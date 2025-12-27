@@ -1,0 +1,6 @@
+# OS / editor
+.DS_Store
+
+# MinerU / local conversion artifacts
+downloads/
+
