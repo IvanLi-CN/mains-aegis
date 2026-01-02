@@ -7,4 +7,6 @@ This folder stores original datasheets (PDF) and their Markdown conversions, wit
 - `BM3451TJDC-T28A/`
   - `BM3451TJDC-T28A.pdf`
   - `BM3451TJDC-T28A.md`
-
+- `BQ40Z50-R2/`
+  - `BQ40Z50-R2.pdf`
+  - `BQ40Z50-R2.md`
