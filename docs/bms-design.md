@@ -119,7 +119,9 @@ Cells (4S) ── sense ── BQ296100 ── OUT ── SI2310A ── CLM hea
 - `TS1`（板上风险点温度，TS_BOARD）：`FNTC0402X103F3380FB`（`10 kΩ@25°C(103)`，`β=3380`，0402）
 - `TS2/TS3/TS4`（电芯间温度）：`10 kΩ@25°C(103)`，`β=3380`（封装/料号可不同，但必须同一条 R-T 曲线）
 - 连接方式：每路 `TSx` 直接接一颗 NTC 到 `VSS/BGND`（不需要外部分压电阻；`BQ40Z50-R2` 内部提供热敏上拉/驱动）
-- `PTC`：当前不启用（`PTC` 与 `PTCEN` 均接 `VSS`）
+- `PTC`（安全 PTC，贴近 CHG/DSG FET）：`Murata PRF18BA103QB1RB`（或同等规格）
+  - 选型约束：正常工作温区 `RPTC ≈ 10 kΩ`；在 PTC 触发温度点 `RPTC > 1.2 MΩ`
+  - 连接方式：按 `BQ40Z50-R2` 参考电路，PTC 元件接在 `PTC` 与 `BAT` 之间，`PTCEN` 接 `BAT` 使能
 
 > 备注：`BQ40Z50-R2` 只提供两套可配置 thermistor profile（cell / FET）。因此最多支持“两条不同曲线”；本项目统一使用 `β=3380`，便于 TS1~TS4 共用同一条曲线并降低 DF 配置复杂度。
 
@@ -205,6 +207,9 @@ Cells (4S) ── sense ── BQ296100 ── OUT ── SI2310A ── CLM hea
 - 热敏曲线模型（thermistor profile）：
   - 将 cell / FET 两套模型都配置为 `10 kΩ@25°C(103), β=3380` 对应的曲线（本项目 TS1~TS4 统一曲线）
   - 若未来确需 TS1 与电芯间 NTC 使用不同曲线：使用 “FET 模型” 绑定 TS1、用 “cell 模型” 绑定 TS2~TS4（仍只能支持两条曲线，无法让 TS2/TS3/TS4 各自不同）
+- `PTC`（安全 PTC）：
+  - 启用 `PTC/PTCEN` 安全 PTC 检测，并按参考设计连接至 `BAT`
+  - 注意：`PTC fault` 属于永久故障类，通常只能通过 `POR` 清除；因此 PTC 的触发温度应高于“正常温控关断（可恢复）”的阈值，用作最后一道安全闩锁
 
 温度阈值（充/放电高温/低温、延时、恢复点）需结合电芯规格书与系统功耗/散热做定标后落到 DF（此处不写死，避免后续版本变更造成误导）。
 
@@ -221,6 +226,7 @@ Cells (4S) ── sense ── BQ296100 ── OUT ── SI2310A ── CLM hea
 
 - `docs/hardware-selection.md`
 - `docs/datasheets/BQ40Z50-R2/`
+- TI `BQ40Z50EVM` User's Guide（SLUUAV7，用于参考 PTC 选型与参考电路）
 - `docs/datasheets/BQ296100DSGR/`
 - `docs/datasheets/CLM1612P1412/`
 - `docs/datasheets/UMW_SI2305A/`
