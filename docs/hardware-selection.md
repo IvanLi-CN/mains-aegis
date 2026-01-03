@@ -10,7 +10,7 @@
 
 当前仓库已收录并转换（`mineru`）的数据手册资料包含：
 
-- BMS / 电池包管理：`BM3451TJDC-T28A`、`BQ40Z50-R2`
+- BMS / 电池包管理：`BQ40Z50-R2`
 - 二次保护：`CLM1612P1412`、`SFJ-1412`
 - 二级过压保护（OVP）：`BQ296100DSGR`
 
@@ -37,10 +37,8 @@
 | 分块 | 关键器件 | 选型状态 | 说明 | 资料 |
 |---|---|---|---|---|
 | BMS（电池包管理/电量计） | `BQ40Z50RSMR-R2` | 已选 | 1~4S pack manager：电量计（Impedance Track™）+ 保护 + 认证；SMBus v1.1 | `docs/datasheets/BQ40Z50-R2/` |
-| BMS（备选，保护/均衡） | `BM3451TJDC-T28A` | 候选 | 3/4/5S 保护 + 被动均衡；可级联扩展更高串数（无电量计/主机通信接口引脚） | `docs/hardware-selection/bms-bm3451tjdc-t28a.md` |
 | BMS 数据手册 | `BQ40Z50-R2.pdf/.md` | 已收录 | 离线可渲染（图片本地化） | `docs/datasheets/BQ40Z50-R2/` |
-| BMS 数据手册 | `BM3451TJDC-T28A.pdf/.md` | 已收录 | 离线可渲染（图片本地化） | `docs/datasheets/BM3451TJDC-T28A/` |
-| BMS 对比 | `BM3451TJDC-T28A vs BQ40Z50-R2` | 已收录 | 仅基于已收录数据手册的功能边界与系统影响对比 | `docs/hardware-selection/bms-bm3451-vs-bq40z50-r2.md` |
+| BMS 设计文档 | `BMS design` | 已收录 | 系统级 BMS 设计说明（原理图要点 + 二次保护链路 + 配置流程） | `docs/bms-design.md` |
 
 ### 2.2 充/放电功率开关（由 BMS 控制）
 
@@ -91,8 +89,7 @@
 
 ## 3. 子文档
 
-- BMS 器件级选型：`docs/hardware-selection/bms-bm3451tjdc-t28a.md`
-- BMS 对比（BM3451 vs BQ40Z50）：`docs/hardware-selection/bms-bm3451-vs-bq40z50-r2.md`
+- BMS 设计文档：`docs/bms-design.md`
 - 二次保护器件对比（CLM vs SFJ）：`docs/datasheets/CLM1612P1412-vs-SFJ-1412.md`
 
 ## 4. 需要你补齐的项目输入（我才能继续把“待定”变成具体料号）
