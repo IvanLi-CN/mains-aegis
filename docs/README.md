@@ -11,3 +11,10 @@ This folder stores project documentation and offline-renderable datasheets.
 
 - Datasheets index: `docs/datasheets/README.md`
 
+## Manuals
+
+- Manuals index: `docs/manuals/README.md`
+
+## Reference designs
+
+- Reference designs index: `docs/reference-designs/README.md`

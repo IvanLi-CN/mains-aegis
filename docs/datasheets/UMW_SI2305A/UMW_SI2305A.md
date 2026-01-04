@@ -15,5 +15,4 @@ Project use: external cell balancing switch for `BQ40Z50-R2` (TI external PMOS t
 - `RDS(on) max = 40 mΩ` @ `VGS=-4.5 V`, `ID=-4.2 A`
 - `RDS(on) max = 60 mΩ` @ `VGS=-2.5 V`, `ID=-3.4 A`
 
-Source: `UMW_SI2305A.pdf`
-
+Source PDF (UMW): https://www.umw-ic.com/static/pdf/e37c15f27b9e5d06e904dbb1b203feb1.pdf

@@ -37,7 +37,7 @@
 | 分块 | 关键器件 | 选型状态 | 说明 | 资料 |
 |---|---|---|---|---|
 | BMS（电池包管理/电量计） | `BQ40Z50RSMR-R2` | 已选 | 1~4S pack manager：电量计（Impedance Track™）+ 保护 + 认证；SMBus v1.1 | `docs/datasheets/BQ40Z50-R2/` |
-| BMS 数据手册 | `BQ40Z50-R2.pdf/.md` | 已收录 | 离线可渲染（图片本地化） | `docs/datasheets/BQ40Z50-R2/` |
+| BMS 数据手册 | `BQ40Z50-R2.md` | 已收录 | 离线可渲染（图片本地化） | `docs/datasheets/BQ40Z50-R2/` |
 | BMS 设计文档 | `BMS design` | 已收录 | 系统级 BMS 设计说明（原理图要点 + 二次保护链路 + 配置流程） | `docs/bms-design.md` |
 
 ### 2.2 充/放电功率开关（由 BMS 控制）

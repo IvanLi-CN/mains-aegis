@@ -1,7 +1,6 @@
 # BQ40Z50-R2 datasheet
 
 - Source PDF (TI): https://www.ti.com/lit/ds/symlink/bq40z50-r2.pdf
-- Local PDF: `BQ40Z50-R2.pdf`
 
 ## Markdown conversion
 

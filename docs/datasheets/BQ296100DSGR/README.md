@@ -1,7 +1,6 @@
 # BQ296100DSGR datasheet
 
 - Source PDF (TI, BQ296xxx family): https://www.ti.com/lit/ds/symlink/bq2961.pdf
-- Local PDF: `BQ296100DSGR.pdf`
 
 Note: `BQ296100` is one of the device options listed in the BQ2961 datasheet; `DSGR` is the orderable package variant.
 
