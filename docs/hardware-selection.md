@@ -13,6 +13,7 @@
 - BMS / 电池包管理：`BQ40Z50-R2`
 - 二次保护：`CLM1612P1412`、`SFJ-1412`
 - 二级过压保护（OVP）：`BQ296100DSGR`
+- 主控 MCU：`ESP32-S3-FH4R2`（ESP32-S3 series；datasheet：`docs/datasheets/esp32-s3-fh4r2/`；配套资料见 `docs/manuals/esp32-s3-*`）
 
 因此本阶段能“确定”的选型可覆盖：电池包管理（含电量计/电量计功能）、保护/均衡与二次保护；其他分块（若项目还有充电/电源/通信/控制等）需要你补充需求与约束后才能继续落地到具体料号。
 
@@ -87,10 +88,18 @@
 | 二次保护（备选） | `SFJ-1412` | 候选 | SFJ 系列（SCP）表贴二次保护器件（4S / 12 A 规格项） | `docs/datasheets/SFJ-1412/` |
 | 器件对比 | `CLM1612P1412 vs SFJ-1412` | 已收录 | 仅基于已收录数据手册的关键参数对比与选型备注 | `docs/datasheets/CLM1612P1412-vs-SFJ-1412.md` |
 
+### 2.8 主控 MCU（系统控制/通信）
+
+| 分块 | 关键器件 | 选型状态 | 说明 | 资料 |
+|---|---|---|---|---|
+| 主控 MCU / SoC | `ESP32-S3-FH4R2` | 已选 | Wi-Fi 2.4 GHz + BLE 5；双核 Xtensa LX7；USB OTG + USB Serial/JTAG；in‑package 4 MB flash + 2 MB PSRAM（Quad SPI） | `docs/datasheets/esp32-s3-fh4r2/` |
+| GPIO 分配 | `ESP32-S3-FH4R2` | 已收录 | 主控 GPIO 资源规划与分配表（避免与 strapping/USB/JTAG/UART0/in‑package flash/PSRAM 冲突） | `docs/hardware-selection/esp32-s3-fh4r2-gpio.md` |
+
 ## 3. 子文档
 
 - BMS 设计文档：`docs/bms-design.md`
 - 二次保护器件对比（CLM vs SFJ）：`docs/datasheets/CLM1612P1412-vs-SFJ-1412.md`
+- 主控 GPIO 分配：`docs/hardware-selection/esp32-s3-fh4r2-gpio.md`
 
 ## 4. 需要你补齐的项目输入（我才能继续把“待定”变成具体料号）
 

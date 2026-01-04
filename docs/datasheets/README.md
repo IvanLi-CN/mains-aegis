@@ -4,6 +4,8 @@ This folder stores Markdown conversions of vendor datasheets, with images extrac
 
 ## Index
 
+- `esp32-s3-fh4r2/`
+  - `esp32-s3-fh4r2.md`
 - `BQ40Z50-R2/`
   - `BQ40Z50-R2.md`
 - `BQ296100DSGR/`
