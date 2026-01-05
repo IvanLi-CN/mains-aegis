@@ -12,6 +12,8 @@ This folder stores Markdown conversions of vendor datasheets, with images extrac
   - `BQ40Z50-R2.md`
 - `BQ296100DSGR/`
   - `BQ296100DSGR.md`
+- `FUSB302B/`
+  - `FUSB302B.md`
 - `ch224q/`
   - `CH224Q.md`
 - `ch442e/`
