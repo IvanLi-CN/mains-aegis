@@ -1,6 +1,6 @@
 # 充电器设计（BQ25792 + Type‑C/PD 控制器（需 PPS），双输入）
 
-本文档描述本项目基于 **TI BQ25792**（buck-boost 充电管理）实现的充电器方案：主 USB‑C + DC5025（直流输入）双输入；支持 1A / 500mA / 100mA 三档充电电流；支持 BQ25792 OTG（VBUS 输出）能力；不使用 Ship MOSFET；充电器与电池包（`4S1P`）同板，电芯可无工具拆装。
+本文档描述本项目基于 **TI BQ25792**（buck-boost 充电管理）实现的充电器方案：主 USB‑C + DC5025（直流输入）双输入；支持 1A / 500mA / 100mA 三档充电电流；支持 BQ25792 OTG（VBUS 输出）能力；不使用 Ship MOSFET；充电器电路 + BMS + `4S1P` 电池组共板（`10 cm × 10 cm` 四层 PCB），电芯通过 `4×21700` 电池座连接，可免工具拆装。
 
 **重要约束（项目硬性需求）**：主 USB‑C 口需要同时支持 **PPS 输入（Sink PPS/APDO）** 与 **PPS 输出（Source PPS/APDO）**，因此 Type‑C/PD 控制器必须明确支持 PD3.0 PPS（或具备可验证的 PPS 实现路径）。
 
@@ -24,7 +24,7 @@
   - `VIN2`：DC5025 圆孔 DC 输入（纯输入）
 - OTG：使用 `BQ25792` 的 OTG（VBUS 输出）能力；主 USB‑C 口的 Type‑C/PD 角色由 Type‑C/PD 控制器 + MCU 管理
 - 不使用 Ship MOSFET
-- 充电器与电池包在同一 PCB；电芯可拆卸（需考虑“无电池/电池被断开”场景）
+- 结构/PCB 约束：充电器电路 + BMS + `4×21700` 电池座共板（`10 cm × 10 cm` 四层 PCB），电芯可免工具拆装（需考虑“无电池/电池被断开”场景）
 
 ### 1.2 关键结论（可行性）
 
@@ -68,6 +68,7 @@ MCU (host) ─ I2C ─ Type-C/PD Controller (attach/orientation/role/PD+PPS)
 - `BQ25792 BAT / BATP`：连接到 **电池包正端（PACK+）**（也就是 BMS 充电通路允许电流流入的节点）。  
   - 若你希望 BMS 在故障时能够硬件切断充电电流，**不要**把 BQ25792 直接接到电芯正端（CELL+）去绕过 CHG FET。
 - `BQ25792 GND`：连接到电池包地（PACK- / 系统地），并遵循 TI 的功率回流/开关回路布局要求。
+- `PACK+ / PACK-` 端口防护：在电池座/端子处并联 `SMBJ18CA`（双向 TVS，`DO-214AA`），用于 ESD/瞬态钳位（详见 `docs/bms-design.md` 的 PACK 端 ESD/TVS 说明）。
 - 约 `120W` 级的主功率输出（例如电池到 19V 的大功率 DCDC/项目文档中的“OTG 19V”）应从电池主回路获取，**不要**走 BQ25792 的 `SYS` 节点。
 
 ### 2.2 输入选择策略
