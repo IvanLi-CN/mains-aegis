@@ -74,6 +74,12 @@ MCU (host) ─ I2C ─ Type-C/PD Controller (attach/orientation/role/PD+PPS)
 - `PACK+ / PACK-` 端口防护：在电池座/端子处并联 `SMBJ18CA`（双向 TVS，`DO-214AA`），用于 ESD/瞬态钳位（详见 `docs/bms-design.md` 的 PACK 端 ESD/TVS 说明）。
 - 约 `120W` 级的 UPS 主功率输出（例如电池到 `19V` 的大功率 DCDC；或 `12V` 版本）应从电池主回路获取，**不要**走 BQ25792 的 `SYS` 节点。
 
+### 2.1.2 Ship MOSFET（不使用）相关引脚：`SDRV` / `QON`
+
+- 本项目不安装外部 Ship MOSFET（Ship FET / SFET），因此不使用其 ship/shutdown/system-reset 相关能力（见 `docs/datasheets/BQ25792/BQ25792.md` 引脚说明）。
+- `SDRV`：**禁止悬空**。按 datasheet 建议在 `SDRV` 与 `BAT` 之间并联 `1nF / 50V / 0402` 陶瓷电容（本项目选择 `SDRV→BAT`）。
+- `QON`：本项目不使用其控制功能，`QON` 直接 `NC`（利用其内部上拉保持高电平），避免被外部信号误拉低。
+
 ### 2.2 输入选择策略
 
 - `VAC1` 定义为 USB-C 输入（默认优先），`VAC2` 定义为 DC5025 输入。  
