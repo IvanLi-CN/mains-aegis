@@ -101,6 +101,7 @@
 ## 3. 子文档
 
 - BMS 设计文档：`docs/bms-design.md`
+- 充电器设计（BQ25792 + PD/PPS）：`docs/charger-design.md`
 - 二次保护器件对比（CLM vs SFJ）：`docs/datasheets/CLM1612P1412-vs-SFJ-1412.md`
 - 主控 GPIO 分配：`docs/hardware-selection/esp32-s3-fh4r2-gpio.md`
 

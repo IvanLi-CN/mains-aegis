@@ -6,6 +6,7 @@ This folder stores project documentation and offline-renderable datasheets.
 
 - Hardware selection overview: `docs/hardware-selection.md`
 - BMS design (system-level): `docs/bms-design.md`
+- Charger design (BQ25792 + PD/PPS): `docs/charger-design.md`
 - ESP32-S3 GPIO assignment: `docs/hardware-selection/esp32-s3-fh4r2-gpio.md`
 
 ## Datasheets
