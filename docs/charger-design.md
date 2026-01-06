@@ -150,6 +150,8 @@ BQ25792 充电电流寄存器分辨率为 `10mA`（范围 `50mA~5000mA`），因
 - `CE` 引脚 **默认拉高**（充电禁用），由 MCU 在确认电池存在且 BMS 允许充电后再拉低使能。
 - 在检测到电池被断开或 BMS 关闭充电通路时，固件应立即：`EN_CHG=0` 或将 `CE` 拉高，避免 BAT 浮空导致 SYS 过冲反复触发保护。
 
+> 注意：`CE` 是**低有效的充电使能（Charge Enable）**引脚（`CE=LOW` 才允许充电）。部分资料/版本在“Power Supply Recommendations（电源建议）”段落出现过“pulling low the CE pin to disable charge”的表述，与引脚定义逻辑矛盾，容易误用；本项目一律按引脚定义执行：**禁充请用 `CE=HIGH` 或 `EN_CHG=0`**（见 `docs/datasheets/BQ25792/BQ25792.md` 的 `CE` 引脚描述）。
+
 ### 4.3 双输入外部 MOSFET（ACFET/RBFET）
 
 推荐实现方式：两路输入各用一对背靠背 N‑MOS（common‑source），由 `ACDRV1/2` 驱动，达到：
