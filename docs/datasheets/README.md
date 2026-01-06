@@ -12,6 +12,8 @@ This folder stores Markdown conversions of vendor datasheets, with images extrac
   - `BQ40Z50-R2.md`
 - `BQ296100DSGR/`
   - `BQ296100DSGR.md`
+- `CKST1004/`
+  - `CKST1004.md` (CENKER CKST1004 series; project uses `CKST1004-2.2uH/M`)
 - `FUSB302B/`
   - `FUSB302B.md`
 - `ch224q/`
