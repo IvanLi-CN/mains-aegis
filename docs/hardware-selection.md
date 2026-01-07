@@ -98,10 +98,35 @@
 | 主控 MCU / SoC | `ESP32-S3-FH4R2` | 已选 | Wi-Fi 2.4 GHz + BLE 5；双核 Xtensa LX7；USB OTG + USB Serial/JTAG；in‑package 4 MB flash + 2 MB PSRAM（Quad SPI） | `docs/datasheets/esp32-s3-fh4r2/` |
 | GPIO 分配 | `ESP32-S3-FH4R2` | 已收录 | 主控 GPIO 资源规划与分配表（避免与 strapping/USB/JTAG/UART0/in‑package flash/PSRAM 冲突） | `docs/hardware-selection/esp32-s3-fh4r2-gpio.md` |
 
+### 2.9 UPS 主输出（DC5025 输出口，12V/19V 两版本）
+
+> 重要：这里的“UPS 主输出”是**系统对外供电母线**，不是充电器 IC 的 `SYS/VSYS` 节点。
+
+#### 2.9.1 需求澄清（已知硬性约束）
+
+- **输出口**：`DC5025`（UPS OUT），系统策略为“常开”（UPS OUT 一直有电）。
+- **两个版本**：`12V` / `19V`（通过“换固件”切换目标电压，不是运行时动态切换）。
+- **输入/输出电压一致**：对应版本下，外部适配器输入电压与 UPS 主输出目标电压一致（12V 版输入=12V；19V 版输入=19V）。
+- **输出电压可调范围**：`9–20.8V`（必须支持 `I2C` 设置输出电压，否则不满足项目需求）。
+- **电流设置**：必须支持 `I2C` 设置电流相关参数（例如 OTG/输出电流设定或输出限流设定）。
+- **输出电流上限**：`6.32A`（12V 与 19V 版本一致）。
+  - 额定输出功率：`12V × 6.32A ≈ 75.8W`；`19V × 6.32A ≈ 120W`。
+- **电源路径隔离**：`VBUS →(理想二极管)→ UPS OUT`，用于**阻断 UPS OUT 倒灌回 VBUS**（允许 VBUS 正向供电到 UPS OUT）。
+
+#### 2.9.2 候选器件（以“淘宝 ≤¥10、TI、I2C 设压/设流”为约束）
+
+| 分块 | 关键器件 | 选型状态 | 说明 |
+|---|---|---|---|
+| UPS 主输出（低成本单芯片） | `BQ25713RSNR` / `BQ25713BRSNR` | 候选 | 走 OTG（VOTG）作为 UPS 主输出：I2C 可设 `OTGVoltage()`（最高 `20.8V`）与 `OTGCurrent()`；注意 OTG 使能条件包含“VBUS 低于阈值”这一硬门槛，必须在本项目的“理想二极管隔离 + UPS OUT 常开”拓扑下做样机验证。 |
+| UPS 主输出（双路并联可试） | `TPS55288RPMR` | 候选 | I2C 可编程输出 `0.8–22V`，并支持 I2C 输出电流限制设置（最大档位 `6.35A`，且有精度误差）；单颗做 `19V × 6.32A` 很卡边界，若并联需验证动态均流与热分布（不引入额外均流器件的前提下尤其需要实测）。 |
+
+> 若放宽“≤¥10”预算并追求功率余量，优先考虑外置功率 MOSFET 的 buck-boost 控制器类（例如 `BQ25756RRVR`/同族）。
+
 ## 3. 子文档
 
 - BMS 设计文档：`docs/bms-design.md`
 - 充电器设计（BQ25792 + PD/PPS）：`docs/charger-design.md`
+- UPS 主输出设计：`docs/ups-output-design.md`
 - 二次保护器件对比（CLM vs SFJ）：`docs/datasheets/CLM1612P1412-vs-SFJ-1412.md`
 - 主控 GPIO 分配：`docs/hardware-selection/esp32-s3-fh4r2-gpio.md`
 
