@@ -1,0 +1,25 @@
+{
+  "artifacts": {
+    "md": {
+      "path": "INA3221.md",
+      "sha256": "48d80289088490f539941c3a3b3b0aac5ded44ec78bb986ac3f74a78a3a6d7f3"
+    },
+    "pdf": {
+      "path": "INA3221.pdf",
+      "sha256": "822b051af349fff4de87ef506ddd306570e295f848498cfcb966643216876dd9"
+    }
+  },
+  "generated_at_utc": "2026-01-08T06:34:32+00:00",
+  "generator": {
+    "extract_path": "downloads/30c05965-f6d4-42dd-9c9c-1fe225807307/3bf6f90b-f9cb-4ea9-b097-ab61ebefb5fd",
+    "tool": "mcp__mineru__parse_documents"
+  },
+  "schema": "codex.hardware-doc-ingest.lock.v1",
+  "slug": "INA3221",
+  "source": {
+    "doc_type": "datasheet",
+    "part": "INA3221",
+    "url": "https://www.ti.com/lit/ds/symlink/ina3221.pdf",
+    "vendor": "TI"
+  }
+}
