@@ -48,9 +48,9 @@
 
 | 子项 | 选型状态 | 说明 |
 |---|---|---|
-| 充放电 MOSFET 拓扑 | 待定 | 参考 `BQ40Z50-R2` 的 high-side N-CH protection FET drive（常见为高边背靠背 N-MOS）；最终以你项目的回路与安全要求为准 |
-| MOSFET 料号 | 待定 | 需要你提供：串数、最大连续电流/峰值电流、允许压降/温升、封装与散热条件 |
-| 栅极/下拉网络 | 待定 | `BQ40Z50-R2` 提供 CHG/DSG FET drive（以及 PCHG 预充电控制）；先按其参考电路做初版，再结合 EMI/ESD 与 MOSFET 选型调整 |
+| 充放电 MOSFET 拓扑 | 已定 | 高边背靠背 N‑MOS（CHG/DSG 分立 gate drive），并配套预充电（PCHG）路径（按 `BQ40Z50-R2` 参考电路落图） |
+| MOSFET 料号 | 已定 | 本项目功率 NMOS 统一池：`NCEP3065QU` + `NCEP3040Q`（用途与数量见 `docs/bms-design.md` 与 `docs/ups-output-design.md`） |
+| 栅极/下拉网络 | 待定（按参考电路起步） | `BQ40Z50-R2` 提供 CHG/DSG FET drive（以及 PCHG 预充电控制）；先按其参考电路做初版，再结合 EMI/ESD 与 MOSFET 选型调整 |
 
 ### 2.3 电流采样（Rsense，库仑计/过流/短路相关）
 
@@ -113,8 +113,8 @@
   - 额定输出功率：`12V × 6.32A ≈ 75.8W`；`19V × 6.32A ≈ 120W`。
 - **电源路径隔离**：`VBUS →(理想二极管)→ UPS OUT`，用于**阻断 UPS OUT 倒灌回 VBUS**（允许 VBUS 正向供电到 UPS OUT）。
 - **理想二极管实现（项目统一方案）**：统一使用 `MX5050T + N‑MOS`（High‑Side OR‑ing FET Controller + external N‑channel MOSFET）。本项目所有“理想二极管/反向阻断”功能电路均复用该方案（含 `VBUS → UPS OUT`）。
-  - MOSFET（可用候选）：`NCEP3065QU`（`VDS=30V`，`DFN3.3×3.3`；电气上可用，但 `RDS(on)` 偏低会放大“反向检测门槛电流”，使用需结合瞬态与回灌风险评估）
-  - MOSFET 选型与 `NCEP3065QU` 适配结论：`docs/datasheets/MX5050T/README.md`
+  - MOSFET（功率 NMOS 池）：`NCEP3040Q`（推荐默认）/ `NCEP3065QU`（更低压降；但 `RDS(on)` 偏低会放大“反向检测门槛电流”，使用需结合瞬态与回灌风险评估）
+  - MOSFET 选型与适配结论：`docs/datasheets/MX5050T/README.md`
   - 数据手册：`docs/datasheets/MX5050T/`
 
 #### 2.9.2 候选器件（以“淘宝 ≤¥10、TI、I2C 设压/设流”为约束）
@@ -122,7 +122,7 @@
 | 分块 | 关键器件 | 选型状态 | 说明 |
 |---|---|---|---|
 | UPS 主输出（低成本单芯片） | `BQ25713RSNR` / `BQ25713BRSNR` | 候选 | 走 OTG（VOTG）作为 UPS 主输出：I2C 可设 `OTGVoltage()`（最高 `20.8V`）与 `OTGCurrent()`；注意 OTG 使能条件包含“VBUS 低于阈值”这一硬门槛，必须在本项目的“理想二极管隔离 + UPS OUT 常开”拓扑下做样机验证。 |
-| UPS 主输出（双路并联可试） | `TPS55288RPMR` | 候选 | I2C 可编程输出 `0.8–22V`，并支持 I2C 输出电流限制设置（最大档位 `6.35A`，且有精度误差）；单颗做 `19V × 6.32A` 很卡边界，若并联需验证动态均流与热分布（不引入额外均流器件的前提下尤其需要实测）。 |
+| UPS 主输出（双路并联可试） | `TPS55288RPMR` | 候选 | I2C 可编程输出 `0.8–22V`，并支持 I2C 输出电流限制设置（最大档位 `6.35A`，且有精度误差）；单颗做 `19V × 6.32A` 很卡边界，若并联需验证动态均流与热分布（不引入额外均流器件的前提下尤其需要实测）。buck leg 外置 MOSFET（`DR1H/DR1L`）使用本项目功率 NMOS 池：`NCEP3065QU` + `NCEP3040Q`（详见 `docs/ups-output-design.md`）。 |
 
 > 若放宽“≤¥10”预算并追求功率余量，优先考虑外置功率 MOSFET 的 buck-boost 控制器类（例如 `BQ25756RRVR`/同族）。
 

@@ -21,7 +21,22 @@ MX5050T drives an external **N-channel MOSFET** as an “ideal diode” / OR-ing
 - `RDS(on)` guideline in the datasheet: pick `RDS(on)` such that the forward drop at nominal load current is **30–100mV**:
   - `(30mV / ILOAD) < RDS(on) < (100mV / ILOAD)`
 
-## NCEP3065QU quick evaluation (candidate)
+## NCEP3040Q quick evaluation (recommended default)
+
+Project context: UPS OUT max current is `6.32A` (see `docs/ups-output-design.md`).
+
+- For `ILOAD = 6.32A`, the datasheet `RDS(on)` guideline implies `RDS(on) ≈ 4.75–15.8mΩ`.
+- NCEP3040Q key parameters (Wuxi NCE Power / datasheet):
+  - `VDS = 30V`, `VGS = ±20V`
+  - `RDS(on)` (TC=25°C): `≈6.8mΩ @ VGS=10V` (typ), `≈9.5mΩ @ VGS=4.5V` (typ)
+  - `Qg ≈ 15nC` (typ)
+
+Conclusion:
+
+- **Aligned with the datasheet’s `RDS(on)` guideline** for OR-ing at `6.32A` (forward drop falls in the intended 30–100mV range).
+- **Good match for MX5050T turn-on capability** (`IGATE(ON)` is small), because `Qg` is relatively low.
+
+## NCEP3065QU quick evaluation (low-drop option)
 
 Project context: UPS OUT max current is `6.32A` (see `docs/ups-output-design.md`).
 

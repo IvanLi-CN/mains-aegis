@@ -124,11 +124,23 @@ Cells (4S) ── sense ── BQ296100 ── OUT ── SI2310A ── CLM hea
 - 每颗 `150 Ω / 2512` 建议按 **≥1 W@70°C** 规格选型，并考虑温升与降额曲线
 - 预留足够铜皮散热，尽量远离主功率 MOSFET 与热源，避免高温降额后余量不足
 
+#### CHG/DSG 主功率 MOSFET（已定）
+
+- 拓扑：高边背靠背 N‑MOS（CHG/DSG 分立 gate drive，common‑source），按 `BQ40Z50-R2` 参考电路落图。
+- 本项目功率 NMOS 统一池：`NCEP3065QU` + `NCEP3040Q`（均 `VDS=30V`，`VGS=±20V`）。
+- 数量/装配建议（按项目连续放电约 `12A` 的边界设计）：
+  - 默认装配：`CHG=1×NCEP3065QU` + `DSG=1×NCEP3065QU`（共 2 颗）。
+  - 降成本装配：若改用 `NCEP3040Q`，建议 `CHG=2×NCEP3040Q` 并联、`DSG=2×NCEP3040Q` 并联（2×2，共 4 颗），以降低导通损耗/温升。
+  - PCB 建议：若封装/面积允许，建议在 CHG/DSG 位置预留“每侧 2 颗并联”的焊盘（默认 DNP 第二颗），以便在 `NCEP3065QU` 与 `NCEP3040Q` 方案间切换而无需改板。
+- 导通损耗数量级（仅用于对比；实际需考虑 `RDS(on)` 温升上升与 PCB 热阻）：
+  - 1×1 `NCEP3065QU`（CHG+DSG 串联）：`R≈2×1.9mΩ≈3.8mΩ` → `P≈12^2×3.8mΩ≈0.55W`
+  - 2×2 `NCEP3040Q`（每侧 2 并联）：`R≈6.8mΩ` → `P≈12^2×6.8mΩ≈0.98W`
+- 选型提示：`BQ40Z50-R2` 的 CHG/DSG gate drive 典型 `V(FETON)≈11.5V`，因此 `RDS(on)@10V` 更接近实际工作点（见 `docs/datasheets/BQ40Z50-R2/BQ40Z50-R2.md` 7.18）。
+
 待定项：
 
-- 充放电 MOSFET 拓扑细化（背靠背方式、栅极保护与拉电阻）
-- MOSFET 料号（耐压、`RDS(on)`、封装散热）
 - 预充电（PCHG）路径器件（P-MOS 与门极网络等，除 R1 外）
+- 栅极/下拉网络细化（ESD/TVS、gate resistor、pull-down 等；按参考电路起步后再按波形与 EMI 调整）
 
 #### 3.3.2 反接充电保护（Q4：DSG Gate Clamp）（已定）
 
