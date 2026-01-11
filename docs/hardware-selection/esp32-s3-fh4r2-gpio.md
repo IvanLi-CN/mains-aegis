@@ -190,15 +190,15 @@
 约束与建议：
 
 - 仅做**预留建议**：不改变“已确认引脚分配”的范围与含义。
-- I2S TX 最少需要 3 个 GPIO：`BCLK/LRCLK/DOUT`；可选再加 1 个 `AMP_EN` 控制功放上电/静音。
+- I2S TX 最少需要 3 个 GPIO：`BCLK/LRCLK/DOUT`。
+- 为了提升兼容性，本项目计划**同时保留蜂鸣器与 I2S 数字功放电路**，并把 GPIO 成本控制为 **3 根**：其中 1 根 GPIO 需要“二选一复用”（I2S 数据线 / 蜂鸣器 PWM）。
 - 由于 `GPIO19/20` 固定用于 USB 下载调试，音频相关信号建议优先放在远离 USB 差分对的预留 GPIO 上，降低串扰/走线压力。
 
 推荐预留组合（可按原理图布局调整）：
 
 - `GPIO47`：`AUDIO_I2S_BCLK`
 - `GPIO48`：`AUDIO_I2S_LRCLK`
-- `GPIO21`：`AUDIO_I2S_DOUT`
-- `GPIO18`：`AUDIO_AMP_EN`（可选）
+- `GPIO21`：`AUDIO_I2S_DOUT` / `BUZZ_PWM`（二选一复用）
 
 ## 引脚快速查找表（按 GPIO 编号）
 
@@ -225,10 +225,10 @@
 | 15 | 21 | 已分配 | `BLK` | 固定分配（原理图红框；不得复用） |
 | 16 | 22 | 已分配 | `BQ_CE` | `BQ25792.CE`（低有效；默认上拉禁充） |
 | 17 | 23 | 已分配 | `BQ_ILIM_HIZ_BRK` | `ILIM_HIZ` 刹车控制（驱动 `NX7002BKWX` 下拉） |
-| 18 | 24 | 预留 | `AUDIO_AMP_EN`（建议） | 可选：功放使能/静音；详见 `docs/audio-design.md` |
+| 18 | 24 | 预留 | — | 可用于后续项目功能 |
 | 19 | 25 | 已分配 | USB_D- | USB 下载调试（不得复用；原理图网名常写 `ESP_DM`，若加入 CH442E 则接 `S1B`） |
 | 20 | 26 | 已分配 | USB_D+ | USB 下载调试（不得复用；原理图网名常写 `ESP_DP`，若加入 CH442E 则接 `S1C`） |
-| 21 | 27 | 预留 | `AUDIO_I2S_DOUT`（建议） | I2S TX 数据输出；详见 `docs/audio-design.md` |
+| 21 | 27 | 预留 | `AUDIO_I2S_DOUT` / `BUZZ_PWM`（建议） | 二选一复用：I2S TX 数据输出或蜂鸣器 PWM；详见 `docs/audio-design.md` |
 | 26 | 28 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 27 | 30 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 28 | 31 | 不可用 | — | in‑package flash/PSRAM 专用 |
