@@ -126,11 +126,19 @@
 
 > 若放宽“≤¥10”预算并追求功率余量，优先考虑外置功率 MOSFET 的 buck-boost 控制器类（例如 `BQ25756RRVR`/同族）。
 
+### 2.10 音频/提示音（从无源蜂鸣器升级）
+
+| 分块 | 关键器件 | 选型状态 | 说明 | 资料 |
+|---|---|---|---|---|
+| 数字功放（I2S） | `MAX98357A` | 候选 | I2S/PCM 输入的 Class‑D 功放；用于告警/提示音效（不追求高音质，优先低资源占用与易实现） | `docs/audio-design.md` |
+| 发声器件 | 小喇叭（`4Ω/8Ω`） | 待定 | 目标为“音色比无源蜂鸣器更丰富”；阻抗/功率/尺寸由结构与响度目标决定 | `docs/audio-design.md` |
+
 ## 3. 子文档
 
 - BMS 设计文档：`docs/bms-design.md`
 - 充电器设计（BQ25792 + PD/PPS）：`docs/charger-design.md`
 - UPS 主输出设计：`docs/ups-output-design.md`
+- 音频/提示音设计：`docs/audio-design.md`
 - 二次保护器件对比（CLM vs SFJ）：`docs/datasheets/CLM1612P1412-vs-SFJ-1412.md`
 - 主控 GPIO 分配：`docs/hardware-selection/esp32-s3-fh4r2-gpio.md`
 

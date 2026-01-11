@@ -183,6 +183,23 @@
 | 不推荐/谨慎（未分配） | 3 | `GPIO3`、`GPIO45`、`GPIO46` |
 | 其余 GPIO | 6 | 预留（未分配） |
 
+## 预留建议（音频/提示音：I2S -> 数字功放 -> Speaker）
+
+本项目提示音计划从“无源蜂鸣器”升级为 “`I2S + MAX98357A + Speaker`”（详见 `docs/audio-design.md`）。
+
+约束与建议：
+
+- 仅做**预留建议**：不改变“已确认引脚分配”的范围与含义。
+- I2S TX 最少需要 3 个 GPIO：`BCLK/LRCLK/DOUT`；可选再加 1 个 `AMP_EN` 控制功放上电/静音。
+- 由于 `GPIO19/20` 固定用于 USB 下载调试，音频相关信号建议优先放在远离 USB 差分对的预留 GPIO 上，降低串扰/走线压力。
+
+推荐预留组合（可按原理图布局调整）：
+
+- `GPIO47`：`AUDIO_I2S_BCLK`
+- `GPIO48`：`AUDIO_I2S_LRCLK`
+- `GPIO21`：`AUDIO_I2S_DOUT`
+- `GPIO18`：`AUDIO_AMP_EN`（可选）
+
 ## 引脚快速查找表（按 GPIO 编号）
 
 > 约定：**状态**取值：`已分配` / `预留` / `不可用` / `谨慎`
@@ -208,10 +225,10 @@
 | 15 | 21 | 已分配 | `BLK` | 固定分配（原理图红框；不得复用） |
 | 16 | 22 | 已分配 | `BQ_CE` | `BQ25792.CE`（低有效；默认上拉禁充） |
 | 17 | 23 | 已分配 | `BQ_ILIM_HIZ_BRK` | `ILIM_HIZ` 刹车控制（驱动 `NX7002BKWX` 下拉） |
-| 18 | 24 | 预留 | — | 可用于后续项目功能 |
+| 18 | 24 | 预留 | `AUDIO_AMP_EN`（建议） | 可选：功放使能/静音；详见 `docs/audio-design.md` |
 | 19 | 25 | 已分配 | USB_D- | USB 下载调试（不得复用；原理图网名常写 `ESP_DM`，若加入 CH442E 则接 `S1B`） |
 | 20 | 26 | 已分配 | USB_D+ | USB 下载调试（不得复用；原理图网名常写 `ESP_DP`，若加入 CH442E 则接 `S1C`） |
-| 21 | 27 | 预留 | — | 可用于后续项目功能 |
+| 21 | 27 | 预留 | `AUDIO_I2S_DOUT`（建议） | I2S TX 数据输出；详见 `docs/audio-design.md` |
 | 26 | 28 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 27 | 30 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 28 | 31 | 不可用 | — | in‑package flash/PSRAM 专用 |
@@ -233,8 +250,8 @@
 | 44 | 50 | 预留 | — | UART0 相关；建议预留测试点/焊盘兜底 |
 | 45 | 51 | 谨慎 | — | strapping pin（VDD_SPI 相关）；后续使用需评审 |
 | 46 | 52 | 谨慎 | — | strapping pin（boot/ROM 打印等相关）；后续使用需评审 |
-| 47 | 37 | 预留 | — | 可用于后续项目功能 |
-| 48 | 36 | 预留 | — | 可用于后续项目功能 |
+| 47 | 37 | 预留 | `AUDIO_I2S_BCLK`（建议） | I2S TX 位时钟；详见 `docs/audio-design.md` |
+| 48 | 36 | 预留 | `AUDIO_I2S_LRCLK`（建议） | I2S TX 帧同步；详见 `docs/audio-design.md` |
 
 ## 待补齐输入（用于下一步把“预留”落到具体分配）
 
