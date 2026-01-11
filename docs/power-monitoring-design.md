@@ -176,4 +176,3 @@ I = VSHUNT / RSHUNT
 
 - `INA3221`：`docs/datasheets/INA3221/`
 - `UPS 输出设计（TPS55288 并联注意项）`：`docs/ups-output-design.md`
-

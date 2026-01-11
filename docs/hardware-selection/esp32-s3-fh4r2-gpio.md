@@ -73,21 +73,36 @@
 
 ### BMS 告警/中断（1 个 GPIO）
 
-- `GPIO33`：`BMS_BTP_INT_N`（来自 `BQ40Z50-R2` 的 `BTP_INT`，经 N‑MOSFET 隔离/反相后进入 MCU；MCU 侧建议开启内部上拉或外部上拉）
+- `GPIO6`：`BMS_BTP_INT_N`（`BQ40Z50-R2.BTP_INT`；BMS 中断线）
+- 通信：`BQ40Z50-R2` 挂载在 `I2C2`（`GPIO8/GPIO9`）
 
 说明：
 
-- 该信号与 `INT/SDA/SCL` 组合成 `GPIO33~GPIO36` 的连续引脚块，便于走线与接口定义。
+- 该信号与 `I2C2(PANEL_INT/SDA/SCL)` 组合成 `GPIO6~GPIO9` 的连续引脚块，便于走线与接口定义。
 
-### 板载 I2C（I2C1，3 个 GPIO）
+### I2C1（1MHz，3 个 GPIO）
 
-- `GPIO34`：`INT`（板载 I2C 设备中断输入；按器件需求评估上拉/电平）
+- `GPIO34`：`INT_PMIC`（`INA3221` + `BQ25792` 共用中断线；可按需求再并入 `FUSB302B.INT_N`）
 - `GPIO35`：`SDA`
 - `GPIO36`：`SCL`
 
 说明：
 
 - `ESP32-S3FH4R2` 为 Quad SPI in‑package 变体：`GPIO33~GPIO37` 未被 in‑package memory 占用；若未来改用 Octal SPI 变体/外置 Octal Flash/PSRAM，需重新评审本段分配。
+
+### I2C2（≤400kHz，3 个 GPIO）
+
+- `GPIO7`：`PANEL_INT`（若面板侧无 I2C 器件，可仅保留为通用输入）
+- `GPIO8`：`PANEL_SDA`（`I2C2_SDA`）
+- `GPIO9`：`PANEL_SCL`（`I2C2_SCL`）
+
+说明：
+
+- `I2C2` 用于 `BQ40Z50-R2`（SMBus）以及面板侧 I2C 器件（若有）；速率建议 `≤400kHz`。
+
+### TPS55288 故障中断（1 个 GPIO）
+
+- `GPIO37`：`INT_TPS`（两颗 `TPS55288.FB/INT` 的线与；开漏/需上拉）
 
 ### 风扇电压控制（PWM→RC）+ 转速测量（2 个 GPIO）
 
@@ -106,30 +121,23 @@
 
 ### 交错 SYNC（180° 反相方波，2 个 GPIO）
 
-- `GPIO39`：`UPS_SYNC_A`（相位 0°）
-- `GPIO40`：`UPS_SYNC_B`（相位 180°；与 `UPS_SYNC_A` 互补）
+- `GPIO39`：`SYNCA`（相位 0°）
+- `GPIO40`：`SYNCB`（相位 180°；与 `SYNCA` 互补）
 
 说明：
 
 - 目标频率：`400–600kHz`（最高 `2.2MHz`）。
-- 连接关系：`UPS_SYNC_A` / `UPS_SYNC_B` 分别连接到两颗 `TPS55288.DITH/SYNC`，作为外部同步时钟以实现两相 interleave（详见 `docs/ups-output-design.md`）。
+- 连接关系：`SYNCA` / `SYNCB` 分别连接到两颗 `TPS55288.DITH/SYNC`，作为外部同步时钟以实现两相 interleave（详见 `docs/ups-output-design.md`）。
 - 这两脚属于传统 JTAG 组（`GPIO39~GPIO42`）；本项目不外接传统 JTAG，因此复用为项目 IO。
 
-### 固定分配（原理图红框：PANEL I2C2 + SPI + BLK，9 个 GPIO）
+### 固定分配（原理图红框：SPI + BLK，6 个 GPIO）
 
-- `GPIO7`：`PANEL_INT`
-- `GPIO8`：`PANEL_SDA`
-- `GPIO9`：`PANEL_SCL`
 - `GPIO10`：`DC`
 - `GPIO11`：`MOSI`
 - `GPIO12`：`SCLK`
 - `GPIO13`：`CS`
 - `GPIO14`：`RES`
 - `GPIO15`：`BLK`
-
-说明：
-
-- 面板侧 `PANEL_SDA/PANEL_SCL` 使用 `I2C2` 外设；面板 PCB 上所有 I2C 器件统一挂在该总线上。
 
 ## 引脚使用统计（当前阶段）
 
@@ -139,14 +147,16 @@
 | USB 下载调试 | 2 | `GPIO19`、`GPIO20` |
 | USB D+/D- 切换控制 | 2 | `GPIO4`、`GPIO5` |
 | 下载模式/系统控制 | 1 + EN | `GPIO0`、`CHIP_PU (EN)` |
-| BMS 告警/中断 | 1 | `GPIO33` |
-| 板载 I2C（I2C1） | 3 | `GPIO34~GPIO36` |
+| BMS 告警/中断 | 1 | `GPIO6` |
+| I2C1（1MHz） | 3 | `GPIO34~GPIO36` |
+| I2C2（≤400kHz） | 3 | `GPIO7~GPIO9` |
+| TPS55288 故障中断 | 1 | `GPIO37` |
 | 充电器控制（BQ25792） | 2 | `GPIO16`、`GPIO17` |
-| 固定分配（PANEL I2C2 + SPI + BLK） | 9 | `GPIO7~GPIO15` |
+| 固定分配（SPI + BLK） | 6 | `GPIO10~GPIO15` |
 | 交错 SYNC（180°） | 2 | `GPIO39`、`GPIO40` |
 | 不可用 | 7 | `GPIO26~GPIO32` |
 | 不推荐/谨慎（未分配） | 3 | `GPIO3`、`GPIO45`、`GPIO46` |
-| 其余 GPIO | 11 | 预留（未分配） |
+| 其余 GPIO | 10 | 预留（未分配） |
 
 ## 引脚快速查找表（按 GPIO 编号）
 
@@ -161,10 +171,10 @@
 | 3 | 8 | 谨慎 | — | strapping pin（JTAG 信号源控制等）；后续使用需评审 |
 | 4 | 9 | 已分配 | `UCM_DIN` | CH442E `IN`：USB D+/D- 归属选择（`0` 选 `S1x`；`1` 选 `S2x`；本项目约定 `S1x→ESP32‑S3`，`S2x→BQ25792`） |
 | 5 | 10 | 已分配 | `UCM_DCE` | CH442E `EN#`：全局使能（低有效；`1` 时两边断开） |
-| 6 | 11 | 预留 | — | 可用于后续项目功能 |
-| 7 | 12 | 已分配 | `PANEL_INT` | 固定分配（原理图红框；不得复用；面板 I2C2 相关） |
-| 8 | 13 | 已分配 | `PANEL_SDA` | 固定分配（原理图红框；不得复用；面板 I2C2 相关） |
-| 9 | 14 | 已分配 | `PANEL_SCL` | 固定分配（原理图红框；不得复用；面板 I2C2 相关） |
+| 6 | 11 | 已分配 | `BMS_BTP_INT_N` | BMS 中断线（`BQ40Z50-R2.BTP_INT`） |
+| 7 | 12 | 已分配 | `PANEL_INT` | 原理图红框；不得复用；I2C2 相关 |
+| 8 | 13 | 已分配 | `PANEL_SDA` | 原理图红框；不得复用；I2C2 相关 |
+| 9 | 14 | 已分配 | `PANEL_SCL` | 原理图红框；不得复用；I2C2 相关 |
 | 10 | 15 | 已分配 | `DC` | 固定分配（原理图红框；不得复用） |
 | 11 | 16 | 已分配 | `MOSI` | 固定分配（原理图红框；不得复用） |
 | 12 | 17 | 已分配 | `SCLK` | 固定分配（原理图红框；不得复用） |
@@ -184,14 +194,14 @@
 | 30 | 33 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 31 | 34 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 32 | 35 | 不可用 | — | in‑package flash/PSRAM 专用 |
-| 33 | 38 | 已分配 | `BMS_BTP_INT_N` | 连续引脚块 `GPIO33~GPIO36`；若未来更换 Octal SPI 变体/外置 Octal Flash/PSRAM 需重新评审 |
-| 34 | 39 | 已分配 | `INT` | 连续引脚块 `GPIO33~GPIO36`；板载 I2C1 相关 |
-| 35 | 40 | 已分配 | `SDA` | 连续引脚块 `GPIO33~GPIO36`；板载 I2C1 相关 |
-| 36 | 41 | 已分配 | `SCL` | 连续引脚块 `GPIO33~GPIO36`；板载 I2C1 相关 |
-| 37 | 42 | 预留 | — | FH4R2 为 Quad SPI 变体：`GPIO33~GPIO37` 未被 in‑package memory 占用；若未来改用 Octal SPI 变体/外置 Octal Flash/PSRAM 需重新评审 |
+| 33 | 38 | 预留 | — | 可用于后续项目功能（若未来更换 Octal SPI 变体/外置 Octal Flash/PSRAM 需重新评审） |
+| 34 | 39 | 已分配 | `INT_PMIC` | 连续引脚块 `GPIO34~GPIO36`；I2C1（1MHz）设备中断线 |
+| 35 | 40 | 已分配 | `SDA` | 连续引脚块 `GPIO34~GPIO36`；I2C1（1MHz） |
+| 36 | 41 | 已分配 | `SCL` | 连续引脚块 `GPIO34~GPIO36`；I2C1（1MHz） |
+| 37 | 42 | 已分配 | `INT_TPS` | `TPS55288.FB/INT` 线与输入；开漏/需上拉 |
 | 38 | 43 | 预留 | — | 可用于后续项目功能 |
-| 39 | 44 | 已分配 | `UPS_SYNC_A` | 交错 SYNC：相位 0°；复用传统 JTAG 引脚组 |
-| 40 | 45 | 已分配 | `UPS_SYNC_B` | 交错 SYNC：相位 180°；复用传统 JTAG 引脚组 |
+| 39 | 44 | 已分配 | `SYNCA` | 交错 SYNC：相位 0°；复用传统 JTAG 引脚组 |
+| 40 | 45 | 已分配 | `SYNCB` | 交错 SYNC：相位 180°；复用传统 JTAG 引脚组 |
 | 41 | 47 | 预留 | — | 同上 |
 | 42 | 48 | 预留 | — | 同上 |
 | 43 | 49 | 预留 | — | UART0 相关；建议预留测试点/焊盘兜底 |

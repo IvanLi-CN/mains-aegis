@@ -9,6 +9,7 @@ This folder stores project documentation and offline-renderable datasheets.
 - Charger design (BQ25792 + PD/PPS): `docs/charger-design.md`
 - UPS main output design: `docs/ups-output-design.md`
 - Power monitoring & protection (INA3221 + UPS VIN/TPS outputs): `docs/power-monitoring-design.md`
+- I2C/SMBus address map: `docs/i2c-address-map.md`
 - ESP32-S3 GPIO assignment: `docs/hardware-selection/esp32-s3-fh4r2-gpio.md`
 
 ## Datasheets
