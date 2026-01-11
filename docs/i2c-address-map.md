@@ -29,6 +29,8 @@
 |---:|---|---:|---|---|---|
 | `0x22` | `FUSB302BMPX` | `1MHz`（Fast Mode Plus） | 固定（`BMPX`） | `INT_N`（开漏） | `INT_PMIC`（可并入） |
 | `0x40` | `INA3221` | `400kHz`（Fast）；`2.44MHz`（High-speed） | `A0=GND` | `PV/CRITICAL/(WARNING)`（开漏） | `INT_PMIC` |
+| `0x48` | `TMP112A`（TPS55288 温度：OUT-A） | `1MHz`（Fast Mode Plus） | `ADD0=GND` | `ALERT`（开漏） | `INT_PMIC` |
+| `0x49` | `TMP112A`（TPS55288 温度：OUT-B） | `1MHz`（Fast Mode Plus） | `ADD0=V+` | `ALERT`（开漏） | `INT_PMIC` |
 | `0x50` | `M24C64-FMC6TG` | `1MHz` | `E2/E1/E0=0` | — | — |
 | `0x6B` | `BQ25792RQMR` | `1MHz` | 固定 | `INT`（开漏；低有效 `256µs` 脉冲） | `INT_PMIC` |
 | `0x74` | `TPS55288`（OUT-A） | `1MHz` | `MODE` 电阻选择 `0x74` | `FB/INT`（内部反馈模式下为故障指示输出；需上拉） | `INT_TPS` |
@@ -47,7 +49,7 @@
 | 中断线 | 来源（建议线与） | 类型 | 上拉 | MCU GPIO（暂定） |
 |---|---|---|---|---|
 | `INT_TPS` | `TPS55288(OUT-A).FB/INT` + `TPS55288(OUT-B).FB/INT` | 开漏/需上拉（故障指示） | `3.3V` | `GPIO37` |
-| `INT_PMIC` | `INA3221.PV` + `INA3221.CRITICAL` (+ `INA3221.WARNING`) + `BQ25792.INT`（+ `FUSB302B.INT_N` 可选） | 开漏线与 | `3.3V` | `GPIO34` |
+| `INT_PMIC` | `INA3221.PV` + `INA3221.CRITICAL` (+ `INA3221.WARNING`) + `BQ25792.INT` + `TMP112A(OUT-A).ALERT` + `TMP112A(OUT-B).ALERT`（+ `FUSB302B.INT_N` 可选） | 开漏线与 | `3.3V` | `GPIO34` |
 | `INT_BMS` | `BQ40Z50.BTP_INT` | 依 `BQ40Z50` 配置/电气特性决定（可按外部上拉做中断输入） | 视需要外加 | `GPIO6` |
 
-> 注意：`BQ25792.INT` 为 `256µs` 短脉冲中断；若与“可能长期拉低”的告警脚（例如某些阈值告警）共线，脉冲可能被掩盖。若该场景不可接受，需要拆分中断线或调整告警策略。
+> 注意：`BQ25792.INT` 为 `256µs` 短脉冲中断；若与“可能长期拉低”的告警脚（例如 `INA3221.PV/CRITICAL`、或 `TMP112A.ALERT` 未及时清除）共线，脉冲可能被掩盖。若该场景不可接受，需要拆分中断线或调整告警/轮询策略。

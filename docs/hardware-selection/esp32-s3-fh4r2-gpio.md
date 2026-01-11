@@ -82,7 +82,7 @@
 
 ### I2C1（1MHz，3 个 GPIO）
 
-- `GPIO34`：`INT_PMIC`（`INA3221` + `BQ25792` 共用中断线；可按需求再并入 `FUSB302B.INT_N`）
+- `GPIO34`：`INT_PMIC`（`INA3221` + `BQ25792` + `TMP112A×2` 共用中断线；可按需求再并入 `FUSB302B.INT_N`）
 - `GPIO35`：`SDA`
 - `GPIO36`：`SCL`
 
@@ -195,7 +195,7 @@
 | 31 | 34 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 32 | 35 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 33 | 38 | 预留 | — | 可用于后续项目功能（若未来更换 Octal SPI 变体/外置 Octal Flash/PSRAM 需重新评审） |
-| 34 | 39 | 已分配 | `INT_PMIC` | 连续引脚块 `GPIO34~GPIO36`；I2C1（1MHz）设备中断线 |
+| 34 | 39 | 已分配 | `INT_PMIC` | 连续引脚块 `GPIO34~GPIO36`；I2C1（1MHz）设备中断线（`INA3221`/`BQ25792`/`TMP112A×2`） |
 | 35 | 40 | 已分配 | `SDA` | 连续引脚块 `GPIO34~GPIO36`；I2C1（1MHz） |
 | 36 | 41 | 已分配 | `SCL` | 连续引脚块 `GPIO34~GPIO36`；I2C1（1MHz） |
 | 37 | 42 | 已分配 | `INT_TPS` | `TPS55288.FB/INT` 线与输入；开漏/需上拉 |
