@@ -39,7 +39,8 @@
 以下 GPIO 在上电/复位时会被采样用于启动配置；如需复用为普通 GPIO，必须保证外部电路在采样窗口不会把电平拉偏：
 
 - `GPIO0`（本项目已用于 BOOT/下载模式控制）
-- `GPIO3`、`GPIO45`、`GPIO46`（当前预留，后续若使用必须专项评审）
+- `GPIO3`（本项目用于 `FAN_EN`；strapping pin，必须保证风扇驱动侧电路在采样窗口不干扰其默认电平）
+- `GPIO45`、`GPIO46`（当前预留，后续若使用必须专项评审）
 
 ### 谨慎（默认调试/下载相关）
 
@@ -126,14 +127,16 @@
 - `GPIO41`：`CE_TPSA`（驱动 NMOS，使能控制 `TPS55288 OUT-A`）
 - `GPIO42`：`CE_TPSB`（驱动 NMOS，使能控制 `TPS55288 OUT-B`）
 
-### 风扇电压控制（PWM→RC）+ 转速测量（2 个 GPIO）
+### 风扇电压控制（PWM→RC）+ 使能 + 转速测量（3 个 GPIO）
 
 - `GPIO1`：`FAN_VSET_PWM`（PWM 输出；外部多级 RC 滤波后模拟电压，用于风扇电压/控制信号）
 - `GPIO2`：`FAN_TACH`（风扇测速输入；典型为开漏/开集输出，建议上拉到 `3.3V`）
+- `GPIO3`：`FAN_EN`（风扇驱动使能；strapping pin；必须保证驱动侧默认禁用且不会在上电/复位采样窗口拉偏 `GPIO3`）
 
 说明：
 
 - `FAN_VSET_PWM` 与 `FAN_TACH` **连续分配**，便于走线与连接器布局。
+- `FAN_EN` 分配到 `GPIO3`（strapping pin）主要是为连接器/走线集中；使用前需要对风扇驱动电路的上电默认状态做专项评审。
 - 外设建议：`FAN_VSET_PWM` 用 `LEDC`；`FAN_TACH` 用 `PCNT`（计数）或 `MCPWM capture`（测周期）。
 
 ### 充电器控制（BQ25792，2 个 GPIO）
@@ -165,7 +168,7 @@
 
 | 功能类别 | 数量 | 引脚 |
 |---|---:|---|
-| 风扇电压控制/测速 | 2 | `GPIO1`、`GPIO2` |
+| 风扇控制（VSET/TACH/EN） | 3 | `GPIO1`、`GPIO2`、`GPIO3` |
 | USB 下载调试 | 2 | `GPIO19`、`GPIO20` |
 | USB D+/D- 切换控制 | 2 | `GPIO4`、`GPIO5` |
 | 下载模式/系统控制 | 1 + EN | `GPIO0`、`CHIP_PU (EN)` |
@@ -180,7 +183,7 @@
 | 固定分配（SPI + BLK） | 6 | `GPIO10~GPIO15` |
 | 交错 SYNC（180°） | 2 | `GPIO39`、`GPIO40` |
 | 不可用 | 7 | `GPIO26~GPIO32` |
-| 不推荐/谨慎（未分配） | 3 | `GPIO3`、`GPIO45`、`GPIO46` |
+| 不推荐/谨慎（未分配） | 2 | `GPIO45`、`GPIO46` |
 | 其余 GPIO | 6 | 预留（未分配） |
 
 ## 预留建议（音频/提示音：I2S -> 数字功放 -> Speaker）
@@ -210,7 +213,7 @@
 | 0 | 5 | 已分配 | BOOT | strapping pin；用于进入下载模式 |
 | 1 | 6 | 已分配 | `FAN_VSET_PWM` | PWM 输出；外部 RC 滤波后模拟电压（风扇相关） |
 | 2 | 7 | 已分配 | `FAN_TACH` | 风扇测速输入；建议上拉到 `3.3V` |
-| 3 | 8 | 谨慎 | — | strapping pin（JTAG 信号源控制等）；后续使用需评审 |
+| 3 | 8 | 谨慎 | `FAN_EN` | 风扇驱动使能；strapping pin；必须保证驱动侧电路不在上电/复位采样窗口拉偏 `GPIO3` |
 | 4 | 9 | 已分配 | `UCM_DIN` | CH442E `IN`：USB D+/D- 归属选择（`0` 选 `S1x`；`1` 选 `S2x`；本项目约定 `S1x→ESP32‑S3`，`S2x→BQ25792`） |
 | 5 | 10 | 已分配 | `UCM_DCE` | CH442E `EN#`：全局使能（低有效；`1` 时两边断开） |
 | 6 | 11 | 已分配 | `BMS_BTP_INT` | BMS 中断线（`BQ40Z50-R2.BTP_INT`；有效极性可配置） |
