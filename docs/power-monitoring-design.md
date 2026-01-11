@@ -78,10 +78,13 @@ I = VSHUNT / RSHUNT
 - 全部高于 upper limit → `PV` 释放为高（开漏，上拉后为高）
 - 任一低于 lower limit → `PV` 拉低
 
-本项目使用 `PV` 表达“任意通道欠压”并触发 MCU 信号（`INT_PMIC`）：
+本项目使用 `PV` 表达“任意通道欠压”并触发 MCU 告警输入（`INA3221_PV`）：
 
 - `12V` 固件：任意通道 `VBUS < 11V` → `PV` 拉低
 - `19V` 固件：任意通道 `VBUS < 18V` → `PV` 拉低
+
+> 注意：`PV` 为**开漏、电平型**告警输出；当欠压条件持续存在时，`PV` 会持续拉低，因此 `INA3221_PV` 可能长期为低（这是预期行为）。  
+> `PV` 的“释放”依赖欠压条件解除（而非单纯读寄存器清除），因此不建议把 `PV` 与“需要可靠捕获的中断/告警”线与到同一根线上；本项目将 `PV` 单独接到 `INA3221_PV`，避免掩盖 `I2C1_INT` 上的其它事件。
 
 阈值写入（`VBUS_LSB = 8mV`，寄存器按 `<< 3` 对齐）：
 
@@ -108,7 +111,7 @@ I = VSHUNT / RSHUNT
 
 触发与区分方式：
 
-- 任意条件满足 → `Critical` 拉低 → `INT_PMIC` 拉低
+- 任意条件满足 → `Critical` 拉低 → `I2C1_INT` 拉低
 - MCU 读取 `Mask/Enable` 寄存器区分来源：
   - `CF1/CF2/CF3`：CH1/CH2/CH3 单路过流
   - `SF`：输出总过流（求和）
@@ -118,7 +121,7 @@ I = VSHUNT / RSHUNT
 建议在固件里把动作分层，避免把“保护”做成“闭环抖动”：
 
 - **硬保护（Critical）**：
-  - 立即：关断/降额 TPS55288（例如拉 `EN/OE`、或通过 I2C 下调限流/降低目标电压）
+  - 立即：关断/降额 TPS55288（例如控制 `CE_TPSA/CE_TPSB`（分别对应 `TPS55288 OUT-A/OUT-B`；经 NMOS 使能控制；见 `docs/hardware-selection/esp32-s3-fh4r2-gpio.md`）、或通过 I2C 下调限流/降低目标电压）
   - 记录：通道号、采样值、时间戳、重复次数
   - 恢复策略：需要明确是否允许自动重试（次数/间隔），或仅人工/上位机清故障
 - **控制（VIN 欠压，PV）**：
@@ -158,7 +161,7 @@ I = VSHUNT / RSHUNT
   - `TMP112A(TPS-A)`：`ADD0=GND` → `0x48`
   - `TMP112A(TPS-B)`：`ADD0=V+` → `0x49`
 - 供电去耦：`V+` 就近放置 `0.1µF`（`100nF`）到 `GND`；若 `3.3V` 噪声较大/走线较长，可再并 `1µF`（或通过磁珠/小电阻做隔离再在传感器侧加电容）
-- 过温中断：`ALERT` 为开漏输出；两颗 `TMP112A.ALERT` 与 `INA3221.PV/CRITICAL`（以及 `BQ25792.INT`）线与到同一根 `INT_PMIC`
+- 过温中断：`ALERT` 为开漏输出；两颗 `TMP112A.ALERT` 与 `INA3221.CRITICAL`（+可选 `INA3221.WARNING`）线与到同一根 `I2C1_INT`（`INA3221.PV` 单独接 `INA3221_PV`；`BQ25792.INT` 单独接 `BQ25792_INT`）
   - 建议使用 `Interrupt mode (TM=1)` 并设置 `T(HIGH)/T(LOW)` 做滞回；触发后由 MCU 在中断处理流程里读寄存器清除 `ALERT`，避免长期拉低导致其它“脉冲型中断”被掩盖
 
 > 资料：TMP112 datasheet（地址与 `ALERT`/模式相关章节）https://www.ti.com/lit/ds/symlink/tmp112.pdf

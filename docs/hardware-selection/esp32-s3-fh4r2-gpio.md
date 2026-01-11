@@ -73,36 +73,58 @@
 
 ### BMS 告警/中断（1 个 GPIO）
 
-- `GPIO6`：`BMS_BTP_INT_N`（`BQ40Z50-R2.BTP_INT`；BMS 中断线）
-- 通信：`BQ40Z50-R2` 挂载在 `I2C2`（`GPIO8/GPIO9`）
+- `GPIO6`：`BMS_BTP_INT`（`BQ40Z50-R2.BTP_INT`；BMS 中断线）
+- 通信：`BQ40Z50-R2` 挂载在 `I2C1`（`GPIO35/GPIO36`）
 
 说明：
 
-- 该信号与 `I2C2(PANEL_INT/SDA/SCL)` 组合成 `GPIO6~GPIO9` 的连续引脚块，便于走线与接口定义。
+- `BQ40Z50-R2.BTP_INT` 的**有效电平极性可配置**（可配置为高有效或低有效）；本项目约定网络名**不使用** `_N` 表示极性，极性信息写在备注里即可。
+- `GPIO6` 与 `I2C2(I2C2_INT/I2C2_SDA/I2C2_SCL)` 组合成 `GPIO6~GPIO9` 的连续引脚块，便于走线与接口定义（但 `BQ40Z50-R2` 通信走 `I2C1`）。
 
-### I2C1（1MHz，3 个 GPIO）
+### I2C1（400kHz，3 个 GPIO）
 
-- `GPIO34`：`INT_PMIC`（`INA3221` + `BQ25792` + `TMP112A×2` 共用中断线；可按需求再并入 `FUSB302B.INT_N`）
-- `GPIO35`：`SDA`
-- `GPIO36`：`SCL`
+- `GPIO34`：`I2C1_INT`（开漏线与：`INA3221.CRITICAL`（+可选 `INA3221.WARNING`） + `TMP112A×2`；可按需求并入 Type‑C/PD 控制器中断输出）
+- `GPIO35`：`I2C1_SDA`
+- `GPIO36`：`I2C1_SCL`
 
 说明：
 
 - `ESP32-S3FH4R2` 为 Quad SPI in‑package 变体：`GPIO33~GPIO37` 未被 in‑package memory 占用；若未来改用 Octal SPI 变体/外置 Octal Flash/PSRAM，需重新评审本段分配。
 
-### I2C2（≤400kHz，3 个 GPIO）
+### BQ25792 中断（INT，1 个 GPIO）
 
-- `GPIO7`：`PANEL_INT`（若面板侧无 I2C 器件，可仅保留为通用输入）
-- `GPIO8`：`PANEL_SDA`（`I2C2_SDA`）
-- `GPIO9`：`PANEL_SCL`（`I2C2_SCL`）
+- `GPIO33`：`BQ25792_INT`（`BQ25792.INT`；开漏；低有效 `256µs` 脉冲）
 
 说明：
 
-- `I2C2` 用于 `BQ40Z50-R2`（SMBus）以及面板侧 I2C 器件（若有）；速率建议 `≤400kHz`。
+- `BQ25792.INT` 为 `256µs` 短脉冲中断；不能与可能“长期拉低”的告警脚共线，否则脉冲会被掩盖，因此单独接入。
+
+### INA3221 欠压告警（PV，1 个 GPIO）
+
+- `GPIO38`：`INA3221_PV`（`INA3221.PV`；开漏/电平型告警：欠压时拉低；上拉到 `3.3V`）
+
+说明：
+
+- `PV` 为电平型告警（欠压持续时会持续拉低），不属于 I2C 信号，因此命名不加 `I2C1_*`；并且不建议与其它告警/中断线与到一起，避免长期拉低掩盖事件。
+
+### I2C2（400kHz，3 个 GPIO）
+
+- `GPIO7`：`I2C2_INT`（若面板侧无 I2C 器件，可仅保留为通用输入）
+- `GPIO8`：`I2C2_SDA`
+- `GPIO9`：`I2C2_SCL`
+
+说明：
+
+- `I2C2` 预留给面板侧 I2C 器件（若有）；速率：`400kHz`。
 
 ### TPS55288 故障中断（1 个 GPIO）
 
 - `GPIO37`：`INT_TPS`（两颗 `TPS55288.FB/INT` 的线与；开漏/需上拉）
+
+### TPS55288 使能控制（2 个 GPIO）
+
+- `GPIO41`：`CE_TPSA`（驱动 NMOS，使能控制 `TPS55288 OUT-A`）
+- `GPIO42`：`CE_TPSB`（驱动 NMOS，使能控制 `TPS55288 OUT-B`）
 
 ### 风扇电压控制（PWM→RC）+ 转速测量（2 个 GPIO）
 
@@ -116,7 +138,7 @@
 
 ### 充电器控制（BQ25792，2 个 GPIO）
 
-- `GPIO16`：`BQ_CE_N`（连接 `BQ25792.CE`；低有效；默认上拉禁充，MCU 确认电池存在且 BMS 允许后再拉低使能）
+- `GPIO16`：`BQ_CE`（连接 `BQ25792.CE`；低有效；默认上拉禁充，MCU 确认电池存在且 BMS 允许后再拉低使能）
 - `GPIO17`：`BQ_ILIM_HIZ_BRK`（`ILIM_HIZ`“刹车”控制：驱动 `NX7002BKWX` 下拉 `BQ25792.ILIM_HIZ` 到 GND，使其进入非开关模式；默认低电平不刹车）
 
 ### 交错 SYNC（180° 反相方波，2 个 GPIO）
@@ -148,15 +170,18 @@
 | USB D+/D- 切换控制 | 2 | `GPIO4`、`GPIO5` |
 | 下载模式/系统控制 | 1 + EN | `GPIO0`、`CHIP_PU (EN)` |
 | BMS 告警/中断 | 1 | `GPIO6` |
-| I2C1（1MHz） | 3 | `GPIO34~GPIO36` |
-| I2C2（≤400kHz） | 3 | `GPIO7~GPIO9` |
+| I2C1（400kHz） | 3 | `GPIO34~GPIO36` |
+| BQ25792 中断（INT） | 1 | `GPIO33` |
+| INA3221 欠压告警（PV） | 1 | `GPIO38` |
+| I2C2（400kHz） | 3 | `GPIO7~GPIO9` |
 | TPS55288 故障中断 | 1 | `GPIO37` |
+| TPS55288 使能控制 | 2 | `GPIO41`、`GPIO42` |
 | 充电器控制（BQ25792） | 2 | `GPIO16`、`GPIO17` |
 | 固定分配（SPI + BLK） | 6 | `GPIO10~GPIO15` |
 | 交错 SYNC（180°） | 2 | `GPIO39`、`GPIO40` |
 | 不可用 | 7 | `GPIO26~GPIO32` |
 | 不推荐/谨慎（未分配） | 3 | `GPIO3`、`GPIO45`、`GPIO46` |
-| 其余 GPIO | 10 | 预留（未分配） |
+| 其余 GPIO | 6 | 预留（未分配） |
 
 ## 引脚快速查找表（按 GPIO 编号）
 
@@ -171,17 +196,17 @@
 | 3 | 8 | 谨慎 | — | strapping pin（JTAG 信号源控制等）；后续使用需评审 |
 | 4 | 9 | 已分配 | `UCM_DIN` | CH442E `IN`：USB D+/D- 归属选择（`0` 选 `S1x`；`1` 选 `S2x`；本项目约定 `S1x→ESP32‑S3`，`S2x→BQ25792`） |
 | 5 | 10 | 已分配 | `UCM_DCE` | CH442E `EN#`：全局使能（低有效；`1` 时两边断开） |
-| 6 | 11 | 已分配 | `BMS_BTP_INT_N` | BMS 中断线（`BQ40Z50-R2.BTP_INT`） |
-| 7 | 12 | 已分配 | `PANEL_INT` | 原理图红框；不得复用；I2C2 相关 |
-| 8 | 13 | 已分配 | `PANEL_SDA` | 原理图红框；不得复用；I2C2 相关 |
-| 9 | 14 | 已分配 | `PANEL_SCL` | 原理图红框；不得复用；I2C2 相关 |
+| 6 | 11 | 已分配 | `BMS_BTP_INT` | BMS 中断线（`BQ40Z50-R2.BTP_INT`；有效极性可配置） |
+| 7 | 12 | 已分配 | `I2C2_INT` | 原理图红框；不得复用；I2C2 相关 |
+| 8 | 13 | 已分配 | `I2C2_SDA` | 原理图红框；不得复用；I2C2 相关 |
+| 9 | 14 | 已分配 | `I2C2_SCL` | 原理图红框；不得复用；I2C2 相关 |
 | 10 | 15 | 已分配 | `DC` | 固定分配（原理图红框；不得复用） |
 | 11 | 16 | 已分配 | `MOSI` | 固定分配（原理图红框；不得复用） |
 | 12 | 17 | 已分配 | `SCLK` | 固定分配（原理图红框；不得复用） |
 | 13 | 18 | 已分配 | `CS` | 固定分配（原理图红框；不得复用） |
 | 14 | 19 | 已分配 | `RES` | 固定分配（原理图红框；不得复用） |
 | 15 | 21 | 已分配 | `BLK` | 固定分配（原理图红框；不得复用） |
-| 16 | 22 | 已分配 | `BQ_CE_N` | `BQ25792.CE`（低有效；默认上拉禁充） |
+| 16 | 22 | 已分配 | `BQ_CE` | `BQ25792.CE`（低有效；默认上拉禁充） |
 | 17 | 23 | 已分配 | `BQ_ILIM_HIZ_BRK` | `ILIM_HIZ` 刹车控制（驱动 `NX7002BKWX` 下拉） |
 | 18 | 24 | 预留 | — | 可用于后续项目功能 |
 | 19 | 25 | 已分配 | USB_D- | USB 下载调试（不得复用；原理图网名常写 `ESP_DM`，若加入 CH442E 则接 `S1B`） |
@@ -194,16 +219,16 @@
 | 30 | 33 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 31 | 34 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 32 | 35 | 不可用 | — | in‑package flash/PSRAM 专用 |
-| 33 | 38 | 预留 | — | 可用于后续项目功能（若未来更换 Octal SPI 变体/外置 Octal Flash/PSRAM 需重新评审） |
-| 34 | 39 | 已分配 | `INT_PMIC` | 连续引脚块 `GPIO34~GPIO36`；I2C1（1MHz）设备中断线（`INA3221`/`BQ25792`/`TMP112A×2`） |
-| 35 | 40 | 已分配 | `SDA` | 连续引脚块 `GPIO34~GPIO36`；I2C1（1MHz） |
-| 36 | 41 | 已分配 | `SCL` | 连续引脚块 `GPIO34~GPIO36`；I2C1（1MHz） |
+| 33 | 38 | 已分配 | `BQ25792_INT` | `BQ25792.INT`；开漏；低有效 `256µs` 脉冲 |
+| 34 | 39 | 已分配 | `I2C1_INT` | 连续引脚块 `GPIO34~GPIO36`；I2C1（400kHz）告警线（`INA3221.CRITICAL`（+可选 `WARNING`）/`TMP112A×2`；可并入 Type‑C/PD 控制器中断输出） |
+| 35 | 40 | 已分配 | `I2C1_SDA` | 连续引脚块 `GPIO34~GPIO36`；I2C1（400kHz） |
+| 36 | 41 | 已分配 | `I2C1_SCL` | 连续引脚块 `GPIO34~GPIO36`；I2C1（400kHz） |
 | 37 | 42 | 已分配 | `INT_TPS` | `TPS55288.FB/INT` 线与输入；开漏/需上拉 |
-| 38 | 43 | 预留 | — | 可用于后续项目功能 |
+| 38 | 43 | 已分配 | `INA3221_PV` | `INA3221.PV`；开漏/电平型告警（欠压时拉低）；上拉到 `3.3V` |
 | 39 | 44 | 已分配 | `SYNCA` | 交错 SYNC：相位 0°；复用传统 JTAG 引脚组 |
 | 40 | 45 | 已分配 | `SYNCB` | 交错 SYNC：相位 180°；复用传统 JTAG 引脚组 |
-| 41 | 47 | 预留 | — | 同上 |
-| 42 | 48 | 预留 | — | 同上 |
+| 41 | 47 | 已分配 | `CE_TPSA` | 驱动 NMOS，使能控制 `TPS55288 OUT-A` |
+| 42 | 48 | 已分配 | `CE_TPSB` | 驱动 NMOS，使能控制 `TPS55288 OUT-B` |
 | 43 | 49 | 预留 | — | UART0 相关；建议预留测试点/焊盘兜底 |
 | 44 | 50 | 预留 | — | UART0 相关；建议预留测试点/焊盘兜底 |
 | 45 | 51 | 谨慎 | — | strapping pin（VDD_SPI 相关）；后续使用需评审 |
