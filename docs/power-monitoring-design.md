@@ -172,11 +172,11 @@ I = VSHUNT / RSHUNT
       - 作为输入：接收过温/停机请求（电平型）
       - 作为开漏输出：MCU 可拉低 `THERM_KILL_N` 强制双路停机（不走 I2C）
   - 关断执行（两路同时停机）：
-    - 将 `TPS55288A.EN/UVLO` 与 `TPS55288B.EN/UVLO` 视为同一个节点 `EN_UVLO_BUS`（建议各自串联 `~100Ω` 再汇聚，便于隔离与调试）
+    - 将 `TPS55288A.EN/UVLO` 与 `TPS55288B.EN/UVLO` 视为同一个节点 `TPS_EN`（建议各自串联 `~100Ω` 再汇聚，便于隔离与调试）
     - 使用 `BSS138PS,115`（双 NMOS）实现“反相 + 下拉”：
       - Q1（反相）：`G=THERM_KILL_N`，`S=GND`，`D=THERM_FAULT_H`，并用 `~100kΩ` 上拉到 `3.3V`
-      - Q2（下拉）：`G=THERM_FAULT_H`，`S=GND`，`D=EN_UVLO_BUS`
-    - `EN_UVLO_BUS` 的上拉/分压网络按 `TPS55288` 的 `EN/UVLO` UVLO 需求设计；过温/强制停机时通过 Q2 强制拉低优先
+      - Q2（下拉）：`G=THERM_FAULT_H`，`S=GND`，`D=TPS_EN`
+    - `TPS_EN` 的上拉/分压网络按 `TPS55288` 的 `EN/UVLO` UVLO 需求设计；过温/强制停机时通过 Q2 强制拉低优先
   - 备注：
     - 不把 `TMP112A.ALERT` 并入 `I2C1_INT`：Comparator 模式下可能长期拉低，会掩盖其它中断/告警；本方案用 `THERM_KILL_N` 独立接入 MCU，兼顾“硬停机”与“MCU 可见”。
 
