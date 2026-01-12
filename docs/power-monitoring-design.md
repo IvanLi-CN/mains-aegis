@@ -121,7 +121,7 @@ I = VSHUNT / RSHUNT
 建议在固件里把动作分层，避免把“保护”做成“闭环抖动”：
 
 - **硬保护（Critical）**：
-  - 立即：关断/降额 TPS55288（例如控制 `CE_TPSA/CE_TPSB`（分别对应 `TPS55288 OUT-A/OUT-B`；经 NMOS 使能控制；见 `docs/hardware-selection/esp32-s3-fh4r2-gpio.md`）、或通过 I2C 下调限流/降低目标电压）
+  - 立即：关断/降额 TPS55288（例如拉低 `THERM_KILL_N` 触发“硬停机”（双路同时停机，见 4.3）、或通过 I2C 下调限流/降低目标电压）
   - 记录：通道号、采样值、时间戳、重复次数
   - 恢复策略：需要明确是否允许自动重试（次数/间隔），或仅人工/上位机清故障
 - **控制（VIN 欠压，PV）**：
@@ -161,8 +161,24 @@ I = VSHUNT / RSHUNT
   - `TMP112A(TPS-A)`：`ADD0=GND` → `0x48`
   - `TMP112A(TPS-B)`：`ADD0=V+` → `0x49`
 - 供电去耦：`V+` 就近放置 `0.1µF`（`100nF`）到 `GND`；若 `3.3V` 噪声较大/走线较长，可再并 `1µF`（或通过磁珠/小电阻做隔离再在传感器侧加电容）
-- 过温中断：`ALERT` 为开漏输出；两颗 `TMP112A.ALERT` 与 `INA3221.CRITICAL`（+可选 `INA3221.WARNING`）线与到同一根 `I2C1_INT`（`INA3221.PV` 单独接 `INA3221_PV`；`BQ25792.INT` 单独接 `BQ25792_INT`）
-  - 建议使用 `Interrupt mode (TM=1)` 并设置 `T(HIGH)/T(LOW)` 做滞回；触发后由 MCU 在中断处理流程里读寄存器清除 `ALERT`，避免长期拉低导致其它“脉冲型中断”被掩盖
+- 过温硬保护（推荐）：利用 `ALERT`（开漏）做“任一路过温 → 双路 `TPS55288` 同时停机”的硬件链路，避免单路停机后负载被另一颗接手导致快速过温。
+  - 模式：建议使用 `Comparator mode (TM=0)` + `POL=0`，这样 `ALERT` 在温度 ≥ `T(HIGH)` 时会持续拉低，并保持到温度 < `T(LOW)` 才释放（通过 `T(HIGH)/T(LOW)` 实现滞回；可配合 Fault Queue 做去抖）。
+  - 过温汇总 + MCU 强制（同一根 GPIO，低有效）：
+    - 汇总线：`THERM_KILL_N`（开漏线与；低=过温/停机请求）
+    - `TMP112A(TPS-A).ALERT` —(串联 `~1kΩ`)→ `THERM_KILL_N`
+    - `TMP112A(TPS-B).ALERT` —(串联 `~1kΩ`)→ `THERM_KILL_N`
+    - `THERM_KILL_N` 上拉 `~10kΩ` 到 `3.3V`
+    - `MCU.GPIO_THERM_KILL_N` 直接连接 `THERM_KILL_N`：
+      - 作为输入：接收过温/停机请求（电平型）
+      - 作为开漏输出：MCU 可拉低 `THERM_KILL_N` 强制双路停机（不走 I2C）
+  - 关断执行（两路同时停机）：
+    - 将 `TPS55288A.EN/UVLO` 与 `TPS55288B.EN/UVLO` 视为同一个节点 `EN_UVLO_BUS`（建议各自串联 `~100Ω` 再汇聚，便于隔离与调试）
+    - 使用 `BSS138PS,115`（双 NMOS）实现“反相 + 下拉”：
+      - Q1（反相）：`G=THERM_KILL_N`，`S=GND`，`D=THERM_FAULT_H`，并用 `~100kΩ` 上拉到 `3.3V`
+      - Q2（下拉）：`G=THERM_FAULT_H`，`S=GND`，`D=EN_UVLO_BUS`
+    - `EN_UVLO_BUS` 的上拉/分压网络按 `TPS55288` 的 `EN/UVLO` UVLO 需求设计；过温/强制停机时通过 Q2 强制拉低优先
+  - 备注：
+    - 不把 `TMP112A.ALERT` 并入 `I2C1_INT`：Comparator 模式下可能长期拉低，会掩盖其它中断/告警；本方案用 `THERM_KILL_N` 独立接入 MCU，兼顾“硬停机”与“MCU 可见”。
 
 > 资料：TMP112 datasheet（地址与 `ALERT`/模式相关章节）https://www.ti.com/lit/ds/symlink/tmp112.pdf
 

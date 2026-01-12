@@ -30,8 +30,8 @@
 |---:|---|---:|---|---|---|
 | `0x0B` | `BQ40Z50RSMR-R2` | `100kHz`（SMBus）；`400kHz`（SMBus XL） | 固定 | `BTP_INT` | `BMS_BTP_INT_N` |
 | `0x40` | `INA3221` | `400kHz`（Fast）；`2.44MHz`（High-speed） | `A0=GND` | `PV/CRITICAL/(WARNING)`（开漏） | `PV→INA3221_PV；CRITICAL/WARNING→I2C1_INT` |
-| `0x48` | `TMP112A`（TPS55288 温度：OUT-A） | `1MHz`（Fast Mode Plus） | `ADD0=GND` | `ALERT`（开漏） | `I2C1_INT` |
-| `0x49` | `TMP112A`（TPS55288 温度：OUT-B） | `1MHz`（Fast Mode Plus） | `ADD0=V+` | `ALERT`（开漏） | `I2C1_INT` |
+| `0x48` | `TMP112A`（TPS55288 温度：OUT-A） | `1MHz`（Fast Mode Plus） | `ADD0=GND` | `ALERT`（开漏） | `THERM_KILL_N`（硬件过温停机链路；MCU 同一 GPIO 可拉低强制停机） |
+| `0x49` | `TMP112A`（TPS55288 温度：OUT-B） | `1MHz`（Fast Mode Plus） | `ADD0=V+` | `ALERT`（开漏） | `THERM_KILL_N`（硬件过温停机链路；MCU 同一 GPIO 可拉低强制停机） |
 | `0x50` | `M24C64-FMC6TG` | `1MHz` | `E2/E1/E0=0` | — | — |
 | `0x6B` | `BQ25792RQMR` | `1MHz` | 固定 | `INT`（开漏；低有效 `256µs` 脉冲） | `BQ25792_INT` |
 | `0x74` | `TPS55288`（OUT-A） | `1MHz` | `MODE` 电阻选择 `0x74` | `FB/INT`（内部反馈模式下为故障指示输出；需上拉） | `INT_TPS` |
@@ -48,12 +48,13 @@
 | 中断线 | 来源（建议线与） | 类型 | 上拉 | MCU GPIO（暂定） |
 |---|---|---|---|---|
 | `INT_TPS` | `TPS55288(OUT-A).FB/INT` + `TPS55288(OUT-B).FB/INT` | 开漏/需上拉（故障指示） | `3.3V` | `GPIO37` |
-| `I2C1_INT` | `INA3221.CRITICAL` (+ `INA3221.WARNING`) + `TMP112A(OUT-A).ALERT` + `TMP112A(OUT-B).ALERT`（+ Type‑C/PD 控制器中断输出可选） | 开漏线与 | `3.3V` | `GPIO34` |
+| `I2C1_INT` | `INA3221.CRITICAL` (+ `INA3221.WARNING`)（+ Type‑C/PD 控制器中断输出可选） | 开漏线与 | `3.3V` | `GPIO34` |
 | `BQ25792_INT` | `BQ25792.INT`（开漏；低有效 `256µs` 脉冲） | 开漏/脉冲型中断 | `3.3V` | `GPIO33` |
-| `INA3221_PV` | `INA3221.PV`（Power Valid；欠压时拉低） | 开漏/电平型告警 | `VPU=3.3V` | `GPIO38` |
+| `INA3221_PV` | `INA3221.PV`（Power Valid；欠压时拉低） | 开漏/电平型告警 | `VPU=3.3V` | `GPIO18` |
 | `BMS_BTP_INT_N` | `BQ40Z50.BTP_INT`（经 `NMOSFET` 取反） | 有效极性可配置（高有效/低有效）；按需要外加上拉 | 视需要外加 | `GPIO6` |
+| `THERM_KILL_N` | `TMP112A(OUT-A).ALERT` + `TMP112A(OUT-B).ALERT`（开漏线与，串 `~1kΩ` 建议） | 开漏/电平型告警 | `3.3V` | `GPIO38`（MCU 可读/也可开漏拉低强制停机） |
 
 > 注意：`BQ25792.INT` 为 `256µs` 短脉冲中断；若与“可能长期拉低”的告警脚共线，脉冲可能被掩盖。本项目将其单独接到 `BQ25792_INT`，避免被 `I2C1_INT` 上的电平告警掩盖。
 
-> SMBus ARA（Alert Response Address）：可对 7-bit `0x0C` 发起 Read（8-bit `0x19`）。`INA3221` 与 `TMP112` 支持该机制，可用于在 `I2C1_INT` 拉低时快速定位来源；若 ARA 无响应，则按设备逐个读取状态寄存器确认。  
-> 其中 `INA3221` 要求告警为 Latch mode；`TMP112` 需在 Interrupt mode（`TM=1`）下才会保持 `ALERT` 并参与 ARA。
+> SMBus ARA（Alert Response Address）：可对 7-bit `0x0C` 发起 Read（8-bit `0x19`）。`INA3221` 支持该机制，可用于在 `I2C1_INT` 拉低时快速定位来源。  
+> 说明：`TMP112` 也支持 ARA，但仅在你把 `TMP112A.ALERT` 接入 `I2C1_INT` 且配置为 Interrupt mode（`TM=1`）时才有意义；本项目当前将 `TMP112A.ALERT` 用于硬件过温停机链路（`THERM_KILL_N`），不走 `I2C1_INT`。

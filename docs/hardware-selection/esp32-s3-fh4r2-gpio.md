@@ -84,13 +84,14 @@
 
 ### I2C1（400kHz，3 个 GPIO）
 
-- `GPIO34`：`I2C1_INT`（开漏线与：`INA3221.CRITICAL`（+可选 `INA3221.WARNING`） + `TMP112A×2`；可按需求并入 Type‑C/PD 控制器中断输出）
+- `GPIO34`：`I2C1_INT`（开漏线与：`INA3221.CRITICAL`（+可选 `INA3221.WARNING`）；可按需求并入 Type‑C/PD 控制器中断输出）
 - `GPIO35`：`I2C1_SDA`
 - `GPIO36`：`I2C1_SCL`
 
 说明：
 
 - `ESP32-S3FH4R2` 为 Quad SPI in‑package 变体：`GPIO33~GPIO37` 未被 in‑package memory 占用；若未来改用 Octal SPI 变体/外置 Octal Flash/PSRAM，需重新评审本段分配。
+- 温度硬保护：本项目建议将 `TMP112A.ALERT` 用于硬件过温停机链路（见 `docs/power-monitoring-design.md`），不并入 `I2C1_INT`，避免 Comparator 模式下“长期拉低”掩盖其它告警。
 
 ### BQ25792 中断（INT，1 个 GPIO）
 
@@ -102,7 +103,7 @@
 
 ### INA3221 欠压告警（PV，1 个 GPIO）
 
-- `GPIO38`：`INA3221_PV`（`INA3221.PV`；开漏/电平型告警：欠压时拉低；上拉到 `3.3V`）
+- `GPIO18`：`INA3221_PV`（`INA3221.PV`；开漏/电平型告警：欠压时拉低；上拉到 `3.3V`）
 
 说明：
 
@@ -122,10 +123,9 @@
 
 - `GPIO37`：`INT_TPS`（两颗 `TPS55288.FB/INT` 的线与；开漏/需上拉）
 
-### TPS55288 使能控制（2 个 GPIO）
+### TPS55288 硬停机（过温/强制关断，1 个 GPIO）
 
-- `GPIO41`：`CE_TPSA`（驱动 NMOS，使能控制 `TPS55288 OUT-A`）
-- `GPIO42`：`CE_TPSB`（驱动 NMOS，使能控制 `TPS55288 OUT-B`）
+- `GPIO38`：`THERM_KILL_N`（开漏线与：`TMP112A×2.ALERT`；同一 GPIO 可作为输入接收过温告警，也可配置为开漏输出拉低以强制双路 `TPS55288` 停机；详见 `docs/power-monitoring-design.md`）
 
 ### 风扇电压控制（PWM→RC）+ 使能 + 转速测量（3 个 GPIO）
 
@@ -175,16 +175,16 @@
 | BMS 告警/中断 | 1 | `GPIO6` |
 | I2C1（400kHz） | 3 | `GPIO34~GPIO36` |
 | BQ25792 中断（INT） | 1 | `GPIO33` |
-| INA3221 欠压告警（PV） | 1 | `GPIO38` |
+| INA3221 欠压告警（PV） | 1 | `GPIO18` |
 | I2C2（400kHz） | 3 | `GPIO7~GPIO9` |
 | TPS55288 故障中断 | 1 | `GPIO37` |
-| TPS55288 使能控制 | 2 | `GPIO41`、`GPIO42` |
+| TPS55288 硬停机（过温/强制关断） | 1 | `GPIO38` |
 | 充电器控制（BQ25792） | 2 | `GPIO16`、`GPIO17` |
 | 固定分配（SPI + BLK） | 6 | `GPIO10~GPIO15` |
 | 交错 SYNC（180°） | 2 | `GPIO39`、`GPIO40` |
 | 不可用 | 7 | `GPIO26~GPIO32` |
 | 不推荐/谨慎（未分配） | 2 | `GPIO45`、`GPIO46` |
-| 其余 GPIO | 6 | 预留（未分配） |
+| 其余 GPIO | 7 | 预留（未分配） |
 
 ## 预留建议（音频/提示音：I2S -> 数字功放 -> Speaker）
 
@@ -228,7 +228,7 @@
 | 15 | 21 | 已分配 | `BLK` | 固定分配（原理图红框；不得复用） |
 | 16 | 22 | 已分配 | `BQ_CE` | `BQ25792.CE`（低有效；默认上拉禁充） |
 | 17 | 23 | 已分配 | `BQ_ILIM_HIZ_BRK` | `ILIM_HIZ` 刹车控制（驱动 `NX7002BKWX` 下拉） |
-| 18 | 24 | 预留 | — | 可用于后续项目功能 |
+| 18 | 24 | 已分配 | `INA3221_PV` | `INA3221.PV`；开漏/电平型告警（欠压时拉低）；上拉到 `3.3V` |
 | 19 | 25 | 已分配 | USB_D- | USB 下载调试（不得复用；原理图网名常写 `ESP_DM`，若加入 CH442E 则接 `S1B`） |
 | 20 | 26 | 已分配 | USB_D+ | USB 下载调试（不得复用；原理图网名常写 `ESP_DP`，若加入 CH442E 则接 `S1C`） |
 | 21 | 27 | 预留 | `AUDIO_I2S_DOUT` / `BUZZ_PWM`（建议） | 二选一复用：I2S TX 数据输出或蜂鸣器 PWM；详见 `docs/audio-design.md` |
@@ -240,15 +240,15 @@
 | 31 | 34 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 32 | 35 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 33 | 38 | 已分配 | `BQ25792_INT` | `BQ25792.INT`；开漏；低有效 `256µs` 脉冲 |
-| 34 | 39 | 已分配 | `I2C1_INT` | 连续引脚块 `GPIO34~GPIO36`；I2C1（400kHz）告警线（`INA3221.CRITICAL`（+可选 `WARNING`）/`TMP112A×2`；可并入 Type‑C/PD 控制器中断输出） |
+| 34 | 39 | 已分配 | `I2C1_INT` | 连续引脚块 `GPIO34~GPIO36`；I2C1（400kHz）告警线（`INA3221.CRITICAL`（+可选 `WARNING`）；可并入 Type‑C/PD 控制器中断输出） |
 | 35 | 40 | 已分配 | `I2C1_SDA` | 连续引脚块 `GPIO34~GPIO36`；I2C1（400kHz） |
 | 36 | 41 | 已分配 | `I2C1_SCL` | 连续引脚块 `GPIO34~GPIO36`；I2C1（400kHz） |
 | 37 | 42 | 已分配 | `INT_TPS` | `TPS55288.FB/INT` 线与输入；开漏/需上拉 |
-| 38 | 43 | 已分配 | `INA3221_PV` | `INA3221.PV`；开漏/电平型告警（欠压时拉低）；上拉到 `3.3V` |
+| 38 | 43 | 已分配 | `THERM_KILL_N` | 过温硬停机线（开漏线与：`TMP112A×2.ALERT`）；同一 GPIO 可开漏拉低强制双路 `TPS55288` 停机 |
 | 39 | 44 | 已分配 | `SYNCA` | 交错 SYNC：相位 0°；复用传统 JTAG 引脚组 |
 | 40 | 45 | 已分配 | `SYNCB` | 交错 SYNC：相位 180°；复用传统 JTAG 引脚组 |
-| 41 | 47 | 已分配 | `CE_TPSA` | 驱动 NMOS，使能控制 `TPS55288 OUT-A` |
-| 42 | 48 | 已分配 | `CE_TPSB` | 驱动 NMOS，使能控制 `TPS55288 OUT-B` |
+| 41 | 47 | 预留 | — | 预留（原“单路使能”方案占用；当前改为 `THERM_KILL_N` 硬停机链路以节约 GPIO） |
+| 42 | 48 | 预留 | — | 预留（原“单路使能”方案占用；当前改为 `THERM_KILL_N` 硬停机链路以节约 GPIO） |
 | 43 | 49 | 预留 | — | UART0 相关；建议预留测试点/焊盘兜底 |
 | 44 | 50 | 预留 | — | UART0 相关；建议预留测试点/焊盘兜底 |
 | 45 | 51 | 谨慎 | — | strapping pin（VDD_SPI 相关）；后续使用需评审 |
