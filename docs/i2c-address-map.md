@@ -28,7 +28,7 @@
 
 | 7-bit 地址 | 器件 | 最高 `fSCL`（器件能力） | 地址配置（硬件） | 中断/告警输出 | 中断线分组（暂定） |
 |---:|---|---:|---|---|---|
-| `0x0B` | `BQ40Z50RSMR-R2` | `100kHz`（SMBus）；`400kHz`（SMBus XL） | 固定 | `BTP_INT` | `BMS_BTP_INT` |
+| `0x0B` | `BQ40Z50RSMR-R2` | `100kHz`（SMBus）；`400kHz`（SMBus XL） | 固定 | `BTP_INT` | `BMS_BTP_INT_N` |
 | `0x40` | `INA3221` | `400kHz`（Fast）；`2.44MHz`（High-speed） | `A0=GND` | `PV/CRITICAL/(WARNING)`（开漏） | `PV→INA3221_PV；CRITICAL/WARNING→I2C1_INT` |
 | `0x48` | `TMP112A`（TPS55288 温度：OUT-A） | `1MHz`（Fast Mode Plus） | `ADD0=GND` | `ALERT`（开漏） | `I2C1_INT` |
 | `0x49` | `TMP112A`（TPS55288 温度：OUT-B） | `1MHz`（Fast Mode Plus） | `ADD0=V+` | `ALERT`（开漏） | `I2C1_INT` |
@@ -51,7 +51,7 @@
 | `I2C1_INT` | `INA3221.CRITICAL` (+ `INA3221.WARNING`) + `TMP112A(OUT-A).ALERT` + `TMP112A(OUT-B).ALERT`（+ Type‑C/PD 控制器中断输出可选） | 开漏线与 | `3.3V` | `GPIO34` |
 | `BQ25792_INT` | `BQ25792.INT`（开漏；低有效 `256µs` 脉冲） | 开漏/脉冲型中断 | `3.3V` | `GPIO33` |
 | `INA3221_PV` | `INA3221.PV`（Power Valid；欠压时拉低） | 开漏/电平型告警 | `VPU=3.3V` | `GPIO38` |
-| `BMS_BTP_INT` | `BQ40Z50.BTP_INT` | 有效极性可配置（高有效/低有效）；按需要外加上拉 | 视需要外加 | `GPIO6` |
+| `BMS_BTP_INT_N` | `BQ40Z50.BTP_INT`（经 `NMOSFET` 取反） | 有效极性可配置（高有效/低有效）；按需要外加上拉 | 视需要外加 | `GPIO6` |
 
 > 注意：`BQ25792.INT` 为 `256µs` 短脉冲中断；若与“可能长期拉低”的告警脚共线，脉冲可能被掩盖。本项目将其单独接到 `BQ25792_INT`，避免被 `I2C1_INT` 上的电平告警掩盖。
 
