@@ -186,15 +186,15 @@
 | 不推荐/谨慎（未分配） | 2 | `GPIO45`、`GPIO46` |
 | 其余 GPIO | 7 | 预留（未分配） |
 
-## 预留建议（音频/提示音：I2S -> 数字功放 -> Speaker）
+## 预留建议（音频/提示音：TDM（I2S 外设） -> 数字功放 -> Speaker）
 
-本项目提示音计划从“无源蜂鸣器”升级为 “`I2S + MAX98357A + Speaker`”（详见 `docs/audio-design.md`）。
+本项目提示音计划从“无源蜂鸣器”升级为 “`TDM + MAX98357A + Speaker`”（详见 `docs/audio-design.md`）。
 
 约束与建议：
 
 - 仅做**预留建议**：不改变“已确认引脚分配”的范围与含义。
-- I2S TX 最少需要 3 个 GPIO：`BCLK/LRCLK/DOUT`。
-- 为了提升兼容性，本项目计划**同时保留蜂鸣器与 I2S 数字功放电路**，并把 GPIO 成本控制为 **3 根**：其中 1 根 GPIO 需要“二选一复用”（I2S 数据线 / 蜂鸣器 PWM）。
+- TDM TX 最少需要 3 个 GPIO：`BCLK/LRCLK/DOUT`（在 TDM 中 `LRCLK` 作为帧同步 `WS` 使用；网名保持 `AUDIO_I2S_LRCLK` 不变）。
+- 为了提升兼容性，本项目计划**同时保留蜂鸣器与数字功放电路**，并把 GPIO 成本控制为 **3 根**：其中 1 根 GPIO 需要“二选一复用”（TDM 数据线 / 蜂鸣器 PWM）。
 - 由于 `GPIO19/20` 固定用于 USB 下载调试，音频相关信号建议优先放在远离 USB 差分对的预留 GPIO 上，降低串扰/走线压力。
 
 推荐预留组合（可按原理图布局调整）：
@@ -231,7 +231,7 @@
 | 18 | 24 | 已分配 | `INA3221_PV` | `INA3221.PV`；开漏/电平型告警（欠压时拉低）；上拉到 `3.3V` |
 | 19 | 25 | 已分配 | USB_D- | USB 下载调试（不得复用；原理图网名常写 `ESP_DM`，若加入 CH442E 则接 `S1B`） |
 | 20 | 26 | 已分配 | USB_D+ | USB 下载调试（不得复用；原理图网名常写 `ESP_DP`，若加入 CH442E 则接 `S1C`） |
-| 21 | 27 | 预留 | `AUDIO_I2S_DOUT` / `BUZZ_PWM`（建议） | 二选一复用：I2S TX 数据输出或蜂鸣器 PWM；详见 `docs/audio-design.md` |
+| 21 | 27 | 预留 | `AUDIO_I2S_DOUT` / `BUZZ_PWM`（建议） | 二选一复用：TDM TX 数据输出或蜂鸣器 PWM；详见 `docs/audio-design.md` |
 | 26 | 28 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 27 | 30 | 不可用 | — | in‑package flash/PSRAM 专用 |
 | 28 | 31 | 不可用 | — | in‑package flash/PSRAM 专用 |
@@ -253,8 +253,8 @@
 | 44 | 50 | 预留 | — | UART0 相关；建议预留测试点/焊盘兜底 |
 | 45 | 51 | 谨慎 | — | strapping pin（VDD_SPI 相关）；后续使用需评审 |
 | 46 | 52 | 谨慎 | — | strapping pin（boot/ROM 打印等相关）；后续使用需评审 |
-| 47 | 37 | 预留 | `AUDIO_I2S_BCLK`（建议） | I2S TX 位时钟；详见 `docs/audio-design.md` |
-| 48 | 36 | 预留 | `AUDIO_I2S_LRCLK`（建议） | I2S TX 帧同步；详见 `docs/audio-design.md` |
+| 47 | 37 | 预留 | `AUDIO_I2S_BCLK`（建议） | TDM TX 位时钟；详见 `docs/audio-design.md` |
+| 48 | 36 | 预留 | `AUDIO_I2S_LRCLK`（建议） | TDM TX 帧同步（WS，网名保持不变）；详见 `docs/audio-design.md` |
 
 ## 待补齐输入（用于下一步把“预留”落到具体分配）
 

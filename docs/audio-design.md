@@ -5,7 +5,7 @@
 结论（推荐默认方案）：
 
 - **MCU**：`ESP32-S3-FH4R2`（本项目已选）
-- **输出链路**：`ESP32-S3 I2S (TX) -> MAX98357A -> Speaker`
+- **输出链路**：`ESP32-S3 TDM (TX) -> MAX98357A -> Speaker`（固件采用 `esp-rs`/`esp-hal`（no_std）时按 TDM 落地）
 - **素材格式**：`IMA-ADPCM`（4-bit）优先；备选 `PCM`（WAV/裸 PCM）
 - **发声器件（当前选型）**：`8Ω / 1W`（`15×11×3mm` 级别）
 
@@ -19,12 +19,12 @@
 
 ---
 
-## 2. 器件选择：MAX98357A（I2S 数字功放）
+## 2. 器件选择：MAX98357A（PCM/TDM 数字功放）
 
 `MAX98357A` 是数字 PCM 输入的 Class‑D 功放，适合“提示音/告警音效”这种低码率音频输出：
 
 - **供电范围**：`2.5–5.5V`
-- **无需 MCLK**（只需要 `BCLK/LRCLK/DIN`）
+- **无需 MCLK**（只需要 `BCLK/LRCLK/DIN`；在 TDM 中，`LRCLK` 实际作为帧同步 `WS` 使用）
 - **采样率**：`8kHz–96kHz`
 - **输出能力**：典型宣传指标为 `3.2W into 4Ω @ 5V`（具体受供电、负载、热设计限制）
 - **Filterless Class‑D 输出**（更少外围器件，但 PCB 走线/EMI 需要专项注意）
@@ -50,15 +50,31 @@
 - 额定功率保护：`8Ω / 1W` 喇叭在 `5V` 供电下仍可能被过驱（取决于增益/素材电平/限幅策略）；建议通过增益档位与素材电平（留 headroom）控制最大输出。
 - Class‑D 输出走线/EMI：喇叭线与回流路径、地分割、开关节点环路面积都要控制；必要时评估 EMI 滤波（按 datasheet/参考设计）。
 
+### 3.3 `SD_MODE` / `GAIN_SLOT`（本项目：TDM + 单声道）
+
+参考：
+
+- datasheet：`https://www.analog.com/media/en/technical-documentation/data-sheets/max98357a-max98357b.pdf`
+- 应用笔记（MAX98357 WLP）：`https://www.analog.com/en/resources/design-notes/optimize-cost-size-and-performance-with-max98357-wlp.html`
+
+#### 3.3.1 设计结论（只讲连接）
+
+- `SD_MODE`：**固定上拉到 `VDDIO`（高电平）**
+- `GAIN_SLOT`：**固定下拉到 `GND`**
+
+该组合在 TDM 模式下选择 **channel 0**（应用笔记 Table 2）。本项目只使用单声道：固件把音频样本写入该 slot，其余 slot 置 0。
+
+> 注：保持网名不变：`AUDIO_I2S_LRCLK` 在 TDM 下作为 `WS` 使用，但网名不改。
+
 ---
 
 ## 4. 固件资源评估（提示音场景）
 
-提示音播放使用 `ESP32-S3` 的 I2S TX + DMA：CPU 主要做“解码/搬运数据”，资源压力很小。
+提示音播放使用 `ESP32-S3` 的 I2S 外设（TDM 模式）TX + DMA：CPU 主要做“解码/搬运数据”，资源压力很小。
 
 ### 4.1 占用的 MCU 资源类型
 
-- **外设**：占用 1 路 I2S（TX）
+- **外设**：占用 1 路 I2S（TX，TDM 模式）
 - **GPIO**：最少 3 根（`BCLK/LRCLK/DOUT`），可选再加 1 根（`AMP_EN`）
 - **RAM**：I2S DMA buffer + 应用层 ring buffer（通常数 KB～数十 KB）
 - **CPU**：
@@ -90,20 +106,20 @@
 - `AUDIO_I2S_DOUT`
 - （可选）`AUDIO_AMP_EN`（本项目默认不引入）
 
-### 5.1 蜂鸣器 + I2S 数字功放共存（3 引脚，1 根复用）
+### 5.1 蜂鸣器 + 数字功放（TDM）共存（3 引脚，1 根复用）
 
-为兼容“保留蜂鸣器”与“I2S 数字功放”，并将 GPIO 成本控制为 **3 根**，建议：
+为兼容“保留蜂鸣器”与“数字功放（TDM）”，并将 GPIO 成本控制为 **3 根**，建议：
 
 - `AUDIO_I2S_BCLK`：专用
 - `AUDIO_I2S_LRCLK`：专用
 - 第 3 根 GPIO **二选一复用**：
-  - I2S 模式：`AUDIO_I2S_DOUT`
+  - TDM 模式：`AUDIO_I2S_DOUT`
   - 蜂鸣器模式：`BUZZ_PWM`
 
 实现原则：
 
 - 硬件上用“二选一装配 / 二选一跳线 / 模拟开关”等方式，保证同一根 GPIO 不会同时接到两路负载。
-- 固件上在不同模式下切换外设功能（I2S vs LEDC/PWM）。
+- 固件上在不同模式下切换外设功能（TDM TX vs LEDC/PWM）。
 
 ---
 
@@ -122,4 +138,4 @@
 - 从电流上看，`8Ω` 喇叭在“听起来明显”的响度下往往需要数十到数百 mA 的交流电流，GPIO 通常达不到。
 - 可行的做法是：PWM 作为音频调制信号，外接**功率驱动**（半桥/全桥/H 桥/专用功放），必要时再做滤波/EMI 处理。
 
-因此本项目如果要“更丰富的提示音”，仍建议走 `I2S + MAX98357A + Speaker`；蜂鸣器则用 `LEDC/PWM` 单独驱动更合适。
+因此本项目如果要“更丰富的提示音”，仍建议走 `TDM + MAX98357A + Speaker`；蜂鸣器则用 `LEDC/PWM` 单独驱动更合适。
