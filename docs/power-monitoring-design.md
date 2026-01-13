@@ -84,7 +84,7 @@ I = VSHUNT / RSHUNT
 - `19V` 固件：任意通道 `VBUS < 18V` → `PV` 拉低
 
 > 注意：`PV` 为**开漏、电平型**告警输出；当欠压条件持续存在时，`PV` 会持续拉低，因此 `INA3221_PV` 可能长期为低（这是预期行为）。  
-> `PV` 的“释放”依赖欠压条件解除（而非单纯读寄存器清除），因此不建议把 `PV` 与“需要可靠捕获的中断/告警”线与到同一根线上；本项目将 `PV` 单独接到 `INA3221_PV`，避免掩盖 `I2C1_INT` 上的其它事件。
+> `PV` 的“释放”依赖欠压条件解除（而非单纯读寄存器清除），因此不建议把 `PV` 与“需要可靠捕获的脉冲中断”共线；本项目将 `PV` 单独接到 `INA3221_PV`。
 
 阈值写入（`VBUS_LSB = 8mV`，寄存器按 `<< 3` 对齐）：
 
@@ -111,7 +111,7 @@ I = VSHUNT / RSHUNT
 
 触发与区分方式：
 
-- 任意条件满足 → `Critical` 拉低 → `I2C1_INT` 拉低
+- 任意条件满足 → `Critical` 拉低 → `INA3221_CRITICAL` 拉低
 - MCU 读取 `Mask/Enable` 寄存器区分来源：
   - `CF1/CF2/CF3`：CH1/CH2/CH3 单路过流
   - `SF`：输出总过流（求和）
@@ -178,7 +178,7 @@ I = VSHUNT / RSHUNT
       - Q2（下拉）：`G=THERM_FAULT_H`，`S=GND`，`D=TPS_EN`
     - `TPS_EN` 的上拉/分压网络按 `TPS55288` 的 `EN/UVLO` UVLO 需求设计；过温/强制停机时通过 Q2 强制拉低优先
   - 备注：
-    - 不把 `TMP112A.ALERT` 并入 `I2C1_INT`：Comparator 模式下可能长期拉低，会掩盖其它中断/告警；本方案用 `THERM_KILL_N` 独立接入 MCU，兼顾“硬停机”与“MCU 可见”。
+    - 不把 `TMP112A.ALERT` 并入 `INA3221_*` 告警线：Comparator 模式下可能长期拉低，会掩盖其它中断/告警；本方案用 `THERM_KILL_N` 独立接入 MCU，兼顾“硬停机”与“MCU 可见”。
 
 > 资料：TMP112 datasheet（地址与 `ALERT`/模式相关章节）https://www.ti.com/lit/ds/symlink/tmp112.pdf
 
