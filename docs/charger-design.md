@@ -92,7 +92,7 @@ MCU (host) ─ I2C ─ Type-C/PD Controller (attach/orientation/role/PD+PPS)
 
 #### 2.3.1 充电电压
 
-- `4S` 目标：`VREG = 16.8V`（与电芯 `4.2V/cell` 对齐）。本项目采用 `PROG = 27.0kΩ`（`4S` + `750kHz`），默认 `VREG=16.8V`。
+- `4S` 目标：`VREG = 16.8V`（与电芯 `4.2V/cell` 对齐）。本项目采用 `PROG = 27.0kΩ`（`±1%`，下拉到 `GND`；`4S` + `750kHz`），默认 `VREG=16.8V`。
 
 #### 2.3.2 充电电流
 
@@ -150,7 +150,7 @@ BQ25792 充电电流寄存器分辨率为 `10mA`（范围 `50mA~5000mA`），因
 
 为确保在 MCU 未介入时也不会把 `4S` 当成其他串数，建议 `PROG` 采用 `4S` 配置：
 
-- `PROG = 27.0kΩ` → `4S` + `750kHz`（默认 `ICHG=1A`、`VSYSMIN=12V`、`VREG=16.8V`）
+- `PROG`：`27.0kΩ`（`±1%`，下拉到 `GND`）→ `4S` + `750kHz`（默认 `ICHG=1A`、`VSYSMIN=12V`、`VREG=16.8V`）
 
 ### 4.2 “无电池/电池被断开”安全策略（强制）
 
