@@ -20,6 +20,13 @@
 - **工作电压**：3.3 V
 - **可用 GPIO 编号集合**：`GPIO0~GPIO21`、`GPIO26~GPIO48`（共 45 个）
 
+## 内部上拉/下拉（WPU/WPD）简要说明
+
+- `ESP32‑S3` GPIO 支持可配置的**内部弱上拉/弱下拉**（`WPU/WPD`），用于给输入提供默认电平、避免悬空等（配置接口见 `docs/manuals/esp32-s3-hardware-design-guidelines/esp32-s3-hardware-design-guidelines.md` 中对 `WPU/WPD` 的定义，以及 datasheet/TRM 的 IO_MUX 章节）。
+- 内部上下拉为**弱**且**非精密**的等效电阻：datasheet 给出的典型值为 `RPU/RPD ≈ 45kΩ`（见 `docs/datasheets/esp32-s3-fh4r2/esp32-s3-fh4r2.md` 的 DC Characteristics 表），实际阻值会随工艺/温度/电压变化。
+- 是否默认使能/是否可用受**复位默认配置**与**外设功能占用**影响：例如 USB 引脚在作为普通 GPIO 使用时，内部弱上下拉默认禁用，但可通过 IO_MUX 再配置开启（见 `docs/manuals/esp32-s3-hardware-design-guidelines/esp32-s3-hardware-design-guidelines.md` 与 `docs/datasheets/esp32-s3-fh4r2/esp32-s3-fh4r2.md` 的相关说明）。
+- 设计建议：对“上电/复位期间必须确定电平”的脚、长线/强干扰/外部漏电较大、以及需要更强上拉（例如 I2C 上拉）等场景，优先保留外部上/下拉电阻或至少预留焊盘；内部弱上下拉更适合作为默认偏置或软件可控选项。
+
 ## 必须标记的不可用/谨慎引脚
 
 ### 不可用（in‑package flash/PSRAM 专用）
