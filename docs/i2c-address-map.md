@@ -12,7 +12,7 @@
 | 总线 | 7-bit 地址 | 器件 | 支持速率（器件能力） | 中断/告警输出 | MCU GPIO |
 |---|---:|---|---:|---|---|
 | `I2C1` | `0x22` | `FUSB302BMPX` | `100kHz`；`400kHz`；`1MHz`（FMP） | `INT_N`（开漏；低有效） | `GPIO33`（`I2C1_INT`） |
-| `I2C1` | `0x40` | `INA3221` | `400kHz`；`2.44MHz`（HS） | `PV/WARNING/CRITICAL`（开漏） | `GPIO37/38/39` |
+| `I2C1` | `0x40` | `INA3221` | `400kHz`；`2.44MHz`（HS） | `PV/WARNING/CRITICAL`（开漏） | `GPIO37(PV)/GPIO38(CRITICAL)/GPIO39(WARNING)` |
 | `I2C1` | `0x48` | `TMP112A`（OUT-A 热点） | `1MHz`（FMP） | `ALERT`（开漏） | `GPIO40`（`THERM_KILL_N`） |
 | `I2C1` | `0x49` | `TMP112A`（OUT-B 热点） | `1MHz`（FMP） | `ALERT`（开漏） | `GPIO40`（`THERM_KILL_N`） |
 | `I2C1` | `0x50` | `M24C64-FMC6TG` | `1MHz` | — | — |
@@ -29,7 +29,7 @@
 | `I2C1_INT` | `TPS55288(OUT-A).FB/INT` + `TPS55288(OUT-B).FB/INT` + `FUSB302B.INT_N` | 开漏线与 | `GPIO33` |
 | `CHG_INT` | `BQ25792.INT`（低有效 `256µs` 脉冲） | 开漏/脉冲型中断 | `GPIO16` |
 | `INA3221_PV` | `INA3221.PV` | 开漏/电平型告警 | `GPIO37` |
-| `INA3221_WARNING` | `INA3221.WARNING` | 开漏/电平型告警 | `GPIO38` |
-| `INA3221_CRITICAL` | `INA3221.CRITICAL` | 开漏/电平型告警 | `GPIO39` |
+| `INA3221_CRITICAL` | `INA3221.CRITICAL` | 开漏/电平型告警 | `GPIO38` |
+| `INA3221_WARNING` | `INA3221.WARNING` | 开漏/电平型告警 | `GPIO39` |
 | `BMS_BTP_INT_H` | `BQ40Z50.BTP_INT`（经 `NMOSFET` 取反） | 可配置极性 | `GPIO21` |
 | `THERM_KILL_N` | `TMP112A(OUT-A).ALERT` + `TMP112A(OUT-B).ALERT` | 开漏/电平型告警 | `GPIO40` |
