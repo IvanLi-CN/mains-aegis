@@ -20,7 +20,9 @@
 | `I2C1` | `0x74` | `TPS55288`（OUT-A） | `1MHz` | `FB/INT`（需上拉） | `GPIO33`（`I2C1_INT`） |
 | `I2C1` | `0x75` | `TPS55288`（OUT-B） | `1MHz` | `FB/INT`（需上拉） | `GPIO33`（`I2C1_INT`） |
 | `I2C1` | `0x0B` | `BQ40Z50RSMR-R2` | `100kHz`（SMBus）；`400kHz`（SMBus XL） | `BTP_INT`（可配置极性） | `GPIO21`（`BMS_BTP_INT_H`） |
-| `I2C2` | `0x20` | `TCA6408A`（面板 IO 扩展） | `100kHz`；`400kHz` | `INT`（开漏；可选） | `GPIO7`（`I2C2_INT`） |
+| `I2C2` | `0x21` | `TCA6408A`（面板 IO 扩展） | `100kHz`；`400kHz` | `INT`（开漏；可选） | `GPIO7`（`I2C2_INT`） |
+
+> 备注：前面板网表中 `TCA6408A.ADDR` 上拉到 `3V3`，因此地址为 `0x21`。
 
 ## 中断/告警信号（汇总）
 

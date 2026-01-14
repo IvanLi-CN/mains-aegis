@@ -45,7 +45,7 @@
 
 以下 GPIO 在上电/复位时会被采样用于启动配置；如需复用为普通 GPIO，必须保证外部电路在采样窗口不会把电平拉偏：
 
-- `GPIO0`（本项目已用于 BOOT/下载模式控制）
+- `GPIO0`（本项目用于 BOOT/下载模式控制；并复用前面板中键 `BTN_CENTER`）
 - `GPIO3`（本项目用于 `UPS_IN_CE`；strapping pin；必须保证外部电路在采样窗口不拉偏其默认电平）
 - `GPIO45`（strapping pin；已分配给 `UCM_DCE`；必须保证采样窗口为低电平）
 - `GPIO46`（strapping pin；已分配给 `UCM_DIN`；必须保证采样窗口为低电平）
@@ -95,7 +95,7 @@
 ### 下载模式/系统控制（1 个 GPIO + 1 个专用引脚）
 
 - `CHIP_PU (EN)`：复位/使能控制（建议做按键或测试点）
-- `GPIO0`：BOOT（进入下载模式所需；strapping pin，必须按规范做默认上拉/按键下拉等）
+- `GPIO0`：`BOOT / BTN_CENTER`（前面板中键直连；strapping pin；默认上拉、按键下拉到 GND；按住中键复位会进入下载模式）
 
 ### BMS 告警/中断（1 个 GPIO）
 
@@ -236,7 +236,7 @@ GPIO 分配（已确认）：
 | GPIO | 封装引脚编号 | 状态 | 用途/功能 | 备注 |
 |---:|---:|---|---|---|
 | EN | 4 | 已分配 | `CHIP_PU (EN)` | 复位/使能；建议按键或测试点 |
-| 0 | 5 | 已分配 | BOOT | strapping pin；用于进入下载模式 |
+| 0 | 5 | 已分配 | `BOOT / BTN_CENTER` | strapping pin；用于进入下载模式；并复用前面板中键 |
 | 1 | 6 | 已分配 | `TCA_RESET#` | 前面板 `TCA6408A.RESET`（低有效）；面板侧无上拉；主板侧需定义上拉；建议开漏输出 |
 | 2 | 7 | 已分配 | `UPS_IN_PG` | 输入侧 Power‑Good 指示（来自 `TPS2490.PG`） |
 | 3 | 8 | 谨慎 | `UPS_IN_CE` | UPS 输入侧 `EN` 控制（开漏；拉低禁用；经 `NX7002BKWX` 下拉 `EN` 节点）；strapping pin |

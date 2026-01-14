@@ -25,26 +25,27 @@
 |---:|---|---|
 |1|`UCM_DP`|USB1 D+|
 |2|`UCM_DM`|USB1 D-|
-|3|`USB2_PG`|USB2 power-good → 主板|
-|4|`GND`||
-|5|`SCLK`|屏幕 SPI SCLK|
-|6|`MOSI`|屏幕 SPI MOSI（主→从）|
-|7|`DC`|屏幕 D/C|
-|8|`BLK`|背光控制（见 `Q16`）|
-|9|`GND`||
-|10|`I2C2_SDA`|共享 I2C2 SDA|
-|11|`I2C2_SCL`|共享 I2C2 SCL|
-|12|`I2C2_INT`|共享中断线（wired‑OR；见第 6 章）|
+|3|`GND`||
+|4|`SCLK`|屏幕 SPI SCLK|
+|5|`MOSI`|屏幕 SPI MOSI（主→从）|
+|6|`DC`|屏幕 D/C|
+|7|`BLK`|背光控制（见 `Q16`）|
+|8|`GND`||
+|9|`I2C2_SDA`|共享 I2C2 SDA|
+|10|`I2C2_SCL`|共享 I2C2 SCL|
+|11|`I2C2_INT`|共享中断线（wired‑OR；见第 6 章）|
+|12|`CTP_IRQ`|触摸 IRQ（独立，不与 `I2C2_INT` 共线）|
 |13|`TCA_RESET#`|`U43` 复位（低有效）|
 |14|`GND`||
-|15|`NC`|未用|
-|16|`NC`|未用|
+|15|`BTN_CENTER`|中键（直连主板 MCU：`ESP32‑S3.GPIO0`）|
+|16|`3V3`||
+|17|`GND`|额外 GND 焊盘|
+|18|`GND`|额外 GND 焊盘|
 
 > 备注：
-> - 网表里 `FPC1` 还有额外焊盘（17–18）但**未连接**。
 > - 本 PCB 上没有对 `TCA_RESET#` 的上拉/下拉，请主板端定义该信号（外部上拉或 MCU 内部上拉）。
 > - 本 PCB 上也没有 `I2C2_SCL/SDA/INT` 的上拉电阻，请主板端提供上拉（见第 6.4 节）。
-> - 若需要把触摸 IRQ 从 `I2C2_INT` 共享线中拆分，优先使用 `FPC1` 的预留焊盘（17–18）之一作为独立 `CTP_IRQ`。
+> - `BTN_CENTER` 为按键到地（前面板 `SW1.COM=GND`），主板侧需提供上拉与消抖策略。
 
 ### 2.2 `FPC2`（连接屏幕模组）
 
@@ -61,7 +62,7 @@
 |9|`3V3`|屏幕/触摸供电|
 |10|`I2C2_SCL`|触摸 I2C2 SCL|
 |11|`I2C2_SDA`|触摸 I2C2 SDA|
-|12|`I2C2_INT`|触摸 IRQ（与其他器件共线；若拆分则改走独立 `CTP_IRQ`）|
+|12|`CTP_IRQ`|触摸 IRQ（独立）|
 |13|`TP_RESET`|触摸复位（来自 `U43`，低有效）|
 |14|`GND`||
 |15|`NC`|未用|
@@ -77,13 +78,15 @@
 
 `U43` 在共享的 `I2C2_*` 总线上。其 8 位端口分配如下：
 
+> 地址：网表中 `U43.ADDR` 接 `3V3`，因此 `I2C` 地址为 `0x21`（见 `docs/i2c-address-map.md`）。
+
 |TCA6408A 端口|Net|用途|
 |---|---|---|
 |P0|`BTN_DOWN`|五向按键：下|
-|P1|`BTN_CENTER`|五向按键：中|
-|P2|`BTN_RIGHT`|五向按键：右|
-|P3|`BTN_LEFT`|五向按键：左|
-|P4|`BTN_UP`|五向按键：上|
+|P1|`BTN_RIGHT`|五向按键：右|
+|P2|`BTN_LEFT`|五向按键：左|
+|P3|`BTN_UP`|五向按键：上|
+|P4|`USB2_PG`|USB2 power-good（来自 `U2(HUSB305-01).STAT`）|
 |P5|`CS`|屏幕 CS（作为“使能/闸门”使用）|
 |P6|`RES`|屏幕复位（低有效）|
 |P7|`TP_RESET`|触摸复位（低有效）|
@@ -108,8 +111,8 @@
 
 `RN1` 与 `RN2` 都是 4 路独立电阻阵列（`4D02WGF1003TCE`，每路 100kΩ）：
 
-- `RN1`：给 `BTN_DOWN/BTN_CENTER/BTN_RIGHT/BTN_LEFT` 提供 100k 上拉到 `3V3`；
-- `RN2`：给 `BTN_UP` 提供 100k 上拉到 `3V3`，并同时完成 `CS/RES/TP_RESET` 的默认偏置（见下节）。
+- `RN1`：给 `BTN_DOWN/BTN_UP/BTN_RIGHT/BTN_LEFT` 提供 100k 上拉到 `3V3`；
+- `RN2`：完成 `CS/RES/TP_RESET` 的默认偏置（见下节），并同时为 `USB2_PG` 提供默认偏置。
 
 > `4D02` 的内部配对关系是 (1–8)、(2–7)、(3–6)、(4–5)。本板的 `RN1/RN2` 连接方式与该配对一致。
 
@@ -155,26 +158,19 @@
 
 - `U43 INT`（开漏、低有效）
 - `U14 INT_N`（开漏、低有效；见 `docs/datasheets/FUSB302B/FUSB302B.md`）
-- 触摸 `IRQ`（来自屏幕模组，经 `FPC2` Pin12）
+- 触摸 `IRQ` **不在** `I2C2_INT` 上：已改走独立 `CTP_IRQ`（`FPC2` Pin12 → `FPC1` Pin12）。
 
 这种“一根中断线挂多个器件”的做法要求所有中断输出都是**开漏（wired‑OR）**，并且由主板侧提供一个上拉电阻。
 
-### 6.3 已确认：触摸芯片为 `CST816D`；但 `IRQ` 输出类型未在 V1.3 datasheet 明确
+### 6.3 为什么把触摸 `IRQ` 拆分为 `CTP_IRQ`
 
-我已经核查了仓库内 `CST816D` V1.3 数据手册（`docs/datasheets/CST816D/CST816D.pdf`），结论是：
+我已经核查了仓库内 `CST816D` 数据手册（`docs/datasheets/CST816D/CST816D.pdf`），结论是：
 
 - 引脚表对 `IRQ` 的描述只有 “Interrupt output；Rising/Falling edge selectable”，**未明确** `IRQ` 是开漏、推挽，还是可配置。
 - 同一份手册对 `SCL/SDA` 则明确写了 “optional internal pull‑up / open‑drain mode”，因此 `IRQ` 的电气类型在文档层面存在**关键缺口**。
 - 手册的 “DC Electrical Performance” 给出了 `Voh/Ioh` 等“高电平输出能力”参数（见 `docs/datasheets/CST816D/CST816D.md` 的电气特性章节），因此**不能把 `IRQ` 当作天然开漏来默认**。
 
-**可执行结论：触摸芯片已确认是 `CST816D`；但在没有更明确的官方说明前，仍把 `IRQ` 视为“未知/可能推挽（或至少可主动拉高）”，因此 `I2C2_INT` 的 wired‑OR 假设不成立。**
-
-建议收敛路径（按优先级）：
-
-1. 拿到明确写出 `IRQ` 电气类型的厂商资料（datasheet/errata/app note）。
-2. 若手头已有屏幕模组，实测确认：去掉上拉（或改变上拉强度）并观察 `IRQ` 空闲态是否能自行拉高、以及是否会主动驱动高电平。
-3. 如果必须把风险彻底清零：下个版本不要共用中断线，或做硬件隔离（开漏缓冲/三极管、二极管 OR、或把触摸 IRQ 接入扩展器输入再用扩展器 `INT` 输出）。
-4. 若已定板且无法改线：固件侧可将触摸改为轮询模式（不使用 IRQ）作为兜底。
+因此在系统级默认把触摸 `IRQ` 视为“可能推挽/未知”，为彻底规避 wired‑OR 风险，触摸中断已从 `I2C2_INT` 拆分为独立 `CTP_IRQ` 线。
 
 ### 6.4 上拉电阻位置
 
