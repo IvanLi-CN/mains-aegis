@@ -22,7 +22,9 @@
 | `I2C1` | `0x0B` | `BQ40Z50RSMR-R2` | `100kHz`（SMBus）；`400kHz`（SMBus XL） | `BTP_INT`（可配置极性） | `GPIO21`（`BMS_BTP_INT_H`） |
 | `I2C2` | `0x21` | `TCA6408A`（面板 IO 扩展） | `100kHz`；`400kHz` | `INT`（开漏；可选） | `GPIO7`（`I2C2_INT`） |
 
-> 备注：前面板网表中 `TCA6408A.ADDR` 上拉到 `3V3`，因此地址为 `0x21`。
+> 备注：
+> - 前面板网表中 `TCA6408A.ADDR` 上拉到 `3V3`，因此地址为 `0x21`。
+> - `TPS55288` 的 I2C 地址由 `MODE`→`AGND` 电阻选择（并同时决定 `VCC` 来源与轻载 `PFM/FPWM`）。本项目约定“外部 `5V` 供 `VCC` + 默认 `PFM`”，因此：OUT‑A 用 `75.0kΩ`（`0x74`），OUT‑B 用 `DNP/Open`（`0x75`）；详见 `docs/ups-output-design.md`。
 
 ## 中断/告警信号（汇总）
 
