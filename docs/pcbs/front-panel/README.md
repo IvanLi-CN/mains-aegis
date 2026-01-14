@@ -179,11 +179,12 @@
 ## 7. 背光电源开关 `Q16(BSS84)`
 
 - `Q16`（P 沟道 MOSFET）把 `3V3` 切换到 `$1N30`，再送到 `FPC2` Pin1。
-- 栅极由 `BLK` 控制（来自主板，经 `FPC1` Pin8）。
+- 栅极由 `BLK` 控制（来自主板，经 `FPC1` Pin7）。
 
 网表观察：
 
-- 前面板上没有对 `BLK` 的独立上拉/下拉；若主板端在复位期间为高阻，栅极可能漂浮。建议主板端尽早配置该 GPIO（并结合内部上拉/下拉）以保证默认背光关闭。
+- 前面板上没有对 `BLK` 的独立上拉/下拉；这是刻意选择：背光只在 MCU 正常运行时由固件主动控制，MCU 未运行/未供电的状态不以背光状态作为系统约束。
+- 若系统进入睡眠仍需保持背光开/关状态，应由固件确保 `BLK(GPIO13)` 维持输出电平（例如 Light-sleep 场景使用 GPIO hold；若使用 Deep-sleep，则需注意并非所有 GPIO 都可控，参见 `docs/manuals/esp32-s3-hardware-design-guidelines/esp32-s3-hardware-design-guidelines.md` 中 “Only GPIOs in the VDD3P3_RTC power domain can be controlled in Deep-sleep mode.” 的约束）。
 
 ## 8. 事实来源（网表）
 
