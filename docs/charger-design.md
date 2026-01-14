@@ -4,19 +4,19 @@
 
 > 术语澄清：本文档的 **OTG** 一词专指 `BQ25792` 的 **VBUS 输出**（USB‑C/PD Source 或独立 5V/专用输出口）；项目的 **UPS 主输出（12V/19V）** 是系统对外供电母线，建议不要通过 `SYS`。
 
-**重要约束（项目硬性需求）**：主 USB‑C 口需要同时支持 **PPS 输入（Sink PPS/APDO）** 与 **PPS 输出（Source PPS/APDO）**，因此 Type‑C/PD 控制器必须明确支持 PD3.0 PPS（或具备可验证的 PPS 实现路径）。
+**重要约束（项目硬性需求）**：主 USB‑C 口需要同时支持 **USB PD PPS（Sink PPS/APDO）** 与 **USB PD PPS（Source PPS/APDO）**，因此 Type‑C/PD 控制器必须明确支持 PPS/APDO（或具备可验证的 PPS 实现路径）。
 
 > 电池包与 BMS 设计背景：`docs/hardware-selection.md`、`docs/bms-design.md`  
 > BQ25792 资料：`docs/datasheets/BQ25792/BQ25792.md`  
 > CH224Q（备选，仅受电）资料：`docs/datasheets/ch224q/CH224Q.md`
-> FUSB302B（参考：数据手册标称 PD2.0，不满足本项目 PPS 需求）资料：`docs/datasheets/FUSB302B/FUSB302B.md`
+> FUSB302B（作为 PD PHY：PPS 由软件堆栈实现，需验证）资料：`docs/datasheets/FUSB302B/FUSB302B.md`
 
 ## 1. 需求与边界
 
 ### 1.1 已知需求
 
 - 电池包：`4S1P`，满充 `16.8V`，截止放电 `10.0V`（见 `docs/hardware-selection.md`）
-- UPS 主输出（系统对外供电）：`12V` / `19V` 两个版本（软件配置选择输出目标电压）
+- UPS 主输出（系统对外供电）：`12V` / `19V` 两种目标电压配置（软件选择输出目标电压）
 - 充电电流档位：
   - 常规：`1.0A`（默认）
   - 预留：`2.0A`（硬件能力预留，后续可通过固件放开）
@@ -52,7 +52,7 @@
 ### 2.1 方框图（逻辑）
 
 ```
-USB-C Receptacle ── CC1/CC2 ── Type-C/PD Controller (DRP + PD3.0 PPS, policy by ESP32-S3 or built-in)
+USB-C Receptacle ── CC1/CC2 ── Type-C/PD Controller (DRP + PPS/APDO, policy by ESP32-S3 or built-in)
          │
          ├─ D+/D- ── CH442E ───┬─ ESP32-S3 USB (GPIO19/20, USB2 data)
          │                    └─ BQ25792 D+/D- (DPDM / legacy detect, optional)
@@ -72,7 +72,7 @@ MCU (host) ─ I2C ─ Type-C/PD Controller (attach/orientation/role/PD+PPS)
   - 若你希望 BMS 在故障时能够硬件切断充电电流，**不要**把 BQ25792 直接接到电芯正端（CELL+）去绕过 CHG FET。
 - `BQ25792 GND`：连接到电池包地（PACK- / 系统地），并遵循 TI 的功率回流/开关回路布局要求。
 - `PACK+ / PACK-` 端口防护：在电池座/端子处并联 `SMBJ18CA`（双向 TVS，`DO-214AA`），用于 ESD/瞬态钳位（详见 `docs/bms-design.md` 的 PACK 端 ESD/TVS 说明）。
-- 约 `120W` 级的 UPS 主功率输出（例如电池到 `19V` 的大功率 DCDC；或 `12V` 版本）应从电池主回路获取，**不要**走 BQ25792 的 `SYS` 节点。
+- 约 `120W` 级的 UPS 主功率输出（例如电池到 `19V` 的大功率 DCDC；或 `12V` 配置）应从电池主回路获取，**不要**走 BQ25792 的 `SYS` 节点。
 
 ### 2.1.2 Ship MOSFET（不使用）相关引脚：`SDRV` / `QON`
 
@@ -125,7 +125,7 @@ BQ25792 充电电流寄存器分辨率为 `10mA`（范围 `50mA~5000mA`），因
 - BQ25792 的职责：提供电源转换与 power-path（受电/充电/OTG）；在 OTG 时可输出 `2.8V~22V` 且 `10mV` 步进，满足 PPS 输出侧电压可调的执行条件（前提是 Type‑C/PD 控制器与固件能正确建立/管理 PPS 合同）。
 - Type‑C/PD 控制器的职责：CC/方向/角色切换 + PD 合同（含 PPS/APDO）建立与维持；并与 MCU/BQ25792 协调输出电压/限流与互锁时序。
 
-> 备注：本仓库已入库 `FUSB302B` 数据手册，但其文档标称 **PD2.0**（见 `docs/datasheets/FUSB302B/FUSB302B.md`），无法作为“PPS 输入 + PPS 输出”的主方案依据，因此仅作为参考资料保留。
+> 备注：本仓库已入库 `FUSB302B` 数据手册（见 `docs/datasheets/FUSB302B/FUSB302B.md`）。本项目若继续采用 `FUSB302B`，则把它视为“PD PHY”，并由软件堆栈实现 **PPS/APDO（Sink+Source）**；该路径必须通过 PD 分析仪/互操作测试验证后，才算满足“PPS 输入 + PPS 输出”的硬性需求。
 
 ### 3.2 关键连接（主 USB‑C 口）
 
@@ -160,7 +160,7 @@ BQ25792 充电电流寄存器分辨率为 `10mA`（范围 `50mA~5000mA`），因
 - `CE` 引脚 **默认拉高**（充电禁用），由 MCU 在确认电池存在且 BMS 允许充电后再拉低使能。
 - 在检测到电池被断开或 BMS 关闭充电通路时，固件应立即：`EN_CHG=0` 或将 `CE` 拉高，避免 BAT 浮空导致 SYS 过冲反复触发保护。
 
-> 注意：`CE` 是**低有效的充电使能（Charge Enable）**引脚（`CE=LOW` 才允许充电）。部分资料/版本在“Power Supply Recommendations（电源建议）”段落出现过“pulling low the CE pin to disable charge”的表述，与引脚定义逻辑矛盾，容易误用；本项目一律按引脚定义执行：**禁充请用 `CE=HIGH` 或 `EN_CHG=0`**（见 `docs/datasheets/BQ25792/BQ25792.md` 的 `CE` 引脚描述）。
+> 注意：`CE` 是**低有效的充电使能（Charge Enable）**引脚（`CE=LOW` 才允许充电）。部分资料在“Power Supply Recommendations（电源建议）”段落出现过“pulling low the CE pin to disable charge”的表述，与引脚定义逻辑矛盾，容易误用；本项目一律按引脚定义执行：**禁充请用 `CE=HIGH` 或 `EN_CHG=0`**（见 `docs/datasheets/BQ25792/BQ25792.md` 的 `CE` 引脚描述）。
 
 ### 4.3 双输入外部 MOSFET（ACFET/RBFET）
 
@@ -344,7 +344,7 @@ BQ25792 的温度相关寄存器集中在 `REG17/REG18/REG1F/REG24/REG2B`（见 
 - `ESP32‑S3`：负责 PD 协议/策略（固定 PDO + PPS；以及角色切换）；并与 `BQ25792` 协调 OTG 输出/输入限流/保护策略
 - `CH224Q`：仅适合“低成本固定受电触发（Sink-only）”备选；不适合作为同口 DRP 的核心控制器
 
-由于本项目硬性要求 **PPS 输入 + PPS 输出**，Type‑C/PD 控制器的选型必须以“明确支持 PD3.0 PPS（APDO）”为前提条件。
+由于本项目硬性要求 **PPS 输入 + PPS 输出**，Type‑C/PD 控制器的选型必须以“明确支持 PPS/APDO”作为前提条件。
 
 ## 9. 验证清单（bring‑up）
 
