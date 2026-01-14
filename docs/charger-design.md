@@ -87,6 +87,7 @@ MCU (host) ─ I2C ─ Type-C/PD Controller (attach/orientation/role/PD+PPS)
 - 固件策略建议：
   - 若两路同时存在，优先级按项目需求确定（默认 USB 优先 or DC 优先均可，BQ25792 默认 VAC1 为主输入）。
   - 切换输入源前先将 `EN_HIZ` 置位/拉低 `ILIM_HIZ` 进入非开关模式，完成后再恢复，降低毛刺与反向电流风险。
+    - `ILIM_HIZ` “刹车”控制脚（`CHG_ILIM_HIZ_BRK`）建议在硬件侧增加 `100kΩ` 下拉到 `GND`，确保 MCU 上电/复位期间不会误触发非开关模式。
 
 ### 2.3 充电档位策略
 
