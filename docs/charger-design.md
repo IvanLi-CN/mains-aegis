@@ -130,7 +130,7 @@ BQ25792 充电电流寄存器分辨率为 `10mA`（范围 `50mA~5000mA`），因
 ### 3.2 关键连接（主 USB‑C 口）
 
 - `CC1/CC2`：USB‑C 口 CC → Type‑C/PD 控制器（含插入检测、方向识别、Type‑C 电流声明/侦测、PD 消息通道）
-- `I2C1_SDA/I2C1_SCL/I2C1_INT`：`ESP32‑S3` ↔ Type‑C/PD 控制器（若为 I2C 型，且控制器提供开漏中断输出；若该中断为电平型可并入 `I2C1_INT`，若为脉冲型则需单独 MCU GPIO）
+- `I2C2_SDA/I2C2_SCL/I2C2_INT`：`ESP32‑S3` ↔ 前面板 Type‑C/PD 控制器（若为 I2C 型，且控制器提供开漏中断输出；通常并入 `I2C2_INT` 共享线）
 - `VBUS`：作为 Type‑C/PD 控制器的 `VBUS` 电压感知（以及 `BQ25792` 的输入电源）
 - `D+/D-`：若主 USB‑C 口需要 **USB2.0 数据通信**，则 `D+/D-` 默认连接到 `ESP32‑S3`（`GPIO19/20`）。  
   若仍需兼容“非 PD / 传统适配器”的 DPDM 检测，可通过 `CH442E` 把 `D+/D-` 临时切换给 `BQ25792 D+/D-`（DPDM）。

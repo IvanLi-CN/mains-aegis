@@ -100,7 +100,7 @@
 ### BMS 告警/中断（1 个 GPIO）
 
 - `GPIO21`：`BMS_BTP_INT_H`（`BQ40Z50-R2.BTP_INT`；经 `NMOSFET` 取反后的 BMS 中断线）
-- 通信：`BQ40Z50-R2` 挂载在 `I2C2`（`GPIO8/GPIO9`）
+- 通信：`BQ40Z50-R2` 挂载在 `I2C1`（`GPIO48/GPIO47`）
 
 说明：
 
@@ -114,7 +114,7 @@
 
 说明：
 
-- `I2C2` 用于 `BQ40Z50-R2`（SMBus）以及面板侧 I2C 器件（若有）；速率：`400kHz`。
+- `I2C2` 用于面板侧 I2C 器件（`TCA6408A` / `FUSB302B` / 触摸等）；速率：`400kHz`。
 
 ### 前面板 GPIO 扩展器复位（TCA6408A，1 个 GPIO）
 
