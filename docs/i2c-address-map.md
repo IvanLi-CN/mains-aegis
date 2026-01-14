@@ -16,7 +16,7 @@
 | `I2C1` | `0x48` | `TMP112A`（OUT-A 热点） | `1MHz`（FMP） | `ALERT`（开漏） | `GPIO40`（`THERM_KILL_N`） |
 | `I2C1` | `0x49` | `TMP112A`（OUT-B 热点） | `1MHz`（FMP） | `ALERT`（开漏） | `GPIO40`（`THERM_KILL_N`） |
 | `I2C1` | `0x50` | `M24C64-FMC6TG` | `1MHz` | — | — |
-| `I2C1` | `0x6B` | `BQ25792RQMR` | `≤1MHz` | `INT`（开漏；低有效 `256µs` 脉冲） | `GPIO16`（`CHG_INT`） |
+| `I2C1` | `0x6B` | `BQ25792RQMR` | `≤1MHz` | `INT`（开漏；低有效 `256µs` 脉冲） | `GPIO17`（`CHG_INT`） |
 | `I2C1` | `0x74` | `TPS55288`（OUT-A） | `1MHz` | `FB/INT`（需上拉） | `GPIO33`（`I2C1_INT`） |
 | `I2C1` | `0x75` | `TPS55288`（OUT-B） | `1MHz` | `FB/INT`（需上拉） | `GPIO33`（`I2C1_INT`） |
 | `I2C2` | `0x0B` | `BQ40Z50RSMR-R2` | `100kHz`（SMBus）；`400kHz`（SMBus XL） | `BTP_INT`（可配置极性） | `GPIO21`（`BMS_BTP_INT_H`） |
@@ -27,7 +27,7 @@
 | 信号 | 来源 | 类型 | MCU GPIO |
 |---|---|---|---|
 | `I2C1_INT` | `TPS55288(OUT-A).FB/INT` + `TPS55288(OUT-B).FB/INT` + `FUSB302B.INT_N` | 开漏线与 | `GPIO33` |
-| `CHG_INT` | `BQ25792.INT`（低有效 `256µs` 脉冲） | 开漏/脉冲型中断 | `GPIO16` |
+| `CHG_INT` | `BQ25792.INT`（低有效 `256µs` 脉冲） | 开漏/脉冲型中断 | `GPIO17` |
 | `INA3221_PV` | `INA3221.PV` | 开漏/电平型告警 | `GPIO37` |
 | `INA3221_CRITICAL` | `INA3221.CRITICAL` | 开漏/电平型告警 | `GPIO38` |
 | `INA3221_WARNING` | `INA3221.WARNING` | 开漏/电平型告警 | `GPIO39` |

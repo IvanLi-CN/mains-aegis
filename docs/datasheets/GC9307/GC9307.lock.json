@@ -1,0 +1,25 @@
+{
+  "artifacts": {
+    "md": {
+      "path": "GC9307.md",
+      "sha256": "69ff0a08fb078a353043114472eb56c999e2e5318e1a55dccd23c512e981e38a"
+    },
+    "pdf": {
+      "path": "GC9307.pdf",
+      "sha256": "afaf02b705a6f401776a063dccee966cb1fbe4598193700d631156b448fae225"
+    }
+  },
+  "generated_at_utc": "2026-01-13T12:36:09+00:00",
+  "generator": {
+    "source_pdf": "/Users/ivan/Projects/Ivan/mains-aegis/downloads/_tmp/GC9307.pdf",
+    "tool": "pymupdf4llm.to_markdown"
+  },
+  "schema": "codex.hardware-doc-ingest.lock.v1",
+  "slug": "GC9307",
+  "source": {
+    "doc_type": "datasheet",
+    "part": "GC9307",
+    "url": "https://datasheet4u.com/pdf-down/G/C/9/GC9307-GALAXYCORE.pdf",
+    "vendor": "GalaxyCore"
+  }
+}

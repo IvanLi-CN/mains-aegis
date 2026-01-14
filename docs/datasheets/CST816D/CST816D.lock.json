@@ -1,0 +1,25 @@
+{
+  "artifacts": {
+    "md": {
+      "path": "CST816D.md",
+      "sha256": "a6457b85e5b9ee7e66dfadec987cbc9fc01376ef31d2de39e1884e392e3e6f9f"
+    },
+    "pdf": {
+      "path": "CST816D.pdf",
+      "sha256": "a0b14a06ef5d82050d1e98092e2249060438e8dd0dc56f96821259e9175c3409"
+    }
+  },
+  "generated_at_utc": "2026-01-13T12:37:08+00:00",
+  "generator": {
+    "source_pdf": "/Users/ivan/Projects/Ivan/mains-aegis/downloads/_tmp/CST816D.pdf",
+    "tool": "pymupdf4llm.to_markdown"
+  },
+  "schema": "codex.hardware-doc-ingest.lock.v1",
+  "slug": "CST816D",
+  "source": {
+    "doc_type": "datasheet",
+    "part": "CST816D",
+    "url": "https://files.waveshare.com/wiki/common/CST816D_datasheet_En_V1.3.pdf",
+    "vendor": "Hynitron"
+  }
+}

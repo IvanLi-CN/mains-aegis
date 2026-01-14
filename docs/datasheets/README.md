@@ -32,3 +32,7 @@ This folder stores Markdown conversions of vendor datasheets, with images extrac
   - `MX5050T.md` (ideal diode / high-side OR-ing FET controller)
 - `UMW_SI2305A/`
   - `UMW_SI2305A.md`
+- `CST816D/`
+  - `CST816D.md`
+- `GC9307/`
+  - `GC9307.md`

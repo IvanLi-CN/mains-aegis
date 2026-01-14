@@ -17,6 +17,10 @@ This folder stores project documentation and offline-renderable datasheets.
 
 - Datasheets index: `docs/datasheets/README.md`
 
+## PCBs
+
+- PCBs index: `docs/pcbs/README.md`
+
 ## Manuals
 
 - Manuals index: `docs/manuals/README.md`

@@ -47,8 +47,8 @@
 
 - `GPIO0`（本项目已用于 BOOT/下载模式控制）
 - `GPIO3`（本项目用于 `UPS_IN_CE`；strapping pin；必须保证外部电路在采样窗口不拉偏其默认电平）
-- `GPIO45`（当前预留，后续若使用必须专项评审）
-- `GPIO46`（当前预留，后续若使用必须专项评审）
+- `GPIO45`（strapping pin；已分配给 `UCM_DCE`；必须保证采样窗口为低电平）
+- `GPIO46`（strapping pin；已分配给 `UCM_DIN`；必须保证采样窗口为低电平）
 
 ### 谨慎（默认调试/下载相关）
 
@@ -80,13 +80,17 @@
 
 ### USB D+/D- 切换控制（CH442E，2 个 GPIO）
 
-- `GPIO17`：`UCM_DIN`（CH442E `IN`：D+/D- 归属选择）
-- `GPIO18`：`UCM_DCE`（CH442E `EN#`：全局使能，低有效；`EN#=1` 时两边都断开）
+- `GPIO46`：`UCM_DIN`（CH442E `IN`：D+/D- 归属选择；strapping pin）
+- `GPIO45`：`UCM_DCE`（CH442E `EN#`：全局使能，低有效；`EN#=1` 时两边都断开；strapping pin）
 
 说明：
 
 - 设计目标：USB‑C 口的 `D+/D-` 可在 **ESP32‑S3（USB 下载调试）** 与 **BQ25792（DPDM/BC1.2 检测）** 间切换，避免“硬并联”导致冲突。
 - 推荐切换时序（break‑before‑make）：先置 `UCM_DCE=1`（断开）→ 切 `UCM_DIN` → 再置 `UCM_DCE=0`（接通）。
+
+### 触摸 IRQ（CTP，1 个 GPIO）
+
+- `GPIO14`：`CTP_IRQ`（触摸控制器：`CST816D`；独立触摸中断输入；从 `I2C2_INT` 共享线中拆分）
 
 ### 下载模式/系统控制（1 个 GPIO + 1 个专用引脚）
 
@@ -139,9 +143,9 @@
 
 ### 充电器控制/中断（BQ25792，3 个 GPIO，连续）
 
-- `GPIO14`：`CHG_CE`（连接 `BQ25792.CE`；低有效；默认上拉禁充，MCU 确认电池存在且 BMS 允许后再拉低使能）
-- `GPIO15`：`CHG_ILIM_HIZ_BRK`（`ILIM_HIZ`“刹车”控制：驱动 `NX7002BKWX` 下拉 `BQ25792.ILIM_HIZ` 到 GND，使其进入非开关模式；默认低电平不刹车）
-- `GPIO16`：`CHG_INT`（连接 `BQ25792.INT`；开漏；低有效 `256µs` 脉冲；不与电平型告警共线）
+- `GPIO15`：`CHG_CE`（连接 `BQ25792.CE`；低有效；默认上拉禁充，MCU 确认电池存在且 BMS 允许后再拉低使能）
+- `GPIO16`：`CHG_ILIM_HIZ_BRK`（`ILIM_HIZ`“刹车”控制：驱动 `NX7002BKWX` 下拉 `BQ25792.ILIM_HIZ` 到 GND，使其进入非开关模式；默认低电平不刹车）
+- `GPIO17`：`CHG_INT`（连接 `BQ25792.INT`；开漏；低有效 `256µs` 脉冲；不与电平型告警共线）
 
 ### INA3221 告警输出（3 个 GPIO，连续）
 
@@ -192,7 +196,8 @@
 | 功能类别 | 数量 | 引脚 |
 |---|---:|---|
 | USB 下载调试 | 2 | `GPIO19`、`GPIO20` |
-| USB D+/D- 切换控制 | 2 | `GPIO17`、`GPIO18` |
+| USB D+/D- 切换控制 | 2 | `GPIO45`、`GPIO46` |
+| 触摸 IRQ（CTP） | 1 | `GPIO14` |
 | 下载模式/系统控制 | 1 + EN | `GPIO0`、`CHIP_PU (EN)` |
 | BMS 告警/中断 | 1 | `GPIO21` |
 | I2C1（400kHz） | 3 | `GPIO48`、`GPIO47`、`GPIO33` |
@@ -201,14 +206,13 @@
 | TPS55288 硬停机（过温/强制关断） | 1 | `GPIO40` |
 | UART0（下载/日志兜底） | 2 | `GPIO43`、`GPIO44` |
 | 音频/提示音（TDM/I2S） | 3 | `GPIO4~GPIO6` |
-| 充电器控制/中断（BQ25792） | 3 | `GPIO14~GPIO16` |
+| 充电器控制/中断（BQ25792） | 3 | `GPIO15~GPIO17` |
 | INA3221 告警输出（PV/WARNING/CRITICAL） | 3 | `GPIO37~GPIO39` |
 | 风扇控制 | 3 | `GPIO34~GPIO36` |
 | UPS 输入侧控制/状态 | 2 | `GPIO2`、`GPIO3` |
 | 固定分配（SPI + BLK） | 4 | `GPIO10~GPIO13` |
 | 交错 SYNC（180°） | 2 | `GPIO41`、`GPIO42` |
 | 不可用 | 7 | `GPIO26~GPIO32` |
-| 不推荐/谨慎（未分配） | 2 | `GPIO45`、`GPIO46` |
 
 ## 音频/提示音（TDM（I2S 外设） -> 数字功放 -> Speaker）
 
@@ -246,11 +250,11 @@ GPIO 分配（已确认）：
 | 11 | 16 | 已分配 | `MOSI` | 固定分配（原理图红框；不得复用） |
 | 12 | 17 | 已分配 | `SCLK` | 固定分配（原理图红框；不得复用） |
 | 13 | 18 | 已分配 | `BLK` | 固定分配（原理图红框；不得复用） |
-| 14 | 19 | 已分配 | `CHG_CE` | `BQ25792.CE`（低有效；默认上拉禁充） |
-| 15 | 21 | 已分配 | `CHG_ILIM_HIZ_BRK` | `ILIM_HIZ` 刹车控制（驱动 `NX7002BKWX` 下拉） |
-| 16 | 22 | 已分配 | `CHG_INT` | `BQ25792.INT`；开漏；低有效 `256µs` 脉冲（独立 GPIO） |
-| 17 | 23 | 已分配 | `UCM_DIN` | CH442E `IN`：USB D+/D- 归属选择（`0` 选 `S1x`；`1` 选 `S2x`；本项目约定 `S1x→ESP32‑S3`，`S2x→BQ25792`） |
-| 18 | 24 | 已分配 | `UCM_DCE` | CH442E `EN#`：全局使能（低有效；`1` 时两边断开） |
+| 14 | 19 | 已分配 | `CTP_IRQ` | 触摸控制器：`CST816D`；独立触摸 IRQ（从 `I2C2_INT` 共享线中拆分） |
+| 15 | 21 | 已分配 | `CHG_CE` | `BQ25792.CE`（低有效；默认上拉禁充） |
+| 16 | 22 | 已分配 | `CHG_ILIM_HIZ_BRK` | `ILIM_HIZ` 刹车控制（驱动 `NX7002BKWX` 下拉） |
+| 17 | 23 | 已分配 | `CHG_INT` | `BQ25792.INT`；开漏；低有效 `256µs` 脉冲（独立 GPIO） |
+| 18 | 24 | 预留 | — | — |
 | 19 | 25 | 已分配 | USB_D- | USB 下载调试（不得复用；原理图网名常写 `ESP_DM`，若加入 CH442E 则接 `S1B`） |
 | 20 | 26 | 已分配 | USB_D+ | USB 下载调试（不得复用；原理图网名常写 `ESP_DP`，若加入 CH442E 则接 `S1C`） |
 | 21 | 27 | 已分配 | `BMS_BTP_INT_H` | BMS 中断线（`BQ40Z50-R2.BTP_INT` 经 `NMOSFET` 取反；MCU 侧约定高有效） |
@@ -275,8 +279,8 @@ GPIO 分配（已确认）：
 | 42 | 48 | 已分配 | `SYNCB` | 交错 SYNC：相位 180°；复用传统 JTAG 引脚组 |
 | 43 | 49 | 已分配 | `UART0_TXD` | UART0 TX；锁定使用；测试点：`TP_UART0_TXD` |
 | 44 | 50 | 已分配 | `UART0_RXD` | UART0 RX；锁定使用；测试点：`TP_UART0_RXD` |
-| 45 | 51 | 谨慎 | — | strapping pin（VDD_SPI 相关）；后续使用需评审 |
-| 46 | 52 | 谨慎 | — | strapping pin（boot/ROM 打印等相关）；后续使用需评审 |
+| 45 | 51 | 谨慎 | `UCM_DCE` | CH442E `EN#`：全局使能（低有效；`1` 时两边断开）；strapping pin（VDD_SPI 相关） |
+| 46 | 52 | 谨慎 | `UCM_DIN` | CH442E `IN`：USB D+/D- 归属选择；strapping pin（boot/ROM 打印等相关） |
 
 ## 待分配列表（网络已冻结；GPIO 待定）
 
