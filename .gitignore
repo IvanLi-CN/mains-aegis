@@ -4,3 +4,5 @@
 # MinerU / local conversion artifacts
 downloads/
 
+# Scratch / temp
+.tmp/
