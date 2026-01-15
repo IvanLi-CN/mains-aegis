@@ -175,8 +175,8 @@ I = VSHUNT / RSHUNT
     - 将 `TPS55288A.EN/UVLO` 与 `TPS55288B.EN/UVLO` 视为同一个节点 `TPS_EN`（建议各自串联 `~100Ω` 再汇聚，便于隔离与调试）
     - 使用 `BSS138PS,115`（双 NMOS）实现“反相 + 下拉”：
       - Q1（反相）：`G=THERM_KILL_N`，`S=GND`，`D=THERM_KILL_H`，并用 `~100kΩ` 上拉到 `3.3V`
-      - Q2（下拉）：`G=THERM_KILL_H`，`S=GND`，`D=TPS_EN`
-    - `TPS_EN` 的上拉/分压网络按 `TPS55288` 的 `EN/UVLO` UVLO 需求设计；过温/强制停机时通过 Q2 强制拉低优先
+      - Q2（下拉）：`G=THERM_KILL_H`，`S=GND/CHGND`，`D=TPS_EN`
+    - `TPS_EN` 的上拉/分压网络按 `TPS55288.EN/UVLO` 的 UVLO 需求设计；本项目约定 **UVLO 分压参考地选用 `AGND_TPSA`**。若关断下拉（Q2）参考的是 `GND/CHGND`，则需要保证 `AGND_TPSA` 与 `CHGND` 按 `TPS55288` 的布局指南做单点/低阻连接，避免地弹噪声影响 `TPS_EN` 的阈值稳定性
   - 备注：
     - 不把 `TMP112A.ALERT` 并入 `INA3221_*` 告警线：Comparator 模式下可能长期拉低，会掩盖其它中断/告警；本方案用 `THERM_KILL_N` 独立接入 MCU，兼顾“硬停机”与“MCU 可见”。
 
