@@ -28,6 +28,8 @@ This folder stores Markdown conversions of vendor datasheets, with images extrac
   - `SFJ-1412.md`
 - `SI2310A/`
   - `SI2310A.md`
+- `UMW_AO3400A/`
+  - `UMW_AO3400A.md`
 - `MX5050T/`
   - `MX5050T.md` (ideal diode / high-side OR-ing FET controller)
 - `UMW_SI2305A/`

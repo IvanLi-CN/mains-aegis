@@ -87,7 +87,7 @@
 |---|---|---|---|---|
 | 二次保护（限流模块） | `CLM1612P1412` | 已选 | 4S / 12 A 电芯组二次保护用 Current Limiting Module（带 heater 电阻；由外部检测电路触发） | `docs/datasheets/CLM1612P1412/` |
 | 二级过压保护（OVP，熔丝触发） | `BQ296100DSGR` | 已选 | 2~4S 二级过压保护（OVP=4.35V/cell）+ `REG=3.3V`；优先考虑采购可得性 | `docs/datasheets/BQ296100DSGR/` |
-| Heater 触发 NMOS（CLM Pin 2） | `SI2310A` | 已选 | 外部电压检测电路驱动，用于给 `CLM1612P1412` 的 heater 端通电触发熔断 | `docs/datasheets/SI2310A/` |
+| Heater 触发 NMOS（CLM Pin 2） | `UMW AO3400A` | 已选 | 外部电压检测电路驱动，用于给 `CLM1612P1412` 的 heater 端通电触发熔断（需要 `VGS≈2.5V` 仍有明确导通指标） | `docs/datasheets/UMW_AO3400A/` |
 | 二次保护（备选） | `SFJ-1412` | 候选 | SFJ 系列（SCP）表贴二次保护器件（4S / 12 A 规格项） | `docs/datasheets/SFJ-1412/` |
 | 器件对比 | `CLM1612P1412 vs SFJ-1412` | 已收录 | 仅基于已收录数据手册的关键参数对比与选型备注 | `docs/datasheets/CLM1612P1412-vs-SFJ-1412.md` |
 

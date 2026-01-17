@@ -35,7 +35,7 @@
 | 二级过压保护（OVP） | `BQ296100DSGR` | 已选 | 2~4S OVP；`OVP=4.35 V/cell`；`REG=3.3 V` | `docs/datasheets/BQ296100DSGR/` |
 | 二次保护（限流/熔断） | `CLM1612P1412` | 已选 | 4S / 12A；带 fuse element + heater element，可用于外部触发熔断 | `docs/datasheets/CLM1612P1412/` |
 | 均衡 PMOS（外部） | `UMW SI2305A` | 已选 | TI 外部均衡 PMOS 拓扑用 | `docs/datasheets/UMW_SI2305A/` |
-| Heater 触发 NMOS | `SI2310A` | 已选 | 驱动 `CLM1612P1412` heater（由 OVP/外部检测电路控制） | `docs/datasheets/SI2310A/` |
+| Heater 触发 NMOS | `UMW AO3400A` | 已选 | 驱动 `CLM1612P1412` heater（由 OVP/外部检测电路控制；需低 `VGS` 仍能可靠导通） | `docs/datasheets/UMW_AO3400A/` |
 
 ### 1.3 明确不采用（清理项）
 
@@ -50,7 +50,7 @@
   - 保护：基于电压/电流/温度的可配置保护与故障状态上报
   - 控制：CHG/DSG FET drive、PCHG（预充）控制、均衡控制
   - 通信：SMBus v1.1（`SMBC/SMBD`）
-- **二次保护层（独立链路）**：`BQ296100DSGR` + `CLM1612P1412` + `SI2310A`
+- **二次保护层（独立链路）**：`BQ296100DSGR` + `CLM1612P1412` + `UMW AO3400A`
   - 当主 BMS 失效/失配（例如软件配置错误、单点失效）时，仍可对过压等灾难性风险做熔断隔离
 
 ### 2.2 关键电气链路（文字版框图）
@@ -64,7 +64,7 @@ BAT+ ──(CHG/DSG back-to-back N-MOS)───┤
                                      │
 BAT- ── Rsense (SRP/SRN) ────────────┘
 
-Cells (4S) ── sense ── BQ296100 ── OUT ── SI2310A ── CLM heater ── blow CLM fuse
+Cells (4S) ── sense ── BQ296100 ── OUT ── AO3400A ── CLM heater ── blow CLM fuse
 ```
 
 > 说明：上图表达“主要信号流与保护链路”，实际原理图应严格按 `BQ40Z50-R2` 参考设计拆分为：VC 采样滤波、差分电流采样、SMBus 防护、FET gate 网络、均衡网络与熔断网络等小回路。
@@ -142,19 +142,21 @@ Cells (4S) ── sense ── BQ296100 ── OUT ── SI2310A ── CLM hea
 - 预充电（PCHG）路径器件（P-MOS 与门极网络等，除 R1 外）
 - 栅极/下拉网络细化（ESD/TVS、gate resistor、pull-down 等；按参考电路起步后再按波形与 EMI 调整）
 
-#### 3.3.2 反接充电保护（Q4：DSG Gate Clamp）（已定）
+#### 3.3.2 反接充电保护（Q13：DSG Gate Clamp）（已定）
 
-`BQ40Z50-R2` 数据手册在“PACK and FET Control”章节明确给出：为防止**反接充电器**导致 `PACK+` 变为“略微负压”时，放电 FET（参考图中的 Q3）被驱入线性区并损坏，参考电路增加 Q4；当 `PACK+` 为负时，Q4 导通并**短接 Q3 的 Gate 与 Source**，从而保护 Q3（见 `docs/datasheets/BQ40Z50-R2/BQ40Z50-R2.md:785`）。
+`BQ40Z50-R2` 数据手册在“PACK and FET Control”章节明确给出：为防止**反接充电器**导致 `PACK+` 变为“略微负压”时，放电 FET（参考图中的 Q3）被驱入线性区并损坏，参考电路增加 Q4；当 `PACK+` 为负时，Q4 导通并**短接放电 FET 的 Gate 与 Source**，从而保护放电 FET（见 `docs/datasheets/BQ40Z50-R2/BQ40Z50-R2.md:785`）。
+
+本项目中，参考图中的 **Q4 对应器件位号为 `Q13(BSS139H6327)`**（其 gate 通过 `R41=10k` 下拉到 `CHGND`，drain 接 `DSG` gate 节点，source 接 `VBAT`；以网表为准）。
 
 本项目采用“**gate 直接拉到 `CHGND`**”的简化方案（不额外加 `3.3 V` 偏置）。原因是 `BQ40Z50-R2` 的低电流参考地 `VSS` 位于 `RSENSE` 的 `SRP` 侧，而 `CHGND` 位于 `SRN` 侧；若用 `VSS` 侧电源给 `CHGND` 侧 gate 做偏置，会在 `RSENSE` 上引入额外电流路径与压降，增加调试与误差风险（见 `docs/datasheets/BQ40Z50-R2/BQ40Z50-R2.md:688`）。
 
-Q4 器件选型（已定）：
+Q13 器件选型（已定）：
 
 - 料号：`BSS139H6327`
 - 选型理由（与本拓扑强相关）：
-  - 类型：N 沟道**耗尽型** MOSFET（depletion-mode / normally-on），`VGS(th)` 为负；在反接导致 `PACK+` 略为负时，`VGS` 会回到 `≈0…1 V`，器件可可靠导通以夹紧 Q3 的 `G-S`。
-  - `VGS(max)=±20 V`：正常 4S 运行时，Q4 可能长期承受 `VGS≈-(10…16.8) V` 的负栅压，必须确保栅氧可靠性。
-  - `IDSS(min)=30 mA @ VGS=0 V`：足以把 Q3 的 gate 节点“硬拉回”source（Q3 gate 电流受 `5.1 kΩ` 串阻限制，夹紧并不需要大电流）。
+  - 类型：N 沟道**增强型** MOSFET（enhancement-mode / normally-off）。当 `PACK+` 反接导致其电位略为负时，`VGS` 会变为正，从而导通并把 `DSG` gate 节点钳位到 `VBAT`，实现“gate-source 直接短接”的保护意图。
+  - **低 `VGS(th)`**：按 `BQ40Z50-R2` 的说明，“gate 直接接地”的简化方案要求器件有较低的开启阈值；若阈值/余量不足，需要按参考说明改为“gate 通过高值电阻偏置到 3.3 V”的做法。
+  - `VGS` 额定必须覆盖正常 4S 工况下的负栅压（近似 `VGS≈-VBAT`）与端口瞬态裕量；电流/功耗要求较低（该器件只需要快速拉回 `DSG` gate 节点，不承担主功率回路）。
 
 PACK 端 ESD/瞬态钳位（TVS）（已定）：
 
@@ -167,7 +169,7 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 
 布局/实现要点：
 
-- Q4 与 Q3 的 gate/source 回路走线尽量短、铜皮宽，避免寄生电感导致夹紧变慢。
+- Q13 与 `DSG` gate/source 回路走线尽量短、铜皮宽，避免寄生电感导致夹紧变慢。
 - 以 datasheet pinout 为准核对 `G/S/D` 与封装库引脚编号，避免安装方向错误（体二极管方向接反会直接破坏保护意图）。
 
 #### 3.3.3 BAT 输入隔离二极管 D1（已定）
@@ -226,16 +228,33 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 ### 4.2 器件职责
 
 - `BQ296100DSGR`：2~4S 逐节过压监测与故障输出（本项目选型参数：`OVP=4.35V/cell`、`REG=3.3V`）
-- `SI2310A`：受 `BQ296100` 输出控制，对 `CLM1612P1412` 的 heater 端供电（触发熔断）
+- `UMW AO3400A`：受 `BQ296100` 输出控制，对 `CLM1612P1412` 的 heater 端供电（触发熔断）
 - `CLM1612P1412`：二次保护器件，正常电流路径走 fuse element；当 heater 被激励产生热量时熔断
 
 ### 4.3 关键约束（设计时必须显式评审）
 
 - `BQ296100` 的 OVP delay（数据手册中对 `BQ296100` 标注为 `6.5s`）与系统可接受的反应时间
-- `BQ296100` 的 `REG` 管脚在 `VSS` 未先接/浮空时存在损伤与过压风险，需要按数据手册对 `REG` 支路做限流与可选钳位设计（见 4.4）
+- `BQ296100` 的 `REG` 管脚在 `VSS` 未先接/浮空时存在损伤与过压风险，需要按数据手册对 `REG` 支路做限流与可选钳位设计（见 4.5）
 - `CLM1612P1412` 的 heater 激励功耗与触发条件（由外部驱动链路决定；需要把“触发电压/电流/时间”落成可验证指标）
+- Heater 触发 NMOS（`Q3`）必须按“**低 `VGS` 仍能可靠导通**”来选型（见 4.4）
 
-### 4.4 BQ296100 `REG` 引脚保护（连接顺序不可控）
+### 4.4 Heater 触发 NMOS：为什么 `VGS` 可能只有 2~3V（以及选型要求）
+
+本项目把 **`BQ40Z50 FUSE`** 与 **`BQ296100 OUT`** 两路信号通过 `RN2=5.1k/5.1k` 分压合到 `Q3.G`，
+其设计意图与 `BQ40Z50-R2` 参考电路一致：一方面让两路信号“任一路触发即可点熔”，另一方面限制 `FUSE` 为高时对 `BQ296100` 的反灌电流。
+
+关键点在于：当两路信号一个高、一个低时，`Q3.G` 并不会被拉到“高电平本身”，而是落在一个中间电压。
+再叠加 `Q3` 的 `R1=51k` 下拉与驱动端输出阻抗，`VGS` 的最差情况会进一步被拉低到 **2~3V** 量级。
+
+因此，`Q3` 的选型必须满足：
+
+- **在 `VGS≈2.5V` 时有“明确的最大 `RDS(on)` 指标”**（而不是只给 4.5V/10V 的 `RDS(on)`）。
+- `SOT-23` 且 pinout 与现封装一致（`1=G, 2=S, 3=D`）。
+
+`SI2310A`（仅在 `VGS=4.5V/10V` 给 `RDS(on)` 的器件版本）在本拓扑下无法保证 heater 电流/功耗，
+可能导致 `CLM` 触发不可靠；`AO3400A` 这类带 `VGS=2.5V` 指标的 NMOS 才能把风险从“靠运气”变成“可验证”。
+
+### 4.5 BQ296100 `REG` 引脚保护（连接顺序不可控）
 
 本项目电池单元连接顺序**无法确保**。按 TI `BQ296xxx` 数据手册（`docs/datasheets/BQ296100DSGR/`，8.2.2 与图 8-3）的建议，`REG` 管脚采用以下处理：
 
@@ -299,7 +318,7 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 3. 预充电路径（PCHG）器件（P-MOS 与门极网络等，除 R1 外；R1 已定为 `2×150 Ω 2512` 串联）
 4. 温度：NTC 已定 `10k(103) β3380`（TS1 料号 `FNTC0402X103F3380FB`；TS2~TS4 同曲线）；待定：充/放电温度阈值点与延时/恢复点（充/放电温度窗口）
 5. Pack 连接器 pinout 与 ESD/EMI 方案
-6. 二次保护触发指标：`BQ296100` → `SI2310A` → `CLM` heater 的电压/电流/触发时间
+6. 二次保护触发指标：`BQ296100` → `AO3400A` → `CLM` heater 的电压/电流/触发时间
 
 ## 7. 参考资料（本仓库）
 
@@ -309,4 +328,4 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 - `docs/datasheets/BQ296100DSGR/`
 - `docs/datasheets/CLM1612P1412/`
 - `docs/datasheets/UMW_SI2305A/`
-- `docs/datasheets/SI2310A/`
+- `docs/datasheets/UMW_AO3400A/`
