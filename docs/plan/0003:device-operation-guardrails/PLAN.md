@@ -49,8 +49,8 @@
 
 - **espflash 禁用（G0）**：拒绝执行任何 `espflash` 相关命令与任何最终触发 `espflash` 的间接路径（包括但不限于 `cargo espflash` / `cargo-espflash` / `mcu-agentd` 若其后端为 `espflash`）。
 - **写入硬禁令（G1）**：拒绝执行任何会写入/擦除 Flash/分区的命令（无论工具为何）。
-- **端口唯一性（G2）**：当 `mcu-agentd selector get <MCU_ID>` 无法得到唯一目标端口时，拒绝一切设备操作（仅允许提问）；最小提问为“请先在你本机用 mcu-agentd 选择唯一目标端口（selector set），然后再继续”。
-- **端口不可枚举（G2a）**：Agent 不得通过任何方式枚举/列出候选端口（包括 `mcu-agentd selector list`、列目录等）；必须要求用户显式提供唯一目标端口（从用户本机 `mcu-agentd` 配置/状态中复制）。
+- **端口唯一性（G2）**：当 `mcu-agentd selector get <MCU_ID>` 无法得到唯一目标端口时，拒绝一切设备操作（仅允许提问）；最小提问为“请先在你本机用 `mcu-agentd selector set <MCU_ID> <PORT>` 选择唯一目标端口，然后再继续”。
+- **端口不可枚举（G2a）**：Agent 不得通过任何方式枚举/列出候选端口（包括 `mcu-agentd selector list`、列目录等）；必须要求用户先手工在 `mcu-agentd` 中完成唯一选择（`mcu-agentd selector set <MCU_ID> <PORT>`）。
 - **端口来源固定（G2b）**：目标端口只允许来自 `mcu-agentd` 的 selector 状态：Agent 仅允许读取 `mcu-agentd selector get <MCU_ID>` 的结果；若无唯一结果则拒绝设备动作。
 - **禁止自动换端口（G3）**：Agent 不得自行把端口从 A 换到 B“试试”；只能在用户更新白名单后才可切换。
 - **状态改变二次确认（G4）**：执行任何 reset / monitor-with-reset / 进入下载模式等状态改变操作前，必须复述“端口 X + 操作 Y（不写入）”，并等待明确 yes/no。
@@ -74,7 +74,7 @@
 
 - Agent 不执行任何 `espflash`（含封装/间接调用）。
 - Agent 永不执行任何写入/擦除命令（Flash/分区级别）。
-- 多端口场景下，Agent 不会尝试其他端口，也不会枚举候选端口；只会要求用户先在 `mcu-agentd` 中完成唯一选择（`selector set`），并只读验证（`selector get`）。
+- 多端口场景下，Agent 不会尝试其他端口，也不会枚举候选端口；只会要求用户先在 `mcu-agentd` 中完成唯一选择（`mcu-agentd selector set <MCU_ID> <PORT>`），并只读验证（`mcu-agentd selector get <MCU_ID>`）。
 - 任何状态改变操作均在二次确认后执行；未确认则拒绝。
 - 每次设备相关动作均有最小说明输出（允许/拒绝 + 原因 + 下一步）。
 
@@ -82,7 +82,7 @@
 
 - “espflash 禁用”口径已冻结（含 `cargo-espflash`、`mcu-agentd` 等间接路径）。
 - 文档落点已确定（AGENTS 指南与 bring-up 文档）；本计划不修改其他计划文档。
-- 本仓库约定 `MCU_ID=esp`，且 Agent 仅允许读取 `mcu-agentd selector get esp`（只读）来校验唯一目标端口。
+- `MCU_ID` 的取值需要在会话中明确给出；且 Agent 仅允许读取 `mcu-agentd selector get <MCU_ID>`（只读）来校验唯一目标端口。
 
 ## 非功能性验收 / 质量门槛（Quality Gates）
 
@@ -104,7 +104,7 @@
 
 ## 方案概述（Approach, high-level）
 
-- 以“默认拒绝”为准：先要求用户提供唯一目标端口（Agent 不枚举），再判定命令类别（read-only / state-changing / WRITE-BLOCKED）。
+- 以“默认拒绝”为准：先要求用户手工在 `mcu-agentd` 中完成唯一选择（`mcu-agentd selector set <MCU_ID> <PORT>`），Agent 仅允许只读校验（`mcu-agentd selector get <MCU_ID>`），再判定命令类别（read-only / state-changing / WRITE-BLOCKED）。
 - 对任何 `espflash`（含间接路径）统一拒绝并给出替代路径（仅提示原则与需要用户执行的步骤，不提供 Agent 代执行）。
 - 对任何写入/擦除统一拒绝并给出“用户自行执行”的下一步。
 - 对任何状态改变动作统一走二次确认。
