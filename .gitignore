@@ -6,3 +6,9 @@ downloads/
 
 # Scratch / temp
 .tmp/
+
+# Firmware build / runtime artifacts
+firmware/target/
+firmware/.esp32-port
+firmware/.mcu-agentd/
+.mcu-agentd/

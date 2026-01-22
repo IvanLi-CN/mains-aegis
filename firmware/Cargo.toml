@@ -1,0 +1,15 @@
+[package]
+name = "esp-firmware"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+defmt = "1.0.1"
+esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32s3"] }
+esp-backtrace = { version = "0.18.1", features = ["esp32s3", "panic-handler", "defmt"] }
+esp-hal = { version = "1.0.0", features = ["esp32s3", "rt", "unstable"] }
+esp-println = { version = "0.16.1", default-features = false, features = ["esp32s3", "defmt-espflash", "jtag-serial"] }
+
+[profile.dev.package.xtensa-lx-rt]
+opt-level = "z"
