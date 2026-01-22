@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 待实现
+- Status: 已完成
 - Created: 2026-01-22
 - Last: 2026-01-22
 
@@ -101,6 +101,11 @@
 
 - `AGENTS.md`: 增补“设备操作纪律”章节（禁用 `espflash`、写入硬禁令、端口白名单、最小说明输出要求）。
  
+## 实现里程碑（Milestones）
+
+- [x] 在 `AGENTS.md` 固化 G0–G4 与 Decision summary 输出要求（可复制粘贴）
+- [x] 在 `firmware/README.md` 标注“Human-only / Agent-allowed（read-only）”并避免 Agent 端口枚举与写入
+
 
 ## 方案概述（Approach, high-level）
 
@@ -117,3 +122,7 @@
 ## 参考（References）
 
 （如需对齐其他计划的实现口径，应由对应计划的 owner 在其实现流程中自行合入本计划的纪律要求。）
+
+## Change log
+
+- 2026-01-22: 落地 Agent 设备闸门的文档约束与示例标注（AGENTS + firmware bring-up README）。

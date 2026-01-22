@@ -2,6 +2,15 @@
 
 本目录是本仓库固件 bring-up 的最小基线：**可构建、可烧录、可观测（串口日志）**，但不包含任何业务功能。
 
+## Agent 协作规则（重要）
+
+本 README 里的“烧录 / 监视 / 端口选择”等命令默认是**给人类开发者执行**的。
+
+- Agent 禁止直接/间接调用 `espflash`（含 `cargo espflash` / `cargo-espflash` / 以及后端为 `espflash` 的封装工具）。
+- Agent 禁止执行任何写入/擦除类操作（例如 `mcu-agentd flash`、`cargo espflash flash`）。
+- Agent 禁止枚举候选端口（例如 `mcu-agentd selector list`、列 `/dev/*`）。
+- Agent 只允许对端口做只读校验：`mcu-agentd selector get <MCU_ID>`；若无唯一目标端口，必须先要求你用 `mcu-agentd selector set <MCU_ID> <PORT>` 手工完成选择。
+
 ## 目录结构（契约）
 
 与 `docs/plan/0001:esp-rs-no-std-firmware-bootstrap/contracts/file-formats.md` 对齐：
@@ -72,13 +81,16 @@ cd firmware
 cargo build --release
 cd ..
 
-# List candidate ports
+# (Human-only) List candidate ports
 mcu-agentd selector list esp
 
-# Select one explicitly (writes firmware/.esp32-port)
+# (Human-only) Select one explicitly (writes firmware/.esp32-port)
 PORT=/dev/cu.usbmodemXXXX mcu-agentd selector set esp "$PORT"
 
-# Flash + monitor
+# (Agent-allowed: read-only) Verify selected target port
+mcu-agentd selector get esp
+
+# (Human-only) Flash + monitor
 mcu-agentd flash esp
 mcu-agentd monitor esp --reset
 ```
@@ -94,10 +106,10 @@ cd firmware
 cargo build
 cargo build --release
 
-# Flash
+# (Human-only) Flash
 DEFMT_LOG=info cargo espflash flash --release --log-format defmt
 
-# Flash + monitor
+# (Human-only) Flash + monitor
 DEFMT_LOG=info cargo espflash flash --release --monitor --baud 115200 --log-format defmt
 ```
 
