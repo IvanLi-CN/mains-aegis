@@ -19,10 +19,10 @@ cargo build
 cargo build --release
 
 # Flash (recommended)
-cargo espflash flash --release
+DEFMT_LOG=info cargo espflash flash --release --log-format defmt
 
 # Flash + monitor (recommended for bring-up)
-cargo espflash flash --release --monitor --baud 115200
+DEFMT_LOG=info cargo espflash flash --release --monitor --baud 115200 --log-format defmt
 ```
 
 ### 参数（Args / options）
@@ -31,6 +31,7 @@ cargo espflash flash --release --monitor --baud 115200
 - `--release`: 使用 release profile
 - `--monitor`: 烧录后进入串口监视器
 - `--baud <n>`: 串口波特率（默认以实现阶段 README 口径为准；bring-up 推荐 `115200`）
+- `--log-format defmt`: 显式启用 `defmt` 日志解码（避免按默认 `serial` 输出解析）
 - `DEFMT_LOG=<level>`: 日志级别（如 `info`/`debug`；由实现阶段 `firmware/README.md` 固定默认值）
 
 ### 输出（Output）
