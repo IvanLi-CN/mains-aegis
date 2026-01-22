@@ -1,0 +1,34 @@
+pre-commit:
+  commands:
+    rustfmt-staged:
+      run: scripts/format_staged.sh
+      stage_fixed: true
+
+commit-msg:
+  commands:
+    commitlint:
+      run: bun run commitlint -- --edit {1}
+
+pre-push:
+  commands:
+    firmware-quality:
+      run: |
+        set -euo pipefail
+
+        if [ ! -d firmware ]; then
+          echo "Skip firmware quality checks: firmware/ directory not found"
+          exit 0
+        fi
+
+        cd firmware
+
+        cargo +stable fmt --all -- --check
+
+        if ! rustup run esp rustc -V >/dev/null 2>&1; then
+          echo "Missing Rust toolchain 'esp' (required for firmware build)." >&2
+          echo "Install via: cargo install espup && espup install && source ~/export-esp.sh" >&2
+          exit 1
+        fi
+
+        cargo clippy
+        cargo build

@@ -12,3 +12,7 @@ firmware/target/
 firmware/.esp32-port
 firmware/.mcu-agentd/
 .mcu-agentd/
+
+# JS tooling (bun)
+node_modules/
+bun.lockb

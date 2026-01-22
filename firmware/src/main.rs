@@ -5,9 +5,9 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 use esp_backtrace as _;
 use esp_hal::time::{Duration, Instant};
+use esp_hal::timer::{systimer::SystemTimer, timg::TimerGroup};
 use esp_hal::{clock::CpuClock, main};
 use esp_println as _;
-use esp_hal::timer::{systimer::SystemTimer, timg::TimerGroup};
 
 #[main]
 fn main() -> ! {

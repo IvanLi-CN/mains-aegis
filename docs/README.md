@@ -6,6 +6,7 @@ This folder stores project documentation and offline-renderable datasheets.
 
 - Hardware selection overview: `docs/hardware-selection.md`
 - Firmware bring-up (ESP32-S3 / esp-hal / no_std): `firmware/README.md`
+- Code quality & CI: `docs/quality-gates.md`
 - BMS design (system-level): `docs/bms-design.md`
 - Charger design (BQ25792 + PD/PPS): `docs/charger-design.md`
 - UPS main output design: `docs/ups-output-design.md`
