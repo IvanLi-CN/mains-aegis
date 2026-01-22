@@ -12,23 +12,29 @@
 ### 用法（Usage）
 
 ```text
+# Build the firmware (uses firmware-local toolchain config)
 cd firmware
+cargo build --release
+cd ..
 
-# List candidate ports (human mode)
-mcu-agentd selector list aegis
+# List candidate ports (human mode) - run from repo root (mcu-agentd.toml lives here)
+mcu-agentd selector list esp
 
 # Select one explicitly (writes firmware/.esp32-port)
-PORT=/dev/cu.usbmodemXXXX mcu-agentd selector set aegis "$PORT"
+PORT=/dev/cu.usbmodemXXXX mcu-agentd selector set esp "$PORT"
 
 # Flash + monitor (recommended for bring-up)
-mcu-agentd flash aegis
-mcu-agentd monitor aegis --reset
+mcu-agentd flash esp
+mcu-agentd monitor esp --reset
 ```
 
 备注：
 
-- `aegis` 为本计划建议的 `mcu_id`（实现阶段在 `firmware/mcu-agentd.toml` 中固定）。
-- 该流程不依赖 `cargo espflash` 的 CLI 参数口径：底层由 `mcu-agentd` 读取 `firmware/mcu-agentd.toml` 决定 `chip/artifact_elf/log_format` 等。
+- `esp` 为本计划固定的 `mcu_id`（实现在仓库根目录 `mcu-agentd.toml` 中固定）。
+- `mcu-agentd.toml` 固定在仓库根目录（满足 root 直接运行的要求）。
+- 首次 `mcu-agentd monitor esp` 可能会提示绑定设备 MAC（用于防止“串口节点复用导致连错设备”）；确认后会在 `firmware/.esp32-port` 追加 `mac=<MAC>` 行（见 `contracts/file-formats.md`）。
+- 该流程不依赖 `cargo espflash` 的 CLI 参数口径：底层由 `mcu-agentd` 读取仓库根目录 `mcu-agentd.toml` 决定 `chip/artifact_elf/log_format` 等。
+- 若监视器输出停在 `boot:0x0 (DOWNLOAD(USB/UART0))` / `waiting for download`：通常表示设备处于下载模式，或当前串口不是应用日志通道；需要检查启动拉脚/复位方式并重新选择串口设备节点。
 
 ## `cargo espflash`（fallback: flash + monitor）
 

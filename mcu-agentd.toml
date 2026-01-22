@@ -1,0 +1,17 @@
+# mcu-agentd project config (repo root)
+#
+# Requirement (Plan #0001): `mcu-agentd.toml` must live in the project root so running
+# `mcu-agentd ...` from the root works without extra flags.
+
+[project]
+id = "esp"
+
+[mcu.esp]
+backend = "espflash"
+chip = "esp32s3"
+artifact_elf = "firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware"
+selector_cache_file = "firmware/.esp32-port"
+
+[mcu.esp.espflash]
+baud = 115200
+log_format = "defmt"

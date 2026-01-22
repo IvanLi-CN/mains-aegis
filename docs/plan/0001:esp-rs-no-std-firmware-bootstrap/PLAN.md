@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 待实现
+- Status: 已完成
 - Created: 2026-01-22
 - Last: 2026-01-22
 
@@ -49,6 +49,7 @@
 
 - 固件工程使用 `esp-rs` / `esp-hal` 的 `no_std` 路线，目标芯片为 `ESP32-S3`。
 - 工程结构与配置应尽量**隔离在 `firmware/` 下**，避免对仓库其它内容产生非必要影响（例如将 `.cargo/` 与 `rust-toolchain.toml` 放在 `firmware/` 内）。
+- `mcu-agentd` 配置文件必须位于仓库根目录：`mcu-agentd.toml`（用于支持在 root 直接运行 `mcu-agentd ...`）。
 - `mcu-agentd` 被视为本仓库固件 bring-up 的默认工作流入口：用于串口选择缓存、统一执行 `espflash`、以及 `defmt` 解码监视。
 - 提供清晰的开发者入口文档（`firmware/README.md` 或等价位置）：
   - 安装前置（工具链/驱动/权限）
@@ -92,7 +93,7 @@
 
 ## 实现前置条件（Definition of Ready / Preconditions）
 
-（本计划当前 `Status: 待实现` 表示以下前置条件已冻结并满足；若后续发现不满足，应将 `Status` 回退为 `待设计` 并更新 `Last`。）
+（本计划当前 `Status: 已完成` 表示以下前置条件已冻结并满足；若后续发现不满足，应将 `Status` 回退为 `待设计` 并更新 `Last`。）
 
 - 目标/非目标、范围（in/out）、约束已明确
 - 验收标准覆盖 core path + 关键边界/异常
@@ -123,9 +124,56 @@
 
 ## 实现里程碑（Milestones）
 
-- [ ] M1: 落地 `firmware/` 工程骨架（`esp-hal` + `no_std` + `esp32s3`），并能输出串口启动信息
-- [ ] M2: 补齐 `firmware/README.md` 的安装/构建/烧录/监视器与排错指引
-- [ ] M3: 完成一次端到端手工验证记录（所用硬件、连接方式、命令、预期输出），并更新 `docs/README.md` 入口链接
+- [x] M1: 落地 `firmware/` 工程骨架（`esp-hal` + `no_std` + `esp32s3`），并能输出串口启动信息
+- [x] M2: 补齐 `firmware/README.md` 的安装/构建/烧录/监视器与排错指引
+- [x] M3: 完成一次端到端手工验证记录（所用硬件、连接方式、命令、预期输出），并更新 `docs/README.md` 入口链接
+
+## 端到端手工验证记录（E2E bring-up record）
+
+（本节用于 M3；由执行者在实际硬件上完成后补齐。）
+
+- Date: 2026-01-22
+- Host:
+  - OS: macOS 15.6.1
+  - Tooling: `mcu-agentd 0.1.0` + `espflash 4.2.0` + Rust toolchain `esp`
+- Hardware:
+  - Board: mains-aegis mainboard（rev unknown）
+  - Connection:
+    - Front panel `USB1` → host
+    - Port: `/dev/cu.usbmodem412201`
+    - Selector cache: `firmware/.esp32-port`（首次 `monitor` 可能提示绑定 MAC；确认后写入 `mac=<MAC>` 行）
+    - MAC: `50:78:7d:19:88:40`
+
+### Commands
+
+```bash
+# Build (firmware-local toolchain/config)
+cd firmware
+cargo build --release
+cd ..
+
+# Flash + monitor (run from repo root; uses ./mcu-agentd.toml)
+mcu-agentd flash esp
+mcu-agentd monitor esp --from-start
+```
+
+### Observed output (excerpt)
+
+- Bootloader/ROM 输出（可能包含）
+- 应用层输出至少包含（其中一项即可视为“可辨识启动信息”）：
+  - `esp: boot (serial)`
+  - `esp: boot`（`defmt` 解码）
+  - `esp: heartbeat`（`defmt` 解码，周期性）
+
+实际观测（节选）：
+
+```text
+esp: boot (serial)
+[INFO ] esp: boot
+[INFO ] esp: heartbeat
+```
+
+监视记录：`/.mcu-agentd/monitor/esp/20260122_093840.mon.ndjson`（heartbeat 约每 2s 输出一次；本次观测窗口内未出现 panic）。
 
 ## 方案概述（Approach, high-level）
 
@@ -146,6 +194,9 @@
 ## 变更记录（Change log）
 
 - 2026-01-22: 初始化计划与接口契约骨架
+- 2026-01-22: 落地 `firmware/` 最小工程骨架与 bring-up 文档；默认 `defmt`（espflash 解码）并集成 `mcu-agentd` 配置
+- 2026-01-22: 根据工作流约束，将 `mcu-agentd.toml` 固定到仓库根目录，并同步更新接口契约与文档口径
+- 2026-01-22: `mcu-agentd` 串口缓存补充 MAC 绑定格式（`firmware/.esp32-port`）；将固件输出标识统一为 `esp:*` 并为 `Instant::now()` 增加必要的 timer/watchdog 初始化（需重刷验证）
 
 ## 参考（References）
 

@@ -19,15 +19,17 @@ firmware/
   README.md
   Cargo.toml
   rust-toolchain.toml
-  mcu-agentd.toml
   .esp32-port
-  .mcu-agentd/
   .cargo/
     config.toml
   src/
     main.rs
   (可选) build.rs
   (可选) memory.x / linker scripts
+
+(repo root)
+  mcu-agentd.toml
+  .mcu-agentd/
 ```
 
 约束：
@@ -35,13 +37,34 @@ firmware/
 - `firmware/` 目录应当可独立运行 `cargo ...` 命令（不要求仓库根目录存在 Rust workspace）。
 - `rust-toolchain.toml` 与 `.cargo/config.toml` 放在 `firmware/` 内，避免影响仓库中未来可能新增的其它语言/工程。
 - 构建产物（如 `firmware/target/`）在实现阶段需要加入忽略规则（`.gitignore`）；本契约不规定其具体忽略写法，但要求“不得被提交到仓库”。
-- `mcu-agentd` 配置文件固定为 `firmware/mcu-agentd.toml`（使 `firmware/` 成为该工具的 project root）。
+- `mcu-agentd` 配置文件固定为仓库根目录 `mcu-agentd.toml`（以满足“从 root 直接运行 `mcu-agentd ...`”的工作流要求）。
 - 串口选择缓存文件为 `firmware/.esp32-port`（由 `mcu-agentd` selector 写入；不应提交到仓库）。
-- `firmware/.mcu-agentd/` 为运行态目录（logs/state；不应提交到仓库）。
+- `repo_root/.mcu-agentd/` 为运行态目录（logs/state；不应提交到仓库）。
+
+## 串口选择缓存（`firmware/.esp32-port`）
+
+- 范围（Scope）: internal
+- 变更（Change）: New
+- 编码（Encoding）: utf-8
+
+该文件用于记录当前工程选中的串口（以及可选的设备绑定信息），供 `mcu-agentd` 在后续 `flash/monitor/reset` 时复用。
+
+### Schema（结构）
+
+```text
+<PORT>
+mac=<MAC>   # optional
+```
+
+- `<PORT>`：串口设备节点（例如 macOS 下的 `/dev/cu.usbmodem...`）。
+- `mac=<MAC>`：可选的设备绑定信息（形如 `mac=50:78:7d:...`）。首次 `monitor` 时可能会提示绑定，确认后写入该行。
 
 ### Examples（示例）
 
-无（该接口为新增接口；以实现阶段落地的目录树为准）。
+```text
+/dev/cu.usbmodem412201
+mac=50:78:7d:19:88:40
+```
 
 ### 兼容性与迁移（Compatibility / migration）
 

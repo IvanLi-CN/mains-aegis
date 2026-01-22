@@ -57,4 +57,4 @@
 
 | ID   | Title | Status | Plan | Last | Notes |
 |-----:|-------|--------|------|------|-------|
-| 0001 | 初始化 ESP32-S3（esp-rs/esp-hal）no_std 固件工程 | 待实现 | `0001:esp-rs-no-std-firmware-bootstrap/PLAN.md` | 2026-01-22 | - |
+| 0001 | 初始化 ESP32-S3（esp-rs/esp-hal）no_std 固件工程 | 已完成 | `0001:esp-rs-no-std-firmware-bootstrap/PLAN.md` | 2026-01-22 | - |
