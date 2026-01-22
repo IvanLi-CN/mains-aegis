@@ -58,3 +58,4 @@
 | ID   | Title | Status | Plan | Last | Notes |
 |-----:|-------|--------|------|------|-------|
 | 0001 | 初始化 ESP32-S3（esp-rs/esp-hal）no_std 固件工程 | 待实现 | `0001:esp-rs-no-std-firmware-bootstrap/PLAN.md` | 2026-01-22 | - |
+| 0002 | 仓库代码质量门槛：Git hooks + GitHub Actions | 待实现 | `0002:quality-gates-ci-hooks/PLAN.md` | 2026-01-22 | - |
