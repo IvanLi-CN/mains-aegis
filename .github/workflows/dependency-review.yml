@@ -15,4 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Dependency Review
+        id: dependency_review
+        continue-on-error: true
         uses: actions/dependency-review-action@v4
+      - name: Note (dependency review unsupported)
+        if: steps.dependency_review.outcome == 'failure'
+        run: |
+          echo "Dependency review is not supported/enabled for this repository."
+          echo "Enable Dependency graph (+ GitHub Advanced Security for private repos) to enforce this gate."

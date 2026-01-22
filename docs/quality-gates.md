@@ -47,3 +47,4 @@ lefthook run pre-push
 
 - Hook fails with `rustfmt is required`: install `rustfmt` (e.g. `rustup component add rustfmt` on stable).
 - `bun install --frozen-lockfile` fails: update `bun` to match `package.json` `engines.bun` constraint.
+- Dependency review check fails with "not supported": enable Dependency graph (and GitHub Advanced Security for private repos) in repository settings.
