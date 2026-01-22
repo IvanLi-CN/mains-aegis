@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 待实现
+- Status: 已完成
 - Created: 2026-01-22
 - Last: 2026-01-22
 
@@ -130,9 +130,9 @@
 
 ## 实现里程碑（Milestones）
 
-- [ ] M1: 落地 `bun` + `commitlint`（含英文口径规则）与 `lefthook.yml`（pre-commit/commit-msg/pre-push）
-- [ ] M2: 落地 GitHub Actions workflows（fmt / firmware build / PR title lint / dependency review）并加上 `paths-ignore`（`docs/**` + `README.md`）
-- [ ] M3: 更新 `docs/README.md`，补充质量门槛入口与常见排错指引
+- [x] M1: 落地 `bun` + `commitlint`（含英文口径规则）与 `lefthook.yml`（pre-commit/commit-msg/pre-push）
+- [x] M2: 落地 GitHub Actions workflows（fmt / firmware build / PR title lint / dependency review）并加上 `paths-ignore`（`docs/**` + `README.md`）
+- [x] M3: 更新 `docs/README.md`，补充质量门槛入口与常见排错指引
 
 ## 方案概述（Approach, high-level）
 
@@ -152,6 +152,7 @@
 ## 变更记录（Change log）
 
 - 2026-01-22: 新建计划，冻结 git hooks + GitHub Actions 质量门槛口径
+- 2026-01-22: 已落地 bun/commitlint/lefthook 与 CI workflows，并补充质量门槛文档入口
 
 ## 参考（References）
 

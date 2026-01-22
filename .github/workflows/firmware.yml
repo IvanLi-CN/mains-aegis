@@ -1,0 +1,50 @@
+name: firmware
+
+on:
+  push:
+    branches: ["main"]
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  build:
+    name: Firmware build (ESP32-S3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Paths filter (skip if no firmware changes)
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            firmware:
+              - "firmware/**"
+              - ".github/workflows/firmware.yml"
+      - name: Skip (no firmware changes)
+        if: steps.changes.outputs.firmware != 'true'
+        run: echo "No firmware changes; skip build."
+
+      - name: Install ESP Xtensa toolchain (esp)
+        if: steps.changes.outputs.firmware == 'true'
+        uses: esp-rs/xtensa-toolchain@v1.5
+        with:
+          default: true
+          buildtargets: esp32s3
+          version: latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: cargo build (firmware)
+        if: steps.changes.outputs.firmware == 'true'
+        run: |
+          cd firmware
+          cargo build
