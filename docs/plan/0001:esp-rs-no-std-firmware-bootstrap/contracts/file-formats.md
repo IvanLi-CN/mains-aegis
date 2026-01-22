@@ -19,6 +19,9 @@ firmware/
   README.md
   Cargo.toml
   rust-toolchain.toml
+  mcu-agentd.toml
+  .esp32-port
+  .mcu-agentd/
   .cargo/
     config.toml
   src/
@@ -32,6 +35,9 @@ firmware/
 - `firmware/` 目录应当可独立运行 `cargo ...` 命令（不要求仓库根目录存在 Rust workspace）。
 - `rust-toolchain.toml` 与 `.cargo/config.toml` 放在 `firmware/` 内，避免影响仓库中未来可能新增的其它语言/工程。
 - 构建产物（如 `firmware/target/`）在实现阶段需要加入忽略规则（`.gitignore`）；本契约不规定其具体忽略写法，但要求“不得被提交到仓库”。
+- `mcu-agentd` 配置文件固定为 `firmware/mcu-agentd.toml`（使 `firmware/` 成为该工具的 project root）。
+- 串口选择缓存文件为 `firmware/.esp32-port`（由 `mcu-agentd` selector 写入；不应提交到仓库）。
+- `firmware/.mcu-agentd/` 为运行态目录（logs/state；不应提交到仓库）。
 
 ### Examples（示例）
 
@@ -41,4 +47,3 @@ firmware/
 
 - 后续如需引入多 crate workspace（例如 `firmware/crates/*`），应以“新增目录”为主，避免破坏 `firmware/` 作为入口目录的约定。
 - 如必须搬迁 `firmware/` 的入口位置：需要在 `../PLAN.md` 里作为接口变更重新冻结，并提供迁移指引（包含路径重定向与文档更新）。
-

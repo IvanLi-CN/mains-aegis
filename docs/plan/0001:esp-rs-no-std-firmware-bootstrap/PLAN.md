@@ -17,7 +17,7 @@
 ### Goals
 
 - 在仓库内新增一个**可复用的固件工程骨架**：面向 `ESP32-S3`，使用 `esp-rs` / `esp-hal` 的 `no_std` 路线。
-- 固化“开发者工作流”：能在一台干净的开发机上按文档完成**构建、烧录、查看日志**（至少覆盖 macOS）。
+- 固化“开发者工作流”：能在一台干净的开发机上按文档完成**构建、烧录、查看日志**（覆盖 macOS + Linux）。
 - 产出一个“弱依赖硬件”的 smoke test：在最小外设条件下验证链路（`defmt` 串口日志即可）。
 
 ### Non-goals
@@ -35,6 +35,7 @@
 - 提供最小示例程序：
   - 串口输出（用于确认运行与基本日志路径）
   - 不包含 LED/GPIO 闪烁（本计划 bring-up 闭环仅依赖串口可观测）
+- 集成 `mcu-agentd` 作为默认烧录/监视入口（底层后端为 `espflash`，并在 monitor 侧解码 `defmt`），同时保留 `cargo espflash` 作为兜底路径。
 - 明确仓库层面的 Git hygiene（例如需要忽略哪些构建产物目录），并在实现阶段落地。
 
 ### Out of scope
@@ -48,6 +49,7 @@
 
 - 固件工程使用 `esp-rs` / `esp-hal` 的 `no_std` 路线，目标芯片为 `ESP32-S3`。
 - 工程结构与配置应尽量**隔离在 `firmware/` 下**，避免对仓库其它内容产生非必要影响（例如将 `.cargo/` 与 `rust-toolchain.toml` 放在 `firmware/` 内）。
+- `mcu-agentd` 被视为本仓库固件 bring-up 的默认工作流入口：用于串口选择缓存、统一执行 `espflash`、以及 `defmt` 解码监视。
 - 提供清晰的开发者入口文档（`firmware/README.md` 或等价位置）：
   - 安装前置（工具链/驱动/权限）
   - 构建命令
@@ -66,7 +68,7 @@
 | 接口（Name） | 类型（Kind） | 范围（Scope） | 变更（Change） | 契约文档（Contract Doc） | 负责人（Owner） | 使用方（Consumers） | 备注（Notes） |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 固件工程目录结构（`firmware/`） | File format | internal | New | ./contracts/file-formats.md | firmware | developers | 约束工程布局与关键文件位置 |
-| 固件开发命令口径（build/flash/monitor） | CLI | internal | New | ./contracts/cli.md | firmware | developers | 约束推荐命令与输出/退出码语义 |
+| 固件 bring-up 命令口径（mcu-agentd / espflash） | CLI | internal | New | ./contracts/cli.md | firmware | developers | 默认 mcu-agentd；`cargo espflash` 兜底 |
 
 ### 契约文档（按 Kind 拆分）
 

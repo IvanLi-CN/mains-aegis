@@ -2,7 +2,35 @@
 
 本契约用于冻结“固件开发者工作流”的推荐命令口径：构建、烧录与串口监视。
 
-## `cargo espflash`（flash + monitor）
+## `mcu-agentd`（preferred: flash + monitor）
+
+- 范围（Scope）: internal
+- 变更（Change）: New
+- 支持平台（Host）: macOS + Linux
+- 日志格式（Logs）: `defmt`（由 `mcu-agentd` 通过 `espflash` 在 monitor 侧解码；由 `mcu-agentd.toml` 固定）
+
+### 用法（Usage）
+
+```text
+cd firmware
+
+# List candidate ports (human mode)
+mcu-agentd selector list aegis
+
+# Select one explicitly (writes firmware/.esp32-port)
+PORT=/dev/cu.usbmodemXXXX mcu-agentd selector set aegis "$PORT"
+
+# Flash + monitor (recommended for bring-up)
+mcu-agentd flash aegis
+mcu-agentd monitor aegis --reset
+```
+
+备注：
+
+- `aegis` 为本计划建议的 `mcu_id`（实现阶段在 `firmware/mcu-agentd.toml` 中固定）。
+- 该流程不依赖 `cargo espflash` 的 CLI 参数口径：底层由 `mcu-agentd` 读取 `firmware/mcu-agentd.toml` 决定 `chip/artifact_elf/log_format` 等。
+
+## `cargo espflash`（fallback: flash + monitor）
 
 - 范围（Scope）: internal
 - 变更（Change）: New
