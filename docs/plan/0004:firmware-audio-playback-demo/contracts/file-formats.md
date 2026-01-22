@@ -10,7 +10,7 @@
 
 ### Schema（结构）
 
-（实现前需要冻结：Demo playlist 的段数/每段时长、采样率/编码方式、以及是否需要离线转码。）
+本文件为本计划的**冻结契约**：后续实现以这里为准。
 
 源素材（计划冻结闸门要求）：必须落在本计划目录下，作为“可回归”的事实依据。
 
@@ -37,9 +37,11 @@ firmware/
         02_*.wav
         03_*.wav
         04_*.wav
+        05_*.wav
+        06_*.wav
 ```
 
-字段约束（待冻结）：
+字段约束（已冻结）：
 
 - Channel: mono（固定）
 - Inter-segment silence: 1s（固定）
@@ -56,7 +58,7 @@ firmware/
 - 至少 1 段为 `WAV(PCM)`
 - 至少 1 段为 `WAV(IMA-ADPCM)`
 
-段数与每段时长（待冻结）：
+段数与每段时长（已冻结）：
 
 - Segment count: `6`（固定）
 - Segment duration: 约 `10s`（每段的**实际长度**以“文件清单”中的 `samples@8000Hz` 为准；不强行卡整秒）
@@ -73,10 +75,20 @@ firmware/
 
 ### Examples（示例）
 
-- `firmware/assets/audio/demo-playlist/01_sweep_pcm.wav`
-- `firmware/assets/audio/demo-playlist/02_melody_adpcm.wav`
-- `firmware/assets/audio/demo-playlist/03_sweep_adpcm.wav`
-- `firmware/assets/audio/demo-playlist/04_melody_pcm.wav`
+- 计划侧源素材：
+  - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/01_sweep_pcm.wav`
+  - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/02_melody_adpcm.wav`
+  - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/03_sweep_adpcm.wav`
+  - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/04_melody_pcm.wav`
+  - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/05_sweep_pcm2.wav`
+  - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/06_melody_adpcm2.wav`
+- 固件侧建议引用形状：
+  - `firmware/assets/audio/demo-playlist/01_sweep_pcm.wav`
+  - `firmware/assets/audio/demo-playlist/02_melody_adpcm.wav`
+  - `firmware/assets/audio/demo-playlist/03_sweep_adpcm.wav`
+  - `firmware/assets/audio/demo-playlist/04_melody_pcm.wav`
+  - `firmware/assets/audio/demo-playlist/05_sweep_pcm2.wav`
+  - `firmware/assets/audio/demo-playlist/06_melody_adpcm2.wav`
 
 ### 兼容性与迁移（Compatibility / migration）
 
