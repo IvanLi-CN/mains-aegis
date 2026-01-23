@@ -71,6 +71,40 @@ cargo build --release
 
 > 注意：本工程将 target / toolchain 配置隔离在 `firmware/` 内，不要求仓库根目录存在 Rust workspace。
 
+> 备注：当前固件将 CPU 频率固定为 `160MHz`（early bring-up 更稳），避免上电初始化阶段的偶发异常影响验证。
+> 备注：本计划的音频素材已收敛为 PCM-only（`WAV(PCM16LE)`），固件侧不再包含 ADPCM 解码路径。
+
+## 音频播放 Demo（Plan #0004）
+
+本固件在上电后会自动播放一组 Demo playlist，用于闭环验证：
+
+- 链路：`ESP32-S3 I2S/TDM TX -> MAX98357A -> 8Ω/1W Speaker`
+- GPIO：`GPIO4=BCLK`，`GPIO5=WS(LRCLK)`，`GPIO6=DOUT`
+- 素材：`firmware/assets/audio/demo-playlist/01_*.wav` … `06_*.wav`
+- 播放顺序：按 `01_`→`06_`；段间由固件插入 `1s` 静音
+
+预期日志（`defmt`）：
+
+- `audio: demo playlist start ...`
+- `audio: segment 1/6 start: 01_sweep_pcm.wav`
+- ...
+- `audio: demo playlist done ...`
+
+手工验证（端到端，建议按以下顺序执行）：
+
+```bash
+cd firmware
+cargo build --release
+cd ..
+
+# (Human-only) Ensure the selected port is correct
+mcu-agentd selector get esp
+
+# Flash + monitor
+mcu-agentd flash esp
+mcu-agentd monitor esp --reset
+```
+
 ## 烧录与监视（推荐：`mcu-agentd`，从仓库根目录运行）
 
 `mcu-agentd` 的配置文件固定在仓库根目录：`mcu-agentd.toml`。

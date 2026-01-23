@@ -2,9 +2,9 @@
 
 ## 状态
 
-- Status: 待实现
+- Status: 已完成
 - Created: 2026-01-22
-- Last: 2026-01-22
+- Last: 2026-01-23
 
 ## 背景 / 问题陈述
 
@@ -46,7 +46,7 @@
 ### MUST
 
 - Demo playlist 为 **单声道（mono）**，由 6 段音频按顺序播放组成，每段 **约 10 秒**（不强制整秒），段与段之间插入 **1 秒静音**。
-- Demo playlist 必须覆盖以下要素（至少各 1 次）：`WAV(PCM)`、`WAV(IMA-ADPCM)`、`旋律`、`扫频`。
+- Demo playlist 必须覆盖以下要素（至少各 1 次）：`WAV(PCM16LE)`、`旋律`、`扫频`。
 - Demo 音频素材必须可在仓库内离线获取（不依赖在线 URL）；其版权/授权必须可用于仓库分发（默认采用“纯合成音/合成波形”避免版权风险）。
 - 固件播放链路与硬件设计文档保持一致：以 `ESP32-S3` 的 I2S/TDM TX 驱动 `MAX98357A`（或等价数字功放）输出到 `8Ω / 1W` 喇叭。
 - 音频播放不应导致固件 panic；播放过程中不得出现持续性的 DMA underrun（若出现，必须在日志中可定位）。
@@ -90,7 +90,7 @@
 
 ### Testing
 
-- Unit tests: 若引入解码器（如 IMA-ADPCM），需提供可在 host 上运行的最小测试覆盖（至少：解码正确性 + 边界输入）。
+- Unit tests: 本计划 PCM-only 不引入解码器；若未来另起计划引入解码器（如压缩音频），需提供可在 host 上运行的最小测试覆盖（至少：解码正确性 + 边界输入）。
 - Integration tests: 至少一次“可烧录 + 可播放 + 可观测日志”的手工验证步骤，并固化到文档（例如 `firmware/README.md` 的音频验证章节）。
 
 ### Quality checks
@@ -105,15 +105,16 @@
 
 ## 实现里程碑（Milestones）
 
-- [ ] M1: 落地 Demo playlist 音频文件（6 段；每段约 10s；段间 1s 静音；含 WAV(PCM) + WAV(IMA-ADPCM) + 旋律 + 扫频）
-- [ ] M2: 固件侧 I2S/TDM TX + DMA 播放链路跑通（可播放 Demo）
-- [ ] M3: 落地可用于验证的触发方式 + 播放日志（start/stop + underrun 可观测）
-- [ ] M4: 完成一次端到端手工验证记录并同步相关文档入口
+- [x] M1: 落地 Demo playlist 音频文件（6 段；每段约 10s；段间 1s 静音；WAV(PCM16LE)；含 旋律 + 扫频）
+- [x] M2: 固件侧 I2S/TDM TX + DMA 播放链路跑通（可播放 Demo）
+- [x] M3: 落地可用于验证的触发方式 + 播放日志（start/stop + underrun 可观测）
+- [x] M4: 完成一次端到端手工验证记录并同步相关文档入口
 
 ## 方案概述（Approach, high-level）
 
 - 优先走 `docs/audio-design.md` 推荐的链路：`ESP32-S3` I2S/TDM TX → `MAX98357A`。
 - 素材默认采用“纯合成音”生成（避免版权问题）；在格式选择上，优先满足“简单可用 + 可回归”，再考虑 flash 体积与解码开销。
+- 由于 ADPCM 在目标链路上底噪难以满足听感要求，本计划最终**仅接受 PCM（WAV PCM16LE）**；如未来需压缩，应另起新计划评估硬件/电源/放大器噪声底与编码方案。
 - 通过“素材电平约束（headroom）+ 增益档位/（可选）数字限幅”的组合来避免过驱 `8Ω/1W` 喇叭。
 
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）
@@ -129,6 +130,13 @@
 ## 变更记录（Change log）
 
 - 2026-01-22: 初始化计划与契约骨架
+- 2026-01-23: 落地固件侧 I2S/TDM 播放 Demo、固件侧素材落盘与验证文档入口；修复 DMA overflow（按 available 分块 push）；CPU 固定 160MHz 规避上电初始化偶发异常；重生成 ADPCM demo 素材以消除噼啪杂音（见 tools 脚本）
+- 2026-01-23: 尝试将旋律段（02/06）切换为 `WAV(PCM16LE)` 以消除 ADPCM 杂音底噪；后续为满足 ADPCM 覆盖要求已恢复 02/06 为 `WAV(IMA-ADPCM)`，并在固件侧加入 ADPCM 解码后低通以压制沙沙底噪（见 tools 脚本）
+- 2026-01-23: 加重 ADPCM 解码后低通（两级一阶低通串联）进一步压制沙沙底噪；完成端到端烧录验证（见 monitor log）
+- 2026-01-23: 增加 ADPCM 解码后噪声门/扩展器（包络跟随 + soft knee）进一步压制静音/弱音段底噪；完成端到端烧录验证（见 monitor log）
+- 2026-01-23: 用“预加重（素材生成）+ 去加重（固件侧）”替代低通/噪声门，降低 ADPCM 量化噪声且避免明显变暗/泵动；完成端到端烧录验证（见 monitor log）
+- 2026-01-23: 决策收敛：只接受 PCM（WAV PCM16LE）；更新契约与素材/固件为 PCM-only
+- 2026-01-23: 修复 `DmaError::Late`（环形 DMA 喂数过晚）：改为 `push_with` 单循环流式生成（音频/段间静音）并将日志延后到 ring buffer 高水位；复核端到端 6 段均播放完成
 
 ## 参考（References）
 

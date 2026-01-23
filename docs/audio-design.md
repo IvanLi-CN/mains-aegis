@@ -6,8 +6,10 @@
 
 - **MCU**：`ESP32-S3-FH4R2`（本项目已选）
 - **输出链路**：`ESP32-S3 TDM (TX) -> MAX98357A -> Speaker`（固件采用 `esp-rs`/`esp-hal`（no_std）时按 TDM 落地）
-- **素材格式**：`IMA-ADPCM`（4-bit）优先；备选 `PCM`（WAV/裸 PCM）
+- **素材格式**：仅接受 `PCM`（`WAV(PCM16LE)`；mono；`8kHz`）
 - **发声器件（当前选型）**：`8Ω / 1W`（`15×11×3mm` 级别）
+
+> 说明：我们在实际硬件上尝试过 `IMA-ADPCM`（含多种“降噪/去噪”手段），仍存在明显沙沙底噪且副作用较大（变暗/变小/泵动）。因此当前设计决策收敛为 PCM-only；若未来需要压缩，请另起计划评估硬件噪声底与编码方案。
 
 ---
 
@@ -86,12 +88,20 @@
 
 以“10 种提示音、每种 3–5 秒”为例：
 
-- **8kHz / Mono / IMA‑ADPCM(4‑bit)**：约 `4KB/s`
-  - 单个音效：`12–20KB`
-  - 10 个合计：约 `120–200KB`
 - **8kHz / Mono / PCM(16‑bit)**：约 `16KB/s`
   - 单个音效：`48–80KB`
   - 10 个合计：约 `0.48–0.8MB`
+
+> 若后续需要降低素材体积，优先从“提示音时长/采样率/内容设计”优化；编码压缩（如 ADPCM/Opus 等）需结合目标板噪声底与听感另行评估。
+
+### 4.3 固件实现入口（Demo）
+
+本仓库已落地一个“上电自动播放”的最小音频 Demo（用于验证 I2S/TDM→MAX98357A 链路）：
+
+- 固件入口：`../firmware/src/main.rs`（启动后触发播放）
+- 播放实现：`../firmware/src/audio_demo.rs`
+- Demo 素材（固件侧落盘）：`../firmware/assets/audio/demo-playlist/`
+- 验证步骤：`../firmware/README.md`（见“音频播放 Demo（Plan #0004）”章节）
 
 ---
 

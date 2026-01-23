@@ -33,7 +33,7 @@ firmware/
   assets/
     audio/
       demo-playlist/
-        01_*.wav         # mono；WAV(PCM) 或 WAV(IMA-ADPCM)
+        01_*.wav         # mono；WAV(PCM16LE)
         02_*.wav
         03_*.wav
         04_*.wav
@@ -46,17 +46,13 @@ firmware/
 - Channel: mono（固定）
 - Inter-segment silence: 1s（固定）
 - Sample rate: `8000 Hz`（固定）
-- Encoding/container:
-  - PCM: `WAV(PCM16LE)`（默认）
-  - ADPCM: `WAV(IMA-ADPCM, 4-bit)`（默认）
+- Encoding/container: `WAV(PCM16LE)`（固定；仅接受 PCM）
 - Level/headroom: 峰值 `<= -6 dBFS`（固定；不得削波）
 
 内容覆盖（固定要求）：
 
 - 至少 1 段为 `扫频`
 - 至少 1 段为 `旋律`
-- 至少 1 段为 `WAV(PCM)`
-- 至少 1 段为 `WAV(IMA-ADPCM)`
 
 段数与每段时长（已冻结）：
 
@@ -67,28 +63,28 @@ firmware/
 文件清单（固定；按前缀顺序播放；段间由固件插入 1s 静音）：
 
 1. `01_sweep_pcm.wav`：扫频；`WAV(PCM16LE)`；`8000 Hz`；`78400 samples`（`9.8s`）
-2. `02_melody_adpcm.wav`：旋律；`WAV(IMA-ADPCM)`；`8000 Hz`；`84800 samples`（`10.6s`）
-3. `03_sweep_adpcm.wav`：扫频；`WAV(IMA-ADPCM)`；`8000 Hz`；`74396 samples`（`9.2995s`）
+2. `02_melody_pcm2.wav`：旋律；`WAV(PCM16LE)`；`8000 Hz`；`84800 samples`（`10.6s`）
+3. `03_sweep_pcm3.wav`：扫频；`WAV(PCM16LE)`；`8000 Hz`；`74396 samples`（`9.2995s`）
 4. `04_melody_pcm.wav`：旋律；`WAV(PCM16LE)`；`8000 Hz`；`88800 samples`（`11.1s`）
 5. `05_sweep_pcm2.wav`：扫频；`WAV(PCM16LE)`；`8000 Hz`；`77600 samples`（`9.7s`）
-6. `06_melody_adpcm2.wav`：旋律；`WAV(IMA-ADPCM)`；`8000 Hz`；`81600 samples`（`10.2s`）
+6. `06_melody_pcm3.wav`：旋律；`WAV(PCM16LE)`；`8000 Hz`；`81600 samples`（`10.2s`）
 
 ### Examples（示例）
 
 - 计划侧源素材：
   - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/01_sweep_pcm.wav`
-  - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/02_melody_adpcm.wav`
-  - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/03_sweep_adpcm.wav`
+  - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/02_melody_pcm2.wav`
+  - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/03_sweep_pcm3.wav`
   - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/04_melody_pcm.wav`
   - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/05_sweep_pcm2.wav`
-  - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/06_melody_adpcm2.wav`
+  - `docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/06_melody_pcm3.wav`
 - 固件侧建议引用形状：
   - `firmware/assets/audio/demo-playlist/01_sweep_pcm.wav`
-  - `firmware/assets/audio/demo-playlist/02_melody_adpcm.wav`
-  - `firmware/assets/audio/demo-playlist/03_sweep_adpcm.wav`
+  - `firmware/assets/audio/demo-playlist/02_melody_pcm2.wav`
+  - `firmware/assets/audio/demo-playlist/03_sweep_pcm3.wav`
   - `firmware/assets/audio/demo-playlist/04_melody_pcm.wav`
   - `firmware/assets/audio/demo-playlist/05_sweep_pcm2.wav`
-  - `firmware/assets/audio/demo-playlist/06_melody_adpcm2.wav`
+  - `firmware/assets/audio/demo-playlist/06_melody_pcm3.wav`
 
 ### 兼容性与迁移（Compatibility / migration）
 
