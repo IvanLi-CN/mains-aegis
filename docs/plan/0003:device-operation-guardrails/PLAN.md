@@ -10,14 +10,14 @@
 
 - 仓库包含固件 bring-up 工作流，且常见场景为“多设备/多端口候选并存”。
 - Agent 在排错过程中若具备自动尝试、自动切换端口或自动写入能力，将高概率误操作其他设备并违反操作纪律。
-- 本计划将“设备操作闸门”制度化：在未被显式授权且未唯一确认目标端口前，Agent 仅允许只读动作；任何写入/擦除一律禁止；原则上不得使用 `espflash`（含 `cargo espflash` / `cargo-espflash` 以及其封装/后端）。
+- 本计划将“设备操作闸门”制度化：在未被显式授权且未唯一确认目标端口前，Agent 仅允许只读动作；当你明确授权时，允许通过 `mcu-agentd` 执行受控烧录（写入）与必要的状态改变操作；同时仍禁止端口枚举与自动换端口，并禁止直接调用 `espflash`（含 `cargo espflash` / `cargo-espflash`）。
 
 ## 目标 / 非目标
 
 ### Goals
 
-- 禁止写入：Agent 永不执行任何会写入/擦除/改写设备 Flash/分区的操作（含通过其他工具间接触发写入/擦除）。
-- 禁止使用 `espflash`：Agent 原则上不得直接或间接使用 `espflash`（包括但不限于 `espflash` CLI、`cargo espflash`、`cargo-espflash`，以及任何底层调用 espflash 的封装工具）。
+- 受控烧录：允许 Agent 通过 `mcu-agentd flash <MCU_ID>` 执行烧录（写入），但必须满足“唯一目标端口 + 二次确认 + 禁止端口枚举/自动换端口”。
+- 禁止直接使用 `espflash`：Agent 不得直接调用 `espflash` CLI / `cargo espflash` / `cargo-espflash`（但允许 `mcu-agentd` 使用 `espflash` 作为内部后端）。
 - 唯一目标：未唯一确认目标设备（端口白名单）前，Agent 只能执行只读动作。
 - 不枚举端口：Agent 不得执行任何“列出候选端口/枚举串口设备”的动作；目标端口必须由用户先在 `mcu-agentd` 中手工配置好，Agent 仅允许只读校验。
 - 显式授权：任何可能改变设备状态的动作（即便非写入，例如 reset）必须获得显式授权。
@@ -27,7 +27,7 @@
 
 - 不对所有端口进行“轮询尝试”。
 - 不因为“端口已设置好”就推断“允许切换端口/允许写入/允许操作其他设备”。
-- 不通过封装工具绕过禁令（例如通过 `mcu-agentd` / 其他工具间接触发 `espflash` 或写入/擦除）。
+- 不绕过闸门：不允许跳过“唯一端口校验 / 二次确认 / 禁止端口枚举与自动换端口”的约束。
 - 不限制开发者手工使用 `espflash`/`mcu-agentd` 的工作流口径（本计划仅约束 Agent 的行为）。
 
 ## 范围（Scope）
@@ -41,19 +41,19 @@
 ### Out of scope
 
 - 新增任何“自动修复/自动切换端口/自动尝试”的排错策略。
-- 为写入/擦除行为设计任何自动化路径（写入始终由用户自行执行）。
+- 将“无需确认即可写入”的路径制度化。
 
 ## 需求（Requirements）
 
 ### MUST
 
-- **espflash 禁用（G0）**：拒绝执行任何 `espflash` 相关命令与任何最终触发 `espflash` 的间接路径（包括但不限于 `cargo espflash` / `cargo-espflash` / `mcu-agentd` 若其后端为 `espflash`）。
-- **写入硬禁令（G1）**：拒绝执行任何会写入/擦除 Flash/分区的命令（无论工具为何）。
+- **直接 espflash 禁用（G0）**：拒绝执行任何直接调用 `espflash` 的命令（包括但不限于 `espflash ...` / `cargo espflash ...` / `cargo-espflash ...`）。
+- **受控写入（G1）**：允许执行 `mcu-agentd flash <MCU_ID>`（写入），但必须满足 G2/G3/G4；除 `mcu-agentd flash` 外，其他写入/擦除/分区改写类命令一律拒绝。
 - **端口唯一性（G2）**：当 `mcu-agentd selector get <MCU_ID>` 无法得到唯一目标端口时，拒绝一切设备操作（仅允许提问）；最小提问为“请先在你本机用 `mcu-agentd selector set <MCU_ID> <PORT>` 选择唯一目标端口，然后再继续”。
 - **端口不可枚举（G2a）**：Agent 不得通过任何方式枚举/列出候选端口（包括 `mcu-agentd selector list`、列目录等）；必须要求用户先手工在 `mcu-agentd` 中完成唯一选择（`mcu-agentd selector set <MCU_ID> <PORT>`）。
 - **端口来源固定（G2b）**：目标端口只允许来自 `mcu-agentd` 的 selector 状态：Agent 仅允许读取 `mcu-agentd selector get <MCU_ID>` 的结果；若无唯一结果则拒绝设备动作。
 - **禁止自动换端口（G3）**：Agent 不得自行把端口从 A 换到 B“试试”；只能在用户更新白名单后才可切换。
-- **状态改变二次确认（G4）**：执行任何 reset / monitor-with-reset / 进入下载模式等状态改变操作前，必须复述“端口 X + 操作 Y（不写入）”，并等待明确 yes/no。
+- **状态改变/写入二次确认（G4）**：执行任何 reset / monitor-with-reset / 进入下载模式等状态改变操作，或执行 `mcu-agentd flash <MCU_ID>` 写入操作前，必须复述“端口 X + 命令 Y”，并等待明确 yes/no。
 - **输出规范**：每次设备相关动作必须输出“Decision summary”（类型/端口/命令/为何允许或拒绝/下一步）；不要求会话汇总，也不要求任何落盘日志产出。
 
 ## 接口契约（Interfaces & Contracts）
@@ -72,15 +72,15 @@
 
 ## 验收标准（Acceptance Criteria）
 
-- Agent 不执行任何 `espflash`（含封装/间接调用）。
-- Agent 永不执行任何写入/擦除命令（Flash/分区级别）。
+- Agent 不直接调用 `espflash` / `cargo espflash` / `cargo-espflash`。
+- Agent 允许通过 `mcu-agentd flash <MCU_ID>` 执行烧录（写入），但每次均在“唯一目标端口校验 + 二次确认”后执行；其他写入/擦除命令一律拒绝。
 - 多端口场景下，Agent 不会尝试其他端口，也不会枚举候选端口；只会要求用户先在 `mcu-agentd` 中完成唯一选择（`mcu-agentd selector set <MCU_ID> <PORT>`），并只读验证（`mcu-agentd selector get <MCU_ID>`）。
 - 任何状态改变操作均在二次确认后执行；未确认则拒绝。
 - 每次设备相关动作均有最小说明输出（允许/拒绝 + 原因 + 下一步）。
 
 ## 实现前置条件（Definition of Ready / Preconditions）
 
-- “espflash 禁用”口径已冻结（含 `cargo-espflash`、`mcu-agentd` 等间接路径）。
+- “直接 espflash 禁用”口径已冻结（不限制 `mcu-agentd` 的内部后端实现）。
 - 文档落点已确定（AGENTS 指南与 bring-up 文档）；本计划不修改其他计划文档。
 - `MCU_ID` 的取值需要在会话中明确给出；且 Agent 仅允许读取 `mcu-agentd selector get <MCU_ID>`（只读）来校验唯一目标端口。
 
@@ -109,9 +109,9 @@
 
 ## 方案概述（Approach, high-level）
 
-- 以“默认拒绝”为准：先要求用户手工在 `mcu-agentd` 中完成唯一选择（`mcu-agentd selector set <MCU_ID> <PORT>`），Agent 仅允许只读校验（`mcu-agentd selector get <MCU_ID>`），再判定命令类别（read-only / state-changing / WRITE-BLOCKED）。
-- 对任何 `espflash`（含间接路径）统一拒绝并给出替代路径（仅提示原则与需要用户执行的步骤，不提供 Agent 代执行）。
-- 对任何写入/擦除统一拒绝并给出“用户自行执行”的下一步。
+- 以“默认拒绝”为准：先要求用户手工在 `mcu-agentd` 中完成唯一选择（`mcu-agentd selector set <MCU_ID> <PORT>`），Agent 仅允许只读校验（`mcu-agentd selector get <MCU_ID>`），再判定命令类别（read-only / state-changing / write）。
+- 对任何直接 `espflash` 调用统一拒绝并给出替代路径（优先建议使用 `mcu-agentd`）。
+- 对写入/擦除：仅允许 `mcu-agentd flash <MCU_ID>`，其余一律拒绝并给出“用户自行执行/改用 mcu-agentd”的下一步。
 - 对任何状态改变动作统一走二次确认。
 
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）
@@ -126,3 +126,4 @@
 ## Change log
 
 - 2026-01-22: 落地 Agent 设备闸门的文档约束与示例标注（AGENTS + firmware bring-up README）。
+- 2026-01-22: 更新闸门策略：允许 Agent 在二次确认后通过 `mcu-agentd flash` 执行受控烧录（写入）。
