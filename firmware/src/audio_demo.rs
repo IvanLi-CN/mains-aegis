@@ -1,6 +1,6 @@
 use esp_hal::dma::DmaError;
 use esp_hal::i2s::master::{Channels, Config, DataFormat, I2s};
-use esp_hal::time::Rate;
+use esp_hal::time::{Duration, Instant, Rate};
 
 #[derive(defmt::Format, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioDemoError {
@@ -176,6 +176,9 @@ pub fn play_demo_playlist(
                             tail[tail_len..tail_len + take2]
                                 .copy_from_slice(&audio_remaining[..take2]);
                             tail_len += take2;
+                            if tail_len < 4 {
+                                tail[tail_len..].fill(0);
+                            }
                             audio_remaining = &audio_remaining[take2..];
                             break;
                         }
@@ -211,13 +214,31 @@ pub fn play_demo_playlist(
         }
     }
 
-    // Best-effort drain: wait until the DMA circular buffer is fully available, then stop.
-    for _ in 0..2_000_000 {
-        if transfer.available().map_err(|err| AudioDemoError::Dma {
+    // Drain: wait until the DMA circular buffer is fully available, then stop.
+    //
+    // A fixed-iteration busy loop is unsafe here (can stop early depending on CPU speed),
+    // so use a time-based upper bound derived from the ring size and sample rate.
+    //
+    // Worst-case assume 16-bit mono at 8 kHz => 16_000 bytes/s. We add generous slack.
+    let bytes_per_second = core::cmp::max(1usize, (wavs[0].sample_rate_hz as usize) * 2);
+    let drain_ms = ((tx_capacity.saturating_add(bytes_per_second - 1)) / bytes_per_second) * 1_000;
+    let drain_timeout = Duration::from_millis((drain_ms as u64).saturating_add(2_000));
+    let deadline = Instant::now() + drain_timeout;
+
+    loop {
+        let avail = transfer.available().map_err(|err| AudioDemoError::Dma {
             op: DmaOp::Available,
             err,
-        })? >= tx_capacity
-        {
+        })?;
+        if avail >= tx_capacity {
+            break;
+        }
+        if Instant::now() >= deadline {
+            defmt::warn!(
+                "audio: drain timeout (avail {}/{}), stopping anyway",
+                avail,
+                tx_capacity
+            );
             break;
         }
     }
