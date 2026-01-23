@@ -9,7 +9,7 @@
 ## 背景 / 问题陈述
 
 - 主板包含两路可编程升降压输出：`U17/U18(TPS55288RPMR)`，通过 `I2C1`（`GPIO48/47`）进行寄存器配置（地址：`0x74/0x75`，见 `docs/i2c-address-map.md`）。
-- 主板包含电源监测：`U22(INA3221)`（I2C 地址 `0x40`），可对 `TPS55288 OUT-A/OUT-B` 的电压/电流进行采样（见 `docs/power-monitoring-design.md`）。
+- 主板包含电源监测：`U22(INA3221)`（I2C 地址 `0x40`），其中 `CH2/CH1` 分别采样 `TPS55288 OUT-A/OUT-B` 的电压/电流（见 `docs/power-monitoring-design.md`）。
 - 当前 `firmware/` 仅提供最小 bring-up（heartbeat），尚未落地对 `TPS55288` 的控制逻辑。
 - 需要在固件侧实现对两颗 `TPS55288` 的最小可控能力，并冻结“默认启用哪一路、默认输出电压/电流限制”的口径，便于后续联调与回归验证。
 
