@@ -22,5 +22,5 @@
 ## Validation rules
 
 - 当 `mcu-agentd selector get <MCU_ID>` 无法得到唯一端口：拒绝一切设备操作（仅允许提问）。
-- 写入/擦除始终禁止。
-- 原则上不得使用 `espflash`（含 `cargo espflash` / `cargo-espflash` 与其封装/间接调用）；因此本契约不提供任何“允许 espflash”的档位输入。
+- 写入/擦除：仅允许 `mcu-agentd flash <MCU_ID>`（写入），且每次执行前必须先校验唯一目标端口并获得明确 yes/no；其他写入/擦除/分区改写类命令一律拒绝。
+- 禁止直接使用 `espflash`（含 `espflash` / `cargo espflash` / `cargo-espflash`）；但不限制 `mcu-agentd` 的内部后端实现。
