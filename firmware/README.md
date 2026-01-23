@@ -7,7 +7,7 @@
 本 README 里的“烧录 / 监视 / 端口选择”等命令默认是**给人类开发者执行**的；当你明确授权（yes/no）时，Agent 也可以通过 `mcu-agentd` 执行烧录与监视。
 
 - Agent 禁止直接调用 `espflash`（含 `cargo espflash` / `cargo-espflash`）。注意：`mcu-agentd` 可能使用 `espflash` 作为后端，但通过 `mcu-agentd` 执行烧录/监视是允许的。
-- Agent 允许执行 `mcu-agentd flash <MCU_ID>`（写入）与 `mcu-agentd monitor <MCU_ID> --reset`（状态改变），但每次执行前必须先用 `mcu-agentd selector get <MCU_ID>` 校验唯一目标端口，并在复述“端口 + 命令”后等待你明确 yes/no。
+- Agent 允许执行 `mcu-agentd flash <MCU_ID>`（写入）与 `mcu-agentd monitor <MCU_ID> --reset`（状态改变），但每次执行前必须先用 `mcu-agentd selector get <MCU_ID>` 校验唯一目标端口，并在复述“端口 + 命令”后等待你明确 yes/no。注意：yes/no 仅对当次复述的“端口 + 命令”生效，不存在“本会话后续默认允许”的授权。
 - Agent 禁止枚举候选端口（例如 `mcu-agentd selector list`、列 `/dev/*`）。
 - Agent 只允许对端口做只读校验：`mcu-agentd selector get <MCU_ID>`；若无唯一目标端口，必须先要求你用 `mcu-agentd selector set <MCU_ID> <PORT>` 手工完成选择。
 
@@ -90,10 +90,10 @@ PORT=/dev/cu.usbmodemXXXX mcu-agentd selector set esp "$PORT"
 # (Agent-allowed: read-only) Verify selected target port
 mcu-agentd selector get esp
 
-# (Agent-allowed: write; requires explicit yes/no) Flash
+# (Agent-allowed: write; requires explicit yes/no; per-command) Flash
 mcu-agentd flash esp
 
-# (Agent-allowed: state-changing; requires explicit yes/no) Monitor (+ reset)
+# (Agent-allowed: state-changing; requires explicit yes/no; per-command) Monitor (+ reset)
 mcu-agentd monitor esp --reset
 ```
 

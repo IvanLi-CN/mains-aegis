@@ -13,6 +13,7 @@ To avoid operating the wrong device in multi-device / multi-port environments, t
 - Single target port only: the only allowed target port must come from `mcu-agentd` selector state (user runs `mcu-agentd selector set <MCU_ID> <PORT>`; Agent may only read `mcu-agentd selector get <MCU_ID>`). The Agent must not enumerate candidate ports; if no unique target is set, deny device operations.
 - No automatic port switching: never switch ports “to try”.
 - State-changing / write requires confirmation: any operation that may change device state (reset/boot mode/monitor-with-reset/etc.) or write to flash requires an explicit user yes/no after restating “port + command”.
+- No session-wide blanket approval: a “yes” applies only to the single, restated “port + command”. Any subsequent state-changing / write operation must be re-confirmed.
 - Decision summary required: for every device-related operation (including denials), output a minimal, copy-pastable decision summary: `Operation type` (`read-only` / `state-changing` / `write`), `Target port`, `Command`, `Decision` (`allow|deny`), `Rationale` (which gate G0–G4), and `Next step`.
 
 Related plan: `docs/plan/0003:device-operation-guardrails/PLAN.md`
