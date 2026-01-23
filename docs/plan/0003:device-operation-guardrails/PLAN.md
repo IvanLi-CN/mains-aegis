@@ -99,12 +99,11 @@
 
 （是否在 plan 阶段直接修改这些文档，取决于主人决策；见本计划实现阶段。）
 
-- `AGENTS.md`: 增补“设备操作纪律”章节（禁用 `espflash`、写入硬禁令、端口白名单、最小说明输出要求）。
- 
+- `AGENTS.md`: 增补“设备操作纪律”章节（禁用直接 `espflash`、受控写入（仅 `mcu-agentd flash`）、端口白名单、最小说明输出要求）。
 ## 实现里程碑（Milestones）
 
 - [x] 在 `AGENTS.md` 固化 G0–G4 与 Decision summary 输出要求（可复制粘贴）
-- [x] 在 `firmware/README.md` 标注“Human-only / Agent-allowed（read-only）”并避免 Agent 端口枚举与写入
+- [x] 在 `firmware/README.md` 标注“Human-only / Agent-allowed（read-only / state-changing / write）”，并明确：禁止端口枚举与自动换端口；写入仅允许 `mcu-agentd flash`（需二次确认）
 
 
 ## 方案概述（Approach, high-level）
