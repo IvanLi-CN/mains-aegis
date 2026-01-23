@@ -45,7 +45,7 @@ pub fn play_demo_playlist(
     .map_err(|_| AudioDemoError::I2sConfig)?;
 
     // Circular DMA TX buffer.
-    let (_, _, mut tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 16 * 4092);
+    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 16 * 4092);
     let tx_capacity = tx_buffer.len();
     // Keep logging conservative: only log when the DMA ring is almost full.
     let log_safe_free_bytes = core::cmp::min(tx_capacity, 2 * 4092);
@@ -58,7 +58,7 @@ pub fn play_demo_playlist(
         .build(tx_descriptors);
 
     let mut transfer = i2s_tx
-        .write_dma_circular(&mut tx_buffer)
+        .write_dma_circular(&tx_buffer)
         .map_err(|_| AudioDemoError::I2s)?;
     let zeros = [0u8; 512];
 
