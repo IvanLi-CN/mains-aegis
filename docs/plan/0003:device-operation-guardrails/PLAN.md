@@ -53,7 +53,7 @@
 - **端口不可枚举（G2a）**：Agent 不得通过任何方式枚举/列出候选端口（包括 `mcu-agentd selector list`、列目录等）；必须要求用户先手工在 `mcu-agentd` 中完成唯一选择（`mcu-agentd selector set <MCU_ID> <PORT>`）。
 - **端口来源固定（G2b）**：目标端口只允许来自 `mcu-agentd` 的 selector 状态：Agent 仅允许读取 `mcu-agentd selector get <MCU_ID>` 的结果；若无唯一结果则拒绝设备动作。
 - **禁止自动换端口（G3）**：Agent 不得自行把端口从 A 换到 B“试试”；只能在用户更新白名单后才可切换。
-- **状态改变/写入二次确认（G4）**：执行任何 reset / monitor-with-reset / 进入下载模式等状态改变操作，或执行 `mcu-agentd flash <MCU_ID>` 写入操作前，必须复述“端口 X + 命令 Y”，并等待明确 yes/no。
+- **状态改变/写入二次确认（G4）**：执行任何 reset / monitor-with-reset / 进入下载模式等状态改变操作，或执行 `mcu-agentd flash <MCU_ID>` 写入操作前，必须复述“端口 X + 命令 Y”，并等待明确 yes/no；确认只对当次复述的“端口 + 命令”生效，不存在“会话内一次授权，后续默认允许”。
 - **输出规范**：每次设备相关动作必须输出“Decision summary”（类型/端口/命令/为何允许或拒绝/下一步）；不要求会话汇总，也不要求任何落盘日志产出。
 
 ## 接口契约（Interfaces & Contracts）
