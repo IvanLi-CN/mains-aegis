@@ -130,11 +130,7 @@
 ## 变更记录（Change log）
 
 - 2026-01-22: 初始化计划与契约骨架
-- 2026-01-23: 落地固件侧 I2S/TDM 播放 Demo、固件侧素材落盘与验证文档入口；修复 DMA overflow（按 available 分块 push）；CPU 固定 160MHz 规避上电初始化偶发异常；重生成 ADPCM demo 素材以消除噼啪杂音（见 tools 脚本）
-- 2026-01-23: 尝试将旋律段（02/06）切换为 `WAV(PCM16LE)` 以消除 ADPCM 杂音底噪；后续为满足 ADPCM 覆盖要求已恢复 02/06 为 `WAV(IMA-ADPCM)`，并在固件侧加入 ADPCM 解码后低通以压制沙沙底噪（见 tools 脚本）
-- 2026-01-23: 加重 ADPCM 解码后低通（两级一阶低通串联）进一步压制沙沙底噪；完成端到端烧录验证（见 monitor log）
-- 2026-01-23: 增加 ADPCM 解码后噪声门/扩展器（包络跟随 + soft knee）进一步压制静音/弱音段底噪；完成端到端烧录验证（见 monitor log）
-- 2026-01-23: 用“预加重（素材生成）+ 去加重（固件侧）”替代低通/噪声门，降低 ADPCM 量化噪声且避免明显变暗/泵动；完成端到端烧录验证（见 monitor log）
+- 2026-01-23: 收敛为 PCM-only（WAV PCM16LE mono 8kHz），并落地固件侧 I2S/TDM 播放 Demo、固件侧素材落盘与验证文档入口；播放链路以连续流式 `push_with` 驱动 DMA ring，完成端到端烧录验证。
 - 2026-01-23: 决策收敛：只接受 PCM（WAV PCM16LE）；更新契约与素材/固件为 PCM-only
 - 2026-01-23: 修复 `DmaError::Late`（环形 DMA 喂数过晚）：改为 `push_with` 单循环流式生成（音频/段间静音）并将日志延后到 ring buffer 高水位；复核端到端 6 段均播放完成
 
