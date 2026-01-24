@@ -18,11 +18,12 @@
 | `tps_a_hotspot` | `TMP112A(OUT-A 热点 / TPS-A 热点)` | `0x48` | `ADD0=GND`（见 `docs/power-monitoring-design.md`） |
 | `tps_b_hotspot` | `TMP112A(OUT-B 热点 / TPS-B 热点)` | `0x49` | `ADD0=V+`（见 `docs/power-monitoring-design.md`） |
 
-## Sampling（required）
+## Sampling（fixed）
 
-- `temp_period_ms`: integer
-  - Meaning: 温度采样与日志输出周期（ms）
-  - Default: `500`
+本计划**不引入可配置的 telemetry 周期**，避免与既有冻结口径发生漂移。
+
+- Period: `500ms`
+- Binding: 与 `#0005` 已冻结的 `telemetry` 周期一致；本计划只追加字段，不改变 cadence。
 
 ## Units（required）
 
