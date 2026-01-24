@@ -11,4 +11,4 @@
 - Command: `<full command>`（完整可复制）
 - Decision: `allow|deny`
 - Rationale: 为什么允许/拒绝（包含命中哪条闸门：G0–G4）
-- Next step: 若为 deny，用户下一步需要做什么（例如先在 `mcu-agentd` 中配置唯一目标端口，或“确认是否允许执行写入/状态改变命令”）
+- Next step: 若为 deny，用户下一步需要做什么（例如先在 `mcu-agentd` 中配置唯一目标端口，或“改为执行 allowlist 命令”）

@@ -9,14 +9,19 @@
 To avoid operating the wrong device in multi-device / multi-port environments, the Agent must follow:
 
 - No direct `espflash`: do not directly invoke `espflash` / `cargo espflash` / `cargo-espflash`. (Note: `mcu-agentd` may use an `espflash` backend internally; that is allowed when using `mcu-agentd`.)
-- Write allowed via `mcu-agentd` only: flashing is permitted only via `mcu-agentd flash <MCU_ID>`, and only after (1) verifying the selected target port via `mcu-agentd selector get <MCU_ID>` and (2) getting an explicit user yes/no after restating “port + command”.
 - Single target port only: the only allowed target port must come from `mcu-agentd` selector state (user runs `mcu-agentd selector set <MCU_ID> <PORT>`; Agent may only read `mcu-agentd selector get <MCU_ID>`). The Agent must not enumerate candidate ports; if no unique target is set, deny device operations.
 - No automatic port switching: never switch ports “to try”.
-- State-changing / write requires confirmation: any operation that may change device state (reset/boot mode/monitor-with-reset/etc.) or write to flash requires an explicit user yes/no after restating “port + command”.
-- No session-wide blanket approval: a “yes” applies only to the single, restated “port + command”. Any subsequent state-changing / write operation must be re-confirmed.
+- State-changing allowlist (no confirmation): after verifying the selected target port via `mcu-agentd selector get <MCU_ID>`, the Agent may run only the allowlisted state-changing command `mcu-agentd monitor <MCU_ID> --reset` without additional confirmation prompts.
+- Write allowlist (no confirmation): flashing is permitted only via `mcu-agentd flash <MCU_ID>`, and only after verifying the selected target port via `mcu-agentd selector get <MCU_ID>`. No additional confirmation prompts.
 - Decision summary required: for every device-related operation (including denials), output a minimal, copy-pastable decision summary: `Operation type` (`read-only` / `state-changing` / `write`), `Target port`, `Command`, `Decision` (`allow|deny`), `Rationale` (which gate G0–G4), and `Next step`.
 
-Related plan: `docs/plan/0003:device-operation-guardrails/PLAN.md`
+Gates (G0–G4) for the `Rationale` field:
+
+- G0 (no direct espflash): deny any direct `espflash` / `cargo espflash` / `cargo-espflash`.
+- G1 (selector-only port): target port must come from `mcu-agentd selector get <MCU_ID>` (agent may read only).
+- G2 (unique port required): if selector does not yield a unique port, deny device ops and ask the user to run `mcu-agentd selector set <MCU_ID> <PORT>`.
+- G3 (no enumeration/switching): deny any port enumeration and never switch ports “to try”.
+- G4 (allowlist-only ops): allow only `mcu-agentd monitor <MCU_ID> --reset` and `mcu-agentd flash <MCU_ID>` after passing G1–G3.
 
 ## Project Structure & Module Organization
 

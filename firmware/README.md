@@ -4,16 +4,15 @@
 
 ## Agent 协作规则（重要）
 
-本 README 里的“烧录 / 监视 / 端口选择”等命令默认是**给人类开发者执行**的；当你明确授权（yes/no）时，Agent 也可以通过 `mcu-agentd` 执行烧录与监视。
+本 README 里的“烧录 / 监视 / 端口选择”等命令默认是**给人类开发者执行**的；Agent 若需代执行，必须严格遵守“端口唯一性/禁止枚举/禁止换端口”等纪律。
 
 - Agent 禁止直接调用 `espflash`（含 `cargo espflash` / `cargo-espflash`）。注意：`mcu-agentd` 可能使用 `espflash` 作为后端，但通过 `mcu-agentd` 执行烧录/监视是允许的。
-- Agent 允许执行 `mcu-agentd flash <MCU_ID>`（写入）与 `mcu-agentd monitor <MCU_ID> --reset`（状态改变），但每次执行前必须先用 `mcu-agentd selector get <MCU_ID>` 校验唯一目标端口，并在复述“端口 + 命令”后等待你明确 yes/no。注意：yes/no 仅对当次复述的“端口 + 命令”生效，不存在“本会话后续默认允许”的授权。
+- Agent 允许执行 `mcu-agentd monitor <MCU_ID> --reset`（状态改变，allowlist；**不需要**额外确认），但每次执行前必须先用 `mcu-agentd selector get <MCU_ID>` 校验唯一目标端口；除此之外的状态改变类命令一律拒绝。
+- Agent 允许执行 `mcu-agentd flash <MCU_ID>`（写入，allowlist；**不需要**额外确认），但每次执行前必须先用 `mcu-agentd selector get <MCU_ID>` 校验唯一目标端口；除此之外的写入/擦除/分区改写类命令一律拒绝。
 - Agent 禁止枚举候选端口（例如 `mcu-agentd selector list`、列 `/dev/*`）。
 - Agent 只允许对端口做只读校验：`mcu-agentd selector get <MCU_ID>`；若无唯一目标端口，必须先要求你用 `mcu-agentd selector set <MCU_ID> <PORT>` 手工完成选择。
 
 ## 目录结构（契约）
-
-与 `docs/plan/0001:esp-rs-no-std-firmware-bootstrap/contracts/file-formats.md` 对齐：
 
 ```text
 firmware/
@@ -108,7 +107,7 @@ mcu-agentd monitor esp --reset
 ## 烧录与监视（推荐：`mcu-agentd`，从仓库根目录运行）
 
 `mcu-agentd` 的配置文件固定在仓库根目录：`mcu-agentd.toml`。
-与 `docs/plan/0001:esp-rs-no-std-firmware-bootstrap/contracts/cli.md` 对齐（`mcu_id = esp`）：
+说明：本项目约定 `mcu_id = esp`。
 
 ```bash
 cd firmware
@@ -124,10 +123,10 @@ PORT=/dev/cu.usbmodemXXXX mcu-agentd selector set esp "$PORT"
 # (Agent-allowed: read-only) Verify selected target port
 mcu-agentd selector get esp
 
-# (Agent-allowed: write; requires explicit yes/no; per-command) Flash
+# (Agent-allowed: write; allowlist only) Flash
 mcu-agentd flash esp
 
-# (Agent-allowed: state-changing; requires explicit yes/no; per-command) Monitor (+ reset)
+# (Agent-allowed: state-changing; allowlist only) Monitor (+ reset)
 mcu-agentd monitor esp --reset
 ```
 
