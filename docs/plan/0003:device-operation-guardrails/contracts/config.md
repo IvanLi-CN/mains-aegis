@@ -7,21 +7,21 @@
 ### `MCU_ID`（required）
 
 - Type: string
-- Meaning: `mcu-agentd` 的目标 MCU 标识（用于读取 selector 状态）。
+- Meaning: `mcu-agentd` 的目标 MCU 标识（用于执行 device ops）。
 - Example: `esp`
 
-### 目标端口来源（required）
+### 端口选择（human-only）
 
-- Meaning: 目标端口只允许来自用户本机 `mcu-agentd` 的 selector 状态（即用户先手工完成选择，Agent 只读校验）。
+- Meaning: 端口选择是人类责任；Agent 不枚举、不切换。
 - Rules:
-  - 用户负责手工完成“选择唯一端口”（例如 `mcu-agentd selector set <MCU_ID> <PORT>`）
-  - Agent 只允许通过 `mcu-agentd selector get <MCU_ID>` 读取已选择的目标端口（只读）
+  - 用户负责手工完成端口选择（例如 `mcu-agentd selector set <MCU_ID> <PORT>`）
   - Agent 禁止执行任何“枚举候选端口”的动作（例如 `mcu-agentd selector list`、列目录等）
-  - 若 `selector get` 结果为空/不存在：Agent 必须拒绝设备动作，并要求用户先完成选择
+  - Agent 禁止执行任何“切换端口”的动作（例如 `mcu-agentd selector set`）
+  - Agent 不需要频繁读取当前端口（例如不需要在每次动作前跑 `mcu-agentd selector get`）
 
 ## Validation rules
 
-- 当 `mcu-agentd selector get <MCU_ID>` 无法得到唯一端口：拒绝一切设备操作（仅允许提问）。
-- 状态改变：仅允许 `mcu-agentd monitor <MCU_ID> --reset`，且执行前必须先校验唯一目标端口；其他状态改变类命令一律拒绝。
-- 写入/擦除：仅允许 `mcu-agentd flash <MCU_ID>`（写入），且执行前必须先校验唯一目标端口；其他写入/擦除/分区改写类命令一律拒绝。
+- 禁止端口枚举：拒绝执行 `mcu-agentd selector list <MCU_ID>` 以及任何端口枚举行为。
+- 禁止端口切换：拒绝执行 `mcu-agentd selector set <MCU_ID> <PORT>` 以及任何“换端口试试”的行为。
+- `mcu-agentd` 设备操作：除端口枚举/切换外，允许执行其他 `mcu-agentd` 命令（含 `flash` / `monitor` / `erase` / `reset` 等）。
 - 禁止直接使用 `espflash`（含 `espflash` / `cargo espflash` / `cargo-espflash`）；但不限制 `mcu-agentd` 的内部后端实现。

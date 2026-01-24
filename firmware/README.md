@@ -4,13 +4,12 @@
 
 ## Agent 协作规则（重要）
 
-本 README 里的“烧录 / 监视 / 端口选择”等命令默认是**给人类开发者执行**的；Agent 若需代执行，必须严格遵守“端口唯一性/禁止枚举/禁止换端口”等纪律。
+本 README 里的“烧录 / 监视 / 端口选择”等命令默认是**给人类开发者执行**的；Agent 若需代执行，必须严格遵守“禁止枚举/禁止换端口”等纪律。
 
 - Agent 禁止直接调用 `espflash`（含 `cargo espflash` / `cargo-espflash`）。注意：`mcu-agentd` 可能使用 `espflash` 作为后端，但通过 `mcu-agentd` 执行烧录/监视是允许的。
-- Agent 允许执行 `mcu-agentd monitor <MCU_ID> --reset`（状态改变，allowlist；**不需要**额外确认），但每次执行前必须先用 `mcu-agentd selector get <MCU_ID>` 校验唯一目标端口；除此之外的状态改变类命令一律拒绝。
-- Agent 允许执行 `mcu-agentd flash <MCU_ID>`（写入，allowlist；**不需要**额外确认），但每次执行前必须先用 `mcu-agentd selector get <MCU_ID>` 校验唯一目标端口；除此之外的写入/擦除/分区改写类命令一律拒绝。
-- Agent 禁止枚举候选端口（例如 `mcu-agentd selector list`、列 `/dev/*`）。
-- Agent 只允许对端口做只读校验：`mcu-agentd selector get <MCU_ID>`；若无唯一目标端口，必须先要求你用 `mcu-agentd selector set <MCU_ID> <PORT>` 手工完成选择。
+- Agent 禁止枚举候选端口（例如 `mcu-agentd selector list <MCU_ID>`、列 `/dev/*`）。
+- Agent 禁止切换端口（例如 `mcu-agentd selector set <MCU_ID> <PORT>`），也不得自行“换一个端口试试”。
+- 除端口枚举/切换外，Agent 可以执行其他 `mcu-agentd` 命令（含 `flash` / `monitor` / `erase` / `reset` 等），且不需要额外确认或频繁读取当前端口。
 
 ## 目录结构（契约）
 
@@ -120,13 +119,13 @@ mcu-agentd selector list esp
 # (Human-only) Select one explicitly (writes firmware/.esp32-port)
 PORT=/dev/cu.usbmodemXXXX mcu-agentd selector set esp "$PORT"
 
-# (Agent-allowed: read-only) Verify selected target port
+# (Agent-allowed: read-only; optional) Inspect selected target port
 mcu-agentd selector get esp
 
-# (Agent-allowed: write; allowlist only) Flash
+# (Agent-allowed: write) Flash
 mcu-agentd flash esp
 
-# (Agent-allowed: state-changing; allowlist only) Monitor (+ reset)
+# (Agent-allowed: state-changing) Monitor (+ reset)
 mcu-agentd monitor esp --reset
 ```
 
