@@ -62,3 +62,4 @@
 | 0003 | 设备操作纪律防护：Agent 设备闸门 | 已完成 | `0003:device-operation-guardrails/PLAN.md` | 2026-01-24 | PR #7 |
 | 0004 | 固件音频播放 + Demo 素材（6 段；~65s；mono） | 已完成 | `0004:firmware-audio-playback-demo/PLAN.md` | 2026-01-23 | 决策收敛：PCM-only（`WAV(PCM16LE)`）；已复核端到端 6 段均播放完成（无 `Late`） |
 | 0005 | TPS55288 双路输出控制（默认启用一路：5V/1A；含 INA3221 遥测） | 待实现 | `0005:tps55288-control/PLAN.md` | 2026-01-23 | - |
+| 0006 | TPS 热点温度采样：TMP112A 读数并入 telemetry | 待实现 | `0006:tps-tmp112-temperature-reading/PLAN.md` | 2026-01-24 | 兼容：只追加字段，不改变 `#0005` 既有字段 |
