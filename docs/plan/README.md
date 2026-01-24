@@ -59,6 +59,6 @@
 |-----:|-------|--------|------|------|-------|
 | 0001 | 初始化 ESP32-S3（esp-rs/esp-hal）no_std 固件工程 | 已完成 | `0001:esp-rs-no-std-firmware-bootstrap/PLAN.md` | 2026-01-22 | PR #4 |
 | 0002 | 仓库代码质量门槛：Git hooks + GitHub Actions | 已完成 | `0002:quality-gates-ci-hooks/PLAN.md` | 2026-01-22 | - |
-| 0003 | 设备操作纪律防护：Agent 设备闸门 | 已完成 | `0003:device-operation-guardrails/PLAN.md` | 2026-01-22 | PR #7 |
+| 0003 | 设备操作纪律防护：Agent 设备闸门 | 已完成 | `0003:device-operation-guardrails/PLAN.md` | 2026-01-24 | PR #7 |
 | 0004 | 固件音频播放 + Demo 素材（6 段；~65s；mono） | 已完成 | `0004:firmware-audio-playback-demo/PLAN.md` | 2026-01-23 | 决策收敛：PCM-only（`WAV(PCM16LE)`）；已复核端到端 6 段均播放完成（无 `Late`） |
 | 0005 | TPS55288 双路输出控制（默认启用一路：5V/1A；含 INA3221 遥测） | 待实现 | `0005:tps55288-control/PLAN.md` | 2026-01-23 | - |
