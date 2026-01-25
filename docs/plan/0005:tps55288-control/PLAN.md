@@ -2,9 +2,9 @@
 
 ## 状态
 
-- Status: 待实现
+- Status: 已完成
 - Created: 2026-01-23
-- Last: 2026-01-23
+- Last: 2026-01-25
 
 ## 背景 / 问题陈述
 
@@ -122,10 +122,10 @@
 
 ## 实现里程碑（Milestones）
 
-- [ ] M1: 落地 `TPS55288` 最小驱动封装（I2C 读写 + 关键寄存器配置）并在启动时应用默认 profile
-- [ ] M2: 初始化 `INA3221` 并输出 `500ms` 周期遥测日志（OUT-A/OUT-B：`vset/vbus/current`）
-- [ ] M3: 落地 fault/告警的最小观测与日志口径（`I2C1_INT(GPIO33)` + 状态读取/解析）
-- [ ] M4: 固化上板验证步骤与测量口径到 `firmware/README.md`
+- [x] M1: 落地 `TPS55288` 最小驱动封装（I2C 读写 + 关键寄存器配置）并在启动时应用默认 profile
+- [x] M2: 初始化 `INA3221` 并输出 `500ms` 周期遥测日志（OUT-A/OUT-B：`vset/vbus/current`）
+- [x] M3: 落地 fault/告警的最小观测与日志口径（`I2C1_INT(GPIO33)` + 状态读取/解析）
+- [x] M4: 固化上板验证步骤与测量口径到 `firmware/README.md`
 
 ## 方案概述（Approach, high-level）
 
@@ -145,6 +145,8 @@
 
 - 2026-01-22: 初始化计划与契约骨架
 - 2026-01-23: 纳入 INA3221 初始化与 `500ms` 遥测日志契约
+- 2026-01-24: 实现默认 profile（`out_a=5V/1A`）、遥测输出与 `I2C1_INT` 最小故障观测；补齐 bring-up README
+- 2026-01-25: bring-up 增强：解除 CDC fault mask、补全 fault 寄存器打印（含 `VOUT_SR/MODE` 关键位）；调大 `OCP_DELAY` 并放慢 `VOUT` 斜率用于排查启动瞬态误触发；修正 telemetry 字段顺序以符合 CLI 契约
 
 ## 参考（References）
 

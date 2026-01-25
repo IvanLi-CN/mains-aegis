@@ -29,6 +29,7 @@ pub fn play_demo_playlist(
     bclk: esp_hal::peripherals::GPIO4,
     ws: esp_hal::peripherals::GPIO5,
     dout: esp_hal::peripherals::GPIO6,
+    mut tick: impl FnMut(),
 ) -> Result<(), AudioDemoError> {
     defmt::info!("audio: demo playlist start (PCM-only)");
 
@@ -110,6 +111,8 @@ pub fn play_demo_playlist(
     let mut tail_len = 0usize;
 
     while seg_idx < playlist.len() {
+        tick();
+
         // If we've queued the final segment completely, we can stop producing and just drain.
         if seg_idx + 1 == playlist.len() && audio_remaining.is_empty() && tail_len == 0 {
             break;
@@ -226,6 +229,8 @@ pub fn play_demo_playlist(
     let deadline = Instant::now() + drain_timeout;
 
     loop {
+        tick();
+
         let avail = transfer.available().map_err(|err| AudioDemoError::Dma {
             op: DmaOp::Available,
             err,

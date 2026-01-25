@@ -103,6 +103,65 @@ mcu-agentd flash esp
 mcu-agentd monitor esp --reset
 ```
 
+## TPS55288 双路输出控制（Plan #0005）
+
+本固件在启动时会通过 `I2C1` 对两颗 `TPS55288` 做最小 bring-up，并冻结一个“默认 profile”（用于上板联调与回归）。
+
+### 默认 profile（冻结口径）
+
+- I2C 总线：`I2C1`（`GPIO48=SDA`，`GPIO47=SCL`），`400kHz`
+- OUT-A：`addr=0x74`（`TPS55288 OUT-A` / `VOUT_TPSA`）
+- OUT-B：`addr=0x75`（`TPS55288 OUT-B` / `VOUT_TPSB`）
+- 默认启用：`out_a`
+- 目标输出：`5V`
+- 目标限流：`1A`（临时测试）
+- 非默认输出路：通过寄存器关闭输出（`OE=0`），不主动稳压输出
+
+### 预期日志（`defmt`）
+
+启动阶段（配置结果）：
+
+- `power: default_enabled_channel=out_a target_vout_mv=5000 target_ilimit_ma=1000`
+- `power: ina3221 ok ...`
+- `power: tps addr=0x74 configured enabled=true ...`
+- `power: tps addr=0x75 configured enabled=false ...`
+
+故障/告警（`I2C1_INT(GPIO33)` 触发时，最小可观测口径）：
+
+- `power: fault ch=out_a addr=0x74 status=0x..`
+- `power: fault ch=out_b addr=0x75 status=0x..`
+
+若 I2C 通信失败（缺件/焊接/总线故障等）：
+
+- 固件不会 panic
+- 日志包含 `addr` + `stage` + `err=<i2c_nack|i2c_timeout|i2c_...>`
+- 固件会限频重试（默认 `5s` 一次），避免刷屏
+
+## INA3221 遥测（Plan #0005）
+
+固件会初始化 `INA3221 (addr=0x40)` 并每 `500ms` 输出两行遥测（`out_a/out_b` 各一行）。
+
+### 通道映射（冻结口径）
+
+- `out_a` ← INA3221 `CH2`（`Rshunt=10mΩ`）
+- `out_b` ← INA3221 `CH1`（`Rshunt=10mΩ`）
+
+### 遥测日志格式（契约）
+
+每 `500ms` 输出 **2 行**，字段顺序固定：
+
+```text
+telemetry ch=out_a addr=0x74 vset_mv=5000 vbus_mv=4984 current_ma=312
+telemetry ch=out_b addr=0x75 vset_mv=5000 vbus_mv=0 current_ma=0
+```
+
+字段含义：
+
+- `vset_mv`：从 `TPS55288` 寄存器读回的设置电压（mV）
+- `vbus_mv/current_ma`：从 `INA3221` 读取的实际电压/电流（单位见行内字段）
+
+若某个字段读取失败，该字段会变为 `err(<kind>)`（例如 `err(i2c_nack)`），但该行仍会输出。
+
 ## 烧录与监视（推荐：`mcu-agentd`，从仓库根目录运行）
 
 `mcu-agentd` 的配置文件固定在仓库根目录：`mcu-agentd.toml`。

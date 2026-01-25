@@ -50,7 +50,7 @@
 
 - `vbus_mv = raw_bus * 8`
 - `vshunt_uv = raw_shunt * 40`
-- `current_ma = vshunt_uv / 10_000`（因为 `10 mΩ = 0.01 Ω`）
+- `current_ma = vshunt_uv / 10`（因为 `I(mA) = Vshunt(µV) / Rshunt(mΩ)`，`Rshunt=10mΩ`）
 
 ### 设备与通道映射（fixed）
 

@@ -1,0 +1,6 @@
+[submodule "tps55288"]
+	path = tps55288
+	url = https://github.com/IvanLi-CN/tps55288-rs.git
+[submodule "ina3221-async"]
+	path = ina3221-async
+	url = git@github.com:IvanLi-CN/ina3221-async-rs.git
