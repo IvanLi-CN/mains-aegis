@@ -121,10 +121,10 @@ mcu-agentd monitor esp --reset
 
 启动阶段（配置结果）：
 
-- `power: default_enabled_channel=out_a target_vout_mv=5000 target_ilimit_ma=1000`
+- `power: default_enabled_channel=out_b target_vout_mv=5000 target_ilimit_ma=1000`
 - `power: ina3221 ok ...`
-- `power: tps addr=0x74 configured enabled=true ...`
-- `power: tps addr=0x75 configured enabled=false ...`
+- `power: tps addr=0x74 configured enabled=false ...`
+- `power: tps addr=0x75 configured enabled=true ...`
 
 故障/告警（`I2C1_INT(GPIO33)` 触发时，最小可观测口径）：
 

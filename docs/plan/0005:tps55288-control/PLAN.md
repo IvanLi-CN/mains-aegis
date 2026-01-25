@@ -147,6 +147,7 @@
 - 2026-01-23: 纳入 INA3221 初始化与 `500ms` 遥测日志契约
 - 2026-01-24: 实现默认 profile（`out_a=5V/1A`）、遥测输出与 `I2C1_INT` 最小故障观测；补齐 bring-up README
 - 2026-01-25: bring-up 增强：解除 CDC fault mask、补全 fault 寄存器打印（含 `VOUT_SR/MODE` 关键位）；调大 `OCP_DELAY` 并放慢 `VOUT` 斜率用于排查启动瞬态误触发；修正 telemetry 字段顺序以符合 CLI 契约
+- 2026-01-25: 调试配置：默认启用通道切换为 `out_b`
 
 ## 参考（References）
 

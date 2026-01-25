@@ -18,7 +18,7 @@ use esp_hal::timer::{systimer::SystemTimer, timg::TimerGroup};
 use esp_hal::{main, Blocking};
 use esp_println as _;
 
-const DEFAULT_ENABLED_CHANNEL: output::OutputChannel = output::OutputChannel::OutA;
+const DEFAULT_ENABLED_CHANNEL: output::OutputChannel = output::OutputChannel::OutB;
 const DEFAULT_VOUT_MV: u16 = 5_000;
 const DEFAULT_ILIMIT_MA: u16 = 1_000;
 const TELEMETRY_PERIOD: Duration = Duration::from_millis(500);

@@ -92,7 +92,7 @@
 
 - `default_enabled_channel`: `out_a | out_b`
   - Meaning: 上电后默认“主动稳压输出”的通道
-  - Default: `out_a`
+  - Default: `out_b`
 
 - `default_vout_mv`: integer
   - Meaning: 目标输出电压（mV）
