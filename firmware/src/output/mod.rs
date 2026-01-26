@@ -9,6 +9,32 @@ use ::tps55288::Error as TpsError;
 pub use self::tps55288::OutputChannel;
 
 #[derive(Clone, Copy)]
+pub enum EnabledOutputs {
+    None,
+    Only(OutputChannel),
+    Both,
+}
+
+impl EnabledOutputs {
+    pub fn is_enabled(self, ch: OutputChannel) -> bool {
+        match self {
+            EnabledOutputs::None => false,
+            EnabledOutputs::Only(only) => only == ch,
+            EnabledOutputs::Both => true,
+        }
+    }
+
+    pub fn describe(self) -> &'static str {
+        match self {
+            EnabledOutputs::None => "none",
+            EnabledOutputs::Only(OutputChannel::OutA) => "out_a",
+            EnabledOutputs::Only(OutputChannel::OutB) => "out_b",
+            EnabledOutputs::Both => "out_a+out_b",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub enum TelemetryValue {
     Value(i32),
     Err(&'static str),
@@ -34,6 +60,21 @@ impl defmt::Format for TelemetryU8 {
         match self {
             TelemetryU8::Value(v) => defmt::write!(fmt, "0x{=u8:x}", v),
             TelemetryU8::Err(kind) => defmt::write!(fmt, "err({})", kind),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum TelemetryU16 {
+    Value(u16),
+    Err(&'static str),
+}
+
+impl defmt::Format for TelemetryU16 {
+    fn format(&self, fmt: defmt::Formatter) {
+        match self {
+            TelemetryU16::Value(v) => defmt::write!(fmt, "0x{=u16:x}", v),
+            TelemetryU16::Err(kind) => defmt::write!(fmt, "err({})", kind),
         }
     }
 }
@@ -99,7 +140,7 @@ pub struct PowerManager<'d, I2C> {
 
 #[derive(Clone, Copy)]
 pub struct Config {
-    pub default_enabled: OutputChannel,
+    pub enabled_outputs: EnabledOutputs,
     pub vout_mv: u16,
     pub ilimit_ma: u16,
     pub telemetry_period: Duration,
@@ -182,10 +223,28 @@ where
             ina3221::CONFIG_VALUE_CH12
         };
 
+        // INA3221 has an IIR-style averaging filter (AVG bits). If we re-flash the MCU while the
+        // board stays powered, stale register values can linger and take a long time to settle.
+        // Force a device reset before applying our desired config.
+        let _ = ina3221::init_with_config(&mut self.i2c, 0x8000).map_err(|e| {
+            defmt::warn!("power: ina3221 reset err={}", ina_error_kind(e));
+        });
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(2) {}
+
         match ina3221::init_with_config(&mut self.i2c, cfg) {
             Ok(()) => {
                 self.ina_ready = true;
-                defmt::info!("power: ina3221 ok (addr=0x40 config=0x{=u16:x})", cfg);
+                let cfg_read = ina3221::read_config(&mut self.i2c).map_err(ina_error_kind);
+                let man = ina3221::read_manufacturer_id(&mut self.i2c).map_err(ina_error_kind);
+                let die = ina3221::read_die_id(&mut self.i2c).map_err(ina_error_kind);
+                defmt::info!(
+                    "power: ina3221 ok (addr=0x40 cfg_wr=0x{=u16:x} cfg_rd={=?} man_id={=?} die_id={=?})",
+                    cfg,
+                    cfg_read,
+                    man,
+                    die
+                );
             }
             Err(e) => {
                 self.ina_ready = false;
@@ -196,7 +255,7 @@ where
     }
 
     fn try_configure_tps(&mut self, ch: OutputChannel) {
-        let enabled = ch == self.cfg.default_enabled;
+        let enabled = self.cfg.enabled_outputs.is_enabled(ch);
         let addr = ch.addr();
 
         match tps55288::configure_one(
@@ -272,28 +331,32 @@ where
         tps55288::print_telemetry_line(&mut self.i2c, OutputChannel::OutA, self.ina_ready);
         tps55288::print_telemetry_line(&mut self.i2c, OutputChannel::OutB, self.ina_ready);
 
-        if self.cfg.telemetry_include_vin_ch3 && self.ina_ready {
-            let bus = ina3221::read_bus_mv(&mut self.i2c, ina3221::Channel::Ch3);
-            let shunt = ina3221::read_shunt_uv(&mut self.i2c, ina3221::Channel::Ch3);
-            let vbus_mv = match bus {
-                Ok(v) => TelemetryValue::Value(v),
-                Err(e) => TelemetryValue::Err(ina_error_kind(e)),
-            };
-            let current_ma = match shunt {
-                Ok(shunt_uv) => TelemetryValue::Value(ina3221::shunt_uv_to_current_ma(shunt_uv, 7)),
-                Err(e) => TelemetryValue::Err(ina_error_kind(e)),
-            };
-            defmt::info!(
-                "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
-                vbus_mv,
-                current_ma
-            );
-        } else {
-            defmt::info!(
-                "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
-                TelemetryValue::Err("ina_uninit"),
-                TelemetryValue::Err("ina_uninit")
-            );
+        if self.cfg.telemetry_include_vin_ch3 {
+            if self.ina_ready {
+                let bus = ina3221::read_bus_mv(&mut self.i2c, ina3221::Channel::Ch3);
+                let shunt = ina3221::read_shunt_uv(&mut self.i2c, ina3221::Channel::Ch3);
+                let vbus_mv = match bus {
+                    Ok(v) => TelemetryValue::Value(v),
+                    Err(e) => TelemetryValue::Err(ina_error_kind(e)),
+                };
+                let current_ma = match shunt {
+                    Ok(shunt_uv) => {
+                        TelemetryValue::Value(ina3221::shunt_uv_to_current_ma(shunt_uv, 7))
+                    }
+                    Err(e) => TelemetryValue::Err(ina_error_kind(e)),
+                };
+                defmt::info!(
+                    "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
+                    vbus_mv,
+                    current_ma
+                );
+            } else {
+                defmt::info!(
+                    "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
+                    TelemetryValue::Err("ina_uninit"),
+                    TelemetryValue::Err("ina_uninit")
+                );
+            }
         }
     }
 }

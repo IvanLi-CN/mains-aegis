@@ -9,7 +9,9 @@ use ::tps55288::registers::{
     addr as tps_addr, CdcBits, ModeBits, StatusBits, VoutFsBits, VoutSrBits,
 };
 
-use super::{ina_error_kind, tps_error_kind, TelemetryBool, TelemetryU8, TelemetryValue};
+use super::{
+    ina_error_kind, tps_error_kind, TelemetryBool, TelemetryU16, TelemetryU8, TelemetryValue,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum OutputChannel {
@@ -83,7 +85,7 @@ where
         LightLoadOverride::FromRegister,
         VccSource::External5v,
         ch.addr_enum(),
-        LightLoadMode::Pwm, // FPWM requested for bring-up
+        LightLoadMode::Pfm, // Do not force PWM (FPWM disabled)
     )
     .map_err(|e| (ConfigureStage::Mode, e))?;
 
@@ -103,7 +105,7 @@ where
     .map_err(|e| (ConfigureStage::Cdc, e))?;
     tps.set_vout_mv(default_vout_mv)
         .map_err(|e| (ConfigureStage::Vout, e))?;
-    tps.set_ilim_ma(default_ilimit_ma, true)
+    tps.set_ilim_ma(default_ilimit_ma, enabled)
         .map_err(|e| (ConfigureStage::Ilim, e))?;
 
     if enabled {
@@ -416,40 +418,78 @@ where
         (oe, fpwm, scp, ocp, ovp)
     };
 
-    let (vbus_mv, current_ma) = if ina_ready {
+    let (vbus_mv, vbus_reg, shunt_uv, current_ma) = if ina_ready {
         let bus = ina3221::read_bus_mv(i2c, ch.ina_ch());
         let shunt = ina3221::read_shunt_uv(i2c, ch.ina_ch());
+        let vbus_reg = match read_vbus_reg_u16(i2c, ch.ina_ch()) {
+            Ok(v) => TelemetryU16::Value(v),
+            Err(e) => TelemetryU16::Err(ina_error_kind(e)),
+        };
 
         let vbus_mv = match bus {
             Ok(v) => TelemetryValue::Value(v),
             Err(e) => TelemetryValue::Err(ina_error_kind(e)),
         };
 
-        let current_ma = match shunt {
-            Ok(shunt_uv) => TelemetryValue::Value(ina3221::shunt_uv_to_current_ma(shunt_uv, 10)),
-            Err(e) => TelemetryValue::Err(ina_error_kind(e)),
+        let (shunt_uv, current_ma) = match shunt {
+            Ok(shunt_uv) => (
+                TelemetryValue::Value(shunt_uv),
+                TelemetryValue::Value(ina3221::shunt_uv_to_current_ma(shunt_uv, 10)),
+            ),
+            Err(e) => {
+                let kind = ina_error_kind(e);
+                (TelemetryValue::Err(kind), TelemetryValue::Err(kind))
+            }
         };
 
-        (vbus_mv, current_ma)
+        (vbus_mv, vbus_reg, shunt_uv, current_ma)
     } else {
         (
             TelemetryValue::Err("ina_uninit"),
+            TelemetryU16::Err("ina_uninit"),
+            TelemetryValue::Err("ina_uninit"),
             TelemetryValue::Err("ina_uninit"),
         )
+    };
+
+    let dv_mv = match (vbus_mv, vset_mv) {
+        (TelemetryValue::Value(vbus), TelemetryValue::Value(vset)) => {
+            TelemetryValue::Value(vbus - vset)
+        }
+        (TelemetryValue::Err(e), _) => TelemetryValue::Err(e),
+        (_, TelemetryValue::Err(e)) => TelemetryValue::Err(e),
     };
 
     // Keep the first fields stable per docs/plan/0005:tps55288-control/contracts/cli.md.
     // Extra fields are appended for bring-up/debugging.
     match ch {
         OutputChannel::OutA => defmt::info!(
-            "telemetry ch=out_a addr=0x74 vset_mv={} vbus_mv={} current_ma={} oe={} fpwm={} status={} scp={} ocp={} ovp={} vout_sr={} cdc={} iout_limit={}",
-            vset_mv, vbus_mv, current_ma, oe, fpwm, status, scp, ocp, ovp, vout_sr, cdc, iout_limit
+            "telemetry ch=out_a addr=0x74 vset_mv={} vbus_mv={} current_ma={} dv_mv={} vbus_reg={} shunt_uv={} oe={} fpwm={} status={} scp={} ocp={} ovp={} vout_sr={} cdc={} iout_limit={}",
+            vset_mv, vbus_mv, current_ma, dv_mv, vbus_reg, shunt_uv, oe, fpwm, status, scp, ocp, ovp, vout_sr, cdc, iout_limit
         ),
         OutputChannel::OutB => defmt::info!(
-            "telemetry ch=out_b addr=0x75 vset_mv={} vbus_mv={} current_ma={} oe={} fpwm={} status={} scp={} ocp={} ovp={} vout_sr={} cdc={} iout_limit={}",
-            vset_mv, vbus_mv, current_ma, oe, fpwm, status, scp, ocp, ovp, vout_sr, cdc, iout_limit
+            "telemetry ch=out_b addr=0x75 vset_mv={} vbus_mv={} current_ma={} dv_mv={} vbus_reg={} shunt_uv={} oe={} fpwm={} status={} scp={} ocp={} ovp={} vout_sr={} cdc={} iout_limit={}",
+            vset_mv, vbus_mv, current_ma, dv_mv, vbus_reg, shunt_uv, oe, fpwm, status, scp, ocp, ovp, vout_sr, cdc, iout_limit
         ),
     }
+}
+
+fn read_vbus_reg_u16<I2C>(
+    i2c: &mut I2C,
+    ch: ina3221::Channel,
+) -> Result<u16, ina3221::Error<esp_hal::i2c::master::Error>>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    use ina3221::registers::addr;
+    let reg = match ch {
+        ina3221::Channel::Ch1 => addr::CH1_BUS,
+        ina3221::Channel::Ch2 => addr::CH2_BUS,
+        ina3221::Channel::Ch3 => addr::CH3_BUS,
+    };
+
+    let mut dev = ina3221::Ina3221::new(&mut *i2c);
+    dev.read_reg_u16_be(reg)
 }
 
 pub fn should_log_fault(now: Instant, last: &mut Option<Instant>, min_interval: Duration) -> bool {

@@ -18,13 +18,14 @@ use esp_hal::timer::{systimer::SystemTimer, timg::TimerGroup};
 use esp_hal::{main, Blocking};
 use esp_println as _;
 
-const DEFAULT_ENABLED_CHANNEL: output::OutputChannel = output::OutputChannel::OutB;
-const DEFAULT_VOUT_MV: u16 = 5_000;
-const DEFAULT_ILIMIT_MA: u16 = 1_000;
+// Bring-up default profile.
+const DEFAULT_ENABLED_OUTPUTS: output::EnabledOutputs = output::EnabledOutputs::Both;
+const DEFAULT_VOUT_MV: u16 = 19_000;
+const DEFAULT_ILIMIT_MA: u16 = 3_500;
 const TELEMETRY_PERIOD: Duration = Duration::from_millis(500);
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
 const FAULT_LOG_MIN_INTERVAL: Duration = Duration::from_millis(200);
-const TELEMETRY_INCLUDE_VIN_CH3: bool = true;
+const TELEMETRY_INCLUDE_VIN_CH3: bool = false;
 
 const FW_BUILD_PROFILE: &str = env!("FW_BUILD_PROFILE");
 const FW_GIT_SHA: &str = env!("FW_GIT_SHA");
@@ -32,10 +33,14 @@ const FW_GIT_SHA: &str = env!("FW_GIT_SHA");
 // External SYNC for TPS55288 DITH/SYNC pins (SYNCA=0°, SYNCB=180°).
 // RFSW on board is 43kΩ (U17/U18 pin 8), so nominal fSW ≈ 20MHz / 43kΩ ≈ 465kHz.
 // External clock must be within ±30% of the configured fSW.
-const TPS_SYNC_ENABLE: bool = true;
+// Debug: disable external SYNC to check if INA3221 shunt readings are polluted by coupling.
+const TPS_SYNC_ENABLE: bool = false;
 const TPS_SYNC_FREQ_KHZ: u32 = 465;
 const TPS_SYNC_DUTY_PCT: u8 = 50;
 const TPS_SYNC_PHASE_TICKS: u16 = 64; // 180° at Duty7Bit => 128 ticks/period.
+
+// Do not assert THERM_KILL_N during normal bring-up.
+const FORCE_THERM_KILL_N_ASSERTED: bool = false;
 
 #[main]
 fn main() -> ! {
@@ -147,11 +152,15 @@ fn main() -> ! {
     );
     therm_kill.set_high();
     therm_kill.set_output_enable(true);
+    if FORCE_THERM_KILL_N_ASSERTED {
+        therm_kill.set_low();
+    }
     let low_after = therm_kill.is_low();
     defmt::info!(
-        "power: therm_kill_n low_before={=bool} low_after={=bool}",
+        "power: therm_kill_n low_before={=bool} low_after={=bool} forced={=bool}",
         low_before,
-        low_after
+        low_after,
+        FORCE_THERM_KILL_N_ASSERTED
     );
     if low_after {
         defmt::warn!(
@@ -161,7 +170,7 @@ fn main() -> ! {
     let _therm_kill = therm_kill;
 
     let cfg = output::Config {
-        default_enabled: DEFAULT_ENABLED_CHANNEL,
+        enabled_outputs: DEFAULT_ENABLED_OUTPUTS,
         vout_mv: DEFAULT_VOUT_MV,
         ilimit_ma: DEFAULT_ILIMIT_MA,
         telemetry_period: TELEMETRY_PERIOD,
@@ -172,8 +181,8 @@ fn main() -> ! {
 
     let mut power = output::PowerManager::new(i2c, i2c1_int, cfg);
     defmt::info!(
-        "power: default_enabled_channel={} target_vout_mv={=u16} target_ilimit_ma={=u16}",
-        cfg.default_enabled.name(),
+        "power: enabled_outputs={} target_vout_mv={=u16} target_ilimit_ma={=u16}",
+        cfg.enabled_outputs.describe(),
         cfg.vout_mv,
         cfg.ilimit_ma
     );

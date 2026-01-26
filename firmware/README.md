@@ -112,18 +112,20 @@ mcu-agentd monitor esp --reset
 - I2C 总线：`I2C1`（`GPIO48=SDA`，`GPIO47=SCL`），`400kHz`
 - OUT-A：`addr=0x74`（`TPS55288 OUT-A` / `VOUT_TPSA`）
 - OUT-B：`addr=0x75`（`TPS55288 OUT-B` / `VOUT_TPSB`）
-- 默认启用：`out_a`
-- 目标输出：`5V`
-- 目标限流：`1A`（临时测试）
+- 默认启用：`out_a+out_b`
+- 目标输出：`19V`
+- 目标限流：`3.5A`
 - 非默认输出路：通过寄存器关闭输出（`OE=0`），不主动稳压输出
+
+> 以上默认 profile 由 `firmware/src/main.rs` 的编译期常量决定，可按联调需要调整（不要在上电状态下频繁刷写造成误判）。
 
 ### 预期日志（`defmt`）
 
 启动阶段（配置结果）：
 
-- `power: default_enabled_channel=out_b target_vout_mv=5000 target_ilimit_ma=1000`
+- `power: enabled_outputs=out_a+out_b target_vout_mv=19000 target_ilimit_ma=3500`
 - `power: ina3221 ok ...`
-- `power: tps addr=0x74 configured enabled=false ...`
+- `power: tps addr=0x74 configured enabled=true ...`
 - `power: tps addr=0x75 configured enabled=true ...`
 
 故障/告警（`I2C1_INT(GPIO33)` 触发时，最小可观测口径）：
@@ -151,14 +153,16 @@ mcu-agentd monitor esp --reset
 每 `500ms` 输出 **2 行**，字段顺序固定：
 
 ```text
-telemetry ch=out_a addr=0x74 vset_mv=5000 vbus_mv=4984 current_ma=312
-telemetry ch=out_b addr=0x75 vset_mv=5000 vbus_mv=0 current_ma=0
+telemetry ch=out_a addr=0x74 vset_mv=19000 vbus_mv=19000 current_ma=0
+telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0
 ```
 
 字段含义：
 
 - `vset_mv`：从 `TPS55288` 寄存器读回的设置电压（mV）
 - `vbus_mv/current_ma`：从 `INA3221` 读取的实际电压/电流（单位见行内字段）
+
+> 允许追加字段：固件会在行尾追加 bring-up/debug 字段（例如 `dv_mv` / `vbus_reg` / `shunt_uv` / `oe` / `fpwm` / `status` 等）；前 6 个字段的语义与顺序保持不变。
 
 若某个字段读取失败，该字段会变为 `err(<kind>)`（例如 `err(i2c_nack)`），但该行仍会输出。
 
@@ -215,3 +219,8 @@ DEFMT_LOG=info cargo espflash flash --release --monitor --baud 115200 --log-form
 - Linux 下串口权限不足：确保当前用户对 `/dev/ttyACM*` / `/dev/ttyUSB*` 有访问权限（常见做法是加入 `dialout` 组后重新登录）。
 - `defmt` 看不到 `info/debug`：确认使用 `DEFMT_LOG=info`（或更详细）并且监视器使用 `--log-format defmt`。
 - 监视器输出停在 `boot:0x0 (DOWNLOAD(USB/UART0))` / `waiting for download`：通常表示设备被置于下载模式，或当前串口不是应用日志通道。请检查启动拉脚/复位方式，并重新选择正确的串口设备节点（同一设备在 macOS 下常同时出现 `/dev/cu.usbmodem...` 与 `/dev/tty.usbmodem...`）。
+- `telemetry ... vbus_mv` 明显偏高（例如比万用表高 `0.5–1V`）：优先按“测点/参考地”排查，而不是先改固件换算。建议顺序：
+  - 用同一个地参考：请用 `U22(INA3221)` 的 `CHGND`（pin3/EP）作为万用表地，复测你认为的 `VOUT` 测点。
+  - 直接在芯片脚边测：测 `U22 IN-1(pin11)`/`IN-2(pin14)` 对 `CHGND`，应该与日志 `vbus_reg/vbus_mv` 一致。
+  - 对比路由后的 `VOUT_B/VOUT_A/VOUT`：若你测的是 `VOUT_B` 或 `VOUT`，而 INA 采样在 `VOUT_TPSB`，中间还隔着跳线 `J1/J3` 与后级大电流 MOSFET（见 `docs/pcbs/mainboard/README.md` 的 `J1/J2/J3` 与 `Q1/Q28`），不一致是可能的（尤其当跳线未焊或 MOSFET 未进入理想二极管导通状态）。
+  - 检查 INA 输入串阻是否误贴：`R107/R106/R103/R104` 设计值为 `10Ω`（网表），若误贴到 `kΩ` 档位，会因为 `IN-` 输入偏置电流导致 `VBUS` 产生明显 DC 偏差。
