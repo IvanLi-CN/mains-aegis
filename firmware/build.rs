@@ -44,19 +44,24 @@ fn main() {
         }
     }
 
-    let git_sha = std::process::Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            } else {
-                None
-            }
-        })
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_string());
+    let git_sha = {
+        let mut cmd = std::process::Command::new("git");
+        if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+            cmd.current_dir(std::path::Path::new(&manifest_dir));
+        }
+        cmd.args(["rev-parse", "--short", "HEAD"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "unknown".to_string())
+    };
     println!("cargo:rustc-env=FW_GIT_SHA={}", git_sha);
 
     // Only apply embedded linker scripts when building for Xtensa.
