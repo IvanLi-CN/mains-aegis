@@ -30,6 +30,9 @@ jobs:
           filters: |
             firmware:
               - "firmware/**"
+              - ".gitmodules"
+              - "tps55288"
+              - "ina3221-async"
               - ".github/workflows/firmware.yml"
       - name: Skip (no firmware changes)
         if: steps.changes.outputs.firmware != 'true'
