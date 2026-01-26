@@ -71,7 +71,7 @@ I = VSHUNT / RSHUNT
 ### 2.4 已知问题：VBUS 读数偏高（待排查）
 
 - 在 `TPS55288` 输出与外部仪表测量一致时，`INA3221` 的 `VBUS` 读数仍可能偏高（例如 `19V` 档偏高 `~0.5–1.0V`）。
-- 跟踪：`docs/plan/0006:ina3221-vbus-offset/PLAN.md`（优先以 `U22 IN- -> U22 CHGND` 的口径对比测量）。
+- 跟踪：`docs/plan/0007:ina3221-vbus-offset/PLAN.md`（优先以 `U22 IN- -> U22 CHGND` 的口径对比测量）。
 
 ---
 
