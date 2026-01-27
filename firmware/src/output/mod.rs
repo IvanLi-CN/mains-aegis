@@ -1,7 +1,7 @@
 pub mod tps55288;
 
 use esp_firmware::ina3221;
-use esp_hal::gpio::Input;
+use esp_hal::gpio::{Flex, Input};
 use esp_hal::time::{Duration, Instant};
 
 use ::tps55288::Error as TpsError;
@@ -45,6 +45,32 @@ impl defmt::Format for TelemetryValue {
         match self {
             TelemetryValue::Value(v) => defmt::write!(fmt, "{}", v),
             TelemetryValue::Err(kind) => defmt::write!(fmt, "err({})", kind),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum TelemetryTempC {
+    Value(i32), // temp_c_x16
+    Err(&'static str),
+}
+
+impl defmt::Format for TelemetryTempC {
+    fn format(&self, fmt: defmt::Formatter) {
+        match self {
+            TelemetryTempC::Value(temp_c_x16) => {
+                let neg = *temp_c_x16 < 0;
+                let abs = temp_c_x16.wrapping_abs() as u32;
+                let int = abs / 16;
+                let frac_4 = (abs % 16) * 625; // 1/16°C = 0.0625°C => 6250e-4
+
+                if neg {
+                    defmt::write!(fmt, "-{=u32}.{=u32:04}", int, frac_4);
+                } else {
+                    defmt::write!(fmt, "{=u32}.{=u32:04}", int, frac_4);
+                }
+            }
+            TelemetryTempC::Err(kind) => defmt::write!(fmt, "err({})", kind),
         }
     }
 }
@@ -123,6 +149,7 @@ pub(super) fn ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -
 pub struct PowerManager<'d, I2C> {
     i2c: I2C,
     i2c1_int: Input<'d>,
+    therm_kill: Flex<'d>,
 
     cfg: Config,
 
@@ -153,11 +180,12 @@ impl<'d, I2C> PowerManager<'d, I2C>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    pub fn new(i2c: I2C, i2c1_int: Input<'d>, cfg: Config) -> Self {
+    pub fn new(i2c: I2C, i2c1_int: Input<'d>, therm_kill: Flex<'d>, cfg: Config) -> Self {
         let now = Instant::now();
         Self {
             i2c,
             i2c1_int,
+            therm_kill,
             cfg,
 
             next_telemetry_at: now,
@@ -328,8 +356,19 @@ where
         }
         self.next_telemetry_at = now + self.cfg.telemetry_period;
 
-        tps55288::print_telemetry_line(&mut self.i2c, OutputChannel::OutA, self.ina_ready);
-        tps55288::print_telemetry_line(&mut self.i2c, OutputChannel::OutB, self.ina_ready);
+        let therm_kill_n: u8 = if self.therm_kill.is_low() { 0 } else { 1 };
+        tps55288::print_telemetry_line(
+            &mut self.i2c,
+            OutputChannel::OutA,
+            self.ina_ready,
+            therm_kill_n,
+        );
+        tps55288::print_telemetry_line(
+            &mut self.i2c,
+            OutputChannel::OutB,
+            self.ina_ready,
+            therm_kill_n,
+        );
 
         if self.cfg.telemetry_include_vin_ch3 {
             if self.ina_ready {

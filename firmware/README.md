@@ -166,6 +166,37 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0
 
 若某个字段读取失败，该字段会变为 `err(<kind>)`（例如 `err(i2c_nack)`），但该行仍会输出。
 
+## TMP112A 温度采样（Plan #0006）
+
+固件会在每行 `telemetry ...` 末尾追加 TPS 热点温度与 `THERM_KILL_N` 电平，用于 bring-up 与回归时快速对齐“电压/电流/温度”。
+
+### I2C（冻结口径）
+
+- 总线：`I2C1`（`GPIO48=SDA`，`GPIO47=SCL`），`400kHz`
+- 地址：
+  - `out_a`：`TMP112A addr=0x48`
+  - `out_b`：`TMP112A addr=0x49`
+
+### 追加字段（冻结口径）
+
+每行追加以下字段（顺序固定，单位固定）：
+
+- `tmp_addr=<0x48|0x49>`
+- `temp_c_x16=<int|err(kind)>`（温度 `°C * 16`；`temp_c = temp_c_x16 / 16`）
+- `therm_kill_n=<0|1>`（`GPIO40(THERM_KILL_N)` 电平；1=高，0=低）
+
+示例：
+
+```text
+telemetry ch=out_a addr=0x74 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_addr=0x48 temp_c_x16=400 therm_kill_n=1
+telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_addr=0x49 temp_c_x16=err(i2c_nack) therm_kill_n=1
+```
+
+### 上板验证（人类操作）
+
+1) 正常路径：`tmp_addr/temp_c_x16/therm_kill_n` 均可见，且 `temp_c_x16/16` 与环境温度趋势一致。
+2) 断开/缺件路径：拔掉/不焊其中一颗 `TMP112A` 后，固件不 panic；对应通道输出 `temp_c_x16=err(i2c_...)`，但仍保持 `500ms` 两行 `telemetry ...` 稳定输出。
+
 ## 烧录与监视（推荐：`mcu-agentd`，从仓库根目录运行）
 
 `mcu-agentd` 的配置文件固定在仓库根目录：`mcu-agentd.toml`。
