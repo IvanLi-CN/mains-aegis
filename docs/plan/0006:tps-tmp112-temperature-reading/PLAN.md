@@ -2,9 +2,9 @@
 
 ## 状态
 
-- Status: 待实现
+- Status: 已完成
 - Created: 2026-01-24
-- Last: 2026-01-24
+- Last: 2026-01-27
 
 ## 背景 / 问题陈述
 
@@ -111,9 +111,9 @@
 
 ## 实现里程碑（Milestones）
 
-- [ ] M1: 落地 `TMP112A` 最小驱动封装（I2C 读温度寄存器 + 解码为 `temp_c_x16`）
-- [ ] M2: 固化遥测字段追加（`telemetry ...` 行追加 `tmp_addr/temp_c_x16/therm_kill_n`；错误占位与限频）
-- [ ] M3: 固化上板验证步骤到 `firmware/README.md`
+- [x] M1: 落地 `TMP112A` 最小驱动封装（I2C 读温度寄存器 + 解码为 `temp_c_x16`）
+- [x] M2: 固化遥测字段追加（`telemetry ...` 行追加 `tmp_addr/temp_c_x16/therm_kill_n`；错误占位与限频）
+- [x] M3: 固化上板验证步骤到 `firmware/README.md`
 
 ## 方案概述（Approach, high-level）
 
@@ -131,6 +131,7 @@
 ## 变更记录（Change log）
 
 - 2026-01-24: 初始化计划与契约骨架
+- 2026-01-27: 完成 TMP112A 温度采样与 `telemetry` 字段追加；补充 bring-up 验证步骤
 
 ## 参考（References）
 

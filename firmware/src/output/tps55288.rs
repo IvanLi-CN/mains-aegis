@@ -1,4 +1,5 @@
 use esp_firmware::ina3221;
+use esp_firmware::tmp112;
 use esp_hal::time::{Duration, Instant};
 
 use ::tps55288::data_types::{
@@ -10,7 +11,8 @@ use ::tps55288::registers::{
 };
 
 use super::{
-    ina_error_kind, tps_error_kind, TelemetryBool, TelemetryU16, TelemetryU8, TelemetryValue,
+    i2c_error_kind, ina_error_kind, tps_error_kind, TelemetryBool, TelemetryTempC, TelemetryU16,
+    TelemetryU8, TelemetryValue,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -47,6 +49,13 @@ impl OutputChannel {
         match self {
             OutputChannel::OutA => ina3221::Channel::Ch2,
             OutputChannel::OutB => ina3221::Channel::Ch1,
+        }
+    }
+
+    pub const fn tmp_addr(self) -> u8 {
+        match self {
+            OutputChannel::OutA => 0x48,
+            OutputChannel::OutB => 0x49,
         }
     }
 }
@@ -350,8 +359,12 @@ where
     }
 }
 
-pub fn print_telemetry_line<I2C>(i2c: &mut I2C, ch: OutputChannel, ina_ready: bool)
-where
+pub fn print_telemetry_line<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+    ina_ready: bool,
+    therm_kill_n: u8,
+) where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     let addr = ch.addr();
@@ -462,14 +475,26 @@ where
 
     // Keep the first fields stable per docs/plan/0005:tps55288-control/contracts/cli.md.
     // Extra fields are appended for bring-up/debugging.
+    let tmp_addr = ch.tmp_addr();
+    let tmp_addr_value = TelemetryU8::Value(tmp_addr);
+    let (temp_c_x16, temp_c) = match tmp112::read_temp_c_x16(&mut *i2c, tmp_addr) {
+        Ok(v) => (
+            TelemetryValue::Value(v as i32),
+            TelemetryTempC::Value(v as i32),
+        ),
+        Err(e) => {
+            let kind = i2c_error_kind(e);
+            (TelemetryValue::Err(kind), TelemetryTempC::Err(kind))
+        }
+    };
     match ch {
         OutputChannel::OutA => defmt::info!(
-            "telemetry ch=out_a addr=0x74 vset_mv={} vbus_mv={} current_ma={} dv_mv={} vbus_reg={} shunt_uv={} oe={} fpwm={} status={} scp={} ocp={} ovp={} vout_sr={} cdc={} iout_limit={}",
-            vset_mv, vbus_mv, current_ma, dv_mv, vbus_reg, shunt_uv, oe, fpwm, status, scp, ocp, ovp, vout_sr, cdc, iout_limit
+            "telemetry ch=out_a addr=0x74 vset_mv={} vbus_mv={} current_ma={} dv_mv={} vbus_reg={} shunt_uv={} oe={} fpwm={} status={} scp={} ocp={} ovp={} vout_sr={} cdc={} iout_limit={} tmp_addr={} temp_c_x16={} therm_kill_n={=u8} temp_c={}",
+            vset_mv, vbus_mv, current_ma, dv_mv, vbus_reg, shunt_uv, oe, fpwm, status, scp, ocp, ovp, vout_sr, cdc, iout_limit, tmp_addr_value, temp_c_x16, therm_kill_n, temp_c
         ),
         OutputChannel::OutB => defmt::info!(
-            "telemetry ch=out_b addr=0x75 vset_mv={} vbus_mv={} current_ma={} dv_mv={} vbus_reg={} shunt_uv={} oe={} fpwm={} status={} scp={} ocp={} ovp={} vout_sr={} cdc={} iout_limit={}",
-            vset_mv, vbus_mv, current_ma, dv_mv, vbus_reg, shunt_uv, oe, fpwm, status, scp, ocp, ovp, vout_sr, cdc, iout_limit
+            "telemetry ch=out_b addr=0x75 vset_mv={} vbus_mv={} current_ma={} dv_mv={} vbus_reg={} shunt_uv={} oe={} fpwm={} status={} scp={} ocp={} ovp={} vout_sr={} cdc={} iout_limit={} tmp_addr={} temp_c_x16={} therm_kill_n={=u8} temp_c={}",
+            vset_mv, vbus_mv, current_ma, dv_mv, vbus_reg, shunt_uv, oe, fpwm, status, scp, ocp, ovp, vout_sr, cdc, iout_limit, tmp_addr_value, temp_c_x16, therm_kill_n, temp_c
         ),
     }
 }

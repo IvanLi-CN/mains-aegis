@@ -167,7 +167,6 @@ fn main() -> ! {
             "power: therm_kill_n asserted; TPS_EN likely forced low (power stage disabled)"
         );
     }
-    let _therm_kill = therm_kill;
 
     let cfg = output::Config {
         enabled_outputs: DEFAULT_ENABLED_OUTPUTS,
@@ -179,7 +178,7 @@ fn main() -> ! {
         telemetry_include_vin_ch3: TELEMETRY_INCLUDE_VIN_CH3,
     };
 
-    let mut power = output::PowerManager::new(i2c, i2c1_int, cfg);
+    let mut power = output::PowerManager::new(i2c, i2c1_int, therm_kill, cfg);
     defmt::info!(
         "power: enabled_outputs={} target_vout_mv={=u16} target_ilimit_ma={=u16}",
         cfg.enabled_outputs.describe(),
