@@ -4,7 +4,7 @@
 
 ## 快速新增一个计划
 
-1. 分配一个新的四位编号 `ID`（查看下方 Index，取未使用的最小或递增编号）。
+1. 生成一个新的计划 `ID`（推荐 5 个字符的 nanoId 风格；也兼容历史四位数字 `0001`–`9999`）。
 2. 新建目录：`docs/plan/<id>:<title>/`（`<title>` 用简短 slug，建议 kebab-case）。
 3. 在该目录下创建 `PLAN.md`（模板见下方“PLAN.md 写法（简要）”）。
 4. 在下方 Index 表新增一行，并把 `Status` 设为 `待设计` 或 `待实现`（取决于是否已冻结验收标准），并填入 `Last`（通常为当天）。
@@ -12,7 +12,9 @@
 ## 目录与命名规则
 
 - 每个计划一个目录：`docs/plan/<id>:<title>/`
-- `<id>`：四位数字（`0001`–`9999`），一经分配不要变更。
+- `<id>`：推荐 5 个字符的 nanoId 风格；兼容历史四位数字（`0001`–`9999`）并允许共存。
+  - 推荐字符集（小写 + 避免易混淆字符）：`23456789abcdefghjkmnpqrstuvwxyz`
+  - 正则：`[23456789abcdefghjkmnpqrstuvwxyz]{5}`
 - `<title>`：短标题 slug（建议 kebab-case，避免空格与特殊字符）；目录名尽量稳定。
 - 人类可读标题写在 Index 的 `Title` 列；标题变更优先改 `Title`，不强制改目录名。
 - 兼容性提示：目录名包含 `:`，在 Windows 默认文件系统/工具链下可能无法正常 checkout；本仓库计划文档工作流默认以 macOS/Linux 为主。
@@ -64,3 +66,4 @@
 | 0005 | TPS55288 双路输出控制（默认启用一路：5V/1A；含 INA3221 遥测） | 已完成 | `0005:tps55288-control/PLAN.md` | 2026-01-26 | - |
 | 0006 | TPS 热点温度采样：TMP112A 读数并入 telemetry | 已完成 | `0006:tps-tmp112-temperature-reading/PLAN.md` | 2026-01-27 | 兼容：只追加字段，不改变 `#0005` 既有字段 |
 | 0007 | INA3221 VBUS 读数偏高排查 | 待设计 | `0007:ina3221-vbus-offset/PLAN.md` | 2026-01-26 | - |
+| v5hze | TMP112A 过温告警输出：Comparator 模式保持输出（ALERT→THERM_KILL_N） | 待实现 | `v5hze:tps-tmp112-alert-overtemp-hold/PLAN.md` | 2026-01-27 | - |
