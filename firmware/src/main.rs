@@ -42,6 +42,12 @@ const TPS_SYNC_PHASE_TICKS: u16 = 64; // 180° at Duty7Bit => 128 ticks/period.
 // Do not assert THERM_KILL_N during normal bring-up.
 const FORCE_THERM_KILL_N_ASSERTED: bool = false;
 
+// TMP112A alert settings (Plan v5hze).
+const TMP112_OUT_A_ADDR: u8 = 0x48;
+const TMP112_OUT_B_ADDR: u8 = 0x49;
+const TMP112_THIGH_C_X16: i16 = 50 * 16;
+const TMP112_TLOW_C_X16: i16 = 40 * 16;
+
 #[main]
 fn main() -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::_160MHz);
@@ -130,7 +136,7 @@ fn main() -> ! {
     let i2c_config = I2cConfig::default()
         .with_frequency(Rate::from_khz(400))
         .with_software_timeout(SoftwareTimeout::Transaction(Duration::from_millis(100)));
-    let i2c: I2c<'static, Blocking> = I2c::new(peripherals.I2C1, i2c_config)
+    let mut i2c: I2c<'static, Blocking> = I2c::new(peripherals.I2C1, i2c_config)
         .unwrap()
         .with_sda(peripherals.GPIO48)
         .with_scl(peripherals.GPIO47);
@@ -168,14 +174,50 @@ fn main() -> ! {
         );
     }
 
+    // Program TMP112A alert thresholds and debounce. If configuration fails, do not enable TPS.
+    let tmp112_cfg = esp_firmware::tmp112::AlertConfig {
+        t_high_c_x16: TMP112_THIGH_C_X16,
+        t_low_c_x16: TMP112_TLOW_C_X16,
+        fault_queue: esp_firmware::tmp112::FaultQueue::F4,
+        conversion_rate: esp_firmware::tmp112::ConversionRate::Hz1,
+    };
+    let mut tmp112_ok = true;
+    for addr in [TMP112_OUT_A_ADDR, TMP112_OUT_B_ADDR] {
+        match esp_firmware::tmp112::program_alert_config(&mut i2c, addr, tmp112_cfg) {
+            Ok(rb) => defmt::info!(
+                "power: tmp112 ok addr=0x{=u8:x} cfg=0x{=u16:x} tlow=0x{=u16:x} thigh=0x{=u16:x}",
+                addr,
+                rb.config,
+                rb.tlow,
+                rb.thigh
+            ),
+            Err(e) => {
+                tmp112_ok = false;
+                defmt::error!(
+                    "power: tmp112 err addr=0x{=u8:x} err={}",
+                    addr,
+                    output::i2c_error_kind(e)
+                );
+            }
+        }
+    }
+    let enabled_outputs = if tmp112_ok {
+        DEFAULT_ENABLED_OUTPUTS
+    } else {
+        defmt::error!("power: tmp112 init failed; outputs disabled (fail-safe)");
+        output::EnabledOutputs::None
+    };
+
     let cfg = output::Config {
-        enabled_outputs: DEFAULT_ENABLED_OUTPUTS,
+        enabled_outputs,
         vout_mv: DEFAULT_VOUT_MV,
         ilimit_ma: DEFAULT_ILIMIT_MA,
         telemetry_period: TELEMETRY_PERIOD,
         retry_backoff: RETRY_BACKOFF,
         fault_log_min_interval: FAULT_LOG_MIN_INTERVAL,
         telemetry_include_vin_ch3: TELEMETRY_INCLUDE_VIN_CH3,
+        tmp112_tlow_c_x16: TMP112_TLOW_C_X16,
+        tmp112_thigh_c_x16: TMP112_THIGH_C_X16,
     };
 
     let mut power = output::PowerManager::new(i2c, i2c1_int, therm_kill, cfg);
