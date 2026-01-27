@@ -50,7 +50,7 @@
 
 - `vbus_mv = raw_bus * 8`
 - `vshunt_uv = raw_shunt * 40`
-- `current_ma = vshunt_uv / 10_000`（因为 `10 mΩ = 0.01 Ω`）
+- `current_ma = vshunt_uv / 10`（因为 `I(mA) = Vshunt(µV) / Rshunt(mΩ)`，`Rshunt=10mΩ`）
 
 ### 设备与通道映射（fixed）
 
@@ -90,17 +90,17 @@
 
 ### 默认 profile（required）
 
-- `default_enabled_channel`: `out_a | out_b`
+- `default_enabled_channel`: `out_a | out_b | out_a+out_b`
   - Meaning: 上电后默认“主动稳压输出”的通道
-  - Default: `out_a`
+  - Default: `out_a+out_b`
 
 - `default_vout_mv`: integer
   - Meaning: 目标输出电压（mV）
-  - Default: `5000`（临时测试）
+  - Default: `19000`
 
 - `default_ilimit_ma`: integer
   - Meaning: 目标电流限制（mA）；实现以 `TPS55288` 的寄存器能力为准（可能是近似值/档位值）
-  - Default: `1000`（临时测试）
+  - Default: `3500`
 
 ### 非默认通道关闭策略（required）
 
