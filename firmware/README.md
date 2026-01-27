@@ -197,6 +197,20 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 1) 正常路径：`tmp_addr/temp_c_x16/therm_kill_n` 均可见，且 `temp_c_x16/16` 与环境温度趋势一致。
 2) 断开/缺件路径：拔掉/不焊其中一颗 `TMP112A` 后，固件不 panic；对应通道输出 `temp_c_x16=err(i2c_...)`，但仍保持 `500ms` 两行 `telemetry ...` 稳定输出。
 
+## TMP112A 过温告警（Plan v5hze）
+
+固件会在启动阶段对两颗 `TMP112A(0x48/0x49)` 写入 `ALERT` 配置，使 `ALERT -> THERM_KILL_N` 满足“过温时保持输出（电平型）”的硬件级保护语义：
+
+- 模式：Comparator（`TEMP >= T(HIGH)` 触发；`TEMP < T(LOW)` 才释放）
+- 极性：active-low（`ALERT` 拉低；`THERM_KILL_N=0`）
+- 去抖：Fault queue = `4`
+- 采样：Conversion rate = `1 Hz`
+- 阈值：`T(HIGH)=50°C`，`T(LOW)=40°C`（两路一致）
+
+若任一 `TMP112A` 配置写入失败，固件会进入 fail-safe：**不允许使能 TPS 输出**，并打印错误信息（包含地址与错误类型）。
+
+当 `THERM_KILL_N=0` 时，固件会额外打印一条“可能来源”的提示（`out_a/out_b/both/unknown`）：通过读取两颗 `TMP112A` 当前温度并与 `T(LOW)/T(HIGH)` 比较得到（不新增硬件信号）。
+
 ## 烧录与监视（推荐：`mcu-agentd`，从仓库根目录运行）
 
 `mcu-agentd` 的配置文件固定在仓库根目录：`mcu-agentd.toml`。

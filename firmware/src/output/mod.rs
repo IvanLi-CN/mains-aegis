@@ -1,6 +1,7 @@
 pub mod tps55288;
 
 use esp_firmware::ina3221;
+use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
 use esp_hal::time::{Duration, Instant};
 
@@ -155,6 +156,7 @@ pub struct PowerManager<'d, I2C> {
 
     next_telemetry_at: Instant,
     last_fault_log_at: Option<Instant>,
+    last_therm_kill_hint_at: Option<Instant>,
 
     ina_ready: bool,
     ina_next_retry_at: Option<Instant>,
@@ -174,6 +176,8 @@ pub struct Config {
     pub retry_backoff: Duration,
     pub fault_log_min_interval: Duration,
     pub telemetry_include_vin_ch3: bool,
+    pub tmp112_tlow_c_x16: i16,
+    pub tmp112_thigh_c_x16: i16,
 }
 
 impl<'d, I2C> PowerManager<'d, I2C>
@@ -190,6 +194,7 @@ where
 
             next_telemetry_at: now,
             last_fault_log_at: None,
+            last_therm_kill_hint_at: None,
 
             ina_ready: false,
             ina_next_retry_at: Some(now),
@@ -357,6 +362,16 @@ where
         self.next_telemetry_at = now + self.cfg.telemetry_period;
 
         let therm_kill_n: u8 = if self.therm_kill.is_low() { 0 } else { 1 };
+        if therm_kill_n == 0
+            && tps55288::should_log_fault(
+                now,
+                &mut self.last_therm_kill_hint_at,
+                self.cfg.fault_log_min_interval,
+            )
+        {
+            self.log_therm_kill_hint();
+        }
+
         tps55288::print_telemetry_line(
             &mut self.i2c,
             OutputChannel::OutA,
@@ -397,5 +412,35 @@ where
                 );
             }
         }
+    }
+
+    fn log_therm_kill_hint(&mut self) {
+        const TMP112_OUT_A_ADDR: u8 = 0x48;
+        const TMP112_OUT_B_ADDR: u8 = 0x49;
+
+        let a = tmp112::read_temp_c_x16(&mut self.i2c, TMP112_OUT_A_ADDR);
+        let b = tmp112::read_temp_c_x16(&mut self.i2c, TMP112_OUT_B_ADDR);
+
+        let a_active = matches!(&a, Ok(t) if *t >= self.cfg.tmp112_tlow_c_x16);
+        let b_active = matches!(&b, Ok(t) if *t >= self.cfg.tmp112_tlow_c_x16);
+
+        let hint = if a_active && b_active {
+            "both"
+        } else if a_active {
+            "out_a"
+        } else if b_active {
+            "out_b"
+        } else {
+            "unknown"
+        };
+
+        defmt::warn!(
+            "power: therm_kill_n asserted hint={} tlow_c_x16={=i16} thigh_c_x16={=i16} out_a_temp_c_x16={=?} out_b_temp_c_x16={=?}",
+            hint,
+            self.cfg.tmp112_tlow_c_x16,
+            self.cfg.tmp112_thigh_c_x16,
+            a.map_err(i2c_error_kind),
+            b.map_err(i2c_error_kind),
+        );
     }
 }
