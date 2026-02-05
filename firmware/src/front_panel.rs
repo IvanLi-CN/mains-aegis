@@ -233,11 +233,9 @@ impl FrontPanel {
             let fps = ((self.frames_in_window as u64) * 1_000_000 + (micros / 2)) / micros;
             let fps_u32 = core::cmp::min(fps, u32::MAX as u64) as u32;
 
-            // Avoid unnecessary redraw when fps doesn't change.
-            if fps_u32 != self.last_fps {
-                self.last_fps = fps_u32;
-                let _ = self.draw_fps(self.last_fps);
-            }
+            // Redraw at least once per second so "fps=<n>" is a live indicator even when stable.
+            self.last_fps = fps_u32;
+            let _ = self.draw_fps(self.last_fps);
 
             self.fps_window_start = now;
             self.frames_in_window = 0;
