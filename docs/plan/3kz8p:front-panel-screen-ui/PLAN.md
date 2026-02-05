@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 待实现
+- Status: 部分完成（3/4）
 - Created: 2026-02-05
 - Last: 2026-02-05
 
@@ -126,9 +126,10 @@ None
 
 ## 实现里程碑（Milestones）
 
-- [ ] M1: 面板控制线 bring-up：初始化 `TCA6408A(0x21)`，可控 `CS/RES/TP_RESET`，并确认 `BLK(GPIO13)` 能点亮背光
-- [ ] M2: 屏幕显示 bring-up：初始化 `GC9307` 并显示 `Hello World`
-- [ ] M3: 文档固化：`firmware/README.md` 验证步骤
+- [x] M1: 面板控制线 bring-up：初始化 `TCA6408A(0x21)`，可控 `CS/RES/TP_RESET`，并确认 `BLK(GPIO13)` 能点亮背光
+- [x] M2: 屏幕显示 bring-up：初始化 `GC9307` 并显示 `Hello World`
+- [x] M3: 文档固化：`firmware/README.md` 验证步骤
+- [ ] M4: 上板验证（人类操作）：确认 `Hello World` + `fps=<n>` 可见；若黑屏优先排查背光极性与初始化顺序
 
 ## 方案概述（Approach, high-level）
 
@@ -150,6 +151,7 @@ None
 
 - 2026-02-05: 新建计划骨架（待冻结 UI 信息架构与验收口径）
 - 2026-02-05: 冻结 MVP：不做触摸；屏幕仅 `Hello World`；暂不做 idle backlight policy
+- 2026-02-05: 实现：屏幕显示 `Hello World` + `fps=<n>`，并补齐 `firmware/README.md` bring-up 说明
 
 ## 参考（References）
 
