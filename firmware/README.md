@@ -226,6 +226,35 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - `BQ40Z50` 默认只使用 `7-bit 0x0B`（等价 `8-bit W=0x16/R=0x17`）；只有 `--features bms-dual-probe-diag` 才会额外探测 `0x16` 以做兼容诊断。
 - 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。
 
+## 前面板屏幕显示（Plan 3kz8p）
+
+固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，`240x320`，SPI）并显示最小内容：
+
+- 文本：`Hello World`
+- 角落 overlay：`fps=<n>`
+  - 这里的 `fps` 指固件渲染循环的帧率（即“每秒发起多少次屏幕写入/刷新”），不是面板物理扫描频率
+
+硬件要点（冻结口径）：
+
+- SPI（屏幕）：
+  - `GPIO12`：`SCLK`
+  - `GPIO11`：`MOSI`
+  - `GPIO10`：`DC`
+  - `CS/RES` 不直连 MCU：由面板 `TCA6408A` 提供（作为“使能/闸门 + 复位”慢控制线）
+- I2C2（面板侧）：
+  - `GPIO8`：`I2C2_SDA`
+  - `GPIO9`：`I2C2_SCL`
+  - `TCA6408A` 地址：`0x21`
+- 背光：
+  - `GPIO13`：`BLK`（控制面板 `Q16(BSS84)` 高边开关；当前固件按“低电平点亮背光”实现）
+- 触摸：
+  - 本计划 **暂不做触摸**：固件保持 `TP_RESET` 为低，使触摸控制器处于复位态
+
+预期日志（`defmt`）：
+
+- 成功：`ui: front panel ready`
+- 失败：`ui: ... failed ...`（并退回到安全态：屏幕不选中、复位保持、背光关闭）
+
 ## 烧录与监视（推荐：`mcu-agentd`，从仓库根目录运行）
 
 `mcu-agentd` 的配置文件固定在仓库根目录：`mcu-agentd.toml`。
