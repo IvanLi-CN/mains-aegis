@@ -7,4 +7,5 @@ pub mod ina3221 {
     pub use ina3221_async::*;
 }
 
+pub mod bq25792;
 pub mod tmp112;

@@ -1,5 +1,6 @@
 pub mod tps55288;
 
+use esp_firmware::bq25792;
 use esp_firmware::ina3221;
 use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
@@ -151,6 +152,8 @@ pub struct PowerManager<'d, I2C> {
     i2c: I2C,
     i2c1_int: Input<'d>,
     therm_kill: Flex<'d>,
+    chg_ce: Flex<'d>,
+    chg_ilim_hiz_brk: Flex<'d>,
 
     cfg: Config,
 
@@ -165,6 +168,10 @@ pub struct PowerManager<'d, I2C> {
     tps_a_next_retry_at: Option<Instant>,
     tps_b_ready: bool,
     tps_b_next_retry_at: Option<Instant>,
+
+    chg_next_poll_at: Instant,
+    chg_next_retry_at: Option<Instant>,
+    chg_enabled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -184,12 +191,26 @@ impl<'d, I2C> PowerManager<'d, I2C>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    pub fn new(i2c: I2C, i2c1_int: Input<'d>, therm_kill: Flex<'d>, cfg: Config) -> Self {
+    pub fn new(
+        i2c: I2C,
+        i2c1_int: Input<'d>,
+        therm_kill: Flex<'d>,
+        mut chg_ce: Flex<'d>,
+        mut chg_ilim_hiz_brk: Flex<'d>,
+        cfg: Config,
+    ) -> Self {
         let now = Instant::now();
+
+        // Fail-safe defaults.
+        chg_ce.set_high();
+        chg_ilim_hiz_brk.set_low();
+
         Self {
             i2c,
             i2c1_int,
             therm_kill,
+            chg_ce,
+            chg_ilim_hiz_brk,
             cfg,
 
             next_telemetry_at: now,
@@ -203,6 +224,10 @@ where
             tps_a_next_retry_at: Some(now),
             tps_b_ready: false,
             tps_b_next_retry_at: Some(now),
+
+            chg_next_poll_at: now,
+            chg_next_retry_at: Some(now),
+            chg_enabled: false,
         }
     }
 
@@ -215,6 +240,7 @@ where
     pub fn tick(&mut self) {
         self.maybe_retry();
         self.maybe_handle_fault();
+        self.maybe_poll_charger();
         self.maybe_print_telemetry();
     }
 
@@ -412,6 +438,159 @@ where
                 );
             }
         }
+    }
+
+    fn maybe_poll_charger(&mut self) {
+        // Keep the charger polling independent from the TPS/INA telemetry period.
+        const POLL_PERIOD: Duration = Duration::from_secs(1);
+
+        let now = Instant::now();
+        if now < self.chg_next_poll_at {
+            return;
+        }
+        if let Some(next_retry_at) = self.chg_next_retry_at {
+            if now < next_retry_at {
+                return;
+            }
+        }
+        self.chg_next_poll_at = now + POLL_PERIOD;
+
+        // Snapshot key registers with multi-byte reads (BQ25792 supports crossing boundaries).
+        let mut st = [0u8; 5];
+        let mut fault = [0u8; 2];
+
+        let ctrl0 = match bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0) {
+            Ok(v) => v,
+            Err(e) => {
+                self.chg_ce.set_high();
+                self.chg_enabled = false;
+                self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                defmt::error!(
+                    "charger: bq25792 err stage=ctrl0_read err={}",
+                    i2c_error_kind(e)
+                );
+                return;
+            }
+        };
+
+        if let Err(e) = bq25792::read_block(&mut self.i2c, bq25792::reg::CHARGER_STATUS_0, &mut st)
+        {
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+            self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+            defmt::error!(
+                "charger: bq25792 err stage=status_read err={}",
+                i2c_error_kind(e)
+            );
+            return;
+        }
+        if let Err(e) = bq25792::read_block(&mut self.i2c, bq25792::reg::FAULT_STATUS_0, &mut fault)
+        {
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+            self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+            defmt::error!(
+                "charger: bq25792 err stage=fault_read err={}",
+                i2c_error_kind(e)
+            );
+            return;
+        }
+
+        let status0 = st[0];
+        let status1 = st[1];
+        let status2 = st[2];
+        let status3 = st[3];
+        let status4 = st[4];
+        let fault0 = fault[0];
+        let fault1 = fault[1];
+
+        let vbus_present = (status0 & bq25792::status0::VBUS_PRESENT_STAT) != 0;
+        let ac1_present = (status0 & bq25792::status0::AC1_PRESENT_STAT) != 0;
+        let ac2_present = (status0 & bq25792::status0::AC2_PRESENT_STAT) != 0;
+        let pg = (status0 & bq25792::status0::PG_STAT) != 0;
+        let poorsrc = (status0 & bq25792::status0::POORSRC_STAT) != 0;
+        let wd = (status0 & bq25792::status0::WD_STAT) != 0;
+        let vindpm = (status0 & bq25792::status0::VINDPM_STAT) != 0;
+        let iindpm = (status0 & bq25792::status0::IINDPM_STAT) != 0;
+
+        let vbat_present = (status2 & bq25792::status2::VBAT_PRESENT_STAT) != 0;
+        let treg = (status2 & bq25792::status2::TREG_STAT) != 0;
+        let dpdm = (status2 & bq25792::status2::DPDM_STAT) != 0;
+        let ico_stat = bq25792::status2::ico_stat(status2);
+
+        let ts_cold = (status4 & bq25792::status4::TS_COLD_STAT) != 0;
+        let ts_cool = (status4 & bq25792::status4::TS_COOL_STAT) != 0;
+        let ts_warm = (status4 & bq25792::status4::TS_WARM_STAT) != 0;
+        let ts_hot = (status4 & bq25792::status4::TS_HOT_STAT) != 0;
+
+        let can_enable = vbat_present && !ts_cold && !ts_hot;
+        let mut applied_ctrl0 = ctrl0;
+
+        if can_enable {
+            // Ensure we are not braking the converter (ILIM_HIZ < 0.75V forces non-switching).
+            self.chg_ilim_hiz_brk.set_low();
+
+            // Charge is enabled only when both `EN_CHG=1` and `CE=LOW`.
+            let desired_ctrl0 = (ctrl0 | bq25792::ctrl0::EN_CHG) & !bq25792::ctrl0::EN_HIZ;
+            if desired_ctrl0 != ctrl0 {
+                match bq25792::write_u8(
+                    &mut self.i2c,
+                    bq25792::reg::CHARGER_CONTROL_0,
+                    desired_ctrl0,
+                ) {
+                    Ok(()) => applied_ctrl0 = desired_ctrl0,
+                    Err(e) => {
+                        self.chg_ce.set_high();
+                        self.chg_enabled = false;
+                        self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                        defmt::error!(
+                            "charger: bq25792 err stage=ctrl0_write err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
+                    }
+                }
+            }
+
+            self.chg_ce.set_low();
+            self.chg_enabled = true;
+        } else {
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+        }
+
+        defmt::info!(
+            "charger: enabled={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
+            self.chg_enabled,
+            vbus_present,
+            ac1_present,
+            ac2_present,
+            pg,
+            vbat_present,
+            ts_cold,
+            ts_cool,
+            ts_warm,
+            ts_hot,
+            bq25792::decode_chg_stat(bq25792::status1::chg_stat(status1)),
+            bq25792::decode_vbus_stat(bq25792::status1::vbus_stat(status1)),
+            bq25792::decode_ico_stat(ico_stat),
+            treg,
+            dpdm,
+            wd,
+            poorsrc,
+            vindpm,
+            iindpm,
+            status0,
+            status1,
+            status2,
+            status3,
+            status4,
+            fault0,
+            fault1,
+            applied_ctrl0
+        );
+
+        self.chg_next_retry_at = None;
     }
 
     fn log_therm_kill_hint(&mut self) {
