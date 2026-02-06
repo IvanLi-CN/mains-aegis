@@ -19,7 +19,9 @@ use esp_hal::{main, Blocking};
 use esp_println as _;
 
 // Bring-up default profile.
-const DEFAULT_ENABLED_OUTPUTS: output::EnabledOutputs = output::EnabledOutputs::Both;
+// Bring-up safety: disable OUT-B by default until we explicitly validate the power stage.
+const DEFAULT_ENABLED_OUTPUTS: output::EnabledOutputs =
+    output::EnabledOutputs::Only(output::OutputChannel::OutA);
 const DEFAULT_VOUT_MV: u16 = 19_000;
 const DEFAULT_ILIMIT_MA: u16 = 3_500;
 const TELEMETRY_PERIOD: Duration = Duration::from_millis(500);
