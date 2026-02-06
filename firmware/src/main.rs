@@ -144,6 +144,36 @@ fn main() -> ! {
     let i2c1_int_cfg = InputConfig::default().with_pull(Pull::Up);
     let i2c1_int = Input::new(peripherals.GPIO33, i2c1_int_cfg);
 
+    // BQ25792 charger control pins.
+    //
+    // CE is active-low; hardware pull-up keeps it disabled during reset. We still
+    // drive it HIGH as early as possible and only enable charging after we can
+    // validate charger/battery status over I2C.
+    let mut chg_ce = Flex::new(peripherals.GPIO15);
+    chg_ce.apply_output_config(
+        &OutputConfig::default()
+            .with_drive_mode(DriveMode::OpenDrain)
+            .with_pull(Pull::Up),
+    );
+    chg_ce.set_high();
+    chg_ce.set_output_enable(true);
+
+    // ILIM_HIZ "brake" (drives an external NMOS that pulls ILIM_HIZ low).
+    // Keep deasserted (LOW) during normal bring-up.
+    let mut chg_ilim_hiz_brk = Flex::new(peripherals.GPIO16);
+    chg_ilim_hiz_brk.apply_output_config(
+        &OutputConfig::default()
+            .with_drive_mode(DriveMode::PushPull)
+            .with_pull(Pull::None),
+    );
+    chg_ilim_hiz_brk.set_low();
+    chg_ilim_hiz_brk.set_output_enable(true);
+
+    // CHG_INT is an open-drain 256us active-low pulse. We poll status registers
+    // periodically, but keep the pin configured (with pull-up) for future ISR work.
+    let _chg_int_cfg = InputConfig::default().with_pull(Pull::Up);
+    let _chg_int = Input::new(peripherals.GPIO17, _chg_int_cfg);
+
     // Ensure THERM_KILL_N is released. This net can hard-disable both TPS via TPS_EN.
     // Configure as open-drain output, set HIGH (release), and also enable input so we can observe if
     // something external is holding it low.
@@ -220,7 +250,8 @@ fn main() -> ! {
         tmp112_thigh_c_x16: TMP112_THIGH_C_X16,
     };
 
-    let mut power = output::PowerManager::new(i2c, i2c1_int, therm_kill, cfg);
+    let mut power =
+        output::PowerManager::new(i2c, i2c1_int, therm_kill, chg_ce, chg_ilim_hiz_brk, cfg);
     defmt::info!(
         "power: enabled_outputs={} target_vout_mv={=u16} target_ilimit_ma={=u16}",
         cfg.enabled_outputs.describe(),
