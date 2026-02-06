@@ -68,4 +68,4 @@
 | 0007 | INA3221 VBUS 读数偏高排查 | 待设计 | `0007:ina3221-vbus-offset/PLAN.md` | 2026-01-26 | - |
 | v5hze | TMP112A 过温告警输出：Comparator 模式保持输出（ALERT→THERM_KILL_N） | 待实现 | `v5hze:tps-tmp112-alert-overtemp-hold/PLAN.md` | 2026-01-27 | - |
 | b3qzy | BQ25792 充电功能 bring-up：状态遥测 + 使能策略 | 已完成 | `b3qzy:bq25792-charging-enable/PLAN.md` | 2026-02-06 | PR #18 |
-| bkhbz | BQ40Z50 BMS bring-up：SMBus 轮询 + 无电池故障预期 | 待实现 | `bkhbz:bq40z50-bms-bringup/PLAN.md` | 2026-02-06 | - |
+| bkhbz | BQ40Z50 BMS bring-up：SMBus 轮询 + 无电池故障预期 | 已完成 | `bkhbz:bq40z50-bms-bringup/PLAN.md` | 2026-02-06 | PR #19 |
