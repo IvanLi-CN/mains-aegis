@@ -228,19 +228,21 @@ pub fn boot_self_test<I2C>(
     sync_ok: bool,
     screen_present: bool,
     therm_kill_asserted: bool,
+    force_min_charge: bool,
 ) -> BootSelfTestResult
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     defmt::info!(
-        "self_test: begin vout_mv={=u16} ilimit_ma={=u16} tmp_a_ok={=bool} tmp_b_ok={=bool} sync_ok={=bool} screen_present={=bool} therm_kill_asserted={=bool}",
+        "self_test: begin vout_mv={=u16} ilimit_ma={=u16} tmp_a_ok={=bool} tmp_b_ok={=bool} sync_ok={=bool} screen_present={=bool} therm_kill_asserted={=bool} force_min_charge={=bool}",
         vout_mv,
         ilimit_ma,
         tmp_out_a_ok,
         tmp_out_b_ok,
         sync_ok,
         screen_present,
-        therm_kill_asserted
+        therm_kill_asserted,
+        force_min_charge
     );
 
     // Stage 0: configure independent sensors.
@@ -418,13 +420,21 @@ where
     }
 
     if bms_addr.is_none() {
-        // Policy: after init, BQ40 missing means both power and charging paths must be disabled.
+        // Policy: after init, BQ40 missing means TPS outputs must be disabled.
         out_a_allowed = false;
         out_b_allowed = false;
-        if charger_enabled {
-            defmt::warn!("self_test: force disable charger because bq40z50 is missing");
+
+        if force_min_charge {
+            defmt::warn!(
+                "self_test: bq40z50 missing; keep charger module for force_min_charge (charger_probe_ok={=bool})",
+                charger_enabled
+            );
+        } else {
+            if charger_enabled {
+                defmt::warn!("self_test: force disable charger because bq40z50 is missing");
+            }
+            charger_enabled = false;
         }
-        charger_enabled = false;
     }
 
     // Emergency-stop path: only this path is allowed to change TPS output state in self-test.
@@ -528,6 +538,7 @@ pub struct Config {
     pub tmp112_tlow_c_x16: i16,
     pub tmp112_thigh_c_x16: i16,
     pub charger_enabled: bool,
+    pub force_min_charge: bool,
     pub bms_addr: Option<u8>,
 }
 
@@ -902,6 +913,22 @@ where
             }
         };
 
+        // Keep external ship-FET path enabled and force SDRV_CTRL=00 (IDLE) so
+        // charger-side wake pulses can actually reach the battery/gauge path.
+        let ship_path = match bq25792::ensure_ship_fet_path_enabled(&mut self.i2c) {
+            Ok(state) => state,
+            Err(e) => {
+                self.chg_ce.set_high();
+                self.chg_enabled = false;
+                self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                defmt::error!(
+                    "charger: bq25792 err stage=ship_fet_path err={}",
+                    i2c_error_kind(e)
+                );
+                return;
+            }
+        };
+
         if let Err(e) = bq25792::read_block(&mut self.i2c, bq25792::reg::CHARGER_STATUS_0, &mut st)
         {
             self.chg_ce.set_high();
@@ -952,12 +979,55 @@ where
         let ts_warm = (status4 & bq25792::status4::TS_WARM_STAT) != 0;
         let ts_hot = (status4 & bq25792::status4::TS_HOT_STAT) != 0;
 
-        let can_enable = vbat_present && !ts_cold && !ts_hot;
+        let input_present = vbus_present || ac1_present || ac2_present || pg;
+        let can_enable = input_present && !ts_cold && !ts_hot;
+        let normal_allow_charge = can_enable && vbat_present;
+        let force_allow_charge = self.cfg.force_min_charge && can_enable;
+        let allow_charge = normal_allow_charge || force_allow_charge;
         let mut applied_ctrl0 = ctrl0;
+        let mut applied_ichg_ma: Option<u16> = None;
+        let mut applied_iindpm_ma: Option<u16> = None;
 
-        if can_enable {
+        if allow_charge {
             // Ensure we are not braking the converter (ILIM_HIZ < 0.75V forces non-switching).
             self.chg_ilim_hiz_brk.set_low();
+
+            if force_allow_charge {
+                const FORCE_MIN_ICHG_MA: u16 = 50;
+                const FORCE_MIN_IINDPM_MA: u16 = 100;
+
+                fn decode_cur_ma(reg: u16) -> u16 {
+                    (reg & 0x01FF) * 10
+                }
+
+                match bq25792::set_charge_current_limit_ma(&mut self.i2c, FORCE_MIN_ICHG_MA) {
+                    Ok(v) => applied_ichg_ma = Some(decode_cur_ma(v)),
+                    Err(e) => {
+                        self.chg_ce.set_high();
+                        self.chg_enabled = false;
+                        self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                        defmt::error!(
+                            "charger: bq25792 err stage=ichg_write err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
+                    }
+                }
+
+                match bq25792::set_input_current_limit_ma(&mut self.i2c, FORCE_MIN_IINDPM_MA) {
+                    Ok(v) => applied_iindpm_ma = Some(decode_cur_ma(v)),
+                    Err(e) => {
+                        self.chg_ce.set_high();
+                        self.chg_enabled = false;
+                        self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                        defmt::error!(
+                            "charger: bq25792 err stage=iindpm_write err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
+                    }
+                }
+            }
 
             // Charge is enabled only when both `EN_CHG=1` and `CE=LOW`.
             let desired_ctrl0 = (ctrl0 | bq25792::ctrl0::EN_CHG) & !bq25792::ctrl0::EN_HIZ;
@@ -989,8 +1059,13 @@ where
         }
 
         defmt::info!(
-            "charger: enabled={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
+            "charger: enabled={=bool} force_min_charge={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} ichg_ma={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
             self.chg_enabled,
+            self.cfg.force_min_charge,
+            normal_allow_charge,
+            force_allow_charge,
+            allow_charge,
+            input_present,
             vbus_present,
             ac1_present,
             ac2_present,
@@ -1000,6 +1075,12 @@ where
             ts_cool,
             ts_warm,
             ts_hot,
+            applied_ichg_ma,
+            applied_iindpm_ma,
+            (ship_path.ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
+            (ship_path.ctrl5_after & bq25792::ctrl5::SFET_PRESENT) != 0,
+            ship_path.ship.sdrv_ctrl_before,
+            ship_path.ship.sdrv_ctrl_after,
             bq25792::decode_chg_stat(bq25792::status1::chg_stat(status1)),
             bq25792::decode_vbus_stat(bq25792::status1::vbus_stat(status1)),
             bq25792::decode_ico_stat(ico_stat),

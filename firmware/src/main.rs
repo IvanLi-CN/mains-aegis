@@ -29,6 +29,7 @@ const TELEMETRY_PERIOD: Duration = Duration::from_millis(500);
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
 const FAULT_LOG_MIN_INTERVAL: Duration = Duration::from_millis(200);
 const TELEMETRY_INCLUDE_VIN_CH3: bool = false;
+const FORCE_MIN_CHARGE: bool = cfg!(feature = "force-min-charge");
 
 const FW_BUILD_PROFILE: &str = env!("FW_BUILD_PROFILE");
 const FW_GIT_SHA: &str = env!("FW_GIT_SHA");
@@ -152,9 +153,11 @@ fn main() -> ! {
         DEFAULT_VOUT_MV,
         DEFAULT_ILIMIT_MA
     );
+    defmt::info!("fw: force_min_charge={=bool}", FORCE_MIN_CHARGE);
 
     let i2c1_config = I2cConfig::default()
-        .with_frequency(Rate::from_khz(400))
+        // SMBus-gauge bring-up is more stable at 100kHz on the shared bus.
+        .with_frequency(Rate::from_khz(100))
         .with_software_timeout(SoftwareTimeout::Transaction(Duration::from_millis(100)));
     let mut i2c: I2c<'static, Blocking> = I2c::new(peripherals.I2C1, i2c1_config)
         .unwrap()
@@ -322,6 +325,7 @@ fn main() -> ! {
         tps_sync_ok,
         panel_probe.screen_present(),
         low_after,
+        FORCE_MIN_CHARGE,
     );
 
     let cfg = output::Config {
@@ -335,6 +339,7 @@ fn main() -> ! {
         tmp112_tlow_c_x16: TMP112_TLOW_C_X16,
         tmp112_thigh_c_x16: TMP112_THIGH_C_X16,
         charger_enabled: self_test.charger_enabled,
+        force_min_charge: FORCE_MIN_CHARGE,
         bms_addr: self_test.bms_addr,
     };
 
