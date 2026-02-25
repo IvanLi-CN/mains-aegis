@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,69 +89,75 @@ def main() -> int:
     canonical_touched_0x16 = False
     allowed_addrs = {0x0B} if args.mode == "canonical" else {0x0B, 0x16}
 
-    with monitor_file.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+    if not monitor_file.is_file():
+        print(f"monitor file not found: {monitor_file}", file=sys.stderr)
+        return 3
 
-            text = entry.get("text", "")
-            if not isinstance(text, str):
-                continue
+    try:
+        with monitor_file.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
 
-            if ADDR16_RE.search(text):
-                canonical_touched_0x16 = True
+                text = entry.get("text", "")
+                if not isinstance(text, str):
+                    continue
 
-            if ROM_DETECTED_RE.search(text):
-                rom_detected = True
-            if ROM_FLASH_BEGIN_RE.search(text):
-                rom_flash_attempted = True
-            if ROM_FLASH_DONE_RE.search(text):
-                rom_flash_done = True
+                if ADDR16_RE.search(text):
+                    canonical_touched_0x16 = True
 
-            err_match = POLL_ERR_RE.search(text)
-            if err_match:
-                poll_errors[err_match.group("err")] += 1
-                current_streak = 0
+                if ROM_DETECTED_RE.search(text):
+                    rom_detected = True
+                if ROM_FLASH_BEGIN_RE.search(text):
+                    rom_flash_attempted = True
+                if ROM_FLASH_DONE_RE.search(text):
+                    rom_flash_done = True
 
-            retry_match = POLL_RETRY_RE.search(text)
-            if retry_match:
-                poll_errors[retry_match.group("first")] += 1
-                retry_err = retry_match.group("retry")
-                if retry_err:
-                    poll_errors[retry_err] += 1
-                # retry_ok means the same poll window recovered and still produced a valid sample;
-                # don't break the valid streak in that case.
-                if retry_match.group("result") == "fail":
+                err_match = POLL_ERR_RE.search(text)
+                if err_match:
+                    poll_errors[err_match.group("err")] += 1
                     current_streak = 0
 
-            sample_match = SAMPLE_RE.search(text)
-            if not sample_match:
-                continue
+                retry_match = POLL_RETRY_RE.search(text)
+                if retry_match:
+                    # `retry_ok` has no terminal poll error line, so keep first_err for visibility.
+                    # `retry_fail` is represented by a later `poll_snapshot err=...` line.
+                    if retry_match.group("result") == "ok":
+                        poll_errors[retry_match.group("first")] += 1
+                    else:
+                        current_streak = 0
 
-            sample = Sample(
-                addr=int(sample_match.group("addr"), 16),
-                temp=int(sample_match.group("temp")),
-                voltage=int(sample_match.group("voltage")),
-                current=int(sample_match.group("current")),
-                soc=int(sample_match.group("soc")),
-                status=int(sample_match.group("status"), 16),
-            )
+                sample_match = SAMPLE_RE.search(text)
+                if not sample_match:
+                    continue
 
-            if sample.addr not in allowed_addrs:
-                continue
+                sample = Sample(
+                    addr=int(sample_match.group("addr"), 16),
+                    temp=int(sample_match.group("temp")),
+                    voltage=int(sample_match.group("voltage")),
+                    current=int(sample_match.group("current")),
+                    soc=int(sample_match.group("soc")),
+                    status=int(sample_match.group("status"), 16),
+                )
 
-            samples_total += 1
-            if sample.valid:
-                valid_samples += 1
-                current_streak += 1
-                max_streak = max(max_streak, current_streak)
-            else:
-                current_streak = 0
+                if sample.addr not in allowed_addrs:
+                    continue
+
+                samples_total += 1
+                if sample.valid:
+                    valid_samples += 1
+                    current_streak += 1
+                    max_streak = max(max_streak, current_streak)
+                else:
+                    current_streak = 0
+    except OSError as exc:
+        print(f"failed to read monitor file: {exc}", file=sys.stderr)
+        return 4
 
     reasons: list[str] = []
     if samples_total == 0:
@@ -223,7 +230,7 @@ def main() -> int:
 
     print(str((report_out / "summary.json")))
     print(str((report_out / "summary.md")))
-    return 0
+    return 0 if verdict_pass else 20
 
 
 if __name__ == "__main__":

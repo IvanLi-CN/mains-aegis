@@ -13,6 +13,7 @@ Expected:
 - build + flash + monitor + report complete
 - `summary.json` produced
 - `verdict.pass=true` when `max_valid_streak >= 10`
+- command exits non-zero when `verdict.pass=false` (CI/automation friendly)
 - `--recover` is rejected in this mode (to avoid silent overrides)
 - `tps_sync` unavailable only emits warning; output self-test still proceeds
 - `--duration-sec` must be `>=20` (10-sample streak at 2s poll period)

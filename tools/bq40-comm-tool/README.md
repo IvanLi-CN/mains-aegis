@@ -43,6 +43,7 @@ Options:
 Each run produces:
 - `summary.json`
 - `summary.md`
+- process exit code (`0` when `verdict.pass=true`; non-zero when `verdict.pass=false`)
 
 Required `summary.json` fields:
 - `mode`, `duration_sec`, `samples_total`, `valid_samples`, `max_valid_streak`

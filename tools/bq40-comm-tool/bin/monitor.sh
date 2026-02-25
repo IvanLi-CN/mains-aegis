@@ -56,6 +56,7 @@ monitor_path=$(python3 - "$TOOL_ROOT" "$duration_sec" <<'PY'
 import json
 import subprocess
 import sys
+import time
 from collections import deque
 from pathlib import Path
 from threading import Lock, Thread
@@ -74,6 +75,7 @@ def snapshot() -> Dict[Path, Tuple[float, int]]:
     return state
 
 before = snapshot()
+started_at = time.time()
 
 stdout_tail: Deque[str] = deque(maxlen=200)
 stderr_tail: Deque[str] = deque(maxlen=200)
@@ -153,9 +155,20 @@ for path, (mtime, size) in after.items():
     if prev is None or mtime > prev[0] or size > prev[1]:
         changed.append((mtime, path))
 changed.sort()
+changed_paths = {path for _, path in changed}
 
 chosen: Optional[Path] = None
-if path_from_stdout is not None and path_from_stdout.exists():
+if (
+    path_from_stdout is not None
+    and path_from_stdout.exists()
+    and (
+        path_from_stdout in changed_paths
+        or (
+            path_from_stdout in after
+            and after[path_from_stdout][0] >= started_at
+        )
+    )
+):
     chosen = path_from_stdout
 elif changed:
     chosen = changed[-1][1]
