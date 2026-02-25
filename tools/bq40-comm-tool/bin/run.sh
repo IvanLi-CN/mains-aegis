@@ -94,6 +94,10 @@ case "$subcommand" in
     exit 0
     ;;
   diagnose)
+    if [[ "$recover_arg_set" == "true" ]]; then
+      echo "diagnose mode does not accept --recover" >&2
+      exit 11
+    fi
     recover_policy="never"
     ;;
   recover)

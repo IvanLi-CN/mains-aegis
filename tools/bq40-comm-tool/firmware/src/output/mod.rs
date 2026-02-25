@@ -1974,10 +1974,11 @@ where
         BMS_WAKE_SETTLE.as_millis()
     );
 
+    let outputs_ok = (!want_out_a || out_a_ok) && (!want_out_b || out_b_ok);
     defmt::info!(
         "self_test: done enabled_outputs={} outputs_ok={=bool} charger_enabled={=bool}",
         enabled_outputs.describe(),
-        out_a_ok && out_b_ok,
+        outputs_ok,
         charger_enabled
     );
 

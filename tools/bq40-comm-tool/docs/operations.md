@@ -13,6 +13,7 @@ Expected:
 - build + flash + monitor + report complete
 - `summary.json` produced
 - `verdict.pass=true` when `max_valid_streak >= 10`
+- `--recover` is rejected in this mode (to avoid silent overrides)
 
 ## 2) Recover (state-changing path)
 
