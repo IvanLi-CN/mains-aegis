@@ -62,6 +62,8 @@ Required `summary.json` fields:
   - check manager status: `mcu-managerd status`
   - if not running, start foreground once for this session: `mcu-managerd run`
   - then re-run `./bin/run.sh ...` (tool report parser works offline on existing logs too)
+- `monitor file not found: ...`
+  - for `verify`, make sure `--monitor-file` points to an existing `.mon.ndjson`
 - `verdict.fail: canonical_mode_touched_0x16`
   - canonical mode should not touch `0x16`; check firmware mode and logs
 

@@ -1721,7 +1721,11 @@ where
     let out_a_devices_present = tps_a_present && tmp_a_present && tmp_out_a_ok;
     let out_b_devices_present = tps_b_present && tmp_b_present && tmp_out_b_ok;
 
-    if want_outputs && sync_ok && ina_present {
+    if want_outputs && !sync_ok {
+        defmt::warn!("self_test: tps_sync unavailable; continue output bring-up without sync");
+    }
+
+    if want_outputs && ina_present {
         let ina_cfg = if include_vin_ch3 {
             ina3221::CONFIG_VALUE_CH123
         } else {

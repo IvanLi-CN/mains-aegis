@@ -168,6 +168,15 @@ else
   fi
 fi
 
+if [[ ! -f "$monitor_file" ]]; then
+  echo "monitor file not found: $monitor_file" >&2
+  exit 12
+fi
+if [[ ! -r "$monitor_file" ]]; then
+  echo "monitor file is not readable: $monitor_file" >&2
+  exit 13
+fi
+
 report_args=(
   --mode "$mode"
   --duration-sec "$duration_sec"

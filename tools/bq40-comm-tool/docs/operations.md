@@ -14,6 +14,7 @@ Expected:
 - `summary.json` produced
 - `verdict.pass=true` when `max_valid_streak >= 10`
 - `--recover` is rejected in this mode (to avoid silent overrides)
+- `tps_sync` unavailable only emits warning; output self-test still proceeds
 
 ## 2) Recover (state-changing path)
 
