@@ -1,0 +1,28 @@
+[package]
+name = "esp-firmware"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[features]
+# Default build variant is the 12V UPS firmware.
+default = []
+ups-19v = []
+# Force a minimal-charge wake path during bring-up diagnostics.
+force-min-charge = []
+bms-dual-probe-diag = []
+bms-rom-recover-disable = []
+bms-rom-recover-force = []
+
+[dependencies]
+defmt = "1.0.1"
+embedded-hal = "1"
+esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32s3"] }
+esp-backtrace = { version = "0.18.1", features = ["esp32s3", "panic-handler", "defmt"] }
+esp-hal = { version = "1.0.0", features = ["esp32s3", "rt", "unstable", "defmt"] }
+esp-println = { version = "0.16.1", default-features = false, features = ["esp32s3", "defmt-espflash", "jtag-serial"] }
+ina3221-async = { path = "../crates/ina3221-async", features = ["defmt"] }
+tps55288 = { path = "../crates/tps55288", features = ["defmt"] }
+
+[profile.dev.package.xtensa-lx-rt]
+opt-level = "z"

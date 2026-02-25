@@ -1,0 +1,20 @@
+# Tool-local runtime artifacts
+.esp32-port
+.mcu-agentd/
+firmware/.esp32-port
+firmware/.mcu-agentd/
+
+# Rust build outputs
+firmware/target/
+crates/**/target/
+
+# Generated reports
+reports/*
+!reports/.gitkeep
+
+# Optional ad-hoc exports
+*.session.ndjson
+*.mon.ndjson
+
+# Local script caches
+bin/__pycache__/

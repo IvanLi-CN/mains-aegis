@@ -1,0 +1,30 @@
+[package]
+name = "tps55288-esp32s3fh4n2"
+version = "0.1.0"
+edition = "2024"
+autobins = false
+
+[dependencies]
+tps55288 = { path = "../.." }
+embedded-hal = "1"
+
+# ESP32-S3 bare-metal stack
+esp-hal = { version = "1.0.0", features = ["esp32s3", "unstable"] }
+esp-println = { version = "0.16.1", features = ["esp32s3", "auto"] }
+esp-backtrace = { version = "0.18.1", features = ["esp32s3", "panic-handler", "println"] }
+esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32s3"] }
+
+[profile.dev.package.xtensa-lx-rt]
+opt-level = "z"
+
+[[bin]]
+name = "step_vout"
+path = "src/bin/step_vout.rs"
+
+[[bin]]
+name = "fixed_5v"
+path = "src/bin/fixed_5v.rs"
+
+[[bin]]
+name = "ext_fb_sw2303"
+path = "src/bin/ext_fb_sw2303.rs"

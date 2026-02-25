@@ -1,0 +1,33 @@
+[package]
+name = "ina3221-async"
+version = "0.1.0"
+edition = "2024"
+description = "Rust driver for TI INA3221 3-channel shunt & bus voltage monitor (I2C)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/IvanLi-CN/ina3221-async-rs"
+keywords = ["embedded", "driver", "ina3221", "i2c", "current-sense"]
+categories = ["embedded", "hardware-support", "no-std"]
+readme = "README.md"
+exclude = [
+  "target/",
+]
+
+[features]
+default = []
+async = ["embedded-hal-async"]
+defmt = ["dep:defmt"]
+
+[dependencies]
+embedded-hal = "1"
+embedded-hal-async = { version = "1", optional = true }
+defmt = { version = "0.3", optional = true }
+
+[dev-dependencies]
+embedded-hal-mock = { version = "0.11", features = ["eh1"] }
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+opt-level = 1
+
