@@ -320,7 +320,7 @@ where
     }
 
     // Stage 3: BQ25792.
-    let charger_enabled = match bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_CONTROL_0) {
+    let mut charger_enabled = match bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_CONTROL_0) {
         Ok(v) => {
             defmt::info!("self_test: bq25792 ok ctrl0=0x{=u8:x}", v);
             true
@@ -415,6 +415,16 @@ where
             tmp_b_present,
             tmp_out_b_ok
         );
+    }
+
+    if bms_addr.is_none() {
+        // Policy: after init, BQ40 missing means both power and charging paths must be disabled.
+        out_a_allowed = false;
+        out_b_allowed = false;
+        if charger_enabled {
+            defmt::warn!("self_test: force disable charger because bq40z50 is missing");
+        }
+        charger_enabled = false;
     }
 
     // Emergency-stop path: only this path is allowed to change TPS output state in self-test.
@@ -590,6 +600,7 @@ where
             }
         } else {
             defmt::warn!("power: outputs disabled (boot self-test)");
+            self.force_disable_outputs();
         }
 
         if !self.charger_allowed {
@@ -601,6 +612,26 @@ where
         if self.bms_addr.is_none() {
             defmt::warn!("bms: bq40z50 disabled (boot self-test)");
         }
+    }
+
+    fn force_disable_outputs(&mut self) {
+        self.tps_a_ready = false;
+        self.tps_b_ready = false;
+        self.tps_a_next_retry_at = None;
+        self.tps_b_next_retry_at = None;
+
+        let out_a = ::tps55288::Tps55288::with_address(&mut self.i2c, OutputChannel::OutA.addr())
+            .disable_output()
+            .map_err(tps_error_kind);
+        let out_b = ::tps55288::Tps55288::with_address(&mut self.i2c, OutputChannel::OutB.addr())
+            .disable_output()
+            .map_err(tps_error_kind);
+
+        defmt::info!(
+            "power: force_disable_outputs out_a={=?} out_b={=?}",
+            out_a,
+            out_b
+        );
     }
 
     pub fn tick(&mut self, irq: &IrqSnapshot) {

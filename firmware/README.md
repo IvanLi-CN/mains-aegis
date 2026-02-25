@@ -217,7 +217,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 - 未命中紧急条件时，自检阶段不主动改 `TPS55288` 输出状态。
 - 固定顺序：`SYNC` → 独立传感器（`INA3221`/`TMP112`）→ 屏幕模块 → `BQ40Z50` → `BQ25792` → `TPS55288`。
-- 根据探测结果只禁用缺失/异常模块，不做全局连坐。
+- 初始化应用阶段按探测结果门控模块；其中 `BQ40Z50` 缺失时强制禁用 `TPS55288` 输出与 `BQ25792` 充电。
 - 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。
 
 ## 烧录与监视（推荐：`mcu-agentd`，从仓库根目录运行）
