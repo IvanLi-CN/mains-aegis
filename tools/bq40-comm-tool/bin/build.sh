@@ -56,6 +56,11 @@ case "$recover" in
     ;;
 esac
 
+if [[ "$recover" == "force" && "$mode" != "dual-diag" ]]; then
+  echo "--recover force requires --mode dual-diag" >&2
+  exit 5
+fi
+
 build_cmd=(cargo build --release)
 if [[ ${#features[@]} -gt 0 ]]; then
   feature_csv=$(IFS=, ; echo "${features[*]}")

@@ -161,8 +161,8 @@ mod tests {
 
     #[test]
     fn encode_temp_reg_negative() {
-        // -1°C => -16 => 0xFFF0
-        assert_eq!(encode_temp_reg(-16), 0xFFF0);
+        // -1°C => -16 (0xFFF0) shifted into the register format => 0xFF00.
+        assert_eq!(encode_temp_reg(-16), 0xFF00);
     }
 
     #[test]

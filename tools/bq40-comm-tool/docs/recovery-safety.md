@@ -9,7 +9,7 @@
 ## When recovery is allowed
 
 - ROM signature observed (`0x9002`) and `--recover if-rom`.
-- Explicit force path is requested (`--recover force`) for controlled diagnosis.
+- Explicit force path is requested (`--recover force --mode dual-diag`) for controlled diagnosis.
 
 ## When to stop
 

@@ -3,10 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
-REPO_ROOT=$(cd "$TOOL_ROOT" && git rev-parse --show-toplevel 2>/dev/null || true)
-if [[ -z "$REPO_ROOT" ]]; then
-  REPO_ROOT=$(cd "$TOOL_ROOT/../.." && pwd)
-fi
 
 duration_sec=120
 output_file=""
@@ -44,7 +40,7 @@ if ! [[ "$duration_sec" =~ ^[0-9]+$ ]] || [[ "$duration_sec" -lt 1 ]]; then
   exit 3
 fi
 
-monitor_path=$(python3 - "$REPO_ROOT" "$duration_sec" <<'PY'
+monitor_path=$(python3 - "$TOOL_ROOT" "$duration_sec" <<'PY'
 import json
 import subprocess
 import sys

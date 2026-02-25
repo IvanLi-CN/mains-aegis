@@ -25,7 +25,7 @@ Recover mode allows ROM recovery policy control.
 Policy:
 - `--recover never`: disable ROM recovery
 - `--recover if-rom`: recover only when ROM signature is detected
-- `--recover force`: force ROM recovery path even when signature is not detected
+- `--recover force`: force ROM recovery path even when signature is not detected (requires `--mode dual-diag`)
 
 ## 3) Verify (offline)
 

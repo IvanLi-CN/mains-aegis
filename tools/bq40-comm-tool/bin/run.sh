@@ -116,6 +116,11 @@ case "$recover_policy" in
     ;;
 esac
 
+if [[ "$recover_policy" == "force" && "$mode" != "dual-diag" ]]; then
+  echo "--recover force requires --mode dual-diag" >&2
+  exit 9
+fi
+
 if [[ "$subcommand" == "verify" ]]; then
   if [[ -z "$monitor_file" ]]; then
     echo "verify mode requires --monitor-file" >&2
