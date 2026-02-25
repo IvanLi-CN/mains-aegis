@@ -4,11 +4,12 @@
 esp_bootloader_esp_idf::esp_app_desc!();
 
 mod audio_demo;
+mod irq;
 mod output;
 
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{DriveMode, Flex, Input, InputConfig, OutputConfig, Pull};
+use esp_hal::gpio::{DriveMode, Event, Flex, Input, InputConfig, Io, OutputConfig, Pull};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c, SoftwareTimeout};
 use esp_hal::ledc::channel::{self, ChannelIFace};
 use esp_hal::ledc::timer::{self, TimerIFace};
@@ -36,7 +37,7 @@ const FW_GIT_SHA: &str = env!("FW_GIT_SHA");
 // RFSW on board is 43kΩ (U17/U18 pin 8), so nominal fSW ≈ 20MHz / 43kΩ ≈ 465kHz.
 // External clock must be within ±30% of the configured fSW.
 // Debug: disable external SYNC to check if INA3221 shunt readings are polluted by coupling.
-const TPS_SYNC_ENABLE: bool = false;
+const TPS_SYNC_ENABLE: bool = true;
 const TPS_SYNC_FREQ_KHZ: u32 = 465;
 const TPS_SYNC_DUTY_PCT: u8 = 50;
 const TPS_SYNC_PHASE_TICKS: u16 = 64; // 180° at Duty7Bit => 128 ticks/period.
@@ -55,6 +56,10 @@ fn main() -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::_160MHz);
     let peripherals = esp_hal::init(config);
 
+    // GPIO interrupt aggregator (see `docs/i2c-address-map.md`).
+    let mut _io = Io::new(peripherals.IO_MUX);
+    _io.set_interrupt_handler(irq::gpio_isr);
+
     // Audio demo peripherals (I2S/TDM TX -> MAX98357A).
     let i2s0 = peripherals.I2S0;
     let dma_channel = peripherals.DMA_CH0;
@@ -70,6 +75,7 @@ fn main() -> ! {
     let mut _tps_sync_a = _tps_sync_ledc.channel(channel::Number::Channel0, peripherals.GPIO41);
     let mut _tps_sync_b = _tps_sync_ledc.channel(channel::Number::Channel1, peripherals.GPIO42);
 
+    let mut tps_sync_ok = true;
     if TPS_SYNC_ENABLE {
         match _tps_sync_timer0.configure(timer::config::Config {
             duty: timer::config::Duty::Duty7Bit,
@@ -104,12 +110,19 @@ fn main() -> ! {
                             TPS_SYNC_PHASE_TICKS
                         );
                     }
-                    (a, b) => defmt::error!("power: tps_sync err ch0={=?} ch1={=?}", a, b),
+                    (a, b) => {
+                        tps_sync_ok = false;
+                        defmt::error!("power: tps_sync err ch0={=?} ch1={=?}", a, b);
+                    }
                 }
             }
-            Err(e) => defmt::error!("power: tps_sync timer err={=?}", e),
+            Err(e) => {
+                tps_sync_ok = false;
+                defmt::error!("power: tps_sync timer err={=?}", e);
+            }
         }
     } else {
+        tps_sync_ok = false;
         defmt::info!("power: tps_sync disabled (pins reserved)");
     }
 
@@ -134,22 +147,49 @@ fn main() -> ! {
         FW_GIT_SHA,
         FW_BUILD_PROFILE
     );
+    defmt::info!(
+        "fw: default_vout_mv={=u16} default_ilimit_ma={=u16}",
+        DEFAULT_VOUT_MV,
+        DEFAULT_ILIMIT_MA
+    );
 
-    let i2c_config = I2cConfig::default()
+    let i2c1_config = I2cConfig::default()
         .with_frequency(Rate::from_khz(400))
         .with_software_timeout(SoftwareTimeout::Transaction(Duration::from_millis(100)));
-    let mut i2c: I2c<'static, Blocking> = I2c::new(peripherals.I2C1, i2c_config)
+    let mut i2c: I2c<'static, Blocking> = I2c::new(peripherals.I2C1, i2c1_config)
         .unwrap()
         .with_sda(peripherals.GPIO48)
         .with_scl(peripherals.GPIO47);
 
     let i2c1_int_cfg = InputConfig::default().with_pull(Pull::Up);
-    let i2c1_int = Input::new(peripherals.GPIO33, i2c1_int_cfg);
+    let mut i2c1_int = Input::new(peripherals.GPIO33, i2c1_int_cfg);
+    i2c1_int.clear_interrupt();
+    i2c1_int.listen(Event::FallingEdge);
+
+    // I2C2 interrupt/alert line (open-drain, active-low).
+    let i2c2_int_cfg = InputConfig::default().with_pull(Pull::Up);
+    let mut _i2c2_int = Input::new(peripherals.GPIO7, i2c2_int_cfg);
+    _i2c2_int.clear_interrupt();
+    _i2c2_int.listen(Event::FallingEdge);
+
+    // INA3221 alerts (open-drain, active-low).
+    let ina_alert_cfg = InputConfig::default().with_pull(Pull::Up);
+    let mut _ina_pv = Input::new(peripherals.GPIO37, ina_alert_cfg);
+    _ina_pv.clear_interrupt();
+    _ina_pv.listen(Event::FallingEdge);
+    let mut _ina_critical = Input::new(peripherals.GPIO38, ina_alert_cfg);
+    _ina_critical.clear_interrupt();
+    _ina_critical.listen(Event::FallingEdge);
+    let mut _ina_warning = Input::new(peripherals.GPIO39, ina_alert_cfg);
+    _ina_warning.clear_interrupt();
+    _ina_warning.listen(Event::FallingEdge);
 
     // BMS interrupt/alert line (active-high on MCU side after an inverter stage).
     // External pull-up is provided by a resistor network on the mainboard.
     let bms_btp_int_cfg = InputConfig::default().with_pull(Pull::None);
-    let bms_btp_int_h = Input::new(peripherals.GPIO21, bms_btp_int_cfg);
+    let mut bms_btp_int_h = Input::new(peripherals.GPIO21, bms_btp_int_cfg);
+    bms_btp_int_h.clear_interrupt();
+    bms_btp_int_h.listen(Event::RisingEdge);
 
     // BQ25792 charger control pins.
     //
@@ -177,9 +217,11 @@ fn main() -> ! {
     chg_ilim_hiz_brk.set_output_enable(true);
 
     // CHG_INT is an open-drain 256us active-low pulse. We poll status registers
-    // periodically, but keep the pin configured (with pull-up) for future ISR work.
-    let _chg_int_cfg = InputConfig::default().with_pull(Pull::Up);
-    let _chg_int = Input::new(peripherals.GPIO17, _chg_int_cfg);
+    // periodically, but also count pulses via ISR for timely snapshots.
+    let chg_int_cfg = InputConfig::default().with_pull(Pull::Up);
+    let mut _chg_int = Input::new(peripherals.GPIO17, chg_int_cfg);
+    _chg_int.clear_interrupt();
+    _chg_int.listen(Event::FallingEdge);
 
     // Ensure THERM_KILL_N is released. This net can hard-disable both TPS via TPS_EN.
     // Configure as open-drain output, set HIGH (release), and also enable input so we can observe if
@@ -199,6 +241,8 @@ fn main() -> ! {
         therm_kill.set_low();
     }
     let low_after = therm_kill.is_low();
+    therm_kill.clear_interrupt();
+    therm_kill.listen(Event::FallingEdge);
     defmt::info!(
         "power: therm_kill_n low_before={=bool} low_after={=bool} forced={=bool}",
         low_before,
@@ -211,25 +255,33 @@ fn main() -> ! {
         );
     }
 
-    // Program TMP112A alert thresholds and debounce. If configuration fails, do not enable TPS.
+    // Program TMP112A alert thresholds and debounce.
     let tmp112_cfg = esp_firmware::tmp112::AlertConfig {
         t_high_c_x16: TMP112_THIGH_C_X16,
         t_low_c_x16: TMP112_TLOW_C_X16,
         fault_queue: esp_firmware::tmp112::FaultQueue::F4,
         conversion_rate: esp_firmware::tmp112::ConversionRate::Hz1,
     };
-    let mut tmp112_ok = true;
+    let mut tmp_out_a_ok = false;
+    let mut tmp_out_b_ok = false;
     for addr in [TMP112_OUT_A_ADDR, TMP112_OUT_B_ADDR] {
         match esp_firmware::tmp112::program_alert_config(&mut i2c, addr, tmp112_cfg) {
-            Ok(rb) => defmt::info!(
-                "power: tmp112 ok addr=0x{=u8:x} cfg=0x{=u16:x} tlow=0x{=u16:x} thigh=0x{=u16:x}",
-                addr,
-                rb.config,
-                rb.tlow,
-                rb.thigh
-            ),
+            Ok(rb) => {
+                defmt::info!(
+                    "power: tmp112 ok addr=0x{=u8:x} cfg=0x{=u16:x} tlow=0x{=u16:x} thigh=0x{=u16:x}",
+                    addr,
+                    rb.config,
+                    rb.tlow,
+                    rb.thigh
+                );
+                if addr == TMP112_OUT_A_ADDR {
+                    tmp_out_a_ok = true;
+                }
+                if addr == TMP112_OUT_B_ADDR {
+                    tmp_out_b_ok = true;
+                }
+            }
             Err(e) => {
-                tmp112_ok = false;
                 defmt::error!(
                     "power: tmp112 err addr=0x{=u8:x} err={}",
                     addr,
@@ -238,15 +290,35 @@ fn main() -> ! {
             }
         }
     }
-    let enabled_outputs = if tmp112_ok {
-        DEFAULT_ENABLED_OUTPUTS
-    } else {
-        defmt::error!("power: tmp112 init failed; outputs disabled (fail-safe)");
-        output::EnabledOutputs::None
-    };
+    if !tmp_out_a_ok && !tmp_out_b_ok {
+        defmt::error!(
+            "power: tmp112 init failed for both channels; outputs likely disabled (self-test)"
+        );
+    }
+
+    // Boot self-test: detect online devices and decide which modules are allowed to run.
+    let i2c2_config = I2cConfig::default()
+        .with_frequency(Rate::from_khz(400))
+        .with_software_timeout(SoftwareTimeout::Transaction(Duration::from_millis(100)));
+    let mut i2c2: I2c<'static, Blocking> = I2c::new(peripherals.I2C0, i2c2_config)
+        .unwrap()
+        .with_sda(peripherals.GPIO8)
+        .with_scl(peripherals.GPIO9);
+    output::log_i2c2_presence(&mut i2c2);
+
+    let self_test = output::boot_self_test(
+        &mut i2c,
+        DEFAULT_ENABLED_OUTPUTS,
+        DEFAULT_VOUT_MV,
+        DEFAULT_ILIMIT_MA,
+        TELEMETRY_INCLUDE_VIN_CH3,
+        tmp_out_a_ok,
+        tmp_out_b_ok,
+        tps_sync_ok,
+    );
 
     let cfg = output::Config {
-        enabled_outputs,
+        enabled_outputs: self_test.enabled_outputs,
         vout_mv: DEFAULT_VOUT_MV,
         ilimit_ma: DEFAULT_ILIMIT_MA,
         telemetry_period: TELEMETRY_PERIOD,
@@ -255,6 +327,8 @@ fn main() -> ! {
         telemetry_include_vin_ch3: TELEMETRY_INCLUDE_VIN_CH3,
         tmp112_tlow_c_x16: TMP112_TLOW_C_X16,
         tmp112_thigh_c_x16: TMP112_THIGH_C_X16,
+        charger_enabled: self_test.charger_enabled,
+        bms_addr: self_test.bms_addr,
     };
 
     let mut power = output::PowerManager::new(
@@ -274,6 +348,9 @@ fn main() -> ! {
     );
     power.init_best_effort();
 
+    let mut irq_tracker = irq::IrqTracker::new();
+    let mut last_irq_log_at: Option<Instant> = None;
+
     match audio_demo::play_demo_playlist(
         i2s0,
         dma_channel,
@@ -281,7 +358,28 @@ fn main() -> ! {
         audio_ws,
         audio_dout,
         || {
-            power.tick();
+            let irq_events = irq_tracker.take_delta();
+            power.tick(&irq_events);
+
+            if irq_events.any()
+                && output::tps55288::should_log_fault(
+                    Instant::now(),
+                    &mut last_irq_log_at,
+                    Duration::from_millis(200),
+                )
+            {
+                defmt::info!(
+                    "irq: i2c1_int={=u32} i2c2_int={=u32} chg_int={=u32} ina_pv={=u32} ina_warning={=u32} ina_critical={=u32} bms_btp_int_h={=u32} therm_kill_n={=u32}",
+                    irq_events.i2c1_int,
+                    irq_events.i2c2_int,
+                    irq_events.chg_int,
+                    irq_events.ina_pv,
+                    irq_events.ina_warning,
+                    irq_events.ina_critical,
+                    irq_events.bms_btp_int_h,
+                    irq_events.therm_kill_n
+                );
+            }
         },
     ) {
         Ok(()) => {}
@@ -290,7 +388,8 @@ fn main() -> ! {
 
     loop {
         defmt::info!("esp: heartbeat");
-        power.tick();
+        let irq_events = irq_tracker.take_delta();
+        power.tick(&irq_events);
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(2_000) {}
     }

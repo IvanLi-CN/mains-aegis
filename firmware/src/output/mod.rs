@@ -7,11 +7,13 @@ use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
 use esp_hal::time::{Duration, Instant};
 
+use crate::irq::IrqSnapshot;
+
 use ::tps55288::Error as TpsError;
 
 pub use self::tps55288::OutputChannel;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EnabledOutputs {
     None,
     Only(OutputChannel),
@@ -149,6 +151,385 @@ pub(super) fn ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct BootSelfTestResult {
+    pub enabled_outputs: EnabledOutputs,
+    pub charger_enabled: bool,
+    pub bms_addr: Option<u8>,
+}
+
+pub fn log_i2c2_presence<I2C>(i2c: &mut I2C)
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    defmt::info!("self_test: i2c2 scan begin");
+    for (addr, name) in [(0x21u8, "tca6408a"), (0x22u8, "fusb302b")] {
+        let mut buf = [0u8; 1];
+        match i2c.write_read(addr, &[0x00], &mut buf) {
+            Ok(()) => defmt::info!(
+                "self_test: i2c2 ok addr=0x{=u8:x} dev={} reg0=0x{=u8:x}",
+                addr,
+                name,
+                buf[0]
+            ),
+            Err(e) => defmt::warn!(
+                "self_test: i2c2 miss addr=0x{=u8:x} dev={} err={}",
+                addr,
+                name,
+                i2c_error_kind(e)
+            ),
+        }
+    }
+}
+
+pub fn boot_self_test<I2C>(
+    i2c: &mut I2C,
+    desired_outputs: EnabledOutputs,
+    vout_mv: u16,
+    ilimit_ma: u16,
+    include_vin_ch3: bool,
+    tmp_out_a_ok: bool,
+    tmp_out_b_ok: bool,
+    sync_ok: bool,
+) -> BootSelfTestResult
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    defmt::info!(
+        "self_test: begin vout_mv={=u16} ilimit_ma={=u16} tmp_a_ok={=bool} tmp_b_ok={=bool} sync_ok={=bool}",
+        vout_mv,
+        ilimit_ma,
+        tmp_out_a_ok,
+        tmp_out_b_ok,
+        sync_ok
+    );
+
+    let ina_present = ina3221::read_manufacturer_id(&mut *i2c).is_ok();
+    let tps_a_present = ::tps55288::Tps55288::with_address(&mut *i2c, OutputChannel::OutA.addr())
+        .read_reg(::tps55288::registers::addr::MODE)
+        .is_ok();
+    let tps_b_present = ::tps55288::Tps55288::with_address(&mut *i2c, OutputChannel::OutB.addr())
+        .read_reg(::tps55288::registers::addr::MODE)
+        .is_ok();
+    let tmp_a_present = tmp112::read_temp_c_x16(&mut *i2c, OutputChannel::OutA.tmp_addr()).is_ok();
+    let tmp_b_present = tmp112::read_temp_c_x16(&mut *i2c, OutputChannel::OutB.tmp_addr()).is_ok();
+
+    defmt::info!(
+        "self_test: i2c1 presence ina3221={=bool} tps_a={=bool} tps_b={=bool} tmp_a={=bool} tmp_b={=bool} bq25792={=bool}",
+        ina_present,
+        tps_a_present,
+        tps_b_present,
+        tmp_a_present,
+        tmp_b_present,
+        bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_CONTROL_0).is_ok()
+    );
+
+    let mut enabled_outputs = EnabledOutputs::None;
+    let mut out_a_ok = false;
+    let mut out_b_ok = false;
+
+    let want_out_a = desired_outputs.is_enabled(OutputChannel::OutA);
+    let want_out_b = desired_outputs.is_enabled(OutputChannel::OutB);
+    let want_outputs = want_out_a || want_out_b;
+
+    let out_a_devices_present = tps_a_present && tmp_a_present && tmp_out_a_ok;
+    let out_b_devices_present = tps_b_present && tmp_b_present && tmp_out_b_ok;
+
+    if want_outputs && sync_ok && ina_present {
+        let ina_cfg = if include_vin_ch3 {
+            ina3221::CONFIG_VALUE_CH123
+        } else {
+            ina3221::CONFIG_VALUE_CH12
+        };
+
+        let _ = ina3221::init_with_config(&mut *i2c, 0x8000).map_err(|e| {
+            defmt::warn!("self_test: ina3221 reset err={}", ina_error_kind(e));
+        });
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(2) {}
+
+        let ina_ok = ina3221::init_with_config(&mut *i2c, ina_cfg).is_ok();
+        if !ina_ok {
+            defmt::error!("self_test: ina3221 init failed; outputs disabled");
+        } else {
+            // Fail-safe: ensure both channels start disabled (even across MCU-only resets).
+            if tps_a_present {
+                let _ = ::tps55288::Tps55288::with_address(&mut *i2c, OutputChannel::OutA.addr())
+                    .disable_output();
+            }
+            if tps_b_present {
+                let _ = ::tps55288::Tps55288::with_address(&mut *i2c, OutputChannel::OutB.addr())
+                    .disable_output();
+            }
+
+            let mut out_a_enabled = false;
+            let mut out_b_enabled = false;
+
+            if want_out_a {
+                if out_a_devices_present {
+                    if let Err((stage, e)) = tps55288::configure_one(
+                        &mut *i2c,
+                        OutputChannel::OutA,
+                        true,
+                        vout_mv,
+                        ilimit_ma,
+                    ) {
+                        defmt::error!(
+                            "self_test: tps out_a err stage={} err={}",
+                            stage.as_str(),
+                            tps_error_kind(e)
+                        );
+                    } else {
+                        out_a_enabled = true;
+                    }
+                } else {
+                    defmt::warn!(
+                        "self_test: out_a skipped want=true tps_present={=bool} tmp_present={=bool} tmp_cfg_ok={=bool}",
+                        tps_a_present,
+                        tmp_a_present,
+                        tmp_out_a_ok
+                    );
+                }
+            }
+
+            if want_out_b {
+                if out_b_devices_present {
+                    if let Err((stage, e)) = tps55288::configure_one(
+                        &mut *i2c,
+                        OutputChannel::OutB,
+                        true,
+                        vout_mv,
+                        ilimit_ma,
+                    ) {
+                        defmt::error!(
+                            "self_test: tps out_b err stage={} err={}",
+                            stage.as_str(),
+                            tps_error_kind(e)
+                        );
+                    } else {
+                        out_b_enabled = true;
+                    }
+                } else {
+                    defmt::warn!(
+                        "self_test: out_b skipped want=true tps_present={=bool} tmp_present={=bool} tmp_cfg_ok={=bool}",
+                        tps_b_present,
+                        tmp_b_present,
+                        tmp_out_b_ok
+                    );
+                }
+            }
+
+            if out_a_enabled || out_b_enabled {
+                let start = Instant::now();
+                while start.elapsed() < Duration::from_millis(500) {}
+
+                // NOTE: `INA3221 VBUS` is known to read high on some boards (see Plan #0007).
+                // Temporary policy: allow ±20% window for bring-up, but only enforce the lower-bound
+                // to avoid false negatives caused by VBUS offset.
+                const VBUS_TOL_PCT: u32 = 20;
+                let lower = (vout_mv as u32) * (100 - VBUS_TOL_PCT) / 100;
+                let upper = (vout_mv as u32) * (100 + VBUS_TOL_PCT) / 100;
+
+                let vbus_a = if out_a_enabled {
+                    ina3221::read_bus_mv(&mut *i2c, OutputChannel::OutA.ina_ch())
+                        .map_err(ina_error_kind)
+                } else {
+                    Err("skipped")
+                };
+                let vbus_b = if out_b_enabled {
+                    ina3221::read_bus_mv(&mut *i2c, OutputChannel::OutB.ina_ch())
+                        .map_err(ina_error_kind)
+                } else {
+                    Err("skipped")
+                };
+
+                let status_a = if out_a_enabled {
+                    ::tps55288::Tps55288::with_address(&mut *i2c, OutputChannel::OutA.addr())
+                        .read_reg(::tps55288::registers::addr::STATUS)
+                        .map_err(tps_error_kind)
+                } else {
+                    Err("skipped")
+                };
+                let status_b = if out_b_enabled {
+                    ::tps55288::Tps55288::with_address(&mut *i2c, OutputChannel::OutB.addr())
+                        .read_reg(::tps55288::registers::addr::STATUS)
+                        .map_err(tps_error_kind)
+                } else {
+                    Err("skipped")
+                };
+
+                let fault_a = match &status_a {
+                    Ok(v) => {
+                        let bits = ::tps55288::registers::StatusBits::from_bits_truncate(*v);
+                        bits.intersects(
+                            ::tps55288::registers::StatusBits::SCP
+                                | ::tps55288::registers::StatusBits::OCP
+                                | ::tps55288::registers::StatusBits::OVP,
+                        )
+                    }
+                    Err(_) => true,
+                };
+                let fault_b = match &status_b {
+                    Ok(v) => {
+                        let bits = ::tps55288::registers::StatusBits::from_bits_truncate(*v);
+                        bits.intersects(
+                            ::tps55288::registers::StatusBits::SCP
+                                | ::tps55288::registers::StatusBits::OCP
+                                | ::tps55288::registers::StatusBits::OVP,
+                        )
+                    }
+                    Err(_) => true,
+                };
+
+                let in_range_a =
+                    matches!(&vbus_a, Ok(v) if (*v as u32) >= lower && (*v as u32) <= upper);
+                let in_range_b =
+                    matches!(&vbus_b, Ok(v) if (*v as u32) >= lower && (*v as u32) <= upper);
+
+                out_a_ok = out_a_enabled
+                    && matches!(&vbus_a, Ok(v) if (*v as u32) >= lower)
+                    && matches!(&status_a, Ok(_))
+                    && !fault_a;
+                out_b_ok = out_b_enabled
+                    && matches!(&vbus_b, Ok(v) if (*v as u32) >= lower)
+                    && matches!(&status_b, Ok(_))
+                    && !fault_b;
+
+                defmt::info!(
+                    "self_test: outputs check vout_mv={=u16} tol_pct={=u32} lower_mv={=u32} upper_mv={=u32} out_a_vbus_mv={=?} out_b_vbus_mv={=?} out_a_in_range={=bool} out_b_in_range={=bool} out_a_status={=?} out_b_status={=?} out_a_fault={=bool} out_b_fault={=bool} out_a_ok={=bool} out_b_ok={=bool}",
+                    vout_mv,
+                    VBUS_TOL_PCT,
+                    lower,
+                    upper,
+                    vbus_a,
+                    vbus_b,
+                    in_range_a,
+                    in_range_b,
+                    status_a,
+                    status_b,
+                    fault_a,
+                    fault_b,
+                    out_a_ok,
+                    out_b_ok
+                );
+
+                enabled_outputs = match desired_outputs {
+                    EnabledOutputs::None => EnabledOutputs::None,
+                    EnabledOutputs::Only(OutputChannel::OutA) => {
+                        if out_a_ok {
+                            EnabledOutputs::Only(OutputChannel::OutA)
+                        } else {
+                            EnabledOutputs::None
+                        }
+                    }
+                    EnabledOutputs::Only(OutputChannel::OutB) => {
+                        if out_b_ok {
+                            EnabledOutputs::Only(OutputChannel::OutB)
+                        } else {
+                            EnabledOutputs::None
+                        }
+                    }
+                    EnabledOutputs::Both => match (out_a_ok, out_b_ok) {
+                        (true, true) => EnabledOutputs::Both,
+                        (true, false) => EnabledOutputs::Only(OutputChannel::OutA),
+                        (false, true) => EnabledOutputs::Only(OutputChannel::OutB),
+                        (false, false) => EnabledOutputs::None,
+                    },
+                };
+
+                // Best-effort disable any channel that should not remain enabled.
+                if out_a_enabled && !enabled_outputs.is_enabled(OutputChannel::OutA) {
+                    let _ =
+                        ::tps55288::Tps55288::with_address(&mut *i2c, OutputChannel::OutA.addr())
+                            .disable_output();
+                }
+                if out_b_enabled && !enabled_outputs.is_enabled(OutputChannel::OutB) {
+                    let _ =
+                        ::tps55288::Tps55288::with_address(&mut *i2c, OutputChannel::OutB.addr())
+                            .disable_output();
+                }
+            }
+        }
+    } else if want_outputs {
+        defmt::warn!(
+            "self_test: outputs skipped want_a={=bool} want_b={=bool} ina_present={=bool} sync_ok={=bool} tps_a_present={=bool} tps_b_present={=bool} tmp_a_present={=bool} tmp_b_present={=bool} tmp_a_cfg_ok={=bool} tmp_b_cfg_ok={=bool}",
+            want_out_a,
+            want_out_b,
+            ina_present,
+            sync_ok,
+            tps_a_present,
+            tps_b_present,
+            tmp_a_present,
+            tmp_b_present,
+            tmp_out_a_ok,
+            tmp_out_b_ok
+        );
+    }
+
+    if want_outputs && enabled_outputs == EnabledOutputs::None {
+        // Best-effort disable (even if one TPS is missing, this will still shut down the other).
+        let _ = tps55288::configure_one(&mut *i2c, OutputChannel::OutA, false, vout_mv, ilimit_ma);
+        let _ = tps55288::configure_one(&mut *i2c, OutputChannel::OutB, false, vout_mv, ilimit_ma);
+    }
+
+    let charger_enabled = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_CONTROL_0)
+        .map(|v| {
+            defmt::info!("self_test: bq25792 ok ctrl0=0x{=u8:x}", v);
+        })
+        .is_ok();
+    if !charger_enabled {
+        defmt::warn!("self_test: bq25792 missing/err; charger disabled");
+    }
+
+    let mut bms_addr: Option<u8> = None;
+    for addr in bq40z50::I2C_ADDRESS_CANDIDATES {
+        let temp = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::TEMPERATURE);
+        let voltage = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::VOLTAGE);
+        let current = bq40z50::read_i16(&mut *i2c, addr, bq40z50::cmd::CURRENT);
+        let soc = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE);
+        let status = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::BATTERY_STATUS);
+
+        if let (Ok(temp_k_x10), Ok(voltage_mv), Ok(current_ma), Ok(soc_pct), Ok(status_raw)) =
+            (temp, voltage, current, soc, status)
+        {
+            let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(temp_k_x10);
+            let err_code = bq40z50::battery_status::error_code(status_raw);
+            defmt::info!(
+                "self_test: bq40z50 ok addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} err_code={} err_str={}",
+                addr,
+                temp_c_x10,
+                voltage_mv,
+                current_ma,
+                soc_pct,
+                status_raw,
+                err_code,
+                bq40z50::decode_error_code(err_code)
+            );
+            bms_addr = Some(addr);
+            break;
+        }
+
+        defmt::warn!("self_test: bq40z50 miss addr=0x{=u8:x}", addr);
+    }
+
+    if bms_addr.is_none() {
+        defmt::warn!("self_test: bq40z50 missing/err; battery module disabled");
+    }
+
+    defmt::info!(
+        "self_test: done enabled_outputs={} outputs_ok={=bool} charger_enabled={=bool}",
+        enabled_outputs.describe(),
+        out_a_ok && out_b_ok,
+        charger_enabled
+    );
+
+    BootSelfTestResult {
+        enabled_outputs,
+        charger_enabled,
+        bms_addr,
+    }
+}
+
 pub struct PowerManager<'d, I2C> {
     i2c: I2C,
     i2c1_int: Input<'d>,
@@ -171,13 +552,16 @@ pub struct PowerManager<'d, I2C> {
     tps_b_ready: bool,
     tps_b_next_retry_at: Option<Instant>,
 
+    bms_addr: Option<u8>,
     bms_next_poll_at: Instant,
     bms_next_retry_at: Option<Instant>,
-    bms_addr: Option<u8>,
+    bms_last_int_poll_at: Option<Instant>,
 
     chg_next_poll_at: Instant,
     chg_next_retry_at: Option<Instant>,
     chg_enabled: bool,
+    charger_allowed: bool,
+    chg_last_int_poll_at: Option<Instant>,
 }
 
 #[derive(Clone, Copy)]
@@ -191,6 +575,8 @@ pub struct Config {
     pub telemetry_include_vin_ch3: bool,
     pub tmp112_tlow_c_x16: i16,
     pub tmp112_thigh_c_x16: i16,
+    pub charger_enabled: bool,
+    pub bms_addr: Option<u8>,
 }
 
 impl<'d, I2C> PowerManager<'d, I2C>
@@ -207,6 +593,11 @@ where
         cfg: Config,
     ) -> Self {
         let now = Instant::now();
+        let outputs_allowed = cfg.enabled_outputs != EnabledOutputs::None;
+        let out_a_allowed = cfg.enabled_outputs.is_enabled(OutputChannel::OutA);
+        let out_b_allowed = cfg.enabled_outputs.is_enabled(OutputChannel::OutB);
+        let charger_allowed = cfg.charger_enabled;
+        let bms_addr = cfg.bms_addr;
 
         // Fail-safe defaults.
         chg_ce.set_high();
@@ -226,34 +617,55 @@ where
             last_therm_kill_hint_at: None,
 
             ina_ready: false,
-            ina_next_retry_at: Some(now),
+            ina_next_retry_at: if outputs_allowed { Some(now) } else { None },
 
             tps_a_ready: false,
-            tps_a_next_retry_at: Some(now),
+            tps_a_next_retry_at: if out_a_allowed { Some(now) } else { None },
             tps_b_ready: false,
-            tps_b_next_retry_at: Some(now),
+            tps_b_next_retry_at: if out_b_allowed { Some(now) } else { None },
 
+            bms_addr,
             bms_next_poll_at: now,
             bms_next_retry_at: Some(now),
-            bms_addr: None,
+            bms_last_int_poll_at: None,
 
             chg_next_poll_at: now,
-            chg_next_retry_at: Some(now),
+            chg_next_retry_at: if charger_allowed { Some(now) } else { None },
             chg_enabled: false,
+            charger_allowed,
+            chg_last_int_poll_at: None,
         }
     }
 
     pub fn init_best_effort(&mut self) {
-        self.try_init_ina();
-        self.try_configure_tps(OutputChannel::OutA);
-        self.try_configure_tps(OutputChannel::OutB);
+        if self.cfg.enabled_outputs != EnabledOutputs::None {
+            self.try_init_ina();
+            if self.cfg.enabled_outputs.is_enabled(OutputChannel::OutA) {
+                self.try_configure_tps(OutputChannel::OutA);
+            }
+            if self.cfg.enabled_outputs.is_enabled(OutputChannel::OutB) {
+                self.try_configure_tps(OutputChannel::OutB);
+            }
+        } else {
+            defmt::warn!("power: outputs disabled (boot self-test)");
+        }
+
+        if !self.charger_allowed {
+            defmt::warn!("charger: bq25792 disabled (boot self-test)");
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+        }
+
+        if self.bms_addr.is_none() {
+            defmt::warn!("bms: bq40z50 disabled (boot self-test)");
+        }
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self, irq: &IrqSnapshot) {
         self.maybe_retry();
-        self.maybe_handle_fault();
-        self.maybe_poll_charger();
-        self.maybe_poll_bms();
+        self.maybe_handle_fault(irq);
+        self.maybe_poll_charger(irq);
+        self.maybe_poll_bms(irq);
         self.maybe_print_telemetry();
     }
 
@@ -269,7 +681,7 @@ where
             }
         }
 
-        if !self.tps_a_ready {
+        if !self.tps_a_ready && self.cfg.enabled_outputs.is_enabled(OutputChannel::OutA) {
             if let Some(t) = self.tps_a_next_retry_at {
                 if now >= t {
                     self.tps_a_next_retry_at = None;
@@ -278,7 +690,7 @@ where
             }
         }
 
-        if !self.tps_b_ready {
+        if !self.tps_b_ready && self.cfg.enabled_outputs.is_enabled(OutputChannel::OutB) {
             if let Some(t) = self.tps_b_next_retry_at {
                 if now >= t {
                     self.tps_b_next_retry_at = None;
@@ -379,21 +791,33 @@ where
         }
     }
 
-    fn maybe_handle_fault(&mut self) {
+    fn maybe_handle_fault(&mut self, irq: &IrqSnapshot) {
+        if self.cfg.enabled_outputs == EnabledOutputs::None {
+            return;
+        }
+
         let now = Instant::now();
-        if self.i2c1_int.is_low() {
+        if self.i2c1_int.is_low() || irq.i2c1_int != 0 {
             if tps55288::should_log_fault(
                 now,
                 &mut self.last_fault_log_at,
                 self.cfg.fault_log_min_interval,
             ) {
-                tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutA, self.ina_ready);
-                tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutB, self.ina_ready);
+                if self.cfg.enabled_outputs.is_enabled(OutputChannel::OutA) {
+                    tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutA, self.ina_ready);
+                }
+                if self.cfg.enabled_outputs.is_enabled(OutputChannel::OutB) {
+                    tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutB, self.ina_ready);
+                }
             }
         }
     }
 
     fn maybe_print_telemetry(&mut self) {
+        if self.cfg.enabled_outputs == EnabledOutputs::None {
+            return;
+        }
+
         let now = Instant::now();
         if now < self.next_telemetry_at {
             return;
@@ -411,18 +835,22 @@ where
             self.log_therm_kill_hint();
         }
 
-        tps55288::print_telemetry_line(
-            &mut self.i2c,
-            OutputChannel::OutA,
-            self.ina_ready,
-            therm_kill_n,
-        );
-        tps55288::print_telemetry_line(
-            &mut self.i2c,
-            OutputChannel::OutB,
-            self.ina_ready,
-            therm_kill_n,
-        );
+        if self.cfg.enabled_outputs.is_enabled(OutputChannel::OutA) {
+            tps55288::print_telemetry_line(
+                &mut self.i2c,
+                OutputChannel::OutA,
+                self.ina_ready,
+                therm_kill_n,
+            );
+        }
+        if self.cfg.enabled_outputs.is_enabled(OutputChannel::OutB) {
+            tps55288::print_telemetry_line(
+                &mut self.i2c,
+                OutputChannel::OutB,
+                self.ina_ready,
+                therm_kill_n,
+            );
+        }
 
         if self.cfg.telemetry_include_vin_ch3 {
             if self.ina_ready {
@@ -453,12 +881,27 @@ where
         }
     }
 
-    fn maybe_poll_charger(&mut self) {
+    fn maybe_poll_charger(&mut self, irq: &IrqSnapshot) {
+        if !self.charger_allowed {
+            return;
+        }
+
         // Keep the charger polling independent from the TPS/INA telemetry period.
         const POLL_PERIOD: Duration = Duration::from_secs(1);
+        const INT_MIN_INTERVAL: Duration = Duration::from_millis(50);
 
         let now = Instant::now();
-        if now < self.chg_next_poll_at {
+        let mut due = now >= self.chg_next_poll_at;
+        if irq.chg_int != 0 {
+            let allow = self
+                .chg_last_int_poll_at
+                .map_or(true, |t| now >= t + INT_MIN_INTERVAL);
+            if allow {
+                due = true;
+                self.chg_last_int_poll_at = Some(now);
+            }
+        }
+        if !due {
             return;
         }
         if let Some(next_retry_at) = self.chg_next_retry_at {
@@ -606,12 +1049,22 @@ where
         self.chg_next_retry_at = None;
     }
 
-    fn maybe_poll_bms(&mut self) {
-        // Keep the BMS polling independent from the TPS/INA telemetry period.
+    fn maybe_poll_bms(&mut self, irq: &IrqSnapshot) {
         const POLL_PERIOD: Duration = Duration::from_secs(2);
+        const INT_MIN_INTERVAL: Duration = Duration::from_millis(100);
 
         let now = Instant::now();
-        if now < self.bms_next_poll_at {
+        let mut due = now >= self.bms_next_poll_at;
+        if irq.bms_btp_int_h != 0 {
+            let allow = self
+                .bms_last_int_poll_at
+                .map_or(true, |t| now >= t + INT_MIN_INTERVAL);
+            if allow {
+                due = true;
+                self.bms_last_int_poll_at = Some(now);
+            }
+        }
+        if !due {
             return;
         }
         if let Some(next_retry_at) = self.bms_next_retry_at {
@@ -621,7 +1074,7 @@ where
         }
         self.bms_next_poll_at = now + POLL_PERIOD;
 
-        let btp_int_h = self.bms_btp_int_h.is_high();
+        let btp_int_h = self.bms_btp_int_h.is_high() || irq.bms_btp_int_h != 0;
 
         // The BQ40Z50 SMBus address is data-flash configurable. The project address map uses 0x0B,
         // while the TI TRM states a DF default of 0x16. Probe both to keep bring-up resilient.
