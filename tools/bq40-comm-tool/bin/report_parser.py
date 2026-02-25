@@ -12,20 +12,22 @@ SUSPICIOUS_VOLTAGE_MV = 5911
 SUSPICIOUS_CURRENT_MA = 5911
 SUSPICIOUS_STATUS = 0x1717
 
+LOG_LEVEL_PREFIX = r"(?:\[[A-Z ]+\]\s+)?"
+
 SAMPLE_RE = re.compile(
-    r"\[INFO \] bms: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    r"temp_c_x10=(?P<temp>-?\d+) voltage_mv=(?P<voltage>\d+) "
-    r"current_ma=(?P<current>-?\d+) soc_pct=(?P<soc>\d+) "
-    r"status=0x(?P<status>[0-9a-fA-F]+)"
+    rf"{LOG_LEVEL_PREFIX}bms: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"temp_c_x10=(?P<temp>-?\d+) voltage_mv=(?P<voltage>\d+) "
+    rf"current_ma=(?P<current>-?\d+) soc_pct=(?P<soc>\d+) "
+    rf"status=0x(?P<status>[0-9a-fA-F]+)"
 )
 POLL_ERR_RE = re.compile(
-    r"\[WARN \] bms_diag: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    r"stage=poll_snapshot err=(?P<err>[a-zA-Z0-9_]+)"
+    rf"{LOG_LEVEL_PREFIX}bms_diag: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"stage=poll_snapshot err=(?P<err>[a-zA-Z0-9_]+)"
 )
 POLL_RETRY_RE = re.compile(
-    r"\[WARN \] bms_diag: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    r"stage=poll_snapshot_retry_(?P<result>ok|fail) first_err=(?P<first>[a-zA-Z0-9_]+)"
-    r"(?: retry_err=(?P<retry>[a-zA-Z0-9_]+))?"
+    rf"{LOG_LEVEL_PREFIX}bms_diag: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"stage=poll_snapshot_retry_(?P<result>ok|fail) first_err=(?P<first>[a-zA-Z0-9_]+)"
+    rf"(?: retry_err=(?P<retry>[a-zA-Z0-9_]+))?"
 )
 ROM_DETECTED_RE = re.compile(r"stage=rom_mode_detected")
 ROM_FLASH_BEGIN_RE = re.compile(r"stage=(probe_rom_flash_begin|rom_flash_start)")

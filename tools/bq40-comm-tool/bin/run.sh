@@ -22,6 +22,9 @@ monitor_file=""
 report_out=""
 flash_arg_set="false"
 recover_arg_set="false"
+POLL_PERIOD_SEC=2
+MIN_VALID_STREAK=10
+MIN_DURATION_FOR_STREAK=$((POLL_PERIOD_SEC * MIN_VALID_STREAK))
 
 usage() {
   cat <<USAGE
@@ -122,6 +125,11 @@ esac
 if ! [[ "$duration_sec" =~ ^[0-9]+$ ]] || [[ "$duration_sec" -lt 1 ]]; then
   echo "Invalid --duration-sec: $duration_sec" >&2
   exit 5
+fi
+
+if [[ "$subcommand" != "verify" ]] && [[ "$duration_sec" -lt "$MIN_DURATION_FOR_STREAK" ]]; then
+  echo "duration-sec must be >= $MIN_DURATION_FOR_STREAK for diagnose/recover (streak>=${MIN_VALID_STREAK} at ${POLL_PERIOD_SEC}s poll)" >&2
+  exit 14
 fi
 
 if [[ "$subcommand" == "verify" ]]; then

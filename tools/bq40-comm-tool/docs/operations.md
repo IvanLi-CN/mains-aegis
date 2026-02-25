@@ -15,6 +15,7 @@ Expected:
 - `verdict.pass=true` when `max_valid_streak >= 10`
 - `--recover` is rejected in this mode (to avoid silent overrides)
 - `tps_sync` unavailable only emits warning; output self-test still proceeds
+- `--duration-sec` must be `>=20` (10-sample streak at 2s poll period)
 
 ## 2) Recover (state-changing path)
 

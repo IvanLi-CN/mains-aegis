@@ -56,8 +56,10 @@ monitor_path=$(python3 - "$TOOL_ROOT" "$duration_sec" <<'PY'
 import json
 import subprocess
 import sys
+from collections import deque
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from threading import Lock, Thread
+from typing import Deque, Dict, Optional, Tuple
 
 root = Path(sys.argv[1])
 duration = int(sys.argv[2])
@@ -73,41 +75,76 @@ def snapshot() -> Dict[Path, Tuple[float, int]]:
 
 before = snapshot()
 
+stdout_tail: Deque[str] = deque(maxlen=200)
+stderr_tail: Deque[str] = deque(maxlen=200)
+path_lock = Lock()
 path_from_stdout: Optional[Path] = None
+
+
+def capture(stream, tail: Deque[str], parse_payload: bool) -> None:
+    global path_from_stdout
+    for raw in iter(stream.readline, ""):
+        line = raw.rstrip("\n")
+        if line:
+            tail.append(line)
+        if not parse_payload:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        payload = entry.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        payload_path = payload.get("path")
+        if isinstance(payload_path, str) and payload_path.endswith(".mon.ndjson"):
+            candidate = Path(payload_path)
+            if not candidate.is_absolute():
+                candidate = root / candidate
+            with path_lock:
+                if path_from_stdout is None:
+                    path_from_stdout = candidate.resolve()
+    stream.close()
+
+
+proc = subprocess.Popen(
+    ["mcu-agentd", "--non-interactive", "monitor", "esp", "--reset"],
+    cwd=root,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    bufsize=1,
+)
+if proc.stdout is None or proc.stderr is None:
+    raise SystemExit("mcu-agentd monitor failed: missing stdout/stderr pipe")
+
+stdout_thread = Thread(target=capture, args=(proc.stdout, stdout_tail, True), daemon=True)
+stderr_thread = Thread(target=capture, args=(proc.stderr, stderr_tail, False), daemon=True)
+stdout_thread.start()
+stderr_thread.start()
+
+timed_out = False
 try:
-    result = subprocess.run(
-        ["mcu-agentd", "--non-interactive", "monitor", "esp", "--reset"],
-        cwd=root,
-        timeout=duration,
-        text=True,
-        capture_output=True,
-    )
-    stdout_data = result.stdout or ""
-    stderr_data = result.stderr or ""
-except subprocess.TimeoutExpired as exc:
-    stdout_data = (exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or ""))
-    stderr_data = (exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or ""))
-
-for line in stdout_data.splitlines():
+    proc.wait(timeout=duration)
+except subprocess.TimeoutExpired:
+    timed_out = True
+    proc.terminate()
     try:
-        entry = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    payload = entry.get("payload")
-    if not isinstance(payload, dict):
-        continue
-    payload_path = payload.get("path")
-    if isinstance(payload_path, str) and payload_path.endswith(".mon.ndjson"):
-        candidate = Path(payload_path)
-        if not candidate.is_absolute():
-            candidate = root / candidate
-        path_from_stdout = candidate.resolve()
-        break
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
 
-if "result" in locals() and result.returncode != 0:
+stdout_thread.join(timeout=2)
+stderr_thread.join(timeout=2)
+
+stdout_data = "\n".join(stdout_tail)
+stderr_data = "\n".join(stderr_tail)
+
+if not timed_out and proc.returncode != 0:
     tail = (stderr_data or stdout_data).strip().splitlines()[-8:]
-    detail = "\n".join(tail) if tail else f"mcu-agentd exited with {result.returncode}"
-    raise SystemExit(f"mcu-agentd monitor failed (rc={result.returncode})\n{detail}")
+    detail = "\n".join(tail) if tail else f"mcu-agentd exited with {proc.returncode}"
+    raise SystemExit(f"mcu-agentd monitor failed (rc={proc.returncode})\n{detail}")
 
 after = snapshot()
 changed = []

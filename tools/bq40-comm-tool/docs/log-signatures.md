@@ -2,6 +2,7 @@
 
 ## Core communication
 
+- Prefix note: parser accepts both raw `bms: ...` lines and defmt-style `[INFO ] bms: ...`.
 - `bms: bq40z50 discovered addr=0xb`
   - BQ40 endpoint discovered
 - `bms: addr=0xb temp_c_x10=... voltage_mv=... current_ma=... soc_pct=... status=0x...`

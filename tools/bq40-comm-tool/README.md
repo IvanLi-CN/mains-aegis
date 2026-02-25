@@ -32,7 +32,7 @@ cp .esp32-port.example .esp32-port
 
 Options:
 - `--mode canonical|dual-diag` (default: `canonical`)
-- `--duration-sec <N>` (default: `120`)
+- `--duration-sec <N>` (default: `120`; `diagnose/recover` require `>=20`)
 - `--flash true|false` (default: `true`; not accepted by `verify`)
 - `--recover never|if-rom|force` (default: `if-rom`; not accepted by `diagnose`/`verify`; `force` requires `--mode dual-diag`)
 - `--monitor-file <path>` (`verify` required; others optional)
@@ -64,6 +64,8 @@ Required `summary.json` fields:
   - then re-run `./bin/run.sh ...` (tool report parser works offline on existing logs too)
 - `monitor file not found: ...`
   - for `verify`, make sure `--monitor-file` points to an existing `.mon.ndjson`
+- `duration-sec must be >= 20 for diagnose/recover`
+  - pass criteria requires streak>=10 and poll period is 2s; use at least 20s window
 - `verdict.fail: canonical_mode_touched_0x16`
   - canonical mode should not touch `0x16`; check firmware mode and logs
 
