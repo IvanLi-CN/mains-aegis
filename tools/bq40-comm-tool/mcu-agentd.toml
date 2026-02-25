@@ -1,0 +1,14 @@
+# bq40-comm-tool mcu-agentd config
+
+[project]
+id = "esp_bq40_tool"
+
+[mcu.esp]
+backend = "espflash"
+chip = "esp32s3"
+artifact_elf = "firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware"
+selector_cache_file = ".esp32-port"
+
+[mcu.esp.espflash]
+baud = 115200
+log_format = "defmt"

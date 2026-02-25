@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+
+subcommand="${1:-}"
+if [[ -z "$subcommand" ]]; then
+  echo "Usage: $(basename "$0") <diagnose|recover|verify> [options]" >&2
+  exit 2
+fi
+if [[ "$subcommand" == "-h" || "$subcommand" == "--help" ]]; then
+  subcommand="help"
+fi
+shift || true
+
+mode="canonical"
+duration_sec=120
+flash="true"
+recover_policy="if-rom"
+monitor_file=""
+report_out=""
+flash_arg_set="false"
+recover_arg_set="false"
+POLL_PERIOD_SEC=2
+MIN_VALID_STREAK=10
+MIN_DURATION_FOR_STREAK=$((POLL_PERIOD_SEC * MIN_VALID_STREAK))
+
+usage() {
+  cat <<USAGE
+Usage:
+  $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") recover  [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--report-out DIR]
+USAGE
+}
+
+require_value() {
+  local opt="$1"
+  local argc="$2"
+  if (( argc < 2 )); then
+    echo "Option $opt requires a value" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --mode)
+      require_value "$1" "$#"
+      mode="${2:-}"
+      shift 2
+      ;;
+    --duration-sec)
+      require_value "$1" "$#"
+      duration_sec="${2:-}"
+      shift 2
+      ;;
+    --flash)
+      require_value "$1" "$#"
+      flash="${2:-}"
+      flash_arg_set="true"
+      shift 2
+      ;;
+    --recover)
+      require_value "$1" "$#"
+      recover_policy="${2:-}"
+      recover_arg_set="true"
+      shift 2
+      ;;
+    --monitor-file)
+      require_value "$1" "$#"
+      monitor_file="${2:-}"
+      shift 2
+      ;;
+    --report-out)
+      require_value "$1" "$#"
+      report_out="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$subcommand" in
+  help)
+    usage
+    exit 0
+    ;;
+  diagnose)
+    if [[ "$recover_arg_set" == "true" ]]; then
+      echo "diagnose mode does not accept --recover" >&2
+      exit 11
+    fi
+    recover_policy="never"
+    ;;
+  recover)
+    ;;
+  verify)
+    ;;
+  *)
+    echo "Unknown subcommand: $subcommand" >&2
+    usage >&2
+    exit 3
+    ;;
+esac
+
+case "$mode" in
+  canonical|dual-diag) ;;
+  *)
+    echo "Invalid --mode: $mode" >&2
+    exit 4
+    ;;
+esac
+
+if ! [[ "$duration_sec" =~ ^[0-9]+$ ]] || [[ "$duration_sec" -lt 1 ]]; then
+  echo "Invalid --duration-sec: $duration_sec" >&2
+  exit 5
+fi
+
+if [[ "$subcommand" != "verify" ]] && [[ "$duration_sec" -lt "$MIN_DURATION_FOR_STREAK" ]]; then
+  echo "duration-sec must be >= $MIN_DURATION_FOR_STREAK for diagnose/recover (streak>=${MIN_VALID_STREAK} at ${POLL_PERIOD_SEC}s poll)" >&2
+  exit 14
+fi
+
+if [[ "$subcommand" == "verify" ]]; then
+  if [[ -z "$monitor_file" ]]; then
+    echo "verify mode requires --monitor-file" >&2
+    exit 8
+  fi
+  if [[ "$flash_arg_set" == "true" || "$recover_arg_set" == "true" ]]; then
+    echo "verify mode does not accept --flash or --recover" >&2
+    exit 10
+  fi
+else
+  case "$flash" in
+    true|false) ;;
+    *)
+      echo "Invalid --flash: $flash" >&2
+      exit 6
+      ;;
+  esac
+
+  case "$recover_policy" in
+    never|if-rom|force) ;;
+    *)
+      echo "Invalid --recover: $recover_policy" >&2
+      exit 7
+      ;;
+  esac
+
+  if [[ "$recover_policy" == "force" && "$mode" != "dual-diag" ]]; then
+    echo "--recover force requires --mode dual-diag" >&2
+    exit 9
+  fi
+
+  "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy"
+
+  if [[ "$flash" == "true" ]]; then
+    "$SCRIPT_DIR/flash.sh"
+  fi
+
+  if [[ -n "$monitor_file" ]]; then
+    monitor_file=$("$SCRIPT_DIR/monitor.sh" --duration-sec "$duration_sec" --output "$monitor_file")
+  else
+    monitor_file=$("$SCRIPT_DIR/monitor.sh" --duration-sec "$duration_sec")
+  fi
+fi
+
+if [[ ! -f "$monitor_file" ]]; then
+  echo "monitor file not found: $monitor_file" >&2
+  exit 12
+fi
+if [[ ! -r "$monitor_file" ]]; then
+  echo "monitor file is not readable: $monitor_file" >&2
+  exit 13
+fi
+
+report_args=(
+  --mode "$mode"
+  --duration-sec "$duration_sec"
+  --monitor-file "$monitor_file"
+)
+if [[ -n "$report_out" ]]; then
+  report_args+=(--report-out "$report_out")
+fi
+
+"$SCRIPT_DIR/report.sh" "${report_args[@]}"

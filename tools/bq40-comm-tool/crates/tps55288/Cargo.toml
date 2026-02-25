@@ -1,0 +1,48 @@
+[package]
+name = "tps55288"
+version = "0.2.0"
+edition = "2024"
+description = "Rust driver skeleton for TI TPS55288 buck-boost converter (I2C)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/IvanLi-CN/tps55288-rs"
+documentation = "https://docs.rs/tps55288"
+keywords = ["embedded", "driver", "buck-boost", "tps55288", "i2c"]
+categories = ["embedded", "hardware-support", "no-std"]
+readme = "README.md"
+exclude = [
+  ".github/",
+  "docs/",
+  "downloads/",
+  "node_modules/",
+  "scripts/",
+  "target/",
+  ".bun-version",
+  "bun.lock",
+  "commitlint.config.cjs",
+  "dprint.json",
+  "lefthook.yml",
+  "Makefile",
+  "package.json",
+  "ROADMAP.md",
+  "TODO.md",
+]
+
+[features]
+default = []
+async = ["embedded-hal-async"]
+defmt = ["dep:defmt"]
+
+[dependencies]
+embedded-hal = "1"
+embedded-hal-async = { version = "1", optional = true }
+bitflags = "2"
+defmt = { version = "0.3", optional = true }
+
+[dev-dependencies]
+embedded-hal-mock = { version = "0.11", features = ["eh1"] }
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+opt-level = 1
