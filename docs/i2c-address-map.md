@@ -4,7 +4,7 @@
 
 | 总线 | 目标速率 | SDA | SCL | INT/告警汇总 |
 |---|---:|---|---|---|
-| `I2C1` | `400kHz` | `GPIO48`（`I2C1_SDA`） | `GPIO47`（`I2C1_SCL`） | `GPIO33`（`I2C1_INT`） |
+| `I2C1` | `100kHz`（当前固件） | `GPIO48`（`I2C1_SDA`） | `GPIO47`（`I2C1_SCL`） | `GPIO33`（`I2C1_INT`） |
 | `I2C2` | `400kHz` | `GPIO8`（`I2C2_SDA`） | `GPIO9`（`I2C2_SCL`） | `GPIO7`（`I2C2_INT`） |
 
 ## 设备地址（7-bit）
@@ -25,6 +25,7 @@
 > 备注：
 > - 前面板网表中 `TCA6408A.ADDR` 上拉到 `3V3`，因此地址为 `0x21`。
 > - `TPS55288` 的 I2C 地址由 `MODE`→`AGND` 电阻选择（并同时决定 `VCC` 来源与轻载 `PFM/FPWM`）。本项目约定“外部 `5V` 供 `VCC` + 默认 `PFM`”，因此：OUT‑A 用 `75.0kΩ`（`0x74`），OUT‑B 用 `DNP/Open`（`0x75`）；详见 `docs/ups-output-design.md`。
+> - `BQ40Z50` 运行地址默认固定 `7-bit 0x0B`，对应 `8-bit` 地址字节 `W=0x16/R=0x17`；`0x16(7-bit)` 仅用于显式诊断构建（`bms-dual-probe-diag`）。
 
 ## 中断/告警信号（汇总）
 

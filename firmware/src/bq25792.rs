@@ -11,7 +11,13 @@
 pub const I2C_ADDRESS: u8 = 0x6B;
 
 pub mod reg {
+    // 16-bit register LSB addresses.
+    pub const CHARGE_CURRENT_LIMIT: u8 = 0x03;
+    pub const INPUT_CURRENT_LIMIT: u8 = 0x06;
+
     pub const CHARGER_CONTROL_0: u8 = 0x0F;
+    pub const CHARGER_CONTROL_2: u8 = 0x11;
+    pub const CHARGER_CONTROL_5: u8 = 0x14;
 
     pub const CHARGER_STATUS_0: u8 = 0x1B;
     pub const CHARGER_STATUS_1: u8 = 0x1C;
@@ -28,6 +34,17 @@ pub mod ctrl0 {
     pub const EN_CHG: u8 = 1 << 5;
     /// `REGOF_Charger_Control_0.EN_HIZ` (bit 2).
     pub const EN_HIZ: u8 = 1 << 2;
+}
+
+pub mod ctrl2 {
+    /// `REG11.Charger_Control_2.SDRV_CTRL[1:0]` lives at bits 2:1.
+    pub const SDRV_CTRL_SHIFT: u8 = 1;
+    pub const SDRV_CTRL_MASK: u8 = 0b11 << SDRV_CTRL_SHIFT;
+}
+
+pub mod ctrl5 {
+    /// `REG14.SFET_PRESENT` (bit 7).
+    pub const SFET_PRESENT: u8 = 1 << 7;
 }
 
 pub mod status0 {
@@ -90,11 +107,28 @@ where
     i2c.write_read(I2C_ADDRESS, &[start_reg], buf)
 }
 
+pub fn read_u16<I2C>(i2c: &mut I2C, reg_lsb: u8) -> Result<u16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let mut buf = [0u8; 2];
+    i2c.write_read(I2C_ADDRESS, &[reg_lsb], &mut buf)?;
+    Ok(u16::from_le_bytes(buf))
+}
+
 pub fn write_u8<I2C>(i2c: &mut I2C, reg: u8, value: u8) -> Result<(), I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
     i2c.write(I2C_ADDRESS, &[reg, value])
+}
+
+pub fn write_u16<I2C>(i2c: &mut I2C, reg_lsb: u8, value: u16) -> Result<(), I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let [lsb, msb] = value.to_le_bytes();
+    i2c.write(I2C_ADDRESS, &[reg_lsb, lsb, msb])
 }
 
 /// Read-modify-write a single 8-bit register.
@@ -115,6 +149,111 @@ where
         write_u8(i2c, reg, new)?;
     }
     Ok(new)
+}
+
+fn clamp_u16(value: u16, min: u16, max: u16) -> u16 {
+    if value < min {
+        min
+    } else if value > max {
+        max
+    } else {
+        value
+    }
+}
+
+pub fn set_charge_current_limit_ma<I2C>(i2c: &mut I2C, ma: u16) -> Result<u16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    // ICHG range: 50mA..=5000mA, step 10mA.
+    const MIN_MA: u16 = 50;
+    const MAX_MA: u16 = 5000;
+    const FIELD_MASK: u16 = 0x01FF;
+
+    let ma = clamp_u16(ma, MIN_MA, MAX_MA);
+    let field = (ma / 10) & FIELD_MASK;
+
+    let cur = read_u16(i2c, reg::CHARGE_CURRENT_LIMIT)?;
+    let new = (cur & !FIELD_MASK) | field;
+    if new != cur {
+        write_u16(i2c, reg::CHARGE_CURRENT_LIMIT, new)?;
+    }
+    Ok(new)
+}
+
+pub fn set_input_current_limit_ma<I2C>(i2c: &mut I2C, ma: u16) -> Result<u16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    // IINDPM range: 100mA..=3300mA, step 10mA.
+    const MIN_MA: u16 = 100;
+    const MAX_MA: u16 = 3300;
+    const FIELD_MASK: u16 = 0x01FF;
+
+    let ma = clamp_u16(ma, MIN_MA, MAX_MA);
+    let field = (ma / 10) & FIELD_MASK;
+
+    let cur = read_u16(i2c, reg::INPUT_CURRENT_LIMIT)?;
+    let new = (cur & !FIELD_MASK) | field;
+    if new != cur {
+        write_u16(i2c, reg::INPUT_CURRENT_LIMIT, new)?;
+    }
+    Ok(new)
+}
+
+#[derive(Clone, Copy)]
+pub struct ShipFetState {
+    pub ctrl2_before: u8,
+    pub ctrl2_after: u8,
+    pub sdrv_ctrl_before: u8,
+    pub sdrv_ctrl_after: u8,
+}
+
+/// Force SDRV control into IDLE (00) so external ship FET is not left off.
+pub fn ensure_ship_fet_idle<I2C>(i2c: &mut I2C) -> Result<ShipFetState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl2_before = read_u8(i2c, reg::CHARGER_CONTROL_2)?;
+    let sdrv_ctrl_before = (ctrl2_before & ctrl2::SDRV_CTRL_MASK) >> ctrl2::SDRV_CTRL_SHIFT;
+    let ctrl2_after = ctrl2_before & !ctrl2::SDRV_CTRL_MASK;
+    if ctrl2_after != ctrl2_before {
+        write_u8(i2c, reg::CHARGER_CONTROL_2, ctrl2_after)?;
+    }
+    let sdrv_ctrl_after = (ctrl2_after & ctrl2::SDRV_CTRL_MASK) >> ctrl2::SDRV_CTRL_SHIFT;
+
+    Ok(ShipFetState {
+        ctrl2_before,
+        ctrl2_after,
+        sdrv_ctrl_before,
+        sdrv_ctrl_after,
+    })
+}
+
+#[derive(Clone, Copy)]
+pub struct ShipFetPathState {
+    pub ctrl5_before: u8,
+    pub ctrl5_after: u8,
+    pub ship: ShipFetState,
+}
+
+/// Ensure ship-FET feature is enabled and SDRV stays in IDLE (00).
+pub fn ensure_ship_fet_path_enabled<I2C>(i2c: &mut I2C) -> Result<ShipFetPathState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl5_before = read_u8(i2c, reg::CHARGER_CONTROL_5)?;
+    let ctrl5_after = ctrl5_before | ctrl5::SFET_PRESENT;
+    if ctrl5_after != ctrl5_before {
+        write_u8(i2c, reg::CHARGER_CONTROL_5, ctrl5_after)?;
+    }
+
+    let ship = ensure_ship_fet_idle(i2c)?;
+    Ok(ShipFetPathState {
+        ctrl5_before,
+        ctrl5_after,
+        ship,
+    })
 }
 
 pub const fn decode_chg_stat(code: u8) -> &'static str {

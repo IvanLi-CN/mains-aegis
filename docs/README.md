@@ -9,6 +9,7 @@ This folder stores project documentation and offline-renderable datasheets.
 - Code quality & CI: `docs/quality-gates.md`
 - BMS design (system-level): `docs/bms-design.md`
 - Charger design (BQ25792 + PD/PPS): `docs/charger-design.md`
+- Boot self-test flow (module gating + emergency-stop): `docs/boot-self-test-flow.md`
 - UPS main output design: `docs/ups-output-design.md`
 - Power monitoring & protection (INA3221 + UPS VIN/TPS outputs): `docs/power-monitoring-design.md`
 - I2C/SMBus address map: `docs/i2c-address-map.md`
