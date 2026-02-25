@@ -1145,6 +1145,23 @@ where
         for (idx, addr) in addr_order.iter().copied().enumerate() {
             match self.read_bq40z50_snapshot(addr) {
                 Ok(s) => {
+                    if !Self::is_bq40_snapshot_reasonable(&s) {
+                        let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(s.temp_k_x10);
+                        if idx + 1 == addr_order.len() {
+                            self.bms_addr = None;
+                            self.bms_next_retry_at = Some(now + self.cfg.retry_backoff);
+                            defmt::warn!(
+                                "bms: bq40z50 invalid addrs=0x{=u8:x}/0x{=u8:x} temp_c_x10={=i32} vpack_mv={=u16} rsoc_pct={=u16}",
+                                bq40z50::I2C_ADDRESS_PRIMARY,
+                                bq40z50::I2C_ADDRESS_FALLBACK,
+                                temp_c_x10,
+                                s.vpack_mv,
+                                s.rsoc_pct
+                            );
+                        }
+                        continue;
+                    }
+
                     self.bms_addr = Some(addr);
                     self.bms_next_retry_at = None;
                     self.log_bq40z50_snapshot(addr, btp_int_h, &s);
@@ -1178,6 +1195,13 @@ where
                 }
             }
         }
+    }
+
+    fn is_bq40_snapshot_reasonable(s: &Bq40z50Snapshot) -> bool {
+        let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(s.temp_k_x10);
+        (-400..=1250).contains(&temp_c_x10)
+            && (2500..=20_000).contains(&s.vpack_mv)
+            && s.rsoc_pct <= 100
     }
 
     fn read_bq40z50_snapshot(
