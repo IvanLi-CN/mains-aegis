@@ -20,6 +20,8 @@ flash="true"
 recover_policy="if-rom"
 monitor_file=""
 report_out=""
+flash_arg_set="false"
+recover_arg_set="false"
 
 usage() {
   cat <<USAGE
@@ -30,29 +32,47 @@ Usage:
 USAGE
 }
 
+require_value() {
+  local opt="$1"
+  local argc="$2"
+  if (( argc < 2 )); then
+    echo "Option $opt requires a value" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mode)
+      require_value "$1" "$#"
       mode="${2:-}"
       shift 2
       ;;
     --duration-sec)
+      require_value "$1" "$#"
       duration_sec="${2:-}"
       shift 2
       ;;
     --flash)
+      require_value "$1" "$#"
       flash="${2:-}"
+      flash_arg_set="true"
       shift 2
       ;;
     --recover)
+      require_value "$1" "$#"
       recover_policy="${2:-}"
+      recover_arg_set="true"
       shift 2
       ;;
     --monitor-file)
+      require_value "$1" "$#"
       monitor_file="${2:-}"
       shift 2
       ;;
     --report-out)
+      require_value "$1" "$#"
       report_out="${2:-}"
       shift 2
       ;;
@@ -100,33 +120,37 @@ if ! [[ "$duration_sec" =~ ^[0-9]+$ ]] || [[ "$duration_sec" -lt 1 ]]; then
   exit 5
 fi
 
-case "$flash" in
-  true|false) ;;
-  *)
-    echo "Invalid --flash: $flash" >&2
-    exit 6
-    ;;
-esac
-
-case "$recover_policy" in
-  never|if-rom|force) ;;
-  *)
-    echo "Invalid --recover: $recover_policy" >&2
-    exit 7
-    ;;
-esac
-
-if [[ "$recover_policy" == "force" && "$mode" != "dual-diag" ]]; then
-  echo "--recover force requires --mode dual-diag" >&2
-  exit 9
-fi
-
 if [[ "$subcommand" == "verify" ]]; then
   if [[ -z "$monitor_file" ]]; then
     echo "verify mode requires --monitor-file" >&2
     exit 8
   fi
+  if [[ "$flash_arg_set" == "true" || "$recover_arg_set" == "true" ]]; then
+    echo "verify mode does not accept --flash or --recover" >&2
+    exit 10
+  fi
 else
+  case "$flash" in
+    true|false) ;;
+    *)
+      echo "Invalid --flash: $flash" >&2
+      exit 6
+      ;;
+  esac
+
+  case "$recover_policy" in
+    never|if-rom|force) ;;
+    *)
+      echo "Invalid --recover: $recover_policy" >&2
+      exit 7
+      ;;
+  esac
+
+  if [[ "$recover_policy" == "force" && "$mode" != "dual-diag" ]]; then
+    echo "--recover force requires --mode dual-diag" >&2
+    exit 9
+  fi
+
   "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy"
 
   if [[ "$flash" == "true" ]]; then

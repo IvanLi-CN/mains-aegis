@@ -33,8 +33,8 @@ cp .esp32-port.example .esp32-port
 Options:
 - `--mode canonical|dual-diag` (default: `canonical`)
 - `--duration-sec <N>` (default: `120`)
-- `--flash true|false` (default: `true`)
-- `--recover never|if-rom|force` (default: `if-rom`; forced to `never` for `diagnose`; `force` requires `--mode dual-diag`)
+- `--flash true|false` (default: `true`; not accepted by `verify`)
+- `--recover never|if-rom|force` (default: `if-rom`; forced to `never` for `diagnose`; `force` requires `--mode dual-diag`; not accepted by `verify`)
 - `--monitor-file <path>` (`verify` required; others optional)
 - `--report-out <dir>` (default: `tools/bq40-comm-tool/reports/<timestamp>`)
 

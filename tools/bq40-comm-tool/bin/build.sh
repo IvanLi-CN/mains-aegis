@@ -14,13 +14,25 @@ Usage: $(basename "$0") [--mode canonical|dual-diag] [--recover never|if-rom|for
 USAGE
 }
 
+require_value() {
+  local opt="$1"
+  local argc="$2"
+  if (( argc < 2 )); then
+    echo "Option $opt requires a value" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mode)
+      require_value "$1" "$#"
       mode="${2:-}"
       shift 2
       ;;
     --recover)
+      require_value "$1" "$#"
       recover="${2:-}"
       shift 2
       ;;

@@ -33,6 +33,9 @@ Policy:
 ./bin/run.sh verify --mode canonical --duration-sec 120 --monitor-file /abs/path/to/file.mon.ndjson
 ```
 
+Notes:
+- `verify` is offline-only and does not accept `--flash` or `--recover`.
+
 ## 4) Scenario checklist
 
 - A: BQ40 disconnected -> stable `i2c_nack`, `verdict.pass=false`

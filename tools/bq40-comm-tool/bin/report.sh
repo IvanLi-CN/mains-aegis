@@ -15,21 +15,35 @@ Usage: $(basename "$0") --monitor-file PATH [--mode canonical|dual-diag] [--dura
 USAGE
 }
 
+require_value() {
+  local opt="$1"
+  local argc="$2"
+  if (( argc < 2 )); then
+    echo "Option $opt requires a value" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mode)
+      require_value "$1" "$#"
       mode="${2:-}"
       shift 2
       ;;
     --duration-sec)
+      require_value "$1" "$#"
       duration_sec="${2:-}"
       shift 2
       ;;
     --monitor-file)
+      require_value "$1" "$#"
       monitor_file="${2:-}"
       shift 2
       ;;
     --report-out)
+      require_value "$1" "$#"
       report_out="${2:-}"
       shift 2
       ;;

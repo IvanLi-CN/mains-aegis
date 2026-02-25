@@ -13,13 +13,25 @@ Usage: $(basename "$0") [--duration-sec N] [--output PATH]
 USAGE
 }
 
+require_value() {
+  local opt="$1"
+  local argc="$2"
+  if (( argc < 2 )); then
+    echo "Option $opt requires a value" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --duration-sec)
+      require_value "$1" "$#"
       duration_sec="${2:-}"
       shift 2
       ;;
     --output)
+      require_value "$1" "$#"
       output_file="${2:-}"
       shift 2
       ;;
