@@ -1,6 +1,7 @@
 pub mod tps55288;
 
 use esp_firmware::bq25792;
+use esp_firmware::bq40z50;
 use esp_firmware::ina3221;
 use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
@@ -151,6 +152,7 @@ pub(super) fn ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -
 pub struct PowerManager<'d, I2C> {
     i2c: I2C,
     i2c1_int: Input<'d>,
+    bms_btp_int_h: Input<'d>,
     therm_kill: Flex<'d>,
     chg_ce: Flex<'d>,
     chg_ilim_hiz_brk: Flex<'d>,
@@ -168,6 +170,10 @@ pub struct PowerManager<'d, I2C> {
     tps_a_next_retry_at: Option<Instant>,
     tps_b_ready: bool,
     tps_b_next_retry_at: Option<Instant>,
+
+    bms_next_poll_at: Instant,
+    bms_next_retry_at: Option<Instant>,
+    bms_addr: Option<u8>,
 
     chg_next_poll_at: Instant,
     chg_next_retry_at: Option<Instant>,
@@ -194,6 +200,7 @@ where
     pub fn new(
         i2c: I2C,
         i2c1_int: Input<'d>,
+        bms_btp_int_h: Input<'d>,
         therm_kill: Flex<'d>,
         mut chg_ce: Flex<'d>,
         mut chg_ilim_hiz_brk: Flex<'d>,
@@ -208,6 +215,7 @@ where
         Self {
             i2c,
             i2c1_int,
+            bms_btp_int_h,
             therm_kill,
             chg_ce,
             chg_ilim_hiz_brk,
@@ -225,6 +233,10 @@ where
             tps_b_ready: false,
             tps_b_next_retry_at: Some(now),
 
+            bms_next_poll_at: now,
+            bms_next_retry_at: Some(now),
+            bms_addr: None,
+
             chg_next_poll_at: now,
             chg_next_retry_at: Some(now),
             chg_enabled: false,
@@ -241,6 +253,7 @@ where
         self.maybe_retry();
         self.maybe_handle_fault();
         self.maybe_poll_charger();
+        self.maybe_poll_bms();
         self.maybe_print_telemetry();
     }
 
@@ -593,6 +606,146 @@ where
         self.chg_next_retry_at = None;
     }
 
+    fn maybe_poll_bms(&mut self) {
+        // Keep the BMS polling independent from the TPS/INA telemetry period.
+        const POLL_PERIOD: Duration = Duration::from_secs(2);
+
+        let now = Instant::now();
+        if now < self.bms_next_poll_at {
+            return;
+        }
+        if let Some(next_retry_at) = self.bms_next_retry_at {
+            if now < next_retry_at {
+                return;
+            }
+        }
+        self.bms_next_poll_at = now + POLL_PERIOD;
+
+        let btp_int_h = self.bms_btp_int_h.is_high();
+
+        // The BQ40Z50 SMBus address is data-flash configurable. The project address map uses 0x0B,
+        // while the TI TRM states a DF default of 0x16. Probe both to keep bring-up resilient.
+        let addr_order: [u8; 2] = match self.bms_addr {
+            Some(a) if a == bq40z50::I2C_ADDRESS_FALLBACK => {
+                [bq40z50::I2C_ADDRESS_FALLBACK, bq40z50::I2C_ADDRESS_PRIMARY]
+            }
+            Some(a) if a == bq40z50::I2C_ADDRESS_PRIMARY => {
+                [bq40z50::I2C_ADDRESS_PRIMARY, bq40z50::I2C_ADDRESS_FALLBACK]
+            }
+            _ => bq40z50::I2C_ADDRESS_CANDIDATES,
+        };
+
+        for (idx, addr) in addr_order.iter().copied().enumerate() {
+            match self.read_bq40z50_snapshot(addr) {
+                Ok(s) => {
+                    self.bms_addr = Some(addr);
+                    self.bms_next_retry_at = None;
+                    self.log_bq40z50_snapshot(addr, btp_int_h, &s);
+                    return;
+                }
+                Err(e) => {
+                    // Only log one line after the final address attempt.
+                    if idx + 1 == addr_order.len() {
+                        self.bms_addr = None;
+                        self.bms_next_retry_at = Some(now + self.cfg.retry_backoff);
+
+                        let kind = i2c_error_kind(e);
+                        if kind == "i2c_nack" || kind == "i2c_timeout" {
+                            defmt::warn!(
+                                "bms: bq40z50 absent addrs=0x{=u8:x}/0x{=u8:x} err={} btp_int_h={=bool}",
+                                bq40z50::I2C_ADDRESS_PRIMARY,
+                                bq40z50::I2C_ADDRESS_FALLBACK,
+                                kind,
+                                btp_int_h
+                            );
+                        } else {
+                            defmt::error!(
+                                "bms: bq40z50 err addrs=0x{=u8:x}/0x{=u8:x} err={} btp_int_h={=bool}",
+                                bq40z50::I2C_ADDRESS_PRIMARY,
+                                bq40z50::I2C_ADDRESS_FALLBACK,
+                                kind,
+                                btp_int_h
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn read_bq40z50_snapshot(
+        &mut self,
+        addr: u8,
+    ) -> Result<Bq40z50Snapshot, esp_hal::i2c::master::Error> {
+        Ok(Bq40z50Snapshot {
+            temp_k_x10: bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::TEMPERATURE)?,
+            vpack_mv: bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::VOLTAGE)?,
+            current_ma: bq40z50::read_i16(&mut self.i2c, addr, bq40z50::cmd::CURRENT)?,
+            rsoc_pct: bq40z50::read_u16(
+                &mut self.i2c,
+                addr,
+                bq40z50::cmd::RELATIVE_STATE_OF_CHARGE,
+            )?,
+            remcap: bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::REMAINING_CAPACITY)?,
+            fcc: bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::FULL_CHARGE_CAPACITY)?,
+            batt_status: bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::BATTERY_STATUS)?,
+            cell_mv: [
+                bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::CELL_VOLTAGE_1)?,
+                bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::CELL_VOLTAGE_2)?,
+                bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::CELL_VOLTAGE_3)?,
+                bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::CELL_VOLTAGE_4)?,
+            ],
+        })
+    }
+
+    fn log_bq40z50_snapshot(&self, addr: u8, btp_int_h: bool, s: &Bq40z50Snapshot) {
+        let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(s.temp_k_x10);
+
+        let bs = s.batt_status;
+        let init = (bs & bq40z50::battery_status::INIT) != 0;
+        let dsg = (bs & bq40z50::battery_status::DSG) != 0;
+        let fc = (bs & bq40z50::battery_status::FC) != 0;
+        let fd = (bs & bq40z50::battery_status::FD) != 0;
+
+        let oca = (bs & bq40z50::battery_status::OCA) != 0;
+        let tca = (bs & bq40z50::battery_status::TCA) != 0;
+        let ota = (bs & bq40z50::battery_status::OTA) != 0;
+        let tda = (bs & bq40z50::battery_status::TDA) != 0;
+        let rca = (bs & bq40z50::battery_status::RCA) != 0;
+        let rta = (bs & bq40z50::battery_status::RTA) != 0;
+
+        let ec = bq40z50::battery_status::error_code(bs);
+
+        defmt::info!(
+            "bms: bq40z50 addr=0x{=u8:x} btp_int_h={=bool} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} remcap={=u16} fcc={=u16} batt_status=0x{=u16:x} init={=bool} dsg={=bool} fc={=bool} fd={=bool} oca={=bool} tca={=bool} ota={=bool} tda={=bool} rca={=bool} rta={=bool} ec=0x{=u8:x} ec_str={} c1_mv={=u16} c2_mv={=u16} c3_mv={=u16} c4_mv={=u16}",
+            addr,
+            btp_int_h,
+            temp_c_x10,
+            s.vpack_mv,
+            s.current_ma,
+            s.rsoc_pct,
+            s.remcap,
+            s.fcc,
+            bs,
+            init,
+            dsg,
+            fc,
+            fd,
+            oca,
+            tca,
+            ota,
+            tda,
+            rca,
+            rta,
+            ec,
+            bq40z50::decode_error_code(ec),
+            s.cell_mv[0],
+            s.cell_mv[1],
+            s.cell_mv[2],
+            s.cell_mv[3],
+        );
+    }
+
     fn log_therm_kill_hint(&mut self) {
         const TMP112_OUT_A_ADDR: u8 = 0x48;
         const TMP112_OUT_B_ADDR: u8 = 0x49;
@@ -622,4 +775,16 @@ where
             b.map_err(i2c_error_kind),
         );
     }
+}
+
+#[derive(Clone, Copy)]
+struct Bq40z50Snapshot {
+    temp_k_x10: u16,
+    vpack_mv: u16,
+    current_ma: i16,
+    rsoc_pct: u16,
+    remcap: u16,
+    fcc: u16,
+    batt_status: u16,
+    cell_mv: [u16; 4],
 }

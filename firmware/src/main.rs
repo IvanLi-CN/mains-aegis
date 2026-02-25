@@ -19,7 +19,9 @@ use esp_hal::{main, Blocking};
 use esp_println as _;
 
 // Bring-up default profile.
-const DEFAULT_ENABLED_OUTPUTS: output::EnabledOutputs = output::EnabledOutputs::Both;
+// Bring-up safety: disable OUT-B by default until we explicitly validate the power stage.
+const DEFAULT_ENABLED_OUTPUTS: output::EnabledOutputs =
+    output::EnabledOutputs::Only(output::OutputChannel::OutA);
 const DEFAULT_VOUT_MV: u16 = 19_000;
 const DEFAULT_ILIMIT_MA: u16 = 3_500;
 const TELEMETRY_PERIOD: Duration = Duration::from_millis(500);
@@ -144,6 +146,11 @@ fn main() -> ! {
     let i2c1_int_cfg = InputConfig::default().with_pull(Pull::Up);
     let i2c1_int = Input::new(peripherals.GPIO33, i2c1_int_cfg);
 
+    // BMS interrupt/alert line (active-high on MCU side after an inverter stage).
+    // External pull-up is provided by a resistor network on the mainboard.
+    let bms_btp_int_cfg = InputConfig::default().with_pull(Pull::None);
+    let bms_btp_int_h = Input::new(peripherals.GPIO21, bms_btp_int_cfg);
+
     // BQ25792 charger control pins.
     //
     // CE is active-low; hardware pull-up keeps it disabled during reset. We still
@@ -250,8 +257,15 @@ fn main() -> ! {
         tmp112_thigh_c_x16: TMP112_THIGH_C_X16,
     };
 
-    let mut power =
-        output::PowerManager::new(i2c, i2c1_int, therm_kill, chg_ce, chg_ilim_hiz_brk, cfg);
+    let mut power = output::PowerManager::new(
+        i2c,
+        i2c1_int,
+        bms_btp_int_h,
+        therm_kill,
+        chg_ce,
+        chg_ilim_hiz_brk,
+        cfg,
+    );
     defmt::info!(
         "power: enabled_outputs={} target_vout_mv={=u16} target_ilimit_ma={=u16}",
         cfg.enabled_outputs.describe(),
