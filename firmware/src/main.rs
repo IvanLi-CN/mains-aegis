@@ -304,7 +304,12 @@ fn main() -> ! {
         .unwrap()
         .with_sda(peripherals.GPIO8)
         .with_scl(peripherals.GPIO9);
-    output::log_i2c2_presence(&mut i2c2);
+    let panel_probe = output::log_i2c2_presence(&mut i2c2);
+    defmt::info!(
+        "self_test: panel screen_present={=bool} typec_present={=bool}",
+        panel_probe.screen_present(),
+        panel_probe.fusb302_present
+    );
 
     let self_test = output::boot_self_test(
         &mut i2c,
@@ -315,6 +320,8 @@ fn main() -> ! {
         tmp_out_a_ok,
         tmp_out_b_ok,
         tps_sync_ok,
+        panel_probe.screen_present(),
+        low_after,
     );
 
     let cfg = output::Config {
