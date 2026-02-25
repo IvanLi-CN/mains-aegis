@@ -13,6 +13,22 @@ use ::tps55288::Error as TpsError;
 
 pub use self::tps55288::OutputChannel;
 
+#[cfg(feature = "bms-dual-probe-diag")]
+fn bms_probe_candidates() -> &'static [u8] {
+    &bq40z50::I2C_ADDRESS_CANDIDATES
+}
+
+#[cfg(not(feature = "bms-dual-probe-diag"))]
+fn bms_probe_candidates() -> &'static [u8] {
+    &[bq40z50::I2C_ADDRESS_PRIMARY]
+}
+
+#[cfg(feature = "bms-dual-probe-diag")]
+const BMS_ADDR_LOG: &str = "0x0b/0x16";
+
+#[cfg(not(feature = "bms-dual-probe-diag"))]
+const BMS_ADDR_LOG: &str = "0x0b";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EnabledOutputs {
     None,
@@ -287,7 +303,7 @@ where
 
     // Stage 2: BQ40Z50.
     let mut bms_addr: Option<u8> = None;
-    for addr in bq40z50::I2C_ADDRESS_CANDIDATES {
+    for addr in bms_probe_candidates().iter().copied() {
         let temp = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::TEMPERATURE);
         let voltage = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::VOLTAGE);
         let current = bq40z50::read_i16(&mut *i2c, addr, bq40z50::cmd::CURRENT);
@@ -1130,63 +1146,64 @@ where
 
         let btp_int_h = self.bms_btp_int_h.is_high() || irq.bms_btp_int_h != 0;
 
-        // The BQ40Z50 SMBus address is data-flash configurable. The project address map uses 0x0B,
-        // while the TI TRM states a DF default of 0x16. Probe both to keep bring-up resilient.
-        let addr_order: [u8; 2] = match self.bms_addr {
-            Some(a) if a == bq40z50::I2C_ADDRESS_FALLBACK => {
-                [bq40z50::I2C_ADDRESS_FALLBACK, bq40z50::I2C_ADDRESS_PRIMARY]
-            }
-            Some(a) if a == bq40z50::I2C_ADDRESS_PRIMARY => {
-                [bq40z50::I2C_ADDRESS_PRIMARY, bq40z50::I2C_ADDRESS_FALLBACK]
-            }
-            _ => bq40z50::I2C_ADDRESS_CANDIDATES,
+        #[cfg(feature = "bms-dual-probe-diag")]
+        let (addr_order, addr_count): ([u8; 2], usize) = match self.bms_addr {
+            Some(a) if a == bq40z50::I2C_ADDRESS_FALLBACK => (
+                [bq40z50::I2C_ADDRESS_FALLBACK, bq40z50::I2C_ADDRESS_PRIMARY],
+                2,
+            ),
+            Some(a) if a == bq40z50::I2C_ADDRESS_PRIMARY => (
+                [bq40z50::I2C_ADDRESS_PRIMARY, bq40z50::I2C_ADDRESS_FALLBACK],
+                2,
+            ),
+            _ => (bq40z50::I2C_ADDRESS_CANDIDATES, 2),
         };
 
-        for (idx, addr) in addr_order.iter().copied().enumerate() {
-            match self.read_bq40z50_snapshot(addr) {
-                Ok(s) => {
-                    if !Self::is_bq40_snapshot_reasonable(&s) {
-                        let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(s.temp_k_x10);
-                        if idx + 1 == addr_order.len() {
-                            self.bms_addr = None;
-                            self.bms_next_retry_at = Some(now + self.cfg.retry_backoff);
-                            defmt::warn!(
-                                "bms: bq40z50 invalid addrs=0x{=u8:x}/0x{=u8:x} temp_c_x10={=i32} vpack_mv={=u16} rsoc_pct={=u16}",
-                                bq40z50::I2C_ADDRESS_PRIMARY,
-                                bq40z50::I2C_ADDRESS_FALLBACK,
-                                temp_c_x10,
-                                s.vpack_mv,
-                                s.rsoc_pct
-                            );
-                        }
-                        continue;
-                    }
+        #[cfg(not(feature = "bms-dual-probe-diag"))]
+        let (addr_order, addr_count): ([u8; 2], usize) = (
+            [bq40z50::I2C_ADDRESS_PRIMARY, bq40z50::I2C_ADDRESS_PRIMARY],
+            1,
+        );
 
+        for (idx, addr) in addr_order.into_iter().take(addr_count).enumerate() {
+            match self.read_bq40z50_snapshot_strict(addr) {
+                Ok(s) => {
                     self.bms_addr = Some(addr);
                     self.bms_next_retry_at = None;
                     self.log_bq40z50_snapshot(addr, btp_int_h, &s);
                     return;
                 }
-                Err(e) => {
+                Err(Bq40SnapshotReadError::Invalid(s)) => {
+                    if idx + 1 == addr_count {
+                        self.bms_addr = None;
+                        self.bms_next_retry_at = Some(now + self.cfg.retry_backoff);
+                        let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(s.temp_k_x10);
+                        defmt::warn!(
+                            "bms: bq40z50 invalid addrs={} temp_c_x10={=i32} vpack_mv={=u16} rsoc_pct={=u16}",
+                            BMS_ADDR_LOG,
+                            temp_c_x10,
+                            s.vpack_mv,
+                            s.rsoc_pct
+                        );
+                    }
+                }
+                Err(Bq40SnapshotReadError::I2c(kind)) => {
                     // Only log one line after the final address attempt.
-                    if idx + 1 == addr_order.len() {
+                    if idx + 1 == addr_count {
                         self.bms_addr = None;
                         self.bms_next_retry_at = Some(now + self.cfg.retry_backoff);
 
-                        let kind = i2c_error_kind(e);
                         if kind == "i2c_nack" || kind == "i2c_timeout" {
                             defmt::warn!(
-                                "bms: bq40z50 absent addrs=0x{=u8:x}/0x{=u8:x} err={} btp_int_h={=bool}",
-                                bq40z50::I2C_ADDRESS_PRIMARY,
-                                bq40z50::I2C_ADDRESS_FALLBACK,
+                                "bms: bq40z50 absent addrs={} err={} btp_int_h={=bool}",
+                                BMS_ADDR_LOG,
                                 kind,
                                 btp_int_h
                             );
                         } else {
                             defmt::error!(
-                                "bms: bq40z50 err addrs=0x{=u8:x}/0x{=u8:x} err={} btp_int_h={=bool}",
-                                bq40z50::I2C_ADDRESS_PRIMARY,
-                                bq40z50::I2C_ADDRESS_FALLBACK,
+                                "bms: bq40z50 err addrs={} err={} btp_int_h={=bool}",
+                                BMS_ADDR_LOG,
                                 kind,
                                 btp_int_h
                             );
@@ -1202,6 +1219,61 @@ where
         (-400..=1250).contains(&temp_c_x10)
             && (2500..=20_000).contains(&s.vpack_mv)
             && s.rsoc_pct <= 100
+    }
+
+    fn read_bq40z50_snapshot_strict(
+        &mut self,
+        addr: u8,
+    ) -> Result<Bq40z50Snapshot, Bq40SnapshotReadError> {
+        const MAX_FULL_SNAPSHOT_ATTEMPTS: usize = 2;
+        let mut last_i2c_kind: Option<&'static str> = None;
+        let mut last_invalid: Option<Bq40z50Snapshot> = None;
+
+        for _ in 0..MAX_FULL_SNAPSHOT_ATTEMPTS {
+            match self.read_bq40z50_snapshot_retry(addr) {
+                Ok(snapshot) => {
+                    if Self::is_bq40_snapshot_reasonable(&snapshot) {
+                        return Ok(snapshot);
+                    }
+                    last_invalid = Some(snapshot);
+                }
+                Err(e) => {
+                    last_i2c_kind = Some(i2c_error_kind(e));
+                }
+            }
+        }
+
+        if let Some(snapshot) = last_invalid {
+            return Err(Bq40SnapshotReadError::Invalid(snapshot));
+        }
+
+        Err(Bq40SnapshotReadError::I2c(last_i2c_kind.unwrap_or("i2c")))
+    }
+
+    fn read_bq40z50_snapshot_retry(
+        &mut self,
+        addr: u8,
+    ) -> Result<Bq40z50Snapshot, esp_hal::i2c::master::Error> {
+        const MAX_ATTEMPTS: usize = 3;
+
+        for attempt in 0..MAX_ATTEMPTS {
+            match self.read_bq40z50_snapshot(addr) {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(e) => {
+                    let retryable = matches!(
+                        e,
+                        esp_hal::i2c::master::Error::Timeout
+                            | esp_hal::i2c::master::Error::AcknowledgeCheckFailed(_)
+                    );
+                    if retryable && attempt + 1 < MAX_ATTEMPTS {
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        unreachable!()
     }
 
     fn read_bq40z50_snapshot(
@@ -1318,4 +1390,9 @@ struct Bq40z50Snapshot {
     fcc: u16,
     batt_status: u16,
     cell_mv: [u16; 4],
+}
+
+enum Bq40SnapshotReadError {
+    I2c(&'static str),
+    Invalid(Bq40z50Snapshot),
 }

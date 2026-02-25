@@ -154,6 +154,14 @@ fn main() -> ! {
         DEFAULT_ILIMIT_MA
     );
     defmt::info!("fw: force_min_charge={=bool}", FORCE_MIN_CHARGE);
+    defmt::info!(
+        "fw: bq40_addr_mode={} addr7=0x0b addr8_w=0x16 addr8_r=0x17",
+        if cfg!(feature = "bms-dual-probe-diag") {
+            "dual-diag"
+        } else {
+            "canonical"
+        }
+    );
 
     let i2c1_config = I2cConfig::default()
         // SMBus-gauge bring-up is more stable at 100kHz on the shared bus.
