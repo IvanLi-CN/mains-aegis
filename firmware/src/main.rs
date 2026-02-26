@@ -4,6 +4,7 @@
 esp_bootloader_esp_idf::esp_app_desc!();
 
 mod audio_demo;
+mod front_panel;
 mod irq;
 mod output;
 
@@ -14,6 +15,8 @@ use esp_hal::i2c::master::{Config as I2cConfig, I2c, SoftwareTimeout};
 use esp_hal::ledc::channel::{self, ChannelIFace};
 use esp_hal::ledc::timer::{self, TimerIFace};
 use esp_hal::ledc::{LSGlobalClkSource, Ledc, LowSpeed};
+use esp_hal::spi::master::{Config as SpiConfig, Spi};
+use esp_hal::spi::Mode as SpiMode;
 use esp_hal::time::{Duration, Instant, Rate};
 use esp_hal::timer::{systimer::SystemTimer, timg::TimerGroup};
 use esp_hal::{main, Blocking};
@@ -234,6 +237,36 @@ fn main() -> ! {
     _chg_int.clear_interrupt();
     _chg_int.listen(Event::FallingEdge);
 
+    // Front panel: I2C2 + SPI display bring-up (Plan #3kz8p).
+    // Keep these variables alive for the whole program.
+    let i2c2_config = I2cConfig::default()
+        .with_frequency(Rate::from_khz(400))
+        .with_software_timeout(SoftwareTimeout::Transaction(Duration::from_millis(100)));
+    let mut i2c2: I2c<'static, Blocking> = I2c::new(peripherals.I2C0, i2c2_config)
+        .unwrap()
+        .with_sda(peripherals.GPIO8)
+        .with_scl(peripherals.GPIO9);
+
+    let spi_cfg = SpiConfig::default()
+        .with_frequency(Rate::from_mhz(10))
+        .with_mode(SpiMode::_0);
+    let spi: Spi<'static, Blocking> = Spi::new(peripherals.SPI2, spi_cfg)
+        .unwrap()
+        .with_sck(peripherals.GPIO12)
+        .with_mosi(peripherals.GPIO11);
+
+    let tca_reset_n = Flex::new(peripherals.GPIO1);
+    let dc = Flex::new(peripherals.GPIO10);
+    let bl = Flex::new(peripherals.GPIO13);
+    let btn_center = Input::new(
+        peripherals.GPIO0,
+        InputConfig::default().with_pull(Pull::None),
+    );
+    let ctp_irq = Input::new(
+        peripherals.GPIO14,
+        InputConfig::default().with_pull(Pull::None),
+    );
+
     // Ensure THERM_KILL_N is released. This net can hard-disable both TPS via TPS_EN.
     // Configure as open-drain output, set HIGH (release), and also enable input so we can observe if
     // something external is holding it low.
@@ -308,13 +341,6 @@ fn main() -> ! {
     }
 
     // Boot self-test: detect online devices and decide which modules are allowed to run.
-    let i2c2_config = I2cConfig::default()
-        .with_frequency(Rate::from_khz(400))
-        .with_software_timeout(SoftwareTimeout::Transaction(Duration::from_millis(100)));
-    let mut i2c2: I2c<'static, Blocking> = I2c::new(peripherals.I2C0, i2c2_config)
-        .unwrap()
-        .with_sda(peripherals.GPIO8)
-        .with_scl(peripherals.GPIO9);
     let panel_probe = output::log_i2c2_presence(&mut i2c2);
     defmt::info!(
         "self_test: panel screen_present={=bool} typec_present={=bool}",
@@ -335,6 +361,14 @@ fn main() -> ! {
         low_after,
         FORCE_MIN_CHARGE,
     );
+
+    let mut front_panel =
+        front_panel::FrontPanel::new(i2c2, spi, btn_center, ctp_irq, tca_reset_n, dc, bl);
+    if !panel_probe.screen_present() {
+        defmt::warn!("ui: skip display init because panel_io probe is missing");
+    } else {
+        front_panel.init_best_effort();
+    }
 
     let cfg = output::Config {
         enabled_outputs: self_test.enabled_outputs,
@@ -380,7 +414,7 @@ fn main() -> ! {
         || {
             let irq_events = irq_tracker.take_delta();
             power.tick(&irq_events);
-
+            front_panel.tick();
             if irq_events.any()
                 && output::tps55288::should_log_fault(
                     Instant::now(),
@@ -408,9 +442,11 @@ fn main() -> ! {
 
     loop {
         defmt::info!("esp: heartbeat");
-        let irq_events = irq_tracker.take_delta();
-        power.tick(&irq_events);
         let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(2_000) {}
+        while start.elapsed() < Duration::from_millis(2_000) {
+            front_panel.tick();
+            let irq_events = irq_tracker.take_delta();
+            power.tick(&irq_events);
+        }
     }
 }
