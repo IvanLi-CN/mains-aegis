@@ -15,6 +15,7 @@ pub const UI_W: u16 = 320;
 pub const UI_H: u16 = 172;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum UiVariant {
     InstrumentA,
     InstrumentB,
