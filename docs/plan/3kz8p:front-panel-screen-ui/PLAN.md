@@ -2,9 +2,9 @@
 
 ## 状态
 
-- Status: 部分完成（3/4）
+- Status: 重新设计（#6qrjs）
 - Created: 2026-02-05
-- Last: 2026-02-05
+- Last: 2026-02-26
 
 ## 背景 / 问题陈述
 
@@ -149,6 +149,7 @@ None
 
 ## 变更记录（Change log）
 
+- 2026-02-26: 该计划迁移为新规格 `docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`，状态更新为 `重新设计（#6qrjs）`
 - 2026-02-05: 新建计划骨架（待冻结 UI 信息架构与验收口径）
 - 2026-02-05: 冻结 MVP：不做触摸；屏幕仅 `Hello World`；暂不做 idle backlight policy
 - 2026-02-05: 实现：屏幕显示 `Hello World` + `fps=<n>`，并补齐 `firmware/README.md` bring-up 说明
