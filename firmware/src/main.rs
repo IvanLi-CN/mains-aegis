@@ -4,8 +4,8 @@
 esp_bootloader_esp_idf::esp_app_desc!();
 
 mod audio_demo;
-mod irq;
 mod front_panel;
+mod irq;
 mod output;
 
 use esp_backtrace as _;
@@ -258,6 +258,14 @@ fn main() -> ! {
     let tca_reset_n = Flex::new(peripherals.GPIO1);
     let dc = Flex::new(peripherals.GPIO10);
     let bl = Flex::new(peripherals.GPIO13);
+    let btn_center = Input::new(
+        peripherals.GPIO0,
+        InputConfig::default().with_pull(Pull::None),
+    );
+    let ctp_irq = Input::new(
+        peripherals.GPIO14,
+        InputConfig::default().with_pull(Pull::None),
+    );
 
     // Ensure THERM_KILL_N is released. This net can hard-disable both TPS via TPS_EN.
     // Configure as open-drain output, set HIGH (release), and also enable input so we can observe if
@@ -354,11 +362,12 @@ fn main() -> ! {
         FORCE_MIN_CHARGE,
     );
 
-    let mut front_panel = front_panel::FrontPanel::new(i2c2, spi, tca_reset_n, dc, bl);
-    if panel_probe.screen_present() {
-        front_panel.init_best_effort();
-    } else {
+    let mut front_panel =
+        front_panel::FrontPanel::new(i2c2, spi, btn_center, ctp_irq, tca_reset_n, dc, bl);
+    if !panel_probe.screen_present() {
         defmt::warn!("ui: skip display init because panel_io probe is missing");
+    } else {
+        front_panel.init_best_effort();
     }
 
     let cfg = output::Config {
@@ -406,7 +415,6 @@ fn main() -> ! {
             let irq_events = irq_tracker.take_delta();
             power.tick(&irq_events);
             front_panel.tick();
-
             if irq_events.any()
                 && output::tps55288::should_log_fault(
                     Instant::now(),
