@@ -79,14 +79,10 @@ const CARD_ALERT_Y: u16 = 114;
 const CARD_ALERT_W: u16 = 108;
 const CARD_ALERT_H: u16 = 26;
 
-static FONT_A_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvB12_tf>();
-static FONT_A_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvR10_tf>();
-
-static FONT_B_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvB14_tf>();
-static FONT_B_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvR12_tf>();
-
-static FONT_C_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_ncenB14_tf>();
-static FONT_C_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_ncenR10_tf>();
+static FONT_LABEL_STRONG: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvB12_tf>();
+static FONT_LABEL: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvR10_tf>();
+static FONT_VALUE_STRONG: FontRenderer = FontRenderer::new::<fonts::u8g2_font_9x15_mf>();
+static FONT_VALUE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13_mf>();
 
 #[derive(Clone, Copy)]
 struct Palette {
@@ -109,8 +105,10 @@ struct Palette {
 
 #[derive(Clone, Copy)]
 enum FontRole {
-    Title,
-    Body,
+    LabelStrong,
+    Label,
+    ValueStrong,
+    Value,
 }
 
 pub fn render_frame<P: UiPainter>(
@@ -203,12 +201,26 @@ pub fn render_frame<P: UiPainter>(
         )?;
     }
 
+    let out_a_mv: u16 = 19_000 + if out_a_on { 120 } else { 0 };
+    let out_a_ma: u16 = if out_a_on { 820 } else { 140 };
+    let out_b_mv: u16 = 19_000 + if out_b_on { 80 } else { 0 };
+    let out_b_ma: u16 = if out_b_on { 760 } else { 0 };
+
+    let chg_vbus_mv: u16 = 20_100 + if chg_on { 120 } else { 0 };
+    let chg_iin_ma: u16 = if chg_on { 1_250 } else { 180 };
+
+    let bms_pack_mv: u16 = 15_700 + ((model.frame_no % 3) as u16) * 10;
+    let bms_soc_pct: u16 = 62 + ((model.frame_no % 4) as u16);
+
+    let therm_a_c: u16 = if therm_on { 52 } else { 37 };
+    let therm_b_c: u16 = if therm_on { 50 } else { 35 };
+
     // Header text.
     render_text(
         painter,
         variant,
-        FontRole::Title,
-        "POWER CONTROL",
+        FontRole::LabelStrong,
+        "MAINS AEGIS",
         Point::new(10, 3),
         HorizontalAlignment::Left,
         palette.text_primary,
@@ -216,8 +228,8 @@ pub fn render_frame<P: UiPainter>(
     render_text(
         painter,
         variant,
-        FontRole::Body,
-        "BQ40Z50 + BQ25792",
+        FontRole::Label,
+        "POWER DASHBOARD",
         Point::new((UI_W - 10) as i32, 4),
         HorizontalAlignment::Right,
         palette.accent,
@@ -227,123 +239,272 @@ pub fn render_frame<P: UiPainter>(
     render_text(
         painter,
         variant,
-        FontRole::Title,
-        "OUT-A READY",
-        Point::new((CARD_A_X + 8) as i32, (CARD_A_Y + 8) as i32),
+        FontRole::LabelStrong,
+        "OUT-A",
+        Point::new((CARD_A_X + 8) as i32, (CARD_A_Y + 6) as i32),
         HorizontalAlignment::Left,
         palette.text_primary,
     )?;
     render_text(
         painter,
         variant,
-        FontRole::Body,
-        "TARGET 19.0V",
-        Point::new((CARD_A_X + 8) as i32, (CARD_A_Y + 26) as i32),
-        HorizontalAlignment::Left,
-        palette.text_primary,
+        FontRole::Label,
+        if out_a_on { "ENABLED" } else { "STANDBY" },
+        Point::new((CARD_A_X + CARD_A_W - 8) as i32, (CARD_A_Y + 7) as i32),
+        HorizontalAlignment::Right,
+        if out_a_on {
+            palette.up_active
+        } else {
+            palette.text_muted
+        },
     )?;
     render_text(
         painter,
         variant,
-        FontRole::Body,
-        "ILIMIT 3.5A",
-        Point::new((CARD_A_X + 8) as i32, (CARD_A_Y + 40) as i32),
+        FontRole::Label,
+        "VOUT",
+        Point::new((CARD_A_X + 8) as i32, (CARD_A_Y + 24) as i32),
         HorizontalAlignment::Left,
         palette.text_muted,
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Value,
+        format_args!("{:>2}.{:01}V", out_a_mv / 1000, (out_a_mv % 1000) / 100),
+        Point::new((CARD_A_X + CARD_A_W - 8) as i32, (CARD_A_Y + 22) as i32),
+        HorizontalAlignment::Right,
+        palette.text_primary,
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Label,
+        "IOUT",
+        Point::new((CARD_A_X + 8) as i32, (CARD_A_Y + 41) as i32),
+        HorizontalAlignment::Left,
+        palette.text_muted,
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Value,
+        format_args!("{:>1}.{:02}A", out_a_ma / 1000, (out_a_ma % 1000) / 10),
+        Point::new((CARD_A_X + CARD_A_W - 8) as i32, (CARD_A_Y + 39) as i32),
+        HorizontalAlignment::Right,
+        palette.text_primary,
     )?;
 
     // OUT-B block.
     render_text(
         painter,
         variant,
-        FontRole::Title,
-        "OUT-B STBY",
-        Point::new((CARD_B_X + 8) as i32, (CARD_B_Y + 8) as i32),
+        FontRole::LabelStrong,
+        "OUT-B",
+        Point::new((CARD_B_X + 8) as i32, (CARD_B_Y + 6) as i32),
         HorizontalAlignment::Left,
         palette.text_primary,
     )?;
     render_text(
         painter,
         variant,
-        FontRole::Body,
-        "TARGET 19.0V",
-        Point::new((CARD_B_X + 8) as i32, (CARD_B_Y + 26) as i32),
-        HorizontalAlignment::Left,
-        palette.text_primary,
+        FontRole::Label,
+        if out_b_on { "ENABLED" } else { "GATED" },
+        Point::new((CARD_B_X + CARD_B_W - 8) as i32, (CARD_B_Y + 7) as i32),
+        HorizontalAlignment::Right,
+        if out_b_on {
+            palette.down_active
+        } else {
+            palette.text_muted
+        },
     )?;
     render_text(
         painter,
         variant,
-        FontRole::Body,
-        "STATE GATED",
-        Point::new((CARD_B_X + 8) as i32, (CARD_B_Y + 40) as i32),
+        FontRole::Label,
+        "VOUT",
+        Point::new((CARD_B_X + 8) as i32, (CARD_B_Y + 24) as i32),
         HorizontalAlignment::Left,
         palette.text_muted,
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Value,
+        format_args!("{:>2}.{:01}V", out_b_mv / 1000, (out_b_mv % 1000) / 100),
+        Point::new((CARD_B_X + CARD_B_W - 8) as i32, (CARD_B_Y + 22) as i32),
+        HorizontalAlignment::Right,
+        palette.text_primary,
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Label,
+        "IOUT",
+        Point::new((CARD_B_X + 8) as i32, (CARD_B_Y + 41) as i32),
+        HorizontalAlignment::Left,
+        palette.text_muted,
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Value,
+        format_args!("{:>1}.{:02}A", out_b_ma / 1000, (out_b_ma % 1000) / 10),
+        Point::new((CARD_B_X + CARD_B_W - 8) as i32, (CARD_B_Y + 39) as i32),
+        HorizontalAlignment::Right,
+        palette.text_primary,
     )?;
 
-    // CHARGER + BMS block.
+    // CHARGER block.
     render_text(
         painter,
         variant,
-        FontRole::Title,
+        FontRole::LabelStrong,
         "CHARGER",
-        Point::new((CARD_CHG_X + 8) as i32, (CARD_CHG_Y + 8) as i32),
+        Point::new((CARD_CHG_X + 8) as i32, (CARD_CHG_Y + 6) as i32),
         HorizontalAlignment::Left,
         palette.text_primary,
     )?;
     render_text(
         painter,
         variant,
-        FontRole::Body,
-        "BQ25792 SAFE",
-        Point::new((CARD_CHG_X + 8) as i32, (CARD_CHG_Y + 24) as i32),
+        FontRole::Label,
+        if chg_on { "ACTIVE" } else { "SAFE" },
+        Point::new(
+            (CARD_CHG_X + CARD_CHG_W - 8) as i32,
+            (CARD_CHG_Y + 7) as i32,
+        ),
+        HorizontalAlignment::Right,
+        if chg_on {
+            palette.right_active
+        } else {
+            palette.text_muted
+        },
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Label,
+        "VBUS",
+        Point::new((CARD_CHG_X + 8) as i32, (CARD_CHG_Y + 22) as i32),
         HorizontalAlignment::Left,
         palette.text_muted,
     )?;
     render_text(
         painter,
         variant,
-        FontRole::Title,
+        FontRole::ValueStrong,
+        format_args!(
+            "{:>2}.{:01}V",
+            chg_vbus_mv / 1000,
+            (chg_vbus_mv % 1000) / 100
+        ),
+        Point::new(
+            (CARD_CHG_X + CARD_CHG_W - 8) as i32,
+            (CARD_CHG_Y + 20) as i32,
+        ),
+        HorizontalAlignment::Right,
+        palette.text_primary,
+    )?;
+
+    // BMS block.
+    render_text(
+        painter,
+        variant,
+        FontRole::LabelStrong,
         "BMS",
-        Point::new((CARD_BMS_X + 8) as i32, (CARD_BMS_Y + 8) as i32),
+        Point::new((CARD_BMS_X + 8) as i32, (CARD_BMS_Y + 6) as i32),
         HorizontalAlignment::Left,
         palette.text_primary,
     )?;
     render_text(
         painter,
         variant,
-        FontRole::Body,
-        "BQ40Z50 0X0B",
-        Point::new((CARD_BMS_X + 8) as i32, (CARD_BMS_Y + 24) as i32),
+        FontRole::Label,
+        "ADDR 0X0B",
+        Point::new(
+            (CARD_BMS_X + CARD_BMS_W - 8) as i32,
+            (CARD_BMS_Y + 7) as i32,
+        ),
+        HorizontalAlignment::Right,
+        if bms_on {
+            palette.left_active
+        } else {
+            palette.text_muted
+        },
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Label,
+        "PACK",
+        Point::new((CARD_BMS_X + 8) as i32, (CARD_BMS_Y + 22) as i32),
         HorizontalAlignment::Left,
         palette.text_muted,
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::ValueStrong,
+        format_args!(
+            "{:>2}.{:01}V",
+            bms_pack_mv / 1000,
+            (bms_pack_mv % 1000) / 100
+        ),
+        Point::new(
+            (CARD_BMS_X + CARD_BMS_W - 8) as i32,
+            (CARD_BMS_Y + 20) as i32,
+        ),
+        HorizontalAlignment::Right,
+        palette.text_primary,
     )?;
 
     // Alert row.
     render_text(
         painter,
         variant,
-        FontRole::Body,
-        if model.touch_irq {
-            "ALERT TOUCH IRQ"
-        } else {
-            "ALERT NONE"
-        },
+        FontRole::Label,
+        "THERM",
         Point::new((CARD_ALERT_X + 6) as i32, (CARD_ALERT_Y + 7) as i32),
         HorizontalAlignment::Left,
-        if model.touch_irq {
-            palette.touch_active
+        palette.text_muted,
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Value,
+        format_args!("A{:02}C B{:02}C", therm_a_c, therm_b_c),
+        Point::new((CARD_ALERT_X + 54) as i32, (CARD_ALERT_Y + 5) as i32),
+        HorizontalAlignment::Left,
+        if therm_on {
+            palette.center_active
         } else {
             palette.text_primary
         },
     )?;
-
-    // Footer: map keys to product actions.
     render_text(
         painter,
         variant,
-        FontRole::Body,
-        "UP:A DN:B LT:BMS RT:CHG",
+        FontRole::Label,
+        if model.touch_irq { "IRQ ON" } else { "IRQ OFF" },
+        Point::new(
+            (CARD_ALERT_X + CARD_ALERT_W - 6) as i32,
+            (CARD_ALERT_Y + 7) as i32,
+        ),
+        HorizontalAlignment::Right,
+        if model.touch_irq {
+            palette.touch_active
+        } else {
+            palette.text_muted
+        },
+    )?;
+
+    // Footer: key mapping and live numeric summary.
+    render_text(
+        painter,
+        variant,
+        FontRole::Label,
+        "UP:A  DN:B  LT:BMS  RT:CHG  OK:THERM",
         Point::new(8, (UI_H - 15) as i32),
         HorizontalAlignment::Left,
         palette.text_muted,
@@ -351,8 +512,13 @@ pub fn render_frame<P: UiPainter>(
     render_text(
         painter,
         variant,
-        FontRole::Body,
-        focus_action_label(model.focus),
+        FontRole::Value,
+        format_args!(
+            "SOC {:02}%  IIN {:>1}.{:02}A",
+            bms_soc_pct,
+            chg_iin_ma / 1000,
+            (chg_iin_ma % 1000) / 10
+        ),
         Point::new((UI_W - 8) as i32, (UI_H - 15) as i32),
         HorizontalAlignment::Right,
         palette.accent,
@@ -465,26 +631,12 @@ fn render_text<P: UiPainter>(
     }
 }
 
-fn select_renderer(variant: UiVariant, role: FontRole) -> &'static FontRenderer {
-    match (variant, role) {
-        (UiVariant::InstrumentA, FontRole::Title) => &FONT_A_TITLE,
-        (UiVariant::InstrumentA, FontRole::Body) => &FONT_A_BODY,
-        (UiVariant::InstrumentB, FontRole::Title) => &FONT_B_TITLE,
-        (UiVariant::InstrumentB, FontRole::Body) => &FONT_B_BODY,
-        (UiVariant::RetroC, FontRole::Title) => &FONT_C_TITLE,
-        (UiVariant::RetroC, FontRole::Body) => &FONT_C_BODY,
-    }
-}
-
-fn focus_action_label(focus: UiFocus) -> &'static str {
-    match focus {
-        UiFocus::Idle => "OK:THERM NORMAL",
-        UiFocus::Up => "SELECT OUT-A",
-        UiFocus::Down => "SELECT OUT-B",
-        UiFocus::Left => "SELECT BMS",
-        UiFocus::Right => "SELECT CHARGER",
-        UiFocus::Center => "THERM CHECK",
-        UiFocus::Touch => "TOUCH ALERT ACK",
+fn select_renderer(_variant: UiVariant, role: FontRole) -> &'static FontRenderer {
+    match role {
+        FontRole::LabelStrong => &FONT_LABEL_STRONG,
+        FontRole::Label => &FONT_LABEL,
+        FontRole::ValueStrong => &FONT_VALUE_STRONG,
+        FontRole::Value => &FONT_VALUE,
     }
 }
 

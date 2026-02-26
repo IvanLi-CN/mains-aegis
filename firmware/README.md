@@ -230,10 +230,10 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，有效显示区 `320x172`，横屏，SPI）并渲染工业仪表风 UI：
 
-- 英文状态文案（`MAINS AEGIS`、`FOCUS ...`、`IRQ ...`）
-- 五向按键区（`UP/DN/LT/RT/OK`）+ 触摸状态块（`TOUCH`）
-- 按键联动高亮 + `touch_irq` 状态指示
-- 当前默认视觉方案：`Variant A`
+- 功能看板分区：`OUT-A`、`OUT-B`、`CHARGER`、`BMS`、`THERM/ALERT`
+- 五向按键映射为功能焦点切换：`UP->OUT-A`、`DOWN->OUT-B`、`LEFT->BMS`、`RIGHT->CHARGER`、`CENTER->THERM`
+- 触摸中断仅作为告警指示（`IRQ ON/OFF`）
+- 当前默认视觉方案：`Variant A`（仅影响配色，不改变功能信息结构）
 
 渲染架构采用“同源渲染”：
 
@@ -242,9 +242,9 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 字体方案（互联网来源，u8g2）：
 
-- A（默认）：`u8g2_font_8x13B_tf` + `u8g2_font_7x14B_tf`
-- B：`u8g2_font_9x15_tf` + `u8g2_font_8x13_tf`
-- C：`u8g2_font_pxplusibmvga8_tf` + `u8g2_font_pxplusibmvga8_tr`
+- A（非数值文本）：`u8g2_font_helvB12_tf` + `u8g2_font_helvR10_tf`
+- B（数值文本，等宽）：`u8g2_font_9x15_mf` + `u8g2_font_8x13_mf`
+- 字体使用规则：非数值信息一律使用 A；数值与对齐字段一律使用 B（monospace）
 - 许可说明：`u8g2-fonts` crate 本身是 MIT/Apache-2.0；具体字体许可需按 [U8g2 license](https://raw.githubusercontent.com/olikraus/u8g2/master/LICENSE) 核对。
 
 硬件要点（冻结口径）：
