@@ -51,27 +51,33 @@ const FRAME_BG_A: u16 = 0x0821;
 const FRAME_BG_B: u16 = 0x1062;
 const FRAME_BG_C: u16 = 0x0000;
 
-const CELL_W: u16 = 44;
-const CELL_H: u16 = 44;
-const PAD_X: u16 = 18;
-const PAD_Y: u16 = 24;
-const PAD_GAP: u16 = 6;
+const HEADER_H: u16 = 18;
+const FOOTER_H: u16 = 20;
 
-const UP_X: u16 = PAD_X + CELL_W + PAD_GAP;
-const UP_Y: u16 = PAD_Y;
-const DOWN_X: u16 = PAD_X + CELL_W + PAD_GAP;
-const DOWN_Y: u16 = PAD_Y + (CELL_H + PAD_GAP) * 2;
-const LEFT_X: u16 = PAD_X;
-const LEFT_Y: u16 = PAD_Y + CELL_H + PAD_GAP;
-const RIGHT_X: u16 = PAD_X + (CELL_W + PAD_GAP) * 2;
-const RIGHT_Y: u16 = PAD_Y + CELL_H + PAD_GAP;
-const CENTER_X: u16 = PAD_X + CELL_W + PAD_GAP;
-const CENTER_Y: u16 = PAD_Y + CELL_H + PAD_GAP;
+const CARD_A_X: u16 = 8;
+const CARD_A_Y: u16 = 22;
+const CARD_A_W: u16 = 188;
+const CARD_A_H: u16 = 56;
 
-const TOUCH_X: u16 = 210;
-const TOUCH_Y: u16 = 24;
-const TOUCH_W: u16 = 94;
-const TOUCH_H: u16 = 124;
+const CARD_B_X: u16 = 8;
+const CARD_B_Y: u16 = 84;
+const CARD_B_W: u16 = 188;
+const CARD_B_H: u16 = 56;
+
+const CARD_CHG_X: u16 = 204;
+const CARD_CHG_Y: u16 = 22;
+const CARD_CHG_W: u16 = 108;
+const CARD_CHG_H: u16 = 42;
+
+const CARD_BMS_X: u16 = 204;
+const CARD_BMS_Y: u16 = 68;
+const CARD_BMS_W: u16 = 108;
+const CARD_BMS_H: u16 = 42;
+
+const CARD_ALERT_X: u16 = 204;
+const CARD_ALERT_Y: u16 = 114;
+const CARD_ALERT_W: u16 = 108;
+const CARD_ALERT_H: u16 = 26;
 
 static FONT_A_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13B_tf>();
 static FONT_A_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_7x14B_tf>();
@@ -119,102 +125,90 @@ pub fn render_frame<P: UiPainter>(
 
     draw_outline(painter, 0, 0, UI_W, UI_H, palette.panel_border)?;
 
-    // Header and status bars.
-    fill(painter, 0, 0, UI_W, 18, palette.panel)?;
-    fill(painter, 0, UI_H - 20, UI_W, 20, palette.panel)?;
+    // Header and footer.
+    fill(painter, 0, 0, UI_W, HEADER_H, palette.panel)?;
+    fill(painter, 0, UI_H - FOOTER_H, UI_W, FOOTER_H, palette.panel)?;
 
-    // Group containers.
-    fill(painter, 8, 20, 186, 128, palette.panel)?;
-    draw_outline(painter, 8, 20, 186, 128, palette.panel_border)?;
-
-    fill(painter, 204, 20, 108, 128, palette.panel)?;
-    draw_outline(painter, 204, 20, 108, 128, palette.panel_border)?;
-
-    let up_on = model.focus == UiFocus::Up;
-    let down_on = model.focus == UiFocus::Down;
-    let left_on = model.focus == UiFocus::Left;
-    let right_on = model.focus == UiFocus::Right;
-    let center_on = model.focus == UiFocus::Center;
-    let touch_on = model.focus == UiFocus::Touch || model.touch_irq;
+    let out_a_on = model.focus == UiFocus::Up;
+    let out_b_on = model.focus == UiFocus::Down;
+    let bms_on = model.focus == UiFocus::Left;
+    let chg_on = model.focus == UiFocus::Right;
+    let therm_on = model.focus == UiFocus::Center;
+    let alert_on = model.focus == UiFocus::Touch || model.touch_irq;
 
     draw_key(
         painter,
-        UP_X,
-        UP_Y,
-        CELL_W,
-        CELL_H,
-        up_on,
+        CARD_A_X,
+        CARD_A_Y,
+        CARD_A_W,
+        CARD_A_H,
+        out_a_on,
         palette.key_idle,
         palette.key_border,
         palette.up_active,
     )?;
     draw_key(
         painter,
-        DOWN_X,
-        DOWN_Y,
-        CELL_W,
-        CELL_H,
-        down_on,
+        CARD_B_X,
+        CARD_B_Y,
+        CARD_B_W,
+        CARD_B_H,
+        out_b_on,
         palette.key_idle,
         palette.key_border,
         palette.down_active,
     )?;
     draw_key(
         painter,
-        LEFT_X,
-        LEFT_Y,
-        CELL_W,
-        CELL_H,
-        left_on,
-        palette.key_idle,
-        palette.key_border,
-        palette.left_active,
-    )?;
-    draw_key(
-        painter,
-        RIGHT_X,
-        RIGHT_Y,
-        CELL_W,
-        CELL_H,
-        right_on,
+        CARD_CHG_X,
+        CARD_CHG_Y,
+        CARD_CHG_W,
+        CARD_CHG_H,
+        chg_on,
         palette.key_idle,
         palette.key_border,
         palette.right_active,
     )?;
     draw_key(
         painter,
-        CENTER_X,
-        CENTER_Y,
-        CELL_W,
-        CELL_H,
-        center_on,
+        CARD_BMS_X,
+        CARD_BMS_Y,
+        CARD_BMS_W,
+        CARD_BMS_H,
+        bms_on,
         palette.key_idle,
         palette.key_border,
-        palette.center_active,
+        palette.left_active,
     )?;
     draw_key(
         painter,
-        TOUCH_X,
-        TOUCH_Y,
-        TOUCH_W,
-        TOUCH_H,
-        touch_on,
+        CARD_ALERT_X,
+        CARD_ALERT_Y,
+        CARD_ALERT_W,
+        CARD_ALERT_H,
+        alert_on,
         palette.key_idle,
         palette.key_border,
         palette.touch_active,
     )?;
 
-    // Focus tracker bar.
-    fill(painter, 214, 136, 88, 6, palette.key_idle)?;
-    let tracker_w = ((model.frame_no % 88) as u16).saturating_add(1);
-    fill(painter, 214, 136, tracker_w, 6, palette.accent)?;
+    if therm_on {
+        fill(
+            painter,
+            CARD_A_X + CARD_A_W - 48,
+            CARD_A_Y + 4,
+            40,
+            10,
+            palette.center_active,
+        )?;
+    }
 
     // Header text.
     render_text(
         painter,
         variant,
         FontRole::Title,
-        "MAINS AEGIS",
+        "POWER CONTROL",
         Point::new(10, 3),
         HorizontalAlignment::Left,
         palette.text_primary,
@@ -223,75 +217,134 @@ pub fn render_frame<P: UiPainter>(
         painter,
         variant,
         FontRole::Body,
-        style_label(variant),
+        "BQ40Z50 + BQ25792",
         Point::new((UI_W - 10) as i32, 4),
         HorizontalAlignment::Right,
         palette.accent,
     )?;
 
-    // Key labels.
+    // OUT-A block.
     render_text(
         painter,
         variant,
-        FontRole::Body,
-        "UP",
-        Point::new((UP_X + CELL_W / 2) as i32, (UP_Y + 14) as i32),
-        HorizontalAlignment::Center,
+        FontRole::Title,
+        "OUT-A READY",
+        Point::new((CARD_A_X + 8) as i32, (CARD_A_Y + 8) as i32),
+        HorizontalAlignment::Left,
         palette.text_primary,
     )?;
     render_text(
         painter,
         variant,
         FontRole::Body,
-        "DN",
-        Point::new((DOWN_X + CELL_W / 2) as i32, (DOWN_Y + 14) as i32),
-        HorizontalAlignment::Center,
+        "TARGET 19.0V",
+        Point::new((CARD_A_X + 8) as i32, (CARD_A_Y + 26) as i32),
+        HorizontalAlignment::Left,
         palette.text_primary,
     )?;
     render_text(
         painter,
         variant,
         FontRole::Body,
-        "LT",
-        Point::new((LEFT_X + CELL_W / 2) as i32, (LEFT_Y + 14) as i32),
-        HorizontalAlignment::Center,
-        palette.text_primary,
-    )?;
-    render_text(
-        painter,
-        variant,
-        FontRole::Body,
-        "RT",
-        Point::new((RIGHT_X + CELL_W / 2) as i32, (RIGHT_Y + 14) as i32),
-        HorizontalAlignment::Center,
-        palette.text_primary,
-    )?;
-    render_text(
-        painter,
-        variant,
-        FontRole::Body,
-        "OK",
-        Point::new((CENTER_X + CELL_W / 2) as i32, (CENTER_Y + 14) as i32),
-        HorizontalAlignment::Center,
-        palette.text_primary,
-    )?;
-    render_text(
-        painter,
-        variant,
-        FontRole::Body,
-        "TOUCH",
-        Point::new((TOUCH_X + TOUCH_W / 2) as i32, (TOUCH_Y + 52) as i32),
-        HorizontalAlignment::Center,
-        palette.text_primary,
+        "ILIMIT 3.5A",
+        Point::new((CARD_A_X + 8) as i32, (CARD_A_Y + 40) as i32),
+        HorizontalAlignment::Left,
+        palette.text_muted,
     )?;
 
-    // Footer text.
+    // OUT-B block.
+    render_text(
+        painter,
+        variant,
+        FontRole::Title,
+        "OUT-B STBY",
+        Point::new((CARD_B_X + 8) as i32, (CARD_B_Y + 8) as i32),
+        HorizontalAlignment::Left,
+        palette.text_primary,
+    )?;
     render_text(
         painter,
         variant,
         FontRole::Body,
-        format_args!("FRAME {:06}", model.frame_no),
-        Point::new(10, (UI_H - 16) as i32),
+        "TARGET 19.0V",
+        Point::new((CARD_B_X + 8) as i32, (CARD_B_Y + 26) as i32),
+        HorizontalAlignment::Left,
+        palette.text_primary,
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Body,
+        "STATE GATED",
+        Point::new((CARD_B_X + 8) as i32, (CARD_B_Y + 40) as i32),
+        HorizontalAlignment::Left,
+        palette.text_muted,
+    )?;
+
+    // CHARGER + BMS block.
+    render_text(
+        painter,
+        variant,
+        FontRole::Title,
+        "CHARGER",
+        Point::new((CARD_CHG_X + 8) as i32, (CARD_CHG_Y + 8) as i32),
+        HorizontalAlignment::Left,
+        palette.text_primary,
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Body,
+        "BQ25792 SAFE",
+        Point::new((CARD_CHG_X + 8) as i32, (CARD_CHG_Y + 24) as i32),
+        HorizontalAlignment::Left,
+        palette.text_muted,
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Title,
+        "BMS",
+        Point::new((CARD_BMS_X + 8) as i32, (CARD_BMS_Y + 8) as i32),
+        HorizontalAlignment::Left,
+        palette.text_primary,
+    )?;
+    render_text(
+        painter,
+        variant,
+        FontRole::Body,
+        "BQ40Z50 0X0B",
+        Point::new((CARD_BMS_X + 8) as i32, (CARD_BMS_Y + 24) as i32),
+        HorizontalAlignment::Left,
+        palette.text_muted,
+    )?;
+
+    // Alert row.
+    render_text(
+        painter,
+        variant,
+        FontRole::Body,
+        if model.touch_irq {
+            "ALERT TOUCH IRQ"
+        } else {
+            "ALERT NONE"
+        },
+        Point::new((CARD_ALERT_X + 6) as i32, (CARD_ALERT_Y + 7) as i32),
+        HorizontalAlignment::Left,
+        if model.touch_irq {
+            palette.touch_active
+        } else {
+            palette.text_primary
+        },
+    )?;
+
+    // Footer: map keys to product actions.
+    render_text(
+        painter,
+        variant,
+        FontRole::Body,
+        "UP:A DN:B LT:BMS RT:CHG",
+        Point::new(8, (UI_H - 15) as i32),
         HorizontalAlignment::Left,
         palette.text_muted,
     )?;
@@ -299,38 +352,32 @@ pub fn render_frame<P: UiPainter>(
         painter,
         variant,
         FontRole::Body,
-        focus_label(model.focus),
-        Point::new((UI_W / 2) as i32, (UI_H - 16) as i32),
-        HorizontalAlignment::Center,
-        palette.text_primary,
-    )?;
-    render_text(
-        painter,
-        variant,
-        FontRole::Body,
-        if model.touch_irq { "IRQ ON" } else { "IRQ OFF" },
-        Point::new((UI_W - 10) as i32, (UI_H - 16) as i32),
+        focus_action_label(model.focus),
+        Point::new((UI_W - 8) as i32, (UI_H - 15) as i32),
         HorizontalAlignment::Right,
-        if model.touch_irq {
-            palette.touch_active
-        } else {
-            palette.text_muted
-        },
+        palette.accent,
     )?;
 
     Ok(())
 }
 
 fn draw_background_grid<P: UiPainter>(painter: &mut P, palette: Palette) -> Result<(), P::Error> {
-    let mut y = 18;
-    while y < UI_H - 20 {
+    let mut y = HEADER_H;
+    while y < UI_H - FOOTER_H {
         fill(painter, 0, y, UI_W, 1, palette.grid)?;
         y += 8;
     }
 
     let mut x = 0;
     while x < UI_W {
-        fill(painter, x, 18, 1, UI_H - 38, palette.grid)?;
+        fill(
+            painter,
+            x,
+            HEADER_H,
+            1,
+            UI_H - HEADER_H - FOOTER_H,
+            palette.grid,
+        )?;
         x += 16;
     }
 
@@ -429,23 +476,15 @@ fn select_renderer(variant: UiVariant, role: FontRole) -> &'static FontRenderer 
     }
 }
 
-fn style_label(variant: UiVariant) -> &'static str {
-    match variant {
-        UiVariant::InstrumentA => "STYLE A",
-        UiVariant::InstrumentB => "STYLE B",
-        UiVariant::RetroC => "STYLE C",
-    }
-}
-
-fn focus_label(focus: UiFocus) -> &'static str {
+fn focus_action_label(focus: UiFocus) -> &'static str {
     match focus {
-        UiFocus::Idle => "FOCUS IDLE",
-        UiFocus::Up => "FOCUS UP",
-        UiFocus::Down => "FOCUS DOWN",
-        UiFocus::Left => "FOCUS LEFT",
-        UiFocus::Right => "FOCUS RIGHT",
-        UiFocus::Center => "FOCUS OK",
-        UiFocus::Touch => "FOCUS TOUCH",
+        UiFocus::Idle => "OK:THERM NORMAL",
+        UiFocus::Up => "SELECT OUT-A",
+        UiFocus::Down => "SELECT OUT-B",
+        UiFocus::Left => "SELECT BMS",
+        UiFocus::Right => "SELECT CHARGER",
+        UiFocus::Center => "THERM CHECK",
+        UiFocus::Touch => "TOUCH ALERT ACK",
     }
 }
 
