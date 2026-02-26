@@ -79,14 +79,14 @@ const CARD_ALERT_Y: u16 = 114;
 const CARD_ALERT_W: u16 = 108;
 const CARD_ALERT_H: u16 = 26;
 
-static FONT_A_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13B_tf>();
-static FONT_A_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_7x14B_tf>();
+static FONT_A_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvB12_tf>();
+static FONT_A_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvR10_tf>();
 
-static FONT_B_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_9x15_tf>();
-static FONT_B_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13_tf>();
+static FONT_B_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvB14_tf>();
+static FONT_B_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_helvR12_tf>();
 
-static FONT_C_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_pxplusibmvga8_tf>();
-static FONT_C_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_pxplusibmvga8_tr>();
+static FONT_C_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_ncenB14_tf>();
+static FONT_C_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_ncenR10_tf>();
 
 #[derive(Clone, Copy)]
 struct Palette {
