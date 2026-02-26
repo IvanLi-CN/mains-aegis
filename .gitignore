@@ -12,6 +12,7 @@ firmware/target/
 firmware/.esp32-port
 firmware/.mcu-agentd/
 .mcu-agentd/
+tools/front-panel-preview/target/
 
 # JS tooling (bun)
 node_modules/

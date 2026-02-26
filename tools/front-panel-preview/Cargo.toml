@@ -1,0 +1,10 @@
+[package]
+name = "front-panel-preview"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+embedded-graphics-core = "0.4.1"
+image = { version = "0.25.5", default-features = false, features = ["png"] }
+u8g2-fonts = { version = "0.7.2", default-features = false }

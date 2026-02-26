@@ -226,13 +226,26 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - `BQ40Z50` 默认只使用 `7-bit 0x0B`（等价 `8-bit W=0x16/R=0x17`）；只有 `--features bms-dual-probe-diag` 才会额外探测 `0x16` 以做兼容诊断。
 - 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。
 
-## 前面板屏幕显示（Plan 3kz8p）
+## 前面板屏幕显示（Spec 6qrjs）
 
-固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，`240x320`，SPI）并显示最小内容：
+固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，有效显示区 `320x172`，横屏，SPI）并渲染工业仪表风 UI：
 
-- 文本：`Hello World`
-- 角落 overlay：`fps=<n>`
-  - 这里的 `fps` 指固件渲染循环的帧率（即“每秒发起多少次屏幕写入/刷新”），不是面板物理扫描频率
+- 英文状态文案（`MAINS AEGIS`、`FOCUS ...`、`IRQ ...`）
+- 五向按键区（`UP/DN/LT/RT/OK`）+ 触摸状态块（`TOUCH`）
+- 按键联动高亮 + `touch_irq` 状态指示
+- 当前默认视觉方案：`Variant A`
+
+渲染架构采用“同源渲染”：
+
+- 固件显示路径：`firmware/src/front_panel.rs` -> `firmware/src/front_panel_scene.rs`
+- 主机预览路径：`tools/front-panel-preview` 复用同一 `front_panel_scene.rs`
+
+字体方案（互联网来源，u8g2）：
+
+- A（默认）：`u8g2_font_8x13B_tf` + `u8g2_font_7x14B_tf`
+- B：`u8g2_font_9x15_tf` + `u8g2_font_8x13_tf`
+- C：`u8g2_font_pxplusibmvga8_tf` + `u8g2_font_pxplusibmvga8_tr`
+- 许可说明：`u8g2-fonts` crate 本身是 MIT/Apache-2.0；具体字体许可需按 [U8g2 license](https://raw.githubusercontent.com/olikraus/u8g2/master/LICENSE) 核对。
 
 硬件要点（冻结口径）：
 
@@ -252,8 +265,25 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 预期日志（`defmt`）：
 
-- 成功：`ui: front panel ready`
+- 成功：`ui: front panel ready (driver=gc9307-async mode=industrial-demo variant=A ...)`
 - 失败：`ui: ... failed ...`（并退回到安全态：屏幕不选中、复位保持、背光关闭）
+
+### 1:1 预览工具（主机）
+
+预览工具会输出与固件同源渲染的两类产物：
+
+- `framebuffer.bin`（RGB565 little-endian）
+- `preview.png`（`320x172`）
+
+示例：
+
+```bash
+cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
+  --variant A \\
+  --focus idle \\
+  --out-dir /abs/path/to/front-panel-preview \\
+  --frame-no 12
+```
 
 ## 烧录与监视（推荐：`mcu-agentd`，从仓库根目录运行）
 
