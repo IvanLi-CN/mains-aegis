@@ -40,7 +40,7 @@ const OFFSET_Y: u16 = 34;
 const BACKLIGHT_ACTIVE_LOW: bool = true;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
-const DEFAULT_UI_VARIANT: UiVariant = UiVariant::InstrumentA;
+const DEFAULT_UI_VARIANT: UiVariant = UiVariant::InstrumentB;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitState {
@@ -553,6 +553,7 @@ fn variant_name(variant: UiVariant) -> &'static str {
         UiVariant::InstrumentA => "A",
         UiVariant::InstrumentB => "B",
         UiVariant::RetroC => "C",
+        UiVariant::InstrumentD => "D",
     }
 }
 

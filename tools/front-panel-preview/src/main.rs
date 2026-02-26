@@ -64,6 +64,7 @@ enum VariantArg {
     A,
     B,
     C,
+    D,
 }
 
 impl VariantArg {
@@ -72,8 +73,9 @@ impl VariantArg {
             "a" => Ok(Self::A),
             "b" => Ok(Self::B),
             "c" => Ok(Self::C),
+            "d" => Ok(Self::D),
             _ => Err(format!(
-                "unsupported --variant value: {raw} (expected A|B|C)"
+                "unsupported --variant value: {raw} (expected A|B|C|D)"
             )),
         }
     }
@@ -83,6 +85,7 @@ impl VariantArg {
             VariantArg::A => "A",
             VariantArg::B => "B",
             VariantArg::C => "C",
+            VariantArg::D => "D",
         }
     }
 
@@ -91,6 +94,7 @@ impl VariantArg {
             VariantArg::A => UiVariant::InstrumentA,
             VariantArg::B => UiVariant::InstrumentB,
             VariantArg::C => UiVariant::RetroC,
+            VariantArg::D => UiVariant::InstrumentD,
         }
     }
 }
@@ -210,7 +214,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C} --focus {idle|up|down|left|right|center|touch} --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant A --focus idle --out-dir /tmp/front-panel-preview",

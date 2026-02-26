@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 部分完成（6/7）
+- Status: 已完成
 - Created: 2026-02-26
 - Last: 2026-02-26
 
@@ -18,8 +18,8 @@
 
 - 固定 `320x172` 横屏有效区，交付工业仪表风英文 UI。
 - 新增共享渲染模块，由固件与主机预览工具复用同一渲染代码。
-- 交付 3 个视觉变体（A/B/C 配色）与 7 个交互状态帧（idle/up/down/left/right/center/touch）。
-- 默认固化 Variant A，保留 B/C 用于视觉对比。
+- 交付 4 个视觉变体（A/B/C/D）与 7 个交互状态帧（idle/up/down/left/right/center/touch）。
+- 默认固化 Variant B 作为 Dashboard 主界面；Variant C 收敛为“高级设置/自检页”风格。
 - 建立 `docs/specs` 主规格目录并与实现保持同步。
 
 ### Non-goals
@@ -70,6 +70,28 @@
 - 固件启动后读入当前按键状态，使用共享 renderer 绘制完整首帧。
 - 周期轮询输入，状态变化时重绘界面并更新 focus/highlight。
 - 主机工具根据 `--variant` 与 `--focus` 调用同一 renderer，输出 raw framebuffer 与 PNG。
+- Dashboard 冻结语义：
+  - `AC MODE`：显示 `POUT`、`PIN`（主 KPI）与 `IIN/ICHG/IOUT NET`（次级流向）
+  - `BATT MODE`：显示 `POUT`、`IOUT`（主 KPI）与 `VOUT/IOUT/POUT`（次级输出）
+  - 右侧固定状态块：`BMS SOC`、`THERM`、`MODE/IRQ`
+
+### Dashboard 视觉冻结（Variant B）
+
+- 冻结对象：`Variant B (Neutral)` 作为默认 Dashboard；`Variant C` 仅用于自检页。
+- 主 KPI 面板：`x=6 y=22 w=196 h=52`。
+  - 标签行：`y=29`（`POUT W / PIN W` 或 `POUT W / IOUT A`）
+  - 数值行：`y=50`（`NumBig`，数值字体 B）
+- 次级信息面板：`x=6 y=78 w=196 h=72`。
+  - 三行信息基线：`y=99 / y=116 / y=133`
+- 所有冻结布局均按 `320x172` 有效区评审，不允许缩放、裁切或旋转补偿。
+
+### 冻结参考图（Spec assets）
+
+- AC mode: `assets/dashboard-b-ac-mode.png`
+- BATT mode: `assets/dashboard-b-batt-mode.png`
+
+![Dashboard Variant B - AC mode](assets/dashboard-b-ac-mode.png)
+![Dashboard Variant B - BATT mode](assets/dashboard-b-batt-mode.png)
 
 ### Edge cases / errors
 
@@ -124,7 +146,9 @@ None
 ## 计划资产（Plan assets）
 
 - Directory: `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/`
-- In-plan references: None
+- In-plan references:
+  - `assets/dashboard-b-ac-mode.png`
+  - `assets/dashboard-b-batt-mode.png`
 
 ## 资产晋升（Asset promotion）
 
@@ -138,7 +162,7 @@ None
 - [x] M4: 新增主机预览工具并输出 raw + PNG
 - [x] M5: 批量导出 21 张状态预览图
 - [x] M6: 更新 README 与旧计划口径漂移
-- [ ] M7: 真机主观观感确认（主人评审）
+- [x] M7: Dashboard 视觉冻结（主人评审通过，按 Variant B 锁定）
 
 ## 方案概述（Approach, high-level）
 
@@ -149,18 +173,22 @@ None
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）
 
 - 风险：逐像素字体渲染在 MCU 侧吞吐较低，后续可能需要局部刷新优化。
-- 需要决策的问题：是否将 Variant A 之外的样式保留为运行时可切换功能。
-- 假设（需主人确认）：当前阶段默认 Variant A 即可满足第一轮上板验证。
+- 需要决策的问题：A/D 是否保留为后续主题实验样式。
+- 假设（已确认）：当前阶段默认 Variant B 满足 Dashboard 首轮上板验证，Variant C 用于自检页面方向。
 
 ## 变更记录（Change log）
 
 - 2026-02-26: 新建规格并完成第一轮实现同步（共享渲染 + 预览工具 + 文档更新）。
 - 2026-02-26: 根据评审反馈将 Dashboard 文案收敛到项目功能域，并固定 A/B 字体分工（标签 A，数值 B）。
+- 2026-02-26: 根据评审反馈将默认 Dashboard 切换为 Variant B，并将 Variant C 重定位为自检页视觉。
+- 2026-02-26: 冻结 Variant B Dashboard 间距与留白（主 KPI 面板 + 次级面板行距），并归档 AC/BATT 参考图。
 
 ## 参考（References）
 
 - `firmware/src/front_panel.rs`
 - `firmware/src/front_panel_scene.rs`
 - `tools/front-panel-preview/src/main.rs`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-b-ac-mode.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-b-batt-mode.png`
 - [u8g2-fonts docs](https://docs.rs/u8g2-fonts/latest/u8g2_fonts/fonts/index.html)
 - [u8g2 license](https://raw.githubusercontent.com/olikraus/u8g2/master/LICENSE)

@@ -19,4 +19,4 @@
 
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
-| 6qrjs | Front panel industrial UI preview（320x172） | 部分完成（6/7） | `6qrjs-front-panel-industrial-ui-preview/SPEC.md` | 2026-02-26 | 默认风格已落地为 A；待真机主观观感确认 |
+| 6qrjs | Front panel industrial UI preview（320x172） | 已完成 | `6qrjs-front-panel-industrial-ui-preview/SPEC.md` | 2026-02-26 | Dashboard 已冻结为 Variant B；Spec 内已归档 AC/BATT 参考图 |

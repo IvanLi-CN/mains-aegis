@@ -230,10 +230,16 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，有效显示区 `320x172`，横屏，SPI）并渲染工业仪表风 UI：
 
-- 功能看板分区：`OUT-A`、`OUT-B`、`CHARGER`、`BMS`、`THERM/ALERT`
+- Dashboard 信息分层（项目口径）：
+  - `AC MODE`：主 KPI 为 `POUT/PIN`，次级为 `IIN/ICHG/IOUT NET`
+  - `BATT MODE`：主 KPI 为 `POUT/IOUT`，次级为 `VOUT/IOUT/POUT`
+  - 右侧状态块固定为 `BMS SOC`、`THERM`、`MODE/IRQ`
 - 五向按键映射为功能焦点切换：`UP->OUT-A`、`DOWN->OUT-B`、`LEFT->BMS`、`RIGHT->CHARGER`、`CENTER->THERM`
 - 触摸中断仅作为告警指示（`IRQ ON/OFF`）
-- 当前默认视觉方案：`Variant A`（仅影响配色，不改变功能信息结构）
+- 当前默认视觉方案：`Variant B`（Dashboard 主界面）
+- `Variant C` 重定位为“高级设置/自检页”风格，不作为默认 Dashboard
+- Dashboard 配色风格固定为 3 套：`Variant A = Calm Blue`、`Variant B = Neutral`、`Variant D = Warm`
+- Dashboard 间距与行距冻结参数见：`docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`
 
 渲染架构采用“同源渲染”：
 
@@ -242,10 +248,15 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 字体方案（互联网来源，u8g2）：
 
-- A（非数值文本）：`u8g2_font_helvB12_tf` + `u8g2_font_helvR10_tf`
-- B（数值文本，等宽）：`u8g2_font_9x15_mf` + `u8g2_font_8x13_mf`
+- A（非数值文本）：`u8g2_font_8x13B_tf` + `u8g2_font_7x14B_tf`
+- B（数值文本，等宽）：`u8g2_font_10x20_mf` + `u8g2_font_8x13_mf`
 - 字体使用规则：非数值信息一律使用 A；数值与对齐字段一律使用 B（monospace）
 - 许可说明：`u8g2-fonts` crate 本身是 MIT/Apache-2.0；具体字体许可需按 [U8g2 license](https://raw.githubusercontent.com/olikraus/u8g2/master/LICENSE) 核对。
+
+屏幕物理尺寸口径（用于 UI 密度评审）：
+
+- 仓库内机械图当前状态：`未检查`（未收录屏幕模组 AA/mm 明确参数）
+- 同分辨率 1.47" 模组参考：AA 约 `17.39 x 32.35mm`、约 `250 PPI`（用于字体/留白密度估算，来源：[Waveshare 1.47inch LCD](https://www.waveshare.com/1.47inch-lcd-module.htm)、[Adafruit 1.47\" 172x320](https://www.adafruit.com/product/5393)）
 
 硬件要点（冻结口径）：
 
@@ -261,11 +272,11 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 背光：
   - `GPIO13`：`BLK`（控制面板 `Q16(BSS84)` 高边开关；当前固件按“低电平点亮背光”实现）
 - 触摸：
-  - 本计划 **暂不做触摸**：固件保持 `TP_RESET` 为低，使触摸控制器处于复位态
+  - 当前仅使用 `CTP_IRQ` 做告警可视化（不解析触摸手势/坐标）
 
 预期日志（`defmt`）：
 
-- 成功：`ui: front panel ready (driver=gc9307-async mode=industrial-demo variant=A ...)`
+- 成功：`ui: front panel ready (driver=gc9307-async mode=industrial-demo variant=B ...)`
 - 失败：`ui: ... failed ...`（并退回到安全态：屏幕不选中、复位保持、背光关闭）
 
 ### 1:1 预览工具（主机）
@@ -279,7 +290,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 ```bash
 cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
-  --variant A \\
+  --variant B \\
   --focus idle \\
   --out-dir /abs/path/to/front-panel-preview \\
   --frame-no 12
