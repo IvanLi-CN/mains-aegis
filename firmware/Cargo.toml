@@ -13,6 +13,7 @@ bms-dual-probe-diag = []
 
 [dependencies]
 defmt = "1.0.1"
+embedded-graphics-core = "0.4.1"
 embedded-hal = "1"
 gc9307-async = { version = "0.1.1", default-features = false }
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32s3"] }
@@ -21,6 +22,7 @@ esp-hal = { version = "1.0.0", features = ["esp32s3", "rt", "unstable", "defmt"]
 esp-println = { version = "0.16.1", default-features = false, features = ["esp32s3", "defmt-espflash", "jtag-serial"] }
 ina3221-async = { path = "../ina3221-async", features = ["defmt"] }
 tps55288 = { path = "../tps55288", features = ["defmt"] }
+u8g2-fonts = { version = "0.7.2", default-features = false }
 
 [profile.dev.package.xtensa-lx-rt]
 opt-level = "z"

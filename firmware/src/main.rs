@@ -5,6 +5,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 mod audio_demo;
 mod front_panel;
+mod front_panel_scene;
 mod irq;
 mod output;
 
