@@ -39,6 +39,7 @@ const LCD_H: u16 = 172;
 const OFFSET_X: u16 = 0;
 const OFFSET_Y: u16 = 34;
 const PANEL_ORIENTATION: Orientation = Orientation::Portrait;
+const UI_ORIENTATION_MARKER: &str = "FP_ORI_PROBE_20260227";
 
 const BACKLIGHT_ACTIVE_LOW: bool = true;
 
@@ -230,6 +231,16 @@ impl FrontPanel {
             LCD_H,
             OFFSET_X,
             OFFSET_Y
+        );
+        defmt::info!(
+            "ui: marker={} orientation_madctl=0x{=u8:02x}",
+            UI_ORIENTATION_MARKER,
+            PANEL_ORIENTATION as u8
+        );
+        esp_println::println!(
+            "ui: marker={} orientation_madctl=0x{:02x}",
+            UI_ORIENTATION_MARKER,
+            PANEL_ORIENTATION as u8
         );
     }
 
