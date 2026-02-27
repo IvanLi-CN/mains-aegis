@@ -4,7 +4,7 @@
 
 - Status: 重新设计（#6qrjs）
 - Created: 2026-02-05
-- Last: 2026-02-26
+- Last: 2026-02-27
 
 ## 背景 / 问题陈述
 
@@ -129,7 +129,7 @@ None
 - [x] M1: 面板控制线 bring-up：初始化 `TCA6408A(0x21)`，可控 `CS/RES/TP_RESET`，并确认 `BLK(GPIO13)` 能点亮背光
 - [x] M2: 屏幕显示 bring-up：初始化 `GC9307` 并显示 `Hello World`
 - [x] M3: 文档固化：`firmware/README.md` 验证步骤
-- [ ] M4: 上板验证（人类操作）：确认 `Hello World` + `fps=<n>` 可见；若黑屏优先排查背光极性与初始化顺序
+- [x] M4: 已迁移至 `#6qrjs` 后关闭（旧口径 `Hello World + fps` 不再作为当前验收目标）
 
 ## 方案概述（Approach, high-level）
 
@@ -149,6 +149,7 @@ None
 
 ## 变更记录（Change log）
 
+- 2026-02-27: 关闭遗留里程碑 M4（迁移后不再适用），避免与 `#6qrjs` 当前范围产生歧义
 - 2026-02-26: 该计划迁移为新规格 `docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`，状态更新为 `重新设计（#6qrjs）`
 - 2026-02-05: 新建计划骨架（待冻结 UI 信息架构与验收口径）
 - 2026-02-05: 冻结 MVP：不做触摸；屏幕仅 `Hello World`；暂不做 idle backlight policy
