@@ -1,5 +1,8 @@
 use core::convert::Infallible;
 
+use crate::front_panel_scene::{
+    self, demo_mode_from_focus, UiFocus, UiModel, UiPainter, UiVariant,
+};
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
 use esp_hal::gpio::{DriveMode, Flex, Input, OutputConfig, Pull};
@@ -30,51 +33,20 @@ const CMD_CASET: u8 = 0x2A;
 const CMD_RASET: u8 = 0x2B;
 const CMD_RAMWR: u8 = 0x2C;
 
-// Match gc9307-async example profile (Landscape + 320x172 + dy=34).
+// Diagnostic step: rotate 180° via driver orientation API (LandscapeSwapped).
 const LCD_W: u16 = 320;
 const LCD_H: u16 = 172;
 const OFFSET_X: u16 = 0;
 const OFFSET_Y: u16 = 34;
+const PANEL_ORIENTATION: Orientation = Orientation::LandscapeSwapped;
+const UI_ORIENTATION_MARKER: &str = "FP_ORI_PROBE_20260227";
 
 const BACKLIGHT_ACTIVE_LOW: bool = true;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
-
-const UI_BG: u16 = 0x0000;
-const UI_INACTIVE: u16 = 0x2104;
-const UI_BORDER: u16 = 0xFFFF;
-const UI_TOUCH_ACTIVE: u16 = RGB565_WHITE;
-const UI_UP_ACTIVE: u16 = 0xFFE0;
-const UI_DOWN_ACTIVE: u16 = 0x07FF;
-const UI_LEFT_ACTIVE: u16 = RGB565_BLUE;
-const UI_RIGHT_ACTIVE: u16 = RGB565_RED;
-const UI_CENTER_ACTIVE: u16 = 0xF81F;
-
-const CELL_W: u16 = 44;
-const CELL_H: u16 = 44;
-const PAD_X: u16 = 18;
-const PAD_Y: u16 = 20;
-const PAD_GAP: u16 = 6;
-
-const UP_X: u16 = PAD_X + CELL_W + PAD_GAP;
-const UP_Y: u16 = PAD_Y;
-const DOWN_X: u16 = PAD_X + CELL_W + PAD_GAP;
-const DOWN_Y: u16 = PAD_Y + (CELL_H + PAD_GAP) * 2;
-const LEFT_X: u16 = PAD_X;
-const LEFT_Y: u16 = PAD_Y + CELL_H + PAD_GAP;
-const RIGHT_X: u16 = PAD_X + (CELL_W + PAD_GAP) * 2;
-const RIGHT_Y: u16 = PAD_Y + CELL_H + PAD_GAP;
-const CENTER_X: u16 = PAD_X + CELL_W + PAD_GAP;
-const CENTER_Y: u16 = PAD_Y + CELL_H + PAD_GAP;
-
-const TOUCH_X: u16 = 210;
-const TOUCH_Y: u16 = 24;
-const TOUCH_W: u16 = 94;
-const TOUCH_H: u16 = 124;
-
-const RGB565_WHITE: u16 = 0xFFFF;
-const RGB565_RED: u16 = 0xF800;
-const RGB565_BLUE: u16 = 0x001F;
+const DEFAULT_UI_VARIANT: UiVariant = UiVariant::InstrumentB;
+const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
+const PAGE_SWITCH_HOLD: Duration = Duration::from_millis(800);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitState {
@@ -92,6 +64,19 @@ struct InputSnapshot {
     touch: bool,
 }
 
+impl InputSnapshot {
+    const fn idle() -> Self {
+        Self {
+            up: false,
+            down: false,
+            left: false,
+            right: false,
+            center: false,
+            touch: false,
+        }
+    }
+}
+
 pub struct FrontPanel {
     i2c: HalI2c<'static, Blocking>,
     spi: HalSpi<'static, Blocking>,
@@ -106,6 +91,10 @@ pub struct FrontPanel {
     state: InitState,
     next_frame_deadline: Instant,
     last_inputs: Option<InputSnapshot>,
+    ui_variant: UiVariant,
+    center_press_started: Option<Instant>,
+    page_switch_latched: bool,
+    frame_no: u32,
 }
 
 impl FrontPanel {
@@ -130,6 +119,10 @@ impl FrontPanel {
             state: InitState::Disabled,
             next_frame_deadline: Instant::now(),
             last_inputs: None,
+            ui_variant: DEFAULT_UI_VARIANT,
+            center_press_started: None,
+            page_switch_latched: false,
+            frame_no: 0,
         }
     }
 
@@ -215,24 +208,24 @@ impl FrontPanel {
             return;
         }
 
-        if let Err(e) = self.draw_input_dashboard() {
-            defmt::error!("ui: draw dashboard failed err={=?}", e);
-        }
-
-        match self.read_inputs() {
+        let snapshot = match self.read_inputs() {
             Ok(snapshot) => {
-                if let Err(e) = self.render_inputs(snapshot) {
-                    defmt::error!("ui: render input state failed err={=?}", e);
-                } else {
-                    self.last_inputs = Some(snapshot);
-                }
+                self.last_inputs = Some(snapshot);
+                snapshot
             }
             Err(e) => {
                 defmt::error!(
                     "ui: read input state failed err={}",
                     crate::output::i2c_error_kind(e)
                 );
+                let idle = InputSnapshot::idle();
+                self.last_inputs = Some(idle);
+                idle
             }
+        };
+
+        if let Err(e) = self.render_inputs(snapshot) {
+            defmt::error!("ui: render input state failed err={=?}", e);
         }
 
         self.set_backlight(true);
@@ -240,11 +233,22 @@ impl FrontPanel {
         self.next_frame_deadline = Instant::now();
 
         defmt::info!(
-            "ui: front panel ready (driver=gc9307-async mode=input-test res={}x{} offset=({},{}))",
+            "ui: front panel ready (driver=gc9307-async mode=industrial-demo variant={} res={}x{} offset=({},{}))",
+            variant_name(self.ui_variant),
             LCD_W,
             LCD_H,
             OFFSET_X,
             OFFSET_Y
+        );
+        defmt::info!(
+            "ui: marker={} orientation_madctl=0x{=u8:02x}",
+            UI_ORIENTATION_MARKER,
+            PANEL_ORIENTATION as u8
+        );
+        esp_println::println!(
+            "ui: marker={} orientation_madctl=0x{:02x}",
+            UI_ORIENTATION_MARKER,
+            PANEL_ORIENTATION as u8
         );
     }
 
@@ -261,7 +265,9 @@ impl FrontPanel {
 
         match self.read_inputs() {
             Ok(snapshot) => {
-                if self.last_inputs != Some(snapshot) {
+                let variant_changed = self.update_page_variant(snapshot);
+                let inputs_changed = self.last_inputs != Some(snapshot);
+                if variant_changed || inputs_changed {
                     if let Err(e) = self.render_inputs(snapshot) {
                         defmt::error!("ui: update input state failed err={=?}", e);
                     } else {
@@ -415,7 +421,7 @@ impl FrontPanel {
         let mut display_buf = [0u8; 1536];
 
         let panel_cfg = GcConfig {
-            orientation: Orientation::Landscape,
+            orientation: PANEL_ORIENTATION,
             width: LCD_W,
             height: LCD_H,
             dx: OFFSET_X,
@@ -436,6 +442,8 @@ impl FrontPanel {
             &mut display_buf,
         );
         drv.init()?;
+        // Keep orientation control on the driver API path.
+        drv.set_orientation(PANEL_ORIENTATION)?;
 
         Ok(())
     }
@@ -448,17 +456,6 @@ impl FrontPanel {
     fn write_data(&mut self, data: &[u8]) -> Result<(), esp_hal::spi::Error> {
         self.dc.set_high();
         self.spi.write(data)
-    }
-
-    fn draw_input_dashboard(&mut self) -> Result<(), esp_hal::spi::Error> {
-        self.fill_rect(0, 0, LCD_W, LCD_H, UI_BG)?;
-        self.draw_cell(UP_X, UP_Y, CELL_W, CELL_H, UI_INACTIVE)?;
-        self.draw_cell(DOWN_X, DOWN_Y, CELL_W, CELL_H, UI_INACTIVE)?;
-        self.draw_cell(LEFT_X, LEFT_Y, CELL_W, CELL_H, UI_INACTIVE)?;
-        self.draw_cell(RIGHT_X, RIGHT_Y, CELL_W, CELL_H, UI_INACTIVE)?;
-        self.draw_cell(CENTER_X, CENTER_Y, CELL_W, CELL_H, UI_INACTIVE)?;
-        self.draw_cell(TOUCH_X, TOUCH_Y, TOUCH_W, TOUCH_H, UI_INACTIVE)?;
-        Ok(())
     }
 
     fn read_inputs(&mut self) -> Result<InputSnapshot, esp_hal::i2c::master::Error> {
@@ -487,76 +484,76 @@ impl FrontPanel {
         })
     }
 
-    fn render_inputs(&mut self, snapshot: InputSnapshot) -> Result<(), esp_hal::spi::Error> {
-        self.draw_state_cell(UP_X, UP_Y, CELL_W, CELL_H, snapshot.up, UI_UP_ACTIVE)?;
-        self.draw_state_cell(
-            DOWN_X,
-            DOWN_Y,
-            CELL_W,
-            CELL_H,
-            snapshot.down,
-            UI_DOWN_ACTIVE,
-        )?;
-        self.draw_state_cell(
-            LEFT_X,
-            LEFT_Y,
-            CELL_W,
-            CELL_H,
-            snapshot.left,
-            UI_LEFT_ACTIVE,
-        )?;
-        self.draw_state_cell(
-            RIGHT_X,
-            RIGHT_Y,
-            CELL_W,
-            CELL_H,
-            snapshot.right,
-            UI_RIGHT_ACTIVE,
-        )?;
-        self.draw_state_cell(
-            CENTER_X,
-            CENTER_Y,
-            CELL_W,
-            CELL_H,
-            snapshot.center,
-            UI_CENTER_ACTIVE,
-        )?;
-        self.draw_state_cell(
-            TOUCH_X,
-            TOUCH_Y,
-            TOUCH_W,
-            TOUCH_H,
-            snapshot.touch,
-            UI_TOUCH_ACTIVE,
-        )?;
-        Ok(())
-    }
-
-    fn draw_state_cell(
-        &mut self,
-        x: u16,
-        y: u16,
-        w: u16,
-        h: u16,
-        active: bool,
-        active_color: u16,
-    ) -> Result<(), esp_hal::spi::Error> {
-        let color = if active { active_color } else { UI_INACTIVE };
-        self.draw_cell(x, y, w, h, color)
-    }
-
-    fn draw_cell(
-        &mut self,
-        x: u16,
-        y: u16,
-        w: u16,
-        h: u16,
-        fill: u16,
-    ) -> Result<(), esp_hal::spi::Error> {
-        self.fill_rect(x, y, w, h, UI_BORDER)?;
-        if w > 4 && h > 4 {
-            self.fill_rect(x + 2, y + 2, w - 4, h - 4, fill)?;
+    fn update_page_variant(&mut self, snapshot: InputSnapshot) -> bool {
+        if !snapshot.center {
+            self.center_press_started = None;
+            self.page_switch_latched = false;
+            return false;
         }
+
+        if self.center_press_started.is_none() {
+            self.center_press_started = Some(Instant::now());
+            return false;
+        }
+
+        if self.page_switch_latched {
+            return false;
+        }
+
+        let Some(started) = self.center_press_started else {
+            return false;
+        };
+        if started.elapsed() < PAGE_SWITCH_HOLD {
+            return false;
+        }
+
+        self.ui_variant = if self.ui_variant == DEFAULT_UI_VARIANT {
+            SELF_CHECK_VARIANT
+        } else {
+            DEFAULT_UI_VARIANT
+        };
+        self.page_switch_latched = true;
+        defmt::info!(
+            "ui: page switch variant={} hold_ms={=u32}",
+            variant_name(self.ui_variant),
+            800u32
+        );
+        true
+    }
+
+    fn snapshot_to_model(&self, snapshot: InputSnapshot) -> UiModel {
+        let focus = if snapshot.center {
+            UiFocus::Center
+        } else if snapshot.up {
+            UiFocus::Up
+        } else if snapshot.down {
+            UiFocus::Down
+        } else if snapshot.left {
+            UiFocus::Left
+        } else if snapshot.right {
+            UiFocus::Right
+        } else if snapshot.touch {
+            UiFocus::Touch
+        } else {
+            UiFocus::Idle
+        };
+
+        UiModel {
+            mode: demo_mode_from_focus(focus),
+            focus,
+            touch_irq: snapshot.touch,
+            frame_no: self.frame_no,
+        }
+    }
+
+    fn render_inputs(&mut self, snapshot: InputSnapshot) -> Result<(), esp_hal::spi::Error> {
+        let model = self.snapshot_to_model(snapshot);
+        let variant = self.ui_variant;
+        {
+            let mut painter = PanelPainter { panel: self };
+            front_panel_scene::render_frame(&mut painter, &model, variant)?;
+        }
+        self.frame_no = self.frame_no.wrapping_add(1);
         Ok(())
     }
 
@@ -613,6 +610,34 @@ impl FrontPanel {
         }
 
         Ok(())
+    }
+}
+
+fn variant_name(variant: UiVariant) -> &'static str {
+    match variant {
+        UiVariant::InstrumentA => "A",
+        UiVariant::InstrumentB => "B",
+        UiVariant::RetroC => "C",
+        UiVariant::InstrumentD => "D",
+    }
+}
+
+struct PanelPainter<'a> {
+    panel: &'a mut FrontPanel,
+}
+
+impl UiPainter for PanelPainter<'_> {
+    type Error = esp_hal::spi::Error;
+
+    fn fill_rect(
+        &mut self,
+        x: u16,
+        y: u16,
+        w: u16,
+        h: u16,
+        rgb565: u16,
+    ) -> Result<(), Self::Error> {
+        self.panel.fill_rect(x, y, w, h, rgb565)
     }
 }
 

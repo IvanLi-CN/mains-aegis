@@ -147,6 +147,12 @@ mcu-agentd monitor esp --reset
 
 固件会初始化 `INA3221 (addr=0x40)` 并每 `500ms` 输出两行遥测（`out_a/out_b` 各一行）。
 
+若自检门控导致 `enabled_outputs=none`（例如 `BQ40Z50` 缺失），固件仍会继续输出 INA 诊断行，便于单独验证 INA3221 是否可读：
+
+```text
+telemetry ch=ina_diag addr=0x40 ch1_vbus_mv=... ch1_current_ma=... ch2_vbus_mv=... ch2_current_ma=...
+```
+
 ### 通道映射（冻结口径）
 
 - `out_a` ← INA3221 `CH2`（`Rshunt=10mΩ`）
@@ -226,13 +232,50 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - `BQ40Z50` 默认只使用 `7-bit 0x0B`（等价 `8-bit W=0x16/R=0x17`）；只有 `--features bms-dual-probe-diag` 才会额外探测 `0x16` 以做兼容诊断。
 - 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。
 
-## 前面板屏幕显示（Plan 3kz8p）
+## 前面板屏幕显示（Spec 6qrjs）
 
-固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，`240x320`，SPI）并显示最小内容：
+固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，有效显示区 `320x172`，横屏，SPI）并渲染工业仪表风 UI：
 
-- 文本：`Hello World`
-- 角落 overlay：`fps=<n>`
-  - 这里的 `fps` 指固件渲染循环的帧率（即“每秒发起多少次屏幕写入/刷新”），不是面板物理扫描频率
+- Dashboard 工作模式（项目口径）：
+  - `BYPASS`（关闭）：不提供 UPS 功能，输入直通输出（bypass）
+  - `STANDBY`（待机）：输入存在，TPS55288 无实际输出电流
+  - `ASSIST`（补充）：输入存在，TPS55288 有实际输出电流
+  - `BACKUP`（后备）：输入不存在
+- 充电策略（本轮 UI 冻结）：
+  - 仅 `STANDBY` 允许电池充电
+  - `BYPASS/ASSIST/BACKUP` 不允许充电（`BYPASS` 手动充电能力不在本轮 Dashboard 展示范围）
+- Dashboard 字段分层（项目口径）：
+  - 市电存在（`BYPASS/STANDBY/ASSIST`）：主 KPI 显示 `PIN` 与 `POUT`
+  - 市电缺失（`BACKUP`）：主 KPI 显示 `POUT` 与 `IOUT`
+  - 右侧三卡固定：`BATTERY`（SOC/最高电池温度/电池状态）、`CHARGE`（仅电池充电电流）、`DISCHG`（电池放电电流）
+- 顶栏右上模式标签使用全称（不使用缩写）：`BYPASS / STANDBY / ASSIST / BACKUP`
+- 五向按键映射为功能焦点切换：`UP->OUT-A`、`DOWN->OUT-B`、`LEFT->BMS`、`RIGHT->CHARGER`、`CENTER->THERM`
+- 触摸中断仅作为告警指示（`IRQ ON/OFF`）
+- 页面切换：长按 `CENTER` 约 `800ms` 在 `Variant B Dashboard` 与 `Variant C Self-check` 间切换
+- 当前默认视觉方案：`Variant B`（Dashboard 主界面）
+- `Variant C` 重定位为“高级设置/自检页”风格，不作为默认 Dashboard
+- `Variant C` 自检页固定显示 10 个可通信模块，采用“双列大字号诊断卡”布局（每卡两行：`MODULE+COMM` 与 `KEY PARAM`）：
+  - `GC9307`、`TCA6408A`、`FUSB302`、`INA3221`、`BQ25792`
+  - `BQ40Z50`、`TPS55288-A`、`TPS55288-B`、`TMP112-A`、`TMP112-B`
+- Dashboard 配色风格固定为 3 套：`Variant A = Calm Blue`、`Variant B = Neutral`、`Variant D = Warm`
+- Dashboard 间距与行距冻结参数见：`docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`
+
+渲染架构采用“同源渲染”：
+
+- 固件显示路径：`firmware/src/front_panel.rs` -> `firmware/src/front_panel_scene.rs`
+- 主机预览路径：`tools/front-panel-preview` 复用同一 `front_panel_scene.rs`
+
+字体方案（互联网来源，u8g2）：
+
+- A（非数值文本）：`u8g2_font_8x13B_tf` + `u8g2_font_7x14B_tf`
+- B（数值文本，等宽）：`u8g2_font_t0_22b_tn` + `u8g2_font_8x13_mf`
+- 字体使用规则：非数值信息一律使用 A；数值与对齐字段一律使用 B（monospace）
+- 许可说明：`u8g2-fonts` crate 本身是 MIT/Apache-2.0；具体字体许可需按 [U8g2 license](https://raw.githubusercontent.com/olikraus/u8g2/master/LICENSE) 核对。
+
+屏幕物理尺寸口径（用于 UI 密度评审）：
+
+- 仓库内机械图当前状态：`未检查`（未收录屏幕模组 AA/mm 明确参数）
+- 同分辨率 1.47" 模组参考：AA 约 `17.39 x 32.35mm`、约 `250 PPI`（用于字体/留白密度估算，来源：[Waveshare 1.47inch LCD](https://www.waveshare.com/1.47inch-lcd-module.htm)、[Adafruit 1.47\" 172x320](https://www.adafruit.com/product/5393)）
 
 硬件要点（冻结口径）：
 
@@ -248,12 +291,29 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 背光：
   - `GPIO13`：`BLK`（控制面板 `Q16(BSS84)` 高边开关；当前固件按“低电平点亮背光”实现）
 - 触摸：
-  - 本计划 **暂不做触摸**：固件保持 `TP_RESET` 为低，使触摸控制器处于复位态
+  - 当前仅使用 `CTP_IRQ` 做告警可视化（不解析触摸手势/坐标）
 
 预期日志（`defmt`）：
 
-- 成功：`ui: front panel ready`
+- 成功：`ui: front panel ready (driver=gc9307-async mode=industrial-demo variant=B ...)`
 - 失败：`ui: ... failed ...`（并退回到安全态：屏幕不选中、复位保持、背光关闭）
+
+### 1:1 预览工具（主机）
+
+预览工具会输出与固件同源渲染的两类产物：
+
+- `framebuffer.bin`（RGB565 little-endian）
+- `preview.png`（`320x172`）
+
+示例：
+
+```bash
+cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
+  --variant B \\
+  --focus idle \\
+  --out-dir /abs/path/to/front-panel-preview \\
+  --frame-no 12
+```
 
 ## 烧录与监视（推荐：`mcu-agentd`，从仓库根目录运行）
 
