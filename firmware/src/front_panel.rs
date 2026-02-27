@@ -1,6 +1,8 @@
 use core::convert::Infallible;
 
-use crate::front_panel_scene::{self, UiFocus, UiModel, UiPainter, UiVariant};
+use crate::front_panel_scene::{
+    self, demo_mode_from_focus, UiFocus, UiModel, UiPainter, UiVariant,
+};
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
 use esp_hal::gpio::{DriveMode, Flex, Input, OutputConfig, Pull};
@@ -476,6 +478,7 @@ impl FrontPanel {
         };
 
         UiModel {
+            mode: demo_mode_from_focus(focus),
             focus,
             touch_irq: snapshot.touch,
             frame_no: self.frame_no,

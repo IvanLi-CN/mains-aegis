@@ -19,4 +19,4 @@
 
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
-| 6qrjs | Front panel industrial UI preview（320x172） | 已完成 | `6qrjs-front-panel-industrial-ui-preview/SPEC.md` | 2026-02-26 | Dashboard 已冻结为 Variant B；Spec 内已归档 AC/BATT 参考图 |
+| 6qrjs | Front panel industrial UI preview（320x172） | 已完成 | `6qrjs-front-panel-industrial-ui-preview/SPEC.md` | 2026-02-27 | Dashboard 已冻结为 Variant B；模式语义重构为 OFF/STBY/SUPP/BACKUP 且仅 STBY 允许充电 |

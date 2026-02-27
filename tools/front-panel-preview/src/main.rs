@@ -11,7 +11,9 @@ use image::{Rgb, RgbImage};
 #[path = "../../../firmware/src/front_panel_scene.rs"]
 mod front_panel_scene;
 
-use front_panel_scene::{UiFocus, UiModel, UiPainter, UiVariant, UI_H, UI_W};
+use front_panel_scene::{
+    demo_mode_from_focus, UiFocus, UiModel, UiPainter, UiVariant, UpsMode, UI_H, UI_W,
+};
 
 fn main() {
     if let Err(err) = run() {
@@ -30,11 +32,13 @@ fn run() -> Result<(), String> {
     let frame_dir = args
         .out_dir
         .join(format!("variant-{}", args.variant.as_tag()))
+        .join(format!("mode-{}", args.mode.as_tag()))
         .join(format!("focus-{}", args.focus.as_tag()));
     fs::create_dir_all(&frame_dir).map_err(|e| format!("create output dir failed: {e}"))?;
 
     let mut framebuffer = FrameBuffer::new(UI_W as usize, UI_H as usize);
     let model = UiModel {
+        mode: args.mode.into_scene(),
         focus: args.focus.into_scene(),
         touch_irq: args.focus.into_scene() == UiFocus::Touch,
         frame_no: args.frame_no,
@@ -151,9 +155,59 @@ impl FocusArg {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ModeArg {
+    Off,
+    Standby,
+    Supplement,
+    Backup,
+}
+
+impl ModeArg {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw.to_ascii_lowercase().as_str() {
+            "off" => Ok(Self::Off),
+            "standby" | "stby" => Ok(Self::Standby),
+            "supplement" | "supp" => Ok(Self::Supplement),
+            "backup" | "batt" => Ok(Self::Backup),
+            _ => Err(format!(
+                "unsupported --mode value: {raw} (expected off|standby|supplement|backup)"
+            )),
+        }
+    }
+
+    fn from_focus(focus: FocusArg) -> Self {
+        match demo_mode_from_focus(focus.into_scene()) {
+            UpsMode::Off => Self::Off,
+            UpsMode::Standby => Self::Standby,
+            UpsMode::Supplement => Self::Supplement,
+            UpsMode::Backup => Self::Backup,
+        }
+    }
+
+    fn into_scene(self) -> UpsMode {
+        match self {
+            ModeArg::Off => UpsMode::Off,
+            ModeArg::Standby => UpsMode::Standby,
+            ModeArg::Supplement => UpsMode::Supplement,
+            ModeArg::Backup => UpsMode::Backup,
+        }
+    }
+
+    fn as_tag(self) -> &'static str {
+        match self {
+            ModeArg::Off => "off",
+            ModeArg::Standby => "standby",
+            ModeArg::Supplement => "supplement",
+            ModeArg::Backup => "backup",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Args {
     variant: VariantArg,
+    mode: ModeArg,
     focus: FocusArg,
     out_dir: PathBuf,
     frame_no: u32,
@@ -165,6 +219,7 @@ impl Args {
         I: Iterator<Item = String>,
     {
         let mut variant: Option<VariantArg> = None;
+        let mut mode: Option<ModeArg> = None;
         let mut focus: Option<FocusArg> = None;
         let mut out_dir: Option<PathBuf> = None;
         let mut frame_no: u32 = 0;
@@ -178,6 +233,10 @@ impl Args {
                 "--focus" => {
                     let value = iter.next().ok_or("missing value for --focus")?;
                     focus = Some(FocusArg::parse(&value)?);
+                }
+                "--mode" => {
+                    let value = iter.next().ok_or("missing value for --mode")?;
+                    mode = Some(ModeArg::parse(&value)?);
                 }
                 "--out-dir" => {
                     let value = iter.next().ok_or("missing value for --out-dir")?;
@@ -201,9 +260,11 @@ impl Args {
         let variant = variant.ok_or_else(|| format!("missing --variant\n\n{}", help_text()))?;
         let focus = focus.ok_or_else(|| format!("missing --focus\n\n{}", help_text()))?;
         let out_dir = out_dir.ok_or_else(|| format!("missing --out-dir\n\n{}", help_text()))?;
+        let mode = mode.unwrap_or_else(|| ModeArg::from_focus(focus));
 
         Ok(Self {
             variant,
+            mode,
             focus,
             out_dir,
             frame_no,
@@ -214,10 +275,10 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
-        "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant A --focus idle --out-dir /tmp/front-panel-preview",
+        "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --mode standby --out-dir /tmp/front-panel-preview",
     ]
     .join("\n")
 }

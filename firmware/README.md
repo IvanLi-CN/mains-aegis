@@ -147,6 +147,12 @@ mcu-agentd monitor esp --reset
 
 固件会初始化 `INA3221 (addr=0x40)` 并每 `500ms` 输出两行遥测（`out_a/out_b` 各一行）。
 
+若自检门控导致 `enabled_outputs=none`（例如 `BQ40Z50` 缺失），固件仍会继续输出 INA 诊断行，便于单独验证 INA3221 是否可读：
+
+```text
+telemetry ch=ina_diag addr=0x40 ch1_vbus_mv=... ch1_current_ma=... ch2_vbus_mv=... ch2_current_ma=...
+```
+
 ### 通道映射（冻结口径）
 
 - `out_a` ← INA3221 `CH2`（`Rshunt=10mΩ`）
@@ -230,10 +236,18 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，有效显示区 `320x172`，横屏，SPI）并渲染工业仪表风 UI：
 
-- Dashboard 信息分层（项目口径）：
-  - `AC MODE`：主 KPI 为 `POUT/PIN`，次级为 `IIN/ICHG/IOUT NET`
-  - `BATT MODE`：主 KPI 为 `POUT/IOUT`，次级为 `VOUT/IOUT/POUT`
-  - 右侧状态块固定为 `BMS SOC`、`THERM`、`MODE/IRQ`
+- Dashboard 工作模式（项目口径）：
+  - `OFF`（关闭）：不提供 UPS 功能，输入直通输出（bypass）
+  - `STBY`（待机）：输入存在，TPS55288 无实际输出电流
+  - `SUPP`（补充）：输入存在，TPS55288 有实际输出电流
+  - `BACKUP`（后备）：输入不存在
+- 充电策略（本轮 UI 冻结）：
+  - 仅 `STBY` 允许电池充电
+  - `OFF/SUPP/BACKUP` 不允许充电（`OFF` 手动充电能力不在本轮 Dashboard 展示范围）
+- Dashboard 字段分层（项目口径）：
+  - 市电存在（`OFF/STBY/SUPP`）：主 KPI 显示 `PIN` 与 `POUT`
+  - 市电缺失（`BACKUP`）：主 KPI 显示 `POUT` 与 `IOUT`
+  - 右侧三卡固定：`BATTERY`（SOC/电池状态）、`CHARGE`（仅电池充电电流）、`DISCHG`（电池放电功率）
 - 五向按键映射为功能焦点切换：`UP->OUT-A`、`DOWN->OUT-B`、`LEFT->BMS`、`RIGHT->CHARGER`、`CENTER->THERM`
 - 触摸中断仅作为告警指示（`IRQ ON/OFF`）
 - 当前默认视觉方案：`Variant B`（Dashboard 主界面）

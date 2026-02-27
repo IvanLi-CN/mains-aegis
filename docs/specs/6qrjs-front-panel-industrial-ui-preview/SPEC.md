@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-02-26
-- Last: 2026-02-26
+- Last: 2026-02-27
 
 ## 背景 / 问题陈述
 
@@ -20,6 +20,7 @@
 - 新增共享渲染模块，由固件与主机预览工具复用同一渲染代码。
 - 交付 4 个视觉变体（A/B/C/D）与 7 个交互状态帧（idle/up/down/left/right/center/touch）。
 - 默认固化 Variant B 作为 Dashboard 主界面；Variant C 收敛为“高级设置/自检页”风格。
+- 在 Dashboard 中明确 UPS 四工作模式（`OFF / STBY / SUPP / BACKUP`）与充电策略约束。
 - 建立 `docs/specs` 主规格目录并与实现保持同步。
 
 ### Non-goals
@@ -51,6 +52,8 @@
 - 渲染逻辑同源：固件与预览必须复用同一 scene renderer。
 - 预览输出像素必须是 `320x172`、`RGB565 little-endian`。
 - 支持 `UiFocus` 七态与 `touch_irq` 状态展示。
+- 支持 `UpsMode` 四态展示：`OFF`（关闭）、`STBY`（待机）、`SUPP`（补充）、`BACKUP`（后备）。
+- 充电策略口径固定：仅 `STBY` 允许电池充电；`OFF/SUPP/BACKUP` 在本轮 Dashboard 一律显示充电锁定（`LOCK` 或 `NOAC`）。
 - 字体策略固定：非数值文本使用 A（现代无衬线），数值/对齐字段使用 B（等宽）。
 - 文档不再将前面板 UI 目标描述为 `Hello World + fps`。
 
@@ -69,29 +72,46 @@
 
 - 固件启动后读入当前按键状态，使用共享 renderer 绘制完整首帧。
 - 周期轮询输入，状态变化时重绘界面并更新 focus/highlight。
-- 主机工具根据 `--variant` 与 `--focus` 调用同一 renderer，输出 raw framebuffer 与 PNG。
-- Dashboard 冻结语义：
-  - `AC MODE`：显示 `POUT`、`PIN`（主 KPI）与 `IIN/ICHG/IOUT NET`（次级流向）
-  - `BATT MODE`：显示 `POUT`、`IOUT`（主 KPI）与 `VOUT/IOUT/POUT`（次级输出）
-  - 右侧固定状态块：`BMS SOC`、`THERM`、`MODE/IRQ`
+- 主机工具根据 `--variant`、`--mode` 与 `--focus` 调用同一 renderer，输出 raw framebuffer 与 PNG。
+- Dashboard 冻结语义（项目工作模式口径）：
+  - `OFF`（关闭）: 输入直通输出（bypass），不提供 UPS 功能；本轮 UI 充电状态固定为 `LOCK`。
+  - `STBY`（待机）: 输入存在，TPS 无实际输出电流；允许充电。
+  - `SUPP`（补充）: 输入存在，TPS 有实际输出电流；不允许充电。
+  - `BACKUP`（后备）: 输入不存在；不允许充电，输出由电池侧供能。
+  - 右侧三卡固定语义：`BATTERY`（SOC + 电池状态）、`CHARGE`（仅电池充电电流与状态）、`DISCHG`（电池放电功率与状态）。
 
 ### Dashboard 视觉冻结（Variant B）
 
 - 冻结对象：`Variant B (Neutral)` 作为默认 Dashboard；`Variant C` 仅用于自检页。
 - 主 KPI 面板：`x=6 y=22 w=196 h=52`。
-  - 标签行：`y=29`（`POUT W / PIN W` 或 `POUT W / IOUT A`）
-  - 数值行：`y=50`（`NumBig`，数值字体 B）
-- 次级信息面板：`x=6 y=78 w=196 h=72`。
-  - 三行信息基线：`y=99 / y=116 / y=133`
+  - 标签行：`y=27`（市电模式固定 `PIN W` 在前、`POUT W` 在后；后备模式为 `POUT W / IOUT A`）
+  - 数值行：`y=44`（`NumBig`，数值字体 B）
+- 次级信息面板：`x=6 y=76 w=196 h=94`。
+  - 按工作模式切换文本块：
+    - `OFF`：`BYPASS ACTIVE / TPS OUT / BAT CHG`
+    - `STBY`：`STANDBY CHARGE / TPS OUT / BAT CHG`
+    - `SUPP`：`SUPPLEMENT / TPS OUT / BAT CHG`
+    - `BACKUP`：`OUTPUT / VOUT / TEMP / SOC`
 - 所有冻结布局均按 `320x172` 有效区评审，不允许缩放、裁切或旋转补偿。
+
+### 冲突检查（按四模式口径）
+
+- 旧冲突 1：将 `focus` 直接当作工作模式来源。已修正为显式 `UiModel.mode`，`focus` 仅用于高亮。
+- 旧冲突 2：非待机模式仍显示可充电语义。已修正为仅 `STBY` 显示 `READY/CHG`，其余模式显示 `LOCK/NOAC`。
+- 旧冲突 3：放电卡片和输出负载混用。已修正为 `DISCHG` 卡片仅表示电池侧放电功率（`OFF/STBY=0`）。
+- 旧冲突 4：平衡状态位置不一致。已修正为 `BATTERY` 卡片状态位固定显示 `BAL`，并在值区显示 `SOC + Tmax`。
 
 ### 冻结参考图（Spec assets）
 
-- AC mode: `assets/dashboard-b-ac-mode.png`
-- BATT mode: `assets/dashboard-b-batt-mode.png`
+- OFF mode: `assets/dashboard-b-off-mode.png`
+- STBY mode: `assets/dashboard-b-standby-mode.png`
+- SUPP mode: `assets/dashboard-b-supplement-mode.png`
+- BACKUP mode: `assets/dashboard-b-backup-mode.png`
 
-![Dashboard Variant B - AC mode](assets/dashboard-b-ac-mode.png)
-![Dashboard Variant B - BATT mode](assets/dashboard-b-batt-mode.png)
+![Dashboard Variant B - OFF mode](assets/dashboard-b-off-mode.png)
+![Dashboard Variant B - STBY mode](assets/dashboard-b-standby-mode.png)
+![Dashboard Variant B - SUPP mode](assets/dashboard-b-supplement-mode.png)
+![Dashboard Variant B - BACKUP mode](assets/dashboard-b-backup-mode.png)
 
 ### Edge cases / errors
 
@@ -106,8 +126,9 @@
 | 接口（Name） | 类型（Kind） | 范围（Scope） | 变更（Change） | 契约文档（Contract Doc） | 负责人（Owner） | 使用方（Consumers） | 备注（Notes） |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `render_frame` | Rust API | internal | New | None | firmware | firmware + host preview tool | 同源渲染入口 |
-| `UiModel` | Rust type | internal | New | None | firmware | firmware + host preview tool | UI 状态模型 |
-| `front-panel-preview CLI` | CLI | internal | New | None | firmware tooling | local developer | `--variant --focus --out-dir` |
+| `UiModel` | Rust type | internal | Updated | None | firmware | firmware + host preview tool | UI 状态模型（新增 `mode`） |
+| `UpsMode` | Rust type | internal | New | None | firmware | firmware + host preview tool | UPS 工作模式四态 |
+| `front-panel-preview CLI` | CLI | internal | Updated | None | firmware tooling | local developer | `--variant --mode --focus --out-dir` |
 
 ### 契约文档（按 Kind 拆分）
 
@@ -116,7 +137,9 @@ None
 ## 验收标准（Acceptance Criteria）
 
 - Given 固件构建成功且屏幕硬件可访问，When 前面板输入状态变化，Then 屏幕渲染由共享 scene renderer 产出并正确显示对应 focus 高亮。
-- Given 主机运行预览工具，When 指定任意 `variant/focus`，Then 产出 `framebuffer.bin`（固定 `110080` bytes）与 `preview.png`（固定 `320x172`）。
+- Given 主机运行预览工具，When 指定任意 `variant/mode/focus`，Then 产出 `framebuffer.bin`（固定 `110080` bytes）与 `preview.png`（固定 `320x172`）。
+- Given `mode=STBY`，When 查看 CHARGE 卡片，Then 仅显示电池充电电流且状态允许充电（`READY/CHG`）。
+- Given `mode=OFF/SUPP/BACKUP`，When 查看 CHARGE 卡片，Then 状态必须为非充电（`LOCK/NOAC`）且充电电流为 0。
 - Given 文档更新完成，When 查阅前面板说明，Then 不再以 `Hello World + fps` 作为当前 UI 目标。
 
 ## 实现前置条件（Definition of Ready / Preconditions）
@@ -130,7 +153,7 @@ None
 ### Testing
 
 - Firmware build: `cargo build --manifest-path firmware/Cargo.toml --release`
-- Preview build/run: `cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant A --focus idle --out-dir <ABS_PATH>`
+- Preview build/run: `cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant B --mode standby --focus idle --out-dir <ABS_PATH>`
 
 ### Quality checks
 
@@ -182,13 +205,17 @@ None
 - 2026-02-26: 根据评审反馈将 Dashboard 文案收敛到项目功能域，并固定 A/B 字体分工（标签 A，数值 B）。
 - 2026-02-26: 根据评审反馈将默认 Dashboard 切换为 Variant B，并将 Variant C 重定位为自检页视觉。
 - 2026-02-26: 冻结 Variant B Dashboard 间距与留白（主 KPI 面板 + 次级面板行距），并归档 AC/BATT 参考图。
+- 2026-02-27: 修正 AC 电流语义（`ICHG BAT` 不再混同为线侧输入电流），并移除 BATT 模式次级面板中的 `POUT` 重复字段。
+- 2026-02-27: 按 UPS 四工作模式重构 Dashboard 语义：新增 `UpsMode`、明确充电策略（仅 STBY 可充）、并归档 OFF/STBY/SUPP/BACKUP 四张冻结参考图。
 
 ## 参考（References）
 
 - `firmware/src/front_panel.rs`
 - `firmware/src/front_panel_scene.rs`
 - `tools/front-panel-preview/src/main.rs`
-- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-b-ac-mode.png`
-- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-b-batt-mode.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-b-off-mode.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-b-standby-mode.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-b-supplement-mode.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-b-backup-mode.png`
 - [u8g2-fonts docs](https://docs.rs/u8g2-fonts/latest/u8g2_fonts/fonts/index.html)
 - [u8g2 license](https://raw.githubusercontent.com/olikraus/u8g2/master/LICENSE)
