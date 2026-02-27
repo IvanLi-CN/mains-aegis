@@ -33,14 +33,12 @@ const CMD_CASET: u8 = 0x2A;
 const CMD_RASET: u8 = 0x2B;
 const CMD_RAMWR: u8 = 0x2C;
 
-// Match gc9307-async profile (Landscape + 320x172 + dy=34).
+// Match gc9307-async profile (LandscapeSwapped + 320x172 + dy=34) for 180° mount.
 const LCD_W: u16 = 320;
 const LCD_H: u16 = 172;
 const OFFSET_X: u16 = 0;
 const OFFSET_Y: u16 = 34;
-const PANEL_ORIENTATION: Orientation = Orientation::Landscape;
-// Current hardware mount is physically 180-degree flipped; apply software coordinate rotation.
-const PANEL_ROTATE_180: bool = true;
+const PANEL_ORIENTATION: Orientation = Orientation::LandscapeSwapped;
 
 const BACKLIGHT_ACTIVE_LOW: bool = true;
 
@@ -423,6 +421,8 @@ impl FrontPanel {
             &mut display_buf,
         );
         drv.init()?;
+        // Keep orientation control on the driver API path.
+        drv.set_orientation(PANEL_ORIENTATION)?;
 
         Ok(())
     }
@@ -528,15 +528,6 @@ impl FrontPanel {
         if w == 0 || h == 0 {
             return Ok(());
         }
-
-        let (x, y) = if PANEL_ROTATE_180 {
-            (
-                LCD_W.saturating_sub(x.saturating_add(w)),
-                LCD_H.saturating_sub(y.saturating_add(h)),
-            )
-        } else {
-            (x, y)
-        };
 
         let x1 = x.saturating_add(w - 1);
         let y1 = y.saturating_add(h - 1);
