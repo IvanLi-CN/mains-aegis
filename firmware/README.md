@@ -254,7 +254,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 页面切换：长按 `CENTER` 约 `800ms` 在 `Variant B Dashboard` 与 `Variant C Self-check` 间切换
 - 当前默认视觉方案：`Variant B`（Dashboard 主界面）
 - `Variant C` 重定位为“高级设置/自检页”风格，不作为默认 Dashboard
-- `Variant C` 自检页固定显示 10 个可通信模块，且每行包含 `MODULE / COMM / KEY PARAM`：
+- `Variant C` 自检页固定显示 10 个可通信模块，采用“双列大字号诊断卡”布局（每卡两行：`MODULE+COMM` 与 `KEY PARAM`）：
   - `GC9307`、`TCA6408A`、`FUSB302`、`INA3221`、`BQ25792`
   - `BQ40Z50`、`TPS55288-A`、`TPS55288-B`、`TMP112-A`、`TMP112-B`
 - Dashboard 配色风格固定为 3 套：`Variant A = Calm Blue`、`Variant B = Neutral`、`Variant D = Warm`

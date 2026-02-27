@@ -19,4 +19,4 @@
 
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
-| 6qrjs | Front panel industrial UI preview（320x172） | 已完成 | `6qrjs-front-panel-industrial-ui-preview/SPEC.md` | 2026-02-27 | Dashboard 冻结 Variant B；新增 Variant C 全模块自检表（10 模块）与长按 CENTER 页面切换 |
+| 6qrjs | Front panel industrial UI preview（320x172） | 已完成 | `6qrjs-front-panel-industrial-ui-preview/SPEC.md` | 2026-02-27 | Dashboard 冻结 Variant B；Variant C 为全模块自检页（10 模块，双列大字号诊断卡）+ 长按 CENTER 切页 |

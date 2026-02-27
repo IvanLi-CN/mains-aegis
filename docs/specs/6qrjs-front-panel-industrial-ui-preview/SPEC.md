@@ -87,8 +87,8 @@
 ### Self-check 视觉冻结（Variant C）
 
 - 顶栏：`SELF CHECK`，右上状态位显示当前 UPS 工作模式（`BYPASS/STANDBY/ASSIST/BACKUP`）。
-- 主体：紧凑表格（1:1 `320x172`），列固定为 `MODULE / COMM / KEY PARAM`。
-- 模块覆盖固定为 10 行（按实现顺序）：
+- 主体：双列大字号诊断卡（1:1 `320x172`），每卡固定两行：首行 `MODULE + COMM`，次行 `KEY PARAM`。
+- 模块覆盖固定为 10 卡（按实现顺序）：
   - `GC9307`：屏幕链路状态与分辨率参数。
   - `TCA6408A`：前面板按键/IRQ 通信状态。
   - `FUSB302`：Type-C/PD 控制器通信与 VBUS 存在态。
@@ -161,7 +161,7 @@ None
 - Given 主机运行预览工具，When 指定任意 `variant/mode/focus`，Then 产出 `framebuffer.bin`（固定 `110080` bytes）与 `preview.png`（固定 `320x172`）。
 - Given `mode=standby`，When 查看 CHARGE 卡片，Then 仅显示电池充电电流且状态允许充电（`READY/CHG`）。
 - Given `mode=off/supplement/backup`，When 查看 CHARGE 卡片，Then 状态必须为非充电（`LOCK/NOAC`）且充电电流为 0。
-- Given 切到 `Variant C` 自检页，When 查看表格，Then 必须完整显示 10 个可通信模块且每行包含 `COMM` 与 `KEY PARAM`。
+- Given 切到 `Variant C` 自检页，When 查看诊断卡，Then 必须完整显示 10 个可通信模块且每卡包含 `COMM` 与 `KEY PARAM`。
 - Given 自检页已显示，When 长按 `CENTER` 约 `800ms`，Then 页面在 Dashboard 与 Self-check 间切换且不会连发抖动切换。
 - Given 文档更新完成，When 查阅前面板说明，Then 不再以 `Hello World + fps` 作为当前 UI 目标。
 
@@ -234,6 +234,7 @@ None
 - 2026-02-27: 按 UPS 四工作模式重构 Dashboard 语义：新增 `UpsMode`、明确充电策略（仅 STANDBY 可充）、并归档四张冻结参考图。
 - 2026-02-27: 模式命名统一升级为专业全称（`BYPASS / STANDBY / ASSIST / BACKUP`），界面右上状态位不再使用缩写。
 - 2026-02-27: 自检页升级为“全模块通信诊断表”（10 模块覆盖），并新增长按 CENTER 页面切换（Dashboard <-> Self-check）。
+- 2026-02-27: 自检页再优化为“双列大字号诊断卡”，提升小屏可读性并保留全模块覆盖。
 
 ## 参考（References）
 
