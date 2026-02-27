@@ -33,12 +33,12 @@ const CMD_CASET: u8 = 0x2A;
 const CMD_RASET: u8 = 0x2B;
 const CMD_RAMWR: u8 = 0x2C;
 
-// Diagnostic step: rotate 90° via driver orientation API.
+// Diagnostic step: rotate 270° via driver orientation API (PortraitSwapped).
 const LCD_W: u16 = 320;
 const LCD_H: u16 = 172;
 const OFFSET_X: u16 = 0;
 const OFFSET_Y: u16 = 34;
-const PANEL_ORIENTATION: Orientation = Orientation::Portrait;
+const PANEL_ORIENTATION: Orientation = Orientation::PortraitSwapped;
 const UI_ORIENTATION_MARKER: &str = "FP_ORI_PROBE_20260227";
 
 const BACKLIGHT_ACTIVE_LOW: bool = true;
