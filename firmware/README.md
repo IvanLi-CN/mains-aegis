@@ -238,17 +238,17 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 - Dashboard 工作模式（项目口径）：
   - `BYPASS`（关闭）：不提供 UPS 功能，输入直通输出（bypass）
-  - `MAINS STANDBY`（待机）：输入存在，TPS55288 无实际输出电流
-  - `MAINS ASSIST`（补充）：输入存在，TPS55288 有实际输出电流
+  - `STANDBY`（待机）：输入存在，TPS55288 无实际输出电流
+  - `ASSIST`（补充）：输入存在，TPS55288 有实际输出电流
   - `BACKUP`（后备）：输入不存在
 - 充电策略（本轮 UI 冻结）：
-  - 仅 `MAINS STANDBY` 允许电池充电
-  - `BYPASS/MAINS ASSIST/BACKUP` 不允许充电（`BYPASS` 手动充电能力不在本轮 Dashboard 展示范围）
+  - 仅 `STANDBY` 允许电池充电
+  - `BYPASS/ASSIST/BACKUP` 不允许充电（`BYPASS` 手动充电能力不在本轮 Dashboard 展示范围）
 - Dashboard 字段分层（项目口径）：
-  - 市电存在（`BYPASS/MAINS STANDBY/MAINS ASSIST`）：主 KPI 显示 `PIN` 与 `POUT`
+  - 市电存在（`BYPASS/STANDBY/ASSIST`）：主 KPI 显示 `PIN` 与 `POUT`
   - 市电缺失（`BACKUP`）：主 KPI 显示 `POUT` 与 `IOUT`
   - 右侧三卡固定：`BATTERY`（SOC/电池状态）、`CHARGE`（仅电池充电电流）、`DISCHG`（电池放电功率）
-- 顶栏右上模式标签使用全称（不使用缩写）：`BYPASS / MAINS STANDBY / MAINS ASSIST / BACKUP`
+- 顶栏右上模式标签使用全称（不使用缩写）：`BYPASS / STANDBY / ASSIST / BACKUP`
 - 五向按键映射为功能焦点切换：`UP->OUT-A`、`DOWN->OUT-B`、`LEFT->BMS`、`RIGHT->CHARGER`、`CENTER->THERM`
 - 触摸中断仅作为告警指示（`IRQ ON/OFF`）
 - 当前默认视觉方案：`Variant B`（Dashboard 主界面）

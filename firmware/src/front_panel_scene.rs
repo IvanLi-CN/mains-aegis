@@ -211,8 +211,8 @@ impl DashboardData {
 fn mode_label(mode: UpsMode) -> &'static str {
     match mode {
         UpsMode::Off => "BYPASS",
-        UpsMode::Standby => "MAINS STANDBY",
-        UpsMode::Supplement => "MAINS ASSIST",
+        UpsMode::Standby => "STANDBY",
+        UpsMode::Supplement => "ASSIST",
         UpsMode::Backup => "BACKUP",
     }
 }
@@ -527,7 +527,7 @@ fn render_variant_b<P: UiPainter>(
                 painter,
                 variant,
                 FontRole::TextBody,
-                "MAINS ASSIST",
+                "ASSIST",
                 Point::new(14, 81),
                 HorizontalAlignment::Left,
                 palette.text,
