@@ -822,60 +822,52 @@ fn render_variant_c<P: UiPainter>(
         0
     };
 
-    let x = 6;
-    let y = 22;
-    let w = 308;
-    let header_h = 12;
-    let row_h = 13;
-    let row_count = 10;
-    let panel_h = 4 + header_h + row_h * row_count;
+    let col_left_x = 6;
+    let col_right_x = 163;
+    let col_w = 151;
+    let row_h = 29;
+    let start_y = 22;
 
-    draw_panel(painter, x, y, w, panel_h, palette, false, palette.accent)?;
-
-    fill(painter, x + 2, y + 2, w - 4, header_h, palette.panel_alt)?;
-    draw_column_headers(painter, variant, palette, x + 4, y + 4)?;
-
-    let row_y = y + 2 + header_h;
-
-    draw_table_row(
+    draw_diag_card(
         painter,
         variant,
         palette,
-        TableRow {
-            x: x + 2,
-            y: row_y,
+        DiagCard {
+            x: col_left_x,
+            y: start_y,
+            w: col_w,
             h: row_h,
             module: "GC9307",
             status: "OK",
             key: "RGB565 320x172",
             active: false,
             accent: palette.accent,
-            odd: false,
         },
     )?;
-    draw_table_row(
+    draw_diag_card(
         painter,
         variant,
         palette,
-        TableRow {
-            x: x + 2,
-            y: row_y + row_h,
+        DiagCard {
+            x: col_left_x,
+            y: start_y + row_h,
+            w: col_w,
             h: row_h,
             module: "TCA6408A",
             status: if data.touch_irq { "IRQ" } else { "OK" },
             key: format_args!("BTN {}", focus_tag(data.focus)),
             active: data.focus == UiFocus::Touch || data.touch_irq,
             accent: palette.touch,
-            odd: true,
         },
     )?;
-    draw_table_row(
+    draw_diag_card(
         painter,
         variant,
         palette,
-        TableRow {
-            x: x + 2,
-            y: row_y + row_h * 2,
+        DiagCard {
+            x: col_left_x,
+            y: start_y + row_h * 2,
+            w: col_w,
             h: row_h,
             module: "FUSB302",
             status: "OK",
@@ -886,16 +878,16 @@ fn render_variant_c<P: UiPainter>(
             },
             active: false,
             accent: palette.accent,
-            odd: false,
         },
     )?;
-    draw_table_row(
+    draw_diag_card(
         painter,
         variant,
         palette,
-        TableRow {
-            x: x + 2,
-            y: row_y + row_h * 3,
+        DiagCard {
+            x: col_left_x,
+            y: start_y + row_h * 3,
+            w: col_w,
             h: row_h,
             module: "INA3221",
             status: if data.alert_on { "WARN" } else { "OK" },
@@ -906,90 +898,91 @@ fn render_variant_c<P: UiPainter>(
             ),
             active: data.focus == UiFocus::Touch,
             accent: palette.touch,
-            odd: true,
         },
     )?;
-    let bq25792_a_int = data.chg_iin_ma / 1000;
-    let bq25792_a_frac = (data.chg_iin_ma % 1000) / 10;
     if matches!(data.mode, UpsMode::Standby) {
-        draw_table_row(
+        draw_diag_card(
             painter,
             variant,
             palette,
-            TableRow {
-                x: x + 2,
-                y: row_y + row_h * 4,
+            DiagCard {
+                x: col_left_x,
+                y: start_y + row_h * 4,
+                w: col_w,
                 h: row_h,
                 module: "BQ25792",
                 status: "RUN",
-                key: format_args!("ICHG {:>1}.{:02}A", bq25792_a_int, bq25792_a_frac),
+                key: format_args!(
+                    "ICHG {:>1}.{:02}A",
+                    data.chg_iin_ma / 1000,
+                    (data.chg_iin_ma % 1000) / 10
+                ),
                 active: data.focus == UiFocus::Right,
                 accent: palette.right,
-                odd: false,
             },
         )?;
     } else {
-        draw_table_row(
+        draw_diag_card(
             painter,
             variant,
             palette,
-            TableRow {
-                x: x + 2,
-                y: row_y + row_h * 4,
+            DiagCard {
+                x: col_left_x,
+                y: start_y + row_h * 4,
+                w: col_w,
                 h: row_h,
                 module: "BQ25792",
                 status: "LOCK",
                 key: "CHG DISABLED",
                 active: data.focus == UiFocus::Right,
                 accent: palette.right,
-                odd: false,
             },
         )?;
     }
 
     if data.bms_balancing {
-        draw_table_row(
+        draw_diag_card(
             painter,
             variant,
             palette,
-            TableRow {
-                x: x + 2,
-                y: row_y + row_h * 5,
+            DiagCard {
+                x: col_right_x,
+                y: start_y,
+                w: col_w,
                 h: row_h,
                 module: "BQ40Z50",
                 status: "BAL",
                 key: "BALANCING",
                 active: data.focus == UiFocus::Left,
                 accent: palette.left,
-                odd: true,
             },
         )?;
     } else {
-        let bq40z50_soc = data.bms_soc_pct;
-        draw_table_row(
+        draw_diag_card(
             painter,
             variant,
             palette,
-            TableRow {
-                x: x + 2,
-                y: row_y + row_h * 5,
+            DiagCard {
+                x: col_right_x,
+                y: start_y,
+                w: col_w,
                 h: row_h,
                 module: "BQ40Z50",
                 status: "OK",
-                key: format_args!("SOC {:>2}%", bq40z50_soc),
+                key: format_args!("SOC {:>2}%", data.bms_soc_pct),
                 active: data.focus == UiFocus::Left,
                 accent: palette.left,
-                odd: true,
             },
         )?;
     }
-    draw_table_row(
+    draw_diag_card(
         painter,
         variant,
         palette,
-        TableRow {
-            x: x + 2,
-            y: row_y + row_h * 6,
+        DiagCard {
+            x: col_right_x,
+            y: start_y + row_h,
+            w: col_w,
             h: row_h,
             module: "TPS55288-A",
             status: if data.out_a_on { "RUN" } else { "IDLE" },
@@ -1000,16 +993,16 @@ fn render_variant_c<P: UiPainter>(
             ),
             active: data.focus == UiFocus::Up,
             accent: palette.up,
-            odd: false,
         },
     )?;
-    draw_table_row(
+    draw_diag_card(
         painter,
         variant,
         palette,
-        TableRow {
-            x: x + 2,
-            y: row_y + row_h * 7,
+        DiagCard {
+            x: col_right_x,
+            y: start_y + row_h * 2,
+            w: col_w,
             h: row_h,
             module: "TPS55288-B",
             status: if data.out_b_on { "RUN" } else { "IDLE" },
@@ -1020,39 +1013,38 @@ fn render_variant_c<P: UiPainter>(
             ),
             active: data.focus == UiFocus::Down,
             accent: palette.down,
-            odd: true,
         },
     )?;
-    draw_table_row(
+    draw_diag_card(
         painter,
         variant,
         palette,
-        TableRow {
-            x: x + 2,
-            y: row_y + row_h * 8,
+        DiagCard {
+            x: col_right_x,
+            y: start_y + row_h * 3,
+            w: col_w,
             h: row_h,
             module: "TMP112-A",
             status: if data.therm_a_c >= 50 { "HOT" } else { "OK" },
-            key: format_args!("{:>2}C HOTSPOT", data.therm_a_c),
+            key: format_args!("TMAX {:>2}C", data.therm_a_c),
             active: data.focus == UiFocus::Center,
             accent: palette.center,
-            odd: false,
         },
     )?;
-    draw_table_row(
+    draw_diag_card(
         painter,
         variant,
         palette,
-        TableRow {
-            x: x + 2,
-            y: row_y + row_h * 9,
+        DiagCard {
+            x: col_right_x,
+            y: start_y + row_h * 4,
+            w: col_w,
             h: row_h,
             module: "TMP112-B",
             status: if data.therm_b_c >= 50 { "HOT" } else { "OK" },
-            key: format_args!("{:>2}C HOTSPOT", data.therm_b_c),
+            key: format_args!("TMAX {:>2}C", data.therm_b_c),
             active: data.focus == UiFocus::Center,
             accent: palette.center,
-            odd: true,
         },
     )?;
 
@@ -1066,6 +1058,78 @@ fn render_variant_d<P: UiPainter>(
     data: DashboardData,
 ) -> Result<(), P::Error> {
     render_variant_b(painter, variant, palette, data)
+}
+
+struct DiagCard<T>
+where
+    T: Content,
+{
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    module: &'static str,
+    status: &'static str,
+    key: T,
+    active: bool,
+    accent: u16,
+}
+
+fn draw_diag_card<P: UiPainter, T: Content>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    spec: DiagCard<T>,
+) -> Result<(), P::Error> {
+    draw_panel(
+        painter,
+        spec.x,
+        spec.y,
+        spec.w,
+        spec.h,
+        palette,
+        spec.active,
+        spec.accent,
+    )?;
+
+    let text_color = if spec.active {
+        palette.bg
+    } else {
+        palette.text
+    };
+    let dim_color = if spec.active {
+        fade_color(palette.bg, spec.accent)
+    } else {
+        palette.text_dim
+    };
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        spec.module,
+        Point::new((spec.x + 6) as i32, (spec.y + 3) as i32),
+        HorizontalAlignment::Left,
+        text_color,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::Num,
+        spec.status,
+        Point::new((spec.x + spec.w - 6) as i32, (spec.y + 4) as i32),
+        HorizontalAlignment::Right,
+        if spec.active { palette.bg } else { dim_color },
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::Num,
+        spec.key,
+        Point::new((spec.x + 6) as i32, (spec.y + 15) as i32),
+        HorizontalAlignment::Left,
+        text_color,
+    )?;
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -1295,6 +1359,7 @@ fn draw_health_block<P: UiPainter, T: Content>(
     )
 }
 
+#[allow(dead_code)]
 fn draw_column_headers<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
@@ -1332,6 +1397,7 @@ fn draw_column_headers<P: UiPainter>(
     Ok(())
 }
 
+#[allow(dead_code)]
 struct TableRow<TK>
 where
     TK: Content,
@@ -1347,6 +1413,7 @@ where
     odd: bool,
 }
 
+#[allow(dead_code)]
 fn draw_table_row<P: UiPainter, TK: Content>(
     painter: &mut P,
     variant: UiVariant,
@@ -1706,6 +1773,7 @@ fn draw_right_stat<P: UiPainter, T: Content>(
     )
 }
 
+#[allow(dead_code)]
 fn draw_top_bar<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
@@ -1939,6 +2007,7 @@ fn focus_tag(focus: UiFocus) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 fn focus_color(palette: Palette, focus: UiFocus) -> u16 {
     match focus {
         UiFocus::Idle => palette.accent,
