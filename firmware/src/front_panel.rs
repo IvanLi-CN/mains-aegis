@@ -33,12 +33,12 @@ const CMD_CASET: u8 = 0x2A;
 const CMD_RASET: u8 = 0x2B;
 const CMD_RAMWR: u8 = 0x2C;
 
-// Match gc9307-async profile (LandscapeSwapped + 320x172 + dy=34) for 180° mount.
+// Diagnostic step: rotate 90° via driver orientation API.
 const LCD_W: u16 = 320;
 const LCD_H: u16 = 172;
 const OFFSET_X: u16 = 0;
 const OFFSET_Y: u16 = 34;
-const PANEL_ORIENTATION: Orientation = Orientation::LandscapeSwapped;
+const PANEL_ORIENTATION: Orientation = Orientation::Portrait;
 
 const BACKLIGHT_ACTIVE_LOW: bool = true;
 
