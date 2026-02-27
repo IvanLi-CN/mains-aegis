@@ -20,7 +20,7 @@
 - 新增共享渲染模块，由固件与主机预览工具复用同一渲染代码。
 - 交付 4 个视觉变体（A/B/C/D）与 7 个交互状态帧（idle/up/down/left/right/center/touch）。
 - 默认固化 Variant B 作为 Dashboard 主界面；Variant C 收敛为“高级设置/自检页”风格。
-- 在 Dashboard 中明确 UPS 四工作模式（`BYPASS MODE / LINE STANDBY / LINE ASSIST / BACKUP MODE`）与充电策略约束。
+- 在 Dashboard 中明确 UPS 四工作模式（`BYPASS / MAINS STANDBY / MAINS ASSIST / BACKUP`）与充电策略约束。
 - 建立 `docs/specs` 主规格目录并与实现保持同步。
 
 ### Non-goals
@@ -52,8 +52,8 @@
 - 渲染逻辑同源：固件与预览必须复用同一 scene renderer。
 - 预览输出像素必须是 `320x172`、`RGB565 little-endian`。
 - 支持 `UiFocus` 七态与 `touch_irq` 状态展示。
-- 支持 `UpsMode` 四态展示：`BYPASS MODE`（关闭/旁路）、`LINE STANDBY`（待机）、`LINE ASSIST`（补充）、`BACKUP MODE`（后备）。
-- 充电策略口径固定：仅 `LINE STANDBY` 允许电池充电；`BYPASS MODE/LINE ASSIST/BACKUP MODE` 在本轮 Dashboard 一律显示充电锁定（`LOCK` 或 `NOAC`）。
+- 支持 `UpsMode` 四态展示：`BYPASS`（关闭/旁路）、`MAINS STANDBY`（待机）、`MAINS ASSIST`（补充）、`BACKUP`（后备）。
+- 充电策略口径固定：仅 `MAINS STANDBY` 允许电池充电；`BYPASS/MAINS ASSIST/BACKUP` 在本轮 Dashboard 一律显示充电锁定（`LOCK` 或 `NOAC`）。
 - 字体策略固定：非数值文本使用 A（现代无衬线），数值/对齐字段使用 B（等宽）。
 - 文档不再将前面板 UI 目标描述为 `Hello World + fps`。
 
@@ -74,45 +74,45 @@
 - 周期轮询输入，状态变化时重绘界面并更新 focus/highlight。
 - 主机工具根据 `--variant`、`--mode` 与 `--focus` 调用同一 renderer，输出 raw framebuffer 与 PNG。
 - Dashboard 冻结语义（项目工作模式口径）：
-  - `BYPASS MODE`（关闭）: 输入直通输出（bypass），不提供 UPS 功能；本轮 UI 充电状态固定为 `LOCK`。
-  - `LINE STANDBY`（待机）: 输入存在，TPS 无实际输出电流；允许充电。
-  - `LINE ASSIST`（补充）: 输入存在，TPS 有实际输出电流；不允许充电。
-  - `BACKUP MODE`（后备）: 输入不存在；不允许充电，输出由电池侧供能。
+  - `BYPASS`（关闭）: 输入直通输出（bypass），不提供 UPS 功能；本轮 UI 充电状态固定为 `LOCK`。
+  - `MAINS STANDBY`（待机）: 输入存在，TPS 无实际输出电流；允许充电。
+  - `MAINS ASSIST`（补充）: 输入存在，TPS 有实际输出电流；不允许充电。
+  - `BACKUP`（后备）: 输入不存在；不允许充电，输出由电池侧供能。
   - 右侧三卡固定语义：`BATTERY`（SOC + 电池状态）、`CHARGE`（仅电池充电电流与状态）、`DISCHG`（电池放电功率与状态）。
 
 ### Dashboard 视觉冻结（Variant B）
 
 - 冻结对象：`Variant B (Neutral)` 作为默认 Dashboard；`Variant C` 仅用于自检页。
 - 主 KPI 面板：`x=6 y=22 w=196 h=52`。
-  - 顶栏模式标签（右上）使用全称：`BYPASS MODE / LINE STANDBY / LINE ASSIST / BACKUP MODE`（不使用缩写）。
+  - 顶栏模式标签（右上）使用全称：`BYPASS / MAINS STANDBY / MAINS ASSIST / BACKUP`（不使用缩写）。
   - 标签行：`y=27`（市电模式固定 `PIN W` 在前、`POUT W` 在后；后备模式为 `POUT W / IOUT A`）
   - 数值行：`y=44`（`NumBig`，数值字体 B）
 - 次级信息面板：`x=6 y=76 w=196 h=94`。
   - 按工作模式切换文本块：
-    - `BYPASS MODE`：`BYPASS ACTIVE / TPS OUT / BAT CHG`
-    - `LINE STANDBY`：`STANDBY CHARGE / TPS OUT / BAT CHG`
-    - `LINE ASSIST`：`LINE ASSIST / TPS OUT / BAT CHG`
-    - `BACKUP MODE`：`OUTPUT / VOUT / TEMP / SOC`
+    - `BYPASS`：`BYPASS ACTIVE / TPS OUT / BAT CHG`
+    - `MAINS STANDBY`：`STANDBY CHARGE / TPS OUT / BAT CHG`
+    - `MAINS ASSIST`：`MAINS ASSIST / TPS OUT / BAT CHG`
+    - `BACKUP`：`OUTPUT / VOUT / TEMP / SOC`
 - 所有冻结布局均按 `320x172` 有效区评审，不允许缩放、裁切或旋转补偿。
 
 ### 冲突检查（按四模式口径）
 
 - 旧冲突 1：将 `focus` 直接当作工作模式来源。已修正为显式 `UiModel.mode`，`focus` 仅用于高亮。
-- 旧冲突 2：非待机模式仍显示可充电语义。已修正为仅 `LINE STANDBY` 显示 `READY/CHG`，其余模式显示 `LOCK/NOAC`。
-- 旧冲突 3：放电卡片和输出负载混用。已修正为 `DISCHG` 卡片仅表示电池侧放电功率（`BYPASS MODE/LINE STANDBY=0`）。
+- 旧冲突 2：非待机模式仍显示可充电语义。已修正为仅 `MAINS STANDBY` 显示 `READY/CHG`，其余模式显示 `LOCK/NOAC`。
+- 旧冲突 3：放电卡片和输出负载混用。已修正为 `DISCHG` 卡片仅表示电池侧放电功率（`BYPASS/MAINS STANDBY=0`）。
 - 旧冲突 4：平衡状态位置不一致。已修正为 `BATTERY` 卡片状态位固定显示 `BAL`，并在值区显示 `SOC + Tmax`。
 
 ### 冻结参考图（Spec assets）
 
-- BYPASS MODE: `assets/dashboard-b-off-mode.png`
-- LINE STANDBY: `assets/dashboard-b-standby-mode.png`
-- LINE ASSIST: `assets/dashboard-b-supplement-mode.png`
-- BACKUP MODE: `assets/dashboard-b-backup-mode.png`
+- BYPASS: `assets/dashboard-b-off-mode.png`
+- MAINS STANDBY: `assets/dashboard-b-standby-mode.png`
+- MAINS ASSIST: `assets/dashboard-b-supplement-mode.png`
+- BACKUP: `assets/dashboard-b-backup-mode.png`
 
-![Dashboard Variant B - BYPASS MODE](assets/dashboard-b-off-mode.png)
-![Dashboard Variant B - LINE STANDBY](assets/dashboard-b-standby-mode.png)
-![Dashboard Variant B - LINE ASSIST](assets/dashboard-b-supplement-mode.png)
-![Dashboard Variant B - BACKUP MODE](assets/dashboard-b-backup-mode.png)
+![Dashboard Variant B - BYPASS](assets/dashboard-b-off-mode.png)
+![Dashboard Variant B - MAINS STANDBY](assets/dashboard-b-standby-mode.png)
+![Dashboard Variant B - MAINS ASSIST](assets/dashboard-b-supplement-mode.png)
+![Dashboard Variant B - BACKUP](assets/dashboard-b-backup-mode.png)
 
 ### Edge cases / errors
 
@@ -209,8 +209,8 @@ None
 - 2026-02-26: 根据评审反馈将默认 Dashboard 切换为 Variant B，并将 Variant C 重定位为自检页视觉。
 - 2026-02-26: 冻结 Variant B Dashboard 间距与留白（主 KPI 面板 + 次级面板行距），并归档 AC/BATT 参考图。
 - 2026-02-27: 修正 AC 电流语义（`ICHG BAT` 不再混同为线侧输入电流），并移除 BATT 模式次级面板中的 `POUT` 重复字段。
-- 2026-02-27: 按 UPS 四工作模式重构 Dashboard 语义：新增 `UpsMode`、明确充电策略（仅 LINE STANDBY 可充）、并归档四张冻结参考图。
-- 2026-02-27: 模式命名统一升级为专业全称（`BYPASS MODE / LINE STANDBY / LINE ASSIST / BACKUP MODE`），界面右上状态位不再使用缩写。
+- 2026-02-27: 按 UPS 四工作模式重构 Dashboard 语义：新增 `UpsMode`、明确充电策略（仅 MAINS STANDBY 可充）、并归档四张冻结参考图。
+- 2026-02-27: 模式命名统一升级为专业全称（`BYPASS / MAINS STANDBY / MAINS ASSIST / BACKUP`），界面右上状态位不再使用缩写。
 
 ## 参考（References）
 
