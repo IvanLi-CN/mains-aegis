@@ -19,4 +19,4 @@
 
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
-| 6qrjs | Front panel industrial UI preview（320x172） | 已完成 | `6qrjs-front-panel-industrial-ui-preview/SPEC.md` | 2026-02-27 | Dashboard 已冻结为 Variant B；模式语义重构为 BYPASS/STANDBY/ASSIST/BACKUP 且仅 STANDBY 允许充电 |
+| 6qrjs | Front panel industrial UI preview（320x172） | 已完成 | `6qrjs-front-panel-industrial-ui-preview/SPEC.md` | 2026-02-27 | Dashboard 冻结 Variant B；新增 Variant C 全模块自检表（10 模块）与长按 CENTER 页面切换 |

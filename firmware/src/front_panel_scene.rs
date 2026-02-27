@@ -57,6 +57,9 @@ static FONT_A_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13B_t
 static FONT_A_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_7x14B_tf>();
 static FONT_B_NUM: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13_mf>();
 static FONT_B_NUM_BIG: FontRenderer = FontRenderer::new::<fonts::u8g2_font_t0_22b_tn>();
+// Compact self-check table fonts: keep A/B split while fitting all communication modules.
+static FONT_A_COMPACT: FontRenderer = FontRenderer::new::<fonts::u8g2_font_5x8_tf>();
+static FONT_B_COMPACT: FontRenderer = FontRenderer::new::<fonts::u8g2_font_5x8_mf>();
 
 #[derive(Clone, Copy)]
 struct Palette {
@@ -80,7 +83,9 @@ struct Palette {
 enum FontRole {
     TextTitle,
     TextBody,
+    TextCompact,
     Num,
+    NumCompact,
     NumBig,
 }
 
@@ -784,25 +789,53 @@ fn render_variant_c<P: UiPainter>(
     palette: Palette,
     data: DashboardData,
 ) -> Result<(), P::Error> {
-    draw_top_bar(
+    let mode_accent = mode_accent_color(palette, data.mode, data.touch_irq);
+    draw_top_bar_with_status(
         painter,
         variant,
         palette,
         data.focus,
         "SELF CHECK",
-        "DIAG TABLE",
+        "",
+        mode_label(data.mode),
+        mode_accent,
     )?;
+
+    let load_ma = data.load_ma as u32;
+    let tps_out_ma = data.out_a_ma as u32 + data.out_b_ma as u32;
+    let charge_batt_ma = if matches!(data.mode, UpsMode::Standby) {
+        data.chg_iin_ma as u32
+    } else {
+        0
+    };
+    let input_current_ma = if data.mains_present {
+        match data.mode {
+            UpsMode::Off => load_ma,
+            UpsMode::Standby => load_ma + charge_batt_ma,
+            UpsMode::Supplement => {
+                let supplement_ma = tps_out_ma.min(load_ma.saturating_sub(120));
+                load_ma.saturating_sub(supplement_ma)
+            }
+            UpsMode::Backup => 0,
+        }
+    } else {
+        0
+    };
 
     let x = 6;
     let y = 22;
     let w = 308;
-    let header_h = 16;
-    let row_h = 18;
+    let header_h = 12;
+    let row_h = 13;
+    let row_count = 10;
+    let panel_h = 4 + header_h + row_h * row_count;
 
-    draw_panel(painter, x, y, w, 124, palette, false, palette.accent)?;
+    draw_panel(painter, x, y, w, panel_h, palette, false, palette.accent)?;
 
     fill(painter, x + 2, y + 2, w - 4, header_h, palette.panel_alt)?;
-    draw_column_headers(painter, variant, palette, x + 4, y + 3)?;
+    draw_column_headers(painter, variant, palette, x + 4, y + 4)?;
+
+    let row_y = y + 2 + header_h;
 
     draw_table_row(
         painter,
@@ -810,17 +843,161 @@ fn render_variant_c<P: UiPainter>(
         palette,
         TableRow {
             x: x + 2,
-            y: y + 2 + header_h,
+            y: row_y,
             h: row_h,
-            module: "OUT-A",
-            status: if data.out_a_on { "ACT" } else { "OK " },
-            voltage: "IO-A",
-            current: format_args!(
-                "{:>2}.{:01}V",
-                data.out_a_mv / 1000,
-                (data.out_a_mv % 1000) / 100
+            module: "GC9307",
+            status: "OK",
+            key: "RGB565 320x172",
+            active: false,
+            accent: palette.accent,
+            odd: false,
+        },
+    )?;
+    draw_table_row(
+        painter,
+        variant,
+        palette,
+        TableRow {
+            x: x + 2,
+            y: row_y + row_h,
+            h: row_h,
+            module: "TCA6408A",
+            status: if data.touch_irq { "IRQ" } else { "OK" },
+            key: format_args!("BTN {}", focus_tag(data.focus)),
+            active: data.focus == UiFocus::Touch || data.touch_irq,
+            accent: palette.touch,
+            odd: true,
+        },
+    )?;
+    draw_table_row(
+        painter,
+        variant,
+        palette,
+        TableRow {
+            x: x + 2,
+            y: row_y + row_h * 2,
+            h: row_h,
+            module: "FUSB302",
+            status: "OK",
+            key: if data.mains_present {
+                "VBUS PRESENT"
+            } else {
+                "VBUS LOST"
+            },
+            active: false,
+            accent: palette.accent,
+            odd: false,
+        },
+    )?;
+    draw_table_row(
+        painter,
+        variant,
+        palette,
+        TableRow {
+            x: x + 2,
+            y: row_y + row_h * 3,
+            h: row_h,
+            module: "INA3221",
+            status: if data.alert_on { "WARN" } else { "OK" },
+            key: format_args!(
+                "IIN {:>1}.{:02}A",
+                input_current_ma / 1000,
+                (input_current_ma % 1000) / 10
             ),
-            temp: "--/--",
+            active: data.focus == UiFocus::Touch,
+            accent: palette.touch,
+            odd: true,
+        },
+    )?;
+    let bq25792_a_int = data.chg_iin_ma / 1000;
+    let bq25792_a_frac = (data.chg_iin_ma % 1000) / 10;
+    if matches!(data.mode, UpsMode::Standby) {
+        draw_table_row(
+            painter,
+            variant,
+            palette,
+            TableRow {
+                x: x + 2,
+                y: row_y + row_h * 4,
+                h: row_h,
+                module: "BQ25792",
+                status: "RUN",
+                key: format_args!("ICHG {:>1}.{:02}A", bq25792_a_int, bq25792_a_frac),
+                active: data.focus == UiFocus::Right,
+                accent: palette.right,
+                odd: false,
+            },
+        )?;
+    } else {
+        draw_table_row(
+            painter,
+            variant,
+            palette,
+            TableRow {
+                x: x + 2,
+                y: row_y + row_h * 4,
+                h: row_h,
+                module: "BQ25792",
+                status: "LOCK",
+                key: "CHG DISABLED",
+                active: data.focus == UiFocus::Right,
+                accent: palette.right,
+                odd: false,
+            },
+        )?;
+    }
+
+    if data.bms_balancing {
+        draw_table_row(
+            painter,
+            variant,
+            palette,
+            TableRow {
+                x: x + 2,
+                y: row_y + row_h * 5,
+                h: row_h,
+                module: "BQ40Z50",
+                status: "BAL",
+                key: "BALANCING",
+                active: data.focus == UiFocus::Left,
+                accent: palette.left,
+                odd: true,
+            },
+        )?;
+    } else {
+        let bq40z50_soc = data.bms_soc_pct;
+        draw_table_row(
+            painter,
+            variant,
+            palette,
+            TableRow {
+                x: x + 2,
+                y: row_y + row_h * 5,
+                h: row_h,
+                module: "BQ40Z50",
+                status: "OK",
+                key: format_args!("SOC {:>2}%", bq40z50_soc),
+                active: data.focus == UiFocus::Left,
+                accent: palette.left,
+                odd: true,
+            },
+        )?;
+    }
+    draw_table_row(
+        painter,
+        variant,
+        palette,
+        TableRow {
+            x: x + 2,
+            y: row_y + row_h * 6,
+            h: row_h,
+            module: "TPS55288-A",
+            status: if data.out_a_on { "RUN" } else { "IDLE" },
+            key: format_args!(
+                "IOUT {:>1}.{:02}A",
+                data.out_a_ma / 1000,
+                (data.out_a_ma % 1000) / 10
+            ),
             active: data.focus == UiFocus::Up,
             accent: palette.up,
             odd: false,
@@ -832,17 +1009,15 @@ fn render_variant_c<P: UiPainter>(
         palette,
         TableRow {
             x: x + 2,
-            y: y + 2 + header_h + row_h,
+            y: row_y + row_h * 7,
             h: row_h,
-            module: "OUT-B",
-            status: if data.out_b_on { "ACT" } else { "OK " },
-            voltage: "IO-B",
-            current: format_args!(
-                "{:>2}.{:01}V",
-                data.out_b_mv / 1000,
-                (data.out_b_mv % 1000) / 100
+            module: "TPS55288-B",
+            status: if data.out_b_on { "RUN" } else { "IDLE" },
+            key: format_args!(
+                "IOUT {:>1}.{:02}A",
+                data.out_b_ma / 1000,
+                (data.out_b_ma % 1000) / 10
             ),
-            temp: "--/--",
             active: data.focus == UiFocus::Down,
             accent: palette.down,
             odd: true,
@@ -854,53 +1029,11 @@ fn render_variant_c<P: UiPainter>(
         palette,
         TableRow {
             x: x + 2,
-            y: y + 2 + header_h + row_h * 2,
+            y: row_y + row_h * 8,
             h: row_h,
-            module: "CHG",
-            status: if data.chg_on { "RUN" } else { "STB" },
-            voltage: "I2C",
-            current: format_args!(
-                "{:>1}.{:02}A",
-                data.chg_iin_ma / 1000,
-                (data.chg_iin_ma % 1000) / 10
-            ),
-            temp: "OK  ",
-            active: data.focus == UiFocus::Right,
-            accent: palette.right,
-            odd: false,
-        },
-    )?;
-    draw_table_row(
-        painter,
-        variant,
-        palette,
-        TableRow {
-            x: x + 2,
-            y: y + 2 + header_h + row_h * 3,
-            h: row_h,
-            module: "BMS",
-            status: if data.bms_on { "SEL" } else { "OK " },
-            voltage: "SMB",
-            current: format_args!("{:>2}%", data.bms_soc_pct),
-            temp: "OK  ",
-            active: data.focus == UiFocus::Left,
-            accent: palette.left,
-            odd: true,
-        },
-    )?;
-    draw_table_row(
-        painter,
-        variant,
-        palette,
-        TableRow {
-            x: x + 2,
-            y: y + 2 + header_h + row_h * 4,
-            h: row_h,
-            module: "THERM",
-            status: if data.therm_on { "HOT" } else { "OK " },
-            voltage: "NTC",
-            temp: format_args!("{:02}/{:02}", data.therm_a_c, data.therm_b_c),
-            current: "READ",
+            module: "TMP112-A",
+            status: if data.therm_a_c >= 50 { "HOT" } else { "OK" },
+            key: format_args!("{:>2}C HOTSPOT", data.therm_a_c),
             active: data.focus == UiFocus::Center,
             accent: palette.center,
             odd: false,
@@ -912,15 +1045,13 @@ fn render_variant_c<P: UiPainter>(
         palette,
         TableRow {
             x: x + 2,
-            y: y + 2 + header_h + row_h * 5,
+            y: row_y + row_h * 9,
             h: row_h,
-            module: "IRQ",
-            status: if data.touch_irq { "ON " } else { "OFF" },
-            voltage: "INT",
-            current: if data.touch_irq { "EDGE" } else { "NONE" },
-            temp: if data.touch_irq { "ALRT" } else { "OK  " },
-            active: data.focus == UiFocus::Touch || data.touch_irq,
-            accent: palette.touch,
+            module: "TMP112-B",
+            status: if data.therm_b_c >= 50 { "HOT" } else { "OK" },
+            key: format_args!("{:>2}C HOTSPOT", data.therm_b_c),
+            active: data.focus == UiFocus::Center,
+            accent: palette.center,
             odd: true,
         },
     )?;
@@ -1174,7 +1305,7 @@ fn draw_column_headers<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::TextCompact,
         "MODULE",
         Point::new(x as i32, y as i32),
         HorizontalAlignment::Left,
@@ -1183,66 +1314,44 @@ fn draw_column_headers<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
-        "STATE",
-        Point::new((x + 84) as i32, y as i32),
-        HorizontalAlignment::Left,
-        palette.text,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::TextBody,
-        "CODE",
-        Point::new((x + 168) as i32, y as i32),
+        FontRole::TextCompact,
+        "COMM",
+        Point::new((x + 194) as i32, y as i32),
         HorizontalAlignment::Right,
         palette.text,
     )?;
     text(
         painter,
         variant,
-        FontRole::TextBody,
-        "READ",
-        Point::new((x + 236) as i32, y as i32),
-        HorizontalAlignment::Right,
-        palette.text,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::TextBody,
-        "TEMP",
-        Point::new((x + 292) as i32, y as i32),
+        FontRole::TextCompact,
+        "KEY PARAM",
+        Point::new((x + 296) as i32, y as i32),
         HorizontalAlignment::Right,
         palette.text,
     )?;
     Ok(())
 }
 
-struct TableRow<TV, TC, TT>
+struct TableRow<TK>
 where
-    TV: Content,
-    TC: Content,
-    TT: Content,
+    TK: Content,
 {
     x: u16,
     y: u16,
     h: u16,
     module: &'static str,
     status: &'static str,
-    voltage: TV,
-    current: TC,
-    temp: TT,
+    key: TK,
     active: bool,
     accent: u16,
     odd: bool,
 }
 
-fn draw_table_row<P: UiPainter, TV: Content, TC: Content, TT: Content>(
+fn draw_table_row<P: UiPainter, TK: Content>(
     painter: &mut P,
     variant: UiVariant,
     palette: Palette,
-    spec: TableRow<TV, TC, TT>,
+    spec: TableRow<TK>,
 ) -> Result<(), P::Error> {
     let row_bg = if spec.active {
         spec.accent
@@ -1269,45 +1378,27 @@ fn draw_table_row<P: UiPainter, TV: Content, TC: Content, TT: Content>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::TextCompact,
         spec.module,
-        Point::new((spec.x + 4) as i32, (spec.y + 3) as i32),
+        Point::new((spec.x + 4) as i32, (spec.y + 2) as i32),
         HorizontalAlignment::Left,
         text_color,
     )?;
     text(
         painter,
         variant,
-        FontRole::Num,
+        FontRole::NumCompact,
         spec.status,
-        Point::new((spec.x + 112) as i32, (spec.y + 3) as i32),
-        HorizontalAlignment::Left,
+        Point::new((spec.x + 194) as i32, (spec.y + 2) as i32),
+        HorizontalAlignment::Right,
         dim_color,
     )?;
     text(
         painter,
         variant,
-        FontRole::Num,
-        spec.voltage,
-        Point::new((spec.x + 190) as i32, (spec.y + 3) as i32),
-        HorizontalAlignment::Right,
-        text_color,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::Num,
-        spec.current,
-        Point::new((spec.x + 254) as i32, (spec.y + 3) as i32),
-        HorizontalAlignment::Right,
-        text_color,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::Num,
-        spec.temp,
-        Point::new((spec.x + 300) as i32, (spec.y + 3) as i32),
+        FontRole::NumCompact,
+        spec.key,
+        Point::new((spec.x + 300) as i32, (spec.y + 2) as i32),
         HorizontalAlignment::Right,
         text_color,
     )?;
@@ -1815,7 +1906,9 @@ fn text<P: UiPainter>(
     let renderer = match role {
         FontRole::TextTitle => &FONT_A_TITLE,
         FontRole::TextBody => &FONT_A_BODY,
+        FontRole::TextCompact => &FONT_A_COMPACT,
         FontRole::Num => &FONT_B_NUM,
+        FontRole::NumCompact => &FONT_B_COMPACT,
         FontRole::NumBig => &FONT_B_NUM_BIG,
     };
 

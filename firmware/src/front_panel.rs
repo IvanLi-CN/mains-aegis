@@ -45,6 +45,8 @@ const BACKLIGHT_ACTIVE_LOW: bool = true;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const DEFAULT_UI_VARIANT: UiVariant = UiVariant::InstrumentB;
+const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
+const PAGE_SWITCH_HOLD: Duration = Duration::from_millis(800);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitState {
@@ -89,6 +91,9 @@ pub struct FrontPanel {
     state: InitState,
     next_frame_deadline: Instant,
     last_inputs: Option<InputSnapshot>,
+    ui_variant: UiVariant,
+    center_press_started: Option<Instant>,
+    page_switch_latched: bool,
     frame_no: u32,
 }
 
@@ -114,6 +119,9 @@ impl FrontPanel {
             state: InitState::Disabled,
             next_frame_deadline: Instant::now(),
             last_inputs: None,
+            ui_variant: DEFAULT_UI_VARIANT,
+            center_press_started: None,
+            page_switch_latched: false,
             frame_no: 0,
         }
     }
@@ -226,7 +234,7 @@ impl FrontPanel {
 
         defmt::info!(
             "ui: front panel ready (driver=gc9307-async mode=industrial-demo variant={} res={}x{} offset=({},{}))",
-            variant_name(DEFAULT_UI_VARIANT),
+            variant_name(self.ui_variant),
             LCD_W,
             LCD_H,
             OFFSET_X,
@@ -257,7 +265,9 @@ impl FrontPanel {
 
         match self.read_inputs() {
             Ok(snapshot) => {
-                if self.last_inputs != Some(snapshot) {
+                let variant_changed = self.update_page_variant(snapshot);
+                let inputs_changed = self.last_inputs != Some(snapshot);
+                if variant_changed || inputs_changed {
                     if let Err(e) = self.render_inputs(snapshot) {
                         defmt::error!("ui: update input state failed err={=?}", e);
                     } else {
@@ -474,6 +484,43 @@ impl FrontPanel {
         })
     }
 
+    fn update_page_variant(&mut self, snapshot: InputSnapshot) -> bool {
+        if !snapshot.center {
+            self.center_press_started = None;
+            self.page_switch_latched = false;
+            return false;
+        }
+
+        if self.center_press_started.is_none() {
+            self.center_press_started = Some(Instant::now());
+            return false;
+        }
+
+        if self.page_switch_latched {
+            return false;
+        }
+
+        let Some(started) = self.center_press_started else {
+            return false;
+        };
+        if started.elapsed() < PAGE_SWITCH_HOLD {
+            return false;
+        }
+
+        self.ui_variant = if self.ui_variant == DEFAULT_UI_VARIANT {
+            SELF_CHECK_VARIANT
+        } else {
+            DEFAULT_UI_VARIANT
+        };
+        self.page_switch_latched = true;
+        defmt::info!(
+            "ui: page switch variant={} hold_ms={=u32}",
+            variant_name(self.ui_variant),
+            800u32
+        );
+        true
+    }
+
     fn snapshot_to_model(&self, snapshot: InputSnapshot) -> UiModel {
         let focus = if snapshot.center {
             UiFocus::Center
@@ -501,9 +548,10 @@ impl FrontPanel {
 
     fn render_inputs(&mut self, snapshot: InputSnapshot) -> Result<(), esp_hal::spi::Error> {
         let model = self.snapshot_to_model(snapshot);
+        let variant = self.ui_variant;
         {
             let mut painter = PanelPainter { panel: self };
-            front_panel_scene::render_frame(&mut painter, &model, DEFAULT_UI_VARIANT)?;
+            front_panel_scene::render_frame(&mut painter, &model, variant)?;
         }
         self.frame_no = self.frame_no.wrapping_add(1);
         Ok(())

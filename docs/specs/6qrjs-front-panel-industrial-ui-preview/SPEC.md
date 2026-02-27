@@ -21,6 +21,7 @@
 - 交付 4 个视觉变体（A/B/C/D）与 7 个交互状态帧（idle/up/down/left/right/center/touch）。
 - 默认固化 Variant B 作为 Dashboard 主界面；Variant C 收敛为“高级设置/自检页”风格。
 - 在 Dashboard 中明确 UPS 四工作模式（`BYPASS / STANDBY / ASSIST / BACKUP`）与充电策略约束。
+- Variant C 自检页固定展示“全部可通信模块 + 通信状态 + 关键参数”。
 - 建立 `docs/specs` 主规格目录并与实现保持同步。
 
 ### Non-goals
@@ -55,6 +56,8 @@
 - 支持 `UpsMode` 四态展示：`BYPASS`（关闭/旁路）、`STANDBY`（待机）、`ASSIST`（补充）、`BACKUP`（后备）。
 - 充电策略口径固定：仅 `STANDBY` 允许电池充电；`BYPASS/ASSIST/BACKUP` 在本轮 Dashboard 一律显示充电锁定（`LOCK` 或 `NOAC`）。
 - 字体策略固定：非数值文本使用 A（现代无衬线），数值/对齐字段使用 B（等宽）。
+- 自检页（Variant C）必须覆盖全部通信模块：`GC9307 / TCA6408A / FUSB302 / INA3221 / BQ25792 / BQ40Z50 / TPS55288-A / TPS55288-B / TMP112-A / TMP112-B`。
+- 自检页每行必须同时包含 `module + comm + key param` 三列。
 - 文档不再将前面板 UI 目标描述为 `Hello World + fps`。
 
 ### SHOULD
@@ -72,6 +75,7 @@
 
 - 固件启动后读入当前按键状态，使用共享 renderer 绘制完整首帧。
 - 周期轮询输入，状态变化时重绘界面并更新 focus/highlight。
+- 长按 `CENTER` 约 `800ms` 在两页间切换：`Variant B Dashboard <-> Variant C Self-check`。
 - 主机工具根据 `--variant`、`--mode` 与 `--focus` 调用同一 renderer，输出 raw framebuffer 与 PNG。
 - Dashboard 冻结语义（项目工作模式口径）：
   - `BYPASS`（关闭）: 输入直通输出（bypass），不提供 UPS 功能；本轮 UI 充电状态固定为 `LOCK`。
@@ -79,6 +83,22 @@
   - `ASSIST`（补充）: 输入存在，TPS 有实际输出电流；不允许充电。
   - `BACKUP`（后备）: 输入不存在；不允许充电，输出由电池侧供能。
   - 右侧三卡固定语义：`BATTERY`（SOC + 最高电池温度 + 电池状态）、`CHARGE`（仅电池充电电流与状态）、`DISCHG`（电池放电电流与状态）。
+
+### Self-check 视觉冻结（Variant C）
+
+- 顶栏：`SELF CHECK`，右上状态位显示当前 UPS 工作模式（`BYPASS/STANDBY/ASSIST/BACKUP`）。
+- 主体：紧凑表格（1:1 `320x172`），列固定为 `MODULE / COMM / KEY PARAM`。
+- 模块覆盖固定为 10 行（按实现顺序）：
+  - `GC9307`：屏幕链路状态与分辨率参数。
+  - `TCA6408A`：前面板按键/IRQ 通信状态。
+  - `FUSB302`：Type-C/PD 控制器通信与 VBUS 存在态。
+  - `INA3221`：输入侧关键电流参数（IIN）。
+  - `BQ25792`：充电器通信状态与充电电流（仅待机允许充电）。
+  - `BQ40Z50`：BMS 通信状态与 SOC/均衡状态。
+  - `TPS55288-A`：A 路输出模块状态与输出电流。
+  - `TPS55288-B`：B 路输出模块状态与输出电流。
+  - `TMP112-A`：A 路热点温度状态与温度值。
+  - `TMP112-B`：B 路热点温度状态与温度值。
 
 ### Dashboard 视觉冻结（Variant B）
 
@@ -141,6 +161,8 @@ None
 - Given 主机运行预览工具，When 指定任意 `variant/mode/focus`，Then 产出 `framebuffer.bin`（固定 `110080` bytes）与 `preview.png`（固定 `320x172`）。
 - Given `mode=standby`，When 查看 CHARGE 卡片，Then 仅显示电池充电电流且状态允许充电（`READY/CHG`）。
 - Given `mode=off/supplement/backup`，When 查看 CHARGE 卡片，Then 状态必须为非充电（`LOCK/NOAC`）且充电电流为 0。
+- Given 切到 `Variant C` 自检页，When 查看表格，Then 必须完整显示 10 个可通信模块且每行包含 `COMM` 与 `KEY PARAM`。
+- Given 自检页已显示，When 长按 `CENTER` 约 `800ms`，Then 页面在 Dashboard 与 Self-check 间切换且不会连发抖动切换。
 - Given 文档更新完成，When 查阅前面板说明，Then 不再以 `Hello World + fps` 作为当前 UI 目标。
 
 ## 实现前置条件（Definition of Ready / Preconditions）
@@ -211,6 +233,7 @@ None
 - 2026-02-27: 修正 AC 电流语义（`ICHG BAT` 不再混同为线侧输入电流），并移除 BATT 模式次级面板中的 `POUT` 重复字段。
 - 2026-02-27: 按 UPS 四工作模式重构 Dashboard 语义：新增 `UpsMode`、明确充电策略（仅 STANDBY 可充）、并归档四张冻结参考图。
 - 2026-02-27: 模式命名统一升级为专业全称（`BYPASS / STANDBY / ASSIST / BACKUP`），界面右上状态位不再使用缩写。
+- 2026-02-27: 自检页升级为“全模块通信诊断表”（10 模块覆盖），并新增长按 CENTER 页面切换（Dashboard <-> Self-check）。
 
 ## 参考（References）
 
