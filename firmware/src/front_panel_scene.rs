@@ -210,10 +210,10 @@ impl DashboardData {
 
 fn mode_label(mode: UpsMode) -> &'static str {
     match mode {
-        UpsMode::Off => "OFF",
-        UpsMode::Standby => "STBY",
-        UpsMode::Supplement => "SUPP",
-        UpsMode::Backup => "BACKUP",
+        UpsMode::Off => "BYPASS MODE",
+        UpsMode::Standby => "LINE STANDBY",
+        UpsMode::Supplement => "LINE ASSIST",
+        UpsMode::Backup => "BACKUP MODE",
     }
 }
 
@@ -527,7 +527,7 @@ fn render_variant_b<P: UiPainter>(
                 painter,
                 variant,
                 FontRole::TextBody,
-                "SUPPLEMENT",
+                "LINE ASSIST",
                 Point::new(14, 81),
                 HorizontalAlignment::Left,
                 palette.text,
@@ -659,7 +659,7 @@ fn render_variant_b<P: UiPainter>(
                 if charge_batt_ma > 80 {
                     "CHG"
                 } else {
-                    "STBY"
+                    "IDLE"
                 }
             }
             UpsMode::Supplement => "DSG",
@@ -686,7 +686,7 @@ fn render_variant_b<P: UiPainter>(
     let discharge_status = match data.mode {
         UpsMode::Off => "BYP",
         UpsMode::Standby => "IDLE",
-        UpsMode::Supplement => "SUPP",
+        UpsMode::Supplement => "ASSIST",
         UpsMode::Backup => "LOAD",
     };
 

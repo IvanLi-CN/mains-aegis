@@ -237,17 +237,18 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，有效显示区 `320x172`，横屏，SPI）并渲染工业仪表风 UI：
 
 - Dashboard 工作模式（项目口径）：
-  - `OFF`（关闭）：不提供 UPS 功能，输入直通输出（bypass）
-  - `STBY`（待机）：输入存在，TPS55288 无实际输出电流
-  - `SUPP`（补充）：输入存在，TPS55288 有实际输出电流
-  - `BACKUP`（后备）：输入不存在
+  - `BYPASS MODE`（关闭）：不提供 UPS 功能，输入直通输出（bypass）
+  - `LINE STANDBY`（待机）：输入存在，TPS55288 无实际输出电流
+  - `LINE ASSIST`（补充）：输入存在，TPS55288 有实际输出电流
+  - `BACKUP MODE`（后备）：输入不存在
 - 充电策略（本轮 UI 冻结）：
-  - 仅 `STBY` 允许电池充电
-  - `OFF/SUPP/BACKUP` 不允许充电（`OFF` 手动充电能力不在本轮 Dashboard 展示范围）
+  - 仅 `LINE STANDBY` 允许电池充电
+  - `BYPASS MODE/LINE ASSIST/BACKUP MODE` 不允许充电（`BYPASS MODE` 手动充电能力不在本轮 Dashboard 展示范围）
 - Dashboard 字段分层（项目口径）：
-  - 市电存在（`OFF/STBY/SUPP`）：主 KPI 显示 `PIN` 与 `POUT`
-  - 市电缺失（`BACKUP`）：主 KPI 显示 `POUT` 与 `IOUT`
+  - 市电存在（`BYPASS MODE/LINE STANDBY/LINE ASSIST`）：主 KPI 显示 `PIN` 与 `POUT`
+  - 市电缺失（`BACKUP MODE`）：主 KPI 显示 `POUT` 与 `IOUT`
   - 右侧三卡固定：`BATTERY`（SOC/电池状态）、`CHARGE`（仅电池充电电流）、`DISCHG`（电池放电功率）
+- 顶栏右上模式标签使用全称（不使用缩写）：`BYPASS MODE / LINE STANDBY / LINE ASSIST / BACKUP MODE`
 - 五向按键映射为功能焦点切换：`UP->OUT-A`、`DOWN->OUT-B`、`LEFT->BMS`、`RIGHT->CHARGER`、`CENTER->THERM`
 - 触摸中断仅作为告警指示（`IRQ ON/OFF`）
 - 当前默认视觉方案：`Variant B`（Dashboard 主界面）
