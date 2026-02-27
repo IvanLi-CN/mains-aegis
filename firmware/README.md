@@ -263,7 +263,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 字体方案（互联网来源，u8g2）：
 
 - A（非数值文本）：`u8g2_font_8x13B_tf` + `u8g2_font_7x14B_tf`
-- B（数值文本，等宽）：`u8g2_font_10x20_mf` + `u8g2_font_8x13_mf`
+- B（数值文本，等宽）：`u8g2_font_t0_22b_tn` + `u8g2_font_8x13_mf`
 - 字体使用规则：非数值信息一律使用 A；数值与对齐字段一律使用 B（monospace）
 - 许可说明：`u8g2-fonts` crate 本身是 MIT/Apache-2.0；具体字体许可需按 [U8g2 license](https://raw.githubusercontent.com/olikraus/u8g2/master/LICENSE) 核对。
 
