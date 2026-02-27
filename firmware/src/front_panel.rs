@@ -33,11 +33,12 @@ const CMD_CASET: u8 = 0x2A;
 const CMD_RASET: u8 = 0x2B;
 const CMD_RAMWR: u8 = 0x2C;
 
-// Match gc9307-async example profile (Landscape + 320x172 + dy=34).
+// Match gc9307-async profile (LandscapeSwapped + 320x172 + dy=34) for current panel mounting.
 const LCD_W: u16 = 320;
 const LCD_H: u16 = 172;
 const OFFSET_X: u16 = 0;
 const OFFSET_Y: u16 = 34;
+const PANEL_ORIENTATION: Orientation = Orientation::LandscapeSwapped;
 
 const BACKLIGHT_ACTIVE_LOW: bool = true;
 
@@ -399,7 +400,7 @@ impl FrontPanel {
         let mut display_buf = [0u8; 1536];
 
         let panel_cfg = GcConfig {
-            orientation: Orientation::Landscape,
+            orientation: PANEL_ORIENTATION,
             width: LCD_W,
             height: LCD_H,
             dx: OFFSET_X,
