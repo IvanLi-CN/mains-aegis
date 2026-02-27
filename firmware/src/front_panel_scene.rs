@@ -302,7 +302,6 @@ fn render_variant_b<P: UiPainter>(
     };
     let input_power_w10 = ((bus_mv as u32) * input_current_ma) / 100_000;
     let output_power_w10 = ((bus_mv as u32) * output_current_ma) / 100_000;
-    let batt_discharge_w10 = ((bus_mv as u32) * batt_discharge_ma) / 100_000;
 
     let mode_accent = mode_accent_color(palette, data.mode, data.touch_irq);
     let mode_tag = if data.touch_irq {
@@ -691,48 +690,23 @@ fn render_variant_b<P: UiPainter>(
     };
 
     let batt_max_c = data.therm_a_c.max(data.therm_b_c);
-    if data.bms_balancing {
-        draw_health_block(
-            painter,
-            variant,
-            palette,
-            HealthBlock {
-                x: 206,
-                y: 22,
-                w: 108,
-                h: 48,
-                title: "BATTERY",
-                value: format_args!("{:>2}% {:02}C", data.bms_soc_pct, batt_max_c),
-                note: batt_status,
-                meter: data.bms_soc_pct as u32,
-                active: data.bms_on,
-                accent: palette.left,
-            },
-        )?;
-    } else {
-        draw_health_block(
-            painter,
-            variant,
-            palette,
-            HealthBlock {
-                x: 206,
-                y: 22,
-                w: 108,
-                h: 48,
-                title: "BATTERY",
-                value: format_args!(
-                    "{:>2}% {:>2}.{:01}V",
-                    data.bms_soc_pct,
-                    data.batt_pack_mv / 1000,
-                    (data.batt_pack_mv % 1000) / 100
-                ),
-                note: batt_status,
-                meter: data.bms_soc_pct as u32,
-                active: data.bms_on,
-                accent: palette.left,
-            },
-        )?;
-    }
+    draw_health_block(
+        painter,
+        variant,
+        palette,
+        HealthBlock {
+            x: 206,
+            y: 22,
+            w: 108,
+            h: 48,
+            title: "BATTERY",
+            value: format_args!("{:>2}% {:02}C", data.bms_soc_pct, batt_max_c),
+            note: batt_status,
+            meter: data.bms_soc_pct as u32,
+            active: data.bms_on,
+            accent: palette.left,
+        },
+    )?;
     if matches!(data.mode, UpsMode::Standby) {
         draw_health_block(
             painter,
@@ -786,13 +760,13 @@ fn render_variant_b<P: UiPainter>(
             h: 48,
             title: "DISCHG",
             value: format_args!(
-                "{:>2}.{:01}W {:02}C",
-                batt_discharge_w10 / 10,
-                batt_discharge_w10 % 10,
+                "{:>1}.{:02}A {:02}C",
+                (batt_discharge_ma as u16) / 1000,
+                ((batt_discharge_ma as u16) % 1000) / 10,
                 batt_max_c
             ),
             note: discharge_status,
-            meter: (batt_discharge_w10 * 100 / 280).min(100),
+            meter: (batt_discharge_ma * 100 / 2200).min(100),
             active: matches!(data.mode, UpsMode::Supplement | UpsMode::Backup),
             accent: if data.mains_present {
                 palette.accent
