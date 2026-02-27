@@ -170,8 +170,10 @@ None
 
 - Directory: `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/`
 - In-plan references:
-  - `assets/dashboard-b-ac-mode.png`
-  - `assets/dashboard-b-batt-mode.png`
+  - `assets/dashboard-b-off-mode.png`
+  - `assets/dashboard-b-standby-mode.png`
+  - `assets/dashboard-b-supplement-mode.png`
+  - `assets/dashboard-b-backup-mode.png`
 
 ## 资产晋升（Asset promotion）
 
