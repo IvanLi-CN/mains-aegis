@@ -128,11 +128,19 @@
 - STANDBY: `assets/dashboard-b-standby-mode.png`
 - ASSIST: `assets/dashboard-b-supplement-mode.png`
 - BACKUP: `assets/dashboard-b-backup-mode.png`
+- Self-check STANDBY idle: `assets/self-check-c-standby-idle.png`
+- Self-check STANDBY charger-focus: `assets/self-check-c-standby-right.png`
+- Self-check ASSIST output-focus: `assets/self-check-c-assist-up.png`
+- Self-check BACKUP irq-focus: `assets/self-check-c-backup-touch.png`
 
 ![Dashboard Variant B - BYPASS](assets/dashboard-b-off-mode.png)
 ![Dashboard Variant B - STANDBY](assets/dashboard-b-standby-mode.png)
 ![Dashboard Variant B - ASSIST](assets/dashboard-b-supplement-mode.png)
 ![Dashboard Variant B - BACKUP](assets/dashboard-b-backup-mode.png)
+![Self-check Variant C - STANDBY idle](assets/self-check-c-standby-idle.png)
+![Self-check Variant C - STANDBY charger-focus](assets/self-check-c-standby-right.png)
+![Self-check Variant C - ASSIST output-focus](assets/self-check-c-assist-up.png)
+![Self-check Variant C - BACKUP irq-focus](assets/self-check-c-backup-touch.png)
 
 ### Edge cases / errors
 
@@ -197,6 +205,10 @@ None
   - `assets/dashboard-b-standby-mode.png`
   - `assets/dashboard-b-supplement-mode.png`
   - `assets/dashboard-b-backup-mode.png`
+  - `assets/self-check-c-standby-idle.png`
+  - `assets/self-check-c-standby-right.png`
+  - `assets/self-check-c-assist-up.png`
+  - `assets/self-check-c-backup-touch.png`
 
 ## 资产晋升（Asset promotion）
 
@@ -245,5 +257,9 @@ None
 - `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-b-standby-mode.png`
 - `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-b-supplement-mode.png`
 - `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-b-backup-mode.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-standby-idle.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-standby-right.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-assist-up.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-backup-touch.png`
 - [u8g2-fonts docs](https://docs.rs/u8g2-fonts/latest/u8g2_fonts/fonts/index.html)
 - [u8g2 license](https://raw.githubusercontent.com/olikraus/u8g2/master/LICENSE)
