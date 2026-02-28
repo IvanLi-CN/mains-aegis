@@ -359,12 +359,22 @@ where
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TelemetryCapture {
+    pub comm_ok: bool,
+    pub fault_active: bool,
+    pub output_enabled: Option<bool>,
+    pub current_ma: Option<i32>,
+    pub temp_c_x16: Option<i16>,
+}
+
 pub fn print_telemetry_line<I2C>(
     i2c: &mut I2C,
     ch: OutputChannel,
     ina_ready: bool,
     therm_kill_n: u8,
-) where
+) -> TelemetryCapture
+where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     let addr = ch.addr();
@@ -496,6 +506,31 @@ pub fn print_telemetry_line<I2C>(
             "telemetry ch=out_b addr=0x75 vset_mv={} vbus_mv={} current_ma={} dv_mv={} vbus_reg={} shunt_uv={} oe={} fpwm={} status={} scp={} ocp={} ovp={} vout_sr={} cdc={} iout_limit={} tmp_addr={} temp_c_x16={} therm_kill_n={=u8} temp_c={}",
             vset_mv, vbus_mv, current_ma, dv_mv, vbus_reg, shunt_uv, oe, fpwm, status, scp, ocp, ovp, vout_sr, cdc, iout_limit, tmp_addr_value, temp_c_x16, therm_kill_n, temp_c
         ),
+    }
+
+    let comm_ok = matches!(mode, TelemetryU8::Value(_)) && matches!(status, TelemetryU8::Value(_));
+    let fault_active = matches!(scp, TelemetryBool::Value(true))
+        || matches!(ocp, TelemetryBool::Value(true))
+        || matches!(ovp, TelemetryBool::Value(true));
+    let output_enabled = match oe {
+        TelemetryBool::Value(v) => Some(v),
+        TelemetryBool::Err(_) => None,
+    };
+    let current_ma = match current_ma {
+        TelemetryValue::Value(v) => Some(v),
+        TelemetryValue::Err(_) => None,
+    };
+    let temp_c_x16 = match temp_c_x16 {
+        TelemetryValue::Value(v) => Some(v as i16),
+        TelemetryValue::Err(_) => None,
+    };
+
+    TelemetryCapture {
+        comm_ok,
+        fault_active,
+        output_enabled,
+        current_ma,
+        temp_c_x16,
     }
 }
 

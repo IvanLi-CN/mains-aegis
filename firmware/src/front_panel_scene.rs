@@ -97,6 +97,73 @@ pub enum UpsMode {
     Backup,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelfCheckCommState {
+    Pending,
+    Ok,
+    Warn,
+    Err,
+    NotAvailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelfCheckUiSnapshot {
+    pub mode: UpsMode,
+    pub gc9307: SelfCheckCommState,
+    pub tca6408a: SelfCheckCommState,
+    pub fusb302: SelfCheckCommState,
+    pub fusb302_vbus_present: Option<bool>,
+    pub ina3221: SelfCheckCommState,
+    pub ina_total_ma: Option<i32>,
+    pub bq25792: SelfCheckCommState,
+    pub bq25792_allow_charge: Option<bool>,
+    pub bq25792_ichg_ma: Option<u16>,
+    pub bq40z50: SelfCheckCommState,
+    pub bq40z50_soc_pct: Option<u16>,
+    pub bq40z50_rca_alarm: Option<bool>,
+    pub tps_a: SelfCheckCommState,
+    pub tps_a_enabled: Option<bool>,
+    pub tps_a_iout_ma: Option<i32>,
+    pub tps_b: SelfCheckCommState,
+    pub tps_b_enabled: Option<bool>,
+    pub tps_b_iout_ma: Option<i32>,
+    pub tmp_a: SelfCheckCommState,
+    pub tmp_a_c: Option<i16>,
+    pub tmp_b: SelfCheckCommState,
+    pub tmp_b_c: Option<i16>,
+}
+
+impl SelfCheckUiSnapshot {
+    pub const fn pending(mode: UpsMode) -> Self {
+        Self {
+            mode,
+            gc9307: SelfCheckCommState::Pending,
+            tca6408a: SelfCheckCommState::Pending,
+            fusb302: SelfCheckCommState::Pending,
+            fusb302_vbus_present: None,
+            ina3221: SelfCheckCommState::Pending,
+            ina_total_ma: None,
+            bq25792: SelfCheckCommState::Pending,
+            bq25792_allow_charge: None,
+            bq25792_ichg_ma: None,
+            bq40z50: SelfCheckCommState::Pending,
+            bq40z50_soc_pct: None,
+            bq40z50_rca_alarm: None,
+            tps_a: SelfCheckCommState::Pending,
+            tps_a_enabled: None,
+            tps_a_iout_ma: None,
+            tps_b: SelfCheckCommState::Pending,
+            tps_b_enabled: None,
+            tps_b_iout_ma: None,
+            tmp_a: SelfCheckCommState::Pending,
+            tmp_a_c: None,
+            tmp_b: SelfCheckCommState::Pending,
+            tmp_b_c: None,
+        }
+    }
+}
+
+#[allow(dead_code)]
 pub const fn demo_mode_from_focus(focus: UiFocus) -> UpsMode {
     match focus {
         UiFocus::Center => UpsMode::Off,
@@ -238,10 +305,20 @@ fn mode_is_mains(mode: UpsMode) -> bool {
     !matches!(mode, UpsMode::Backup)
 }
 
+#[allow(dead_code)]
 pub fn render_frame<P: UiPainter>(
     painter: &mut P,
     model: &UiModel,
     variant: UiVariant,
+) -> Result<(), P::Error> {
+    render_frame_with_self_check(painter, model, variant, None)
+}
+
+pub fn render_frame_with_self_check<P: UiPainter>(
+    painter: &mut P,
+    model: &UiModel,
+    variant: UiVariant,
+    self_check: Option<&SelfCheckUiSnapshot>,
 ) -> Result<(), P::Error> {
     let palette = palette_for(variant);
     let data = DashboardData::from_model(model);
@@ -253,7 +330,7 @@ pub fn render_frame<P: UiPainter>(
     match variant {
         UiVariant::InstrumentA => render_variant_a(painter, variant, palette, data)?,
         UiVariant::InstrumentB => render_variant_b(painter, variant, palette, data)?,
-        UiVariant::RetroC => render_variant_c(painter, variant, palette, data)?,
+        UiVariant::RetroC => render_variant_c(painter, variant, palette, data, self_check)?,
         UiVariant::InstrumentD => render_variant_d(painter, variant, palette, data)?,
     }
 
@@ -788,8 +865,42 @@ fn render_variant_c<P: UiPainter>(
     variant: UiVariant,
     palette: Palette,
     data: DashboardData,
+    self_check: Option<&SelfCheckUiSnapshot>,
 ) -> Result<(), P::Error> {
-    let mode_accent = mode_accent_color(palette, data.mode, data.touch_irq);
+    let snapshot = self_check.copied().unwrap_or_else(|| {
+        let mut fallback = SelfCheckUiSnapshot::pending(data.mode);
+        fallback.gc9307 = SelfCheckCommState::Ok;
+        fallback.tca6408a = if data.touch_irq {
+            SelfCheckCommState::Warn
+        } else {
+            SelfCheckCommState::Ok
+        };
+        fallback.fusb302 = SelfCheckCommState::Warn;
+        fallback.fusb302_vbus_present = Some(data.mains_present);
+        fallback.ina3221 = SelfCheckCommState::Warn;
+        fallback.ina_total_ma = None;
+        fallback.bq25792 = SelfCheckCommState::Warn;
+        fallback.bq25792_allow_charge = Some(matches!(data.mode, UpsMode::Standby));
+        fallback.bq40z50 = SelfCheckCommState::Warn;
+        fallback.bq40z50_soc_pct = None;
+        fallback.tps_a = if data.out_a_on {
+            SelfCheckCommState::Warn
+        } else {
+            SelfCheckCommState::NotAvailable
+        };
+        fallback.tps_a_enabled = Some(data.out_a_on);
+        fallback.tps_b = if data.out_b_on {
+            SelfCheckCommState::Warn
+        } else {
+            SelfCheckCommState::NotAvailable
+        };
+        fallback.tps_b_enabled = Some(data.out_b_on);
+        fallback.tmp_a = SelfCheckCommState::Warn;
+        fallback.tmp_b = SelfCheckCommState::Warn;
+        fallback
+    });
+
+    let mode_accent = mode_accent_color(palette, snapshot.mode, data.touch_irq);
     draw_top_bar_with_status(
         painter,
         variant,
@@ -797,36 +908,89 @@ fn render_variant_c<P: UiPainter>(
         data.focus,
         "SELF CHECK",
         "",
-        mode_label(data.mode),
+        mode_label(snapshot.mode),
         mode_accent,
     )?;
-
-    let load_ma = data.load_ma as u32;
-    let tps_out_ma = data.out_a_ma as u32 + data.out_b_ma as u32;
-    let charge_batt_ma = if matches!(data.mode, UpsMode::Standby) {
-        data.chg_iin_ma as u32
-    } else {
-        0
-    };
-    let input_current_ma = if data.mains_present {
-        match data.mode {
-            UpsMode::Off => load_ma,
-            UpsMode::Standby => load_ma + charge_batt_ma,
-            UpsMode::Supplement => {
-                let supplement_ma = tps_out_ma.min(load_ma.saturating_sub(120));
-                load_ma.saturating_sub(supplement_ma)
-            }
-            UpsMode::Backup => 0,
-        }
-    } else {
-        0
-    };
 
     let col_left_x = 6;
     let col_right_x = 163;
     let col_w = 151;
     let row_h = 29;
     let start_y = 22;
+
+    let ina_has = snapshot.ina_total_ma.is_some();
+    let ina_ma = snapshot.ina_total_ma.unwrap_or_default();
+    let ina_abs = ina_ma.wrapping_abs() as u32;
+    let ina_sign = if ina_ma < 0 { "-" } else { "" };
+    let ina_whole = ina_abs / 1000;
+    let ina_frac = (ina_abs % 1000) / 10;
+
+    let ichg_has = snapshot.bq25792_ichg_ma.is_some();
+    let ichg_ma = snapshot.bq25792_ichg_ma.unwrap_or(0);
+    let ichg_whole = ichg_ma / 1000;
+    let ichg_frac = (ichg_ma % 1000) / 10;
+
+    let bms_soc_has = snapshot.bq40z50_soc_pct.is_some();
+    let bms_soc = snapshot.bq40z50_soc_pct.unwrap_or(0);
+
+    let tps_a_has = snapshot.tps_a_iout_ma.is_some();
+    let tps_a_ma = snapshot.tps_a_iout_ma.unwrap_or_default();
+    let tps_a_abs = tps_a_ma.wrapping_abs() as u32;
+    let tps_a_sign = if tps_a_ma < 0 { "-" } else { "" };
+    let tps_a_whole = tps_a_abs / 1000;
+    let tps_a_frac = (tps_a_abs % 1000) / 10;
+
+    let tps_b_has = snapshot.tps_b_iout_ma.is_some();
+    let tps_b_ma = snapshot.tps_b_iout_ma.unwrap_or_default();
+    let tps_b_abs = tps_b_ma.wrapping_abs() as u32;
+    let tps_b_sign = if tps_b_ma < 0 { "-" } else { "" };
+    let tps_b_whole = tps_b_abs / 1000;
+    let tps_b_frac = (tps_b_abs % 1000) / 10;
+
+    let tmp_a_has = snapshot.tmp_a_c.is_some();
+    let tmp_a_c = snapshot.tmp_a_c.unwrap_or(0);
+    let tmp_b_has = snapshot.tmp_b_c.is_some();
+    let tmp_b_c = snapshot.tmp_b_c.unwrap_or(0);
+
+    let ina_key = if ina_has {
+        format_args!("ISUM {}{:>1}.{:02}A", ina_sign, ina_whole, ina_frac)
+    } else {
+        format_args!("ISUM N/A")
+    };
+    let chg_key = if snapshot.bq25792_allow_charge == Some(false) {
+        format_args!("CHG DISABLED")
+    } else if ichg_has {
+        format_args!("ICHG {:>1}.{:02}A", ichg_whole, ichg_frac)
+    } else {
+        format_args!("ICHG N/A")
+    };
+    let bms_key = if snapshot.bq40z50_rca_alarm == Some(true) {
+        format_args!("RCA ALARM")
+    } else if bms_soc_has {
+        format_args!("SOC {:>2}%", bms_soc)
+    } else {
+        format_args!("SOC N/A")
+    };
+    let tps_a_key = if tps_a_has {
+        format_args!("IOUT {}{:>1}.{:02}A", tps_a_sign, tps_a_whole, tps_a_frac)
+    } else {
+        format_args!("IOUT N/A")
+    };
+    let tps_b_key = if tps_b_has {
+        format_args!("IOUT {}{:>1}.{:02}A", tps_b_sign, tps_b_whole, tps_b_frac)
+    } else {
+        format_args!("IOUT N/A")
+    };
+    let tmp_a_key = if tmp_a_has {
+        format_args!("TMAX {:>2}C", tmp_a_c)
+    } else {
+        format_args!("TMAX N/A")
+    };
+    let tmp_b_key = if tmp_b_has {
+        format_args!("TMAX {:>2}C", tmp_b_c)
+    } else {
+        format_args!("TMAX N/A")
+    };
 
     draw_diag_card(
         painter,
@@ -838,7 +1002,7 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "GC9307",
-            status: "OK",
+            status: comm_label(snapshot.gc9307),
             key: "RGB565 320x172",
             active: false,
             accent: palette.accent,
@@ -854,8 +1018,8 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "TCA6408A",
-            status: if data.touch_irq { "IRQ" } else { "OK" },
-            key: format_args!("BTN {}", focus_tag(data.focus)),
+            status: comm_label(snapshot.tca6408a),
+            key: "I2C2 ADDR 0x21",
             active: data.focus == UiFocus::Touch || data.touch_irq,
             accent: palette.touch,
         },
@@ -870,12 +1034,8 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "FUSB302",
-            status: "OK",
-            key: if data.mains_present {
-                "VBUS PRESENT"
-            } else {
-                "VBUS LOST"
-            },
+            status: comm_label(snapshot.fusb302),
+            key: vbus_key_text(snapshot.fusb302_vbus_present),
             active: false,
             accent: palette.accent,
         },
@@ -890,91 +1050,45 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "INA3221",
-            status: if data.alert_on { "WARN" } else { "OK" },
-            key: format_args!(
-                "IIN {:>1}.{:02}A",
-                input_current_ma / 1000,
-                (input_current_ma % 1000) / 10
-            ),
+            status: comm_label(snapshot.ina3221),
+            key: ina_key,
             active: data.focus == UiFocus::Touch,
             accent: palette.touch,
         },
     )?;
-    if matches!(data.mode, UpsMode::Standby) {
-        draw_diag_card(
-            painter,
-            variant,
-            palette,
-            DiagCard {
-                x: col_left_x,
-                y: start_y + row_h * 4,
-                w: col_w,
-                h: row_h,
-                module: "BQ25792",
-                status: "RUN",
-                key: format_args!(
-                    "ICHG {:>1}.{:02}A",
-                    data.chg_iin_ma / 1000,
-                    (data.chg_iin_ma % 1000) / 10
-                ),
-                active: data.focus == UiFocus::Right,
-                accent: palette.right,
-            },
-        )?;
-    } else {
-        draw_diag_card(
-            painter,
-            variant,
-            palette,
-            DiagCard {
-                x: col_left_x,
-                y: start_y + row_h * 4,
-                w: col_w,
-                h: row_h,
-                module: "BQ25792",
-                status: "LOCK",
-                key: "CHG DISABLED",
-                active: data.focus == UiFocus::Right,
-                accent: palette.right,
-            },
-        )?;
-    }
+    draw_diag_card(
+        painter,
+        variant,
+        palette,
+        DiagCard {
+            x: col_left_x,
+            y: start_y + row_h * 4,
+            w: col_w,
+            h: row_h,
+            module: "BQ25792",
+            status: charger_label(snapshot.bq25792, snapshot.bq25792_allow_charge),
+            key: chg_key,
+            active: data.focus == UiFocus::Right,
+            accent: palette.right,
+        },
+    )?;
 
-    if data.bms_balancing {
-        draw_diag_card(
-            painter,
-            variant,
-            palette,
-            DiagCard {
-                x: col_right_x,
-                y: start_y,
-                w: col_w,
-                h: row_h,
-                module: "BQ40Z50",
-                status: "BAL",
-                key: "BALANCING",
-                active: data.focus == UiFocus::Left,
-                accent: palette.left,
-            },
-        )?;
-    } else {
-        draw_diag_card(
-            painter,
-            variant,
-            palette,
-            DiagCard {
-                x: col_right_x,
-                y: start_y,
-                w: col_w,
-                h: row_h,
-                module: "BQ40Z50",
-                status: "OK",
-                key: format_args!("SOC {:>2}%", data.bms_soc_pct),
-                active: data.focus == UiFocus::Left,
-                accent: palette.left,
-            },
-        )?;
-    }
+    draw_diag_card(
+        painter,
+        variant,
+        palette,
+        DiagCard {
+            x: col_right_x,
+            y: start_y,
+            w: col_w,
+            h: row_h,
+            module: "BQ40Z50",
+            status: bms_label(snapshot.bq40z50, snapshot.bq40z50_rca_alarm),
+            key: bms_key,
+            active: data.focus == UiFocus::Left,
+            accent: palette.left,
+        },
+    )?;
     draw_diag_card(
         painter,
         variant,
@@ -985,12 +1099,8 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "TPS55288-A",
-            status: if data.out_a_on { "RUN" } else { "IDLE" },
-            key: format_args!(
-                "IOUT {:>1}.{:02}A",
-                data.out_a_ma / 1000,
-                (data.out_a_ma % 1000) / 10
-            ),
+            status: tps_label(snapshot.tps_a, snapshot.tps_a_enabled),
+            key: tps_a_key,
             active: data.focus == UiFocus::Up,
             accent: palette.up,
         },
@@ -1005,12 +1115,8 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "TPS55288-B",
-            status: if data.out_b_on { "RUN" } else { "IDLE" },
-            key: format_args!(
-                "IOUT {:>1}.{:02}A",
-                data.out_b_ma / 1000,
-                (data.out_b_ma % 1000) / 10
-            ),
+            status: tps_label(snapshot.tps_b, snapshot.tps_b_enabled),
+            key: tps_b_key,
             active: data.focus == UiFocus::Down,
             accent: palette.down,
         },
@@ -1025,8 +1131,8 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "TMP112-A",
-            status: if data.therm_a_c >= 50 { "HOT" } else { "OK" },
-            key: format_args!("TMAX {:>2}C", data.therm_a_c),
+            status: tmp_label(snapshot.tmp_a, snapshot.tmp_a_c),
+            key: tmp_a_key,
             active: data.focus == UiFocus::Center,
             accent: palette.center,
         },
@@ -1041,14 +1147,96 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "TMP112-B",
-            status: if data.therm_b_c >= 50 { "HOT" } else { "OK" },
-            key: format_args!("TMAX {:>2}C", data.therm_b_c),
+            status: tmp_label(snapshot.tmp_b, snapshot.tmp_b_c),
+            key: tmp_b_key,
             active: data.focus == UiFocus::Center,
             accent: palette.center,
         },
     )?;
 
     Ok(())
+}
+
+fn comm_label(state: SelfCheckCommState) -> &'static str {
+    match state {
+        SelfCheckCommState::Pending => "PEND",
+        SelfCheckCommState::Ok => "OK",
+        SelfCheckCommState::Warn => "WARN",
+        SelfCheckCommState::Err => "ERR",
+        SelfCheckCommState::NotAvailable => "N/A",
+    }
+}
+
+fn tps_label(state: SelfCheckCommState, enabled: Option<bool>) -> &'static str {
+    match state {
+        SelfCheckCommState::Pending => "PEND",
+        SelfCheckCommState::Warn => "WARN",
+        SelfCheckCommState::Err => "ERR",
+        SelfCheckCommState::NotAvailable => "N/A",
+        SelfCheckCommState::Ok => match enabled {
+            Some(true) => "RUN",
+            Some(false) => "IDLE",
+            None => "OK",
+        },
+    }
+}
+
+fn charger_label(state: SelfCheckCommState, allow_charge: Option<bool>) -> &'static str {
+    match state {
+        SelfCheckCommState::Pending => "PEND",
+        SelfCheckCommState::Warn => "WARN",
+        SelfCheckCommState::Err => "ERR",
+        SelfCheckCommState::NotAvailable => "N/A",
+        SelfCheckCommState::Ok => match allow_charge {
+            Some(true) => "RUN",
+            Some(false) => "LOCK",
+            None => "OK",
+        },
+    }
+}
+
+fn bms_label(state: SelfCheckCommState, rca_alarm: Option<bool>) -> &'static str {
+    match state {
+        SelfCheckCommState::Pending => "PEND",
+        SelfCheckCommState::Warn => {
+            if rca_alarm == Some(true) {
+                "RCA"
+            } else {
+                "WARN"
+            }
+        }
+        SelfCheckCommState::Err => "ERR",
+        SelfCheckCommState::NotAvailable => "N/A",
+        SelfCheckCommState::Ok => {
+            if rca_alarm == Some(true) {
+                "RCA"
+            } else {
+                "OK"
+            }
+        }
+    }
+}
+
+fn tmp_label(state: SelfCheckCommState, temp_c: Option<i16>) -> &'static str {
+    match state {
+        SelfCheckCommState::Pending => "PEND",
+        SelfCheckCommState::Warn => "WARN",
+        SelfCheckCommState::Err => "ERR",
+        SelfCheckCommState::NotAvailable => "N/A",
+        SelfCheckCommState::Ok => match temp_c {
+            Some(v) if v >= 50 => "HOT",
+            Some(_) => "OK",
+            None => "OK",
+        },
+    }
+}
+
+fn vbus_key_text(vbus_present: Option<bool>) -> &'static str {
+    match vbus_present {
+        Some(true) => "VBUS PRESENT",
+        Some(false) => "VBUS LOST",
+        None => "VBUS N/A",
+    }
 }
 
 fn render_variant_d<P: UiPainter>(
