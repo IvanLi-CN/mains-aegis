@@ -20,6 +20,14 @@ from core import CSV_CONFIG, AVAILABLE_STACKS, MAX_RESULTS, search, search_stack
 from design_system import generate_design_system, safe_slug
 
 
+def positive_int(value: str) -> int:
+    """argparse helper that only accepts positive integers."""
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("max-results must be >= 1")
+    return parsed
+
+
 def format_output(result):
     """Format results for Claude consumption (token-optimized)"""
     if "error" in result:
@@ -51,7 +59,7 @@ if __name__ == "__main__":
     parser.add_argument("query", help="Search query")
     parser.add_argument("--domain", "-d", choices=list(CSV_CONFIG.keys()), help="Search domain")
     parser.add_argument("--stack", "-s", choices=AVAILABLE_STACKS, help="Stack-specific search (html-tailwind, react, nextjs)")
-    parser.add_argument("--max-results", "-n", type=int, default=MAX_RESULTS, help="Max results (default: 3)")
+    parser.add_argument("--max-results", "-n", type=positive_int, default=MAX_RESULTS, help="Max results (default: 3)")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     # Design system generation
     parser.add_argument("--design-system", "-ds", action="store_true", help="Generate complete design system recommendation")

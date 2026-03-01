@@ -167,6 +167,8 @@ def _search_csv(filepath, search_cols, output_cols, query, max_results):
     """Core search function using BM25"""
     if not filepath.exists():
         return []
+    if max_results < 1:
+        return []
 
     data = _load_csv(filepath)
 
@@ -198,7 +200,7 @@ def detect_domain(query):
         if kw == "#":
             return "#" in query_lower
         if " " in kw:
-            pattern = r"(?<!\\w)" + re.escape(kw).replace(r"\\ ", r"\\s+") + r"(?!\\w)"
+            pattern = r"(?<!\w)" + re.escape(kw).replace(r"\ ", r"\s+") + r"(?!\w)"
             return re.search(pattern, query_lower) is not None
         return kw in query_tokens
 
