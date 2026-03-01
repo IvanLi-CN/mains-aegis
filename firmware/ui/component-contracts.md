@@ -6,6 +6,7 @@
 
 - 几何来源：以 `dashboard-design.md` 与 `self-check-design.md` 中冻结坐标为准。
 - 视觉来源：以 `design-language.md` Token 体系为准。
+- 字体来源：以 `design-language.md` 中 bitmap 字体白名单与字高白名单为准。
 - 字段规则：组件只承载自身职责字段，不跨组件复用语义。
 
 ## 2. Dashboard components
@@ -72,7 +73,7 @@
 - Required fields: `module_name`, `comm_state`, `key_param`。
 - Forbidden fields: 不属于该模块的参数。
 - Allowed states: 基础态 `PEND/OK/WARN/ERR/N/A` + 模块派生态 `RUN/LOCK/IDLE/RCA/HOT`。
-- Token refs: `Type.Compact`, `Type.Num`, `Color.State.*`, `Color.Text.Primary`。
+- Token refs: `Type.Compact`, `Type.NumCompact`, `Color.State.*`, `Color.Text.Primary`。
 - Geometry anchor: 左列 `x=6`，右列 `x=163`，每卡高 `29`。
 
 ### TopBar (Self-check)
@@ -101,6 +102,7 @@
 - `BatteryCard` 必须保留 `SOC + Tmax` 核心字段，不得替换为电压等其它主字段。
 - `DiagCard` 的 `key_param` 必须可映射到对应模块采样或状态源。
 - `UiFocus` 影响高亮，不得作为业务模式来源。
+- 不允许组件绕过 Token 直接指定新字体；字体必须落在字高白名单 `8/13/14/22`。
 
 ## 6. Mapping references
 

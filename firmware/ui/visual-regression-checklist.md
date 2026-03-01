@@ -116,3 +116,22 @@
   - `firmware/ui/README.md`
 - Pass criteria:
   - 从 docs 入口两跳内可达 `design-language.md`、`component-contracts.md`、`visual-regression-checklist.md`。
+
+### VR-G-03 Bitmap font whitelist conformance
+
+- Command:
+  - `rg -n "static FONT_|u8g2_font_" firmware/src/front_panel_scene.rs`
+  - `rg -n "Type.NumCompact|8px|13px|14px|22px|u8g2_font_8x13B_tf|u8g2_font_7x14B_tf|u8g2_font_5x8_tf|u8g2_font_8x13_mf|u8g2_font_5x8_mf|u8g2_font_t0_22b_tn" firmware/ui/design-language.md`
+- Pass criteria:
+  - 代码侧字体绑定仅包含白名单项：`8x13B`、`7x14B`、`5x8_tf`、`8x13_mf`、`5x8_mf`、`t0_22b_tn`。
+  - 文档侧明确 `Type.Title/Body/Compact/Num/NumCompact/NumBig` 对应字体与字高。
+  - 字高白名单固定为 `8/13/14/22`，无其它未审批字高。
+
+### VR-G-04 Preview artifacts reachable
+
+- Targets:
+  - `docs/specs/hg3dw-front-panel-visual-language/assets/color-preview.svg`
+  - `docs/specs/hg3dw-front-panel-visual-language/assets/typography-preview.svg`
+  - `firmware/ui/design-language.md`
+- Pass criteria:
+  - 预览图文件存在且可由 `design-language.md` 直接访问。

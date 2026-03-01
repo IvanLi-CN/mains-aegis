@@ -47,6 +47,8 @@
 ### MUST
 
 - 规范文档必须覆盖 `Color/Type/Space/Stroke/State` 五类 Token。
+- Typography 必须绑定到 bitmap 字体白名单，并给出 Token->字体->字高映射。
+- 必须定义字体字高白名单（用于后续新增字体准入），不允许未审批字高进入实现。
 - 组件契约必须覆盖 `TopBar`、`KpiPanel`、`InfoPanel`、`BatteryCard`、`ChargeCard`、`DischgCard`、`DiagCard`、`ActivationDialog`。
 - 状态语义必须统一 `UpsMode`、`SelfCheckCommState`、`BmsActivationState`、`UiFocus`、`touch_irq`。
 - 业务口径固定：`ChargeCard` 仅 `STANDBY` 可充电，其他模式显示 `LOCK/NOAC`。
@@ -95,6 +97,8 @@ None
 - Given 页面设计文档，When 查阅样式口径，Then 均引用统一视觉规范来源而非重复定义。
 - Given 新增回归清单，When 按规则核对资产，Then 每条规则均能定位到对应文件与通过条件。
 - Given 全部 UI 文档，When 扫描图片链接，Then 不存在 `http/https` 外链图片。
+- Given Typography 规范，When 审核字体章节，Then 每个 `Type` Token 都可追溯到唯一 bitmap 字体与明确字高。
+- Given 后续新增字体需求，When 对照规范，Then 仅允许白名单字高 `8/13/14/22`，否则必须先更新文档契约再进入实现。
 
 ## 实现前置条件（Definition of Ready / Preconditions）
 
@@ -109,6 +113,7 @@ None
 - 文档链接与引用检查：`rg -n "\]\((https?://|\.\./\.\./\.\./)" firmware/ui docs/README.md docs/specs/README.md docs/specs/hg3dw-front-panel-visual-language/SPEC.md`
 - 外链图片扫描：`rg -n '![^\n]*\(https?://' firmware/ui docs`
 - 状态术语一致性检查：`rg -n "LOCK|NOAC|STANDBY|BYPASS|ASSIST|BACKUP|PEND|WARN|ERR|N/A" firmware/ui`
+- 字体白名单检查：`rg -n "static FONT_|u8g2_font_|Type.NumCompact|8px|13px|14px|22px" firmware/src/front_panel_scene.rs firmware/ui/design-language.md firmware/ui/component-contracts.md firmware/ui/visual-regression-checklist.md`
 
 ### Quality checks
 
@@ -126,7 +131,9 @@ None
 ## 计划资产（Plan assets）
 
 - Directory: `docs/specs/hg3dw-front-panel-visual-language/assets/`
-- In-plan references: None
+- In-plan references:
+  - `assets/color-preview.svg`
+  - `assets/typography-preview.svg`
 
 ## 资产晋升（Asset promotion）
 
@@ -139,6 +146,7 @@ None
 - [x] M3: 新增视觉回归清单并绑定冻结资产。
 - [x] M4: 更新页面文档与索引入口，完成规范回链。
 - [x] M5: 通过文档一致性与外链检查。
+- [x] M6: 固化 bitmap 字体白名单与字高白名单，并补充配色/字体预览图。
 
 ## 方案概述（Approach, high-level）
 
@@ -155,6 +163,7 @@ None
 ## 变更记录（Change log）
 
 - 2026-03-02: 新建规格并完成设计语言、组件契约、回归清单及索引同步。
+- 2026-03-02: 增补 bitmap 字体白名单、字高白名单与配色/字体预览图资产。
 
 ## 参考（References）
 

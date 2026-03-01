@@ -21,6 +21,9 @@ This directory consolidates the current confirmed front panel UI design view fro
   - `assets/dashboard-b-module-map.png`
   - `assets/self-check-c-module-map.png`
   - Used in module-level docs (`dashboard-design.md`, `self-check-design.md`)
+- Design-language previews (2):
+  - `../../docs/specs/hg3dw-front-panel-visual-language/assets/color-preview.svg`
+  - `../../docs/specs/hg3dw-front-panel-visual-language/assets/typography-preview.svg`
 - All assets are `320x172` and offline-readable.
 
 ## Preview (representative final renders)

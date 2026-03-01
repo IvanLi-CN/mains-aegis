@@ -44,6 +44,7 @@
 - `Type.Body`: 正文与标签，使用 Font A。
 - `Type.Compact`: 紧凑诊断卡标签，使用 Font A compact。
 - `Type.Num`: 常规数值字段，使用 Font B monospace。
+- `Type.NumCompact`: 紧凑诊断卡数字字段，使用 Font B compact monospace。
 - `Type.NumBig`: KPI 大号数值，使用 Font B big digits。
 
 字体分工约束：
@@ -51,6 +52,30 @@
 - 非数字语义文本必须使用 Font A 体系。
 - 可对齐数字字段必须使用 Font B 体系。
 - 单位（`W/A/C/%`）跟随数值字段时使用 `Type.Num`。
+
+#### Bitmap font whitelist (hard gate)
+
+> 以下白名单以 `firmware/src/front_panel_scene.rs` 中静态字体绑定为准，后续新增字体必须先通过该白名单门禁。
+
+| Token | Code binding | u8g2 font | Nominal box | Glyph height |
+| --- | --- | --- | --- | --- |
+| `Type.Title` | `FONT_A_TITLE` | `u8g2_font_8x13B_tf` | `8x13` | `13px` |
+| `Type.Body` | `FONT_A_BODY` | `u8g2_font_7x14B_tf` | `7x14` | `14px` |
+| `Type.Compact` | `FONT_A_COMPACT` | `u8g2_font_5x8_tf` | `5x8` | `8px` |
+| `Type.Num` | `FONT_B_NUM` | `u8g2_font_8x13_mf` | `8x13` | `13px` |
+| `Type.NumCompact` | `FONT_B_COMPACT` | `u8g2_font_5x8_mf` | `5x8` | `8px` |
+| `Type.NumBig` | `FONT_B_NUM_BIG` | `u8g2_font_t0_22b_tn` | `t0_22` | `22px` |
+
+字高白名单（允许值）：
+
+- `8px`, `13px`, `14px`, `22px`
+
+新增字体准入规则：
+
+1. 必须是 bitmap 字体（u8g2 family），并映射到唯一 Token。
+2. 字高必须属于白名单；若需要新字高，必须先更新 `design-language.md`、`component-contracts.md`、`visual-regression-checklist.md` 与对应 SPEC，再允许落地实现。
+3. 不允许对 bitmap 字体做运行时缩放来“模拟字号”。
+4. 新增字体后必须补充预览图与回归清单检查项。
 
 ### 3.3 Color tokens
 
@@ -90,6 +115,14 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 
 - `InstrumentB`: `bg=0x10C4`, `panel=0x1905`, `panel_alt=0x2167`, `border=0x5B0E`, `text=0xFFFF`, `text_dim=0xB5F8`, `accent=0x8D37`
 - `RetroC`: `bg=0x0044`, `panel=0x0867`, `panel_alt=0x10A9`, `border=0x8C51`, `text=0xFFFF`, `text_dim=0xBDF7`, `accent=0xFF20`
+
+### 3.5 Visual previews
+
+- Color preview: `../../docs/specs/hg3dw-front-panel-visual-language/assets/color-preview.svg`
+- Typography preview: `../../docs/specs/hg3dw-front-panel-visual-language/assets/typography-preview.svg`
+
+![Front panel color preview](../../docs/specs/hg3dw-front-panel-visual-language/assets/color-preview.svg)
+![Front panel typography preview](../../docs/specs/hg3dw-front-panel-visual-language/assets/typography-preview.svg)
 
 ## 4. State mapping contract
 
