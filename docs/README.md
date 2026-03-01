@@ -5,7 +5,6 @@ This folder stores project documentation and offline-renderable datasheets.
 ## Project docs
 
 - Hardware selection overview: `docs/hardware-selection.md`
-- Front panel UI design overview (current confirmed view): `firmware/ui/front-panel-design.md`
 - Dashboard module design: `firmware/ui/dashboard-design.md`
 - Self-check module design: `firmware/ui/self-check-design.md`
 - Firmware bring-up (ESP32-S3 / esp-hal / no_std): `firmware/README.md`

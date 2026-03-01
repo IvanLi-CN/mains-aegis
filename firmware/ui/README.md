@@ -5,7 +5,6 @@ This directory consolidates the current confirmed front panel UI design view fro
 ## Scope
 
 - Firmware screen UI (implemented now):
-  - Overview: [front-panel-design.md](front-panel-design.md)
   - Dashboard module design: [dashboard-design.md](dashboard-design.md)
   - Self-check module design: [self-check-design.md](self-check-design.md)
 - Host-side UI (future implementation): reserved, not frozen in this directory yet
@@ -27,10 +26,9 @@ This directory consolidates the current confirmed front panel UI design view fro
 
 ## Read order
 
-1. [front-panel-design.md](front-panel-design.md)
-2. [dashboard-design.md](dashboard-design.md)
-3. [self-check-design.md](self-check-design.md)
-4. Source specs for traceability:
+1. [dashboard-design.md](dashboard-design.md)
+2. [self-check-design.md](self-check-design.md)
+3. Source specs for traceability:
    - [../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md](../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md)
    - [../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md](../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md)
 

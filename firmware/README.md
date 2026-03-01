@@ -236,7 +236,6 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，有效显示区 `320x172`，横屏，SPI）并渲染工业仪表风 UI：
 
-- 当前确定设计文档入口：`firmware/ui/front-panel-design.md`
 - Dashboard 模块设计：`firmware/ui/dashboard-design.md`
 - Self-check 模块设计：`firmware/ui/self-check-design.md`
 - 规格追溯：`docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md` 与 `docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`
@@ -264,7 +263,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
   - `GC9307`、`TCA6408A`、`FUSB302`、`INA3221`、`BQ25792`
   - `BQ40Z50`、`TPS55288-A`、`TPS55288-B`、`TMP112-A`、`TMP112-B`
 - Dashboard 当前验收口径固定为 `Variant B = Neutral`；`Variant A/D` 仅保留为历史参考样式
-- Dashboard 间距与行距冻结参数见：`firmware/ui/front-panel-design.md`（来源追溯仍在 `docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`）
+- Dashboard 间距与行距冻结参数见：`firmware/ui/dashboard-design.md`（来源追溯仍在 `docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`）
 
 固件 UI 渲染图（文档内直显）：
 
