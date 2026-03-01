@@ -51,3 +51,8 @@
 ![Self-check Variant C - STANDBY charger-focus](assets/self-check-c-standby-right.png)
 ![Self-check Variant C - ASSIST output-focus](assets/self-check-c-assist-up.png)
 ![Self-check Variant C - BACKUP irq-focus](assets/self-check-c-backup-touch.png)
+![Self-check Variant C - BQ40 offline idle](assets/self-check-c-bq40-offline-idle.png)
+![Self-check Variant C - BQ40 offline activation dialog](assets/self-check-c-bq40-offline-activate-dialog.png)
+![Self-check Variant C - BQ40 activating](assets/self-check-c-bq40-activating.png)
+![Self-check Variant C - BQ40 activation succeeded](assets/self-check-c-bq40-activation-succeeded.png)
+![Self-check Variant C - BQ40 activation failed](assets/self-check-c-bq40-activation-failed.png)

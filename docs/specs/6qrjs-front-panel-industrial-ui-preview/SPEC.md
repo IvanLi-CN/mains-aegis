@@ -132,6 +132,11 @@
 - Self-check STANDBY charger-focus: `assets/self-check-c-standby-right.png`
 - Self-check ASSIST output-focus: `assets/self-check-c-assist-up.png`
 - Self-check BACKUP irq-focus: `assets/self-check-c-backup-touch.png`
+- Self-check BQ40 offline idle: `assets/self-check-c-bq40-offline-idle.png`
+- Self-check BQ40 offline activation dialog: `assets/self-check-c-bq40-offline-activate-dialog.png`
+- Self-check BQ40 activation in progress: `assets/self-check-c-bq40-activating.png`
+- Self-check BQ40 activation succeeded: `assets/self-check-c-bq40-activation-succeeded.png`
+- Self-check BQ40 activation failed: `assets/self-check-c-bq40-activation-failed.png`
 
 ![Dashboard Variant B - BYPASS](assets/dashboard-b-off-mode.png)
 ![Dashboard Variant B - STANDBY](assets/dashboard-b-standby-mode.png)
@@ -141,6 +146,11 @@
 ![Self-check Variant C - STANDBY charger-focus](assets/self-check-c-standby-right.png)
 ![Self-check Variant C - ASSIST output-focus](assets/self-check-c-assist-up.png)
 ![Self-check Variant C - BACKUP irq-focus](assets/self-check-c-backup-touch.png)
+![Self-check Variant C - BQ40 offline idle](assets/self-check-c-bq40-offline-idle.png)
+![Self-check Variant C - BQ40 offline activation dialog](assets/self-check-c-bq40-offline-activate-dialog.png)
+![Self-check Variant C - BQ40 activating](assets/self-check-c-bq40-activating.png)
+![Self-check Variant C - BQ40 activation succeeded](assets/self-check-c-bq40-activation-succeeded.png)
+![Self-check Variant C - BQ40 activation failed](assets/self-check-c-bq40-activation-failed.png)
 
 ### Edge cases / errors
 
@@ -209,6 +219,11 @@ None
   - `assets/self-check-c-standby-right.png`
   - `assets/self-check-c-assist-up.png`
   - `assets/self-check-c-backup-touch.png`
+  - `assets/self-check-c-bq40-offline-idle.png`
+  - `assets/self-check-c-bq40-offline-activate-dialog.png`
+  - `assets/self-check-c-bq40-activating.png`
+  - `assets/self-check-c-bq40-activation-succeeded.png`
+  - `assets/self-check-c-bq40-activation-failed.png`
 
 ## 资产晋升（Asset promotion）
 
@@ -262,5 +277,10 @@ None
 - `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-standby-right.png`
 - `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-assist-up.png`
 - `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-backup-touch.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-offline-idle.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-offline-activate-dialog.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-activating.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-activation-succeeded.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-activation-failed.png`
 - [u8g2-fonts docs](https://docs.rs/u8g2-fonts/latest/u8g2_fonts/fonts/index.html)
 - [u8g2 license](https://raw.githubusercontent.com/olikraus/u8g2/master/LICENSE)

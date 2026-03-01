@@ -277,6 +277,11 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 ![Self-check Variant C - STANDBY charger-focus](ui/assets/self-check-c-standby-right.png)
 ![Self-check Variant C - ASSIST output-focus](ui/assets/self-check-c-assist-up.png)
 ![Self-check Variant C - BACKUP irq-focus](ui/assets/self-check-c-backup-touch.png)
+![Self-check Variant C - BQ40 offline idle](ui/assets/self-check-c-bq40-offline-idle.png)
+![Self-check Variant C - BQ40 offline activation dialog](ui/assets/self-check-c-bq40-offline-activate-dialog.png)
+![Self-check Variant C - BQ40 activating](ui/assets/self-check-c-bq40-activating.png)
+![Self-check Variant C - BQ40 activation succeeded](ui/assets/self-check-c-bq40-activation-succeeded.png)
+![Self-check Variant C - BQ40 activation failed](ui/assets/self-check-c-bq40-activation-failed.png)
 
 渲染架构采用“同源渲染”：
 
@@ -309,7 +314,8 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 背光：
   - `GPIO13`：`BLK`（控制面板 `Q16(BSS84)` 高边开关；当前固件按“低电平点亮背光”实现）
 - 触摸：
-  - 当前仅使用 `CTP_IRQ` 做告警可视化（不解析触摸手势/坐标）
+  - 读取 `CST816D` 单点坐标（`0x01..0x06`）并用于 `SELF CHECK` 页面命中测试
+  - `BQ40Z50` 离线时，触摸卡片弹出英文激活对话框（`Cancel` / `Try Activation`）
 
 预期日志（`defmt`）：
 
