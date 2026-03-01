@@ -62,7 +62,7 @@
 - [x] M2: 执行 `uipro-cli@2.2.1` 安装到 `.codex/skills`。
 - [x] M3: 完成 Codex 路径兼容修正与 pycache 清理。
 - [x] M4: 通过本地 smoke 验证并提交。
-- [ ] M5: PR checks/review-loop 收敛并状态明确。
+- [x] M5: PR checks/review-loop 收敛并状态明确。
 
 ## 关联规格
 
