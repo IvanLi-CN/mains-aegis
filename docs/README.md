@@ -5,6 +5,8 @@ This folder stores project documentation and offline-renderable datasheets.
 ## Project docs
 
 - Hardware selection overview: `docs/hardware-selection.md`
+- Dashboard module design: `firmware/ui/dashboard-design.md`
+- Self-check module design: `firmware/ui/self-check-design.md`
 - Firmware bring-up (ESP32-S3 / esp-hal / no_std): `firmware/README.md`
 - Code quality & CI: `docs/quality-gates.md`
 - BMS design (system-level): `docs/bms-design.md`
@@ -15,6 +17,10 @@ This folder stores project documentation and offline-renderable datasheets.
 - I2C/SMBus address map: `docs/i2c-address-map.md`
 - Audio alert output (buzzer -> TDM speaker): `docs/audio-design.md`
 - ESP32-S3 GPIO assignment: `docs/hardware-selection/esp32-s3-fh4r2-gpio.md`
+
+## UI docs
+
+- UI docs index: `firmware/ui/README.md`
 
 ## Datasheets
 
