@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820">
+  <rect width="1400" height="820" fill="#111419"/>
+  <text x="36" y="46" fill="#F5F7FA" font-size="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-weight="700">Front Panel Color Preview (from RGB565)</text>
+  <text x="36" y="76" fill="#A8B0BD" font-size="17" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Source: firmware/ui/design-language.md → 3.3 + 3.4</text>
+
+  <g transform="translate(36,110)">
+    <rect x="0" y="0" width="420" height="650" rx="14" fill="#1A1F26" stroke="#515A67" stroke-width="2"/>
+    <text x="22" y="40" fill="#FFFFFF" font-size="25" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-weight="700">InstrumentB</text>
+
+    <g font-family="Menlo,Consolas,monospace" font-size="15" fill="#D3D8E1">
+      <rect x="22" y="75" width="170" height="56" rx="8" fill="#101821" stroke="#EBEEF4"/><text x="208" y="97">bg</text><text x="208" y="118">0x10C4 / #101821</text>
+      <rect x="22" y="143" width="170" height="56" rx="8" fill="#182029" stroke="#EBEEF4"/><text x="208" y="165">panel</text><text x="208" y="186">0x1905 / #182029</text>
+      <rect x="22" y="211" width="170" height="56" rx="8" fill="#212C39" stroke="#EBEEF4"/><text x="208" y="233">panel_alt</text><text x="208" y="254">0x2167 / #212C39</text>
+      <rect x="22" y="279" width="170" height="56" rx="8" fill="#5A6173" stroke="#EBEEF4"/><text x="208" y="301">border</text><text x="208" y="322">0x5B0E / #5A6173</text>
+      <rect x="22" y="347" width="170" height="56" rx="8" fill="#FFFFFF" stroke="#EBEEF4"/><text x="208" y="369">text</text><text x="208" y="390">0xFFFF / #FFFFFF</text>
+      <rect x="22" y="415" width="170" height="56" rx="8" fill="#B5BEC6" stroke="#EBEEF4"/><text x="208" y="437">text_dim</text><text x="208" y="458">0xB5F8 / #B5BEC6</text>
+      <rect x="22" y="483" width="170" height="56" rx="8" fill="#8CA6BD" stroke="#EBEEF4"/><text x="208" y="505">accent</text><text x="208" y="526">0x8D37 / #8CA6BD</text>
+    </g>
+  </g>
+
+  <g transform="translate(478,110)">
+    <rect x="0" y="0" width="420" height="650" rx="14" fill="#1A1F26" stroke="#515A67" stroke-width="2"/>
+    <text x="22" y="40" fill="#FFFFFF" font-size="25" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-weight="700">RetroC</text>
+
+    <g font-family="Menlo,Consolas,monospace" font-size="15" fill="#D3D8E1">
+      <rect x="22" y="75" width="170" height="56" rx="8" fill="#000821" stroke="#EBEEF4"/><text x="208" y="97">bg</text><text x="208" y="118">0x0044 / #000821</text>
+      <rect x="22" y="143" width="170" height="56" rx="8" fill="#080C39" stroke="#EBEEF4"/><text x="208" y="165">panel</text><text x="208" y="186">0x0867 / #080C39</text>
+      <rect x="22" y="211" width="170" height="56" rx="8" fill="#10144A" stroke="#EBEEF4"/><text x="208" y="233">panel_alt</text><text x="208" y="254">0x10A9 / #10144A</text>
+      <rect x="22" y="279" width="170" height="56" rx="8" fill="#8C8A8C" stroke="#EBEEF4"/><text x="208" y="301">border</text><text x="208" y="322">0x8C51 / #8C8A8C</text>
+      <rect x="22" y="347" width="170" height="56" rx="8" fill="#FFFFFF" stroke="#EBEEF4"/><text x="208" y="369">text</text><text x="208" y="390">0xFFFF / #FFFFFF</text>
+      <rect x="22" y="415" width="170" height="56" rx="8" fill="#BDBEBD" stroke="#EBEEF4"/><text x="208" y="437">text_dim</text><text x="208" y="458">0xBDF7 / #BDBEBD</text>
+      <rect x="22" y="483" width="170" height="56" rx="8" fill="#FFE700" stroke="#EBEEF4"/><text x="208" y="505">accent</text><text x="208" y="526">0xFF20 / #FFE700</text>
+    </g>
+  </g>
+
+  <g transform="translate(920,110)">
+    <rect x="0" y="0" width="444" height="650" rx="14" fill="#1A1F26" stroke="#515A67" stroke-width="2"/>
+    <text x="22" y="40" fill="#FFFFFF" font-size="25" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-weight="700">State Semantic Colors</text>
+
+    <g font-family="Menlo,Consolas,monospace" font-size="18" fill="#D3D8E1">
+      <rect x="22" y="85" width="190" height="95" rx="10" fill="#00FF00" stroke="#EBEEF4"/><text x="230" y="124">SUCCESS</text><text x="230" y="152">0x07E0 / #00FF00</text>
+      <rect x="22" y="210" width="190" height="95" rx="10" fill="#FFA600" stroke="#EBEEF4"/><text x="230" y="249">WARNING</text><text x="230" y="277">0xFD20 / #FFA600</text>
+      <rect x="22" y="335" width="190" height="95" rx="10" fill="#FF0000" stroke="#EBEEF4"/><text x="230" y="374">ERROR</text><text x="230" y="402">0xF800 / #FF0000</text>
+    </g>
+
+    <text x="22" y="590" fill="#9EA8B8" font-size="15" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Note: real panel appearance may shift with LCD gamma/brightness and ambient light.</text>
+  </g>
+</svg>

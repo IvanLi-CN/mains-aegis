@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820">
+  <rect width="1400" height="820" fill="#111419"/>
+  <text x="36" y="46" fill="#F5F7FA" font-size="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-weight="700">Front Panel Typography Preview (Token-level)</text>
+  <text x="36" y="76" fill="#A8B0BD" font-size="17" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Source: firmware/ui/design-language.md → 3.2 Typography tokens (min glyph height: 10px)</text>
+
+  <g transform="translate(36,110)">
+    <rect x="0" y="0" width="650" height="650" rx="14" fill="#1A1F26" stroke="#515A67" stroke-width="2"/>
+    <text x="24" y="42" fill="#FFFFFF" font-size="24" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-weight="700">Font A family (labels/text)</text>
+
+    <text x="24" y="105" fill="#8CA6BD" font-size="16" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Type.Title</text>
+    <text x="24" y="145" fill="#FFFFFF" font-size="36" font-family="Arial,Helvetica,sans-serif" font-weight="700">UPS DASHBOARD</text>
+
+    <text x="24" y="205" fill="#8CA6BD" font-size="16" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Type.Body</text>
+    <text x="24" y="238" fill="#FFFFFF" font-size="25" font-family="Arial,Helvetica,sans-serif">BYPASS ACTIVE</text>
+    <text x="24" y="272" fill="#B5BEC6" font-size="21" font-family="Arial,Helvetica,sans-serif">INPUT NORMAL / OUTPUT READY</text>
+
+    <text x="24" y="335" fill="#8CA6BD" font-size="16" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Type.Compact</text>
+    <text x="24" y="366" fill="#FFFFFF" font-size="20" font-family="Arial,Helvetica,sans-serif">BQ40Z50   RCA</text>
+    <text x="24" y="395" fill="#B5BEC6" font-size="18" font-family="Arial,Helvetica,sans-serif">SOC  78%</text>
+
+    <text x="24" y="456" fill="#A8B0BD" font-size="15" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Rule: Non-numeric semantic text uses Font A.</text>
+  </g>
+
+  <g transform="translate(710,110)">
+    <rect x="0" y="0" width="654" height="650" rx="14" fill="#1A1F26" stroke="#515A67" stroke-width="2"/>
+    <text x="24" y="42" fill="#FFFFFF" font-size="24" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-weight="700">Font B family (monospace numbers)</text>
+
+    <text x="24" y="105" fill="#8CA6BD" font-size="16" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Type.NumBig</text>
+    <text x="24" y="175" fill="#FFFFFF" font-size="72" font-family="Menlo,Consolas,monospace" font-weight="700">1260W</text>
+
+    <text x="24" y="245" fill="#8CA6BD" font-size="16" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Type.Num</text>
+    <text x="24" y="290" fill="#FFFFFF" font-size="42" font-family="Menlo,Consolas,monospace">12.48A</text>
+    <text x="24" y="340" fill="#FFFFFF" font-size="42" font-family="Menlo,Consolas,monospace">45C</text>
+    <text x="24" y="390" fill="#FFFFFF" font-size="42" font-family="Menlo,Consolas,monospace">78%</text>
+
+    <text x="24" y="456" fill="#A8B0BD" font-size="15" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Rule: Numeric fields and units W/A/C/% use Font B.</text>
+    <text x="24" y="486" fill="#A8B0BD" font-size="15" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Whitelist glyph heights: 13 / 14 / 22 (no sub-10px fonts).</text>
+
+    <text x="24" y="540" fill="#FD20" font-size="15" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Preview note: this chart is token-level, not a pixel-perfect u8g2 raster dump.</text>
+  </g>
+</svg>
