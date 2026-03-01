@@ -129,15 +129,18 @@ if __name__ == "__main__":
     # Design system takes priority
     if args.design_system:
         result = generate_design_system(
-            args.query, 
-            args.project_name, 
+            args.query,
+            args.project_name,
             args.format,
             persist=args.persist,
             page=args.page,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
         )
         print(result)
-        
+        has_design_error = isinstance(result, str) and result.startswith("Error:")
+        if has_design_error:
+            raise SystemExit(1)
+
         # Print persistence confirmation
         if args.persist:
             project_name = args.project_name or args.query.upper()

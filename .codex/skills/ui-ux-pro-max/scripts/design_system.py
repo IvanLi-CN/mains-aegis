@@ -179,6 +179,18 @@ class DesignSystemGenerator:
         search_results = self._multi_domain_search(query, style_priority)
         search_results["product"] = product_result  # Reuse product search
 
+        required_domains = ("product", "style", "color", "landing", "typography")
+        domain_errors = {
+            domain: search_results.get(domain, {}).get("error")
+            for domain in required_domains
+            if search_results.get(domain, {}).get("error")
+        }
+        if domain_errors:
+            details = ", ".join(
+                f"{domain}: {message}" for domain, message in domain_errors.items()
+            )
+            raise ValueError(f"Required design data unavailable ({details})")
+
         # Step 4: Select best matches from each domain using priority
         style_results = self._extract_results(search_results.get("style", {}))
         color_results = self._extract_results(search_results.get("color", {}))
@@ -255,12 +267,20 @@ def format_ascii_box(design_system: dict) -> str:
         """Wrap long text into multiple lines."""
         if not text:
             return []
+        available = max(1, width - 2 - len(prefix))
         words = text.split()
         lines = []
         current_line = prefix
         for word in words:
-            if len(current_line) + len(word) + 1 <= width - 2:
-                current_line += (" " if current_line != prefix else "") + word
+            while len(word) > available:
+                if current_line != prefix:
+                    lines.append(current_line)
+                    current_line = prefix
+                lines.append(prefix + word[:available])
+                word = word[available:]
+            candidate = word if current_line == prefix else f"{current_line} {word}"
+            if len(candidate) <= width - 2:
+                current_line = candidate
             else:
                 if current_line != prefix:
                     lines.append(current_line)
@@ -269,9 +289,22 @@ def format_ascii_box(design_system: dict) -> str:
             lines.append(current_line)
         return lines
 
+    def parse_sections(raw_sections: str) -> list:
+        """Normalize section list from either '>' or numbered comma formats."""
+        if not raw_sections:
+            return []
+        section_text = str(raw_sections).strip()
+        if ">" in section_text and not re.search(r",\s*\d+\.", section_text):
+            parts = [part.strip() for part in section_text.split(">") if part.strip()]
+        elif re.search(r",\s*\d+\.", section_text):
+            parts = [part.strip() for part in re.split(r",\s*(?=\d+\.)", section_text) if part.strip()]
+        else:
+            parts = [part.strip() for part in section_text.split(",") if part.strip()]
+        normalized = [re.sub(r"^\d+\.\s*", "", part).strip() for part in parts]
+        return [part for part in normalized if part]
+
     # Build sections from pattern
-    sections = pattern.get("sections", "").split(">")
-    sections = [s.strip() for s in sections if s.strip()]
+    sections = parse_sections(pattern.get("sections", ""))
 
     # Build output lines
     lines = []
@@ -279,23 +312,33 @@ def format_ascii_box(design_system: dict) -> str:
     empty_line = "|" + " " * inner_width + "|"
 
     lines.append("+" + "-" * inner_width + "+")
-    lines.append(f"|  TARGET: {project} - RECOMMENDED DESIGN SYSTEM".ljust(BOX_WIDTH) + "|")
+    target_text = f"{project} - RECOMMENDED DESIGN SYSTEM"
+    target_lines = wrap_text(target_text, "|  TARGET: ", BOX_WIDTH)
+    if not target_lines:
+        target_lines = ["|  TARGET: RECOMMENDED DESIGN SYSTEM"]
+    for line in target_lines:
+        lines.append(line.ljust(BOX_WIDTH) + "|")
     lines.append("+" + "-" * inner_width + "+")
     lines.append(empty_line)
 
     # Pattern section
-    lines.append(f"|  PATTERN: {pattern.get('name', '')}".ljust(BOX_WIDTH) + "|")
+    for line in wrap_text(pattern.get("name", ""), "|  PATTERN: ", BOX_WIDTH):
+        lines.append(line.ljust(BOX_WIDTH) + "|")
     if pattern.get('conversion'):
-        lines.append(f"|     Conversion: {pattern.get('conversion', '')}".ljust(BOX_WIDTH) + "|")
+        for line in wrap_text(pattern.get("conversion", ""), "|     Conversion: ", BOX_WIDTH):
+            lines.append(line.ljust(BOX_WIDTH) + "|")
     if pattern.get('cta_placement'):
-        lines.append(f"|     CTA: {pattern.get('cta_placement', '')}".ljust(BOX_WIDTH) + "|")
+        for line in wrap_text(pattern.get("cta_placement", ""), "|     CTA: ", BOX_WIDTH):
+            lines.append(line.ljust(BOX_WIDTH) + "|")
     lines.append("|     Sections:".ljust(BOX_WIDTH) + "|")
     for i, section in enumerate(sections, 1):
-        lines.append(f"|       {i}. {section}".ljust(BOX_WIDTH) + "|")
+        for line in wrap_text(section, f"|       {i}. ", BOX_WIDTH):
+            lines.append(line.ljust(BOX_WIDTH) + "|")
     lines.append(empty_line)
 
     # Style section
-    lines.append(f"|  STYLE: {style.get('name', '')}".ljust(BOX_WIDTH) + "|")
+    for line in wrap_text(style.get("name", ""), "|  STYLE: ", BOX_WIDTH):
+        lines.append(line.ljust(BOX_WIDTH) + "|")
     if style.get("keywords"):
         for line in wrap_text(f"Keywords: {style.get('keywords', '')}", "|     ", BOX_WIDTH):
             lines.append(line.ljust(BOX_WIDTH) + "|")
@@ -304,7 +347,8 @@ def format_ascii_box(design_system: dict) -> str:
             lines.append(line.ljust(BOX_WIDTH) + "|")
     if style.get("performance") or style.get("accessibility"):
         perf_a11y = f"Performance: {style.get('performance', '')} | Accessibility: {style.get('accessibility', '')}"
-        lines.append(f"|     {perf_a11y}".ljust(BOX_WIDTH) + "|")
+        for line in wrap_text(perf_a11y, "|     ", BOX_WIDTH):
+            lines.append(line.ljust(BOX_WIDTH) + "|")
     lines.append(empty_line)
 
     # Colors section
@@ -320,7 +364,9 @@ def format_ascii_box(design_system: dict) -> str:
     lines.append(empty_line)
 
     # Typography section
-    lines.append(f"|  TYPOGRAPHY: {typography.get('heading', '')} / {typography.get('body', '')}".ljust(BOX_WIDTH) + "|")
+    typography_title = f"{typography.get('heading', '')} / {typography.get('body', '')}"
+    for line in wrap_text(typography_title, "|  TYPOGRAPHY: ", BOX_WIDTH):
+        lines.append(line.ljust(BOX_WIDTH) + "|")
     if typography.get("mood"):
         for line in wrap_text(f"Mood: {typography.get('mood', '')}", "|     ", BOX_WIDTH):
             lines.append(line.ljust(BOX_WIDTH) + "|")
@@ -328,16 +374,11 @@ def format_ascii_box(design_system: dict) -> str:
         for line in wrap_text(f"Best For: {typography.get('best_for', '')}", "|     ", BOX_WIDTH):
             lines.append(line.ljust(BOX_WIDTH) + "|")
     if typography.get("google_fonts_url"):
-        url_line = f"|     Google Fonts: {typography.get('google_fonts_url', '')}"
-        if len(url_line) > BOX_WIDTH:
-            url_line = url_line[:BOX_WIDTH - 3] + "..."
-        lines.append(url_line.ljust(BOX_WIDTH) + "|")
+        for line in wrap_text(typography.get("google_fonts_url", ""), "|     Google Fonts: ", BOX_WIDTH):
+            lines.append(line.ljust(BOX_WIDTH) + "|")
     if typography.get("css_import"):
-        css_snippet = typography.get("css_import", "")
-        css_line = f"|     CSS Import: {css_snippet}"
-        if len(css_line) > BOX_WIDTH:
-            css_line = css_line[:BOX_WIDTH - 3] + "..."
-        lines.append(css_line.ljust(BOX_WIDTH) + "|")
+        for line in wrap_text(typography.get("css_import", ""), "|     CSS Import: ", BOX_WIDTH):
+            lines.append(line.ljust(BOX_WIDTH) + "|")
     lines.append(empty_line)
 
     # Key Effects section
@@ -486,7 +527,10 @@ def generate_design_system(query: str, project_name: str = None, output_format: 
         Formatted design system string
     """
     generator = DesignSystemGenerator()
-    design_system = generator.generate(query, project_name)
+    try:
+        design_system = generator.generate(query, project_name)
+    except ValueError as exc:
+        return f"Error: {exc}"
     
     # Persist to files if requested
     if persist:
@@ -1086,3 +1130,5 @@ if __name__ == "__main__":
 
     result = generate_design_system(args.query, args.project_name, args.format)
     print(result)
+    if isinstance(result, str) and result.startswith("Error:"):
+        raise SystemExit(1)
