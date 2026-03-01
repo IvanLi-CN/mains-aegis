@@ -1,6 +1,9 @@
 use core::convert::Infallible;
 
-use crate::front_panel_scene::{self, SelfCheckUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant};
+use crate::front_panel_scene::{
+    self, BmsActivationState, SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot, UiFocus,
+    UiModel, UiPainter, UiVariant,
+};
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
 use esp_hal::gpio::{DriveMode, Flex, Input, OutputConfig, Pull};
@@ -20,6 +23,10 @@ const TCA_REG_INPUT: u8 = 0x00;
 const TCA_REG_OUTPUT: u8 = 0x01;
 const TCA_REG_POLARITY: u8 = 0x02;
 const TCA_REG_CONFIG: u8 = 0x03;
+
+const CST816D_ADDR: u8 = 0x15;
+const CST816D_REG_GESTURE: u8 = 0x01;
+const CST816D_TOUCH_REG_LEN: usize = 6;
 
 // TCA bit assignments.
 const TCA_BIT_CS: u8 = 5; // P5, active-low
@@ -45,6 +52,12 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiAction {
+    RequestBmsActivation,
+    ClearBmsActivationResult,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitState {
     Disabled,
     Ready,
@@ -58,6 +71,7 @@ struct InputSnapshot {
     right: bool,
     center: bool,
     touch: bool,
+    touch_point: Option<(u16, u16)>,
 }
 
 impl InputSnapshot {
@@ -69,6 +83,7 @@ impl InputSnapshot {
             right: false,
             center: false,
             touch: false,
+            touch_point: None,
         }
     }
 }
@@ -90,6 +105,8 @@ pub struct FrontPanel {
     needs_redraw: bool,
     ui_variant: UiVariant,
     self_check_snapshot: SelfCheckUiSnapshot,
+    bms_activation_state: BmsActivationState,
+    self_check_overlay: SelfCheckOverlay,
     frame_no: u32,
 }
 
@@ -118,6 +135,8 @@ impl FrontPanel {
             needs_redraw: false,
             ui_variant: SELF_CHECK_VARIANT,
             self_check_snapshot: SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby),
+            bms_activation_state: BmsActivationState::Idle,
+            self_check_overlay: SelfCheckOverlay::None,
             frame_no: 0,
         }
     }
@@ -253,6 +272,11 @@ impl FrontPanel {
             return;
         }
         self.self_check_snapshot = snapshot;
+        if self.self_check_overlay == SelfCheckOverlay::BmsActivateConfirm
+            && !front_panel_scene::is_bq40_offline(&self.self_check_snapshot)
+        {
+            self.self_check_overlay = SelfCheckOverlay::None;
+        }
         self.needs_redraw = true;
         if self.state != InitState::Ready {
             return;
@@ -266,19 +290,39 @@ impl FrontPanel {
         }
     }
 
-    pub fn tick(&mut self) {
-        if self.state != InitState::Ready {
+    pub fn update_bms_activation_state(&mut self, state: BmsActivationState) {
+        if self.bms_activation_state == state {
             return;
+        }
+        self.bms_activation_state = state;
+        self.self_check_overlay = match state {
+            BmsActivationState::Idle => SelfCheckOverlay::None,
+            BmsActivationState::Pending => SelfCheckOverlay::BmsActivateProgress,
+            BmsActivationState::Succeeded => SelfCheckOverlay::BmsActivateResult { success: true },
+            BmsActivationState::FailedNoInput
+            | BmsActivationState::FailedTimeout
+            | BmsActivationState::FailedComm => {
+                SelfCheckOverlay::BmsActivateResult { success: false }
+            }
+        };
+        self.needs_redraw = true;
+    }
+
+    pub fn tick(&mut self) -> Option<UiAction> {
+        if self.state != InitState::Ready {
+            return None;
         }
 
         let now = Instant::now();
         if now < self.next_frame_deadline {
-            return;
+            return None;
         }
         self.next_frame_deadline += FRAME_INTERVAL;
 
+        let mut ui_action = None;
         match self.read_inputs() {
             Ok(snapshot) => {
+                ui_action = self.process_touch_action(snapshot);
                 let inputs_changed = self.last_inputs != Some(snapshot);
                 if inputs_changed || self.needs_redraw {
                     if let Err(e) = self.render_inputs(snapshot) {
@@ -297,6 +341,8 @@ impl FrontPanel {
                 );
             }
         }
+
+        ui_action
     }
 
     fn configure_dc(&mut self) {
@@ -488,6 +534,7 @@ impl FrontPanel {
 
         let center = self.btn_center.is_low();
         let touch = self.ctp_irq.is_low();
+        let touch_point = self.read_touch_point(touch);
 
         Ok(InputSnapshot {
             up,
@@ -496,7 +543,86 @@ impl FrontPanel {
             right,
             center,
             touch,
+            touch_point,
         })
+    }
+
+    fn read_touch_point(&mut self, touch_active: bool) -> Option<(u16, u16)> {
+        if !touch_active {
+            return None;
+        }
+
+        let mut buf = [0u8; CST816D_TOUCH_REG_LEN];
+        if self
+            .i2c
+            .write_read(CST816D_ADDR, &[CST816D_REG_GESTURE], &mut buf)
+            .is_err()
+        {
+            return None;
+        }
+
+        let finger_count = buf[1] & 0x0f;
+        if finger_count == 0 {
+            return None;
+        }
+
+        let x_raw = (((buf[2] & 0x0f) as u16) << 8) | buf[3] as u16;
+        let y_raw = (((buf[4] & 0x0f) as u16) << 8) | buf[5] as u16;
+        Self::map_touch_to_ui(x_raw, y_raw)
+    }
+
+    fn map_touch_to_ui(x_raw: u16, y_raw: u16) -> Option<(u16, u16)> {
+        if x_raw < front_panel_scene::UI_W && y_raw < front_panel_scene::UI_H {
+            return Some((x_raw, y_raw));
+        }
+        if y_raw < front_panel_scene::UI_W && x_raw < front_panel_scene::UI_H {
+            return Some((y_raw, x_raw));
+        }
+        None
+    }
+
+    fn process_touch_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
+        let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        if !snapshot.touch || prev.touch {
+            return None;
+        }
+
+        if matches!(
+            self.self_check_overlay,
+            SelfCheckOverlay::BmsActivateResult { .. }
+        ) {
+            self.self_check_overlay = SelfCheckOverlay::None;
+            self.needs_redraw = true;
+            return Some(UiAction::ClearBmsActivationResult);
+        }
+
+        let Some((x, y)) = snapshot.touch_point else {
+            return None;
+        };
+
+        match front_panel_scene::self_check_hit_test(x, y, self.self_check_overlay) {
+            Some(SelfCheckTouchTarget::ActivateCancel) => {
+                self.self_check_overlay = SelfCheckOverlay::None;
+                self.needs_redraw = true;
+                None
+            }
+            Some(SelfCheckTouchTarget::ActivateConfirm) => {
+                self.self_check_overlay = SelfCheckOverlay::BmsActivateProgress;
+                self.needs_redraw = true;
+                Some(UiAction::RequestBmsActivation)
+            }
+            Some(SelfCheckTouchTarget::Bq40Card) => {
+                if self.self_check_overlay == SelfCheckOverlay::None
+                    && front_panel_scene::is_bq40_offline(&self.self_check_snapshot)
+                    && self.bms_activation_state != BmsActivationState::Pending
+                {
+                    self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
+                    self.needs_redraw = true;
+                }
+                None
+            }
+            None => None,
+        }
     }
 
     fn snapshot_to_model(&self, snapshot: InputSnapshot) -> UiModel {
@@ -528,13 +654,15 @@ impl FrontPanel {
         let model = self.snapshot_to_model(snapshot);
         let variant = self.ui_variant;
         let self_check_snapshot = self.self_check_snapshot;
+        let self_check_overlay = self.self_check_overlay;
         {
             let mut painter = PanelPainter { panel: self };
-            front_panel_scene::render_frame_with_self_check(
+            front_panel_scene::render_frame_with_self_check_overlay(
                 &mut painter,
                 &model,
                 variant,
                 Some(&self_check_snapshot),
+                self_check_overlay,
             )?;
         }
         self.frame_no = self.frame_no.wrapping_add(1);

@@ -7,7 +7,9 @@ use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
 use esp_hal::time::{Duration, Instant};
 
-use crate::front_panel_scene::{SelfCheckCommState, SelfCheckUiSnapshot, UpsMode};
+use crate::front_panel_scene::{
+    is_bq40_offline, BmsActivationState, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+};
 use crate::irq::IrqSnapshot;
 
 use ::tps55288::Error as TpsError;
@@ -29,6 +31,10 @@ const BMS_ADDR_LOG: &str = "0x0b/0x16";
 
 #[cfg(not(feature = "bms-dual-probe-diag"))]
 const BMS_ADDR_LOG: &str = "0x0b";
+
+const BMS_ACTIVATION_WINDOW: Duration = Duration::from_secs(15);
+const BMS_ACTIVATION_FORCE_ICHG_MA: u16 = 50;
+const BMS_ACTIVATION_FORCE_IINDPM_MA: u16 = 100;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EnabledOutputs {
@@ -719,8 +725,18 @@ pub struct PowerManager<'d, I2C> {
     chg_enabled: bool,
     charger_allowed: bool,
     chg_last_int_poll_at: Option<Instant>,
+    bms_activation_state: BmsActivationState,
+    bms_activation_deadline: Option<Instant>,
+    bms_activation_backup: Option<ChargerActivationBackup>,
 
     ui_snapshot: SelfCheckUiSnapshot,
+}
+
+#[derive(Clone, Copy)]
+struct ChargerActivationBackup {
+    ctrl0: u8,
+    ichg_reg: u16,
+    iindpm_reg: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -796,6 +812,9 @@ where
             chg_enabled: false,
             charger_allowed,
             chg_last_int_poll_at: None,
+            bms_activation_state: BmsActivationState::Idle,
+            bms_activation_deadline: None,
+            bms_activation_backup: None,
             ui_snapshot: cfg.self_check_snapshot,
         }
     }
@@ -867,11 +886,153 @@ where
         self.maybe_handle_fault(irq);
         self.maybe_poll_charger(irq);
         self.maybe_poll_bms(irq);
+        self.maybe_track_bms_activation();
         self.maybe_print_telemetry();
     }
 
     pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
         self.ui_snapshot
+    }
+
+    pub fn bms_activation_state(&self) -> BmsActivationState {
+        self.bms_activation_state
+    }
+
+    pub fn clear_bms_activation_state(&mut self) {
+        if self.bms_activation_state != BmsActivationState::Pending {
+            self.bms_activation_state = BmsActivationState::Idle;
+        }
+    }
+
+    pub fn request_bms_activation(&mut self) {
+        if self.bms_activation_state == BmsActivationState::Pending {
+            return;
+        }
+        if !is_bq40_offline(&self.ui_snapshot) {
+            return;
+        }
+        if !self.charger_allowed {
+            self.finish_bms_activation(BmsActivationState::FailedComm);
+            return;
+        }
+
+        let status0 = match bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_0) {
+            Ok(v) => v,
+            Err(_) => {
+                self.finish_bms_activation(BmsActivationState::FailedComm);
+                return;
+            }
+        };
+        let input_present = (status0 & bq25792::status0::VBUS_PRESENT_STAT) != 0
+            || (status0 & bq25792::status0::AC1_PRESENT_STAT) != 0
+            || (status0 & bq25792::status0::AC2_PRESENT_STAT) != 0
+            || (status0 & bq25792::status0::PG_STAT) != 0;
+        if !input_present {
+            self.finish_bms_activation(BmsActivationState::FailedNoInput);
+            return;
+        }
+
+        let ctrl0 = match bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0) {
+            Ok(v) => v,
+            Err(_) => {
+                self.finish_bms_activation(BmsActivationState::FailedComm);
+                return;
+            }
+        };
+        let ichg_reg = match bq25792::read_u16(&mut self.i2c, bq25792::reg::CHARGE_CURRENT_LIMIT) {
+            Ok(v) => v,
+            Err(_) => {
+                self.finish_bms_activation(BmsActivationState::FailedComm);
+                return;
+            }
+        };
+        let iindpm_reg = match bq25792::read_u16(&mut self.i2c, bq25792::reg::INPUT_CURRENT_LIMIT) {
+            Ok(v) => v,
+            Err(_) => {
+                self.finish_bms_activation(BmsActivationState::FailedComm);
+                return;
+            }
+        };
+        self.bms_activation_backup = Some(ChargerActivationBackup {
+            ctrl0,
+            ichg_reg,
+            iindpm_reg,
+        });
+
+        self.chg_ilim_hiz_brk.set_low();
+        if bq25792::set_charge_current_limit_ma(&mut self.i2c, BMS_ACTIVATION_FORCE_ICHG_MA)
+            .is_err()
+            || bq25792::set_input_current_limit_ma(&mut self.i2c, BMS_ACTIVATION_FORCE_IINDPM_MA)
+                .is_err()
+        {
+            self.finish_bms_activation(BmsActivationState::FailedComm);
+            return;
+        }
+
+        let desired_ctrl0 = (ctrl0 | bq25792::ctrl0::EN_CHG) & !bq25792::ctrl0::EN_HIZ;
+        if bq25792::write_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_CONTROL_0,
+            desired_ctrl0,
+        )
+        .is_err()
+        {
+            self.finish_bms_activation(BmsActivationState::FailedComm);
+            return;
+        }
+        self.chg_ce.set_low();
+        self.chg_enabled = true;
+
+        let now = Instant::now();
+        self.bms_activation_state = BmsActivationState::Pending;
+        self.bms_activation_deadline = Some(now + BMS_ACTIVATION_WINDOW);
+        self.bms_next_poll_at = now;
+        self.chg_next_poll_at = now;
+    }
+
+    fn maybe_track_bms_activation(&mut self) {
+        if self.bms_activation_state != BmsActivationState::Pending {
+            return;
+        }
+
+        let bms_online = self.ui_snapshot.bq40z50_soc_pct.is_some()
+            && matches!(
+                self.ui_snapshot.bq40z50,
+                SelfCheckCommState::Ok | SelfCheckCommState::Warn
+            );
+        if bms_online {
+            self.finish_bms_activation(BmsActivationState::Succeeded);
+            return;
+        }
+
+        let Some(deadline) = self.bms_activation_deadline else {
+            self.finish_bms_activation(BmsActivationState::FailedComm);
+            return;
+        };
+        if Instant::now() >= deadline {
+            self.finish_bms_activation(BmsActivationState::FailedTimeout);
+        }
+    }
+
+    fn finish_bms_activation(&mut self, result: BmsActivationState) {
+        if let Some(backup) = self.bms_activation_backup.take() {
+            let _ = bq25792::write_u16(
+                &mut self.i2c,
+                bq25792::reg::CHARGE_CURRENT_LIMIT,
+                backup.ichg_reg,
+            );
+            let _ = bq25792::write_u16(
+                &mut self.i2c,
+                bq25792::reg::INPUT_CURRENT_LIMIT,
+                backup.iindpm_reg,
+            );
+            let _ = bq25792::write_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0, backup.ctrl0);
+        }
+        self.chg_ce.set_high();
+        self.chg_enabled = false;
+        self.bms_activation_deadline = None;
+        self.bms_activation_state = result;
+        self.chg_next_poll_at = Instant::now();
     }
 
     fn recompute_ui_mode(&mut self) {
@@ -1210,9 +1371,11 @@ where
             }
         };
 
+        let activation_pending = self.bms_activation_state == BmsActivationState::Pending;
+
         // Only enforce ship-FET path when charging is policy-enabled.
         let (sfet_present_before, sfet_present_after, ship_mode_before, ship_mode_after) =
-            if self.cfg.charger_enabled {
+            if self.cfg.charger_enabled || activation_pending {
                 match bq25792::ensure_ship_fet_path_enabled(&mut self.i2c) {
                     Ok(state) => (
                         (state.ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
@@ -1293,8 +1456,13 @@ where
         let input_present = vbus_present || ac1_present || ac2_present || pg;
         let can_enable = input_present && !ts_cold && !ts_hot;
         let normal_allow_charge = can_enable && vbat_present;
-        let force_allow_charge = self.cfg.force_min_charge && can_enable;
-        let allow_charge = (normal_allow_charge || force_allow_charge) && self.cfg.charger_enabled;
+        let force_allow_charge =
+            (self.cfg.force_min_charge && can_enable) || (activation_pending && can_enable);
+        let allow_charge = if activation_pending {
+            force_allow_charge
+        } else {
+            (normal_allow_charge || force_allow_charge) && self.cfg.charger_enabled
+        };
         let mut applied_ctrl0 = ctrl0;
         let mut applied_ichg_ma: Option<u16> = None;
         let mut applied_iindpm_ma: Option<u16> = None;
@@ -1304,14 +1472,14 @@ where
             self.chg_ilim_hiz_brk.set_low();
 
             if force_allow_charge {
-                const FORCE_MIN_ICHG_MA: u16 = 50;
-                const FORCE_MIN_IINDPM_MA: u16 = 100;
-
                 fn decode_cur_ma(reg: u16) -> u16 {
                     (reg & 0x01FF) * 10
                 }
 
-                match bq25792::set_charge_current_limit_ma(&mut self.i2c, FORCE_MIN_ICHG_MA) {
+                match bq25792::set_charge_current_limit_ma(
+                    &mut self.i2c,
+                    BMS_ACTIVATION_FORCE_ICHG_MA,
+                ) {
                     Ok(v) => applied_ichg_ma = Some(decode_cur_ma(v)),
                     Err(e) => {
                         self.mark_charger_poll_failed(now);
@@ -1323,7 +1491,10 @@ where
                     }
                 }
 
-                match bq25792::set_input_current_limit_ma(&mut self.i2c, FORCE_MIN_IINDPM_MA) {
+                match bq25792::set_input_current_limit_ma(
+                    &mut self.i2c,
+                    BMS_ACTIVATION_FORCE_IINDPM_MA,
+                ) {
                     Ok(v) => applied_iindpm_ma = Some(decode_cur_ma(v)),
                     Err(e) => {
                         self.mark_charger_poll_failed(now);
@@ -1430,6 +1601,9 @@ where
     }
 
     fn mark_charger_poll_failed(&mut self, now: Instant) {
+        if self.bms_activation_state == BmsActivationState::Pending {
+            self.finish_bms_activation(BmsActivationState::FailedComm);
+        }
         self.chg_ce.set_high();
         self.chg_enabled = false;
         self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
