@@ -613,7 +613,7 @@ impl FrontPanel {
             }
             Some(SelfCheckTouchTarget::Bq40Card) => {
                 if self.self_check_overlay == SelfCheckOverlay::None
-                    && front_panel_scene::is_bq40_offline(&self.self_check_snapshot)
+                    && front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
                     && self.bms_activation_state != BmsActivationState::Pending
                 {
                     self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;

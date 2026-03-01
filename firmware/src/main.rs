@@ -379,6 +379,8 @@ fn main() -> ! {
 
     let cfg = output::Config {
         enabled_outputs: self_test.enabled_outputs,
+        outputs_restore_on_bms_ready: self_test.outputs_restore_on_bms_ready,
+        outputs_blocked_by_bms: self_test.outputs_blocked_by_bms,
         vout_mv: DEFAULT_VOUT_MV,
         ilimit_ma: DEFAULT_ILIMIT_MA,
         telemetry_period: TELEMETRY_PERIOD,

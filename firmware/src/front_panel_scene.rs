@@ -119,9 +119,11 @@ pub struct SelfCheckUiSnapshot {
     pub bq25792: SelfCheckCommState,
     pub bq25792_allow_charge: Option<bool>,
     pub bq25792_ichg_ma: Option<u16>,
+    pub bq25792_vbat_present: Option<bool>,
     pub bq40z50: SelfCheckCommState,
     pub bq40z50_soc_pct: Option<u16>,
     pub bq40z50_rca_alarm: Option<bool>,
+    pub bq40z50_discharge_ready: Option<bool>,
     pub tps_a: SelfCheckCommState,
     pub tps_a_enabled: Option<bool>,
     pub tps_a_iout_ma: Option<i32>,
@@ -147,9 +149,11 @@ impl SelfCheckUiSnapshot {
             bq25792: SelfCheckCommState::Pending,
             bq25792_allow_charge: None,
             bq25792_ichg_ma: None,
+            bq25792_vbat_present: None,
             bq40z50: SelfCheckCommState::Pending,
             bq40z50_soc_pct: None,
             bq40z50_rca_alarm: None,
+            bq40z50_discharge_ready: None,
             tps_a: SelfCheckCommState::Pending,
             tps_a_enabled: None,
             tps_a_iout_ma: None,
@@ -215,6 +219,12 @@ const SELF_CHECK_CONFIRM_BTN_H: u16 = 24;
 #[allow(dead_code)]
 pub fn is_bq40_offline(snapshot: &SelfCheckUiSnapshot) -> bool {
     snapshot.bq40z50 == SelfCheckCommState::Err && snapshot.bq40z50_soc_pct.is_none()
+}
+
+#[allow(dead_code)]
+pub fn is_bq40_activation_needed(snapshot: &SelfCheckUiSnapshot) -> bool {
+    is_bq40_offline(snapshot)
+        || (snapshot.bq40z50_soc_pct.is_some() && snapshot.bq40z50_discharge_ready == Some(false))
 }
 
 #[allow(dead_code)]
