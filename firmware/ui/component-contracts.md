@@ -73,7 +73,8 @@
 - Required fields: `module_name`, `comm_state`, `key_param`。
 - Forbidden fields: 不属于该模块的参数。
 - Allowed states: 基础态 `PEND/OK/WARN/ERR/N/A` + 模块派生态 `RUN/LOCK/IDLE/RCA/HOT`。
-- Token refs: `Type.Compact`, `Type.NumCompact`, `Color.State.*`, `Color.Text.Primary`。
+- `comm_state` 语义由固定词形承载，不通过状态色做额外区分。
+- Token refs: `Type.Compact`, `Type.NumCompact`, `Color.Text.Primary`, `Color.Text.Secondary`。
 - Geometry anchor: 左列 `x=6`，右列 `x=163`，每卡高 `29`。
 
 ### TopBar (Self-check)

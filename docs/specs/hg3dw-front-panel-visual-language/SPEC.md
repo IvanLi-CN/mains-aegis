@@ -23,7 +23,7 @@
 
 ### Non-goals
 
-- 不修改固件实现代码与渲染逻辑。
+- 不做功能性重设计（不改业务状态机、不改页面结构与交互行为）。
 - 不新增页面、不替换现有冻结图资产。
 - 不变更分辨率、字体资源与硬件初始化流程。
 
@@ -36,10 +36,12 @@
 - 新增 `firmware/ui/visual-regression-checklist.md`。
 - 更新 `firmware/ui/README.md`、`firmware/ui/dashboard-design.md`、`firmware/ui/self-check-design.md`。
 - 更新 `docs/README.md` 与 `docs/specs/README.md` 索引。
+- 在不改变布局与业务语义前提下，允许对 `firmware/src/front_panel_scene.rs` 做最小字体门禁对齐（移除 `<10px` 字形、Compact 角色复用白名单字体）。
 
 ### Out of scope
 
-- `firmware/src/front_panel_scene.rs`、`firmware/src/front_panel.rs`、`firmware/src/main.rs`。
+- `firmware/src/front_panel.rs`、`firmware/src/main.rs`。
+- `firmware/src/front_panel_scene.rs` 的业务逻辑改动（状态机、页面结构、交互流程）。
 - `firmware/ui/assets/*` 的新增与替换。
 
 ## 需求（Requirements）
@@ -52,7 +54,7 @@
 - 组件契约必须覆盖 `TopBar`、`KpiPanel`、`InfoPanel`、`BatteryCard`、`ChargeCard`、`DischgCard`、`DiagCard`、`ActivationDialog`。
 - 状态语义必须统一 `UpsMode`、`SelfCheckCommState`、`BmsActivationState`、`UiFocus`、`touch_irq`。
 - 业务口径固定：`ChargeCard` 仅 `STANDBY` 可充电，其他模式显示 `LOCK/NOAC`。
-- 视觉回归清单的每条规则必须至少绑定一个 `firmware/ui/assets` 资产文件。
+- 视觉回归清单中的视觉规则必须绑定 `firmware/ui/assets` 资产；全局离线/入口/白名单检查允许使用命令或 targets 验证。
 
 ### SHOULD
 
@@ -74,7 +76,7 @@
 ### Edge cases / errors
 
 - 若页面文档与视觉规范冲突，以 `design-language.md` 为准并在页面文档回链。
-- 若某规则无法映射到资产，规则必须标记为待补充，不得视为通过。
+- 若视觉规则无法映射到资产，规则必须标记为待补充，不得视为通过；全局检查项按命令/targets 验收。
 
 ## 接口契约（Interfaces & Contracts）
 
@@ -103,7 +105,7 @@ None
 ## 实现前置条件（Definition of Ready / Preconditions）
 
 - 目标、范围、非目标已冻结。
-- 文档型交付边界已确认（不改实现代码）。
+- 文档型交付边界已确认（文档为主，允许最小字体门禁对齐代码改动）。
 - 现有冻结资产目录可用：`firmware/ui/assets/`。
 
 ## 非功能性验收 / 质量门槛（Quality Gates）
@@ -165,6 +167,7 @@ None
 - 2026-03-02: 新建规格并完成设计语言、组件契约、回归清单及索引同步。
 - 2026-03-02: 增补 bitmap 字体白名单、字高白名单与配色/字体预览图资产。
 - 2026-03-02: 收敛字体策略为 `>=10px`，移除 `8px` 字形白名单并同步代码绑定。
+- 2026-03-02: 对齐规格边界，明确“文档为主 + 最小字体门禁代码对齐”与“全局检查项可用命令验收”。
 
 ## 参考（References）
 

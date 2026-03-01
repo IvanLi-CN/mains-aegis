@@ -138,9 +138,9 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 基础通信态：
 
 - `PEND`: 初始化中，使用中性色（secondary text + default border）。
-- `OK`: 通过，优先 `Color.State.Success`。
-- `WARN`: 可运行但异常，优先 `Color.State.Warning`。
-- `ERR`: 失败，优先 `Color.State.Error`。
+- `OK`: 通过，文案固定 `OK`，当前基线使用中性色文本（`Color.Text.Secondary`）。
+- `WARN`: 可运行但异常，文案固定 `WARN`，当前基线使用中性色文本（`Color.Text.Secondary`）。
+- `ERR`: 失败，文案固定 `ERR`，当前基线使用中性色文本（`Color.Text.Secondary`）。
 - `N/A`: 模块不可用或未接入，文案固定 `N/A`。
 
 模块派生态（由基础态与模块上下文派生）：
