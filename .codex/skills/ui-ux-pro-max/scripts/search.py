@@ -6,12 +6,14 @@ Usage: python search.py "<query>" [--domain <domain>] [--stack <stack>] [--max-r
        python search.py "<query>" --design-system [-p "Project Name"]
        python search.py "<query>" --design-system --persist [-p "Project Name"] [--page "dashboard"]
 
-Domains: style, color, chart, landing, product, ux, typography
-Stacks: html-tailwind, react, nextjs
+Domains: style, color, chart, landing, product, ux, typography, icons, react, web
+Stacks: html-tailwind, react, nextjs, astro, vue, nuxtjs, nuxt-ui, svelte, swiftui,
+        react-native, flutter, shadcn, jetpack-compose
 
 Persistence (Master + Overrides pattern):
-  --persist    Save design system to design-system/MASTER.md
-  --page       Also create a page-specific override file in design-system/pages/
+  --persist    Save design system to design-system/<project-slug>/MASTER.md
+  --page       Also create a page-specific override file in
+               design-system/<project-slug>/pages/
 """
 
 import argparse
@@ -26,6 +28,34 @@ def positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("max-results must be >= 1")
     return parsed
+
+
+def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """Reject conflicting or no-op argument combinations early."""
+    if args.design_system:
+        if args.stack or args.domain:
+            parser.error("--design-system cannot be combined with --stack or --domain")
+        if (args.page or args.output_dir) and not args.persist:
+            parser.error("--page and --output-dir require --persist with --design-system")
+    else:
+        design_system_only_args = []
+        if args.persist:
+            design_system_only_args.append("--persist")
+        if args.page:
+            design_system_only_args.append("--page")
+        if args.output_dir:
+            design_system_only_args.append("--output-dir")
+        if args.project_name:
+            design_system_only_args.append("--project-name")
+        if args.format != "ascii":
+            design_system_only_args.append("--format")
+        if design_system_only_args:
+            parser.error(
+                f"{', '.join(design_system_only_args)} require --design-system"
+            )
+
+    if args.stack and args.domain:
+        parser.error("--stack cannot be combined with --domain")
 
 
 def format_output(result):
@@ -66,11 +96,33 @@ if __name__ == "__main__":
     parser.add_argument("--project-name", "-p", type=str, default=None, help="Project name for design system output")
     parser.add_argument("--format", "-f", choices=["ascii", "markdown"], default="ascii", help="Output format for design system")
     # Persistence (Master + Overrides pattern)
-    parser.add_argument("--persist", action="store_true", help="Save design system to design-system/MASTER.md (creates hierarchical structure)")
-    parser.add_argument("--page", type=str, default=None, help="Create page-specific override file in design-system/pages/")
-    parser.add_argument("--output-dir", "-o", type=str, default=None, help="Output directory for persisted files (default: current directory)")
+    parser.add_argument(
+        "--persist",
+        action="store_true",
+        help=(
+            "Save design system to design-system/<project-slug>/MASTER.md "
+            "(creates hierarchical structure)"
+        ),
+    )
+    parser.add_argument(
+        "--page",
+        type=str,
+        default=None,
+        help=(
+            "Create page-specific override file in "
+            "design-system/<project-slug>/pages/"
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        type=str,
+        default=None,
+        help="Output directory for persisted files (requires --design-system --persist)",
+    )
 
     args = parser.parse_args()
+    validate_args(args, parser)
 
     # Design system takes priority
     if args.design_system:
