@@ -411,6 +411,7 @@ fn main() -> ! {
     );
     power.init_best_effort();
     front_panel.update_self_check_snapshot(power.ui_snapshot());
+    front_panel.update_bms_activation_state(power.bms_activation_state());
 
     let mut irq_tracker = irq::IrqTracker::new();
     let mut last_irq_log_at: Option<Instant> = None;
@@ -425,7 +426,19 @@ fn main() -> ! {
             let irq_events = irq_tracker.take_delta();
             power.tick(&irq_events);
             front_panel.update_self_check_snapshot(power.ui_snapshot());
-            front_panel.tick();
+            front_panel.update_bms_activation_state(power.bms_activation_state());
+            if let Some(action) = front_panel.tick() {
+                match action {
+                    front_panel::UiAction::RequestBmsActivation => {
+                        power.request_bms_activation();
+                        front_panel.update_bms_activation_state(power.bms_activation_state());
+                    }
+                    front_panel::UiAction::ClearBmsActivationResult => {
+                        power.clear_bms_activation_state();
+                        front_panel.update_bms_activation_state(power.bms_activation_state());
+                    }
+                }
+            }
             if irq_events.any()
                 && output::tps55288::should_log_fault(
                     Instant::now(),
@@ -458,7 +471,19 @@ fn main() -> ! {
             let irq_events = irq_tracker.take_delta();
             power.tick(&irq_events);
             front_panel.update_self_check_snapshot(power.ui_snapshot());
-            front_panel.tick();
+            front_panel.update_bms_activation_state(power.bms_activation_state());
+            if let Some(action) = front_panel.tick() {
+                match action {
+                    front_panel::UiAction::RequestBmsActivation => {
+                        power.request_bms_activation();
+                        front_panel.update_bms_activation_state(power.bms_activation_state());
+                    }
+                    front_panel::UiAction::ClearBmsActivationResult => {
+                        power.clear_bms_activation_state();
+                        front_panel.update_bms_activation_state(power.bms_activation_state());
+                    }
+                }
+            }
         }
     }
 }
