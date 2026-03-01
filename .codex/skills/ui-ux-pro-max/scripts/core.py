@@ -109,7 +109,8 @@ class BM25:
     def tokenize(self, text):
         """Lowercase, split, remove punctuation, filter short words"""
         text = re.sub(r'[^\w\s]', ' ', str(text).lower())
-        return [w for w in text.split() if len(w) > 2]
+        short_whitelist = {"ui", "ux", "ai", "js"}
+        return [w for w in text.split() if len(w) > 2 or w in short_whitelist]
 
     def fit(self, documents):
         """Build BM25 index from documents"""
@@ -190,6 +191,16 @@ def _search_csv(filepath, search_cols, output_cols, query, max_results):
 def detect_domain(query):
     """Auto-detect the most relevant domain from query"""
     query_lower = query.lower()
+    query_tokens = set(re.findall(r"[a-z0-9][a-z0-9+.-]*", query_lower))
+
+    def keyword_matches(keyword: str) -> bool:
+        kw = keyword.lower()
+        if kw == "#":
+            return "#" in query_lower
+        if " " in kw:
+            pattern = r"(?<!\\w)" + re.escape(kw).replace(r"\\ ", r"\\s+") + r"(?!\\w)"
+            return re.search(pattern, query_lower) is not None
+        return kw in query_tokens
 
     domain_keywords = {
         "color": ["color", "palette", "hex", "#", "rgb"],
@@ -204,7 +215,7 @@ def detect_domain(query):
         "web": ["aria", "focus", "outline", "semantic", "virtualize", "autocomplete", "form", "input type", "preconnect"]
     }
 
-    scores = {domain: sum(1 for kw in keywords if kw in query_lower) for domain, keywords in domain_keywords.items()}
+    scores = {domain: sum(1 for kw in keywords if keyword_matches(kw)) for domain, keywords in domain_keywords.items()}
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else "style"
 

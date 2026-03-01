@@ -14,6 +14,7 @@ Usage:
 """
 
 import csv
+import hashlib
 import json
 import os
 import re
@@ -274,12 +275,13 @@ def format_ascii_box(design_system: dict) -> str:
 
     # Build output lines
     lines = []
-    w = BOX_WIDTH - 1
+    inner_width = BOX_WIDTH - 1
+    empty_line = "|" + " " * inner_width + "|"
 
-    lines.append("+" + "-" * w + "+")
+    lines.append("+" + "-" * inner_width + "+")
     lines.append(f"|  TARGET: {project} - RECOMMENDED DESIGN SYSTEM".ljust(BOX_WIDTH) + "|")
-    lines.append("+" + "-" * w + "+")
-    lines.append("|" + " " * BOX_WIDTH + "|")
+    lines.append("+" + "-" * inner_width + "+")
+    lines.append(empty_line)
 
     # Pattern section
     lines.append(f"|  PATTERN: {pattern.get('name', '')}".ljust(BOX_WIDTH) + "|")
@@ -290,7 +292,7 @@ def format_ascii_box(design_system: dict) -> str:
     lines.append("|     Sections:".ljust(BOX_WIDTH) + "|")
     for i, section in enumerate(sections, 1):
         lines.append(f"|       {i}. {section}".ljust(BOX_WIDTH) + "|")
-    lines.append("|" + " " * BOX_WIDTH + "|")
+    lines.append(empty_line)
 
     # Style section
     lines.append(f"|  STYLE: {style.get('name', '')}".ljust(BOX_WIDTH) + "|")
@@ -303,7 +305,7 @@ def format_ascii_box(design_system: dict) -> str:
     if style.get("performance") or style.get("accessibility"):
         perf_a11y = f"Performance: {style.get('performance', '')} | Accessibility: {style.get('accessibility', '')}"
         lines.append(f"|     {perf_a11y}".ljust(BOX_WIDTH) + "|")
-    lines.append("|" + " " * BOX_WIDTH + "|")
+    lines.append(empty_line)
 
     # Colors section
     lines.append("|  COLORS:".ljust(BOX_WIDTH) + "|")
@@ -315,7 +317,7 @@ def format_ascii_box(design_system: dict) -> str:
     if colors.get("notes"):
         for line in wrap_text(f"Notes: {colors.get('notes', '')}", "|     ", BOX_WIDTH):
             lines.append(line.ljust(BOX_WIDTH) + "|")
-    lines.append("|" + " " * BOX_WIDTH + "|")
+    lines.append(empty_line)
 
     # Typography section
     lines.append(f"|  TYPOGRAPHY: {typography.get('heading', '')} / {typography.get('body', '')}".ljust(BOX_WIDTH) + "|")
@@ -326,24 +328,31 @@ def format_ascii_box(design_system: dict) -> str:
         for line in wrap_text(f"Best For: {typography.get('best_for', '')}", "|     ", BOX_WIDTH):
             lines.append(line.ljust(BOX_WIDTH) + "|")
     if typography.get("google_fonts_url"):
-        lines.append(f"|     Google Fonts: {typography.get('google_fonts_url', '')}".ljust(BOX_WIDTH) + "|")
+        url_line = f"|     Google Fonts: {typography.get('google_fonts_url', '')}"
+        if len(url_line) > BOX_WIDTH:
+            url_line = url_line[:BOX_WIDTH - 3] + "..."
+        lines.append(url_line.ljust(BOX_WIDTH) + "|")
     if typography.get("css_import"):
-        lines.append(f"|     CSS Import: {typography.get('css_import', '')[:70]}...".ljust(BOX_WIDTH) + "|")
-    lines.append("|" + " " * BOX_WIDTH + "|")
+        css_snippet = typography.get("css_import", "")
+        css_line = f"|     CSS Import: {css_snippet}"
+        if len(css_line) > BOX_WIDTH:
+            css_line = css_line[:BOX_WIDTH - 3] + "..."
+        lines.append(css_line.ljust(BOX_WIDTH) + "|")
+    lines.append(empty_line)
 
     # Key Effects section
     if effects:
         lines.append("|  KEY EFFECTS:".ljust(BOX_WIDTH) + "|")
         for line in wrap_text(effects, "|     ", BOX_WIDTH):
             lines.append(line.ljust(BOX_WIDTH) + "|")
-        lines.append("|" + " " * BOX_WIDTH + "|")
+        lines.append(empty_line)
 
     # Anti-patterns section
     if anti_patterns:
         lines.append("|  AVOID (Anti-patterns):".ljust(BOX_WIDTH) + "|")
         for line in wrap_text(anti_patterns, "|     ", BOX_WIDTH):
             lines.append(line.ljust(BOX_WIDTH) + "|")
-        lines.append("|" + " " * BOX_WIDTH + "|")
+        lines.append(empty_line)
 
     # Pre-Delivery Checklist section
     lines.append("|  PRE-DELIVERY CHECKLIST:".ljust(BOX_WIDTH) + "|")
@@ -358,9 +367,9 @@ def format_ascii_box(design_system: dict) -> str:
     ]
     for item in checklist_items:
         lines.append(f"|     {item}".ljust(BOX_WIDTH) + "|")
-    lines.append("|" + " " * BOX_WIDTH + "|")
+    lines.append(empty_line)
 
-    lines.append("+" + "-" * w + "+")
+    lines.append("+" + "-" * inner_width + "+")
 
     return "\n".join(lines)
 
@@ -491,8 +500,12 @@ def generate_design_system(query: str, project_name: str = None, output_format: 
 # ============ PERSISTENCE FUNCTIONS ============
 def safe_slug(value: str, fallback: str = "default") -> str:
     """Convert arbitrary user input into a filesystem-safe slug."""
-    normalized = re.sub(r"[^a-z0-9]+", "-", str(value).lower()).strip("-")
-    return normalized or fallback
+    raw = str(value)
+    normalized = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+    if normalized:
+        return normalized
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+    return f"{fallback}-{digest}" if fallback else digest
 
 
 def persist_design_system(design_system: dict, page: str = None, output_dir: str = None, page_query: str = None) -> dict:
