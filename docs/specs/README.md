@@ -20,4 +20,4 @@
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
 | 6qrjs | Front panel industrial UI preview（320x172） | 重新设计（#7n4qd） | `6qrjs-front-panel-industrial-ui-preview/SPEC.md` | 2026-03-01 | 视觉基线保留；自检页运行语义迁移到 #7n4qd |
-| 7n4qd | MCU self-check live panel (resident Variant C) | 已完成 | `7n4qd-mcu-self-check-live-panel/SPEC.md` | 2026-03-01 | 自检期间实时进度 + 自检后常驻 + 真实数据刷新 + 禁用 CENTER 切页 |
+| 7n4qd | MCU self-check live panel (resident Variant C) | 已完成 | `7n4qd-mcu-self-check-live-panel/SPEC.md` | 2026-03-02 | 自检期间实时进度 + 自检后常驻 + 真实数据刷新 + BMS 放电就绪门控与恢复 |

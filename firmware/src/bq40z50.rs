@@ -28,11 +28,23 @@ pub mod cmd {
     pub const REMAINING_CAPACITY: u8 = 0x0F;
     pub const FULL_CHARGE_CAPACITY: u8 = 0x10;
     pub const BATTERY_STATUS: u8 = 0x16;
+    pub const OPERATION_STATUS: u8 = 0x54;
 
     pub const CELL_VOLTAGE_4: u8 = 0x3C;
     pub const CELL_VOLTAGE_3: u8 = 0x3D;
     pub const CELL_VOLTAGE_2: u8 = 0x3E;
     pub const CELL_VOLTAGE_1: u8 = 0x3F;
+}
+
+pub mod operation_status {
+    pub const SLEEP: u16 = 1 << 15;
+    pub const XCHG: u16 = 1 << 14;
+    pub const XDSG: u16 = 1 << 13;
+    pub const PF: u16 = 1 << 12;
+    pub const PCHG: u16 = 1 << 3;
+    pub const CHG: u16 = 1 << 2;
+    pub const DSG: u16 = 1 << 1;
+    pub const PRES: u16 = 1 << 0;
 }
 
 pub mod battery_status {
