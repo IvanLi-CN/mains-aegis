@@ -6,6 +6,8 @@
 
 - 运行语义基线：[../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md](../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md)
 - 视觉冻结基线：[../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md](../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md)
+- 视觉规范来源：[design-language.md](design-language.md)
+- 组件契约来源：[component-contracts.md](component-contracts.md)
 - 分辨率：`320x172`
 
 ## 2. 页面模块分区图
@@ -16,7 +18,7 @@
 
 | 编号 | 模块 | 几何（px） | 固定语义 |
 | --- | --- | --- | --- |
-| 1 | 顶栏 Top bar | `x=0 y=0 w=320 h=20` | 标题固定 `SELF CHECK`，右侧显示当前 UPS 模式 |
+| 1 | 顶栏 Top bar | `x=0 y=0 w=320 h=18` | 标题固定 `SELF CHECK`，右侧显示当前 UPS 模式 |
 | 2-6 | 左列 5 张诊断卡 | `x=6 y=22..166 w=151 h=29` | 每卡两行：`MODULE + COMM` / `KEY PARAM` |
 | 7-11 | 右列 5 张诊断卡 | `x=163 y=22..166 w=151 h=29` | 每卡两行：`MODULE + COMM` / `KEY PARAM` |
 
@@ -41,6 +43,7 @@
 - 自检阶段按模块探测进度实时更新状态：`PEND -> OK/WARN/ERR/N/A`。
 - 自检完成后保持 `SELF CHECK` 页面并持续刷新真实运行数据。
 - 本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard。
+- 视觉样式（状态颜色、字体层级、交互高亮）以 [design-language.md](design-language.md) 为准，本页保留布局与语义冻结。
 
 ## 6. 冻结渲染图（四场景）
 
