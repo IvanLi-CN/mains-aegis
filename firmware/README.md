@@ -236,6 +236,10 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，有效显示区 `320x172`，横屏，SPI）并渲染工业仪表风 UI：
 
+- 当前确定设计文档入口：`firmware/ui/front-panel-design.md`
+- Dashboard 模块设计：`firmware/ui/dashboard-design.md`
+- Self-check 模块设计：`firmware/ui/self-check-design.md`
+- 规格追溯：`docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md` 与 `docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`
 - Dashboard 工作模式（项目口径）：
   - `BYPASS`（关闭）：不提供 UPS 功能，输入直通输出（bypass）
   - `STANDBY`（待机）：输入存在，TPS55288 无实际输出电流
@@ -259,8 +263,21 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - `Variant C` 自检页固定显示 10 个可通信模块，采用“双列大字号诊断卡”布局（每卡两行：`MODULE+COMM` 与 `KEY PARAM`）：
   - `GC9307`、`TCA6408A`、`FUSB302`、`INA3221`、`BQ25792`
   - `BQ40Z50`、`TPS55288-A`、`TPS55288-B`、`TMP112-A`、`TMP112-B`
-- Dashboard 配色风格固定为 3 套：`Variant A = Calm Blue`、`Variant B = Neutral`、`Variant D = Warm`
-- Dashboard 间距与行距冻结参数见：`docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`
+- Dashboard 当前验收口径固定为 `Variant B = Neutral`；`Variant A/D` 仅保留为历史参考样式
+- Dashboard 间距与行距冻结参数见：`firmware/ui/front-panel-design.md`（来源追溯仍在 `docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`）
+
+固件 UI 渲染图（文档内直显）：
+
+![Dashboard Variant B Module Map](ui/assets/dashboard-b-module-map.png)
+![Self-check Variant C Module Map](ui/assets/self-check-c-module-map.png)
+![Dashboard Variant B - BYPASS](ui/assets/dashboard-b-off-mode.png)
+![Dashboard Variant B - STANDBY](ui/assets/dashboard-b-standby-mode.png)
+![Dashboard Variant B - ASSIST](ui/assets/dashboard-b-supplement-mode.png)
+![Dashboard Variant B - BACKUP](ui/assets/dashboard-b-backup-mode.png)
+![Self-check Variant C - STANDBY idle](ui/assets/self-check-c-standby-idle.png)
+![Self-check Variant C - STANDBY charger-focus](ui/assets/self-check-c-standby-right.png)
+![Self-check Variant C - ASSIST output-focus](ui/assets/self-check-c-assist-up.png)
+![Self-check Variant C - BACKUP irq-focus](ui/assets/self-check-c-backup-touch.png)
 
 渲染架构采用“同源渲染”：
 
