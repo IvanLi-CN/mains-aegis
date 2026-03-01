@@ -207,7 +207,7 @@ def detect_domain(query):
     domain_keywords = {
         "color": ["color", "palette", "hex", "#", "rgb"],
         "chart": ["chart", "graph", "visualization", "trend", "bar", "pie", "scatter", "heatmap", "funnel"],
-        "landing": ["landing", "page", "cta", "conversion", "hero", "testimonial", "pricing", "section"],
+        "landing": ["landing", "landing page", "cta", "conversion", "hero", "testimonial", "pricing", "section"],
         "product": ["saas", "ecommerce", "e-commerce", "fintech", "healthcare", "gaming", "portfolio", "crypto", "dashboard"],
         "style": ["style", "design", "ui", "minimalism", "glassmorphism", "neumorphism", "brutalism", "dark mode", "flat", "aurora", "prompt", "css", "implementation", "variable", "checklist", "tailwind"],
         "ux": ["ux", "usability", "accessibility", "wcag", "touch", "scroll", "animation", "keyboard", "navigation", "mobile"],
@@ -218,7 +218,20 @@ def detect_domain(query):
     }
 
     scores = {domain: sum(1 for kw in keywords if keyword_matches(kw)) for domain, keywords in domain_keywords.items()}
-    best = max(scores, key=scores.get)
+    # Tie-break toward more specialized domains instead of relying on dict order.
+    domain_priority = {
+        "web": 10,
+        "ux": 9,
+        "react": 8,
+        "chart": 7,
+        "color": 7,
+        "icons": 7,
+        "typography": 7,
+        "product": 6,
+        "landing": 5,
+        "style": 1,
+    }
+    best = max(scores, key=lambda domain: (scores[domain], domain_priority.get(domain, 0)))
     return best if scores[best] > 0 else "style"
 
 

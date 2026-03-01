@@ -35,6 +35,8 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     if args.design_system:
         if args.stack or args.domain:
             parser.error("--design-system cannot be combined with --stack or --domain")
+        if args.json:
+            parser.error("--json is not supported with --design-system")
         if (args.page or args.output_dir) and not args.persist:
             parser.error("--page and --output-dir require --persist with --design-system")
     else:
