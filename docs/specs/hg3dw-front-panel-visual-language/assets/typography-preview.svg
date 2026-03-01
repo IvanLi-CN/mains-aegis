@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820">
   <rect width="1400" height="820" fill="#111419"/>
   <text x="36" y="46" fill="#F5F7FA" font-size="30" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif" font-weight="700">Front Panel Typography Preview (Token-level)</text>
-  <text x="36" y="76" fill="#A8B0BD" font-size="17" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Source: firmware/ui/design-language.md → 3.2 Typography tokens</text>
+  <text x="36" y="76" fill="#A8B0BD" font-size="17" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Source: firmware/ui/design-language.md → 3.2 Typography tokens (min glyph height: 10px)</text>
 
   <g transform="translate(36,110)">
     <rect x="0" y="0" width="650" height="650" rx="14" fill="#1A1F26" stroke="#515A67" stroke-width="2"/>
@@ -34,7 +34,8 @@
     <text x="24" y="390" fill="#FFFFFF" font-size="42" font-family="Menlo,Consolas,monospace">78%</text>
 
     <text x="24" y="456" fill="#A8B0BD" font-size="15" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Rule: Numeric fields and units W/A/C/% use Font B.</text>
+    <text x="24" y="486" fill="#A8B0BD" font-size="15" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Whitelist glyph heights: 13 / 14 / 22 (no sub-10px fonts).</text>
 
-    <text x="24" y="520" fill="#FD20" font-size="15" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Preview note: this chart is token-level, not a pixel-perfect u8g2 raster dump.</text>
+    <text x="24" y="540" fill="#FD20" font-size="15" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">Preview note: this chart is token-level, not a pixel-perfect u8g2 raster dump.</text>
   </g>
 </svg>

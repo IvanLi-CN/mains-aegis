@@ -98,7 +98,7 @@ None
 - Given 新增回归清单，When 按规则核对资产，Then 每条规则均能定位到对应文件与通过条件。
 - Given 全部 UI 文档，When 扫描图片链接，Then 不存在 `http/https` 外链图片。
 - Given Typography 规范，When 审核字体章节，Then 每个 `Type` Token 都可追溯到唯一 bitmap 字体与明确字高。
-- Given 后续新增字体需求，When 对照规范，Then 仅允许白名单字高 `8/13/14/22`，否则必须先更新文档契约再进入实现。
+- Given 后续新增字体需求，When 对照规范，Then 仅允许白名单字高 `13/14/22`（且不得小于 `10px`），否则必须先更新文档契约再进入实现。
 
 ## 实现前置条件（Definition of Ready / Preconditions）
 
@@ -113,7 +113,7 @@ None
 - 文档链接与引用检查：`rg -n "\]\((https?://|\.\./\.\./\.\./)" firmware/ui docs/README.md docs/specs/README.md docs/specs/hg3dw-front-panel-visual-language/SPEC.md`
 - 外链图片扫描：`rg -n '![^\n]*\(https?://' firmware/ui docs`
 - 状态术语一致性检查：`rg -n "LOCK|NOAC|STANDBY|BYPASS|ASSIST|BACKUP|PEND|WARN|ERR|N/A" firmware/ui`
-- 字体白名单检查：`rg -n "static FONT_|u8g2_font_|Type.NumCompact|8px|13px|14px|22px" firmware/src/front_panel_scene.rs firmware/ui/design-language.md firmware/ui/component-contracts.md firmware/ui/visual-regression-checklist.md`
+- 字体白名单检查：`rg -n "static FONT_|u8g2_font_|Type.NumCompact|13px|14px|22px|10px" firmware/src/front_panel_scene.rs firmware/ui/design-language.md firmware/ui/component-contracts.md firmware/ui/visual-regression-checklist.md`
 
 ### Quality checks
 
@@ -164,6 +164,7 @@ None
 
 - 2026-03-02: 新建规格并完成设计语言、组件契约、回归清单及索引同步。
 - 2026-03-02: 增补 bitmap 字体白名单、字高白名单与配色/字体预览图资产。
+- 2026-03-02: 收敛字体策略为 `>=10px`，移除 `8px` 字形白名单并同步代码绑定。
 
 ## 参考（References）
 

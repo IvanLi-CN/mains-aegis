@@ -57,9 +57,7 @@ static FONT_A_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13B_t
 static FONT_A_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_7x14B_tf>();
 static FONT_B_NUM: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13_mf>();
 static FONT_B_NUM_BIG: FontRenderer = FontRenderer::new::<fonts::u8g2_font_t0_22b_tn>();
-// Compact self-check table fonts: keep A/B split while fitting all communication modules.
-static FONT_A_COMPACT: FontRenderer = FontRenderer::new::<fonts::u8g2_font_5x8_tf>();
-static FONT_B_COMPACT: FontRenderer = FontRenderer::new::<fonts::u8g2_font_5x8_mf>();
+// Compact roles intentionally reuse >=10px fonts to enforce minimum glyph height.
 
 #[derive(Clone, Copy)]
 struct Palette {
@@ -1293,7 +1291,7 @@ fn draw_diag_card<P: UiPainter, T: Content>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::TextCompact,
         spec.module,
         Point::new((spec.x + 6) as i32, (spec.y + 3) as i32),
         HorizontalAlignment::Left,
@@ -1302,7 +1300,7 @@ fn draw_diag_card<P: UiPainter, T: Content>(
     text(
         painter,
         variant,
-        FontRole::Num,
+        FontRole::NumCompact,
         spec.status,
         Point::new((spec.x + spec.w - 6) as i32, (spec.y + 4) as i32),
         HorizontalAlignment::Right,
@@ -1311,7 +1309,7 @@ fn draw_diag_card<P: UiPainter, T: Content>(
     text(
         painter,
         variant,
-        FontRole::Num,
+        FontRole::NumCompact,
         spec.key,
         Point::new((spec.x + 6) as i32, (spec.y + 15) as i32),
         HorizontalAlignment::Left,
@@ -2162,9 +2160,9 @@ fn text<P: UiPainter>(
     let renderer = match role {
         FontRole::TextTitle => &FONT_A_TITLE,
         FontRole::TextBody => &FONT_A_BODY,
-        FontRole::TextCompact => &FONT_A_COMPACT,
+        FontRole::TextCompact => &FONT_A_BODY,
         FontRole::Num => &FONT_B_NUM,
-        FontRole::NumCompact => &FONT_B_COMPACT,
+        FontRole::NumCompact => &FONT_B_NUM,
         FontRole::NumBig => &FONT_B_NUM_BIG,
     };
 
