@@ -6,7 +6,7 @@ Usage: python search.py "<query>" [--domain <domain>] [--stack <stack>] [--max-r
        python search.py "<query>" --design-system [-p "Project Name"]
        python search.py "<query>" --design-system --persist [-p "Project Name"] [--page "dashboard"]
 
-Domains: style, prompt, color, chart, landing, product, ux, typography
+Domains: style, color, chart, landing, product, ux, typography
 Stacks: html-tailwind, react, nextjs
 
 Persistence (Master + Overrides pattern):
@@ -15,8 +15,9 @@ Persistence (Master + Overrides pattern):
 """
 
 import argparse
+from pathlib import Path
 from core import CSV_CONFIG, AVAILABLE_STACKS, MAX_RESULTS, search, search_stack
-from design_system import generate_design_system, persist_design_system
+from design_system import generate_design_system, safe_slug
 
 
 def format_output(result):
@@ -77,15 +78,18 @@ if __name__ == "__main__":
         
         # Print persistence confirmation
         if args.persist:
-            project_slug = args.project_name.lower().replace(' ', '-') if args.project_name else "default"
+            project_name = args.project_name or args.query.upper()
+            project_slug = safe_slug(project_name, "default")
+            page_slug = safe_slug(args.page, "page") if args.page else None
+            base_dir = (Path(args.output_dir) if args.output_dir else Path.cwd()).resolve()
+            persisted_dir = (base_dir / "design-system" / project_slug).resolve()
             print("\n" + "=" * 60)
-            print(f"✅ Design system persisted to design-system/{project_slug}/")
-            print(f"   📄 design-system/{project_slug}/MASTER.md (Global Source of Truth)")
+            print(f"✅ Design system persisted to {persisted_dir}/")
+            print(f"   📄 {persisted_dir / 'MASTER.md'} (Global Source of Truth)")
             if args.page:
-                page_filename = args.page.lower().replace(' ', '-')
-                print(f"   📄 design-system/{project_slug}/pages/{page_filename}.md (Page Overrides)")
+                print(f"   📄 {persisted_dir / 'pages' / f'{page_slug}.md'} (Page Overrides)")
             print("")
-            print(f"📖 Usage: When building a page, check design-system/{project_slug}/pages/[page].md first.")
+            print(f"📖 Usage: When building a page, check {persisted_dir / 'pages'}/[page].md first.")
             print(f"   If exists, its rules override MASTER.md. Otherwise, use MASTER.md.")
             print("=" * 60)
     # Stack search
