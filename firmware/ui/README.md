@@ -17,12 +17,13 @@ This directory consolidates the current confirmed front panel UI design view fro
 - Module maps (2):
   - `assets/dashboard-b-module-map.png`
   - `assets/self-check-c-module-map.png`
+  - Used in module-level docs (`dashboard-design.md`, `self-check-design.md`)
 - All assets are `320x172` and offline-readable.
 
-## Preview
+## Preview (representative final renders)
 
-![Dashboard Variant B Module Map](assets/dashboard-b-module-map.png)
-![Self-check Variant C Module Map](assets/self-check-c-module-map.png)
+![Dashboard Variant B - STANDBY](assets/dashboard-b-standby-mode.png)
+![Self-check Variant C - STANDBY idle](assets/self-check-c-standby-idle.png)
 
 ## Read order
 
