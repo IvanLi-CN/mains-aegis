@@ -13,6 +13,7 @@ firmware/.esp32-port
 firmware/.mcu-agentd/
 .mcu-agentd/
 tools/front-panel-preview/target/
+/.codex/skills/ui-ux-pro-max/scripts/__pycache__/
 
 # JS tooling (bun)
 node_modules/
