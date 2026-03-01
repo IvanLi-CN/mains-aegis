@@ -232,7 +232,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - `BQ40Z50` 默认只使用 `7-bit 0x0B`（等价 `8-bit W=0x16/R=0x17`）；只有 `--features bms-dual-probe-diag` 才会额外探测 `0x16` 以做兼容诊断。
 - 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。
 
-## 前面板屏幕显示（Spec 6qrjs）
+## 前面板屏幕显示（Spec 6qrjs / 7n4qd）
 
 固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，有效显示区 `320x172`，横屏，SPI）并渲染工业仪表风 UI：
 
@@ -251,8 +251,10 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 顶栏右上模式标签使用全称（不使用缩写）：`BYPASS / STANDBY / ASSIST / BACKUP`
 - 五向按键映射为功能焦点切换：`UP->OUT-A`、`DOWN->OUT-B`、`LEFT->BMS`、`RIGHT->CHARGER`、`CENTER->THERM`
 - 触摸中断仅作为告警指示（`IRQ ON/OFF`）
-- 页面切换：长按 `CENTER` 约 `800ms` 在 `Variant B Dashboard` 与 `Variant C Self-check` 间切换
-- 当前默认视觉方案：`Variant B`（Dashboard 主界面）
+- 上电自检页：屏幕可用时先进入 `Variant C Self-check`，自检阶段按探测进度实时刷新模块状态（`PEND -> OK/WARN/ERR/N/A`）
+- 自检完成后保持 `Variant C` 常驻，并持续显示运行期真实数据（`TPS/INA/TMP/BQ25792/BQ40`）
+- 页面切换：本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard
+- Dashboard 视觉基线：`Variant B`（仅用于 Dashboard 场景）
 - `Variant C` 重定位为“高级设置/自检页”风格，不作为默认 Dashboard
 - `Variant C` 自检页固定显示 10 个可通信模块，采用“双列大字号诊断卡”布局（每卡两行：`MODULE+COMM` 与 `KEY PARAM`）：
   - `GC9307`、`TCA6408A`、`FUSB302`、`INA3221`、`BQ25792`
@@ -295,7 +297,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 预期日志（`defmt`）：
 
-- 成功：`ui: front panel ready (driver=gc9307-async mode=industrial-demo variant=B ...)`
+- 成功：`ui: front panel ready (driver=gc9307-async mode=industrial-demo variant=C ...)`
 - 失败：`ui: ... failed ...`（并退回到安全态：屏幕不选中、复位保持、背光关闭）
 
 ### 1:1 预览工具（主机）

@@ -7,6 +7,7 @@ use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
 use esp_hal::time::{Duration, Instant};
 
+use crate::front_panel_scene::{SelfCheckCommState, SelfCheckUiSnapshot, UpsMode};
 use crate::irq::IrqSnapshot;
 
 use ::tps55288::Error as TpsError;
@@ -170,8 +171,21 @@ pub(super) fn ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -
 #[derive(Clone, Copy)]
 pub struct BootSelfTestResult {
     pub enabled_outputs: EnabledOutputs,
+    pub charger_probe_ok: bool,
     pub charger_enabled: bool,
     pub bms_addr: Option<u8>,
+    pub self_check_snapshot: SelfCheckUiSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelfCheckStage {
+    Begin,
+    Sensors,
+    Screen,
+    Bms,
+    Charger,
+    Tps,
+    Done,
 }
 
 #[derive(Clone, Copy)]
@@ -184,6 +198,30 @@ impl PanelProbeResult {
     pub const fn screen_present(self) -> bool {
         // The front-panel screen path depends on the panel IO expander.
         self.tca6408_present
+    }
+}
+
+fn ups_mode_from_vbus(vbus_present: Option<bool>, has_output: bool) -> UpsMode {
+    match vbus_present {
+        Some(true) => {
+            if has_output {
+                UpsMode::Supplement
+            } else {
+                UpsMode::Standby
+            }
+        }
+        Some(false) => {
+            let _ = has_output;
+            UpsMode::Backup
+        }
+        None => {
+            // Unknown VBUS is treated conservatively: avoid assuming mains-present.
+            if has_output {
+                UpsMode::Backup
+            } else {
+                UpsMode::Standby
+            }
+        }
     }
 }
 
@@ -233,6 +271,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 pub fn boot_self_test<I2C>(
     i2c: &mut I2C,
     desired_outputs: EnabledOutputs,
@@ -242,12 +281,46 @@ pub fn boot_self_test<I2C>(
     tmp_out_a_ok: bool,
     tmp_out_b_ok: bool,
     sync_ok: bool,
-    screen_present: bool,
+    panel_probe: PanelProbeResult,
     therm_kill_asserted: bool,
     force_min_charge: bool,
 ) -> BootSelfTestResult
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    boot_self_test_with_report(
+        i2c,
+        desired_outputs,
+        vout_mv,
+        ilimit_ma,
+        include_vin_ch3,
+        tmp_out_a_ok,
+        tmp_out_b_ok,
+        sync_ok,
+        panel_probe,
+        therm_kill_asserted,
+        force_min_charge,
+        |_, _| {},
+    )
+}
+
+pub fn boot_self_test_with_report<I2C, F>(
+    i2c: &mut I2C,
+    desired_outputs: EnabledOutputs,
+    vout_mv: u16,
+    ilimit_ma: u16,
+    include_vin_ch3: bool,
+    tmp_out_a_ok: bool,
+    tmp_out_b_ok: bool,
+    sync_ok: bool,
+    panel_probe: PanelProbeResult,
+    therm_kill_asserted: bool,
+    force_min_charge: bool,
+    mut reporter: F,
+) -> BootSelfTestResult
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+    F: FnMut(SelfCheckStage, SelfCheckUiSnapshot),
 {
     defmt::info!(
         "self_test: begin vout_mv={=u16} ilimit_ma={=u16} tmp_a_ok={=bool} tmp_b_ok={=bool} sync_ok={=bool} screen_present={=bool} therm_kill_asserted={=bool} force_min_charge={=bool}",
@@ -256,10 +329,28 @@ where
         tmp_out_a_ok,
         tmp_out_b_ok,
         sync_ok,
-        screen_present,
+        panel_probe.screen_present(),
         therm_kill_asserted,
         force_min_charge
     );
+
+    let mut ui = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+    ui.gc9307 = if panel_probe.screen_present() {
+        SelfCheckCommState::Ok
+    } else {
+        SelfCheckCommState::Err
+    };
+    ui.tca6408a = if panel_probe.tca6408_present {
+        SelfCheckCommState::Ok
+    } else {
+        SelfCheckCommState::Err
+    };
+    ui.fusb302 = if panel_probe.fusb302_present {
+        SelfCheckCommState::Ok
+    } else {
+        SelfCheckCommState::Err
+    };
+    reporter(SelfCheckStage::Begin, ui);
 
     // Stage 0: configure independent sensors.
     let ina_cfg = if include_vin_ch3 {
@@ -283,8 +374,10 @@ where
         }
     };
 
-    let tmp_a_present = tmp112::read_temp_c_x16(&mut *i2c, OutputChannel::OutA.tmp_addr()).is_ok();
-    let tmp_b_present = tmp112::read_temp_c_x16(&mut *i2c, OutputChannel::OutB.tmp_addr()).is_ok();
+    let tmp_a_read = tmp112::read_temp_c_x16(&mut *i2c, OutputChannel::OutA.tmp_addr());
+    let tmp_b_read = tmp112::read_temp_c_x16(&mut *i2c, OutputChannel::OutB.tmp_addr());
+    let tmp_a_present = tmp_a_read.is_ok();
+    let tmp_b_present = tmp_b_read.is_ok();
     defmt::info!(
         "self_test: sensors ina_ready={=bool} tmp_a_present={=bool} tmp_b_present={=bool} tmp_a_cfg_ok={=bool} tmp_b_cfg_ok={=bool}",
         ina_ready,
@@ -294,15 +387,41 @@ where
         tmp_out_b_ok
     );
 
+    ui.ina3221 = if ina_ready {
+        SelfCheckCommState::Ok
+    } else {
+        SelfCheckCommState::Err
+    };
+    ui.tmp_a = if tmp_a_present && tmp_out_a_ok {
+        SelfCheckCommState::Ok
+    } else if tmp_a_present {
+        SelfCheckCommState::Warn
+    } else {
+        SelfCheckCommState::Err
+    };
+    ui.tmp_b = if tmp_b_present && tmp_out_b_ok {
+        SelfCheckCommState::Ok
+    } else if tmp_b_present {
+        SelfCheckCommState::Warn
+    } else {
+        SelfCheckCommState::Err
+    };
+    ui.tmp_a_c = tmp_a_read.ok().map(|v| v / 16);
+    ui.tmp_b_c = tmp_b_read.ok().map(|v| v / 16);
+    reporter(SelfCheckStage::Sensors, ui);
+
     // Stage 1: screen module presence (already probed on I2C2 before entering this function).
-    if screen_present {
+    if panel_probe.screen_present() {
         defmt::info!("self_test: stage=screen result=present");
     } else {
         defmt::warn!("self_test: stage=screen result=missing action=disable_screen_module_only");
     }
+    reporter(SelfCheckStage::Screen, ui);
 
     // Stage 2: BQ40Z50.
     let mut bms_addr: Option<u8> = None;
+    let mut bms_soc_pct: Option<u16> = None;
+    let mut bms_rca_alarm: Option<bool> = None;
     for addr in bms_probe_candidates().iter().copied() {
         let temp = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::TEMPERATURE);
         let voltage = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::VOLTAGE);
@@ -327,6 +446,8 @@ where
                 bq40z50::decode_error_code(err_code)
             );
             bms_addr = Some(addr);
+            bms_soc_pct = Some(soc_pct);
+            bms_rca_alarm = Some((status_raw & bq40z50::battery_status::RCA) != 0);
             break;
         }
 
@@ -335,7 +456,15 @@ where
 
     if bms_addr.is_none() {
         defmt::warn!("self_test: bq40z50 missing/err; battery module disabled");
+        ui.bq40z50 = SelfCheckCommState::Err;
+    } else if bms_rca_alarm == Some(true) {
+        ui.bq40z50 = SelfCheckCommState::Warn;
+    } else {
+        ui.bq40z50 = SelfCheckCommState::Ok;
     }
+    ui.bq40z50_soc_pct = bms_soc_pct;
+    ui.bq40z50_rca_alarm = bms_rca_alarm;
+    reporter(SelfCheckStage::Bms, ui);
 
     // Stage 3: BQ25792.
     let mut charger_enabled = match bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_CONTROL_0) {
@@ -351,6 +480,23 @@ where
             false
         }
     };
+    ui.bq25792 = if charger_enabled {
+        SelfCheckCommState::Ok
+    } else {
+        SelfCheckCommState::Err
+    };
+    ui.bq25792_ichg_ma = bq25792::read_u16(&mut *i2c, bq25792::reg::CHARGE_CURRENT_LIMIT)
+        .ok()
+        .map(|v| (v & 0x01ff) * 10);
+    if let Ok(status0) = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_0) {
+        let vbus_present = (status0 & bq25792::status0::VBUS_PRESENT_STAT) != 0
+            || (status0 & bq25792::status0::AC1_PRESENT_STAT) != 0
+            || (status0 & bq25792::status0::AC2_PRESENT_STAT) != 0
+            || (status0 & bq25792::status0::PG_STAT) != 0;
+        ui.fusb302_vbus_present = Some(vbus_present);
+    }
+    let charger_probe_ok = charger_enabled;
+    reporter(SelfCheckStage::Charger, ui);
 
     // Stage 4: TPS55288.
     let tps_a_present = ::tps55288::Tps55288::with_address(&mut *i2c, OutputChannel::OutA.addr())
@@ -487,12 +633,41 @@ where
         out_b_allowed = false;
     }
 
+    ui.tps_a = if tps_a_present {
+        if tps_a_fault {
+            SelfCheckCommState::Warn
+        } else if status_a.is_ok() {
+            SelfCheckCommState::Ok
+        } else {
+            SelfCheckCommState::Err
+        }
+    } else {
+        SelfCheckCommState::Err
+    };
+    ui.tps_b = if tps_b_present {
+        if tps_b_fault {
+            SelfCheckCommState::Warn
+        } else if status_b.is_ok() {
+            SelfCheckCommState::Ok
+        } else {
+            SelfCheckCommState::Err
+        }
+    } else {
+        SelfCheckCommState::Err
+    };
+    ui.tps_a_enabled = Some(out_a_allowed);
+    ui.tps_b_enabled = Some(out_b_allowed);
+    ui.bq25792_allow_charge = Some(charger_enabled);
+    reporter(SelfCheckStage::Tps, ui);
+
     let enabled_outputs = match (out_a_allowed, out_b_allowed) {
         (true, true) => EnabledOutputs::Both,
         (true, false) => EnabledOutputs::Only(OutputChannel::OutA),
         (false, true) => EnabledOutputs::Only(OutputChannel::OutB),
         (false, false) => EnabledOutputs::None,
     };
+
+    ui.mode = ups_mode_from_vbus(ui.fusb302_vbus_present, out_a_allowed || out_b_allowed);
 
     defmt::info!(
         "self_test: done enabled_outputs={} charger_enabled={=bool} bms_present={=bool}",
@@ -501,10 +676,14 @@ where
         bms_addr.is_some()
     );
 
+    reporter(SelfCheckStage::Done, ui);
+
     BootSelfTestResult {
         enabled_outputs,
+        charger_probe_ok,
         charger_enabled,
         bms_addr,
+        self_check_snapshot: ui,
     }
 }
 
@@ -540,6 +719,8 @@ pub struct PowerManager<'d, I2C> {
     chg_enabled: bool,
     charger_allowed: bool,
     chg_last_int_poll_at: Option<Instant>,
+
+    ui_snapshot: SelfCheckUiSnapshot,
 }
 
 #[derive(Clone, Copy)]
@@ -553,9 +734,11 @@ pub struct Config {
     pub telemetry_include_vin_ch3: bool,
     pub tmp112_tlow_c_x16: i16,
     pub tmp112_thigh_c_x16: i16,
+    pub charger_probe_ok: bool,
     pub charger_enabled: bool,
     pub force_min_charge: bool,
     pub bms_addr: Option<u8>,
+    pub self_check_snapshot: SelfCheckUiSnapshot,
 }
 
 impl<'d, I2C> PowerManager<'d, I2C>
@@ -575,7 +758,7 @@ where
         let outputs_allowed = cfg.enabled_outputs != EnabledOutputs::None;
         let out_a_allowed = cfg.enabled_outputs.is_enabled(OutputChannel::OutA);
         let out_b_allowed = cfg.enabled_outputs.is_enabled(OutputChannel::OutB);
-        let charger_allowed = cfg.charger_enabled;
+        let charger_allowed = cfg.charger_probe_ok;
         let bms_addr = cfg.bms_addr;
 
         // Fail-safe defaults.
@@ -613,6 +796,7 @@ where
             chg_enabled: false,
             charger_allowed,
             chg_last_int_poll_at: None,
+            ui_snapshot: cfg.self_check_snapshot,
         }
     }
 
@@ -639,6 +823,20 @@ where
         if self.bms_addr.is_none() {
             defmt::warn!("bms: bq40z50 disabled (boot self-test)");
         }
+
+        if self.ui_snapshot.bq25792_allow_charge.is_none() {
+            self.ui_snapshot.bq25792_allow_charge =
+                Some(self.cfg.charger_enabled && self.charger_allowed);
+        }
+        if self.ui_snapshot.tps_a_enabled.is_none() {
+            self.ui_snapshot.tps_a_enabled =
+                Some(self.cfg.enabled_outputs.is_enabled(OutputChannel::OutA));
+        }
+        if self.ui_snapshot.tps_b_enabled.is_none() {
+            self.ui_snapshot.tps_b_enabled =
+                Some(self.cfg.enabled_outputs.is_enabled(OutputChannel::OutB));
+        }
+        self.recompute_ui_mode();
     }
 
     fn force_disable_outputs(&mut self) {
@@ -646,6 +844,8 @@ where
         self.tps_b_ready = false;
         self.tps_a_next_retry_at = None;
         self.tps_b_next_retry_at = None;
+        self.ui_snapshot.tps_a_enabled = Some(false);
+        self.ui_snapshot.tps_b_enabled = Some(false);
 
         let out_a = ::tps55288::Tps55288::with_address(&mut self.i2c, OutputChannel::OutA.addr())
             .disable_output()
@@ -659,6 +859,7 @@ where
             out_a,
             out_b
         );
+        self.recompute_ui_mode();
     }
 
     pub fn tick(&mut self, irq: &IrqSnapshot) {
@@ -667,6 +868,17 @@ where
         self.maybe_poll_charger(irq);
         self.maybe_poll_bms(irq);
         self.maybe_print_telemetry();
+    }
+
+    pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
+        self.ui_snapshot
+    }
+
+    fn recompute_ui_mode(&mut self) {
+        let has_output = self.ui_snapshot.tps_a_enabled == Some(true)
+            || self.ui_snapshot.tps_b_enabled == Some(true);
+        self.ui_snapshot.mode =
+            ups_mode_from_vbus(self.ui_snapshot.fusb302_vbus_present, has_output);
     }
 
     fn maybe_retry(&mut self) {
@@ -719,6 +931,7 @@ where
         match ina3221::init_with_config(&mut self.i2c, cfg) {
             Ok(()) => {
                 self.ina_ready = true;
+                self.ui_snapshot.ina3221 = SelfCheckCommState::Ok;
                 let cfg_read = ina3221::read_config(&mut self.i2c).map_err(ina_error_kind);
                 let man = ina3221::read_manufacturer_id(&mut self.i2c).map_err(ina_error_kind);
                 let die = ina3221::read_die_id(&mut self.i2c).map_err(ina_error_kind);
@@ -732,6 +945,7 @@ where
             }
             Err(e) => {
                 self.ina_ready = false;
+                self.ui_snapshot.ina3221 = SelfCheckCommState::Err;
                 self.ina_next_retry_at = Some(Instant::now() + self.cfg.retry_backoff);
                 defmt::error!("power: ina3221 err={}", ina_error_kind(e));
             }
@@ -752,10 +966,30 @@ where
             Ok(()) => {
                 tps55288::log_configured(&mut self.i2c, ch, enabled);
                 self.mark_tps_ok(ch);
+                match ch {
+                    OutputChannel::OutA => {
+                        self.ui_snapshot.tps_a = SelfCheckCommState::Ok;
+                        self.ui_snapshot.tps_a_enabled = Some(enabled);
+                    }
+                    OutputChannel::OutB => {
+                        self.ui_snapshot.tps_b = SelfCheckCommState::Ok;
+                        self.ui_snapshot.tps_b_enabled = Some(enabled);
+                    }
+                }
             }
             Err((stage, e)) => {
                 let kind = tps_error_kind(e);
                 self.mark_tps_failed(ch, Instant::now() + self.cfg.retry_backoff);
+                match ch {
+                    OutputChannel::OutA => {
+                        self.ui_snapshot.tps_a = SelfCheckCommState::Err;
+                        self.ui_snapshot.tps_a_enabled = Some(false);
+                    }
+                    OutputChannel::OutB => {
+                        self.ui_snapshot.tps_b = SelfCheckCommState::Err;
+                        self.ui_snapshot.tps_b_enabled = Some(false);
+                    }
+                }
                 defmt::error!(
                     "power: tps addr=0x{=u8:x} stage={} err={}",
                     addr,
@@ -769,6 +1003,7 @@ where
                 }
             }
         }
+        self.recompute_ui_mode();
     }
 
     fn mark_tps_ok(&mut self, ch: OutputChannel) {
@@ -836,21 +1071,65 @@ where
         }
 
         if self.cfg.enabled_outputs.is_enabled(OutputChannel::OutA) {
-            tps55288::print_telemetry_line(
+            let capture = tps55288::print_telemetry_line(
                 &mut self.i2c,
                 OutputChannel::OutA,
                 self.ina_ready,
                 therm_kill_n,
             );
+            self.ui_snapshot.tps_a = if !capture.comm_ok {
+                SelfCheckCommState::Err
+            } else if capture.fault_active {
+                SelfCheckCommState::Warn
+            } else {
+                SelfCheckCommState::Ok
+            };
+            if let Some(enabled) = capture.output_enabled {
+                self.ui_snapshot.tps_a_enabled = Some(enabled);
+            }
+            self.ui_snapshot.tps_a_iout_ma = capture.current_ma;
+            self.ui_snapshot.tmp_a = if capture.temp_c_x16.is_some() {
+                SelfCheckCommState::Ok
+            } else {
+                SelfCheckCommState::Err
+            };
+            self.ui_snapshot.tmp_a_c = capture.temp_c_x16.map(|v| v / 16);
         }
         if self.cfg.enabled_outputs.is_enabled(OutputChannel::OutB) {
-            tps55288::print_telemetry_line(
+            let capture = tps55288::print_telemetry_line(
                 &mut self.i2c,
                 OutputChannel::OutB,
                 self.ina_ready,
                 therm_kill_n,
             );
+            self.ui_snapshot.tps_b = if !capture.comm_ok {
+                SelfCheckCommState::Err
+            } else if capture.fault_active {
+                SelfCheckCommState::Warn
+            } else {
+                SelfCheckCommState::Ok
+            };
+            if let Some(enabled) = capture.output_enabled {
+                self.ui_snapshot.tps_b_enabled = Some(enabled);
+            }
+            self.ui_snapshot.tps_b_iout_ma = capture.current_ma;
+            self.ui_snapshot.tmp_b = if capture.temp_c_x16.is_some() {
+                SelfCheckCommState::Ok
+            } else {
+                SelfCheckCommState::Err
+            };
+            self.ui_snapshot.tmp_b_c = capture.temp_c_x16.map(|v| v / 16);
         }
+
+        self.ui_snapshot.ina_total_ma = match (
+            self.ui_snapshot.tps_a_iout_ma,
+            self.ui_snapshot.tps_b_iout_ma,
+        ) {
+            (Some(a), Some(b)) => Some(a + b),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
 
         if self.cfg.telemetry_include_vin_ch3 {
             if self.ina_ready {
@@ -879,10 +1158,14 @@ where
                 );
             }
         }
+        self.recompute_ui_mode();
     }
 
     fn maybe_poll_charger(&mut self, irq: &IrqSnapshot) {
         if !self.charger_allowed {
+            self.ui_snapshot.bq25792_allow_charge = Some(false);
+            self.ui_snapshot.bq25792_ichg_ma = None;
+            self.recompute_ui_mode();
             return;
         }
 
@@ -918,9 +1201,7 @@ where
         let ctrl0 = match bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0) {
             Ok(v) => v,
             Err(e) => {
-                self.chg_ce.set_high();
-                self.chg_enabled = false;
-                self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                self.mark_charger_poll_failed(now);
                 defmt::error!(
                     "charger: bq25792 err stage=ctrl0_read err={}",
                     i2c_error_kind(e)
@@ -929,27 +1210,43 @@ where
             }
         };
 
-        // Keep external ship-FET path enabled and force SDRV_CTRL=00 (IDLE) so
-        // charger-side wake pulses can actually reach the battery/gauge path.
-        let ship_path = match bq25792::ensure_ship_fet_path_enabled(&mut self.i2c) {
-            Ok(state) => state,
-            Err(e) => {
-                self.chg_ce.set_high();
-                self.chg_enabled = false;
-                self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
-                defmt::error!(
-                    "charger: bq25792 err stage=ship_fet_path err={}",
-                    i2c_error_kind(e)
-                );
-                return;
-            }
-        };
+        // Only enforce ship-FET path when charging is policy-enabled.
+        let (sfet_present_before, sfet_present_after, ship_mode_before, ship_mode_after) =
+            if self.cfg.charger_enabled {
+                match bq25792::ensure_ship_fet_path_enabled(&mut self.i2c) {
+                    Ok(state) => (
+                        (state.ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
+                        (state.ctrl5_after & bq25792::ctrl5::SFET_PRESENT) != 0,
+                        state.ship.sdrv_ctrl_before,
+                        state.ship.sdrv_ctrl_after,
+                    ),
+                    Err(e) => {
+                        self.mark_charger_poll_failed(now);
+                        defmt::error!(
+                            "charger: bq25792 err stage=ship_fet_path err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
+                    }
+                }
+            } else {
+                let ctrl5_before = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_5)
+                    .unwrap_or_default();
+                let ctrl2_before = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_2)
+                    .unwrap_or_default();
+                let sdrv_ctrl_before = (ctrl2_before & bq25792::ctrl2::SDRV_CTRL_MASK)
+                    >> bq25792::ctrl2::SDRV_CTRL_SHIFT;
+                (
+                    (ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
+                    (ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
+                    sdrv_ctrl_before,
+                    sdrv_ctrl_before,
+                )
+            };
 
         if let Err(e) = bq25792::read_block(&mut self.i2c, bq25792::reg::CHARGER_STATUS_0, &mut st)
         {
-            self.chg_ce.set_high();
-            self.chg_enabled = false;
-            self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+            self.mark_charger_poll_failed(now);
             defmt::error!(
                 "charger: bq25792 err stage=status_read err={}",
                 i2c_error_kind(e)
@@ -958,9 +1255,7 @@ where
         }
         if let Err(e) = bq25792::read_block(&mut self.i2c, bq25792::reg::FAULT_STATUS_0, &mut fault)
         {
-            self.chg_ce.set_high();
-            self.chg_enabled = false;
-            self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+            self.mark_charger_poll_failed(now);
             defmt::error!(
                 "charger: bq25792 err stage=fault_read err={}",
                 i2c_error_kind(e)
@@ -999,7 +1294,7 @@ where
         let can_enable = input_present && !ts_cold && !ts_hot;
         let normal_allow_charge = can_enable && vbat_present;
         let force_allow_charge = self.cfg.force_min_charge && can_enable;
-        let allow_charge = normal_allow_charge || force_allow_charge;
+        let allow_charge = (normal_allow_charge || force_allow_charge) && self.cfg.charger_enabled;
         let mut applied_ctrl0 = ctrl0;
         let mut applied_ichg_ma: Option<u16> = None;
         let mut applied_iindpm_ma: Option<u16> = None;
@@ -1019,9 +1314,7 @@ where
                 match bq25792::set_charge_current_limit_ma(&mut self.i2c, FORCE_MIN_ICHG_MA) {
                     Ok(v) => applied_ichg_ma = Some(decode_cur_ma(v)),
                     Err(e) => {
-                        self.chg_ce.set_high();
-                        self.chg_enabled = false;
-                        self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                        self.mark_charger_poll_failed(now);
                         defmt::error!(
                             "charger: bq25792 err stage=ichg_write err={}",
                             i2c_error_kind(e)
@@ -1033,9 +1326,7 @@ where
                 match bq25792::set_input_current_limit_ma(&mut self.i2c, FORCE_MIN_IINDPM_MA) {
                     Ok(v) => applied_iindpm_ma = Some(decode_cur_ma(v)),
                     Err(e) => {
-                        self.chg_ce.set_high();
-                        self.chg_enabled = false;
-                        self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                        self.mark_charger_poll_failed(now);
                         defmt::error!(
                             "charger: bq25792 err stage=iindpm_write err={}",
                             i2c_error_kind(e)
@@ -1055,9 +1346,7 @@ where
                 ) {
                     Ok(()) => applied_ctrl0 = desired_ctrl0,
                     Err(e) => {
-                        self.chg_ce.set_high();
-                        self.chg_enabled = false;
-                        self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                        self.mark_charger_poll_failed(now);
                         defmt::error!(
                             "charger: bq25792 err stage=ctrl0_write err={}",
                             i2c_error_kind(e)
@@ -1093,10 +1382,10 @@ where
             ts_hot,
             applied_ichg_ma,
             applied_iindpm_ma,
-            (ship_path.ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
-            (ship_path.ctrl5_after & bq25792::ctrl5::SFET_PRESENT) != 0,
-            ship_path.ship.sdrv_ctrl_before,
-            ship_path.ship.sdrv_ctrl_after,
+            sfet_present_before,
+            sfet_present_after,
+            ship_mode_before,
+            ship_mode_after,
             bq25792::decode_chg_stat(bq25792::status1::chg_stat(status1)),
             bq25792::decode_vbus_stat(bq25792::status1::vbus_stat(status1)),
             bq25792::decode_ico_stat(ico_stat),
@@ -1116,7 +1405,39 @@ where
             applied_ctrl0
         );
 
+        let charger_fault = fault0 != 0 || fault1 != 0 || ts_cold || ts_hot;
+        self.ui_snapshot.bq25792 = if charger_fault {
+            SelfCheckCommState::Warn
+        } else {
+            SelfCheckCommState::Ok
+        };
+        self.ui_snapshot.bq25792_allow_charge = Some(allow_charge);
+        self.ui_snapshot.bq25792_ichg_ma = if allow_charge {
+            if let Some(v) = applied_ichg_ma {
+                Some(v)
+            } else {
+                bq25792::read_u16(&mut self.i2c, bq25792::reg::CHARGE_CURRENT_LIMIT)
+                    .ok()
+                    .map(|v| (v & 0x01ff) * 10)
+            }
+        } else {
+            None
+        };
+        self.ui_snapshot.fusb302_vbus_present = Some(input_present);
+        self.recompute_ui_mode();
+
         self.chg_next_retry_at = None;
+    }
+
+    fn mark_charger_poll_failed(&mut self, now: Instant) {
+        self.chg_ce.set_high();
+        self.chg_enabled = false;
+        self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+        self.ui_snapshot.bq25792 = SelfCheckCommState::Err;
+        self.ui_snapshot.bq25792_allow_charge = Some(false);
+        self.ui_snapshot.bq25792_ichg_ma = None;
+        self.ui_snapshot.fusb302_vbus_present = None;
+        self.recompute_ui_mode();
     }
 
     fn maybe_poll_bms(&mut self, irq: &IrqSnapshot) {
@@ -1170,6 +1491,14 @@ where
                 Ok(s) => {
                     self.bms_addr = Some(addr);
                     self.bms_next_retry_at = None;
+                    let rca_alarm = (s.batt_status & bq40z50::battery_status::RCA) != 0;
+                    self.ui_snapshot.bq40z50 = if rca_alarm {
+                        SelfCheckCommState::Warn
+                    } else {
+                        SelfCheckCommState::Ok
+                    };
+                    self.ui_snapshot.bq40z50_soc_pct = Some(s.rsoc_pct);
+                    self.ui_snapshot.bq40z50_rca_alarm = Some(rca_alarm);
                     self.log_bq40z50_snapshot(addr, btp_int_h, &s);
                     return;
                 }
@@ -1177,6 +1506,9 @@ where
                     if idx + 1 == addr_count {
                         self.bms_addr = None;
                         self.bms_next_retry_at = Some(now + self.cfg.retry_backoff);
+                        self.ui_snapshot.bq40z50 = SelfCheckCommState::Warn;
+                        self.ui_snapshot.bq40z50_soc_pct = None;
+                        self.ui_snapshot.bq40z50_rca_alarm = None;
                         let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(s.temp_k_x10);
                         defmt::warn!(
                             "bms: bq40z50 invalid addrs={} temp_c_x10={=i32} vpack_mv={=u16} rsoc_pct={=u16}",
@@ -1192,6 +1524,9 @@ where
                     if idx + 1 == addr_count {
                         self.bms_addr = None;
                         self.bms_next_retry_at = Some(now + self.cfg.retry_backoff);
+                        self.ui_snapshot.bq40z50 = SelfCheckCommState::Err;
+                        self.ui_snapshot.bq40z50_soc_pct = None;
+                        self.ui_snapshot.bq40z50_rca_alarm = None;
 
                         if kind == "i2c_nack" || kind == "i2c_timeout" {
                             defmt::warn!(

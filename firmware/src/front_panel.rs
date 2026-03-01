@@ -1,8 +1,6 @@
 use core::convert::Infallible;
 
-use crate::front_panel_scene::{
-    self, demo_mode_from_focus, UiFocus, UiModel, UiPainter, UiVariant,
-};
+use crate::front_panel_scene::{self, SelfCheckUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant};
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
 use esp_hal::gpio::{DriveMode, Flex, Input, OutputConfig, Pull};
@@ -44,9 +42,7 @@ const UI_ORIENTATION_MARKER: &str = "FP_ORI_PROBE_20260227";
 const BACKLIGHT_ACTIVE_LOW: bool = true;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
-const DEFAULT_UI_VARIANT: UiVariant = UiVariant::InstrumentB;
 const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
-const PAGE_SWITCH_HOLD: Duration = Duration::from_millis(800);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitState {
@@ -91,9 +87,9 @@ pub struct FrontPanel {
     state: InitState,
     next_frame_deadline: Instant,
     last_inputs: Option<InputSnapshot>,
+    needs_redraw: bool,
     ui_variant: UiVariant,
-    center_press_started: Option<Instant>,
-    page_switch_latched: bool,
+    self_check_snapshot: SelfCheckUiSnapshot,
     frame_no: u32,
 }
 
@@ -119,9 +115,9 @@ impl FrontPanel {
             state: InitState::Disabled,
             next_frame_deadline: Instant::now(),
             last_inputs: None,
-            ui_variant: DEFAULT_UI_VARIANT,
-            center_press_started: None,
-            page_switch_latched: false,
+            needs_redraw: false,
+            ui_variant: SELF_CHECK_VARIANT,
+            self_check_snapshot: SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby),
             frame_no: 0,
         }
     }
@@ -252,6 +248,24 @@ impl FrontPanel {
         );
     }
 
+    pub fn update_self_check_snapshot(&mut self, snapshot: SelfCheckUiSnapshot) {
+        if self.self_check_snapshot == snapshot {
+            return;
+        }
+        self.self_check_snapshot = snapshot;
+        self.needs_redraw = true;
+        if self.state != InitState::Ready {
+            return;
+        }
+        let current_inputs = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        if let Err(e) = self.render_inputs(current_inputs) {
+            defmt::error!("ui: render self-check snapshot failed err={=?}", e);
+        } else {
+            self.last_inputs = Some(current_inputs);
+            self.needs_redraw = false;
+        }
+    }
+
     pub fn tick(&mut self) {
         if self.state != InitState::Ready {
             return;
@@ -265,13 +279,14 @@ impl FrontPanel {
 
         match self.read_inputs() {
             Ok(snapshot) => {
-                let variant_changed = self.update_page_variant(snapshot);
                 let inputs_changed = self.last_inputs != Some(snapshot);
-                if variant_changed || inputs_changed {
+                if inputs_changed || self.needs_redraw {
                     if let Err(e) = self.render_inputs(snapshot) {
                         defmt::error!("ui: update input state failed err={=?}", e);
+                        self.needs_redraw = true;
                     } else {
                         self.last_inputs = Some(snapshot);
+                        self.needs_redraw = false;
                     }
                 }
             }
@@ -484,43 +499,6 @@ impl FrontPanel {
         })
     }
 
-    fn update_page_variant(&mut self, snapshot: InputSnapshot) -> bool {
-        if !snapshot.center {
-            self.center_press_started = None;
-            self.page_switch_latched = false;
-            return false;
-        }
-
-        if self.center_press_started.is_none() {
-            self.center_press_started = Some(Instant::now());
-            return false;
-        }
-
-        if self.page_switch_latched {
-            return false;
-        }
-
-        let Some(started) = self.center_press_started else {
-            return false;
-        };
-        if started.elapsed() < PAGE_SWITCH_HOLD {
-            return false;
-        }
-
-        self.ui_variant = if self.ui_variant == DEFAULT_UI_VARIANT {
-            SELF_CHECK_VARIANT
-        } else {
-            DEFAULT_UI_VARIANT
-        };
-        self.page_switch_latched = true;
-        defmt::info!(
-            "ui: page switch variant={} hold_ms={=u32}",
-            variant_name(self.ui_variant),
-            800u32
-        );
-        true
-    }
-
     fn snapshot_to_model(&self, snapshot: InputSnapshot) -> UiModel {
         let focus = if snapshot.center {
             UiFocus::Center
@@ -539,7 +517,7 @@ impl FrontPanel {
         };
 
         UiModel {
-            mode: demo_mode_from_focus(focus),
+            mode: self.self_check_snapshot.mode,
             focus,
             touch_irq: snapshot.touch,
             frame_no: self.frame_no,
@@ -549,9 +527,15 @@ impl FrontPanel {
     fn render_inputs(&mut self, snapshot: InputSnapshot) -> Result<(), esp_hal::spi::Error> {
         let model = self.snapshot_to_model(snapshot);
         let variant = self.ui_variant;
+        let self_check_snapshot = self.self_check_snapshot;
         {
             let mut painter = PanelPainter { panel: self };
-            front_panel_scene::render_frame(&mut painter, &model, variant)?;
+            front_panel_scene::render_frame_with_self_check(
+                &mut painter,
+                &model,
+                variant,
+                Some(&self_check_snapshot),
+            )?;
         }
         self.frame_no = self.frame_no.wrapping_add(1);
         Ok(())

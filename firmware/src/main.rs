@@ -349,7 +349,18 @@ fn main() -> ! {
         panel_probe.fusb302_present
     );
 
-    let self_test = output::boot_self_test(
+    let mut front_panel =
+        front_panel::FrontPanel::new(i2c2, spi, btn_center, ctp_irq, tca_reset_n, dc, bl);
+    if !panel_probe.screen_present() {
+        defmt::warn!("ui: skip display init because panel_io probe is missing");
+    } else {
+        front_panel.init_best_effort();
+        front_panel.update_self_check_snapshot(front_panel_scene::SelfCheckUiSnapshot::pending(
+            front_panel_scene::UpsMode::Standby,
+        ));
+    }
+
+    let self_test = output::boot_self_test_with_report(
         &mut i2c,
         DEFAULT_ENABLED_OUTPUTS,
         DEFAULT_VOUT_MV,
@@ -358,18 +369,13 @@ fn main() -> ! {
         tmp_out_a_ok,
         tmp_out_b_ok,
         tps_sync_ok,
-        panel_probe.screen_present(),
+        panel_probe,
         low_after,
         FORCE_MIN_CHARGE,
+        |_, snapshot| {
+            front_panel.update_self_check_snapshot(snapshot);
+        },
     );
-
-    let mut front_panel =
-        front_panel::FrontPanel::new(i2c2, spi, btn_center, ctp_irq, tca_reset_n, dc, bl);
-    if !panel_probe.screen_present() {
-        defmt::warn!("ui: skip display init because panel_io probe is missing");
-    } else {
-        front_panel.init_best_effort();
-    }
 
     let cfg = output::Config {
         enabled_outputs: self_test.enabled_outputs,
@@ -381,9 +387,11 @@ fn main() -> ! {
         telemetry_include_vin_ch3: TELEMETRY_INCLUDE_VIN_CH3,
         tmp112_tlow_c_x16: TMP112_TLOW_C_X16,
         tmp112_thigh_c_x16: TMP112_THIGH_C_X16,
+        charger_probe_ok: self_test.charger_probe_ok,
         charger_enabled: self_test.charger_enabled,
         force_min_charge: FORCE_MIN_CHARGE,
         bms_addr: self_test.bms_addr,
+        self_check_snapshot: self_test.self_check_snapshot,
     };
 
     let mut power = output::PowerManager::new(
@@ -402,6 +410,7 @@ fn main() -> ! {
         cfg.ilimit_ma
     );
     power.init_best_effort();
+    front_panel.update_self_check_snapshot(power.ui_snapshot());
 
     let mut irq_tracker = irq::IrqTracker::new();
     let mut last_irq_log_at: Option<Instant> = None;
@@ -415,6 +424,7 @@ fn main() -> ! {
         || {
             let irq_events = irq_tracker.take_delta();
             power.tick(&irq_events);
+            front_panel.update_self_check_snapshot(power.ui_snapshot());
             front_panel.tick();
             if irq_events.any()
                 && output::tps55288::should_log_fault(
@@ -445,9 +455,10 @@ fn main() -> ! {
         defmt::info!("esp: heartbeat");
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(2_000) {
-            front_panel.tick();
             let irq_events = irq_tracker.take_delta();
             power.tick(&irq_events);
+            front_panel.update_self_check_snapshot(power.ui_snapshot());
+            front_panel.tick();
         }
     }
 }
