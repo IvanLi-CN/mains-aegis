@@ -44,6 +44,7 @@ const LCD_H: u16 = 172;
 const OFFSET_X: u16 = 0;
 const OFFSET_Y: u16 = 34;
 const PANEL_ORIENTATION: Orientation = Orientation::LandscapeSwapped;
+const PANEL_RGB_ORDER: bool = false;
 const UI_ORIENTATION_MARKER: &str = "FP_ORI_PROBE_20260227";
 
 const BACKLIGHT_ACTIVE_LOW: bool = true;
@@ -150,35 +151,23 @@ impl FrontPanel {
         self.pulse_tca_reset(Duration::from_millis(10));
 
         if let Err(e) = self.tca_init() {
-            defmt::error!(
-                "ui: tca6408a init failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca6408a init failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
 
         if let Err(e) = self.tca_set_res_released(false) {
-            defmt::error!(
-                "ui: tca set res failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca set res failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
         if let Err(e) = self.tca_set_tp_reset_released(false) {
-            defmt::error!(
-                "ui: tca set tp_reset failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca set tp_reset failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
         if let Err(e) = self.tca_set_cs_enabled(false) {
-            defmt::error!(
-                "ui: tca set cs failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca set cs failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
@@ -187,28 +176,19 @@ impl FrontPanel {
 
         // Hardware reset through expander lines before handing over to driver init.
         if let Err(e) = self.tca_set_res_released(true) {
-            defmt::error!(
-                "ui: tca release res failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca release res failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
         if let Err(e) = self.tca_set_tp_reset_released(true) {
-            defmt::error!(
-                "ui: tca release tp_reset failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca release tp_reset failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
         busy_wait(Duration::from_millis(120));
 
         if let Err(e) = self.tca_set_cs_enabled(true) {
-            defmt::error!(
-                "ui: tca enable cs failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca enable cs failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
@@ -229,10 +209,7 @@ impl FrontPanel {
                 snapshot
             }
             Err(e) => {
-                defmt::error!(
-                    "ui: read input state failed err={}",
-                    crate::output::i2c_error_kind(e)
-                );
+                defmt::error!("ui: read input state failed err={}", i2c_error_kind(e));
                 let idle = InputSnapshot::idle();
                 self.last_inputs = Some(idle);
                 idle
@@ -335,14 +312,36 @@ impl FrontPanel {
                 }
             }
             Err(e) => {
-                defmt::error!(
-                    "ui: poll input state failed err={}",
-                    crate::output::i2c_error_kind(e)
-                );
+                defmt::error!("ui: poll input state failed err={}", i2c_error_kind(e));
             }
         }
 
         ui_action
+    }
+
+    #[allow(dead_code)]
+    pub fn is_ready(&self) -> bool {
+        self.state == InitState::Ready
+    }
+
+    #[allow(dead_code)]
+    pub fn render_display_diagnostic(&mut self, heartbeat_on: bool) {
+        if self.state != InitState::Ready {
+            return;
+        }
+        let meta = front_panel_scene::DisplayDiagnosticMeta {
+            orientation_label: orientation_label(PANEL_ORIENTATION),
+            color_order_label: if PANEL_RGB_ORDER {
+                "COLOR ORDER: RGB565"
+            } else {
+                "COLOR ORDER: BGR565"
+            },
+            heartbeat_on,
+        };
+        let mut painter = PanelPainter { panel: self };
+        if let Err(e) = front_panel_scene::render_display_diagnostic(&mut painter, &meta) {
+            defmt::error!("ui: render display diag failed err={=?}", e);
+        }
     }
 
     fn configure_dc(&mut self) {
@@ -487,7 +486,7 @@ impl FrontPanel {
             height: LCD_H,
             dx: OFFSET_X,
             dy: OFFSET_Y,
-            rgb: true,
+            rgb: PANEL_RGB_ORDER,
             ..GcConfig::default()
         };
 
@@ -734,6 +733,16 @@ fn variant_name(variant: UiVariant) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
+fn orientation_label(orientation: Orientation) -> &'static str {
+    match orientation {
+        Orientation::Portrait => "ORI: PORTRAIT (MADCTL=0x40)",
+        Orientation::Landscape => "ORI: LANDSCAPE (MADCTL=0x20)",
+        Orientation::PortraitSwapped => "ORI: PORTRAIT_SWAP (MADCTL=0x80)",
+        Orientation::LandscapeSwapped => "ORI: LANDSCAPE_SWAP (MADCTL=0xE0)",
+    }
+}
+
 struct PanelPainter<'a> {
     panel: &'a mut FrontPanel,
 }
@@ -839,4 +848,17 @@ fn u16_be_pair(a: u16, b: u16) -> [u8; 4] {
     let [a0, a1] = a.to_be_bytes();
     let [b0, b1] = b.to_be_bytes();
     [a0, a1, b0, b1]
+}
+
+fn i2c_error_kind(e: esp_hal::i2c::master::Error) -> &'static str {
+    use esp_hal::i2c::master::Error;
+
+    match e {
+        Error::FifoExceeded => "i2c_fifo_exceeded",
+        Error::AcknowledgeCheckFailed(_) => "i2c_nack",
+        Error::Timeout => "i2c_timeout",
+        Error::ArbitrationLost => "i2c_arb_lost",
+        Error::ExecutionIncomplete => "i2c_exec_incomplete",
+        _ => "i2c_other",
+    }
 }
