@@ -645,7 +645,7 @@ where
         );
     }
 
-    if bms_addr.is_none() || bms_discharge_ready == Some(false) {
+    if bms_addr.is_none() || bms_discharge_ready != Some(true) {
         // Policy: when BMS comm is missing or discharge path is not ready, keep TPS outputs off.
         outputs_blocked_by_bms = outputs_restore_on_bms_ready != EnabledOutputs::None;
         out_a_allowed = false;
@@ -1062,7 +1062,9 @@ where
         self.bms_activation_state = BmsActivationState::Pending;
         self.bms_activation_deadline = Some(now + BMS_ACTIVATION_WINDOW);
         self.bms_next_poll_at = now;
+        self.bms_next_retry_at = None;
         self.chg_next_poll_at = now;
+        self.chg_next_retry_at = None;
     }
 
     fn maybe_track_bms_activation(&mut self) {

@@ -250,7 +250,7 @@ impl FrontPanel {
         }
         self.self_check_snapshot = snapshot;
         if self.self_check_overlay == SelfCheckOverlay::BmsActivateConfirm
-            && !front_panel_scene::is_bq40_offline(&self.self_check_snapshot)
+            && !front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
         {
             self.self_check_overlay = SelfCheckOverlay::None;
         }

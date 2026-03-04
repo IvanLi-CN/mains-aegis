@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-03-01
-- Last: 2026-03-02
+- Last: 2026-03-05
 
 ## 背景 / 问题陈述
 
@@ -89,4 +89,5 @@
 
 ## 变更记录（Change log）
 
+- 2026-03-05: 修正 BMS 激活闭环细节：`OPERATION_STATUS` 读取失败不再放行 TPS；激活请求会清理 `bms/chg` 重试退避窗口；`BmsActivateConfirm` 弹窗收起条件与激活触发条件统一。
 - 2026-03-02: 对齐 BMS 放电就绪语义：`XDSG=0 && DSG=0` 归类为 `WARN`；激活成功判定增加放电就绪与 `VBAT_PRESENT`，并补充 BMS 恢复后的 TPS 门控自动解除路径。
