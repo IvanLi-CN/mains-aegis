@@ -808,6 +808,7 @@ struct ChargerActivationBackup {
     ctrl0: u8,
     ichg_reg: u16,
     iindpm_reg: u16,
+    chg_enabled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1035,6 +1036,7 @@ where
             ctrl0,
             ichg_reg,
             iindpm_reg,
+            chg_enabled: self.chg_enabled,
         });
 
         self.chg_ilim_hiz_brk.set_low();
@@ -1098,6 +1100,7 @@ where
     }
 
     fn finish_bms_activation(&mut self, result: BmsActivationState) {
+        let mut restore_chg_enabled = false;
         if let Some(backup) = self.bms_activation_backup.take() {
             let _ = bq25792::write_u16(
                 &mut self.i2c,
@@ -1110,9 +1113,15 @@ where
                 backup.iindpm_reg,
             );
             let _ = bq25792::write_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0, backup.ctrl0);
+            restore_chg_enabled = backup.chg_enabled;
         }
-        self.chg_ce.set_high();
-        self.chg_enabled = false;
+        if restore_chg_enabled {
+            self.chg_ce.set_low();
+            self.chg_enabled = true;
+        } else {
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+        }
         self.bms_activation_deadline = None;
         self.bms_activation_state = result;
         self.chg_next_poll_at = Instant::now();
@@ -1574,25 +1583,25 @@ where
         let adc_done = (status3 & bq25792::status3::ADC_DONE_STAT) != 0;
         let vsys_min_reg = (status3 & bq25792::status3::VSYS_STAT) != 0;
 
-        let adc_ctrl = match bq25792::update_u8(
+        let (adc_enabled, vbat_adc_mv, vsys_adc_mv) = match bq25792::update_u8(
             &mut self.i2c,
             bq25792::reg::ADC_CONTROL,
             0,
             bq25792::adc_ctrl::ADC_EN,
         ) {
-            Ok(v) => v,
+            Ok(adc_ctrl) => (
+                (adc_ctrl & bq25792::adc_ctrl::ADC_EN) != 0,
+                bq25792::read_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok(),
+                bq25792::read_u16(&mut self.i2c, bq25792::reg::VSYS_ADC).ok(),
+            ),
             Err(e) => {
-                self.mark_charger_poll_failed(now);
-                defmt::error!(
-                    "charger: bq25792 err stage=adc_ctrl err={}",
+                defmt::warn!(
+                    "charger: bq25792 warn stage=adc_ctrl err={} action=skip_adc_samples",
                     i2c_error_kind(e)
                 );
-                return;
+                (false, None, None)
             }
         };
-        let adc_enabled = (adc_ctrl & bq25792::adc_ctrl::ADC_EN) != 0;
-        let vbat_adc_mv = bq25792::read_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok();
-        let vsys_adc_mv = bq25792::read_u16(&mut self.i2c, bq25792::reg::VSYS_ADC).ok();
 
         let input_present = vbus_present || ac1_present || ac2_present || pg;
         let can_enable = input_present && !ts_cold && !ts_hot;
