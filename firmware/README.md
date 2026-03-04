@@ -322,6 +322,35 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 成功：`ui: front panel ready (driver=gc9307-async mode=industrial-demo variant=C ...)`
 - 失败：`ui: ... failed ...`（并退回到安全态：屏幕不选中、复位保持、背光关闭）
 
+### 屏幕诊断专用固件（独立 bin，无 feature）
+
+用于排查 `颜色映射 / 旋转方向 / 镜像`，该固件只 bring-up 前面板相关外设，不进入主电源控制流程。
+
+- 方向锚点：顶部固定 `UP ^`
+- 四角锚点：`TL=Red`、`TR=Green`、`BL=Blue`、`BR=Yellow`
+- 色条：`R/G/B/Y/C/M/W/K`
+- 灰阶：8 级灰阶条
+- 刷新心跳：右上角方块每 `500ms` 闪烁
+
+构建与烧录（仓库根目录）：
+
+```bash
+cd firmware
+cargo build --release --bin display-diag-fw
+cd display-diag
+mcu-agentd flash esp-diag
+```
+
+串口口径（节选）：
+
+- `diag: front-panel display probe boot`
+- `diag: rendering display diagnostic screen`
+
+拍照复核建议：
+
+- 先拍整屏（含四角和顶部 `UP ^`），再近拍中部色条与灰阶条；
+- 若出现颜色/方向/镜像异常，保持同角度再拍一张，用于前后对比修复结果。
+
 ### 1:1 预览工具（主机）
 
 预览工具会输出与固件同源渲染的两类产物：

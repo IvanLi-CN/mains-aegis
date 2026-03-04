@@ -420,6 +420,199 @@ fn mode_is_mains(mode: UpsMode) -> bool {
 }
 
 #[allow(dead_code)]
+pub struct DisplayDiagnosticMeta {
+    pub orientation_label: &'static str,
+    pub color_order_label: &'static str,
+    pub heartbeat_on: bool,
+}
+
+#[allow(dead_code)]
+pub fn render_display_diagnostic<P: UiPainter>(
+    painter: &mut P,
+    meta: &DisplayDiagnosticMeta,
+) -> Result<(), P::Error> {
+    const BG: u16 = 0x0000;
+    const FG: u16 = 0xFFFF;
+    const MUTED: u16 = 0x7BEF;
+    const ACCENT: u16 = 0x07FF;
+
+    fill(painter, 0, 0, UI_W, UI_H, BG)?;
+    draw_outline(painter, 0, 0, UI_W, UI_H, FG)?;
+
+    fill(painter, 0, 0, UI_W, 20, 0x0841)?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "DISPLAY DIAG",
+        Point::new((UI_W / 2) as i32, 6),
+        HorizontalAlignment::Center,
+        FG,
+    )?;
+
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "UP ^",
+        Point::new((UI_W / 2) as i32, 24),
+        HorizontalAlignment::Center,
+        ACCENT,
+    )?;
+    fill(painter, UI_W / 2, 34, 1, 24, ACCENT)?;
+    fill(painter, UI_W / 2 - 3, 34, 7, 1, ACCENT)?;
+    fill(painter, UI_W / 2 - 2, 35, 5, 1, ACCENT)?;
+    fill(painter, UI_W / 2 - 1, 36, 3, 1, ACCENT)?;
+
+    fill(painter, 4, 24, 30, 18, 0xF800)?;
+    fill(painter, UI_W - 34, 24, 30, 18, 0x07E0)?;
+    fill(painter, 4, UI_H - 22, 30, 18, 0x001F)?;
+    fill(painter, UI_W - 34, UI_H - 22, 30, 18, 0xFFE0)?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "TL",
+        Point::new(19, 29),
+        HorizontalAlignment::Center,
+        FG,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "TR",
+        Point::new((UI_W - 19) as i32, 29),
+        HorizontalAlignment::Center,
+        0x0000,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "BL",
+        Point::new(19, (UI_H - 17) as i32),
+        HorizontalAlignment::Center,
+        FG,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "BR",
+        Point::new((UI_W - 19) as i32, (UI_H - 17) as i32),
+        HorizontalAlignment::Center,
+        0x0000,
+    )?;
+
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "LEFT",
+        Point::new(6, 47),
+        HorizontalAlignment::Left,
+        ACCENT,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "RIGHT",
+        Point::new((UI_W - 6) as i32, 47),
+        HorizontalAlignment::Right,
+        ACCENT,
+    )?;
+
+    const BARS: [(u16, &str); 8] = [
+        (0xF800, "R"),
+        (0x07E0, "G"),
+        (0x001F, "B"),
+        (0xFFE0, "Y"),
+        (0x07FF, "C"),
+        (0xF81F, "M"),
+        (0xFFFF, "W"),
+        (0x0000, "K"),
+    ];
+    let bar_y = 60;
+    let bar_h = 46;
+    let bar_w = UI_W / (BARS.len() as u16);
+    for (idx, &(color, label)) in BARS.iter().enumerate() {
+        let x = (idx as u16) * bar_w;
+        fill(painter, x, bar_y, bar_w, bar_h, color)?;
+        draw_outline(
+            painter,
+            x,
+            bar_y,
+            bar_w,
+            bar_h,
+            if color == 0x0000 { FG } else { BG },
+        )?;
+        text(
+            painter,
+            UiVariant::RetroC,
+            FontRole::TextCompact,
+            label,
+            Point::new((x + bar_w / 2) as i32, (bar_y + bar_h + 2) as i32),
+            HorizontalAlignment::Center,
+            if color == 0x0000 { FG } else { BG },
+        )?;
+    }
+
+    let gray_y = 118;
+    let gray_h = 16;
+    let gray_w = UI_W / 8;
+    for idx in 0..8u16 {
+        let r = (idx * 31 / 7) & 0x1f;
+        let g = (idx * 63 / 7) & 0x3f;
+        let b = (idx * 31 / 7) & 0x1f;
+        let gray = (r << 11) | (g << 5) | b;
+        fill(painter, idx * gray_w, gray_y, gray_w, gray_h, gray)?;
+        draw_outline(painter, idx * gray_w, gray_y, gray_w, gray_h, MUTED)?;
+    }
+
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        meta.orientation_label,
+        Point::new(6, 140),
+        HorizontalAlignment::Left,
+        FG,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        meta.color_order_label,
+        Point::new(6, 150),
+        HorizontalAlignment::Left,
+        FG,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "EXPECT: TL-R TR-G BL-B BR-Y",
+        Point::new(6, 160),
+        HorizontalAlignment::Left,
+        MUTED,
+    )?;
+
+    fill(
+        painter,
+        UI_W - 16,
+        4,
+        10,
+        10,
+        if meta.heartbeat_on { 0x07E0 } else { 0x39E7 },
+    )?;
+    draw_outline(painter, UI_W - 16, 4, 10, 10, FG)?;
+
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub fn render_frame<P: UiPainter>(
     painter: &mut P,
     model: &UiModel,
