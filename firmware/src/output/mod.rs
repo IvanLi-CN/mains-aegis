@@ -488,8 +488,11 @@ where
     if bms_addr.is_none() {
         defmt::warn!("self_test: bq40z50 missing/err; battery module disabled");
         ui.bq40z50 = SelfCheckCommState::Err;
-    } else if bms_discharge_ready == Some(false) {
-        defmt::warn!("self_test: bq40z50 discharge path not ready");
+    } else if bms_discharge_ready != Some(true) {
+        defmt::warn!(
+            "self_test: bq40z50 discharge path not ready state={=?}",
+            bms_discharge_ready
+        );
         ui.bq40z50 = SelfCheckCommState::Warn;
     } else if bms_rca_alarm == Some(true) {
         ui.bq40z50 = SelfCheckCommState::Warn;
@@ -1141,6 +1144,9 @@ where
         }
         if restore.is_enabled(OutputChannel::OutB) {
             self.tps_b_next_retry_at = Some(now);
+        }
+        if !self.ina_ready {
+            self.ina_next_retry_at = Some(now);
         }
         self.outputs_blocked_by_bms = false;
     }
@@ -1811,7 +1817,7 @@ where
                     self.bms_next_retry_at = None;
                     let rca_alarm = (s.batt_status & bq40z50::battery_status::RCA) != 0;
                     let discharge_ready = Self::bq40_discharge_ready(s.op_status);
-                    self.ui_snapshot.bq40z50 = if discharge_ready == Some(false) || rca_alarm {
+                    self.ui_snapshot.bq40z50 = if discharge_ready != Some(true) || rca_alarm {
                         SelfCheckCommState::Warn
                     } else {
                         SelfCheckCommState::Ok

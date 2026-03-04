@@ -224,7 +224,7 @@ pub fn is_bq40_offline(snapshot: &SelfCheckUiSnapshot) -> bool {
 #[allow(dead_code)]
 pub fn is_bq40_activation_needed(snapshot: &SelfCheckUiSnapshot) -> bool {
     is_bq40_offline(snapshot)
-        || (snapshot.bq40z50_soc_pct.is_some() && snapshot.bq40z50_discharge_ready == Some(false))
+        || (snapshot.bq40z50_soc_pct.is_some() && snapshot.bq40z50_discharge_ready != Some(true))
 }
 
 #[allow(dead_code)]
