@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>状态/告警/错误提示音预览</title>
+    <link rel="stylesheet" href="./preview.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <header class="hero">
+        <h1>状态/告警/错误提示音（Speaker Chime）</h1>
+        <p>
+          试听资产预览页：支持分组浏览、单条播放、循环模拟、全局音量与告警间隔调参。
+        </p>
+      </header>
+
+      <section class="panel controls">
+        <div class="control-group">
+          <label for="filter">分组筛选</label>
+          <select id="filter">
+            <option value="all">全部</option>
+            <option value="status">状态音</option>
+            <option value="warning">告警音</option>
+            <option value="error">错误音</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label for="volume">全局音量</label>
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="0.85" />
+          <output id="volume-value">0.85</output>
+        </div>
+
+        <div class="control-group">
+          <label for="warning-interval">告警循环间隔 (ms)</label>
+          <input id="warning-interval" type="number" min="400" max="10000" step="100" />
+        </div>
+
+        <div class="control-group control-group-wide">
+          <button id="stop-all" class="danger">停止全部</button>
+        </div>
+      </section>
+
+      <section id="status-group" class="panel cue-group">
+        <h2>状态音（单次）</h2>
+        <div class="cue-list" data-category="status"></div>
+      </section>
+
+      <section id="warning-group" class="panel cue-group">
+        <h2>告警音（间隔循环）</h2>
+        <div class="cue-list" data-category="warning"></div>
+      </section>
+
+      <section id="error-group" class="panel cue-group">
+        <h2>错误音（连续循环）</h2>
+        <div class="cue-list" data-category="error"></div>
+      </section>
+    </main>
+
+    <template id="cue-template">
+      <article class="cue-item">
+        <div class="cue-main">
+          <div class="cue-title-row">
+            <h3 class="cue-title"></h3>
+            <span class="cue-id"></span>
+          </div>
+          <p class="cue-trigger"></p>
+          <p class="cue-meta"></p>
+        </div>
+        <div class="cue-actions">
+          <button class="play-once">播放一次</button>
+          <button class="play-loop">循环播放</button>
+          <button class="stop-one">停止</button>
+          <a class="open-wav" target="_blank" rel="noreferrer">WAV</a>
+          <a class="open-mid" target="_blank" rel="noreferrer">MIDI</a>
+        </div>
+      </article>
+    </template>
+
+    <script src="./preview.js" type="module"></script>
+  </body>
+</html>

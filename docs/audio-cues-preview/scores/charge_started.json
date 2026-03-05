@@ -1,0 +1,31 @@
+{
+  "tempo_bpm": 120,
+  "audio": {
+    "waveform": "sine",
+    "sample_rate_hz": 44100,
+    "volume": 0.62,
+    "fade_ms": 6
+  },
+  "midi": {
+    "channel": 0,
+    "program": 80,
+    "velocity": 98
+  },
+  "events": [
+    {
+      "note": "C5",
+      "ms": 110
+    },
+    {
+      "rest_ms": 40
+    },
+    {
+      "note": "E5",
+      "ms": 170
+    },
+    {
+      "note": "G5",
+      "ms": 180
+    }
+  ]
+}

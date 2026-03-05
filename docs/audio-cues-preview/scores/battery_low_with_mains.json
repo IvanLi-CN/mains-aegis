@@ -1,0 +1,27 @@
+{
+  "tempo_bpm": 120,
+  "audio": {
+    "waveform": "sine",
+    "sample_rate_hz": 44100,
+    "volume": 0.72,
+    "fade_ms": 6
+  },
+  "midi": {
+    "channel": 0,
+    "program": 80,
+    "velocity": 98
+  },
+  "events": [
+    {
+      "note": "A4",
+      "ms": 170
+    },
+    {
+      "rest_ms": 80
+    },
+    {
+      "note": "F4",
+      "ms": 230
+    }
+  ]
+}

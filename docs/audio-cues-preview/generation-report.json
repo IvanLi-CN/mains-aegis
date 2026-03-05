@@ -1,0 +1,12 @@
+{
+  "score_count": 15,
+  "wav_count": 15,
+  "mid_count": 15,
+  "expected_count": 15,
+  "category_counts": {
+    "status": 5,
+    "warning": 4,
+    "error": 6
+  },
+  "total_duration_ms": 8290
+}
