@@ -13,15 +13,25 @@
   },
   "events": [
     {
-      "note": "G4",
-      "ms": 220
-    },
-    {
-      "rest_ms": 120
-    },
-    {
       "note": "E4",
-      "ms": 250
+      "ms": 180,
+      "velocity": 118
+    },
+    {
+      "rest_ms": 60
+    },
+    {
+      "note": "C#4",
+      "ms": 180,
+      "velocity": 110
+    },
+    {
+      "rest_ms": 60
+    },
+    {
+      "note": "A3",
+      "ms": 280,
+      "velocity": 116
     }
   ]
 }

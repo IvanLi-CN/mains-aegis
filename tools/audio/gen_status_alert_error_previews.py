@@ -27,8 +27,11 @@ class CueDef:
     events: list[dict[str, object]]
 
 
-def note(name: str, ms: int) -> dict[str, object]:
-    return {"note": name, "ms": ms}
+def note(name: str, ms: int, velocity: int | None = None) -> dict[str, object]:
+    event: dict[str, object] = {"note": name, "ms": ms}
+    if velocity is not None:
+        event["velocity"] = velocity
+    return event
 
 
 def rest(ms: int) -> dict[str, object]:
@@ -89,7 +92,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="DC 桶输入丢失时触发间隔循环",
             loop_mode="interval_loop",
             loop_interval_ms=WARNING_INTERVAL_MS_DEFAULT,
-            events=[note("A4", 180), rest(120), note("A4", 200)],
+            events=[note("F4", 150, 114), rest(70), note("F4", 150), rest(70), note("D4", 260, 108)],
         ),
         CueDef(
             cue_id="high_stress",
@@ -107,7 +110,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="电池低电且市电不存在时触发间隔循环",
             loop_mode="interval_loop",
             loop_interval_ms=WARNING_INTERVAL_MS_DEFAULT,
-            events=[note("G4", 220), rest(120), note("E4", 250)],
+            events=[note("E4", 180, 118), rest(60), note("C#4", 180, 110), rest(60), note("A3", 280, 116)],
         ),
         CueDef(
             cue_id="battery_low_with_mains",
@@ -116,7 +119,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="电池低电且检测到市电时触发间隔循环",
             loop_mode="interval_loop",
             loop_interval_ms=WARNING_INTERVAL_MS_DEFAULT,
-            events=[note("A4", 170), rest(80), note("F4", 230)],
+            events=[note("G4", 170, 112), rest(70), note("E4", 170), rest(80), note("C4", 240, 108)],
         ),
         CueDef(
             cue_id="shutdown_protection",

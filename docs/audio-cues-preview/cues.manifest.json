@@ -74,7 +74,7 @@
       "score_path": "scores/mains_absent_dc.json",
       "wav_path": "audio/mains_absent_dc.wav",
       "mid_path": "audio/mains_absent_dc.mid",
-      "duration_ms": 500
+      "duration_ms": 700
     },
     {
       "id": "high_stress",
@@ -98,7 +98,7 @@
       "score_path": "scores/battery_low_no_mains.json",
       "wav_path": "audio/battery_low_no_mains.wav",
       "mid_path": "audio/battery_low_no_mains.mid",
-      "duration_ms": 590
+      "duration_ms": 760
     },
     {
       "id": "battery_low_with_mains",
@@ -110,7 +110,7 @@
       "score_path": "scores/battery_low_with_mains.json",
       "wav_path": "audio/battery_low_with_mains.wav",
       "mid_path": "audio/battery_low_with_mains.mid",
-      "duration_ms": 480
+      "duration_ms": 730
     },
     {
       "id": "shutdown_protection",

@@ -13,15 +13,24 @@
   },
   "events": [
     {
-      "note": "A4",
-      "ms": 180
+      "note": "F4",
+      "ms": 150,
+      "velocity": 114
     },
     {
-      "rest_ms": 120
+      "rest_ms": 70
     },
     {
-      "note": "A4",
-      "ms": 200
+      "note": "F4",
+      "ms": 150
+    },
+    {
+      "rest_ms": 70
+    },
+    {
+      "note": "D4",
+      "ms": 260,
+      "velocity": 108
     }
   ]
 }
