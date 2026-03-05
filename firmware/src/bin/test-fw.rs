@@ -149,12 +149,12 @@ fn main() -> ! {
         I2sConfig::new_tdm_philips()
             .with_sample_rate(Rate::from_hz(test_audio::PLAYBACK_SAMPLE_RATE_HZ))
             .with_data_format(DataFormat::Data16Channel16)
-            .with_channels(Channels::MONO),
+            .with_channels(Channels::STEREO),
     )
     .unwrap();
 
     #[cfg(feature = "test-fw-audio-playback")]
-    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 4092);
+    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 16 * 4092);
     #[cfg(feature = "test-fw-audio-playback")]
     let mut i2s_tx = i2s
         .i2s_tx
@@ -181,11 +181,17 @@ fn main() -> ! {
     loop {
         #[cfg(feature = "test-fw-audio-playback")]
         {
-            if audio_transfer
-                .push_with(|buf| audio_manager.fill(buf))
-                .is_err()
-            {
-                defmt::warn!("test-fw: dma push failed");
+            match audio_transfer.available() {
+                Ok(available) if available >= 4 => {
+                    if audio_transfer
+                        .push_with(|buf| audio_manager.fill(buf))
+                        .is_err()
+                    {
+                        defmt::warn!("test-fw: dma push failed");
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => defmt::warn!("test-fw: dma available failed"),
             }
             audio_manager.tick();
         }

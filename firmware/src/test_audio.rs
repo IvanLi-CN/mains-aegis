@@ -36,10 +36,13 @@ pub struct AudioStatus {
 struct ActivePlayback {
     request: AudioRequest,
     pcm: &'static [u8],
-    cursor: usize,
+    source_pos_q16: u32,
 }
 
-pub const PLAYBACK_SAMPLE_RATE_HZ: u32 = 44_100;
+pub const PLAYBACK_SAMPLE_RATE_HZ: u32 = 8_000;
+const SOURCE_SAMPLE_RATE_HZ: u32 = 44_100;
+const RESAMPLE_STEP_Q16: u32 =
+    ((SOURCE_SAMPLE_RATE_HZ as u64 * 65_536u64) / PLAYBACK_SAMPLE_RATE_HZ as u64) as u32;
 const QUEUE_CAPACITY: usize = 8;
 
 const WAV_BOOT: &[u8] = include_bytes!("../assets/audio/test-fw-cues/boot_startup.wav");
@@ -136,28 +139,25 @@ impl AudioManager {
                 }
             }
 
-            let written = {
+            let sample = {
                 let active = self
                     .current
                     .as_mut()
                     .expect("audio playback must exist after promote");
-                copy_pcm_chunk(active.pcm, &mut active.cursor, &mut buf[out..want])
+                next_mono_sample(active)
             };
-
-            if written == 0 {
+            let Some(sample) = sample else {
                 self.current = None;
                 continue;
-            }
-
-            out += written;
-            let finished = self
-                .current
-                .as_ref()
-                .map(|active| active.cursor >= active.pcm.len())
-                .unwrap_or(false);
-            if finished {
-                self.current = None;
-            }
+            };
+            let [lo, hi] = sample.to_le_bytes();
+            // Duplicate mono sample to L/R so MAX98357A board wiring can use
+            // either channel without becoming silent.
+            buf[out] = lo;
+            buf[out + 1] = hi;
+            buf[out + 2] = lo;
+            buf[out + 3] = hi;
+            out += 4;
         }
 
         out
@@ -167,7 +167,7 @@ impl AudioManager {
         ActivePlayback {
             request,
             pcm: pcm_for_event(request.event),
-            cursor: 0,
+            source_pos_q16: 0,
         }
     }
 
@@ -242,28 +242,18 @@ fn pcm_for_event(event: AudioEvent) -> &'static [u8] {
     parse_wav_pcm16le_mono(wav)
 }
 
-fn copy_pcm_chunk(src: &[u8], cursor: &mut usize, dst: &mut [u8]) -> usize {
-    let dst_len = dst.len() & !0x3;
-    if dst_len == 0 || *cursor >= src.len() {
-        return 0;
+fn next_mono_sample(active: &mut ActivePlayback) -> Option<i16> {
+    let sample_count = active.pcm.len() / 2;
+    let idx = (active.source_pos_q16 >> 16) as usize;
+    if idx >= sample_count {
+        active.source_pos_q16 = (sample_count as u32) << 16;
+        return None;
     }
-
-    let remaining = src.len() - *cursor;
-    let aligned_src = remaining & !0x3;
-    if aligned_src > 0 {
-        let take = core::cmp::min(dst_len, aligned_src);
-        dst[..take].copy_from_slice(&src[*cursor..*cursor + take]);
-        *cursor += take;
-        return take;
-    }
-
-    let take = core::cmp::min(remaining, 4);
-    dst[..take].copy_from_slice(&src[*cursor..*cursor + take]);
-    for b in &mut dst[take..4] {
-        *b = 0;
-    }
-    *cursor += take;
-    4
+    let base = idx * 2;
+    let lo = active.pcm[base];
+    let hi = active.pcm[base + 1];
+    active.source_pos_q16 = active.source_pos_q16.saturating_add(RESAMPLE_STEP_Q16);
+    Some(i16::from_le_bytes([lo, hi]))
 }
 
 fn parse_wav_pcm16le_mono(bytes: &'static [u8]) -> &'static [u8] {
@@ -279,7 +269,7 @@ fn parse_wav_pcm16le_mono(bytes: &'static [u8]) -> &'static [u8] {
     if view.bits_per_sample != 16 {
         return &[];
     }
-    if view.sample_rate_hz != PLAYBACK_SAMPLE_RATE_HZ {
+    if view.sample_rate_hz != SOURCE_SAMPLE_RATE_HZ {
         return &[];
     }
     view.data
