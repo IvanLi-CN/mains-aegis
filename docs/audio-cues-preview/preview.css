@@ -116,67 +116,6 @@ button.danger {
   gap: 10px;
 }
 
-.mix-panel {
-  border: 1px dashed #bfd4e6;
-  border-radius: 12px;
-  padding: 10px 12px;
-  margin-bottom: 12px;
-  background: #f8fcff;
-}
-
-.mix-note {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.mix-list {
-  margin-top: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-}
-
-.mix-list label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--ink);
-  font-size: 0.88rem;
-  border: 1px solid #dce7f2;
-  border-radius: 999px;
-  padding: 4px 10px;
-  background: #fff;
-}
-
-.mix-actions {
-  margin-top: 10px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.mix-actions button {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 6px 10px;
-  background: #fff;
-}
-
-.mix-status {
-  color: var(--muted);
-  font-size: 0.86rem;
-}
-
-.mix-status.ok {
-  color: #1f7a36;
-}
-
-.mix-status.warn {
-  color: #9a6015;
-}
-
 .cue-item {
   border: 1px solid var(--line);
   border-radius: 12px;
