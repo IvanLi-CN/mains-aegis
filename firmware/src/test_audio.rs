@@ -33,88 +33,24 @@ pub struct AudioStatus {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ToneStep {
-    freq_hz: u16,
-    duration_ms: u16,
-}
-
-#[derive(Clone, Copy, Debug)]
 struct ActivePlayback {
     request: AudioRequest,
-    script: &'static [ToneStep],
-    step_index: usize,
-    samples_left_in_step: u32,
-    phase: u32,
+    pcm: &'static [u8],
+    cursor: usize,
 }
 
-const SAMPLE_RATE_HZ: u32 = 8_000;
-const AMP: i16 = 9_000;
+pub const PLAYBACK_SAMPLE_RATE_HZ: u32 = 44_100;
 const QUEUE_CAPACITY: usize = 8;
 
-const STEPS_BOOT: [ToneStep; 2] = [
-    ToneStep {
-        freq_hz: 523,
-        duration_ms: 130,
-    },
-    ToneStep {
-        freq_hz: 659,
-        duration_ms: 170,
-    },
-];
-const STEPS_TOUCH: [ToneStep; 1] = [ToneStep {
-    freq_hz: 1100,
-    duration_ms: 45,
-}];
-const STEPS_KEY: [ToneStep; 1] = [ToneStep {
-    freq_hz: 980,
-    duration_ms: 45,
-}];
-const STEPS_MODE_SWITCH: [ToneStep; 2] = [
-    ToneStep {
-        freq_hz: 700,
-        duration_ms: 75,
-    },
-    ToneStep {
-        freq_hz: 920,
-        duration_ms: 85,
-    },
-];
-const STEPS_WARNING: [ToneStep; 3] = [
-    ToneStep {
-        freq_hz: 760,
-        duration_ms: 110,
-    },
-    ToneStep {
-        freq_hz: 0,
-        duration_ms: 60,
-    },
-    ToneStep {
-        freq_hz: 760,
-        duration_ms: 120,
-    },
-];
-const STEPS_ERROR: [ToneStep; 5] = [
-    ToneStep {
-        freq_hz: 320,
-        duration_ms: 150,
-    },
-    ToneStep {
-        freq_hz: 0,
-        duration_ms: 70,
-    },
-    ToneStep {
-        freq_hz: 320,
-        duration_ms: 160,
-    },
-    ToneStep {
-        freq_hz: 0,
-        duration_ms: 70,
-    },
-    ToneStep {
-        freq_hz: 260,
-        duration_ms: 220,
-    },
-];
+const WAV_BOOT: &[u8] = include_bytes!("../assets/audio/test-fw-cues/boot_startup.wav");
+const WAV_TOUCH_INTERACTION: &[u8] =
+    include_bytes!("../assets/audio/test-fw-cues/mains_present_dc.wav");
+const WAV_KEY_INTERACTION: &[u8] =
+    include_bytes!("../assets/audio/test-fw-cues/charge_completed.wav");
+const WAV_MODE_SWITCH: &[u8] =
+    include_bytes!("../assets/audio/test-fw-cues/shutdown_mode_entered.wav");
+const WAV_WARNING: &[u8] = include_bytes!("../assets/audio/test-fw-cues/battery_low_no_mains.wav");
+const WAV_ERROR: &[u8] = include_bytes!("../assets/audio/test-fw-cues/module_fault.wav");
 
 pub struct AudioManager {
     current: Option<ActivePlayback>,
@@ -187,8 +123,8 @@ impl AudioManager {
         if want == 0 {
             return 0;
         }
-        let mut out = 0usize;
 
+        let mut out = 0usize;
         while out < want {
             if self.current.is_none() {
                 self.promote_next();
@@ -200,62 +136,38 @@ impl AudioManager {
                 }
             }
 
-            let s0 = self.next_sample_i16();
-            let s1 = self.next_sample_i16();
-            let [a0, a1] = s0.to_le_bytes();
-            let [b0, b1] = s1.to_le_bytes();
-            buf[out] = a0;
-            buf[out + 1] = a1;
-            buf[out + 2] = b0;
-            buf[out + 3] = b1;
-            out += 4;
+            let written = {
+                let active = self
+                    .current
+                    .as_mut()
+                    .expect("audio playback must exist after promote");
+                copy_pcm_chunk(active.pcm, &mut active.cursor, &mut buf[out..want])
+            };
+
+            if written == 0 {
+                self.current = None;
+                continue;
+            }
+
+            out += written;
+            let finished = self
+                .current
+                .as_ref()
+                .map(|active| active.cursor >= active.pcm.len())
+                .unwrap_or(false);
+            if finished {
+                self.current = None;
+            }
         }
 
         out
     }
 
-    fn next_sample_i16(&mut self) -> i16 {
-        let Some(active) = self.current.as_mut() else {
-            return 0;
-        };
-
-        let step = active.script[active.step_index];
-        let sample = if step.freq_hz == 0 {
-            0
-        } else {
-            let inc = ((step.freq_hz as u64) << 32) / (SAMPLE_RATE_HZ as u64);
-            active.phase = active.phase.wrapping_add(inc as u32);
-            if (active.phase & 0x8000_0000) == 0 {
-                AMP
-            } else {
-                -AMP
-            }
-        };
-
-        if active.samples_left_in_step > 0 {
-            active.samples_left_in_step -= 1;
-        }
-        if active.samples_left_in_step == 0 {
-            active.step_index += 1;
-            if active.step_index >= active.script.len() {
-                self.current = None;
-            } else {
-                active.phase = 0;
-                active.samples_left_in_step = samples_for_step(active.script[active.step_index]);
-            }
-        }
-
-        sample
-    }
-
     fn start_playback(request: AudioRequest) -> ActivePlayback {
-        let script = script_for(request.event);
         ActivePlayback {
             request,
-            script,
-            step_index: 0,
-            samples_left_in_step: samples_for_step(script[0]),
-            phase: 0,
+            pcm: pcm_for_event(request.event),
+            cursor: 0,
         }
     }
 
@@ -316,21 +228,130 @@ fn priority_for(event: AudioEvent) -> AudioPriority {
     }
 }
 
-fn script_for(event: AudioEvent) -> &'static [ToneStep] {
-    match event {
-        AudioEvent::Boot => &STEPS_BOOT,
-        AudioEvent::TouchInteraction => &STEPS_TOUCH,
-        AudioEvent::KeyInteraction => &STEPS_KEY,
-        AudioEvent::ModeSwitch => &STEPS_MODE_SWITCH,
-        AudioEvent::Warning => &STEPS_WARNING,
-        AudioEvent::Error => &STEPS_ERROR,
-    }
+fn pcm_for_event(event: AudioEvent) -> &'static [u8] {
+    // test-fw maps high-level events onto the latest approved cue bundle from
+    // docs/audio-cues-preview/audio.
+    let wav = match event {
+        AudioEvent::Boot => WAV_BOOT,
+        AudioEvent::TouchInteraction => WAV_TOUCH_INTERACTION,
+        AudioEvent::KeyInteraction => WAV_KEY_INTERACTION,
+        AudioEvent::Warning => WAV_WARNING,
+        AudioEvent::Error => WAV_ERROR,
+        AudioEvent::ModeSwitch => WAV_MODE_SWITCH,
+    };
+    parse_wav_pcm16le_mono(wav)
 }
 
-fn samples_for_step(step: ToneStep) -> u32 {
-    let mut samples = (SAMPLE_RATE_HZ as u64 * step.duration_ms as u64) / 1000;
-    if samples == 0 {
-        samples = 1;
+fn copy_pcm_chunk(src: &[u8], cursor: &mut usize, dst: &mut [u8]) -> usize {
+    let dst_len = dst.len() & !0x3;
+    if dst_len == 0 || *cursor >= src.len() {
+        return 0;
     }
-    samples as u32
+
+    let remaining = src.len() - *cursor;
+    let aligned_src = remaining & !0x3;
+    if aligned_src > 0 {
+        let take = core::cmp::min(dst_len, aligned_src);
+        dst[..take].copy_from_slice(&src[*cursor..*cursor + take]);
+        *cursor += take;
+        return take;
+    }
+
+    let take = core::cmp::min(remaining, 4);
+    dst[..take].copy_from_slice(&src[*cursor..*cursor + take]);
+    for b in &mut dst[take..4] {
+        *b = 0;
+    }
+    *cursor += take;
+    4
+}
+
+fn parse_wav_pcm16le_mono(bytes: &'static [u8]) -> &'static [u8] {
+    let Ok(view) = parse_wav_view(bytes) else {
+        return &[];
+    };
+    if view.audio_format != 1 {
+        return &[];
+    }
+    if view.channels != 1 {
+        return &[];
+    }
+    if view.bits_per_sample != 16 {
+        return &[];
+    }
+    if view.sample_rate_hz != PLAYBACK_SAMPLE_RATE_HZ {
+        return &[];
+    }
+    view.data
+}
+
+#[derive(Clone, Copy)]
+struct WavView {
+    audio_format: u16,
+    channels: u16,
+    sample_rate_hz: u32,
+    bits_per_sample: u16,
+    data: &'static [u8],
+}
+
+fn parse_wav_view(bytes: &'static [u8]) -> Result<WavView, ()> {
+    if bytes.len() < 44 {
+        return Err(());
+    }
+    if &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err(());
+    }
+
+    let mut fmt: Option<(u16, u16, u32, u16)> = None;
+    let mut data: Option<&'static [u8]> = None;
+    let mut offset = 12usize;
+
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let size = u32::from_le_bytes([
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ]) as usize;
+        offset += 8;
+
+        if offset + size > bytes.len() {
+            return Err(());
+        }
+
+        if id == b"fmt " {
+            if size < 16 {
+                return Err(());
+            }
+            fmt = Some((
+                u16::from_le_bytes([bytes[offset], bytes[offset + 1]]),
+                u16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]),
+                u32::from_le_bytes([
+                    bytes[offset + 4],
+                    bytes[offset + 5],
+                    bytes[offset + 6],
+                    bytes[offset + 7],
+                ]),
+                u16::from_le_bytes([bytes[offset + 14], bytes[offset + 15]]),
+            ));
+        } else if id == b"data" {
+            data = Some(&bytes[offset..offset + size]);
+        }
+
+        offset += size + (size % 2);
+        if fmt.is_some() && data.is_some() {
+            break;
+        }
+    }
+
+    let (audio_format, channels, sample_rate_hz, bits_per_sample) = fmt.ok_or(())?;
+    let data = data.ok_or(())?;
+    Ok(WavView {
+        audio_format,
+        channels,
+        sample_rate_hz,
+        bits_per_sample,
+        data,
+    })
 }

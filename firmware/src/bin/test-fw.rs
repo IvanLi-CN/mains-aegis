@@ -147,7 +147,7 @@ fn main() -> ! {
         i2s0,
         dma_channel,
         I2sConfig::new_tdm_philips()
-            .with_sample_rate(Rate::from_hz(8_000))
+            .with_sample_rate(Rate::from_hz(test_audio::PLAYBACK_SAMPLE_RATE_HZ))
             .with_data_format(DataFormat::Data16Channel16)
             .with_channels(Channels::MONO),
     )

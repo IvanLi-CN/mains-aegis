@@ -328,6 +328,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 - `test-fw-screen-static`：屏幕静态显示测试（方向锚点 + 四角色块 + 色条 + 灰阶 + BACK 控件）
 - `test-fw-audio-playback`：音频播放与优先级测试（抢占 + 同级 FIFO）
+  - 音频素材：`firmware/assets/audio/test-fw-cues/*.wav`（同步自 `docs/audio-cues-preview/audio/`）
 
 路由规则：
 
