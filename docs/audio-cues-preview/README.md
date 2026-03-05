@@ -19,6 +19,8 @@
 python3 tools/audio/gen_status_alert_error_previews.py
 ```
 
+默认使用仓库内置工具 `tools/audio/buzzer_preview.py` 生成 `MIDI + WAV`，也可通过 `--buzzer-tool` 覆盖。
+
 ## 本地预览
 
 在仓库根目录执行：

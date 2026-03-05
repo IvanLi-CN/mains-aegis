@@ -7,7 +7,7 @@ import argparse
 import json
 import subprocess
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 WARNING_INTERVAL_MS_DEFAULT = 2000
@@ -238,7 +238,18 @@ def run_buzzer_preview(tool_script: Path, score_path: Path, out_dir: Path, stem:
     subprocess.run(cmd, check=True)
 
 
+def clean_previous_outputs(score_dir: Path, audio_dir: Path) -> None:
+    for pattern in ("*.json",):
+        for path in score_dir.glob(pattern):
+            path.unlink()
+
+    for pattern in ("*.wav", "*.mid"):
+        for path in audio_dir.glob(pattern):
+            path.unlink()
+
+
 def parse_args() -> argparse.Namespace:
+    local_tool = Path(__file__).resolve().with_name("buzzer_preview.py")
     parser = argparse.ArgumentParser(description="Generate status/warning/error preview assets.")
     parser.add_argument(
         "--repo-root",
@@ -249,8 +260,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--buzzer-tool",
         type=Path,
-        default=Path.home() / ".codex/skills/buzzer-audio-preview/scripts/buzzer_preview.py",
-        help="Path to buzzer_preview.py",
+        default=local_tool,
+        help="Path to buzzer_preview.py (default: tools/audio/buzzer_preview.py)",
     )
     return parser.parse_args()
 
@@ -268,6 +279,7 @@ def main() -> int:
     audio_dir = base_dir / "audio"
     score_dir.mkdir(parents=True, exist_ok=True)
     audio_dir.mkdir(parents=True, exist_ok=True)
+    clean_previous_outputs(score_dir=score_dir, audio_dir=audio_dir)
 
     manifest_items: list[dict[str, object]] = []
     cue_defs = cues()
@@ -312,17 +324,27 @@ def main() -> int:
     manifest_payload = {
         "version": 1,
         "profile": "speaker_chime_v1",
-        "generated_at": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "warning_interval_ms_default": WARNING_INTERVAL_MS_DEFAULT,
         "items": manifest_items,
     }
     write_json(base_dir / "cues.manifest.json", manifest_payload)
 
+    score_count = len(list(score_dir.glob("*.json")))
+    wav_count = len(list(audio_dir.glob("*.wav")))
+    mid_count = len(list(audio_dir.glob("*.mid")))
+    expected_count = len(cue_defs)
+    if not (score_count == wav_count == mid_count == expected_count):
+        raise ValueError(
+            "generated artifact counts mismatch: "
+            f"score={score_count}, wav={wav_count}, mid={mid_count}, expected={expected_count}"
+        )
+
     report_payload = {
-        "score_count": len(list(score_dir.glob("*.json"))),
-        "wav_count": len(list(audio_dir.glob("*.wav"))),
-        "mid_count": len(list(audio_dir.glob("*.mid"))),
-        "expected_count": len(cue_defs),
+        "score_count": score_count,
+        "wav_count": wav_count,
+        "mid_count": mid_count,
+        "expected_count": expected_count,
         "category_counts": category_counts,
         "total_duration_ms": sum(int(item["duration_ms"]) for item in manifest_items),
     }

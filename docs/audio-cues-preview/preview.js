@@ -8,6 +8,7 @@ const groupTitles = {
 
 const activePlayers = new Map();
 let manifest = null;
+let manifestBaseUrl = new URL(MANIFEST_URL, window.location.href).toString();
 
 const filterEl = document.getElementById("filter");
 const volumeEl = document.getElementById("volume");
@@ -37,6 +38,10 @@ function getWarningLoopInterval(defaultInterval) {
 
 function cueItemKey(item) {
   return `${item.category}:${item.id}`;
+}
+
+function resolveAssetUrl(relativePath) {
+  return new URL(relativePath, manifestBaseUrl).toString();
 }
 
 function setRowPlaying(item, playing) {
@@ -72,7 +77,7 @@ function stopAllCues() {
 async function playOnce(item) {
   stopCue(item);
   const key = cueItemKey(item);
-  const audio = new Audio(new URL(item.wav_path, MANIFEST_URL).toString());
+  const audio = new Audio(resolveAssetUrl(item.wav_path));
   audio.volume = getGlobalVolume();
 
   const state = {
@@ -107,7 +112,7 @@ async function playLoop(item) {
   }
 
   const key = cueItemKey(item);
-  const audio = new Audio(new URL(item.wav_path, MANIFEST_URL).toString());
+  const audio = new Audio(resolveAssetUrl(item.wav_path));
   audio.volume = getGlobalVolume();
 
   const state = {
@@ -202,8 +207,8 @@ function renderCue(item) {
         : "连续循环";
   meta.textContent = `${groupTitles[item.category]} · ${loopText} · 时长 ${durationText}`;
 
-  wav.href = item.wav_path;
-  mid.href = item.mid_path;
+  wav.href = resolveAssetUrl(item.wav_path);
+  mid.href = resolveAssetUrl(item.mid_path);
 
   bindRowActions(item, row);
   return fragment;
@@ -259,6 +264,7 @@ async function bootstrap() {
   if (!response.ok) {
     throw new Error(`Failed to load manifest: ${response.status}`);
   }
+  manifestBaseUrl = response.url;
   manifest = await response.json();
   render(manifest);
 }
