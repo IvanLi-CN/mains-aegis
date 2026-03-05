@@ -1,5 +1,5 @@
 {
-  "tempo_bpm": 120,
+  "tempo_bpm": 240,
   "audio": {
     "waveform": "sine",
     "sample_rate_hz": 44100,

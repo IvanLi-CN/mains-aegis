@@ -14,7 +14,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 WARNING_INTERVAL_MS_DEFAULT = 2000
-TEMPO_BPM = 120
+TEMPO_BPM = 240
 BAR_BEATS = 4.0
 
 
