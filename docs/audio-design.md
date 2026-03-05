@@ -103,6 +103,16 @@
 - Demo 素材（固件侧落盘）：`../firmware/assets/audio/demo-playlist/`
 - 验证步骤：`../firmware/README.md`（见“音频播放 Demo（Plan #0004）”章节）
 
+### 4.4 状态/告警/错误提示音本地试听资产（非固件接入）
+
+为了快速评审提示音语义与听感，本仓库提供了独立的“本地试听资产”目录（不直接接入固件运行时资源）：
+
+- 资产入口：`./audio-cues-preview/README.md`
+- 清单契约：`./audio-cues-preview/cues.manifest.json`
+- 本地预览页：`./audio-cues-preview/preview.html`
+
+> 说明：该目录用于“音效定义与试听”，不是固件打包资源；后续若要接入固件资产目录，应另开变更并同步规格。
+
 ---
 
 ## 5. 引脚预留建议（供原理图阶段落地）

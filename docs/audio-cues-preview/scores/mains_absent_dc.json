@@ -1,0 +1,37 @@
+{
+  "tempo_bpm": 240,
+  "audio": {
+    "waveform": "sine",
+    "sample_rate_hz": 44100,
+    "volume": 0.82,
+    "fade_ms": 5,
+    "harmonics": [
+      1.0,
+      0.22,
+      0.08
+    ]
+  },
+  "midi": {
+    "channel": 0,
+    "program": 80,
+    "velocity": 98
+  },
+  "events": [
+    {
+      "note": "F4",
+      "beats": 0.5,
+      "velocity": 124
+    },
+    {
+      "rest_beats": 1.5
+    },
+    {
+      "note": "D4",
+      "beats": 0.5,
+      "velocity": 122
+    },
+    {
+      "rest_beats": 1.5
+    }
+  ]
+}
