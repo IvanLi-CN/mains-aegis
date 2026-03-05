@@ -3,7 +3,7 @@
   "audio": {
     "waveform": "sine",
     "sample_rate_hz": 44100,
-    "volume": 0.76,
+    "volume": 0.82,
     "fade_ms": 6
   },
   "midi": {
@@ -17,18 +17,15 @@
       "ms": 140
     },
     {
-      "rest_ms": 55
-    },
-    {
-      "note": "G4",
+      "note": "A4",
       "ms": 140
     },
     {
-      "rest_ms": 55
+      "note": "D5",
+      "ms": 140
     },
     {
-      "note": "D5",
-      "ms": 150
+      "rest_ms": 80
     }
   ]
 }

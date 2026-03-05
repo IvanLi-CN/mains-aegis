@@ -3,7 +3,7 @@
   "audio": {
     "waveform": "sine",
     "sample_rate_hz": 44100,
-    "volume": 0.76,
+    "volume": 0.82,
     "fade_ms": 6
   },
   "midi": {
@@ -13,29 +13,20 @@
   },
   "events": [
     {
-      "note": "A4",
-      "ms": 170
+      "note": "C5",
+      "ms": 180
     },
     {
-      "rest_ms": 50
+      "note": "G4",
+      "ms": 180
     },
     {
-      "note": "E4",
-      "ms": 170
+      "note": "C5",
+      "ms": 180
     },
     {
-      "rest_ms": 50
-    },
-    {
-      "note": "C4",
-      "ms": 190
-    },
-    {
-      "rest_ms": 50
-    },
-    {
-      "note": "A3",
-      "ms": 210
+      "note": "G4",
+      "ms": 180
     }
   ]
 }

@@ -62,39 +62,6 @@ function setRowPlaying(item, playing) {
   row.classList.toggle("playing", playing);
 }
 
-function getErrorMixScale(activeErrorCount) {
-  if (activeErrorCount <= 1) return 1.0;
-  if (activeErrorCount === 2) return 0.7;
-  return 0.54;
-}
-
-function countActiveErrorPlayers() {
-  let count = 0;
-  for (const state of activePlayers.values()) {
-    if (!state.stopped && state.item?.category === "error") {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function playerVolume(state) {
-  const global = getGlobalVolume();
-  if (state.item?.category !== "error") {
-    return global;
-  }
-  const mixScale = getErrorMixScale(countActiveErrorPlayers());
-  return Math.min(1, global * mixScale);
-}
-
-function syncActiveVolumes() {
-  for (const state of activePlayers.values()) {
-    if (state.audio) {
-      state.audio.volume = playerVolume(state);
-    }
-  }
-}
-
 function stopCue(item) {
   const key = cueItemKey(item);
   const state = activePlayers.get(key);
@@ -109,7 +76,6 @@ function stopCue(item) {
     state.audio.currentTime = 0;
   }
   activePlayers.delete(key);
-  syncActiveVolumes();
   setRowPlaying(item, false);
 }
 
@@ -131,17 +97,14 @@ async function playOnce(item) {
     timerId: 0,
     stopped: false,
     mode: "once",
-    item,
   };
   activePlayers.set(key, state);
-  syncActiveVolumes();
   setRowPlaying(item, true);
 
   audio.addEventListener("ended", () => {
     const latest = activePlayers.get(key);
     if (!latest || latest.mode !== "once") return;
     activePlayers.delete(key);
-    syncActiveVolumes();
     setRowPlaying(item, false);
   });
 
@@ -169,11 +132,9 @@ async function playLoop(item) {
     timerId: 0,
     stopped: false,
     mode: "loop",
-    item,
   };
 
   activePlayers.set(key, state);
-  syncActiveVolumes();
   setRowPlaying(item, true);
 
   if (item.loop_mode === "continuous_loop") {
@@ -190,7 +151,7 @@ async function playLoop(item) {
 
     const startAt = performance.now();
     latest.audio.currentTime = 0;
-    latest.audio.volume = playerVolume(latest);
+    latest.audio.volume = getGlobalVolume();
 
     latest.audio.onended = () => {
       const interval = getWarningLoopInterval(item.loop_interval_ms || 2000);
@@ -311,7 +272,12 @@ function bindGlobalEvents() {
   volumeEl.addEventListener("input", () => {
     const volume = getGlobalVolume();
     volumeValueEl.textContent = volume.toFixed(2);
-    syncActiveVolumes();
+
+    for (const state of activePlayers.values()) {
+      if (state.audio) {
+        state.audio.volume = volume;
+      }
+    }
   });
   stopAllEl.addEventListener("click", stopAllCues);
 }
