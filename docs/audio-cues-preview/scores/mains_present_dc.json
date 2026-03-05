@@ -3,8 +3,13 @@
   "audio": {
     "waveform": "sine",
     "sample_rate_hz": 44100,
-    "volume": 0.62,
-    "fade_ms": 6
+    "volume": 0.6,
+    "fade_ms": 6,
+    "harmonics": [
+      1.0,
+      0.16,
+      0.04
+    ]
   },
   "midi": {
     "channel": 0,

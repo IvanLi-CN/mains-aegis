@@ -113,6 +113,7 @@ class AudioConfig:
     duty_cycle: float = 0.5
     volume: float = 0.7
     fade_ms: int = 2
+    harmonics: tuple[float, ...] = (1.0,)
 
 
 @dataclass(frozen=True)
@@ -198,6 +199,18 @@ def parse_score(path: Path) -> tuple[ScoreConfig, list[Event]]:
     volume = float(audio_raw.get("volume", raw.get("volume", 0.7)))
     fade_ms = int(audio_raw.get("fade_ms", raw.get("fade_ms", 2)))
     duty_cycle = float(audio_raw.get("duty_cycle", raw.get("duty_cycle", 0.5)))
+    harmonics_raw = audio_raw.get("harmonics", raw.get("harmonics", [1.0]))
+    if not isinstance(harmonics_raw, list) or not harmonics_raw:
+        raise ValueError("audio.harmonics must be a non-empty array of non-negative numbers")
+
+    harmonics: list[float] = []
+    for idx, partial in enumerate(harmonics_raw):
+        level = float(partial)
+        if level < 0:
+            raise ValueError(f"audio.harmonics[{idx}] must be >= 0, got {level}")
+        harmonics.append(level)
+    if all(level == 0 for level in harmonics):
+        raise ValueError("audio.harmonics must contain at least one non-zero level")
 
     audio_cfg = AudioConfig(
         sample_rate_hz=sample_rate_hz,
@@ -205,6 +218,7 @@ def parse_score(path: Path) -> tuple[ScoreConfig, list[Event]]:
         duty_cycle=_clamp01(duty_cycle),
         volume=_clamp01(volume),
         fade_ms=max(0, fade_ms),
+        harmonics=tuple(harmonics),
     )
 
     cfg = ScoreConfig(tempo_bpm=tempo_bpm, ppqn=ppqn, midi=midi_cfg, audio=audio_cfg)
@@ -318,6 +332,10 @@ def write_wav(path: Path, cfg: ScoreConfig, events: list[Event]) -> None:
     fade_samples = int(round(sr * cfg.audio.fade_ms / 1000.0))
     fade_samples = max(0, fade_samples)
     volume = _clamp01(cfg.audio.volume) * 0.9
+    harmonics = cfg.audio.harmonics if cfg.audio.waveform == "sine" else (1.0,)
+    harmonics_norm = sum(abs(level) for level in harmonics)
+    if harmonics_norm <= 0:
+        harmonics_norm = 1.0
 
     frames = bytearray()
     two_pi = 2.0 * math.pi
@@ -341,11 +359,16 @@ def write_wav(path: Path, cfg: ScoreConfig, events: list[Event]) -> None:
             inc = two_pi * freq / sr
             for i in range(count):
                 amp = _envelope(i, count, fade_samples) * volume
-                sample = math.sin(phase) * amp
+                sample = 0.0
+                for harmonic_index, level in enumerate(harmonics, start=1):
+                    if level <= 0:
+                        continue
+                    sample += level * math.sin(phase * harmonic_index)
+                sample = (sample / harmonics_norm) * amp
                 frames.extend(struct.pack("<h", int(max(-1.0, min(1.0, sample)) * 32767)))
                 phase += inc
                 if phase > two_pi:
-                    phase -= two_pi
+                    phase %= two_pi
         else:  # square
             inc = freq / sr
             duty = _clamp01(cfg.audio.duty_cycle)

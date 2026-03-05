@@ -94,7 +94,18 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="DC 桶输入丢失时触发间隔循环",
             loop_mode="interval_loop",
             loop_interval_ms=WARNING_INTERVAL_MS_DEFAULT,
-            events=[note("F4", 0.5, 122), rest(0.5), note("F4", 0.5, 116), rest(0.5), note("D4", 0.5, 120), rest(0.5), note("F4", 0.5, 114), rest(0.5)],
+            events=[
+                note("F4", 0.25, 126),
+                rest(0.25),
+                note("F4", 0.25, 122),
+                rest(0.25),
+                note("D4", 0.5, 124),
+                rest(0.5),
+                note("F4", 0.25, 120),
+                rest(0.25),
+                note("D4", 0.5, 122),
+                rest(1.0),
+            ],
         ),
         CueDef(
             cue_id="high_stress",
@@ -103,7 +114,18 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="任一模块温度/负载不佳但未触发保护时触发间隔循环",
             loop_mode="interval_loop",
             loop_interval_ms=WARNING_INTERVAL_MS_DEFAULT,
-            events=[note("C5", 0.5, 120), rest(0.5), note("D#5", 0.5, 116), rest(0.5), note("C5", 0.5, 118), rest(0.5), note("A4", 0.5, 112), rest(0.5)],
+            events=[
+                note("C5", 0.25, 122),
+                rest(0.25),
+                note("D5", 0.25, 120),
+                rest(0.25),
+                note("E5", 0.25, 118),
+                rest(0.25),
+                note("D5", 0.25, 116),
+                rest(0.25),
+                note("C5", 0.5, 114),
+                rest(1.5),
+            ],
         ),
         CueDef(
             cue_id="battery_low_no_mains",
@@ -112,7 +134,16 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="电池低电且市电不存在时触发间隔循环",
             loop_mode="interval_loop",
             loop_interval_ms=WARNING_INTERVAL_MS_DEFAULT,
-            events=[note("E4", 0.5, 122), rest(0.5), note("C#4", 0.5, 116), rest(0.5), note("A3", 0.5, 124), rest(0.5), note("A3", 0.5, 116), rest(0.5)],
+            events=[
+                note("E4", 0.5, 126),
+                rest(0.25),
+                note("C#4", 0.5, 120),
+                rest(0.25),
+                note("A3", 0.75, 126),
+                rest(0.25),
+                note("A3", 0.75, 122),
+                rest(0.75),
+            ],
         ),
         CueDef(
             cue_id="battery_low_with_mains",
@@ -121,7 +152,16 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="电池低电且检测到市电时触发间隔循环",
             loop_mode="interval_loop",
             loop_interval_ms=WARNING_INTERVAL_MS_DEFAULT,
-            events=[note("G4", 0.5, 118), rest(0.5), note("E4", 0.5, 112), rest(0.5), note("C4", 0.5, 116), rest(0.5), note("G3", 0.5, 108), rest(0.5)],
+            events=[
+                note("G4", 0.5, 122),
+                rest(0.25),
+                note("D4", 0.5, 116),
+                rest(0.25),
+                note("C4", 0.5, 118),
+                rest(0.25),
+                note("D4", 0.5, 114),
+                rest(1.25),
+            ],
         ),
         CueDef(
             cue_id="shutdown_protection",
@@ -130,7 +170,14 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="任一模块触发保护动作导致停机时连续循环",
             loop_mode="continuous_loop",
             loop_interval_ms=0,
-            events=[note("D3", 0.5, 124), rest(0.5), note("D3", 0.5, 118), rest(0.5), note("A3", 0.5, 122), rest(0.5), rest(1.0)],
+            events=[
+                note("D3", 0.75, 126),
+                rest(0.25),
+                note("D3", 0.5, 122),
+                rest(0.5),
+                note("A2", 0.75, 124),
+                rest(1.25),
+            ],
         ),
         CueDef(
             cue_id="io_over_voltage",
@@ -139,7 +186,17 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="输入或输出检测到过压时连续循环",
             loop_mode="continuous_loop",
             loop_interval_ms=0,
-            events=[note("A4", 0.5, 122), rest(0.5), note("C5", 0.5, 116), rest(0.5), note("A4", 0.5, 120), rest(0.5), rest(1.0)],
+            events=[
+                rest(0.25),
+                note("A4", 0.25, 126),
+                rest(0.25),
+                note("C5", 0.25, 122),
+                rest(0.25),
+                note("E5", 0.25, 124),
+                rest(0.25),
+                note("A5", 0.25, 120),
+                rest(2.0),
+            ],
         ),
         CueDef(
             cue_id="io_over_current",
@@ -148,7 +205,16 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="输入或输出检测到过流时连续循环",
             loop_mode="continuous_loop",
             loop_interval_ms=0,
-            events=[note("G4", 0.5, 120), rest(0.5), note("D4", 0.5, 114), rest(0.5), note("G4", 0.5, 118), rest(0.5), rest(1.0)],
+            events=[
+                note("G4", 0.5, 122),
+                rest(0.5),
+                note("D4", 0.5, 118),
+                rest(0.5),
+                note("G4", 0.5, 120),
+                rest(0.25),
+                note("D4", 0.25, 114),
+                rest(1.0),
+            ],
         ),
         CueDef(
             cue_id="io_over_power",
@@ -157,7 +223,16 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="输入或输出检测到过功率时连续循环",
             loop_mode="continuous_loop",
             loop_interval_ms=0,
-            events=[note("F4", 0.5, 118), rest(0.5), note("C4", 0.5, 112), rest(0.5), note("F4", 0.5, 116), rest(0.5), rest(1.0)],
+            events=[
+                note("F4", 0.5, 120),
+                rest(0.25),
+                note("C4", 0.5, 116),
+                rest(0.25),
+                note("F3", 0.75, 122),
+                rest(0.25),
+                note("C4", 0.5, 114),
+                rest(1.0),
+            ],
         ),
         CueDef(
             cue_id="module_fault",
@@ -166,7 +241,21 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="部分硬件通信失败期间连续循环",
             loop_mode="continuous_loop",
             loop_interval_ms=0,
-            events=[note("C4", 0.5, 116), rest(0.5), note("G3", 0.5, 110), rest(0.5), note("C4", 0.5, 114), rest(0.5), rest(1.0)],
+            events=[
+                note("C4", 0.25, 118),
+                rest(0.25),
+                note("G3", 0.25, 112),
+                rest(0.25),
+                note("C4", 0.25, 116),
+                rest(0.25),
+                note("G3", 0.25, 110),
+                rest(0.25),
+                note("C4", 0.25, 118),
+                rest(0.25),
+                note("G3", 0.25, 110),
+                rest(0.25),
+                rest(1.0),
+            ],
         ),
         CueDef(
             cue_id="battery_protection",
@@ -175,19 +264,34 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="BMS 触发保护时连续循环",
             loop_mode="continuous_loop",
             loop_interval_ms=0,
-            events=[note("A3", 0.5, 122), rest(0.5), note("F3", 0.5, 116), rest(0.5), note("D3", 0.5, 120), rest(0.5), rest(1.0)],
+            events=[
+                note("A3", 0.5, 124),
+                rest(0.25),
+                note("F3", 0.5, 118),
+                rest(0.25),
+                note("D3", 0.75, 122),
+                rest(0.25),
+                note("F3", 0.5, 114),
+                rest(1.0),
+            ],
         ),
     ]
 
 
 def category_audio_profile(category: str) -> dict[str, object]:
-    volume = {"status": 0.62, "warning": 0.78, "error": 0.84}[category]
-    fade_ms = {"status": 6, "warning": 4, "error": 3}[category]
+    volume = {"status": 0.60, "warning": 0.82, "error": 0.76}[category]
+    fade_ms = {"status": 6, "warning": 5, "error": 4}[category]
+    harmonics = {
+        "status": [1.0, 0.16, 0.04],
+        "warning": [1.0, 0.22, 0.08],
+        "error": [1.0, 0.28, 0.10],
+    }[category]
     return {
         "waveform": "sine",
         "sample_rate_hz": 44_100,
         "volume": volume,
         "fade_ms": fade_ms,
+        "harmonics": harmonics,
     }
 
 
