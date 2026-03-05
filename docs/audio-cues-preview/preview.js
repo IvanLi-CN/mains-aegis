@@ -28,12 +28,24 @@ function getGlobalVolume() {
   return Number.parseFloat(volumeEl.value || "0.85");
 }
 
+function clampInt(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function getWarningLoopInterval(defaultInterval) {
+  const min = Number.parseInt(warningIntervalEl.min || "400", 10);
+  const max = Number.parseInt(warningIntervalEl.max || "10000", 10);
+  const fallback = clampInt(defaultInterval, min, max);
   const raw = Number.parseInt(warningIntervalEl.value || "", 10);
-  if (Number.isFinite(raw) && raw > 0) {
-    return raw;
+  if (!Number.isFinite(raw)) {
+    warningIntervalEl.value = String(fallback);
+    return fallback;
   }
-  return defaultInterval;
+  const clamped = clampInt(raw, min, max);
+  if (clamped !== raw) {
+    warningIntervalEl.value = String(clamped);
+  }
+  return clamped;
 }
 
 function cueItemKey(item) {
@@ -137,15 +149,9 @@ async function playLoop(item) {
       return;
     }
 
+    const startAt = performance.now();
     latest.audio.currentTime = 0;
     latest.audio.volume = getGlobalVolume();
-
-    try {
-      await latest.audio.play();
-    } catch {
-      stopCue(item);
-      return;
-    }
 
     latest.audio.onended = () => {
       const interval = getWarningLoopInterval(item.loop_interval_ms || 2000);
@@ -153,8 +159,21 @@ async function playLoop(item) {
       if (!active || active.stopped) {
         return;
       }
-      active.timerId = window.setTimeout(runIntervalLoop, interval);
+      const elapsed = performance.now() - startAt;
+      const nextDelay = Math.max(0, interval - elapsed);
+      active.timerId = window.setTimeout(() => {
+        runIntervalLoop().catch(() => {
+          stopCue(item);
+        });
+      }, nextDelay);
     };
+
+    try {
+      await latest.audio.play();
+    } catch {
+      stopCue(item);
+      return;
+    }
   };
 
   await runIntervalLoop();
@@ -169,13 +188,20 @@ function bindRowActions(item, row) {
     }
   });
 
-  row.querySelector(".play-loop").addEventListener("click", async () => {
-    try {
-      await playLoop(item);
-    } catch {
-      stopCue(item);
-    }
-  });
+  const loopButton = row.querySelector(".play-loop");
+  if (item.loop_mode === "one_shot") {
+    loopButton.disabled = true;
+    loopButton.textContent = "仅单次";
+    loopButton.title = "该提示音仅支持单次播放";
+  } else {
+    loopButton.addEventListener("click", async () => {
+      try {
+        await playLoop(item);
+      } catch {
+        stopCue(item);
+      }
+    });
+  }
 
   row.querySelector(".stop-one").addEventListener("click", () => {
     stopCue(item);

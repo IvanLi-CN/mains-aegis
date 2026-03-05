@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 WARNING_INTERVAL_MS_DEFAULT = 2000
 
@@ -224,9 +227,15 @@ def write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def generated_at_iso_utc_date() -> str:
+    # Keep regenerated manifests stable within the same UTC day.
+    day = datetime.now(timezone.utc).date().isoformat()
+    return f"{day}T00:00:00Z"
+
+
 def run_buzzer_preview(tool_script: Path, score_path: Path, out_dir: Path, stem: str) -> None:
     cmd = [
-        "python3",
+        sys.executable,
         str(tool_script),
         "--in",
         str(score_path),
@@ -235,17 +244,30 @@ def run_buzzer_preview(tool_script: Path, score_path: Path, out_dir: Path, stem:
         "--stem",
         stem,
     ]
-    subprocess.run(cmd, check=True)
+    # Preserve a machine-readable stdout channel for the final JSON report.
+    subprocess.run(cmd, check=True, stdout=sys.stderr, stderr=sys.stderr)
 
 
-def clean_previous_outputs(score_dir: Path, audio_dir: Path) -> None:
-    for pattern in ("*.json",):
-        for path in score_dir.glob(pattern):
-            path.unlink()
+def publish_outputs(staging_dir: Path, base_dir: Path) -> None:
+    targets = (
+        ("scores", True),
+        ("audio", True),
+        ("cues.manifest.json", False),
+        ("generation-report.json", False),
+    )
+    for name, is_dir in targets:
+        src = staging_dir / name
+        dst = base_dir / name
+        if not src.exists():
+            raise FileNotFoundError(f"missing staged output: {src}")
 
-    for pattern in ("*.wav", "*.mid"):
-        for path in audio_dir.glob(pattern):
-            path.unlink()
+        if dst.exists():
+            if is_dir:
+                shutil.rmtree(dst)
+            else:
+                dst.unlink()
+
+        shutil.move(str(src), str(dst))
 
 
 def parse_args() -> argparse.Namespace:
@@ -275,13 +297,6 @@ def main() -> int:
         raise FileNotFoundError(f"buzzer preview tool not found: {tool_script}")
 
     base_dir = repo_root / "docs/audio-cues-preview"
-    score_dir = base_dir / "scores"
-    audio_dir = base_dir / "audio"
-    score_dir.mkdir(parents=True, exist_ok=True)
-    audio_dir.mkdir(parents=True, exist_ok=True)
-    clean_previous_outputs(score_dir=score_dir, audio_dir=audio_dir)
-
-    manifest_items: list[dict[str, object]] = []
     cue_defs = cues()
 
     if len(cue_defs) != 15:
@@ -292,66 +307,77 @@ def main() -> int:
         if cue.cue_id in seen_ids:
             raise ValueError(f"duplicate cue id: {cue.cue_id}")
         seen_ids.add(cue.cue_id)
+    base_dir.mkdir(parents=True, exist_ok=True)
 
-        score_payload = score_for(cue)
-        score_path = score_dir / f"{cue.cue_id}.json"
-        write_json(score_path, score_payload)
+    with TemporaryDirectory(prefix=".audio-cues-stage-", dir=base_dir) as temp_dir:
+        staging_dir = Path(temp_dir)
+        score_dir = staging_dir / "scores"
+        audio_dir = staging_dir / "audio"
+        score_dir.mkdir(parents=True, exist_ok=True)
+        audio_dir.mkdir(parents=True, exist_ok=True)
 
-        run_buzzer_preview(tool_script=tool_script, score_path=score_path, out_dir=audio_dir, stem=cue.cue_id)
+        manifest_items: list[dict[str, object]] = []
+        for cue in cue_defs:
+            score_payload = score_for(cue)
+            score_path = score_dir / f"{cue.cue_id}.json"
+            write_json(score_path, score_payload)
 
-        cue_duration_ms = duration_ms(score_payload)
-        item = {
-            "id": cue.cue_id,
-            "title_zh": cue.title_zh,
-            "category": cue.category,
-            "trigger_condition_zh": cue.trigger_condition_zh,
-            "loop_mode": cue.loop_mode,
-            "loop_interval_ms": cue.loop_interval_ms,
-            "score_path": f"scores/{cue.cue_id}.json",
-            "wav_path": f"audio/{cue.cue_id}.wav",
-            "mid_path": f"audio/{cue.cue_id}.mid",
-            "duration_ms": cue_duration_ms,
+            run_buzzer_preview(tool_script=tool_script, score_path=score_path, out_dir=audio_dir, stem=cue.cue_id)
+
+            cue_duration_ms = duration_ms(score_payload)
+            item = {
+                "id": cue.cue_id,
+                "title_zh": cue.title_zh,
+                "category": cue.category,
+                "trigger_condition_zh": cue.trigger_condition_zh,
+                "loop_mode": cue.loop_mode,
+                "loop_interval_ms": cue.loop_interval_ms,
+                "score_path": f"scores/{cue.cue_id}.json",
+                "wav_path": f"audio/{cue.cue_id}.wav",
+                "mid_path": f"audio/{cue.cue_id}.mid",
+                "duration_ms": cue_duration_ms,
+            }
+            manifest_items.append(item)
+
+        category_counts: dict[str, int] = {"status": 0, "warning": 0, "error": 0}
+        for item in manifest_items:
+            category_counts[str(item["category"])] += 1
+
+        if category_counts != {"status": 5, "warning": 4, "error": 6}:
+            raise ValueError(f"Unexpected category counts: {category_counts}")
+
+        score_count = len(list(score_dir.glob("*.json")))
+        wav_count = len(list(audio_dir.glob("*.wav")))
+        mid_count = len(list(audio_dir.glob("*.mid")))
+        expected_count = len(cue_defs)
+        if not (score_count == wav_count == mid_count == expected_count):
+            raise ValueError(
+                "generated artifact counts mismatch: "
+                f"score={score_count}, wav={wav_count}, mid={mid_count}, expected={expected_count}"
+            )
+
+        manifest_payload = {
+            "version": 1,
+            "profile": "speaker_chime_v1",
+            "generated_at": generated_at_iso_utc_date(),
+            "warning_interval_ms_default": WARNING_INTERVAL_MS_DEFAULT,
+            "items": manifest_items,
         }
-        manifest_items.append(item)
+        write_json(staging_dir / "cues.manifest.json", manifest_payload)
 
-    category_counts: dict[str, int] = {"status": 0, "warning": 0, "error": 0}
-    for item in manifest_items:
-        category_counts[str(item["category"])] += 1
+        report_payload = {
+            "score_count": score_count,
+            "wav_count": wav_count,
+            "mid_count": mid_count,
+            "expected_count": expected_count,
+            "category_counts": category_counts,
+            "total_duration_ms": sum(int(item["duration_ms"]) for item in manifest_items),
+        }
+        write_json(staging_dir / "generation-report.json", report_payload)
 
-    if category_counts != {"status": 5, "warning": 4, "error": 6}:
-        raise ValueError(f"Unexpected category counts: {category_counts}")
-
-    manifest_payload = {
-        "version": 1,
-        "profile": "speaker_chime_v1",
-        "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        "warning_interval_ms_default": WARNING_INTERVAL_MS_DEFAULT,
-        "items": manifest_items,
-    }
-    write_json(base_dir / "cues.manifest.json", manifest_payload)
-
-    score_count = len(list(score_dir.glob("*.json")))
-    wav_count = len(list(audio_dir.glob("*.wav")))
-    mid_count = len(list(audio_dir.glob("*.mid")))
-    expected_count = len(cue_defs)
-    if not (score_count == wav_count == mid_count == expected_count):
-        raise ValueError(
-            "generated artifact counts mismatch: "
-            f"score={score_count}, wav={wav_count}, mid={mid_count}, expected={expected_count}"
-        )
-
-    report_payload = {
-        "score_count": score_count,
-        "wav_count": wav_count,
-        "mid_count": mid_count,
-        "expected_count": expected_count,
-        "category_counts": category_counts,
-        "total_duration_ms": sum(int(item["duration_ms"]) for item in manifest_items),
-    }
-    write_json(base_dir / "generation-report.json", report_payload)
-
-    print(json.dumps(report_payload, ensure_ascii=False))
-    return 0
+        publish_outputs(staging_dir=staging_dir, base_dir=base_dir)
+        print(json.dumps(report_payload, ensure_ascii=False))
+        return 0
 
 
 if __name__ == "__main__":

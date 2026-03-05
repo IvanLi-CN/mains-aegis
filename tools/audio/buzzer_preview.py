@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+MIDI_TEMPO_US_MAX = 0xFFFFFF
+
 
 NOTE_OFFSETS = {
     "C": 0,
@@ -40,6 +42,8 @@ def note_to_midi(note: int | str) -> int:
         if 0 <= note <= 127:
             return note
         raise ValueError(f"midi note out of range: {note} (expected 0..127)")
+    if not isinstance(note, str):
+        raise ValueError(f"note must be int or string, got {type(note).__name__}")
 
     s = note.strip()
     m = re.fullmatch(r"([A-Ga-g])([#b]?)(-?\d+)", s)
@@ -71,7 +75,12 @@ def freq_to_nearest_midi(freq_hz: float) -> int:
     if freq_hz <= 0:
         raise ValueError(f"freq_hz must be > 0, got {freq_hz}")
     midi = 69 + 12 * math.log2(freq_hz / 440.0)
-    return int(round(midi))
+    midi_note = int(round(midi))
+    if not 0 <= midi_note <= 127:
+        raise ValueError(
+            f"freq_hz converts to out-of-range MIDI note: freq_hz={freq_hz}, midi_note={midi_note}, expected=0..127"
+        )
+    return midi_note
 
 
 def _varlen(value: int) -> bytes:
@@ -147,13 +156,21 @@ def parse_score(path: Path) -> tuple[ScoreConfig, list[Event]]:
     tempo_bpm = float(raw.get("tempo_bpm", 120.0))
     if tempo_bpm <= 0:
         raise ValueError(f"tempo_bpm must be > 0, got {tempo_bpm}")
+    tempo_us_per_quarter = int(round(60_000_000 / tempo_bpm))
+    if not 1 <= tempo_us_per_quarter <= MIDI_TEMPO_US_MAX:
+        min_bpm = 60_000_000 / MIDI_TEMPO_US_MAX
+        raise ValueError(
+            f"tempo_bpm out of MIDI range: got {tempo_bpm}, expected >= {min_bpm:.3f} to encode tempo meta event"
+        )
 
     ppqn = int(raw.get("ppqn", 480))
     if ppqn <= 0:
         raise ValueError(f"ppqn must be > 0, got {ppqn}")
 
-    midi_raw = raw.get("midi", {}) or {}
-    if not isinstance(midi_raw, dict):
+    midi_raw = raw.get("midi")
+    if midi_raw is None:
+        midi_raw = {}
+    elif not isinstance(midi_raw, dict):
         raise ValueError("midi must be an object")
     midi_cfg = MidiConfig(
         channel=int(midi_raw.get("channel", 0)),
@@ -167,8 +184,10 @@ def parse_score(path: Path) -> tuple[ScoreConfig, list[Event]]:
     if not 0 <= midi_cfg.velocity <= 127:
         raise ValueError("midi.velocity must be 0..127")
 
-    audio_raw = raw.get("audio", {}) or {}
-    if not isinstance(audio_raw, dict):
+    audio_raw = raw.get("audio")
+    if audio_raw is None:
+        audio_raw = {}
+    elif not isinstance(audio_raw, dict):
         raise ValueError("audio must be an object")
     waveform = str(audio_raw.get("waveform", raw.get("waveform", "square"))).lower()
     if waveform not in {"square", "sine"}:
@@ -204,16 +223,20 @@ def parse_score(path: Path) -> tuple[ScoreConfig, list[Event]]:
         rest_beats = e.get("rest_beats")
         rest_ms = e.get("rest_ms")
 
-        if ("note" in e) or ("freq_hz" in e):
+        has_note = "note" in e
+        has_freq = "freq_hz" in e
+        if has_note or has_freq:
+            if has_note and has_freq:
+                raise ValueError(f"events[{idx}] is ambiguous: provide only one of 'note' or 'freq_hz'")
             duration_s = _duration_seconds(tempo_bpm=tempo_bpm, beats=_as_optional_float(beats), ms=_as_optional_float(ms))
 
             midi_note: int | None = None
             freq_hz: float | None = None
 
-            if "note" in e:
+            if has_note:
                 midi_note = note_to_midi(e["note"])  # type: ignore[arg-type]
                 freq_hz = midi_to_freq_hz(midi_note)
-            elif "freq_hz" in e:
+            elif has_freq:
                 freq_hz = float(e["freq_hz"])
                 midi_note = freq_to_nearest_midi(freq_hz)
 
@@ -256,6 +279,10 @@ def _as_optional_float(value: Any) -> float | None:
 
 def write_midi(path: Path, cfg: ScoreConfig, events: list[Event]) -> None:
     tempo_us_per_quarter = int(round(60_000_000 / cfg.tempo_bpm))
+    if not 1 <= tempo_us_per_quarter <= MIDI_TEMPO_US_MAX:
+        raise ValueError(
+            f"tempo is out of MIDI range: tempo_bpm={cfg.tempo_bpm}, tempo_us_per_quarter={tempo_us_per_quarter}"
+        )
 
     track = bytearray()
     track.extend(_midi_event(0, b"\xFF\x51\x03" + tempo_us_per_quarter.to_bytes(3, "big")))
@@ -373,4 +400,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-
