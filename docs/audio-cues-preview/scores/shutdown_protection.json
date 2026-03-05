@@ -19,19 +19,11 @@
   "events": [
     {
       "note": "D3",
-      "beats": 0.75,
+      "beats": 0.5,
       "velocity": 126
     },
     {
-      "rest_beats": 0.25
-    },
-    {
-      "note": "D3",
-      "beats": 0.5,
-      "velocity": 122
-    },
-    {
-      "rest_beats": 0.5
+      "rest_beats": 1.0
     },
     {
       "note": "A2",
@@ -39,7 +31,7 @@
       "velocity": 124
     },
     {
-      "rest_beats": 1.25
+      "rest_beats": 1.75
     }
   ]
 }
