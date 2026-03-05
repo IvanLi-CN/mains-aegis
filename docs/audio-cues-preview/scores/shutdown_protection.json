@@ -37,12 +37,7 @@
       "rest_beats": 0.5
     },
     {
-      "note": "D3",
-      "beats": 0.5,
-      "velocity": 116
-    },
-    {
-      "rest_beats": 0.5
+      "rest_beats": 1.0
     }
   ]
 }

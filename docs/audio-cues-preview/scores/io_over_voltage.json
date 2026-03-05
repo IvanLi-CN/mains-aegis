@@ -37,12 +37,7 @@
       "rest_beats": 0.5
     },
     {
-      "note": "C5",
-      "beats": 0.5,
-      "velocity": 114
-    },
-    {
-      "rest_beats": 0.5
+      "rest_beats": 1.0
     }
   ]
 }
