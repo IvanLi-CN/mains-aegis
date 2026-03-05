@@ -3,8 +3,8 @@
   "audio": {
     "waveform": "sine",
     "sample_rate_hz": 44100,
-    "volume": 0.82,
-    "fade_ms": 6
+    "volume": 0.84,
+    "fade_ms": 3
   },
   "midi": {
     "channel": 0,
@@ -13,25 +13,9 @@
   },
   "events": [
     {
-      "note": "G4",
+      "note": "C4",
       "beats": 0.5,
-      "velocity": 108
-    },
-    {
-      "rest_beats": 0.5
-    },
-    {
-      "note": "E4",
-      "beats": 0.5,
-      "velocity": 106
-    },
-    {
-      "rest_beats": 0.5
-    },
-    {
-      "note": "D4",
-      "beats": 0.5,
-      "velocity": 104
+      "velocity": 116
     },
     {
       "rest_beats": 0.5
@@ -39,7 +23,23 @@
     {
       "note": "G3",
       "beats": 0.5,
-      "velocity": 102
+      "velocity": 110
+    },
+    {
+      "rest_beats": 0.5
+    },
+    {
+      "note": "C4",
+      "beats": 0.5,
+      "velocity": 114
+    },
+    {
+      "rest_beats": 0.5
+    },
+    {
+      "note": "G3",
+      "beats": 0.5,
+      "velocity": 108
     },
     {
       "rest_beats": 0.5
