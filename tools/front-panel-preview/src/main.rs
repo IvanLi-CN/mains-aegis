@@ -12,8 +12,8 @@ use image::{Rgb, RgbImage};
 mod front_panel_scene;
 
 use front_panel_scene::{
-    demo_mode_from_focus, SelfCheckCommState, SelfCheckOverlay, SelfCheckUiSnapshot, UiFocus,
-    UiModel, UiPainter, UiVariant, UpsMode, UI_H, UI_W,
+    demo_mode_from_focus, DisplayDiagnosticMeta, SelfCheckCommState, SelfCheckOverlay,
+    SelfCheckUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant, UpsMode, UI_H, UI_W,
 };
 
 fn main() {
@@ -57,6 +57,15 @@ fn run() -> Result<(), String> {
             )
             .map_err(|_| "render failed unexpectedly".to_string())?;
         }
+        ScenarioArg::DisplayDiag => {
+            let meta = DisplayDiagnosticMeta {
+                orientation_label: "ORI: LANDSCAPE_SWAP (MADCTL=0xE0)",
+                color_order_label: "COLOR ORDER: BGR565",
+                heartbeat_on: (args.frame_no % 2) == 0,
+            };
+            front_panel_scene::render_display_diagnostic(&mut framebuffer, &meta)
+                .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
         ScenarioArg::Bq40Offline
         | ScenarioArg::Bq40OfflineDialog
         | ScenarioArg::Bq40Activating
@@ -95,6 +104,7 @@ fn run() -> Result<(), String> {
                 ScenarioArg::Bq40ActivationFailed => {
                     SelfCheckOverlay::BmsActivateResult { success: false }
                 }
+                ScenarioArg::DisplayDiag => SelfCheckOverlay::None,
                 ScenarioArg::Default => SelfCheckOverlay::None,
             };
             front_panel_scene::render_frame_with_self_check_overlay(
@@ -268,6 +278,7 @@ impl ModeArg {
 #[derive(Clone, Copy, Debug)]
 enum ScenarioArg {
     Default,
+    DisplayDiag,
     Bq40Offline,
     Bq40OfflineDialog,
     Bq40Activating,
@@ -279,13 +290,14 @@ impl ScenarioArg {
     fn parse(raw: &str) -> Result<Self, String> {
         match raw.to_ascii_lowercase().as_str() {
             "default" => Ok(Self::Default),
+            "display-diag" => Ok(Self::DisplayDiag),
             "bq40-offline" => Ok(Self::Bq40Offline),
             "bq40-offline-dialog" => Ok(Self::Bq40OfflineDialog),
             "bq40-activating" => Ok(Self::Bq40Activating),
             "bq40-activation-succeeded" => Ok(Self::Bq40ActivationSucceeded),
             "bq40-activation-failed" => Ok(Self::Bq40ActivationFailed),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-activation-succeeded|bq40-activation-failed)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-activation-succeeded|bq40-activation-failed)"
             )),
         }
     }
@@ -293,6 +305,7 @@ impl ScenarioArg {
     fn as_tag(self) -> &'static str {
         match self {
             ScenarioArg::Default => "default",
+            ScenarioArg::DisplayDiag => "display-diag",
             ScenarioArg::Bq40Offline => "bq40-offline",
             ScenarioArg::Bq40OfflineDialog => "bq40-offline-dialog",
             ScenarioArg::Bq40Activating => "bq40-activating",
@@ -381,7 +394,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-activation-succeeded|bq40-activation-failed}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-activation-succeeded|bq40-activation-failed}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",
