@@ -14,18 +14,18 @@
   "events": [
     {
       "note": "G4",
-      "ms": 110
-    },
-    {
-      "rest_ms": 30
+      "beats": 0.5
     },
     {
       "note": "D5",
-      "ms": 140
+      "beats": 0.5
     },
     {
       "note": "G5",
-      "ms": 260
+      "beats": 1.0
+    },
+    {
+      "rest_beats": 2.0
     }
   ]
 }

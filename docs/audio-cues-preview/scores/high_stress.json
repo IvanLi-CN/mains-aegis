@@ -14,18 +14,33 @@
   "events": [
     {
       "note": "C5",
-      "ms": 130
+      "beats": 0.5
     },
     {
       "note": "D#5",
-      "ms": 130
+      "beats": 0.5
     },
     {
       "note": "C5",
-      "ms": 130
+      "beats": 0.5
     },
     {
-      "rest_ms": 90
+      "note": "A4",
+      "beats": 0.5
+    },
+    {
+      "rest_beats": 0.5
+    },
+    {
+      "note": "C5",
+      "beats": 0.5
+    },
+    {
+      "note": "A4",
+      "beats": 0.5
+    },
+    {
+      "rest_beats": 0.5
     }
   ]
 }

@@ -14,19 +14,35 @@
   "events": [
     {
       "note": "A3",
-      "ms": 240,
+      "beats": 0.5,
       "velocity": 116
     },
     {
-      "rest_ms": 120
+      "rest_beats": 0.5
     },
     {
       "note": "E4",
-      "ms": 120,
+      "beats": 0.5,
       "velocity": 104
     },
     {
-      "rest_ms": 120
+      "rest_beats": 0.5
+    },
+    {
+      "note": "A3",
+      "beats": 0.5,
+      "velocity": 112
+    },
+    {
+      "rest_beats": 0.5
+    },
+    {
+      "note": "E4",
+      "beats": 0.5,
+      "velocity": 102
+    },
+    {
+      "rest_beats": 0.5
     }
   ]
 }

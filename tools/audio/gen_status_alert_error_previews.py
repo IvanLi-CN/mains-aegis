@@ -14,6 +14,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 WARNING_INTERVAL_MS_DEFAULT = 2000
+TEMPO_BPM = 120
+BAR_BEATS = 4.0
 
 
 @dataclass(frozen=True)
@@ -27,15 +29,15 @@ class CueDef:
     events: list[dict[str, object]]
 
 
-def note(name: str, ms: int, velocity: int | None = None) -> dict[str, object]:
-    event: dict[str, object] = {"note": name, "ms": ms}
+def note(name: str, beats: float, velocity: int | None = None) -> dict[str, object]:
+    event: dict[str, object] = {"note": name, "beats": beats}
     if velocity is not None:
         event["velocity"] = velocity
     return event
 
 
-def rest(ms: int) -> dict[str, object]:
-    return {"rest_ms": ms}
+def rest(beats: float) -> dict[str, object]:
+    return {"rest_beats": beats}
 
 
 def cues() -> list[CueDef]:
@@ -47,7 +49,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="系统上电启动成功后触发",
             loop_mode="one_shot",
             loop_interval_ms=0,
-            events=[note("C5", 120), note("E5", 120), note("G5", 160), note("C6", 280)],
+            events=[note("C5", 0.5), note("E5", 0.5), note("G5", 0.5), note("C6", 0.5), rest(2.0)],
         ),
         CueDef(
             cue_id="mains_present_dc",
@@ -56,7 +58,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="检测到 DC 桶输入恢复时触发",
             loop_mode="one_shot",
             loop_interval_ms=0,
-            events=[note("G4", 110), rest(30), note("D5", 140), note("G5", 260)],
+            events=[note("G4", 0.5), note("D5", 0.5), note("G5", 1.0), rest(2.0)],
         ),
         CueDef(
             cue_id="charge_started",
@@ -65,7 +67,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="充电状态从未充电切换为充电中时触发",
             loop_mode="one_shot",
             loop_interval_ms=0,
-            events=[note("C5", 110), rest(40), note("E5", 170), note("G5", 180)],
+            events=[note("C5", 0.5), note("E5", 0.5), note("G5", 0.5), note("A5", 0.5), rest(2.0)],
         ),
         CueDef(
             cue_id="charge_completed",
@@ -74,7 +76,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="充电状态进入完成态时触发",
             loop_mode="one_shot",
             loop_interval_ms=0,
-            events=[note("C5", 100), note("E5", 100), note("G5", 120), note("C6", 320)],
+            events=[note("C5", 0.5), note("E5", 0.5), note("G5", 0.5), note("C6", 1.0), rest(1.5)],
         ),
         CueDef(
             cue_id="shutdown_mode_entered",
@@ -83,7 +85,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="系统进入关闭模式流程时触发",
             loop_mode="one_shot",
             loop_interval_ms=0,
-            events=[note("E5", 120), note("C5", 140), note("G4", 320)],
+            events=[note("E5", 0.5), note("C5", 0.5), note("G4", 1.0), rest(2.0)],
         ),
         CueDef(
             cue_id="mains_absent_dc",
@@ -92,7 +94,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="DC 桶输入丢失时触发间隔循环",
             loop_mode="interval_loop",
             loop_interval_ms=WARNING_INTERVAL_MS_DEFAULT,
-            events=[note("F4", 150, 114), rest(70), note("F4", 150), rest(70), note("D4", 260, 108)],
+            events=[note("F4", 0.5, 114), rest(0.5), note("F4", 0.5), rest(0.5), note("D4", 1.0, 108), rest(1.0)],
         ),
         CueDef(
             cue_id="high_stress",
@@ -101,7 +103,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="任一模块温度/负载不佳但未触发保护时触发间隔循环",
             loop_mode="interval_loop",
             loop_interval_ms=WARNING_INTERVAL_MS_DEFAULT,
-            events=[note("C5", 130), note("D#5", 130), note("C5", 130), rest(90)],
+            events=[note("C5", 0.5), note("D#5", 0.5), note("C5", 0.5), note("A4", 0.5), rest(0.5), note("C5", 0.5), note("A4", 0.5), rest(0.5)],
         ),
         CueDef(
             cue_id="battery_low_no_mains",
@@ -110,7 +112,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="电池低电且市电不存在时触发间隔循环",
             loop_mode="interval_loop",
             loop_interval_ms=WARNING_INTERVAL_MS_DEFAULT,
-            events=[note("E4", 180, 118), rest(60), note("C#4", 180, 110), rest(60), note("A3", 280, 116)],
+            events=[note("E4", 0.5, 118), rest(0.5), note("C#4", 0.5, 110), rest(0.5), note("A3", 1.0, 116), rest(1.0)],
         ),
         CueDef(
             cue_id="battery_low_with_mains",
@@ -119,7 +121,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="电池低电且检测到市电时触发间隔循环",
             loop_mode="interval_loop",
             loop_interval_ms=WARNING_INTERVAL_MS_DEFAULT,
-            events=[note("G4", 170, 112), rest(70), note("E4", 170), rest(80), note("C4", 240, 108)],
+            events=[note("G4", 0.5, 112), rest(0.5), note("E4", 0.5), rest(0.5), note("C4", 0.5, 108), rest(0.5), note("G3", 0.5), rest(0.5)],
         ),
         CueDef(
             cue_id="shutdown_protection",
@@ -128,7 +130,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="任一模块触发保护动作导致停机时连续循环",
             loop_mode="continuous_loop",
             loop_interval_ms=0,
-            events=[note("A3", 240, 116), rest(120), note("E4", 120, 104), rest(120)],
+            events=[note("A3", 0.5, 116), rest(0.5), note("E4", 0.5, 104), rest(0.5), note("A3", 0.5, 112), rest(0.5), note("E4", 0.5, 102), rest(0.5)],
         ),
         CueDef(
             cue_id="io_over_voltage",
@@ -137,7 +139,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="输入或输出检测到过压时连续循环",
             loop_mode="continuous_loop",
             loop_interval_ms=0,
-            events=[note("E5", 120, 118), rest(120), note("B5", 120, 106), rest(120)],
+            events=[note("E5", 0.5, 118), rest(0.5), note("B5", 0.5, 106), rest(0.5), note("E5", 0.5, 112), rest(0.5), note("C5", 0.5, 104), rest(0.5)],
         ),
         CueDef(
             cue_id="io_over_current",
@@ -146,7 +148,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="输入或输出检测到过流时连续循环",
             loop_mode="continuous_loop",
             loop_interval_ms=0,
-            events=[note("D5", 120, 116), rest(120), note("G4", 120, 108), rest(120), note("D5", 120, 112)],
+            events=[note("D5", 0.5, 116), rest(0.5), note("G4", 0.5, 108), rest(0.5), note("D5", 0.5, 112), rest(0.5), note("A4", 0.5, 106), rest(0.5)],
         ),
         CueDef(
             cue_id="io_over_power",
@@ -155,7 +157,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="输入或输出检测到过功率时连续循环",
             loop_mode="continuous_loop",
             loop_interval_ms=0,
-            events=[note("C5", 120, 112), rest(120), note("G4", 120, 108), rest(120), note("E4", 240, 112)],
+            events=[note("C5", 0.5, 112), rest(0.5), note("G4", 0.5, 108), rest(0.5), note("E4", 0.5, 112), rest(0.5), note("C4", 0.5, 106), rest(0.5)],
         ),
         CueDef(
             cue_id="module_fault",
@@ -164,7 +166,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="部分硬件通信失败期间连续循环",
             loop_mode="continuous_loop",
             loop_interval_ms=0,
-            events=[note("G4", 120, 108), rest(120), note("E4", 120, 106), rest(120), note("D4", 120, 104)],
+            events=[note("G4", 0.5, 108), rest(0.5), note("E4", 0.5, 106), rest(0.5), note("D4", 0.5, 104), rest(0.5), note("G3", 0.5, 102), rest(0.5)],
         ),
         CueDef(
             cue_id="battery_protection",
@@ -173,7 +175,7 @@ def cues() -> list[CueDef]:
             trigger_condition_zh="BMS 触发保护时连续循环",
             loop_mode="continuous_loop",
             loop_interval_ms=0,
-            events=[note("A4", 120, 118), rest(120), note("E4", 120, 112), rest(120), note("C4", 120, 108), rest(120), note("A3", 120, 114)],
+            events=[note("A4", 0.5, 118), rest(0.5), note("E4", 0.5, 112), rest(0.5), note("C4", 0.5, 108), rest(0.5), note("A3", 0.5, 114), rest(0.5)],
         ),
     ]
 
@@ -194,7 +196,7 @@ def category_audio_profile(category: str) -> dict[str, object]:
 
 def score_for(cue: CueDef) -> dict[str, object]:
     return {
-        "tempo_bpm": 120,
+        "tempo_bpm": TEMPO_BPM,
         "audio": category_audio_profile(cue.category),
         "midi": {
             "channel": 0,
@@ -224,6 +226,27 @@ def duration_ms(score: dict[str, object]) -> int:
             continue
         raise ValueError(f"Unsupported event duration shape: {event_map}")
     return int(round(total_s * 1000.0))
+
+
+def duration_beats(score: dict[str, object]) -> float:
+    tempo_bpm = float(score.get("tempo_bpm", TEMPO_BPM))
+    total_beats = 0.0
+    for event in score["events"]:  # type: ignore[index]
+        event_map: dict[str, object] = event  # type: ignore[assignment]
+        if "beats" in event_map:
+            total_beats += float(event_map["beats"])
+            continue
+        if "rest_beats" in event_map:
+            total_beats += float(event_map["rest_beats"])
+            continue
+        if "ms" in event_map:
+            total_beats += (float(event_map["ms"]) / 1000.0) * tempo_bpm / 60.0
+            continue
+        if "rest_ms" in event_map:
+            total_beats += (float(event_map["rest_ms"]) / 1000.0) * tempo_bpm / 60.0
+            continue
+        raise ValueError(f"Unsupported event duration shape: {event_map}")
+    return total_beats
 
 
 def write_json(path: Path, payload: dict[str, object]) -> None:
@@ -322,6 +345,16 @@ def main() -> int:
         manifest_items: list[dict[str, object]] = []
         for cue in cue_defs:
             score_payload = score_for(cue)
+            cue_beats = duration_beats(score_payload)
+            bars = cue_beats / BAR_BEATS
+            if abs(cue_beats - BAR_BEATS) > 1e-6:
+                raise ValueError(
+                    f"cue {cue.cue_id} must use unified {BAR_BEATS:g} beats, got {cue_beats:g}"
+                )
+            if abs(bars - round(bars)) > 1e-6:
+                raise ValueError(
+                    f"cue {cue.cue_id} must be an integer number of bars, got {bars:.4f} bars"
+                )
             score_path = score_dir / f"{cue.cue_id}.json"
             write_json(score_path, score_payload)
 
@@ -363,6 +396,8 @@ def main() -> int:
             "version": 1,
             "profile": "speaker_chime_v1",
             "generated_at": generated_at_iso_utc_date(),
+            "tempo_bpm": TEMPO_BPM,
+            "bar_beats": BAR_BEATS,
             "warning_interval_ms_default": WARNING_INTERVAL_MS_DEFAULT,
             "items": manifest_items,
         }

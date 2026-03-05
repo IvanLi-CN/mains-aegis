@@ -14,24 +14,35 @@
   "events": [
     {
       "note": "D5",
-      "ms": 120,
+      "beats": 0.5,
       "velocity": 116
     },
     {
-      "rest_ms": 120
+      "rest_beats": 0.5
     },
     {
       "note": "G4",
-      "ms": 120,
+      "beats": 0.5,
       "velocity": 108
     },
     {
-      "rest_ms": 120
+      "rest_beats": 0.5
     },
     {
       "note": "D5",
-      "ms": 120,
+      "beats": 0.5,
       "velocity": 112
+    },
+    {
+      "rest_beats": 0.5
+    },
+    {
+      "note": "A4",
+      "beats": 0.5,
+      "velocity": 106
+    },
+    {
+      "rest_beats": 0.5
     }
   ]
 }

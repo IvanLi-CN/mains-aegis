@@ -12,6 +12,9 @@ const mixBufferCache = new Map();
 let manifest = null;
 let manifestBaseUrl = new URL(MANIFEST_URL, window.location.href).toString();
 let mixAudioContext = null;
+let errorBeatSeconds = 0.5;
+let errorBarSeconds = 2.0;
+let errorTransportOrigin = null;
 
 const filterEl = document.getElementById("filter");
 const volumeEl = document.getElementById("volume");
@@ -109,10 +112,19 @@ async function loadMixBuffer(item) {
   return buffer;
 }
 
-function quantizedStartTime(ctx) {
-  const gridSeconds = 0.05;
+function nextAlignedErrorStart(ctx) {
   const lookAhead = 0.03;
-  return Math.ceil((ctx.currentTime + lookAhead) / gridSeconds) * gridSeconds;
+  const minTime = ctx.currentTime + lookAhead;
+  if (errorTransportOrigin === null) {
+    const firstStart = Math.ceil(minTime / errorBeatSeconds) * errorBeatSeconds;
+    errorTransportOrigin = firstStart;
+    return firstStart;
+  }
+  if (minTime <= errorTransportOrigin) {
+    return errorTransportOrigin;
+  }
+  const barsAhead = Math.ceil((minTime - errorTransportOrigin) / errorBarSeconds);
+  return errorTransportOrigin + barsAhead * errorBarSeconds;
 }
 
 function stopErrorMix(item) {
@@ -128,6 +140,9 @@ function stopErrorMix(item) {
   state.source.disconnect();
   state.gain.disconnect();
   activeErrorMixers.delete(key);
+  if (activeErrorMixers.size === 0) {
+    errorTransportOrigin = null;
+  }
   syncErrorMixerGains();
   refreshRowPlaying(item);
 }
@@ -167,7 +182,7 @@ async function playErrorMixLoop(item) {
   activeErrorMixers.set(key, { source, gain });
   syncErrorMixerGains();
   refreshRowPlaying(item);
-  source.start(quantizedStartTime(ctx));
+  source.start(nextAlignedErrorStart(ctx));
 }
 
 function stopCue(item) {
@@ -410,6 +425,14 @@ async function bootstrap() {
   }
   manifestBaseUrl = response.url;
   manifest = await response.json();
+  if (manifest.tempo_bpm && manifest.bar_beats) {
+    const tempo = Number(manifest.tempo_bpm);
+    const barBeats = Number(manifest.bar_beats);
+    if (Number.isFinite(tempo) && tempo > 0 && Number.isFinite(barBeats) && barBeats > 0) {
+      errorBeatSeconds = 60 / tempo;
+      errorBarSeconds = errorBeatSeconds * barBeats;
+    }
+  }
   render(manifest);
 }
 

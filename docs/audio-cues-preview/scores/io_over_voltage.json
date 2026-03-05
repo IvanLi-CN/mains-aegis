@@ -14,19 +14,35 @@
   "events": [
     {
       "note": "E5",
-      "ms": 120,
+      "beats": 0.5,
       "velocity": 118
     },
     {
-      "rest_ms": 120
+      "rest_beats": 0.5
     },
     {
       "note": "B5",
-      "ms": 120,
+      "beats": 0.5,
       "velocity": 106
     },
     {
-      "rest_ms": 120
+      "rest_beats": 0.5
+    },
+    {
+      "note": "E5",
+      "beats": 0.5,
+      "velocity": 112
+    },
+    {
+      "rest_beats": 0.5
+    },
+    {
+      "note": "C5",
+      "beats": 0.5,
+      "velocity": 104
+    },
+    {
+      "rest_beats": 0.5
     }
   ]
 }
