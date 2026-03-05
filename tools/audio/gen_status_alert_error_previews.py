@@ -267,12 +267,14 @@ def cues() -> list[CueDef]:
             events=[
                 note("A3", 0.5, 124),
                 rest(0.25),
-                note("F3", 0.5, 118),
+                note("Bb3", 0.25, 120),
                 rest(0.25),
-                note("D3", 0.75, 122),
+                note("A3", 0.5, 122),
+                rest(0.5),
+                note("E3", 0.75, 116),
                 rest(0.25),
-                note("F3", 0.5, 114),
-                rest(1.0),
+                note("D3", 0.5, 114),
+                rest(0.25),
             ],
         ),
     ]
