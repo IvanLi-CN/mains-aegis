@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-03-01
-- Last: 2026-03-01
+- Last: 2026-03-05
 
 ## 背景 / 问题陈述
 
@@ -21,6 +21,7 @@
 - 自检结束后保持自检页并持续刷新真实运行数据。
 - 禁用 `CENTER` 长按切页，避免误切回 Dashboard。
 - 保持 10 模块双列诊断卡布局不变，仅替换为真实数据源。
+- 对齐 BMS 运行语义：当 BQ40 可通信但放电通路未就绪时，页面显示 `WARN` 而非误判为 `OK`。
 
 ### Non-goals
 
@@ -35,6 +36,7 @@
 - `firmware/src/output/mod.rs`
   - 新增 `SelfCheckStage`、自检进度上报接口 `boot_self_test_with_report`。
   - `BootSelfTestResult` 补充 `self_check_snapshot`。
+  - 自检门控与运行态补充 BMS 放电就绪判定（`XDSG/DSG`）与恢复路径（解除 BMS 门控后恢复 TPS 通道）。
   - `PowerManager` 提供 `ui_snapshot()`，持续输出运行期真实快照。
 - `firmware/src/output/tps55288.rs`
   - `print_telemetry_line` 返回结构化采样结果，供 UI 快照聚合。
@@ -66,6 +68,7 @@
 - 上电后（屏幕链路可用）首屏为 `SELF CHECK`，而非 Dashboard。
 - 自检过程中 10 张模块卡片从 `PEND` 逐步切换到真实状态；缺失模块显示 `ERR/N/A`。
 - 自检结束后页面保持在 `SELF CHECK`，关键参数（电流/温度/SOC/充电状态）可持续变化。
+- BQ40 可通信但放电未就绪时，`BQ40Z50` 诊断卡显示 `WARN`，并保持 TPS 输出门控；放电就绪后自动解除该门控。
 - 长按 `CENTER` 不再切页，日志不再出现 `ui: page switch ...`。
 - 构建验证：
   - `cargo build --release`（`firmware/`）通过。
@@ -83,3 +86,10 @@
 ## 关联规格
 
 - `docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`：视觉与布局基线来源。
+
+## 变更记录（Change log）
+
+- 2026-03-05: 激活稳态修正：`ADC_CONTROL` 置位失败降级为 `warn + 跳过 ADC 采样`，不再直接判定激活通信失败；激活结束后恢复充电使能状态（按激活前 `CHG_CE/chg_enabled` 还原），避免无谓充电瞬断。
+- 2026-03-05: review-loop 收敛补丁：当 `OPERATION_STATUS` 读取失败（`discharge_ready=None`）时，BQ40 卡片改为 `WARN` 且允许触发激活；BMS 恢复放行 TPS 时同步触发 `INA3221` 重试，避免长期停留 `ina_uninit`。
+- 2026-03-05: 修正 BMS 激活闭环细节：`OPERATION_STATUS` 读取失败不再放行 TPS；激活请求会清理 `bms/chg` 重试退避窗口；`BmsActivateConfirm` 弹窗收起条件与激活触发条件统一。
+- 2026-03-02: 对齐 BMS 放电就绪语义：`XDSG=0 && DSG=0` 归类为 `WARN`；激活成功判定增加放电就绪与 `VBAT_PRESENT`，并补充 BMS 恢复后的 TPS 门控自动解除路径。

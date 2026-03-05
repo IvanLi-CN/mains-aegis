@@ -27,6 +27,9 @@ pub mod reg {
 
     pub const FAULT_STATUS_0: u8 = 0x20;
     pub const FAULT_STATUS_1: u8 = 0x21;
+    pub const ADC_CONTROL: u8 = 0x2E;
+    pub const VBAT_ADC: u8 = 0x3B;
+    pub const VSYS_ADC: u8 = 0x3D;
 }
 
 pub mod ctrl0 {
@@ -89,6 +92,19 @@ pub mod status4 {
     pub const TS_COOL_STAT: u8 = 1 << 2;
     pub const TS_WARM_STAT: u8 = 1 << 1;
     pub const TS_HOT_STAT: u8 = 1 << 0;
+}
+
+pub mod status3 {
+    pub const ACRB2_STAT: u8 = 1 << 7;
+    pub const ACRB1_STAT: u8 = 1 << 6;
+    pub const ADC_DONE_STAT: u8 = 1 << 5;
+    pub const VSYS_STAT: u8 = 1 << 4;
+    pub const CHG_TMR_STAT: u8 = 1 << 3;
+    pub const TRICHG_TMR_STAT: u8 = 1 << 2;
+}
+
+pub mod adc_ctrl {
+    pub const ADC_EN: u8 = 1 << 7;
 }
 
 pub fn read_u8<I2C>(i2c: &mut I2C, reg: u8) -> Result<u8, I2C::Error>

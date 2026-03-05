@@ -12,7 +12,8 @@ use image::{Rgb, RgbImage};
 mod front_panel_scene;
 
 use front_panel_scene::{
-    demo_mode_from_focus, UiFocus, UiModel, UiPainter, UiVariant, UpsMode, UI_H, UI_W,
+    demo_mode_from_focus, DisplayDiagnosticMeta, SelfCheckCommState, SelfCheckOverlay,
+    SelfCheckUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant, UpsMode, UI_H, UI_W,
 };
 
 fn main() {
@@ -33,7 +34,8 @@ fn run() -> Result<(), String> {
         .out_dir
         .join(format!("variant-{}", args.variant.as_tag()))
         .join(format!("mode-{}", args.mode.as_tag()))
-        .join(format!("focus-{}", args.focus.as_tag()));
+        .join(format!("focus-{}", args.focus.as_tag()))
+        .join(format!("scenario-{}", args.scenario.as_tag()));
     fs::create_dir_all(&frame_dir).map_err(|e| format!("create output dir failed: {e}"))?;
 
     let mut framebuffer = FrameBuffer::new(UI_W as usize, UI_H as usize);
@@ -44,8 +46,77 @@ fn run() -> Result<(), String> {
         frame_no: args.frame_no,
     };
 
-    front_panel_scene::render_frame(&mut framebuffer, &model, args.variant.into_scene())
-        .map_err(|_| "render failed unexpectedly".to_string())?;
+    match args.scenario {
+        ScenarioArg::Default => {
+            front_panel_scene::render_frame_with_self_check_overlay(
+                &mut framebuffer,
+                &model,
+                args.variant.into_scene(),
+                None,
+                SelfCheckOverlay::None,
+            )
+            .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
+        ScenarioArg::DisplayDiag => {
+            let meta = DisplayDiagnosticMeta {
+                orientation_label: "ORI: LANDSCAPE_SWAP (MADCTL=0xE0)",
+                color_order_label: "COLOR ORDER: BGR565",
+                heartbeat_on: (args.frame_no % 2) == 0,
+            };
+            front_panel_scene::render_display_diagnostic(&mut framebuffer, &meta)
+                .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
+        ScenarioArg::Bq40Offline
+        | ScenarioArg::Bq40OfflineDialog
+        | ScenarioArg::Bq40Activating
+        | ScenarioArg::Bq40ActivationSucceeded
+        | ScenarioArg::Bq40ActivationFailed => {
+            let mut snapshot = SelfCheckUiSnapshot::pending(args.mode.into_scene());
+            snapshot.gc9307 = SelfCheckCommState::Ok;
+            snapshot.tca6408a = SelfCheckCommState::Ok;
+            snapshot.fusb302 = SelfCheckCommState::Ok;
+            snapshot.fusb302_vbus_present = Some(true);
+            snapshot.ina3221 = SelfCheckCommState::Ok;
+            snapshot.ina_total_ma = Some(1130);
+            snapshot.bq25792 = SelfCheckCommState::Ok;
+            snapshot.bq25792_allow_charge = Some(true);
+            snapshot.bq25792_ichg_ma = Some(520);
+            snapshot.bq40z50 = SelfCheckCommState::Err;
+            snapshot.bq40z50_soc_pct = None;
+            snapshot.tps_a = SelfCheckCommState::Ok;
+            snapshot.tps_a_enabled = Some(true);
+            snapshot.tps_a_iout_ma = Some(430);
+            snapshot.tps_b = SelfCheckCommState::Ok;
+            snapshot.tps_b_enabled = Some(false);
+            snapshot.tps_b_iout_ma = Some(0);
+            snapshot.tmp_a = SelfCheckCommState::Ok;
+            snapshot.tmp_a_c = Some(39);
+            snapshot.tmp_b = SelfCheckCommState::Ok;
+            snapshot.tmp_b_c = Some(37);
+
+            let overlay = match args.scenario {
+                ScenarioArg::Bq40Offline => SelfCheckOverlay::None,
+                ScenarioArg::Bq40OfflineDialog => SelfCheckOverlay::BmsActivateConfirm,
+                ScenarioArg::Bq40Activating => SelfCheckOverlay::BmsActivateProgress,
+                ScenarioArg::Bq40ActivationSucceeded => {
+                    SelfCheckOverlay::BmsActivateResult { success: true }
+                }
+                ScenarioArg::Bq40ActivationFailed => {
+                    SelfCheckOverlay::BmsActivateResult { success: false }
+                }
+                ScenarioArg::DisplayDiag => SelfCheckOverlay::None,
+                ScenarioArg::Default => SelfCheckOverlay::None,
+            };
+            front_panel_scene::render_frame_with_self_check_overlay(
+                &mut framebuffer,
+                &model,
+                args.variant.into_scene(),
+                Some(&snapshot),
+                overlay,
+            )
+            .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
+    }
 
     let bin_path = frame_dir.join("framebuffer.bin");
     framebuffer
@@ -204,11 +275,52 @@ impl ModeArg {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ScenarioArg {
+    Default,
+    DisplayDiag,
+    Bq40Offline,
+    Bq40OfflineDialog,
+    Bq40Activating,
+    Bq40ActivationSucceeded,
+    Bq40ActivationFailed,
+}
+
+impl ScenarioArg {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw.to_ascii_lowercase().as_str() {
+            "default" => Ok(Self::Default),
+            "display-diag" => Ok(Self::DisplayDiag),
+            "bq40-offline" => Ok(Self::Bq40Offline),
+            "bq40-offline-dialog" => Ok(Self::Bq40OfflineDialog),
+            "bq40-activating" => Ok(Self::Bq40Activating),
+            "bq40-activation-succeeded" => Ok(Self::Bq40ActivationSucceeded),
+            "bq40-activation-failed" => Ok(Self::Bq40ActivationFailed),
+            _ => Err(format!(
+                "unsupported --scenario value: {raw} (expected default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-activation-succeeded|bq40-activation-failed)"
+            )),
+        }
+    }
+
+    fn as_tag(self) -> &'static str {
+        match self {
+            ScenarioArg::Default => "default",
+            ScenarioArg::DisplayDiag => "display-diag",
+            ScenarioArg::Bq40Offline => "bq40-offline",
+            ScenarioArg::Bq40OfflineDialog => "bq40-offline-dialog",
+            ScenarioArg::Bq40Activating => "bq40-activating",
+            ScenarioArg::Bq40ActivationSucceeded => "bq40-activation-succeeded",
+            ScenarioArg::Bq40ActivationFailed => "bq40-activation-failed",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Args {
     variant: VariantArg,
     mode: ModeArg,
     focus: FocusArg,
+    scenario: ScenarioArg,
     out_dir: PathBuf,
     frame_no: u32,
 }
@@ -221,6 +333,7 @@ impl Args {
         let mut variant: Option<VariantArg> = None;
         let mut mode: Option<ModeArg> = None;
         let mut focus: Option<FocusArg> = None;
+        let mut scenario: Option<ScenarioArg> = None;
         let mut out_dir: Option<PathBuf> = None;
         let mut frame_no: u32 = 0;
 
@@ -237,6 +350,10 @@ impl Args {
                 "--mode" => {
                     let value = iter.next().ok_or("missing value for --mode")?;
                     mode = Some(ModeArg::parse(&value)?);
+                }
+                "--scenario" => {
+                    let value = iter.next().ok_or("missing value for --scenario")?;
+                    scenario = Some(ScenarioArg::parse(&value)?);
                 }
                 "--out-dir" => {
                     let value = iter.next().ok_or("missing value for --out-dir")?;
@@ -261,11 +378,13 @@ impl Args {
         let focus = focus.ok_or_else(|| format!("missing --focus\n\n{}", help_text()))?;
         let out_dir = out_dir.ok_or_else(|| format!("missing --out-dir\n\n{}", help_text()))?;
         let mode = mode.unwrap_or_else(|| ModeArg::from_focus(focus));
+        let scenario = scenario.unwrap_or(ScenarioArg::Default);
 
         Ok(Self {
             variant,
             mode,
             focus,
+            scenario,
             out_dir,
             frame_no,
         })
@@ -275,10 +394,10 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-activation-succeeded|bq40-activation-failed}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
-        "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --mode standby --out-dir /tmp/front-panel-preview",
+        "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",
     ]
     .join("\n")
 }

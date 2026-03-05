@@ -51,6 +51,9 @@ pub trait UiPainter {
 
 const HEADER_H: u16 = 18;
 const FOOTER_H: u16 = 0;
+const ERROR_COLOR: u16 = 0xF800;
+const SUCCESS_COLOR: u16 = 0x07E0;
+const PROGRESS_COLOR: u16 = 0xFD20;
 
 // User preference: non-numeric text uses Font A, numeric fields use fixed-width Font B.
 static FONT_A_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13B_tf>();
@@ -116,9 +119,11 @@ pub struct SelfCheckUiSnapshot {
     pub bq25792: SelfCheckCommState,
     pub bq25792_allow_charge: Option<bool>,
     pub bq25792_ichg_ma: Option<u16>,
+    pub bq25792_vbat_present: Option<bool>,
     pub bq40z50: SelfCheckCommState,
     pub bq40z50_soc_pct: Option<u16>,
     pub bq40z50_rca_alarm: Option<bool>,
+    pub bq40z50_discharge_ready: Option<bool>,
     pub tps_a: SelfCheckCommState,
     pub tps_a_enabled: Option<bool>,
     pub tps_a_iout_ma: Option<i32>,
@@ -144,9 +149,11 @@ impl SelfCheckUiSnapshot {
             bq25792: SelfCheckCommState::Pending,
             bq25792_allow_charge: None,
             bq25792_ichg_ma: None,
+            bq25792_vbat_present: None,
             bq40z50: SelfCheckCommState::Pending,
             bq40z50_soc_pct: None,
             bq40z50_rca_alarm: None,
+            bq40z50_discharge_ready: None,
             tps_a: SelfCheckCommState::Pending,
             tps_a_enabled: None,
             tps_a_iout_ma: None,
@@ -158,6 +165,113 @@ impl SelfCheckUiSnapshot {
             tmp_b: SelfCheckCommState::Pending,
             tmp_b_c: None,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum SelfCheckTouchTarget {
+    Bq40Card,
+    ActivateCancel,
+    ActivateConfirm,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum SelfCheckOverlay {
+    None,
+    BmsActivateConfirm,
+    BmsActivateProgress,
+    BmsActivateResult { success: bool },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum BmsActivationState {
+    Idle,
+    Pending,
+    Succeeded,
+    FailedNoInput,
+    FailedTimeout,
+    FailedComm,
+}
+
+const SELF_CHECK_BQ40_CARD_X: u16 = 163;
+const SELF_CHECK_BQ40_CARD_Y: u16 = 22;
+const SELF_CHECK_BQ40_CARD_W: u16 = 151;
+const SELF_CHECK_BQ40_CARD_H: u16 = 29;
+
+const SELF_CHECK_DIALOG_X: u16 = 20;
+const SELF_CHECK_DIALOG_Y: u16 = 34;
+const SELF_CHECK_DIALOG_W: u16 = 280;
+const SELF_CHECK_DIALOG_H: u16 = 112;
+
+const SELF_CHECK_CANCEL_BTN_X: u16 = 32;
+const SELF_CHECK_CANCEL_BTN_Y: u16 = 110;
+const SELF_CHECK_CANCEL_BTN_W: u16 = 108;
+const SELF_CHECK_CANCEL_BTN_H: u16 = 24;
+
+const SELF_CHECK_CONFIRM_BTN_X: u16 = 152;
+const SELF_CHECK_CONFIRM_BTN_Y: u16 = 110;
+const SELF_CHECK_CONFIRM_BTN_W: u16 = 136;
+const SELF_CHECK_CONFIRM_BTN_H: u16 = 24;
+
+#[allow(dead_code)]
+pub fn is_bq40_offline(snapshot: &SelfCheckUiSnapshot) -> bool {
+    snapshot.bq40z50 == SelfCheckCommState::Err && snapshot.bq40z50_soc_pct.is_none()
+}
+
+#[allow(dead_code)]
+pub fn is_bq40_activation_needed(snapshot: &SelfCheckUiSnapshot) -> bool {
+    is_bq40_offline(snapshot)
+        || (snapshot.bq40z50_soc_pct.is_some() && snapshot.bq40z50_discharge_ready != Some(true))
+}
+
+#[allow(dead_code)]
+pub fn self_check_hit_test(
+    x: u16,
+    y: u16,
+    overlay: SelfCheckOverlay,
+) -> Option<SelfCheckTouchTarget> {
+    match overlay {
+        SelfCheckOverlay::None => {
+            if contains(
+                x,
+                y,
+                SELF_CHECK_BQ40_CARD_X,
+                SELF_CHECK_BQ40_CARD_Y,
+                SELF_CHECK_BQ40_CARD_W,
+                SELF_CHECK_BQ40_CARD_H,
+            ) {
+                Some(SelfCheckTouchTarget::Bq40Card)
+            } else {
+                None
+            }
+        }
+        SelfCheckOverlay::BmsActivateConfirm => {
+            if contains(
+                x,
+                y,
+                SELF_CHECK_CANCEL_BTN_X,
+                SELF_CHECK_CANCEL_BTN_Y,
+                SELF_CHECK_CANCEL_BTN_W,
+                SELF_CHECK_CANCEL_BTN_H,
+            ) {
+                Some(SelfCheckTouchTarget::ActivateCancel)
+            } else if contains(
+                x,
+                y,
+                SELF_CHECK_CONFIRM_BTN_X,
+                SELF_CHECK_CONFIRM_BTN_Y,
+                SELF_CHECK_CONFIRM_BTN_W,
+                SELF_CHECK_CONFIRM_BTN_H,
+            ) {
+                Some(SelfCheckTouchTarget::ActivateConfirm)
+            } else {
+                None
+            }
+        }
+        SelfCheckOverlay::BmsActivateProgress | SelfCheckOverlay::BmsActivateResult { .. } => None,
     }
 }
 
@@ -304,19 +418,229 @@ fn mode_is_mains(mode: UpsMode) -> bool {
 }
 
 #[allow(dead_code)]
+pub struct DisplayDiagnosticMeta {
+    pub orientation_label: &'static str,
+    pub color_order_label: &'static str,
+    pub heartbeat_on: bool,
+}
+
+#[allow(dead_code)]
+pub fn render_display_diagnostic<P: UiPainter>(
+    painter: &mut P,
+    meta: &DisplayDiagnosticMeta,
+) -> Result<(), P::Error> {
+    const BG: u16 = 0x0000;
+    const FG: u16 = 0xFFFF;
+    const MUTED: u16 = 0x7BEF;
+    const ACCENT: u16 = 0x07FF;
+
+    fill(painter, 0, 0, UI_W, UI_H, BG)?;
+    draw_outline(painter, 0, 0, UI_W, UI_H, FG)?;
+
+    fill(painter, 0, 0, UI_W, 20, 0x0841)?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "DISPLAY DIAG",
+        Point::new((UI_W / 2) as i32, 6),
+        HorizontalAlignment::Center,
+        FG,
+    )?;
+
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "UP ^",
+        Point::new((UI_W / 2) as i32, 24),
+        HorizontalAlignment::Center,
+        ACCENT,
+    )?;
+    fill(painter, UI_W / 2, 34, 1, 24, ACCENT)?;
+    fill(painter, UI_W / 2 - 3, 34, 7, 1, ACCENT)?;
+    fill(painter, UI_W / 2 - 2, 35, 5, 1, ACCENT)?;
+    fill(painter, UI_W / 2 - 1, 36, 3, 1, ACCENT)?;
+
+    fill(painter, 4, 24, 30, 18, 0xF800)?;
+    fill(painter, UI_W - 34, 24, 30, 18, 0x07E0)?;
+    fill(painter, 4, UI_H - 22, 30, 18, 0x001F)?;
+    fill(painter, UI_W - 34, UI_H - 22, 30, 18, 0xFFE0)?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "TL",
+        Point::new(19, 29),
+        HorizontalAlignment::Center,
+        FG,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "TR",
+        Point::new((UI_W - 19) as i32, 29),
+        HorizontalAlignment::Center,
+        0x0000,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "BL",
+        Point::new(19, (UI_H - 17) as i32),
+        HorizontalAlignment::Center,
+        FG,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "BR",
+        Point::new((UI_W - 19) as i32, (UI_H - 17) as i32),
+        HorizontalAlignment::Center,
+        0x0000,
+    )?;
+
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "LEFT",
+        Point::new(6, 47),
+        HorizontalAlignment::Left,
+        ACCENT,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "RIGHT",
+        Point::new((UI_W - 6) as i32, 47),
+        HorizontalAlignment::Right,
+        ACCENT,
+    )?;
+
+    const BARS: [(u16, &str); 8] = [
+        (0xF800, "R"),
+        (0x07E0, "G"),
+        (0x001F, "B"),
+        (0xFFE0, "Y"),
+        (0x07FF, "C"),
+        (0xF81F, "M"),
+        (0xFFFF, "W"),
+        (0x0000, "K"),
+    ];
+    let bar_y = 60;
+    let bar_h = 46;
+    let bar_w = UI_W / (BARS.len() as u16);
+    for (idx, &(color, label)) in BARS.iter().enumerate() {
+        let x = (idx as u16) * bar_w;
+        fill(painter, x, bar_y, bar_w, bar_h, color)?;
+        draw_outline(
+            painter,
+            x,
+            bar_y,
+            bar_w,
+            bar_h,
+            if color == 0x0000 { FG } else { BG },
+        )?;
+        text(
+            painter,
+            UiVariant::RetroC,
+            FontRole::TextCompact,
+            label,
+            Point::new((x + bar_w / 2) as i32, (bar_y + bar_h + 2) as i32),
+            HorizontalAlignment::Center,
+            if color == 0x0000 { FG } else { BG },
+        )?;
+    }
+
+    let gray_y = 118;
+    let gray_h = 16;
+    let gray_w = UI_W / 8;
+    for idx in 0..8u16 {
+        let r = (idx * 31 / 7) & 0x1f;
+        let g = (idx * 63 / 7) & 0x3f;
+        let b = (idx * 31 / 7) & 0x1f;
+        let gray = (r << 11) | (g << 5) | b;
+        fill(painter, idx * gray_w, gray_y, gray_w, gray_h, gray)?;
+        draw_outline(painter, idx * gray_w, gray_y, gray_w, gray_h, MUTED)?;
+    }
+
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        meta.orientation_label,
+        Point::new(6, 140),
+        HorizontalAlignment::Left,
+        FG,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        meta.color_order_label,
+        Point::new(6, 150),
+        HorizontalAlignment::Left,
+        FG,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextCompact,
+        "EXPECT: TL-R TR-G BL-B BR-Y",
+        Point::new(6, 160),
+        HorizontalAlignment::Left,
+        MUTED,
+    )?;
+
+    fill(
+        painter,
+        UI_W - 16,
+        4,
+        10,
+        10,
+        if meta.heartbeat_on { 0x07E0 } else { 0x39E7 },
+    )?;
+    draw_outline(painter, UI_W - 16, 4, 10, 10, FG)?;
+
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub fn render_frame<P: UiPainter>(
     painter: &mut P,
     model: &UiModel,
     variant: UiVariant,
 ) -> Result<(), P::Error> {
-    render_frame_with_self_check(painter, model, variant, None)
+    render_frame_with_self_check_overlay(painter, model, variant, None, SelfCheckOverlay::None)
 }
 
+#[allow(dead_code)]
 pub fn render_frame_with_self_check<P: UiPainter>(
     painter: &mut P,
     model: &UiModel,
     variant: UiVariant,
     self_check: Option<&SelfCheckUiSnapshot>,
+) -> Result<(), P::Error> {
+    render_frame_with_self_check_overlay(
+        painter,
+        model,
+        variant,
+        self_check,
+        SelfCheckOverlay::None,
+    )
+}
+
+pub fn render_frame_with_self_check_overlay<P: UiPainter>(
+    painter: &mut P,
+    model: &UiModel,
+    variant: UiVariant,
+    self_check: Option<&SelfCheckUiSnapshot>,
+    overlay: SelfCheckOverlay,
 ) -> Result<(), P::Error> {
     let palette = palette_for(variant);
     let data = DashboardData::from_model(model);
@@ -328,7 +652,9 @@ pub fn render_frame_with_self_check<P: UiPainter>(
     match variant {
         UiVariant::InstrumentA => render_variant_a(painter, variant, palette, data)?,
         UiVariant::InstrumentB => render_variant_b(painter, variant, palette, data)?,
-        UiVariant::RetroC => render_variant_c(painter, variant, palette, data, self_check)?,
+        UiVariant::RetroC => {
+            render_variant_c(painter, variant, palette, data, self_check, overlay)?
+        }
         UiVariant::InstrumentD => render_variant_d(painter, variant, palette, data)?,
     }
 
@@ -864,6 +1190,7 @@ fn render_variant_c<P: UiPainter>(
     palette: Palette,
     data: DashboardData,
     self_check: Option<&SelfCheckUiSnapshot>,
+    overlay: SelfCheckOverlay,
 ) -> Result<(), P::Error> {
     let snapshot = self_check.copied().unwrap_or_else(|| {
         let mut fallback = SelfCheckUiSnapshot::pending(data.mode);
@@ -1000,6 +1327,7 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "GC9307",
+            status_state: snapshot.gc9307,
             status: comm_label(snapshot.gc9307),
             key: "RGB565 320x172",
             active: false,
@@ -1016,6 +1344,7 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "TCA6408A",
+            status_state: snapshot.tca6408a,
             status: comm_label(snapshot.tca6408a),
             key: "I2C2 ADDR 0x21",
             active: data.focus == UiFocus::Touch || data.touch_irq,
@@ -1032,6 +1361,7 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "FUSB302",
+            status_state: snapshot.fusb302,
             status: comm_label(snapshot.fusb302),
             key: vbus_key_text(snapshot.fusb302_vbus_present),
             active: false,
@@ -1048,6 +1378,7 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "INA3221",
+            status_state: snapshot.ina3221,
             status: comm_label(snapshot.ina3221),
             key: ina_key,
             active: data.focus == UiFocus::Touch,
@@ -1064,6 +1395,7 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "BQ25792",
+            status_state: snapshot.bq25792,
             status: charger_label(snapshot.bq25792, snapshot.bq25792_allow_charge),
             key: chg_key,
             active: data.focus == UiFocus::Right,
@@ -1081,6 +1413,7 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "BQ40Z50",
+            status_state: snapshot.bq40z50,
             status: bms_label(snapshot.bq40z50, snapshot.bq40z50_rca_alarm),
             key: bms_key,
             active: data.focus == UiFocus::Left,
@@ -1097,6 +1430,7 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "TPS55288-A",
+            status_state: snapshot.tps_a,
             status: tps_label(snapshot.tps_a, snapshot.tps_a_enabled),
             key: tps_a_key,
             active: data.focus == UiFocus::Up,
@@ -1113,6 +1447,7 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "TPS55288-B",
+            status_state: snapshot.tps_b,
             status: tps_label(snapshot.tps_b, snapshot.tps_b_enabled),
             key: tps_b_key,
             active: data.focus == UiFocus::Down,
@@ -1129,6 +1464,7 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "TMP112-A",
+            status_state: snapshot.tmp_a,
             status: tmp_label(snapshot.tmp_a, snapshot.tmp_a_c),
             key: tmp_a_key,
             active: data.focus == UiFocus::Center,
@@ -1145,6 +1481,7 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "TMP112-B",
+            status_state: snapshot.tmp_b,
             status: tmp_label(snapshot.tmp_b, snapshot.tmp_b_c),
             key: tmp_b_key,
             active: data.focus == UiFocus::Center,
@@ -1152,8 +1489,527 @@ fn render_variant_c<P: UiPainter>(
         },
     )?;
 
+    draw_self_check_overlay(painter, variant, palette, overlay)?;
+
     Ok(())
 }
+
+fn draw_self_check_overlay<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    overlay: SelfCheckOverlay,
+) -> Result<(), P::Error> {
+    if overlay == SelfCheckOverlay::None {
+        return Ok(());
+    }
+
+    fill(
+        painter,
+        0,
+        HEADER_H,
+        UI_W,
+        UI_H - HEADER_H,
+        fade_color(palette.bg, 0x0000),
+    )?;
+
+    let dialog_border = fade_color(palette.left, palette.border);
+    let dialog_fill = fade_color(palette.left, palette.panel_alt);
+    let title_fill = fade_color(dialog_fill, palette.bg);
+    let title_text = palette.text;
+    let body_text = palette.text;
+    let divider = fade_color(title_fill, palette.text_dim);
+
+    let cancel_border = fade_color(palette.border, palette.text_dim);
+    let cancel_fill = fade_color(palette.panel, palette.panel_alt);
+    let cancel_text = palette.text;
+
+    let confirm_border = fade_color(palette.right, 0x0000);
+    let confirm_fill = palette.right;
+    let confirm_text = fade_color(palette.bg, 0x0000);
+
+    fill(
+        painter,
+        SELF_CHECK_DIALOG_X,
+        SELF_CHECK_DIALOG_Y,
+        SELF_CHECK_DIALOG_W,
+        SELF_CHECK_DIALOG_H,
+        dialog_border,
+    )?;
+    fill(
+        painter,
+        SELF_CHECK_DIALOG_X + 1,
+        SELF_CHECK_DIALOG_Y + 1,
+        SELF_CHECK_DIALOG_W - 2,
+        SELF_CHECK_DIALOG_H - 2,
+        dialog_fill,
+    )?;
+    fill(
+        painter,
+        SELF_CHECK_DIALOG_X + 1,
+        SELF_CHECK_DIALOG_Y + 1,
+        SELF_CHECK_DIALOG_W - 2,
+        20,
+        title_fill,
+    )?;
+    fill(
+        painter,
+        SELF_CHECK_DIALOG_X + 1,
+        SELF_CHECK_DIALOG_Y + 21,
+        SELF_CHECK_DIALOG_W - 2,
+        1,
+        divider,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "BMS Offline",
+        Point::new(
+            (SELF_CHECK_DIALOG_X + 10) as i32,
+            (SELF_CHECK_DIALOG_Y + 4) as i32,
+        ),
+        HorizontalAlignment::Left,
+        title_text,
+    )?;
+
+    match overlay {
+        SelfCheckOverlay::BmsActivateConfirm => {
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "BQ40Z50 is not responding.",
+                Point::new(
+                    (SELF_CHECK_DIALOG_X + 10) as i32,
+                    (SELF_CHECK_DIALOG_Y + 26) as i32,
+                ),
+                HorizontalAlignment::Left,
+                body_text,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "Activate BMS now?",
+                Point::new(
+                    (SELF_CHECK_DIALOG_X + 10) as i32,
+                    (SELF_CHECK_DIALOG_Y + 46) as i32,
+                ),
+                HorizontalAlignment::Left,
+                body_text,
+            )?;
+
+            fill(
+                painter,
+                SELF_CHECK_CANCEL_BTN_X,
+                SELF_CHECK_CANCEL_BTN_Y,
+                SELF_CHECK_CANCEL_BTN_W,
+                SELF_CHECK_CANCEL_BTN_H,
+                cancel_border,
+            )?;
+            fill(
+                painter,
+                SELF_CHECK_CANCEL_BTN_X + 1,
+                SELF_CHECK_CANCEL_BTN_Y + 1,
+                SELF_CHECK_CANCEL_BTN_W - 2,
+                SELF_CHECK_CANCEL_BTN_H - 2,
+                cancel_fill,
+            )?;
+            fill(
+                painter,
+                SELF_CHECK_CONFIRM_BTN_X,
+                SELF_CHECK_CONFIRM_BTN_Y,
+                SELF_CHECK_CONFIRM_BTN_W,
+                SELF_CHECK_CONFIRM_BTN_H,
+                confirm_border,
+            )?;
+            fill(
+                painter,
+                SELF_CHECK_CONFIRM_BTN_X + 1,
+                SELF_CHECK_CONFIRM_BTN_Y + 1,
+                SELF_CHECK_CONFIRM_BTN_W - 2,
+                SELF_CHECK_CONFIRM_BTN_H - 2,
+                confirm_fill,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::Num,
+                "Cancel",
+                Point::new(
+                    (SELF_CHECK_CANCEL_BTN_X + (SELF_CHECK_CANCEL_BTN_W.saturating_sub(6 * 8)) / 2)
+                        as i32,
+                    (SELF_CHECK_CANCEL_BTN_Y + 6) as i32,
+                ),
+                HorizontalAlignment::Left,
+                cancel_text,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::Num,
+                "Activate",
+                Point::new(
+                    (SELF_CHECK_CONFIRM_BTN_X
+                        + (SELF_CHECK_CONFIRM_BTN_W.saturating_sub(8 * 8)) / 2)
+                        as i32,
+                    (SELF_CHECK_CONFIRM_BTN_Y + 6) as i32,
+                ),
+                HorizontalAlignment::Left,
+                confirm_text,
+            )?;
+        }
+        SelfCheckOverlay::BmsActivateProgress => {
+            let icon_x = SELF_CHECK_DIALOG_X + 10;
+            let icon_y = SELF_CHECK_DIALOG_Y + 28;
+            let text_x = SELF_CHECK_DIALOG_X + 50;
+            draw_activation_icon(painter, icon_x, icon_y, ActivationIcon::Progress)?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "BQ40Z50 is not responding.",
+                Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 28) as i32),
+                HorizontalAlignment::Left,
+                body_text,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::Num,
+                "Activating...",
+                Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 50) as i32),
+                HorizontalAlignment::Left,
+                PROGRESS_COLOR,
+            )?;
+        }
+        SelfCheckOverlay::BmsActivateResult { success } => {
+            let icon_x = SELF_CHECK_DIALOG_X + 10;
+            let icon_y = SELF_CHECK_DIALOG_Y + 28;
+            let text_x = SELF_CHECK_DIALOG_X + 50;
+            draw_activation_icon(
+                painter,
+                icon_x,
+                icon_y,
+                if success {
+                    ActivationIcon::Success
+                } else {
+                    ActivationIcon::Failed
+                },
+            )?;
+            if success {
+                text(
+                    painter,
+                    variant,
+                    FontRole::TextBody,
+                    "Activation succeeded.",
+                    Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 28) as i32),
+                    HorizontalAlignment::Left,
+                    SUCCESS_COLOR,
+                )?;
+                text(
+                    painter,
+                    variant,
+                    FontRole::TextBody,
+                    "BQ40Z50 is online.",
+                    Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 46) as i32),
+                    HorizontalAlignment::Left,
+                    body_text,
+                )?;
+            } else {
+                text(
+                    painter,
+                    variant,
+                    FontRole::TextBody,
+                    "Activation failed.",
+                    Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 28) as i32),
+                    HorizontalAlignment::Left,
+                    ERROR_COLOR,
+                )?;
+                text(
+                    painter,
+                    variant,
+                    FontRole::TextBody,
+                    "Check input power and",
+                    Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 46) as i32),
+                    HorizontalAlignment::Left,
+                    body_text,
+                )?;
+                text(
+                    painter,
+                    variant,
+                    FontRole::TextBody,
+                    "battery wiring.",
+                    Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 64) as i32),
+                    HorizontalAlignment::Left,
+                    body_text,
+                )?;
+            }
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "Tap to close",
+                Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 84) as i32),
+                HorizontalAlignment::Left,
+                palette.text_dim,
+            )?;
+        }
+        SelfCheckOverlay::None => {}
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ActivationIcon {
+    Progress,
+    Success,
+    Failed,
+}
+
+fn draw_activation_icon<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    icon: ActivationIcon,
+) -> Result<(), P::Error> {
+    // Icon source: Iconify / carbon.
+    // Use original glyphs directly (no secondary reinterpretation/composition).
+    let (icon_color, icon_blocks) = match icon {
+        ActivationIcon::Progress => (PROGRESS_COLOR, CARBON_IN_PROGRESS_32),
+        ActivationIcon::Success => (SUCCESS_COLOR, CARBON_CHECKMARK_OUTLINE_32),
+        ActivationIcon::Failed => (ERROR_COLOR, CARBON_CLOSE_OUTLINE_32),
+    };
+
+    draw_icon_blocks(painter, x, y, icon_blocks, icon_color)?;
+
+    Ok(())
+}
+
+fn draw_icon_blocks<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    blocks: &[(u8, u8, u8, u8)],
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    for &(bx, by, bw, bh) in blocks {
+        if bw == 0 || bh == 0 {
+            continue;
+        }
+        fill(
+            painter,
+            x + u16::from(bx),
+            y + u16::from(by),
+            u16::from(bw),
+            u16::from(bh),
+            rgb565,
+        )?;
+    }
+    Ok(())
+}
+
+const CARBON_IN_PROGRESS_32: &[(u8, u8, u8, u8)] = &[
+    (11, 2, 10, 1),
+    (9, 3, 14, 1),
+    (7, 4, 8, 1),
+    (16, 4, 9, 1),
+    (6, 5, 5, 1),
+    (16, 5, 10, 1),
+    (5, 6, 4, 1),
+    (16, 6, 11, 1),
+    (4, 7, 4, 1),
+    (16, 7, 12, 1),
+    (4, 8, 3, 1),
+    (16, 8, 12, 1),
+    (3, 9, 3, 1),
+    (16, 9, 13, 1),
+    (3, 10, 3, 1),
+    (16, 10, 13, 1),
+    (2, 11, 3, 1),
+    (16, 11, 14, 1),
+    (2, 12, 3, 1),
+    (16, 12, 14, 1),
+    (2, 13, 3, 1),
+    (16, 13, 14, 1),
+    (2, 14, 3, 1),
+    (16, 14, 14, 1),
+    (2, 15, 2, 1),
+    (16, 15, 14, 1),
+    (2, 16, 2, 1),
+    (16, 16, 14, 1),
+    (2, 17, 3, 1),
+    (17, 17, 13, 1),
+    (2, 18, 3, 1),
+    (18, 18, 12, 1),
+    (2, 19, 3, 1),
+    (19, 19, 11, 1),
+    (2, 20, 3, 1),
+    (20, 20, 10, 1),
+    (3, 21, 3, 1),
+    (21, 21, 8, 1),
+    (3, 22, 3, 1),
+    (22, 22, 7, 1),
+    (4, 23, 3, 1),
+    (23, 23, 5, 1),
+    (4, 24, 4, 1),
+    (24, 24, 4, 1),
+    (5, 25, 4, 1),
+    (23, 25, 4, 1),
+    (6, 26, 5, 1),
+    (21, 26, 5, 1),
+    (7, 27, 8, 1),
+    (17, 27, 8, 1),
+    (9, 28, 14, 1),
+    (11, 29, 10, 1),
+];
+
+const CARBON_CHECKMARK_OUTLINE_32: &[(u8, u8, u8, u8)] = &[
+    (11, 2, 10, 1),
+    (9, 3, 14, 1),
+    (7, 4, 8, 1),
+    (17, 4, 8, 1),
+    (6, 5, 5, 1),
+    (21, 5, 5, 1),
+    (5, 6, 4, 1),
+    (23, 6, 4, 1),
+    (4, 7, 4, 1),
+    (24, 7, 4, 1),
+    (4, 8, 3, 1),
+    (25, 8, 3, 1),
+    (3, 9, 3, 1),
+    (26, 9, 3, 1),
+    (3, 10, 3, 1),
+    (26, 10, 3, 1),
+    (2, 11, 3, 1),
+    (20, 11, 3, 1),
+    (27, 11, 3, 1),
+    (2, 12, 3, 1),
+    (19, 12, 4, 1),
+    (27, 12, 3, 1),
+    (2, 13, 3, 1),
+    (18, 13, 5, 1),
+    (27, 13, 3, 1),
+    (2, 14, 3, 1),
+    (17, 14, 5, 1),
+    (27, 14, 3, 1),
+    (2, 15, 2, 1),
+    (9, 15, 3, 1),
+    (16, 15, 5, 1),
+    (28, 15, 2, 1),
+    (2, 16, 2, 1),
+    (9, 16, 4, 1),
+    (15, 16, 5, 1),
+    (28, 16, 2, 1),
+    (2, 17, 3, 1),
+    (9, 17, 10, 1),
+    (27, 17, 3, 1),
+    (2, 18, 3, 1),
+    (10, 18, 8, 1),
+    (27, 18, 3, 1),
+    (2, 19, 3, 1),
+    (11, 19, 6, 1),
+    (27, 19, 3, 1),
+    (2, 20, 3, 1),
+    (12, 20, 4, 1),
+    (27, 20, 3, 1),
+    (3, 21, 3, 1),
+    (13, 21, 2, 1),
+    (26, 21, 3, 1),
+    (3, 22, 3, 1),
+    (26, 22, 3, 1),
+    (4, 23, 3, 1),
+    (25, 23, 3, 1),
+    (4, 24, 4, 1),
+    (24, 24, 4, 1),
+    (5, 25, 4, 1),
+    (23, 25, 4, 1),
+    (6, 26, 5, 1),
+    (21, 26, 5, 1),
+    (7, 27, 8, 1),
+    (17, 27, 8, 1),
+    (9, 28, 14, 1),
+    (11, 29, 10, 1),
+];
+
+const CARBON_CLOSE_OUTLINE_32: &[(u8, u8, u8, u8)] = &[
+    (11, 2, 10, 1),
+    (9, 3, 14, 1),
+    (7, 4, 8, 1),
+    (17, 4, 8, 1),
+    (6, 5, 5, 1),
+    (21, 5, 5, 1),
+    (5, 6, 4, 1),
+    (23, 6, 4, 1),
+    (4, 7, 4, 1),
+    (24, 7, 4, 1),
+    (4, 8, 3, 1),
+    (25, 8, 3, 1),
+    (3, 9, 3, 1),
+    (9, 9, 3, 1),
+    (20, 9, 3, 1),
+    (26, 9, 3, 1),
+    (3, 10, 3, 1),
+    (9, 10, 4, 1),
+    (19, 10, 4, 1),
+    (26, 10, 3, 1),
+    (2, 11, 3, 1),
+    (9, 11, 5, 1),
+    (18, 11, 5, 1),
+    (27, 11, 3, 1),
+    (2, 12, 3, 1),
+    (10, 12, 5, 1),
+    (17, 12, 5, 1),
+    (27, 12, 3, 1),
+    (2, 13, 3, 1),
+    (11, 13, 10, 1),
+    (27, 13, 3, 1),
+    (2, 14, 3, 1),
+    (12, 14, 8, 1),
+    (27, 14, 3, 1),
+    (2, 15, 2, 1),
+    (13, 15, 6, 1),
+    (28, 15, 2, 1),
+    (2, 16, 2, 1),
+    (13, 16, 6, 1),
+    (28, 16, 2, 1),
+    (2, 17, 3, 1),
+    (12, 17, 8, 1),
+    (27, 17, 3, 1),
+    (2, 18, 3, 1),
+    (11, 18, 10, 1),
+    (27, 18, 3, 1),
+    (2, 19, 3, 1),
+    (10, 19, 5, 1),
+    (17, 19, 5, 1),
+    (27, 19, 3, 1),
+    (2, 20, 3, 1),
+    (9, 20, 5, 1),
+    (18, 20, 5, 1),
+    (27, 20, 3, 1),
+    (3, 21, 3, 1),
+    (9, 21, 4, 1),
+    (19, 21, 4, 1),
+    (26, 21, 3, 1),
+    (3, 22, 3, 1),
+    (10, 22, 2, 1),
+    (20, 22, 2, 1),
+    (26, 22, 3, 1),
+    (4, 23, 3, 1),
+    (25, 23, 3, 1),
+    (4, 24, 4, 1),
+    (24, 24, 4, 1),
+    (5, 25, 4, 1),
+    (23, 25, 4, 1),
+    (6, 26, 5, 1),
+    (21, 26, 5, 1),
+    (7, 27, 8, 1),
+    (17, 27, 8, 1),
+    (9, 28, 14, 1),
+    (11, 29, 10, 1),
+];
 
 fn comm_label(state: SelfCheckCommState) -> &'static str {
     match state {
@@ -1237,6 +2093,10 @@ fn vbus_key_text(vbus_present: Option<bool>) -> &'static str {
     }
 }
 
+fn contains(x: u16, y: u16, rx: u16, ry: u16, rw: u16, rh: u16) -> bool {
+    x >= rx && y >= ry && x < rx + rw && y < ry + rh
+}
+
 fn render_variant_d<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
@@ -1255,6 +2115,7 @@ where
     w: u16,
     h: u16,
     module: &'static str,
+    status_state: SelfCheckCommState,
     status: &'static str,
     key: T,
     active: bool,
@@ -1288,6 +2149,13 @@ fn draw_diag_card<P: UiPainter, T: Content>(
     } else {
         palette.text_dim
     };
+    let status_color = if spec.active {
+        palette.bg
+    } else if spec.status_state == SelfCheckCommState::Err {
+        ERROR_COLOR
+    } else {
+        dim_color
+    };
     text(
         painter,
         variant,
@@ -1304,7 +2172,7 @@ fn draw_diag_card<P: UiPainter, T: Content>(
         spec.status,
         Point::new((spec.x + spec.w - 6) as i32, (spec.y + 4) as i32),
         HorizontalAlignment::Right,
-        if spec.active { palette.bg } else { dim_color },
+        status_color,
     )?;
     text(
         painter,

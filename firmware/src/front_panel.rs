@@ -1,6 +1,9 @@
 use core::convert::Infallible;
 
-use crate::front_panel_scene::{self, SelfCheckUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant};
+use crate::front_panel_scene::{
+    self, BmsActivationState, SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot, UiFocus,
+    UiModel, UiPainter, UiVariant,
+};
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
 use esp_hal::gpio::{DriveMode, Flex, Input, OutputConfig, Pull};
@@ -21,6 +24,10 @@ const TCA_REG_OUTPUT: u8 = 0x01;
 const TCA_REG_POLARITY: u8 = 0x02;
 const TCA_REG_CONFIG: u8 = 0x03;
 
+const CST816D_ADDR: u8 = 0x15;
+const CST816D_REG_GESTURE: u8 = 0x01;
+const CST816D_TOUCH_REG_LEN: usize = 6;
+
 // TCA bit assignments.
 const TCA_BIT_CS: u8 = 5; // P5, active-low
 const TCA_BIT_RES: u8 = 6; // P6, active-low
@@ -37,12 +44,19 @@ const LCD_H: u16 = 172;
 const OFFSET_X: u16 = 0;
 const OFFSET_Y: u16 = 34;
 const PANEL_ORIENTATION: Orientation = Orientation::LandscapeSwapped;
+const PANEL_RGB_ORDER: bool = false;
 const UI_ORIENTATION_MARKER: &str = "FP_ORI_PROBE_20260227";
 
 const BACKLIGHT_ACTIVE_LOW: bool = true;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiAction {
+    RequestBmsActivation,
+    ClearBmsActivationResult,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitState {
@@ -58,6 +72,7 @@ struct InputSnapshot {
     right: bool,
     center: bool,
     touch: bool,
+    touch_point: Option<(u16, u16)>,
 }
 
 impl InputSnapshot {
@@ -69,6 +84,7 @@ impl InputSnapshot {
             right: false,
             center: false,
             touch: false,
+            touch_point: None,
         }
     }
 }
@@ -90,6 +106,8 @@ pub struct FrontPanel {
     needs_redraw: bool,
     ui_variant: UiVariant,
     self_check_snapshot: SelfCheckUiSnapshot,
+    bms_activation_state: BmsActivationState,
+    self_check_overlay: SelfCheckOverlay,
     frame_no: u32,
 }
 
@@ -118,6 +136,8 @@ impl FrontPanel {
             needs_redraw: false,
             ui_variant: SELF_CHECK_VARIANT,
             self_check_snapshot: SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby),
+            bms_activation_state: BmsActivationState::Idle,
+            self_check_overlay: SelfCheckOverlay::None,
             frame_no: 0,
         }
     }
@@ -131,35 +151,23 @@ impl FrontPanel {
         self.pulse_tca_reset(Duration::from_millis(10));
 
         if let Err(e) = self.tca_init() {
-            defmt::error!(
-                "ui: tca6408a init failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca6408a init failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
 
         if let Err(e) = self.tca_set_res_released(false) {
-            defmt::error!(
-                "ui: tca set res failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca set res failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
         if let Err(e) = self.tca_set_tp_reset_released(false) {
-            defmt::error!(
-                "ui: tca set tp_reset failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca set tp_reset failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
         if let Err(e) = self.tca_set_cs_enabled(false) {
-            defmt::error!(
-                "ui: tca set cs failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca set cs failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
@@ -168,28 +176,19 @@ impl FrontPanel {
 
         // Hardware reset through expander lines before handing over to driver init.
         if let Err(e) = self.tca_set_res_released(true) {
-            defmt::error!(
-                "ui: tca release res failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca release res failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
         if let Err(e) = self.tca_set_tp_reset_released(true) {
-            defmt::error!(
-                "ui: tca release tp_reset failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca release tp_reset failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
         busy_wait(Duration::from_millis(120));
 
         if let Err(e) = self.tca_set_cs_enabled(true) {
-            defmt::error!(
-                "ui: tca enable cs failed err={}",
-                crate::output::i2c_error_kind(e)
-            );
+            defmt::error!("ui: tca enable cs failed err={}", i2c_error_kind(e));
             self.state = InitState::Disabled;
             return;
         }
@@ -210,10 +209,7 @@ impl FrontPanel {
                 snapshot
             }
             Err(e) => {
-                defmt::error!(
-                    "ui: read input state failed err={}",
-                    crate::output::i2c_error_kind(e)
-                );
+                defmt::error!("ui: read input state failed err={}", i2c_error_kind(e));
                 let idle = InputSnapshot::idle();
                 self.last_inputs = Some(idle);
                 idle
@@ -253,6 +249,11 @@ impl FrontPanel {
             return;
         }
         self.self_check_snapshot = snapshot;
+        if self.self_check_overlay == SelfCheckOverlay::BmsActivateConfirm
+            && !front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
+        {
+            self.self_check_overlay = SelfCheckOverlay::None;
+        }
         self.needs_redraw = true;
         if self.state != InitState::Ready {
             return;
@@ -266,19 +267,39 @@ impl FrontPanel {
         }
     }
 
-    pub fn tick(&mut self) {
-        if self.state != InitState::Ready {
+    pub fn update_bms_activation_state(&mut self, state: BmsActivationState) {
+        if self.bms_activation_state == state {
             return;
+        }
+        self.bms_activation_state = state;
+        self.self_check_overlay = match state {
+            BmsActivationState::Idle => SelfCheckOverlay::None,
+            BmsActivationState::Pending => SelfCheckOverlay::BmsActivateProgress,
+            BmsActivationState::Succeeded => SelfCheckOverlay::BmsActivateResult { success: true },
+            BmsActivationState::FailedNoInput
+            | BmsActivationState::FailedTimeout
+            | BmsActivationState::FailedComm => {
+                SelfCheckOverlay::BmsActivateResult { success: false }
+            }
+        };
+        self.needs_redraw = true;
+    }
+
+    pub fn tick(&mut self) -> Option<UiAction> {
+        if self.state != InitState::Ready {
+            return None;
         }
 
         let now = Instant::now();
         if now < self.next_frame_deadline {
-            return;
+            return None;
         }
         self.next_frame_deadline += FRAME_INTERVAL;
 
+        let mut ui_action = None;
         match self.read_inputs() {
             Ok(snapshot) => {
+                ui_action = self.process_touch_action(snapshot);
                 let inputs_changed = self.last_inputs != Some(snapshot);
                 if inputs_changed || self.needs_redraw {
                     if let Err(e) = self.render_inputs(snapshot) {
@@ -291,11 +312,35 @@ impl FrontPanel {
                 }
             }
             Err(e) => {
-                defmt::error!(
-                    "ui: poll input state failed err={}",
-                    crate::output::i2c_error_kind(e)
-                );
+                defmt::error!("ui: poll input state failed err={}", i2c_error_kind(e));
             }
+        }
+
+        ui_action
+    }
+
+    #[allow(dead_code)]
+    pub fn is_ready(&self) -> bool {
+        self.state == InitState::Ready
+    }
+
+    #[allow(dead_code)]
+    pub fn render_display_diagnostic(&mut self, heartbeat_on: bool) {
+        if self.state != InitState::Ready {
+            return;
+        }
+        let meta = front_panel_scene::DisplayDiagnosticMeta {
+            orientation_label: orientation_label(PANEL_ORIENTATION),
+            color_order_label: if PANEL_RGB_ORDER {
+                "COLOR ORDER: RGB565"
+            } else {
+                "COLOR ORDER: BGR565"
+            },
+            heartbeat_on,
+        };
+        let mut painter = PanelPainter { panel: self };
+        if let Err(e) = front_panel_scene::render_display_diagnostic(&mut painter, &meta) {
+            defmt::error!("ui: render display diag failed err={=?}", e);
         }
     }
 
@@ -441,7 +486,7 @@ impl FrontPanel {
             height: LCD_H,
             dx: OFFSET_X,
             dy: OFFSET_Y,
-            rgb: true,
+            rgb: PANEL_RGB_ORDER,
             ..GcConfig::default()
         };
 
@@ -488,6 +533,7 @@ impl FrontPanel {
 
         let center = self.btn_center.is_low();
         let touch = self.ctp_irq.is_low();
+        let touch_point = self.read_touch_point(touch);
 
         Ok(InputSnapshot {
             up,
@@ -496,7 +542,86 @@ impl FrontPanel {
             right,
             center,
             touch,
+            touch_point,
         })
+    }
+
+    fn read_touch_point(&mut self, touch_active: bool) -> Option<(u16, u16)> {
+        if !touch_active {
+            return None;
+        }
+
+        let mut buf = [0u8; CST816D_TOUCH_REG_LEN];
+        if self
+            .i2c
+            .write_read(CST816D_ADDR, &[CST816D_REG_GESTURE], &mut buf)
+            .is_err()
+        {
+            return None;
+        }
+
+        let finger_count = buf[1] & 0x0f;
+        if finger_count == 0 {
+            return None;
+        }
+
+        let x_raw = (((buf[2] & 0x0f) as u16) << 8) | buf[3] as u16;
+        let y_raw = (((buf[4] & 0x0f) as u16) << 8) | buf[5] as u16;
+        Self::map_touch_to_ui(x_raw, y_raw)
+    }
+
+    fn map_touch_to_ui(x_raw: u16, y_raw: u16) -> Option<(u16, u16)> {
+        if x_raw < front_panel_scene::UI_W && y_raw < front_panel_scene::UI_H {
+            return Some((x_raw, y_raw));
+        }
+        if y_raw < front_panel_scene::UI_W && x_raw < front_panel_scene::UI_H {
+            return Some((y_raw, x_raw));
+        }
+        None
+    }
+
+    fn process_touch_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
+        let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        if !snapshot.touch || prev.touch {
+            return None;
+        }
+
+        if matches!(
+            self.self_check_overlay,
+            SelfCheckOverlay::BmsActivateResult { .. }
+        ) {
+            self.self_check_overlay = SelfCheckOverlay::None;
+            self.needs_redraw = true;
+            return Some(UiAction::ClearBmsActivationResult);
+        }
+
+        let Some((x, y)) = snapshot.touch_point else {
+            return None;
+        };
+
+        match front_panel_scene::self_check_hit_test(x, y, self.self_check_overlay) {
+            Some(SelfCheckTouchTarget::ActivateCancel) => {
+                self.self_check_overlay = SelfCheckOverlay::None;
+                self.needs_redraw = true;
+                None
+            }
+            Some(SelfCheckTouchTarget::ActivateConfirm) => {
+                self.self_check_overlay = SelfCheckOverlay::BmsActivateProgress;
+                self.needs_redraw = true;
+                Some(UiAction::RequestBmsActivation)
+            }
+            Some(SelfCheckTouchTarget::Bq40Card) => {
+                if self.self_check_overlay == SelfCheckOverlay::None
+                    && front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
+                    && self.bms_activation_state != BmsActivationState::Pending
+                {
+                    self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
+                    self.needs_redraw = true;
+                }
+                None
+            }
+            None => None,
+        }
     }
 
     fn snapshot_to_model(&self, snapshot: InputSnapshot) -> UiModel {
@@ -528,13 +653,15 @@ impl FrontPanel {
         let model = self.snapshot_to_model(snapshot);
         let variant = self.ui_variant;
         let self_check_snapshot = self.self_check_snapshot;
+        let self_check_overlay = self.self_check_overlay;
         {
             let mut painter = PanelPainter { panel: self };
-            front_panel_scene::render_frame_with_self_check(
+            front_panel_scene::render_frame_with_self_check_overlay(
                 &mut painter,
                 &model,
                 variant,
                 Some(&self_check_snapshot),
+                self_check_overlay,
             )?;
         }
         self.frame_no = self.frame_no.wrapping_add(1);
@@ -603,6 +730,16 @@ fn variant_name(variant: UiVariant) -> &'static str {
         UiVariant::InstrumentB => "B",
         UiVariant::RetroC => "C",
         UiVariant::InstrumentD => "D",
+    }
+}
+
+#[allow(dead_code)]
+fn orientation_label(orientation: Orientation) -> &'static str {
+    match orientation {
+        Orientation::Portrait => "ORI: PORTRAIT (MADCTL=0x40)",
+        Orientation::Landscape => "ORI: LANDSCAPE (MADCTL=0x20)",
+        Orientation::PortraitSwapped => "ORI: PORTRAIT_SWAP (MADCTL=0x80)",
+        Orientation::LandscapeSwapped => "ORI: LANDSCAPE_SWAP (MADCTL=0xE0)",
     }
 }
 
@@ -711,4 +848,17 @@ fn u16_be_pair(a: u16, b: u16) -> [u8; 4] {
     let [a0, a1] = a.to_be_bytes();
     let [b0, b1] = b.to_be_bytes();
     [a0, a1, b0, b1]
+}
+
+fn i2c_error_kind(e: esp_hal::i2c::master::Error) -> &'static str {
+    use esp_hal::i2c::master::Error;
+
+    match e {
+        Error::FifoExceeded => "i2c_fifo_exceeded",
+        Error::AcknowledgeCheckFailed(_) => "i2c_nack",
+        Error::Timeout => "i2c_timeout",
+        Error::ArbitrationLost => "i2c_arb_lost",
+        Error::ExecutionIncomplete => "i2c_exec_incomplete",
+        _ => "i2c_other",
+    }
 }

@@ -7,7 +7,9 @@ use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
 use esp_hal::time::{Duration, Instant};
 
-use crate::front_panel_scene::{SelfCheckCommState, SelfCheckUiSnapshot, UpsMode};
+use crate::front_panel_scene::{
+    is_bq40_activation_needed, BmsActivationState, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+};
 use crate::irq::IrqSnapshot;
 
 use ::tps55288::Error as TpsError;
@@ -29,6 +31,10 @@ const BMS_ADDR_LOG: &str = "0x0b/0x16";
 
 #[cfg(not(feature = "bms-dual-probe-diag"))]
 const BMS_ADDR_LOG: &str = "0x0b";
+
+const BMS_ACTIVATION_WINDOW: Duration = Duration::from_secs(15);
+const BMS_ACTIVATION_FORCE_ICHG_MA: u16 = 50;
+const BMS_ACTIVATION_FORCE_IINDPM_MA: u16 = 100;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EnabledOutputs {
@@ -53,6 +59,15 @@ impl EnabledOutputs {
             EnabledOutputs::Only(OutputChannel::OutB) => "out_b",
             EnabledOutputs::Both => "out_a+out_b",
         }
+    }
+}
+
+const fn enabled_outputs_from_flags(out_a: bool, out_b: bool) -> EnabledOutputs {
+    match (out_a, out_b) {
+        (true, true) => EnabledOutputs::Both,
+        (true, false) => EnabledOutputs::Only(OutputChannel::OutA),
+        (false, true) => EnabledOutputs::Only(OutputChannel::OutB),
+        (false, false) => EnabledOutputs::None,
     }
 }
 
@@ -171,6 +186,8 @@ pub(super) fn ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -
 #[derive(Clone, Copy)]
 pub struct BootSelfTestResult {
     pub enabled_outputs: EnabledOutputs,
+    pub outputs_restore_on_bms_ready: EnabledOutputs,
+    pub outputs_blocked_by_bms: bool,
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
     pub bms_addr: Option<u8>,
@@ -422,32 +439,46 @@ where
     let mut bms_addr: Option<u8> = None;
     let mut bms_soc_pct: Option<u16> = None;
     let mut bms_rca_alarm: Option<bool> = None;
+    let mut bms_discharge_ready: Option<bool> = None;
     for addr in bms_probe_candidates().iter().copied() {
         let temp = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::TEMPERATURE);
         let voltage = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::VOLTAGE);
         let current = bq40z50::read_i16(&mut *i2c, addr, bq40z50::cmd::CURRENT);
         let soc = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE);
         let status = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::BATTERY_STATUS);
+        let op_status = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::OPERATION_STATUS).ok();
 
         if let (Ok(temp_k_x10), Ok(voltage_mv), Ok(current_ma), Ok(soc_pct), Ok(status_raw)) =
             (temp, voltage, current, soc, status)
         {
             let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(temp_k_x10);
             let err_code = bq40z50::battery_status::error_code(status_raw);
+            let xchg = op_status.map(|v| (v & bq40z50::operation_status::XCHG) != 0);
+            let xdsg = op_status.map(|v| (v & bq40z50::operation_status::XDSG) != 0);
+            let chg_fet = op_status.map(|v| (v & bq40z50::operation_status::CHG) != 0);
+            let dsg_fet = op_status.map(|v| (v & bq40z50::operation_status::DSG) != 0);
+            let discharge_ready = xdsg.zip(dsg_fet).map(|(x, d)| !x && d);
             defmt::info!(
-                "self_test: bq40z50 ok addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} err_code={} err_str={}",
+                "self_test: bq40z50 ok addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} op_status={=?} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} dsg_ready={=?} err_code={} err_str={}",
                 addr,
                 temp_c_x10,
                 voltage_mv,
                 current_ma,
                 soc_pct,
                 status_raw,
+                op_status,
+                xchg,
+                xdsg,
+                chg_fet,
+                dsg_fet,
+                discharge_ready,
                 err_code,
                 bq40z50::decode_error_code(err_code)
             );
             bms_addr = Some(addr);
             bms_soc_pct = Some(soc_pct);
             bms_rca_alarm = Some((status_raw & bq40z50::battery_status::RCA) != 0);
+            bms_discharge_ready = discharge_ready;
             break;
         }
 
@@ -457,6 +488,12 @@ where
     if bms_addr.is_none() {
         defmt::warn!("self_test: bq40z50 missing/err; battery module disabled");
         ui.bq40z50 = SelfCheckCommState::Err;
+    } else if bms_discharge_ready != Some(true) {
+        defmt::warn!(
+            "self_test: bq40z50 discharge path not ready state={=?}",
+            bms_discharge_ready
+        );
+        ui.bq40z50 = SelfCheckCommState::Warn;
     } else if bms_rca_alarm == Some(true) {
         ui.bq40z50 = SelfCheckCommState::Warn;
     } else {
@@ -464,11 +501,15 @@ where
     }
     ui.bq40z50_soc_pct = bms_soc_pct;
     ui.bq40z50_rca_alarm = bms_rca_alarm;
+    ui.bq40z50_discharge_ready = bms_discharge_ready;
     reporter(SelfCheckStage::Bms, ui);
 
     // Stage 3: BQ25792.
+    let mut charger_ctrl0: Option<u8> = None;
+    let mut charger_status0: Option<u8> = None;
     let mut charger_enabled = match bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_CONTROL_0) {
         Ok(v) => {
+            charger_ctrl0 = Some(v);
             defmt::info!("self_test: bq25792 ok ctrl0=0x{=u8:x}", v);
             true
         }
@@ -480,6 +521,29 @@ where
             false
         }
     };
+    let mut charger_vbat_present: Option<bool> = None;
+    if charger_enabled {
+        charger_status0 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_0).ok();
+        let charger_status2 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_2).ok();
+        let charger_status3 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_3).ok();
+        let charger_vbat_adc_mv = bq25792::read_u16(&mut *i2c, bq25792::reg::VBAT_ADC).ok();
+        let charger_vsys_adc_mv = bq25792::read_u16(&mut *i2c, bq25792::reg::VSYS_ADC).ok();
+
+        let vbat_present = charger_status2.map(|v| (v & bq25792::status2::VBAT_PRESENT_STAT) != 0);
+        charger_vbat_present = vbat_present;
+        let vsys_min_reg = charger_status3.map(|v| (v & bq25792::status3::VSYS_STAT) != 0);
+        defmt::info!(
+            "self_test: bq25792 ctrl0={=?} status0={=?} status2={=?} status3={=?} vbat_present={=?} vsys_min_reg={=?} vbat_adc_mv={=?} vsys_adc_mv={=?}",
+            charger_ctrl0,
+            charger_status0,
+            charger_status2,
+            charger_status3,
+            vbat_present,
+            vsys_min_reg,
+            charger_vbat_adc_mv,
+            charger_vsys_adc_mv
+        );
+    }
     ui.bq25792 = if charger_enabled {
         SelfCheckCommState::Ok
     } else {
@@ -488,7 +552,8 @@ where
     ui.bq25792_ichg_ma = bq25792::read_u16(&mut *i2c, bq25792::reg::CHARGE_CURRENT_LIMIT)
         .ok()
         .map(|v| (v & 0x01ff) * 10);
-    if let Ok(status0) = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_0) {
+    ui.bq25792_vbat_present = charger_vbat_present;
+    if let Some(status0) = charger_status0 {
         let vbus_present = (status0 & bq25792::status0::VBUS_PRESENT_STAT) != 0
             || (status0 & bq25792::status0::AC1_PRESENT_STAT) != 0
             || (status0 & bq25792::status0::AC2_PRESENT_STAT) != 0
@@ -555,6 +620,8 @@ where
         && !tps_b_fault
         && tmp_b_present
         && tmp_out_b_ok;
+    let mut outputs_restore_on_bms_ready = enabled_outputs_from_flags(out_a_allowed, out_b_allowed);
+    let mut outputs_blocked_by_bms = false;
 
     if desired_outputs.is_enabled(OutputChannel::OutA) && !out_a_allowed {
         defmt::warn!(
@@ -581,21 +648,28 @@ where
         );
     }
 
-    if bms_addr.is_none() {
-        // Policy: after init, BQ40 missing means TPS outputs must be disabled.
+    if bms_addr.is_none() || bms_discharge_ready != Some(true) {
+        // Policy: when BMS comm is missing or discharge path is not ready, keep TPS outputs off.
+        outputs_blocked_by_bms = outputs_restore_on_bms_ready != EnabledOutputs::None;
         out_a_allowed = false;
         out_b_allowed = false;
 
-        if force_min_charge {
-            defmt::warn!(
-                "self_test: bq40z50 missing; keep charger module for force_min_charge (charger_probe_ok={=bool})",
-                charger_enabled
-            );
-        } else {
-            if charger_enabled {
-                defmt::warn!("self_test: force disable charger because bq40z50 is missing");
+        if bms_addr.is_none() {
+            if force_min_charge {
+                defmt::warn!(
+                    "self_test: bq40z50 missing; keep charger module for force_min_charge (charger_probe_ok={=bool})",
+                    charger_enabled
+                );
+            } else {
+                if charger_enabled {
+                    defmt::warn!("self_test: force disable charger because bq40z50 is missing");
+                }
+                charger_enabled = false;
             }
-            charger_enabled = false;
+        } else {
+            defmt::warn!(
+                "self_test: bq40z50 discharge path not ready; block tps until activation/recovery"
+            );
         }
     }
 
@@ -631,6 +705,8 @@ where
         }
         out_a_allowed = false;
         out_b_allowed = false;
+        outputs_restore_on_bms_ready = EnabledOutputs::None;
+        outputs_blocked_by_bms = false;
     }
 
     ui.tps_a = if tps_a_present {
@@ -660,18 +736,15 @@ where
     ui.bq25792_allow_charge = Some(charger_enabled);
     reporter(SelfCheckStage::Tps, ui);
 
-    let enabled_outputs = match (out_a_allowed, out_b_allowed) {
-        (true, true) => EnabledOutputs::Both,
-        (true, false) => EnabledOutputs::Only(OutputChannel::OutA),
-        (false, true) => EnabledOutputs::Only(OutputChannel::OutB),
-        (false, false) => EnabledOutputs::None,
-    };
+    let enabled_outputs = enabled_outputs_from_flags(out_a_allowed, out_b_allowed);
 
     ui.mode = ups_mode_from_vbus(ui.fusb302_vbus_present, out_a_allowed || out_b_allowed);
 
     defmt::info!(
-        "self_test: done enabled_outputs={} charger_enabled={=bool} bms_present={=bool}",
+        "self_test: done enabled_outputs={} restore_on_bms_ready={} blocked_by_bms={=bool} charger_enabled={=bool} bms_present={=bool}",
         enabled_outputs.describe(),
+        outputs_restore_on_bms_ready.describe(),
+        outputs_blocked_by_bms,
         charger_enabled,
         bms_addr.is_some()
     );
@@ -680,6 +753,8 @@ where
 
     BootSelfTestResult {
         enabled_outputs,
+        outputs_restore_on_bms_ready,
+        outputs_blocked_by_bms,
         charger_probe_ok,
         charger_enabled,
         bms_addr,
@@ -719,13 +794,28 @@ pub struct PowerManager<'d, I2C> {
     chg_enabled: bool,
     charger_allowed: bool,
     chg_last_int_poll_at: Option<Instant>,
+    bms_activation_state: BmsActivationState,
+    bms_activation_deadline: Option<Instant>,
+    bms_activation_backup: Option<ChargerActivationBackup>,
+    outputs_restore_on_bms_ready: EnabledOutputs,
+    outputs_blocked_by_bms: bool,
 
     ui_snapshot: SelfCheckUiSnapshot,
 }
 
 #[derive(Clone, Copy)]
+struct ChargerActivationBackup {
+    ctrl0: u8,
+    ichg_reg: u16,
+    iindpm_reg: u16,
+    chg_enabled: bool,
+}
+
+#[derive(Clone, Copy)]
 pub struct Config {
     pub enabled_outputs: EnabledOutputs,
+    pub outputs_restore_on_bms_ready: EnabledOutputs,
+    pub outputs_blocked_by_bms: bool,
     pub vout_mv: u16,
     pub ilimit_ma: u16,
     pub telemetry_period: Duration,
@@ -796,6 +886,11 @@ where
             chg_enabled: false,
             charger_allowed,
             chg_last_int_poll_at: None,
+            bms_activation_state: BmsActivationState::Idle,
+            bms_activation_deadline: None,
+            bms_activation_backup: None,
+            outputs_restore_on_bms_ready: cfg.outputs_restore_on_bms_ready,
+            outputs_blocked_by_bms: cfg.outputs_blocked_by_bms,
             ui_snapshot: cfg.self_check_snapshot,
         }
     }
@@ -822,6 +917,9 @@ where
 
         if self.bms_addr.is_none() {
             defmt::warn!("bms: bq40z50 disabled (boot self-test)");
+        }
+        if self.outputs_blocked_by_bms {
+            defmt::warn!("power: outputs blocked by bms state (boot self-test)");
         }
 
         if self.ui_snapshot.bq25792_allow_charge.is_none() {
@@ -867,11 +965,199 @@ where
         self.maybe_handle_fault(irq);
         self.maybe_poll_charger(irq);
         self.maybe_poll_bms(irq);
+        self.maybe_track_bms_activation();
         self.maybe_print_telemetry();
     }
 
     pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
         self.ui_snapshot
+    }
+
+    pub fn bms_activation_state(&self) -> BmsActivationState {
+        self.bms_activation_state
+    }
+
+    pub fn clear_bms_activation_state(&mut self) {
+        if self.bms_activation_state != BmsActivationState::Pending {
+            self.bms_activation_state = BmsActivationState::Idle;
+        }
+    }
+
+    pub fn request_bms_activation(&mut self) {
+        if self.bms_activation_state == BmsActivationState::Pending {
+            return;
+        }
+        if !is_bq40_activation_needed(&self.ui_snapshot) {
+            return;
+        }
+        if !self.charger_allowed {
+            self.finish_bms_activation(BmsActivationState::FailedComm);
+            return;
+        }
+
+        let status0 = match bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_0) {
+            Ok(v) => v,
+            Err(_) => {
+                self.finish_bms_activation(BmsActivationState::FailedComm);
+                return;
+            }
+        };
+        let input_present = (status0 & bq25792::status0::VBUS_PRESENT_STAT) != 0
+            || (status0 & bq25792::status0::AC1_PRESENT_STAT) != 0
+            || (status0 & bq25792::status0::AC2_PRESENT_STAT) != 0
+            || (status0 & bq25792::status0::PG_STAT) != 0;
+        if !input_present {
+            self.finish_bms_activation(BmsActivationState::FailedNoInput);
+            return;
+        }
+
+        let ctrl0 = match bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0) {
+            Ok(v) => v,
+            Err(_) => {
+                self.finish_bms_activation(BmsActivationState::FailedComm);
+                return;
+            }
+        };
+        let ichg_reg = match bq25792::read_u16(&mut self.i2c, bq25792::reg::CHARGE_CURRENT_LIMIT) {
+            Ok(v) => v,
+            Err(_) => {
+                self.finish_bms_activation(BmsActivationState::FailedComm);
+                return;
+            }
+        };
+        let iindpm_reg = match bq25792::read_u16(&mut self.i2c, bq25792::reg::INPUT_CURRENT_LIMIT) {
+            Ok(v) => v,
+            Err(_) => {
+                self.finish_bms_activation(BmsActivationState::FailedComm);
+                return;
+            }
+        };
+        self.bms_activation_backup = Some(ChargerActivationBackup {
+            ctrl0,
+            ichg_reg,
+            iindpm_reg,
+            chg_enabled: self.chg_enabled,
+        });
+
+        self.chg_ilim_hiz_brk.set_low();
+        if bq25792::set_charge_current_limit_ma(&mut self.i2c, BMS_ACTIVATION_FORCE_ICHG_MA)
+            .is_err()
+            || bq25792::set_input_current_limit_ma(&mut self.i2c, BMS_ACTIVATION_FORCE_IINDPM_MA)
+                .is_err()
+        {
+            self.finish_bms_activation(BmsActivationState::FailedComm);
+            return;
+        }
+
+        let desired_ctrl0 = (ctrl0 | bq25792::ctrl0::EN_CHG) & !bq25792::ctrl0::EN_HIZ;
+        if bq25792::write_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_CONTROL_0,
+            desired_ctrl0,
+        )
+        .is_err()
+        {
+            self.finish_bms_activation(BmsActivationState::FailedComm);
+            return;
+        }
+        self.chg_ce.set_low();
+        self.chg_enabled = true;
+
+        let now = Instant::now();
+        self.bms_activation_state = BmsActivationState::Pending;
+        self.bms_activation_deadline = Some(now + BMS_ACTIVATION_WINDOW);
+        self.bms_next_poll_at = now;
+        self.bms_next_retry_at = None;
+        self.chg_next_poll_at = now;
+        self.chg_next_retry_at = None;
+    }
+
+    fn maybe_track_bms_activation(&mut self) {
+        if self.bms_activation_state != BmsActivationState::Pending {
+            return;
+        }
+
+        let bms_online = self.ui_snapshot.bq40z50_soc_pct.is_some()
+            && matches!(
+                self.ui_snapshot.bq40z50,
+                SelfCheckCommState::Ok | SelfCheckCommState::Warn
+            );
+        let dsg_ready = self.ui_snapshot.bq40z50_discharge_ready == Some(true);
+        let vbat_present = self.ui_snapshot.bq25792_vbat_present == Some(true);
+
+        if bms_online && dsg_ready && vbat_present {
+            self.finish_bms_activation(BmsActivationState::Succeeded);
+            return;
+        }
+
+        let Some(deadline) = self.bms_activation_deadline else {
+            self.finish_bms_activation(BmsActivationState::FailedComm);
+            return;
+        };
+        if Instant::now() >= deadline {
+            self.finish_bms_activation(BmsActivationState::FailedTimeout);
+        }
+    }
+
+    fn finish_bms_activation(&mut self, result: BmsActivationState) {
+        let mut restore_chg_enabled = false;
+        if let Some(backup) = self.bms_activation_backup.take() {
+            let _ = bq25792::write_u16(
+                &mut self.i2c,
+                bq25792::reg::CHARGE_CURRENT_LIMIT,
+                backup.ichg_reg,
+            );
+            let _ = bq25792::write_u16(
+                &mut self.i2c,
+                bq25792::reg::INPUT_CURRENT_LIMIT,
+                backup.iindpm_reg,
+            );
+            let _ = bq25792::write_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0, backup.ctrl0);
+            restore_chg_enabled = backup.chg_enabled;
+        }
+        if restore_chg_enabled {
+            self.chg_ce.set_low();
+            self.chg_enabled = true;
+        } else {
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+        }
+        self.bms_activation_deadline = None;
+        self.bms_activation_state = result;
+        self.chg_next_poll_at = Instant::now();
+        if result == BmsActivationState::Succeeded {
+            self.try_restore_outputs_after_bms_ready();
+        }
+    }
+
+    fn try_restore_outputs_after_bms_ready(&mut self) {
+        if !self.outputs_blocked_by_bms {
+            return;
+        }
+        let restore = self.outputs_restore_on_bms_ready;
+        if restore == EnabledOutputs::None {
+            self.outputs_blocked_by_bms = false;
+            return;
+        }
+
+        defmt::info!(
+            "power: bms recovered; restore outputs {}",
+            restore.describe()
+        );
+        self.cfg.enabled_outputs = restore;
+        self.ui_snapshot.tps_a_enabled = Some(restore.is_enabled(OutputChannel::OutA));
+        self.ui_snapshot.tps_b_enabled = Some(restore.is_enabled(OutputChannel::OutB));
+        let now = Instant::now();
+        if restore.is_enabled(OutputChannel::OutA) {
+            self.tps_a_next_retry_at = Some(now);
+        }
+        if restore.is_enabled(OutputChannel::OutB) {
+            self.tps_b_next_retry_at = Some(now);
+        }
+        if !self.ina_ready {
+            self.ina_next_retry_at = Some(now);
+        }
+        self.outputs_blocked_by_bms = false;
     }
 
     fn recompute_ui_mode(&mut self) {
@@ -1165,6 +1451,7 @@ where
         if !self.charger_allowed {
             self.ui_snapshot.bq25792_allow_charge = Some(false);
             self.ui_snapshot.bq25792_ichg_ma = None;
+            self.ui_snapshot.bq25792_vbat_present = None;
             self.recompute_ui_mode();
             return;
         }
@@ -1210,9 +1497,11 @@ where
             }
         };
 
+        let activation_pending = self.bms_activation_state == BmsActivationState::Pending;
+
         // Only enforce ship-FET path when charging is policy-enabled.
         let (sfet_present_before, sfet_present_after, ship_mode_before, ship_mode_after) =
-            if self.cfg.charger_enabled {
+            if self.cfg.charger_enabled || activation_pending {
                 match bq25792::ensure_ship_fet_path_enabled(&mut self.i2c) {
                     Ok(state) => (
                         (state.ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
@@ -1289,12 +1578,41 @@ where
         let ts_cool = (status4 & bq25792::status4::TS_COOL_STAT) != 0;
         let ts_warm = (status4 & bq25792::status4::TS_WARM_STAT) != 0;
         let ts_hot = (status4 & bq25792::status4::TS_HOT_STAT) != 0;
+        let ac_rb2_present = (status3 & bq25792::status3::ACRB2_STAT) != 0;
+        let ac_rb1_present = (status3 & bq25792::status3::ACRB1_STAT) != 0;
+        let adc_done = (status3 & bq25792::status3::ADC_DONE_STAT) != 0;
+        let vsys_min_reg = (status3 & bq25792::status3::VSYS_STAT) != 0;
+
+        let (adc_enabled, vbat_adc_mv, vsys_adc_mv) = match bq25792::update_u8(
+            &mut self.i2c,
+            bq25792::reg::ADC_CONTROL,
+            0,
+            bq25792::adc_ctrl::ADC_EN,
+        ) {
+            Ok(adc_ctrl) => (
+                (adc_ctrl & bq25792::adc_ctrl::ADC_EN) != 0,
+                bq25792::read_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok(),
+                bq25792::read_u16(&mut self.i2c, bq25792::reg::VSYS_ADC).ok(),
+            ),
+            Err(e) => {
+                defmt::warn!(
+                    "charger: bq25792 warn stage=adc_ctrl err={} action=skip_adc_samples",
+                    i2c_error_kind(e)
+                );
+                (false, None, None)
+            }
+        };
 
         let input_present = vbus_present || ac1_present || ac2_present || pg;
         let can_enable = input_present && !ts_cold && !ts_hot;
         let normal_allow_charge = can_enable && vbat_present;
-        let force_allow_charge = self.cfg.force_min_charge && can_enable;
-        let allow_charge = (normal_allow_charge || force_allow_charge) && self.cfg.charger_enabled;
+        let force_allow_charge =
+            (self.cfg.force_min_charge && can_enable) || (activation_pending && can_enable);
+        let allow_charge = if activation_pending {
+            force_allow_charge
+        } else {
+            (normal_allow_charge || force_allow_charge) && self.cfg.charger_enabled
+        };
         let mut applied_ctrl0 = ctrl0;
         let mut applied_ichg_ma: Option<u16> = None;
         let mut applied_iindpm_ma: Option<u16> = None;
@@ -1304,14 +1622,14 @@ where
             self.chg_ilim_hiz_brk.set_low();
 
             if force_allow_charge {
-                const FORCE_MIN_ICHG_MA: u16 = 50;
-                const FORCE_MIN_IINDPM_MA: u16 = 100;
-
                 fn decode_cur_ma(reg: u16) -> u16 {
                     (reg & 0x01FF) * 10
                 }
 
-                match bq25792::set_charge_current_limit_ma(&mut self.i2c, FORCE_MIN_ICHG_MA) {
+                match bq25792::set_charge_current_limit_ma(
+                    &mut self.i2c,
+                    BMS_ACTIVATION_FORCE_ICHG_MA,
+                ) {
                     Ok(v) => applied_ichg_ma = Some(decode_cur_ma(v)),
                     Err(e) => {
                         self.mark_charger_poll_failed(now);
@@ -1323,7 +1641,10 @@ where
                     }
                 }
 
-                match bq25792::set_input_current_limit_ma(&mut self.i2c, FORCE_MIN_IINDPM_MA) {
+                match bq25792::set_input_current_limit_ma(
+                    &mut self.i2c,
+                    BMS_ACTIVATION_FORCE_IINDPM_MA,
+                ) {
                     Ok(v) => applied_iindpm_ma = Some(decode_cur_ma(v)),
                     Err(e) => {
                         self.mark_charger_poll_failed(now);
@@ -1364,7 +1685,7 @@ where
         }
 
         defmt::info!(
-            "charger: enabled={=bool} force_min_charge={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} ichg_ma={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
+            "charger: enabled={=bool} force_min_charge={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} ichg_ma={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
             self.chg_enabled,
             self.cfg.force_min_charge,
             normal_allow_charge,
@@ -1376,6 +1697,13 @@ where
             ac2_present,
             pg,
             vbat_present,
+            vbat_adc_mv,
+            vsys_adc_mv,
+            adc_enabled,
+            adc_done,
+            ac_rb1_present,
+            ac_rb2_present,
+            vsys_min_reg,
             ts_cold,
             ts_cool,
             ts_warm,
@@ -1412,6 +1740,7 @@ where
             SelfCheckCommState::Ok
         };
         self.ui_snapshot.bq25792_allow_charge = Some(allow_charge);
+        self.ui_snapshot.bq25792_vbat_present = Some(vbat_present);
         self.ui_snapshot.bq25792_ichg_ma = if allow_charge {
             if let Some(v) = applied_ichg_ma {
                 Some(v)
@@ -1430,12 +1759,16 @@ where
     }
 
     fn mark_charger_poll_failed(&mut self, now: Instant) {
+        if self.bms_activation_state == BmsActivationState::Pending {
+            self.finish_bms_activation(BmsActivationState::FailedComm);
+        }
         self.chg_ce.set_high();
         self.chg_enabled = false;
         self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
         self.ui_snapshot.bq25792 = SelfCheckCommState::Err;
         self.ui_snapshot.bq25792_allow_charge = Some(false);
         self.ui_snapshot.bq25792_ichg_ma = None;
+        self.ui_snapshot.bq25792_vbat_present = None;
         self.ui_snapshot.fusb302_vbus_present = None;
         self.recompute_ui_mode();
     }
@@ -1492,13 +1825,18 @@ where
                     self.bms_addr = Some(addr);
                     self.bms_next_retry_at = None;
                     let rca_alarm = (s.batt_status & bq40z50::battery_status::RCA) != 0;
-                    self.ui_snapshot.bq40z50 = if rca_alarm {
+                    let discharge_ready = Self::bq40_discharge_ready(s.op_status);
+                    self.ui_snapshot.bq40z50 = if discharge_ready != Some(true) || rca_alarm {
                         SelfCheckCommState::Warn
                     } else {
                         SelfCheckCommState::Ok
                     };
                     self.ui_snapshot.bq40z50_soc_pct = Some(s.rsoc_pct);
                     self.ui_snapshot.bq40z50_rca_alarm = Some(rca_alarm);
+                    self.ui_snapshot.bq40z50_discharge_ready = discharge_ready;
+                    if discharge_ready == Some(true) {
+                        self.try_restore_outputs_after_bms_ready();
+                    }
                     self.log_bq40z50_snapshot(addr, btp_int_h, &s);
                     return;
                 }
@@ -1509,6 +1847,7 @@ where
                         self.ui_snapshot.bq40z50 = SelfCheckCommState::Warn;
                         self.ui_snapshot.bq40z50_soc_pct = None;
                         self.ui_snapshot.bq40z50_rca_alarm = None;
+                        self.ui_snapshot.bq40z50_discharge_ready = None;
                         let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(s.temp_k_x10);
                         defmt::warn!(
                             "bms: bq40z50 invalid addrs={} temp_c_x10={=i32} vpack_mv={=u16} rsoc_pct={=u16}",
@@ -1527,6 +1866,7 @@ where
                         self.ui_snapshot.bq40z50 = SelfCheckCommState::Err;
                         self.ui_snapshot.bq40z50_soc_pct = None;
                         self.ui_snapshot.bq40z50_rca_alarm = None;
+                        self.ui_snapshot.bq40z50_discharge_ready = None;
 
                         if kind == "i2c_nack" || kind == "i2c_timeout" {
                             defmt::warn!(
@@ -1554,6 +1894,14 @@ where
         (-400..=1250).contains(&temp_c_x10)
             && (2500..=20_000).contains(&s.vpack_mv)
             && s.rsoc_pct <= 100
+    }
+
+    fn bq40_discharge_ready(op_status: Option<u16>) -> Option<bool> {
+        op_status.map(|v| {
+            let xdsg = (v & bq40z50::operation_status::XDSG) != 0;
+            let dsg_fet = (v & bq40z50::operation_status::DSG) != 0;
+            !xdsg && dsg_fet
+        })
     }
 
     fn read_bq40z50_snapshot_strict(
@@ -1627,6 +1975,7 @@ where
             remcap: bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::REMAINING_CAPACITY)?,
             fcc: bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::FULL_CHARGE_CAPACITY)?,
             batt_status: bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::BATTERY_STATUS)?,
+            op_status: bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::OPERATION_STATUS).ok(),
             cell_mv: [
                 bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::CELL_VOLTAGE_1)?,
                 bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::CELL_VOLTAGE_2)?,
@@ -1651,11 +2000,33 @@ where
         let tda = (bs & bq40z50::battery_status::TDA) != 0;
         let rca = (bs & bq40z50::battery_status::RCA) != 0;
         let rta = (bs & bq40z50::battery_status::RTA) != 0;
+        let xchg = s
+            .op_status
+            .map(|v| (v & bq40z50::operation_status::XCHG) != 0);
+        let xdsg = s
+            .op_status
+            .map(|v| (v & bq40z50::operation_status::XDSG) != 0);
+        let chg_fet = s
+            .op_status
+            .map(|v| (v & bq40z50::operation_status::CHG) != 0);
+        let dsg_fet = s
+            .op_status
+            .map(|v| (v & bq40z50::operation_status::DSG) != 0);
+        let dsg_ready = xdsg.zip(dsg_fet).map(|(x, d)| !x && d);
+        let pres = s
+            .op_status
+            .map(|v| (v & bq40z50::operation_status::PRES) != 0);
+        let sleep = s
+            .op_status
+            .map(|v| (v & bq40z50::operation_status::SLEEP) != 0);
+        let pf = s
+            .op_status
+            .map(|v| (v & bq40z50::operation_status::PF) != 0);
 
         let ec = bq40z50::battery_status::error_code(bs);
 
         defmt::info!(
-            "bms: bq40z50 addr=0x{=u8:x} btp_int_h={=bool} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} remcap={=u16} fcc={=u16} batt_status=0x{=u16:x} init={=bool} dsg={=bool} fc={=bool} fd={=bool} oca={=bool} tca={=bool} ota={=bool} tda={=bool} rca={=bool} rta={=bool} ec=0x{=u8:x} ec_str={} c1_mv={=u16} c2_mv={=u16} c3_mv={=u16} c4_mv={=u16}",
+            "bms: bq40z50 addr=0x{=u8:x} btp_int_h={=bool} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} remcap={=u16} fcc={=u16} batt_status=0x{=u16:x} op_status={=?} init={=bool} dsg={=bool} fc={=bool} fd={=bool} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} dsg_ready={=?} pres={=?} sleep={=?} pf={=?} oca={=bool} tca={=bool} ota={=bool} tda={=bool} rca={=bool} rta={=bool} ec=0x{=u8:x} ec_str={} c1_mv={=u16} c2_mv={=u16} c3_mv={=u16} c4_mv={=u16}",
             addr,
             btp_int_h,
             temp_c_x10,
@@ -1665,10 +2036,19 @@ where
             s.remcap,
             s.fcc,
             bs,
+            s.op_status,
             init,
             dsg,
             fc,
             fd,
+            xchg,
+            xdsg,
+            chg_fet,
+            dsg_fet,
+            dsg_ready,
+            pres,
+            sleep,
+            pf,
             oca,
             tca,
             ota,
@@ -1724,6 +2104,7 @@ struct Bq40z50Snapshot {
     remcap: u16,
     fcc: u16,
     batt_status: u16,
+    op_status: Option<u16>,
     cell_mv: [u16; 4],
 }
 
