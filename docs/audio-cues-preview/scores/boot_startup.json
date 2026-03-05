@@ -1,0 +1,40 @@
+{
+  "tempo_bpm": 240,
+  "audio": {
+    "waveform": "sine",
+    "sample_rate_hz": 44100,
+    "volume": 0.6,
+    "fade_ms": 6,
+    "harmonics": [
+      1.0,
+      0.16,
+      0.04
+    ]
+  },
+  "midi": {
+    "channel": 0,
+    "program": 80,
+    "velocity": 98
+  },
+  "events": [
+    {
+      "note": "C5",
+      "beats": 0.5
+    },
+    {
+      "note": "E5",
+      "beats": 0.5
+    },
+    {
+      "note": "G5",
+      "beats": 0.5
+    },
+    {
+      "note": "C6",
+      "beats": 0.5
+    },
+    {
+      "rest_beats": 2.0
+    }
+  ]
+}

@@ -24,3 +24,4 @@
 | 7n4qd | MCU self-check live panel (resident Variant C) | 已完成 | `7n4qd-mcu-self-check-live-panel/SPEC.md` | 2026-03-05 | 自检期间实时进度 + 自检后常驻 + 真实数据刷新 + BMS 放电就绪门控与恢复；激活闭环细节修正 |
 | 958aj | Standalone display diagnostic firmware | 已完成 | `958aj-standalone-display-diag-firmware/SPEC.md` | 2026-03-05 | 独立 bin 诊断固件 + 独立烧录配置；完成颜色通道现场修复 |
 | hg3dw | Front panel visual language systematization | 已完成 | `hg3dw-front-panel-visual-language/SPEC.md` | 2026-03-02 | 建立 Token/组件契约/视觉回归清单，补充 bitmap 字体字高白名单与预览图 |
+| mecb8 | Status/warning/error speaker cues preview assets | 已完成 | `mecb8-audio-cues-preview/SPEC.md` | 2026-03-05 | 15 组提示音试听资产（score + mid + wav）与增强预览页 |

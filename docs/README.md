@@ -16,6 +16,7 @@ This folder stores project documentation and offline-renderable datasheets.
 - Power monitoring & protection (INA3221 + UPS VIN/TPS outputs): `docs/power-monitoring-design.md`
 - I2C/SMBus address map: `docs/i2c-address-map.md`
 - Audio alert output (buzzer -> TDM speaker): `docs/audio-design.md`
+- Speaker cue previews (status/warning/error): `docs/audio-cues-preview/README.md`
 - ESP32-S3 GPIO assignment: `docs/hardware-selection/esp32-s3-fh4r2-gpio.md`
 
 ## UI docs
