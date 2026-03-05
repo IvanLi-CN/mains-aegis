@@ -13,20 +13,33 @@
   },
   "events": [
     {
-      "note": "C5",
-      "ms": 180
+      "note": "A4",
+      "ms": 120,
+      "velocity": 118
     },
     {
-      "note": "G4",
-      "ms": 180
+      "rest_ms": 120
     },
     {
-      "note": "C5",
-      "ms": 180
+      "note": "E4",
+      "ms": 120,
+      "velocity": 112
     },
     {
-      "note": "G4",
-      "ms": 180
+      "rest_ms": 120
+    },
+    {
+      "note": "C4",
+      "ms": 120,
+      "velocity": 108
+    },
+    {
+      "rest_ms": 120
+    },
+    {
+      "note": "A3",
+      "ms": 120,
+      "velocity": 114
     }
   ]
 }

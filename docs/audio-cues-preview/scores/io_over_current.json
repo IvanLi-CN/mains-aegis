@@ -14,18 +14,24 @@
   "events": [
     {
       "note": "D5",
-      "ms": 140
+      "ms": 120,
+      "velocity": 116
     },
     {
-      "note": "A4",
-      "ms": 140
+      "rest_ms": 120
+    },
+    {
+      "note": "G4",
+      "ms": 120,
+      "velocity": 108
+    },
+    {
+      "rest_ms": 120
     },
     {
       "note": "D5",
-      "ms": 140
-    },
-    {
-      "rest_ms": 80
+      "ms": 120,
+      "velocity": 112
     }
   ]
 }

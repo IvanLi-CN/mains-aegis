@@ -13,19 +13,25 @@
   },
   "events": [
     {
-      "note": "F5",
-      "ms": 160
-    },
-    {
       "note": "C5",
-      "ms": 160
+      "ms": 120,
+      "velocity": 112
     },
     {
-      "note": "F5",
-      "ms": 160
+      "rest_ms": 120
     },
     {
-      "rest_ms": 70
+      "note": "G4",
+      "ms": 120,
+      "velocity": 108
+    },
+    {
+      "rest_ms": 120
+    },
+    {
+      "note": "E4",
+      "ms": 240,
+      "velocity": 112
     }
   ]
 }

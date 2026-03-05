@@ -14,18 +14,19 @@
   "events": [
     {
       "note": "E5",
-      "ms": 120
+      "ms": 120,
+      "velocity": 118
+    },
+    {
+      "rest_ms": 120
     },
     {
       "note": "B5",
-      "ms": 120
+      "ms": 120,
+      "velocity": 106
     },
     {
-      "note": "E5",
-      "ms": 140
-    },
-    {
-      "rest_ms": 70
+      "rest_ms": 120
     }
   ]
 }
