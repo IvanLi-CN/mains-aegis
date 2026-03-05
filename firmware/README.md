@@ -322,31 +322,39 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 成功：`ui: front panel ready (driver=gc9307-async mode=industrial-demo variant=C ...)`
 - 失败：`ui: ... failed ...`（并退回到安全态：屏幕不选中、复位保持、背光关闭）
 
-### 屏幕诊断专用固件（独立 bin，无 feature）
+### 功能验证测试固件（`test-fw`，feature 驱动）
 
-用于排查 `颜色映射 / 旋转方向 / 镜像`，该固件只 bring-up 前面板相关外设，不进入主电源控制流程。
+用于前面板测试功能验证，不进入主电源控制流程。当前支持：
 
-- 方向锚点：顶部固定 `UP ^`
-- 四角锚点：`TL=Red`、`TR=Green`、`BL=Blue`、`BR=Yellow`
-- 色条：`R/G/B/Y/C/M/W/K`
-- 灰阶：8 级灰阶条
-- 刷新心跳：右上角方块每 `500ms` 闪烁
+- `test-fw-screen-static`：屏幕静态显示测试（方向锚点 + 四角色块 + 色条 + 灰阶 + BACK 控件）
+- `test-fw-audio-playback`：音频播放与优先级测试（抢占 + 同级 FIFO）
+
+路由规则：
+
+- 仅启用一个功能时：开机直达该测试页。
+- 启用多个功能且未指定默认：开机进入导航页（五向 + 触摸可切换并进入）。
+- 启用多个功能并指定默认：开机直达默认测试页；可通过返回回到导航页。
+
+默认测试 feature（多选会在编译期报错）：
+
+- `test-fw-default-screen-static`
+- `test-fw-default-audio-playback`
 
 构建与烧录（仓库根目录）：
 
 ```bash
 cd firmware
-cargo build --release --bin display-diag-fw
-cd display-diag
-mcu-agentd flash esp-diag
+# 单功能：屏幕静态
+cargo build --release --bin test-fw --features test-fw-screen-static
+
+# 双功能 + 默认音频测试
+cargo build --release --bin test-fw --features "test-fw-screen-static test-fw-audio-playback test-fw-default-audio-playback"
+
+cd display-test
+mcu-agentd flash esp-test
 ```
 
-串口口径（节选）：
-
-- `diag: front-panel display probe boot`
-- `diag: rendering display diagnostic screen`
-
-拍照复核建议：
+屏幕静态测试拍照复核建议：
 
 - 先拍整屏（含四角和顶部 `UP ^`），再近拍中部色条与灰阶条；
 - 若出现颜色/方向/镜像异常，保持同角度再拍一张，用于前后对比修复结果。

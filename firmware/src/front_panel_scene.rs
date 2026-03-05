@@ -34,6 +34,31 @@ pub enum UiFocus {
     Touch,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestFunctionUi {
+    ScreenStatic,
+    AudioPlayback,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioEventUi {
+    Boot,
+    Interaction,
+    ModeSwitch,
+    Warning,
+    Error,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioTestUiState {
+    pub playing: bool,
+    pub queued: u8,
+    pub current: Option<AudioEventUi>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiModel {
     pub mode: UpsMode,
@@ -217,6 +242,44 @@ const SELF_CHECK_CONFIRM_BTN_W: u16 = 136;
 const SELF_CHECK_CONFIRM_BTN_H: u16 = 24;
 
 #[allow(dead_code)]
+const TEST_NAV_CARD_X: u16 = 20;
+#[allow(dead_code)]
+const TEST_NAV_CARD_Y: u16 = 42;
+#[allow(dead_code)]
+const TEST_NAV_CARD_W: u16 = 280;
+#[allow(dead_code)]
+const TEST_NAV_CARD_H: u16 = 44;
+#[allow(dead_code)]
+const TEST_NAV_CARD_GAP: u16 = 14;
+
+#[allow(dead_code)]
+const TEST_BACK_BTN_X: u16 = 12;
+#[allow(dead_code)]
+const TEST_BACK_BTN_Y: u16 = 142;
+#[allow(dead_code)]
+const TEST_BACK_BTN_W: u16 = 84;
+#[allow(dead_code)]
+const TEST_BACK_BTN_H: u16 = 20;
+
+#[allow(dead_code)]
+const TEST_AUDIO_PLAY_BTN_X: u16 = 178;
+#[allow(dead_code)]
+const TEST_AUDIO_PLAY_BTN_Y: u16 = 70;
+#[allow(dead_code)]
+const TEST_AUDIO_PLAY_BTN_W: u16 = 122;
+#[allow(dead_code)]
+const TEST_AUDIO_PLAY_BTN_H: u16 = 30;
+
+#[allow(dead_code)]
+const TEST_AUDIO_STOP_BTN_X: u16 = 178;
+#[allow(dead_code)]
+const TEST_AUDIO_STOP_BTN_Y: u16 = 108;
+#[allow(dead_code)]
+const TEST_AUDIO_STOP_BTN_W: u16 = 122;
+#[allow(dead_code)]
+const TEST_AUDIO_STOP_BTN_H: u16 = 30;
+
+#[allow(dead_code)]
 pub fn is_bq40_offline(snapshot: &SelfCheckUiSnapshot) -> bool {
     snapshot.bq40z50 == SelfCheckCommState::Err && snapshot.bq40z50_soc_pct.is_none()
 }
@@ -273,6 +336,69 @@ pub fn self_check_hit_test(
         }
         SelfCheckOverlay::BmsActivateProgress | SelfCheckOverlay::BmsActivateResult { .. } => None,
     }
+}
+
+#[allow(dead_code)]
+pub fn test_navigation_hit_test(x: u16, y: u16) -> Option<TestFunctionUi> {
+    if contains(
+        x,
+        y,
+        TEST_NAV_CARD_X,
+        TEST_NAV_CARD_Y,
+        TEST_NAV_CARD_W,
+        TEST_NAV_CARD_H,
+    ) {
+        return Some(TestFunctionUi::ScreenStatic);
+    }
+
+    if contains(
+        x,
+        y,
+        TEST_NAV_CARD_X,
+        TEST_NAV_CARD_Y + TEST_NAV_CARD_H + TEST_NAV_CARD_GAP,
+        TEST_NAV_CARD_W,
+        TEST_NAV_CARD_H,
+    ) {
+        return Some(TestFunctionUi::AudioPlayback);
+    }
+
+    None
+}
+
+#[allow(dead_code)]
+pub fn test_back_hit_test(x: u16, y: u16) -> bool {
+    contains(
+        x,
+        y,
+        TEST_BACK_BTN_X,
+        TEST_BACK_BTN_Y,
+        TEST_BACK_BTN_W,
+        TEST_BACK_BTN_H,
+    )
+}
+
+#[allow(dead_code)]
+pub fn test_audio_play_hit_test(x: u16, y: u16) -> bool {
+    contains(
+        x,
+        y,
+        TEST_AUDIO_PLAY_BTN_X,
+        TEST_AUDIO_PLAY_BTN_Y,
+        TEST_AUDIO_PLAY_BTN_W,
+        TEST_AUDIO_PLAY_BTN_H,
+    )
+}
+
+#[allow(dead_code)]
+pub fn test_audio_stop_hit_test(x: u16, y: u16) -> bool {
+    contains(
+        x,
+        y,
+        TEST_AUDIO_STOP_BTN_X,
+        TEST_AUDIO_STOP_BTN_Y,
+        TEST_AUDIO_STOP_BTN_W,
+        TEST_AUDIO_STOP_BTN_H,
+    )
 }
 
 #[allow(dead_code)]
@@ -608,6 +734,349 @@ pub fn render_display_diagnostic<P: UiPainter>(
     draw_outline(painter, UI_W - 16, 4, 10, 10, FG)?;
 
     Ok(())
+}
+
+#[allow(dead_code)]
+pub fn render_test_navigation<P: UiPainter>(
+    painter: &mut P,
+    selected: TestFunctionUi,
+    default_test: Option<TestFunctionUi>,
+) -> Result<(), P::Error> {
+    let variant = UiVariant::RetroC;
+    let palette = palette_for(variant);
+
+    fill(painter, 0, 0, UI_W, UI_H, palette.bg)?;
+    draw_background_grid(painter, palette)?;
+    draw_outline(painter, 0, 0, UI_W, UI_H, palette.border)?;
+    draw_top_bar_with_status(
+        painter,
+        variant,
+        palette,
+        UiFocus::Idle,
+        "TEST NAV",
+        "feature-selected test set",
+        "NAV",
+        palette.accent,
+    )?;
+
+    draw_panel(
+        painter,
+        TEST_NAV_CARD_X,
+        TEST_NAV_CARD_Y,
+        TEST_NAV_CARD_W,
+        TEST_NAV_CARD_H,
+        palette,
+        selected == TestFunctionUi::ScreenStatic,
+        palette.right,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextTitle,
+        "SCREEN STATIC",
+        Point::new((TEST_NAV_CARD_X + 10) as i32, (TEST_NAV_CARD_Y + 8) as i32),
+        HorizontalAlignment::Left,
+        if selected == TestFunctionUi::ScreenStatic {
+            palette.bg
+        } else {
+            palette.text
+        },
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "Display orientation / color bars",
+        Point::new(
+            (TEST_NAV_CARD_X + TEST_NAV_CARD_W - 10) as i32,
+            (TEST_NAV_CARD_Y + 24) as i32,
+        ),
+        HorizontalAlignment::Right,
+        if selected == TestFunctionUi::ScreenStatic {
+            palette.bg
+        } else {
+            palette.text_dim
+        },
+    )?;
+
+    let audio_y = TEST_NAV_CARD_Y + TEST_NAV_CARD_H + TEST_NAV_CARD_GAP;
+    draw_panel(
+        painter,
+        TEST_NAV_CARD_X,
+        audio_y,
+        TEST_NAV_CARD_W,
+        TEST_NAV_CARD_H,
+        palette,
+        selected == TestFunctionUi::AudioPlayback,
+        palette.down,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextTitle,
+        "AUDIO PLAYBACK",
+        Point::new((TEST_NAV_CARD_X + 10) as i32, (audio_y + 8) as i32),
+        HorizontalAlignment::Left,
+        if selected == TestFunctionUi::AudioPlayback {
+            palette.bg
+        } else {
+            palette.text
+        },
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "Priority / preemption test",
+        Point::new(
+            (TEST_NAV_CARD_X + TEST_NAV_CARD_W - 10) as i32,
+            (audio_y + 24) as i32,
+        ),
+        HorizontalAlignment::Right,
+        if selected == TestFunctionUi::AudioPlayback {
+            palette.bg
+        } else {
+            palette.text_dim
+        },
+    )?;
+
+    let default_label = match default_test {
+        Some(TestFunctionUi::ScreenStatic) => "DEFAULT: SCREEN",
+        Some(TestFunctionUi::AudioPlayback) => "DEFAULT: AUDIO",
+        None => "DEFAULT: NAVIGATION",
+    };
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        default_label,
+        Point::new(8, 124),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "D-pad/touch choose, CENTER/tap to enter",
+        Point::new(8, 138),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+
+    render_test_back_button(painter, false)
+}
+
+#[allow(dead_code)]
+pub fn render_test_screen_static<P: UiPainter>(
+    painter: &mut P,
+    back_enabled: bool,
+    color_order_label: &'static str,
+) -> Result<(), P::Error> {
+    let meta = DisplayDiagnosticMeta {
+        orientation_label: "SCREEN STATIC TEST",
+        color_order_label,
+        heartbeat_on: true,
+    };
+    render_display_diagnostic(painter, &meta)?;
+
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextBody,
+        "Static pattern validation page",
+        Point::new(8, 132),
+        HorizontalAlignment::Left,
+        0xFFFF,
+    )?;
+    text(
+        painter,
+        UiVariant::RetroC,
+        FontRole::TextBody,
+        if back_enabled {
+            "LEFT key or BACK button to return"
+        } else {
+            "Single test mode: BACK disabled"
+        },
+        Point::new(8, 144),
+        HorizontalAlignment::Left,
+        0x7BEF,
+    )?;
+
+    render_test_back_button(painter, back_enabled)
+}
+
+#[allow(dead_code)]
+pub fn render_test_audio_playback<P: UiPainter>(
+    painter: &mut P,
+    back_enabled: bool,
+    state: AudioTestUiState,
+) -> Result<(), P::Error> {
+    let variant = UiVariant::RetroC;
+    let palette = palette_for(variant);
+
+    fill(painter, 0, 0, UI_W, UI_H, palette.bg)?;
+    draw_background_grid(painter, palette)?;
+    draw_outline(painter, 0, 0, UI_W, UI_H, palette.border)?;
+    draw_top_bar_with_status(
+        painter,
+        variant,
+        palette,
+        UiFocus::Idle,
+        "AUDIO TEST",
+        "priority + preemption",
+        if state.playing { "PLAYING" } else { "IDLE" },
+        if state.playing {
+            SUCCESS_COLOR
+        } else {
+            palette.text_dim
+        },
+    )?;
+
+    draw_panel(painter, 20, 40, 146, 98, palette, false, palette.accent)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "Current",
+        Point::new(30, 48),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextTitle,
+        match state.current {
+            Some(AudioEventUi::Boot) => "BOOT",
+            Some(AudioEventUi::Interaction) => "INTERACTION",
+            Some(AudioEventUi::ModeSwitch) => "MODE SWITCH",
+            Some(AudioEventUi::Warning) => "WARNING",
+            Some(AudioEventUi::Error) => "ERROR",
+            None => "NONE",
+        },
+        Point::new(30, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        format_args!("Queue: {}", state.queued),
+        Point::new(30, 82),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "UP=warn DOWN=error RIGHT=mode",
+        Point::new(30, 102),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "CENTER=interaction",
+        Point::new(30, 116),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+
+    draw_panel(
+        painter,
+        TEST_AUDIO_PLAY_BTN_X,
+        TEST_AUDIO_PLAY_BTN_Y,
+        TEST_AUDIO_PLAY_BTN_W,
+        TEST_AUDIO_PLAY_BTN_H,
+        palette,
+        state.playing,
+        palette.right,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextTitle,
+        "PLAY BOOT",
+        Point::new(
+            (TEST_AUDIO_PLAY_BTN_X + TEST_AUDIO_PLAY_BTN_W / 2) as i32,
+            (TEST_AUDIO_PLAY_BTN_Y + 9) as i32,
+        ),
+        HorizontalAlignment::Center,
+        if state.playing {
+            palette.bg
+        } else {
+            palette.text
+        },
+    )?;
+
+    draw_panel(
+        painter,
+        TEST_AUDIO_STOP_BTN_X,
+        TEST_AUDIO_STOP_BTN_Y,
+        TEST_AUDIO_STOP_BTN_W,
+        TEST_AUDIO_STOP_BTN_H,
+        palette,
+        false,
+        palette.down,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextTitle,
+        "STOP ALL",
+        Point::new(
+            (TEST_AUDIO_STOP_BTN_X + TEST_AUDIO_STOP_BTN_W / 2) as i32,
+            (TEST_AUDIO_STOP_BTN_Y + 9) as i32,
+        ),
+        HorizontalAlignment::Center,
+        palette.text,
+    )?;
+
+    render_test_back_button(painter, back_enabled)
+}
+
+#[allow(dead_code)]
+pub fn render_test_back_button<P: UiPainter>(
+    painter: &mut P,
+    enabled: bool,
+) -> Result<(), P::Error> {
+    let variant = UiVariant::RetroC;
+    let palette = palette_for(variant);
+    draw_panel(
+        painter,
+        TEST_BACK_BTN_X,
+        TEST_BACK_BTN_Y,
+        TEST_BACK_BTN_W,
+        TEST_BACK_BTN_H,
+        palette,
+        enabled,
+        if enabled {
+            palette.left
+        } else {
+            palette.panel_alt
+        },
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        if enabled { "BACK" } else { "BACK (DISABLED)" },
+        Point::new(
+            (TEST_BACK_BTN_X + TEST_BACK_BTN_W / 2) as i32,
+            (TEST_BACK_BTN_Y + 4) as i32,
+        ),
+        HorizontalAlignment::Center,
+        if enabled {
+            palette.bg
+        } else {
+            palette.text_dim
+        },
+    )
 }
 
 #[allow(dead_code)]

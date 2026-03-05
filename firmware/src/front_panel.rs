@@ -1,8 +1,8 @@
 use core::convert::Infallible;
 
 use crate::front_panel_scene::{
-    self, BmsActivationState, SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot, UiFocus,
-    UiModel, UiPainter, UiVariant,
+    self, AudioTestUiState, BmsActivationState, SelfCheckOverlay, SelfCheckTouchTarget,
+    SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel, UiPainter, UiVariant,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -56,6 +56,17 @@ const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
 pub enum UiAction {
     RequestBmsActivation,
     ClearBmsActivationResult,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestInputEvent {
+    Up,
+    Down,
+    Left,
+    Right,
+    Center,
+    Touch { x: u16, y: u16 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,6 +353,97 @@ impl FrontPanel {
         if let Err(e) = front_panel_scene::render_display_diagnostic(&mut painter, &meta) {
             defmt::error!("ui: render display diag failed err={=?}", e);
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn render_test_navigation(
+        &mut self,
+        selected: TestFunctionUi,
+        default_test: Option<TestFunctionUi>,
+    ) {
+        if self.state != InitState::Ready {
+            return;
+        }
+        let mut painter = PanelPainter { panel: self };
+        if let Err(e) =
+            front_panel_scene::render_test_navigation(&mut painter, selected, default_test)
+        {
+            defmt::error!("ui: render test navigation failed err={=?}", e);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn render_test_screen_static(&mut self, back_enabled: bool) {
+        if self.state != InitState::Ready {
+            return;
+        }
+        let mut painter = PanelPainter { panel: self };
+        let color_order_label = if PANEL_RGB_ORDER {
+            "COLOR ORDER: RGB565"
+        } else {
+            "COLOR ORDER: BGR565"
+        };
+        if let Err(e) = front_panel_scene::render_test_screen_static(
+            &mut painter,
+            back_enabled,
+            color_order_label,
+        ) {
+            defmt::error!("ui: render screen static test failed err={=?}", e);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn render_test_audio_playback(&mut self, back_enabled: bool, state: AudioTestUiState) {
+        if self.state != InitState::Ready {
+            return;
+        }
+        let mut painter = PanelPainter { panel: self };
+        if let Err(e) =
+            front_panel_scene::render_test_audio_playback(&mut painter, back_enabled, state)
+        {
+            defmt::error!("ui: render audio playback test failed err={=?}", e);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn poll_test_input_event(&mut self) -> Option<TestInputEvent> {
+        if self.state != InitState::Ready {
+            return None;
+        }
+
+        let snapshot = match self.read_inputs() {
+            Ok(v) => v,
+            Err(e) => {
+                defmt::error!("ui: test input read failed err={}", i2c_error_kind(e));
+                return None;
+            }
+        };
+        let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        let mut event = None;
+        let mut next_snapshot = snapshot;
+
+        if snapshot.center && !prev.center {
+            event = Some(TestInputEvent::Center);
+        } else if snapshot.up && !prev.up {
+            event = Some(TestInputEvent::Up);
+        } else if snapshot.down && !prev.down {
+            event = Some(TestInputEvent::Down);
+        } else if snapshot.left && !prev.left {
+            event = Some(TestInputEvent::Left);
+        } else if snapshot.right && !prev.right {
+            event = Some(TestInputEvent::Right);
+        } else if snapshot.touch && !prev.touch {
+            if let Some((x, y)) = snapshot.touch_point {
+                event = Some(TestInputEvent::Touch { x, y });
+            } else {
+                // Keep touch edge pending until we have a usable coordinate sample.
+                next_snapshot.touch = false;
+                next_snapshot.touch_point = None;
+            }
+        }
+
+        self.last_inputs = Some(next_snapshot);
+        event
     }
 
     fn configure_dc(&mut self) {
