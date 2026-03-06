@@ -329,6 +329,9 @@ fn map_input(input: front_panel::TestInputEvent) -> Option<HarnessInputEvent> {
         front_panel::TestInputEvent::TouchDrag { x, y, dy } => {
             HarnessInputEvent::TouchDrag { x, y, dy }
         }
+        front_panel::TestInputEvent::TouchRelease { x, y } => {
+            HarnessInputEvent::TouchRelease { x, y }
+        }
     })
 }
 

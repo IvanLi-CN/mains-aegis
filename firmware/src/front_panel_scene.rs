@@ -276,33 +276,36 @@ const TEST_BACK_BTN_H: u16 = 20;
 #[allow(dead_code)]
 const TEST_AUDIO_LIST_X: u16 = 12;
 #[allow(dead_code)]
-const TEST_AUDIO_LIST_Y: u16 = 30;
+const TEST_AUDIO_LIST_Y: u16 = 24;
 #[allow(dead_code)]
 const TEST_AUDIO_LIST_W: u16 = 296;
 #[allow(dead_code)]
-const TEST_AUDIO_LIST_H: u16 = 106;
+const TEST_AUDIO_LIST_H: u16 = 144;
 
 #[allow(dead_code)]
-const TEST_AUDIO_ROW_X: u16 = TEST_AUDIO_LIST_X + 8;
+const TEST_AUDIO_ROW_X: u16 = TEST_AUDIO_LIST_X + 6;
 #[allow(dead_code)]
-const TEST_AUDIO_ROW_Y: u16 = TEST_AUDIO_LIST_Y + 8;
+const TEST_AUDIO_ROW_Y: u16 = TEST_AUDIO_LIST_Y + 6;
 #[allow(dead_code)]
-const TEST_AUDIO_ROW_W: u16 = TEST_AUDIO_LIST_W - 16;
+const TEST_AUDIO_ROW_W: u16 = TEST_AUDIO_LIST_W - 12;
 #[allow(dead_code)]
-const TEST_AUDIO_ROW_H: u16 = 22;
+const TEST_AUDIO_ROW_H: u16 = 20;
 #[allow(dead_code)]
 const TEST_AUDIO_ROW_GAP: u16 = 2;
 #[allow(dead_code)]
-pub const TEST_AUDIO_VISIBLE_ROWS: usize = 4;
+pub const TEST_AUDIO_VISIBLE_ROWS: usize = 6;
 
 #[allow(dead_code)]
-const TEST_AUDIO_STOP_BTN_X: u16 = 210;
+const TEST_AUDIO_BACK_BTN_X: u16 = UI_W - 72;
 #[allow(dead_code)]
-const TEST_AUDIO_STOP_BTN_Y: u16 = 142;
+const TEST_AUDIO_BACK_BTN_Y: u16 = 2;
 #[allow(dead_code)]
-const TEST_AUDIO_STOP_BTN_W: u16 = 98;
+const TEST_AUDIO_BACK_BTN_W: u16 = 68;
 #[allow(dead_code)]
-const TEST_AUDIO_STOP_BTN_H: u16 = 20;
+const TEST_AUDIO_BACK_BTN_H: u16 = 18;
+
+#[allow(dead_code)]
+const TEST_AUDIO_SCROLLBAR_W: u16 = 4;
 
 #[allow(dead_code)]
 const AUDIO_TEST_ITEM_COUNT: usize = 15;
@@ -464,14 +467,14 @@ pub fn test_audio_list_hit_test(x: u16, y: u16, list_top: usize) -> Option<usize
 }
 
 #[allow(dead_code)]
-pub fn test_audio_stop_hit_test(x: u16, y: u16) -> bool {
+pub fn test_audio_back_hit_test(x: u16, y: u16) -> bool {
     contains(
         x,
         y,
-        TEST_AUDIO_STOP_BTN_X,
-        TEST_AUDIO_STOP_BTN_Y,
-        TEST_AUDIO_STOP_BTN_W,
-        TEST_AUDIO_STOP_BTN_H,
+        TEST_AUDIO_BACK_BTN_X,
+        TEST_AUDIO_BACK_BTN_Y,
+        TEST_AUDIO_BACK_BTN_W,
+        TEST_AUDIO_BACK_BTN_H,
     )
 }
 
@@ -998,10 +1001,40 @@ pub fn render_test_audio_playback<P: UiPainter>(
         palette,
         UiFocus::Idle,
         "AUDIO TEST",
-        "list + touch drag scroll",
+        "cue list",
         if state.playing { "PLAYING" } else { "IDLE" },
         if state.playing {
             SUCCESS_COLOR
+        } else {
+            palette.text_dim
+        },
+    )?;
+    draw_panel(
+        painter,
+        TEST_AUDIO_BACK_BTN_X,
+        TEST_AUDIO_BACK_BTN_Y,
+        TEST_AUDIO_BACK_BTN_W,
+        TEST_AUDIO_BACK_BTN_H,
+        palette,
+        false,
+        if back_enabled {
+            palette.left
+        } else {
+            palette.panel_alt
+        },
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        if back_enabled { "BACK" } else { "BACK OFF" },
+        Point::new(
+            (TEST_AUDIO_BACK_BTN_X + TEST_AUDIO_BACK_BTN_W / 2) as i32,
+            (TEST_AUDIO_BACK_BTN_Y + 4) as i32,
+        ),
+        HorizontalAlignment::Center,
+        if back_enabled {
+            palette.text
         } else {
             palette.text_dim
         },
@@ -1025,22 +1058,6 @@ pub fn render_test_audio_playback<P: UiPainter>(
         false,
         palette.accent,
     )?;
-    text(
-        painter,
-        variant,
-        FontRole::TextBody,
-        format_args!(
-            "Current: {}",
-            state.current.map(audio_event_ui_label).unwrap_or("NONE")
-        ),
-        Point::new(
-            (TEST_AUDIO_LIST_X + 10) as i32,
-            (TEST_AUDIO_LIST_Y + 6) as i32,
-        ),
-        HorizontalAlignment::Left,
-        palette.text_dim,
-    )?;
-
     let stride = TEST_AUDIO_ROW_H + TEST_AUDIO_ROW_GAP;
     let mut row = 0usize;
     while row < TEST_AUDIO_VISIBLE_ROWS {
@@ -1094,87 +1111,47 @@ pub fn render_test_audio_playback<P: UiPainter>(
         row += 1;
     }
 
-    text(
-        painter,
-        variant,
-        FontRole::TextCompact,
-        "UP/DOWN: SELECT  CENTER: PLAY",
-        Point::new(
-            (TEST_AUDIO_LIST_X + 8) as i32,
-            (TEST_AUDIO_LIST_Y + TEST_AUDIO_LIST_H - 14) as i32,
-        ),
-        HorizontalAlignment::Left,
-        palette.text_dim,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::TextCompact,
-        "Touch: tap play, drag list  Queue:",
-        Point::new(
-            (TEST_AUDIO_LIST_X + 8) as i32,
-            (TEST_AUDIO_LIST_Y + TEST_AUDIO_LIST_H - 4) as i32,
-        ),
-        HorizontalAlignment::Left,
-        palette.text_dim,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::NumCompact,
-        format_args!("{}", state.queued),
-        Point::new(
-            (TEST_AUDIO_LIST_X + TEST_AUDIO_LIST_W - 10) as i32,
-            (TEST_AUDIO_LIST_Y + TEST_AUDIO_LIST_H - 4) as i32,
-        ),
-        HorizontalAlignment::Right,
-        palette.text,
-    )?;
+    if AUDIO_TEST_ITEM_COUNT > TEST_AUDIO_VISIBLE_ROWS {
+        let track_x = TEST_AUDIO_LIST_X + TEST_AUDIO_LIST_W - 8;
+        let track_y = TEST_AUDIO_LIST_Y + 4;
+        let track_h = TEST_AUDIO_LIST_H - 8;
+        draw_panel(
+            painter,
+            track_x,
+            track_y,
+            TEST_AUDIO_SCROLLBAR_W,
+            track_h,
+            palette,
+            false,
+            palette.panel_alt,
+        )?;
 
-    draw_panel(
-        painter,
-        TEST_AUDIO_STOP_BTN_X,
-        TEST_AUDIO_STOP_BTN_Y,
-        TEST_AUDIO_STOP_BTN_W,
-        TEST_AUDIO_STOP_BTN_H,
-        palette,
-        false,
-        palette.down,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::TextTitle,
-        "STOP ALL",
-        Point::new(
-            (TEST_AUDIO_STOP_BTN_X + TEST_AUDIO_STOP_BTN_W / 2) as i32,
-            (TEST_AUDIO_STOP_BTN_Y + 9) as i32,
-        ),
-        HorizontalAlignment::Center,
-        palette.text,
-    )?;
-
-    render_test_back_button(painter, back_enabled)
-}
-
-fn audio_event_ui_label(event: AudioEventUi) -> &'static str {
-    match event {
-        AudioEventUi::BootStartup => AUDIO_TEST_LABELS[0],
-        AudioEventUi::MainsPresentDc => AUDIO_TEST_LABELS[1],
-        AudioEventUi::ChargeStarted => AUDIO_TEST_LABELS[2],
-        AudioEventUi::ChargeCompleted => AUDIO_TEST_LABELS[3],
-        AudioEventUi::ShutdownModeEntered => AUDIO_TEST_LABELS[4],
-        AudioEventUi::MainsAbsentDc => AUDIO_TEST_LABELS[5],
-        AudioEventUi::HighStress => AUDIO_TEST_LABELS[6],
-        AudioEventUi::BatteryLowNoMains => AUDIO_TEST_LABELS[7],
-        AudioEventUi::BatteryLowWithMains => AUDIO_TEST_LABELS[8],
-        AudioEventUi::ShutdownProtection => AUDIO_TEST_LABELS[9],
-        AudioEventUi::IoOverVoltage => AUDIO_TEST_LABELS[10],
-        AudioEventUi::IoOverCurrent => AUDIO_TEST_LABELS[11],
-        AudioEventUi::IoOverPower => AUDIO_TEST_LABELS[12],
-        AudioEventUi::ModuleFault => AUDIO_TEST_LABELS[13],
-        AudioEventUi::BatteryProtection => AUDIO_TEST_LABELS[14],
+        let thumb_h = core::cmp::max(
+            12,
+            (track_h as usize * TEST_AUDIO_VISIBLE_ROWS / AUDIO_TEST_ITEM_COUNT) as u16,
+        );
+        let max_top = AUDIO_TEST_ITEM_COUNT - TEST_AUDIO_VISIBLE_ROWS;
+        let travel = track_h.saturating_sub(thumb_h);
+        let thumb_off = if max_top == 0 {
+            0
+        } else {
+            (travel as usize * list_top / max_top) as u16
+        };
+        fill(
+            painter,
+            track_x,
+            track_y + thumb_off,
+            TEST_AUDIO_SCROLLBAR_W,
+            thumb_h,
+            if state.playing {
+                SUCCESS_COLOR
+            } else {
+                palette.accent
+            },
+        )?;
     }
+
+    Ok(())
 }
 
 fn audio_event_ui_index(event: AudioEventUi) -> Option<usize> {

@@ -68,6 +68,7 @@ pub enum TestInputEvent {
     Center,
     Touch { x: u16, y: u16 },
     TouchDrag { x: u16, y: u16, dy: i16 },
+    TouchRelease { x: u16, y: u16 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +116,7 @@ pub struct FrontPanel {
     state: InitState,
     next_frame_deadline: Instant,
     last_inputs: Option<InputSnapshot>,
+    last_test_touch_point: Option<(u16, u16)>,
     needs_redraw: bool,
     ui_variant: UiVariant,
     self_check_snapshot: SelfCheckUiSnapshot,
@@ -145,6 +147,7 @@ impl FrontPanel {
             state: InitState::Disabled,
             next_frame_deadline: Instant::now(),
             last_inputs: None,
+            last_test_touch_point: None,
             needs_redraw: false,
             ui_variant: SELF_CHECK_VARIANT,
             self_check_snapshot: SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby),
@@ -433,21 +436,30 @@ impl FrontPanel {
             event = Some(TestInputEvent::Left);
         } else if snapshot.right && !prev.right {
             event = Some(TestInputEvent::Right);
-        } else if snapshot.touch && !prev.touch {
-            if let Some((x, y)) = snapshot.touch_point {
+        } else if let Some((x, y)) = snapshot.touch_point {
+            let mut emitted = false;
+            if let Some((_, prev_y)) = self.last_test_touch_point {
+                let dy = y as i16 - prev_y as i16;
+                if dy != 0 {
+                    event = Some(TestInputEvent::TouchDrag { x, y, dy });
+                    emitted = true;
+                }
+            }
+            if !emitted && snapshot.touch && !prev.touch {
                 event = Some(TestInputEvent::Touch { x, y });
-            } else {
+            }
+            self.last_test_touch_point = Some((x, y));
+        } else {
+            if !snapshot.touch && prev.touch {
+                if let Some((x, y)) = self.last_test_touch_point.or(prev.touch_point) {
+                    event = Some(TestInputEvent::TouchRelease { x, y });
+                }
+            } else if snapshot.touch && !prev.touch {
                 // Keep touch edge pending until we have a usable coordinate sample.
                 next_snapshot.touch = false;
                 next_snapshot.touch_point = None;
             }
-        } else if snapshot.touch && prev.touch {
-            if let (Some((x, y)), Some((_, prev_y))) = (snapshot.touch_point, prev.touch_point) {
-                let dy = y as i16 - prev_y as i16;
-                if dy != 0 {
-                    event = Some(TestInputEvent::TouchDrag { x, y, dy });
-                }
-            }
+            self.last_test_touch_point = None;
         }
 
         self.last_inputs = Some(next_snapshot);
@@ -642,8 +654,9 @@ impl FrontPanel {
         let down = (bits & (1 << 0)) == 0;
 
         let center = self.btn_center.is_low();
-        let touch = self.ctp_irq.is_low();
-        let touch_point = self.read_touch_point(touch);
+        let touch_irq_active = self.ctp_irq.is_low();
+        let touch_point = self.read_touch_point();
+        let touch = touch_irq_active || touch_point.is_some();
 
         Ok(InputSnapshot {
             up,
@@ -656,11 +669,7 @@ impl FrontPanel {
         })
     }
 
-    fn read_touch_point(&mut self, touch_active: bool) -> Option<(u16, u16)> {
-        if !touch_active {
-            return None;
-        }
-
+    fn read_touch_point(&mut self) -> Option<(u16, u16)> {
         let mut buf = [0u8; CST816D_TOUCH_REG_LEN];
         if self
             .i2c

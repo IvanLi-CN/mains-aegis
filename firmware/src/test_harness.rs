@@ -1,5 +1,5 @@
 use crate::front_panel_scene::{
-    test_audio_list_hit_test, test_audio_list_scroll_hit_test, test_audio_stop_hit_test,
+    test_audio_back_hit_test, test_audio_list_hit_test, test_audio_list_scroll_hit_test,
     test_back_hit_test, test_navigation_hit_test, TestFunctionUi, TEST_AUDIO_VISIBLE_ROWS,
 };
 use crate::test_audio::{AudioCue, AUDIO_CUE_COUNT};
@@ -26,6 +26,7 @@ pub enum HarnessInputEvent {
     Center,
     Touch { x: u16, y: u16 },
     TouchDrag { x: u16, y: u16, dy: i16 },
+    TouchRelease { x: u16, y: u16 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +59,9 @@ pub struct TestHarnessState {
     audio_selected_idx: usize,
     audio_list_top: usize,
     audio_drag_residual: i16,
+    audio_touch_pending_idx: Option<usize>,
+    audio_touch_pending_back: bool,
+    audio_touch_dragged: bool,
 }
 
 const AUDIO_LIST_LEN: usize = AUDIO_CUE_COUNT;
@@ -110,6 +114,9 @@ impl TestHarnessState {
             audio_selected_idx: 0,
             audio_list_top: 0,
             audio_drag_residual: 0,
+            audio_touch_pending_idx: None,
+            audio_touch_pending_back: false,
+            audio_touch_dragged: false,
         }
     }
 
@@ -185,6 +192,7 @@ impl TestHarnessState {
                 }
             }
             HarnessInputEvent::TouchDrag { .. } => {}
+            HarnessInputEvent::TouchRelease { .. } => {}
         }
         out
     }
@@ -209,6 +217,7 @@ impl TestHarnessState {
             }
             HarnessInputEvent::Up | HarnessInputEvent::Down | HarnessInputEvent::Right => {}
             HarnessInputEvent::TouchDrag { .. } => {}
+            HarnessInputEvent::TouchRelease { .. } => {}
         }
         out
     }
@@ -218,6 +227,7 @@ impl TestHarnessState {
         match input {
             HarnessInputEvent::Left => {
                 self.audio_drag_residual = 0;
+                self.clear_audio_touch_gesture();
                 if self.cfg.has_navigation {
                     self.route = TestRoute::Navigation;
                     out.needs_redraw = true;
@@ -226,47 +236,76 @@ impl TestHarnessState {
             }
             HarnessInputEvent::Up => {
                 self.audio_drag_residual = 0;
+                self.clear_audio_touch_gesture();
                 self.audio_move_selection(-1);
                 out.needs_redraw = true;
             }
             HarnessInputEvent::Down => {
                 self.audio_drag_residual = 0;
+                self.clear_audio_touch_gesture();
                 self.audio_move_selection(1);
                 out.needs_redraw = true;
             }
-            HarnessInputEvent::Right => {}
+            HarnessInputEvent::Right => {
+                self.audio_drag_residual = 0;
+                self.clear_audio_touch_gesture();
+                out.stop_audio = true;
+                out.needs_redraw = true;
+            }
             HarnessInputEvent::Center => {
                 self.audio_drag_residual = 0;
+                self.clear_audio_touch_gesture();
                 out.audio_cue = Some(audio_cue_for_index(self.audio_selected_idx));
                 out.needs_redraw = true;
             }
             HarnessInputEvent::Touch { x, y } => {
                 self.audio_drag_residual = 0;
-                if test_back_hit_test(x, y) {
-                    if self.cfg.has_navigation {
-                        self.route = TestRoute::Navigation;
-                        out.needs_redraw = true;
-                        out.stop_audio = true;
-                    }
-                } else if test_audio_stop_hit_test(x, y) {
-                    out.stop_audio = true;
-                    out.needs_redraw = true;
-                } else if let Some(idx) = test_audio_list_hit_test(x, y, self.audio_list_top) {
+                self.audio_touch_dragged = false;
+                self.audio_touch_pending_idx = None;
+                self.audio_touch_pending_back = test_audio_back_hit_test(x, y);
+                if let Some(idx) = test_audio_list_hit_test(x, y, self.audio_list_top) {
                     self.audio_selected_idx = idx;
                     self.audio_ensure_visible();
-                    out.audio_cue = Some(audio_cue_for_index(idx));
+                    self.audio_touch_pending_idx = Some(idx);
+                    self.audio_touch_pending_back = false;
                     out.needs_redraw = true;
                 }
             }
             HarnessInputEvent::TouchDrag { x, y, dy } => {
                 if test_audio_list_scroll_hit_test(x, y) {
+                    self.audio_touch_dragged = true;
+                    self.audio_touch_pending_idx = None;
+                    self.audio_touch_pending_back = false;
                     if self.audio_scroll_from_drag(dy) {
                         out.needs_redraw = true;
                     }
                 }
             }
+            HarnessInputEvent::TouchRelease { x, y } => {
+                if self.audio_touch_pending_back && test_audio_back_hit_test(x, y) {
+                    if self.cfg.has_navigation {
+                        self.route = TestRoute::Navigation;
+                        out.needs_redraw = true;
+                        out.stop_audio = true;
+                    }
+                } else if !self.audio_touch_dragged {
+                    if let Some(idx) = self.audio_touch_pending_idx {
+                        if test_audio_list_hit_test(x, y, self.audio_list_top) == Some(idx) {
+                            out.audio_cue = Some(audio_cue_for_index(idx));
+                            out.needs_redraw = true;
+                        }
+                    }
+                }
+                self.clear_audio_touch_gesture();
+            }
         }
         out
+    }
+
+    fn clear_audio_touch_gesture(&mut self) {
+        self.audio_touch_pending_idx = None;
+        self.audio_touch_pending_back = false;
+        self.audio_touch_dragged = false;
     }
 
     fn audio_move_selection(&mut self, delta: i32) {
