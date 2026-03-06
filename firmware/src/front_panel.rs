@@ -444,7 +444,7 @@ impl FrontPanel {
         } else if snapshot.touch && prev.touch {
             if let (Some((x, y)), Some((_, prev_y))) = (snapshot.touch_point, prev.touch_point) {
                 let dy = y as i16 - prev_y as i16;
-                if dy.abs() >= 3 {
+                if dy != 0 {
                     event = Some(TestInputEvent::TouchDrag { x, y, dy });
                 }
             }
@@ -635,11 +635,11 @@ impl FrontPanel {
         let bits = input[0];
 
         // Front-panel buttons are externally pulled up and shorted to GND when pressed.
-        // Wiring is physically mirrored relative to the logical D-pad.
-        let up = (bits & (1 << 0)) == 0;
+        // On current board wiring, P0/P3 are swapped against silk-screen UP/DOWN labels.
+        let up = (bits & (1 << 3)) == 0;
         let left = (bits & (1 << 1)) == 0;
         let right = (bits & (1 << 2)) == 0;
-        let down = (bits & (1 << 3)) == 0;
+        let down = (bits & (1 << 0)) == 0;
 
         let center = self.btn_center.is_low();
         let touch = self.ctp_irq.is_low();

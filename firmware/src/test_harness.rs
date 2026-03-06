@@ -57,6 +57,7 @@ pub struct TestHarnessState {
     selected_idx: usize,
     audio_selected_idx: usize,
     audio_list_top: usize,
+    audio_drag_residual: i16,
 }
 
 const AUDIO_LIST_LEN: usize = AUDIO_CUE_COUNT;
@@ -108,6 +109,7 @@ impl TestHarnessState {
             selected_idx,
             audio_selected_idx: 0,
             audio_list_top: 0,
+            audio_drag_residual: 0,
         }
     }
 
@@ -215,6 +217,7 @@ impl TestHarnessState {
         let mut out = HarnessResult::none();
         match input {
             HarnessInputEvent::Left => {
+                self.audio_drag_residual = 0;
                 if self.cfg.has_navigation {
                     self.route = TestRoute::Navigation;
                     out.needs_redraw = true;
@@ -222,19 +225,23 @@ impl TestHarnessState {
                 }
             }
             HarnessInputEvent::Up => {
+                self.audio_drag_residual = 0;
                 self.audio_move_selection(-1);
                 out.needs_redraw = true;
             }
             HarnessInputEvent::Down => {
+                self.audio_drag_residual = 0;
                 self.audio_move_selection(1);
                 out.needs_redraw = true;
             }
             HarnessInputEvent::Right => {}
             HarnessInputEvent::Center => {
+                self.audio_drag_residual = 0;
                 out.audio_cue = Some(audio_cue_for_index(self.audio_selected_idx));
                 out.needs_redraw = true;
             }
             HarnessInputEvent::Touch { x, y } => {
+                self.audio_drag_residual = 0;
                 if test_back_hit_test(x, y) {
                     if self.cfg.has_navigation {
                         self.route = TestRoute::Navigation;
@@ -286,28 +293,39 @@ impl TestHarnessState {
     }
 
     fn audio_scroll_from_drag(&mut self, dy: i16) -> bool {
+        const DRAG_STEP_PX: i16 = 6;
         let max_top = AUDIO_LIST_LEN.saturating_sub(TEST_AUDIO_VISIBLE_ROWS);
-        if dy >= 8 {
-            if self.audio_list_top > 0 {
-                self.audio_list_top -= 1;
-                if self.audio_selected_idx < self.audio_list_top {
-                    self.audio_selected_idx = self.audio_list_top;
-                }
-                return true;
+        self.audio_drag_residual = self.audio_drag_residual.saturating_add(dy);
+        let mut changed = false;
+
+        while self.audio_drag_residual >= DRAG_STEP_PX {
+            if self.audio_list_top == 0 {
+                self.audio_drag_residual = 0;
+                break;
             }
-            return false;
-        }
-        if dy <= -8 {
-            if self.audio_list_top < max_top {
-                self.audio_list_top += 1;
-                let max_visible = self.audio_list_top + TEST_AUDIO_VISIBLE_ROWS - 1;
-                if self.audio_selected_idx > max_visible {
-                    self.audio_selected_idx = max_visible;
-                }
-                return true;
+            self.audio_drag_residual -= DRAG_STEP_PX;
+            self.audio_list_top -= 1;
+            if self.audio_selected_idx < self.audio_list_top {
+                self.audio_selected_idx = self.audio_list_top;
             }
+            changed = true;
         }
-        false
+
+        while self.audio_drag_residual <= -DRAG_STEP_PX {
+            if self.audio_list_top >= max_top {
+                self.audio_drag_residual = 0;
+                break;
+            }
+            self.audio_drag_residual += DRAG_STEP_PX;
+            self.audio_list_top += 1;
+            let max_visible = self.audio_list_top + TEST_AUDIO_VISIBLE_ROWS - 1;
+            if self.audio_selected_idx > max_visible {
+                self.audio_selected_idx = max_visible;
+            }
+            changed = true;
+        }
+
+        changed
     }
 }
 
