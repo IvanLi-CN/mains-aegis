@@ -35,6 +35,101 @@ const BMS_ADDR_LOG: &str = "0x0b";
 const BMS_ACTIVATION_WINDOW: Duration = Duration::from_secs(15);
 const BMS_ACTIVATION_FORCE_ICHG_MA: u16 = 50;
 const BMS_ACTIVATION_FORCE_IINDPM_MA: u16 = 100;
+const BQ40_CURRENT_IDLE_THRESHOLD_MA: i16 = 20;
+
+fn bq40_op_bit(op_status: Option<u16>, mask: u16) -> Option<bool> {
+    op_status.map(|raw| (raw & mask) != 0)
+}
+
+fn bq40_decode_charge_path(op_status: Option<u16>) -> (Option<bool>, &'static str) {
+    let Some(raw) = op_status else {
+        return (None, "op_status_unavailable");
+    };
+
+    let xchg = (raw & bq40z50::operation_status::XCHG) != 0;
+    let chg_fet = (raw & bq40z50::operation_status::CHG) != 0;
+
+    if xchg {
+        (Some(false), "xchg_blocked")
+    } else if chg_fet {
+        (Some(true), "ready")
+    } else {
+        (Some(false), "chg_fet_off")
+    }
+}
+
+fn bq40_decode_discharge_path(op_status: Option<u16>) -> (Option<bool>, &'static str) {
+    let Some(raw) = op_status else {
+        return (None, "op_status_unavailable");
+    };
+
+    let xdsg = (raw & bq40z50::operation_status::XDSG) != 0;
+    let dsg_fet = (raw & bq40z50::operation_status::DSG) != 0;
+
+    if xdsg {
+        (Some(false), "xdsg_blocked")
+    } else if dsg_fet {
+        (Some(true), "ready")
+    } else {
+        (Some(false), "dsg_fet_off")
+    }
+}
+
+fn bq40_decode_current_flow(current_ma: i16) -> &'static str {
+    if current_ma > BQ40_CURRENT_IDLE_THRESHOLD_MA {
+        "charging"
+    } else if current_ma < -BQ40_CURRENT_IDLE_THRESHOLD_MA {
+        "discharging"
+    } else {
+        "idle"
+    }
+}
+
+fn bq40_primary_reason(
+    batt_status: u16,
+    op_status: Option<u16>,
+    charge_reason: &'static str,
+    discharge_reason: &'static str,
+) -> &'static str {
+    if bq40z50::battery_status::error_code(batt_status) != 0 {
+        return "sbs_error_code";
+    }
+    if (batt_status & bq40z50::battery_status::RCA) != 0 {
+        return "remaining_capacity_alarm";
+    }
+    if bq40_op_bit(op_status, bq40z50::operation_status::PF) == Some(true) {
+        return "permanent_failure";
+    }
+    if discharge_reason != "ready" && discharge_reason != "op_status_unavailable" {
+        return discharge_reason;
+    }
+    if charge_reason != "ready" && charge_reason != "op_status_unavailable" {
+        return charge_reason;
+    }
+    if bq40_op_bit(op_status, bq40z50::operation_status::SLEEP) == Some(true) {
+        return "sleep_mode";
+    }
+    if op_status.is_none() {
+        return "op_status_unavailable";
+    }
+    "nominal"
+}
+
+fn bq40_cell_min_max_delta(cell_mv: &[u16; 4]) -> (u16, u16, u16) {
+    let mut min_mv = cell_mv[0];
+    let mut max_mv = cell_mv[0];
+
+    for mv in cell_mv.iter().skip(1).copied() {
+        if mv < min_mv {
+            min_mv = mv;
+        }
+        if mv > max_mv {
+            max_mv = mv;
+        }
+    }
+
+    (min_mv, max_mv, max_mv.saturating_sub(min_mv))
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EnabledOutputs {
@@ -440,6 +535,11 @@ where
     let mut bms_soc_pct: Option<u16> = None;
     let mut bms_rca_alarm: Option<bool> = None;
     let mut bms_discharge_ready: Option<bool> = None;
+    let mut bms_discharge_reason: Option<&'static str> = None;
+    let mut bms_charge_ready: Option<bool> = None;
+    let mut bms_charge_reason: Option<&'static str> = None;
+    let mut bms_flow: Option<&'static str> = None;
+    let mut bms_primary_reason: Option<&'static str> = None;
     for addr in bms_probe_candidates().iter().copied() {
         let temp = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::TEMPERATURE);
         let voltage = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::VOLTAGE);
@@ -453,17 +553,24 @@ where
         {
             let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(temp_k_x10);
             let err_code = bq40z50::battery_status::error_code(status_raw);
-            let xchg = op_status.map(|v| (v & bq40z50::operation_status::XCHG) != 0);
-            let xdsg = op_status.map(|v| (v & bq40z50::operation_status::XDSG) != 0);
-            let chg_fet = op_status.map(|v| (v & bq40z50::operation_status::CHG) != 0);
-            let dsg_fet = op_status.map(|v| (v & bq40z50::operation_status::DSG) != 0);
-            let discharge_ready = xdsg.zip(dsg_fet).map(|(x, d)| !x && d);
+            let xchg = bq40_op_bit(op_status, bq40z50::operation_status::XCHG);
+            let xdsg = bq40_op_bit(op_status, bq40z50::operation_status::XDSG);
+            let chg_fet = bq40_op_bit(op_status, bq40z50::operation_status::CHG);
+            let dsg_fet = bq40_op_bit(op_status, bq40z50::operation_status::DSG);
+            let (charge_ready, charge_reason) = bq40_decode_charge_path(op_status);
+            let (discharge_ready, discharge_reason) = bq40_decode_discharge_path(op_status);
+            let flow = bq40_decode_current_flow(current_ma);
+            let flow_abs_ma = current_ma.wrapping_abs() as u16;
+            let primary_reason =
+                bq40_primary_reason(status_raw, op_status, charge_reason, discharge_reason);
             defmt::info!(
-                "self_test: bq40z50 ok addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} op_status={=?} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} dsg_ready={=?} err_code={} err_str={}",
+                "self_test: bq40z50 ok addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} flow={} flow_abs_ma={=u16} soc_pct={=u16} status=0x{=u16:x} op_status={=?} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} chg_ready={=?} dsg_ready={=?} chg_reason={} dsg_reason={} primary_reason={} err_code={} err_str={}",
                 addr,
                 temp_c_x10,
                 voltage_mv,
                 current_ma,
+                flow,
+                flow_abs_ma,
                 soc_pct,
                 status_raw,
                 op_status,
@@ -471,14 +578,23 @@ where
                 xdsg,
                 chg_fet,
                 dsg_fet,
+                charge_ready,
                 discharge_ready,
+                charge_reason,
+                discharge_reason,
+                primary_reason,
                 err_code,
                 bq40z50::decode_error_code(err_code)
             );
             bms_addr = Some(addr);
             bms_soc_pct = Some(soc_pct);
             bms_rca_alarm = Some((status_raw & bq40z50::battery_status::RCA) != 0);
+            bms_charge_ready = charge_ready;
+            bms_charge_reason = Some(charge_reason);
             bms_discharge_ready = discharge_ready;
+            bms_discharge_reason = Some(discharge_reason);
+            bms_flow = Some(flow);
+            bms_primary_reason = Some(primary_reason);
             break;
         }
 
@@ -490,11 +606,21 @@ where
         ui.bq40z50 = SelfCheckCommState::Err;
     } else if bms_discharge_ready != Some(true) {
         defmt::warn!(
-            "self_test: bq40z50 discharge path not ready state={=?}",
-            bms_discharge_ready
+            "self_test: bq40z50 discharge path not ready state={=?} reason={=?} charge_ready={=?} charge_reason={=?} flow={=?} primary_reason={=?}",
+            bms_discharge_ready,
+            bms_discharge_reason,
+            bms_charge_ready,
+            bms_charge_reason,
+            bms_flow,
+            bms_primary_reason
         );
         ui.bq40z50 = SelfCheckCommState::Warn;
     } else if bms_rca_alarm == Some(true) {
+        defmt::warn!(
+            "self_test: bq40z50 remaining capacity alarm flow={=?} primary_reason={=?}",
+            bms_flow,
+            bms_primary_reason
+        );
         ui.bq40z50 = SelfCheckCommState::Warn;
     } else {
         ui.bq40z50 = SelfCheckCommState::Ok;
@@ -788,6 +914,9 @@ pub struct PowerManager<'d, I2C> {
     bms_next_poll_at: Instant,
     bms_next_retry_at: Option<Instant>,
     bms_last_int_poll_at: Option<Instant>,
+    bms_poll_seq: u32,
+    bms_ok_streak: u16,
+    bms_err_streak: u16,
 
     chg_next_poll_at: Instant,
     chg_next_retry_at: Option<Instant>,
@@ -880,6 +1009,9 @@ where
             bms_next_poll_at: now,
             bms_next_retry_at: Some(now),
             bms_last_int_poll_at: None,
+            bms_poll_seq: 0,
+            bms_ok_streak: 0,
+            bms_err_streak: 0,
 
             chg_next_poll_at: now,
             chg_next_retry_at: if charger_allowed { Some(now) } else { None },
@@ -1797,6 +1929,8 @@ where
             }
         }
         self.bms_next_poll_at = now + POLL_PERIOD;
+        self.bms_poll_seq = self.bms_poll_seq.wrapping_add(1);
+        let poll_seq = self.bms_poll_seq;
 
         let btp_int_h = self.bms_btp_int_h.is_high() || irq.bms_btp_int_h != 0;
 
@@ -1824,6 +1958,8 @@ where
                 Ok(s) => {
                     self.bms_addr = Some(addr);
                     self.bms_next_retry_at = None;
+                    self.bms_ok_streak = self.bms_ok_streak.saturating_add(1);
+                    self.bms_err_streak = 0;
                     let rca_alarm = (s.batt_status & bq40z50::battery_status::RCA) != 0;
                     let discharge_ready = Self::bq40_discharge_ready(s.op_status);
                     self.ui_snapshot.bq40z50 = if discharge_ready != Some(true) || rca_alarm {
@@ -1837,24 +1973,44 @@ where
                     if discharge_ready == Some(true) {
                         self.try_restore_outputs_after_bms_ready();
                     }
-                    self.log_bq40z50_snapshot(addr, btp_int_h, &s);
+                    self.log_bq40z50_snapshot(addr, poll_seq, self.bms_ok_streak, btp_int_h, &s);
                     return;
                 }
                 Err(Bq40SnapshotReadError::Invalid(s)) => {
                     if idx + 1 == addr_count {
                         self.bms_addr = None;
+                        self.bms_ok_streak = 0;
+                        self.bms_err_streak = self.bms_err_streak.saturating_add(1);
                         self.bms_next_retry_at = Some(now + self.cfg.retry_backoff);
                         self.ui_snapshot.bq40z50 = SelfCheckCommState::Warn;
                         self.ui_snapshot.bq40z50_soc_pct = None;
                         self.ui_snapshot.bq40z50_rca_alarm = None;
                         self.ui_snapshot.bq40z50_discharge_ready = None;
                         let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(s.temp_k_x10);
+                        let flow = bq40_decode_current_flow(s.current_ma);
+                        let (charge_ready, charge_reason) = bq40_decode_charge_path(s.op_status);
+                        let (discharge_ready, discharge_reason) =
+                            bq40_decode_discharge_path(s.op_status);
+                        let primary_reason = bq40_primary_reason(
+                            s.batt_status,
+                            s.op_status,
+                            charge_reason,
+                            discharge_reason,
+                        );
                         defmt::warn!(
-                            "bms: bq40z50 invalid addrs={} temp_c_x10={=i32} vpack_mv={=u16} rsoc_pct={=u16}",
+                            "bms: bq40z50 invalid addrs={} poll_seq={=u32} err_streak={=u16} temp_c_x10={=i32} vpack_mv={=u16} rsoc_pct={=u16} flow={} chg_ready={=?} dsg_ready={=?} chg_reason={} dsg_reason={} primary_reason={}",
                             BMS_ADDR_LOG,
+                            poll_seq,
+                            self.bms_err_streak,
                             temp_c_x10,
                             s.vpack_mv,
-                            s.rsoc_pct
+                            s.rsoc_pct,
+                            flow,
+                            charge_ready,
+                            discharge_ready,
+                            charge_reason,
+                            discharge_reason,
+                            primary_reason
                         );
                     }
                 }
@@ -1862,6 +2018,8 @@ where
                     // Only log one line after the final address attempt.
                     if idx + 1 == addr_count {
                         self.bms_addr = None;
+                        self.bms_ok_streak = 0;
+                        self.bms_err_streak = self.bms_err_streak.saturating_add(1);
                         self.bms_next_retry_at = Some(now + self.cfg.retry_backoff);
                         self.ui_snapshot.bq40z50 = SelfCheckCommState::Err;
                         self.ui_snapshot.bq40z50_soc_pct = None;
@@ -1870,15 +2028,19 @@ where
 
                         if kind == "i2c_nack" || kind == "i2c_timeout" {
                             defmt::warn!(
-                                "bms: bq40z50 absent addrs={} err={} btp_int_h={=bool}",
+                                "bms: bq40z50 absent addrs={} poll_seq={=u32} err_streak={=u16} err={} btp_int_h={=bool}",
                                 BMS_ADDR_LOG,
+                                poll_seq,
+                                self.bms_err_streak,
                                 kind,
                                 btp_int_h
                             );
                         } else {
                             defmt::error!(
-                                "bms: bq40z50 err addrs={} err={} btp_int_h={=bool}",
+                                "bms: bq40z50 err addrs={} poll_seq={=u32} err_streak={=u16} err={} btp_int_h={=bool}",
                                 BMS_ADDR_LOG,
+                                poll_seq,
+                                self.bms_err_streak,
                                 kind,
                                 btp_int_h
                             );
@@ -1897,11 +2059,7 @@ where
     }
 
     fn bq40_discharge_ready(op_status: Option<u16>) -> Option<bool> {
-        op_status.map(|v| {
-            let xdsg = (v & bq40z50::operation_status::XDSG) != 0;
-            let dsg_fet = (v & bq40z50::operation_status::DSG) != 0;
-            !xdsg && dsg_fet
-        })
+        bq40_decode_discharge_path(op_status).0
     }
 
     fn read_bq40z50_snapshot_strict(
@@ -1985,7 +2143,14 @@ where
         })
     }
 
-    fn log_bq40z50_snapshot(&self, addr: u8, btp_int_h: bool, s: &Bq40z50Snapshot) {
+    fn log_bq40z50_snapshot(
+        &self,
+        addr: u8,
+        poll_seq: u32,
+        ok_streak: u16,
+        btp_int_h: bool,
+        s: &Bq40z50Snapshot,
+    ) {
         let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(s.temp_k_x10);
 
         let bs = s.batt_status;
@@ -2000,43 +2165,42 @@ where
         let tda = (bs & bq40z50::battery_status::TDA) != 0;
         let rca = (bs & bq40z50::battery_status::RCA) != 0;
         let rta = (bs & bq40z50::battery_status::RTA) != 0;
-        let xchg = s
-            .op_status
-            .map(|v| (v & bq40z50::operation_status::XCHG) != 0);
-        let xdsg = s
-            .op_status
-            .map(|v| (v & bq40z50::operation_status::XDSG) != 0);
-        let chg_fet = s
-            .op_status
-            .map(|v| (v & bq40z50::operation_status::CHG) != 0);
-        let dsg_fet = s
-            .op_status
-            .map(|v| (v & bq40z50::operation_status::DSG) != 0);
-        let dsg_ready = xdsg.zip(dsg_fet).map(|(x, d)| !x && d);
-        let pres = s
-            .op_status
-            .map(|v| (v & bq40z50::operation_status::PRES) != 0);
-        let sleep = s
-            .op_status
-            .map(|v| (v & bq40z50::operation_status::SLEEP) != 0);
-        let pf = s
-            .op_status
-            .map(|v| (v & bq40z50::operation_status::PF) != 0);
+        let xchg = bq40_op_bit(s.op_status, bq40z50::operation_status::XCHG);
+        let xdsg = bq40_op_bit(s.op_status, bq40z50::operation_status::XDSG);
+        let chg_fet = bq40_op_bit(s.op_status, bq40z50::operation_status::CHG);
+        let dsg_fet = bq40_op_bit(s.op_status, bq40z50::operation_status::DSG);
+        let (chg_ready, chg_reason) = bq40_decode_charge_path(s.op_status);
+        let (dsg_ready, dsg_reason) = bq40_decode_discharge_path(s.op_status);
+        let pres = bq40_op_bit(s.op_status, bq40z50::operation_status::PRES);
+        let sleep = bq40_op_bit(s.op_status, bq40z50::operation_status::SLEEP);
+        let pf = bq40_op_bit(s.op_status, bq40z50::operation_status::PF);
+        let flow = bq40_decode_current_flow(s.current_ma);
+        let flow_abs_ma = s.current_ma.wrapping_abs() as u16;
+        let pack_power_mw = (s.vpack_mv as i32 * s.current_ma as i32) / 1000;
+        let primary_reason = bq40_primary_reason(bs, s.op_status, chg_reason, dsg_reason);
+        let (cell_min_mv, cell_max_mv, cell_delta_mv) = bq40_cell_min_max_delta(&s.cell_mv);
+        let op_status_read_ok = s.op_status.is_some();
 
         let ec = bq40z50::battery_status::error_code(bs);
 
         defmt::info!(
-            "bms: bq40z50 addr=0x{=u8:x} btp_int_h={=bool} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} remcap={=u16} fcc={=u16} batt_status=0x{=u16:x} op_status={=?} init={=bool} dsg={=bool} fc={=bool} fd={=bool} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} dsg_ready={=?} pres={=?} sleep={=?} pf={=?} oca={=bool} tca={=bool} ota={=bool} tda={=bool} rca={=bool} rta={=bool} ec=0x{=u8:x} ec_str={} c1_mv={=u16} c2_mv={=u16} c3_mv={=u16} c4_mv={=u16}",
+            "bms: bq40z50 addr=0x{=u8:x} poll_seq={=u32} ok_streak={=u16} btp_int_h={=bool} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} flow={} flow_abs_ma={=u16} pack_power_mw={=i32} rsoc_pct={=u16} remcap={=u16} fcc={=u16} batt_status=0x{=u16:x} op_status={=?} op_status_read_ok={=bool} init={=bool} dsg={=bool} fc={=bool} fd={=bool} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} chg_ready={=?} dsg_ready={=?} chg_reason={} dsg_reason={} primary_reason={} pres={=?} sleep={=?} pf={=?} oca={=bool} tca={=bool} ota={=bool} tda={=bool} rca={=bool} rta={=bool} ec=0x{=u8:x} ec_str={} cell_min_mv={=u16} cell_max_mv={=u16} cell_delta_mv={=u16} c1_mv={=u16} c2_mv={=u16} c3_mv={=u16} c4_mv={=u16}",
             addr,
+            poll_seq,
+            ok_streak,
             btp_int_h,
             temp_c_x10,
             s.vpack_mv,
             s.current_ma,
+            flow,
+            flow_abs_ma,
+            pack_power_mw,
             s.rsoc_pct,
             s.remcap,
             s.fcc,
             bs,
             s.op_status,
+            op_status_read_ok,
             init,
             dsg,
             fc,
@@ -2045,7 +2209,11 @@ where
             xdsg,
             chg_fet,
             dsg_fet,
+            chg_ready,
             dsg_ready,
+            chg_reason,
+            dsg_reason,
+            primary_reason,
             pres,
             sleep,
             pf,
@@ -2057,6 +2225,9 @@ where
             rta,
             ec,
             bq40z50::decode_error_code(ec),
+            cell_min_mv,
+            cell_max_mv,
+            cell_delta_mv,
             s.cell_mv[0],
             s.cell_mv[1],
             s.cell_mv[2],
