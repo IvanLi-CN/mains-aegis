@@ -232,14 +232,12 @@ impl TestHarnessState {
                 }
             }
             HarnessInputEvent::Up => {
-                self.audio_move_selection(-1);
-                out.needs_redraw = true;
-                out.audio_event = Some(AudioEvent::KeyInteraction);
-            }
-            HarnessInputEvent::Down => {
                 self.audio_move_selection(1);
                 out.needs_redraw = true;
-                out.audio_event = Some(AudioEvent::KeyInteraction);
+            }
+            HarnessInputEvent::Down => {
+                self.audio_move_selection(-1);
+                out.needs_redraw = true;
             }
             HarnessInputEvent::Right => {
                 out.stop_audio = true;
@@ -279,14 +277,10 @@ impl TestHarnessState {
 
     fn audio_move_selection(&mut self, delta: i32) {
         if delta < 0 {
-            if self.audio_selected_idx == 0 {
-                self.audio_selected_idx = AUDIO_LIST_LEN - 1;
-            } else {
+            if self.audio_selected_idx > 0 {
                 self.audio_selected_idx -= 1;
             }
-        } else if self.audio_selected_idx + 1 >= AUDIO_LIST_LEN {
-            self.audio_selected_idx = 0;
-        } else {
+        } else if self.audio_selected_idx + 1 < AUDIO_LIST_LEN {
             self.audio_selected_idx += 1;
         }
         self.audio_ensure_visible();
