@@ -835,10 +835,10 @@ pub fn render_test_navigation<P: UiPainter>(
         "",
         palette.accent,
     )?;
-    let list_x = 10;
-    let list_y = HEADER_H + 8;
-    let list_w = UI_W - 20;
-    let list_h = UI_H - list_y - 10;
+    let list_x = TEST_NAV_CARD_X - 8;
+    let list_y = TEST_NAV_CARD_Y - 8;
+    let list_w = TEST_NAV_CARD_W + 16;
+    let list_h = (TEST_NAV_CARD_H * 2) + TEST_NAV_CARD_GAP + 16;
     draw_panel(
         painter,
         list_x,
@@ -850,12 +850,11 @@ pub fn render_test_navigation<P: UiPainter>(
         palette.accent,
     )?;
 
-    let row_x = list_x + 6;
-    let row_w = list_w - 12;
-    let row_h = 44;
-    let row_gap = 8;
-    let screen_y = list_y + 8;
-    let audio_y = screen_y + row_h + row_gap;
+    let row_x = TEST_NAV_CARD_X;
+    let row_w = TEST_NAV_CARD_W;
+    let row_h = TEST_NAV_CARD_H;
+    let screen_y = TEST_NAV_CARD_Y;
+    let audio_y = TEST_NAV_CARD_Y + TEST_NAV_CARD_H + TEST_NAV_CARD_GAP;
     let screen_selected = selected == TestFunctionUi::ScreenStatic;
     let audio_selected = selected == TestFunctionUi::AudioPlayback;
 
@@ -872,22 +871,9 @@ pub fn render_test_navigation<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::Num,
-        "01",
-        Point::new((row_x + 10) as i32, (screen_y + 12) as i32),
-        HorizontalAlignment::Left,
-        if screen_selected {
-            palette.bg
-        } else {
-            palette.text_dim
-        },
-    )?;
-    text(
-        painter,
-        variant,
         FontRole::TextTitle,
-        "SCREEN STATIC",
-        Point::new((row_x + 48) as i32, (screen_y + 12) as i32),
+        "01  SCREEN STATIC",
+        Point::new((row_x + 12) as i32, (screen_y + 12) as i32),
         HorizontalAlignment::Left,
         if screen_selected {
             palette.bg
@@ -920,22 +906,9 @@ pub fn render_test_navigation<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::Num,
-        "02",
-        Point::new((row_x + 10) as i32, (audio_y + 12) as i32),
-        HorizontalAlignment::Left,
-        if audio_selected {
-            palette.bg
-        } else {
-            palette.text_dim
-        },
-    )?;
-    text(
-        painter,
-        variant,
         FontRole::TextTitle,
-        "AUDIO PLAYBACK",
-        Point::new((row_x + 48) as i32, (audio_y + 12) as i32),
+        "02  AUDIO PLAYBACK",
+        Point::new((row_x + 12) as i32, (audio_y + 12) as i32),
         HorizontalAlignment::Left,
         if audio_selected {
             palette.bg
