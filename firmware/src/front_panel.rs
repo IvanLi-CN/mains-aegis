@@ -122,6 +122,7 @@ pub struct FrontPanel {
     self_check_snapshot: SelfCheckUiSnapshot,
     bms_activation_state: BmsActivationState,
     self_check_overlay: SelfCheckOverlay,
+    touch_irq_stuck_hint_logged: bool,
     frame_no: u32,
 }
 
@@ -153,6 +154,7 @@ impl FrontPanel {
             self_check_snapshot: SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby),
             bms_activation_state: BmsActivationState::Idle,
             self_check_overlay: SelfCheckOverlay::None,
+            touch_irq_stuck_hint_logged: false,
             frame_no: 0,
         }
     }
@@ -314,7 +316,10 @@ impl FrontPanel {
         let mut ui_action = None;
         match self.read_inputs() {
             Ok(snapshot) => {
-                ui_action = self.process_touch_action(snapshot);
+                ui_action = self.process_bms_activation_button_action(snapshot);
+                if ui_action.is_none() {
+                    ui_action = self.process_touch_action(snapshot);
+                }
                 let inputs_changed = self.last_inputs != Some(snapshot);
                 if inputs_changed || self.needs_redraw {
                     if let Err(e) = self.render_inputs(snapshot) {
@@ -332,6 +337,57 @@ impl FrontPanel {
         }
 
         ui_action
+    }
+
+    fn process_bms_activation_button_action(
+        &mut self,
+        snapshot: InputSnapshot,
+    ) -> Option<UiAction> {
+        let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        let left_edge = snapshot.left && !prev.left;
+        let right_edge = snapshot.right && !prev.right;
+        let center_edge = snapshot.center && !prev.center;
+
+        if matches!(
+            self.self_check_overlay,
+            SelfCheckOverlay::BmsActivateResult { .. }
+        ) {
+            if left_edge || right_edge || center_edge {
+                self.self_check_overlay = SelfCheckOverlay::None;
+                self.needs_redraw = true;
+                return Some(UiAction::ClearBmsActivationResult);
+            }
+            return None;
+        }
+
+        match self.self_check_overlay {
+            SelfCheckOverlay::None => {
+                if (left_edge || center_edge)
+                    && front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
+                    && self.bms_activation_state != BmsActivationState::Pending
+                {
+                    self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
+                    self.needs_redraw = true;
+                    defmt::info!("ui: bms activation dialog open via key");
+                }
+            }
+            SelfCheckOverlay::BmsActivateConfirm => {
+                if right_edge {
+                    self.self_check_overlay = SelfCheckOverlay::None;
+                    self.needs_redraw = true;
+                    defmt::info!("ui: bms activation dialog cancel via key");
+                } else if left_edge || center_edge {
+                    self.self_check_overlay = SelfCheckOverlay::BmsActivateProgress;
+                    self.needs_redraw = true;
+                    defmt::info!("ui: bms activation request via key");
+                    return Some(UiAction::RequestBmsActivation);
+                }
+            }
+            SelfCheckOverlay::BmsActivateProgress => {}
+            SelfCheckOverlay::BmsActivateResult { .. } => {}
+        }
+
+        None
     }
 
     #[allow(dead_code)]
@@ -656,7 +712,18 @@ impl FrontPanel {
         let center = self.btn_center.is_low();
         let touch_irq_active = self.ctp_irq.is_low();
         let touch_point = self.read_touch_point();
-        let touch = touch_irq_active || touch_point.is_some();
+        let touch = touch_point.is_some();
+
+        if touch_irq_active && touch_point.is_none() {
+            if !self.touch_irq_stuck_hint_logged {
+                defmt::warn!(
+                    "ui: ctp_irq active without coordinates; ignore irq-only touch to avoid stuck edge"
+                );
+                self.touch_irq_stuck_hint_logged = true;
+            }
+        } else if !touch_irq_active {
+            self.touch_irq_stuck_hint_logged = false;
+        }
 
         Ok(InputSnapshot {
             up,
@@ -690,10 +757,20 @@ impl FrontPanel {
     }
 
     fn map_touch_to_ui(x_raw: u16, y_raw: u16) -> Option<(u16, u16)> {
-        if x_raw < front_panel_scene::UI_W && y_raw < front_panel_scene::UI_H {
+        let ui_w = front_panel_scene::UI_W;
+        let ui_h = front_panel_scene::UI_H;
+
+        // CST816D on this board reports in a portrait-like space (x=0..UI_H, y=0..UI_W).
+        // Front panel is rendered as LandscapeSwapped, so map by axis swap + horizontal mirror.
+        if x_raw < ui_h && y_raw < ui_w {
+            return Some((ui_w.saturating_sub(1).saturating_sub(y_raw), x_raw));
+        }
+
+        // Fallback path for legacy coordinate orderings.
+        if x_raw < ui_w && y_raw < ui_h {
             return Some((x_raw, y_raw));
         }
-        if y_raw < front_panel_scene::UI_W && x_raw < front_panel_scene::UI_H {
+        if y_raw < ui_w && x_raw < ui_h {
             return Some((y_raw, x_raw));
         }
         None
@@ -718,6 +795,13 @@ impl FrontPanel {
             return None;
         };
 
+        defmt::info!(
+            "ui: touch edge x={=u16} y={=u16} overlay={}",
+            x,
+            y,
+            overlay_name(self.self_check_overlay)
+        );
+
         match front_panel_scene::self_check_hit_test(x, y, self.self_check_overlay) {
             Some(SelfCheckTouchTarget::ActivateCancel) => {
                 self.self_check_overlay = SelfCheckOverlay::None;
@@ -730,41 +814,45 @@ impl FrontPanel {
                 Some(UiAction::RequestBmsActivation)
             }
             Some(SelfCheckTouchTarget::Bq40Card) => {
+                let activation_needed =
+                    front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot);
                 if self.self_check_overlay == SelfCheckOverlay::None
-                    && front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
+                    && activation_needed
                     && self.bms_activation_state != BmsActivationState::Pending
                 {
                     self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
                     self.needs_redraw = true;
+                    defmt::info!("ui: bms activation dialog open via touch");
+                } else {
+                    defmt::info!(
+                        "ui: bms touch ignored overlay={} activation_needed={=bool} bms_state={}",
+                        overlay_name(self.self_check_overlay),
+                        activation_needed,
+                        bms_activation_state_name(self.bms_activation_state)
+                    );
                 }
                 None
             }
-            None => None,
+            None => {
+                defmt::info!(
+                    "ui: touch target none x={=u16} y={=u16} overlay={}",
+                    x,
+                    y,
+                    overlay_name(self.self_check_overlay)
+                );
+                None
+            }
         }
     }
 
-    fn snapshot_to_model(&self, snapshot: InputSnapshot) -> UiModel {
-        let focus = if snapshot.center {
-            UiFocus::Center
-        } else if snapshot.up {
-            UiFocus::Up
-        } else if snapshot.down {
-            UiFocus::Down
-        } else if snapshot.left {
-            UiFocus::Left
-        } else if snapshot.right {
-            UiFocus::Right
-        } else if snapshot.touch {
-            UiFocus::Touch
-        } else {
-            UiFocus::Idle
-        };
-
+    fn snapshot_to_model(&self, _snapshot: InputSnapshot) -> UiModel {
         UiModel {
             mode: self.self_check_snapshot.mode,
-            focus,
-            touch_irq: snapshot.touch,
-            frame_no: self.frame_no,
+            // In production self-check flow, front-panel input should only affect
+            // activation actions; it must not switch visual demo/focus styles.
+            focus: UiFocus::Idle,
+            touch_irq: false,
+            frame_no: 0,
         }
     }
 
@@ -849,6 +937,27 @@ fn variant_name(variant: UiVariant) -> &'static str {
         UiVariant::InstrumentB => "B",
         UiVariant::RetroC => "C",
         UiVariant::InstrumentD => "D",
+    }
+}
+
+fn overlay_name(overlay: SelfCheckOverlay) -> &'static str {
+    match overlay {
+        SelfCheckOverlay::None => "none",
+        SelfCheckOverlay::BmsActivateConfirm => "confirm",
+        SelfCheckOverlay::BmsActivateProgress => "progress",
+        SelfCheckOverlay::BmsActivateResult { success: true } => "result_ok",
+        SelfCheckOverlay::BmsActivateResult { success: false } => "result_fail",
+    }
+}
+
+fn bms_activation_state_name(state: BmsActivationState) -> &'static str {
+    match state {
+        BmsActivationState::Idle => "idle",
+        BmsActivationState::Pending => "pending",
+        BmsActivationState::Succeeded => "succeeded",
+        BmsActivationState::FailedNoInput => "failed_no_input",
+        BmsActivationState::FailedTimeout => "failed_timeout",
+        BmsActivationState::FailedComm => "failed_comm",
     }
 }
 
