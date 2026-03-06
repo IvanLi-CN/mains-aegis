@@ -37,6 +37,9 @@ const FORCE_MIN_CHARGE: bool = cfg!(feature = "force-min-charge");
 
 const FW_BUILD_PROFILE: &str = env!("FW_BUILD_PROFILE");
 const FW_GIT_SHA: &str = env!("FW_GIT_SHA");
+const FW_SRC_HASH: &str = env!("FW_SRC_HASH");
+const FW_GIT_DIRTY: &str = env!("FW_GIT_DIRTY");
+const FW_BUILD_ID: &str = env!("FW_BUILD_ID");
 
 // External SYNC for TPS55288 DITH/SYNC pins (SYNCA=0°, SYNCB=180°).
 // RFSW on board is 43kΩ (U17/U18 pin 8), so nominal fSW ≈ 20MHz / 43kΩ ≈ 465kHz.
@@ -151,6 +154,18 @@ fn main() -> ! {
         env!("CARGO_PKG_VERSION"),
         FW_GIT_SHA,
         FW_BUILD_PROFILE
+    );
+    esp_println::println!(
+        "fw: build_id={} src_hash={} git_dirty={}",
+        FW_BUILD_ID,
+        FW_SRC_HASH,
+        FW_GIT_DIRTY
+    );
+    defmt::info!(
+        "fw: build_id={} src_hash={} git_dirty={}",
+        FW_BUILD_ID,
+        FW_SRC_HASH,
+        FW_GIT_DIRTY
     );
     defmt::info!(
         "fw: default_vout_mv={=u16} default_ilimit_ma={=u16}",
