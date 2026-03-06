@@ -835,54 +835,125 @@ pub fn render_test_navigation<P: UiPainter>(
         "",
         palette.accent,
     )?;
+    let list_x = 10;
+    let list_y = HEADER_H + 8;
+    let list_w = UI_W - 20;
+    let list_h = UI_H - list_y - 10;
+    draw_panel(
+        painter,
+        list_x,
+        list_y,
+        list_w,
+        list_h,
+        palette,
+        false,
+        palette.accent,
+    )?;
+
+    let row_x = list_x + 6;
+    let row_w = list_w - 12;
+    let row_h = 44;
+    let row_gap = 8;
+    let screen_y = list_y + 8;
+    let audio_y = screen_y + row_h + row_gap;
+    let screen_selected = selected == TestFunctionUi::ScreenStatic;
+    let audio_selected = selected == TestFunctionUi::AudioPlayback;
 
     draw_panel(
         painter,
-        TEST_NAV_CARD_X,
-        TEST_NAV_CARD_Y,
-        TEST_NAV_CARD_W,
-        TEST_NAV_CARD_H,
+        row_x,
+        screen_y,
+        row_w,
+        row_h,
         palette,
-        selected == TestFunctionUi::ScreenStatic,
+        screen_selected,
         palette.right,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::Num,
+        "01",
+        Point::new((row_x + 10) as i32, (screen_y + 12) as i32),
+        HorizontalAlignment::Left,
+        if screen_selected {
+            palette.bg
+        } else {
+            palette.text_dim
+        },
     )?;
     text(
         painter,
         variant,
         FontRole::TextTitle,
         "SCREEN STATIC",
-        Point::new((TEST_NAV_CARD_X + 10) as i32, (TEST_NAV_CARD_Y + 8) as i32),
+        Point::new((row_x + 48) as i32, (screen_y + 12) as i32),
         HorizontalAlignment::Left,
-        if selected == TestFunctionUi::ScreenStatic {
+        if screen_selected {
             palette.bg
         } else {
             palette.text
         },
     )?;
-    let audio_y = TEST_NAV_CARD_Y + TEST_NAV_CARD_H + TEST_NAV_CARD_GAP;
+    if screen_selected {
+        text(
+            painter,
+            variant,
+            FontRole::TextTitle,
+            ">",
+            Point::new((row_x + row_w - 10) as i32, (screen_y + 12) as i32),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?;
+    }
+
     draw_panel(
         painter,
-        TEST_NAV_CARD_X,
+        row_x,
         audio_y,
-        TEST_NAV_CARD_W,
-        TEST_NAV_CARD_H,
+        row_w,
+        row_h,
         palette,
-        selected == TestFunctionUi::AudioPlayback,
+        audio_selected,
         palette.down,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::Num,
+        "02",
+        Point::new((row_x + 10) as i32, (audio_y + 12) as i32),
+        HorizontalAlignment::Left,
+        if audio_selected {
+            palette.bg
+        } else {
+            palette.text_dim
+        },
     )?;
     text(
         painter,
         variant,
         FontRole::TextTitle,
         "AUDIO PLAYBACK",
-        Point::new((TEST_NAV_CARD_X + 10) as i32, (audio_y + 8) as i32),
+        Point::new((row_x + 48) as i32, (audio_y + 12) as i32),
         HorizontalAlignment::Left,
-        if selected == TestFunctionUi::AudioPlayback {
+        if audio_selected {
             palette.bg
         } else {
             palette.text
         },
     )?;
+    if audio_selected {
+        text(
+            painter,
+            variant,
+            FontRole::TextTitle,
+            ">",
+            Point::new((row_x + row_w - 10) as i32, (audio_y + 12) as i32),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?;
+    }
     Ok(())
 }
 
