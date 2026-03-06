@@ -10,6 +10,19 @@ default = []
 force-min-charge = []
 # Development-only diagnostics: probe BQ40Z50 on both 0x0B and 0x16.
 bms-dual-probe-diag = []
+# Test firmware gate (prevents default cargo build/check from forcing test-fw feature selection).
+test-fw = []
+# Test firmware function set.
+test-fw-screen-static = ["test-fw"]
+test-fw-audio-playback = ["test-fw"]
+# Test firmware default entry selection (single-choice).
+test-fw-default-screen-static = ["test-fw"]
+test-fw-default-audio-playback = ["test-fw"]
+
+[[bin]]
+name = "test-fw"
+path = "src/bin/test-fw.rs"
+required-features = ["test-fw"]
 
 [dependencies]
 defmt = "1.0.1"

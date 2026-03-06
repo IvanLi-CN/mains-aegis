@@ -1,0 +1,14 @@
+# Dedicated MCU agent config for the feature-driven test firmware.
+
+[project]
+id = "esp_test_fw"
+
+[mcu.esp-test]
+backend = "espflash"
+chip = "esp32s3"
+artifact_elf = "../target/xtensa-esp32s3-none-elf/release/test-fw"
+selector_cache_file = "../.esp32-port"
+
+[mcu.esp-test.espflash]
+baud = 115200
+log_format = "defmt"

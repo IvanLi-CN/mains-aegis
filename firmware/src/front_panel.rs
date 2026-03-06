@@ -1,8 +1,8 @@
 use core::convert::Infallible;
 
 use crate::front_panel_scene::{
-    self, BmsActivationState, SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot, UiFocus,
-    UiModel, UiPainter, UiVariant,
+    self, AudioTestUiState, BmsActivationState, SelfCheckOverlay, SelfCheckTouchTarget,
+    SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel, UiPainter, UiVariant,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -58,6 +58,19 @@ pub enum UiAction {
     ClearBmsActivationResult,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestInputEvent {
+    Up,
+    Down,
+    Left,
+    Right,
+    Center,
+    Touch { x: u16, y: u16 },
+    TouchDrag { x: u16, y: u16, dy: i16 },
+    TouchRelease { x: u16, y: u16 },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitState {
     Disabled,
@@ -103,6 +116,7 @@ pub struct FrontPanel {
     state: InitState,
     next_frame_deadline: Instant,
     last_inputs: Option<InputSnapshot>,
+    last_test_touch_point: Option<(u16, u16)>,
     needs_redraw: bool,
     ui_variant: UiVariant,
     self_check_snapshot: SelfCheckUiSnapshot,
@@ -133,6 +147,7 @@ impl FrontPanel {
             state: InitState::Disabled,
             next_frame_deadline: Instant::now(),
             last_inputs: None,
+            last_test_touch_point: None,
             needs_redraw: false,
             ui_variant: SELF_CHECK_VARIANT,
             self_check_snapshot: SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby),
@@ -344,6 +359,113 @@ impl FrontPanel {
         }
     }
 
+    #[allow(dead_code)]
+    pub fn render_test_navigation(
+        &mut self,
+        selected: TestFunctionUi,
+        default_test: Option<TestFunctionUi>,
+    ) {
+        if self.state != InitState::Ready {
+            return;
+        }
+        let mut painter = PanelPainter { panel: self };
+        if let Err(e) =
+            front_panel_scene::render_test_navigation(&mut painter, selected, default_test)
+        {
+            defmt::error!("ui: render test navigation failed err={=?}", e);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn render_test_screen_static(&mut self, back_enabled: bool) {
+        if self.state != InitState::Ready {
+            return;
+        }
+        let mut painter = PanelPainter { panel: self };
+        let color_order_label = if PANEL_RGB_ORDER {
+            "COLOR ORDER: RGB565"
+        } else {
+            "COLOR ORDER: BGR565"
+        };
+        if let Err(e) = front_panel_scene::render_test_screen_static(
+            &mut painter,
+            back_enabled,
+            color_order_label,
+        ) {
+            defmt::error!("ui: render screen static test failed err={=?}", e);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn render_test_audio_playback(&mut self, back_enabled: bool, state: AudioTestUiState) {
+        if self.state != InitState::Ready {
+            return;
+        }
+        let mut painter = PanelPainter { panel: self };
+        if let Err(e) =
+            front_panel_scene::render_test_audio_playback(&mut painter, back_enabled, state)
+        {
+            defmt::error!("ui: render audio playback test failed err={=?}", e);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn poll_test_input_event(&mut self) -> Option<TestInputEvent> {
+        if self.state != InitState::Ready {
+            return None;
+        }
+
+        let snapshot = match self.read_inputs() {
+            Ok(v) => v,
+            Err(e) => {
+                defmt::error!("ui: test input read failed err={}", i2c_error_kind(e));
+                return None;
+            }
+        };
+        let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        let mut event = None;
+        let mut next_snapshot = snapshot;
+
+        if snapshot.center && !prev.center {
+            event = Some(TestInputEvent::Center);
+        } else if snapshot.up && !prev.up {
+            event = Some(TestInputEvent::Up);
+        } else if snapshot.down && !prev.down {
+            event = Some(TestInputEvent::Down);
+        } else if snapshot.left && !prev.left {
+            event = Some(TestInputEvent::Left);
+        } else if snapshot.right && !prev.right {
+            event = Some(TestInputEvent::Right);
+        } else if let Some((x, y)) = snapshot.touch_point {
+            let mut emitted = false;
+            if let Some((_, prev_y)) = self.last_test_touch_point {
+                let dy = y as i16 - prev_y as i16;
+                if dy != 0 {
+                    event = Some(TestInputEvent::TouchDrag { x, y, dy });
+                    emitted = true;
+                }
+            }
+            if !emitted && snapshot.touch && !prev.touch {
+                event = Some(TestInputEvent::Touch { x, y });
+            }
+            self.last_test_touch_point = Some((x, y));
+        } else {
+            if !snapshot.touch && prev.touch {
+                if let Some((x, y)) = self.last_test_touch_point.or(prev.touch_point) {
+                    event = Some(TestInputEvent::TouchRelease { x, y });
+                }
+            } else if snapshot.touch && !prev.touch {
+                // Keep touch edge pending until we have a usable coordinate sample.
+                next_snapshot.touch = false;
+                next_snapshot.touch_point = None;
+            }
+            self.last_test_touch_point = None;
+        }
+
+        self.last_inputs = Some(next_snapshot);
+        event
+    }
+
     fn configure_dc(&mut self) {
         self.dc.apply_output_config(
             &OutputConfig::default()
@@ -525,15 +647,16 @@ impl FrontPanel {
         let bits = input[0];
 
         // Front-panel buttons are externally pulled up and shorted to GND when pressed.
-        // Wiring is physically mirrored relative to the logical D-pad.
-        let up = (bits & (1 << 0)) == 0;
+        // On current board wiring, P0/P3 are swapped against silk-screen UP/DOWN labels.
+        let up = (bits & (1 << 3)) == 0;
         let left = (bits & (1 << 1)) == 0;
         let right = (bits & (1 << 2)) == 0;
-        let down = (bits & (1 << 3)) == 0;
+        let down = (bits & (1 << 0)) == 0;
 
         let center = self.btn_center.is_low();
-        let touch = self.ctp_irq.is_low();
-        let touch_point = self.read_touch_point(touch);
+        let touch_irq_active = self.ctp_irq.is_low();
+        let touch_point = self.read_touch_point();
+        let touch = touch_irq_active || touch_point.is_some();
 
         Ok(InputSnapshot {
             up,
@@ -546,11 +669,7 @@ impl FrontPanel {
         })
     }
 
-    fn read_touch_point(&mut self, touch_active: bool) -> Option<(u16, u16)> {
-        if !touch_active {
-            return None;
-        }
-
+    fn read_touch_point(&mut self) -> Option<(u16, u16)> {
         let mut buf = [0u8; CST816D_TOUCH_REG_LEN];
         if self
             .i2c
