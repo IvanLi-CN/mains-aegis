@@ -44,12 +44,21 @@ pub enum TestFunctionUi {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AudioEventUi {
-    Boot,
-    TouchInteraction,
-    KeyInteraction,
-    ModeSwitch,
-    Warning,
-    Error,
+    BootStartup,
+    MainsPresentDc,
+    ChargeStarted,
+    ChargeCompleted,
+    ShutdownModeEntered,
+    MainsAbsentDc,
+    HighStress,
+    BatteryLowNoMains,
+    BatteryLowWithMains,
+    ShutdownProtection,
+    IoOverVoltage,
+    IoOverCurrent,
+    IoOverPower,
+    ModuleFault,
+    BatteryProtection,
 }
 
 #[allow(dead_code)]
@@ -296,10 +305,25 @@ const TEST_AUDIO_STOP_BTN_W: u16 = 98;
 const TEST_AUDIO_STOP_BTN_H: u16 = 20;
 
 #[allow(dead_code)]
-const AUDIO_TEST_ITEM_COUNT: usize = 6;
+const AUDIO_TEST_ITEM_COUNT: usize = 15;
 #[allow(dead_code)]
-const AUDIO_TEST_LABELS: [&str; AUDIO_TEST_ITEM_COUNT] =
-    ["BOOT", "TOUCH", "KEY", "MODE SWITCH", "WARNING", "ERROR"];
+const AUDIO_TEST_LABELS: [&str; AUDIO_TEST_ITEM_COUNT] = [
+    "BOOT STARTUP",
+    "MAINS PRESENT DC",
+    "CHARGE STARTED",
+    "CHARGE COMPLETED",
+    "SHUTDOWN MODE ENTERED",
+    "MAINS ABSENT DC",
+    "HIGH STRESS",
+    "BATTERY LOW NO MAINS",
+    "BATTERY LOW WITH MAINS",
+    "SHUTDOWN PROTECTION",
+    "IO OVER VOLTAGE",
+    "IO OVER CURRENT",
+    "IO OVER POWER",
+    "MODULE FAULT",
+    "BATTERY PROTECTION",
+];
 
 #[allow(dead_code)]
 pub fn is_bq40_offline(snapshot: &SelfCheckUiSnapshot) -> bool {
@@ -1135,23 +1159,41 @@ pub fn render_test_audio_playback<P: UiPainter>(
 
 fn audio_event_ui_label(event: AudioEventUi) -> &'static str {
     match event {
-        AudioEventUi::Boot => "BOOT",
-        AudioEventUi::TouchInteraction => "TOUCH",
-        AudioEventUi::KeyInteraction => "KEY",
-        AudioEventUi::ModeSwitch => "MODE SWITCH",
-        AudioEventUi::Warning => "WARNING",
-        AudioEventUi::Error => "ERROR",
+        AudioEventUi::BootStartup => AUDIO_TEST_LABELS[0],
+        AudioEventUi::MainsPresentDc => AUDIO_TEST_LABELS[1],
+        AudioEventUi::ChargeStarted => AUDIO_TEST_LABELS[2],
+        AudioEventUi::ChargeCompleted => AUDIO_TEST_LABELS[3],
+        AudioEventUi::ShutdownModeEntered => AUDIO_TEST_LABELS[4],
+        AudioEventUi::MainsAbsentDc => AUDIO_TEST_LABELS[5],
+        AudioEventUi::HighStress => AUDIO_TEST_LABELS[6],
+        AudioEventUi::BatteryLowNoMains => AUDIO_TEST_LABELS[7],
+        AudioEventUi::BatteryLowWithMains => AUDIO_TEST_LABELS[8],
+        AudioEventUi::ShutdownProtection => AUDIO_TEST_LABELS[9],
+        AudioEventUi::IoOverVoltage => AUDIO_TEST_LABELS[10],
+        AudioEventUi::IoOverCurrent => AUDIO_TEST_LABELS[11],
+        AudioEventUi::IoOverPower => AUDIO_TEST_LABELS[12],
+        AudioEventUi::ModuleFault => AUDIO_TEST_LABELS[13],
+        AudioEventUi::BatteryProtection => AUDIO_TEST_LABELS[14],
     }
 }
 
 fn audio_event_ui_index(event: AudioEventUi) -> Option<usize> {
     match event {
-        AudioEventUi::Boot => Some(0),
-        AudioEventUi::TouchInteraction => Some(1),
-        AudioEventUi::KeyInteraction => Some(2),
-        AudioEventUi::ModeSwitch => Some(3),
-        AudioEventUi::Warning => Some(4),
-        AudioEventUi::Error => Some(5),
+        AudioEventUi::BootStartup => Some(0),
+        AudioEventUi::MainsPresentDc => Some(1),
+        AudioEventUi::ChargeStarted => Some(2),
+        AudioEventUi::ChargeCompleted => Some(3),
+        AudioEventUi::ShutdownModeEntered => Some(4),
+        AudioEventUi::MainsAbsentDc => Some(5),
+        AudioEventUi::HighStress => Some(6),
+        AudioEventUi::BatteryLowNoMains => Some(7),
+        AudioEventUi::BatteryLowWithMains => Some(8),
+        AudioEventUi::ShutdownProtection => Some(9),
+        AudioEventUi::IoOverVoltage => Some(10),
+        AudioEventUi::IoOverCurrent => Some(11),
+        AudioEventUi::IoOverPower => Some(12),
+        AudioEventUi::ModuleFault => Some(13),
+        AudioEventUi::BatteryProtection => Some(14),
     }
 }
 

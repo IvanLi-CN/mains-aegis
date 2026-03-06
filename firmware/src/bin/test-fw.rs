@@ -52,7 +52,7 @@ use esp_hal::{main, Blocking};
 use esp_println as _;
 
 #[cfg(feature = "test-fw-audio-playback")]
-use test_audio::AudioEvent;
+use test_audio::AudioCue;
 use test_harness::{HarnessInputEvent, TestHarnessState, TestRoute};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -139,7 +139,7 @@ fn main() -> ! {
 
     #[cfg(feature = "test-fw-audio-playback")]
     {
-        audio_manager.request_event(AudioEvent::Boot);
+        audio_manager.request_cue(AudioCue::BootStartup);
     }
 
     #[cfg(feature = "test-fw-audio-playback")]
@@ -233,8 +233,8 @@ fn main() -> ! {
                     }
                 }
                 #[cfg(feature = "test-fw-audio-playback")]
-                if let Some(audio_event) = result.audio_event {
-                    audio_manager.request_event(audio_event);
+                if let Some(audio_cue) = result.audio_cue {
+                    audio_manager.request_cue(audio_cue);
                 }
                 if result.needs_redraw {
                     needs_redraw = true;
@@ -340,17 +340,34 @@ fn map_audio_ui_state(
     front_panel_scene::AudioTestUiState {
         playing: status.playing,
         queued: status.queued,
-        current: status.current.map(|event| match event {
-            test_audio::AudioEvent::Boot => front_panel_scene::AudioEventUi::Boot,
-            test_audio::AudioEvent::TouchInteraction => {
-                front_panel_scene::AudioEventUi::TouchInteraction
+        current: status.current.map(|cue| match cue {
+            test_audio::AudioCue::BootStartup => front_panel_scene::AudioEventUi::BootStartup,
+            test_audio::AudioCue::MainsPresentDc => front_panel_scene::AudioEventUi::MainsPresentDc,
+            test_audio::AudioCue::ChargeStarted => front_panel_scene::AudioEventUi::ChargeStarted,
+            test_audio::AudioCue::ChargeCompleted => {
+                front_panel_scene::AudioEventUi::ChargeCompleted
             }
-            test_audio::AudioEvent::KeyInteraction => {
-                front_panel_scene::AudioEventUi::KeyInteraction
+            test_audio::AudioCue::ShutdownModeEntered => {
+                front_panel_scene::AudioEventUi::ShutdownModeEntered
             }
-            test_audio::AudioEvent::Warning => front_panel_scene::AudioEventUi::Warning,
-            test_audio::AudioEvent::Error => front_panel_scene::AudioEventUi::Error,
-            test_audio::AudioEvent::ModeSwitch => front_panel_scene::AudioEventUi::ModeSwitch,
+            test_audio::AudioCue::MainsAbsentDc => front_panel_scene::AudioEventUi::MainsAbsentDc,
+            test_audio::AudioCue::HighStress => front_panel_scene::AudioEventUi::HighStress,
+            test_audio::AudioCue::BatteryLowNoMains => {
+                front_panel_scene::AudioEventUi::BatteryLowNoMains
+            }
+            test_audio::AudioCue::BatteryLowWithMains => {
+                front_panel_scene::AudioEventUi::BatteryLowWithMains
+            }
+            test_audio::AudioCue::ShutdownProtection => {
+                front_panel_scene::AudioEventUi::ShutdownProtection
+            }
+            test_audio::AudioCue::IoOverVoltage => front_panel_scene::AudioEventUi::IoOverVoltage,
+            test_audio::AudioCue::IoOverCurrent => front_panel_scene::AudioEventUi::IoOverCurrent,
+            test_audio::AudioCue::IoOverPower => front_panel_scene::AudioEventUi::IoOverPower,
+            test_audio::AudioCue::ModuleFault => front_panel_scene::AudioEventUi::ModuleFault,
+            test_audio::AudioCue::BatteryProtection => {
+                front_panel_scene::AudioEventUi::BatteryProtection
+            }
         }),
         selected_idx: harness.audio_selected_index() as u8,
         list_top: harness.audio_list_top() as u8,
@@ -366,14 +383,23 @@ fn route_name(route: TestRoute) -> &'static str {
 }
 
 #[cfg(feature = "test-fw-audio-playback")]
-fn audio_event_name(event: Option<test_audio::AudioEvent>) -> &'static str {
+fn audio_event_name(event: Option<test_audio::AudioCue>) -> &'static str {
     match event {
-        Some(test_audio::AudioEvent::Boot) => "boot",
-        Some(test_audio::AudioEvent::TouchInteraction) => "touch",
-        Some(test_audio::AudioEvent::KeyInteraction) => "key",
-        Some(test_audio::AudioEvent::Warning) => "warning",
-        Some(test_audio::AudioEvent::Error) => "error",
-        Some(test_audio::AudioEvent::ModeSwitch) => "mode-switch",
+        Some(test_audio::AudioCue::BootStartup) => "boot_startup",
+        Some(test_audio::AudioCue::MainsPresentDc) => "mains_present_dc",
+        Some(test_audio::AudioCue::ChargeStarted) => "charge_started",
+        Some(test_audio::AudioCue::ChargeCompleted) => "charge_completed",
+        Some(test_audio::AudioCue::ShutdownModeEntered) => "shutdown_mode_entered",
+        Some(test_audio::AudioCue::MainsAbsentDc) => "mains_absent_dc",
+        Some(test_audio::AudioCue::HighStress) => "high_stress",
+        Some(test_audio::AudioCue::BatteryLowNoMains) => "battery_low_no_mains",
+        Some(test_audio::AudioCue::BatteryLowWithMains) => "battery_low_with_mains",
+        Some(test_audio::AudioCue::ShutdownProtection) => "shutdown_protection",
+        Some(test_audio::AudioCue::IoOverVoltage) => "io_over_voltage",
+        Some(test_audio::AudioCue::IoOverCurrent) => "io_over_current",
+        Some(test_audio::AudioCue::IoOverPower) => "io_over_power",
+        Some(test_audio::AudioCue::ModuleFault) => "module_fault",
+        Some(test_audio::AudioCue::BatteryProtection) => "battery_protection",
         None => "none",
     }
 }

@@ -1,32 +1,102 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AudioEvent {
-    Boot,
-    TouchInteraction,
-    KeyInteraction,
-    Warning,
-    Error,
-    ModeSwitch,
+pub enum AudioCue {
+    BootStartup,
+    MainsPresentDc,
+    ChargeStarted,
+    ChargeCompleted,
+    ShutdownModeEntered,
+    MainsAbsentDc,
+    HighStress,
+    BatteryLowNoMains,
+    BatteryLowWithMains,
+    ShutdownProtection,
+    IoOverVoltage,
+    IoOverCurrent,
+    IoOverPower,
+    ModuleFault,
+    BatteryProtection,
+}
+
+pub const AUDIO_CUE_COUNT: usize = 15;
+pub const AUDIO_CUE_LABELS: [&str; AUDIO_CUE_COUNT] = [
+    "BOOT STARTUP",
+    "MAINS PRESENT DC",
+    "CHARGE STARTED",
+    "CHARGE COMPLETED",
+    "SHUTDOWN MODE ENTERED",
+    "MAINS ABSENT DC",
+    "HIGH STRESS",
+    "BATTERY LOW NO MAINS",
+    "BATTERY LOW WITH MAINS",
+    "SHUTDOWN PROTECTION",
+    "IO OVER VOLTAGE",
+    "IO OVER CURRENT",
+    "IO OVER POWER",
+    "MODULE FAULT",
+    "BATTERY PROTECTION",
+];
+
+impl AudioCue {
+    pub fn from_index(idx: usize) -> Option<Self> {
+        Some(match idx {
+            0 => Self::BootStartup,
+            1 => Self::MainsPresentDc,
+            2 => Self::ChargeStarted,
+            3 => Self::ChargeCompleted,
+            4 => Self::ShutdownModeEntered,
+            5 => Self::MainsAbsentDc,
+            6 => Self::HighStress,
+            7 => Self::BatteryLowNoMains,
+            8 => Self::BatteryLowWithMains,
+            9 => Self::ShutdownProtection,
+            10 => Self::IoOverVoltage,
+            11 => Self::IoOverCurrent,
+            12 => Self::IoOverPower,
+            13 => Self::ModuleFault,
+            14 => Self::BatteryProtection,
+            _ => return None,
+        })
+    }
+
+    pub const fn index(self) -> usize {
+        match self {
+            Self::BootStartup => 0,
+            Self::MainsPresentDc => 1,
+            Self::ChargeStarted => 2,
+            Self::ChargeCompleted => 3,
+            Self::ShutdownModeEntered => 4,
+            Self::MainsAbsentDc => 5,
+            Self::HighStress => 6,
+            Self::BatteryLowNoMains => 7,
+            Self::BatteryLowWithMains => 8,
+            Self::ShutdownProtection => 9,
+            Self::IoOverVoltage => 10,
+            Self::IoOverCurrent => 11,
+            Self::IoOverPower => 12,
+            Self::ModuleFault => 13,
+            Self::BatteryProtection => 14,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AudioPriority {
     Boot = 0,
-    Interaction = 1,
-    ModeSwitch = 2,
-    Warning = 3,
-    Error = 4,
+    Status = 1,
+    Warning = 2,
+    Error = 3,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AudioRequest {
-    pub event: AudioEvent,
+    pub cue: AudioCue,
     pub priority: AudioPriority,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AudioStatus {
     pub playing: bool,
-    pub current: Option<AudioEvent>,
+    pub current: Option<AudioCue>,
     pub queued: u8,
     pub dropped: u32,
     pub preempted: u32,
@@ -43,17 +113,33 @@ pub const PLAYBACK_SAMPLE_RATE_HZ: u32 = 8_000;
 const SOURCE_SAMPLE_RATE_HZ: u32 = 44_100;
 const RESAMPLE_STEP_Q16: u32 =
     ((SOURCE_SAMPLE_RATE_HZ as u64 * 65_536u64) / PLAYBACK_SAMPLE_RATE_HZ as u64) as u32;
-const QUEUE_CAPACITY: usize = 8;
+const QUEUE_CAPACITY: usize = 16;
 
-const WAV_BOOT: &[u8] = include_bytes!("../assets/audio/test-fw-cues/boot_startup.wav");
-const WAV_TOUCH_INTERACTION: &[u8] =
+const WAV_BOOT_STARTUP: &[u8] = include_bytes!("../assets/audio/test-fw-cues/boot_startup.wav");
+const WAV_MAINS_PRESENT_DC: &[u8] =
     include_bytes!("../assets/audio/test-fw-cues/mains_present_dc.wav");
-const WAV_KEY_INTERACTION: &[u8] =
+const WAV_CHARGE_STARTED: &[u8] = include_bytes!("../assets/audio/test-fw-cues/charge_started.wav");
+const WAV_CHARGE_COMPLETED: &[u8] =
     include_bytes!("../assets/audio/test-fw-cues/charge_completed.wav");
-const WAV_MODE_SWITCH: &[u8] =
+const WAV_SHUTDOWN_MODE_ENTERED: &[u8] =
     include_bytes!("../assets/audio/test-fw-cues/shutdown_mode_entered.wav");
-const WAV_WARNING: &[u8] = include_bytes!("../assets/audio/test-fw-cues/battery_low_no_mains.wav");
-const WAV_ERROR: &[u8] = include_bytes!("../assets/audio/test-fw-cues/module_fault.wav");
+const WAV_MAINS_ABSENT_DC: &[u8] =
+    include_bytes!("../assets/audio/test-fw-cues/mains_absent_dc.wav");
+const WAV_HIGH_STRESS: &[u8] = include_bytes!("../assets/audio/test-fw-cues/high_stress.wav");
+const WAV_BATTERY_LOW_NO_MAINS: &[u8] =
+    include_bytes!("../assets/audio/test-fw-cues/battery_low_no_mains.wav");
+const WAV_BATTERY_LOW_WITH_MAINS: &[u8] =
+    include_bytes!("../assets/audio/test-fw-cues/battery_low_with_mains.wav");
+const WAV_SHUTDOWN_PROTECTION: &[u8] =
+    include_bytes!("../assets/audio/test-fw-cues/shutdown_protection.wav");
+const WAV_IO_OVER_VOLTAGE: &[u8] =
+    include_bytes!("../assets/audio/test-fw-cues/io_over_voltage.wav");
+const WAV_IO_OVER_CURRENT: &[u8] =
+    include_bytes!("../assets/audio/test-fw-cues/io_over_current.wav");
+const WAV_IO_OVER_POWER: &[u8] = include_bytes!("../assets/audio/test-fw-cues/io_over_power.wav");
+const WAV_MODULE_FAULT: &[u8] = include_bytes!("../assets/audio/test-fw-cues/module_fault.wav");
+const WAV_BATTERY_PROTECTION: &[u8] =
+    include_bytes!("../assets/audio/test-fw-cues/battery_protection.wav");
 
 pub struct AudioManager {
     current: Option<ActivePlayback>,
@@ -91,10 +177,10 @@ impl AudioManager {
         self.current = Some(Self::start_playback(request));
     }
 
-    pub fn request_event(&mut self, event: AudioEvent) {
+    pub fn request_cue(&mut self, cue: AudioCue) {
         self.request(AudioRequest {
-            priority: priority_for(event),
-            event,
+            priority: priority_for_cue(cue),
+            cue,
         });
     }
 
@@ -114,7 +200,7 @@ impl AudioManager {
     pub fn status(&self) -> AudioStatus {
         AudioStatus {
             playing: self.current.is_some(),
-            current: self.current.map(|v| v.request.event),
+            current: self.current.map(|v| v.request.cue),
             queued: self.queue_len as u8,
             dropped: self.dropped,
             preempted: self.preempted,
@@ -166,7 +252,7 @@ impl AudioManager {
     fn start_playback(request: AudioRequest) -> ActivePlayback {
         ActivePlayback {
             request,
-            pcm: pcm_for_event(request.event),
+            pcm: pcm_for_cue(request.cue),
             source_pos_q16: 0,
         }
     }
@@ -218,26 +304,43 @@ impl AudioManager {
     }
 }
 
-fn priority_for(event: AudioEvent) -> AudioPriority {
-    match event {
-        AudioEvent::Boot => AudioPriority::Boot,
-        AudioEvent::TouchInteraction | AudioEvent::KeyInteraction => AudioPriority::Interaction,
-        AudioEvent::ModeSwitch => AudioPriority::ModeSwitch,
-        AudioEvent::Warning => AudioPriority::Warning,
-        AudioEvent::Error => AudioPriority::Error,
+fn priority_for_cue(cue: AudioCue) -> AudioPriority {
+    match cue {
+        AudioCue::BootStartup => AudioPriority::Boot,
+        AudioCue::MainsPresentDc
+        | AudioCue::ChargeStarted
+        | AudioCue::ChargeCompleted
+        | AudioCue::ShutdownModeEntered => AudioPriority::Status,
+        AudioCue::MainsAbsentDc
+        | AudioCue::HighStress
+        | AudioCue::BatteryLowNoMains
+        | AudioCue::BatteryLowWithMains => AudioPriority::Warning,
+        AudioCue::ShutdownProtection
+        | AudioCue::IoOverVoltage
+        | AudioCue::IoOverCurrent
+        | AudioCue::IoOverPower
+        | AudioCue::ModuleFault
+        | AudioCue::BatteryProtection => AudioPriority::Error,
     }
 }
 
-fn pcm_for_event(event: AudioEvent) -> &'static [u8] {
-    // test-fw maps high-level events onto the latest approved cue bundle from
-    // docs/audio-cues-preview/audio.
-    let wav = match event {
-        AudioEvent::Boot => WAV_BOOT,
-        AudioEvent::TouchInteraction => WAV_TOUCH_INTERACTION,
-        AudioEvent::KeyInteraction => WAV_KEY_INTERACTION,
-        AudioEvent::Warning => WAV_WARNING,
-        AudioEvent::Error => WAV_ERROR,
-        AudioEvent::ModeSwitch => WAV_MODE_SWITCH,
+fn pcm_for_cue(cue: AudioCue) -> &'static [u8] {
+    let wav = match cue {
+        AudioCue::BootStartup => WAV_BOOT_STARTUP,
+        AudioCue::MainsPresentDc => WAV_MAINS_PRESENT_DC,
+        AudioCue::ChargeStarted => WAV_CHARGE_STARTED,
+        AudioCue::ChargeCompleted => WAV_CHARGE_COMPLETED,
+        AudioCue::ShutdownModeEntered => WAV_SHUTDOWN_MODE_ENTERED,
+        AudioCue::MainsAbsentDc => WAV_MAINS_ABSENT_DC,
+        AudioCue::HighStress => WAV_HIGH_STRESS,
+        AudioCue::BatteryLowNoMains => WAV_BATTERY_LOW_NO_MAINS,
+        AudioCue::BatteryLowWithMains => WAV_BATTERY_LOW_WITH_MAINS,
+        AudioCue::ShutdownProtection => WAV_SHUTDOWN_PROTECTION,
+        AudioCue::IoOverVoltage => WAV_IO_OVER_VOLTAGE,
+        AudioCue::IoOverCurrent => WAV_IO_OVER_CURRENT,
+        AudioCue::IoOverPower => WAV_IO_OVER_POWER,
+        AudioCue::ModuleFault => WAV_MODULE_FAULT,
+        AudioCue::BatteryProtection => WAV_BATTERY_PROTECTION,
     };
     parse_wav_pcm16le_mono(wav)
 }
