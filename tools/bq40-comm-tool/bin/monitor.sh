@@ -219,6 +219,14 @@ while time.time() < deadline:
         time.sleep(0.2)
         continue
 
+    if first_attach:
+        restarts += 1
+        if restarts > 8:
+            break
+        first_attach = False
+        time.sleep(0.5)
+        continue
+
     if combined_path.exists() and combined_path.stat().st_size > 0:
         restarts += 1
         if restarts > 8:

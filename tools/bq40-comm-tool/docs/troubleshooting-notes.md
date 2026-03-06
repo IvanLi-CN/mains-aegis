@@ -124,14 +124,22 @@
   - 把 staged wake probe 前移到 boot 后 `0/800/1600 ms` 仍然没有抓到有效样本；`rom_events.detected=false`。
 - `reports/20260306_235009/summary.json`
   - 在同样的早期窗口上改走 `recover --recover if-rom`，依旧 `detected=false`、`flash_attempted=false`、`flash_done=false`。
+- `reports/20260307_001256/summary.json`
+  - 第一次加入“盲打 ROM 入口”诊断时，`monitor` 首轮 `--reset` 自身失败；因此没有采到有效 monitor 证据，但 flash 已成功。
+- `reports/20260307_002008/summary.json`
+  - 在修复 `monitor` 自动回退后重新执行 `recover --recover if-rom`，仍然 `detected=false`、`flash_attempted=false`、`flash_done=false`。
 - `/.mcu-agentd/monitor/esp/20260306_234613_combined.mon.ndjson`
   - `0x0B` 在 boot 后 `10 ms` 就已经呈现稳定模式：标准 SBS/MAC 命令写全部 `i2c_nack_data`，裸读 `raw_read1/raw_read2` 却返回 `0xFF`。
   - `0x16` 则在同一早期窗口内，标准 word、MAC、裸读全部 `i2c_nack_addr`。
-- `/.mcu-agentd/monitor/esp/20260306_234909_combined.mon.ndjson`
-  - 进入 `if-rom` 安全恢复路径后，`probe_rom_exit` 在 `0x0B/0x16` 上仍然只是 `i2c_nack`，没有出现 `rom_mode_detected` 或 `probe_rom_flash_begin`。
+- `/.mcu-agentd/monitor/esp/20260307_001908_combined.mon.ndjson`
+  - 即使在 `probe_rom_exit` 读签名失败后，继续主动发送 `0x0F00` / `0x0033`（含 PEC 变体）试探 ROM 入口：
+    - `0x0B` 上四种 ROM 入口写法全部 `write_err=i2c_nack_data`；
+    - `0x16` 上四种 ROM 入口写法全部 `write_err=i2c_nack_addr`；
+    - 之后总线指纹没有变化，也没有出现 `rom_mode_detected_after_enter`。
 - 这组证据说明：
   - `0x0B` 的异常并不是“30 秒后才错过了唤醒窗口”；即使在 boot 后首个 `0~1600 ms` staged probe 窗口内，它也仍然只是命令字节拒绝 + 裸读 `0xFF`；
   - `0x16` 在早期窗口与后续重探里都完全没有地址级应答；
+  - 就连主动 `0x0F00/0x0033` 试探也无法把设备拉进可见 ROM，这更符合“半烧录后落入非标准阻断态/伪应答态”，而不是单纯未触发 ROM；
   - 当前既不像正常固件态，也不像 TI ROM `0x9002` 特征态。
 
 - 若 `dual-diag + force-min-charge + probe-mode mac-only` 仍然满足以下组合：

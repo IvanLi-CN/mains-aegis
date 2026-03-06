@@ -1580,6 +1580,95 @@ where
     Ok(())
 }
 
+fn maybe_enter_bms_rom_mode_diag<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    quiet: bool,
+) -> Result<bool, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let addr_w = addr << 1;
+
+    let mut try_enter = |stage: &'static str,
+                         frame: &[u8],
+                         settle: Duration|
+     -> Result<bool, bq40z50::BmsDiagError> {
+        if let Err(e) = i2c.write(addr, frame) {
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage={} write_err={}",
+                    addr,
+                    stage,
+                    i2c_error_kind(e)
+                );
+            }
+            return Ok(false);
+        }
+
+        spin_delay(settle);
+        match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE) {
+            Ok(after) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} rsoc_after=0x{=u16:x}",
+                        addr,
+                        stage,
+                        after
+                    );
+                }
+                Ok(after == BMS_ROM_MODE_SIGNATURE)
+            }
+            Err(e) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} read_err={}",
+                        addr,
+                        stage,
+                        e
+                    );
+                }
+                Ok(false)
+            }
+        }
+    };
+
+    if try_enter(
+        "rom_mode_enter_0f00",
+        &[0x00, 0x0F, 0x00],
+        BMS_MAC_TOGGLE_SETTLE,
+    )? {
+        return Ok(true);
+    }
+    if try_enter(
+        "rom_mode_enter_0033",
+        &[0x00, 0x00, 0x33],
+        BMS_MAC_TOGGLE_SETTLE,
+    )? {
+        return Ok(true);
+    }
+
+    let pec_0f00 = crc8_smbus(&[addr_w, 0x00, 0x0F, 0x00]);
+    if try_enter(
+        "rom_mode_enter_0f00_pec",
+        &[0x00, 0x0F, 0x00, pec_0f00],
+        BMS_MAC_TOGGLE_SETTLE,
+    )? {
+        return Ok(true);
+    }
+
+    let pec_0033 = crc8_smbus(&[addr_w, 0x00, 0x00, 0x33]);
+    if try_enter(
+        "rom_mode_enter_0033_pec",
+        &[0x00, 0x00, 0x33, pec_0033],
+        BMS_MAC_TOGGLE_SETTLE,
+    )? {
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
 fn maybe_exit_bms_rom_mode<I2C>(
     i2c: &mut I2C,
     addr: u8,
@@ -2606,43 +2695,70 @@ where
                     } else {
                         self.bms_last_rom_recover_primary_at = Some(now);
                     }
+                    let mut rom_mode_ready = false;
                     match maybe_exit_bms_rom_mode(&mut self.i2c, addr, quiet) {
                         Ok(true) => {
-                            // `--recover force` must be able to run recovery even when ROM
-                            // signature is not observed.
-                            if force_rom_recover
-                                && matches!(
-                                    self.cfg.bms_address_mode,
-                                    bq40z50::BmsAddressMode::DualProbeDiag
-                                )
-                                && !self.bms_rom_flash_attempted
-                            {
-                                self.bms_rom_flash_attempted = true;
-                                if !quiet {
-                                    defmt::warn!(
-                                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_begin",
-                                        addr
-                                    );
-                                }
-
-                                match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, quiet)
-                                {
-                                    Ok(()) => {
+                            if matches!(
+                                self.cfg.bms_address_mode,
+                                bq40z50::BmsAddressMode::DualProbeDiag
+                            ) {
+                                match maybe_enter_bms_rom_mode_diag(&mut self.i2c, addr, quiet) {
+                                    Ok(true) => {
+                                        rom_mode_ready = true;
                                         if !quiet {
                                             defmt::warn!(
-                                                "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done",
+                                                "bms_diag: addr=0x{=u8:x} stage=rom_mode_detected_after_enter",
                                                 addr
                                             );
+                                        }
+                                    }
+                                    Ok(false) => {
+                                        // `--recover force` must be able to run recovery even when ROM
+                                        // signature is not observed.
+                                        if force_rom_recover && !self.bms_rom_flash_attempted {
+                                            self.bms_rom_flash_attempted = true;
+                                            if !quiet {
+                                                defmt::warn!(
+                                                    "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_begin",
+                                                    addr
+                                                );
+                                            }
+
+                                            match run_bms_rom_flash_recover_sequence(
+                                                &mut self.i2c,
+                                                addr,
+                                                quiet,
+                                            ) {
+                                                Ok(()) => {
+                                                    if !quiet {
+                                                        defmt::warn!(
+                                                            "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done",
+                                                            addr
+                                                        );
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    if !quiet {
+                                                        log_bms_diag(
+                                                            addr,
+                                                            "probe_rom_flash",
+                                                            e,
+                                                            "word",
+                                                            "srec",
+                                                        );
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                     Err(e) => {
                                         if !quiet {
                                             log_bms_diag(
                                                 addr,
-                                                "probe_rom_flash",
+                                                "probe_rom_enter",
                                                 e,
                                                 "word",
-                                                "srec",
+                                                "rom-mode",
                                             );
                                         }
                                     }
@@ -2650,52 +2766,7 @@ where
                             }
                         }
                         Ok(false) => {
-                            // ROM signature is still present after lightweight exit attempts.
-                            // In diagnostic dual-probe mode we allow one full ROM flash recovery try.
-                            if matches!(
-                                self.cfg.bms_address_mode,
-                                bq40z50::BmsAddressMode::DualProbeDiag
-                            ) && !self.bms_rom_flash_attempted
-                            {
-                                self.bms_rom_flash_attempted = true;
-                                if !quiet {
-                                    defmt::warn!(
-                                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_begin",
-                                        addr
-                                    );
-                                }
-
-                                match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, quiet)
-                                {
-                                    Ok(()) => {
-                                        if !quiet {
-                                            defmt::warn!(
-                                                "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done",
-                                                addr
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        if !quiet {
-                                            log_bms_diag(
-                                                addr,
-                                                "probe_rom_flash",
-                                                e,
-                                                "word",
-                                                "srec",
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-
-                            if !quiet {
-                                defmt::warn!(
-                                    "bms: bq40z50 probe_wait addr=0x{=u8:x} reason=rom_mode",
-                                    addr
-                                );
-                            }
-                            continue;
+                            rom_mode_ready = true;
                         }
                         Err(e) => {
                             if !quiet {
@@ -2704,7 +2775,78 @@ where
                                     self.maybe_log_bms_word_diag(addr, "probe_rom_exit", e);
                                 }
                             }
+                            if matches!(
+                                self.cfg.bms_address_mode,
+                                bq40z50::BmsAddressMode::DualProbeDiag
+                            ) {
+                                match maybe_enter_bms_rom_mode_diag(&mut self.i2c, addr, quiet) {
+                                    Ok(true) => {
+                                        rom_mode_ready = true;
+                                        if !quiet {
+                                            defmt::warn!(
+                                                "bms_diag: addr=0x{=u8:x} stage=rom_mode_detected_after_enter",
+                                                addr
+                                            );
+                                        }
+                                    }
+                                    Ok(false) => {}
+                                    Err(enter_err) => {
+                                        if !quiet {
+                                            log_bms_diag(
+                                                addr,
+                                                "probe_rom_enter",
+                                                enter_err,
+                                                "word",
+                                                "rom-mode",
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
+                    }
+
+                    if rom_mode_ready {
+                        // ROM signature is present after lightweight exit attempts or after a
+                        // diagnostic enter-ROM pulse. In dual-probe mode we allow one safe
+                        // `if-rom` flash recovery try.
+                        if matches!(
+                            self.cfg.bms_address_mode,
+                            bq40z50::BmsAddressMode::DualProbeDiag
+                        ) && !self.bms_rom_flash_attempted
+                        {
+                            self.bms_rom_flash_attempted = true;
+                            if !quiet {
+                                defmt::warn!(
+                                    "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_begin",
+                                    addr
+                                );
+                            }
+
+                            match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, quiet) {
+                                Ok(()) => {
+                                    if !quiet {
+                                        defmt::warn!(
+                                            "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done",
+                                            addr
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    if !quiet {
+                                        log_bms_diag(addr, "probe_rom_flash", e, "word", "srec");
+                                    }
+                                }
+                            }
+                        }
+
+                        if !quiet {
+                            defmt::warn!(
+                                "bms: bq40z50 probe_wait addr=0x{=u8:x} reason=rom_mode",
+                                addr
+                            );
+                        }
+                        continue;
                     }
                 }
             }

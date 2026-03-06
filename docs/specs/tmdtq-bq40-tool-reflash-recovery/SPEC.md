@@ -175,7 +175,7 @@
 
 - 风险：若台架外部输入不稳定，可能把“参数已恢复”误判成“逻辑未生效”。
 - 风险：历史日志若混有 `probe_rom_flash_done`，需要谨慎区分旧报告与新语义。
-- 开放问题：当前实板即使把 staged wake probe 前移到 boot 后 `0/800/1600 ms`，并在同一窗口内执行 `recover --recover if-rom`，`0x0B` 仍然是命令写 `i2c_nack_data` + 裸读 `0xFF`，`0x16` 仍然是命令写/裸读全 `i2c_nack_addr`，且无 `rom_mode_detected`。这说明故障并非单纯“错过 CHECK_WAKE 窗口”，更像 canonical 地址上的伪应答/总线回读，需要继续确认是 BQ40 固件异常、板级占用还是线路伪响应。
+- 开放问题：当前实板即使把 staged wake probe 前移到 boot 后 `0/800/1600 ms`，并在同一窗口内执行 `recover --recover if-rom`，`0x0B` 仍然是命令写 `i2c_nack_data` + 裸读 `0xFF`，`0x16` 仍然是命令写/裸读全 `i2c_nack_addr`，且无 `rom_mode_detected`。进一步地，在 `probe_rom_exit` 本身读签名失败后，继续主动发送 `0x0F00` / `0x0033`（含 PEC 变体）也无法把设备拉进可见 ROM。按 TI 文档/E2E，这更像半烧录后落入了既非正常 FW、也非可见 ROM 的阻断态。
 - 开放问题：是否已有可重复触发的 ROM signature 样本用于验证 `flash_done=true` 正例；若没有，需要至少保底验证“不误报 true”。
 - 假设：`tools/bq40-comm-tool/docs/troubleshooting-notes.md` 中记录的 `16.8V / 200mA / 500mA` 仍是当前 bench 的目标参数。
 
@@ -184,6 +184,7 @@
 - 2026-03-06: 初始化规格，冻结工具路径边界、bench 前提、`if-rom` 验收口径与里程碑。
 - 2026-03-06: 已完成工具侧 `--force-min-charge` / `flash_done` 语义修复，并新增 `--probe-mode mac-only`、missing reprobe、以及按地址细化的 `bms_diag_word` 诊断；最新实板证据表明 `0x0B` 只剩裸读 `0xFF` 伪应答、`0x16` 完全 NACK，仍属阻断态。
 - 2026-03-06: 新增 boot 后 `0/800/1600 ms` staged wake probe，并在 `if-rom` 路径上复测；结果表明即使在早期唤醒窗口内，`0x0B` 依旧命令字节 NACK、`0x16` 依旧地址 NACK，ROM 恢复仍未触发。
+- 2026-03-07: 在 `probe_rom_exit` 失败时追加 `0x0F00` / `0x0033`（含 PEC）盲打 ROM 入口诊断，并为 `monitor` 增加首轮 reset 失败自动回退；结果显示 ROM 入口写法在 `0x0B` 上全部 data-NACK、在 `0x16` 上全部 address-NACK，仍无法进入可见 ROM。
 
 ## 参考（References）
 
