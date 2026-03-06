@@ -67,6 +67,7 @@ pub enum TestInputEvent {
     Right,
     Center,
     Touch { x: u16, y: u16 },
+    TouchDrag { x: u16, y: u16, dy: i16 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -439,6 +440,13 @@ impl FrontPanel {
                 // Keep touch edge pending until we have a usable coordinate sample.
                 next_snapshot.touch = false;
                 next_snapshot.touch_point = None;
+            }
+        } else if snapshot.touch && prev.touch {
+            if let (Some((x, y)), Some((_, prev_y))) = (snapshot.touch_point, prev.touch_point) {
+                let dy = y as i16 - prev_y as i16;
+                if dy.abs() >= 3 {
+                    event = Some(TestInputEvent::TouchDrag { x, y, dy });
+                }
             }
         }
 

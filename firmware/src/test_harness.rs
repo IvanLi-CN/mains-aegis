@@ -1,6 +1,6 @@
 use crate::front_panel_scene::{
-    test_audio_play_hit_test, test_audio_stop_hit_test, test_back_hit_test,
-    test_navigation_hit_test, TestFunctionUi,
+    test_audio_list_hit_test, test_audio_list_scroll_hit_test, test_audio_stop_hit_test,
+    test_back_hit_test, test_navigation_hit_test, TestFunctionUi, TEST_AUDIO_VISIBLE_ROWS,
 };
 use crate::test_audio::AudioEvent;
 
@@ -25,6 +25,7 @@ pub enum HarnessInputEvent {
     Right,
     Center,
     Touch { x: u16, y: u16 },
+    TouchDrag { x: u16, y: u16, dy: i16 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,7 +55,11 @@ pub struct TestHarnessState {
     cfg: TestHarnessConfig,
     route: TestRoute,
     selected_idx: usize,
+    audio_selected_idx: usize,
+    audio_list_top: usize,
 }
+
+const AUDIO_LIST_LEN: usize = 6;
 
 #[cfg(all(feature = "test-fw-screen-static", feature = "test-fw-audio-playback"))]
 const ENABLED_TESTS: [TestFunction; 2] = [TestFunction::ScreenStatic, TestFunction::AudioPlayback];
@@ -101,6 +106,8 @@ impl TestHarnessState {
             cfg,
             route,
             selected_idx,
+            audio_selected_idx: 0,
+            audio_list_top: 0,
         }
     }
 
@@ -125,6 +132,14 @@ impl TestHarnessState {
             TestFunction::ScreenStatic => TestFunctionUi::ScreenStatic,
             TestFunction::AudioPlayback => TestFunctionUi::AudioPlayback,
         })
+    }
+
+    pub fn audio_selected_index(&self) -> usize {
+        self.audio_selected_idx
+    }
+
+    pub fn audio_list_top(&self) -> usize {
+        self.audio_list_top
     }
 
     pub fn handle_input(&mut self, input: HarnessInputEvent) -> HarnessResult {
@@ -171,6 +186,7 @@ impl TestHarnessState {
                     out.audio_event = Some(AudioEvent::TouchInteraction);
                 }
             }
+            HarnessInputEvent::TouchDrag { .. } => {}
         }
         out
     }
@@ -200,6 +216,7 @@ impl TestHarnessState {
             HarnessInputEvent::Up | HarnessInputEvent::Down | HarnessInputEvent::Right => {
                 out.audio_event = Some(AudioEvent::KeyInteraction);
             }
+            HarnessInputEvent::TouchDrag { .. } => {}
         }
         out
     }
@@ -214,10 +231,24 @@ impl TestHarnessState {
                     out.stop_audio = true;
                 }
             }
-            HarnessInputEvent::Up => out.audio_event = Some(AudioEvent::Warning),
-            HarnessInputEvent::Down => out.audio_event = Some(AudioEvent::Error),
-            HarnessInputEvent::Right => out.audio_event = Some(AudioEvent::ModeSwitch),
-            HarnessInputEvent::Center => out.audio_event = Some(AudioEvent::KeyInteraction),
+            HarnessInputEvent::Up => {
+                self.audio_move_selection(-1);
+                out.needs_redraw = true;
+                out.audio_event = Some(AudioEvent::KeyInteraction);
+            }
+            HarnessInputEvent::Down => {
+                self.audio_move_selection(1);
+                out.needs_redraw = true;
+                out.audio_event = Some(AudioEvent::KeyInteraction);
+            }
+            HarnessInputEvent::Right => {
+                out.stop_audio = true;
+                out.needs_redraw = true;
+            }
+            HarnessInputEvent::Center => {
+                out.audio_event = Some(audio_event_for_index(self.audio_selected_idx));
+                out.needs_redraw = true;
+            }
             HarnessInputEvent::Touch { x, y } => {
                 if test_back_hit_test(x, y) {
                     if self.cfg.has_navigation {
@@ -225,15 +256,88 @@ impl TestHarnessState {
                         out.needs_redraw = true;
                         out.stop_audio = true;
                     }
-                } else if test_audio_play_hit_test(x, y) {
-                    out.audio_event = Some(AudioEvent::Boot);
                 } else if test_audio_stop_hit_test(x, y) {
                     out.stop_audio = true;
                     out.needs_redraw = true;
+                } else if let Some(idx) = test_audio_list_hit_test(x, y, self.audio_list_top) {
+                    self.audio_selected_idx = idx;
+                    self.audio_ensure_visible();
+                    out.audio_event = Some(audio_event_for_index(idx));
+                    out.needs_redraw = true;
+                }
+            }
+            HarnessInputEvent::TouchDrag { x, y, dy } => {
+                if test_audio_list_scroll_hit_test(x, y) {
+                    if self.audio_scroll_from_drag(dy) {
+                        out.needs_redraw = true;
+                    }
                 }
             }
         }
         out
+    }
+
+    fn audio_move_selection(&mut self, delta: i32) {
+        if delta < 0 {
+            if self.audio_selected_idx == 0 {
+                self.audio_selected_idx = AUDIO_LIST_LEN - 1;
+            } else {
+                self.audio_selected_idx -= 1;
+            }
+        } else if self.audio_selected_idx + 1 >= AUDIO_LIST_LEN {
+            self.audio_selected_idx = 0;
+        } else {
+            self.audio_selected_idx += 1;
+        }
+        self.audio_ensure_visible();
+    }
+
+    fn audio_ensure_visible(&mut self) {
+        let visible = TEST_AUDIO_VISIBLE_ROWS;
+        if self.audio_selected_idx < self.audio_list_top {
+            self.audio_list_top = self.audio_selected_idx;
+            return;
+        }
+        let end = self.audio_list_top + visible;
+        if self.audio_selected_idx >= end {
+            self.audio_list_top = self.audio_selected_idx + 1 - visible;
+        }
+    }
+
+    fn audio_scroll_from_drag(&mut self, dy: i16) -> bool {
+        let max_top = AUDIO_LIST_LEN.saturating_sub(TEST_AUDIO_VISIBLE_ROWS);
+        if dy >= 8 {
+            if self.audio_list_top > 0 {
+                self.audio_list_top -= 1;
+                if self.audio_selected_idx < self.audio_list_top {
+                    self.audio_selected_idx = self.audio_list_top;
+                }
+                return true;
+            }
+            return false;
+        }
+        if dy <= -8 {
+            if self.audio_list_top < max_top {
+                self.audio_list_top += 1;
+                let max_visible = self.audio_list_top + TEST_AUDIO_VISIBLE_ROWS - 1;
+                if self.audio_selected_idx > max_visible {
+                    self.audio_selected_idx = max_visible;
+                }
+                return true;
+            }
+        }
+        false
+    }
+}
+
+fn audio_event_for_index(idx: usize) -> AudioEvent {
+    match idx {
+        0 => AudioEvent::Boot,
+        1 => AudioEvent::TouchInteraction,
+        2 => AudioEvent::KeyInteraction,
+        3 => AudioEvent::ModeSwitch,
+        4 => AudioEvent::Warning,
+        _ => AudioEvent::Error,
     }
 }
 

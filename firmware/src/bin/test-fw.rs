@@ -304,12 +304,14 @@ fn render_route(
             panel.render_test_audio_playback(
                 harness.back_enabled(),
                 #[cfg(feature = "test-fw-audio-playback")]
-                map_audio_ui_state(audio_status),
+                map_audio_ui_state(harness, audio_status),
                 #[cfg(not(feature = "test-fw-audio-playback"))]
                 front_panel_scene::AudioTestUiState {
                     playing: false,
                     queued: 0,
                     current: None,
+                    selected_idx: 0,
+                    list_top: 0,
                 },
             );
         }
@@ -324,23 +326,34 @@ fn map_input(input: front_panel::TestInputEvent) -> Option<HarnessInputEvent> {
         front_panel::TestInputEvent::Right => HarnessInputEvent::Right,
         front_panel::TestInputEvent::Center => HarnessInputEvent::Center,
         front_panel::TestInputEvent::Touch { x, y } => HarnessInputEvent::Touch { x, y },
+        front_panel::TestInputEvent::TouchDrag { x, y, dy } => {
+            HarnessInputEvent::TouchDrag { x, y, dy }
+        }
     })
 }
 
 #[cfg(feature = "test-fw-audio-playback")]
-fn map_audio_ui_state(status: test_audio::AudioStatus) -> front_panel_scene::AudioTestUiState {
+fn map_audio_ui_state(
+    harness: &TestHarnessState,
+    status: test_audio::AudioStatus,
+) -> front_panel_scene::AudioTestUiState {
     front_panel_scene::AudioTestUiState {
         playing: status.playing,
         queued: status.queued,
         current: status.current.map(|event| match event {
             test_audio::AudioEvent::Boot => front_panel_scene::AudioEventUi::Boot,
-            test_audio::AudioEvent::TouchInteraction | test_audio::AudioEvent::KeyInteraction => {
-                front_panel_scene::AudioEventUi::Interaction
+            test_audio::AudioEvent::TouchInteraction => {
+                front_panel_scene::AudioEventUi::TouchInteraction
+            }
+            test_audio::AudioEvent::KeyInteraction => {
+                front_panel_scene::AudioEventUi::KeyInteraction
             }
             test_audio::AudioEvent::Warning => front_panel_scene::AudioEventUi::Warning,
             test_audio::AudioEvent::Error => front_panel_scene::AudioEventUi::Error,
             test_audio::AudioEvent::ModeSwitch => front_panel_scene::AudioEventUi::ModeSwitch,
         }),
+        selected_idx: harness.audio_selected_index() as u8,
+        list_top: harness.audio_list_top() as u8,
     }
 }
 
