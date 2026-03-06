@@ -161,7 +161,19 @@ const BMS_ISOLATION_WINDOW: Duration = Duration::from_millis(40);
 const BMS_TRANSPORT_LOSS_THRESHOLD: u8 = 3;
 const BMS_TRANSPORT_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 const BMS_WORD_DIAG_MIN_INTERVAL: Duration = Duration::from_secs(10);
-const BMS_WORD_GAP: Duration = Duration::from_millis(2);
+// TI E2E reports that some BQ40 MAC/read flows need ~22ms read spacing and ~66ms after
+// writes while the gauge finishes internal processing. Keep that slowdown confined to the
+// diagnostic-only mac-only build so normal polling stays responsive.
+const BMS_WORD_GAP: Duration = if cfg!(feature = "bms-mac-probe-only") {
+    Duration::from_millis(22)
+} else {
+    Duration::from_millis(2)
+};
+const BMS_MAC_WRITE_SETTLE: Duration = if cfg!(feature = "bms-mac-probe-only") {
+    Duration::from_millis(66)
+} else {
+    BMS_WORD_GAP
+};
 const BMS_WAKE_SETTLE: Duration = Duration::from_secs(30);
 const BMS_ROM_RECOVER_MIN_INTERVAL: Duration = Duration::from_secs(30);
 const BMS_MAC_TOGGLE_SETTLE: Duration = Duration::from_millis(40);
@@ -187,6 +199,7 @@ const BMS_SUSPICIOUS_STATUS: u16 = 0x1717;
 const BMS_ROM_MODE_SIGNATURE: u16 = 0x9002;
 const BMS_MAC_STAGED_DELAYS_MS: [u64; 3] = [0, 800, 1_600];
 const BMS_DIAG_SCAN_INTERVAL: Duration = Duration::from_secs(30);
+const BMS_MISSING_VERBOSE_REPROBE_INTERVAL: Duration = Duration::from_secs(30);
 const BMS_DIAG_SCAN_MIN_ADDR: u8 = 0x03;
 const BMS_DIAG_SCAN_MAX_ADDR: u8 = 0x77;
 const BMS_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
@@ -275,7 +288,7 @@ where
     // Per TRM, data bytes for cmd 0x00 are written MSB-first.
     i2c.write(addr, &[bq40z50::cmd::MANUFACTURER_ACCESS, 0x00, 0x01])
         .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
-    spin_delay(BMS_WORD_GAP);
+    spin_delay(BMS_MAC_WRITE_SETTLE);
     let raw = bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA)?;
     let payload_len = raw.payload_len as usize;
 
@@ -423,6 +436,23 @@ struct WordDiagRaw {
     hi: u8,
 }
 
+#[derive(Clone, Copy)]
+struct WordDiagSplit {
+    err: &'static str,
+    write_err: &'static str,
+    read_err: &'static str,
+    lo: u8,
+    hi: u8,
+}
+
+#[derive(Clone, Copy)]
+struct WordDiagReadOnly {
+    err: &'static str,
+    len: u8,
+    b0: u8,
+    b1: u8,
+}
+
 fn word_diag_write_read<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> WordDiagRaw
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
@@ -442,30 +472,61 @@ where
     }
 }
 
-fn word_diag_split<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> WordDiagRaw
+fn word_diag_split<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> WordDiagSplit
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    if let Err(e) = i2c.write(addr, &[cmd]) {
-        return WordDiagRaw {
-            err: i2c_error_kind(e),
-            lo: 0,
-            hi: 0,
-        };
-    }
+    let write_err = match i2c.write(addr, &[cmd]) {
+        Ok(()) => "ok",
+        Err(e) => {
+            return WordDiagSplit {
+                err: i2c_error_kind(e),
+                write_err: i2c_error_kind(e),
+                read_err: "skip",
+                lo: 0,
+                hi: 0,
+            };
+        }
+    };
 
     spin_delay(BMS_WORD_GAP);
     let mut buf = [0u8; 2];
     match i2c.read(addr, &mut buf) {
-        Ok(()) => WordDiagRaw {
+        Ok(()) => WordDiagSplit {
             err: "ok",
+            write_err,
+            read_err: "ok",
             lo: buf[0],
             hi: buf[1],
         },
-        Err(e) => WordDiagRaw {
+        Err(e) => WordDiagSplit {
             err: i2c_error_kind(e),
+            write_err,
+            read_err: i2c_error_kind(e),
             lo: 0,
             hi: 0,
+        },
+    }
+}
+
+fn word_diag_read_only<I2C>(i2c: &mut I2C, addr: u8, len: usize) -> WordDiagReadOnly
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let len = len.min(2);
+    let mut buf = [0u8; 2];
+    match i2c.read(addr, &mut buf[..len]) {
+        Ok(()) => WordDiagReadOnly {
+            err: "ok",
+            len: len as u8,
+            b0: buf[0],
+            b1: buf[1],
+        },
+        Err(e) => WordDiagReadOnly {
+            err: i2c_error_kind(e),
+            len: len as u8,
+            b0: 0,
+            b1: 0,
         },
     }
 }
@@ -482,6 +543,18 @@ struct WordDiagPec {
 #[derive(Clone, Copy)]
 struct WordDiagBlock {
     err: &'static str,
+    declared_len: u8,
+    payload_len: u8,
+    b0: u8,
+    b1: u8,
+    b2: u8,
+}
+
+#[derive(Clone, Copy)]
+struct WordDiagBlockSplit {
+    err: &'static str,
+    write_err: &'static str,
+    read_err: &'static str,
     declared_len: u8,
     payload_len: u8,
     b0: u8,
@@ -507,6 +580,61 @@ where
         }
         Err(e) => WordDiagBlock {
             err: e.as_str(),
+            declared_len: 0,
+            payload_len: 0,
+            b0: 0,
+            b1: 0,
+            b2: 0,
+        },
+    }
+}
+
+fn word_diag_block_split<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> WordDiagBlockSplit
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let write_err = match i2c.write(addr, &[cmd]) {
+        Ok(()) => "ok",
+        Err(e) => {
+            return WordDiagBlockSplit {
+                err: i2c_error_kind(e),
+                write_err: i2c_error_kind(e),
+                read_err: "skip",
+                declared_len: 0,
+                payload_len: 0,
+                b0: 0,
+                b1: 0,
+                b2: 0,
+            };
+        }
+    };
+
+    spin_delay(BMS_WORD_GAP);
+    let mut buf = [0u8; 33];
+    match i2c.read(addr, &mut buf) {
+        Ok(()) => {
+            let declared_len = buf[0];
+            let payload_len = declared_len.min(32);
+            let payload_len_usize = payload_len as usize;
+            WordDiagBlockSplit {
+                err: if declared_len == 0 || declared_len > 32 {
+                    "bad_len"
+                } else {
+                    "ok"
+                },
+                write_err,
+                read_err: "ok",
+                declared_len,
+                payload_len,
+                b0: if payload_len_usize > 0 { buf[1] } else { 0 },
+                b1: if payload_len_usize > 1 { buf[2] } else { 0 },
+                b2: if payload_len_usize > 2 { buf[3] } else { 0 },
+            }
+        }
+        Err(e) => WordDiagBlockSplit {
+            err: i2c_error_kind(e),
+            write_err,
+            read_err: i2c_error_kind(e),
             declared_len: 0,
             payload_len: 0,
             b0: 0,
@@ -557,9 +685,12 @@ where
     let split = word_diag_split(i2c, addr, cmd);
     let pec = word_diag_pec(i2c, addr, cmd);
     let blk = word_diag_block(i2c, addr, cmd);
+    let blk_split = word_diag_block_split(i2c, addr, cmd);
+    let read1 = word_diag_read_only(i2c, addr, 1);
+    let read2 = word_diag_read_only(i2c, addr, 2);
 
     defmt::warn!(
-        "bms_diag_word: addr=0x{=u8:x} cmd=0x{=u8:x} name={} wr={} wr_raw=0x{=u8:x} 0x{=u8:x} split={} split_raw=0x{=u8:x} 0x{=u8:x} pec={} pec_raw=0x{=u8:x} 0x{=u8:x} rx_pec=0x{=u8:x} exp_pec=0x{=u8:x} blk={} blk_len={=u8} blk_payload={=u8} blk_b0=0x{=u8:x} blk_b1=0x{=u8:x} blk_b2=0x{=u8:x}",
+        "bms_diag_word: addr=0x{=u8:x} cmd=0x{=u8:x} name={} wr={} wr_raw=0x{=u8:x} 0x{=u8:x} split={} split_wr={} split_rd={} split_raw=0x{=u8:x} 0x{=u8:x} pec={} pec_raw=0x{=u8:x} 0x{=u8:x} rx_pec=0x{=u8:x} exp_pec=0x{=u8:x} blk={} blk_len={=u8} blk_payload={=u8} blk_b0=0x{=u8:x} blk_b1=0x{=u8:x} blk_b2=0x{=u8:x} blk_split={} blk_split_wr={} blk_split_rd={} blk_split_len={=u8} blk_split_payload={=u8} blk_split_b0=0x{=u8:x} blk_split_b1=0x{=u8:x} blk_split_b2=0x{=u8:x} raw_read1={} raw_read1_len={=u8} raw_read1_b0=0x{=u8:x} raw_read2={} raw_read2_len={=u8} raw_read2_b0=0x{=u8:x} raw_read2_b1=0x{=u8:x}",
         addr,
         cmd,
         name,
@@ -567,6 +698,8 @@ where
         wr.lo,
         wr.hi,
         split.err,
+        split.write_err,
+        split.read_err,
         split.lo,
         split.hi,
         pec.err,
@@ -580,6 +713,21 @@ where
         blk.b0,
         blk.b1,
         blk.b2,
+        blk_split.err,
+        blk_split.write_err,
+        blk_split.read_err,
+        blk_split.declared_len,
+        blk_split.payload_len,
+        blk_split.b0,
+        blk_split.b1,
+        blk_split.b2,
+        read1.err,
+        read1.len,
+        read1.b0,
+        read2.err,
+        read2.len,
+        read2.b0,
+        read2.b1,
     );
 }
 
@@ -612,7 +760,7 @@ where
     // Try ManufacturerAccess() 0x0001 (DeviceType) legacy path:
     // write word to 0x00 (MSB first per TRM), then read block from 0x23.
     let mac_write = i2c.write(addr, &[bq40z50::cmd::MANUFACTURER_ACCESS, 0x00, 0x01]);
-    spin_delay(BMS_WORD_GAP);
+    spin_delay(BMS_MAC_WRITE_SETTLE);
     let mac_read = bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA);
 
     match mac_read {
@@ -648,7 +796,7 @@ where
         addr,
         &[bq40z50::cmd::MANUFACTURER_ACCESS, 0x00, 0x01, ma_pec],
     );
-    spin_delay(BMS_WORD_GAP);
+    spin_delay(BMS_MAC_WRITE_SETTLE);
     let mac_read_pec = bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA);
     match mac_read_pec {
         Ok(raw) => {
@@ -683,7 +831,7 @@ where
         addr,
         &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS, 0x02, 0x01, 0x00],
     );
-    spin_delay(BMS_WORD_GAP);
+    spin_delay(BMS_MAC_WRITE_SETTLE);
     let mba_block_read =
         bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS);
 
@@ -731,7 +879,7 @@ where
             mba_block_pec,
         ],
     );
-    spin_delay(BMS_WORD_GAP);
+    spin_delay(BMS_MAC_WRITE_SETTLE);
     let mba_block_read_pec =
         bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS);
     match mba_block_read_pec {
@@ -765,7 +913,7 @@ where
 
     // Alternate wire format probe used by some hosts: write cmd bytes without SMBus count.
     let mba_word_write = i2c.write(addr, &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS, 0x01, 0x00]);
-    spin_delay(BMS_WORD_GAP);
+    spin_delay(BMS_MAC_WRITE_SETTLE);
     let mba_word_read =
         bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS);
 
@@ -795,6 +943,36 @@ where
             );
         }
     }
+
+    let md23_split = word_diag_block_split(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA);
+    let mb44_split = word_diag_block_split(i2c, addr, bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS);
+    let raw_read1 = word_diag_read_only(i2c, addr, 1);
+    let raw_read2 = word_diag_read_only(i2c, addr, 2);
+    defmt::warn!(
+        "bms_diag_bus: addr=0x{=u8:x} md23={} md23_wr={} md23_rd={} md23_len={=u8} md23_payload={=u8} md23_b0=0x{=u8:x} md23_b1=0x{=u8:x} mb44={} mb44_wr={} mb44_rd={} mb44_len={=u8} mb44_payload={=u8} mb44_b0=0x{=u8:x} mb44_b1=0x{=u8:x} raw_read1={} raw_read1_len={=u8} raw_read1_b0=0x{=u8:x} raw_read2={} raw_read2_len={=u8} raw_read2_b0=0x{=u8:x} raw_read2_b1=0x{=u8:x}",
+        addr,
+        md23_split.err,
+        md23_split.write_err,
+        md23_split.read_err,
+        md23_split.declared_len,
+        md23_split.payload_len,
+        md23_split.b0,
+        md23_split.b1,
+        mb44_split.err,
+        mb44_split.write_err,
+        mb44_split.read_err,
+        mb44_split.declared_len,
+        mb44_split.payload_len,
+        mb44_split.b0,
+        mb44_split.b1,
+        raw_read1.err,
+        raw_read1.len,
+        raw_read1.b0,
+        raw_read2.err,
+        raw_read2.len,
+        raw_read2.b0,
+        raw_read2.b1,
+    );
 }
 
 fn write_bms_rom_word<I2C>(
@@ -1185,16 +1363,23 @@ where
         }
     }
 
+    if after == BMS_ROM_MODE_SIGNATURE {
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=rom_flash_incomplete rsoc_after=0x{=u16:x}",
+                addr,
+                after
+            );
+        }
+        return Err(bq40z50::BmsDiagError::InconsistentSample);
+    }
+
     if !quiet {
         defmt::warn!(
             "bms_diag: addr=0x{=u8:x} stage=rom_flash_done rsoc_after=0x{=u16:x}",
             addr,
             after
         );
-    }
-
-    if after == BMS_ROM_MODE_SIGNATURE {
-        return Err(bq40z50::BmsDiagError::InconsistentSample);
     }
     Ok(())
 }
@@ -2027,7 +2212,9 @@ pub struct PowerManager<'d, I2C> {
     bms_pattern_tracker: BmsPatternTracker,
     bms_weak_pass_votes: u8,
     bms_last_word_diag_at: Option<Instant>,
+    bms_last_word_diag_addr: Option<u8>,
     bms_diag_scan_next_at: Instant,
+    bms_missing_diag_next_at: Option<Instant>,
     bms_probe_mode_last: Option<bool>,
     boot_at: Instant,
     bms_isolation_until: Option<Instant>,
@@ -2120,7 +2307,13 @@ where
             bms_pattern_tracker: BmsPatternTracker::new(),
             bms_weak_pass_votes: 0,
             bms_last_word_diag_at: None,
+            bms_last_word_diag_addr: None,
             bms_diag_scan_next_at: now,
+            bms_missing_diag_next_at: if bms_addr.is_some() {
+                None
+            } else {
+                Some(now + BMS_MISSING_VERBOSE_REPROBE_INTERVAL)
+            },
             bms_probe_mode_last: None,
             boot_at: now,
             bms_isolation_until: None,
@@ -2489,6 +2682,9 @@ where
                         Err(e) => {
                             if !quiet {
                                 log_bms_diag(addr, "probe_rom_exit", e, "word", "rom-mode");
+                                if bms_verbose_diag(self.cfg.bms_address_mode) {
+                                    self.maybe_log_bms_word_diag(addr, "probe_rom_exit", e);
+                                }
                             }
                         }
                     }
@@ -2518,6 +2714,7 @@ where
                         if !quiet {
                             log_bms_diag(addr, "probe_mac", e, "block", "mac-only");
                             if bms_verbose_diag(self.cfg.bms_address_mode) {
+                                self.maybe_log_bms_word_diag(addr, "probe_mac", e);
                                 log_bms_mac_diag(&mut self.i2c, addr);
                             }
                             defmt::warn!("bms: bq40z50 probe_miss addr=0x{=u8:x} err={}", addr, e);
@@ -2707,9 +2904,8 @@ where
             }
         }
 
-        // We intentionally do not "poke" BQ25792 (e.g., by changing charge voltage/current)
-        // just to wake the gauge. Charger configuration must remain in the normal
-        // startup/charge flow.
+        // Gauge wake-up is handled only by the explicit `force_min_charge` path in the
+        // charger state machine. Missing BQ40 during probe must not silently retune BQ25792.
         defmt::warn!("bms: bq40z50 missing/err; battery module disabled");
     }
 
@@ -3004,15 +3200,15 @@ where
         // Bring-up policy:
         // - Keep SYS regulation alive (never force HiZ / non-switching here).
         // - Default path: charge only when runtime conditions are valid and VBAT is present.
-        // - Diagnostic override: `force_min_charge` can bypass VBAT presence and poke the pack
-        //   with the minimum currents, without changing charge voltage.
+        // - Diagnostic override: `force_min_charge` can bypass VBAT presence and apply the
+        //   proven wake profile (VREG=16.8V / ICHG=200mA / IINDPM=500mA) for no-pack benches.
         let input_present = vbus_present || ac1_present || ac2_present || pg;
         let can_enable = input_present && !ts_cold && !ts_hot;
         let normal_allow_charge = self.cfg.charge_allowed && can_enable && vbat_present;
         let force_allow_charge = self.cfg.force_min_charge && can_enable;
         let allow_charge = normal_allow_charge || force_allow_charge;
         let mut applied_ctrl0 = ctrl0;
-        let applied_vreg_mv: Option<u16> = None;
+        let mut applied_vreg_mv: Option<u16> = None;
         let mut applied_ichg_ma: Option<u16> = None;
         let mut applied_iindpm_ma: Option<u16> = None;
 
@@ -3020,16 +3216,34 @@ where
         self.chg_ilim_hiz_brk.set_low();
 
         if allow_charge {
-            // When forced, use absolute minimum currents; leave VREG untouched.
-            const FORCE_MIN_ICHG_MA: u16 = 50;
-            const FORCE_MIN_IINDPM_MA: u16 = 100;
+            const FORCE_WAKE_VREG_MV: u16 = 16_800;
+            const FORCE_WAKE_ICHG_MA: u16 = 200;
+            const FORCE_WAKE_IINDPM_MA: u16 = 500;
+
+            fn decode_voltage_mv(reg: u16) -> u16 {
+                (reg & 0x07FF) * 10
+            }
 
             fn decode_cur_ma(reg: u16) -> u16 {
                 (reg & 0x01FF) * 10
             }
 
             if force_allow_charge {
-                match bq25792::set_charge_current_limit_ma(&mut self.i2c, FORCE_MIN_ICHG_MA) {
+                match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, FORCE_WAKE_VREG_MV) {
+                    Ok(v) => applied_vreg_mv = Some(decode_voltage_mv(v)),
+                    Err(e) => {
+                        self.chg_ce.set_high();
+                        self.chg_enabled = false;
+                        self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                        defmt::error!(
+                            "charger: bq25792 err stage=vreg_write err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
+                    }
+                }
+
+                match bq25792::set_charge_current_limit_ma(&mut self.i2c, FORCE_WAKE_ICHG_MA) {
                     Ok(v) => applied_ichg_ma = Some(decode_cur_ma(v)),
                     Err(e) => {
                         self.chg_ce.set_high();
@@ -3043,7 +3257,7 @@ where
                     }
                 }
 
-                match bq25792::set_input_current_limit_ma(&mut self.i2c, FORCE_MIN_IINDPM_MA) {
+                match bq25792::set_input_current_limit_ma(&mut self.i2c, FORCE_WAKE_IINDPM_MA) {
                     Ok(v) => applied_iindpm_ma = Some(decode_cur_ma(v)),
                     Err(e) => {
                         self.chg_ce.set_high();
@@ -3206,13 +3420,42 @@ where
             }
             self.bms_next_poll_at = now + BMS_POLL_PERIOD;
 
-            if let Some(addr) = self.probe_bq40z50_quiet() {
+            let verbose_missing_probe = (self.cfg.bms_mac_probe_only
+                || matches!(
+                    self.cfg.bms_address_mode,
+                    bq40z50::BmsAddressMode::DualProbeDiag
+                ))
+                && self
+                    .bms_missing_diag_next_at
+                    .map_or(false, |next| now >= next);
+            if verbose_missing_probe {
+                self.bms_missing_diag_next_at = Some(now + BMS_MISSING_VERBOSE_REPROBE_INTERVAL);
+                defmt::warn!(
+                    "bms_diag: stage=missing_reprobe probe_mode={} addr_mode={} elapsed_ms={=u64}",
+                    if self.cfg.bms_mac_probe_only {
+                        "mac_only"
+                    } else {
+                        "strict_word"
+                    },
+                    self.cfg.bms_address_mode.as_str(),
+                    self.boot_at.elapsed().as_millis()
+                );
+            }
+
+            let probe = if verbose_missing_probe {
+                self.probe_bq40z50()
+            } else {
+                self.probe_bq40z50_quiet()
+            };
+
+            if let Some(addr) = probe {
                 self.bms_addr = Some(addr);
                 self.bms_next_retry_at = Some(now);
                 self.bms_next_poll_at = now;
                 self.bms_last_int_poll_at = None;
                 self.bms_weak_pass_votes = 0;
                 self.bms_transport_fail_count = 0;
+                self.bms_missing_diag_next_at = None;
                 defmt::info!("bms: bq40z50 discovered addr=0x{=u8:x}", addr);
             }
             return true;
@@ -3332,6 +3575,8 @@ where
                         self.bms_addr = None;
                         self.bms_next_retry_at = None;
                         self.bms_transport_fail_count = 0;
+                        self.bms_missing_diag_next_at =
+                            Some(now + BMS_MISSING_VERBOSE_REPROBE_INTERVAL);
                         defmt::error!(
                             "bms: bq40z50 transport_lost addr=0x{=u8:x} err={} fail_streak={=u8}",
                             addr,
@@ -3375,13 +3620,13 @@ where
         }
 
         let now = Instant::now();
-        if self
-            .bms_last_word_diag_at
-            .map_or(false, |last| now < last + BMS_WORD_DIAG_MIN_INTERVAL)
-        {
+        if self.bms_last_word_diag_at.map_or(false, |last| {
+            now < last + BMS_WORD_DIAG_MIN_INTERVAL && self.bms_last_word_diag_addr == Some(addr)
+        }) {
             return;
         }
         self.bms_last_word_diag_at = Some(now);
+        self.bms_last_word_diag_addr = Some(addr);
         log_bms_word_diag_set(&mut self.i2c, addr, stage, err);
     }
 

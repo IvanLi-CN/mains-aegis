@@ -32,7 +32,7 @@ POLL_RETRY_RE = re.compile(
 )
 ROM_DETECTED_RE = re.compile(r"stage=rom_mode_detected")
 ROM_FLASH_BEGIN_RE = re.compile(r"stage=(probe_rom_flash_begin|rom_flash_start)")
-ROM_FLASH_DONE_RE = re.compile(r"stage=(probe_rom_flash_done|rom_flash_done)")
+ROM_FLASH_DONE_RE = re.compile(r"stage=probe_rom_flash_done")
 ADDR16_RE = re.compile(r"addr=0x16\b")
 
 

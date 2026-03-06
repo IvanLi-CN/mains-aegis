@@ -18,10 +18,14 @@ mode="canonical"
 duration_sec=120
 flash="true"
 recover_policy="if-rom"
+force_min_charge="false"
+probe_mode="strict"
 monitor_file=""
 report_out=""
 flash_arg_set="false"
 recover_arg_set="false"
+force_min_charge_arg_set="false"
+probe_mode_arg_set="false"
 POLL_PERIOD_SEC=2
 MIN_VALID_STREAK=10
 MIN_DURATION_FOR_STREAK=$((POLL_PERIOD_SEC * MIN_VALID_STREAK))
@@ -29,8 +33,8 @@ MIN_DURATION_FOR_STREAK=$((POLL_PERIOD_SEC * MIN_VALID_STREAK))
 usage() {
   cat <<USAGE
 Usage:
-  $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--monitor-file PATH] [--report-out DIR]
-  $(basename "$0") recover  [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") recover  [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--monitor-file PATH] [--report-out DIR]
   $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--report-out DIR]
 USAGE
 }
@@ -67,6 +71,18 @@ while [[ $# -gt 0 ]]; do
       require_value "$1" "$#"
       recover_policy="${2:-}"
       recover_arg_set="true"
+      shift 2
+      ;;
+    --force-min-charge)
+      require_value "$1" "$#"
+      force_min_charge="${2:-}"
+      force_min_charge_arg_set="true"
+      shift 2
+      ;;
+    --probe-mode)
+      require_value "$1" "$#"
+      probe_mode="${2:-}"
+      probe_mode_arg_set="true"
       shift 2
       ;;
     --monitor-file)
@@ -137,8 +153,8 @@ if [[ "$subcommand" == "verify" ]]; then
     echo "verify mode requires --monitor-file" >&2
     exit 8
   fi
-  if [[ "$flash_arg_set" == "true" || "$recover_arg_set" == "true" ]]; then
-    echo "verify mode does not accept --flash or --recover" >&2
+  if [[ "$flash_arg_set" == "true" || "$recover_arg_set" == "true" || "$force_min_charge_arg_set" == "true" || "$probe_mode_arg_set" == "true" ]]; then
+    echo "verify mode does not accept --flash, --recover, --force-min-charge, or --probe-mode" >&2
     exit 10
   fi
 else
@@ -158,12 +174,28 @@ else
       ;;
   esac
 
+  case "$force_min_charge" in
+    true|false) ;;
+    *)
+      echo "Invalid --force-min-charge: $force_min_charge" >&2
+      exit 15
+      ;;
+  esac
+
+  case "$probe_mode" in
+    strict|mac-only) ;;
+    *)
+      echo "Invalid --probe-mode: $probe_mode" >&2
+      exit 16
+      ;;
+  esac
+
   if [[ "$recover_policy" == "force" && "$mode" != "dual-diag" ]]; then
     echo "--recover force requires --mode dual-diag" >&2
     exit 9
   fi
 
-  "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy"
+  "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy" --force-min-charge "$force_min_charge" --probe-mode "$probe_mode"
 
   if [[ "$flash" == "true" ]]; then
     "$SCRIPT_DIR/flash.sh"

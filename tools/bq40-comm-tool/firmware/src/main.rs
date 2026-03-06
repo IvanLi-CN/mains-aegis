@@ -52,8 +52,13 @@ const FORCE_MIN_CHARGE: bool = cfg!(feature = "force-min-charge");
 const BMS_DIAG_ISOLATION: bool = true;
 const BMS_STRICT_VALIDATION: bool = true;
 const BMS_STAGED_PROBE: bool = false;
-const BMS_MAC_PROBE_ONLY: bool = false;
-const BMS_MAC_PROBE_BOOT_WINDOW_SECS: u64 = 0;
+const BMS_MAC_PROBE_ONLY: bool = cfg!(feature = "bms-mac-probe-only");
+// Diagnostic-only build knob: keep MAC-only probing enabled for the whole monitor session.
+const BMS_MAC_PROBE_BOOT_WINDOW_SECS: u64 = if cfg!(feature = "bms-mac-probe-only") {
+    60 * 60
+} else {
+    0
+};
 const BMS_ROM_RECOVER: bool = !cfg!(feature = "bms-rom-recover-disable");
 const BMS_ADDRESS_MODE: bq40z50::BmsAddressMode = if cfg!(feature = "bms-dual-probe-diag") {
     bq40z50::BmsAddressMode::DualProbeDiag

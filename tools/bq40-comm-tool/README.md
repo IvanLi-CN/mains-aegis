@@ -16,13 +16,16 @@ cd /Users/ivan/Projects/Ivan/mains-aegis/tools/bq40-comm-tool
 cp .esp32-port.example .esp32-port
 # edit .esp32-port
 
-# 2) Run diagnose flow (no ROM write)
-./bin/run.sh diagnose --mode canonical --duration-sec 120
+# 2) Run canonical diagnose with the proven wake profile (no ROM write)
+./bin/run.sh diagnose --mode canonical --duration-sec 120 --force-min-charge true
 
-# 3) Run recover flow (ROM write allowed only in recover)
-./bin/run.sh recover --mode canonical --duration-sec 120 --recover if-rom
+# 3) Only if step 2 reports `rom_mode_detected`, run dual-diag recover
+./bin/run.sh recover --mode dual-diag --duration-sec 120 --recover if-rom --force-min-charge true
 
-# 4) Offline verify from an existing monitor log
+# 4) Re-run canonical diagnose after recovery
+./bin/run.sh diagnose --mode canonical --duration-sec 120 --force-min-charge true
+
+# 5) Offline verify from the canonical monitor log
 ./bin/run.sh verify --mode canonical --duration-sec 120 --monitor-file /abs/path/to/xxx.mon.ndjson
 ```
 
@@ -35,6 +38,8 @@ Options:
 - `--duration-sec <N>` (default: `120`; `diagnose/recover` require `>=20`)
 - `--flash true|false` (default: `true`; not accepted by `verify`)
 - `--recover never|if-rom|force` (default: `if-rom`; not accepted by `diagnose`/`verify`; `force` requires `--mode dual-diag`)
+- `--force-min-charge true|false` (default: `false`; not accepted by `verify`)
+- `--probe-mode strict|mac-only` (default: `strict`; not accepted by `verify`; `mac-only` is diagnostic-only and keeps probing ManufacturerAccess()/ManufacturerBlockAccess() liveness)
 - `--monitor-file <path>` (`verify` required; others optional)
 - `--report-out <dir>` (default: `tools/bq40-comm-tool/reports/<timestamp>`)
 
@@ -49,6 +54,7 @@ Required `summary.json` fields:
 - `mode`, `duration_sec`, `samples_total`, `valid_samples`, `max_valid_streak`
 - `poll_errors` (by error type)
 - `rom_events` (`detected`, `flash_attempted`, `flash_done`)
+  - `flash_done=true` means the probe flow emitted `stage=probe_rom_flash_done` (recover returned `Ok` and exited ROM).
 - `verdict.pass`, `verdict.reason`
 
 ## Common issues
@@ -69,6 +75,12 @@ Required `summary.json` fields:
   - pass criteria requires streak>=10 and poll period is 2s; use at least 20s window
 - `verdict.fail: canonical_mode_touched_0x16`
   - canonical mode should not touch `0x16`; check firmware mode and logs
+- canonical diagnose still has `samples_total=0`
+  - re-run with `--force-min-charge true`; the supported no-pack wake profile is `VREG=16.8V / ICHG=200mA / IINDPM=500mA`
+- dual-diag still has `samples_total=0` and no ROM signature
+  - run `./bin/run.sh diagnose --mode dual-diag --duration-sec 120 --force-min-charge true --probe-mode mac-only` and inspect whether `0x0B` is `i2c_nack_data` while `0x16` stays `i2c_nack_addr`
+- recover report shows `flash_attempted=true` but `flash_done=false`
+  - the ROM sequence ran but did not exit ROM; stop and inspect the monitor log instead of assuming reflashing succeeded
 
 ## More docs
 

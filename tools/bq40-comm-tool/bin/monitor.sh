@@ -60,12 +60,14 @@ import time
 from collections import deque
 from pathlib import Path
 from threading import Lock, Thread
-from typing import Deque, Dict, Optional, Tuple
+from typing import Deque, Dict, Optional, Set, Tuple
 
 root = Path(sys.argv[1])
 duration = int(sys.argv[2])
 monitor_dir = root / ".mcu-agentd" / "monitor" / "esp"
 monitor_dir.mkdir(parents=True, exist_ok=True)
+combined_path = monitor_dir / f"{time.strftime('%Y%m%d_%H%M%S')}_combined.mon.ndjson"
+
 
 def snapshot() -> Dict[Path, Tuple[float, int]]:
     state: Dict[Path, Tuple[float, int]] = {}
@@ -74,17 +76,8 @@ def snapshot() -> Dict[Path, Tuple[float, int]]:
         state[p.resolve()] = (st.st_mtime, st.st_size)
     return state
 
-before = snapshot()
-started_at = time.time()
 
-stdout_tail: Deque[str] = deque(maxlen=200)
-stderr_tail: Deque[str] = deque(maxlen=200)
-path_lock = Lock()
-path_from_stdout: Optional[Path] = None
-
-
-def capture(stream, tail: Deque[str], parse_payload: bool) -> None:
-    global path_from_stdout
+def capture(stream, tail: Deque[str], parse_payload: bool, path_ref: Dict[str, Optional[Path]]) -> None:
     for raw in iter(stream.readline, ""):
         line = raw.rstrip("\n")
         if line:
@@ -103,33 +96,49 @@ def capture(stream, tail: Deque[str], parse_payload: bool) -> None:
             candidate = Path(payload_path)
             if not candidate.is_absolute():
                 candidate = root / candidate
-            with path_lock:
-                if path_from_stdout is None:
-                    path_from_stdout = candidate.resolve()
+            if path_ref["path"] is None:
+                path_ref["path"] = candidate.resolve()
     stream.close()
 
 
-proc = subprocess.Popen(
-    ["mcu-agentd", "--non-interactive", "monitor", "esp", "--reset"],
-    cwd=root,
-    text=True,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    bufsize=1,
-)
-if proc.stdout is None or proc.stderr is None:
-    raise SystemExit("mcu-agentd monitor failed: missing stdout/stderr pipe")
+def resolve_monitor_path(
+    before: Dict[Path, Tuple[float, int]],
+    after: Dict[Path, Tuple[float, int]],
+    started_at: float,
+    hinted_path: Optional[Path],
+) -> Optional[Path]:
+    changed = []
+    for path, (mtime, size) in after.items():
+        prev = before.get(path)
+        if prev is None or mtime > prev[0] or size > prev[1]:
+            changed.append((mtime, path))
+    changed.sort()
+    changed_paths = {path for _, path in changed}
 
-stdout_thread = Thread(target=capture, args=(proc.stdout, stdout_tail, True), daemon=True)
-stderr_thread = Thread(target=capture, args=(proc.stderr, stderr_tail, False), daemon=True)
-stdout_thread.start()
-stderr_thread.start()
+    if (
+        hinted_path is not None
+        and hinted_path.exists()
+        and (
+            hinted_path in changed_paths
+            or (hinted_path in after and after[hinted_path][0] >= started_at)
+        )
+    ):
+        return hinted_path
+    if changed:
+        return changed[-1][1]
+    return None
 
-timed_out = False
-try:
-    proc.wait(timeout=duration)
-except subprocess.TimeoutExpired:
-    timed_out = True
+
+def append_segment(src: Path, appended: Set[Path]) -> None:
+    src = src.resolve()
+    if src in appended or not src.exists():
+        return
+    with src.open("rb") as infile, combined_path.open("ab") as outfile:
+        outfile.write(infile.read())
+    appended.add(src)
+
+
+def stop_process(proc: subprocess.Popen[str]) -> None:
     proc.terminate()
     try:
         proc.wait(timeout=5)
@@ -137,48 +146,94 @@ except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=5)
 
-stdout_thread.join(timeout=2)
-stderr_thread.join(timeout=2)
 
-stdout_data = "\n".join(stdout_tail)
-stderr_data = "\n".join(stderr_tail)
+deadline = time.time() + duration
+appended_paths: Set[Path] = set()
+restarts = 0
+first_attach = True
+last_detail = ""
 
-if not timed_out and proc.returncode != 0:
-    tail = (stderr_data or stdout_data).strip().splitlines()[-8:]
-    detail = "\n".join(tail) if tail else f"mcu-agentd exited with {proc.returncode}"
-    raise SystemExit(f"mcu-agentd monitor failed (rc={proc.returncode})\n{detail}")
+while time.time() < deadline:
+    remaining = max(1.0, deadline - time.time())
+    before = snapshot()
+    started_at = time.time()
+    stdout_tail: Deque[str] = deque(maxlen=200)
+    stderr_tail: Deque[str] = deque(maxlen=200)
+    path_ref: Dict[str, Optional[Path]] = {"path": None}
 
-after = snapshot()
-changed = []
-for path, (mtime, size) in after.items():
-    prev = before.get(path)
-    if prev is None or mtime > prev[0] or size > prev[1]:
-        changed.append((mtime, path))
-changed.sort()
-changed_paths = {path for _, path in changed}
+    cmd = ["mcu-agentd", "--non-interactive", "monitor", "esp"]
+    if first_attach:
+        cmd.append("--reset")
 
-chosen: Optional[Path] = None
-if (
-    path_from_stdout is not None
-    and path_from_stdout.exists()
-    and (
-        path_from_stdout in changed_paths
-        or (
-            path_from_stdout in after
-            and after[path_from_stdout][0] >= started_at
-        )
+    proc = subprocess.Popen(
+        cmd,
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=1,
     )
-):
-    chosen = path_from_stdout
-elif changed:
-    chosen = changed[-1][1]
+    if proc.stdout is None or proc.stderr is None:
+        raise SystemExit("mcu-agentd monitor failed: missing stdout/stderr pipe")
 
-if chosen is None:
-    tail = (stderr_data or stdout_data).strip().splitlines()[-5:]
-    detail = "\n".join(tail) if tail else "no monitor output captured"
+    stdout_thread = Thread(
+        target=capture,
+        args=(proc.stdout, stdout_tail, True, path_ref),
+        daemon=True,
+    )
+    stderr_thread = Thread(
+        target=capture,
+        args=(proc.stderr, stderr_tail, False, path_ref),
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+
+    timed_out = False
+    try:
+        proc.wait(timeout=remaining)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        stop_process(proc)
+
+    stdout_thread.join(timeout=2)
+    stderr_thread.join(timeout=2)
+
+    stdout_data = "\n".join(stdout_tail)
+    stderr_data = "\n".join(stderr_tail)
+    after = snapshot()
+    chosen = resolve_monitor_path(before, after, started_at, path_ref["path"])
+    if chosen is not None:
+        append_segment(chosen, appended_paths)
+
+    detail_lines = (stderr_data or stdout_data).strip().splitlines()[-8:]
+    last_detail = "\n".join(detail_lines) if detail_lines else f"mcu-agentd exited with {proc.returncode}"
+
+    if timed_out:
+        break
+
+    if proc.returncode == 0:
+        if time.time() >= deadline:
+            break
+        first_attach = False
+        time.sleep(0.2)
+        continue
+
+    if combined_path.exists() and combined_path.stat().st_size > 0:
+        restarts += 1
+        if restarts > 8:
+            break
+        first_attach = False
+        time.sleep(0.5)
+        continue
+
+    raise SystemExit(f"mcu-agentd monitor failed (rc={proc.returncode})\n{last_detail}")
+
+if not combined_path.exists() or combined_path.stat().st_size == 0:
+    detail = last_detail or "no monitor output captured"
     raise SystemExit(f"monitor output not found for this run\n{detail}")
 
-print(chosen)
+print(combined_path.resolve())
 PY
 )
 

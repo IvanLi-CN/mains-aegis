@@ -7,10 +7,13 @@ FIRMWARE_DIR="$TOOL_ROOT/firmware"
 
 mode="canonical"
 recover="if-rom"
+force_min_charge="false"
+probe_mode="strict"
 
 usage() {
   cat <<USAGE
 Usage: $(basename "$0") [--mode canonical|dual-diag] [--recover never|if-rom|force]
+                         [--force-min-charge true|false] [--probe-mode strict|mac-only]
 USAGE
 }
 
@@ -34,6 +37,16 @@ while [[ $# -gt 0 ]]; do
     --recover)
       require_value "$1" "$#"
       recover="${2:-}"
+      shift 2
+      ;;
+    --force-min-charge)
+      require_value "$1" "$#"
+      force_min_charge="${2:-}"
+      shift 2
+      ;;
+    --probe-mode)
+      require_value "$1" "$#"
+      probe_mode="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -68,9 +81,27 @@ case "$recover" in
     ;;
 esac
 
+case "$force_min_charge" in
+  true) features+=("force-min-charge") ;;
+  false) ;;
+  *)
+    echo "Invalid --force-min-charge: $force_min_charge" >&2
+    exit 5
+    ;;
+esac
+
+case "$probe_mode" in
+  strict) ;;
+  mac-only) features+=("bms-mac-probe-only") ;;
+  *)
+    echo "Invalid --probe-mode: $probe_mode" >&2
+    exit 7
+    ;;
+esac
+
 if [[ "$recover" == "force" && "$mode" != "dual-diag" ]]; then
   echo "--recover force requires --mode dual-diag" >&2
-  exit 5
+  exit 6
 fi
 
 build_cmd=(cargo build --release)
