@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-03-05
-- Last: 2026-03-05
+- Last: 2026-03-06
 
 ## 背景 / 问题陈述
 
@@ -122,6 +122,12 @@
   - `cargo build --release --bin test-fw --features "test-fw-audio-playback test-fw-default-screen-static"`
   - `cargo build --release --bin test-fw --features "test-fw-screen-static test-fw-default-audio-playback"`
   - `cargo build --release --bin test-fw --features test-fw`
+
+## 界面渲染图（最新）
+
+- 音频测试页：移除底部说明文字，列表区域占满主显示区，用于触摸拖动滚动与点选播放验证。
+
+![test-fw audio list fullscreen](assets/test-fw-audio-list-fullscreen.png)
 
 ## 关联规格
 

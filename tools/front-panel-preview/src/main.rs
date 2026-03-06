@@ -12,8 +12,9 @@ use image::{Rgb, RgbImage};
 mod front_panel_scene;
 
 use front_panel_scene::{
-    demo_mode_from_focus, DisplayDiagnosticMeta, SelfCheckCommState, SelfCheckOverlay,
-    SelfCheckUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant, UpsMode, UI_H, UI_W,
+    demo_mode_from_focus, AudioTestUiState, DisplayDiagnosticMeta, SelfCheckCommState,
+    SelfCheckOverlay, SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel, UiPainter, UiVariant,
+    UpsMode, UI_H, UI_W,
 };
 
 fn main() {
@@ -106,6 +107,8 @@ fn run() -> Result<(), String> {
                 }
                 ScenarioArg::DisplayDiag => SelfCheckOverlay::None,
                 ScenarioArg::Default => SelfCheckOverlay::None,
+                ScenarioArg::TestAudio => SelfCheckOverlay::None,
+                ScenarioArg::TestNavigation => SelfCheckOverlay::None,
             };
             front_panel_scene::render_frame_with_self_check_overlay(
                 &mut framebuffer,
@@ -113,6 +116,25 @@ fn run() -> Result<(), String> {
                 args.variant.into_scene(),
                 Some(&snapshot),
                 overlay,
+            )
+            .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
+        ScenarioArg::TestAudio => {
+            let state = AudioTestUiState {
+                playing: false,
+                queued: 0,
+                current: None,
+                selected_idx: 3,
+                list_top: 0,
+            };
+            front_panel_scene::render_test_audio_playback(&mut framebuffer, false, state)
+                .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
+        ScenarioArg::TestNavigation => {
+            front_panel_scene::render_test_navigation(
+                &mut framebuffer,
+                TestFunctionUi::AudioPlayback,
+                Some(TestFunctionUi::ScreenStatic),
             )
             .map_err(|_| "render failed unexpectedly".to_string())?;
         }
@@ -284,6 +306,8 @@ enum ScenarioArg {
     Bq40Activating,
     Bq40ActivationSucceeded,
     Bq40ActivationFailed,
+    TestAudio,
+    TestNavigation,
 }
 
 impl ScenarioArg {
@@ -296,8 +320,10 @@ impl ScenarioArg {
             "bq40-activating" => Ok(Self::Bq40Activating),
             "bq40-activation-succeeded" => Ok(Self::Bq40ActivationSucceeded),
             "bq40-activation-failed" => Ok(Self::Bq40ActivationFailed),
+            "test-audio" => Ok(Self::TestAudio),
+            "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-activation-succeeded|bq40-activation-failed)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-activation-succeeded|bq40-activation-failed|test-audio|test-navigation)"
             )),
         }
     }
@@ -311,6 +337,8 @@ impl ScenarioArg {
             ScenarioArg::Bq40Activating => "bq40-activating",
             ScenarioArg::Bq40ActivationSucceeded => "bq40-activation-succeeded",
             ScenarioArg::Bq40ActivationFailed => "bq40-activation-failed",
+            ScenarioArg::TestAudio => "test-audio",
+            ScenarioArg::TestNavigation => "test-navigation",
         }
     }
 }
@@ -394,7 +422,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-activation-succeeded|bq40-activation-failed}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-activation-succeeded|bq40-activation-failed|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",
