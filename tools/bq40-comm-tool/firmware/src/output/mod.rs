@@ -197,6 +197,9 @@ const BMS_SUSPICIOUS_VOLTAGE_MV: u16 = 5_911;
 const BMS_SUSPICIOUS_CURRENT_MA: i16 = 5_911;
 const BMS_SUSPICIOUS_STATUS: u16 = 0x1717;
 const BMS_ROM_MODE_SIGNATURE: u16 = 0x9002;
+// TI docs describe a ~2 s CHECK_WAKE communication window after the pack sees a wake event.
+// Keep staged probes inside that window in the diagnostic mac-only build before falling back to
+// the longer settle path used by the normal snapshot flow.
 const BMS_MAC_STAGED_DELAYS_MS: [u64; 3] = [0, 800, 1_600];
 const BMS_DIAG_SCAN_INTERVAL: Duration = Duration::from_secs(30);
 const BMS_MISSING_VERBOSE_REPROBE_INTERVAL: Duration = Duration::from_secs(30);
@@ -427,6 +430,10 @@ fn crc8_smbus(bytes: &[u8]) -> u8 {
 fn spin_delay(wait: Duration) {
     let start = Instant::now();
     while start.elapsed() < wait {}
+}
+
+fn spin_until_elapsed(start: Instant, elapsed: Duration) {
+    while start.elapsed() < elapsed {}
 }
 
 #[derive(Clone, Copy)]
@@ -2349,7 +2356,18 @@ where
         // Ensure charger state is applied before the first BMS probe so the gauge can be powered.
         if self.charger_allowed {
             self.maybe_poll_charger(&IrqSnapshot::default());
-            spin_delay(BMS_WAKE_SETTLE);
+            if self.cfg.bms_staged_probe && self.bms_addr.is_none() {
+                defmt::warn!(
+                    "bms: staged_probe boot_window begin stage0_ms={=u64} stage1_ms={=u64} stage2_ms={=u64}",
+                    BMS_MAC_STAGED_DELAYS_MS[0],
+                    BMS_MAC_STAGED_DELAYS_MS[1],
+                    BMS_MAC_STAGED_DELAYS_MS[2]
+                );
+                self.try_wake_bq40z50();
+            }
+            if self.bms_addr.is_none() {
+                spin_delay(BMS_WAKE_SETTLE);
+            }
         }
 
         if self.bms_addr.is_none() {
@@ -2871,26 +2889,27 @@ where
         };
 
         if self.cfg.bms_staged_probe {
+            let staged_start = Instant::now();
             for (stage, delay_ms) in BMS_MAC_STAGED_DELAYS_MS.iter().enumerate() {
-                if *delay_ms != 0 {
-                    spin_delay(Duration::from_millis(*delay_ms));
-                }
+                spin_until_elapsed(staged_start, Duration::from_millis(*delay_ms));
                 if let Some(addr) = self.probe_bq40z50() {
                     self.bms_addr = Some(addr);
                     self.bms_next_retry_at = Some(Instant::now());
                     self.bms_next_poll_at = Instant::now();
                     defmt::info!(
-                        "bms: bq40z50 ok addr=0x{=u8:x} probe_mode={} stage={=u8}",
+                        "bms: bq40z50 ok addr=0x{=u8:x} probe_mode={} stage={=u8} stage_delay_ms={=u64}",
                         addr,
                         mode,
-                        stage as u8
+                        stage as u8,
+                        *delay_ms
                     );
                     return;
                 }
                 defmt::warn!(
-                    "bms: staged_probe miss mode={} stage={=u8}",
+                    "bms: staged_probe miss mode={} stage={=u8} stage_delay_ms={=u64}",
                     mode,
-                    stage as u8
+                    stage as u8,
+                    *delay_ms
                 );
             }
         } else {

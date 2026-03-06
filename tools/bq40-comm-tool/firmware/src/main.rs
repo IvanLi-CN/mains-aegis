@@ -51,7 +51,7 @@ const TELEMETRY_INCLUDE_VIN_CH3: bool = false;
 const FORCE_MIN_CHARGE: bool = cfg!(feature = "force-min-charge");
 const BMS_DIAG_ISOLATION: bool = true;
 const BMS_STRICT_VALIDATION: bool = true;
-const BMS_STAGED_PROBE: bool = false;
+const BMS_STAGED_PROBE: bool = cfg!(feature = "bms-mac-probe-only");
 const BMS_MAC_PROBE_ONLY: bool = cfg!(feature = "bms-mac-probe-only");
 // Diagnostic-only build knob: keep MAC-only probing enabled for the whole monitor session.
 const BMS_MAC_PROBE_BOOT_WINDOW_SECS: u64 = if cfg!(feature = "bms-mac-probe-only") {

@@ -175,7 +175,7 @@
 
 - 风险：若台架外部输入不稳定，可能把“参数已恢复”误判成“逻辑未生效”。
 - 风险：历史日志若混有 `probe_rom_flash_done`，需要谨慎区分旧报告与新语义。
-- 开放问题：当前实板在 `dual-diag + force-min-charge + probe-mode mac-only` 下，`0x0B` 的命令写全部 `i2c_nack_data`，但裸读会回 `0xFF`；`0x16` 的命令写与裸读则全部 `i2c_nack_addr`，且无 `rom_mode_detected`。这更像 canonical 地址上的伪应答/总线回读，而不是可恢复 ROM，需要继续确认是 BQ40 固件异常、板级占用还是线路伪响应。
+- 开放问题：当前实板即使把 staged wake probe 前移到 boot 后 `0/800/1600 ms`，并在同一窗口内执行 `recover --recover if-rom`，`0x0B` 仍然是命令写 `i2c_nack_data` + 裸读 `0xFF`，`0x16` 仍然是命令写/裸读全 `i2c_nack_addr`，且无 `rom_mode_detected`。这说明故障并非单纯“错过 CHECK_WAKE 窗口”，更像 canonical 地址上的伪应答/总线回读，需要继续确认是 BQ40 固件异常、板级占用还是线路伪响应。
 - 开放问题：是否已有可重复触发的 ROM signature 样本用于验证 `flash_done=true` 正例；若没有，需要至少保底验证“不误报 true”。
 - 假设：`tools/bq40-comm-tool/docs/troubleshooting-notes.md` 中记录的 `16.8V / 200mA / 500mA` 仍是当前 bench 的目标参数。
 
@@ -183,6 +183,7 @@
 
 - 2026-03-06: 初始化规格，冻结工具路径边界、bench 前提、`if-rom` 验收口径与里程碑。
 - 2026-03-06: 已完成工具侧 `--force-min-charge` / `flash_done` 语义修复，并新增 `--probe-mode mac-only`、missing reprobe、以及按地址细化的 `bms_diag_word` 诊断；最新实板证据表明 `0x0B` 只剩裸读 `0xFF` 伪应答、`0x16` 完全 NACK，仍属阻断态。
+- 2026-03-06: 新增 boot 后 `0/800/1600 ms` staged wake probe，并在 `if-rom` 路径上复测；结果表明即使在早期唤醒窗口内，`0x0B` 依旧命令字节 NACK、`0x16` 依旧地址 NACK，ROM 恢复仍未触发。
 
 ## 参考（References）
 
