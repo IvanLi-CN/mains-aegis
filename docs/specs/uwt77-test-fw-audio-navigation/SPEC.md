@@ -125,6 +125,10 @@
 
 ## 界面渲染图（最新）
 
+- 测试导航页：按“硬件测试固件 + 测试项目列表”展示，采用双行列表结构。
+
+![test-fw navigation list](assets/test-fw-navigation-list.png)
+
 - 音频测试页：移除底部说明文字，列表区域占满主显示区，用于触摸拖动滚动与点选播放验证。
 
 ![test-fw audio list fullscreen](assets/test-fw-audio-list-fullscreen.png)
