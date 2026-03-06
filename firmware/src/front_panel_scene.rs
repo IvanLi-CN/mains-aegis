@@ -817,7 +817,7 @@ pub fn render_display_diagnostic<P: UiPainter>(
 pub fn render_test_navigation<P: UiPainter>(
     painter: &mut P,
     selected: TestFunctionUi,
-    default_test: Option<TestFunctionUi>,
+    _default_test: Option<TestFunctionUi>,
 ) -> Result<(), P::Error> {
     let variant = UiVariant::RetroC;
     let palette = palette_for(variant);
@@ -830,9 +830,9 @@ pub fn render_test_navigation<P: UiPainter>(
         variant,
         palette,
         UiFocus::Idle,
-        "TEST NAV",
-        "feature-selected test set",
-        "NAV",
+        "HW TEST FW",
+        "TEST ITEM LIST",
+        "",
         palette.accent,
     )?;
 
@@ -859,23 +859,6 @@ pub fn render_test_navigation<P: UiPainter>(
             palette.text
         },
     )?;
-    text(
-        painter,
-        variant,
-        FontRole::TextBody,
-        "Display orientation / color bars",
-        Point::new(
-            (TEST_NAV_CARD_X + TEST_NAV_CARD_W - 10) as i32,
-            (TEST_NAV_CARD_Y + 24) as i32,
-        ),
-        HorizontalAlignment::Right,
-        if selected == TestFunctionUi::ScreenStatic {
-            palette.bg
-        } else {
-            palette.text_dim
-        },
-    )?;
-
     let audio_y = TEST_NAV_CARD_Y + TEST_NAV_CARD_H + TEST_NAV_CARD_GAP;
     draw_panel(
         painter,
@@ -900,48 +883,7 @@ pub fn render_test_navigation<P: UiPainter>(
             palette.text
         },
     )?;
-    text(
-        painter,
-        variant,
-        FontRole::TextBody,
-        "Priority / preemption test",
-        Point::new(
-            (TEST_NAV_CARD_X + TEST_NAV_CARD_W - 10) as i32,
-            (audio_y + 24) as i32,
-        ),
-        HorizontalAlignment::Right,
-        if selected == TestFunctionUi::AudioPlayback {
-            palette.bg
-        } else {
-            palette.text_dim
-        },
-    )?;
-
-    let default_label = match default_test {
-        Some(TestFunctionUi::ScreenStatic) => "DEFAULT: SCREEN",
-        Some(TestFunctionUi::AudioPlayback) => "DEFAULT: AUDIO",
-        None => "DEFAULT: NAVIGATION",
-    };
-    text(
-        painter,
-        variant,
-        FontRole::TextBody,
-        default_label,
-        Point::new(8, 124),
-        HorizontalAlignment::Left,
-        palette.text_dim,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::TextBody,
-        "D-pad/touch choose, CENTER/tap to enter",
-        Point::new(8, 138),
-        HorizontalAlignment::Left,
-        palette.text_dim,
-    )?;
-
-    render_test_back_button(painter, false)
+    Ok(())
 }
 
 #[allow(dead_code)]
