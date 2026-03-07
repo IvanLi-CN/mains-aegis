@@ -182,17 +182,15 @@ const BMS_ROM_FLASH_WRITE_GAP: Duration = Duration::from_millis(10);
 const BMS_ROM_FLASH_WORD_GAP: Duration = Duration::from_millis(50);
 const BMS_ROM_FLASH_ERASE_GAP: Duration = Duration::from_secs(1);
 const BMS_ROM_FLASH_BLOCK_BYTES: usize = 32;
-const BMS_ROM_FLASH_IMAGE_TAG: &str = "bq40z50-r5-v5.05-build96";
+const BMS_ROM_FLASH_IMAGE_TAG: &str = "bq40z50-r2-v2.11-build52";
 const BMS_ROM_SECTION1_IMAGE: &[u8] =
-    include_bytes!("../../assets/bq40z50_r5_v5_05_build_96/section1.bin");
+    include_bytes!("../../assets/bq40z50_r2_v2_11_build_52/section1.bin");
 const BMS_ROM_SECTION2_IMAGE: &[u8] =
-    include_bytes!("../../assets/bq40z50_r5_v5_05_build_96/section2.bin");
-const BMS_ROM_SECTION3_BLK00: &[u8] =
-    include_bytes!("../../assets/bq40z50_r5_v5_05_build_96/section3_blk00.bin");
-const BMS_ROM_SECTION3_BLK80: &[u8] =
-    include_bytes!("../../assets/bq40z50_r5_v5_05_build_96/section3_blk80.bin");
+    include_bytes!("../../assets/bq40z50_r2_v2_11_build_52/section2.bin");
+const BMS_ROM_SECTION3_INFO_IMAGE: &[u8] =
+    include_bytes!("../../assets/bq40z50_r2_v2_11_build_52/section3_info.bin");
 const BMS_ROM_SECTION4_BLK: &[u8] =
-    include_bytes!("../../assets/bq40z50_r5_v5_05_build_96/section4_blk.bin");
+    include_bytes!("../../assets/bq40z50_r2_v2_11_build_52/section4_blk.bin");
 const BMS_SUSPICIOUS_VOLTAGE_MV: u16 = 5_911;
 const BMS_SUSPICIOUS_CURRENT_MA: i16 = 5_911;
 const BMS_SUSPICIOUS_STATUS: u16 = 0x1717;
@@ -1120,6 +1118,58 @@ where
     Ok(())
 }
 
+fn program_bms_rom_info_section<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    image: &[u8],
+    quiet: bool,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if image.len() != 0x100 {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+
+    let mut payload = [0u8; BMS_ROM_FLASH_BLOCK_BYTES + 2];
+    for (idx, chunk) in image.chunks_exact(BMS_ROM_FLASH_BLOCK_BYTES).enumerate() {
+        let block_off = (idx * BMS_ROM_FLASH_BLOCK_BYTES) as u16;
+        if let Err(e) = write_bms_rom_word(i2c, addr, 0x1A, 0xDE, 0x83) {
+            if !quiet {
+                log_bms_diag(addr, "rom_flash_sec3_preface", e, "word", "srec");
+            }
+            return Err(e);
+        }
+        spin_delay(BMS_ROM_FLASH_WORD_GAP);
+
+        payload[0] = (block_off & 0x00FF) as u8;
+        payload[1] = (block_off >> 8) as u8;
+        payload[2..].copy_from_slice(chunk);
+        if block_off == 0 {
+            payload[2] = 0xFF;
+            payload[3] = 0xFF;
+        }
+
+        if let Err(e) = write_bms_rom_block(i2c, addr, 0x05, &payload) {
+            if !quiet {
+                log_bms_diag(addr, "rom_flash_sec3_info", e, "block", "srec");
+            }
+            return Err(e);
+        }
+        spin_delay(BMS_ROM_FLASH_WRITE_GAP);
+
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=rom_flash_sec3_info block=0x{=u8:x}",
+                addr,
+                block_off as u8
+            );
+        }
+    }
+
+    Ok(())
+}
+
 fn run_bms_rom_flash_recover_sequence<I2C>(
     i2c: &mut I2C,
     addr: u8,
@@ -1254,36 +1304,14 @@ where
         return Err(e);
     }
 
-    // Section3 + Section4: Information block writes from TI script.
-    if let Err(e) = write_bms_rom_word(i2c, addr, 0x1A, 0xDE, 0x83) {
+    // Section3 + Section4: program the full 0x140000..0x1400FF information page map,
+    // then restore the first info word with the separate section4 write.
+    if let Err(e) = program_bms_rom_info_section(i2c, addr, BMS_ROM_SECTION3_INFO_IMAGE, quiet) {
         if !quiet {
-            log_bms_diag(addr, "rom_flash_sec3_preface_1a", e, "word", "srec");
+            log_bms_diag(addr, "rom_flash_sec3_info", e, "block", "srec");
         }
         return Err(e);
     }
-    spin_delay(BMS_ROM_FLASH_WORD_GAP);
-    if let Err(e) = write_bms_rom_block(i2c, addr, 0x05, BMS_ROM_SECTION3_BLK00) {
-        if !quiet {
-            log_bms_diag(addr, "rom_flash_sec3_blk00", e, "block", "srec");
-        }
-        return Err(e);
-    }
-    spin_delay(BMS_ROM_FLASH_WRITE_GAP);
-
-    if let Err(e) = write_bms_rom_word(i2c, addr, 0x1A, 0xDE, 0x83) {
-        if !quiet {
-            log_bms_diag(addr, "rom_flash_sec3_preface_1a_80", e, "word", "srec");
-        }
-        return Err(e);
-    }
-    spin_delay(BMS_ROM_FLASH_WORD_GAP);
-    if let Err(e) = write_bms_rom_block(i2c, addr, 0x05, BMS_ROM_SECTION3_BLK80) {
-        if !quiet {
-            log_bms_diag(addr, "rom_flash_sec3_blk80", e, "block", "srec");
-        }
-        return Err(e);
-    }
-    spin_delay(BMS_ROM_FLASH_WRITE_GAP);
 
     if let Err(e) = write_bms_rom_word(i2c, addr, 0x1A, 0xDE, 0x83) {
         if !quiet {
