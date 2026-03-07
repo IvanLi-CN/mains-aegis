@@ -1300,20 +1300,56 @@ where
     }
     spin_delay(BMS_ROM_FLASH_WORD_GAP);
 
-    if let Err(e) = write_bms_rom_bytes(i2c, addr, &[0x08]) {
-        if !quiet {
-            log_bms_diag(addr, "rom_flash_exec_08", e, "word", "srec");
-        }
-        return Err(e);
-    }
-    spin_delay(BMS_ROM_EXECUTE_FLASH_SETTLE);
+    let addr_w = addr << 1;
+    let pec_08 = crc8_smbus(&[addr_w, 0x08]);
+    let pec_0811 = crc8_smbus(&[addr_w, 0x08, 0x11]);
 
-    let mut after = read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)?;
+    let mut after = match try_bms_rom_execute_frame(
+        i2c,
+        addr,
+        "rom_flash_exec_08",
+        &[0x08],
+        BMS_ROM_EXECUTE_FLASH_SETTLE,
+        quiet,
+    )? {
+        Some(v) => v,
+        None => return Err(bq40z50::BmsDiagError::I2cNack),
+    };
     if after == BMS_ROM_MODE_SIGNATURE {
-        // Some ROM paths only jump after the combined trigger.
-        let _ = write_bms_rom_bytes(i2c, addr, &[0x08, 0x11]);
-        spin_delay(BMS_ROM_EXECUTE_FLASH_SETTLE);
-        after = read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)?;
+        if let Some(v) = try_bms_rom_execute_frame(
+            i2c,
+            addr,
+            "rom_flash_exec_08_pec",
+            &[0x08, pec_08],
+            BMS_ROM_EXECUTE_FLASH_SETTLE,
+            quiet,
+        )? {
+            after = v;
+        }
+    }
+    if after == BMS_ROM_MODE_SIGNATURE {
+        if let Some(v) = try_bms_rom_execute_frame(
+            i2c,
+            addr,
+            "rom_flash_exec_08_11",
+            &[0x08, 0x11],
+            BMS_ROM_EXECUTE_FLASH_SETTLE,
+            quiet,
+        )? {
+            after = v;
+        }
+    }
+    if after == BMS_ROM_MODE_SIGNATURE {
+        if let Some(v) = try_bms_rom_execute_frame(
+            i2c,
+            addr,
+            "rom_flash_exec_08_11_pec",
+            &[0x08, 0x11, pec_0811],
+            BMS_ROM_EXECUTE_FLASH_SETTLE,
+            quiet,
+        )? {
+            after = v;
+        }
     }
     if after == BMS_ROM_MODE_SIGNATURE {
         if !quiet {
@@ -1487,15 +1523,71 @@ fn run_bms_rom_execute_flash_sequence<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    // Cross-family TI ROM execute-flash sequence (0x00=0x0F then 0x64=0x000F).
-    // Useful when 0x08 alone is acknowledged but does not jump back to FW.
-    i2c.write(addr, &[0x00, 0x0F])
-        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    // Cross-family TI ROM execute-flash sequence (0x00=0x000F then 0x64=0x000F).
+    // Both steps are SMBus word writes; use the ROM helpers so PEC/swapped-byte retries stay available.
+    write_bms_rom_word(i2c, addr, 0x00, 0x0F, 0x00)?;
     spin_delay(BMS_MAC_TOGGLE_SETTLE);
-    i2c.write(addr, &[0x64, 0x0F, 0x00])
-        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    write_bms_rom_word(i2c, addr, 0x64, 0x0F, 0x00)?;
     spin_delay(BMS_ROM_EXECUTE_FLASH_SETTLE);
     Ok(())
+}
+
+fn try_bms_rom_execute_frame<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    stage: &'static str,
+    frame: &[u8],
+    settle: Duration,
+    quiet: bool,
+) -> Result<Option<u16>, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if let Err(e) = i2c.write(addr, frame) {
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage={} write_err={}",
+                addr,
+                stage,
+                i2c_error_kind(e)
+            );
+        }
+        return Ok(None);
+    }
+
+    spin_delay(settle);
+    let mut read_attempt = 0u8;
+    loop {
+        match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE) {
+            Ok(after) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} rsoc_after=0x{=u16:x}",
+                        addr,
+                        stage,
+                        after
+                    );
+                }
+                return Ok(Some(after));
+            }
+            Err(e) => {
+                read_attempt = read_attempt.saturating_add(1);
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} read_err={} attempt={=u8}",
+                        addr,
+                        stage,
+                        e,
+                        read_attempt
+                    );
+                }
+                if read_attempt >= 2 {
+                    return Ok(None);
+                }
+                spin_delay(BMS_ROM_EXECUTE_FLASH_SETTLE);
+            }
+        }
+    }
 }
 
 fn read_u16_with_pec<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> Result<u16, bq40z50::BmsDiagError>
