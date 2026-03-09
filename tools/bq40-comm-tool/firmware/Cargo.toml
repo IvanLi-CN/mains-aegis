@@ -25,6 +25,10 @@ bms-dual-probe-diag = []
 bms-mac-probe-only = []
 bms-rom-recover-disable = []
 bms-rom-recover-force = []
+bms-rom-full-info = []
+bms-rom-force-pec = []
+bms-rom-image-r3 = []
+bms-rom-image-r5 = []
 
 [dependencies]
 defmt = "1.0.1"

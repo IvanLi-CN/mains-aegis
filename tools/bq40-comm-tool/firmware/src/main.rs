@@ -51,7 +51,7 @@ const TELEMETRY_INCLUDE_VIN_CH3: bool = false;
 const FORCE_MIN_CHARGE: bool = cfg!(feature = "force-min-charge");
 const BMS_DIAG_ISOLATION: bool = true;
 const BMS_STRICT_VALIDATION: bool = true;
-const BMS_STAGED_PROBE: bool = cfg!(feature = "bms-mac-probe-only");
+const BMS_STAGED_PROBE: bool = true;
 const BMS_MAC_PROBE_ONLY: bool = cfg!(feature = "bms-mac-probe-only");
 // Diagnostic-only build knob: keep MAC-only probing enabled for the whole monitor session.
 const BMS_MAC_PROBE_BOOT_WINDOW_SECS: u64 = if cfg!(feature = "bms-mac-probe-only") {
@@ -60,6 +60,13 @@ const BMS_MAC_PROBE_BOOT_WINDOW_SECS: u64 = if cfg!(feature = "bms-mac-probe-onl
     0
 };
 const BMS_ROM_RECOVER: bool = !cfg!(feature = "bms-rom-recover-disable");
+// Keep the whole diagnostic tool on the slowest known-good SMBus rate to maximize margin during
+// recovery and wake attempts.
+const I2C1_FREQ_KHZ: u32 = 25;
+const I2C1_BUS_CLEAR_PULSES: u8 = 18;
+const I2C1_BUS_CLEAR_HALF_PERIOD: Duration = Duration::from_micros(20);
+const I2C1_BUS_TIMEOUT_LOW: Duration = Duration::from_millis(40);
+const I2C1_BITBANG_HALF_PERIOD: Duration = Duration::from_micros(100);
 const BMS_ADDRESS_MODE: bq40z50::BmsAddressMode = if cfg!(feature = "bms-dual-probe-diag") {
     bq40z50::BmsAddressMode::DualProbeDiag
 } else {
@@ -87,6 +94,152 @@ const TMP112_OUT_A_ADDR: u8 = 0x48;
 const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 50 * 16;
 const TMP112_TLOW_C_X16: i16 = 40 * 16;
+
+fn spin_delay(wait: Duration) {
+    let start = Instant::now();
+    while Instant::now() - start < wait {
+        core::hint::spin_loop();
+    }
+}
+
+fn bitbang_release(pin: &mut Flex<'_>) {
+    pin.set_high();
+}
+
+fn bitbang_pull_low(pin: &mut Flex<'_>) {
+    pin.set_low();
+}
+
+fn bitbang_start(sda: &mut Flex<'_>, scl: &mut Flex<'_>) {
+    bitbang_release(sda);
+    bitbang_release(scl);
+    spin_delay(I2C1_BITBANG_HALF_PERIOD);
+    bitbang_pull_low(sda);
+    spin_delay(I2C1_BITBANG_HALF_PERIOD);
+    bitbang_pull_low(scl);
+    spin_delay(I2C1_BITBANG_HALF_PERIOD);
+}
+
+fn bitbang_stop(sda: &mut Flex<'_>, scl: &mut Flex<'_>) {
+    bitbang_pull_low(sda);
+    spin_delay(I2C1_BITBANG_HALF_PERIOD);
+    bitbang_release(scl);
+    spin_delay(I2C1_BITBANG_HALF_PERIOD);
+    bitbang_release(sda);
+    spin_delay(I2C1_BITBANG_HALF_PERIOD);
+}
+
+fn bitbang_write_byte(sda: &mut Flex<'_>, scl: &mut Flex<'_>, byte: u8) -> bool {
+    for shift in (0..8).rev() {
+        if ((byte >> shift) & 1) != 0 {
+            bitbang_release(sda);
+        } else {
+            bitbang_pull_low(sda);
+        }
+        spin_delay(I2C1_BITBANG_HALF_PERIOD);
+        bitbang_release(scl);
+        spin_delay(I2C1_BITBANG_HALF_PERIOD);
+        bitbang_pull_low(scl);
+    }
+
+    bitbang_release(sda);
+    spin_delay(I2C1_BITBANG_HALF_PERIOD);
+    bitbang_release(scl);
+    spin_delay(I2C1_BITBANG_HALF_PERIOD / 2);
+    let ack = sda.is_low();
+    spin_delay(I2C1_BITBANG_HALF_PERIOD / 2);
+    bitbang_pull_low(scl);
+    spin_delay(I2C1_BITBANG_HALF_PERIOD);
+    ack
+}
+
+fn bitbang_touch_bq(sda: &mut Flex<'_>, scl: &mut Flex<'_>, addr: u8, cmd: u8) {
+    bitbang_start(sda, scl);
+    let addr_ack = bitbang_write_byte(sda, scl, addr << 1);
+    let cmd_ack = if addr_ack {
+        bitbang_write_byte(sda, scl, cmd)
+    } else {
+        false
+    };
+    bitbang_stop(sda, scl);
+    defmt::info!(
+        "i2c_bitbang_touch: addr=0x{=u8:x} cmd=0x{=u8:x} addr_ack={=bool} cmd_ack={=bool}",
+        addr,
+        cmd,
+        addr_ack,
+        cmd_ack
+    );
+}
+
+fn clear_i2c_bus(sda: &mut Flex<'_>, scl: &mut Flex<'_>, bus: &'static str) {
+    let input_cfg = InputConfig::default().with_pull(Pull::Up);
+    let output_cfg = OutputConfig::default()
+        .with_drive_mode(DriveMode::OpenDrain)
+        .with_pull(Pull::Up);
+
+    sda.apply_input_config(&input_cfg);
+    sda.set_input_enable(true);
+    sda.set_output_enable(false);
+    scl.apply_input_config(&input_cfg);
+    scl.set_input_enable(true);
+    scl.set_output_enable(false);
+
+    let sda_high_before = sda.is_high();
+    let scl_high_before = scl.is_high();
+
+    sda.apply_output_config(&output_cfg);
+    scl.apply_output_config(&output_cfg);
+    sda.set_high();
+    scl.set_high();
+    sda.set_output_enable(true);
+    scl.set_output_enable(true);
+    spin_delay(I2C1_BUS_CLEAR_HALF_PERIOD);
+
+    // SMBus devices can recover an incomplete transaction after SCL stays low long enough for
+    // the bus-timeout logic to fire. Keep SDA released while we issue this timeout pulse.
+    scl.set_low();
+    spin_delay(I2C1_BUS_TIMEOUT_LOW);
+    scl.set_high();
+    spin_delay(I2C1_BUS_CLEAR_HALF_PERIOD);
+
+    for _ in 0..I2C1_BUS_CLEAR_PULSES {
+        scl.set_low();
+        spin_delay(I2C1_BUS_CLEAR_HALF_PERIOD);
+        scl.set_high();
+        spin_delay(I2C1_BUS_CLEAR_HALF_PERIOD);
+    }
+
+    sda.set_low();
+    spin_delay(I2C1_BUS_CLEAR_HALF_PERIOD);
+    scl.set_high();
+    spin_delay(I2C1_BUS_CLEAR_HALF_PERIOD);
+    sda.set_high();
+    spin_delay(I2C1_BUS_CLEAR_HALF_PERIOD);
+
+    sda.set_output_enable(false);
+    scl.set_output_enable(false);
+
+    let sda_high_after = sda.is_high();
+    let scl_high_after = scl.is_high();
+    defmt::info!(
+        "i2c_bus_clear: bus={} pulses={=u8} timeout_low_ms={=u64} sda_before={=bool} scl_before={=bool} sda_after={=bool} scl_after={=bool}",
+        bus,
+        I2C1_BUS_CLEAR_PULSES,
+        I2C1_BUS_TIMEOUT_LOW.as_millis() as u64,
+        sda_high_before,
+        scl_high_before,
+        sda_high_after,
+        scl_high_after
+    );
+    if !sda_high_after || !scl_high_after {
+        defmt::warn!(
+            "i2c_bus_clear: bus={} idle_not_high sda_after={=bool} scl_after={=bool}",
+            bus,
+            sda_high_after,
+            scl_high_after
+        );
+    }
+}
 
 #[main]
 fn main() -> ! {
@@ -204,14 +357,25 @@ fn main() -> ! {
     if matches!(BMS_ADDRESS_MODE, bq40z50::BmsAddressMode::DualProbeDiag) {
         defmt::warn!("fw: bms dual-probe diagnostic mode enabled");
     }
+    defmt::info!("fw: i2c1_khz={=u32}", I2C1_FREQ_KHZ);
+
+    let mut i2c1_sda = Flex::new(peripherals.GPIO48);
+    let mut i2c1_scl = Flex::new(peripherals.GPIO47);
+    clear_i2c_bus(&mut i2c1_sda, &mut i2c1_scl, "i2c1");
+    bitbang_touch_bq(
+        &mut i2c1_sda,
+        &mut i2c1_scl,
+        bq40z50::I2C_ADDRESS_PRIMARY,
+        0x0d,
+    );
 
     let i2c1_config = I2cConfig::default()
-        .with_frequency(Rate::from_khz(100))
+        .with_frequency(Rate::from_khz(I2C1_FREQ_KHZ))
         .with_software_timeout(SoftwareTimeout::Transaction(Duration::from_millis(100)));
     let mut i2c: I2c<'static, Blocking> = I2c::new(peripherals.I2C1, i2c1_config)
         .unwrap()
-        .with_sda(peripherals.GPIO48)
-        .with_scl(peripherals.GPIO47);
+        .with_sda(i2c1_sda.into_peripheral_output())
+        .with_scl(i2c1_scl.into_peripheral_output());
 
     let i2c1_int_cfg = InputConfig::default().with_pull(Pull::Up);
     let mut i2c1_int = Input::new(peripherals.GPIO33, i2c1_int_cfg);
@@ -238,9 +402,9 @@ fn main() -> ! {
 
     // BMS interrupt/alert line (active-high on MCU side after an inverter stage).
     let bms_btp_int_cfg = InputConfig::default().with_pull(Pull::None);
-    let mut _bms_btp_int_h = Input::new(peripherals.GPIO21, bms_btp_int_cfg);
-    _bms_btp_int_h.clear_interrupt();
-    _bms_btp_int_h.listen(Event::RisingEdge);
+    let mut bms_btp_int_h = Input::new(peripherals.GPIO21, bms_btp_int_cfg);
+    bms_btp_int_h.clear_interrupt();
+    bms_btp_int_h.listen(Event::RisingEdge);
 
     // BQ25792 charger control pins.
     //
@@ -397,8 +561,15 @@ fn main() -> ! {
         bms_rom_recover: BMS_ROM_RECOVER,
     };
 
-    let mut power =
-        output::PowerManager::new(i2c, i2c1_int, therm_kill, chg_ce, chg_ilim_hiz_brk, cfg);
+    let mut power = output::PowerManager::new(
+        i2c,
+        i2c1_int,
+        bms_btp_int_h,
+        therm_kill,
+        chg_ce,
+        chg_ilim_hiz_brk,
+        cfg,
+    );
     defmt::info!(
         "power: enabled_outputs={} target_vout_mv={=u16} target_ilimit_ma={=u16}",
         cfg.enabled_outputs.describe(),

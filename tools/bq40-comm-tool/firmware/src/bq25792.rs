@@ -19,6 +19,7 @@ pub mod reg {
     pub const INPUT_CURRENT_LIMIT: u8 = 0x06;
 
     pub const CHARGER_CONTROL_0: u8 = 0x0F;
+    pub const CHARGER_CONTROL_1: u8 = 0x10;
     pub const CHARGER_CONTROL_2: u8 = 0x11;
     pub const CHARGER_CONTROL_5: u8 = 0x14;
 
@@ -49,6 +50,13 @@ pub mod ctrl0 {
     pub const EN_CHG: u8 = 1 << 5;
     /// `REGOF_Charger_Control_0.EN_HIZ` (bit 2).
     pub const EN_HIZ: u8 = 1 << 2;
+}
+
+pub mod ctrl1 {
+    /// `REG10.WD_RST` (bit 3).
+    pub const WD_RST: u8 = 1 << 3;
+    /// `REG10.WATCHDOG[2:0]`.
+    pub const WATCHDOG_MASK: u8 = 0x07;
 }
 
 pub mod ctrl2 {
@@ -142,13 +150,13 @@ where
     i2c.write_read(I2C_ADDRESS, &[start_reg], buf)
 }
 
-pub fn read_u16<I2C>(i2c: &mut I2C, reg_lsb: u8) -> Result<u16, I2C::Error>
+pub fn read_u16<I2C>(i2c: &mut I2C, reg_msb: u8) -> Result<u16, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
     let mut buf = [0u8; 2];
-    i2c.write_read(I2C_ADDRESS, &[reg_lsb], &mut buf)?;
-    Ok(u16::from_le_bytes(buf))
+    i2c.write_read(I2C_ADDRESS, &[reg_msb], &mut buf)?;
+    Ok(u16::from_be_bytes(buf))
 }
 
 pub fn write_u8<I2C>(i2c: &mut I2C, reg: u8, value: u8) -> Result<(), I2C::Error>
@@ -158,12 +166,12 @@ where
     i2c.write(I2C_ADDRESS, &[reg, value])
 }
 
-pub fn write_u16<I2C>(i2c: &mut I2C, reg_lsb: u8, value: u16) -> Result<(), I2C::Error>
+pub fn write_u16<I2C>(i2c: &mut I2C, reg_msb: u8, value: u16) -> Result<(), I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    let [lsb, msb] = value.to_le_bytes();
-    i2c.write(I2C_ADDRESS, &[reg_lsb, lsb, msb])
+    let [msb, lsb] = value.to_be_bytes();
+    i2c.write(I2C_ADDRESS, &[reg_msb, msb, lsb])
 }
 
 /// Read-modify-write a single 8-bit register.
@@ -254,6 +262,35 @@ where
         write_u16(i2c, reg::INPUT_CURRENT_LIMIT, new)?;
     }
     Ok(new)
+}
+
+#[derive(Clone, Copy)]
+pub struct WatchdogState {
+    pub ctrl1_before: u8,
+    pub ctrl1_after: u8,
+    pub watchdog_before: u8,
+    pub watchdog_after: u8,
+}
+
+/// Disable the I2C watchdog so long-running recovery flows do not get their charger state reset.
+pub fn ensure_watchdog_disabled<I2C>(i2c: &mut I2C) -> Result<WatchdogState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let watchdog_before = ctrl1_before & ctrl1::WATCHDOG_MASK;
+    let ctrl1_after = ctrl1_before & !ctrl1::WATCHDOG_MASK;
+    if ctrl1_after != ctrl1_before {
+        write_u8(i2c, reg::CHARGER_CONTROL_1, ctrl1_after)?;
+    }
+    let watchdog_after = ctrl1_after & ctrl1::WATCHDOG_MASK;
+
+    Ok(WatchdogState {
+        ctrl1_before,
+        ctrl1_after,
+        watchdog_before,
+        watchdog_after,
+    })
 }
 
 #[derive(Clone, Copy)]

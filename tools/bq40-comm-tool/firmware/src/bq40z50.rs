@@ -92,6 +92,8 @@ pub mod cmd {
     pub const BATTERY_STATUS: u8 = 0x16;
     pub const MANUFACTURER_DATA: u8 = 0x23;
     pub const MANUFACTURER_BLOCK_ACCESS: u8 = 0x44;
+    pub const PF_STATUS: u8 = 0x53;
+    pub const LIFETIME_DATA_BLOCK_2: u8 = 0x61;
 
     pub const MANUFACTURER_NAME: u8 = 0x20;
     pub const DEVICE_NAME: u8 = 0x21;
