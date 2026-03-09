@@ -348,6 +348,10 @@ struct ValidatedBmsSnapshot {
     current_ma: i16,
     soc_pct: u16,
     status_raw: u16,
+    cell1_mv: u16,
+    cell2_mv: u16,
+    cell3_mv: u16,
+    cell4_mv: u16,
     err_code: u8,
     remaining_cap_mah: Result<u16, &'static str>,
     full_cap_mah: Result<u16, &'static str>,
@@ -3418,6 +3422,18 @@ where
     spin_delay(BMS_WORD_GAP);
     prime_bms_command_window(i2c, addr)?;
     let status_raw = read_u16_consistent(i2c, addr, bq40z50::cmd::BATTERY_STATUS, 0)?;
+    spin_delay(BMS_WORD_GAP);
+    prime_bms_command_window(i2c, addr)?;
+    let cell1_mv = read_u16_consistent(i2c, addr, bq40z50::cmd::CELL_VOLTAGE_1, 20)?;
+    spin_delay(BMS_WORD_GAP);
+    prime_bms_command_window(i2c, addr)?;
+    let cell2_mv = read_u16_consistent(i2c, addr, bq40z50::cmd::CELL_VOLTAGE_2, 20)?;
+    spin_delay(BMS_WORD_GAP);
+    prime_bms_command_window(i2c, addr)?;
+    let cell3_mv = read_u16_consistent(i2c, addr, bq40z50::cmd::CELL_VOLTAGE_3, 20)?;
+    spin_delay(BMS_WORD_GAP);
+    prime_bms_command_window(i2c, addr)?;
+    let cell4_mv = read_u16_consistent(i2c, addr, bq40z50::cmd::CELL_VOLTAGE_4, 20)?;
     let mut temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(temp_k_x10);
     if strict_validation && !(-400..=1250).contains(&temp_c_x10) {
         // Temperature occasionally glitches to a transient out-of-range value while other fields
@@ -3444,7 +3460,7 @@ where
         && status_raw == BMS_SUSPICIOUS_STATUS;
     if strict_validation && suspicious_tuple && repeat_count >= 3 {
         defmt::warn!(
-            "bms_diag_raw: addr=0x{=u8:x} temp_k_x10={=u16} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} repeats={=u8}",
+            "bms_diag_raw: addr=0x{=u8:x} temp_k_x10={=u16} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16} repeats={=u8}",
             addr,
             temp_k_x10,
             temp_c_x10,
@@ -3452,6 +3468,10 @@ where
             current_ma,
             soc_pct,
             status_raw,
+            cell1_mv,
+            cell2_mv,
+            cell3_mv,
+            cell4_mv,
             repeat_count
         );
         return Err(bq40z50::BmsDiagError::StalePattern);
@@ -3463,7 +3483,7 @@ where
             || soc_pct > 100)
     {
         defmt::warn!(
-            "bms_diag_raw: addr=0x{=u8:x} temp_k_x10={=u16} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x}",
+            "bms_diag_raw: addr=0x{=u8:x} temp_k_x10={=u16} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16}",
             addr,
             temp_k_x10,
             temp_c_x10,
@@ -3471,6 +3491,10 @@ where
             current_ma,
             soc_pct,
             status_raw,
+            cell1_mv,
+            cell2_mv,
+            cell3_mv,
+            cell4_mv,
         );
         return Err(bq40z50::BmsDiagError::BadRange);
     }
@@ -3485,6 +3509,10 @@ where
         current_ma,
         soc_pct,
         status_raw,
+        cell1_mv,
+        cell2_mv,
+        cell3_mv,
+        cell4_mv,
         err_code,
         remaining_cap_mah,
         full_cap_mah,
@@ -5241,10 +5269,14 @@ where
                         self.bms_weak_pass_votes = 0;
                         if !quiet {
                             defmt::info!(
-                                "bms: bq40z50 probe_ok addr=0x{=u8:x} voltage_mv={=u16} soc_pct={=u16}",
+                                "bms: bq40z50 probe_ok addr=0x{=u8:x} voltage_mv={=u16} soc_pct={=u16} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16}",
                                 addr,
                                 snapshot.voltage_mv,
-                                snapshot.soc_pct
+                                snapshot.soc_pct,
+                                snapshot.cell1_mv,
+                                snapshot.cell2_mv,
+                                snapshot.cell3_mv,
+                                snapshot.cell4_mv,
                             );
                         }
                         return Some(addr);
@@ -6190,13 +6222,17 @@ where
                     .map_or(true, |last| now >= last + BMS_WORKING_INFO_PERIOD)
                 {
                     defmt::info!(
-                        "bms: addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} err_code={} err_str={} rem_cap_mah={=?} full_cap_mah={=?}",
+                        "bms: addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16} err_code={} err_str={} rem_cap_mah={=?} full_cap_mah={=?}",
                         addr,
                         snapshot.temp_c_x10,
                         snapshot.voltage_mv,
                         snapshot.current_ma,
                         snapshot.soc_pct,
                         snapshot.status_raw,
+                        snapshot.cell1_mv,
+                        snapshot.cell2_mv,
+                        snapshot.cell3_mv,
+                        snapshot.cell4_mv,
                         snapshot.err_code,
                         bq40z50::decode_error_code(snapshot.err_code),
                         snapshot.remaining_cap_mah,
