@@ -107,6 +107,10 @@
   When 运行 `./bin/run.sh recover --mode canonical --duration-sec 120 --recover if-rom --force-min-charge true` 并完成完整 ROM flash reflash，
   Then `summary.json` 中 `rom_events.detected=true`、`flash_attempted=true`、`flash_done=true`；若只有 `probe_rom_flash_done` 或其他探测性阶段打点，则 `flash_done` 仍为 `false`。
 
+- Given 原始芯片样本持续停留在“既非正常 SBS、也非可见 ROM”的阻断态，
+  When 在同板同工具链下更换 BQ40Z50 样本后，`tools/bq40-comm-tool` 已能完成 `ROM 检测 -> 重刷 -> 退出 ROM`，并在无电池偏置条件下稳定给出 `Voltage()/CellVoltage1()` 为几十 mV、`CellVoltage2..4()` 为 `0 mV` 的悬空签名，
+  Then 本轮软件任务可判定为“工具链与诊断路径有效，且已把原始样本收敛为疑似硬损坏器件”，不再要求软件侧继续把该损坏样本恢复到应用态通信通过。
+
 - Given 已存在由 `tools/bq40-comm-tool` live 流程生成的 `.mon.ndjson`，
   When 运行 `./bin/run.sh verify --mode canonical --duration-sec 120 --monitor-file <that-file>`，
   Then 离线复算出的 `rom_events` 与在线 summary 一致，且命令仍拒绝 `--flash`、`--recover`、`--force-min-charge`。
@@ -175,7 +179,7 @@
 
 - 风险：若台架外部输入不稳定，可能把“参数已恢复”误判成“逻辑未生效”。
 - 风险：历史日志若混有 `probe_rom_flash_done`，需要谨慎区分旧报告与新语义。
-- 开放问题：当前实板即使把 staged wake probe 前移到 boot 后 `0/800/1600 ms`，并在同一窗口内执行 `recover --recover if-rom`，`0x0B` 仍然是命令写 `i2c_nack_data` + 裸读 `0xFF`，`0x16` 仍然是命令写/裸读全 `i2c_nack_addr`，且无 `rom_mode_detected`。进一步地，在 `probe_rom_exit` 本身读签名失败后，继续主动发送 `0x0F00` / `0x0033`（含 PEC 变体）也无法把设备拉进可见 ROM。按 TI 文档/E2E，这更像半烧录后落入了既非正常 FW、也非可见 ROM 的阻断态。
+- 开放问题：原始问题芯片为何损坏仍未查明。基于“同板更换芯片后工具链可完成 ROM 检测/重刷/退出 ROM，而原芯片始终停在阻断态”的对照结果，当前更合理的结论是 **原始样本疑似硬损坏**，而非工具链仍有主路径故障。
 - 开放问题：是否已有可重复触发的 ROM signature 样本用于验证 `flash_done=true` 正例；若没有，需要至少保底验证“不误报 true”。
 - 假设：`tools/bq40-comm-tool/docs/troubleshooting-notes.md` 中记录的 `16.8V / 200mA / 500mA` 仍是当前 bench 的目标参数。
 
@@ -185,6 +189,7 @@
 - 2026-03-06: 已完成工具侧 `--force-min-charge` / `flash_done` 语义修复，并新增 `--probe-mode mac-only`、missing reprobe、以及按地址细化的 `bms_diag_word` 诊断；最新实板证据表明 `0x0B` 只剩裸读 `0xFF` 伪应答、`0x16` 完全 NACK，仍属阻断态。
 - 2026-03-06: 新增 boot 后 `0/800/1600 ms` staged wake probe，并在 `if-rom` 路径上复测；结果表明即使在早期唤醒窗口内，`0x0B` 依旧命令字节 NACK、`0x16` 依旧地址 NACK，ROM 恢复仍未触发。
 - 2026-03-07: 在 `probe_rom_exit` 失败时追加 `0x0F00` / `0x0033`（含 PEC）盲打 ROM 入口诊断，并为 `monitor` 增加首轮 reset 失败自动回退；结果显示 ROM 入口写法在 `0x0B` 上全部 data-NACK、在 `0x16` 上全部 address-NACK，仍无法进入可见 ROM。
+- 2026-03-09: 在工具固件日志中补充 `CellVoltage1..4()` 诊断；无电池偏置样本显示 `CellVoltage1≈27~51 mV`、`CellVoltage2..4=0 mV`，与 `Voltage()` 的几十 mV 浮动一致，可作为悬空偏置签名。结合更换芯片后的对照结果，本任务的软件收口口径调整为“工具链有效并可识别原始样本疑似硬损坏”，而不是要求软件恢复已损坏芯片。
 
 ## 参考（References）
 
