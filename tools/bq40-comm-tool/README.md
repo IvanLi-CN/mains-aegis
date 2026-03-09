@@ -35,7 +35,7 @@ cp .esp32-port.example .esp32-port
 
 Options:
 - `--mode canonical|dual-diag` (default: `canonical`)
-- `--duration-sec <N>` (default: `120`; `diagnose/recover` require `>=20`)
+- `--duration-sec <N>` (default: `120`; `diagnose` requires `>=62`, `recover` requires `>=92`)
 - `--flash true|false` (default: `true`; not accepted by `verify`)
 - `--recover never|if-rom|force` (default: `if-rom`; not accepted by `diagnose`/`verify`; `force` requires `--mode dual-diag`)
 - `--force-min-charge true|false` (default: `false`; not accepted by `verify`)

@@ -102,6 +102,23 @@ fn spin_delay(wait: Duration) {
     }
 }
 
+fn prepare_bitbang_pin(pin: &mut Flex<'_>) {
+    let input_cfg = InputConfig::default().with_pull(Pull::Up);
+    let output_cfg = OutputConfig::default()
+        .with_drive_mode(DriveMode::OpenDrain)
+        .with_pull(Pull::Up);
+    pin.apply_input_config(&input_cfg);
+    pin.set_input_enable(true);
+    pin.apply_output_config(&output_cfg);
+    pin.set_output_enable(true);
+    pin.set_high();
+}
+
+fn release_bitbang_pin(pin: &mut Flex<'_>) {
+    pin.set_high();
+    pin.set_output_enable(false);
+}
+
 fn bitbang_release(pin: &mut Flex<'_>) {
     pin.set_high();
 }
@@ -154,6 +171,8 @@ fn bitbang_write_byte(sda: &mut Flex<'_>, scl: &mut Flex<'_>, byte: u8) -> bool 
 }
 
 fn bitbang_touch_bq(sda: &mut Flex<'_>, scl: &mut Flex<'_>, addr: u8, cmd: u8) {
+    prepare_bitbang_pin(sda);
+    prepare_bitbang_pin(scl);
     bitbang_start(sda, scl);
     let addr_ack = bitbang_write_byte(sda, scl, addr << 1);
     let cmd_ack = if addr_ack {
@@ -162,6 +181,8 @@ fn bitbang_touch_bq(sda: &mut Flex<'_>, scl: &mut Flex<'_>, addr: u8, cmd: u8) {
         false
     };
     bitbang_stop(sda, scl);
+    release_bitbang_pin(sda);
+    release_bitbang_pin(scl);
     defmt::info!(
         "i2c_bitbang_touch: addr=0x{=u8:x} cmd=0x{=u8:x} addr_ack={=bool} cmd_ack={=bool}",
         addr,

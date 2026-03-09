@@ -4276,6 +4276,7 @@ where
 
     fn attempt_bq40_rom_flash(&mut self, addr: u8, quiet: bool) {
         let now = Instant::now();
+        let recover_quiet = false;
         if !self.rom_recover_due(addr, now) {
             if !quiet {
                 defmt::warn!(
@@ -4290,13 +4291,13 @@ where
 
         self.note_rom_recover_attempt(addr, now);
         self.clear_post_flash_resume();
-        self.maybe_dwell_before_rom_flash(addr, quiet);
-        match prepare_bms_rom_flash_recover(&mut self.i2c, addr, quiet) {
+        self.maybe_dwell_before_rom_flash(addr, recover_quiet);
+        match prepare_bms_rom_flash_recover(&mut self.i2c, addr, recover_quiet) {
             Ok(Some(sig)) => {
                 self.bms_rom_flash_attempted = true;
-                match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, sig, quiet) {
+                match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, sig, recover_quiet) {
                     Ok(()) => {
-                        maybe_enable_bms_runtime_after_flash(&mut self.i2c, addr, quiet);
+                        maybe_enable_bms_runtime_after_flash(&mut self.i2c, addr, recover_quiet);
                         self.clear_post_flash_resume();
                         if !quiet {
                             defmt::warn!(
@@ -4306,14 +4307,14 @@ where
                         }
                     }
                     Err(e) => {
-                        if !quiet {
+                        if !recover_quiet {
                             log_bms_diag(addr, "probe_rom_flash", e, "word", "srec");
                         }
                         if matches!(e, bq40z50::BmsDiagError::InconsistentSample) {
                             let pending_at = Instant::now();
                             self.arm_post_flash_resume(addr, pending_at);
                             self.bms_stage_next_at = pending_at + BMS_POST_FLASH_BOOT_QUIET;
-                            if !quiet {
+                            if !recover_quiet {
                                 defmt::warn!(
                                     "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_resume_armed keep_charge=true next_probe_ms={=u64}",
                                     addr,
@@ -4326,7 +4327,7 @@ where
             }
             Ok(None) => {
                 self.clear_post_flash_resume();
-                if !quiet {
+                if !recover_quiet {
                     defmt::warn!(
                         "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_skipped",
                         addr
@@ -4335,7 +4336,7 @@ where
             }
             Err(e) => {
                 self.clear_post_flash_resume();
-                if !quiet {
+                if !recover_quiet {
                     log_bms_diag(addr, "probe_rom_flash", e, "word", "srec");
                 }
             }

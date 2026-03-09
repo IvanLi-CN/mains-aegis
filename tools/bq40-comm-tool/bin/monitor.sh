@@ -54,8 +54,10 @@ fi
 
 monitor_path=$(python3 - "$TOOL_ROOT" "$duration_sec" <<'PY'
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import time
 from collections import deque
 from pathlib import Path
@@ -66,7 +68,13 @@ root = Path(sys.argv[1])
 duration = int(sys.argv[2])
 monitor_dir = root / ".mcu-agentd" / "monitor" / "esp"
 monitor_dir.mkdir(parents=True, exist_ok=True)
-combined_path = monitor_dir / f"{time.strftime('%Y%m%d_%H%M%S')}_combined.mon.ndjson"
+combined_fd, combined_tmp = tempfile.mkstemp(
+    prefix=f"{time.strftime('%Y%m%d_%H%M%S')}_",
+    suffix="_combined.mon.ndjson",
+    dir=monitor_dir,
+)
+os.close(combined_fd)
+combined_path = Path(combined_tmp)
 
 
 def snapshot() -> Dict[Path, Tuple[float, int]]:
