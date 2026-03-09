@@ -129,14 +129,19 @@ def resolve_monitor_path(
     return None
 
 
-def append_segment(src: Path, appended_offsets: Dict[Path, int]) -> None:
+def append_segment(
+    src: Path,
+    before: Dict[Path, Tuple[float, int]],
+    appended_offsets: Dict[Path, int],
+) -> None:
     src = src.resolve()
     if not src.exists():
         return
-    prev_offset = appended_offsets.get(src, 0)
+    baseline_offset = before.get(src, (0.0, 0))[1]
+    prev_offset = appended_offsets.get(src, baseline_offset)
     size = src.stat().st_size
     if size < prev_offset:
-        prev_offset = 0
+        prev_offset = baseline_offset if size >= baseline_offset else 0
     with src.open("rb") as infile, combined_path.open("ab") as outfile:
         infile.seek(prev_offset)
         chunk = infile.read()
@@ -147,11 +152,17 @@ def append_segment(src: Path, appended_offsets: Dict[Path, int]) -> None:
         appended_offsets[src] = infile.tell()
 
 
-def monitor_file_has_stdout(src: Optional[Path]) -> bool:
+def monitor_file_has_stdout(
+    src: Optional[Path],
+    before: Dict[Path, Tuple[float, int]],
+) -> bool:
     if src is None or not src.exists():
         return False
+    src = src.resolve()
+    baseline_offset = before.get(src, (0.0, 0))[1]
     try:
         with src.open("r", encoding="utf-8") as infile:
+            infile.seek(baseline_offset)
             for line in infile:
                 try:
                     entry = json.loads(line)
@@ -180,7 +191,7 @@ def inspect_monitor_path(
 ) -> Tuple[Dict[Path, Tuple[float, int]], Optional[Path], bool]:
     after = snapshot()
     chosen = resolve_monitor_path(before, after, started_at, hinted_path)
-    return after, chosen, monitor_file_has_stdout(chosen)
+    return after, chosen, monitor_file_has_stdout(chosen, before)
 
 
 def wait_for_target_stdout(
@@ -274,7 +285,7 @@ while time.time() < deadline:
             stdout_data = "\n".join(stdout_tail)
             stderr_data = "\n".join(stderr_tail)
             if chosen is not None:
-                append_segment(chosen, appended_offsets)
+                append_segment(chosen, before, appended_offsets)
             detail_lines = (stderr_data or stdout_data).strip().splitlines()[-8:]
             last_detail = "\n".join(detail_lines) if detail_lines else f"mcu-agentd exited with {proc.returncode}"
             reset_fallback_used = True
@@ -296,7 +307,7 @@ while time.time() < deadline:
     stderr_data = "\n".join(stderr_tail)
     after, chosen, chosen_has_stdout = inspect_monitor_path(before, started_at, path_ref["path"])
     if chosen is not None:
-        append_segment(chosen, appended_offsets)
+        append_segment(chosen, before, appended_offsets)
 
     detail_lines = (stderr_data or stdout_data).strip().splitlines()[-8:]
     last_detail = "\n".join(detail_lines) if detail_lines else f"mcu-agentd exited with {proc.returncode}"

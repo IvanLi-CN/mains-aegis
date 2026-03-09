@@ -17,7 +17,7 @@ Expected:
 - `--recover` is rejected in this mode (to avoid silent overrides)
 - `--force-min-charge true` applies the supported wake profile: `VREG=16.8V / ICHG=200mA / IINDPM=500mA`
 - `tps_sync` unavailable only emits warning; output self-test still proceeds
-- `--duration-sec` must be `>=20` (10-sample streak at 2s poll period)
+- `--duration-sec` must be `>=50` (10-sample streak at the 5s working-info cadence consumed by the parser)
 
 ## 1.1) Deep diagnostic fallback (no ROM write)
 

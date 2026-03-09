@@ -71,8 +71,8 @@ Required `summary.json` fields:
   - then re-run `./bin/run.sh ...` (tool report parser works offline on existing logs too)
 - `monitor file not found: ...`
   - for `verify`, make sure `--monitor-file` points to an existing `.mon.ndjson`
-- `duration-sec must be >= 20 for diagnose/recover`
-  - pass criteria requires streak>=10 and poll period is 2s; use at least 20s window
+- `duration-sec must be >= 50 for diagnose/recover`
+  - pass criteria consumes one parser-visible `bms:` sample every 5s; use at least a 50s window (120s remains the recommended bench default)
 - `verdict.fail: canonical_mode_touched_0x16`
   - canonical mode should not touch `0x16`; check firmware mode and logs
 - canonical diagnose still has `samples_total=0`

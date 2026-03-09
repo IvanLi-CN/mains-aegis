@@ -26,9 +26,9 @@ flash_arg_set="false"
 recover_arg_set="false"
 force_min_charge_arg_set="false"
 probe_mode_arg_set="false"
-POLL_PERIOD_SEC=2
+WORKING_INFO_PERIOD_SEC=5
 MIN_VALID_STREAK=10
-MIN_DURATION_FOR_STREAK=$((POLL_PERIOD_SEC * MIN_VALID_STREAK))
+MIN_DURATION_FOR_STREAK=$((WORKING_INFO_PERIOD_SEC * MIN_VALID_STREAK))
 
 usage() {
   cat <<USAGE
@@ -144,7 +144,7 @@ if ! [[ "$duration_sec" =~ ^[0-9]+$ ]] || [[ "$duration_sec" -lt 1 ]]; then
 fi
 
 if [[ "$subcommand" != "verify" ]] && [[ "$duration_sec" -lt "$MIN_DURATION_FOR_STREAK" ]]; then
-  echo "duration-sec must be >= $MIN_DURATION_FOR_STREAK for diagnose/recover (streak>=${MIN_VALID_STREAK} at ${POLL_PERIOD_SEC}s poll)" >&2
+  echo "duration-sec must be >= $MIN_DURATION_FOR_STREAK for diagnose/recover (streak>=${MIN_VALID_STREAK} at ${WORKING_INFO_PERIOD_SEC}s working-info cadence)" >&2
   exit 14
 fi
 

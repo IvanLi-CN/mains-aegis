@@ -5866,7 +5866,7 @@ where
         //   proven wake profile (VREG=16.8V / ICHG=200mA / IINDPM=500mA) for no-pack benches.
         let input_present = vbus_present || ac1_present || ac2_present || pg;
         let can_enable = input_present && !ts_cold && !ts_hot;
-        let normal_allow_charge = false;
+        let normal_allow_charge = self.cfg.charge_allowed && can_enable && vbat_present;
         let force_allow_charge = matches!(self.charge_mode, BootChargeMode::MinCharge)
             && self.cfg.force_min_charge
             && can_enable;
