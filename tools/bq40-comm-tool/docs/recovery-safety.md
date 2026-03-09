@@ -22,6 +22,6 @@
 ## Device-operation guardrails
 
 - Allowed: `mcu-agentd flash/monitor/reset` (G4)
-- Allowed: `diagnose --mode dual-diag --probe-mode mac-only` as a diagnostic-only escalation before any ROM write decision
+- Allowed: `diagnose --mode dual-diag --probe-mode mac-only` as a diagnostic-only escalation before any ROM write decision; this option only narrows the steady-state liveness probe path, and does not suppress the normal wake/ROM checks
 - Denied: direct `espflash` / `cargo espflash` (G0)
 - Denied: selector enumeration/switching in automated flows (G1/G2/G3)

@@ -150,13 +150,13 @@ where
     i2c.write_read(I2C_ADDRESS, &[start_reg], buf)
 }
 
-pub fn read_u16<I2C>(i2c: &mut I2C, reg_msb: u8) -> Result<u16, I2C::Error>
+pub fn read_u16<I2C>(i2c: &mut I2C, reg_lsb: u8) -> Result<u16, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
     let mut buf = [0u8; 2];
-    i2c.write_read(I2C_ADDRESS, &[reg_msb], &mut buf)?;
-    Ok(u16::from_be_bytes(buf))
+    i2c.write_read(I2C_ADDRESS, &[reg_lsb], &mut buf)?;
+    Ok(u16::from_le_bytes(buf))
 }
 
 pub fn write_u8<I2C>(i2c: &mut I2C, reg: u8, value: u8) -> Result<(), I2C::Error>
@@ -166,12 +166,12 @@ where
     i2c.write(I2C_ADDRESS, &[reg, value])
 }
 
-pub fn write_u16<I2C>(i2c: &mut I2C, reg_msb: u8, value: u16) -> Result<(), I2C::Error>
+pub fn write_u16<I2C>(i2c: &mut I2C, reg_lsb: u8, value: u16) -> Result<(), I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    let [msb, lsb] = value.to_be_bytes();
-    i2c.write(I2C_ADDRESS, &[reg_msb, msb, lsb])
+    let [lsb, msb] = value.to_le_bytes();
+    i2c.write(I2C_ADDRESS, &[reg_lsb, lsb, msb])
 }
 
 /// Read-modify-write a single 8-bit register.

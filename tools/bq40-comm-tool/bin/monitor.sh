@@ -60,7 +60,7 @@ import time
 from collections import deque
 from pathlib import Path
 from threading import Lock, Thread
-from typing import Deque, Dict, Optional, Set, Tuple
+from typing import Deque, Dict, Optional, Tuple
 
 root = Path(sys.argv[1])
 duration = int(sys.argv[2])
@@ -129,13 +129,22 @@ def resolve_monitor_path(
     return None
 
 
-def append_segment(src: Path, appended: Set[Path]) -> None:
+def append_segment(src: Path, appended_offsets: Dict[Path, int]) -> None:
     src = src.resolve()
-    if src in appended or not src.exists():
+    if not src.exists():
         return
+    prev_offset = appended_offsets.get(src, 0)
+    size = src.stat().st_size
+    if size < prev_offset:
+        prev_offset = 0
     with src.open("rb") as infile, combined_path.open("ab") as outfile:
-        outfile.write(infile.read())
-    appended.add(src)
+        infile.seek(prev_offset)
+        chunk = infile.read()
+        if not chunk:
+            appended_offsets[src] = infile.tell()
+            return
+        outfile.write(chunk)
+        appended_offsets[src] = infile.tell()
 
 
 def monitor_file_has_stdout(src: Optional[Path]) -> bool:
@@ -196,7 +205,7 @@ def wait_for_target_stdout(
 INITIAL_STDOUT_TIMEOUT_SEC = 6.0
 
 deadline = time.time() + duration
-appended_paths: Set[Path] = set()
+appended_offsets: Dict[Path, int] = {}
 restarts = 0
 first_attach = True
 last_detail = ""
@@ -265,7 +274,7 @@ while time.time() < deadline:
             stdout_data = "\n".join(stdout_tail)
             stderr_data = "\n".join(stderr_tail)
             if chosen is not None:
-                append_segment(chosen, appended_paths)
+                append_segment(chosen, appended_offsets)
             detail_lines = (stderr_data or stdout_data).strip().splitlines()[-8:]
             last_detail = "\n".join(detail_lines) if detail_lines else f"mcu-agentd exited with {proc.returncode}"
             reset_fallback_used = True
