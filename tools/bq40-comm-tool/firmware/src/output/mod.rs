@@ -1910,11 +1910,11 @@ where
     Ok(())
 }
 
-fn run_bms_rom_flash_recover_sequence<I2C>(
+fn prepare_bms_rom_flash_recover<I2C>(
     i2c: &mut I2C,
     addr: u8,
     quiet: bool,
-) -> Result<bool, bq40z50::BmsDiagError>
+) -> Result<Option<u16>, bq40z50::BmsDiagError>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
@@ -1930,7 +1930,7 @@ where
         Err(e) => return Err(e),
     };
     if sig != BMS_ROM_MODE_SIGNATURE && !force_recover {
-        return Ok(false);
+        return Ok(None);
     }
     if force_recover && sig != BMS_ROM_MODE_SIGNATURE && !quiet {
         defmt::warn!(
@@ -1940,10 +1940,23 @@ where
         );
     }
 
+    Ok(Some(sig))
+}
+
+fn run_bms_rom_flash_recover_sequence<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    sig: u16,
+    quiet: bool,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
     let section1_image = BMS_ROM_SECTION1_IMAGE;
     let section2_image = BMS_ROM_SECTION2_IMAGE;
 
     if !quiet {
+        defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_begin", addr);
         defmt::warn!(
             "bms_diag: addr=0x{=u8:x} stage=rom_flash_start image={} info_layout={} sec1={=u32} sec1_used={=u32} sec2={=u32} sec2_used={=u32} blk12={=u8}",
             addr,
@@ -2155,7 +2168,7 @@ where
             after
         );
     }
-    Ok(true)
+    Ok(())
 }
 
 fn run_bms_rom_token_recover_sequence<I2C>(
@@ -4247,7 +4260,6 @@ where
         } else {
             self.bms_last_rom_recover_primary_at = Some(now);
         }
-        self.bms_rom_flash_attempted = true;
     }
 
     fn blind_force_recover_ready(&self, now: Instant) -> bool {
@@ -4279,18 +4291,40 @@ where
         self.note_rom_recover_attempt(addr, now);
         self.clear_post_flash_resume();
         self.maybe_dwell_before_rom_flash(addr, quiet);
-        if !quiet {
-            defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_begin", addr);
-        }
-        match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, quiet) {
-            Ok(true) => {
-                maybe_enable_bms_runtime_after_flash(&mut self.i2c, addr, quiet);
-                self.clear_post_flash_resume();
-                if !quiet {
-                    defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done", addr);
+        match prepare_bms_rom_flash_recover(&mut self.i2c, addr, quiet) {
+            Ok(Some(sig)) => {
+                self.bms_rom_flash_attempted = true;
+                match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, sig, quiet) {
+                    Ok(()) => {
+                        maybe_enable_bms_runtime_after_flash(&mut self.i2c, addr, quiet);
+                        self.clear_post_flash_resume();
+                        if !quiet {
+                            defmt::warn!(
+                                "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done",
+                                addr
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        if !quiet {
+                            log_bms_diag(addr, "probe_rom_flash", e, "word", "srec");
+                        }
+                        if matches!(e, bq40z50::BmsDiagError::InconsistentSample) {
+                            let pending_at = Instant::now();
+                            self.arm_post_flash_resume(addr, pending_at);
+                            self.bms_stage_next_at = pending_at + BMS_POST_FLASH_BOOT_QUIET;
+                            if !quiet {
+                                defmt::warn!(
+                                    "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_resume_armed keep_charge=true next_probe_ms={=u64}",
+                                    addr,
+                                    BMS_POST_FLASH_BOOT_QUIET.as_millis() as u64
+                                );
+                            }
+                        }
+                    }
                 }
             }
-            Ok(false) => {
+            Ok(None) => {
                 self.clear_post_flash_resume();
                 if !quiet {
                     defmt::warn!(
@@ -4300,20 +4334,9 @@ where
                 }
             }
             Err(e) => {
+                self.clear_post_flash_resume();
                 if !quiet {
                     log_bms_diag(addr, "probe_rom_flash", e, "word", "srec");
-                }
-                if matches!(e, bq40z50::BmsDiagError::InconsistentSample) {
-                    let pending_at = Instant::now();
-                    self.arm_post_flash_resume(addr, pending_at);
-                    self.bms_stage_next_at = pending_at + BMS_POST_FLASH_BOOT_QUIET;
-                    if !quiet {
-                        defmt::warn!(
-                            "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_resume_armed keep_charge=true next_probe_ms={=u64}",
-                            addr,
-                            BMS_POST_FLASH_BOOT_QUIET.as_millis() as u64
-                        );
-                    }
                 }
             }
         }

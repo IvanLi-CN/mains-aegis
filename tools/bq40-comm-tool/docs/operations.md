@@ -17,7 +17,7 @@ Expected:
 - `--recover` is rejected in this mode (to avoid silent overrides)
 - `--force-min-charge true` applies the supported wake profile: `VREG=16.8V / ICHG=200mA / IINDPM=500mA`
 - `tps_sync` unavailable only emits warning; output self-test still proceeds
-- `--duration-sec` must be `>=50` (10-sample streak at the 5s working-info cadence consumed by the parser)
+- `--duration-sec` must be `>=62` for diagnose (10s repower-off + 2s settle + 10-sample streak at the 5s working-info cadence consumed by the parser)
 
 ## 1.1) Deep diagnostic fallback (no ROM write)
 
@@ -42,6 +42,7 @@ Only run recover after canonical diagnose fails and the monitor log proves `stag
 ```
 
 Policy:
+- `--duration-sec` must be `>=92` for recover (diagnose floor + 30s post-flash quiet window before steady-state samples)
 - `--recover never`: disable ROM recovery
 - `--recover if-rom`: recover only when ROM signature is detected
 - `--recover force`: debug-only escape hatch; not part of the supported repo recovery sequence

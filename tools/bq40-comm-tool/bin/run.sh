@@ -28,7 +28,12 @@ force_min_charge_arg_set="false"
 probe_mode_arg_set="false"
 WORKING_INFO_PERIOD_SEC=5
 MIN_VALID_STREAK=10
-MIN_DURATION_FOR_STREAK=$((WORKING_INFO_PERIOD_SEC * MIN_VALID_STREAK))
+REPOWER_OFF_WINDOW_SEC=10
+MIN_CHARGE_SETTLE_SEC=2
+POST_FLASH_QUIET_WINDOW_SEC=30
+MIN_STEADY_STATE_WINDOW_SEC=$((WORKING_INFO_PERIOD_SEC * MIN_VALID_STREAK))
+MIN_DURATION_DIAG_SEC=$((REPOWER_OFF_WINDOW_SEC + MIN_CHARGE_SETTLE_SEC + MIN_STEADY_STATE_WINDOW_SEC))
+MIN_DURATION_RECOVER_SEC=$((MIN_DURATION_DIAG_SEC + POST_FLASH_QUIET_WINDOW_SEC))
 
 usage() {
   cat <<USAGE
@@ -143,9 +148,15 @@ if ! [[ "$duration_sec" =~ ^[0-9]+$ ]] || [[ "$duration_sec" -lt 1 ]]; then
   exit 5
 fi
 
-if [[ "$subcommand" != "verify" ]] && [[ "$duration_sec" -lt "$MIN_DURATION_FOR_STREAK" ]]; then
-  echo "duration-sec must be >= $MIN_DURATION_FOR_STREAK for diagnose/recover (streak>=${MIN_VALID_STREAK} at ${WORKING_INFO_PERIOD_SEC}s working-info cadence)" >&2
-  exit 14
+if [[ "$subcommand" != "verify" ]]; then
+  min_duration_sec="$MIN_DURATION_DIAG_SEC"
+  if [[ "$subcommand" == "recover" ]]; then
+    min_duration_sec="$MIN_DURATION_RECOVER_SEC"
+  fi
+  if [[ "$duration_sec" -lt "$min_duration_sec" ]]; then
+    echo "duration-sec must be >= $min_duration_sec for $subcommand (10s repower-off + 2s min-charge settle + streak>=${MIN_VALID_STREAK} at ${WORKING_INFO_PERIOD_SEC}s working-info cadence; recover also reserves ${POST_FLASH_QUIET_WINDOW_SEC}s post-flash quiet time)" >&2
+    exit 14
+  fi
 fi
 
 if [[ "$subcommand" == "verify" ]]; then
