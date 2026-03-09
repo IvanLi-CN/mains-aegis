@@ -138,6 +138,23 @@ def append_segment(src: Path, appended: Set[Path]) -> None:
     appended.add(src)
 
 
+def monitor_file_has_stdout(src: Optional[Path]) -> bool:
+    if src is None or not src.exists():
+        return False
+    try:
+        with src.open("r", encoding="utf-8") as infile:
+            for line in infile:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("src") == "stdout":
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def stop_process(proc: subprocess.Popen[str]) -> None:
     proc.terminate()
     try:
@@ -147,11 +164,44 @@ def stop_process(proc: subprocess.Popen[str]) -> None:
         proc.wait(timeout=5)
 
 
+def inspect_monitor_path(
+    before: Dict[Path, Tuple[float, int]],
+    started_at: float,
+    hinted_path: Optional[Path],
+) -> Tuple[Dict[Path, Tuple[float, int]], Optional[Path], bool]:
+    after = snapshot()
+    chosen = resolve_monitor_path(before, after, started_at, hinted_path)
+    return after, chosen, monitor_file_has_stdout(chosen)
+
+
+def wait_for_target_stdout(
+    proc: subprocess.Popen[str],
+    before: Dict[Path, Tuple[float, int]],
+    started_at: float,
+    path_ref: Dict[str, Optional[Path]],
+    timeout_sec: float,
+) -> Tuple[Dict[Path, Tuple[float, int]], Optional[Path], bool]:
+    probe_deadline = time.time() + timeout_sec
+    after = before
+    chosen: Optional[Path] = None
+    has_stdout = False
+    while time.time() < probe_deadline:
+        after, chosen, has_stdout = inspect_monitor_path(before, started_at, path_ref["path"])
+        if has_stdout or proc.poll() is not None:
+            return after, chosen, has_stdout
+        time.sleep(0.2)
+    return inspect_monitor_path(before, started_at, path_ref["path"])
+
+
+INITIAL_STDOUT_TIMEOUT_SEC = 6.0
+
 deadline = time.time() + duration
 appended_paths: Set[Path] = set()
 restarts = 0
 first_attach = True
 last_detail = ""
+use_reset_attach = False
+reset_fallback_used = False
 
 while time.time() < deadline:
     remaining = max(1.0, deadline - time.time())
@@ -162,7 +212,10 @@ while time.time() < deadline:
     path_ref: Dict[str, Optional[Path]] = {"path": None}
 
     cmd = ["mcu-agentd", "--non-interactive", "monitor", "esp"]
-    if first_attach:
+    # Prefer reusing the daemon-started monitor after flashing. If that attach fails to show any
+    # target stdout within a short window, fall back once to a controlled reset attach so the
+    # freshly flashed firmware actually boots and starts logging.
+    if use_reset_attach:
         cmd.append("--reset")
 
     proc = subprocess.Popen(
@@ -190,6 +243,37 @@ while time.time() < deadline:
     stderr_thread.start()
 
     timed_out = False
+    after = before
+    chosen: Optional[Path] = None
+    chosen_has_stdout = False
+
+    if not use_reset_attach and not reset_fallback_used:
+        probe_timeout = min(INITIAL_STDOUT_TIMEOUT_SEC, remaining)
+        after, chosen, chosen_has_stdout = wait_for_target_stdout(
+            proc,
+            before,
+            started_at,
+            path_ref,
+            probe_timeout,
+        )
+        if not chosen_has_stdout:
+            if proc.poll() is None:
+                stop_process(proc)
+            stdout_thread.join(timeout=2)
+            stderr_thread.join(timeout=2)
+
+            stdout_data = "\n".join(stdout_tail)
+            stderr_data = "\n".join(stderr_tail)
+            if chosen is not None:
+                append_segment(chosen, appended_paths)
+            detail_lines = (stderr_data or stdout_data).strip().splitlines()[-8:]
+            last_detail = "\n".join(detail_lines) if detail_lines else f"mcu-agentd exited with {proc.returncode}"
+            reset_fallback_used = True
+            use_reset_attach = True
+            time.sleep(0.5)
+            continue
+
+    remaining = max(0.1, deadline - time.time())
     try:
         proc.wait(timeout=remaining)
     except subprocess.TimeoutExpired:
@@ -201,8 +285,7 @@ while time.time() < deadline:
 
     stdout_data = "\n".join(stdout_tail)
     stderr_data = "\n".join(stderr_tail)
-    after = snapshot()
-    chosen = resolve_monitor_path(before, after, started_at, path_ref["path"])
+    after, chosen, chosen_has_stdout = inspect_monitor_path(before, started_at, path_ref["path"])
     if chosen is not None:
         append_segment(chosen, appended_paths)
 
@@ -211,6 +294,10 @@ while time.time() < deadline:
 
     if timed_out:
         break
+
+    use_reset_attach = False
+    if chosen_has_stdout:
+        reset_fallback_used = False
 
     if proc.returncode == 0:
         if time.time() >= deadline:

@@ -12,3 +12,4 @@ selector_cache_file = ".esp32-port"
 [mcu.esp.espflash]
 baud = 115200
 log_format = "defmt"
+after_flash = "hard-reset"
