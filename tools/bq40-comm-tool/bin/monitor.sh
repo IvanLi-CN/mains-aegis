@@ -296,7 +296,7 @@ while time.time() < deadline:
     stderr_data = "\n".join(stderr_tail)
     after, chosen, chosen_has_stdout = inspect_monitor_path(before, started_at, path_ref["path"])
     if chosen is not None:
-        append_segment(chosen, appended_paths)
+        append_segment(chosen, appended_offsets)
 
     detail_lines = (stderr_data or stdout_data).strip().splitlines()[-8:]
     last_detail = "\n".join(detail_lines) if detail_lines else f"mcu-agentd exited with {proc.returncode}"
