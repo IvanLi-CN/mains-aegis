@@ -104,8 +104,8 @@
 
 ## 6. ROM 模式相关结论
 
-- `rom_events.flash_done=true` 的新口径：仅当 monitor 日志出现 `stage=probe_rom_flash_done`（recover 调用栈返回 `Ok`）才算 ROM 恢复成功。
-- 若只看到 `stage=rom_flash_incomplete`，或报告为 `flash_attempted=true` 且 `flash_done=false`，表示 ROM 序列跑过但并未退出 ROM。
+- `rom_events.flash_done=true` 的新口径：仅当 monitor 日志出现 `stage=probe_rom_flash_done`（已确认回到 firmware mode）才算 ROM 恢复成功。
+- 若只看到 `stage=rom_flash_done rsoc_after=0x9002`，或报告为 `flash_attempted=true` 且 `flash_done=false`，表示 ROM 序列跑过但并未确认回到 firmware mode。
 
 ## 7. 仍需持续观察的风险
 
@@ -160,7 +160,7 @@
   - 在 **无电池 + 最小充电偏置** 条件下，`0x0B` 可以出现 TI ROM 签名 `0x9002`；
   - 工具可完成 `ROM 检测 -> 刷写 -> Execute`；
   - Execute 后 `RSOC` 可从 `0x9002` 变为 `0x0000`，说明“卡在 ROM/烧录中断”已不再是主矛盾。
-- 对应 monitor 证据可参考本地 `tools/bq40-comm-tool/.espflash-monitor/` 下的以下日志：
+- 对应 monitor 证据可参考本地 `tools/bq40-comm-tool/.mcu-agentd/monitor/esp/` 下的以下日志：
   - `20260309_new_chip_after_wake_fix2_95s.log`
   - `20260309_new_chip_full_info_95s.log`
   - `20260309_new_chip_post_flash_mfg_enable_95s.log`

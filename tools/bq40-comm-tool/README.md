@@ -54,7 +54,7 @@ Required `summary.json` fields:
 - `mode`, `duration_sec`, `samples_total`, `valid_samples`, `max_valid_streak`
 - `poll_errors` (by error type)
 - `rom_events` (`detected`, `flash_attempted`, `flash_done`)
-  - `flash_done=true` means the probe flow emitted `stage=probe_rom_flash_done` (recover returned `Ok` and exited ROM).
+  - `flash_done=true` means the recover flow emitted `stage=probe_rom_flash_done` after the gauge was validated back in firmware mode (including delayed post-flash resume).
 - `verdict.pass`, `verdict.reason`
 
 ## Common issues

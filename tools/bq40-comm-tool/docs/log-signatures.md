@@ -29,10 +29,8 @@
   - ROM flash sequence entered
 - `stage=rom_flash_done`
   - ROM helper completed and exited ROM mode successfully
-- `stage=rom_flash_incomplete`
-  - ROM helper ran but `RSOC` still read back as `0x9002`; parser must not count this as success
 - `stage=probe_rom_flash_done`
-  - outer probe flow observed recover return `Ok`; this is the success marker used by `summary.json`
+  - recover flow validated the pack back in firmware mode; this is the success marker used by `summary.json`
 
 ## Address semantics
 

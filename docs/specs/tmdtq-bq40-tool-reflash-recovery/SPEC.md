@@ -10,7 +10,7 @@
 
 - `tools/bq40-comm-tool` 已经具备 `diagnose / recover / verify` 三段式流程，也已有 `--force-min-charge` CLI 入口，但当前工具内强制唤醒路径与已验证台架参数不一致。
 - 现有工具固件在 `force_min_charge` 分支里仍使用最小电流写法（`ICHG=50mA`、`IINDPM=100mA`，且不改 `VREG`），与排障笔记里已经收敛出的唤醒参数 `16.8V / 200mA / 500mA` 不一致，导致“CLI 开了强制唤醒”与“台架真正需要的唤醒动作”之间存在语义落差。
-- `summary.json` 里的 `rom_events.flash_done` 目前会把 `stage=probe_rom_flash_done` 与 `stage=rom_flash_done` 一起视为“刷写完成”，会混淆“真正完成 ROM flash reflash”与“探测阶段/轻量恢复阶段打点”。
+- `summary.json` 里的 `rom_events.flash_done` 只应认 `stage=probe_rom_flash_done`；单独出现 `stage=rom_flash_done` 仍不足以证明工具已经确认回到 firmware mode。
 - 本轮实现需要把验收范围收紧到 `tools/bq40-comm-tool` 路径，且台架条件固定为“无电池 + 外部输入供电”；验收只覆盖 `--recover if-rom`，不把 `--recover force` 作为成功标准。
 
 ## 目标 / 非目标
@@ -26,7 +26,7 @@
 ### Non-goals
 
 - 不修改主工程根目录 `firmware/` 的 `force-min-charge` 语义，也不把主固件自检流程纳入本轮验收。
-- 不把 `--recover force` / `dual-diag` 强刷路径作为本轮验收目标。
+- 不把 `--recover force` 强刷路径作为本轮验收目标。
 - 不新增 BQ40 ROM 镜像资产，也不变更 recovery image traceability。
 - 不覆盖“接电池”场景下的充电策略重新定义；本轮只针对无电池外部供电台架收敛。
 
@@ -53,7 +53,7 @@
 - `diagnose` 与 `recover` 必须接受 `--force-min-charge true|false`，并在工具本地构建路径中稳定透传为 `force-min-charge` feature。
 - `verify` 必须继续拒绝 `--force-min-charge`、`--recover`、`--flash`，保持离线复算语义纯净。
 - 工具固件在 `force_min_charge=true` 且外部输入存在时，必须显式写入并记录 `VREG=16800mV`、`ICHG=200mA`、`IINDPM=500mA`。
-- `rom_events.flash_done=true` 只能由“真正完成 ROM flash reflash”的日志阶段触发；`probe_rom_flash_done` 不能再单独把它置为 `true`。
+- `rom_events.flash_done=true` 只能由 `stage=probe_rom_flash_done` 触发；单独出现 `stage=rom_flash_done` 不能把它置为 `true`。
 - 本轮 diagnose / recover / verify 的验收命令、日志来源、报告目录必须全部位于 `tools/bq40-comm-tool` 路径语义下。
 - 验收只覆盖 `--recover if-rom`：若未观测到 ROM signature，则 `flash_attempted=false`、`flash_done=false`；若观测到 ROM signature 且执行完整 reflash，则二者才允许按实际完成情况置位。
 
@@ -71,14 +71,14 @@
 ### Core flows
 
 - 运行 `./bin/run.sh diagnose --mode canonical --duration-sec 120 --force-min-charge true` 时，工具链在 `tools/bq40-comm-tool` 内完成 build / flash / monitor / report，且强制唤醒参数按 `16.8V / 200mA / 500mA` 生效。
-- 运行 `./bin/run.sh recover --mode canonical --duration-sec 120 --recover if-rom --force-min-charge true` 时，仅在检测到 ROM signature 后进入 ROM reflash；未检测到时不得把报告写成 flash 已完成。
+- 运行 `./bin/run.sh recover --mode dual-diag --duration-sec 120 --recover if-rom --force-min-charge true` 时，仅在检测到 ROM signature 后进入 ROM reflash；未检测到时不得把报告写成 flash 已完成。
 - 运行 `./bin/run.sh verify --mode canonical --duration-sec 120 --monitor-file <path>` 时，应基于工具路径生成的 monitor log 离线复算出与在线一致的 ROM 事件语义。
 
 ### Edge cases / errors
 
 - 若外部输入不存在、温度保护不允许或充电器写寄存器失败，工具不得宣称已成功应用唤醒参数。
 - `canonical` 模式下若日志触达 `0x16`，仍按现有失败语义处理；本轮不放宽该约束。
-- `--recover force` 与 `dual-diag` 可以保留现有实现，但不属于本轮通过标准，也不得反向污染 `if-rom` 报告语义。
+- `dual-diag` 是本轮受支持的 recover 地址模式；`--recover force` 仍不属于本轮通过标准，也不得反向污染 `if-rom` 报告语义。
 
 ## 接口契约（Interfaces & Contracts）
 
@@ -100,12 +100,12 @@
   Then 工具链完成 live 流程并产出报告，且日志/报告可确认强制唤醒参数为 `VREG=16800mV`、`ICHG=200mA`、`IINDPM=500mA`。
 
 - Given 同一台架条件下未检测到 ROM signature，
-  When 运行 `./bin/run.sh recover --mode canonical --duration-sec 120 --recover if-rom --force-min-charge true`，
+  When 运行 `./bin/run.sh recover --mode dual-diag --duration-sec 120 --recover if-rom --force-min-charge true`，
   Then `summary.json` 中 `rom_events.detected=false`、`flash_attempted=false`、`flash_done=false`，且本轮验收不需要、也不允许用 `--recover force` 兜底达成通过。
 
 - Given 同一工具路径下检测到 ROM signature（`0x9002`），
-  When 运行 `./bin/run.sh recover --mode canonical --duration-sec 120 --recover if-rom --force-min-charge true` 并完成完整 ROM flash reflash，
-  Then `summary.json` 中 `rom_events.detected=true`、`flash_attempted=true`、`flash_done=true`；若只有 `probe_rom_flash_done` 或其他探测性阶段打点，则 `flash_done` 仍为 `false`。
+  When 运行 `./bin/run.sh recover --mode dual-diag --duration-sec 120 --recover if-rom --force-min-charge true` 并完成完整 ROM flash reflash，
+  Then `summary.json` 中 `rom_events.detected=true`、`flash_attempted=true`、`flash_done=true`；若只有 `stage=rom_flash_done rsoc_after=0x9002` 或其他未确认回到 firmware mode 的阶段打点，则 `flash_done` 仍为 `false`。
 
 - Given 原始芯片样本持续停留在“既非正常 SBS、也非可见 ROM”的阻断态，
   When 在同板同工具链下更换 BQ40Z50 样本后，`tools/bq40-comm-tool` 已能完成 `ROM 检测 -> 重刷 -> 退出 ROM`，并在无电池偏置条件下稳定给出 `Voltage()/CellVoltage1()` 为几十 mV、`CellVoltage2..4()` 为 `0 mV` 的悬空签名，
@@ -132,7 +132,7 @@
 
 - Live bench：
   - `./bin/run.sh diagnose --mode canonical --duration-sec 120 --force-min-charge true`
-  - `./bin/run.sh recover --mode canonical --duration-sec 120 --recover if-rom --force-min-charge true`
+  - `./bin/run.sh recover --mode dual-diag --duration-sec 120 --recover if-rom --force-min-charge true`
 - Offline verify：
   - `./bin/run.sh verify --mode canonical --duration-sec 120 --monitor-file <recover-or-diagnose-log>`
 - 若具备 ROM signature 样本，需要至少一组“真实 flash_done=true”的 recover 报告；若无 ROM signature 样本，至少需要证明 `if-rom` 路径不会误报 `flash_done=true`。
@@ -178,7 +178,7 @@
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）
 
 - 风险：若台架外部输入不稳定，可能把“参数已恢复”误判成“逻辑未生效”。
-- 风险：历史日志若混有 `probe_rom_flash_done`，需要谨慎区分旧报告与新语义。
+- 风险：历史日志若只含 `stage=rom_flash_done` 而没有 `stage=probe_rom_flash_done`，需要谨慎区分旧报告与新语义。
 - 开放问题：原始问题芯片为何损坏仍未查明。基于“同板更换芯片后工具链可完成 ROM 检测/重刷/退出 ROM，而原芯片始终停在阻断态”的对照结果，当前更合理的结论是 **原始样本疑似硬损坏**，而非工具链仍有主路径故障。
 - 开放问题：是否已有可重复触发的 ROM signature 样本用于验证 `flash_done=true` 正例；若没有，需要至少保底验证“不误报 true”。
 - 假设：`tools/bq40-comm-tool/docs/troubleshooting-notes.md` 中记录的 `16.8V / 200mA / 500mA` 仍是当前 bench 的目标参数。

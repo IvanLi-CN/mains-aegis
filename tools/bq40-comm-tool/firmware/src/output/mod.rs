@@ -2480,11 +2480,36 @@ where
 {
     let sig = read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)?;
     if sig != BMS_ROM_MODE_SIGNATURE {
+        if sig > 100 {
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage=rom_post_flash_resume_bad_rsoc rsoc=0x{=u16:x}",
+                    addr,
+                    sig
+                );
+            }
+            return Err(bq40z50::BmsDiagError::BadRange);
+        }
+
+        let temp = read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::TEMPERATURE)?;
+        if !(2_000..=4_300).contains(&temp) {
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage=rom_post_flash_resume_bad_temp rsoc=0x{=u16:x} temp_raw=0x{=u16:x}",
+                    addr,
+                    sig,
+                    temp
+                );
+            }
+            return Err(bq40z50::BmsDiagError::BadRange);
+        }
+
         if !quiet {
             defmt::warn!(
-                "bms_diag: addr=0x{=u8:x} stage=rom_post_flash_resume_not_rom rsoc=0x{=u16:x}",
+                "bms_diag: addr=0x{=u8:x} stage=rom_post_flash_resume_not_rom rsoc=0x{=u16:x} temp_raw=0x{=u16:x}",
                 addr,
-                sig
+                sig,
+                temp
             );
         }
         return Ok(true);
@@ -4493,15 +4518,47 @@ where
 
         match run_bms_rom_postflash_resume_sequence(&mut self.i2c, addr, quiet) {
             Ok(true) => {
-                self.clear_post_flash_resume();
-                defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done", addr);
-                if !quiet {
-                    defmt::warn!(
-                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_fw_seen",
-                        addr
-                    );
+                maybe_enable_bms_runtime_after_flash(&mut self.i2c, addr, quiet);
+                let mut tracker = BmsPatternTracker::new();
+                match read_bms_snapshot_strict(&mut self.i2c, addr, true, &mut tracker) {
+                    Ok(_) => {
+                        self.clear_post_flash_resume();
+                        defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done", addr);
+                        if !quiet {
+                            defmt::warn!(
+                                "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_fw_seen",
+                                addr
+                            );
+                        }
+                        None
+                    }
+                    Err(e) => {
+                        if !expired {
+                            if !quiet {
+                                log_bms_diag(
+                                    addr,
+                                    "probe_rom_post_flash_snapshot",
+                                    e,
+                                    "word",
+                                    "strict",
+                                );
+                            }
+                            return Some(PostFlashResumeResult::WaitingRom);
+                        }
+
+                        self.clear_post_flash_resume();
+                        if !quiet {
+                            log_bms_diag(
+                                addr,
+                                "probe_rom_post_flash_snapshot",
+                                e,
+                                "word",
+                                "strict",
+                            );
+                        }
+                        None
+                    }
                 }
-                None
             }
             Ok(false) => {
                 if !expired {
