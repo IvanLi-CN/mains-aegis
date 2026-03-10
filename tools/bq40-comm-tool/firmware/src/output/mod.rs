@@ -4562,7 +4562,6 @@ where
             return;
         }
 
-        self.note_rom_recover_attempt(addr, now);
         self.clear_post_flash_resume();
         if let Err(e) = self.maybe_disable_charger_watchdog_for_recovery(recover_quiet) {
             self.clear_post_flash_resume();
@@ -4578,6 +4577,8 @@ where
         self.maybe_dwell_before_rom_flash(addr, recover_quiet);
         match prepare_bms_rom_flash_recover(&mut self.i2c, addr, recover_quiet) {
             Ok(Some(sig)) => {
+                // Only commit to the "recover attempt" backoff once we truly start a ROM flash.
+                self.note_rom_recover_attempt(addr, Instant::now());
                 self.bms_rom_flash_attempted = true;
                 match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, sig, recover_quiet) {
                     Ok(()) => {
@@ -4743,7 +4744,7 @@ where
         let addr = self.bms_post_flash_resume_addr?;
         let started = self.bms_post_flash_resume_started_at.unwrap_or(now);
         let quiet_deadline = started + BMS_POST_FLASH_BOOT_QUIET;
-        let deadline = started + BMS_POST_FLASH_RESUME_WINDOW;
+        let deadline = quiet_deadline + BMS_POST_FLASH_RESUME_WINDOW;
 
         if now < quiet_deadline {
             if !quiet {
