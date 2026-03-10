@@ -270,7 +270,9 @@ def monitor_file_stdout_window(
         and latest_existing_stdout_ts is not None
         and latest_existing_stdout_ts >= recent_window_start
     ):
-        return True, recent_window_offset
+        # Recent pre-attach stdout is useful as context, but do not let it suppress the
+        # post-flash reset fallback unless fresh stdout arrives after the current attach.
+        return False, recent_window_offset
     return False, None
 
 

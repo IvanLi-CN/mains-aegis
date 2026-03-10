@@ -28,6 +28,7 @@ recover_arg_set="false"
 force_min_charge_arg_set="false"
 probe_mode_arg_set="false"
 rom_image_arg_set="false"
+duration_arg_set="false"
 MAIN_LOOP_QUANTUM_SEC=2
 WORKING_INFO_PERIOD_SEC=5
 MIN_VALID_STREAK=10
@@ -80,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --duration-sec)
       require_value "$1" "$#"
       duration_sec="${2:-}"
+      duration_arg_set="true"
       shift 2
       ;;
     --flash)
@@ -164,6 +166,10 @@ case "$mode" in
     exit 4
     ;;
 esac
+
+if [[ "$subcommand" == "recover" && "$duration_arg_set" != "true" ]]; then
+  duration_sec="$MIN_DURATION_RECOVER_SEC"
+fi
 
 if ! [[ "$duration_sec" =~ ^[0-9]+$ ]] || [[ "$duration_sec" -lt 1 ]]; then
   echo "Invalid --duration-sec: $duration_sec" >&2

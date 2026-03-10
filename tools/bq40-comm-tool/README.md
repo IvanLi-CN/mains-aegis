@@ -20,7 +20,7 @@ cp .esp32-port.example .esp32-port
 ./bin/run.sh diagnose --mode canonical --duration-sec 120 --force-min-charge true
 
 # 3) Only if step 2 reports `rom_mode_detected`, run dual-diag recover
-./bin/run.sh recover --mode dual-diag --duration-sec 120 --recover if-rom --force-min-charge true
+./bin/run.sh recover --mode dual-diag --duration-sec 125 --recover if-rom --force-min-charge true
 
 # 4) Re-run canonical diagnose after recovery
 ./bin/run.sh diagnose --mode canonical --duration-sec 120 --force-min-charge true
@@ -73,7 +73,7 @@ Required `summary.json` fields:
 - `monitor file not found: ...`
   - for `verify`, make sure `--monitor-file` points to an existing `.mon.ndjson`
 - `duration-sec must be >= 70 for diagnose` or `>= 125 for recover`
-  - the no-pack wake path still spends 10s with charge off and 2s at minimum charge, but the firmware only checks the 5s working-info target on a 2s main loop, so the parser-visible steady-state cadence is effectively ~6s; recover also reserves another 10s post-flash boot quiet plus the current ROM flash transfer/gap budget (120s remains the recommended bench default)
+  - the no-pack wake path still spends 10s with charge off and 2s at minimum charge, but the firmware only checks the 5s working-info target on a 2s main loop, so the parser-visible steady-state cadence is effectively ~6s; recover also reserves another 10s post-flash boot quiet plus the current ROM flash transfer/gap budget (120s remains the diagnose/verify bench default, while recover now needs at least 125s)
 - `verdict.fail: canonical_mode_touched_0x16`
   - canonical mode should not touch `0x16`; check firmware mode and logs
 - canonical diagnose still has `samples_total=0`

@@ -38,7 +38,7 @@ What to inspect:
 Only run recover after canonical diagnose fails and the monitor log proves `stage=rom_mode_detected`. The supported repo workflow is `dual-diag + if-rom + force-min-charge`; do not escalate to `force` when ROM signature is absent.
 
 ```bash
-./bin/run.sh recover --mode dual-diag --duration-sec 120 --recover if-rom --force-min-charge true
+./bin/run.sh recover --mode dual-diag --duration-sec 125 --recover if-rom --force-min-charge true
 ```
 
 Policy:
