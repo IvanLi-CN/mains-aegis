@@ -55,7 +55,8 @@ WORKING_INFO_EFFECTIVE_SEC=$((((WORKING_INFO_PERIOD_SEC + MAIN_LOOP_QUANTUM_SEC 
 BMS_BOOT_EXTRA_LATENCY_SEC=$((WAKE_WINDOW_PROBE_MAX_SEC + EXIT_EXERCISE_WINDOW_SEC))
 WORKING_INFO_STARTUP_LATENCY_SEC=$((MAIN_LOOP_QUANTUM_SEC * 2 + BMS_BOOT_EXTRA_LATENCY_SEC))
 MIN_STEADY_STATE_WINDOW_SEC=$((WORKING_INFO_STARTUP_LATENCY_SEC + (MIN_VALID_STREAK - 1) * WORKING_INFO_EFFECTIVE_SEC))
-MIN_DURATION_DIAG_SEC=$((REPOWER_OFF_WINDOW_SEC + MIN_CHARGE_SETTLE_SEC + MIN_STEADY_STATE_WINDOW_SEC))
+# Computed after parsing args (depends on `--force-min-charge`).
+MIN_DURATION_DIAG_SEC=0
 ROM_FLASH_TRANSFER_SEC=0
 MIN_DURATION_RECOVER_SEC=0
 
@@ -178,6 +179,22 @@ case "$mode" in
     ;;
 esac
 
+case "$force_min_charge" in
+  true|false) ;;
+  *)
+    echo "Invalid --force-min-charge: $force_min_charge" >&2
+    exit 15
+    ;;
+esac
+
+wake_desc_prefix=""
+wake_budget_sec=0
+if [[ "$force_min_charge" == "true" ]]; then
+  wake_desc_prefix="${REPOWER_OFF_WINDOW_SEC}s repower-off + ${MIN_CHARGE_SETTLE_SEC}s min-charge settle + "
+  wake_budget_sec=$((REPOWER_OFF_WINDOW_SEC + MIN_CHARGE_SETTLE_SEC))
+fi
+MIN_DURATION_DIAG_SEC=$((wake_budget_sec + MIN_STEADY_STATE_WINDOW_SEC))
+
 if [[ "$subcommand" == "recover" && "$mode" != "dual-diag" ]]; then
   echo "recover requires --mode dual-diag" >&2
   exit 18
@@ -269,9 +286,9 @@ if [[ "$subcommand" != "verify" ]]; then
   fi
   if [[ "$duration_sec" -lt "$min_duration_sec" ]]; then
     if [[ "$subcommand" == "recover" && "$recover_policy" != "never" ]]; then
-      echo "duration-sec must be >= $min_duration_sec for recover (10s repower-off + 2s min-charge settle + ${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop + ${POST_FLASH_BOOT_QUIET_SEC}s post-flash boot quiet + ${POST_FLASH_RESUME_WINDOW_SEC}s post-flash resume window + current ROM flash lower-bound ${ROM_FLASH_TRANSFER_SEC}s transfer/gap budget + ${ROM_FLASH_FIXED_LATENCY_SEC}s erase/execute/dwell)" >&2
+      echo "duration-sec must be >= $min_duration_sec for recover (${wake_desc_prefix}${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop + ${POST_FLASH_BOOT_QUIET_SEC}s post-flash boot quiet + ${POST_FLASH_RESUME_WINDOW_SEC}s post-flash resume window + current ROM flash lower-bound ${ROM_FLASH_TRANSFER_SEC}s transfer/gap budget + ${ROM_FLASH_FIXED_LATENCY_SEC}s erase/execute/dwell)" >&2
     else
-      echo "duration-sec must be >= $min_duration_sec for $subcommand (10s repower-off + 2s min-charge settle + ${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop)" >&2
+      echo "duration-sec must be >= $min_duration_sec for $subcommand (${wake_desc_prefix}${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop)" >&2
     fi
     exit 14
   fi
@@ -300,14 +317,6 @@ else
     *)
       echo "Invalid --recover: $recover_policy" >&2
       exit 7
-      ;;
-  esac
-
-  case "$force_min_charge" in
-    true|false) ;;
-    *)
-      echo "Invalid --force-min-charge: $force_min_charge" >&2
-      exit 15
       ;;
   esac
 

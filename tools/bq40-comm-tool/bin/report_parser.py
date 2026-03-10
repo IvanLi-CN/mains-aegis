@@ -38,6 +38,7 @@ ROM_DETECTED_RE = re.compile(
     r"stage=(?:rom_mode_detected(?:_after_enter|_post_flash)?|wake_window_rom_entered|wake_window_rom_signature)\b"
 )
 ROM_FLASH_BEGIN_RE = re.compile(r"stage=(probe_rom_flash_begin|rom_flash_start)")
+ROM_FLASH_IMAGE_DONE_RE = re.compile(r"stage=rom_flash_done\b")
 ROM_FLASH_DONE_RE = re.compile(r"stage=probe_rom_flash_done")
 ADDR16_RE = re.compile(r"addr=0x16\b")
 
@@ -102,6 +103,7 @@ def main() -> int:
     max_streak = 0
     rom_detected = False
     rom_flash_attempted = False
+    rom_flash_image_done = False
     rom_flash_done = False
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
@@ -140,6 +142,8 @@ def main() -> int:
                     rom_detected = True
                 if ROM_FLASH_BEGIN_RE.search(text):
                     rom_flash_attempted = True
+                if ROM_FLASH_IMAGE_DONE_RE.search(text):
+                    rom_flash_image_done = True
                 if ROM_FLASH_DONE_RE.search(text):
                     rom_flash_done = True
 
@@ -215,6 +219,7 @@ def main() -> int:
         "rom_events": {
             "detected": rom_detected,
             "flash_attempted": rom_flash_attempted,
+            "flash_image_done": rom_flash_image_done,
             "flash_done": rom_flash_done,
         },
         "verdict": {
@@ -255,6 +260,7 @@ def main() -> int:
             "",
             f"- detected: `{summary['rom_events']['detected']}`",
             f"- flash_attempted: `{summary['rom_events']['flash_attempted']}`",
+            f"- flash_image_done: `{summary['rom_events']['flash_image_done']}`",
             f"- flash_done: `{summary['rom_events']['flash_done']}`",
             "",
             f"source_log: `{monitor_file}`",

@@ -6357,6 +6357,21 @@ where
                 defmt::warn!("charger: bq25792 wake_profile_restored");
             }
         }
+
+        // Keep the charger in host mode while the forced wake profile is active. The BQ25792 I2C
+        // watchdog defaults to 40s, which is shorter than typical diagnose sessions.
+        if force_allow_charge
+            && self.chg_watchdog_restore.is_none()
+            && watchdog_read_ok
+            && watchdog.watchdog_before != 0
+        {
+            if let Err(e) = bq25792::kick_watchdog(&mut self.i2c) {
+                defmt::warn!(
+                    "charger: bq25792 err stage=watchdog_kick err={} keep_charge_state=true",
+                    i2c_error_kind(e)
+                );
+            }
+        }
         let allow_charge = normal_allow_charge || force_allow_charge;
         let mut applied_ctrl0 = ctrl0;
         let mut applied_vreg_mv: Option<u16> = None;

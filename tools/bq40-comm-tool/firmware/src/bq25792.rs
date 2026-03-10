@@ -348,6 +348,19 @@ where
     })
 }
 
+/// Kick (reset) the I2C watchdog timer without changing the configured timeout bits.
+///
+/// Datasheet: host must write `WD_RST=1` before the watchdog expires to remain in host mode.
+pub fn kick_watchdog<I2C>(i2c: &mut I2C) -> Result<u8, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let ctrl1_after = ctrl1_before | ctrl1::WD_RST;
+    write_u8(i2c, reg::CHARGER_CONTROL_1, ctrl1_after)?;
+    Ok(ctrl1_after)
+}
+
 #[derive(Clone, Copy)]
 pub struct AdcState {
     pub ctrl: u8,

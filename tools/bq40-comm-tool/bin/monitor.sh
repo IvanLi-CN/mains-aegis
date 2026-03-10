@@ -504,9 +504,12 @@ while True:
 
     raise SystemExit(f"mcu-agentd monitor failed (rc={proc.returncode})\n{last_detail}")
 
-if captured_monitor_new_bytes == 0 and not saw_recent_existing_stdout:
+if captured_monitor_new_bytes == 0:
     detail = last_detail or "no new monitor output captured"
-    raise SystemExit(f"monitor output not found for this run\n{detail}")
+    extra = ""
+    if saw_recent_existing_stdout:
+        extra = "\n(recent pre-attach stdout was found, but no new bytes appeared after this run started)"
+    raise SystemExit(f"monitor output not found for this run\n{detail}{extra}")
 
 if not completed_duration:
     detail = last_detail or "monitor session ended before requested duration"
