@@ -79,7 +79,7 @@ Required `summary.json` fields:
 - canonical diagnose still has `samples_total=0`
   - re-run with `--force-min-charge true`; the supported no-pack wake profile is `VREG=16.8V / ICHG=200mA / IINDPM=500mA`
 - dual-diag still has `samples_total=0` and no ROM signature
-  - run `./bin/run.sh diagnose --mode dual-diag --duration-sec 120 --force-min-charge true --probe-mode mac-only`; note that this only narrows the steady-state liveness probe path, and the normal wake/ROM checks still run before the MAC-only path is used
+  - run `./bin/run.sh diagnose --mode dual-diag --duration-sec 120 --force-min-charge true --probe-mode mac-only`; note that this only changes the discovery probe path (before an address is latched), and the normal wake/ROM checks still run before the MAC probe is used
 - recover report shows `flash_attempted=true` but `flash_done=false`
   - the ROM sequence ran but did not exit ROM; stop and inspect the monitor log instead of assuming reflashing succeeded
 

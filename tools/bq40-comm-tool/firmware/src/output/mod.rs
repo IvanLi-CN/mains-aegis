@@ -4035,6 +4035,7 @@ enum WakeWindowProbeResult {
 enum PostFlashResumeResult {
     WaitingBoot,
     WaitingRom,
+    Recovered(u8),
 }
 
 pub struct PowerManager<'d, I2C> {
@@ -4353,7 +4354,7 @@ where
     fn mark_bms_working(&mut self, addr: u8) {
         let now = Instant::now();
         self.maybe_restore_charger_watchdog_after_recovery(false);
-        if self.charge_mode == BootChargeMode::MinCharge {
+        if self.charge_mode == BootChargeMode::MinCharge && !self.cfg.force_min_charge {
             self.set_charge_mode(BootChargeMode::Off);
             self.maybe_poll_charger(&IrqSnapshot::default());
         }
@@ -4643,8 +4644,7 @@ where
                 let mut tracker = BmsPatternTracker::new();
                 match read_bms_snapshot_strict(&mut self.i2c, addr, true, &mut tracker) {
                     Ok(_) => {
-                        self.clear_post_flash_resume();
-                        self.maybe_restore_charger_watchdog_after_recovery(quiet);
+                        self.mark_bms_working(addr);
                         defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done", addr);
                         if !quiet {
                             defmt::warn!(
@@ -4652,7 +4652,7 @@ where
                                 addr
                             );
                         }
-                        None
+                        Some(PostFlashResumeResult::Recovered(addr))
                     }
                     Err(e) => {
                         if !expired {
@@ -4736,6 +4736,19 @@ where
                     // the minimum-charge wake profile: it can perturb a healthy pack and pollute
                     // diagnose results.
                     self.mark_bms_working(addr);
+                    return true;
+                }
+
+                if !self.cfg.force_min_charge {
+                    // Without the explicit wake override, skip the repower/min-charge stages and
+                    // proceed directly to the staged wake/ROM probing.
+                    self.bms_startup_stage = BmsStartupStage::ProbeWithMinCharge;
+                    self.bms_stage_next_at = now;
+                    defmt::warn!(
+                        "bms_flow: stage={} next={} force_min_charge=false",
+                        BmsStartupStage::ProbeWithoutCharge.as_str(),
+                        self.bms_startup_stage.as_str(),
+                    );
                     return true;
                 }
 
@@ -4840,6 +4853,11 @@ where
                                     self.bms_wait_rom_status_next_at =
                                         Some(now + BMS_BOOT_STAGE_POLL_PERIOD);
                                 }
+                                return true;
+                            }
+                            PostFlashResumeResult::Recovered(_) => {
+                                // `maybe_handle_post_flash_resume` already transitioned the FSM to
+                                // Monitoring on success; stop processing the old WaitRom branch.
                                 return true;
                             }
                         }
@@ -5220,7 +5238,7 @@ where
         if self.bms_probe_mode_last != Some(use_mac_probe_only) {
             self.bms_probe_mode_last = Some(use_mac_probe_only);
             defmt::info!(
-                "bms: probe_mode={} elapsed_ms={=u64} window_ms={=u64}",
+                "bms: boot_probe_mode={} elapsed_ms={=u64} window_ms={=u64}",
                 if use_mac_probe_only {
                     "mac_only"
                 } else {
@@ -6457,7 +6475,7 @@ where
             if verbose_missing_probe {
                 self.bms_missing_diag_next_at = Some(now + BMS_MISSING_VERBOSE_REPROBE_INTERVAL);
                 defmt::warn!(
-                    "bms_diag: stage=missing_reprobe probe_mode={} addr_mode={} elapsed_ms={=u64}",
+                    "bms_diag: stage=missing_reprobe boot_probe_mode={} addr_mode={} elapsed_ms={=u64}",
                     if self.cfg.bms_mac_probe_only {
                         "mac_only"
                     } else {
