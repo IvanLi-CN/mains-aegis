@@ -23,11 +23,11 @@
 
 ### 2.1 历史故障证据（主工程早期日志）
 
-- `/.mcu-agentd/monitor/esp/20260209_095024.mon.ndjson`
+- `.mcu-agentd/monitor/esp/20260209_095024.mon.ndjson`
   - 现象：出现 ACK 但数据可疑常量化（典型为 `5911/5911/0x1717`）并伴随子字段 NACK。
   - 结论：链路“能回数据”不等于“数据可信”。
 
-- `/.mcu-agentd/monitor/esp/20260209_134121.mon.ndjson`
+- `.mcu-agentd/monitor/esp/20260209_134121.mon.ndjson`
   - 现象：`0x0B` 与 `0x16` 均 miss（NACK）。
   - 结论：存在纯物理/供电层不可达阶段。
 
@@ -131,10 +131,10 @@
   - 第一次加入“盲打 ROM 入口”诊断时，`monitor` 首轮 `--reset` 自身失败；因此没有采到有效 monitor 证据，但 flash 已成功。
 - `reports/20260307_002008/summary.json`
   - 在修复 `monitor` 自动回退后重新执行 `recover --recover if-rom`，仍然 `detected=false`、`flash_attempted=false`、`flash_done=false`。
-- `/.mcu-agentd/monitor/esp/20260306_234613_combined.mon.ndjson`
+- `.mcu-agentd/monitor/esp/20260306_234613_combined.mon.ndjson`
   - `0x0B` 在 boot 后 `10 ms` 就已经呈现稳定模式：标准 SBS/MAC 命令写全部 `i2c_nack_data`，裸读 `raw_read1/raw_read2` 却返回 `0xFF`。
   - `0x16` 则在同一早期窗口内，标准 word、MAC、裸读全部 `i2c_nack_addr`。
-- `/.mcu-agentd/monitor/esp/20260307_001908_combined.mon.ndjson`
+- `.mcu-agentd/monitor/esp/20260307_001908_combined.mon.ndjson`
   - 即使在 `probe_rom_exit` 读签名失败后，继续主动发送 `0x0F00` / `0x0033`（含 PEC 变体）试探 ROM 入口：
     - `0x0B` 上四种 ROM 入口写法全部 `write_err=i2c_nack_data`；
     - `0x16` 上四种 ROM 入口写法全部 `write_err=i2c_nack_addr`；

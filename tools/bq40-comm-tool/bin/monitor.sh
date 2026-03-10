@@ -90,7 +90,7 @@ import time
 from datetime import datetime, timezone
 from collections import deque
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Thread
 from typing import Deque, Dict, Optional, Tuple
 
 INITIAL_STDOUT_TIMEOUT_SEC = 6.0
@@ -502,8 +502,15 @@ PY
 
 if [[ -n "$output_file" ]]; then
   mkdir -p "$(dirname "$output_file")"
+  output_abs="$(cd "$(dirname "$output_file")" && pwd)/$(basename "$output_file")"
   cp "$monitor_path" "$output_file"
-  monitor_path="$(cd "$(dirname "$output_file")" && pwd)/$(basename "$output_file")"
+  # monitor_path points at the per-run combined temp file. When the caller requested
+  # an explicit output path, clean up the temp file (unless they happened to choose
+  # that exact same path).
+  if [[ "$monitor_path" != "$output_abs" ]]; then
+    rm -f "$monitor_path"
+  fi
+  monitor_path="$output_abs"
 fi
 
 echo "$monitor_path"

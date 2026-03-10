@@ -37,7 +37,7 @@ REPOWER_OFF_WINDOW_SEC=10
 MIN_CHARGE_SETTLE_SEC=2
 POST_FLASH_BOOT_QUIET_SEC=10
 POST_FLASH_RESUME_WINDOW_SEC=30
-ROM_FLASH_IMAGE_BYTES=$((8192 + 57344 + 34 + 34))
+ROM_FLASH_IMAGE_BYTES=0
 ROM_FLASH_BLOCK_BYTES=64
 ROM_FLASH_BLOCK_ONWIRE_BYTES=67
 ROM_FLASH_BITS_PER_BYTE=9
@@ -48,11 +48,8 @@ WORKING_INFO_EFFECTIVE_SEC=$((((WORKING_INFO_PERIOD_SEC + MAIN_LOOP_QUANTUM_SEC 
 WORKING_INFO_STARTUP_LATENCY_SEC=$((MAIN_LOOP_QUANTUM_SEC * 2))
 MIN_STEADY_STATE_WINDOW_SEC=$((WORKING_INFO_STARTUP_LATENCY_SEC + (MIN_VALID_STREAK - 1) * WORKING_INFO_EFFECTIVE_SEC))
 MIN_DURATION_DIAG_SEC=$((REPOWER_OFF_WINDOW_SEC + MIN_CHARGE_SETTLE_SEC + MIN_STEADY_STATE_WINDOW_SEC))
-ROM_FLASH_BLOCK_COUNT=$(((ROM_FLASH_IMAGE_BYTES + ROM_FLASH_BLOCK_BYTES - 1) / ROM_FLASH_BLOCK_BYTES))
-ROM_FLASH_WIRE_MS=$(((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_BLOCK_ONWIRE_BYTES * ROM_FLASH_BITS_PER_BYTE * 1000 + I2C_SLOW_BUS_BPS - 1) / I2C_SLOW_BUS_BPS))
-ROM_FLASH_GAP_MS=$((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_WRITE_GAP_MS))
-ROM_FLASH_TRANSFER_SEC=$((((ROM_FLASH_WIRE_MS + ROM_FLASH_GAP_MS) + 999) / 1000))
-MIN_DURATION_RECOVER_SEC=$((MIN_DURATION_DIAG_SEC + POST_FLASH_BOOT_QUIET_SEC + POST_FLASH_RESUME_WINDOW_SEC + ROM_FLASH_TRANSFER_SEC + ROM_FLASH_FIXED_LATENCY_SEC))
+ROM_FLASH_TRANSFER_SEC=0
+MIN_DURATION_RECOVER_SEC=0
 
 usage() {
   cat <<USAGE
@@ -178,6 +175,55 @@ if [[ "$subcommand" == "recover" && "$mode" != "dual-diag" ]]; then
   exit 18
 fi
 
+if [[ "$subcommand" != "verify" ]]; then
+  case "$rom_image" in
+    r2|r3|r5) ;;
+    *)
+      echo "Invalid --rom-image: $rom_image" >&2
+      exit 17
+      ;;
+  esac
+fi
+
+if [[ "$subcommand" == "recover" ]]; then
+  ROM_FLASH_IMAGE_BYTES=$(python3 - "$TOOL_ROOT" "$rom_image" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+rom_image = sys.argv[2]
+
+dir_map = {
+    "r2": "bq40z50_r2_v2_11_build_52",
+    "r3": "bq40z50_r3_v3_09_build_73",
+    "r5": "bq40z50_r5_v5_05_build_96",
+}
+asset_dir = root / "firmware" / "assets" / dir_map[rom_image]
+
+files = [
+    "section1.bin",
+    "section2.bin",
+    "section3_blk00.bin",
+    "section3_blk80.bin",
+]
+if (asset_dir / "section3_info.bin").exists():
+    files.append("section3_info.bin")
+files.append("section4_blk.bin")
+
+total = 0
+for name in files:
+    total += (asset_dir / name).stat().st_size
+print(total)
+PY
+)
+
+  ROM_FLASH_BLOCK_COUNT=$(((ROM_FLASH_IMAGE_BYTES + ROM_FLASH_BLOCK_BYTES - 1) / ROM_FLASH_BLOCK_BYTES))
+  ROM_FLASH_WIRE_MS=$(((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_BLOCK_ONWIRE_BYTES * ROM_FLASH_BITS_PER_BYTE * 1000 + I2C_SLOW_BUS_BPS - 1) / I2C_SLOW_BUS_BPS))
+  ROM_FLASH_GAP_MS=$((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_WRITE_GAP_MS))
+  ROM_FLASH_TRANSFER_SEC=$((((ROM_FLASH_WIRE_MS + ROM_FLASH_GAP_MS) + 999) / 1000))
+  MIN_DURATION_RECOVER_SEC=$((MIN_DURATION_DIAG_SEC + POST_FLASH_BOOT_QUIET_SEC + POST_FLASH_RESUME_WINDOW_SEC + ROM_FLASH_TRANSFER_SEC + ROM_FLASH_FIXED_LATENCY_SEC))
+fi
+
 if [[ "$subcommand" == "recover" && "$duration_arg_set" != "true" ]]; then
   duration_sec="$MIN_DURATION_RECOVER_SEC"
 fi
@@ -241,14 +287,6 @@ else
     *)
       echo "Invalid --probe-mode: $probe_mode" >&2
       exit 16
-      ;;
-  esac
-
-  case "$rom_image" in
-    r2|r3|r5) ;;
-    *)
-      echo "Invalid --rom-image: $rom_image" >&2
-      exit 17
       ;;
   esac
 

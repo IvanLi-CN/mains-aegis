@@ -51,7 +51,6 @@ const TELEMETRY_INCLUDE_VIN_CH3: bool = false;
 const FORCE_MIN_CHARGE: bool = cfg!(feature = "force-min-charge");
 const BMS_DIAG_ISOLATION: bool = true;
 const BMS_STRICT_VALIDATION: bool = true;
-const BMS_STAGED_PROBE: bool = true;
 const BMS_MAC_PROBE_ONLY: bool = cfg!(feature = "bms-mac-probe-only");
 // Diagnostic-only build knob: keep MAC-only probing enabled for the whole monitor session.
 const BMS_MAC_PROBE_BOOT_WINDOW_SECS: u64 = if cfg!(feature = "bms-mac-probe-only") {
@@ -359,11 +358,10 @@ fn main() -> ! {
         DEFAULT_ILIMIT_MA
     );
     defmt::info!(
-        "fw: debug force_min_charge={=bool} bms_diag_isolation={=bool} bms_strict_validation={=bool} bms_staged_probe={=bool} bms_mac_probe_only={=bool} bms_mac_window_s={=u64} bms_rom_recover={=bool} bms_addr_mode={} skip_i2c2_probe={=bool}",
+        "fw: debug force_min_charge={=bool} bms_diag_isolation={=bool} bms_strict_validation={=bool} bms_mac_probe_only={=bool} bms_mac_window_s={=u64} bms_rom_recover={=bool} bms_addr_mode={} skip_i2c2_probe={=bool}",
         FORCE_MIN_CHARGE,
         BMS_DIAG_ISOLATION,
         BMS_STRICT_VALIDATION,
-        BMS_STAGED_PROBE,
         BMS_MAC_PROBE_ONLY,
         BMS_MAC_PROBE_BOOT_WINDOW_SECS,
         BMS_ROM_RECOVER,
@@ -389,7 +387,7 @@ fn main() -> ! {
             &mut i2c1_sda,
             &mut i2c1_scl,
             bq40z50::I2C_ADDRESS_PRIMARY,
-            0x0d,
+            bq40z50::cmd::RELATIVE_STATE_OF_CHARGE,
         );
     }
 
@@ -579,7 +577,6 @@ fn main() -> ! {
         bms_diag_isolation: BMS_DIAG_ISOLATION,
         bms_address_mode: BMS_ADDRESS_MODE,
         bms_strict_validation: BMS_STRICT_VALIDATION,
-        bms_staged_probe: BMS_STAGED_PROBE,
         bms_mac_probe_only: BMS_MAC_PROBE_ONLY,
         bms_mac_probe_boot_window: Duration::from_secs(BMS_MAC_PROBE_BOOT_WINDOW_SECS),
         bms_rom_recover: BMS_ROM_RECOVER,

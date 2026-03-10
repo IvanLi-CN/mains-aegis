@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 SUSPICIOUS_VOLTAGE_MV = 5911
 SUSPICIOUS_CURRENT_MA = 5911
@@ -67,7 +68,7 @@ class Sample:
         return True
 
 
-def parse_entry_ts(entry: dict) -> float | None:
+def parse_entry_ts(entry: dict) -> Optional[float]:
     ts = entry.get("ts")
     if not isinstance(ts, str):
         return None
@@ -103,7 +104,7 @@ def main() -> int:
     rom_flash_attempted = False
     rom_flash_done = False
     canonical_touched_0x16 = False
-    last_sample_ts: float | None = None
+    last_sample_ts: Optional[float] = None
     allowed_addrs = {0x0B} if args.mode == "canonical" else {0x0B, 0x16}
 
     if not monitor_file.is_file():
