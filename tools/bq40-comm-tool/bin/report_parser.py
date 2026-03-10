@@ -16,6 +16,7 @@ SUSPICIOUS_CURRENT_MA = 5911
 SUSPICIOUS_STATUS = 0x1717
 MAX_SAMPLE_STREAK_GAP_SEC = 15.0
 SESSION_BOUNDARY_EVENT = "monitor_session_start"
+RECENT_EXISTING_STDOUT_EVENT = "recent_existing_stdout"
 PREEXISTING_BEGIN_EVENT = "preexisting_segment_begin"
 PREEXISTING_END_EVENT = "preexisting_segment_end"
 
@@ -110,6 +111,8 @@ def main() -> int:
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
     in_preexisting_segment = False
+    parse_preexisting_segment = False
+    allow_preexisting_parse = False
     allowed_addrs = {0x0B} if args.mode == "canonical" else {0x0B, 0x16}
 
     if not monitor_file.is_file():
@@ -129,23 +132,34 @@ def main() -> int:
 
                 if entry.get("src") == "meta":
                     event = entry.get("event")
+                    if event == RECENT_EXISTING_STDOUT_EVENT:
+                        # `monitor.sh` may splice a small "pre-attach stdout" segment for the
+                        # current run (e.g. flash finished and the MCU printed early logs before
+                        # we attached). Allow the immediately following preexisting segment to
+                        # participate in ROM/sample parsing.
+                        allow_preexisting_parse = True
+                        continue
                     if event == PREEXISTING_BEGIN_EVENT:
                         in_preexisting_segment = True
+                        parse_preexisting_segment = allow_preexisting_parse
+                        allow_preexisting_parse = False
                         continue
                     if event == PREEXISTING_END_EVENT:
                         in_preexisting_segment = False
+                        parse_preexisting_segment = False
                         continue
                     if event == SESSION_BOUNDARY_EVENT:
                         # Only treat reset attaches (or older logs without the flag) as streak
                         # discontinuities. Re-attaches without a reset can still build a valid
                         # streak across the combined log.
+                        allow_preexisting_parse = False
                         reset_on_attach = entry.get("reset_on_attach")
                         if reset_on_attach is None or reset_on_attach:
                             current_streak = 0
                             last_sample_ts = None
                         continue
 
-                if in_preexisting_segment:
+                if in_preexisting_segment and not parse_preexisting_segment:
                     continue
 
                 text = entry.get("text", "")

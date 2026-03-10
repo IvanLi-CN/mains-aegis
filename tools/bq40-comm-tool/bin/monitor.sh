@@ -543,10 +543,13 @@ while True:
 
 if captured_monitor_new_bytes == 0:
     detail = last_detail or "no new monitor output captured"
-    extra = ""
     if saw_recent_existing_stdout:
-        extra = "\n(recent pre-attach stdout was found, but no new bytes appeared after this run started)"
-    raise SystemExit(f"monitor output not found for this run\n{detail}{extra}")
+        # We still captured meaningful "pre-attach" output for this run. Keep going so the caller
+        # can generate a report from the combined log, but preserve a breadcrumb in case the
+        # session went silent immediately after boot.
+        append_meta_entry("monitor_warning", warning="no_new_bytes_after_attach", detail=detail)
+    else:
+        raise SystemExit(f"monitor output not found for this run\n{detail}")
 
 if not completed_duration:
     detail = last_detail or "monitor session ended before requested duration"
