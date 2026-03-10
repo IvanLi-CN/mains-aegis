@@ -95,7 +95,6 @@ from typing import Deque, Dict, Optional, Tuple
 
 INITIAL_STDOUT_TIMEOUT_SEC = 6.0
 RECENT_EXISTING_STDOUT_GRACE_SEC = 10.0
-META_MONITOR_HINT_WINDOW_SEC = 30.0
 
 root = Path(sys.argv[1])
 duration = int(sys.argv[2])
@@ -222,39 +221,6 @@ def parse_entry_ts(entry: dict) -> Optional[float]:
         return datetime.fromisoformat(normalized).astimezone(timezone.utc).timestamp()
     except ValueError:
         return None
-
-
-def read_recent_meta_monitor_path(now_ts: float) -> Optional[Path]:
-    meta_path = root / ".mcu-agentd" / "meta" / "esp.ndjson"
-    if not meta_path.exists():
-        return None
-    try:
-        lines = meta_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
-
-    cutoff = now_ts - META_MONITOR_HINT_WINDOW_SEC
-    best: Optional[Tuple[float, Path]] = None
-    for line in lines[-250:]:
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if entry.get("event") != "monitor-start":
-            continue
-        ts = parse_entry_ts(entry)
-        if ts is None or ts < cutoff:
-            continue
-        session_path = entry.get("session_path")
-        if not isinstance(session_path, str) or not session_path.endswith(".mon.ndjson"):
-            continue
-        candidate = Path(session_path)
-        if not candidate.is_absolute():
-            candidate = root / candidate
-        resolved = candidate.resolve()
-        if best is None or ts > best[0]:
-            best = (ts, resolved)
-    return None if best is None else best[1]
 
 
 def monitor_file_stdout_window(
@@ -387,10 +353,6 @@ while True:
     stdout_tail: Deque[str] = deque(maxlen=200)
     stderr_tail: Deque[str] = deque(maxlen=200)
     path_ref: Dict[str, Optional[Path]] = {"path": None}
-    if after_flash and not use_reset_attach and not reset_fallback_used:
-        meta_hint = read_recent_meta_monitor_path(started_at)
-        if meta_hint is not None:
-            path_ref["path"] = meta_hint
 
     cmd = ["mcu-agentd", "--non-interactive", "monitor", "esp"]
     # Prefer reusing the daemon-started monitor after flashing. If that attach fails to show any

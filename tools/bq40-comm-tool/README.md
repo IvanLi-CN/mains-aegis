@@ -35,7 +35,7 @@ cp .esp32-port.example .esp32-port
 
 Options:
 - `--mode canonical|dual-diag` (default: `canonical`)
-- `--duration-sec <N>` (default: `120`; `diagnose` requires `>=70`; `recover` requires `>=70` when `--recover never`, otherwise `>=` the tool-derived minimum; when omitted, ROM-enabled recover defaults to `155`)
+- `--duration-sec <N>` (default: `120`; `diagnose` requires `>=78`; `recover` requires `>=78` when `--recover never`, otherwise `>=` the tool-derived minimum; when omitted, ROM-enabled recover defaults to `155`)
 - `--flash true|false` (default: `true`; not accepted by `verify`)
 - `--recover never|if-rom|force` (default: `if-rom`; not accepted by `diagnose`/`verify`; `force` requires `--mode dual-diag`)
 - `--force-min-charge true|false` (default: `false`; not accepted by `verify`)
@@ -72,7 +72,7 @@ Required `summary.json` fields:
   - then re-run `./bin/run.sh ...` (tool report parser works offline on existing logs too)
 - `monitor file not found: ...`
   - for `verify`, make sure `--monitor-file` points to an existing `.mon.ndjson`
-- `duration-sec` floors (`diagnose >=70`; `recover --recover never >=70`; ROM-enabled `recover` uses a tool-derived minimum and defaults to 155)
+- `duration-sec` floors (`diagnose >=78`; `recover --recover never >=78`; ROM-enabled `recover` uses a tool-derived minimum and defaults to 155)
   - the no-pack wake path still spends 10s with charge off and 2s at minimum charge, but the firmware only checks the 5s working-info target on a 2s main loop, so the parser-visible steady-state cadence is effectively ~6s; ROM-enabled recover also reserves another 10s post-flash boot quiet plus the ROM flash transfer/gap budget (120s remains the diagnose/verify bench default, while recover defaults to 155 because the firmware can spend another 30s in the post-flash resume window before steady-state samples resume)
 - `verdict.fail: canonical_mode_touched_0x16`
   - canonical mode should not touch `0x16`; check firmware mode and logs
