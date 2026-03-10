@@ -189,6 +189,8 @@ const BMS_WAKE_KEEPALIVE_GAP: Duration = Duration::from_millis(40);
 const BMS_WAKE_KEEPALIVE_ROUNDS: usize = 3;
 const BMS_WAKE_READ_GAPS_MS: [u64; 3] = [2, 22, 40];
 const BMS_WAKE_TOUCH_READ_GAPS_MS: [u64; 3] = [22, 40, 66];
+const BMS_MAC_CMD_DEVICE_TYPE: u16 = 0x0001;
+const BMS_DEVICE_TYPE_BQ40Z50: u16 = 0x4500;
 const BMS_MAC_CMD_GAUGING: u16 = 0x0021;
 const BMS_MAC_CMD_FET_CONTROL: u16 = 0x0022;
 const BMS_MAC_CMD_OPERATION_STATUS: u16 = 0x0054;
@@ -361,6 +363,7 @@ struct ValidatedBmsSnapshot {
 struct BmsMacProbeSnapshot {
     declared_len: u8,
     payload_len: u8,
+    device_type: u16,
     b0: u8,
     b1: u8,
     b2: u8,
@@ -392,7 +395,8 @@ where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     // ManufacturerAccess() 0x0001 DeviceType query via ManufacturerData() (0x23).
-    // Per TRM, data bytes for cmd 0x00 are written MSB-first.
+    // Per TRM, data bytes for cmd 0x00 are written MSB-first and the block reply echoes 0x0001
+    // before the 16-bit device type payload.
     i2c.write(addr, &[bq40z50::cmd::MANUFACTURER_ACCESS, 0x00, 0x01])
         .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
     spin_delay(BMS_MAC_WRITE_SETTLE);
@@ -404,19 +408,22 @@ where
     let b2 = if payload_len > 2 { raw.payload[2] } else { 0 };
     let b3 = if payload_len > 3 { raw.payload[3] } else { 0 };
 
-    // Temporary liveness gate: reject the known ghost frame signature.
-    let looks_like_ghost = raw.declared_len == 23
-        && raw.payload_len >= 8
-        && raw.payload[..(raw.payload_len as usize)]
-            .iter()
-            .all(|b| *b == 0x17);
-    if looks_like_ghost {
+    if is_bms_ghost_block(&raw) {
         return Err(bq40z50::BmsDiagError::StalePattern);
+    }
+    if !is_bms_mb44_reply_for_cmd(&raw, BMS_MAC_CMD_DEVICE_TYPE) {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+
+    let device_type = u16::from_le_bytes([b2, b3]);
+    if device_type != BMS_DEVICE_TYPE_BQ40Z50 {
+        return Err(bq40z50::BmsDiagError::BadRange);
     }
 
     Ok(BmsMacProbeSnapshot {
         declared_len: raw.declared_len,
         payload_len: raw.payload_len,
+        device_type,
         b0,
         b1,
         b2,
@@ -5209,8 +5216,9 @@ where
                         self.bms_weak_pass_votes = 0;
                         if !quiet {
                             defmt::warn!(
-                                "bms: bq40z50 mac_probe_ok addr=0x{=u8:x} len={=u8} payload={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                                "bms: bq40z50 mac_probe_ok addr=0x{=u8:x} device_type=0x{=u16:x} len={=u8} payload={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
                                 addr,
+                                snapshot.device_type,
                                 snapshot.declared_len,
                                 snapshot.payload_len,
                                 snapshot.b0,

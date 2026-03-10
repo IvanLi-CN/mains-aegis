@@ -212,11 +212,11 @@ else
     "$SCRIPT_DIR/flash.sh"
   fi
 
+  monitor_args=(--duration-sec "$duration_sec" --after-flash "$flash")
   if [[ -n "$monitor_file" ]]; then
-    monitor_file=$("$SCRIPT_DIR/monitor.sh" --duration-sec "$duration_sec" --output "$monitor_file")
-  else
-    monitor_file=$("$SCRIPT_DIR/monitor.sh" --duration-sec "$duration_sec")
+    monitor_args+=(--output "$monitor_file")
   fi
+  monitor_file=$("$SCRIPT_DIR/monitor.sh" "${monitor_args[@]}")
 fi
 
 if [[ ! -f "$monitor_file" ]]; then

@@ -6,10 +6,11 @@ TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 
 duration_sec=120
 output_file=""
+after_flash="false"
 
 usage() {
   cat <<USAGE
-Usage: $(basename "$0") [--duration-sec N] [--output PATH]
+Usage: $(basename "$0") [--duration-sec N] [--output PATH] [--after-flash true|false]
 USAGE
 }
 
@@ -35,6 +36,11 @@ while [[ $# -gt 0 ]]; do
       output_file="${2:-}"
       shift 2
       ;;
+    --after-flash)
+      require_value "$1" "$#"
+      after_flash="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -52,20 +58,33 @@ if ! [[ "$duration_sec" =~ ^[0-9]+$ ]] || [[ "$duration_sec" -lt 1 ]]; then
   exit 3
 fi
 
-monitor_path=$(python3 - "$TOOL_ROOT" "$duration_sec" <<'PY'
+case "$after_flash" in
+  true|false) ;;
+  *)
+    echo "Invalid --after-flash: $after_flash" >&2
+    exit 4
+    ;;
+esac
+
+monitor_path=$(python3 - "$TOOL_ROOT" "$duration_sec" "$after_flash" <<'PY'
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from collections import deque
 from pathlib import Path
 from threading import Lock, Thread
 from typing import Deque, Dict, Optional, Tuple
 
+INITIAL_STDOUT_TIMEOUT_SEC = 6.0
+RECENT_EXISTING_STDOUT_GRACE_SEC = 10.0
+
 root = Path(sys.argv[1])
 duration = int(sys.argv[2])
+after_flash = sys.argv[3] == "true"
 monitor_dir = root / ".mcu-agentd" / "monitor" / "esp"
 monitor_dir.mkdir(parents=True, exist_ok=True)
 combined_fd, combined_tmp = tempfile.mkstemp(
@@ -160,27 +179,55 @@ def append_segment(
         appended_offsets[src] = infile.tell()
 
 
+def parse_entry_ts(entry: dict) -> Optional[float]:
+    ts = entry.get("ts")
+    if not isinstance(ts, str):
+        return None
+    normalized = ts[:-1] + "+00:00" if ts.endswith("Z") else ts
+    try:
+        return datetime.fromisoformat(normalized).astimezone(timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
 def monitor_file_has_stdout(
     src: Optional[Path],
     before: Dict[Path, Tuple[float, int]],
+    started_at: float,
+    allow_recent_existing: bool,
 ) -> bool:
     if src is None or not src.exists():
         return False
     src = src.resolve()
     baseline_offset = before.get(src, (0.0, 0))[1]
+    latest_existing_stdout_ts: Optional[float] = None
     try:
         with src.open("r", encoding="utf-8") as infile:
-            infile.seek(baseline_offset)
-            for line in infile:
+            while True:
+                line_start = infile.tell()
+                line = infile.readline()
+                if not line:
+                    break
                 try:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if entry.get("src") == "stdout":
+                if entry.get("src") != "stdout":
+                    continue
+                if line_start >= baseline_offset:
                     return True
+                if allow_recent_existing:
+                    parsed_ts = parse_entry_ts(entry)
+                    if parsed_ts is not None:
+                        latest_existing_stdout_ts = parsed_ts
     except OSError:
         return False
-    return False
+
+    return (
+        allow_recent_existing
+        and latest_existing_stdout_ts is not None
+        and latest_existing_stdout_ts >= started_at - RECENT_EXISTING_STDOUT_GRACE_SEC
+    )
 
 
 def stop_process(proc: subprocess.Popen[str]) -> None:
@@ -196,10 +243,16 @@ def inspect_monitor_path(
     before: Dict[Path, Tuple[float, int]],
     started_at: float,
     hinted_path: Optional[Path],
+    allow_recent_existing: bool,
 ) -> Tuple[Dict[Path, Tuple[float, int]], Optional[Path], bool]:
     after = snapshot()
     chosen = resolve_monitor_path(before, after, started_at, hinted_path)
-    return after, chosen, monitor_file_has_stdout(chosen, before)
+    return after, chosen, monitor_file_has_stdout(
+        chosen,
+        before,
+        started_at,
+        allow_recent_existing,
+    )
 
 
 def wait_for_target_stdout(
@@ -208,20 +261,19 @@ def wait_for_target_stdout(
     started_at: float,
     path_ref: Dict[str, Optional[Path]],
     timeout_sec: float,
+    allow_recent_existing: bool,
 ) -> Tuple[Dict[Path, Tuple[float, int]], Optional[Path], bool]:
     probe_deadline = time.time() + timeout_sec
     after = before
     chosen: Optional[Path] = None
     has_stdout = False
     while time.time() < probe_deadline:
-        after, chosen, has_stdout = inspect_monitor_path(before, started_at, path_ref["path"])
+        after, chosen, has_stdout = inspect_monitor_path(before, started_at, path_ref["path"], allow_recent_existing)
         if has_stdout or proc.poll() is not None:
             return after, chosen, has_stdout
         time.sleep(0.2)
-    return inspect_monitor_path(before, started_at, path_ref["path"])
+    return inspect_monitor_path(before, started_at, path_ref["path"], allow_recent_existing)
 
-
-INITIAL_STDOUT_TIMEOUT_SEC = 6.0
 
 deadline = time.time() + duration
 appended_offsets: Dict[Path, int] = {}
@@ -275,7 +327,7 @@ while time.time() < deadline:
     chosen: Optional[Path] = None
     chosen_has_stdout = False
 
-    if not use_reset_attach and not reset_fallback_used:
+    if after_flash and not use_reset_attach and not reset_fallback_used:
         probe_timeout = min(INITIAL_STDOUT_TIMEOUT_SEC, remaining)
         after, chosen, chosen_has_stdout = wait_for_target_stdout(
             proc,
@@ -283,6 +335,7 @@ while time.time() < deadline:
             started_at,
             path_ref,
             probe_timeout,
+            True,
         )
         if not chosen_has_stdout:
             if proc.poll() is None:
@@ -313,7 +366,7 @@ while time.time() < deadline:
 
     stdout_data = "\n".join(stdout_tail)
     stderr_data = "\n".join(stderr_tail)
-    after, chosen, chosen_has_stdout = inspect_monitor_path(before, started_at, path_ref["path"])
+    after, chosen, chosen_has_stdout = inspect_monitor_path(before, started_at, path_ref["path"], False)
     if chosen is not None:
         append_segment(chosen, before, appended_offsets)
 
