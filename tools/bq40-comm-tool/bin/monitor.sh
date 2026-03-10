@@ -111,6 +111,7 @@ os.close(combined_fd)
 combined_path = Path(combined_tmp)
 captured_monitor_bytes = 0
 captured_monitor_new_bytes = 0
+saw_recent_existing_stdout = False
 
 
 def snapshot() -> Dict[Path, Tuple[float, int]]:
@@ -414,6 +415,7 @@ while True:
             True,
         )
         if chosen is not None and recent_window_offset is not None:
+            saw_recent_existing_stdout = True
             append_meta_entry(
                 "recent_existing_stdout",
                 path=str(chosen.resolve()),
@@ -494,7 +496,7 @@ while True:
 
     raise SystemExit(f"mcu-agentd monitor failed (rc={proc.returncode})\n{last_detail}")
 
-if captured_monitor_new_bytes == 0:
+if captured_monitor_new_bytes == 0 and not saw_recent_existing_stdout:
     detail = last_detail or "no new monitor output captured"
     raise SystemExit(f"monitor output not found for this run\n{detail}")
 
