@@ -95,6 +95,7 @@ from typing import Deque, Dict, Optional, Tuple
 
 INITIAL_STDOUT_TIMEOUT_SEC = 6.0
 RECENT_EXISTING_STDOUT_GRACE_SEC = 10.0
+META_MONITOR_HINT_WINDOW_SEC = 30.0
 
 root = Path(sys.argv[1])
 duration = int(sys.argv[2])
@@ -142,8 +143,8 @@ def capture(stream, tail: Deque[str], parse_payload: bool, path_ref: Dict[str, O
             candidate = Path(payload_path)
             if not candidate.is_absolute():
                 candidate = root / candidate
-            if path_ref["path"] is None:
-                path_ref["path"] = candidate.resolve()
+            # Prefer the most recently hinted file path (flash may start monitor before we attach).
+            path_ref["path"] = candidate.resolve()
     stream.close()
 
 
@@ -161,15 +162,12 @@ def resolve_monitor_path(
     changed.sort()
     changed_paths = {path for _, path in changed}
 
-    if (
-        hinted_path is not None
-        and hinted_path.exists()
-        and (
-            hinted_path in changed_paths
-            or (hinted_path in after and after[hinted_path][0] >= started_at)
-        )
-    ):
-        return hinted_path
+    if hinted_path is not None:
+        hinted_path = hinted_path.resolve()
+        # A hint coming from the current attach (or meta) is the strongest signal, even if the file
+        # existed before monitor.sh started and no new bytes arrived yet.
+        if hinted_path.exists():
+            return hinted_path
     if changed:
         return changed[-1][1]
     return None
@@ -216,7 +214,7 @@ def append_segment(
 
 
 def parse_entry_ts(entry: dict) -> Optional[float]:
-    ts = entry.get("ts")
+    ts = entry.get("ts") or entry.get("timestamp")
     if not isinstance(ts, str):
         return None
     normalized = ts[:-1] + "+00:00" if ts.endswith("Z") else ts
@@ -224,6 +222,39 @@ def parse_entry_ts(entry: dict) -> Optional[float]:
         return datetime.fromisoformat(normalized).astimezone(timezone.utc).timestamp()
     except ValueError:
         return None
+
+
+def read_recent_meta_monitor_path(now_ts: float) -> Optional[Path]:
+    meta_path = root / ".mcu-agentd" / "meta" / "esp.ndjson"
+    if not meta_path.exists():
+        return None
+    try:
+        lines = meta_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    cutoff = now_ts - META_MONITOR_HINT_WINDOW_SEC
+    best: Optional[Tuple[float, Path]] = None
+    for line in lines[-250:]:
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("event") != "monitor-start":
+            continue
+        ts = parse_entry_ts(entry)
+        if ts is None or ts < cutoff:
+            continue
+        session_path = entry.get("session_path")
+        if not isinstance(session_path, str) or not session_path.endswith(".mon.ndjson"):
+            continue
+        candidate = Path(session_path)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        resolved = candidate.resolve()
+        if best is None or ts > best[0]:
+            best = (ts, resolved)
+    return None if best is None else best[1]
 
 
 def monitor_file_stdout_window(
@@ -273,9 +304,9 @@ def monitor_file_stdout_window(
         and latest_existing_stdout_ts is not None
         and latest_existing_stdout_ts >= recent_window_start
     ):
-        # Recent pre-attach stdout is useful as context, but do not let it suppress the
-        # post-flash reset fallback unless fresh stdout arrives after the current attach.
-        return False, recent_window_offset
+        # Treat recent pre-attach stdout as attach evidence in after-flash mode so we don't
+        # immediately force a reset and lose the post-flash trace.
+        return True, recent_window_offset
     return False, None
 
 
@@ -356,6 +387,10 @@ while True:
     stdout_tail: Deque[str] = deque(maxlen=200)
     stderr_tail: Deque[str] = deque(maxlen=200)
     path_ref: Dict[str, Optional[Path]] = {"path": None}
+    if after_flash and not use_reset_attach and not reset_fallback_used:
+        meta_hint = read_recent_meta_monitor_path(started_at)
+        if meta_hint is not None:
+            path_ref["path"] = meta_hint
 
     cmd = ["mcu-agentd", "--non-interactive", "monitor", "esp"]
     # Prefer reusing the daemon-started monitor after flashing. If that attach fails to show any
@@ -417,6 +452,7 @@ while True:
                 path=str(chosen.resolve()),
                 grace_sec=RECENT_EXISTING_STDOUT_GRACE_SEC,
             )
+            append_segment(chosen, before, appended_offsets, recent_window_offset)
         if not chosen_has_stdout:
             if proc.poll() is None:
                 stop_process(proc)
