@@ -478,7 +478,10 @@ while True:
         time.sleep(0.5)
         continue
 
-    if combined_path.exists() and combined_path.stat().st_size > 0:
+    # combined_path always contains at least the per-attach meta marker, so use the
+    # captured monitor payload bytes (stdout/meta from mcu-agentd) instead of file size
+    # to decide whether a retry can make progress.
+    if captured_monitor_bytes > 0:
         restarts += 1
         if restarts > 8:
             break

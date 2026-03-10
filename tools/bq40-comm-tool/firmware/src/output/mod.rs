@@ -1985,8 +1985,10 @@ fn run_bms_rom_flash_recover_sequence<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let section1_image = BMS_ROM_SECTION1_IMAGE;
-    let section2_image = BMS_ROM_SECTION2_IMAGE;
+    let section1_file = BMS_ROM_SECTION1_IMAGE;
+    let section2_file = BMS_ROM_SECTION2_IMAGE;
+    let section1_image = &section1_file[..BMS_ROM_SECTION1_USED_LEN];
+    let section2_image = &section2_file[..BMS_ROM_SECTION2_USED_LEN];
 
     if !quiet {
         defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_begin", addr);
@@ -1995,9 +1997,9 @@ where
             addr,
             BMS_ROM_FLASH_IMAGE_TAG,
             BMS_ROM_INFO_LAYOUT_TAG,
-            section1_image.len() as u32,
+            section1_file.len() as u32,
             BMS_ROM_SECTION1_USED_LEN as u32,
-            section2_image.len() as u32,
+            section2_file.len() as u32,
             BMS_ROM_SECTION2_USED_LEN as u32,
             BMS_ROM_FLASH_BLOCK_BYTES_SEC12 as u8
         );

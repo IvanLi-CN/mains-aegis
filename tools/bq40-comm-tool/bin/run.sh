@@ -37,6 +37,8 @@ REPOWER_OFF_WINDOW_SEC=10
 MIN_CHARGE_SETTLE_SEC=2
 POST_FLASH_BOOT_QUIET_SEC=10
 POST_FLASH_RESUME_WINDOW_SEC=30
+# Historical safe bench default for ROM-enabled recovery (keeps extra slack beyond the computed minimum).
+RECOVER_DEFAULT_SEC=155
 ROM_FLASH_IMAGE_BYTES=0
 ROM_FLASH_BLOCK_BYTES=64
 ROM_FLASH_BLOCK_ONWIRE_BYTES=67
@@ -205,19 +207,31 @@ dir_map = {
 }
 asset_dir = root / "firmware" / "assets" / dir_map[rom_image]
 
+used_len = {
+    "r2": (0x0DEC, 0xB69D),
+    "r3": (0x12AC, 0xBE23),
+    "r5": (0x1614, 0xDA63),
+}[rom_image]
+sec1_used, sec2_used = used_len
+sec1_path = asset_dir / "section1.bin"
+sec2_path = asset_dir / "section2.bin"
+if sec1_used > sec1_path.stat().st_size or sec2_used > sec2_path.stat().st_size:
+    raise SystemExit("ROM section used length exceeds asset file size")
+
 files = [
-    "section1.bin",
-    "section2.bin",
-    "section3_blk00.bin",
-    "section3_blk80.bin",
+    ("section1.bin", sec1_used),
+    ("section2.bin", sec2_used),
+    ("section3_blk00.bin", None),
+    ("section3_blk80.bin", None),
+    ("section4_blk.bin", None),
 ]
-if (asset_dir / "section3_info.bin").exists():
-    files.append("section3_info.bin")
-files.append("section4_blk.bin")
 
 total = 0
-for name in files:
-    total += (asset_dir / name).stat().st_size
+for name, size_override in files:
+    if size_override is None:
+        total += (asset_dir / name).stat().st_size
+    else:
+        total += size_override
 print(total)
 PY
     )
@@ -232,6 +246,9 @@ fi
 
 if [[ "$subcommand" == "recover" && "$duration_arg_set" != "true" && "$recover_policy" != "never" ]]; then
   duration_sec="$MIN_DURATION_RECOVER_SEC"
+  if [[ "$duration_sec" -lt "$RECOVER_DEFAULT_SEC" ]]; then
+    duration_sec="$RECOVER_DEFAULT_SEC"
+  fi
 fi
 
 if ! [[ "$duration_sec" =~ ^[0-9]+$ ]] || [[ "$duration_sec" -lt 1 ]]; then
