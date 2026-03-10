@@ -88,6 +88,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=["canonical", "dual-diag"], required=True)
     parser.add_argument("--duration-sec", type=int, required=True)
     parser.add_argument("--monitor-file", required=True)
+    # Provenance-only knobs: supplied by `run.sh` so `summary.json` can be traced back to the
+    # exact live run configuration (especially when swapping ROM images).
+    parser.add_argument("--force-min-charge", choices=["true", "false"])
+    parser.add_argument("--probe-mode", choices=["strict", "mac-only"])
+    parser.add_argument("--rom-image", choices=["r2", "r3", "r5"])
     parser.add_argument("--report-out", required=True)
     return parser.parse_args()
 
@@ -114,6 +119,14 @@ def main() -> int:
     parse_preexisting_segment = False
     allow_preexisting_parse = False
     allowed_addrs = {0x0B} if args.mode == "canonical" else {0x0B, 0x16}
+
+    run_config = {
+        "force_min_charge": None
+        if args.force_min_charge is None
+        else (args.force_min_charge == "true"),
+        "probe_mode": args.probe_mode,
+        "rom_image": args.rom_image,
+    }
 
     if not monitor_file.is_file():
         print(f"monitor file not found: {monitor_file}", file=sys.stderr)
@@ -243,6 +256,7 @@ def main() -> int:
     summary = {
         "mode": args.mode,
         "duration_sec": args.duration_sec,
+        "run_config": run_config,
         "samples_total": samples_total,
         "valid_samples": valid_samples,
         "max_valid_streak": max_streak,
@@ -264,6 +278,14 @@ def main() -> int:
         encoding="utf-8",
     )
 
+    def fmt_cfg_bool(value: Optional[bool]) -> str:
+        if value is None:
+            return "unknown"
+        return "true" if value else "false"
+
+    def fmt_cfg_str(value: Optional[str]) -> str:
+        return value if value is not None else "unknown"
+
     md = [
         "# BQ40 Communication Summary",
         "",
@@ -273,6 +295,12 @@ def main() -> int:
         f"- valid_samples: `{summary['valid_samples']}`",
         f"- max_valid_streak: `{summary['max_valid_streak']}`",
         f"- verdict: `{'PASS' if summary['verdict']['pass'] else 'FAIL'}` ({summary['verdict']['reason']})",
+        "",
+        "## Run Config",
+        "",
+        f"- force_min_charge: `{fmt_cfg_bool(run_config['force_min_charge'])}`",
+        f"- probe_mode: `{fmt_cfg_str(run_config['probe_mode'])}`",
+        f"- rom_image: `{fmt_cfg_str(run_config['rom_image'])}`",
         "",
         "## Poll Errors",
         "",

@@ -8,10 +8,14 @@ mode="canonical"
 duration_sec=120
 monitor_file=""
 report_out=""
+force_min_charge=""
+probe_mode=""
+rom_image=""
 
 usage() {
   cat <<USAGE
 Usage: $(basename "$0") --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--report-out DIR]
+                         [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5]
 USAGE
 }
 
@@ -42,6 +46,21 @@ while [[ $# -gt 0 ]]; do
       monitor_file="${2:-}"
       shift 2
       ;;
+    --force-min-charge)
+      require_value "$1" "$#"
+      force_min_charge="${2:-}"
+      shift 2
+      ;;
+    --probe-mode)
+      require_value "$1" "$#"
+      probe_mode="${2:-}"
+      shift 2
+      ;;
+    --rom-image)
+      require_value "$1" "$#"
+      rom_image="${2:-}"
+      shift 2
+      ;;
     --report-out)
       require_value "$1" "$#"
       report_out="${2:-}"
@@ -69,8 +88,20 @@ if [[ -z "$report_out" ]]; then
   report_out="$TOOL_ROOT/reports/$ts"
 fi
 
-python3 "$SCRIPT_DIR/report_parser.py" \
-  --mode "$mode" \
-  --duration-sec "$duration_sec" \
-  --monitor-file "$monitor_file" \
+parser_args=(
+  --mode "$mode"
+  --duration-sec "$duration_sec"
+  --monitor-file "$monitor_file"
   --report-out "$report_out"
+)
+if [[ -n "$force_min_charge" ]]; then
+  parser_args+=(--force-min-charge "$force_min_charge")
+fi
+if [[ -n "$probe_mode" ]]; then
+  parser_args+=(--probe-mode "$probe_mode")
+fi
+if [[ -n "$rom_image" ]]; then
+  parser_args+=(--rom-image "$rom_image")
+fi
+
+python3 "$SCRIPT_DIR/report_parser.py" "${parser_args[@]}"

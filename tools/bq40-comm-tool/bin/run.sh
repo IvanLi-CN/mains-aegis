@@ -365,6 +365,13 @@ report_args=(
   --duration-sec "$duration_sec"
   --monitor-file "$monitor_file"
 )
+if [[ "$subcommand" != "verify" ]]; then
+  report_args+=(
+    --force-min-charge "$force_min_charge"
+    --probe-mode "$probe_mode"
+    --rom-image "$rom_image"
+  )
+fi
 if [[ -n "$report_out" ]]; then
   report_args+=(--report-out "$report_out")
 fi

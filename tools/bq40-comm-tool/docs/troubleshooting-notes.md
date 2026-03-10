@@ -98,7 +98,7 @@
    - `canonical` 模式下不得出现 `addr=0x16`
 4. 仅在出现 ROM 签名时执行恢复：
    ```bash
-   ./bin/run.sh recover --mode dual-diag --duration-sec 155 --recover if-rom --force-min-charge true
+   ./bin/run.sh recover --mode dual-diag --recover if-rom --force-min-charge true --rom-image r2
    ```
 5. 恢复后必须重新刷回 canonical 并再次诊断，然后用同一份 canonical 日志做离线 verify。
 
