@@ -14,6 +14,7 @@ SUSPICIOUS_VOLTAGE_MV = 5911
 SUSPICIOUS_CURRENT_MA = 5911
 SUSPICIOUS_STATUS = 0x1717
 MAX_SAMPLE_STREAK_GAP_SEC = 15.0
+SESSION_BOUNDARY_EVENT = "monitor_session_start"
 
 LOG_LEVEL_PREFIX = r"(?:\[[A-Z ]+\]\s+)?"
 
@@ -118,6 +119,11 @@ def main() -> int:
                 try:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+
+                if entry.get("src") == "meta" and entry.get("event") == SESSION_BOUNDARY_EVENT:
+                    current_streak = 0
+                    last_sample_ts = None
                     continue
 
                 text = entry.get("text", "")

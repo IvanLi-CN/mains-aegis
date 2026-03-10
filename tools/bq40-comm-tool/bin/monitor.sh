@@ -109,6 +109,7 @@ combined_fd, combined_tmp = tempfile.mkstemp(
 )
 os.close(combined_fd)
 combined_path = Path(combined_tmp)
+captured_monitor_bytes = 0
 
 
 def snapshot() -> Dict[Path, Tuple[float, int]]:
@@ -171,11 +172,24 @@ def resolve_monitor_path(
     return None
 
 
+def append_meta_entry(event: str, **fields: object) -> None:
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "mcu_id": "esp",
+        "src": "meta",
+        "event": event,
+    }
+    entry.update(fields)
+    with combined_path.open("a", encoding="utf-8") as outfile:
+        outfile.write(json.dumps(entry, ensure_ascii=True) + "\n")
+
+
 def append_segment(
     src: Path,
     before: Dict[Path, Tuple[float, int]],
     appended_offsets: Dict[Path, int],
 ) -> None:
+    global captured_monitor_bytes
     src = src.resolve()
     if not src.exists():
         return
@@ -191,6 +205,7 @@ def append_segment(
             appended_offsets[src] = infile.tell()
             return
         outfile.write(chunk)
+        captured_monitor_bytes += len(chunk)
         appended_offsets[src] = infile.tell()
 
 
@@ -303,9 +318,11 @@ first_attach = True
 last_detail = ""
 use_reset_attach = reset_on_attach
 reset_fallback_used = False
+completed_duration = False
 
 while True:
     if deadline is not None and time.time() >= deadline:
+        completed_duration = True
         break
     remaining = duration if deadline is None else max(1.0, deadline - time.time())
     before = snapshot()
@@ -331,6 +348,13 @@ while True:
     )
     if proc.stdout is None or proc.stderr is None:
         raise SystemExit("mcu-agentd monitor failed: missing stdout/stderr pipe")
+
+    append_meta_entry(
+        "monitor_session_start",
+        after_flash=after_flash,
+        reset_on_attach=use_reset_attach,
+        attempt=restarts + 1,
+    )
 
     stdout_thread = Thread(
         target=capture,
@@ -398,7 +422,8 @@ while True:
     detail_lines = (stderr_data or stdout_data).strip().splitlines()[-8:]
     last_detail = "\n".join(detail_lines) if detail_lines else f"mcu-agentd exited with {proc.returncode}"
 
-    if timed_out:
+    if timed_out or (deadline is not None and time.time() >= deadline):
+        completed_duration = True
         break
 
     use_reset_attach = False
@@ -430,9 +455,13 @@ while True:
 
     raise SystemExit(f"mcu-agentd monitor failed (rc={proc.returncode})\n{last_detail}")
 
-if not combined_path.exists() or combined_path.stat().st_size == 0:
+if captured_monitor_bytes == 0:
     detail = last_detail or "no monitor output captured"
     raise SystemExit(f"monitor output not found for this run\n{detail}")
+
+if not completed_duration:
+    detail = last_detail or "monitor session ended before requested duration"
+    raise SystemExit(f"monitor run ended before requested duration\n{detail}")
 
 print(combined_path.resolve())
 PY
