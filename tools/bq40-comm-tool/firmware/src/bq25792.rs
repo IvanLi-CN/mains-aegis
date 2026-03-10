@@ -58,6 +58,8 @@ pub mod ctrl1 {
     pub const WD_RST: u8 = 1 << 3;
     /// `REG10.WATCHDOG[2:0]`.
     pub const WATCHDOG_MASK: u8 = 0x07;
+    /// Datasheet POR default watchdog setting (40s = 0b101).
+    pub const WATCHDOG_DEFAULT: u8 = 0x05;
 }
 
 pub mod ctrl2 {

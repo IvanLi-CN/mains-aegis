@@ -5007,17 +5007,28 @@ where
             self.chg_enabled = false;
         }
 
-        // Safety net: previous tool sessions may have crashed mid-recovery and left the charger
-        // in a forced wake profile / watchdog-disabled host configuration. Trigger REG_RST once
-        // at boot so each run starts from a known default baseline.
+        // Safety net: if a previous recovery flow disabled the charger watchdog and the MCU reset
+        // before restoring it, bring back the default watchdog bits at boot. Avoid using REG_RST
+        // here so we do not reset charger safety timers on every tool restart.
         if self.charger_allowed {
-            match bq25792::trigger_reg_rst(&mut self.i2c) {
-                Ok(reg9) => defmt::warn!(
-                    "charger: bq25792 stage=reg_rst reg09_written=0x{=u8:x}",
-                    reg9
-                ),
+            match bq25792::read_watchdog_state(&mut self.i2c) {
+                Ok(state) if state.watchdog_before == 0 => match bq25792::restore_watchdog(
+                    &mut self.i2c,
+                    bq25792::ctrl1::WATCHDOG_DEFAULT,
+                ) {
+                    Ok(updated) => defmt::warn!(
+                        "charger: bq25792 watchdog stage=boot_restore before=0x{=u8:x} after=0x{=u8:x}",
+                        updated.watchdog_before,
+                        updated.watchdog_after,
+                    ),
+                    Err(e) => defmt::warn!(
+                        "charger: bq25792 err stage=watchdog_boot_restore err={}",
+                        i2c_error_kind(e)
+                    ),
+                },
+                Ok(_) => {}
                 Err(e) => defmt::warn!(
-                    "charger: bq25792 err stage=reg_rst err={}",
+                    "charger: bq25792 err stage=watchdog_boot_read err={}",
                     i2c_error_kind(e)
                 ),
             }
