@@ -30,10 +30,20 @@ WORKING_INFO_PERIOD_SEC=5
 MIN_VALID_STREAK=10
 REPOWER_OFF_WINDOW_SEC=10
 MIN_CHARGE_SETTLE_SEC=2
-POST_FLASH_QUIET_WINDOW_SEC=30
+ROM_FLASH_IMAGE_BYTES=$((8192 + 57344 + 34 + 34))
+ROM_FLASH_BLOCK_BYTES=64
+ROM_FLASH_BLOCK_ONWIRE_BYTES=67
+ROM_FLASH_BITS_PER_BYTE=9
+I2C_SLOW_BUS_BPS=$((25 * 1000))
+ROM_FLASH_WRITE_GAP_MS=10
+ROM_FLASH_FIXED_LATENCY_SEC=$((3 + 4 + 2))
 MIN_STEADY_STATE_WINDOW_SEC=$((WORKING_INFO_PERIOD_SEC * MIN_VALID_STREAK))
 MIN_DURATION_DIAG_SEC=$((REPOWER_OFF_WINDOW_SEC + MIN_CHARGE_SETTLE_SEC + MIN_STEADY_STATE_WINDOW_SEC))
-MIN_DURATION_RECOVER_SEC=$((MIN_DURATION_DIAG_SEC + POST_FLASH_QUIET_WINDOW_SEC))
+ROM_FLASH_BLOCK_COUNT=$(((ROM_FLASH_IMAGE_BYTES + ROM_FLASH_BLOCK_BYTES - 1) / ROM_FLASH_BLOCK_BYTES))
+ROM_FLASH_WIRE_MS=$(((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_BLOCK_ONWIRE_BYTES * ROM_FLASH_BITS_PER_BYTE * 1000 + I2C_SLOW_BUS_BPS - 1) / I2C_SLOW_BUS_BPS))
+ROM_FLASH_GAP_MS=$((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_WRITE_GAP_MS))
+ROM_FLASH_TRANSFER_SEC=$((((ROM_FLASH_WIRE_MS + ROM_FLASH_GAP_MS) + 999) / 1000))
+MIN_DURATION_RECOVER_SEC=$((MIN_DURATION_DIAG_SEC + ROM_FLASH_TRANSFER_SEC + ROM_FLASH_FIXED_LATENCY_SEC))
 
 usage() {
   cat <<USAGE
@@ -154,7 +164,11 @@ if [[ "$subcommand" != "verify" ]]; then
     min_duration_sec="$MIN_DURATION_RECOVER_SEC"
   fi
   if [[ "$duration_sec" -lt "$min_duration_sec" ]]; then
-    echo "duration-sec must be >= $min_duration_sec for $subcommand (10s repower-off + 2s min-charge settle + streak>=${MIN_VALID_STREAK} at ${WORKING_INFO_PERIOD_SEC}s working-info cadence; recover also reserves ${POST_FLASH_QUIET_WINDOW_SEC}s post-flash quiet time)" >&2
+    if [[ "$subcommand" == "recover" ]]; then
+      echo "duration-sec must be >= $min_duration_sec for recover (10s repower-off + 2s min-charge settle + streak>=${MIN_VALID_STREAK} at ${WORKING_INFO_PERIOD_SEC}s working-info cadence + current ROM flash lower-bound ${ROM_FLASH_TRANSFER_SEC}s transfer/gap budget + ${ROM_FLASH_FIXED_LATENCY_SEC}s erase/execute/dwell)" >&2
+    else
+      echo "duration-sec must be >= $min_duration_sec for $subcommand (10s repower-off + 2s min-charge settle + streak>=${MIN_VALID_STREAK} at ${WORKING_INFO_PERIOD_SEC}s working-info cadence)" >&2
+    fi
     exit 14
   fi
 fi
@@ -212,7 +226,11 @@ else
     "$SCRIPT_DIR/flash.sh"
   fi
 
-  monitor_args=(--duration-sec "$duration_sec" --after-flash "$flash")
+  monitor_reset_on_attach="true"
+  if [[ "$flash" == "true" ]]; then
+    monitor_reset_on_attach="false"
+  fi
+  monitor_args=(--duration-sec "$duration_sec" --after-flash "$flash" --reset-on-attach "$monitor_reset_on_attach")
   if [[ -n "$monitor_file" ]]; then
     monitor_args+=(--output "$monitor_file")
   fi

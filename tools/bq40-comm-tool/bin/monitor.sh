@@ -7,10 +7,11 @@ TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 duration_sec=120
 output_file=""
 after_flash="false"
+reset_on_attach="false"
 
 usage() {
   cat <<USAGE
-Usage: $(basename "$0") [--duration-sec N] [--output PATH] [--after-flash true|false]
+Usage: $(basename "$0") [--duration-sec N] [--output PATH] [--after-flash true|false] [--reset-on-attach true|false]
 USAGE
 }
 
@@ -41,6 +42,11 @@ while [[ $# -gt 0 ]]; do
       after_flash="${2:-}"
       shift 2
       ;;
+    --reset-on-attach)
+      require_value "$1" "$#"
+      reset_on_attach="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -66,7 +72,15 @@ case "$after_flash" in
     ;;
 esac
 
-monitor_path=$(python3 - "$TOOL_ROOT" "$duration_sec" "$after_flash" <<'PY'
+case "$reset_on_attach" in
+  true|false) ;;
+  *)
+    echo "Invalid --reset-on-attach: $reset_on_attach" >&2
+    exit 5
+    ;;
+esac
+
+monitor_path=$(python3 - "$TOOL_ROOT" "$duration_sec" "$after_flash" "$reset_on_attach" <<'PY'
 import json
 import os
 import subprocess
@@ -85,6 +99,7 @@ RECENT_EXISTING_STDOUT_GRACE_SEC = 10.0
 root = Path(sys.argv[1])
 duration = int(sys.argv[2])
 after_flash = sys.argv[3] == "true"
+reset_on_attach = sys.argv[4] == "true"
 monitor_dir = root / ".mcu-agentd" / "monitor" / "esp"
 monitor_dir.mkdir(parents=True, exist_ok=True)
 combined_fd, combined_tmp = tempfile.mkstemp(
@@ -280,7 +295,7 @@ appended_offsets: Dict[Path, int] = {}
 restarts = 0
 first_attach = True
 last_detail = ""
-use_reset_attach = False
+use_reset_attach = reset_on_attach
 reset_fallback_used = False
 
 while time.time() < deadline:

@@ -5,6 +5,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 SUSPICIOUS_VOLTAGE_MV = 5911
 SUSPICIOUS_CURRENT_MA = 5911
 SUSPICIOUS_STATUS = 0x1717
+MAX_SAMPLE_STREAK_GAP_SEC = 15.0
 
 LOG_LEVEL_PREFIX = r"(?:\[[A-Z ]+\]\s+)?"
 
@@ -62,6 +64,17 @@ class Sample:
         return True
 
 
+def parse_entry_ts(entry: dict) -> float | None:
+    ts = entry.get("ts")
+    if not isinstance(ts, str):
+        return None
+    normalized = ts[:-1] + "+00:00" if ts.endswith("Z") else ts
+    try:
+        return datetime.fromisoformat(normalized).astimezone(timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["canonical", "dual-diag"], required=True)
@@ -87,6 +100,7 @@ def main() -> int:
     rom_flash_attempted = False
     rom_flash_done = False
     canonical_touched_0x16 = False
+    last_sample_ts: float | None = None
     allowed_addrs = {0x0B} if args.mode == "canonical" else {0x0B, 0x16}
 
     if not monitor_file.is_file():
@@ -147,6 +161,16 @@ def main() -> int:
 
                 if sample.addr not in allowed_addrs:
                     continue
+
+                entry_ts = parse_entry_ts(entry)
+                if (
+                    entry_ts is not None
+                    and last_sample_ts is not None
+                    and entry_ts - last_sample_ts > MAX_SAMPLE_STREAK_GAP_SEC
+                ):
+                    current_streak = 0
+                if entry_ts is not None:
+                    last_sample_ts = entry_ts
 
                 samples_total += 1
                 if sample.valid:
