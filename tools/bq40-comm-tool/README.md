@@ -54,7 +54,8 @@ Each run produces:
 Required `summary.json` fields:
 - `mode`, `duration_sec`, `samples_total`, `valid_samples`, `max_valid_streak`
 - `poll_errors` (by error type)
-- `rom_events` (`detected`, `flash_attempted`, `flash_done`)
+- `rom_events` (`detected`, `flash_attempted`, `flash_image_done`, `flash_done`)
+  - `flash_image_done=true` means the ROM flash sequence reached `stage=rom_flash_done` (image write completed), but post-flash resume may still fail.
   - `flash_done=true` means the recover flow emitted `stage=probe_rom_flash_done` after the gauge was validated back in firmware mode (including delayed post-flash resume).
 - `verdict.pass`, `verdict.reason`
 
@@ -72,8 +73,8 @@ Required `summary.json` fields:
   - then re-run `./bin/run.sh ...` (tool report parser works offline on existing logs too)
 - `monitor file not found: ...`
   - for `verify`, make sure `--monitor-file` points to an existing `.mon.ndjson`
-- `duration-sec` floors (`diagnose >=78`; `recover --recover never >=78`; ROM-enabled `recover` uses a tool-derived minimum and defaults to 155)
-  - the no-pack wake path still spends 10s with charge off and 2s at minimum charge, but the firmware only checks the 5s working-info target on a 2s main loop, so the parser-visible steady-state cadence is effectively ~6s; ROM-enabled recover also reserves another 10s post-flash boot quiet plus the ROM flash transfer/gap budget (120s remains the diagnose/verify bench default, while recover defaults to 155 because the firmware can spend another 30s in the post-flash resume window before steady-state samples resume)
+- `duration-sec` floors (computed by `./bin/run.sh`; wake adds 12s when `--force-min-charge true`; ROM-enabled `recover` also adds post-flash quiet + resume + transfer/gap budget and defaults to 155)
+  - the no-pack wake path spends 10s with charge off and 2s at minimum charge, but the firmware only checks the 5s working-info target on a 2s main loop, so the parser-visible steady-state cadence is effectively ~6s; ROM-enabled recover also reserves another 10s post-flash boot quiet plus the ROM flash transfer/gap budget (120s remains the diagnose/verify bench default, while recover defaults to 155 because the firmware can spend another 30s in the post-flash resume window before steady-state samples resume)
 - `verdict.fail: canonical_mode_touched_0x16`
   - canonical mode should not touch `0x16`; check firmware mode and logs
 - canonical diagnose still has `samples_total=0`

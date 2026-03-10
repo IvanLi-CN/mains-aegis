@@ -191,6 +191,7 @@ def append_segment(
     before: Dict[Path, Tuple[float, int]],
     appended_offsets: Dict[Path, int],
     start_offset_override: Optional[int] = None,
+    end_offset_limit: Optional[int] = None,
 ) -> None:
     global captured_monitor_bytes, captured_monitor_new_bytes
     src = src.resolve()
@@ -209,18 +210,24 @@ def append_segment(
     ):
         prev_offset = max(0, start_offset_override)
     size = src.stat().st_size
+    end_offset = size
+    if end_offset_limit is not None:
+        end_offset = min(end_offset, end_offset_limit)
     if size < prev_offset:
         prev_offset = baseline_offset if size >= baseline_offset else 0
     new_start = max(baseline_offset, prev_offset)
     with src.open("rb") as infile, combined_path.open("ab") as outfile:
         infile.seek(prev_offset)
-        chunk = infile.read()
+        if end_offset_limit is None:
+            chunk = infile.read()
+        else:
+            chunk = infile.read(max(0, end_offset - prev_offset))
         if not chunk:
-            appended_offsets[src] = infile.tell()
+            appended_offsets[src] = end_offset
             return
         outfile.write(chunk)
         captured_monitor_bytes += len(chunk)
-        if size > new_start:
+        if end_offset_limit is None and size > new_start:
             captured_monitor_new_bytes += size - new_start
         appended_offsets[src] = infile.tell()
 
@@ -429,7 +436,25 @@ while True:
                 path=str(chosen.resolve()),
                 grace_sec=RECENT_EXISTING_STDOUT_GRACE_SEC,
             )
-            append_segment(chosen, before, appended_offsets, recent_window_offset)
+            baseline_offset = before.get(chosen.resolve(), (0.0, 0))[1]
+            append_meta_entry(
+                "preexisting_segment_begin",
+                path=str(chosen.resolve()),
+                start_offset=recent_window_offset,
+                end_offset=baseline_offset,
+            )
+            append_segment(
+                chosen,
+                before,
+                appended_offsets,
+                recent_window_offset,
+                baseline_offset,
+            )
+            append_meta_entry(
+                "preexisting_segment_end",
+                path=str(chosen.resolve()),
+                end_offset=baseline_offset,
+            )
         if not chosen_has_stdout and recent_window_offset is None:
             if proc.poll() is None:
                 stop_process(proc)
