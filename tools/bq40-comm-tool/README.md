@@ -35,7 +35,7 @@ cp .esp32-port.example .esp32-port
 
 Options:
 - `--mode canonical|dual-diag` (default: `canonical`)
-- `--duration-sec <N>` (default: `120`; `diagnose` requires `>=62`, `recover` requires `>=92`)
+- `--duration-sec <N>` (default: `120`; `diagnose` requires `>=62`, `recover` requires `>=117`)
 - `--flash true|false` (default: `true`; not accepted by `verify`)
 - `--recover never|if-rom|force` (default: `if-rom`; not accepted by `diagnose`/`verify`; `force` requires `--mode dual-diag`)
 - `--force-min-charge true|false` (default: `false`; not accepted by `verify`)
@@ -71,8 +71,8 @@ Required `summary.json` fields:
   - then re-run `./bin/run.sh ...` (tool report parser works offline on existing logs too)
 - `monitor file not found: ...`
   - for `verify`, make sure `--monitor-file` points to an existing `.mon.ndjson`
-- `duration-sec must be >= 62 for diagnose` or `>= 92 for recover`
-  - the no-pack wake path spends 10s with charge off and 2s at minimum charge before steady-state logging; recover reserves another 30s post-flash quiet window, so the parser-visible 5s cadence needs at least 62s/92s respectively (120s remains the recommended bench default)
+- `duration-sec must be >= 62 for diagnose` or `>= 117 for recover`
+  - the no-pack wake path spends 10s with charge off and 2s at minimum charge before steady-state logging; recover reserves another 10s post-flash boot quiet plus the current ROM flash transfer/gap budget, so the parser-visible 5s cadence needs at least 62s/117s respectively (120s remains the recommended bench default)
 - `verdict.fail: canonical_mode_touched_0x16`
   - canonical mode should not touch `0x16`; check firmware mode and logs
 - canonical diagnose still has `samples_total=0`

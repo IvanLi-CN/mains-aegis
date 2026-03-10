@@ -42,7 +42,7 @@ Only run recover after canonical diagnose fails and the monitor log proves `stag
 ```
 
 Policy:
-- `--duration-sec` must be `>=92` for recover (diagnose floor + 30s post-flash quiet window before steady-state samples)
+- `--duration-sec` must be `>=117` for recover (diagnose floor + 10s post-flash boot quiet + current ROM flash transfer/gap budget before the 10-sample steady-state verdict)
 - `--recover never`: disable ROM recovery
 - `--recover if-rom`: recover only when ROM signature is detected
 - `--recover force`: debug-only escape hatch; not part of the supported repo recovery sequence

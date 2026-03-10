@@ -4306,12 +4306,7 @@ where
                     Ok(()) => {
                         maybe_enable_bms_runtime_after_flash(&mut self.i2c, addr, recover_quiet);
                         self.clear_post_flash_resume();
-                        if !quiet {
-                            defmt::warn!(
-                                "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done",
-                                addr
-                            );
-                        }
+                        defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done", addr);
                     }
                     Err(e) => {
                         if !recover_quiet {
@@ -4473,20 +4468,22 @@ where
         let now = Instant::now();
         let addr = self.bms_post_flash_resume_addr?;
         let started = self.bms_post_flash_resume_started_at.unwrap_or(now);
+        let quiet_deadline = started + BMS_POST_FLASH_BOOT_QUIET;
         let deadline = started + BMS_POST_FLASH_RESUME_WINDOW;
 
-        if now < deadline {
+        if now < quiet_deadline {
             if !quiet {
                 defmt::warn!(
                     "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_quiet_wait remaining_ms={=u64}",
                     addr,
-                    (deadline - now).as_millis() as u64
+                    (quiet_deadline - now).as_millis() as u64
                 );
             }
             return Some(PostFlashResumeResult::WaitingBoot);
         }
 
-        if !quiet {
+        let expired = now >= deadline;
+        if expired && !quiet {
             defmt::warn!(
                 "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_expired window_ms={=u64}",
                 addr,
@@ -4497,6 +4494,7 @@ where
         match run_bms_rom_postflash_resume_sequence(&mut self.i2c, addr, quiet) {
             Ok(true) => {
                 self.clear_post_flash_resume();
+                defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done", addr);
                 if !quiet {
                     defmt::warn!(
                         "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_fw_seen",
@@ -4506,6 +4504,17 @@ where
                 None
             }
             Ok(false) => {
+                if !expired {
+                    if !quiet {
+                        defmt::warn!(
+                            "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_still_rom keep_charge=true next_probe_ms={=u64}",
+                            addr,
+                            BMS_BOOT_STAGE_POLL_PERIOD.as_millis() as u64
+                        );
+                    }
+                    return Some(PostFlashResumeResult::WaitingRom);
+                }
+
                 self.clear_post_flash_resume();
                 if !quiet {
                     defmt::warn!(
@@ -4516,6 +4525,13 @@ where
                 None
             }
             Err(e) => {
+                if !expired {
+                    if !quiet {
+                        log_bms_diag(addr, "probe_rom_post_flash_resume", e, "word", "rom-mode");
+                    }
+                    return Some(PostFlashResumeResult::WaitingRom);
+                }
+
                 self.clear_post_flash_resume();
                 if !quiet {
                     log_bms_diag(addr, "probe_rom_post_flash_resume", e, "word", "rom-mode");
@@ -4614,28 +4630,16 @@ where
                 let quiet = !status_probe_due;
 
                 if self.bms_post_flash_resume_addr.is_some() {
-                    if let Some(started) = self.bms_post_flash_resume_started_at {
-                        let passive_deadline = started + BMS_POST_FLASH_RESUME_WINDOW;
-                        if now < passive_deadline {
-                            if status_probe_due {
-                                defmt::warn!(
-                                    "bms_flow: stage={} rom=post_flash_passive_wait keep_charge=true next_probe_ms={=u64}",
-                                    self.bms_startup_stage.as_str(),
-                                    (passive_deadline - now).as_millis() as u64
-                                );
-                            }
-                            self.bms_stage_next_at = passive_deadline;
-                            if status_probe_due {
-                                self.bms_wait_rom_status_next_at = Some(passive_deadline);
-                            }
-                            return true;
-                        }
-                    }
-
                     if let Some(result) = self.maybe_handle_post_flash_resume(quiet) {
                         match result {
                             PostFlashResumeResult::WaitingBoot => {
-                                self.bms_stage_next_at = now + BMS_POST_FLASH_BOOT_QUIET;
+                                let quiet_deadline =
+                                    self.bms_post_flash_resume_started_at.unwrap_or(now)
+                                        + BMS_POST_FLASH_BOOT_QUIET;
+                                self.bms_stage_next_at = quiet_deadline;
+                                if status_probe_due {
+                                    self.bms_wait_rom_status_next_at = Some(quiet_deadline);
+                                }
                                 return true;
                             }
                             PostFlashResumeResult::WaitingRom => {
