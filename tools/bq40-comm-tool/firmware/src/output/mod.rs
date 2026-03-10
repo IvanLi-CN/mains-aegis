@@ -4353,6 +4353,10 @@ where
     fn mark_bms_working(&mut self, addr: u8) {
         let now = Instant::now();
         self.maybe_restore_charger_watchdog_after_recovery(false);
+        if self.charge_mode == BootChargeMode::MinCharge {
+            self.set_charge_mode(BootChargeMode::Off);
+            self.maybe_poll_charger(&IrqSnapshot::default());
+        }
         self.bms_addr = Some(addr);
         self.bms_next_retry_at = Some(now);
         self.bms_next_poll_at = now;
@@ -4728,6 +4732,10 @@ where
         match self.bms_startup_stage {
             BmsStartupStage::ProbeWithoutCharge => {
                 if let Some(addr) = self.probe_bq40z50_without_recover(false) {
+                    if self.cfg.force_min_charge {
+                        self.set_charge_mode(BootChargeMode::MinCharge);
+                        self.maybe_poll_charger(&IrqSnapshot::default());
+                    }
                     self.mark_bms_working(addr);
                     return true;
                 }
