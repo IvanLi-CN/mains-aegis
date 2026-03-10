@@ -123,9 +123,17 @@ def main() -> int:
 
                 if entry.get("src") == "meta" and entry.get("event") == SESSION_BOUNDARY_EVENT:
                     # A plain monitor reattach does not imply the target rebooted; only reset-driven
-                    # attaches should break a valid-sample streak inside one logical run.
+                    # attaches should discard the abandoned pre-reset session from the final summary.
                     if entry.get("reset_on_attach") is True:
+                        poll_errors = Counter()
+                        samples_total = 0
+                        valid_samples = 0
                         current_streak = 0
+                        max_streak = 0
+                        rom_detected = False
+                        rom_flash_attempted = False
+                        rom_flash_done = False
+                        canonical_touched_0x16 = False
                         last_sample_ts = None
                     continue
 

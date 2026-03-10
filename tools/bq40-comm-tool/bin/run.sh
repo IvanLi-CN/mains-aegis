@@ -36,6 +36,7 @@ MIN_VALID_STREAK=10
 REPOWER_OFF_WINDOW_SEC=10
 MIN_CHARGE_SETTLE_SEC=2
 POST_FLASH_BOOT_QUIET_SEC=10
+POST_FLASH_RESUME_WINDOW_SEC=30
 ROM_FLASH_IMAGE_BYTES=$((8192 + 57344 + 34 + 34))
 ROM_FLASH_BLOCK_BYTES=64
 ROM_FLASH_BLOCK_ONWIRE_BYTES=67
@@ -51,7 +52,7 @@ ROM_FLASH_BLOCK_COUNT=$(((ROM_FLASH_IMAGE_BYTES + ROM_FLASH_BLOCK_BYTES - 1) / R
 ROM_FLASH_WIRE_MS=$(((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_BLOCK_ONWIRE_BYTES * ROM_FLASH_BITS_PER_BYTE * 1000 + I2C_SLOW_BUS_BPS - 1) / I2C_SLOW_BUS_BPS))
 ROM_FLASH_GAP_MS=$((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_WRITE_GAP_MS))
 ROM_FLASH_TRANSFER_SEC=$((((ROM_FLASH_WIRE_MS + ROM_FLASH_GAP_MS) + 999) / 1000))
-MIN_DURATION_RECOVER_SEC=$((MIN_DURATION_DIAG_SEC + POST_FLASH_BOOT_QUIET_SEC + ROM_FLASH_TRANSFER_SEC + ROM_FLASH_FIXED_LATENCY_SEC))
+MIN_DURATION_RECOVER_SEC=$((MIN_DURATION_DIAG_SEC + POST_FLASH_BOOT_QUIET_SEC + POST_FLASH_RESUME_WINDOW_SEC + ROM_FLASH_TRANSFER_SEC + ROM_FLASH_FIXED_LATENCY_SEC))
 
 usage() {
   cat <<USAGE
@@ -193,7 +194,7 @@ if [[ "$subcommand" != "verify" ]]; then
   fi
   if [[ "$duration_sec" -lt "$min_duration_sec" ]]; then
     if [[ "$subcommand" == "recover" ]]; then
-      echo "duration-sec must be >= $min_duration_sec for recover (10s repower-off + 2s min-charge settle + ${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop + ${POST_FLASH_BOOT_QUIET_SEC}s post-flash boot quiet + current ROM flash lower-bound ${ROM_FLASH_TRANSFER_SEC}s transfer/gap budget + ${ROM_FLASH_FIXED_LATENCY_SEC}s erase/execute/dwell)" >&2
+      echo "duration-sec must be >= $min_duration_sec for recover (10s repower-off + 2s min-charge settle + ${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop + ${POST_FLASH_BOOT_QUIET_SEC}s post-flash boot quiet + ${POST_FLASH_RESUME_WINDOW_SEC}s post-flash resume window + current ROM flash lower-bound ${ROM_FLASH_TRANSFER_SEC}s transfer/gap budget + ${ROM_FLASH_FIXED_LATENCY_SEC}s erase/execute/dwell)" >&2
     else
       echo "duration-sec must be >= $min_duration_sec for $subcommand (10s repower-off + 2s min-charge settle + ${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop)" >&2
     fi
