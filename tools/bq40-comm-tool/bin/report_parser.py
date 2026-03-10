@@ -32,7 +32,9 @@ POLL_RETRY_RE = re.compile(
     rf"stage=poll_snapshot_retry_(?P<result>ok|fail) first_err=(?P<first>[a-zA-Z0-9_]+)"
     rf"(?: retry_err=(?P<retry>[a-zA-Z0-9_]+))?"
 )
-ROM_DETECTED_RE = re.compile(r"stage=rom_mode_detected")
+ROM_DETECTED_RE = re.compile(
+    r"stage=(?:rom_mode_detected(?:_after_enter|_post_flash)?|wake_window_rom(?:_signature)?)\b"
+)
 ROM_FLASH_BEGIN_RE = re.compile(r"stage=(probe_rom_flash_begin|rom_flash_start)")
 ROM_FLASH_DONE_RE = re.compile(r"stage=probe_rom_flash_done")
 ADDR16_RE = re.compile(r"addr=0x16\b")

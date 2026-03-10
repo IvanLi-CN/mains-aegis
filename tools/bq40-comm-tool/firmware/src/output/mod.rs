@@ -566,11 +566,15 @@ where
     Err(bq40z50::BmsDiagError::I2cNack)
 }
 
-fn maybe_enable_bms_runtime_after_flash<I2C>(i2c: &mut I2C, addr: u8, quiet: bool)
+fn maybe_enable_bms_runtime_after_flash<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    quiet: bool,
+) -> Result<(), bq40z50::BmsDiagError>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let mut mfg_status = match read_bms_mac_u32(i2c, addr, BMS_MAC_CMD_MANUFACTURING_STATUS) {
+    let mut bits = match read_bms_mac_u32(i2c, addr, BMS_MAC_CMD_MANUFACTURING_STATUS) {
         Ok(bits) => {
             if !quiet {
                 defmt::warn!(
@@ -581,45 +585,50 @@ where
                     (bits & BMS_MFG_STATUS_FET_EN) != 0,
                 );
             }
-            Some(bits)
+            bits
         }
         Err(e) => {
             if !quiet {
                 log_bms_diag(addr, "post_flash_mfg_status", e, "block", "mac");
             }
-            None
+            return Err(e);
         }
     };
 
-    if let Some(bits) = mfg_status {
-        if bits & BMS_MFG_STATUS_GAUGE_EN == 0 {
-            if let Err(e) = send_bms_manufacturer_toggle(
-                i2c,
-                addr,
-                BMS_MAC_CMD_GAUGING,
-                "post_flash_gauge_en",
-                quiet,
-            ) {
-                if !quiet {
-                    log_bms_diag(addr, "post_flash_gauge_en", e, "word", "mac");
-                }
+    let mut toggled = false;
+    if bits & BMS_MFG_STATUS_GAUGE_EN == 0 {
+        if let Err(e) = send_bms_manufacturer_toggle(
+            i2c,
+            addr,
+            BMS_MAC_CMD_GAUGING,
+            "post_flash_gauge_en",
+            quiet,
+        ) {
+            if !quiet {
+                log_bms_diag(addr, "post_flash_gauge_en", e, "word", "mac");
             }
+            return Err(e);
         }
-        if bits & BMS_MFG_STATUS_FET_EN == 0 {
-            if let Err(e) = send_bms_manufacturer_toggle(
-                i2c,
-                addr,
-                BMS_MAC_CMD_FET_CONTROL,
-                "post_flash_fet_en",
-                quiet,
-            ) {
-                if !quiet {
-                    log_bms_diag(addr, "post_flash_fet_en", e, "word", "mac");
-                }
+        toggled = true;
+    }
+    if bits & BMS_MFG_STATUS_FET_EN == 0 {
+        if let Err(e) = send_bms_manufacturer_toggle(
+            i2c,
+            addr,
+            BMS_MAC_CMD_FET_CONTROL,
+            "post_flash_fet_en",
+            quiet,
+        ) {
+            if !quiet {
+                log_bms_diag(addr, "post_flash_fet_en", e, "word", "mac");
             }
+            return Err(e);
         }
+        toggled = true;
+    }
 
-        mfg_status = match read_bms_mac_u32(i2c, addr, BMS_MAC_CMD_MANUFACTURING_STATUS) {
+    if toggled {
+        bits = match read_bms_mac_u32(i2c, addr, BMS_MAC_CMD_MANUFACTURING_STATUS) {
             Ok(bits_after) => {
                 if !quiet {
                     defmt::warn!(
@@ -630,15 +639,30 @@ where
                         (bits_after & BMS_MFG_STATUS_FET_EN) != 0,
                     );
                 }
-                Some(bits_after)
+                bits_after
             }
             Err(e) => {
                 if !quiet {
                     log_bms_diag(addr, "post_flash_mfg_status_after", e, "block", "mac");
                 }
-                mfg_status
+                return Err(e);
             }
         };
+    }
+
+    let gauge_en = (bits & BMS_MFG_STATUS_GAUGE_EN) != 0;
+    let fet_en = (bits & BMS_MFG_STATUS_FET_EN) != 0;
+    if !gauge_en || !fet_en {
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=post_flash_runtime_incomplete bits=0x{=u32:x} gauge_en={=bool} fet_en={=bool}",
+                addr,
+                bits,
+                gauge_en,
+                fet_en,
+            );
+        }
+        return Err(bq40z50::BmsDiagError::BadRange);
     }
 
     if let Ok(op_status) = read_bms_mac_u32(i2c, addr, BMS_MAC_CMD_OPERATION_STATUS) {
@@ -666,6 +690,8 @@ where
             "mac",
         );
     }
+
+    Ok(())
 }
 
 fn is_bms_ghost_block(raw: &bq40z50::BlockReadRaw) -> bool {
@@ -4251,6 +4277,19 @@ where
         self.bms_post_flash_repower_attempted = false;
     }
 
+    fn schedule_post_flash_resume(&mut self, addr: u8, quiet: bool) {
+        let pending_at = Instant::now();
+        self.arm_post_flash_resume(addr, pending_at);
+        self.bms_stage_next_at = pending_at + BMS_POST_FLASH_BOOT_QUIET;
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_resume_armed keep_charge=true next_probe_ms={=u64}",
+                addr,
+                BMS_POST_FLASH_BOOT_QUIET.as_millis() as u64
+            );
+        }
+    }
+
     fn mark_bms_working(&mut self, addr: u8) {
         let now = Instant::now();
         self.bms_addr = Some(addr);
@@ -4329,25 +4368,14 @@ where
                 self.bms_rom_flash_attempted = true;
                 match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, sig, recover_quiet) {
                     Ok(()) => {
-                        maybe_enable_bms_runtime_after_flash(&mut self.i2c, addr, recover_quiet);
-                        self.clear_post_flash_resume();
-                        defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done", addr);
+                        self.schedule_post_flash_resume(addr, recover_quiet);
                     }
                     Err(e) => {
                         if !recover_quiet {
                             log_bms_diag(addr, "probe_rom_flash", e, "word", "srec");
                         }
                         if matches!(e, bq40z50::BmsDiagError::InconsistentSample) {
-                            let pending_at = Instant::now();
-                            self.arm_post_flash_resume(addr, pending_at);
-                            self.bms_stage_next_at = pending_at + BMS_POST_FLASH_BOOT_QUIET;
-                            if !recover_quiet {
-                                defmt::warn!(
-                                    "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_resume_armed keep_charge=true next_probe_ms={=u64}",
-                                    addr,
-                                    BMS_POST_FLASH_BOOT_QUIET.as_millis() as u64
-                                );
-                            }
+                            self.schedule_post_flash_resume(addr, recover_quiet);
                         }
                     }
                 }
@@ -4518,7 +4546,15 @@ where
 
         match run_bms_rom_postflash_resume_sequence(&mut self.i2c, addr, quiet) {
             Ok(true) => {
-                maybe_enable_bms_runtime_after_flash(&mut self.i2c, addr, quiet);
+                if maybe_enable_bms_runtime_after_flash(&mut self.i2c, addr, quiet).is_err() {
+                    if !expired {
+                        return Some(PostFlashResumeResult::WaitingRom);
+                    }
+
+                    self.clear_post_flash_resume();
+                    return None;
+                }
+
                 let mut tracker = BmsPatternTracker::new();
                 match read_bms_snapshot_strict(&mut self.i2c, addr, true, &mut tracker) {
                     Ok(_) => {
