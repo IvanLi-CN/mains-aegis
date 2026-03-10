@@ -5,6 +5,7 @@ use esp_firmware::bq40z50;
 use esp_firmware::ina3221;
 use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
+use esp_hal::ram;
 use esp_hal::time::{Duration, Instant};
 
 use crate::irq::IrqSnapshot;
@@ -4000,6 +4001,83 @@ struct ChargerProfileRestore {
     iindpm: u16,
 }
 
+const CHARGER_PROFILE_RTC_VERSION: u8 = 1;
+const CHARGER_PROFILE_RTC_VALID: u8 = 1 << 0;
+const CHARGER_PROFILE_RTC_LEN: usize = 24;
+
+// Persist the pre-wake charger profile so a watchdog/software reset can restore it without
+// requiring REG_RST (which also resets safety timers).
+#[ram(unstable(rtc_fast, persistent))]
+static mut CHARGER_PROFILE_RTC: [u8; CHARGER_PROFILE_RTC_LEN] = [0; CHARGER_PROFILE_RTC_LEN];
+
+fn charger_profile_rtc_checksum(data: &[u8]) -> u32 {
+    // FNV-1a hash (no_std friendly) to avoid treating random RTC contents as valid.
+    let mut hash: u32 = 0x811C_9DC5;
+    for &b in data {
+        hash ^= b as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+fn charger_profile_rtc_load() -> Option<ChargerProfileRestore> {
+    // Avoid taking references to `static mut`; RTC contents are copied out once per call.
+    let buf: [u8; CHARGER_PROFILE_RTC_LEN] =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CHARGER_PROFILE_RTC)) };
+
+    if buf[0] != b'C' || buf[1] != b'H' || buf[2] != b'R' || buf[3] != b'G' {
+        return None;
+    }
+    if buf[4] != CHARGER_PROFILE_RTC_VERSION {
+        return None;
+    }
+    if (buf[5] & CHARGER_PROFILE_RTC_VALID) == 0 {
+        return None;
+    }
+
+    let expected = u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]);
+    let actual = charger_profile_rtc_checksum(&buf[0..20]);
+    if expected != actual {
+        return None;
+    }
+
+    let vreg = u16::from_le_bytes([buf[8], buf[9]]);
+    let ichg = u16::from_le_bytes([buf[10], buf[11]]);
+    let iindpm = u16::from_le_bytes([buf[12], buf[13]]);
+
+    Some(ChargerProfileRestore { vreg, ichg, iindpm })
+}
+
+fn charger_profile_rtc_store(saved: ChargerProfileRestore) {
+    let mut buf = [0u8; CHARGER_PROFILE_RTC_LEN];
+    buf[0] = b'C';
+    buf[1] = b'H';
+    buf[2] = b'R';
+    buf[3] = b'G';
+    buf[4] = CHARGER_PROFILE_RTC_VERSION;
+    buf[5] = CHARGER_PROFILE_RTC_VALID;
+
+    buf[8..10].copy_from_slice(&saved.vreg.to_le_bytes());
+    buf[10..12].copy_from_slice(&saved.ichg.to_le_bytes());
+    buf[12..14].copy_from_slice(&saved.iindpm.to_le_bytes());
+
+    let checksum = charger_profile_rtc_checksum(&buf[0..20]);
+    buf[20..24].copy_from_slice(&checksum.to_le_bytes());
+
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CHARGER_PROFILE_RTC), buf);
+    }
+}
+
+fn charger_profile_rtc_clear() {
+    unsafe {
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!(CHARGER_PROFILE_RTC),
+            [0u8; CHARGER_PROFILE_RTC_LEN],
+        );
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BmsStartupStage {
     ProbeWithoutCharge,
@@ -4130,6 +4208,64 @@ impl<'d, I2C> PowerManager<'d, I2C>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
+    fn maybe_restore_charger_profile_after_reset(&mut self) {
+        let Some(saved) = charger_profile_rtc_load() else {
+            return;
+        };
+
+        fn decode_voltage_mv(reg: u16) -> u16 {
+            (reg & 0x07FF) * 10
+        }
+
+        fn decode_cur_ma(reg: u16) -> u16 {
+            (reg & 0x01FF) * 10
+        }
+
+        defmt::warn!(
+            "charger: bq25792 stage=boot_restore_wake_profile vreg_mv={=u16} ichg_ma={=u16} iindpm_ma={=u16}",
+            decode_voltage_mv(saved.vreg),
+            decode_cur_ma(saved.ichg),
+            decode_cur_ma(saved.iindpm),
+        );
+
+        if let Err(e) = bq25792::write_u16(
+            &mut self.i2c,
+            bq25792::reg::CHARGE_VOLTAGE_LIMIT,
+            saved.vreg,
+        ) {
+            defmt::warn!(
+                "charger: bq25792 err stage=boot_restore_vreg err={}",
+                i2c_error_kind(e)
+            );
+            return;
+        }
+        if let Err(e) = bq25792::write_u16(
+            &mut self.i2c,
+            bq25792::reg::CHARGE_CURRENT_LIMIT,
+            saved.ichg,
+        ) {
+            defmt::warn!(
+                "charger: bq25792 err stage=boot_restore_ichg err={}",
+                i2c_error_kind(e)
+            );
+            return;
+        }
+        if let Err(e) = bq25792::write_u16(
+            &mut self.i2c,
+            bq25792::reg::INPUT_CURRENT_LIMIT,
+            saved.iindpm,
+        ) {
+            defmt::warn!(
+                "charger: bq25792 err stage=boot_restore_iindpm err={}",
+                i2c_error_kind(e)
+            );
+            return;
+        }
+
+        charger_profile_rtc_clear();
+        defmt::warn!("charger: bq25792 stage=boot_restore_wake_profile_done");
+    }
+
     pub fn new(
         i2c: I2C,
         i2c1_int: Input<'d>,
@@ -5005,6 +5141,10 @@ where
             defmt::warn!("charger: bq25792 disabled (boot self-test)");
             self.chg_ce.set_high();
             self.chg_enabled = false;
+        }
+
+        if self.charger_allowed {
+            self.maybe_restore_charger_profile_after_reset();
         }
 
         // Safety net: if a previous recovery flow disabled the charger watchdog and the MCU reset
@@ -6213,6 +6353,7 @@ where
                     return;
                 }
                 self.chg_force_profile_restore = None;
+                charger_profile_rtc_clear();
                 defmt::warn!("charger: bq25792 wake_profile_restored");
             }
         }
@@ -6288,6 +6429,7 @@ where
                         };
                     self.chg_force_profile_restore =
                         Some(ChargerProfileRestore { vreg, ichg, iindpm });
+                    charger_profile_rtc_store(ChargerProfileRestore { vreg, ichg, iindpm });
                 }
                 match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, FORCE_WAKE_VREG_MV) {
                     Ok(v) => applied_vreg_mv = Some(decode_voltage_mv(v)),
