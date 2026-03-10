@@ -5007,6 +5007,22 @@ where
             self.chg_enabled = false;
         }
 
+        // Safety net: previous tool sessions may have crashed mid-recovery and left the charger
+        // in a forced wake profile / watchdog-disabled host configuration. Trigger REG_RST once
+        // at boot so each run starts from a known default baseline.
+        if self.charger_allowed {
+            match bq25792::trigger_reg_rst(&mut self.i2c) {
+                Ok(reg9) => defmt::warn!(
+                    "charger: bq25792 stage=reg_rst reg09_written=0x{=u8:x}",
+                    reg9
+                ),
+                Err(e) => defmt::warn!(
+                    "charger: bq25792 err stage=reg_rst err={}",
+                    i2c_error_kind(e)
+                ),
+            }
+        }
+
         // New recovery flow: stop charging first, probe BQ normally, then switch to minimum
         // charge and continue staged probing/recovery from the main loop.
         self.set_charge_mode(BootChargeMode::Off);

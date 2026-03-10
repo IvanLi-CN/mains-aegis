@@ -17,6 +17,7 @@ pub mod reg {
     pub const CHARGE_VOLTAGE_LIMIT: u8 = 0x01;
     pub const CHARGE_CURRENT_LIMIT: u8 = 0x03;
     pub const INPUT_CURRENT_LIMIT: u8 = 0x06;
+    pub const TERMINATION_CONTROL: u8 = 0x09;
 
     pub const CHARGER_CONTROL_0: u8 = 0x0F;
     pub const CHARGER_CONTROL_1: u8 = 0x10;
@@ -134,6 +135,11 @@ pub mod status4 {
     pub const TS_HOT_STAT: u8 = 1 << 0;
 }
 
+pub mod term_ctrl {
+    /// `REG09.Termination_Control.REG_RST` (bit 6).
+    pub const REG_RST: u8 = 1 << 6;
+}
+
 pub fn read_u8<I2C>(i2c: &mut I2C, reg: u8) -> Result<u8, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -192,6 +198,17 @@ where
         write_u8(i2c, reg, new)?;
     }
     Ok(new)
+}
+
+/// Trigger `REG_RST` (reset charger registers/timers back to defaults).
+///
+/// This is useful as a safety net when previous tool sessions may have crashed
+/// mid-recovery and left the charger in an unexpected host-mode configuration.
+pub fn trigger_reg_rst<I2C>(i2c: &mut I2C) -> Result<u8, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    update_u8(i2c, reg::TERMINATION_CONTROL, 0, term_ctrl::REG_RST)
 }
 
 fn clamp_u16(value: u16, min: u16, max: u16) -> u16 {

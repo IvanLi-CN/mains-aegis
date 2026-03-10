@@ -197,8 +197,16 @@ def append_segment(
     if src == combined_path.resolve() or not src.exists():
         return
     baseline_offset = before.get(src, (0.0, 0))[1]
+    had_prev_offset = src in appended_offsets
     prev_offset = appended_offsets.get(src, baseline_offset)
-    if start_offset_override is not None and start_offset_override < prev_offset:
+    # `start_offset_override` is used to capture a "recent existing stdout" window on the very
+    # first attach. Never rewind offsets on subsequent attaches, or the same bytes will be
+    # duplicated in the combined log and inflate parser counters.
+    if (
+        start_offset_override is not None
+        and not had_prev_offset
+        and start_offset_override < prev_offset
+    ):
         prev_offset = max(0, start_offset_override)
     size = src.stat().st_size
     if size < prev_offset:
