@@ -246,10 +246,9 @@ else
     "$SCRIPT_DIR/flash.sh"
   fi
 
-  monitor_reset_on_attach="true"
-  if [[ "$flash" == "true" ]]; then
-    monitor_reset_on_attach="false"
-  fi
+  # monitor.sh owns the single reset fallback after a flash-triggered attach timeout.
+  # Pure monitor sessions should stay non-intrusive and must not reset the MCU on entry.
+  monitor_reset_on_attach="false"
   monitor_args=(--duration-sec "$duration_sec" --after-flash "$flash" --reset-on-attach "$monitor_reset_on_attach")
   if [[ -n "$monitor_file" ]]; then
     monitor_args+=(--output "$monitor_file")
