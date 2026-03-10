@@ -223,17 +223,19 @@ def parse_entry_ts(entry: dict) -> Optional[float]:
         return None
 
 
-def monitor_file_has_stdout(
+def monitor_file_stdout_window(
     src: Optional[Path],
     before: Dict[Path, Tuple[float, int]],
     started_at: float,
     allow_recent_existing: bool,
-) -> bool:
+) -> Tuple[bool, Optional[int]]:
     if src is None or not src.exists():
-        return False
+        return False, None
     src = src.resolve()
     baseline_offset = before.get(src, (0.0, 0))[1]
     latest_existing_stdout_ts: Optional[float] = None
+    recent_window_offset: Optional[int] = None
+    recent_window_start = started_at - RECENT_EXISTING_STDOUT_GRACE_SEC
     try:
         with src.open("r", encoding="utf-8") as infile:
             while True:
@@ -245,22 +247,31 @@ def monitor_file_has_stdout(
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                parsed_ts = parse_entry_ts(entry)
+                if (
+                    allow_recent_existing
+                    and line_start < baseline_offset
+                    and parsed_ts is not None
+                    and parsed_ts >= recent_window_start
+                    and recent_window_offset is None
+                ):
+                    recent_window_offset = line_start
                 if entry.get("src") != "stdout":
                     continue
                 if line_start >= baseline_offset:
-                    return True
-                if allow_recent_existing:
-                    parsed_ts = parse_entry_ts(entry)
-                    if parsed_ts is not None:
-                        latest_existing_stdout_ts = parsed_ts
+                    return True, None
+                if allow_recent_existing and parsed_ts is not None:
+                    latest_existing_stdout_ts = parsed_ts
     except OSError:
-        return False
+        return False, None
 
-    return (
+    if (
         allow_recent_existing
         and latest_existing_stdout_ts is not None
-        and latest_existing_stdout_ts >= started_at - RECENT_EXISTING_STDOUT_GRACE_SEC
-    )
+        and latest_existing_stdout_ts >= recent_window_start
+    ):
+        return True, recent_window_offset
+    return False, None
 
 
 def stop_process(proc: subprocess.Popen[str]) -> None:
@@ -277,7 +288,7 @@ def inspect_monitor_path(
     started_at: float,
     hinted_path: Optional[Path],
     allow_recent_existing: bool,
-) -> Tuple[Dict[Path, Tuple[float, int]], Optional[Path], bool]:
+) -> Tuple[Dict[Path, Tuple[float, int]], Optional[Path], bool, Optional[int]]:
     after = snapshot()
     chosen = resolve_monitor_path(before, after, started_at, hinted_path)
     allow_existing_for_chosen = (
@@ -286,12 +297,13 @@ def inspect_monitor_path(
         and chosen is not None
         and chosen == hinted_path.resolve()
     )
-    return after, chosen, monitor_file_has_stdout(
+    has_stdout, recent_window_offset = monitor_file_stdout_window(
         chosen,
         before,
         started_at,
         allow_existing_for_chosen,
     )
+    return after, chosen, has_stdout, recent_window_offset
 
 
 def wait_for_target_stdout(
@@ -301,15 +313,21 @@ def wait_for_target_stdout(
     path_ref: Dict[str, Optional[Path]],
     timeout_sec: float,
     allow_recent_existing: bool,
-) -> Tuple[Dict[Path, Tuple[float, int]], Optional[Path], bool]:
+) -> Tuple[Dict[Path, Tuple[float, int]], Optional[Path], bool, Optional[int]]:
     probe_deadline = time.time() + timeout_sec
     after = before
     chosen: Optional[Path] = None
     has_stdout = False
+    recent_window_offset: Optional[int] = None
     while time.time() < probe_deadline:
-        after, chosen, has_stdout = inspect_monitor_path(before, started_at, path_ref["path"], allow_recent_existing)
+        after, chosen, has_stdout, recent_window_offset = inspect_monitor_path(
+            before,
+            started_at,
+            path_ref["path"],
+            allow_recent_existing,
+        )
         if has_stdout or proc.poll() is not None:
-            return after, chosen, has_stdout
+            return after, chosen, has_stdout, recent_window_offset
         time.sleep(0.2)
     return inspect_monitor_path(before, started_at, path_ref["path"], allow_recent_existing)
 
@@ -376,10 +394,11 @@ while True:
     after = before
     chosen: Optional[Path] = None
     chosen_has_stdout = False
+    recent_window_offset: Optional[int] = None
 
     if after_flash and not use_reset_attach and not reset_fallback_used:
         probe_timeout = min(INITIAL_STDOUT_TIMEOUT_SEC, remaining)
-        after, chosen, chosen_has_stdout = wait_for_target_stdout(
+        after, chosen, chosen_has_stdout, recent_window_offset = wait_for_target_stdout(
             proc,
             before,
             started_at,
@@ -387,6 +406,8 @@ while True:
             probe_timeout,
             True,
         )
+        if chosen is not None and recent_window_offset is not None:
+            appended_offsets.setdefault(chosen.resolve(), recent_window_offset)
         if not chosen_has_stdout:
             if proc.poll() is None:
                 stop_process(proc)
@@ -418,7 +439,7 @@ while True:
 
     stdout_data = "\n".join(stdout_tail)
     stderr_data = "\n".join(stderr_tail)
-    after, chosen, chosen_has_stdout = inspect_monitor_path(before, started_at, path_ref["path"], False)
+    after, chosen, chosen_has_stdout, _ = inspect_monitor_path(before, started_at, path_ref["path"], False)
     if chosen is not None:
         append_segment(chosen, before, appended_offsets)
 

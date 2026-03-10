@@ -122,8 +122,11 @@ def main() -> int:
                     continue
 
                 if entry.get("src") == "meta" and entry.get("event") == SESSION_BOUNDARY_EVENT:
-                    current_streak = 0
-                    last_sample_ts = None
+                    # A plain monitor reattach does not imply the target rebooted; only reset-driven
+                    # attaches should break a valid-sample streak inside one logical run.
+                    if entry.get("reset_on_attach") is True:
+                        current_streak = 0
+                        last_sample_ts = None
                     continue
 
                 text = entry.get("text", "")
