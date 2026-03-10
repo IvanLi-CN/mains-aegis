@@ -272,6 +272,21 @@ pub struct WatchdogState {
     pub watchdog_after: u8,
 }
 
+pub fn read_watchdog_state<I2C>(i2c: &mut I2C) -> Result<WatchdogState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let watchdog_before = ctrl1_before & ctrl1::WATCHDOG_MASK;
+
+    Ok(WatchdogState {
+        ctrl1_before,
+        ctrl1_after: ctrl1_before,
+        watchdog_before,
+        watchdog_after: watchdog_before,
+    })
+}
+
 /// Disable the I2C watchdog so long-running recovery flows do not get their charger state reset.
 pub fn ensure_watchdog_disabled<I2C>(i2c: &mut I2C) -> Result<WatchdogState, I2C::Error>
 where
@@ -280,6 +295,27 @@ where
     let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
     let watchdog_before = ctrl1_before & ctrl1::WATCHDOG_MASK;
     let ctrl1_after = ctrl1_before & !ctrl1::WATCHDOG_MASK;
+    if ctrl1_after != ctrl1_before {
+        write_u8(i2c, reg::CHARGER_CONTROL_1, ctrl1_after)?;
+    }
+    let watchdog_after = ctrl1_after & ctrl1::WATCHDOG_MASK;
+
+    Ok(WatchdogState {
+        ctrl1_before,
+        ctrl1_after,
+        watchdog_before,
+        watchdog_after,
+    })
+}
+
+pub fn restore_watchdog<I2C>(i2c: &mut I2C, watchdog_bits: u8) -> Result<WatchdogState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let watchdog_before = ctrl1_before & ctrl1::WATCHDOG_MASK;
+    let ctrl1_after =
+        (ctrl1_before & !ctrl1::WATCHDOG_MASK) | (watchdog_bits & ctrl1::WATCHDOG_MASK);
     if ctrl1_after != ctrl1_before {
         write_u8(i2c, reg::CHARGER_CONTROL_1, ctrl1_after)?;
     }

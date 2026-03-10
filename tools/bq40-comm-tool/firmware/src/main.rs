@@ -60,6 +60,7 @@ const BMS_MAC_PROBE_BOOT_WINDOW_SECS: u64 = if cfg!(feature = "bms-mac-probe-onl
     0
 };
 const BMS_ROM_RECOVER: bool = !cfg!(feature = "bms-rom-recover-disable");
+const BMS_PRETOUCH_ENABLED: bool = FORCE_MIN_CHARGE || BMS_ROM_RECOVER;
 // Keep the whole diagnostic tool on the slowest known-good SMBus rate to maximize margin during
 // recovery and wake attempts.
 const I2C1_FREQ_KHZ: u32 = 25;
@@ -382,13 +383,15 @@ fn main() -> ! {
 
     let mut i2c1_sda = Flex::new(peripherals.GPIO48);
     let mut i2c1_scl = Flex::new(peripherals.GPIO47);
-    clear_i2c_bus(&mut i2c1_sda, &mut i2c1_scl, "i2c1");
-    bitbang_touch_bq(
-        &mut i2c1_sda,
-        &mut i2c1_scl,
-        bq40z50::I2C_ADDRESS_PRIMARY,
-        0x0d,
-    );
+    if BMS_PRETOUCH_ENABLED {
+        clear_i2c_bus(&mut i2c1_sda, &mut i2c1_scl, "i2c1");
+        bitbang_touch_bq(
+            &mut i2c1_sda,
+            &mut i2c1_scl,
+            bq40z50::I2C_ADDRESS_PRIMARY,
+            0x0d,
+        );
+    }
 
     let i2c1_config = I2cConfig::default()
         .with_frequency(Rate::from_khz(I2C1_FREQ_KHZ))

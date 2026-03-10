@@ -262,11 +262,17 @@ def inspect_monitor_path(
 ) -> Tuple[Dict[Path, Tuple[float, int]], Optional[Path], bool]:
     after = snapshot()
     chosen = resolve_monitor_path(before, after, started_at, hinted_path)
+    allow_existing_for_chosen = (
+        allow_recent_existing
+        and hinted_path is not None
+        and chosen is not None
+        and chosen == hinted_path.resolve()
+    )
     return after, chosen, monitor_file_has_stdout(
         chosen,
         before,
         started_at,
-        allow_recent_existing,
+        allow_existing_for_chosen,
     )
 
 

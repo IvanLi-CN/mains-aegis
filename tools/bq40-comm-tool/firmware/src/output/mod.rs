@@ -4054,6 +4054,7 @@ pub struct PowerManager<'d, I2C> {
     chg_enabled: bool,
     charger_allowed: bool,
     chg_last_int_poll_at: Option<Instant>,
+    chg_watchdog_restore: Option<u8>,
     charge_mode: BootChargeMode,
 
     bms_addr: Option<u8>,
@@ -4165,6 +4166,7 @@ where
             chg_enabled: false,
             charger_allowed,
             chg_last_int_poll_at: None,
+            chg_watchdog_restore: None,
             charge_mode: BootChargeMode::Off,
 
             bms_addr,
@@ -4290,8 +4292,58 @@ where
         }
     }
 
+    fn maybe_disable_charger_watchdog_for_recovery(
+        &mut self,
+        quiet: bool,
+    ) -> Result<(), esp_hal::i2c::master::Error> {
+        if self.chg_watchdog_restore.is_some() {
+            return Ok(());
+        }
+
+        let watchdog = bq25792::ensure_watchdog_disabled(&mut self.i2c)?;
+        if watchdog.watchdog_before != watchdog.watchdog_after {
+            self.chg_watchdog_restore = Some(watchdog.watchdog_before);
+            if !quiet {
+                defmt::warn!(
+                    "charger: bq25792 watchdog stage=recover_disable before=0x{=u8:x} after=0x{=u8:x}",
+                    watchdog.watchdog_before,
+                    watchdog.watchdog_after,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn maybe_restore_charger_watchdog_after_recovery(&mut self, quiet: bool) {
+        let Some(bits) = self.chg_watchdog_restore else {
+            return;
+        };
+
+        match bq25792::restore_watchdog(&mut self.i2c, bits) {
+            Ok(state) => {
+                self.chg_watchdog_restore = None;
+                if !quiet {
+                    defmt::warn!(
+                        "charger: bq25792 watchdog stage=recover_restore before=0x{=u8:x} after=0x{=u8:x}",
+                        state.watchdog_before,
+                        state.watchdog_after,
+                    );
+                }
+            }
+            Err(e) => {
+                if !quiet {
+                    defmt::error!(
+                        "charger: bq25792 err stage=watchdog_restore err={}",
+                        i2c_error_kind(e)
+                    );
+                }
+            }
+        }
+    }
+
     fn mark_bms_working(&mut self, addr: u8) {
         let now = Instant::now();
+        self.maybe_restore_charger_watchdog_after_recovery(false);
         self.bms_addr = Some(addr);
         self.bms_next_retry_at = Some(now);
         self.bms_next_poll_at = now;
@@ -4362,6 +4414,17 @@ where
 
         self.note_rom_recover_attempt(addr, now);
         self.clear_post_flash_resume();
+        if let Err(e) = self.maybe_disable_charger_watchdog_for_recovery(recover_quiet) {
+            self.clear_post_flash_resume();
+            self.maybe_restore_charger_watchdog_after_recovery(recover_quiet);
+            if !recover_quiet {
+                defmt::error!(
+                    "charger: bq25792 err stage=watchdog_cfg err={}",
+                    i2c_error_kind(e)
+                );
+            }
+            return;
+        }
         self.maybe_dwell_before_rom_flash(addr, recover_quiet);
         match prepare_bms_rom_flash_recover(&mut self.i2c, addr, recover_quiet) {
             Ok(Some(sig)) => {
@@ -4382,6 +4445,7 @@ where
             }
             Ok(None) => {
                 self.clear_post_flash_resume();
+                self.maybe_restore_charger_watchdog_after_recovery(recover_quiet);
                 if !recover_quiet {
                     defmt::warn!(
                         "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_skipped",
@@ -4391,6 +4455,7 @@ where
             }
             Err(e) => {
                 self.clear_post_flash_resume();
+                self.maybe_restore_charger_watchdog_after_recovery(recover_quiet);
                 if !recover_quiet {
                     log_bms_diag(addr, "probe_rom_flash", e, "word", "srec");
                 }
@@ -4552,6 +4617,7 @@ where
                     }
 
                     self.clear_post_flash_resume();
+                    self.maybe_restore_charger_watchdog_after_recovery(quiet);
                     return None;
                 }
 
@@ -4559,6 +4625,7 @@ where
                 match read_bms_snapshot_strict(&mut self.i2c, addr, true, &mut tracker) {
                     Ok(_) => {
                         self.clear_post_flash_resume();
+                        self.maybe_restore_charger_watchdog_after_recovery(quiet);
                         defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done", addr);
                         if !quiet {
                             defmt::warn!(
@@ -4583,6 +4650,7 @@ where
                         }
 
                         self.clear_post_flash_resume();
+                        self.maybe_restore_charger_watchdog_after_recovery(quiet);
                         if !quiet {
                             log_bms_diag(
                                 addr,
@@ -4609,6 +4677,7 @@ where
                 }
 
                 self.clear_post_flash_resume();
+                self.maybe_restore_charger_watchdog_after_recovery(quiet);
                 if !quiet {
                     defmt::warn!(
                         "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_still_rom keep_charge=true",
@@ -4626,6 +4695,7 @@ where
                 }
 
                 self.clear_post_flash_resume();
+                self.maybe_restore_charger_watchdog_after_recovery(quiet);
                 if !quiet {
                     log_bms_diag(addr, "probe_rom_post_flash_resume", e, "word", "rom-mode");
                 }
@@ -5855,14 +5925,14 @@ where
             }
         };
 
-        let watchdog = match bq25792::ensure_watchdog_disabled(&mut self.i2c) {
+        let watchdog = match bq25792::read_watchdog_state(&mut self.i2c) {
             Ok(state) => state,
             Err(e) => {
                 self.chg_ce.set_high();
                 self.chg_enabled = false;
                 self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
                 defmt::error!(
-                    "charger: bq25792 err stage=watchdog_cfg err={}",
+                    "charger: bq25792 err stage=watchdog_read err={}",
                     i2c_error_kind(e)
                 );
                 return;
