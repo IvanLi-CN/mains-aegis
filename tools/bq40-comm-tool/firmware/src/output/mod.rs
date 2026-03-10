@@ -3032,6 +3032,14 @@ where
     ) {
         Ok(rsoc) => {
             if rsoc == BMS_ROM_MODE_SIGNATURE {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=wake_window_rom_signature step={=u8} delay_ms={=u64}",
+                        addr,
+                        step,
+                        delay_ms
+                    );
+                }
                 return Ok(WakeWindowProbeResult::Rom(addr));
             }
             if rsoc <= 100 {
@@ -3189,13 +3197,13 @@ where
     if try_enter_bms_rom_mode_wake_diag(i2c, addr, step, delay_ms, quiet)? {
         if !quiet {
             defmt::warn!(
-                "bms_diag: addr=0x{=u8:x} stage=wake_window_rom_signature step={=u8} delay_ms={=u64}",
+                "bms_diag: addr=0x{=u8:x} stage=wake_window_rom_entered step={=u8} delay_ms={=u64}",
                 addr,
                 step,
                 delay_ms
             );
         }
-        return Ok(WakeWindowProbeResult::Rom(addr));
+        return Ok(WakeWindowProbeResult::EnteredRom(addr));
     }
 
     Ok(WakeWindowProbeResult::Miss)
@@ -4019,6 +4027,7 @@ enum WakeWindowProbeResult {
     Miss,
     Working(u8),
     Rom(u8),
+    EnteredRom(u8),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -4439,6 +4448,9 @@ where
                         }
                         if matches!(e, bq40z50::BmsDiagError::InconsistentSample) {
                             self.schedule_post_flash_resume(addr, recover_quiet);
+                        } else {
+                            self.clear_post_flash_resume();
+                            self.maybe_restore_charger_watchdog_after_recovery(recover_quiet);
                         }
                     }
                 }
@@ -4546,6 +4558,9 @@ where
                             }
                             Ok(WakeWindowProbeResult::Rom(found)) => {
                                 return Some(WakeWindowProbeResult::Rom(found));
+                            }
+                            Ok(WakeWindowProbeResult::EnteredRom(found)) => {
+                                return Some(WakeWindowProbeResult::EnteredRom(found));
                             }
                             Ok(WakeWindowProbeResult::Miss) => {}
                             Err(e) => {
@@ -4758,7 +4773,7 @@ where
                         self.mark_bms_working(addr);
                         return true;
                     }
-                    WakeWindowProbeResult::Rom(addr) => {
+                    WakeWindowProbeResult::Rom(addr) | WakeWindowProbeResult::EnteredRom(addr) => {
                         if self.cfg.bms_rom_recover && self.bms_post_flash_resume_addr.is_none() {
                             self.attempt_bq40_rom_flash(addr, false);
                             if self.bms_post_flash_resume_addr.is_some() {
@@ -4830,7 +4845,8 @@ where
                             self.mark_bms_working(addr);
                             return true;
                         }
-                        WakeWindowProbeResult::Rom(addr) => {
+                        WakeWindowProbeResult::Rom(addr)
+                        | WakeWindowProbeResult::EnteredRom(addr) => {
                             if self.cfg.bms_rom_recover && self.bms_post_flash_resume_addr.is_none()
                             {
                                 self.attempt_bq40_rom_flash(addr, quiet);
@@ -5586,6 +5602,14 @@ where
                         ) {
                             Ok(rsoc) => {
                                 if rsoc == BMS_ROM_MODE_SIGNATURE {
+                                    if !quiet {
+                                        defmt::warn!(
+                                            "bms_diag: addr=0x{=u8:x} stage=wake_window_rom_signature step={=u8} delay_ms={=u64}",
+                                            addr,
+                                            stage as u8,
+                                            *delay_ms
+                                        );
+                                    }
                                     return WakeWindowProbeResult::Rom(addr);
                                 }
                                 if rsoc <= 100 {
@@ -5725,6 +5749,18 @@ where
                             );
                         }
                         return WakeWindowProbeResult::Rom(addr);
+                    }
+                    Ok(WakeWindowProbeResult::EnteredRom(addr)) => {
+                        if !quiet {
+                            defmt::warn!(
+                                "bms_diag: stage=wake_window_rom_entered addr=0x{=u8:x} probe_mode={} step={=u8} delay_ms={=u64}",
+                                addr,
+                                mode,
+                                stage as u8,
+                                *delay_ms
+                            );
+                        }
+                        return WakeWindowProbeResult::EnteredRom(addr);
                     }
                     Ok(WakeWindowProbeResult::Miss) => {}
                     Err(e) => {
@@ -5925,17 +5961,21 @@ where
             }
         };
 
+        let mut watchdog_read_ok = true;
         let watchdog = match bq25792::read_watchdog_state(&mut self.i2c) {
             Ok(state) => state,
             Err(e) => {
-                self.chg_ce.set_high();
-                self.chg_enabled = false;
-                self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
-                defmt::error!(
-                    "charger: bq25792 err stage=watchdog_read err={}",
+                watchdog_read_ok = false;
+                defmt::warn!(
+                    "charger: bq25792 err stage=watchdog_read err={} keep_charge_state=true",
                     i2c_error_kind(e)
                 );
-                return;
+                bq25792::WatchdogState {
+                    ctrl1_before: 0,
+                    ctrl1_after: 0,
+                    watchdog_before: 0xFF,
+                    watchdog_after: 0xFF,
+                }
             }
         };
 
@@ -6214,7 +6254,7 @@ where
         let vsys_adc_mv = vsys_adc_mv.map_err(i2c_error_kind);
 
         defmt::info!(
-            "charger: enabled={=bool} charge_allowed={=bool} force_min_charge={=bool} normal_allow_charge={=bool} allow_charge={=bool} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} iindpm_ma={=?} wd_cfg_before={=u8} wd_cfg_after={=u8} ctrl1_before=0x{=u8:x} ctrl1_after=0x{=u8:x} sfet_present_before={=bool} sfet_present_after={=bool} ship_ctrl2_before=0x{=u8:x} ship_ctrl2_after=0x{=u8:x} ship_mode_before={=u8} ship_mode_after={=u8} adc_ctrl=0x{=u8:x} adc_dis0=0x{=u8:x} adc_dis1=0x{=u8:x} vbus_adc_mv={=?} vac1_adc_mv={=?} vac2_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} ibus_adc_raw={=?} ibus_adc_ma={=?} ibat_adc_raw={=?} ibat_adc_ma={=?} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
+            "charger: enabled={=bool} charge_allowed={=bool} force_min_charge={=bool} normal_allow_charge={=bool} allow_charge={=bool} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} iindpm_ma={=?} wd_read_ok={=bool} wd_cfg_before={=u8} wd_cfg_after={=u8} ctrl1_before=0x{=u8:x} ctrl1_after=0x{=u8:x} sfet_present_before={=bool} sfet_present_after={=bool} ship_ctrl2_before=0x{=u8:x} ship_ctrl2_after=0x{=u8:x} ship_mode_before={=u8} ship_mode_after={=u8} adc_ctrl=0x{=u8:x} adc_dis0=0x{=u8:x} adc_dis1=0x{=u8:x} vbus_adc_mv={=?} vac1_adc_mv={=?} vac2_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} ibus_adc_raw={=?} ibus_adc_ma={=?} ibat_adc_raw={=?} ibat_adc_ma={=?} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
             self.chg_enabled,
             self.cfg.charge_allowed,
             self.cfg.force_min_charge,
@@ -6233,6 +6273,7 @@ where
             applied_vreg_mv,
             applied_ichg_ma,
             applied_iindpm_ma,
+            watchdog_read_ok,
             watchdog.watchdog_before,
             watchdog.watchdog_after,
             watchdog.ctrl1_before,

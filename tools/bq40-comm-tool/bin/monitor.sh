@@ -407,7 +407,11 @@ while True:
             True,
         )
         if chosen is not None and recent_window_offset is not None:
-            appended_offsets.setdefault(chosen.resolve(), recent_window_offset)
+            append_meta_entry(
+                "recent_existing_stdout",
+                path=str(chosen.resolve()),
+                grace_sec=RECENT_EXISTING_STDOUT_GRACE_SEC,
+            )
         if not chosen_has_stdout:
             if proc.poll() is None:
                 stop_process(proc)
