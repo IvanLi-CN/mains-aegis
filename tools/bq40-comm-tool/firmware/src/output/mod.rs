@@ -4740,10 +4740,9 @@ where
         match self.bms_startup_stage {
             BmsStartupStage::ProbeWithoutCharge => {
                 if let Some(addr) = self.probe_bq40z50_without_recover(false) {
-                    if self.cfg.force_min_charge {
-                        self.set_charge_mode(BootChargeMode::MinCharge);
-                        self.maybe_poll_charger(&IrqSnapshot::default());
-                    }
+                    // If the gauge is already responsive with charging disabled, avoid toggling
+                    // the minimum-charge wake profile: it can perturb a healthy pack and pollute
+                    // diagnose results.
                     self.mark_bms_working(addr);
                     return true;
                 }

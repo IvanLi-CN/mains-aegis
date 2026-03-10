@@ -7,6 +7,7 @@ FIRMWARE_DIR="$TOOL_ROOT/firmware"
 
 mode="canonical"
 recover="never"
+recover_arg_set="false"
 force_min_charge="false"
 probe_mode="strict"
 rom_image="r2"
@@ -38,6 +39,7 @@ while [[ $# -gt 0 ]]; do
     --recover)
       require_value "$1" "$#"
       recover="${2:-}"
+      recover_arg_set="true"
       shift 2
       ;;
     --force-min-charge)
@@ -66,6 +68,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$mode" == "dual-diag" && "$recover_arg_set" != "true" ]]; then
+  # Low-level default: dual-diag is almost always used for ROM recovery, so keep it enabled
+  # unless the caller explicitly disables it.
+  recover="if-rom"
+fi
 
 features=()
 case "$mode" in
