@@ -110,6 +110,7 @@ combined_fd, combined_tmp = tempfile.mkstemp(
 os.close(combined_fd)
 combined_path = Path(combined_tmp)
 captured_monitor_bytes = 0
+captured_monitor_new_bytes = 0
 
 
 def snapshot() -> Dict[Path, Tuple[float, int]]:
@@ -190,7 +191,7 @@ def append_segment(
     appended_offsets: Dict[Path, int],
     start_offset_override: Optional[int] = None,
 ) -> None:
-    global captured_monitor_bytes
+    global captured_monitor_bytes, captured_monitor_new_bytes
     src = src.resolve()
     if src == combined_path.resolve() or not src.exists():
         return
@@ -201,6 +202,7 @@ def append_segment(
     size = src.stat().st_size
     if size < prev_offset:
         prev_offset = baseline_offset if size >= baseline_offset else 0
+    new_start = max(baseline_offset, prev_offset)
     with src.open("rb") as infile, combined_path.open("ab") as outfile:
         infile.seek(prev_offset)
         chunk = infile.read()
@@ -209,6 +211,8 @@ def append_segment(
             return
         outfile.write(chunk)
         captured_monitor_bytes += len(chunk)
+        if size > new_start:
+            captured_monitor_new_bytes += size - new_start
         appended_offsets[src] = infile.tell()
 
 
@@ -271,8 +275,9 @@ def monitor_file_stdout_window(
         and latest_existing_stdout_ts >= recent_window_start
     ):
         # Treat recent pre-attach stdout as attach evidence in after-flash mode so we don't
-        # immediately force a reset and lose the post-flash trace.
-        return True, recent_window_offset
+        # immediately force a reset and lose the post-flash trace. This does NOT imply any
+        # new bytes were written after monitor.sh started.
+        return False, recent_window_offset
     return False, None
 
 
@@ -415,7 +420,7 @@ while True:
                 grace_sec=RECENT_EXISTING_STDOUT_GRACE_SEC,
             )
             append_segment(chosen, before, appended_offsets, recent_window_offset)
-        if not chosen_has_stdout:
+        if not chosen_has_stdout and recent_window_offset is None:
             if proc.poll() is None:
                 stop_process(proc)
             stdout_thread.join(timeout=2)
@@ -489,8 +494,8 @@ while True:
 
     raise SystemExit(f"mcu-agentd monitor failed (rc={proc.returncode})\n{last_detail}")
 
-if captured_monitor_bytes == 0:
-    detail = last_detail or "no monitor output captured"
+if captured_monitor_new_bytes == 0:
+    detail = last_detail or "no new monitor output captured"
     raise SystemExit(f"monitor output not found for this run\n{detail}")
 
 if not completed_duration:

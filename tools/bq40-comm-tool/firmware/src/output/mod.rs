@@ -499,14 +499,6 @@ fn parse_bms_mac_u32(raw: &bq40z50::BlockReadRaw, mac_cmd: u16) -> Option<u32> {
             raw.payload[5],
         ]));
     }
-    if payload_len >= 4 {
-        return Some(u32::from_le_bytes([
-            raw.payload[0],
-            raw.payload[1],
-            raw.payload[2],
-            raw.payload[3],
-        ]));
-    }
     None
 }
 
