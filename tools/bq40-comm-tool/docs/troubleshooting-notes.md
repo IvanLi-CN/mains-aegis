@@ -182,6 +182,6 @@
   - wake-window 必须再用完整快照确认 `Voltage()/Current()/SOC/Status` 合法，才能把设备标记为 working。
 - 对 `post_flash_mfg_status` / `post_flash_op_status` 若读到全 `0xFF`，暂不应据此直接下 `EMSHUT` 或 `GAUGE_EN/FET_EN` 结论；这类全 `1` 回包更像原始 block 解析噪声，需要更严格的 MAC 回包校验后再使用。
 - 实操口径上，可直接采用以下判断：
-  - **无电池**：只验证 `ROM/重刷链路`，不把刷后“几十 mV 应用态”误判为恢复成功；
+  - **无电池**：只验证 `ROM/重刷链路`，不把刷后“几十 mV 应用态”误判为恢复成功；该条件下 `report_parser.py` 会把 `Voltage()<2500mV` 的样本判为 invalid，因此 `summary.json` 的 `verdict.pass` 预期为 FAIL（这不是回归）。
   - **带电池**：再去验收 `diagnose + verify` 是否真正 PASS。
 - 若同一块板在更换 BQ40Z50 芯片后，`tools/bq40-comm-tool` 已能稳定完成 `ROM 检测 -> 重刷 -> 退出 ROM`，而旧芯片仍持续表现为既非正常 SBS、也非可见 ROM 的阻断态，则应优先把旧芯片判为 **疑似硬损坏样本**。此时软件任务的收口口径应是“工具已能区分工具链问题与芯片硬故障”，而不是继续要求软件去“修活”损坏器件。

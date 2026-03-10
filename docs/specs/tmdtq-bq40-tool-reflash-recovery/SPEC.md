@@ -110,6 +110,7 @@
 - Given 原始芯片样本持续停留在“既非正常 SBS、也非可见 ROM”的阻断态，
   When 在同板同工具链下更换 BQ40Z50 样本后，`tools/bq40-comm-tool` 已能完成 `ROM 检测 -> 重刷 -> 退出 ROM`，并在无电池偏置条件下稳定给出 `Voltage()/CellVoltage1()` 为几十 mV、`CellVoltage2..4()` 为 `0 mV` 的悬空签名，
   Then 本轮软件任务可判定为“工具链与诊断路径有效，且已把原始样本收敛为疑似硬损坏器件”，不再要求软件侧继续把该损坏样本恢复到应用态通信通过。
+  Note 该条是“人工判定工具链有效”的验收口径：`report_parser.py` 仍会把 `Voltage()<2500mV` 的样本视为 invalid，因此 `summary.json` 的 `verdict.pass` 预期为 `false`（这不是回归，而是避免把悬空偏置误判为正常通信）。
 
 - Given 已存在由 `tools/bq40-comm-tool` live 流程生成的 `.mon.ndjson`，
   When 运行 `./bin/run.sh verify --mode canonical --duration-sec 120 --monitor-file <that-file>`，

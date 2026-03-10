@@ -131,10 +131,8 @@ def main() -> int:
                         valid_samples = 0
                         current_streak = 0
                         max_streak = 0
-                        rom_detected = False
-                        rom_flash_attempted = False
-                        rom_flash_done = False
-                        canonical_touched_0x16 = False
+                        # Keep ROM event latches across reset boundaries: reset is part of the same
+                        # overall run and should not erase evidence that a flash path executed.
                         last_sample_ts = None
                     continue
 
