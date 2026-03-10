@@ -71,7 +71,7 @@
 ### Core flows
 
 - 运行 `./bin/run.sh diagnose --mode canonical --duration-sec 120 --force-min-charge true` 时，工具链在 `tools/bq40-comm-tool` 内完成 build / flash / monitor / report，且强制唤醒参数按 `16.8V / 200mA / 500mA` 生效。
-- 运行 `./bin/run.sh recover --mode dual-diag --duration-sec 120 --recover if-rom --force-min-charge true` 时，仅在检测到 ROM signature 后进入 ROM reflash；未检测到时不得把报告写成 flash 已完成。
+- 运行 `./bin/run.sh recover --mode dual-diag --duration-sec 125 --recover if-rom --force-min-charge true` 时，仅在检测到 ROM signature 后进入 ROM reflash；未检测到时不得把报告写成 flash 已完成。
 - 运行 `./bin/run.sh verify --mode canonical --duration-sec 120 --monitor-file <path>` 时，应基于工具路径生成的 monitor log 离线复算出与在线一致的 ROM 事件语义。
 
 ### Edge cases / errors
@@ -100,11 +100,11 @@
   Then 工具链完成 live 流程并产出报告，且日志/报告可确认强制唤醒参数为 `VREG=16800mV`、`ICHG=200mA`、`IINDPM=500mA`。
 
 - Given 同一台架条件下未检测到 ROM signature，
-  When 运行 `./bin/run.sh recover --mode dual-diag --duration-sec 120 --recover if-rom --force-min-charge true`，
+  When 运行 `./bin/run.sh recover --mode dual-diag --duration-sec 125 --recover if-rom --force-min-charge true`，
   Then `summary.json` 中 `rom_events.detected=false`、`flash_attempted=false`、`flash_done=false`，且本轮验收不需要、也不允许用 `--recover force` 兜底达成通过。
 
 - Given 同一工具路径下检测到 ROM signature（`0x9002`），
-  When 运行 `./bin/run.sh recover --mode dual-diag --duration-sec 120 --recover if-rom --force-min-charge true` 并完成完整 ROM flash reflash，
+  When 运行 `./bin/run.sh recover --mode dual-diag --duration-sec 125 --recover if-rom --force-min-charge true` 并完成完整 ROM flash reflash，
   Then `summary.json` 中 `rom_events.detected=true`、`flash_attempted=true`、`flash_done=true`；若只有 `stage=rom_flash_done rsoc_after=0x9002` 或其他未确认回到 firmware mode 的阶段打点，则 `flash_done` 仍为 `false`。
 
 - Given 原始芯片样本持续停留在“既非正常 SBS、也非可见 ROM”的阻断态，
@@ -132,7 +132,7 @@
 
 - Live bench：
   - `./bin/run.sh diagnose --mode canonical --duration-sec 120 --force-min-charge true`
-  - `./bin/run.sh recover --mode dual-diag --duration-sec 120 --recover if-rom --force-min-charge true`
+  - `./bin/run.sh recover --mode dual-diag --duration-sec 125 --recover if-rom --force-min-charge true`
 - Offline verify：
   - `./bin/run.sh verify --mode canonical --duration-sec 120 --monitor-file <recover-or-diagnose-log>`
 - 若具备 ROM signature 样本，需要至少一组“真实 flash_done=true”的 recover 报告；若无 ROM signature 样本，至少需要证明 `if-rom` 路径不会误报 `flash_done=true`。

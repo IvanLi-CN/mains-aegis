@@ -191,6 +191,7 @@ def append_segment(
     src: Path,
     before: Dict[Path, Tuple[float, int]],
     appended_offsets: Dict[Path, int],
+    start_offset_override: Optional[int] = None,
 ) -> None:
     global captured_monitor_bytes
     src = src.resolve()
@@ -198,6 +199,8 @@ def append_segment(
         return
     baseline_offset = before.get(src, (0.0, 0))[1]
     prev_offset = appended_offsets.get(src, baseline_offset)
+    if start_offset_override is not None and start_offset_override < prev_offset:
+        prev_offset = max(0, start_offset_override)
     size = src.stat().st_size
     if size < prev_offset:
         prev_offset = baseline_offset if size >= baseline_offset else 0
@@ -423,7 +426,7 @@ while True:
             stdout_data = "\n".join(stdout_tail)
             stderr_data = "\n".join(stderr_tail)
             if chosen is not None:
-                append_segment(chosen, before, appended_offsets)
+                append_segment(chosen, before, appended_offsets, recent_window_offset)
             detail_lines = (stderr_data or stdout_data).strip().splitlines()[-8:]
             last_detail = "\n".join(detail_lines) if detail_lines else f"mcu-agentd exited with {proc.returncode}"
             reset_fallback_used = True

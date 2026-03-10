@@ -29,6 +29,7 @@ force_min_charge_arg_set="false"
 probe_mode_arg_set="false"
 rom_image_arg_set="false"
 duration_arg_set="false"
+mode_arg_set="false"
 MAIN_LOOP_QUANTUM_SEC=2
 WORKING_INFO_PERIOD_SEC=5
 MIN_VALID_STREAK=10
@@ -56,7 +57,7 @@ usage() {
   cat <<USAGE
 Usage:
   $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--monitor-file PATH] [--report-out DIR]
-  $(basename "$0") recover  [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") recover  [--mode dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--monitor-file PATH] [--report-out DIR]
   $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--report-out DIR]
 USAGE
 }
@@ -76,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --mode)
       require_value "$1" "$#"
       mode="${2:-}"
+      mode_arg_set="true"
       shift 2
       ;;
     --duration-sec)
@@ -149,6 +151,9 @@ case "$subcommand" in
     recover_policy="never"
     ;;
   recover)
+    if [[ "$mode_arg_set" != "true" ]]; then
+      mode="dual-diag"
+    fi
     ;;
   verify)
     ;;
@@ -166,6 +171,11 @@ case "$mode" in
     exit 4
     ;;
 esac
+
+if [[ "$subcommand" == "recover" && "$mode" != "dual-diag" ]]; then
+  echo "recover requires --mode dual-diag" >&2
+  exit 18
+fi
 
 if [[ "$subcommand" == "recover" && "$duration_arg_set" != "true" ]]; then
   duration_sec="$MIN_DURATION_RECOVER_SEC"
