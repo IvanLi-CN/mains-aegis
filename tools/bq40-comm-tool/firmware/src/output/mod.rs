@@ -6771,18 +6771,25 @@ where
 
         match sample {
             Ok(snapshot) => {
+                // Emit a machine-parseable sample line for every successful poll so the offline
+                // report can detect intermittent invalid readings, not just the 5s info cadence.
+                defmt::info!(
+                    "bms: addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x}",
+                    addr,
+                    snapshot.temp_c_x10,
+                    snapshot.voltage_mv,
+                    snapshot.current_ma,
+                    snapshot.soc_pct,
+                    snapshot.status_raw,
+                );
+
                 if self
                     .bms_last_working_info_at
                     .map_or(true, |last| now >= last + BMS_WORKING_INFO_PERIOD)
                 {
                     defmt::info!(
-                        "bms: addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16} err_code={} err_str={} rem_cap_mah={=?} full_cap_mah={=?}",
+                        "bms_info: addr=0x{=u8:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16} err_code={} err_str={} rem_cap_mah={=?} full_cap_mah={=?}",
                         addr,
-                        snapshot.temp_c_x10,
-                        snapshot.voltage_mv,
-                        snapshot.current_ma,
-                        snapshot.soc_pct,
-                        snapshot.status_raw,
                         snapshot.cell1_mv,
                         snapshot.cell2_mv,
                         snapshot.cell3_mv,

@@ -182,6 +182,18 @@ def append_meta_entry(event: str, **fields: object) -> None:
         "event": event,
     }
     entry.update(fields)
+    # `append_segment()` may have copied raw bytes that don't end with a newline (e.g. when a
+    # source `.mon.ndjson` was growing and we cut at a byte offset). Ensure the meta entry always
+    # begins on its own NDJSON line.
+    try:
+        with combined_path.open("rb+") as fh:
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() > 0:
+                fh.seek(-1, os.SEEK_END)
+                if fh.read(1) != b"\n":
+                    fh.write(b"\n")
+    except OSError:
+        pass
     with combined_path.open("a", encoding="utf-8") as outfile:
         outfile.write(json.dumps(entry, ensure_ascii=True) + "\n")
 
