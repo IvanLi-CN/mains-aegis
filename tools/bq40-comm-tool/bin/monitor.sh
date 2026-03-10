@@ -115,8 +115,11 @@ captured_monitor_bytes = 0
 def snapshot() -> Dict[Path, Tuple[float, int]]:
     state: Dict[Path, Tuple[float, int]] = {}
     for p in monitor_dir.glob("*.mon.ndjson"):
+        resolved = p.resolve()
+        if resolved == combined_path.resolve():
+            continue
         st = p.stat()
-        state[p.resolve()] = (st.st_mtime, st.st_size)
+        state[resolved] = (st.st_mtime, st.st_size)
     return state
 
 
@@ -191,7 +194,7 @@ def append_segment(
 ) -> None:
     global captured_monitor_bytes
     src = src.resolve()
-    if not src.exists():
+    if src == combined_path.resolve() or not src.exists():
         return
     baseline_offset = before.get(src, (0.0, 0))[1]
     prev_offset = appended_offsets.get(src, baseline_offset)
