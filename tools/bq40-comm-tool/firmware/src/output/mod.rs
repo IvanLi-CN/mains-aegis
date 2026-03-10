@@ -5378,15 +5378,16 @@ where
                     if rom_mode_ready {
                         // TI's ROM-mode recovery guidance allows restarting the flashstream from
                         // the first ROM command if the part is still stuck in ROM after a failed
-                        // attempt. Keep doing that on our bounded retry cadence instead of giving
-                        // up after the first incomplete write.
+                        // attempt. Keep that retry loop available for `--recover force`, but in the
+                        // supported `if-rom` flow we do at most one ROM flash attempt per run (rerun
+                        // the tool if you want another attempt).
                         if matches!(
                             self.cfg.bms_address_mode,
                             bq40z50::BmsAddressMode::DualProbeDiag
                         ) {
                             if !self.bms_rom_flash_attempted {
                                 self.attempt_bq40_rom_flash(addr, quiet);
-                            } else if should_recover {
+                            } else if should_recover && force_rom_recover {
                                 if !quiet {
                                     defmt::warn!(
                                         "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_retry keep_charge=true",

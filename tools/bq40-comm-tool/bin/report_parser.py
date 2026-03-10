@@ -123,18 +123,19 @@ def main() -> int:
                     continue
 
                 if entry.get("src") == "meta" and entry.get("event") == SESSION_BOUNDARY_EVENT:
+                    # Any monitor boundary is a streak discontinuity (even if timestamps look
+                    # contiguous in the merged log).
+                    current_streak = 0
+                    last_sample_ts = None
                     # A plain monitor reattach does not imply the target rebooted; only reset-driven
                     # attaches should discard the abandoned pre-reset session from the final summary.
                     if entry.get("reset_on_attach") is True:
                         poll_errors = Counter()
                         samples_total = 0
                         valid_samples = 0
-                        current_streak = 0
                         max_streak = 0
-                        canonical_touched_0x16 = False
                         # Keep ROM event latches across reset boundaries: reset is part of the same
                         # overall run and should not erase evidence that a flash path executed.
-                        last_sample_ts = None
                     continue
 
                 text = entry.get("text", "")
