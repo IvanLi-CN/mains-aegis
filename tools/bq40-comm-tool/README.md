@@ -35,11 +35,12 @@ cp .esp32-port.example .esp32-port
 
 Options:
 - `--mode canonical|dual-diag` (default: `canonical`)
-- `--duration-sec <N>` (default: `120`; `diagnose` requires `>=62`, `recover` requires `>=117`)
+- `--duration-sec <N>` (default: `120`; `diagnose` requires `>=70`, `recover` requires `>=125`)
 - `--flash true|false` (default: `true`; not accepted by `verify`)
 - `--recover never|if-rom|force` (default: `if-rom`; not accepted by `diagnose`/`verify`; `force` requires `--mode dual-diag`)
 - `--force-min-charge true|false` (default: `false`; not accepted by `verify`)
 - `--probe-mode strict|mac-only` (default: `strict`; not accepted by `verify`; `mac-only` is diagnostic-only and narrows steady-state liveness checks to ManufacturerAccess()/ManufacturerBlockAccess() after the normal wake/ROM handling)
+- `--rom-image r2|r3|r5` (default: `r2`; not accepted by `verify`)
 - `--monitor-file <path>` (`verify` required; others optional)
 - `--report-out <dir>` (default: `tools/bq40-comm-tool/reports/<timestamp>`)
 
@@ -71,8 +72,8 @@ Required `summary.json` fields:
   - then re-run `./bin/run.sh ...` (tool report parser works offline on existing logs too)
 - `monitor file not found: ...`
   - for `verify`, make sure `--monitor-file` points to an existing `.mon.ndjson`
-- `duration-sec must be >= 62 for diagnose` or `>= 117 for recover`
-  - the no-pack wake path spends 10s with charge off and 2s at minimum charge before steady-state logging; recover reserves another 10s post-flash boot quiet plus the current ROM flash transfer/gap budget, so the parser-visible 5s cadence needs at least 62s/117s respectively (120s remains the recommended bench default)
+- `duration-sec must be >= 70 for diagnose` or `>= 125 for recover`
+  - the no-pack wake path still spends 10s with charge off and 2s at minimum charge, but the firmware only checks the 5s working-info target on a 2s main loop, so the parser-visible steady-state cadence is effectively ~6s; recover also reserves another 10s post-flash boot quiet plus the current ROM flash transfer/gap budget (120s remains the recommended bench default)
 - `verdict.fail: canonical_mode_touched_0x16`
   - canonical mode should not touch `0x16`; check firmware mode and logs
 - canonical diagnose still has `samples_total=0`

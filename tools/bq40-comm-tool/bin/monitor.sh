@@ -290,7 +290,7 @@ def wait_for_target_stdout(
     return inspect_monitor_path(before, started_at, path_ref["path"], allow_recent_existing)
 
 
-deadline = time.time() + duration
+deadline: Optional[float] = None
 appended_offsets: Dict[Path, int] = {}
 restarts = 0
 first_attach = True
@@ -298,8 +298,10 @@ last_detail = ""
 use_reset_attach = reset_on_attach
 reset_fallback_used = False
 
-while time.time() < deadline:
-    remaining = max(1.0, deadline - time.time())
+while True:
+    if deadline is not None and time.time() >= deadline:
+        break
+    remaining = duration if deadline is None else max(1.0, deadline - time.time())
     before = snapshot()
     started_at = time.time()
     stdout_tail: Deque[str] = deque(maxlen=200)
@@ -369,6 +371,8 @@ while time.time() < deadline:
             time.sleep(0.5)
             continue
 
+    if deadline is None:
+        deadline = time.time() + duration
     remaining = max(0.1, deadline - time.time())
     try:
         proc.wait(timeout=remaining)

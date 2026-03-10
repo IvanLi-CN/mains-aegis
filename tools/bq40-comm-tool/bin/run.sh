@@ -20,12 +20,15 @@ flash="true"
 recover_policy="if-rom"
 force_min_charge="false"
 probe_mode="strict"
+rom_image="r2"
 monitor_file=""
 report_out=""
 flash_arg_set="false"
 recover_arg_set="false"
 force_min_charge_arg_set="false"
 probe_mode_arg_set="false"
+rom_image_arg_set="false"
+MAIN_LOOP_QUANTUM_SEC=2
 WORKING_INFO_PERIOD_SEC=5
 MIN_VALID_STREAK=10
 REPOWER_OFF_WINDOW_SEC=10
@@ -38,7 +41,9 @@ ROM_FLASH_BITS_PER_BYTE=9
 I2C_SLOW_BUS_BPS=$((25 * 1000))
 ROM_FLASH_WRITE_GAP_MS=10
 ROM_FLASH_FIXED_LATENCY_SEC=$((3 + 4 + 2))
-MIN_STEADY_STATE_WINDOW_SEC=$((WORKING_INFO_PERIOD_SEC * MIN_VALID_STREAK))
+WORKING_INFO_EFFECTIVE_SEC=$((((WORKING_INFO_PERIOD_SEC + MAIN_LOOP_QUANTUM_SEC - 1) / MAIN_LOOP_QUANTUM_SEC) * MAIN_LOOP_QUANTUM_SEC))
+WORKING_INFO_STARTUP_LATENCY_SEC=$((MAIN_LOOP_QUANTUM_SEC * 2))
+MIN_STEADY_STATE_WINDOW_SEC=$((WORKING_INFO_STARTUP_LATENCY_SEC + (MIN_VALID_STREAK - 1) * WORKING_INFO_EFFECTIVE_SEC))
 MIN_DURATION_DIAG_SEC=$((REPOWER_OFF_WINDOW_SEC + MIN_CHARGE_SETTLE_SEC + MIN_STEADY_STATE_WINDOW_SEC))
 ROM_FLASH_BLOCK_COUNT=$(((ROM_FLASH_IMAGE_BYTES + ROM_FLASH_BLOCK_BYTES - 1) / ROM_FLASH_BLOCK_BYTES))
 ROM_FLASH_WIRE_MS=$(((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_BLOCK_ONWIRE_BYTES * ROM_FLASH_BITS_PER_BYTE * 1000 + I2C_SLOW_BUS_BPS - 1) / I2C_SLOW_BUS_BPS))
@@ -49,8 +54,8 @@ MIN_DURATION_RECOVER_SEC=$((MIN_DURATION_DIAG_SEC + POST_FLASH_BOOT_QUIET_SEC + 
 usage() {
   cat <<USAGE
 Usage:
-  $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--monitor-file PATH] [--report-out DIR]
-  $(basename "$0") recover  [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") recover  [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--monitor-file PATH] [--report-out DIR]
   $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--report-out DIR]
 USAGE
 }
@@ -99,6 +104,12 @@ while [[ $# -gt 0 ]]; do
       require_value "$1" "$#"
       probe_mode="${2:-}"
       probe_mode_arg_set="true"
+      shift 2
+      ;;
+    --rom-image)
+      require_value "$1" "$#"
+      rom_image="${2:-}"
+      rom_image_arg_set="true"
       shift 2
       ;;
     --monitor-file)
@@ -166,9 +177,9 @@ if [[ "$subcommand" != "verify" ]]; then
   fi
   if [[ "$duration_sec" -lt "$min_duration_sec" ]]; then
     if [[ "$subcommand" == "recover" ]]; then
-      echo "duration-sec must be >= $min_duration_sec for recover (10s repower-off + 2s min-charge settle + ${POST_FLASH_BOOT_QUIET_SEC}s post-flash boot quiet + streak>=${MIN_VALID_STREAK} at ${WORKING_INFO_PERIOD_SEC}s working-info cadence + current ROM flash lower-bound ${ROM_FLASH_TRANSFER_SEC}s transfer/gap budget + ${ROM_FLASH_FIXED_LATENCY_SEC}s erase/execute/dwell)" >&2
+      echo "duration-sec must be >= $min_duration_sec for recover (10s repower-off + 2s min-charge settle + ${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop + ${POST_FLASH_BOOT_QUIET_SEC}s post-flash boot quiet + current ROM flash lower-bound ${ROM_FLASH_TRANSFER_SEC}s transfer/gap budget + ${ROM_FLASH_FIXED_LATENCY_SEC}s erase/execute/dwell)" >&2
     else
-      echo "duration-sec must be >= $min_duration_sec for $subcommand (10s repower-off + 2s min-charge settle + streak>=${MIN_VALID_STREAK} at ${WORKING_INFO_PERIOD_SEC}s working-info cadence)" >&2
+      echo "duration-sec must be >= $min_duration_sec for $subcommand (10s repower-off + 2s min-charge settle + ${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop)" >&2
     fi
     exit 14
   fi
@@ -179,8 +190,8 @@ if [[ "$subcommand" == "verify" ]]; then
     echo "verify mode requires --monitor-file" >&2
     exit 8
   fi
-  if [[ "$flash_arg_set" == "true" || "$recover_arg_set" == "true" || "$force_min_charge_arg_set" == "true" || "$probe_mode_arg_set" == "true" ]]; then
-    echo "verify mode does not accept --flash, --recover, --force-min-charge, or --probe-mode" >&2
+  if [[ "$flash_arg_set" == "true" || "$recover_arg_set" == "true" || "$force_min_charge_arg_set" == "true" || "$probe_mode_arg_set" == "true" || "$rom_image_arg_set" == "true" ]]; then
+    echo "verify mode does not accept --flash, --recover, --force-min-charge, --probe-mode, or --rom-image" >&2
     exit 10
   fi
 else
@@ -216,12 +227,20 @@ else
       ;;
   esac
 
+  case "$rom_image" in
+    r2|r3|r5) ;;
+    *)
+      echo "Invalid --rom-image: $rom_image" >&2
+      exit 17
+      ;;
+  esac
+
   if [[ "$recover_policy" == "force" && "$mode" != "dual-diag" ]]; then
     echo "--recover force requires --mode dual-diag" >&2
     exit 9
   fi
 
-  "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy" --force-min-charge "$force_min_charge" --probe-mode "$probe_mode"
+  "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy" --force-min-charge "$force_min_charge" --probe-mode "$probe_mode" --rom-image "$rom_image"
 
   if [[ "$flash" == "true" ]]; then
     "$SCRIPT_DIR/flash.sh"

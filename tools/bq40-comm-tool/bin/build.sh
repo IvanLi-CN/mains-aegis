@@ -9,11 +9,12 @@ mode="canonical"
 recover="if-rom"
 force_min_charge="false"
 probe_mode="strict"
+rom_image="r2"
 
 usage() {
   cat <<USAGE
 Usage: $(basename "$0") [--mode canonical|dual-diag] [--recover never|if-rom|force]
-                         [--force-min-charge true|false] [--probe-mode strict|mac-only]
+                         [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5]
 USAGE
 }
 
@@ -47,6 +48,11 @@ while [[ $# -gt 0 ]]; do
     --probe-mode)
       require_value "$1" "$#"
       probe_mode="${2:-}"
+      shift 2
+      ;;
+    --rom-image)
+      require_value "$1" "$#"
+      rom_image="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -96,6 +102,16 @@ case "$probe_mode" in
   *)
     echo "Invalid --probe-mode: $probe_mode" >&2
     exit 7
+    ;;
+esac
+
+case "$rom_image" in
+  r2) ;;
+  r3) features+=("bms-rom-image-r3") ;;
+  r5) features+=("bms-rom-image-r5") ;;
+  *)
+    echo "Invalid --rom-image: $rom_image" >&2
+    exit 8
     ;;
 esac
 
