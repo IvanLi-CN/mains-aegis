@@ -3999,6 +3999,13 @@ impl BootChargeMode {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ChargerProfileRestore {
+    vreg: u16,
+    ichg: u16,
+    iindpm: u16,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BmsStartupStage {
     ProbeWithoutCharge,
@@ -4064,6 +4071,7 @@ pub struct PowerManager<'d, I2C> {
     charger_allowed: bool,
     chg_last_int_poll_at: Option<Instant>,
     chg_watchdog_restore: Option<u8>,
+    chg_force_profile_restore: Option<ChargerProfileRestore>,
     charge_mode: BootChargeMode,
 
     bms_addr: Option<u8>,
@@ -4176,6 +4184,7 @@ where
             charger_allowed,
             chg_last_int_poll_at: None,
             chg_watchdog_restore: None,
+            chg_force_profile_restore: None,
             charge_mode: BootChargeMode::Off,
 
             bms_addr,
@@ -5903,24 +5912,31 @@ where
     }
 
     fn maybe_poll_charger(&mut self, irq: &IrqSnapshot) {
+        let now = Instant::now();
         if self.bms_post_flash_resume_addr.is_some() {
-            return;
+            let started_at = self.bms_post_flash_resume_started_at.unwrap_or(now);
+            // Keep the charger configuration stable during the post-flash boot quiet window.
+            // Once the quiet window ends, resume polling so the recovery flow can keep biasing
+            // the pack and respond to input/fault changes.
+            if now < started_at + BMS_POST_FLASH_BOOT_QUIET {
+                return;
+            }
         }
 
         if !self.charger_allowed {
             if let Some(next_retry_at) = self.chg_next_retry_at {
-                if Instant::now() < next_retry_at {
+                if now < next_retry_at {
                     return;
                 }
             }
             match bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0) {
                 Ok(ctrl0) => {
                     self.charger_allowed = true;
-                    self.chg_next_retry_at = Some(Instant::now());
+                    self.chg_next_retry_at = Some(now);
                     defmt::warn!("charger: bq25792 recovered ctrl0=0x{=u8:x}", ctrl0);
                 }
                 Err(_) => {
-                    self.chg_next_retry_at = Some(Instant::now() + self.cfg.retry_backoff);
+                    self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
                     return;
                 }
             }
@@ -5930,7 +5946,6 @@ where
         const POLL_PERIOD: Duration = Duration::from_secs(1);
         const INT_MIN_INTERVAL: Duration = Duration::from_millis(50);
 
-        let now = Instant::now();
         let mut due = now >= self.chg_next_poll_at;
         if irq.chg_int != 0 && !self.cfg.bms_diag_isolation {
             let allow = self
@@ -6117,6 +6132,54 @@ where
         let force_allow_charge = matches!(self.charge_mode, BootChargeMode::MinCharge)
             && self.cfg.force_min_charge
             && can_enable;
+        if self.charge_mode == BootChargeMode::Off {
+            if let Some(saved) = self.chg_force_profile_restore {
+                if let Err(e) = bq25792::write_u16(
+                    &mut self.i2c,
+                    bq25792::reg::CHARGE_VOLTAGE_LIMIT,
+                    saved.vreg,
+                ) {
+                    self.chg_ce.set_high();
+                    self.chg_enabled = false;
+                    self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                    defmt::error!(
+                        "charger: bq25792 err stage=restore_vreg err={}",
+                        i2c_error_kind(e)
+                    );
+                    return;
+                }
+                if let Err(e) = bq25792::write_u16(
+                    &mut self.i2c,
+                    bq25792::reg::CHARGE_CURRENT_LIMIT,
+                    saved.ichg,
+                ) {
+                    self.chg_ce.set_high();
+                    self.chg_enabled = false;
+                    self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                    defmt::error!(
+                        "charger: bq25792 err stage=restore_ichg err={}",
+                        i2c_error_kind(e)
+                    );
+                    return;
+                }
+                if let Err(e) = bq25792::write_u16(
+                    &mut self.i2c,
+                    bq25792::reg::INPUT_CURRENT_LIMIT,
+                    saved.iindpm,
+                ) {
+                    self.chg_ce.set_high();
+                    self.chg_enabled = false;
+                    self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                    defmt::error!(
+                        "charger: bq25792 err stage=restore_iindpm err={}",
+                        i2c_error_kind(e)
+                    );
+                    return;
+                }
+                self.chg_force_profile_restore = None;
+                defmt::warn!("charger: bq25792 wake_profile_restored");
+            }
+        }
         let allow_charge = normal_allow_charge || force_allow_charge;
         let mut applied_ctrl0 = ctrl0;
         let mut applied_vreg_mv: Option<u16> = None;
@@ -6140,6 +6203,56 @@ where
             }
 
             if force_allow_charge {
+                if self.chg_force_profile_restore.is_none() {
+                    let vreg = match bq25792::read_u16(
+                        &mut self.i2c,
+                        bq25792::reg::CHARGE_VOLTAGE_LIMIT,
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.chg_ce.set_high();
+                            self.chg_enabled = false;
+                            self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                            defmt::error!(
+                                "charger: bq25792 err stage=wake_profile_read_vreg err={}",
+                                i2c_error_kind(e)
+                            );
+                            return;
+                        }
+                    };
+                    let ichg = match bq25792::read_u16(
+                        &mut self.i2c,
+                        bq25792::reg::CHARGE_CURRENT_LIMIT,
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.chg_ce.set_high();
+                            self.chg_enabled = false;
+                            self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                            defmt::error!(
+                                "charger: bq25792 err stage=wake_profile_read_ichg err={}",
+                                i2c_error_kind(e)
+                            );
+                            return;
+                        }
+                    };
+                    let iindpm =
+                        match bq25792::read_u16(&mut self.i2c, bq25792::reg::INPUT_CURRENT_LIMIT) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                self.chg_ce.set_high();
+                                self.chg_enabled = false;
+                                self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                                defmt::error!(
+                                    "charger: bq25792 err stage=wake_profile_read_iindpm err={}",
+                                    i2c_error_kind(e)
+                                );
+                                return;
+                            }
+                        };
+                    self.chg_force_profile_restore =
+                        Some(ChargerProfileRestore { vreg, ichg, iindpm });
+                }
                 match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, FORCE_WAKE_VREG_MV) {
                     Ok(v) => applied_vreg_mv = Some(decode_voltage_mv(v)),
                     Err(e) => {
