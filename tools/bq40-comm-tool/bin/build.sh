@@ -6,7 +6,7 @@ TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 FIRMWARE_DIR="$TOOL_ROOT/firmware"
 
 mode="canonical"
-recover="if-rom"
+recover="never"
 force_min_charge="false"
 probe_mode="strict"
 rom_image="r2"
@@ -115,8 +115,8 @@ case "$rom_image" in
     ;;
 esac
 
-if [[ "$recover" == "force" && "$mode" != "dual-diag" ]]; then
-  echo "--recover force requires --mode dual-diag" >&2
+if [[ "$recover" != "never" && "$mode" != "dual-diag" ]]; then
+  echo "--recover $recover requires --mode dual-diag" >&2
   exit 6
 fi
 

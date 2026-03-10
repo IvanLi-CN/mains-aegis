@@ -186,7 +186,12 @@ if [[ "$subcommand" != "verify" ]]; then
 fi
 
 if [[ "$subcommand" == "recover" ]]; then
-  ROM_FLASH_IMAGE_BYTES=$(python3 - "$TOOL_ROOT" "$rom_image" <<'PY'
+  if [[ "$recover_policy" == "never" ]]; then
+    # --recover never explicitly disables ROM work; do not force the full post-flash
+    # timing budget in this mode.
+    MIN_DURATION_RECOVER_SEC="$MIN_DURATION_DIAG_SEC"
+  else
+    ROM_FLASH_IMAGE_BYTES=$(python3 - "$TOOL_ROOT" "$rom_image" <<'PY'
 import sys
 from pathlib import Path
 
@@ -215,16 +220,17 @@ for name in files:
     total += (asset_dir / name).stat().st_size
 print(total)
 PY
-)
+    )
 
-  ROM_FLASH_BLOCK_COUNT=$(((ROM_FLASH_IMAGE_BYTES + ROM_FLASH_BLOCK_BYTES - 1) / ROM_FLASH_BLOCK_BYTES))
-  ROM_FLASH_WIRE_MS=$(((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_BLOCK_ONWIRE_BYTES * ROM_FLASH_BITS_PER_BYTE * 1000 + I2C_SLOW_BUS_BPS - 1) / I2C_SLOW_BUS_BPS))
-  ROM_FLASH_GAP_MS=$((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_WRITE_GAP_MS))
-  ROM_FLASH_TRANSFER_SEC=$((((ROM_FLASH_WIRE_MS + ROM_FLASH_GAP_MS) + 999) / 1000))
-  MIN_DURATION_RECOVER_SEC=$((MIN_DURATION_DIAG_SEC + POST_FLASH_BOOT_QUIET_SEC + POST_FLASH_RESUME_WINDOW_SEC + ROM_FLASH_TRANSFER_SEC + ROM_FLASH_FIXED_LATENCY_SEC))
+    ROM_FLASH_BLOCK_COUNT=$(((ROM_FLASH_IMAGE_BYTES + ROM_FLASH_BLOCK_BYTES - 1) / ROM_FLASH_BLOCK_BYTES))
+    ROM_FLASH_WIRE_MS=$(((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_BLOCK_ONWIRE_BYTES * ROM_FLASH_BITS_PER_BYTE * 1000 + I2C_SLOW_BUS_BPS - 1) / I2C_SLOW_BUS_BPS))
+    ROM_FLASH_GAP_MS=$((ROM_FLASH_BLOCK_COUNT * ROM_FLASH_WRITE_GAP_MS))
+    ROM_FLASH_TRANSFER_SEC=$((((ROM_FLASH_WIRE_MS + ROM_FLASH_GAP_MS) + 999) / 1000))
+    MIN_DURATION_RECOVER_SEC=$((MIN_DURATION_DIAG_SEC + POST_FLASH_BOOT_QUIET_SEC + POST_FLASH_RESUME_WINDOW_SEC + ROM_FLASH_TRANSFER_SEC + ROM_FLASH_FIXED_LATENCY_SEC))
+  fi
 fi
 
-if [[ "$subcommand" == "recover" && "$duration_arg_set" != "true" ]]; then
+if [[ "$subcommand" == "recover" && "$duration_arg_set" != "true" && "$recover_policy" != "never" ]]; then
   duration_sec="$MIN_DURATION_RECOVER_SEC"
 fi
 
@@ -239,7 +245,7 @@ if [[ "$subcommand" != "verify" ]]; then
     min_duration_sec="$MIN_DURATION_RECOVER_SEC"
   fi
   if [[ "$duration_sec" -lt "$min_duration_sec" ]]; then
-    if [[ "$subcommand" == "recover" ]]; then
+    if [[ "$subcommand" == "recover" && "$recover_policy" != "never" ]]; then
       echo "duration-sec must be >= $min_duration_sec for recover (10s repower-off + 2s min-charge settle + ${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop + ${POST_FLASH_BOOT_QUIET_SEC}s post-flash boot quiet + ${POST_FLASH_RESUME_WINDOW_SEC}s post-flash resume window + current ROM flash lower-bound ${ROM_FLASH_TRANSFER_SEC}s transfer/gap budget + ${ROM_FLASH_FIXED_LATENCY_SEC}s erase/execute/dwell)" >&2
     else
       echo "duration-sec must be >= $min_duration_sec for $subcommand (10s repower-off + 2s min-charge settle + ${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop)" >&2

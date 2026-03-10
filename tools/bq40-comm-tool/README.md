@@ -35,7 +35,7 @@ cp .esp32-port.example .esp32-port
 
 Options:
 - `--mode canonical|dual-diag` (default: `canonical`)
-- `--duration-sec <N>` (default: `120`; `diagnose` requires `>=70`, `recover` requires `>=155`)
+- `--duration-sec <N>` (default: `120`; `diagnose` requires `>=70`; `recover` requires `>=70` when `--recover never`, otherwise `>=155`)
 - `--flash true|false` (default: `true`; not accepted by `verify`)
 - `--recover never|if-rom|force` (default: `if-rom`; not accepted by `diagnose`/`verify`; `force` requires `--mode dual-diag`)
 - `--force-min-charge true|false` (default: `false`; not accepted by `verify`)
@@ -72,8 +72,8 @@ Required `summary.json` fields:
   - then re-run `./bin/run.sh ...` (tool report parser works offline on existing logs too)
 - `monitor file not found: ...`
   - for `verify`, make sure `--monitor-file` points to an existing `.mon.ndjson`
-- `duration-sec must be >= 70 for diagnose` or `>= 155 for recover`
-  - the no-pack wake path still spends 10s with charge off and 2s at minimum charge, but the firmware only checks the 5s working-info target on a 2s main loop, so the parser-visible steady-state cadence is effectively ~6s; recover also reserves another 10s post-flash boot quiet plus the current ROM flash transfer/gap budget (120s remains the diagnose/verify bench default, while recover now needs at least 155s because the firmware can spend another 30s in the post-flash resume window before steady-state samples resume)
+- `duration-sec` floors (`diagnose >=70`; `recover --recover never >=70`; `recover --recover if-rom|force >=155`)
+  - the no-pack wake path still spends 10s with charge off and 2s at minimum charge, but the firmware only checks the 5s working-info target on a 2s main loop, so the parser-visible steady-state cadence is effectively ~6s; recover with ROM enabled also reserves another 10s post-flash boot quiet plus the current ROM flash transfer/gap budget (120s remains the diagnose/verify bench default, while ROM-enabled recover needs at least 155s because the firmware can spend another 30s in the post-flash resume window before steady-state samples resume)
 - `verdict.fail: canonical_mode_touched_0x16`
   - canonical mode should not touch `0x16`; check firmware mode and logs
 - canonical diagnose still has `samples_total=0`
