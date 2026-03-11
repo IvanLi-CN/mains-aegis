@@ -55,9 +55,11 @@ Required `summary.json` fields:
 - `mode`, `duration_sec`, `samples_total`, `valid_samples`, `max_valid_streak`
 - `run_config` (`force_min_charge`, `probe_mode`, `rom_image`)
 - `poll_errors` (by error type)
-- `rom_events` (`detected`, `flash_attempted`, `flash_image_done`, `flash_done`)
+- `rom_events` (`detected`, `flash_attempted`, `flash_image_done`, `flash_done`, `fw_seen`, `runtime_invalid`, `runtime_status_unconfirmed`)
   - `flash_image_done=true` means the ROM flash sequence reached `stage=rom_flash_done` (image write completed), but post-flash resume may still fail.
   - `flash_done=true` means the recover flow emitted `stage=probe_rom_flash_done` after the gauge was validated back in firmware mode (including delayed post-flash resume).
+  - `fw_seen=true` means post-flash probing observed firmware-mode evidence such as `probe_rom_post_flash_fw_seen*` or `rom_post_flash_resume_not_rom`; a bare ROM-exit acknowledgement is not enough.
+  - `runtime_invalid=true` / `runtime_status_unconfirmed=true` make the post-flash failure mode explicit when the gauge leaves ROM but still cannot produce a trustworthy runtime snapshot.
 - `verdict.pass`, `verdict.reason`
 
 ## Common issues
@@ -74,8 +76,8 @@ Required `summary.json` fields:
   - then re-run `./bin/run.sh ...` (tool report parser works offline on existing logs too)
 - `monitor file not found: ...`
   - for `verify`, make sure `--monitor-file` points to an existing `.mon.ndjson`
-- `duration-sec` floors (computed by `./bin/run.sh`; wake adds 12s when `--force-min-charge true`; ROM-enabled `recover` also adds post-flash quiet + resume + transfer/gap budget and defaults to the computed minimum, which is `>=155` and depends on `--rom-image`)
-  - the no-pack wake path spends 10s with charge off and 2s at minimum charge, but the firmware only checks the 5s working-info target on a 2s main loop, so the parser-visible steady-state cadence is effectively ~6s; ROM-enabled recover also reserves another 10s post-flash boot quiet plus the ROM flash transfer/gap budget
+- `duration-sec` floors (computed by `./bin/run.sh`; `diagnose` / `recover --recover never` require `>=30s` without wake and `>=42s` with `--force-min-charge true`; ROM-enabled `recover` also adds post-flash quiet + resume + transfer/gap budget and still defaults to the historical safe `155s` bench duration when `--duration-sec` is omitted)
+  - the parser now scores every successful `bms:` poll, so the steady-state cadence is the 2s main loop rather than the older 5s working-info print; for example, `recover --recover if-rom --force-min-charge true --rom-image r2` currently computes a hard minimum of `118s` before the extra safe default is applied
 - `verdict.fail: canonical_mode_touched_0x16`
   - canonical mode should not touch `0x16`; check firmware mode and logs
 - canonical diagnose still has `samples_total=0`

@@ -17,7 +17,7 @@ Expected:
 - `--recover` is rejected in this mode (to avoid silent overrides)
 - `--force-min-charge true` applies the supported wake profile: `VREG=16.8V / ICHG=200mA / IINDPM=500mA`
 - `tps_sync` unavailable only emits warning; output self-test still proceeds
-- `--duration-sec` must be `>=78` for diagnose (10s repower-off + 2s settle + ~8s wake/exit-exercise overhead + two 2s loop quanta before the first steady-state sample + the remaining 9 samples landing on an effective ~6s cadence)
+- `--duration-sec` must satisfy the tool-derived minimum for diagnose: `>=30s` without wake, or `>=42s` with `--force-min-charge true` (10s repower-off + 2s settle + 12s startup-to-first-sample + 9 more samples at the 2s successful-poll cadence)
 
 ## 1.1) Deep diagnostic fallback (no ROM write)
 
@@ -42,8 +42,8 @@ Only run recover after canonical diagnose fails and the monitor log proves `stag
 ```
 
 Policy:
-- `--duration-sec` must be `>=78` for `recover --recover never` (ROM recovery disabled; same floor as diagnose)
-- `--duration-sec` must be `>=` the tool-derived minimum for `recover --recover if-rom|force` (omit `--duration-sec` to auto-select; the minimum is `>=155` and depends on the selected ROM image size + the post-flash resume budget)
+- `--duration-sec` must be `>=30s` for `recover --recover never`, or `>=42s` when that path is combined with `--force-min-charge true` (same floor logic as diagnose)
+- `--duration-sec` must be `>=` the tool-derived minimum for `recover --recover if-rom|force` (omit `--duration-sec` to auto-select; for example `--force-min-charge true --rom-image r2` currently computes `118s`, while the script still keeps the safer historical default of `155s` when the option is omitted)
 - `--recover never`: disable ROM recovery (no state-changing ROM write)
 - `--recover if-rom`: recover only when ROM signature is detected
 - `--recover force`: debug-only escape hatch; not part of the supported repo recovery sequence
