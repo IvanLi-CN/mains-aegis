@@ -80,7 +80,7 @@ class Sample:
 
 
 def parse_entry_ts(entry: dict) -> Optional[float]:
-    ts = entry.get("ts")
+    ts = entry.get("ts") or entry.get("timestamp")
     if not isinstance(ts, str):
         return None
     normalized = ts[:-1] + "+00:00" if ts.endswith("Z") else ts

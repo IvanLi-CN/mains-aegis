@@ -34,13 +34,13 @@ cp .esp32-port.example .esp32-port
 `./bin/run.sh <diagnose|recover|verify> [options]`
 
 Options:
-- `--mode canonical|dual-diag` (default: `canonical`)
-- `--duration-sec <N>` (default: `120`; `diagnose` requires `>=78`; `recover` requires `>=78` when `--recover never`, otherwise `>=` the tool-derived minimum; when omitted, ROM-enabled recover defaults to the computed minimum, which is `>=155` and depends on `--rom-image`)
+- `--mode canonical|dual-diag` (`diagnose`/`verify` default to `canonical`; `recover` defaults to `dual-diag` unless explicitly overridden)
+- `--duration-sec <N>` (default: `120`; explicit lower bounds are computed from the selected subcommand and wake/recover knobs, so `--force-min-charge` / `--recover` / `--rom-image` can all raise the minimum; when omitted, ROM-enabled `recover` automatically picks the computed minimum)
 - `--flash true|false` (default: `true`; not accepted by `verify`)
 - `--recover never|if-rom|force` (default: `if-rom`; not accepted by `diagnose`/`verify`; `force` requires `--mode dual-diag`)
-- `--force-min-charge true|false` (default: `false`; not accepted by `verify`)
+- `--force-min-charge true|false` (default: `false`; not accepted by `verify`; also lengthens the minimum live-monitor window because the tool adds a repower/min-charge settle budget before liveness probing)
 - `--probe-mode strict|mac-only` (default: `strict`; not accepted by `verify`; `mac-only` is diagnostic-only and narrows steady-state liveness checks to ManufacturerAccess()/ManufacturerBlockAccess() after the normal wake/ROM handling)
-- `--rom-image r2|r3|r5` (default: `r2`; not accepted by `verify`)
+- `--rom-image r2|r3|r5` (default: `r2`; not accepted by `verify`; affects the computed `recover` minimum)
 - `--monitor-file <path>` (`verify` required; others optional)
 - `--report-out <dir>` (default: `tools/bq40-comm-tool/reports/<timestamp>`)
 
