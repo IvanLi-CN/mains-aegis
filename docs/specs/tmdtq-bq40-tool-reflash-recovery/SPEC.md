@@ -4,7 +4,7 @@
 
 - Status: 部分完成（4/5）
 - Created: 2026-03-06
-- Last: 2026-03-06
+- Last: 2026-03-11
 
 ## 背景 / 问题陈述
 
@@ -191,6 +191,8 @@
 - 2026-03-06: 新增 boot 后 `0/800/1600 ms` staged wake probe，并在 `if-rom` 路径上复测；结果表明即使在早期唤醒窗口内，`0x0B` 依旧命令字节 NACK、`0x16` 依旧地址 NACK，ROM 恢复仍未触发。
 - 2026-03-07: 在 `probe_rom_exit` 失败时追加 `0x0F00` / `0x0033`（含 PEC）盲打 ROM 入口诊断，并为 `monitor` 增加首轮 reset 失败自动回退；结果显示 ROM 入口写法在 `0x0B` 上全部 data-NACK、在 `0x16` 上全部 address-NACK，仍无法进入可见 ROM。
 - 2026-03-09: 在工具固件日志中补充 `CellVoltage1..4()` 诊断；无电池偏置样本显示 `CellVoltage1≈27~51 mV`、`CellVoltage2..4=0 mV`，与 `Voltage()` 的几十 mV 浮动一致，可作为悬空偏置签名。结合更换芯片后的对照结果，本任务的软件收口口径调整为“工具链有效并可识别原始样本疑似硬损坏”，而不是要求软件恢复已损坏芯片。
+- 2026-03-11: 追加真机闭环记录：`reports/20260311_112932/summary.json` 先确认当前样本已可见 `rom_events.detected=true`；随后 `reports/20260311_114111/summary.json` 显示 `flash_attempted=true`、`flash_image_done=true`、`flash_done=false`，并在 monitor 中持续出现 `stage=rom_post_flash_resume_observe rsoc=0x9002` / `stage=probe_rom_post_flash_still_rom`；最后 `reports/20260311_114419/summary.json` 与 `reports/20260311_114513/summary.json` 证明 post-recover canonical diagnose 与 offline verify 仍然没有有效样本，因此本轮 bench 结论仍是“镜像写入已发生，但退出 ROM/恢复应用态通信未被证实”。
+- 2026-03-11: 在 Codex 桌面环境补记一条操作经验：若 `mcu-managerd start` 无法维持 IPC，可改用前台 `mcu-managerd run`，再执行 `mcu-agentd --non-interactive start` 后继续 live bench。
 
 ## 参考（References）
 

@@ -185,3 +185,16 @@
   - **无电池**：只验证 `ROM/重刷链路`，不把刷后“几十 mV 应用态”误判为恢复成功；该条件下 `report_parser.py` 会把 `Voltage()<2500mV` 的样本判为 invalid，因此 `summary.json` 的 `verdict.pass` 预期为 FAIL（这不是回归）。
   - **带电池**：再去验收 `diagnose + verify` 是否真正 PASS。
 - 若同一块板在更换 BQ40Z50 芯片后，`tools/bq40-comm-tool` 已能稳定完成 `ROM 检测 -> 重刷 -> 退出 ROM`，而旧芯片仍持续表现为既非正常 SBS、也非可见 ROM 的阻断态，则应优先把旧芯片判为 **疑似硬损坏样本**。此时软件任务的收口口径应是“工具已能区分工具链问题与芯片硬故障”，而不是继续要求软件去“修活”损坏器件。
+
+### 8.3 2026-03-11 真机闭环补充（本次样本仍停在 ROM）
+
+- `reports/20260311_112932/summary.json`
+  - `diagnose --mode canonical --duration-sec 120 --force-min-charge true` 首轮即观测到 `rom_events.detected=true`，但 `samples_total=0`、`verdict.pass=false`。
+- `reports/20260311_114111/summary.json`
+  - `recover --mode dual-diag --recover if-rom --force-min-charge true --rom-image r2` 已达到 `flash_attempted=true`、`flash_image_done=true`，但仍然 `flash_done=false`。
+- `.mcu-agentd/monitor/esp/20260311_113829_paeuvl5e_combined.mon.ndjson`
+  - 事件序列明确显示：`stage=probe_rom_flash_begin -> stage=rom_flash_start -> stage=rom_flash_done rsoc_after=0x0` 之后，又连续出现 `stage=rom_post_flash_resume_observe rsoc=0x9002` 与 `stage=probe_rom_post_flash_still_rom`；说明镜像传输完成后，工具始终没有观察到器件退出 ROM。
+- `reports/20260311_114419/summary.json` 与 `reports/20260311_114513/summary.json`
+  - post-recover canonical diagnose 与同日志离线 verify 结论一致：`rom_events.detected=true`、`samples_total=0`、`max_valid_streak=0`、`verdict.pass=false`。
+- 这组 2026-03-11 证据应按“**已进入 ROM、已完成镜像写入、但未确认退出 ROM**”归档，不能把它升级为 recover 成功。
+- 另外补一条现场操作经验：若在 Codex 桌面环境里出现 `managerd ipc failed: io: Connection refused (os error 61)`，而 `mcu-managerd start` 又无法保持 `running: true`，可先前台运行 `mcu-managerd run`，再执行 `mcu-agentd --non-interactive start` 后重试 live 流程。
