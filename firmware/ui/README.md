@@ -13,10 +13,11 @@ This directory consolidates the current confirmed front panel UI design view fro
 - Host-side UI (future implementation): reserved, not frozen in this directory yet
 - Runtime behavior baseline: [../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md](../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md)
 - Visual freeze baseline: [../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md](../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md)
+- BQ40 result dialog baseline: [../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md](../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md)
 
 ## Assets
 
-- Frozen renders (8): `assets/dashboard-b-*.png`, `assets/self-check-c-*.png`
+- Frozen renders: `assets/dashboard-b-*.png`, `assets/self-check-c-*.png`（含 BQ40 结果弹窗 5 态）
 - Module maps (2):
   - `assets/dashboard-b-module-map.png`
   - `assets/self-check-c-module-map.png`
@@ -40,6 +41,8 @@ This directory consolidates the current confirmed front panel UI design view fro
 5. [visual-regression-checklist.md](visual-regression-checklist.md)
 6. Source specs for traceability:
    - [../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md](../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md)
+   - [../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md](../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md)
+   - [../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md](../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md)
    - [../../docs/specs/hg3dw-front-panel-visual-language/SPEC.md](../../docs/specs/hg3dw-front-panel-visual-language/SPEC.md)
    - [../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md](../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md)
 

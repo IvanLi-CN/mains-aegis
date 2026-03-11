@@ -292,12 +292,7 @@ impl FrontPanel {
         self.self_check_overlay = match state {
             BmsActivationState::Idle => SelfCheckOverlay::None,
             BmsActivationState::Pending => SelfCheckOverlay::BmsActivateProgress,
-            BmsActivationState::Succeeded => SelfCheckOverlay::BmsActivateResult { success: true },
-            BmsActivationState::FailedNoInput
-            | BmsActivationState::FailedTimeout
-            | BmsActivationState::FailedComm => {
-                SelfCheckOverlay::BmsActivateResult { success: false }
-            }
+            BmsActivationState::Result(result) => SelfCheckOverlay::BmsActivateResult(result),
         };
         self.needs_redraw = true;
     }
@@ -350,7 +345,7 @@ impl FrontPanel {
 
         if matches!(
             self.self_check_overlay,
-            SelfCheckOverlay::BmsActivateResult { .. }
+            SelfCheckOverlay::BmsActivateResult(..)
         ) {
             if left_edge || right_edge || center_edge {
                 self.self_check_overlay = SelfCheckOverlay::None;
@@ -363,12 +358,21 @@ impl FrontPanel {
         match self.self_check_overlay {
             SelfCheckOverlay::None => {
                 if (left_edge || center_edge)
-                    && front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
                     && self.bms_activation_state != BmsActivationState::Pending
                 {
-                    self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
-                    self.needs_redraw = true;
-                    defmt::info!("ui: bms activation dialog open via key");
+                    if let Some(result_overlay) =
+                        front_panel_scene::bq40_result_overlay(&self.self_check_snapshot)
+                    {
+                        self.self_check_overlay = result_overlay;
+                        self.needs_redraw = true;
+                        defmt::info!("ui: bms result dialog reopen via key");
+                    } else if front_panel_scene::is_bq40_activation_needed(
+                        &self.self_check_snapshot,
+                    ) {
+                        self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
+                        self.needs_redraw = true;
+                        defmt::info!("ui: bms activation dialog open via key");
+                    }
                 }
             }
             SelfCheckOverlay::BmsActivateConfirm => {
@@ -384,7 +388,7 @@ impl FrontPanel {
                 }
             }
             SelfCheckOverlay::BmsActivateProgress => {}
-            SelfCheckOverlay::BmsActivateResult { .. } => {}
+            SelfCheckOverlay::BmsActivateResult(..) => {}
         }
 
         None
@@ -784,7 +788,7 @@ impl FrontPanel {
 
         if matches!(
             self.self_check_overlay,
-            SelfCheckOverlay::BmsActivateResult { .. }
+            SelfCheckOverlay::BmsActivateResult(..)
         ) {
             self.self_check_overlay = SelfCheckOverlay::None;
             self.needs_redraw = true;
@@ -817,12 +821,26 @@ impl FrontPanel {
                 let activation_needed =
                     front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot);
                 if self.self_check_overlay == SelfCheckOverlay::None
-                    && activation_needed
                     && self.bms_activation_state != BmsActivationState::Pending
                 {
-                    self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
-                    self.needs_redraw = true;
-                    defmt::info!("ui: bms activation dialog open via touch");
+                    if let Some(result_overlay) =
+                        front_panel_scene::bq40_result_overlay(&self.self_check_snapshot)
+                    {
+                        self.self_check_overlay = result_overlay;
+                        self.needs_redraw = true;
+                        defmt::info!("ui: bms result dialog reopen via touch");
+                    } else if activation_needed {
+                        self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
+                        self.needs_redraw = true;
+                        defmt::info!("ui: bms activation dialog open via touch");
+                    } else {
+                        defmt::info!(
+                            "ui: bms touch ignored overlay={} activation_needed={=bool} bms_state={}",
+                            overlay_name(self.self_check_overlay),
+                            activation_needed,
+                            bms_activation_state_name(self.bms_activation_state)
+                        );
+                    }
                 } else {
                     defmt::info!(
                         "ui: bms touch ignored overlay={} activation_needed={=bool} bms_state={}",
@@ -945,8 +963,21 @@ fn overlay_name(overlay: SelfCheckOverlay) -> &'static str {
         SelfCheckOverlay::None => "none",
         SelfCheckOverlay::BmsActivateConfirm => "confirm",
         SelfCheckOverlay::BmsActivateProgress => "progress",
-        SelfCheckOverlay::BmsActivateResult { success: true } => "result_ok",
-        SelfCheckOverlay::BmsActivateResult { success: false } => "result_fail",
+        SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::Success) => {
+            "result_success"
+        }
+        SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::NoBattery) => {
+            "result_no_battery"
+        }
+        SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::RomMode) => {
+            "result_rom_mode"
+        }
+        SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::Abnormal) => {
+            "result_abnormal"
+        }
+        SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::NotDetected) => {
+            "result_not_detected"
+        }
     }
 }
 
@@ -954,10 +985,15 @@ fn bms_activation_state_name(state: BmsActivationState) -> &'static str {
     match state {
         BmsActivationState::Idle => "idle",
         BmsActivationState::Pending => "pending",
-        BmsActivationState::Succeeded => "succeeded",
-        BmsActivationState::FailedNoInput => "failed_no_input",
-        BmsActivationState::FailedTimeout => "failed_timeout",
-        BmsActivationState::FailedComm => "failed_comm",
+        BmsActivationState::Result(front_panel_scene::BmsResultKind::Success) => "result_success",
+        BmsActivationState::Result(front_panel_scene::BmsResultKind::NoBattery) => {
+            "result_no_battery"
+        }
+        BmsActivationState::Result(front_panel_scene::BmsResultKind::RomMode) => "result_rom_mode",
+        BmsActivationState::Result(front_panel_scene::BmsResultKind::Abnormal) => "result_abnormal",
+        BmsActivationState::Result(front_panel_scene::BmsResultKind::NotDetected) => {
+            "result_not_detected"
+        }
     }
 }
 

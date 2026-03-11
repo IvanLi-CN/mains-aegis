@@ -67,7 +67,7 @@
   - `assets/self-check-c-assist-up.png`
   - `assets/self-check-c-backup-touch.png`
 - Pass criteria:
-  - `COMM` 状态词仅出现规范词汇：基础态 `PEND/OK/WARN/ERR/N/A` 与派生态 `RUN/LOCK/IDLE/RCA/HOT`。
+  - `COMM` 状态词仅出现规范词汇：基础态 `PEND/OK/WARN/ERR/N/A` 与派生态 `RUN/LOCK/IDLE/HOT`。
   - 交互高亮由 `UiFocus` 驱动，不改变模块业务语义。
 
 ### VR-S-03 Module naming consistency
@@ -85,11 +85,14 @@
   - `assets/self-check-c-bq40-offline-idle.png`
   - `assets/self-check-c-bq40-offline-activate-dialog.png`
   - `assets/self-check-c-bq40-activating.png`
-  - `assets/self-check-c-bq40-activation-succeeded.png`
-  - `assets/self-check-c-bq40-activation-failed.png`
+  - `assets/self-check-c-bq40-result-success.png`
+  - `assets/self-check-c-bq40-result-no-battery.png`
+  - `assets/self-check-c-bq40-result-rom-mode.png`
+  - `assets/self-check-c-bq40-result-abnormal.png`
+  - `assets/self-check-c-bq40-result-not-detected.png`
 - Pass criteria:
-  - 场景覆盖 `Idle -> Confirm -> Pending -> Succeeded/Failed`。
-  - 不同失败状态共享失败视觉语义，但结果文案不与成功态混用。
+  - 场景覆盖 `Idle -> Confirm -> Pending -> Success/NoBattery/RomMode/Abnormal/NotDetected`。
+  - 五类结果弹窗标题统一为 `BQ40 RESULT`，正文文案与卡片 `OK/WARN/ERR` 语义不冲突。
 
 ### VR-O-02 Dialog geometry and action areas
 

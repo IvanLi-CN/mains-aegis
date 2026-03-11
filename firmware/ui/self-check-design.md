@@ -31,7 +31,7 @@
 | `FUSB302` | `PEND/OK/WARN/ERR/N/A` | `VBUS ON/OFF/UNKNOWN` |
 | `INA3221` | `PEND/OK/WARN/ERR/N/A` | `ISUM x.xxA` |
 | `BQ25792` | `PEND/RUN/LOCK/WARN/ERR/N/A` | `ICHG x.xxA` 或 `CHG DISABLED` |
-| `BQ40Z50` | `PEND/OK/RCA/WARN/ERR/N/A` | `SOC xx%` 或 `RCA ALARM` |
+| `BQ40Z50` | `PEND/OK/WARN/ERR/N/A` | `SOC xx%` / `ABNORMAL` / `RCA ALARM` / `NOT DETECTED` |
 | `TPS55288-A` | `PEND/RUN/IDLE/WARN/ERR/N/A` | `IOUT x.xxA` |
 | `TPS55288-B` | `PEND/RUN/IDLE/WARN/ERR/N/A` | `IOUT x.xxA` |
 | `TMP112-A` | `PEND/OK/WARN/ERR/N/A` | `TMAX xxC` |
@@ -42,10 +42,11 @@
 - 开机后屏幕可用即进入 `SELF CHECK`（Variant C）。
 - 自检阶段按模块探测进度实时更新状态：`PEND -> OK/WARN/ERR/N/A`。
 - 自检完成后保持 `SELF CHECK` 页面并持续刷新真实运行数据。
+- `BQ40Z50` 卡片语义固定为：`OK`=普通访问可信正常态，`WARN`=设备存在但非正常态，`ERR`=普通访问未识别。
 - 本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard。
 - 视觉样式（状态颜色、字体层级、交互高亮）以 [design-language.md](design-language.md) 为准，本页保留布局与语义冻结。
 
-## 6. 冻结渲染图（四场景）
+## 6. 冻结渲染图（含 BQ40 结果弹窗）
 
 ![Self-check Variant C - STANDBY idle](assets/self-check-c-standby-idle.png)
 ![Self-check Variant C - STANDBY charger-focus](assets/self-check-c-standby-right.png)
@@ -54,5 +55,8 @@
 ![Self-check Variant C - BQ40 offline idle](assets/self-check-c-bq40-offline-idle.png)
 ![Self-check Variant C - BQ40 offline activation dialog](assets/self-check-c-bq40-offline-activate-dialog.png)
 ![Self-check Variant C - BQ40 activating](assets/self-check-c-bq40-activating.png)
-![Self-check Variant C - BQ40 activation succeeded](assets/self-check-c-bq40-activation-succeeded.png)
-![Self-check Variant C - BQ40 activation failed](assets/self-check-c-bq40-activation-failed.png)
+![Self-check Variant C - BQ40 result success](assets/self-check-c-bq40-result-success.png)
+![Self-check Variant C - BQ40 result no battery](assets/self-check-c-bq40-result-no-battery.png)
+![Self-check Variant C - BQ40 result rom mode](assets/self-check-c-bq40-result-rom-mode.png)
+![Self-check Variant C - BQ40 result abnormal](assets/self-check-c-bq40-result-abnormal.png)
+![Self-check Variant C - BQ40 result not detected](assets/self-check-c-bq40-result-not-detected.png)

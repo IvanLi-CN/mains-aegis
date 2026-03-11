@@ -255,6 +255,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 五向按键映射为功能焦点切换：`UP->OUT-A`、`DOWN->OUT-B`、`LEFT->BMS`、`RIGHT->CHARGER`、`CENTER->THERM`
 - 触摸中断仅作为告警指示（`IRQ ON/OFF`）
 - 上电自检页：屏幕可用时先进入 `Variant C Self-check`，自检阶段按探测进度实时刷新模块状态（`PEND -> OK/WARN/ERR/N/A`）
+- `BQ40Z50` 卡片语义：`OK`=普通访问可信正常态，`WARN`=设备存在但非正常态，`ERR`=普通访问未识别；`ERR` 时允许尝试激活。
 - 自检完成后保持 `Variant C` 常驻，并持续显示运行期真实数据（`TPS/INA/TMP/BQ25792/BQ40`）
 - 页面切换：本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard
 - Dashboard 视觉基线：`Variant B`（仅用于 Dashboard 场景）
@@ -280,8 +281,11 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 ![Self-check Variant C - BQ40 offline idle](ui/assets/self-check-c-bq40-offline-idle.png)
 ![Self-check Variant C - BQ40 offline activation dialog](ui/assets/self-check-c-bq40-offline-activate-dialog.png)
 ![Self-check Variant C - BQ40 activating](ui/assets/self-check-c-bq40-activating.png)
-![Self-check Variant C - BQ40 activation succeeded](ui/assets/self-check-c-bq40-activation-succeeded.png)
-![Self-check Variant C - BQ40 activation failed](ui/assets/self-check-c-bq40-activation-failed.png)
+![Self-check Variant C - BQ40 result success](ui/assets/self-check-c-bq40-result-success.png)
+![Self-check Variant C - BQ40 result no battery](ui/assets/self-check-c-bq40-result-no-battery.png)
+![Self-check Variant C - BQ40 result rom mode](ui/assets/self-check-c-bq40-result-rom-mode.png)
+![Self-check Variant C - BQ40 result abnormal](ui/assets/self-check-c-bq40-result-abnormal.png)
+![Self-check Variant C - BQ40 result not detected](ui/assets/self-check-c-bq40-result-not-detected.png)
 
 渲染架构采用“同源渲染”：
 
@@ -315,7 +319,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
   - `GPIO13`：`BLK`（控制面板 `Q16(BSS84)` 高边开关；当前固件按“低电平点亮背光”实现）
 - 触摸：
   - 读取 `CST816D` 单点坐标（`0x01..0x06`）并用于 `SELF CHECK` 页面命中测试
-  - `BQ40Z50` 离线时，触摸卡片弹出英文激活对话框（`Cancel` / `Try Activation`）
+  - `BQ40Z50` 为 `ERR` 时，触摸卡片先弹出英文激活确认对话框（`Cancel` / `Activate`）；已有最近结果时直接回显对应结果弹窗
 
 预期日志（`defmt`）：
 
