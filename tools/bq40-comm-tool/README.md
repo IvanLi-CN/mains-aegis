@@ -35,7 +35,7 @@ cp .esp32-port.example .esp32-port
 
 Options:
 - `--mode canonical|dual-diag` (`diagnose`/`verify` default to `canonical`; `recover` defaults to `dual-diag` unless explicitly overridden)
-- `--duration-sec <N>` (default: `120`; explicit lower bounds are computed from the selected subcommand and wake/recover knobs, so `--force-min-charge` / `--recover` / `--rom-image` can all raise the minimum; when omitted, ROM-enabled `recover` automatically picks the computed minimum)
+- `--duration-sec <N>` (default: `120`; explicit lower bounds are computed from the selected subcommand and wake/recover knobs, so `--force-min-charge` / `--recover` / `--rom-image` can all raise the minimum; when omitted, ROM-enabled `recover` uses the larger of the computed minimum and the historical safe `155s` default)
 - `--flash true|false` (default: `true`; not accepted by `verify`)
 - `--recover never|if-rom|force` (default: `if-rom`; not accepted by `diagnose`/`verify`; `force` requires `--mode dual-diag`)
 - `--force-min-charge true|false` (default: `false`; not accepted by `verify`; also lengthens the minimum live-monitor window because the tool adds a repower/min-charge settle budget before liveness probing)
