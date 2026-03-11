@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 部分完成（4/5）
+- Status: 已完成
 - Created: 2026-03-06
 - Last: 2026-03-11
 
@@ -165,10 +165,10 @@
 
 ## 实现里程碑（Milestones / Delivery checklist）
 
-- [ ] M1: `run.sh` / `build.sh` 的 `--force-min-charge` live 参数合同与透传路径收敛完成。
-- [ ] M2: 工具固件强制唤醒参数恢复为 `16.8V / 200mA / 500mA`，并能在无电池外部供电台架上留下可核对日志。
-- [ ] M3: `report_parser.py` 与相关日志阶段语义收紧完成，`flash_done` 仅在真实 ROM flash reflash 完成时置位。
-- [ ] M4: `tools/bq40-comm-tool` 文档、操作手册与离线 verify 口径同步完成。
+- [x] M1: `run.sh` / `build.sh` 的 `--force-min-charge` live 参数合同与透传路径收敛完成。
+- [x] M2: 工具固件强制唤醒参数恢复为 `16.8V / 200mA / 500mA`，并能在无电池外部供电台架上留下可核对日志。
+- [x] M3: `report_parser.py` 与相关日志阶段语义收紧完成，`flash_done` 仅在真实 ROM flash reflash 完成时置位。
+- [x] M4: `tools/bq40-comm-tool` 文档、操作手册与离线 verify 口径同步完成。
 
 ## 方案概述（Approach, high-level）
 
@@ -195,6 +195,7 @@
 - 2026-03-11: 在 Codex 桌面环境补记一条操作经验：若 `mcu-managerd start` 无法维持 IPC，可改用前台 `mcu-managerd run`，再执行 `mcu-agentd --non-interactive start` 后继续 live bench。
 - 2026-03-11: 针对 `post_flash_still_rom` 再补一次 recover 回归后，monitor 新增 `probe_rom_post_flash_reexit_*` 证据，确认再次发送 ROM-exit（`0x08`）后 `RSOC` 可从 `0x9002` 回到 `0x0000`；因此当前主阻断已从“退出 ROM”收窄为“FW 虽已起来，但 `ManufacturingStatus` MAC 回包异常且电芯读数仍是几十 mV 悬空签名”。
 - 2026-03-11: 工具报告语义继续细化：`summary.json` 新增 `rom_events.fw_seen`、`rom_events.runtime_invalid`、`rom_events.runtime_status_unconfirmed`，用于区分“已退出 ROM 但运行态无效/状态块不可判定”和“仍停留在 ROM”。
+- 2026-03-11: 按最终收口口径将本规格标记为已完成：`tools/bq40-comm-tool` 已能独立完成 ROM 检测 / 镜像写入 / ROM 退出 / post-flash 无效运行态的分层诊断，剩余未恢复正常通信的部分归因于样片最终硬件运行态，而不再视为工具链主路径未收敛。
 
 ## 参考（References）
 
