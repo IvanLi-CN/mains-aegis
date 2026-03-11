@@ -198,3 +198,5 @@
   - post-recover canonical diagnose 与同日志离线 verify 结论一致：`rom_events.detected=true`、`samples_total=0`、`max_valid_streak=0`、`verdict.pass=false`。
 - 这组 2026-03-11 证据应按“**已进入 ROM、已完成镜像写入、但未确认退出 ROM**”归档，不能把它升级为 recover 成功。
 - 另外补一条现场操作经验：若在 Codex 桌面环境里出现 `managerd ipc failed: io: Connection refused (os error 61)`，而 `mcu-managerd start` 又无法保持 `running: true`，可先前台运行 `mcu-managerd run`，再执行 `mcu-agentd --non-interactive start` 后重试 live 流程。
+- 在补上 post-flash ROM-exit 重试后，同一路径的 `reports/20260311_120958/summary.json` 仍然 FAIL，但 monitor 已明确出现：`stage=probe_rom_post_flash_reexit_begin -> stage=rom_mode_exit_write_08 rsoc_after=0x0 -> stage=probe_rom_post_flash_reexit_ok`，说明这一次**不是**“一直卡在 ROM”。
+- 同一份 monitor 随后连续给出 `stage=rom_post_flash_resume_not_rom rsoc=0x0 temp_raw=0xbad`，并伴随 `stage=post_flash_mfg_status err=bad_len raw=block parsed=mac`；窗口结束时还能读到 `temp_c_x10=259`、`voltage_mv=50`、`cell1_mv=50`、`cell2/3/4=0`。这表明剩余阻断点已经转移到“FW 已起来，但没有形成可信运行态快照 / 看不到有效 cell stack”，而不是 ROM-exit 本身。

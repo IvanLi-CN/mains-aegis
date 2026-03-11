@@ -4177,7 +4177,7 @@ pub struct PowerManager<'d, I2C> {
     bms_exit_exercise_reported: bool,
     bms_post_flash_resume_addr: Option<u8>,
     bms_post_flash_resume_started_at: Option<Instant>,
-    bms_post_flash_repower_attempted: bool,
+    bms_post_flash_reexit_attempted: bool,
     bms_last_working_info_at: Option<Instant>,
 }
 
@@ -4350,7 +4350,7 @@ where
             bms_exit_exercise_reported: false,
             bms_post_flash_resume_addr: None,
             bms_post_flash_resume_started_at: None,
-            bms_post_flash_repower_attempted: false,
+            bms_post_flash_reexit_attempted: false,
             bms_last_working_info_at: None,
         }
     }
@@ -4416,13 +4416,13 @@ where
     fn clear_post_flash_resume(&mut self) {
         self.bms_post_flash_resume_addr = None;
         self.bms_post_flash_resume_started_at = None;
-        self.bms_post_flash_repower_attempted = false;
+        self.bms_post_flash_reexit_attempted = false;
     }
 
     fn arm_post_flash_resume(&mut self, addr: u8, started_at: Instant) {
         self.bms_post_flash_resume_addr = Some(addr);
         self.bms_post_flash_resume_started_at = Some(started_at);
-        self.bms_post_flash_repower_attempted = false;
+        self.bms_post_flash_reexit_attempted = false;
     }
 
     fn schedule_post_flash_resume(&mut self, addr: u8, quiet: bool) {
@@ -4822,6 +4822,50 @@ where
             }
             Ok(false) => {
                 if !expired {
+                    if !self.bms_post_flash_reexit_attempted {
+                        self.bms_post_flash_reexit_attempted = true;
+                        if !quiet {
+                            defmt::warn!(
+                                "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_reexit_begin keep_charge=true",
+                                addr
+                            );
+                        }
+                        match maybe_exit_bms_rom_mode(&mut self.i2c, addr, quiet) {
+                            Ok(true) => {
+                                self.bms_stage_next_at =
+                                    Instant::now() + BMS_BOOT_STAGE_POLL_PERIOD;
+                                if !quiet {
+                                    defmt::warn!(
+                                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_reexit_ok keep_charge=true next_probe_ms={=u64}",
+                                        addr,
+                                        BMS_BOOT_STAGE_POLL_PERIOD.as_millis() as u64
+                                    );
+                                }
+                                return Some(PostFlashResumeResult::WaitingRom);
+                            }
+                            Ok(false) => {
+                                if !quiet {
+                                    defmt::warn!(
+                                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_reexit_still_rom keep_charge=true next_probe_ms={=u64}",
+                                        addr,
+                                        BMS_BOOT_STAGE_POLL_PERIOD.as_millis() as u64
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                if !quiet {
+                                    log_bms_diag(
+                                        addr,
+                                        "probe_rom_post_flash_reexit",
+                                        e,
+                                        "word",
+                                        "rom-mode",
+                                    );
+                                }
+                            }
+                        }
+                    }
+
                     if !quiet {
                         defmt::warn!(
                             "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_still_rom keep_charge=true next_probe_ms={=u64}",

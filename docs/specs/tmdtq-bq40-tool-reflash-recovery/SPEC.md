@@ -193,6 +193,7 @@
 - 2026-03-09: 在工具固件日志中补充 `CellVoltage1..4()` 诊断；无电池偏置样本显示 `CellVoltage1≈27~51 mV`、`CellVoltage2..4=0 mV`，与 `Voltage()` 的几十 mV 浮动一致，可作为悬空偏置签名。结合更换芯片后的对照结果，本任务的软件收口口径调整为“工具链有效并可识别原始样本疑似硬损坏”，而不是要求软件恢复已损坏芯片。
 - 2026-03-11: 追加真机闭环记录：`reports/20260311_112932/summary.json` 先确认当前样本已可见 `rom_events.detected=true`；随后 `reports/20260311_114111/summary.json` 显示 `flash_attempted=true`、`flash_image_done=true`、`flash_done=false`，并在 monitor 中持续出现 `stage=rom_post_flash_resume_observe rsoc=0x9002` / `stage=probe_rom_post_flash_still_rom`；最后 `reports/20260311_114419/summary.json` 与 `reports/20260311_114513/summary.json` 证明 post-recover canonical diagnose 与 offline verify 仍然没有有效样本，因此本轮 bench 结论仍是“镜像写入已发生，但退出 ROM/恢复应用态通信未被证实”。
 - 2026-03-11: 在 Codex 桌面环境补记一条操作经验：若 `mcu-managerd start` 无法维持 IPC，可改用前台 `mcu-managerd run`，再执行 `mcu-agentd --non-interactive start` 后继续 live bench。
+- 2026-03-11: 针对 `post_flash_still_rom` 再补一次 recover 回归后，monitor 新增 `probe_rom_post_flash_reexit_*` 证据，确认再次发送 ROM-exit（`0x08`）后 `RSOC` 可从 `0x9002` 回到 `0x0000`；因此当前主阻断已从“退出 ROM”收窄为“FW 虽已起来，但 `ManufacturingStatus` MAC 回包异常且电芯读数仍是几十 mV 悬空签名”。
 
 ## 参考（References）
 
