@@ -43,6 +43,13 @@ ROM_DETECTED_RE = re.compile(
 ROM_FLASH_BEGIN_RE = re.compile(r"stage=(probe_rom_flash_begin|rom_flash_start)")
 ROM_FLASH_IMAGE_DONE_RE = re.compile(r"stage=rom_flash_done\b")
 ROM_FLASH_DONE_RE = re.compile(r"stage=probe_rom_flash_done")
+ROM_FW_SEEN_RE = re.compile(
+    r"stage=(?:probe_rom_post_flash_fw_seen(?:_status_unconfirmed)?|probe_rom_post_flash_reexit_ok|rom_post_flash_resume_not_rom)\b"
+)
+ROM_FW_INVALID_RUNTIME_RE = re.compile(r"stage=probe_rom_post_flash_fw_invalid_runtime\b")
+ROM_RUNTIME_STATUS_UNCONFIRMED_RE = re.compile(
+    r"stage=(?:probe_rom_post_flash_runtime_status_unavailable|probe_rom_post_flash_fw_seen_status_unconfirmed|probe_rom_post_flash_fw_invalid_runtime_status_unconfirmed)\b"
+)
 ADDR16_RE = re.compile(r"addr=0x16\b")
 
 
@@ -113,6 +120,9 @@ def main() -> int:
     rom_flash_attempted = False
     rom_flash_image_done = False
     rom_flash_done = False
+    rom_fw_seen = False
+    rom_fw_invalid_runtime = False
+    rom_runtime_status_unconfirmed = False
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
     in_preexisting_segment = False
@@ -190,6 +200,12 @@ def main() -> int:
                     rom_flash_image_done = True
                 if ROM_FLASH_DONE_RE.search(text):
                     rom_flash_done = True
+                if ROM_FW_SEEN_RE.search(text):
+                    rom_fw_seen = True
+                if ROM_FW_INVALID_RUNTIME_RE.search(text):
+                    rom_fw_invalid_runtime = True
+                if ROM_RUNTIME_STATUS_UNCONFIRMED_RE.search(text):
+                    rom_runtime_status_unconfirmed = True
 
                 err_match = POLL_ERR_RE.search(text)
                 if err_match:
@@ -266,6 +282,9 @@ def main() -> int:
             "flash_attempted": rom_flash_attempted,
             "flash_image_done": rom_flash_image_done,
             "flash_done": rom_flash_done,
+            "fw_seen": rom_fw_seen,
+            "runtime_invalid": rom_fw_invalid_runtime,
+            "runtime_status_unconfirmed": rom_runtime_status_unconfirmed,
         },
         "verdict": {
             "pass": verdict_pass,
@@ -321,6 +340,9 @@ def main() -> int:
             f"- flash_attempted: `{summary['rom_events']['flash_attempted']}`",
             f"- flash_image_done: `{summary['rom_events']['flash_image_done']}`",
             f"- flash_done: `{summary['rom_events']['flash_done']}`",
+            f"- fw_seen: `{summary['rom_events']['fw_seen']}`",
+            f"- runtime_invalid: `{summary['rom_events']['runtime_invalid']}`",
+            f"- runtime_status_unconfirmed: `{summary['rom_events']['runtime_status_unconfirmed']}`",
             "",
             f"source_log: `{monitor_file}`",
         ]

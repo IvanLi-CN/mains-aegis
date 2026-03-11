@@ -559,11 +559,17 @@ where
     Err(bq40z50::BmsDiagError::I2cNack)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PostFlashRuntimePrep {
+    Confirmed,
+    StatusUnconfirmed,
+}
+
 fn maybe_enable_bms_runtime_after_flash<I2C>(
     i2c: &mut I2C,
     addr: u8,
     quiet: bool,
-) -> Result<(), bq40z50::BmsDiagError>
+) -> Result<PostFlashRuntimePrep, bq40z50::BmsDiagError>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
@@ -583,6 +589,19 @@ where
         Err(e) => {
             if !quiet {
                 log_bms_diag(addr, "post_flash_mfg_status", e, "block", "mac");
+            }
+            if matches!(
+                e,
+                bq40z50::BmsDiagError::BadBlockLen | bq40z50::BmsDiagError::BadAscii
+            ) {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_runtime_status_unavailable err={}",
+                        addr,
+                        e,
+                    );
+                }
+                return Ok(PostFlashRuntimePrep::StatusUnconfirmed);
             }
             return Err(e);
         }
@@ -638,6 +657,19 @@ where
                 if !quiet {
                     log_bms_diag(addr, "post_flash_mfg_status_after", e, "block", "mac");
                 }
+                if matches!(
+                    e,
+                    bq40z50::BmsDiagError::BadBlockLen | bq40z50::BmsDiagError::BadAscii
+                ) {
+                    if !quiet {
+                        defmt::warn!(
+                            "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_runtime_status_unavailable err={}",
+                            addr,
+                            e,
+                        );
+                    }
+                    return Ok(PostFlashRuntimePrep::StatusUnconfirmed);
+                }
                 return Err(e);
             }
         };
@@ -684,7 +716,7 @@ where
         );
     }
 
-    Ok(())
+    Ok(PostFlashRuntimePrep::Confirmed)
 }
 
 fn is_bms_ghost_block(raw: &bq40z50::BlockReadRaw) -> bool {
@@ -4768,15 +4800,28 @@ where
 
         match run_bms_rom_postflash_resume_sequence(&mut self.i2c, addr, quiet) {
             Ok(true) => {
-                if maybe_enable_bms_runtime_after_flash(&mut self.i2c, addr, quiet).is_err() {
-                    if !expired {
-                        return Some(PostFlashResumeResult::WaitingRom);
-                    }
+                let runtime_prep =
+                    match maybe_enable_bms_runtime_after_flash(&mut self.i2c, addr, quiet) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            if !quiet {
+                                log_bms_diag(
+                                    addr,
+                                    "probe_rom_post_flash_runtime_prepare",
+                                    e,
+                                    "word",
+                                    "mac",
+                                );
+                            }
+                            if !expired {
+                                return Some(PostFlashResumeResult::WaitingRom);
+                            }
 
-                    self.clear_post_flash_resume();
-                    self.maybe_restore_charger_watchdog_after_recovery(quiet);
-                    return None;
-                }
+                            self.clear_post_flash_resume();
+                            self.maybe_restore_charger_watchdog_after_recovery(quiet);
+                            return None;
+                        }
+                    };
 
                 let mut tracker = BmsPatternTracker::new();
                 match read_bms_snapshot_strict(&mut self.i2c, addr, true, &mut tracker) {
@@ -4784,30 +4829,24 @@ where
                         self.mark_bms_working(addr);
                         defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done", addr);
                         if !quiet {
-                            defmt::warn!(
-                                "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_fw_seen",
-                                addr
-                            );
+                            let fw_stage = if runtime_prep == PostFlashRuntimePrep::Confirmed {
+                                "probe_rom_post_flash_fw_seen"
+                            } else {
+                                "probe_rom_post_flash_fw_seen_status_unconfirmed"
+                            };
+                            defmt::warn!("bms_diag: addr=0x{=u8:x} stage={}", addr, fw_stage);
                         }
                         Some(PostFlashResumeResult::Recovered(addr))
                     }
                     Err(e) => {
-                        if !expired {
-                            if !quiet {
-                                log_bms_diag(
-                                    addr,
-                                    "probe_rom_post_flash_snapshot",
-                                    e,
-                                    "word",
-                                    "strict",
-                                );
-                            }
-                            return Some(PostFlashResumeResult::WaitingRom);
-                        }
-
-                        self.clear_post_flash_resume();
-                        self.maybe_restore_charger_watchdog_after_recovery(quiet);
                         if !quiet {
+                            log_bms_diag(
+                                addr,
+                                "probe_rom_post_flash_fw_invalid_runtime",
+                                e,
+                                "word",
+                                "strict",
+                            );
                             log_bms_diag(
                                 addr,
                                 "probe_rom_post_flash_snapshot",
@@ -4815,7 +4854,19 @@ where
                                 "word",
                                 "strict",
                             );
+                            if runtime_prep == PostFlashRuntimePrep::StatusUnconfirmed {
+                                defmt::warn!(
+                                    "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_fw_invalid_runtime_status_unconfirmed",
+                                    addr
+                                );
+                            }
                         }
+                        if !expired {
+                            return Some(PostFlashResumeResult::WaitingRom);
+                        }
+
+                        self.clear_post_flash_resume();
+                        self.maybe_restore_charger_watchdog_after_recovery(quiet);
                         None
                     }
                 }
