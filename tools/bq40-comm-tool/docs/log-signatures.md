@@ -28,9 +28,9 @@
 - `stage=rom_flash_start`
   - ROM flash sequence entered
 - `stage=rom_flash_done`
-  - flash sequence completed with readback
+  - ROM helper completed and exited ROM mode successfully
 - `stage=probe_rom_flash_done`
-  - probe flow returned from ROM flash attempt
+  - recover flow validated the pack back in firmware mode; this is the success marker used by `summary.json`
 
 ## Address semantics
 

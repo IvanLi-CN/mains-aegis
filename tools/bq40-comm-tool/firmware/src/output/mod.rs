@@ -5,6 +5,7 @@ use esp_firmware::bq40z50;
 use esp_firmware::ina3221;
 use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
+use esp_hal::ram;
 use esp_hal::time::{Duration, Instant};
 
 use crate::irq::IrqSnapshot;
@@ -160,33 +161,151 @@ const BMS_INT_MIN_INTERVAL: Duration = Duration::from_millis(100);
 const BMS_ISOLATION_WINDOW: Duration = Duration::from_millis(40);
 const BMS_TRANSPORT_LOSS_THRESHOLD: u8 = 3;
 const BMS_TRANSPORT_RETRY_BACKOFF: Duration = Duration::from_millis(250);
-const BMS_WORD_DIAG_MIN_INTERVAL: Duration = Duration::from_secs(10);
-const BMS_WORD_GAP: Duration = Duration::from_millis(2);
+const BMS_WORD_DIAG_MIN_INTERVAL: Duration = Duration::from_secs(45);
+// TI E2E reports that some BQ40 MAC/read flows need ~22ms read spacing and ~66ms after
+// writes while the gauge finishes internal processing. Keep that slowdown confined to the
+// diagnostic-only mac-only build so normal polling stays responsive.
+const BMS_WORD_GAP: Duration = if cfg!(feature = "bms-mac-probe-only") {
+    Duration::from_millis(22)
+} else {
+    Duration::from_millis(2)
+};
+const BMS_MAC_WRITE_SETTLE: Duration = if cfg!(feature = "bms-mac-probe-only") {
+    Duration::from_millis(66)
+} else {
+    BMS_WORD_GAP
+};
 const BMS_WAKE_SETTLE: Duration = Duration::from_secs(30);
+const BMS_BOOT_STAGE_POLL_PERIOD: Duration = Duration::from_secs(5);
+const BMS_WAIT_ROM_FAST_POLL_PERIOD: Duration = Duration::from_millis(250);
+const BMS_BOOT_MIN_CHARGE_SETTLE: Duration = Duration::from_secs(2);
+const BMS_POST_FLASH_BOOT_QUIET: Duration = Duration::from_secs(10);
+const BMS_WORKING_INFO_PERIOD: Duration = Duration::from_secs(5);
+const BMS_FORCE_MIN_CHARGE_REPOWER_OFF: Duration = Duration::from_secs(10);
 const BMS_ROM_RECOVER_MIN_INTERVAL: Duration = Duration::from_secs(30);
+const BMS_ROM_FORCE_MIN_CHARGE_DWELL: Duration = Duration::from_secs(2);
+const BMS_POST_FLASH_RESUME_WINDOW: Duration = Duration::from_secs(30);
 const BMS_MAC_TOGGLE_SETTLE: Duration = Duration::from_millis(40);
+const BMS_WAKE_KEEPALIVE_GAP: Duration = Duration::from_millis(40);
+const BMS_WAKE_KEEPALIVE_ROUNDS: usize = 3;
+const BMS_WAKE_READ_GAPS_MS: [u64; 3] = [2, 22, 40];
+const BMS_WAKE_TOUCH_READ_GAPS_MS: [u64; 3] = [22, 40, 66];
+const BMS_MAC_CMD_DEVICE_TYPE: u16 = 0x0001;
+const BMS_DEVICE_TYPE_BQ40Z50: u16 = 0x4500;
+const BMS_MAC_CMD_GAUGING: u16 = 0x0021;
+const BMS_MAC_CMD_FET_CONTROL: u16 = 0x0022;
+const BMS_MAC_CMD_OPERATION_STATUS: u16 = 0x0054;
+const BMS_MAC_CMD_MANUFACTURING_STATUS: u16 = 0x0057;
+const BMS_MFG_STATUS_GAUGE_EN: u32 = 1 << 3;
+const BMS_MFG_STATUS_FET_EN: u32 = 1 << 4;
+// TI's standalone SREC note sends Execute FW, waits quietly for about 1 s, then polls 0x0D.
+// Keep the first post-execute transaction as a plain 0x0D read so we do not disturb the ROM
+// -> FW reboot window with extra SMBus probes unless the quiet path has already failed.
+const BMS_ROM_EXECUTE_FLASH_FIRST_CHECK: Duration = Duration::from_secs(1);
 const BMS_ROM_EXECUTE_FLASH_SETTLE: Duration = Duration::from_millis(4_000);
+const BMS_ROM_EXECUTE_FLASH_POLL_WINDOW: Duration = Duration::from_secs(4);
 const BMS_ROM_FLASH_WRITE_GAP: Duration = Duration::from_millis(10);
 const BMS_ROM_FLASH_WORD_GAP: Duration = Duration::from_millis(50);
 const BMS_ROM_FLASH_ERASE_GAP: Duration = Duration::from_secs(1);
-const BMS_ROM_FLASH_BLOCK_BYTES: usize = 32;
+const BMS_ROM_FLASH_BLOCK_BYTES_MAX: usize = 64;
+// TI's standalone SREC note programs Section1/2 in 64-byte data blocks.
+// Our recovery path was still stuck in ROM with 32-byte writes, so fall back
+// to the documented block geometry before trying tool-specific variants.
+const BMS_ROM_FLASH_BLOCK_BYTES_SEC12: usize = 64;
+const BMS_ROM_FLASH_BLOCK_BYTES_SEC3: usize = 32;
+const BMS_ROM_INFO_LAYOUT_TAG: &str = if cfg!(feature = "bms-rom-full-info") {
+    "full-info"
+} else {
+    "stock-sparse"
+};
+#[cfg(all(feature = "bms-rom-image-r3", feature = "bms-rom-image-r5"))]
+compile_error!("Select at most one BQ ROM image feature");
+#[cfg(all(feature = "bms-rom-full-info", feature = "bms-rom-image-r5"))]
+compile_error!("bms-rom-image-r5 currently supports only stock-sparse info writes");
+#[cfg(feature = "bms-rom-image-r5")]
 const BMS_ROM_FLASH_IMAGE_TAG: &str = "bq40z50-r5-v5.05-build96";
+#[cfg(all(not(feature = "bms-rom-image-r5"), feature = "bms-rom-image-r3"))]
+const BMS_ROM_FLASH_IMAGE_TAG: &str = "bq40z50-r3-v3.09-build73";
+#[cfg(all(not(feature = "bms-rom-image-r5"), not(feature = "bms-rom-image-r3")))]
+const BMS_ROM_FLASH_IMAGE_TAG: &str = "bq40z50-r2-v2.11-build52";
+#[cfg(feature = "bms-rom-image-r5")]
 const BMS_ROM_SECTION1_IMAGE: &[u8] =
     include_bytes!("../../assets/bq40z50_r5_v5_05_build_96/section1.bin");
+#[cfg(feature = "bms-rom-image-r5")]
+const BMS_ROM_SECTION1_USED_LEN: usize = 0x1614;
+#[cfg(all(not(feature = "bms-rom-image-r5"), feature = "bms-rom-image-r3"))]
+const BMS_ROM_SECTION1_IMAGE: &[u8] =
+    include_bytes!("../../assets/bq40z50_r3_v3_09_build_73/section1.bin");
+#[cfg(all(not(feature = "bms-rom-image-r5"), feature = "bms-rom-image-r3"))]
+const BMS_ROM_SECTION1_USED_LEN: usize = 0x12AC;
+#[cfg(all(not(feature = "bms-rom-image-r5"), not(feature = "bms-rom-image-r3")))]
+const BMS_ROM_SECTION1_IMAGE: &[u8] =
+    include_bytes!("../../assets/bq40z50_r2_v2_11_build_52/section1.bin");
+#[cfg(all(not(feature = "bms-rom-image-r5"), not(feature = "bms-rom-image-r3")))]
+const BMS_ROM_SECTION1_USED_LEN: usize = 0x0DEC;
+#[cfg(feature = "bms-rom-image-r5")]
 const BMS_ROM_SECTION2_IMAGE: &[u8] =
     include_bytes!("../../assets/bq40z50_r5_v5_05_build_96/section2.bin");
+#[cfg(feature = "bms-rom-image-r5")]
+const BMS_ROM_SECTION2_USED_LEN: usize = 0xDA63;
+#[cfg(all(not(feature = "bms-rom-image-r5"), feature = "bms-rom-image-r3"))]
+const BMS_ROM_SECTION2_IMAGE: &[u8] =
+    include_bytes!("../../assets/bq40z50_r3_v3_09_build_73/section2.bin");
+#[cfg(all(not(feature = "bms-rom-image-r5"), feature = "bms-rom-image-r3"))]
+const BMS_ROM_SECTION2_USED_LEN: usize = 0xBE23;
+#[cfg(all(not(feature = "bms-rom-image-r5"), not(feature = "bms-rom-image-r3")))]
+const BMS_ROM_SECTION2_IMAGE: &[u8] =
+    include_bytes!("../../assets/bq40z50_r2_v2_11_build_52/section2.bin");
+#[cfg(all(not(feature = "bms-rom-image-r5"), not(feature = "bms-rom-image-r3")))]
+const BMS_ROM_SECTION2_USED_LEN: usize = 0xB69D;
+#[cfg(feature = "bms-rom-image-r5")]
 const BMS_ROM_SECTION3_BLK00: &[u8] =
     include_bytes!("../../assets/bq40z50_r5_v5_05_build_96/section3_blk00.bin");
+#[cfg(all(not(feature = "bms-rom-image-r5"), feature = "bms-rom-image-r3"))]
+const BMS_ROM_SECTION3_BLK00: &[u8] =
+    include_bytes!("../../assets/bq40z50_r3_v3_09_build_73/section3_blk00.bin");
+#[cfg(all(not(feature = "bms-rom-image-r5"), not(feature = "bms-rom-image-r3")))]
+const BMS_ROM_SECTION3_BLK00: &[u8] =
+    include_bytes!("../../assets/bq40z50_r2_v2_11_build_52/section3_blk00.bin");
+#[cfg(feature = "bms-rom-image-r5")]
 const BMS_ROM_SECTION3_BLK80: &[u8] =
     include_bytes!("../../assets/bq40z50_r5_v5_05_build_96/section3_blk80.bin");
+#[cfg(all(not(feature = "bms-rom-image-r5"), feature = "bms-rom-image-r3"))]
+const BMS_ROM_SECTION3_BLK80: &[u8] =
+    include_bytes!("../../assets/bq40z50_r3_v3_09_build_73/section3_blk80.bin");
+#[cfg(all(not(feature = "bms-rom-image-r5"), not(feature = "bms-rom-image-r3")))]
+const BMS_ROM_SECTION3_BLK80: &[u8] =
+    include_bytes!("../../assets/bq40z50_r2_v2_11_build_52/section3_blk80.bin");
+#[cfg(feature = "bms-rom-image-r3")]
+const BMS_ROM_SECTION3_INFO_IMAGE: &[u8] =
+    include_bytes!("../../assets/bq40z50_r3_v3_09_build_73/section3_info.bin");
+#[cfg(all(not(feature = "bms-rom-image-r3"), not(feature = "bms-rom-image-r5")))]
+const BMS_ROM_SECTION3_INFO_IMAGE: &[u8] =
+    include_bytes!("../../assets/bq40z50_r2_v2_11_build_52/section3_info.bin");
+#[cfg(feature = "bms-rom-image-r5")]
 const BMS_ROM_SECTION4_BLK: &[u8] =
     include_bytes!("../../assets/bq40z50_r5_v5_05_build_96/section4_blk.bin");
+#[cfg(all(not(feature = "bms-rom-image-r5"), feature = "bms-rom-image-r3"))]
+const BMS_ROM_SECTION4_BLK: &[u8] =
+    include_bytes!("../../assets/bq40z50_r3_v3_09_build_73/section4_blk.bin");
+#[cfg(all(not(feature = "bms-rom-image-r5"), not(feature = "bms-rom-image-r3")))]
+const BMS_ROM_SECTION4_BLK: &[u8] =
+    include_bytes!("../../assets/bq40z50_r2_v2_11_build_52/section4_blk.bin");
 const BMS_SUSPICIOUS_VOLTAGE_MV: u16 = 5_911;
 const BMS_SUSPICIOUS_CURRENT_MA: i16 = 5_911;
 const BMS_SUSPICIOUS_STATUS: u16 = 0x1717;
 const BMS_ROM_MODE_SIGNATURE: u16 = 0x9002;
-const BMS_MAC_STAGED_DELAYS_MS: [u64; 3] = [0, 800, 1_600];
+// TI docs describe a ~2 s CHECK_WAKE communication window after the pack sees a wake event.
+// Keep staged probes inside that window so the tool can deliver a valid SMBus transaction
+// before the gauge decides the wake was unintended and drops back out again.
+const BMS_WAKE_WINDOW_PROBE_DELAYS_MS: [u64; 3] = [0, 800, 1_600];
+// After the staged wake probes miss, keep minimum charge applied and repeatedly send
+// valid gauge-address commands for a few seconds. This explicitly exercises the
+// documented EMSHUT/SHUTDOWN communication exit path before we conclude the gauge is mute.
+const BMS_EXIT_EXERCISE_WINDOW: Duration = Duration::from_secs(6);
+const BMS_EXIT_EXERCISE_PERIOD: Duration = Duration::from_millis(500);
 const BMS_DIAG_SCAN_INTERVAL: Duration = Duration::from_secs(30);
+const BMS_MISSING_VERBOSE_REPROBE_INTERVAL: Duration = Duration::from_secs(30);
 const BMS_DIAG_SCAN_MIN_ADDR: u8 = 0x03;
 const BMS_DIAG_SCAN_MAX_ADDR: u8 = 0x77;
 const BMS_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
@@ -232,6 +351,10 @@ struct ValidatedBmsSnapshot {
     current_ma: i16,
     soc_pct: u16,
     status_raw: u16,
+    cell1_mv: u16,
+    cell2_mv: u16,
+    cell3_mv: u16,
+    cell4_mv: u16,
     err_code: u8,
     remaining_cap_mah: Result<u16, &'static str>,
     full_cap_mah: Result<u16, &'static str>,
@@ -241,6 +364,7 @@ struct ValidatedBmsSnapshot {
 struct BmsMacProbeSnapshot {
     declared_len: u8,
     payload_len: u8,
+    device_type: u16,
     b0: u8,
     b1: u8,
     b2: u8,
@@ -272,10 +396,11 @@ where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     // ManufacturerAccess() 0x0001 DeviceType query via ManufacturerData() (0x23).
-    // Per TRM, data bytes for cmd 0x00 are written MSB-first.
+    // Per TRM, data bytes for cmd 0x00 are written MSB-first and the block reply echoes 0x0001
+    // before the 16-bit device type payload.
     i2c.write(addr, &[bq40z50::cmd::MANUFACTURER_ACCESS, 0x00, 0x01])
         .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
-    spin_delay(BMS_WORD_GAP);
+    spin_delay(BMS_MAC_WRITE_SETTLE);
     let raw = bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA)?;
     let payload_len = raw.payload_len as usize;
 
@@ -284,24 +409,449 @@ where
     let b2 = if payload_len > 2 { raw.payload[2] } else { 0 };
     let b3 = if payload_len > 3 { raw.payload[3] } else { 0 };
 
-    // Temporary liveness gate: reject the known ghost frame signature.
-    let looks_like_ghost = raw.declared_len == 23
-        && raw.payload_len >= 8
-        && raw.payload[..(raw.payload_len as usize)]
-            .iter()
-            .all(|b| *b == 0x17);
-    if looks_like_ghost {
+    if is_bms_ghost_block(&raw) {
         return Err(bq40z50::BmsDiagError::StalePattern);
+    }
+    if !is_bms_mb44_reply_for_cmd(&raw, BMS_MAC_CMD_DEVICE_TYPE) {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+
+    let device_type = u16::from_le_bytes([b2, b3]);
+    if device_type != BMS_DEVICE_TYPE_BQ40Z50 {
+        return Err(bq40z50::BmsDiagError::BadRange);
     }
 
     Ok(BmsMacProbeSnapshot {
         declared_len: raw.declared_len,
         payload_len: raw.payload_len,
+        device_type,
         b0,
         b1,
         b2,
         b3,
     })
+}
+
+fn read_bms_mac_block_via_md23<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+) -> Result<bq40z50::BlockReadRaw, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    // ManufacturerAccess() writes use MSB-first ordering on cmd 0x00, then the reply is read
+    // back from ManufacturerData() (0x23).
+    i2c.write(
+        addr,
+        &[
+            bq40z50::cmd::MANUFACTURER_ACCESS,
+            (mac_cmd >> 8) as u8,
+            (mac_cmd & 0x00FF) as u8,
+        ],
+    )
+    .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    spin_delay(BMS_MAC_WRITE_SETTLE);
+    bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA)
+}
+
+fn read_bms_mac_block_via_mb44<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+) -> Result<bq40z50::BlockReadRaw, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let cmd = mac_cmd.to_le_bytes();
+    let direct = [
+        bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+        0x02,
+        cmd[0],
+        cmd[1],
+    ];
+    let addr_w = addr << 1;
+    let pec = crc8_smbus(&[addr_w, direct[0], direct[1], direct[2], direct[3]]);
+    let with_pec = [direct[0], direct[1], direct[2], direct[3], pec];
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+
+    for frame in [&direct[..], &with_pec[..]] {
+        if i2c.write(addr, frame).is_err() {
+            continue;
+        }
+        spin_delay(BMS_MAC_WRITE_SETTLE);
+        match bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS) {
+            Ok(raw) => return Ok(raw),
+            Err(e) => last_err = e,
+        }
+    }
+
+    Err(last_err)
+}
+
+fn parse_bms_mac_u32(raw: &bq40z50::BlockReadRaw, mac_cmd: u16) -> Option<u32> {
+    let payload_len = raw.payload_len as usize;
+    let cmd = mac_cmd.to_le_bytes();
+    if payload_len >= 6 && raw.payload[0] == cmd[0] && raw.payload[1] == cmd[1] {
+        return Some(u32::from_le_bytes([
+            raw.payload[2],
+            raw.payload[3],
+            raw.payload[4],
+            raw.payload[5],
+        ]));
+    }
+    None
+}
+
+fn read_bms_mac_u32<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+) -> Result<u32, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if let Ok(raw) = read_bms_mac_block_via_md23(i2c, addr, mac_cmd) {
+        if let Some(value) = parse_bms_mac_u32(&raw, mac_cmd) {
+            return Ok(value);
+        }
+    }
+
+    let raw = read_bms_mac_block_via_mb44(i2c, addr, mac_cmd)?;
+    parse_bms_mac_u32(&raw, mac_cmd).ok_or(bq40z50::BmsDiagError::BadBlockLen)
+}
+
+fn send_bms_manufacturer_toggle<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+    stage: &'static str,
+    quiet: bool,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let direct = [
+        bq40z50::cmd::MANUFACTURER_ACCESS,
+        (mac_cmd >> 8) as u8,
+        (mac_cmd & 0x00FF) as u8,
+    ];
+    let addr_w = addr << 1;
+    let pec = crc8_smbus(&[addr_w, direct[0], direct[1], direct[2]]);
+    let with_pec = [direct[0], direct[1], direct[2], pec];
+
+    for (via, frame) in [("direct", &direct[..]), ("pec", &with_pec[..])] {
+        if i2c.write(addr, frame).is_ok() {
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage={} mac_cmd=0x{=u16:x} via={}",
+                    addr,
+                    stage,
+                    mac_cmd,
+                    via,
+                );
+            }
+            spin_delay(BMS_MAC_TOGGLE_SETTLE);
+            return Ok(());
+        }
+    }
+
+    Err(bq40z50::BmsDiagError::I2cNack)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PostFlashRuntimePrep {
+    Confirmed,
+    StatusUnconfirmed,
+}
+
+fn maybe_enable_bms_runtime_after_flash<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    quiet: bool,
+) -> Result<PostFlashRuntimePrep, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut bits = match read_bms_mac_u32(i2c, addr, BMS_MAC_CMD_MANUFACTURING_STATUS) {
+        Ok(bits) => {
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage=post_flash_mfg_status bits=0x{=u32:x} gauge_en={=bool} fet_en={=bool}",
+                    addr,
+                    bits,
+                    (bits & BMS_MFG_STATUS_GAUGE_EN) != 0,
+                    (bits & BMS_MFG_STATUS_FET_EN) != 0,
+                );
+            }
+            bits
+        }
+        Err(e) => {
+            if !quiet {
+                log_bms_diag(addr, "post_flash_mfg_status", e, "block", "mac");
+            }
+            if matches!(
+                e,
+                bq40z50::BmsDiagError::BadBlockLen | bq40z50::BmsDiagError::BadAscii
+            ) {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_runtime_status_unavailable err={}",
+                        addr,
+                        e,
+                    );
+                }
+                return Ok(PostFlashRuntimePrep::StatusUnconfirmed);
+            }
+            return Err(e);
+        }
+    };
+
+    let mut toggled = false;
+    if bits & BMS_MFG_STATUS_GAUGE_EN == 0 {
+        if let Err(e) = send_bms_manufacturer_toggle(
+            i2c,
+            addr,
+            BMS_MAC_CMD_GAUGING,
+            "post_flash_gauge_en",
+            quiet,
+        ) {
+            if !quiet {
+                log_bms_diag(addr, "post_flash_gauge_en", e, "word", "mac");
+            }
+            return Err(e);
+        }
+        toggled = true;
+    }
+    if bits & BMS_MFG_STATUS_FET_EN == 0 {
+        if let Err(e) = send_bms_manufacturer_toggle(
+            i2c,
+            addr,
+            BMS_MAC_CMD_FET_CONTROL,
+            "post_flash_fet_en",
+            quiet,
+        ) {
+            if !quiet {
+                log_bms_diag(addr, "post_flash_fet_en", e, "word", "mac");
+            }
+            return Err(e);
+        }
+        toggled = true;
+    }
+
+    if toggled {
+        bits = match read_bms_mac_u32(i2c, addr, BMS_MAC_CMD_MANUFACTURING_STATUS) {
+            Ok(bits_after) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=post_flash_mfg_status_after bits=0x{=u32:x} gauge_en={=bool} fet_en={=bool}",
+                        addr,
+                        bits_after,
+                        (bits_after & BMS_MFG_STATUS_GAUGE_EN) != 0,
+                        (bits_after & BMS_MFG_STATUS_FET_EN) != 0,
+                    );
+                }
+                bits_after
+            }
+            Err(e) => {
+                if !quiet {
+                    log_bms_diag(addr, "post_flash_mfg_status_after", e, "block", "mac");
+                }
+                if matches!(
+                    e,
+                    bq40z50::BmsDiagError::BadBlockLen | bq40z50::BmsDiagError::BadAscii
+                ) {
+                    if !quiet {
+                        defmt::warn!(
+                            "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_runtime_status_unavailable err={}",
+                            addr,
+                            e,
+                        );
+                    }
+                    return Ok(PostFlashRuntimePrep::StatusUnconfirmed);
+                }
+                return Err(e);
+            }
+        };
+    }
+
+    let gauge_en = (bits & BMS_MFG_STATUS_GAUGE_EN) != 0;
+    let fet_en = (bits & BMS_MFG_STATUS_FET_EN) != 0;
+    if !gauge_en || !fet_en {
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=post_flash_runtime_incomplete bits=0x{=u32:x} gauge_en={=bool} fet_en={=bool}",
+                addr,
+                bits,
+                gauge_en,
+                fet_en,
+            );
+        }
+        return Err(bq40z50::BmsDiagError::BadRange);
+    }
+
+    if let Ok(op_status) = read_bms_mac_u32(i2c, addr, BMS_MAC_CMD_OPERATION_STATUS) {
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=post_flash_op_status bits=0x{=u32:x} emshut={=bool} init={=bool} xchg={=bool} xdsg={=bool} ss={=bool} chg={=bool} dsg={=bool} pres={=bool}",
+                addr,
+                op_status,
+                (op_status & (1 << 29)) != 0,
+                (op_status & (1 << 24)) != 0,
+                (op_status & (1 << 14)) != 0,
+                (op_status & (1 << 13)) != 0,
+                (op_status & (1 << 11)) != 0,
+                (op_status & (1 << 2)) != 0,
+                (op_status & (1 << 1)) != 0,
+                (op_status & (1 << 0)) != 0,
+            );
+        }
+    } else if !quiet {
+        log_bms_diag(
+            addr,
+            "post_flash_op_status",
+            bq40z50::BmsDiagError::I2cNack,
+            "block",
+            "mac",
+        );
+    }
+
+    Ok(PostFlashRuntimePrep::Confirmed)
+}
+
+fn is_bms_ghost_block(raw: &bq40z50::BlockReadRaw) -> bool {
+    raw.declared_len == 23
+        && raw.payload_len >= 8
+        && raw.payload[..(raw.payload_len as usize)]
+            .iter()
+            .all(|b| *b == 0x17)
+}
+
+fn is_bms_mb44_reply_for_cmd(raw: &bq40z50::BlockReadRaw, mac_cmd: u16) -> bool {
+    let cmd = mac_cmd.to_le_bytes();
+    raw.payload_len >= 4
+        && raw.payload[0] == cmd[0]
+        && raw.payload[1] == cmd[1]
+        && !is_bms_ghost_block(raw)
+}
+
+fn log_execute_fw_window_probe<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    stage: &'static str,
+    attempt: u8,
+    quiet: bool,
+) -> bool
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut saw_fw = false;
+
+    if let Ok(raw) = bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::LIFETIME_DATA_BLOCK_2)
+    {
+        saw_fw = true;
+        let payload_len = raw.payload_len as usize;
+        let payload = &raw.payload[..payload_len];
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage={} fw_probe=lt2 attempt={=u8} len={=u8} payload={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x} b4=0x{=u8:x} b5=0x{=u8:x} b6=0x{=u8:x} b7=0x{=u8:x}",
+                addr,
+                stage,
+                attempt,
+                raw.declared_len,
+                raw.payload_len,
+                payload.get(0).copied().unwrap_or(0),
+                payload.get(1).copied().unwrap_or(0),
+                payload.get(2).copied().unwrap_or(0),
+                payload.get(3).copied().unwrap_or(0),
+                payload.get(4).copied().unwrap_or(0),
+                payload.get(5).copied().unwrap_or(0),
+                payload.get(6).copied().unwrap_or(0),
+                payload.get(7).copied().unwrap_or(0),
+            );
+        }
+    }
+
+    if let Ok(raw) = bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::PF_STATUS) {
+        saw_fw = true;
+        let payload_len = raw.payload_len as usize;
+        let payload = &raw.payload[..payload_len];
+        let mut pf_bytes = [0u8; 4];
+        let copy_len = payload_len.min(4);
+        pf_bytes[..copy_len].copy_from_slice(&payload[..copy_len]);
+        let pf_le = u32::from_le_bytes(pf_bytes);
+        let pf_be = u32::from_be_bytes(pf_bytes);
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage={} fw_probe=pf_status attempt={=u8} len={=u8} payload={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x} le=0x{=u32:x} be=0x{=u32:x} ifc_le={=bool} ifc_be={=bool}",
+                addr,
+                stage,
+                attempt,
+                raw.declared_len,
+                raw.payload_len,
+                payload.get(0).copied().unwrap_or(0),
+                payload.get(1).copied().unwrap_or(0),
+                payload.get(2).copied().unwrap_or(0),
+                payload.get(3).copied().unwrap_or(0),
+                pf_le,
+                pf_be,
+                (pf_le & (1 << 24)) != 0,
+                (pf_be & (1 << 24)) != 0,
+            );
+        }
+    }
+
+    for (probe_name, mac_cmd) in [("fw_ver_mb44", 0x0002u16), ("if_sig_mb44", 0x0004u16)] {
+        if let Ok(raw) = read_bms_mac_block_via_mb44(i2c, addr, mac_cmd) {
+            let payload_len = raw.payload_len as usize;
+            let payload = &raw.payload[..payload_len];
+            let valid = is_bms_mb44_reply_for_cmd(&raw, mac_cmd);
+            if valid {
+                saw_fw = true;
+            }
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage={} fw_probe={} attempt={=u8} valid={=bool} len={=u8} payload={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x} b4=0x{=u8:x} b5=0x{=u8:x}",
+                    addr,
+                    stage,
+                    probe_name,
+                    attempt,
+                    valid,
+                    raw.declared_len,
+                    raw.payload_len,
+                    payload.get(0).copied().unwrap_or(0),
+                    payload.get(1).copied().unwrap_or(0),
+                    payload.get(2).copied().unwrap_or(0),
+                    payload.get(3).copied().unwrap_or(0),
+                    payload.get(4).copied().unwrap_or(0),
+                    payload.get(5).copied().unwrap_or(0),
+                );
+            }
+        }
+    }
+
+    if let Ok(raw) = read_bms_mac_block_via_md23(i2c, addr, 0x0004) {
+        let payload_len = raw.payload_len as usize;
+        let payload = &raw.payload[..payload_len];
+        let ghost = is_bms_ghost_block(&raw);
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage={} fw_probe={} attempt={=u8} len={=u8} payload={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                addr,
+                stage,
+                if ghost { "if_sig_md23_ghost" } else { "if_sig_md23" },
+                attempt,
+                raw.declared_len,
+                raw.payload_len,
+                payload.get(0).copied().unwrap_or(0),
+                payload.get(1).copied().unwrap_or(0),
+                payload.get(2).copied().unwrap_or(0),
+                payload.get(3).copied().unwrap_or(0),
+            );
+        }
+    }
+
+    saw_fw
 }
 
 fn read_ascii_block_checked<'a, I2C>(
@@ -416,11 +966,32 @@ fn spin_delay(wait: Duration) {
     while start.elapsed() < wait {}
 }
 
+fn spin_until_elapsed(start: Instant, elapsed: Duration) {
+    while start.elapsed() < elapsed {}
+}
+
 #[derive(Clone, Copy)]
 struct WordDiagRaw {
     err: &'static str,
     lo: u8,
     hi: u8,
+}
+
+#[derive(Clone, Copy)]
+struct WordDiagSplit {
+    err: &'static str,
+    write_err: &'static str,
+    read_err: &'static str,
+    lo: u8,
+    hi: u8,
+}
+
+#[derive(Clone, Copy)]
+struct WordDiagReadOnly {
+    err: &'static str,
+    len: u8,
+    b0: u8,
+    b1: u8,
 }
 
 fn word_diag_write_read<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> WordDiagRaw
@@ -442,30 +1013,61 @@ where
     }
 }
 
-fn word_diag_split<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> WordDiagRaw
+fn word_diag_split<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> WordDiagSplit
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    if let Err(e) = i2c.write(addr, &[cmd]) {
-        return WordDiagRaw {
-            err: i2c_error_kind(e),
-            lo: 0,
-            hi: 0,
-        };
-    }
+    let write_err = match i2c.write(addr, &[cmd]) {
+        Ok(()) => "ok",
+        Err(e) => {
+            return WordDiagSplit {
+                err: i2c_error_kind(e),
+                write_err: i2c_error_kind(e),
+                read_err: "skip",
+                lo: 0,
+                hi: 0,
+            };
+        }
+    };
 
     spin_delay(BMS_WORD_GAP);
     let mut buf = [0u8; 2];
     match i2c.read(addr, &mut buf) {
-        Ok(()) => WordDiagRaw {
+        Ok(()) => WordDiagSplit {
             err: "ok",
+            write_err,
+            read_err: "ok",
             lo: buf[0],
             hi: buf[1],
         },
-        Err(e) => WordDiagRaw {
+        Err(e) => WordDiagSplit {
             err: i2c_error_kind(e),
+            write_err,
+            read_err: i2c_error_kind(e),
             lo: 0,
             hi: 0,
+        },
+    }
+}
+
+fn word_diag_read_only<I2C>(i2c: &mut I2C, addr: u8, len: usize) -> WordDiagReadOnly
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let len = len.min(2);
+    let mut buf = [0u8; 2];
+    match i2c.read(addr, &mut buf[..len]) {
+        Ok(()) => WordDiagReadOnly {
+            err: "ok",
+            len: len as u8,
+            b0: buf[0],
+            b1: buf[1],
+        },
+        Err(e) => WordDiagReadOnly {
+            err: i2c_error_kind(e),
+            len: len as u8,
+            b0: 0,
+            b1: 0,
         },
     }
 }
@@ -482,6 +1084,18 @@ struct WordDiagPec {
 #[derive(Clone, Copy)]
 struct WordDiagBlock {
     err: &'static str,
+    declared_len: u8,
+    payload_len: u8,
+    b0: u8,
+    b1: u8,
+    b2: u8,
+}
+
+#[derive(Clone, Copy)]
+struct WordDiagBlockSplit {
+    err: &'static str,
+    write_err: &'static str,
+    read_err: &'static str,
     declared_len: u8,
     payload_len: u8,
     b0: u8,
@@ -507,6 +1121,61 @@ where
         }
         Err(e) => WordDiagBlock {
             err: e.as_str(),
+            declared_len: 0,
+            payload_len: 0,
+            b0: 0,
+            b1: 0,
+            b2: 0,
+        },
+    }
+}
+
+fn word_diag_block_split<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> WordDiagBlockSplit
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let write_err = match i2c.write(addr, &[cmd]) {
+        Ok(()) => "ok",
+        Err(e) => {
+            return WordDiagBlockSplit {
+                err: i2c_error_kind(e),
+                write_err: i2c_error_kind(e),
+                read_err: "skip",
+                declared_len: 0,
+                payload_len: 0,
+                b0: 0,
+                b1: 0,
+                b2: 0,
+            };
+        }
+    };
+
+    spin_delay(BMS_WORD_GAP);
+    let mut buf = [0u8; 33];
+    match i2c.read(addr, &mut buf) {
+        Ok(()) => {
+            let declared_len = buf[0];
+            let payload_len = declared_len.min(32);
+            let payload_len_usize = payload_len as usize;
+            WordDiagBlockSplit {
+                err: if declared_len == 0 || declared_len > 32 {
+                    "bad_len"
+                } else {
+                    "ok"
+                },
+                write_err,
+                read_err: "ok",
+                declared_len,
+                payload_len,
+                b0: if payload_len_usize > 0 { buf[1] } else { 0 },
+                b1: if payload_len_usize > 1 { buf[2] } else { 0 },
+                b2: if payload_len_usize > 2 { buf[3] } else { 0 },
+            }
+        }
+        Err(e) => WordDiagBlockSplit {
+            err: i2c_error_kind(e),
+            write_err,
+            read_err: i2c_error_kind(e),
             declared_len: 0,
             payload_len: 0,
             b0: 0,
@@ -557,9 +1226,12 @@ where
     let split = word_diag_split(i2c, addr, cmd);
     let pec = word_diag_pec(i2c, addr, cmd);
     let blk = word_diag_block(i2c, addr, cmd);
+    let blk_split = word_diag_block_split(i2c, addr, cmd);
+    let read1 = word_diag_read_only(i2c, addr, 1);
+    let read2 = word_diag_read_only(i2c, addr, 2);
 
     defmt::warn!(
-        "bms_diag_word: addr=0x{=u8:x} cmd=0x{=u8:x} name={} wr={} wr_raw=0x{=u8:x} 0x{=u8:x} split={} split_raw=0x{=u8:x} 0x{=u8:x} pec={} pec_raw=0x{=u8:x} 0x{=u8:x} rx_pec=0x{=u8:x} exp_pec=0x{=u8:x} blk={} blk_len={=u8} blk_payload={=u8} blk_b0=0x{=u8:x} blk_b1=0x{=u8:x} blk_b2=0x{=u8:x}",
+        "bms_diag_word: addr=0x{=u8:x} cmd=0x{=u8:x} name={} wr={} wr_raw=0x{=u8:x} 0x{=u8:x} split={} split_wr={} split_rd={} split_raw=0x{=u8:x} 0x{=u8:x} pec={} pec_raw=0x{=u8:x} 0x{=u8:x} rx_pec=0x{=u8:x} exp_pec=0x{=u8:x} blk={} blk_len={=u8} blk_payload={=u8} blk_b0=0x{=u8:x} blk_b1=0x{=u8:x} blk_b2=0x{=u8:x} blk_split={} blk_split_wr={} blk_split_rd={} blk_split_len={=u8} blk_split_payload={=u8} blk_split_b0=0x{=u8:x} blk_split_b1=0x{=u8:x} blk_split_b2=0x{=u8:x} raw_read1={} raw_read1_len={=u8} raw_read1_b0=0x{=u8:x} raw_read2={} raw_read2_len={=u8} raw_read2_b0=0x{=u8:x} raw_read2_b1=0x{=u8:x}",
         addr,
         cmd,
         name,
@@ -567,6 +1239,8 @@ where
         wr.lo,
         wr.hi,
         split.err,
+        split.write_err,
+        split.read_err,
         split.lo,
         split.hi,
         pec.err,
@@ -580,6 +1254,21 @@ where
         blk.b0,
         blk.b1,
         blk.b2,
+        blk_split.err,
+        blk_split.write_err,
+        blk_split.read_err,
+        blk_split.declared_len,
+        blk_split.payload_len,
+        blk_split.b0,
+        blk_split.b1,
+        blk_split.b2,
+        read1.err,
+        read1.len,
+        read1.b0,
+        read2.err,
+        read2.len,
+        read2.b0,
+        read2.b1,
     );
 }
 
@@ -591,18 +1280,38 @@ fn log_bms_word_diag_set<I2C>(
 ) where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
+    let temp_wr = word_diag_write_read(i2c, addr, bq40z50::cmd::TEMPERATURE);
+    let temp_split = word_diag_split(i2c, addr, bq40z50::cmd::TEMPERATURE);
+    let rsoc_wr = word_diag_write_read(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE);
+    let rsoc_split = word_diag_split(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE);
+    let md23 = word_diag_block_split(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA);
+    let mb44 = word_diag_block_split(i2c, addr, bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS);
+    let raw_read1 = word_diag_read_only(i2c, addr, 1);
+    let raw_read2 = word_diag_read_only(i2c, addr, 2);
+
     defmt::warn!(
-        "bms_diag_word: begin addr=0x{=u8:x} stage={} err={}",
+        "bms_diag_compact: addr=0x{=u8:x} stage={} err={} temp_wr={} temp_split={} rsoc_wr={} rsoc_split={} md23={} md23_wr={} md23_rd={} mb44={} mb44_wr={} mb44_rd={} raw1={} raw1_len={=u8} raw1_b0=0x{=u8:x} raw2={} raw2_len={=u8} raw2_b0=0x{=u8:x} raw2_b1=0x{=u8:x}",
         addr,
         stage,
-        err
+        err,
+        temp_wr.err,
+        temp_split.err,
+        rsoc_wr.err,
+        rsoc_split.err,
+        md23.err,
+        md23.write_err,
+        md23.read_err,
+        mb44.err,
+        mb44.write_err,
+        mb44.read_err,
+        raw_read1.err,
+        raw_read1.len,
+        raw_read1.b0,
+        raw_read2.err,
+        raw_read2.len,
+        raw_read2.b0,
+        raw_read2.b1,
     );
-    log_bms_word_diag_for_cmd(i2c, addr, bq40z50::cmd::TEMPERATURE, "temperature");
-    log_bms_word_diag_for_cmd(i2c, addr, bq40z50::cmd::VOLTAGE, "voltage");
-    log_bms_word_diag_for_cmd(i2c, addr, bq40z50::cmd::CURRENT, "current");
-    log_bms_word_diag_for_cmd(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE, "rsoc");
-    log_bms_word_diag_for_cmd(i2c, addr, bq40z50::cmd::BATTERY_STATUS, "battery_status");
-    log_bms_mac_diag(i2c, addr);
 }
 
 fn log_bms_mac_diag<I2C>(i2c: &mut I2C, addr: u8)
@@ -612,7 +1321,7 @@ where
     // Try ManufacturerAccess() 0x0001 (DeviceType) legacy path:
     // write word to 0x00 (MSB first per TRM), then read block from 0x23.
     let mac_write = i2c.write(addr, &[bq40z50::cmd::MANUFACTURER_ACCESS, 0x00, 0x01]);
-    spin_delay(BMS_WORD_GAP);
+    spin_delay(BMS_MAC_WRITE_SETTLE);
     let mac_read = bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA);
 
     match mac_read {
@@ -648,7 +1357,7 @@ where
         addr,
         &[bq40z50::cmd::MANUFACTURER_ACCESS, 0x00, 0x01, ma_pec],
     );
-    spin_delay(BMS_WORD_GAP);
+    spin_delay(BMS_MAC_WRITE_SETTLE);
     let mac_read_pec = bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA);
     match mac_read_pec {
         Ok(raw) => {
@@ -683,7 +1392,7 @@ where
         addr,
         &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS, 0x02, 0x01, 0x00],
     );
-    spin_delay(BMS_WORD_GAP);
+    spin_delay(BMS_MAC_WRITE_SETTLE);
     let mba_block_read =
         bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS);
 
@@ -731,7 +1440,7 @@ where
             mba_block_pec,
         ],
     );
-    spin_delay(BMS_WORD_GAP);
+    spin_delay(BMS_MAC_WRITE_SETTLE);
     let mba_block_read_pec =
         bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS);
     match mba_block_read_pec {
@@ -765,7 +1474,7 @@ where
 
     // Alternate wire format probe used by some hosts: write cmd bytes without SMBus count.
     let mba_word_write = i2c.write(addr, &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS, 0x01, 0x00]);
-    spin_delay(BMS_WORD_GAP);
+    spin_delay(BMS_MAC_WRITE_SETTLE);
     let mba_word_read =
         bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS);
 
@@ -795,6 +1504,36 @@ where
             );
         }
     }
+
+    let md23_split = word_diag_block_split(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA);
+    let mb44_split = word_diag_block_split(i2c, addr, bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS);
+    let raw_read1 = word_diag_read_only(i2c, addr, 1);
+    let raw_read2 = word_diag_read_only(i2c, addr, 2);
+    defmt::warn!(
+        "bms_diag_bus: addr=0x{=u8:x} md23={} md23_wr={} md23_rd={} md23_len={=u8} md23_payload={=u8} md23_b0=0x{=u8:x} md23_b1=0x{=u8:x} mb44={} mb44_wr={} mb44_rd={} mb44_len={=u8} mb44_payload={=u8} mb44_b0=0x{=u8:x} mb44_b1=0x{=u8:x} raw_read1={} raw_read1_len={=u8} raw_read1_b0=0x{=u8:x} raw_read2={} raw_read2_len={=u8} raw_read2_b0=0x{=u8:x} raw_read2_b1=0x{=u8:x}",
+        addr,
+        md23_split.err,
+        md23_split.write_err,
+        md23_split.read_err,
+        md23_split.declared_len,
+        md23_split.payload_len,
+        md23_split.b0,
+        md23_split.b1,
+        mb44_split.err,
+        mb44_split.write_err,
+        mb44_split.read_err,
+        mb44_split.declared_len,
+        mb44_split.payload_len,
+        mb44_split.b0,
+        mb44_split.b1,
+        raw_read1.err,
+        raw_read1.len,
+        raw_read1.b0,
+        raw_read2.err,
+        raw_read2.len,
+        raw_read2.b0,
+        raw_read2.b1,
+    );
 }
 
 fn write_bms_rom_word<I2C>(
@@ -807,26 +1546,77 @@ fn write_bms_rom_word<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    if i2c.write(addr, &[cmd, lo, hi]).is_ok() {
-        return Ok(());
-    }
-
-    // ROM flows on some gauges require SMBus PEC.
+    // TI's standalone SREC programming note uses plain WriteWord frames, but keep a compile-time
+    // PEC-first experiment available in case this board's ROM only commits writes with SMBus PEC.
     let addr_w = addr << 1;
     let pec = crc8_smbus(&[addr_w, cmd, lo, hi]);
-    if i2c.write(addr, &[cmd, lo, hi, pec]).is_ok() {
-        return Ok(());
+    let direct = [cmd, lo, hi];
+    let with_pec = [cmd, lo, hi, pec];
+    let frames: [(&str, &[u8]); 2] = if cfg!(feature = "bms-rom-force-pec") {
+        [("pec", &with_pec), ("direct", &direct)]
+    } else {
+        [("direct", &direct), ("pec", &with_pec)]
+    };
+
+    for (via, frame) in frames {
+        if i2c.write(addr, frame).is_ok() {
+            if cfg!(feature = "bms-dual-probe-diag") {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage=rom_word_write cmd=0x{=u8:x} via={}",
+                    addr,
+                    cmd,
+                    via
+                );
+            }
+            return Ok(());
+        }
     }
 
-    // Diagnostic-only fallback: retry swapped data byte order.
     if cfg!(feature = "bms-dual-probe-diag") {
-        if i2c.write(addr, &[cmd, hi, lo]).is_ok() {
+        defmt::warn!(
+            "bms_diag: addr=0x{=u8:x} stage=rom_word_write cmd=0x{=u8:x} via=fail",
+            addr,
+            cmd
+        );
+    }
+
+    Err(bq40z50::BmsDiagError::I2cNack)
+}
+
+fn send_bms_rom_cmd<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let addr_w = addr << 1;
+    let pec = crc8_smbus(&[addr_w, cmd]);
+    let direct = [cmd];
+    let with_pec = [cmd, pec];
+    let frames: [(&str, &[u8]); 2] = if cfg!(feature = "bms-rom-force-pec") {
+        [("pec", &with_pec), ("direct", &direct)]
+    } else {
+        [("direct", &direct), ("pec", &with_pec)]
+    };
+
+    for (via, frame) in frames {
+        if i2c.write(addr, frame).is_ok() {
+            if cfg!(feature = "bms-dual-probe-diag") {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage=rom_send_cmd cmd=0x{=u8:x} via={}",
+                    addr,
+                    cmd,
+                    via
+                );
+            }
             return Ok(());
         }
-        let pec_swapped = crc8_smbus(&[addr_w, cmd, hi, lo]);
-        if i2c.write(addr, &[cmd, hi, lo, pec_swapped]).is_ok() {
-            return Ok(());
-        }
+    }
+
+    if cfg!(feature = "bms-dual-probe-diag") {
+        defmt::warn!(
+            "bms_diag: addr=0x{=u8:x} stage=rom_send_cmd cmd=0x{=u8:x} via=fail",
+            addr,
+            cmd
+        );
     }
 
     Err(bq40z50::BmsDiagError::I2cNack)
@@ -845,19 +1635,95 @@ where
     }
 
     // Retry once with SMBus PEC appended.
-    let mut frame = [0u8; BMS_ROM_FLASH_BLOCK_BYTES + 5];
+    let mut frame = [0u8; BMS_ROM_FLASH_BLOCK_BYTES_MAX + 5];
     if bytes.len() > (frame.len() - 1) {
         return Err(bq40z50::BmsDiagError::BadBlockLen);
     }
     frame[..bytes.len()].copy_from_slice(bytes);
     let addr_w = addr << 1;
-    let mut pec_input = [0u8; BMS_ROM_FLASH_BLOCK_BYTES + 6];
+    let mut pec_input = [0u8; BMS_ROM_FLASH_BLOCK_BYTES_MAX + 6];
     pec_input[0] = addr_w;
     pec_input[1..(1 + bytes.len())].copy_from_slice(bytes);
     let pec = crc8_smbus(&pec_input[..(1 + bytes.len())]);
     frame[bytes.len()] = pec;
     i2c.write(addr, &frame[..(bytes.len() + 1)])
         .map_err(|_| bq40z50::BmsDiagError::I2cNack)
+}
+
+fn touch_bms_command<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    i2c.write(addr, &[cmd])
+        .map_err(|_| bq40z50::BmsDiagError::I2cNack)
+}
+
+fn write_bms_rom_bytes_trace<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    stage: &'static str,
+    frame_idx: u8,
+    bytes: &[u8],
+    quiet: bool,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if bytes.len() > (BMS_ROM_FLASH_BLOCK_BYTES_MAX + 4) {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+
+    match i2c.write(addr, bytes) {
+        Ok(()) => {
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage={} frame={=u8} via=direct",
+                    addr,
+                    stage,
+                    frame_idx
+                );
+            }
+            return Ok(());
+        }
+        Err(direct_err) => {
+            let direct_kind = i2c_error_kind(direct_err);
+            let mut frame = [0u8; BMS_ROM_FLASH_BLOCK_BYTES_MAX + 5];
+            frame[..bytes.len()].copy_from_slice(bytes);
+            let addr_w = addr << 1;
+            let mut pec_input = [0u8; BMS_ROM_FLASH_BLOCK_BYTES_MAX + 6];
+            pec_input[0] = addr_w;
+            pec_input[1..(1 + bytes.len())].copy_from_slice(bytes);
+            let pec = crc8_smbus(&pec_input[..(1 + bytes.len())]);
+            frame[bytes.len()] = pec;
+            match i2c.write(addr, &frame[..(bytes.len() + 1)]) {
+                Ok(()) => {
+                    if !quiet {
+                        defmt::warn!(
+                            "bms_diag: addr=0x{=u8:x} stage={} frame={=u8} via=pec direct_err={}",
+                            addr,
+                            stage,
+                            frame_idx,
+                            direct_kind
+                        );
+                    }
+                    Ok(())
+                }
+                Err(pec_err) => {
+                    if !quiet {
+                        defmt::warn!(
+                            "bms_diag: addr=0x{=u8:x} stage={} frame={=u8} direct_err={} pec_err={}",
+                            addr,
+                            stage,
+                            frame_idx,
+                            direct_kind,
+                            i2c_error_kind(pec_err)
+                        );
+                    }
+                    Err(bq40z50::BmsDiagError::I2cNack)
+                }
+            }
+        }
+    }
 }
 
 fn write_bms_rom_block<I2C>(
@@ -869,30 +1735,61 @@ fn write_bms_rom_block<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    if payload.is_empty() || payload.len() > (BMS_ROM_FLASH_BLOCK_BYTES + 2) {
+    if payload.is_empty() || payload.len() > (BMS_ROM_FLASH_BLOCK_BYTES_MAX + 2) {
         return Err(bq40z50::BmsDiagError::BadBlockLen);
     }
 
-    let mut frame = [0u8; BMS_ROM_FLASH_BLOCK_BYTES + 4];
+    let mut frame = [0u8; BMS_ROM_FLASH_BLOCK_BYTES_MAX + 4];
     frame[0] = cmd;
     frame[1] = payload.len() as u8;
     frame[2..(2 + payload.len())].copy_from_slice(payload);
     let frame_len = 2 + payload.len();
-    if i2c.write(addr, &frame[..frame_len]).is_ok() {
-        return Ok(());
-    }
 
-    // Retry with PEC appended (ROM download path on some silicon requires it).
-    let mut frame_pec = [0u8; BMS_ROM_FLASH_BLOCK_BYTES + 5];
+    let mut frame_pec = [0u8; BMS_ROM_FLASH_BLOCK_BYTES_MAX + 5];
     frame_pec[..frame_len].copy_from_slice(&frame[..frame_len]);
     let addr_w = addr << 1;
-    let mut pec_input = [0u8; BMS_ROM_FLASH_BLOCK_BYTES + 6];
+    let mut pec_input = [0u8; BMS_ROM_FLASH_BLOCK_BYTES_MAX + 6];
     pec_input[0] = addr_w;
     pec_input[1..(1 + frame_len)].copy_from_slice(&frame[..frame_len]);
     let pec = crc8_smbus(&pec_input[..(1 + frame_len)]);
     frame_pec[frame_len] = pec;
-    i2c.write(addr, &frame_pec[..(frame_len + 1)])
-        .map_err(|_| bq40z50::BmsDiagError::I2cNack)
+    let frames: [(&str, &[u8]); 2] = if cfg!(feature = "bms-rom-force-pec") {
+        [
+            ("pec", &frame_pec[..(frame_len + 1)]),
+            ("direct", &frame[..frame_len]),
+        ]
+    } else {
+        [
+            ("direct", &frame[..frame_len]),
+            ("pec", &frame_pec[..(frame_len + 1)]),
+        ]
+    };
+
+    for (via, candidate) in frames {
+        if i2c.write(addr, candidate).is_ok() {
+            if cfg!(feature = "bms-dual-probe-diag") {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage=rom_block_write cmd=0x{=u8:x} via={} len={=u8}",
+                    addr,
+                    cmd,
+                    via,
+                    payload.len() as u8
+                );
+            }
+            return Ok(());
+        }
+    }
+
+    if cfg!(feature = "bms-dual-probe-diag") {
+        defmt::warn!(
+            "bms_diag: addr=0x{=u8:x} stage=rom_block_write cmd=0x{=u8:x} via=fail len={=u8}",
+            addr,
+            cmd,
+            payload.len() as u8
+        );
+    }
+
+    Err(bq40z50::BmsDiagError::I2cNack)
 }
 
 fn program_bms_rom_section<I2C>(
@@ -900,6 +1797,7 @@ fn program_bms_rom_section<I2C>(
     addr: u8,
     cmd: u8,
     start_addr: u16,
+    block_bytes: usize,
     image: &[u8],
     stage: &'static str,
     quiet: bool,
@@ -907,27 +1805,28 @@ fn program_bms_rom_section<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    if (image.len() % BMS_ROM_FLASH_BLOCK_BYTES) != 0 {
+    if block_bytes == 0 || block_bytes > BMS_ROM_FLASH_BLOCK_BYTES_MAX || image.is_empty() {
         return Err(bq40z50::BmsDiagError::BadBlockLen);
     }
 
-    let total_blocks = image.len() / BMS_ROM_FLASH_BLOCK_BYTES;
-    let mut payload = [0u8; BMS_ROM_FLASH_BLOCK_BYTES + 2];
-    for (idx, chunk) in image.chunks_exact(BMS_ROM_FLASH_BLOCK_BYTES).enumerate() {
-        let word_addr = start_addr.wrapping_add((idx * BMS_ROM_FLASH_BLOCK_BYTES) as u16);
+    let total_blocks = image.len().div_ceil(block_bytes);
+    let mut payload = [0u8; BMS_ROM_FLASH_BLOCK_BYTES_MAX + 2];
+    for (idx, chunk) in image.chunks(block_bytes).enumerate() {
+        let word_addr = start_addr.wrapping_add((idx * block_bytes) as u16);
         payload[0] = (word_addr & 0x00FF) as u8;
         payload[1] = (word_addr >> 8) as u8;
-        payload[2..].copy_from_slice(chunk);
-        write_bms_rom_block(i2c, addr, cmd, &payload)?;
+        payload[2..(2 + chunk.len())].copy_from_slice(chunk);
+        write_bms_rom_block(i2c, addr, cmd, &payload[..(chunk.len() + 2)])?;
         spin_delay(BMS_ROM_FLASH_WRITE_GAP);
 
         if !quiet && (idx == 0 || ((idx + 1) % 128) == 0 || (idx + 1) == total_blocks) {
             defmt::warn!(
-                "bms_diag: addr=0x{=u8:x} stage={} block={=u16}/{=u16}",
+                "bms_diag: addr=0x{=u8:x} stage={} block={=u16}/{=u16} len={=u8}",
                 addr,
                 stage,
                 (idx + 1) as u16,
-                total_blocks as u16
+                total_blocks as u16,
+                chunk.len() as u8
             );
         }
     }
@@ -935,7 +1834,7 @@ where
     Ok(())
 }
 
-fn run_bms_rom_flash_recover_sequence<I2C>(
+fn program_bms_rom_sparse_info_sections<I2C>(
     i2c: &mut I2C,
     addr: u8,
     quiet: bool,
@@ -943,70 +1842,100 @@ fn run_bms_rom_flash_recover_sequence<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let sig = read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)?;
-    let force_recover = cfg!(feature = "bms-rom-recover-force");
-    if sig != BMS_ROM_MODE_SIGNATURE && !force_recover {
-        return Ok(());
-    }
-    if force_recover && sig != BMS_ROM_MODE_SIGNATURE && !quiet {
-        defmt::warn!(
-            "bms_diag: addr=0x{=u8:x} stage=rom_flash_force_non_rom rsoc=0x{=u16:x}",
-            addr,
-            sig
-        );
-    }
-
-    if !quiet {
-        defmt::warn!(
-            "bms_diag: addr=0x{=u8:x} stage=rom_flash_start image={} sec1={=u32} sec2={=u32}",
-            addr,
-            BMS_ROM_FLASH_IMAGE_TAG,
-            BMS_ROM_SECTION1_IMAGE.len() as u32,
-            BMS_ROM_SECTION2_IMAGE.len() as u32
-        );
-    }
-
-    if !quiet {
-        defmt::warn!("bms_diag: addr=0x{=u8:x} stage=rom_flash_token_begin", addr);
-    }
-    match run_bms_rom_token_recover_sequence(i2c, addr) {
-        Ok(()) => {
-            spin_delay(BMS_ROM_EXECUTE_FLASH_SETTLE);
-            match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE) {
-                Ok(after_token) => {
-                    if !quiet {
-                        defmt::warn!(
-                            "bms_diag: addr=0x{=u8:x} stage=rom_flash_token_done rsoc_before=0x{=u16:x} rsoc_after=0x{=u16:x}",
-                            addr,
-                            sig,
-                            after_token
-                        );
-                    }
-                    if after_token != BMS_ROM_MODE_SIGNATURE {
-                        return Ok(());
-                    }
-                }
-                Err(e) => {
-                    if !quiet {
-                        log_bms_diag(addr, "rom_flash_token_readback", e, "word", "token");
-                    }
-                }
-            }
-        }
-        Err(e) => {
+    for (stage, payload, block_off) in [
+        ("rom_flash_sec3_blk00", BMS_ROM_SECTION3_BLK00, 0x00u8),
+        ("rom_flash_sec3_blk80", BMS_ROM_SECTION3_BLK80, 0x80u8),
+    ] {
+        if let Err(e) = write_bms_rom_word(i2c, addr, 0x1A, 0xDE, 0x83) {
             if !quiet {
-                log_bms_diag(addr, "rom_flash_token", e, "word", "token");
+                log_bms_diag(addr, stage, e, "word", "srec");
             }
+            return Err(e);
+        }
+        spin_delay(BMS_ROM_FLASH_WORD_GAP);
+        if let Err(e) = write_bms_rom_block(i2c, addr, 0x05, payload) {
+            if !quiet {
+                log_bms_diag(addr, stage, e, "block", "srec");
+            }
+            return Err(e);
+        }
+        spin_delay(BMS_ROM_FLASH_WRITE_GAP);
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage={} block=0x{=u8:x}",
+                addr,
+                stage,
+                block_off
+            );
         }
     }
 
-    if !quiet {
-        defmt::warn!(
-            "bms_diag: addr=0x{=u8:x} stage=rom_flash_preface_begin",
-            addr
-        );
+    Ok(())
+}
+
+fn program_bms_rom_info_section<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    image: &[u8],
+    quiet: bool,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if image.len() != 0x100 {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
     }
 
+    let mut payload = [0u8; BMS_ROM_FLASH_BLOCK_BYTES_SEC3 + 2];
+    for (idx, chunk) in image
+        .chunks_exact(BMS_ROM_FLASH_BLOCK_BYTES_SEC3)
+        .enumerate()
+    {
+        let block_off = (idx * BMS_ROM_FLASH_BLOCK_BYTES_SEC3) as u16;
+        if let Err(e) = write_bms_rom_word(i2c, addr, 0x1A, 0xDE, 0x83) {
+            if !quiet {
+                log_bms_diag(addr, "rom_flash_sec3_preface", e, "word", "srec");
+            }
+            return Err(e);
+        }
+        spin_delay(BMS_ROM_FLASH_WORD_GAP);
+
+        payload[0] = (block_off & 0x00FF) as u8;
+        payload[1] = (block_off >> 8) as u8;
+        payload[2..].copy_from_slice(chunk);
+        if block_off == 0 {
+            payload[2] = 0xFF;
+            payload[3] = 0xFF;
+        }
+
+        if let Err(e) = write_bms_rom_block(i2c, addr, 0x05, &payload) {
+            if !quiet {
+                log_bms_diag(addr, "rom_flash_sec3_info", e, "block", "srec");
+            }
+            return Err(e);
+        }
+        spin_delay(BMS_ROM_FLASH_WRITE_GAP);
+
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=rom_flash_sec3_info block=0x{=u8:x}",
+                addr,
+                block_off as u8
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn run_bms_rom_erase_preface_sequence<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    quiet: bool,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
     // TI `prog_srec_v0p9.py` erase preface.
     if let Err(e) = write_bms_rom_word(i2c, addr, 0x1A, 0xDE, 0x83) {
         if !quiet {
@@ -1036,6 +1965,143 @@ where
         return Err(e);
     }
     spin_delay(BMS_ROM_FLASH_ERASE_GAP);
+    Ok(())
+}
+
+fn prepare_bms_rom_flash_recover<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    quiet: bool,
+) -> Result<Option<u16>, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let force_recover = cfg!(feature = "bms-rom-recover-force");
+    let sig = match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE) {
+        Ok(v) => v,
+        Err(e) if force_recover => {
+            if !quiet {
+                log_bms_diag(addr, "rom_flash_force_sig_read", e, "word", "srec");
+            }
+            0xFFFF
+        }
+        Err(e) => return Err(e),
+    };
+    if sig != BMS_ROM_MODE_SIGNATURE && !force_recover {
+        return Ok(None);
+    }
+    if force_recover && sig != BMS_ROM_MODE_SIGNATURE && !quiet {
+        defmt::warn!(
+            "bms_diag: addr=0x{=u8:x} stage=rom_flash_force_non_rom rsoc=0x{=u16:x}",
+            addr,
+            sig
+        );
+    }
+
+    Ok(Some(sig))
+}
+
+fn run_bms_rom_flash_recover_sequence<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    sig: u16,
+    quiet: bool,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let section1_file = BMS_ROM_SECTION1_IMAGE;
+    let section2_file = BMS_ROM_SECTION2_IMAGE;
+    let section1_image = &section1_file[..BMS_ROM_SECTION1_USED_LEN];
+    let section2_image = &section2_file[..BMS_ROM_SECTION2_USED_LEN];
+
+    if !quiet {
+        defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_begin", addr);
+        defmt::warn!(
+            "bms_diag: addr=0x{=u8:x} stage=rom_flash_start image={} info_layout={} sec1={=u32} sec1_used={=u32} sec2={=u32} sec2_used={=u32} blk12={=u8}",
+            addr,
+            BMS_ROM_FLASH_IMAGE_TAG,
+            BMS_ROM_INFO_LAYOUT_TAG,
+            section1_file.len() as u32,
+            BMS_ROM_SECTION1_USED_LEN as u32,
+            section2_file.len() as u32,
+            BMS_ROM_SECTION2_USED_LEN as u32,
+            BMS_ROM_FLASH_BLOCK_BYTES_SEC12 as u8
+        );
+        defmt::warn!(
+            "bms_diag: addr=0x{=u8:x} stage=rom_flash_preface_begin",
+            addr
+        );
+    }
+    log_bms_rom_checksum_probe(i2c, addr, "rom_flash_ck_before_erase", quiet);
+
+    if let Err(_preface_err) = run_bms_rom_erase_preface_sequence(i2c, addr, quiet) {
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=rom_flash_e2e_unlock_begin",
+                addr
+            );
+        }
+        match run_bms_rom_e2e_unlock_sequence(i2c, addr, quiet) {
+            Ok(()) => {
+                spin_delay(BMS_ROM_FLASH_WORD_GAP);
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=rom_flash_e2e_unlock_done",
+                        addr
+                    );
+                }
+            }
+            Err(e) => {
+                if !quiet {
+                    log_bms_diag(addr, "rom_flash_e2e_unlock", e, "word", "e2e");
+                }
+            }
+        }
+
+        if !quiet {
+            defmt::warn!("bms_diag: addr=0x{=u8:x} stage=rom_flash_token_begin", addr);
+        }
+        match run_bms_rom_token_recover_sequence(i2c, addr) {
+            Ok(()) => {
+                if !quiet {
+                    defmt::warn!("bms_diag: addr=0x{=u8:x} stage=rom_flash_token_done", addr);
+                }
+            }
+            Err(e) => {
+                if !quiet {
+                    log_bms_diag(addr, "rom_flash_token", e, "word", "token");
+                }
+            }
+        }
+
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=rom_flash_preface_retry_begin",
+                addr
+            );
+        }
+        if let Err(retry_err) = run_bms_rom_erase_preface_sequence(i2c, addr, quiet) {
+            if !quiet {
+                log_bms_diag(addr, "rom_flash_preface_retry", retry_err, "word", "srec");
+            }
+            return Err(retry_err);
+        }
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=rom_flash_preface_retry_done",
+                addr
+            );
+        }
+
+        if sig != BMS_ROM_MODE_SIGNATURE && !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=rom_flash_force_preface_override rsoc_before=0x{=u16:x}",
+                addr,
+                sig
+            );
+        }
+    }
 
     // Section1: Data Flash 0x4000..0x5FFF (cmd 0x0F).
     if let Err(e) = program_bms_rom_section(
@@ -1043,7 +2109,8 @@ where
         addr,
         0x0F,
         0x4000,
-        BMS_ROM_SECTION1_IMAGE,
+        BMS_ROM_FLASH_BLOCK_BYTES_SEC12,
+        section1_image,
         "rom_flash_sec1",
         quiet,
     ) {
@@ -1059,7 +2126,8 @@ where
         addr,
         0x05,
         0x0000,
-        BMS_ROM_SECTION2_IMAGE,
+        BMS_ROM_FLASH_BLOCK_BYTES_SEC12,
+        section2_image,
         "rom_flash_sec2",
         quiet,
     ) {
@@ -1068,37 +2136,28 @@ where
         }
         return Err(e);
     }
+    log_bms_rom_checksum_probe(i2c, addr, "rom_flash_ck_after_sec2", quiet);
 
-    // Section3 + Section4: Information block writes from TI script.
-    if let Err(e) = write_bms_rom_word(i2c, addr, 0x1A, 0xDE, 0x83) {
+    #[cfg(feature = "bms-rom-full-info")]
+    {
+        // Keep the wider info-window rewrite available as an opt-in experiment, but default back
+        // to TI's stock sparse-info flow when trying to leave ROM cleanly.
+        if let Err(e) = program_bms_rom_info_section(i2c, addr, BMS_ROM_SECTION3_INFO_IMAGE, quiet)
+        {
+            if !quiet {
+                log_bms_diag(addr, "rom_flash_sec3_info", e, "block", "srec");
+            }
+            return Err(e);
+        }
+    }
+    #[cfg(not(feature = "bms-rom-full-info"))]
+    if let Err(e) = program_bms_rom_sparse_info_sections(i2c, addr, quiet) {
         if !quiet {
-            log_bms_diag(addr, "rom_flash_sec3_preface_1a", e, "word", "srec");
+            log_bms_diag(addr, "rom_flash_sec3_sparse", e, "block", "srec");
         }
         return Err(e);
     }
-    spin_delay(BMS_ROM_FLASH_WORD_GAP);
-    if let Err(e) = write_bms_rom_block(i2c, addr, 0x05, BMS_ROM_SECTION3_BLK00) {
-        if !quiet {
-            log_bms_diag(addr, "rom_flash_sec3_blk00", e, "block", "srec");
-        }
-        return Err(e);
-    }
-    spin_delay(BMS_ROM_FLASH_WRITE_GAP);
-
-    if let Err(e) = write_bms_rom_word(i2c, addr, 0x1A, 0xDE, 0x83) {
-        if !quiet {
-            log_bms_diag(addr, "rom_flash_sec3_preface_1a_80", e, "word", "srec");
-        }
-        return Err(e);
-    }
-    spin_delay(BMS_ROM_FLASH_WORD_GAP);
-    if let Err(e) = write_bms_rom_block(i2c, addr, 0x05, BMS_ROM_SECTION3_BLK80) {
-        if !quiet {
-            log_bms_diag(addr, "rom_flash_sec3_blk80", e, "block", "srec");
-        }
-        return Err(e);
-    }
-    spin_delay(BMS_ROM_FLASH_WRITE_GAP);
+    log_bms_rom_checksum_probe(i2c, addr, "rom_flash_ck_after_sec3", quiet);
 
     if let Err(e) = write_bms_rom_word(i2c, addr, 0x1A, 0xDE, 0x83) {
         if !quiet {
@@ -1114,75 +2173,52 @@ where
         return Err(e);
     }
     spin_delay(BMS_ROM_FLASH_WORD_GAP);
+    log_bms_rom_checksum_probe(i2c, addr, "rom_flash_ck_after_sec4", quiet);
 
-    if let Err(e) = write_bms_rom_bytes(i2c, addr, &[0x08]) {
-        if !quiet {
-            log_bms_diag(addr, "rom_flash_exec_08", e, "word", "srec");
-        }
-        return Err(e);
+    let mut after = BMS_ROM_MODE_SIGNATURE;
+    if let Some(v) = run_bms_rom_exact_execute_probe(i2c, addr, "rom_flash_exec_exact", quiet)? {
+        after = v;
     }
-    spin_delay(BMS_ROM_EXECUTE_FLASH_SETTLE);
-
-    let mut after = read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)?;
     if after == BMS_ROM_MODE_SIGNATURE {
-        // Some ROM paths only jump after the combined trigger.
-        let _ = write_bms_rom_bytes(i2c, addr, &[0x08, 0x11]);
         spin_delay(BMS_ROM_EXECUTE_FLASH_SETTLE);
-        after = read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)?;
-    }
-    if after == BMS_ROM_MODE_SIGNATURE {
-        if !quiet {
-            defmt::warn!(
-                "bms_diag: addr=0x{=u8:x} stage=rom_flash_exec_alt_begin",
-                addr
-            );
-        }
-        match run_bms_rom_execute_flash_sequence(i2c, addr) {
-            Ok(()) => {
-                spin_delay(BMS_ROM_EXECUTE_FLASH_SETTLE);
-                match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)
-                {
-                    Ok(v) => after = v,
-                    Err(e) => {
-                        if !quiet {
-                            log_bms_diag(addr, "rom_flash_exec_alt_readback", e, "word", "srec");
-                        }
-                    }
+        match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE) {
+            Ok(v) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=rom_flash_exec_exact_quiet rsoc_after=0x{=u16:x}",
+                        addr,
+                        v
+                    );
                 }
+                after = v;
             }
             Err(e) => {
                 if !quiet {
-                    log_bms_diag(addr, "rom_flash_exec_alt", e, "word", "srec");
+                    log_bms_diag(addr, "rom_flash_exec_exact_quiet", e, "word", "srec");
                 }
             }
         }
     }
+
     if after == BMS_ROM_MODE_SIGNATURE {
         if !quiet {
             defmt::warn!(
-                "bms_diag: addr=0x{=u8:x} stage=rom_flash_e2e_preface_begin",
+                "bms_diag: addr=0x{=u8:x} stage=rom_flash_exec_exact_still_rom keep_charge=true",
                 addr
             );
         }
-        match run_bms_rom_e2e_preface_sequence(i2c, addr) {
-            Ok(()) => {
-                spin_delay(BMS_ROM_EXECUTE_FLASH_SETTLE);
-                match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)
-                {
-                    Ok(v) => after = v,
-                    Err(e) => {
-                        if !quiet {
-                            log_bms_diag(addr, "rom_flash_e2e_readback", e, "word", "e2e");
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                if !quiet {
-                    log_bms_diag(addr, "rom_flash_e2e_preface", e, "word", "e2e");
-                }
-            }
+        return Err(bq40z50::BmsDiagError::InconsistentSample);
+    }
+
+    if after > 100 {
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=rom_flash_invalid_fw_state rsoc_after=0x{=u16:x}",
+                addr,
+                after
+            );
         }
+        return Err(bq40z50::BmsDiagError::InconsistentSample);
     }
 
     if !quiet {
@@ -1191,10 +2227,6 @@ where
             addr,
             after
         );
-    }
-
-    if after == BMS_ROM_MODE_SIGNATURE {
-        return Err(bq40z50::BmsDiagError::InconsistentSample);
     }
     Ok(())
 }
@@ -1206,9 +2238,9 @@ fn run_bms_rom_token_recover_sequence<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    // Sequence adapted from TI bq40z50 flashstream examples:
-    // clear updater tokens -> set updater tokens -> clear tokens -> execute FW (0x08).
-    // This is only attempted after explicit ROM signature detection.
+    // Sequence adapted from TI bq40z50 flashstream examples. We keep it as a last-ditch
+    // helper after the exact raw E2E unlock frames, because some half-programmed gauges
+    // only accept one of the two wire encodings.
     write_bms_rom_word(i2c, addr, 0x09, 0x00, 0x00)?;
     write_bms_rom_word(i2c, addr, 0x0A, 0x02, 0x00)?;
     write_bms_rom_word(i2c, addr, 0x09, 0x02, 0x00)?;
@@ -1223,7 +2255,7 @@ where
     spin_delay(Duration::from_millis(250));
 
     write_bms_rom_word(i2c, addr, 0x09, 0x00, 0x00)?;
-    write_bms_rom_word(i2c, addr, 0x0A, 0x0A, 0x00)?;
+    write_bms_rom_word(i2c, addr, 0x0A, 0x08, 0x00)?;
     write_bms_rom_word(i2c, addr, 0x09, 0x02, 0x00)?;
     write_bms_rom_word(i2c, addr, 0x0A, 0xB8, 0x00)?;
     write_bms_rom_word(i2c, addr, 0x00, 0x80, 0x01)?;
@@ -1235,8 +2267,7 @@ where
     write_bms_rom_word(i2c, addr, 0x0A, 0x02, 0x00)?;
     write_bms_rom_word(i2c, addr, 0x09, 0x02, 0x00)?;
     write_bms_rom_word(i2c, addr, 0x0A, 0x00, 0x00)?;
-    i2c.write(addr, &[0x08])
-        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    send_bms_rom_cmd(i2c, addr, 0x08)?;
     Ok(())
 }
 
@@ -1247,8 +2278,8 @@ fn run_bms_rom_e2e_preface_sequence<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    // Transaction bytes from TI E2E bq40z50 SREC logs (include PEC byte).
-    // Source: https://e2e.ti.com/.../446520/bq40z50-srec-programming
+    // Transaction bytes captured from TI E2E bq40z50 SREC logs. This is kept as a
+    // last-chance post-program execute nudge when the stock 0x08 path never leaves ROM.
     const E2E_ROM_SEQ: [&[u8]; 24] = [
         &[0x09, 0x00, 0x00, 0x29],
         &[0x0A, 0x00, 0x00, 0x94],
@@ -1288,6 +2319,51 @@ where
     Ok(())
 }
 
+fn run_bms_rom_e2e_unlock_sequence<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    quiet: bool,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    // Raw SMBus frames captured in TI E2E SREC programming logs. Use them only as a
+    // recovery unlock fallback before retrying the stock GEOSTASIS/TI erase preface.
+    const E2E_ROM_SEQ: [&[u8]; 17] = [
+        &[0x09, 0x00, 0x00, 0x29],
+        &[0x0A, 0x00, 0x00, 0x94],
+        &[0x09, 0x02, 0x00, 0x03],
+        &[0x0A, 0x00, 0x00, 0x94],
+        &[0x00, 0x00, 0x00, 0x13],
+        &[0x1A, 0xDE, 0x83, 0xDA],
+        &[0x06, 0x00, 0x00, 0x6E],
+        &[0x00, 0x80, 0x00, 0xA5],
+        &[0x1A, 0xDE, 0x83, 0xDA],
+        &[0x06, 0x80, 0x00, 0xD8],
+        &[0x09, 0x00, 0x00, 0x29],
+        &[0x0A, 0x08, 0x00, 0x3C],
+        &[0x09, 0x02, 0x00, 0x03],
+        &[0x0A, 0xB8, 0x00, 0x73],
+        &[0x00, 0x80, 0x01, 0xA2],
+        &[0x1A, 0xDE, 0x83, 0xDA],
+        &[0x06, 0x80, 0x01, 0xDF],
+    ];
+
+    for (idx, frame) in E2E_ROM_SEQ.iter().enumerate() {
+        write_bms_rom_bytes_trace(
+            i2c,
+            addr,
+            "rom_flash_e2e_unlock_step",
+            idx as u8,
+            frame,
+            quiet,
+        )?;
+        spin_delay(BMS_WORD_GAP);
+    }
+
+    Ok(())
+}
+
 fn run_bms_rom_execute_flash_sequence<I2C>(
     i2c: &mut I2C,
     addr: u8,
@@ -1295,15 +2371,211 @@ fn run_bms_rom_execute_flash_sequence<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    // Cross-family TI ROM execute-flash sequence (0x00=0x0F then 0x64=0x000F).
-    // Useful when 0x08 alone is acknowledged but does not jump back to FW.
-    i2c.write(addr, &[0x00, 0x0F])
-        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    // Cross-family TI ROM execute-flash sequence (0x00=0x000F then 0x64=0x000F).
+    // Both steps are SMBus word writes; use the ROM helpers so PEC/swapped-byte retries stay available.
+    write_bms_rom_word(i2c, addr, 0x00, 0x0F, 0x00)?;
     spin_delay(BMS_MAC_TOGGLE_SETTLE);
-    i2c.write(addr, &[0x64, 0x0F, 0x00])
-        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    write_bms_rom_word(i2c, addr, 0x64, 0x0F, 0x00)?;
     spin_delay(BMS_ROM_EXECUTE_FLASH_SETTLE);
     Ok(())
+}
+
+fn log_bms_rom_checksum_probe<I2C>(i2c: &mut I2C, addr: u8, stage: &'static str, quiet: bool)
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    // Keep the stock ROM recovery path bus-quiet around erase/program/execute. TI's public
+    // bq40z50 SREC flow does not use these extra ROM reads, so leave the hook in place but do
+    // not issue additional traffic during normal recovery attempts.
+    let _ = (i2c, addr, stage, quiet);
+}
+
+fn run_bms_rom_exact_execute_probe<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    stage: &'static str,
+    quiet: bool,
+) -> Result<Option<u16>, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if !quiet {
+        defmt::warn!("bms_diag: addr=0x{=u8:x} stage={} begin", addr, stage);
+    }
+
+    if let Err(e) = send_bms_rom_cmd(i2c, addr, 0x08) {
+        if !quiet {
+            log_bms_diag(addr, stage, e, "cmd", "srec");
+        }
+        return Ok(None);
+    }
+
+    spin_delay(BMS_ROM_EXECUTE_FLASH_FIRST_CHECK);
+    match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE) {
+        Ok(after) => {
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage={} rsoc_after=0x{=u16:x}",
+                    addr,
+                    stage,
+                    after
+                );
+            }
+            Ok(Some(after))
+        }
+        Err(e) => {
+            if !quiet {
+                log_bms_diag(addr, stage, e, "word", "srec");
+            }
+            Ok(None)
+        }
+    }
+}
+
+fn observe_bms_rom_execute_result<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    stage: &'static str,
+    initial_settle: Duration,
+    probe_fw_window: bool,
+    quiet: bool,
+) -> Result<Option<u16>, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let poll_deadline = Instant::now() + BMS_ROM_EXECUTE_FLASH_POLL_WINDOW;
+    let mut read_attempt = 0u8;
+    let mut last_success = None;
+    let mut saw_fw_window = false;
+    spin_delay(initial_settle);
+    loop {
+        read_attempt = read_attempt.saturating_add(1);
+
+        match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE) {
+            Ok(after) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} rsoc_after=0x{=u16:x} attempt={=u8} fw_window={=bool}",
+                        addr,
+                        stage,
+                        after,
+                        read_attempt,
+                        saw_fw_window
+                    );
+                }
+                last_success = Some(after);
+                if after != BMS_ROM_MODE_SIGNATURE || Instant::now() >= poll_deadline {
+                    return Ok(Some(after));
+                }
+            }
+            Err(e) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} read_err={} attempt={=u8} fw_window={=bool}",
+                        addr,
+                        stage,
+                        e,
+                        read_attempt,
+                        saw_fw_window
+                    );
+                }
+                if Instant::now() >= poll_deadline {
+                    return Ok(last_success);
+                }
+            }
+        }
+
+        if probe_fw_window {
+            saw_fw_window |= log_execute_fw_window_probe(i2c, addr, stage, read_attempt, quiet);
+        }
+        spin_delay(BMS_ROM_EXECUTE_FLASH_SETTLE);
+    }
+}
+
+fn try_bms_rom_execute_frame<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    stage: &'static str,
+    frame: &[u8],
+    settle: Duration,
+    probe_fw_window: bool,
+    quiet: bool,
+) -> Result<Option<u16>, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if !quiet {
+        defmt::warn!("bms_diag: addr=0x{=u8:x} stage={} begin", addr, stage);
+    }
+
+    if let Err(e) = i2c.write(addr, frame) {
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage={} write_err={}",
+                addr,
+                stage,
+                i2c_error_kind(e)
+            );
+        }
+        return Ok(None);
+    }
+
+    observe_bms_rom_execute_result(i2c, addr, stage, settle, probe_fw_window, quiet)
+}
+
+fn run_bms_rom_postflash_resume_sequence<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    quiet: bool,
+) -> Result<bool, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let sig = read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)?;
+    if sig != BMS_ROM_MODE_SIGNATURE {
+        if sig > 100 {
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage=rom_post_flash_resume_bad_rsoc rsoc=0x{=u16:x}",
+                    addr,
+                    sig
+                );
+            }
+            return Err(bq40z50::BmsDiagError::BadRange);
+        }
+
+        let temp = read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::TEMPERATURE)?;
+        if !(2_000..=4_300).contains(&temp) {
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage=rom_post_flash_resume_bad_temp rsoc=0x{=u16:x} temp_raw=0x{=u16:x}",
+                    addr,
+                    sig,
+                    temp
+                );
+            }
+            return Err(bq40z50::BmsDiagError::BadRange);
+        }
+
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=rom_post_flash_resume_not_rom rsoc=0x{=u16:x} temp_raw=0x{=u16:x}",
+                addr,
+                sig,
+                temp
+            );
+        }
+        return Ok(true);
+    }
+
+    if !quiet {
+        defmt::warn!(
+            "bms_diag: addr=0x{=u8:x} stage=rom_post_flash_resume_observe rsoc=0x{=u16:x}",
+            addr,
+            sig
+        );
+    }
+    Ok(false)
 }
 
 fn read_u16_with_pec<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> Result<u16, bq40z50::BmsDiagError>
@@ -1335,6 +2607,75 @@ where
     i2c.read(addr, &mut buf)
         .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
     Ok(u16::from_le_bytes(buf))
+}
+
+fn read_u16_split_with_gap<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    cmd: u8,
+    gap: Duration,
+) -> Result<u16, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    i2c.write(addr, &[cmd])
+        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    spin_delay(gap);
+    let mut buf = [0u8; 2];
+    i2c.read(addr, &mut buf)
+        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    Ok(u16::from_le_bytes(buf))
+}
+
+fn read_u16_wake_probe<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    cmd: u8,
+    stage: &'static str,
+    step: u8,
+    delay_ms: u64,
+    round: u8,
+    quiet: bool,
+) -> Result<u16, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    for gap_ms in BMS_WAKE_READ_GAPS_MS {
+        let gap = Duration::from_millis(gap_ms);
+        match read_u16_split_with_gap(i2c, addr, cmd, gap) {
+            Ok(raw) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} round={=u8} gap_ms={=u64} raw=0x{=u16:x}",
+                        addr,
+                        stage,
+                        step,
+                        delay_ms,
+                        round,
+                        gap_ms,
+                        raw
+                    );
+                }
+                return Ok(raw);
+            }
+            Err(e) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} round={=u8} gap_ms={=u64} err={}",
+                        addr,
+                        stage,
+                        step,
+                        delay_ms,
+                        round,
+                        gap_ms,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    read_u16_with_optional_pec(i2c, addr, cmd)
 }
 
 fn read_u16_with_optional_pec<I2C>(
@@ -1383,9 +2724,664 @@ fn prime_bms_command_window<I2C>(i2c: &mut I2C, addr: u8) -> Result<(), bq40z50:
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let _ = i2c;
-    let _ = addr;
+    let _ = touch_bms_command(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE);
     Ok(())
+}
+
+fn log_bms_wake_read_only_diag<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    stage: &'static str,
+    step: u8,
+    delay_ms: u64,
+    quiet: bool,
+) where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if quiet {
+        return;
+    }
+
+    for len in [1usize, 2usize] {
+        let diag = word_diag_read_only(i2c, addr, len);
+        defmt::warn!(
+            "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} len={=u8} err={} b0=0x{=u8:x} b1=0x{=u8:x}",
+            addr,
+            stage,
+            step,
+            delay_ms,
+            diag.len,
+            diag.err,
+            diag.b0,
+            diag.b1
+        );
+    }
+}
+
+fn read_u16_after_successful_touch<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    stage: &'static str,
+    step: u8,
+    delay_ms: u64,
+    quiet: bool,
+) -> Result<u16, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    for gap_ms in BMS_WAKE_TOUCH_READ_GAPS_MS {
+        spin_delay(Duration::from_millis(gap_ms));
+        let mut buf = [0u8; 2];
+        match i2c.read(addr, &mut buf) {
+            Ok(()) => {
+                let raw = u16::from_le_bytes(buf);
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} gap_ms={=u64} raw=0x{=u16:x}",
+                        addr,
+                        stage,
+                        step,
+                        delay_ms,
+                        gap_ms,
+                        raw
+                    );
+                }
+                return Ok(raw);
+            }
+            Err(e) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} gap_ms={=u64} err={}",
+                        addr,
+                        stage,
+                        step,
+                        delay_ms,
+                        gap_ms,
+                        i2c_error_kind(e)
+                    );
+                }
+            }
+        }
+    }
+
+    Err(bq40z50::BmsDiagError::I2cNack)
+}
+
+fn touch_then_read_wake_probe<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    cmd: u8,
+    touch_stage: &'static str,
+    read_stage: &'static str,
+    step: u8,
+    delay_ms: u64,
+    quiet: bool,
+) -> Result<u16, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    for gap_ms in BMS_WAKE_READ_GAPS_MS {
+        match touch_bms_command(i2c, addr, cmd) {
+            Ok(()) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} gap_ms={=u64}",
+                        addr,
+                        touch_stage,
+                        step,
+                        delay_ms,
+                        gap_ms
+                    );
+                }
+            }
+            Err(e) => {
+                if !quiet {
+                    log_bms_diag(addr, touch_stage, e, "cmd", "wake");
+                }
+                continue;
+            }
+        }
+
+        spin_delay(Duration::from_millis(gap_ms));
+        let mut buf = [0u8; 2];
+        match i2c.read(addr, &mut buf) {
+            Ok(()) => {
+                let raw = u16::from_le_bytes(buf);
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} gap_ms={=u64} raw=0x{=u16:x}",
+                        addr,
+                        read_stage,
+                        step,
+                        delay_ms,
+                        gap_ms,
+                        raw
+                    );
+                }
+                return Ok(raw);
+            }
+            Err(e) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} gap_ms={=u64} err={}",
+                        addr,
+                        read_stage,
+                        step,
+                        delay_ms,
+                        gap_ms,
+                        i2c_error_kind(e)
+                    );
+                }
+            }
+        }
+    }
+
+    Err(bq40z50::BmsDiagError::I2cNack)
+}
+
+fn try_enter_bms_rom_mode_wake_diag<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    step: u8,
+    delay_ms: u64,
+    quiet: bool,
+) -> Result<bool, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let addr_w = addr << 1;
+    let pec_44_0f00 = crc8_smbus(&[addr_w, 0x44, 0x02, 0x00, 0x0F]);
+    let pec_44_0033 = crc8_smbus(&[addr_w, 0x44, 0x02, 0x33, 0x00]);
+    let pec_0f00 = crc8_smbus(&[addr_w, 0x00, 0x0F, 0x00]);
+    let pec_0033 = crc8_smbus(&[addr_w, 0x00, 0x00, 0x33]);
+
+    let frames: [(&'static str, &[u8], Duration); 8] = [
+        (
+            "wake_rom_enter_44_0f00",
+            &[0x44, 0x02, 0x00, 0x0F],
+            BMS_MAC_TOGGLE_SETTLE,
+        ),
+        (
+            "wake_rom_enter_44_0033",
+            &[0x44, 0x02, 0x33, 0x00],
+            BMS_MAC_TOGGLE_SETTLE,
+        ),
+        (
+            "wake_rom_enter_44_0f00_pec",
+            &[0x44, 0x02, 0x00, 0x0F, pec_44_0f00],
+            BMS_MAC_TOGGLE_SETTLE,
+        ),
+        (
+            "wake_rom_enter_44_0033_pec",
+            &[0x44, 0x02, 0x33, 0x00, pec_44_0033],
+            BMS_MAC_TOGGLE_SETTLE,
+        ),
+        (
+            "wake_rom_enter_0f00",
+            &[0x00, 0x0F, 0x00],
+            BMS_MAC_TOGGLE_SETTLE,
+        ),
+        (
+            "wake_rom_enter_0033",
+            &[0x00, 0x00, 0x33],
+            BMS_MAC_TOGGLE_SETTLE,
+        ),
+        (
+            "wake_rom_enter_0f00_pec",
+            &[0x00, 0x0F, 0x00, pec_0f00],
+            BMS_MAC_TOGGLE_SETTLE,
+        ),
+        (
+            "wake_rom_enter_0033_pec",
+            &[0x00, 0x00, 0x33, pec_0033],
+            BMS_MAC_TOGGLE_SETTLE,
+        ),
+    ];
+
+    for (stage, frame, settle) in frames {
+        let _ = touch_bms_command(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE);
+        match i2c.write(addr, frame) {
+            Ok(()) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} write=ok len={=u8}",
+                        addr,
+                        stage,
+                        step,
+                        delay_ms,
+                        frame.len() as u8
+                    );
+                }
+                spin_delay(settle);
+            }
+            Err(e) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} write_err={}",
+                        addr,
+                        stage,
+                        step,
+                        delay_ms,
+                        i2c_error_kind(e)
+                    );
+                }
+                continue;
+            }
+        }
+
+        log_bms_wake_read_only_diag(i2c, addr, "wake_rom_raw_read", step, delay_ms, quiet);
+        match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE) {
+            Ok(sig) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} rsoc_after=0x{=u16:x}",
+                        addr,
+                        stage,
+                        step,
+                        delay_ms,
+                        sig
+                    );
+                }
+                if sig == BMS_ROM_MODE_SIGNATURE {
+                    return Ok(true);
+                }
+            }
+            Err(e) => {
+                if !quiet {
+                    log_bms_diag(addr, stage, e, "word", "wake-rom");
+                }
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+fn confirm_bq40_wake_snapshot<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    strict_validation: bool,
+    tracker: &mut BmsPatternTracker,
+    stage: &'static str,
+    step: u8,
+    delay_ms: u64,
+    quiet: bool,
+) -> bool
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    match read_bms_snapshot_strict(i2c, addr, strict_validation, tracker) {
+        Ok(snapshot) => {
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} voltage_mv={=u16} soc_pct={=u16} temp_c_x10={=i32}",
+                    addr,
+                    stage,
+                    step,
+                    delay_ms,
+                    snapshot.voltage_mv,
+                    snapshot.soc_pct,
+                    snapshot.temp_c_x10,
+                );
+            }
+            true
+        }
+        Err(e) => {
+            if !quiet {
+                log_bms_diag(addr, stage, e, "word", "wake-confirm");
+            }
+            false
+        }
+    }
+}
+
+fn probe_bq40z50_after_wake_touch<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    strict_validation: bool,
+    tracker: &mut BmsPatternTracker,
+    step: u8,
+    delay_ms: u64,
+    quiet: bool,
+) -> Result<WakeWindowProbeResult, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    match touch_then_read_wake_probe(
+        i2c,
+        addr,
+        bq40z50::cmd::RELATIVE_STATE_OF_CHARGE,
+        "wake_touch_read_rsoc",
+        "wake_touch_read_rsoc_raw",
+        step,
+        delay_ms,
+        quiet,
+    ) {
+        Ok(rsoc) => {
+            if rsoc == BMS_ROM_MODE_SIGNATURE {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=wake_window_rom_signature step={=u8} delay_ms={=u64}",
+                        addr,
+                        step,
+                        delay_ms
+                    );
+                }
+                return Ok(WakeWindowProbeResult::Rom(addr));
+            }
+            if rsoc <= 100 {
+                match touch_then_read_wake_probe(
+                    i2c,
+                    addr,
+                    bq40z50::cmd::TEMPERATURE,
+                    "wake_touch_read_temp",
+                    "wake_touch_read_temp_raw",
+                    step,
+                    delay_ms,
+                    quiet,
+                ) {
+                    Ok(temp) if (2_000..=4_300).contains(&temp) => {
+                        if confirm_bq40_wake_snapshot(
+                            i2c,
+                            addr,
+                            strict_validation,
+                            tracker,
+                            "wake_snapshot_confirm_touch",
+                            step,
+                            delay_ms,
+                            quiet,
+                        ) {
+                            return Ok(WakeWindowProbeResult::Working(addr));
+                        }
+                    }
+                    Ok(_) | Err(_) => {}
+                }
+            }
+        }
+        Err(_) => {}
+    }
+
+    for round in 0..BMS_WAKE_KEEPALIVE_ROUNDS {
+        if round > 0 {
+            spin_delay(BMS_WAKE_KEEPALIVE_GAP);
+        }
+
+        for (cmd, name) in [
+            (
+                bq40z50::cmd::RELATIVE_STATE_OF_CHARGE,
+                "wake_keepalive_rsoc",
+            ),
+            (bq40z50::cmd::TEMPERATURE, "wake_keepalive_temp"),
+        ] {
+            match touch_bms_command(i2c, addr, cmd) {
+                Ok(()) => {
+                    if !quiet {
+                        defmt::warn!(
+                            "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} round={=u8}",
+                            addr,
+                            name,
+                            step,
+                            delay_ms,
+                            round as u8
+                        );
+                    }
+                }
+                Err(e) => {
+                    if !quiet {
+                        log_bms_diag(addr, name, e, "cmd", "wake");
+                    }
+                }
+            }
+        }
+
+        log_bms_wake_read_only_diag(i2c, addr, "wake_raw_read", step, delay_ms, quiet);
+
+        match read_u16_wake_probe(
+            i2c,
+            addr,
+            bq40z50::cmd::RELATIVE_STATE_OF_CHARGE,
+            "wake_read_rsoc_split",
+            step,
+            delay_ms,
+            round as u8,
+            quiet,
+        ) {
+            Ok(rsoc) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=wake_read_rsoc step={=u8} delay_ms={=u64} round={=u8} raw=0x{=u16:x}",
+                        addr,
+                        step,
+                        delay_ms,
+                        round as u8,
+                        rsoc
+                    );
+                }
+                if rsoc == BMS_ROM_MODE_SIGNATURE {
+                    if !quiet {
+                        defmt::warn!(
+                            "bms_diag: addr=0x{=u8:x} stage=wake_window_rom_signature step={=u8} delay_ms={=u64}",
+                            addr,
+                            step,
+                            delay_ms
+                        );
+                    }
+                    return Ok(WakeWindowProbeResult::Rom(addr));
+                }
+                if rsoc <= 100 {
+                    match read_u16_wake_probe(
+                        i2c,
+                        addr,
+                        bq40z50::cmd::TEMPERATURE,
+                        "wake_read_temp_split",
+                        step,
+                        delay_ms,
+                        round as u8,
+                        quiet,
+                    ) {
+                        Ok(temp) => {
+                            if !quiet {
+                                defmt::warn!(
+                                    "bms_diag: addr=0x{=u8:x} stage=wake_read_temp step={=u8} delay_ms={=u64} round={=u8} raw=0x{=u16:x}",
+                                    addr,
+                                    step,
+                                    delay_ms,
+                                    round as u8,
+                                    temp
+                                );
+                            }
+                            if (2_000..=4_300).contains(&temp)
+                                && confirm_bq40_wake_snapshot(
+                                    i2c,
+                                    addr,
+                                    strict_validation,
+                                    tracker,
+                                    "wake_snapshot_confirm_split",
+                                    step,
+                                    delay_ms,
+                                    quiet,
+                                )
+                            {
+                                return Ok(WakeWindowProbeResult::Working(addr));
+                            }
+                        }
+                        Err(e) => {
+                            if !quiet {
+                                log_bms_diag(addr, "wake_read_temp", e, "word", "wake");
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                if !quiet {
+                    log_bms_diag(addr, "wake_read_rsoc", e, "word", "wake");
+                }
+            }
+        }
+    }
+
+    if try_enter_bms_rom_mode_wake_diag(i2c, addr, step, delay_ms, quiet)? {
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=wake_window_rom_entered step={=u8} delay_ms={=u64}",
+                addr,
+                step,
+                delay_ms
+            );
+        }
+        return Ok(WakeWindowProbeResult::EnteredRom(addr));
+    }
+
+    Ok(WakeWindowProbeResult::Miss)
+}
+
+fn maybe_enter_bms_rom_mode_diag<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    quiet: bool,
+) -> Result<bool, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let addr_w = addr << 1;
+
+    let mut try_access_word =
+        |stage: &'static str, lo: u8, hi: u8| match write_bms_rom_word(i2c, addr, 0x00, lo, hi) {
+            Ok(()) => {
+                if !quiet {
+                    defmt::warn!("bms_diag: addr=0x{=u8:x} stage={} write=ok", addr, stage,);
+                }
+                spin_delay(BMS_MAC_TOGGLE_SETTLE);
+            }
+            Err(e) => {
+                if !quiet {
+                    log_bms_diag(addr, stage, e, "word", "security");
+                }
+            }
+        };
+
+    // Try TI default security transitions before boot-ROM entry. Repo TRM notes:
+    // default UNSEAL=0x0414/0x3672, default FULL ACCESS=0xFFFF/0xFFFF.
+    try_access_word("security_unseal_0414", 0x14, 0x04);
+    try_access_word("security_unseal_3672", 0x72, 0x36);
+    try_access_word("security_full_access_ffff_1", 0xFF, 0xFF);
+    try_access_word("security_full_access_ffff_2", 0xFF, 0xFF);
+
+    let mut try_enter = |stage: &'static str,
+                         frame: &[u8],
+                         settle: Duration|
+     -> Result<bool, bq40z50::BmsDiagError> {
+        if !quiet {
+            defmt::warn!("bms_diag: addr=0x{=u8:x} stage={} begin", addr, stage);
+        }
+
+        if let Err(e) = i2c.write(addr, frame) {
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage={} write_err={}",
+                    addr,
+                    stage,
+                    i2c_error_kind(e)
+                );
+            }
+            return Ok(false);
+        }
+
+        spin_delay(settle);
+        match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE) {
+            Ok(after) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} rsoc_after=0x{=u16:x}",
+                        addr,
+                        stage,
+                        after
+                    );
+                }
+                Ok(after == BMS_ROM_MODE_SIGNATURE)
+            }
+            Err(e) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage={} read_err={}",
+                        addr,
+                        stage,
+                        e
+                    );
+                }
+                Ok(false)
+            }
+        }
+    };
+
+    if try_enter(
+        "rom_mode_enter_44_0f00",
+        &[0x44, 0x02, 0x00, 0x0F],
+        BMS_MAC_TOGGLE_SETTLE,
+    )? {
+        return Ok(true);
+    }
+    if try_enter(
+        "rom_mode_enter_44_0033",
+        &[0x44, 0x02, 0x33, 0x00],
+        BMS_MAC_TOGGLE_SETTLE,
+    )? {
+        return Ok(true);
+    }
+
+    let pec_44_0f00 = crc8_smbus(&[addr_w, 0x44, 0x02, 0x00, 0x0F]);
+    if try_enter(
+        "rom_mode_enter_44_0f00_pec",
+        &[0x44, 0x02, 0x00, 0x0F, pec_44_0f00],
+        BMS_MAC_TOGGLE_SETTLE,
+    )? {
+        return Ok(true);
+    }
+
+    let pec_44_0033 = crc8_smbus(&[addr_w, 0x44, 0x02, 0x33, 0x00]);
+    if try_enter(
+        "rom_mode_enter_44_0033_pec",
+        &[0x44, 0x02, 0x33, 0x00, pec_44_0033],
+        BMS_MAC_TOGGLE_SETTLE,
+    )? {
+        return Ok(true);
+    }
+
+    if try_enter(
+        "rom_mode_enter_0f00",
+        &[0x00, 0x0F, 0x00],
+        BMS_MAC_TOGGLE_SETTLE,
+    )? {
+        return Ok(true);
+    }
+    if try_enter(
+        "rom_mode_enter_0033",
+        &[0x00, 0x00, 0x33],
+        BMS_MAC_TOGGLE_SETTLE,
+    )? {
+        return Ok(true);
+    }
+
+    let pec_0f00 = crc8_smbus(&[addr_w, 0x00, 0x0F, 0x00]);
+    if try_enter(
+        "rom_mode_enter_0f00_pec",
+        &[0x00, 0x0F, 0x00, pec_0f00],
+        BMS_MAC_TOGGLE_SETTLE,
+    )? {
+        return Ok(true);
+    }
+
+    let pec_0033 = crc8_smbus(&[addr_w, 0x00, 0x00, 0x33]);
+    if try_enter(
+        "rom_mode_enter_0033_pec",
+        &[0x00, 0x00, 0x33, pec_0033],
+        BMS_MAC_TOGGLE_SETTLE,
+    )? {
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 fn maybe_exit_bms_rom_mode<I2C>(
@@ -1466,9 +3462,10 @@ where
         Ok(after != BMS_ROM_MODE_SIGNATURE)
     };
 
-    // Keep ROM recovery as a narrow/safe path:
-    // - first try `Execute FW` (`0x08`) and `[0x08, 0x11]` without PEC
-    // - then retry both with PEC in case CPE/HPE requires it.
+    // Recover the broader historical ROM-exit matrix before declaring the gauge stuck in 0x9002.
+    let addr_w = addr << 1;
+    let pec_08 = crc8_smbus(&[addr_w, 0x08]);
+    let pec_0811 = crc8_smbus(&[addr_w, 0x08, 0x11]);
     if try_exit(
         "rom_mode_exit_write_08",
         &[0x08],
@@ -1483,8 +3480,6 @@ where
     )? {
         return Ok(true);
     }
-    let addr_w = addr << 1;
-    let pec_08 = crc8_smbus(&[addr_w, 0x08]);
     if try_exit(
         "rom_mode_exit_write_08_pec",
         &[0x08, pec_08],
@@ -1492,7 +3487,6 @@ where
     )? {
         return Ok(true);
     }
-    let pec_0811 = crc8_smbus(&[addr_w, 0x08, 0x11]);
     if try_exit(
         "rom_mode_exit_write_08_11_pec",
         &[0x08, 0x11, pec_0811],
@@ -1534,6 +3528,18 @@ where
     spin_delay(BMS_WORD_GAP);
     prime_bms_command_window(i2c, addr)?;
     let status_raw = read_u16_consistent(i2c, addr, bq40z50::cmd::BATTERY_STATUS, 0)?;
+    spin_delay(BMS_WORD_GAP);
+    prime_bms_command_window(i2c, addr)?;
+    let cell1_mv = read_u16_consistent(i2c, addr, bq40z50::cmd::CELL_VOLTAGE_1, 20)?;
+    spin_delay(BMS_WORD_GAP);
+    prime_bms_command_window(i2c, addr)?;
+    let cell2_mv = read_u16_consistent(i2c, addr, bq40z50::cmd::CELL_VOLTAGE_2, 20)?;
+    spin_delay(BMS_WORD_GAP);
+    prime_bms_command_window(i2c, addr)?;
+    let cell3_mv = read_u16_consistent(i2c, addr, bq40z50::cmd::CELL_VOLTAGE_3, 20)?;
+    spin_delay(BMS_WORD_GAP);
+    prime_bms_command_window(i2c, addr)?;
+    let cell4_mv = read_u16_consistent(i2c, addr, bq40z50::cmd::CELL_VOLTAGE_4, 20)?;
     let mut temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(temp_k_x10);
     if strict_validation && !(-400..=1250).contains(&temp_c_x10) {
         // Temperature occasionally glitches to a transient out-of-range value while other fields
@@ -1560,7 +3566,7 @@ where
         && status_raw == BMS_SUSPICIOUS_STATUS;
     if strict_validation && suspicious_tuple && repeat_count >= 3 {
         defmt::warn!(
-            "bms_diag_raw: addr=0x{=u8:x} temp_k_x10={=u16} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} repeats={=u8}",
+            "bms_diag_raw: addr=0x{=u8:x} temp_k_x10={=u16} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16} repeats={=u8}",
             addr,
             temp_k_x10,
             temp_c_x10,
@@ -1568,6 +3574,10 @@ where
             current_ma,
             soc_pct,
             status_raw,
+            cell1_mv,
+            cell2_mv,
+            cell3_mv,
+            cell4_mv,
             repeat_count
         );
         return Err(bq40z50::BmsDiagError::StalePattern);
@@ -1579,7 +3589,7 @@ where
             || soc_pct > 100)
     {
         defmt::warn!(
-            "bms_diag_raw: addr=0x{=u8:x} temp_k_x10={=u16} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x}",
+            "bms_diag_raw: addr=0x{=u8:x} temp_k_x10={=u16} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16}",
             addr,
             temp_k_x10,
             temp_c_x10,
@@ -1587,6 +3597,10 @@ where
             current_ma,
             soc_pct,
             status_raw,
+            cell1_mv,
+            cell2_mv,
+            cell3_mv,
+            cell4_mv,
         );
         return Err(bq40z50::BmsDiagError::BadRange);
     }
@@ -1601,6 +3615,10 @@ where
         current_ma,
         soc_pct,
         status_raw,
+        cell1_mv,
+        cell2_mv,
+        cell3_mv,
+        cell4_mv,
         err_code,
         remaining_cap_mah,
         full_cap_mah,
@@ -1993,9 +4011,147 @@ where
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BootChargeMode {
+    Off,
+    MinCharge,
+}
+
+impl BootChargeMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::MinCharge => "min_charge",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ChargerProfileRestore {
+    vreg: u16,
+    ichg: u16,
+    iindpm: u16,
+}
+
+const CHARGER_PROFILE_RTC_VERSION: u8 = 1;
+const CHARGER_PROFILE_RTC_VALID: u8 = 1 << 0;
+const CHARGER_PROFILE_RTC_LEN: usize = 24;
+
+// Persist the pre-wake charger profile so a watchdog/software reset can restore it without
+// requiring REG_RST (which also resets safety timers).
+#[ram(unstable(rtc_fast, persistent))]
+static mut CHARGER_PROFILE_RTC: [u8; CHARGER_PROFILE_RTC_LEN] = [0; CHARGER_PROFILE_RTC_LEN];
+
+fn charger_profile_rtc_checksum(data: &[u8]) -> u32 {
+    // FNV-1a hash (no_std friendly) to avoid treating random RTC contents as valid.
+    let mut hash: u32 = 0x811C_9DC5;
+    for &b in data {
+        hash ^= b as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
+fn charger_profile_rtc_load() -> Option<ChargerProfileRestore> {
+    // Avoid taking references to `static mut`; RTC contents are copied out once per call.
+    let buf: [u8; CHARGER_PROFILE_RTC_LEN] =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!(CHARGER_PROFILE_RTC)) };
+
+    if buf[0] != b'C' || buf[1] != b'H' || buf[2] != b'R' || buf[3] != b'G' {
+        return None;
+    }
+    if buf[4] != CHARGER_PROFILE_RTC_VERSION {
+        return None;
+    }
+    if (buf[5] & CHARGER_PROFILE_RTC_VALID) == 0 {
+        return None;
+    }
+
+    let expected = u32::from_le_bytes([buf[20], buf[21], buf[22], buf[23]]);
+    let actual = charger_profile_rtc_checksum(&buf[0..20]);
+    if expected != actual {
+        return None;
+    }
+
+    let vreg = u16::from_le_bytes([buf[8], buf[9]]);
+    let ichg = u16::from_le_bytes([buf[10], buf[11]]);
+    let iindpm = u16::from_le_bytes([buf[12], buf[13]]);
+
+    Some(ChargerProfileRestore { vreg, ichg, iindpm })
+}
+
+fn charger_profile_rtc_store(saved: ChargerProfileRestore) {
+    let mut buf = [0u8; CHARGER_PROFILE_RTC_LEN];
+    buf[0] = b'C';
+    buf[1] = b'H';
+    buf[2] = b'R';
+    buf[3] = b'G';
+    buf[4] = CHARGER_PROFILE_RTC_VERSION;
+    buf[5] = CHARGER_PROFILE_RTC_VALID;
+
+    buf[8..10].copy_from_slice(&saved.vreg.to_le_bytes());
+    buf[10..12].copy_from_slice(&saved.ichg.to_le_bytes());
+    buf[12..14].copy_from_slice(&saved.iindpm.to_le_bytes());
+
+    let checksum = charger_profile_rtc_checksum(&buf[0..20]);
+    buf[20..24].copy_from_slice(&checksum.to_le_bytes());
+
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(CHARGER_PROFILE_RTC), buf);
+    }
+}
+
+fn charger_profile_rtc_clear() {
+    unsafe {
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!(CHARGER_PROFILE_RTC),
+            [0u8; CHARGER_PROFILE_RTC_LEN],
+        );
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BmsStartupStage {
+    ProbeWithoutCharge,
+    WaitChargeOff,
+    WaitMinChargeSettle,
+    ProbeWithMinCharge,
+    WaitRom,
+    Monitoring,
+}
+
+impl BmsStartupStage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ProbeWithoutCharge => "probe_without_charge",
+            Self::WaitChargeOff => "wait_charge_off",
+            Self::WaitMinChargeSettle => "wait_min_charge_settle",
+            Self::ProbeWithMinCharge => "probe_with_min_charge",
+            Self::WaitRom => "wait_rom",
+            Self::Monitoring => "monitoring",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WakeWindowProbeResult {
+    Miss,
+    Working(u8),
+    Rom(u8),
+    EnteredRom(u8),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PostFlashResumeResult {
+    WaitingBoot,
+    WaitingRom,
+    Recovered(u8),
+}
+
 pub struct PowerManager<'d, I2C> {
     i2c: I2C,
     i2c1_int: Input<'d>,
+    bms_btp_int_h: Input<'d>,
     therm_kill: Flex<'d>,
     chg_ce: Flex<'d>,
     chg_ilim_hiz_brk: Flex<'d>,
@@ -2019,6 +4175,9 @@ pub struct PowerManager<'d, I2C> {
     chg_enabled: bool,
     charger_allowed: bool,
     chg_last_int_poll_at: Option<Instant>,
+    chg_watchdog_restore: Option<u8>,
+    chg_force_profile_restore: Option<ChargerProfileRestore>,
+    charge_mode: BootChargeMode,
 
     bms_addr: Option<u8>,
     bms_next_poll_at: Instant,
@@ -2027,17 +4186,31 @@ pub struct PowerManager<'d, I2C> {
     bms_pattern_tracker: BmsPatternTracker,
     bms_weak_pass_votes: u8,
     bms_last_word_diag_at: Option<Instant>,
+    bms_last_word_diag_addr: Option<u8>,
     bms_diag_scan_next_at: Instant,
+    bms_missing_diag_next_at: Option<Instant>,
     bms_probe_mode_last: Option<bool>,
     boot_at: Instant,
     bms_isolation_until: Option<Instant>,
     pending_irq: IrqSnapshot,
-    bms_force_recover_attempted: bool,
+    bms_btp_irq_total: u32,
     bms_last_rom_recover_primary_at: Option<Instant>,
     bms_last_rom_recover_fallback_at: Option<Instant>,
     bms_rom_flash_attempted: bool,
     bms_ship_reset_attempted: bool,
     bms_transport_fail_count: u8,
+    bms_startup_stage: BmsStartupStage,
+    bms_stage_next_at: Instant,
+    bms_wait_rom_started_at: Option<Instant>,
+    bms_wait_rom_status_next_at: Option<Instant>,
+    bms_exit_exercise_next_at: Option<Instant>,
+    bms_exit_exercise_attempts: u16,
+    bms_exit_exercise_ack_count: u16,
+    bms_exit_exercise_reported: bool,
+    bms_post_flash_resume_addr: Option<u8>,
+    bms_post_flash_resume_started_at: Option<Instant>,
+    bms_post_flash_reexit_attempted: bool,
+    bms_last_working_info_at: Option<Instant>,
 }
 
 #[derive(Clone, Copy)]
@@ -2058,7 +4231,6 @@ pub struct Config {
     pub bms_diag_isolation: bool,
     pub bms_address_mode: bq40z50::BmsAddressMode,
     pub bms_strict_validation: bool,
-    pub bms_staged_probe: bool,
     pub bms_mac_probe_only: bool,
     pub bms_mac_probe_boot_window: Duration,
     pub bms_rom_recover: bool,
@@ -2068,9 +4240,68 @@ impl<'d, I2C> PowerManager<'d, I2C>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
+    fn maybe_restore_charger_profile_after_reset(&mut self) {
+        let Some(saved) = charger_profile_rtc_load() else {
+            return;
+        };
+
+        fn decode_voltage_mv(reg: u16) -> u16 {
+            (reg & 0x07FF) * 10
+        }
+
+        fn decode_cur_ma(reg: u16) -> u16 {
+            (reg & 0x01FF) * 10
+        }
+
+        defmt::warn!(
+            "charger: bq25792 stage=boot_restore_wake_profile vreg_mv={=u16} ichg_ma={=u16} iindpm_ma={=u16}",
+            decode_voltage_mv(saved.vreg),
+            decode_cur_ma(saved.ichg),
+            decode_cur_ma(saved.iindpm),
+        );
+
+        if let Err(e) = bq25792::write_u16(
+            &mut self.i2c,
+            bq25792::reg::CHARGE_VOLTAGE_LIMIT,
+            saved.vreg,
+        ) {
+            defmt::warn!(
+                "charger: bq25792 err stage=boot_restore_vreg err={}",
+                i2c_error_kind(e)
+            );
+            return;
+        }
+        if let Err(e) = bq25792::write_u16(
+            &mut self.i2c,
+            bq25792::reg::CHARGE_CURRENT_LIMIT,
+            saved.ichg,
+        ) {
+            defmt::warn!(
+                "charger: bq25792 err stage=boot_restore_ichg err={}",
+                i2c_error_kind(e)
+            );
+            return;
+        }
+        if let Err(e) = bq25792::write_u16(
+            &mut self.i2c,
+            bq25792::reg::INPUT_CURRENT_LIMIT,
+            saved.iindpm,
+        ) {
+            defmt::warn!(
+                "charger: bq25792 err stage=boot_restore_iindpm err={}",
+                i2c_error_kind(e)
+            );
+            return;
+        }
+
+        charger_profile_rtc_clear();
+        defmt::warn!("charger: bq25792 stage=boot_restore_wake_profile_done");
+    }
+
     pub fn new(
         i2c: I2C,
         i2c1_int: Input<'d>,
+        bms_btp_int_h: Input<'d>,
         therm_kill: Flex<'d>,
         mut chg_ce: Flex<'d>,
         mut chg_ilim_hiz_brk: Flex<'d>,
@@ -2090,6 +4321,7 @@ where
         Self {
             i2c,
             i2c1_int,
+            bms_btp_int_h,
             therm_kill,
             chg_ce,
             chg_ilim_hiz_brk,
@@ -2112,6 +4344,9 @@ where
             chg_enabled: false,
             charger_allowed,
             chg_last_int_poll_at: None,
+            chg_watchdog_restore: None,
+            chg_force_profile_restore: None,
+            charge_mode: BootChargeMode::Off,
 
             bms_addr,
             bms_next_poll_at: now,
@@ -2120,17 +4355,868 @@ where
             bms_pattern_tracker: BmsPatternTracker::new(),
             bms_weak_pass_votes: 0,
             bms_last_word_diag_at: None,
+            bms_last_word_diag_addr: None,
             bms_diag_scan_next_at: now,
+            bms_missing_diag_next_at: if bms_addr.is_some() {
+                None
+            } else {
+                Some(now + BMS_MISSING_VERBOSE_REPROBE_INTERVAL)
+            },
             bms_probe_mode_last: None,
             boot_at: now,
             bms_isolation_until: None,
             pending_irq: IrqSnapshot::default(),
-            bms_force_recover_attempted: false,
+            bms_btp_irq_total: 0,
             bms_last_rom_recover_primary_at: None,
             bms_last_rom_recover_fallback_at: None,
             bms_rom_flash_attempted: false,
             bms_ship_reset_attempted: false,
             bms_transport_fail_count: 0,
+            bms_startup_stage: BmsStartupStage::ProbeWithoutCharge,
+            bms_stage_next_at: now,
+            bms_wait_rom_started_at: None,
+            bms_wait_rom_status_next_at: None,
+            bms_exit_exercise_next_at: None,
+            bms_exit_exercise_attempts: 0,
+            bms_exit_exercise_ack_count: 0,
+            bms_exit_exercise_reported: false,
+            bms_post_flash_resume_addr: None,
+            bms_post_flash_resume_started_at: None,
+            bms_post_flash_reexit_attempted: false,
+            bms_last_working_info_at: None,
+        }
+    }
+
+    fn set_charge_mode(&mut self, mode: BootChargeMode) {
+        if self.charge_mode == mode {
+            return;
+        }
+
+        self.charge_mode = mode;
+        self.chg_next_retry_at = Some(Instant::now());
+        self.chg_next_poll_at = Instant::now();
+        defmt::warn!("charger: boot_charge_mode={}", mode.as_str());
+    }
+
+    fn log_bms_signal_line(&mut self, irq: &IrqSnapshot, reason: &'static str) {
+        self.bms_btp_irq_total = self.bms_btp_irq_total.wrapping_add(irq.bms_btp_int_h);
+        defmt::info!(
+            "bms_signal: reason={} stage={} charge_mode={} gpio21_high={=bool} edge_delta={=u32} edge_total={=u32} addr={=?} post_flash_addr={=?} i2c1_int_delta={=u32}",
+            reason,
+            self.bms_startup_stage.as_str(),
+            self.charge_mode.as_str(),
+            self.bms_btp_int_h.is_high(),
+            irq.bms_btp_int_h,
+            self.bms_btp_irq_total,
+            self.bms_addr,
+            self.bms_post_flash_resume_addr,
+            irq.i2c1_int,
+        );
+    }
+
+    fn probe_bq40z50_without_recover(&mut self, quiet: bool) -> Option<u8> {
+        let old = self.cfg.bms_rom_recover;
+        self.cfg.bms_rom_recover = false;
+        let found = self.probe_bq40z50_impl(quiet);
+        self.cfg.bms_rom_recover = old;
+        found
+    }
+
+    fn detect_bq40z50_rom_signature(&mut self, quiet: bool) -> Option<u8> {
+        for &addr in self.cfg.bms_address_mode.candidates() {
+            match read_u16_with_optional_pec(
+                &mut self.i2c,
+                addr,
+                bq40z50::cmd::RELATIVE_STATE_OF_CHARGE,
+            ) {
+                Ok(sig) if sig == BMS_ROM_MODE_SIGNATURE => {
+                    if !quiet {
+                        defmt::warn!(
+                            "bms_diag: addr=0x{=u8:x} stage=rom_mode_detected rsoc=0x{=u16:x}",
+                            addr,
+                            sig
+                        );
+                    }
+                    return Some(addr);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn clear_post_flash_resume(&mut self) {
+        self.bms_post_flash_resume_addr = None;
+        self.bms_post_flash_resume_started_at = None;
+        self.bms_post_flash_reexit_attempted = false;
+    }
+
+    fn arm_post_flash_resume(&mut self, addr: u8, started_at: Instant) {
+        self.bms_post_flash_resume_addr = Some(addr);
+        self.bms_post_flash_resume_started_at = Some(started_at);
+        self.bms_post_flash_reexit_attempted = false;
+    }
+
+    fn schedule_post_flash_resume(&mut self, addr: u8, quiet: bool) {
+        let pending_at = Instant::now();
+        self.arm_post_flash_resume(addr, pending_at);
+        self.bms_stage_next_at = pending_at + BMS_POST_FLASH_BOOT_QUIET;
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_resume_armed keep_charge=true next_probe_ms={=u64}",
+                addr,
+                BMS_POST_FLASH_BOOT_QUIET.as_millis() as u64
+            );
+        }
+    }
+
+    fn maybe_disable_charger_watchdog_for_recovery(
+        &mut self,
+        quiet: bool,
+    ) -> Result<(), esp_hal::i2c::master::Error> {
+        if self.chg_watchdog_restore.is_some() {
+            return Ok(());
+        }
+
+        let watchdog = bq25792::ensure_watchdog_disabled(&mut self.i2c)?;
+        if watchdog.watchdog_before != watchdog.watchdog_after {
+            self.chg_watchdog_restore = Some(watchdog.watchdog_before);
+            if !quiet {
+                defmt::warn!(
+                    "charger: bq25792 watchdog stage=recover_disable before=0x{=u8:x} after=0x{=u8:x}",
+                    watchdog.watchdog_before,
+                    watchdog.watchdog_after,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn maybe_restore_charger_watchdog_after_recovery(&mut self, quiet: bool) {
+        let Some(bits) = self.chg_watchdog_restore else {
+            return;
+        };
+
+        match bq25792::restore_watchdog(&mut self.i2c, bits) {
+            Ok(state) => {
+                self.chg_watchdog_restore = None;
+                if !quiet {
+                    defmt::warn!(
+                        "charger: bq25792 watchdog stage=recover_restore before=0x{=u8:x} after=0x{=u8:x}",
+                        state.watchdog_before,
+                        state.watchdog_after,
+                    );
+                }
+            }
+            Err(e) => {
+                if !quiet {
+                    defmt::error!(
+                        "charger: bq25792 err stage=watchdog_restore err={}",
+                        i2c_error_kind(e)
+                    );
+                }
+            }
+        }
+    }
+
+    fn mark_bms_working(&mut self, addr: u8) {
+        let now = Instant::now();
+        self.maybe_restore_charger_watchdog_after_recovery(false);
+        if self.charge_mode == BootChargeMode::MinCharge && !self.cfg.force_min_charge {
+            self.set_charge_mode(BootChargeMode::Off);
+            self.maybe_poll_charger(&IrqSnapshot::default());
+        }
+        self.bms_addr = Some(addr);
+        self.bms_next_retry_at = Some(now);
+        self.bms_next_poll_at = now;
+        self.bms_last_int_poll_at = None;
+        self.bms_transport_fail_count = 0;
+        self.bms_missing_diag_next_at = None;
+        self.bms_startup_stage = BmsStartupStage::Monitoring;
+        self.bms_stage_next_at = now;
+        self.bms_wait_rom_started_at = None;
+        self.bms_wait_rom_status_next_at = None;
+        self.bms_exit_exercise_next_at = None;
+        self.bms_exit_exercise_attempts = 0;
+        self.bms_exit_exercise_ack_count = 0;
+        self.bms_exit_exercise_reported = false;
+        self.clear_post_flash_resume();
+        self.bms_last_working_info_at = None;
+        defmt::warn!(
+            "bms_flow: stage={} addr=0x{=u8:x} charge_mode={}",
+            self.bms_startup_stage.as_str(),
+            addr,
+            self.charge_mode.as_str()
+        );
+    }
+
+    fn rom_recover_due(&self, addr: u8, now: Instant) -> bool {
+        let last = if addr == bq40z50::I2C_ADDRESS_FALLBACK {
+            self.bms_last_rom_recover_fallback_at
+        } else {
+            self.bms_last_rom_recover_primary_at
+        };
+        last.map_or(true, |prev| now >= prev + BMS_ROM_RECOVER_MIN_INTERVAL)
+    }
+
+    fn note_rom_recover_attempt(&mut self, addr: u8, now: Instant) {
+        if addr == bq40z50::I2C_ADDRESS_FALLBACK {
+            self.bms_last_rom_recover_fallback_at = Some(now);
+        } else {
+            self.bms_last_rom_recover_primary_at = Some(now);
+        }
+    }
+
+    fn blind_force_recover_ready(&self, now: Instant) -> bool {
+        if !cfg!(feature = "bms-rom-recover-force") {
+            return false;
+        }
+        if self.bms_startup_stage != BmsStartupStage::WaitRom {
+            return true;
+        }
+        self.bms_wait_rom_started_at.map_or(false, |started| {
+            now >= started + BMS_ROM_FORCE_MIN_CHARGE_DWELL
+        })
+    }
+
+    fn attempt_bq40_rom_flash(&mut self, addr: u8, quiet: bool) {
+        let now = Instant::now();
+        let recover_quiet = false;
+        if !self.rom_recover_due(addr, now) {
+            if !quiet {
+                defmt::warn!(
+                    "bms_flow: stage={} addr=0x{=u8:x} recover=deferred wait_ms={=u64}",
+                    self.bms_startup_stage.as_str(),
+                    addr,
+                    BMS_ROM_RECOVER_MIN_INTERVAL.as_millis() as u64
+                );
+            }
+            return;
+        }
+
+        self.clear_post_flash_resume();
+        if let Err(e) = self.maybe_disable_charger_watchdog_for_recovery(recover_quiet) {
+            self.clear_post_flash_resume();
+            self.maybe_restore_charger_watchdog_after_recovery(recover_quiet);
+            if !recover_quiet {
+                defmt::error!(
+                    "charger: bq25792 err stage=watchdog_cfg err={}",
+                    i2c_error_kind(e)
+                );
+            }
+            return;
+        }
+        self.maybe_dwell_before_rom_flash(addr, recover_quiet);
+        match prepare_bms_rom_flash_recover(&mut self.i2c, addr, recover_quiet) {
+            Ok(Some(sig)) => {
+                // Only commit to the "recover attempt" backoff once we truly start a ROM flash.
+                self.note_rom_recover_attempt(addr, Instant::now());
+                self.bms_rom_flash_attempted = true;
+                match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, sig, recover_quiet) {
+                    Ok(()) => {
+                        self.schedule_post_flash_resume(addr, recover_quiet);
+                    }
+                    Err(e) => {
+                        if !recover_quiet {
+                            log_bms_diag(addr, "probe_rom_flash", e, "word", "srec");
+                        }
+                        if matches!(e, bq40z50::BmsDiagError::InconsistentSample) {
+                            self.schedule_post_flash_resume(addr, recover_quiet);
+                        } else {
+                            self.clear_post_flash_resume();
+                            self.maybe_restore_charger_watchdog_after_recovery(recover_quiet);
+                        }
+                    }
+                }
+            }
+            Ok(None) => {
+                self.clear_post_flash_resume();
+                self.maybe_restore_charger_watchdog_after_recovery(recover_quiet);
+                if !recover_quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_skipped",
+                        addr
+                    );
+                }
+            }
+            Err(e) => {
+                self.clear_post_flash_resume();
+                self.maybe_restore_charger_watchdog_after_recovery(recover_quiet);
+                if !recover_quiet {
+                    log_bms_diag(addr, "probe_rom_flash", e, "word", "srec");
+                }
+            }
+        }
+    }
+
+    fn maybe_exercise_bms_exit_conditions(
+        &mut self,
+        now: Instant,
+        quiet: bool,
+    ) -> Option<WakeWindowProbeResult> {
+        if self.bms_startup_stage != BmsStartupStage::WaitRom || self.bms_rom_flash_attempted {
+            return None;
+        }
+
+        let Some(started) = self.bms_wait_rom_started_at else {
+            return None;
+        };
+
+        let elapsed = now - started;
+        if elapsed >= BMS_EXIT_EXERCISE_WINDOW {
+            if !self.bms_exit_exercise_reported {
+                defmt::warn!(
+                    "bms_diag: stage=emshut_shutdown_exit_window_done keep_charge={=bool} dwell_ms={=u64} attempts={=u16} ack_total={=u16}",
+                    self.charge_mode == BootChargeMode::MinCharge,
+                    elapsed.as_millis() as u64,
+                    self.bms_exit_exercise_attempts,
+                    self.bms_exit_exercise_ack_count,
+                );
+                self.bms_exit_exercise_reported = true;
+            }
+            self.bms_exit_exercise_next_at = None;
+            return None;
+        }
+
+        if self
+            .bms_exit_exercise_next_at
+            .map_or(false, |next| now < next)
+        {
+            return None;
+        }
+
+        self.bms_exit_exercise_next_at = Some(now + BMS_EXIT_EXERCISE_PERIOD);
+        self.bms_exit_exercise_attempts = self.bms_exit_exercise_attempts.saturating_add(1);
+        let attempt = self.bms_exit_exercise_attempts;
+        let dwell_ms = elapsed.as_millis() as u64;
+
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: stage=emshut_shutdown_exit_window keep_charge={=bool} dwell_ms={=u64} attempt={=u16}",
+                self.charge_mode == BootChargeMode::MinCharge,
+                dwell_ms,
+                attempt,
+            );
+        }
+
+        for &addr in self.cfg.bms_address_mode.candidates() {
+            let mut addr_acked = false;
+            for &cmd in &[
+                bq40z50::cmd::RELATIVE_STATE_OF_CHARGE,
+                bq40z50::cmd::TEMPERATURE,
+            ] {
+                match touch_bms_command(&mut self.i2c, addr, cmd) {
+                    Ok(()) => {
+                        addr_acked = true;
+                        self.bms_exit_exercise_ack_count =
+                            self.bms_exit_exercise_ack_count.saturating_add(1);
+                        defmt::warn!(
+                            "bms_diag: addr=0x{=u8:x} stage=emshut_shutdown_exit_touch cmd=0x{=u8:x} dwell_ms={=u64} attempt={=u16}",
+                            addr,
+                            cmd,
+                            dwell_ms,
+                            attempt,
+                        );
+
+                        match probe_bq40z50_after_wake_touch(
+                            &mut self.i2c,
+                            addr,
+                            self.cfg.bms_strict_validation,
+                            &mut self.bms_pattern_tracker,
+                            attempt.min(u8::MAX as u16) as u8,
+                            dwell_ms,
+                            quiet,
+                        ) {
+                            Ok(WakeWindowProbeResult::Working(found)) => {
+                                return Some(WakeWindowProbeResult::Working(found));
+                            }
+                            Ok(WakeWindowProbeResult::Rom(found)) => {
+                                return Some(WakeWindowProbeResult::Rom(found));
+                            }
+                            Ok(WakeWindowProbeResult::EnteredRom(found)) => {
+                                return Some(WakeWindowProbeResult::EnteredRom(found));
+                            }
+                            Ok(WakeWindowProbeResult::Miss) => {}
+                            Err(e) => {
+                                if !quiet {
+                                    log_bms_diag(
+                                        addr,
+                                        "emshut_shutdown_exit_probe",
+                                        e,
+                                        "word",
+                                        "exit",
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if !quiet {
+                            log_bms_diag(addr, "emshut_shutdown_exit_touch", e, "cmd", "exit");
+                        }
+                    }
+                }
+            }
+
+            if !addr_acked && !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage=emshut_shutdown_exit_addr_miss dwell_ms={=u64} attempt={=u16}",
+                    addr,
+                    dwell_ms,
+                    attempt,
+                );
+            }
+        }
+
+        None
+    }
+
+    fn maybe_handle_post_flash_resume(&mut self, quiet: bool) -> Option<PostFlashResumeResult> {
+        let now = Instant::now();
+        let addr = self.bms_post_flash_resume_addr?;
+        let started = self.bms_post_flash_resume_started_at.unwrap_or(now);
+        let quiet_deadline = started + BMS_POST_FLASH_BOOT_QUIET;
+        let deadline = quiet_deadline + BMS_POST_FLASH_RESUME_WINDOW;
+
+        if now < quiet_deadline {
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_quiet_wait remaining_ms={=u64}",
+                    addr,
+                    (quiet_deadline - now).as_millis() as u64
+                );
+            }
+            return Some(PostFlashResumeResult::WaitingBoot);
+        }
+
+        let expired = now >= deadline;
+        if expired && !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_expired window_ms={=u64}",
+                addr,
+                BMS_POST_FLASH_RESUME_WINDOW.as_millis() as u64
+            );
+        }
+
+        match run_bms_rom_postflash_resume_sequence(&mut self.i2c, addr, quiet) {
+            Ok(true) => {
+                let runtime_prep =
+                    match maybe_enable_bms_runtime_after_flash(&mut self.i2c, addr, quiet) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            if !quiet {
+                                log_bms_diag(
+                                    addr,
+                                    "probe_rom_post_flash_runtime_prepare",
+                                    e,
+                                    "word",
+                                    "mac",
+                                );
+                            }
+                            if !expired {
+                                return Some(PostFlashResumeResult::WaitingRom);
+                            }
+
+                            self.clear_post_flash_resume();
+                            self.maybe_restore_charger_watchdog_after_recovery(quiet);
+                            return None;
+                        }
+                    };
+
+                let mut tracker = BmsPatternTracker::new();
+                match read_bms_snapshot_strict(&mut self.i2c, addr, true, &mut tracker) {
+                    Ok(_) => {
+                        self.mark_bms_working(addr);
+                        defmt::warn!("bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done", addr);
+                        if !quiet {
+                            let fw_stage = if runtime_prep == PostFlashRuntimePrep::Confirmed {
+                                "probe_rom_post_flash_fw_seen"
+                            } else {
+                                "probe_rom_post_flash_fw_seen_status_unconfirmed"
+                            };
+                            defmt::warn!("bms_diag: addr=0x{=u8:x} stage={}", addr, fw_stage);
+                        }
+                        Some(PostFlashResumeResult::Recovered(addr))
+                    }
+                    Err(e) => {
+                        if !quiet {
+                            log_bms_diag(
+                                addr,
+                                "probe_rom_post_flash_fw_invalid_runtime",
+                                e,
+                                "word",
+                                "strict",
+                            );
+                            log_bms_diag(
+                                addr,
+                                "probe_rom_post_flash_snapshot",
+                                e,
+                                "word",
+                                "strict",
+                            );
+                            if runtime_prep == PostFlashRuntimePrep::StatusUnconfirmed {
+                                defmt::warn!(
+                                    "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_fw_invalid_runtime_status_unconfirmed",
+                                    addr
+                                );
+                            }
+                        }
+                        if !expired {
+                            return Some(PostFlashResumeResult::WaitingRom);
+                        }
+
+                        self.clear_post_flash_resume();
+                        self.maybe_restore_charger_watchdog_after_recovery(quiet);
+                        None
+                    }
+                }
+            }
+            Ok(false) => {
+                if !expired {
+                    if !self.bms_post_flash_reexit_attempted {
+                        self.bms_post_flash_reexit_attempted = true;
+                        if !quiet {
+                            defmt::warn!(
+                                "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_reexit_begin keep_charge=true",
+                                addr
+                            );
+                        }
+                        match maybe_exit_bms_rom_mode(&mut self.i2c, addr, quiet) {
+                            Ok(true) => {
+                                self.bms_stage_next_at =
+                                    Instant::now() + BMS_BOOT_STAGE_POLL_PERIOD;
+                                if !quiet {
+                                    defmt::warn!(
+                                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_reexit_ok keep_charge=true next_probe_ms={=u64}",
+                                        addr,
+                                        BMS_BOOT_STAGE_POLL_PERIOD.as_millis() as u64
+                                    );
+                                }
+                                return Some(PostFlashResumeResult::WaitingRom);
+                            }
+                            Ok(false) => {
+                                if !quiet {
+                                    defmt::warn!(
+                                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_reexit_still_rom keep_charge=true next_probe_ms={=u64}",
+                                        addr,
+                                        BMS_BOOT_STAGE_POLL_PERIOD.as_millis() as u64
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                if !quiet {
+                                    log_bms_diag(
+                                        addr,
+                                        "probe_rom_post_flash_reexit",
+                                        e,
+                                        "word",
+                                        "rom-mode",
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    if !quiet {
+                        defmt::warn!(
+                            "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_still_rom keep_charge=true next_probe_ms={=u64}",
+                            addr,
+                            BMS_BOOT_STAGE_POLL_PERIOD.as_millis() as u64
+                        );
+                    }
+                    return Some(PostFlashResumeResult::WaitingRom);
+                }
+
+                self.clear_post_flash_resume();
+                self.maybe_restore_charger_watchdog_after_recovery(quiet);
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_post_flash_still_rom keep_charge=true",
+                        addr
+                    );
+                }
+                None
+            }
+            Err(e) => {
+                if !expired {
+                    if !quiet {
+                        log_bms_diag(addr, "probe_rom_post_flash_resume", e, "word", "rom-mode");
+                    }
+                    return Some(PostFlashResumeResult::WaitingRom);
+                }
+
+                self.clear_post_flash_resume();
+                self.maybe_restore_charger_watchdog_after_recovery(quiet);
+                if !quiet {
+                    log_bms_diag(addr, "probe_rom_post_flash_resume", e, "word", "rom-mode");
+                }
+                None
+            }
+        }
+    }
+
+    fn maybe_run_bms_startup_flow(&mut self) -> bool {
+        let now = Instant::now();
+        if now < self.bms_stage_next_at {
+            return false;
+        }
+
+        match self.bms_startup_stage {
+            BmsStartupStage::ProbeWithoutCharge => {
+                if let Some(addr) = self.probe_bq40z50_without_recover(false) {
+                    // If the gauge is already responsive with charging disabled, avoid toggling
+                    // the minimum-charge wake profile: it can perturb a healthy pack and pollute
+                    // diagnose results.
+                    self.mark_bms_working(addr);
+                    return true;
+                }
+
+                if !self.cfg.force_min_charge {
+                    // Without the explicit wake override, skip the repower/min-charge stages and
+                    // proceed directly to the staged wake/ROM probing.
+                    self.bms_startup_stage = BmsStartupStage::ProbeWithMinCharge;
+                    self.bms_stage_next_at = now;
+                    defmt::warn!(
+                        "bms_flow: stage={} next={} force_min_charge=false",
+                        BmsStartupStage::ProbeWithoutCharge.as_str(),
+                        self.bms_startup_stage.as_str(),
+                    );
+                    return true;
+                }
+
+                self.bms_startup_stage = BmsStartupStage::WaitChargeOff;
+                self.bms_stage_next_at = now + BMS_FORCE_MIN_CHARGE_REPOWER_OFF;
+                defmt::warn!(
+                    "bms_flow: stage={} next={} off_ms={=u64}",
+                    BmsStartupStage::ProbeWithoutCharge.as_str(),
+                    self.bms_startup_stage.as_str(),
+                    BMS_FORCE_MIN_CHARGE_REPOWER_OFF.as_millis() as u64
+                );
+                true
+            }
+            BmsStartupStage::WaitChargeOff => {
+                self.set_charge_mode(BootChargeMode::MinCharge);
+                self.maybe_poll_charger(&IrqSnapshot::default());
+                // Match the agreed recovery flow exactly: after the forced no-charge repower
+                // window, hold minimum charge for 2 s before the first BQ probe.
+                self.bms_startup_stage = BmsStartupStage::WaitMinChargeSettle;
+                self.bms_stage_next_at = now + BMS_BOOT_MIN_CHARGE_SETTLE;
+                defmt::warn!(
+                    "bms_flow: stage={} next={} settle_ms={=u64} charge_mode=min_charge",
+                    BmsStartupStage::WaitChargeOff.as_str(),
+                    self.bms_startup_stage.as_str(),
+                    BMS_BOOT_MIN_CHARGE_SETTLE.as_millis() as u64
+                );
+                true
+            }
+            BmsStartupStage::WaitMinChargeSettle => {
+                self.bms_startup_stage = BmsStartupStage::ProbeWithMinCharge;
+                self.bms_stage_next_at = now;
+                defmt::warn!(
+                    "bms_flow: stage={} next={}",
+                    BmsStartupStage::WaitMinChargeSettle.as_str(),
+                    self.bms_startup_stage.as_str()
+                );
+                true
+            }
+            BmsStartupStage::ProbeWithMinCharge => {
+                match self.probe_bq40z50_wake_window(false) {
+                    WakeWindowProbeResult::Working(addr) => {
+                        self.mark_bms_working(addr);
+                        return true;
+                    }
+                    WakeWindowProbeResult::Rom(addr) | WakeWindowProbeResult::EnteredRom(addr) => {
+                        if self.cfg.bms_rom_recover && self.bms_post_flash_resume_addr.is_none() {
+                            self.attempt_bq40_rom_flash(addr, false);
+                            if self.bms_post_flash_resume_addr.is_some() {
+                                return true;
+                            }
+                        }
+                    }
+                    WakeWindowProbeResult::Miss => {}
+                }
+
+                self.bms_startup_stage = BmsStartupStage::WaitRom;
+                self.bms_stage_next_at = now;
+                self.bms_wait_rom_started_at = Some(now);
+                self.bms_wait_rom_status_next_at = Some(now);
+                self.bms_exit_exercise_next_at = Some(now);
+                self.bms_exit_exercise_attempts = 0;
+                self.bms_exit_exercise_ack_count = 0;
+                self.bms_exit_exercise_reported = false;
+                defmt::warn!(
+                    "bms_flow: stage={} next={} probe_ms={=u64} status_ms={=u64}",
+                    BmsStartupStage::ProbeWithMinCharge.as_str(),
+                    self.bms_startup_stage.as_str(),
+                    BMS_WAIT_ROM_FAST_POLL_PERIOD.as_millis() as u64,
+                    BMS_BOOT_STAGE_POLL_PERIOD.as_millis() as u64
+                );
+                true
+            }
+            BmsStartupStage::WaitRom => {
+                let status_probe_due = self
+                    .bms_wait_rom_status_next_at
+                    .map_or(true, |next| now >= next);
+                let quiet = !status_probe_due;
+
+                if self.bms_post_flash_resume_addr.is_some() {
+                    if let Some(result) = self.maybe_handle_post_flash_resume(quiet) {
+                        match result {
+                            PostFlashResumeResult::WaitingBoot => {
+                                let quiet_deadline =
+                                    self.bms_post_flash_resume_started_at.unwrap_or(now)
+                                        + BMS_POST_FLASH_BOOT_QUIET;
+                                self.bms_stage_next_at = quiet_deadline;
+                                if status_probe_due {
+                                    self.bms_wait_rom_status_next_at = Some(quiet_deadline);
+                                }
+                                return true;
+                            }
+                            PostFlashResumeResult::WaitingRom => {
+                                if status_probe_due {
+                                    defmt::warn!(
+                                        "bms_flow: stage={} rom=post_flash_resume_wait keep_charge=true next_probe_ms={=u64}",
+                                        self.bms_startup_stage.as_str(),
+                                        BMS_BOOT_STAGE_POLL_PERIOD.as_millis() as u64
+                                    );
+                                }
+                                self.bms_stage_next_at = now + BMS_BOOT_STAGE_POLL_PERIOD;
+                                if status_probe_due {
+                                    self.bms_wait_rom_status_next_at =
+                                        Some(now + BMS_BOOT_STAGE_POLL_PERIOD);
+                                }
+                                return true;
+                            }
+                            PostFlashResumeResult::Recovered(_) => {
+                                // `maybe_handle_post_flash_resume` already transitioned the FSM to
+                                // Monitoring on success; stop processing the old WaitRom branch.
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                if let Some(result) = self.maybe_exercise_bms_exit_conditions(now, quiet) {
+                    match result {
+                        WakeWindowProbeResult::Working(addr) => {
+                            self.mark_bms_working(addr);
+                            return true;
+                        }
+                        WakeWindowProbeResult::Rom(addr)
+                        | WakeWindowProbeResult::EnteredRom(addr) => {
+                            if self.cfg.bms_rom_recover && self.bms_post_flash_resume_addr.is_none()
+                            {
+                                self.attempt_bq40_rom_flash(addr, quiet);
+                                if self.bms_post_flash_resume_addr.is_some() {
+                                    return true;
+                                }
+                            }
+                        }
+                        WakeWindowProbeResult::Miss => {}
+                    }
+                }
+
+                if let Some(addr) = self.probe_bq40z50_without_recover(quiet) {
+                    self.mark_bms_working(addr);
+                    return true;
+                }
+
+                let mut rom_waiting = true;
+                if self.cfg.bms_rom_recover {
+                    if let Some(addr) = self.probe_bq40z50_impl(quiet) {
+                        self.mark_bms_working(addr);
+                        return true;
+                    }
+                    rom_waiting = !self.bms_rom_flash_attempted;
+                } else if let Some(addr) = self.detect_bq40z50_rom_signature(quiet) {
+                    rom_waiting = false;
+                    if status_probe_due {
+                        defmt::warn!(
+                            "bms_flow: stage={} rom=detected recover=disabled addr=0x{=u8:x}",
+                            self.bms_startup_stage.as_str(),
+                            addr
+                        );
+                    }
+                }
+
+                if rom_waiting && status_probe_due {
+                    let blind_force_wait_ms = if cfg!(feature = "bms-rom-recover-force") {
+                        self.bms_wait_rom_started_at.map(|started| {
+                            let deadline = started + BMS_ROM_FORCE_MIN_CHARGE_DWELL;
+                            if now >= deadline {
+                                0
+                            } else {
+                                (deadline - now).as_millis() as u64
+                            }
+                        })
+                    } else {
+                        None
+                    };
+
+                    if let Some(wait_ms) = blind_force_wait_ms {
+                        defmt::warn!(
+                            "bms_flow: stage={} rom=waiting keep_charge=true next_probe_ms={=u64} blind_force_wait_ms={=u64}",
+                            self.bms_startup_stage.as_str(),
+                            BMS_WAIT_ROM_FAST_POLL_PERIOD.as_millis() as u64,
+                            wait_ms
+                        );
+                    } else {
+                        defmt::warn!(
+                            "bms_flow: stage={} rom=waiting keep_charge=true next_probe_ms={=u64}",
+                            self.bms_startup_stage.as_str(),
+                            BMS_WAIT_ROM_FAST_POLL_PERIOD.as_millis() as u64
+                        );
+                    }
+                }
+                self.bms_stage_next_at = now + BMS_WAIT_ROM_FAST_POLL_PERIOD;
+                if status_probe_due {
+                    self.bms_wait_rom_status_next_at = Some(now + BMS_BOOT_STAGE_POLL_PERIOD);
+                }
+                true
+            }
+            BmsStartupStage::Monitoring => false,
+        }
+    }
+
+    fn maybe_dwell_before_rom_flash(&mut self, addr: u8, quiet: bool) {
+        if !self.cfg.force_min_charge || !self.charger_allowed {
+            return;
+        }
+
+        const ROM_RECOVER_ICHG_MA: u16 = 200;
+        const ROM_RECOVER_IINDPM_MA: u16 = 500;
+
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=rom_flash_charge_dwell_begin ms={=u64}",
+                addr,
+                BMS_ROM_FORCE_MIN_CHARGE_DWELL.as_millis() as u64
+            );
+        }
+
+        // The 10 s force-min-charge repower has already happened before ROM recovery. Keep the
+        // proven wake profile active while flashing instead of boosting current again, so the
+        // pack stays biased but we avoid introducing another large power-state step right here.
+        if let Err(e) = bq25792::set_charge_current_limit_ma(&mut self.i2c, ROM_RECOVER_ICHG_MA) {
+            defmt::warn!(
+                "charger: rom_recover_boost ichg_write err={}",
+                i2c_error_kind(e)
+            );
+        }
+        if let Err(e) = bq25792::set_input_current_limit_ma(&mut self.i2c, ROM_RECOVER_IINDPM_MA) {
+            defmt::warn!(
+                "charger: rom_recover_boost iindpm_write err={}",
+                i2c_error_kind(e)
+            );
+        }
+
+        spin_delay(BMS_ROM_FORCE_MIN_CHARGE_DWELL);
+
+        if !quiet {
+            defmt::warn!(
+                "bms_diag: addr=0x{=u8:x} stage=rom_flash_charge_dwell_done",
+                addr
+            );
         }
     }
 
@@ -2153,18 +5239,65 @@ where
             self.chg_enabled = false;
         }
 
-        // Ensure charger state is applied before the first BMS probe so the gauge can be powered.
         if self.charger_allowed {
-            self.maybe_poll_charger(&IrqSnapshot::default());
-            spin_delay(BMS_WAKE_SETTLE);
+            self.maybe_restore_charger_profile_after_reset();
         }
 
-        if self.bms_addr.is_none() {
-            self.try_wake_bq40z50();
-            if self.bms_addr.is_none() {
-                defmt::warn!("bms: bq40z50 disabled (boot self-test)");
+        // Safety net: if a previous recovery flow disabled the charger watchdog and the MCU reset
+        // before restoring it, bring back the default watchdog bits at boot. Avoid using REG_RST
+        // here so we do not reset charger safety timers on every tool restart.
+        if self.charger_allowed {
+            match bq25792::read_watchdog_state(&mut self.i2c) {
+                Ok(state) if state.watchdog_before == 0 => match bq25792::restore_watchdog(
+                    &mut self.i2c,
+                    bq25792::ctrl1::WATCHDOG_DEFAULT,
+                ) {
+                    Ok(updated) => defmt::warn!(
+                        "charger: bq25792 watchdog stage=boot_restore before=0x{=u8:x} after=0x{=u8:x}",
+                        updated.watchdog_before,
+                        updated.watchdog_after,
+                    ),
+                    Err(e) => defmt::warn!(
+                        "charger: bq25792 err stage=watchdog_boot_restore err={}",
+                        i2c_error_kind(e)
+                    ),
+                },
+                Ok(_) => {}
+                Err(e) => defmt::warn!(
+                    "charger: bq25792 err stage=watchdog_boot_read err={}",
+                    i2c_error_kind(e)
+                ),
             }
         }
+
+        // New recovery flow: stop charging first, probe BQ normally, then switch to minimum
+        // charge and continue staged probing/recovery from the main loop.
+        self.set_charge_mode(BootChargeMode::Off);
+        if self.charger_allowed {
+            self.maybe_poll_charger(&IrqSnapshot::default());
+        }
+
+        self.bms_addr = None;
+        self.bms_next_retry_at = None;
+        self.bms_next_poll_at = Instant::now();
+        self.bms_missing_diag_next_at = Some(Instant::now() + BMS_MISSING_VERBOSE_REPROBE_INTERVAL);
+        self.bms_startup_stage = BmsStartupStage::ProbeWithoutCharge;
+        self.bms_stage_next_at = Instant::now();
+        self.bms_wait_rom_started_at = None;
+        self.bms_wait_rom_status_next_at = None;
+        self.bms_exit_exercise_next_at = None;
+        self.bms_exit_exercise_attempts = 0;
+        self.bms_exit_exercise_ack_count = 0;
+        self.bms_exit_exercise_reported = false;
+        self.clear_post_flash_resume();
+        self.bms_last_working_info_at = None;
+        defmt::warn!(
+            "bms_flow: stage={} charge_mode={} rom_recover={=bool}",
+            self.bms_startup_stage.as_str(),
+            self.charge_mode.as_str(),
+            self.cfg.bms_rom_recover
+        );
+        self.log_bms_signal_line(&IrqSnapshot::default(), "boot_init");
     }
 
     pub fn tick(&mut self, irq: &IrqSnapshot) {
@@ -2180,23 +5313,28 @@ where
         let irq = self.pending_irq;
         self.pending_irq = IrqSnapshot::default();
 
-        // In isolation mode the main loop period equals BMS poll period (2s), so we must apply
-        // charger keep-alive before each BMS window to avoid starving wake current maintenance.
-        if self.cfg.bms_diag_isolation {
-            self.maybe_poll_charger(&irq);
+        self.maybe_retry();
+        self.maybe_handle_fault(&irq);
+
+        // Keep the SMBus completely quiet during the post-flash boot window so the gauge gets the
+        // same uninterrupted settle time that TI's SREC flow expects after Execute 0x08.
+        if self.bms_post_flash_resume_addr.is_some() && Instant::now() < self.bms_stage_next_at {
+            return;
         }
 
-        let bms_i2c_active = self.maybe_poll_bms(&irq);
+        // Keep the charger alive during both the staged recovery flow and steady-state monitoring.
+        self.maybe_poll_charger(&irq);
+
+        let bms_i2c_active = if self.bms_startup_stage == BmsStartupStage::Monitoring {
+            self.maybe_poll_bms(&irq)
+        } else {
+            self.maybe_run_bms_startup_flow()
+        };
         if self.cfg.bms_diag_isolation && bms_i2c_active {
             self.bms_isolation_until = Some(Instant::now() + BMS_ISOLATION_WINDOW);
             return;
         }
 
-        self.maybe_retry();
-        self.maybe_handle_fault(&irq);
-        if !self.cfg.bms_diag_isolation {
-            self.maybe_poll_charger(&irq);
-        }
         self.maybe_print_telemetry();
     }
 
@@ -2363,7 +5501,7 @@ where
         if self.bms_probe_mode_last != Some(use_mac_probe_only) {
             self.bms_probe_mode_last = Some(use_mac_probe_only);
             defmt::info!(
-                "bms: probe_mode={} elapsed_ms={=u64} window_ms={=u64}",
+                "bms: boot_probe_mode={} elapsed_ms={=u64} window_ms={=u64}",
                 if use_mac_probe_only {
                     "mac_only"
                 } else {
@@ -2379,6 +5517,8 @@ where
             bq40z50::BmsAddressMode::DualProbeDiag
         );
         let force_rom_recover = cfg!(feature = "bms-rom-recover-force");
+        let blind_force_recover =
+            force_rom_recover && self.blind_force_recover_ready(Instant::now());
         for &addr in self.cfg.bms_address_mode.candidates() {
             if self.cfg.bms_rom_recover {
                 let now = Instant::now();
@@ -2390,107 +5530,154 @@ where
                 let should_recover =
                     last_recover_at.map_or(true, |last| now >= last + BMS_ROM_RECOVER_MIN_INTERVAL);
                 if should_recover {
-                    if addr == bq40z50::I2C_ADDRESS_FALLBACK {
-                        self.bms_last_rom_recover_fallback_at = Some(now);
+                    let mut rom_mode_ready = false;
+                    if self.bms_rom_flash_attempted {
+                        match read_u16_with_optional_pec(
+                            &mut self.i2c,
+                            addr,
+                            bq40z50::cmd::RELATIVE_STATE_OF_CHARGE,
+                        ) {
+                            Ok(sig) if sig == BMS_ROM_MODE_SIGNATURE => {
+                                rom_mode_ready = true;
+                                if !quiet {
+                                    defmt::warn!(
+                                        "bms_diag: addr=0x{=u8:x} stage=rom_mode_detected_post_flash rsoc=0x{=u16:x}",
+                                        addr,
+                                        sig
+                                    );
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                if !quiet {
+                                    log_bms_diag(
+                                        addr,
+                                        "probe_rom_post_flash_state",
+                                        e,
+                                        "word",
+                                        "rom-mode",
+                                    );
+                                }
+                            }
+                        }
                     } else {
-                        self.bms_last_rom_recover_primary_at = Some(now);
-                    }
-                    match maybe_exit_bms_rom_mode(&mut self.i2c, addr, quiet) {
-                        Ok(true) => {
-                            // `--recover force` must be able to run recovery even when ROM
-                            // signature is not observed.
-                            if force_rom_recover
-                                && matches!(
+                        match maybe_exit_bms_rom_mode(&mut self.i2c, addr, quiet) {
+                            Ok(true) => {
+                                if matches!(
                                     self.cfg.bms_address_mode,
                                     bq40z50::BmsAddressMode::DualProbeDiag
-                                )
-                                && !self.bms_rom_flash_attempted
-                            {
-                                self.bms_rom_flash_attempted = true;
+                                ) {
+                                    match maybe_enter_bms_rom_mode_diag(&mut self.i2c, addr, quiet)
+                                    {
+                                        Ok(true) => {
+                                            rom_mode_ready = true;
+                                            if !quiet {
+                                                defmt::warn!(
+                                                    "bms_diag: addr=0x{=u8:x} stage=rom_mode_detected_after_enter",
+                                                    addr
+                                                );
+                                            }
+                                        }
+                                        Ok(false) => {
+                                            // `--recover force` must be able to run recovery even when ROM
+                                            // signature is not observed.
+                                            if blind_force_recover && !self.bms_rom_flash_attempted
+                                            {
+                                                self.attempt_bq40_rom_flash(addr, quiet);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            if !quiet {
+                                                log_bms_diag(
+                                                    addr,
+                                                    "probe_rom_enter",
+                                                    e,
+                                                    "word",
+                                                    "rom-mode",
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(false) => {
+                                rom_mode_ready = true;
+                            }
+                            Err(e) => {
+                                if !quiet {
+                                    log_bms_diag(addr, "probe_rom_exit", e, "word", "rom-mode");
+                                    if bms_verbose_diag(self.cfg.bms_address_mode) {
+                                        self.maybe_log_bms_word_diag(addr, "probe_rom_exit", e);
+                                    }
+                                }
+                                if matches!(
+                                    self.cfg.bms_address_mode,
+                                    bq40z50::BmsAddressMode::DualProbeDiag
+                                ) {
+                                    match maybe_enter_bms_rom_mode_diag(&mut self.i2c, addr, quiet)
+                                    {
+                                        Ok(true) => {
+                                            rom_mode_ready = true;
+                                            if !quiet {
+                                                defmt::warn!(
+                                                    "bms_diag: addr=0x{=u8:x} stage=rom_mode_detected_after_enter",
+                                                    addr
+                                                );
+                                            }
+                                        }
+                                        Ok(false) => {
+                                            if blind_force_recover && !self.bms_rom_flash_attempted
+                                            {
+                                                self.attempt_bq40_rom_flash(addr, quiet);
+                                            }
+                                        }
+                                        Err(enter_err) => {
+                                            if !quiet {
+                                                log_bms_diag(
+                                                    addr,
+                                                    "probe_rom_enter",
+                                                    enter_err,
+                                                    "word",
+                                                    "rom-mode",
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if rom_mode_ready {
+                        // TI's ROM-mode recovery guidance allows restarting the flashstream from
+                        // the first ROM command if the part is still stuck in ROM after a failed
+                        // attempt. Keep that retry loop available for `--recover force`, but in the
+                        // supported `if-rom` flow we do at most one ROM flash attempt per run (rerun
+                        // the tool if you want another attempt).
+                        if matches!(
+                            self.cfg.bms_address_mode,
+                            bq40z50::BmsAddressMode::DualProbeDiag
+                        ) {
+                            if !self.bms_rom_flash_attempted {
+                                self.attempt_bq40_rom_flash(addr, quiet);
+                            } else if should_recover && force_rom_recover {
                                 if !quiet {
                                     defmt::warn!(
-                                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_begin",
+                                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_retry keep_charge=true",
                                         addr
                                     );
                                 }
-
-                                match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, quiet)
-                                {
-                                    Ok(()) => {
-                                        if !quiet {
-                                            defmt::warn!(
-                                                "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done",
-                                                addr
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        if !quiet {
-                                            log_bms_diag(
-                                                addr,
-                                                "probe_rom_flash",
-                                                e,
-                                                "word",
-                                                "srec",
-                                            );
-                                        }
-                                    }
-                                }
+                                self.attempt_bq40_rom_flash(addr, quiet);
                             }
                         }
-                        Ok(false) => {
-                            // ROM signature is still present after lightweight exit attempts.
-                            // In diagnostic dual-probe mode we allow one full ROM flash recovery try.
-                            if matches!(
-                                self.cfg.bms_address_mode,
-                                bq40z50::BmsAddressMode::DualProbeDiag
-                            ) && !self.bms_rom_flash_attempted
-                            {
-                                self.bms_rom_flash_attempted = true;
-                                if !quiet {
-                                    defmt::warn!(
-                                        "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_begin",
-                                        addr
-                                    );
-                                }
 
-                                match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, quiet)
-                                {
-                                    Ok(()) => {
-                                        if !quiet {
-                                            defmt::warn!(
-                                                "bms_diag: addr=0x{=u8:x} stage=probe_rom_flash_done",
-                                                addr
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        if !quiet {
-                                            log_bms_diag(
-                                                addr,
-                                                "probe_rom_flash",
-                                                e,
-                                                "word",
-                                                "srec",
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-
-                            if !quiet {
-                                defmt::warn!(
-                                    "bms: bq40z50 probe_wait addr=0x{=u8:x} reason=rom_mode",
-                                    addr
-                                );
-                            }
-                            continue;
+                        if !quiet {
+                            defmt::warn!(
+                                "bms: bq40z50 probe_wait addr=0x{=u8:x} reason=rom_mode",
+                                addr
+                            );
                         }
-                        Err(e) => {
-                            if !quiet {
-                                log_bms_diag(addr, "probe_rom_exit", e, "word", "rom-mode");
-                            }
-                        }
+                        continue;
                     }
                 }
             }
@@ -2501,8 +5688,9 @@ where
                         self.bms_weak_pass_votes = 0;
                         if !quiet {
                             defmt::warn!(
-                                "bms: bq40z50 mac_probe_ok addr=0x{=u8:x} len={=u8} payload={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                                "bms: bq40z50 mac_probe_ok addr=0x{=u8:x} device_type=0x{=u16:x} len={=u8} payload={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
                                 addr,
+                                snapshot.device_type,
                                 snapshot.declared_len,
                                 snapshot.payload_len,
                                 snapshot.b0,
@@ -2518,6 +5706,7 @@ where
                         if !quiet {
                             log_bms_diag(addr, "probe_mac", e, "block", "mac-only");
                             if bms_verbose_diag(self.cfg.bms_address_mode) {
+                                self.maybe_log_bms_word_diag(addr, "probe_mac", e);
                                 log_bms_mac_diag(&mut self.i2c, addr);
                             }
                             defmt::warn!("bms: bq40z50 probe_miss addr=0x{=u8:x} err={}", addr, e);
@@ -2584,10 +5773,14 @@ where
                         self.bms_weak_pass_votes = 0;
                         if !quiet {
                             defmt::info!(
-                                "bms: bq40z50 probe_ok addr=0x{=u8:x} voltage_mv={=u16} soc_pct={=u16}",
+                                "bms: bq40z50 probe_ok addr=0x{=u8:x} voltage_mv={=u16} soc_pct={=u16} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16}",
                                 addr,
                                 snapshot.voltage_mv,
-                                snapshot.soc_pct
+                                snapshot.soc_pct,
+                                snapshot.cell1_mv,
+                                snapshot.cell2_mv,
+                                snapshot.cell3_mv,
+                                snapshot.cell4_mv,
                             );
                         }
                         return Some(addr);
@@ -2662,55 +5855,222 @@ where
         None
     }
 
-    fn try_wake_bq40z50(&mut self) {
-        if self.bms_addr.is_some() {
-            return;
-        }
-        self.bms_force_recover_attempted = true;
+    fn probe_bq40z50_wake_window(&mut self, quiet: bool) -> WakeWindowProbeResult {
         let mode = if self.cfg.bms_mac_probe_only {
             "mac_only"
         } else {
             "strict_word"
         };
+        let staged_start = Instant::now();
 
-        if self.cfg.bms_staged_probe {
-            for (stage, delay_ms) in BMS_MAC_STAGED_DELAYS_MS.iter().enumerate() {
-                if *delay_ms != 0 {
-                    spin_delay(Duration::from_millis(*delay_ms));
+        for (stage, delay_ms) in BMS_WAKE_WINDOW_PROBE_DELAYS_MS.iter().enumerate() {
+            spin_until_elapsed(staged_start, Duration::from_millis(*delay_ms));
+
+            for &addr in self.cfg.bms_address_mode.candidates() {
+                let mut touched = false;
+
+                match touch_bms_command(&mut self.i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)
+                {
+                    Ok(()) => {
+                        touched = true;
+                        if !quiet {
+                            defmt::warn!(
+                                "bms_diag: addr=0x{=u8:x} stage=wake_touch_rsoc step={=u8} delay_ms={=u64}",
+                                addr,
+                                stage as u8,
+                                *delay_ms
+                            );
+                        }
+                        match read_u16_after_successful_touch(
+                            &mut self.i2c,
+                            addr,
+                            "wake_touch_rsoc_raw",
+                            stage as u8,
+                            *delay_ms,
+                            quiet,
+                        ) {
+                            Ok(rsoc) => {
+                                if rsoc == BMS_ROM_MODE_SIGNATURE {
+                                    if !quiet {
+                                        defmt::warn!(
+                                            "bms_diag: addr=0x{=u8:x} stage=wake_window_rom_signature step={=u8} delay_ms={=u64}",
+                                            addr,
+                                            stage as u8,
+                                            *delay_ms
+                                        );
+                                    }
+                                    return WakeWindowProbeResult::Rom(addr);
+                                }
+                                if rsoc <= 100 {
+                                    match touch_bms_command(
+                                        &mut self.i2c,
+                                        addr,
+                                        bq40z50::cmd::TEMPERATURE,
+                                    ) {
+                                        Ok(()) => {
+                                            if !quiet {
+                                                defmt::warn!(
+                                                    "bms_diag: addr=0x{=u8:x} stage=wake_touch_temp step={=u8} delay_ms={=u64}",
+                                                    addr,
+                                                    stage as u8,
+                                                    *delay_ms
+                                                );
+                                            }
+                                            if let Ok(temp) = read_u16_after_successful_touch(
+                                                &mut self.i2c,
+                                                addr,
+                                                "wake_touch_temp_raw",
+                                                stage as u8,
+                                                *delay_ms,
+                                                quiet,
+                                            ) {
+                                                if (2_000..=4_300).contains(&temp)
+                                                    && confirm_bq40_wake_snapshot(
+                                                        &mut self.i2c,
+                                                        addr,
+                                                        self.cfg.bms_strict_validation,
+                                                        &mut self.bms_pattern_tracker,
+                                                        "wake_snapshot_confirm_direct",
+                                                        stage as u8,
+                                                        *delay_ms,
+                                                        quiet,
+                                                    )
+                                                {
+                                                    if !quiet {
+                                                        defmt::warn!(
+                                                            "bms_diag: stage=wake_window_hit addr=0x{=u8:x} probe_mode={} step={=u8} delay_ms={=u64}",
+                                                            addr,
+                                                            mode,
+                                                            stage as u8,
+                                                            *delay_ms
+                                                        );
+                                                    }
+                                                    return WakeWindowProbeResult::Working(addr);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            if !quiet {
+                                                log_bms_diag(
+                                                    addr,
+                                                    "wake_touch_temp",
+                                                    e,
+                                                    "cmd",
+                                                    "wake",
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    Err(e) => {
+                        if !quiet {
+                            log_bms_diag(addr, "wake_touch_rsoc", e, "cmd", "wake");
+                        }
+                    }
                 }
-                if let Some(addr) = self.probe_bq40z50() {
-                    self.bms_addr = Some(addr);
-                    self.bms_next_retry_at = Some(Instant::now());
-                    self.bms_next_poll_at = Instant::now();
-                    defmt::info!(
-                        "bms: bq40z50 ok addr=0x{=u8:x} probe_mode={} stage={=u8}",
-                        addr,
-                        mode,
-                        stage as u8
-                    );
-                    return;
+
+                if !touched {
+                    match touch_bms_command(&mut self.i2c, addr, bq40z50::cmd::TEMPERATURE) {
+                        Ok(()) => {
+                            touched = true;
+                            if !quiet {
+                                defmt::warn!(
+                                    "bms_diag: addr=0x{=u8:x} stage=wake_touch_temp step={=u8} delay_ms={=u64}",
+                                    addr,
+                                    stage as u8,
+                                    *delay_ms
+                                );
+                            }
+                            let _ = read_u16_after_successful_touch(
+                                &mut self.i2c,
+                                addr,
+                                "wake_touch_temp_raw",
+                                stage as u8,
+                                *delay_ms,
+                                quiet,
+                            );
+                        }
+                        Err(e) => {
+                            if !quiet {
+                                log_bms_diag(addr, "wake_touch_temp", e, "cmd", "wake");
+                            }
+                        }
+                    }
                 }
-                defmt::warn!(
-                    "bms: staged_probe miss mode={} stage={=u8}",
-                    mode,
-                    stage as u8
-                );
+
+                if !touched {
+                    continue;
+                }
+
+                match probe_bq40z50_after_wake_touch(
+                    &mut self.i2c,
+                    addr,
+                    self.cfg.bms_strict_validation,
+                    &mut self.bms_pattern_tracker,
+                    stage as u8,
+                    *delay_ms,
+                    quiet,
+                ) {
+                    Ok(WakeWindowProbeResult::Working(addr)) => {
+                        if !quiet {
+                            defmt::warn!(
+                                "bms_diag: stage=wake_window_hit addr=0x{=u8:x} probe_mode={} step={=u8} delay_ms={=u64}",
+                                addr,
+                                mode,
+                                stage as u8,
+                                *delay_ms
+                            );
+                        }
+                        return WakeWindowProbeResult::Working(addr);
+                    }
+                    Ok(WakeWindowProbeResult::Rom(addr)) => {
+                        if !quiet {
+                            defmt::warn!(
+                                "bms_diag: stage=wake_window_rom addr=0x{=u8:x} probe_mode={} step={=u8} delay_ms={=u64}",
+                                addr,
+                                mode,
+                                stage as u8,
+                                *delay_ms
+                            );
+                        }
+                        return WakeWindowProbeResult::Rom(addr);
+                    }
+                    Ok(WakeWindowProbeResult::EnteredRom(addr)) => {
+                        if !quiet {
+                            defmt::warn!(
+                                "bms_diag: stage=wake_window_rom_entered addr=0x{=u8:x} probe_mode={} step={=u8} delay_ms={=u64}",
+                                addr,
+                                mode,
+                                stage as u8,
+                                *delay_ms
+                            );
+                        }
+                        return WakeWindowProbeResult::EnteredRom(addr);
+                    }
+                    Ok(WakeWindowProbeResult::Miss) => {}
+                    Err(e) => {
+                        if !quiet {
+                            log_bms_diag(addr, "wake_probe_followup", e, "word", "wake");
+                        }
+                    }
+                }
             }
-        } else {
-            spin_delay(BMS_WORD_GAP);
-            if let Some(addr) = self.probe_bq40z50() {
-                self.bms_addr = Some(addr);
-                self.bms_next_retry_at = Some(Instant::now());
-                self.bms_next_poll_at = Instant::now();
-                defmt::info!("bms: bq40z50 ok addr=0x{=u8:x}", addr);
-                return;
+
+            if !quiet {
+                defmt::warn!(
+                    "bms_diag: stage=wake_window_miss probe_mode={} step={=u8} delay_ms={=u64}",
+                    mode,
+                    stage as u8,
+                    *delay_ms
+                );
             }
         }
 
-        // We intentionally do not "poke" BQ25792 (e.g., by changing charge voltage/current)
-        // just to wake the gauge. Charger configuration must remain in the normal
-        // startup/charge flow.
-        defmt::warn!("bms: bq40z50 missing/err; battery module disabled");
+        WakeWindowProbeResult::Miss
     }
 
     fn mark_tps_ok(&mut self, ch: OutputChannel) {
@@ -2824,20 +6184,31 @@ where
     }
 
     fn maybe_poll_charger(&mut self, irq: &IrqSnapshot) {
+        let now = Instant::now();
+        if self.bms_post_flash_resume_addr.is_some() {
+            let started_at = self.bms_post_flash_resume_started_at.unwrap_or(now);
+            // Keep the charger configuration stable during the post-flash boot quiet window.
+            // Once the quiet window ends, resume polling so the recovery flow can keep biasing
+            // the pack and respond to input/fault changes.
+            if now < started_at + BMS_POST_FLASH_BOOT_QUIET {
+                return;
+            }
+        }
+
         if !self.charger_allowed {
             if let Some(next_retry_at) = self.chg_next_retry_at {
-                if Instant::now() < next_retry_at {
+                if now < next_retry_at {
                     return;
                 }
             }
             match bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0) {
                 Ok(ctrl0) => {
                     self.charger_allowed = true;
-                    self.chg_next_retry_at = Some(Instant::now());
+                    self.chg_next_retry_at = Some(now);
                     defmt::warn!("charger: bq25792 recovered ctrl0=0x{=u8:x}", ctrl0);
                 }
                 Err(_) => {
-                    self.chg_next_retry_at = Some(Instant::now() + self.cfg.retry_backoff);
+                    self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
                     return;
                 }
             }
@@ -2847,7 +6218,6 @@ where
         const POLL_PERIOD: Duration = Duration::from_secs(1);
         const INT_MIN_INTERVAL: Duration = Duration::from_millis(50);
 
-        let now = Instant::now();
         let mut due = now >= self.chg_next_poll_at;
         if irq.chg_int != 0 && !self.cfg.bms_diag_isolation {
             let allow = self
@@ -2886,6 +6256,24 @@ where
             }
         };
 
+        let mut watchdog_read_ok = true;
+        let watchdog = match bq25792::read_watchdog_state(&mut self.i2c) {
+            Ok(state) => state,
+            Err(e) => {
+                watchdog_read_ok = false;
+                defmt::warn!(
+                    "charger: bq25792 err stage=watchdog_read err={} keep_charge_state=true",
+                    i2c_error_kind(e)
+                );
+                bq25792::WatchdogState {
+                    ctrl1_before: 0,
+                    ctrl1_after: 0,
+                    watchdog_before: 0xFF,
+                    watchdog_after: 0xFF,
+                }
+            }
+        };
+
         // Keep external ship FET path enabled and force SDRV_CTRL=00 (IDLE).
         let ship_path = match bq25792::ensure_ship_fet_path_enabled(&mut self.i2c) {
             Ok(state) => state,
@@ -2903,8 +6291,12 @@ where
 
         // Diagnostic-only nudge: if BMS stays missing after charger wakeup, trigger one
         // SDRV system-reset pulse (11 -> 00) to re-open the battery-side path.
+        // Do not do this during force-min-charge recovery: that flow must keep the pack rail
+        // as undisturbed as possible and the pulse can look like a brief charge drop.
         if self.bms_addr.is_none()
+            && self.bms_post_flash_resume_addr.is_none()
             && !self.bms_ship_reset_attempted
+            && !self.cfg.force_min_charge
             && matches!(
                 self.cfg.bms_address_mode,
                 bq40z50::BmsAddressMode::DualProbeDiag
@@ -3004,15 +6396,81 @@ where
         // Bring-up policy:
         // - Keep SYS regulation alive (never force HiZ / non-switching here).
         // - Default path: charge only when runtime conditions are valid and VBAT is present.
-        // - Diagnostic override: `force_min_charge` can bypass VBAT presence and poke the pack
-        //   with the minimum currents, without changing charge voltage.
+        // - Diagnostic override: `force_min_charge` can bypass VBAT presence and apply the
+        //   proven wake profile (VREG=16.8V / ICHG=200mA / IINDPM=500mA) for no-pack benches.
         let input_present = vbus_present || ac1_present || ac2_present || pg;
         let can_enable = input_present && !ts_cold && !ts_hot;
         let normal_allow_charge = self.cfg.charge_allowed && can_enable && vbat_present;
-        let force_allow_charge = self.cfg.force_min_charge && can_enable;
+        let force_allow_charge = matches!(self.charge_mode, BootChargeMode::MinCharge)
+            && self.cfg.force_min_charge
+            && can_enable;
+        if self.charge_mode == BootChargeMode::Off {
+            if let Some(saved) = self.chg_force_profile_restore {
+                if let Err(e) = bq25792::write_u16(
+                    &mut self.i2c,
+                    bq25792::reg::CHARGE_VOLTAGE_LIMIT,
+                    saved.vreg,
+                ) {
+                    self.chg_ce.set_high();
+                    self.chg_enabled = false;
+                    self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                    defmt::error!(
+                        "charger: bq25792 err stage=restore_vreg err={}",
+                        i2c_error_kind(e)
+                    );
+                    return;
+                }
+                if let Err(e) = bq25792::write_u16(
+                    &mut self.i2c,
+                    bq25792::reg::CHARGE_CURRENT_LIMIT,
+                    saved.ichg,
+                ) {
+                    self.chg_ce.set_high();
+                    self.chg_enabled = false;
+                    self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                    defmt::error!(
+                        "charger: bq25792 err stage=restore_ichg err={}",
+                        i2c_error_kind(e)
+                    );
+                    return;
+                }
+                if let Err(e) = bq25792::write_u16(
+                    &mut self.i2c,
+                    bq25792::reg::INPUT_CURRENT_LIMIT,
+                    saved.iindpm,
+                ) {
+                    self.chg_ce.set_high();
+                    self.chg_enabled = false;
+                    self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                    defmt::error!(
+                        "charger: bq25792 err stage=restore_iindpm err={}",
+                        i2c_error_kind(e)
+                    );
+                    return;
+                }
+                self.chg_force_profile_restore = None;
+                charger_profile_rtc_clear();
+                defmt::warn!("charger: bq25792 wake_profile_restored");
+            }
+        }
+
+        // Keep the charger in host mode while the forced wake profile is active. The BQ25792 I2C
+        // watchdog defaults to 40s, which is shorter than typical diagnose sessions.
+        if force_allow_charge
+            && self.chg_watchdog_restore.is_none()
+            && watchdog_read_ok
+            && watchdog.watchdog_before != 0
+        {
+            if let Err(e) = bq25792::kick_watchdog(&mut self.i2c) {
+                defmt::warn!(
+                    "charger: bq25792 err stage=watchdog_kick err={} keep_charge_state=true",
+                    i2c_error_kind(e)
+                );
+            }
+        }
         let allow_charge = normal_allow_charge || force_allow_charge;
         let mut applied_ctrl0 = ctrl0;
-        let applied_vreg_mv: Option<u16> = None;
+        let mut applied_vreg_mv: Option<u16> = None;
         let mut applied_ichg_ma: Option<u16> = None;
         let mut applied_iindpm_ma: Option<u16> = None;
 
@@ -3020,16 +6478,85 @@ where
         self.chg_ilim_hiz_brk.set_low();
 
         if allow_charge {
-            // When forced, use absolute minimum currents; leave VREG untouched.
-            const FORCE_MIN_ICHG_MA: u16 = 50;
-            const FORCE_MIN_IINDPM_MA: u16 = 100;
+            const FORCE_WAKE_VREG_MV: u16 = 16_800;
+            const FORCE_WAKE_ICHG_MA: u16 = 200;
+            const FORCE_WAKE_IINDPM_MA: u16 = 500;
+
+            fn decode_voltage_mv(reg: u16) -> u16 {
+                (reg & 0x07FF) * 10
+            }
 
             fn decode_cur_ma(reg: u16) -> u16 {
                 (reg & 0x01FF) * 10
             }
 
             if force_allow_charge {
-                match bq25792::set_charge_current_limit_ma(&mut self.i2c, FORCE_MIN_ICHG_MA) {
+                if self.chg_force_profile_restore.is_none() {
+                    let vreg = match bq25792::read_u16(
+                        &mut self.i2c,
+                        bq25792::reg::CHARGE_VOLTAGE_LIMIT,
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.chg_ce.set_high();
+                            self.chg_enabled = false;
+                            self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                            defmt::error!(
+                                "charger: bq25792 err stage=wake_profile_read_vreg err={}",
+                                i2c_error_kind(e)
+                            );
+                            return;
+                        }
+                    };
+                    let ichg = match bq25792::read_u16(
+                        &mut self.i2c,
+                        bq25792::reg::CHARGE_CURRENT_LIMIT,
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.chg_ce.set_high();
+                            self.chg_enabled = false;
+                            self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                            defmt::error!(
+                                "charger: bq25792 err stage=wake_profile_read_ichg err={}",
+                                i2c_error_kind(e)
+                            );
+                            return;
+                        }
+                    };
+                    let iindpm =
+                        match bq25792::read_u16(&mut self.i2c, bq25792::reg::INPUT_CURRENT_LIMIT) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                self.chg_ce.set_high();
+                                self.chg_enabled = false;
+                                self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                                defmt::error!(
+                                    "charger: bq25792 err stage=wake_profile_read_iindpm err={}",
+                                    i2c_error_kind(e)
+                                );
+                                return;
+                            }
+                        };
+                    self.chg_force_profile_restore =
+                        Some(ChargerProfileRestore { vreg, ichg, iindpm });
+                    charger_profile_rtc_store(ChargerProfileRestore { vreg, ichg, iindpm });
+                }
+                match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, FORCE_WAKE_VREG_MV) {
+                    Ok(v) => applied_vreg_mv = Some(decode_voltage_mv(v)),
+                    Err(e) => {
+                        self.chg_ce.set_high();
+                        self.chg_enabled = false;
+                        self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+                        defmt::error!(
+                            "charger: bq25792 err stage=vreg_write err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
+                    }
+                }
+
+                match bq25792::set_charge_current_limit_ma(&mut self.i2c, FORCE_WAKE_ICHG_MA) {
                     Ok(v) => applied_ichg_ma = Some(decode_cur_ma(v)),
                     Err(e) => {
                         self.chg_ce.set_high();
@@ -3043,7 +6570,7 @@ where
                     }
                 }
 
-                match bq25792::set_input_current_limit_ma(&mut self.i2c, FORCE_MIN_IINDPM_MA) {
+                match bq25792::set_input_current_limit_ma(&mut self.i2c, FORCE_WAKE_IINDPM_MA) {
                     Ok(v) => applied_iindpm_ma = Some(decode_cur_ma(v)),
                     Err(e) => {
                         self.chg_ce.set_high();
@@ -3137,7 +6664,7 @@ where
         let vsys_adc_mv = vsys_adc_mv.map_err(i2c_error_kind);
 
         defmt::info!(
-            "charger: enabled={=bool} charge_allowed={=bool} force_min_charge={=bool} normal_allow_charge={=bool} allow_charge={=bool} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_ctrl2_before=0x{=u8:x} ship_ctrl2_after=0x{=u8:x} ship_mode_before={=u8} ship_mode_after={=u8} adc_ctrl=0x{=u8:x} adc_dis0=0x{=u8:x} adc_dis1=0x{=u8:x} vbus_adc_mv={=?} vac1_adc_mv={=?} vac2_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} ibus_adc_raw={=?} ibus_adc_ma={=?} ibat_adc_raw={=?} ibat_adc_ma={=?} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
+            "charger: enabled={=bool} charge_allowed={=bool} force_min_charge={=bool} normal_allow_charge={=bool} allow_charge={=bool} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} iindpm_ma={=?} wd_read_ok={=bool} wd_cfg_before={=u8} wd_cfg_after={=u8} ctrl1_before=0x{=u8:x} ctrl1_after=0x{=u8:x} sfet_present_before={=bool} sfet_present_after={=bool} ship_ctrl2_before=0x{=u8:x} ship_ctrl2_after=0x{=u8:x} ship_mode_before={=u8} ship_mode_after={=u8} adc_ctrl=0x{=u8:x} adc_dis0=0x{=u8:x} adc_dis1=0x{=u8:x} vbus_adc_mv={=?} vac1_adc_mv={=?} vac2_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} ibus_adc_raw={=?} ibus_adc_ma={=?} ibat_adc_raw={=?} ibat_adc_ma={=?} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
             self.chg_enabled,
             self.cfg.charge_allowed,
             self.cfg.force_min_charge,
@@ -3156,6 +6683,11 @@ where
             applied_vreg_mv,
             applied_ichg_ma,
             applied_iindpm_ma,
+            watchdog_read_ok,
+            watchdog.watchdog_before,
+            watchdog.watchdog_after,
+            watchdog.ctrl1_before,
+            watchdog.ctrl1_after,
             (ship_path.ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
             (ship_path.ctrl5_after & bq25792::ctrl5::SFET_PRESENT) != 0,
             ship_path.ship.ctrl2_before,
@@ -3192,6 +6724,12 @@ where
             fault1,
             applied_ctrl0
         );
+        if self.bms_addr.is_none()
+            || self.bms_startup_stage != BmsStartupStage::Monitoring
+            || irq.bms_btp_int_h != 0
+        {
+            self.log_bms_signal_line(irq, "charger_poll");
+        }
 
         self.chg_next_retry_at = None;
     }
@@ -3206,13 +6744,42 @@ where
             }
             self.bms_next_poll_at = now + BMS_POLL_PERIOD;
 
-            if let Some(addr) = self.probe_bq40z50_quiet() {
+            let verbose_missing_probe = (self.cfg.bms_mac_probe_only
+                || matches!(
+                    self.cfg.bms_address_mode,
+                    bq40z50::BmsAddressMode::DualProbeDiag
+                ))
+                && self
+                    .bms_missing_diag_next_at
+                    .map_or(false, |next| now >= next);
+            if verbose_missing_probe {
+                self.bms_missing_diag_next_at = Some(now + BMS_MISSING_VERBOSE_REPROBE_INTERVAL);
+                defmt::warn!(
+                    "bms_diag: stage=missing_reprobe boot_probe_mode={} addr_mode={} elapsed_ms={=u64}",
+                    if self.cfg.bms_mac_probe_only {
+                        "mac_only"
+                    } else {
+                        "strict_word"
+                    },
+                    self.cfg.bms_address_mode.as_str(),
+                    self.boot_at.elapsed().as_millis()
+                );
+            }
+
+            let probe = if verbose_missing_probe {
+                self.probe_bq40z50()
+            } else {
+                self.probe_bq40z50_quiet()
+            };
+
+            if let Some(addr) = probe {
                 self.bms_addr = Some(addr);
                 self.bms_next_retry_at = Some(now);
                 self.bms_next_poll_at = now;
                 self.bms_last_int_poll_at = None;
                 self.bms_weak_pass_votes = 0;
                 self.bms_transport_fail_count = 0;
+                self.bms_missing_diag_next_at = None;
                 defmt::info!("bms: bq40z50 discovered addr=0x{=u8:x}", addr);
             }
             return true;
@@ -3300,19 +6867,36 @@ where
 
         match sample {
             Ok(snapshot) => {
+                // Emit a machine-parseable sample line for every successful poll so the offline
+                // report can detect intermittent invalid readings, not just the 5s info cadence.
                 defmt::info!(
-                    "bms: addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x} err_code={} err_str={} rem_cap_mah={=?} full_cap_mah={=?}",
+                    "bms: addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x}",
                     addr,
                     snapshot.temp_c_x10,
                     snapshot.voltage_mv,
                     snapshot.current_ma,
                     snapshot.soc_pct,
                     snapshot.status_raw,
-                    snapshot.err_code,
-                    bq40z50::decode_error_code(snapshot.err_code),
-                    snapshot.remaining_cap_mah,
-                    snapshot.full_cap_mah,
                 );
+
+                if self
+                    .bms_last_working_info_at
+                    .map_or(true, |last| now >= last + BMS_WORKING_INFO_PERIOD)
+                {
+                    defmt::info!(
+                        "bms_info: addr=0x{=u8:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16} err_code={} err_str={} rem_cap_mah={=?} full_cap_mah={=?}",
+                        addr,
+                        snapshot.cell1_mv,
+                        snapshot.cell2_mv,
+                        snapshot.cell3_mv,
+                        snapshot.cell4_mv,
+                        snapshot.err_code,
+                        bq40z50::decode_error_code(snapshot.err_code),
+                        snapshot.remaining_cap_mah,
+                        snapshot.full_cap_mah,
+                    );
+                    self.bms_last_working_info_at = Some(now);
+                }
                 self.bms_next_retry_at = None;
                 self.bms_transport_fail_count = 0;
             }
@@ -3332,6 +6916,9 @@ where
                         self.bms_addr = None;
                         self.bms_next_retry_at = None;
                         self.bms_transport_fail_count = 0;
+                        self.bms_missing_diag_next_at =
+                            Some(now + BMS_MISSING_VERBOSE_REPROBE_INTERVAL);
+                        self.bms_last_working_info_at = None;
                         defmt::error!(
                             "bms: bq40z50 transport_lost addr=0x{=u8:x} err={} fail_streak={=u8}",
                             addr,
@@ -3382,6 +6969,7 @@ where
             return;
         }
         self.bms_last_word_diag_at = Some(now);
+        self.bms_last_word_diag_addr = Some(addr);
         log_bms_word_diag_set(&mut self.i2c, addr, stage, err);
     }
 

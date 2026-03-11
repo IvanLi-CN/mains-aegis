@@ -5,13 +5,20 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 SUSPICIOUS_VOLTAGE_MV = 5911
 SUSPICIOUS_CURRENT_MA = 5911
 SUSPICIOUS_STATUS = 0x1717
+MAX_SAMPLE_STREAK_GAP_SEC = 5.0
+SESSION_BOUNDARY_EVENT = "monitor_session_start"
+RECENT_EXISTING_STDOUT_EVENT = "recent_existing_stdout"
+PREEXISTING_BEGIN_EVENT = "preexisting_segment_begin"
+PREEXISTING_END_EVENT = "preexisting_segment_end"
 
 LOG_LEVEL_PREFIX = r"(?:\[[A-Z ]+\]\s+)?"
 
@@ -30,9 +37,19 @@ POLL_RETRY_RE = re.compile(
     rf"stage=poll_snapshot_retry_(?P<result>ok|fail) first_err=(?P<first>[a-zA-Z0-9_]+)"
     rf"(?: retry_err=(?P<retry>[a-zA-Z0-9_]+))?"
 )
-ROM_DETECTED_RE = re.compile(r"stage=rom_mode_detected")
+ROM_DETECTED_RE = re.compile(
+    r"stage=(?:rom_mode_detected(?:_after_enter|_post_flash)?|wake_window_rom_entered|wake_window_rom_signature)\b"
+)
 ROM_FLASH_BEGIN_RE = re.compile(r"stage=(probe_rom_flash_begin|rom_flash_start)")
-ROM_FLASH_DONE_RE = re.compile(r"stage=(probe_rom_flash_done|rom_flash_done)")
+ROM_FLASH_IMAGE_DONE_RE = re.compile(r"stage=rom_flash_done\b")
+ROM_FLASH_DONE_RE = re.compile(r"stage=probe_rom_flash_done")
+ROM_FW_SEEN_RE = re.compile(
+    r"stage=(?:probe_rom_post_flash_fw_seen(?:_status_unconfirmed)?|rom_post_flash_resume_not_rom)\b"
+)
+ROM_FW_INVALID_RUNTIME_RE = re.compile(r"stage=probe_rom_post_flash_fw_invalid_runtime\b")
+ROM_RUNTIME_STATUS_UNCONFIRMED_RE = re.compile(
+    r"stage=(?:probe_rom_post_flash_runtime_status_unavailable|probe_rom_post_flash_fw_seen_status_unconfirmed|probe_rom_post_flash_fw_invalid_runtime_status_unconfirmed)\b"
+)
 ADDR16_RE = re.compile(r"addr=0x16\b")
 
 
@@ -62,11 +79,27 @@ class Sample:
         return True
 
 
+def parse_entry_ts(entry: dict) -> Optional[float]:
+    ts = entry.get("ts") or entry.get("timestamp")
+    if not isinstance(ts, str):
+        return None
+    normalized = ts[:-1] + "+00:00" if ts.endswith("Z") else ts
+    try:
+        return datetime.fromisoformat(normalized).astimezone(timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["canonical", "dual-diag"], required=True)
     parser.add_argument("--duration-sec", type=int, required=True)
     parser.add_argument("--monitor-file", required=True)
+    # Provenance-only knobs: supplied by `run.sh` so `summary.json` can be traced back to the
+    # exact live run configuration (especially when swapping ROM images).
+    parser.add_argument("--force-min-charge", choices=["true", "false"])
+    parser.add_argument("--probe-mode", choices=["strict", "mac-only"])
+    parser.add_argument("--rom-image", choices=["r2", "r3", "r5"])
     parser.add_argument("--report-out", required=True)
     return parser.parse_args()
 
@@ -85,9 +118,25 @@ def main() -> int:
     max_streak = 0
     rom_detected = False
     rom_flash_attempted = False
+    rom_flash_image_done = False
     rom_flash_done = False
+    rom_fw_seen = False
+    rom_fw_invalid_runtime = False
+    rom_runtime_status_unconfirmed = False
     canonical_touched_0x16 = False
+    last_sample_ts: Optional[float] = None
+    in_preexisting_segment = False
+    parse_preexisting_segment = False
+    allow_preexisting_parse = False
     allowed_addrs = {0x0B} if args.mode == "canonical" else {0x0B, 0x16}
+
+    run_config = {
+        "force_min_charge": None
+        if args.force_min_charge is None
+        else (args.force_min_charge == "true"),
+        "probe_mode": args.probe_mode,
+        "rom_image": args.rom_image,
+    }
 
     if not monitor_file.is_file():
         print(f"monitor file not found: {monitor_file}", file=sys.stderr)
@@ -104,6 +153,38 @@ def main() -> int:
                 except json.JSONDecodeError:
                     continue
 
+                if entry.get("src") == "meta":
+                    event = entry.get("event")
+                    if event == RECENT_EXISTING_STDOUT_EVENT:
+                        # `monitor.sh` may splice a small "pre-attach stdout" segment for the
+                        # current run (e.g. flash finished and the MCU printed early logs before
+                        # we attached). Allow the immediately following preexisting segment to
+                        # participate in ROM/sample parsing.
+                        allow_preexisting_parse = True
+                        continue
+                    if event == PREEXISTING_BEGIN_EVENT:
+                        in_preexisting_segment = True
+                        parse_preexisting_segment = allow_preexisting_parse
+                        allow_preexisting_parse = False
+                        continue
+                    if event == PREEXISTING_END_EVENT:
+                        in_preexisting_segment = False
+                        parse_preexisting_segment = False
+                        continue
+                    if event == SESSION_BOUNDARY_EVENT:
+                        # Only treat reset attaches (or older logs without the flag) as streak
+                        # discontinuities. Re-attaches without a reset can still build a valid
+                        # streak across the combined log.
+                        allow_preexisting_parse = False
+                        reset_on_attach = entry.get("reset_on_attach")
+                        if reset_on_attach is None or reset_on_attach:
+                            current_streak = 0
+                            last_sample_ts = None
+                        continue
+
+                if in_preexisting_segment and not parse_preexisting_segment:
+                    continue
+
                 text = entry.get("text", "")
                 if not isinstance(text, str):
                     continue
@@ -115,8 +196,16 @@ def main() -> int:
                     rom_detected = True
                 if ROM_FLASH_BEGIN_RE.search(text):
                     rom_flash_attempted = True
+                if ROM_FLASH_IMAGE_DONE_RE.search(text):
+                    rom_flash_image_done = True
                 if ROM_FLASH_DONE_RE.search(text):
                     rom_flash_done = True
+                if ROM_FW_SEEN_RE.search(text):
+                    rom_fw_seen = True
+                if ROM_FW_INVALID_RUNTIME_RE.search(text):
+                    rom_fw_invalid_runtime = True
+                if ROM_RUNTIME_STATUS_UNCONFIRMED_RE.search(text):
+                    rom_runtime_status_unconfirmed = True
 
                 err_match = POLL_ERR_RE.search(text)
                 if err_match:
@@ -148,6 +237,16 @@ def main() -> int:
                 if sample.addr not in allowed_addrs:
                     continue
 
+                entry_ts = parse_entry_ts(entry)
+                if (
+                    entry_ts is not None
+                    and last_sample_ts is not None
+                    and entry_ts - last_sample_ts > MAX_SAMPLE_STREAK_GAP_SEC
+                ):
+                    current_streak = 0
+                if entry_ts is not None:
+                    last_sample_ts = entry_ts
+
                 samples_total += 1
                 if sample.valid:
                     valid_samples += 1
@@ -173,6 +272,7 @@ def main() -> int:
     summary = {
         "mode": args.mode,
         "duration_sec": args.duration_sec,
+        "run_config": run_config,
         "samples_total": samples_total,
         "valid_samples": valid_samples,
         "max_valid_streak": max_streak,
@@ -180,7 +280,11 @@ def main() -> int:
         "rom_events": {
             "detected": rom_detected,
             "flash_attempted": rom_flash_attempted,
+            "flash_image_done": rom_flash_image_done,
             "flash_done": rom_flash_done,
+            "fw_seen": rom_fw_seen,
+            "runtime_invalid": rom_fw_invalid_runtime,
+            "runtime_status_unconfirmed": rom_runtime_status_unconfirmed,
         },
         "verdict": {
             "pass": verdict_pass,
@@ -193,6 +297,14 @@ def main() -> int:
         encoding="utf-8",
     )
 
+    def fmt_cfg_bool(value: Optional[bool]) -> str:
+        if value is None:
+            return "unknown"
+        return "true" if value else "false"
+
+    def fmt_cfg_str(value: Optional[str]) -> str:
+        return value if value is not None else "unknown"
+
     md = [
         "# BQ40 Communication Summary",
         "",
@@ -202,6 +314,12 @@ def main() -> int:
         f"- valid_samples: `{summary['valid_samples']}`",
         f"- max_valid_streak: `{summary['max_valid_streak']}`",
         f"- verdict: `{'PASS' if summary['verdict']['pass'] else 'FAIL'}` ({summary['verdict']['reason']})",
+        "",
+        "## Run Config",
+        "",
+        f"- force_min_charge: `{fmt_cfg_bool(run_config['force_min_charge'])}`",
+        f"- probe_mode: `{fmt_cfg_str(run_config['probe_mode'])}`",
+        f"- rom_image: `{fmt_cfg_str(run_config['rom_image'])}`",
         "",
         "## Poll Errors",
         "",
@@ -220,7 +338,11 @@ def main() -> int:
             "",
             f"- detected: `{summary['rom_events']['detected']}`",
             f"- flash_attempted: `{summary['rom_events']['flash_attempted']}`",
+            f"- flash_image_done: `{summary['rom_events']['flash_image_done']}`",
             f"- flash_done: `{summary['rom_events']['flash_done']}`",
+            f"- fw_seen: `{summary['rom_events']['fw_seen']}`",
+            f"- runtime_invalid: `{summary['rom_events']['runtime_invalid']}`",
+            f"- runtime_status_unconfirmed: `{summary['rom_events']['runtime_status_unconfirmed']}`",
             "",
             f"source_log: `{monitor_file}`",
         ]

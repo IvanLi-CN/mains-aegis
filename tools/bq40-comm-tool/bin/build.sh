@@ -6,11 +6,16 @@ TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 FIRMWARE_DIR="$TOOL_ROOT/firmware"
 
 mode="canonical"
-recover="if-rom"
+recover="never"
+recover_arg_set="false"
+force_min_charge="false"
+probe_mode="strict"
+rom_image="r2"
 
 usage() {
   cat <<USAGE
 Usage: $(basename "$0") [--mode canonical|dual-diag] [--recover never|if-rom|force]
+                         [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5]
 USAGE
 }
 
@@ -34,6 +39,22 @@ while [[ $# -gt 0 ]]; do
     --recover)
       require_value "$1" "$#"
       recover="${2:-}"
+      recover_arg_set="true"
+      shift 2
+      ;;
+    --force-min-charge)
+      require_value "$1" "$#"
+      force_min_charge="${2:-}"
+      shift 2
+      ;;
+    --probe-mode)
+      require_value "$1" "$#"
+      probe_mode="${2:-}"
+      shift 2
+      ;;
+    --rom-image)
+      require_value "$1" "$#"
+      rom_image="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -47,6 +68,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$mode" == "dual-diag" && "$recover_arg_set" != "true" ]]; then
+  # Low-level default: dual-diag is almost always used for ROM recovery, so keep it enabled
+  # unless the caller explicitly disables it.
+  recover="if-rom"
+fi
 
 features=()
 case "$mode" in
@@ -68,9 +95,37 @@ case "$recover" in
     ;;
 esac
 
-if [[ "$recover" == "force" && "$mode" != "dual-diag" ]]; then
-  echo "--recover force requires --mode dual-diag" >&2
-  exit 5
+case "$force_min_charge" in
+  true) features+=("force-min-charge") ;;
+  false) ;;
+  *)
+    echo "Invalid --force-min-charge: $force_min_charge" >&2
+    exit 5
+    ;;
+esac
+
+case "$probe_mode" in
+  strict) ;;
+  mac-only) features+=("bms-mac-probe-only") ;;
+  *)
+    echo "Invalid --probe-mode: $probe_mode" >&2
+    exit 7
+    ;;
+esac
+
+case "$rom_image" in
+  r2) ;;
+  r3) features+=("bms-rom-image-r3") ;;
+  r5) features+=("bms-rom-image-r5") ;;
+  *)
+    echo "Invalid --rom-image: $rom_image" >&2
+    exit 8
+    ;;
+esac
+
+if [[ "$recover" != "never" && "$mode" != "dual-diag" ]]; then
+  echo "--recover $recover requires --mode dual-diag" >&2
+  exit 6
 fi
 
 build_cmd=(cargo build --release)

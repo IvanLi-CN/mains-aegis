@@ -17,8 +17,10 @@ pub mod reg {
     pub const CHARGE_VOLTAGE_LIMIT: u8 = 0x01;
     pub const CHARGE_CURRENT_LIMIT: u8 = 0x03;
     pub const INPUT_CURRENT_LIMIT: u8 = 0x06;
+    pub const TERMINATION_CONTROL: u8 = 0x09;
 
     pub const CHARGER_CONTROL_0: u8 = 0x0F;
+    pub const CHARGER_CONTROL_1: u8 = 0x10;
     pub const CHARGER_CONTROL_2: u8 = 0x11;
     pub const CHARGER_CONTROL_5: u8 = 0x14;
 
@@ -49,6 +51,15 @@ pub mod ctrl0 {
     pub const EN_CHG: u8 = 1 << 5;
     /// `REGOF_Charger_Control_0.EN_HIZ` (bit 2).
     pub const EN_HIZ: u8 = 1 << 2;
+}
+
+pub mod ctrl1 {
+    /// `REG10.WD_RST` (bit 3).
+    pub const WD_RST: u8 = 1 << 3;
+    /// `REG10.WATCHDOG[2:0]`.
+    pub const WATCHDOG_MASK: u8 = 0x07;
+    /// Datasheet POR default watchdog setting (40s = 0b101).
+    pub const WATCHDOG_DEFAULT: u8 = 0x05;
 }
 
 pub mod ctrl2 {
@@ -126,6 +137,11 @@ pub mod status4 {
     pub const TS_HOT_STAT: u8 = 1 << 0;
 }
 
+pub mod term_ctrl {
+    /// `REG09.Termination_Control.REG_RST` (bit 6).
+    pub const REG_RST: u8 = 1 << 6;
+}
+
 pub fn read_u8<I2C>(i2c: &mut I2C, reg: u8) -> Result<u8, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -184,6 +200,17 @@ where
         write_u8(i2c, reg, new)?;
     }
     Ok(new)
+}
+
+/// Trigger `REG_RST` (reset charger registers/timers back to defaults).
+///
+/// This is useful as a safety net when previous tool sessions may have crashed
+/// mid-recovery and left the charger in an unexpected host-mode configuration.
+pub fn trigger_reg_rst<I2C>(i2c: &mut I2C) -> Result<u8, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    update_u8(i2c, reg::TERMINATION_CONTROL, 0, term_ctrl::REG_RST)
 }
 
 fn clamp_u16(value: u16, min: u16, max: u16) -> u16 {
@@ -254,6 +281,84 @@ where
         write_u16(i2c, reg::INPUT_CURRENT_LIMIT, new)?;
     }
     Ok(new)
+}
+
+#[derive(Clone, Copy)]
+pub struct WatchdogState {
+    pub ctrl1_before: u8,
+    pub ctrl1_after: u8,
+    pub watchdog_before: u8,
+    pub watchdog_after: u8,
+}
+
+pub fn read_watchdog_state<I2C>(i2c: &mut I2C) -> Result<WatchdogState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let watchdog_before = ctrl1_before & ctrl1::WATCHDOG_MASK;
+
+    Ok(WatchdogState {
+        ctrl1_before,
+        ctrl1_after: ctrl1_before,
+        watchdog_before,
+        watchdog_after: watchdog_before,
+    })
+}
+
+/// Disable the I2C watchdog so long-running recovery flows do not get their charger state reset.
+pub fn ensure_watchdog_disabled<I2C>(i2c: &mut I2C) -> Result<WatchdogState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let watchdog_before = ctrl1_before & ctrl1::WATCHDOG_MASK;
+    let ctrl1_after = ctrl1_before & !ctrl1::WATCHDOG_MASK;
+    if ctrl1_after != ctrl1_before {
+        write_u8(i2c, reg::CHARGER_CONTROL_1, ctrl1_after)?;
+    }
+    let watchdog_after = ctrl1_after & ctrl1::WATCHDOG_MASK;
+
+    Ok(WatchdogState {
+        ctrl1_before,
+        ctrl1_after,
+        watchdog_before,
+        watchdog_after,
+    })
+}
+
+pub fn restore_watchdog<I2C>(i2c: &mut I2C, watchdog_bits: u8) -> Result<WatchdogState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let watchdog_before = ctrl1_before & ctrl1::WATCHDOG_MASK;
+    let ctrl1_after =
+        (ctrl1_before & !ctrl1::WATCHDOG_MASK) | (watchdog_bits & ctrl1::WATCHDOG_MASK);
+    if ctrl1_after != ctrl1_before {
+        write_u8(i2c, reg::CHARGER_CONTROL_1, ctrl1_after)?;
+    }
+    let watchdog_after = ctrl1_after & ctrl1::WATCHDOG_MASK;
+
+    Ok(WatchdogState {
+        ctrl1_before,
+        ctrl1_after,
+        watchdog_before,
+        watchdog_after,
+    })
+}
+
+/// Kick (reset) the I2C watchdog timer without changing the configured timeout bits.
+///
+/// Datasheet: host must write `WD_RST=1` before the watchdog expires to remain in host mode.
+pub fn kick_watchdog<I2C>(i2c: &mut I2C) -> Result<u8, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let ctrl1_after = ctrl1_before | ctrl1::WD_RST;
+    write_u8(i2c, reg::CHARGER_CONTROL_1, ctrl1_after)?;
+    Ok(ctrl1_after)
 }
 
 #[derive(Clone, Copy)]
