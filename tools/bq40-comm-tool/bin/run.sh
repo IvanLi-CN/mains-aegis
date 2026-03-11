@@ -31,7 +31,7 @@ rom_image_arg_set="false"
 duration_arg_set="false"
 mode_arg_set="false"
 MAIN_LOOP_QUANTUM_SEC=2
-WORKING_INFO_PERIOD_SEC=5
+SAMPLE_POLL_PERIOD_SEC=$MAIN_LOOP_QUANTUM_SEC
 MIN_VALID_STREAK=10
 REPOWER_OFF_WINDOW_SEC=10
 MIN_CHARGE_SETTLE_SEC=2
@@ -51,10 +51,9 @@ ROM_FLASH_BITS_PER_BYTE=9
 I2C_SLOW_BUS_BPS=$((25 * 1000))
 ROM_FLASH_WRITE_GAP_MS=10
 ROM_FLASH_FIXED_LATENCY_SEC=$((3 + 4 + 2))
-WORKING_INFO_EFFECTIVE_SEC=$((((WORKING_INFO_PERIOD_SEC + MAIN_LOOP_QUANTUM_SEC - 1) / MAIN_LOOP_QUANTUM_SEC) * MAIN_LOOP_QUANTUM_SEC))
 BMS_BOOT_EXTRA_LATENCY_SEC=$((WAKE_WINDOW_PROBE_MAX_SEC + EXIT_EXERCISE_WINDOW_SEC))
-WORKING_INFO_STARTUP_LATENCY_SEC=$((MAIN_LOOP_QUANTUM_SEC * 2 + BMS_BOOT_EXTRA_LATENCY_SEC))
-MIN_STEADY_STATE_WINDOW_SEC=$((WORKING_INFO_STARTUP_LATENCY_SEC + (MIN_VALID_STREAK - 1) * WORKING_INFO_EFFECTIVE_SEC))
+SAMPLE_STARTUP_LATENCY_SEC=$((MAIN_LOOP_QUANTUM_SEC * 2 + BMS_BOOT_EXTRA_LATENCY_SEC))
+MIN_STEADY_STATE_WINDOW_SEC=$((SAMPLE_STARTUP_LATENCY_SEC + (MIN_VALID_STREAK - 1) * SAMPLE_POLL_PERIOD_SEC))
 # Computed after parsing args (depends on `--force-min-charge`).
 MIN_DURATION_DIAG_SEC=0
 ROM_FLASH_TRANSFER_SEC=0
@@ -286,9 +285,9 @@ if [[ "$subcommand" != "verify" ]]; then
   fi
   if [[ "$duration_sec" -lt "$min_duration_sec" ]]; then
     if [[ "$subcommand" == "recover" && "$recover_policy" != "never" ]]; then
-      echo "duration-sec must be >= $min_duration_sec for recover (${wake_desc_prefix}${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop + ${POST_FLASH_BOOT_QUIET_SEC}s post-flash boot quiet + ${POST_FLASH_RESUME_WINDOW_SEC}s post-flash resume window + current ROM flash lower-bound ${ROM_FLASH_TRANSFER_SEC}s transfer/gap budget + ${ROM_FLASH_FIXED_LATENCY_SEC}s erase/execute/dwell)" >&2
+      echo "duration-sec must be >= $min_duration_sec for recover (${wake_desc_prefix}${SAMPLE_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${SAMPLE_POLL_PERIOD_SEC}s successful-poll cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop + ${POST_FLASH_BOOT_QUIET_SEC}s post-flash boot quiet + ${POST_FLASH_RESUME_WINDOW_SEC}s post-flash resume window + current ROM flash lower-bound ${ROM_FLASH_TRANSFER_SEC}s transfer/gap budget + ${ROM_FLASH_FIXED_LATENCY_SEC}s erase/execute/dwell)" >&2
     else
-      echo "duration-sec must be >= $min_duration_sec for $subcommand (${wake_desc_prefix}${WORKING_INFO_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${WORKING_INFO_EFFECTIVE_SEC}s effective working-info cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop)" >&2
+      echo "duration-sec must be >= $min_duration_sec for $subcommand (${wake_desc_prefix}${SAMPLE_STARTUP_LATENCY_SEC}s startup-to-first-sample + streak>=${MIN_VALID_STREAK} at ~${SAMPLE_POLL_PERIOD_SEC}s successful-poll cadence on a ${MAIN_LOOP_QUANTUM_SEC}s loop)" >&2
     fi
     exit 14
   fi

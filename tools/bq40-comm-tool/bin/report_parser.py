@@ -14,7 +14,7 @@ from typing import Optional
 SUSPICIOUS_VOLTAGE_MV = 5911
 SUSPICIOUS_CURRENT_MA = 5911
 SUSPICIOUS_STATUS = 0x1717
-MAX_SAMPLE_STREAK_GAP_SEC = 15.0
+MAX_SAMPLE_STREAK_GAP_SEC = 5.0
 SESSION_BOUNDARY_EVENT = "monitor_session_start"
 RECENT_EXISTING_STDOUT_EVENT = "recent_existing_stdout"
 PREEXISTING_BEGIN_EVENT = "preexisting_segment_begin"
@@ -44,7 +44,7 @@ ROM_FLASH_BEGIN_RE = re.compile(r"stage=(probe_rom_flash_begin|rom_flash_start)"
 ROM_FLASH_IMAGE_DONE_RE = re.compile(r"stage=rom_flash_done\b")
 ROM_FLASH_DONE_RE = re.compile(r"stage=probe_rom_flash_done")
 ROM_FW_SEEN_RE = re.compile(
-    r"stage=(?:probe_rom_post_flash_fw_seen(?:_status_unconfirmed)?|probe_rom_post_flash_reexit_ok|rom_post_flash_resume_not_rom)\b"
+    r"stage=(?:probe_rom_post_flash_fw_seen(?:_status_unconfirmed)?|rom_post_flash_resume_not_rom)\b"
 )
 ROM_FW_INVALID_RUNTIME_RE = re.compile(r"stage=probe_rom_post_flash_fw_invalid_runtime\b")
 ROM_RUNTIME_STATUS_UNCONFIRMED_RE = re.compile(
