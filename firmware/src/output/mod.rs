@@ -2815,17 +2815,9 @@ where
             }
         }
 
-        let signature = Bq40ActivationSignature {
-            vpack_mv,
-            current_ma,
-            rsoc_pct,
-            batt_status,
-        };
-        let repeat_count = tracker.observe(signature);
-        let suspicious_tuple = vpack_mv == BMS_SUSPICIOUS_VOLTAGE_MV
-            && current_ma == BMS_SUSPICIOUS_CURRENT_MA
-            && batt_status == BMS_SUSPICIOUS_STATUS;
-        if suspicious_tuple && repeat_count >= 3 {
+        let repeat_count =
+            observe_bq40_activation_signature(tracker, vpack_mv, current_ma, rsoc_pct, batt_status);
+        if bq40_activation_signature_is_stale(vpack_mv, current_ma, batt_status, repeat_count) {
             defmt::info!(
                 "bms_diag_raw: addr=0x{=u8:x} reason=stale_pattern temp_k_x10={=u16} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16} repeats={=u8} op_status={=?}",
                 addr,
@@ -2954,6 +2946,34 @@ where
     ) -> Option<Bq40z50Snapshot> {
         match self.read_bq40_activation_snapshot_core(addr) {
             Ok(snapshot) => {
+                let repeat_count = observe_bq40_activation_signature(
+                    tracker,
+                    snapshot.vpack_mv,
+                    snapshot.current_ma,
+                    snapshot.rsoc_pct,
+                    snapshot.batt_status,
+                );
+                if bq40_activation_signature_is_stale(
+                    snapshot.vpack_mv,
+                    snapshot.current_ma,
+                    snapshot.batt_status,
+                    repeat_count,
+                ) {
+                    defmt::info!(
+                        "bms: activation confirm_core stale addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} repeats={=u8}",
+                        addr,
+                        stage,
+                        step,
+                        delay_ms,
+                        bq40z50::temp_c_x10_from_k_x10(snapshot.temp_k_x10),
+                        snapshot.vpack_mv,
+                        snapshot.current_ma,
+                        snapshot.rsoc_pct,
+                        snapshot.batt_status,
+                        repeat_count
+                    );
+                    return None;
+                }
                 defmt::info!(
                     "bms: activation confirm_core addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x}",
                     addr,
@@ -3037,7 +3057,7 @@ where
             } else {
                 SelfCheckCommState::Ok
             }
-        } else if discharge_ready != Some(true) || rca_alarm {
+        } else if matches!(discharge_ready, Some(false)) || rca_alarm {
             SelfCheckCommState::Warn
         } else {
             SelfCheckCommState::Ok
@@ -4543,7 +4563,7 @@ where
                     let low_pack = bq40_pack_indicates_no_battery(s.vpack_mv);
                     let discharge_ready = Self::bq40_discharge_ready(s.op_status);
                     self.ui_snapshot.bq40z50 =
-                        if low_pack || discharge_ready != Some(true) || rca_alarm {
+                        if low_pack || matches!(discharge_ready, Some(false)) || rca_alarm {
                             SelfCheckCommState::Warn
                         } else {
                             SelfCheckCommState::Ok
@@ -4939,6 +4959,33 @@ impl Bq40ActivationPatternTracker {
         }
         self.repeat_count
     }
+}
+
+fn observe_bq40_activation_signature(
+    tracker: &mut Bq40ActivationPatternTracker,
+    vpack_mv: u16,
+    current_ma: i16,
+    rsoc_pct: u16,
+    batt_status: u16,
+) -> u8 {
+    tracker.observe(Bq40ActivationSignature {
+        vpack_mv,
+        current_ma,
+        rsoc_pct,
+        batt_status,
+    })
+}
+
+fn bq40_activation_signature_is_stale(
+    vpack_mv: u16,
+    current_ma: i16,
+    batt_status: u16,
+    repeat_count: u8,
+) -> bool {
+    vpack_mv == BMS_SUSPICIOUS_VOLTAGE_MV
+        && current_ma == BMS_SUSPICIOUS_CURRENT_MA
+        && batt_status == BMS_SUSPICIOUS_STATUS
+        && repeat_count >= 3
 }
 
 #[derive(Clone, Copy)]

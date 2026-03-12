@@ -100,7 +100,7 @@
 
 ### 2. 触发激活：其它器件只负责门禁，不负责结果分类
 
-1. 只有卡片已经落到 `ERR` 时，才允许进入 `Try Activation`。
+1. 默认情况下，卡片落到 `ERR` 时允许进入 `Try Activation`；若普通轮询已经拿到 BQ40 自身的低包压证据并显示 `NO BATTERY`，在尚无最近一次激活结果时也允许手动进入 `Try Activation`，避免被瞬态低压样本卡死在不可重试状态。
 2. `BQ25792`、输入电源存在与否、充电器配置写入结果，只能决定“本次是否能执行激活动作”。
 3. 若激活动作因为前置条件不满足而无法推进，结果统一回落为 `NOT DETECTED`；不得借此推断 `NO BATTERY`、`ABNORMAL` 或 `SUCCESS`。
 
@@ -111,6 +111,7 @@
 3. 若激活窗口内读到带有可信运行时字段的 BQ40 快照，但其状态仍为异常态，则结果为 `ABNORMAL`。
 4. 若激活窗口结束前始终无法访问 BQ40，或只能得到无效/不可信访问结果（例如只有异常原始值、没有可信运行时字段），则结果为 `NOT DETECTED`。
 5. `NO BATTERY` 只允许在 BQ40 自身返回了明确的无电池证据时使用；当前实现不得使用 `BQ25792` 的 `VBAT_PRESENT`、输入电源状态或其它外部器件信息来触发该结果。
+6. 激活确认链路里的 core 5-word snapshot 与 strict snapshot 都必须经过同一套 stale-pattern 过滤；禁止因为“core 先成功”而绕过重复假值判定。
 
 ### 4. 激活链路：工具式 no-charge probe + wake-window / keepalive / confirm
 
