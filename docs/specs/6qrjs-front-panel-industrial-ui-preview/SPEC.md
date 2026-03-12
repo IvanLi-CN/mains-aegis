@@ -4,7 +4,7 @@
 
 - Status: 重新设计（#7n4qd）
 - Created: 2026-02-26
-- Last: 2026-03-11
+- Last: 2026-03-01
 
 ## 背景 / 问题陈述
 
@@ -135,11 +135,8 @@
 - Self-check BQ40 offline idle: `assets/self-check-c-bq40-offline-idle.png`
 - Self-check BQ40 offline activation dialog: `assets/self-check-c-bq40-offline-activate-dialog.png`
 - Self-check BQ40 activation in progress: `assets/self-check-c-bq40-activating.png`
-- Self-check BQ40 result success: `assets/self-check-c-bq40-result-success.png`
-- Self-check BQ40 result no battery: `assets/self-check-c-bq40-result-no-battery.png`
-- Self-check BQ40 result rom mode: `assets/self-check-c-bq40-result-rom-mode.png`
-- Self-check BQ40 result abnormal: `assets/self-check-c-bq40-result-abnormal.png`
-- Self-check BQ40 result not detected: `assets/self-check-c-bq40-result-not-detected.png`
+- Self-check BQ40 activation succeeded: `assets/self-check-c-bq40-activation-succeeded.png`
+- Self-check BQ40 activation failed: `assets/self-check-c-bq40-activation-failed.png`
 
 ![Dashboard Variant B - BYPASS](assets/dashboard-b-off-mode.png)
 ![Dashboard Variant B - STANDBY](assets/dashboard-b-standby-mode.png)
@@ -152,11 +149,8 @@
 ![Self-check Variant C - BQ40 offline idle](assets/self-check-c-bq40-offline-idle.png)
 ![Self-check Variant C - BQ40 offline activation dialog](assets/self-check-c-bq40-offline-activate-dialog.png)
 ![Self-check Variant C - BQ40 activating](assets/self-check-c-bq40-activating.png)
-![Self-check Variant C - BQ40 result success](assets/self-check-c-bq40-result-success.png)
-![Self-check Variant C - BQ40 result no battery](assets/self-check-c-bq40-result-no-battery.png)
-![Self-check Variant C - BQ40 result rom mode](assets/self-check-c-bq40-result-rom-mode.png)
-![Self-check Variant C - BQ40 result abnormal](assets/self-check-c-bq40-result-abnormal.png)
-![Self-check Variant C - BQ40 result not detected](assets/self-check-c-bq40-result-not-detected.png)
+![Self-check Variant C - BQ40 activation succeeded](assets/self-check-c-bq40-activation-succeeded.png)
+![Self-check Variant C - BQ40 activation failed](assets/self-check-c-bq40-activation-failed.png)
 
 ### Edge cases / errors
 
@@ -228,11 +222,8 @@ None
   - `assets/self-check-c-bq40-offline-idle.png`
   - `assets/self-check-c-bq40-offline-activate-dialog.png`
   - `assets/self-check-c-bq40-activating.png`
-  - `assets/self-check-c-bq40-result-success.png`
-  - `assets/self-check-c-bq40-result-no-battery.png`
-  - `assets/self-check-c-bq40-result-rom-mode.png`
-  - `assets/self-check-c-bq40-result-abnormal.png`
-  - `assets/self-check-c-bq40-result-not-detected.png`
+  - `assets/self-check-c-bq40-activation-succeeded.png`
+  - `assets/self-check-c-bq40-activation-failed.png`
 
 ## 资产晋升（Asset promotion）
 
@@ -272,7 +263,6 @@ None
 - 2026-02-27: 自检页升级为“全模块通信诊断表”（10 模块覆盖），并新增长按 CENTER 页面切换（Dashboard <-> Self-check）。
 - 2026-02-27: 自检页再优化为“双列大字号诊断卡”，提升小屏可读性并保留全模块覆盖。
 - 2026-03-01: 运行语义迁移到 `#7n4qd`（自检期间实时刷新 + 自检后常驻 + 禁用 CENTER 切页）；本规格保留为视觉基线。
-- 2026-03-11: BQ40 激活结果视觉从二值成功/失败扩展为 5 类结果弹窗，并与 `#5cvrj` 结果持久化语义对齐。
 
 ## 参考（References）
 
@@ -290,10 +280,7 @@ None
 - `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-offline-idle.png`
 - `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-offline-activate-dialog.png`
 - `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-activating.png`
-- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-result-success.png`
-- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-result-no-battery.png`
-- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-result-rom-mode.png`
-- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-result-abnormal.png`
-- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-result-not-detected.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-activation-succeeded.png`
+- `docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/self-check-c-bq40-activation-failed.png`
 - [u8g2-fonts docs](https://docs.rs/u8g2-fonts/latest/u8g2_fonts/fonts/index.html)
 - [u8g2 license](https://raw.githubusercontent.com/olikraus/u8g2/master/LICENSE)

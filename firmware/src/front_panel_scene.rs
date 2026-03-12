@@ -147,6 +147,7 @@ pub enum SelfCheckCommState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BmsResultKind {
     Success,
+    #[allow(dead_code)]
     NoBattery,
     RomMode,
     Abnormal,

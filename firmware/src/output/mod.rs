@@ -1307,23 +1307,10 @@ where
             return;
         }
 
-        let vbat_present = self.ui_snapshot.bq25792_vbat_present;
-        if vbat_present == Some(false) && self.ui_snapshot.bq40z50 != SelfCheckCommState::Ok {
-            self.finish_bms_activation(BmsResultKind::NoBattery, "vbat_absent");
-            return;
-        }
-
         match self.ui_snapshot.bq40z50 {
             SelfCheckCommState::Ok => {
-                if self.ui_snapshot.bq40z50_discharge_ready == Some(true)
-                    && vbat_present == Some(true)
-                {
-                    self.finish_bms_activation(
-                        BmsResultKind::Success,
-                        "bq40_ready_with_vbat_present",
-                    );
-                    return;
-                }
+                self.finish_bms_activation(BmsResultKind::Success, "bq40_ready");
+                return;
             }
             SelfCheckCommState::Warn => {
                 self.finish_bms_activation(BmsResultKind::Abnormal, "bq40_warn_after_activation");
@@ -1339,17 +1326,15 @@ where
         if Instant::now() >= deadline {
             let result = if self.is_bq40_rom_mode_detected() {
                 BmsResultKind::RomMode
-            } else if vbat_present == Some(false) {
-                BmsResultKind::NoBattery
             } else {
                 BmsResultKind::NotDetected
             };
             let reason = match result {
                 BmsResultKind::RomMode => "deadline_elapsed_rom_mode",
-                BmsResultKind::NoBattery => "deadline_elapsed_no_battery",
                 BmsResultKind::NotDetected => "deadline_elapsed_not_detected",
                 BmsResultKind::Success => "deadline_elapsed_success",
                 BmsResultKind::Abnormal => "deadline_elapsed_abnormal",
+                BmsResultKind::NoBattery => "deadline_elapsed_no_battery",
             };
             self.finish_bms_activation(result, reason);
         }
