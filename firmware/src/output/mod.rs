@@ -50,7 +50,7 @@ const BMS_ACTIVATION_MIN_CHARGE_SETTLE: Duration = Duration::from_secs(4);
 const BMS_ACTIVATION_MIN_CHARGE_PROBE_WINDOW: Duration = Duration::from_secs(12);
 const BMS_ACTIVATION_DIAG_STAGE_DELAYS_MS: [u64; 3] = [0, 800, 1_600];
 const BMS_ACTIVATION_DIAG_TOUCH_READ_GAPS_MS: [u64; 3] = [22, 40, 66];
-const BMS_ACTIVATION_READ_GAPS_MS: [u64; 3] = [2, 22, 40];
+const BMS_ACTIVATION_READ_GAPS_MS: [u64; 3] = [22, 40, 66];
 const BMS_ACTIVATION_KEEPALIVE_GAP: Duration = Duration::from_millis(40);
 const BMS_ACTIVATION_KEEPALIVE_ROUNDS: usize = 3;
 const BMS_ACTIVATION_FOLLOWUP_INITIAL_DELAY: Duration = Duration::from_millis(0);
@@ -1454,7 +1454,10 @@ where
             allow_diag_warn
         );
         bms_diag_breadcrumb_note(2, allow_diag_warn as u8);
-        self.bms_activation_auto_force_charge_until = None;
+        if !(allow_diag_warn && self.cfg.bms_boot_diag_auto_validate) {
+            self.bms_activation_auto_force_charge_until = None;
+            self.bms_activation_auto_force_charge_programmed = false;
+        }
         self.bms_activation_force_charge_requested = true;
         self.ui_snapshot.bq40z50_last_result = None;
         if !self.charger_allowed {
@@ -1532,13 +1535,7 @@ where
             ichg_reg,
             iindpm_reg
         );
-        self.bms_activation_backup = Some(ChargerActivationBackup {
-            ctrl0,
-            vreg_reg,
-            ichg_reg,
-            iindpm_reg,
-            chg_enabled: self.chg_enabled,
-        });
+        self.capture_bms_activation_charger_backup(ctrl0, vreg_reg, ichg_reg, iindpm_reg);
         if self
             .maybe_disable_charger_watchdog_for_activation()
             .is_err()
@@ -1627,6 +1624,97 @@ where
         }
     }
 
+    fn capture_bms_activation_charger_backup(
+        &mut self,
+        ctrl0: u8,
+        vreg_reg: u16,
+        ichg_reg: u16,
+        iindpm_reg: u16,
+    ) {
+        if self.bms_activation_backup.is_some() {
+            return;
+        }
+        self.bms_activation_backup = Some(ChargerActivationBackup {
+            ctrl0,
+            vreg_reg,
+            ichg_reg,
+            iindpm_reg,
+            chg_enabled: self.chg_enabled,
+        });
+        defmt::info!(
+            "bms: activation backup_saved ctrl0=0x{=u8:x} vreg_reg=0x{=u16:x} ichg_reg=0x{=u16:x} iindpm_reg=0x{=u16:x} chg_enabled={=bool}",
+            ctrl0,
+            vreg_reg,
+            ichg_reg,
+            iindpm_reg,
+            self.chg_enabled
+        );
+    }
+
+    fn ensure_bms_activation_charger_backup(&mut self) -> Result<(), &'static str> {
+        if self.bms_activation_backup.is_some() {
+            return Ok(());
+        }
+        let ctrl0 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0)
+            .map_err(|_| "read_charger_ctrl0_backup_failed")?;
+        let vreg_reg = bq25792::read_u16(&mut self.i2c, bq25792::reg::CHARGE_VOLTAGE_LIMIT)
+            .map_err(|_| "read_charge_voltage_limit_backup_failed")?;
+        let ichg_reg = bq25792::read_u16(&mut self.i2c, bq25792::reg::CHARGE_CURRENT_LIMIT)
+            .map_err(|_| "read_charge_current_limit_backup_failed")?;
+        let iindpm_reg = bq25792::read_u16(&mut self.i2c, bq25792::reg::INPUT_CURRENT_LIMIT)
+            .map_err(|_| "read_input_current_limit_backup_failed")?;
+        self.capture_bms_activation_charger_backup(ctrl0, vreg_reg, ichg_reg, iindpm_reg);
+        Ok(())
+    }
+
+    fn restore_bms_activation_charger_backup(&mut self, reason: &'static str) -> Option<bool> {
+        let backup = self.bms_activation_backup.take()?;
+        let _ = bq25792::write_u16(
+            &mut self.i2c,
+            bq25792::reg::CHARGE_VOLTAGE_LIMIT,
+            backup.vreg_reg,
+        );
+        let _ = bq25792::write_u16(
+            &mut self.i2c,
+            bq25792::reg::CHARGE_CURRENT_LIMIT,
+            backup.ichg_reg,
+        );
+        let _ = bq25792::write_u16(
+            &mut self.i2c,
+            bq25792::reg::INPUT_CURRENT_LIMIT,
+            backup.iindpm_reg,
+        );
+        let _ = bq25792::write_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0, backup.ctrl0);
+        defmt::info!(
+            "bms: activation backup_restored reason={} ctrl0=0x{=u8:x} vreg_reg=0x{=u16:x} ichg_reg=0x{=u16:x} iindpm_reg=0x{=u16:x} restore_chg_enabled={=bool}",
+            reason,
+            backup.ctrl0,
+            backup.vreg_reg,
+            backup.ichg_reg,
+            backup.iindpm_reg,
+            backup.chg_enabled
+        );
+        Some(backup.chg_enabled)
+    }
+
+    fn update_bms_activation_auto_due(&mut self, due_at: Instant) {
+        let release_margin =
+            BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY.saturating_sub(BMS_ACTIVATION_AUTO_DELAY);
+        self.bms_activation_auto_due_at = due_at;
+        self.bms_activation_auto_poll_release_at = due_at + release_margin;
+        self.bms_activation_auto_defer_logged = false;
+        if BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE {
+            self.bms_activation_auto_force_charge_until = Some(
+                due_at
+                    + if BMS_BOOT_DIAG_TOOL_STYLE_PROBE_ONLY {
+                        BMS_BOOT_DIAG_TOOL_STYLE_FORCE_HOLD
+                    } else {
+                        Duration::ZERO
+                    },
+            );
+        }
+    }
+
     fn maybe_run_bms_activation_wake_probe(&mut self) -> Option<Bq40ActivationProbeResult> {
         if self.bms_activation_phase != BmsActivationPhase::WakeProbe {
             return None;
@@ -1707,7 +1795,7 @@ where
 
         for addr in bms_probe_candidates().iter().copied() {
             if let Some(snapshot) =
-                self.probe_bq40_activation_runtime(addr, attempt, dwell_ms, raw_diag)
+                self.probe_bq40_activation_runtime(addr, attempt, dwell_ms, raw_diag, true)
             {
                 return Some(Bq40ActivationProbeResult::Working { addr, snapshot });
             }
@@ -1773,7 +1861,7 @@ where
 
             for addr in bms_probe_candidates().iter().copied() {
                 if let Some(snapshot) =
-                    self.probe_bq40_activation_runtime(addr, attempt, dwell_ms, raw_diag)
+                    self.probe_bq40_activation_runtime(addr, attempt, dwell_ms, raw_diag, false)
                 {
                     return Some(Bq40ActivationProbeResult::Working { addr, snapshot });
                 }
@@ -1782,7 +1870,7 @@ where
 
         for addr in bms_probe_candidates().iter().copied() {
             if let Some(snapshot) =
-                self.probe_bq40_activation_runtime(addr, attempt, dwell_ms, raw_diag)
+                self.probe_bq40_activation_runtime(addr, attempt, dwell_ms, raw_diag, false)
             {
                 return Some(Bq40ActivationProbeResult::Working { addr, snapshot });
             }
@@ -1891,6 +1979,7 @@ where
         attempt: u16,
         dwell_ms: u64,
         raw_diag: bool,
+        require_trusted_voltage_for_confirm: bool,
     ) -> Option<Bq40z50Snapshot> {
         let voltage_mv = match self.read_bq40_u16_direct(addr, bq40z50::cmd::VOLTAGE) {
             Ok(voltage_mv) if voltage_mv <= 20_000 => {
@@ -1928,6 +2017,20 @@ where
                 None
             }
         };
+
+        if require_trusted_voltage_for_confirm
+            && !voltage_mv.is_some_and(|raw| (2_500..=20_000).contains(&raw))
+        {
+            if raw_diag {
+                defmt::info!(
+                    "bms_diag: addr=0x{=u8:x} stage=runtime_probe_confirm_skipped attempt={=u16} dwell_ms={=u64} reason=untrusted_voltage",
+                    addr,
+                    attempt,
+                    dwell_ms
+                );
+            }
+            return None;
+        }
 
         let mut tracker = self.bms_activation_pattern_tracker;
         let confirmed = self.confirm_bq40_activation_snapshot(
@@ -3132,17 +3235,7 @@ where
             || self.ui_snapshot.fusb302 == SelfCheckCommState::Pending
         {
             let due_at = now + Duration::from_millis(500);
-            self.bms_activation_auto_due_at = due_at;
-            if BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE {
-                self.bms_activation_auto_force_charge_until = Some(
-                    due_at
-                        + if BMS_BOOT_DIAG_TOOL_STYLE_PROBE_ONLY {
-                            BMS_BOOT_DIAG_TOOL_STYLE_FORCE_HOLD
-                        } else {
-                            Duration::ZERO
-                        },
-                );
-            }
+            self.update_bms_activation_auto_due(due_at);
             return;
         }
 
@@ -3152,6 +3245,17 @@ where
             self.bms_activation_auto_attempted = true;
             self.bms_activation_auto_force_charge_until = None;
             self.bms_activation_auto_force_charge_programmed = false;
+            if let Some(restore_chg_enabled) =
+                self.restore_bms_activation_charger_backup("auto_skip_not_needed")
+            {
+                if restore_chg_enabled {
+                    self.chg_ce.set_low();
+                    self.chg_enabled = true;
+                } else {
+                    self.chg_ce.set_high();
+                    self.chg_enabled = false;
+                }
+            }
             defmt::info!(
                 "bms: activation auto_skip reason=bq40_not_err state={} trusted_evidence={=bool} last_result={}",
                 self_check_comm_state_name(self.ui_snapshot.bq40z50),
@@ -3163,17 +3267,7 @@ where
 
         if self.ui_snapshot.fusb302_vbus_present != Some(true) {
             let due_at = now + Duration::from_secs(1);
-            self.bms_activation_auto_due_at = due_at;
-            if BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE {
-                self.bms_activation_auto_force_charge_until = Some(
-                    due_at
-                        + if BMS_BOOT_DIAG_TOOL_STYLE_PROBE_ONLY {
-                            BMS_BOOT_DIAG_TOOL_STYLE_FORCE_HOLD
-                        } else {
-                            Duration::ZERO
-                        },
-                );
-            }
+            self.update_bms_activation_auto_due(due_at);
             return;
         }
 
@@ -3456,6 +3550,8 @@ where
     fn begin_bms_activation_repower_window(&mut self) -> Result<(), &'static str> {
         let old_phase = self.bms_activation_phase;
         let now = Instant::now();
+        self.bms_activation_auto_force_charge_until = None;
+        self.bms_activation_auto_force_charge_programmed = false;
         self.bms_activation_phase = BmsActivationPhase::WaitChargeOff;
         self.bms_activation_started_at = Some(now);
         self.bms_activation_diag_stage = 0;
@@ -3544,11 +3640,11 @@ where
         self.bms_activation_isolation_until = None;
         self.bms_next_poll_at = now;
         self.bms_next_retry_at = None;
-        self.chg_next_poll_at = now;
+        self.chg_next_poll_at = now + BMS_ACTIVATION_CHARGER_POLL_PERIOD;
         self.chg_next_retry_at = None;
         bms_diag_breadcrumb_note(4, 0);
         defmt::info!(
-            "bms: activation phase old={} new={} charger_mode=normal",
+            "bms: activation phase old={} new={} charger_mode=off",
             bms_activation_phase_name(old_phase),
             bms_activation_phase_name(self.bms_activation_phase)
         );
@@ -3604,24 +3700,8 @@ where
             },
         );
         let mut restore_chg_enabled = false;
-        if let Some(backup) = self.bms_activation_backup.take() {
-            let _ = bq25792::write_u16(
-                &mut self.i2c,
-                bq25792::reg::CHARGE_VOLTAGE_LIMIT,
-                backup.vreg_reg,
-            );
-            let _ = bq25792::write_u16(
-                &mut self.i2c,
-                bq25792::reg::CHARGE_CURRENT_LIMIT,
-                backup.ichg_reg,
-            );
-            let _ = bq25792::write_u16(
-                &mut self.i2c,
-                bq25792::reg::INPUT_CURRENT_LIMIT,
-                backup.iindpm_reg,
-            );
-            let _ = bq25792::write_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0, backup.ctrl0);
-            restore_chg_enabled = backup.chg_enabled;
+        if let Some(chg_enabled) = self.restore_bms_activation_charger_backup(reason) {
+            restore_chg_enabled = chg_enabled;
         }
         if restore_chg_enabled {
             self.chg_ce.set_low();
@@ -4215,9 +4295,11 @@ where
 
         let input_present = vbus_present || ac1_present || ac2_present || pg;
         let can_enable = input_present && !ts_cold && !ts_hot;
+        let activation_probe_without_charge = activation_pending
+            && self.bms_activation_phase == BmsActivationPhase::ProbeWithoutCharge;
         let activation_normal_hold_charge = false;
         let boot_diag_hold_charge = false;
-        let normal_allow_charge = can_enable && vbat_present;
+        let normal_allow_charge = can_enable && vbat_present && !activation_probe_without_charge;
         let force_allow_charge = (activation_force_charge || auto_force_charge) && can_enable;
         let allow_charge = if activation_force_charge_off {
             false
@@ -4237,6 +4319,12 @@ where
             self.chg_ilim_hiz_brk.set_low();
 
             if force_allow_charge {
+                if let Err(reason) = self.ensure_bms_activation_charger_backup() {
+                    self.mark_charger_poll_failed(now);
+                    defmt::error!("charger: bq25792 err stage=backup_capture err={}", reason);
+                    return;
+                }
+
                 fn decode_voltage_mv(reg: u16) -> u16 {
                     (reg & 0x07FF) * 10
                 }
@@ -4450,6 +4538,22 @@ where
                 }
             }
         } else {
+            if self.bms_activation_auto_force_charge_programmed
+                && self.bms_activation_state != BmsActivationState::Pending
+                && !activation_force_charge
+            {
+                if let Some(restore_chg_enabled) =
+                    self.restore_bms_activation_charger_backup("auto_force_charge_complete")
+                {
+                    if restore_chg_enabled {
+                        self.chg_ce.set_low();
+                        self.chg_enabled = true;
+                    } else {
+                        self.chg_ce.set_high();
+                        self.chg_enabled = false;
+                    }
+                }
+            }
             self.bms_activation_auto_force_charge_programmed = false;
         }
 
@@ -4476,17 +4580,23 @@ where
         const INT_MIN_INTERVAL: Duration = Duration::from_millis(100);
 
         let now = Instant::now();
+        let auto_quiet_until =
+            if self.bms_activation_auto_poll_release_at > self.bms_activation_auto_due_at {
+                self.bms_activation_auto_poll_release_at
+            } else {
+                self.bms_activation_auto_due_at
+            };
         if self.cfg.bms_boot_diag_auto_validate
             && !self.bms_activation_auto_attempted
-            && now < self.bms_activation_auto_poll_release_at
+            && now < auto_quiet_until
         {
-            self.bms_next_poll_at = self.bms_activation_auto_poll_release_at;
+            self.bms_next_poll_at = auto_quiet_until;
             self.bms_next_retry_at = None;
             if !self.bms_activation_auto_defer_logged {
                 self.bms_activation_auto_defer_logged = true;
                 defmt::info!(
                     "bms: boot_diag defer_poll until_auto_request settle_ms={=u64}",
-                    BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY.as_millis() as u64
+                    (auto_quiet_until - now).as_millis() as u64
                 );
             }
             return false;
@@ -4512,8 +4622,7 @@ where
         self.bms_next_poll_at = now + POLL_PERIOD;
         self.bms_poll_seq = self.bms_poll_seq.wrapping_add(1);
         let poll_seq = self.bms_poll_seq;
-        let auto_observation_active =
-            !self.bms_activation_auto_attempted && now < self.bms_activation_auto_due_at;
+        let auto_observation_active = !self.bms_activation_auto_attempted && now < auto_quiet_until;
         let boot_diag_probe_hold_active = BMS_BOOT_DIAG_TOOL_STYLE_PROBE_ONLY
             && self.bms_activation_auto_attempted
             && self
@@ -4750,39 +4859,32 @@ where
         &mut self,
         addr: u8,
     ) -> Result<Bq40z50Snapshot, Bq40ActivationReadError> {
-        self.prime_bq40_command_window(addr)?;
-        let mut temp_k_x10 = self.read_bq40_u16_consistent(addr, bq40z50::cmd::TEMPERATURE, 5)?;
+        let mut temp_k_x10 =
+            self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::TEMPERATURE)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
-        self.prime_bq40_command_window(addr)?;
-        let vpack_mv = self.read_bq40_u16_consistent(addr, bq40z50::cmd::VOLTAGE, 20)?;
+        let vpack_mv = self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::VOLTAGE)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
-        self.prime_bq40_command_window(addr)?;
-        let current_ma = self.read_bq40_i16_consistent(addr, bq40z50::cmd::CURRENT, 100)?;
+        let current_ma = self.read_bq40_i16_with_optional_pec(addr, bq40z50::cmd::CURRENT)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
-        self.prime_bq40_command_window(addr)?;
         let rsoc_pct =
-            self.read_bq40_u16_consistent(addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE, 1)?;
+            self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
-        self.prime_bq40_command_window(addr)?;
-        let batt_status = self.read_bq40_u16_consistent(addr, bq40z50::cmd::BATTERY_STATUS, 0)?;
+        let batt_status =
+            self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::BATTERY_STATUS)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
-        self.prime_bq40_command_window(addr)?;
-        let cell1_mv = self.read_bq40_u16_consistent(addr, bq40z50::cmd::CELL_VOLTAGE_1, 20)?;
+        let cell1_mv = self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::CELL_VOLTAGE_1)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
-        self.prime_bq40_command_window(addr)?;
-        let cell2_mv = self.read_bq40_u16_consistent(addr, bq40z50::cmd::CELL_VOLTAGE_2, 20)?;
+        let cell2_mv = self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::CELL_VOLTAGE_2)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
-        self.prime_bq40_command_window(addr)?;
-        let cell3_mv = self.read_bq40_u16_consistent(addr, bq40z50::cmd::CELL_VOLTAGE_3, 20)?;
+        let cell3_mv = self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::CELL_VOLTAGE_3)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
-        self.prime_bq40_command_window(addr)?;
-        let cell4_mv = self.read_bq40_u16_consistent(addr, bq40z50::cmd::CELL_VOLTAGE_4, 20)?;
+        let cell4_mv = self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::CELL_VOLTAGE_4)?;
 
         let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(temp_k_x10);
         if !(-400..=1250).contains(&temp_c_x10) {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             if let Ok(retry_temp_k_x10) =
-                self.read_bq40_u16_consistent(addr, bq40z50::cmd::TEMPERATURE, 5)
+                self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::TEMPERATURE)
             {
                 let retry_temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(retry_temp_k_x10);
                 if (-400..=1250).contains(&retry_temp_c_x10) {

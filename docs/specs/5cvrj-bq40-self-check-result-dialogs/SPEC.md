@@ -117,7 +117,7 @@
 ### 4. 激活链路：工具式 no-charge probe + wake-window / keepalive / confirm
 
 1. `Try Activation` 成功进入 pending 后，主固件必须先进入 `ProbeWithoutCharge` 主路径：不启用 min-charge 覆盖，并沿用历史 PASS 固件的“低流量 observe”方式先做 no-charge 运行态探测。
-2. `ProbeWithoutCharge` 必须保留一个 `12 s` 的 observe window，并以 `2 s` cadence 重复执行；在该窗口内禁止发送 wake touch burst，只允许先做 `Voltage()` 单字 presence probe，只有当 `Voltage()` 已进入可信范围后，才允许继续读取 core 5-word snapshot。
+2. `ProbeWithoutCharge` 必须保留一个 `12 s` 的 observe window，并以 `2 s` cadence 重复执行；在该窗口内禁止发送 wake touch burst，只允许先做 `Voltage()` 单字 presence probe，只有当 `Voltage()` 已进入可信范围后，才允许继续读取 core 5-word snapshot；`Voltage()` 缺失、超范围或仅落在 low-pack/no-battery 区间时，都必须直接记为 observe miss，不能升级成 confirm 读取。
 3. `ProbeWithoutCharge` miss 后，激活链路必须无条件进入工具同款补救链路：`WaitChargeOff -> WaitMinChargeSettle -> MinChargeProbe -> WakeProbe -> follow-up`。这条链路属于激活流程本身，不得再受编译期 `force_min_charge` 总开关约束。
 4. 仅对“临时开机一次自动验证”入口，`ProbeWithoutCharge` 允许沿用 boot prewarm 已建立的最小充电 profile，不得在 `auto_request` 边界先把 wake profile 释放掉再开始观测；这样才能复现历史 PASS 固件的“30 s 连续偏置后直接发现可信快照”路径。
 5. 手动 `Try Activation` 的 `ProbeWithoutCharge` 必须保持 no-charge 语义：不得为了激活而保持 charger 处于 normal profile host-enable，也不得提前写入 min-charge 覆盖。只有进入 `WaitChargeOff` 之后，才允许开始 `10 s` 的 charger-off repower window；`WaitMinChargeSettle`、`MinChargeProbe`、`WakeProbe` 与 `follow-up` 必须维持激活态最小充电 profile。
@@ -128,7 +128,7 @@
    - `touch TEMP -> delayed read`
    - 若得到候选运行态读数，则进入 keepalive / confirm
    - 只要任一 touch 已经成功，即使首个 raw/read 没成功，也必须继续执行后续 wake follow-up / keepalive 探测；只有 `RSOC` 与 `TEMP` 的 touch 都失败时，才允许把该阶段记为 miss。
-9. delayed read 的读间隔固定使用 `[22, 40, 66] ms`。
+9. delayed read 的读间隔固定使用 `[22, 40, 66] ms`；`2 ms` 只允许作为 strict snapshot reader 的 word-to-word gap，不能混入 delayed read / keepalive 的 gap 集合。
 10. 一旦 `RSOC == 0x9002`，立即收敛到 `ROM MODE`，不再继续后续 keepalive。
 11. 命中候选读数后，必须继续执行有限轮数的 keepalive，并使用激活专用的 trusted snapshot confirm 逻辑读取运行态快照。
 12. 激活确认必须先走低流量的 “core 5-word” confirm：只读取 `Temperature / Voltage / Current / RSOC / BatteryStatus` 这 5 个历史 PASS 过的核心 SBS 字段，不追加 `Cell1..4`、`OP_STATUS` 或额外 block/MAC 访问；目的不是放宽结果口径，而是避免在 fragile wake window 内先用整包 strict 读取把器件重新拖回假值窗口。
@@ -144,7 +144,7 @@
    - `WakeProbe / follow-up` 期间允许保留正常 cadence 的 charger keepalive，但不得新增任何比正常 cadence 更激进的 charger fast poll。
 19. 激活态的 min-charge 覆盖只允许存在于 `WaitChargeOff` 之后的手动激活内部阶段；仅自动验证入口允许把 boot prewarm 连续保持到 `ProbeWithoutCharge` 的首轮观测。除此之外，主固件的常规 charger 策略不能变成“只要有输入就一直保持最小充电”。
 20. BQ40 诊断事务结束后仍需保留短暂的 SMBus quiet window；该 quiet window 固定为 `40 ms`，并且主循环必须像工具一样在该窗口内直接跳过后续 I2C 工作，避免 charger/BQ40 事务在窗口边界交错。该 quiet window 是附加保护，不能拿它替代激活阶段本身的 charger cadence 约束。
-21. 该 wake probe / follow-up 逻辑只允许存在于激活流程里；默认自检和常规轮询仍保持现有普通访问行为。
+21. 该 wake probe / follow-up 逻辑只允许存在于激活流程里；默认自检和常规轮询仍保持现有普通访问行为，不得复用 activation 专用的 priming、consistent-reader 或多轮 keepalive 读法。
 
 ### 5. 临时自动验证流：只允许用于修复验证
 
@@ -164,6 +164,9 @@
 9. 临时自动验证流允许在 `30 s` 的 `wake_settle` 窗口内临时维持工具同款 `16.8V / 200mA / 500mA` charger prewarm，用来复现工具已经验证有效的唤醒条件；该 prewarm 只服务于“自动验证是否已修复”的试验入口，不得参与结果分类。
 10. 临时自动验证流的 prewarm 必须无缝衔接到 `activation auto_request reason=boot_diag` 之后的首轮 `ProbeWithoutCharge` 观测；不得在 `auto_request` 边界先释放 wake profile，再重新依赖普通 charger 策略。是否可访问 `BQ40` 只允许由 `BQ40` 自身 SMBus/ROM 事务结果决定。
 11. 临时自动验证流启用时，boot self-test 不得在 `30 s` prewarm 之前主动访问 `BQ40`；只能把 `BQ40` 标成 `ERR` 并等待 `activation auto_request reason=boot_diag` 后的正式激活链路。这样可以避免早期普通探测扰动唤醒条件。
+12. 只要主固件准备写入 `16.8V / 200mA / 500mA` 激活档位，无论入口来自手动 `Try Activation` 还是 boot auto-validation prewarm，都必须先保存原始 charger 配置（至少包括 `CTRL0 / VREG / ICHG / IINDPM / chg_enabled`）。
+13. boot auto-validation 若在 due 时间点发现不需要激活，或 prewarm/hold 已结束而未进入真正的 activation finish，主固件也必须恢复上述原始 charger 配置，不能把预热档位残留给后续正常策略。
+14. boot auto-validation 只要把 `auto_due_at` 往后延，普通 BQ40 轮询的 quiet release 也必须同步往后延；在 auto-request 真的发生前，不得提前恢复普通 BQ40 轮询去污染 quiet bus 假设。
 
 ### 6. 明确禁止的误判
 
