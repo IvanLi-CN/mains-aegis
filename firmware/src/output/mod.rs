@@ -1313,7 +1313,17 @@ where
                 return;
             }
             SelfCheckCommState::Warn => {
-                self.finish_bms_activation(BmsResultKind::Abnormal, "bq40_warn_after_activation");
+                if self.has_trusted_bq40_runtime_evidence() {
+                    self.finish_bms_activation(
+                        BmsResultKind::Abnormal,
+                        "bq40_warn_after_activation",
+                    );
+                } else {
+                    self.finish_bms_activation(
+                        BmsResultKind::NotDetected,
+                        "bq40_untrusted_after_activation",
+                    );
+                }
                 return;
             }
             _ => {}
@@ -1338,6 +1348,12 @@ where
             };
             self.finish_bms_activation(result, reason);
         }
+    }
+
+    fn has_trusted_bq40_runtime_evidence(&self) -> bool {
+        self.ui_snapshot.bq40z50_soc_pct.is_some()
+            || self.ui_snapshot.bq40z50_rca_alarm.is_some()
+            || self.ui_snapshot.bq40z50_discharge_ready.is_some()
     }
 
     fn finish_bms_activation(&mut self, result: BmsResultKind, reason: &'static str) {
