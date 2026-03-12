@@ -1929,85 +1929,48 @@ where
             }
         };
 
-        match self.read_bq40_activation_snapshot_core(addr) {
-            Ok(snapshot) => {
-                let mut tracker = self.bms_activation_pattern_tracker;
-                match self.read_bq40_activation_snapshot_strict(addr, &mut tracker) {
-                    Ok(strict_snapshot) => {
-                        self.bms_activation_pattern_tracker = tracker;
-                        defmt::info!(
-                            "bms: activation runtime_probe addr=0x{=u8:x} attempt={=u16} dwell_ms={=u64} source=strict temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16}",
-                            addr,
-                            attempt,
-                            dwell_ms,
-                            bq40z50::temp_c_x10_from_k_x10(strict_snapshot.temp_k_x10),
-                            strict_snapshot.vpack_mv,
-                            strict_snapshot.current_ma,
-                            strict_snapshot.rsoc_pct,
-                            strict_snapshot.batt_status,
-                            strict_snapshot.cell_mv[0],
-                            strict_snapshot.cell_mv[1],
-                            strict_snapshot.cell_mv[2],
-                            strict_snapshot.cell_mv[3]
-                        );
-                        return Some(strict_snapshot);
-                    }
-                    Err(err) => {
-                        self.bms_activation_pattern_tracker = tracker;
-                        defmt::info!(
-                            "bms: activation runtime_probe_core addr=0x{=u8:x} attempt={=u16} dwell_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} strict_detail_err={} confirm=failed",
-                            addr,
-                            attempt,
-                            dwell_ms,
-                            bq40z50::temp_c_x10_from_k_x10(snapshot.temp_k_x10),
-                            snapshot.vpack_mv,
-                            snapshot.current_ma,
-                            snapshot.rsoc_pct,
-                            snapshot.batt_status,
-                            bq40_activation_read_error_kind(err)
-                        );
-                        return None;
-                    }
-                }
-            }
-            Err(core_err) => {
-                let mut tracker = self.bms_activation_pattern_tracker;
-                let result = self.read_bq40_activation_snapshot_strict(addr, &mut tracker);
-                self.bms_activation_pattern_tracker = tracker;
-                match result {
-                    Ok(snapshot) => {
-                        defmt::info!(
-                            "bms: activation runtime_probe addr=0x{=u8:x} attempt={=u16} dwell_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} op_status={=?} core_err={}",
-                            addr,
-                            attempt,
-                            dwell_ms,
-                            bq40z50::temp_c_x10_from_k_x10(snapshot.temp_k_x10),
-                            snapshot.vpack_mv,
-                            snapshot.current_ma,
-                            snapshot.rsoc_pct,
-                            snapshot.batt_status,
-                            snapshot.op_status,
-                            bq40_activation_read_error_kind(core_err)
-                        );
-                        Some(snapshot)
-                    }
-                    Err(err) => {
-                        if raw_diag {
-                            defmt::info!(
-                                "bms_diag: addr=0x{=u8:x} stage=runtime_probe attempt={=u16} dwell_ms={=u64} vpack_mv={=?} core_err={} strict_err={}",
-                                addr,
-                                attempt,
-                                dwell_ms,
-                                voltage_mv,
-                                bq40_activation_read_error_kind(core_err),
-                                bq40_activation_read_error_kind(err)
-                            );
-                        }
-                        None
-                    }
-                }
-            }
+        let mut tracker = self.bms_activation_pattern_tracker;
+        let confirmed = self.confirm_bq40_activation_snapshot(
+            addr,
+            attempt.min(u16::from(u8::MAX)) as u8,
+            dwell_ms,
+            "runtime_probe_confirm",
+            &mut tracker,
+            raw_diag,
+        );
+        self.bms_activation_pattern_tracker = tracker;
+
+        if let Some(snapshot) = confirmed {
+            let core_only_snapshot = snapshot.op_status.is_none() && snapshot.cell_mv == [0; 4];
+            defmt::info!(
+                "bms: activation runtime_probe addr=0x{=u8:x} attempt={=u16} dwell_ms={=u64} source={} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16}",
+                addr,
+                attempt,
+                dwell_ms,
+                if core_only_snapshot { "core_5word" } else { "strict" },
+                bq40z50::temp_c_x10_from_k_x10(snapshot.temp_k_x10),
+                snapshot.vpack_mv,
+                snapshot.current_ma,
+                snapshot.rsoc_pct,
+                snapshot.batt_status,
+                snapshot.cell_mv[0],
+                snapshot.cell_mv[1],
+                snapshot.cell_mv[2],
+                snapshot.cell_mv[3]
+            );
+            return Some(snapshot);
         }
+
+        if raw_diag {
+            defmt::info!(
+                "bms_diag: addr=0x{=u8:x} stage=runtime_probe_confirm attempt={=u16} dwell_ms={=u64} vpack_mv={=?} result=miss",
+                addr,
+                attempt,
+                dwell_ms,
+                voltage_mv
+            );
+        }
+        None
     }
 
     fn run_bms_activation_wake_probe_step(
@@ -4592,7 +4555,7 @@ where
                     let low_pack = bq40_pack_indicates_no_battery(s.vpack_mv);
                     let discharge_ready = Self::bq40_discharge_ready(s.op_status);
                     self.ui_snapshot.bq40z50 =
-                        if low_pack || matches!(discharge_ready, Some(false)) || rca_alarm {
+                        if low_pack || rca_alarm || !matches!(discharge_ready, Some(true)) {
                             SelfCheckCommState::Warn
                         } else {
                             SelfCheckCommState::Ok
@@ -4695,7 +4658,24 @@ where
 
     fn is_bq40_snapshot_reasonable(s: &Bq40z50Snapshot) -> bool {
         let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(s.temp_k_x10);
-        (-400..=1250).contains(&temp_c_x10) && s.vpack_mv <= 20_000 && s.rsoc_pct <= 100
+        (-400..=1250).contains(&temp_c_x10)
+            && (2_500..=20_000).contains(&s.vpack_mv)
+            && s.rsoc_pct <= 100
+    }
+
+    fn is_bq40_low_pack_snapshot_candidate(s: &Bq40z50Snapshot) -> bool {
+        let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(s.temp_k_x10);
+        (-400..=1250).contains(&temp_c_x10)
+            && bq40_pack_indicates_no_battery(s.vpack_mv)
+            && s.rsoc_pct <= 100
+    }
+
+    fn bq40_low_pack_snapshots_match(a: &Bq40z50Snapshot, b: &Bq40z50Snapshot) -> bool {
+        a.vpack_mv == b.vpack_mv
+            && a.current_ma == b.current_ma
+            && a.rsoc_pct == b.rsoc_pct
+            && a.batt_status == b.batt_status
+            && a.cell_mv == b.cell_mv
     }
 
     fn bq40_discharge_ready(op_status: Option<u16>) -> Option<bool> {
@@ -4709,12 +4689,21 @@ where
         const MAX_FULL_SNAPSHOT_ATTEMPTS: usize = 2;
         let mut last_i2c_kind: Option<&'static str> = None;
         let mut last_invalid: Option<Bq40z50Snapshot> = None;
+        let mut low_pack_candidate: Option<Bq40z50Snapshot> = None;
 
         for _ in 0..MAX_FULL_SNAPSHOT_ATTEMPTS {
             match self.read_bq40z50_snapshot_retry(addr) {
                 Ok(snapshot) => {
                     if Self::is_bq40_snapshot_reasonable(&snapshot) {
                         return Ok(snapshot);
+                    }
+                    if Self::is_bq40_low_pack_snapshot_candidate(&snapshot) {
+                        if let Some(previous) = low_pack_candidate {
+                            if Self::bq40_low_pack_snapshots_match(&previous, &snapshot) {
+                                return Ok(snapshot);
+                            }
+                        }
+                        low_pack_candidate = Some(snapshot);
                     }
                     last_invalid = Some(snapshot);
                 }
