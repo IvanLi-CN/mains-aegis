@@ -17,6 +17,7 @@ pub mod reg {
     pub const INPUT_CURRENT_LIMIT: u8 = 0x06;
 
     pub const CHARGER_CONTROL_0: u8 = 0x0F;
+    pub const CHARGER_CONTROL_1: u8 = 0x10;
     pub const CHARGER_CONTROL_2: u8 = 0x11;
     pub const CHARGER_CONTROL_5: u8 = 0x14;
 
@@ -29,15 +30,26 @@ pub mod reg {
     pub const FAULT_STATUS_0: u8 = 0x20;
     pub const FAULT_STATUS_1: u8 = 0x21;
     pub const ADC_CONTROL: u8 = 0x2E;
+    pub const ADC_FUNCTION_DISABLE_0: u8 = 0x2F;
+    pub const ADC_FUNCTION_DISABLE_1: u8 = 0x30;
     pub const VBAT_ADC: u8 = 0x3B;
     pub const VSYS_ADC: u8 = 0x3D;
 }
 
 pub mod ctrl0 {
+    /// `REGOF_Charger_Control_0.EN_AUTO_IBATDIS` (bit 7).
+    pub const EN_AUTO_IBATDIS: u8 = 1 << 7;
     /// `REGOF_Charger_Control_0.EN_CHG` (bit 5).
     pub const EN_CHG: u8 = 1 << 5;
     /// `REGOF_Charger_Control_0.EN_HIZ` (bit 2).
     pub const EN_HIZ: u8 = 1 << 2;
+}
+
+pub mod ctrl1 {
+    /// `REG10.WATCHDOG[2:0]`.
+    pub const WATCHDOG_MASK: u8 = 0x07;
+    /// `REG10.WD_RST` (bit 3).
+    pub const WD_RST: u8 = 1 << 3;
 }
 
 pub mod ctrl2 {
@@ -106,6 +118,21 @@ pub mod status3 {
 
 pub mod adc_ctrl {
     pub const ADC_EN: u8 = 1 << 7;
+    /// `REG2E.ADC_RATE` (bit 6), 0 = continuous.
+    pub const ADC_RATE: u8 = 1 << 6;
+}
+
+pub mod adc_disable0 {
+    pub const IBUS_ADC_DIS: u8 = 1 << 7;
+    pub const IBAT_ADC_DIS: u8 = 1 << 6;
+    pub const VBUS_ADC_DIS: u8 = 1 << 5;
+    pub const VBAT_ADC_DIS: u8 = 1 << 4;
+    pub const VSYS_ADC_DIS: u8 = 1 << 3;
+}
+
+pub mod adc_disable1 {
+    pub const VAC2_ADC_DIS: u8 = 1 << 5;
+    pub const VAC1_ADC_DIS: u8 = 1 << 4;
 }
 
 pub fn read_u8<I2C>(i2c: &mut I2C, reg: u8) -> Result<u8, I2C::Error>
@@ -239,6 +266,122 @@ where
 }
 
 #[derive(Clone, Copy)]
+pub struct WatchdogState {
+    pub ctrl1_before: u8,
+    pub ctrl1_after: u8,
+    pub watchdog_before: u8,
+    pub watchdog_after: u8,
+}
+
+pub fn read_watchdog_state<I2C>(i2c: &mut I2C) -> Result<WatchdogState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let watchdog_before = ctrl1_before & ctrl1::WATCHDOG_MASK;
+
+    Ok(WatchdogState {
+        ctrl1_before,
+        ctrl1_after: ctrl1_before,
+        watchdog_before,
+        watchdog_after: watchdog_before,
+    })
+}
+
+pub fn kick_watchdog<I2C>(i2c: &mut I2C) -> Result<u8, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let ctrl1_after = ctrl1_before | ctrl1::WD_RST;
+    write_u8(i2c, reg::CHARGER_CONTROL_1, ctrl1_after)?;
+    Ok(ctrl1_after)
+}
+
+pub fn ensure_watchdog_disabled<I2C>(i2c: &mut I2C) -> Result<WatchdogState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let watchdog_before = ctrl1_before & ctrl1::WATCHDOG_MASK;
+    let ctrl1_after = ctrl1_before & !ctrl1::WATCHDOG_MASK;
+    if ctrl1_after != ctrl1_before {
+        write_u8(i2c, reg::CHARGER_CONTROL_1, ctrl1_after)?;
+    }
+    let watchdog_after = ctrl1_after & ctrl1::WATCHDOG_MASK;
+
+    Ok(WatchdogState {
+        ctrl1_before,
+        ctrl1_after,
+        watchdog_before,
+        watchdog_after,
+    })
+}
+
+pub fn restore_watchdog<I2C>(i2c: &mut I2C, watchdog_bits: u8) -> Result<WatchdogState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let watchdog_before = ctrl1_before & ctrl1::WATCHDOG_MASK;
+    let ctrl1_after =
+        (ctrl1_before & !ctrl1::WATCHDOG_MASK) | (watchdog_bits & ctrl1::WATCHDOG_MASK);
+    if ctrl1_after != ctrl1_before {
+        write_u8(i2c, reg::CHARGER_CONTROL_1, ctrl1_after)?;
+    }
+    let watchdog_after = ctrl1_after & ctrl1::WATCHDOG_MASK;
+
+    Ok(WatchdogState {
+        ctrl1_before,
+        ctrl1_after,
+        watchdog_before,
+        watchdog_after,
+    })
+}
+
+#[derive(Clone, Copy)]
+pub struct AdcState {
+    pub ctrl: u8,
+    pub disable0: u8,
+    pub disable1: u8,
+}
+
+pub fn ensure_adc_power_path<I2C>(i2c: &mut I2C) -> Result<AdcState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl = read_u8(i2c, reg::ADC_CONTROL)?;
+    let desired_ctrl = (ctrl | adc_ctrl::ADC_EN) & !adc_ctrl::ADC_RATE;
+    if desired_ctrl != ctrl {
+        write_u8(i2c, reg::ADC_CONTROL, desired_ctrl)?;
+    }
+
+    let disable0 = read_u8(i2c, reg::ADC_FUNCTION_DISABLE_0)?;
+    let keep_enabled0 = adc_disable0::IBUS_ADC_DIS
+        | adc_disable0::IBAT_ADC_DIS
+        | adc_disable0::VBUS_ADC_DIS
+        | adc_disable0::VBAT_ADC_DIS
+        | adc_disable0::VSYS_ADC_DIS;
+    let desired_disable0 = disable0 & !keep_enabled0;
+    if desired_disable0 != disable0 {
+        write_u8(i2c, reg::ADC_FUNCTION_DISABLE_0, desired_disable0)?;
+    }
+
+    let disable1 = read_u8(i2c, reg::ADC_FUNCTION_DISABLE_1)?;
+    let keep_enabled1 = adc_disable1::VAC2_ADC_DIS | adc_disable1::VAC1_ADC_DIS;
+    let desired_disable1 = disable1 & !keep_enabled1;
+    if desired_disable1 != disable1 {
+        write_u8(i2c, reg::ADC_FUNCTION_DISABLE_1, desired_disable1)?;
+    }
+
+    Ok(AdcState {
+        ctrl: desired_ctrl,
+        disable0: desired_disable0,
+        disable1: desired_disable1,
+    })
+}
+
+#[derive(Clone, Copy)]
 pub struct ShipFetState {
     pub ctrl2_before: u8,
     pub ctrl2_after: u8,
@@ -291,6 +434,20 @@ where
         ctrl5_after,
         ship,
     })
+}
+
+/// Set `SDRV_CTRL[1:0]` mode (00 idle, 01 shutdown, 10 ship, 11 system reset).
+pub fn set_sdrv_ctrl_mode<I2C>(i2c: &mut I2C, mode: u8) -> Result<u8, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl2_before = read_u8(i2c, reg::CHARGER_CONTROL_2)?;
+    let mode_bits = (mode & 0x03) << ctrl2::SDRV_CTRL_SHIFT;
+    let ctrl2_after = (ctrl2_before & !ctrl2::SDRV_CTRL_MASK) | mode_bits;
+    if ctrl2_after != ctrl2_before {
+        write_u8(i2c, reg::CHARGER_CONTROL_2, ctrl2_after)?;
+    }
+    Ok(ctrl2_after)
 }
 
 pub const fn decode_chg_stat(code: u8) -> &'static str {
