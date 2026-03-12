@@ -12,6 +12,7 @@ pub const I2C_ADDRESS: u8 = 0x6B;
 
 pub mod reg {
     // 16-bit register LSB addresses.
+    pub const CHARGE_VOLTAGE_LIMIT: u8 = 0x01;
     pub const CHARGE_CURRENT_LIMIT: u8 = 0x03;
     pub const INPUT_CURRENT_LIMIT: u8 = 0x06;
 
@@ -175,6 +176,26 @@ fn clamp_u16(value: u16, min: u16, max: u16) -> u16 {
     } else {
         value
     }
+}
+
+pub fn set_charge_voltage_limit_mv<I2C>(i2c: &mut I2C, mv: u16) -> Result<u16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    // VREG range: 3000mV..=18800mV, step 10mV.
+    const MIN_MV: u16 = 3000;
+    const MAX_MV: u16 = 18_800;
+    const FIELD_MASK: u16 = 0x07FF;
+
+    let mv = clamp_u16(mv, MIN_MV, MAX_MV);
+    let field = (mv / 10) & FIELD_MASK;
+
+    let cur = read_u16(i2c, reg::CHARGE_VOLTAGE_LIMIT)?;
+    let new = (cur & !FIELD_MASK) | field;
+    if new != cur {
+        write_u16(i2c, reg::CHARGE_VOLTAGE_LIMIT, new)?;
+    }
+    Ok(new)
 }
 
 pub fn set_charge_current_limit_ma<I2C>(i2c: &mut I2C, ma: u16) -> Result<u16, I2C::Error>

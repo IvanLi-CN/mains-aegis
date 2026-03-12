@@ -146,16 +146,16 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 模块派生态（由基础态与模块上下文派生）：
 
 - Charger: `RUN` / `LOCK`
-- BQ40: `RCA`
 - TPS: `RUN` / `IDLE`
 - TMP: `HOT`
 
 ### 4.3 BmsActivationState
 
 - `Idle`: 无 overlay。
+- `Confirm`: 仅 UI overlay 使用，用于激活前确认。
 - `Pending`: 进入 progress overlay。
-- `Succeeded`: 显示成功结果 overlay。
-- `FailedNoInput` / `FailedTimeout` / `FailedComm`: 显示失败结果 overlay，错误语义不混用。
+- `Result(Success)`: 显示成功结果 overlay。
+- `Result(NoBattery | RomMode | Abnormal | NotDetected)`: 显示结果 overlay，并保持最近一次结果可复看。
 
 ### 4.4 UiFocus and touch_irq
 
@@ -165,7 +165,7 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 ## 5. Naming and copywriting rules
 
 - 文档说明使用中文，组件/Token/状态标识使用英文。
-- 状态词必须使用固定词形：`BYPASS`、`STANDBY`、`ASSIST`、`BACKUP`、`PEND`、`OK`、`WARN`、`ERR`、`N/A`、`LOCK`、`NOAC`、`RUN`、`IDLE`、`RCA`、`HOT`。
+- 状态词必须使用固定词形：`BYPASS`、`STANDBY`、`ASSIST`、`BACKUP`、`PEND`、`OK`、`WARN`、`ERR`、`N/A`、`LOCK`、`NOAC`、`RUN`、`IDLE`、`HOT`。
 - 模块名必须与实现一致：`GC9307`、`TCA6408A`、`FUSB302`、`INA3221`、`BQ25792`、`BQ40Z50`、`TPS55288-A`、`TPS55288-B`、`TMP112-A`、`TMP112-B`。
 - 单位规范：`W`（功率）、`A`（电流）、`C`（温度）、`%`（SOC）。
 - 禁止同义词漂移：同一状态不得在不同文档中出现别名。

@@ -145,6 +145,16 @@ pub enum SelfCheckCommState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BmsResultKind {
+    Success,
+    #[allow(dead_code)]
+    NoBattery,
+    RomMode,
+    Abnormal,
+    NotDetected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SelfCheckUiSnapshot {
     pub mode: UpsMode,
     pub gc9307: SelfCheckCommState,
@@ -161,6 +171,7 @@ pub struct SelfCheckUiSnapshot {
     pub bq40z50_soc_pct: Option<u16>,
     pub bq40z50_rca_alarm: Option<bool>,
     pub bq40z50_discharge_ready: Option<bool>,
+    pub bq40z50_last_result: Option<BmsResultKind>,
     pub tps_a: SelfCheckCommState,
     pub tps_a_enabled: Option<bool>,
     pub tps_a_iout_ma: Option<i32>,
@@ -191,6 +202,7 @@ impl SelfCheckUiSnapshot {
             bq40z50_soc_pct: None,
             bq40z50_rca_alarm: None,
             bq40z50_discharge_ready: None,
+            bq40z50_last_result: None,
             tps_a: SelfCheckCommState::Pending,
             tps_a_enabled: None,
             tps_a_iout_ma: None,
@@ -219,7 +231,7 @@ pub enum SelfCheckOverlay {
     None,
     BmsActivateConfirm,
     BmsActivateProgress,
-    BmsActivateResult { success: bool },
+    BmsActivateResult(BmsResultKind),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,10 +239,7 @@ pub enum SelfCheckOverlay {
 pub enum BmsActivationState {
     Idle,
     Pending,
-    Succeeded,
-    FailedNoInput,
-    FailedTimeout,
-    FailedComm,
+    Result(BmsResultKind),
 }
 
 const SELF_CHECK_BQ40_CARD_X: u16 = 163;
@@ -330,13 +339,19 @@ const AUDIO_TEST_LABELS: [&str; AUDIO_TEST_ITEM_COUNT] = [
 
 #[allow(dead_code)]
 pub fn is_bq40_offline(snapshot: &SelfCheckUiSnapshot) -> bool {
-    snapshot.bq40z50 == SelfCheckCommState::Err && snapshot.bq40z50_soc_pct.is_none()
+    snapshot.bq40z50 == SelfCheckCommState::Err
 }
 
 #[allow(dead_code)]
 pub fn is_bq40_activation_needed(snapshot: &SelfCheckUiSnapshot) -> bool {
-    is_bq40_offline(snapshot)
-        || (snapshot.bq40z50_soc_pct.is_some() && snapshot.bq40z50_discharge_ready != Some(true))
+    is_bq40_offline(snapshot) && snapshot.bq40z50_last_result.is_none()
+}
+
+#[allow(dead_code)]
+pub fn bq40_result_overlay(snapshot: &SelfCheckUiSnapshot) -> Option<SelfCheckOverlay> {
+    snapshot
+        .bq40z50_last_result
+        .map(SelfCheckOverlay::BmsActivateResult)
 }
 
 #[allow(dead_code)]
@@ -383,7 +398,7 @@ pub fn self_check_hit_test(
                 None
             }
         }
-        SelfCheckOverlay::BmsActivateProgress | SelfCheckOverlay::BmsActivateResult { .. } => None,
+        SelfCheckOverlay::BmsActivateProgress | SelfCheckOverlay::BmsActivateResult(..) => None,
     }
 }
 
@@ -1878,8 +1893,12 @@ fn render_variant_c<P: UiPainter>(
     } else {
         format_args!("ICHG N/A")
     };
-    let bms_key = if snapshot.bq40z50_rca_alarm == Some(true) {
+    let bms_key = if snapshot.bq40z50 == SelfCheckCommState::Err {
+        format_args!("NOT DETECTED")
+    } else if snapshot.bq40z50_rca_alarm == Some(true) {
         format_args!("RCA ALARM")
+    } else if snapshot.bq40z50 == SelfCheckCommState::Warn {
+        format_args!("ABNORMAL")
     } else if bms_soc_has {
         format_args!("SOC {:>2}%", bms_soc)
     } else {
@@ -2117,6 +2136,14 @@ fn draw_self_check_overlay<P: UiPainter>(
     let confirm_fill = palette.right;
     let confirm_text = fade_color(palette.bg, 0x0000);
 
+    let title = match overlay {
+        SelfCheckOverlay::BmsActivateConfirm | SelfCheckOverlay::BmsActivateProgress => {
+            "BQ40 ACTIVATE"
+        }
+        SelfCheckOverlay::BmsActivateResult(..) => "BQ40 RESULT",
+        SelfCheckOverlay::None => "",
+    };
+
     fill(
         painter,
         SELF_CHECK_DIALOG_X,
@@ -2153,7 +2180,7 @@ fn draw_self_check_overlay<P: UiPainter>(
         painter,
         variant,
         FontRole::TextBody,
-        "BMS Offline",
+        title,
         Point::new(
             (SELF_CHECK_DIALOG_X + 10) as i32,
             (SELF_CHECK_DIALOG_Y + 4) as i32,
@@ -2168,7 +2195,7 @@ fn draw_self_check_overlay<P: UiPainter>(
                 painter,
                 variant,
                 FontRole::TextBody,
-                "BQ40Z50 is not responding.",
+                "No SBS response yet.",
                 Point::new(
                     (SELF_CHECK_DIALOG_X + 10) as i32,
                     (SELF_CHECK_DIALOG_Y + 26) as i32,
@@ -2180,7 +2207,7 @@ fn draw_self_check_overlay<P: UiPainter>(
                 painter,
                 variant,
                 FontRole::TextBody,
-                "Activate BMS now?",
+                "Try activation now?",
                 Point::new(
                     (SELF_CHECK_DIALOG_X + 10) as i32,
                     (SELF_CHECK_DIALOG_Y + 46) as i32,
@@ -2258,7 +2285,7 @@ fn draw_self_check_overlay<P: UiPainter>(
                 painter,
                 variant,
                 FontRole::TextBody,
-                "BQ40Z50 is not responding.",
+                "Applying wake profile.",
                 Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 28) as i32),
                 HorizontalAlignment::Left,
                 body_text,
@@ -2267,79 +2294,77 @@ fn draw_self_check_overlay<P: UiPainter>(
                 painter,
                 variant,
                 FontRole::Num,
-                "Activating...",
+                "Checking pack state...",
                 Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 50) as i32),
                 HorizontalAlignment::Left,
                 PROGRESS_COLOR,
             )?;
         }
-        SelfCheckOverlay::BmsActivateResult { success } => {
+        SelfCheckOverlay::BmsActivateResult(result) => {
             let icon_x = SELF_CHECK_DIALOG_X + 10;
             let icon_y = SELF_CHECK_DIALOG_Y + 28;
             let text_x = SELF_CHECK_DIALOG_X + 50;
-            draw_activation_icon(
-                painter,
-                icon_x,
-                icon_y,
-                if success {
-                    ActivationIcon::Success
-                } else {
-                    ActivationIcon::Failed
-                },
-            )?;
-            if success {
-                text(
-                    painter,
-                    variant,
-                    FontRole::TextBody,
+            let (headline, body1, body2, accent, icon) = match result {
+                BmsResultKind::Success => (
                     "Activation succeeded.",
-                    Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 28) as i32),
-                    HorizontalAlignment::Left,
+                    "BQ40Z50 is ready.",
+                    "Tap to close",
                     SUCCESS_COLOR,
-                )?;
-                text(
-                    painter,
-                    variant,
-                    FontRole::TextBody,
-                    "BQ40Z50 is online.",
-                    Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 46) as i32),
-                    HorizontalAlignment::Left,
-                    body_text,
-                )?;
-            } else {
-                text(
-                    painter,
-                    variant,
-                    FontRole::TextBody,
-                    "Activation failed.",
-                    Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 28) as i32),
-                    HorizontalAlignment::Left,
+                    ActivationIcon::Success,
+                ),
+                BmsResultKind::NoBattery => (
+                    "Battery not detected.",
+                    "Check pack connection.",
+                    "Tap to close",
+                    PROGRESS_COLOR,
+                    ActivationIcon::Failed,
+                ),
+                BmsResultKind::RomMode => (
+                    "Gauge is in ROM mode.",
+                    "Use BQ40 tool recovery.",
+                    "Tap to close",
+                    PROGRESS_COLOR,
+                    ActivationIcon::Failed,
+                ),
+                BmsResultKind::Abnormal => (
+                    "Gauge responded abnormally.",
+                    "Review pack status.",
+                    "Tap to close",
+                    PROGRESS_COLOR,
+                    ActivationIcon::Failed,
+                ),
+                BmsResultKind::NotDetected => (
+                    "Still not detected.",
+                    "Check power and wiring.",
+                    "Tap to close",
                     ERROR_COLOR,
-                )?;
-                text(
-                    painter,
-                    variant,
-                    FontRole::TextBody,
-                    "Check input power and",
-                    Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 46) as i32),
-                    HorizontalAlignment::Left,
-                    body_text,
-                )?;
-                text(
-                    painter,
-                    variant,
-                    FontRole::TextBody,
-                    "battery wiring.",
-                    Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 64) as i32),
-                    HorizontalAlignment::Left,
-                    body_text,
-                )?;
-            }
+                    ActivationIcon::Failed,
+                ),
+            };
+            draw_activation_icon(painter, icon_x, icon_y, icon)?;
             text(
                 painter,
                 variant,
                 FontRole::TextBody,
-                "Tap to close",
+                headline,
+                Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 28) as i32),
+                HorizontalAlignment::Left,
+                accent,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                body1,
+                Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 46) as i32),
+                HorizontalAlignment::Left,
+                body_text,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                body2,
                 Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 84) as i32),
                 HorizontalAlignment::Left,
                 palette.text_dim,
@@ -2638,25 +2663,13 @@ fn charger_label(state: SelfCheckCommState, allow_charge: Option<bool>) -> &'sta
     }
 }
 
-fn bms_label(state: SelfCheckCommState, rca_alarm: Option<bool>) -> &'static str {
+fn bms_label(state: SelfCheckCommState, _rca_alarm: Option<bool>) -> &'static str {
     match state {
         SelfCheckCommState::Pending => "PEND",
-        SelfCheckCommState::Warn => {
-            if rca_alarm == Some(true) {
-                "RCA"
-            } else {
-                "WARN"
-            }
-        }
+        SelfCheckCommState::Warn => "WARN",
         SelfCheckCommState::Err => "ERR",
         SelfCheckCommState::NotAvailable => "N/A",
-        SelfCheckCommState::Ok => {
-            if rca_alarm == Some(true) {
-                "RCA"
-            } else {
-                "OK"
-            }
-        }
+        SelfCheckCommState::Ok => "OK",
     }
 }
 
