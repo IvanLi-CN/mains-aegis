@@ -36,6 +36,17 @@ const BMS_ACTIVATION_WINDOW: Duration = Duration::from_secs(15);
 const BMS_ACTIVATION_FORCE_ICHG_MA: u16 = 50;
 const BMS_ACTIVATION_FORCE_IINDPM_MA: u16 = 100;
 const BQ40_CURRENT_IDLE_THRESHOLD_MA: i16 = 20;
+const CHARGER_FAULT0_VBUS_OVP: u8 = 1 << 6;
+const CHARGER_FAULT0_VBAT_OVP: u8 = 1 << 5;
+const CHARGER_FAULT0_IBUS_OCP: u8 = 1 << 4;
+const CHARGER_FAULT0_IBAT_OCP: u8 = 1 << 3;
+const CHARGER_FAULT0_CONV_OCP: u8 = 1 << 2;
+const CHARGER_FAULT0_VAC2_OVP: u8 = 1 << 1;
+const CHARGER_FAULT0_VAC1_OVP: u8 = 1 << 0;
+const CHARGER_FAULT1_VSYS_SHORT: u8 = 1 << 7;
+const CHARGER_FAULT1_VSYS_OVP: u8 = 1 << 6;
+const CHARGER_FAULT1_OTG_OVP: u8 = 1 << 5;
+const CHARGER_FAULT1_TSHUT: u8 = 1 << 2;
 
 fn bq40_op_bit(op_status: Option<u16>, mask: u16) -> Option<bool> {
     op_status.map(|raw| (raw & mask) != 0)
@@ -82,6 +93,15 @@ fn bq40_decode_current_flow(current_ma: i16) -> &'static str {
         "discharging"
     } else {
         "idle"
+    }
+}
+
+fn audio_charge_phase_from_chg_stat(code: u8) -> AudioChargePhase {
+    match code & 0x07 {
+        0 => AudioChargePhase::NotCharging,
+        1 | 2 | 3 | 4 | 6 => AudioChargePhase::Charging,
+        7 => AudioChargePhase::Completed,
+        _ => AudioChargePhase::Unknown,
     }
 }
 
@@ -930,6 +950,12 @@ pub struct PowerManager<'d, I2C> {
     outputs_blocked_by_bms: bool,
 
     ui_snapshot: SelfCheckUiSnapshot,
+    audio_snapshot: AudioSignalSnapshot,
+    audio_events: AudioSignalEvents,
+    audio_signals_ready: bool,
+    charger_audio: ChargerAudioState,
+    bms_audio: BmsAudioState,
+    tps_audio: TpsAudioState,
 }
 
 #[derive(Clone, Copy)]
@@ -958,6 +984,84 @@ pub struct Config {
     pub force_min_charge: bool,
     pub bms_addr: Option<u8>,
     pub self_check_snapshot: SelfCheckUiSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioChargePhase {
+    Unknown,
+    NotCharging,
+    Charging,
+    Completed,
+}
+
+impl Default for AudioChargePhase {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioBatteryLowState {
+    Unknown,
+    Inactive,
+    WithMains,
+    NoMains,
+}
+
+impl Default for AudioBatteryLowState {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AudioSignalSnapshot {
+    pub mains_present: Option<bool>,
+    pub charge_phase: AudioChargePhase,
+    pub thermal_stress: bool,
+    pub battery_low: AudioBatteryLowState,
+    pub battery_protection: bool,
+    pub module_fault: bool,
+    pub io_over_voltage: bool,
+    pub io_over_current: bool,
+    pub shutdown_protection: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AudioSignalEvents {
+    pub mains_present_changed: Option<bool>,
+    pub charge_phase_changed: Option<AudioChargePhase>,
+    pub thermal_stress_changed: Option<bool>,
+    pub battery_low_changed: Option<AudioBatteryLowState>,
+    pub battery_protection_changed: Option<bool>,
+    pub module_fault_changed: Option<bool>,
+    pub io_over_voltage_changed: Option<bool>,
+    pub io_over_current_changed: Option<bool>,
+    pub shutdown_protection_changed: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ChargerAudioState {
+    input_present: Option<bool>,
+    phase: AudioChargePhase,
+    thermal_stress: bool,
+    over_voltage: bool,
+    over_current: bool,
+    shutdown_protection: bool,
+    module_fault: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct BmsAudioState {
+    rca_alarm: Option<bool>,
+    protection_active: bool,
+    module_fault: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TpsAudioState {
+    over_voltage: bool,
+    over_current: bool,
 }
 
 impl<'d, I2C> PowerManager<'d, I2C>
@@ -1024,6 +1128,12 @@ where
             outputs_restore_on_bms_ready: cfg.outputs_restore_on_bms_ready,
             outputs_blocked_by_bms: cfg.outputs_blocked_by_bms,
             ui_snapshot: cfg.self_check_snapshot,
+            audio_snapshot: AudioSignalSnapshot::default(),
+            audio_events: AudioSignalEvents::default(),
+            audio_signals_ready: false,
+            charger_audio: ChargerAudioState::default(),
+            bms_audio: BmsAudioState::default(),
+            tps_audio: TpsAudioState::default(),
         }
     }
 
@@ -1066,7 +1176,13 @@ where
             self.ui_snapshot.tps_b_enabled =
                 Some(self.cfg.enabled_outputs.is_enabled(OutputChannel::OutB));
         }
+        self.charger_audio.input_present = self.ui_snapshot.fusb302_vbus_present;
+        self.charger_audio.module_fault =
+            matches!(self.ui_snapshot.bq25792, SelfCheckCommState::Err);
+        self.bms_audio.rca_alarm = self.ui_snapshot.bq40z50_rca_alarm;
+        self.bms_audio.module_fault = matches!(self.ui_snapshot.bq40z50, SelfCheckCommState::Err);
         self.recompute_ui_mode();
+        self.refresh_audio_signals();
     }
 
     fn force_disable_outputs(&mut self) {
@@ -1099,6 +1215,7 @@ where
         self.maybe_poll_bms(irq);
         self.maybe_track_bms_activation();
         self.maybe_print_telemetry();
+        self.refresh_audio_signals();
     }
 
     pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
@@ -1107,6 +1224,16 @@ where
 
     pub fn bms_activation_state(&self) -> BmsActivationState {
         self.bms_activation_state
+    }
+
+    pub fn audio_signals(&self) -> AudioSignalSnapshot {
+        self.audio_snapshot
+    }
+
+    pub fn take_audio_edges(&mut self) -> AudioSignalEvents {
+        let events = self.audio_events;
+        self.audio_events = AudioSignalEvents::default();
+        events
     }
 
     pub fn clear_bms_activation_state(&mut self) {
@@ -1299,6 +1426,102 @@ where
             ups_mode_from_vbus(self.ui_snapshot.fusb302_vbus_present, has_output);
     }
 
+    fn refresh_audio_signals(&mut self) {
+        let mains_present = self
+            .charger_audio
+            .input_present
+            .or(self.ui_snapshot.fusb302_vbus_present);
+        let battery_low = match self.bms_audio.rca_alarm {
+            Some(true) => match mains_present {
+                Some(true) => AudioBatteryLowState::WithMains,
+                Some(false) => AudioBatteryLowState::NoMains,
+                None => AudioBatteryLowState::Unknown,
+            },
+            Some(false) => AudioBatteryLowState::Inactive,
+            None => AudioBatteryLowState::Unknown,
+        };
+        let module_fault = self.charger_audio.module_fault
+            || self.bms_audio.module_fault
+            || matches!(self.ui_snapshot.ina3221, SelfCheckCommState::Err)
+            || matches!(self.ui_snapshot.tps_a, SelfCheckCommState::Err)
+            || matches!(self.ui_snapshot.tps_b, SelfCheckCommState::Err)
+            || matches!(self.ui_snapshot.tmp_a, SelfCheckCommState::Err)
+            || matches!(self.ui_snapshot.tmp_b, SelfCheckCommState::Err);
+        let therm_kill_asserted = self.therm_kill.is_low();
+        let snapshot = AudioSignalSnapshot {
+            mains_present,
+            charge_phase: self.charger_audio.phase,
+            thermal_stress: self.charger_audio.thermal_stress,
+            battery_low,
+            battery_protection: self.bms_audio.protection_active,
+            module_fault,
+            io_over_voltage: self.charger_audio.over_voltage || self.tps_audio.over_voltage,
+            io_over_current: self.charger_audio.over_current || self.tps_audio.over_current,
+            shutdown_protection: therm_kill_asserted || self.charger_audio.shutdown_protection,
+        };
+
+        if !self.audio_signals_ready {
+            self.audio_snapshot = snapshot;
+            self.audio_events = AudioSignalEvents::default();
+            self.audio_signals_ready = true;
+            return;
+        }
+
+        let prev = self.audio_snapshot;
+        if prev.mains_present != snapshot.mains_present {
+            self.audio_events.mains_present_changed = snapshot.mains_present;
+        }
+        if prev.charge_phase != snapshot.charge_phase {
+            self.audio_events.charge_phase_changed = Some(snapshot.charge_phase);
+        }
+        if prev.thermal_stress != snapshot.thermal_stress {
+            self.audio_events.thermal_stress_changed = Some(snapshot.thermal_stress);
+        }
+        if prev.battery_low != snapshot.battery_low {
+            self.audio_events.battery_low_changed = Some(snapshot.battery_low);
+        }
+        if prev.battery_protection != snapshot.battery_protection {
+            self.audio_events.battery_protection_changed = Some(snapshot.battery_protection);
+        }
+        if prev.module_fault != snapshot.module_fault {
+            self.audio_events.module_fault_changed = Some(snapshot.module_fault);
+        }
+        if prev.io_over_voltage != snapshot.io_over_voltage {
+            self.audio_events.io_over_voltage_changed = Some(snapshot.io_over_voltage);
+        }
+        if prev.io_over_current != snapshot.io_over_current {
+            self.audio_events.io_over_current_changed = Some(snapshot.io_over_current);
+        }
+        if prev.shutdown_protection != snapshot.shutdown_protection {
+            self.audio_events.shutdown_protection_changed = Some(snapshot.shutdown_protection);
+        }
+        self.audio_snapshot = snapshot;
+    }
+
+    fn refresh_tps_audio_state(&mut self) {
+        let mut over_voltage = false;
+        let mut over_current = false;
+
+        for ch in [OutputChannel::OutA, OutputChannel::OutB] {
+            if !self.cfg.enabled_outputs.is_enabled(ch) {
+                continue;
+            }
+            let status = ::tps55288::Tps55288::with_address(&mut self.i2c, ch.addr())
+                .read_reg(::tps55288::registers::addr::STATUS)
+                .ok()
+                .map(::tps55288::registers::StatusBits::from_bits_truncate);
+            let Some(bits) = status else {
+                continue;
+            };
+            over_voltage |= bits.contains(::tps55288::registers::StatusBits::OVP);
+            over_current |= bits.contains(::tps55288::registers::StatusBits::OCP)
+                || bits.contains(::tps55288::registers::StatusBits::SCP);
+        }
+
+        self.tps_audio.over_voltage = over_voltage;
+        self.tps_audio.over_current = over_current;
+    }
+
     fn maybe_retry(&mut self) {
         let now = Instant::now();
 
@@ -1463,6 +1686,7 @@ where
                     tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutB, self.ina_ready);
                 }
             }
+            self.refresh_tps_audio_state();
         }
     }
 
@@ -1538,6 +1762,8 @@ where
             };
             self.ui_snapshot.tmp_b_c = capture.temp_c_x16.map(|v| v / 16);
         }
+
+        self.refresh_tps_audio_state();
 
         self.ui_snapshot.ina_total_ma = match (
             self.ui_snapshot.tps_a_iout_ma,
@@ -1865,6 +2091,25 @@ where
             applied_ctrl0
         );
 
+        self.charger_audio = ChargerAudioState {
+            input_present: Some(input_present),
+            phase: audio_charge_phase_from_chg_stat(bq25792::status1::chg_stat(status1)),
+            thermal_stress: ts_cool || ts_warm || treg,
+            over_voltage: (fault0
+                & (CHARGER_FAULT0_VBUS_OVP
+                    | CHARGER_FAULT0_VBAT_OVP
+                    | CHARGER_FAULT0_VAC1_OVP
+                    | CHARGER_FAULT0_VAC2_OVP))
+                != 0
+                || (fault1 & (CHARGER_FAULT1_VSYS_OVP | CHARGER_FAULT1_OTG_OVP)) != 0,
+            over_current: (fault0
+                & (CHARGER_FAULT0_IBUS_OCP | CHARGER_FAULT0_IBAT_OCP | CHARGER_FAULT0_CONV_OCP))
+                != 0
+                || (fault1 & CHARGER_FAULT1_VSYS_SHORT) != 0,
+            shutdown_protection: (fault1 & (CHARGER_FAULT1_VSYS_SHORT | CHARGER_FAULT1_TSHUT)) != 0,
+            module_fault: false,
+        };
+
         let charger_fault = fault0 != 0 || fault1 != 0 || ts_cold || ts_hot;
         self.ui_snapshot.bq25792 = if charger_fault {
             SelfCheckCommState::Warn
@@ -1897,6 +2142,15 @@ where
         self.chg_ce.set_high();
         self.chg_enabled = false;
         self.chg_next_retry_at = Some(now + self.cfg.retry_backoff);
+        self.charger_audio = ChargerAudioState {
+            input_present: None,
+            phase: AudioChargePhase::Unknown,
+            thermal_stress: false,
+            over_voltage: false,
+            over_current: false,
+            shutdown_protection: false,
+            module_fault: true,
+        };
         self.ui_snapshot.bq25792 = SelfCheckCommState::Err;
         self.ui_snapshot.bq25792_allow_charge = Some(false);
         self.ui_snapshot.bq25792_ichg_ma = None;
@@ -1970,6 +2224,20 @@ where
                     self.ui_snapshot.bq40z50_soc_pct = Some(s.rsoc_pct);
                     self.ui_snapshot.bq40z50_rca_alarm = Some(rca_alarm);
                     self.ui_snapshot.bq40z50_discharge_ready = discharge_ready;
+                    let protection_active = bq40_op_bit(s.op_status, bq40z50::operation_status::PF)
+                        == Some(true)
+                        || bq40z50::battery_status::error_code(s.batt_status) != 0
+                        || (s.batt_status
+                            & (bq40z50::battery_status::OCA
+                                | bq40z50::battery_status::TCA
+                                | bq40z50::battery_status::OTA
+                                | bq40z50::battery_status::TDA))
+                            != 0;
+                    self.bms_audio = BmsAudioState {
+                        rca_alarm: Some(rca_alarm),
+                        protection_active,
+                        module_fault: false,
+                    };
                     if discharge_ready == Some(true) {
                         self.try_restore_outputs_after_bms_ready();
                     }
@@ -1986,6 +2254,11 @@ where
                         self.ui_snapshot.bq40z50_soc_pct = None;
                         self.ui_snapshot.bq40z50_rca_alarm = None;
                         self.ui_snapshot.bq40z50_discharge_ready = None;
+                        self.bms_audio = BmsAudioState {
+                            rca_alarm: None,
+                            protection_active: false,
+                            module_fault: true,
+                        };
                         let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(s.temp_k_x10);
                         let flow = bq40_decode_current_flow(s.current_ma);
                         let (charge_ready, charge_reason) = bq40_decode_charge_path(s.op_status);
@@ -2025,6 +2298,11 @@ where
                         self.ui_snapshot.bq40z50_soc_pct = None;
                         self.ui_snapshot.bq40z50_rca_alarm = None;
                         self.ui_snapshot.bq40z50_discharge_ready = None;
+                        self.bms_audio = BmsAudioState {
+                            rca_alarm: None,
+                            protection_active: false,
+                            module_fault: true,
+                        };
 
                         if kind == "i2c_nack" || kind == "i2c_timeout" {
                             defmt::warn!(

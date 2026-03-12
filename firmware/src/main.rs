@@ -3,16 +3,17 @@
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-mod audio_demo;
 mod front_panel;
 mod front_panel_scene;
 mod irq;
 mod output;
 
 use esp_backtrace as _;
+use esp_firmware::audio::{AudioCue, AudioManager, PLAYBACK_SAMPLE_RATE_HZ};
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{DriveMode, Event, Flex, Input, InputConfig, Io, OutputConfig, Pull};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c, SoftwareTimeout};
+use esp_hal::i2s::master::{Channels, Config as I2sConfig, DataFormat, I2s};
 use esp_hal::ledc::channel::{self, ChannelIFace};
 use esp_hal::ledc::timer::{self, TimerIFace};
 use esp_hal::ledc::{LSGlobalClkSource, Ledc, LowSpeed};
@@ -430,18 +431,64 @@ fn main() -> ! {
     front_panel.update_self_check_snapshot(power.ui_snapshot());
     front_panel.update_bms_activation_state(power.bms_activation_state());
 
+    let i2s = I2s::new(
+        i2s0,
+        dma_channel,
+        I2sConfig::new_tdm_philips()
+            .with_sample_rate(Rate::from_hz(PLAYBACK_SAMPLE_RATE_HZ))
+            .with_data_format(DataFormat::Data16Channel16)
+            .with_channels(Channels::STEREO),
+    )
+    .unwrap();
+    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 16 * 4092);
+    let mut i2s_tx = i2s
+        .i2s_tx
+        .with_bclk(audio_bclk)
+        .with_ws(audio_ws)
+        .with_dout(audio_dout)
+        .build(tx_descriptors);
+    let mut audio_transfer = i2s_tx.write_dma_circular(&tx_buffer).unwrap();
+    let mut audio_manager = AudioManager::new();
+
+    audio_manager.trigger(AudioCue::BootStartup);
+    sync_runtime_audio(
+        &mut audio_manager,
+        Instant::now(),
+        power.audio_signals(),
+        power.take_audio_edges(),
+    );
+
     let mut irq_tracker = irq::IrqTracker::new();
     let mut last_irq_log_at: Option<Instant> = None;
 
-    match audio_demo::play_demo_playlist(
-        i2s0,
-        dma_channel,
-        audio_bclk,
-        audio_ws,
-        audio_dout,
-        || {
+    loop {
+        defmt::info!("esp: heartbeat");
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(2_000) {
+            match audio_transfer.available() {
+                Ok(available) if available >= 4 => {
+                    if audio_transfer
+                        .push_with(|buf| audio_manager.fill(buf))
+                        .is_err()
+                    {
+                        defmt::warn!("audio: dma push failed");
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => defmt::warn!("audio: dma available failed err={=?}", err),
+            }
+
             let irq_events = irq_tracker.take_delta();
             power.tick(&irq_events);
+            let now = Instant::now();
+            sync_runtime_audio(
+                &mut audio_manager,
+                now,
+                power.audio_signals(),
+                power.take_audio_edges(),
+            );
+            audio_manager.tick(now);
+
             front_panel.update_self_check_snapshot(power.ui_snapshot());
             front_panel.update_bms_activation_state(power.bms_activation_state());
             if let Some(action) = front_panel.tick() {
@@ -458,7 +505,7 @@ fn main() -> ! {
             }
             if irq_events.any()
                 && output::tps55288::should_log_fault(
-                    Instant::now(),
+                    now,
                     &mut last_irq_log_at,
                     Duration::from_millis(200),
                 )
@@ -475,32 +522,55 @@ fn main() -> ! {
                     irq_events.therm_kill_n
                 );
             }
-        },
-    ) {
-        Ok(()) => {}
-        Err(err) => defmt::error!("audio: demo playlist error: {=?}", err),
-    }
-
-    loop {
-        defmt::info!("esp: heartbeat");
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(2_000) {
-            let irq_events = irq_tracker.take_delta();
-            power.tick(&irq_events);
-            front_panel.update_self_check_snapshot(power.ui_snapshot());
-            front_panel.update_bms_activation_state(power.bms_activation_state());
-            if let Some(action) = front_panel.tick() {
-                match action {
-                    front_panel::UiAction::RequestBmsActivation => {
-                        power.request_bms_activation();
-                        front_panel.update_bms_activation_state(power.bms_activation_state());
-                    }
-                    front_panel::UiAction::ClearBmsActivationResult => {
-                        power.clear_bms_activation_state();
-                        front_panel.update_bms_activation_state(power.bms_activation_state());
-                    }
-                }
-            }
         }
     }
+}
+
+fn sync_runtime_audio(
+    audio_manager: &mut AudioManager,
+    now: Instant,
+    signals: output::AudioSignalSnapshot,
+    edges: output::AudioSignalEvents,
+) {
+    if edges.mains_present_changed == Some(true) {
+        audio_manager.trigger(AudioCue::MainsPresentDc);
+    }
+    if matches!(
+        edges.charge_phase_changed,
+        Some(output::AudioChargePhase::Charging)
+    ) {
+        audio_manager.trigger(AudioCue::ChargeStarted);
+    }
+    if matches!(
+        edges.charge_phase_changed,
+        Some(output::AudioChargePhase::Completed)
+    ) {
+        audio_manager.trigger(AudioCue::ChargeCompleted);
+    }
+
+    audio_manager.set_cue_active(
+        AudioCue::MainsAbsentDc,
+        signals.mains_present == Some(false),
+        now,
+    );
+    audio_manager.set_cue_active(AudioCue::HighStress, signals.thermal_stress, now);
+    audio_manager.set_cue_active(
+        AudioCue::BatteryLowNoMains,
+        signals.battery_low == output::AudioBatteryLowState::NoMains,
+        now,
+    );
+    audio_manager.set_cue_active(
+        AudioCue::BatteryLowWithMains,
+        signals.battery_low == output::AudioBatteryLowState::WithMains,
+        now,
+    );
+    audio_manager.set_cue_active(
+        AudioCue::ShutdownProtection,
+        signals.shutdown_protection,
+        now,
+    );
+    audio_manager.set_cue_active(AudioCue::IoOverVoltage, signals.io_over_voltage, now);
+    audio_manager.set_cue_active(AudioCue::IoOverCurrent, signals.io_over_current, now);
+    audio_manager.set_cue_active(AudioCue::ModuleFault, signals.module_fault, now);
+    audio_manager.set_cue_active(AudioCue::BatteryProtection, signals.battery_protection, now);
 }

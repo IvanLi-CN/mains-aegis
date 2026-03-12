@@ -94,24 +94,34 @@
 
 > 若后续需要降低素材体积，优先从“提示音时长/采样率/内容设计”优化；编码压缩（如 ADPCM/Opus 等）仅作为未来评估方向，需结合目标板噪声底与听感另行评估（当前 PCM-only）。
 
-### 4.3 固件实现入口（Demo）
+### 4.3 固件实现入口（运行时 cue 服务）
 
-本仓库已落地一个“上电自动播放”的最小音频 Demo（用于验证 I2S/TDM→MAX98357A 链路）：
+本仓库已将主固件切换为“主循环常驻音效服务”，用于把 I2S/TDM→MAX98357A 音频链路与实际运行时提示音语义接到一起：
 
-- 固件入口：`../firmware/src/main.rs`（启动后触发播放）
-- 播放实现：`../firmware/src/audio_demo.rs`
-- Demo 素材（固件侧落盘）：`../firmware/assets/audio/demo-playlist/`
-- 验证步骤：`../firmware/README.md`（见“音频播放 Demo（Plan #0004）”章节）
+- 主固件入口：`../firmware/src/main.rs`（启动后只请求一次 `boot_startup`，随后在主循环内持续调度）
+- 共享播放核心：`../firmware/src/audio.rs`
+- 运行时信号快照：`../firmware/src/output/mod.rs`
+- 运行时资产（固件侧打包）：`../firmware/assets/audio/test-fw-cues/`
+- 验证步骤：`../firmware/README.md`（见“运行时音效服务（Plan #h43mk）”章节）
 
-### 4.4 状态/告警/错误提示音本地试听资产（非固件接入）
+运行时调度冻结为：
 
-为了快速评审提示音语义与听感，本仓库提供了独立的“本地试听资产”目录（不直接接入固件运行时资源）：
+- `one_shot`：`boot_startup`、市电恢复、充电开始/完成
+- `interval_loop(2000ms)`：市电丢失、高压力、低电（按市电有无拆分）
+- `continuous_loop`：保护、过压/过流、模块故障、电池保护
 
-- 资产入口：`./audio-cues-preview/README.md`
+`shutdown_mode_entered` 与 `io_over_power` 继续保留素材定义，但主固件本轮不触发，等待真实状态源后再接入。
+
+### 4.4 状态/告警/错误提示音试听资产与固件资产关系
+
+为了快速评审提示音语义与听感，本仓库继续保留独立的“本地试听资产”目录；它是试听/定义源，不由主固件直接读取：
+
+- 试听资产入口：`./audio-cues-preview/README.md`
 - 清单契约：`./audio-cues-preview/cues.manifest.json`
 - 本地预览页：`./audio-cues-preview/preview.html`
+- 固件打包副本：`../firmware/assets/audio/test-fw-cues/*.wav`
 
-> 说明：该目录用于“音效定义与试听”，不是固件打包资源；后续若要接入固件资产目录，应另开变更并同步规格。
+> 说明：`docs/audio-cues-preview/**` 用于“音效定义与试听”，`firmware/assets/audio/test-fw-cues/*.wav` 是当前主固件与 `test-fw` 共用的运行时资产副本。
 
 ---
 
