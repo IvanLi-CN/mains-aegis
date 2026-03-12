@@ -101,7 +101,7 @@
 
 ### 2. 触发激活：其它器件只负责门禁，不负责结果分类
 
-1. 默认情况下，卡片落到 `ERR` 时允许进入 `Try Activation`；若普通轮询已经拿到 BQ40 自身的低包压证据并显示 `NO BATTERY`，在尚无最近一次激活结果时也允许手动进入 `Try Activation`，避免被瞬态低压样本卡死在不可重试状态。
+1. 默认情况下，只有卡片落到 `ERR` 时才允许进入 `Try Activation`；`NO BATTERY` 结果只允许回显最近一次结果弹窗，不得重新作为手动激活入口门禁。
 2. `BQ25792`、输入电源存在与否、充电器配置写入结果，只能决定“本次是否能执行激活动作”。
 3. 若激活动作因为前置条件不满足而无法推进，结果统一回落为 `NOT DETECTED`；不得借此推断 `NO BATTERY`、`ABNORMAL` 或 `SUCCESS`。
 
@@ -134,17 +134,19 @@
 12. 激活确认必须先走低流量的 “core 5-word” confirm：只读取 `Temperature / Voltage / Current / RSOC / BatteryStatus` 这 5 个历史 PASS 过的核心 SBS 字段，不追加 `Cell1..4`、`OP_STATUS` 或额外 block/MAC 访问；目的不是放宽结果口径，而是避免在 fragile wake window 内先用整包 strict 读取把器件重新拖回假值窗口。
 13. 只有当 core 5-word confirm miss，或 core 5-word confirm 命中 stale-pattern 时，才允许在同一轮激活里继续尝试激活专用 strict snapshot reader；strict reader 读取 `Temperature / Voltage / Current / RSOC / BatteryStatus / Cell1..4`，且不得把 `OP_STATUS` 之类可选读数塞进 wake confirm 路径；该 reader 的 word-to-word gap 固定为 `2 ms`。`22 / 40 / 66 ms` 只用于 wake touch 后的 delayed read，不得误用于 strict snapshot reader。
 14. 只有 core 5-word confirm 或 strict confirm 通过的快照才允许驱动 `SUCCESS` 或 `ABNORMAL`；未 confirm 的候选值只能作为“继续保活”的依据，不能直接驱动结果分类。`ProbeWithoutCharge`、`MinChargeProbe` 与 follow-up runtime probe 都不得因为一次未 confirm 的 lean/core 候选值就提前返回 Working。
-15. 若通过的是 core 5-word confirm，则结果分类仍然只能依据 `BQ40` 自身字段：`Voltage / Temperature / Current / RSOC / BatteryStatus` 合法且 `RCA=0` 时可判 `SUCCESS`；若 `RCA=1` 则判 `ABNORMAL`；不得因为 `OP_STATUS` 缺失就自动降级成 `ABNORMAL`，也不得引入其它器件信息补判。
-16. follow-up 的 runtime probe 必须先尝试 core 5-word confirm；若 core confirm miss 或命中 stale-pattern，再退到激活专用 strict snapshot reader。只要 core confirm 或 strict confirm 任一通过，就允许继续按该确认结果分类；不得直接退回普通轮询用的弱校验快照路径。
-17. staged wake 三段全部 miss 后，激活流程必须立即进入 follow-up：初始延迟固定为 `0 ms`，保证 `WakeProbe` 结束后立刻补一轮 post-wake follow-up；后续 probe 周期固定为 `2 s`。follow-up 的前 `6 s` 允许保留工具同款的 limited exit exercise，并且同一轮 follow-up 必须先做 exit exercise，再做 runtime probe；超过该窗口后必须停止额外 touch，只保留 confirm。该 cadence 必须对齐工具“wake probe 结束后先立刻补一轮，再回到约 `2 s` tick”的实际节奏，不能在主固件里把 post-wake follow-up 提升成持续 `250 ms` 刷总线。
-18. 激活 pending 期间，charger 行为必须分阶段约束：
+15. `NO BATTERY` 不得由单次 activation sample 直接拍板；至少必须拿到两次一致的 BQ40 低包压 runtime 样本后才能出结果。若第一次 low-pack 候选来自 core 5-word confirm，则必须继续补一轮 strict confirm；若补确认失败或两次样本不一致，只能继续 pending / follow-up，不能提前结束为 `NO BATTERY`。
+16. 若通过的是 core 5-word confirm，则结果分类仍然只能依据 `BQ40` 自身字段：`Voltage / Temperature / Current / RSOC / BatteryStatus` 合法且 `RCA=0` 时可判 `SUCCESS`；若 `RCA=1` 则判 `ABNORMAL`；不得因为 `OP_STATUS` 缺失就自动降级成 `ABNORMAL`，也不得引入其它器件信息补判。
+17. follow-up 的 runtime probe 必须先尝试 core 5-word confirm；若 core confirm miss、命中 stale-pattern、或只命中尚未二次确认的 low-pack 候选，再退到激活专用 strict snapshot reader。只要 core confirm 或 strict confirm 任一通过，就允许继续按该确认结果分类；不得直接退回普通轮询用的弱校验快照路径。
+18. staged wake 三段全部 miss 后，激活流程必须立即进入 follow-up：初始延迟固定为 `0 ms`，保证 `WakeProbe` 结束后立刻补一轮 post-wake follow-up；后续 probe 周期固定为 `2 s`。follow-up 的前 `6 s` 允许保留工具同款的 limited exit exercise，并且同一轮 follow-up 必须先做 exit exercise，再做 runtime probe；超过该窗口后必须停止额外 touch，只保留 confirm。该 cadence 必须对齐工具“wake probe 结束后先立刻补一轮，再回到约 `2 s` tick”的实际节奏，不能在主固件里把 post-wake follow-up 提升成持续 `250 ms` 刷总线。
+19. 激活 pending 期间，charger 行为必须分阶段约束：
    - `ProbeWithoutCharge` 必须保持 no-charge；不得临时保持 normal profile host-enable，也不得写入 min-charge 覆盖。
    - `WaitChargeOff` 必须显式关闭 charger 并保持 `10 s` repower window。
    - `WaitMinChargeSettle`、`MinChargeProbe`、`WakeProbe` 与 `follow-up` 必须保留工具同款的 charger keepalive / 轮询，让 `16.8V / 200mA / 500mA` 的最小充电偏置持续稳定；charger poll cadence 必须独立于 `BQ40` fast probe，不能因为 `BQ40` 进入更密的探测窗口就把 charger 轮询也提升到同样频率。
    - `WakeProbe / follow-up` 期间允许保留正常 cadence 的 charger keepalive，但不得新增任何比正常 cadence 更激进的 charger fast poll。
-19. 激活态的 min-charge 覆盖只允许存在于 `WaitChargeOff` 之后的手动激活内部阶段；仅自动验证入口允许把 boot prewarm 连续保持到 `ProbeWithoutCharge` 的首轮观测。除此之外，主固件的常规 charger 策略不能变成“只要有输入就一直保持最小充电”。
-20. BQ40 诊断事务结束后仍需保留短暂的 SMBus quiet window；该 quiet window 固定为 `40 ms`，并且主循环必须像工具一样在该窗口内直接跳过后续 I2C 工作，避免 charger/BQ40 事务在窗口边界交错。该 quiet window 是附加保护，不能拿它替代激活阶段本身的 charger cadence 约束。
-21. 该 wake probe / follow-up 逻辑只允许存在于激活流程里；默认自检和常规轮询仍保持现有普通访问行为，不得复用 activation 专用的 priming、consistent-reader 或多轮 keepalive 读法。
+20. 切入 `ProbeWithoutCharge` 时必须立刻执行一次 charger disable / poll，确保首个 no-charge probe 前 `CE` 已经拉高；不得只把下一次 charger poll 推迟到未来再假设 charger 已经关闭。
+21. 激活态的 min-charge 覆盖只允许存在于 `WaitChargeOff` 之后的手动激活内部阶段；仅自动验证入口允许把 boot prewarm 连续保持到 `ProbeWithoutCharge` 的首轮观测。除此之外，主固件的常规 charger 策略不能变成“只要有输入就一直保持最小充电”。
+22. BQ40 诊断事务结束后仍需保留短暂的 SMBus quiet window；该 quiet window 固定为 `40 ms`，并且主循环必须像工具一样在该窗口内直接跳过后续 I2C 工作，避免 charger/BQ40 事务在窗口边界交错。该 quiet window 是附加保护，不能拿它替代激活阶段本身的 charger cadence 约束。
+23. 该 wake probe / follow-up 逻辑只允许存在于激活流程里；默认自检和常规轮询仍保持现有普通访问行为，不得复用 activation 专用的 priming、consistent-reader 或多轮 keepalive 读法。
 
 ### 5. 临时自动验证流：只允许用于修复验证
 

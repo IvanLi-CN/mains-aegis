@@ -150,6 +150,75 @@ fn bq40_pack_indicates_no_battery(vpack_mv: u16) -> bool {
     vpack_mv < BMS_NO_BATTERY_VPACK_MAX_MV
 }
 
+fn bq40_low_pack_runtime_signature_matches(
+    vpack_mv_a: u16,
+    current_ma_a: i16,
+    rsoc_pct_a: u16,
+    batt_status_a: u16,
+    vpack_mv_b: u16,
+    current_ma_b: i16,
+    rsoc_pct_b: u16,
+    batt_status_b: u16,
+) -> bool {
+    vpack_mv_a == vpack_mv_b
+        && current_ma_a == current_ma_b
+        && rsoc_pct_a == rsoc_pct_b
+        && batt_status_a == batt_status_b
+}
+
+fn bq40_self_test_no_battery_confirmed<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    temp_k_x10: u16,
+    voltage_mv: u16,
+    current_ma: i16,
+    soc_pct: u16,
+    status_raw: u16,
+) -> bool
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if !bq40_pack_indicates_no_battery(voltage_mv)
+        || !(-400..=1250).contains(&bq40z50::temp_c_x10_from_k_x10(temp_k_x10))
+        || soc_pct > 100
+    {
+        return false;
+    }
+
+    let confirm = (
+        bq40z50::read_u16(i2c, addr, bq40z50::cmd::TEMPERATURE),
+        bq40z50::read_u16(i2c, addr, bq40z50::cmd::VOLTAGE),
+        bq40z50::read_i16(i2c, addr, bq40z50::cmd::CURRENT),
+        bq40z50::read_u16(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE),
+        bq40z50::read_u16(i2c, addr, bq40z50::cmd::BATTERY_STATUS),
+    );
+
+    match confirm {
+        (
+            Ok(confirm_temp_k_x10),
+            Ok(confirm_voltage_mv),
+            Ok(confirm_current_ma),
+            Ok(confirm_soc_pct),
+            Ok(confirm_status_raw),
+        ) => {
+            (-400..=1250).contains(&bq40z50::temp_c_x10_from_k_x10(confirm_temp_k_x10))
+                && confirm_soc_pct <= 100
+                && bq40_pack_indicates_no_battery(confirm_voltage_mv)
+                && bq40_low_pack_runtime_signature_matches(
+                    voltage_mv,
+                    current_ma,
+                    soc_pct,
+                    status_raw,
+                    confirm_voltage_mv,
+                    confirm_current_ma,
+                    confirm_soc_pct,
+                    confirm_status_raw,
+                )
+        }
+        _ => false,
+    }
+}
+
 fn bq40_op_bit(op_status: Option<u16>, mask: u16) -> Option<bool> {
     op_status.map(|raw| (raw & mask) != 0)
 }
@@ -724,7 +793,20 @@ where
                 bms_voltage_mv = Some(voltage_mv);
                 bms_soc_pct = Some(soc_pct);
                 bms_rca_alarm = Some((status_raw & bq40z50::battery_status::RCA) != 0);
-                bms_no_battery = Some(bq40_pack_indicates_no_battery(voltage_mv));
+                let no_battery_confirmed = bq40_self_test_no_battery_confirmed(
+                    &mut *i2c, addr, temp_k_x10, voltage_mv, current_ma, soc_pct, status_raw,
+                );
+                if bq40_pack_indicates_no_battery(voltage_mv) && !no_battery_confirmed {
+                    defmt::info!(
+                        "self_test: bq40z50 low_pack candidate rejected addr=0x{=u8:x} voltage_mv={=u16} current_ma={=i16} soc_pct={=u16} status=0x{=u16:x}",
+                        addr,
+                        voltage_mv,
+                        current_ma,
+                        soc_pct,
+                        status_raw
+                    );
+                }
+                bms_no_battery = Some(no_battery_confirmed);
                 bms_charge_ready = charge_ready;
                 bms_charge_reason = Some(charge_reason);
                 bms_discharge_ready = discharge_ready;
@@ -3019,6 +3101,23 @@ where
                     snapshot.rsoc_pct,
                     snapshot.batt_status,
                 );
+                if bq40_pack_indicates_no_battery(snapshot.vpack_mv) {
+                    defmt::info!(
+                        "bms: activation confirm_core low_pack_candidate addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x}",
+                        addr,
+                        stage,
+                        step,
+                        delay_ms,
+                        bq40z50::temp_c_x10_from_k_x10(snapshot.temp_k_x10),
+                        snapshot.vpack_mv,
+                        snapshot.current_ma,
+                        snapshot.rsoc_pct,
+                        snapshot.batt_status
+                    );
+                    return self.confirm_bq40_activation_no_battery(
+                        addr, step, delay_ms, stage, tracker, raw_diag, "core", snapshot,
+                    );
+                }
                 if bq40_activation_signature_is_stale(
                     snapshot.vpack_mv,
                     snapshot.current_ma,
@@ -3040,6 +3139,18 @@ where
                     );
                     match self.read_bq40_activation_snapshot_strict(addr, tracker) {
                         Ok(snapshot) => {
+                            if bq40_pack_indicates_no_battery(snapshot.vpack_mv) {
+                                return self.confirm_bq40_activation_no_battery(
+                                    addr,
+                                    step,
+                                    delay_ms,
+                                    stage,
+                                    tracker,
+                                    raw_diag,
+                                    "strict_after_stale",
+                                    snapshot,
+                                );
+                            }
                             defmt::info!(
                                 "bms: activation confirm addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} core_state=stale",
                                 addr,
@@ -3085,6 +3196,18 @@ where
             }
             Err(core_err) => match self.read_bq40_activation_snapshot_strict(addr, tracker) {
                 Ok(snapshot) => {
+                    if bq40_pack_indicates_no_battery(snapshot.vpack_mv) {
+                        return self.confirm_bq40_activation_no_battery(
+                            addr,
+                            step,
+                            delay_ms,
+                            stage,
+                            tracker,
+                            raw_diag,
+                            "strict_after_core_err",
+                            snapshot,
+                        );
+                    }
                     defmt::info!(
                         "bms: activation confirm addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} op_status={=?} core_err={}",
                         addr,
@@ -3126,6 +3249,109 @@ where
                     None
                 }
             },
+        }
+    }
+
+    fn confirm_bq40_activation_no_battery(
+        &mut self,
+        addr: u8,
+        step: u8,
+        delay_ms: u64,
+        stage: &'static str,
+        tracker: &mut Bq40ActivationPatternTracker,
+        raw_diag: bool,
+        source: &'static str,
+        snapshot: Bq40z50Snapshot,
+    ) -> Option<Bq40z50Snapshot> {
+        match self.read_bq40_activation_snapshot_strict(addr, tracker) {
+            Ok(confirm) => {
+                let confirmed = bq40_pack_indicates_no_battery(confirm.vpack_mv)
+                    && bq40_low_pack_runtime_signature_matches(
+                        snapshot.vpack_mv,
+                        snapshot.current_ma,
+                        snapshot.rsoc_pct,
+                        snapshot.batt_status,
+                        confirm.vpack_mv,
+                        confirm.current_ma,
+                        confirm.rsoc_pct,
+                        confirm.batt_status,
+                    );
+                if confirmed {
+                    defmt::info!(
+                        "bms: activation confirm low_pack addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} source={} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16}",
+                        addr,
+                        stage,
+                        step,
+                        delay_ms,
+                        source,
+                        bq40z50::temp_c_x10_from_k_x10(confirm.temp_k_x10),
+                        confirm.vpack_mv,
+                        confirm.current_ma,
+                        confirm.rsoc_pct,
+                        confirm.batt_status,
+                        confirm.cell_mv[0],
+                        confirm.cell_mv[1],
+                        confirm.cell_mv[2],
+                        confirm.cell_mv[3]
+                    );
+                    Some(confirm)
+                } else {
+                    if raw_diag {
+                        defmt::info!(
+                            "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} low_pack_mismatch source={} first_vpack_mv={=u16} first_current_ma={=i16} first_rsoc_pct={=u16} first_batt_status=0x{=u16:x} confirm_vpack_mv={=u16} confirm_current_ma={=i16} confirm_rsoc_pct={=u16} confirm_batt_status=0x{=u16:x}",
+                            addr,
+                            stage,
+                            step,
+                            delay_ms,
+                            source,
+                            snapshot.vpack_mv,
+                            snapshot.current_ma,
+                            snapshot.rsoc_pct,
+                            snapshot.batt_status,
+                            confirm.vpack_mv,
+                            confirm.current_ma,
+                            confirm.rsoc_pct,
+                            confirm.batt_status
+                        );
+                    } else {
+                        defmt::info!(
+                            "bms: activation confirm low_pack mismatch addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} source={} first_vpack_mv={=u16} confirm_vpack_mv={=u16}",
+                            addr,
+                            stage,
+                            step,
+                            delay_ms,
+                            source,
+                            snapshot.vpack_mv,
+                            confirm.vpack_mv
+                        );
+                    }
+                    None
+                }
+            }
+            Err(err) => {
+                if raw_diag {
+                    defmt::info!(
+                        "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} low_pack_confirm_miss source={} strict_err={}",
+                        addr,
+                        stage,
+                        step,
+                        delay_ms,
+                        source,
+                        bq40_activation_read_error_kind(err)
+                    );
+                } else {
+                    defmt::info!(
+                        "bms: activation confirm low_pack miss addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} source={} strict_err={}",
+                        addr,
+                        stage,
+                        step,
+                        delay_ms,
+                        source,
+                        bq40_activation_read_error_kind(err)
+                    );
+                }
+                None
+            }
         }
     }
 
@@ -3640,8 +3866,10 @@ where
         self.bms_activation_isolation_until = None;
         self.bms_next_poll_at = now;
         self.bms_next_retry_at = None;
-        self.chg_next_poll_at = now + BMS_ACTIVATION_CHARGER_POLL_PERIOD;
+        self.chg_next_poll_at = now;
         self.chg_next_retry_at = None;
+        self.maybe_poll_charger(&IrqSnapshot::default());
+        self.chg_next_poll_at = Instant::now() + BMS_ACTIVATION_CHARGER_POLL_PERIOD;
         bms_diag_breadcrumb_note(4, 0);
         defmt::info!(
             "bms: activation phase old={} new={} charger_mode=off",

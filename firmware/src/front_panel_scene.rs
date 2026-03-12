@@ -346,8 +346,7 @@ pub fn is_bq40_offline(snapshot: &SelfCheckUiSnapshot) -> bool {
 
 #[allow(dead_code)]
 pub fn is_bq40_activation_needed(snapshot: &SelfCheckUiSnapshot) -> bool {
-    snapshot.bq40z50_last_result.is_none()
-        && (is_bq40_offline(snapshot) || snapshot.bq40z50_no_battery == Some(true))
+    snapshot.bq40z50_last_result.is_none() && is_bq40_offline(snapshot)
 }
 
 #[allow(dead_code)]
