@@ -104,6 +104,7 @@
 
 - 主固件已移除阻塞式 demo playlist，改为在主循环内常驻调度共享 `AudioManager`。
 - 共享播放核心已落到 `firmware/src/audio.rs`，统一 15 组 cue、优先级、WAV 解析/重采样、DMA `fill()` 与播放状态接口。
+- Warning cue 的 loop state 只在状态边沿变化时重置，steady-state 轮询期间继续保持 `interval_loop(2000ms)` 节流。
 - `test-fw` 已改为复用共享音频模块，保留人工点播、抢占和同级 FIFO 验证能力。
 - `PowerManager` 已输出运行时音效快照与边沿接口，主固件不再依赖 UI snapshot 差分来判定业务音效。
 - `shutdown_mode_entered` 与 `io_over_power` 继续保持 dormant，并在主固件中明确不触发。
@@ -124,3 +125,4 @@
 
 - 2026-03-12: 初始化规格，冻结主固件运行时 cue 映射、dormant cue 结论与验收口径。
 - 2026-03-12: 实现完成，主固件切换到运行时 cue 服务，共享音频核心与文档/构建验证同步落地。
+- 2026-03-12: review fix，修正 warning cue 在 steady-state 轮询下的重播间隔，保持 2000ms 节流语义。
