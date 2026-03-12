@@ -131,8 +131,8 @@
 10. 一旦 `RSOC == 0x9002`，立即收敛到 `ROM MODE`，不再继续后续 keepalive。
 11. 命中候选读数后，必须继续执行有限轮数的 keepalive，并使用激活专用的 trusted snapshot confirm 逻辑读取运行态快照。
 12. 激活确认必须先走低流量的 “core 5-word” confirm：只读取 `Temperature / Voltage / Current / RSOC / BatteryStatus` 这 5 个历史 PASS 过的核心 SBS 字段，不追加 `Cell1..4`、`OP_STATUS` 或额外 block/MAC 访问；目的不是放宽结果口径，而是避免在 fragile wake window 内先用整包 strict 读取把器件重新拖回假值窗口。
-13. 只有当 core 5-word confirm miss 时，才允许在同一轮激活里继续尝试激活专用 strict snapshot reader；strict reader 读取 `Temperature / Voltage / Current / RSOC / BatteryStatus / Cell1..4`，且不得把 `OP_STATUS` 之类可选读数塞进 wake confirm 路径；该 reader 的 word-to-word gap 固定为 `2 ms`。`22 / 40 / 66 ms` 只用于 wake touch 后的 delayed read，不得误用于 strict snapshot reader。
-14. 只有 core 5-word confirm 或 strict confirm 通过的快照才允许驱动 `SUCCESS` 或 `ABNORMAL`；未 confirm 的候选值只能作为“继续保活”的依据，不能直接驱动结果分类。
+13. 只有当 core 5-word confirm miss，或 core 5-word confirm 命中 stale-pattern 时，才允许在同一轮激活里继续尝试激活专用 strict snapshot reader；strict reader 读取 `Temperature / Voltage / Current / RSOC / BatteryStatus / Cell1..4`，且不得把 `OP_STATUS` 之类可选读数塞进 wake confirm 路径；该 reader 的 word-to-word gap 固定为 `2 ms`。`22 / 40 / 66 ms` 只用于 wake touch 后的 delayed read，不得误用于 strict snapshot reader。
+14. 只有 core 5-word confirm 或 strict confirm 通过的快照才允许驱动 `SUCCESS` 或 `ABNORMAL`；未 confirm 的候选值只能作为“继续保活”的依据，不能直接驱动结果分类。`ProbeWithoutCharge`、`MinChargeProbe` 与 follow-up runtime probe 都不得因为一次未 confirm 的 lean/core 候选值就提前返回 Working。
 15. 若通过的是 core 5-word confirm，则结果分类仍然只能依据 `BQ40` 自身字段：`Voltage / Temperature / Current / RSOC / BatteryStatus` 合法且 `RCA=0` 时可判 `SUCCESS`；若 `RCA=1` 则判 `ABNORMAL`；不得因为 `OP_STATUS` 缺失就自动降级成 `ABNORMAL`，也不得引入其它器件信息补判。
 16. follow-up 的 runtime probe 必须先尝试 core 5-word confirm，失败后再退到激活专用 strict snapshot reader；不得直接退回普通轮询用的弱校验快照路径。
 17. staged wake 三段全部 miss 后，激活流程必须立即进入 follow-up：初始延迟固定为 `0 ms`，保证 `WakeProbe` 结束后立刻补一轮 post-wake follow-up；后续 probe 周期固定为 `2 s`。follow-up 的前 `6 s` 允许保留工具同款的 limited exit exercise，并且同一轮 follow-up 必须先做 exit exercise，再做 runtime probe；超过该窗口后必须停止额外 touch，只保留 confirm。该 cadence 必须对齐工具“wake probe 结束后先立刻补一轮，再回到约 `2 s` tick”的实际节奏，不能在主固件里把 post-wake follow-up 提升成持续 `250 ms` 刷总线。

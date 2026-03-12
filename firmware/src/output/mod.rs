@@ -1854,7 +1854,7 @@ where
                         Err(err) => {
                             self.bms_activation_pattern_tracker = tracker;
                             defmt::info!(
-                                "bms: activation min_charge_probe lean addr=0x{=u8:x} attempt={=u16} dwell_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} strict_detail_err={}",
+                                "bms: activation min_charge_probe lean addr=0x{=u8:x} attempt={=u16} dwell_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} strict_detail_err={} confirm=failed",
                                 addr,
                                 attempt,
                                 dwell_ms,
@@ -1865,7 +1865,7 @@ where
                                 snapshot.batt_status,
                                 bq40_activation_read_error_kind(err)
                             );
-                            return Some(Bq40ActivationProbeResult::Working { addr, snapshot });
+                            continue;
                         }
                     }
                 }
@@ -1955,7 +1955,7 @@ where
                     Err(err) => {
                         self.bms_activation_pattern_tracker = tracker;
                         defmt::info!(
-                            "bms: activation runtime_probe_core addr=0x{=u8:x} attempt={=u16} dwell_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} strict_detail_err={}",
+                            "bms: activation runtime_probe_core addr=0x{=u8:x} attempt={=u16} dwell_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} strict_detail_err={} confirm=failed",
                             addr,
                             attempt,
                             dwell_ms,
@@ -1966,7 +1966,7 @@ where
                             snapshot.batt_status,
                             bq40_activation_read_error_kind(err)
                         );
-                        return Some(snapshot);
+                        return None;
                     }
                 }
             }
@@ -2972,7 +2972,36 @@ where
                         snapshot.batt_status,
                         repeat_count
                     );
-                    return None;
+                    match self.read_bq40_activation_snapshot_strict(addr, tracker) {
+                        Ok(snapshot) => {
+                            defmt::info!(
+                                "bms: activation confirm addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x} core_state=stale",
+                                addr,
+                                stage,
+                                step,
+                                delay_ms,
+                                bq40z50::temp_c_x10_from_k_x10(snapshot.temp_k_x10),
+                                snapshot.vpack_mv,
+                                snapshot.current_ma,
+                                snapshot.rsoc_pct,
+                                snapshot.batt_status
+                            );
+                            return Some(snapshot);
+                        }
+                        Err(err) => {
+                            if raw_diag {
+                                defmt::info!(
+                                    "bms_diag: addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} core_state=stale strict_err={}",
+                                    addr,
+                                    stage,
+                                    step,
+                                    delay_ms,
+                                    bq40_activation_read_error_kind(err)
+                                );
+                            }
+                            return None;
+                        }
+                    }
                 }
                 defmt::info!(
                     "bms: activation confirm_core addr=0x{=u8:x} stage={} step={=u8} delay_ms={=u64} temp_c_x10={=i32} vpack_mv={=u16} current_ma={=i16} rsoc_pct={=u16} batt_status=0x{=u16:x}",
