@@ -221,26 +221,34 @@ impl AudioManager {
 
     pub fn set_cue_active(&mut self, cue: AudioCue, active: bool, now: Instant) {
         let idx = cue.index();
+        let was_active = self.loops[idx].active;
         match playback_mode_for_cue(cue) {
             CuePlaybackMode::OneShot => {
-                if active {
+                self.loops[idx].active = active;
+                if active && !was_active {
                     self.request_cue(cue);
+                } else if !active {
+                    self.loops[idx].next_due_at = None;
                 }
             }
             CuePlaybackMode::ContinuousLoop => {
-                self.loops[idx].active = active;
-                self.loops[idx].next_due_at = if active { Some(now) } else { None };
-                if !active {
+                if active {
+                    if !was_active {
+                        self.loops[idx].active = true;
+                        self.loops[idx].next_due_at = Some(now);
+                    }
+                } else if was_active {
                     self.stop_cue(cue);
                 }
             }
-            CuePlaybackMode::IntervalLoop { interval_ms } => {
-                self.loops[idx].active = active;
-                self.loops[idx].next_due_at = if active { Some(now) } else { None };
-                if !active {
+            CuePlaybackMode::IntervalLoop { .. } => {
+                if active {
+                    if !was_active {
+                        self.loops[idx].active = true;
+                        self.loops[idx].next_due_at = Some(now);
+                    }
+                } else if was_active {
                     self.stop_cue(cue);
-                } else if interval_ms == 0 {
-                    self.request_cue(cue);
                 }
             }
         }
@@ -433,6 +441,45 @@ impl AudioManager {
 impl Default for AudioManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use esp_hal::time::Duration;
+
+    fn drain_current(manager: &mut AudioManager) {
+        let mut buf = [0u8; 512];
+        let mut attempts = 0usize;
+        while manager.status().playing {
+            manager.fill(&mut buf);
+            attempts += 1;
+            assert!(attempts < 8_192, "audio playback did not drain");
+        }
+    }
+
+    #[test]
+    fn warning_loop_keeps_interval_during_steady_state_updates() {
+        let cue = AudioCue::HighStress;
+        let start = Instant::EPOCH;
+        let early = start + Duration::from_millis(500);
+        let due = start + Duration::from_millis(WARNING_INTERVAL_MS as u64);
+
+        let mut manager = AudioManager::new();
+        manager.set_cue_active(cue, true, start);
+        manager.tick(start);
+        assert_eq!(manager.status().current, Some(cue));
+
+        drain_current(&mut manager);
+        assert!(!manager.status().playing);
+
+        manager.set_cue_active(cue, true, early);
+        manager.tick(early);
+        assert!(!manager.status().playing);
+
+        manager.tick(due);
+        assert_eq!(manager.status().current, Some(cue));
     }
 }
 
