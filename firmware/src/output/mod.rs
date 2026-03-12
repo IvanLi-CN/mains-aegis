@@ -1172,6 +1172,7 @@ pub struct PowerManager<'d, I2C> {
     bms_activation_auto_due_at: Instant,
     bms_activation_auto_poll_release_at: Instant,
     bms_activation_auto_attempted: bool,
+    bms_activation_current_is_auto: bool,
     bms_activation_auto_force_charge_until: Option<Instant>,
     bms_activation_auto_force_charge_programmed: bool,
     bms_activation_auto_defer_logged: bool,
@@ -1319,6 +1320,7 @@ where
             bms_activation_auto_due_at: now + BMS_ACTIVATION_AUTO_DELAY,
             bms_activation_auto_poll_release_at: now + BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY,
             bms_activation_auto_attempted: false,
+            bms_activation_current_is_auto: false,
             bms_activation_auto_force_charge_until: if BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE {
                 Some(
                     now + BMS_ACTIVATION_AUTO_DELAY
@@ -1493,10 +1495,14 @@ where
     }
 
     pub fn request_bms_activation(&mut self) {
-        self.request_bms_activation_with_diag_override(false);
+        self.request_bms_activation_with_diag_override(false, false);
     }
 
-    fn request_bms_activation_with_diag_override(&mut self, allow_diag_warn: bool) {
+    fn request_bms_activation_with_diag_override(
+        &mut self,
+        allow_diag_warn: bool,
+        auto_request: bool,
+    ) {
         if self.bms_activation_state == BmsActivationState::Pending {
             defmt::info!("bms: activation ignored reason=already_pending");
             return;
@@ -1536,6 +1542,7 @@ where
             allow_diag_warn
         );
         bms_diag_breadcrumb_note(2, allow_diag_warn as u8);
+        self.bms_activation_current_is_auto = auto_request;
         if !(allow_diag_warn && self.cfg.bms_boot_diag_auto_validate) {
             self.bms_activation_auto_force_charge_until = None;
             self.bms_activation_auto_force_charge_programmed = false;
@@ -1804,7 +1811,7 @@ where
         let Some(started_at) = self.bms_activation_started_at else {
             return None;
         };
-        let raw_diag = self.bms_activation_auto_attempted;
+        let raw_diag = self.bms_activation_current_is_auto;
 
         while self.bms_activation_diag_stage < BMS_ACTIVATION_DIAG_STAGE_DELAYS_MS.len() {
             let step = self.bms_activation_diag_stage;
@@ -1867,7 +1874,7 @@ where
 
         let attempt = self.bms_activation_followup_attempts;
         let dwell_ms = started_at.elapsed().as_millis() as u64;
-        let raw_diag = self.bms_activation_auto_attempted;
+        let raw_diag = self.bms_activation_current_is_auto;
         defmt::info!(
             "bms: activation probe_without_charge attempt={=u16} dwell_ms={=u64} addrs={}",
             attempt,
@@ -1915,7 +1922,7 @@ where
 
         let attempt = self.bms_activation_followup_attempts;
         let dwell_ms = started_at.elapsed().as_millis() as u64;
-        let raw_diag = self.bms_activation_auto_attempted;
+        let raw_diag = self.bms_activation_current_is_auto;
         defmt::info!(
             "bms: activation followup attempt={=u16} dwell_ms={=u64} addrs={}",
             attempt,
@@ -1993,7 +2000,7 @@ where
         );
         bms_diag_breadcrumb_note(9, attempt.min(u16::from(u8::MAX)) as u8);
 
-        let raw_diag = self.bms_activation_auto_attempted;
+        let raw_diag = self.bms_activation_current_is_auto;
         for addr in bms_probe_candidates().iter().copied() {
             match self.read_bq40_activation_snapshot_lean(addr) {
                 Ok(snapshot) => {
@@ -3492,8 +3499,15 @@ where
         }
 
         if self.ui_snapshot.fusb302_vbus_present != Some(true) {
-            let due_at = now + Duration::from_secs(1);
-            self.update_bms_activation_auto_due(due_at);
+            self.bms_activation_auto_attempted = true;
+            self.bms_activation_auto_force_charge_until = None;
+            self.bms_activation_auto_force_charge_programmed = false;
+            defmt::info!(
+                "bms: activation auto_skip reason=no_input_power bq40_state={} charger_state={} input_present={=?}",
+                self_check_comm_state_name(self.ui_snapshot.bq40z50),
+                self_check_comm_state_name(self.ui_snapshot.bq25792),
+                self.ui_snapshot.fusb302_vbus_present
+            );
             return;
         }
 
@@ -3531,7 +3545,7 @@ where
             self.ui_snapshot.fusb302_vbus_present,
             self.ui_snapshot.bq25792_vbat_present
         );
-        self.request_bms_activation_with_diag_override(true);
+        self.request_bms_activation_with_diag_override(true, true);
     }
 
     fn maybe_track_bms_activation(&mut self) -> bool {
@@ -3869,6 +3883,9 @@ where
         self.chg_next_poll_at = now;
         self.chg_next_retry_at = None;
         self.maybe_poll_charger(&IrqSnapshot::default());
+        if self.bms_activation_state != BmsActivationState::Pending {
+            return Err("charger_poll_failed");
+        }
         self.chg_next_poll_at = Instant::now() + BMS_ACTIVATION_CHARGER_POLL_PERIOD;
         bms_diag_breadcrumb_note(4, 0);
         defmt::info!(
@@ -3948,6 +3965,7 @@ where
         self.bms_activation_pattern_tracker = Bq40ActivationPatternTracker::new();
         self.bms_activation_isolation_until = None;
         self.bms_activation_force_charge_requested = false;
+        self.bms_activation_current_is_auto = false;
         self.bms_activation_state = BmsActivationState::Result(result);
         self.ui_snapshot.bq40z50_last_result = Some(result);
         self.chg_next_poll_at = Instant::now();
@@ -4332,7 +4350,7 @@ where
         let now = Instant::now();
         let activation_pending = self.bms_activation_state == BmsActivationState::Pending;
         let activation_auto_probe_hold_charge = activation_pending
-            && self.bms_activation_auto_attempted
+            && self.bms_activation_current_is_auto
             && self.bms_activation_phase == BmsActivationPhase::ProbeWithoutCharge;
         let activation_force_charge = activation_pending
             && self.bms_activation_force_charge_requested
