@@ -326,7 +326,7 @@ impl AudioManager {
             if !state.active {
                 continue;
             }
-            let due = state.next_due_at.map_or(true, |deadline| now >= deadline);
+            let due = state.next_due_at.is_none_or(|deadline| now >= deadline);
             if !due || self.has_queued_or_current(cue) {
                 continue;
             }
@@ -427,6 +427,12 @@ impl AudioManager {
         self.queue = next;
         self.queue_head = 0;
         self.queue_len = kept_len;
+    }
+}
+
+impl Default for AudioManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
