@@ -3,16 +3,17 @@
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-mod audio_demo;
 mod front_panel;
 mod front_panel_scene;
 mod irq;
 mod output;
 
 use esp_backtrace as _;
+use esp_firmware::audio::{AudioCue, AudioManager, PLAYBACK_SAMPLE_RATE_HZ};
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{DriveMode, Event, Flex, Input, InputConfig, Io, OutputConfig, Pull};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c, SoftwareTimeout};
+use esp_hal::i2s::master::{Channels, Config as I2sConfig, DataFormat, I2s};
 use esp_hal::ledc::channel::{self, ChannelIFace};
 use esp_hal::ledc::timer::{self, TimerIFace};
 use esp_hal::ledc::{LSGlobalClkSource, Ledc, LowSpeed};
@@ -64,6 +65,8 @@ const TMP112_OUT_A_ADDR: u8 = 0x48;
 const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 50 * 16;
 const TMP112_TLOW_C_X16: i16 = 40 * 16;
+// Keep the DMA ring short enough that runtime preemption remains audible.
+const AUDIO_DMA_BUFFER_BYTES: usize = 4 * 4092;
 
 fn spin_delay(wait: Duration) {
     let start = Instant::now();
@@ -556,6 +559,82 @@ fn main() -> ! {
         ));
     }
 
+    let (_, _, tx_buffer, tx_descriptors) =
+        esp_hal::dma_circular_buffers!(0, AUDIO_DMA_BUFFER_BYTES);
+    let mut audio_manager = AudioManager::new();
+    let mut i2s_tx = match I2s::new(
+        i2s0,
+        dma_channel,
+        I2sConfig::new_tdm_philips()
+            .with_sample_rate(Rate::from_hz(PLAYBACK_SAMPLE_RATE_HZ))
+            .with_data_format(DataFormat::Data16Channel16)
+            .with_channels(Channels::STEREO),
+    ) {
+        Ok(i2s) => Some(
+            i2s.i2s_tx
+                .with_bclk(audio_bclk)
+                .with_ws(audio_ws)
+                .with_dout(audio_dout)
+                .build(tx_descriptors),
+        ),
+        Err(err) => {
+            defmt::warn!(
+                "audio: disable runtime audio because i2s init failed err={=?}",
+                err
+            );
+            None
+        }
+    };
+    let mut audio_transfer = match i2s_tx.as_mut() {
+        Some(i2s_tx) => match i2s_tx.write_dma_circular(&tx_buffer) {
+            Ok(transfer) => Some(transfer),
+            Err(err) => {
+                defmt::warn!(
+                    "audio: disable runtime audio because dma init failed err={=?}",
+                    err
+                );
+                None
+            }
+        },
+        None => None,
+    };
+    let mut audio_enabled = audio_transfer.is_some();
+
+    if audio_enabled {
+        audio_manager.trigger(AudioCue::BootStartup);
+        let mut disable_audio = false;
+        if let Some(audio_transfer) = audio_transfer.as_mut() {
+            match audio_transfer.available() {
+                Ok(available) if available >= 4 => {
+                    if audio_transfer
+                        .push_with(|buf| audio_manager.fill(buf))
+                        .is_err()
+                    {
+                        defmt::warn!(
+                            "audio: dma push failed during boot prefill; disabling runtime audio"
+                        );
+                        disable_audio = true;
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    defmt::warn!(
+                        "audio: dma available failed during boot prefill err={=?}; disabling runtime audio",
+                        err
+                    );
+                    disable_audio = true;
+                }
+            }
+        } else {
+            disable_audio = true;
+        }
+        if disable_audio {
+            audio_enabled = false;
+            audio_transfer = None;
+            audio_manager.stop();
+        }
+    }
+
     let self_test = output::boot_self_test_with_report(
         &mut i2c,
         DEFAULT_ENABLED_OUTPUTS,
@@ -570,10 +649,50 @@ fn main() -> ! {
         FORCE_MIN_CHARGE,
         BMS_BOOT_DIAG_AUTO_VALIDATE,
         BMS_BOOT_DIAG_AUTO_VALIDATE,
-        |_, snapshot| front_panel.update_self_check_snapshot(snapshot),
+        |_, snapshot| {
+            front_panel.update_self_check_snapshot(snapshot);
+            if audio_enabled {
+                let now = Instant::now();
+                audio_manager.tick(now);
+                let mut disable_audio = false;
+                if let Some(audio_transfer) = audio_transfer.as_mut() {
+                    match audio_transfer.available() {
+                        Ok(available) if available >= 4 => {
+                            if audio_transfer
+                                .push_with(|buf| audio_manager.fill(buf))
+                                .is_err()
+                            {
+                                defmt::warn!(
+                                    "audio: dma push failed during self-test; disabling runtime audio"
+                                );
+                                disable_audio = true;
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            defmt::warn!(
+                                "audio: dma available failed during self-test err={=?}; disabling runtime audio",
+                                err
+                            );
+                            disable_audio = true;
+                        }
+                    }
+                } else {
+                    disable_audio = true;
+                }
+                if disable_audio {
+                    audio_enabled = false;
+                    audio_transfer = None;
+                    audio_manager.stop();
+                }
+            }
+        },
     );
 
     let cfg = output::Config {
+        ina_detected: self_test.ina_detected,
+        detected_tmp_outputs: self_test.detected_tmp_outputs,
+        detected_tps_outputs: self_test.detected_tps_outputs,
         enabled_outputs: self_test.enabled_outputs,
         outputs_restore_on_bms_ready: self_test.outputs_restore_on_bms_ready,
         outputs_blocked_by_bms: self_test.outputs_blocked_by_bms,
@@ -587,6 +706,12 @@ fn main() -> ! {
         tmp112_thigh_c_x16: TMP112_THIGH_C_X16,
         charger_probe_ok: self_test.charger_probe_ok,
         charger_enabled: self_test.charger_enabled,
+        initial_audio_charge_phase: self_test.initial_audio_charge_phase,
+        initial_bms_protection_active: self_test.initial_bms_protection_active,
+        initial_tps_a_over_voltage: self_test.initial_tps_a_over_voltage,
+        initial_tps_b_over_voltage: self_test.initial_tps_b_over_voltage,
+        initial_tps_a_over_current: self_test.initial_tps_a_over_current,
+        initial_tps_b_over_current: self_test.initial_tps_b_over_current,
         force_min_charge: FORCE_MIN_CHARGE,
         bms_boot_diag_auto_validate: BMS_BOOT_DIAG_AUTO_VALIDATE,
         bms_addr: self_test.bms_addr,
@@ -612,18 +737,66 @@ fn main() -> ! {
     front_panel.update_self_check_snapshot(power.ui_snapshot());
     front_panel.update_bms_activation_state(power.bms_activation_state());
 
+    if audio_enabled {
+        sync_runtime_audio(
+            &mut audio_manager,
+            Instant::now(),
+            power.audio_signals(),
+            power.take_audio_edges(),
+        );
+        audio_manager.tick(Instant::now());
+    }
+
     let mut irq_tracker = irq::IrqTracker::new();
     let mut last_irq_log_at: Option<Instant> = None;
 
-    match audio_demo::play_demo_playlist(
-        i2s0,
-        dma_channel,
-        audio_bclk,
-        audio_ws,
-        audio_dout,
-        || {
+    loop {
+        defmt::info!("esp: heartbeat");
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(2_000) {
             let irq_events = irq_tracker.take_delta();
             power.tick(&irq_events);
+            let now = Instant::now();
+            if audio_enabled {
+                sync_runtime_audio(
+                    &mut audio_manager,
+                    now,
+                    power.audio_signals(),
+                    power.take_audio_edges(),
+                );
+                audio_manager.tick(now);
+
+                let mut disable_audio = false;
+                if let Some(audio_transfer) = audio_transfer.as_mut() {
+                    match audio_transfer.available() {
+                        Ok(available) if available >= 4 => {
+                            if audio_transfer
+                                .push_with(|buf| audio_manager.fill(buf))
+                                .is_err()
+                            {
+                                defmt::warn!("audio: dma push failed; disabling runtime audio");
+                                disable_audio = true;
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            defmt::warn!(
+                                "audio: dma available failed err={=?}; disabling runtime audio",
+                                err
+                            );
+                            disable_audio = true;
+                        }
+                    }
+                } else {
+                    disable_audio = true;
+                }
+                if disable_audio {
+                    audio_enabled = false;
+                    audio_transfer = None;
+                    audio_manager.stop();
+                }
+            }
+
             front_panel.update_self_check_snapshot(power.ui_snapshot());
             front_panel.update_bms_activation_state(power.bms_activation_state());
             if let Some(action) = front_panel.tick() {
@@ -640,7 +813,7 @@ fn main() -> ! {
             }
             if irq_events.any()
                 && output::tps55288::should_log_fault(
-                    Instant::now(),
+                    now,
                     &mut last_irq_log_at,
                     Duration::from_millis(200),
                 )
@@ -657,32 +830,59 @@ fn main() -> ! {
                     irq_events.therm_kill_n
                 );
             }
-        },
-    ) {
-        Ok(()) => {}
-        Err(err) => defmt::error!("audio: demo playlist error: {=?}", err),
-    }
-
-    loop {
-        defmt::info!("esp: heartbeat");
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(2_000) {
-            let irq_events = irq_tracker.take_delta();
-            power.tick(&irq_events);
-            front_panel.update_self_check_snapshot(power.ui_snapshot());
-            front_panel.update_bms_activation_state(power.bms_activation_state());
-            if let Some(action) = front_panel.tick() {
-                match action {
-                    front_panel::UiAction::RequestBmsActivation => {
-                        power.request_bms_activation();
-                        front_panel.update_bms_activation_state(power.bms_activation_state());
-                    }
-                    front_panel::UiAction::ClearBmsActivationResult => {
-                        power.clear_bms_activation_state();
-                        front_panel.update_bms_activation_state(power.bms_activation_state());
-                    }
-                }
-            }
         }
     }
+}
+
+fn sync_runtime_audio(
+    audio_manager: &mut AudioManager,
+    now: Instant,
+    signals: output::AudioSignalSnapshot,
+    edges: output::AudioSignalEvents,
+) {
+    if edges.mains_present_changed == Some(true) {
+        audio_manager.trigger(AudioCue::MainsPresentDc);
+    }
+    if matches!(
+        edges.charge_phase_changed,
+        Some(output::AudioChargePhase::Charging)
+    ) {
+        audio_manager.trigger(AudioCue::ChargeStarted);
+    }
+    if matches!(
+        edges.charge_phase_changed,
+        Some(output::AudioChargePhase::Completed)
+    ) {
+        audio_manager.trigger(AudioCue::ChargeCompleted);
+    }
+    let mains_absent_active = match signals.mains_present {
+        Some(false) => {
+            edges.mains_present_changed == Some(false)
+                || audio_manager.is_cue_active(AudioCue::MainsAbsentDc)
+        }
+        None => audio_manager.is_cue_active(AudioCue::MainsAbsentDc),
+        Some(true) => false,
+    };
+
+    audio_manager.set_cue_active(AudioCue::MainsAbsentDc, mains_absent_active, now);
+    audio_manager.set_cue_active(AudioCue::HighStress, signals.thermal_stress, now);
+    audio_manager.set_cue_active(
+        AudioCue::BatteryLowNoMains,
+        signals.battery_low == output::AudioBatteryLowState::NoMains,
+        now,
+    );
+    audio_manager.set_cue_active(
+        AudioCue::BatteryLowWithMains,
+        signals.battery_low == output::AudioBatteryLowState::WithMains,
+        now,
+    );
+    audio_manager.set_cue_active(
+        AudioCue::ShutdownProtection,
+        signals.shutdown_protection,
+        now,
+    );
+    audio_manager.set_cue_active(AudioCue::IoOverVoltage, signals.io_over_voltage, now);
+    audio_manager.set_cue_active(AudioCue::IoOverCurrent, signals.io_over_current, now);
+    audio_manager.set_cue_active(AudioCue::ModuleFault, signals.module_fault, now);
+    audio_manager.set_cue_active(AudioCue::BatteryProtection, signals.battery_protection, now);
 }

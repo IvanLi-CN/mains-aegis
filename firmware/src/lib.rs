@@ -10,3 +10,5 @@ pub mod ina3221 {
 pub mod bq25792;
 pub mod bq40z50;
 pub mod tmp112;
+
+pub mod audio;
