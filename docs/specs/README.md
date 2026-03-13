@@ -27,4 +27,4 @@
 | uwt77 | Test firmware navigation + audio priority | 已完成 | `uwt77-test-fw-audio-navigation/SPEC.md` | 2026-03-05 | `test-fw` 已替换 display-diag；功能导航与音频优先级协调已验收 |
 | hg3dw | Front panel visual language systematization | 已完成 | `hg3dw-front-panel-visual-language/SPEC.md` | 2026-03-02 | 建立 Token/组件契约/视觉回归清单，补充 bitmap 字体字高白名单与预览图 |
 | mecb8 | Status/warning/error speaker cues preview assets | 已完成 | `mecb8-audio-cues-preview/SPEC.md` | 2026-03-05 | 15 组提示音试听资产（score + mid + wav）与增强预览页 |
-| ygmqn | Fan control with thermal/tach fail-safe | 待实现 | `ygmqn-fan-control/SPEC.md` | 2026-03-13 | V1 风扇温控、tach 看门狗与日志契约 |
+| ygmqn | Fan control with thermal/tach fail-safe | 部分完成（4/5） | `ygmqn-fan-control/SPEC.md` | 2026-03-13 | PR #36 已创建；等待 review-loop 收敛 |

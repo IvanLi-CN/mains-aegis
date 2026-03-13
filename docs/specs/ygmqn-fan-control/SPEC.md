@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 待实现
+- Status: 部分完成（4/5）
 - Created: 2026-03-13
 - Last: 2026-03-13
 
@@ -76,12 +76,13 @@
 
 ## 里程碑（Milestones）
 
-- [ ] M1: 新增风扇 spec 与索引。
-- [ ] M2: 接入 GPIO/PWM/tach 中断初始化。
-- [ ] M3: 完成风扇状态机与 `PowerManager` 集成。
-- [ ] M4: 补充测试、README 与日志契约。
+- [x] M1: 新增风扇 spec 与索引。
+- [x] M2: 接入 GPIO/PWM/tach 中断初始化。
+- [x] M3: 完成风扇状态机与 `PowerManager` 集成。
+- [x] M4: 补充测试、README 与日志契约。
 - [ ] M5: 验证、PR 与 review-loop 收敛。
 
 ## 变更记录（Change log）
 
 - 2026-03-13: 首版规格冻结 V1 风扇控制口径：最高温三档、`3C` 回滞、`10s` 余冷、`2s` tach 看门狗、异常全速保护。
+- 2026-03-13: 已落地 `esp_firmware::fan` 纯逻辑状态机、`FAN_TACH/FAN_EN/FAN_VSET_PWM` 固件接线、`fan:` 日志与 bench 文档；PR 为 `#36`，当前等待 review-loop 收敛。
