@@ -3502,6 +3502,17 @@ where
             self.bms_activation_auto_attempted = true;
             self.bms_activation_auto_force_charge_until = None;
             self.bms_activation_auto_force_charge_programmed = false;
+            if let Some(restore_chg_enabled) =
+                self.restore_bms_activation_charger_backup("auto_skip_no_input_power")
+            {
+                if restore_chg_enabled {
+                    self.chg_ce.set_low();
+                    self.chg_enabled = true;
+                } else {
+                    self.chg_ce.set_high();
+                    self.chg_enabled = false;
+                }
+            }
             defmt::info!(
                 "bms: activation auto_skip reason=no_input_power bq40_state={} charger_state={} input_present={=?}",
                 self_check_comm_state_name(self.ui_snapshot.bq40z50),
