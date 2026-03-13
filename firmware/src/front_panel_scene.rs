@@ -170,6 +170,7 @@ pub struct SelfCheckUiSnapshot {
     pub bq40z50: SelfCheckCommState,
     pub bq40z50_soc_pct: Option<u16>,
     pub bq40z50_rca_alarm: Option<bool>,
+    pub bq40z50_no_battery: Option<bool>,
     pub bq40z50_discharge_ready: Option<bool>,
     pub bq40z50_last_result: Option<BmsResultKind>,
     pub tps_a: SelfCheckCommState,
@@ -201,6 +202,7 @@ impl SelfCheckUiSnapshot {
             bq40z50: SelfCheckCommState::Pending,
             bq40z50_soc_pct: None,
             bq40z50_rca_alarm: None,
+            bq40z50_no_battery: None,
             bq40z50_discharge_ready: None,
             bq40z50_last_result: None,
             tps_a: SelfCheckCommState::Pending,
@@ -344,7 +346,7 @@ pub fn is_bq40_offline(snapshot: &SelfCheckUiSnapshot) -> bool {
 
 #[allow(dead_code)]
 pub fn is_bq40_activation_needed(snapshot: &SelfCheckUiSnapshot) -> bool {
-    is_bq40_offline(snapshot) && snapshot.bq40z50_last_result.is_none()
+    snapshot.bq40z50_last_result.is_none() && is_bq40_offline(snapshot)
 }
 
 #[allow(dead_code)]
@@ -1895,6 +1897,8 @@ fn render_variant_c<P: UiPainter>(
     };
     let bms_key = if snapshot.bq40z50 == SelfCheckCommState::Err {
         format_args!("NOT DETECTED")
+    } else if snapshot.bq40z50_no_battery == Some(true) {
+        format_args!("NO BATTERY")
     } else if snapshot.bq40z50_rca_alarm == Some(true) {
         format_args!("RCA ALARM")
     } else if snapshot.bq40z50 == SelfCheckCommState::Warn {

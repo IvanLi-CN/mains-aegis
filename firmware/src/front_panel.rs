@@ -1010,17 +1010,19 @@ fn log_self_check_snapshot_transition(previous: &SelfCheckUiSnapshot, next: &Sel
         || previous.bq25792_vbat_present != next.bq25792_vbat_present
         || previous.bq40z50_soc_pct != next.bq40z50_soc_pct
         || previous.bq40z50_rca_alarm != next.bq40z50_rca_alarm
+        || previous.bq40z50_no_battery != next.bq40z50_no_battery
         || previous.bq40z50_discharge_ready != next.bq40z50_discharge_ready
         || previous.bq40z50_last_result != next.bq40z50_last_result;
     if power_detail_changed {
         defmt::info!(
-            "ui: self_check power_detail vbus_present={=?} chg_allow={=?} chg_ichg_ma={=?} vbat_present={=?} bq40_soc_pct={=?} bq40_rca_alarm={=?} bq40_dsg_ready={=?} bq40_last_result={}",
+            "ui: self_check power_detail vbus_present={=?} chg_allow={=?} chg_ichg_ma={=?} vbat_present={=?} bq40_soc_pct={=?} bq40_rca_alarm={=?} bq40_no_battery={=?} bq40_dsg_ready={=?} bq40_last_result={}",
             next.fusb302_vbus_present,
             next.bq25792_allow_charge,
             next.bq25792_ichg_ma,
             next.bq25792_vbat_present,
             next.bq40z50_soc_pct,
             next.bq40z50_rca_alarm,
+            next.bq40z50_no_battery,
             next.bq40z50_discharge_ready,
             bms_result_option_name(next.bq40z50_last_result)
         );
