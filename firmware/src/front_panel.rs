@@ -1,8 +1,9 @@
 use core::convert::Infallible;
 
 use crate::front_panel_scene::{
-    self, AudioTestUiState, BmsActivationState, SelfCheckOverlay, SelfCheckTouchTarget,
-    SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel, UiPainter, UiVariant,
+    self, AudioTestUiState, BmsActivationState, BmsResultKind, SelfCheckCommState,
+    SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel,
+    UiPainter, UiVariant, UpsMode,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -262,13 +263,20 @@ impl FrontPanel {
     }
 
     pub fn update_self_check_snapshot(&mut self, snapshot: SelfCheckUiSnapshot) {
-        if self.self_check_snapshot == snapshot {
+        let previous = self.self_check_snapshot;
+        if previous == snapshot {
             return;
         }
+        log_self_check_snapshot_transition(&previous, &snapshot);
         self.self_check_snapshot = snapshot;
         if self.self_check_overlay == SelfCheckOverlay::BmsActivateConfirm
             && !front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
         {
+            defmt::info!(
+                "ui: bms activation dialog auto_close reason=activation_not_needed bq40_state={} last_result={}",
+                self_check_comm_state_name(self.self_check_snapshot.bq40z50),
+                bms_result_option_name(self.self_check_snapshot.bq40z50_last_result)
+            );
             self.self_check_overlay = SelfCheckOverlay::None;
         }
         self.needs_redraw = true;
@@ -285,20 +293,22 @@ impl FrontPanel {
     }
 
     pub fn update_bms_activation_state(&mut self, state: BmsActivationState) {
-        if self.bms_activation_state == state {
+        let previous = self.bms_activation_state;
+        if previous == state {
             return;
         }
         self.bms_activation_state = state;
         self.self_check_overlay = match state {
             BmsActivationState::Idle => SelfCheckOverlay::None,
             BmsActivationState::Pending => SelfCheckOverlay::BmsActivateProgress,
-            BmsActivationState::Succeeded => SelfCheckOverlay::BmsActivateResult { success: true },
-            BmsActivationState::FailedNoInput
-            | BmsActivationState::FailedTimeout
-            | BmsActivationState::FailedComm => {
-                SelfCheckOverlay::BmsActivateResult { success: false }
-            }
+            BmsActivationState::Result(result) => SelfCheckOverlay::BmsActivateResult(result),
         };
+        defmt::info!(
+            "ui: bms activation state old={} new={} overlay={}",
+            bms_activation_state_name(previous),
+            bms_activation_state_name(state),
+            overlay_name(self.self_check_overlay)
+        );
         self.needs_redraw = true;
     }
 
@@ -350,11 +360,12 @@ impl FrontPanel {
 
         if matches!(
             self.self_check_overlay,
-            SelfCheckOverlay::BmsActivateResult { .. }
+            SelfCheckOverlay::BmsActivateResult(..)
         ) {
             if left_edge || right_edge || center_edge {
                 self.self_check_overlay = SelfCheckOverlay::None;
                 self.needs_redraw = true;
+                defmt::info!("ui: bms result dialog close via key");
                 return Some(UiAction::ClearBmsActivationResult);
             }
             return None;
@@ -363,12 +374,21 @@ impl FrontPanel {
         match self.self_check_overlay {
             SelfCheckOverlay::None => {
                 if (left_edge || center_edge)
-                    && front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
                     && self.bms_activation_state != BmsActivationState::Pending
                 {
-                    self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
-                    self.needs_redraw = true;
-                    defmt::info!("ui: bms activation dialog open via key");
+                    if let Some(result_overlay) =
+                        front_panel_scene::bq40_result_overlay(&self.self_check_snapshot)
+                    {
+                        self.self_check_overlay = result_overlay;
+                        self.needs_redraw = true;
+                        defmt::info!("ui: bms result dialog reopen via key");
+                    } else if front_panel_scene::is_bq40_activation_needed(
+                        &self.self_check_snapshot,
+                    ) {
+                        self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
+                        self.needs_redraw = true;
+                        defmt::info!("ui: bms activation dialog open via key");
+                    }
                 }
             }
             SelfCheckOverlay::BmsActivateConfirm => {
@@ -384,7 +404,7 @@ impl FrontPanel {
                 }
             }
             SelfCheckOverlay::BmsActivateProgress => {}
-            SelfCheckOverlay::BmsActivateResult { .. } => {}
+            SelfCheckOverlay::BmsActivateResult(..) => {}
         }
 
         None
@@ -784,10 +804,11 @@ impl FrontPanel {
 
         if matches!(
             self.self_check_overlay,
-            SelfCheckOverlay::BmsActivateResult { .. }
+            SelfCheckOverlay::BmsActivateResult(..)
         ) {
             self.self_check_overlay = SelfCheckOverlay::None;
             self.needs_redraw = true;
+            defmt::info!("ui: bms result dialog close via touch");
             return Some(UiAction::ClearBmsActivationResult);
         }
 
@@ -817,12 +838,26 @@ impl FrontPanel {
                 let activation_needed =
                     front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot);
                 if self.self_check_overlay == SelfCheckOverlay::None
-                    && activation_needed
                     && self.bms_activation_state != BmsActivationState::Pending
                 {
-                    self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
-                    self.needs_redraw = true;
-                    defmt::info!("ui: bms activation dialog open via touch");
+                    if let Some(result_overlay) =
+                        front_panel_scene::bq40_result_overlay(&self.self_check_snapshot)
+                    {
+                        self.self_check_overlay = result_overlay;
+                        self.needs_redraw = true;
+                        defmt::info!("ui: bms result dialog reopen via touch");
+                    } else if activation_needed {
+                        self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
+                        self.needs_redraw = true;
+                        defmt::info!("ui: bms activation dialog open via touch");
+                    } else {
+                        defmt::info!(
+                            "ui: bms touch ignored overlay={} activation_needed={=bool} bms_state={}",
+                            overlay_name(self.self_check_overlay),
+                            activation_needed,
+                            bms_activation_state_name(self.bms_activation_state)
+                        );
+                    }
                 } else {
                     defmt::info!(
                         "ui: bms touch ignored overlay={} activation_needed={=bool} bms_state={}",
@@ -940,24 +975,127 @@ fn variant_name(variant: UiVariant) -> &'static str {
     }
 }
 
+fn log_self_check_snapshot_transition(previous: &SelfCheckUiSnapshot, next: &SelfCheckUiSnapshot) {
+    let summary_changed = previous.mode != next.mode
+        || previous.gc9307 != next.gc9307
+        || previous.tca6408a != next.tca6408a
+        || previous.fusb302 != next.fusb302
+        || previous.ina3221 != next.ina3221
+        || previous.bq25792 != next.bq25792
+        || previous.bq40z50 != next.bq40z50
+        || previous.tps_a != next.tps_a
+        || previous.tps_b != next.tps_b
+        || previous.tmp_a != next.tmp_a
+        || previous.tmp_b != next.tmp_b;
+    if summary_changed {
+        defmt::info!(
+            "ui: self_check summary mode={} gc9307={} tca6408a={} fusb302={} ina3221={} bq25792={} bq40z50={} tps_a={} tps_b={} tmp_a={} tmp_b={}",
+            ups_mode_name(next.mode),
+            self_check_comm_state_name(next.gc9307),
+            self_check_comm_state_name(next.tca6408a),
+            self_check_comm_state_name(next.fusb302),
+            self_check_comm_state_name(next.ina3221),
+            self_check_comm_state_name(next.bq25792),
+            self_check_comm_state_name(next.bq40z50),
+            self_check_comm_state_name(next.tps_a),
+            self_check_comm_state_name(next.tps_b),
+            self_check_comm_state_name(next.tmp_a),
+            self_check_comm_state_name(next.tmp_b)
+        );
+    }
+
+    let power_detail_changed = previous.fusb302_vbus_present != next.fusb302_vbus_present
+        || previous.bq25792_allow_charge != next.bq25792_allow_charge
+        || previous.bq25792_ichg_ma != next.bq25792_ichg_ma
+        || previous.bq25792_vbat_present != next.bq25792_vbat_present
+        || previous.bq40z50_soc_pct != next.bq40z50_soc_pct
+        || previous.bq40z50_rca_alarm != next.bq40z50_rca_alarm
+        || previous.bq40z50_no_battery != next.bq40z50_no_battery
+        || previous.bq40z50_discharge_ready != next.bq40z50_discharge_ready
+        || previous.bq40z50_last_result != next.bq40z50_last_result;
+    if power_detail_changed {
+        defmt::info!(
+            "ui: self_check power_detail vbus_present={=?} chg_allow={=?} chg_ichg_ma={=?} vbat_present={=?} bq40_soc_pct={=?} bq40_rca_alarm={=?} bq40_no_battery={=?} bq40_dsg_ready={=?} bq40_last_result={}",
+            next.fusb302_vbus_present,
+            next.bq25792_allow_charge,
+            next.bq25792_ichg_ma,
+            next.bq25792_vbat_present,
+            next.bq40z50_soc_pct,
+            next.bq40z50_rca_alarm,
+            next.bq40z50_no_battery,
+            next.bq40z50_discharge_ready,
+            bms_result_option_name(next.bq40z50_last_result)
+        );
+    }
+}
+
 fn overlay_name(overlay: SelfCheckOverlay) -> &'static str {
     match overlay {
         SelfCheckOverlay::None => "none",
         SelfCheckOverlay::BmsActivateConfirm => "confirm",
         SelfCheckOverlay::BmsActivateProgress => "progress",
-        SelfCheckOverlay::BmsActivateResult { success: true } => "result_ok",
-        SelfCheckOverlay::BmsActivateResult { success: false } => "result_fail",
+        SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::Success) => {
+            "result_success"
+        }
+        SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::NoBattery) => {
+            "result_no_battery"
+        }
+        SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::RomMode) => {
+            "result_rom_mode"
+        }
+        SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::Abnormal) => {
+            "result_abnormal"
+        }
+        SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::NotDetected) => {
+            "result_not_detected"
+        }
     }
+}
+
+fn ups_mode_name(mode: UpsMode) -> &'static str {
+    match mode {
+        UpsMode::Off => "off",
+        UpsMode::Standby => "standby",
+        UpsMode::Supplement => "supplement",
+        UpsMode::Backup => "backup",
+    }
+}
+
+fn self_check_comm_state_name(state: SelfCheckCommState) -> &'static str {
+    match state {
+        SelfCheckCommState::Pending => "pending",
+        SelfCheckCommState::Ok => "ok",
+        SelfCheckCommState::Warn => "warn",
+        SelfCheckCommState::Err => "err",
+        SelfCheckCommState::NotAvailable => "na",
+    }
+}
+
+fn bms_result_name(result: BmsResultKind) -> &'static str {
+    match result {
+        BmsResultKind::Success => "success",
+        BmsResultKind::NoBattery => "no_battery",
+        BmsResultKind::RomMode => "rom_mode",
+        BmsResultKind::Abnormal => "abnormal",
+        BmsResultKind::NotDetected => "not_detected",
+    }
+}
+
+fn bms_result_option_name(result: Option<BmsResultKind>) -> &'static str {
+    result.map_or("none", bms_result_name)
 }
 
 fn bms_activation_state_name(state: BmsActivationState) -> &'static str {
     match state {
         BmsActivationState::Idle => "idle",
         BmsActivationState::Pending => "pending",
-        BmsActivationState::Succeeded => "succeeded",
-        BmsActivationState::FailedNoInput => "failed_no_input",
-        BmsActivationState::FailedTimeout => "failed_timeout",
-        BmsActivationState::FailedComm => "failed_comm",
+        BmsActivationState::Result(result) => match result {
+            BmsResultKind::Success => "result_success",
+            BmsResultKind::NoBattery => "result_no_battery",
+            BmsResultKind::RomMode => "result_rom_mode",
+            BmsResultKind::Abnormal => "result_abnormal",
+            BmsResultKind::NotDetected => "result_not_detected",
+        },
     }
 }
 

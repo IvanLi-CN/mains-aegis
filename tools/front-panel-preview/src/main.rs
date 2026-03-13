@@ -12,10 +12,90 @@ use image::{Rgb, RgbImage};
 mod front_panel_scene;
 
 use front_panel_scene::{
-    demo_mode_from_focus, AudioTestUiState, DisplayDiagnosticMeta, SelfCheckCommState,
-    SelfCheckOverlay, SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel, UiPainter, UiVariant,
-    UpsMode, UI_H, UI_W,
+    demo_mode_from_focus, AudioTestUiState, BmsResultKind, DisplayDiagnosticMeta,
+    SelfCheckCommState, SelfCheckOverlay, SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel,
+    UiPainter, UiVariant, UpsMode, UI_H, UI_W,
 };
+
+#[allow(dead_code)]
+fn base_bq40_snapshot(mode: UpsMode) -> SelfCheckUiSnapshot {
+    let mut snapshot = SelfCheckUiSnapshot::pending(mode);
+    snapshot.gc9307 = SelfCheckCommState::Ok;
+    snapshot.tca6408a = SelfCheckCommState::Ok;
+    snapshot.fusb302 = SelfCheckCommState::Ok;
+    snapshot.fusb302_vbus_present = Some(true);
+    snapshot.ina3221 = SelfCheckCommState::Ok;
+    snapshot.ina_total_ma = Some(1130);
+    snapshot.bq25792 = SelfCheckCommState::Ok;
+    snapshot.bq25792_allow_charge = Some(true);
+    snapshot.bq25792_ichg_ma = Some(520);
+    snapshot.bq25792_vbat_present = Some(true);
+    snapshot.bq40z50 = SelfCheckCommState::Err;
+    snapshot.bq40z50_soc_pct = None;
+    snapshot.bq40z50_rca_alarm = None;
+    snapshot.bq40z50_discharge_ready = None;
+    snapshot.bq40z50_last_result = None;
+    snapshot.tps_a = SelfCheckCommState::Ok;
+    snapshot.tps_a_enabled = Some(true);
+    snapshot.tps_a_iout_ma = Some(430);
+    snapshot.tps_b = SelfCheckCommState::Ok;
+    snapshot.tps_b_enabled = Some(false);
+    snapshot.tps_b_iout_ma = Some(0);
+    snapshot.tmp_a = SelfCheckCommState::Ok;
+    snapshot.tmp_a_c = Some(39);
+    snapshot.tmp_b = SelfCheckCommState::Ok;
+    snapshot.tmp_b_c = Some(37);
+    snapshot
+}
+
+#[allow(dead_code)]
+fn bq40_snapshot_for_scenario(
+    mode: UpsMode,
+    scenario: ScenarioArg,
+) -> (SelfCheckUiSnapshot, SelfCheckOverlay) {
+    let mut snapshot = base_bq40_snapshot(mode);
+    let overlay = match scenario {
+        ScenarioArg::Bq40Offline => SelfCheckOverlay::None,
+        ScenarioArg::Bq40OfflineDialog => SelfCheckOverlay::BmsActivateConfirm,
+        ScenarioArg::Bq40Activating => SelfCheckOverlay::BmsActivateProgress,
+        ScenarioArg::Bq40ResultSuccess => {
+            snapshot.bq40z50 = SelfCheckCommState::Ok;
+            snapshot.bq40z50_soc_pct = Some(78);
+            snapshot.bq40z50_rca_alarm = Some(false);
+            snapshot.bq40z50_discharge_ready = Some(true);
+            snapshot.bq25792_vbat_present = Some(true);
+            snapshot.bq40z50_last_result = Some(BmsResultKind::Success);
+            SelfCheckOverlay::BmsActivateResult(BmsResultKind::Success)
+        }
+        ScenarioArg::Bq40ResultNoBattery => {
+            snapshot.bq25792_vbat_present = Some(false);
+            snapshot.bq40z50_last_result = Some(BmsResultKind::NoBattery);
+            SelfCheckOverlay::BmsActivateResult(BmsResultKind::NoBattery)
+        }
+        ScenarioArg::Bq40ResultRomMode => {
+            snapshot.bq40z50_last_result = Some(BmsResultKind::RomMode);
+            SelfCheckOverlay::BmsActivateResult(BmsResultKind::RomMode)
+        }
+        ScenarioArg::Bq40ResultAbnormal => {
+            snapshot.bq40z50 = SelfCheckCommState::Warn;
+            snapshot.bq40z50_soc_pct = Some(61);
+            snapshot.bq40z50_rca_alarm = Some(true);
+            snapshot.bq40z50_discharge_ready = Some(false);
+            snapshot.bq25792_vbat_present = Some(true);
+            snapshot.bq40z50_last_result = Some(BmsResultKind::Abnormal);
+            SelfCheckOverlay::BmsActivateResult(BmsResultKind::Abnormal)
+        }
+        ScenarioArg::Bq40ResultNotDetected => {
+            snapshot.bq40z50_last_result = Some(BmsResultKind::NotDetected);
+            SelfCheckOverlay::BmsActivateResult(BmsResultKind::NotDetected)
+        }
+        ScenarioArg::Default
+        | ScenarioArg::DisplayDiag
+        | ScenarioArg::TestAudio
+        | ScenarioArg::TestNavigation => SelfCheckOverlay::None,
+    };
+    (snapshot, overlay)
+}
 
 fn main() {
     if let Err(err) = run() {
@@ -70,46 +150,13 @@ fn run() -> Result<(), String> {
         ScenarioArg::Bq40Offline
         | ScenarioArg::Bq40OfflineDialog
         | ScenarioArg::Bq40Activating
-        | ScenarioArg::Bq40ActivationSucceeded
-        | ScenarioArg::Bq40ActivationFailed => {
-            let mut snapshot = SelfCheckUiSnapshot::pending(args.mode.into_scene());
-            snapshot.gc9307 = SelfCheckCommState::Ok;
-            snapshot.tca6408a = SelfCheckCommState::Ok;
-            snapshot.fusb302 = SelfCheckCommState::Ok;
-            snapshot.fusb302_vbus_present = Some(true);
-            snapshot.ina3221 = SelfCheckCommState::Ok;
-            snapshot.ina_total_ma = Some(1130);
-            snapshot.bq25792 = SelfCheckCommState::Ok;
-            snapshot.bq25792_allow_charge = Some(true);
-            snapshot.bq25792_ichg_ma = Some(520);
-            snapshot.bq40z50 = SelfCheckCommState::Err;
-            snapshot.bq40z50_soc_pct = None;
-            snapshot.tps_a = SelfCheckCommState::Ok;
-            snapshot.tps_a_enabled = Some(true);
-            snapshot.tps_a_iout_ma = Some(430);
-            snapshot.tps_b = SelfCheckCommState::Ok;
-            snapshot.tps_b_enabled = Some(false);
-            snapshot.tps_b_iout_ma = Some(0);
-            snapshot.tmp_a = SelfCheckCommState::Ok;
-            snapshot.tmp_a_c = Some(39);
-            snapshot.tmp_b = SelfCheckCommState::Ok;
-            snapshot.tmp_b_c = Some(37);
-
-            let overlay = match args.scenario {
-                ScenarioArg::Bq40Offline => SelfCheckOverlay::None,
-                ScenarioArg::Bq40OfflineDialog => SelfCheckOverlay::BmsActivateConfirm,
-                ScenarioArg::Bq40Activating => SelfCheckOverlay::BmsActivateProgress,
-                ScenarioArg::Bq40ActivationSucceeded => {
-                    SelfCheckOverlay::BmsActivateResult { success: true }
-                }
-                ScenarioArg::Bq40ActivationFailed => {
-                    SelfCheckOverlay::BmsActivateResult { success: false }
-                }
-                ScenarioArg::DisplayDiag => SelfCheckOverlay::None,
-                ScenarioArg::Default => SelfCheckOverlay::None,
-                ScenarioArg::TestAudio => SelfCheckOverlay::None,
-                ScenarioArg::TestNavigation => SelfCheckOverlay::None,
-            };
+        | ScenarioArg::Bq40ResultSuccess
+        | ScenarioArg::Bq40ResultNoBattery
+        | ScenarioArg::Bq40ResultRomMode
+        | ScenarioArg::Bq40ResultAbnormal
+        | ScenarioArg::Bq40ResultNotDetected => {
+            let (snapshot, overlay) =
+                bq40_snapshot_for_scenario(args.mode.into_scene(), args.scenario);
             front_panel_scene::render_frame_with_self_check_overlay(
                 &mut framebuffer,
                 &model,
@@ -150,9 +197,7 @@ fn run() -> Result<(), String> {
         .write_png(&png_path)
         .map_err(|e| format!("write preview png failed: {e}"))?;
 
-    println!("framebuffer: {}", bin_path.display());
-    println!("preview: {}", png_path.display());
-
+    println!("wrote {} and {}", bin_path.display(), png_path.display());
     Ok(())
 }
 
@@ -304,8 +349,11 @@ enum ScenarioArg {
     Bq40Offline,
     Bq40OfflineDialog,
     Bq40Activating,
-    Bq40ActivationSucceeded,
-    Bq40ActivationFailed,
+    Bq40ResultSuccess,
+    Bq40ResultNoBattery,
+    Bq40ResultRomMode,
+    Bq40ResultAbnormal,
+    Bq40ResultNotDetected,
     TestAudio,
     TestNavigation,
 }
@@ -318,12 +366,15 @@ impl ScenarioArg {
             "bq40-offline" => Ok(Self::Bq40Offline),
             "bq40-offline-dialog" => Ok(Self::Bq40OfflineDialog),
             "bq40-activating" => Ok(Self::Bq40Activating),
-            "bq40-activation-succeeded" => Ok(Self::Bq40ActivationSucceeded),
-            "bq40-activation-failed" => Ok(Self::Bq40ActivationFailed),
+            "bq40-result-success" => Ok(Self::Bq40ResultSuccess),
+            "bq40-result-no-battery" => Ok(Self::Bq40ResultNoBattery),
+            "bq40-result-rom-mode" => Ok(Self::Bq40ResultRomMode),
+            "bq40-result-abnormal" => Ok(Self::Bq40ResultAbnormal),
+            "bq40-result-not-detected" => Ok(Self::Bq40ResultNotDetected),
             "test-audio" => Ok(Self::TestAudio),
             "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-activation-succeeded|bq40-activation-failed|test-audio|test-navigation)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation)"
             )),
         }
     }
@@ -335,8 +386,11 @@ impl ScenarioArg {
             ScenarioArg::Bq40Offline => "bq40-offline",
             ScenarioArg::Bq40OfflineDialog => "bq40-offline-dialog",
             ScenarioArg::Bq40Activating => "bq40-activating",
-            ScenarioArg::Bq40ActivationSucceeded => "bq40-activation-succeeded",
-            ScenarioArg::Bq40ActivationFailed => "bq40-activation-failed",
+            ScenarioArg::Bq40ResultSuccess => "bq40-result-success",
+            ScenarioArg::Bq40ResultNoBattery => "bq40-result-no-battery",
+            ScenarioArg::Bq40ResultRomMode => "bq40-result-rom-mode",
+            ScenarioArg::Bq40ResultAbnormal => "bq40-result-abnormal",
+            ScenarioArg::Bq40ResultNotDetected => "bq40-result-not-detected",
             ScenarioArg::TestAudio => "test-audio",
             ScenarioArg::TestNavigation => "test-navigation",
         }
@@ -422,7 +476,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-activation-succeeded|bq40-activation-failed|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",
