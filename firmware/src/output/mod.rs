@@ -1462,7 +1462,7 @@ where
         let out_b_allowed = cfg.enabled_outputs.is_enabled(OutputChannel::OutB);
         let charger_allowed = cfg.charger_probe_ok;
         let bms_addr = cfg.bms_addr;
-        let bms_runtime_seen = bms_addr.is_some();
+        let bms_runtime_seen = bms_addr.is_some() || cfg.outputs_blocked_by_bms;
 
         // Fail-safe defaults.
         chg_ce.set_high();

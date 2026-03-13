@@ -71,6 +71,7 @@
 - `shutdown_protection`：`THERM_KILL_N` 断言或保护导致输出被关时触发。
 - `io_over_voltage` / `io_over_current`：charger/TPS 解码后的保护位触发。
 - `module_fault`：运行期关键模块通信错误期间触发。
+- 若本板当前配置要求 BMS 才允许恢复输出，则开机自检阶段的 BMS 缺失/通信失败也必须种子化到 `module_fault`，不能等 runtime 曾成功建链后才播报。
 - `battery_protection`：BMS `PF`/保护位触发。
 - Dormant cue：
   - `shutdown_mode_entered`：本轮不接入，等待真实 shutdown flow。
@@ -130,6 +131,7 @@
 - BMS protection / permanent-failure 状态已在自检结果中种子化，进入主循环前即可驱动 `battery_protection` 的首次调度。
 - TPS OVP/OCP runtime state 已细化为按通道持有；只有成功读取到某路 TPS `STATUS` 时才会覆盖该路 fault seed，未读到的通道继续保留自检/上次有效观测结果。
 - 主循环现在会先完成 power/audio 状态同步，再向 DMA ring 推入下一批 PCM 数据；本轮 hotfix 把 DMA ring 容量恢复到约 2.0 秒，但仅在最早期 boot prefill 保留约 1.0 秒余量；进入自检回调后收敛到约 0.9 秒水位，进入运行期后收敛到约 0.5 秒水位，兼顾 bring-up 稳定与高优先级 cue 听感延迟。
+- 对当前板级必需的 BMS，若自检已判定 “missing/err” 且该状态会门控输出恢复，则运行时音频快照必须在首次刷新时就携带 `module_fault=true`，避免故障音被 `runtime_seen` 门控吞掉。
 - 运行时后接入的 BMS 现在会把“曾成功建链”状态保留下来；即便后续轮询掉线，`module_fault` 也不会再被启动快照门控吞掉。
 - `shutdown_mode_entered` 与 `io_over_power` 继续保持 dormant，并在主固件中明确不触发。
 
@@ -158,3 +160,4 @@
 - 2026-03-13: merge-proof fix，给运行时 BMS 建链增加 sticky presence，避免激活后掉线时 `module_fault` 被启动快照门控吞掉。
 - 2026-03-13: merge-proof fix，补齐运行期 DMA 故障后的静默降级路径，避免 `AudioManager` 在无 DMA 消费者时卡在假播放状态。
 - 2026-03-13: hotfix，恢复约 2.0 秒 DMA ring 容量，并把 boot prefill / 自检 / 运行期 refill 收敛到分阶段受控水位，修复开始音截断与后续告警静音回归，同时避免高优先级 cue 再次被长缓存拖慢。
+- 2026-03-13: hotfix，补齐“BMS 为当前板级必需模块”时的 `module_fault` 种子化，避免开机起即缺失的 BMS 被 runtime-seen 门控静默掉故障音。
