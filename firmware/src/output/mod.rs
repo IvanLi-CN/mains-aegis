@@ -496,8 +496,10 @@ pub struct BootSelfTestResult {
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
     pub initial_audio_charge_phase: AudioChargePhase,
-    pub initial_tps_over_voltage: bool,
-    pub initial_tps_over_current: bool,
+    pub initial_tps_a_over_voltage: bool,
+    pub initial_tps_b_over_voltage: bool,
+    pub initial_tps_a_over_current: bool,
+    pub initial_tps_b_over_current: bool,
     pub bms_addr: Option<u8>,
     pub self_check_snapshot: SelfCheckUiSnapshot,
 }
@@ -986,25 +988,27 @@ where
                     | ::tps55288::registers::StatusBits::OVP
             )
     );
-    let initial_tps_over_voltage = matches!(
+    let initial_tps_a_over_voltage = matches!(
         &status_a,
         Ok(v)
             if ::tps55288::registers::StatusBits::from_bits_truncate(*v)
                 .contains(::tps55288::registers::StatusBits::OVP)
-    ) || matches!(
+    );
+    let initial_tps_b_over_voltage = matches!(
         &status_b,
         Ok(v)
             if ::tps55288::registers::StatusBits::from_bits_truncate(*v)
                 .contains(::tps55288::registers::StatusBits::OVP)
     );
-    let initial_tps_over_current = matches!(
+    let initial_tps_a_over_current = matches!(
         &status_a,
         Ok(v)
             if ::tps55288::registers::StatusBits::from_bits_truncate(*v).intersects(
                 ::tps55288::registers::StatusBits::OCP
                     | ::tps55288::registers::StatusBits::SCP
             )
-    ) || matches!(
+    );
+    let initial_tps_b_over_current = matches!(
         &status_b,
         Ok(v)
             if ::tps55288::registers::StatusBits::from_bits_truncate(*v).intersects(
@@ -1186,8 +1190,10 @@ where
         charger_probe_ok,
         charger_enabled,
         initial_audio_charge_phase,
-        initial_tps_over_voltage,
-        initial_tps_over_current,
+        initial_tps_a_over_voltage,
+        initial_tps_b_over_voltage,
+        initial_tps_a_over_current,
+        initial_tps_b_over_current,
         bms_addr,
         self_check_snapshot: ui,
     }
@@ -1322,8 +1328,10 @@ pub struct Config {
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
     pub initial_audio_charge_phase: AudioChargePhase,
-    pub initial_tps_over_voltage: bool,
-    pub initial_tps_over_current: bool,
+    pub initial_tps_a_over_voltage: bool,
+    pub initial_tps_b_over_voltage: bool,
+    pub initial_tps_a_over_current: bool,
+    pub initial_tps_b_over_current: bool,
     pub force_min_charge: bool,
     pub bms_boot_diag_auto_validate: bool,
     pub bms_addr: Option<u8>,
@@ -1404,8 +1412,20 @@ struct BmsAudioState {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct TpsAudioState {
-    over_voltage: bool,
-    over_current: bool,
+    out_a_over_voltage: bool,
+    out_b_over_voltage: bool,
+    out_a_over_current: bool,
+    out_b_over_current: bool,
+}
+
+impl TpsAudioState {
+    const fn any_over_voltage(self) -> bool {
+        self.out_a_over_voltage || self.out_b_over_voltage
+    }
+
+    const fn any_over_current(self) -> bool {
+        self.out_a_over_current || self.out_b_over_current
+    }
 }
 
 impl<'d, I2C> PowerManager<'d, I2C>
@@ -1557,8 +1577,10 @@ where
             matches!(self.ui_snapshot.bq25792, SelfCheckCommState::Err);
         self.bms_audio.rca_alarm = self.ui_snapshot.bq40z50_rca_alarm;
         self.bms_audio.module_fault = matches!(self.ui_snapshot.bq40z50, SelfCheckCommState::Err);
-        self.tps_audio.over_voltage = self.cfg.initial_tps_over_voltage;
-        self.tps_audio.over_current = self.cfg.initial_tps_over_current;
+        self.tps_audio.out_a_over_voltage = self.cfg.initial_tps_a_over_voltage;
+        self.tps_audio.out_b_over_voltage = self.cfg.initial_tps_b_over_voltage;
+        self.tps_audio.out_a_over_current = self.cfg.initial_tps_a_over_current;
+        self.tps_audio.out_b_over_current = self.cfg.initial_tps_b_over_current;
         self.recompute_ui_mode();
         self.refresh_audio_signals();
     }
@@ -1616,8 +1638,10 @@ where
             if bms_i2c_active {
                 self.bms_activation_isolation_until =
                     Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
+                self.refresh_audio_signals();
                 return;
             }
+            self.refresh_audio_signals();
             return;
         }
 
@@ -1631,8 +1655,10 @@ where
             if bms_i2c_active {
                 self.bms_activation_isolation_until =
                     Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
+                self.refresh_audio_signals();
                 return;
             }
+            self.refresh_audio_signals();
             return;
         }
         let mut bms_i2c_active = self.maybe_poll_bms(irq);
@@ -1640,9 +1666,11 @@ where
         if bms_i2c_active {
             self.bms_activation_isolation_until =
                 Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
+            self.refresh_audio_signals();
             return;
         }
         if self.bms_activation_state == BmsActivationState::Pending {
+            self.refresh_audio_signals();
             return;
         }
         self.maybe_print_telemetry();
@@ -4316,8 +4344,8 @@ where
             battery_low,
             battery_protection: self.bms_audio.protection_active,
             module_fault,
-            io_over_voltage: self.charger_audio.over_voltage || self.tps_audio.over_voltage,
-            io_over_current: self.charger_audio.over_current || self.tps_audio.over_current,
+            io_over_voltage: self.charger_audio.over_voltage || self.tps_audio.any_over_voltage(),
+            io_over_current: self.charger_audio.over_current || self.tps_audio.any_over_current(),
             shutdown_protection: therm_kill_asserted || self.charger_audio.shutdown_protection,
         };
 
@@ -4366,9 +4394,6 @@ where
     }
 
     fn refresh_tps_audio_state(&mut self) {
-        let mut over_voltage = false;
-        let mut over_current = false;
-
         for ch in [OutputChannel::OutA, OutputChannel::OutB] {
             if !self.cfg.detected_tps_outputs.is_enabled(ch) {
                 continue;
@@ -4380,13 +4405,20 @@ where
             let Some(bits) = status else {
                 continue;
             };
-            over_voltage |= bits.contains(::tps55288::registers::StatusBits::OVP);
-            over_current |= bits.contains(::tps55288::registers::StatusBits::OCP)
+            let over_voltage = bits.contains(::tps55288::registers::StatusBits::OVP);
+            let over_current = bits.contains(::tps55288::registers::StatusBits::OCP)
                 || bits.contains(::tps55288::registers::StatusBits::SCP);
+            match ch {
+                OutputChannel::OutA => {
+                    self.tps_audio.out_a_over_voltage = over_voltage;
+                    self.tps_audio.out_a_over_current = over_current;
+                }
+                OutputChannel::OutB => {
+                    self.tps_audio.out_b_over_voltage = over_voltage;
+                    self.tps_audio.out_b_over_current = over_current;
+                }
+            }
         }
-
-        self.tps_audio.over_voltage = over_voltage;
-        self.tps_audio.over_current = over_current;
     }
 
     fn maybe_retry(&mut self) {

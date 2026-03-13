@@ -84,6 +84,7 @@
 - 主固件上电后只请求一次 `boot_startup`，允许在自检期间开始播放且不阻塞自检，不再出现 6 段 demo playlist 的阻塞播放与对应日志序列。
 - 主循环期间 power/front-panel tick 节奏保持可用，音频服务每轮并入调度而不独占流程。
 - 若 I2S / DMA 音频初始化失败，主固件必须记录告警并继续进入主循环；音频链路允许降级为静默，但不得因音频 bring-up 失败而 panic。
+- BMS 激活 / isolation 窗口期间，运行时音效快照仍需持续刷新；激活流程可以短路主循环中的其他动作，但不能让 cue 状态冻结。
 - 调度语义固定为：
   - `status` -> `one_shot`
   - `warning` -> `interval_loop(2000ms)`
@@ -93,7 +94,7 @@
 - 运行时场景正确触发/停播：市电恢复/丢失、充电开始/完成、电池低电（区分有无市电）、高压力进入/退出、模块通信故障进入/恢复、保护/过压/过流进入/清除。
 - 通信恢复语义：
   - charger 输入/相位从 unknown 恢复到 known 时，不得伪造 `mains_present_dc`、`charge_started`、`charge_completed`。
-  - 自检阶段已观察到的 TPS OVP/OCP/SCP 必须能种子化到运行时音效状态，不能因为该路输出被门控后就永久失去 `io_over_voltage` / `io_over_current` 观测。
+  - 自检阶段已观察到的 TPS OVP/OCP/SCP 必须能种子化到运行时音效状态；运行期只能在成功读取到对应 TPS 通道状态后覆盖该通道 fault 位，不能因为该路输出被门控或单次读失败就把 seed 清零。
   - 自检阶段带入的 warning/error loop cue 必须在进入主循环前完成首次调度，不能在首轮 `power.tick()` 前被静默清掉。
   - 已在播放中的 active loop cue 若被更高优先级 cue 抢占，必须保留待播资格；高优先级 cue 结束后应立即恢复，而不是等待下一个 loop interval。
   - `module_fault` 只针对运行期实际检测到且必需的模块；因配置关闭或本板未装的可选模块不得常驻拉高该 cue。
@@ -116,7 +117,9 @@
 - Active loop cue 被更高优先级 cue 抢占后会回灌待播队列，避免 warning/error loop 在抢占场景下丢失“首次恢复播放”机会。
 - `test-fw` 已改为复用共享音频模块，保留人工点播、抢占和同级 FIFO 验证能力。
 - `PowerManager` 已输出运行时音效快照与边沿接口，主固件不再依赖 UI snapshot 差分来判定业务音效。
+- BMS 激活 / isolation 路径上的 early-return 现在也会刷新音效快照，避免运行时 cue 在激活窗口内冻结。
 - `high_stress` 运行时信号已并入 TMP112 `TLOW` 条件；即使 charger 未上报热状态，只要实际温度越过 `TLOW` 且未触发停机，仍会触发该 cue。
+- TPS OVP/OCP runtime state 已细化为按通道持有；只有成功读取到某路 TPS `STATUS` 时才会覆盖该路 fault seed，未读到的通道继续保留自检/上次有效观测结果。
 - `shutdown_mode_entered` 与 `io_over_power` 继续保持 dormant，并在主固件中明确不触发。
 
 ## 验证记录
@@ -137,3 +140,4 @@
 - 2026-03-12: 实现完成，主固件切换到运行时 cue 服务，共享音频核心与文档/构建验证同步落地。
 - 2026-03-12: review fix，修正 warning cue 在 steady-state 轮询下的重播间隔，保持 2000ms 节流语义。
 - 2026-03-13: merge-proof fix，补齐 I2S/DMA 初始化失败的静默降级路径、抢占后 active loop cue 的立即恢复语义，以及 TMP112 `TLOW` 驱动的 `high_stress` 触发。
+- 2026-03-13: merge-proof fix，补齐 BMS 激活 / isolation 窗口内的音效快照刷新，并把 TPS OVP/OCP seed 改为按通道保留、按成功读回覆盖。
