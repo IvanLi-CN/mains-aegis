@@ -1497,7 +1497,7 @@ where
     }
 
     fn fan_now_ms(&self) -> u64 {
-        self.fan_started_at.elapsed().as_millis() as u64
+        self.fan_started_at.elapsed().as_millis()
     }
 
     fn fan_temps_ready(&self) -> bool {
