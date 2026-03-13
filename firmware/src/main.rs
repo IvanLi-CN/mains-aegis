@@ -629,6 +629,8 @@ fn main() -> ! {
     );
 
     let cfg = output::Config {
+        requested_outputs: self_test.requested_outputs,
+        detected_tps_outputs: self_test.detected_tps_outputs,
         enabled_outputs: self_test.enabled_outputs,
         outputs_restore_on_bms_ready: self_test.outputs_restore_on_bms_ready,
         outputs_blocked_by_bms: self_test.outputs_blocked_by_bms,
@@ -643,6 +645,8 @@ fn main() -> ! {
         charger_probe_ok: self_test.charger_probe_ok,
         charger_enabled: self_test.charger_enabled,
         initial_audio_charge_phase: self_test.initial_audio_charge_phase,
+        initial_tps_over_voltage: self_test.initial_tps_over_voltage,
+        initial_tps_over_current: self_test.initial_tps_over_current,
         force_min_charge: FORCE_MIN_CHARGE,
         bms_boot_diag_auto_validate: BMS_BOOT_DIAG_AUTO_VALIDATE,
         bms_addr: self_test.bms_addr,

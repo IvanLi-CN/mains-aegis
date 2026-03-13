@@ -487,12 +487,16 @@ pub(super) fn ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -
 
 #[derive(Clone, Copy)]
 pub struct BootSelfTestResult {
+    pub requested_outputs: EnabledOutputs,
+    pub detected_tps_outputs: EnabledOutputs,
     pub enabled_outputs: EnabledOutputs,
     pub outputs_restore_on_bms_ready: EnabledOutputs,
     pub outputs_blocked_by_bms: bool,
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
     pub initial_audio_charge_phase: AudioChargePhase,
+    pub initial_tps_over_voltage: bool,
+    pub initial_tps_over_current: bool,
     pub bms_addr: Option<u8>,
     pub self_check_snapshot: SelfCheckUiSnapshot,
 }
@@ -981,6 +985,33 @@ where
                     | ::tps55288::registers::StatusBits::OVP
             )
     );
+    let initial_tps_over_voltage = matches!(
+        &status_a,
+        Ok(v)
+            if ::tps55288::registers::StatusBits::from_bits_truncate(*v)
+                .contains(::tps55288::registers::StatusBits::OVP)
+    ) || matches!(
+        &status_b,
+        Ok(v)
+            if ::tps55288::registers::StatusBits::from_bits_truncate(*v)
+                .contains(::tps55288::registers::StatusBits::OVP)
+    );
+    let initial_tps_over_current = matches!(
+        &status_a,
+        Ok(v)
+            if ::tps55288::registers::StatusBits::from_bits_truncate(*v).intersects(
+                ::tps55288::registers::StatusBits::OCP
+                    | ::tps55288::registers::StatusBits::SCP
+            )
+    ) || matches!(
+        &status_b,
+        Ok(v)
+            if ::tps55288::registers::StatusBits::from_bits_truncate(*v).intersects(
+                ::tps55288::registers::StatusBits::OCP
+                    | ::tps55288::registers::StatusBits::SCP
+            )
+    );
+    let detected_tps_outputs = enabled_outputs_from_flags(tps_a_present, tps_b_present);
     let tps_b_fault = matches!(
         &status_b,
         Ok(v)
@@ -1144,12 +1175,16 @@ where
     reporter(SelfCheckStage::Done, ui);
 
     BootSelfTestResult {
+        requested_outputs: desired_outputs,
+        detected_tps_outputs,
         enabled_outputs,
         outputs_restore_on_bms_ready,
         outputs_blocked_by_bms,
         charger_probe_ok,
         charger_enabled,
         initial_audio_charge_phase,
+        initial_tps_over_voltage,
+        initial_tps_over_current,
         bms_addr,
         self_check_snapshot: ui,
     }
@@ -1267,6 +1302,8 @@ fn bms_activation_phase_forces_charge_off(phase: BmsActivationPhase) -> bool {
 
 #[derive(Clone, Copy)]
 pub struct Config {
+    pub requested_outputs: EnabledOutputs,
+    pub detected_tps_outputs: EnabledOutputs,
     pub enabled_outputs: EnabledOutputs,
     pub outputs_restore_on_bms_ready: EnabledOutputs,
     pub outputs_blocked_by_bms: bool,
@@ -1281,6 +1318,8 @@ pub struct Config {
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
     pub initial_audio_charge_phase: AudioChargePhase,
+    pub initial_tps_over_voltage: bool,
+    pub initial_tps_over_current: bool,
     pub force_min_charge: bool,
     pub bms_boot_diag_auto_validate: bool,
     pub bms_addr: Option<u8>,
@@ -1514,6 +1553,8 @@ where
             matches!(self.ui_snapshot.bq25792, SelfCheckCommState::Err);
         self.bms_audio.rca_alarm = self.ui_snapshot.bq40z50_rca_alarm;
         self.bms_audio.module_fault = matches!(self.ui_snapshot.bq40z50, SelfCheckCommState::Err);
+        self.tps_audio.over_voltage = self.cfg.initial_tps_over_voltage;
+        self.tps_audio.over_current = self.cfg.initial_tps_over_current;
         self.recompute_ui_mode();
         self.refresh_audio_signals();
     }
@@ -4223,13 +4264,18 @@ where
             Some(false) => AudioBatteryLowState::Inactive,
             None => AudioBatteryLowState::Unknown,
         };
-        let module_fault = self.charger_audio.module_fault
-            || self.bms_audio.module_fault
-            || matches!(self.ui_snapshot.ina3221, SelfCheckCommState::Err)
-            || matches!(self.ui_snapshot.tps_a, SelfCheckCommState::Err)
-            || matches!(self.ui_snapshot.tps_b, SelfCheckCommState::Err)
-            || matches!(self.ui_snapshot.tmp_a, SelfCheckCommState::Err)
-            || matches!(self.ui_snapshot.tmp_b, SelfCheckCommState::Err);
+        let module_fault = (self.cfg.charger_probe_ok && self.charger_audio.module_fault)
+            || (self.cfg.bms_addr.is_some() && self.bms_audio.module_fault)
+            || (self.cfg.requested_outputs != EnabledOutputs::None
+                && matches!(self.ui_snapshot.ina3221, SelfCheckCommState::Err))
+            || (self.cfg.requested_outputs.is_enabled(OutputChannel::OutA)
+                && matches!(self.ui_snapshot.tps_a, SelfCheckCommState::Err))
+            || (self.cfg.requested_outputs.is_enabled(OutputChannel::OutB)
+                && matches!(self.ui_snapshot.tps_b, SelfCheckCommState::Err))
+            || (self.cfg.requested_outputs.is_enabled(OutputChannel::OutA)
+                && matches!(self.ui_snapshot.tmp_a, SelfCheckCommState::Err))
+            || (self.cfg.requested_outputs.is_enabled(OutputChannel::OutB)
+                && matches!(self.ui_snapshot.tmp_b, SelfCheckCommState::Err));
         let therm_kill_asserted = self.therm_kill.is_low();
         let snapshot = AudioSignalSnapshot {
             mains_present,
@@ -4251,10 +4297,16 @@ where
         }
 
         let prev = self.audio_snapshot;
-        if prev.mains_present != snapshot.mains_present {
+        if prev.mains_present.is_some()
+            && snapshot.mains_present.is_some()
+            && prev.mains_present != snapshot.mains_present
+        {
             self.audio_events.mains_present_changed = snapshot.mains_present;
         }
-        if prev.charge_phase != snapshot.charge_phase {
+        if prev.charge_phase != AudioChargePhase::Unknown
+            && snapshot.charge_phase != AudioChargePhase::Unknown
+            && prev.charge_phase != snapshot.charge_phase
+        {
             self.audio_events.charge_phase_changed = Some(snapshot.charge_phase);
         }
         if prev.thermal_stress != snapshot.thermal_stress {
@@ -4286,7 +4338,7 @@ where
         let mut over_current = false;
 
         for ch in [OutputChannel::OutA, OutputChannel::OutB] {
-            if !self.cfg.enabled_outputs.is_enabled(ch) {
+            if !self.cfg.detected_tps_outputs.is_enabled(ch) {
                 continue;
             }
             let status = ::tps55288::Tps55288::with_address(&mut self.i2c, ch.addr())

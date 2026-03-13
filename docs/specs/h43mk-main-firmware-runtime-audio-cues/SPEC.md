@@ -64,8 +64,8 @@
 ## 运行时 cue 映射冻结
 
 - `boot_startup`：上电进入自检后立即请求一次，可与自检并行，且允许被更高优先级 cue 抢占。
-- `mains_present_dc` / `mains_absent_dc`：输入存在位变化时触发。
-- `charge_started` / `charge_completed`：charger 状态进入“充电中 / 完成”时触发。
+- `mains_present_dc` / `mains_absent_dc`：输入存在位在“已知状态之间”变化时触发；通信从 unknown 恢复到 known 时保持静默。
+- `charge_started` / `charge_completed`：charger 状态在“已知相位之间”进入“充电中 / 完成”时触发；首次建链或通信恢复后的 unknown -> known 不补播 one-shot。
 - `battery_low_no_mains` / `battery_low_with_mains`：BMS `RCA` 低电告警按市电有无拆分。
 - `high_stress`：`TS_COOL` / `TS_WARM` / `TREG` 或 TMP112 到达 `TLOW` 但尚未触发停机时触发。
 - `shutdown_protection`：`THERM_KILL_N` 断言或保护导致输出被关时触发。
@@ -90,6 +90,10 @@
   - 优先级：`Error > Warning > Status > Boot`
   - 同优先级 `one_shot` 保持 FIFO。
 - 运行时场景正确触发/停播：市电恢复/丢失、充电开始/完成、电池低电（区分有无市电）、高压力进入/退出、模块通信故障进入/恢复、保护/过压/过流进入/清除。
+- 通信恢复语义：
+  - charger 输入/相位从 unknown 恢复到 known 时，不得伪造 `mains_present_dc`、`charge_started`、`charge_completed`。
+  - 自检阶段已观察到的 TPS OVP/OCP/SCP 必须能种子化到运行时音效状态，不能因为该路输出被门控后就永久失去 `io_over_voltage` / `io_over_current` 观测。
+  - `module_fault` 只针对运行期必需模块；因配置关闭或本板未装的可选模块不得常驻拉高该 cue。
 - `shutdown_mode_entered` 与 `io_over_power` 在主固件本轮保持静默，且文档明确注明等待真实状态源后再接入。
 
 ## 里程碑（Milestones）
