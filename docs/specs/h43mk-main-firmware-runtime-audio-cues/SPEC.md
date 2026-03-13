@@ -126,6 +126,7 @@
 - BMS protection / permanent-failure 状态已在自检结果中种子化，进入主循环前即可驱动 `battery_protection` 的首次调度。
 - TPS OVP/OCP runtime state 已细化为按通道持有；只有成功读取到某路 TPS `STATUS` 时才会覆盖该路 fault seed，未读到的通道继续保留自检/上次有效观测结果。
 - 主循环现在会先完成 power/audio 状态同步，再向 DMA ring 推入下一批 PCM 数据，并把 DMA ring 缩短到约 0.5 秒缓存，降低高优先级 cue 的实际听感抢占延迟。
+- 运行时后接入的 BMS 现在会把“曾成功建链”状态保留下来；即便后续轮询掉线，`module_fault` 也不会再被启动快照门控吞掉。
 - `shutdown_mode_entered` 与 `io_over_power` 继续保持 dormant，并在主固件中明确不触发。
 
 ## 验证记录
@@ -149,3 +150,4 @@
 - 2026-03-13: merge-proof fix，补齐 BMS 激活 / isolation 窗口内的音效快照刷新，并把 TPS OVP/OCP seed 改为按通道保留、按成功读回覆盖。
 - 2026-03-13: merge-proof fix，修正 `mains_absent_dc` 在电池冷启动时的误报，并把 BMS protection / PF seed 接入运行时 `battery_protection`。
 - 2026-03-13: merge-proof fix，缩短 DMA ring 并把运行时 cue 同步提前到 DMA refill 之前，降低高优先级告警的实际播报延迟；同时让 `mains_absent_dc` 跨 charger `Unknown` 抖动保持激活态。
+- 2026-03-13: merge-proof fix，给运行时 BMS 建链增加 sticky presence，避免激活后掉线时 `module_fault` 被启动快照门控吞掉。

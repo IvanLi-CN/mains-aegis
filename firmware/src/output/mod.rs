@@ -1235,6 +1235,7 @@ pub struct PowerManager<'d, I2C> {
     tps_b_next_retry_at: Option<Instant>,
 
     bms_addr: Option<u8>,
+    bms_runtime_seen: bool,
     bms_next_poll_at: Instant,
     bms_next_retry_at: Option<Instant>,
     bms_last_int_poll_at: Option<Instant>,
@@ -1461,6 +1462,7 @@ where
         let out_b_allowed = cfg.enabled_outputs.is_enabled(OutputChannel::OutB);
         let charger_allowed = cfg.charger_probe_ok;
         let bms_addr = cfg.bms_addr;
+        let bms_runtime_seen = bms_addr.is_some();
 
         // Fail-safe defaults.
         chg_ce.set_high();
@@ -1488,6 +1490,7 @@ where
             tps_b_next_retry_at: if out_b_allowed { Some(now) } else { None },
 
             bms_addr,
+            bms_runtime_seen,
             bms_next_poll_at: now,
             bms_next_retry_at: Some(now),
             bms_last_int_poll_at: None,
@@ -4329,7 +4332,7 @@ where
             None => AudioBatteryLowState::Unknown,
         };
         let module_fault = (self.cfg.charger_probe_ok && self.charger_audio.module_fault)
-            || (self.cfg.bms_addr.is_some() && self.bms_audio.module_fault)
+            || (self.bms_runtime_seen && self.bms_audio.module_fault)
             || (self.cfg.ina_detected
                 && matches!(self.ui_snapshot.ina3221, SelfCheckCommState::Err))
             || (self
@@ -5316,6 +5319,7 @@ where
             match self.read_bq40z50_snapshot_strict(addr) {
                 Ok(s) => {
                     self.bms_addr = Some(addr);
+                    self.bms_runtime_seen = true;
                     self.bms_next_retry_at = None;
                     self.bms_ok_streak = self.bms_ok_streak.saturating_add(1);
                     self.bms_err_streak = 0;
