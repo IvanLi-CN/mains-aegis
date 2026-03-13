@@ -1626,6 +1626,7 @@ where
     pub fn tick(&mut self, irq: &IrqSnapshot) {
         if let Some(until) = self.bms_activation_isolation_until {
             if Instant::now() < until {
+                self.refresh_audio_signals();
                 return;
             }
             self.bms_activation_isolation_until = None;
