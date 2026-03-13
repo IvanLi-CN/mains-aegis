@@ -93,7 +93,8 @@
 - 通信恢复语义：
   - charger 输入/相位从 unknown 恢复到 known 时，不得伪造 `mains_present_dc`、`charge_started`、`charge_completed`。
   - 自检阶段已观察到的 TPS OVP/OCP/SCP 必须能种子化到运行时音效状态，不能因为该路输出被门控后就永久失去 `io_over_voltage` / `io_over_current` 观测。
-  - `module_fault` 只针对运行期必需模块；因配置关闭或本板未装的可选模块不得常驻拉高该 cue。
+  - 自检阶段带入的 warning/error loop cue 必须在进入主循环前完成首次调度，不能在首轮 `power.tick()` 前被静默清掉。
+  - `module_fault` 只针对运行期实际检测到且必需的模块；因配置关闭或本板未装的可选模块不得常驻拉高该 cue。
 - `shutdown_mode_entered` 与 `io_over_power` 在主固件本轮保持静默，且文档明确注明等待真实状态源后再接入。
 
 ## 里程碑（Milestones）

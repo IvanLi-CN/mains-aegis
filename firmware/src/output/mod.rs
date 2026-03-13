@@ -487,7 +487,8 @@ pub(super) fn ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -
 
 #[derive(Clone, Copy)]
 pub struct BootSelfTestResult {
-    pub requested_outputs: EnabledOutputs,
+    pub ina_detected: bool,
+    pub detected_tmp_outputs: EnabledOutputs,
     pub detected_tps_outputs: EnabledOutputs,
     pub enabled_outputs: EnabledOutputs,
     pub outputs_restore_on_bms_ready: EnabledOutputs,
@@ -1011,6 +1012,7 @@ where
                     | ::tps55288::registers::StatusBits::SCP
             )
     );
+    let detected_tmp_outputs = enabled_outputs_from_flags(tmp_a_present, tmp_b_present);
     let detected_tps_outputs = enabled_outputs_from_flags(tps_a_present, tps_b_present);
     let tps_b_fault = matches!(
         &status_b,
@@ -1175,7 +1177,8 @@ where
     reporter(SelfCheckStage::Done, ui);
 
     BootSelfTestResult {
-        requested_outputs: desired_outputs,
+        ina_detected: ina_ready,
+        detected_tmp_outputs,
         detected_tps_outputs,
         enabled_outputs,
         outputs_restore_on_bms_ready,
@@ -1302,7 +1305,8 @@ fn bms_activation_phase_forces_charge_off(phase: BmsActivationPhase) -> bool {
 
 #[derive(Clone, Copy)]
 pub struct Config {
-    pub requested_outputs: EnabledOutputs,
+    pub ina_detected: bool,
+    pub detected_tmp_outputs: EnabledOutputs,
     pub detected_tps_outputs: EnabledOutputs,
     pub enabled_outputs: EnabledOutputs,
     pub outputs_restore_on_bms_ready: EnabledOutputs,
@@ -4266,15 +4270,27 @@ where
         };
         let module_fault = (self.cfg.charger_probe_ok && self.charger_audio.module_fault)
             || (self.cfg.bms_addr.is_some() && self.bms_audio.module_fault)
-            || (self.cfg.requested_outputs != EnabledOutputs::None
+            || (self.cfg.ina_detected
                 && matches!(self.ui_snapshot.ina3221, SelfCheckCommState::Err))
-            || (self.cfg.requested_outputs.is_enabled(OutputChannel::OutA)
+            || (self
+                .cfg
+                .detected_tps_outputs
+                .is_enabled(OutputChannel::OutA)
                 && matches!(self.ui_snapshot.tps_a, SelfCheckCommState::Err))
-            || (self.cfg.requested_outputs.is_enabled(OutputChannel::OutB)
+            || (self
+                .cfg
+                .detected_tps_outputs
+                .is_enabled(OutputChannel::OutB)
                 && matches!(self.ui_snapshot.tps_b, SelfCheckCommState::Err))
-            || (self.cfg.requested_outputs.is_enabled(OutputChannel::OutA)
+            || (self
+                .cfg
+                .detected_tmp_outputs
+                .is_enabled(OutputChannel::OutA)
                 && matches!(self.ui_snapshot.tmp_a, SelfCheckCommState::Err))
-            || (self.cfg.requested_outputs.is_enabled(OutputChannel::OutB)
+            || (self
+                .cfg
+                .detected_tmp_outputs
+                .is_enabled(OutputChannel::OutB)
                 && matches!(self.ui_snapshot.tmp_b, SelfCheckCommState::Err));
         let therm_kill_asserted = self.therm_kill.is_low();
         let snapshot = AudioSignalSnapshot {

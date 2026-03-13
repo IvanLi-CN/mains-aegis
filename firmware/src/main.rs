@@ -629,7 +629,8 @@ fn main() -> ! {
     );
 
     let cfg = output::Config {
-        requested_outputs: self_test.requested_outputs,
+        ina_detected: self_test.ina_detected,
+        detected_tmp_outputs: self_test.detected_tmp_outputs,
         detected_tps_outputs: self_test.detected_tps_outputs,
         enabled_outputs: self_test.enabled_outputs,
         outputs_restore_on_bms_ready: self_test.outputs_restore_on_bms_ready,
@@ -678,6 +679,7 @@ fn main() -> ! {
         power.audio_signals(),
         power.take_audio_edges(),
     );
+    audio_manager.tick(Instant::now());
 
     let mut irq_tracker = irq::IrqTracker::new();
     let mut last_irq_log_at: Option<Instant> = None;
