@@ -199,9 +199,10 @@ impl AudioManager {
     pub fn request(&mut self, request: AudioRequest) {
         if let Some(current) = self.current {
             if request.priority > current.request.priority {
-                self.requeue_preempted_loop(current.request);
+                let preempted = current.request;
                 self.preempted = self.preempted.saturating_add(1);
                 self.current = Some(Self::start_playback(request));
+                self.requeue_preempted_loop(preempted);
                 return;
             }
             if !self.enqueue(request) {
@@ -276,6 +277,10 @@ impl AudioManager {
         self.queue_head = 0;
         self.queue_len = 0;
         self.loops = [CueLoopState::INACTIVE; AUDIO_CUE_COUNT];
+    }
+
+    pub fn is_cue_active(&self, cue: AudioCue) -> bool {
+        self.loops[cue.index()].active
     }
 
     pub fn status(&self) -> AudioStatus {

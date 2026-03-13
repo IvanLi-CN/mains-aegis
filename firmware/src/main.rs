@@ -670,6 +670,7 @@ fn main() -> ! {
         charger_probe_ok: self_test.charger_probe_ok,
         charger_enabled: self_test.charger_enabled,
         initial_audio_charge_phase: self_test.initial_audio_charge_phase,
+        initial_bms_protection_active: self_test.initial_bms_protection_active,
         initial_tps_a_over_voltage: self_test.initial_tps_a_over_voltage,
         initial_tps_b_over_voltage: self_test.initial_tps_b_over_voltage,
         initial_tps_a_over_current: self_test.initial_tps_a_over_current,
@@ -798,12 +799,11 @@ fn sync_runtime_audio(
     ) {
         audio_manager.trigger(AudioCue::ChargeCompleted);
     }
+    let mains_absent_active = signals.mains_present == Some(false)
+        && (edges.mains_present_changed == Some(false)
+            || audio_manager.is_cue_active(AudioCue::MainsAbsentDc));
 
-    audio_manager.set_cue_active(
-        AudioCue::MainsAbsentDc,
-        signals.mains_present == Some(false),
-        now,
-    );
+    audio_manager.set_cue_active(AudioCue::MainsAbsentDc, mains_absent_active, now);
     audio_manager.set_cue_active(AudioCue::HighStress, signals.thermal_stress, now);
     audio_manager.set_cue_active(
         AudioCue::BatteryLowNoMains,

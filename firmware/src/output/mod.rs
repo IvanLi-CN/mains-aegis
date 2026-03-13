@@ -496,6 +496,7 @@ pub struct BootSelfTestResult {
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
     pub initial_audio_charge_phase: AudioChargePhase,
+    pub initial_bms_protection_active: bool,
     pub initial_tps_a_over_voltage: bool,
     pub initial_tps_b_over_voltage: bool,
     pub initial_tps_a_over_current: bool,
@@ -764,6 +765,7 @@ where
     let mut bms_charge_reason: Option<&'static str> = None;
     let mut bms_flow: Option<&'static str> = None;
     let mut bms_primary_reason: Option<&'static str> = None;
+    let mut initial_bms_protection_active = false;
     if defer_bms_probe {
         defmt::info!(
             "self_test: bq40z50 probe deferred until activation auto_request settle_ms={=u64}",
@@ -794,6 +796,15 @@ where
                 let flow_abs_ma = current_ma.wrapping_abs() as u16;
                 let primary_reason =
                     bq40_primary_reason(status_raw, op_status, charge_reason, discharge_reason);
+                let protection_active = bq40_op_bit(op_status, bq40z50::operation_status::PF)
+                    == Some(true)
+                    || err_code != 0
+                    || (status_raw
+                        & (bq40z50::battery_status::OCA
+                            | bq40z50::battery_status::TCA
+                            | bq40z50::battery_status::OTA
+                            | bq40z50::battery_status::TDA))
+                        != 0;
                 defmt::info!(
                     "self_test: bq40z50 ok addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} flow={} flow_abs_ma={=u16} soc_pct={=u16} status=0x{=u16:x} op_status={=?} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} chg_ready={=?} dsg_ready={=?} chg_reason={} dsg_reason={} primary_reason={} err_code={} err_str={}",
                     addr,
@@ -818,6 +829,7 @@ where
                     bq40z50::decode_error_code(err_code)
                 );
                 bms_addr = Some(addr);
+                initial_bms_protection_active = protection_active;
                 bms_voltage_mv = Some(voltage_mv);
                 bms_soc_pct = Some(soc_pct);
                 bms_rca_alarm = Some((status_raw & bq40z50::battery_status::RCA) != 0);
@@ -1190,6 +1202,7 @@ where
         charger_probe_ok,
         charger_enabled,
         initial_audio_charge_phase,
+        initial_bms_protection_active,
         initial_tps_a_over_voltage,
         initial_tps_b_over_voltage,
         initial_tps_a_over_current,
@@ -1328,6 +1341,7 @@ pub struct Config {
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
     pub initial_audio_charge_phase: AudioChargePhase,
+    pub initial_bms_protection_active: bool,
     pub initial_tps_a_over_voltage: bool,
     pub initial_tps_b_over_voltage: bool,
     pub initial_tps_a_over_current: bool,
@@ -1576,6 +1590,7 @@ where
         self.charger_audio.module_fault =
             matches!(self.ui_snapshot.bq25792, SelfCheckCommState::Err);
         self.bms_audio.rca_alarm = self.ui_snapshot.bq40z50_rca_alarm;
+        self.bms_audio.protection_active = self.cfg.initial_bms_protection_active;
         self.bms_audio.module_fault = matches!(self.ui_snapshot.bq40z50, SelfCheckCommState::Err);
         self.tps_audio.out_a_over_voltage = self.cfg.initial_tps_a_over_voltage;
         self.tps_audio.out_b_over_voltage = self.cfg.initial_tps_b_over_voltage;
