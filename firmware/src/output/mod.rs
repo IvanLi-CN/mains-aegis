@@ -492,6 +492,7 @@ pub struct BootSelfTestResult {
     pub outputs_blocked_by_bms: bool,
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
+    pub initial_audio_charge_phase: AudioChargePhase,
     pub bms_addr: Option<u8>,
     pub self_check_snapshot: SelfCheckUiSnapshot,
 }
@@ -896,23 +897,35 @@ where
         }
     };
     let mut charger_vbat_present: Option<bool> = None;
+    let mut initial_audio_charge_phase = AudioChargePhase::Unknown;
     if charger_enabled {
         charger_status0 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_0).ok();
+        let charger_status1 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_1).ok();
         let charger_status2 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_2).ok();
         let charger_status3 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_3).ok();
         let charger_vbat_adc_mv = bq25792::read_u16(&mut *i2c, bq25792::reg::VBAT_ADC).ok();
         let charger_vsys_adc_mv = bq25792::read_u16(&mut *i2c, bq25792::reg::VSYS_ADC).ok();
 
+        if let Some(status1) = charger_status1 {
+            initial_audio_charge_phase =
+                audio_charge_phase_from_chg_stat(bq25792::status1::chg_stat(status1));
+        }
         let vbat_present = charger_status2.map(|v| (v & bq25792::status2::VBAT_PRESENT_STAT) != 0);
         charger_vbat_present = vbat_present;
         let vsys_min_reg = charger_status3.map(|v| (v & bq25792::status3::VSYS_STAT) != 0);
         defmt::info!(
-            "self_test: bq25792 ctrl0={=?} status0={=?} status2={=?} status3={=?} vbat_present={=?} vsys_min_reg={=?} vbat_adc_mv={=?} vsys_adc_mv={=?}",
+            "self_test: bq25792 ctrl0={=?} status0={=?} status1={=?} status2={=?} status3={=?} vbat_present={=?} phase={} vsys_min_reg={=?} vbat_adc_mv={=?} vsys_adc_mv={=?}",
             charger_ctrl0,
             charger_status0,
+            charger_status1,
             charger_status2,
             charger_status3,
             vbat_present,
+            bq25792::decode_chg_stat(
+                charger_status1
+                    .map(bq25792::status1::chg_stat)
+                    .unwrap_or_default()
+            ),
             vsys_min_reg,
             charger_vbat_adc_mv,
             charger_vsys_adc_mv
@@ -1136,6 +1149,7 @@ where
         outputs_blocked_by_bms,
         charger_probe_ok,
         charger_enabled,
+        initial_audio_charge_phase,
         bms_addr,
         self_check_snapshot: ui,
     }
@@ -1266,6 +1280,7 @@ pub struct Config {
     pub tmp112_thigh_c_x16: i16,
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
+    pub initial_audio_charge_phase: AudioChargePhase,
     pub force_min_charge: bool,
     pub bms_boot_diag_auto_validate: bool,
     pub bms_addr: Option<u8>,
@@ -1494,6 +1509,7 @@ where
                 Some(self.cfg.enabled_outputs.is_enabled(OutputChannel::OutB));
         }
         self.charger_audio.input_present = self.ui_snapshot.fusb302_vbus_present;
+        self.charger_audio.phase = self.cfg.initial_audio_charge_phase;
         self.charger_audio.module_fault =
             matches!(self.ui_snapshot.bq25792, SelfCheckCommState::Err);
         self.bms_audio.rca_alarm = self.ui_snapshot.bq40z50_rca_alarm;

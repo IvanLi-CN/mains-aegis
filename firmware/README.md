@@ -78,7 +78,7 @@ cargo build --release --features bms-dual-probe-diag
 
 ## 运行时音效服务（Plan #h43mk）
 
-主固件已改为常驻运行时音效服务；上电后只请求一次 `boot_startup`，后续由主循环按电源/BMS/保护状态驱动 cue 播放，不再阻塞播放 6 段 Demo playlist。
+主固件已改为常驻运行时音效服务；上电进入自检后就会请求一次 `boot_startup`，音频播放与自检并行推进，后续由主循环按电源/BMS/保护状态驱动 cue 播放，不再阻塞播放 6 段 Demo playlist。
 
 - 链路：`ESP32-S3 I2S/TDM TX -> MAX98357A -> 8Ω/1W Speaker`
 - GPIO：`GPIO4=BCLK`，`GPIO5=WS(LRCLK)`，`GPIO6=DOUT`
@@ -122,7 +122,7 @@ mcu-agentd monitor esp --reset
 验证关注点：
 
 - 启动阶段不再出现 `demo playlist` 相关日志序列，也不会阻塞主循环。
-- 上电后只播放一次 `boot_startup`。
+- 上电后只请求一次 `boot_startup`，允许在自检期间开始播放。
 - 在市电丢失/恢复、充电开始/完成、低电/保护/过压/过流等状态切换时，能听到对应 cue。
 
 ## TPS55288 双路输出控制（Plan #0005）

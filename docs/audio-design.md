@@ -98,7 +98,7 @@
 
 本仓库已将主固件切换为“主循环常驻音效服务”，用于把 I2S/TDM→MAX98357A 音频链路与实际运行时提示音语义接到一起：
 
-- 主固件入口：`../firmware/src/main.rs`（启动后只请求一次 `boot_startup`，随后在主循环内持续调度）
+- 主固件入口：`../firmware/src/main.rs`（上电进入自检后立即请求一次 `boot_startup`，并与自检/主循环持续并行调度）
 - 共享播放核心：`../firmware/src/audio.rs`
 - 运行时信号快照：`../firmware/src/output/mod.rs`
 - 运行时资产（固件侧打包）：`../firmware/assets/audio/test-fw-cues/`

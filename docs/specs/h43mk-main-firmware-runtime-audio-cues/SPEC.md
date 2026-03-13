@@ -63,7 +63,7 @@
 
 ## 运行时 cue 映射冻结
 
-- `boot_startup`：主循环启动后触发一次。
+- `boot_startup`：上电进入自检后立即请求一次，可与自检并行，且允许被更高优先级 cue 抢占。
 - `mains_present_dc` / `mains_absent_dc`：输入存在位变化时触发。
 - `charge_started` / `charge_completed`：charger 状态进入“充电中 / 完成”时触发。
 - `battery_low_no_mains` / `battery_low_with_mains`：BMS `RCA` 低电告警按市电有无拆分。
@@ -81,7 +81,7 @@
 - 构建通过：
   - `cargo build --release --bin esp-firmware`
   - `cargo build --release --bin test-fw --features test-fw-audio-playback`
-- 主固件上电后只播放一次 `boot_startup`，不再出现 6 段 demo playlist 的阻塞播放与对应日志序列。
+- 主固件上电后只请求一次 `boot_startup`，允许在自检期间开始播放且不阻塞自检，不再出现 6 段 demo playlist 的阻塞播放与对应日志序列。
 - 主循环期间 power/front-panel tick 节奏保持可用，音频服务每轮并入调度而不独占流程。
 - 调度语义固定为：
   - `status` -> `one_shot`

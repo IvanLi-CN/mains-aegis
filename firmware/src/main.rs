@@ -642,6 +642,7 @@ fn main() -> ! {
         tmp112_thigh_c_x16: TMP112_THIGH_C_X16,
         charger_probe_ok: self_test.charger_probe_ok,
         charger_enabled: self_test.charger_enabled,
+        initial_audio_charge_phase: self_test.initial_audio_charge_phase,
         force_min_charge: FORCE_MIN_CHARGE,
         bms_boot_diag_auto_validate: BMS_BOOT_DIAG_AUTO_VALIDATE,
         bms_addr: self_test.bms_addr,
