@@ -174,26 +174,21 @@ impl Controller {
 
         let expecting_tach = desired_command.enabled();
         let mut tach_fault = prev.tach_fault;
-        if expecting_tach {
-            if input.tach_pulse_count > 0 {
+        if input.tach_pulse_count > 0 {
+            self.last_tach_seen_ms = Some(input.now_ms);
+            tach_fault = false;
+        } else if expecting_tach {
+            if !prev.command.enabled() && !prev.tach_fault {
                 self.last_tach_seen_ms = Some(input.now_ms);
-                tach_fault = false;
-            } else {
-                if !prev.command.enabled() {
-                    self.last_tach_seen_ms = Some(input.now_ms);
-                }
-                if let Some(last_seen_ms) = self.last_tach_seen_ms {
-                    if input.now_ms.saturating_sub(last_seen_ms) >= self.cfg.tach_timeout_ms {
-                        tach_fault = true;
-                    }
+            }
+            if let Some(last_seen_ms) = self.last_tach_seen_ms {
+                if input.now_ms.saturating_sub(last_seen_ms) >= self.cfg.tach_timeout_ms {
+                    tach_fault = true;
                 }
             }
-        } else {
-            self.last_tach_seen_ms = None;
-            tach_fault = false;
         }
 
-        let command = if tach_fault && expecting_tach {
+        let command = if tach_fault {
             FanLevel::High
         } else {
             desired_command
@@ -434,6 +429,16 @@ mod tests {
             now_ms: 2_100,
             temps_ready: true,
             temp_a_c_x16: Some(42 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 0,
+        });
+        assert_eq!(status.command, FanLevel::High);
+        assert!(status.tach_fault);
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 2_150,
+            temps_ready: true,
+            temp_a_c_x16: Some(35 * 16),
             temp_b_c_x16: None,
             tach_pulse_count: 0,
         });

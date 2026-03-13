@@ -523,6 +523,12 @@ fn main() -> ! {
     );
     fan_en.set_low();
     fan_en.set_output_enable(true);
+    if !fan_pwm_ready {
+        // If PWM cannot be configured, at least power the fan continuously so cooling
+        // does not silently disappear while the control path keeps logging activity.
+        fan_en.set_high();
+        defmt::warn!("fan: pwm unavailable; forcing fan_en high for fail-safe cooling");
+    }
 
     // Front panel: I2C2 + SPI display bring-up (Plan #3kz8p).
     // Keep these variables alive for the whole program.
