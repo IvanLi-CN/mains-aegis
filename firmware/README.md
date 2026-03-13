@@ -383,6 +383,51 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
 
 ## 烧录与监视（推荐：`mcu-agentd`，从仓库根目录运行）
 
+## 风扇温控与故障保护（Spec #ygmqn）
+
+固件会在运行期接管 `GPIO35(FAN_EN)`、`GPIO36(FAN_VSET_PWM)` 与 `GPIO34(FAN_TACH)`，形成一个以 `TMP112A/B` 为输入的 V1 风扇策略。
+
+### 冻结口径
+
+- PWM：`25kHz`，`GPIO36 -> FAN_VSET_PWM`
+- 档位：`off=0%`、`mid=60%`、`high=100%`
+- 温控：取 `max(tmp_a, tmp_b)`
+  - `< 40C` => `off`
+  - `40C .. < 50C` => `mid`
+  - `>= 50C` => `high`
+- 回滞：`3C`
+- 余冷：从 `mid/high` 退出后保留 `10s` 低速
+- `tach` 看门狗：命令为 `mid/high` 且 `2s` 内没有 `FAN_TACH` 脉冲时，记录故障并强制 `high`
+- 温度退化：单路温度缺失时退化到另一侧；双路都缺失时直接 `high`
+
+### 预期日志（`defmt`）
+
+策略/状态变化：
+
+- `fan: command mode=mid pwm_pct=60 ...`
+- `fan: command mode=high pwm_pct=100 ...`
+- `fan: telemetry mode=off pwm_pct=0 ...`
+
+异常/恢复：
+
+- `fan: temp_source degraded source=tmp_a ...`
+- `fan: temp_source missing fallback=full_speed ...`
+- `fan: tach_timeout mode=high pwm_pct=100 ...`
+- `fan: tach_recovered mode=mid pwm_pct=60 ...`
+
+### Bench 验证（人类操作）
+
+1. 正常热升路径：
+   - 运行 `mcu-agentd monitor esp --reset`
+   - 观察 `fan: command ...` / `fan: telemetry ...`
+   - 让 `tmp_a/tmp_b` 升过 `40C` 与 `50C`，确认依次进入 `mid` / `high`
+2. 回落路径：
+   - 温度降回阈值以下后，确认会先进入 `10s` 余冷低速，再关风扇
+3. 故障路径：
+   - 断开 `FAN_TACH` 或让风扇停转
+   - 在 `mid/high` 命令下应看到 `fan: tach_timeout ...`，并保持 `high`
+   - 恢复 tach 脉冲后应看到 `fan: tach_recovered ...`
+
 `mcu-agentd` 的配置文件固定在仓库根目录：`mcu-agentd.toml`。
 说明：本项目约定 `mcu_id = esp`。
 

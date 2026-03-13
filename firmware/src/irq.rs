@@ -6,6 +6,7 @@ use esp_hal::{handler, ram};
 pub const GPIO_I2C1_INT: u8 = 33;
 pub const GPIO_I2C2_INT: u8 = 7;
 pub const GPIO_CHG_INT: u8 = 17;
+pub const GPIO_FAN_TACH: u8 = 34;
 pub const GPIO_INA_PV: u8 = 37;
 pub const GPIO_INA_CRITICAL: u8 = 38;
 pub const GPIO_INA_WARNING: u8 = 39;
@@ -15,6 +16,7 @@ pub const GPIO_THERM_KILL_N: u8 = 40;
 static IRQ_I2C1_INT: AtomicU32 = AtomicU32::new(0);
 static IRQ_I2C2_INT: AtomicU32 = AtomicU32::new(0);
 static IRQ_CHG_INT: AtomicU32 = AtomicU32::new(0);
+static IRQ_FAN_TACH: AtomicU32 = AtomicU32::new(0);
 static IRQ_INA_PV: AtomicU32 = AtomicU32::new(0);
 static IRQ_INA_CRITICAL: AtomicU32 = AtomicU32::new(0);
 static IRQ_INA_WARNING: AtomicU32 = AtomicU32::new(0);
@@ -26,6 +28,7 @@ pub struct IrqSnapshot {
     pub i2c1_int: u32,
     pub i2c2_int: u32,
     pub chg_int: u32,
+    pub fan_tach: u32,
     pub ina_pv: u32,
     pub ina_critical: u32,
     pub ina_warning: u32,
@@ -38,6 +41,7 @@ impl IrqSnapshot {
         self.i2c1_int != 0
             || self.i2c2_int != 0
             || self.chg_int != 0
+            || self.fan_tach != 0
             || self.ina_pv != 0
             || self.ina_critical != 0
             || self.ina_warning != 0
@@ -57,6 +61,7 @@ impl IrqTracker {
                 i2c1_int: 0,
                 i2c2_int: 0,
                 chg_int: 0,
+                fan_tach: 0,
                 ina_pv: 0,
                 ina_critical: 0,
                 ina_warning: 0,
@@ -72,6 +77,7 @@ impl IrqTracker {
             i2c1_int: now.i2c1_int.wrapping_sub(self.last.i2c1_int),
             i2c2_int: now.i2c2_int.wrapping_sub(self.last.i2c2_int),
             chg_int: now.chg_int.wrapping_sub(self.last.chg_int),
+            fan_tach: now.fan_tach.wrapping_sub(self.last.fan_tach),
             ina_pv: now.ina_pv.wrapping_sub(self.last.ina_pv),
             ina_critical: now.ina_critical.wrapping_sub(self.last.ina_critical),
             ina_warning: now.ina_warning.wrapping_sub(self.last.ina_warning),
@@ -88,6 +94,7 @@ pub fn snapshot() -> IrqSnapshot {
         i2c1_int: IRQ_I2C1_INT.load(Ordering::Relaxed),
         i2c2_int: IRQ_I2C2_INT.load(Ordering::Relaxed),
         chg_int: IRQ_CHG_INT.load(Ordering::Relaxed),
+        fan_tach: IRQ_FAN_TACH.load(Ordering::Relaxed),
         ina_pv: IRQ_INA_PV.load(Ordering::Relaxed),
         ina_critical: IRQ_INA_CRITICAL.load(Ordering::Relaxed),
         ina_warning: IRQ_INA_WARNING.load(Ordering::Relaxed),
@@ -128,6 +135,12 @@ pub(crate) fn gpio_isr() {
     if (pending1 & i2c1_int_mask) != 0 {
         IRQ_I2C1_INT.fetch_add(1, Ordering::Relaxed);
         clear1 |= i2c1_int_mask;
+    }
+
+    let fan_tach_mask = 1u32 << (GPIO_FAN_TACH - 32);
+    if (pending1 & fan_tach_mask) != 0 {
+        IRQ_FAN_TACH.fetch_add(1, Ordering::Relaxed);
+        clear1 |= fan_tach_mask;
     }
 
     let ina_pv_mask = 1u32 << (GPIO_INA_PV - 32);

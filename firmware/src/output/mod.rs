@@ -2,6 +2,7 @@ pub mod tps55288;
 
 use esp_firmware::bq25792;
 use esp_firmware::bq40z50;
+use esp_firmware::fan;
 use esp_firmware::ina3221;
 use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
@@ -1134,6 +1135,7 @@ pub struct PowerManager<'d, I2C> {
     next_telemetry_at: Instant,
     last_fault_log_at: Option<Instant>,
     last_therm_kill_hint_at: Option<Instant>,
+    fan_started_at: Instant,
 
     ina_ready: bool,
     ina_next_retry_at: Option<Instant>,
@@ -1180,6 +1182,7 @@ pub struct PowerManager<'d, I2C> {
     chg_watchdog_restore: Option<u8>,
     outputs_restore_on_bms_ready: EnabledOutputs,
     outputs_blocked_by_bms: bool,
+    fan: fan::Controller,
 
     ui_snapshot: SelfCheckUiSnapshot,
 }
@@ -1238,6 +1241,7 @@ pub struct Config {
     pub telemetry_include_vin_ch3: bool,
     pub tmp112_tlow_c_x16: i16,
     pub tmp112_thigh_c_x16: i16,
+    pub fan_config: fan::Config,
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
     pub force_min_charge: bool,
@@ -1282,6 +1286,7 @@ where
             next_telemetry_at: now,
             last_fault_log_at: None,
             last_therm_kill_hint_at: None,
+            fan_started_at: now,
 
             ina_ready: false,
             ina_next_retry_at: if outputs_allowed { Some(now) } else { None },
@@ -1339,6 +1344,7 @@ where
             chg_watchdog_restore: None,
             outputs_restore_on_bms_ready: cfg.outputs_restore_on_bms_ready,
             outputs_blocked_by_bms: cfg.outputs_blocked_by_bms,
+            fan: fan::Controller::new(cfg.fan_config),
             ui_snapshot: cfg.self_check_snapshot,
         }
     }
@@ -1412,6 +1418,7 @@ where
     pub fn tick(&mut self, irq: &IrqSnapshot) {
         if let Some(until) = self.bms_activation_isolation_until {
             if Instant::now() < until {
+                self.update_fan_state(irq);
                 return;
             }
             self.bms_activation_isolation_until = None;
@@ -1439,8 +1446,10 @@ where
             if bms_i2c_active {
                 self.bms_activation_isolation_until =
                     Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
+                self.update_fan_state(irq);
                 return;
             }
+            self.update_fan_state(irq);
             return;
         }
 
@@ -1454,8 +1463,10 @@ where
             if bms_i2c_active {
                 self.bms_activation_isolation_until =
                     Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
+                self.update_fan_state(irq);
                 return;
             }
+            self.update_fan_state(irq);
             return;
         }
         let mut bms_i2c_active = self.maybe_poll_bms(irq);
@@ -1463,16 +1474,122 @@ where
         if bms_i2c_active {
             self.bms_activation_isolation_until =
                 Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
+            self.update_fan_state(irq);
             return;
         }
         if self.bms_activation_state == BmsActivationState::Pending {
+            self.update_fan_state(irq);
             return;
         }
-        self.maybe_print_telemetry();
+        let telemetry_printed = self.maybe_print_telemetry();
+        self.update_fan_state(irq);
+        if telemetry_printed {
+            self.log_fan_telemetry();
+        }
     }
 
     pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
         self.ui_snapshot
+    }
+
+    pub fn fan_command(&self) -> fan::Status {
+        self.fan.status()
+    }
+
+    fn fan_now_ms(&self) -> u64 {
+        self.fan_started_at.elapsed().as_millis() as u64
+    }
+
+    fn fan_temps_ready(&self) -> bool {
+        self.ui_snapshot.tmp_a != SelfCheckCommState::Pending
+            || self.ui_snapshot.tmp_b != SelfCheckCommState::Pending
+    }
+
+    fn update_fan_state(&mut self, irq: &IrqSnapshot) {
+        let prev = self.fan.status();
+        let (status, events) = self.fan.update(fan::Input {
+            now_ms: self.fan_now_ms(),
+            temps_ready: self.fan_temps_ready(),
+            temp_a_c_x16: self.ui_snapshot.tmp_a_c.map(|temp_c| temp_c * 16),
+            temp_b_c_x16: self.ui_snapshot.tmp_b_c.map(|temp_c| temp_c * 16),
+            tach_pulse_count: irq.fan_tach,
+        });
+        let pwm_pct = status.pwm_pct(self.cfg.fan_config.mid_pwm_pct);
+
+        if events.temp_source_changed {
+            match status.temp_source {
+                fan::TempSource::Pending => {}
+                fan::TempSource::Missing => {
+                    defmt::warn!(
+                        "fan: temp_source missing fallback=full_speed control_temp_c_x16={=?}",
+                        status.control_temp_c_x16
+                    );
+                }
+                fan::TempSource::TmpA | fan::TempSource::TmpB => {
+                    defmt::warn!(
+                        "fan: temp_source degraded source={} control_temp_c_x16={=?}",
+                        status.temp_source.as_str(),
+                        status.control_temp_c_x16
+                    );
+                }
+                fan::TempSource::Max => {
+                    if prev.temp_source.is_degraded() {
+                        defmt::info!(
+                            "fan: temp_source restored source={} control_temp_c_x16={=?}",
+                            status.temp_source.as_str(),
+                            status.control_temp_c_x16
+                        );
+                    }
+                }
+            }
+        }
+
+        if events.command_changed {
+            defmt::info!(
+                "fan: command mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?} cooldown_active={=bool} tach_fault={=bool}",
+                status.command.as_str(),
+                pwm_pct,
+                status.temp_source.as_str(),
+                status.control_temp_c_x16,
+                status.cooldown_active,
+                status.tach_fault
+            );
+        }
+
+        if events.tach_fault_changed {
+            if status.tach_fault {
+                defmt::warn!(
+                    "fan: tach_timeout mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?} timeout_ms={=u64}",
+                    status.command.as_str(),
+                    pwm_pct,
+                    status.temp_source.as_str(),
+                    status.control_temp_c_x16,
+                    self.cfg.fan_config.tach_timeout_ms
+                );
+            } else {
+                defmt::info!(
+                    "fan: tach_recovered mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?}",
+                    status.command.as_str(),
+                    pwm_pct,
+                    status.temp_source.as_str(),
+                    status.control_temp_c_x16
+                );
+            }
+        }
+    }
+
+    fn log_fan_telemetry(&self) {
+        let status = self.fan.status();
+        defmt::info!(
+            "fan: telemetry mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?} tach_recent={=bool} tach_fault={=bool} cooldown_active={=bool}",
+            status.command.as_str(),
+            status.pwm_pct(self.cfg.fan_config.mid_pwm_pct),
+            status.temp_source.as_str(),
+            status.control_temp_c_x16,
+            status.tach_pulse_seen_recently,
+            status.tach_fault,
+            status.cooldown_active
+        );
     }
 
     pub fn bms_activation_state(&self) -> BmsActivationState {
@@ -4233,14 +4350,14 @@ where
         }
     }
 
-    fn maybe_print_telemetry(&mut self) {
+    fn maybe_print_telemetry(&mut self) -> bool {
         if self.cfg.enabled_outputs == EnabledOutputs::None {
-            return;
+            return false;
         }
 
         let now = Instant::now();
         if now < self.next_telemetry_at {
-            return;
+            return false;
         }
         self.next_telemetry_at = now + self.cfg.telemetry_period;
 
@@ -4344,6 +4461,7 @@ where
             }
         }
         self.recompute_ui_mode();
+        true
     }
 
     fn maybe_poll_charger(&mut self, irq: &IrqSnapshot) {

@@ -64,6 +64,46 @@ const TMP112_OUT_A_ADDR: u8 = 0x48;
 const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 50 * 16;
 const TMP112_TLOW_C_X16: i16 = 40 * 16;
+const FAN_PWM_FREQ_KHZ: u32 = 25;
+const FAN_MID_PWM_PCT: u8 = 60;
+const FAN_LOW_TEMP_C_X16: i16 = 40 * 16;
+const FAN_HIGH_TEMP_C_X16: i16 = 50 * 16;
+const FAN_HYSTERESIS_C_X16: i16 = 3 * 16;
+const FAN_COOLDOWN: Duration = Duration::from_secs(10);
+const FAN_TACH_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct AppliedFanOutput {
+    enabled: bool,
+    pwm_pct: u8,
+}
+
+fn apply_fan_command(
+    fan_en: &mut Flex<'_>,
+    fan_pwm: &channel::Channel<'_, LowSpeed>,
+    applied: &mut Option<AppliedFanOutput>,
+    status: esp_firmware::fan::Status,
+) {
+    let next = AppliedFanOutput {
+        enabled: status.command.enabled(),
+        pwm_pct: status.pwm_pct(FAN_MID_PWM_PCT),
+    };
+    if applied.as_ref() == Some(&next) {
+        return;
+    }
+
+    if let Err(err) = fan_pwm.set_duty(next.pwm_pct) {
+        defmt::error!("fan: pwm apply err duty_pct={} err={=?}", next.pwm_pct, err);
+        return;
+    }
+
+    if next.enabled {
+        fan_en.set_high();
+    } else {
+        fan_en.set_low();
+    }
+    *applied = Some(next);
+}
 
 fn spin_delay(wait: Duration) {
     let start = Instant::now();
@@ -251,6 +291,9 @@ fn main() -> ! {
     let mut _tps_sync_timer0 = _tps_sync_ledc.timer::<LowSpeed>(timer::Number::Timer0);
     let mut _tps_sync_a = _tps_sync_ledc.channel(channel::Number::Channel0, peripherals.GPIO41);
     let mut _tps_sync_b = _tps_sync_ledc.channel(channel::Number::Channel1, peripherals.GPIO42);
+    let mut _fan_pwm_timer1 = _tps_sync_ledc.timer::<LowSpeed>(timer::Number::Timer1);
+    let mut _fan_pwm_channel =
+        _tps_sync_ledc.channel(channel::Number::Channel2, peripherals.GPIO36);
 
     let mut tps_sync_ok = true;
     if TPS_SYNC_ENABLE {
@@ -303,6 +346,31 @@ fn main() -> ! {
         defmt::info!("power: tps_sync disabled (pins reserved)");
     }
 
+    let mut fan_pwm_ready = false;
+    match _fan_pwm_timer1.configure(timer::config::Config {
+        duty: timer::config::Duty::Duty8Bit,
+        clock_source: timer::LSClockSource::APBClk,
+        frequency: Rate::from_khz(FAN_PWM_FREQ_KHZ),
+    }) {
+        Ok(()) => match _fan_pwm_channel.configure(channel::config::Config {
+            timer: &_fan_pwm_timer1,
+            duty_pct: 0,
+            drive_mode: DriveMode::PushPull,
+        }) {
+            Ok(()) => {
+                fan_pwm_ready = true;
+                defmt::info!(
+                    "fan: pwm ok freq_khz={} duty_pct={} mid_pwm_pct={=u8}",
+                    FAN_PWM_FREQ_KHZ,
+                    0,
+                    FAN_MID_PWM_PCT
+                );
+            }
+            Err(err) => defmt::error!("fan: pwm channel err={=?}", err),
+        },
+        Err(err) => defmt::error!("fan: pwm timer err={=?}", err),
+    }
+
     // Ensure the system timer is enabled before calling `Instant::now()`.
     let _systimer = SystemTimer::new(peripherals.SYSTIMER);
 
@@ -335,6 +403,14 @@ fn main() -> ! {
         FW_BUILD_ID,
         FW_SRC_HASH,
         FW_GIT_DIRTY
+    );
+    defmt::info!(
+        "fan: policy low_c_x16={=i16} high_c_x16={=i16} hysteresis_c_x16={=i16} cooldown_ms={=u64} tach_timeout_ms={=u64}",
+        FAN_LOW_TEMP_C_X16,
+        FAN_HIGH_TEMP_C_X16,
+        FAN_HYSTERESIS_C_X16,
+        FAN_COOLDOWN.as_millis() as u64,
+        FAN_TACH_TIMEOUT.as_millis() as u64
     );
     defmt::info!(
         "fw: default_vout_mv={=u16} default_ilimit_ma={=u16}",
@@ -433,6 +509,20 @@ fn main() -> ! {
     let mut _chg_int = Input::new(peripherals.GPIO17, chg_int_cfg);
     _chg_int.clear_interrupt();
     _chg_int.listen(Event::FallingEdge);
+
+    let fan_tach_cfg = InputConfig::default().with_pull(Pull::Up);
+    let mut _fan_tach = Input::new(peripherals.GPIO34, fan_tach_cfg);
+    _fan_tach.clear_interrupt();
+    _fan_tach.listen(Event::RisingEdge);
+
+    let mut fan_en = Flex::new(peripherals.GPIO35);
+    fan_en.apply_output_config(
+        &OutputConfig::default()
+            .with_drive_mode(DriveMode::PushPull)
+            .with_pull(Pull::None),
+    );
+    fan_en.set_low();
+    fan_en.set_output_enable(true);
 
     // Front panel: I2C2 + SPI display bring-up (Plan #3kz8p).
     // Keep these variables alive for the whole program.
@@ -585,6 +675,14 @@ fn main() -> ! {
         telemetry_include_vin_ch3: TELEMETRY_INCLUDE_VIN_CH3,
         tmp112_tlow_c_x16: TMP112_TLOW_C_X16,
         tmp112_thigh_c_x16: TMP112_THIGH_C_X16,
+        fan_config: esp_firmware::fan::Config {
+            low_temp_c_x16: FAN_LOW_TEMP_C_X16,
+            high_temp_c_x16: FAN_HIGH_TEMP_C_X16,
+            hysteresis_c_x16: FAN_HYSTERESIS_C_X16,
+            cooldown_ms: FAN_COOLDOWN.as_millis() as u64,
+            tach_timeout_ms: FAN_TACH_TIMEOUT.as_millis() as u64,
+            mid_pwm_pct: FAN_MID_PWM_PCT,
+        },
         charger_probe_ok: self_test.charger_probe_ok,
         charger_enabled: self_test.charger_enabled,
         force_min_charge: FORCE_MIN_CHARGE,
@@ -611,6 +709,15 @@ fn main() -> ! {
     power.init_best_effort();
     front_panel.update_self_check_snapshot(power.ui_snapshot());
     front_panel.update_bms_activation_state(power.bms_activation_state());
+    let mut applied_fan = None;
+    if fan_pwm_ready {
+        apply_fan_command(
+            &mut fan_en,
+            &_fan_pwm_channel,
+            &mut applied_fan,
+            power.fan_command(),
+        );
+    }
 
     let mut irq_tracker = irq::IrqTracker::new();
     let mut last_irq_log_at: Option<Instant> = None;
@@ -624,6 +731,14 @@ fn main() -> ! {
         || {
             let irq_events = irq_tracker.take_delta();
             power.tick(&irq_events);
+            if fan_pwm_ready {
+                apply_fan_command(
+                    &mut fan_en,
+                    &_fan_pwm_channel,
+                    &mut applied_fan,
+                    power.fan_command(),
+                );
+            }
             front_panel.update_self_check_snapshot(power.ui_snapshot());
             front_panel.update_bms_activation_state(power.bms_activation_state());
             if let Some(action) = front_panel.tick() {
@@ -646,10 +761,11 @@ fn main() -> ! {
                 )
             {
                 defmt::info!(
-                    "irq: i2c1_int={=u32} i2c2_int={=u32} chg_int={=u32} ina_pv={=u32} ina_warning={=u32} ina_critical={=u32} bms_btp_int_h={=u32} therm_kill_n={=u32}",
+                    "irq: i2c1_int={=u32} i2c2_int={=u32} chg_int={=u32} fan_tach={=u32} ina_pv={=u32} ina_warning={=u32} ina_critical={=u32} bms_btp_int_h={=u32} therm_kill_n={=u32}",
                     irq_events.i2c1_int,
                     irq_events.i2c2_int,
                     irq_events.chg_int,
+                    irq_events.fan_tach,
                     irq_events.ina_pv,
                     irq_events.ina_warning,
                     irq_events.ina_critical,
@@ -669,6 +785,14 @@ fn main() -> ! {
         while start.elapsed() < Duration::from_millis(2_000) {
             let irq_events = irq_tracker.take_delta();
             power.tick(&irq_events);
+            if fan_pwm_ready {
+                apply_fan_command(
+                    &mut fan_en,
+                    &_fan_pwm_channel,
+                    &mut applied_fan,
+                    power.fan_command(),
+                );
+            }
             front_panel.update_self_check_snapshot(power.ui_snapshot());
             front_panel.update_bms_activation_state(power.bms_activation_state());
             if let Some(action) = front_panel.tick() {
