@@ -598,23 +598,40 @@ fn main() -> ! {
         },
         None => None,
     };
+    let mut audio_enabled = audio_transfer.is_some();
 
-    audio_manager.trigger(AudioCue::BootStartup);
-    if let Some(audio_transfer) = audio_transfer.as_mut() {
-        match audio_transfer.available() {
-            Ok(available) if available >= 4 => {
-                if audio_transfer
-                    .push_with(|buf| audio_manager.fill(buf))
-                    .is_err()
-                {
-                    defmt::warn!("audio: dma push failed during boot prefill");
+    if audio_enabled {
+        audio_manager.trigger(AudioCue::BootStartup);
+        let mut disable_audio = false;
+        if let Some(audio_transfer) = audio_transfer.as_mut() {
+            match audio_transfer.available() {
+                Ok(available) if available >= 4 => {
+                    if audio_transfer
+                        .push_with(|buf| audio_manager.fill(buf))
+                        .is_err()
+                    {
+                        defmt::warn!(
+                            "audio: dma push failed during boot prefill; disabling runtime audio"
+                        );
+                        disable_audio = true;
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    defmt::warn!(
+                        "audio: dma available failed during boot prefill err={=?}; disabling runtime audio",
+                        err
+                    );
+                    disable_audio = true;
                 }
             }
-            Ok(_) => {}
-            Err(err) => defmt::warn!(
-                "audio: dma available failed during boot prefill err={=?}",
-                err
-            ),
+        } else {
+            disable_audio = true;
+        }
+        if disable_audio {
+            audio_enabled = false;
+            audio_transfer = None;
+            audio_manager.stop();
         }
     }
 
@@ -634,22 +651,39 @@ fn main() -> ! {
         BMS_BOOT_DIAG_AUTO_VALIDATE,
         |_, snapshot| {
             front_panel.update_self_check_snapshot(snapshot);
-            let now = Instant::now();
-            audio_manager.tick(now);
-            if let Some(audio_transfer) = audio_transfer.as_mut() {
-                match audio_transfer.available() {
-                    Ok(available) if available >= 4 => {
-                        if audio_transfer
-                            .push_with(|buf| audio_manager.fill(buf))
-                            .is_err()
-                        {
-                            defmt::warn!("audio: dma push failed during self-test");
+            if audio_enabled {
+                let now = Instant::now();
+                audio_manager.tick(now);
+                let mut disable_audio = false;
+                if let Some(audio_transfer) = audio_transfer.as_mut() {
+                    match audio_transfer.available() {
+                        Ok(available) if available >= 4 => {
+                            if audio_transfer
+                                .push_with(|buf| audio_manager.fill(buf))
+                                .is_err()
+                            {
+                                defmt::warn!(
+                                    "audio: dma push failed during self-test; disabling runtime audio"
+                                );
+                                disable_audio = true;
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            defmt::warn!(
+                                "audio: dma available failed during self-test err={=?}; disabling runtime audio",
+                                err
+                            );
+                            disable_audio = true;
                         }
                     }
-                    Ok(_) => {}
-                    Err(err) => {
-                        defmt::warn!("audio: dma available failed during self-test err={=?}", err)
-                    }
+                } else {
+                    disable_audio = true;
+                }
+                if disable_audio {
+                    audio_enabled = false;
+                    audio_transfer = None;
+                    audio_manager.stop();
                 }
             }
         },
@@ -703,13 +737,15 @@ fn main() -> ! {
     front_panel.update_self_check_snapshot(power.ui_snapshot());
     front_panel.update_bms_activation_state(power.bms_activation_state());
 
-    sync_runtime_audio(
-        &mut audio_manager,
-        Instant::now(),
-        power.audio_signals(),
-        power.take_audio_edges(),
-    );
-    audio_manager.tick(Instant::now());
+    if audio_enabled {
+        sync_runtime_audio(
+            &mut audio_manager,
+            Instant::now(),
+            power.audio_signals(),
+            power.take_audio_edges(),
+        );
+        audio_manager.tick(Instant::now());
+    }
 
     let mut irq_tracker = irq::IrqTracker::new();
     let mut last_irq_log_at: Option<Instant> = None;
@@ -721,26 +757,43 @@ fn main() -> ! {
             let irq_events = irq_tracker.take_delta();
             power.tick(&irq_events);
             let now = Instant::now();
-            sync_runtime_audio(
-                &mut audio_manager,
-                now,
-                power.audio_signals(),
-                power.take_audio_edges(),
-            );
-            audio_manager.tick(now);
+            if audio_enabled {
+                sync_runtime_audio(
+                    &mut audio_manager,
+                    now,
+                    power.audio_signals(),
+                    power.take_audio_edges(),
+                );
+                audio_manager.tick(now);
 
-            if let Some(audio_transfer) = audio_transfer.as_mut() {
-                match audio_transfer.available() {
-                    Ok(available) if available >= 4 => {
-                        if audio_transfer
-                            .push_with(|buf| audio_manager.fill(buf))
-                            .is_err()
-                        {
-                            defmt::warn!("audio: dma push failed");
+                let mut disable_audio = false;
+                if let Some(audio_transfer) = audio_transfer.as_mut() {
+                    match audio_transfer.available() {
+                        Ok(available) if available >= 4 => {
+                            if audio_transfer
+                                .push_with(|buf| audio_manager.fill(buf))
+                                .is_err()
+                            {
+                                defmt::warn!("audio: dma push failed; disabling runtime audio");
+                                disable_audio = true;
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            defmt::warn!(
+                                "audio: dma available failed err={=?}; disabling runtime audio",
+                                err
+                            );
+                            disable_audio = true;
                         }
                     }
-                    Ok(_) => {}
-                    Err(err) => defmt::warn!("audio: dma available failed err={=?}", err),
+                } else {
+                    disable_audio = true;
+                }
+                if disable_audio {
+                    audio_enabled = false;
+                    audio_transfer = None;
+                    audio_manager.stop();
                 }
             }
 

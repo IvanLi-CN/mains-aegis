@@ -84,6 +84,7 @@
 - 主固件上电后只请求一次 `boot_startup`，允许在自检期间开始播放且不阻塞自检，不再出现 6 段 demo playlist 的阻塞播放与对应日志序列。
 - 主循环期间 power/front-panel tick 节奏保持可用，音频服务每轮并入调度而不独占流程。
 - 若 I2S / DMA 音频初始化失败，主固件必须记录告警并继续进入主循环；音频链路允许降级为静默，但不得因音频 bring-up 失败而 panic。
+- 若运行期 DMA `available()` / `push_with()` 连续失败，主固件必须关闭运行时音频调度并静默降级；不得让 cue 在无 DMA 消费者时停留在“假播放”状态。
 - BMS 激活 / isolation 窗口期间，运行时音效快照仍需持续刷新；激活流程可以短路主循环中的其他动作，但不能让 cue 状态冻结。
 - 调度语义固定为：
   - `status` -> `one_shot`
@@ -114,6 +115,7 @@
 
 - 主固件已移除阻塞式 demo playlist，改为在主循环内常驻调度共享 `AudioManager`。
 - 主固件的 I2S / DMA 音频初始化已改为 best-effort；初始化失败时只记录告警并静默降级，不阻断自检与主循环启动。
+- 运行期若 DMA refill 持续报错，主固件会关闭音频调度并清空队列，避免 cue 在无消费者时永久卡住。
 - 共享播放核心已落到 `firmware/src/audio.rs`，统一 15 组 cue、优先级、WAV 解析/重采样、DMA `fill()` 与播放状态接口。
 - Warning cue 的 loop state 只在状态边沿变化时重置，steady-state 轮询期间继续保持 `interval_loop(2000ms)` 节流。
 - Active loop cue 被更高优先级 cue 抢占后会回灌待播队列，避免 warning/error loop 在抢占场景下丢失“首次恢复播放”机会。
@@ -151,3 +153,4 @@
 - 2026-03-13: merge-proof fix，修正 `mains_absent_dc` 在电池冷启动时的误报，并把 BMS protection / PF seed 接入运行时 `battery_protection`。
 - 2026-03-13: merge-proof fix，缩短 DMA ring 并把运行时 cue 同步提前到 DMA refill 之前，降低高优先级告警的实际播报延迟；同时让 `mains_absent_dc` 跨 charger `Unknown` 抖动保持激活态。
 - 2026-03-13: merge-proof fix，给运行时 BMS 建链增加 sticky presence，避免激活后掉线时 `module_fault` 被启动快照门控吞掉。
+- 2026-03-13: merge-proof fix，补齐运行期 DMA 故障后的静默降级路径，避免 `AudioManager` 在无 DMA 消费者时卡在假播放状态。
