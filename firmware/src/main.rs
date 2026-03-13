@@ -65,6 +65,8 @@ const TMP112_OUT_A_ADDR: u8 = 0x48;
 const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 50 * 16;
 const TMP112_TLOW_C_X16: i16 = 40 * 16;
+// Keep the DMA ring short enough that runtime preemption remains audible.
+const AUDIO_DMA_BUFFER_BYTES: usize = 4 * 4092;
 
 fn spin_delay(wait: Duration) {
     let start = Instant::now();
@@ -557,7 +559,8 @@ fn main() -> ! {
         ));
     }
 
-    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 16 * 4092);
+    let (_, _, tx_buffer, tx_descriptors) =
+        esp_hal::dma_circular_buffers!(0, AUDIO_DMA_BUFFER_BYTES);
     let mut audio_manager = AudioManager::new();
     let mut i2s_tx = match I2s::new(
         i2s0,
@@ -715,6 +718,17 @@ fn main() -> ! {
         defmt::info!("esp: heartbeat");
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(2_000) {
+            let irq_events = irq_tracker.take_delta();
+            power.tick(&irq_events);
+            let now = Instant::now();
+            sync_runtime_audio(
+                &mut audio_manager,
+                now,
+                power.audio_signals(),
+                power.take_audio_edges(),
+            );
+            audio_manager.tick(now);
+
             if let Some(audio_transfer) = audio_transfer.as_mut() {
                 match audio_transfer.available() {
                     Ok(available) if available >= 4 => {
@@ -729,17 +743,6 @@ fn main() -> ! {
                     Err(err) => defmt::warn!("audio: dma available failed err={=?}", err),
                 }
             }
-
-            let irq_events = irq_tracker.take_delta();
-            power.tick(&irq_events);
-            let now = Instant::now();
-            sync_runtime_audio(
-                &mut audio_manager,
-                now,
-                power.audio_signals(),
-                power.take_audio_edges(),
-            );
-            audio_manager.tick(now);
 
             front_panel.update_self_check_snapshot(power.ui_snapshot());
             front_panel.update_bms_activation_state(power.bms_activation_state());
@@ -799,9 +802,14 @@ fn sync_runtime_audio(
     ) {
         audio_manager.trigger(AudioCue::ChargeCompleted);
     }
-    let mains_absent_active = signals.mains_present == Some(false)
-        && (edges.mains_present_changed == Some(false)
-            || audio_manager.is_cue_active(AudioCue::MainsAbsentDc));
+    let mains_absent_active = match signals.mains_present {
+        Some(false) => {
+            edges.mains_present_changed == Some(false)
+                || audio_manager.is_cue_active(AudioCue::MainsAbsentDc)
+        }
+        None => audio_manager.is_cue_active(AudioCue::MainsAbsentDc),
+        Some(true) => false,
+    };
 
     audio_manager.set_cue_active(AudioCue::MainsAbsentDc, mains_absent_active, now);
     audio_manager.set_cue_active(AudioCue::HighStress, signals.thermal_stress, now);

@@ -121,9 +121,11 @@
 - `PowerManager` 已输出运行时音效快照与边沿接口，主固件不再依赖 UI snapshot 差分来判定业务音效。
 - BMS 激活 / isolation 路径上的 early-return 现在也会刷新音效快照，避免运行时 cue 在激活窗口内冻结。
 - `mains_absent_dc` 已区分“初始无市电”与“已知状态之间掉电边沿”，避免电池冷启动时误报一次市电丢失告警。
+- `mains_absent_dc` 在 charger 通信临时退回 `Unknown` 期间会保留已激活 loop；只有明确恢复到 `Some(true)` 才停播，避免断电告警在链路抖动后永久静默。
 - `high_stress` 运行时信号已并入 TMP112 `TLOW` 条件；即使 charger 未上报热状态，只要实际温度越过 `TLOW` 且未触发停机，仍会触发该 cue。
 - BMS protection / permanent-failure 状态已在自检结果中种子化，进入主循环前即可驱动 `battery_protection` 的首次调度。
 - TPS OVP/OCP runtime state 已细化为按通道持有；只有成功读取到某路 TPS `STATUS` 时才会覆盖该路 fault seed，未读到的通道继续保留自检/上次有效观测结果。
+- 主循环现在会先完成 power/audio 状态同步，再向 DMA ring 推入下一批 PCM 数据，并把 DMA ring 缩短到约 0.5 秒缓存，降低高优先级 cue 的实际听感抢占延迟。
 - `shutdown_mode_entered` 与 `io_over_power` 继续保持 dormant，并在主固件中明确不触发。
 
 ## 验证记录
@@ -146,3 +148,4 @@
 - 2026-03-13: merge-proof fix，补齐 I2S/DMA 初始化失败的静默降级路径、抢占后 active loop cue 的立即恢复语义，以及 TMP112 `TLOW` 驱动的 `high_stress` 触发。
 - 2026-03-13: merge-proof fix，补齐 BMS 激活 / isolation 窗口内的音效快照刷新，并把 TPS OVP/OCP seed 改为按通道保留、按成功读回覆盖。
 - 2026-03-13: merge-proof fix，修正 `mains_absent_dc` 在电池冷启动时的误报，并把 BMS protection / PF seed 接入运行时 `battery_protection`。
+- 2026-03-13: merge-proof fix，缩短 DMA ring 并把运行时 cue 同步提前到 DMA refill 之前，降低高优先级告警的实际播报延迟；同时让 `mains_absent_dc` 跨 charger `Unknown` 抖动保持激活态。
