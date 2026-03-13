@@ -130,7 +130,7 @@
 - `high_stress` 运行时信号已并入 TMP112 `TLOW` 条件；即使 charger 未上报热状态，只要实际温度越过 `TLOW` 且未触发停机，仍会触发该 cue。
 - BMS protection / permanent-failure 状态已在自检结果中种子化，进入主循环前即可驱动 `battery_protection` 的首次调度。
 - TPS OVP/OCP runtime state 已细化为按通道持有；只有成功读取到某路 TPS `STATUS` 时才会覆盖该路 fault seed，未读到的通道继续保留自检/上次有效观测结果。
-- 主循环现在会先完成 power/audio 状态同步，再向 DMA ring 推入下一批 PCM 数据；本轮 hotfix 把 DMA ring 容量恢复到约 2.0 秒，但仅在最早期 boot prefill 保留约 1.0 秒余量；进入自检回调后收敛到约 0.9 秒水位，进入运行期后收敛到约 0.5 秒水位，兼顾 bring-up 稳定与高优先级 cue 听感延迟。
+- 主循环现在会先完成 power/audio 状态同步，再向 DMA ring 推入下一批 PCM 数据；本轮 hotfix 把 DMA ring 容量恢复到约 2.0 秒，但仅在最早期 boot prefill 保留约 1.0 秒余量；进入自检回调后收敛到约 0.9 秒水位，运行期保持约 1.3 秒水位，并在 UI tick / 重绘后立即补一次 DMA，避免打开 BMS 激活弹层等整帧重绘场景把 runtime DMA ring 拖空后永久静音。
 - 对开机即缺失的 BMS，只要自检已判定 “missing/err” 且当前板级仍存在 charger path 或 BMS 输出恢复门控，运行时音频快照就必须在首次刷新时携带 `module_fault=true`，避免故障音被 `runtime_seen` 门控吞掉。
 - 运行时后接入的 BMS 现在会把“曾成功建链”状态保留下来；即便后续轮询掉线，`module_fault` 也不会再被启动快照门控吞掉。
 - `shutdown_mode_entered` 与 `io_over_power` 继续保持 dormant，并在主固件中明确不触发。
@@ -161,3 +161,4 @@
 - 2026-03-13: merge-proof fix，补齐运行期 DMA 故障后的静默降级路径，避免 `AudioManager` 在无 DMA 消费者时卡在假播放状态。
 - 2026-03-13: hotfix，恢复约 2.0 秒 DMA ring 容量，并把 boot prefill / 自检 / 运行期 refill 收敛到分阶段受控水位，修复开始音截断与后续告警静音回归，同时避免高优先级 cue 再次被长缓存拖慢。
 - 2026-03-13: hotfix，补齐“开机已判定 BMS 缺失/错误且 charger path 仍存在”时的 `module_fault` 种子化，避免开机起即缺失的 BMS 被 runtime-seen 门控静默掉故障音。
+- 2026-03-13: hotfix，运行期水位进一步上调到约 1.3 秒，并在 UI tick 后立即补一次 DMA，修复打开 BMS 激活弹层等重型面板重绘时 runtime DMA `Late` 后整条音频服务被永久关闭的问题。

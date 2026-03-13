@@ -69,7 +69,9 @@ const TMP112_TLOW_C_X16: i16 = 40 * 16;
 const AUDIO_DMA_BUFFER_BYTES: usize = 16 * 4092;
 const AUDIO_BOOT_WATERMARK_BYTES: usize = 8 * 4092;
 const AUDIO_SELF_TEST_WATERMARK_BYTES: usize = 7 * 4092;
-const AUDIO_RUNTIME_WATERMARK_BYTES: usize = 4 * 4092;
+// Opening modal overlays can stall the main loop close to a second while the
+// panel redraw completes, so runtime audio needs a larger steady-state buffer.
+const AUDIO_RUNTIME_WATERMARK_BYTES: usize = 10 * 4092;
 
 fn spin_delay(wait: Duration) {
     let start = Instant::now();
@@ -784,7 +786,6 @@ fn main() -> ! {
                     power.take_audio_edges(),
                 );
                 audio_manager.tick(now);
-
                 let mut disable_audio = false;
                 if let Some(audio_transfer) = audio_transfer.as_mut() {
                     match audio_transfer.available() {
@@ -834,6 +835,51 @@ fn main() -> ! {
                         power.clear_bms_activation_state();
                         front_panel.update_bms_activation_state(power.bms_activation_state());
                     }
+                }
+            }
+            if audio_enabled {
+                let now = Instant::now();
+                sync_runtime_audio(
+                    &mut audio_manager,
+                    now,
+                    power.audio_signals(),
+                    power.take_audio_edges(),
+                );
+                audio_manager.tick(now);
+                let mut disable_audio = false;
+                if let Some(audio_transfer) = audio_transfer.as_mut() {
+                    match audio_transfer.available() {
+                        Ok(available) if available >= 4 => {
+                            let budget =
+                                audio_refill_budget(available, AUDIO_RUNTIME_WATERMARK_BYTES);
+                            if budget >= 4
+                                && audio_transfer
+                                    .push_with(|buf| {
+                                        let len = budget.min(buf.len()) & !0x3;
+                                        audio_manager.fill(&mut buf[..len])
+                                    })
+                                    .is_err()
+                            {
+                                defmt::warn!("audio: dma push failed; disabling runtime audio");
+                                disable_audio = true;
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(err) => {
+                            defmt::warn!(
+                                "audio: dma available failed err={=?}; disabling runtime audio",
+                                err
+                            );
+                            disable_audio = true;
+                        }
+                    }
+                } else {
+                    disable_audio = true;
+                }
+                if disable_audio {
+                    audio_enabled = false;
+                    audio_transfer = None;
+                    audio_manager.stop();
                 }
             }
             if irq_events.any()
