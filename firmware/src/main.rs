@@ -557,6 +557,42 @@ fn main() -> ! {
         ));
     }
 
+    let i2s = I2s::new(
+        i2s0,
+        dma_channel,
+        I2sConfig::new_tdm_philips()
+            .with_sample_rate(Rate::from_hz(PLAYBACK_SAMPLE_RATE_HZ))
+            .with_data_format(DataFormat::Data16Channel16)
+            .with_channels(Channels::STEREO),
+    )
+    .unwrap();
+    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 16 * 4092);
+    let mut i2s_tx = i2s
+        .i2s_tx
+        .with_bclk(audio_bclk)
+        .with_ws(audio_ws)
+        .with_dout(audio_dout)
+        .build(tx_descriptors);
+    let mut audio_transfer = i2s_tx.write_dma_circular(&tx_buffer).unwrap();
+    let mut audio_manager = AudioManager::new();
+
+    audio_manager.trigger(AudioCue::BootStartup);
+    match audio_transfer.available() {
+        Ok(available) if available >= 4 => {
+            if audio_transfer
+                .push_with(|buf| audio_manager.fill(buf))
+                .is_err()
+            {
+                defmt::warn!("audio: dma push failed during boot prefill");
+            }
+        }
+        Ok(_) => {}
+        Err(err) => defmt::warn!(
+            "audio: dma available failed during boot prefill err={=?}",
+            err
+        ),
+    }
+
     let self_test = output::boot_self_test_with_report(
         &mut i2c,
         DEFAULT_ENABLED_OUTPUTS,
@@ -571,7 +607,25 @@ fn main() -> ! {
         FORCE_MIN_CHARGE,
         BMS_BOOT_DIAG_AUTO_VALIDATE,
         BMS_BOOT_DIAG_AUTO_VALIDATE,
-        |_, snapshot| front_panel.update_self_check_snapshot(snapshot),
+        |_, snapshot| {
+            front_panel.update_self_check_snapshot(snapshot);
+            let now = Instant::now();
+            audio_manager.tick(now);
+            match audio_transfer.available() {
+                Ok(available) if available >= 4 => {
+                    if audio_transfer
+                        .push_with(|buf| audio_manager.fill(buf))
+                        .is_err()
+                    {
+                        defmt::warn!("audio: dma push failed during self-test");
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    defmt::warn!("audio: dma available failed during self-test err={=?}", err)
+                }
+            }
+        },
     );
 
     let cfg = output::Config {
@@ -613,26 +667,6 @@ fn main() -> ! {
     front_panel.update_self_check_snapshot(power.ui_snapshot());
     front_panel.update_bms_activation_state(power.bms_activation_state());
 
-    let i2s = I2s::new(
-        i2s0,
-        dma_channel,
-        I2sConfig::new_tdm_philips()
-            .with_sample_rate(Rate::from_hz(PLAYBACK_SAMPLE_RATE_HZ))
-            .with_data_format(DataFormat::Data16Channel16)
-            .with_channels(Channels::STEREO),
-    )
-    .unwrap();
-    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 16 * 4092);
-    let mut i2s_tx = i2s
-        .i2s_tx
-        .with_bclk(audio_bclk)
-        .with_ws(audio_ws)
-        .with_dout(audio_dout)
-        .build(tx_descriptors);
-    let mut audio_transfer = i2s_tx.write_dma_circular(&tx_buffer).unwrap();
-    let mut audio_manager = AudioManager::new();
-
-    audio_manager.trigger(AudioCue::BootStartup);
     sync_runtime_audio(
         &mut audio_manager,
         Instant::now(),
