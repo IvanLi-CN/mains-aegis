@@ -557,40 +557,62 @@ fn main() -> ! {
         ));
     }
 
-    let i2s = I2s::new(
+    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 16 * 4092);
+    let mut audio_manager = AudioManager::new();
+    let mut i2s_tx = match I2s::new(
         i2s0,
         dma_channel,
         I2sConfig::new_tdm_philips()
             .with_sample_rate(Rate::from_hz(PLAYBACK_SAMPLE_RATE_HZ))
             .with_data_format(DataFormat::Data16Channel16)
             .with_channels(Channels::STEREO),
-    )
-    .unwrap();
-    let (_, _, tx_buffer, tx_descriptors) = esp_hal::dma_circular_buffers!(0, 16 * 4092);
-    let mut i2s_tx = i2s
-        .i2s_tx
-        .with_bclk(audio_bclk)
-        .with_ws(audio_ws)
-        .with_dout(audio_dout)
-        .build(tx_descriptors);
-    let mut audio_transfer = i2s_tx.write_dma_circular(&tx_buffer).unwrap();
-    let mut audio_manager = AudioManager::new();
+    ) {
+        Ok(i2s) => Some(
+            i2s.i2s_tx
+                .with_bclk(audio_bclk)
+                .with_ws(audio_ws)
+                .with_dout(audio_dout)
+                .build(tx_descriptors),
+        ),
+        Err(err) => {
+            defmt::warn!(
+                "audio: disable runtime audio because i2s init failed err={=?}",
+                err
+            );
+            None
+        }
+    };
+    let mut audio_transfer = match i2s_tx.as_mut() {
+        Some(i2s_tx) => match i2s_tx.write_dma_circular(&tx_buffer) {
+            Ok(transfer) => Some(transfer),
+            Err(err) => {
+                defmt::warn!(
+                    "audio: disable runtime audio because dma init failed err={=?}",
+                    err
+                );
+                None
+            }
+        },
+        None => None,
+    };
 
     audio_manager.trigger(AudioCue::BootStartup);
-    match audio_transfer.available() {
-        Ok(available) if available >= 4 => {
-            if audio_transfer
-                .push_with(|buf| audio_manager.fill(buf))
-                .is_err()
-            {
-                defmt::warn!("audio: dma push failed during boot prefill");
+    if let Some(audio_transfer) = audio_transfer.as_mut() {
+        match audio_transfer.available() {
+            Ok(available) if available >= 4 => {
+                if audio_transfer
+                    .push_with(|buf| audio_manager.fill(buf))
+                    .is_err()
+                {
+                    defmt::warn!("audio: dma push failed during boot prefill");
+                }
             }
+            Ok(_) => {}
+            Err(err) => defmt::warn!(
+                "audio: dma available failed during boot prefill err={=?}",
+                err
+            ),
         }
-        Ok(_) => {}
-        Err(err) => defmt::warn!(
-            "audio: dma available failed during boot prefill err={=?}",
-            err
-        ),
     }
 
     let self_test = output::boot_self_test_with_report(
@@ -611,18 +633,20 @@ fn main() -> ! {
             front_panel.update_self_check_snapshot(snapshot);
             let now = Instant::now();
             audio_manager.tick(now);
-            match audio_transfer.available() {
-                Ok(available) if available >= 4 => {
-                    if audio_transfer
-                        .push_with(|buf| audio_manager.fill(buf))
-                        .is_err()
-                    {
-                        defmt::warn!("audio: dma push failed during self-test");
+            if let Some(audio_transfer) = audio_transfer.as_mut() {
+                match audio_transfer.available() {
+                    Ok(available) if available >= 4 => {
+                        if audio_transfer
+                            .push_with(|buf| audio_manager.fill(buf))
+                            .is_err()
+                        {
+                            defmt::warn!("audio: dma push failed during self-test");
+                        }
                     }
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    defmt::warn!("audio: dma available failed during self-test err={=?}", err)
+                    Ok(_) => {}
+                    Err(err) => {
+                        defmt::warn!("audio: dma available failed during self-test err={=?}", err)
+                    }
                 }
             }
         },
@@ -688,17 +712,19 @@ fn main() -> ! {
         defmt::info!("esp: heartbeat");
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(2_000) {
-            match audio_transfer.available() {
-                Ok(available) if available >= 4 => {
-                    if audio_transfer
-                        .push_with(|buf| audio_manager.fill(buf))
-                        .is_err()
-                    {
-                        defmt::warn!("audio: dma push failed");
+            if let Some(audio_transfer) = audio_transfer.as_mut() {
+                match audio_transfer.available() {
+                    Ok(available) if available >= 4 => {
+                        if audio_transfer
+                            .push_with(|buf| audio_manager.fill(buf))
+                            .is_err()
+                        {
+                            defmt::warn!("audio: dma push failed");
+                        }
                     }
+                    Ok(_) => {}
+                    Err(err) => defmt::warn!("audio: dma available failed err={=?}", err),
                 }
-                Ok(_) => {}
-                Err(err) => defmt::warn!("audio: dma available failed err={=?}", err),
             }
 
             let irq_events = irq_tracker.take_delta();

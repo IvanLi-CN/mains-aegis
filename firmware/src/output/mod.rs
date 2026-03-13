@@ -4259,6 +4259,22 @@ where
             .charger_audio
             .input_present
             .or(self.ui_snapshot.fusb302_vbus_present);
+        let tmp_a_hot = self
+            .cfg
+            .detected_tmp_outputs
+            .is_enabled(OutputChannel::OutA)
+            && self
+                .ui_snapshot
+                .tmp_a_c
+                .is_some_and(|temp_c| temp_c.saturating_mul(16) >= self.cfg.tmp112_tlow_c_x16);
+        let tmp_b_hot = self
+            .cfg
+            .detected_tmp_outputs
+            .is_enabled(OutputChannel::OutB)
+            && self
+                .ui_snapshot
+                .tmp_b_c
+                .is_some_and(|temp_c| temp_c.saturating_mul(16) >= self.cfg.tmp112_tlow_c_x16);
         let battery_low = match self.bms_audio.rca_alarm {
             Some(true) => match mains_present {
                 Some(true) => AudioBatteryLowState::WithMains,
@@ -4296,7 +4312,7 @@ where
         let snapshot = AudioSignalSnapshot {
             mains_present,
             charge_phase: self.charger_audio.phase,
-            thermal_stress: self.charger_audio.thermal_stress,
+            thermal_stress: self.charger_audio.thermal_stress || tmp_a_hot || tmp_b_hot,
             battery_low,
             battery_protection: self.bms_audio.protection_active,
             module_fault,

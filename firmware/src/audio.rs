@@ -199,6 +199,7 @@ impl AudioManager {
     pub fn request(&mut self, request: AudioRequest) {
         if let Some(current) = self.current {
             if request.priority > current.request.priority {
+                self.requeue_preempted_loop(current.request);
                 self.preempted = self.preempted.saturating_add(1);
                 self.current = Some(Self::start_playback(request));
                 return;
@@ -436,6 +437,21 @@ impl AudioManager {
         self.queue_head = 0;
         self.queue_len = kept_len;
     }
+
+    fn requeue_preempted_loop(&mut self, request: AudioRequest) {
+        if matches!(playback_mode_for_cue(request.cue), CuePlaybackMode::OneShot) {
+            return;
+        }
+        if !self.loops[request.cue.index()].active {
+            return;
+        }
+        if self.has_queued_or_current(request.cue) {
+            return;
+        }
+        if !self.enqueue(request) {
+            self.dropped = self.dropped.saturating_add(1);
+        }
+    }
 }
 
 impl Default for AudioManager {
@@ -480,6 +496,27 @@ mod tests {
 
         manager.tick(due);
         assert_eq!(manager.status().current, Some(cue));
+    }
+
+    #[test]
+    fn preempted_loop_cue_resumes_without_waiting_for_next_interval() {
+        let warning = AudioCue::HighStress;
+        let error = AudioCue::ModuleFault;
+        let now = Instant::EPOCH;
+
+        let mut manager = AudioManager::new();
+        manager.set_cue_active(warning, true, now);
+        manager.tick(now);
+        assert_eq!(manager.status().current, Some(warning));
+
+        manager.set_cue_active(error, true, now);
+        manager.tick(now);
+        assert_eq!(manager.status().current, Some(error));
+        assert!(manager.has_queued_or_current(warning));
+
+        manager.set_cue_active(error, false, now);
+        manager.tick(now);
+        assert_eq!(manager.status().current, Some(warning));
     }
 }
 
