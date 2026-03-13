@@ -65,12 +65,20 @@ const TMP112_OUT_A_ADDR: u8 = 0x48;
 const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 50 * 16;
 const TMP112_TLOW_C_X16: i16 = 40 * 16;
-// Keep the DMA ring short enough that runtime preemption remains audible.
-const AUDIO_DMA_BUFFER_BYTES: usize = 4 * 4092;
+// Keep enough capacity for bring-up stalls, but cap refill watermarks so runtime cues stay snappy.
+const AUDIO_DMA_BUFFER_BYTES: usize = 16 * 4092;
+const AUDIO_BOOT_WATERMARK_BYTES: usize = 8 * 4092;
+const AUDIO_SELF_TEST_WATERMARK_BYTES: usize = 7 * 4092;
+const AUDIO_RUNTIME_WATERMARK_BYTES: usize = 4 * 4092;
 
 fn spin_delay(wait: Duration) {
     let start = Instant::now();
     while start.elapsed() < wait {}
+}
+
+fn audio_refill_budget(available: usize, target_buffered_bytes: usize) -> usize {
+    let buffered = AUDIO_DMA_BUFFER_BYTES.saturating_sub(available);
+    target_buffered_bytes.saturating_sub(buffered) & !0x3
 }
 
 fn prepare_bitbang_pin(pin: &mut Flex<'_>) {
@@ -606,9 +614,14 @@ fn main() -> ! {
         if let Some(audio_transfer) = audio_transfer.as_mut() {
             match audio_transfer.available() {
                 Ok(available) if available >= 4 => {
-                    if audio_transfer
-                        .push_with(|buf| audio_manager.fill(buf))
-                        .is_err()
+                    let budget = audio_refill_budget(available, AUDIO_BOOT_WATERMARK_BYTES);
+                    if budget >= 4
+                        && audio_transfer
+                            .push_with(|buf| {
+                                let len = budget.min(buf.len()) & !0x3;
+                                audio_manager.fill(&mut buf[..len])
+                            })
+                            .is_err()
                     {
                         defmt::warn!(
                             "audio: dma push failed during boot prefill; disabling runtime audio"
@@ -658,9 +671,15 @@ fn main() -> ! {
                 if let Some(audio_transfer) = audio_transfer.as_mut() {
                     match audio_transfer.available() {
                         Ok(available) if available >= 4 => {
-                            if audio_transfer
-                                .push_with(|buf| audio_manager.fill(buf))
-                                .is_err()
+                            let budget =
+                                audio_refill_budget(available, AUDIO_SELF_TEST_WATERMARK_BYTES);
+                            if budget >= 4
+                                && audio_transfer
+                                    .push_with(|buf| {
+                                        let len = budget.min(buf.len()) & !0x3;
+                                        audio_manager.fill(&mut buf[..len])
+                                    })
+                                    .is_err()
                             {
                                 defmt::warn!(
                                     "audio: dma push failed during self-test; disabling runtime audio"
@@ -770,9 +789,15 @@ fn main() -> ! {
                 if let Some(audio_transfer) = audio_transfer.as_mut() {
                     match audio_transfer.available() {
                         Ok(available) if available >= 4 => {
-                            if audio_transfer
-                                .push_with(|buf| audio_manager.fill(buf))
-                                .is_err()
+                            let budget =
+                                audio_refill_budget(available, AUDIO_RUNTIME_WATERMARK_BYTES);
+                            if budget >= 4
+                                && audio_transfer
+                                    .push_with(|buf| {
+                                        let len = budget.min(buf.len()) & !0x3;
+                                        audio_manager.fill(&mut buf[..len])
+                                    })
+                                    .is_err()
                             {
                                 defmt::warn!("audio: dma push failed; disabling runtime audio");
                                 disable_audio = true;

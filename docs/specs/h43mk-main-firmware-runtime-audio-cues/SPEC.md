@@ -84,6 +84,8 @@
 - 主固件上电后只请求一次 `boot_startup`，允许在自检期间开始播放且不阻塞自检，不再出现 6 段 demo playlist 的阻塞播放与对应日志序列。
 - 主循环期间 power/front-panel tick 节奏保持可用，音频服务每轮并入调度而不独占流程。
 - 若 I2S / DMA 音频初始化失败，主固件必须记录告警并继续进入主循环；音频链路允许降级为静默，但不得因音频 bring-up 失败而 panic。
+- 启动 / 自检阶段不得因 DMA underrun 打出 `audio: dma available failed during self-test err=Late`；`boot_startup` 听感必须连续，不得出现明显截断后整机永久静音。
+- DMA ring 容量可大于运行期常驻水位，但启动 / 自检与运行期都必须使用受控 refill 水位，避免把 `boot_startup` 或静音一次性灌满整条 ring，导致高优先级 cue 听感延迟失控。
 - 若运行期 DMA `available()` / `push_with()` 连续失败，主固件必须关闭运行时音频调度并静默降级；不得让 cue 在无 DMA 消费者时停留在“假播放”状态。
 - BMS 激活 / isolation 窗口期间，运行时音效快照仍需持续刷新；激活流程可以短路主循环中的其他动作，但不能让 cue 状态冻结。
 - 调度语义固定为：
@@ -127,7 +129,7 @@
 - `high_stress` 运行时信号已并入 TMP112 `TLOW` 条件；即使 charger 未上报热状态，只要实际温度越过 `TLOW` 且未触发停机，仍会触发该 cue。
 - BMS protection / permanent-failure 状态已在自检结果中种子化，进入主循环前即可驱动 `battery_protection` 的首次调度。
 - TPS OVP/OCP runtime state 已细化为按通道持有；只有成功读取到某路 TPS `STATUS` 时才会覆盖该路 fault seed，未读到的通道继续保留自检/上次有效观测结果。
-- 主循环现在会先完成 power/audio 状态同步，再向 DMA ring 推入下一批 PCM 数据，并把 DMA ring 缩短到约 0.5 秒缓存，降低高优先级 cue 的实际听感抢占延迟。
+- 主循环现在会先完成 power/audio 状态同步，再向 DMA ring 推入下一批 PCM 数据；本轮 hotfix 把 DMA ring 容量恢复到约 2.0 秒，但仅在最早期 boot prefill 保留约 1.0 秒余量；进入自检回调后收敛到约 0.9 秒水位，进入运行期后收敛到约 0.5 秒水位，兼顾 bring-up 稳定与高优先级 cue 听感延迟。
 - 运行时后接入的 BMS 现在会把“曾成功建链”状态保留下来；即便后续轮询掉线，`module_fault` 也不会再被启动快照门控吞掉。
 - `shutdown_mode_entered` 与 `io_over_power` 继续保持 dormant，并在主固件中明确不触发。
 
@@ -141,6 +143,7 @@
 
 - 当前 worktree 初始化前 `ina3221-async` 与 `tps55288` submodule 为空目录；本轮实现前需要补齐子模块内容后再执行构建验证。
 - 运行时资产继续复用 `firmware/assets/audio/test-fw-cues/*.wav`，不直接从 `docs/audio-cues-preview/**` 读取。
+- 当前 `esp-hal` I2S circular DMA 生命周期未提供无缝重绑 ring 的现成路径；本轮 hotfix 通过“统一大 ring 容量 + 分阶段 refill 水位”消除启动期 underrun，而不是在运行期热切 ring。
 - 当前主固件没有真实 shutdown flow，且没有独立 over-power 状态源，因此对应 cue 必须保持 dormant。
 
 ## 变更记录（Change log）
@@ -154,3 +157,4 @@
 - 2026-03-13: merge-proof fix，缩短 DMA ring 并把运行时 cue 同步提前到 DMA refill 之前，降低高优先级告警的实际播报延迟；同时让 `mains_absent_dc` 跨 charger `Unknown` 抖动保持激活态。
 - 2026-03-13: merge-proof fix，给运行时 BMS 建链增加 sticky presence，避免激活后掉线时 `module_fault` 被启动快照门控吞掉。
 - 2026-03-13: merge-proof fix，补齐运行期 DMA 故障后的静默降级路径，避免 `AudioManager` 在无 DMA 消费者时卡在假播放状态。
+- 2026-03-13: hotfix，恢复约 2.0 秒 DMA ring 容量，并把 boot prefill / 自检 / 运行期 refill 收敛到分阶段受控水位，修复开始音截断与后续告警静音回归，同时避免高优先级 cue 再次被长缓存拖慢。
