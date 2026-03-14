@@ -579,6 +579,24 @@ mod tests {
         assert!(manager.is_cue_active(cue));
         assert_eq!(manager.status().queued, 0);
     }
+
+    #[test]
+    fn continuous_loop_wrap_preserves_resample_remainder() {
+        let mut active = AudioManager::start_playback(default_request(AudioCue::BatteryProtection));
+        active.fade_in_samples_remaining = 0;
+
+        let sample_count = active.pcm.len() / 2;
+        let span_q16 = (sample_count as u64) << 16;
+        let wrapped_idx = 2usize;
+        let wrapped_rem = 63_936u64;
+        let overflow_q16 = span_q16 + ((wrapped_idx as u64) << 16) + wrapped_rem;
+        active.source_pos_q16 = overflow_q16 as u32;
+
+        let sample = next_mono_sample(&mut active).expect("continuous loop should wrap");
+        let base = wrapped_idx * 2;
+        let expected = i16::from_le_bytes([active.pcm[base], active.pcm[base + 1]]);
+        assert_eq!(sample, expected);
+    }
 }
 
 pub const fn default_request(cue: AudioCue) -> AudioRequest {
@@ -666,7 +684,8 @@ fn next_mono_sample(active: &mut ActivePlayback) -> Option<i16> {
             active.source_pos_q16 = (sample_count as u32) << 16;
             return None;
         }
-        active.source_pos_q16 = 0;
+        let sample_span_q16 = (sample_count as u64) << 16;
+        active.source_pos_q16 = ((active.source_pos_q16 as u64) % sample_span_q16) as u32;
     }
     let idx = (active.source_pos_q16 >> 16) as usize;
     let base = idx * 2;

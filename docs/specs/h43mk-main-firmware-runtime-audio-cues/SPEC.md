@@ -182,3 +182,4 @@
 - 2026-03-14: hotfix，运行期 DMA flush 现在会带约 5 ms 的淡出/淡入过渡，降低 cue 切换瞬间的爆音。
 - 2026-03-14: hotfix，`battery_protection` 现在全局高于低电提示音；当保护与低电同时成立时，只保留 `BatteryProtection`，并在日志中明确标记低电提示音被保护音压制。
 - 2026-03-14: hotfix，`continuous_loop` cue 改为在样本末尾无缝回绕，避免 `BatteryProtection` 每约 1 秒重新 `start_playback` 一次而产生额外起音。
+- 2026-03-14: hotfix，`continuous_loop` 的样本回绕现在保留重采样余量，不再在边界重复开头样本或丢掉尾部样本，进一步降低保护音循环接缝感。
