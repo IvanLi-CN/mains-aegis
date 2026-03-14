@@ -4350,7 +4350,7 @@ where
                 .ui_snapshot
                 .tmp_b_c
                 .is_some_and(|temp_c| temp_c.saturating_mul(16) >= self.cfg.tmp112_tlow_c_x16);
-        let battery_low = match self.bms_audio.rca_alarm {
+        let raw_battery_low = match self.bms_audio.rca_alarm {
             Some(true) => match mains_present {
                 Some(true) => AudioBatteryLowState::WithMains,
                 Some(false) => AudioBatteryLowState::NoMains,
@@ -4393,6 +4393,11 @@ where
         } else {
             self.bms_audio.protection_active
         };
+        let battery_low = if battery_protection {
+            AudioBatteryLowState::Inactive
+        } else {
+            raw_battery_low
+        };
         let snapshot = AudioSignalSnapshot {
             mains_present,
             charge_phase: self.charger_audio.phase,
@@ -4431,9 +4436,11 @@ where
         if prev.battery_low != snapshot.battery_low {
             self.audio_events.battery_low_changed = Some(snapshot.battery_low);
             defmt::info!(
-                "audio: battery_low changed old={} new={}",
+                "audio: battery_low changed old={} new={} raw_new={} suppressed_by_battery_protection={=bool}",
                 audio_battery_low_state_name(prev.battery_low),
-                audio_battery_low_state_name(snapshot.battery_low)
+                audio_battery_low_state_name(snapshot.battery_low),
+                audio_battery_low_state_name(raw_battery_low),
+                battery_protection && raw_battery_low != AudioBatteryLowState::Inactive
             );
         }
         if prev.battery_protection != snapshot.battery_protection {
