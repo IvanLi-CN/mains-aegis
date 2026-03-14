@@ -96,6 +96,29 @@ where
     Ok(i16::from_le_bytes(buf))
 }
 
+/// Read the low 16 bits of OperationStatus() from its SMBus block response.
+///
+/// TRM marks 0x54 as an H4/block command, so reading it as a plain word can
+/// return stale or misaligned bytes. We only need the low 16 bits for CHG/DSG
+/// path decoding in the main firmware.
+pub fn read_operation_status_low_u16<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+) -> Result<Option<u16>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let mut buf = [0u8; 5];
+    i2c.write_read(addr, &[cmd::OPERATION_STATUS], &mut buf)?;
+
+    let declared_len = buf[0] as usize;
+    if declared_len < 4 || declared_len > 32 {
+        return Ok(None);
+    }
+
+    Ok(Some(u16::from_le_bytes([buf[1], buf[2]])))
+}
+
 /// Convert Temperature() units (0.1 K) to 0.1 C (i.e., C * 10).
 pub const fn temp_c_x10_from_k_x10(temp_k_x10: u16) -> i32 {
     temp_k_x10 as i32 - 2731
