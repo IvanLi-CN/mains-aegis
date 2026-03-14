@@ -561,6 +561,24 @@ mod tests {
         manager.tick(now);
         assert_eq!(manager.status().current, Some(warning));
     }
+
+    #[test]
+    fn continuous_loop_wraps_without_retrigger() {
+        let cue = AudioCue::BatteryProtection;
+        let now = Instant::EPOCH;
+
+        let mut manager = AudioManager::new();
+        manager.set_cue_active(cue, true, now);
+        manager.tick(now);
+        assert_eq!(manager.status().current, Some(cue));
+
+        let mut buf = [0u8; 65_536];
+        let filled = manager.fill(&mut buf);
+        assert_eq!(filled, buf.len());
+        assert_eq!(manager.status().current, Some(cue));
+        assert!(manager.is_cue_active(cue));
+        assert_eq!(manager.status().queued, 0);
+    }
 }
 
 pub const fn default_request(cue: AudioCue) -> AudioRequest {
@@ -635,11 +653,22 @@ fn pcm_for_cue(cue: AudioCue) -> &'static [u8] {
 
 fn next_mono_sample(active: &mut ActivePlayback) -> Option<i16> {
     let sample_count = active.pcm.len() / 2;
-    let idx = (active.source_pos_q16 >> 16) as usize;
-    if idx >= sample_count {
-        active.source_pos_q16 = (sample_count as u32) << 16;
+    if sample_count == 0 {
         return None;
     }
+    let continuous_loop = matches!(
+        playback_mode_for_cue(active.request.cue),
+        CuePlaybackMode::ContinuousLoop
+    );
+    let idx = (active.source_pos_q16 >> 16) as usize;
+    if idx >= sample_count {
+        if !continuous_loop {
+            active.source_pos_q16 = (sample_count as u32) << 16;
+            return None;
+        }
+        active.source_pos_q16 = 0;
+    }
+    let idx = (active.source_pos_q16 >> 16) as usize;
     let base = idx * 2;
     let lo = active.pcm[base];
     let hi = active.pcm[base + 1];

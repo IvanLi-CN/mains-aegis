@@ -97,6 +97,7 @@
   - 同优先级 `one_shot` 保持 FIFO。
 - 运行时场景正确触发/停播：市电恢复/丢失、充电开始/完成、电池低电（区分有无市电）、高压力进入/退出、模块通信故障进入/恢复、保护/过压/过流进入/清除。
 - 当 `battery_protection` 与低电条件同时成立时，只允许播放 `battery_protection`；`BatteryLowNoMains` / `BatteryLowWithMains` 必须被全局压制，直到保护解除后再按当前 `RCA + mains_present` 状态恢复。
+- `continuous_loop` cue 必须在单段 PCM 末尾无缝回绕，不能每播完 1 段就重新触发一次 `start_playback`；否则错误音会在每轮边界听出额外起音/断点。
 - 通信恢复语义：
   - charger 输入/相位从 unknown 恢复到 known 时，不得伪造 `mains_present_dc`、`charge_started`、`charge_completed`。
   - 冷启动时若 `mains_present == Some(false)`，不得仅凭初始快照就触发 `mains_absent_dc`；该 cue 只能由已知状态之间的掉电边沿首发，随后再按 loop 语义保持。
@@ -140,6 +141,7 @@
 - 当 `module_fault` / `battery_protection` / `battery_low` 发生切换时，运行期必须刷新 DMA ring，清掉已缓冲的旧 cue 采样；否则即使逻辑层已切 cue，扬声器仍可能继续播出上一段错误音并与新 cue 混音。
 - 运行期强制刷新 DMA ring 时，切换边界必须附带短淡出/淡入过渡，避免直接从旧采样硬切到 0 或新 cue 导致 click/pop 爆音。
 - 电池相关音效优先级现在固定为：`BatteryProtection > BatteryLowNoMains/BatteryLowWithMains`；若两者同时为真，运行时音频快照必须把低电状态收敛为 `Inactive`，从源头禁止 warning/error 并发。
+- `BatteryProtection`、`ModuleFault` 等 `continuous_loop` cue 的播放状态必须跨样本尾部保持同一个 active playback，不得通过“播完后重新 request 同一 cue”来续播。
 - 对开机即缺失的 BMS，只要自检已判定 “missing/err” 且当前板级仍存在 charger path 或 BMS 输出恢复门控，运行时音频快照就必须在首次刷新时携带 `module_fault=true`，避免故障音被 `runtime_seen` 门控吞掉。
 - 运行时后接入的 BMS 现在会把“曾成功建链”状态保留下来；即便后续轮询掉线，`module_fault` 也不会再被启动快照门控吞掉。
 - `shutdown_mode_entered` 与 `io_over_power` 继续保持 dormant，并在主固件中明确不触发。
@@ -179,3 +181,4 @@
 - 2026-03-14: hotfix，运行期 cue 发生切换时会重建并清空 DMA ring，避免旧的 `ModuleFault` 采样残留到激活后的 `BatteryLowWithMains` 阶段。
 - 2026-03-14: hotfix，运行期 DMA flush 现在会带约 5 ms 的淡出/淡入过渡，降低 cue 切换瞬间的爆音。
 - 2026-03-14: hotfix，`battery_protection` 现在全局高于低电提示音；当保护与低电同时成立时，只保留 `BatteryProtection`，并在日志中明确标记低电提示音被保护音压制。
+- 2026-03-14: hotfix，`continuous_loop` cue 改为在样本末尾无缝回绕，避免 `BatteryProtection` 每约 1 秒重新 `start_playback` 一次而产生额外起音。
