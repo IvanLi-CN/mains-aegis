@@ -92,7 +92,17 @@ pub mod cmd {
     pub const BATTERY_STATUS: u8 = 0x16;
     pub const MANUFACTURER_DATA: u8 = 0x23;
     pub const MANUFACTURER_BLOCK_ACCESS: u8 = 0x44;
+    pub const SAFETY_ALERT: u8 = 0x50;
+    pub const SAFETY_STATUS: u8 = 0x51;
     pub const PF_STATUS: u8 = 0x53;
+    pub const OPERATION_STATUS: u8 = 0x54;
+    pub const CHARGING_STATUS: u8 = 0x55;
+    pub const GAUGING_STATUS: u8 = 0x56;
+    pub const MANUFACTURING_STATUS: u8 = 0x57;
+    pub const AFE_REGISTER: u8 = 0x58;
+    pub const LIFETIME_DATA_BLOCK_1: u8 = 0x60;
+    pub const DA_STATUS_1: u8 = 0x71;
+    pub const DA_STATUS_2: u8 = 0x72;
     pub const LIFETIME_DATA_BLOCK_2: u8 = 0x61;
 
     pub const MANUFACTURER_NAME: u8 = 0x20;

@@ -19,6 +19,7 @@
 
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
+| edbpk | BQ40 Cell4 protocol-safe diagnostics | 部分完成（1/2） | `edbpk-bq40-cell4-protocol-diagnostics/SPEC.md` | 2026-03-14 | 已修正主机侧协议与侵入式诊断；当前已确认串数配置为 4 节，待补 reply PEC 校验 |
 | tmdtq | BQ40 tool reflash / recovery convergence | 已完成 | `tmdtq-bq40-tool-reflash-recovery/SPEC.md` | 2026-03-11 | 工具链已可区分 ROM 检测/写入/退出与 post-flash 无效运行态；剩余问题收敛为样片硬件状态 |
 | 4t9wx | Install UI UX Pro Max skill（Codex） | 已完成 | `4t9wx-install-ui-ux-pro-max-skill/SPEC.md` | 2026-03-02 | 项目内安装并入库；修正 `.codex` 脚本路径与 pycache 忽略 |
 | 6qrjs | Front panel industrial UI preview（320x172） | 重新设计（#7n4qd） | `6qrjs-front-panel-industrial-ui-preview/SPEC.md` | 2026-03-01 | 视觉基线保留；自检页运行语义迁移到 #7n4qd |

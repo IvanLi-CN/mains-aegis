@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+source "$SCRIPT_DIR/common.sh"
 
 subcommand="${1:-}"
 if [[ -z "$subcommand" ]]; then
@@ -334,15 +335,15 @@ else
 
   "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy" --force-min-charge "$force_min_charge" --probe-mode "$probe_mode" --rom-image "$rom_image"
 
+  bq40_tool_acquire_flash_monitor_lock "$TOOL_ROOT"
+
   if [[ "$flash" == "true" ]]; then
     "$SCRIPT_DIR/flash.sh"
   fi
 
   monitor_reset_on_attach="true"
-  if [[ "$flash" == "true" ]]; then
-    # A fresh flash already rebooted the MCU, so let monitor.sh try a clean attach first.
-    monitor_reset_on_attach="false"
-  fi
+  # Always reset before attaching monitor so the defmt stream starts from a clean boot boundary.
+  # This avoids mid-stream attach corruption after a fresh flash.
   monitor_args=(--duration-sec "$duration_sec" --after-flash "$flash" --reset-on-attach "$monitor_reset_on_attach")
   if [[ -n "$monitor_file" ]]; then
     monitor_args+=(--output "$monitor_file")

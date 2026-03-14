@@ -3,6 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+source "$SCRIPT_DIR/common.sh"
+
+bq40_tool_acquire_flash_monitor_lock "$TOOL_ROOT"
 
 duration_sec=120
 output_file=""
