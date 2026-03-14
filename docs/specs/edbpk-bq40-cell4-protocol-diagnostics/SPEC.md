@@ -2,9 +2,9 @@
 
 ## 状态
 
-- Status: 部分完成（1/2）
+- Status: 已完成
 - Created: 2026-03-14
-- Last: 2026-03-14
+- Last: 2026-03-15
 
 ## 背景 / 问题陈述
 
@@ -85,15 +85,15 @@
 
 - 已确认工具主机侧存在真实协议 bug，且已修复。
 - 已确认当前常规诊断链路可以在不主动切换 `GAUGING/CAL` 的前提下读取稳定数据。
-- 已确认当前 `DA Configuration = 0x8103`，即 `4 cells`。
-- 已确认在上述前提下，`CellVoltage4()` 仍然为 `0`。
+- 已确认关键读取链路已补上 reply `PEC` 探测，`MD23 DeviceType/FW`、`AFE Register`、`DAStatus1`、`DA Configuration` 的关键结论不再依赖无校验块读。
+- 已确认诊断结论最终收敛为：`CellVoltage4() = 0` 的第一阶段根因不是工具协议、不是诊断写扰动、也不是 `3S/4S` 判断污染。
 
 ## 里程碑（Milestones）
 
 - [x] M1: 修正 `0x00 -> 0x23` 读取实现并完成实机验证。
 - [x] M2: 去除常规诊断对 `GAUGING/CAL` 的主动扰动。
 - [x] M3: 为 `flash/monitor` 增加互斥并完成干净 monitor 验证。
-- [ ] M4: 在所有关键读路径上补齐 reply PEC 校验，并重新验证 `DA Configuration` / `DAStatus1`。
+- [x] M4: 在所有关键读路径上补齐 reply PEC 校验，并重新验证 `DA Configuration` / `DAStatus1`。
 
 ## 质量门槛（Quality Gates）
 
@@ -105,4 +105,9 @@
 
 - `tools/bq40-comm-tool/reports/20260314_md23_proto_fix/summary.json`
 - `tools/bq40-comm-tool/reports/20260314_cleaner_cell4_check2/summary.json`
+- `tools/bq40-comm-tool/reports/20260314_pec_probe_check/summary.json`
 - `docs/manuals/BQ40Z50-R2-TRM/BQ40Z50-R2-TRM.md`
+
+## 变更记录（Change log）
+
+- 2026-03-15: 补齐 reply `PEC` 探测并完成二次实机验证；本规格范围内的工具协议/只读诊断/互斥收敛任务全部关闭，后续 `Cell4` 修复与主固件自检链路移交其它规格跟踪。
