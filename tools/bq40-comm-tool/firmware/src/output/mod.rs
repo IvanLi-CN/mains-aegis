@@ -215,6 +215,7 @@ const BMS_DF_REPLY_LEN_WITH_ADDR: u8 = 34;
 const BMS_MFG_STATUS_CAL_TEST: u32 = 1 << 15;
 const BMS_MFG_STATUS_GAUGE_EN: u32 = 1 << 3;
 const BMS_MFG_STATUS_FET_EN: u32 = 1 << 4;
+const BMS_SBS_CONFIGURATION_HPE: u8 = 1 << 2;
 const BMS_ENABLE_CAL_OUTPUT_DIAG: bool = false;
 // TI's standalone SREC note sends Execute FW, waits quietly for about 1 s, then polls 0x0D.
 // Keep the first post-execute transaction as a plain 0x0D read so we do not disturb the ROM
@@ -841,6 +842,131 @@ where
         spin_delay(BMS_WORD_GAP);
     }
     Err(last_err)
+}
+
+fn probe_block_reply_pec<I2C, const N: usize>(
+    i2c: &mut I2C,
+    addr: u8,
+    cmd: u8,
+    expected_declared_len: u8,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if N < 3 {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+
+    let mut buf = [0u8; N];
+    i2c.write_read(addr, &[cmd], &mut buf)
+        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+
+    let declared_len = buf[0];
+    if declared_len != expected_declared_len {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+
+    let payload_end = 1usize + declared_len as usize;
+    if payload_end >= N {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+
+    let addr_w = addr << 1;
+    let addr_r = addr_w | 1;
+    let mut pec_input = [0u8; 40];
+    pec_input[0] = addr_w;
+    pec_input[1] = cmd;
+    pec_input[2] = addr_r;
+    pec_input[3..(3 + payload_end)].copy_from_slice(&buf[..payload_end]);
+    let expected = crc8_smbus(&pec_input[..(3 + payload_end)]);
+    if expected != buf[payload_end] {
+        return Err(bq40z50::BmsDiagError::InconsistentSample);
+    }
+
+    Ok(())
+}
+
+fn probe_bms_direct_block_reply_pec<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    cmd: u8,
+    expected_declared_len: u8,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    match expected_declared_len {
+        3 => probe_block_reply_pec::<I2C, 5>(i2c, addr, cmd, expected_declared_len),
+        4 => probe_block_reply_pec::<I2C, 6>(i2c, addr, cmd, expected_declared_len),
+        16 => probe_block_reply_pec::<I2C, 18>(i2c, addr, cmd, expected_declared_len),
+        21 => probe_block_reply_pec::<I2C, 23>(i2c, addr, cmd, expected_declared_len),
+        32 => probe_block_reply_pec::<I2C, 34>(i2c, addr, cmd, expected_declared_len),
+        _ => Err(bq40z50::BmsDiagError::BadRange),
+    }
+}
+
+fn probe_bms_md23_reply_pec<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+    expected_declared_len: u8,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    write_bms_mac_via_ma00(i2c, addr, mac_cmd, BmsMacWordOrder::Little, false)?;
+    spin_delay(BMS_MAC_WRITE_SETTLE);
+    match expected_declared_len {
+        2 => probe_block_reply_pec::<I2C, 4>(
+            i2c,
+            addr,
+            bq40z50::cmd::MANUFACTURER_DATA,
+            expected_declared_len,
+        ),
+        11 => probe_block_reply_pec::<I2C, 13>(
+            i2c,
+            addr,
+            bq40z50::cmd::MANUFACTURER_DATA,
+            expected_declared_len,
+        ),
+        _ => Err(bq40z50::BmsDiagError::BadRange),
+    }
+}
+
+fn probe_bms_mb44_reply_pec<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+    expected_declared_len: u8,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let cmd = mac_cmd.to_le_bytes();
+    let direct = [
+        bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+        0x02,
+        cmd[0],
+        cmd[1],
+    ];
+    i2c.write(addr, &direct)
+        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    spin_delay(BMS_MAC_WRITE_SETTLE);
+    match expected_declared_len {
+        34 => probe_block_reply_pec::<I2C, 36>(
+            i2c,
+            addr,
+            bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+            expected_declared_len,
+        ),
+        32 => probe_block_reply_pec::<I2C, 34>(
+            i2c,
+            addr,
+            bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+            expected_declared_len,
+        ),
+        _ => Err(bq40z50::BmsDiagError::BadRange),
+    }
 }
 
 fn parse_direct_block_u16(raw: &bq40z50::BlockReadRaw, index: usize) -> Option<u16> {
@@ -7758,6 +7884,51 @@ where
                         df_cell_gain,
                         df_pack_gain,
                         df_bat_gain,
+                    );
+                    let host_pec_enabled = match df_sbs_configuration {
+                        TelemetryU8::Value(bits) => (bits & BMS_SBS_CONFIGURATION_HPE) != 0,
+                        TelemetryU8::Err(_) => false,
+                    };
+                    let md23_devtype_pec =
+                        probe_bms_md23_reply_pec(&mut self.i2c, addr, BMS_MAC_CMD_DEVICE_TYPE, 2)
+                            .map(|_| "ok")
+                            .unwrap_or_else(|e| e.as_str());
+                    let md23_fw_pec = probe_bms_md23_reply_pec(&mut self.i2c, addr, 0x0002, 11)
+                        .map(|_| "ok")
+                        .unwrap_or_else(|e| e.as_str());
+                    let afe_pec = probe_bms_direct_block_reply_pec(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::AFE_REGISTER,
+                        21,
+                    )
+                    .map(|_| "ok")
+                    .unwrap_or_else(|e| e.as_str());
+                    let da1_pec = probe_bms_direct_block_reply_pec(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::DA_STATUS_1,
+                        32,
+                    )
+                    .map(|_| "ok")
+                    .unwrap_or_else(|e| e.as_str());
+                    let mb44_da_cfg_pec = probe_bms_mb44_reply_pec(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_DA_CONFIGURATION,
+                        34,
+                    )
+                    .map(|_| "ok")
+                    .unwrap_or_else(|e| e.as_str());
+                    defmt::info!(
+                        "bms_pec: addr=0x{=u8:x} host_pec={=bool} md23_devtype={} md23_fw={} afe={} da1={} mb44_da_cfg={}",
+                        addr,
+                        host_pec_enabled,
+                        md23_devtype_pec,
+                        md23_fw_pec,
+                        afe_pec,
+                        da1_pec,
+                        mb44_da_cfg_pec,
                     );
                     for window_addr in [0x4000u16, 0x4600u16, 0x4880u16, 0x4910u16, 0x4A70u16] {
                         match read_bms_df_block_via_mb44(&mut self.i2c, addr, window_addr) {
