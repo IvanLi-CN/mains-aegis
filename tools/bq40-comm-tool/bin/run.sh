@@ -22,6 +22,7 @@ recover_policy="if-rom"
 force_min_charge="false"
 probe_mode="strict"
 rom_image="r2"
+repair_profile="none"
 monitor_file=""
 report_out=""
 flash_arg_set="false"
@@ -63,8 +64,8 @@ MIN_DURATION_RECOVER_SEC=0
 usage() {
   cat <<USAGE
 Usage:
-  $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--monitor-file PATH] [--report-out DIR]
-  $(basename "$0") recover  [--mode dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default|live-df-mainboard] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") recover  [--mode dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default|live-df-mainboard] [--monitor-file PATH] [--report-out DIR]
   $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--report-out DIR]
 USAGE
 }
@@ -121,6 +122,11 @@ while [[ $# -gt 0 ]]; do
       require_value "$1" "$#"
       rom_image="${2:-}"
       rom_image_arg_set="true"
+      shift 2
+      ;;
+    --repair-profile)
+      require_value "$1" "$#"
+      repair_profile="${2:-}"
       shift 2
       ;;
     --monitor-file)
@@ -328,12 +334,20 @@ else
       ;;
   esac
 
+  case "$repair_profile" in
+    none|afe-default|live-df-mainboard) ;;
+    *)
+      echo "Invalid --repair-profile: $repair_profile" >&2
+      exit 17
+      ;;
+  esac
+
   if [[ "$recover_policy" == "force" && "$mode" != "dual-diag" ]]; then
     echo "--recover force requires --mode dual-diag" >&2
     exit 9
   fi
 
-  "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy" --force-min-charge "$force_min_charge" --probe-mode "$probe_mode" --rom-image "$rom_image"
+  "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy" --force-min-charge "$force_min_charge" --probe-mode "$probe_mode" --rom-image "$rom_image" --repair-profile "$repair_profile"
 
   bq40_tool_acquire_flash_monitor_lock "$TOOL_ROOT"
 

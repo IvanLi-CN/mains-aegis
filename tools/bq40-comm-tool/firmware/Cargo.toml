@@ -29,6 +29,8 @@ bms-rom-full-info = []
 bms-rom-force-pec = []
 bms-rom-image-r3 = []
 bms-rom-image-r5 = []
+bms-df-repair-afe-default = []
+bms-rom-repair-live-df-mainboard = []
 
 [dependencies]
 defmt = "1.0.1"
