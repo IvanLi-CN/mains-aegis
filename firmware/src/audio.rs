@@ -41,6 +41,7 @@ pub const AUDIO_CUE_LABELS: [&str; AUDIO_CUE_COUNT] = [
 pub const PLAYBACK_SAMPLE_RATE_HZ: u32 = 8_000;
 pub const WARNING_INTERVAL_MS: u32 = 2_000;
 const SOURCE_SAMPLE_RATE_HZ: u32 = 44_100;
+const TRANSITION_RAMP_SAMPLES: u16 = (PLAYBACK_SAMPLE_RATE_HZ / 200) as u16; // ~5 ms
 const RESAMPLE_STEP_Q16: u32 =
     ((SOURCE_SAMPLE_RATE_HZ as u64 * 65_536u64) / PLAYBACK_SAMPLE_RATE_HZ as u64) as u32;
 const QUEUE_CAPACITY: usize = 16;
@@ -149,6 +150,7 @@ struct ActivePlayback {
     request: AudioRequest,
     pcm: &'static [u8],
     source_pos_q16: u32,
+    fade_in_samples_remaining: u16,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -181,6 +183,9 @@ pub struct AudioManager {
     dropped: u32,
     preempted: u32,
     loops: [CueLoopState; AUDIO_CUE_COUNT],
+    last_output_sample: i16,
+    bridge_from_sample: i16,
+    bridge_samples_remaining: u16,
 }
 
 impl AudioManager {
@@ -193,6 +198,9 @@ impl AudioManager {
             dropped: 0,
             preempted: 0,
             loops: [CueLoopState::INACTIVE; AUDIO_CUE_COUNT],
+            last_output_sample: 0,
+            bridge_from_sample: 0,
+            bridge_samples_remaining: 0,
         }
     }
 
@@ -277,6 +285,14 @@ impl AudioManager {
         self.queue_head = 0;
         self.queue_len = 0;
         self.loops = [CueLoopState::INACTIVE; AUDIO_CUE_COUNT];
+        self.last_output_sample = 0;
+        self.bridge_from_sample = 0;
+        self.bridge_samples_remaining = 0;
+    }
+
+    pub fn arm_transition_bridge(&mut self) {
+        self.bridge_from_sample = self.last_output_sample;
+        self.bridge_samples_remaining = TRANSITION_RAMP_SAMPLES;
     }
 
     pub fn is_cue_active(&self, cue: AudioCue) -> bool {
@@ -301,12 +317,27 @@ impl AudioManager {
 
         let mut out = 0usize;
         while out < want {
+            if self.bridge_samples_remaining > 0 {
+                let remaining = i32::from(self.bridge_samples_remaining);
+                let total = i32::from(TRANSITION_RAMP_SAMPLES.max(1));
+                let sample = (i32::from(self.bridge_from_sample) * remaining) / total;
+                self.bridge_samples_remaining -= 1;
+                self.last_output_sample = sample as i16;
+                let [lo, hi] = (sample as i16).to_le_bytes();
+                buf[out] = lo;
+                buf[out + 1] = hi;
+                buf[out + 2] = lo;
+                buf[out + 3] = hi;
+                out += 4;
+                continue;
+            }
             if self.current.is_none() {
                 self.promote_next();
                 if self.current.is_none() {
                     for b in &mut buf[out..want] {
                         *b = 0;
                     }
+                    self.last_output_sample = 0;
                     return want;
                 }
             }
@@ -322,6 +353,7 @@ impl AudioManager {
                 self.current = None;
                 continue;
             };
+            self.last_output_sample = sample;
             let [lo, hi] = sample.to_le_bytes();
             buf[out] = lo;
             buf[out + 1] = hi;
@@ -356,10 +388,16 @@ impl AudioManager {
     }
 
     fn start_playback(request: AudioRequest) -> ActivePlayback {
+        defmt::info!(
+            "audio: start_playback cue={=?} priority={=?}",
+            request.cue,
+            request.priority
+        );
         ActivePlayback {
             request,
             pcm: pcm_for_cue(request.cue),
             source_pos_q16: 0,
+            fade_in_samples_remaining: TRANSITION_RAMP_SAMPLES,
         }
     }
 
@@ -606,7 +644,15 @@ fn next_mono_sample(active: &mut ActivePlayback) -> Option<i16> {
     let lo = active.pcm[base];
     let hi = active.pcm[base + 1];
     active.source_pos_q16 = active.source_pos_q16.saturating_add(RESAMPLE_STEP_Q16);
-    Some(i16::from_le_bytes([lo, hi]))
+    let mut sample = i16::from_le_bytes([lo, hi]);
+    if active.fade_in_samples_remaining > 0 {
+        let total = i32::from(TRANSITION_RAMP_SAMPLES.max(1));
+        let progressed = total - i32::from(active.fade_in_samples_remaining) + 1;
+        let scaled = (i32::from(sample) * progressed) / total;
+        active.fade_in_samples_remaining -= 1;
+        sample = scaled as i16;
+    }
+    Some(sample)
 }
 
 fn parse_wav_pcm16le_mono(bytes: &'static [u8]) -> &'static [u8] {

@@ -11,6 +11,7 @@ mod output;
 use esp_backtrace as _;
 use esp_firmware::audio::{AudioCue, AudioManager, PLAYBACK_SAMPLE_RATE_HZ};
 use esp_hal::clock::CpuClock;
+use esp_hal::dma::DmaError;
 use esp_hal::gpio::{DriveMode, Event, Flex, Input, InputConfig, Io, OutputConfig, Pull};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c, SoftwareTimeout};
 use esp_hal::i2s::master::{Channels, Config as I2sConfig, DataFormat, I2s};
@@ -610,6 +611,65 @@ fn main() -> ! {
     };
     let mut audio_enabled = audio_transfer.is_some();
 
+    macro_rules! restart_runtime_audio_dma {
+        () => {{
+            audio_transfer = None;
+            tx_buffer.fill(0);
+            let mut disable_audio = false;
+            if let Some(i2s_tx) = i2s_tx.as_mut() {
+                match i2s_tx.write_dma_circular(&tx_buffer) {
+                    Ok(mut transfer) => {
+                        match transfer.available() {
+                            Ok(available) if available >= 4 => {
+                                let budget =
+                                    audio_refill_budget(available, AUDIO_RUNTIME_WATERMARK_BYTES);
+                                if budget >= 4
+                                    && transfer
+                                        .push_with(|buf| {
+                                            let len = budget.min(buf.len()) & !0x3;
+                                            audio_manager.fill(&mut buf[..len])
+                                        })
+                                        .is_err()
+                                {
+                                    defmt::warn!(
+                                        "audio: dma push failed during runtime flush; disabling runtime audio"
+                                    );
+                                    disable_audio = true;
+                                } else {
+                                    audio_transfer = Some(transfer);
+                                }
+                            }
+                            Ok(_) => {
+                                audio_transfer = Some(transfer);
+                            }
+                            Err(err) => {
+                                defmt::warn!(
+                                    "audio: dma available failed during runtime flush err={=?}; disabling runtime audio",
+                                    err
+                                );
+                                disable_audio = true;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        defmt::warn!(
+                            "audio: dma restart failed err={=?}; disabling runtime audio",
+                            err
+                        );
+                        disable_audio = true;
+                    }
+                }
+            } else {
+                disable_audio = true;
+            }
+            if disable_audio {
+                audio_enabled = false;
+                audio_transfer = None;
+                audio_manager.stop();
+            }
+        }};
+    }
+
     if audio_enabled {
         audio_manager.trigger(AudioCue::BootStartup);
         let mut disable_audio = false;
@@ -779,13 +839,17 @@ fn main() -> ! {
             power.tick(&irq_events);
             let now = Instant::now();
             if audio_enabled {
-                sync_runtime_audio(
-                    &mut audio_manager,
-                    now,
-                    power.audio_signals(),
-                    power.take_audio_edges(),
-                );
+                let audio_edges = power.take_audio_edges();
+                let flush_runtime_audio = audio_edges.battery_low_changed.is_some()
+                    || audio_edges.module_fault_changed.is_some()
+                    || audio_edges.battery_protection_changed.is_some();
+                sync_runtime_audio(&mut audio_manager, now, power.audio_signals(), audio_edges);
                 audio_manager.tick(now);
+                if flush_runtime_audio {
+                    audio_manager.arm_transition_bridge();
+                    restart_runtime_audio_dma!();
+                    continue;
+                }
                 let mut disable_audio = false;
                 if let Some(audio_transfer) = audio_transfer.as_mut() {
                     match audio_transfer.available() {
@@ -805,6 +869,11 @@ fn main() -> ! {
                             }
                         }
                         Ok(_) => {}
+                        Err(DmaError::Late) => {
+                            defmt::warn!(
+                                "audio: dma available failed err=Late; recover runtime audio on next refill"
+                            );
+                        }
                         Err(err) => {
                             defmt::warn!(
                                 "audio: dma available failed err={=?}; disabling runtime audio",
@@ -839,13 +908,17 @@ fn main() -> ! {
             }
             if audio_enabled {
                 let now = Instant::now();
-                sync_runtime_audio(
-                    &mut audio_manager,
-                    now,
-                    power.audio_signals(),
-                    power.take_audio_edges(),
-                );
+                let audio_edges = power.take_audio_edges();
+                let flush_runtime_audio = audio_edges.battery_low_changed.is_some()
+                    || audio_edges.module_fault_changed.is_some()
+                    || audio_edges.battery_protection_changed.is_some();
+                sync_runtime_audio(&mut audio_manager, now, power.audio_signals(), audio_edges);
                 audio_manager.tick(now);
+                if flush_runtime_audio {
+                    audio_manager.arm_transition_bridge();
+                    restart_runtime_audio_dma!();
+                    continue;
+                }
                 let mut disable_audio = false;
                 if let Some(audio_transfer) = audio_transfer.as_mut() {
                     match audio_transfer.available() {
@@ -865,6 +938,11 @@ fn main() -> ! {
                             }
                         }
                         Ok(_) => {}
+                        Err(DmaError::Late) => {
+                            defmt::warn!(
+                                "audio: dma available failed err=Late; recover runtime audio on next refill"
+                            );
+                        }
                         Err(err) => {
                             defmt::warn!(
                                 "audio: dma available failed err={=?}; disabling runtime audio",

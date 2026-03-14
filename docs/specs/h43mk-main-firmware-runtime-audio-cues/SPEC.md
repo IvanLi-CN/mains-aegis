@@ -131,6 +131,13 @@
 - BMS protection / permanent-failure 状态已在自检结果中种子化，进入主循环前即可驱动 `battery_protection` 的首次调度。
 - TPS OVP/OCP runtime state 已细化为按通道持有；只有成功读取到某路 TPS `STATUS` 时才会覆盖该路 fault seed，未读到的通道继续保留自检/上次有效观测结果。
 - 主循环现在会先完成 power/audio 状态同步，再向 DMA ring 推入下一批 PCM 数据；本轮 hotfix 把 DMA ring 容量恢复到约 2.0 秒，但仅在最早期 boot prefill 保留约 1.0 秒余量；进入自检回调后收敛到约 0.9 秒水位，运行期保持约 1.3 秒水位，并在 UI tick / 重绘后立即补一次 DMA，避免打开 BMS 激活弹层等整帧重绘场景把 runtime DMA ring 拖空后永久静音。
+- 运行期若偶发 `DmaError::Late`，应视为可恢复的 refill 迟到，而不是永久熔断音频服务；下一轮 `sync_runtime_audio` 必须能重新拉起仍处于 active 的 warning / error cue。
+- BMS 激活流程一旦拿到可信快照，必须同时刷新 UI snapshot 与 `bms_audio` 运行时状态；像 `no_battery + rca_alarm` 这类激活结果不能只显示在界面上而不进入 warning cue 判定。
+- BMS 激活若以 `no_battery` 收尾，后续短时间内的 BQ40 invalid / absent 轮询不得立刻把语义翻回 `module_fault`；在下一次明确的正常 pack 快照或新的激活尝试之前，应继续维持 `no_battery + rca_alarm` 的 warning 音频语义，并压住由同一轮自检残留的 `module_fault` 聚合结果，避免 warning / error cue 交替打架。
+- BMS 激活若以 `no_battery` 收尾，则同一保持窗口内也不得再额外拉起 `battery_protection`；`PF/OCA/TCA/OTA/TDA` 这类位若来自该次 `no_battery` 快照，只能保留给诊断/UI，不得与 `BatteryLowWithMains` 同时播报。
+- 运行期若出现 `DmaError::Late`，允许后续 refill 恢复 DMA 供给，但不得通过 `audio_manager.stop()` 把当前 warning cue 从头重启；否则用户会听到额外的重复起音/“嘟声”伪装成第二个提示音。
+- 当 `module_fault` / `battery_protection` / `battery_low` 发生切换时，运行期必须刷新 DMA ring，清掉已缓冲的旧 cue 采样；否则即使逻辑层已切 cue，扬声器仍可能继续播出上一段错误音并与新 cue 混音。
+- 运行期强制刷新 DMA ring 时，切换边界必须附带短淡出/淡入过渡，避免直接从旧采样硬切到 0 或新 cue 导致 click/pop 爆音。
 - 对开机即缺失的 BMS，只要自检已判定 “missing/err” 且当前板级仍存在 charger path 或 BMS 输出恢复门控，运行时音频快照就必须在首次刷新时携带 `module_fault=true`，避免故障音被 `runtime_seen` 门控吞掉。
 - 运行时后接入的 BMS 现在会把“曾成功建链”状态保留下来；即便后续轮询掉线，`module_fault` 也不会再被启动快照门控吞掉。
 - `shutdown_mode_entered` 与 `io_over_power` 继续保持 dormant，并在主固件中明确不触发。
@@ -162,3 +169,10 @@
 - 2026-03-13: hotfix，恢复约 2.0 秒 DMA ring 容量，并把 boot prefill / 自检 / 运行期 refill 收敛到分阶段受控水位，修复开始音截断与后续告警静音回归，同时避免高优先级 cue 再次被长缓存拖慢。
 - 2026-03-13: hotfix，补齐“开机已判定 BMS 缺失/错误且 charger path 仍存在”时的 `module_fault` 种子化，避免开机起即缺失的 BMS 被 runtime-seen 门控静默掉故障音。
 - 2026-03-13: hotfix，运行期水位进一步上调到约 1.3 秒，并在 UI tick 后立即补一次 DMA，修复打开 BMS 激活弹层等重型面板重绘时 runtime DMA `Late` 后整条音频服务被永久关闭的问题。
+- 2026-03-13: hotfix，BMS 激活可信快照现在会同步刷新 `bms_audio`，并把运行期 `DmaError::Late` 从永久禁音改为可恢复重拉，避免 `no_battery` 结果只显示在 UI 上却没有后续 warning cue。
+- 2026-03-13: hotfix，BMS 激活返回 `no_battery` 后会把该结果保持为运行时 warning 语义，直到拿到新的正常 BMS 快照或再次发起激活，避免 `BatteryLowWithMains` 与 `ModuleFault` 在后续抖动轮询里来回抢占。
+- 2026-03-13: hotfix，`no_battery` 保持态会同时屏蔽同一轮自检残留的 `module_fault` 聚合，避免 `tps_a/tps_b=err` 等旧快照继续把错误音混进激活后的 warning 播报。
+- 2026-03-13: hotfix，`no_battery` 保持态会同时压住 `battery_protection`，避免 `BatteryProtection` 与 `BatteryLowWithMains` 在激活完成后重叠播放。
+- 2026-03-13: hotfix，运行期 `DmaError::Late` 改为“保留当前播放状态并等待下次 refill 恢复”，避免 warning cue 每次 underrun 都从头重启而听成第二个嘟声。
+- 2026-03-14: hotfix，运行期 cue 发生切换时会重建并清空 DMA ring，避免旧的 `ModuleFault` 采样残留到激活后的 `BatteryLowWithMains` 阶段。
+- 2026-03-14: hotfix，运行期 DMA flush 现在会带约 5 ms 的淡出/淡入过渡，降低 cue 切换瞬间的爆音。
