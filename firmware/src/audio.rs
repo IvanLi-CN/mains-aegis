@@ -561,6 +561,42 @@ mod tests {
         manager.tick(now);
         assert_eq!(manager.status().current, Some(warning));
     }
+
+    #[test]
+    fn continuous_loop_wraps_without_retrigger() {
+        let cue = AudioCue::BatteryProtection;
+        let now = Instant::EPOCH;
+
+        let mut manager = AudioManager::new();
+        manager.set_cue_active(cue, true, now);
+        manager.tick(now);
+        assert_eq!(manager.status().current, Some(cue));
+
+        let mut buf = [0u8; 65_536];
+        let filled = manager.fill(&mut buf);
+        assert_eq!(filled, buf.len());
+        assert_eq!(manager.status().current, Some(cue));
+        assert!(manager.is_cue_active(cue));
+        assert_eq!(manager.status().queued, 0);
+    }
+
+    #[test]
+    fn continuous_loop_wrap_preserves_resample_remainder() {
+        let mut active = AudioManager::start_playback(default_request(AudioCue::BatteryProtection));
+        active.fade_in_samples_remaining = 0;
+
+        let sample_count = active.pcm.len() / 2;
+        let span_q16 = (sample_count as u64) << 16;
+        let wrapped_idx = 2usize;
+        let wrapped_rem = 63_936u64;
+        let overflow_q16 = span_q16 + ((wrapped_idx as u64) << 16) + wrapped_rem;
+        active.source_pos_q16 = overflow_q16 as u32;
+
+        let sample = next_mono_sample(&mut active).expect("continuous loop should wrap");
+        let base = wrapped_idx * 2;
+        let expected = i16::from_le_bytes([active.pcm[base], active.pcm[base + 1]]);
+        assert_eq!(sample, expected);
+    }
 }
 
 pub const fn default_request(cue: AudioCue) -> AudioRequest {
@@ -635,11 +671,23 @@ fn pcm_for_cue(cue: AudioCue) -> &'static [u8] {
 
 fn next_mono_sample(active: &mut ActivePlayback) -> Option<i16> {
     let sample_count = active.pcm.len() / 2;
-    let idx = (active.source_pos_q16 >> 16) as usize;
-    if idx >= sample_count {
-        active.source_pos_q16 = (sample_count as u32) << 16;
+    if sample_count == 0 {
         return None;
     }
+    let continuous_loop = matches!(
+        playback_mode_for_cue(active.request.cue),
+        CuePlaybackMode::ContinuousLoop
+    );
+    let idx = (active.source_pos_q16 >> 16) as usize;
+    if idx >= sample_count {
+        if !continuous_loop {
+            active.source_pos_q16 = (sample_count as u32) << 16;
+            return None;
+        }
+        let sample_span_q16 = (sample_count as u64) << 16;
+        active.source_pos_q16 = ((active.source_pos_q16 as u64) % sample_span_q16) as u32;
+    }
+    let idx = (active.source_pos_q16 >> 16) as usize;
     let base = idx * 2;
     let lo = active.pcm[base];
     let hi = active.pcm[base + 1];
