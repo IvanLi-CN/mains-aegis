@@ -11,14 +11,30 @@ bq40_tool_acquire_flash_monitor_lock() {
   local lock_path="$lock_dir/flash-monitor.lock.d"
   local owner_file="$lock_path/owner"
   local owner_pid=""
+  local owner_start=""
+  local owner_cmd=""
+  local current_start=""
+  local current_cmd=""
 
   mkdir -p "$lock_dir"
 
   if ! mkdir "$lock_path" 2>/dev/null; then
     if [[ -f "$owner_file" ]]; then
-      owner_pid="$(tr -d '[:space:]' < "$owner_file" 2>/dev/null || true)"
+      owner_pid="$(sed -n 's/^pid=//p' "$owner_file" | head -n1 | tr -d '[:space:]')"
+      owner_start="$(sed -n 's/^start=//p' "$owner_file" | head -n1)"
+      owner_cmd="$(sed -n 's/^cmd=//p' "$owner_file" | head -n1)"
     fi
-    if [[ "$owner_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$owner_pid" 2>/dev/null; then
+    if [[ "$owner_pid" =~ ^[0-9]+$ ]]; then
+      current_start="$(ps -p "$owner_pid" -o lstart= 2>/dev/null | sed 's/^ *//')"
+      current_cmd="$(ps -p "$owner_pid" -o command= 2>/dev/null | sed 's/^ *//')"
+    fi
+    if [[ "$owner_pid" =~ ^[0-9]+$ ]] \
+      && [[ -n "$current_start" ]] \
+      && [[ "$current_start" == "$owner_start" ]] \
+      && [[ "$current_cmd" == "$owner_cmd" ]]; then
+      echo "bq40-comm-tool flash/monitor is busy; wait for the current session to finish before starting another one" >&2
+      exit 71
+    else
       rm -f "$owner_file"
       rmdir "$lock_path" 2>/dev/null || true
       if mkdir "$lock_path" 2>/dev/null; then
@@ -27,13 +43,14 @@ bq40_tool_acquire_flash_monitor_lock() {
         echo "bq40-comm-tool flash/monitor is busy; stale lock recovery failed" >&2
         exit 71
       fi
-    else
-      echo "bq40-comm-tool flash/monitor is busy; wait for the current session to finish before starting another one" >&2
-      exit 71
     fi
   fi
 
-  printf '%s\n' "$$" > "$owner_file"
+  printf 'pid=%s\nstart=%s\ncmd=%s\n' \
+    "$$" \
+    "$(ps -p "$$" -o lstart= 2>/dev/null | sed 's/^ *//')" \
+    "$(ps -p "$$" -o command= 2>/dev/null | sed 's/^ *//')" \
+    > "$owner_file"
   export BQ40_TOOL_LOCK_HELD="1"
   export BQ40_TOOL_LOCK_PATH="$lock_path"
 

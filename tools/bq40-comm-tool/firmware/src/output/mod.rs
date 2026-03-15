@@ -715,6 +715,22 @@ where
 }
 
 #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+fn read_bms_df_block_via_mb44_strict<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+) -> Result<bq40z50::BlockReadRaw, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let (echoed_addr, raw) = read_bms_df_block_via_mb44(i2c, addr, df_addr)?;
+    if echoed_addr != df_addr {
+        return Err(bq40z50::BmsDiagError::BadRange);
+    }
+    Ok(raw)
+}
+
+#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
 fn read_bms_df_bytes_via_mb44<I2C>(
     i2c: &mut I2C,
     addr: u8,
@@ -727,7 +743,7 @@ where
     let mut copied = 0usize;
     while copied < out.len() {
         let window_addr = df_addr.wrapping_add(copied as u16);
-        let (_, raw) = read_bms_df_block_via_mb44(i2c, addr, window_addr)?;
+        let raw = read_bms_df_block_via_mb44_strict(i2c, addr, window_addr)?;
         let payload_len = raw.payload_len as usize;
         if payload_len == 0 {
             return Err(bq40z50::BmsDiagError::BadBlockLen);
@@ -5359,9 +5375,7 @@ where
 
     #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
     fn capture_bms_rom_df_section1_mainboard(&mut self, addr: u8, quiet: bool) {
-        if self.bms_rom_df_section1_valid {
-            return;
-        }
+        self.bms_rom_df_section1_valid = false;
         let mut last_err = None;
         for _attempt in 0..3 {
             match read_bms_df_bytes_via_mb44(
