@@ -356,8 +356,11 @@ else
   fi
 
   monitor_reset_on_attach="true"
-  # Always reset before attaching monitor so the defmt stream starts from a clean boot boundary.
-  # This avoids mid-stream attach corruption after a fresh flash.
+  if [[ "$flash" == "true" ]]; then
+    # After a fresh flash, let monitor.sh try reusing the initial boot stream first and only
+    # fall back to a reset attach if no target stdout appears.
+    monitor_reset_on_attach="false"
+  fi
   monitor_args=(--duration-sec "$duration_sec" --after-flash "$flash" --reset-on-attach "$monitor_reset_on_attach")
   if [[ -n "$monitor_file" ]]; then
     monitor_args+=(--output "$monitor_file")

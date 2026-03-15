@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 
+bq40_tool_lock_owner_age_secs() {
+  python3 - "$1" <<'PY'
+import os, sys, time
+path = sys.argv[1]
+try:
+    print(int(max(0, time.time() - os.stat(path).st_mtime)))
+except FileNotFoundError:
+    print(-1)
+PY
+}
+
 bq40_tool_acquire_flash_monitor_lock() {
   local tool_root="$1"
 
@@ -19,6 +30,13 @@ bq40_tool_acquire_flash_monitor_lock() {
   mkdir -p "$lock_dir"
 
   if ! mkdir "$lock_path" 2>/dev/null; then
+    if [[ ! -f "$owner_file" ]]; then
+      local wait_loops=0
+      while [[ ! -f "$owner_file" && $wait_loops -lt 10 ]]; do
+        sleep 0.1
+        wait_loops=$((wait_loops + 1))
+      done
+    fi
     if [[ -f "$owner_file" ]]; then
       owner_pid="$(sed -n 's/^pid=//p' "$owner_file" | head -n1 | tr -d '[:space:]')"
       owner_start="$(sed -n 's/^start=//p' "$owner_file" | head -n1)"
@@ -35,6 +53,12 @@ bq40_tool_acquire_flash_monitor_lock() {
       echo "bq40-comm-tool flash/monitor is busy; wait for the current session to finish before starting another one" >&2
       exit 71
     else
+      local lock_age
+      lock_age="$(bq40_tool_lock_owner_age_secs "$lock_path")"
+      if [[ ! -f "$owner_file" && "$lock_age" -ge 0 && "$lock_age" -lt 5 ]]; then
+        echo "bq40-comm-tool flash/monitor is busy; lock acquisition is still in progress" >&2
+        exit 71
+      fi
       rm -f "$owner_file"
       rmdir "$lock_path" 2>/dev/null || true
       if mkdir "$lock_path" 2>/dev/null; then

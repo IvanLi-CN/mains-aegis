@@ -723,11 +723,46 @@ fn read_bms_df_block_via_mb44_strict<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let (echoed_addr, raw) = read_bms_df_block_via_mb44(i2c, addr, df_addr)?;
-    if echoed_addr != df_addr {
-        return Err(bq40z50::BmsDiagError::BadRange);
+    let cmd = df_addr.to_le_bytes();
+    let direct = [
+        bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+        0x02,
+        cmd[0],
+        cmd[1],
+    ];
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+
+    for _attempt in 0..3 {
+        i2c.write(addr, &direct)
+            .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+        spin_delay(BMS_MAC_WRITE_SETTLE);
+
+        let mut buf = [0u8; 36];
+        match i2c.write_read(addr, &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS], &mut buf) {
+            Ok(()) => {
+                if buf[0] != BMS_DF_REPLY_LEN_WITH_ADDR {
+                    last_err = bq40z50::BmsDiagError::BadBlockLen;
+                    continue;
+                }
+                let echoed_addr = u16::from_le_bytes([buf[1], buf[2]]);
+                if echoed_addr != df_addr {
+                    last_err = bq40z50::BmsDiagError::BadRange;
+                    continue;
+                }
+                let mut compact = bq40z50::BlockReadRaw {
+                    declared_len: 32,
+                    payload_len: 32,
+                    payload: [0u8; 32],
+                };
+                compact.payload.copy_from_slice(&buf[3..35]);
+                return Ok(compact);
+            }
+            Err(_) => last_err = bq40z50::BmsDiagError::I2cNack,
+        }
+        spin_delay(BMS_MAC_WRITE_SETTLE);
     }
-    Ok(raw)
+
+    Err(last_err)
 }
 
 #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
