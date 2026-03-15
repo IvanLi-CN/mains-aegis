@@ -399,7 +399,7 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
 - 余冷：从 `mid/high` 退出后保留 `10s` 低速
 - `tach` 看门狗：命令为 `mid/high` 且 `2s` 内没有 `FAN_TACH` 脉冲时，记录故障并强制 `high`
 - 温度退化：单路温度缺失时退化到另一侧；双路都缺失时直接 `high`
-- PWM 失败兜底：若 `FAN_VSET_PWM` 的 LEDC 初始化失败，或运行期 duty 更新失败，固件会直接拉高 `FAN_EN`，强制持续散热，避免“日志还在跑但风扇硬件失效”
+- PWM 失败兜底：若 `FAN_VSET_PWM` 的 LEDC 初始化失败，或运行期 duty 更新失败，固件会直接拉高 `FAN_EN`，并把 `FAN_VSET_PWM` 切到高电平 fail-safe，避免“日志还在跑但风扇硬件失效”
 
 ### 预期日志（`defmt`）
 

@@ -1135,6 +1135,7 @@ pub struct PowerManager<'d, I2C> {
     cfg: Config,
 
     next_telemetry_at: Instant,
+    next_fan_temp_refresh_at: Instant,
     last_fault_log_at: Option<Instant>,
     last_therm_kill_hint_at: Option<Instant>,
     fan_started_at: Instant,
@@ -1286,6 +1287,7 @@ where
             cfg,
 
             next_telemetry_at: now,
+            next_fan_temp_refresh_at: now,
             last_fault_log_at: None,
             last_therm_kill_hint_at: None,
             fan_started_at: now,
@@ -1531,7 +1533,18 @@ where
         }
     }
 
+    fn refresh_fan_temp_snapshots_if_due(&mut self) {
+        let now = Instant::now();
+        if now < self.next_fan_temp_refresh_at {
+            return;
+        }
+        self.next_fan_temp_refresh_at = now + self.cfg.telemetry_period;
+        self.refresh_tmp112_snapshot(OutputChannel::OutA);
+        self.refresh_tmp112_snapshot(OutputChannel::OutB);
+    }
+
     fn update_fan_state(&mut self, irq: &IrqSnapshot) {
+        self.refresh_fan_temp_snapshots_if_due();
         let prev = self.fan.status();
         let (status, events) = self.fan.update(fan::Input {
             now_ms: self.fan_now_ms(),
@@ -4382,9 +4395,6 @@ where
             return false;
         }
         self.next_telemetry_at = now + self.cfg.telemetry_period;
-
-        self.refresh_tmp112_snapshot(OutputChannel::OutA);
-        self.refresh_tmp112_snapshot(OutputChannel::OutB);
 
         if self.cfg.enabled_outputs == EnabledOutputs::None {
             return true;

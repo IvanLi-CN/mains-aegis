@@ -11,7 +11,9 @@ mod output;
 
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{DriveMode, Event, Flex, Input, InputConfig, Io, OutputConfig, Pull};
+use esp_hal::gpio::{
+    AnyPin, DriveMode, Event, Flex, Input, InputConfig, Io, Level, Output, OutputConfig, Pull,
+};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c, SoftwareTimeout};
 use esp_hal::ledc::channel::{self, ChannelIFace};
 use esp_hal::ledc::timer::{self, TimerIFace};
@@ -78,38 +80,53 @@ struct AppliedFanOutput {
     pwm_pct: u8,
 }
 
+fn latch_fan_vset_fail_safe(fan_vset_fail_safe: &mut Option<Output<'static>>) {
+    if fan_vset_fail_safe.is_none() {
+        *fan_vset_fail_safe = Some(Output::new(
+            unsafe { AnyPin::steal(36) },
+            Level::High,
+            OutputConfig::default()
+                .with_drive_mode(DriveMode::PushPull)
+                .with_pull(Pull::None),
+        ));
+    } else if let Some(pin) = fan_vset_fail_safe.as_mut() {
+        pin.set_high();
+    }
+}
+
 fn apply_fan_command(
     fan_en: &mut Flex<'_>,
     fan_pwm: &channel::Channel<'_, LowSpeed>,
     applied: &mut Option<AppliedFanOutput>,
     pwm_degraded: &mut bool,
+    fan_vset_fail_safe: &mut Option<Output<'static>>,
     status: esp_firmware::fan::Status,
 ) {
     let next = AppliedFanOutput {
         enabled: status.command.enabled(),
         pwm_pct: status.pwm_pct(FAN_MID_PWM_PCT),
     };
-    if !*pwm_degraded && applied.as_ref() == Some(&next) {
-        return;
-    }
-
-    if let Err(err) = fan_pwm.set_duty(next.pwm_pct) {
-        if !*pwm_degraded {
-            defmt::error!(
-                "fan: pwm apply err duty_pct={} err={=?} fallback=fan_en_high",
-                next.pwm_pct,
-                err
-            );
-        }
-        *pwm_degraded = true;
-        *applied = None;
+    if *pwm_degraded {
+        latch_fan_vset_fail_safe(fan_vset_fail_safe);
         fan_en.set_high();
         return;
     }
 
-    if *pwm_degraded {
-        defmt::info!("fan: pwm apply recovered duty_pct={=u8}", next.pwm_pct);
-        *pwm_degraded = false;
+    if applied.as_ref() == Some(&next) {
+        return;
+    }
+
+    if let Err(err) = fan_pwm.set_duty(next.pwm_pct) {
+        defmt::error!(
+            "fan: pwm apply err duty_pct={} err={=?} fallback=fan_en_high_vset_high",
+            next.pwm_pct,
+            err
+        );
+        *pwm_degraded = true;
+        *applied = None;
+        latch_fan_vset_fail_safe(fan_vset_fail_safe);
+        fan_en.set_high();
+        return;
     }
 
     if next.enabled {
@@ -538,11 +555,13 @@ fn main() -> ! {
     );
     fan_en.set_low();
     fan_en.set_output_enable(true);
+    let mut fan_vset_fail_safe: Option<Output<'static>> = None;
     if !fan_pwm_ready {
         // If PWM cannot be configured, at least power the fan continuously so cooling
         // does not silently disappear while the control path keeps logging activity.
+        latch_fan_vset_fail_safe(&mut fan_vset_fail_safe);
         fan_en.set_high();
-        defmt::warn!("fan: pwm unavailable; forcing fan_en high for fail-safe cooling");
+        defmt::warn!("fan: pwm unavailable; forcing fan_en/vset high for fail-safe cooling");
     }
 
     // Front panel: I2C2 + SPI display bring-up (Plan #3kz8p).
@@ -738,6 +757,7 @@ fn main() -> ! {
             &_fan_pwm_channel,
             &mut applied_fan,
             &mut fan_pwm_degraded,
+            &mut fan_vset_fail_safe,
             power.fan_command(),
         );
     }
@@ -760,6 +780,7 @@ fn main() -> ! {
                     &_fan_pwm_channel,
                     &mut applied_fan,
                     &mut fan_pwm_degraded,
+                    &mut fan_vset_fail_safe,
                     power.fan_command(),
                 );
             }
@@ -815,6 +836,7 @@ fn main() -> ! {
                     &_fan_pwm_channel,
                     &mut applied_fan,
                     &mut fan_pwm_degraded,
+                    &mut fan_vset_fail_safe,
                     power.fan_command(),
                 );
             }
