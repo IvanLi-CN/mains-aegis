@@ -4385,13 +4385,13 @@ fn detail_footer_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &
     }
 
     match detail_status_tag(page, data) {
-        "FAULT" => detail_fault_row_text(page, data),
+        "FAULT" => detail_fault_notice(page, data),
         "WARN" => "WARNING ACTIVE - CHECK DETAIL ROWS",
         _ => data.page_notice(page),
     }
 }
 
-fn detail_fault_row_text(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
+fn detail_fault_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
     match page {
         DashboardDetailPage::BatteryFlow => {
             if data.bms_state == SelfCheckCommState::Err {
@@ -4423,6 +4423,41 @@ fn detail_fault_row_text(page: DashboardDetailPage, data: DashboardLiveData) -> 
             }
         }
         _ => data.page_notice(page),
+    }
+}
+
+fn detail_fault_row_text(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
+    match page {
+        DashboardDetailPage::BatteryFlow => {
+            if data.bms_state == SelfCheckCommState::Err {
+                "LINK"
+            } else if data.bms_rca_alarm == Some(true) {
+                "ALARM"
+            } else if !battery_flow_detail_ready(data) {
+                "N/A"
+            } else {
+                "CLEAR"
+            }
+        }
+        DashboardDetailPage::Charger => {
+            if data.charger_state == SelfCheckCommState::Err {
+                "LINK"
+            } else if !charger_data_ready(data) {
+                "N/A"
+            } else {
+                "CLEAR"
+            }
+        }
+        DashboardDetailPage::Thermal => {
+            if thermal_fault_present(data) {
+                "SENSE"
+            } else if thermal_hotspot_c(data).is_some() {
+                "CLEAR"
+            } else {
+                "N/A"
+            }
+        }
+        _ => "CLEAR",
     }
 }
 
@@ -6788,6 +6823,10 @@ mod tests {
             DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &charger_fault);
         assert_eq!(
             detail_fault_row_text(DashboardDetailPage::Charger, charger_live),
+            "LINK"
+        );
+        assert_eq!(
+            detail_fault_notice(DashboardDetailPage::Charger, charger_live),
             "CHARGER LINK FAULT"
         );
 
@@ -6797,12 +6836,40 @@ mod tests {
             DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &thermal_fault);
         assert_eq!(
             detail_fault_row_text(DashboardDetailPage::Thermal, thermal_live),
+            "SENSE"
+        );
+        assert_eq!(
+            detail_fault_notice(DashboardDetailPage::Thermal, thermal_live),
             "THERMAL SENSE FAULT"
         );
 
         assert_eq!(
             output_fault_row_text(SelfCheckCommState::Err, true, "HOLD"),
             "FAULT"
+        );
+    }
+
+    #[test]
+    fn non_fault_rows_use_short_clear_tokens() {
+        let mut charger_ok = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        charger_ok.fusb302_vbus_present = Some(true);
+        charger_ok.dashboard_detail.charger_active = Some(true);
+        charger_ok.dashboard_detail.charger_status = Some("CHG");
+        let charger_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &charger_ok);
+        assert_eq!(
+            detail_fault_row_text(DashboardDetailPage::Charger, charger_live),
+            "CLEAR"
+        );
+
+        let mut thermal_ok = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        thermal_ok.tmp_a_c = Some(34);
+        thermal_ok.dashboard_detail.fan_status = Some("HIGH");
+        let thermal_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &thermal_ok);
+        assert_eq!(
+            detail_fault_row_text(DashboardDetailPage::Thermal, thermal_live),
+            "CLEAR"
         );
     }
 }
