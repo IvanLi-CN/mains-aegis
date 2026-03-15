@@ -118,8 +118,17 @@ fn main() -> ! {
         InputConfig::default().with_pull(Pull::None),
     );
 
-    let mut panel =
-        front_panel::FrontPanel::new(i2c2, spi, btn_center, ctp_irq, tca_reset_n, dc, bl);
+    let mut panel = front_panel::FrontPanel::new(
+        i2c2,
+        spi,
+        peripherals.DMA_CH1,
+        peripherals.PSRAM,
+        btn_center,
+        ctp_irq,
+        tca_reset_n,
+        dc,
+        bl,
+    );
     panel.init_best_effort();
 
     if !panel.is_ready() {

@@ -7,9 +7,18 @@ use crate::front_panel_scene::{
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
+use esp_firmware::display_pipeline::{
+    DirtyRows, DisplayBufferError, DisplayBuffers, DMA_STAGING_BYTES, FRAME_HEIGHT, FRAME_WIDTH,
+};
+use esp_hal::dma::{DmaChannelFor, DmaRxBuf, DmaTxBuf};
 use esp_hal::gpio::{DriveMode, Flex, Input, OutputConfig, Pull};
 use esp_hal::i2c::master::I2c as HalI2c;
-use esp_hal::spi::{master::Spi as HalSpi, Mode};
+use esp_hal::peripherals::PSRAM;
+use esp_hal::psram;
+use esp_hal::spi::{
+    master::{AnySpi, Spi as HalSpi, SpiDmaBus},
+    Mode,
+};
 use esp_hal::time::{Duration, Instant, Rate};
 use esp_hal::Blocking;
 use gc9307_async::{Config as GcConfig, Orientation, Timer as GcTimer, GC9307C};
@@ -53,6 +62,12 @@ const BACKLIGHT_ACTIVE_LOW: bool = true;
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const BOOT_SPLASH_HOLD: Duration = Duration::from_millis(900);
 const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
+const PANEL_INIT_SPI_FREQ_MHZ: u32 = 10;
+const PANEL_RUNTIME_SPI_FREQ_MHZ: u32 = if cfg!(feature = "display-spi-20mhz") {
+    20
+} else {
+    40
+};
 const DASHBOARD_VARIANT: UiVariant = UiVariant::InstrumentB;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,12 +122,13 @@ impl InputSnapshot {
 
 pub struct FrontPanel {
     i2c: HalI2c<'static, Blocking>,
-    spi: HalSpi<'static, Blocking>,
+    panel_io: PanelIo,
     btn_center: Input<'static>,
     ctp_irq: Input<'static>,
     tca_reset_n: Flex<'static>,
-    dc: Flex<'static>,
     bl: Flex<'static>,
+    display_buffers: DisplayBuffers,
+    dirty_rows: DirtyRows,
 
     tca_output: u8,
 
@@ -130,23 +146,54 @@ pub struct FrontPanel {
 }
 
 impl FrontPanel {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         i2c: HalI2c<'static, Blocking>,
         spi: HalSpi<'static, Blocking>,
+        dma_channel: impl DmaChannelFor<AnySpi<'static>>,
+        psram: PSRAM<'static>,
         btn_center: Input<'static>,
         ctp_irq: Input<'static>,
         tca_reset_n: Flex<'static>,
         dc: Flex<'static>,
         bl: Flex<'static>,
     ) -> Self {
+        let display_buffers = unsafe {
+            let (psram_ptr, psram_bytes) = psram::psram_raw_parts(&psram);
+            DisplayBuffers::from_psram_raw_parts(psram_ptr, psram_bytes).unwrap_or_else(|err| {
+                match err {
+                    DisplayBufferError::MisalignedPsram => {
+                        panic!("display PSRAM alignment is invalid")
+                    }
+                    DisplayBufferError::InsufficientPsram => {
+                        panic!("display PSRAM capacity is insufficient")
+                    }
+                }
+            })
+        };
+
+        let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) =
+            esp_hal::dma_buffers!(4, DMA_STAGING_BYTES);
+        let dma_rx_buf =
+            DmaRxBuf::new(rx_descriptors, rx_buffer).expect("display dma rx buffer init failed");
+        let dma_tx_buf =
+            DmaTxBuf::new(tx_descriptors, tx_buffer).expect("display dma tx buffer init failed");
+        let panel_io = PanelIo {
+            spi: spi
+                .with_dma(dma_channel)
+                .with_buffers(dma_rx_buf, dma_tx_buf),
+            dc,
+        };
+
         Self {
             i2c,
-            spi,
+            panel_io,
             btn_center,
             ctp_irq,
             tca_reset_n,
-            dc,
             bl,
+            display_buffers,
+            dirty_rows: DirtyRows::new(),
             tca_output: 0,
             state: InitState::Disabled,
             next_frame_deadline: Instant::now(),
@@ -163,7 +210,7 @@ impl FrontPanel {
     }
 
     pub fn init_best_effort(&mut self) {
-        self.configure_dc();
+        self.panel_io.configure_dc();
         self.configure_backlight();
         self.configure_tca_reset();
 
@@ -484,24 +531,22 @@ impl FrontPanel {
             },
             heartbeat_on,
         };
-        let mut painter = PanelPainter { panel: self };
-        if let Err(e) = front_panel_scene::render_display_diagnostic(&mut painter, &meta) {
+        if let Err(e) = self
+            .render_scene(|painter| front_panel_scene::render_display_diagnostic(painter, &meta))
+        {
             defmt::error!("ui: render display diag failed err={=?}", e);
         }
     }
 
     fn render_boot_confirmation_splash(&mut self) {
-        let mut painter = PanelPainter { panel: self };
         let meta = front_panel_scene::DisplayDiagnosticMeta {
             orientation_label: "BOOT CHECK 320x172",
-            color_order_label: if PANEL_RGB_ORDER {
-                "BACKLIGHT + SPI + TCA"
-            } else {
-                "BACKLIGHT + SPI + TCA"
-            },
+            color_order_label: "BACKLIGHT + SPI + TCA",
             heartbeat_on: true,
         };
-        if let Err(e) = front_panel_scene::render_display_diagnostic(&mut painter, &meta) {
+        if let Err(e) = self
+            .render_scene(|painter| front_panel_scene::render_display_diagnostic(painter, &meta))
+        {
             defmt::error!("ui: render boot splash failed err={=?}", e);
         } else {
             esp_println::println!("ui: boot splash rendered");
@@ -517,10 +562,9 @@ impl FrontPanel {
         if self.state != InitState::Ready {
             return;
         }
-        let mut painter = PanelPainter { panel: self };
-        if let Err(e) =
-            front_panel_scene::render_test_navigation(&mut painter, selected, default_test)
-        {
+        if let Err(e) = self.render_scene(|painter| {
+            front_panel_scene::render_test_navigation(painter, selected, default_test)
+        }) {
             defmt::error!("ui: render test navigation failed err={=?}", e);
         }
     }
@@ -530,17 +574,14 @@ impl FrontPanel {
         if self.state != InitState::Ready {
             return;
         }
-        let mut painter = PanelPainter { panel: self };
         let color_order_label = if PANEL_RGB_ORDER {
             "COLOR ORDER: RGB565"
         } else {
             "COLOR ORDER: BGR565"
         };
-        if let Err(e) = front_panel_scene::render_test_screen_static(
-            &mut painter,
-            back_enabled,
-            color_order_label,
-        ) {
+        if let Err(e) = self.render_scene(|painter| {
+            front_panel_scene::render_test_screen_static(painter, back_enabled, color_order_label)
+        }) {
             defmt::error!("ui: render screen static test failed err={=?}", e);
         }
     }
@@ -550,10 +591,9 @@ impl FrontPanel {
         if self.state != InitState::Ready {
             return;
         }
-        let mut painter = PanelPainter { panel: self };
-        if let Err(e) =
-            front_panel_scene::render_test_audio_playback(&mut painter, back_enabled, state)
-        {
+        if let Err(e) = self.render_scene(|painter| {
+            front_panel_scene::render_test_audio_playback(painter, back_enabled, state)
+        }) {
             defmt::error!("ui: render audio playback test failed err={=?}", e);
         }
     }
@@ -613,16 +653,6 @@ impl FrontPanel {
 
         self.last_inputs = Some(next_snapshot);
         event
-    }
-
-    fn configure_dc(&mut self) {
-        self.dc.apply_output_config(
-            &OutputConfig::default()
-                .with_drive_mode(DriveMode::PushPull)
-                .with_pull(Pull::None),
-        );
-        self.dc.set_low();
-        self.dc.set_output_enable(true);
     }
 
     fn configure_backlight(&mut self) {
@@ -742,12 +772,14 @@ impl FrontPanel {
     }
 
     fn gc9307_driver_init(&mut self) -> Result<(), gc9307_async::Error<esp_hal::spi::Error>> {
-        // Match the reference driver default bus profile.
         let cfg = esp_hal::spi::master::Config::default()
-            .with_frequency(Rate::from_mhz(10))
+            .with_frequency(Rate::from_mhz(PANEL_INIT_SPI_FREQ_MHZ))
             .with_mode(Mode::_0);
-        let _ = self.spi.apply_config(&cfg);
-        defmt::info!("ui: gc9307 driver=gc9307-async source=crates.io freq_mhz=10 mode=0");
+        let _ = self.panel_io.spi.apply_config(&cfg);
+        defmt::info!(
+            "ui: gc9307 driver=gc9307-async source=crates.io init_freq_mhz={} mode=0",
+            PANEL_INIT_SPI_FREQ_MHZ
+        );
 
         let mut display_buf = [0u8; 1536];
 
@@ -761,8 +793,12 @@ impl FrontPanel {
             ..GcConfig::default()
         };
 
-        let spi_dev = NoCsSpiDevice { bus: &mut self.spi };
-        let dc_pin = DcPin { pin: &mut self.dc };
+        let spi_dev = NoCsSpiDevice {
+            bus: &mut self.panel_io.spi,
+        };
+        let dc_pin = DcPin {
+            pin: &mut self.panel_io.dc,
+        };
         let rst_pin = NullRstPin;
 
         let mut drv = GC9307C::<_, _, _, LocalDelayTimer>::new(
@@ -776,17 +812,9 @@ impl FrontPanel {
         // Keep orientation control on the driver API path.
         drv.set_orientation(PANEL_ORIENTATION)?;
 
+        self.panel_io.apply_runtime_config();
+
         Ok(())
-    }
-
-    fn write_cmd(&mut self, cmd: u8) -> Result<(), esp_hal::spi::Error> {
-        self.dc.set_low();
-        self.spi.write(&[cmd])
-    }
-
-    fn write_data(&mut self, data: &[u8]) -> Result<(), esp_hal::spi::Error> {
-        self.dc.set_high();
-        self.spi.write(data)
     }
 
     fn read_inputs(&mut self) -> Result<InputSnapshot, esp_hal::i2c::master::Error> {
@@ -885,9 +913,7 @@ impl FrontPanel {
             return Some(UiAction::ClearBmsActivationResult);
         }
 
-        let Some((x, y)) = snapshot.touch_point else {
-            return None;
-        };
+        let (x, y) = snapshot.touch_point?;
 
         defmt::info!(
             "ui: touch edge x={=u16} y={=u16} overlay={}",
@@ -963,78 +989,41 @@ impl FrontPanel {
         }
     }
 
+    fn render_scene<F>(&mut self, draw: F) -> Result<(), esp_hal::spi::Error>
+    where
+        F: FnOnce(&mut FrameBufferPainter<'_>) -> Result<(), esp_hal::spi::Error>,
+    {
+        self.display_buffers.copy_displayed_to_render();
+        self.dirty_rows.clear();
+        {
+            let mut painter =
+                FrameBufferPainter::new(self.display_buffers.render_mut(), &mut self.dirty_rows);
+            draw(&mut painter)?;
+        }
+        self.dirty_rows.retain_differences(
+            self.display_buffers.displayed(),
+            self.display_buffers.render(),
+        );
+        self.panel_io
+            .present(&mut self.display_buffers, &mut self.dirty_rows)?;
+        self.frame_no = self.frame_no.wrapping_add(1);
+        Ok(())
+    }
+
     fn render_inputs(&mut self, snapshot: InputSnapshot) -> Result<(), esp_hal::spi::Error> {
         let model = self.snapshot_to_model(snapshot);
         let variant = self.ui_variant;
         let self_check_snapshot = self.self_check_snapshot;
         let self_check_overlay = self.self_check_overlay;
-        {
-            let mut painter = PanelPainter { panel: self };
+        self.render_scene(|painter| {
             front_panel_scene::render_frame_with_self_check_overlay(
-                &mut painter,
+                painter,
                 &model,
                 variant,
                 Some(&self_check_snapshot),
                 self_check_overlay,
-            )?;
-        }
-        self.frame_no = self.frame_no.wrapping_add(1);
-        Ok(())
-    }
-
-    fn set_window(
-        &mut self,
-        x0: u16,
-        y0: u16,
-        x1: u16,
-        y1: u16,
-    ) -> Result<(), esp_hal::spi::Error> {
-        let sx = x0.saturating_add(OFFSET_X);
-        let sy = y0.saturating_add(OFFSET_Y);
-        let ex = x1.saturating_add(OFFSET_X);
-        let ey = y1.saturating_add(OFFSET_Y);
-
-        self.write_cmd(CMD_CASET)?;
-        self.write_data(&u16_be_pair(sx, ex))?;
-        self.write_cmd(CMD_RASET)?;
-        self.write_data(&u16_be_pair(sy, ey))?;
-        Ok(())
-    }
-
-    fn fill_rect(
-        &mut self,
-        x: u16,
-        y: u16,
-        w: u16,
-        h: u16,
-        color: u16,
-    ) -> Result<(), esp_hal::spi::Error> {
-        if w == 0 || h == 0 {
-            return Ok(());
-        }
-
-        let x1 = x.saturating_add(w - 1);
-        let y1 = y.saturating_add(h - 1);
-
-        self.set_window(x, y, x1, y1)?;
-        self.write_cmd(CMD_RAMWR)?;
-
-        let [hi, lo] = color.to_be_bytes();
-        let mut buf = [0u8; 64];
-        for chunk in buf.chunks_exact_mut(2) {
-            chunk[0] = hi;
-            chunk[1] = lo;
-        }
-
-        let mut remaining: u32 = (w as u32) * (h as u32);
-        while remaining > 0 {
-            let pixels = core::cmp::min(remaining, (buf.len() / 2) as u32);
-            let bytes = (pixels as usize) * 2;
-            self.write_data(&buf[..bytes])?;
-            remaining -= pixels;
-        }
-
-        Ok(())
+            )
+        })
     }
 }
 
@@ -1181,11 +1170,111 @@ fn orientation_label(orientation: Orientation) -> &'static str {
     }
 }
 
-struct PanelPainter<'a> {
-    panel: &'a mut FrontPanel,
+struct PanelIo {
+    spi: SpiDmaBus<'static, Blocking>,
+    dc: Flex<'static>,
 }
 
-impl UiPainter for PanelPainter<'_> {
+impl PanelIo {
+    fn configure_dc(&mut self) {
+        self.dc.apply_output_config(
+            &OutputConfig::default()
+                .with_drive_mode(DriveMode::PushPull)
+                .with_pull(Pull::None),
+        );
+        self.dc.set_low();
+        self.dc.set_output_enable(true);
+    }
+
+    fn apply_runtime_config(&mut self) {
+        let cfg = esp_hal::spi::master::Config::default()
+            .with_frequency(Rate::from_mhz(PANEL_RUNTIME_SPI_FREQ_MHZ))
+            .with_mode(Mode::_0);
+        self.spi
+            .apply_config(&cfg)
+            .expect("display runtime spi config should be valid");
+        defmt::info!(
+            "ui: display runtime path mode=dma freq_mhz={} staging_bytes={}",
+            PANEL_RUNTIME_SPI_FREQ_MHZ,
+            DMA_STAGING_BYTES
+        );
+    }
+
+    fn write_cmd(&mut self, cmd: u8) -> Result<(), esp_hal::spi::Error> {
+        self.dc.set_low();
+        self.spi.write(&[cmd])
+    }
+
+    fn write_data(&mut self, data: &[u8]) -> Result<(), esp_hal::spi::Error> {
+        self.dc.set_high();
+        self.spi.write(data)
+    }
+
+    fn set_window(
+        &mut self,
+        x0: u16,
+        y0: u16,
+        x1: u16,
+        y1: u16,
+    ) -> Result<(), esp_hal::spi::Error> {
+        let sx = x0.saturating_add(OFFSET_X);
+        let sy = y0.saturating_add(OFFSET_Y);
+        let ex = x1.saturating_add(OFFSET_X);
+        let ey = y1.saturating_add(OFFSET_Y);
+
+        self.write_cmd(CMD_CASET)?;
+        self.write_data(&u16_be_pair(sx, ex))?;
+        self.write_cmd(CMD_RASET)?;
+        self.write_data(&u16_be_pair(sy, ey))?;
+        Ok(())
+    }
+
+    fn present(
+        &mut self,
+        display_buffers: &mut DisplayBuffers,
+        dirty_rows: &mut DirtyRows,
+    ) -> Result<(), esp_hal::spi::Error> {
+        if dirty_rows.any() {
+            let source = display_buffers.render();
+            for band in dirty_rows.bands() {
+                let start = band.start_row * FRAME_WIDTH;
+                let pixels = band.row_count * FRAME_WIDTH;
+                let byte_len = pixels * core::mem::size_of::<u16>();
+                let band_bytes = unsafe {
+                    core::slice::from_raw_parts(
+                        source[start..start + pixels].as_ptr().cast(),
+                        byte_len,
+                    )
+                };
+                self.set_window(
+                    0,
+                    band.start_row as u16,
+                    (FRAME_WIDTH - 1) as u16,
+                    (band.start_row + band.row_count - 1) as u16,
+                )?;
+                self.write_cmd(CMD_RAMWR)?;
+                self.write_data(band_bytes)?;
+            }
+        }
+
+        display_buffers.commit_present();
+        dirty_rows.clear();
+        Ok(())
+    }
+}
+
+struct FrameBufferPainter<'a> {
+    frame: &'a mut [u16],
+    dirty_rows: &'a mut DirtyRows,
+}
+
+impl<'a> FrameBufferPainter<'a> {
+    fn new(frame: &'a mut [u16], dirty_rows: &'a mut DirtyRows) -> Self {
+        Self { frame, dirty_rows }
+    }
+}
+
+impl UiPainter for FrameBufferPainter<'_> {
     type Error = esp_hal::spi::Error;
 
     fn fill_rect(
@@ -1196,7 +1285,31 @@ impl UiPainter for PanelPainter<'_> {
         h: u16,
         rgb565: u16,
     ) -> Result<(), Self::Error> {
-        self.panel.fill_rect(x, y, w, h, rgb565)
+        if w == 0 || h == 0 {
+            return Ok(());
+        }
+
+        let x0 = x as usize;
+        let y0 = y as usize;
+        if x0 >= FRAME_WIDTH || y0 >= FRAME_HEIGHT {
+            return Ok(());
+        }
+
+        let x1 = x0.saturating_add(w as usize).min(FRAME_WIDTH);
+        let y1 = y0.saturating_add(h as usize).min(FRAME_HEIGHT);
+        if x1 <= x0 || y1 <= y0 {
+            return Ok(());
+        }
+
+        let stored_color = rgb565.to_be();
+        self.dirty_rows.mark_range(y0, y1 - y0);
+        for row in y0..y1 {
+            let start = row * FRAME_WIDTH + x0;
+            let end = row * FRAME_WIDTH + x1;
+            self.frame[start..end].fill(stored_color);
+        }
+
+        Ok(())
     }
 }
 
@@ -1245,15 +1358,21 @@ impl OutputPin for DcPin<'_> {
     }
 }
 
-struct NoCsSpiDevice<'a> {
-    bus: &'a mut HalSpi<'static, Blocking>,
+struct NoCsSpiDevice<'a, BUS> {
+    bus: &'a mut BUS,
 }
 
-impl embedded_hal::spi::ErrorType for NoCsSpiDevice<'_> {
+impl<BUS> embedded_hal::spi::ErrorType for NoCsSpiDevice<'_, BUS>
+where
+    BUS: SpiBus<Error = esp_hal::spi::Error>,
+{
     type Error = esp_hal::spi::Error;
 }
 
-impl SpiDevice for NoCsSpiDevice<'_> {
+impl<BUS> SpiDevice for NoCsSpiDevice<'_, BUS>
+where
+    BUS: SpiBus<Error = esp_hal::spi::Error>,
+{
     fn transaction(&mut self, operations: &mut [Operation<'_, u8>]) -> Result<(), Self::Error> {
         for op in operations {
             match op {
@@ -1261,8 +1380,7 @@ impl SpiDevice for NoCsSpiDevice<'_> {
                 Operation::Write(buf) => self.bus.write(buf)?,
                 Operation::Transfer(read, write) => {
                     let count = core::cmp::min(read.len(), write.len());
-                    read[..count].copy_from_slice(&write[..count]);
-                    self.bus.transfer(&mut read[..count])?;
+                    self.bus.transfer(&mut read[..count], &write[..count])?;
                 }
                 Operation::TransferInPlace(buf) => self.bus.transfer_in_place(buf)?,
                 Operation::DelayNs(ns) => {
