@@ -209,8 +209,16 @@ impl Controller {
                 tach_fault = false;
             }
         } else if expecting_tach {
-            self.tach_recovery_started_ms = None;
-            self.tach_recovery_pulses = 0;
+            if self
+                .last_tach_seen_ms
+                .map(|last_seen_ms| {
+                    input.now_ms.saturating_sub(last_seen_ms) >= self.cfg.tach_timeout_ms
+                })
+                .unwrap_or(true)
+            {
+                self.tach_recovery_started_ms = None;
+                self.tach_recovery_pulses = 0;
+            }
             if !prev.command.enabled() && !prev.tach_fault {
                 self.last_tach_seen_ms = Some(input.now_ms);
             }
@@ -500,6 +508,16 @@ mod tests {
         assert!(status.tach_fault);
 
         let (status, _) = ctl.update(Input {
+            now_ms: 2_210,
+            temps_ready: true,
+            temp_a_c_x16: Some(42 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 0,
+        });
+        assert_eq!(status.command, FanLevel::High);
+        assert!(status.tach_fault);
+
+        let (status, _) = ctl.update(Input {
             now_ms: 2_225,
             temps_ready: true,
             temp_a_c_x16: Some(42 * 16),
@@ -511,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_sparse_glitches_while_fault_is_forced_high() {
+    fn ignores_sparse_glitches_after_recovery_window_expires() {
         let mut ctl = Controller::new(cfg());
         ctl.update(Input {
             now_ms: 0,
