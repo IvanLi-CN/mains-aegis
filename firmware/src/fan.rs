@@ -184,7 +184,10 @@ impl Controller {
             self.cooldown_until_ms = None;
         }
 
-        let expecting_tach = desired_command.enabled();
+        // Keep the tach watchdog tied to the actual driven output. Once a fault
+        // is latched the fan stays forced-high until sustained pulse activity
+        // proves it really recovered, even if the thermal request drops to off.
+        let expecting_tach = prev.tach_fault || desired_command.enabled();
         let mut tach_fault = prev.tach_fault;
         if input.tach_pulse_count > 0 {
             self.last_tach_seen_ms = Some(input.now_ms);
@@ -504,6 +507,71 @@ mod tests {
             tach_pulse_count: 1,
         });
         assert_eq!(status.command, FanLevel::Mid);
+        assert!(!status.tach_fault);
+    }
+
+    #[test]
+    fn ignores_sparse_glitches_while_fault_is_forced_high() {
+        let mut ctl = Controller::new(cfg());
+        ctl.update(Input {
+            now_ms: 0,
+            temps_ready: true,
+            temp_a_c_x16: Some(42 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 1,
+        });
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 2_100,
+            temps_ready: true,
+            temp_a_c_x16: Some(42 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 0,
+        });
+        assert_eq!(status.command, FanLevel::High);
+        assert!(status.tach_fault);
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 13_000,
+            temps_ready: true,
+            temp_a_c_x16: Some(35 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 1,
+        });
+        assert_eq!(status.requested_command, FanLevel::Mid);
+        assert_eq!(status.command, FanLevel::High);
+        assert!(status.tach_fault);
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 26_000,
+            temps_ready: true,
+            temp_a_c_x16: Some(35 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 0,
+        });
+        assert_eq!(status.requested_command, FanLevel::Off);
+        assert_eq!(status.command, FanLevel::High);
+        assert!(status.tach_fault);
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 26_100,
+            temps_ready: true,
+            temp_a_c_x16: Some(35 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 1,
+        });
+        assert_eq!(status.requested_command, FanLevel::Off);
+        assert_eq!(status.command, FanLevel::High);
+        assert!(status.tach_fault);
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 26_125,
+            temps_ready: true,
+            temp_a_c_x16: Some(35 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 1,
+        });
+        assert_eq!(status.command, FanLevel::Off);
         assert!(!status.tach_fault);
     }
 }

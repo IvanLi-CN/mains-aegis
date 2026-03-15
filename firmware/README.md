@@ -416,7 +416,7 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
 - `fan: temp_source missing fallback=full_speed ...`
 - `fan: tach_timeout mode=high pwm_pct=100 ...`
 - `fan: tach_recovered mode=mid pwm_pct=60 ...`
-- `irq: fan_tach=...`（限频调试日志，用于确认 tach 脉冲可见性，不跟随每个边沿刷屏）
+- `irq: fan_tach=...`（限频 `info` 日志，默认 `DEFMT_LOG=info` 下即可确认 tach 脉冲可见性，不跟随每个边沿刷屏）
 
 ### Bench 验证（人类操作）
 

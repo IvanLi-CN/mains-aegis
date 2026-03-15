@@ -851,7 +851,7 @@ fn main() -> ! {
                     Duration::from_secs(1),
                 )
             {
-                defmt::debug!("irq: fan_tach={=u32}", irq_events.fan_tach);
+                defmt::info!("irq: fan_tach={=u32}", irq_events.fan_tach);
             }
         },
     ) {
@@ -919,7 +919,7 @@ fn main() -> ! {
                     Duration::from_secs(1),
                 )
             {
-                defmt::debug!("irq: fan_tach={=u32}", irq_events.fan_tach);
+                defmt::info!("irq: fan_tach={=u32}", irq_events.fan_tach);
             }
         }
     }
