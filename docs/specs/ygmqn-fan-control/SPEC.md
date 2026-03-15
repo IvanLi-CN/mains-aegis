@@ -4,7 +4,7 @@
 
 - Status: 部分完成（4/5）
 - Created: 2026-03-13
-- Last: 2026-03-13
+- Last: 2026-03-15
 
 ## 背景 / 问题陈述
 
@@ -92,3 +92,4 @@
 
 - 2026-03-13: 首版规格冻结 V1 风扇控制口径：最高温三档、`3C` 回滞、`10s` 余冷、`2s` tach 看门狗、异常全速保护。
 - 2026-03-13: 已落地 `esp_firmware::fan` 纯逻辑状态机、`FAN_TACH/FAN_EN/FAN_VSET_PWM` 固件接线、`fan:` 日志与 bench 文档；补充 `tach` 故障锁存与抗毛刺恢复、故障强制高转期间的恢复去抖、恢复窗口静默超时后重新取证、BMS isolation 窗口内使用缓存温度、请求/实际双层 telemetry、默认 `info` 可见的限频 tach bring-up 日志、双 TMP112 持续采样、raw x16 阈值口径、host 侧纯逻辑单测脚本，以及 PWM 初始化/运行期失败强制 `FAN_EN`/`FAN_VSET_PWM` fail-safe；PR 为 `#36`，当前等待 review-loop 收敛。
+- 2026-03-15: 已同步 `origin/main` 的运行时音频与 BQ40 基线更新；风扇控制分支保留既有温控 / tach / 日志契约，并已重新通过 host fan 单测与 `cargo build --release`。
