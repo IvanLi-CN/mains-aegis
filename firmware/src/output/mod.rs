@@ -94,6 +94,7 @@ const CHARGER_FAULT1_TSHUT: u8 = 1 << 2;
 const CHARGER_INPUT_IBUS_MAX_MA: i16 = 5_000;
 const CHARGER_INPUT_VBUS_MAX_MV: u16 = 30_000;
 const CHARGER_INPUT_POWER_ANOMALY_W10: u32 = 2_000;
+const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
 
 const BMS_DIAG_BREADCRUMB_LEN: usize = 8;
 const BMS_DIAG_BREADCRUMB_VERSION: u8 = 1;
@@ -542,8 +543,16 @@ impl PanelProbeResult {
     }
 }
 
-fn ups_mode_from_vbus(vbus_present: Option<bool>, has_output: bool) -> UpsMode {
-    match vbus_present {
+fn mains_present_from_vin(vin_vbus_mv: Option<u16>) -> Option<bool> {
+    vin_vbus_mv.map(|mv| mv >= VIN_MAINS_PRESENT_THRESHOLD_MV)
+}
+
+fn stable_mains_present(vin_mains_present: Option<bool>, vin_vbus_mv: Option<u16>) -> Option<bool> {
+    mains_present_from_vin(vin_vbus_mv).or(vin_mains_present)
+}
+
+fn ups_mode_from_mains(mains_present: Option<bool>, has_output: bool) -> UpsMode {
+    match mains_present {
         Some(true) => {
             if has_output {
                 UpsMode::Supplement
@@ -744,6 +753,7 @@ where
         ui.vin_vbus_mv = ina3221::read_bus_mv(&mut *i2c, ina3221::Channel::Ch3)
             .ok()
             .and_then(|mv| u16::try_from(mv).ok());
+        ui.vin_mains_present = mains_present_from_vin(ui.vin_vbus_mv);
         ui.vin_iin_ma = ina3221::read_shunt_uv(&mut *i2c, ina3221::Channel::Ch3)
             .ok()
             .map(|shunt_uv| ina3221::shunt_uv_to_current_ma(shunt_uv, 7));
@@ -1240,7 +1250,10 @@ where
 
     let enabled_outputs = enabled_outputs_from_flags(out_a_allowed, out_b_allowed);
 
-    ui.mode = ups_mode_from_vbus(ui.fusb302_vbus_present, out_a_allowed || out_b_allowed);
+    ui.mode = ups_mode_from_mains(
+        stable_mains_present(ui.vin_mains_present, ui.vin_vbus_mv),
+        out_a_allowed || out_b_allowed,
+    );
 
     defmt::info!(
         "self_test: done enabled_outputs={} restore_on_bms_ready={} blocked_by_bms={=bool} charger_enabled={=bool} bms_present={=bool}",
@@ -4688,16 +4701,21 @@ where
     fn recompute_ui_mode(&mut self) {
         let has_output = self.ui_snapshot.tps_a_enabled == Some(true)
             || self.ui_snapshot.tps_b_enabled == Some(true);
-        self.ui_snapshot.mode =
-            ups_mode_from_vbus(self.ui_snapshot.fusb302_vbus_present, has_output);
+        self.ui_snapshot.mode = ups_mode_from_mains(
+            stable_mains_present(
+                self.ui_snapshot.vin_mains_present,
+                self.ui_snapshot.vin_vbus_mv,
+            ),
+            has_output,
+        );
     }
 
     fn refresh_audio_signals(&mut self) {
         let hold_no_battery_result = self.should_hold_no_battery_result();
-        let mains_present = self
-            .charger_audio
-            .input_present
-            .or(self.ui_snapshot.fusb302_vbus_present);
+        let mains_present = stable_mains_present(
+            self.ui_snapshot.vin_mains_present,
+            self.ui_snapshot.vin_vbus_mv,
+        );
         let tmp_a_hot = self
             .cfg
             .detected_tmp_outputs
@@ -5159,6 +5177,8 @@ where
                 let vbus_mv = match bus {
                     Ok(v) => {
                         self.ui_snapshot.vin_vbus_mv = u16::try_from(v).ok();
+                        self.ui_snapshot.vin_mains_present =
+                            mains_present_from_vin(self.ui_snapshot.vin_vbus_mv);
                         TelemetryValue::Value(v)
                     }
                     Err(e) => {
@@ -5194,6 +5214,7 @@ where
         } else {
             self.ui_snapshot.vin_vbus_mv = None;
             self.ui_snapshot.vin_iin_ma = None;
+            self.ui_snapshot.vin_mains_present = None;
         }
         self.recompute_ui_mode();
         true
@@ -6402,5 +6423,30 @@ mod tests {
         assert_eq!(sample.issue, Some(ChargerInputSampleIssue::AdcNotReady));
         assert_eq!(sample.ui_vbus_mv, None);
         assert_eq!(sample.ui_ibus_ma, None);
+    }
+
+    #[test]
+    fn mains_present_from_vin_uses_dc5025_threshold_only() {
+        assert_eq!(mains_present_from_vin(None), None);
+        assert_eq!(mains_present_from_vin(Some(2_999)), Some(false));
+        assert_eq!(mains_present_from_vin(Some(3_000)), Some(true));
+    }
+
+    #[test]
+    fn stable_mains_present_prefers_fresh_vin_and_keeps_last_known_good() {
+        assert_eq!(stable_mains_present(None, None), None);
+        assert_eq!(stable_mains_present(Some(true), None), Some(true));
+        assert_eq!(stable_mains_present(Some(false), None), Some(false));
+        assert_eq!(stable_mains_present(Some(true), Some(2_900)), Some(false));
+        assert_eq!(stable_mains_present(Some(false), Some(19_200)), Some(true));
+    }
+
+    #[test]
+    fn ups_mode_from_mains_prefers_vin_truth_source() {
+        assert_eq!(ups_mode_from_mains(Some(true), false), UpsMode::Standby);
+        assert_eq!(ups_mode_from_mains(Some(true), true), UpsMode::Supplement);
+        assert_eq!(ups_mode_from_mains(Some(false), true), UpsMode::Backup);
+        assert_eq!(ups_mode_from_mains(None, false), UpsMode::Standby);
+        assert_eq!(ups_mode_from_mains(None, true), UpsMode::Backup);
     }
 }

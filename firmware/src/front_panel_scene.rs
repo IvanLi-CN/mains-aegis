@@ -13,6 +13,17 @@ use u8g2_fonts::{
 
 pub const UI_W: u16 = 320;
 pub const UI_H: u16 = 172;
+const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
+
+fn mains_present_from_vin(vin_vbus_mv: Option<u16>) -> bool {
+    vin_vbus_mv.is_some_and(|mv| mv >= VIN_MAINS_PRESENT_THRESHOLD_MV)
+}
+
+fn snapshot_mains_present(snapshot: &SelfCheckUiSnapshot) -> bool {
+    snapshot
+        .vin_mains_present
+        .unwrap_or_else(|| mains_present_from_vin(snapshot.vin_vbus_mv))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -163,6 +174,7 @@ pub struct SelfCheckUiSnapshot {
     pub fusb302_vbus_present: Option<bool>,
     pub input_vbus_mv: Option<u16>,
     pub input_ibus_ma: Option<i32>,
+    pub vin_mains_present: Option<bool>,
     pub vin_vbus_mv: Option<u16>,
     pub vin_iin_ma: Option<i32>,
     pub ina3221: SelfCheckCommState,
@@ -205,6 +217,7 @@ impl SelfCheckUiSnapshot {
             fusb302_vbus_present: None,
             input_vbus_mv: None,
             input_ibus_ma: None,
+            vin_mains_present: None,
             vin_vbus_mv: None,
             vin_iin_ma: None,
             ina3221: SelfCheckCommState::Pending,
@@ -667,8 +680,7 @@ impl DashboardLiveData {
             mode: snapshot.mode,
             focus: model.focus,
             touch_irq: model.touch_irq,
-            mains_present: snapshot.fusb302_vbus_present == Some(true)
-                || snapshot.vin_vbus_mv.map(|mv| mv >= 3_000).unwrap_or(false),
+            mains_present: snapshot_mains_present(snapshot),
             out_a_on: snapshot.tps_a_enabled == Some(true),
             out_b_on: snapshot.tps_b_enabled == Some(true),
             bms_on: model.bms_on,
@@ -4637,6 +4649,7 @@ mod tests {
         snapshot.bq40z50 = SelfCheckCommState::Ok;
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
+        assert!(!live.mains_present);
         assert_eq!(live.input_power_w10(), None);
         assert_eq!(live.output_power_w10(), None);
         assert_eq!(live.output_current_ma(), None);
@@ -4665,6 +4678,7 @@ mod tests {
 
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Backup), &snapshot);
 
+        assert!(live.mains_present);
         assert_eq!(live.input_power_w10(), Some(174));
         assert_eq!(live.output_bus_mv(), Some(18_845));
         assert_eq!(live.output_current_ma(), Some(1_900));
@@ -4682,6 +4696,7 @@ mod tests {
 
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
+        assert!(live.mains_present);
         assert_eq!(live.input_power_w10(), Some(0));
     }
 
@@ -4694,6 +4709,7 @@ mod tests {
 
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
+        assert!(live.mains_present);
         assert_eq!(live.input_power_w10(), Some(0));
     }
 
@@ -4706,6 +4722,40 @@ mod tests {
 
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
+        assert!(!live.mains_present);
         assert_eq!(live.input_power_w10(), None);
+    }
+
+    #[test]
+    fn live_dashboard_ignores_charger_present_when_vin_is_below_threshold() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.vin_vbus_mv = Some(2_900);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert!(!live.mains_present);
+    }
+
+    #[test]
+    fn live_dashboard_keeps_mains_present_when_vin_is_online_without_charger_flag() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(false);
+        snapshot.vin_vbus_mv = Some(19_200);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert!(live.mains_present);
+    }
+
+    #[test]
+    fn live_dashboard_keeps_latched_mains_when_vin_sample_is_temporarily_missing() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.vin_mains_present = Some(true);
+        snapshot.vin_vbus_mv = None;
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert!(live.mains_present);
     }
 }
