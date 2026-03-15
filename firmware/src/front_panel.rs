@@ -1066,6 +1066,7 @@ impl FrontPanel {
     fn render_inputs(&mut self, snapshot: InputSnapshot) -> Result<(), esp_hal::spi::Error> {
         let model = self.snapshot_to_model(snapshot);
         let variant = self.ui_variant;
+        let dashboard_route = self.dashboard_route;
         let self_check_snapshot = self.self_check_snapshot;
         let self_check_overlay = self.self_check_overlay;
         self.render_scene(|painter| {
@@ -1073,7 +1074,7 @@ impl FrontPanel {
                 painter,
                 &model,
                 variant,
-                self.dashboard_route,
+                dashboard_route,
                 Some(&self_check_snapshot),
                 self_check_overlay,
             )
