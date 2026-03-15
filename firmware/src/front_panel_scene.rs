@@ -103,6 +103,7 @@ static FONT_A_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13B_t
 static FONT_A_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_7x14B_tf>();
 static FONT_B_NUM: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13_mf>();
 static FONT_B_NUM_BIG: FontRenderer = FontRenderer::new::<fonts::u8g2_font_t0_22b_tn>();
+static FONT_B_NUM_HERO: FontRenderer = FontRenderer::new::<fonts::u8g2_font_t0_30b_tn>();
 static FONT_A_DETAIL: FontRenderer = FontRenderer::new::<fonts::u8g2_font_9x15B_tf>();
 static FONT_B_DETAIL: FontRenderer = FontRenderer::new::<fonts::u8g2_font_9x15_mf>();
 // Compact roles intentionally reuse >=10px fonts to enforce minimum glyph height.
@@ -136,6 +137,7 @@ enum FontRole {
     NumCompact,
     DetailNum,
     NumBig,
+    NumHero,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1823,7 +1825,7 @@ fn render_variant_b_demo<P: UiPainter>(
         text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::NumHero,
             format_args!("{:>2}.{:01}", input_power_w10 / 10, input_power_w10 % 10),
             Point::new(14, kpi_value_y),
             HorizontalAlignment::Left,
@@ -1832,7 +1834,7 @@ fn render_variant_b_demo<P: UiPainter>(
         text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::NumHero,
             format_args!("{:>2}.{:01}", output_power_w10 / 10, output_power_w10 % 10),
             Point::new(194, kpi_value_y),
             HorizontalAlignment::Right,
@@ -1860,7 +1862,7 @@ fn render_variant_b_demo<P: UiPainter>(
         text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::NumHero,
             format_args!("{:>2}.{:01}", output_power_w10 / 10, output_power_w10 % 10),
             Point::new(14, kpi_value_y),
             HorizontalAlignment::Left,
@@ -1869,7 +1871,7 @@ fn render_variant_b_demo<P: UiPainter>(
         text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::NumHero,
             format_args!(
                 "{:>1}.{:01}",
                 (output_current_ma / 1000),
@@ -1905,7 +1907,7 @@ fn render_variant_b_demo<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "0.00A",
                 Point::new(194, 108),
                 HorizontalAlignment::Right,
@@ -1923,7 +1925,7 @@ fn render_variant_b_demo<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "LOCK",
                 Point::new(194, 132),
                 HorizontalAlignment::Right,
@@ -1962,7 +1964,7 @@ fn render_variant_b_demo<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "0.00A",
                 Point::new(194, 108),
                 HorizontalAlignment::Right,
@@ -1980,7 +1982,7 @@ fn render_variant_b_demo<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 format_args!(
                     "{:>1}.{:02}A",
                     (charge_batt_ma as u16) / 1000,
@@ -2023,7 +2025,7 @@ fn render_variant_b_demo<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 format_args!(
                     "{:>1}.{:02}A",
                     (tps_out_ma as u16) / 1000,
@@ -2045,7 +2047,7 @@ fn render_variant_b_demo<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "LOCK",
                 Point::new(194, 132),
                 HorizontalAlignment::Right,
@@ -2324,7 +2326,7 @@ fn render_variant_b_live<P: UiPainter>(
             Some(pin_w10) => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::NumHero,
                 format_args!("{:>2}.{:01}", pin_w10 / 10, pin_w10 % 10),
                 Point::new(14, kpi_value_y),
                 HorizontalAlignment::Left,
@@ -2344,7 +2346,7 @@ fn render_variant_b_live<P: UiPainter>(
             Some(pout_w10) => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::NumHero,
                 format_args!("{:>2}.{:01}", pout_w10 / 10, pout_w10 % 10),
                 Point::new(194, kpi_value_y),
                 HorizontalAlignment::Right,
@@ -2383,7 +2385,7 @@ fn render_variant_b_live<P: UiPainter>(
             Some(pout_w10) => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::NumHero,
                 format_args!("{:>2}.{:01}", pout_w10 / 10, pout_w10 % 10),
                 Point::new(14, kpi_value_y),
                 HorizontalAlignment::Left,
@@ -2403,7 +2405,7 @@ fn render_variant_b_live<P: UiPainter>(
             Some(iout_ma) => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::NumHero,
                 format_args!("{:>1}.{:01}", iout_ma / 1000, (iout_ma % 1000) / 100),
                 Point::new(194, kpi_value_y),
                 HorizontalAlignment::Right,
@@ -2445,7 +2447,7 @@ fn render_variant_b_live<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "0.00A",
                 Point::new(194, 108),
                 HorizontalAlignment::Right,
@@ -2463,7 +2465,7 @@ fn render_variant_b_live<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 if data.mains_present { "LOCK" } else { "NOAC" },
                 Point::new(194, 132),
                 HorizontalAlignment::Right,
@@ -2502,7 +2504,7 @@ fn render_variant_b_live<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "0.00A",
                 Point::new(194, 108),
                 HorizontalAlignment::Right,
@@ -2521,7 +2523,7 @@ fn render_variant_b_live<P: UiPainter>(
                 Some(chg_ma) => text(
                     painter,
                     variant,
-                    FontRole::Num,
+                    FontRole::DetailNum,
                     format_args!("{:>1}.{:02}A", chg_ma / 1000, (chg_ma % 1000) / 10),
                     Point::new(194, 132),
                     HorizontalAlignment::Right,
@@ -2530,7 +2532,7 @@ fn render_variant_b_live<P: UiPainter>(
                 None => text(
                     painter,
                     variant,
-                    FontRole::Num,
+                    FontRole::DetailNum,
                     "N/A",
                     Point::new(194, 132),
                     HorizontalAlignment::Right,
@@ -2573,7 +2575,7 @@ fn render_variant_b_live<P: UiPainter>(
                 Some(out_ma) => text(
                     painter,
                     variant,
-                    FontRole::Num,
+                    FontRole::DetailNum,
                     format_args!("{:>1}.{:02}A", out_ma / 1000, (out_ma % 1000) / 10),
                     Point::new(194, 108),
                     HorizontalAlignment::Right,
@@ -2582,7 +2584,7 @@ fn render_variant_b_live<P: UiPainter>(
                 None => text(
                     painter,
                     variant,
-                    FontRole::Num,
+                    FontRole::DetailNum,
                     "N/A",
                     Point::new(194, 108),
                     HorizontalAlignment::Right,
@@ -2601,7 +2603,7 @@ fn render_variant_b_live<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "LOCK",
                 Point::new(194, 132),
                 HorizontalAlignment::Right,
@@ -6401,6 +6403,7 @@ fn text<P: UiPainter>(
         FontRole::NumCompact => &FONT_B_NUM,
         FontRole::DetailNum => &FONT_B_DETAIL,
         FontRole::NumBig => &FONT_B_NUM_BIG,
+        FontRole::NumHero => &FONT_B_NUM_HERO,
     };
 
     let mut target = PainterDrawTarget::new(painter);
