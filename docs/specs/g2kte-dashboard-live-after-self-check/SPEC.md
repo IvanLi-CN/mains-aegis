@@ -70,7 +70,7 @@
 - Given 运行态 `VIN` 遥测存在，When Dashboard 显示 `PIN W`，Then 读数来自 `INA3221 CH3` 的 `vin_vbus_mv * vin_iin_ma`。
 - Given `vin_iin_ma<=0` 但 `VIN` 仍在线，When Dashboard 计算 `PIN W`，Then 显示 `0.0W`，不再把逆流/空载样本转成正功率。
 - Given `VIN` 遥测缺失，When Dashboard 渲染 `PIN W`，Then 显示 `N/A`。
-- Given `USB-C VBUS` 不在线但 `VIN>=3V`，When Dashboard 进入 live 渲染，Then `PIN W` 区块仍显示，不再因为旧的 `VBUS` 门槛被隐藏。
+- Given charger `input_present` 不在线但 `VIN>=3V`，When Dashboard 进入 live 渲染，Then `PIN W` 区块仍显示，且 live Dashboard 仍按“有市电”分支渲染。
 - Given `tools/front-panel-preview` 运行真实 Dashboard 场景，When 导出 PNG，Then `preview.png` 分辨率为 `320x172`。
 
 ## 实现记录
@@ -79,8 +79,11 @@
 - `render_variant_b` 改为优先消费 `SelfCheckUiSnapshot`；只有未传快照时才保留历史 demo fallback。
 - `PowerManager` 在 INA/TPS/BQ40 轮询中持续维护 Dashboard 真实字段，保证启动自检与运行态共用同一份 UI 快照。
 - `PIN W` 改为消费 `vin_vbus_mv` / `vin_iin_ma`，不再绑定 `BQ25792` 的输入侧寄存器样本。
-- live Dashboard 的 mains 判定同时接受 `USB-C VBUS` 或 `VIN>=3V`，避免 DC 输入在线时 `PIN` 卡片被隐藏。
+- live Dashboard 的 mains 判定统一改为 `VIN>=3V`；`BQ25792 input_present` 仅保留给 charger 诊断，不再影响 Dashboard 的“有市电”分支。
 - Preview 工具增加 3 组 runtime fixture，用于验证 `standby / assist / backup` 三个 Dashboard 场景。
+- live Dashboard 的 `mains_present` 改为只消费 `vin_vbus_mv>=3V`；即使 charger `input_present` 临时抖动，只要 `DC5025 VIN` 在线，模式、强调色与 `NOAC/LOCK` 分支都保持一致。
+- 若 `VIN` 只发生瞬时采样缺失，或因运行态暂时跳过 `VIN` 遥测而错过单个采样周期，live Dashboard 继续沿用最近一次已知的 `VIN` 市电状态；只把 `PIN W` 数值回退为 `N/A`。
+- 若 `VIN` 连续缺失，或连续多个周期都在跳过 `VIN` 遥测而超出瞬时容错窗口，live Dashboard 回退到 charger `input_present` 作为降级兜底，避免整页长期卡在过期的市电状态。
 
 ## 验证记录
 
@@ -101,3 +104,5 @@
 
 - 2026-03-15: `PIN W` 数据源改为 `VIN / INA3221 CH3`；DC 输入在线时 `PIN` 区块继续显示，逆流/空载样本显示 `0.0W`，缺失样本显示 `N/A`。
 - 2026-03-15: 自检页不再作为 steady-state 默认页；切换为“自检 -> 真实 Dashboard”。
+- 2026-03-15: live Dashboard 的市电真相源统一改为 `DC5025 VIN>=3V`，不再把 charger `input_present` 当成 UI 的 mains 判定输入。
+- 2026-03-15: `VIN` 瞬时采样缺失时保留最近一次已知的市电状态，避免 INA CH3 单次读失败把 live Dashboard 误切到 `BACKUP/NOAC` 分支；连续缺失则退回 charger `input_present` 兜底。
