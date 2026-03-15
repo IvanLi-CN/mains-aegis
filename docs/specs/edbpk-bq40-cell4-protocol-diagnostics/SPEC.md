@@ -110,5 +110,5 @@
 
 ## 变更记录（Change log）
 
-- 2026-03-15: merge-proof review 收敛补丁：live DF 抓取失败时改为 fail-closed，不再把 `stock section1` 伪装成有效 live DF；ROM repair 使用的 live DF 窗口改为必须校验 echoed DF 起始地址，并在每次 recover attempt 前强制重抓；`ManufacturerAccess(0x00)` toggle / reset 统一复用同一套多变体发送路径；`flash/monitor` 目录锁补上 owner 写入竞态等待、stale owner PID + 启动信息校验，避免异常退出或 PID 复用后永久卡死；fresh flash 后恢复成“先尝试无 reset 附着、失败再 fallback reset”的 monitor 策略，避免把启动边界问题静默掩盖。
+- 2026-03-15: merge-proof review 收敛补丁：`ManufacturerBlockAccess(0x44)` 的 DF 读回复统一改为 fail-closed，只接受“echoed start address + 32-byte payload”的 TRM 规范返回；live DF 抓取失败时改为 fail-closed，不再把 `stock section1` 伪装成有效 live DF；ROM repair 使用的 live DF 窗口在每次 recover attempt 前强制重抓；`ManufacturerAccess(0x00)` toggle / reset 统一复用同一套多变体发送路径；`flash/monitor` 目录锁补上 owner 写入竞态等待、stale owner PID + 启动信息校验，避免异常退出或 PID 复用后永久卡死；fresh flash 后恢复成“先尝试无 reset 附着、失败再 fallback reset”的 monitor 策略，避免把启动边界问题静默掩盖。
 - 2026-03-15: 补齐 reply `PEC` 探测并完成二次实机验证；本规格范围内的工具协议/只读诊断/互斥收敛任务全部关闭，后续 `Cell4` 修复与主固件自检链路移交其它规格跟踪。
