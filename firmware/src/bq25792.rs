@@ -382,9 +382,11 @@ pub const fn power_path_adc_config_ok(state: AdcState) -> bool {
 }
 
 pub const fn power_path_adc_ready(state: AdcState, status3: u8) -> bool {
+    let continuous = (state.ctrl & adc_ctrl::ADC_RATE) == 0;
+
     power_path_adc_config_ok(state)
         && !state.reconfigured
-        && (status3 & status3::ADC_DONE_STAT) != 0
+        && (continuous || (status3 & status3::ADC_DONE_STAT) != 0)
 }
 
 pub fn ensure_adc_power_path<I2C>(i2c: &mut I2C) -> Result<AdcState, I2C::Error>
@@ -465,7 +467,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn power_path_adc_ready_requires_stable_config_and_conversion_done() {
+    fn power_path_adc_ready_accepts_continuous_mode_without_done_flag() {
         let state = AdcState {
             ctrl: adc_ctrl::ADC_EN | adc_ctrl::ADC_AVG | adc_ctrl::ADC_SAMPLE_15BIT,
             disable0: 0,
@@ -474,8 +476,7 @@ mod tests {
         };
 
         assert!(power_path_adc_config_ok(state));
-        assert!(power_path_adc_ready(state, status3::ADC_DONE_STAT));
-        assert!(!power_path_adc_ready(state, 0));
+        assert!(power_path_adc_ready(state, 0));
     }
 
     #[test]
@@ -496,6 +497,23 @@ mod tests {
         state.ctrl = adc_ctrl::ADC_EN | adc_ctrl::ADC_AVG | adc_ctrl::ADC_SAMPLE_15BIT;
         state.disable0 = adc_disable0::IBUS_ADC_DIS;
         assert!(!power_path_adc_config_ok(state));
+    }
+
+    #[test]
+    fn power_path_adc_ready_requires_done_flag_in_one_shot_mode() {
+        let state = AdcState {
+            ctrl: adc_ctrl::ADC_EN
+                | adc_ctrl::ADC_RATE
+                | adc_ctrl::ADC_AVG
+                | adc_ctrl::ADC_SAMPLE_15BIT,
+            disable0: 0,
+            disable1: 0,
+            reconfigured: false,
+        };
+
+        assert!(power_path_adc_config_ok(state));
+        assert!(!power_path_adc_ready(state, 0));
+        assert!(power_path_adc_ready(state, status3::ADC_DONE_STAT));
     }
 }
 
