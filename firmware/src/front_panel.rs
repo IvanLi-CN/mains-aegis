@@ -541,11 +541,7 @@ impl FrontPanel {
     fn render_boot_confirmation_splash(&mut self) {
         let meta = front_panel_scene::DisplayDiagnosticMeta {
             orientation_label: "BOOT CHECK 320x172",
-            color_order_label: if PANEL_RGB_ORDER {
-                "BACKLIGHT + SPI + TCA"
-            } else {
-                "BACKLIGHT + SPI + TCA"
-            },
+            color_order_label: "BACKLIGHT + SPI + TCA",
             heartbeat_on: true,
         };
         if let Err(e) = self
