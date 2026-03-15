@@ -18,7 +18,7 @@
 
 - 把前面板运行时绘制切换为 `PSRAM 双 framebuffer + framebuffer painter + SPI2 GDMA full-width dirty-band flush`。
 - 保留现有 GC9307 初始化、方向、偏移、UI 布局与触摸命中语义。
-- 默认把运行时 SPI 频率提升到 `40MHz`；`20MHz` 作为中间验证档位保留，`10MHz` 作为安全回退档位保留。
+- 默认把运行时 SPI 频率提升到 `40MHz`；`20MHz` 作为中间验证档位保留。
 - 为 dirty-row 合并与 buffer 角色切换补上可重复的纯逻辑测试。
 
 ### Non-goals
@@ -41,7 +41,7 @@
 - `firmware/src/bin/test-fw.rs`
   - 测试固件显示路径同步切换到 `SPI2 + DMA_CH1 + PSRAM`。
 - `firmware/Cargo.toml`
-  - `esp-hal` 启用 `psram`，增加 `display-spi-10mhz` / `display-spi-20mhz` / `display-spi-40mhz` 频率档位 feature。
+  - `esp-hal` 启用 `psram`，增加 `display-spi-20mhz` / `display-spi-40mhz` 频率档位 feature。
 
 ### Out of scope
 
@@ -57,7 +57,6 @@
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `esp_firmware::display_pipeline` | Rust module | internal | New | None | firmware | `front_panel.rs` | 提供 framebuffer/dirty-band 纯逻辑 |
 | `front_panel::FrontPanel::new(...)` | Rust API | internal | Modify | None | firmware | `main.rs`, `test-fw.rs` | 新增 `DMA_CH1` 与 `PSRAM` 输入 |
-| `display-spi-10mhz` | Cargo feature | internal | New | None | firmware | firmware build | 10MHz 安全回退档位，默认关闭 |
 | `display-spi-20mhz` | Cargo feature | internal | New | None | firmware | firmware build | 20MHz 实验开关，默认关闭 |
 | `display-spi-40mhz` | Cargo feature | internal | New | None | firmware | firmware build | 40MHz 默认档位的显式选择，默认关闭 |
 
@@ -73,7 +72,7 @@ None
 - 场景层仍通过 `UiPainter::fill_rect` 绘制，但落点改成 framebuffer；图元覆盖的行会被标记为 dirty rows。
 - 每次渲染前将当前 displayed frame 复制到 render frame，渲染后仅保留“确实与 displayed 不同”的 dirty rows。
 - present 阶段按连续 dirty rows 合并为 full-width bands，逐 band 发送 `CASET/RASET/RAMWR + SPI DMA burst`。
-- GC9307 初始化阶段保留 `10MHz`；runtime SPI 默认提升到 `40MHz`。启用 `display-spi-20mhz` feature 时切换到 `20MHz`，启用 `display-spi-10mhz` feature 时回退到 `10MHz`。
+- GC9307 初始化阶段保留 `10MHz`；runtime SPI 默认提升到 `40MHz`。启用 `display-spi-20mhz` feature 时切换到 `20MHz`。
 
 ### Edge cases / errors
 
@@ -87,11 +86,11 @@ None
 - `FrontPanel` 默认通过 `SPI2 + DMA_CH1 + PSRAM` 驱动屏幕；runtime SPI 默认频率为 `40MHz`。
 - 默认构建 `cargo +esp check --release` 通过；测试固件 `cargo +esp check --release --bin test-fw --features test-fw-screen-static,test-fw-default-screen-static` 通过。
 - dirty-row/band/buffer-role 的纯逻辑测试可在宿主机复跑通过。
-- `display-spi-10mhz` 作为安全回退档位保留；`display-spi-20mhz` 作为中间验证档位保留。
+- `display-spi-20mhz` 作为中间验证档位保留。
 
 ## 实现前置条件（Definition of Ready / Preconditions）
 
-- 目标、范围与“默认 40MHz / 20MHz 中间档 / 10MHz 安全回退”策略已冻结。
+- 目标、范围与“默认 40MHz / 20MHz 中间档”策略已冻结。
 - 以 PSRAM 为正式依赖的前提已确认。
 - 当前 UI 仍允许“全帧渲染 + 局部 flush”而无需改视觉布局。
 
@@ -101,7 +100,7 @@ None
 
 - Unit / pure-logic tests: `display_pipeline.rs` 的 dirty-row、band merge、buffer role 切换。
 - Firmware compile checks: 主固件与 `test-fw` 的 release `cargo +esp check`。
-- Hardware manual validation: `10MHz` 回退档、`20MHz` 中间档、`40MHz` 默认档均已完成板级验证；`40MHz` 作为默认发布频率。
+- Hardware manual validation: `20MHz` 中间档与 `40MHz` 默认档均已完成板级验证；`40MHz` 作为默认发布频率。
 
 ### Quality checks
 
@@ -127,7 +126,7 @@ None
 - [x] M1: 新增 `display_pipeline`，提供 double-buffer / dirty-row / band merge 纯逻辑。
 - [x] M2: `FrontPanel` 运行时绘制切换到 framebuffer painter，不再在图元粒度直写 SPI。
 - [x] M3: `PanelIo` 接入 `SPI2 + GDMA`，以 full-width dirty bands 刷新 GC9307。
-- [x] M4: 主固件与 `test-fw` 切换到 `PSRAM + DMA_CH1` 显示主路径，默认运行时 `40MHz`，并保留 `20MHz` 中间档与 `10MHz` 回退档。
+- [x] M4: 主固件与 `test-fw` 切换到 `PSRAM + DMA_CH1` 显示主路径，默认运行时 `40MHz`，并保留 `20MHz` 中间档。
 - [x] M5: PR / review-loop / 联调结论同步回规格与索引。
 
 ## 方案概述（Approach, high-level）
@@ -144,8 +143,8 @@ None
 
 ## 变更记录（Change log）
 
-- 2026-03-15: 默认运行时 SPI 频率提升到 `40MHz`；`20MHz` 作为中间验证档位保留，`10MHz` 作为安全回退档位保留，并同步到 PR #41。
-- 2026-03-15: 实机完成 `10MHz`、`20MHz`、`40MHz` 三档烧录与显示验证，确认 `40MHz` 在当前板级上可正常点亮并显著提升刷新观感。
+- 2026-03-15: 默认运行时 SPI 频率提升到 `40MHz`；`20MHz` 作为中间验证档位保留，并同步到 PR #41。
+- 2026-03-15: 实机完成 `20MHz`、`40MHz` 两档烧录与显示验证，确认 `40MHz` 在当前板级上可正常点亮并显著提升刷新观感。
 - 2026-03-15: 新增显示链路重构规格，冻结 `PSRAM 双缓冲 + SPI DMA dirty-band` 路线。
 
 ## 参考（References）
