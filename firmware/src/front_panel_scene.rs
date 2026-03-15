@@ -2986,7 +2986,7 @@ fn render_dashboard_detail_page<P: UiPainter>(
         detail_status_color(palette, status),
     )?;
 
-    draw_panel(painter, 6, 22, 308, 34, palette, true, accent)?;
+    draw_panel(painter, 6, 22, 308, 38, palette, true, accent)?;
     draw_panel(painter, 6, 60, 150, 82, palette, false, accent)?;
     draw_panel(painter, 164, 60, 150, 82, palette, false, accent)?;
     draw_panel(
@@ -3085,7 +3085,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
         variant,
         FontRole::DetailBody,
         "BAL CELL",
-        Point::new(14, 42),
+        Point::new(14, 44),
         HorizontalAlignment::Left,
         palette.bg,
     )?;
@@ -3228,7 +3228,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         Some(pack_mv) => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::DetailNum,
             format_args!("{:>2}.{:01}V", pack_mv / 1000, (pack_mv % 1000) / 100),
             Point::new(150, 28),
             HorizontalAlignment::Left,
@@ -3237,7 +3237,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         None => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::DetailNum,
             "N/A",
             Point::new(150, 28),
             HorizontalAlignment::Left,
@@ -3249,7 +3249,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         variant,
         FontRole::DetailBody,
         "IPACK",
-        Point::new(176, 26),
+        Point::new(232, 26),
         HorizontalAlignment::Left,
         palette.bg,
     )?;
@@ -3257,7 +3257,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         Some(current_ma) => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::DetailNum,
             format_args!(
                 "{:>1}.{:02}A",
                 current_ma.abs() / 1000,
@@ -3270,7 +3270,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         None => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::DetailNum,
             "N/A",
             Point::new(308, 28),
             HorizontalAlignment::Right,
@@ -3288,7 +3288,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         } else {
             "PACK IDLE"
         },
-        Point::new(14, 42),
+        Point::new(14, 44),
         HorizontalAlignment::Left,
         palette.bg,
     )?;
@@ -3419,7 +3419,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         Some(bus_mv) => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::DetailNum,
             format_args!("{:>2}.{:01}V", bus_mv / 1000, (bus_mv % 1000) / 100),
             Point::new(150, 28),
             HorizontalAlignment::Left,
@@ -3428,7 +3428,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         None => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::DetailNum,
             "N/A",
             Point::new(150, 28),
             HorizontalAlignment::Left,
@@ -3440,7 +3440,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         variant,
         FontRole::DetailBody,
         "POUT",
-        Point::new(176, 26),
+        Point::new(232, 26),
         HorizontalAlignment::Left,
         palette.bg,
     )?;
@@ -3448,7 +3448,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         Some(power_w10) => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::DetailNum,
             format_args!("{:>2}.{:01}W", power_w10 / 10, power_w10 % 10),
             Point::new(308, 28),
             HorizontalAlignment::Right,
@@ -3457,7 +3457,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         None => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::DetailNum,
             "N/A",
             Point::new(308, 28),
             HorizontalAlignment::Right,
@@ -3469,7 +3469,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         variant,
         FontRole::DetailBody,
         "DUAL REGULATION PATH",
-        Point::new(14, 42),
+        Point::new(14, 44),
         HorizontalAlignment::Left,
         palette.bg,
     )?;
@@ -3606,7 +3606,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::NumBig,
+        FontRole::DetailNum,
         data.detail
             .input_source
             .map(DashboardInputSource::label)
@@ -3628,7 +3628,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         Some(pin_w10) => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::DetailNum,
             format_args!("{:>2}.{:01}W", pin_w10 / 10, pin_w10 % 10),
             Point::new(308, 28),
             HorizontalAlignment::Right,
@@ -3637,7 +3637,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         None => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::DetailNum,
             "N/A",
             Point::new(308, 28),
             HorizontalAlignment::Right,
@@ -3649,7 +3649,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         variant,
         FontRole::DetailBody,
         "INPUT CHARGER SUMMARY",
-        Point::new(14, 42),
+        Point::new(14, 44),
         HorizontalAlignment::Left,
         palette.bg,
     )?;
@@ -3781,7 +3781,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         Some(temp_c) => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::DetailNum,
             format_args!("{:>2}C", temp_c),
             Point::new(150, 28),
             HorizontalAlignment::Left,
@@ -3790,7 +3790,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         None => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::DetailNum,
             "N/A",
             Point::new(150, 28),
             HorizontalAlignment::Left,
@@ -3809,7 +3809,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::NumBig,
+        FontRole::DetailNum,
         data.detail.fan_status.unwrap_or("N/A"),
         Point::new(308, 28),
         HorizontalAlignment::Right,
@@ -3820,7 +3820,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         variant,
         FontRole::DetailBody,
         "THERMAL PROTECTION SUMMARY",
-        Point::new(14, 42),
+        Point::new(14, 44),
         HorizontalAlignment::Left,
         palette.bg,
     )?;
