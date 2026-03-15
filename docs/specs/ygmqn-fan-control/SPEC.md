@@ -21,7 +21,7 @@
 - 温控阈值固定为 `<40C=关`、`40~49C=中速`、`>=50C=全速`；回滞固定 `3C`。
 - 从中速或全速退出后保留 `10s` 余冷，余冷期间维持低速。
 - 接入 `FAN_TACH` 边沿计数；当命令档位为中速/全速且 `2s` 内无脉冲时，记录故障并强制全速。
-- `tach` 故障必须保持锁存，直到再次观察到真实 `FAN_TACH` 脉冲后才允许清除。
+- `tach` 故障必须保持锁存，直到再次观察到已确认的真实 `FAN_TACH` 脉冲活动后才允许清除；单个毛刺边沿不能解除保护。
 - 输出可观察日志，覆盖档位切换、温度源退化、tach 超时与故障恢复。
 - 若 `FAN_VSET_PWM` 初始化失败，或后续运行期 duty 应用失败，固件必须退化到“`FAN_EN` 常开且 `FAN_VSET_PWM` 强制高电平/满占空比”的保守散热模式，而不是静默失去风扇控制。
 
@@ -87,4 +87,4 @@
 ## 变更记录（Change log）
 
 - 2026-03-13: 首版规格冻结 V1 风扇控制口径：最高温三档、`3C` 回滞、`10s` 余冷、`2s` tach 看门狗、异常全速保护。
-- 2026-03-13: 已落地 `esp_firmware::fan` 纯逻辑状态机、`FAN_TACH/FAN_EN/FAN_VSET_PWM` 固件接线、`fan:` 日志与 bench 文档；补充 `tach` 故障锁存、双 TMP112 持续采样、raw x16 阈值口径、host 侧纯逻辑单测脚本，以及 PWM 初始化/运行期失败强制 `FAN_EN`/`FAN_VSET_PWM` fail-safe；PR 为 `#36`，当前等待 review-loop 收敛。
+- 2026-03-13: 已落地 `esp_firmware::fan` 纯逻辑状态机、`FAN_TACH/FAN_EN/FAN_VSET_PWM` 固件接线、`fan:` 日志与 bench 文档；补充 `tach` 故障锁存与抗毛刺恢复、双 TMP112 持续采样、raw x16 阈值口径、host 侧纯逻辑单测脚本，以及 PWM 初始化/运行期失败强制 `FAN_EN`/`FAN_VSET_PWM` fail-safe；PR 为 `#36`，当前等待 review-loop 收敛。

@@ -1535,6 +1535,9 @@ where
 
     fn refresh_fan_temp_snapshots_if_due(&mut self) {
         let now = Instant::now();
+        if matches!(self.bms_activation_isolation_until, Some(until) if now < until) {
+            return;
+        }
         if now < self.next_fan_temp_refresh_at {
             return;
         }

@@ -104,6 +104,7 @@ pub struct Controller {
     thermal_level: FanLevel,
     cooldown_until_ms: Option<u64>,
     last_tach_seen_ms: Option<u64>,
+    tach_recovery_samples: u8,
     status: Status,
 }
 
@@ -114,6 +115,7 @@ impl Controller {
             thermal_level: FanLevel::Off,
             cooldown_until_ms: None,
             last_tach_seen_ms: None,
+            tach_recovery_samples: 0,
             status: Status {
                 command: FanLevel::Off,
                 thermal_level: FanLevel::Off,
@@ -176,8 +178,18 @@ impl Controller {
         let mut tach_fault = prev.tach_fault;
         if input.tach_pulse_count > 0 {
             self.last_tach_seen_ms = Some(input.now_ms);
-            tach_fault = false;
+            if prev.tach_fault {
+                self.tach_recovery_samples = self.tach_recovery_samples.saturating_add(1);
+                if self.tach_recovery_samples >= 2 {
+                    tach_fault = false;
+                    self.tach_recovery_samples = 0;
+                }
+            } else {
+                self.tach_recovery_samples = 0;
+                tach_fault = false;
+            }
         } else if expecting_tach {
+            self.tach_recovery_samples = 0;
             if !prev.command.enabled() && !prev.tach_fault {
                 self.last_tach_seen_ms = Some(input.now_ms);
             }
@@ -447,6 +459,16 @@ mod tests {
 
         let (status, _) = ctl.update(Input {
             now_ms: 2_200,
+            temps_ready: true,
+            temp_a_c_x16: Some(42 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 1,
+        });
+        assert_eq!(status.command, FanLevel::High);
+        assert!(status.tach_fault);
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 2_250,
             temps_ready: true,
             temp_a_c_x16: Some(42 * 16),
             temp_b_c_x16: None,
