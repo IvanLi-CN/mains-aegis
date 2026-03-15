@@ -163,6 +163,8 @@ pub struct SelfCheckUiSnapshot {
     pub fusb302_vbus_present: Option<bool>,
     pub input_vbus_mv: Option<u16>,
     pub input_ibus_ma: Option<i32>,
+    pub vin_vbus_mv: Option<u16>,
+    pub vin_iin_ma: Option<i32>,
     pub ina3221: SelfCheckCommState,
     pub ina_total_ma: Option<i32>,
     pub bq25792: SelfCheckCommState,
@@ -203,6 +205,8 @@ impl SelfCheckUiSnapshot {
             fusb302_vbus_present: None,
             input_vbus_mv: None,
             input_ibus_ma: None,
+            vin_vbus_mv: None,
+            vin_iin_ma: None,
             ina3221: SelfCheckCommState::Pending,
             ina_total_ma: None,
             bq25792: SelfCheckCommState::Pending,
@@ -637,8 +641,8 @@ struct DashboardLiveData {
     out_a_on: bool,
     out_b_on: bool,
     bms_on: bool,
-    input_vbus_mv: Option<u16>,
-    input_ibus_ma: Option<i32>,
+    vin_vbus_mv: Option<u16>,
+    vin_iin_ma: Option<i32>,
     out_a_mv: Option<u16>,
     out_a_ma: Option<i32>,
     out_b_mv: Option<u16>,
@@ -663,12 +667,13 @@ impl DashboardLiveData {
             mode: snapshot.mode,
             focus: model.focus,
             touch_irq: model.touch_irq,
-            mains_present: snapshot.fusb302_vbus_present == Some(true),
+            mains_present: snapshot.fusb302_vbus_present == Some(true)
+                || snapshot.vin_vbus_mv.map(|mv| mv >= 3_000).unwrap_or(false),
             out_a_on: snapshot.tps_a_enabled == Some(true),
             out_b_on: snapshot.tps_b_enabled == Some(true),
             bms_on: model.bms_on,
-            input_vbus_mv: snapshot.input_vbus_mv,
-            input_ibus_ma: snapshot.input_ibus_ma,
+            vin_vbus_mv: snapshot.vin_vbus_mv,
+            vin_iin_ma: snapshot.vin_iin_ma,
             out_a_mv: snapshot.out_a_vbus_mv,
             out_a_ma: snapshot.tps_a_iout_ma,
             out_b_mv: snapshot.out_b_vbus_mv,
@@ -720,8 +725,8 @@ impl DashboardLiveData {
     }
 
     fn input_power_w10(self) -> Option<u32> {
-        let ibus_ma = self.input_ibus_ma?;
-        Some((self.input_vbus_mv? as u32 * ibus_ma.max(0) as u32) / 100_000)
+        let vin_ma = self.vin_iin_ma?;
+        Some((self.vin_vbus_mv? as u32 * vin_ma.max(0) as u32) / 100_000)
     }
 
     fn output_power_w10(self) -> Option<u32> {
@@ -4642,8 +4647,8 @@ mod tests {
     fn live_dashboard_uses_real_snapshot_metrics_without_demo_fallback() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Backup);
         snapshot.fusb302_vbus_present = Some(false);
-        snapshot.input_vbus_mv = Some(19_200);
-        snapshot.input_ibus_ma = Some(910);
+        snapshot.vin_vbus_mv = Some(19_200);
+        snapshot.vin_iin_ma = Some(910);
         snapshot.tps_a_enabled = Some(true);
         snapshot.out_a_vbus_mv = Some(18_860);
         snapshot.tps_a_iout_ma = Some(980);
@@ -4672,8 +4677,8 @@ mod tests {
     fn live_dashboard_clamps_reverse_input_current_to_zero_power() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.fusb302_vbus_present = Some(true);
-        snapshot.input_vbus_mv = Some(20_100);
-        snapshot.input_ibus_ma = Some(-1_250);
+        snapshot.vin_vbus_mv = Some(20_100);
+        snapshot.vin_iin_ma = Some(-1_250);
 
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
@@ -4684,8 +4689,8 @@ mod tests {
     fn live_dashboard_keeps_zero_input_current_as_zero_power() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.fusb302_vbus_present = Some(true);
-        snapshot.input_vbus_mv = Some(20_100);
-        snapshot.input_ibus_ma = Some(0);
+        snapshot.vin_vbus_mv = Some(20_100);
+        snapshot.vin_iin_ma = Some(0);
 
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
@@ -4696,8 +4701,8 @@ mod tests {
     fn live_dashboard_keeps_invalid_input_sample_as_na() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.fusb302_vbus_present = Some(true);
-        snapshot.input_vbus_mv = None;
-        snapshot.input_ibus_ma = None;
+        snapshot.vin_vbus_mv = None;
+        snapshot.vin_iin_ma = None;
 
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 

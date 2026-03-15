@@ -26,6 +26,8 @@ fn base_bq40_snapshot(mode: UpsMode) -> SelfCheckUiSnapshot {
     snapshot.fusb302_vbus_present = Some(true);
     snapshot.input_vbus_mv = Some(19_240);
     snapshot.input_ibus_ma = Some(1180);
+    snapshot.vin_vbus_mv = Some(19_240);
+    snapshot.vin_iin_ma = Some(1180);
     snapshot.ina3221 = SelfCheckCommState::Ok;
     snapshot.ina_total_ma = Some(1130);
     snapshot.bq25792 = SelfCheckCommState::Ok;
@@ -66,6 +68,8 @@ fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
             snapshot.fusb302_vbus_present = Some(true);
             snapshot.input_vbus_mv = Some(19_110);
             snapshot.input_ibus_ma = Some(1260);
+            snapshot.vin_vbus_mv = Some(19_110);
+            snapshot.vin_iin_ma = Some(1260);
             snapshot.bq25792_allow_charge = Some(false);
             snapshot.bq25792_ichg_ma = None;
             snapshot.tps_a_enabled = Some(false);
@@ -83,6 +87,8 @@ fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
             snapshot.fusb302_vbus_present = Some(true);
             snapshot.input_vbus_mv = Some(19_220);
             snapshot.input_ibus_ma = Some(1320);
+            snapshot.vin_vbus_mv = Some(19_220);
+            snapshot.vin_iin_ma = Some(1320);
             snapshot.bq25792_allow_charge = Some(true);
             snapshot.bq25792_ichg_ma = Some(540);
             snapshot.tps_a_enabled = Some(false);
@@ -100,6 +106,8 @@ fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
             snapshot.fusb302_vbus_present = Some(true);
             snapshot.input_vbus_mv = Some(19_180);
             snapshot.input_ibus_ma = Some(820);
+            snapshot.vin_vbus_mv = Some(19_180);
+            snapshot.vin_iin_ma = Some(820);
             snapshot.bq25792_allow_charge = Some(false);
             snapshot.bq25792_ichg_ma = None;
             snapshot.tps_a_enabled = Some(true);
@@ -117,6 +125,8 @@ fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
             snapshot.fusb302_vbus_present = Some(false);
             snapshot.input_vbus_mv = None;
             snapshot.input_ibus_ma = None;
+            snapshot.vin_vbus_mv = None;
+            snapshot.vin_iin_ma = None;
             snapshot.bq25792_allow_charge = Some(false);
             snapshot.bq25792_ichg_ma = None;
             snapshot.tps_a_enabled = Some(true);

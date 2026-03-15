@@ -35,7 +35,7 @@ const DEFAULT_ILIMIT_MA: u16 = 3_500;
 const TELEMETRY_PERIOD: Duration = Duration::from_millis(500);
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
 const FAULT_LOG_MIN_INTERVAL: Duration = Duration::from_millis(200);
-const TELEMETRY_INCLUDE_VIN_CH3: bool = false;
+const TELEMETRY_INCLUDE_VIN_CH3: bool = true;
 const FORCE_MIN_CHARGE: bool = cfg!(feature = "force-min-charge");
 const BMS_BOOT_DIAG_AUTO_VALIDATE: bool = false;
 const I2C1_FREQ_KHZ: u32 = 25;

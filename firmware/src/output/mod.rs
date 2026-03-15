@@ -740,6 +740,14 @@ where
     } else {
         SelfCheckCommState::Err
     };
+    if ina_ready && include_vin_ch3 {
+        ui.vin_vbus_mv = ina3221::read_bus_mv(&mut *i2c, ina3221::Channel::Ch3)
+            .ok()
+            .and_then(|mv| u16::try_from(mv).ok());
+        ui.vin_iin_ma = ina3221::read_shunt_uv(&mut *i2c, ina3221::Channel::Ch3)
+            .ok()
+            .map(|shunt_uv| ina3221::shunt_uv_to_current_ma(shunt_uv, 7));
+    }
     ui.tmp_a = if tmp_a_present && tmp_out_a_ok {
         SelfCheckCommState::Ok
     } else if tmp_a_present {
@@ -5149,14 +5157,25 @@ where
                 let bus = ina3221::read_bus_mv(&mut self.i2c, ina3221::Channel::Ch3);
                 let shunt = ina3221::read_shunt_uv(&mut self.i2c, ina3221::Channel::Ch3);
                 let vbus_mv = match bus {
-                    Ok(v) => TelemetryValue::Value(v),
-                    Err(e) => TelemetryValue::Err(ina_error_kind(e)),
+                    Ok(v) => {
+                        self.ui_snapshot.vin_vbus_mv = u16::try_from(v).ok();
+                        TelemetryValue::Value(v)
+                    }
+                    Err(e) => {
+                        self.ui_snapshot.vin_vbus_mv = None;
+                        TelemetryValue::Err(ina_error_kind(e))
+                    }
                 };
                 let current_ma = match shunt {
                     Ok(shunt_uv) => {
-                        TelemetryValue::Value(ina3221::shunt_uv_to_current_ma(shunt_uv, 7))
+                        let current_ma = ina3221::shunt_uv_to_current_ma(shunt_uv, 7);
+                        self.ui_snapshot.vin_iin_ma = Some(current_ma);
+                        TelemetryValue::Value(current_ma)
                     }
-                    Err(e) => TelemetryValue::Err(ina_error_kind(e)),
+                    Err(e) => {
+                        self.ui_snapshot.vin_iin_ma = None;
+                        TelemetryValue::Err(ina_error_kind(e))
+                    }
                 };
                 defmt::info!(
                     "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
@@ -5164,12 +5183,17 @@ where
                     current_ma
                 );
             } else {
+                self.ui_snapshot.vin_vbus_mv = None;
+                self.ui_snapshot.vin_iin_ma = None;
                 defmt::info!(
                     "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
                     TelemetryValue::Err("ina_uninit"),
                     TelemetryValue::Err("ina_uninit")
                 );
             }
+        } else {
+            self.ui_snapshot.vin_vbus_mv = None;
+            self.ui_snapshot.vin_iin_ma = None;
         }
         self.recompute_ui_mode();
         true
