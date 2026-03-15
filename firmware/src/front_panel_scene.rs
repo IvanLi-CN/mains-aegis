@@ -161,6 +161,8 @@ pub struct SelfCheckUiSnapshot {
     pub tca6408a: SelfCheckCommState,
     pub fusb302: SelfCheckCommState,
     pub fusb302_vbus_present: Option<bool>,
+    pub input_vbus_mv: Option<u16>,
+    pub input_ibus_ma: Option<i32>,
     pub ina3221: SelfCheckCommState,
     pub ina_total_ma: Option<i32>,
     pub bq25792: SelfCheckCommState,
@@ -168,6 +170,8 @@ pub struct SelfCheckUiSnapshot {
     pub bq25792_ichg_ma: Option<u16>,
     pub bq25792_vbat_present: Option<bool>,
     pub bq40z50: SelfCheckCommState,
+    pub bq40z50_pack_mv: Option<u16>,
+    pub bq40z50_current_ma: Option<i16>,
     pub bq40z50_soc_pct: Option<u16>,
     pub bq40z50_rca_alarm: Option<bool>,
     pub bq40z50_no_battery: Option<bool>,
@@ -175,9 +179,11 @@ pub struct SelfCheckUiSnapshot {
     pub bq40z50_last_result: Option<BmsResultKind>,
     pub tps_a: SelfCheckCommState,
     pub tps_a_enabled: Option<bool>,
+    pub out_a_vbus_mv: Option<u16>,
     pub tps_a_iout_ma: Option<i32>,
     pub tps_b: SelfCheckCommState,
     pub tps_b_enabled: Option<bool>,
+    pub out_b_vbus_mv: Option<u16>,
     pub tps_b_iout_ma: Option<i32>,
     pub tmp_a: SelfCheckCommState,
     pub tmp_a_c: Option<i16>,
@@ -195,6 +201,8 @@ impl SelfCheckUiSnapshot {
             tca6408a: SelfCheckCommState::Pending,
             fusb302: SelfCheckCommState::Pending,
             fusb302_vbus_present: None,
+            input_vbus_mv: None,
+            input_ibus_ma: None,
             ina3221: SelfCheckCommState::Pending,
             ina_total_ma: None,
             bq25792: SelfCheckCommState::Pending,
@@ -202,6 +210,8 @@ impl SelfCheckUiSnapshot {
             bq25792_ichg_ma: None,
             bq25792_vbat_present: None,
             bq40z50: SelfCheckCommState::Pending,
+            bq40z50_pack_mv: None,
+            bq40z50_current_ma: None,
             bq40z50_soc_pct: None,
             bq40z50_rca_alarm: None,
             bq40z50_no_battery: None,
@@ -209,9 +219,11 @@ impl SelfCheckUiSnapshot {
             bq40z50_last_result: None,
             tps_a: SelfCheckCommState::Pending,
             tps_a_enabled: None,
+            out_a_vbus_mv: None,
             tps_a_iout_ma: None,
             tps_b: SelfCheckCommState::Pending,
             tps_b_enabled: None,
+            out_b_vbus_mv: None,
             tps_b_iout_ma: None,
             tmp_a: SelfCheckCommState::Pending,
             tmp_a_c: None,
@@ -612,6 +624,132 @@ impl DashboardData {
             } else {
                 35 + (wave % 2)
             },
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DashboardLiveData {
+    mode: UpsMode,
+    focus: UiFocus,
+    touch_irq: bool,
+    mains_present: bool,
+    out_a_on: bool,
+    out_b_on: bool,
+    bms_on: bool,
+    input_vbus_mv: Option<u16>,
+    input_ibus_ma: Option<i32>,
+    out_a_mv: Option<u16>,
+    out_a_ma: Option<i32>,
+    out_b_mv: Option<u16>,
+    out_b_ma: Option<i32>,
+    chg_iin_ma: Option<u16>,
+    batt_pack_mv: Option<u16>,
+    bms_current_ma: Option<i16>,
+    bms_soc_pct: Option<u16>,
+    therm_a_c: Option<i16>,
+    therm_b_c: Option<i16>,
+    charge_allowed: Option<bool>,
+    bms_state: SelfCheckCommState,
+    charger_state: SelfCheckCommState,
+    bms_rca_alarm: Option<bool>,
+    bms_no_battery: Option<bool>,
+    bms_discharge_ready: Option<bool>,
+}
+
+impl DashboardLiveData {
+    fn from_snapshot(model: DashboardData, snapshot: &SelfCheckUiSnapshot) -> Self {
+        Self {
+            mode: snapshot.mode,
+            focus: model.focus,
+            touch_irq: model.touch_irq,
+            mains_present: snapshot.fusb302_vbus_present == Some(true),
+            out_a_on: snapshot.tps_a_enabled == Some(true),
+            out_b_on: snapshot.tps_b_enabled == Some(true),
+            bms_on: model.bms_on,
+            input_vbus_mv: snapshot.input_vbus_mv,
+            input_ibus_ma: snapshot.input_ibus_ma,
+            out_a_mv: snapshot.out_a_vbus_mv,
+            out_a_ma: snapshot.tps_a_iout_ma,
+            out_b_mv: snapshot.out_b_vbus_mv,
+            out_b_ma: snapshot.tps_b_iout_ma,
+            chg_iin_ma: snapshot.bq25792_ichg_ma,
+            batt_pack_mv: snapshot.bq40z50_pack_mv,
+            bms_current_ma: snapshot.bq40z50_current_ma,
+            bms_soc_pct: snapshot.bq40z50_soc_pct,
+            therm_a_c: snapshot.tmp_a_c,
+            therm_b_c: snapshot.tmp_b_c,
+            charge_allowed: snapshot.bq25792_allow_charge,
+            bms_state: snapshot.bq40z50,
+            charger_state: snapshot.bq25792,
+            bms_rca_alarm: snapshot.bq40z50_rca_alarm,
+            bms_no_battery: snapshot.bq40z50_no_battery,
+            bms_discharge_ready: snapshot.bq40z50_discharge_ready,
+        }
+    }
+
+    fn output_bus_mv(self) -> Option<u16> {
+        match (
+            self.out_a_on.then_some(self.out_a_mv).flatten(),
+            self.out_b_on.then_some(self.out_b_mv).flatten(),
+        ) {
+            (Some(a), Some(b)) => Some(((a as u32 + b as u32) / 2) as u16),
+            (Some(a), None) if !self.out_b_on => Some(a),
+            (None, Some(b)) if !self.out_a_on => Some(b),
+            (Some(a), None) if a > 0 && !self.out_b_on => Some(a),
+            (None, Some(b)) if b > 0 && !self.out_a_on => Some(b),
+            _ => None,
+        }
+    }
+
+    fn output_current_ma(self) -> Option<u32> {
+        if !self.out_a_on && !self.out_b_on {
+            return None;
+        }
+        let a = if self.out_a_on {
+            Some(self.out_a_ma?.unsigned_abs())
+        } else {
+            Some(0)
+        }?;
+        let b = if self.out_b_on {
+            Some(self.out_b_ma?.unsigned_abs())
+        } else {
+            Some(0)
+        }?;
+        Some(a + b)
+    }
+
+    fn input_power_w10(self) -> Option<u32> {
+        Some((self.input_vbus_mv? as u32 * self.input_ibus_ma?.unsigned_abs()) / 100_000)
+    }
+
+    fn output_power_w10(self) -> Option<u32> {
+        Some((self.output_bus_mv()? as u32 * self.output_current_ma()?) / 100_000)
+    }
+
+    fn charge_current_ma(self) -> Option<u16> {
+        match self.charge_allowed {
+            Some(true) => self.chg_iin_ma,
+            Some(false) => Some(0),
+            None => None,
+        }
+    }
+
+    fn battery_discharge_ma(self) -> Option<u32> {
+        match self.bms_current_ma {
+            Some(ma) if ma < 0 => Some(ma.unsigned_abs() as u32),
+            Some(_) => Some(0),
+            None => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn battery_max_temp_c(self) -> Option<i16> {
+        match (self.therm_a_c, self.therm_b_c) {
+            (Some(a), Some(b)) => Some(if a > b { a } else { b }),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
         }
     }
 }
@@ -1260,12 +1398,12 @@ pub fn render_frame_with_self_check_overlay<P: UiPainter>(
     draw_outline(painter, 0, 0, UI_W, UI_H, palette.border)?;
 
     match variant {
-        UiVariant::InstrumentA => render_variant_a(painter, variant, palette, data)?,
-        UiVariant::InstrumentB => render_variant_b(painter, variant, palette, data)?,
+        UiVariant::InstrumentA => render_variant_a(painter, variant, palette, data, self_check)?,
+        UiVariant::InstrumentB => render_variant_b(painter, variant, palette, data, self_check)?,
         UiVariant::RetroC => {
             render_variant_c(painter, variant, palette, data, self_check, overlay)?
         }
-        UiVariant::InstrumentD => render_variant_d(painter, variant, palette, data)?,
+        UiVariant::InstrumentD => render_variant_d(painter, variant, palette, data, self_check)?,
     }
 
     Ok(())
@@ -1276,11 +1414,31 @@ fn render_variant_a<P: UiPainter>(
     variant: UiVariant,
     palette: Palette,
     data: DashboardData,
+    self_check: Option<&SelfCheckUiSnapshot>,
 ) -> Result<(), P::Error> {
-    render_variant_b(painter, variant, palette, data)
+    render_variant_b(painter, variant, palette, data, self_check)
 }
 
 fn render_variant_b<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardData,
+    self_check: Option<&SelfCheckUiSnapshot>,
+) -> Result<(), P::Error> {
+    if let Some(snapshot) = self_check {
+        return render_variant_b_live(
+            painter,
+            variant,
+            palette,
+            DashboardLiveData::from_snapshot(data, snapshot),
+        );
+    }
+
+    render_variant_b_demo(painter, variant, palette, data)
+}
+
+fn render_variant_b_demo<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
     palette: Palette,
@@ -1718,6 +1876,7 @@ fn render_variant_b<P: UiPainter>(
             title: "BATTERY",
             value: format_args!("{:>2}% {:02}C", data.bms_soc_pct, batt_max_c),
             note: batt_status,
+            note_color: palette.text_dim,
             meter: data.bms_soc_pct as u32,
             active: data.bms_on,
             accent: palette.left,
@@ -1741,6 +1900,7 @@ fn render_variant_b<P: UiPainter>(
                     batt_max_c
                 ),
                 note: charge_status,
+                note_color: palette.text_dim,
                 meter: (charge_batt_ma * 100 / 1200).min(100),
                 active: true,
                 accent: palette.right,
@@ -1759,6 +1919,7 @@ fn render_variant_b<P: UiPainter>(
                 title: "CHARGE",
                 value: format_args!("{:>1}.{:02}A {:02}C", 0, 0, batt_max_c),
                 note: charge_status,
+                note_color: palette.text_dim,
                 meter: 0,
                 active: data.chg_on,
                 accent: palette.right,
@@ -1782,6 +1943,7 @@ fn render_variant_b<P: UiPainter>(
                 batt_max_c
             ),
             note: discharge_status,
+            note_color: palette.text_dim,
             meter: (batt_discharge_ma * 100 / 2200).min(100),
             active: matches!(data.mode, UpsMode::Supplement | UpsMode::Backup),
             accent: if data.mains_present {
@@ -1791,6 +1953,632 @@ fn render_variant_b<P: UiPainter>(
             },
         },
     )?;
+    Ok(())
+}
+
+fn render_variant_b_live<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    let kpi_label_y = 27;
+    let kpi_value_y = 44;
+    let mode_accent = mode_accent_color(palette, data.mode, data.touch_irq);
+    let mode_tag = if data.touch_irq {
+        "IRQ ON"
+    } else {
+        mode_label(data.mode)
+    };
+
+    let input_power_w10 = data.input_power_w10();
+    let output_power_w10 = data.output_power_w10();
+    let output_current_ma = data.output_current_ma();
+    let output_bus_mv = data.output_bus_mv();
+    let charge_batt_ma = data.charge_current_ma();
+    let tps_out_ma = data.output_current_ma();
+    let batt_discharge_ma = data.battery_discharge_ma();
+    draw_top_bar_with_status(
+        painter,
+        variant,
+        palette,
+        data.focus,
+        "UPS DASHBOARD",
+        "",
+        mode_tag,
+        mode_accent,
+    )?;
+
+    draw_panel(painter, 6, 22, 196, 52, palette, true, mode_accent)?;
+    if data.mains_present {
+        text(
+            painter,
+            variant,
+            FontRole::TextBody,
+            "PIN W",
+            Point::new(14, kpi_label_y),
+            HorizontalAlignment::Left,
+            palette.bg,
+        )?;
+        text(
+            painter,
+            variant,
+            FontRole::TextBody,
+            "POUT W",
+            Point::new(194, kpi_label_y),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?;
+        match input_power_w10 {
+            Some(pin_w10) => text(
+                painter,
+                variant,
+                FontRole::NumBig,
+                format_args!("{:>2}.{:01}", pin_w10 / 10, pin_w10 % 10),
+                Point::new(14, kpi_value_y),
+                HorizontalAlignment::Left,
+                palette.bg,
+            )?,
+            None => text(
+                painter,
+                variant,
+                FontRole::NumBig,
+                "N/A",
+                Point::new(14, kpi_value_y),
+                HorizontalAlignment::Left,
+                palette.bg,
+            )?,
+        }
+        match output_power_w10 {
+            Some(pout_w10) => text(
+                painter,
+                variant,
+                FontRole::NumBig,
+                format_args!("{:>2}.{:01}", pout_w10 / 10, pout_w10 % 10),
+                Point::new(194, kpi_value_y),
+                HorizontalAlignment::Right,
+                palette.bg,
+            )?,
+            None => text(
+                painter,
+                variant,
+                FontRole::NumBig,
+                "N/A",
+                Point::new(194, kpi_value_y),
+                HorizontalAlignment::Right,
+                palette.bg,
+            )?,
+        }
+    } else {
+        text(
+            painter,
+            variant,
+            FontRole::TextBody,
+            "POUT W",
+            Point::new(14, kpi_label_y),
+            HorizontalAlignment::Left,
+            palette.bg,
+        )?;
+        text(
+            painter,
+            variant,
+            FontRole::TextBody,
+            "IOUT A",
+            Point::new(194, kpi_label_y),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?;
+        match output_power_w10 {
+            Some(pout_w10) => text(
+                painter,
+                variant,
+                FontRole::NumBig,
+                format_args!("{:>2}.{:01}", pout_w10 / 10, pout_w10 % 10),
+                Point::new(14, kpi_value_y),
+                HorizontalAlignment::Left,
+                palette.bg,
+            )?,
+            None => text(
+                painter,
+                variant,
+                FontRole::NumBig,
+                "N/A",
+                Point::new(14, kpi_value_y),
+                HorizontalAlignment::Left,
+                palette.bg,
+            )?,
+        }
+        match output_current_ma {
+            Some(iout_ma) => text(
+                painter,
+                variant,
+                FontRole::NumBig,
+                format_args!("{:>1}.{:01}", iout_ma / 1000, (iout_ma % 1000) / 100),
+                Point::new(194, kpi_value_y),
+                HorizontalAlignment::Right,
+                palette.bg,
+            )?,
+            None => text(
+                painter,
+                variant,
+                FontRole::NumBig,
+                "N/A",
+                Point::new(194, kpi_value_y),
+                HorizontalAlignment::Right,
+                palette.bg,
+            )?,
+        }
+    }
+
+    draw_panel(painter, 6, 76, 196, 94, palette, false, palette.accent)?;
+    match data.mode {
+        UpsMode::Off => {
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "BYPASS ACTIVE",
+                Point::new(14, 81),
+                HorizontalAlignment::Left,
+                palette.text,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "TPS OUT",
+                Point::new(14, 108),
+                HorizontalAlignment::Left,
+                palette.text_dim,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::Num,
+                "0.00A",
+                Point::new(194, 108),
+                HorizontalAlignment::Right,
+                palette.text,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "BAT CHG",
+                Point::new(14, 132),
+                HorizontalAlignment::Left,
+                palette.text_dim,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::Num,
+                if data.mains_present { "LOCK" } else { "NOAC" },
+                Point::new(194, 132),
+                HorizontalAlignment::Right,
+                palette.text,
+            )?;
+            draw_meter(
+                painter,
+                14,
+                154,
+                180,
+                6,
+                0,
+                palette.text_dim,
+                palette.panel_alt,
+            )?;
+        }
+        UpsMode::Standby => {
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "STANDBY CHARGE",
+                Point::new(14, 81),
+                HorizontalAlignment::Left,
+                palette.text,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "TPS OUT",
+                Point::new(14, 108),
+                HorizontalAlignment::Left,
+                palette.text_dim,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::Num,
+                "0.00A",
+                Point::new(194, 108),
+                HorizontalAlignment::Right,
+                palette.text,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "BAT CHG",
+                Point::new(14, 132),
+                HorizontalAlignment::Left,
+                palette.text_dim,
+            )?;
+            match charge_batt_ma {
+                Some(chg_ma) => text(
+                    painter,
+                    variant,
+                    FontRole::Num,
+                    format_args!("{:>1}.{:02}A", chg_ma / 1000, (chg_ma % 1000) / 10),
+                    Point::new(194, 132),
+                    HorizontalAlignment::Right,
+                    palette.text,
+                )?,
+                None => text(
+                    painter,
+                    variant,
+                    FontRole::Num,
+                    "N/A",
+                    Point::new(194, 132),
+                    HorizontalAlignment::Right,
+                    palette.text,
+                )?,
+            }
+            draw_meter(
+                painter,
+                14,
+                154,
+                180,
+                6,
+                charge_batt_ma
+                    .map(|ma| (u32::from(ma) * 100 / 1200).min(100))
+                    .unwrap_or(0),
+                palette.right,
+                palette.panel_alt,
+            )?;
+        }
+        UpsMode::Supplement => {
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "ASSIST",
+                Point::new(14, 81),
+                HorizontalAlignment::Left,
+                palette.text,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "TPS OUT",
+                Point::new(14, 108),
+                HorizontalAlignment::Left,
+                palette.text_dim,
+            )?;
+            match tps_out_ma {
+                Some(out_ma) => text(
+                    painter,
+                    variant,
+                    FontRole::Num,
+                    format_args!("{:>1}.{:02}A", out_ma / 1000, (out_ma % 1000) / 10),
+                    Point::new(194, 108),
+                    HorizontalAlignment::Right,
+                    palette.text,
+                )?,
+                None => text(
+                    painter,
+                    variant,
+                    FontRole::Num,
+                    "N/A",
+                    Point::new(194, 108),
+                    HorizontalAlignment::Right,
+                    palette.text,
+                )?,
+            }
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "BAT CHG",
+                Point::new(14, 132),
+                HorizontalAlignment::Left,
+                palette.text_dim,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::Num,
+                "LOCK",
+                Point::new(194, 132),
+                HorizontalAlignment::Right,
+                palette.text,
+            )?;
+            draw_meter(
+                painter,
+                14,
+                154,
+                180,
+                6,
+                match (tps_out_ma, output_current_ma) {
+                    (Some(out_ma), Some(iout_ma)) if iout_ma > 0 => {
+                        (out_ma * 100 / iout_ma).min(100)
+                    }
+                    _ => 0,
+                },
+                palette.accent,
+                palette.panel_alt,
+            )?;
+        }
+        UpsMode::Backup => {
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "OUTPUT",
+                Point::new(14, 81),
+                HorizontalAlignment::Left,
+                palette.text,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "VOUT",
+                Point::new(14, 102),
+                HorizontalAlignment::Left,
+                palette.text_dim,
+            )?;
+            match output_bus_mv {
+                Some(bus_mv) => text(
+                    painter,
+                    variant,
+                    FontRole::Num,
+                    format_args!("{:>2}.{:01}V", bus_mv / 1000, (bus_mv % 1000) / 100),
+                    Point::new(194, 102),
+                    HorizontalAlignment::Right,
+                    palette.text,
+                )?,
+                None => text(
+                    painter,
+                    variant,
+                    FontRole::Num,
+                    "N/A",
+                    Point::new(194, 102),
+                    HorizontalAlignment::Right,
+                    palette.text,
+                )?,
+            }
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "TEMP",
+                Point::new(14, 126),
+                HorizontalAlignment::Left,
+                palette.text_dim,
+            )?;
+            match (data.therm_a_c, data.therm_b_c) {
+                (Some(a), Some(b)) => text(
+                    painter,
+                    variant,
+                    FontRole::Num,
+                    format_args!("{:02}/{:02}C", a, b),
+                    Point::new(194, 126),
+                    HorizontalAlignment::Right,
+                    palette.text,
+                )?,
+                _ => text(
+                    painter,
+                    variant,
+                    FontRole::Num,
+                    "N/A",
+                    Point::new(194, 126),
+                    HorizontalAlignment::Right,
+                    palette.text,
+                )?,
+            }
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                "SOC",
+                Point::new(14, 150),
+                HorizontalAlignment::Left,
+                palette.text_dim,
+            )?;
+            match data.bms_soc_pct {
+                Some(soc) => text(
+                    painter,
+                    variant,
+                    FontRole::Num,
+                    format_args!("{:>2}%", soc),
+                    Point::new(194, 150),
+                    HorizontalAlignment::Right,
+                    palette.text,
+                )?,
+                None => text(
+                    painter,
+                    variant,
+                    FontRole::Num,
+                    "N/A",
+                    Point::new(194, 150),
+                    HorizontalAlignment::Right,
+                    palette.text,
+                )?,
+            }
+        }
+    }
+
+    let battery_note = if data.bms_state == SelfCheckCommState::Err {
+        "FAULT"
+    } else if data.bms_no_battery == Some(true) {
+        "NOBAT"
+    } else if data.bms_rca_alarm == Some(true) {
+        "ALARM"
+    } else if data.bms_discharge_ready == Some(false) {
+        "BLOCK"
+    } else if matches!(data.bms_current_ma, Some(ma) if ma < 0) {
+        "DSG"
+    } else if matches!(data.bms_current_ma, Some(ma) if ma > 0) {
+        "CHG"
+    } else {
+        "READY"
+    };
+    let battery_note_color = comm_state_color(palette, data.bms_state);
+    let charge_note = match data.charge_allowed {
+        Some(true) => {
+            if data.charger_state == SelfCheckCommState::Warn {
+                "WARN"
+            } else if data.chg_iin_ma.unwrap_or(0) > 80 {
+                "CHG"
+            } else {
+                "READY"
+            }
+        }
+        Some(false) => {
+            if data.mains_present {
+                "LOCK"
+            } else {
+                "NOAC"
+            }
+        }
+        None => "N/A",
+    };
+    let charge_note_color = comm_state_color(palette, data.charger_state);
+    let discharge_note = if data.bms_state == SelfCheckCommState::Err {
+        "FAULT"
+    } else if data.bms_no_battery == Some(true) {
+        "NOBAT"
+    } else if data.bms_discharge_ready == Some(false) {
+        "BLOCK"
+    } else {
+        match data.mode {
+            UpsMode::Off => "BYP",
+            UpsMode::Standby => "IDLE",
+            UpsMode::Supplement => "ASSIST",
+            UpsMode::Backup => "LOAD",
+        }
+    };
+    let discharge_note_color = comm_state_color(palette, data.bms_state);
+    let battery_soc = data.bms_soc_pct.unwrap_or(0);
+    let charge_current = charge_batt_ma.unwrap_or(0);
+    let discharge_current = batt_discharge_ma.unwrap_or(0);
+    let battery_value = match (data.batt_pack_mv, data.bms_soc_pct) {
+        (Some(pack_mv), Some(_)) => format_args!(
+            "{:>2}.{:01}V {:>2}%",
+            pack_mv / 1000,
+            (pack_mv % 1000) / 100,
+            battery_soc
+        ),
+        (Some(pack_mv), None) => {
+            format_args!("{:>2}.{:01}V N/A", pack_mv / 1000, (pack_mv % 1000) / 100)
+        }
+        (None, Some(_)) => format_args!("N/A {:>2}%", battery_soc),
+        (None, None) => format_args!("N/A"),
+    };
+    let charge_value = match (charge_batt_ma, data.batt_pack_mv) {
+        (Some(_), Some(pack_mv)) => format_args!(
+            "{:>1}.{:02}A {:>2}.{:01}V",
+            charge_current / 1000,
+            (charge_current % 1000) / 10,
+            pack_mv / 1000,
+            (pack_mv % 1000) / 100
+        ),
+        (Some(_), None) => format_args!(
+            "{:>1}.{:02}A N/A",
+            charge_current / 1000,
+            (charge_current % 1000) / 10
+        ),
+        (None, Some(pack_mv)) => {
+            format_args!("N/A {:>2}.{:01}V", pack_mv / 1000, (pack_mv % 1000) / 100)
+        }
+        (None, None) => format_args!("N/A"),
+    };
+    let discharge_value = match (batt_discharge_ma, data.batt_pack_mv) {
+        (Some(_), Some(pack_mv)) => format_args!(
+            "{:>1}.{:02}A {:>2}.{:01}V",
+            discharge_current / 1000,
+            (discharge_current % 1000) / 10,
+            pack_mv / 1000,
+            (pack_mv % 1000) / 100
+        ),
+        (Some(_), None) => format_args!(
+            "{:>1}.{:02}A N/A",
+            discharge_current / 1000,
+            (discharge_current % 1000) / 10
+        ),
+        (None, Some(pack_mv)) => {
+            format_args!("N/A {:>2}.{:01}V", pack_mv / 1000, (pack_mv % 1000) / 100)
+        }
+        (None, None) => format_args!("N/A"),
+    };
+
+    draw_health_block(
+        painter,
+        variant,
+        palette,
+        HealthBlock {
+            x: 206,
+            y: 22,
+            w: 108,
+            h: 48,
+            title: "BATTERY",
+            value: battery_value,
+            note: battery_note,
+            note_color: battery_note_color,
+            meter: data.bms_soc_pct.map(u32::from).unwrap_or(0),
+            active: data.bms_on,
+            accent: palette.left,
+        },
+    )?;
+    draw_health_block(
+        painter,
+        variant,
+        palette,
+        HealthBlock {
+            x: 206,
+            y: 72,
+            w: 108,
+            h: 48,
+            title: "CHARGE",
+            value: charge_value,
+            note: charge_note,
+            note_color: charge_note_color,
+            meter: charge_batt_ma
+                .map(|ma| (u32::from(ma) * 100 / 1200).min(100))
+                .unwrap_or(0),
+            active: data.charge_allowed == Some(true) && data.chg_iin_ma.is_some(),
+            accent: palette.right,
+        },
+    )?;
+    draw_health_block(
+        painter,
+        variant,
+        palette,
+        HealthBlock {
+            x: 206,
+            y: 122,
+            w: 108,
+            h: 48,
+            title: "DISCHG",
+            value: discharge_value,
+            note: discharge_note,
+            note_color: discharge_note_color,
+            meter: batt_discharge_ma
+                .map(|ma| (ma * 100 / 2200).min(100))
+                .unwrap_or(0),
+            active: matches!(data.mode, UpsMode::Supplement | UpsMode::Backup),
+            accent: if data.mains_present {
+                palette.accent
+            } else {
+                palette.down
+            },
+        },
+    )?;
+
     Ok(())
 }
 
@@ -2703,6 +3491,15 @@ fn vbus_key_text(vbus_present: Option<bool>) -> &'static str {
     }
 }
 
+fn comm_state_color(palette: Palette, state: SelfCheckCommState) -> u16 {
+    match state {
+        SelfCheckCommState::Ok => SUCCESS_COLOR,
+        SelfCheckCommState::Warn => PROGRESS_COLOR,
+        SelfCheckCommState::Err => ERROR_COLOR,
+        SelfCheckCommState::Pending | SelfCheckCommState::NotAvailable => palette.text_dim,
+    }
+}
+
 fn contains(x: u16, y: u16, rx: u16, ry: u16, rw: u16, rh: u16) -> bool {
     x >= rx && y >= ry && x < rx + rw && y < ry + rh
 }
@@ -2712,8 +3509,9 @@ fn render_variant_d<P: UiPainter>(
     variant: UiVariant,
     palette: Palette,
     data: DashboardData,
+    self_check: Option<&SelfCheckUiSnapshot>,
 ) -> Result<(), P::Error> {
-    render_variant_b(painter, variant, palette, data)
+    render_variant_b(painter, variant, palette, data, self_check)
 }
 
 struct DiagCard<T>
@@ -2953,6 +3751,7 @@ where
     title: &'static str,
     value: T,
     note: &'static str,
+    note_color: u16,
     meter: u32,
     active: bool,
     accent: u16,
@@ -2996,7 +3795,11 @@ fn draw_health_block<P: UiPainter, T: Content>(
         spec.note,
         Point::new((spec.x + spec.w - 6) as i32, (spec.y + 4) as i32),
         HorizontalAlignment::Right,
-        text_color,
+        if spec.active {
+            text_color
+        } else {
+            spec.note_color
+        },
     )?;
     text(
         painter,
@@ -3804,5 +4607,63 @@ impl<P: UiPainter> DrawTarget for PainterDrawTarget<'_, P> {
 impl<P: UiPainter> OriginDimensions for PainterDrawTarget<'_, P> {
     fn size(&self) -> Size {
         Size::new(UI_W as u32, UI_H as u32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_model(mode: UpsMode) -> DashboardData {
+        DashboardData::from_model(&UiModel {
+            mode,
+            focus: UiFocus::Idle,
+            touch_irq: false,
+            frame_no: 0,
+        })
+    }
+
+    #[test]
+    fn live_dashboard_keeps_missing_metrics_as_na_inputs() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Ok;
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(live.input_power_w10(), None);
+        assert_eq!(live.output_power_w10(), None);
+        assert_eq!(live.output_current_ma(), None);
+        assert_eq!(live.charge_current_ma(), None);
+    }
+
+    #[test]
+    fn live_dashboard_uses_real_snapshot_metrics_without_demo_fallback() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Backup);
+        snapshot.fusb302_vbus_present = Some(false);
+        snapshot.input_vbus_mv = Some(19_200);
+        snapshot.input_ibus_ma = Some(910);
+        snapshot.tps_a_enabled = Some(true);
+        snapshot.out_a_vbus_mv = Some(18_860);
+        snapshot.tps_a_iout_ma = Some(980);
+        snapshot.tps_b_enabled = Some(true);
+        snapshot.out_b_vbus_mv = Some(18_830);
+        snapshot.tps_b_iout_ma = Some(920);
+        snapshot.bq25792_allow_charge = Some(false);
+        snapshot.bq40z50 = SelfCheckCommState::Ok;
+        snapshot.bq40z50_pack_mv = Some(14_820);
+        snapshot.bq40z50_current_ma = Some(-1880);
+        snapshot.bq40z50_soc_pct = Some(53);
+        snapshot.tmp_a_c = Some(41);
+        snapshot.tmp_b_c = Some(39);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Backup), &snapshot);
+
+        assert_eq!(live.input_power_w10(), Some(174));
+        assert_eq!(live.output_bus_mv(), Some(18_845));
+        assert_eq!(live.output_current_ma(), Some(1_900));
+        assert_eq!(live.output_power_w10(), Some(358));
+        assert_eq!(live.battery_discharge_ma(), Some(1_880));
+        assert_eq!(live.battery_max_temp_c(), Some(41));
     }
 }
