@@ -622,6 +622,40 @@ where
         }
         spin_delay(BMS_MAC_WRITE_SETTLE);
 
+        let mut buf_pec = [0u8; 36];
+        match i2c.write_read(
+            addr,
+            &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS],
+            &mut buf_pec,
+        ) {
+            Ok(()) => {
+                let declared_len = buf_pec[0];
+                if declared_len == BMS_DF_REPLY_LEN_WITH_ADDR {
+                    let payload_end = 1usize + declared_len as usize;
+                    let addr_w = addr << 1;
+                    let addr_r = addr_w | 1;
+                    let mut pec_input = [0u8; 40];
+                    pec_input[0] = addr_w;
+                    pec_input[1] = bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS;
+                    pec_input[2] = addr_r;
+                    pec_input[3..(3 + payload_end)].copy_from_slice(&buf_pec[..payload_end]);
+                    let expected = crc8_smbus(&pec_input[..(3 + payload_end)]);
+                    if expected == buf_pec[payload_end] {
+                        let echoed_addr = u16::from_le_bytes([buf_pec[1], buf_pec[2]]);
+                        if echoed_addr != df_addr {
+                            last_err = bq40z50::BmsDiagError::BadRange;
+                            continue;
+                        }
+                        return Ok(buf_pec[3]);
+                    }
+                    last_err = bq40z50::BmsDiagError::InconsistentSample;
+                } else {
+                    last_err = bq40z50::BmsDiagError::BadBlockLen;
+                }
+            }
+            Err(_) => last_err = bq40z50::BmsDiagError::I2cNack,
+        }
+
         let mut buf = [0u8; 35];
         match i2c.write_read(addr, &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS], &mut buf) {
             Ok(()) => {
@@ -998,19 +1032,6 @@ fn parse_bms_md23_u16(raw: &bq40z50::BlockReadRaw) -> Option<u16> {
     Some(u16::from_le_bytes([raw.payload[0], raw.payload[1]]))
 }
 
-fn parse_bms_md23_u32(raw: &bq40z50::BlockReadRaw) -> Option<u32> {
-    let payload_len = raw.payload_len as usize;
-    if payload_len < 4 {
-        return None;
-    }
-    Some(u32::from_le_bytes([
-        raw.payload[0],
-        raw.payload[1],
-        raw.payload[2],
-        raw.payload[3],
-    ]))
-}
-
 fn copy_bms_md23_payload<const N: usize>(raw: &bq40z50::BlockReadRaw) -> Option<([u8; N], usize)> {
     let payload_len = raw.payload_len as usize;
     if payload_len == 0 {
@@ -1039,12 +1060,6 @@ fn read_bms_mac_u32<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    if let Ok(raw) = read_bms_mac_block_via_md23(i2c, addr, mac_cmd) {
-        if let Some(value) = parse_bms_md23_u32(&raw) {
-            return Ok(value);
-        }
-    }
-
     let raw = read_bms_mac_block_via_mb44(i2c, addr, mac_cmd)?;
     parse_bms_mac_u32(&raw, mac_cmd).ok_or(bq40z50::BmsDiagError::BadBlockLen)
 }

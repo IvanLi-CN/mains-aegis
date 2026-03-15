@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 source "$SCRIPT_DIR/common.sh"
+bq40_tool_acquire_flash_monitor_lock "$TOOL_ROOT"
 
 subcommand="${1:-}"
 if [[ -z "$subcommand" ]]; then
@@ -356,8 +357,8 @@ else
   monitor_reset_on_attach="true"
   initial_stdout_timeout_sec=""
   if [[ "$flash" == "true" ]]; then
-    # After a fresh flash, let monitor.sh try reusing the initial boot stream first and only
-    # fall back to a reset attach if no target stdout appears.
+    # Preserve the flash->monitor lock handoff in this parent process, but still let monitor.sh
+    # try the captured boot stream before forcing a reset attach.
     monitor_reset_on_attach="false"
     initial_stdout_timeout_sec="$POST_FLASH_BOOT_QUIET_SEC"
   fi
