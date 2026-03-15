@@ -52,6 +52,7 @@ const BACKLIGHT_ACTIVE_LOW: bool = true;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
+const DASHBOARD_VARIANT: UiVariant = UiVariant::InstrumentB;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiAction {
@@ -298,10 +299,14 @@ impl FrontPanel {
             return;
         }
         self.bms_activation_state = state;
-        self.self_check_overlay = match state {
-            BmsActivationState::Idle => SelfCheckOverlay::None,
-            BmsActivationState::Pending => SelfCheckOverlay::BmsActivateProgress,
-            BmsActivationState::Result(result) => SelfCheckOverlay::BmsActivateResult(result),
+        self.self_check_overlay = if self.ui_variant == SELF_CHECK_VARIANT {
+            match state {
+                BmsActivationState::Idle => SelfCheckOverlay::None,
+                BmsActivationState::Pending => SelfCheckOverlay::BmsActivateProgress,
+                BmsActivationState::Result(result) => SelfCheckOverlay::BmsActivateResult(result),
+            }
+        } else {
+            SelfCheckOverlay::None
         };
         defmt::info!(
             "ui: bms activation state old={} new={} overlay={}",
@@ -309,7 +314,36 @@ impl FrontPanel {
             bms_activation_state_name(state),
             overlay_name(self.self_check_overlay)
         );
+        self.needs_redraw = self.ui_variant == SELF_CHECK_VARIANT;
+    }
+
+    pub fn enter_dashboard(&mut self) {
+        if self.ui_variant == DASHBOARD_VARIANT {
+            return;
+        }
+
+        let previous_variant = self.ui_variant;
+        self.ui_variant = DASHBOARD_VARIANT;
+        self.self_check_overlay = SelfCheckOverlay::None;
         self.needs_redraw = true;
+        defmt::info!(
+            "ui: page switch old={} new={}",
+            variant_name(previous_variant),
+            variant_name(self.ui_variant)
+        );
+
+        if self.state != InitState::Ready {
+            return;
+        }
+
+        let current_inputs = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        if let Err(e) = self.render_inputs(current_inputs) {
+            defmt::error!("ui: render dashboard failed err={=?}", e);
+            self.needs_redraw = true;
+        } else {
+            self.last_inputs = Some(current_inputs);
+            self.needs_redraw = false;
+        }
     }
 
     pub fn tick(&mut self) -> Option<UiAction> {
@@ -326,12 +360,16 @@ impl FrontPanel {
         let mut ui_action = None;
         match self.read_inputs() {
             Ok(snapshot) => {
-                ui_action = self.process_bms_activation_button_action(snapshot);
-                if ui_action.is_none() {
-                    ui_action = self.process_touch_action(snapshot);
+                if self.ui_variant == SELF_CHECK_VARIANT {
+                    ui_action = self.process_bms_activation_button_action(snapshot);
+                    if ui_action.is_none() {
+                        ui_action = self.process_touch_action(snapshot);
+                    }
                 }
                 let inputs_changed = self.last_inputs != Some(snapshot);
-                if inputs_changed || self.needs_redraw {
+                let should_render =
+                    self.needs_redraw || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed);
+                if should_render {
                     if let Err(e) = self.render_inputs(snapshot) {
                         defmt::error!("ui: update input state failed err={=?}", e);
                         self.needs_redraw = true;
@@ -883,11 +921,10 @@ impl FrontPanel {
     fn snapshot_to_model(&self, _snapshot: InputSnapshot) -> UiModel {
         UiModel {
             mode: self.self_check_snapshot.mode,
-            // In production self-check flow, front-panel input should only affect
-            // activation actions; it must not switch visual demo/focus styles.
+            // Runtime pages are data-driven; keys only serve self-check actions.
             focus: UiFocus::Idle,
             touch_irq: false,
-            frame_no: 0,
+            frame_no: self.frame_no,
         }
     }
 

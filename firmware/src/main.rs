@@ -817,6 +817,7 @@ fn main() -> ! {
     power.init_best_effort();
     front_panel.update_self_check_snapshot(power.ui_snapshot());
     front_panel.update_bms_activation_state(power.bms_activation_state());
+    front_panel.enter_dashboard();
 
     if audio_enabled {
         sync_runtime_audio(

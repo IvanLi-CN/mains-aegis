@@ -32,6 +32,8 @@ pub mod reg {
     pub const ADC_CONTROL: u8 = 0x2E;
     pub const ADC_FUNCTION_DISABLE_0: u8 = 0x2F;
     pub const ADC_FUNCTION_DISABLE_1: u8 = 0x30;
+    pub const IBUS_ADC: u8 = 0x31;
+    pub const VBUS_ADC: u8 = 0x35;
     pub const VBAT_ADC: u8 = 0x3B;
     pub const VSYS_ADC: u8 = 0x3D;
 }
@@ -158,6 +160,13 @@ where
     let mut buf = [0u8; 2];
     i2c.write_read(I2C_ADDRESS, &[reg_lsb], &mut buf)?;
     Ok(u16::from_le_bytes(buf))
+}
+
+pub fn read_i16<I2C>(i2c: &mut I2C, reg_lsb: u8) -> Result<i16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    read_u16(i2c, reg_lsb).map(|value| i16::from_le_bytes(value.to_le_bytes()))
 }
 
 pub fn write_u8<I2C>(i2c: &mut I2C, reg: u8, value: u8) -> Result<(), I2C::Error>

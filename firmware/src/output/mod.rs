@@ -765,6 +765,7 @@ where
     // Stage 2: BQ40Z50.
     let mut bms_addr: Option<u8> = None;
     let mut bms_voltage_mv: Option<u16> = None;
+    let mut bms_current_ma: Option<i16> = None;
     let mut bms_soc_pct: Option<u16> = None;
     let mut bms_rca_alarm: Option<bool> = None;
     let mut bms_no_battery: Option<bool> = None;
@@ -842,6 +843,7 @@ where
                 bms_addr = Some(addr);
                 initial_bms_protection_active = protection_active;
                 bms_voltage_mv = Some(voltage_mv);
+                bms_current_ma = Some(current_ma);
                 bms_soc_pct = Some(soc_pct);
                 bms_rca_alarm = Some((status_raw & bq40z50::battery_status::RCA) != 0);
                 let no_battery_confirmed = bq40_self_test_no_battery_confirmed(
@@ -903,6 +905,8 @@ where
             ui.bq40z50 = SelfCheckCommState::Ok;
         }
     }
+    ui.bq40z50_pack_mv = bms_voltage_mv;
+    ui.bq40z50_current_ma = bms_current_ma;
     ui.bq40z50_soc_pct = bms_soc_pct;
     ui.bq40z50_rca_alarm = bms_rca_alarm;
     ui.bq40z50_no_battery = bms_no_battery;
@@ -927,14 +931,20 @@ where
         }
     };
     let mut charger_vbat_present: Option<bool> = None;
+    let mut charger_vbus_adc_mv: Option<u16> = None;
+    let mut charger_ibus_adc_ma: Option<i16> = None;
     let mut initial_audio_charge_phase = AudioChargePhase::Unknown;
     if charger_enabled {
         charger_status0 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_0).ok();
         let charger_status1 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_1).ok();
         let charger_status2 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_2).ok();
         let charger_status3 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_3).ok();
+        let charger_vbus_adc_mv_local = bq25792::read_u16(&mut *i2c, bq25792::reg::VBUS_ADC).ok();
+        let charger_ibus_adc_ma_local = bq25792::read_i16(&mut *i2c, bq25792::reg::IBUS_ADC).ok();
         let charger_vbat_adc_mv = bq25792::read_u16(&mut *i2c, bq25792::reg::VBAT_ADC).ok();
         let charger_vsys_adc_mv = bq25792::read_u16(&mut *i2c, bq25792::reg::VSYS_ADC).ok();
+        charger_vbus_adc_mv = charger_vbus_adc_mv_local;
+        charger_ibus_adc_ma = charger_ibus_adc_ma_local;
 
         if let Some(status1) = charger_status1 {
             initial_audio_charge_phase =
@@ -944,7 +954,7 @@ where
         charger_vbat_present = vbat_present;
         let vsys_min_reg = charger_status3.map(|v| (v & bq25792::status3::VSYS_STAT) != 0);
         defmt::info!(
-            "self_test: bq25792 ctrl0={=?} status0={=?} status1={=?} status2={=?} status3={=?} vbat_present={=?} phase={} vsys_min_reg={=?} vbat_adc_mv={=?} vsys_adc_mv={=?}",
+            "self_test: bq25792 ctrl0={=?} status0={=?} status1={=?} status2={=?} status3={=?} vbat_present={=?} phase={} vsys_min_reg={=?} vbus_adc_mv={=?} ibus_adc_ma={=?} vbat_adc_mv={=?} vsys_adc_mv={=?}",
             charger_ctrl0,
             charger_status0,
             charger_status1,
@@ -957,6 +967,8 @@ where
                     .unwrap_or_default()
             ),
             vsys_min_reg,
+            charger_vbus_adc_mv_local,
+            charger_ibus_adc_ma_local,
             charger_vbat_adc_mv,
             charger_vsys_adc_mv
         );
@@ -970,6 +982,8 @@ where
         .ok()
         .map(|v| (v & 0x01ff) * 10);
     ui.bq25792_vbat_present = charger_vbat_present;
+    ui.input_vbus_mv = charger_vbus_adc_mv;
+    ui.input_ibus_ma = charger_ibus_adc_ma.map(i32::from);
     if let Some(status0) = charger_status0 {
         let vbus_present = (status0 & bq25792::status0::VBUS_PRESENT_STAT) != 0
             || (status0 & bq25792::status0::AC1_PRESENT_STAT) != 0
@@ -1624,6 +1638,10 @@ where
         self.tps_b_next_retry_at = None;
         self.ui_snapshot.tps_a_enabled = Some(false);
         self.ui_snapshot.tps_b_enabled = Some(false);
+        self.ui_snapshot.out_a_vbus_mv = None;
+        self.ui_snapshot.out_b_vbus_mv = None;
+        self.ui_snapshot.tps_a_iout_ma = None;
+        self.ui_snapshot.tps_b_iout_ma = None;
 
         let out_a = ::tps55288::Tps55288::with_address(&mut self.i2c, OutputChannel::OutA.addr())
             .disable_output()
@@ -3656,6 +3674,8 @@ where
         self.bms_next_retry_at = None;
         self.bms_next_poll_at = Instant::now();
         self.ui_snapshot.bq40z50 = state;
+        self.ui_snapshot.bq40z50_pack_mv = Some(snapshot.vpack_mv);
+        self.ui_snapshot.bq40z50_current_ma = Some(snapshot.current_ma);
         self.ui_snapshot.bq40z50_soc_pct = Some(snapshot.rsoc_pct);
         self.ui_snapshot.bq40z50_rca_alarm = Some(rca_alarm);
         self.ui_snapshot.bq40z50_no_battery = Some(low_pack_runtime);
@@ -4481,6 +4501,8 @@ where
 
     fn hold_no_battery_result_audio_state(&mut self) {
         self.ui_snapshot.bq40z50 = SelfCheckCommState::Warn;
+        self.ui_snapshot.bq40z50_pack_mv = None;
+        self.ui_snapshot.bq40z50_current_ma = None;
         if self.ui_snapshot.bq40z50_soc_pct.is_none() {
             self.ui_snapshot.bq40z50_soc_pct = Some(0);
         }
@@ -4729,6 +4751,7 @@ where
             if let Some(enabled) = capture.output_enabled {
                 self.ui_snapshot.tps_a_enabled = Some(enabled);
             }
+            self.ui_snapshot.out_a_vbus_mv = capture.vbus_mv;
             self.ui_snapshot.tps_a_iout_ma = capture.current_ma;
             self.ui_snapshot.tmp_a = if capture.temp_c_x16.is_some() {
                 SelfCheckCommState::Ok
@@ -4754,6 +4777,7 @@ where
             if let Some(enabled) = capture.output_enabled {
                 self.ui_snapshot.tps_b_enabled = Some(enabled);
             }
+            self.ui_snapshot.out_b_vbus_mv = capture.vbus_mv;
             self.ui_snapshot.tps_b_iout_ma = capture.current_ma;
             self.ui_snapshot.tmp_b = if capture.temp_c_x16.is_some() {
                 SelfCheckCommState::Ok
@@ -4993,10 +5017,12 @@ where
         let adc_done = (status3 & bq25792::status3::ADC_DONE_STAT) != 0;
         let vsys_min_reg = (status3 & bq25792::status3::VSYS_STAT) != 0;
 
-        let (adc_enabled, vbat_adc_mv, vsys_adc_mv) =
+        let (adc_enabled, ibus_adc_ma, vbus_adc_mv, vbat_adc_mv, vsys_adc_mv) =
             match bq25792::ensure_adc_power_path(&mut self.i2c) {
                 Ok(adc_state) => (
                     (adc_state.ctrl & bq25792::adc_ctrl::ADC_EN) != 0,
+                    bq25792::read_i16(&mut self.i2c, bq25792::reg::IBUS_ADC).ok(),
+                    bq25792::read_u16(&mut self.i2c, bq25792::reg::VBUS_ADC).ok(),
                     bq25792::read_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok(),
                     bq25792::read_u16(&mut self.i2c, bq25792::reg::VSYS_ADC).ok(),
                 ),
@@ -5005,7 +5031,7 @@ where
                         "charger: bq25792 adc_cfg err={} action=skip_adc_samples",
                         i2c_error_kind(e)
                     );
-                    (false, None, None)
+                    (false, None, None, None, None)
                 }
             };
 
@@ -5147,7 +5173,7 @@ where
 
         if !(auto_force_charge || activation_pending) {
             defmt::info!(
-                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
+                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
                 self.chg_enabled,
                 self.cfg.force_min_charge,
                 auto_force_charge,
@@ -5164,6 +5190,8 @@ where
                 ac2_present,
                 pg,
                 vbat_present,
+                ibus_adc_ma,
+                vbus_adc_mv,
                 vbat_adc_mv,
                 vsys_adc_mv,
                 adc_enabled,
@@ -5229,6 +5257,8 @@ where
         };
         self.ui_snapshot.bq25792_allow_charge = Some(allow_charge);
         self.ui_snapshot.bq25792_vbat_present = Some(vbat_present);
+        self.ui_snapshot.input_vbus_mv = vbus_adc_mv;
+        self.ui_snapshot.input_ibus_ma = ibus_adc_ma.map(i32::from);
         self.ui_snapshot.bq25792_ichg_ma = if allow_charge {
             if let Some(v) = applied_ichg_ma {
                 Some(v)
@@ -5316,6 +5346,8 @@ where
         self.ui_snapshot.bq25792_ichg_ma = None;
         self.ui_snapshot.bq25792_vbat_present = None;
         self.ui_snapshot.fusb302_vbus_present = None;
+        self.ui_snapshot.input_vbus_mv = None;
+        self.ui_snapshot.input_ibus_ma = None;
         self.recompute_ui_mode();
     }
 
@@ -5414,6 +5446,8 @@ where
                         } else {
                             SelfCheckCommState::Ok
                         };
+                    self.ui_snapshot.bq40z50_pack_mv = Some(s.vpack_mv);
+                    self.ui_snapshot.bq40z50_current_ma = Some(s.current_ma);
                     self.ui_snapshot.bq40z50_soc_pct = Some(s.rsoc_pct);
                     self.ui_snapshot.bq40z50_rca_alarm = Some(rca_alarm);
                     self.ui_snapshot.bq40z50_no_battery = Some(low_pack);
@@ -5452,6 +5486,8 @@ where
                             self.hold_no_battery_result_audio_state();
                         } else {
                             self.ui_snapshot.bq40z50 = SelfCheckCommState::Warn;
+                            self.ui_snapshot.bq40z50_pack_mv = None;
+                            self.ui_snapshot.bq40z50_current_ma = None;
                             self.ui_snapshot.bq40z50_soc_pct = None;
                             self.ui_snapshot.bq40z50_rca_alarm = None;
                             self.ui_snapshot.bq40z50_no_battery = None;
@@ -5505,6 +5541,8 @@ where
                             self.hold_no_battery_result_audio_state();
                         } else {
                             self.ui_snapshot.bq40z50 = SelfCheckCommState::Err;
+                            self.ui_snapshot.bq40z50_pack_mv = None;
+                            self.ui_snapshot.bq40z50_current_ma = None;
                             self.ui_snapshot.bq40z50_soc_pct = None;
                             self.ui_snapshot.bq40z50_rca_alarm = None;
                             self.ui_snapshot.bq40z50_no_battery = None;
