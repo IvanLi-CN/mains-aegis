@@ -78,10 +78,46 @@ pub const fn decode_error_code(code: u8) -> &'static str {
     }
 }
 
+fn crc8_smbus(bytes: &[u8]) -> u8 {
+    let mut crc = 0u8;
+    for &byte in bytes {
+        crc ^= byte;
+        for _ in 0..8 {
+            crc = if (crc & 0x80) != 0 {
+                (crc << 1) ^ 0x07
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc
+}
+
+fn read_u16_with_pec<I2C>(i2c: &mut I2C, addr: u8, sbscmd: u8) -> Option<u16>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let mut buf = [0u8; 3];
+    i2c.write_read(addr, &[sbscmd], &mut buf).ok()?;
+
+    let addr_w = addr << 1;
+    let addr_r = addr_w | 1;
+    let expected = crc8_smbus(&[addr_w, sbscmd, addr_r, buf[0], buf[1]]);
+    if expected != buf[2] {
+        return None;
+    }
+
+    Some(u16::from_le_bytes([buf[0], buf[1]]))
+}
+
 pub fn read_u16<I2C>(i2c: &mut I2C, addr: u8, sbscmd: u8) -> Result<u16, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
+    if let Some(v) = read_u16_with_pec(i2c, addr, sbscmd) {
+        return Ok(v);
+    }
+
     let mut buf = [0u8; 2];
     i2c.write_read(addr, &[sbscmd], &mut buf)?;
     Ok(u16::from_le_bytes(buf))
@@ -91,9 +127,55 @@ pub fn read_i16<I2C>(i2c: &mut I2C, addr: u8, sbscmd: u8) -> Result<i16, I2C::Er
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    let mut buf = [0u8; 2];
-    i2c.write_read(addr, &[sbscmd], &mut buf)?;
-    Ok(i16::from_le_bytes(buf))
+    read_u16(i2c, addr, sbscmd).map(|raw| i16::from_le_bytes(raw.to_le_bytes()))
+}
+
+/// Read the low 16 bits of OperationStatus() from its SMBus block response.
+///
+/// TRM marks 0x54 as an H4/block command, so reading it as a plain word can
+/// return stale or misaligned bytes. We only need the low 16 bits for CHG/DSG
+/// path decoding in the main firmware.
+pub fn read_operation_status_low_u16<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+) -> Result<Option<u16>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let mut pec_buf = [0u8; 6];
+    if i2c
+        .write_read(addr, &[cmd::OPERATION_STATUS], &mut pec_buf)
+        .is_ok()
+    {
+        let declared_len = pec_buf[0] as usize;
+        if (4..=32).contains(&declared_len) {
+            let addr_w = addr << 1;
+            let addr_r = addr_w | 1;
+            let expected = crc8_smbus(&[
+                addr_w,
+                cmd::OPERATION_STATUS,
+                addr_r,
+                pec_buf[0],
+                pec_buf[1],
+                pec_buf[2],
+                pec_buf[3],
+                pec_buf[4],
+            ]);
+            if expected == pec_buf[5] {
+                return Ok(Some(u16::from_le_bytes([pec_buf[1], pec_buf[2]])));
+            }
+        }
+    }
+
+    let mut buf = [0u8; 5];
+    i2c.write_read(addr, &[cmd::OPERATION_STATUS], &mut buf)?;
+
+    let declared_len = buf[0] as usize;
+    if !(4..=32).contains(&declared_len) {
+        return Ok(None);
+    }
+
+    Ok(Some(u16::from_le_bytes([buf[1], buf[2]])))
 }
 
 /// Convert Temperature() units (0.1 K) to 0.1 C (i.e., C * 10).

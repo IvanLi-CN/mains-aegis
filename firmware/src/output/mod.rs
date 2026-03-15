@@ -788,7 +788,9 @@ where
             let current = bq40z50::read_i16(&mut *i2c, addr, bq40z50::cmd::CURRENT);
             let soc = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE);
             let status = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::BATTERY_STATUS);
-            let op_status = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::OPERATION_STATUS).ok();
+            let op_status = bq40z50::read_operation_status_low_u16(&mut *i2c, addr)
+                .ok()
+                .flatten();
 
             if let (Ok(temp_k_x10), Ok(voltage_mv), Ok(current_ma), Ok(soc_pct), Ok(status_raw)) =
                 (temp, voltage, current, soc, status)
@@ -5668,9 +5670,9 @@ where
             }
         }
 
-        let op_status = self
-            .read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::OPERATION_STATUS)
-            .ok();
+        let op_status = bq40z50::read_operation_status_low_u16(&mut self.i2c, addr)
+            .ok()
+            .flatten();
 
         Ok(Bq40z50Snapshot {
             temp_k_x10,

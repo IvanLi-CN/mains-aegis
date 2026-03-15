@@ -3,15 +3,19 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+source "$SCRIPT_DIR/common.sh"
+
+bq40_tool_acquire_flash_monitor_lock "$TOOL_ROOT"
 
 duration_sec=120
 output_file=""
 after_flash="false"
 reset_on_attach="false"
+initial_stdout_timeout_sec="6"
 
 usage() {
   cat <<USAGE
-Usage: $(basename "$0") [--duration-sec N] [--output PATH] [--after-flash true|false] [--reset-on-attach true|false]
+Usage: $(basename "$0") [--duration-sec N] [--output PATH] [--after-flash true|false] [--reset-on-attach true|false] [--initial-stdout-timeout-sec N]
 USAGE
 }
 
@@ -47,6 +51,11 @@ while [[ $# -gt 0 ]]; do
       reset_on_attach="${2:-}"
       shift 2
       ;;
+    --initial-stdout-timeout-sec)
+      require_value "$1" "$#"
+      initial_stdout_timeout_sec="${2:-}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -80,7 +89,12 @@ case "$reset_on_attach" in
     ;;
 esac
 
-monitor_path=$(python3 - "$TOOL_ROOT" "$duration_sec" "$after_flash" "$reset_on_attach" <<'PY'
+if ! [[ "$initial_stdout_timeout_sec" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "Invalid --initial-stdout-timeout-sec: $initial_stdout_timeout_sec" >&2
+  exit 6
+fi
+
+monitor_path=$(python3 - "$TOOL_ROOT" "$duration_sec" "$after_flash" "$reset_on_attach" "$initial_stdout_timeout_sec" <<'PY'
 import json
 import os
 import subprocess
@@ -93,7 +107,7 @@ from pathlib import Path
 from threading import Thread
 from typing import Deque, Dict, Optional, Tuple
 
-INITIAL_STDOUT_TIMEOUT_SEC = 6.0
+INITIAL_STDOUT_TIMEOUT_SEC = float(sys.argv[5])
 RECENT_EXISTING_STDOUT_GRACE_SEC = 10.0
 
 root = Path(sys.argv[1])

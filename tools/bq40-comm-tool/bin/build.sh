@@ -11,11 +11,13 @@ recover_arg_set="false"
 force_min_charge="false"
 probe_mode="strict"
 rom_image="r2"
+repair_profile="none"
 
 usage() {
   cat <<USAGE
 Usage: $(basename "$0") [--mode canonical|dual-diag] [--recover never|if-rom|force]
                          [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5]
+                         [--repair-profile none|afe-default|live-df-mainboard]
 USAGE
 }
 
@@ -55,6 +57,11 @@ while [[ $# -gt 0 ]]; do
     --rom-image)
       require_value "$1" "$#"
       rom_image="${2:-}"
+      shift 2
+      ;;
+    --repair-profile)
+      require_value "$1" "$#"
+      repair_profile="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -120,6 +127,16 @@ case "$rom_image" in
   *)
     echo "Invalid --rom-image: $rom_image" >&2
     exit 8
+    ;;
+esac
+
+case "$repair_profile" in
+  none) ;;
+  afe-default) features+=("bms-df-repair-afe-default") ;;
+  live-df-mainboard) features+=("bms-rom-repair-live-df-mainboard") ;;
+  *)
+    echo "Invalid --repair-profile: $repair_profile" >&2
+    exit 9
     ;;
 esac
 
