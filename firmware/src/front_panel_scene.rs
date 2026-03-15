@@ -4026,7 +4026,7 @@ fn draw_dashboard_detail_top_bar<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::DetailBody,
+        FontRole::TextBody,
         "BACK",
         Point::new(
             (DASHBOARD_DETAIL_BACK_X + DASHBOARD_DETAIL_BACK_W / 2) as i32,
@@ -4079,7 +4079,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
     text(
         painter,
         variant,
-        FontRole::DetailBody,
+        FontRole::TextBody,
         label,
         Point::new(x as i32, y as i32),
         HorizontalAlignment::Left,
@@ -4089,7 +4089,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         (Some(DetailValue::U16(raw)), DetailValueFmt::MilliVolt) => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             format_args!("{:>2}.{:03}V", raw / 1000, raw % 1000),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4098,7 +4098,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         (Some(DetailValue::U16(raw)), DetailValueFmt::MilliAmp) => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             format_args!("{:>1}.{:02}A", raw / 1000, (raw % 1000) / 10),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4107,7 +4107,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         (Some(DetailValue::U32(raw)), DetailValueFmt::MilliWattHour) => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             format_args!("{:>5}mWh", raw),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4116,7 +4116,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         (Some(DetailValue::I16(raw)), DetailValueFmt::Celsius) => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             format_args!("{:>2}C", raw),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4125,7 +4125,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         (Some(DetailValue::U8(raw)), DetailValueFmt::Percent) => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             format_args!("{:>3}%", raw),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4134,7 +4134,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         (Some(DetailValue::U16(raw)), DetailValueFmt::Rpm) => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             format_args!("{:>4}RPM", raw),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4143,7 +4143,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         _ => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             "N/A",
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4164,7 +4164,7 @@ fn draw_detail_text_row<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::DetailBody,
+        FontRole::TextBody,
         label,
         Point::new(x as i32, y as i32),
         HorizontalAlignment::Left,
@@ -4174,7 +4174,7 @@ fn draw_detail_text_row<P: UiPainter>(
         DetailTextValue::Static(value) => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             value,
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4183,7 +4183,7 @@ fn draw_detail_text_row<P: UiPainter>(
         DetailTextValue::Percent(value) => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             format_args!("{:>3}%", value),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4192,7 +4192,7 @@ fn draw_detail_text_row<P: UiPainter>(
         DetailTextValue::Na => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             "N/A",
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4214,7 +4214,7 @@ fn draw_output_current_row<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::DetailBody,
+        FontRole::TextBody,
         label,
         Point::new(x as i32, y as i32),
         HorizontalAlignment::Left,
@@ -4224,7 +4224,7 @@ fn draw_output_current_row<P: UiPainter>(
         return text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             "--",
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4235,7 +4235,7 @@ fn draw_output_current_row<P: UiPainter>(
         Some(current_ma) if current_ma >= 0 => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             format_args!(
                 "{:>1}.{:02}A",
                 (current_ma as u32) / 1000,
@@ -4248,7 +4248,7 @@ fn draw_output_current_row<P: UiPainter>(
         Some(_) => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             "--",
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4257,7 +4257,7 @@ fn draw_output_current_row<P: UiPainter>(
         None => text(
             painter,
             variant,
-            FontRole::DetailNum,
+            FontRole::Num,
             "N/A",
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
