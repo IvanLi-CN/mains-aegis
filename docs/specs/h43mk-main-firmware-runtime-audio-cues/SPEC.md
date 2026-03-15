@@ -64,7 +64,7 @@
 ## 运行时 cue 映射冻结
 
 - `boot_startup`：上电进入自检后立即请求一次，可与自检并行，且允许被更高优先级 cue 抢占。
-- `mains_present_dc` / `mains_absent_dc`：以 `DC5025 VIN>=3V` 的运行时采样作为真相源，在“已知状态之间”变化时触发；charger 通信从 unknown 恢复到 known 时保持静默；若 VIN 遥测暂不可用并持续退化到 charger fallback，则 fallback 自身的已知 `false <-> true` 变化仍可触发边沿。
+- `mains_present_dc` / `mains_absent_dc`：以 `DC5025 VIN>=3V` 的运行时采样作为真相源，在“已知状态之间”变化时触发；charger 通信从 unknown 恢复到 known 时保持静默；仅当 `VIN <-> charger fallback` 的来源切换未伴随 `mains_present` 真假翻转时保持静默，若真假确实变化则仍应触发边沿。
 - `charge_started` / `charge_completed`：charger 状态在“已知相位之间”进入“充电中 / 完成”时触发；首次建链或通信恢复后的 unknown -> known 不补播 one-shot。
 - `battery_low_no_mains` / `battery_low_with_mains`：BMS `RCA` 低电告警按市电有无拆分。
 - `high_stress`：`TS_COOL` / `TS_WARM` / `TREG` 或 TMP112 到达 `TLOW` 但尚未触发停机时触发。
@@ -99,7 +99,7 @@
 - 当 `battery_protection` 与低电条件同时成立时，只允许播放 `battery_protection`；`BatteryLowNoMains` / `BatteryLowWithMains` 必须被全局压制，直到保护解除后再按当前 `RCA + mains_present` 状态恢复。
 - `continuous_loop` cue 必须在单段 PCM 末尾无缝回绕，不能每播完 1 段就重新触发一次 `start_playback`；否则错误音会在每轮边界听出额外起音/断点。
 - 通信恢复语义：
-  - charger 输入/相位从 unknown 恢复到 known 时，不得伪造 `mains_present_dc`、`charge_started`、`charge_completed`；只要 `VIN` 未跨过 `3V` 门槛，就不得仅因 `VIN <-> charger fallback` 的来源切换产生来电/断电边沿，但当系统已持续处于 charger fallback 时，fallback 自身的已知来电/断电变化仍应正常播报。
+  - charger 输入/相位从 unknown 恢复到 known 时，不得伪造 `mains_present_dc`、`charge_started`、`charge_completed`；只要 `VIN` 未跨过 `3V` 门槛，就不得仅因 `VIN <-> charger fallback` 的来源切换且 `mains_present` 未翻转而产生来电/断电边沿；若 `mains_present` 真假确实改变，则仍应按当前已知状态正常播报。
   - 冷启动时若 `mains_present == Some(false)`，不得仅凭初始快照就触发 `mains_absent_dc`；该 cue 只能由已知状态之间的掉电边沿首发，随后再按 loop 语义保持。
   - 自检阶段已观察到的 TPS OVP/OCP/SCP 必须能种子化到运行时音效状态；运行期只能在成功读取到对应 TPS 通道状态后覆盖该通道 fault 位，不能因为该路输出被门控或单次读失败就把 seed 清零。
   - 自检阶段已观察到的 BMS protection / permanent-failure 状态必须能种子化到运行时音效状态，不能等首次 runtime poll 才补发 `battery_protection`。

@@ -618,11 +618,7 @@ fn stable_mains_state(
 }
 
 fn mains_present_edge(prev: StableMainsState, next: StableMainsState) -> Option<bool> {
-    if prev.source == next.source
-        && prev.present.is_some()
-        && next.present.is_some()
-        && prev.present != next.present
-    {
+    if prev.present.is_some() && next.present.is_some() && prev.present != next.present {
         next.present
     } else {
         None
@@ -1379,6 +1375,7 @@ pub struct PowerManager<'d, I2C> {
     cfg: Config,
 
     next_telemetry_at: Instant,
+    next_vin_telemetry_skip_at: Instant,
     next_fan_temp_refresh_at: Instant,
     last_fault_log_at: Option<Instant>,
     last_input_power_anomaly_log_at: Option<Instant>,
@@ -1746,6 +1743,7 @@ where
             cfg,
 
             next_telemetry_at: now,
+            next_vin_telemetry_skip_at: now,
             next_fan_temp_refresh_at: now,
             last_fault_log_at: None,
             last_input_power_anomaly_log_at: None,
@@ -5175,10 +5173,10 @@ where
     }
 
     fn note_skipped_vin_telemetry_if_due(&mut self, now: Instant) {
-        if now < self.next_telemetry_at {
+        if now < self.next_vin_telemetry_skip_at {
             return;
         }
-        self.next_telemetry_at = now + self.cfg.telemetry_period;
+        self.next_vin_telemetry_skip_at = now + self.cfg.telemetry_period;
         mark_vin_telemetry_unavailable(
             self.cfg.telemetry_include_vin_ch3,
             &mut self.ui_snapshot.vin_vbus_mv,
@@ -5189,7 +5187,8 @@ where
         self.recompute_ui_mode();
     }
 
-    fn refresh_vin_telemetry(&mut self) {
+    fn refresh_vin_telemetry(&mut self, now: Instant) {
+        self.next_vin_telemetry_skip_at = now + self.cfg.telemetry_period;
         if self.cfg.telemetry_include_vin_ch3 {
             if self.ina_ready {
                 let bus = ina3221::read_bus_mv(&mut self.i2c, ina3221::Channel::Ch3);
@@ -5265,7 +5264,7 @@ where
             self.refresh_tmp112_snapshot(OutputChannel::OutA);
             self.refresh_tmp112_snapshot(OutputChannel::OutB);
             self.next_fan_temp_refresh_at = now + self.cfg.telemetry_period;
-            self.refresh_vin_telemetry();
+            self.refresh_vin_telemetry(now);
             self.recompute_ui_mode();
             return true;
         }
@@ -5354,7 +5353,7 @@ where
             (None, None) => None,
         };
 
-        self.refresh_vin_telemetry();
+        self.refresh_vin_telemetry(now);
         self.recompute_ui_mode();
         true
     }
@@ -6619,7 +6618,7 @@ mod tests {
     }
 
     #[test]
-    fn mains_present_edge_requires_a_stable_truth_source() {
+    fn mains_present_edge_only_silences_source_switches_without_state_change() {
         let vin_true = StableMainsState {
             present: Some(true),
             source: AudioMainsSource::Vin,
@@ -6639,8 +6638,21 @@ mod tests {
 
         assert_eq!(mains_present_edge(vin_true, vin_false), Some(false));
         assert_eq!(mains_present_edge(charger_false, charger_true), Some(true));
-        assert_eq!(mains_present_edge(vin_true, charger_false), None);
-        assert_eq!(mains_present_edge(charger_false, vin_true), None);
+        assert_eq!(mains_present_edge(vin_true, charger_false), Some(false));
+        assert_eq!(mains_present_edge(charger_false, vin_true), Some(true));
+        assert_eq!(
+            mains_present_edge(
+                StableMainsState {
+                    present: Some(true),
+                    source: AudioMainsSource::Vin,
+                },
+                StableMainsState {
+                    present: Some(true),
+                    source: AudioMainsSource::ChargerFallback,
+                }
+            ),
+            None
+        );
     }
 
     #[test]
