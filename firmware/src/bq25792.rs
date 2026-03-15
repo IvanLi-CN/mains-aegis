@@ -122,6 +122,10 @@ pub mod adc_ctrl {
     pub const ADC_EN: u8 = 1 << 7;
     /// `REG2E.ADC_RATE` (bit 6), 0 = continuous.
     pub const ADC_RATE: u8 = 1 << 6;
+    pub const ADC_SAMPLE_MASK: u8 = 0b11 << 4;
+    pub const ADC_SAMPLE_15BIT: u8 = 0b00 << 4;
+    pub const ADC_AVG: u8 = 1 << 3;
+    pub const ADC_AVG_INIT: u8 = 1 << 2;
 }
 
 pub mod adc_disable0 {
@@ -353,6 +357,36 @@ pub struct AdcState {
     pub ctrl: u8,
     pub disable0: u8,
     pub disable1: u8,
+    pub reconfigured: bool,
+}
+
+pub const fn power_path_adc_enabled(ctrl: u8) -> bool {
+    (ctrl & adc_ctrl::ADC_EN) != 0
+}
+
+pub const fn power_path_adc_config_ok(state: AdcState) -> bool {
+    let ctrl_ok = (state.ctrl
+        & (adc_ctrl::ADC_EN | adc_ctrl::ADC_RATE | adc_ctrl::ADC_SAMPLE_MASK | adc_ctrl::ADC_AVG))
+        == (adc_ctrl::ADC_EN | adc_ctrl::ADC_SAMPLE_15BIT | adc_ctrl::ADC_AVG);
+    let disable0_ok = (state.disable0
+        & (adc_disable0::IBUS_ADC_DIS
+            | adc_disable0::IBAT_ADC_DIS
+            | adc_disable0::VBUS_ADC_DIS
+            | adc_disable0::VBAT_ADC_DIS
+            | adc_disable0::VSYS_ADC_DIS))
+        == 0;
+    let disable1_ok =
+        (state.disable1 & (adc_disable1::VAC2_ADC_DIS | adc_disable1::VAC1_ADC_DIS)) == 0;
+
+    ctrl_ok && disable0_ok && disable1_ok
+}
+
+pub const fn power_path_adc_ready(state: AdcState, status3: u8) -> bool {
+    let continuous = (state.ctrl & adc_ctrl::ADC_RATE) == 0;
+
+    power_path_adc_config_ok(state)
+        && !state.reconfigured
+        && (continuous || (status3 & status3::ADC_DONE_STAT) != 0)
 }
 
 pub fn ensure_adc_power_path<I2C>(i2c: &mut I2C) -> Result<AdcState, I2C::Error>
@@ -360,9 +394,15 @@ where
     I2C: embedded_hal::i2c::I2c,
 {
     let ctrl = read_u8(i2c, reg::ADC_CONTROL)?;
-    let desired_ctrl = (ctrl | adc_ctrl::ADC_EN) & !adc_ctrl::ADC_RATE;
+    let desired_ctrl = (ctrl
+        & !(adc_ctrl::ADC_RATE | adc_ctrl::ADC_SAMPLE_MASK | adc_ctrl::ADC_AVG_INIT))
+        | adc_ctrl::ADC_EN
+        | adc_ctrl::ADC_AVG
+        | adc_ctrl::ADC_SAMPLE_15BIT;
+    let mut reconfigured = false;
     if desired_ctrl != ctrl {
         write_u8(i2c, reg::ADC_CONTROL, desired_ctrl)?;
+        reconfigured = true;
     }
 
     let disable0 = read_u8(i2c, reg::ADC_FUNCTION_DISABLE_0)?;
@@ -374,6 +414,7 @@ where
     let desired_disable0 = disable0 & !keep_enabled0;
     if desired_disable0 != disable0 {
         write_u8(i2c, reg::ADC_FUNCTION_DISABLE_0, desired_disable0)?;
+        reconfigured = true;
     }
 
     let disable1 = read_u8(i2c, reg::ADC_FUNCTION_DISABLE_1)?;
@@ -381,12 +422,14 @@ where
     let desired_disable1 = disable1 & !keep_enabled1;
     if desired_disable1 != disable1 {
         write_u8(i2c, reg::ADC_FUNCTION_DISABLE_1, desired_disable1)?;
+        reconfigured = true;
     }
 
     Ok(AdcState {
         ctrl: desired_ctrl,
         disable0: desired_disable0,
         disable1: desired_disable1,
+        reconfigured,
     })
 }
 
@@ -417,6 +460,61 @@ where
         sdrv_ctrl_before,
         sdrv_ctrl_after,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn power_path_adc_ready_accepts_continuous_mode_without_done_flag() {
+        let state = AdcState {
+            ctrl: adc_ctrl::ADC_EN | adc_ctrl::ADC_AVG | adc_ctrl::ADC_SAMPLE_15BIT,
+            disable0: 0,
+            disable1: 0,
+            reconfigured: false,
+        };
+
+        assert!(power_path_adc_config_ok(state));
+        assert!(power_path_adc_ready(state, 0));
+    }
+
+    #[test]
+    fn power_path_adc_ready_rejects_reconfigured_or_unsupported_settings() {
+        let mut state = AdcState {
+            ctrl: adc_ctrl::ADC_EN | adc_ctrl::ADC_AVG | adc_ctrl::ADC_SAMPLE_15BIT,
+            disable0: 0,
+            disable1: 0,
+            reconfigured: true,
+        };
+
+        assert!(!power_path_adc_ready(state, status3::ADC_DONE_STAT));
+
+        state.reconfigured = false;
+        state.ctrl |= adc_ctrl::ADC_RATE;
+        assert!(!power_path_adc_config_ok(state));
+
+        state.ctrl = adc_ctrl::ADC_EN | adc_ctrl::ADC_AVG | adc_ctrl::ADC_SAMPLE_15BIT;
+        state.disable0 = adc_disable0::IBUS_ADC_DIS;
+        assert!(!power_path_adc_config_ok(state));
+    }
+
+    #[test]
+    fn power_path_adc_ready_requires_done_flag_in_one_shot_mode() {
+        let state = AdcState {
+            ctrl: adc_ctrl::ADC_EN
+                | adc_ctrl::ADC_RATE
+                | adc_ctrl::ADC_AVG
+                | adc_ctrl::ADC_SAMPLE_15BIT,
+            disable0: 0,
+            disable1: 0,
+            reconfigured: false,
+        };
+
+        assert!(power_path_adc_config_ok(state));
+        assert!(!power_path_adc_ready(state, 0));
+        assert!(power_path_adc_ready(state, status3::ADC_DONE_STAT));
+    }
 }
 
 #[derive(Clone, Copy)]

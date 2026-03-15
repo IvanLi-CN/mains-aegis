@@ -91,6 +91,9 @@ const CHARGER_FAULT1_VSYS_SHORT: u8 = 1 << 7;
 const CHARGER_FAULT1_VSYS_OVP: u8 = 1 << 6;
 const CHARGER_FAULT1_OTG_OVP: u8 = 1 << 5;
 const CHARGER_FAULT1_TSHUT: u8 = 1 << 2;
+const CHARGER_INPUT_IBUS_MAX_MA: i16 = 5_000;
+const CHARGER_INPUT_VBUS_MAX_MV: u16 = 30_000;
+const CHARGER_INPUT_POWER_ANOMALY_W10: u32 = 2_000;
 
 const BMS_DIAG_BREADCRUMB_LEN: usize = 8;
 const BMS_DIAG_BREADCRUMB_VERSION: u8 = 1;
@@ -737,6 +740,14 @@ where
     } else {
         SelfCheckCommState::Err
     };
+    if ina_ready && include_vin_ch3 {
+        ui.vin_vbus_mv = ina3221::read_bus_mv(&mut *i2c, ina3221::Channel::Ch3)
+            .ok()
+            .and_then(|mv| u16::try_from(mv).ok());
+        ui.vin_iin_ma = ina3221::read_shunt_uv(&mut *i2c, ina3221::Channel::Ch3)
+            .ok()
+            .map(|shunt_uv| ina3221::shunt_uv_to_current_ma(shunt_uv, 7));
+    }
     ui.tmp_a = if tmp_a_present && tmp_out_a_ok {
         SelfCheckCommState::Ok
     } else if tmp_a_present {
@@ -935,19 +946,18 @@ where
     };
     let mut charger_vbat_present: Option<bool> = None;
     let mut charger_vbus_adc_mv: Option<u16> = None;
-    let mut charger_ibus_adc_ma: Option<i16> = None;
+    let mut charger_ibus_adc_ma: Option<i32> = None;
     let mut initial_audio_charge_phase = AudioChargePhase::Unknown;
     if charger_enabled {
         charger_status0 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_0).ok();
         let charger_status1 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_1).ok();
         let charger_status2 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_2).ok();
         let charger_status3 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_3).ok();
+        let adc_state = bq25792::ensure_adc_power_path(&mut *i2c).ok();
         let charger_vbus_adc_mv_local = bq25792::read_u16(&mut *i2c, bq25792::reg::VBUS_ADC).ok();
         let charger_ibus_adc_ma_local = bq25792::read_i16(&mut *i2c, bq25792::reg::IBUS_ADC).ok();
         let charger_vbat_adc_mv = bq25792::read_u16(&mut *i2c, bq25792::reg::VBAT_ADC).ok();
         let charger_vsys_adc_mv = bq25792::read_u16(&mut *i2c, bq25792::reg::VSYS_ADC).ok();
-        charger_vbus_adc_mv = charger_vbus_adc_mv_local;
-        charger_ibus_adc_ma = charger_ibus_adc_ma_local;
 
         if let Some(status1) = charger_status1 {
             initial_audio_charge_phase =
@@ -956,8 +966,28 @@ where
         let vbat_present = charger_status2.map(|v| (v & bq25792::status2::VBAT_PRESENT_STAT) != 0);
         charger_vbat_present = vbat_present;
         let vsys_min_reg = charger_status3.map(|v| (v & bq25792::status3::VSYS_STAT) != 0);
+        let input_present = charger_status0
+            .map(|status0| {
+                (status0 & bq25792::status0::VBUS_PRESENT_STAT) != 0
+                    || (status0 & bq25792::status0::AC1_PRESENT_STAT) != 0
+                    || (status0 & bq25792::status0::AC2_PRESENT_STAT) != 0
+                    || (status0 & bq25792::status0::PG_STAT) != 0
+            })
+            .unwrap_or(false);
+        let adc_ready = match (adc_state, charger_status3) {
+            (Some(adc_state), Some(status3)) => bq25792::power_path_adc_ready(adc_state, status3),
+            _ => false,
+        };
+        let input_sample = normalize_charger_input_power_sample(
+            input_present,
+            adc_ready,
+            charger_vbus_adc_mv_local,
+            charger_ibus_adc_ma_local,
+        );
+        charger_vbus_adc_mv = input_sample.ui_vbus_mv;
+        charger_ibus_adc_ma = input_sample.ui_ibus_ma;
         defmt::info!(
-            "self_test: bq25792 ctrl0={=?} status0={=?} status1={=?} status2={=?} status3={=?} vbat_present={=?} phase={} vsys_min_reg={=?} vbus_adc_mv={=?} ibus_adc_ma={=?} vbat_adc_mv={=?} vsys_adc_mv={=?}",
+            "self_test: bq25792 ctrl0={=?} status0={=?} status1={=?} status2={=?} status3={=?} vbat_present={=?} phase={} vsys_min_reg={=?} vbus_adc_mv={=?} ibus_adc_ma={=?} ui_vbus_mv={=?} ui_ibus_ma={=?} adc_ready={=bool} vbat_adc_mv={=?} vsys_adc_mv={=?}",
             charger_ctrl0,
             charger_status0,
             charger_status1,
@@ -972,6 +1002,9 @@ where
             vsys_min_reg,
             charger_vbus_adc_mv_local,
             charger_ibus_adc_ma_local,
+            input_sample.ui_vbus_mv,
+            input_sample.ui_ibus_ma,
+            adc_ready,
             charger_vbat_adc_mv,
             charger_vsys_adc_mv
         );
@@ -986,7 +1019,7 @@ where
         .map(|v| (v & 0x01ff) * 10);
     ui.bq25792_vbat_present = charger_vbat_present;
     ui.input_vbus_mv = charger_vbus_adc_mv;
-    ui.input_ibus_ma = charger_ibus_adc_ma.map(i32::from);
+    ui.input_ibus_ma = charger_ibus_adc_ma;
     if let Some(status0) = charger_status0 {
         let vbus_present = (status0 & bq25792::status0::VBUS_PRESENT_STAT) != 0
             || (status0 & bq25792::status0::AC1_PRESENT_STAT) != 0
@@ -1253,6 +1286,7 @@ pub struct PowerManager<'d, I2C> {
     next_telemetry_at: Instant,
     next_fan_temp_refresh_at: Instant,
     last_fault_log_at: Option<Instant>,
+    last_input_power_anomaly_log_at: Option<Instant>,
     last_therm_kill_hint_at: Option<Instant>,
     fan_started_at: Instant,
 
@@ -1457,6 +1491,101 @@ struct ChargerAudioState {
     module_fault: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChargerInputSampleIssue {
+    AdcNotReady,
+    VbusMissing,
+    VbusOutOfRange,
+    IbusMissing,
+    IbusOutOfRange,
+}
+
+impl ChargerInputSampleIssue {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::AdcNotReady => "adc_not_ready",
+            Self::VbusMissing => "vbus_missing",
+            Self::VbusOutOfRange => "vbus_out_of_range",
+            Self::IbusMissing => "ibus_missing",
+            Self::IbusOutOfRange => "ibus_out_of_range",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ChargerInputPowerSample {
+    raw_vbus_mv: Option<u16>,
+    raw_ibus_ma: Option<i16>,
+    ui_vbus_mv: Option<u16>,
+    ui_ibus_ma: Option<i32>,
+    raw_power_w10: Option<u32>,
+    issue: Option<ChargerInputSampleIssue>,
+}
+
+fn normalize_charger_input_power_sample(
+    input_present: bool,
+    adc_ready: bool,
+    raw_vbus_mv: Option<u16>,
+    raw_ibus_ma: Option<i16>,
+) -> ChargerInputPowerSample {
+    let raw_power_w10 = match (raw_vbus_mv, raw_ibus_ma) {
+        (Some(vbus_mv), Some(ibus_ma)) => {
+            Some((vbus_mv as u32 * ibus_ma.unsigned_abs() as u32) / 100_000)
+        }
+        _ => None,
+    };
+
+    let mut sample = ChargerInputPowerSample {
+        raw_vbus_mv,
+        raw_ibus_ma,
+        ui_vbus_mv: None,
+        ui_ibus_ma: None,
+        raw_power_w10,
+        issue: None,
+    };
+
+    if !input_present {
+        return sample;
+    }
+
+    if !adc_ready {
+        sample.issue = Some(ChargerInputSampleIssue::AdcNotReady);
+        return sample;
+    }
+
+    let vbus_mv = match raw_vbus_mv {
+        Some(vbus_mv) if vbus_mv <= CHARGER_INPUT_VBUS_MAX_MV => vbus_mv,
+        Some(_) => {
+            sample.issue = Some(ChargerInputSampleIssue::VbusOutOfRange);
+            return sample;
+        }
+        None => {
+            sample.issue = Some(ChargerInputSampleIssue::VbusMissing);
+            return sample;
+        }
+    };
+
+    let ibus_ma = match raw_ibus_ma {
+        Some(ibus_ma)
+            if ibus_ma >= -CHARGER_INPUT_IBUS_MAX_MA && ibus_ma <= CHARGER_INPUT_IBUS_MAX_MA =>
+        {
+            ibus_ma
+        }
+        Some(_) => {
+            sample.issue = Some(ChargerInputSampleIssue::IbusOutOfRange);
+            return sample;
+        }
+        None => {
+            sample.issue = Some(ChargerInputSampleIssue::IbusMissing);
+            return sample;
+        }
+    };
+
+    sample.ui_vbus_mv = Some(vbus_mv);
+    sample.ui_ibus_ma = Some(if ibus_ma <= 0 { 0 } else { i32::from(ibus_ma) });
+    sample
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct BmsAudioState {
     rca_alarm: Option<bool>,
@@ -1522,6 +1651,7 @@ where
             next_telemetry_at: now,
             next_fan_temp_refresh_at: now,
             last_fault_log_at: None,
+            last_input_power_anomaly_log_at: None,
             last_therm_kill_hint_at: None,
             fan_started_at: now,
 
@@ -1673,6 +1803,51 @@ where
             out_b
         );
         self.recompute_ui_mode();
+    }
+
+    fn maybe_log_charger_input_power_anomaly(
+        &mut self,
+        now: Instant,
+        sample: ChargerInputPowerSample,
+        adc_state: Option<bq25792::AdcState>,
+        adc_ready: bool,
+        status0: u8,
+        status1: u8,
+        status3: u8,
+    ) {
+        if sample.raw_power_w10.unwrap_or(0) <= CHARGER_INPUT_POWER_ANOMALY_W10 {
+            return;
+        }
+
+        if !tps55288::should_log_fault(
+            now,
+            &mut self.last_input_power_anomaly_log_at,
+            self.cfg.fault_log_min_interval,
+        ) {
+            return;
+        }
+
+        let adc_ctrl = adc_state.map(|state| state.ctrl).unwrap_or(0);
+        defmt::warn!(
+            "charger: input_power_anomaly raw_pin_w10={=u32} raw_ibus_adc_ma={=?} raw_vbus_adc_mv={=?} ui_ibus_ma={=?} ui_vbus_mv={=?} reason={} adc_ready={=bool} adc_ctrl=0x{=u8:x} adc_done={=bool} vbus_stat={} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool}",
+            sample.raw_power_w10.unwrap_or(0),
+            sample.raw_ibus_ma,
+            sample.raw_vbus_mv,
+            sample.ui_ibus_ma,
+            sample.ui_vbus_mv,
+            sample
+                .issue
+                .map(ChargerInputSampleIssue::as_str)
+                .unwrap_or("none"),
+            adc_ready,
+            adc_ctrl,
+            (status3 & bq25792::status3::ADC_DONE_STAT) != 0,
+            bq25792::decode_vbus_stat(bq25792::status1::vbus_stat(status1)),
+            (status0 & bq25792::status0::VBUS_PRESENT_STAT) != 0,
+            (status0 & bq25792::status0::AC1_PRESENT_STAT) != 0,
+            (status0 & bq25792::status0::AC2_PRESENT_STAT) != 0,
+            (status0 & bq25792::status0::PG_STAT) != 0,
+        );
     }
 
     pub fn tick(&mut self, irq: &IrqSnapshot) -> bool {
@@ -4982,14 +5157,25 @@ where
                 let bus = ina3221::read_bus_mv(&mut self.i2c, ina3221::Channel::Ch3);
                 let shunt = ina3221::read_shunt_uv(&mut self.i2c, ina3221::Channel::Ch3);
                 let vbus_mv = match bus {
-                    Ok(v) => TelemetryValue::Value(v),
-                    Err(e) => TelemetryValue::Err(ina_error_kind(e)),
+                    Ok(v) => {
+                        self.ui_snapshot.vin_vbus_mv = u16::try_from(v).ok();
+                        TelemetryValue::Value(v)
+                    }
+                    Err(e) => {
+                        self.ui_snapshot.vin_vbus_mv = None;
+                        TelemetryValue::Err(ina_error_kind(e))
+                    }
                 };
                 let current_ma = match shunt {
                     Ok(shunt_uv) => {
-                        TelemetryValue::Value(ina3221::shunt_uv_to_current_ma(shunt_uv, 7))
+                        let current_ma = ina3221::shunt_uv_to_current_ma(shunt_uv, 7);
+                        self.ui_snapshot.vin_iin_ma = Some(current_ma);
+                        TelemetryValue::Value(current_ma)
                     }
-                    Err(e) => TelemetryValue::Err(ina_error_kind(e)),
+                    Err(e) => {
+                        self.ui_snapshot.vin_iin_ma = None;
+                        TelemetryValue::Err(ina_error_kind(e))
+                    }
                 };
                 defmt::info!(
                     "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
@@ -4997,12 +5183,17 @@ where
                     current_ma
                 );
             } else {
+                self.ui_snapshot.vin_vbus_mv = None;
+                self.ui_snapshot.vin_iin_ma = None;
                 defmt::info!(
                     "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
                     TelemetryValue::Err("ina_uninit"),
                     TelemetryValue::Err("ina_uninit")
                 );
             }
+        } else {
+            self.ui_snapshot.vin_vbus_mv = None;
+            self.ui_snapshot.vin_iin_ma = None;
         }
         self.recompute_ui_mode();
         true
@@ -5196,25 +5387,48 @@ where
         let adc_done = (status3 & bq25792::status3::ADC_DONE_STAT) != 0;
         let vsys_min_reg = (status3 & bq25792::status3::VSYS_STAT) != 0;
 
-        let (adc_enabled, ibus_adc_ma, vbus_adc_mv, vbat_adc_mv, vsys_adc_mv) =
-            match bq25792::ensure_adc_power_path(&mut self.i2c) {
-                Ok(adc_state) => (
-                    (adc_state.ctrl & bq25792::adc_ctrl::ADC_EN) != 0,
-                    bq25792::read_i16(&mut self.i2c, bq25792::reg::IBUS_ADC).ok(),
-                    bq25792::read_u16(&mut self.i2c, bq25792::reg::VBUS_ADC).ok(),
-                    bq25792::read_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok(),
-                    bq25792::read_u16(&mut self.i2c, bq25792::reg::VSYS_ADC).ok(),
-                ),
-                Err(e) => {
-                    defmt::info!(
-                        "charger: bq25792 adc_cfg err={} action=skip_adc_samples",
-                        i2c_error_kind(e)
-                    );
-                    (false, None, None, None, None)
-                }
-            };
-
         let input_present = vbus_present || ac1_present || ac2_present || pg;
+        let adc_state = match bq25792::ensure_adc_power_path(&mut self.i2c) {
+            Ok(adc_state) => Some(adc_state),
+            Err(e) => {
+                defmt::info!(
+                    "charger: bq25792 adc_cfg err={} action=skip_adc_samples",
+                    i2c_error_kind(e)
+                );
+                None
+            }
+        };
+        let adc_enabled = adc_state
+            .map(|adc_state| bq25792::power_path_adc_enabled(adc_state.ctrl))
+            .unwrap_or(false);
+        let raw_ibus_adc_ma =
+            adc_state.and_then(|_| bq25792::read_i16(&mut self.i2c, bq25792::reg::IBUS_ADC).ok());
+        let raw_vbus_adc_mv =
+            adc_state.and_then(|_| bq25792::read_u16(&mut self.i2c, bq25792::reg::VBUS_ADC).ok());
+        let vbat_adc_mv =
+            adc_state.and_then(|_| bq25792::read_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok());
+        let vsys_adc_mv =
+            adc_state.and_then(|_| bq25792::read_u16(&mut self.i2c, bq25792::reg::VSYS_ADC).ok());
+        let adc_ready = match adc_state {
+            Some(adc_state) => bq25792::power_path_adc_ready(adc_state, status3),
+            None => false,
+        };
+        let input_sample = normalize_charger_input_power_sample(
+            input_present,
+            adc_ready,
+            raw_vbus_adc_mv,
+            raw_ibus_adc_ma,
+        );
+        self.maybe_log_charger_input_power_anomaly(
+            now,
+            input_sample,
+            adc_state,
+            adc_ready,
+            status0,
+            status1,
+            status3,
+        );
+
         let can_enable = input_present && !ts_cold && !ts_hot;
         let activation_probe_without_charge = activation_pending
             && self.bms_activation_phase == BmsActivationPhase::ProbeWithoutCharge;
@@ -5369,8 +5583,8 @@ where
                 ac2_present,
                 pg,
                 vbat_present,
-                ibus_adc_ma,
-                vbus_adc_mv,
+                raw_ibus_adc_ma,
+                raw_vbus_adc_mv,
                 vbat_adc_mv,
                 vsys_adc_mv,
                 adc_enabled,
@@ -5436,8 +5650,8 @@ where
         };
         self.ui_snapshot.bq25792_allow_charge = Some(allow_charge);
         self.ui_snapshot.bq25792_vbat_present = Some(vbat_present);
-        self.ui_snapshot.input_vbus_mv = vbus_adc_mv;
-        self.ui_snapshot.input_ibus_ma = ibus_adc_ma.map(i32::from);
+        self.ui_snapshot.input_vbus_mv = input_sample.ui_vbus_mv;
+        self.ui_snapshot.input_ibus_ma = input_sample.ui_ibus_ma;
         self.ui_snapshot.bq25792_ichg_ma = if allow_charge {
             if let Some(v) = applied_ichg_ma {
                 Some(v)
@@ -6136,4 +6350,57 @@ fn bq40_activation_read_error_kind(err: Bq40ActivationReadError) -> &'static str
 enum Bq40SnapshotReadError {
     I2c(&'static str),
     Invalid(Bq40z50Snapshot),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_input_sample_accepts_stable_positive_input() {
+        let sample = normalize_charger_input_power_sample(true, true, Some(20_000), Some(1_500));
+
+        assert_eq!(sample.issue, None);
+        assert_eq!(sample.ui_vbus_mv, Some(20_000));
+        assert_eq!(sample.ui_ibus_ma, Some(1_500));
+        assert_eq!(sample.raw_power_w10, Some(300));
+    }
+
+    #[test]
+    fn normalize_input_sample_returns_na_when_input_missing() {
+        let sample = normalize_charger_input_power_sample(false, true, Some(20_000), Some(1_500));
+
+        assert_eq!(sample.issue, None);
+        assert_eq!(sample.ui_vbus_mv, None);
+        assert_eq!(sample.ui_ibus_ma, None);
+    }
+
+    #[test]
+    fn normalize_input_sample_clamps_reverse_current_to_zero() {
+        let sample = normalize_charger_input_power_sample(true, true, Some(20_000), Some(-1_500));
+
+        assert_eq!(sample.issue, None);
+        assert_eq!(sample.ui_vbus_mv, Some(20_000));
+        assert_eq!(sample.ui_ibus_ma, Some(0));
+        assert_eq!(sample.raw_power_w10, Some(300));
+    }
+
+    #[test]
+    fn normalize_input_sample_rejects_out_of_range_current() {
+        let sample = normalize_charger_input_power_sample(true, true, Some(20_000), Some(i16::MIN));
+
+        assert_eq!(sample.issue, Some(ChargerInputSampleIssue::IbusOutOfRange));
+        assert_eq!(sample.ui_vbus_mv, None);
+        assert_eq!(sample.ui_ibus_ma, None);
+        assert!(sample.raw_power_w10.unwrap_or(0) > CHARGER_INPUT_POWER_ANOMALY_W10);
+    }
+
+    #[test]
+    fn normalize_input_sample_rejects_not_ready_adc() {
+        let sample = normalize_charger_input_power_sample(true, false, Some(20_000), Some(1_500));
+
+        assert_eq!(sample.issue, Some(ChargerInputSampleIssue::AdcNotReady));
+        assert_eq!(sample.ui_vbus_mv, None);
+        assert_eq!(sample.ui_ibus_ma, None);
+    }
 }
