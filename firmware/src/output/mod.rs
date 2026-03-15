@@ -713,8 +713,10 @@ where
     } else {
         SelfCheckCommState::Err
     };
-    ui.tmp_a_c = tmp_a_read.ok().map(|v| v / 16);
-    ui.tmp_b_c = tmp_b_read.ok().map(|v| v / 16);
+    ui.tmp_a_c_x16 = tmp_a_read.ok();
+    ui.tmp_a_c = ui.tmp_a_c_x16.map(|v| v / 16);
+    ui.tmp_b_c_x16 = tmp_b_read.ok();
+    ui.tmp_b_c = ui.tmp_b_c_x16.map(|v| v / 16);
     reporter(SelfCheckStage::Sensors, ui);
 
     // Stage 1: screen module presence (already probed on I2C2 before entering this function).
@@ -1505,13 +1507,37 @@ where
             || self.ui_snapshot.tmp_b != SelfCheckCommState::Pending
     }
 
+    fn refresh_tmp112_snapshot(&mut self, ch: OutputChannel) {
+        let temp_c_x16 = tmp112::read_temp_c_x16(&mut self.i2c, ch.tmp_addr()).ok();
+        match ch {
+            OutputChannel::OutA => {
+                self.ui_snapshot.tmp_a = if temp_c_x16.is_some() {
+                    SelfCheckCommState::Ok
+                } else {
+                    SelfCheckCommState::Err
+                };
+                self.ui_snapshot.tmp_a_c_x16 = temp_c_x16;
+                self.ui_snapshot.tmp_a_c = temp_c_x16.map(|v| v / 16);
+            }
+            OutputChannel::OutB => {
+                self.ui_snapshot.tmp_b = if temp_c_x16.is_some() {
+                    SelfCheckCommState::Ok
+                } else {
+                    SelfCheckCommState::Err
+                };
+                self.ui_snapshot.tmp_b_c_x16 = temp_c_x16;
+                self.ui_snapshot.tmp_b_c = temp_c_x16.map(|v| v / 16);
+            }
+        }
+    }
+
     fn update_fan_state(&mut self, irq: &IrqSnapshot) {
         let prev = self.fan.status();
         let (status, events) = self.fan.update(fan::Input {
             now_ms: self.fan_now_ms(),
             temps_ready: self.fan_temps_ready(),
-            temp_a_c_x16: self.ui_snapshot.tmp_a_c.map(|temp_c| temp_c * 16),
-            temp_b_c_x16: self.ui_snapshot.tmp_b_c.map(|temp_c| temp_c * 16),
+            temp_a_c_x16: self.ui_snapshot.tmp_a_c_x16,
+            temp_b_c_x16: self.ui_snapshot.tmp_b_c_x16,
             tach_pulse_count: irq.fan_tach,
         });
         let pwm_pct = status.pwm_pct(self.cfg.fan_config.mid_pwm_pct);
@@ -4351,15 +4377,18 @@ where
     }
 
     fn maybe_print_telemetry(&mut self) -> bool {
-        if self.cfg.enabled_outputs == EnabledOutputs::None {
-            return false;
-        }
-
         let now = Instant::now();
         if now < self.next_telemetry_at {
             return false;
         }
         self.next_telemetry_at = now + self.cfg.telemetry_period;
+
+        self.refresh_tmp112_snapshot(OutputChannel::OutA);
+        self.refresh_tmp112_snapshot(OutputChannel::OutB);
+
+        if self.cfg.enabled_outputs == EnabledOutputs::None {
+            return true;
+        }
 
         let therm_kill_n: u8 = if self.therm_kill.is_low() { 0 } else { 1 };
         if therm_kill_n == 0
@@ -4395,6 +4424,7 @@ where
             } else {
                 SelfCheckCommState::Err
             };
+            self.ui_snapshot.tmp_a_c_x16 = capture.temp_c_x16;
             self.ui_snapshot.tmp_a_c = capture.temp_c_x16.map(|v| v / 16);
         }
         if self.cfg.enabled_outputs.is_enabled(OutputChannel::OutB) {
@@ -4420,6 +4450,7 @@ where
             } else {
                 SelfCheckCommState::Err
             };
+            self.ui_snapshot.tmp_b_c_x16 = capture.temp_c_x16;
             self.ui_snapshot.tmp_b_c = capture.temp_c_x16.map(|v| v / 16);
         }
 

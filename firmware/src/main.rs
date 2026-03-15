@@ -82,19 +82,34 @@ fn apply_fan_command(
     fan_en: &mut Flex<'_>,
     fan_pwm: &channel::Channel<'_, LowSpeed>,
     applied: &mut Option<AppliedFanOutput>,
+    pwm_degraded: &mut bool,
     status: esp_firmware::fan::Status,
 ) {
     let next = AppliedFanOutput {
         enabled: status.command.enabled(),
         pwm_pct: status.pwm_pct(FAN_MID_PWM_PCT),
     };
-    if applied.as_ref() == Some(&next) {
+    if !*pwm_degraded && applied.as_ref() == Some(&next) {
         return;
     }
 
     if let Err(err) = fan_pwm.set_duty(next.pwm_pct) {
-        defmt::error!("fan: pwm apply err duty_pct={} err={=?}", next.pwm_pct, err);
+        if !*pwm_degraded {
+            defmt::error!(
+                "fan: pwm apply err duty_pct={} err={=?} fallback=fan_en_high",
+                next.pwm_pct,
+                err
+            );
+        }
+        *pwm_degraded = true;
+        *applied = None;
+        fan_en.set_high();
         return;
+    }
+
+    if *pwm_degraded {
+        defmt::info!("fan: pwm apply recovered duty_pct={=u8}", next.pwm_pct);
+        *pwm_degraded = false;
     }
 
     if next.enabled {
@@ -716,11 +731,13 @@ fn main() -> ! {
     front_panel.update_self_check_snapshot(power.ui_snapshot());
     front_panel.update_bms_activation_state(power.bms_activation_state());
     let mut applied_fan = None;
+    let mut fan_pwm_degraded = false;
     if fan_pwm_ready {
         apply_fan_command(
             &mut fan_en,
             &_fan_pwm_channel,
             &mut applied_fan,
+            &mut fan_pwm_degraded,
             power.fan_command(),
         );
     }
@@ -742,6 +759,7 @@ fn main() -> ! {
                     &mut fan_en,
                     &_fan_pwm_channel,
                     &mut applied_fan,
+                    &mut fan_pwm_degraded,
                     power.fan_command(),
                 );
             }
@@ -796,6 +814,7 @@ fn main() -> ! {
                     &mut fan_en,
                     &_fan_pwm_channel,
                     &mut applied_fan,
+                    &mut fan_pwm_degraded,
                     power.fan_command(),
                 );
             }
