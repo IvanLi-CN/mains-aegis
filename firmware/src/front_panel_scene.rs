@@ -1878,7 +1878,7 @@ fn render_variant_b_demo<P: UiPainter>(
                 ((output_current_ma % 1000) / 100)
             ),
             Point::new(194, kpi_value_y),
-            HorizontalAlignment::Right,
+            HorizontalAlignment::Left,
             palette.bg,
         )?;
     }
@@ -2288,6 +2288,20 @@ fn render_variant_b_live<P: UiPainter>(
     let output_power_w10 = data.output_power_w10();
     let output_current_ma = data.output_current_ma();
     let output_bus_mv = data.output_bus_mv();
+    let headline_output_power_w10 = output_power_w10.or({
+        if !data.out_a_on && !data.out_b_on {
+            Some(0)
+        } else {
+            None
+        }
+    });
+    let headline_output_current_ma = output_current_ma.or({
+        if !data.out_a_on && !data.out_b_on {
+            Some(0)
+        } else {
+            None
+        }
+    });
     let charge_batt_ma = data.charge_current_ma();
     let tps_out_ma = data.output_current_ma();
     let batt_discharge_ma = data.battery_discharge_ma();
@@ -2335,18 +2349,18 @@ fn render_variant_b_live<P: UiPainter>(
             None => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::DetailNum,
                 "N/A",
                 Point::new(14, kpi_value_y),
                 HorizontalAlignment::Left,
                 palette.bg,
             )?,
         }
-        match output_power_w10 {
+        match headline_output_power_w10 {
             Some(pout_w10) => text(
                 painter,
                 variant,
-                FontRole::NumHero,
+                FontRole::NumBig,
                 format_args!("{:>2}.{:01}", pout_w10 / 10, pout_w10 % 10),
                 Point::new(194, kpi_value_y),
                 HorizontalAlignment::Right,
@@ -2355,7 +2369,7 @@ fn render_variant_b_live<P: UiPainter>(
             None => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::DetailNum,
                 "N/A",
                 Point::new(194, kpi_value_y),
                 HorizontalAlignment::Right,
@@ -2381,7 +2395,7 @@ fn render_variant_b_live<P: UiPainter>(
             HorizontalAlignment::Right,
             palette.bg,
         )?;
-        match output_power_w10 {
+        match headline_output_power_w10 {
             Some(pout_w10) => text(
                 painter,
                 variant,
@@ -2394,18 +2408,18 @@ fn render_variant_b_live<P: UiPainter>(
             None => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::DetailNum,
                 "N/A",
                 Point::new(14, kpi_value_y),
                 HorizontalAlignment::Left,
                 palette.bg,
             )?,
         }
-        match output_current_ma {
+        match headline_output_current_ma {
             Some(iout_ma) => text(
                 painter,
                 variant,
-                FontRole::NumHero,
+                FontRole::NumBig,
                 format_args!("{:>1}.{:01}", iout_ma / 1000, (iout_ma % 1000) / 100),
                 Point::new(194, kpi_value_y),
                 HorizontalAlignment::Right,
@@ -2414,7 +2428,7 @@ fn render_variant_b_live<P: UiPainter>(
             None => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::DetailNum,
                 "N/A",
                 Point::new(194, kpi_value_y),
                 HorizontalAlignment::Right,
