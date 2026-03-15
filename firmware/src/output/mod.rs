@@ -1,5 +1,10 @@
 pub mod tps55288;
 
+use crate::front_panel_scene::{
+    is_bq40_activation_needed, BmsActivationState, BmsResultKind, SelfCheckCommState,
+    SelfCheckUiSnapshot, UpsMode,
+};
+use crate::irq::IrqSnapshot;
 use esp_firmware::bq25792;
 use esp_firmware::bq40z50;
 use esp_firmware::fan;
@@ -8,14 +13,6 @@ use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
 use esp_hal::ram;
 use esp_hal::time::{Duration, Instant};
-
-use crate::front_panel_scene::{
-    is_bq40_activation_needed, BmsActivationState, BmsResultKind, SelfCheckCommState,
-    SelfCheckUiSnapshot, UpsMode,
-};
-use crate::irq::IrqSnapshot;
-
-use ::tps55288::Error as TpsError;
 
 pub use self::tps55288::OutputChannel;
 
@@ -95,6 +92,7 @@ const CHARGER_INPUT_IBUS_MAX_MA: i16 = 5_000;
 const CHARGER_INPUT_VBUS_MAX_MV: u16 = 30_000;
 const CHARGER_INPUT_POWER_ANOMALY_W10: u32 = 2_000;
 const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
+const VIN_MAINS_LATCH_FAILURE_LIMIT: u8 = 2;
 
 const BMS_DIAG_BREADCRUMB_LEN: usize = 8;
 const BMS_DIAG_BREADCRUMB_VERSION: u8 = 1;
@@ -483,11 +481,11 @@ fn spin_delay(wait: Duration) {
     while start.elapsed() < wait {}
 }
 
-pub(super) fn tps_error_kind(err: TpsError<esp_hal::i2c::master::Error>) -> &'static str {
+pub(super) fn tps_error_kind(err: ::tps55288::Error<esp_hal::i2c::master::Error>) -> &'static str {
     match err {
-        TpsError::I2c(e) => i2c_error_kind(e),
-        TpsError::OutOfRange => "out_of_range",
-        TpsError::InvalidConfig => "invalid_config",
+        ::tps55288::Error::I2c(e) => i2c_error_kind(e),
+        ::tps55288::Error::OutOfRange => "out_of_range",
+        ::tps55288::Error::InvalidConfig => "invalid_config",
     }
 }
 
@@ -547,8 +545,21 @@ fn mains_present_from_vin(vin_vbus_mv: Option<u16>) -> Option<bool> {
     vin_vbus_mv.map(|mv| mv >= VIN_MAINS_PRESENT_THRESHOLD_MV)
 }
 
-fn stable_mains_present(vin_mains_present: Option<bool>, vin_vbus_mv: Option<u16>) -> Option<bool> {
-    mains_present_from_vin(vin_vbus_mv).or(vin_mains_present)
+fn stable_mains_present(
+    vin_mains_present: Option<bool>,
+    vin_vbus_mv: Option<u16>,
+    charger_present: Option<bool>,
+) -> Option<bool> {
+    mains_present_from_vin(vin_vbus_mv)
+        .or(vin_mains_present)
+        .or(charger_present)
+}
+
+fn record_vin_sample_failure(vin_mains_present: &mut Option<bool>, missing_streak: &mut u8) {
+    *missing_streak = missing_streak.saturating_add(1);
+    if *missing_streak >= VIN_MAINS_LATCH_FAILURE_LIMIT {
+        *vin_mains_present = None;
+    }
 }
 
 fn ups_mode_from_mains(mains_present: Option<bool>, has_output: bool) -> UpsMode {
@@ -1251,7 +1262,11 @@ where
     let enabled_outputs = enabled_outputs_from_flags(out_a_allowed, out_b_allowed);
 
     ui.mode = ups_mode_from_mains(
-        stable_mains_present(ui.vin_mains_present, ui.vin_vbus_mv),
+        stable_mains_present(
+            ui.vin_mains_present,
+            ui.vin_vbus_mv,
+            ui.fusb302_vbus_present,
+        ),
         out_a_allowed || out_b_allowed,
     );
 
@@ -1350,6 +1365,7 @@ pub struct PowerManager<'d, I2C> {
     outputs_restore_on_bms_ready: EnabledOutputs,
     outputs_blocked_by_bms: bool,
     fan: fan::Controller,
+    vin_sample_missing_streak: u8,
 
     ui_snapshot: SelfCheckUiSnapshot,
     audio_snapshot: AudioSignalSnapshot,
@@ -1726,6 +1742,7 @@ where
             outputs_restore_on_bms_ready: cfg.outputs_restore_on_bms_ready,
             outputs_blocked_by_bms: cfg.outputs_blocked_by_bms,
             fan: fan::Controller::new(cfg.fan_config),
+            vin_sample_missing_streak: 0,
             ui_snapshot: cfg.self_check_snapshot,
             audio_snapshot: AudioSignalSnapshot::default(),
             audio_events: AudioSignalEvents::default(),
@@ -4705,6 +4722,7 @@ where
             stable_mains_present(
                 self.ui_snapshot.vin_mains_present,
                 self.ui_snapshot.vin_vbus_mv,
+                self.ui_snapshot.fusb302_vbus_present,
             ),
             has_output,
         );
@@ -4715,6 +4733,7 @@ where
         let mains_present = stable_mains_present(
             self.ui_snapshot.vin_mains_present,
             self.ui_snapshot.vin_vbus_mv,
+            self.ui_snapshot.fusb302_vbus_present,
         );
         let tmp_a_hot = self
             .cfg
@@ -5179,10 +5198,15 @@ where
                         self.ui_snapshot.vin_vbus_mv = u16::try_from(v).ok();
                         self.ui_snapshot.vin_mains_present =
                             mains_present_from_vin(self.ui_snapshot.vin_vbus_mv);
+                        self.vin_sample_missing_streak = 0;
                         TelemetryValue::Value(v)
                     }
                     Err(e) => {
                         self.ui_snapshot.vin_vbus_mv = None;
+                        record_vin_sample_failure(
+                            &mut self.ui_snapshot.vin_mains_present,
+                            &mut self.vin_sample_missing_streak,
+                        );
                         TelemetryValue::Err(ina_error_kind(e))
                     }
                 };
@@ -5205,6 +5229,10 @@ where
             } else {
                 self.ui_snapshot.vin_vbus_mv = None;
                 self.ui_snapshot.vin_iin_ma = None;
+                record_vin_sample_failure(
+                    &mut self.ui_snapshot.vin_mains_present,
+                    &mut self.vin_sample_missing_streak,
+                );
                 defmt::info!(
                     "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
                     TelemetryValue::Err("ina_uninit"),
@@ -5215,6 +5243,7 @@ where
             self.ui_snapshot.vin_vbus_mv = None;
             self.ui_snapshot.vin_iin_ma = None;
             self.ui_snapshot.vin_mains_present = None;
+            self.vin_sample_missing_streak = 0;
         }
         self.recompute_ui_mode();
         true
@@ -6434,11 +6463,38 @@ mod tests {
 
     #[test]
     fn stable_mains_present_prefers_fresh_vin_and_keeps_last_known_good() {
-        assert_eq!(stable_mains_present(None, None), None);
-        assert_eq!(stable_mains_present(Some(true), None), Some(true));
-        assert_eq!(stable_mains_present(Some(false), None), Some(false));
-        assert_eq!(stable_mains_present(Some(true), Some(2_900)), Some(false));
-        assert_eq!(stable_mains_present(Some(false), Some(19_200)), Some(true));
+        assert_eq!(stable_mains_present(None, None, None), None);
+        assert_eq!(stable_mains_present(None, None, Some(true)), Some(true));
+        assert_eq!(
+            stable_mains_present(Some(true), None, Some(false)),
+            Some(true)
+        );
+        assert_eq!(
+            stable_mains_present(Some(false), None, Some(true)),
+            Some(false)
+        );
+        assert_eq!(
+            stable_mains_present(Some(true), Some(2_900), Some(true)),
+            Some(false)
+        );
+        assert_eq!(
+            stable_mains_present(Some(false), Some(19_200), Some(false)),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn record_vin_sample_failure_expires_stale_latch_after_repeated_misses() {
+        let mut mains_present = Some(true);
+        let mut missing_streak = 0;
+
+        record_vin_sample_failure(&mut mains_present, &mut missing_streak);
+        assert_eq!(mains_present, Some(true));
+        assert_eq!(missing_streak, 1);
+
+        record_vin_sample_failure(&mut mains_present, &mut missing_streak);
+        assert_eq!(mains_present, None);
+        assert_eq!(missing_streak, VIN_MAINS_LATCH_FAILURE_LIMIT);
     }
 
     #[test]

@@ -15,14 +15,18 @@ pub const UI_W: u16 = 320;
 pub const UI_H: u16 = 172;
 const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
 
-fn mains_present_from_vin(vin_vbus_mv: Option<u16>) -> bool {
-    vin_vbus_mv.is_some_and(|mv| mv >= VIN_MAINS_PRESENT_THRESHOLD_MV)
+fn mains_present_from_vin(vin_vbus_mv: Option<u16>) -> Option<bool> {
+    vin_vbus_mv.map(|mv| mv >= VIN_MAINS_PRESENT_THRESHOLD_MV)
+}
+
+fn snapshot_mains_present_value(snapshot: &SelfCheckUiSnapshot) -> Option<bool> {
+    mains_present_from_vin(snapshot.vin_vbus_mv)
+        .or(snapshot.vin_mains_present)
+        .or(snapshot.fusb302_vbus_present)
 }
 
 fn snapshot_mains_present(snapshot: &SelfCheckUiSnapshot) -> bool {
-    snapshot
-        .vin_mains_present
-        .unwrap_or_else(|| mains_present_from_vin(snapshot.vin_vbus_mv))
+    snapshot_mains_present_value(snapshot).unwrap_or(false)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4722,7 +4726,7 @@ mod tests {
 
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
-        assert!(!live.mains_present);
+        assert!(live.mains_present);
         assert_eq!(live.input_power_w10(), None);
     }
 
@@ -4751,11 +4755,24 @@ mod tests {
     #[test]
     fn live_dashboard_keeps_latched_mains_when_vin_sample_is_temporarily_missing() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(false);
         snapshot.vin_mains_present = Some(true);
         snapshot.vin_vbus_mv = None;
 
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
         assert!(live.mains_present);
+    }
+
+    #[test]
+    fn live_dashboard_falls_back_to_charger_after_stale_vin_latch_expires() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(false);
+        snapshot.vin_mains_present = None;
+        snapshot.vin_vbus_mv = None;
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert!(!live.mains_present);
     }
 }

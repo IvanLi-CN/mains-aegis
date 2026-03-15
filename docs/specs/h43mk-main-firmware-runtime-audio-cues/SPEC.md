@@ -130,7 +130,8 @@
 - `mains_absent_dc` 已区分“初始无市电”与“已知状态之间掉电边沿”，避免电池冷启动时误报一次市电丢失告警。
 - `mains_absent_dc` 在 charger 通信临时退回 `Unknown` 期间会保留已激活 loop；只有明确恢复到 `Some(true)` 才停播，避免断电告警在链路抖动后永久静默。
 - 运行时 `mains_present` 真相源已统一到 `DC5025 VIN>=3V`；`BQ25792 input_present` 继续服务 charger 本地逻辑与诊断，但不再参与音频 cue 的市电判定。
-- 若 `VIN` 采样临时缺失，运行时音效继续沿用最近一次已知的 `VIN` 市电状态；只有新的有效 `VIN` 样本跨过 `3V` 门槛时才产生来电/断电 cue。
+- 若 `VIN` 只发生瞬时采样缺失，运行时音效继续沿用最近一次已知的 `VIN` 市电状态；只有新的有效 `VIN` 样本跨过 `3V` 门槛时才产生来电/断电 cue。
+- 若 `VIN` 连续缺失到超出瞬时容错窗口，运行时音效回退到 charger `input_present` 作为降级兜底，避免把过期的 `VIN` 市电状态无限期锁存。
 - `high_stress` 运行时信号已并入 TMP112 `TLOW` 条件；即使 charger 未上报热状态，只要实际温度越过 `TLOW` 且未触发停机，仍会触发该 cue。
 - BMS protection / permanent-failure 状态已在自检结果中种子化，进入主循环前即可驱动 `battery_protection` 的首次调度。
 - TPS OVP/OCP runtime state 已细化为按通道持有；只有成功读取到某路 TPS `STATUS` 时才会覆盖该路 fault seed，未读到的通道继续保留自检/上次有效观测结果。
@@ -186,4 +187,4 @@
 - 2026-03-14: hotfix，`continuous_loop` cue 改为在样本末尾无缝回绕，避免 `BatteryProtection` 每约 1 秒重新 `start_playback` 一次而产生额外起音。
 - 2026-03-14: hotfix，`continuous_loop` 的样本回绕现在保留重采样余量，不再在边界重复开头样本或丢掉尾部样本，进一步降低保护音循环接缝感。
 - 2026-03-15: hotfix，运行时市电音效判定改为只消费 `DC5025 VIN>=3V`，修复 charger `input_present` 抖动导致的误判来电/断电音。
-- 2026-03-15: hotfix，`VIN` 采样临时缺失时保留最近一次已知市电状态，避免 INA CH3 瞬时读失败伪造 `mains_absent_dc` / `battery_low_no_mains`。
+- 2026-03-15: hotfix，`VIN` 瞬时采样缺失时保留最近一次已知市电状态，避免 INA CH3 单次读失败伪造 `mains_absent_dc` / `battery_low_no_mains`；连续缺失则退回 charger `input_present` 兜底。
