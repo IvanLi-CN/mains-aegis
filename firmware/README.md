@@ -417,6 +417,7 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
 - `fan: tach_timeout mode=high pwm_pct=100 ...`
 - `fan: tach_recovered mode=mid pwm_pct=60 ...`
 - `irq: fan_tach=...`（限频 `info` 日志，默认 `DEFMT_LOG=info` 下即可确认 tach 脉冲可见性，不跟随每个边沿刷屏）
+- `tach_recovered` 的判定允许主循环在两次真实 tach 脉冲之间看到短暂的 `irq_events.fan_tach=0`；只有静默时间达到 `2s` 看门狗窗口后，恢复取证才会被丢弃并重新开始
 
 ### Bench 验证（人类操作）
 
