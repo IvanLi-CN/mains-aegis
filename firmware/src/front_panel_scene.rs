@@ -869,6 +869,8 @@ struct DashboardLiveData {
     bms_soc_pct: Option<u16>,
     therm_a_c: Option<i16>,
     therm_b_c: Option<i16>,
+    therm_a_state: SelfCheckCommState,
+    therm_b_state: SelfCheckCommState,
     charge_allowed: Option<bool>,
     bms_state: SelfCheckCommState,
     charger_state: SelfCheckCommState,
@@ -903,6 +905,8 @@ impl DashboardLiveData {
             bms_soc_pct: snapshot.bq40z50_soc_pct,
             therm_a_c: snapshot.tmp_a_c,
             therm_b_c: snapshot.tmp_b_c,
+            therm_a_state: snapshot.tmp_a,
+            therm_b_state: snapshot.tmp_b,
             charge_allowed: snapshot.bq25792_allow_charge,
             bms_state: snapshot.bq40z50,
             charger_state: snapshot.bq25792,
@@ -3621,9 +3625,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         14,
         78,
         "ACTIVE",
-        bool_text_value(data.detail.charger_active.or_else(|| {
-            Some(data.charge_allowed == Some(true) && data.chg_iin_ma.unwrap_or(0) > 0)
-        })),
+        bool_text_value(charger_active_value(data)),
     )?;
     draw_detail_text_row(
         painter,
@@ -3632,17 +3634,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         14,
         92,
         "STATE",
-        DetailTextValue::Static(data.detail.charger_status.unwrap_or(
-            if data.charge_allowed == Some(false) && data.mains_present {
-                "LOCK"
-            } else if !data.mains_present {
-                "NOAC"
-            } else if data.chg_iin_ma.unwrap_or(0) > 0 {
-                "CHG"
-            } else {
-                "READY"
-            },
-        )),
+        DetailTextValue::Static(charger_state_text(data)),
     )?;
     draw_detail_row(
         painter,
@@ -3903,10 +3895,10 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
         DashboardDetailPage::Cells => {
             if data.bms_state == SelfCheckCommState::Err {
                 "FAULT"
-            } else if data.detail.balance_cell.is_some() {
-                "BAL ON"
             } else if data.bms_rca_alarm == Some(true) {
                 "WARN"
+            } else if data.detail.balance_cell.is_some() {
+                "BAL ON"
             } else {
                 "READY"
             }
@@ -3939,24 +3931,30 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
         DashboardDetailPage::Charger => {
             if data.charger_state == SelfCheckCommState::Err {
                 "FAULT"
-            } else if data.detail.charger_active == Some(true)
-                || (data.charge_allowed == Some(true) && data.chg_iin_ma.unwrap_or(0) > 0)
-            {
+            } else if charger_active_value(data) == Some(true) {
                 "ACTIVE"
             } else if !data.mains_present {
                 "NOAC"
             } else if data.charge_allowed == Some(false) {
                 "LOCK"
-            } else {
+            } else if charger_data_ready(data) {
                 "IDLE"
+            } else {
+                "N/A"
             }
         }
-        DashboardDetailPage::Thermal => match thermal_hotspot_c(data) {
-            Some(temp) if temp >= 60 => "HOT",
-            Some(temp) if temp >= 45 => "WARM",
-            Some(_) => "COOL",
-            None => "N/A",
-        },
+        DashboardDetailPage::Thermal => {
+            if thermal_fault_present(data) {
+                "FAULT"
+            } else {
+                match thermal_hotspot_c(data) {
+                    Some(temp) if temp >= 60 => "HOT",
+                    Some(temp) if temp >= 45 => "WARM",
+                    Some(_) => "COOL",
+                    None => "N/A",
+                }
+            }
+        }
     }
 }
 
@@ -4264,6 +4262,48 @@ fn thermal_hotspot_c(data: DashboardLiveData) -> Option<i16> {
             max_optional_i16(data.detail.board_temp_c, data.detail.battery_temp_c),
         ),
     )
+}
+
+fn charger_data_ready(data: DashboardLiveData) -> bool {
+    data.detail.charger_active.is_some()
+        || data.detail.charger_status.is_some()
+        || data.charge_allowed.is_some()
+        || data.chg_iin_ma.is_some()
+        || data.charger_state == SelfCheckCommState::Err
+}
+
+fn charger_active_value(data: DashboardLiveData) -> Option<bool> {
+    data.detail
+        .charger_active
+        .or(match (data.charge_allowed, data.chg_iin_ma) {
+            (Some(true), Some(ma)) => Some(ma > 0),
+            (Some(false), _) => Some(false),
+            _ => None,
+        })
+}
+
+fn charger_state_text(data: DashboardLiveData) -> &'static str {
+    if let Some(status) = data.detail.charger_status {
+        status
+    } else if data.charger_state == SelfCheckCommState::Err {
+        "FAULT"
+    } else if data.charge_allowed == Some(false) && data.mains_present {
+        "LOCK"
+    } else if !data.mains_present {
+        "NOAC"
+    } else {
+        match (data.charge_allowed, data.chg_iin_ma) {
+            (Some(true), Some(ma)) if ma > 0 => "CHG",
+            (Some(true), Some(_)) => "READY",
+            _ => "N/A",
+        }
+    }
+}
+
+fn thermal_fault_present(data: DashboardLiveData) -> bool {
+    data.therm_a_state == SelfCheckCommState::Err
+        || data.therm_b_state == SelfCheckCommState::Err
+        || data.detail.fan_status == Some("FAULT")
 }
 
 enum DetailValue {
@@ -6519,5 +6559,44 @@ mod tests {
             detail_status_tag(DashboardDetailPage::Output, output_live),
             "FAULT"
         );
+    }
+
+    #[test]
+    fn charger_detail_keeps_missing_session_data_as_na() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(true);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(charger_active_value(live), None);
+        assert_eq!(charger_state_text(live), "N/A");
+        assert_eq!(detail_status_tag(DashboardDetailPage::Charger, live), "N/A");
+    }
+
+    #[test]
+    fn thermal_fault_status_beats_temperature_band() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.tmp_a = SelfCheckCommState::Err;
+        snapshot.tmp_a_c = Some(38);
+        snapshot.dashboard_detail.battery_temp_c = Some(42);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert!(thermal_fault_present(live));
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Thermal, live),
+            "FAULT"
+        );
+    }
+
+    #[test]
+    fn cells_warn_status_beats_balance_indicator() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq40z50_rca_alarm = Some(true);
+        snapshot.dashboard_detail.balance_cell = Some(2);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(detail_status_tag(DashboardDetailPage::Cells, live), "WARN");
     }
 }
