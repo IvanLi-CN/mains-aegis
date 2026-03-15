@@ -76,27 +76,39 @@ cargo build --release --features bms-dual-probe-diag
 > 备注：当前固件将 CPU 频率固定为 `160MHz`（early bring-up 更稳），避免上电初始化阶段的偶发异常影响验证。
 > 备注：本计划的音频素材已收敛为 PCM-only（`WAV(PCM16LE)`），固件侧不再包含 ADPCM 解码路径。
 
-## 音频播放 Demo（Plan #0004）
+## 运行时音效服务（Plan #h43mk）
 
-本固件在上电后会自动播放一组 Demo playlist，用于闭环验证：
+主固件已改为常驻运行时音效服务；上电进入自检后就会请求一次 `boot_startup`，音频播放与自检并行推进，后续由主循环按电源/BMS/保护状态驱动 cue 播放，不再阻塞播放 6 段 Demo playlist。
 
 - 链路：`ESP32-S3 I2S/TDM TX -> MAX98357A -> 8Ω/1W Speaker`
 - GPIO：`GPIO4=BCLK`，`GPIO5=WS(LRCLK)`，`GPIO6=DOUT`
-- 素材：`firmware/assets/audio/demo-playlist/01_*.wav` … `06_*.wav`
-- 播放顺序：按 `01_`→`06_`；段间由固件插入 `1s` 静音
+- 共享播放核心：`firmware/src/audio.rs`
+- 运行时资产：`firmware/assets/audio/test-fw-cues/*.wav`
+- 调度语义：`Boot/Status=one_shot`、`Warning=interval_loop(2000ms)`、`Error=continuous_loop`
+- 优先级：`Error > Warning > Status > Boot`
 
-预期日志（`defmt`）：
+当前主固件会接入以下运行时 cue：
 
-- `audio: demo playlist start ...`
-- `audio: segment 1/6 start: 01_sweep_pcm.wav`
-- ...
-- `audio: demo playlist done ...`
+- `boot_startup`
+- `mains_present_dc` / `mains_absent_dc`
+- `charge_started` / `charge_completed`
+- `battery_low_no_mains` / `battery_low_with_mains`
+- `high_stress`
+- `shutdown_protection`
+- `io_over_voltage` / `io_over_current`
+- `module_fault`
+- `battery_protection`
+
+本轮保持 dormant 的 cue：
+
+- `shutdown_mode_entered`：等待真实 shutdown flow
+- `io_over_power`：等待独立 over-power 状态源或阈值策略
 
 手工验证（端到端，建议按以下顺序执行）：
 
 ```bash
 cd firmware
-cargo build --release
+cargo build --release --bin esp-firmware
 cd ..
 
 # (Human-only) Ensure the selected port is correct
@@ -106,6 +118,12 @@ mcu-agentd selector get esp
 mcu-agentd flash esp
 mcu-agentd monitor esp --reset
 ```
+
+验证关注点：
+
+- 启动阶段不再出现 `demo playlist` 相关日志序列，也不会阻塞主循环。
+- 上电后只请求一次 `boot_startup`，允许在自检期间开始播放。
+- 在市电丢失/恢复、充电开始/完成、低电/保护/过压/过流等状态切换时，能听到对应 cue。
 
 ## TPS55288 双路输出控制（Plan #0005）
 
@@ -332,6 +350,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 - `test-fw-screen-static`：屏幕静态显示测试（方向锚点 + 四角色块 + 色条 + 灰阶 + BACK 控件）
 - `test-fw-audio-playback`：音频播放与优先级测试（抢占 + 同级 FIFO）
+  - 共享播放核心：`firmware/src/audio.rs`
   - 音频素材：`firmware/assets/audio/test-fw-cues/*.wav`（同步自 `docs/audio-cues-preview/audio/`）
 
 路由规则：

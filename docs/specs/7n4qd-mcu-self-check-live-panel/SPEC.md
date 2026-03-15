@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-03-01
-- Last: 2026-03-05
+- Last: 2026-03-15
 
 ## 背景 / 问题陈述
 
@@ -89,6 +89,7 @@
 
 ## 变更记录（Change log）
 
+- 2026-03-15: hotfix，`BQ40 OperationStatus(0x54)` 改按 `SMBus block` 读取，并为关键 `BQ40` 读取补上兼容式 `PEC` 校验优先路径；这样主固件不再把有效 `DSG FET=ON` 误读成 `dsg_fet_off`，自检可在真实放电就绪时正确放行输出。
 - 2026-03-05: 激活稳态修正：`ADC_CONTROL` 置位失败降级为 `warn + 跳过 ADC 采样`，不再直接判定激活通信失败；激活结束后恢复充电使能状态（按激活前 `CHG_CE/chg_enabled` 还原），避免无谓充电瞬断。
 - 2026-03-05: review-loop 收敛补丁：当 `OPERATION_STATUS` 读取失败（`discharge_ready=None`）时，BQ40 卡片改为 `WARN` 且允许触发激活；BMS 恢复放行 TPS 时同步触发 `INA3221` 重试，避免长期停留 `ina_uninit`。
 - 2026-03-05: 修正 BMS 激活闭环细节：`OPERATION_STATUS` 读取失败不再放行 TPS；激活请求会清理 `bms/chg` 重试退避窗口；`BmsActivateConfirm` 弹窗收起条件与激活触发条件统一。

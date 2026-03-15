@@ -195,7 +195,7 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 
 本项目最终选型与用法：
 
-- `TS1`（板上风险点温度，TS_BOARD）：`FNTC0402X103F3380FB`（`10 kΩ@25°C(103)`，`β=3380`，0402）
+- `TS1`（板侧温度点，靠近 `BQ40Z50-R2`）：`FNTC0402X103F3380FB`（`10 kΩ@25°C(103)`，`β=3380`，0402）
 - `TS2/TS3/TS4`（电芯间温度）：`10 kΩ@25°C(103)`，`β=3380`（封装/料号可不同，但必须同一条 R-T 曲线）
 - 连接方式：每路 `TSx` 直接接一颗 NTC 到 `VSS/BGND`（不需要外部分压电阻；`BQ40Z50-R2` 内部提供热敏上拉/驱动）
 - `PTC`（安全 PTC，贴近 CHG/DSG FET）：`Murata PRF18BA103QB1RB`（或同等规格）
@@ -204,7 +204,7 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
     - 在目标触发温度点，电阻应确保超过芯片 trip 阈值（参考 datasheet：`RPTC(TRIP)` 最大 `3.95 MΩ`）
   - 连接方式：按 `BQ40Z50-R2` 参考电路，PTC 元件接在 `PTC` 与 `BAT` 之间，`PTCEN` 接 `BAT` 使能
 
-> 备注：`BQ40Z50-R2` 只提供两套可配置 thermistor profile（cell / FET）。因此最多支持“两条不同曲线”；本项目统一使用 `β=3380`，便于 TS1~TS4 共用同一条曲线并降低 DF 配置复杂度。
+> 备注：`BQ40Z50-R2` 只提供两套可配置 thermistor profile（cell / FET）。本项目当前约定 `TS1~TS4` 全部使用同一条 `cell` 曲线；MOS 附近的最终高温闩锁由 `PTC` 承担，不依赖把某一路 `TSx` 单独切成 `FET` 曲线。
 
 ### 3.5 均衡（外部被动均衡，200 mA）
 
@@ -300,14 +300,171 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
   - 启用 `TS1~TS4`
   - 未使用的温度通道必须在 DF 中禁用，并且硬件端接 `VSS`
 - 传感器用途映射：
-  - `TS1`：配置为 **FET/board 风险点温度**（用于更快反映板上 MOSFET/Rsense/铜皮等温升风险）
-  - `TS2/TS3/TS4`：配置为 **cell 温度**（用于充/放电温度窗口与电芯安全保护）
+  - `TS1`：配置为 **cell / board 温度输入**，不作为单独的 `FET` 温度源
+  - `TS2/TS3/TS4`：配置为 **cell 温度**
 - 热敏曲线模型（thermistor profile）：
-  - 将 cell / FET 两套模型都配置为 `10 kΩ@25°C(103), β=3380` 对应的曲线（本项目 TS1~TS4 统一曲线）
-  - 若未来确需 TS1 与电芯间 NTC 使用不同曲线：使用 “FET 模型” 绑定 TS1、用 “cell 模型” 绑定 TS2~TS4（仍只能支持两条曲线，无法让 TS2/TS3/TS4 各自不同）
+  - `TS1~TS4` 全部使用 `10 kΩ@25°C(103), β=3380` 对应的 `cell` 曲线
+  - 本项目当前不单独启用 `FET` thermistor profile
 - `PTC`（安全 PTC）：
   - 启用 `PTC/PTCEN` 安全 PTC 检测，并按参考设计连接至 `BAT`
   - 注意：`PTC fault` 属于永久故障类，通常只能通过 `POR` 清除；因此 PTC 的触发温度应高于“正常温控关断（可恢复）”的阈值，用作最后一道安全闩锁
+
+### 5.4 首版 Golden DF 基线（主板固定项）
+
+以下字段作为本项目首版 `BQ40Z50-R2` 主板基线。含义、推荐值与常见可选项需在文档中固定，避免后续 bring-up / recover 反复刷写。
+
+#### 5.4.1 包模式 / 激活方式
+
+- `DA Configuration` / 数据采集配置：推荐整字设为 `0x8127`
+  - `CC1:CC0` / 电芯串数：设 `11`，表示 `4S`
+    - 选项：`11=4S`，`10=3S`，`01=2S`，`00=1S`
+  - `NR` / 非可拆卸模式：设 `1`
+    - 含义：忽略 `PRES`，按内置电池处理
+    - 选项：`1=Non-removable`，`0=Removable + PRES`
+  - `EMSHUT_EN` / 紧急 FET 关断使能：设 `1`
+    - 含义：启用 `SHUTDN` 相关的 Emergency FET Shutdown 路径
+    - 选项：`1=启用`，`0=禁用`
+  - `SLEEP` / 睡眠模式：当前保持 `0`
+    - 含义：当前基线不靠该位引入额外睡眠行为
+    - 选项：`1=启用`，`0=禁用`
+  - `IN_SYSTEM_SLEEP` / 系统内睡眠：当前保持 `0`
+    - 含义：当前基线不启用 in-system sleep
+    - 选项：`1=启用`，`0=禁用`
+  - `EMSHUT_PEXIT_DIS` / 禁止以 `SHUTDN` 退出紧急关断：当前保持 `0`
+    - 含义：允许 `SHUTDN` 作为退出选项
+    - 选项：`1=禁止`，`0=允许`
+
+#### 5.4.2 温度输入
+
+- `Temperature Enable` / 温度通道使能：推荐整字设为 `0x1E`
+  - `TS4 Enable`：设 `1`
+  - `TS3 Enable`：设 `1`
+  - `TS2 Enable`：设 `1`
+  - `TS1 Enable`：设 `1`
+  - `TSint Enable`：设 `0`
+  - 选项：每一位均为 `1=启用`、`0=禁用`
+
+- `Temperature Mode` / 温度通道用途：推荐整字设为 `0x00`
+  - `TS4 Mode`：设 `0`
+  - `TS3 Mode`：设 `0`
+  - `TS2 Mode`：设 `0`
+  - `TS1 Mode`：设 `0`
+  - `TSInt Mode`：设 `0`
+  - 含义：`TS1~TS4` 全部按 `cell temperature` 处理，不单独指定 `FET temperature`
+  - 选项：每一位均为 `1=FET temperature`、`0=cell temperature`
+
+#### 5.4.3 充电路径 FET 行为
+
+- `FET Options` / FET 选项：推荐整字设为 `0x18`
+  - `CHGFET` / 达到 `TC` 时的 FET 动作：设 `0`
+    - 含义：`TC` 只是“正常终止充电”标志，不因为该标志硬切充电路径
+    - 选项：`1=TC 时关充电/预充 FET`，`0=不因 TC 关 FET`
+  - `CHGIN` / `Charge Inhibit` 时的 FET 动作：设 `1`
+    - 含义：当温度落入“禁止开始充电”区间时，允许 BQ 直接阻断充电路径
+    - 选项：`1=有 FET 动作`，`0=仅逻辑禁止开始`
+  - `CHGSU` / `Charge Suspend` 时的 FET 动作：设 `1`
+    - 含义：当温度在充电过程中进入 suspend 区间时，允许 BQ 直接阻断充电路径
+    - 选项：`1=有 FET 动作`，`0=仅输出 0V/0A 充电请求`
+  - `OTFET` / 过温时 FET 动作：当前保持 `0`
+    - 含义：过温保护逻辑存在，但首版基线不在该位上附加额外 FET 动作
+    - 选项：`1=过温关 CHG/DSG FET`，`0=不由该位直接关`
+  - `PCHG_COMM` / 预充 FET 选择：当前保持 `0`
+    - 含义：预充使用独立 `PCHG FET`
+    - 选项：`1=使用 CHG FET`，`0=使用 PCHG FET`
+
+#### 5.4.4 SBS / 主机侧行为
+
+- `SBS Gauging Configuration` / SBS 计量配置：推荐整字设为 `0x05`
+  - `LOCK0`：设 `1`
+    - 含义：放空到 `0%` 后，在 relax 阶段不让 RSOC / RC 跳回去
+    - 选项：`1=锁住`，`0=允许跳回`
+  - `RSOCL`：设 `1`
+    - 含义：充电结束前 `RSOC` 最高只显示 `99%`，检测到有效终止后再跳 `100%`
+    - 选项：`1=卡 99% 到 VCT`，`0=直接显示实际值`
+  - `RSOC_RND_OFF`：当前保持 `0`
+    - 含义：继续使用默认 ceiling 行为
+    - 选项：`1=round-off`，`0=ceiling`
+  - `RSOC_HOLD`：当前保持 `0`
+    - 含义：放电时不额外限制 `RSOC` 上升
+    - 选项：`1=不允许上升`，`0=不限制`
+
+- `SBS Configuration` / SBS 配置：推荐整字设为 `0x20`
+  - `BLT1:BLT0` / 总线低电平超时：设 `10`
+    - 含义：使用 `20 s` timeout
+    - 选项：`00=无 timeout`，`01=15 s`，`10=20 s`，`11=35 s`
+  - `HPE` / 主机通信 PEC：当前保持 `0`
+    - 含义：主机链路暂不强制 PEC
+    - 选项：`1=启用`，`0=禁用`
+  - `CPE` / 充电器广播 PEC：当前保持 `0`
+  - `BCAST` / 广播使能：当前保持 `0`
+  - `SMB_CELL_TEMP` / 主机写温度旁路：当前保持 `0`
+  - `XL` / 400 kHz：当前保持 `0`
+
+#### 5.4.5 认证与计量算法
+
+- `Auth Config` / 认证配置：推荐整字设为 `0x00`
+  - `SHA1_SECURE`：设 `0`
+    - 含义：当前不用 secure memory 认证
+    - 选项：`1=启用`，`0=禁用`
+
+- `IT Gauging Configuration` / Impedance Track 计量配置：首版保持 `0xD0FE`
+  - 含义：先沿用 TI 默认基线，不把 bring-up 问题扩展到 IT 算法调参
+  - 推荐：仅在 `ChemID`、校准、学习流程一并锁定后再改
+
+#### 5.4.5A Manufacturing Status Init（复位默认功能）
+
+- `Manufacturing Status Init` / 制造状态初始化：推荐整字设为 `0x0378`
+  - `LED_EN`：设 `1`
+    - 含义：启用按键触发的 LED 显示
+    - 选项：`1=启用`，`0=禁用`
+  - `FUSE_EN`：设 `1`
+    - 含义：允许 `BQ40Z50-R2` 驱动 `FUSE` 输出
+    - 选项：`1=启用`，`0=禁用`
+  - `BBR_EN`：设 `0`
+    - 含义：首版基线先不启用 Black Box Recorder
+    - 选项：`1=启用`，`0=禁用`
+  - `PF_EN`：设 `1`
+    - 含义：启用 Permanent Failure 保护
+    - 选项：`1=启用`，`0=禁用`
+  - `LF_EN`：设 `1`
+    - 含义：启用 Lifetime Data Collection
+    - 选项：`1=启用`，`0=禁用`
+  - `FET_EN`：设 `1`
+    - 含义：允许固件控制 CHG/DSG/PCHG FET
+    - 选项：`1=启用`，`0=禁用`
+  - `GAUGE_EN`：设 `1`
+    - 含义：启用 gauging
+    - 选项：`1=启用`，`0=禁用`
+  - 推荐理由：
+    - 本项目有 5 个电量灯，因此 `LED_EN=1`
+    - `BQ40Z50-R2 FUSE` 已参与二次保护触发链路，因此 `FUSE_EN=1`
+    - 作为正式运行基线，`PF_EN/LF_EN/FET_EN/GAUGE_EN` 都应在复位后默认开启
+    - `BBR_EN` 先保持关闭，避免在首版 bring-up 中引入额外状态变量
+
+#### 5.4.6 AFE 基线
+
+- `AFE Protection Control` / AFE 保护控制：首版保持 `0x70`
+  - `RSTRIM[7:4]`：保持 `0x7`
+    - 含义：TRM 明确要求保持默认，避免影响 AFE 电流保护精度
+  - `SCDDx2`：保持 `0`
+    - 选项：`1=短路放电延时翻倍`，`0=正常延时`
+  - `RSNS`：保持 `0`
+    - 含义：继续使用 `0.5x` 阈值表
+    - 选项：`1=正常阈值表`，`0=0.5x 阈值表`
+
+### 5.5 仍需单独锁定的量产字段
+
+以下字段与主板 bring-up 逻辑解耦，但在量产前必须单独锁定，不得沿用卖家模板：
+
+- `Manufacturing Status Init`：需单独确认 `GAUGE_EN`、`FET_EN`、`LF_EN`、`PF_EN`、`LED_EN`、`FUSE_EN`
+- `ChemID`
+- `Design Capacity`
+- `Design Voltage`
+- `Terminate Voltage`
+- `Remaining Capacity Alarm`
+- 充/放电温度窗口与恢复点
+- `COV/CUV/OCC/OCD/SCC/SCD`
+- 均衡策略
 
 温度阈值（充/放电高温/低温、延时、恢复点）需结合电芯规格书与系统功耗/散热做定标后落到 DF（此处不写死，避免后续版本变更造成误导）。
 

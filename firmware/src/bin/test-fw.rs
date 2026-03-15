@@ -139,7 +139,7 @@ fn main() -> ! {
 
     #[cfg(feature = "test-fw-audio-playback")]
     {
-        audio_manager.request_cue(AudioCue::BootStartup);
+        audio_manager.trigger(AudioCue::BootStartup);
     }
 
     #[cfg(feature = "test-fw-audio-playback")]
@@ -193,7 +193,7 @@ fn main() -> ! {
                 Ok(_) => {}
                 Err(_) => defmt::warn!("test-fw: dma available failed"),
             }
-            audio_manager.tick();
+            audio_manager.tick(Instant::now());
         }
 
         let now = Instant::now();
@@ -234,7 +234,7 @@ fn main() -> ! {
                 }
                 #[cfg(feature = "test-fw-audio-playback")]
                 if let Some(audio_cue) = result.audio_cue {
-                    audio_manager.request_cue(audio_cue);
+                    audio_manager.trigger(audio_cue);
                 }
                 if result.needs_redraw {
                     needs_redraw = true;

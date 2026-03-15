@@ -1,6 +1,7 @@
 # Tool-local runtime artifacts
 .esp32-port
 .mcu-agentd/
+.mcu-agentd.bak_*/
 .espflash-monitor/
 firmware/.esp32-port
 firmware/.mcu-agentd/

@@ -191,13 +191,61 @@ const BMS_WAKE_KEEPALIVE_ROUNDS: usize = 3;
 const BMS_WAKE_READ_GAPS_MS: [u64; 3] = [2, 22, 40];
 const BMS_WAKE_TOUCH_READ_GAPS_MS: [u64; 3] = [22, 40, 66];
 const BMS_MAC_CMD_DEVICE_TYPE: u16 = 0x0001;
+const BMS_MAC_CMD_CAL_MODE: u16 = 0x002D;
 const BMS_DEVICE_TYPE_BQ40Z50: u16 = 0x4500;
 const BMS_MAC_CMD_GAUGING: u16 = 0x0021;
 const BMS_MAC_CMD_FET_CONTROL: u16 = 0x0022;
 const BMS_MAC_CMD_OPERATION_STATUS: u16 = 0x0054;
 const BMS_MAC_CMD_MANUFACTURING_STATUS: u16 = 0x0057;
+const BMS_MAC_CMD_EXIT_CAL_OUTPUT: u16 = 0xF080;
+const BMS_MAC_CMD_OUTPUT_CCADC_CAL: u16 = 0xF081;
+const BMS_DF_ADDR_DA_CONFIGURATION: u16 = 0x4A7D;
+const BMS_DF_ADDR_MFG_STATUS_INIT: u16 = 0x4600;
+const BMS_DF_ADDR_FET_OPTIONS: u16 = 0x4887;
+const BMS_DF_ADDR_SBS_GAUGING_CONFIGURATION: u16 = 0x4888;
+const BMS_DF_ADDR_SBS_CONFIGURATION: u16 = 0x4889;
+const BMS_DF_ADDR_AUTH_CONFIG: u16 = 0x488A;
+const BMS_DF_ADDR_PROTECTION_CONFIGURATION: u16 = 0x4937;
+const BMS_DF_ADDR_ENABLED_PROTECTIONS_A: u16 = 0x4938;
+const BMS_DF_ADDR_ENABLED_PROTECTIONS_B: u16 = 0x4939;
+const BMS_DF_ADDR_ENABLED_PROTECTIONS_C: u16 = 0x493A;
+const BMS_DF_ADDR_ENABLED_PROTECTIONS_D: u16 = 0x493B;
+const BMS_DF_ADDR_IT_GAUGING_CONFIGURATION: u16 = 0x4917;
+const BMS_DF_ADDR_ENABLED_PF_A: u16 = 0x49BF;
+const BMS_DF_ADDR_ENABLED_PF_B: u16 = 0x49C0;
+const BMS_DF_ADDR_ENABLED_PF_C: u16 = 0x49C1;
+const BMS_DF_ADDR_ENABLED_PF_D: u16 = 0x49C2;
+const BMS_DF_ADDR_TEMPERATURE_ENABLE: u16 = 0x4A7B;
+const BMS_DF_ADDR_TEMPERATURE_MODE: u16 = 0x4A7C;
+const BMS_DF_ADDR_AFE_PROTECTION_CONTROL: u16 = 0x4A80;
+const BMS_DF_ADDR_CELL_GAIN: u16 = 0x4000;
+const BMS_DF_ADDR_PACK_GAIN: u16 = 0x4002;
+const BMS_DF_ADDR_BAT_GAIN: u16 = 0x4004;
+const BMS_DF_AFE_PROTECTION_CONTROL_DEFAULT: u8 = 0x70;
+#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+const BMS_DF_MFG_STATUS_INIT_DEFAULT: u16 = 0x0378;
+#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+const BMS_DF_FET_OPTIONS_DEFAULT: u8 = 0x18;
+#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+const BMS_DF_DA_CONFIGURATION_MAINBOARD: u16 = 0x8127;
+#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+const BMS_DF_TEMPERATURE_ENABLE_MAINBOARD: u8 = 0x1E;
+#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+const BMS_DF_TEMPERATURE_MODE_MAINBOARD: u8 = 0x00;
+#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+const BMS_DF_SBS_GAUGING_CONFIGURATION_DEFAULT: u8 = 0x05;
+#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+const BMS_DF_SBS_CONFIGURATION_DEFAULT: u8 = 0x20;
+#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+const BMS_DF_AUTH_CONFIG_DEFAULT: u8 = 0x00;
+#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+const BMS_DF_IT_GAUGING_CONFIGURATION_DEFAULT: u16 = 0xD0FE;
+const BMS_DF_REPLY_LEN_WITH_ADDR: u8 = 34;
+const BMS_MFG_STATUS_CAL_TEST: u32 = 1 << 15;
 const BMS_MFG_STATUS_GAUGE_EN: u32 = 1 << 3;
 const BMS_MFG_STATUS_FET_EN: u32 = 1 << 4;
+const BMS_SBS_CONFIGURATION_HPE: u8 = 1 << 2;
+const BMS_ENABLE_CAL_OUTPUT_DIAG: bool = false;
 // TI's standalone SREC note sends Execute FW, waits quietly for about 1 s, then polls 0x0D.
 // Keep the first post-execute transaction as a plain 0x0D read so we do not disturb the ROM
 // -> FW reboot window with extra SMBus probes unless the quiet path has already failed.
@@ -395,13 +443,7 @@ fn read_bms_mac_probe_checked<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    // ManufacturerAccess() 0x0001 DeviceType query via ManufacturerData() (0x23).
-    // Per TRM, data bytes for cmd 0x00 are written MSB-first and the block reply echoes 0x0001
-    // before the 16-bit device type payload.
-    i2c.write(addr, &[bq40z50::cmd::MANUFACTURER_ACCESS, 0x00, 0x01])
-        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
-    spin_delay(BMS_MAC_WRITE_SETTLE);
-    let raw = bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA)?;
+    let raw = read_bms_mac_block_via_mb44(i2c, addr, BMS_MAC_CMD_DEVICE_TYPE)?;
     let payload_len = raw.payload_len as usize;
 
     let b0 = if payload_len > 0 { raw.payload[0] } else { 0 };
@@ -416,7 +458,12 @@ where
         return Err(bq40z50::BmsDiagError::BadBlockLen);
     }
 
-    let device_type = u16::from_le_bytes([b2, b3]);
+    let payload = parse_bms_mac_payload(&raw, BMS_MAC_CMD_DEVICE_TYPE)
+        .ok_or(bq40z50::BmsDiagError::BadBlockLen)?;
+    if payload.len() < 2 {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+    let device_type = u16::from_le_bytes([payload[0], payload[1]]);
     if device_type != BMS_DEVICE_TYPE_BQ40Z50 {
         return Err(bq40z50::BmsDiagError::BadRange);
     }
@@ -432,6 +479,68 @@ where
     })
 }
 
+#[derive(Clone, Copy)]
+enum BmsMacWordOrder {
+    Little,
+    Big,
+}
+
+impl BmsMacWordOrder {
+    fn bytes(self, mac_cmd: u16) -> [u8; 2] {
+        match self {
+            Self::Little => mac_cmd.to_le_bytes(),
+            Self::Big => mac_cmd.to_be_bytes(),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Little => "le",
+            Self::Big => "be",
+        }
+    }
+}
+
+fn write_bms_mac_via_ma00<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+    order: BmsMacWordOrder,
+    with_pec: bool,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let cmd = order.bytes(mac_cmd);
+    let direct = [bq40z50::cmd::MANUFACTURER_ACCESS, cmd[0], cmd[1]];
+    if with_pec {
+        let addr_w = addr << 1;
+        let pec = crc8_smbus(&[addr_w, direct[0], direct[1], direct[2]]);
+        let with_pec_frame = [direct[0], direct[1], direct[2], pec];
+        i2c.write(addr, &with_pec_frame)
+            .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    } else {
+        i2c.write(addr, &direct)
+            .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    }
+    Ok(())
+}
+
+fn read_bms_mac_block_via_md23_variant<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+    order: BmsMacWordOrder,
+    with_pec: bool,
+) -> Result<bq40z50::BlockReadRaw, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    write_bms_mac_via_ma00(i2c, addr, mac_cmd, order, with_pec)?;
+    spin_delay(BMS_MAC_WRITE_SETTLE);
+    bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA)
+}
+
 fn read_bms_mac_block_via_md23<I2C>(
     i2c: &mut I2C,
     addr: u8,
@@ -440,19 +549,17 @@ fn read_bms_mac_block_via_md23<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    // ManufacturerAccess() writes use MSB-first ordering on cmd 0x00, then the reply is read
-    // back from ManufacturerData() (0x23).
-    i2c.write(
-        addr,
-        &[
-            bq40z50::cmd::MANUFACTURER_ACCESS,
-            (mac_cmd >> 8) as u8,
-            (mac_cmd & 0x00FF) as u8,
-        ],
-    )
-    .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
-    spin_delay(BMS_MAC_WRITE_SETTLE);
-    bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA)
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+    for (order, with_pec) in [
+        (BmsMacWordOrder::Little, false),
+        (BmsMacWordOrder::Little, true),
+    ] {
+        match read_bms_mac_block_via_md23_variant(i2c, addr, mac_cmd, order, with_pec) {
+            Ok(raw) => return Ok(raw),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
 }
 
 fn read_bms_mac_block_via_mb44<I2C>(
@@ -489,6 +596,420 @@ where
     Err(last_err)
 }
 
+fn read_bms_df_byte_via_mb44<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+) -> Result<u8, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let df_addr_le = df_addr.to_le_bytes();
+    let direct = [
+        bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+        0x02,
+        df_addr_le[0],
+        df_addr_le[1],
+    ];
+    let addr_w = addr << 1;
+    let pec = crc8_smbus(&[addr_w, direct[0], direct[1], direct[2], direct[3]]);
+    let with_pec = [direct[0], direct[1], direct[2], direct[3], pec];
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+
+    for frame in [&direct[..], &with_pec[..]] {
+        if i2c.write(addr, frame).is_err() {
+            continue;
+        }
+        spin_delay(BMS_MAC_WRITE_SETTLE);
+
+        let mut buf_pec = [0u8; 36];
+        match i2c.write_read(
+            addr,
+            &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS],
+            &mut buf_pec,
+        ) {
+            Ok(()) => {
+                let declared_len = buf_pec[0];
+                if declared_len == BMS_DF_REPLY_LEN_WITH_ADDR {
+                    let payload_end = 1usize + declared_len as usize;
+                    let addr_w = addr << 1;
+                    let addr_r = addr_w | 1;
+                    let mut pec_input = [0u8; 40];
+                    pec_input[0] = addr_w;
+                    pec_input[1] = bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS;
+                    pec_input[2] = addr_r;
+                    pec_input[3..(3 + payload_end)].copy_from_slice(&buf_pec[..payload_end]);
+                    let expected = crc8_smbus(&pec_input[..(3 + payload_end)]);
+                    if expected == buf_pec[payload_end] {
+                        let echoed_addr = u16::from_le_bytes([buf_pec[1], buf_pec[2]]);
+                        if echoed_addr != df_addr {
+                            last_err = bq40z50::BmsDiagError::BadRange;
+                            continue;
+                        }
+                        return Ok(buf_pec[3]);
+                    }
+                    last_err = bq40z50::BmsDiagError::InconsistentSample;
+                } else {
+                    last_err = bq40z50::BmsDiagError::BadBlockLen;
+                }
+            }
+            Err(_) => last_err = bq40z50::BmsDiagError::I2cNack,
+        }
+
+        let mut buf = [0u8; 35];
+        match i2c.write_read(addr, &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS], &mut buf) {
+            Ok(()) => {
+                let declared_len = buf[0];
+                if declared_len == BMS_DF_REPLY_LEN_WITH_ADDR {
+                    let echoed_addr = u16::from_le_bytes([buf[1], buf[2]]);
+                    if echoed_addr != df_addr {
+                        last_err = bq40z50::BmsDiagError::BadRange;
+                        continue;
+                    }
+                    return Ok(buf[3]);
+                }
+
+                last_err = bq40z50::BmsDiagError::BadBlockLen;
+            }
+            Err(_) => last_err = bq40z50::BmsDiagError::I2cNack,
+        }
+    }
+
+    Err(last_err)
+}
+
+fn read_bms_df_block_via_mb44<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+) -> Result<(u16, bq40z50::BlockReadRaw), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let df_addr_le = df_addr.to_le_bytes();
+    let direct = [
+        bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+        0x02,
+        df_addr_le[0],
+        df_addr_le[1],
+    ];
+    let addr_w = addr << 1;
+    let pec = crc8_smbus(&[addr_w, direct[0], direct[1], direct[2], direct[3]]);
+    let with_pec = [direct[0], direct[1], direct[2], direct[3], pec];
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+
+    for frame in [&direct[..], &with_pec[..]] {
+        if i2c.write(addr, frame).is_err() {
+            continue;
+        }
+        spin_delay(BMS_MAC_WRITE_SETTLE);
+
+        let mut buf_pec = [0u8; 36];
+        match i2c.write_read(
+            addr,
+            &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS],
+            &mut buf_pec,
+        ) {
+            Ok(()) => {
+                let declared_len = buf_pec[0];
+                if declared_len == BMS_DF_REPLY_LEN_WITH_ADDR {
+                    let payload_end = 1usize + declared_len as usize;
+                    let addr_w = addr << 1;
+                    let addr_r = addr_w | 1;
+                    let mut pec_input = [0u8; 40];
+                    pec_input[0] = addr_w;
+                    pec_input[1] = bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS;
+                    pec_input[2] = addr_r;
+                    pec_input[3..(3 + payload_end)].copy_from_slice(&buf_pec[..payload_end]);
+                    let expected = crc8_smbus(&pec_input[..(3 + payload_end)]);
+                    if expected != buf_pec[payload_end] {
+                        last_err = bq40z50::BmsDiagError::InconsistentSample;
+                        continue;
+                    }
+                    let echoed_addr = u16::from_le_bytes([buf_pec[1], buf_pec[2]]);
+                    if echoed_addr != df_addr {
+                        last_err = bq40z50::BmsDiagError::BadRange;
+                        continue;
+                    }
+                    let mut compact = bq40z50::BlockReadRaw {
+                        declared_len: 32,
+                        payload_len: 32,
+                        payload: [0u8; 32],
+                    };
+                    compact.payload.copy_from_slice(&buf_pec[3..35]);
+                    return Ok((echoed_addr, compact));
+                }
+            }
+            Err(_) => {}
+        }
+
+        let mut buf = [0u8; 35];
+        match i2c.write_read(addr, &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS], &mut buf) {
+            Ok(()) => {
+                let declared_len = buf[0];
+                if declared_len == BMS_DF_REPLY_LEN_WITH_ADDR {
+                    let echoed_addr = u16::from_le_bytes([buf[1], buf[2]]);
+                    if echoed_addr != df_addr {
+                        last_err = bq40z50::BmsDiagError::BadRange;
+                        continue;
+                    }
+                    let mut compact = bq40z50::BlockReadRaw {
+                        declared_len: 32,
+                        payload_len: 32,
+                        payload: [0u8; 32],
+                    };
+                    compact.payload.copy_from_slice(&buf[3..35]);
+                    return Ok((echoed_addr, compact));
+                }
+
+                last_err = bq40z50::BmsDiagError::BadBlockLen;
+            }
+            Err(_) => last_err = bq40z50::BmsDiagError::I2cNack,
+        }
+    }
+
+    Err(last_err)
+}
+
+#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+fn read_bms_df_bytes_via_mb44<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+    out: &mut [u8],
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut copied = 0usize;
+    while copied < out.len() {
+        let window_addr = df_addr.wrapping_add(copied as u16);
+        let (_, raw) = read_bms_df_block_via_mb44(i2c, addr, window_addr)?;
+        let payload_len = raw.payload_len as usize;
+        if payload_len == 0 {
+            return Err(bq40z50::BmsDiagError::BadBlockLen);
+        }
+        let take = core::cmp::min(payload_len, out.len() - copied);
+        out[copied..(copied + take)].copy_from_slice(&raw.payload[..take]);
+        copied += take;
+        spin_delay(BMS_MAC_WRITE_SETTLE);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+fn patch_bms_live_df_mainboard(section1: &mut [u8]) {
+    let base = 0x4000u16;
+    let patch_u8 = |buf: &mut [u8], addr: u16, value: u8| {
+        let off = addr.wrapping_sub(base) as usize;
+        if off < buf.len() {
+            buf[off] = value;
+        }
+    };
+    let patch_u16 = |buf: &mut [u8], addr: u16, value: u16| {
+        let off = addr.wrapping_sub(base) as usize;
+        if off + 1 < buf.len() {
+            let bytes = value.to_le_bytes();
+            buf[off] = bytes[0];
+            buf[off + 1] = bytes[1];
+        }
+    };
+    patch_u16(
+        section1,
+        BMS_DF_ADDR_MFG_STATUS_INIT,
+        BMS_DF_MFG_STATUS_INIT_DEFAULT,
+    );
+    patch_u16(
+        section1,
+        BMS_DF_ADDR_DA_CONFIGURATION,
+        BMS_DF_DA_CONFIGURATION_MAINBOARD,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_FET_OPTIONS,
+        BMS_DF_FET_OPTIONS_DEFAULT,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_SBS_GAUGING_CONFIGURATION,
+        BMS_DF_SBS_GAUGING_CONFIGURATION_DEFAULT,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_SBS_CONFIGURATION,
+        BMS_DF_SBS_CONFIGURATION_DEFAULT,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_AUTH_CONFIG,
+        BMS_DF_AUTH_CONFIG_DEFAULT,
+    );
+    patch_u16(
+        section1,
+        BMS_DF_ADDR_IT_GAUGING_CONFIGURATION,
+        BMS_DF_IT_GAUGING_CONFIGURATION_DEFAULT,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_TEMPERATURE_ENABLE,
+        BMS_DF_TEMPERATURE_ENABLE_MAINBOARD,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_TEMPERATURE_MODE,
+        BMS_DF_TEMPERATURE_MODE_MAINBOARD,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_AFE_PROTECTION_CONTROL,
+        BMS_DF_AFE_PROTECTION_CONTROL_DEFAULT,
+    );
+}
+
+fn read_bms_da_configuration<I2C>(i2c: &mut I2C, addr: u8) -> Result<u16, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let lo = read_bms_df_byte_via_mb44(i2c, addr, BMS_DF_ADDR_DA_CONFIGURATION)?;
+    spin_delay(BMS_WORD_GAP);
+    let hi = read_bms_df_byte_via_mb44(i2c, addr, BMS_DF_ADDR_DA_CONFIGURATION + 1)?;
+    Ok(u16::from_le_bytes([lo, hi]))
+}
+
+#[derive(Clone, Copy)]
+enum BmsDfWriteVia {
+    Direct,
+    Pec,
+}
+
+impl BmsDfWriteVia {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Pec => "pec",
+        }
+    }
+}
+
+fn write_bms_df_bytes_via_mb44_once<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+    data: &[u8],
+    via: BmsDfWriteVia,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if data.is_empty() || data.len() > 32 {
+        return Err(bq40z50::BmsDiagError::BadRange);
+    }
+
+    let mut frame = [0u8; 36];
+    let df_addr_le = df_addr.to_le_bytes();
+    frame[0] = bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS;
+    frame[1] = (2 + data.len()) as u8;
+    frame[2] = df_addr_le[0];
+    frame[3] = df_addr_le[1];
+    frame[4..(4 + data.len())].copy_from_slice(data);
+    let frame_len = 4 + data.len();
+
+    match via {
+        BmsDfWriteVia::Direct => i2c.write(addr, &frame[..frame_len]),
+        BmsDfWriteVia::Pec => {
+            let addr_w = addr << 1;
+            let mut pec_input = [0u8; 37];
+            pec_input[0] = addr_w;
+            pec_input[1..(1 + frame_len)].copy_from_slice(&frame[..frame_len]);
+            let pec = crc8_smbus(&pec_input[..(1 + frame_len)]);
+            frame[frame_len] = pec;
+            i2c.write(addr, &frame[..(frame_len + 1)])
+        }
+    }
+    .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    spin_delay(BMS_MAC_WRITE_SETTLE);
+    Ok(())
+}
+
+fn read_bms_block_u32<I2C>(i2c: &mut I2C, addr: u8, cmd: u8) -> Result<u32, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let raw = bq40z50::read_block_raw_checked(i2c, addr, cmd)?;
+    if raw.payload_len == 0 {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+    let payload_len = raw.payload_len as usize;
+    let mut bytes = [0u8; 4];
+    let copy_len = payload_len.min(4);
+    bytes[..copy_len].copy_from_slice(&raw.payload[..copy_len]);
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn read_bms_operation_status_raw<I2C>(i2c: &mut I2C, addr: u8) -> Result<u32, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    read_bms_block_u32(i2c, addr, bq40z50::cmd::OPERATION_STATUS)
+}
+
+fn read_bms_pf_status_raw<I2C>(i2c: &mut I2C, addr: u8) -> Result<u32, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    read_bms_block_u32(i2c, addr, bq40z50::cmd::PF_STATUS)
+}
+
+fn bms_security_mode_from_op(op: u32) -> &'static str {
+    match ((op >> 8) & 0x3) as u8 {
+        0b01 => "full_access",
+        0b10 => "unsealed",
+        0b11 => "sealed",
+        _ => "reserved",
+    }
+}
+
+fn verify_bms_df_byte<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+    retries: u8,
+) -> Result<u8, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+    for _ in 0..retries {
+        match read_bms_df_byte_via_mb44(i2c, addr, df_addr) {
+            Ok(value) => return Ok(value),
+            Err(e) => last_err = e,
+        }
+        spin_delay(BMS_MAC_WRITE_SETTLE);
+    }
+    Err(last_err)
+}
+
+fn send_bms_device_reset<I2C>(i2c: &mut I2C, addr: u8) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    send_bms_manufacturer_toggle(i2c, addr, 0x0041, "device_reset", true)
+}
+
+fn read_bms_df_u16_via_mb44<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+) -> Result<u16, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let lo = read_bms_df_byte_via_mb44(i2c, addr, df_addr)?;
+    spin_delay(BMS_WORD_GAP);
+    let hi = read_bms_df_byte_via_mb44(i2c, addr, df_addr + 1)?;
+    Ok(u16::from_le_bytes([lo, hi]))
+}
+
 fn parse_bms_mac_u32(raw: &bq40z50::BlockReadRaw, mac_cmd: u16) -> Option<u32> {
     let payload_len = raw.payload_len as usize;
     let cmd = mac_cmd.to_le_bytes();
@@ -503,6 +1024,34 @@ fn parse_bms_mac_u32(raw: &bq40z50::BlockReadRaw, mac_cmd: u16) -> Option<u32> {
     None
 }
 
+fn parse_bms_md23_u16(raw: &bq40z50::BlockReadRaw) -> Option<u16> {
+    let payload_len = raw.payload_len as usize;
+    if payload_len < 2 {
+        return None;
+    }
+    Some(u16::from_le_bytes([raw.payload[0], raw.payload[1]]))
+}
+
+fn copy_bms_md23_payload<const N: usize>(raw: &bq40z50::BlockReadRaw) -> Option<([u8; N], usize)> {
+    let payload_len = raw.payload_len as usize;
+    if payload_len == 0 {
+        return None;
+    }
+    let mut out = [0u8; N];
+    let copy_len = payload_len.min(N);
+    out[..copy_len].copy_from_slice(&raw.payload[..copy_len]);
+    Some((out, copy_len))
+}
+
+fn parse_bms_mac_payload<'a>(raw: &'a bq40z50::BlockReadRaw, mac_cmd: u16) -> Option<&'a [u8]> {
+    let payload_len = raw.payload_len as usize;
+    let cmd = mac_cmd.to_le_bytes();
+    if payload_len >= 2 && raw.payload[0] == cmd[0] && raw.payload[1] == cmd[1] {
+        return Some(&raw.payload[2..payload_len]);
+    }
+    None
+}
+
 fn read_bms_mac_u32<I2C>(
     i2c: &mut I2C,
     addr: u8,
@@ -511,14 +1060,255 @@ fn read_bms_mac_u32<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    if let Ok(raw) = read_bms_mac_block_via_md23(i2c, addr, mac_cmd) {
-        if let Some(value) = parse_bms_mac_u32(&raw, mac_cmd) {
-            return Ok(value);
-        }
-    }
-
     let raw = read_bms_mac_block_via_mb44(i2c, addr, mac_cmd)?;
     parse_bms_mac_u32(&raw, mac_cmd).ok_or(bq40z50::BmsDiagError::BadBlockLen)
+}
+
+fn read_bms_mac_payload_via_mb44<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+) -> Result<bq40z50::BlockReadRaw, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let raw = read_bms_mac_block_via_mb44(i2c, addr, mac_cmd)?;
+    if parse_bms_mac_payload(&raw, mac_cmd).is_some() {
+        Ok(raw)
+    } else {
+        Err(bq40z50::BmsDiagError::BadBlockLen)
+    }
+}
+
+fn read_bms_mac_u16_via_mb44<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+) -> Result<u16, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let raw = read_bms_mac_payload_via_mb44(i2c, addr, mac_cmd)?;
+    let payload = parse_bms_mac_payload(&raw, mac_cmd).ok_or(bq40z50::BmsDiagError::BadBlockLen)?;
+    if payload.len() < 2 {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+    Ok(u16::from_le_bytes([payload[0], payload[1]]))
+}
+
+fn copy_bms_mac_payload<const N: usize>(
+    raw: &bq40z50::BlockReadRaw,
+    mac_cmd: u16,
+) -> Option<([u8; N], usize)> {
+    let payload = parse_bms_mac_payload(raw, mac_cmd)?;
+    let mut out = [0u8; N];
+    let copy_len = payload.len().min(N);
+    out[..copy_len].copy_from_slice(&payload[..copy_len]);
+    Some((out, copy_len))
+}
+
+fn read_bms_direct_block_with_retry<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    cmd: u8,
+) -> Result<bq40z50::BlockReadRaw, bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+    for _ in 0..3 {
+        match bq40z50::read_block_raw_checked(i2c, addr, cmd) {
+            Ok(raw) => return Ok(raw),
+            Err(e) => last_err = e,
+        }
+        spin_delay(BMS_WORD_GAP);
+    }
+    Err(last_err)
+}
+
+fn probe_block_reply_pec<I2C, const N: usize>(
+    i2c: &mut I2C,
+    addr: u8,
+    cmd: u8,
+    expected_declared_len: u8,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if N < 3 {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+
+    let mut buf = [0u8; N];
+    i2c.write_read(addr, &[cmd], &mut buf)
+        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+
+    let declared_len = buf[0];
+    if declared_len != expected_declared_len {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+
+    let payload_end = 1usize + declared_len as usize;
+    if payload_end >= N {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+
+    let addr_w = addr << 1;
+    let addr_r = addr_w | 1;
+    let mut pec_input = [0u8; 40];
+    pec_input[0] = addr_w;
+    pec_input[1] = cmd;
+    pec_input[2] = addr_r;
+    pec_input[3..(3 + payload_end)].copy_from_slice(&buf[..payload_end]);
+    let expected = crc8_smbus(&pec_input[..(3 + payload_end)]);
+    if expected != buf[payload_end] {
+        return Err(bq40z50::BmsDiagError::InconsistentSample);
+    }
+
+    Ok(())
+}
+
+fn probe_bms_direct_block_reply_pec<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    cmd: u8,
+    expected_declared_len: u8,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    match expected_declared_len {
+        3 => probe_block_reply_pec::<I2C, 5>(i2c, addr, cmd, expected_declared_len),
+        4 => probe_block_reply_pec::<I2C, 6>(i2c, addr, cmd, expected_declared_len),
+        16 => probe_block_reply_pec::<I2C, 18>(i2c, addr, cmd, expected_declared_len),
+        21 => probe_block_reply_pec::<I2C, 23>(i2c, addr, cmd, expected_declared_len),
+        32 => probe_block_reply_pec::<I2C, 34>(i2c, addr, cmd, expected_declared_len),
+        _ => Err(bq40z50::BmsDiagError::BadRange),
+    }
+}
+
+fn probe_bms_md23_reply_pec<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+    expected_declared_len: u8,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+    for (order, with_pec) in [
+        (BmsMacWordOrder::Little, false),
+        (BmsMacWordOrder::Little, true),
+    ] {
+        if let Err(e) = write_bms_mac_via_ma00(i2c, addr, mac_cmd, order, with_pec) {
+            last_err = e;
+            continue;
+        }
+        spin_delay(BMS_MAC_WRITE_SETTLE);
+        let attempt = match expected_declared_len {
+            2 => probe_block_reply_pec::<I2C, 4>(
+                i2c,
+                addr,
+                bq40z50::cmd::MANUFACTURER_DATA,
+                expected_declared_len,
+            ),
+            11 => probe_block_reply_pec::<I2C, 13>(
+                i2c,
+                addr,
+                bq40z50::cmd::MANUFACTURER_DATA,
+                expected_declared_len,
+            ),
+            _ => return Err(bq40z50::BmsDiagError::BadRange),
+        };
+        match attempt {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
+}
+
+fn probe_bms_mb44_reply_pec<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+    expected_declared_len: u8,
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let cmd = mac_cmd.to_le_bytes();
+    let direct = [
+        bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+        0x02,
+        cmd[0],
+        cmd[1],
+    ];
+    let addr_w = addr << 1;
+    let pec = crc8_smbus(&[addr_w, direct[0], direct[1], direct[2], direct[3]]);
+    let with_pec = [direct[0], direct[1], direct[2], direct[3], pec];
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+    for frame in [&direct[..], &with_pec[..]] {
+        if i2c.write(addr, frame).is_err() {
+            continue;
+        }
+        spin_delay(BMS_MAC_WRITE_SETTLE);
+        let attempt = match expected_declared_len {
+            34 => probe_block_reply_pec::<I2C, 36>(
+                i2c,
+                addr,
+                bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+                expected_declared_len,
+            ),
+            32 => probe_block_reply_pec::<I2C, 34>(
+                i2c,
+                addr,
+                bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+                expected_declared_len,
+            ),
+            _ => return Err(bq40z50::BmsDiagError::BadRange),
+        };
+        match attempt {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
+}
+
+fn parse_direct_block_u16(raw: &bq40z50::BlockReadRaw, index: usize) -> Option<u16> {
+    let start = index.checked_mul(2)?;
+    let payload_len = raw.payload_len as usize;
+    if start + 1 >= payload_len {
+        return None;
+    }
+    Some(u16::from_le_bytes([
+        raw.payload[start],
+        raw.payload[start + 1],
+    ]))
+}
+
+fn parse_md23_u16(raw: &bq40z50::BlockReadRaw, byte_offset: usize) -> Option<u16> {
+    let payload_len = raw.payload_len as usize;
+    if byte_offset + 1 >= payload_len {
+        return None;
+    }
+    Some(u16::from_le_bytes([
+        raw.payload[byte_offset],
+        raw.payload[byte_offset + 1],
+    ]))
+}
+
+fn parse_md23_be_u16(raw: &bq40z50::BlockReadRaw, byte_offset: usize) -> Option<u16> {
+    let payload_len = raw.payload_len as usize;
+    if byte_offset + 1 >= payload_len {
+        return None;
+    }
+    Some(u16::from_be_bytes([
+        raw.payload[byte_offset],
+        raw.payload[byte_offset + 1],
+    ]))
 }
 
 fn send_bms_manufacturer_toggle<I2C>(
@@ -531,24 +1321,21 @@ fn send_bms_manufacturer_toggle<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let direct = [
-        bq40z50::cmd::MANUFACTURER_ACCESS,
-        (mac_cmd >> 8) as u8,
-        (mac_cmd & 0x00FF) as u8,
-    ];
-    let addr_w = addr << 1;
-    let pec = crc8_smbus(&[addr_w, direct[0], direct[1], direct[2]]);
-    let with_pec = [direct[0], direct[1], direct[2], pec];
-
-    for (via, frame) in [("direct", &direct[..]), ("pec", &with_pec[..])] {
-        if i2c.write(addr, frame).is_ok() {
+    for (order, with_pec) in [
+        (BmsMacWordOrder::Little, false),
+        (BmsMacWordOrder::Little, true),
+        (BmsMacWordOrder::Big, false),
+        (BmsMacWordOrder::Big, true),
+    ] {
+        if write_bms_mac_via_ma00(i2c, addr, mac_cmd, order, with_pec).is_ok() {
             if !quiet {
                 defmt::warn!(
-                    "bms_diag: addr=0x{=u8:x} stage={} mac_cmd=0x{=u16:x} via={}",
+                    "bms_diag: addr=0x{=u8:x} stage={} mac_cmd=0x{=u16:x} via={} pec={}",
                     addr,
                     stage,
                     mac_cmd,
-                    via,
+                    order.label(),
+                    if with_pec { "yes" } else { "no" },
                 );
             }
             spin_delay(BMS_MAC_TOGGLE_SETTLE);
@@ -1318,71 +2105,47 @@ fn log_bms_mac_diag<I2C>(i2c: &mut I2C, addr: u8)
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    // Try ManufacturerAccess() 0x0001 (DeviceType) legacy path:
-    // write word to 0x00 (MSB first per TRM), then read block from 0x23.
-    let mac_write = i2c.write(addr, &[bq40z50::cmd::MANUFACTURER_ACCESS, 0x00, 0x01]);
-    spin_delay(BMS_MAC_WRITE_SETTLE);
-    let mac_read = bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA);
-
-    match mac_read {
-        Ok(raw) => {
-            let payload_len = raw.payload_len as usize;
-            let b0 = if payload_len > 0 { raw.payload[0] } else { 0 };
-            let b1 = if payload_len > 1 { raw.payload[1] } else { 0 };
-            let b2 = if payload_len > 2 { raw.payload[2] } else { 0 };
-            let b3 = if payload_len > 3 { raw.payload[3] } else { 0 };
-            defmt::warn!(
-                "bms_diag_mac: path=ma00->md23 write={} read=ok len={=u8} payload={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
-                mac_write.map(|_| "ok").unwrap_or_else(i2c_error_kind),
-                raw.declared_len,
-                raw.payload_len,
-                b0,
-                b1,
-                b2,
-                b3
-            );
-        }
-        Err(e) => {
-            defmt::warn!(
-                "bms_diag_mac: path=ma00->md23 write={} read={} ",
-                mac_write.map(|_| "ok").unwrap_or_else(i2c_error_kind),
-                e
-            );
-        }
-    }
-
-    // Try MA path with explicit SMBus PEC on the write transaction.
-    let ma_pec = crc8_smbus(&[(addr << 1), bq40z50::cmd::MANUFACTURER_ACCESS, 0x00, 0x01]);
-    let mac_write_pec = i2c.write(
-        addr,
-        &[bq40z50::cmd::MANUFACTURER_ACCESS, 0x00, 0x01, ma_pec],
-    );
-    spin_delay(BMS_MAC_WRITE_SETTLE);
-    let mac_read_pec = bq40z50::read_block_raw_checked(i2c, addr, bq40z50::cmd::MANUFACTURER_DATA);
-    match mac_read_pec {
-        Ok(raw) => {
-            let payload_len = raw.payload_len as usize;
-            let b0 = if payload_len > 0 { raw.payload[0] } else { 0 };
-            let b1 = if payload_len > 1 { raw.payload[1] } else { 0 };
-            let b2 = if payload_len > 2 { raw.payload[2] } else { 0 };
-            let b3 = if payload_len > 3 { raw.payload[3] } else { 0 };
-            defmt::warn!(
-                "bms_diag_mac: path=ma00_pec->md23 write={} read=ok len={=u8} payload={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
-                mac_write_pec.map(|_| "ok").unwrap_or_else(i2c_error_kind),
-                raw.declared_len,
-                raw.payload_len,
-                b0,
-                b1,
-                b2,
-                b3
-            );
-        }
-        Err(e) => {
-            defmt::warn!(
-                "bms_diag_mac: path=ma00_pec->md23 write={} read={} ",
-                mac_write_pec.map(|_| "ok").unwrap_or_else(i2c_error_kind),
-                e
-            );
+    for (order, with_pec) in [
+        (BmsMacWordOrder::Little, false),
+        (BmsMacWordOrder::Little, true),
+        (BmsMacWordOrder::Big, false),
+        (BmsMacWordOrder::Big, true),
+    ] {
+        match read_bms_mac_block_via_md23_variant(
+            i2c,
+            addr,
+            BMS_MAC_CMD_DEVICE_TYPE,
+            order,
+            with_pec,
+        ) {
+            Ok(raw) => {
+                let parsed = parse_bms_mac_payload(&raw, BMS_MAC_CMD_DEVICE_TYPE).is_some();
+                let payload_len = raw.payload_len as usize;
+                let b0 = if payload_len > 0 { raw.payload[0] } else { 0 };
+                let b1 = if payload_len > 1 { raw.payload[1] } else { 0 };
+                let b2 = if payload_len > 2 { raw.payload[2] } else { 0 };
+                let b3 = if payload_len > 3 { raw.payload[3] } else { 0 };
+                defmt::warn!(
+                    "bms_diag_mac: path=ma00->md23 order={=str} pec={} read=ok parsed={} len={=u8} payload={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                    order.label(),
+                    with_pec,
+                    parsed,
+                    raw.declared_len,
+                    raw.payload_len,
+                    b0,
+                    b1,
+                    b2,
+                    b3
+                );
+            }
+            Err(e) => {
+                defmt::warn!(
+                    "bms_diag_mac: path=ma00->md23 order={=str} pec={} read={}",
+                    order.label(),
+                    with_pec,
+                    e
+                );
+            }
         }
     }
 
@@ -1726,6 +2489,58 @@ where
     }
 }
 
+fn log_bms_md23_compare<I2C>(i2c: &mut I2C, addr: u8, mac_cmd: u16)
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    for (order, with_pec) in [
+        (BmsMacWordOrder::Little, false),
+        (BmsMacWordOrder::Little, true),
+        (BmsMacWordOrder::Big, false),
+        (BmsMacWordOrder::Big, true),
+    ] {
+        match read_bms_mac_block_via_md23_variant(i2c, addr, mac_cmd, order, with_pec) {
+            Ok(raw) => {
+                let parsed = parse_bms_mac_payload(&raw, mac_cmd).is_some();
+                let payload_len = raw.payload_len as usize;
+                let b0 = if payload_len > 0 { raw.payload[0] } else { 0 };
+                let b1 = if payload_len > 1 { raw.payload[1] } else { 0 };
+                let b2 = if payload_len > 2 { raw.payload[2] } else { 0 };
+                let b3 = if payload_len > 3 { raw.payload[3] } else { 0 };
+                let b4 = if payload_len > 4 { raw.payload[4] } else { 0 };
+                let b5 = if payload_len > 5 { raw.payload[5] } else { 0 };
+                defmt::info!(
+                    "bms_md23_cmp: addr=0x{=u8:x} cmd=0x{=u16:x} order={=str} pec={} parsed={} len={=u8} payload={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x} b4=0x{=u8:x} b5=0x{=u8:x}",
+                    addr,
+                    mac_cmd,
+                    order.label(),
+                    with_pec,
+                    parsed,
+                    raw.declared_len,
+                    raw.payload_len,
+                    b0,
+                    b1,
+                    b2,
+                    b3,
+                    b4,
+                    b5
+                );
+            }
+            Err(e) => {
+                defmt::warn!(
+                    "bms_md23_cmp: addr=0x{=u8:x} cmd=0x{=u16:x} order={=str} pec={} err={}",
+                    addr,
+                    mac_cmd,
+                    order.label(),
+                    with_pec,
+                    e
+                );
+            }
+        }
+        spin_delay(BMS_WORD_GAP);
+    }
+}
+
 fn write_bms_rom_block<I2C>(
     i2c: &mut I2C,
     addr: u8,
@@ -1977,16 +2792,17 @@ where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     let force_recover = cfg!(feature = "bms-rom-recover-force");
-    let sig = match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE) {
-        Ok(v) => v,
-        Err(e) if force_recover => {
-            if !quiet {
-                log_bms_diag(addr, "rom_flash_force_sig_read", e, "word", "srec");
+    let mut sig =
+        match read_u16_with_optional_pec(i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE) {
+            Ok(v) => v,
+            Err(e) if force_recover => {
+                if !quiet {
+                    log_bms_diag(addr, "rom_flash_force_sig_read", e, "word", "srec");
+                }
+                0xFFFF
             }
-            0xFFFF
-        }
-        Err(e) => return Err(e),
-    };
+            Err(e) => return Err(e),
+        };
     if sig != BMS_ROM_MODE_SIGNATURE && !force_recover {
         return Ok(None);
     }
@@ -1998,6 +2814,35 @@ where
         );
     }
 
+    if force_recover && sig != BMS_ROM_MODE_SIGNATURE {
+        match maybe_enter_bms_rom_mode_diag(i2c, addr, quiet) {
+            Ok(true) => {
+                sig = BMS_ROM_MODE_SIGNATURE;
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=rom_flash_force_entered_rom",
+                        addr
+                    );
+                }
+            }
+            Ok(false) => {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=rom_flash_force_enter_failed",
+                        addr
+                    );
+                }
+                return Ok(None);
+            }
+            Err(e) => {
+                if !quiet {
+                    log_bms_diag(addr, "rom_flash_force_enter", e, "word", "rom-mode");
+                }
+                return Err(e);
+            }
+        }
+    }
+
     Ok(Some(sig))
 }
 
@@ -2005,6 +2850,7 @@ fn run_bms_rom_flash_recover_sequence<I2C>(
     i2c: &mut I2C,
     addr: u8,
     sig: u16,
+    section1_override: Option<&[u8]>,
     quiet: bool,
 ) -> Result<(), bq40z50::BmsDiagError>
 where
@@ -2012,7 +2858,7 @@ where
 {
     let section1_file = BMS_ROM_SECTION1_IMAGE;
     let section2_file = BMS_ROM_SECTION2_IMAGE;
-    let section1_image = &section1_file[..BMS_ROM_SECTION1_USED_LEN];
+    let section1_image = section1_override.unwrap_or(&section1_file[..BMS_ROM_SECTION1_USED_LEN]);
     let section2_image = &section2_file[..BMS_ROM_SECTION2_USED_LEN];
 
     if !quiet {
@@ -4211,6 +5057,10 @@ pub struct PowerManager<'d, I2C> {
     bms_post_flash_resume_started_at: Option<Instant>,
     bms_post_flash_reexit_attempted: bool,
     bms_last_working_info_at: Option<Instant>,
+    #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+    bms_rom_df_section1_valid: bool,
+    #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+    bms_rom_df_section1: [u8; BMS_ROM_SECTION1_USED_LEN],
 }
 
 #[derive(Clone, Copy)]
@@ -4384,6 +5234,10 @@ where
             bms_post_flash_resume_started_at: None,
             bms_post_flash_reexit_attempted: false,
             bms_last_working_info_at: None,
+            #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+            bms_rom_df_section1_valid: false,
+            #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+            bms_rom_df_section1: [0u8; BMS_ROM_SECTION1_USED_LEN],
         }
     }
 
@@ -4567,6 +5421,60 @@ where
         }
     }
 
+    #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+    fn capture_bms_rom_df_section1_mainboard(&mut self, addr: u8, quiet: bool) {
+        self.bms_rom_df_section1_valid = false;
+        let mut last_err = None;
+        for _attempt in 0..3 {
+            match read_bms_df_bytes_via_mb44(
+                &mut self.i2c,
+                addr,
+                0x4000,
+                &mut self.bms_rom_df_section1[..],
+            ) {
+                Ok(()) => {
+                    patch_bms_live_df_mainboard(&mut self.bms_rom_df_section1[..]);
+                    self.bms_rom_df_section1_valid = true;
+                    if !quiet {
+                        let da_off = (BMS_DF_ADDR_DA_CONFIGURATION - 0x4000) as usize;
+                        let da = u16::from_le_bytes([
+                            self.bms_rom_df_section1[da_off],
+                            self.bms_rom_df_section1[da_off + 1],
+                        ]);
+                        defmt::warn!(
+                            "bms_df_capture: addr=0x{=u8:x} mode=live_mainboard da_cfg=0x{=u16:x} sbs_gauging=0x{=u8:x} auth=0x{=u8:x} temp_enable=0x{=u8:x} temp_mode=0x{=u8:x} afe=0x{=u8:x}",
+                            addr,
+                            da,
+                            self.bms_rom_df_section1[(BMS_DF_ADDR_SBS_GAUGING_CONFIGURATION - 0x4000)
+                                as usize],
+                            self.bms_rom_df_section1[(BMS_DF_ADDR_AUTH_CONFIG - 0x4000) as usize],
+                            self.bms_rom_df_section1[(BMS_DF_ADDR_TEMPERATURE_ENABLE - 0x4000)
+                                as usize],
+                            self.bms_rom_df_section1[(BMS_DF_ADDR_TEMPERATURE_MODE - 0x4000)
+                                as usize],
+                            self.bms_rom_df_section1[(BMS_DF_ADDR_AFE_PROTECTION_CONTROL - 0x4000)
+                                as usize],
+                        );
+                    }
+                    return;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    spin_delay(BMS_MAC_WRITE_SETTLE);
+                }
+            }
+        }
+        let e = last_err.unwrap_or(bq40z50::BmsDiagError::I2cNack);
+        self.bms_rom_df_section1_valid = false;
+        if !quiet {
+            defmt::warn!(
+                "bms_df_capture: addr=0x{=u8:x} mode=live_df_required err={}",
+                addr,
+                e,
+            );
+        }
+    }
+
     fn blind_force_recover_ready(&self, now: Instant) -> bool {
         if !cfg!(feature = "bms-rom-recover-force") {
             return false;
@@ -4595,6 +5503,19 @@ where
         }
 
         self.clear_post_flash_resume();
+        #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+        {
+            self.capture_bms_rom_df_section1_mainboard(addr, recover_quiet);
+            if !self.bms_rom_df_section1_valid {
+                if !recover_quiet {
+                    defmt::warn!(
+                        "bms_diag: addr=0x{=u8:x} stage=rom_flash_live_df_capture_required",
+                        addr
+                    );
+                }
+                return;
+            }
+        }
         if let Err(e) = self.maybe_disable_charger_watchdog_for_recovery(recover_quiet) {
             self.clear_post_flash_resume();
             self.maybe_restore_charger_watchdog_after_recovery(recover_quiet);
@@ -4612,7 +5533,21 @@ where
                 // Only commit to the "recover attempt" backoff once we truly start a ROM flash.
                 self.note_rom_recover_attempt(addr, Instant::now());
                 self.bms_rom_flash_attempted = true;
-                match run_bms_rom_flash_recover_sequence(&mut self.i2c, addr, sig, recover_quiet) {
+                #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+                let section1_override = if self.bms_rom_df_section1_valid {
+                    Some(&self.bms_rom_df_section1[..])
+                } else {
+                    None
+                };
+                #[cfg(not(feature = "bms-rom-repair-live-df-mainboard"))]
+                let section1_override: Option<&[u8]> = None;
+                match run_bms_rom_flash_recover_sequence(
+                    &mut self.i2c,
+                    addr,
+                    sig,
+                    section1_override,
+                    recover_quiet,
+                ) {
                     Ok(()) => {
                         self.schedule_post_flash_resume(addr, recover_quiet);
                     }
@@ -4963,7 +5898,14 @@ where
 
         match self.bms_startup_stage {
             BmsStartupStage::ProbeWithoutCharge => {
-                if let Some(addr) = self.probe_bq40z50_without_recover(false) {
+                let startup_force_recover =
+                    self.cfg.bms_rom_recover && cfg!(feature = "bms-rom-recover-force");
+                let startup_probe = if startup_force_recover {
+                    self.probe_bq40z50_impl(false)
+                } else {
+                    self.probe_bq40z50_without_recover(false)
+                };
+                if let Some(addr) = startup_probe {
                     // If the gauge is already responsive with charging disabled, avoid toggling
                     // the minimum-charge wake profile: it can perturb a healthy pack and pollute
                     // diagnose results.
@@ -5022,6 +5964,20 @@ where
             BmsStartupStage::ProbeWithMinCharge => {
                 match self.probe_bq40z50_wake_window(false) {
                     WakeWindowProbeResult::Working(addr) => {
+                        if self.cfg.bms_rom_recover
+                            && cfg!(feature = "bms-rom-recover-force")
+                            && self.bms_post_flash_resume_addr.is_none()
+                            && !self.bms_rom_flash_attempted
+                        {
+                            defmt::warn!(
+                                "bms_diag: addr=0x{=u8:x} stage=wake_window_force_recover",
+                                addr
+                            );
+                            self.attempt_bq40_rom_flash(addr, false);
+                            if self.bms_rom_flash_attempted {
+                                return true;
+                            }
+                        }
                         self.mark_bms_working(addr);
                         return true;
                     }
@@ -5099,6 +6055,22 @@ where
                 if let Some(result) = self.maybe_exercise_bms_exit_conditions(now, quiet) {
                     match result {
                         WakeWindowProbeResult::Working(addr) => {
+                            if self.cfg.bms_rom_recover
+                                && cfg!(feature = "bms-rom-recover-force")
+                                && self.bms_post_flash_resume_addr.is_none()
+                                && !self.bms_rom_flash_attempted
+                            {
+                                if !quiet {
+                                    defmt::warn!(
+                                        "bms_diag: addr=0x{=u8:x} stage=exit_working_force_recover",
+                                        addr
+                                    );
+                                }
+                                self.attempt_bq40_rom_flash(addr, quiet);
+                                if self.bms_rom_flash_attempted {
+                                    return true;
+                                }
+                            }
                             self.mark_bms_working(addr);
                             return true;
                         }
@@ -5116,7 +6088,14 @@ where
                     }
                 }
 
-                if let Some(addr) = self.probe_bq40z50_without_recover(quiet) {
+                let startup_force_recover =
+                    self.cfg.bms_rom_recover && cfg!(feature = "bms-rom-recover-force");
+                let startup_probe = if startup_force_recover {
+                    self.probe_bq40z50_impl(quiet)
+                } else {
+                    self.probe_bq40z50_without_recover(quiet)
+                };
+                if let Some(addr) = startup_probe {
                     self.mark_bms_working(addr);
                     return true;
                 }
@@ -5699,6 +6678,19 @@ where
                                 snapshot.b3
                             );
                         }
+                        if self.cfg.bms_rom_recover
+                            && cfg!(feature = "bms-rom-recover-force")
+                            && !self.bms_rom_flash_attempted
+                        {
+                            if !quiet {
+                                defmt::warn!(
+                                    "bms_diag: addr=0x{=u8:x} stage=mac_probe_force_recover",
+                                    addr
+                                );
+                            }
+                            self.attempt_bq40_rom_flash(addr, quiet);
+                            return None;
+                        }
                         return Some(addr);
                     }
                     Err(e) => {
@@ -5783,6 +6775,19 @@ where
                                 snapshot.cell4_mv,
                             );
                         }
+                        if self.cfg.bms_rom_recover
+                            && cfg!(feature = "bms-rom-recover-force")
+                            && !self.bms_rom_flash_attempted
+                        {
+                            if !quiet {
+                                defmt::warn!(
+                                    "bms_diag: addr=0x{=u8:x} stage=probe_ok_force_recover",
+                                    addr
+                                );
+                            }
+                            self.attempt_bq40_rom_flash(addr, quiet);
+                            return None;
+                        }
                         return Some(addr);
                     }
 
@@ -5794,6 +6799,19 @@ where
                                 addr,
                                 self.bms_weak_pass_votes
                             );
+                        }
+                        if self.cfg.bms_rom_recover
+                            && cfg!(feature = "bms-rom-recover-force")
+                            && !self.bms_rom_flash_attempted
+                        {
+                            if !quiet {
+                                defmt::warn!(
+                                    "bms_diag: addr=0x{=u8:x} stage=weak_pass_force_recover",
+                                    addr
+                                );
+                            }
+                            self.attempt_bq40_rom_flash(addr, quiet);
+                            return None;
                         }
                         return Some(addr);
                     }
@@ -5840,6 +6858,19 @@ where
             if now >= self.bms_diag_scan_next_at {
                 self.bms_diag_scan_next_at = now + BMS_DIAG_SCAN_INTERVAL;
                 if let Some(addr) = self.probe_bq40z50_diag_scan(quiet) {
+                    if self.cfg.bms_rom_recover
+                        && cfg!(feature = "bms-rom-recover-force")
+                        && !self.bms_rom_flash_attempted
+                    {
+                        if !quiet {
+                            defmt::warn!(
+                                "bms_diag: addr=0x{=u8:x} stage=addr_scan_force_recover",
+                                addr
+                            );
+                        }
+                        self.attempt_bq40_rom_flash(addr, quiet);
+                        return None;
+                    }
                     return Some(addr);
                 }
                 if !quiet {
@@ -6883,6 +7914,1209 @@ where
                     .bms_last_working_info_at
                     .map_or(true, |last| now >= last + BMS_WORKING_INFO_PERIOD)
                 {
+                    let mut mfg_buf = [0u8; 32];
+                    let mut dev_buf = [0u8; 32];
+                    let mfg_name = read_ascii_block_checked(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::MANUFACTURER_NAME,
+                        &mut mfg_buf,
+                    )
+                    .ok();
+                    spin_delay(BMS_WORD_GAP);
+                    let dev_name = read_ascii_block_checked(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::DEVICE_NAME,
+                        &mut dev_buf,
+                    )
+                    .ok();
+                    spin_delay(BMS_WORD_GAP);
+                    let device_type =
+                        read_bms_mac_u16_via_mb44(&mut self.i2c, addr, BMS_MAC_CMD_DEVICE_TYPE)
+                            .ok();
+                    spin_delay(BMS_WORD_GAP);
+                    let fw_read = read_bms_mac_payload_via_mb44(&mut self.i2c, addr, 0x0002);
+                    let fw_raw = fw_read.ok();
+                    let fw_version = fw_raw.as_ref().and_then(|raw| {
+                        parse_bms_mac_payload(raw, 0x0002).map(|payload| {
+                            let dev_num = if payload.len() >= 2 {
+                                u16::from_le_bytes([payload[0], payload[1]])
+                            } else {
+                                0
+                            };
+                            let version = if payload.len() >= 4 {
+                                u16::from_le_bytes([payload[2], payload[3]])
+                            } else {
+                                0
+                            };
+                            let build = if payload.len() >= 6 {
+                                u16::from_le_bytes([payload[4], payload[5]])
+                            } else {
+                                0
+                            };
+                            let fw_type = payload.get(6).copied().unwrap_or(0);
+                            let it_ver = if payload.len() >= 9 {
+                                u16::from_le_bytes([payload[7], payload[8]])
+                            } else {
+                                0
+                            };
+                            let reserved_r = payload.get(9).copied().unwrap_or(0);
+                            let reserved_e = payload.get(10).copied().unwrap_or(0);
+                            (
+                                dev_num, version, build, fw_type, it_ver, reserved_r, reserved_e,
+                            )
+                        })
+                    });
+                    spin_delay(BMS_WORD_GAP);
+                    let hw_read = read_bms_mac_payload_via_mb44(&mut self.i2c, addr, 0x0003);
+                    let hw_raw = hw_read.ok();
+                    let hw_version = hw_raw.as_ref().and_then(|raw| {
+                        parse_bms_mac_payload(raw, 0x0003).and_then(|payload| {
+                            if payload.len() >= 2 {
+                                Some(u16::from_le_bytes([payload[0], payload[1]]))
+                            } else {
+                                None
+                            }
+                        })
+                    });
+                    spin_delay(BMS_WORD_GAP);
+                    let ifchk_read = read_bms_mac_payload_via_mb44(&mut self.i2c, addr, 0x0004);
+                    let ifchk_raw = ifchk_read.ok();
+                    let ifchk_md23 = if ifchk_raw.is_none() {
+                        read_bms_mac_block_via_md23(&mut self.i2c, addr, 0x0004).ok()
+                    } else {
+                        None
+                    };
+                    let if_checksum = ifchk_raw
+                        .as_ref()
+                        .and_then(|raw| {
+                            parse_bms_mac_payload(raw, 0x0004).and_then(|payload| {
+                                if payload.len() >= 2 {
+                                    Some(u16::from_le_bytes([payload[0], payload[1]]))
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .or_else(|| ifchk_md23.as_ref().and_then(parse_bms_md23_u16));
+                    spin_delay(BMS_WORD_GAP);
+                    let static_dfsig_read =
+                        read_bms_mac_payload_via_mb44(&mut self.i2c, addr, 0x0005);
+                    let static_dfsig_raw = static_dfsig_read.ok();
+                    let static_dfsig_md23 = if static_dfsig_raw.is_none() {
+                        read_bms_mac_block_via_md23(&mut self.i2c, addr, 0x0005).ok()
+                    } else {
+                        None
+                    };
+                    let static_dfsig = static_dfsig_raw
+                        .as_ref()
+                        .and_then(|raw| {
+                            parse_bms_mac_payload(raw, 0x0005).and_then(|payload| {
+                                if payload.len() >= 2 {
+                                    Some(u16::from_le_bytes([payload[0], payload[1]]))
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .or_else(|| static_dfsig_md23.as_ref().and_then(parse_bms_md23_u16));
+                    spin_delay(BMS_WORD_GAP);
+                    let chem_read = read_bms_mac_payload_via_mb44(&mut self.i2c, addr, 0x0006);
+                    let chem_raw = chem_read.ok();
+                    let chem_md23 = if chem_raw.is_none() {
+                        read_bms_mac_block_via_md23(&mut self.i2c, addr, 0x0006).ok()
+                    } else {
+                        None
+                    };
+                    let chem_id = chem_raw
+                        .as_ref()
+                        .and_then(|raw| {
+                            parse_bms_mac_payload(raw, 0x0006).and_then(|payload| {
+                                if payload.len() >= 2 {
+                                    Some(u16::from_le_bytes([payload[0], payload[1]]))
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .or_else(|| chem_md23.as_ref().and_then(parse_bms_md23_u16));
+                    spin_delay(BMS_WORD_GAP);
+                    let static_chem_dfsig_read =
+                        read_bms_mac_payload_via_mb44(&mut self.i2c, addr, 0x0008);
+                    let static_chem_dfsig_raw = static_chem_dfsig_read.ok();
+                    let static_chem_dfsig_md23 = if static_chem_dfsig_raw.is_none() {
+                        read_bms_mac_block_via_md23(&mut self.i2c, addr, 0x0008).ok()
+                    } else {
+                        None
+                    };
+                    let static_chem_dfsig = static_chem_dfsig_raw
+                        .as_ref()
+                        .and_then(|raw| {
+                            parse_bms_mac_payload(raw, 0x0008).and_then(|payload| {
+                                if payload.len() >= 2 {
+                                    Some(u16::from_le_bytes([payload[0], payload[1]]))
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .or_else(|| static_chem_dfsig_md23.as_ref().and_then(parse_bms_md23_u16));
+                    spin_delay(BMS_WORD_GAP);
+                    let alidf_read = read_bms_mac_payload_via_mb44(&mut self.i2c, addr, 0x0009);
+                    let alidf_raw = alidf_read.ok();
+                    let alidf = alidf_raw.as_ref().and_then(|raw| {
+                        parse_bms_mac_payload(raw, 0x0009).and_then(|payload| {
+                            if payload.len() >= 2 {
+                                Some(u16::from_le_bytes([payload[0], payload[1]]))
+                            } else {
+                                None
+                            }
+                        })
+                    });
+
+                    defmt::info!(
+                        "bms_chip: addr=0x{=u8:x} mfg={} dev={} device_type={=?} fw={=?} hw={=?} ifchk={=?} sdfsig={=?} chem={=?} scdfsig={=?} alidf={=?}",
+                        addr,
+                        mfg_name.unwrap_or("n/a"),
+                        dev_name.unwrap_or("n/a"),
+                        device_type,
+                        fw_version,
+                        hw_version,
+                        if_checksum,
+                        static_dfsig,
+                        chem_id,
+                        static_chem_dfsig,
+                        alidf,
+                    );
+                    if let Some(raw) = fw_raw.as_ref() {
+                        if let Some((bytes, len)) = copy_bms_mac_payload::<16>(raw, 0x0002) {
+                            defmt::info!(
+                                "bms_chip_raw: addr=0x{=u8:x} cmd=0x0002 len={=usize} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x} b4=0x{=u8:x} b5=0x{=u8:x} b6=0x{=u8:x} b7=0x{=u8:x} b8=0x{=u8:x} b9=0x{=u8:x} b10=0x{=u8:x}",
+                                addr,
+                                len,
+                                bytes[0],
+                                bytes[1],
+                                bytes[2],
+                                bytes[3],
+                                bytes[4],
+                                bytes[5],
+                                bytes[6],
+                                bytes[7],
+                                bytes[8],
+                                bytes[9],
+                                bytes[10],
+                            );
+                        }
+                    } else if let Err(e) = fw_read {
+                        defmt::warn!("bms_chip_raw: addr=0x{=u8:x} cmd=0x0002 err={}", addr, e);
+                    }
+                    if let Some(raw) = hw_raw.as_ref() {
+                        if let Some((bytes, len)) = copy_bms_mac_payload::<8>(raw, 0x0003) {
+                            defmt::info!(
+                                "bms_chip_raw: addr=0x{=u8:x} cmd=0x0003 len={=usize} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                                addr,
+                                len,
+                                bytes[0],
+                                bytes[1],
+                                bytes[2],
+                                bytes[3],
+                            );
+                        }
+                    } else if let Err(e) = hw_read {
+                        defmt::warn!("bms_chip_raw: addr=0x{=u8:x} cmd=0x0003 err={}", addr, e);
+                    }
+                    if let Some(raw) = ifchk_raw.as_ref() {
+                        if let Some((bytes, len)) = copy_bms_mac_payload::<8>(raw, 0x0004) {
+                            defmt::info!(
+                                "bms_chip_raw: addr=0x{=u8:x} cmd=0x0004 len={=usize} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                                addr,
+                                len,
+                                bytes[0],
+                                bytes[1],
+                                bytes[2],
+                                bytes[3],
+                            );
+                        }
+                    } else if let Some(raw) = ifchk_md23.as_ref() {
+                        if let Some((bytes, len)) = copy_bms_md23_payload::<8>(raw) {
+                            defmt::info!(
+                                "bms_chip_md23_raw: addr=0x{=u8:x} cmd=0x0004 len={=usize} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                                addr,
+                                len,
+                                bytes[0],
+                                bytes[1],
+                                bytes[2],
+                                bytes[3],
+                            );
+                        }
+                    } else if let Err(e) = ifchk_read {
+                        defmt::warn!("bms_chip_raw: addr=0x{=u8:x} cmd=0x0004 err={}", addr, e);
+                    }
+                    if let Some(raw) = chem_raw.as_ref() {
+                        if let Some((bytes, len)) = copy_bms_mac_payload::<8>(raw, 0x0006) {
+                            defmt::info!(
+                                "bms_chip_raw: addr=0x{=u8:x} cmd=0x0006 len={=usize} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                                addr,
+                                len,
+                                bytes[0],
+                                bytes[1],
+                                bytes[2],
+                                bytes[3],
+                            );
+                        }
+                    } else if let Some(raw) = chem_md23.as_ref() {
+                        if let Some((bytes, len)) = copy_bms_md23_payload::<8>(raw) {
+                            defmt::info!(
+                                "bms_chip_md23_raw: addr=0x{=u8:x} cmd=0x0006 len={=usize} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                                addr,
+                                len,
+                                bytes[0],
+                                bytes[1],
+                                bytes[2],
+                                bytes[3],
+                            );
+                        }
+                    } else if let Err(e) = chem_read {
+                        defmt::warn!("bms_chip_raw: addr=0x{=u8:x} cmd=0x0006 err={}", addr, e);
+                    }
+                    if let Some(raw) = static_dfsig_raw.as_ref() {
+                        if let Some((bytes, len)) = copy_bms_mac_payload::<8>(raw, 0x0005) {
+                            defmt::info!(
+                                "bms_chip_raw: addr=0x{=u8:x} cmd=0x0005 len={=usize} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                                addr,
+                                len,
+                                bytes[0],
+                                bytes[1],
+                                bytes[2],
+                                bytes[3],
+                            );
+                        }
+                    } else if let Some(raw) = static_dfsig_md23.as_ref() {
+                        if let Some((bytes, len)) = copy_bms_md23_payload::<8>(raw) {
+                            defmt::info!(
+                                "bms_chip_md23_raw: addr=0x{=u8:x} cmd=0x0005 len={=usize} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                                addr,
+                                len,
+                                bytes[0],
+                                bytes[1],
+                                bytes[2],
+                                bytes[3],
+                            );
+                        }
+                    } else if let Err(e) = static_dfsig_read {
+                        defmt::warn!("bms_chip_raw: addr=0x{=u8:x} cmd=0x0005 err={}", addr, e);
+                    }
+                    if let Some(raw) = static_chem_dfsig_raw.as_ref() {
+                        if let Some((bytes, len)) = copy_bms_mac_payload::<8>(raw, 0x0008) {
+                            defmt::info!(
+                                "bms_chip_raw: addr=0x{=u8:x} cmd=0x0008 len={=usize} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                                addr,
+                                len,
+                                bytes[0],
+                                bytes[1],
+                                bytes[2],
+                                bytes[3],
+                            );
+                        }
+                    } else if let Some(raw) = static_chem_dfsig_md23.as_ref() {
+                        if let Some((bytes, len)) = copy_bms_md23_payload::<8>(raw) {
+                            defmt::info!(
+                                "bms_chip_md23_raw: addr=0x{=u8:x} cmd=0x0008 len={=usize} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                                addr,
+                                len,
+                                bytes[0],
+                                bytes[1],
+                                bytes[2],
+                                bytes[3],
+                            );
+                        }
+                    } else if let Err(e) = static_chem_dfsig_read {
+                        defmt::warn!("bms_chip_raw: addr=0x{=u8:x} cmd=0x0008 err={}", addr, e);
+                    }
+                    if let Some(raw) = alidf_raw.as_ref() {
+                        if let Some((bytes, len)) = copy_bms_mac_payload::<8>(raw, 0x0009) {
+                            defmt::info!(
+                                "bms_chip_raw: addr=0x{=u8:x} cmd=0x0009 len={=usize} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                                addr,
+                                len,
+                                bytes[0],
+                                bytes[1],
+                                bytes[2],
+                                bytes[3],
+                            );
+                        }
+                    } else if let Err(e) = alidf_read {
+                        defmt::warn!("bms_chip_raw: addr=0x{=u8:x} cmd=0x0009 err={}", addr, e);
+                    }
+                    log_bms_md23_compare(&mut self.i2c, addr, 0x0001);
+                    log_bms_md23_compare(&mut self.i2c, addr, 0x0002);
+                    log_bms_md23_compare(&mut self.i2c, addr, 0x0004);
+                    log_bms_md23_compare(&mut self.i2c, addr, 0x0006);
+                    let mfg_status =
+                        read_bms_mac_u32(&mut self.i2c, addr, BMS_MAC_CMD_MANUFACTURING_STATUS)
+                            .ok();
+                    let op_status_read = read_bms_direct_block_with_retry(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::OPERATION_STATUS,
+                    );
+                    let op_status_raw = op_status_read.ok();
+                    let chg_status_read = read_bms_direct_block_with_retry(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::CHARGING_STATUS,
+                    );
+                    let chg_status_raw = chg_status_read.ok();
+                    let gauge_status_read = read_bms_direct_block_with_retry(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::GAUGING_STATUS,
+                    );
+                    let gauge_status_raw = gauge_status_read.ok();
+                    let mfg_status_direct_read = read_bms_direct_block_with_retry(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::MANUFACTURING_STATUS,
+                    );
+                    let mfg_status_direct_raw = mfg_status_direct_read.ok();
+                    let safety_alert_read = read_bms_direct_block_with_retry(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::SAFETY_ALERT,
+                    );
+                    let safety_alert_raw = safety_alert_read.as_ref().ok();
+                    let safety_status_read = read_bms_direct_block_with_retry(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::SAFETY_STATUS,
+                    );
+                    let safety_status_raw = safety_status_read.as_ref().ok();
+                    let pf_read = read_bms_direct_block_with_retry(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::PF_STATUS,
+                    );
+                    let pf_raw = pf_read.ok();
+                    let afe_read = read_bms_direct_block_with_retry(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::AFE_REGISTER,
+                    );
+                    let afe_raw = afe_read.ok();
+                    let lt1_read = read_bms_direct_block_with_retry(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::LIFETIME_DATA_BLOCK_1,
+                    );
+                    let lt1_raw = lt1_read.ok();
+                    let da1_read = read_bms_direct_block_with_retry(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::DA_STATUS_1,
+                    );
+                    let da1_raw = da1_read.ok();
+                    match read_bms_da_configuration(&mut self.i2c, addr) {
+                        Ok(da_cfg) => {
+                            let cell_cfg_bits = (da_cfg & 0x0003) as u8;
+                            let cell_count = cell_cfg_bits + 1;
+                            defmt::info!(
+                                "bms_df: addr=0x{=u8:x} da_cfg=0x{=u16:x} cell_cfg_bits=0x{=u8:x} cell_count={=u8}",
+                                addr,
+                                da_cfg,
+                                cell_cfg_bits,
+                                cell_count,
+                            );
+                        }
+                        Err(e) => {
+                            defmt::warn!("bms_df: addr=0x{=u8:x} da_cfg_err={}", addr, e);
+                        }
+                    }
+                    let df_mfg_status_init =
+                        read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_MFG_STATUS_INIT)
+                            .map(TelemetryU16::Value)
+                            .unwrap_or_else(|e| TelemetryU16::Err(e.as_str()));
+                    let df_fet_options =
+                        read_bms_df_byte_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_FET_OPTIONS)
+                            .map(TelemetryU8::Value)
+                            .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_sbs_gauging = read_bms_df_byte_via_mb44(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_SBS_GAUGING_CONFIGURATION,
+                    )
+                    .map(TelemetryU8::Value)
+                    .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_sbs_configuration = read_bms_df_byte_via_mb44(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_SBS_CONFIGURATION,
+                    )
+                    .map(TelemetryU8::Value)
+                    .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_auth_config =
+                        read_bms_df_byte_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_AUTH_CONFIG)
+                            .map(TelemetryU8::Value)
+                            .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_protection_configuration = read_bms_df_byte_via_mb44(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_PROTECTION_CONFIGURATION,
+                    )
+                    .map(TelemetryU8::Value)
+                    .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_enabled_protections_a = read_bms_df_byte_via_mb44(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_ENABLED_PROTECTIONS_A,
+                    )
+                    .map(TelemetryU8::Value)
+                    .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_enabled_protections_b = read_bms_df_byte_via_mb44(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_ENABLED_PROTECTIONS_B,
+                    )
+                    .map(TelemetryU8::Value)
+                    .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_enabled_protections_c = read_bms_df_byte_via_mb44(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_ENABLED_PROTECTIONS_C,
+                    )
+                    .map(TelemetryU8::Value)
+                    .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_enabled_protections_d = read_bms_df_byte_via_mb44(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_ENABLED_PROTECTIONS_D,
+                    )
+                    .map(TelemetryU8::Value)
+                    .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_it_gauging = read_bms_df_u16_via_mb44(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_IT_GAUGING_CONFIGURATION,
+                    )
+                    .map(TelemetryU16::Value)
+                    .unwrap_or_else(|e| TelemetryU16::Err(e.as_str()));
+                    let df_enabled_pf_a =
+                        read_bms_df_byte_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_ENABLED_PF_A)
+                            .map(TelemetryU8::Value)
+                            .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_enabled_pf_b =
+                        read_bms_df_byte_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_ENABLED_PF_B)
+                            .map(TelemetryU8::Value)
+                            .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_enabled_pf_c =
+                        read_bms_df_byte_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_ENABLED_PF_C)
+                            .map(TelemetryU8::Value)
+                            .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_enabled_pf_d =
+                        read_bms_df_byte_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_ENABLED_PF_D)
+                            .map(TelemetryU8::Value)
+                            .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_temperature_enable = read_bms_df_byte_via_mb44(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_TEMPERATURE_ENABLE,
+                    )
+                    .map(TelemetryU8::Value)
+                    .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_temperature_mode = read_bms_df_byte_via_mb44(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_TEMPERATURE_MODE,
+                    )
+                    .map(TelemetryU8::Value)
+                    .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_afe_protection_control = read_bms_df_byte_via_mb44(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_AFE_PROTECTION_CONTROL,
+                    )
+                    .map(TelemetryU8::Value)
+                    .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    #[cfg(feature = "bms-df-repair-afe-default")]
+                    if let TelemetryU8::Value(current_afe_protection_control) =
+                        df_afe_protection_control
+                    {
+                        if current_afe_protection_control != BMS_DF_AFE_PROTECTION_CONTROL_DEFAULT {
+                            let op_before = read_bms_operation_status_raw(&mut self.i2c, addr).ok();
+                            let pf_before = read_bms_pf_status_raw(&mut self.i2c, addr).ok();
+                            defmt::warn!(
+                                "bms_df_repair: addr=0x{=u8:x} field=afe_prot_ctrl before=0x{=u8:x} target=0x{=u8:x} op=0x{:08x} sec={} pf=0x{:08x}",
+                                addr,
+                                current_afe_protection_control,
+                                BMS_DF_AFE_PROTECTION_CONTROL_DEFAULT,
+                                op_before.unwrap_or(0),
+                                bms_security_mode_from_op(op_before.unwrap_or(0)),
+                                pf_before.unwrap_or(0),
+                            );
+                            for via in [BmsDfWriteVia::Direct, BmsDfWriteVia::Pec] {
+                                match write_bms_df_bytes_via_mb44_once(
+                                    &mut self.i2c,
+                                    addr,
+                                    BMS_DF_ADDR_AFE_PROTECTION_CONTROL,
+                                    &[BMS_DF_AFE_PROTECTION_CONTROL_DEFAULT],
+                                    via,
+                                ) {
+                                    Ok(()) => match verify_bms_df_byte(
+                                        &mut self.i2c,
+                                        addr,
+                                        BMS_DF_ADDR_AFE_PROTECTION_CONTROL,
+                                        4,
+                                    ) {
+                                        Ok(verify)
+                                            if verify == BMS_DF_AFE_PROTECTION_CONTROL_DEFAULT =>
+                                        {
+                                            defmt::warn!(
+                                                "bms_df_repair: addr=0x{=u8:x} field=afe_prot_ctrl via={} verify=0x{=u8:x} reset=begin",
+                                                addr,
+                                                via.as_str(),
+                                                verify,
+                                            );
+                                            match send_bms_device_reset(&mut self.i2c, addr) {
+                                                Ok(()) => defmt::warn!(
+                                                    "bms_df_repair: addr=0x{=u8:x} field=afe_prot_ctrl via={} reset=ok",
+                                                    addr,
+                                                    via.as_str(),
+                                                ),
+                                                Err(e) => defmt::warn!(
+                                                    "bms_df_repair: addr=0x{=u8:x} field=afe_prot_ctrl via={} reset_err={}",
+                                                    addr,
+                                                    via.as_str(),
+                                                    e,
+                                                ),
+                                            }
+                                            self.bms_next_poll_at = now + BMS_POLL_PERIOD;
+                                            return true;
+                                        }
+                                        Ok(verify) => {
+                                            let op_after =
+                                                read_bms_operation_status_raw(&mut self.i2c, addr)
+                                                    .ok();
+                                            let pf_after =
+                                                read_bms_pf_status_raw(&mut self.i2c, addr).ok();
+                                            defmt::warn!(
+                                                "bms_df_repair: addr=0x{=u8:x} field=afe_prot_ctrl via={} verify_mismatch=0x{=u8:x} op=0x{:08x} sec={} pf=0x{:08x}",
+                                                addr,
+                                                via.as_str(),
+                                                verify,
+                                                op_after.unwrap_or(0),
+                                                bms_security_mode_from_op(op_after.unwrap_or(0)),
+                                                pf_after.unwrap_or(0),
+                                            );
+                                        }
+                                        Err(e) => {
+                                            let op_after =
+                                                read_bms_operation_status_raw(&mut self.i2c, addr)
+                                                    .ok();
+                                            let pf_after =
+                                                read_bms_pf_status_raw(&mut self.i2c, addr).ok();
+                                            defmt::warn!(
+                                                "bms_df_repair: addr=0x{=u8:x} field=afe_prot_ctrl via={} verify_err={} op=0x{:08x} sec={} pf=0x{:08x}",
+                                                addr,
+                                                via.as_str(),
+                                                e,
+                                                op_after.unwrap_or(0),
+                                                bms_security_mode_from_op(op_after.unwrap_or(0)),
+                                                pf_after.unwrap_or(0),
+                                            );
+                                        }
+                                    },
+                                    Err(e) => {
+                                        let op_after =
+                                            read_bms_operation_status_raw(&mut self.i2c, addr).ok();
+                                        let pf_after =
+                                            read_bms_pf_status_raw(&mut self.i2c, addr).ok();
+                                        defmt::warn!(
+                                            "bms_df_repair: addr=0x{=u8:x} field=afe_prot_ctrl via={} write_err={} op=0x{:08x} sec={} pf=0x{:08x}",
+                                            addr,
+                                            via.as_str(),
+                                            e,
+                                            op_after.unwrap_or(0),
+                                            bms_security_mode_from_op(op_after.unwrap_or(0)),
+                                            pf_after.unwrap_or(0),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let df_cell_gain =
+                        read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_CELL_GAIN)
+                            .map(TelemetryU16::Value)
+                            .unwrap_or_else(|e| TelemetryU16::Err(e.as_str()));
+                    let df_pack_gain =
+                        read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_PACK_GAIN)
+                            .map(TelemetryU16::Value)
+                            .unwrap_or_else(|e| TelemetryU16::Err(e.as_str()));
+                    let df_bat_gain =
+                        read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_BAT_GAIN)
+                            .map(TelemetryU16::Value)
+                            .unwrap_or_else(|e| TelemetryU16::Err(e.as_str()));
+                    defmt::info!(
+                        "bms_df_cfg: addr=0x{=u8:x} mfg_status_init={} fet_options={} sbs_gauging={} sbs_cfg={} auth_cfg={} prot_cfg={} en_prot_a={} en_prot_b={} en_prot_c={} en_prot_d={} it_gauging={} en_pf_a={} en_pf_b={} en_pf_c={} en_pf_d={} temp_enable={} temperature_mode={} afe_prot_ctrl={} cell_gain={} pack_gain={} bat_gain={}",
+                        addr,
+                        df_mfg_status_init,
+                        df_fet_options,
+                        df_sbs_gauging,
+                        df_sbs_configuration,
+                        df_auth_config,
+                        df_protection_configuration,
+                        df_enabled_protections_a,
+                        df_enabled_protections_b,
+                        df_enabled_protections_c,
+                        df_enabled_protections_d,
+                        df_it_gauging,
+                        df_enabled_pf_a,
+                        df_enabled_pf_b,
+                        df_enabled_pf_c,
+                        df_enabled_pf_d,
+                        df_temperature_enable,
+                        df_temperature_mode,
+                        df_afe_protection_control,
+                        df_cell_gain,
+                        df_pack_gain,
+                        df_bat_gain,
+                    );
+                    let host_pec_enabled = match df_sbs_configuration {
+                        TelemetryU8::Value(bits) => (bits & BMS_SBS_CONFIGURATION_HPE) != 0,
+                        TelemetryU8::Err(_) => false,
+                    };
+                    let md23_devtype_pec =
+                        probe_bms_md23_reply_pec(&mut self.i2c, addr, BMS_MAC_CMD_DEVICE_TYPE, 2)
+                            .map(|_| "ok")
+                            .unwrap_or_else(|e| e.as_str());
+                    let md23_fw_pec = probe_bms_md23_reply_pec(&mut self.i2c, addr, 0x0002, 11)
+                        .map(|_| "ok")
+                        .unwrap_or_else(|e| e.as_str());
+                    let afe_pec = probe_bms_direct_block_reply_pec(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::AFE_REGISTER,
+                        21,
+                    )
+                    .map(|_| "ok")
+                    .unwrap_or_else(|e| e.as_str());
+                    let da1_pec = probe_bms_direct_block_reply_pec(
+                        &mut self.i2c,
+                        addr,
+                        bq40z50::cmd::DA_STATUS_1,
+                        32,
+                    )
+                    .map(|_| "ok")
+                    .unwrap_or_else(|e| e.as_str());
+                    let mb44_da_cfg_pec = probe_bms_mb44_reply_pec(
+                        &mut self.i2c,
+                        addr,
+                        BMS_DF_ADDR_DA_CONFIGURATION,
+                        34,
+                    )
+                    .map(|_| "ok")
+                    .unwrap_or_else(|e| e.as_str());
+                    defmt::info!(
+                        "bms_pec: addr=0x{=u8:x} host_pec={=bool} md23_devtype={} md23_fw={} afe={} da1={} mb44_da_cfg={}",
+                        addr,
+                        host_pec_enabled,
+                        md23_devtype_pec,
+                        md23_fw_pec,
+                        afe_pec,
+                        da1_pec,
+                        mb44_da_cfg_pec,
+                    );
+                    for window_addr in [0x4000u16, 0x4600u16, 0x4880u16, 0x4910u16, 0x4A70u16] {
+                        match read_bms_df_block_via_mb44(&mut self.i2c, addr, window_addr) {
+                            Ok((echoed_addr, raw)) => {
+                                defmt::info!(
+                                    "bms_df_blk: addr=0x{=u8:x} start=0x{=u16:x} echoed=0x{=u16:x} dlen={=u8} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x} b4=0x{=u8:x} b5=0x{=u8:x} b6=0x{=u8:x} b7=0x{=u8:x} b8=0x{=u8:x} b9=0x{=u8:x} b10=0x{=u8:x} b11=0x{=u8:x} b12=0x{=u8:x} b13=0x{=u8:x} b14=0x{=u8:x} b15=0x{=u8:x} b16=0x{=u8:x} b17=0x{=u8:x} b18=0x{=u8:x} b19=0x{=u8:x} b20=0x{=u8:x} b21=0x{=u8:x} b22=0x{=u8:x} b23=0x{=u8:x} b24=0x{=u8:x} b25=0x{=u8:x} b26=0x{=u8:x} b27=0x{=u8:x} b28=0x{=u8:x} b29=0x{=u8:x} b30=0x{=u8:x} b31=0x{=u8:x}",
+                                    addr,
+                                    window_addr,
+                                    echoed_addr,
+                                    raw.declared_len,
+                                    raw.payload[0],
+                                    raw.payload[1],
+                                    raw.payload[2],
+                                    raw.payload[3],
+                                    raw.payload[4],
+                                    raw.payload[5],
+                                    raw.payload[6],
+                                    raw.payload[7],
+                                    raw.payload[8],
+                                    raw.payload[9],
+                                    raw.payload[10],
+                                    raw.payload[11],
+                                    raw.payload[12],
+                                    raw.payload[13],
+                                    raw.payload[14],
+                                    raw.payload[15],
+                                    raw.payload[16],
+                                    raw.payload[17],
+                                    raw.payload[18],
+                                    raw.payload[19],
+                                    raw.payload[20],
+                                    raw.payload[21],
+                                    raw.payload[22],
+                                    raw.payload[23],
+                                    raw.payload[24],
+                                    raw.payload[25],
+                                    raw.payload[26],
+                                    raw.payload[27],
+                                    raw.payload[28],
+                                    raw.payload[29],
+                                    raw.payload[30],
+                                    raw.payload[31],
+                                );
+                            }
+                            Err(e) => {
+                                defmt::warn!(
+                                    "bms_df_blk: addr=0x{=u8:x} start=0x{=u16:x} err={}",
+                                    addr,
+                                    window_addr,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                    let parse_status_bits = |raw: &bq40z50::BlockReadRaw| -> u32 {
+                        if raw.payload_len >= 4 {
+                            u32::from_le_bytes([
+                                raw.payload[0],
+                                raw.payload[1],
+                                raw.payload[2],
+                                raw.payload[3],
+                            ])
+                        } else {
+                            0
+                        }
+                    };
+                    let mfg_direct_bits = mfg_status_direct_raw
+                        .as_ref()
+                        .map(|raw| parse_status_bits(raw));
+                    if let Some(raw) = op_status_raw.as_ref() {
+                        defmt::info!(
+                            "bms_status: addr=0x{=u8:x} kind=op len={=usize} bits=0x{=u32:x} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                            addr,
+                            raw.payload_len as usize,
+                            parse_status_bits(raw),
+                            raw.payload[0],
+                            raw.payload[1],
+                            raw.payload[2],
+                            raw.payload[3],
+                        );
+                    } else if let Err(e) = op_status_read {
+                        defmt::warn!("bms_status: addr=0x{=u8:x} kind=op err={}", addr, e);
+                    }
+                    if let Some(raw) = chg_status_raw.as_ref() {
+                        defmt::info!(
+                            "bms_status: addr=0x{=u8:x} kind=chg len={=usize} bits=0x{=u32:x} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                            addr,
+                            raw.payload_len as usize,
+                            parse_status_bits(raw),
+                            raw.payload[0],
+                            raw.payload[1],
+                            raw.payload[2],
+                            raw.payload[3],
+                        );
+                    } else if let Err(e) = chg_status_read {
+                        defmt::warn!("bms_status: addr=0x{=u8:x} kind=chg err={}", addr, e);
+                    }
+                    if let Some(raw) = gauge_status_raw.as_ref() {
+                        defmt::info!(
+                            "bms_status: addr=0x{=u8:x} kind=gauge len={=usize} bits=0x{=u32:x} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                            addr,
+                            raw.payload_len as usize,
+                            parse_status_bits(raw),
+                            raw.payload[0],
+                            raw.payload[1],
+                            raw.payload[2],
+                            raw.payload[3],
+                        );
+                    } else if let Err(e) = gauge_status_read {
+                        defmt::warn!("bms_status: addr=0x{=u8:x} kind=gauge err={}", addr, e);
+                    }
+                    if let Some(raw) = mfg_status_direct_raw.as_ref() {
+                        defmt::info!(
+                            "bms_status: addr=0x{=u8:x} kind=mfg_direct len={=usize} bits=0x{=u32:x} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                            addr,
+                            raw.payload_len as usize,
+                            parse_status_bits(raw),
+                            raw.payload[0],
+                            raw.payload[1],
+                            raw.payload[2],
+                            raw.payload[3],
+                        );
+                    } else if let Err(e) = mfg_status_direct_read {
+                        defmt::warn!("bms_status: addr=0x{=u8:x} kind=mfg_direct err={}", addr, e);
+                    }
+                    if BMS_ENABLE_CAL_OUTPUT_DIAG {
+                        if let Some(bits) = mfg_direct_bits {
+                            if (bits & BMS_MFG_STATUS_GAUGE_EN) == 0 {
+                                match send_bms_manufacturer_toggle(
+                                    &mut self.i2c,
+                                    addr,
+                                    BMS_MAC_CMD_GAUGING,
+                                    "diag_gauge_en_direct",
+                                    false,
+                                ) {
+                                    Ok(()) => {
+                                        match read_bms_direct_block_with_retry(
+                                            &mut self.i2c,
+                                            addr,
+                                            bq40z50::cmd::MANUFACTURING_STATUS,
+                                        ) {
+                                            Ok(raw_after) => {
+                                                let bits_after = parse_status_bits(&raw_after);
+                                                defmt::warn!(
+                                                    "bms_gauge_toggle: addr=0x{=u8:x} bits=0x{=u32:x} gauge_en={=bool} fet_en={=bool}",
+                                                    addr,
+                                                    bits_after,
+                                                    (bits_after & BMS_MFG_STATUS_GAUGE_EN) != 0,
+                                                    (bits_after & BMS_MFG_STATUS_FET_EN) != 0,
+                                                );
+                                            }
+                                            Err(e) => {
+                                                defmt::warn!(
+                                                    "bms_gauge_toggle: addr=0x{=u8:x} mfg_err={}",
+                                                    addr,
+                                                    e
+                                                );
+                                            }
+                                        }
+                                        match read_bms_direct_block_with_retry(
+                                            &mut self.i2c,
+                                            addr,
+                                            bq40z50::cmd::DA_STATUS_1,
+                                        ) {
+                                            Ok(raw_after) => {
+                                                defmt::info!(
+                                                    "bms_da1_after_gauge: addr=0x{=u8:x} len={=usize} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16} bat_or_sum_mv={=u16} pack_mv={=u16}",
+                                                    addr,
+                                                    raw_after.payload_len as usize,
+                                                    parse_direct_block_u16(&raw_after, 0).unwrap_or(0),
+                                                    parse_direct_block_u16(&raw_after, 1).unwrap_or(0),
+                                                    parse_direct_block_u16(&raw_after, 2).unwrap_or(0),
+                                                    parse_direct_block_u16(&raw_after, 3).unwrap_or(0),
+                                                    parse_direct_block_u16(&raw_after, 4).unwrap_or(0),
+                                                    parse_direct_block_u16(&raw_after, 5).unwrap_or(0),
+                                                );
+                                            }
+                                            Err(e) => {
+                                                defmt::warn!(
+                                                    "bms_da1_after_gauge: addr=0x{=u8:x} err={}",
+                                                    addr,
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        defmt::warn!(
+                                            "bms_gauge_toggle: addr=0x{=u8:x} toggle_err={}",
+                                            addr,
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(raw) = safety_alert_raw.as_ref() {
+                        defmt::info!(
+                            "bms_safety: addr=0x{=u8:x} kind=alert len={=usize} bits=0x{=u32:x} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                            addr,
+                            raw.payload_len as usize,
+                            parse_status_bits(raw),
+                            raw.payload[0],
+                            raw.payload[1],
+                            raw.payload[2],
+                            raw.payload[3],
+                        );
+                    } else if let Err(e) = safety_alert_read {
+                        defmt::warn!("bms_safety: addr=0x{=u8:x} kind=alert err={}", addr, e);
+                    }
+                    if let Some(raw) = safety_status_raw.as_ref() {
+                        defmt::info!(
+                            "bms_safety: addr=0x{=u8:x} kind=status len={=usize} bits=0x{=u32:x} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                            addr,
+                            raw.payload_len as usize,
+                            parse_status_bits(raw),
+                            raw.payload[0],
+                            raw.payload[1],
+                            raw.payload[2],
+                            raw.payload[3],
+                        );
+                    } else if let Err(e) = safety_status_read {
+                        defmt::warn!("bms_safety: addr=0x{=u8:x} kind=status err={}", addr, e);
+                    }
+                    if let Some(raw) = pf_raw.as_ref() {
+                        let len = raw.payload_len as usize;
+                        let bits = if len >= 4 {
+                            u32::from_le_bytes([
+                                raw.payload[0],
+                                raw.payload[1],
+                                raw.payload[2],
+                                raw.payload[3],
+                            ])
+                        } else {
+                            0
+                        };
+                        defmt::info!(
+                            "bms_pf: addr=0x{=u8:x} len={=usize} bits=0x{=u32:x} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x}",
+                            addr,
+                            len,
+                            bits,
+                            raw.payload[0],
+                            raw.payload[1],
+                            raw.payload[2],
+                            raw.payload[3],
+                        );
+                    } else if let Err(e) = pf_read {
+                        defmt::warn!("bms_pf: addr=0x{=u8:x} err={}", addr, e);
+                    }
+                    if let Some(raw) = afe_raw.as_ref() {
+                        let len = raw.payload_len as usize;
+                        defmt::info!(
+                            "bms_afe: addr=0x{=u8:x} len={=usize} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x} b4=0x{=u8:x} b5=0x{=u8:x} b6=0x{=u8:x} b7=0x{=u8:x} b8=0x{=u8:x} b9=0x{=u8:x} b10=0x{=u8:x} b11=0x{=u8:x} b12=0x{=u8:x} b13=0x{=u8:x} b14=0x{=u8:x} b15=0x{=u8:x} b16=0x{=u8:x} b17=0x{=u8:x} b18=0x{=u8:x} b19=0x{=u8:x} b20=0x{=u8:x}",
+                            addr,
+                            len,
+                            raw.payload[0],
+                            raw.payload[1],
+                            raw.payload[2],
+                            raw.payload[3],
+                            raw.payload[4],
+                            raw.payload[5],
+                            raw.payload[6],
+                            raw.payload[7],
+                            raw.payload[8],
+                            raw.payload[9],
+                            raw.payload[10],
+                            raw.payload[11],
+                            raw.payload[12],
+                            raw.payload[13],
+                            raw.payload[14],
+                            raw.payload[15],
+                            raw.payload[16],
+                            raw.payload[17],
+                            raw.payload[18],
+                            raw.payload[19],
+                            raw.payload[20],
+                        );
+                    } else if let Err(e) = afe_read {
+                        defmt::warn!("bms_afe: addr=0x{=u8:x} err={}", addr, e);
+                    }
+                    if let Some(raw) = lt1_raw.as_ref() {
+                        defmt::info!(
+                            "bms_lt1: addr=0x{=u8:x} len={=usize} c1_max={=u16} c2_max={=u16} c3_max={=u16} c4_max={=u16} c1_min={=u16} c2_min={=u16} c3_min={=u16} c4_min={=u16}",
+                            addr,
+                            raw.payload_len as usize,
+                            parse_direct_block_u16(raw, 0).unwrap_or(0),
+                            parse_direct_block_u16(raw, 1).unwrap_or(0),
+                            parse_direct_block_u16(raw, 2).unwrap_or(0),
+                            parse_direct_block_u16(raw, 3).unwrap_or(0),
+                            parse_direct_block_u16(raw, 4).unwrap_or(0),
+                            parse_direct_block_u16(raw, 5).unwrap_or(0),
+                            parse_direct_block_u16(raw, 6).unwrap_or(0),
+                            parse_direct_block_u16(raw, 7).unwrap_or(0),
+                        );
+                    } else if let Err(e) = lt1_read {
+                        defmt::warn!("bms_lt1: addr=0x{=u8:x} err={}", addr, e);
+                    }
+                    if let Some(raw) = da1_raw.as_ref() {
+                        let len = raw.payload_len as usize;
+                        defmt::info!(
+                            "bms_da1: addr=0x{=u8:x} len={=usize} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16} bat_or_sum_mv={=u16} pack_mv={=u16} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x} b4=0x{=u8:x} b5=0x{=u8:x} b6=0x{=u8:x} b7=0x{=u8:x} b8=0x{=u8:x} b9=0x{=u8:x} b10=0x{=u8:x} b11=0x{=u8:x}",
+                            addr,
+                            len,
+                            parse_direct_block_u16(raw, 0).unwrap_or(0),
+                            parse_direct_block_u16(raw, 1).unwrap_or(0),
+                            parse_direct_block_u16(raw, 2).unwrap_or(0),
+                            parse_direct_block_u16(raw, 3).unwrap_or(0),
+                            parse_direct_block_u16(raw, 4).unwrap_or(0),
+                            parse_direct_block_u16(raw, 5).unwrap_or(0),
+                            raw.payload[0],
+                            raw.payload[1],
+                            raw.payload[2],
+                            raw.payload[3],
+                            raw.payload[4],
+                            raw.payload[5],
+                            raw.payload[6],
+                            raw.payload[7],
+                            raw.payload[8],
+                            raw.payload[9],
+                            raw.payload[10],
+                            raw.payload[11],
+                        );
+                    } else if let Err(e) = da1_read {
+                        defmt::warn!("bms_da1: addr=0x{=u8:x} err={}", addr, e);
+                    }
+                    if BMS_ENABLE_CAL_OUTPUT_DIAG {
+                        let mut cal_enabled_here = false;
+                        if let Some(bits) = mfg_status {
+                            defmt::info!(
+                                "bms_mfg: addr=0x{=u8:x} bits=0x{=u32:x} cal_test={=bool} gauge_en={=bool} fet_en={=bool}",
+                                addr,
+                                bits,
+                                (bits & BMS_MFG_STATUS_CAL_TEST) != 0,
+                                (bits & BMS_MFG_STATUS_GAUGE_EN) != 0,
+                                (bits & BMS_MFG_STATUS_FET_EN) != 0,
+                            );
+                            if (bits & BMS_MFG_STATUS_GAUGE_EN) == 0 {
+                                match send_bms_manufacturer_toggle(
+                                    &mut self.i2c,
+                                    addr,
+                                    BMS_MAC_CMD_GAUGING,
+                                    "diag_gauge_en",
+                                    false,
+                                ) {
+                                    Ok(()) => {
+                                        spin_delay(BMS_MAC_TOGGLE_SETTLE);
+                                        match read_bms_mac_u32(
+                                            &mut self.i2c,
+                                            addr,
+                                            BMS_MAC_CMD_MANUFACTURING_STATUS,
+                                        ) {
+                                            Ok(bits_after) => {
+                                                defmt::warn!(
+                                                    "bms_gauge_toggle: addr=0x{=u8:x} bits=0x{=u32:x} gauge_en={=bool} fet_en={=bool}",
+                                                    addr,
+                                                    bits_after,
+                                                    (bits_after & BMS_MFG_STATUS_GAUGE_EN) != 0,
+                                                    (bits_after & BMS_MFG_STATUS_FET_EN) != 0,
+                                                );
+                                            }
+                                            Err(e) => {
+                                                defmt::warn!(
+                                                    "bms_gauge_toggle: addr=0x{=u8:x} mfg_err={}",
+                                                    addr,
+                                                    e
+                                                );
+                                            }
+                                        }
+                                        match read_bms_direct_block_with_retry(
+                                            &mut self.i2c,
+                                            addr,
+                                            bq40z50::cmd::DA_STATUS_1,
+                                        ) {
+                                            Ok(raw_after) => {
+                                                defmt::info!(
+                                                    "bms_da1_after_gauge: addr=0x{=u8:x} len={=usize} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16} bat_or_sum_mv={=u16} pack_mv={=u16}",
+                                                    addr,
+                                                    raw_after.payload_len as usize,
+                                                    parse_direct_block_u16(&raw_after, 0).unwrap_or(0),
+                                                    parse_direct_block_u16(&raw_after, 1).unwrap_or(0),
+                                                    parse_direct_block_u16(&raw_after, 2).unwrap_or(0),
+                                                    parse_direct_block_u16(&raw_after, 3).unwrap_or(0),
+                                                    parse_direct_block_u16(&raw_after, 4).unwrap_or(0),
+                                                    parse_direct_block_u16(&raw_after, 5).unwrap_or(0),
+                                                );
+                                            }
+                                            Err(e) => {
+                                                defmt::warn!(
+                                                    "bms_da1_after_gauge: addr=0x{=u8:x} err={}",
+                                                    addr,
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        defmt::warn!(
+                                            "bms_gauge_toggle: addr=0x{=u8:x} toggle_err={}",
+                                            addr,
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                            if (bits & BMS_MFG_STATUS_CAL_TEST) == 0 {
+                                cal_enabled_here = true;
+                            }
+                        } else {
+                            defmt::warn!("bms_mfg: addr=0x{=u8:x} err=unavailable", addr);
+                            cal_enabled_here = true;
+                        }
+                        if cal_enabled_here {
+                            let _ = send_bms_manufacturer_toggle(
+                                &mut self.i2c,
+                                addr,
+                                BMS_MAC_CMD_CAL_MODE,
+                                "diag_cal_mode_enable",
+                                true,
+                            );
+                            spin_delay(BMS_MAC_TOGGLE_SETTLE);
+                        }
+                        if send_bms_manufacturer_toggle(
+                            &mut self.i2c,
+                            addr,
+                            BMS_MAC_CMD_OUTPUT_CCADC_CAL,
+                            "diag_f081",
+                            true,
+                        )
+                        .is_ok()
+                        {
+                            spin_delay(BMS_MAC_TOGGLE_SETTLE);
+                            match bq40z50::read_block_raw_checked(
+                                &mut self.i2c,
+                                addr,
+                                bq40z50::cmd::MANUFACTURER_DATA,
+                            ) {
+                                Ok(raw) => {
+                                    defmt::info!(
+                                        "bms_cal: addr=0x{=u8:x} len={=u8} ctr=0x{=u8:x} status=0x{=u8:x} cell1_raw={=u16} cell2_raw={=u16} cell3_raw={=u16} cell4_raw={=u16} pack_raw={=u16} bat_raw={=u16} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x} b4=0x{=u8:x} b5=0x{=u8:x} b6=0x{=u8:x} b7=0x{=u8:x} b8=0x{=u8:x} b9=0x{=u8:x} b10=0x{=u8:x} b11=0x{=u8:x} b12=0x{=u8:x} b13=0x{=u8:x} b14=0x{=u8:x} b15=0x{=u8:x}",
+                                        addr,
+                                        raw.payload_len,
+                                        raw.payload[0],
+                                        raw.payload[1],
+                                        parse_md23_be_u16(&raw, 4).unwrap_or(0),
+                                        parse_md23_be_u16(&raw, 6).unwrap_or(0),
+                                        parse_md23_be_u16(&raw, 8).unwrap_or(0),
+                                        parse_md23_be_u16(&raw, 10).unwrap_or(0),
+                                        parse_md23_be_u16(&raw, 12).unwrap_or(0),
+                                        parse_md23_be_u16(&raw, 14).unwrap_or(0),
+                                        raw.payload[0],
+                                        raw.payload[1],
+                                        raw.payload[2],
+                                        raw.payload[3],
+                                        raw.payload[4],
+                                        raw.payload[5],
+                                        raw.payload[6],
+                                        raw.payload[7],
+                                        raw.payload[8],
+                                        raw.payload[9],
+                                        raw.payload[10],
+                                        raw.payload[11],
+                                        raw.payload[12],
+                                        raw.payload[13],
+                                        raw.payload[14],
+                                        raw.payload[15],
+                                    );
+                                }
+                                Err(e) => {
+                                    defmt::warn!("bms_cal: addr=0x{=u8:x} err={}", addr, e);
+                                }
+                            }
+                            let _ = send_bms_manufacturer_toggle(
+                                &mut self.i2c,
+                                addr,
+                                BMS_MAC_CMD_EXIT_CAL_OUTPUT,
+                                "diag_f080",
+                                true,
+                            );
+                        } else {
+                            defmt::warn!("bms_cal: addr=0x{=u8:x} err=f081_write_fail", addr);
+                        }
+                        if cal_enabled_here {
+                            let _ = send_bms_manufacturer_toggle(
+                                &mut self.i2c,
+                                addr,
+                                BMS_MAC_CMD_CAL_MODE,
+                                "diag_cal_mode_disable",
+                                true,
+                            );
+                        }
+                    }
                     defmt::info!(
                         "bms_info: addr=0x{=u8:x} cell1_mv={=u16} cell2_mv={=u16} cell3_mv={=u16} cell4_mv={=u16} err_code={} err_str={} rem_cap_mah={=?} full_cap_mah={=?}",
                         addr,
