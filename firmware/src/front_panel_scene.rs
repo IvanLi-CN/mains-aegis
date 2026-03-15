@@ -872,6 +872,8 @@ struct DashboardLiveData {
     charge_allowed: Option<bool>,
     bms_state: SelfCheckCommState,
     charger_state: SelfCheckCommState,
+    tps_a_state: SelfCheckCommState,
+    tps_b_state: SelfCheckCommState,
     bms_rca_alarm: Option<bool>,
     bms_no_battery: Option<bool>,
     bms_discharge_ready: Option<bool>,
@@ -904,6 +906,8 @@ impl DashboardLiveData {
             charge_allowed: snapshot.bq25792_allow_charge,
             bms_state: snapshot.bq40z50,
             charger_state: snapshot.bq25792,
+            tps_a_state: snapshot.tps_a,
+            tps_b_state: snapshot.tps_b,
             bms_rca_alarm: snapshot.bq40z50_rca_alarm,
             bms_no_battery: snapshot.bq40z50_no_battery,
             bms_discharge_ready: snapshot.bq40z50_discharge_ready,
@@ -3725,10 +3729,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
     palette: Palette,
     data: DashboardLiveData,
 ) -> Result<(), P::Error> {
-    let hotspot_c = max_optional_i16(
-        data.therm_a_c,
-        max_optional_i16(data.therm_b_c, data.detail.board_temp_c),
-    );
+    let hotspot_c = thermal_hotspot_c(data);
 
     text(
         painter,
@@ -3910,14 +3911,24 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
                 "READY"
             }
         }
-        DashboardDetailPage::BatteryFlow => match data.bms_current_ma {
-            Some(ma) if ma > 0 => "CHG",
-            Some(ma) if ma < 0 => "DSG",
-            Some(_) => "IDLE",
-            None => "N/A",
-        },
+        DashboardDetailPage::BatteryFlow => {
+            if data.bms_state == SelfCheckCommState::Err || data.bms_rca_alarm == Some(true) {
+                "FAULT"
+            } else {
+                match data.bms_current_ma {
+                    Some(ma) if ma > 0 => "CHG",
+                    Some(ma) if ma < 0 => "DSG",
+                    Some(_) => "IDLE",
+                    None => "N/A",
+                }
+            }
+        }
         DashboardDetailPage::Output => {
-            if !data.out_a_on && !data.out_b_on {
+            if data.tps_a_state == SelfCheckCommState::Err
+                || data.tps_b_state == SelfCheckCommState::Err
+            {
+                "FAULT"
+            } else if !data.out_a_on && !data.out_b_on {
                 "IDLE"
             } else if !data.out_a_on || !data.out_b_on {
                 "WARN"
@@ -3926,7 +3937,9 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
             }
         }
         DashboardDetailPage::Charger => {
-            if data.detail.charger_active == Some(true)
+            if data.charger_state == SelfCheckCommState::Err {
+                "FAULT"
+            } else if data.detail.charger_active == Some(true)
                 || (data.charge_allowed == Some(true) && data.chg_iin_ma.unwrap_or(0) > 0)
             {
                 "ACTIVE"
@@ -3938,10 +3951,7 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
                 "IDLE"
             }
         }
-        DashboardDetailPage::Thermal => match max_optional_i16(
-            data.therm_a_c,
-            max_optional_i16(data.therm_b_c, data.detail.board_temp_c),
-        ) {
+        DashboardDetailPage::Thermal => match thermal_hotspot_c(data) {
             Some(temp) if temp >= 60 => "HOT",
             Some(temp) if temp >= 45 => "WARM",
             Some(_) => "COOL",
@@ -4244,6 +4254,16 @@ fn max_optional_i16(a: Option<i16>, b: Option<i16>) -> Option<i16> {
         (None, Some(b)) => Some(b),
         (None, None) => None,
     }
+}
+
+fn thermal_hotspot_c(data: DashboardLiveData) -> Option<i16> {
+    max_optional_i16(
+        data.therm_a_c,
+        max_optional_i16(
+            data.therm_b_c,
+            max_optional_i16(data.detail.board_temp_c, data.detail.battery_temp_c),
+        ),
+    )
 }
 
 enum DetailValue {
@@ -6450,6 +6470,54 @@ mod tests {
         assert_eq!(
             dashboard_route_for_target(DashboardTouchTarget::HomeOutput),
             DashboardRoute::Detail(DashboardDetailPage::Output)
+        );
+    }
+
+    #[test]
+    fn thermal_detail_uses_battery_temp_for_hotspot_and_status() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.tmp_a_c = Some(36);
+        snapshot.tmp_b_c = Some(39);
+        snapshot.dashboard_detail.battery_temp_c = Some(67);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(thermal_hotspot_c(live), Some(67));
+        assert_eq!(detail_status_tag(DashboardDetailPage::Thermal, live), "HOT");
+    }
+
+    #[test]
+    fn detail_status_tags_prioritize_fault_states() {
+        let mut battery_fault = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        battery_fault.bq40z50 = SelfCheckCommState::Err;
+        battery_fault.bq40z50_current_ma = Some(1200);
+        let battery_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &battery_fault);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BatteryFlow, battery_live),
+            "FAULT"
+        );
+
+        let mut charger_fault = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        charger_fault.bq25792 = SelfCheckCommState::Err;
+        charger_fault.bq25792_allow_charge = Some(true);
+        charger_fault.bq25792_ichg_ma = Some(900);
+        let charger_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &charger_fault);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Charger, charger_live),
+            "FAULT"
+        );
+
+        let mut output_fault = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        output_fault.tps_a = SelfCheckCommState::Err;
+        output_fault.tps_a_enabled = Some(true);
+        output_fault.tps_b_enabled = Some(true);
+        let output_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &output_fault);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Output, output_live),
+            "FAULT"
         );
     }
 }
