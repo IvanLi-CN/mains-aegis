@@ -24,7 +24,7 @@
   - `BATTERY / DISCHG`：`BQ40Z50`
   - `TEMP`：`TMP112`
 - 严格真实源：任何缺失值显示 `N/A`，不再回落到演示波动值。
-- `PIN W` 的输入样本必须先经过有效性过滤：仅在输入存在、`BQ25792` ADC 已完成稳定转换、且 `VBUS/IBUS` 落在合法量程内时才允许进入 Dashboard。
+- `PIN W` 的输入样本必须先经过有效性过滤：仅在输入存在、`BQ25792` ADC 处于稳定连续采样（或 one-shot 已完成）、且 `VBUS/IBUS` 落在合法量程内时才允许进入 Dashboard。
 
 ### Non-goals
 
@@ -61,7 +61,7 @@
   - 新增：`input_vbus_mv`、`input_ibus_ma`、`out_a_vbus_mv`、`out_b_vbus_mv`、`bq40z50_pack_mv`、`bq40z50_current_ma`
 - `bq25792`
   - 新增：`reg::IBUS_ADC`、`reg::VBUS_ADC`、`read_i16(...)`
-  - 新增：稳定 `power-path ADC` 配置/就绪辅助，要求 `continuous + averaging + stable sample rate`，并显式校验 `ADC_DONE`
+  - 新增：稳定 `power-path ADC` 配置/就绪辅助，要求 `continuous + averaging + stable sample rate`；continuous 模式直接视为 ready，one-shot 模式才校验 `ADC_DONE`
 - `tps55288::TelemetryCapture`
   - 新增：`vbus_mv`
 - `FrontPanel`
@@ -74,7 +74,7 @@
 - Given Dashboard 某个真实字段缺失，When 渲染对应区域，Then 显示 `N/A`，meter 归零，且不显示任何演示波动数值。
 - Given 运行态输入侧存在 VBUS/IBUS ADC 样本，When Dashboard 显示 `PIN W`，Then 读数来自 `BQ25792` ADC，不依赖 `INA3221 CH3`。
 - Given `IBUS_ADC<=0` 但输入状态仍为在线，When Dashboard 计算 `PIN W`，Then 显示 `0.0W`，不再把逆流/空载样本转成正功率。
-- Given `ADC_DONE=0`、`VBUS_ADC>30000mV`、`|IBUS_ADC|>5000mA` 或寄存器样本缺失，When Dashboard 渲染 `PIN W`，Then 显示 `N/A`，并把原始寄存器保留到诊断日志。
+- Given ADC helper 判定样本未就绪（例如刚重配完成或 one-shot `ADC_DONE=0`）、`VBUS_ADC>30000mV`、`|IBUS_ADC|>5000mA` 或寄存器样本缺失，When Dashboard 渲染 `PIN W`，Then 显示 `N/A`，并把原始寄存器保留到诊断日志。
 - Given `tools/front-panel-preview` 运行真实 Dashboard 场景，When 导出 PNG，Then `preview.png` 分辨率为 `320x172`。
 
 ## 实现记录
@@ -103,5 +103,5 @@
 
 ## 变更记录（Change log）
 
-- 2026-03-15: 收紧 `PIN W` 输入样本契约：`BQ25792` ADC 必须处于稳定连续采样并完成转换；逆流/空载样本显示 `0.0W`，未就绪/越界样本显示 `N/A`，并新增异常原始样本诊断日志。
+- 2026-03-15: 收紧 `PIN W` 输入样本契约：`BQ25792` ADC 必须处于稳定 continuous/one-shot 就绪状态；逆流/空载样本显示 `0.0W`，未就绪/越界样本显示 `N/A`，并新增异常原始样本诊断日志。
 - 2026-03-15: 自检页不再作为 steady-state 默认页；切换为“自检 -> 真实 Dashboard”。
