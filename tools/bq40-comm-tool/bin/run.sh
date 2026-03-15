@@ -349,19 +349,22 @@ else
 
   "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy" --force-min-charge "$force_min_charge" --probe-mode "$probe_mode" --rom-image "$rom_image" --repair-profile "$repair_profile"
 
-  bq40_tool_acquire_flash_monitor_lock "$TOOL_ROOT"
-
   if [[ "$flash" == "true" ]]; then
     "$SCRIPT_DIR/flash.sh"
   fi
 
   monitor_reset_on_attach="true"
+  initial_stdout_timeout_sec=""
   if [[ "$flash" == "true" ]]; then
     # After a fresh flash, let monitor.sh try reusing the initial boot stream first and only
     # fall back to a reset attach if no target stdout appears.
     monitor_reset_on_attach="false"
+    initial_stdout_timeout_sec="$POST_FLASH_BOOT_QUIET_SEC"
   fi
   monitor_args=(--duration-sec "$duration_sec" --after-flash "$flash" --reset-on-attach "$monitor_reset_on_attach")
+  if [[ -n "$initial_stdout_timeout_sec" ]]; then
+    monitor_args+=(--initial-stdout-timeout-sec "$initial_stdout_timeout_sec")
+  fi
   if [[ -n "$monitor_file" ]]; then
     monitor_args+=(--output "$monitor_file")
   fi
