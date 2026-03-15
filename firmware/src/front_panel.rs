@@ -444,10 +444,10 @@ impl FrontPanel {
                         defmt::error!("ui: update input state failed err={=?}", e);
                         self.needs_redraw = true;
                     } else {
-                        self.last_inputs = Some(snapshot);
                         self.needs_redraw = false;
                     }
                 }
+                self.last_inputs = Some(snapshot);
             }
             Err(e) => {
                 defmt::error!("ui: poll input state failed err={}", i2c_error_kind(e));

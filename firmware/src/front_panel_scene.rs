@@ -977,11 +977,18 @@ impl DashboardLiveData {
 
     fn page_notice(self, page: DashboardDetailPage) -> &'static str {
         match page {
-            DashboardDetailPage::Cells => self.detail.cells_notice.unwrap_or("CELL STATUS READY"),
-            DashboardDetailPage::BatteryFlow => {
-                self.detail.battery_notice.unwrap_or("PACK STATUS READY")
-            }
-            DashboardDetailPage::Output => self.detail.output_notice.unwrap_or("REGULATION STABLE"),
+            DashboardDetailPage::Cells => self
+                .detail
+                .cells_notice
+                .unwrap_or("CELL DETAIL SOURCE PENDING"),
+            DashboardDetailPage::BatteryFlow => self
+                .detail
+                .battery_notice
+                .unwrap_or("PACK DETAIL SOURCE PENDING"),
+            DashboardDetailPage::Output => self
+                .detail
+                .output_notice
+                .unwrap_or("OUTPUT DETAIL SOURCE PENDING"),
             DashboardDetailPage::Charger => self
                 .detail
                 .charger_notice
@@ -2941,7 +2948,7 @@ fn render_dashboard_detail_page<P: UiPainter>(
         DashboardDetailPage::Thermal => palette.center,
     };
     let status = detail_status_tag(page, data);
-    let notice = data.page_notice(page);
+    let notice = detail_footer_notice(page, data);
 
     draw_dashboard_detail_top_bar(
         painter,
@@ -3358,7 +3365,10 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         172,
         122,
         "FAULT",
-        DetailTextValue::Static(data.page_notice(DashboardDetailPage::BatteryFlow)),
+        DetailTextValue::Static(detail_fault_row_text(
+            DashboardDetailPage::BatteryFlow,
+            data,
+        )),
     )?;
     Ok(())
 }
@@ -3486,7 +3496,11 @@ fn render_dashboard_output_detail<P: UiPainter>(
         14,
         120,
         "FAULT",
-        DetailTextValue::Static(if data.out_a_on { "CLEAR" } else { "HOLD" }),
+        DetailTextValue::Static(output_fault_row_text(
+            data.tps_a_state,
+            data.out_a_on,
+            "HOLD",
+        )),
     )?;
 
     text(
@@ -3538,7 +3552,11 @@ fn render_dashboard_output_detail<P: UiPainter>(
         172,
         120,
         "FAULT",
-        DetailTextValue::Static(if data.out_b_on { "CLEAR" } else { "STBY" }),
+        DetailTextValue::Static(output_fault_row_text(
+            data.tps_b_state,
+            data.out_b_on,
+            "STBY",
+        )),
     )?;
     Ok(())
 }
@@ -3710,7 +3728,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         172,
         120,
         "FAULT",
-        DetailTextValue::Static(data.page_notice(DashboardDetailPage::Charger)),
+        DetailTextValue::Static(detail_fault_row_text(DashboardDetailPage::Charger, data)),
     )?;
     Ok(())
 }
@@ -3875,7 +3893,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         172,
         120,
         "FAULT",
-        DetailTextValue::Static(data.page_notice(DashboardDetailPage::Thermal)),
+        DetailTextValue::Static(detail_fault_row_text(DashboardDetailPage::Thermal, data)),
     )?;
     Ok(())
 }
@@ -3897,6 +3915,8 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
                 "FAULT"
             } else if data.bms_rca_alarm == Some(true) {
                 "WARN"
+            } else if !cells_detail_ready(data) {
+                "N/A"
             } else if data.detail.balance_cell.is_some() {
                 "BAL ON"
             } else {
@@ -3906,6 +3926,8 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
         DashboardDetailPage::BatteryFlow => {
             if data.bms_state == SelfCheckCommState::Err || data.bms_rca_alarm == Some(true) {
                 "FAULT"
+            } else if !battery_flow_detail_ready(data) {
+                "N/A"
             } else {
                 match data.bms_current_ma {
                     Some(ma) if ma > 0 => "CHG",
@@ -3920,6 +3942,8 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
                 || data.tps_b_state == SelfCheckCommState::Err
             {
                 "FAULT"
+            } else if !output_detail_ready(data) {
+                "N/A"
             } else if !data.out_a_on && !data.out_b_on {
                 "IDLE"
             } else if !data.out_a_on || !data.out_b_on {
@@ -4264,6 +4288,35 @@ fn thermal_hotspot_c(data: DashboardLiveData) -> Option<i16> {
     )
 }
 
+fn cells_detail_ready(data: DashboardLiveData) -> bool {
+    data.batt_pack_mv.is_some()
+        || data.detail.balance_cell.is_some()
+        || data.detail.cell_mv.iter().any(|value| value.is_some())
+        || data.detail.cell_temp_c.iter().any(|value| value.is_some())
+}
+
+fn battery_flow_detail_ready(data: DashboardLiveData) -> bool {
+    data.batt_pack_mv.is_some()
+        || data.bms_current_ma.is_some()
+        || data.bms_soc_pct.is_some()
+        || data.detail.battery_energy_mwh.is_some()
+        || data.detail.battery_full_capacity_mwh.is_some()
+        || data.detail.charge_fet_on.is_some()
+        || data.detail.discharge_fet_on.is_some()
+        || data.detail.precharge_fet_on.is_some()
+}
+
+fn output_detail_ready(data: DashboardLiveData) -> bool {
+    data.out_a_mv.is_some()
+        || data.out_a_ma.is_some()
+        || data.out_b_mv.is_some()
+        || data.out_b_ma.is_some()
+        || data.detail.out_a_temp_c.is_some()
+        || data.detail.out_b_temp_c.is_some()
+        || data.tps_a_state != SelfCheckCommState::Pending
+        || data.tps_b_state != SelfCheckCommState::Pending
+}
+
 fn charger_data_ready(data: DashboardLiveData) -> bool {
     data.detail.charger_active.is_some()
         || data.detail.charger_status.is_some()
@@ -4304,6 +4357,85 @@ fn thermal_fault_present(data: DashboardLiveData) -> bool {
     data.therm_a_state == SelfCheckCommState::Err
         || data.therm_b_state == SelfCheckCommState::Err
         || data.detail.fan_status == Some("FAULT")
+}
+
+fn detail_footer_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
+    if !detail_data_ready(page, data) {
+        return data.page_notice(page);
+    }
+
+    match detail_status_tag(page, data) {
+        "FAULT" => detail_fault_row_text(page, data),
+        "WARN" => "WARNING ACTIVE - CHECK DETAIL ROWS",
+        _ => data.page_notice(page),
+    }
+}
+
+fn detail_fault_row_text(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
+    match page {
+        DashboardDetailPage::BatteryFlow => {
+            if data.bms_state == SelfCheckCommState::Err {
+                "BMS LINK FAULT"
+            } else if data.bms_rca_alarm == Some(true) {
+                "PACK ALARM ACTIVE"
+            } else if !battery_flow_detail_ready(data) {
+                "N/A"
+            } else {
+                data.page_notice(page)
+            }
+        }
+        DashboardDetailPage::Charger => {
+            if data.charger_state == SelfCheckCommState::Err {
+                "CHARGER LINK FAULT"
+            } else if !charger_data_ready(data) {
+                "N/A"
+            } else {
+                data.page_notice(page)
+            }
+        }
+        DashboardDetailPage::Thermal => {
+            if thermal_fault_present(data) {
+                "THERMAL SENSE FAULT"
+            } else if thermal_hotspot_c(data).is_some() {
+                data.page_notice(page)
+            } else {
+                "N/A"
+            }
+        }
+        _ => data.page_notice(page),
+    }
+}
+
+fn output_fault_row_text(
+    state: SelfCheckCommState,
+    enabled: bool,
+    off_text: &'static str,
+) -> &'static str {
+    if state == SelfCheckCommState::Err {
+        "FAULT"
+    } else if state == SelfCheckCommState::Pending {
+        "N/A"
+    } else if enabled {
+        "CLEAR"
+    } else {
+        off_text
+    }
+}
+
+fn detail_data_ready(page: DashboardDetailPage, data: DashboardLiveData) -> bool {
+    match page {
+        DashboardDetailPage::Cells => cells_detail_ready(data),
+        DashboardDetailPage::BatteryFlow => battery_flow_detail_ready(data),
+        DashboardDetailPage::Output => output_detail_ready(data),
+        DashboardDetailPage::Charger => charger_data_ready(data),
+        DashboardDetailPage::Thermal => {
+            thermal_fault_present(data)
+                || thermal_hotspot_c(data).is_some()
+                || data.detail.fan_rpm.is_some()
+                || data.detail.fan_pwm_pct.is_some()
+                || data.detail.fan_status.is_some()
+        }
+    }
 }
 
 enum DetailValue {
@@ -6598,5 +6730,56 @@ mod tests {
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
         assert_eq!(detail_status_tag(DashboardDetailPage::Cells, live), "WARN");
+    }
+
+    #[test]
+    fn pending_detail_pages_stay_na_instead_of_reporting_healthy() {
+        let snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(detail_status_tag(DashboardDetailPage::Cells, live), "N/A");
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BatteryFlow, live),
+            "N/A"
+        );
+        assert_eq!(detail_status_tag(DashboardDetailPage::Output, live), "N/A");
+        assert_eq!(
+            detail_footer_notice(DashboardDetailPage::Cells, live),
+            "CELL DETAIL SOURCE PENDING"
+        );
+        assert_eq!(
+            detail_footer_notice(DashboardDetailPage::BatteryFlow, live),
+            "PACK DETAIL SOURCE PENDING"
+        );
+        assert_eq!(
+            detail_footer_notice(DashboardDetailPage::Output, live),
+            "OUTPUT DETAIL SOURCE PENDING"
+        );
+    }
+
+    #[test]
+    fn fault_rows_follow_page_fault_state() {
+        let mut charger_fault = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        charger_fault.bq25792 = SelfCheckCommState::Err;
+        let charger_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &charger_fault);
+        assert_eq!(
+            detail_fault_row_text(DashboardDetailPage::Charger, charger_live),
+            "CHARGER LINK FAULT"
+        );
+
+        let mut thermal_fault = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        thermal_fault.tmp_b = SelfCheckCommState::Err;
+        let thermal_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &thermal_fault);
+        assert_eq!(
+            detail_fault_row_text(DashboardDetailPage::Thermal, thermal_live),
+            "THERMAL SENSE FAULT"
+        );
+
+        assert_eq!(
+            output_fault_row_text(SelfCheckCommState::Err, true, "HOLD"),
+            "FAULT"
+        );
     }
 }
