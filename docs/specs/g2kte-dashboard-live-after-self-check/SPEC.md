@@ -82,8 +82,8 @@
 - live Dashboard 的 mains 判定统一改为 `VIN>=3V`；`BQ25792 input_present` 仅保留给 charger 诊断，不再影响 Dashboard 的“有市电”分支。
 - Preview 工具增加 3 组 runtime fixture，用于验证 `standby / assist / backup` 三个 Dashboard 场景。
 - live Dashboard 的 `mains_present` 改为只消费 `vin_vbus_mv>=3V`；即使 charger `input_present` 临时抖动，只要 `DC5025 VIN` 在线，模式、强调色与 `NOAC/LOCK` 分支都保持一致。
-- 若 `VIN` 只发生瞬时采样缺失，live Dashboard 继续沿用最近一次已知的 `VIN` 市电状态；只把 `PIN W` 数值回退为 `N/A`。
-- 若 `VIN` 连续缺失到超出瞬时容错窗口，live Dashboard 回退到 charger `input_present` 作为降级兜底，避免整页长期卡在过期的市电状态。
+- 若 `VIN` 只发生瞬时采样缺失，或因运行态暂时跳过 `VIN` 遥测而错过单个采样周期，live Dashboard 继续沿用最近一次已知的 `VIN` 市电状态；只把 `PIN W` 数值回退为 `N/A`。
+- 若 `VIN` 连续缺失，或连续多个周期都在跳过 `VIN` 遥测而超出瞬时容错窗口，live Dashboard 回退到 charger `input_present` 作为降级兜底，避免整页长期卡在过期的市电状态。
 
 ## 验证记录
 

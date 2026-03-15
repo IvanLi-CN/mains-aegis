@@ -562,6 +562,23 @@ fn record_vin_sample_failure(vin_mains_present: &mut Option<bool>, missing_strea
     }
 }
 
+fn mark_vin_telemetry_unavailable(
+    telemetry_include_vin_ch3: bool,
+    vin_vbus_mv: &mut Option<u16>,
+    vin_iin_ma: &mut Option<i32>,
+    vin_mains_present: &mut Option<bool>,
+    missing_streak: &mut u8,
+) {
+    *vin_vbus_mv = None;
+    *vin_iin_ma = None;
+    if telemetry_include_vin_ch3 {
+        record_vin_sample_failure(vin_mains_present, missing_streak);
+    } else {
+        *vin_mains_present = None;
+        *missing_streak = 0;
+    }
+}
+
 fn ups_mode_from_mains(mains_present: Option<bool>, has_output: bool) -> UpsMode {
     match mains_present {
         Some(true) => {
@@ -1883,6 +1900,7 @@ where
     pub fn tick(&mut self, irq: &IrqSnapshot) -> bool {
         if let Some(until) = self.bms_activation_isolation_until {
             if Instant::now() < until {
+                self.note_skipped_vin_telemetry_if_due(Instant::now());
                 self.update_fan_state(irq);
                 self.refresh_audio_signals();
                 return false;
@@ -1912,10 +1930,12 @@ where
             if bms_i2c_active {
                 self.bms_activation_isolation_until =
                     Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
+                self.note_skipped_vin_telemetry_if_due(Instant::now());
                 self.update_fan_state(irq);
                 self.refresh_audio_signals();
                 return false;
             }
+            self.note_skipped_vin_telemetry_if_due(Instant::now());
             self.update_fan_state(irq);
             self.refresh_audio_signals();
             return false;
@@ -1931,10 +1951,12 @@ where
             if bms_i2c_active {
                 self.bms_activation_isolation_until =
                     Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
+                self.note_skipped_vin_telemetry_if_due(Instant::now());
                 self.update_fan_state(irq);
                 self.refresh_audio_signals();
                 return false;
             }
+            self.note_skipped_vin_telemetry_if_due(Instant::now());
             self.update_fan_state(irq);
             self.refresh_audio_signals();
             return false;
@@ -1944,11 +1966,13 @@ where
         if bms_i2c_active {
             self.bms_activation_isolation_until =
                 Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
+            self.note_skipped_vin_telemetry_if_due(Instant::now());
             self.update_fan_state(irq);
             self.refresh_audio_signals();
             return false;
         }
         if self.bms_activation_state == BmsActivationState::Pending {
+            self.note_skipped_vin_telemetry_if_due(Instant::now());
             self.update_fan_state(irq);
             self.refresh_audio_signals();
             return false;
@@ -5091,6 +5115,21 @@ where
         }
     }
 
+    fn note_skipped_vin_telemetry_if_due(&mut self, now: Instant) {
+        if now < self.next_telemetry_at {
+            return;
+        }
+        self.next_telemetry_at = now + self.cfg.telemetry_period;
+        mark_vin_telemetry_unavailable(
+            self.cfg.telemetry_include_vin_ch3,
+            &mut self.ui_snapshot.vin_vbus_mv,
+            &mut self.ui_snapshot.vin_iin_ma,
+            &mut self.ui_snapshot.vin_mains_present,
+            &mut self.vin_sample_missing_streak,
+        );
+        self.recompute_ui_mode();
+    }
+
     fn maybe_print_telemetry(&mut self) -> bool {
         let now = Instant::now();
         if now < self.next_telemetry_at {
@@ -5102,6 +5141,14 @@ where
             self.refresh_tmp112_snapshot(OutputChannel::OutA);
             self.refresh_tmp112_snapshot(OutputChannel::OutB);
             self.next_fan_temp_refresh_at = now + self.cfg.telemetry_period;
+            mark_vin_telemetry_unavailable(
+                self.cfg.telemetry_include_vin_ch3,
+                &mut self.ui_snapshot.vin_vbus_mv,
+                &mut self.ui_snapshot.vin_iin_ma,
+                &mut self.ui_snapshot.vin_mains_present,
+                &mut self.vin_sample_missing_streak,
+            );
+            self.recompute_ui_mode();
             return true;
         }
 
@@ -5202,8 +5249,10 @@ where
                         TelemetryValue::Value(v)
                     }
                     Err(e) => {
-                        self.ui_snapshot.vin_vbus_mv = None;
-                        record_vin_sample_failure(
+                        mark_vin_telemetry_unavailable(
+                            self.cfg.telemetry_include_vin_ch3,
+                            &mut self.ui_snapshot.vin_vbus_mv,
+                            &mut self.ui_snapshot.vin_iin_ma,
                             &mut self.ui_snapshot.vin_mains_present,
                             &mut self.vin_sample_missing_streak,
                         );
@@ -5227,9 +5276,10 @@ where
                     current_ma
                 );
             } else {
-                self.ui_snapshot.vin_vbus_mv = None;
-                self.ui_snapshot.vin_iin_ma = None;
-                record_vin_sample_failure(
+                mark_vin_telemetry_unavailable(
+                    self.cfg.telemetry_include_vin_ch3,
+                    &mut self.ui_snapshot.vin_vbus_mv,
+                    &mut self.ui_snapshot.vin_iin_ma,
                     &mut self.ui_snapshot.vin_mains_present,
                     &mut self.vin_sample_missing_streak,
                 );
@@ -5240,10 +5290,13 @@ where
                 );
             }
         } else {
-            self.ui_snapshot.vin_vbus_mv = None;
-            self.ui_snapshot.vin_iin_ma = None;
-            self.ui_snapshot.vin_mains_present = None;
-            self.vin_sample_missing_streak = 0;
+            mark_vin_telemetry_unavailable(
+                self.cfg.telemetry_include_vin_ch3,
+                &mut self.ui_snapshot.vin_vbus_mv,
+                &mut self.ui_snapshot.vin_iin_ma,
+                &mut self.ui_snapshot.vin_mains_present,
+                &mut self.vin_sample_missing_streak,
+            );
         }
         self.recompute_ui_mode();
         true
@@ -6495,6 +6548,56 @@ mod tests {
         record_vin_sample_failure(&mut mains_present, &mut missing_streak);
         assert_eq!(mains_present, None);
         assert_eq!(missing_streak, VIN_MAINS_LATCH_FAILURE_LIMIT);
+    }
+
+    #[test]
+    fn mark_vin_telemetry_unavailable_expires_stale_latch_after_repeated_skips() {
+        let mut vin_vbus_mv = Some(19_200);
+        let mut vin_iin_ma = Some(850);
+        let mut mains_present = Some(true);
+        let mut missing_streak = 0;
+
+        mark_vin_telemetry_unavailable(
+            true,
+            &mut vin_vbus_mv,
+            &mut vin_iin_ma,
+            &mut mains_present,
+            &mut missing_streak,
+        );
+        assert_eq!(vin_vbus_mv, None);
+        assert_eq!(vin_iin_ma, None);
+        assert_eq!(mains_present, Some(true));
+        assert_eq!(missing_streak, 1);
+
+        mark_vin_telemetry_unavailable(
+            true,
+            &mut vin_vbus_mv,
+            &mut vin_iin_ma,
+            &mut mains_present,
+            &mut missing_streak,
+        );
+        assert_eq!(mains_present, None);
+        assert_eq!(missing_streak, VIN_MAINS_LATCH_FAILURE_LIMIT);
+    }
+
+    #[test]
+    fn mark_vin_telemetry_unavailable_clears_state_when_vin_channel_disabled() {
+        let mut vin_vbus_mv = Some(19_200);
+        let mut vin_iin_ma = Some(850);
+        let mut mains_present = Some(true);
+        let mut missing_streak = 1;
+
+        mark_vin_telemetry_unavailable(
+            false,
+            &mut vin_vbus_mv,
+            &mut vin_iin_ma,
+            &mut mains_present,
+            &mut missing_streak,
+        );
+        assert_eq!(vin_vbus_mv, None);
+        assert_eq!(vin_iin_ma, None);
+        assert_eq!(mains_present, None);
+        assert_eq!(missing_streak, 0);
     }
 
     #[test]
