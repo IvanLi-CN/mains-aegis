@@ -51,6 +51,7 @@ const UI_ORIENTATION_MARKER: &str = "FP_ORI_PROBE_20260227";
 const BACKLIGHT_ACTIVE_LOW: bool = true;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
+const BOOT_SPLASH_HOLD: Duration = Duration::from_millis(900);
 const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
 const DASHBOARD_VARIANT: UiVariant = UiVariant::InstrumentB;
 
@@ -171,22 +172,26 @@ impl FrontPanel {
 
         if let Err(e) = self.tca_init() {
             defmt::error!("ui: tca6408a init failed err={}", i2c_error_kind(e));
+            self.set_backlight(true);
             self.state = InitState::Disabled;
             return;
         }
 
         if let Err(e) = self.tca_set_res_released(false) {
             defmt::error!("ui: tca set res failed err={}", i2c_error_kind(e));
+            self.set_backlight(true);
             self.state = InitState::Disabled;
             return;
         }
         if let Err(e) = self.tca_set_tp_reset_released(false) {
             defmt::error!("ui: tca set tp_reset failed err={}", i2c_error_kind(e));
+            self.set_backlight(true);
             self.state = InitState::Disabled;
             return;
         }
         if let Err(e) = self.tca_set_cs_enabled(false) {
             defmt::error!("ui: tca set cs failed err={}", i2c_error_kind(e));
+            self.set_backlight(true);
             self.state = InitState::Disabled;
             return;
         }
@@ -196,11 +201,13 @@ impl FrontPanel {
         // Hardware reset through expander lines before handing over to driver init.
         if let Err(e) = self.tca_set_res_released(true) {
             defmt::error!("ui: tca release res failed err={}", i2c_error_kind(e));
+            self.set_backlight(true);
             self.state = InitState::Disabled;
             return;
         }
         if let Err(e) = self.tca_set_tp_reset_released(true) {
             defmt::error!("ui: tca release tp_reset failed err={}", i2c_error_kind(e));
+            self.set_backlight(true);
             self.state = InitState::Disabled;
             return;
         }
@@ -208,6 +215,7 @@ impl FrontPanel {
 
         if let Err(e) = self.tca_set_cs_enabled(true) {
             defmt::error!("ui: tca enable cs failed err={}", i2c_error_kind(e));
+            self.set_backlight(true);
             self.state = InitState::Disabled;
             return;
         }
@@ -217,10 +225,17 @@ impl FrontPanel {
             defmt::error!("ui: gc9307 driver init failed");
             let _ = self.tca_set_cs_enabled(false);
             let _ = self.tca_set_res_released(false);
-            self.set_backlight(false);
+            self.set_backlight(true);
             self.state = InitState::Disabled;
             return;
         }
+
+        self.set_backlight(true);
+        self.state = InitState::Ready;
+        self.next_frame_deadline = Instant::now();
+
+        self.render_boot_confirmation_splash();
+        busy_wait(BOOT_SPLASH_HOLD);
 
         let snapshot = match self.read_inputs() {
             Ok(snapshot) => {
@@ -238,10 +253,6 @@ impl FrontPanel {
         if let Err(e) = self.render_inputs(snapshot) {
             defmt::error!("ui: render input state failed err={=?}", e);
         }
-
-        self.set_backlight(true);
-        self.state = InitState::Ready;
-        self.next_frame_deadline = Instant::now();
 
         defmt::info!(
             "ui: front panel ready (driver=gc9307-async mode=industrial-demo variant={} res={}x{} offset=({},{}))",
@@ -261,6 +272,7 @@ impl FrontPanel {
             UI_ORIENTATION_MARKER,
             PANEL_ORIENTATION as u8
         );
+        esp_println::println!("ui: boot splash -> self-check");
     }
 
     pub fn update_self_check_snapshot(&mut self, snapshot: SelfCheckUiSnapshot) {
@@ -327,6 +339,11 @@ impl FrontPanel {
         self.self_check_overlay = SelfCheckOverlay::None;
         self.needs_redraw = true;
         defmt::info!(
+            "ui: page switch old={} new={}",
+            variant_name(previous_variant),
+            variant_name(self.ui_variant)
+        );
+        esp_println::println!(
             "ui: page switch old={} new={}",
             variant_name(previous_variant),
             variant_name(self.ui_variant)
@@ -470,6 +487,24 @@ impl FrontPanel {
         let mut painter = PanelPainter { panel: self };
         if let Err(e) = front_panel_scene::render_display_diagnostic(&mut painter, &meta) {
             defmt::error!("ui: render display diag failed err={=?}", e);
+        }
+    }
+
+    fn render_boot_confirmation_splash(&mut self) {
+        let mut painter = PanelPainter { panel: self };
+        let meta = front_panel_scene::DisplayDiagnosticMeta {
+            orientation_label: "BOOT CHECK 320x172",
+            color_order_label: if PANEL_RGB_ORDER {
+                "BACKLIGHT + SPI + TCA"
+            } else {
+                "BACKLIGHT + SPI + TCA"
+            },
+            heartbeat_on: true,
+        };
+        if let Err(e) = front_panel_scene::render_display_diagnostic(&mut painter, &meta) {
+            defmt::error!("ui: render boot splash failed err={=?}", e);
+        } else {
+            esp_println::println!("ui: boot splash rendered");
         }
     }
 
