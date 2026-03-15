@@ -142,6 +142,7 @@ None
 
 ## 变更记录（Change log）
 
+- 2026-03-15: PR #41 已创建；当前实现已经切换到 `PSRAM 双缓冲 + SPI DMA dirty-band` 主路径，剩余收口项为 review-loop 与 `40MHz` 板级联调结论同步。
 - 2026-03-15: 新增显示链路重构规格，冻结 `PSRAM 双缓冲 + SPI DMA dirty-band` 路线，并记录 `20MHz` 默认 / `40MHz` 实验策略。
 
 ## 参考（References）
@@ -149,3 +150,4 @@ None
 - `firmware/src/front_panel.rs`
 - `firmware/src/display_pipeline.rs`
 - `firmware/src/main.rs`
+- [PR #41](https://github.com/IvanLi-CN/mains-aegis/pull/41)

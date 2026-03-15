@@ -29,5 +29,5 @@
 | h43mk | Main firmware runtime audio cues | 已完成 | `h43mk-main-firmware-runtime-audio-cues/SPEC.md` | 2026-03-14 | 主固件已切换到运行时 cue 服务；补齐 DMA / 激活后音频 hotfix，并把 BatteryProtection 固定为高于所有低电提示音的全局规则 |
 | hg3dw | Front panel visual language systematization | 已完成 | `hg3dw-front-panel-visual-language/SPEC.md` | 2026-03-02 | 建立 Token/组件契约/视觉回归清单，补充 bitmap 字体字高白名单与预览图 |
 | mecb8 | Status/warning/error speaker cues preview assets | 已完成 | `mecb8-audio-cues-preview/SPEC.md` | 2026-03-05 | 15 组提示音试听资产（score + mid + wav）与增强预览页 |
-| xy6cz | Front panel refresh pipeline | 部分完成（4/5） | `xy6cz-front-panel-refresh-pipeline/SPEC.md` | 2026-03-15 | 已完成 PSRAM 双缓冲、dirty-band framebuffer 与 SPI DMA 主路径；等待 PR / review-loop / 40MHz 联调结论回填 |
+| xy6cz | Front panel refresh pipeline | 部分完成（4/5） | `xy6cz-front-panel-refresh-pipeline/SPEC.md` | 2026-03-15 | PR #41 已创建；已完成 PSRAM 双缓冲、dirty-band framebuffer 与 SPI DMA 主路径，等待 review-loop / 40MHz 联调结论回填 |
 | ygmqn | Fan control with thermal/tach fail-safe | 部分完成（4/5） | `ygmqn-fan-control/SPEC.md` | 2026-03-13 | PR #36 已创建；等待 review-loop 收敛 |
