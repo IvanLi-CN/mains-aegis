@@ -1,9 +1,9 @@
 use core::convert::Infallible;
 
 use crate::front_panel_scene::{
-    self, AudioTestUiState, BmsActivationState, BmsResultKind, SelfCheckCommState,
-    SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel,
-    UiPainter, UiVariant, UpsMode,
+    self, AudioTestUiState, BmsActivationState, BmsResultKind, DashboardRoute,
+    DashboardTouchTarget, SelfCheckCommState, SelfCheckOverlay, SelfCheckTouchTarget,
+    SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel, UiPainter, UiVariant, UpsMode,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -138,6 +138,7 @@ pub struct FrontPanel {
     last_test_touch_point: Option<(u16, u16)>,
     needs_redraw: bool,
     ui_variant: UiVariant,
+    dashboard_route: DashboardRoute,
     self_check_snapshot: SelfCheckUiSnapshot,
     bms_activation_state: BmsActivationState,
     self_check_overlay: SelfCheckOverlay,
@@ -201,6 +202,7 @@ impl FrontPanel {
             last_test_touch_point: None,
             needs_redraw: false,
             ui_variant: SELF_CHECK_VARIANT,
+            dashboard_route: DashboardRoute::Home,
             self_check_snapshot: SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby),
             bms_activation_state: BmsActivationState::Idle,
             self_check_overlay: SelfCheckOverlay::None,
@@ -377,12 +379,13 @@ impl FrontPanel {
     }
 
     pub fn enter_dashboard(&mut self) {
-        if self.ui_variant == DASHBOARD_VARIANT {
+        if self.ui_variant == DASHBOARD_VARIANT && self.dashboard_route == DashboardRoute::Home {
             return;
         }
 
         let previous_variant = self.ui_variant;
         self.ui_variant = DASHBOARD_VARIANT;
+        self.dashboard_route = DashboardRoute::Home;
         self.self_check_overlay = SelfCheckOverlay::None;
         self.needs_redraw = true;
         defmt::info!(
@@ -429,6 +432,9 @@ impl FrontPanel {
                     if ui_action.is_none() {
                         ui_action = self.process_touch_action(snapshot);
                     }
+                } else {
+                    self.process_dashboard_button_action(snapshot);
+                    self.process_dashboard_touch_action(snapshot);
                 }
                 let inputs_changed = self.last_inputs != Some(snapshot);
                 let should_render =
@@ -979,6 +985,53 @@ impl FrontPanel {
         }
     }
 
+    fn process_dashboard_button_action(&mut self, snapshot: InputSnapshot) {
+        if !matches!(self.dashboard_route, DashboardRoute::Detail(_)) {
+            return;
+        }
+
+        let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        let left_edge = snapshot.left && !prev.left;
+        let center_edge = snapshot.center && !prev.center;
+        if left_edge || center_edge {
+            let previous = self.dashboard_route;
+            self.dashboard_route = DashboardRoute::Home;
+            self.needs_redraw = true;
+            defmt::info!(
+                "ui: dashboard route old={} new={}",
+                dashboard_route_name(previous),
+                dashboard_route_name(self.dashboard_route)
+            );
+        }
+    }
+
+    fn process_dashboard_touch_action(&mut self, snapshot: InputSnapshot) {
+        let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        if !snapshot.touch || prev.touch {
+            return;
+        }
+
+        let (x, y) = match snapshot.touch_point {
+            Some(point) => point,
+            None => return,
+        };
+
+        if let Some(target) = front_panel_scene::dashboard_hit_test(self.dashboard_route, x, y) {
+            let next_route = front_panel_scene::dashboard_route_for_target(target);
+            if next_route != self.dashboard_route {
+                let previous = self.dashboard_route;
+                self.dashboard_route = next_route;
+                self.needs_redraw = true;
+                defmt::info!(
+                    "ui: dashboard route old={} new={} target={}",
+                    dashboard_route_name(previous),
+                    dashboard_route_name(self.dashboard_route),
+                    dashboard_touch_target_name(target)
+                );
+            }
+        }
+    }
+
     fn snapshot_to_model(&self, _snapshot: InputSnapshot) -> UiModel {
         UiModel {
             mode: self.self_check_snapshot.mode,
@@ -1016,10 +1069,11 @@ impl FrontPanel {
         let self_check_snapshot = self.self_check_snapshot;
         let self_check_overlay = self.self_check_overlay;
         self.render_scene(|painter| {
-            front_panel_scene::render_frame_with_self_check_overlay(
+            front_panel_scene::render_frame_with_dashboard_route_overlay(
                 painter,
                 &model,
                 variant,
+                self.dashboard_route,
                 Some(&self_check_snapshot),
                 self_check_overlay,
             )
@@ -1033,6 +1087,30 @@ fn variant_name(variant: UiVariant) -> &'static str {
         UiVariant::InstrumentB => "B",
         UiVariant::RetroC => "C",
         UiVariant::InstrumentD => "D",
+    }
+}
+
+fn dashboard_route_name(route: DashboardRoute) -> &'static str {
+    match route {
+        DashboardRoute::Home => "home",
+        DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Cells) => "detail_cells",
+        DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::BatteryFlow) => {
+            "detail_battery_flow"
+        }
+        DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Output) => "detail_output",
+        DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Charger) => "detail_charger",
+        DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal) => "detail_thermal",
+    }
+}
+
+fn dashboard_touch_target_name(target: DashboardTouchTarget) -> &'static str {
+    match target {
+        DashboardTouchTarget::HomeOutput => "home_output",
+        DashboardTouchTarget::HomeThermal => "home_thermal",
+        DashboardTouchTarget::HomeCells => "home_cells",
+        DashboardTouchTarget::HomeCharger => "home_charger",
+        DashboardTouchTarget::HomeBatteryFlow => "home_battery_flow",
+        DashboardTouchTarget::DetailBack => "detail_back",
     }
 }
 

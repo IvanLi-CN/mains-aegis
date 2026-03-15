@@ -136,6 +136,49 @@ pub enum UpsMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardDetailPage {
+    Cells,
+    BatteryFlow,
+    Output,
+    Charger,
+    Thermal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardRoute {
+    Home,
+    Detail(DashboardDetailPage),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardTouchTarget {
+    HomeOutput,
+    HomeThermal,
+    HomeCells,
+    HomeCharger,
+    HomeBatteryFlow,
+    DetailBack,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardInputSource {
+    DcIn,
+    UsbC,
+    Auto,
+}
+
+impl DashboardInputSource {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::DcIn => "DC IN",
+            Self::UsbC => "USB-C",
+            Self::Auto => "AUTO",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelfCheckCommState {
     Pending,
     Ok,
@@ -152,6 +195,63 @@ pub enum BmsResultKind {
     RomMode,
     Abnormal,
     NotDetected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DashboardDetailSnapshot {
+    pub cell_mv: [Option<u16>; 4],
+    pub cell_temp_c: [Option<i16>; 4],
+    pub balance_cell: Option<u8>,
+    pub battery_energy_mwh: Option<u32>,
+    pub battery_full_capacity_mwh: Option<u32>,
+    pub charge_fet_on: Option<bool>,
+    pub discharge_fet_on: Option<bool>,
+    pub precharge_fet_on: Option<bool>,
+    pub input_source: Option<DashboardInputSource>,
+    pub charger_active: Option<bool>,
+    pub charger_status: Option<&'static str>,
+    pub out_a_temp_c: Option<i16>,
+    pub out_b_temp_c: Option<i16>,
+    pub board_temp_c: Option<i16>,
+    pub battery_temp_c: Option<i16>,
+    pub fan_rpm: Option<u16>,
+    pub fan_pwm_pct: Option<u8>,
+    pub fan_status: Option<&'static str>,
+    pub cells_notice: Option<&'static str>,
+    pub battery_notice: Option<&'static str>,
+    pub output_notice: Option<&'static str>,
+    pub charger_notice: Option<&'static str>,
+    pub thermal_notice: Option<&'static str>,
+}
+
+impl DashboardDetailSnapshot {
+    pub const fn pending() -> Self {
+        Self {
+            cell_mv: [None, None, None, None],
+            cell_temp_c: [None, None, None, None],
+            balance_cell: None,
+            battery_energy_mwh: None,
+            battery_full_capacity_mwh: None,
+            charge_fet_on: None,
+            discharge_fet_on: None,
+            precharge_fet_on: None,
+            input_source: None,
+            charger_active: None,
+            charger_status: None,
+            out_a_temp_c: None,
+            out_b_temp_c: None,
+            board_temp_c: None,
+            battery_temp_c: None,
+            fan_rpm: None,
+            fan_pwm_pct: None,
+            fan_status: None,
+            cells_notice: None,
+            battery_notice: None,
+            output_notice: None,
+            charger_notice: None,
+            thermal_notice: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,6 +293,7 @@ pub struct SelfCheckUiSnapshot {
     pub tmp_b: SelfCheckCommState,
     pub tmp_b_c: Option<i16>,
     pub tmp_b_c_x16: Option<i16>,
+    pub dashboard_detail: DashboardDetailSnapshot,
 }
 
 impl SelfCheckUiSnapshot {
@@ -235,6 +336,7 @@ impl SelfCheckUiSnapshot {
             tmp_b: SelfCheckCommState::Pending,
             tmp_b_c: None,
             tmp_b_c_x16: None,
+            dashboard_detail: DashboardDetailSnapshot::pending(),
         }
     }
 }
@@ -283,6 +385,36 @@ const SELF_CHECK_CONFIRM_BTN_X: u16 = 152;
 const SELF_CHECK_CONFIRM_BTN_Y: u16 = 110;
 const SELF_CHECK_CONFIRM_BTN_W: u16 = 136;
 const SELF_CHECK_CONFIRM_BTN_H: u16 = 24;
+
+const DASHBOARD_HOME_OUTPUT_X: u16 = 6;
+const DASHBOARD_HOME_OUTPUT_Y: u16 = 22;
+const DASHBOARD_HOME_OUTPUT_W: u16 = 196;
+const DASHBOARD_HOME_OUTPUT_H: u16 = 52;
+
+const DASHBOARD_HOME_THERMAL_X: u16 = 6;
+const DASHBOARD_HOME_THERMAL_Y: u16 = 76;
+const DASHBOARD_HOME_THERMAL_W: u16 = 196;
+const DASHBOARD_HOME_THERMAL_H: u16 = 94;
+
+const DASHBOARD_HOME_CELLS_X: u16 = 206;
+const DASHBOARD_HOME_CELLS_Y: u16 = 22;
+const DASHBOARD_HOME_CELLS_W: u16 = 108;
+const DASHBOARD_HOME_CELLS_H: u16 = 48;
+
+const DASHBOARD_HOME_CHARGER_X: u16 = 206;
+const DASHBOARD_HOME_CHARGER_Y: u16 = 72;
+const DASHBOARD_HOME_CHARGER_W: u16 = 108;
+const DASHBOARD_HOME_CHARGER_H: u16 = 48;
+
+const DASHBOARD_HOME_BATTERY_FLOW_X: u16 = 206;
+const DASHBOARD_HOME_BATTERY_FLOW_Y: u16 = 122;
+const DASHBOARD_HOME_BATTERY_FLOW_W: u16 = 108;
+const DASHBOARD_HOME_BATTERY_FLOW_H: u16 = 48;
+
+const DASHBOARD_DETAIL_BACK_X: u16 = 8;
+const DASHBOARD_DETAIL_BACK_Y: u16 = 2;
+const DASHBOARD_DETAIL_BACK_W: u16 = 56;
+const DASHBOARD_DETAIL_BACK_H: u16 = 14;
 
 #[allow(dead_code)]
 const TEST_NAV_CARD_X: u16 = 20;
@@ -421,6 +553,90 @@ pub fn self_check_hit_test(
             }
         }
         SelfCheckOverlay::BmsActivateProgress | SelfCheckOverlay::BmsActivateResult(..) => None,
+    }
+}
+
+#[allow(dead_code)]
+pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<DashboardTouchTarget> {
+    match route {
+        DashboardRoute::Home => {
+            if contains(
+                x,
+                y,
+                DASHBOARD_HOME_OUTPUT_X,
+                DASHBOARD_HOME_OUTPUT_Y,
+                DASHBOARD_HOME_OUTPUT_W,
+                DASHBOARD_HOME_OUTPUT_H,
+            ) {
+                Some(DashboardTouchTarget::HomeOutput)
+            } else if contains(
+                x,
+                y,
+                DASHBOARD_HOME_THERMAL_X,
+                DASHBOARD_HOME_THERMAL_Y,
+                DASHBOARD_HOME_THERMAL_W,
+                DASHBOARD_HOME_THERMAL_H,
+            ) {
+                Some(DashboardTouchTarget::HomeThermal)
+            } else if contains(
+                x,
+                y,
+                DASHBOARD_HOME_CELLS_X,
+                DASHBOARD_HOME_CELLS_Y,
+                DASHBOARD_HOME_CELLS_W,
+                DASHBOARD_HOME_CELLS_H,
+            ) {
+                Some(DashboardTouchTarget::HomeCells)
+            } else if contains(
+                x,
+                y,
+                DASHBOARD_HOME_CHARGER_X,
+                DASHBOARD_HOME_CHARGER_Y,
+                DASHBOARD_HOME_CHARGER_W,
+                DASHBOARD_HOME_CHARGER_H,
+            ) {
+                Some(DashboardTouchTarget::HomeCharger)
+            } else if contains(
+                x,
+                y,
+                DASHBOARD_HOME_BATTERY_FLOW_X,
+                DASHBOARD_HOME_BATTERY_FLOW_Y,
+                DASHBOARD_HOME_BATTERY_FLOW_W,
+                DASHBOARD_HOME_BATTERY_FLOW_H,
+            ) {
+                Some(DashboardTouchTarget::HomeBatteryFlow)
+            } else {
+                None
+            }
+        }
+        DashboardRoute::Detail(_) => {
+            if contains(
+                x,
+                y,
+                DASHBOARD_DETAIL_BACK_X,
+                DASHBOARD_DETAIL_BACK_Y,
+                DASHBOARD_DETAIL_BACK_W,
+                DASHBOARD_DETAIL_BACK_H,
+            ) {
+                Some(DashboardTouchTarget::DetailBack)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub const fn dashboard_route_for_target(target: DashboardTouchTarget) -> DashboardRoute {
+    match target {
+        DashboardTouchTarget::HomeOutput => DashboardRoute::Detail(DashboardDetailPage::Output),
+        DashboardTouchTarget::HomeThermal => DashboardRoute::Detail(DashboardDetailPage::Thermal),
+        DashboardTouchTarget::HomeCells => DashboardRoute::Detail(DashboardDetailPage::Cells),
+        DashboardTouchTarget::HomeCharger => DashboardRoute::Detail(DashboardDetailPage::Charger),
+        DashboardTouchTarget::HomeBatteryFlow => {
+            DashboardRoute::Detail(DashboardDetailPage::BatteryFlow)
+        }
+        DashboardTouchTarget::DetailBack => DashboardRoute::Home,
     }
 }
 
@@ -659,6 +875,7 @@ struct DashboardLiveData {
     bms_rca_alarm: Option<bool>,
     bms_no_battery: Option<bool>,
     bms_discharge_ready: Option<bool>,
+    detail: DashboardDetailSnapshot,
 }
 
 impl DashboardLiveData {
@@ -690,6 +907,7 @@ impl DashboardLiveData {
             bms_rca_alarm: snapshot.bq40z50_rca_alarm,
             bms_no_battery: snapshot.bq40z50_no_battery,
             bms_discharge_ready: snapshot.bq40z50_discharge_ready,
+            detail: snapshot.dashboard_detail,
         }
     }
 
@@ -746,6 +964,24 @@ impl DashboardLiveData {
             Some(ma) if ma < 0 => Some(ma.unsigned_abs() as u32),
             Some(_) => Some(0),
             None => None,
+        }
+    }
+
+    fn page_notice(self, page: DashboardDetailPage) -> &'static str {
+        match page {
+            DashboardDetailPage::Cells => self.detail.cells_notice.unwrap_or("CELL STATUS READY"),
+            DashboardDetailPage::BatteryFlow => {
+                self.detail.battery_notice.unwrap_or("PACK STATUS READY")
+            }
+            DashboardDetailPage::Output => self.detail.output_notice.unwrap_or("REGULATION STABLE"),
+            DashboardDetailPage::Charger => self
+                .detail
+                .charger_notice
+                .unwrap_or("DETAIL UI ONLY - SOURCE PENDING"),
+            DashboardDetailPage::Thermal => self
+                .detail
+                .thermal_notice
+                .unwrap_or("DETAIL UI ONLY - FAN SOURCE PENDING"),
         }
     }
 
@@ -1370,7 +1606,14 @@ pub fn render_frame<P: UiPainter>(
     model: &UiModel,
     variant: UiVariant,
 ) -> Result<(), P::Error> {
-    render_frame_with_self_check_overlay(painter, model, variant, None, SelfCheckOverlay::None)
+    render_frame_with_dashboard_route_overlay(
+        painter,
+        model,
+        variant,
+        DashboardRoute::Home,
+        None,
+        SelfCheckOverlay::None,
+    )
 }
 
 #[allow(dead_code)]
@@ -1380,19 +1623,39 @@ pub fn render_frame_with_self_check<P: UiPainter>(
     variant: UiVariant,
     self_check: Option<&SelfCheckUiSnapshot>,
 ) -> Result<(), P::Error> {
-    render_frame_with_self_check_overlay(
+    render_frame_with_dashboard_route_overlay(
         painter,
         model,
         variant,
+        DashboardRoute::Home,
         self_check,
         SelfCheckOverlay::None,
     )
 }
 
+#[allow(dead_code)]
 pub fn render_frame_with_self_check_overlay<P: UiPainter>(
     painter: &mut P,
     model: &UiModel,
     variant: UiVariant,
+    self_check: Option<&SelfCheckUiSnapshot>,
+    overlay: SelfCheckOverlay,
+) -> Result<(), P::Error> {
+    render_frame_with_dashboard_route_overlay(
+        painter,
+        model,
+        variant,
+        DashboardRoute::Home,
+        self_check,
+        overlay,
+    )
+}
+
+pub fn render_frame_with_dashboard_route_overlay<P: UiPainter>(
+    painter: &mut P,
+    model: &UiModel,
+    variant: UiVariant,
+    dashboard_route: DashboardRoute,
     self_check: Option<&SelfCheckUiSnapshot>,
     overlay: SelfCheckOverlay,
 ) -> Result<(), P::Error> {
@@ -1405,7 +1668,9 @@ pub fn render_frame_with_self_check_overlay<P: UiPainter>(
 
     match variant {
         UiVariant::InstrumentA => render_variant_a(painter, variant, palette, data, self_check)?,
-        UiVariant::InstrumentB => render_variant_b(painter, variant, palette, data, self_check)?,
+        UiVariant::InstrumentB => {
+            render_variant_b(painter, variant, palette, data, dashboard_route, self_check)?
+        }
         UiVariant::RetroC => {
             render_variant_c(painter, variant, palette, data, self_check, overlay)?
         }
@@ -1422,7 +1687,14 @@ fn render_variant_a<P: UiPainter>(
     data: DashboardData,
     self_check: Option<&SelfCheckUiSnapshot>,
 ) -> Result<(), P::Error> {
-    render_variant_b(painter, variant, palette, data, self_check)
+    render_variant_b(
+        painter,
+        variant,
+        palette,
+        data,
+        DashboardRoute::Home,
+        self_check,
+    )
 }
 
 fn render_variant_b<P: UiPainter>(
@@ -1430,6 +1702,7 @@ fn render_variant_b<P: UiPainter>(
     variant: UiVariant,
     palette: Palette,
     data: DashboardData,
+    dashboard_route: DashboardRoute,
     self_check: Option<&SelfCheckUiSnapshot>,
 ) -> Result<(), P::Error> {
     if let Some(snapshot) = self_check {
@@ -1437,6 +1710,7 @@ fn render_variant_b<P: UiPainter>(
             painter,
             variant,
             palette,
+            dashboard_route,
             DashboardLiveData::from_snapshot(data, snapshot),
         );
     }
@@ -1966,8 +2240,13 @@ fn render_variant_b_live<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
     palette: Palette,
+    dashboard_route: DashboardRoute,
     data: DashboardLiveData,
 ) -> Result<(), P::Error> {
+    if let DashboardRoute::Detail(page) = dashboard_route {
+        return render_dashboard_detail_page(painter, variant, palette, data, page);
+    }
+
     let kpi_label_y = 27;
     let kpi_value_y = 44;
     let mode_accent = mode_accent_color(palette, data.mode, data.touch_irq);
@@ -2585,7 +2864,1421 @@ fn render_variant_b_live<P: UiPainter>(
         },
     )?;
 
+    draw_dashboard_entry_marker(
+        painter,
+        DASHBOARD_HOME_OUTPUT_X,
+        DASHBOARD_HOME_OUTPUT_Y,
+        DASHBOARD_HOME_OUTPUT_W,
+        DASHBOARD_HOME_OUTPUT_H,
+        mode_accent,
+    )?;
+    draw_dashboard_entry_marker(
+        painter,
+        DASHBOARD_HOME_THERMAL_X,
+        DASHBOARD_HOME_THERMAL_Y,
+        DASHBOARD_HOME_THERMAL_W,
+        DASHBOARD_HOME_THERMAL_H,
+        palette.center,
+    )?;
+    draw_dashboard_entry_marker(
+        painter,
+        DASHBOARD_HOME_CELLS_X,
+        DASHBOARD_HOME_CELLS_Y,
+        DASHBOARD_HOME_CELLS_W,
+        DASHBOARD_HOME_CELLS_H,
+        palette.left,
+    )?;
+    draw_dashboard_entry_marker(
+        painter,
+        DASHBOARD_HOME_CHARGER_X,
+        DASHBOARD_HOME_CHARGER_Y,
+        DASHBOARD_HOME_CHARGER_W,
+        DASHBOARD_HOME_CHARGER_H,
+        palette.right,
+    )?;
+    draw_dashboard_entry_marker(
+        painter,
+        DASHBOARD_HOME_BATTERY_FLOW_X,
+        DASHBOARD_HOME_BATTERY_FLOW_Y,
+        DASHBOARD_HOME_BATTERY_FLOW_W,
+        DASHBOARD_HOME_BATTERY_FLOW_H,
+        if data.mains_present {
+            palette.accent
+        } else {
+            palette.down
+        },
+    )?;
+
     Ok(())
+}
+
+fn render_dashboard_detail_page<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+    page: DashboardDetailPage,
+) -> Result<(), P::Error> {
+    let accent = match page {
+        DashboardDetailPage::Cells => palette.left,
+        DashboardDetailPage::BatteryFlow => {
+            if data.mains_present {
+                palette.accent
+            } else {
+                palette.down
+            }
+        }
+        DashboardDetailPage::Output => palette.accent,
+        DashboardDetailPage::Charger => palette.right,
+        DashboardDetailPage::Thermal => palette.center,
+    };
+    let status = detail_status_tag(page, data);
+    let notice = data.page_notice(page);
+
+    draw_dashboard_detail_top_bar(
+        painter,
+        variant,
+        palette,
+        detail_page_title(page),
+        status,
+        detail_status_color(palette, status),
+    )?;
+
+    draw_panel(painter, 6, 22, 308, 34, palette, true, accent)?;
+    draw_panel(painter, 6, 60, 150, 82, palette, false, accent)?;
+    draw_panel(painter, 164, 60, 150, 82, palette, false, accent)?;
+    draw_panel(
+        painter,
+        6,
+        146,
+        308,
+        20,
+        palette,
+        true,
+        detail_status_color(palette, status),
+    )?;
+
+    match page {
+        DashboardDetailPage::Cells => {
+            render_dashboard_cells_detail(painter, variant, palette, data)?
+        }
+        DashboardDetailPage::BatteryFlow => {
+            render_dashboard_battery_flow_detail(painter, variant, palette, data)?
+        }
+        DashboardDetailPage::Output => {
+            render_dashboard_output_detail(painter, variant, palette, data)?
+        }
+        DashboardDetailPage::Charger => {
+            render_dashboard_charger_detail(painter, variant, palette, data)?
+        }
+        DashboardDetailPage::Thermal => {
+            render_dashboard_thermal_detail(painter, variant, palette, data)?
+        }
+    }
+
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        notice,
+        Point::new(12, 150),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+
+    Ok(())
+}
+
+fn render_dashboard_cells_detail<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "PACK",
+        Point::new(14, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match (data.batt_pack_mv, data.bms_soc_pct) {
+        (Some(pack_mv), Some(soc)) => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            format_args!(
+                "{:>2}.{:01}V {:>2}%",
+                pack_mv / 1000,
+                (pack_mv % 1000) / 100,
+                soc
+            ),
+            Point::new(308, 28),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        (Some(pack_mv), None) => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            format_args!("{:>2}.{:01}V N/A", pack_mv / 1000, (pack_mv % 1000) / 100),
+            Point::new(308, 28),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        _ => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            "N/A",
+            Point::new(308, 28),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+    }
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "BAL CELL",
+        Point::new(14, 42),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::Num,
+        match data.detail.balance_cell {
+            Some(cell) if (1..=4).contains(&cell) => match cell {
+                1 => "C1 ACTIVE",
+                2 => "C2 ACTIVE",
+                3 => "C3 ACTIVE",
+                _ => "C4 ACTIVE",
+            },
+            _ => "NONE",
+        },
+        Point::new(308, 42),
+        HorizontalAlignment::Right,
+        palette.bg,
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "CELL MV",
+        Point::new(14, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        78,
+        "C1",
+        data.detail.cell_mv[0],
+        DetailValueFmt::MilliVolt,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        92,
+        "C2",
+        data.detail.cell_mv[1],
+        DetailValueFmt::MilliVolt,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        106,
+        "C3",
+        data.detail.cell_mv[2],
+        DetailValueFmt::MilliVolt,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        120,
+        "C4",
+        data.detail.cell_mv[3],
+        DetailValueFmt::MilliVolt,
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "CELL TEMP",
+        Point::new(172, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        78,
+        "T1",
+        data.detail.cell_temp_c[0],
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        92,
+        "T2",
+        data.detail.cell_temp_c[1],
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        106,
+        "T3",
+        data.detail.cell_temp_c[2],
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        120,
+        "T4",
+        data.detail.cell_temp_c[3],
+        DetailValueFmt::Celsius,
+    )?;
+    Ok(())
+}
+
+fn render_dashboard_battery_flow_detail<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "VPACK",
+        Point::new(14, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match data.batt_pack_mv {
+        Some(pack_mv) => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            format_args!("{:>2}.{:01}V", pack_mv / 1000, (pack_mv % 1000) / 100),
+            Point::new(150, 28),
+            HorizontalAlignment::Left,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            "N/A",
+            Point::new(150, 28),
+            HorizontalAlignment::Left,
+            palette.bg,
+        )?,
+    }
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "IPACK",
+        Point::new(176, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match data.bms_current_ma {
+        Some(current_ma) => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            format_args!(
+                "{:>1}.{:02}A",
+                current_ma.abs() / 1000,
+                (current_ma.abs() % 1000) / 10
+            ),
+            Point::new(308, 28),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            "N/A",
+            Point::new(308, 28),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+    }
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        if matches!(data.bms_current_ma, Some(ma) if ma > 0) {
+            "CHARGING PATH"
+        } else if matches!(data.bms_current_ma, Some(ma) if ma < 0) {
+            "DISCHARGE PATH"
+        } else {
+            "PACK IDLE"
+        },
+        Point::new(14, 42),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "ENERGY",
+        Point::new(14, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        78,
+        "STORE",
+        data.detail.battery_energy_mwh,
+        DetailValueFmt::MilliWattHour,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        92,
+        "FULL",
+        data.detail.battery_full_capacity_mwh,
+        DetailValueFmt::MilliWattHour,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        108,
+        "SOC",
+        match data.bms_soc_pct {
+            Some(_) => DetailTextValue::Percent(data.bms_soc_pct.unwrap_or(0)),
+            None => DetailTextValue::Na,
+        },
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        122,
+        "STATE",
+        match data.bms_current_ma {
+            Some(ma) if ma > 0 => DetailTextValue::Static("CHG"),
+            Some(ma) if ma < 0 => DetailTextValue::Static("DSG"),
+            Some(_) => DetailTextValue::Static("IDLE"),
+            None => DetailTextValue::Static("N/A"),
+        },
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "GATE STATE",
+        Point::new(172, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        78,
+        "CHG",
+        bool_text_value(data.detail.charge_fet_on),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        92,
+        "DSG",
+        bool_text_value(data.detail.discharge_fet_on),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        106,
+        "PCHG",
+        bool_text_value(data.detail.precharge_fet_on),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        122,
+        "FAULT",
+        DetailTextValue::Static(data.page_notice(DashboardDetailPage::BatteryFlow)),
+    )?;
+    Ok(())
+}
+
+fn render_dashboard_output_detail<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "VOUT",
+        Point::new(14, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match data.output_bus_mv() {
+        Some(bus_mv) => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            format_args!("{:>2}.{:01}V", bus_mv / 1000, (bus_mv % 1000) / 100),
+            Point::new(150, 28),
+            HorizontalAlignment::Left,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            "N/A",
+            Point::new(150, 28),
+            HorizontalAlignment::Left,
+            palette.bg,
+        )?,
+    }
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "POUT",
+        Point::new(176, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match data.output_power_w10() {
+        Some(power_w10) => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            format_args!("{:>2}.{:01}W", power_w10 / 10, power_w10 % 10),
+            Point::new(308, 28),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            "N/A",
+            Point::new(308, 28),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+    }
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "DUAL REGULATION PATH",
+        Point::new(14, 42),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "OUT-A",
+        Point::new(14, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_output_current_row(
+        painter,
+        variant,
+        palette,
+        14,
+        78,
+        "I",
+        data.out_a_on,
+        data.out_a_ma,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        92,
+        "TEMP",
+        data.detail.out_a_temp_c.or(data.therm_a_c),
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        106,
+        "STATE",
+        if data.out_a_on {
+            DetailTextValue::Static("RUN")
+        } else {
+            DetailTextValue::Static("OFF")
+        },
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        120,
+        "FAULT",
+        DetailTextValue::Static(if data.out_a_on { "CLEAR" } else { "HOLD" }),
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "OUT-B",
+        Point::new(172, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_output_current_row(
+        painter,
+        variant,
+        palette,
+        172,
+        78,
+        "I",
+        data.out_b_on,
+        data.out_b_ma,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        92,
+        "TEMP",
+        data.detail.out_b_temp_c.or(data.therm_b_c),
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        106,
+        "STATE",
+        if data.out_b_on {
+            DetailTextValue::Static("RUN")
+        } else {
+            DetailTextValue::Static("OFF")
+        },
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        120,
+        "FAULT",
+        DetailTextValue::Static(if data.out_b_on { "CLEAR" } else { "STBY" }),
+    )?;
+    Ok(())
+}
+
+fn render_dashboard_charger_detail<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "SOURCE",
+        Point::new(14, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::NumBig,
+        data.detail
+            .input_source
+            .map(DashboardInputSource::label)
+            .unwrap_or("N/A"),
+        Point::new(150, 28),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "PIN",
+        Point::new(214, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match data.input_power_w10() {
+        Some(pin_w10) => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            format_args!("{:>2}.{:01}W", pin_w10 / 10, pin_w10 % 10),
+            Point::new(308, 28),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            "N/A",
+            Point::new(308, 28),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+    }
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "INPUT CHARGER SUMMARY",
+        Point::new(14, 42),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "SESSION",
+        Point::new(14, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        78,
+        "ACTIVE",
+        bool_text_value(data.detail.charger_active.or_else(|| {
+            Some(data.charge_allowed == Some(true) && data.chg_iin_ma.unwrap_or(0) > 0)
+        })),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        92,
+        "STATE",
+        DetailTextValue::Static(data.detail.charger_status.unwrap_or(
+            if data.charge_allowed == Some(false) && data.mains_present {
+                "LOCK"
+            } else if !data.mains_present {
+                "NOAC"
+            } else if data.chg_iin_ma.unwrap_or(0) > 0 {
+                "CHG"
+            } else {
+                "READY"
+            },
+        )),
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        106,
+        "ICHG",
+        data.chg_iin_ma,
+        DetailValueFmt::MilliAmp,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        120,
+        "INPUT",
+        DetailTextValue::Static(if data.mains_present {
+            "PRESENT"
+        } else {
+            "ABSENT"
+        }),
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "PACK SIDE",
+        Point::new(172, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        78,
+        "VPACK",
+        data.batt_pack_mv,
+        DetailValueFmt::MilliVolt,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        92,
+        "BMS",
+        DetailTextValue::Static(match data.bms_state {
+            SelfCheckCommState::Ok => "READY",
+            SelfCheckCommState::Warn => "WARN",
+            SelfCheckCommState::Err => "FAULT",
+            SelfCheckCommState::Pending => "PEND",
+            SelfCheckCommState::NotAvailable => "N/A",
+        }),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        106,
+        "CHG",
+        bool_text_value(data.charge_allowed),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        120,
+        "FAULT",
+        DetailTextValue::Static(data.page_notice(DashboardDetailPage::Charger)),
+    )?;
+    Ok(())
+}
+
+fn render_dashboard_thermal_detail<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    let hotspot_c = max_optional_i16(
+        data.therm_a_c,
+        max_optional_i16(data.therm_b_c, data.detail.board_temp_c),
+    );
+
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "HOTSPOT",
+        Point::new(14, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match hotspot_c {
+        Some(temp_c) => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            format_args!("{:>2}C", temp_c),
+            Point::new(150, 28),
+            HorizontalAlignment::Left,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            "N/A",
+            Point::new(150, 28),
+            HorizontalAlignment::Left,
+            palette.bg,
+        )?,
+    }
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "FAN",
+        Point::new(214, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::NumBig,
+        data.detail.fan_status.unwrap_or("N/A"),
+        Point::new(308, 28),
+        HorizontalAlignment::Right,
+        palette.bg,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "THERMAL PROTECTION SUMMARY",
+        Point::new(14, 42),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "SENSORS",
+        Point::new(14, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        78,
+        "TMP-A",
+        data.therm_a_c,
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        92,
+        "TMP-B",
+        data.therm_b_c,
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        106,
+        "BOARD",
+        data.detail.board_temp_c,
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        120,
+        "BAT",
+        data.detail.battery_temp_c,
+        DetailValueFmt::Celsius,
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "FAN CTRL",
+        Point::new(172, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        78,
+        "RPM",
+        data.detail.fan_rpm,
+        DetailValueFmt::Rpm,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        92,
+        "PWM",
+        data.detail.fan_pwm_pct,
+        DetailValueFmt::Percent,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        106,
+        "MODE",
+        DetailTextValue::Static(data.detail.fan_status.unwrap_or("N/A")),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        120,
+        "FAULT",
+        DetailTextValue::Static(data.page_notice(DashboardDetailPage::Thermal)),
+    )?;
+    Ok(())
+}
+
+fn detail_page_title(page: DashboardDetailPage) -> &'static str {
+    match page {
+        DashboardDetailPage::Cells => "CELL DETAIL",
+        DashboardDetailPage::BatteryFlow => "BATTERY FLOW",
+        DashboardDetailPage::Output => "OUTPUT DETAIL",
+        DashboardDetailPage::Charger => "CHARGER DETAIL",
+        DashboardDetailPage::Thermal => "THERMAL DETAIL",
+    }
+}
+
+fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
+    match page {
+        DashboardDetailPage::Cells => {
+            if data.bms_state == SelfCheckCommState::Err {
+                "FAULT"
+            } else if data.detail.balance_cell.is_some() {
+                "BAL ON"
+            } else if data.bms_rca_alarm == Some(true) {
+                "WARN"
+            } else {
+                "READY"
+            }
+        }
+        DashboardDetailPage::BatteryFlow => match data.bms_current_ma {
+            Some(ma) if ma > 0 => "CHG",
+            Some(ma) if ma < 0 => "DSG",
+            Some(_) => "IDLE",
+            None => "N/A",
+        },
+        DashboardDetailPage::Output => {
+            if !data.out_a_on && !data.out_b_on {
+                "IDLE"
+            } else if !data.out_a_on || !data.out_b_on {
+                "WARN"
+            } else {
+                "REG OK"
+            }
+        }
+        DashboardDetailPage::Charger => {
+            if data.detail.charger_active == Some(true)
+                || (data.charge_allowed == Some(true) && data.chg_iin_ma.unwrap_or(0) > 0)
+            {
+                "ACTIVE"
+            } else if !data.mains_present {
+                "NOAC"
+            } else if data.charge_allowed == Some(false) {
+                "LOCK"
+            } else {
+                "IDLE"
+            }
+        }
+        DashboardDetailPage::Thermal => match max_optional_i16(
+            data.therm_a_c,
+            max_optional_i16(data.therm_b_c, data.detail.board_temp_c),
+        ) {
+            Some(temp) if temp >= 60 => "HOT",
+            Some(temp) if temp >= 45 => "WARM",
+            Some(_) => "COOL",
+            None => "N/A",
+        },
+    }
+}
+
+fn detail_status_color(palette: Palette, status: &'static str) -> u16 {
+    match status {
+        "FAULT" | "HOT" => ERROR_COLOR,
+        "WARN" | "WARM" | "LOCK" | "NOAC" => PROGRESS_COLOR,
+        _ => palette.accent,
+    }
+}
+
+fn draw_dashboard_detail_top_bar<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    title: &'static str,
+    status: &'static str,
+    status_color: u16,
+) -> Result<(), P::Error> {
+    draw_top_bar_with_status(
+        painter,
+        variant,
+        palette,
+        UiFocus::Idle,
+        title,
+        "",
+        status,
+        status_color,
+    )?;
+    draw_panel(
+        painter,
+        DASHBOARD_DETAIL_BACK_X,
+        DASHBOARD_DETAIL_BACK_Y,
+        DASHBOARD_DETAIL_BACK_W,
+        DASHBOARD_DETAIL_BACK_H,
+        palette,
+        false,
+        palette.accent,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "BACK",
+        Point::new(
+            (DASHBOARD_DETAIL_BACK_X + DASHBOARD_DETAIL_BACK_W / 2) as i32,
+            4,
+        ),
+        HorizontalAlignment::Center,
+        palette.text,
+    )
+}
+
+fn draw_dashboard_entry_marker<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    accent: u16,
+) -> Result<(), P::Error> {
+    let marker_x = x + w - 11;
+    let marker_y = y + h - 11;
+    fill(painter, marker_x, marker_y + 6, 8, 2, accent)?;
+    fill(painter, marker_x + 6, marker_y, 2, 8, accent)
+}
+
+enum DetailValueFmt {
+    MilliVolt,
+    MilliAmp,
+    MilliWattHour,
+    Celsius,
+    Percent,
+    Rpm,
+}
+
+enum DetailTextValue {
+    Static(&'static str),
+    Percent(u16),
+    Na,
+}
+
+fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    label: &'static str,
+    value: Option<T>,
+    fmt: DetailValueFmt,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        label,
+        Point::new(x as i32, y as i32),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    match (value.map(IntoDetailValue::into_detail_value), fmt) {
+        (Some(DetailValue::U16(raw)), DetailValueFmt::MilliVolt) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>2}.{:03}V", raw / 1000, raw % 1000),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        (Some(DetailValue::U16(raw)), DetailValueFmt::MilliAmp) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>1}.{:02}A", raw / 1000, (raw % 1000) / 10),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        (Some(DetailValue::U32(raw)), DetailValueFmt::MilliWattHour) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>5}mWh", raw),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        (Some(DetailValue::I16(raw)), DetailValueFmt::Celsius) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>2}C", raw),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        (Some(DetailValue::U8(raw)), DetailValueFmt::Percent) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>3}%", raw),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        (Some(DetailValue::U16(raw)), DetailValueFmt::Rpm) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>4}RPM", raw),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        _ => text(
+            painter,
+            variant,
+            FontRole::Num,
+            "N/A",
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+    }
+}
+
+fn draw_detail_text_row<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    label: &'static str,
+    value: DetailTextValue,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        label,
+        Point::new(x as i32, y as i32),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    match value {
+        DetailTextValue::Static(value) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            value,
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        DetailTextValue::Percent(value) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>3}%", value),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        DetailTextValue::Na => text(
+            painter,
+            variant,
+            FontRole::Num,
+            "N/A",
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+    }
+}
+
+fn draw_output_current_row<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    label: &'static str,
+    enabled: bool,
+    current_ma: Option<i32>,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        label,
+        Point::new(x as i32, y as i32),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    if !enabled {
+        return text(
+            painter,
+            variant,
+            FontRole::Num,
+            "--",
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        );
+    }
+    match current_ma {
+        Some(current_ma) if current_ma >= 0 => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!(
+                "{:>1}.{:02}A",
+                (current_ma as u32) / 1000,
+                ((current_ma as u32) % 1000) / 10
+            ),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        Some(_) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            "--",
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        None => text(
+            painter,
+            variant,
+            FontRole::Num,
+            "N/A",
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+    }
+}
+
+fn bool_text_value(value: Option<bool>) -> DetailTextValue {
+    match value {
+        Some(true) => DetailTextValue::Static("ON"),
+        Some(false) => DetailTextValue::Static("OFF"),
+        None => DetailTextValue::Na,
+    }
+}
+
+fn max_optional_i16(a: Option<i16>, b: Option<i16>) -> Option<i16> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if a > b { a } else { b }),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+enum DetailValue {
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    I16(i16),
+}
+
+trait IntoDetailValue {
+    fn into_detail_value(self) -> DetailValue;
+}
+
+impl IntoDetailValue for u8 {
+    fn into_detail_value(self) -> DetailValue {
+        DetailValue::U8(self)
+    }
+}
+
+impl IntoDetailValue for u16 {
+    fn into_detail_value(self) -> DetailValue {
+        DetailValue::U16(self)
+    }
+}
+
+impl IntoDetailValue for u32 {
+    fn into_detail_value(self) -> DetailValue {
+        DetailValue::U32(self)
+    }
+}
+
+impl IntoDetailValue for i16 {
+    fn into_detail_value(self) -> DetailValue {
+        DetailValue::I16(self)
+    }
 }
 
 fn render_variant_c<P: UiPainter>(
@@ -3517,7 +5210,14 @@ fn render_variant_d<P: UiPainter>(
     data: DashboardData,
     self_check: Option<&SelfCheckUiSnapshot>,
 ) -> Result<(), P::Error> {
-    render_variant_b(painter, variant, palette, data, self_check)
+    render_variant_b(
+        painter,
+        variant,
+        palette,
+        data,
+        DashboardRoute::Home,
+        self_check,
+    )
 }
 
 struct DiagCard<T>
@@ -4707,5 +6407,49 @@ mod tests {
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
         assert_eq!(live.input_power_w10(), None);
+    }
+
+    #[test]
+    fn dashboard_hit_test_maps_fixed_home_regions() {
+        assert_eq!(
+            dashboard_hit_test(DashboardRoute::Home, 30, 40),
+            Some(DashboardTouchTarget::HomeOutput)
+        );
+        assert_eq!(
+            dashboard_hit_test(DashboardRoute::Home, 30, 120),
+            Some(DashboardTouchTarget::HomeThermal)
+        );
+        assert_eq!(
+            dashboard_hit_test(DashboardRoute::Home, 250, 40),
+            Some(DashboardTouchTarget::HomeCells)
+        );
+        assert_eq!(
+            dashboard_hit_test(DashboardRoute::Home, 250, 90),
+            Some(DashboardTouchTarget::HomeCharger)
+        );
+        assert_eq!(
+            dashboard_hit_test(DashboardRoute::Home, 250, 140),
+            Some(DashboardTouchTarget::HomeBatteryFlow)
+        );
+    }
+
+    #[test]
+    fn dashboard_detail_back_target_maps_to_home() {
+        assert_eq!(
+            dashboard_hit_test(
+                DashboardRoute::Detail(DashboardDetailPage::Output),
+                DASHBOARD_DETAIL_BACK_X + 4,
+                DASHBOARD_DETAIL_BACK_Y + 4
+            ),
+            Some(DashboardTouchTarget::DetailBack)
+        );
+        assert_eq!(
+            dashboard_route_for_target(DashboardTouchTarget::DetailBack),
+            DashboardRoute::Home
+        );
+        assert_eq!(
+            dashboard_route_for_target(DashboardTouchTarget::HomeOutput),
+            DashboardRoute::Detail(DashboardDetailPage::Output)
+        );
     }
 }

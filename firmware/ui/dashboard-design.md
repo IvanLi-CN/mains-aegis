@@ -30,7 +30,10 @@
 - 工作模式固定四态：`BYPASS / STANDBY / ASSIST / BACKUP`。
 - 充电策略固定：仅 `STANDBY` 允许充电；`BYPASS/ASSIST/BACKUP` 显示非充电状态（`LOCK/NOAC`）。
 - 右侧三卡语义固定，不与负载侧字段混用。
+- 首页 5 个模块同时承担二级仪表盘入口：主 KPI=`Output`、次级信息=`Thermal`、`BATTERY`=`Cells`、`CHARGE`=`Charger`、`DISCHG`=`Battery Flow`。
 - 视觉样式（色板、字体分工、状态词形）以 [design-language.md](design-language.md) 为准，本页不再重复定义 Token 细节。
+
+详情页冻结口径见：[dashboard-detail-design.md](dashboard-detail-design.md)
 
 ## 5. 冻结渲染图（四模式）
 
