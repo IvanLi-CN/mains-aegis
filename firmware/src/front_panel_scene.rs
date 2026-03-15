@@ -97,6 +97,8 @@ static FONT_A_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13B_t
 static FONT_A_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_7x14B_tf>();
 static FONT_B_NUM: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13_mf>();
 static FONT_B_NUM_BIG: FontRenderer = FontRenderer::new::<fonts::u8g2_font_t0_22b_tn>();
+static FONT_A_DETAIL: FontRenderer = FontRenderer::new::<fonts::u8g2_font_9x15B_tf>();
+static FONT_B_DETAIL: FontRenderer = FontRenderer::new::<fonts::u8g2_font_9x15_mf>();
 // Compact roles intentionally reuse >=10px fonts to enforce minimum glyph height.
 
 #[derive(Clone, Copy)]
@@ -122,8 +124,11 @@ enum FontRole {
     TextTitle,
     TextBody,
     TextCompact,
+    DetailTitle,
+    DetailBody,
     Num,
     NumCompact,
+    DetailNum,
     NumBig,
 }
 
@@ -2994,7 +2999,7 @@ fn render_dashboard_detail_page<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         notice,
         Point::new(12, 150),
         HorizontalAlignment::Left,
@@ -3013,7 +3018,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "PACK",
         Point::new(14, 26),
         HorizontalAlignment::Left,
@@ -3056,7 +3061,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "BAL CELL",
         Point::new(14, 42),
         HorizontalAlignment::Left,
@@ -3065,7 +3070,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::Num,
+        FontRole::DetailNum,
         match data.detail.balance_cell {
             Some(cell) if (1..=4).contains(&cell) => match cell {
                 1 => "C1 ACTIVE",
@@ -3083,7 +3088,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "CELL MV",
         Point::new(14, 64),
         HorizontalAlignment::Left,
@@ -3133,7 +3138,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "CELL TEMP",
         Point::new(172, 64),
         HorizontalAlignment::Left,
@@ -3191,7 +3196,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "VPACK",
         Point::new(14, 26),
         HorizontalAlignment::Left,
@@ -3220,7 +3225,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "IPACK",
         Point::new(176, 26),
         HorizontalAlignment::Left,
@@ -3253,7 +3258,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         if matches!(data.bms_current_ma, Some(ma) if ma > 0) {
             "CHARGING PATH"
         } else if matches!(data.bms_current_ma, Some(ma) if ma < 0) {
@@ -3269,7 +3274,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "ENERGY",
         Point::new(14, 64),
         HorizontalAlignment::Left,
@@ -3325,7 +3330,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "GATE STATE",
         Point::new(172, 64),
         HorizontalAlignment::Left,
@@ -3382,7 +3387,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "VOUT",
         Point::new(14, 26),
         HorizontalAlignment::Left,
@@ -3411,7 +3416,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "POUT",
         Point::new(176, 26),
         HorizontalAlignment::Left,
@@ -3440,7 +3445,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "DUAL REGULATION PATH",
         Point::new(14, 42),
         HorizontalAlignment::Left,
@@ -3450,7 +3455,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "OUT-A",
         Point::new(14, 64),
         HorizontalAlignment::Left,
@@ -3506,7 +3511,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "OUT-B",
         Point::new(172, 64),
         HorizontalAlignment::Left,
@@ -3570,7 +3575,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "SOURCE",
         Point::new(14, 26),
         HorizontalAlignment::Left,
@@ -3591,7 +3596,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "PIN",
         Point::new(214, 26),
         HorizontalAlignment::Left,
@@ -3620,7 +3625,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "INPUT CHARGER SUMMARY",
         Point::new(14, 42),
         HorizontalAlignment::Left,
@@ -3630,7 +3635,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "SESSION",
         Point::new(14, 64),
         HorizontalAlignment::Left,
@@ -3681,7 +3686,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "PACK SIDE",
         Point::new(172, 64),
         HorizontalAlignment::Left,
@@ -3744,7 +3749,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "HOTSPOT",
         Point::new(14, 26),
         HorizontalAlignment::Left,
@@ -3773,7 +3778,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "FAN",
         Point::new(214, 26),
         HorizontalAlignment::Left,
@@ -3791,7 +3796,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "THERMAL PROTECTION SUMMARY",
         Point::new(14, 42),
         HorizontalAlignment::Left,
@@ -3801,7 +3806,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "SENSORS",
         Point::new(14, 64),
         HorizontalAlignment::Left,
@@ -3851,7 +3856,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "FAN CTRL",
         Point::new(172, 64),
         HorizontalAlignment::Left,
@@ -4021,7 +4026,7 @@ fn draw_dashboard_detail_top_bar<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "BACK",
         Point::new(
             (DASHBOARD_DETAIL_BACK_X + DASHBOARD_DETAIL_BACK_W / 2) as i32,
@@ -4074,7 +4079,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         label,
         Point::new(x as i32, y as i32),
         HorizontalAlignment::Left,
@@ -4084,7 +4089,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         (Some(DetailValue::U16(raw)), DetailValueFmt::MilliVolt) => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             format_args!("{:>2}.{:03}V", raw / 1000, raw % 1000),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4093,7 +4098,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         (Some(DetailValue::U16(raw)), DetailValueFmt::MilliAmp) => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             format_args!("{:>1}.{:02}A", raw / 1000, (raw % 1000) / 10),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4102,7 +4107,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         (Some(DetailValue::U32(raw)), DetailValueFmt::MilliWattHour) => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             format_args!("{:>5}mWh", raw),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4111,7 +4116,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         (Some(DetailValue::I16(raw)), DetailValueFmt::Celsius) => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             format_args!("{:>2}C", raw),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4120,7 +4125,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         (Some(DetailValue::U8(raw)), DetailValueFmt::Percent) => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             format_args!("{:>3}%", raw),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4129,7 +4134,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         (Some(DetailValue::U16(raw)), DetailValueFmt::Rpm) => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             format_args!("{:>4}RPM", raw),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4138,7 +4143,7 @@ fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
         _ => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             "N/A",
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4159,7 +4164,7 @@ fn draw_detail_text_row<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         label,
         Point::new(x as i32, y as i32),
         HorizontalAlignment::Left,
@@ -4169,7 +4174,7 @@ fn draw_detail_text_row<P: UiPainter>(
         DetailTextValue::Static(value) => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             value,
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4178,7 +4183,7 @@ fn draw_detail_text_row<P: UiPainter>(
         DetailTextValue::Percent(value) => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             format_args!("{:>3}%", value),
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4187,7 +4192,7 @@ fn draw_detail_text_row<P: UiPainter>(
         DetailTextValue::Na => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             "N/A",
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4209,7 +4214,7 @@ fn draw_output_current_row<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         label,
         Point::new(x as i32, y as i32),
         HorizontalAlignment::Left,
@@ -4219,7 +4224,7 @@ fn draw_output_current_row<P: UiPainter>(
         return text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             "--",
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4230,7 +4235,7 @@ fn draw_output_current_row<P: UiPainter>(
         Some(current_ma) if current_ma >= 0 => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             format_args!(
                 "{:>1}.{:02}A",
                 (current_ma as u32) / 1000,
@@ -4243,7 +4248,7 @@ fn draw_output_current_row<P: UiPainter>(
         Some(_) => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             "--",
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -4252,7 +4257,7 @@ fn draw_output_current_row<P: UiPainter>(
         None => text(
             painter,
             variant,
-            FontRole::Num,
+            FontRole::DetailNum,
             "N/A",
             Point::new((x + 132) as i32, y as i32),
             HorizontalAlignment::Right,
@@ -6173,7 +6178,7 @@ fn draw_top_bar_with_status<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextTitle,
+        FontRole::DetailTitle,
         title,
         Point::new(8, 2),
         HorizontalAlignment::Left,
@@ -6182,7 +6187,7 @@ fn draw_top_bar_with_status<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         subtitle,
         Point::new(106, 2),
         HorizontalAlignment::Left,
@@ -6191,7 +6196,7 @@ fn draw_top_bar_with_status<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         status_tag,
         Point::new((UI_W - 8) as i32, 2),
         HorizontalAlignment::Right,
@@ -6340,8 +6345,11 @@ fn text<P: UiPainter>(
         FontRole::TextTitle => &FONT_A_TITLE,
         FontRole::TextBody => &FONT_A_BODY,
         FontRole::TextCompact => &FONT_A_BODY,
+        FontRole::DetailTitle => &FONT_A_DETAIL,
+        FontRole::DetailBody => &FONT_A_DETAIL,
         FontRole::Num => &FONT_B_NUM,
         FontRole::NumCompact => &FONT_B_NUM,
+        FontRole::DetailNum => &FONT_B_DETAIL,
         FontRole::NumBig => &FONT_B_NUM_BIG,
     };
 
