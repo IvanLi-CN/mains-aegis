@@ -110,4 +110,5 @@
 
 ## 变更记录（Change log）
 
+- 2026-03-15: merge-proof review 收敛补丁：live DF 抓取失败时改为 fail-closed，不再把 `stock section1` 伪装成有效 live DF；`ManufacturerAccess(0x00)` toggle / reset 统一复用同一套多变体发送路径；`flash/monitor` 目录锁补上 stale owner PID 回收，避免异常退出后永久卡死。
 - 2026-03-15: 补齐 reply `PEC` 探测并完成二次实机验证；本规格范围内的工具协议/只读诊断/互斥收敛任务全部关闭，后续 `Cell4` 修复与主固件自检链路移交其它规格跟踪。

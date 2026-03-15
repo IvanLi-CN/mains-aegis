@@ -936,9 +936,7 @@ fn send_bms_device_reset<I2C>(i2c: &mut I2C, addr: u8) -> Result<(), bq40z50::Bm
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    write_bms_mac_via_ma00(i2c, addr, 0x0041, BmsMacWordOrder::Little, false)?;
-    spin_delay(BMS_MAC_TOGGLE_SETTLE);
-    Ok(())
+    send_bms_manufacturer_toggle(i2c, addr, 0x0041, "device_reset", true)
 }
 
 fn read_bms_df_u16_via_mb44<I2C>(
@@ -1259,24 +1257,21 @@ fn send_bms_manufacturer_toggle<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let direct = [
-        bq40z50::cmd::MANUFACTURER_ACCESS,
-        (mac_cmd >> 8) as u8,
-        (mac_cmd & 0x00FF) as u8,
-    ];
-    let addr_w = addr << 1;
-    let pec = crc8_smbus(&[addr_w, direct[0], direct[1], direct[2]]);
-    let with_pec = [direct[0], direct[1], direct[2], pec];
-
-    for (via, frame) in [("direct", &direct[..]), ("pec", &with_pec[..])] {
-        if i2c.write(addr, frame).is_ok() {
+    for (order, with_pec) in [
+        (BmsMacWordOrder::Little, false),
+        (BmsMacWordOrder::Little, true),
+        (BmsMacWordOrder::Big, false),
+        (BmsMacWordOrder::Big, true),
+    ] {
+        if write_bms_mac_via_ma00(i2c, addr, mac_cmd, order, with_pec).is_ok() {
             if !quiet {
                 defmt::warn!(
-                    "bms_diag: addr=0x{=u8:x} stage={} mac_cmd=0x{=u16:x} via={}",
+                    "bms_diag: addr=0x{=u8:x} stage={} mac_cmd=0x{=u16:x} via={} pec={}",
                     addr,
                     stage,
                     mac_cmd,
-                    via,
+                    order.label(),
+                    if with_pec { "yes" } else { "no" },
                 );
             }
             spin_delay(BMS_MAC_TOGGLE_SETTLE);
@@ -5408,21 +5403,12 @@ where
             }
         }
         let e = last_err.unwrap_or(bq40z50::BmsDiagError::I2cNack);
-        self.bms_rom_df_section1[..BMS_ROM_SECTION1_USED_LEN]
-            .copy_from_slice(&BMS_ROM_SECTION1_IMAGE[..BMS_ROM_SECTION1_USED_LEN]);
-        patch_bms_live_df_mainboard(&mut self.bms_rom_df_section1[..]);
-        self.bms_rom_df_section1_valid = true;
+        self.bms_rom_df_section1_valid = false;
         if !quiet {
-            let da_off = (BMS_DF_ADDR_DA_CONFIGURATION - 0x4000) as usize;
-            let da = u16::from_le_bytes([
-                self.bms_rom_df_section1[da_off],
-                self.bms_rom_df_section1[da_off + 1],
-            ]);
             defmt::warn!(
-                "bms_df_capture: addr=0x{=u8:x} mode=stock_mainboard_fallback err={} da_cfg=0x{=u16:x}",
+                "bms_df_capture: addr=0x{=u8:x} mode=live_df_required err={}",
                 addr,
                 e,
-                da
             );
         }
     }
