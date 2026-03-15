@@ -670,6 +670,45 @@ where
         }
         spin_delay(BMS_MAC_WRITE_SETTLE);
 
+        let mut buf_pec = [0u8; 36];
+        match i2c.write_read(
+            addr,
+            &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS],
+            &mut buf_pec,
+        ) {
+            Ok(()) => {
+                let declared_len = buf_pec[0];
+                if declared_len == BMS_DF_REPLY_LEN_WITH_ADDR {
+                    let payload_end = 1usize + declared_len as usize;
+                    let addr_w = addr << 1;
+                    let addr_r = addr_w | 1;
+                    let mut pec_input = [0u8; 40];
+                    pec_input[0] = addr_w;
+                    pec_input[1] = bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS;
+                    pec_input[2] = addr_r;
+                    pec_input[3..(3 + payload_end)].copy_from_slice(&buf_pec[..payload_end]);
+                    let expected = crc8_smbus(&pec_input[..(3 + payload_end)]);
+                    if expected != buf_pec[payload_end] {
+                        last_err = bq40z50::BmsDiagError::InconsistentSample;
+                        continue;
+                    }
+                    let echoed_addr = u16::from_le_bytes([buf_pec[1], buf_pec[2]]);
+                    if echoed_addr != df_addr {
+                        last_err = bq40z50::BmsDiagError::BadRange;
+                        continue;
+                    }
+                    let mut compact = bq40z50::BlockReadRaw {
+                        declared_len: 32,
+                        payload_len: 32,
+                        payload: [0u8; 32],
+                    };
+                    compact.payload.copy_from_slice(&buf_pec[3..35]);
+                    return Ok((echoed_addr, compact));
+                }
+            }
+            Err(_) => {}
+        }
+
         let mut buf = [0u8; 35];
         match i2c.write_read(addr, &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS], &mut buf) {
             Ok(()) => {
@@ -1142,23 +1181,37 @@ fn probe_bms_md23_reply_pec<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    write_bms_mac_via_ma00(i2c, addr, mac_cmd, BmsMacWordOrder::Little, false)?;
-    spin_delay(BMS_MAC_WRITE_SETTLE);
-    match expected_declared_len {
-        2 => probe_block_reply_pec::<I2C, 4>(
-            i2c,
-            addr,
-            bq40z50::cmd::MANUFACTURER_DATA,
-            expected_declared_len,
-        ),
-        11 => probe_block_reply_pec::<I2C, 13>(
-            i2c,
-            addr,
-            bq40z50::cmd::MANUFACTURER_DATA,
-            expected_declared_len,
-        ),
-        _ => Err(bq40z50::BmsDiagError::BadRange),
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+    for (order, with_pec) in [
+        (BmsMacWordOrder::Little, false),
+        (BmsMacWordOrder::Little, true),
+    ] {
+        if let Err(e) = write_bms_mac_via_ma00(i2c, addr, mac_cmd, order, with_pec) {
+            last_err = e;
+            continue;
+        }
+        spin_delay(BMS_MAC_WRITE_SETTLE);
+        let attempt = match expected_declared_len {
+            2 => probe_block_reply_pec::<I2C, 4>(
+                i2c,
+                addr,
+                bq40z50::cmd::MANUFACTURER_DATA,
+                expected_declared_len,
+            ),
+            11 => probe_block_reply_pec::<I2C, 13>(
+                i2c,
+                addr,
+                bq40z50::cmd::MANUFACTURER_DATA,
+                expected_declared_len,
+            ),
+            _ => return Err(bq40z50::BmsDiagError::BadRange),
+        };
+        match attempt {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = e,
+        }
     }
+    Err(last_err)
 }
 
 fn probe_bms_mb44_reply_pec<I2C>(
@@ -1177,24 +1230,36 @@ where
         cmd[0],
         cmd[1],
     ];
-    i2c.write(addr, &direct)
-        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
-    spin_delay(BMS_MAC_WRITE_SETTLE);
-    match expected_declared_len {
-        34 => probe_block_reply_pec::<I2C, 36>(
-            i2c,
-            addr,
-            bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
-            expected_declared_len,
-        ),
-        32 => probe_block_reply_pec::<I2C, 34>(
-            i2c,
-            addr,
-            bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
-            expected_declared_len,
-        ),
-        _ => Err(bq40z50::BmsDiagError::BadRange),
+    let addr_w = addr << 1;
+    let pec = crc8_smbus(&[addr_w, direct[0], direct[1], direct[2], direct[3]]);
+    let with_pec = [direct[0], direct[1], direct[2], direct[3], pec];
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+    for frame in [&direct[..], &with_pec[..]] {
+        if i2c.write(addr, frame).is_err() {
+            continue;
+        }
+        spin_delay(BMS_MAC_WRITE_SETTLE);
+        let attempt = match expected_declared_len {
+            34 => probe_block_reply_pec::<I2C, 36>(
+                i2c,
+                addr,
+                bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+                expected_declared_len,
+            ),
+            32 => probe_block_reply_pec::<I2C, 34>(
+                i2c,
+                addr,
+                bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+                expected_declared_len,
+            ),
+            _ => return Err(bq40z50::BmsDiagError::BadRange),
+        };
+        match attempt {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = e,
+        }
     }
+    Err(last_err)
 }
 
 fn parse_direct_block_u16(raw: &bq40z50::BlockReadRaw, index: usize) -> Option<u16> {
