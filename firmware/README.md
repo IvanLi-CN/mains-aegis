@@ -408,7 +408,7 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
 
 - `fan: command mode=mid pwm_pct=60 ...`
 - `fan: command mode=high pwm_pct=100 ...`
-- `fan: telemetry mode=off pwm_pct=0 ...`
+- `fan: telemetry requested_mode=off requested_pwm_pct=0 applied_mode=high applied_pwm_pct=100 output_degraded=true ...`
 
 异常/恢复：
 

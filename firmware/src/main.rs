@@ -101,7 +101,7 @@ fn apply_fan_command(
     pwm_degraded: &mut bool,
     fan_vset_fail_safe: &mut Option<Output<'static>>,
     status: esp_firmware::fan::Status,
-) {
+) -> output::AppliedFanState {
     let next = AppliedFanOutput {
         enabled: status.command.enabled(),
         pwm_pct: status.pwm_pct(FAN_MID_PWM_PCT),
@@ -109,11 +109,19 @@ fn apply_fan_command(
     if *pwm_degraded {
         latch_fan_vset_fail_safe(fan_vset_fail_safe);
         fan_en.set_high();
-        return;
+        return output::AppliedFanState {
+            command: esp_firmware::fan::FanLevel::High,
+            pwm_pct: 100,
+            degraded: true,
+        };
     }
 
     if applied.as_ref() == Some(&next) {
-        return;
+        return output::AppliedFanState {
+            command: status.command,
+            pwm_pct: next.pwm_pct,
+            degraded: false,
+        };
     }
 
     if let Err(err) = fan_pwm.set_duty(next.pwm_pct) {
@@ -126,7 +134,11 @@ fn apply_fan_command(
         *applied = None;
         latch_fan_vset_fail_safe(fan_vset_fail_safe);
         fan_en.set_high();
-        return;
+        return output::AppliedFanState {
+            command: esp_firmware::fan::FanLevel::High,
+            pwm_pct: 100,
+            degraded: true,
+        };
     }
 
     if next.enabled {
@@ -135,6 +147,11 @@ fn apply_fan_command(
         fan_en.set_low();
     }
     *applied = Some(next);
+    output::AppliedFanState {
+        command: status.command,
+        pwm_pct: next.pwm_pct,
+        degraded: false,
+    }
 }
 
 fn spin_delay(wait: Duration) {
@@ -751,8 +768,13 @@ fn main() -> ! {
     front_panel.update_bms_activation_state(power.bms_activation_state());
     let mut applied_fan = None;
     let mut fan_pwm_degraded = false;
+    let mut applied_fan_state = output::AppliedFanState {
+        command: esp_firmware::fan::FanLevel::High,
+        pwm_pct: 100,
+        degraded: true,
+    };
     if fan_pwm_ready {
-        apply_fan_command(
+        applied_fan_state = apply_fan_command(
             &mut fan_en,
             &_fan_pwm_channel,
             &mut applied_fan,
@@ -773,9 +795,9 @@ fn main() -> ! {
         audio_dout,
         || {
             let irq_events = irq_tracker.take_delta();
-            power.tick(&irq_events);
+            let fan_telemetry_due = power.tick(&irq_events);
             if fan_pwm_ready {
-                apply_fan_command(
+                applied_fan_state = apply_fan_command(
                     &mut fan_en,
                     &_fan_pwm_channel,
                     &mut applied_fan,
@@ -783,6 +805,9 @@ fn main() -> ! {
                     &mut fan_vset_fail_safe,
                     power.fan_command(),
                 );
+            }
+            if fan_telemetry_due {
+                power.log_fan_telemetry(applied_fan_state);
             }
             front_panel.update_self_check_snapshot(power.ui_snapshot());
             front_panel.update_bms_activation_state(power.bms_activation_state());
@@ -829,9 +854,9 @@ fn main() -> ! {
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(2_000) {
             let irq_events = irq_tracker.take_delta();
-            power.tick(&irq_events);
+            let fan_telemetry_due = power.tick(&irq_events);
             if fan_pwm_ready {
-                apply_fan_command(
+                applied_fan_state = apply_fan_command(
                     &mut fan_en,
                     &_fan_pwm_channel,
                     &mut applied_fan,
@@ -839,6 +864,9 @@ fn main() -> ! {
                     &mut fan_vset_fail_safe,
                     power.fan_command(),
                 );
+            }
+            if fan_telemetry_due {
+                power.log_fan_telemetry(applied_fan_state);
             }
             front_panel.update_self_check_snapshot(power.ui_snapshot());
             front_panel.update_bms_activation_state(power.bms_activation_state());

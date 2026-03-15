@@ -1253,6 +1253,13 @@ pub struct Config {
     pub self_check_snapshot: SelfCheckUiSnapshot,
 }
 
+#[derive(Clone, Copy)]
+pub struct AppliedFanState {
+    pub command: fan::FanLevel,
+    pub pwm_pct: u8,
+    pub degraded: bool,
+}
+
 impl<'d, I2C> PowerManager<'d, I2C>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
@@ -1419,11 +1426,11 @@ where
         self.recompute_ui_mode();
     }
 
-    pub fn tick(&mut self, irq: &IrqSnapshot) {
+    pub fn tick(&mut self, irq: &IrqSnapshot) -> bool {
         if let Some(until) = self.bms_activation_isolation_until {
             if Instant::now() < until {
                 self.update_fan_state(irq);
-                return;
+                return false;
             }
             self.bms_activation_isolation_until = None;
         }
@@ -1451,10 +1458,10 @@ where
                 self.bms_activation_isolation_until =
                     Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
                 self.update_fan_state(irq);
-                return;
+                return false;
             }
             self.update_fan_state(irq);
-            return;
+            return false;
         }
 
         self.bms_activation_isolation_until = None;
@@ -1468,10 +1475,10 @@ where
                 self.bms_activation_isolation_until =
                     Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
                 self.update_fan_state(irq);
-                return;
+                return false;
             }
             self.update_fan_state(irq);
-            return;
+            return false;
         }
         let mut bms_i2c_active = self.maybe_poll_bms(irq);
         bms_i2c_active |= self.maybe_track_bms_activation();
@@ -1479,17 +1486,15 @@ where
             self.bms_activation_isolation_until =
                 Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
             self.update_fan_state(irq);
-            return;
+            return false;
         }
         if self.bms_activation_state == BmsActivationState::Pending {
             self.update_fan_state(irq);
-            return;
+            return false;
         }
         let telemetry_printed = self.maybe_print_telemetry();
         self.update_fan_state(irq);
-        if telemetry_printed {
-            self.log_fan_telemetry();
-        }
+        telemetry_printed
     }
 
     pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
@@ -1620,12 +1625,15 @@ where
         }
     }
 
-    fn log_fan_telemetry(&self) {
+    pub fn log_fan_telemetry(&self, applied: AppliedFanState) {
         let status = self.fan.status();
         defmt::info!(
-            "fan: telemetry mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?} tach_recent={=bool} tach_fault={=bool} cooldown_active={=bool}",
+            "fan: telemetry requested_mode={} requested_pwm_pct={=u8} applied_mode={} applied_pwm_pct={=u8} output_degraded={=bool} temp_source={} control_temp_c_x16={=?} tach_recent={=bool} tach_fault={=bool} cooldown_active={=bool}",
             status.command.as_str(),
             status.pwm_pct(self.cfg.fan_config.mid_pwm_pct),
+            applied.command.as_str(),
+            applied.pwm_pct,
+            applied.degraded,
             status.temp_source.as_str(),
             status.control_temp_c_x16,
             status.tach_pulse_seen_recently,
@@ -4400,6 +4408,9 @@ where
         self.next_telemetry_at = now + self.cfg.telemetry_period;
 
         if self.cfg.enabled_outputs == EnabledOutputs::None {
+            self.refresh_tmp112_snapshot(OutputChannel::OutA);
+            self.refresh_tmp112_snapshot(OutputChannel::OutB);
+            self.next_fan_temp_refresh_at = now + self.cfg.telemetry_period;
             return true;
         }
 
@@ -4465,7 +4476,13 @@ where
             };
             self.ui_snapshot.tmp_b_c_x16 = capture.temp_c_x16;
             self.ui_snapshot.tmp_b_c = capture.temp_c_x16.map(|v| v / 16);
+        } else {
+            self.refresh_tmp112_snapshot(OutputChannel::OutB);
         }
+        if !self.cfg.enabled_outputs.is_enabled(OutputChannel::OutA) {
+            self.refresh_tmp112_snapshot(OutputChannel::OutA);
+        }
+        self.next_fan_temp_refresh_at = now + self.cfg.telemetry_period;
 
         self.ui_snapshot.ina_total_ma = match (
             self.ui_snapshot.tps_a_iout_ma,
