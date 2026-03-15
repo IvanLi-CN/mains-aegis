@@ -18,6 +18,7 @@ test-fw-audio-playback = ["test-fw"]
 # Test firmware default entry selection (single-choice).
 test-fw-default-screen-static = ["test-fw"]
 test-fw-default-audio-playback = ["test-fw"]
+display-spi-10mhz = []
 display-spi-20mhz = []
 display-spi-40mhz = []
 

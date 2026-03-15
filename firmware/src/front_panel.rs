@@ -63,12 +63,12 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const BOOT_SPLASH_HOLD: Duration = Duration::from_millis(900);
 const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
 const PANEL_INIT_SPI_FREQ_MHZ: u32 = 10;
-const PANEL_RUNTIME_SPI_FREQ_MHZ: u32 = if cfg!(feature = "display-spi-40mhz") {
-    40
+const PANEL_RUNTIME_SPI_FREQ_MHZ: u32 = if cfg!(feature = "display-spi-10mhz") {
+    10
 } else if cfg!(feature = "display-spi-20mhz") {
     20
 } else {
-    10
+    40
 };
 const DASHBOARD_VARIANT: UiVariant = UiVariant::InstrumentB;
 
