@@ -91,6 +91,12 @@ const FOOTER_H: u16 = 0;
 const ERROR_COLOR: u16 = 0xF800;
 const SUCCESS_COLOR: u16 = 0x07E0;
 const PROGRESS_COLOR: u16 = 0xFD20;
+const DETAIL_TITLE_X: i32 = 74;
+const DETAIL_STATUS_X: i32 = (UI_W - 8) as i32;
+const DETAIL_ROW_Y_1: u16 = 78;
+const DETAIL_ROW_Y_2: u16 = 94;
+const DETAIL_ROW_Y_3: u16 = 110;
+const DETAIL_ROW_Y_4: u16 = 126;
 
 // User preference: non-numeric text uses Font A, numeric fields use fixed-width Font B.
 static FONT_A_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13B_tf>();
@@ -3099,7 +3105,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        78,
+        DETAIL_ROW_Y_1,
         "C1",
         data.detail.cell_mv[0],
         DetailValueFmt::MilliVolt,
@@ -3109,7 +3115,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        92,
+        DETAIL_ROW_Y_2,
         "C2",
         data.detail.cell_mv[1],
         DetailValueFmt::MilliVolt,
@@ -3119,7 +3125,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        106,
+        DETAIL_ROW_Y_3,
         "C3",
         data.detail.cell_mv[2],
         DetailValueFmt::MilliVolt,
@@ -3129,7 +3135,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        120,
+        DETAIL_ROW_Y_4,
         "C4",
         data.detail.cell_mv[3],
         DetailValueFmt::MilliVolt,
@@ -3149,7 +3155,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        78,
+        DETAIL_ROW_Y_1,
         "T1",
         data.detail.cell_temp_c[0],
         DetailValueFmt::Celsius,
@@ -3159,7 +3165,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        92,
+        DETAIL_ROW_Y_2,
         "T2",
         data.detail.cell_temp_c[1],
         DetailValueFmt::Celsius,
@@ -3169,7 +3175,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        106,
+        DETAIL_ROW_Y_3,
         "T3",
         data.detail.cell_temp_c[2],
         DetailValueFmt::Celsius,
@@ -3179,7 +3185,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        120,
+        DETAIL_ROW_Y_4,
         "T4",
         data.detail.cell_temp_c[3],
         DetailValueFmt::Celsius,
@@ -3285,7 +3291,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        78,
+        DETAIL_ROW_Y_1,
         "STORE",
         data.detail.battery_energy_mwh,
         DetailValueFmt::MilliWattHour,
@@ -3295,7 +3301,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        92,
+        DETAIL_ROW_Y_2,
         "FULL",
         data.detail.battery_full_capacity_mwh,
         DetailValueFmt::MilliWattHour,
@@ -3305,7 +3311,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        108,
+        DETAIL_ROW_Y_3,
         "SOC",
         match data.bms_soc_pct {
             Some(_) => DetailTextValue::Percent(data.bms_soc_pct.unwrap_or(0)),
@@ -3317,7 +3323,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        122,
+        DETAIL_ROW_Y_4,
         "STATE",
         match data.bms_current_ma {
             Some(ma) if ma > 0 => DetailTextValue::Static("CHG"),
@@ -3341,7 +3347,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        78,
+        DETAIL_ROW_Y_1,
         "CHG",
         bool_text_value(data.detail.charge_fet_on),
     )?;
@@ -3350,7 +3356,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        92,
+        DETAIL_ROW_Y_2,
         "DSG",
         bool_text_value(data.detail.discharge_fet_on),
     )?;
@@ -3359,7 +3365,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        106,
+        DETAIL_ROW_Y_3,
         "PCHG",
         bool_text_value(data.detail.precharge_fet_on),
     )?;
@@ -3368,7 +3374,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        122,
+        DETAIL_ROW_Y_4,
         "FAULT",
         DetailTextValue::Static(detail_fault_row_text(
             DashboardDetailPage::BatteryFlow,
@@ -3466,7 +3472,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        78,
+        DETAIL_ROW_Y_1,
         "I",
         data.out_a_on,
         data.out_a_ma,
@@ -3476,7 +3482,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        92,
+        DETAIL_ROW_Y_2,
         "TEMP",
         data.detail.out_a_temp_c.or(data.therm_a_c),
         DetailValueFmt::Celsius,
@@ -3486,7 +3492,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        106,
+        DETAIL_ROW_Y_3,
         "STATE",
         if data.out_a_on {
             DetailTextValue::Static("RUN")
@@ -3499,7 +3505,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        120,
+        DETAIL_ROW_Y_4,
         "FAULT",
         DetailTextValue::Static(output_fault_row_text(
             data.tps_a_state,
@@ -3522,7 +3528,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        78,
+        DETAIL_ROW_Y_1,
         "I",
         data.out_b_on,
         data.out_b_ma,
@@ -3532,7 +3538,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        92,
+        DETAIL_ROW_Y_2,
         "TEMP",
         data.detail.out_b_temp_c.or(data.therm_b_c),
         DetailValueFmt::Celsius,
@@ -3542,7 +3548,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        106,
+        DETAIL_ROW_Y_3,
         "STATE",
         if data.out_b_on {
             DetailTextValue::Static("RUN")
@@ -3555,7 +3561,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        120,
+        DETAIL_ROW_Y_4,
         "FAULT",
         DetailTextValue::Static(output_fault_row_text(
             data.tps_b_state,
@@ -3646,7 +3652,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        78,
+        DETAIL_ROW_Y_1,
         "ACTIVE",
         bool_text_value(charger_active_value(data)),
     )?;
@@ -3655,7 +3661,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        92,
+        DETAIL_ROW_Y_2,
         "STATE",
         DetailTextValue::Static(charger_state_text(data)),
     )?;
@@ -3664,7 +3670,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        106,
+        DETAIL_ROW_Y_3,
         "ICHG",
         data.chg_iin_ma,
         DetailValueFmt::MilliAmp,
@@ -3674,7 +3680,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        120,
+        DETAIL_ROW_Y_4,
         "INPUT",
         DetailTextValue::Static(if data.mains_present {
             "PRESENT"
@@ -3697,7 +3703,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        78,
+        DETAIL_ROW_Y_1,
         "VPACK",
         data.batt_pack_mv,
         DetailValueFmt::MilliVolt,
@@ -3707,7 +3713,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        92,
+        DETAIL_ROW_Y_2,
         "BMS",
         DetailTextValue::Static(match data.bms_state {
             SelfCheckCommState::Ok => "READY",
@@ -3722,7 +3728,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        106,
+        DETAIL_ROW_Y_3,
         "CHG",
         bool_text_value(data.charge_allowed),
     )?;
@@ -3731,7 +3737,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        120,
+        DETAIL_ROW_Y_4,
         "FAULT",
         DetailTextValue::Static(detail_fault_row_text(DashboardDetailPage::Charger, data)),
     )?;
@@ -3817,7 +3823,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        78,
+        DETAIL_ROW_Y_1,
         "TMP-A",
         data.therm_a_c,
         DetailValueFmt::Celsius,
@@ -3827,7 +3833,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        92,
+        DETAIL_ROW_Y_2,
         "TMP-B",
         data.therm_b_c,
         DetailValueFmt::Celsius,
@@ -3837,7 +3843,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        106,
+        DETAIL_ROW_Y_3,
         "BOARD",
         data.detail.board_temp_c,
         DetailValueFmt::Celsius,
@@ -3847,7 +3853,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         variant,
         palette,
         14,
-        120,
+        DETAIL_ROW_Y_4,
         "BAT",
         data.detail.battery_temp_c,
         DetailValueFmt::Celsius,
@@ -3867,7 +3873,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        78,
+        DETAIL_ROW_Y_1,
         "RPM",
         data.detail.fan_rpm,
         DetailValueFmt::Rpm,
@@ -3877,7 +3883,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        92,
+        DETAIL_ROW_Y_2,
         "PWM",
         data.detail.fan_pwm_pct,
         DetailValueFmt::Percent,
@@ -3887,7 +3893,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        106,
+        DETAIL_ROW_Y_3,
         "MODE",
         DetailTextValue::Static(data.detail.fan_status.unwrap_or("N/A")),
     )?;
@@ -3896,7 +3902,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         variant,
         palette,
         172,
-        120,
+        DETAIL_ROW_Y_4,
         "FAULT",
         DetailTextValue::Static(detail_fault_row_text(DashboardDetailPage::Thermal, data)),
     )?;
@@ -4003,16 +4009,7 @@ fn draw_dashboard_detail_top_bar<P: UiPainter>(
     status: &'static str,
     status_color: u16,
 ) -> Result<(), P::Error> {
-    draw_top_bar_with_status(
-        painter,
-        variant,
-        palette,
-        UiFocus::Idle,
-        title,
-        "",
-        status,
-        status_color,
-    )?;
+    fill(painter, 0, 0, UI_W, HEADER_H, palette.panel)?;
     draw_panel(
         painter,
         DASHBOARD_DETAIL_BACK_X,
@@ -4034,6 +4031,24 @@ fn draw_dashboard_detail_top_bar<P: UiPainter>(
         ),
         HorizontalAlignment::Center,
         palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        title,
+        Point::new(DETAIL_TITLE_X, 2),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        status,
+        Point::new(DETAIL_STATUS_X, 2),
+        HorizontalAlignment::Right,
+        status_color,
     )
 }
 
