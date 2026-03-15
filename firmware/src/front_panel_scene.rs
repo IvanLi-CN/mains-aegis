@@ -720,7 +720,8 @@ impl DashboardLiveData {
     }
 
     fn input_power_w10(self) -> Option<u32> {
-        Some((self.input_vbus_mv? as u32 * self.input_ibus_ma?.unsigned_abs()) / 100_000)
+        let ibus_ma = self.input_ibus_ma?;
+        Some((self.input_vbus_mv? as u32 * ibus_ma.max(0) as u32) / 100_000)
     }
 
     fn output_power_w10(self) -> Option<u32> {
@@ -4665,5 +4666,41 @@ mod tests {
         assert_eq!(live.output_power_w10(), Some(358));
         assert_eq!(live.battery_discharge_ma(), Some(1_880));
         assert_eq!(live.battery_max_temp_c(), Some(41));
+    }
+
+    #[test]
+    fn live_dashboard_clamps_reverse_input_current_to_zero_power() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.input_vbus_mv = Some(20_100);
+        snapshot.input_ibus_ma = Some(-1_250);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(live.input_power_w10(), Some(0));
+    }
+
+    #[test]
+    fn live_dashboard_keeps_zero_input_current_as_zero_power() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.input_vbus_mv = Some(20_100);
+        snapshot.input_ibus_ma = Some(0);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(live.input_power_w10(), Some(0));
+    }
+
+    #[test]
+    fn live_dashboard_keeps_invalid_input_sample_as_na() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.input_vbus_mv = None;
+        snapshot.input_ibus_ma = None;
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(live.input_power_w10(), None);
     }
 }
