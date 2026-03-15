@@ -618,8 +618,7 @@ fn stable_mains_state(
 }
 
 fn mains_present_edge(prev: StableMainsState, next: StableMainsState) -> Option<bool> {
-    if prev.source == AudioMainsSource::Vin
-        && next.source == AudioMainsSource::Vin
+    if prev.source == next.source
         && prev.present.is_some()
         && next.present.is_some()
         && prev.present != next.present
@@ -6620,7 +6619,7 @@ mod tests {
     }
 
     #[test]
-    fn mains_present_edge_requires_vin_truth_on_both_sides() {
+    fn mains_present_edge_requires_a_stable_truth_source() {
         let vin_true = StableMainsState {
             present: Some(true),
             source: AudioMainsSource::Vin,
@@ -6633,8 +6632,13 @@ mod tests {
             present: Some(false),
             source: AudioMainsSource::ChargerFallback,
         };
+        let charger_true = StableMainsState {
+            present: Some(true),
+            source: AudioMainsSource::ChargerFallback,
+        };
 
         assert_eq!(mains_present_edge(vin_true, vin_false), Some(false));
+        assert_eq!(mains_present_edge(charger_false, charger_true), Some(true));
         assert_eq!(mains_present_edge(vin_true, charger_false), None);
         assert_eq!(mains_present_edge(charger_false, vin_true), None);
     }
