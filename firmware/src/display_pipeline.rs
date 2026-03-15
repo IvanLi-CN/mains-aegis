@@ -155,6 +155,12 @@ pub struct DisplayBuffers {
 }
 
 impl DisplayBuffers {
+    /// # Safety
+    ///
+    /// `ptr` must point to the beginning of mapped PSRAM owned by the display
+    /// pipeline, and `available_bytes` must describe the accessible byte range
+    /// starting at `ptr`. The caller must ensure no other code aliases or
+    /// mutates the returned framebuffers for the lifetime of this object.
     pub unsafe fn from_psram_raw_parts(
         ptr: *mut u8,
         available_bytes: usize,

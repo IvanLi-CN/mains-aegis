@@ -144,6 +144,7 @@ pub struct FrontPanel {
 }
 
 impl FrontPanel {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         i2c: HalI2c<'static, Blocking>,
         spi: HalSpi<'static, Blocking>,
@@ -842,9 +843,7 @@ impl FrontPanel {
             return Some(UiAction::ClearBmsActivationResult);
         }
 
-        let Some((x, y)) = snapshot.touch_point else {
-            return None;
-        };
+        let (x, y) = snapshot.touch_point?;
 
         defmt::info!(
             "ui: touch edge x={=u16} y={=u16} overlay={}",
