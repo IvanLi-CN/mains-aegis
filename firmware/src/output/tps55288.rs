@@ -364,6 +364,7 @@ pub struct TelemetryCapture {
     pub comm_ok: bool,
     pub fault_active: bool,
     pub output_enabled: Option<bool>,
+    pub vbus_mv: Option<u16>,
     pub current_ma: Option<i32>,
     pub temp_c_x16: Option<i16>,
 }
@@ -520,6 +521,10 @@ where
         TelemetryValue::Value(v) => Some(v),
         TelemetryValue::Err(_) => None,
     };
+    let vbus_mv = match vbus_mv {
+        TelemetryValue::Value(v) => Some(v as u16),
+        TelemetryValue::Err(_) => None,
+    };
     let temp_c_x16 = match temp_c_x16 {
         TelemetryValue::Value(v) => Some(v as i16),
         TelemetryValue::Err(_) => None,
@@ -529,6 +534,7 @@ where
         comm_ok,
         fault_active,
         output_enabled,
+        vbus_mv,
         current_ma,
         temp_c_x16,
     }

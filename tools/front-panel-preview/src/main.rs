@@ -24,6 +24,8 @@ fn base_bq40_snapshot(mode: UpsMode) -> SelfCheckUiSnapshot {
     snapshot.tca6408a = SelfCheckCommState::Ok;
     snapshot.fusb302 = SelfCheckCommState::Ok;
     snapshot.fusb302_vbus_present = Some(true);
+    snapshot.input_vbus_mv = Some(19_240);
+    snapshot.input_ibus_ma = Some(1180);
     snapshot.ina3221 = SelfCheckCommState::Ok;
     snapshot.ina_total_ma = Some(1130);
     snapshot.bq25792 = SelfCheckCommState::Ok;
@@ -31,20 +33,105 @@ fn base_bq40_snapshot(mode: UpsMode) -> SelfCheckUiSnapshot {
     snapshot.bq25792_ichg_ma = Some(520);
     snapshot.bq25792_vbat_present = Some(true);
     snapshot.bq40z50 = SelfCheckCommState::Err;
+    snapshot.bq40z50_pack_mv = None;
+    snapshot.bq40z50_current_ma = None;
     snapshot.bq40z50_soc_pct = None;
     snapshot.bq40z50_rca_alarm = None;
     snapshot.bq40z50_discharge_ready = None;
     snapshot.bq40z50_last_result = None;
     snapshot.tps_a = SelfCheckCommState::Ok;
     snapshot.tps_a_enabled = Some(true);
+    snapshot.out_a_vbus_mv = Some(19_020);
     snapshot.tps_a_iout_ma = Some(430);
     snapshot.tps_b = SelfCheckCommState::Ok;
     snapshot.tps_b_enabled = Some(false);
+    snapshot.out_b_vbus_mv = Some(19_010);
     snapshot.tps_b_iout_ma = Some(0);
     snapshot.tmp_a = SelfCheckCommState::Ok;
     snapshot.tmp_a_c = Some(39);
     snapshot.tmp_b = SelfCheckCommState::Ok;
     snapshot.tmp_b_c = Some(37);
+    snapshot
+}
+
+fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
+    let mut snapshot = base_bq40_snapshot(mode);
+    snapshot.bq40z50 = SelfCheckCommState::Ok;
+    snapshot.bq40z50_rca_alarm = Some(false);
+    snapshot.bq40z50_no_battery = Some(false);
+    snapshot.bq40z50_discharge_ready = Some(true);
+
+    match mode {
+        UpsMode::Off => {
+            snapshot.fusb302_vbus_present = Some(true);
+            snapshot.input_vbus_mv = Some(19_110);
+            snapshot.input_ibus_ma = Some(1260);
+            snapshot.bq25792_allow_charge = Some(false);
+            snapshot.bq25792_ichg_ma = None;
+            snapshot.tps_a_enabled = Some(false);
+            snapshot.out_a_vbus_mv = None;
+            snapshot.tps_a_iout_ma = None;
+            snapshot.tps_b_enabled = Some(false);
+            snapshot.out_b_vbus_mv = None;
+            snapshot.tps_b_iout_ma = None;
+            snapshot.ina_total_ma = None;
+            snapshot.bq40z50_pack_mv = Some(15_180);
+            snapshot.bq40z50_current_ma = Some(60);
+            snapshot.bq40z50_soc_pct = Some(64);
+        }
+        UpsMode::Standby => {
+            snapshot.fusb302_vbus_present = Some(true);
+            snapshot.input_vbus_mv = Some(19_220);
+            snapshot.input_ibus_ma = Some(1320);
+            snapshot.bq25792_allow_charge = Some(true);
+            snapshot.bq25792_ichg_ma = Some(540);
+            snapshot.tps_a_enabled = Some(false);
+            snapshot.out_a_vbus_mv = None;
+            snapshot.tps_a_iout_ma = None;
+            snapshot.tps_b_enabled = Some(false);
+            snapshot.out_b_vbus_mv = None;
+            snapshot.tps_b_iout_ma = None;
+            snapshot.ina_total_ma = None;
+            snapshot.bq40z50_pack_mv = Some(15_260);
+            snapshot.bq40z50_current_ma = Some(520);
+            snapshot.bq40z50_soc_pct = Some(67);
+        }
+        UpsMode::Supplement => {
+            snapshot.fusb302_vbus_present = Some(true);
+            snapshot.input_vbus_mv = Some(19_180);
+            snapshot.input_ibus_ma = Some(820);
+            snapshot.bq25792_allow_charge = Some(false);
+            snapshot.bq25792_ichg_ma = None;
+            snapshot.tps_a_enabled = Some(true);
+            snapshot.out_a_vbus_mv = Some(19_040);
+            snapshot.tps_a_iout_ma = Some(620);
+            snapshot.tps_b_enabled = Some(true);
+            snapshot.out_b_vbus_mv = Some(19_000);
+            snapshot.tps_b_iout_ma = Some(510);
+            snapshot.ina_total_ma = Some(1130);
+            snapshot.bq40z50_pack_mv = Some(14_980);
+            snapshot.bq40z50_current_ma = Some(-900);
+            snapshot.bq40z50_soc_pct = Some(59);
+        }
+        UpsMode::Backup => {
+            snapshot.fusb302_vbus_present = Some(false);
+            snapshot.input_vbus_mv = None;
+            snapshot.input_ibus_ma = None;
+            snapshot.bq25792_allow_charge = Some(false);
+            snapshot.bq25792_ichg_ma = None;
+            snapshot.tps_a_enabled = Some(true);
+            snapshot.out_a_vbus_mv = Some(18_860);
+            snapshot.tps_a_iout_ma = Some(980);
+            snapshot.tps_b_enabled = Some(true);
+            snapshot.out_b_vbus_mv = Some(18_830);
+            snapshot.tps_b_iout_ma = Some(910);
+            snapshot.ina_total_ma = Some(1890);
+            snapshot.bq40z50_pack_mv = Some(14_820);
+            snapshot.bq40z50_current_ma = Some(-1880);
+            snapshot.bq40z50_soc_pct = Some(53);
+        }
+    }
+
     snapshot
 }
 
@@ -91,6 +178,9 @@ fn bq40_snapshot_for_scenario(
         }
         ScenarioArg::Default
         | ScenarioArg::DisplayDiag
+        | ScenarioArg::DashboardRuntimeStandby
+        | ScenarioArg::DashboardRuntimeAssist
+        | ScenarioArg::DashboardRuntimeBackup
         | ScenarioArg::TestAudio
         | ScenarioArg::TestNavigation => SelfCheckOverlay::None,
     };
@@ -111,17 +201,24 @@ fn run() -> Result<(), String> {
         return Err("--out-dir must be an absolute path".into());
     }
 
+    let effective_mode = match args.scenario {
+        ScenarioArg::DashboardRuntimeStandby => ModeArg::Standby,
+        ScenarioArg::DashboardRuntimeAssist => ModeArg::Supplement,
+        ScenarioArg::DashboardRuntimeBackup => ModeArg::Backup,
+        _ => args.mode,
+    };
+
     let frame_dir = args
         .out_dir
         .join(format!("variant-{}", args.variant.as_tag()))
-        .join(format!("mode-{}", args.mode.as_tag()))
+        .join(format!("mode-{}", effective_mode.as_tag()))
         .join(format!("focus-{}", args.focus.as_tag()))
         .join(format!("scenario-{}", args.scenario.as_tag()));
     fs::create_dir_all(&frame_dir).map_err(|e| format!("create output dir failed: {e}"))?;
 
     let mut framebuffer = FrameBuffer::new(UI_W as usize, UI_H as usize);
     let model = UiModel {
-        mode: args.mode.into_scene(),
+        mode: effective_mode.into_scene(),
         focus: args.focus.into_scene(),
         touch_irq: args.focus.into_scene() == UiFocus::Touch,
         frame_no: args.frame_no,
@@ -146,6 +243,31 @@ fn run() -> Result<(), String> {
             };
             front_panel_scene::render_display_diagnostic(&mut framebuffer, &meta)
                 .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
+        ScenarioArg::DashboardRuntimeStandby
+        | ScenarioArg::DashboardRuntimeAssist
+        | ScenarioArg::DashboardRuntimeBackup => {
+            let mode = match args.scenario {
+                ScenarioArg::DashboardRuntimeStandby => UpsMode::Standby,
+                ScenarioArg::DashboardRuntimeAssist => UpsMode::Supplement,
+                ScenarioArg::DashboardRuntimeBackup => UpsMode::Backup,
+                _ => unreachable!(),
+            };
+            let snapshot = dashboard_snapshot_for_mode(mode);
+            let dashboard_model = UiModel {
+                mode,
+                focus: UiFocus::Idle,
+                touch_irq: false,
+                frame_no: args.frame_no,
+            };
+            front_panel_scene::render_frame_with_self_check_overlay(
+                &mut framebuffer,
+                &dashboard_model,
+                UiVariant::InstrumentB,
+                Some(&snapshot),
+                SelfCheckOverlay::None,
+            )
+            .map_err(|_| "render failed unexpectedly".to_string())?;
         }
         ScenarioArg::Bq40Offline
         | ScenarioArg::Bq40OfflineDialog
@@ -346,6 +468,9 @@ impl ModeArg {
 enum ScenarioArg {
     Default,
     DisplayDiag,
+    DashboardRuntimeStandby,
+    DashboardRuntimeAssist,
+    DashboardRuntimeBackup,
     Bq40Offline,
     Bq40OfflineDialog,
     Bq40Activating,
@@ -363,6 +488,9 @@ impl ScenarioArg {
         match raw.to_ascii_lowercase().as_str() {
             "default" => Ok(Self::Default),
             "display-diag" => Ok(Self::DisplayDiag),
+            "dashboard-runtime-standby" => Ok(Self::DashboardRuntimeStandby),
+            "dashboard-runtime-assist" => Ok(Self::DashboardRuntimeAssist),
+            "dashboard-runtime-backup" => Ok(Self::DashboardRuntimeBackup),
             "bq40-offline" => Ok(Self::Bq40Offline),
             "bq40-offline-dialog" => Ok(Self::Bq40OfflineDialog),
             "bq40-activating" => Ok(Self::Bq40Activating),
@@ -374,7 +502,7 @@ impl ScenarioArg {
             "test-audio" => Ok(Self::TestAudio),
             "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation)"
             )),
         }
     }
@@ -383,6 +511,9 @@ impl ScenarioArg {
         match self {
             ScenarioArg::Default => "default",
             ScenarioArg::DisplayDiag => "display-diag",
+            ScenarioArg::DashboardRuntimeStandby => "dashboard-runtime-standby",
+            ScenarioArg::DashboardRuntimeAssist => "dashboard-runtime-assist",
+            ScenarioArg::DashboardRuntimeBackup => "dashboard-runtime-backup",
             ScenarioArg::Bq40Offline => "bq40-offline",
             ScenarioArg::Bq40OfflineDialog => "bq40-offline-dialog",
             ScenarioArg::Bq40Activating => "bq40-activating",
@@ -476,7 +607,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",

@@ -163,14 +163,14 @@ const AUDIO_SELF_TEST_WATERMARK_BYTES: usize = 7 * 4092;
 // panel redraw completes, so runtime audio needs a larger steady-state buffer.
 const AUDIO_RUNTIME_WATERMARK_BYTES: usize = 10 * 4092;
 
-fn spin_delay(wait: Duration) {
-    let start = Instant::now();
-    while start.elapsed() < wait {}
-}
-
 fn audio_refill_budget(available: usize, target_buffered_bytes: usize) -> usize {
     let buffered = AUDIO_DMA_BUFFER_BYTES.saturating_sub(available);
     target_buffered_bytes.saturating_sub(buffered) & !0x3
+}
+
+fn spin_delay(wait: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < wait {}
 }
 
 fn prepare_bitbang_pin(pin: &mut Flex<'_>) {
@@ -718,13 +718,14 @@ fn main() -> ! {
         bl,
     );
     if !panel_probe.screen_present() {
-        defmt::warn!("ui: skip display init because panel_io probe is missing");
-    } else {
-        front_panel.init_best_effort();
-        front_panel.update_self_check_snapshot(front_panel_scene::SelfCheckUiSnapshot::pending(
-            front_panel_scene::UpsMode::Standby,
-        ));
+        defmt::warn!(
+            "ui: panel_io probe is missing; attempting display init anyway in case the initial scan was transient"
+        );
     }
+    front_panel.init_best_effort();
+    front_panel.update_self_check_snapshot(front_panel_scene::SelfCheckUiSnapshot::pending(
+        front_panel_scene::UpsMode::Standby,
+    ));
 
     let (_, _, tx_buffer, tx_descriptors) =
         esp_hal::dma_circular_buffers!(0, AUDIO_DMA_BUFFER_BYTES);
@@ -981,6 +982,7 @@ fn main() -> ! {
     power.init_best_effort();
     front_panel.update_self_check_snapshot(power.ui_snapshot());
     front_panel.update_bms_activation_state(power.bms_activation_state());
+    front_panel.enter_dashboard();
     let mut applied_fan = None;
     let mut fan_pwm_degraded = false;
     let mut applied_fan_state = output::AppliedFanState {
