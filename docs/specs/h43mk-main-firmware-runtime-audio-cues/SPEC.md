@@ -132,6 +132,7 @@
 - 运行时 `mains_present` 真相源已统一到 `DC5025 VIN>=3V`；`BQ25792 input_present` 继续服务 charger 本地逻辑与诊断，但不再参与音频 cue 的市电判定。
 - 若 `VIN` 只发生瞬时采样缺失，或因运行态暂时跳过 `VIN` 遥测而错过单个采样周期，运行时音效继续沿用最近一次已知的 `VIN` 市电状态；只有新的有效 `VIN` 样本跨过 `3V` 门槛时才产生来电/断电 cue。
 - 若 `VIN` 连续缺失，或连续多个周期都在跳过 `VIN` 遥测而超出瞬时容错窗口，运行时音效回退到 charger `input_present` 作为降级兜底，避免把过期的 `VIN` 市电状态无限期锁存。
+- 当运行时只是从 `VIN` 真相源切换到 charger 降级兜底，或从 charger 降级兜底切回 `VIN` 真相源时，不得把“数据源切换”伪造为 `mains_present_dc` / `mains_absent_dc` 边沿。
 - `high_stress` 运行时信号已并入 TMP112 `TLOW` 条件；即使 charger 未上报热状态，只要实际温度越过 `TLOW` 且未触发停机，仍会触发该 cue。
 - BMS protection / permanent-failure 状态已在自检结果中种子化，进入主循环前即可驱动 `battery_protection` 的首次调度。
 - TPS OVP/OCP runtime state 已细化为按通道持有；只有成功读取到某路 TPS `STATUS` 时才会覆盖该路 fault seed，未读到的通道继续保留自检/上次有效观测结果。

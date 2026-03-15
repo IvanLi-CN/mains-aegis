@@ -550,9 +550,7 @@ fn stable_mains_present(
     vin_vbus_mv: Option<u16>,
     charger_present: Option<bool>,
 ) -> Option<bool> {
-    mains_present_from_vin(vin_vbus_mv)
-        .or(vin_mains_present)
-        .or(charger_present)
+    stable_mains_state(vin_mains_present, vin_vbus_mv, charger_present).present
 }
 
 fn record_vin_sample_failure(vin_mains_present: &mut Option<bool>, missing_streak: &mut u8) {
@@ -576,6 +574,59 @@ fn mark_vin_telemetry_unavailable(
     } else {
         *vin_mains_present = None;
         *missing_streak = 0;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AudioMainsSource {
+    #[default]
+    Unknown,
+    Vin,
+    ChargerFallback,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct StableMainsState {
+    present: Option<bool>,
+    source: AudioMainsSource,
+}
+
+fn stable_mains_state(
+    vin_mains_present: Option<bool>,
+    vin_vbus_mv: Option<u16>,
+    charger_present: Option<bool>,
+) -> StableMainsState {
+    if let Some(present) = mains_present_from_vin(vin_vbus_mv) {
+        return StableMainsState {
+            present: Some(present),
+            source: AudioMainsSource::Vin,
+        };
+    }
+    if let Some(present) = vin_mains_present {
+        return StableMainsState {
+            present: Some(present),
+            source: AudioMainsSource::Vin,
+        };
+    }
+    if let Some(present) = charger_present {
+        return StableMainsState {
+            present: Some(present),
+            source: AudioMainsSource::ChargerFallback,
+        };
+    }
+    StableMainsState::default()
+}
+
+fn mains_present_edge(prev: StableMainsState, next: StableMainsState) -> Option<bool> {
+    if prev.source == AudioMainsSource::Vin
+        && next.source == AudioMainsSource::Vin
+        && prev.present.is_some()
+        && next.present.is_some()
+        && prev.present != next.present
+    {
+        next.present
+    } else {
+        None
     }
 }
 
@@ -1503,6 +1554,7 @@ impl Default for AudioBatteryLowState {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AudioSignalSnapshot {
     pub mains_present: Option<bool>,
+    pub mains_source: AudioMainsSource,
     pub charge_phase: AudioChargePhase,
     pub thermal_stress: bool,
     pub battery_low: AudioBatteryLowState,
@@ -4754,11 +4806,12 @@ where
 
     fn refresh_audio_signals(&mut self) {
         let hold_no_battery_result = self.should_hold_no_battery_result();
-        let mains_present = stable_mains_present(
+        let mains_state = stable_mains_state(
             self.ui_snapshot.vin_mains_present,
             self.ui_snapshot.vin_vbus_mv,
             self.ui_snapshot.fusb302_vbus_present,
         );
+        let mains_present = mains_state.present;
         let tmp_a_hot = self
             .cfg
             .detected_tmp_outputs
@@ -4825,6 +4878,7 @@ where
         };
         let snapshot = AudioSignalSnapshot {
             mains_present,
+            mains_source: mains_state.source,
             charge_phase: self.charger_audio.phase,
             thermal_stress: self.charger_audio.thermal_stress || tmp_a_hot || tmp_b_hot,
             battery_low,
@@ -4843,11 +4897,17 @@ where
         }
 
         let prev = self.audio_snapshot;
-        if prev.mains_present.is_some()
-            && snapshot.mains_present.is_some()
-            && prev.mains_present != snapshot.mains_present
-        {
-            self.audio_events.mains_present_changed = snapshot.mains_present;
+        if let Some(edge) = mains_present_edge(
+            StableMainsState {
+                present: prev.mains_present,
+                source: prev.mains_source,
+            },
+            StableMainsState {
+                present: snapshot.mains_present,
+                source: snapshot.mains_source,
+            },
+        ) {
+            self.audio_events.mains_present_changed = Some(edge);
         }
         if prev.charge_phase != AudioChargePhase::Unknown
             && snapshot.charge_phase != AudioChargePhase::Unknown
@@ -5130,6 +5190,71 @@ where
         self.recompute_ui_mode();
     }
 
+    fn refresh_vin_telemetry(&mut self) {
+        if self.cfg.telemetry_include_vin_ch3 {
+            if self.ina_ready {
+                let bus = ina3221::read_bus_mv(&mut self.i2c, ina3221::Channel::Ch3);
+                let shunt = ina3221::read_shunt_uv(&mut self.i2c, ina3221::Channel::Ch3);
+                let vbus_mv = match bus {
+                    Ok(v) => {
+                        self.ui_snapshot.vin_vbus_mv = u16::try_from(v).ok();
+                        self.ui_snapshot.vin_mains_present =
+                            mains_present_from_vin(self.ui_snapshot.vin_vbus_mv);
+                        self.vin_sample_missing_streak = 0;
+                        TelemetryValue::Value(v)
+                    }
+                    Err(e) => {
+                        mark_vin_telemetry_unavailable(
+                            self.cfg.telemetry_include_vin_ch3,
+                            &mut self.ui_snapshot.vin_vbus_mv,
+                            &mut self.ui_snapshot.vin_iin_ma,
+                            &mut self.ui_snapshot.vin_mains_present,
+                            &mut self.vin_sample_missing_streak,
+                        );
+                        TelemetryValue::Err(ina_error_kind(e))
+                    }
+                };
+                let current_ma = match shunt {
+                    Ok(shunt_uv) => {
+                        let current_ma = ina3221::shunt_uv_to_current_ma(shunt_uv, 7);
+                        self.ui_snapshot.vin_iin_ma = Some(current_ma);
+                        TelemetryValue::Value(current_ma)
+                    }
+                    Err(e) => {
+                        self.ui_snapshot.vin_iin_ma = None;
+                        TelemetryValue::Err(ina_error_kind(e))
+                    }
+                };
+                defmt::info!(
+                    "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
+                    vbus_mv,
+                    current_ma
+                );
+            } else {
+                mark_vin_telemetry_unavailable(
+                    self.cfg.telemetry_include_vin_ch3,
+                    &mut self.ui_snapshot.vin_vbus_mv,
+                    &mut self.ui_snapshot.vin_iin_ma,
+                    &mut self.ui_snapshot.vin_mains_present,
+                    &mut self.vin_sample_missing_streak,
+                );
+                defmt::info!(
+                    "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
+                    TelemetryValue::Err("ina_uninit"),
+                    TelemetryValue::Err("ina_uninit")
+                );
+            }
+        } else {
+            mark_vin_telemetry_unavailable(
+                self.cfg.telemetry_include_vin_ch3,
+                &mut self.ui_snapshot.vin_vbus_mv,
+                &mut self.ui_snapshot.vin_iin_ma,
+                &mut self.ui_snapshot.vin_mains_present,
+                &mut self.vin_sample_missing_streak,
+            );
+        }
+    }
+
     fn maybe_print_telemetry(&mut self) -> bool {
         let now = Instant::now();
         if now < self.next_telemetry_at {
@@ -5141,13 +5266,7 @@ where
             self.refresh_tmp112_snapshot(OutputChannel::OutA);
             self.refresh_tmp112_snapshot(OutputChannel::OutB);
             self.next_fan_temp_refresh_at = now + self.cfg.telemetry_period;
-            mark_vin_telemetry_unavailable(
-                self.cfg.telemetry_include_vin_ch3,
-                &mut self.ui_snapshot.vin_vbus_mv,
-                &mut self.ui_snapshot.vin_iin_ma,
-                &mut self.ui_snapshot.vin_mains_present,
-                &mut self.vin_sample_missing_streak,
-            );
+            self.refresh_vin_telemetry();
             self.recompute_ui_mode();
             return true;
         }
@@ -5236,68 +5355,7 @@ where
             (None, None) => None,
         };
 
-        if self.cfg.telemetry_include_vin_ch3 {
-            if self.ina_ready {
-                let bus = ina3221::read_bus_mv(&mut self.i2c, ina3221::Channel::Ch3);
-                let shunt = ina3221::read_shunt_uv(&mut self.i2c, ina3221::Channel::Ch3);
-                let vbus_mv = match bus {
-                    Ok(v) => {
-                        self.ui_snapshot.vin_vbus_mv = u16::try_from(v).ok();
-                        self.ui_snapshot.vin_mains_present =
-                            mains_present_from_vin(self.ui_snapshot.vin_vbus_mv);
-                        self.vin_sample_missing_streak = 0;
-                        TelemetryValue::Value(v)
-                    }
-                    Err(e) => {
-                        mark_vin_telemetry_unavailable(
-                            self.cfg.telemetry_include_vin_ch3,
-                            &mut self.ui_snapshot.vin_vbus_mv,
-                            &mut self.ui_snapshot.vin_iin_ma,
-                            &mut self.ui_snapshot.vin_mains_present,
-                            &mut self.vin_sample_missing_streak,
-                        );
-                        TelemetryValue::Err(ina_error_kind(e))
-                    }
-                };
-                let current_ma = match shunt {
-                    Ok(shunt_uv) => {
-                        let current_ma = ina3221::shunt_uv_to_current_ma(shunt_uv, 7);
-                        self.ui_snapshot.vin_iin_ma = Some(current_ma);
-                        TelemetryValue::Value(current_ma)
-                    }
-                    Err(e) => {
-                        self.ui_snapshot.vin_iin_ma = None;
-                        TelemetryValue::Err(ina_error_kind(e))
-                    }
-                };
-                defmt::info!(
-                    "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
-                    vbus_mv,
-                    current_ma
-                );
-            } else {
-                mark_vin_telemetry_unavailable(
-                    self.cfg.telemetry_include_vin_ch3,
-                    &mut self.ui_snapshot.vin_vbus_mv,
-                    &mut self.ui_snapshot.vin_iin_ma,
-                    &mut self.ui_snapshot.vin_mains_present,
-                    &mut self.vin_sample_missing_streak,
-                );
-                defmt::info!(
-                    "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
-                    TelemetryValue::Err("ina_uninit"),
-                    TelemetryValue::Err("ina_uninit")
-                );
-            }
-        } else {
-            mark_vin_telemetry_unavailable(
-                self.cfg.telemetry_include_vin_ch3,
-                &mut self.ui_snapshot.vin_vbus_mv,
-                &mut self.ui_snapshot.vin_iin_ma,
-                &mut self.ui_snapshot.vin_mains_present,
-                &mut self.vin_sample_missing_streak,
-            );
-        }
+        self.refresh_vin_telemetry();
         self.recompute_ui_mode();
         true
     }
@@ -6534,6 +6592,51 @@ mod tests {
             stable_mains_present(Some(false), Some(19_200), Some(false)),
             Some(true)
         );
+    }
+
+    #[test]
+    fn stable_mains_state_tracks_when_audio_is_using_charger_fallback() {
+        assert_eq!(
+            stable_mains_state(None, None, Some(false)),
+            StableMainsState {
+                present: Some(false),
+                source: AudioMainsSource::ChargerFallback,
+            }
+        );
+        assert_eq!(
+            stable_mains_state(Some(true), None, Some(false)),
+            StableMainsState {
+                present: Some(true),
+                source: AudioMainsSource::Vin,
+            }
+        );
+        assert_eq!(
+            stable_mains_state(Some(false), Some(19_200), Some(false)),
+            StableMainsState {
+                present: Some(true),
+                source: AudioMainsSource::Vin,
+            }
+        );
+    }
+
+    #[test]
+    fn mains_present_edge_requires_vin_truth_on_both_sides() {
+        let vin_true = StableMainsState {
+            present: Some(true),
+            source: AudioMainsSource::Vin,
+        };
+        let vin_false = StableMainsState {
+            present: Some(false),
+            source: AudioMainsSource::Vin,
+        };
+        let charger_false = StableMainsState {
+            present: Some(false),
+            source: AudioMainsSource::ChargerFallback,
+        };
+
+        assert_eq!(mains_present_edge(vin_true, vin_false), Some(false));
+        assert_eq!(mains_present_edge(vin_true, charger_false), None);
+        assert_eq!(mains_present_edge(charger_false, vin_true), None);
     }
 
     #[test]
