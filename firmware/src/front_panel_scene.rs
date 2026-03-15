@@ -181,8 +181,10 @@ pub struct SelfCheckUiSnapshot {
     pub tps_b_iout_ma: Option<i32>,
     pub tmp_a: SelfCheckCommState,
     pub tmp_a_c: Option<i16>,
+    pub tmp_a_c_x16: Option<i16>,
     pub tmp_b: SelfCheckCommState,
     pub tmp_b_c: Option<i16>,
+    pub tmp_b_c_x16: Option<i16>,
 }
 
 impl SelfCheckUiSnapshot {
@@ -213,8 +215,10 @@ impl SelfCheckUiSnapshot {
             tps_b_iout_ma: None,
             tmp_a: SelfCheckCommState::Pending,
             tmp_a_c: None,
+            tmp_a_c_x16: None,
             tmp_b: SelfCheckCommState::Pending,
             tmp_b_c: None,
+            tmp_b_c_x16: None,
         }
     }
 }

@@ -2,6 +2,7 @@ pub mod tps55288;
 
 use esp_firmware::bq25792;
 use esp_firmware::bq40z50;
+use esp_firmware::fan;
 use esp_firmware::ina3221;
 use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
@@ -750,8 +751,10 @@ where
     } else {
         SelfCheckCommState::Err
     };
-    ui.tmp_a_c = tmp_a_read.ok().map(|v| v / 16);
-    ui.tmp_b_c = tmp_b_read.ok().map(|v| v / 16);
+    ui.tmp_a_c_x16 = tmp_a_read.ok();
+    ui.tmp_a_c = ui.tmp_a_c_x16.map(|v| v / 16);
+    ui.tmp_b_c_x16 = tmp_b_read.ok();
+    ui.tmp_b_c = ui.tmp_b_c_x16.map(|v| v / 16);
     reporter(SelfCheckStage::Sensors, ui);
 
     // Stage 1: screen module presence (already probed on I2C2 before entering this function).
@@ -1234,8 +1237,10 @@ pub struct PowerManager<'d, I2C> {
     cfg: Config,
 
     next_telemetry_at: Instant,
+    next_fan_temp_refresh_at: Instant,
     last_fault_log_at: Option<Instant>,
     last_therm_kill_hint_at: Option<Instant>,
+    fan_started_at: Instant,
 
     ina_ready: bool,
     ina_next_retry_at: Option<Instant>,
@@ -1283,6 +1288,7 @@ pub struct PowerManager<'d, I2C> {
     chg_watchdog_restore: Option<u8>,
     outputs_restore_on_bms_ready: EnabledOutputs,
     outputs_blocked_by_bms: bool,
+    fan: fan::Controller,
 
     ui_snapshot: SelfCheckUiSnapshot,
     audio_snapshot: AudioSignalSnapshot,
@@ -1350,6 +1356,7 @@ pub struct Config {
     pub telemetry_include_vin_ch3: bool,
     pub tmp112_tlow_c_x16: i16,
     pub tmp112_thigh_c_x16: i16,
+    pub fan_config: fan::Config,
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
     pub initial_audio_charge_phase: AudioChargePhase,
@@ -1362,6 +1369,13 @@ pub struct Config {
     pub bms_boot_diag_auto_validate: bool,
     pub bms_addr: Option<u8>,
     pub self_check_snapshot: SelfCheckUiSnapshot,
+}
+
+#[derive(Clone, Copy)]
+pub struct AppliedFanState {
+    pub command: fan::FanLevel,
+    pub pwm_pct: u8,
+    pub degraded: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1492,8 +1506,10 @@ where
             cfg,
 
             next_telemetry_at: now,
+            next_fan_temp_refresh_at: now,
             last_fault_log_at: None,
             last_therm_kill_hint_at: None,
+            fan_started_at: now,
 
             ina_ready: false,
             ina_next_retry_at: if outputs_allowed { Some(now) } else { None },
@@ -1552,6 +1568,7 @@ where
             chg_watchdog_restore: None,
             outputs_restore_on_bms_ready: cfg.outputs_restore_on_bms_ready,
             outputs_blocked_by_bms: cfg.outputs_blocked_by_bms,
+            fan: fan::Controller::new(cfg.fan_config),
             ui_snapshot: cfg.self_check_snapshot,
             audio_snapshot: AudioSignalSnapshot::default(),
             audio_events: AudioSignalEvents::default(),
@@ -1640,11 +1657,12 @@ where
         self.recompute_ui_mode();
     }
 
-    pub fn tick(&mut self, irq: &IrqSnapshot) {
+    pub fn tick(&mut self, irq: &IrqSnapshot) -> bool {
         if let Some(until) = self.bms_activation_isolation_until {
             if Instant::now() < until {
+                self.update_fan_state(irq);
                 self.refresh_audio_signals();
-                return;
+                return false;
             }
             self.bms_activation_isolation_until = None;
         }
@@ -1671,11 +1689,13 @@ where
             if bms_i2c_active {
                 self.bms_activation_isolation_until =
                     Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
+                self.update_fan_state(irq);
                 self.refresh_audio_signals();
-                return;
+                return false;
             }
+            self.update_fan_state(irq);
             self.refresh_audio_signals();
-            return;
+            return false;
         }
 
         self.bms_activation_isolation_until = None;
@@ -1688,30 +1708,177 @@ where
             if bms_i2c_active {
                 self.bms_activation_isolation_until =
                     Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
+                self.update_fan_state(irq);
                 self.refresh_audio_signals();
-                return;
+                return false;
             }
+            self.update_fan_state(irq);
             self.refresh_audio_signals();
-            return;
+            return false;
         }
         let mut bms_i2c_active = self.maybe_poll_bms(irq);
         bms_i2c_active |= self.maybe_track_bms_activation();
         if bms_i2c_active {
             self.bms_activation_isolation_until =
                 Some(Instant::now() + BMS_ACTIVATION_ISOLATION_WINDOW);
+            self.update_fan_state(irq);
             self.refresh_audio_signals();
-            return;
+            return false;
         }
         if self.bms_activation_state == BmsActivationState::Pending {
+            self.update_fan_state(irq);
             self.refresh_audio_signals();
-            return;
+            return false;
         }
-        self.maybe_print_telemetry();
+        let telemetry_printed = self.maybe_print_telemetry();
+        self.update_fan_state(irq);
         self.refresh_audio_signals();
+        telemetry_printed
     }
 
     pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
         self.ui_snapshot
+    }
+
+    pub fn fan_command(&self) -> fan::Status {
+        self.fan.status()
+    }
+
+    fn fan_now_ms(&self) -> u64 {
+        self.fan_started_at.elapsed().as_millis()
+    }
+
+    fn fan_temps_ready(&self) -> bool {
+        self.ui_snapshot.tmp_a != SelfCheckCommState::Pending
+            || self.ui_snapshot.tmp_b != SelfCheckCommState::Pending
+    }
+
+    fn refresh_tmp112_snapshot(&mut self, ch: OutputChannel) {
+        let temp_c_x16 = tmp112::read_temp_c_x16(&mut self.i2c, ch.tmp_addr()).ok();
+        match ch {
+            OutputChannel::OutA => {
+                self.ui_snapshot.tmp_a = if temp_c_x16.is_some() {
+                    SelfCheckCommState::Ok
+                } else {
+                    SelfCheckCommState::Err
+                };
+                self.ui_snapshot.tmp_a_c_x16 = temp_c_x16;
+                self.ui_snapshot.tmp_a_c = temp_c_x16.map(|v| v / 16);
+            }
+            OutputChannel::OutB => {
+                self.ui_snapshot.tmp_b = if temp_c_x16.is_some() {
+                    SelfCheckCommState::Ok
+                } else {
+                    SelfCheckCommState::Err
+                };
+                self.ui_snapshot.tmp_b_c_x16 = temp_c_x16;
+                self.ui_snapshot.tmp_b_c = temp_c_x16.map(|v| v / 16);
+            }
+        }
+    }
+
+    fn refresh_fan_temp_snapshots_if_due(&mut self) {
+        let now = Instant::now();
+        if matches!(self.bms_activation_isolation_until, Some(until) if now < until) {
+            return;
+        }
+        if now < self.next_fan_temp_refresh_at {
+            return;
+        }
+        self.next_fan_temp_refresh_at = now + self.cfg.telemetry_period;
+        self.refresh_tmp112_snapshot(OutputChannel::OutA);
+        self.refresh_tmp112_snapshot(OutputChannel::OutB);
+    }
+
+    fn update_fan_state(&mut self, irq: &IrqSnapshot) {
+        self.refresh_fan_temp_snapshots_if_due();
+        let prev = self.fan.status();
+        let (status, events) = self.fan.update(fan::Input {
+            now_ms: self.fan_now_ms(),
+            temps_ready: self.fan_temps_ready(),
+            temp_a_c_x16: self.ui_snapshot.tmp_a_c_x16,
+            temp_b_c_x16: self.ui_snapshot.tmp_b_c_x16,
+            tach_pulse_count: irq.fan_tach,
+        });
+        let pwm_pct = status.pwm_pct(self.cfg.fan_config.mid_pwm_pct);
+
+        if events.temp_source_changed {
+            match status.temp_source {
+                fan::TempSource::Pending => {}
+                fan::TempSource::Missing => {
+                    defmt::warn!(
+                        "fan: temp_source missing fallback=full_speed control_temp_c_x16={=?}",
+                        status.control_temp_c_x16
+                    );
+                }
+                fan::TempSource::TmpA | fan::TempSource::TmpB => {
+                    defmt::warn!(
+                        "fan: temp_source degraded source={} control_temp_c_x16={=?}",
+                        status.temp_source.as_str(),
+                        status.control_temp_c_x16
+                    );
+                }
+                fan::TempSource::Max => {
+                    if prev.temp_source.is_degraded() {
+                        defmt::info!(
+                            "fan: temp_source restored source={} control_temp_c_x16={=?}",
+                            status.temp_source.as_str(),
+                            status.control_temp_c_x16
+                        );
+                    }
+                }
+            }
+        }
+
+        if events.command_changed {
+            defmt::info!(
+                "fan: command mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?} cooldown_active={=bool} tach_fault={=bool}",
+                status.command.as_str(),
+                pwm_pct,
+                status.temp_source.as_str(),
+                status.control_temp_c_x16,
+                status.cooldown_active,
+                status.tach_fault
+            );
+        }
+
+        if events.tach_fault_changed {
+            if status.tach_fault {
+                defmt::warn!(
+                    "fan: tach_timeout mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?} timeout_ms={=u64}",
+                    status.command.as_str(),
+                    pwm_pct,
+                    status.temp_source.as_str(),
+                    status.control_temp_c_x16,
+                    self.cfg.fan_config.tach_timeout_ms
+                );
+            } else {
+                defmt::info!(
+                    "fan: tach_recovered mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?}",
+                    status.command.as_str(),
+                    pwm_pct,
+                    status.temp_source.as_str(),
+                    status.control_temp_c_x16
+                );
+            }
+        }
+    }
+
+    pub fn log_fan_telemetry(&self, applied: AppliedFanState) {
+        let status = self.fan.status();
+        defmt::info!(
+            "fan: telemetry requested_mode={} requested_pwm_pct={=u8} applied_mode={} applied_pwm_pct={=u8} output_degraded={=bool} temp_source={} control_temp_c_x16={=?} tach_recent={=bool} tach_fault={=bool} cooldown_active={=bool}",
+            status.requested_command.as_str(),
+            status.requested_pwm_pct(self.cfg.fan_config.mid_pwm_pct),
+            applied.command.as_str(),
+            applied.pwm_pct,
+            applied.degraded,
+            status.temp_source.as_str(),
+            status.control_temp_c_x16,
+            status.tach_pulse_seen_recently,
+            status.tach_fault,
+            status.cooldown_active
+        );
     }
 
     pub fn bms_activation_state(&self) -> BmsActivationState {
@@ -4690,16 +4857,19 @@ where
         }
     }
 
-    fn maybe_print_telemetry(&mut self) {
-        if self.cfg.enabled_outputs == EnabledOutputs::None {
-            return;
-        }
-
+    fn maybe_print_telemetry(&mut self) -> bool {
         let now = Instant::now();
         if now < self.next_telemetry_at {
-            return;
+            return false;
         }
         self.next_telemetry_at = now + self.cfg.telemetry_period;
+
+        if self.cfg.enabled_outputs == EnabledOutputs::None {
+            self.refresh_tmp112_snapshot(OutputChannel::OutA);
+            self.refresh_tmp112_snapshot(OutputChannel::OutB);
+            self.next_fan_temp_refresh_at = now + self.cfg.telemetry_period;
+            return true;
+        }
 
         let therm_kill_n: u8 = if self.therm_kill.is_low() { 0 } else { 1 };
         if therm_kill_n == 0
@@ -4735,6 +4905,7 @@ where
             } else {
                 SelfCheckCommState::Err
             };
+            self.ui_snapshot.tmp_a_c_x16 = capture.temp_c_x16;
             self.ui_snapshot.tmp_a_c = capture.temp_c_x16.map(|v| v / 16);
         }
         if self.cfg.enabled_outputs.is_enabled(OutputChannel::OutB) {
@@ -4760,8 +4931,15 @@ where
             } else {
                 SelfCheckCommState::Err
             };
+            self.ui_snapshot.tmp_b_c_x16 = capture.temp_c_x16;
             self.ui_snapshot.tmp_b_c = capture.temp_c_x16.map(|v| v / 16);
+        } else {
+            self.refresh_tmp112_snapshot(OutputChannel::OutB);
         }
+        if !self.cfg.enabled_outputs.is_enabled(OutputChannel::OutA) {
+            self.refresh_tmp112_snapshot(OutputChannel::OutA);
+        }
+        self.next_fan_temp_refresh_at = now + self.cfg.telemetry_period;
 
         self.refresh_tps_audio_state();
 
@@ -4803,6 +4981,7 @@ where
             }
         }
         self.recompute_ui_mode();
+        true
     }
 
     fn maybe_poll_charger(&mut self, irq: &IrqSnapshot) {
