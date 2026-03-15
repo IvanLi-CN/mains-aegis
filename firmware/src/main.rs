@@ -786,6 +786,7 @@ fn main() -> ! {
 
     let mut irq_tracker = irq::IrqTracker::new();
     let mut last_irq_log_at: Option<Instant> = None;
+    let mut last_fan_tach_log_at: Option<Instant> = None;
 
     match audio_demo::play_demo_playlist(
         i2s0,
@@ -843,6 +844,15 @@ fn main() -> ! {
                     irq_events.therm_kill_n
                 );
             }
+            if irq_events.fan_tach != 0
+                && output::tps55288::should_log_fault(
+                    Instant::now(),
+                    &mut last_fan_tach_log_at,
+                    Duration::from_secs(1),
+                )
+            {
+                defmt::debug!("irq: fan_tach={=u32}", irq_events.fan_tach);
+            }
         },
     ) {
         Ok(()) => {}
@@ -881,6 +891,35 @@ fn main() -> ! {
                         front_panel.update_bms_activation_state(power.bms_activation_state());
                     }
                 }
+            }
+            if irq_events.any()
+                && output::tps55288::should_log_fault(
+                    Instant::now(),
+                    &mut last_irq_log_at,
+                    Duration::from_millis(200),
+                )
+            {
+                defmt::info!(
+                    "irq: i2c1_int={=u32} i2c2_int={=u32} chg_int={=u32} fan_tach={=u32} ina_pv={=u32} ina_warning={=u32} ina_critical={=u32} bms_btp_int_h={=u32} therm_kill_n={=u32}",
+                    irq_events.i2c1_int,
+                    irq_events.i2c2_int,
+                    irq_events.chg_int,
+                    irq_events.fan_tach,
+                    irq_events.ina_pv,
+                    irq_events.ina_warning,
+                    irq_events.ina_critical,
+                    irq_events.bms_btp_int_h,
+                    irq_events.therm_kill_n
+                );
+            }
+            if irq_events.fan_tach != 0
+                && output::tps55288::should_log_fault(
+                    Instant::now(),
+                    &mut last_fan_tach_log_at,
+                    Duration::from_secs(1),
+                )
+            {
+                defmt::debug!("irq: fan_tach={=u32}", irq_events.fan_tach);
             }
         }
     }

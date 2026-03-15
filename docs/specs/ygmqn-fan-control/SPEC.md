@@ -25,6 +25,7 @@
 - BMS activation 的总线静默窗口内，风扇控制只能使用最近一次缓存温度，不能额外发起 TMP112 轮询破坏隔离窗口。
 - 输出可观察日志，覆盖档位切换、温度源退化、tach 超时与故障恢复。
 - `fan: telemetry` 必须同时输出策略请求值与实际硬件应用值；当进入 fail-safe 时，日志要能看出硬件已被强制到高风量状态。
+- `FAN_TACH` 的 bring-up 可观察性必须保留，但不能靠通用 IRQ 日志刷屏；需要单独的限频 tach 调试日志。
 - 若 `FAN_VSET_PWM` 初始化失败，或后续运行期 duty 应用失败，固件必须退化到“`FAN_EN` 常开且 `FAN_VSET_PWM` 强制高电平/满占空比”的保守散热模式，而不是静默失去风扇控制。
 
 ### Non-goals
@@ -89,4 +90,4 @@
 ## 变更记录（Change log）
 
 - 2026-03-13: 首版规格冻结 V1 风扇控制口径：最高温三档、`3C` 回滞、`10s` 余冷、`2s` tach 看门狗、异常全速保护。
-- 2026-03-13: 已落地 `esp_firmware::fan` 纯逻辑状态机、`FAN_TACH/FAN_EN/FAN_VSET_PWM` 固件接线、`fan:` 日志与 bench 文档；补充 `tach` 故障锁存与抗毛刺恢复、BMS isolation 窗口内使用缓存温度、请求/实际双层 telemetry、双 TMP112 持续采样、raw x16 阈值口径、host 侧纯逻辑单测脚本，以及 PWM 初始化/运行期失败强制 `FAN_EN`/`FAN_VSET_PWM` fail-safe；PR 为 `#36`，当前等待 review-loop 收敛。
+- 2026-03-13: 已落地 `esp_firmware::fan` 纯逻辑状态机、`FAN_TACH/FAN_EN/FAN_VSET_PWM` 固件接线、`fan:` 日志与 bench 文档；补充 `tach` 故障锁存与抗毛刺恢复、BMS isolation 窗口内使用缓存温度、请求/实际双层 telemetry、限频 tach bring-up 日志、双 TMP112 持续采样、raw x16 阈值口径、host 侧纯逻辑单测脚本，以及 PWM 初始化/运行期失败强制 `FAN_EN`/`FAN_VSET_PWM` fail-safe；PR 为 `#36`，当前等待 review-loop 收敛。

@@ -1629,8 +1629,8 @@ where
         let status = self.fan.status();
         defmt::info!(
             "fan: telemetry requested_mode={} requested_pwm_pct={=u8} applied_mode={} applied_pwm_pct={=u8} output_degraded={=bool} temp_source={} control_temp_c_x16={=?} tach_recent={=bool} tach_fault={=bool} cooldown_active={=bool}",
-            status.command.as_str(),
-            status.pwm_pct(self.cfg.fan_config.mid_pwm_pct),
+            status.requested_command.as_str(),
+            status.requested_pwm_pct(self.cfg.fan_config.mid_pwm_pct),
             applied.command.as_str(),
             applied.pwm_pct,
             applied.degraded,

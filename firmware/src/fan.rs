@@ -77,6 +77,7 @@ pub struct Input {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Status {
+    pub requested_command: FanLevel,
     pub command: FanLevel,
     pub thermal_level: FanLevel,
     pub temp_source: TempSource,
@@ -87,6 +88,10 @@ pub struct Status {
 }
 
 impl Status {
+    pub const fn requested_pwm_pct(self, mid_pwm_pct: u8) -> u8 {
+        self.requested_command.pwm_pct(mid_pwm_pct)
+    }
+
     pub const fn pwm_pct(self, mid_pwm_pct: u8) -> u8 {
         self.command.pwm_pct(mid_pwm_pct)
     }
@@ -121,6 +126,7 @@ impl Controller {
             tach_recovery_started_ms: None,
             tach_recovery_pulses: 0,
             status: Status {
+                requested_command: FanLevel::Off,
                 command: FanLevel::Off,
                 thermal_level: FanLevel::Off,
                 temp_source: TempSource::Pending,
@@ -228,6 +234,7 @@ impl Controller {
         };
 
         self.status = Status {
+            requested_command: desired_command,
             command,
             thermal_level: self.thermal_level,
             temp_source,
