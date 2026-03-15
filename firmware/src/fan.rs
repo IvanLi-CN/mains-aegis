@@ -104,18 +104,22 @@ pub struct Controller {
     thermal_level: FanLevel,
     cooldown_until_ms: Option<u64>,
     last_tach_seen_ms: Option<u64>,
-    tach_recovery_samples: u8,
+    tach_recovery_started_ms: Option<u64>,
+    tach_recovery_pulses: u32,
     status: Status,
 }
 
 impl Controller {
+    const TACH_RECOVERY_CONFIRM_MS: u64 = 20;
+
     pub const fn new(cfg: Config) -> Self {
         Self {
             cfg,
             thermal_level: FanLevel::Off,
             cooldown_until_ms: None,
             last_tach_seen_ms: None,
-            tach_recovery_samples: 0,
+            tach_recovery_started_ms: None,
+            tach_recovery_pulses: 0,
             status: Status {
                 command: FanLevel::Off,
                 thermal_level: FanLevel::Off,
@@ -179,17 +183,25 @@ impl Controller {
         if input.tach_pulse_count > 0 {
             self.last_tach_seen_ms = Some(input.now_ms);
             if prev.tach_fault {
-                self.tach_recovery_samples = self.tach_recovery_samples.saturating_add(1);
-                if self.tach_recovery_samples >= 2 {
+                let started_ms = self.tach_recovery_started_ms.get_or_insert(input.now_ms);
+                self.tach_recovery_pulses = self
+                    .tach_recovery_pulses
+                    .saturating_add(input.tach_pulse_count);
+                if self.tach_recovery_pulses >= 2
+                    && input.now_ms.saturating_sub(*started_ms) >= Self::TACH_RECOVERY_CONFIRM_MS
+                {
                     tach_fault = false;
-                    self.tach_recovery_samples = 0;
+                    self.tach_recovery_started_ms = None;
+                    self.tach_recovery_pulses = 0;
                 }
             } else {
-                self.tach_recovery_samples = 0;
+                self.tach_recovery_started_ms = None;
+                self.tach_recovery_pulses = 0;
                 tach_fault = false;
             }
         } else if expecting_tach {
-            self.tach_recovery_samples = 0;
+            self.tach_recovery_started_ms = None;
+            self.tach_recovery_pulses = 0;
             if !prev.command.enabled() && !prev.tach_fault {
                 self.last_tach_seen_ms = Some(input.now_ms);
             }
@@ -468,7 +480,17 @@ mod tests {
         assert!(status.tach_fault);
 
         let (status, _) = ctl.update(Input {
-            now_ms: 2_250,
+            now_ms: 2_201,
+            temps_ready: true,
+            temp_a_c_x16: Some(42 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 1,
+        });
+        assert_eq!(status.command, FanLevel::High);
+        assert!(status.tach_fault);
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 2_225,
             temps_ready: true,
             temp_a_c_x16: Some(42 * 16),
             temp_b_c_x16: None,

@@ -41,7 +41,6 @@ impl IrqSnapshot {
         self.i2c1_int != 0
             || self.i2c2_int != 0
             || self.chg_int != 0
-            || self.fan_tach != 0
             || self.ina_pv != 0
             || self.ina_critical != 0
             || self.ina_warning != 0
