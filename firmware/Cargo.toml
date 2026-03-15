@@ -18,6 +18,7 @@ test-fw-audio-playback = ["test-fw"]
 # Test firmware default entry selection (single-choice).
 test-fw-default-screen-static = ["test-fw"]
 test-fw-default-audio-playback = ["test-fw"]
+display-spi-40mhz = []
 
 [[bin]]
 name = "test-fw"
@@ -31,7 +32,7 @@ embedded-hal = "1"
 gc9307-async = { version = "0.1.1", default-features = false }
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32s3"] }
 esp-backtrace = { version = "0.18.1", features = ["esp32s3", "panic-handler", "defmt"] }
-esp-hal = { version = "1.0.0", features = ["esp32s3", "rt", "unstable", "defmt"] }
+esp-hal = { version = "1.0.0", features = ["esp32s3", "rt", "unstable", "defmt", "psram"] }
 esp-println = { version = "0.16.1", default-features = false, features = ["esp32s3", "defmt-espflash", "jtag-serial"] }
 ina3221-async = { path = "../ina3221-async", features = ["defmt"] }
 tps55288 = { path = "../tps55288", features = ["defmt"] }

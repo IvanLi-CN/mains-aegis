@@ -706,8 +706,17 @@ fn main() -> ! {
         panel_probe.fusb302_present
     );
 
-    let mut front_panel =
-        front_panel::FrontPanel::new(i2c2, spi, btn_center, ctp_irq, tca_reset_n, dc, bl);
+    let mut front_panel = front_panel::FrontPanel::new(
+        i2c2,
+        spi,
+        peripherals.DMA_CH1,
+        peripherals.PSRAM,
+        btn_center,
+        ctp_irq,
+        tca_reset_n,
+        dc,
+        bl,
+    );
     if !panel_probe.screen_present() {
         defmt::warn!("ui: skip display init because panel_io probe is missing");
     } else {
