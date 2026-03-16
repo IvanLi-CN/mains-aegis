@@ -127,14 +127,14 @@ mcu-agentd monitor esp --reset
 
 ## TPS55288 双路输出控制（Plan #0005）
 
-本固件在启动时会通过 `I2C1` 对两颗 `TPS55288` 做最小 bring-up，并冻结一个“默认 profile”（用于上板联调与回归）。
+本固件在启动时会通过 `I2C1` 对两颗 `TPS55288` 做最小 bring-up，并冻结一个“默认 profile”（用于上板联调与回归）。模块 SoT 见 `docs/modules/regulated-output.md`。
 
 ### 默认 profile（冻结口径）
 
-- I2C 总线：`I2C1`（`GPIO48=SDA`，`GPIO47=SCL`），`100kHz`
+- I2C 总线：`I2C1`（`GPIO48=SDA`，`GPIO47=SCL`），`25kHz`
 - OUT-A：`addr=0x74`（`TPS55288 OUT-A` / `VOUT_TPSA`）
 - OUT-B：`addr=0x75`（`TPS55288 OUT-B` / `VOUT_TPSB`）
-- 默认启用：`out_a+out_b`
+- 默认启用：`out_a`
 - 目标输出：`19V`
 - 目标限流：`3.5A`
 - 非默认输出路：通过寄存器关闭输出（`OE=0`），不主动稳压输出
@@ -145,10 +145,10 @@ mcu-agentd monitor esp --reset
 
 启动阶段（配置结果）：
 
-- `power: enabled_outputs=out_a+out_b target_vout_mv=19000 target_ilimit_ma=3500`
+- `power: requested_outputs=out_a active_outputs=out_a recoverable_outputs=none gate_reason=none target_vout_mv=19000 target_ilimit_ma=3500`
 - `power: ina3221 ok ...`
 - `power: tps addr=0x74 configured enabled=true ...`
-- `power: tps addr=0x75 configured enabled=true ...`
+- `power: tps addr=0x75 configured enabled=false ...`
 
 故障/告警（`I2C1_INT(GPIO33)` 触发时，最小可观测口径）：
 
@@ -163,7 +163,7 @@ mcu-agentd monitor esp --reset
 
 ## INA3221 遥测（Plan #0005）
 
-固件会初始化 `INA3221 (addr=0x40)` 并每 `500ms` 输出两行遥测（`out_a/out_b` 各一行）。
+固件会初始化 `INA3221 (addr=0x40)` 并每 `500ms` 输出两行遥测（`out_a/out_b` 各一行）。`CH1/CH2` 属于稳压输出模块，`CH3` 只作为输入侧 `VIN` 共享观测，不改变输出模块的通道契约。
 
 若自检门控导致 `enabled_outputs=none`（例如 `BQ40Z50` 缺失），固件仍会继续输出 INA 诊断行，便于单独验证 INA3221 是否可读：
 
@@ -200,7 +200,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0
 
 ### I2C（冻结口径）
 
-- 总线：`I2C1`（`GPIO48=SDA`，`GPIO47=SCL`），`100kHz`
+- 总线：`I2C1`（`GPIO48=SDA`，`GPIO47=SCL`），`25kHz`
 - 地址：
   - `out_a`：`TMP112A addr=0x48`
   - `out_b`：`TMP112A addr=0x49`
@@ -245,10 +245,10 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 - 未命中紧急条件时，自检阶段不主动改 `TPS55288` 输出状态。
 - 固定顺序：`SYNC` → 独立传感器（`INA3221`/`TMP112`）→ 屏幕模块 → `BQ40Z50` → `BQ25792` → `TPS55288`。
-- 初始化应用阶段按探测结果门控模块；其中 `BQ40Z50` 缺失时强制禁用 `TPS55288` 输出。
+- 初始化应用阶段按探测结果门控模块；其中 `BQ40Z50` 缺失或放电未就绪时强制禁用 `TPS55288` 输出。
 - `BQ25792` 充电默认也会被禁用；仅 `--features force-min-charge` 构建时保留充电模块，并以最小 `ICHG/IINDPM` 唤醒（不改充电电压）。
 - `BQ40Z50` 默认只使用 `7-bit 0x0B`（等价 `8-bit W=0x16/R=0x17`）；只有 `--features bms-dual-probe-diag` 才会额外探测 `0x16` 以做兼容诊断。
-- 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。
+- 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。运行态门控解除后，本轮固件只转入“可恢复未恢复”，不会自动重新打开输出。
 
 ## 前面板屏幕显示（Spec 6qrjs / 7n4qd）
 

@@ -34,3 +34,4 @@
 | xy6cz | Front panel refresh pipeline | 部分完成（4/5） | `xy6cz-front-panel-refresh-pipeline/SPEC.md` | 2026-03-15 | PR #41 已创建；已完成 PSRAM 双缓冲、dirty-band framebuffer 与 SPI DMA 主路径，等待 review-loop / 40MHz 联调结论回填 |
 | ygmqn | Fan control with thermal/tach fail-safe | 部分完成（4/5） | `ygmqn-fan-control/SPEC.md` | 2026-03-13 | PR #36 已创建；等待 review-loop 收敛 |
 | 6n4qm | PCB netlist sync (2026-03-19) | 已完成 | `6n4qm-pcb-netlist-sync-20260319/SPEC.md` | 2026-03-19 | 主板网表已同步到 2026-03-19 导出版本；前面板导出已确认与仓库零差异 |
+| cqd8u | Regulated output module docs + runtime gate state machine | 已完成 | `cqd8u-regulated-output-module/SPEC.md` | 2026-03-16 | 已建立 `docs/modules/`、收敛稳压输出 SoT，并落地显式恢复状态机与本地验证 |

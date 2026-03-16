@@ -934,9 +934,10 @@ fn main() -> ! {
         ina_detected: self_test.ina_detected,
         detected_tmp_outputs: self_test.detected_tmp_outputs,
         detected_tps_outputs: self_test.detected_tps_outputs,
-        enabled_outputs: self_test.enabled_outputs,
-        outputs_restore_on_bms_ready: self_test.outputs_restore_on_bms_ready,
-        outputs_blocked_by_bms: self_test.outputs_blocked_by_bms,
+        requested_outputs: self_test.requested_outputs,
+        active_outputs: self_test.active_outputs,
+        recoverable_outputs: self_test.recoverable_outputs,
+        output_gate_reason: self_test.output_gate_reason,
         vout_mv: DEFAULT_VOUT_MV,
         ilimit_ma: DEFAULT_ILIMIT_MA,
         telemetry_period: TELEMETRY_PERIOD,
@@ -978,8 +979,11 @@ fn main() -> ! {
         cfg,
     );
     defmt::info!(
-        "power: enabled_outputs={} target_vout_mv={=u16} target_ilimit_ma={=u16}",
-        cfg.enabled_outputs.describe(),
+        "power: requested_outputs={} active_outputs={} recoverable_outputs={} gate_reason={} target_vout_mv={=u16} target_ilimit_ma={=u16}",
+        cfg.requested_outputs.describe(),
+        cfg.active_outputs.describe(),
+        cfg.recoverable_outputs.describe(),
+        cfg.output_gate_reason.as_str(),
         cfg.vout_mv,
         cfg.ilimit_ma
     );
