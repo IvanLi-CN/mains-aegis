@@ -3281,22 +3281,6 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         painter,
         variant,
         FontRole::DetailBody,
-        if matches!(data.bms_current_ma, Some(ma) if ma > 0) {
-            "CHARGING PATH"
-        } else if matches!(data.bms_current_ma, Some(ma) if ma < 0) {
-            "DISCHARGE PATH"
-        } else {
-            "PACK IDLE"
-        },
-        Point::new(14, 44),
-        HorizontalAlignment::Left,
-        palette.bg,
-    )?;
-
-    text(
-        painter,
-        variant,
-        FontRole::DetailBody,
         "ENERGY",
         Point::new(14, 64),
         HorizontalAlignment::Left,
