@@ -10,8 +10,8 @@ use esp_hal::ram;
 use esp_hal::time::{Duration, Instant};
 
 use crate::front_panel_scene::{
-    is_bq40_activation_needed, BmsActivationState, BmsResultKind, SelfCheckCommState,
-    SelfCheckUiSnapshot, UpsMode,
+    is_bq40_activation_needed, BmsActivationState, BmsResultKind, DashboardInputSource,
+    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
 };
 use crate::irq::IrqSnapshot;
 
@@ -298,6 +298,74 @@ fn audio_charge_phase_from_chg_stat(code: u8) -> AudioChargePhase {
         7 => AudioChargePhase::Completed,
         _ => AudioChargePhase::Unknown,
     }
+}
+
+fn detail_input_source(
+    vbus_present: bool,
+    ac1_present: bool,
+    ac2_present: bool,
+) -> Option<DashboardInputSource> {
+    if ac1_present && !ac2_present {
+        Some(DashboardInputSource::UsbC)
+    } else if ac2_present && !ac1_present {
+        Some(DashboardInputSource::DcIn)
+    } else if ac1_present || ac2_present || vbus_present {
+        Some(DashboardInputSource::Auto)
+    } else {
+        None
+    }
+}
+
+fn detail_charger_status_text(
+    charger_fault: bool,
+    input_present: bool,
+    allow_charge: bool,
+    chg_stat: u8,
+) -> &'static str {
+    if charger_fault {
+        "FAULT"
+    } else if !input_present {
+        "NOAC"
+    } else if !allow_charge {
+        "LOCK"
+    } else {
+        match audio_charge_phase_from_chg_stat(chg_stat) {
+            AudioChargePhase::Charging => "CHG",
+            AudioChargePhase::Completed => "DONE",
+            AudioChargePhase::NotCharging => "READY",
+            AudioChargePhase::Unknown => "N/A",
+        }
+    }
+}
+
+fn detail_fan_status_text(status: fan::Status) -> &'static str {
+    if status.tach_fault {
+        "FAULT"
+    } else {
+        match status.command {
+            fan::FanLevel::Off => "OFF",
+            fan::FanLevel::Mid => "MID",
+            fan::FanLevel::High => "HIGH",
+        }
+    }
+}
+
+fn detail_battery_temp_c(snapshot: &Bq40z50Snapshot) -> Option<i16> {
+    let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(snapshot.temp_k_x10);
+    if (-400..=1250).contains(&temp_c_x10) {
+        Some((temp_c_x10 / 10) as i16)
+    } else {
+        None
+    }
+}
+
+fn detail_bms_energy_mwh(snapshot: &Bq40z50Snapshot) -> Option<u32> {
+    ((snapshot.battery_mode & bq40z50::battery_mode::CAPM) != 0)
+        .then_some(snapshot.remcap as u32 * 10)
+}
+
+fn detail_bms_full_capacity_mwh(snapshot: &Bq40z50Snapshot) -> Option<u32> {
+    ((snapshot.battery_mode & bq40z50::battery_mode::CAPM) != 0).then_some(snapshot.fcc as u32 * 10)
 }
 
 fn bq40_primary_reason(
@@ -1930,7 +1998,19 @@ where
     }
 
     pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
-        self.ui_snapshot
+        let mut snapshot = self.ui_snapshot;
+        let mut detail = snapshot.dashboard_detail;
+        let fan_status = self.fan.status();
+
+        detail.out_a_temp_c = snapshot.tmp_a_c;
+        detail.out_b_temp_c = snapshot.tmp_b_c;
+        detail.fan_pwm_pct = Some(fan_status.pwm_pct(self.cfg.fan_config.mid_pwm_pct));
+        detail.fan_status = Some(detail_fan_status_text(fan_status));
+        detail.output_notice = Some("LIVE DATA");
+        detail.thermal_notice = Some("LIVE DATA");
+
+        snapshot.dashboard_detail = detail;
+        snapshot
     }
 
     pub fn fan_command(&self) -> fan::Status {
@@ -1944,6 +2024,44 @@ where
     fn fan_temps_ready(&self) -> bool {
         self.ui_snapshot.tmp_a != SelfCheckCommState::Pending
             || self.ui_snapshot.tmp_b != SelfCheckCommState::Pending
+    }
+
+    fn clear_bms_detail_snapshot(&mut self) {
+        let detail = &mut self.ui_snapshot.dashboard_detail;
+        detail.cell_mv = [None, None, None, None];
+        detail.cell_temp_c = [None, None, None, None];
+        detail.balance_cell = None;
+        detail.battery_energy_mwh = None;
+        detail.battery_full_capacity_mwh = None;
+        detail.charge_fet_on = None;
+        detail.discharge_fet_on = None;
+        detail.precharge_fet_on = None;
+        detail.battery_temp_c = None;
+        detail.cells_notice = None;
+        detail.battery_notice = None;
+    }
+
+    fn apply_bms_detail_snapshot(&mut self, snapshot: &Bq40z50Snapshot) {
+        let detail = &mut self.ui_snapshot.dashboard_detail;
+        detail.cell_mv = snapshot.cell_mv.map(Some);
+        detail.cell_temp_c = [None, None, None, None];
+        detail.balance_cell = None;
+        detail.battery_energy_mwh = detail_bms_energy_mwh(snapshot);
+        detail.battery_full_capacity_mwh = detail_bms_full_capacity_mwh(snapshot);
+        detail.charge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CHG);
+        detail.discharge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::DSG);
+        detail.precharge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::PCHG);
+        detail.battery_temp_c = detail_battery_temp_c(snapshot);
+        detail.cells_notice = Some("LIVE DATA");
+        detail.battery_notice = Some("LIVE DATA");
+    }
+
+    fn clear_charger_detail_snapshot(&mut self) {
+        let detail = &mut self.ui_snapshot.dashboard_detail;
+        detail.input_source = None;
+        detail.charger_active = None;
+        detail.charger_status = None;
+        detail.charger_notice = None;
     }
 
     fn refresh_tmp112_snapshot(&mut self, ch: OutputChannel) {
@@ -3621,6 +3739,7 @@ where
         }
 
         Ok(Bq40z50Snapshot {
+            battery_mode: 0,
             temp_k_x10,
             vpack_mv,
             current_ma,
@@ -3649,6 +3768,7 @@ where
         }
 
         Ok(Bq40z50Snapshot {
+            battery_mode: 0,
             temp_k_x10,
             vpack_mv,
             current_ma,
@@ -3687,6 +3807,7 @@ where
         }
 
         Ok(Bq40z50Snapshot {
+            battery_mode: 0,
             temp_k_x10,
             vpack_mv,
             current_ma,
@@ -4022,6 +4143,7 @@ where
         self.ui_snapshot.bq40z50_rca_alarm = Some(rca_alarm);
         self.ui_snapshot.bq40z50_no_battery = Some(low_pack_runtime);
         self.ui_snapshot.bq40z50_discharge_ready = discharge_ready;
+        self.apply_bms_detail_snapshot(snapshot);
         self.bms_audio = BmsAudioState {
             rca_alarm: Some(rca_alarm),
             protection_active,
@@ -4845,6 +4967,7 @@ where
         self.ui_snapshot.bq40z50 = SelfCheckCommState::Warn;
         self.ui_snapshot.bq40z50_pack_mv = None;
         self.ui_snapshot.bq40z50_current_ma = None;
+        self.clear_bms_detail_snapshot();
         if self.ui_snapshot.bq40z50_soc_pct.is_none() {
             self.ui_snapshot.bq40z50_soc_pct = Some(0);
         }
@@ -5204,6 +5327,7 @@ where
             self.ui_snapshot.bq25792_allow_charge = Some(false);
             self.ui_snapshot.bq25792_ichg_ma = None;
             self.ui_snapshot.bq25792_vbat_present = None;
+            self.clear_charger_detail_snapshot();
             self.recompute_ui_mode();
             return;
         }
@@ -5664,6 +5788,19 @@ where
             None
         };
         self.ui_snapshot.fusb302_vbus_present = Some(input_present);
+        self.ui_snapshot.dashboard_detail.input_source =
+            detail_input_source(vbus_present, ac1_present, ac2_present);
+        self.ui_snapshot.dashboard_detail.charger_active = Some(matches!(
+            audio_charge_phase_from_chg_stat(bq25792::status1::chg_stat(status1)),
+            AudioChargePhase::Charging
+        ));
+        self.ui_snapshot.dashboard_detail.charger_status = Some(detail_charger_status_text(
+            charger_fault,
+            input_present,
+            allow_charge,
+            bq25792::status1::chg_stat(status1),
+        ));
+        self.ui_snapshot.dashboard_detail.charger_notice = Some("LIVE DATA");
         self.recompute_ui_mode();
 
         if auto_force_charge {
@@ -5741,6 +5878,7 @@ where
         self.ui_snapshot.fusb302_vbus_present = None;
         self.ui_snapshot.input_vbus_mv = None;
         self.ui_snapshot.input_ibus_ma = None;
+        self.clear_charger_detail_snapshot();
         self.recompute_ui_mode();
     }
 
@@ -5845,6 +5983,7 @@ where
                     self.ui_snapshot.bq40z50_rca_alarm = Some(rca_alarm);
                     self.ui_snapshot.bq40z50_no_battery = Some(low_pack);
                     self.ui_snapshot.bq40z50_discharge_ready = discharge_ready;
+                    self.apply_bms_detail_snapshot(&s);
                     let protection_active = bq40_op_bit(s.op_status, bq40z50::operation_status::PF)
                         == Some(true)
                         || bq40z50::battery_status::error_code(s.batt_status) != 0
@@ -5885,6 +6024,7 @@ where
                             self.ui_snapshot.bq40z50_rca_alarm = None;
                             self.ui_snapshot.bq40z50_no_battery = None;
                             self.ui_snapshot.bq40z50_discharge_ready = None;
+                            self.clear_bms_detail_snapshot();
                             self.bms_audio = BmsAudioState {
                                 rca_alarm: None,
                                 protection_active: false,
@@ -5940,6 +6080,7 @@ where
                             self.ui_snapshot.bq40z50_rca_alarm = None;
                             self.ui_snapshot.bq40z50_no_battery = None;
                             self.ui_snapshot.bq40z50_discharge_ready = None;
+                            self.clear_bms_detail_snapshot();
                             self.bms_audio = BmsAudioState {
                                 rca_alarm: None,
                                 protection_active: false,
@@ -6067,6 +6208,9 @@ where
         &mut self,
         addr: u8,
     ) -> Result<Bq40z50Snapshot, Bq40ActivationReadError> {
+        let battery_mode =
+            self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::BATTERY_MODE)?;
+        spin_delay(BMS_ACTIVATION_WORD_GAP);
         let mut temp_k_x10 =
             self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::TEMPERATURE)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
@@ -6076,6 +6220,11 @@ where
         spin_delay(BMS_ACTIVATION_WORD_GAP);
         let rsoc_pct =
             self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)?;
+        spin_delay(BMS_ACTIVATION_WORD_GAP);
+        let remcap =
+            self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::REMAINING_CAPACITY)?;
+        spin_delay(BMS_ACTIVATION_WORD_GAP);
+        let fcc = self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::FULL_CHARGE_CAPACITY)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
         let batt_status =
             self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::BATTERY_STATUS)?;
@@ -6106,12 +6255,13 @@ where
             .flatten();
 
         Ok(Bq40z50Snapshot {
+            battery_mode,
             temp_k_x10,
             vpack_mv,
             current_ma,
             rsoc_pct,
-            remcap: 0,
-            fcc: 0,
+            remcap,
+            fcc,
             batt_status,
             op_status,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
@@ -6245,6 +6395,7 @@ where
 
 #[derive(Clone, Copy)]
 struct Bq40z50Snapshot {
+    battery_mode: u16,
     temp_k_x10: u16,
     vpack_mv: u16,
     current_ma: i16,
@@ -6402,5 +6553,32 @@ mod tests {
         assert_eq!(sample.issue, Some(ChargerInputSampleIssue::AdcNotReady));
         assert_eq!(sample.ui_vbus_mv, None);
         assert_eq!(sample.ui_ibus_ma, None);
+    }
+
+    #[test]
+    fn detail_input_source_prefers_explicit_usb_and_dc_routes() {
+        assert_eq!(
+            detail_input_source(true, true, false),
+            Some(DashboardInputSource::UsbC)
+        );
+        assert_eq!(
+            detail_input_source(true, false, true),
+            Some(DashboardInputSource::DcIn)
+        );
+        assert_eq!(
+            detail_input_source(true, true, true),
+            Some(DashboardInputSource::Auto)
+        );
+        assert_eq!(detail_input_source(false, false, false), None);
+    }
+
+    #[test]
+    fn detail_charger_status_maps_runtime_states_to_short_tokens() {
+        assert_eq!(detail_charger_status_text(true, true, true, 3), "FAULT");
+        assert_eq!(detail_charger_status_text(false, false, true, 3), "NOAC");
+        assert_eq!(detail_charger_status_text(false, true, false, 3), "LOCK");
+        assert_eq!(detail_charger_status_text(false, true, true, 3), "CHG");
+        assert_eq!(detail_charger_status_text(false, true, true, 7), "DONE");
+        assert_eq!(detail_charger_status_text(false, true, true, 0), "READY");
     }
 }

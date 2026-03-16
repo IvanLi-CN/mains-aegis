@@ -21,6 +21,7 @@ pub const I2C_ADDRESS_FALLBACK: u8 = 0x16;
 pub const I2C_ADDRESS_CANDIDATES: [u8; 2] = [I2C_ADDRESS_PRIMARY, I2C_ADDRESS_FALLBACK];
 
 pub mod cmd {
+    pub const BATTERY_MODE: u8 = 0x03;
     pub const TEMPERATURE: u8 = 0x08;
     pub const VOLTAGE: u8 = 0x09;
     pub const CURRENT: u8 = 0x0A;
@@ -34,6 +35,10 @@ pub mod cmd {
     pub const CELL_VOLTAGE_3: u8 = 0x3D;
     pub const CELL_VOLTAGE_2: u8 = 0x3E;
     pub const CELL_VOLTAGE_1: u8 = 0x3F;
+}
+
+pub mod battery_mode {
+    pub const CAPM: u16 = 1 << 15;
 }
 
 pub mod operation_status {

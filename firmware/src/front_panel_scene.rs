@@ -870,6 +870,8 @@ struct DashboardLiveData {
     out_a_on: bool,
     out_b_on: bool,
     bms_on: bool,
+    charger_input_vbus_mv: Option<u16>,
+    charger_input_ibus_ma: Option<i32>,
     vin_vbus_mv: Option<u16>,
     vin_iin_ma: Option<i32>,
     out_a_mv: Option<u16>,
@@ -906,6 +908,8 @@ impl DashboardLiveData {
             out_a_on: snapshot.tps_a_enabled == Some(true),
             out_b_on: snapshot.tps_b_enabled == Some(true),
             bms_on: model.bms_on,
+            charger_input_vbus_mv: snapshot.input_vbus_mv,
+            charger_input_ibus_ma: snapshot.input_ibus_ma,
             vin_vbus_mv: snapshot.vin_vbus_mv,
             vin_iin_ma: snapshot.vin_iin_ma,
             out_a_mv: snapshot.out_a_vbus_mv,
@@ -964,6 +968,12 @@ impl DashboardLiveData {
     }
 
     fn input_power_w10(self) -> Option<u32> {
+        if let (Some(vbus_mv), Some(ibus_ma)) =
+            (self.charger_input_vbus_mv, self.charger_input_ibus_ma)
+        {
+            return Some((vbus_mv as u32 * ibus_ma.max(0) as u32) / 100_000);
+        }
+
         let vin_ma = self.vin_iin_ma?;
         Some((self.vin_vbus_mv? as u32 * vin_ma.max(0) as u32) / 100_000)
     }
@@ -6917,6 +6927,20 @@ mod tests {
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
         assert_eq!(live.input_power_w10(), None);
+    }
+
+    #[test]
+    fn live_dashboard_prefers_charger_adc_input_power_when_available() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.input_vbus_mv = Some(20_000);
+        snapshot.input_ibus_ma = Some(1_500);
+        snapshot.vin_vbus_mv = Some(19_200);
+        snapshot.vin_iin_ma = Some(910);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(live.input_power_w10(), Some(300));
     }
 
     #[test]
