@@ -3249,7 +3249,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         variant,
         FontRole::DetailBody,
         "IPACK A",
-        Point::new(188, 26),
+        Point::new(174, 26),
         HorizontalAlignment::Left,
         palette.bg,
     )?;
@@ -3425,7 +3425,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
         variant,
         FontRole::DetailBody,
         "POUT W",
-        Point::new(188, 26),
+        Point::new(174, 26),
         HorizontalAlignment::Left,
         palette.bg,
     )?;
