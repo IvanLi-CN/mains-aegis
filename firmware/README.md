@@ -138,6 +138,7 @@ mcu-agentd monitor esp --reset
 - 目标输出：`19V`
 - 目标限流：`3.5A`
 - 非默认输出路：通过寄存器关闭输出（`OE=0`），不主动稳压输出
+- 运行态软保护：温度/电流超阈值时会逐步下调 `IOUT_LIMIT`，若降额期间 `VOUT < 14V` 持续则进入 `active_protection` 关断
 
 > 以上默认 profile 由 `firmware/src/main.rs` 的编译期常量决定，可按联调需要调整（不要在上电状态下频繁刷写造成误判）。
 

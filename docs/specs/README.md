@@ -35,3 +35,4 @@
 | ygmqn | Fan control with thermal/tach fail-safe | 部分完成（4/5） | `ygmqn-fan-control/SPEC.md` | 2026-03-13 | PR #36 已创建；等待 review-loop 收敛 |
 | 6n4qm | PCB netlist sync (2026-03-19) | 已完成 | `6n4qm-pcb-netlist-sync-20260319/SPEC.md` | 2026-03-19 | 主板网表已同步到 2026-03-19 导出版本；前面板导出已确认与仓库零差异 |
 | cqd8u | Regulated output module docs + runtime gate state machine | 已完成 | `cqd8u-regulated-output-module/SPEC.md` | 2026-03-16 | 已建立 `docs/modules/`、收敛稳压输出 SoT，并落地显式恢复状态机与本地验证 |
+| frsr9 | Regulated output active derating + shutdown | 已完成 | `frsr9-regulated-output-active-protection/SPEC.md` | 2026-03-16 | 已落地温度/电流双门限主动降额、低压主动停机与显式恢复前置条件 |

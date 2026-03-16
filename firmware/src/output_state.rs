@@ -17,6 +17,7 @@ pub enum OutputGateReason {
     BmsNotReady,
     ThermKill,
     TpsFault,
+    ActiveProtection,
 }
 
 impl OutputGateReason {
@@ -26,6 +27,7 @@ impl OutputGateReason {
             OutputGateReason::BmsNotReady => "bms_not_ready",
             OutputGateReason::ThermKill => "therm_kill",
             OutputGateReason::TpsFault => "tps_fault",
+            OutputGateReason::ActiveProtection => "active_protection",
         }
     }
 }

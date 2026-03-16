@@ -9,6 +9,7 @@ use esp_firmware::bq25792;
 use esp_firmware::bq40z50;
 use esp_firmware::fan;
 use esp_firmware::ina3221;
+use esp_firmware::output_protection;
 use esp_firmware::output_state as output_state_logic;
 use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
@@ -1741,6 +1742,7 @@ pub struct PowerManager<'d, I2C> {
     bms_activation_backup: Option<ChargerActivationBackup>,
     chg_watchdog_restore: Option<u8>,
     output_state: OutputRuntimeState,
+    output_protection: output_protection::ProtectionRuntime,
     fan: fan::Controller,
     vin_sample_missing_streak: u8,
 
@@ -1811,6 +1813,17 @@ pub struct Config {
     pub telemetry_include_vin_ch3: bool,
     pub tmp112_tlow_c_x16: i16,
     pub tmp112_thigh_c_x16: i16,
+    pub protect_temp_derate_c_x16: i16,
+    pub protect_temp_resume_c_x16: i16,
+    pub protect_temp_hold: Duration,
+    pub protect_current_derate_ma: i32,
+    pub protect_current_resume_ma: i32,
+    pub protect_current_hold: Duration,
+    pub protect_ilim_step_ma: u16,
+    pub protect_ilim_step_interval: Duration,
+    pub protect_min_ilim_ma: u16,
+    pub protect_shutdown_vout_mv: u16,
+    pub protect_shutdown_hold: Duration,
     pub fan_config: fan::Config,
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
@@ -2131,6 +2144,7 @@ where
             bms_activation_backup: None,
             chg_watchdog_restore: None,
             output_state,
+            output_protection: output_protection::ProtectionRuntime::new(cfg.ilimit_ma),
             fan: fan::Controller::new(cfg.fan_config),
             vin_sample_missing_streak: 0,
             ui_snapshot: cfg.self_check_snapshot,
@@ -2368,8 +2382,13 @@ where
             self.refresh_audio_signals();
             return false;
         }
+        self.update_output_protection();
         self.reconcile_output_state();
         let telemetry_printed = self.maybe_print_telemetry();
+        if telemetry_printed {
+            self.update_output_protection();
+            self.reconcile_output_state();
+        }
         self.update_fan_state(irq);
         self.refresh_audio_signals();
         telemetry_printed
@@ -5228,6 +5247,26 @@ where
         )
     }
 
+    fn current_output_ilimit_ma(&self) -> u16 {
+        self.output_protection.applied_ilim_ma
+    }
+
+    fn output_protection_config(&self) -> output_protection::ProtectionConfig {
+        output_protection::ProtectionConfig {
+            temp_enter_c_x16: self.cfg.protect_temp_derate_c_x16,
+            temp_exit_c_x16: self.cfg.protect_temp_resume_c_x16,
+            temp_hold_ms: self.cfg.protect_temp_hold.as_millis() as u64,
+            current_enter_ma: self.cfg.protect_current_derate_ma,
+            current_exit_ma: self.cfg.protect_current_resume_ma,
+            current_hold_ms: self.cfg.protect_current_hold.as_millis() as u64,
+            ilim_step_ma: self.cfg.protect_ilim_step_ma,
+            ilim_step_interval_ms: self.cfg.protect_ilim_step_interval.as_millis() as u64,
+            min_ilim_ma: self.cfg.protect_min_ilim_ma,
+            shutdown_vout_mv: self.cfg.protect_shutdown_vout_mv,
+            shutdown_hold_ms: self.cfg.protect_shutdown_hold.as_millis() as u64,
+        }
+    }
+
     fn output_gate_reason_now(&mut self) -> OutputGateReason {
         if self.therm_kill.is_low() {
             return OutputGateReason::ThermKill;
@@ -5254,6 +5293,10 @@ where
                     return OutputGateReason::TpsFault;
                 }
             }
+        }
+
+        if self.output_protection.phase == output_protection::ProtectionPhase::Shutdown {
+            return OutputGateReason::ActiveProtection;
         }
 
         OutputGateReason::None
@@ -5299,6 +5342,121 @@ where
     #[allow(dead_code)]
     fn can_request_output_restore(&self) -> bool {
         output_restore_pending_from_state(self.output_state, self.current_mains_present())
+    }
+
+    fn apply_output_current_limit(&mut self, limit_ma: u16) {
+        for ch in [OutputChannel::OutA, OutputChannel::OutB] {
+            if !self.output_state.active_outputs.is_enabled(ch) {
+                continue;
+            }
+
+            let result = ::tps55288::Tps55288::with_address(&mut self.i2c, ch.addr())
+                .set_ilim_ma(limit_ma, true)
+                .map_err(tps_error_kind);
+            match result {
+                Ok(()) => defmt::warn!(
+                    "power: active_protection set_ilim ch={} limit_ma={=u16}",
+                    ch.name(),
+                    limit_ma
+                ),
+                Err(kind) => defmt::warn!(
+                    "power: active_protection set_ilim_failed ch={} limit_ma={=u16} err={}",
+                    ch.name(),
+                    limit_ma,
+                    kind
+                ),
+            }
+        }
+    }
+
+    fn update_output_protection(&mut self) {
+        if self.output_state.requested_outputs == EnabledOutputs::None {
+            return;
+        }
+
+        let mut max_temp_c_x16 = None;
+        let mut max_current_ma = None;
+        let mut min_vout_mv = None;
+
+        for ch in [OutputChannel::OutA, OutputChannel::OutB] {
+            if !self.output_state.requested_outputs.is_enabled(ch) {
+                continue;
+            }
+
+            let temp = match ch {
+                OutputChannel::OutA => self.ui_snapshot.tmp_a_c_x16,
+                OutputChannel::OutB => self.ui_snapshot.tmp_b_c_x16,
+            };
+            if let Some(temp_c_x16) = temp {
+                max_temp_c_x16 =
+                    Some(max_temp_c_x16.map_or(temp_c_x16, |cur: i16| cur.max(temp_c_x16)));
+            }
+
+            let current = match ch {
+                OutputChannel::OutA => self.ui_snapshot.tps_a_iout_ma,
+                OutputChannel::OutB => self.ui_snapshot.tps_b_iout_ma,
+            };
+            if let Some(current_ma) = current {
+                let current_ma = current_ma.max(0);
+                max_current_ma =
+                    Some(max_current_ma.map_or(current_ma, |cur: i32| cur.max(current_ma)));
+            }
+
+            let vout = match ch {
+                OutputChannel::OutA => self.ui_snapshot.out_a_vbus_mv,
+                OutputChannel::OutB => self.ui_snapshot.out_b_vbus_mv,
+            };
+            if let Some(vout_mv) = vout {
+                min_vout_mv = Some(min_vout_mv.map_or(vout_mv, |cur: u16| cur.min(vout_mv)));
+            }
+        }
+
+        let result = output_protection::step(
+            self.fan_now_ms(),
+            self.output_protection_config(),
+            self.cfg.ilimit_ma,
+            self.output_protection,
+            output_protection::ProtectionInputs {
+                max_temp_c_x16,
+                max_current_ma,
+                min_vout_mv,
+            },
+        );
+
+        let prev = self.output_protection;
+        self.output_protection = result.runtime;
+        match result.action {
+            output_protection::ProtectionAction::None => {}
+            output_protection::ProtectionAction::ApplyIlim(limit_ma) => {
+                self.apply_output_current_limit(limit_ma);
+                defmt::warn!(
+                    "power: active_protection derating reason={} ilim_ma={=u16} max_temp_c_x16={=?} max_current_ma={=?} min_vout_mv={=?}",
+                    self.output_protection.status.reason().as_str(),
+                    limit_ma,
+                    max_temp_c_x16,
+                    max_current_ma,
+                    min_vout_mv
+                );
+            }
+            output_protection::ProtectionAction::RestoreDefaultIlim(limit_ma) => {
+                self.apply_output_current_limit(limit_ma);
+                defmt::info!(
+                    "power: active_protection cleared restore_ilim_ma={=u16}",
+                    limit_ma
+                );
+            }
+            output_protection::ProtectionAction::Shutdown(reason) => {
+                defmt::error!(
+                    "power: active_protection shutdown reason={} ilim_ma={=u16} min_vout_mv={=?} max_temp_c_x16={=?} max_current_ma={=?}",
+                    reason.as_str(),
+                    prev.applied_ilim_ma,
+                    min_vout_mv,
+                    max_temp_c_x16,
+                    max_current_ma
+                );
+                self.apply_output_gate(OutputGateReason::ActiveProtection);
+            }
+        }
     }
 
     fn recompute_ui_mode(&mut self) {
@@ -5396,7 +5554,9 @@ where
             module_fault,
             io_over_voltage: self.charger_audio.over_voltage || self.tps_audio.any_over_voltage(),
             io_over_current: self.charger_audio.over_current || self.tps_audio.any_over_current(),
-            shutdown_protection: therm_kill_asserted || self.charger_audio.shutdown_protection,
+            shutdown_protection: therm_kill_asserted
+                || self.charger_audio.shutdown_protection
+                || self.output_protection.phase == output_protection::ProtectionPhase::Shutdown,
         };
 
         if !self.audio_signals_ready {
@@ -5603,14 +5763,9 @@ where
     fn try_configure_tps(&mut self, ch: OutputChannel) {
         let enabled = self.output_state.active_outputs.is_enabled(ch);
         let addr = ch.addr();
+        let ilimit_ma = self.current_output_ilimit_ma();
 
-        match tps55288::configure_one(
-            &mut self.i2c,
-            ch,
-            enabled,
-            self.cfg.vout_mv,
-            self.cfg.ilimit_ma,
-        ) {
+        match tps55288::configure_one(&mut self.i2c, ch, enabled, self.cfg.vout_mv, ilimit_ma) {
             Ok(()) => {
                 tps55288::log_configured(&mut self.i2c, ch, enabled);
                 self.mark_tps_ok(ch);
