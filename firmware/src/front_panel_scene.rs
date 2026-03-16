@@ -2975,7 +2975,6 @@ fn render_dashboard_detail_page<P: UiPainter>(
         DashboardDetailPage::Thermal => palette.center,
     };
     let status = detail_status_tag(page, data);
-    let notice = detail_footer_notice(page, data);
 
     draw_dashboard_detail_top_bar(
         painter,
@@ -3018,15 +3017,7 @@ fn render_dashboard_detail_page<P: UiPainter>(
         }
     }
 
-    text(
-        painter,
-        variant,
-        FontRole::DetailBody,
-        notice,
-        Point::new(12, 150),
-        HorizontalAlignment::Left,
-        palette.bg,
-    )?;
+    draw_dashboard_detail_footer_notice(painter, variant, palette, page, data)?;
 
     Ok(())
 }
@@ -4418,6 +4409,95 @@ fn detail_fault_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &'
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DetailFooterIcon {
+    Live,
+    Mock,
+    Warn,
+    Fault,
+    Unknown,
+}
+
+fn detail_footer_badge(
+    page: DashboardDetailPage,
+    data: DashboardLiveData,
+) -> (DetailFooterIcon, &'static str) {
+    let notice = detail_footer_notice(page, data);
+    let status = detail_status_tag(page, data);
+
+    if !detail_data_ready(page, data) || status == "N/A" || notice == "N/A" {
+        return (DetailFooterIcon::Unknown, "NO DATA");
+    }
+
+    if notice.contains("MOCK") {
+        return (DetailFooterIcon::Mock, "MOCK DATA");
+    }
+
+    if notice.contains("BALANCE") {
+        return (DetailFooterIcon::Live, "BAL ACTIVE");
+    }
+
+    match status {
+        "FAULT" => (
+            DetailFooterIcon::Fault,
+            match page {
+                DashboardDetailPage::BatteryFlow if data.bms_state == SelfCheckCommState::Err => {
+                    "BMS FAULT"
+                }
+                DashboardDetailPage::BatteryFlow => "PACK ALARM",
+                DashboardDetailPage::Charger => "LINK FAULT",
+                DashboardDetailPage::Thermal => "SENSE FAULT",
+                _ => "FAULT",
+            },
+        ),
+        "WARN" | "HOT" | "WARM" | "LOCK" | "NOAC" => (DetailFooterIcon::Warn, "CHECK ROWS"),
+        _ if notice.contains("PENDING")
+            || notice.contains("SOURCE")
+            || notice.contains("UI ONLY") =>
+        {
+            (DetailFooterIcon::Unknown, "SOURCE NXT")
+        }
+        _ => (DetailFooterIcon::Live, "LIVE DATA"),
+    }
+}
+
+fn draw_dashboard_detail_footer_notice<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    page: DashboardDetailPage,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    let (icon, label) = detail_footer_badge(page, data);
+    draw_detail_footer_icon(painter, 12, 149, icon, palette.bg)?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        label,
+        Point::new(32, 150),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )
+}
+
+fn draw_detail_footer_icon<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    icon: DetailFooterIcon,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    let blocks = match icon {
+        DetailFooterIcon::Live => CARBON_CHECKMARK_FILLED_14,
+        DetailFooterIcon::Mock => CARBON_CHECKBOX_INDETERMINATE_FILLED_14,
+        DetailFooterIcon::Warn => CARBON_WARNING_ALT_FILLED_14,
+        DetailFooterIcon::Fault => CARBON_CHECKMARK_FILLED_ERROR_14,
+        DetailFooterIcon::Unknown => CARBON_HELP_FILLED_14,
+    };
+    draw_icon_blocks(painter, x, y, blocks, rgb565)
+}
+
 fn detail_fault_row_text(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
     match page {
         DashboardDetailPage::BatteryFlow => {
@@ -5357,6 +5437,106 @@ const CARBON_CLOSE_OUTLINE_32: &[(u8, u8, u8, u8)] = &[
     (17, 27, 8, 1),
     (9, 28, 14, 1),
     (11, 29, 10, 1),
+];
+
+// Icon source: Iconify / carbon, simplified to 14x14 monochrome bitmaps for footer badges.
+// https://icon-sets.iconify.design/carbon/checkmark-filled/
+const CARBON_CHECKMARK_FILLED_14: &[(u8, u8, u8, u8)] = &[
+    (4, 1, 6, 1),
+    (3, 2, 8, 1),
+    (2, 3, 10, 1),
+    (1, 4, 12, 1),
+    (1, 5, 8, 1),
+    (10, 5, 3, 1),
+    (1, 6, 7, 1),
+    (9, 6, 4, 1),
+    (1, 7, 3, 1),
+    (6, 7, 1, 1),
+    (8, 7, 5, 1),
+    (1, 8, 4, 1),
+    (7, 8, 6, 1),
+    (1, 9, 12, 1),
+    (2, 10, 10, 1),
+    (3, 11, 8, 1),
+    (4, 12, 6, 1),
+];
+
+// https://icon-sets.iconify.design/carbon/checkbox-indeterminate-filled/
+const CARBON_CHECKBOX_INDETERMINATE_FILLED_14: &[(u8, u8, u8, u8)] = &[
+    (2, 2, 10, 1),
+    (2, 3, 10, 1),
+    (2, 4, 10, 1),
+    (2, 5, 10, 1),
+    (2, 6, 2, 1),
+    (10, 6, 2, 1),
+    (2, 7, 2, 1),
+    (10, 7, 2, 1),
+    (2, 8, 10, 1),
+    (2, 9, 10, 1),
+    (2, 10, 10, 1),
+    (2, 11, 10, 1),
+];
+
+// https://icon-sets.iconify.design/carbon/warning-alt-filled/
+const CARBON_WARNING_ALT_FILLED_14: &[(u8, u8, u8, u8)] = &[
+    (6, 2, 2, 1),
+    (6, 3, 2, 1),
+    (5, 4, 4, 1),
+    (5, 5, 4, 1),
+    (4, 6, 6, 1),
+    (4, 7, 6, 1),
+    (3, 8, 8, 1),
+    (2, 9, 10, 1),
+    (2, 10, 10, 1),
+    (1, 11, 12, 1),
+    (1, 12, 12, 1),
+];
+
+// https://icon-sets.iconify.design/carbon/checkmark-filled-error/
+const CARBON_CHECKMARK_FILLED_ERROR_14: &[(u8, u8, u8, u8)] = &[
+    (4, 1, 5, 1),
+    (2, 2, 8, 1),
+    (2, 3, 9, 1),
+    (1, 4, 10, 1),
+    (1, 5, 5, 1),
+    (8, 5, 3, 1),
+    (1, 6, 3, 1),
+    (7, 6, 4, 1),
+    (1, 7, 4, 1),
+    (6, 7, 3, 1),
+    (1, 8, 7, 1),
+    (9, 8, 3, 1),
+    (2, 9, 5, 1),
+    (8, 9, 2, 1),
+    (12, 9, 1, 1),
+    (3, 10, 4, 1),
+    (8, 10, 1, 1),
+    (10, 10, 1, 1),
+    (12, 10, 1, 1),
+    (8, 11, 1, 1),
+    (11, 11, 2, 1),
+    (9, 12, 3, 1),
+];
+
+// https://icon-sets.iconify.design/carbon/help-filled/
+const CARBON_HELP_FILLED_14: &[(u8, u8, u8, u8)] = &[
+    (4, 1, 6, 1),
+    (3, 2, 8, 1),
+    (2, 3, 10, 1),
+    (1, 4, 4, 1),
+    (9, 4, 4, 1),
+    (1, 5, 4, 1),
+    (6, 5, 2, 1),
+    (9, 5, 4, 1),
+    (1, 6, 7, 1),
+    (9, 6, 4, 1),
+    (1, 7, 6, 1),
+    (8, 7, 5, 1),
+    (1, 8, 12, 1),
+    (1, 9, 12, 1),
+    (2, 10, 10, 1),
+    (3, 11, 8, 1),
+    (4, 12, 6, 1),
 ];
 
 fn comm_label(state: SelfCheckCommState) -> &'static str {
@@ -6805,6 +6985,45 @@ mod tests {
         assert_eq!(
             detail_footer_notice(DashboardDetailPage::Output, live),
             "OUTPUT DETAIL SOURCE PENDING"
+        );
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::BatteryFlow, live),
+            (DetailFooterIcon::Unknown, "NO DATA")
+        );
+    }
+
+    #[test]
+    fn footer_badges_prefer_mock_and_warn_short_forms() {
+        let mut mock_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Backup);
+        mock_snapshot.bq40z50 = SelfCheckCommState::Ok;
+        mock_snapshot.bq40z50_pack_mv = Some(14_820);
+        mock_snapshot.bq40z50_current_ma = Some(-1_880);
+        mock_snapshot.dashboard_detail.battery_energy_mwh = Some(46_850);
+        mock_snapshot.dashboard_detail.battery_full_capacity_mwh = Some(63_200);
+        mock_snapshot.dashboard_detail.charge_fet_on = Some(false);
+        mock_snapshot.dashboard_detail.discharge_fet_on = Some(true);
+        mock_snapshot.dashboard_detail.precharge_fet_on = Some(false);
+        mock_snapshot.dashboard_detail.battery_notice = Some("PACK FLOW MOCKED - LIVE SOURCE NEXT");
+        let mock_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Backup), &mock_snapshot);
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::BatteryFlow, mock_live),
+            (DetailFooterIcon::Mock, "MOCK DATA")
+        );
+
+        let mut warn_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Supplement);
+        warn_snapshot.tps_a = SelfCheckCommState::Ok;
+        warn_snapshot.tps_b = SelfCheckCommState::Ok;
+        warn_snapshot.tps_a_enabled = Some(true);
+        warn_snapshot.tps_b_enabled = Some(false);
+        warn_snapshot.out_a_vbus_mv = Some(19_040);
+        warn_snapshot.tps_a_iout_ma = Some(620);
+        warn_snapshot.dashboard_detail.output_notice = Some("OUT-B STANDBY PATH HELD");
+        let warn_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Supplement), &warn_snapshot);
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::Output, warn_live),
+            (DetailFooterIcon::Warn, "CHECK ROWS")
         );
     }
 
