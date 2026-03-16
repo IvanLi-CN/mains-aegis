@@ -94,6 +94,8 @@ const CHARGER_FAULT1_TSHUT: u8 = 1 << 2;
 const CHARGER_INPUT_IBUS_MAX_MA: i16 = 5_000;
 const CHARGER_INPUT_VBUS_MAX_MV: u16 = 30_000;
 const CHARGER_INPUT_POWER_ANOMALY_W10: u32 = 2_000;
+const FAN_RPM_SAMPLE_WINDOW_MS: u64 = 1_000;
+const FAN_RPM_MIN_SAMPLE_WINDOW_MS: u64 = 400;
 
 const BMS_DIAG_BREADCRUMB_LEN: usize = 8;
 const BMS_DIAG_BREADCRUMB_VERSION: u8 = 1;
@@ -348,6 +350,69 @@ fn detail_fan_status_text(status: fan::Status) -> &'static str {
             fan::FanLevel::High => "HIGH",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FanRpmTracker {
+    window_started_ms: Option<u64>,
+    window_pulses: u32,
+    rpm: Option<u16>,
+}
+
+impl FanRpmTracker {
+    const fn new() -> Self {
+        Self {
+            window_started_ms: None,
+            window_pulses: 0,
+            rpm: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.window_started_ms = None;
+        self.window_pulses = 0;
+        self.rpm = None;
+    }
+
+    fn observe(
+        &mut self,
+        now_ms: u64,
+        pulse_delta: u32,
+        status: fan::Status,
+        cfg: fan::Config,
+    ) -> Option<u16> {
+        if !status.command.enabled() || status.tach_fault || cfg.tach_pulses_per_rev == 0 {
+            self.reset();
+            return None;
+        }
+
+        let started_ms = self.window_started_ms.get_or_insert(now_ms);
+        self.window_pulses = self.window_pulses.saturating_add(pulse_delta);
+
+        let elapsed_ms = now_ms.saturating_sub(*started_ms);
+        let enough_pulses = self.window_pulses >= u32::from(cfg.tach_pulses_per_rev);
+        let should_refresh = elapsed_ms >= FAN_RPM_SAMPLE_WINDOW_MS
+            || (elapsed_ms >= FAN_RPM_MIN_SAMPLE_WINDOW_MS && enough_pulses);
+
+        if should_refresh {
+            self.rpm = fan_rpm_from_sample(self.window_pulses, elapsed_ms, cfg.tach_pulses_per_rev);
+            self.window_started_ms = Some(now_ms);
+            self.window_pulses = 0;
+        }
+
+        self.rpm
+    }
+}
+
+fn fan_rpm_from_sample(pulse_count: u32, elapsed_ms: u64, pulses_per_rev: u8) -> Option<u16> {
+    if pulse_count == 0 || elapsed_ms == 0 || pulses_per_rev == 0 {
+        return None;
+    }
+
+    let rpm = u64::from(pulse_count)
+        .saturating_mul(60_000)
+        .checked_div(elapsed_ms.saturating_mul(u64::from(pulses_per_rev)))?;
+    Some(rpm.min(u64::from(u16::MAX)) as u16)
 }
 
 fn detail_battery_temp_c(snapshot: &Bq40z50Snapshot) -> Option<i16> {
@@ -1411,6 +1476,7 @@ pub struct PowerManager<'d, I2C> {
     last_input_power_anomaly_log_at: Option<Instant>,
     last_therm_kill_hint_at: Option<Instant>,
     fan_started_at: Instant,
+    fan_rpm_tracker: FanRpmTracker,
 
     ina_ready: bool,
     ina_next_retry_at: Option<Instant>,
@@ -1776,6 +1842,7 @@ where
             last_input_power_anomaly_log_at: None,
             last_therm_kill_hint_at: None,
             fan_started_at: now,
+            fan_rpm_tracker: FanRpmTracker::new(),
 
             ina_ready: false,
             ina_next_retry_at: if outputs_allowed { Some(now) } else { None },
@@ -2058,6 +2125,7 @@ where
 
         detail.out_a_temp_c = snapshot.tmp_a_c;
         detail.out_b_temp_c = snapshot.tmp_b_c;
+        detail.fan_rpm = self.fan_rpm_tracker.rpm;
         detail.fan_pwm_pct = Some(fan_status.pwm_pct(self.cfg.fan_config.mid_pwm_pct));
         detail.fan_status = Some(detail_fan_status_text(fan_status));
         detail.output_notice = Some("LIVE DATA");
@@ -2165,13 +2233,17 @@ where
     fn update_fan_state(&mut self, irq: &IrqSnapshot) {
         self.refresh_fan_temp_snapshots_if_due();
         let prev = self.fan.status();
+        let now_ms = self.fan_now_ms();
         let (status, events) = self.fan.update(fan::Input {
-            now_ms: self.fan_now_ms(),
+            now_ms,
             temps_ready: self.fan_temps_ready(),
             temp_a_c_x16: self.ui_snapshot.tmp_a_c_x16,
             temp_b_c_x16: self.ui_snapshot.tmp_b_c_x16,
             tach_pulse_count: irq.fan_tach,
         });
+        let rpm = self
+            .fan_rpm_tracker
+            .observe(now_ms, irq.fan_tach, status, self.cfg.fan_config);
         let pwm_pct = status.pwm_pct(self.cfg.fan_config.mid_pwm_pct);
 
         if events.temp_source_changed {
@@ -2204,9 +2276,10 @@ where
 
         if events.command_changed {
             defmt::info!(
-                "fan: command mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?} cooldown_active={=bool} tach_fault={=bool}",
+                "fan: command mode={} pwm_pct={=u8} rpm={=?} temp_source={} control_temp_c_x16={=?} cooldown_active={=bool} tach_fault={=bool}",
                 status.command.as_str(),
                 pwm_pct,
+                rpm,
                 status.temp_source.as_str(),
                 status.control_temp_c_x16,
                 status.cooldown_active,
@@ -2217,18 +2290,20 @@ where
         if events.tach_fault_changed {
             if status.tach_fault {
                 defmt::warn!(
-                    "fan: tach_timeout mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?} timeout_ms={=u64}",
+                    "fan: tach_timeout mode={} pwm_pct={=u8} rpm={=?} temp_source={} control_temp_c_x16={=?} timeout_ms={=u64}",
                     status.command.as_str(),
                     pwm_pct,
+                    rpm,
                     status.temp_source.as_str(),
                     status.control_temp_c_x16,
                     self.cfg.fan_config.tach_timeout_ms
                 );
             } else {
                 defmt::info!(
-                    "fan: tach_recovered mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?}",
+                    "fan: tach_recovered mode={} pwm_pct={=u8} rpm={=?} temp_source={} control_temp_c_x16={=?}",
                     status.command.as_str(),
                     pwm_pct,
+                    rpm,
                     status.temp_source.as_str(),
                     status.control_temp_c_x16
                 );
@@ -2239,11 +2314,12 @@ where
     pub fn log_fan_telemetry(&self, applied: AppliedFanState) {
         let status = self.fan.status();
         defmt::info!(
-            "fan: telemetry requested_mode={} requested_pwm_pct={=u8} applied_mode={} applied_pwm_pct={=u8} output_degraded={=bool} temp_source={} control_temp_c_x16={=?} tach_recent={=bool} tach_fault={=bool} cooldown_active={=bool}",
+            "fan: telemetry requested_mode={} requested_pwm_pct={=u8} applied_mode={} applied_pwm_pct={=u8} rpm={=?} output_degraded={=bool} temp_source={} control_temp_c_x16={=?} tach_recent={=bool} tach_fault={=bool} cooldown_active={=bool}",
             status.requested_command.as_str(),
             status.requested_pwm_pct(self.cfg.fan_config.mid_pwm_pct),
             applied.command.as_str(),
             applied.pwm_pct,
+            self.fan_rpm_tracker.rpm,
             applied.degraded,
             status.temp_source.as_str(),
             status.control_temp_c_x16,
@@ -6698,6 +6774,7 @@ mod tests {
             fcc: 0,
             batt_status: 0,
             op_status: Some(0),
+            da_status2: None,
             cb_status: Some(Bq40CbStatus {
                 balance_time_s: [12, 0, 30, 0],
             }),
@@ -6771,5 +6848,71 @@ mod tests {
         };
 
         assert_eq!(detail_battery_temp_c(&snapshot), Some(33));
+    }
+
+    #[test]
+    fn fan_rpm_tracker_uses_two_pulses_per_rev() {
+        let mut tracker = FanRpmTracker::new();
+        let cfg = fan::Config {
+            low_temp_c_x16: 40 * 16,
+            high_temp_c_x16: 50 * 16,
+            hysteresis_c_x16: 3 * 16,
+            cooldown_ms: 10_000,
+            tach_timeout_ms: 2_000,
+            tach_pulses_per_rev: 2,
+            mid_pwm_pct: 60,
+        };
+        let status = fan::Status {
+            requested_command: fan::FanLevel::High,
+            command: fan::FanLevel::High,
+            thermal_level: fan::FanLevel::High,
+            temp_source: fan::TempSource::Max,
+            control_temp_c_x16: Some(55 * 16),
+            tach_fault: false,
+            tach_pulse_seen_recently: true,
+            cooldown_active: false,
+        };
+
+        assert_eq!(tracker.observe(0, 0, status, cfg), None);
+        assert_eq!(tracker.observe(500, 40, status, cfg), Some(2400));
+    }
+
+    #[test]
+    fn fan_rpm_tracker_clears_when_fan_turns_off() {
+        let mut tracker = FanRpmTracker::new();
+        let cfg = fan::Config {
+            low_temp_c_x16: 40 * 16,
+            high_temp_c_x16: 50 * 16,
+            hysteresis_c_x16: 3 * 16,
+            cooldown_ms: 10_000,
+            tach_timeout_ms: 2_000,
+            tach_pulses_per_rev: 2,
+            mid_pwm_pct: 60,
+        };
+        let running = fan::Status {
+            requested_command: fan::FanLevel::Mid,
+            command: fan::FanLevel::Mid,
+            thermal_level: fan::FanLevel::Mid,
+            temp_source: fan::TempSource::Max,
+            control_temp_c_x16: Some(45 * 16),
+            tach_fault: false,
+            tach_pulse_seen_recently: true,
+            cooldown_active: false,
+        };
+        let off = fan::Status {
+            requested_command: fan::FanLevel::Off,
+            command: fan::FanLevel::Off,
+            thermal_level: fan::FanLevel::Off,
+            temp_source: fan::TempSource::Max,
+            control_temp_c_x16: Some(35 * 16),
+            tach_fault: false,
+            tach_pulse_seen_recently: false,
+            cooldown_active: false,
+        };
+
+        assert_eq!(tracker.observe(0, 0, running, cfg), None);
+        assert_eq!(tracker.observe(500, 20, running, cfg), Some(1200));
+        assert_eq!(tracker.observe(800, 0, off, cfg), None);
+        assert_eq!(tracker.rpm, None);
     }
 }
