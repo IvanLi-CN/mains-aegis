@@ -351,12 +351,40 @@ fn detail_fan_status_text(status: fan::Status) -> &'static str {
 }
 
 fn detail_battery_temp_c(snapshot: &Bq40z50Snapshot) -> Option<i16> {
+    if let Some(da_status2) = snapshot.da_status2 {
+        let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(da_status2.cell_temp_k_x10);
+        if (-400..=1250).contains(&temp_c_x10) {
+            return Some((temp_c_x10 / 10) as i16);
+        }
+    }
+
     let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(snapshot.temp_k_x10);
     if (-400..=1250).contains(&temp_c_x10) {
         Some((temp_c_x10 / 10) as i16)
     } else {
         None
     }
+}
+
+fn detail_da_status2_temp_c(temp_k_x10: u16) -> Option<i16> {
+    let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(temp_k_x10);
+    (-400..=1250)
+        .contains(&temp_c_x10)
+        .then_some((temp_c_x10 / 10) as i16)
+}
+
+fn detail_bms_cell_sensor_temps(snapshot: &Bq40z50Snapshot) -> [Option<i16>; 4] {
+    snapshot
+        .da_status2
+        .map_or([None, None, None, None], |da_status2| {
+            da_status2.ts_temp_k_x10.map(detail_da_status2_temp_c)
+        })
+}
+
+fn detail_bms_board_temp_c(snapshot: &Bq40z50Snapshot) -> Option<i16> {
+    snapshot
+        .da_status2
+        .and_then(|da_status2| detail_da_status2_temp_c(da_status2.ts_temp_k_x10[0]))
 }
 
 fn detail_bms_energy_mwh(snapshot: &Bq40z50Snapshot) -> Option<u32> {
@@ -2064,6 +2092,7 @@ where
         detail.charge_fet_on = None;
         detail.discharge_fet_on = None;
         detail.precharge_fet_on = None;
+        detail.board_temp_c = None;
         detail.battery_temp_c = None;
         detail.cells_notice = None;
         detail.battery_notice = None;
@@ -2073,7 +2102,7 @@ where
         let detail = &mut self.ui_snapshot.dashboard_detail;
         let balance_mask = detail_bms_balance_mask(snapshot);
         detail.cell_mv = snapshot.cell_mv.map(Some);
-        detail.cell_temp_c = [None, None, None, None];
+        detail.cell_temp_c = detail_bms_cell_sensor_temps(snapshot);
         detail.balance_active = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CB);
         detail.balance_mask = balance_mask;
         detail.balance_cell = detail_bms_single_balance_cell(balance_mask);
@@ -2082,6 +2111,7 @@ where
         detail.charge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CHG);
         detail.discharge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::DSG);
         detail.precharge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::PCHG);
+        detail.board_temp_c = detail_bms_board_temp_c(snapshot);
         detail.battery_temp_c = detail_battery_temp_c(snapshot);
         detail.cells_notice = Some("LIVE DATA");
         detail.battery_notice = Some("LIVE DATA");
@@ -3779,6 +3809,7 @@ where
             fcc: 0,
             batt_status,
             op_status,
+            da_status2: None,
             cb_status: None,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
@@ -3809,6 +3840,7 @@ where
             fcc: 0,
             batt_status,
             op_status: None,
+            da_status2: None,
             cb_status: None,
             cell_mv: [0; 4],
         })
@@ -3849,6 +3881,7 @@ where
             fcc: 0,
             batt_status,
             op_status: None,
+            da_status2: None,
             cb_status: None,
             cell_mv: [0; 4],
         })
@@ -6312,6 +6345,8 @@ where
             .ok()
             .flatten();
         spin_delay(BMS_ACTIVATION_WORD_GAP);
+        let da_status2 = bq40z50::read_da_status2(&mut self.i2c, addr).ok().flatten();
+        spin_delay(BMS_ACTIVATION_WORD_GAP);
         let cb_status = self.read_bq40_cb_status(addr).ok().flatten();
 
         Ok(Bq40z50Snapshot {
@@ -6324,6 +6359,7 @@ where
             fcc,
             batt_status,
             op_status,
+            da_status2,
             cb_status,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
@@ -6470,6 +6506,7 @@ struct Bq40z50Snapshot {
     fcc: u16,
     batt_status: u16,
     op_status: Option<u32>,
+    da_status2: Option<bq40z50::DaStatus2>,
     cb_status: Option<Bq40CbStatus>,
     cell_mv: [u16; 4],
 }
@@ -6683,5 +6720,56 @@ mod tests {
         assert_eq!(detail_bms_single_balance_cell(Some(0b0110)), None);
         assert_eq!(detail_bms_single_balance_cell(Some(0)), None);
         assert_eq!(detail_bms_single_balance_cell(None), None);
+    }
+
+    #[test]
+    fn detail_bms_temps_use_da_status2_sensor_mapping() {
+        let snapshot = Bq40z50Snapshot {
+            battery_mode: 0,
+            temp_k_x10: 3331,
+            vpack_mv: 15_200,
+            current_ma: 1200,
+            rsoc_pct: 67,
+            remcap: 0,
+            fcc: 0,
+            batt_status: 0,
+            op_status: Some(0),
+            da_status2: Some(bq40z50::DaStatus2 {
+                int_temp_k_x10: 3051,
+                ts_temp_k_x10: [3081, 3091, 3101, 3111],
+                cell_temp_k_x10: 3121,
+                fet_temp_k_x10: 3131,
+                gauging_temp_k_x10: 3141,
+            }),
+            cb_status: None,
+            cell_mv: [4100, 4098, 4102, 4099],
+        };
+
+        assert_eq!(
+            detail_bms_cell_sensor_temps(&snapshot),
+            [Some(35), Some(36), Some(37), Some(38)]
+        );
+        assert_eq!(detail_bms_board_temp_c(&snapshot), Some(35));
+        assert_eq!(detail_battery_temp_c(&snapshot), Some(39));
+    }
+
+    #[test]
+    fn detail_battery_temp_falls_back_to_temperature_word_without_da_status2() {
+        let snapshot = Bq40z50Snapshot {
+            battery_mode: 0,
+            temp_k_x10: 3061,
+            vpack_mv: 15_200,
+            current_ma: 1200,
+            rsoc_pct: 67,
+            remcap: 0,
+            fcc: 0,
+            batt_status: 0,
+            op_status: Some(0),
+            da_status2: None,
+            cb_status: None,
+            cell_mv: [4100, 4098, 4102, 4099],
+        };
+
+        assert_eq!(detail_battery_temp_c(&snapshot), Some(33));
     }
 }

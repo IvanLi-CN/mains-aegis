@@ -30,6 +30,7 @@ pub mod cmd {
     pub const FULL_CHARGE_CAPACITY: u8 = 0x10;
     pub const BATTERY_STATUS: u8 = 0x16;
     pub const OPERATION_STATUS: u8 = 0x54;
+    pub const DA_STATUS_2: u8 = 0x72;
     pub const CB_STATUS: u8 = 0x76;
 
     pub const CELL_VOLTAGE_4: u8 = 0x3C;
@@ -168,6 +169,40 @@ where
         declared_len: declared_len as u8,
         payload_len: declared_len as u8,
         payload,
+    }))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DaStatus2 {
+    pub int_temp_k_x10: u16,
+    pub ts_temp_k_x10: [u16; 4],
+    pub cell_temp_k_x10: u16,
+    pub fet_temp_k_x10: u16,
+    pub gauging_temp_k_x10: u16,
+}
+
+pub fn read_da_status2<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<DaStatus2>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let Some(raw) = read_block_raw(i2c, addr, cmd::DA_STATUS_2)? else {
+        return Ok(None);
+    };
+    if raw.payload_len < 16 {
+        return Ok(None);
+    }
+
+    Ok(Some(DaStatus2 {
+        int_temp_k_x10: u16::from_le_bytes([raw.payload[0], raw.payload[1]]),
+        ts_temp_k_x10: [
+            u16::from_le_bytes([raw.payload[2], raw.payload[3]]),
+            u16::from_le_bytes([raw.payload[4], raw.payload[5]]),
+            u16::from_le_bytes([raw.payload[6], raw.payload[7]]),
+            u16::from_le_bytes([raw.payload[8], raw.payload[9]]),
+        ],
+        cell_temp_k_x10: u16::from_le_bytes([raw.payload[10], raw.payload[11]]),
+        fet_temp_k_x10: u16::from_le_bytes([raw.payload[12], raw.payload[13]]),
+        gauging_temp_k_x10: u16::from_le_bytes([raw.payload[14], raw.payload[15]]),
     }))
 }
 
