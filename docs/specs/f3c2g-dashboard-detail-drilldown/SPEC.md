@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-03-15
-- Last: 2026-03-15
+- Last: 2026-03-17
 
 ## 背景 / 问题陈述
 
@@ -170,9 +170,30 @@
 
 ## Visual Evidence (PR)
 
-- `![Dashboard home](./assets/dashboard-home.png)`
-- `![Dashboard cells detail](./assets/dashboard-detail-cells.png)`
-- `![Dashboard battery flow detail](./assets/dashboard-detail-battery-flow.png)`
-- `![Dashboard output detail](./assets/dashboard-detail-output.png)`
-- `![Dashboard charger detail](./assets/dashboard-detail-charger.png)`
-- `![Dashboard thermal detail](./assets/dashboard-detail-thermal.png)`
+当前冻结版评审图如下，包含首页与 5 个二级详情页：
+
+![Dashboard review set](./assets/dashboard-review-set.png)
+
+### Home
+
+![Dashboard home](./assets/dashboard-home.png)
+
+### Cells
+
+![Dashboard cells detail](./assets/dashboard-detail-cells.png)
+
+### Battery Flow
+
+![Dashboard battery flow detail](./assets/dashboard-detail-battery-flow.png)
+
+### Output
+
+![Dashboard output detail](./assets/dashboard-detail-output.png)
+
+### Charger
+
+![Dashboard charger detail](./assets/dashboard-detail-charger.png)
+
+### Thermal
+
+![Dashboard thermal detail](./assets/dashboard-detail-thermal.png)
