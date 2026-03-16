@@ -30,6 +30,7 @@ pub mod cmd {
     pub const FULL_CHARGE_CAPACITY: u8 = 0x10;
     pub const BATTERY_STATUS: u8 = 0x16;
     pub const OPERATION_STATUS: u8 = 0x54;
+    pub const CB_STATUS: u8 = 0x76;
 
     pub const CELL_VOLTAGE_4: u8 = 0x3C;
     pub const CELL_VOLTAGE_3: u8 = 0x3D;
@@ -42,14 +43,15 @@ pub mod battery_mode {
 }
 
 pub mod operation_status {
-    pub const SLEEP: u16 = 1 << 15;
-    pub const XCHG: u16 = 1 << 14;
-    pub const XDSG: u16 = 1 << 13;
-    pub const PF: u16 = 1 << 12;
-    pub const PCHG: u16 = 1 << 3;
-    pub const CHG: u16 = 1 << 2;
-    pub const DSG: u16 = 1 << 1;
-    pub const PRES: u16 = 1 << 0;
+    pub const CB: u32 = 1 << 28;
+    pub const SLEEP: u32 = 1 << 15;
+    pub const XCHG: u32 = 1 << 14;
+    pub const XDSG: u32 = 1 << 13;
+    pub const PF: u32 = 1 << 12;
+    pub const PCHG: u32 = 1 << 3;
+    pub const CHG: u32 = 1 << 2;
+    pub const DSG: u32 = 1 << 1;
+    pub const PRES: u32 = 1 << 0;
 }
 
 pub mod battery_status {
@@ -135,52 +137,61 @@ where
     read_u16(i2c, addr, sbscmd).map(|raw| i16::from_le_bytes(raw.to_le_bytes()))
 }
 
-/// Read the low 16 bits of OperationStatus() from its SMBus block response.
-///
-/// TRM marks 0x54 as an H4/block command, so reading it as a plain word can
-/// return stale or misaligned bytes. We only need the low 16 bits for CHG/DSG
-/// path decoding in the main firmware.
-pub fn read_operation_status_low_u16<I2C>(
+pub const MAX_BLOCK_PAYLOAD_LEN: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockReadRaw {
+    pub declared_len: u8,
+    pub payload_len: u8,
+    pub payload: [u8; MAX_BLOCK_PAYLOAD_LEN],
+}
+
+pub fn read_block_raw<I2C>(
     i2c: &mut I2C,
     addr: u8,
-) -> Result<Option<u16>, I2C::Error>
+    sbscmd: u8,
+) -> Result<Option<BlockReadRaw>, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    let mut pec_buf = [0u8; 6];
-    if i2c
-        .write_read(addr, &[cmd::OPERATION_STATUS], &mut pec_buf)
-        .is_ok()
-    {
-        let declared_len = pec_buf[0] as usize;
-        if (4..=32).contains(&declared_len) {
-            let addr_w = addr << 1;
-            let addr_r = addr_w | 1;
-            let expected = crc8_smbus(&[
-                addr_w,
-                cmd::OPERATION_STATUS,
-                addr_r,
-                pec_buf[0],
-                pec_buf[1],
-                pec_buf[2],
-                pec_buf[3],
-                pec_buf[4],
-            ]);
-            if expected == pec_buf[5] {
-                return Ok(Some(u16::from_le_bytes([pec_buf[1], pec_buf[2]])));
-            }
-        }
-    }
-
-    let mut buf = [0u8; 5];
-    i2c.write_read(addr, &[cmd::OPERATION_STATUS], &mut buf)?;
+    let mut buf = [0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+    i2c.write_read(addr, &[sbscmd], &mut buf)?;
 
     let declared_len = buf[0] as usize;
-    if !(4..=32).contains(&declared_len) {
+    if !(1..=MAX_BLOCK_PAYLOAD_LEN).contains(&declared_len) {
         return Ok(None);
     }
 
-    Ok(Some(u16::from_le_bytes([buf[1], buf[2]])))
+    let mut payload = [0u8; MAX_BLOCK_PAYLOAD_LEN];
+    payload[..declared_len].copy_from_slice(&buf[1..(1 + declared_len)]);
+    Ok(Some(BlockReadRaw {
+        declared_len: declared_len as u8,
+        payload_len: declared_len as u8,
+        payload,
+    }))
+}
+
+/// Read the 32-bit OperationStatus() block response.
+///
+/// TRM marks 0x54 as an H4/block command, so reading it as a plain word can
+/// return stale or misaligned bytes.
+pub fn read_operation_status<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<u32>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let Some(raw) = read_block_raw(i2c, addr, cmd::OPERATION_STATUS)? else {
+        return Ok(None);
+    };
+    if raw.payload_len < 4 {
+        return Ok(None);
+    }
+
+    Ok(Some(u32::from_le_bytes([
+        raw.payload[0],
+        raw.payload[1],
+        raw.payload[2],
+        raw.payload[3],
+    ])))
 }
 
 /// Convert Temperature() units (0.1 K) to 0.1 C (i.e., C * 10).

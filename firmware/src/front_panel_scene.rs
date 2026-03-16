@@ -214,6 +214,8 @@ pub enum BmsResultKind {
 pub struct DashboardDetailSnapshot {
     pub cell_mv: [Option<u16>; 4],
     pub cell_temp_c: [Option<i16>; 4],
+    pub balance_active: Option<bool>,
+    pub balance_mask: Option<u8>,
     pub balance_cell: Option<u8>,
     pub battery_energy_mwh: Option<u32>,
     pub battery_full_capacity_mwh: Option<u32>,
@@ -242,6 +244,8 @@ impl DashboardDetailSnapshot {
         Self {
             cell_mv: [None, None, None, None],
             cell_temp_c: [None, None, None, None],
+            balance_active: None,
+            balance_mask: None,
             balance_cell: None,
             battery_energy_mwh: None,
             battery_full_capacity_mwh: None,
@@ -3032,6 +3036,28 @@ fn render_dashboard_detail_page<P: UiPainter>(
     Ok(())
 }
 
+fn detail_balance_summary_text(detail: DashboardDetailSnapshot) -> &'static str {
+    match detail.balance_mask {
+        Some(0) => "NONE",
+        Some(0b0001) => "C1",
+        Some(0b0010) => "C2",
+        Some(0b0100) => "C3",
+        Some(0b1000) => "C4",
+        Some(0b0011) => "C1+C2",
+        Some(0b0101) => "C1+C3",
+        Some(0b0110) => "C2+C3",
+        Some(0b1001) => "C1+C4",
+        Some(0b1010) => "C2+C4",
+        Some(0b1100) => "C3+C4",
+        Some(_) => "MULTI",
+        None => match detail.balance_active {
+            Some(true) => "ACTIVE",
+            Some(false) => "NONE",
+            None => "N/A",
+        },
+    }
+}
+
 fn render_dashboard_cells_detail<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
@@ -3094,15 +3120,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
         painter,
         variant,
         FontRole::DetailNum,
-        match data.detail.balance_cell {
-            Some(cell) if (1..=4).contains(&cell) => match cell {
-                1 => "C1 ACTIVE",
-                2 => "C2 ACTIVE",
-                3 => "C3 ACTIVE",
-                _ => "C4 ACTIVE",
-            },
-            _ => "NONE",
-        },
+        detail_balance_summary_text(data.detail),
         Point::new(308, 42),
         HorizontalAlignment::Right,
         palette.bg,
@@ -3921,7 +3939,7 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
                 "WARN"
             } else if !cells_detail_ready(data) {
                 "N/A"
-            } else if data.detail.balance_cell.is_some() {
+            } else if data.detail.balance_active == Some(true) {
                 "BAL ON"
             } else {
                 "READY"
@@ -4303,6 +4321,8 @@ fn thermal_hotspot_c(data: DashboardLiveData) -> Option<i16> {
 
 fn cells_detail_ready(data: DashboardLiveData) -> bool {
     data.batt_pack_mv.is_some()
+        || data.detail.balance_active.is_some()
+        || data.detail.balance_mask.is_some()
         || data.detail.balance_cell.is_some()
         || data.detail.cell_mv.iter().any(|value| value.is_some())
         || data.detail.cell_temp_c.iter().any(|value| value.is_some())
@@ -7067,11 +7087,28 @@ mod tests {
     fn cells_warn_status_beats_balance_indicator() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.bq40z50_rca_alarm = Some(true);
+        snapshot.dashboard_detail.balance_active = Some(true);
+        snapshot.dashboard_detail.balance_mask = Some(0b0010);
         snapshot.dashboard_detail.balance_cell = Some(2);
 
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
         assert_eq!(detail_status_tag(DashboardDetailPage::Cells, live), "WARN");
+    }
+
+    #[test]
+    fn cells_detail_shows_multi_balance_summary_when_multiple_cells_are_active() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.dashboard_detail.balance_active = Some(true);
+        snapshot.dashboard_detail.balance_mask = Some(0b0101);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Cells, live),
+            "BAL ON"
+        );
+        assert_eq!(detail_balance_summary_text(live.detail), "C1+C3");
     }
 
     #[test]

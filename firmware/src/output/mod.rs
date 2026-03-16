@@ -243,11 +243,11 @@ where
     }
 }
 
-fn bq40_op_bit(op_status: Option<u16>, mask: u16) -> Option<bool> {
+fn bq40_op_bit(op_status: Option<u32>, mask: u32) -> Option<bool> {
     op_status.map(|raw| (raw & mask) != 0)
 }
 
-fn bq40_decode_charge_path(op_status: Option<u16>) -> (Option<bool>, &'static str) {
+fn bq40_decode_charge_path(op_status: Option<u32>) -> (Option<bool>, &'static str) {
     let Some(raw) = op_status else {
         return (None, "op_status_unavailable");
     };
@@ -264,7 +264,7 @@ fn bq40_decode_charge_path(op_status: Option<u16>) -> (Option<bool>, &'static st
     }
 }
 
-fn bq40_decode_discharge_path(op_status: Option<u16>) -> (Option<bool>, &'static str) {
+fn bq40_decode_discharge_path(op_status: Option<u32>) -> (Option<bool>, &'static str) {
     let Some(raw) = op_status else {
         return (None, "op_status_unavailable");
     };
@@ -368,9 +368,35 @@ fn detail_bms_full_capacity_mwh(snapshot: &Bq40z50Snapshot) -> Option<u32> {
     ((snapshot.battery_mode & bq40z50::battery_mode::CAPM) != 0).then_some(snapshot.fcc as u32 * 10)
 }
 
+fn detail_bms_balance_mask(snapshot: &Bq40z50Snapshot) -> Option<u8> {
+    match bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CB) {
+        Some(false) => Some(0),
+        Some(true) => {
+            let cb_status = snapshot.cb_status?;
+            let mut mask = 0u8;
+            for (idx, seconds) in cb_status.balance_time_s.iter().enumerate() {
+                if *seconds > 0 {
+                    mask |= 1 << idx;
+                }
+            }
+            Some(mask)
+        }
+        None => None,
+    }
+}
+
+fn detail_bms_single_balance_cell(balance_mask: Option<u8>) -> Option<u8> {
+    let mask = balance_mask?;
+    if mask.count_ones() != 1 {
+        return None;
+    }
+
+    Some(mask.trailing_zeros() as u8 + 1)
+}
+
 fn bq40_primary_reason(
     batt_status: u16,
-    op_status: Option<u16>,
+    op_status: Option<u32>,
     charge_reason: &'static str,
     discharge_reason: &'static str,
 ) -> &'static str {
@@ -871,7 +897,7 @@ where
             let current = bq40z50::read_i16(&mut *i2c, addr, bq40z50::cmd::CURRENT);
             let soc = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE);
             let status = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::BATTERY_STATUS);
-            let op_status = bq40z50::read_operation_status_low_u16(&mut *i2c, addr)
+            let op_status = bq40z50::read_operation_status(&mut *i2c, addr)
                 .ok()
                 .flatten();
 
@@ -2030,6 +2056,8 @@ where
         let detail = &mut self.ui_snapshot.dashboard_detail;
         detail.cell_mv = [None, None, None, None];
         detail.cell_temp_c = [None, None, None, None];
+        detail.balance_active = None;
+        detail.balance_mask = None;
         detail.balance_cell = None;
         detail.battery_energy_mwh = None;
         detail.battery_full_capacity_mwh = None;
@@ -2043,9 +2071,12 @@ where
 
     fn apply_bms_detail_snapshot(&mut self, snapshot: &Bq40z50Snapshot) {
         let detail = &mut self.ui_snapshot.dashboard_detail;
+        let balance_mask = detail_bms_balance_mask(snapshot);
         detail.cell_mv = snapshot.cell_mv.map(Some);
         detail.cell_temp_c = [None, None, None, None];
-        detail.balance_cell = None;
+        detail.balance_active = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CB);
+        detail.balance_mask = balance_mask;
+        detail.balance_cell = detail_bms_single_balance_cell(balance_mask);
         detail.battery_energy_mwh = detail_bms_energy_mwh(snapshot);
         detail.battery_full_capacity_mwh = detail_bms_full_capacity_mwh(snapshot);
         detail.charge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CHG);
@@ -3748,6 +3779,7 @@ where
             fcc: 0,
             batt_status,
             op_status,
+            cb_status: None,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
     }
@@ -3777,6 +3809,7 @@ where
             fcc: 0,
             batt_status,
             op_status: None,
+            cb_status: None,
             cell_mv: [0; 4],
         })
     }
@@ -3816,6 +3849,7 @@ where
             fcc: 0,
             batt_status,
             op_status: None,
+            cb_status: None,
             cell_mv: [0; 4],
         })
     }
@@ -6136,7 +6170,7 @@ where
             && a.cell_mv == b.cell_mv
     }
 
-    fn bq40_discharge_ready(op_status: Option<u16>) -> Option<bool> {
+    fn bq40_discharge_ready(op_status: Option<u32>) -> Option<bool> {
         bq40_decode_discharge_path(op_status).0
     }
 
@@ -6204,6 +6238,30 @@ where
         unreachable!()
     }
 
+    fn read_bq40_cb_status(
+        &mut self,
+        addr: u8,
+    ) -> Result<Option<Bq40CbStatus>, Bq40ActivationReadError> {
+        let Some(raw) = bq40z50::read_block_raw(&mut self.i2c, addr, bq40z50::cmd::CB_STATUS)
+            .map_err(|err| Bq40ActivationReadError::I2c(i2c_error_kind(err)))?
+        else {
+            return Ok(None);
+        };
+
+        if raw.payload_len < 18 {
+            return Ok(None);
+        }
+
+        Ok(Some(Bq40CbStatus {
+            balance_time_s: [
+                u16::from_le_bytes([raw.payload[0], raw.payload[1]]),
+                u16::from_le_bytes([raw.payload[2], raw.payload[3]]),
+                u16::from_le_bytes([raw.payload[4], raw.payload[5]]),
+                u16::from_le_bytes([raw.payload[6], raw.payload[7]]),
+            ],
+        }))
+    }
+
     fn read_bq40z50_snapshot(
         &mut self,
         addr: u8,
@@ -6250,9 +6308,11 @@ where
             }
         }
 
-        let op_status = bq40z50::read_operation_status_low_u16(&mut self.i2c, addr)
+        let op_status = bq40z50::read_operation_status(&mut self.i2c, addr)
             .ok()
             .flatten();
+        spin_delay(BMS_ACTIVATION_WORD_GAP);
+        let cb_status = self.read_bq40_cb_status(addr).ok().flatten();
 
         Ok(Bq40z50Snapshot {
             battery_mode,
@@ -6264,6 +6324,7 @@ where
             fcc,
             batt_status,
             op_status,
+            cb_status,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
     }
@@ -6394,6 +6455,11 @@ where
 }
 
 #[derive(Clone, Copy)]
+struct Bq40CbStatus {
+    balance_time_s: [u16; 4],
+}
+
+#[derive(Clone, Copy)]
 struct Bq40z50Snapshot {
     battery_mode: u16,
     temp_k_x10: u16,
@@ -6403,7 +6469,8 @@ struct Bq40z50Snapshot {
     remcap: u16,
     fcc: u16,
     batt_status: u16,
-    op_status: Option<u16>,
+    op_status: Option<u32>,
+    cb_status: Option<Bq40CbStatus>,
     cell_mv: [u16; 4],
 }
 
@@ -6580,5 +6647,41 @@ mod tests {
         assert_eq!(detail_charger_status_text(false, true, true, 3), "CHG");
         assert_eq!(detail_charger_status_text(false, true, true, 7), "DONE");
         assert_eq!(detail_charger_status_text(false, true, true, 0), "READY");
+    }
+
+    #[test]
+    fn detail_bms_balance_mask_requires_active_cb_flag() {
+        let base = Bq40z50Snapshot {
+            battery_mode: 0,
+            temp_k_x10: 2981,
+            vpack_mv: 15_200,
+            current_ma: 1200,
+            rsoc_pct: 67,
+            remcap: 0,
+            fcc: 0,
+            batt_status: 0,
+            op_status: Some(0),
+            cb_status: Some(Bq40CbStatus {
+                balance_time_s: [12, 0, 30, 0],
+            }),
+            cell_mv: [4100, 4098, 4102, 4099],
+        };
+
+        assert_eq!(detail_bms_balance_mask(&base), Some(0));
+
+        let active = Bq40z50Snapshot {
+            op_status: Some(bq40z50::operation_status::CB),
+            ..base
+        };
+        assert_eq!(detail_bms_balance_mask(&active), Some(0b0101));
+    }
+
+    #[test]
+    fn detail_bms_single_balance_cell_only_accepts_one_hot_masks() {
+        assert_eq!(detail_bms_single_balance_cell(Some(0b0001)), Some(1));
+        assert_eq!(detail_bms_single_balance_cell(Some(0b0100)), Some(3));
+        assert_eq!(detail_bms_single_balance_cell(Some(0b0110)), None);
+        assert_eq!(detail_bms_single_balance_cell(Some(0)), None);
+        assert_eq!(detail_bms_single_balance_cell(None), None);
     }
 }
