@@ -3228,10 +3228,10 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         Some(pack_mv) => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::NumHero,
             format_args!("{:>2}.{:01}", pack_mv / 1000, (pack_mv % 1000) / 100),
-            Point::new(14, 36),
-            HorizontalAlignment::Left,
+            Point::new(154, 30),
+            HorizontalAlignment::Right,
             palette.bg,
         )?,
         None => text(
@@ -3257,13 +3257,13 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
         Some(current_ma) => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::NumHero,
             format_args!(
                 "{:>1}.{:02}",
                 current_ma.abs() / 1000,
                 (current_ma.abs() % 1000) / 10
             ),
-            Point::new(308, 36),
+            Point::new(304, 30),
             HorizontalAlignment::Right,
             palette.bg,
         )?,
@@ -3277,6 +3277,7 @@ fn render_dashboard_battery_flow_detail<P: UiPainter>(
             palette.bg,
         )?,
     }
+
     text(
         painter,
         variant,
@@ -3403,10 +3404,10 @@ fn render_dashboard_output_detail<P: UiPainter>(
         Some(bus_mv) => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::NumHero,
             format_args!("{:>2}.{:01}", bus_mv / 1000, (bus_mv % 1000) / 100),
-            Point::new(14, 36),
-            HorizontalAlignment::Left,
+            Point::new(154, 30),
+            HorizontalAlignment::Right,
             palette.bg,
         )?,
         None => text(
@@ -3432,9 +3433,9 @@ fn render_dashboard_output_detail<P: UiPainter>(
         Some(power_w10) => text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::NumHero,
             format_args!("{:>2}.{:01}", power_w10 / 10, power_w10 % 10),
-            Point::new(308, 36),
+            Point::new(304, 30),
             HorizontalAlignment::Right,
             palette.bg,
         )?,
@@ -3448,6 +3449,7 @@ fn render_dashboard_output_detail<P: UiPainter>(
             palette.bg,
         )?,
     }
+
     text(
         painter,
         variant,
