@@ -147,6 +147,79 @@ pub struct BlockReadRaw {
     pub payload: [u8; MAX_BLOCK_PAYLOAD_LEN],
 }
 
+fn parse_block_read_raw(declared_len: u8, payload_bytes: &[u8]) -> Option<BlockReadRaw> {
+    let declared_len = declared_len as usize;
+    if !(1..=MAX_BLOCK_PAYLOAD_LEN).contains(&declared_len) {
+        return None;
+    }
+    if payload_bytes.len() < declared_len {
+        return None;
+    }
+
+    let mut payload = [0u8; MAX_BLOCK_PAYLOAD_LEN];
+    payload[..declared_len].copy_from_slice(&payload_bytes[..declared_len]);
+    Some(BlockReadRaw {
+        declared_len: declared_len as u8,
+        payload_len: declared_len as u8,
+        payload,
+    })
+}
+
+fn read_block_raw_with_pec<I2C>(i2c: &mut I2C, addr: u8, sbscmd: u8) -> Option<BlockReadRaw>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    i2c.write(addr, &[sbscmd]).ok()?;
+
+    let mut len_buf = [0u8; 1];
+    i2c.read(addr, &mut len_buf).ok()?;
+    let declared_len = len_buf[0] as usize;
+    if !(1..=MAX_BLOCK_PAYLOAD_LEN).contains(&declared_len) {
+        return None;
+    }
+
+    let mut payload_and_pec = [0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+    i2c.read(addr, &mut payload_and_pec[..(declared_len + 1)])
+        .ok()?;
+
+    let addr_w = addr << 1;
+    let addr_r = addr_w | 1;
+    let mut crc_buf = [0u8; MAX_BLOCK_PAYLOAD_LEN + 4];
+    crc_buf[0] = addr_w;
+    crc_buf[1] = sbscmd;
+    crc_buf[2] = addr_r;
+    crc_buf[3] = len_buf[0];
+    crc_buf[4..(4 + declared_len)].copy_from_slice(&payload_and_pec[..declared_len]);
+    let expected = crc8_smbus(&crc_buf[..(4 + declared_len)]);
+    if expected != payload_and_pec[declared_len] {
+        return None;
+    }
+
+    parse_block_read_raw(len_buf[0], &payload_and_pec[..declared_len])
+}
+
+fn read_block_raw_without_pec<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    sbscmd: u8,
+) -> Result<Option<BlockReadRaw>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    i2c.write(addr, &[sbscmd])?;
+
+    let mut len_buf = [0u8; 1];
+    i2c.read(addr, &mut len_buf)?;
+    let declared_len = len_buf[0] as usize;
+    if !(1..=MAX_BLOCK_PAYLOAD_LEN).contains(&declared_len) {
+        return Ok(None);
+    }
+
+    let mut payload = [0u8; MAX_BLOCK_PAYLOAD_LEN];
+    i2c.read(addr, &mut payload[..declared_len])?;
+    Ok(parse_block_read_raw(len_buf[0], &payload[..declared_len]))
+}
+
 pub fn read_block_raw<I2C>(
     i2c: &mut I2C,
     addr: u8,
@@ -155,21 +228,11 @@ pub fn read_block_raw<I2C>(
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    let mut buf = [0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
-    i2c.write_read(addr, &[sbscmd], &mut buf)?;
-
-    let declared_len = buf[0] as usize;
-    if !(1..=MAX_BLOCK_PAYLOAD_LEN).contains(&declared_len) {
-        return Ok(None);
+    if let Some(raw) = read_block_raw_with_pec(i2c, addr, sbscmd) {
+        return Ok(Some(raw));
     }
 
-    let mut payload = [0u8; MAX_BLOCK_PAYLOAD_LEN];
-    payload[..declared_len].copy_from_slice(&buf[1..(1 + declared_len)]);
-    Ok(Some(BlockReadRaw {
-        declared_len: declared_len as u8,
-        payload_len: declared_len as u8,
-        payload,
-    }))
+    read_block_raw_without_pec(i2c, addr, sbscmd)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,4 +295,123 @@ where
 /// Convert Temperature() units (0.1 K) to 0.1 C (i.e., C * 10).
 pub const fn temp_c_x10_from_k_x10(temp_k_x10: u16) -> i32 {
     temp_k_x10 as i32 - 2731
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use embedded_hal::i2c::{ErrorKind, ErrorType, I2c, Operation};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct FakeError;
+
+    impl embedded_hal::i2c::Error for FakeError {
+        fn kind(&self) -> ErrorKind {
+            ErrorKind::Other
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum Step {
+        Write(u8, Vec<u8>),
+        Read(u8, Vec<u8>),
+    }
+
+    struct ScriptedI2c {
+        steps: std::collections::VecDeque<Step>,
+    }
+
+    impl ScriptedI2c {
+        fn new(steps: impl IntoIterator<Item = Step>) -> Self {
+            Self {
+                steps: steps.into_iter().collect(),
+            }
+        }
+    }
+
+    impl ErrorType for ScriptedI2c {
+        type Error = FakeError;
+    }
+
+    impl I2c for ScriptedI2c {
+        fn transaction(
+            &mut self,
+            address: u8,
+            operations: &mut [Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            for operation in operations {
+                match operation {
+                    Operation::Write(buf) => {
+                        let Some(Step::Write(expected_addr, expected)) = self.steps.pop_front()
+                        else {
+                            panic!("missing scripted write step");
+                        };
+                        assert_eq!(address, expected_addr);
+                        assert_eq!(buf, expected.as_slice());
+                    }
+                    Operation::Read(buf) => {
+                        let Some(Step::Read(expected_addr, data)) = self.steps.pop_front() else {
+                            panic!("missing scripted read step");
+                        };
+                        assert_eq!(address, expected_addr);
+                        assert_eq!(buf.len(), data.len());
+                        buf.copy_from_slice(&data);
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn read_block_raw_accepts_valid_pec_block_frames() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let cmd = cmd::OPERATION_STATUS;
+        let payload = [0x44, 0x33, 0x22, 0x11];
+        let addr_w = addr << 1;
+        let addr_r = addr_w | 1;
+        let pec = crc8_smbus(&[
+            addr_w, cmd, addr_r, 4, payload[0], payload[1], payload[2], payload[3],
+        ]);
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd]),
+            Step::Read(addr, vec![4]),
+            Step::Read(
+                addr,
+                vec![payload[0], payload[1], payload[2], payload[3], pec],
+            ),
+        ]);
+
+        let raw = read_block_raw(&mut i2c, addr, cmd).unwrap().unwrap();
+
+        assert_eq!(raw.declared_len, 4);
+        assert_eq!(raw.payload_len, 4);
+        assert_eq!(&raw.payload[..4], &payload);
+    }
+
+    #[test]
+    fn read_block_raw_falls_back_to_plain_block_frames_when_pec_is_absent() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let cmd = cmd::CB_STATUS;
+        let payload = [0x0c, 0x00, 0x00, 0x00];
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd]),
+            Step::Read(addr, vec![4]),
+            Step::Read(
+                addr,
+                vec![payload[0], payload[1], payload[2], payload[3], 0x00],
+            ),
+            Step::Write(addr, vec![cmd]),
+            Step::Read(addr, vec![4]),
+            Step::Read(addr, payload.to_vec()),
+        ]);
+
+        let raw = read_block_raw(&mut i2c, addr, cmd).unwrap().unwrap();
+
+        assert_eq!(raw.declared_len, 4);
+        assert_eq!(raw.payload_len, 4);
+        assert_eq!(&raw.payload[..4], &payload);
+    }
 }
