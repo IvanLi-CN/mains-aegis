@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-03-12
-- Last: 2026-03-14
+- Last: 2026-03-15
 
 ## 背景 / 问题陈述
 
@@ -64,7 +64,7 @@
 ## 运行时 cue 映射冻结
 
 - `boot_startup`：上电进入自检后立即请求一次，可与自检并行，且允许被更高优先级 cue 抢占。
-- `mains_present_dc` / `mains_absent_dc`：输入存在位在“已知状态之间”变化时触发；通信从 unknown 恢复到 known 时保持静默。
+- `mains_present_dc` / `mains_absent_dc`：以 `DC5025 VIN>=3V` 的运行时采样作为真相源，在“已知状态之间”变化时触发；charger 通信从 unknown 恢复到 known 时保持静默；仅当 `VIN <-> charger fallback` 的来源切换未伴随 `mains_present` 真假翻转时保持静默，若真假确实变化则仍应触发边沿。
 - `charge_started` / `charge_completed`：charger 状态在“已知相位之间”进入“充电中 / 完成”时触发；首次建链或通信恢复后的 unknown -> known 不补播 one-shot。
 - `battery_low_no_mains` / `battery_low_with_mains`：BMS `RCA` 低电告警按市电有无拆分。
 - `high_stress`：`TS_COOL` / `TS_WARM` / `TREG` 或 TMP112 到达 `TLOW` 但尚未触发停机时触发。
@@ -99,7 +99,7 @@
 - 当 `battery_protection` 与低电条件同时成立时，只允许播放 `battery_protection`；`BatteryLowNoMains` / `BatteryLowWithMains` 必须被全局压制，直到保护解除后再按当前 `RCA + mains_present` 状态恢复。
 - `continuous_loop` cue 必须在单段 PCM 末尾无缝回绕，不能每播完 1 段就重新触发一次 `start_playback`；否则错误音会在每轮边界听出额外起音/断点。
 - 通信恢复语义：
-  - charger 输入/相位从 unknown 恢复到 known 时，不得伪造 `mains_present_dc`、`charge_started`、`charge_completed`。
+  - charger 输入/相位从 unknown 恢复到 known 时，不得伪造 `mains_present_dc`、`charge_started`、`charge_completed`；只要 `VIN` 未跨过 `3V` 门槛，就不得仅因 `VIN <-> charger fallback` 的来源切换且 `mains_present` 未翻转而产生来电/断电边沿；若 `mains_present` 真假确实改变，则仍应按当前已知状态正常播报。
   - 冷启动时若 `mains_present == Some(false)`，不得仅凭初始快照就触发 `mains_absent_dc`；该 cue 只能由已知状态之间的掉电边沿首发，随后再按 loop 语义保持。
   - 自检阶段已观察到的 TPS OVP/OCP/SCP 必须能种子化到运行时音效状态；运行期只能在成功读取到对应 TPS 通道状态后覆盖该通道 fault 位，不能因为该路输出被门控或单次读失败就把 seed 清零。
   - 自检阶段已观察到的 BMS protection / permanent-failure 状态必须能种子化到运行时音效状态，不能等首次 runtime poll 才补发 `battery_protection`。
@@ -129,6 +129,10 @@
 - BMS 激活 / isolation 路径上的 early-return 现在也会刷新音效快照，避免运行时 cue 在激活窗口内冻结。
 - `mains_absent_dc` 已区分“初始无市电”与“已知状态之间掉电边沿”，避免电池冷启动时误报一次市电丢失告警。
 - `mains_absent_dc` 在 charger 通信临时退回 `Unknown` 期间会保留已激活 loop；只有明确恢复到 `Some(true)` 才停播，避免断电告警在链路抖动后永久静默。
+- 运行时 `mains_present` 真相源已统一到 `DC5025 VIN>=3V`；`BQ25792 input_present` 继续服务 charger 本地逻辑与诊断，但不再参与音频 cue 的市电判定。
+- 若 `VIN` 只发生瞬时采样缺失，或因运行态暂时跳过 `VIN` 遥测而错过单个采样周期，运行时音效继续沿用最近一次已知的 `VIN` 市电状态；只有新的有效 `VIN` 样本跨过 `3V` 门槛时才产生来电/断电 cue。
+- 若 `VIN` 连续缺失，或连续多个周期都在跳过 `VIN` 遥测而超出瞬时容错窗口，运行时音效回退到 charger `input_present` 作为降级兜底，避免把过期的 `VIN` 市电状态无限期锁存。
+- 当运行时只是从 `VIN` 真相源切换到 charger 降级兜底，或从 charger 降级兜底切回 `VIN` 真相源时，不得把“数据源切换”伪造为 `mains_present_dc` / `mains_absent_dc` 边沿。
 - `high_stress` 运行时信号已并入 TMP112 `TLOW` 条件；即使 charger 未上报热状态，只要实际温度越过 `TLOW` 且未触发停机，仍会触发该 cue。
 - BMS protection / permanent-failure 状态已在自检结果中种子化，进入主循环前即可驱动 `battery_protection` 的首次调度。
 - TPS OVP/OCP runtime state 已细化为按通道持有；只有成功读取到某路 TPS `STATUS` 时才会覆盖该路 fault seed，未读到的通道继续保留自检/上次有效观测结果。
@@ -183,3 +187,5 @@
 - 2026-03-14: hotfix，`battery_protection` 现在全局高于低电提示音；当保护与低电同时成立时，只保留 `BatteryProtection`，并在日志中明确标记低电提示音被保护音压制。
 - 2026-03-14: hotfix，`continuous_loop` cue 改为在样本末尾无缝回绕，避免 `BatteryProtection` 每约 1 秒重新 `start_playback` 一次而产生额外起音。
 - 2026-03-14: hotfix，`continuous_loop` 的样本回绕现在保留重采样余量，不再在边界重复开头样本或丢掉尾部样本，进一步降低保护音循环接缝感。
+- 2026-03-15: hotfix，运行时市电音效判定改为只消费 `DC5025 VIN>=3V`，修复 charger `input_present` 抖动导致的误判来电/断电音。
+- 2026-03-15: hotfix，`VIN` 瞬时采样缺失时保留最近一次已知市电状态，避免 INA CH3 单次读失败伪造 `mains_absent_dc` / `battery_low_no_mains`；连续缺失则退回 charger `input_present` 兜底。
