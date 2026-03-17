@@ -35,7 +35,7 @@
 - 顶栏标题：`CELL DETAIL`
 - 状态 chip：`BAL ON / READY / WARN / FAULT`
 - 主区：4 节电压栅格
-- 次区：当前均衡节、4 路温度、充放电状态
+- 次区：均衡状态、4 路温度、充放电状态
 - 底栏：cell fault / balance hint
 
 ### `Battery Flow`

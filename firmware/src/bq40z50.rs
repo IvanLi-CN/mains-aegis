@@ -165,6 +165,45 @@ fn parse_block_read_raw(declared_len: u8, payload_bytes: &[u8]) -> Option<BlockR
     })
 }
 
+fn parse_pec_block_read_raw(
+    buf: &[u8; MAX_BLOCK_PAYLOAD_LEN + 2],
+    addr: u8,
+    sbscmd: u8,
+) -> Option<BlockReadRaw> {
+    let declared_len = buf[0] as usize;
+    if !(1..=MAX_BLOCK_PAYLOAD_LEN).contains(&declared_len) {
+        return None;
+    }
+
+    let addr_w = addr << 1;
+    let addr_r = addr_w | 1;
+    let mut crc_buf = [0u8; MAX_BLOCK_PAYLOAD_LEN + 4];
+    crc_buf[0] = addr_w;
+    crc_buf[1] = sbscmd;
+    crc_buf[2] = addr_r;
+    crc_buf[3] = buf[0];
+    crc_buf[4..(4 + declared_len)].copy_from_slice(&buf[1..(1 + declared_len)]);
+    let expected_pec = crc8_smbus(&crc_buf[..(4 + declared_len)]);
+    if expected_pec != buf[1 + declared_len] {
+        return None;
+    }
+
+    parse_block_read_raw(buf[0], &buf[1..(1 + declared_len)])
+}
+
+fn read_plain_block_raw<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    sbscmd: u8,
+) -> Result<Option<BlockReadRaw>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let mut buf = [0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+    i2c.write_read(addr, &[sbscmd], &mut buf)?;
+    Ok(parse_block_read_raw(buf[0], &buf[1..]))
+}
+
 pub fn read_block_raw<I2C>(
     i2c: &mut I2C,
     addr: u8,
@@ -176,22 +215,11 @@ where
     let mut buf = [0u8; MAX_BLOCK_PAYLOAD_LEN + 2];
     i2c.write_read(addr, &[sbscmd], &mut buf)?;
 
-    let declared_len = buf[0] as usize;
-    if !(1..=MAX_BLOCK_PAYLOAD_LEN).contains(&declared_len) {
-        return Ok(None);
+    if let Some(raw) = parse_pec_block_read_raw(&buf, addr, sbscmd) {
+        return Ok(Some(raw));
     }
 
-    let addr_w = addr << 1;
-    let addr_r = addr_w | 1;
-    let mut crc_buf = [0u8; MAX_BLOCK_PAYLOAD_LEN + 4];
-    crc_buf[0] = addr_w;
-    crc_buf[1] = sbscmd;
-    crc_buf[2] = addr_r;
-    crc_buf[3] = buf[0];
-    crc_buf[4..(4 + declared_len)].copy_from_slice(&buf[1..(1 + declared_len)]);
-    let _pec_matches = crc8_smbus(&crc_buf[..(4 + declared_len)]) == buf[1 + declared_len];
-
-    Ok(parse_block_read_raw(buf[0], &buf[1..(1 + declared_len)]))
+    read_plain_block_raw(i2c, addr, sbscmd)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -353,16 +381,51 @@ mod tests {
         let cmd = cmd::CB_STATUS;
         let payload = [0x0c, 0x00, 0x00, 0x00];
 
-        let mut frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2];
-        frame[0] = 4;
-        frame[1..5].copy_from_slice(&payload);
+        let mut pec_probe = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2];
+        pec_probe[0] = 4;
+        pec_probe[1..5].copy_from_slice(&payload);
 
-        let mut i2c = ScriptedI2c::new([Step::Write(addr, vec![cmd]), Step::Read(addr, frame)]);
+        let mut plain_frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+        plain_frame[0] = 4;
+        plain_frame[1..5].copy_from_slice(&payload);
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd]),
+            Step::Read(addr, pec_probe),
+            Step::Write(addr, vec![cmd]),
+            Step::Read(addr, plain_frame),
+        ]);
 
         let raw = read_block_raw(&mut i2c, addr, cmd).unwrap().unwrap();
 
         assert_eq!(raw.declared_len, 4);
         assert_eq!(raw.payload_len, 4);
         assert_eq!(&raw.payload[..4], &payload);
+    }
+
+    #[test]
+    fn read_block_raw_rejects_frames_when_neither_pec_nor_plain_is_confirmed() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let cmd = cmd::CB_STATUS;
+        let payload = [0x0c, 0x00, 0x00, 0x00];
+
+        let mut pec_probe = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2];
+        pec_probe[0] = 4;
+        pec_probe[1..5].copy_from_slice(&payload);
+        pec_probe[5] = 0xaa;
+
+        let mut invalid_plain_frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+        invalid_plain_frame[0] = 0;
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd]),
+            Step::Read(addr, pec_probe),
+            Step::Write(addr, vec![cmd]),
+            Step::Read(addr, invalid_plain_frame),
+        ]);
+
+        let raw = read_block_raw(&mut i2c, addr, cmd).unwrap();
+
+        assert_eq!(raw, None);
     }
 }
