@@ -452,12 +452,23 @@ fn detail_bms_board_temp_c(snapshot: &Bq40z50Snapshot) -> Option<i16> {
 }
 
 fn detail_bms_energy_mwh(snapshot: &Bq40z50Snapshot) -> Option<u32> {
-    ((snapshot.battery_mode & bq40z50::battery_mode::CAPM) != 0)
-        .then_some(snapshot.remcap as u32 * 10)
+    if (snapshot.battery_mode & bq40z50::battery_mode::CAPM) != 0 {
+        Some(snapshot.remcap as u32 * 10)
+    } else {
+        snapshot
+            .filter_capacity
+            .map(|filter| filter.remaining_energy_cwh as u32 * 10)
+    }
 }
 
 fn detail_bms_full_capacity_mwh(snapshot: &Bq40z50Snapshot) -> Option<u32> {
-    ((snapshot.battery_mode & bq40z50::battery_mode::CAPM) != 0).then_some(snapshot.fcc as u32 * 10)
+    if (snapshot.battery_mode & bq40z50::battery_mode::CAPM) != 0 {
+        Some(snapshot.fcc as u32 * 10)
+    } else {
+        snapshot
+            .filter_capacity
+            .map(|filter| filter.full_charge_energy_cwh as u32 * 10)
+    }
 }
 
 fn detail_bms_balance_mask(snapshot: &Bq40z50Snapshot) -> Option<u8> {
@@ -3980,6 +3991,7 @@ where
             batt_status,
             op_status,
             da_status2: None,
+            filter_capacity: None,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
     }
@@ -4010,6 +4022,7 @@ where
             batt_status,
             op_status: None,
             da_status2: None,
+            filter_capacity: None,
             cell_mv: [0; 4],
         })
     }
@@ -4050,6 +4063,7 @@ where
             batt_status,
             op_status: None,
             da_status2: None,
+            filter_capacity: None,
             cell_mv: [0; 4],
         })
     }
@@ -6545,6 +6559,10 @@ where
             .flatten();
         spin_delay(BMS_ACTIVATION_WORD_GAP);
         let da_status2 = bq40z50::read_da_status2(&mut self.i2c, addr).ok().flatten();
+        spin_delay(BMS_ACTIVATION_WORD_GAP);
+        let filter_capacity = bq40z50::read_filter_capacity(&mut self.i2c, addr)
+            .ok()
+            .flatten();
         Ok(Bq40z50Snapshot {
             battery_mode,
             temp_k_x10,
@@ -6556,6 +6574,7 @@ where
             batt_status,
             op_status,
             da_status2,
+            filter_capacity,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
     }
@@ -6697,6 +6716,7 @@ struct Bq40z50Snapshot {
     batt_status: u16,
     op_status: Option<u32>,
     da_status2: Option<bq40z50::DaStatus2>,
+    filter_capacity: Option<bq40z50::FilterCapacity>,
     cell_mv: [u16; 4],
 }
 
@@ -6888,6 +6908,7 @@ mod tests {
             batt_status: 0,
             op_status: Some(0),
             da_status2: None,
+            filter_capacity: None,
             cell_mv: [4100, 4098, 4102, 4099],
         };
 
@@ -6922,6 +6943,7 @@ mod tests {
             batt_status: 0,
             op_status: Some(bq40z50::operation_status::CB),
             da_status2: None,
+            filter_capacity: None,
             cell_mv: [4100, 4098, 4102, 4099],
         };
 
@@ -6951,6 +6973,7 @@ mod tests {
                 fet_temp_k_x10: 3131,
                 gauging_temp_k_x10: 3141,
             }),
+            filter_capacity: None,
             cell_mv: [4100, 4098, 4102, 4099],
         };
 
@@ -6975,10 +6998,63 @@ mod tests {
             batt_status: 0,
             op_status: Some(0),
             da_status2: None,
+            filter_capacity: None,
             cell_mv: [4100, 4098, 4102, 4099],
         };
 
         assert_eq!(detail_battery_temp_c(&snapshot), Some(33));
+    }
+
+    #[test]
+    fn detail_bms_energy_prefers_filter_capacity_energy_when_capm_is_clear() {
+        let snapshot = Bq40z50Snapshot {
+            battery_mode: 0,
+            temp_k_x10: 3061,
+            vpack_mv: 15_200,
+            current_ma: 1200,
+            rsoc_pct: 67,
+            remcap: 4321,
+            fcc: 8765,
+            batt_status: 0,
+            op_status: Some(0),
+            da_status2: None,
+            filter_capacity: Some(bq40z50::FilterCapacity {
+                remaining_capacity_mah: 4000,
+                remaining_energy_cwh: 4685,
+                full_charge_capacity_mah: 5000,
+                full_charge_energy_cwh: 6320,
+            }),
+            cell_mv: [4100, 4098, 4102, 4099],
+        };
+
+        assert_eq!(detail_bms_energy_mwh(&snapshot), Some(46_850));
+        assert_eq!(detail_bms_full_capacity_mwh(&snapshot), Some(63_200));
+    }
+
+    #[test]
+    fn detail_bms_energy_uses_sbs_energy_units_when_capm_is_set() {
+        let snapshot = Bq40z50Snapshot {
+            battery_mode: bq40z50::battery_mode::CAPM,
+            temp_k_x10: 3061,
+            vpack_mv: 15_200,
+            current_ma: 1200,
+            rsoc_pct: 67,
+            remcap: 4685,
+            fcc: 6320,
+            batt_status: 0,
+            op_status: Some(0),
+            da_status2: None,
+            filter_capacity: Some(bq40z50::FilterCapacity {
+                remaining_capacity_mah: 0,
+                remaining_energy_cwh: 1,
+                full_charge_capacity_mah: 0,
+                full_charge_energy_cwh: 1,
+            }),
+            cell_mv: [4100, 4098, 4102, 4099],
+        };
+
+        assert_eq!(detail_bms_energy_mwh(&snapshot), Some(46_850));
+        assert_eq!(detail_bms_full_capacity_mwh(&snapshot), Some(63_200));
     }
 
     #[test]

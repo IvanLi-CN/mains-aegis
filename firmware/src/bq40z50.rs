@@ -21,6 +21,7 @@ pub const I2C_ADDRESS_FALLBACK: u8 = 0x16;
 pub const I2C_ADDRESS_CANDIDATES: [u8; 2] = [I2C_ADDRESS_PRIMARY, I2C_ADDRESS_FALLBACK];
 
 pub mod cmd {
+    pub const MANUFACTURER_ACCESS: u8 = 0x00;
     pub const BATTERY_MODE: u8 = 0x03;
     pub const TEMPERATURE: u8 = 0x08;
     pub const VOLTAGE: u8 = 0x09;
@@ -29,14 +30,18 @@ pub mod cmd {
     pub const REMAINING_CAPACITY: u8 = 0x0F;
     pub const FULL_CHARGE_CAPACITY: u8 = 0x10;
     pub const BATTERY_STATUS: u8 = 0x16;
+    pub const MANUFACTURER_DATA: u8 = 0x23;
     pub const OPERATION_STATUS: u8 = 0x54;
-    pub const DA_STATUS_2: u8 = 0x72;
-    pub const CB_STATUS: u8 = 0x76;
 
     pub const CELL_VOLTAGE_4: u8 = 0x3C;
     pub const CELL_VOLTAGE_3: u8 = 0x3D;
     pub const CELL_VOLTAGE_2: u8 = 0x3E;
     pub const CELL_VOLTAGE_1: u8 = 0x3F;
+}
+
+pub mod mac {
+    pub const DA_STATUS_2: u16 = 0x0072;
+    pub const FILTER_CAPACITY: u16 = 0x0078;
 }
 
 pub mod battery_mode {
@@ -222,6 +227,19 @@ where
     read_plain_block_raw(i2c, addr, sbscmd)
 }
 
+pub fn read_mac_block_raw<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+) -> Result<Option<BlockReadRaw>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let mac_cmd = mac_cmd.to_le_bytes();
+    i2c.write(addr, &[cmd::MANUFACTURER_ACCESS, mac_cmd[0], mac_cmd[1]])?;
+    read_block_raw(i2c, addr, cmd::MANUFACTURER_DATA)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DaStatus2 {
     pub int_temp_k_x10: u16,
@@ -231,11 +249,19 @@ pub struct DaStatus2 {
     pub gauging_temp_k_x10: u16,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FilterCapacity {
+    pub remaining_capacity_mah: u16,
+    pub remaining_energy_cwh: u16,
+    pub full_charge_capacity_mah: u16,
+    pub full_charge_energy_cwh: u16,
+}
+
 pub fn read_da_status2<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<DaStatus2>, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    let Some(raw) = read_block_raw(i2c, addr, cmd::DA_STATUS_2)? else {
+    let Some(raw) = read_mac_block_raw(i2c, addr, mac::DA_STATUS_2)? else {
         return Ok(None);
     };
     if raw.payload_len < 16 {
@@ -253,6 +279,28 @@ where
         cell_temp_k_x10: u16::from_le_bytes([raw.payload[10], raw.payload[11]]),
         fet_temp_k_x10: u16::from_le_bytes([raw.payload[12], raw.payload[13]]),
         gauging_temp_k_x10: u16::from_le_bytes([raw.payload[14], raw.payload[15]]),
+    }))
+}
+
+pub fn read_filter_capacity<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+) -> Result<Option<FilterCapacity>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let Some(raw) = read_mac_block_raw(i2c, addr, mac::FILTER_CAPACITY)? else {
+        return Ok(None);
+    };
+    if raw.payload_len < 8 {
+        return Ok(None);
+    }
+
+    Ok(Some(FilterCapacity {
+        remaining_capacity_mah: u16::from_le_bytes([raw.payload[0], raw.payload[1]]),
+        remaining_energy_cwh: u16::from_le_bytes([raw.payload[2], raw.payload[3]]),
+        full_charge_capacity_mah: u16::from_le_bytes([raw.payload[4], raw.payload[5]]),
+        full_charge_energy_cwh: u16::from_le_bytes([raw.payload[6], raw.payload[7]]),
     }))
 }
 
@@ -378,7 +426,7 @@ mod tests {
     #[test]
     fn read_block_raw_falls_back_to_plain_block_frames_when_pec_is_absent() {
         let addr = I2C_ADDRESS_PRIMARY;
-        let cmd = cmd::CB_STATUS;
+        let cmd = cmd::MANUFACTURER_DATA;
         let payload = [0x0c, 0x00, 0x00, 0x00];
 
         let mut pec_probe = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2];
@@ -406,7 +454,7 @@ mod tests {
     #[test]
     fn read_block_raw_rejects_frames_when_neither_pec_nor_plain_is_confirmed() {
         let addr = I2C_ADDRESS_PRIMARY;
-        let cmd = cmd::CB_STATUS;
+        let cmd = cmd::MANUFACTURER_DATA;
         let payload = [0x0c, 0x00, 0x00, 0x00];
 
         let mut pec_probe = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2];
@@ -427,5 +475,53 @@ mod tests {
         let raw = read_block_raw(&mut i2c, addr, cmd).unwrap();
 
         assert_eq!(raw, None);
+    }
+
+    #[test]
+    fn read_mac_block_raw_writes_manufacturer_access_then_reads_manufacturer_data() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let payload = [0x11, 0x22, 0x33, 0x44];
+        let mut plain_frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+        plain_frame[0] = 4;
+        plain_frame[1..5].copy_from_slice(&payload);
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd::MANUFACTURER_ACCESS, 0x72, 0x00]),
+            Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
+            Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
+            Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
+            Step::Read(addr, plain_frame),
+        ]);
+
+        let raw = read_mac_block_raw(&mut i2c, addr, mac::DA_STATUS_2)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(raw.declared_len, 4);
+        assert_eq!(&raw.payload[..4], &payload);
+    }
+
+    #[test]
+    fn read_filter_capacity_decodes_energy_and_capacity_fields() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let payload = [0x34, 0x12, 0x78, 0x56, 0xbc, 0x9a, 0xf0, 0xde];
+        let mut plain_frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+        plain_frame[0] = 8;
+        plain_frame[1..9].copy_from_slice(&payload);
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd::MANUFACTURER_ACCESS, 0x78, 0x00]),
+            Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
+            Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
+            Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
+            Step::Read(addr, plain_frame),
+        ]);
+
+        let filter = read_filter_capacity(&mut i2c, addr).unwrap().unwrap();
+
+        assert_eq!(filter.remaining_capacity_mah, 0x1234);
+        assert_eq!(filter.remaining_energy_cwh, 0x5678);
+        assert_eq!(filter.full_charge_capacity_mah, 0x9abc);
+        assert_eq!(filter.full_charge_energy_cwh, 0xdef0);
     }
 }
