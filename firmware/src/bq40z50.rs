@@ -9,6 +9,8 @@
 //! - TRM: `docs/manuals/BQ40Z50-R2-TRM/BQ40Z50-R2-TRM.md`
 //! - I2C map: `docs/i2c-address-map.md`
 
+use esp_hal::time::{Duration, Instant};
+
 /// Default (project) 7-bit SMBus address for BQ40Z50 (per `docs/i2c-address-map.md`).
 pub const I2C_ADDRESS_PRIMARY: u8 = 0x0B;
 
@@ -43,6 +45,8 @@ pub mod mac {
     pub const DA_STATUS_2: u16 = 0x0072;
     pub const FILTER_CAPACITY: u16 = 0x0078;
 }
+
+const MAC_WRITE_SETTLE: Duration = Duration::from_millis(66);
 
 pub mod battery_mode {
     pub const CAPM: u16 = 1 << 15;
@@ -104,6 +108,13 @@ fn crc8_smbus(bytes: &[u8]) -> u8 {
         }
     }
     crc
+}
+
+fn spin_delay(wait: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < wait {
+        core::hint::spin_loop();
+    }
 }
 
 fn read_u16_with_pec<I2C>(i2c: &mut I2C, addr: u8, sbscmd: u8) -> Option<u16>
@@ -235,8 +246,9 @@ pub fn read_mac_block_raw<I2C>(
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    let mac_cmd = mac_cmd.to_le_bytes();
+    let mac_cmd = mac_cmd.to_be_bytes();
     i2c.write(addr, &[cmd::MANUFACTURER_ACCESS, mac_cmd[0], mac_cmd[1]])?;
+    spin_delay(MAC_WRITE_SETTLE);
     read_block_raw(i2c, addr, cmd::MANUFACTURER_DATA)
 }
 
@@ -486,7 +498,7 @@ mod tests {
         plain_frame[1..5].copy_from_slice(&payload);
 
         let mut i2c = ScriptedI2c::new([
-            Step::Write(addr, vec![cmd::MANUFACTURER_ACCESS, 0x72, 0x00]),
+            Step::Write(addr, vec![cmd::MANUFACTURER_ACCESS, 0x00, 0x72]),
             Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
             Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
             Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
@@ -510,7 +522,7 @@ mod tests {
         plain_frame[1..9].copy_from_slice(&payload);
 
         let mut i2c = ScriptedI2c::new([
-            Step::Write(addr, vec![cmd::MANUFACTURER_ACCESS, 0x78, 0x00]),
+            Step::Write(addr, vec![cmd::MANUFACTURER_ACCESS, 0x00, 0x78]),
             Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
             Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
             Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
