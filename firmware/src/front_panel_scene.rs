@@ -3127,7 +3127,7 @@ fn render_dashboard_cells_detail<P: UiPainter>(
         painter,
         variant,
         FontRole::DetailBody,
-        "BAL CELL",
+        "BAL STATE",
         Point::new(14, 44),
         HorizontalAlignment::Left,
         palette.bg,

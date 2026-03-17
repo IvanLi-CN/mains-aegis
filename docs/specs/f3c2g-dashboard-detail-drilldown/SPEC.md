@@ -92,7 +92,7 @@
 
 - `Cells`
   - 4 节 cell 电压
-  - 当前 balancing cell
+  - balancing 状态
   - 4 路 cell temp
   - 充/放电状态与异常条
 - `Battery Flow`
