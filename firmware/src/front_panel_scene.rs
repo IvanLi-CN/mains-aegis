@@ -665,6 +665,19 @@ pub const fn dashboard_route_for_target(target: DashboardTouchTarget) -> Dashboa
 }
 
 #[allow(dead_code)]
+pub fn dashboard_route_has_active_animation(
+    route: DashboardRoute,
+    snapshot: &SelfCheckUiSnapshot,
+) -> bool {
+    matches!(route, DashboardRoute::Detail(DashboardDetailPage::Thermal))
+        && thermal_fan_motion(
+            snapshot.dashboard_detail.fan_rpm,
+            snapshot.dashboard_detail.fan_pwm_pct,
+            snapshot.dashboard_detail.fan_status,
+        ) != ThermalFanMotion::Off
+}
+
+#[allow(dead_code)]
 pub fn test_navigation_hit_test(x: u16, y: u16) -> Option<TestFunctionUi> {
     if contains(
         x,

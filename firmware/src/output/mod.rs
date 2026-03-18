@@ -72,6 +72,8 @@ const BMS_ACTIVATION_MAC_WRITE_SETTLE: Duration = Duration::from_millis(66);
 const BMS_ROM_MODE_SIGNATURE: u16 = 0x9002;
 const BMS_DEVICE_TYPE_BQ40Z50: u16 = 0x4500;
 const BMS_ACTIVATION_WORD_GAP: Duration = Duration::from_millis(2);
+const BMS_DETAIL_MAC_REFRESH_PERIOD: Duration = Duration::from_secs(8);
+const BMS_DETAIL_MAC_REFRESH_STAGGER: Duration = Duration::from_secs(2);
 const BMS_SUSPICIOUS_VOLTAGE_MV: u16 = 5_911;
 const BMS_SUSPICIOUS_CURRENT_MA: i16 = 5_911;
 const BMS_SUSPICIOUS_STATUS: u16 = 0x1717;
@@ -1598,6 +1600,10 @@ pub struct PowerManager<'d, I2C> {
     bms_poll_seq: u32,
     bms_ok_streak: u16,
     bms_err_streak: u16,
+    bms_cached_da_status2: Option<bq40z50::DaStatus2>,
+    bms_cached_filter_capacity: Option<bq40z50::FilterCapacity>,
+    bms_next_da_status2_refresh_at: Instant,
+    bms_next_filter_capacity_refresh_at: Instant,
 
     chg_next_poll_at: Instant,
     chg_next_retry_at: Option<Instant>,
@@ -1967,6 +1973,10 @@ where
             bms_poll_seq: 0,
             bms_ok_streak: 0,
             bms_err_streak: 0,
+            bms_cached_da_status2: None,
+            bms_cached_filter_capacity: None,
+            bms_next_da_status2_refresh_at: now,
+            bms_next_filter_capacity_refresh_at: now + BMS_DETAIL_MAC_REFRESH_STAGGER,
 
             chg_next_poll_at: now,
             chg_next_retry_at: if charger_allowed { Some(now) } else { None },
@@ -2279,6 +2289,13 @@ where
         detail.battery_temp_c = None;
         detail.cells_notice = None;
         detail.battery_notice = None;
+    }
+
+    fn reset_bms_detail_mac_cache(&mut self, now: Instant) {
+        self.bms_cached_da_status2 = None;
+        self.bms_cached_filter_capacity = None;
+        self.bms_next_da_status2_refresh_at = now;
+        self.bms_next_filter_capacity_refresh_at = now + BMS_DETAIL_MAC_REFRESH_STAGGER;
     }
 
     fn apply_bms_detail_snapshot(&mut self, snapshot: &Bq40z50Snapshot) {
@@ -5240,6 +5257,7 @@ where
         self.ui_snapshot.bq40z50 = SelfCheckCommState::Warn;
         self.ui_snapshot.bq40z50_pack_mv = None;
         self.ui_snapshot.bq40z50_current_ma = None;
+        self.reset_bms_detail_mac_cache(Instant::now());
         self.clear_bms_detail_snapshot();
         if self.ui_snapshot.bq40z50_soc_pct.is_none() {
             self.ui_snapshot.bq40z50_soc_pct = Some(0);
@@ -6331,6 +6349,7 @@ where
                         if self.should_hold_no_battery_result() {
                             self.hold_no_battery_result_audio_state();
                         } else {
+                            self.reset_bms_detail_mac_cache(now);
                             self.ui_snapshot.bq40z50 = SelfCheckCommState::Warn;
                             self.ui_snapshot.bq40z50_pack_mv = None;
                             self.ui_snapshot.bq40z50_current_ma = None;
@@ -6387,6 +6406,7 @@ where
                         if self.should_hold_no_battery_result() {
                             self.hold_no_battery_result_audio_state();
                         } else {
+                            self.reset_bms_detail_mac_cache(now);
                             self.ui_snapshot.bq40z50 = SelfCheckCommState::Err;
                             self.ui_snapshot.bq40z50_pack_mv = None;
                             self.ui_snapshot.bq40z50_current_ma = None;
@@ -6522,6 +6542,7 @@ where
         &mut self,
         addr: u8,
     ) -> Result<Bq40z50Snapshot, Bq40ActivationReadError> {
+        let now = Instant::now();
         let battery_mode =
             self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::BATTERY_MODE)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
@@ -6567,12 +6588,24 @@ where
         let op_status = bq40z50::read_operation_status(&mut self.i2c, addr)
             .ok()
             .flatten();
-        spin_delay(BMS_ACTIVATION_WORD_GAP);
-        let da_status2 = bq40z50::read_da_status2(&mut self.i2c, addr).ok().flatten();
-        spin_delay(BMS_ACTIVATION_WORD_GAP);
-        let filter_capacity = bq40z50::read_filter_capacity(&mut self.i2c, addr)
-            .ok()
-            .flatten();
+        let mut da_status2 = self.bms_cached_da_status2;
+        if now >= self.bms_next_da_status2_refresh_at {
+            spin_delay(BMS_ACTIVATION_WORD_GAP);
+            if let Ok(snapshot) = bq40z50::read_da_status2(&mut self.i2c, addr) {
+                da_status2 = snapshot;
+                self.bms_cached_da_status2 = snapshot;
+            }
+            self.bms_next_da_status2_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
+        }
+        let mut filter_capacity = self.bms_cached_filter_capacity;
+        if now >= self.bms_next_filter_capacity_refresh_at {
+            spin_delay(BMS_ACTIVATION_WORD_GAP);
+            if let Ok(snapshot) = bq40z50::read_filter_capacity(&mut self.i2c, addr) {
+                filter_capacity = snapshot;
+                self.bms_cached_filter_capacity = snapshot;
+            }
+            self.bms_next_filter_capacity_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
+        }
         Ok(Bq40z50Snapshot {
             battery_mode,
             temp_k_x10,

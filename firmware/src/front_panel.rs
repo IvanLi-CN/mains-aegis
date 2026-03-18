@@ -439,7 +439,11 @@ impl FrontPanel {
                 let inputs_changed = self.last_inputs != Some(snapshot);
                 let should_render = self.needs_redraw
                     || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed)
-                    || dashboard_uses_frame_animation(self.ui_variant, self.dashboard_route);
+                    || dashboard_uses_frame_animation(
+                        self.ui_variant,
+                        self.dashboard_route,
+                        &self.self_check_snapshot,
+                    );
                 if should_render {
                     if let Err(e) = self.render_inputs(snapshot) {
                         defmt::error!("ui: update input state failed err={=?}", e);
@@ -1105,12 +1109,13 @@ fn dashboard_route_name(route: DashboardRoute) -> &'static str {
     }
 }
 
-fn dashboard_uses_frame_animation(variant: UiVariant, route: DashboardRoute) -> bool {
+fn dashboard_uses_frame_animation(
+    variant: UiVariant,
+    route: DashboardRoute,
+    snapshot: &SelfCheckUiSnapshot,
+) -> bool {
     variant == DASHBOARD_VARIANT
-        && matches!(
-            route,
-            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal)
-        )
+        && front_panel_scene::dashboard_route_has_active_animation(route, snapshot)
 }
 
 fn dashboard_touch_target_name(target: DashboardTouchTarget) -> &'static str {
@@ -1129,22 +1134,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_thermal_detail_uses_frame_animation() {
+    fn only_animated_thermal_detail_uses_frame_animation() {
+        let mut thermal_active = SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby);
+        thermal_active.dashboard_detail.fan_status = Some("HIGH");
+        let thermal_idle = SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby);
+
         assert!(dashboard_uses_frame_animation(
             DASHBOARD_VARIANT,
-            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal)
+            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal),
+            &thermal_active,
         ));
         assert!(!dashboard_uses_frame_animation(
             DASHBOARD_VARIANT,
-            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Output)
+            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal),
+            &thermal_idle,
         ));
         assert!(!dashboard_uses_frame_animation(
             DASHBOARD_VARIANT,
-            DashboardRoute::Home
+            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Output),
+            &thermal_active,
+        ));
+        assert!(!dashboard_uses_frame_animation(
+            DASHBOARD_VARIANT,
+            DashboardRoute::Home,
+            &thermal_active,
         ));
         assert!(!dashboard_uses_frame_animation(
             UiVariant::RetroC,
-            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal)
+            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal),
+            &thermal_active,
         ));
     }
 }
