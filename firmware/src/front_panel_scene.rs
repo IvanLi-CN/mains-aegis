@@ -2447,7 +2447,7 @@ fn render_variant_b_live<P: UiPainter>(
             Some(iout_ma) => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::NumHero,
                 format_args!("{:>1}.{:01}", iout_ma / 1000, (iout_ma % 1000) / 100),
                 Point::new(194, kpi_value_y),
                 HorizontalAlignment::Right,
@@ -3627,14 +3627,14 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         palette,
         data.detail.input_source,
         14,
-        36,
+        42,
         26,
         12,
     )?;
     draw_icon_blocks_centered(
         painter,
         174,
-        36,
+        42,
         26,
         12,
         if data.battery_charge_power_w10().unwrap_or(0) > 0 {
