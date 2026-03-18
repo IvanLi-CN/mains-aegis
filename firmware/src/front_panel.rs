@@ -437,8 +437,9 @@ impl FrontPanel {
                     self.process_dashboard_touch_action(snapshot);
                 }
                 let inputs_changed = self.last_inputs != Some(snapshot);
-                let should_render =
-                    self.needs_redraw || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed);
+                let should_render = self.needs_redraw
+                    || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed)
+                    || dashboard_uses_frame_animation(self.ui_variant, self.dashboard_route);
                 if should_render {
                     if let Err(e) = self.render_inputs(snapshot) {
                         defmt::error!("ui: update input state failed err={=?}", e);
@@ -1104,6 +1105,14 @@ fn dashboard_route_name(route: DashboardRoute) -> &'static str {
     }
 }
 
+fn dashboard_uses_frame_animation(variant: UiVariant, route: DashboardRoute) -> bool {
+    variant == DASHBOARD_VARIANT
+        && matches!(
+            route,
+            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal)
+        )
+}
+
 fn dashboard_touch_target_name(target: DashboardTouchTarget) -> &'static str {
     match target {
         DashboardTouchTarget::HomeOutput => "home_output",
@@ -1112,6 +1121,31 @@ fn dashboard_touch_target_name(target: DashboardTouchTarget) -> &'static str {
         DashboardTouchTarget::HomeCharger => "home_charger",
         DashboardTouchTarget::HomeBatteryFlow => "home_battery_flow",
         DashboardTouchTarget::DetailBack => "detail_back",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_thermal_detail_uses_frame_animation() {
+        assert!(dashboard_uses_frame_animation(
+            DASHBOARD_VARIANT,
+            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal)
+        ));
+        assert!(!dashboard_uses_frame_animation(
+            DASHBOARD_VARIANT,
+            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Output)
+        ));
+        assert!(!dashboard_uses_frame_animation(
+            DASHBOARD_VARIANT,
+            DashboardRoute::Home
+        ));
+        assert!(!dashboard_uses_frame_animation(
+            UiVariant::RetroC,
+            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal)
+        ));
     }
 }
 
