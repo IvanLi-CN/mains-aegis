@@ -9,6 +9,7 @@ This directory consolidates the current confirmed front panel UI design view fro
   - Component contracts: [component-contracts.md](component-contracts.md)
   - Visual regression checklist: [visual-regression-checklist.md](visual-regression-checklist.md)
   - Dashboard module design: [dashboard-design.md](dashboard-design.md)
+  - Dashboard detail design: [dashboard-detail-design.md](dashboard-detail-design.md)
   - Self-check module design: [self-check-design.md](self-check-design.md)
 - Host-side UI (future implementation): reserved, not frozen in this directory yet
 - Runtime behavior baseline: [../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md](../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md)
@@ -18,6 +19,8 @@ This directory consolidates the current confirmed front panel UI design view fro
 ## Assets
 
 - Frozen renders: `assets/dashboard-b-*.png`, `assets/self-check-c-*.png`（含 BQ40 结果弹窗 5 态）
+- Dashboard detail renders: `assets/dashboard-b-detail-*.png`
+- Dashboard detail icons: `assets/dashboard-detail-icons.png`
 - Module maps (2):
   - `assets/dashboard-b-module-map.png`
   - `assets/self-check-c-module-map.png`
@@ -37,8 +40,9 @@ This directory consolidates the current confirmed front panel UI design view fro
 1. [design-language.md](design-language.md)
 2. [component-contracts.md](component-contracts.md)
 3. [dashboard-design.md](dashboard-design.md)
-4. [self-check-design.md](self-check-design.md)
-5. [visual-regression-checklist.md](visual-regression-checklist.md)
+4. [dashboard-detail-design.md](dashboard-detail-design.md)
+5. [self-check-design.md](self-check-design.md)
+6. [visual-regression-checklist.md](visual-regression-checklist.md)
 6. Source specs for traceability:
    - [../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md](../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md)
    - [../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md](../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md)

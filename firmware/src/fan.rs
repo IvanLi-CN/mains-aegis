@@ -63,6 +63,7 @@ pub struct Config {
     pub hysteresis_c_x16: i16,
     pub cooldown_ms: u64,
     pub tach_timeout_ms: u64,
+    pub tach_pulses_per_rev: u8,
     pub mid_pwm_pct: u8,
 }
 
@@ -331,6 +332,7 @@ mod tests {
             hysteresis_c_x16: 3 * 16,
             cooldown_ms: 10_000,
             tach_timeout_ms: 2_000,
+            tach_pulses_per_rev: 2,
             mid_pwm_pct: 60,
         }
     }

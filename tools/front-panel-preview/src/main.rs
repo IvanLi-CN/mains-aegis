@@ -12,7 +12,8 @@ use image::{Rgb, RgbImage};
 mod front_panel_scene;
 
 use front_panel_scene::{
-    demo_mode_from_focus, AudioTestUiState, BmsResultKind, DisplayDiagnosticMeta,
+    demo_mode_from_focus, AudioTestUiState, BmsResultKind, DashboardDetailPage,
+    DashboardDetailSnapshot, DashboardInputSource, DashboardRoute, DisplayDiagnosticMeta,
     SelfCheckCommState, SelfCheckOverlay, SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel,
     UiPainter, UiVariant, UpsMode, UI_H, UI_W,
 };
@@ -53,11 +54,68 @@ fn base_bq40_snapshot(mode: UpsMode) -> SelfCheckUiSnapshot {
     snapshot.tmp_a_c = Some(39);
     snapshot.tmp_b = SelfCheckCommState::Ok;
     snapshot.tmp_b_c = Some(37);
+    snapshot.dashboard_detail = dashboard_detail_fixture(mode, None);
     snapshot
+}
+
+fn dashboard_detail_fixture(
+    mode: UpsMode,
+    page: Option<DashboardDetailPage>,
+) -> DashboardDetailSnapshot {
+    let mut detail = DashboardDetailSnapshot::pending();
+    detail.cell_mv = [Some(4088), Some(4094), Some(4102), Some(4098)];
+    detail.cell_temp_c = [Some(31), Some(32), Some(33), Some(31)];
+    detail.balance_cell = Some(3);
+    detail.battery_energy_mwh = Some(46_850);
+    detail.battery_full_capacity_mwh = Some(63_200);
+    detail.charge_fet_on = Some(matches!(mode, UpsMode::Standby));
+    detail.discharge_fet_on = Some(matches!(mode, UpsMode::Supplement | UpsMode::Backup));
+    detail.precharge_fet_on = Some(matches!(mode, UpsMode::Standby));
+    detail.input_source = Some(match page {
+        Some(DashboardDetailPage::Charger) => DashboardInputSource::UsbC,
+        _ => DashboardInputSource::DcIn,
+    });
+    detail.charger_active = Some(matches!(mode, UpsMode::Standby));
+    detail.charger_status = Some(if matches!(mode, UpsMode::Standby) {
+        "CHG"
+    } else {
+        "LOCK"
+    });
+    detail.out_a_temp_c = Some(41);
+    detail.out_b_temp_c = Some(43);
+    detail.board_temp_c = Some(36);
+    detail.battery_temp_c = Some(34);
+    detail.fan_rpm = Some(if matches!(mode, UpsMode::Backup) {
+        4120
+    } else {
+        2380
+    });
+    detail.fan_pwm_pct = Some(if matches!(mode, UpsMode::Backup) {
+        100
+    } else {
+        52
+    });
+    detail.fan_status = Some(if matches!(mode, UpsMode::Backup) {
+        "HIGH"
+    } else {
+        "MID"
+    });
+    detail.cells_notice = Some("CELL DELTA 14mV - BALANCE ACTIVE");
+    detail.battery_notice = Some("PACK FLOW MOCKED - LIVE SOURCE NEXT");
+    detail.output_notice = Some("OUT-B STANDBY PATH HELD");
+    detail.charger_notice = Some("USB-C PROFILE MOCKED - DC SWITCH NEXT");
+    detail.thermal_notice = Some("FAN RPM MOCKED - SENSOR WIRING NEXT");
+
+    if matches!(page, Some(DashboardDetailPage::Output)) {
+        detail.out_b_temp_c = None;
+    }
+
+    detail
 }
 
 fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
     let mut snapshot = base_bq40_snapshot(mode);
+    snapshot.dashboard_detail = dashboard_detail_fixture(mode, None);
     snapshot.bq40z50 = SelfCheckCommState::Ok;
     snapshot.bq40z50_rca_alarm = Some(false);
     snapshot.bq40z50_no_battery = Some(false);
@@ -145,6 +203,30 @@ fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
     snapshot
 }
 
+fn dashboard_detail_snapshot_for_page(page: DashboardDetailPage) -> (UpsMode, SelfCheckUiSnapshot) {
+    let mode = match page {
+        DashboardDetailPage::Cells => UpsMode::Standby,
+        DashboardDetailPage::BatteryFlow => UpsMode::Backup,
+        DashboardDetailPage::Output => UpsMode::Supplement,
+        DashboardDetailPage::Charger => UpsMode::Standby,
+        DashboardDetailPage::Thermal => UpsMode::Backup,
+    };
+    let mut snapshot = dashboard_snapshot_for_mode(mode);
+    snapshot.dashboard_detail = dashboard_detail_fixture(mode, Some(page));
+    if matches!(page, DashboardDetailPage::Output) {
+        snapshot.tps_b_enabled = Some(false);
+        snapshot.out_b_vbus_mv = None;
+        snapshot.tps_b_iout_ma = None;
+    }
+    if matches!(page, DashboardDetailPage::Charger) {
+        snapshot.input_vbus_mv = Some(20_060);
+        snapshot.input_ibus_ma = Some(1180);
+        snapshot.vin_vbus_mv = Some(20_060);
+        snapshot.vin_iin_ma = Some(1180);
+    }
+    (mode, snapshot)
+}
+
 #[allow(dead_code)]
 fn bq40_snapshot_for_scenario(
     mode: UpsMode,
@@ -191,6 +273,11 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardRuntimeStandby
         | ScenarioArg::DashboardRuntimeAssist
         | ScenarioArg::DashboardRuntimeBackup
+        | ScenarioArg::DashboardDetailCells
+        | ScenarioArg::DashboardDetailBatteryFlow
+        | ScenarioArg::DashboardDetailOutput
+        | ScenarioArg::DashboardDetailCharger
+        | ScenarioArg::DashboardDetailThermal
         | ScenarioArg::TestAudio
         | ScenarioArg::TestNavigation => SelfCheckOverlay::None,
     };
@@ -215,6 +302,11 @@ fn run() -> Result<(), String> {
         ScenarioArg::DashboardRuntimeStandby => ModeArg::Standby,
         ScenarioArg::DashboardRuntimeAssist => ModeArg::Supplement,
         ScenarioArg::DashboardRuntimeBackup => ModeArg::Backup,
+        ScenarioArg::DashboardDetailCells => ModeArg::Standby,
+        ScenarioArg::DashboardDetailBatteryFlow => ModeArg::Backup,
+        ScenarioArg::DashboardDetailOutput => ModeArg::Supplement,
+        ScenarioArg::DashboardDetailCharger => ModeArg::Standby,
+        ScenarioArg::DashboardDetailThermal => ModeArg::Backup,
         _ => args.mode,
     };
 
@@ -236,10 +328,11 @@ fn run() -> Result<(), String> {
 
     match args.scenario {
         ScenarioArg::Default => {
-            front_panel_scene::render_frame_with_self_check_overlay(
+            front_panel_scene::render_frame_with_dashboard_route_overlay(
                 &mut framebuffer,
                 &model,
                 args.variant.into_scene(),
+                DashboardRoute::Home,
                 None,
                 SelfCheckOverlay::None,
             )
@@ -270,10 +363,41 @@ fn run() -> Result<(), String> {
                 touch_irq: false,
                 frame_no: args.frame_no,
             };
-            front_panel_scene::render_frame_with_self_check_overlay(
+            front_panel_scene::render_frame_with_dashboard_route_overlay(
                 &mut framebuffer,
                 &dashboard_model,
                 UiVariant::InstrumentB,
+                DashboardRoute::Home,
+                Some(&snapshot),
+                SelfCheckOverlay::None,
+            )
+            .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
+        ScenarioArg::DashboardDetailCells
+        | ScenarioArg::DashboardDetailBatteryFlow
+        | ScenarioArg::DashboardDetailOutput
+        | ScenarioArg::DashboardDetailCharger
+        | ScenarioArg::DashboardDetailThermal => {
+            let page = match args.scenario {
+                ScenarioArg::DashboardDetailCells => DashboardDetailPage::Cells,
+                ScenarioArg::DashboardDetailBatteryFlow => DashboardDetailPage::BatteryFlow,
+                ScenarioArg::DashboardDetailOutput => DashboardDetailPage::Output,
+                ScenarioArg::DashboardDetailCharger => DashboardDetailPage::Charger,
+                ScenarioArg::DashboardDetailThermal => DashboardDetailPage::Thermal,
+                _ => unreachable!(),
+            };
+            let (mode, snapshot) = dashboard_detail_snapshot_for_page(page);
+            let dashboard_model = UiModel {
+                mode,
+                focus: UiFocus::Idle,
+                touch_irq: false,
+                frame_no: args.frame_no,
+            };
+            front_panel_scene::render_frame_with_dashboard_route_overlay(
+                &mut framebuffer,
+                &dashboard_model,
+                UiVariant::InstrumentB,
+                DashboardRoute::Detail(page),
                 Some(&snapshot),
                 SelfCheckOverlay::None,
             )
@@ -289,10 +413,11 @@ fn run() -> Result<(), String> {
         | ScenarioArg::Bq40ResultNotDetected => {
             let (snapshot, overlay) =
                 bq40_snapshot_for_scenario(args.mode.into_scene(), args.scenario);
-            front_panel_scene::render_frame_with_self_check_overlay(
+            front_panel_scene::render_frame_with_dashboard_route_overlay(
                 &mut framebuffer,
                 &model,
                 args.variant.into_scene(),
+                DashboardRoute::Home,
                 Some(&snapshot),
                 overlay,
             )
@@ -481,6 +606,11 @@ enum ScenarioArg {
     DashboardRuntimeStandby,
     DashboardRuntimeAssist,
     DashboardRuntimeBackup,
+    DashboardDetailCells,
+    DashboardDetailBatteryFlow,
+    DashboardDetailOutput,
+    DashboardDetailCharger,
+    DashboardDetailThermal,
     Bq40Offline,
     Bq40OfflineDialog,
     Bq40Activating,
@@ -501,6 +631,11 @@ impl ScenarioArg {
             "dashboard-runtime-standby" => Ok(Self::DashboardRuntimeStandby),
             "dashboard-runtime-assist" => Ok(Self::DashboardRuntimeAssist),
             "dashboard-runtime-backup" => Ok(Self::DashboardRuntimeBackup),
+            "dashboard-detail-cells" => Ok(Self::DashboardDetailCells),
+            "dashboard-detail-battery-flow" => Ok(Self::DashboardDetailBatteryFlow),
+            "dashboard-detail-output" => Ok(Self::DashboardDetailOutput),
+            "dashboard-detail-charger" => Ok(Self::DashboardDetailCharger),
+            "dashboard-detail-thermal" => Ok(Self::DashboardDetailThermal),
             "bq40-offline" => Ok(Self::Bq40Offline),
             "bq40-offline-dialog" => Ok(Self::Bq40OfflineDialog),
             "bq40-activating" => Ok(Self::Bq40Activating),
@@ -512,7 +647,7 @@ impl ScenarioArg {
             "test-audio" => Ok(Self::TestAudio),
             "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation)"
             )),
         }
     }
@@ -524,6 +659,11 @@ impl ScenarioArg {
             ScenarioArg::DashboardRuntimeStandby => "dashboard-runtime-standby",
             ScenarioArg::DashboardRuntimeAssist => "dashboard-runtime-assist",
             ScenarioArg::DashboardRuntimeBackup => "dashboard-runtime-backup",
+            ScenarioArg::DashboardDetailCells => "dashboard-detail-cells",
+            ScenarioArg::DashboardDetailBatteryFlow => "dashboard-detail-battery-flow",
+            ScenarioArg::DashboardDetailOutput => "dashboard-detail-output",
+            ScenarioArg::DashboardDetailCharger => "dashboard-detail-charger",
+            ScenarioArg::DashboardDetailThermal => "dashboard-detail-thermal",
             ScenarioArg::Bq40Offline => "bq40-offline",
             ScenarioArg::Bq40OfflineDialog => "bq40-offline-dialog",
             ScenarioArg::Bq40Activating => "bq40-activating",
@@ -617,7 +757,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",

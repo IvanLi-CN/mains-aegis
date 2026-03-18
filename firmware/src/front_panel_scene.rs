@@ -106,12 +106,21 @@ const FOOTER_H: u16 = 0;
 const ERROR_COLOR: u16 = 0xF800;
 const SUCCESS_COLOR: u16 = 0x07E0;
 const PROGRESS_COLOR: u16 = 0xFD20;
+const DETAIL_TITLE_X: i32 = 74;
+const DETAIL_STATUS_X: i32 = (UI_W - 8) as i32;
+const DETAIL_ROW_Y_1: u16 = 78;
+const DETAIL_ROW_Y_2: u16 = 94;
+const DETAIL_ROW_Y_3: u16 = 110;
+const DETAIL_ROW_Y_4: u16 = 126;
 
 // User preference: non-numeric text uses Font A, numeric fields use fixed-width Font B.
 static FONT_A_TITLE: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13B_tf>();
 static FONT_A_BODY: FontRenderer = FontRenderer::new::<fonts::u8g2_font_7x14B_tf>();
 static FONT_B_NUM: FontRenderer = FontRenderer::new::<fonts::u8g2_font_8x13_mf>();
 static FONT_B_NUM_BIG: FontRenderer = FontRenderer::new::<fonts::u8g2_font_t0_22b_tn>();
+static FONT_B_NUM_HERO: FontRenderer = FontRenderer::new::<fonts::u8g2_font_t0_30b_tn>();
+static FONT_A_DETAIL: FontRenderer = FontRenderer::new::<fonts::u8g2_font_9x15B_tf>();
+static FONT_B_DETAIL: FontRenderer = FontRenderer::new::<fonts::u8g2_font_9x15_mf>();
 // Compact roles intentionally reuse >=10px fonts to enforce minimum glyph height.
 
 #[derive(Clone, Copy)]
@@ -137,9 +146,13 @@ enum FontRole {
     TextTitle,
     TextBody,
     TextCompact,
+    DetailTitle,
+    DetailBody,
     Num,
     NumCompact,
+    DetailNum,
     NumBig,
+    NumHero,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,6 +161,39 @@ pub enum UpsMode {
     Standby,
     Supplement,
     Backup,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardDetailPage {
+    Cells,
+    BatteryFlow,
+    Output,
+    Charger,
+    Thermal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardRoute {
+    Home,
+    Detail(DashboardDetailPage),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardTouchTarget {
+    HomeOutput,
+    HomeThermal,
+    HomeCells,
+    HomeCharger,
+    HomeBatteryFlow,
+    DetailBack,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardInputSource {
+    DcIn,
+    UsbC,
+    Auto,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,6 +213,67 @@ pub enum BmsResultKind {
     RomMode,
     Abnormal,
     NotDetected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DashboardDetailSnapshot {
+    pub cell_mv: [Option<u16>; 4],
+    pub cell_temp_c: [Option<i16>; 4],
+    pub balance_active: Option<bool>,
+    pub balance_mask: Option<u8>,
+    pub balance_cell: Option<u8>,
+    pub battery_energy_mwh: Option<u32>,
+    pub battery_full_capacity_mwh: Option<u32>,
+    pub charge_fet_on: Option<bool>,
+    pub discharge_fet_on: Option<bool>,
+    pub precharge_fet_on: Option<bool>,
+    pub input_source: Option<DashboardInputSource>,
+    pub charger_active: Option<bool>,
+    pub charger_status: Option<&'static str>,
+    pub out_a_temp_c: Option<i16>,
+    pub out_b_temp_c: Option<i16>,
+    pub board_temp_c: Option<i16>,
+    pub battery_temp_c: Option<i16>,
+    pub fan_rpm: Option<u16>,
+    pub fan_pwm_pct: Option<u8>,
+    pub fan_status: Option<&'static str>,
+    pub cells_notice: Option<&'static str>,
+    pub battery_notice: Option<&'static str>,
+    pub output_notice: Option<&'static str>,
+    pub charger_notice: Option<&'static str>,
+    pub thermal_notice: Option<&'static str>,
+}
+
+impl DashboardDetailSnapshot {
+    pub const fn pending() -> Self {
+        Self {
+            cell_mv: [None, None, None, None],
+            cell_temp_c: [None, None, None, None],
+            balance_active: None,
+            balance_mask: None,
+            balance_cell: None,
+            battery_energy_mwh: None,
+            battery_full_capacity_mwh: None,
+            charge_fet_on: None,
+            discharge_fet_on: None,
+            precharge_fet_on: None,
+            input_source: None,
+            charger_active: None,
+            charger_status: None,
+            out_a_temp_c: None,
+            out_b_temp_c: None,
+            board_temp_c: None,
+            battery_temp_c: None,
+            fan_rpm: None,
+            fan_pwm_pct: None,
+            fan_status: None,
+            cells_notice: None,
+            battery_notice: None,
+            output_notice: None,
+            charger_notice: None,
+            thermal_notice: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,6 +316,7 @@ pub struct SelfCheckUiSnapshot {
     pub tmp_b: SelfCheckCommState,
     pub tmp_b_c: Option<i16>,
     pub tmp_b_c_x16: Option<i16>,
+    pub dashboard_detail: DashboardDetailSnapshot,
 }
 
 impl SelfCheckUiSnapshot {
@@ -252,6 +360,7 @@ impl SelfCheckUiSnapshot {
             tmp_b: SelfCheckCommState::Pending,
             tmp_b_c: None,
             tmp_b_c_x16: None,
+            dashboard_detail: DashboardDetailSnapshot::pending(),
         }
     }
 }
@@ -300,6 +409,36 @@ const SELF_CHECK_CONFIRM_BTN_X: u16 = 152;
 const SELF_CHECK_CONFIRM_BTN_Y: u16 = 110;
 const SELF_CHECK_CONFIRM_BTN_W: u16 = 136;
 const SELF_CHECK_CONFIRM_BTN_H: u16 = 24;
+
+const DASHBOARD_HOME_OUTPUT_X: u16 = 6;
+const DASHBOARD_HOME_OUTPUT_Y: u16 = 22;
+const DASHBOARD_HOME_OUTPUT_W: u16 = 196;
+const DASHBOARD_HOME_OUTPUT_H: u16 = 52;
+
+const DASHBOARD_HOME_THERMAL_X: u16 = 6;
+const DASHBOARD_HOME_THERMAL_Y: u16 = 76;
+const DASHBOARD_HOME_THERMAL_W: u16 = 196;
+const DASHBOARD_HOME_THERMAL_H: u16 = 94;
+
+const DASHBOARD_HOME_CELLS_X: u16 = 206;
+const DASHBOARD_HOME_CELLS_Y: u16 = 22;
+const DASHBOARD_HOME_CELLS_W: u16 = 108;
+const DASHBOARD_HOME_CELLS_H: u16 = 48;
+
+const DASHBOARD_HOME_CHARGER_X: u16 = 206;
+const DASHBOARD_HOME_CHARGER_Y: u16 = 72;
+const DASHBOARD_HOME_CHARGER_W: u16 = 108;
+const DASHBOARD_HOME_CHARGER_H: u16 = 48;
+
+const DASHBOARD_HOME_BATTERY_FLOW_X: u16 = 206;
+const DASHBOARD_HOME_BATTERY_FLOW_Y: u16 = 122;
+const DASHBOARD_HOME_BATTERY_FLOW_W: u16 = 108;
+const DASHBOARD_HOME_BATTERY_FLOW_H: u16 = 48;
+
+const DASHBOARD_DETAIL_BACK_X: u16 = 8;
+const DASHBOARD_DETAIL_BACK_Y: u16 = 2;
+const DASHBOARD_DETAIL_BACK_W: u16 = 56;
+const DASHBOARD_DETAIL_BACK_H: u16 = 14;
 
 #[allow(dead_code)]
 const TEST_NAV_CARD_X: u16 = 20;
@@ -442,6 +581,103 @@ pub fn self_check_hit_test(
 }
 
 #[allow(dead_code)]
+pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<DashboardTouchTarget> {
+    match route {
+        DashboardRoute::Home => {
+            if contains(
+                x,
+                y,
+                DASHBOARD_HOME_OUTPUT_X,
+                DASHBOARD_HOME_OUTPUT_Y,
+                DASHBOARD_HOME_OUTPUT_W,
+                DASHBOARD_HOME_OUTPUT_H,
+            ) {
+                Some(DashboardTouchTarget::HomeOutput)
+            } else if contains(
+                x,
+                y,
+                DASHBOARD_HOME_THERMAL_X,
+                DASHBOARD_HOME_THERMAL_Y,
+                DASHBOARD_HOME_THERMAL_W,
+                DASHBOARD_HOME_THERMAL_H,
+            ) {
+                Some(DashboardTouchTarget::HomeThermal)
+            } else if contains(
+                x,
+                y,
+                DASHBOARD_HOME_CELLS_X,
+                DASHBOARD_HOME_CELLS_Y,
+                DASHBOARD_HOME_CELLS_W,
+                DASHBOARD_HOME_CELLS_H,
+            ) {
+                Some(DashboardTouchTarget::HomeCells)
+            } else if contains(
+                x,
+                y,
+                DASHBOARD_HOME_CHARGER_X,
+                DASHBOARD_HOME_CHARGER_Y,
+                DASHBOARD_HOME_CHARGER_W,
+                DASHBOARD_HOME_CHARGER_H,
+            ) {
+                Some(DashboardTouchTarget::HomeCharger)
+            } else if contains(
+                x,
+                y,
+                DASHBOARD_HOME_BATTERY_FLOW_X,
+                DASHBOARD_HOME_BATTERY_FLOW_Y,
+                DASHBOARD_HOME_BATTERY_FLOW_W,
+                DASHBOARD_HOME_BATTERY_FLOW_H,
+            ) {
+                Some(DashboardTouchTarget::HomeBatteryFlow)
+            } else {
+                None
+            }
+        }
+        DashboardRoute::Detail(_) => {
+            if contains(
+                x,
+                y,
+                DASHBOARD_DETAIL_BACK_X,
+                DASHBOARD_DETAIL_BACK_Y,
+                DASHBOARD_DETAIL_BACK_W,
+                DASHBOARD_DETAIL_BACK_H,
+            ) {
+                Some(DashboardTouchTarget::DetailBack)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub const fn dashboard_route_for_target(target: DashboardTouchTarget) -> DashboardRoute {
+    match target {
+        DashboardTouchTarget::HomeOutput => DashboardRoute::Detail(DashboardDetailPage::Output),
+        DashboardTouchTarget::HomeThermal => DashboardRoute::Detail(DashboardDetailPage::Thermal),
+        DashboardTouchTarget::HomeCells => DashboardRoute::Detail(DashboardDetailPage::Cells),
+        DashboardTouchTarget::HomeCharger => DashboardRoute::Detail(DashboardDetailPage::Charger),
+        DashboardTouchTarget::HomeBatteryFlow => {
+            DashboardRoute::Detail(DashboardDetailPage::BatteryFlow)
+        }
+        DashboardTouchTarget::DetailBack => DashboardRoute::Home,
+    }
+}
+
+#[allow(dead_code)]
+pub fn dashboard_route_has_active_animation(
+    route: DashboardRoute,
+    snapshot: &SelfCheckUiSnapshot,
+) -> bool {
+    matches!(route, DashboardRoute::Detail(DashboardDetailPage::Thermal))
+        && thermal_fan_motion(
+            snapshot.dashboard_detail.fan_rpm,
+            snapshot.dashboard_detail.fan_pwm_pct,
+            snapshot.dashboard_detail.fan_status,
+        ) != ThermalFanMotion::Off
+}
+
+#[allow(dead_code)]
 pub fn test_navigation_hit_test(x: u16, y: u16) -> Option<TestFunctionUi> {
     if contains(
         x,
@@ -548,6 +784,7 @@ struct DashboardData {
     mode: UpsMode,
     focus: UiFocus,
     touch_irq: bool,
+    frame_no: u32,
     mains_present: bool,
     out_a_on: bool,
     out_b_on: bool,
@@ -595,6 +832,7 @@ impl DashboardData {
             mode,
             focus: model.focus,
             touch_irq: model.touch_irq,
+            frame_no: model.frame_no,
             mains_present,
             out_a_on,
             out_b_on,
@@ -654,10 +892,13 @@ struct DashboardLiveData {
     mode: UpsMode,
     focus: UiFocus,
     touch_irq: bool,
+    frame_no: u32,
     mains_present: bool,
     out_a_on: bool,
     out_b_on: bool,
     bms_on: bool,
+    charger_input_vbus_mv: Option<u16>,
+    charger_input_ibus_ma: Option<i32>,
     vin_vbus_mv: Option<u16>,
     vin_iin_ma: Option<i32>,
     out_a_mv: Option<u16>,
@@ -670,12 +911,17 @@ struct DashboardLiveData {
     bms_soc_pct: Option<u16>,
     therm_a_c: Option<i16>,
     therm_b_c: Option<i16>,
+    therm_a_state: SelfCheckCommState,
+    therm_b_state: SelfCheckCommState,
     charge_allowed: Option<bool>,
     bms_state: SelfCheckCommState,
     charger_state: SelfCheckCommState,
+    tps_a_state: SelfCheckCommState,
+    tps_b_state: SelfCheckCommState,
     bms_rca_alarm: Option<bool>,
     bms_no_battery: Option<bool>,
     bms_discharge_ready: Option<bool>,
+    detail: DashboardDetailSnapshot,
 }
 
 impl DashboardLiveData {
@@ -684,10 +930,13 @@ impl DashboardLiveData {
             mode: snapshot.mode,
             focus: model.focus,
             touch_irq: model.touch_irq,
+            frame_no: model.frame_no,
             mains_present: snapshot_mains_present(snapshot),
             out_a_on: snapshot.tps_a_enabled == Some(true),
             out_b_on: snapshot.tps_b_enabled == Some(true),
             bms_on: model.bms_on,
+            charger_input_vbus_mv: snapshot.input_vbus_mv,
+            charger_input_ibus_ma: snapshot.input_ibus_ma,
             vin_vbus_mv: snapshot.vin_vbus_mv,
             vin_iin_ma: snapshot.vin_iin_ma,
             out_a_mv: snapshot.out_a_vbus_mv,
@@ -700,12 +949,17 @@ impl DashboardLiveData {
             bms_soc_pct: snapshot.bq40z50_soc_pct,
             therm_a_c: snapshot.tmp_a_c,
             therm_b_c: snapshot.tmp_b_c,
+            therm_a_state: snapshot.tmp_a,
+            therm_b_state: snapshot.tmp_b,
             charge_allowed: snapshot.bq25792_allow_charge,
             bms_state: snapshot.bq40z50,
             charger_state: snapshot.bq25792,
+            tps_a_state: snapshot.tps_a,
+            tps_b_state: snapshot.tps_b,
             bms_rca_alarm: snapshot.bq40z50_rca_alarm,
             bms_no_battery: snapshot.bq40z50_no_battery,
             bms_discharge_ready: snapshot.bq40z50_discharge_ready,
+            detail: snapshot.dashboard_detail,
         }
     }
 
@@ -741,8 +995,18 @@ impl DashboardLiveData {
     }
 
     fn input_power_w10(self) -> Option<u32> {
+        if let (Some(vbus_mv), Some(ibus_ma)) =
+            (self.charger_input_vbus_mv, self.charger_input_ibus_ma)
+        {
+            return Some((vbus_mv as u32 * ibus_ma.max(0) as u32) / 100_000);
+        }
+
         let vin_ma = self.vin_iin_ma?;
         Some((self.vin_vbus_mv? as u32 * vin_ma.max(0) as u32) / 100_000)
+    }
+
+    fn battery_charge_power_w10(self) -> Option<u32> {
+        Some((self.batt_pack_mv? as u32 * self.charge_current_ma()? as u32) / 100_000)
     }
 
     fn output_power_w10(self) -> Option<u32> {
@@ -762,6 +1026,31 @@ impl DashboardLiveData {
             Some(ma) if ma < 0 => Some(ma.unsigned_abs() as u32),
             Some(_) => Some(0),
             None => None,
+        }
+    }
+
+    fn page_notice(self, page: DashboardDetailPage) -> &'static str {
+        match page {
+            DashboardDetailPage::Cells => self
+                .detail
+                .cells_notice
+                .unwrap_or("CELL DETAIL SOURCE PENDING"),
+            DashboardDetailPage::BatteryFlow => self
+                .detail
+                .battery_notice
+                .unwrap_or("PACK DETAIL SOURCE PENDING"),
+            DashboardDetailPage::Output => self
+                .detail
+                .output_notice
+                .unwrap_or("OUTPUT DETAIL SOURCE PENDING"),
+            DashboardDetailPage::Charger => self
+                .detail
+                .charger_notice
+                .unwrap_or("DETAIL UI ONLY - SOURCE PENDING"),
+            DashboardDetailPage::Thermal => self
+                .detail
+                .thermal_notice
+                .unwrap_or("DETAIL UI ONLY - FAN SOURCE PENDING"),
         }
     }
 
@@ -1386,7 +1675,14 @@ pub fn render_frame<P: UiPainter>(
     model: &UiModel,
     variant: UiVariant,
 ) -> Result<(), P::Error> {
-    render_frame_with_self_check_overlay(painter, model, variant, None, SelfCheckOverlay::None)
+    render_frame_with_dashboard_route_overlay(
+        painter,
+        model,
+        variant,
+        DashboardRoute::Home,
+        None,
+        SelfCheckOverlay::None,
+    )
 }
 
 #[allow(dead_code)]
@@ -1396,19 +1692,39 @@ pub fn render_frame_with_self_check<P: UiPainter>(
     variant: UiVariant,
     self_check: Option<&SelfCheckUiSnapshot>,
 ) -> Result<(), P::Error> {
-    render_frame_with_self_check_overlay(
+    render_frame_with_dashboard_route_overlay(
         painter,
         model,
         variant,
+        DashboardRoute::Home,
         self_check,
         SelfCheckOverlay::None,
     )
 }
 
+#[allow(dead_code)]
 pub fn render_frame_with_self_check_overlay<P: UiPainter>(
     painter: &mut P,
     model: &UiModel,
     variant: UiVariant,
+    self_check: Option<&SelfCheckUiSnapshot>,
+    overlay: SelfCheckOverlay,
+) -> Result<(), P::Error> {
+    render_frame_with_dashboard_route_overlay(
+        painter,
+        model,
+        variant,
+        DashboardRoute::Home,
+        self_check,
+        overlay,
+    )
+}
+
+pub fn render_frame_with_dashboard_route_overlay<P: UiPainter>(
+    painter: &mut P,
+    model: &UiModel,
+    variant: UiVariant,
+    dashboard_route: DashboardRoute,
     self_check: Option<&SelfCheckUiSnapshot>,
     overlay: SelfCheckOverlay,
 ) -> Result<(), P::Error> {
@@ -1421,7 +1737,9 @@ pub fn render_frame_with_self_check_overlay<P: UiPainter>(
 
     match variant {
         UiVariant::InstrumentA => render_variant_a(painter, variant, palette, data, self_check)?,
-        UiVariant::InstrumentB => render_variant_b(painter, variant, palette, data, self_check)?,
+        UiVariant::InstrumentB => {
+            render_variant_b(painter, variant, palette, data, dashboard_route, self_check)?
+        }
         UiVariant::RetroC => {
             render_variant_c(painter, variant, palette, data, self_check, overlay)?
         }
@@ -1438,7 +1756,14 @@ fn render_variant_a<P: UiPainter>(
     data: DashboardData,
     self_check: Option<&SelfCheckUiSnapshot>,
 ) -> Result<(), P::Error> {
-    render_variant_b(painter, variant, palette, data, self_check)
+    render_variant_b(
+        painter,
+        variant,
+        palette,
+        data,
+        DashboardRoute::Home,
+        self_check,
+    )
 }
 
 fn render_variant_b<P: UiPainter>(
@@ -1446,6 +1771,7 @@ fn render_variant_b<P: UiPainter>(
     variant: UiVariant,
     palette: Palette,
     data: DashboardData,
+    dashboard_route: DashboardRoute,
     self_check: Option<&SelfCheckUiSnapshot>,
 ) -> Result<(), P::Error> {
     if let Some(snapshot) = self_check {
@@ -1453,6 +1779,7 @@ fn render_variant_b<P: UiPainter>(
             painter,
             variant,
             palette,
+            dashboard_route,
             DashboardLiveData::from_snapshot(data, snapshot),
         );
     }
@@ -1539,7 +1866,7 @@ fn render_variant_b_demo<P: UiPainter>(
         text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::NumHero,
             format_args!("{:>2}.{:01}", input_power_w10 / 10, input_power_w10 % 10),
             Point::new(14, kpi_value_y),
             HorizontalAlignment::Left,
@@ -1548,7 +1875,7 @@ fn render_variant_b_demo<P: UiPainter>(
         text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::NumHero,
             format_args!("{:>2}.{:01}", output_power_w10 / 10, output_power_w10 % 10),
             Point::new(194, kpi_value_y),
             HorizontalAlignment::Right,
@@ -1576,7 +1903,7 @@ fn render_variant_b_demo<P: UiPainter>(
         text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::NumHero,
             format_args!("{:>2}.{:01}", output_power_w10 / 10, output_power_w10 % 10),
             Point::new(14, kpi_value_y),
             HorizontalAlignment::Left,
@@ -1585,14 +1912,14 @@ fn render_variant_b_demo<P: UiPainter>(
         text(
             painter,
             variant,
-            FontRole::NumBig,
+            FontRole::NumHero,
             format_args!(
                 "{:>1}.{:01}",
                 (output_current_ma / 1000),
                 ((output_current_ma % 1000) / 100)
             ),
             Point::new(194, kpi_value_y),
-            HorizontalAlignment::Right,
+            HorizontalAlignment::Left,
             palette.bg,
         )?;
     }
@@ -1621,7 +1948,7 @@ fn render_variant_b_demo<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "0.00A",
                 Point::new(194, 108),
                 HorizontalAlignment::Right,
@@ -1639,7 +1966,7 @@ fn render_variant_b_demo<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "LOCK",
                 Point::new(194, 132),
                 HorizontalAlignment::Right,
@@ -1678,7 +2005,7 @@ fn render_variant_b_demo<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "0.00A",
                 Point::new(194, 108),
                 HorizontalAlignment::Right,
@@ -1696,7 +2023,7 @@ fn render_variant_b_demo<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 format_args!(
                     "{:>1}.{:02}A",
                     (charge_batt_ma as u16) / 1000,
@@ -1739,7 +2066,7 @@ fn render_variant_b_demo<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 format_args!(
                     "{:>1}.{:02}A",
                     (tps_out_ma as u16) / 1000,
@@ -1761,7 +2088,7 @@ fn render_variant_b_demo<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "LOCK",
                 Point::new(194, 132),
                 HorizontalAlignment::Right,
@@ -1982,8 +2309,13 @@ fn render_variant_b_live<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
     palette: Palette,
+    dashboard_route: DashboardRoute,
     data: DashboardLiveData,
 ) -> Result<(), P::Error> {
+    if let DashboardRoute::Detail(page) = dashboard_route {
+        return render_dashboard_detail_page(painter, variant, palette, data, page);
+    }
+
     let kpi_label_y = 27;
     let kpi_value_y = 44;
     let mode_accent = mode_accent_color(palette, data.mode, data.touch_irq);
@@ -1997,6 +2329,20 @@ fn render_variant_b_live<P: UiPainter>(
     let output_power_w10 = data.output_power_w10();
     let output_current_ma = data.output_current_ma();
     let output_bus_mv = data.output_bus_mv();
+    let headline_output_power_w10 = output_power_w10.or({
+        if !data.out_a_on && !data.out_b_on {
+            Some(0)
+        } else {
+            None
+        }
+    });
+    let headline_output_current_ma = output_current_ma.or({
+        if !data.out_a_on && !data.out_b_on {
+            Some(0)
+        } else {
+            None
+        }
+    });
     let charge_batt_ma = data.charge_current_ma();
     let tps_out_ma = data.output_current_ma();
     let batt_discharge_ma = data.battery_discharge_ma();
@@ -2035,7 +2381,7 @@ fn render_variant_b_live<P: UiPainter>(
             Some(pin_w10) => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::NumHero,
                 format_args!("{:>2}.{:01}", pin_w10 / 10, pin_w10 % 10),
                 Point::new(14, kpi_value_y),
                 HorizontalAlignment::Left,
@@ -2044,18 +2390,18 @@ fn render_variant_b_live<P: UiPainter>(
             None => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::DetailNum,
                 "N/A",
                 Point::new(14, kpi_value_y),
                 HorizontalAlignment::Left,
                 palette.bg,
             )?,
         }
-        match output_power_w10 {
+        match headline_output_power_w10 {
             Some(pout_w10) => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::NumHero,
                 format_args!("{:>2}.{:01}", pout_w10 / 10, pout_w10 % 10),
                 Point::new(194, kpi_value_y),
                 HorizontalAlignment::Right,
@@ -2064,7 +2410,7 @@ fn render_variant_b_live<P: UiPainter>(
             None => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::DetailNum,
                 "N/A",
                 Point::new(194, kpi_value_y),
                 HorizontalAlignment::Right,
@@ -2090,11 +2436,11 @@ fn render_variant_b_live<P: UiPainter>(
             HorizontalAlignment::Right,
             palette.bg,
         )?;
-        match output_power_w10 {
+        match headline_output_power_w10 {
             Some(pout_w10) => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::NumHero,
                 format_args!("{:>2}.{:01}", pout_w10 / 10, pout_w10 % 10),
                 Point::new(14, kpi_value_y),
                 HorizontalAlignment::Left,
@@ -2103,18 +2449,18 @@ fn render_variant_b_live<P: UiPainter>(
             None => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::DetailNum,
                 "N/A",
                 Point::new(14, kpi_value_y),
                 HorizontalAlignment::Left,
                 palette.bg,
             )?,
         }
-        match output_current_ma {
+        match headline_output_current_ma {
             Some(iout_ma) => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::NumHero,
                 format_args!("{:>1}.{:01}", iout_ma / 1000, (iout_ma % 1000) / 100),
                 Point::new(194, kpi_value_y),
                 HorizontalAlignment::Right,
@@ -2123,7 +2469,7 @@ fn render_variant_b_live<P: UiPainter>(
             None => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::DetailNum,
                 "N/A",
                 Point::new(194, kpi_value_y),
                 HorizontalAlignment::Right,
@@ -2156,7 +2502,7 @@ fn render_variant_b_live<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "0.00A",
                 Point::new(194, 108),
                 HorizontalAlignment::Right,
@@ -2174,7 +2520,7 @@ fn render_variant_b_live<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 if data.mains_present { "LOCK" } else { "NOAC" },
                 Point::new(194, 132),
                 HorizontalAlignment::Right,
@@ -2213,7 +2559,7 @@ fn render_variant_b_live<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "0.00A",
                 Point::new(194, 108),
                 HorizontalAlignment::Right,
@@ -2232,7 +2578,7 @@ fn render_variant_b_live<P: UiPainter>(
                 Some(chg_ma) => text(
                     painter,
                     variant,
-                    FontRole::Num,
+                    FontRole::DetailNum,
                     format_args!("{:>1}.{:02}A", chg_ma / 1000, (chg_ma % 1000) / 10),
                     Point::new(194, 132),
                     HorizontalAlignment::Right,
@@ -2241,7 +2587,7 @@ fn render_variant_b_live<P: UiPainter>(
                 None => text(
                     painter,
                     variant,
-                    FontRole::Num,
+                    FontRole::DetailNum,
                     "N/A",
                     Point::new(194, 132),
                     HorizontalAlignment::Right,
@@ -2284,7 +2630,7 @@ fn render_variant_b_live<P: UiPainter>(
                 Some(out_ma) => text(
                     painter,
                     variant,
-                    FontRole::Num,
+                    FontRole::DetailNum,
                     format_args!("{:>1}.{:02}A", out_ma / 1000, (out_ma % 1000) / 10),
                     Point::new(194, 108),
                     HorizontalAlignment::Right,
@@ -2293,7 +2639,7 @@ fn render_variant_b_live<P: UiPainter>(
                 None => text(
                     painter,
                     variant,
-                    FontRole::Num,
+                    FontRole::DetailNum,
                     "N/A",
                     Point::new(194, 108),
                     HorizontalAlignment::Right,
@@ -2312,7 +2658,7 @@ fn render_variant_b_live<P: UiPainter>(
             text(
                 painter,
                 variant,
-                FontRole::Num,
+                FontRole::DetailNum,
                 "LOCK",
                 Point::new(194, 132),
                 HorizontalAlignment::Right,
@@ -2601,7 +2947,1823 @@ fn render_variant_b_live<P: UiPainter>(
         },
     )?;
 
+    draw_dashboard_entry_marker(
+        painter,
+        DASHBOARD_HOME_OUTPUT_X,
+        DASHBOARD_HOME_OUTPUT_Y,
+        DASHBOARD_HOME_OUTPUT_W,
+        DASHBOARD_HOME_OUTPUT_H,
+        mode_accent,
+    )?;
+    draw_dashboard_entry_marker(
+        painter,
+        DASHBOARD_HOME_THERMAL_X,
+        DASHBOARD_HOME_THERMAL_Y,
+        DASHBOARD_HOME_THERMAL_W,
+        DASHBOARD_HOME_THERMAL_H,
+        palette.center,
+    )?;
+    draw_dashboard_entry_marker(
+        painter,
+        DASHBOARD_HOME_CELLS_X,
+        DASHBOARD_HOME_CELLS_Y,
+        DASHBOARD_HOME_CELLS_W,
+        DASHBOARD_HOME_CELLS_H,
+        palette.left,
+    )?;
+    draw_dashboard_entry_marker(
+        painter,
+        DASHBOARD_HOME_CHARGER_X,
+        DASHBOARD_HOME_CHARGER_Y,
+        DASHBOARD_HOME_CHARGER_W,
+        DASHBOARD_HOME_CHARGER_H,
+        palette.right,
+    )?;
+    draw_dashboard_entry_marker(
+        painter,
+        DASHBOARD_HOME_BATTERY_FLOW_X,
+        DASHBOARD_HOME_BATTERY_FLOW_Y,
+        DASHBOARD_HOME_BATTERY_FLOW_W,
+        DASHBOARD_HOME_BATTERY_FLOW_H,
+        if data.mains_present {
+            palette.accent
+        } else {
+            palette.down
+        },
+    )?;
+
     Ok(())
+}
+
+fn render_dashboard_detail_page<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+    page: DashboardDetailPage,
+) -> Result<(), P::Error> {
+    let accent = match page {
+        DashboardDetailPage::Cells => palette.left,
+        DashboardDetailPage::BatteryFlow => {
+            if data.mains_present {
+                palette.accent
+            } else {
+                palette.down
+            }
+        }
+        DashboardDetailPage::Output => palette.accent,
+        DashboardDetailPage::Charger => palette.right,
+        DashboardDetailPage::Thermal => palette.center,
+    };
+    let status = detail_status_tag(page, data);
+
+    draw_dashboard_detail_top_bar(
+        painter,
+        variant,
+        palette,
+        detail_page_title(page),
+        status,
+        detail_status_color(palette, status),
+    )?;
+
+    draw_panel(painter, 6, 22, 308, 38, palette, true, accent)?;
+    draw_panel(painter, 6, 60, 150, 82, palette, false, accent)?;
+    draw_panel(painter, 164, 60, 150, 82, palette, false, accent)?;
+    draw_panel(
+        painter,
+        6,
+        146,
+        308,
+        20,
+        palette,
+        true,
+        detail_status_color(palette, status),
+    )?;
+
+    match page {
+        DashboardDetailPage::Cells => {
+            render_dashboard_cells_detail(painter, variant, palette, data)?
+        }
+        DashboardDetailPage::BatteryFlow => {
+            render_dashboard_battery_flow_detail(painter, variant, palette, data)?
+        }
+        DashboardDetailPage::Output => {
+            render_dashboard_output_detail(painter, variant, palette, data)?
+        }
+        DashboardDetailPage::Charger => {
+            render_dashboard_charger_detail(painter, variant, palette, data)?
+        }
+        DashboardDetailPage::Thermal => {
+            render_dashboard_thermal_detail(painter, variant, palette, data)?
+        }
+    }
+
+    draw_dashboard_detail_footer_notice(painter, variant, palette, page, data)?;
+
+    Ok(())
+}
+
+fn detail_balance_summary_text(detail: DashboardDetailSnapshot) -> &'static str {
+    match detail.balance_mask {
+        Some(0) => "NONE",
+        Some(0b0001) => "C1",
+        Some(0b0010) => "C2",
+        Some(0b0100) => "C3",
+        Some(0b1000) => "C4",
+        Some(0b0011) => "C1+C2",
+        Some(0b0101) => "C1+C3",
+        Some(0b0110) => "C2+C3",
+        Some(0b1001) => "C1+C4",
+        Some(0b1010) => "C2+C4",
+        Some(0b1100) => "C3+C4",
+        Some(_) => "MULTI",
+        None => match detail.balance_active {
+            Some(true) => "ACTIVE",
+            Some(false) => "NONE",
+            None => "N/A",
+        },
+    }
+}
+
+fn render_dashboard_cells_detail<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "PACK",
+        Point::new(14, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match (data.batt_pack_mv, data.bms_soc_pct) {
+        (Some(pack_mv), Some(soc)) => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            format_args!(
+                "{:>2}.{:01}V {:>2}%",
+                pack_mv / 1000,
+                (pack_mv % 1000) / 100,
+                soc
+            ),
+            Point::new(308, 28),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        (Some(pack_mv), None) => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            format_args!("{:>2}.{:01}V N/A", pack_mv / 1000, (pack_mv % 1000) / 100),
+            Point::new(308, 28),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        _ => text(
+            painter,
+            variant,
+            FontRole::NumBig,
+            "N/A",
+            Point::new(308, 28),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+    }
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "BAL STATE",
+        Point::new(14, 44),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailNum,
+        detail_balance_summary_text(data.detail),
+        Point::new(308, 42),
+        HorizontalAlignment::Right,
+        palette.bg,
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "CELL MV",
+        Point::new(14, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_1,
+        "C1",
+        data.detail.cell_mv[0],
+        DetailValueFmt::MilliVolt,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_2,
+        "C2",
+        data.detail.cell_mv[1],
+        DetailValueFmt::MilliVolt,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_3,
+        "C3",
+        data.detail.cell_mv[2],
+        DetailValueFmt::MilliVolt,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_4,
+        "C4",
+        data.detail.cell_mv[3],
+        DetailValueFmt::MilliVolt,
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "CELL TEMP",
+        Point::new(172, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_1,
+        "T1",
+        data.detail.cell_temp_c[0],
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_2,
+        "T2",
+        data.detail.cell_temp_c[1],
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_3,
+        "T3",
+        data.detail.cell_temp_c[2],
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_4,
+        "T4",
+        data.detail.cell_temp_c[3],
+        DetailValueFmt::Celsius,
+    )?;
+    Ok(())
+}
+
+fn render_dashboard_battery_flow_detail<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "VPACK V",
+        Point::new(14, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match data.batt_pack_mv {
+        Some(pack_mv) => text(
+            painter,
+            variant,
+            FontRole::NumHero,
+            format_args!("{:>2}.{:01}", pack_mv / 1000, (pack_mv % 1000) / 100),
+            Point::new(154, 30),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "N/A",
+            Point::new(14, 38),
+            HorizontalAlignment::Left,
+            palette.bg,
+        )?,
+    }
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "IPACK A",
+        Point::new(174, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match data.bms_current_ma {
+        Some(current_ma) => text(
+            painter,
+            variant,
+            FontRole::NumHero,
+            format_args!(
+                "{:>1}.{:02}",
+                current_ma.abs() / 1000,
+                (current_ma.abs() % 1000) / 10
+            ),
+            Point::new(304, 30),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "N/A",
+            Point::new(308, 38),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+    }
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "ENERGY",
+        Point::new(14, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_1,
+        "STORE",
+        data.detail.battery_energy_mwh,
+        DetailValueFmt::MilliWattHour,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_2,
+        "FULL",
+        data.detail.battery_full_capacity_mwh,
+        DetailValueFmt::MilliWattHour,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_3,
+        "SOC",
+        match data.bms_soc_pct {
+            Some(_) => DetailTextValue::Percent(data.bms_soc_pct.unwrap_or(0)),
+            None => DetailTextValue::Na,
+        },
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_4,
+        "STATE",
+        match data.bms_current_ma {
+            Some(ma) if ma > 0 => DetailTextValue::Static("CHG"),
+            Some(ma) if ma < 0 => DetailTextValue::Static("DSG"),
+            Some(_) => DetailTextValue::Static("IDLE"),
+            None => DetailTextValue::Static("N/A"),
+        },
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "GATE STATE",
+        Point::new(172, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_1,
+        "CHG",
+        bool_text_value(data.detail.charge_fet_on),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_2,
+        "DSG",
+        bool_text_value(data.detail.discharge_fet_on),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_3,
+        "PCHG",
+        bool_text_value(data.detail.precharge_fet_on),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_4,
+        "FAULT",
+        DetailTextValue::Static(detail_fault_row_text(
+            DashboardDetailPage::BatteryFlow,
+            data,
+        )),
+    )?;
+    Ok(())
+}
+
+fn render_dashboard_output_detail<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "VOUT V",
+        Point::new(14, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match data.output_bus_mv() {
+        Some(bus_mv) => text(
+            painter,
+            variant,
+            FontRole::NumHero,
+            format_args!("{:>2}.{:01}", bus_mv / 1000, (bus_mv % 1000) / 100),
+            Point::new(154, 30),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "N/A",
+            Point::new(14, 38),
+            HorizontalAlignment::Left,
+            palette.bg,
+        )?,
+    }
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "POUT W",
+        Point::new(174, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match data.output_power_w10() {
+        Some(power_w10) => text(
+            painter,
+            variant,
+            FontRole::NumHero,
+            format_args!("{:>2}.{:01}", power_w10 / 10, power_w10 % 10),
+            Point::new(304, 30),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "N/A",
+            Point::new(308, 38),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+    }
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "OUT-A",
+        Point::new(14, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_output_current_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_1,
+        "I",
+        data.out_a_on,
+        data.out_a_ma,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_2,
+        "TEMP",
+        data.detail.out_a_temp_c.or(data.therm_a_c),
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_3,
+        "STATE",
+        if data.out_a_on {
+            DetailTextValue::Static("RUN")
+        } else {
+            DetailTextValue::Static("OFF")
+        },
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_4,
+        "FAULT",
+        DetailTextValue::Static(output_fault_row_text(
+            data.tps_a_state,
+            data.out_a_on,
+            "HOLD",
+        )),
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "OUT-B",
+        Point::new(172, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_output_current_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_1,
+        "I",
+        data.out_b_on,
+        data.out_b_ma,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_2,
+        "TEMP",
+        data.detail.out_b_temp_c.or(data.therm_b_c),
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_3,
+        "STATE",
+        if data.out_b_on {
+            DetailTextValue::Static("RUN")
+        } else {
+            DetailTextValue::Static("OFF")
+        },
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_4,
+        "FAULT",
+        DetailTextValue::Static(output_fault_row_text(
+            data.tps_b_state,
+            data.out_b_on,
+            "STBY",
+        )),
+    )?;
+    Ok(())
+}
+
+fn render_dashboard_charger_detail<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "IN W",
+        Point::new(14, 24),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "CHARGE W",
+        Point::new(174, 24),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    draw_charger_source_indicator(
+        painter,
+        variant,
+        palette,
+        data.detail.input_source,
+        14,
+        42,
+        26,
+        12,
+    )?;
+    draw_icon_blocks_centered(
+        painter,
+        174,
+        42,
+        26,
+        12,
+        if data.battery_charge_power_w10().unwrap_or(0) > 0 {
+            RI_BATTERY_CHARGE_LINE_24
+        } else {
+            RI_BATTERY_LINE_24
+        },
+        palette.bg,
+    )?;
+    match data.input_power_w10() {
+        Some(pin_w10) => text(
+            painter,
+            variant,
+            FontRole::NumHero,
+            format_args!("{:>2}.{:01}", pin_w10 / 10, pin_w10 % 10),
+            Point::new(154, 34),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "N/A",
+            Point::new(154, 38),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+    }
+    match data.battery_charge_power_w10() {
+        Some(pack_w10) => text(
+            painter,
+            variant,
+            FontRole::NumHero,
+            format_args!("{:>2}.{:01}", pack_w10 / 10, pack_w10 % 10),
+            Point::new(304, 34),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "N/A",
+            Point::new(308, 38),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+    }
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "SESSION",
+        Point::new(14, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_1,
+        "ACTIVE",
+        bool_text_value(charger_active_value(data)),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_2,
+        "STATE",
+        DetailTextValue::Static(charger_state_text(data)),
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_3,
+        "ICHG",
+        data.chg_iin_ma,
+        DetailValueFmt::MilliAmp,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_4,
+        "INPUT",
+        DetailTextValue::Static(if data.mains_present {
+            "PRESENT"
+        } else {
+            "ABSENT"
+        }),
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "PACK SIDE",
+        Point::new(172, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_1,
+        "VPACK",
+        data.batt_pack_mv,
+        DetailValueFmt::MilliVolt,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_2,
+        "BMS",
+        DetailTextValue::Static(match data.bms_state {
+            SelfCheckCommState::Ok => "READY",
+            SelfCheckCommState::Warn => "WARN",
+            SelfCheckCommState::Err => "FAULT",
+            SelfCheckCommState::Pending => "PEND",
+            SelfCheckCommState::NotAvailable => "N/A",
+        }),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_3,
+        "CHG",
+        bool_text_value(data.charge_allowed),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_4,
+        "FAULT",
+        DetailTextValue::Static(detail_fault_row_text(DashboardDetailPage::Charger, data)),
+    )?;
+    Ok(())
+}
+
+fn render_dashboard_thermal_detail<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    let hotspot_c = thermal_hotspot_c(data);
+    let fan_icon_color = thermal_fan_icon_color(palette, data);
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "HOTSPOT C",
+        Point::new(14, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match hotspot_c {
+        Some(temp_c) if temp_c >= 0 => {
+            text(
+                painter,
+                variant,
+                FontRole::NumHero,
+                format_args!("{}", temp_c),
+                Point::new(154, 30),
+                HorizontalAlignment::Right,
+                palette.bg,
+            )?;
+        }
+        Some(temp_c) => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            format_args!("{temp_c}C"),
+            Point::new(174, 30),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "N/A",
+            Point::new(174, 30),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+    }
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "FAN",
+        Point::new(174, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    draw_icon_blocks_centered(
+        painter,
+        174,
+        28,
+        130,
+        20,
+        thermal_fan_blocks(thermal_fan_frame(
+            data.frame_no,
+            data.detail.fan_rpm,
+            data.detail.fan_pwm_pct,
+            data.detail.fan_status,
+        )),
+        fan_icon_color,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "SENSORS",
+        Point::new(14, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_1,
+        "TMP-A",
+        data.therm_a_c,
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_2,
+        "TMP-B",
+        data.therm_b_c,
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_3,
+        "BOARD",
+        data.detail.board_temp_c,
+        DetailValueFmt::Celsius,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        14,
+        DETAIL_ROW_Y_4,
+        "BAT",
+        data.detail.battery_temp_c,
+        DetailValueFmt::Celsius,
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "FAN CTRL",
+        Point::new(172, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_1,
+        "RPM",
+        data.detail.fan_rpm,
+        DetailValueFmt::Rpm,
+    )?;
+    draw_detail_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_2,
+        "PWM",
+        data.detail.fan_pwm_pct,
+        DetailValueFmt::Percent,
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_3,
+        "MODE",
+        DetailTextValue::Static(data.detail.fan_status.unwrap_or("N/A")),
+    )?;
+    draw_detail_text_row(
+        painter,
+        variant,
+        palette,
+        172,
+        DETAIL_ROW_Y_4,
+        "FAULT",
+        DetailTextValue::Static(detail_fault_row_text(DashboardDetailPage::Thermal, data)),
+    )?;
+    Ok(())
+}
+
+fn detail_page_title(page: DashboardDetailPage) -> &'static str {
+    match page {
+        DashboardDetailPage::Cells => "CELL DETAIL",
+        DashboardDetailPage::BatteryFlow => "BATTERY FLOW",
+        DashboardDetailPage::Output => "OUTPUT DETAIL",
+        DashboardDetailPage::Charger => "CHARGER DETAIL",
+        DashboardDetailPage::Thermal => "THERMAL DETAIL",
+    }
+}
+
+fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
+    match page {
+        DashboardDetailPage::Cells => {
+            if data.bms_state == SelfCheckCommState::Err {
+                "FAULT"
+            } else if data.bms_state == SelfCheckCommState::Warn || data.bms_rca_alarm == Some(true)
+            {
+                "WARN"
+            } else if !cells_detail_ready(data) {
+                "N/A"
+            } else if data.detail.balance_active == Some(true) {
+                "BAL ON"
+            } else {
+                "READY"
+            }
+        }
+        DashboardDetailPage::BatteryFlow => {
+            if data.bms_state == SelfCheckCommState::Err {
+                "FAULT"
+            } else if data.bms_state == SelfCheckCommState::Warn || data.bms_rca_alarm == Some(true)
+            {
+                "WARN"
+            } else if !battery_flow_detail_ready(data) {
+                "N/A"
+            } else {
+                match data.bms_current_ma {
+                    Some(ma) if ma > 0 => "CHG",
+                    Some(ma) if ma < 0 => "DSG",
+                    Some(_) => "IDLE",
+                    None => "N/A",
+                }
+            }
+        }
+        DashboardDetailPage::Output => {
+            if data.tps_a_state == SelfCheckCommState::Err
+                || data.tps_b_state == SelfCheckCommState::Err
+            {
+                "FAULT"
+            } else if data.tps_a_state == SelfCheckCommState::Warn
+                || data.tps_b_state == SelfCheckCommState::Warn
+            {
+                "WARN"
+            } else if !output_detail_ready(data) {
+                "N/A"
+            } else if !data.out_a_on && !data.out_b_on {
+                "IDLE"
+            } else if !data.out_a_on || !data.out_b_on {
+                "WARN"
+            } else {
+                "REG OK"
+            }
+        }
+        DashboardDetailPage::Charger => {
+            if data.charger_state == SelfCheckCommState::Err {
+                "FAULT"
+            } else if data.charger_state == SelfCheckCommState::Warn {
+                "WARN"
+            } else if charger_active_value(data) == Some(true) {
+                "ACTIVE"
+            } else if !data.mains_present {
+                "NOAC"
+            } else if data.charge_allowed == Some(false) {
+                "LOCK"
+            } else if charger_data_ready(data) {
+                "IDLE"
+            } else {
+                "N/A"
+            }
+        }
+        DashboardDetailPage::Thermal => {
+            if thermal_fault_present(data) {
+                "FAULT"
+            } else if thermal_warn_present(data) {
+                "WARN"
+            } else {
+                match thermal_hotspot_c(data) {
+                    Some(temp) if temp >= 60 => "HOT",
+                    Some(temp) if temp >= 45 => "WARM",
+                    Some(_) => "COOL",
+                    None => "N/A",
+                }
+            }
+        }
+    }
+}
+
+fn detail_status_color(palette: Palette, status: &'static str) -> u16 {
+    match status {
+        "FAULT" | "HOT" => ERROR_COLOR,
+        "WARN" | "WARM" | "LOCK" | "NOAC" => PROGRESS_COLOR,
+        _ => palette.accent,
+    }
+}
+
+fn draw_dashboard_detail_top_bar<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    title: &'static str,
+    status: &'static str,
+    status_color: u16,
+) -> Result<(), P::Error> {
+    fill(painter, 0, 0, UI_W, HEADER_H, palette.panel)?;
+    draw_panel(
+        painter,
+        DASHBOARD_DETAIL_BACK_X,
+        DASHBOARD_DETAIL_BACK_Y,
+        DASHBOARD_DETAIL_BACK_W,
+        DASHBOARD_DETAIL_BACK_H,
+        palette,
+        false,
+        palette.accent,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "BACK",
+        Point::new(
+            (DASHBOARD_DETAIL_BACK_X + DASHBOARD_DETAIL_BACK_W / 2) as i32,
+            4,
+        ),
+        HorizontalAlignment::Center,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        title,
+        Point::new(DETAIL_TITLE_X, 2),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        status,
+        Point::new(DETAIL_STATUS_X, 2),
+        HorizontalAlignment::Right,
+        status_color,
+    )
+}
+
+fn draw_dashboard_entry_marker<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    accent: u16,
+) -> Result<(), P::Error> {
+    let marker_x = x + w - 11;
+    let marker_y = y + h - 11;
+    fill(painter, marker_x, marker_y + 6, 8, 2, accent)?;
+    fill(painter, marker_x + 6, marker_y, 2, 8, accent)
+}
+
+enum DetailValueFmt {
+    MilliVolt,
+    MilliAmp,
+    MilliWattHour,
+    Celsius,
+    Percent,
+    Rpm,
+}
+
+enum DetailTextValue {
+    Static(&'static str),
+    Percent(u16),
+    Na,
+}
+
+fn draw_detail_row<P: UiPainter, T: Copy + IntoDetailValue>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    label: &'static str,
+    value: Option<T>,
+    fmt: DetailValueFmt,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        label,
+        Point::new(x as i32, y as i32),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    match (value.map(IntoDetailValue::into_detail_value), fmt) {
+        (Some(DetailValue::U16(raw)), DetailValueFmt::MilliVolt) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>2}.{:03}V", raw / 1000, raw % 1000),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        (Some(DetailValue::U16(raw)), DetailValueFmt::MilliAmp) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>1}.{:02}A", raw / 1000, (raw % 1000) / 10),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        (Some(DetailValue::U32(raw)), DetailValueFmt::MilliWattHour) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>5}mWh", raw),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        (Some(DetailValue::I16(raw)), DetailValueFmt::Celsius) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>2}C", raw),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        (Some(DetailValue::U8(raw)), DetailValueFmt::Percent) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>3}%", raw),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        (Some(DetailValue::U16(raw)), DetailValueFmt::Rpm) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>4}RPM", raw),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        _ => text(
+            painter,
+            variant,
+            FontRole::Num,
+            "N/A",
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+    }
+}
+
+fn draw_detail_text_row<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    label: &'static str,
+    value: DetailTextValue,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        label,
+        Point::new(x as i32, y as i32),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    match value {
+        DetailTextValue::Static(value) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            value,
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        DetailTextValue::Percent(value) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:>3}%", value),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        DetailTextValue::Na => text(
+            painter,
+            variant,
+            FontRole::Num,
+            "N/A",
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+    }
+}
+
+fn draw_output_current_row<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    label: &'static str,
+    enabled: bool,
+    current_ma: Option<i32>,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        label,
+        Point::new(x as i32, y as i32),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    if !enabled {
+        return text(
+            painter,
+            variant,
+            FontRole::Num,
+            "--",
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        );
+    }
+    match current_ma {
+        Some(current_ma) if current_ma >= 0 => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!(
+                "{:>1}.{:02}A",
+                (current_ma as u32) / 1000,
+                ((current_ma as u32) % 1000) / 10
+            ),
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        Some(_) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            "--",
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        None => text(
+            painter,
+            variant,
+            FontRole::Num,
+            "N/A",
+            Point::new((x + 132) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+    }
+}
+
+fn bool_text_value(value: Option<bool>) -> DetailTextValue {
+    match value {
+        Some(true) => DetailTextValue::Static("ON"),
+        Some(false) => DetailTextValue::Static("OFF"),
+        None => DetailTextValue::Na,
+    }
+}
+
+fn max_optional_i16(a: Option<i16>, b: Option<i16>) -> Option<i16> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if a > b { a } else { b }),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+fn thermal_hotspot_c(data: DashboardLiveData) -> Option<i16> {
+    max_optional_i16(
+        data.therm_a_c,
+        max_optional_i16(
+            data.therm_b_c,
+            max_optional_i16(data.detail.board_temp_c, data.detail.battery_temp_c),
+        ),
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThermalFanMotion {
+    Off,
+    Low,
+    Mid,
+    High,
+}
+
+fn thermal_fan_motion(
+    rpm: Option<u16>,
+    pwm_pct: Option<u8>,
+    status: Option<&'static str>,
+) -> ThermalFanMotion {
+    match (rpm, pwm_pct, status) {
+        (Some(rpm), _, _) if rpm >= 3_600 => ThermalFanMotion::High,
+        (_, Some(pwm), _) if pwm >= 90 => ThermalFanMotion::High,
+        (_, _, Some("HIGH")) => ThermalFanMotion::High,
+        (Some(rpm), _, _) if rpm >= 1_800 => ThermalFanMotion::Mid,
+        (_, Some(pwm), _) if pwm >= 55 => ThermalFanMotion::Mid,
+        (_, _, Some("MID")) => ThermalFanMotion::Mid,
+        (Some(rpm), _, _) if rpm > 0 => ThermalFanMotion::Low,
+        (_, Some(pwm), _) if pwm > 0 => ThermalFanMotion::Low,
+        (_, _, Some("LOW" | "RUN")) => ThermalFanMotion::Low,
+        _ => ThermalFanMotion::Off,
+    }
+}
+
+fn thermal_fan_frame(
+    frame_no: u32,
+    rpm: Option<u16>,
+    pwm_pct: Option<u8>,
+    status: Option<&'static str>,
+) -> usize {
+    match thermal_fan_motion(rpm, pwm_pct, status) {
+        ThermalFanMotion::Off => 0,
+        ThermalFanMotion::Low => ((frame_no / 18) % 2) as usize,
+        ThermalFanMotion::Mid => ((frame_no / 10) % 2) as usize,
+        ThermalFanMotion::High => ((frame_no / 5) % 2) as usize,
+    }
+}
+
+fn thermal_fan_icon_color(palette: Palette, data: DashboardLiveData) -> u16 {
+    if data.detail.fan_status == Some("FAULT") {
+        ERROR_COLOR
+    } else {
+        match thermal_fan_motion(
+            data.detail.fan_rpm,
+            data.detail.fan_pwm_pct,
+            data.detail.fan_status,
+        ) {
+            ThermalFanMotion::Off => fade_color(palette.bg, palette.panel_alt),
+            _ => palette.bg,
+        }
+    }
+}
+
+fn cells_detail_ready(data: DashboardLiveData) -> bool {
+    data.batt_pack_mv.is_some()
+        || data.detail.balance_active.is_some()
+        || data.detail.balance_mask.is_some()
+        || data.detail.balance_cell.is_some()
+        || data.detail.cell_mv.iter().any(|value| value.is_some())
+        || data.detail.cell_temp_c.iter().any(|value| value.is_some())
+}
+
+fn battery_flow_detail_ready(data: DashboardLiveData) -> bool {
+    data.batt_pack_mv.is_some()
+        || data.bms_current_ma.is_some()
+        || data.bms_soc_pct.is_some()
+        || data.detail.battery_energy_mwh.is_some()
+        || data.detail.battery_full_capacity_mwh.is_some()
+        || data.detail.charge_fet_on.is_some()
+        || data.detail.discharge_fet_on.is_some()
+        || data.detail.precharge_fet_on.is_some()
+}
+
+fn output_detail_ready(data: DashboardLiveData) -> bool {
+    data.out_a_mv.is_some()
+        || data.out_a_ma.is_some()
+        || data.out_b_mv.is_some()
+        || data.out_b_ma.is_some()
+        || data.detail.out_a_temp_c.is_some()
+        || data.detail.out_b_temp_c.is_some()
+        || data.tps_a_state != SelfCheckCommState::Pending
+        || data.tps_b_state != SelfCheckCommState::Pending
+}
+
+fn charger_data_ready(data: DashboardLiveData) -> bool {
+    data.detail.charger_active.is_some()
+        || data.detail.charger_status.is_some()
+        || data.charge_allowed.is_some()
+        || data.chg_iin_ma.is_some()
+        || data.charger_state == SelfCheckCommState::Err
+}
+
+fn charger_active_value(data: DashboardLiveData) -> Option<bool> {
+    data.detail
+        .charger_active
+        .or(match (data.charge_allowed, data.chg_iin_ma) {
+            (Some(true), Some(ma)) => Some(ma > 0),
+            (Some(false), _) => Some(false),
+            _ => None,
+        })
+}
+
+fn charger_state_text(data: DashboardLiveData) -> &'static str {
+    if let Some(status) = data.detail.charger_status {
+        status
+    } else if data.charger_state == SelfCheckCommState::Err {
+        "FAULT"
+    } else if data.charge_allowed == Some(false) && data.mains_present {
+        "LOCK"
+    } else if !data.mains_present {
+        "NOAC"
+    } else {
+        match (data.charge_allowed, data.chg_iin_ma) {
+            (Some(true), Some(ma)) if ma > 0 => "CHG",
+            (Some(true), Some(_)) => "READY",
+            _ => "N/A",
+        }
+    }
+}
+
+fn thermal_fault_present(data: DashboardLiveData) -> bool {
+    data.therm_a_state == SelfCheckCommState::Err
+        || data.therm_b_state == SelfCheckCommState::Err
+        || data.detail.fan_status == Some("FAULT")
+}
+
+fn thermal_warn_present(data: DashboardLiveData) -> bool {
+    data.therm_a_state == SelfCheckCommState::Warn || data.therm_b_state == SelfCheckCommState::Warn
+}
+
+fn detail_footer_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
+    if !detail_data_ready(page, data) {
+        return data.page_notice(page);
+    }
+
+    match detail_status_tag(page, data) {
+        "FAULT" => detail_fault_notice(page, data),
+        "WARN" => "WARNING ACTIVE - CHECK DETAIL ROWS",
+        _ => data.page_notice(page),
+    }
+}
+
+fn detail_fault_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
+    match page {
+        DashboardDetailPage::BatteryFlow => {
+            if data.bms_state == SelfCheckCommState::Err {
+                "BMS LINK FAULT"
+            } else if data.bms_rca_alarm == Some(true) {
+                "PACK ALARM ACTIVE"
+            } else if !battery_flow_detail_ready(data) {
+                "N/A"
+            } else {
+                data.page_notice(page)
+            }
+        }
+        DashboardDetailPage::Charger => {
+            if data.charger_state == SelfCheckCommState::Err {
+                "CHARGER LINK FAULT"
+            } else if !charger_data_ready(data) {
+                "N/A"
+            } else {
+                data.page_notice(page)
+            }
+        }
+        DashboardDetailPage::Thermal => {
+            if thermal_fault_present(data) {
+                "THERMAL SENSE FAULT"
+            } else if thermal_hotspot_c(data).is_some() {
+                data.page_notice(page)
+            } else {
+                "N/A"
+            }
+        }
+        _ => data.page_notice(page),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DetailFooterIcon {
+    Live,
+    Mock,
+    Warn,
+    Fault,
+    Unknown,
+}
+
+fn detail_footer_badge(
+    page: DashboardDetailPage,
+    data: DashboardLiveData,
+) -> (DetailFooterIcon, &'static str) {
+    let notice = detail_footer_notice(page, data);
+    let status = detail_status_tag(page, data);
+
+    if !detail_data_ready(page, data) || status == "N/A" || notice == "N/A" {
+        return (DetailFooterIcon::Unknown, "NO DATA");
+    }
+
+    if notice.contains("MOCK") {
+        return (DetailFooterIcon::Mock, "MOCK DATA");
+    }
+
+    if notice.contains("BALANCE") {
+        return (DetailFooterIcon::Live, "BAL ACTIVE");
+    }
+
+    match status {
+        "FAULT" => (
+            DetailFooterIcon::Fault,
+            match page {
+                DashboardDetailPage::BatteryFlow if data.bms_state == SelfCheckCommState::Err => {
+                    "BMS FAULT"
+                }
+                DashboardDetailPage::BatteryFlow => "PACK ALARM",
+                DashboardDetailPage::Charger => "LINK FAULT",
+                DashboardDetailPage::Thermal => "SENSE FAULT",
+                _ => "FAULT",
+            },
+        ),
+        "WARN" | "HOT" | "WARM" | "LOCK" | "NOAC" => (DetailFooterIcon::Warn, "CHECK ROWS"),
+        _ if notice.contains("PENDING")
+            || notice.contains("SOURCE")
+            || notice.contains("UI ONLY") =>
+        {
+            (DetailFooterIcon::Unknown, "SOURCE NXT")
+        }
+        _ => (DetailFooterIcon::Live, "LIVE DATA"),
+    }
+}
+
+fn draw_dashboard_detail_footer_notice<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    page: DashboardDetailPage,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    let (icon, label) = detail_footer_badge(page, data);
+    fill(painter, 34, 148, 1, 16, palette.border)?;
+    draw_detail_footer_icon(painter, 12, 147, icon, palette.bg)?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        label,
+        Point::new(40, 150),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )
+}
+
+fn draw_detail_footer_icon<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    icon: DetailFooterIcon,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    let blocks = match icon {
+        DetailFooterIcon::Live => CARBON_CHECKMARK_OUTLINE_18,
+        DetailFooterIcon::Mock => CARBON_CHECKBOX_INDETERMINATE_18,
+        DetailFooterIcon::Warn => CARBON_WARNING_ALT_18,
+        DetailFooterIcon::Fault => CARBON_ERROR_OUTLINE_18,
+        DetailFooterIcon::Unknown => CARBON_HELP_18,
+    };
+    draw_icon_blocks(painter, x, y, blocks, rgb565)
+}
+
+fn detail_fault_row_text(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
+    match page {
+        DashboardDetailPage::BatteryFlow => {
+            if data.bms_state == SelfCheckCommState::Err {
+                "LINK"
+            } else if data.bms_state == SelfCheckCommState::Warn {
+                "WARN"
+            } else if data.bms_rca_alarm == Some(true) {
+                "ALARM"
+            } else if !battery_flow_detail_ready(data) {
+                "N/A"
+            } else {
+                "CLEAR"
+            }
+        }
+        DashboardDetailPage::Charger => {
+            if data.charger_state == SelfCheckCommState::Err {
+                "LINK"
+            } else if data.charger_state == SelfCheckCommState::Warn {
+                "WARN"
+            } else if !charger_data_ready(data) {
+                "N/A"
+            } else {
+                "CLEAR"
+            }
+        }
+        DashboardDetailPage::Thermal => {
+            if thermal_fault_present(data) {
+                "SENSE"
+            } else if thermal_warn_present(data) {
+                "WARN"
+            } else if thermal_hotspot_c(data).is_some() {
+                "CLEAR"
+            } else {
+                "N/A"
+            }
+        }
+        _ => "CLEAR",
+    }
+}
+
+fn output_fault_row_text(
+    state: SelfCheckCommState,
+    enabled: bool,
+    off_text: &'static str,
+) -> &'static str {
+    if state == SelfCheckCommState::Err {
+        "FAULT"
+    } else if state == SelfCheckCommState::Warn {
+        "WARN"
+    } else if state == SelfCheckCommState::Pending {
+        "N/A"
+    } else if enabled {
+        "CLEAR"
+    } else {
+        off_text
+    }
+}
+
+fn detail_data_ready(page: DashboardDetailPage, data: DashboardLiveData) -> bool {
+    match page {
+        DashboardDetailPage::Cells => cells_detail_ready(data),
+        DashboardDetailPage::BatteryFlow => battery_flow_detail_ready(data),
+        DashboardDetailPage::Output => output_detail_ready(data),
+        DashboardDetailPage::Charger => charger_data_ready(data),
+        DashboardDetailPage::Thermal => {
+            thermal_fault_present(data)
+                || thermal_hotspot_c(data).is_some()
+                || data.detail.fan_rpm.is_some()
+                || data.detail.fan_pwm_pct.is_some()
+                || data.detail.fan_status.is_some()
+        }
+    }
+}
+
+enum DetailValue {
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    I16(i16),
+}
+
+trait IntoDetailValue {
+    fn into_detail_value(self) -> DetailValue;
+}
+
+impl IntoDetailValue for u8 {
+    fn into_detail_value(self) -> DetailValue {
+        DetailValue::U8(self)
+    }
+}
+
+impl IntoDetailValue for u16 {
+    fn into_detail_value(self) -> DetailValue {
+        DetailValue::U16(self)
+    }
+}
+
+impl IntoDetailValue for u32 {
+    fn into_detail_value(self) -> DetailValue {
+        DetailValue::U32(self)
+    }
+}
+
+impl IntoDetailValue for i16 {
+    fn into_detail_value(self) -> DetailValue {
+        DetailValue::I16(self)
+    }
 }
 
 fn render_variant_c<P: UiPainter>(
@@ -3243,6 +5405,115 @@ fn draw_icon_blocks<P: UiPainter>(
     Ok(())
 }
 
+fn icon_block_bounds(blocks: &[(u8, u8, u8, u8)]) -> Option<(u8, u8, u8, u8)> {
+    let mut iter = blocks
+        .iter()
+        .copied()
+        .filter(|&(_, _, bw, bh)| bw != 0 && bh != 0);
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = match iter.next() {
+        Some((bx, by, bw, bh)) => (bx, by, bx + bw, by + bh),
+        None => return None,
+    };
+
+    for (bx, by, bw, bh) in iter {
+        min_x = min_x.min(bx);
+        min_y = min_y.min(by);
+        max_x = max_x.max(bx + bw);
+        max_y = max_y.max(by + bh);
+    }
+
+    Some((min_x, min_y, max_x - min_x, max_y - min_y))
+}
+
+fn draw_icon_blocks_centered<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    box_w: u16,
+    box_h: u16,
+    blocks: &[(u8, u8, u8, u8)],
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    let Some((min_x, min_y, icon_w, icon_h)) = icon_block_bounds(blocks) else {
+        return Ok(());
+    };
+
+    let origin_x = i32::from(x) + ((i32::from(box_w) - i32::from(icon_w)) / 2) - i32::from(min_x);
+    let origin_y = i32::from(y) + ((i32::from(box_h) - i32::from(icon_h)) / 2) - i32::from(min_y);
+
+    for &(bx, by, bw, bh) in blocks {
+        if bw == 0 || bh == 0 {
+            continue;
+        }
+        fill(
+            painter,
+            (origin_x + i32::from(bx)) as u16,
+            (origin_y + i32::from(by)) as u16,
+            u16::from(bw),
+            u16::from(bh),
+            rgb565,
+        )?;
+    }
+    Ok(())
+}
+
+fn thermal_fan_blocks(frame: usize) -> &'static [(u8, u8, u8, u8)] {
+    match frame % 2 {
+        0 => CARBON_FAN_OUTLINE_CARDINAL_24,
+        _ => CARBON_FAN_OUTLINE_DIAGONAL_24,
+    }
+}
+
+fn draw_charger_source_indicator<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    source: Option<DashboardInputSource>,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+) -> Result<(), P::Error> {
+    match source {
+        Some(DashboardInputSource::UsbC) => draw_icon_blocks_centered(
+            painter,
+            x,
+            y,
+            width,
+            height,
+            CARBON_USB_C_OUTLINE_24,
+            palette.bg,
+        ),
+        Some(DashboardInputSource::DcIn) => draw_icon_blocks_centered(
+            painter,
+            x,
+            y,
+            width,
+            height,
+            CARBON_DC_BARREL_OUTLINE_24,
+            palette.bg,
+        ),
+        Some(DashboardInputSource::Auto) => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "AUTO",
+            Point::new((x + width / 2) as i32, (y + height / 2 + 3) as i32),
+            HorizontalAlignment::Center,
+            palette.bg,
+        ),
+        None => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "N/A",
+            Point::new((x + width / 2) as i32, (y + height / 2 + 3) as i32),
+            HorizontalAlignment::Center,
+            palette.bg,
+        ),
+    }
+}
+
 const CARBON_IN_PROGRESS_32: &[(u8, u8, u8, u8)] = &[
     (11, 2, 10, 1),
     (9, 3, 14, 1),
@@ -3443,6 +5714,419 @@ const CARBON_CLOSE_OUTLINE_32: &[(u8, u8, u8, u8)] = &[
     (11, 29, 10, 1),
 ];
 
+// Icon source: Iconify / material-symbols-light:mode-fan-outline
+const CARBON_FAN_OUTLINE_CARDINAL_24: &[(u8, u8, u8, u8)] = &[
+    (10, 3, 5, 1),
+    (9, 4, 7, 1),
+    (9, 5, 1, 1),
+    (14, 5, 2, 1),
+    (8, 6, 2, 1),
+    (13, 6, 2, 1),
+    (9, 7, 1, 1),
+    (12, 7, 2, 1),
+    (4, 8, 2, 1),
+    (9, 8, 2, 1),
+    (12, 8, 2, 1),
+    (17, 8, 1, 1),
+    (3, 9, 4, 1),
+    (9, 9, 11, 1),
+    (3, 10, 2, 1),
+    (6, 10, 10, 1),
+    (19, 10, 2, 1),
+    (3, 11, 2, 1),
+    (7, 11, 4, 1),
+    (13, 11, 2, 1),
+    (19, 11, 2, 1),
+    (3, 12, 2, 1),
+    (9, 12, 2, 1),
+    (13, 12, 4, 1),
+    (19, 12, 2, 1),
+    (3, 13, 3, 1),
+    (8, 13, 10, 1),
+    (19, 13, 2, 1),
+    (4, 14, 11, 1),
+    (17, 14, 4, 1),
+    (6, 15, 1, 1),
+    (10, 15, 2, 1),
+    (13, 15, 2, 1),
+    (18, 15, 1, 1),
+    (10, 16, 2, 1),
+    (14, 16, 1, 1),
+    (9, 17, 2, 1),
+    (14, 17, 2, 1),
+    (8, 18, 2, 1),
+    (14, 18, 1, 1),
+    (8, 19, 7, 1),
+    (9, 20, 5, 1),
+];
+
+const CARBON_FAN_OUTLINE_DIAGONAL_24: &[(u8, u8, u8, u8)] = &[
+    (7, 3, 2, 1),
+    (6, 4, 4, 1),
+    (14, 4, 4, 1),
+    (5, 5, 2, 1),
+    (8, 5, 2, 1),
+    (13, 5, 6, 1),
+    (4, 6, 2, 1),
+    (8, 6, 2, 1),
+    (13, 6, 2, 1),
+    (18, 6, 2, 1),
+    (4, 7, 2, 1),
+    (8, 7, 2, 1),
+    (12, 7, 2, 1),
+    (19, 7, 2, 1),
+    (4, 8, 2, 1),
+    (9, 8, 2, 1),
+    (12, 8, 2, 1),
+    (16, 8, 5, 1),
+    (4, 9, 3, 1),
+    (9, 9, 11, 1),
+    (5, 10, 11, 1),
+    (7, 11, 4, 1),
+    (13, 11, 2, 1),
+    (9, 12, 2, 1),
+    (13, 12, 4, 1),
+    (8, 13, 11, 1),
+    (4, 14, 11, 1),
+    (17, 14, 3, 1),
+    (3, 15, 5, 1),
+    (10, 15, 2, 1),
+    (13, 15, 2, 1),
+    (18, 15, 2, 1),
+    (3, 16, 2, 1),
+    (10, 16, 2, 1),
+    (14, 16, 2, 1),
+    (18, 16, 2, 1),
+    (4, 17, 2, 1),
+    (9, 17, 2, 1),
+    (14, 17, 2, 1),
+    (18, 17, 2, 1),
+    (5, 18, 6, 1),
+    (14, 18, 2, 1),
+    (17, 18, 2, 1),
+    (6, 19, 4, 1),
+    (14, 19, 4, 1),
+    (15, 20, 2, 1),
+];
+
+// Icon sources:
+// - Iconify / mdi:usb-c-port
+// - Iconify / mdi:audio-input-stereo-minijack (used as DC5025 indicator by product decision)
+// - Iconify / ri:battery-charge-line
+// - Iconify / ri:battery-line
+const CARBON_USB_C_OUTLINE_24: &[(u8, u8, u8, u8)] = &[
+    (3, 8, 18, 1),
+    (2, 9, 20, 1),
+    (1, 10, 4, 1),
+    (19, 10, 4, 1),
+    (1, 11, 3, 1),
+    (20, 11, 3, 1),
+    (1, 12, 2, 1),
+    (5, 12, 14, 1),
+    (21, 12, 2, 1),
+    (1, 13, 2, 1),
+    (5, 13, 14, 1),
+    (21, 13, 2, 1),
+    (1, 14, 3, 1),
+    (20, 14, 3, 1),
+    (1, 15, 4, 1),
+    (19, 15, 4, 1),
+    (2, 16, 20, 1),
+    (3, 17, 18, 1),
+];
+
+const CARBON_DC_BARREL_OUTLINE_24: &[(u8, u8, u8, u8)] = &[
+    (11, 2, 2, 1),
+    (11, 3, 2, 1),
+    (11, 5, 2, 1),
+    (11, 6, 2, 1),
+    (11, 7, 2, 1),
+    (11, 8, 2, 1),
+    (9, 9, 6, 1),
+    (9, 10, 6, 1),
+    (9, 11, 6, 1),
+    (9, 12, 6, 1),
+    (9, 13, 6, 1),
+    (9, 14, 6, 1),
+    (9, 15, 6, 1),
+    (9, 16, 6, 1),
+    (10, 17, 4, 1),
+    (11, 18, 2, 1),
+    (11, 19, 2, 1),
+    (11, 20, 2, 1),
+    (11, 21, 2, 1),
+];
+
+const RI_BATTERY_CHARGE_LINE_24: &[(u8, u8, u8, u8)] = &[
+    (2, 5, 8, 1),
+    (11, 5, 1, 1),
+    (14, 5, 6, 1),
+    (2, 6, 7, 1),
+    (11, 6, 1, 1),
+    (14, 6, 6, 1),
+    (2, 7, 2, 1),
+    (10, 7, 2, 1),
+    (18, 7, 2, 1),
+    (2, 8, 2, 1),
+    (9, 8, 3, 1),
+    (18, 8, 2, 1),
+    (2, 9, 2, 1),
+    (9, 9, 3, 1),
+    (18, 9, 2, 1),
+    (21, 9, 2, 1),
+    (2, 10, 2, 1),
+    (8, 10, 4, 1),
+    (18, 10, 2, 1),
+    (21, 10, 2, 1),
+    (2, 11, 2, 1),
+    (8, 11, 7, 1),
+    (18, 11, 2, 1),
+    (21, 11, 2, 1),
+    (2, 12, 2, 1),
+    (7, 12, 7, 1),
+    (18, 12, 2, 1),
+    (21, 12, 2, 1),
+    (2, 13, 2, 1),
+    (10, 13, 4, 1),
+    (18, 13, 2, 1),
+    (21, 13, 2, 1),
+    (2, 14, 2, 1),
+    (10, 14, 3, 1),
+    (18, 14, 2, 1),
+    (21, 14, 2, 1),
+    (2, 15, 2, 1),
+    (10, 15, 3, 1),
+    (18, 15, 2, 1),
+    (2, 16, 2, 1),
+    (10, 16, 2, 1),
+    (18, 16, 2, 1),
+    (2, 17, 6, 1),
+    (10, 17, 1, 1),
+    (13, 17, 7, 1),
+    (2, 18, 6, 1),
+    (10, 18, 1, 1),
+    (12, 18, 8, 1),
+];
+
+const RI_BATTERY_LINE_24: &[(u8, u8, u8, u8)] = &[
+    (2, 5, 18, 1),
+    (2, 6, 18, 1),
+    (2, 7, 2, 1),
+    (18, 7, 2, 1),
+    (2, 8, 2, 1),
+    (18, 8, 2, 1),
+    (2, 9, 2, 1),
+    (18, 9, 2, 1),
+    (21, 9, 2, 1),
+    (2, 10, 2, 1),
+    (18, 10, 2, 1),
+    (21, 10, 2, 1),
+    (2, 11, 2, 1),
+    (18, 11, 2, 1),
+    (21, 11, 2, 1),
+    (2, 12, 2, 1),
+    (18, 12, 2, 1),
+    (21, 12, 2, 1),
+    (2, 13, 2, 1),
+    (18, 13, 2, 1),
+    (21, 13, 2, 1),
+    (2, 14, 2, 1),
+    (18, 14, 2, 1),
+    (21, 14, 2, 1),
+    (2, 15, 2, 1),
+    (18, 15, 2, 1),
+    (2, 16, 2, 1),
+    (18, 16, 2, 1),
+    (2, 17, 18, 1),
+    (2, 18, 18, 1),
+];
+
+// 18px outline footer icons for better legibility on the small touch display.
+const CARBON_CHECKMARK_OUTLINE_18: &[(u8, u8, u8, u8)] = &[
+    (7, 1, 4, 1),
+    (5, 2, 2, 1),
+    (11, 2, 2, 1),
+    (3, 3, 2, 1),
+    (13, 3, 2, 1),
+    (3, 4, 1, 1),
+    (14, 4, 1, 1),
+    (2, 5, 1, 1),
+    (15, 5, 1, 1),
+    (2, 6, 1, 1),
+    (15, 6, 1, 1),
+    (1, 7, 1, 1),
+    (11, 7, 1, 1),
+    (16, 7, 1, 1),
+    (1, 8, 1, 1),
+    (10, 8, 1, 1),
+    (16, 8, 1, 1),
+    (1, 9, 1, 1),
+    (5, 9, 2, 1),
+    (9, 9, 1, 1),
+    (16, 9, 1, 1),
+    (1, 10, 1, 1),
+    (6, 10, 3, 1),
+    (16, 10, 1, 1),
+    (2, 11, 1, 1),
+    (7, 11, 1, 1),
+    (15, 11, 1, 1),
+    (2, 12, 1, 1),
+    (15, 12, 1, 1),
+    (3, 13, 1, 1),
+    (14, 13, 1, 1),
+    (3, 14, 2, 1),
+    (13, 14, 2, 1),
+    (5, 15, 2, 1),
+    (11, 15, 2, 1),
+    (7, 16, 4, 1),
+];
+
+const CARBON_CHECKBOX_INDETERMINATE_18: &[(u8, u8, u8, u8)] = &[
+    (3, 2, 12, 1),
+    (2, 3, 2, 1),
+    (14, 3, 2, 1),
+    (2, 4, 1, 1),
+    (15, 4, 1, 1),
+    (2, 5, 1, 1),
+    (15, 5, 1, 1),
+    (2, 6, 1, 1),
+    (15, 6, 1, 1),
+    (2, 7, 1, 1),
+    (15, 7, 1, 1),
+    (2, 8, 1, 1),
+    (6, 8, 6, 1),
+    (15, 8, 1, 1),
+    (2, 9, 1, 1),
+    (6, 9, 6, 1),
+    (15, 9, 1, 1),
+    (2, 10, 1, 1),
+    (15, 10, 1, 1),
+    (2, 11, 1, 1),
+    (15, 11, 1, 1),
+    (2, 12, 1, 1),
+    (15, 12, 1, 1),
+    (2, 13, 1, 1),
+    (15, 13, 1, 1),
+    (2, 14, 2, 1),
+    (14, 14, 2, 1),
+    (3, 15, 12, 1),
+];
+
+const CARBON_WARNING_ALT_18: &[(u8, u8, u8, u8)] = &[
+    (8, 2, 2, 1),
+    (8, 3, 2, 1),
+    (7, 4, 1, 1),
+    (10, 4, 1, 1),
+    (7, 5, 1, 1),
+    (10, 5, 1, 1),
+    (6, 6, 1, 1),
+    (11, 6, 1, 1),
+    (6, 7, 1, 1),
+    (8, 7, 2, 1),
+    (11, 7, 1, 1),
+    (5, 8, 1, 1),
+    (8, 8, 2, 1),
+    (12, 8, 1, 1),
+    (5, 9, 1, 1),
+    (8, 9, 2, 1),
+    (12, 9, 1, 1),
+    (4, 10, 1, 1),
+    (8, 10, 2, 1),
+    (13, 10, 1, 1),
+    (4, 11, 1, 1),
+    (13, 11, 1, 1),
+    (3, 12, 1, 1),
+    (14, 12, 1, 1),
+    (3, 13, 1, 1),
+    (8, 13, 2, 1),
+    (14, 13, 1, 1),
+    (2, 14, 1, 1),
+    (15, 14, 1, 1),
+    (1, 15, 2, 1),
+    (15, 15, 2, 1),
+    (1, 16, 16, 1),
+];
+
+const CARBON_ERROR_OUTLINE_18: &[(u8, u8, u8, u8)] = &[
+    (7, 1, 4, 1),
+    (5, 2, 2, 1),
+    (11, 2, 2, 1),
+    (3, 3, 2, 1),
+    (13, 3, 2, 1),
+    (3, 4, 1, 1),
+    (14, 4, 1, 1),
+    (2, 5, 1, 1),
+    (15, 5, 1, 1),
+    (2, 6, 1, 1),
+    (6, 6, 1, 1),
+    (15, 6, 1, 1),
+    (1, 7, 1, 1),
+    (7, 7, 1, 1),
+    (16, 7, 1, 1),
+    (1, 8, 1, 1),
+    (8, 8, 1, 1),
+    (16, 8, 1, 1),
+    (1, 9, 1, 1),
+    (9, 9, 1, 1),
+    (16, 9, 1, 1),
+    (1, 10, 1, 1),
+    (10, 10, 1, 1),
+    (16, 10, 1, 1),
+    (2, 11, 1, 1),
+    (11, 11, 1, 1),
+    (15, 11, 1, 1),
+    (2, 12, 1, 1),
+    (15, 12, 1, 1),
+    (3, 13, 1, 1),
+    (14, 13, 1, 1),
+    (3, 14, 2, 1),
+    (13, 14, 2, 1),
+    (5, 15, 2, 1),
+    (11, 15, 2, 1),
+    (7, 16, 4, 1),
+];
+
+const CARBON_HELP_18: &[(u8, u8, u8, u8)] = &[
+    (7, 1, 4, 1),
+    (5, 2, 2, 1),
+    (11, 2, 2, 1),
+    (3, 3, 2, 1),
+    (13, 3, 2, 1),
+    (3, 4, 1, 1),
+    (14, 4, 1, 1),
+    (2, 5, 1, 1),
+    (7, 5, 5, 1),
+    (15, 5, 1, 1),
+    (2, 6, 1, 1),
+    (6, 6, 1, 1),
+    (11, 6, 1, 1),
+    (15, 6, 1, 1),
+    (1, 7, 1, 1),
+    (11, 7, 1, 1),
+    (16, 7, 1, 1),
+    (1, 8, 1, 1),
+    (9, 8, 3, 1),
+    (16, 8, 1, 1),
+    (1, 9, 1, 1),
+    (8, 9, 2, 1),
+    (16, 9, 1, 1),
+    (1, 10, 1, 1),
+    (8, 10, 2, 1),
+    (16, 10, 1, 1),
+    (2, 11, 1, 1),
+    (15, 11, 1, 1),
+    (2, 12, 1, 1),
+    (15, 12, 1, 1),
+    (3, 13, 1, 1),
+    (8, 13, 2, 1),
+    (14, 13, 1, 1),
+    (3, 14, 2, 1),
+    (13, 14, 2, 1),
+    (5, 15, 2, 1),
+    (11, 15, 2, 1),
+    (7, 16, 4, 1),
+];
+
 fn comm_label(state: SelfCheckCommState) -> &'static str {
     match state {
         SelfCheckCommState::Pending => "PEND",
@@ -3533,7 +6217,14 @@ fn render_variant_d<P: UiPainter>(
     data: DashboardData,
     self_check: Option<&SelfCheckUiSnapshot>,
 ) -> Result<(), P::Error> {
-    render_variant_b(painter, variant, palette, data, self_check)
+    render_variant_b(
+        painter,
+        variant,
+        palette,
+        data,
+        DashboardRoute::Home,
+        self_check,
+    )
 }
 
 struct DiagCard<T>
@@ -4297,7 +6988,7 @@ fn draw_top_bar_with_status<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextTitle,
+        FontRole::DetailTitle,
         title,
         Point::new(8, 2),
         HorizontalAlignment::Left,
@@ -4306,7 +6997,7 @@ fn draw_top_bar_with_status<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         subtitle,
         Point::new(106, 2),
         HorizontalAlignment::Left,
@@ -4315,7 +7006,7 @@ fn draw_top_bar_with_status<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         status_tag,
         Point::new((UI_W - 8) as i32, 2),
         HorizontalAlignment::Right,
@@ -4464,9 +7155,13 @@ fn text<P: UiPainter>(
         FontRole::TextTitle => &FONT_A_TITLE,
         FontRole::TextBody => &FONT_A_BODY,
         FontRole::TextCompact => &FONT_A_BODY,
+        FontRole::DetailTitle => &FONT_A_DETAIL,
+        FontRole::DetailBody => &FONT_A_DETAIL,
         FontRole::Num => &FONT_B_NUM,
         FontRole::NumCompact => &FONT_B_NUM,
+        FontRole::DetailNum => &FONT_B_DETAIL,
         FontRole::NumBig => &FONT_B_NUM_BIG,
+        FontRole::NumHero => &FONT_B_NUM_HERO,
     };
 
     let mut target = PainterDrawTarget::new(painter);
@@ -4653,7 +7348,7 @@ mod tests {
         snapshot.bq40z50 = SelfCheckCommState::Ok;
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
-        assert!(!live.mains_present);
+        assert!(live.mains_present);
         assert_eq!(live.input_power_w10(), None);
         assert_eq!(live.output_power_w10(), None);
         assert_eq!(live.output_current_ma(), None);
@@ -4728,6 +7423,387 @@ mod tests {
 
         assert!(live.mains_present);
         assert_eq!(live.input_power_w10(), None);
+    }
+
+    #[test]
+    fn live_dashboard_prefers_charger_adc_input_power_when_available() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.input_vbus_mv = Some(20_000);
+        snapshot.input_ibus_ma = Some(1_500);
+        snapshot.vin_vbus_mv = Some(19_200);
+        snapshot.vin_iin_ma = Some(910);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(live.input_power_w10(), Some(300));
+    }
+
+    #[test]
+    fn dashboard_hit_test_maps_fixed_home_regions() {
+        assert_eq!(
+            dashboard_hit_test(DashboardRoute::Home, 30, 40),
+            Some(DashboardTouchTarget::HomeOutput)
+        );
+        assert_eq!(
+            dashboard_hit_test(DashboardRoute::Home, 30, 120),
+            Some(DashboardTouchTarget::HomeThermal)
+        );
+        assert_eq!(
+            dashboard_hit_test(DashboardRoute::Home, 250, 40),
+            Some(DashboardTouchTarget::HomeCells)
+        );
+        assert_eq!(
+            dashboard_hit_test(DashboardRoute::Home, 250, 90),
+            Some(DashboardTouchTarget::HomeCharger)
+        );
+        assert_eq!(
+            dashboard_hit_test(DashboardRoute::Home, 250, 140),
+            Some(DashboardTouchTarget::HomeBatteryFlow)
+        );
+    }
+
+    #[test]
+    fn dashboard_detail_back_target_maps_to_home() {
+        assert_eq!(
+            dashboard_hit_test(
+                DashboardRoute::Detail(DashboardDetailPage::Output),
+                DASHBOARD_DETAIL_BACK_X + 4,
+                DASHBOARD_DETAIL_BACK_Y + 4
+            ),
+            Some(DashboardTouchTarget::DetailBack)
+        );
+        assert_eq!(
+            dashboard_route_for_target(DashboardTouchTarget::DetailBack),
+            DashboardRoute::Home
+        );
+        assert_eq!(
+            dashboard_route_for_target(DashboardTouchTarget::HomeOutput),
+            DashboardRoute::Detail(DashboardDetailPage::Output)
+        );
+    }
+
+    #[test]
+    fn thermal_detail_uses_battery_temp_for_hotspot_and_status() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.tmp_a_c = Some(36);
+        snapshot.tmp_b_c = Some(39);
+        snapshot.dashboard_detail.battery_temp_c = Some(67);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(thermal_hotspot_c(live), Some(67));
+        assert_eq!(detail_status_tag(DashboardDetailPage::Thermal, live), "HOT");
+    }
+
+    #[test]
+    fn detail_status_tags_prioritize_fault_states() {
+        let mut battery_fault = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        battery_fault.bq40z50 = SelfCheckCommState::Err;
+        battery_fault.bq40z50_current_ma = Some(1200);
+        let battery_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &battery_fault);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BatteryFlow, battery_live),
+            "FAULT"
+        );
+
+        let mut charger_fault = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        charger_fault.bq25792 = SelfCheckCommState::Err;
+        charger_fault.bq25792_allow_charge = Some(true);
+        charger_fault.bq25792_ichg_ma = Some(900);
+        let charger_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &charger_fault);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Charger, charger_live),
+            "FAULT"
+        );
+
+        let mut output_fault = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        output_fault.tps_a = SelfCheckCommState::Err;
+        output_fault.tps_a_enabled = Some(true);
+        output_fault.tps_b_enabled = Some(true);
+        let output_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &output_fault);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Output, output_live),
+            "FAULT"
+        );
+    }
+
+    #[test]
+    fn charger_detail_keeps_missing_session_data_as_na() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(true);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(charger_active_value(live), None);
+        assert_eq!(charger_state_text(live), "N/A");
+        assert_eq!(detail_status_tag(DashboardDetailPage::Charger, live), "N/A");
+    }
+
+    #[test]
+    fn thermal_fault_status_beats_temperature_band() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.tmp_a = SelfCheckCommState::Err;
+        snapshot.tmp_a_c = Some(38);
+        snapshot.dashboard_detail.battery_temp_c = Some(42);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert!(thermal_fault_present(live));
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Thermal, live),
+            "FAULT"
+        );
+    }
+
+    #[test]
+    fn thermal_fan_motion_uses_discrete_speed_bands() {
+        assert_eq!(
+            thermal_fan_motion(Some(0), Some(0), Some("OFF")),
+            ThermalFanMotion::Off
+        );
+        assert_eq!(
+            thermal_fan_motion(Some(1_250), Some(32), Some("LOW")),
+            ThermalFanMotion::Low
+        );
+        assert_eq!(
+            thermal_fan_motion(Some(2_380), Some(52), Some("MID")),
+            ThermalFanMotion::Mid
+        );
+        assert_eq!(
+            thermal_fan_motion(Some(4_120), Some(100), Some("HIGH")),
+            ThermalFanMotion::High
+        );
+    }
+
+    #[test]
+    fn thermal_fan_frame_steps_faster_at_higher_rpm() {
+        assert_eq!(thermal_fan_frame(0, Some(0), Some(0), Some("OFF")), 0);
+        assert_eq!(thermal_fan_frame(17, Some(1_250), Some(32), Some("LOW")), 0);
+        assert_eq!(thermal_fan_frame(18, Some(1_250), Some(32), Some("LOW")), 1);
+        assert_eq!(thermal_fan_frame(9, Some(2_380), Some(52), Some("MID")), 0);
+        assert_eq!(thermal_fan_frame(10, Some(2_380), Some(52), Some("MID")), 1);
+        assert_eq!(
+            thermal_fan_frame(4, Some(4_120), Some(100), Some("HIGH")),
+            0
+        );
+        assert_eq!(
+            thermal_fan_frame(5, Some(4_120), Some(100), Some("HIGH")),
+            1
+        );
+    }
+
+    #[test]
+    fn cells_warn_status_beats_balance_indicator() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq40z50_rca_alarm = Some(true);
+        snapshot.dashboard_detail.balance_active = Some(true);
+        snapshot.dashboard_detail.balance_mask = Some(0b0010);
+        snapshot.dashboard_detail.balance_cell = Some(2);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(detail_status_tag(DashboardDetailPage::Cells, live), "WARN");
+    }
+
+    #[test]
+    fn cells_detail_shows_multi_balance_summary_when_multiple_cells_are_active() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.dashboard_detail.balance_active = Some(true);
+        snapshot.dashboard_detail.balance_mask = Some(0b0101);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Cells, live),
+            "BAL ON"
+        );
+        assert_eq!(detail_balance_summary_text(live.detail), "C1+C3");
+    }
+
+    #[test]
+    fn pending_detail_pages_stay_na_instead_of_reporting_healthy() {
+        let snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(detail_status_tag(DashboardDetailPage::Cells, live), "N/A");
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BatteryFlow, live),
+            "N/A"
+        );
+        assert_eq!(detail_status_tag(DashboardDetailPage::Output, live), "N/A");
+        assert_eq!(
+            detail_footer_notice(DashboardDetailPage::Cells, live),
+            "CELL DETAIL SOURCE PENDING"
+        );
+        assert_eq!(
+            detail_footer_notice(DashboardDetailPage::BatteryFlow, live),
+            "PACK DETAIL SOURCE PENDING"
+        );
+        assert_eq!(
+            detail_footer_notice(DashboardDetailPage::Output, live),
+            "OUTPUT DETAIL SOURCE PENDING"
+        );
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::BatteryFlow, live),
+            (DetailFooterIcon::Unknown, "NO DATA")
+        );
+    }
+
+    #[test]
+    fn footer_badges_prefer_mock_and_warn_short_forms() {
+        let mut mock_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Backup);
+        mock_snapshot.bq40z50 = SelfCheckCommState::Ok;
+        mock_snapshot.bq40z50_pack_mv = Some(14_820);
+        mock_snapshot.bq40z50_current_ma = Some(-1_880);
+        mock_snapshot.dashboard_detail.battery_energy_mwh = Some(46_850);
+        mock_snapshot.dashboard_detail.battery_full_capacity_mwh = Some(63_200);
+        mock_snapshot.dashboard_detail.charge_fet_on = Some(false);
+        mock_snapshot.dashboard_detail.discharge_fet_on = Some(true);
+        mock_snapshot.dashboard_detail.precharge_fet_on = Some(false);
+        mock_snapshot.dashboard_detail.battery_notice = Some("PACK FLOW MOCKED - LIVE SOURCE NEXT");
+        let mock_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Backup), &mock_snapshot);
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::BatteryFlow, mock_live),
+            (DetailFooterIcon::Mock, "MOCK DATA")
+        );
+
+        let mut warn_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Supplement);
+        warn_snapshot.tps_a = SelfCheckCommState::Ok;
+        warn_snapshot.tps_b = SelfCheckCommState::Ok;
+        warn_snapshot.tps_a_enabled = Some(true);
+        warn_snapshot.tps_b_enabled = Some(false);
+        warn_snapshot.out_a_vbus_mv = Some(19_040);
+        warn_snapshot.tps_a_iout_ma = Some(620);
+        warn_snapshot.dashboard_detail.output_notice = Some("OUT-B STANDBY PATH HELD");
+        let warn_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Supplement), &warn_snapshot);
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::Output, warn_live),
+            (DetailFooterIcon::Warn, "CHECK ROWS")
+        );
+    }
+
+    #[test]
+    fn fault_rows_follow_page_fault_state() {
+        let mut charger_fault = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        charger_fault.bq25792 = SelfCheckCommState::Err;
+        let charger_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &charger_fault);
+        assert_eq!(
+            detail_fault_row_text(DashboardDetailPage::Charger, charger_live),
+            "LINK"
+        );
+        assert_eq!(
+            detail_fault_notice(DashboardDetailPage::Charger, charger_live),
+            "CHARGER LINK FAULT"
+        );
+
+        let mut thermal_fault = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        thermal_fault.tmp_b = SelfCheckCommState::Err;
+        let thermal_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &thermal_fault);
+        assert_eq!(
+            detail_fault_row_text(DashboardDetailPage::Thermal, thermal_live),
+            "SENSE"
+        );
+        assert_eq!(
+            detail_fault_notice(DashboardDetailPage::Thermal, thermal_live),
+            "THERMAL SENSE FAULT"
+        );
+
+        assert_eq!(
+            output_fault_row_text(SelfCheckCommState::Err, true, "HOLD"),
+            "FAULT"
+        );
+    }
+
+    #[test]
+    fn warn_states_surface_as_warn_in_detail_status_and_rows() {
+        let mut battery_warn = SelfCheckUiSnapshot::pending(UpsMode::Backup);
+        battery_warn.bq40z50 = SelfCheckCommState::Warn;
+        battery_warn.bq40z50_pack_mv = Some(16_540);
+        battery_warn.bq40z50_current_ma = Some(237);
+        let battery_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Backup), &battery_warn);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BatteryFlow, battery_live),
+            "WARN"
+        );
+        assert_eq!(
+            detail_fault_row_text(DashboardDetailPage::BatteryFlow, battery_live),
+            "WARN"
+        );
+
+        let mut charger_warn = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        charger_warn.bq25792 = SelfCheckCommState::Warn;
+        charger_warn.fusb302_vbus_present = Some(true);
+        charger_warn.dashboard_detail.charger_active = Some(true);
+        charger_warn.dashboard_detail.charger_status = Some("CHG");
+        let charger_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &charger_warn);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Charger, charger_live),
+            "WARN"
+        );
+        assert_eq!(
+            detail_fault_row_text(DashboardDetailPage::Charger, charger_live),
+            "WARN"
+        );
+
+        assert_eq!(
+            output_fault_row_text(SelfCheckCommState::Warn, true, "HOLD"),
+            "WARN"
+        );
+    }
+
+    #[test]
+    fn thermal_warn_status_beats_temperature_band_without_escalating_to_fault() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.tmp_a = SelfCheckCommState::Warn;
+        snapshot.tmp_a_c = Some(38);
+        snapshot.dashboard_detail.battery_temp_c = Some(42);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert!(!thermal_fault_present(live));
+        assert!(thermal_warn_present(live));
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Thermal, live),
+            "WARN"
+        );
+        assert_eq!(
+            detail_fault_row_text(DashboardDetailPage::Thermal, live),
+            "WARN"
+        );
+    }
+
+    #[test]
+    fn non_fault_rows_use_short_clear_tokens() {
+        let mut charger_ok = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        charger_ok.fusb302_vbus_present = Some(true);
+        charger_ok.dashboard_detail.charger_active = Some(true);
+        charger_ok.dashboard_detail.charger_status = Some("CHG");
+        let charger_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &charger_ok);
+        assert_eq!(
+            detail_fault_row_text(DashboardDetailPage::Charger, charger_live),
+            "CLEAR"
+        );
+
+        let mut thermal_ok = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        thermal_ok.tmp_a_c = Some(34);
+        thermal_ok.dashboard_detail.fan_status = Some("HIGH");
+        let thermal_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &thermal_ok);
+        assert_eq!(
+            detail_fault_row_text(DashboardDetailPage::Thermal, thermal_live),
+            "CLEAR"
+        );
     }
 
     #[test]

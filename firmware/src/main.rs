@@ -75,6 +75,8 @@ const FAN_HIGH_TEMP_C_X16: i16 = 50 * 16;
 const FAN_HYSTERESIS_C_X16: i16 = 3 * 16;
 const FAN_COOLDOWN: Duration = Duration::from_secs(10);
 const FAN_TACH_TIMEOUT: Duration = Duration::from_secs(2);
+// Temporary hardware assumption until the exact fan tach characteristics are confirmed.
+const FAN_TACH_PULSES_PER_REV: u8 = 2;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct AppliedFanOutput {
@@ -468,12 +470,13 @@ fn main() -> ! {
         FW_GIT_DIRTY
     );
     defmt::info!(
-        "fan: policy low_c_x16={=i16} high_c_x16={=i16} hysteresis_c_x16={=i16} cooldown_ms={=u64} tach_timeout_ms={=u64}",
+        "fan: policy low_c_x16={=i16} high_c_x16={=i16} hysteresis_c_x16={=i16} cooldown_ms={=u64} tach_timeout_ms={=u64} tach_ppr={=u8}",
         FAN_LOW_TEMP_C_X16,
         FAN_HIGH_TEMP_C_X16,
         FAN_HYSTERESIS_C_X16,
         FAN_COOLDOWN.as_millis() as u64,
-        FAN_TACH_TIMEOUT.as_millis() as u64
+        FAN_TACH_TIMEOUT.as_millis() as u64,
+        FAN_TACH_PULSES_PER_REV
     );
     defmt::info!(
         "fw: default_vout_mv={=u16} default_ilimit_ma={=u16}",
@@ -948,6 +951,7 @@ fn main() -> ! {
             hysteresis_c_x16: FAN_HYSTERESIS_C_X16,
             cooldown_ms: FAN_COOLDOWN.as_millis(),
             tach_timeout_ms: FAN_TACH_TIMEOUT.as_millis(),
+            tach_pulses_per_rev: FAN_TACH_PULSES_PER_REV,
             mid_pwm_pct: FAN_MID_PWM_PCT,
         },
         charger_probe_ok: self_test.charger_probe_ok,

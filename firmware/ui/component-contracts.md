@@ -65,6 +65,24 @@
 - Token refs: `Type.Title`, `Type.Num`, `Color.Surface.Panel`。
 - Geometry anchor: `x=206 y=122 w=108 h=48`。
 
+### DashboardDetailPage
+
+- Responsibility: 二级仪表盘全屏详情页容器，承载 `Cells / BatteryFlow / Output / Charger / Thermal` 之一。
+- Required fields: `page_id`, `title`, `status_chip`, `primary_block`, `secondary_blocks`, `footer_notice`。
+- Forbidden fields: 自检 overlay、BQ40 激活流程状态。
+- Allowed states: `DashboardRoute::Detail(*)`。
+- Token refs: `Type.Title`, `Type.Body`, `Type.Num`, `Type.NumBig`, `Color.State.Accent|Warning|Error|Success`。
+- Geometry anchor: 顶栏 `x=0 y=0 w=320 h=18`；内容区 `x=6 y=22 w=308 h=148`。
+
+### DashboardBackChip
+
+- Responsibility: 详情页返回首页触点与可视标识。
+- Required fields: `label=BACK`, `active(optional)`。
+- Forbidden fields: 业务数据。
+- Allowed states: 任一 `DashboardDetailPage`。
+- Token refs: `Type.Body`, `Color.Border.Default`, `Color.Text.Primary`, `Color.State.Accent`。
+- Geometry anchor: `x=8 y=2 w=56 h=14`。
+
 ## 3. Self-check components
 
 ### DiagCard

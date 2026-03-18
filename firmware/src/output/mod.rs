@@ -1,8 +1,8 @@
 pub mod tps55288;
 
 use crate::front_panel_scene::{
-    is_bq40_activation_needed, BmsActivationState, BmsResultKind, SelfCheckCommState,
-    SelfCheckUiSnapshot, UpsMode,
+    is_bq40_activation_needed, BmsActivationState, BmsResultKind, DashboardInputSource,
+    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
 };
 use crate::irq::IrqSnapshot;
 use esp_firmware::bq25792;
@@ -72,6 +72,8 @@ const BMS_ACTIVATION_MAC_WRITE_SETTLE: Duration = Duration::from_millis(66);
 const BMS_ROM_MODE_SIGNATURE: u16 = 0x9002;
 const BMS_DEVICE_TYPE_BQ40Z50: u16 = 0x4500;
 const BMS_ACTIVATION_WORD_GAP: Duration = Duration::from_millis(2);
+const BMS_DETAIL_MAC_REFRESH_PERIOD: Duration = Duration::from_secs(8);
+const BMS_DETAIL_MAC_REFRESH_STAGGER: Duration = Duration::from_secs(2);
 const BMS_SUSPICIOUS_VOLTAGE_MV: u16 = 5_911;
 const BMS_SUSPICIOUS_CURRENT_MA: i16 = 5_911;
 const BMS_SUSPICIOUS_STATUS: u16 = 0x1717;
@@ -91,6 +93,8 @@ const CHARGER_FAULT1_TSHUT: u8 = 1 << 2;
 const CHARGER_INPUT_IBUS_MAX_MA: i16 = 5_000;
 const CHARGER_INPUT_VBUS_MAX_MV: u16 = 30_000;
 const CHARGER_INPUT_POWER_ANOMALY_W10: u32 = 2_000;
+const FAN_RPM_SAMPLE_WINDOW_MS: u64 = 1_000;
+const FAN_RPM_MIN_SAMPLE_WINDOW_MS: u64 = 400;
 const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
 const VIN_MAINS_LATCH_FAILURE_LIMIT: u8 = 2;
 
@@ -242,11 +246,11 @@ where
     }
 }
 
-fn bq40_op_bit(op_status: Option<u16>, mask: u16) -> Option<bool> {
+fn bq40_op_bit(op_status: Option<u32>, mask: u32) -> Option<bool> {
     op_status.map(|raw| (raw & mask) != 0)
 }
 
-fn bq40_decode_charge_path(op_status: Option<u16>) -> (Option<bool>, &'static str) {
+fn bq40_decode_charge_path(op_status: Option<u32>) -> (Option<bool>, &'static str) {
     let Some(raw) = op_status else {
         return (None, "op_status_unavailable");
     };
@@ -263,7 +267,7 @@ fn bq40_decode_charge_path(op_status: Option<u16>) -> (Option<bool>, &'static st
     }
 }
 
-fn bq40_decode_discharge_path(op_status: Option<u16>) -> (Option<bool>, &'static str) {
+fn bq40_decode_discharge_path(op_status: Option<u32>) -> (Option<bool>, &'static str) {
     let Some(raw) = op_status else {
         return (None, "op_status_unavailable");
     };
@@ -299,9 +303,206 @@ fn audio_charge_phase_from_chg_stat(code: u8) -> AudioChargePhase {
     }
 }
 
+fn detail_input_source(
+    vbus_present: bool,
+    ac1_present: bool,
+    ac2_present: bool,
+) -> Option<DashboardInputSource> {
+    if ac1_present && !ac2_present {
+        Some(DashboardInputSource::UsbC)
+    } else if ac2_present && !ac1_present {
+        Some(DashboardInputSource::DcIn)
+    } else if ac1_present || ac2_present || vbus_present {
+        Some(DashboardInputSource::Auto)
+    } else {
+        None
+    }
+}
+
+fn detail_charger_status_text(
+    charger_fault: bool,
+    input_present: bool,
+    allow_charge: bool,
+    chg_stat: u8,
+) -> &'static str {
+    if charger_fault {
+        "FAULT"
+    } else if !input_present {
+        "NOAC"
+    } else if !allow_charge {
+        "LOCK"
+    } else {
+        match audio_charge_phase_from_chg_stat(chg_stat) {
+            AudioChargePhase::Charging => "CHG",
+            AudioChargePhase::Completed => "DONE",
+            AudioChargePhase::NotCharging => "READY",
+            AudioChargePhase::Unknown => "N/A",
+        }
+    }
+}
+
+fn detail_fan_status_text(status: fan::Status) -> &'static str {
+    if status.tach_fault {
+        "FAULT"
+    } else {
+        match status.command {
+            fan::FanLevel::Off => "OFF",
+            fan::FanLevel::Mid => "MID",
+            fan::FanLevel::High => "HIGH",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FanRpmTracker {
+    window_started_ms: Option<u64>,
+    window_pulses: u32,
+    rpm: Option<u16>,
+}
+
+impl FanRpmTracker {
+    const fn new() -> Self {
+        Self {
+            window_started_ms: None,
+            window_pulses: 0,
+            rpm: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.window_started_ms = None;
+        self.window_pulses = 0;
+        self.rpm = None;
+    }
+
+    fn observe(
+        &mut self,
+        now_ms: u64,
+        pulse_delta: u32,
+        status: fan::Status,
+        cfg: fan::Config,
+    ) -> Option<u16> {
+        if !status.command.enabled() || status.tach_fault || cfg.tach_pulses_per_rev == 0 {
+            self.reset();
+            return None;
+        }
+
+        let started_ms = self.window_started_ms.get_or_insert(now_ms);
+        self.window_pulses = self.window_pulses.saturating_add(pulse_delta);
+
+        let elapsed_ms = now_ms.saturating_sub(*started_ms);
+        let enough_pulses = self.window_pulses >= u32::from(cfg.tach_pulses_per_rev);
+        let should_refresh = elapsed_ms >= FAN_RPM_SAMPLE_WINDOW_MS
+            || (elapsed_ms >= FAN_RPM_MIN_SAMPLE_WINDOW_MS && enough_pulses);
+
+        if should_refresh {
+            self.rpm = fan_rpm_from_sample(self.window_pulses, elapsed_ms, cfg.tach_pulses_per_rev);
+            self.window_started_ms = Some(now_ms);
+            self.window_pulses = 0;
+        }
+
+        self.rpm
+    }
+}
+
+fn fan_rpm_from_sample(pulse_count: u32, elapsed_ms: u64, pulses_per_rev: u8) -> Option<u16> {
+    if pulse_count == 0 || elapsed_ms == 0 || pulses_per_rev == 0 {
+        return None;
+    }
+
+    let rpm = u64::from(pulse_count)
+        .saturating_mul(60_000)
+        .checked_div(elapsed_ms.saturating_mul(u64::from(pulses_per_rev)))?;
+    Some(rpm.min(u64::from(u16::MAX)) as u16)
+}
+
+fn detail_battery_temp_c(snapshot: &Bq40z50Snapshot) -> Option<i16> {
+    if let Some(da_status2) = snapshot.da_status2 {
+        let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(da_status2.cell_temp_k_x10);
+        if (-400..=1250).contains(&temp_c_x10) {
+            return Some((temp_c_x10 / 10) as i16);
+        }
+    }
+
+    let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(snapshot.temp_k_x10);
+    if (-400..=1250).contains(&temp_c_x10) {
+        Some((temp_c_x10 / 10) as i16)
+    } else {
+        None
+    }
+}
+
+fn detail_da_status2_temp_c(temp_k_x10: u16) -> Option<i16> {
+    let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(temp_k_x10);
+    (-400..=1250)
+        .contains(&temp_c_x10)
+        .then_some((temp_c_x10 / 10) as i16)
+}
+
+fn detail_bms_cell_sensor_temps(snapshot: &Bq40z50Snapshot) -> [Option<i16>; 4] {
+    snapshot
+        .da_status2
+        .map_or([None, None, None, None], |da_status2| {
+            da_status2.ts_temp_k_x10.map(detail_da_status2_temp_c)
+        })
+}
+
+fn detail_bms_board_temp_c(snapshot: &Bq40z50Snapshot) -> Option<i16> {
+    snapshot
+        .da_status2
+        .and_then(|da_status2| detail_da_status2_temp_c(da_status2.ts_temp_k_x10[0]))
+}
+
+fn filter_energy_mwh(cwh: u16) -> Option<u32> {
+    (cwh != u16::MAX).then_some(cwh as u32 * 10)
+}
+
+fn approximate_energy_mwh(capacity_mah: u16, vpack_mv: u16) -> Option<u32> {
+    (capacity_mah != 0 && vpack_mv != 0).then_some(capacity_mah as u32 * vpack_mv as u32 / 1000)
+}
+
+fn detail_bms_energy_mwh(snapshot: &Bq40z50Snapshot) -> Option<u32> {
+    if (snapshot.battery_mode & bq40z50::battery_mode::CAPM) != 0 {
+        Some(snapshot.remcap as u32 * 10)
+    } else {
+        snapshot
+            .filter_capacity
+            .and_then(|filter| filter_energy_mwh(filter.remaining_energy_cwh))
+            .or_else(|| approximate_energy_mwh(snapshot.remcap, snapshot.vpack_mv))
+    }
+}
+
+fn detail_bms_full_capacity_mwh(snapshot: &Bq40z50Snapshot) -> Option<u32> {
+    if (snapshot.battery_mode & bq40z50::battery_mode::CAPM) != 0 {
+        Some(snapshot.fcc as u32 * 10)
+    } else {
+        snapshot
+            .filter_capacity
+            .and_then(|filter| filter_energy_mwh(filter.full_charge_energy_cwh))
+            .or_else(|| approximate_energy_mwh(snapshot.fcc, snapshot.vpack_mv))
+    }
+}
+
+fn detail_bms_balance_mask(snapshot: &Bq40z50Snapshot) -> Option<u8> {
+    match bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CB) {
+        Some(false) => Some(0),
+        Some(true) => None,
+        None => None,
+    }
+}
+
+fn detail_bms_single_balance_cell(balance_mask: Option<u8>) -> Option<u8> {
+    let mask = balance_mask?;
+    if mask.count_ones() != 1 {
+        return None;
+    }
+
+    Some(mask.trailing_zeros() as u8 + 1)
+}
+
 fn bq40_primary_reason(
     batt_status: u16,
-    op_status: Option<u16>,
+    op_status: Option<u32>,
     charge_reason: &'static str,
     discharge_reason: &'static str,
 ) -> &'static str {
@@ -887,7 +1088,7 @@ where
             let current = bq40z50::read_i16(&mut *i2c, addr, bq40z50::cmd::CURRENT);
             let soc = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE);
             let status = bq40z50::read_u16(&mut *i2c, addr, bq40z50::cmd::BATTERY_STATUS);
-            let op_status = bq40z50::read_operation_status_low_u16(&mut *i2c, addr)
+            let op_status = bq40z50::read_operation_status(&mut *i2c, addr)
                 .ok()
                 .flatten();
 
@@ -1381,6 +1582,7 @@ pub struct PowerManager<'d, I2C> {
     last_input_power_anomaly_log_at: Option<Instant>,
     last_therm_kill_hint_at: Option<Instant>,
     fan_started_at: Instant,
+    fan_rpm_tracker: FanRpmTracker,
 
     ina_ready: bool,
     ina_next_retry_at: Option<Instant>,
@@ -1398,6 +1600,10 @@ pub struct PowerManager<'d, I2C> {
     bms_poll_seq: u32,
     bms_ok_streak: u16,
     bms_err_streak: u16,
+    bms_cached_da_status2: Option<bq40z50::DaStatus2>,
+    bms_cached_filter_capacity: Option<bq40z50::FilterCapacity>,
+    bms_next_da_status2_refresh_at: Instant,
+    bms_next_filter_capacity_refresh_at: Instant,
 
     chg_next_poll_at: Instant,
     chg_next_retry_at: Option<Instant>,
@@ -1749,6 +1955,7 @@ where
             last_input_power_anomaly_log_at: None,
             last_therm_kill_hint_at: None,
             fan_started_at: now,
+            fan_rpm_tracker: FanRpmTracker::new(),
 
             ina_ready: false,
             ina_next_retry_at: if outputs_allowed { Some(now) } else { None },
@@ -1766,6 +1973,10 @@ where
             bms_poll_seq: 0,
             bms_ok_streak: 0,
             bms_err_streak: 0,
+            bms_cached_da_status2: None,
+            bms_cached_filter_capacity: None,
+            bms_next_da_status2_refresh_at: now,
+            bms_next_filter_capacity_refresh_at: now + BMS_DETAIL_MAC_REFRESH_STAGGER,
 
             chg_next_poll_at: now,
             chg_next_retry_at: if charger_allowed { Some(now) } else { None },
@@ -2033,7 +2244,20 @@ where
     }
 
     pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
-        self.ui_snapshot
+        let mut snapshot = self.ui_snapshot;
+        let mut detail = snapshot.dashboard_detail;
+        let fan_status = self.fan.status();
+
+        detail.out_a_temp_c = snapshot.tmp_a_c;
+        detail.out_b_temp_c = snapshot.tmp_b_c;
+        detail.fan_rpm = self.fan_rpm_tracker.rpm;
+        detail.fan_pwm_pct = Some(fan_status.pwm_pct(self.cfg.fan_config.mid_pwm_pct));
+        detail.fan_status = Some(detail_fan_status_text(fan_status));
+        detail.output_notice = Some("LIVE DATA");
+        detail.thermal_notice = Some("LIVE DATA");
+
+        snapshot.dashboard_detail = detail;
+        snapshot
     }
 
     pub fn fan_command(&self) -> fan::Status {
@@ -2047,6 +2271,58 @@ where
     fn fan_temps_ready(&self) -> bool {
         self.ui_snapshot.tmp_a != SelfCheckCommState::Pending
             || self.ui_snapshot.tmp_b != SelfCheckCommState::Pending
+    }
+
+    fn clear_bms_detail_snapshot(&mut self) {
+        let detail = &mut self.ui_snapshot.dashboard_detail;
+        detail.cell_mv = [None, None, None, None];
+        detail.cell_temp_c = [None, None, None, None];
+        detail.balance_active = None;
+        detail.balance_mask = None;
+        detail.balance_cell = None;
+        detail.battery_energy_mwh = None;
+        detail.battery_full_capacity_mwh = None;
+        detail.charge_fet_on = None;
+        detail.discharge_fet_on = None;
+        detail.precharge_fet_on = None;
+        detail.board_temp_c = None;
+        detail.battery_temp_c = None;
+        detail.cells_notice = None;
+        detail.battery_notice = None;
+    }
+
+    fn reset_bms_detail_mac_cache(&mut self, now: Instant) {
+        self.bms_cached_da_status2 = None;
+        self.bms_cached_filter_capacity = None;
+        self.bms_next_da_status2_refresh_at = now;
+        self.bms_next_filter_capacity_refresh_at = now + BMS_DETAIL_MAC_REFRESH_STAGGER;
+    }
+
+    fn apply_bms_detail_snapshot(&mut self, snapshot: &Bq40z50Snapshot) {
+        let detail = &mut self.ui_snapshot.dashboard_detail;
+        let balance_mask = detail_bms_balance_mask(snapshot);
+        detail.cell_mv = snapshot.cell_mv.map(Some);
+        detail.cell_temp_c = detail_bms_cell_sensor_temps(snapshot);
+        detail.balance_active = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CB);
+        detail.balance_mask = balance_mask;
+        detail.balance_cell = detail_bms_single_balance_cell(balance_mask);
+        detail.battery_energy_mwh = detail_bms_energy_mwh(snapshot);
+        detail.battery_full_capacity_mwh = detail_bms_full_capacity_mwh(snapshot);
+        detail.charge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CHG);
+        detail.discharge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::DSG);
+        detail.precharge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::PCHG);
+        detail.board_temp_c = detail_bms_board_temp_c(snapshot);
+        detail.battery_temp_c = detail_battery_temp_c(snapshot);
+        detail.cells_notice = Some("LIVE DATA");
+        detail.battery_notice = Some("LIVE DATA");
+    }
+
+    fn clear_charger_detail_snapshot(&mut self) {
+        let detail = &mut self.ui_snapshot.dashboard_detail;
+        detail.input_source = None;
+        detail.charger_active = None;
+        detail.charger_status = None;
+        detail.charger_notice = None;
     }
 
     fn refresh_tmp112_snapshot(&mut self, ch: OutputChannel) {
@@ -2089,13 +2365,17 @@ where
     fn update_fan_state(&mut self, irq: &IrqSnapshot) {
         self.refresh_fan_temp_snapshots_if_due();
         let prev = self.fan.status();
+        let now_ms = self.fan_now_ms();
         let (status, events) = self.fan.update(fan::Input {
-            now_ms: self.fan_now_ms(),
+            now_ms,
             temps_ready: self.fan_temps_ready(),
             temp_a_c_x16: self.ui_snapshot.tmp_a_c_x16,
             temp_b_c_x16: self.ui_snapshot.tmp_b_c_x16,
             tach_pulse_count: irq.fan_tach,
         });
+        let rpm = self
+            .fan_rpm_tracker
+            .observe(now_ms, irq.fan_tach, status, self.cfg.fan_config);
         let pwm_pct = status.pwm_pct(self.cfg.fan_config.mid_pwm_pct);
 
         if events.temp_source_changed {
@@ -2128,9 +2408,10 @@ where
 
         if events.command_changed {
             defmt::info!(
-                "fan: command mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?} cooldown_active={=bool} tach_fault={=bool}",
+                "fan: command mode={} pwm_pct={=u8} rpm={=?} temp_source={} control_temp_c_x16={=?} cooldown_active={=bool} tach_fault={=bool}",
                 status.command.as_str(),
                 pwm_pct,
+                rpm,
                 status.temp_source.as_str(),
                 status.control_temp_c_x16,
                 status.cooldown_active,
@@ -2141,18 +2422,20 @@ where
         if events.tach_fault_changed {
             if status.tach_fault {
                 defmt::warn!(
-                    "fan: tach_timeout mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?} timeout_ms={=u64}",
+                    "fan: tach_timeout mode={} pwm_pct={=u8} rpm={=?} temp_source={} control_temp_c_x16={=?} timeout_ms={=u64}",
                     status.command.as_str(),
                     pwm_pct,
+                    rpm,
                     status.temp_source.as_str(),
                     status.control_temp_c_x16,
                     self.cfg.fan_config.tach_timeout_ms
                 );
             } else {
                 defmt::info!(
-                    "fan: tach_recovered mode={} pwm_pct={=u8} temp_source={} control_temp_c_x16={=?}",
+                    "fan: tach_recovered mode={} pwm_pct={=u8} rpm={=?} temp_source={} control_temp_c_x16={=?}",
                     status.command.as_str(),
                     pwm_pct,
+                    rpm,
                     status.temp_source.as_str(),
                     status.control_temp_c_x16
                 );
@@ -2163,11 +2446,12 @@ where
     pub fn log_fan_telemetry(&self, applied: AppliedFanState) {
         let status = self.fan.status();
         defmt::info!(
-            "fan: telemetry requested_mode={} requested_pwm_pct={=u8} applied_mode={} applied_pwm_pct={=u8} output_degraded={=bool} temp_source={} control_temp_c_x16={=?} tach_recent={=bool} tach_fault={=bool} cooldown_active={=bool}",
+            "fan: telemetry requested_mode={} requested_pwm_pct={=u8} applied_mode={} applied_pwm_pct={=u8} rpm={=?} output_degraded={=bool} temp_source={} control_temp_c_x16={=?} tach_recent={=bool} tach_fault={=bool} cooldown_active={=bool}",
             status.requested_command.as_str(),
             status.requested_pwm_pct(self.cfg.fan_config.mid_pwm_pct),
             applied.command.as_str(),
             applied.pwm_pct,
+            self.fan_rpm_tracker.rpm,
             applied.degraded,
             status.temp_source.as_str(),
             status.control_temp_c_x16,
@@ -3724,6 +4008,7 @@ where
         }
 
         Ok(Bq40z50Snapshot {
+            battery_mode: 0,
             temp_k_x10,
             vpack_mv,
             current_ma,
@@ -3732,6 +4017,8 @@ where
             fcc: 0,
             batt_status,
             op_status,
+            da_status2: None,
+            filter_capacity: None,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
     }
@@ -3752,6 +4039,7 @@ where
         }
 
         Ok(Bq40z50Snapshot {
+            battery_mode: 0,
             temp_k_x10,
             vpack_mv,
             current_ma,
@@ -3760,6 +4048,8 @@ where
             fcc: 0,
             batt_status,
             op_status: None,
+            da_status2: None,
+            filter_capacity: None,
             cell_mv: [0; 4],
         })
     }
@@ -3790,6 +4080,7 @@ where
         }
 
         Ok(Bq40z50Snapshot {
+            battery_mode: 0,
             temp_k_x10,
             vpack_mv,
             current_ma,
@@ -3798,6 +4089,8 @@ where
             fcc: 0,
             batt_status,
             op_status: None,
+            da_status2: None,
+            filter_capacity: None,
             cell_mv: [0; 4],
         })
     }
@@ -4125,6 +4418,7 @@ where
         self.ui_snapshot.bq40z50_rca_alarm = Some(rca_alarm);
         self.ui_snapshot.bq40z50_no_battery = Some(low_pack_runtime);
         self.ui_snapshot.bq40z50_discharge_ready = discharge_ready;
+        self.apply_bms_detail_snapshot(snapshot);
         self.bms_audio = BmsAudioState {
             rca_alarm: Some(rca_alarm),
             protection_active,
@@ -4963,6 +5257,8 @@ where
         self.ui_snapshot.bq40z50 = SelfCheckCommState::Warn;
         self.ui_snapshot.bq40z50_pack_mv = None;
         self.ui_snapshot.bq40z50_current_ma = None;
+        self.reset_bms_detail_mac_cache(Instant::now());
+        self.clear_bms_detail_snapshot();
         if self.ui_snapshot.bq40z50_soc_pct.is_none() {
             self.ui_snapshot.bq40z50_soc_pct = Some(0);
         }
@@ -5363,6 +5659,7 @@ where
             self.ui_snapshot.bq25792_allow_charge = Some(false);
             self.ui_snapshot.bq25792_ichg_ma = None;
             self.ui_snapshot.bq25792_vbat_present = None;
+            self.clear_charger_detail_snapshot();
             self.recompute_ui_mode();
             return;
         }
@@ -5823,6 +6120,19 @@ where
             None
         };
         self.ui_snapshot.fusb302_vbus_present = Some(input_present);
+        self.ui_snapshot.dashboard_detail.input_source =
+            detail_input_source(vbus_present, ac1_present, ac2_present);
+        self.ui_snapshot.dashboard_detail.charger_active = Some(matches!(
+            audio_charge_phase_from_chg_stat(bq25792::status1::chg_stat(status1)),
+            AudioChargePhase::Charging
+        ));
+        self.ui_snapshot.dashboard_detail.charger_status = Some(detail_charger_status_text(
+            charger_fault,
+            input_present,
+            allow_charge,
+            bq25792::status1::chg_stat(status1),
+        ));
+        self.ui_snapshot.dashboard_detail.charger_notice = Some("LIVE DATA");
         self.recompute_ui_mode();
 
         if auto_force_charge {
@@ -5900,6 +6210,7 @@ where
         self.ui_snapshot.fusb302_vbus_present = None;
         self.ui_snapshot.input_vbus_mv = None;
         self.ui_snapshot.input_ibus_ma = None;
+        self.clear_charger_detail_snapshot();
         self.recompute_ui_mode();
     }
 
@@ -6004,6 +6315,7 @@ where
                     self.ui_snapshot.bq40z50_rca_alarm = Some(rca_alarm);
                     self.ui_snapshot.bq40z50_no_battery = Some(low_pack);
                     self.ui_snapshot.bq40z50_discharge_ready = discharge_ready;
+                    self.apply_bms_detail_snapshot(&s);
                     let protection_active = bq40_op_bit(s.op_status, bq40z50::operation_status::PF)
                         == Some(true)
                         || bq40z50::battery_status::error_code(s.batt_status) != 0
@@ -6037,6 +6349,7 @@ where
                         if self.should_hold_no_battery_result() {
                             self.hold_no_battery_result_audio_state();
                         } else {
+                            self.reset_bms_detail_mac_cache(now);
                             self.ui_snapshot.bq40z50 = SelfCheckCommState::Warn;
                             self.ui_snapshot.bq40z50_pack_mv = None;
                             self.ui_snapshot.bq40z50_current_ma = None;
@@ -6044,6 +6357,7 @@ where
                             self.ui_snapshot.bq40z50_rca_alarm = None;
                             self.ui_snapshot.bq40z50_no_battery = None;
                             self.ui_snapshot.bq40z50_discharge_ready = None;
+                            self.clear_bms_detail_snapshot();
                             self.bms_audio = BmsAudioState {
                                 rca_alarm: None,
                                 protection_active: false,
@@ -6092,6 +6406,7 @@ where
                         if self.should_hold_no_battery_result() {
                             self.hold_no_battery_result_audio_state();
                         } else {
+                            self.reset_bms_detail_mac_cache(now);
                             self.ui_snapshot.bq40z50 = SelfCheckCommState::Err;
                             self.ui_snapshot.bq40z50_pack_mv = None;
                             self.ui_snapshot.bq40z50_current_ma = None;
@@ -6099,6 +6414,7 @@ where
                             self.ui_snapshot.bq40z50_rca_alarm = None;
                             self.ui_snapshot.bq40z50_no_battery = None;
                             self.ui_snapshot.bq40z50_discharge_ready = None;
+                            self.clear_bms_detail_snapshot();
                             self.bms_audio = BmsAudioState {
                                 rca_alarm: None,
                                 protection_active: false,
@@ -6154,7 +6470,7 @@ where
             && a.cell_mv == b.cell_mv
     }
 
-    fn bq40_discharge_ready(op_status: Option<u16>) -> Option<bool> {
+    fn bq40_discharge_ready(op_status: Option<u32>) -> Option<bool> {
         bq40_decode_discharge_path(op_status).0
     }
 
@@ -6226,6 +6542,10 @@ where
         &mut self,
         addr: u8,
     ) -> Result<Bq40z50Snapshot, Bq40ActivationReadError> {
+        let now = Instant::now();
+        let battery_mode =
+            self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::BATTERY_MODE)?;
+        spin_delay(BMS_ACTIVATION_WORD_GAP);
         let mut temp_k_x10 =
             self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::TEMPERATURE)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
@@ -6235,6 +6555,11 @@ where
         spin_delay(BMS_ACTIVATION_WORD_GAP);
         let rsoc_pct =
             self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)?;
+        spin_delay(BMS_ACTIVATION_WORD_GAP);
+        let remcap =
+            self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::REMAINING_CAPACITY)?;
+        spin_delay(BMS_ACTIVATION_WORD_GAP);
+        let fcc = self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::FULL_CHARGE_CAPACITY)?;
         spin_delay(BMS_ACTIVATION_WORD_GAP);
         let batt_status =
             self.read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::BATTERY_STATUS)?;
@@ -6260,19 +6585,39 @@ where
             }
         }
 
-        let op_status = bq40z50::read_operation_status_low_u16(&mut self.i2c, addr)
+        let op_status = bq40z50::read_operation_status(&mut self.i2c, addr)
             .ok()
             .flatten();
-
+        let mut da_status2 = self.bms_cached_da_status2;
+        if now >= self.bms_next_da_status2_refresh_at {
+            spin_delay(BMS_ACTIVATION_WORD_GAP);
+            if let Ok(snapshot) = bq40z50::read_da_status2(&mut self.i2c, addr) {
+                da_status2 = snapshot;
+                self.bms_cached_da_status2 = snapshot;
+            }
+            self.bms_next_da_status2_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
+        }
+        let mut filter_capacity = self.bms_cached_filter_capacity;
+        if now >= self.bms_next_filter_capacity_refresh_at {
+            spin_delay(BMS_ACTIVATION_WORD_GAP);
+            if let Ok(snapshot) = bq40z50::read_filter_capacity(&mut self.i2c, addr) {
+                filter_capacity = snapshot;
+                self.bms_cached_filter_capacity = snapshot;
+            }
+            self.bms_next_filter_capacity_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
+        }
         Ok(Bq40z50Snapshot {
+            battery_mode,
             temp_k_x10,
             vpack_mv,
             current_ma,
             rsoc_pct,
-            remcap: 0,
-            fcc: 0,
+            remcap,
+            fcc,
             batt_status,
             op_status,
+            da_status2,
+            filter_capacity,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
     }
@@ -6404,6 +6749,7 @@ where
 
 #[derive(Clone, Copy)]
 struct Bq40z50Snapshot {
+    battery_mode: u16,
     temp_k_x10: u16,
     vpack_mv: u16,
     current_ma: i16,
@@ -6411,7 +6757,9 @@ struct Bq40z50Snapshot {
     remcap: u16,
     fcc: u16,
     batt_status: u16,
-    op_status: Option<u16>,
+    op_status: Option<u32>,
+    da_status2: Option<bq40z50::DaStatus2>,
+    filter_capacity: Option<bq40z50::FilterCapacity>,
     cell_mv: [u16; 4],
 }
 
@@ -6561,6 +6909,287 @@ mod tests {
         assert_eq!(sample.issue, Some(ChargerInputSampleIssue::AdcNotReady));
         assert_eq!(sample.ui_vbus_mv, None);
         assert_eq!(sample.ui_ibus_ma, None);
+    }
+
+    #[test]
+    fn detail_input_source_prefers_explicit_usb_and_dc_routes() {
+        assert_eq!(
+            detail_input_source(true, true, false),
+            Some(DashboardInputSource::UsbC)
+        );
+        assert_eq!(
+            detail_input_source(true, false, true),
+            Some(DashboardInputSource::DcIn)
+        );
+        assert_eq!(
+            detail_input_source(true, true, true),
+            Some(DashboardInputSource::Auto)
+        );
+        assert_eq!(detail_input_source(false, false, false), None);
+    }
+
+    #[test]
+    fn detail_charger_status_maps_runtime_states_to_short_tokens() {
+        assert_eq!(detail_charger_status_text(true, true, true, 3), "FAULT");
+        assert_eq!(detail_charger_status_text(false, false, true, 3), "NOAC");
+        assert_eq!(detail_charger_status_text(false, true, false, 3), "LOCK");
+        assert_eq!(detail_charger_status_text(false, true, true, 3), "CHG");
+        assert_eq!(detail_charger_status_text(false, true, true, 7), "DONE");
+        assert_eq!(detail_charger_status_text(false, true, true, 0), "READY");
+    }
+
+    #[test]
+    fn detail_bms_balance_mask_requires_active_cb_flag() {
+        let base = Bq40z50Snapshot {
+            battery_mode: 0,
+            temp_k_x10: 2981,
+            vpack_mv: 15_200,
+            current_ma: 1200,
+            rsoc_pct: 67,
+            remcap: 0,
+            fcc: 0,
+            batt_status: 0,
+            op_status: Some(0),
+            da_status2: None,
+            filter_capacity: None,
+            cell_mv: [4100, 4098, 4102, 4099],
+        };
+
+        assert_eq!(detail_bms_balance_mask(&base), Some(0));
+
+        let active = Bq40z50Snapshot {
+            op_status: Some(bq40z50::operation_status::CB),
+            ..base
+        };
+        assert_eq!(detail_bms_balance_mask(&active), None);
+    }
+
+    #[test]
+    fn detail_bms_single_balance_cell_only_accepts_one_hot_masks() {
+        assert_eq!(detail_bms_single_balance_cell(Some(0b0001)), Some(1));
+        assert_eq!(detail_bms_single_balance_cell(Some(0b0100)), Some(3));
+        assert_eq!(detail_bms_single_balance_cell(Some(0b0110)), None);
+        assert_eq!(detail_bms_single_balance_cell(Some(0)), None);
+        assert_eq!(detail_bms_single_balance_cell(None), None);
+    }
+
+    #[test]
+    fn detail_bms_balance_mask_does_not_guess_live_cell_from_historical_timer_data() {
+        let snapshot = Bq40z50Snapshot {
+            battery_mode: 0,
+            temp_k_x10: 2981,
+            vpack_mv: 15_200,
+            current_ma: 1200,
+            rsoc_pct: 67,
+            remcap: 0,
+            fcc: 0,
+            batt_status: 0,
+            op_status: Some(bq40z50::operation_status::CB),
+            da_status2: None,
+            filter_capacity: None,
+            cell_mv: [4100, 4098, 4102, 4099],
+        };
+
+        assert_eq!(detail_bms_balance_mask(&snapshot), None);
+        assert_eq!(
+            detail_bms_single_balance_cell(detail_bms_balance_mask(&snapshot)),
+            None
+        );
+    }
+
+    #[test]
+    fn detail_bms_temps_use_da_status2_sensor_mapping() {
+        let snapshot = Bq40z50Snapshot {
+            battery_mode: 0,
+            temp_k_x10: 3331,
+            vpack_mv: 15_200,
+            current_ma: 1200,
+            rsoc_pct: 67,
+            remcap: 0,
+            fcc: 0,
+            batt_status: 0,
+            op_status: Some(0),
+            da_status2: Some(bq40z50::DaStatus2 {
+                int_temp_k_x10: 3051,
+                ts_temp_k_x10: [3081, 3091, 3101, 3111],
+                cell_temp_k_x10: 3121,
+                fet_temp_k_x10: 3131,
+                gauging_temp_k_x10: 3141,
+            }),
+            filter_capacity: None,
+            cell_mv: [4100, 4098, 4102, 4099],
+        };
+
+        assert_eq!(
+            detail_bms_cell_sensor_temps(&snapshot),
+            [Some(35), Some(36), Some(37), Some(38)]
+        );
+        assert_eq!(detail_bms_board_temp_c(&snapshot), Some(35));
+        assert_eq!(detail_battery_temp_c(&snapshot), Some(39));
+    }
+
+    #[test]
+    fn detail_battery_temp_falls_back_to_temperature_word_without_da_status2() {
+        let snapshot = Bq40z50Snapshot {
+            battery_mode: 0,
+            temp_k_x10: 3061,
+            vpack_mv: 15_200,
+            current_ma: 1200,
+            rsoc_pct: 67,
+            remcap: 0,
+            fcc: 0,
+            batt_status: 0,
+            op_status: Some(0),
+            da_status2: None,
+            filter_capacity: None,
+            cell_mv: [4100, 4098, 4102, 4099],
+        };
+
+        assert_eq!(detail_battery_temp_c(&snapshot), Some(33));
+    }
+
+    #[test]
+    fn detail_bms_energy_prefers_filter_capacity_energy_when_capm_is_clear() {
+        let snapshot = Bq40z50Snapshot {
+            battery_mode: 0,
+            temp_k_x10: 3061,
+            vpack_mv: 15_200,
+            current_ma: 1200,
+            rsoc_pct: 67,
+            remcap: 4321,
+            fcc: 8765,
+            batt_status: 0,
+            op_status: Some(0),
+            da_status2: None,
+            filter_capacity: Some(bq40z50::FilterCapacity {
+                remaining_capacity_mah: 4000,
+                remaining_energy_cwh: 4685,
+                full_charge_capacity_mah: 5000,
+                full_charge_energy_cwh: 6320,
+            }),
+            cell_mv: [4100, 4098, 4102, 4099],
+        };
+
+        assert_eq!(detail_bms_energy_mwh(&snapshot), Some(46_850));
+        assert_eq!(detail_bms_full_capacity_mwh(&snapshot), Some(63_200));
+    }
+
+    #[test]
+    fn detail_bms_energy_uses_sbs_energy_units_when_capm_is_set() {
+        let snapshot = Bq40z50Snapshot {
+            battery_mode: bq40z50::battery_mode::CAPM,
+            temp_k_x10: 3061,
+            vpack_mv: 15_200,
+            current_ma: 1200,
+            rsoc_pct: 67,
+            remcap: 4685,
+            fcc: 6320,
+            batt_status: 0,
+            op_status: Some(0),
+            da_status2: None,
+            filter_capacity: Some(bq40z50::FilterCapacity {
+                remaining_capacity_mah: 0,
+                remaining_energy_cwh: 1,
+                full_charge_capacity_mah: 0,
+                full_charge_energy_cwh: 1,
+            }),
+            cell_mv: [4100, 4098, 4102, 4099],
+        };
+
+        assert_eq!(detail_bms_energy_mwh(&snapshot), Some(46_850));
+        assert_eq!(detail_bms_full_capacity_mwh(&snapshot), Some(63_200));
+    }
+
+    #[test]
+    fn detail_bms_energy_falls_back_when_filter_capacity_reports_invalid_sentinel() {
+        let snapshot = Bq40z50Snapshot {
+            battery_mode: 0,
+            temp_k_x10: 3061,
+            vpack_mv: 16_727,
+            current_ma: 0,
+            rsoc_pct: 100,
+            remcap: 3917,
+            fcc: 3917,
+            batt_status: 0,
+            op_status: Some(0),
+            da_status2: None,
+            filter_capacity: Some(bq40z50::FilterCapacity {
+                remaining_capacity_mah: 3917,
+                remaining_energy_cwh: u16::MAX,
+                full_charge_capacity_mah: 3917,
+                full_charge_energy_cwh: u16::MAX,
+            }),
+            cell_mv: [4184, 4188, 4149, 4157],
+        };
+
+        assert_eq!(detail_bms_energy_mwh(&snapshot), Some(65_505));
+        assert_eq!(detail_bms_full_capacity_mwh(&snapshot), Some(65_505));
+    }
+
+    #[test]
+    fn fan_rpm_tracker_uses_two_pulses_per_rev() {
+        let mut tracker = FanRpmTracker::new();
+        let cfg = fan::Config {
+            low_temp_c_x16: 40 * 16,
+            high_temp_c_x16: 50 * 16,
+            hysteresis_c_x16: 3 * 16,
+            cooldown_ms: 10_000,
+            tach_timeout_ms: 2_000,
+            tach_pulses_per_rev: 2,
+            mid_pwm_pct: 60,
+        };
+        let status = fan::Status {
+            requested_command: fan::FanLevel::High,
+            command: fan::FanLevel::High,
+            thermal_level: fan::FanLevel::High,
+            temp_source: fan::TempSource::Max,
+            control_temp_c_x16: Some(55 * 16),
+            tach_fault: false,
+            tach_pulse_seen_recently: true,
+            cooldown_active: false,
+        };
+
+        assert_eq!(tracker.observe(0, 0, status, cfg), None);
+        assert_eq!(tracker.observe(500, 40, status, cfg), Some(2400));
+    }
+
+    #[test]
+    fn fan_rpm_tracker_clears_when_fan_turns_off() {
+        let mut tracker = FanRpmTracker::new();
+        let cfg = fan::Config {
+            low_temp_c_x16: 40 * 16,
+            high_temp_c_x16: 50 * 16,
+            hysteresis_c_x16: 3 * 16,
+            cooldown_ms: 10_000,
+            tach_timeout_ms: 2_000,
+            tach_pulses_per_rev: 2,
+            mid_pwm_pct: 60,
+        };
+        let running = fan::Status {
+            requested_command: fan::FanLevel::Mid,
+            command: fan::FanLevel::Mid,
+            thermal_level: fan::FanLevel::Mid,
+            temp_source: fan::TempSource::Max,
+            control_temp_c_x16: Some(45 * 16),
+            tach_fault: false,
+            tach_pulse_seen_recently: true,
+            cooldown_active: false,
+        };
+        let off = fan::Status {
+            requested_command: fan::FanLevel::Off,
+            command: fan::FanLevel::Off,
+            thermal_level: fan::FanLevel::Off,
+            temp_source: fan::TempSource::Max,
+            control_temp_c_x16: Some(35 * 16),
+            tach_fault: false,
+            tach_pulse_seen_recently: false,
+            cooldown_active: false,
+        };
+
+        assert_eq!(tracker.observe(0, 0, running, cfg), None);
+        assert_eq!(tracker.observe(500, 20, running, cfg), Some(1200));
+        assert_eq!(tracker.observe(800, 0, off, cfg), None);
+        assert_eq!(tracker.rpm, None);
     }
 
     #[test]
