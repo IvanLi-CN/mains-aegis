@@ -20,6 +20,7 @@ This directory consolidates the current confirmed front panel UI design view fro
 
 - Frozen renders: `assets/dashboard-b-*.png`, `assets/self-check-c-*.png`（含 BQ40 结果弹窗 5 态）
 - Dashboard detail renders: `assets/dashboard-b-detail-*.png`
+- Dashboard detail icons: `assets/dashboard-detail-icons.png`
 - Module maps (2):
   - `assets/dashboard-b-module-map.png`
   - `assets/self-check-c-module-map.png`

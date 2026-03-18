@@ -196,16 +196,6 @@ pub enum DashboardInputSource {
     Auto,
 }
 
-impl DashboardInputSource {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::DcIn => "DC IN",
-            Self::UsbC => "USB-C",
-            Self::Auto => "AUTO",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelfCheckCommState {
     Pending,
@@ -781,6 +771,7 @@ struct DashboardData {
     mode: UpsMode,
     focus: UiFocus,
     touch_irq: bool,
+    frame_no: u32,
     mains_present: bool,
     out_a_on: bool,
     out_b_on: bool,
@@ -828,6 +819,7 @@ impl DashboardData {
             mode,
             focus: model.focus,
             touch_irq: model.touch_irq,
+            frame_no: model.frame_no,
             mains_present,
             out_a_on,
             out_b_on,
@@ -887,6 +879,7 @@ struct DashboardLiveData {
     mode: UpsMode,
     focus: UiFocus,
     touch_irq: bool,
+    frame_no: u32,
     mains_present: bool,
     out_a_on: bool,
     out_b_on: bool,
@@ -924,6 +917,7 @@ impl DashboardLiveData {
             mode: snapshot.mode,
             focus: model.focus,
             touch_irq: model.touch_irq,
+            frame_no: model.frame_no,
             mains_present: snapshot_mains_present(snapshot),
             out_a_on: snapshot.tps_a_enabled == Some(true),
             out_b_on: snapshot.tps_b_enabled == Some(true),
@@ -996,6 +990,10 @@ impl DashboardLiveData {
 
         let vin_ma = self.vin_iin_ma?;
         Some((self.vin_vbus_mv? as u32 * vin_ma.max(0) as u32) / 100_000)
+    }
+
+    fn battery_charge_power_w10(self) -> Option<u32> {
+        Some((self.batt_pack_mv? as u32 * self.charge_current_ma()? as u32) / 100_000)
     }
 
     fn output_power_w10(self) -> Option<u32> {
@@ -2390,7 +2388,7 @@ fn render_variant_b_live<P: UiPainter>(
             Some(pout_w10) => text(
                 painter,
                 variant,
-                FontRole::NumBig,
+                FontRole::NumHero,
                 format_args!("{:>2}.{:01}", pout_w10 / 10, pout_w10 % 10),
                 Point::new(194, kpi_value_y),
                 HorizontalAlignment::Right,
@@ -3609,20 +3607,8 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         painter,
         variant,
         FontRole::DetailBody,
-        "SOURCE",
-        Point::new(14, 26),
-        HorizontalAlignment::Left,
-        palette.bg,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::DetailNum,
-        data.detail
-            .input_source
-            .map(DashboardInputSource::label)
-            .unwrap_or("N/A"),
-        Point::new(150, 28),
+        "IN W",
+        Point::new(14, 24),
         HorizontalAlignment::Left,
         palette.bg,
     )?;
@@ -3630,18 +3616,41 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         painter,
         variant,
         FontRole::DetailBody,
-        "PIN",
-        Point::new(214, 26),
+        "CHARGE W",
+        Point::new(174, 24),
         HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    draw_charger_source_indicator(
+        painter,
+        variant,
+        palette,
+        data.detail.input_source,
+        14,
+        36,
+        26,
+        12,
+    )?;
+    draw_icon_blocks_centered(
+        painter,
+        174,
+        36,
+        26,
+        12,
+        if data.battery_charge_power_w10().unwrap_or(0) > 0 {
+            RI_BATTERY_CHARGE_LINE_24
+        } else {
+            RI_BATTERY_LINE_24
+        },
         palette.bg,
     )?;
     match data.input_power_w10() {
         Some(pin_w10) => text(
             painter,
             variant,
-            FontRole::DetailNum,
-            format_args!("{:>2}.{:01}W", pin_w10 / 10, pin_w10 % 10),
-            Point::new(308, 28),
+            FontRole::NumHero,
+            format_args!("{:>2}.{:01}", pin_w10 / 10, pin_w10 % 10),
+            Point::new(154, 34),
             HorizontalAlignment::Right,
             palette.bg,
         )?,
@@ -3650,21 +3659,31 @@ fn render_dashboard_charger_detail<P: UiPainter>(
             variant,
             FontRole::DetailNum,
             "N/A",
-            Point::new(308, 28),
+            Point::new(154, 38),
             HorizontalAlignment::Right,
             palette.bg,
         )?,
     }
-    text(
-        painter,
-        variant,
-        FontRole::DetailBody,
-        "INPUT CHARGER SUMMARY",
-        Point::new(14, 44),
-        HorizontalAlignment::Left,
-        palette.bg,
-    )?;
-
+    match data.battery_charge_power_w10() {
+        Some(pack_w10) => text(
+            painter,
+            variant,
+            FontRole::NumHero,
+            format_args!("{:>2}.{:01}", pack_w10 / 10, pack_w10 % 10),
+            Point::new(304, 34),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "N/A",
+            Point::new(308, 38),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+    }
     text(
         painter,
         variant,
@@ -3778,24 +3797,36 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
     data: DashboardLiveData,
 ) -> Result<(), P::Error> {
     let hotspot_c = thermal_hotspot_c(data);
+    let fan_icon_color = thermal_fan_icon_color(palette, data);
 
     text(
         painter,
         variant,
         FontRole::DetailBody,
-        "HOTSPOT",
+        "HOTSPOT C",
         Point::new(14, 26),
         HorizontalAlignment::Left,
         palette.bg,
     )?;
     match hotspot_c {
+        Some(temp_c) if temp_c >= 0 => {
+            text(
+                painter,
+                variant,
+                FontRole::NumHero,
+                format_args!("{}", temp_c),
+                Point::new(154, 30),
+                HorizontalAlignment::Right,
+                palette.bg,
+            )?;
+        }
         Some(temp_c) => text(
             painter,
             variant,
             FontRole::DetailNum,
-            format_args!("{:>2}C", temp_c),
-            Point::new(150, 28),
-            HorizontalAlignment::Left,
+            format_args!("{temp_c}C"),
+            Point::new(174, 30),
+            HorizontalAlignment::Right,
             palette.bg,
         )?,
         None => text(
@@ -3803,8 +3834,8 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
             variant,
             FontRole::DetailNum,
             "N/A",
-            Point::new(150, 28),
-            HorizontalAlignment::Left,
+            Point::new(174, 30),
+            HorizontalAlignment::Right,
             palette.bg,
         )?,
     }
@@ -3813,29 +3844,24 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         variant,
         FontRole::DetailBody,
         "FAN",
-        Point::new(214, 26),
+        Point::new(174, 26),
         HorizontalAlignment::Left,
         palette.bg,
     )?;
-    text(
+    draw_icon_blocks_centered(
         painter,
-        variant,
-        FontRole::DetailNum,
-        data.detail.fan_status.unwrap_or("N/A"),
-        Point::new(308, 28),
-        HorizontalAlignment::Right,
-        palette.bg,
+        174,
+        28,
+        130,
+        20,
+        thermal_fan_blocks(thermal_fan_frame(
+            data.frame_no,
+            data.detail.fan_rpm,
+            data.detail.fan_pwm_pct,
+            data.detail.fan_status,
+        )),
+        fan_icon_color,
     )?;
-    text(
-        painter,
-        variant,
-        FontRole::DetailBody,
-        "THERMAL PROTECTION SUMMARY",
-        Point::new(14, 44),
-        HorizontalAlignment::Left,
-        palette.bg,
-    )?;
-
     text(
         painter,
         variant,
@@ -4333,6 +4359,62 @@ fn thermal_hotspot_c(data: DashboardLiveData) -> Option<i16> {
             max_optional_i16(data.detail.board_temp_c, data.detail.battery_temp_c),
         ),
     )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThermalFanMotion {
+    Off,
+    Low,
+    Mid,
+    High,
+}
+
+fn thermal_fan_motion(
+    rpm: Option<u16>,
+    pwm_pct: Option<u8>,
+    status: Option<&'static str>,
+) -> ThermalFanMotion {
+    match (rpm, pwm_pct, status) {
+        (Some(rpm), _, _) if rpm >= 3_600 => ThermalFanMotion::High,
+        (_, Some(pwm), _) if pwm >= 90 => ThermalFanMotion::High,
+        (_, _, Some("HIGH")) => ThermalFanMotion::High,
+        (Some(rpm), _, _) if rpm >= 1_800 => ThermalFanMotion::Mid,
+        (_, Some(pwm), _) if pwm >= 55 => ThermalFanMotion::Mid,
+        (_, _, Some("MID")) => ThermalFanMotion::Mid,
+        (Some(rpm), _, _) if rpm > 0 => ThermalFanMotion::Low,
+        (_, Some(pwm), _) if pwm > 0 => ThermalFanMotion::Low,
+        (_, _, Some("LOW" | "RUN")) => ThermalFanMotion::Low,
+        _ => ThermalFanMotion::Off,
+    }
+}
+
+fn thermal_fan_frame(
+    frame_no: u32,
+    rpm: Option<u16>,
+    pwm_pct: Option<u8>,
+    status: Option<&'static str>,
+) -> usize {
+    match thermal_fan_motion(rpm, pwm_pct, status) {
+        ThermalFanMotion::Off => 0,
+        ThermalFanMotion::Low => ((frame_no / 18) % 2) as usize,
+        ThermalFanMotion::Mid => ((frame_no / 10) % 2) as usize,
+        ThermalFanMotion::High => ((frame_no / 5) % 2) as usize,
+    }
+}
+
+fn thermal_fan_icon_color(palette: Palette, data: DashboardLiveData) -> u16 {
+    if data.detail.fan_status == Some("FAULT") {
+        ERROR_COLOR
+    } else {
+        match thermal_fan_motion(
+            data.detail.fan_rpm,
+            data.detail.fan_pwm_pct,
+            data.detail.fan_status,
+        ) {
+            ThermalFanMotion::Off => fade_color(palette.bg, palette.panel_alt),
+            _ => palette.bg,
+        }
+    }
 }
 
 fn cells_detail_ready(data: DashboardLiveData) -> bool {
@@ -5286,6 +5368,115 @@ fn draw_icon_blocks<P: UiPainter>(
     Ok(())
 }
 
+fn icon_block_bounds(blocks: &[(u8, u8, u8, u8)]) -> Option<(u8, u8, u8, u8)> {
+    let mut iter = blocks
+        .iter()
+        .copied()
+        .filter(|&(_, _, bw, bh)| bw != 0 && bh != 0);
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = match iter.next() {
+        Some((bx, by, bw, bh)) => (bx, by, bx + bw, by + bh),
+        None => return None,
+    };
+
+    for (bx, by, bw, bh) in iter {
+        min_x = min_x.min(bx);
+        min_y = min_y.min(by);
+        max_x = max_x.max(bx + bw);
+        max_y = max_y.max(by + bh);
+    }
+
+    Some((min_x, min_y, max_x - min_x, max_y - min_y))
+}
+
+fn draw_icon_blocks_centered<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    box_w: u16,
+    box_h: u16,
+    blocks: &[(u8, u8, u8, u8)],
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    let Some((min_x, min_y, icon_w, icon_h)) = icon_block_bounds(blocks) else {
+        return Ok(());
+    };
+
+    let origin_x = i32::from(x) + ((i32::from(box_w) - i32::from(icon_w)) / 2) - i32::from(min_x);
+    let origin_y = i32::from(y) + ((i32::from(box_h) - i32::from(icon_h)) / 2) - i32::from(min_y);
+
+    for &(bx, by, bw, bh) in blocks {
+        if bw == 0 || bh == 0 {
+            continue;
+        }
+        fill(
+            painter,
+            (origin_x + i32::from(bx)) as u16,
+            (origin_y + i32::from(by)) as u16,
+            u16::from(bw),
+            u16::from(bh),
+            rgb565,
+        )?;
+    }
+    Ok(())
+}
+
+fn thermal_fan_blocks(frame: usize) -> &'static [(u8, u8, u8, u8)] {
+    match frame % 2 {
+        0 => CARBON_FAN_OUTLINE_CARDINAL_24,
+        _ => CARBON_FAN_OUTLINE_DIAGONAL_24,
+    }
+}
+
+fn draw_charger_source_indicator<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    source: Option<DashboardInputSource>,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+) -> Result<(), P::Error> {
+    match source {
+        Some(DashboardInputSource::UsbC) => draw_icon_blocks_centered(
+            painter,
+            x,
+            y,
+            width,
+            height,
+            CARBON_USB_C_OUTLINE_24,
+            palette.bg,
+        ),
+        Some(DashboardInputSource::DcIn) => draw_icon_blocks_centered(
+            painter,
+            x,
+            y,
+            width,
+            height,
+            CARBON_DC_BARREL_OUTLINE_24,
+            palette.bg,
+        ),
+        Some(DashboardInputSource::Auto) => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "AUTO",
+            Point::new((x + width / 2) as i32, (y + height / 2 + 3) as i32),
+            HorizontalAlignment::Center,
+            palette.bg,
+        ),
+        None => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "N/A",
+            Point::new((x + width / 2) as i32, (y + height / 2 + 3) as i32),
+            HorizontalAlignment::Center,
+            palette.bg,
+        ),
+    }
+}
+
 const CARBON_IN_PROGRESS_32: &[(u8, u8, u8, u8)] = &[
     (11, 2, 10, 1),
     (9, 3, 14, 1),
@@ -5484,6 +5675,233 @@ const CARBON_CLOSE_OUTLINE_32: &[(u8, u8, u8, u8)] = &[
     (17, 27, 8, 1),
     (9, 28, 14, 1),
     (11, 29, 10, 1),
+];
+
+// Icon source: Iconify / material-symbols-light:mode-fan-outline
+const CARBON_FAN_OUTLINE_CARDINAL_24: &[(u8, u8, u8, u8)] = &[
+    (10, 3, 5, 1),
+    (9, 4, 7, 1),
+    (9, 5, 1, 1),
+    (14, 5, 2, 1),
+    (8, 6, 2, 1),
+    (13, 6, 2, 1),
+    (9, 7, 1, 1),
+    (12, 7, 2, 1),
+    (4, 8, 2, 1),
+    (9, 8, 2, 1),
+    (12, 8, 2, 1),
+    (17, 8, 1, 1),
+    (3, 9, 4, 1),
+    (9, 9, 11, 1),
+    (3, 10, 2, 1),
+    (6, 10, 10, 1),
+    (19, 10, 2, 1),
+    (3, 11, 2, 1),
+    (7, 11, 4, 1),
+    (13, 11, 2, 1),
+    (19, 11, 2, 1),
+    (3, 12, 2, 1),
+    (9, 12, 2, 1),
+    (13, 12, 4, 1),
+    (19, 12, 2, 1),
+    (3, 13, 3, 1),
+    (8, 13, 10, 1),
+    (19, 13, 2, 1),
+    (4, 14, 11, 1),
+    (17, 14, 4, 1),
+    (6, 15, 1, 1),
+    (10, 15, 2, 1),
+    (13, 15, 2, 1),
+    (18, 15, 1, 1),
+    (10, 16, 2, 1),
+    (14, 16, 1, 1),
+    (9, 17, 2, 1),
+    (14, 17, 2, 1),
+    (8, 18, 2, 1),
+    (14, 18, 1, 1),
+    (8, 19, 7, 1),
+    (9, 20, 5, 1),
+];
+
+const CARBON_FAN_OUTLINE_DIAGONAL_24: &[(u8, u8, u8, u8)] = &[
+    (7, 3, 2, 1),
+    (6, 4, 4, 1),
+    (14, 4, 4, 1),
+    (5, 5, 2, 1),
+    (8, 5, 2, 1),
+    (13, 5, 6, 1),
+    (4, 6, 2, 1),
+    (8, 6, 2, 1),
+    (13, 6, 2, 1),
+    (18, 6, 2, 1),
+    (4, 7, 2, 1),
+    (8, 7, 2, 1),
+    (12, 7, 2, 1),
+    (19, 7, 2, 1),
+    (4, 8, 2, 1),
+    (9, 8, 2, 1),
+    (12, 8, 2, 1),
+    (16, 8, 5, 1),
+    (4, 9, 3, 1),
+    (9, 9, 11, 1),
+    (5, 10, 11, 1),
+    (7, 11, 4, 1),
+    (13, 11, 2, 1),
+    (9, 12, 2, 1),
+    (13, 12, 4, 1),
+    (8, 13, 11, 1),
+    (4, 14, 11, 1),
+    (17, 14, 3, 1),
+    (3, 15, 5, 1),
+    (10, 15, 2, 1),
+    (13, 15, 2, 1),
+    (18, 15, 2, 1),
+    (3, 16, 2, 1),
+    (10, 16, 2, 1),
+    (14, 16, 2, 1),
+    (18, 16, 2, 1),
+    (4, 17, 2, 1),
+    (9, 17, 2, 1),
+    (14, 17, 2, 1),
+    (18, 17, 2, 1),
+    (5, 18, 6, 1),
+    (14, 18, 2, 1),
+    (17, 18, 2, 1),
+    (6, 19, 4, 1),
+    (14, 19, 4, 1),
+    (15, 20, 2, 1),
+];
+
+// Icon sources:
+// - Iconify / mdi:usb-c-port
+// - Iconify / mdi:audio-input-stereo-minijack (used as DC5025 indicator by product decision)
+// - Iconify / ri:battery-charge-line
+// - Iconify / ri:battery-line
+const CARBON_USB_C_OUTLINE_24: &[(u8, u8, u8, u8)] = &[
+    (3, 8, 18, 1),
+    (2, 9, 20, 1),
+    (1, 10, 4, 1),
+    (19, 10, 4, 1),
+    (1, 11, 3, 1),
+    (20, 11, 3, 1),
+    (1, 12, 2, 1),
+    (5, 12, 14, 1),
+    (21, 12, 2, 1),
+    (1, 13, 2, 1),
+    (5, 13, 14, 1),
+    (21, 13, 2, 1),
+    (1, 14, 3, 1),
+    (20, 14, 3, 1),
+    (1, 15, 4, 1),
+    (19, 15, 4, 1),
+    (2, 16, 20, 1),
+    (3, 17, 18, 1),
+];
+
+const CARBON_DC_BARREL_OUTLINE_24: &[(u8, u8, u8, u8)] = &[
+    (11, 2, 2, 1),
+    (11, 3, 2, 1),
+    (11, 5, 2, 1),
+    (11, 6, 2, 1),
+    (11, 7, 2, 1),
+    (11, 8, 2, 1),
+    (9, 9, 6, 1),
+    (9, 10, 6, 1),
+    (9, 11, 6, 1),
+    (9, 12, 6, 1),
+    (9, 13, 6, 1),
+    (9, 14, 6, 1),
+    (9, 15, 6, 1),
+    (9, 16, 6, 1),
+    (10, 17, 4, 1),
+    (11, 18, 2, 1),
+    (11, 19, 2, 1),
+    (11, 20, 2, 1),
+    (11, 21, 2, 1),
+];
+
+const RI_BATTERY_CHARGE_LINE_24: &[(u8, u8, u8, u8)] = &[
+    (2, 5, 8, 1),
+    (11, 5, 1, 1),
+    (14, 5, 6, 1),
+    (2, 6, 7, 1),
+    (11, 6, 1, 1),
+    (14, 6, 6, 1),
+    (2, 7, 2, 1),
+    (10, 7, 2, 1),
+    (18, 7, 2, 1),
+    (2, 8, 2, 1),
+    (9, 8, 3, 1),
+    (18, 8, 2, 1),
+    (2, 9, 2, 1),
+    (9, 9, 3, 1),
+    (18, 9, 2, 1),
+    (21, 9, 2, 1),
+    (2, 10, 2, 1),
+    (8, 10, 4, 1),
+    (18, 10, 2, 1),
+    (21, 10, 2, 1),
+    (2, 11, 2, 1),
+    (8, 11, 7, 1),
+    (18, 11, 2, 1),
+    (21, 11, 2, 1),
+    (2, 12, 2, 1),
+    (7, 12, 7, 1),
+    (18, 12, 2, 1),
+    (21, 12, 2, 1),
+    (2, 13, 2, 1),
+    (10, 13, 4, 1),
+    (18, 13, 2, 1),
+    (21, 13, 2, 1),
+    (2, 14, 2, 1),
+    (10, 14, 3, 1),
+    (18, 14, 2, 1),
+    (21, 14, 2, 1),
+    (2, 15, 2, 1),
+    (10, 15, 3, 1),
+    (18, 15, 2, 1),
+    (2, 16, 2, 1),
+    (10, 16, 2, 1),
+    (18, 16, 2, 1),
+    (2, 17, 6, 1),
+    (10, 17, 1, 1),
+    (13, 17, 7, 1),
+    (2, 18, 6, 1),
+    (10, 18, 1, 1),
+    (12, 18, 8, 1),
+];
+
+const RI_BATTERY_LINE_24: &[(u8, u8, u8, u8)] = &[
+    (2, 5, 18, 1),
+    (2, 6, 18, 1),
+    (2, 7, 2, 1),
+    (18, 7, 2, 1),
+    (2, 8, 2, 1),
+    (18, 8, 2, 1),
+    (2, 9, 2, 1),
+    (18, 9, 2, 1),
+    (21, 9, 2, 1),
+    (2, 10, 2, 1),
+    (18, 10, 2, 1),
+    (21, 10, 2, 1),
+    (2, 11, 2, 1),
+    (18, 11, 2, 1),
+    (21, 11, 2, 1),
+    (2, 12, 2, 1),
+    (18, 12, 2, 1),
+    (21, 12, 2, 1),
+    (2, 13, 2, 1),
+    (18, 13, 2, 1),
+    (21, 13, 2, 1),
+    (2, 14, 2, 1),
+    (18, 14, 2, 1),
+    (21, 14, 2, 1),
+    (2, 15, 2, 1),
+    (18, 15, 2, 1),
+    (2, 16, 2, 1),
+    (18, 16, 2, 1),
+    (2, 17, 18, 1),
+    (2, 18, 18, 1),
 ];
 
 // 18px outline footer icons for better legibility on the small touch display.
@@ -7101,6 +7519,43 @@ mod tests {
         assert_eq!(
             detail_status_tag(DashboardDetailPage::Thermal, live),
             "FAULT"
+        );
+    }
+
+    #[test]
+    fn thermal_fan_motion_uses_discrete_speed_bands() {
+        assert_eq!(
+            thermal_fan_motion(Some(0), Some(0), Some("OFF")),
+            ThermalFanMotion::Off
+        );
+        assert_eq!(
+            thermal_fan_motion(Some(1_250), Some(32), Some("LOW")),
+            ThermalFanMotion::Low
+        );
+        assert_eq!(
+            thermal_fan_motion(Some(2_380), Some(52), Some("MID")),
+            ThermalFanMotion::Mid
+        );
+        assert_eq!(
+            thermal_fan_motion(Some(4_120), Some(100), Some("HIGH")),
+            ThermalFanMotion::High
+        );
+    }
+
+    #[test]
+    fn thermal_fan_frame_steps_faster_at_higher_rpm() {
+        assert_eq!(thermal_fan_frame(0, Some(0), Some(0), Some("OFF")), 0);
+        assert_eq!(thermal_fan_frame(17, Some(1_250), Some(32), Some("LOW")), 0);
+        assert_eq!(thermal_fan_frame(18, Some(1_250), Some(32), Some("LOW")), 1);
+        assert_eq!(thermal_fan_frame(9, Some(2_380), Some(52), Some("MID")), 0);
+        assert_eq!(thermal_fan_frame(10, Some(2_380), Some(52), Some("MID")), 1);
+        assert_eq!(
+            thermal_fan_frame(4, Some(4_120), Some(100), Some("HIGH")),
+            0
+        );
+        assert_eq!(
+            thermal_fan_frame(5, Some(4_120), Some(100), Some("HIGH")),
+            1
         );
     }
 

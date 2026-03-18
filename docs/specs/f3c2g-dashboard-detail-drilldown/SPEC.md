@@ -197,3 +197,7 @@
 ### Thermal
 
 ![Dashboard thermal detail](./assets/dashboard-detail-thermal.png)
+
+### Icons
+
+![Dashboard detail icons](./assets/dashboard-detail-icons.png)

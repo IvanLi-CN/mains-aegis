@@ -451,13 +451,22 @@ fn detail_bms_board_temp_c(snapshot: &Bq40z50Snapshot) -> Option<i16> {
         .and_then(|da_status2| detail_da_status2_temp_c(da_status2.ts_temp_k_x10[0]))
 }
 
+fn filter_energy_mwh(cwh: u16) -> Option<u32> {
+    (cwh != u16::MAX).then_some(cwh as u32 * 10)
+}
+
+fn approximate_energy_mwh(capacity_mah: u16, vpack_mv: u16) -> Option<u32> {
+    (capacity_mah != 0 && vpack_mv != 0).then_some(capacity_mah as u32 * vpack_mv as u32 / 1000)
+}
+
 fn detail_bms_energy_mwh(snapshot: &Bq40z50Snapshot) -> Option<u32> {
     if (snapshot.battery_mode & bq40z50::battery_mode::CAPM) != 0 {
         Some(snapshot.remcap as u32 * 10)
     } else {
         snapshot
             .filter_capacity
-            .map(|filter| filter.remaining_energy_cwh as u32 * 10)
+            .and_then(|filter| filter_energy_mwh(filter.remaining_energy_cwh))
+            .or_else(|| approximate_energy_mwh(snapshot.remcap, snapshot.vpack_mv))
     }
 }
 
@@ -467,7 +476,8 @@ fn detail_bms_full_capacity_mwh(snapshot: &Bq40z50Snapshot) -> Option<u32> {
     } else {
         snapshot
             .filter_capacity
-            .map(|filter| filter.full_charge_energy_cwh as u32 * 10)
+            .and_then(|filter| filter_energy_mwh(filter.full_charge_energy_cwh))
+            .or_else(|| approximate_energy_mwh(snapshot.fcc, snapshot.vpack_mv))
     }
 }
 
@@ -7055,6 +7065,32 @@ mod tests {
 
         assert_eq!(detail_bms_energy_mwh(&snapshot), Some(46_850));
         assert_eq!(detail_bms_full_capacity_mwh(&snapshot), Some(63_200));
+    }
+
+    #[test]
+    fn detail_bms_energy_falls_back_when_filter_capacity_reports_invalid_sentinel() {
+        let snapshot = Bq40z50Snapshot {
+            battery_mode: 0,
+            temp_k_x10: 3061,
+            vpack_mv: 16_727,
+            current_ma: 0,
+            rsoc_pct: 100,
+            remcap: 3917,
+            fcc: 3917,
+            batt_status: 0,
+            op_status: Some(0),
+            da_status2: None,
+            filter_capacity: Some(bq40z50::FilterCapacity {
+                remaining_capacity_mah: 3917,
+                remaining_energy_cwh: u16::MAX,
+                full_charge_capacity_mah: 3917,
+                full_charge_energy_cwh: u16::MAX,
+            }),
+            cell_mv: [4184, 4188, 4149, 4157],
+        };
+
+        assert_eq!(detail_bms_energy_mwh(&snapshot), Some(65_505));
+        assert_eq!(detail_bms_full_capacity_mwh(&snapshot), Some(65_505));
     }
 
     #[test]

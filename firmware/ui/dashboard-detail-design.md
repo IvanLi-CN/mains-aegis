@@ -58,7 +58,7 @@
 
 - 顶栏标题：`CHARGER DETAIL`
 - 状态 chip：`ACTIVE / IDLE / LOCK / FAULT`
-- 主区：输入来源 + 输入功率
+- 主区：输入来源图标 + `IN W`；电池图标 + `CHARGE W`
 - 次区：charging state / source select / status detail
 - 底栏：charger abnormal summary
 
@@ -84,3 +84,4 @@
 ![Dashboard Detail - Output](assets/dashboard-b-detail-output.png)
 ![Dashboard Detail - Charger](assets/dashboard-b-detail-charger.png)
 ![Dashboard Detail - Thermal](assets/dashboard-b-detail-thermal.png)
+![Dashboard Detail - Icons](assets/dashboard-detail-icons.png)
