@@ -1072,6 +1072,7 @@ where
     );
 
     let mut ui = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+    ui.requested_outputs = logic_outputs_from_enabled(desired_outputs);
     ui.gc9307 = if panel_probe.screen_present() {
         SelfCheckCommState::Ok
     } else {
@@ -1361,6 +1362,7 @@ where
     // Stage 3: BQ25792.
     let mut charger_ctrl0: Option<u8> = None;
     let mut charger_status0: Option<u8> = None;
+    let mut charger_input_present: Option<bool> = None;
     let mut charger_enabled = match bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_CONTROL_0) {
         Ok(v) => {
             charger_ctrl0 = Some(v);
@@ -1405,6 +1407,7 @@ where
                     || (status0 & bq25792::status0::PG_STAT) != 0
             })
             .unwrap_or(false);
+        charger_input_present = Some(input_present);
         let adc_ready = match (adc_state, charger_status3) {
             (Some(adc_state), Some(status3)) => bq25792::power_path_adc_ready(adc_state, status3),
             _ => false,
@@ -1628,6 +1631,38 @@ where
         }
     }
 
+    let discharge_authorization_reason = if desired_outputs == EnabledOutputs::None {
+        "not_requested"
+    } else if bms_addr.is_none() {
+        "bms_missing"
+    } else if bms_no_battery == Some(true) {
+        "no_battery"
+    } else if bms_rca_alarm == Some(true) {
+        "pack_alarm"
+    } else if bms_discharge_ready == Some(true) {
+        "already_ready"
+    } else if therm_kill_asserted {
+        "therm_kill_asserted"
+    } else if !charger_probe_ok {
+        "charger_missing"
+    } else if charger_input_present != Some(true) {
+        "input_not_present"
+    } else {
+        "approved"
+    };
+    defmt::info!(
+        "self_test: discharge_authorization decision={} requested_outputs={} bms_present={=bool} dsg_ready={=?} no_battery={=?} rca_alarm={=?} charger_probe_ok={=bool} input_present={=?} therm_kill_asserted={=bool}",
+        discharge_authorization_reason,
+        desired_outputs.describe(),
+        bms_addr.is_some(),
+        bms_discharge_ready,
+        bms_no_battery,
+        bms_rca_alarm,
+        charger_probe_ok,
+        charger_input_present,
+        therm_kill_asserted
+    );
+
     // Emergency-stop path: only this path is allowed to change TPS output state in self-test.
     if therm_kill_asserted || tps_a_fault || tps_b_fault {
         defmt::error!(
@@ -1668,16 +1703,7 @@ where
         };
     }
 
-    let tps_a_bms_hold = output_gate_reason == OutputGateReason::BmsNotReady
-        && desired_outputs.is_enabled(OutputChannel::OutA)
-        && !tps_a_fault;
-    let tps_b_bms_hold = output_gate_reason == OutputGateReason::BmsNotReady
-        && desired_outputs.is_enabled(OutputChannel::OutB)
-        && !tps_b_fault;
-
-    ui.tps_a = if tps_a_bms_hold {
-        SelfCheckCommState::Ok
-    } else if tps_a_present {
+    ui.tps_a = if tps_a_present {
         if tps_a_fault {
             SelfCheckCommState::Warn
         } else if status_a.is_ok() {
@@ -1688,9 +1714,7 @@ where
     } else {
         SelfCheckCommState::Err
     };
-    ui.tps_b = if tps_b_bms_hold {
-        SelfCheckCommState::Ok
-    } else if tps_b_present {
+    ui.tps_b = if tps_b_present {
         if tps_b_fault {
             SelfCheckCommState::Warn
         } else if status_b.is_ok() {
@@ -1701,6 +1725,11 @@ where
     } else {
         SelfCheckCommState::Err
     };
+    ui.active_outputs =
+        logic_outputs_from_enabled(enabled_outputs_from_flags(out_a_allowed, out_b_allowed));
+    ui.recoverable_outputs = logic_outputs_from_enabled(recoverable_outputs);
+    ui.output_gate_reason = output_gate_reason;
+    ui.bq40z50_recovery_pending = false;
     ui.tps_a_enabled = Some(out_a_allowed);
     ui.tps_b_enabled = Some(out_b_allowed);
     ui.bq25792_allow_charge = Some(charger_enabled);
@@ -2276,6 +2305,9 @@ where
                 self.output_state.gate_reason.as_str()
             );
         }
+        if self.can_request_bms_discharge_authorization() {
+            self.request_bms_discharge_authorization(true);
+        }
 
         if self.ui_snapshot.bq25792_allow_charge.is_none() {
             self.ui_snapshot.bq25792_allow_charge =
@@ -2432,6 +2464,7 @@ where
         self.maybe_handle_fault(irq);
         self.maybe_poll_charger(irq);
         self.maybe_auto_request_bms_activation();
+        self.maybe_auto_request_bms_discharge_authorization();
         if self.bms_activation_state == BmsActivationState::Pending {
             let bms_i2c_active = self.maybe_track_bms_activation();
             if bms_i2c_active {
@@ -2479,13 +2512,53 @@ where
         let mut snapshot = self.ui_snapshot;
         let mut detail = snapshot.dashboard_detail;
         let fan_status = self.fan.status();
+        let bms_recovery_pending = self.bms_activation_state == BmsActivationState::Pending
+            && snapshot.bq40z50 != SelfCheckCommState::Err;
 
+        snapshot.requested_outputs =
+            logic_outputs_from_enabled(self.output_state.requested_outputs);
+        snapshot.active_outputs = logic_outputs_from_enabled(self.output_state.active_outputs);
+        snapshot.recoverable_outputs =
+            logic_outputs_from_enabled(self.output_state.recoverable_outputs);
+        snapshot.output_gate_reason = self.output_state.gate_reason;
+        snapshot.bq40z50_recovery_pending = bms_recovery_pending;
         detail.out_a_temp_c = snapshot.tmp_a_c;
         detail.out_b_temp_c = snapshot.tmp_b_c;
         detail.fan_rpm = self.fan_rpm_tracker.rpm;
         detail.fan_pwm_pct = Some(fan_status.pwm_pct(self.cfg.fan_config.mid_pwm_pct));
         detail.fan_status = Some(detail_fan_status_text(fan_status));
-        detail.output_notice = Some("LIVE DATA");
+        detail.battery_notice = if bms_recovery_pending {
+            Some("DISCHARGE AUTHORIZATION IN PROGRESS")
+        } else if snapshot.bq40z50_no_battery == Some(true) {
+            Some("PACK PRESENT CHECK FAILED")
+        } else if snapshot.bq40z50_discharge_ready == Some(false) {
+            Some("DISCHARGE PATH LIMITED")
+        } else if detail.battery_notice.is_some() {
+            detail.battery_notice
+        } else {
+            Some("LIVE DATA")
+        };
+        detail.output_notice = if self.output_state.gate_reason == OutputGateReason::BmsNotReady
+            && self.output_state.requested_outputs != EnabledOutputs::None
+        {
+            if bms_recovery_pending {
+                Some("WAITING FOR BMS RECOVERY")
+            } else {
+                Some("OUTPUT HELD BY BMS DISCHARGE POLICY")
+            }
+        } else {
+            Some("LIVE DATA")
+        };
+        detail.charger_notice = if snapshot.bq25792 == SelfCheckCommState::Ok
+            && snapshot.bq25792_allow_charge == Some(false)
+            && snapshot.fusb302_vbus_present == Some(true)
+        {
+            Some("INPUT READY - BATTERY PATH BLOCKED")
+        } else if detail.charger_notice.is_some() {
+            detail.charger_notice
+        } else {
+            Some("LIVE DATA")
+        };
         detail.thermal_notice = Some("LIVE DATA");
 
         snapshot.dashboard_detail = detail;
@@ -2759,6 +2832,50 @@ where
             );
             self.bms_activation_state = BmsActivationState::Idle;
         }
+    }
+
+    fn can_request_bms_discharge_authorization(&self) -> bool {
+        self.output_state.requested_outputs != EnabledOutputs::None
+            && self.output_state.gate_reason == OutputGateReason::BmsNotReady
+            && self.bms_addr.is_some()
+            && self.ui_snapshot.bq40z50 != SelfCheckCommState::Err
+            && self.ui_snapshot.bq40z50_no_battery != Some(true)
+            && self.ui_snapshot.bq40z50_rca_alarm != Some(true)
+            && self.ui_snapshot.bq40z50_discharge_ready == Some(false)
+            && self.current_mains_present() == Some(true)
+            && self.charger_allowed
+            && self.ui_snapshot.bq25792 != SelfCheckCommState::Err
+            && !self.therm_kill.is_low()
+    }
+
+    fn request_bms_discharge_authorization(&mut self, auto_request: bool) {
+        if !self.can_request_bms_discharge_authorization() {
+            defmt::info!(
+                "bms: discharge_authorization ignored reason=not_allowed requested_outputs={} gate_reason={} bms_state={} dsg_ready={=?} no_battery={=?} rca_alarm={=?} charger_state={} input_present={=?} mains_present={=?} therm_kill_asserted={=bool}",
+                self.output_state.requested_outputs.describe(),
+                self.output_state.gate_reason.as_str(),
+                self_check_comm_state_name(self.ui_snapshot.bq40z50),
+                self.ui_snapshot.bq40z50_discharge_ready,
+                self.ui_snapshot.bq40z50_no_battery,
+                self.ui_snapshot.bq40z50_rca_alarm,
+                self_check_comm_state_name(self.ui_snapshot.bq25792),
+                self.ui_snapshot.fusb302_vbus_present,
+                self.current_mains_present(),
+                self.therm_kill.is_low()
+            );
+            return;
+        }
+
+        defmt::info!(
+            "bms: discharge_authorization requested requested_outputs={} dsg_ready={=?} charger_state={} input_present={=?} mains_present={=?} auto_request={=bool}",
+            self.output_state.requested_outputs.describe(),
+            self.ui_snapshot.bq40z50_discharge_ready,
+            self_check_comm_state_name(self.ui_snapshot.bq25792),
+            self.ui_snapshot.fusb302_vbus_present,
+            self.current_mains_present(),
+            auto_request
+        );
+        self.request_bms_activation_with_diag_override(true, auto_request);
     }
 
     pub fn request_bms_activation(&mut self) {
@@ -4843,6 +4960,17 @@ where
             self.ui_snapshot.bq25792_vbat_present
         );
         self.request_bms_activation_with_diag_override(true, true);
+    }
+
+    fn maybe_auto_request_bms_discharge_authorization(&mut self) {
+        if self.bms_activation_state != BmsActivationState::Idle
+            || self.ui_snapshot.bq40z50_last_result.is_some()
+            || !self.can_request_bms_discharge_authorization()
+        {
+            return;
+        }
+
+        self.request_bms_discharge_authorization(true);
     }
 
     fn maybe_track_bms_activation(&mut self) -> bool {

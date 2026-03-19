@@ -65,11 +65,45 @@
 - `tps_fault`：任一路 `TPS55288 STATUS` 命中 `SCP/OCP/OVP`
 - `active_protection`：软保护链路已执行主动停机，等待条件恢复后进入显式恢复
 
+## 启动期与 BMS 的耦合
+
+稳压输出模块不是独立上电就能判定成功的模块。只要本轮模式请求输出，它在启动期就必须依赖 `BQ40Z50` 的放电授权状态：
+
+1. 先做 `TPS/TMP/INA` 的只读探测，得到模块自身的原始健康状态。
+2. 再结合 `BQ40Z50` 的 `discharge_ready`、`no_battery`、`RCA alarm` 与输入电源状态，决定是否批准“放电授权恢复尝试”。
+3. 只有当放电路径已经 ready，或者授权恢复成功后，输出模块才允许进入 `active_outputs`。
+
+这意味着：
+
+- `BQ40Z50` 正常通信但 `discharge_ready=false` 时，输出模块不应直接显示为 `FAULT`。
+- 启动页应把这种状态显示为 `HOLD`，表示“上游尚未授权，当前不对输出模块定责”。
+- 对外文档语义称为“放电授权恢复”或“放电路径恢复”；它和“离线 BMS 激活”不是一回事。
+
+## 自检显示语义
+
+当前自检页按“模块自身状态 + 上游约束”两层表达：
+
+- `BMS`
+  - `OK`：普通通信可信，且 `discharge_ready=true`
+  - `LIMIT`：普通通信可信，但 `DSG` 路径未就绪、被策略限制或正在等待恢复
+  - `RECOVER`：启动期已经批准恢复尝试，恢复链路正在运行
+  - `ERR`：普通访问失败、缺失或不可用
+- `BQ25792`
+  - `RUN`：当前允许充电
+  - `IDLE`：芯片正常，但当前不在充电
+  - `WARN/ERR`：充电器自身运行异常
+- `TPS55288-A/B`
+  - `RUN`：该路输出已建立
+  - `HOLD`：该路本来被请求，但当前被 `BMS` 上游门控压住
+  - `RECOVER`：上游恢复尝试进行中，等待再次评估
+  - `WARN/ERR`：只有在上游已授权后，这才表示 `TPS` 自身异常
+
 ### 状态迁移规则
 
 1. 启动阶段按 boot self-test 结果生成初始状态：
    - 可直接运行的通道进入 `active_outputs`
    - 因 `BMS` 门控而暂不允许启动的通道进入 `recoverable_outputs`
+   - 若模式请求输出且 `BMS` 在线但放电路径未就绪，固件会先记录一条显式的 `discharge_authorization decision=...` 日志，再决定是否发起恢复尝试
 2. 运行态只要命中任一门控源：
    - 保存当前 `active_outputs` 到 `recoverable_outputs`
    - 把 `active_outputs` 置为 `none`
@@ -93,6 +127,20 @@
 - `TPS fault` 位清除后，不自动开输出
 - `BMS` 恢复到放电就绪后，也不自动开输出；只转为 recoverable，并等待显式 restore 请求
 - 主动保护停机条件解除后，也不自动开输出；只清除门控并等待显式 restore 请求
+
+### 启动期自动恢复尝试的边界
+
+当前固件只在以下条件同时满足时，允许自动发起一次放电路径恢复尝试：
+
+- 本轮确实请求输出
+- `BQ40Z50` 已在线
+- `discharge_ready == false`
+- `no_battery != true`
+- `RCA alarm != true`
+- `THERM_KILL_N` 未断言
+- `BQ25792` 正常且输入电源在线
+
+如果任一条件不满足，模块保持 `bms_not_ready -> HOLD`，不把输出模块直接判成故障。
 
 ## 主动降额与主动停机
 
@@ -135,6 +183,8 @@
 
 - 配置：`power: tps addr=0x.. configured enabled=...`
 - 门控：`power: outputs gated reason=...`
+- 启动授权：`self_test: discharge_authorization decision=...`
+- 恢复请求：`bms: discharge_authorization requested ...`
 - 恢复请求：`power: output restore requested outputs=...`
 
 ## 与其它文档的关系

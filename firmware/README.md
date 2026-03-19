@@ -246,9 +246,10 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 - 未命中紧急条件时，自检阶段不主动改 `TPS55288` 输出状态。
 - 固定顺序：`SYNC` → 独立传感器（`INA3221`/`TMP112`）→ 屏幕模块 → `BQ40Z50` → `BQ25792` → `TPS55288`。
-- 初始化应用阶段按探测结果门控模块；其中 `BQ40Z50` 缺失或放电未就绪时强制禁用 `TPS55288` 输出。
+- 初始化应用阶段按探测结果与授权决策门控模块；其中 `BQ40Z50` 缺失或放电未就绪时会先把输出保持在 `HOLD`，只有安全条件满足时才允许发起一次放电授权恢复尝试。
 - `BQ25792` 充电默认也会被禁用；仅 `--features force-min-charge` 构建时保留充电模块，并以最小 `ICHG/IINDPM` 唤醒（不改充电电压）。
 - `BQ40Z50` 默认只使用 `7-bit 0x0B`（等价 `8-bit W=0x16/R=0x17`）；只有 `--features bms-dual-probe-diag` 才会额外探测 `0x16` 以做兼容诊断。
+- 只要 `BQ40Z50` 普通通信正常，就不走“离线激活”语义；启动期这类状态属于“放电授权恢复”而不是“激活缺失设备”。
 - 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。运行态门控解除后，本轮固件只转入“可恢复未恢复”，不会自动重新打开输出。
 
 ## 前面板屏幕显示（Spec 6qrjs / 7n4qd）
@@ -274,8 +275,14 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 五向按键映射为功能焦点切换：`UP->OUT-A`、`DOWN->OUT-B`、`LEFT->BMS`、`RIGHT->CHARGER`、`CENTER->THERM`
 - 触摸中断仅作为告警指示（`IRQ ON/OFF`）
 - 上电自检页：屏幕可用时先进入 `Variant C Self-check`，自检阶段按探测进度实时刷新模块状态（`PEND -> OK/WARN/ERR/N/A`）
-- `BQ40Z50` 卡片语义：`OK`=普通访问可信正常态，`WARN`=设备存在但非正常态，`ERR`=普通访问未识别；`ERR` 时允许尝试激活。
-- 自检完成后保持 `Variant C` 常驻，并持续显示运行期真实数据（`TPS/INA/TMP/BQ25792/BQ40`）
+- `BQ40Z50` 卡片语义：
+  - `OK`=普通访问可信且放电路径 ready
+  - `LIMIT`=普通访问可信，但 `DSG` 路径未就绪
+  - `RECOVER`=启动期已批准放电恢复尝试，恢复链路进行中
+  - `ERR`=普通访问未识别；只有这种情况才允许手动打开“激活”对话框
+- `BQ25792` 卡片语义：芯片正常但当前未充电时显示 `IDLE`，不把“电池路径受限”误判成 charger 故障。
+- `TPS55288-A/B` 卡片语义：若上游 `BMS` 尚未放行，显示 `HOLD`/`RECOVER`，不把该路直接显示成输出故障。
+- 自检页只有在本模式必需模块全部 clear 时才会切到 Dashboard；若 `BMS` 仍为 `LIMIT`、输出仍为 `HOLD`，页面继续停留在 `Variant C` 并显示运行期真实数据。
 - 页面切换：本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard
 - Dashboard 视觉基线：`Variant B`（仅用于 Dashboard 场景）
 - `Variant C` 重定位为“高级设置/自检页”风格，不作为默认 Dashboard

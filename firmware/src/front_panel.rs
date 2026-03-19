@@ -360,7 +360,15 @@ impl FrontPanel {
             return;
         }
         self.bms_activation_state = state;
-        self.self_check_overlay = if self.ui_variant == SELF_CHECK_VARIANT {
+        let overlay_allowed = self.ui_variant == SELF_CHECK_VARIANT
+            && (front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
+                || matches!(
+                    self.self_check_overlay,
+                    SelfCheckOverlay::BmsActivateConfirm
+                        | SelfCheckOverlay::BmsActivateProgress
+                        | SelfCheckOverlay::BmsActivateResult(..)
+                ));
+        self.self_check_overlay = if overlay_allowed {
             match state {
                 BmsActivationState::Idle => SelfCheckOverlay::None,
                 BmsActivationState::Pending => SelfCheckOverlay::BmsActivateProgress,
