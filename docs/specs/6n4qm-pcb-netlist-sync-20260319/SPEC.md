@@ -37,6 +37,7 @@
 - `docs/pcbs/mainboard/netlist.enet`
 - `docs/pcbs/mainboard/README.md`
 - `docs/plan/0005:tps55288-control/contracts/config.md`
+- `docs/power-monitoring-design.md`
 - `docs/specs/README.md`
 - `docs/specs/6n4qm-pcb-netlist-sync-20260319/SPEC.md`
 
@@ -54,6 +55,7 @@
 - 前面板网表必须保持与 `/Users/ivan/Downloads/Netlist_Schematic2_2026-03-19.enet.enet` 完全一致。
 - 主板 README 中 `FPC1` pin 表、输出路径说明与当前网表一致，不再引用已移除的 `J1/J2/J3`、`VOUT_A`、`VOUT_B`。
 - TPS55288 配置合同必须保留 `out_a/out_b` 的器件实例与 I2C 地址语义，但把共享输出节点事实同步为 `VOUT_TPS`。
+- INA3221 采样映射文档必须反映当前网表中 `CH1/CH2` 的 `IN-` 落点均为 `VOUT_TPS`。
 
 ### SHOULD
 
@@ -78,6 +80,10 @@
   When 读取 `out_a/out_b` 行与备注，
   Then 文档仍冻结实例/地址映射，但不再声称输出经 `J1/J2/J3` 跳线路由。
 
+- Given 更新后的电源监测设计文档与 TPS55288 合同，
+  When 检查 INA3221 CH1/CH2 的 `IN+/IN-` 映射，
+  Then 两份文档都与当前主板网表一致，明确 `IN-1/IN-2` 落在共享节点 `VOUT_TPS`。
+
 ## 里程碑（Milestones）
 
 - [x] M1: 主板导出网表差异完成确认。
@@ -98,3 +104,4 @@
 - 2026-03-19: 初始化并完成本规格；主板网表同步到 2026-03-19 导出版本，前面板导出确认零差异，同时修正主板 README 与 TPS55288 合同中的旧输出拓扑描述。
 - 2026-03-19: merge-proof review fix，澄清 `ISP_TPSA/ISP_TPSB -> R68/R83 -> VOUT_TPS` 的输出路径，避免把每路 TPS 输出侧网络与共享节点混写。
 - 2026-03-19: merge-proof review fix，TPS55288 合同表改为同时记录 `Output-side net` 与 `Shared output node`，保留每路通道区分并明确共享输出节点。
+- 2026-03-19: merge-proof review fix，修正 INA3221 CH1/CH2 文档映射，明确 `IN-1/IN-2` 均采样共享节点 `VOUT_TPS`，与主板网表中的 `R105..R108/U22` 一致。

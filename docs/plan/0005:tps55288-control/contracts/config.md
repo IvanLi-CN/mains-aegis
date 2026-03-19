@@ -66,8 +66,8 @@
 - Device: `INA3221`
 - I2C address: `0x40`（`I2C1`，见 `docs/i2c-address-map.md`）
 - Sampling channels (source of truth: `docs/power-monitoring-design.md`):
-  - INA3221 CH2: `TPS55288 OUT-A`（`IN+2=ISP_TPSA`，`IN-2=ISN_TPSA`，`Rshunt=10mΩ`）
-  - INA3221 CH1: `TPS55288 OUT-B`（`IN+1=ISP_TPSB`，`IN-1=ISN_TPSB`，`Rshunt=10mΩ`）
+  - INA3221 CH2: `TPS55288 OUT-A`（`IN+2=ISP_TPSA`，`IN-2=VOUT_TPS`，`Rshunt=10mΩ`）
+  - INA3221 CH1: `TPS55288 OUT-B`（`IN+1=ISP_TPSB`，`IN-1=VOUT_TPS`，`Rshunt=10mΩ`）
 
 ### INA3221 初始化配置（fixed）
 
