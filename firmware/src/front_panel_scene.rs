@@ -522,11 +522,27 @@ pub fn is_bq40_offline(snapshot: &SelfCheckUiSnapshot) -> bool {
 
 #[allow(dead_code)]
 pub fn is_bq40_activation_needed(snapshot: &SelfCheckUiSnapshot) -> bool {
-    snapshot.bq40z50_last_result.is_none()
-        && (is_bq40_offline(snapshot)
-            || (snapshot.bq40z50 == SelfCheckCommState::Warn
-                && snapshot.bq40z50_discharge_ready == Some(false)
-                && snapshot.bq40z50_no_battery != Some(true)))
+    snapshot.bq40z50_last_result.is_none() && is_bq40_offline(snapshot)
+}
+
+pub fn self_check_can_enter_dashboard(snapshot: &SelfCheckUiSnapshot) -> bool {
+    fn state_ok(state: SelfCheckCommState) -> bool {
+        matches!(
+            state,
+            SelfCheckCommState::Ok | SelfCheckCommState::NotAvailable
+        )
+    }
+
+    state_ok(snapshot.gc9307)
+        && state_ok(snapshot.tca6408a)
+        && state_ok(snapshot.fusb302)
+        && state_ok(snapshot.ina3221)
+        && state_ok(snapshot.bq25792)
+        && state_ok(snapshot.bq40z50)
+        && state_ok(snapshot.tps_a)
+        && state_ok(snapshot.tps_b)
+        && state_ok(snapshot.tmp_a)
+        && state_ok(snapshot.tmp_b)
 }
 
 #[allow(dead_code)]
@@ -7388,6 +7404,38 @@ mod tests {
         assert_eq!(live.output_power_w10(), Some(358));
         assert_eq!(live.battery_discharge_ma(), Some(1_880));
         assert_eq!(live.battery_max_temp_c(), Some(41));
+    }
+
+    #[test]
+    fn bq40_activation_requires_offline_state() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_discharge_ready = Some(false);
+
+        assert!(!is_bq40_activation_needed(&snapshot));
+
+        snapshot.bq40z50 = SelfCheckCommState::Err;
+        assert!(is_bq40_activation_needed(&snapshot));
+    }
+
+    #[test]
+    fn self_check_can_enter_dashboard_only_when_all_modules_clear() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.gc9307 = SelfCheckCommState::Ok;
+        snapshot.tca6408a = SelfCheckCommState::Ok;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.ina3221 = SelfCheckCommState::Ok;
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Ok;
+        snapshot.tps_a = SelfCheckCommState::Ok;
+        snapshot.tps_b = SelfCheckCommState::Ok;
+        snapshot.tmp_a = SelfCheckCommState::Ok;
+        snapshot.tmp_b = SelfCheckCommState::Ok;
+
+        assert!(self_check_can_enter_dashboard(&snapshot));
+
+        snapshot.tps_a = SelfCheckCommState::Warn;
+        assert!(!self_check_can_enter_dashboard(&snapshot));
     }
 
     #[test]

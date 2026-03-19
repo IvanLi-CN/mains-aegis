@@ -1010,9 +1010,14 @@ fn main() -> ! {
         cfg.ilimit_ma
     );
     power.init_best_effort();
-    front_panel.update_self_check_snapshot(power.ui_snapshot());
+    let initial_snapshot = power.ui_snapshot();
+    front_panel.update_self_check_snapshot(initial_snapshot);
     front_panel.update_bms_activation_state(power.bms_activation_state());
-    front_panel.enter_dashboard();
+    if front_panel_scene::self_check_can_enter_dashboard(&initial_snapshot) {
+        front_panel.enter_dashboard();
+    } else {
+        defmt::warn!("ui: stay on self-check reason=boot_self_check_not_clear");
+    }
     let mut applied_fan = None;
     let mut fan_pwm_degraded = false;
     let mut applied_fan_state = output::AppliedFanState {
