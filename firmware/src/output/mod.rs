@@ -61,7 +61,6 @@ const BMS_ACTIVATION_EXIT_EXERCISE_PERIOD: Duration = Duration::from_secs(2);
 const BMS_ACTIVATION_CHARGER_POLL_PERIOD: Duration = Duration::from_secs(2);
 const BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY: Duration = Duration::from_secs(34);
 const BMS_ACTIVATION_AUTO_DELAY: Duration = Duration::from_secs(30);
-const BMS_OUTPUT_STARTUP_AUTO_ACTIVATION_DELAY: Duration = Duration::from_secs(2);
 const BMS_BOOT_DIAG_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
 const BMS_BOOT_DIAG_SHIP_RESET_SETTLE: Duration = Duration::from_millis(800);
 // Temporary boot-diag validation: keep the proven 16.8V/200mA/500mA wake bias active through
@@ -1823,7 +1822,6 @@ pub struct PowerManager<'d, I2C> {
     bms_activation_auto_defer_logged: bool,
     bms_activation_backup: Option<ChargerActivationBackup>,
     chg_watchdog_restore: Option<u8>,
-    boot_output_restore_pending: bool,
     output_state: OutputRuntimeState,
     output_protection: output_protection::ProtectionRuntime,
     fan: fan::Controller,
@@ -2226,9 +2224,6 @@ where
             bms_activation_auto_defer_logged: false,
             bms_activation_backup: None,
             chg_watchdog_restore: None,
-            boot_output_restore_pending: cfg.output_gate_reason == OutputGateReason::BmsNotReady
-                && cfg.active_outputs == EnabledOutputs::None
-                && cfg.recoverable_outputs != EnabledOutputs::None,
             output_state,
             output_protection: output_protection::ProtectionRuntime::new(cfg.ilimit_ma),
             fan: fan::Controller::new(cfg.fan_config),
@@ -2470,12 +2465,10 @@ where
         }
         self.update_output_protection();
         self.reconcile_output_state();
-        self.maybe_auto_restore_boot_outputs();
         let telemetry_printed = self.maybe_print_telemetry();
         if telemetry_printed {
             self.update_output_protection();
             self.reconcile_output_state();
-            self.maybe_auto_restore_boot_outputs();
         }
         self.update_fan_state(irq);
         self.refresh_audio_signals();
@@ -2518,7 +2511,6 @@ where
         }
 
         let restore = self.output_state.recoverable_outputs;
-        self.boot_output_restore_pending = false;
         self.output_state.active_outputs = restore;
         let now = Instant::now();
         if restore.is_enabled(OutputChannel::OutA) {
@@ -4743,9 +4735,7 @@ where
     }
 
     fn maybe_auto_request_bms_activation(&mut self) {
-        let now = Instant::now();
-        let startup_output_activation_needed = self.startup_output_activation_needed(now);
-        if !self.cfg.bms_boot_diag_auto_validate && !startup_output_activation_needed {
+        if !self.cfg.bms_boot_diag_auto_validate {
             return;
         }
 
@@ -4755,7 +4745,8 @@ where
             return;
         }
 
-        if now < self.bms_activation_auto_due_at && !startup_output_activation_needed {
+        let now = Instant::now();
+        if now < self.bms_activation_auto_due_at {
             return;
         }
 
@@ -4767,13 +4758,9 @@ where
             return;
         }
 
-        let auto_activation_needed = startup_output_activation_needed
-            || (self.ui_snapshot.bq40z50_last_result.is_none()
-                && self.ui_snapshot.bq40z50 == SelfCheckCommState::Err);
+        let auto_activation_needed = self.ui_snapshot.bq40z50_last_result.is_none()
+            && self.ui_snapshot.bq40z50 == SelfCheckCommState::Err;
         if !auto_activation_needed {
-            if !self.cfg.bms_boot_diag_auto_validate {
-                return;
-            }
             self.bms_activation_auto_attempted = true;
             self.bms_activation_auto_force_charge_until = None;
             self.bms_activation_auto_force_charge_programmed = false;
@@ -4794,24 +4781,6 @@ where
                 self.has_trusted_bq40_runtime_evidence(),
                 bms_result_option_name(self.ui_snapshot.bq40z50_last_result)
             );
-            return;
-        }
-
-        if startup_output_activation_needed {
-            self.bms_activation_auto_attempted = true;
-            self.bms_activation_auto_force_charge_until = None;
-            self.bms_activation_auto_force_charge_programmed = false;
-            bms_diag_breadcrumb_note(1, 1);
-            defmt::info!(
-                "bms: activation auto_request reason=output_startup_unblock bq40_state={} dsg_ready={=?} requested_outputs={} recoverable_outputs={} charger_state={} input_present={=?}",
-                self_check_comm_state_name(self.ui_snapshot.bq40z50),
-                self.ui_snapshot.bq40z50_discharge_ready,
-                self.output_state.requested_outputs.describe(),
-                self.output_state.recoverable_outputs.describe(),
-                self_check_comm_state_name(self.ui_snapshot.bq25792),
-                self.ui_snapshot.fusb302_vbus_present
-            );
-            self.request_bms_activation_with_diag_override(false, true);
             return;
         }
 
@@ -5228,43 +5197,6 @@ where
         self.ui_snapshot.bq40z50_soc_pct.is_some()
             || self.ui_snapshot.bq40z50_rca_alarm.is_some()
             || self.ui_snapshot.bq40z50_discharge_ready.is_some()
-    }
-
-    fn startup_output_activation_needed(&self, now: Instant) -> bool {
-        self.output_state.gate_reason == OutputGateReason::BmsNotReady
-            && self.output_state.active_outputs == EnabledOutputs::None
-            && self.output_state.recoverable_outputs != EnabledOutputs::None
-            && self.ui_snapshot.fusb302_vbus_present == Some(true)
-            && now >= self.bms_boot_diag_started_at + BMS_OUTPUT_STARTUP_AUTO_ACTIVATION_DELAY
-            && is_bq40_activation_needed(&self.ui_snapshot)
-    }
-
-    fn maybe_auto_restore_boot_outputs(&mut self) {
-        if !self.boot_output_restore_pending {
-            return;
-        }
-
-        if matches!(
-            self.output_state.gate_reason,
-            OutputGateReason::ThermKill
-                | OutputGateReason::TpsFault
-                | OutputGateReason::ActiveProtection
-        ) {
-            defmt::warn!(
-                "power: boot output auto_restore canceled reason={}",
-                self.output_state.gate_reason.as_str()
-            );
-            self.boot_output_restore_pending = false;
-            return;
-        }
-
-        if self.can_request_output_restore() {
-            defmt::info!(
-                "power: boot output auto_restore outputs={}",
-                self.output_state.recoverable_outputs.describe()
-            );
-            self.request_output_restore();
-        }
     }
 
     fn apply_bms_activation_min_charge_profile(&mut self) -> Result<(), &'static str> {
