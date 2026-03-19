@@ -56,10 +56,10 @@
 
 | Logical channel | Board naming | I2C address | Net (from PCB docs) |
 | --- | --- | ---:| --- |
-| `out_a` | `TPS55288 OUT-A` / `TPS-A` | `0x74` | `VOUT_TPSA` |
-| `out_b` | `TPS55288 OUT-B` / `TPS-B` | `0x75` | `VOUT_TPSB` |
+| `out_a` | `TPS55288 OUT-A` / `TPS-A` | `0x74` | `VOUT_TPS` |
+| `out_b` | `TPS55288 OUT-B` / `TPS-B` | `0x75` | `VOUT_TPS` |
 
-> 备注：输出路由受 `J1/J2/J3` 跳线与后级大电流路径影响（见 `docs/pcbs/mainboard/README.md`）；本契约只冻结“器件与地址”的逻辑映射。
+> 备注：当前主板网表中两颗 `TPS55288` 的输出汇到共享节点 `VOUT_TPS`，后级再经 `U21/Q28` 接入 `VOUT`（见 `docs/pcbs/mainboard/README.md`）；本契约只冻结“器件实例与 I2C 地址”的逻辑映射。
 
 ### INA3221 采样映射（fixed）
 
