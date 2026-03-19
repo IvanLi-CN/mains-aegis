@@ -54,10 +54,10 @@
 
 ### 设备与通道映射（fixed）
 
-| Logical channel | Board naming | I2C address | Net (from PCB docs) |
-| --- | --- | ---:| --- |
-| `out_a` | `TPS55288 OUT-A` / `TPS-A` | `0x74` | `ISP_TPSA` |
-| `out_b` | `TPS55288 OUT-B` / `TPS-B` | `0x75` | `ISP_TPSB` |
+| Logical channel | Board naming | I2C address | Output-side net | Shared output node |
+| --- | --- | ---:| --- | --- |
+| `out_a` | `TPS55288 OUT-A` / `TPS-A` | `0x74` | `ISP_TPSA` | `VOUT_TPS` |
+| `out_b` | `TPS55288 OUT-B` / `TPS-B` | `0x75` | `ISP_TPSB` | `VOUT_TPS` |
 
 > 备注：当前主板网表中两颗 `TPS55288` 的 `VOUT/ISP` 分别落在 `ISP_TPSA` / `ISP_TPSB`，再经 `R68` / `R83` 汇入共享节点 `VOUT_TPS`，后级再由 `U21/Q28` 接入 `VOUT`（见 `docs/pcbs/mainboard/README.md`）；本契约冻结“器件实例、I2C 地址与通道侧输出网络”的逻辑映射。
 
