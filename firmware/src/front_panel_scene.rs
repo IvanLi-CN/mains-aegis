@@ -583,6 +583,65 @@ fn output_recovery_for(snapshot: &SelfCheckUiSnapshot, selector: OutputSelector)
     output_hold_for(snapshot, selector) && snapshot.bq40z50_recovery_pending
 }
 
+fn snapshot_tps_state(
+    snapshot: &SelfCheckUiSnapshot,
+    selector: OutputSelector,
+) -> SelfCheckCommState {
+    match selector {
+        OutputSelector::OutA => snapshot.tps_a,
+        OutputSelector::OutB => snapshot.tps_b,
+    }
+}
+
+fn snapshot_tps_enabled(snapshot: &SelfCheckUiSnapshot, selector: OutputSelector) -> Option<bool> {
+    match selector {
+        OutputSelector::OutA => snapshot.tps_a_enabled,
+        OutputSelector::OutB => snapshot.tps_b_enabled,
+    }
+}
+
+fn effective_tps_state(
+    snapshot: &SelfCheckUiSnapshot,
+    selector: OutputSelector,
+) -> SelfCheckCommState {
+    if !outputs_include(snapshot, selector) {
+        SelfCheckCommState::NotAvailable
+    } else if output_hold_for(snapshot, selector) || output_recovery_for(snapshot, selector) {
+        SelfCheckCommState::Warn
+    } else {
+        snapshot_tps_state(snapshot, selector)
+    }
+}
+
+fn effective_tps_summary_name(
+    snapshot: &SelfCheckUiSnapshot,
+    selector: OutputSelector,
+) -> &'static str {
+    if output_recovery_for(snapshot, selector) {
+        "recover"
+    } else if output_hold_for(snapshot, selector) {
+        "hold"
+    } else if !outputs_include(snapshot, selector) {
+        "na"
+    } else {
+        match snapshot_tps_state(snapshot, selector) {
+            SelfCheckCommState::Pending => "pending",
+            SelfCheckCommState::Ok => "ok",
+            SelfCheckCommState::Warn => "warn",
+            SelfCheckCommState::Err => "err",
+            SelfCheckCommState::NotAvailable => "na",
+        }
+    }
+}
+
+pub fn self_check_tps_a_summary_name(snapshot: &SelfCheckUiSnapshot) -> &'static str {
+    effective_tps_summary_name(snapshot, OutputSelector::OutA)
+}
+
+pub fn self_check_tps_b_summary_name(snapshot: &SelfCheckUiSnapshot) -> &'static str {
+    effective_tps_summary_name(snapshot, OutputSelector::OutB)
+}
+
 pub fn self_check_can_enter_dashboard(snapshot: &SelfCheckUiSnapshot) -> bool {
     fn state_ok(state: SelfCheckCommState) -> bool {
         matches!(
@@ -5133,16 +5192,8 @@ fn render_variant_c<P: UiPainter>(
     } else {
         format_args!("TMAX N/A")
     };
-    let tps_a_status_state = if output_hold_for(&snapshot, OutputSelector::OutA) {
-        SelfCheckCommState::Warn
-    } else {
-        snapshot.tps_a
-    };
-    let tps_b_status_state = if output_hold_for(&snapshot, OutputSelector::OutB) {
-        SelfCheckCommState::Warn
-    } else {
-        snapshot.tps_b
-    };
+    let tps_a_status_state = effective_tps_state(&snapshot, OutputSelector::OutA);
+    let tps_b_status_state = effective_tps_state(&snapshot, OutputSelector::OutB);
 
     draw_diag_card(
         painter,
@@ -5265,8 +5316,8 @@ fn render_variant_c<P: UiPainter>(
             status: tps_label(
                 &snapshot,
                 OutputSelector::OutA,
-                snapshot.tps_a,
-                snapshot.tps_a_enabled,
+                snapshot_tps_state(&snapshot, OutputSelector::OutA),
+                snapshot_tps_enabled(&snapshot, OutputSelector::OutA),
             ),
             key: tps_a_key,
             active: data.focus == UiFocus::Up,
@@ -5287,8 +5338,8 @@ fn render_variant_c<P: UiPainter>(
             status: tps_label(
                 &snapshot,
                 OutputSelector::OutB,
-                snapshot.tps_b,
-                snapshot.tps_b_enabled,
+                snapshot_tps_state(&snapshot, OutputSelector::OutB),
+                snapshot_tps_enabled(&snapshot, OutputSelector::OutB),
             ),
             key: tps_b_key,
             active: data.focus == UiFocus::Down,
@@ -7742,6 +7793,20 @@ mod tests {
             ),
             "HOLD"
         );
+    }
+
+    #[test]
+    fn self_check_tps_summary_uses_hold_for_requested_and_na_for_unrequested() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.active_outputs = EnabledOutputs::None;
+        snapshot.recoverable_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
+        snapshot.tps_a = SelfCheckCommState::Ok;
+        snapshot.tps_b = SelfCheckCommState::Err;
+
+        assert_eq!(self_check_tps_a_summary_name(&snapshot), "hold");
+        assert_eq!(self_check_tps_b_summary_name(&snapshot), "na");
     }
 
     #[test]

@@ -1197,8 +1197,8 @@ fn log_self_check_snapshot_transition(previous: &SelfCheckUiSnapshot, next: &Sel
             self_check_comm_state_name(next.ina3221),
             self_check_comm_state_name(next.bq25792),
             self_check_comm_state_name(next.bq40z50),
-            self_check_comm_state_name(next.tps_a),
-            self_check_comm_state_name(next.tps_b),
+            front_panel_scene::self_check_tps_a_summary_name(next),
+            front_panel_scene::self_check_tps_b_summary_name(next),
             self_check_comm_state_name(next.tmp_a),
             self_check_comm_state_name(next.tmp_b)
         );
