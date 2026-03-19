@@ -102,6 +102,7 @@ const FAN_RPM_SAMPLE_WINDOW_MS: u64 = 1_000;
 const FAN_RPM_MIN_SAMPLE_WINDOW_MS: u64 = 400;
 const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
 const VIN_MAINS_LATCH_FAILURE_LIMIT: u8 = 2;
+const TPS_STARTUP_FAULT_CAPTURE_WINDOW: Duration = Duration::from_secs(3);
 
 const BMS_DIAG_BREADCRUMB_LEN: usize = 8;
 const BMS_DIAG_BREADCRUMB_VERSION: u8 = 1;
@@ -1807,6 +1808,8 @@ pub struct PowerManager<'d, I2C> {
     last_fault_log_at: Option<Instant>,
     last_input_power_anomaly_log_at: Option<Instant>,
     last_therm_kill_hint_at: Option<Instant>,
+    tps_startup_fault_capture_until: Option<Instant>,
+    tps_startup_fault_capture_outputs: EnabledOutputs,
     fan_started_at: Instant,
     fan_rpm_tracker: FanRpmTracker,
 
@@ -2214,6 +2217,8 @@ where
             last_fault_log_at: None,
             last_input_power_anomaly_log_at: None,
             last_therm_kill_hint_at: None,
+            tps_startup_fault_capture_until: None,
+            tps_startup_fault_capture_outputs: EnabledOutputs::None,
             fan_started_at: now,
             fan_rpm_tracker: FanRpmTracker::new(),
 
@@ -2485,6 +2490,7 @@ where
 
         self.bms_activation_isolation_until = None;
         self.maybe_retry();
+        self.maybe_capture_tps_startup_fault(irq);
         self.maybe_handle_fault(irq);
         self.maybe_poll_charger(irq);
         self.maybe_auto_request_bms_activation();
@@ -6091,7 +6097,10 @@ where
 
         match tps55288::configure_one(&mut self.i2c, ch, enabled, self.cfg.vout_mv, ilimit_ma) {
             Ok(()) => {
-                tps55288::log_configured(&mut self.i2c, ch, enabled);
+                if enabled {
+                    self.arm_tps_startup_fault_capture(ch);
+                }
+                tps55288::log_configured(&mut self.i2c, ch, enabled, enabled);
                 self.mark_tps_ok(ch);
                 match ch {
                     OutputChannel::OutA => {
@@ -6151,6 +6160,77 @@ where
                 self.tps_b_next_retry_at = Some(next);
             }
         }
+    }
+
+    fn arm_tps_startup_fault_capture(&mut self, ch: OutputChannel) {
+        let now = Instant::now();
+        self.tps_startup_fault_capture_until = Some(now + TPS_STARTUP_FAULT_CAPTURE_WINDOW);
+        self.tps_startup_fault_capture_outputs = enabled_outputs_from_flags(
+            self.tps_startup_fault_capture_outputs
+                .is_enabled(OutputChannel::OutA)
+                || ch == OutputChannel::OutA,
+            self.tps_startup_fault_capture_outputs
+                .is_enabled(OutputChannel::OutB)
+                || ch == OutputChannel::OutB,
+        );
+        defmt::info!(
+            "power: startup_fault_capture armed outputs={} window_ms={=u64}",
+            self.tps_startup_fault_capture_outputs.describe(),
+            TPS_STARTUP_FAULT_CAPTURE_WINDOW.as_millis() as u64
+        );
+    }
+
+    fn clear_tps_startup_fault_capture(&mut self) {
+        self.tps_startup_fault_capture_until = None;
+        self.tps_startup_fault_capture_outputs = EnabledOutputs::None;
+    }
+
+    fn maybe_capture_tps_startup_fault(&mut self, irq: &IrqSnapshot) {
+        let now = Instant::now();
+        let Some(until) = self.tps_startup_fault_capture_until else {
+            return;
+        };
+
+        if self.tps_startup_fault_capture_outputs == EnabledOutputs::None
+            || self.output_state.active_outputs == EnabledOutputs::None
+        {
+            self.clear_tps_startup_fault_capture();
+            return;
+        }
+
+        if now >= until {
+            defmt::info!(
+                "power: startup_fault_capture expired outputs={}",
+                self.tps_startup_fault_capture_outputs.describe()
+            );
+            self.clear_tps_startup_fault_capture();
+            return;
+        }
+
+        let line_low = self.i2c1_int.is_low();
+        if !line_low && irq.i2c1_int == 0 {
+            return;
+        }
+
+        defmt::warn!(
+            "power: startup_fault_capture triggered outputs={} line_low={=bool} irq_count={=u32}",
+            self.tps_startup_fault_capture_outputs.describe(),
+            line_low,
+            irq.i2c1_int
+        );
+        if self
+            .tps_startup_fault_capture_outputs
+            .is_enabled(OutputChannel::OutA)
+        {
+            tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutA, self.ina_ready);
+        }
+        if self
+            .tps_startup_fault_capture_outputs
+            .is_enabled(OutputChannel::OutB)
+        {
+            tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutB, self.ina_ready);
+        }
+        self.clear_tps_startup_fault_capture();
     }
 
     fn maybe_handle_fault(&mut self, irq: &IrqSnapshot) {

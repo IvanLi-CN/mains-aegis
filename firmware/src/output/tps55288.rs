@@ -154,7 +154,7 @@ impl ConfigureStage {
     }
 }
 
-pub fn log_configured<I2C>(i2c: &mut I2C, ch: OutputChannel, enabled: bool)
+pub fn log_configured<I2C>(i2c: &mut I2C, ch: OutputChannel, enabled: bool, defer_status_read: bool)
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
@@ -172,9 +172,13 @@ where
         Ok(v) => TelemetryU8::Value(v),
         Err(e) => TelemetryU8::Err(tps_error_kind(e)),
     };
-    let status = match tps.read_reg(tps_addr::STATUS) {
-        Ok(v) => TelemetryU8::Value(v),
-        Err(e) => TelemetryU8::Err(tps_error_kind(e)),
+    let status = if defer_status_read {
+        None
+    } else {
+        Some(match tps.read_reg(tps_addr::STATUS) {
+            Ok(v) => TelemetryU8::Value(v),
+            Err(e) => TelemetryU8::Err(tps_error_kind(e)),
+        })
     };
 
     let oe = match mode {
@@ -202,19 +206,27 @@ where
         TelemetryU8::Err(e) => TelemetryBool::Err(e),
     };
 
-    let (scp, ocp, ovp) = match status {
-        TelemetryU8::Value(v) => {
+    let (status, scp, ocp, ovp) = match status {
+        Some(TelemetryU8::Value(v)) => {
             let bits = StatusBits::from_bits_truncate(v);
             (
+                TelemetryU8::Value(v),
                 TelemetryBool::Value(bits.contains(StatusBits::SCP)),
                 TelemetryBool::Value(bits.contains(StatusBits::OCP)),
                 TelemetryBool::Value(bits.contains(StatusBits::OVP)),
             )
         }
-        TelemetryU8::Err(e) => (
+        Some(TelemetryU8::Err(e)) => (
+            TelemetryU8::Err(e),
             TelemetryBool::Err(e),
             TelemetryBool::Err(e),
             TelemetryBool::Err(e),
+        ),
+        None => (
+            TelemetryU8::Err("startup_capture"),
+            TelemetryBool::Err("startup_capture"),
+            TelemetryBool::Err("startup_capture"),
+            TelemetryBool::Err("startup_capture"),
         ),
     };
 
