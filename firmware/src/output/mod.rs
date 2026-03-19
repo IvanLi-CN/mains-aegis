@@ -61,6 +61,7 @@ const BMS_ACTIVATION_EXIT_EXERCISE_PERIOD: Duration = Duration::from_secs(2);
 const BMS_ACTIVATION_CHARGER_POLL_PERIOD: Duration = Duration::from_secs(2);
 const BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY: Duration = Duration::from_secs(34);
 const BMS_ACTIVATION_AUTO_DELAY: Duration = Duration::from_secs(30);
+const BMS_OUTPUT_STARTUP_AUTO_ACTIVATION_DELAY: Duration = Duration::from_secs(2);
 const BMS_BOOT_DIAG_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
 const BMS_BOOT_DIAG_SHIP_RESET_SETTLE: Duration = Duration::from_millis(800);
 // Temporary boot-diag validation: keep the proven 16.8V/200mA/500mA wake bias active through
@@ -81,6 +82,8 @@ const BMS_SUSPICIOUS_VOLTAGE_MV: u16 = 5_911;
 const BMS_SUSPICIOUS_CURRENT_MA: i16 = 5_911;
 const BMS_SUSPICIOUS_STATUS: u16 = 0x1717;
 const BMS_NO_BATTERY_VPACK_MAX_MV: u16 = 2_500;
+const BMS_SELF_TEST_DISCHARGE_READY_RETRIES: usize = 6;
+const BMS_SELF_TEST_DISCHARGE_READY_RETRY_DELAY: Duration = Duration::from_millis(500);
 const BQ40_CURRENT_IDLE_THRESHOLD_MA: i16 = 20;
 const CHARGER_FAULT0_VBUS_OVP: u8 = 1 << 6;
 const CHARGER_FAULT0_VBAT_OVP: u8 = 1 << 5;
@@ -531,6 +534,13 @@ fn bq40_primary_reason(
         return "op_status_unavailable";
     }
     "nominal"
+}
+
+fn bq40_protection_active(batt_status: u16, op_status: Option<u32>) -> bool {
+    // BatteryStatus alarm bits like TCA/OTA/OCA/TDA are advisory thresholds and
+    // should not drive the hard "battery protection" UI/audio state on their own.
+    bq40_op_bit(op_status, bq40z50::operation_status::PF) == Some(true)
+        || bq40z50::battery_status::error_code(batt_status) != 0
 }
 
 fn bq40_cell_min_max_delta(cell_mv: &[u16; 4]) -> (u16, u16, u16) {
@@ -1193,25 +1203,66 @@ where
             {
                 let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(temp_k_x10);
                 let err_code = bq40z50::battery_status::error_code(status_raw);
+                let mut op_status = op_status;
+                let mut charge_ready;
+                let mut charge_reason;
+                let mut discharge_ready;
+                let mut discharge_reason;
+                let mut primary_reason;
+                (charge_ready, charge_reason) = bq40_decode_charge_path(op_status);
+                (discharge_ready, discharge_reason) = bq40_decode_discharge_path(op_status);
+                primary_reason =
+                    bq40_primary_reason(status_raw, op_status, charge_reason, discharge_reason);
+                if err_code == 0
+                    && !bq40_pack_indicates_no_battery(voltage_mv)
+                    && discharge_ready != Some(true)
+                {
+                    for attempt in 1..=BMS_SELF_TEST_DISCHARGE_READY_RETRIES {
+                        let start = Instant::now();
+                        while start.elapsed() < BMS_SELF_TEST_DISCHARGE_READY_RETRY_DELAY {
+                            core::hint::spin_loop();
+                        }
+                        let retry_op_status = bq40z50::read_operation_status(&mut *i2c, addr)
+                            .ok()
+                            .flatten();
+                        let (retry_charge_ready, retry_charge_reason) =
+                            bq40_decode_charge_path(retry_op_status);
+                        let (retry_discharge_ready, retry_discharge_reason) =
+                            bq40_decode_discharge_path(retry_op_status);
+                        let retry_primary_reason = bq40_primary_reason(
+                            status_raw,
+                            retry_op_status,
+                            retry_charge_reason,
+                            retry_discharge_reason,
+                        );
+                        defmt::info!(
+                            "self_test: bq40z50 settle attempt={=u8}/{=u8} addr=0x{=u8:x} discharge_ready={=?} charge_ready={=?} primary_reason={} op_status={=?}",
+                            attempt as u8,
+                            BMS_SELF_TEST_DISCHARGE_READY_RETRIES as u8,
+                            addr,
+                            retry_discharge_ready,
+                            retry_charge_ready,
+                            retry_primary_reason,
+                            retry_op_status
+                        );
+                        op_status = retry_op_status;
+                        charge_ready = retry_charge_ready;
+                        charge_reason = retry_charge_reason;
+                        discharge_ready = retry_discharge_ready;
+                        discharge_reason = retry_discharge_reason;
+                        primary_reason = retry_primary_reason;
+                        if discharge_ready == Some(true) {
+                            break;
+                        }
+                    }
+                }
                 let xchg = bq40_op_bit(op_status, bq40z50::operation_status::XCHG);
                 let xdsg = bq40_op_bit(op_status, bq40z50::operation_status::XDSG);
                 let chg_fet = bq40_op_bit(op_status, bq40z50::operation_status::CHG);
                 let dsg_fet = bq40_op_bit(op_status, bq40z50::operation_status::DSG);
-                let (charge_ready, charge_reason) = bq40_decode_charge_path(op_status);
-                let (discharge_ready, discharge_reason) = bq40_decode_discharge_path(op_status);
                 let flow = bq40_decode_current_flow(current_ma);
                 let flow_abs_ma = current_ma.wrapping_abs() as u16;
-                let primary_reason =
-                    bq40_primary_reason(status_raw, op_status, charge_reason, discharge_reason);
-                let protection_active = bq40_op_bit(op_status, bq40z50::operation_status::PF)
-                    == Some(true)
-                    || err_code != 0
-                    || (status_raw
-                        & (bq40z50::battery_status::OCA
-                            | bq40z50::battery_status::TCA
-                            | bq40z50::battery_status::OTA
-                            | bq40z50::battery_status::TDA))
-                        != 0;
+                let protection_active = bq40_protection_active(status_raw, op_status);
                 defmt::info!(
                     "self_test: bq40z50 ok addr=0x{=u8:x} temp_c_x10={=i32} voltage_mv={=u16} current_ma={=i16} flow={} flow_abs_ma={=u16} soc_pct={=u16} status=0x{=u16:x} op_status={=?} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} chg_ready={=?} dsg_ready={=?} chg_reason={} dsg_reason={} primary_reason={} err_code={} err_str={}",
                     addr,
@@ -1500,6 +1551,20 @@ where
         && tmp_out_b_ok;
     let mut recoverable_outputs = enabled_outputs_from_flags(out_a_allowed, out_b_allowed);
     let mut output_gate_reason = OutputGateReason::None;
+    let bms_block_recoverable_outputs = enabled_outputs_from_flags(
+        desired_outputs.is_enabled(OutputChannel::OutA)
+            && sync_ok
+            && ina_ready
+            && !tps_a_fault
+            && tmp_a_present
+            && tmp_out_a_ok,
+        desired_outputs.is_enabled(OutputChannel::OutB)
+            && sync_ok
+            && ina_ready
+            && !tps_b_fault
+            && tmp_b_present
+            && tmp_out_b_ok,
+    );
 
     if desired_outputs.is_enabled(OutputChannel::OutA) && !out_a_allowed {
         defmt::warn!(
@@ -1528,6 +1593,12 @@ where
 
     if bms_addr.is_none() || bms_discharge_ready != Some(true) {
         // Policy: when BMS comm is missing or discharge path is not ready, keep TPS outputs off.
+        recoverable_outputs = enabled_outputs_from_flags(
+            recoverable_outputs.is_enabled(OutputChannel::OutA)
+                || bms_block_recoverable_outputs.is_enabled(OutputChannel::OutA),
+            recoverable_outputs.is_enabled(OutputChannel::OutB)
+                || bms_block_recoverable_outputs.is_enabled(OutputChannel::OutB),
+        );
         if recoverable_outputs != EnabledOutputs::None {
             output_gate_reason = OutputGateReason::BmsNotReady;
         }
@@ -1598,7 +1669,16 @@ where
         };
     }
 
-    ui.tps_a = if tps_a_present {
+    let tps_a_bms_hold = output_gate_reason == OutputGateReason::BmsNotReady
+        && desired_outputs.is_enabled(OutputChannel::OutA)
+        && !tps_a_fault;
+    let tps_b_bms_hold = output_gate_reason == OutputGateReason::BmsNotReady
+        && desired_outputs.is_enabled(OutputChannel::OutB)
+        && !tps_b_fault;
+
+    ui.tps_a = if tps_a_bms_hold {
+        SelfCheckCommState::Ok
+    } else if tps_a_present {
         if tps_a_fault {
             SelfCheckCommState::Warn
         } else if status_a.is_ok() {
@@ -1609,7 +1689,9 @@ where
     } else {
         SelfCheckCommState::Err
     };
-    ui.tps_b = if tps_b_present {
+    ui.tps_b = if tps_b_bms_hold {
+        SelfCheckCommState::Ok
+    } else if tps_b_present {
         if tps_b_fault {
             SelfCheckCommState::Warn
         } else if status_b.is_ok() {
@@ -1741,6 +1823,7 @@ pub struct PowerManager<'d, I2C> {
     bms_activation_auto_defer_logged: bool,
     bms_activation_backup: Option<ChargerActivationBackup>,
     chg_watchdog_restore: Option<u8>,
+    boot_output_restore_pending: bool,
     output_state: OutputRuntimeState,
     output_protection: output_protection::ProtectionRuntime,
     fan: fan::Controller,
@@ -2143,6 +2226,9 @@ where
             bms_activation_auto_defer_logged: false,
             bms_activation_backup: None,
             chg_watchdog_restore: None,
+            boot_output_restore_pending: cfg.output_gate_reason == OutputGateReason::BmsNotReady
+                && cfg.active_outputs == EnabledOutputs::None
+                && cfg.recoverable_outputs != EnabledOutputs::None,
             output_state,
             output_protection: output_protection::ProtectionRuntime::new(cfg.ilimit_ma),
             fan: fan::Controller::new(cfg.fan_config),
@@ -2384,10 +2470,12 @@ where
         }
         self.update_output_protection();
         self.reconcile_output_state();
+        self.maybe_auto_restore_boot_outputs();
         let telemetry_printed = self.maybe_print_telemetry();
         if telemetry_printed {
             self.update_output_protection();
             self.reconcile_output_state();
+            self.maybe_auto_restore_boot_outputs();
         }
         self.update_fan_state(irq);
         self.refresh_audio_signals();
@@ -2430,6 +2518,7 @@ where
         }
 
         let restore = self.output_state.recoverable_outputs;
+        self.boot_output_restore_pending = false;
         self.output_state.active_outputs = restore;
         let now = Instant::now();
         if restore.is_enabled(OutputChannel::OutA) {
@@ -4567,15 +4656,7 @@ where
         let low_pack_runtime = bq40_pack_indicates_no_battery(snapshot.vpack_mv);
         let (charge_ready, charge_reason) = bq40_decode_charge_path(snapshot.op_status);
         let (discharge_ready, discharge_reason) = bq40_decode_discharge_path(snapshot.op_status);
-        let protection_active = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::PF)
-            == Some(true)
-            || bq40z50::battery_status::error_code(snapshot.batt_status) != 0
-            || (snapshot.batt_status
-                & (bq40z50::battery_status::OCA
-                    | bq40z50::battery_status::TCA
-                    | bq40z50::battery_status::OTA
-                    | bq40z50::battery_status::TDA))
-                != 0;
+        let protection_active = bq40_protection_active(snapshot.batt_status, snapshot.op_status);
         let primary_reason = bq40_primary_reason(
             snapshot.batt_status,
             snapshot.op_status,
@@ -4662,7 +4743,9 @@ where
     }
 
     fn maybe_auto_request_bms_activation(&mut self) {
-        if !self.cfg.bms_boot_diag_auto_validate {
+        let now = Instant::now();
+        let startup_output_activation_needed = self.startup_output_activation_needed(now);
+        if !self.cfg.bms_boot_diag_auto_validate && !startup_output_activation_needed {
             return;
         }
 
@@ -4672,8 +4755,7 @@ where
             return;
         }
 
-        let now = Instant::now();
-        if now < self.bms_activation_auto_due_at {
+        if now < self.bms_activation_auto_due_at && !startup_output_activation_needed {
             return;
         }
 
@@ -4685,9 +4767,13 @@ where
             return;
         }
 
-        let auto_activation_needed = self.ui_snapshot.bq40z50_last_result.is_none()
-            && self.ui_snapshot.bq40z50 == SelfCheckCommState::Err;
+        let auto_activation_needed = startup_output_activation_needed
+            || (self.ui_snapshot.bq40z50_last_result.is_none()
+                && self.ui_snapshot.bq40z50 == SelfCheckCommState::Err);
         if !auto_activation_needed {
+            if !self.cfg.bms_boot_diag_auto_validate {
+                return;
+            }
             self.bms_activation_auto_attempted = true;
             self.bms_activation_auto_force_charge_until = None;
             self.bms_activation_auto_force_charge_programmed = false;
@@ -4708,6 +4794,24 @@ where
                 self.has_trusted_bq40_runtime_evidence(),
                 bms_result_option_name(self.ui_snapshot.bq40z50_last_result)
             );
+            return;
+        }
+
+        if startup_output_activation_needed {
+            self.bms_activation_auto_attempted = true;
+            self.bms_activation_auto_force_charge_until = None;
+            self.bms_activation_auto_force_charge_programmed = false;
+            bms_diag_breadcrumb_note(1, 1);
+            defmt::info!(
+                "bms: activation auto_request reason=output_startup_unblock bq40_state={} dsg_ready={=?} requested_outputs={} recoverable_outputs={} charger_state={} input_present={=?}",
+                self_check_comm_state_name(self.ui_snapshot.bq40z50),
+                self.ui_snapshot.bq40z50_discharge_ready,
+                self.output_state.requested_outputs.describe(),
+                self.output_state.recoverable_outputs.describe(),
+                self_check_comm_state_name(self.ui_snapshot.bq25792),
+                self.ui_snapshot.fusb302_vbus_present
+            );
+            self.request_bms_activation_with_diag_override(false, true);
             return;
         }
 
@@ -5124,6 +5228,43 @@ where
         self.ui_snapshot.bq40z50_soc_pct.is_some()
             || self.ui_snapshot.bq40z50_rca_alarm.is_some()
             || self.ui_snapshot.bq40z50_discharge_ready.is_some()
+    }
+
+    fn startup_output_activation_needed(&self, now: Instant) -> bool {
+        self.output_state.gate_reason == OutputGateReason::BmsNotReady
+            && self.output_state.active_outputs == EnabledOutputs::None
+            && self.output_state.recoverable_outputs != EnabledOutputs::None
+            && self.ui_snapshot.fusb302_vbus_present == Some(true)
+            && now >= self.bms_boot_diag_started_at + BMS_OUTPUT_STARTUP_AUTO_ACTIVATION_DELAY
+            && is_bq40_activation_needed(&self.ui_snapshot)
+    }
+
+    fn maybe_auto_restore_boot_outputs(&mut self) {
+        if !self.boot_output_restore_pending {
+            return;
+        }
+
+        if matches!(
+            self.output_state.gate_reason,
+            OutputGateReason::ThermKill
+                | OutputGateReason::TpsFault
+                | OutputGateReason::ActiveProtection
+        ) {
+            defmt::warn!(
+                "power: boot output auto_restore canceled reason={}",
+                self.output_state.gate_reason.as_str()
+            );
+            self.boot_output_restore_pending = false;
+            return;
+        }
+
+        if self.can_request_output_restore() {
+            defmt::info!(
+                "power: boot output auto_restore outputs={}",
+                self.output_state.recoverable_outputs.describe()
+            );
+            self.request_output_restore();
+        }
     }
 
     fn apply_bms_activation_min_charge_profile(&mut self) -> Result<(), &'static str> {
@@ -6720,15 +6861,7 @@ where
                     self.ui_snapshot.bq40z50_no_battery = Some(low_pack);
                     self.ui_snapshot.bq40z50_discharge_ready = discharge_ready;
                     self.apply_bms_detail_snapshot(&s);
-                    let protection_active = bq40_op_bit(s.op_status, bq40z50::operation_status::PF)
-                        == Some(true)
-                        || bq40z50::battery_status::error_code(s.batt_status) != 0
-                        || (s.batt_status
-                            & (bq40z50::battery_status::OCA
-                                | bq40z50::battery_status::TCA
-                                | bq40z50::battery_status::OTA
-                                | bq40z50::battery_status::TDA))
-                            != 0;
+                    let protection_active = bq40_protection_active(s.batt_status, s.op_status);
                     self.bms_audio = BmsAudioState {
                         rca_alarm: Some(rca_alarm),
                         protection_active,
@@ -7363,6 +7496,27 @@ mod tests {
             ..base
         };
         assert_eq!(detail_bms_balance_mask(&active), None);
+    }
+
+    #[test]
+    fn bq40_protection_active_ignores_alarm_only_bits() {
+        assert!(!bq40_protection_active(
+            bq40z50::battery_status::TCA,
+            Some(0),
+        ));
+        assert!(!bq40_protection_active(
+            bq40z50::battery_status::OCA | bq40z50::battery_status::OTA,
+            Some(0),
+        ));
+    }
+
+    #[test]
+    fn bq40_protection_active_requires_pf_or_error_code() {
+        assert!(bq40_protection_active(0x0001, Some(0)));
+        assert!(bq40_protection_active(
+            0,
+            Some(bq40z50::operation_status::PF),
+        ));
     }
 
     #[test]
