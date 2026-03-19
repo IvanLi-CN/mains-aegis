@@ -155,6 +155,7 @@ mcu-agentd monitor esp --reset
 
 - `power: fault ch=out_a addr=0x74 status=0x..`
 - `power: fault ch=out_b addr=0x75 status=0x..`
+- `TPS55288` 配置阶段不会在 `enable_output()` 之后立刻读取 `STATUS`；固件会先把 `SC/OCP/OVP` 指示重新打开，再由 `I2C1_INT` 常驻捕获并在软件侧锁存故障位
 
 若 I2C 通信失败（缺件/焊接/总线故障等）：
 

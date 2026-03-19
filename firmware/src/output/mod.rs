@@ -102,8 +102,6 @@ const FAN_RPM_SAMPLE_WINDOW_MS: u64 = 1_000;
 const FAN_RPM_MIN_SAMPLE_WINDOW_MS: u64 = 400;
 const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
 const VIN_MAINS_LATCH_FAILURE_LIMIT: u8 = 2;
-const TPS_STARTUP_FAULT_CAPTURE_WINDOW: Duration = Duration::from_secs(3);
-
 const BMS_DIAG_BREADCRUMB_LEN: usize = 8;
 const BMS_DIAG_BREADCRUMB_VERSION: u8 = 1;
 
@@ -812,6 +810,40 @@ impl OutputRuntimeState {
             recoverable_outputs,
             gate_reason,
         }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct TpsFaultLatch {
+    last_status: Option<u8>,
+    scp_latched: bool,
+    ocp_latched: bool,
+    ovp_latched: bool,
+}
+
+impl TpsFaultLatch {
+    fn record_status(&mut self, status: u8) {
+        let bits = ::tps55288::registers::StatusBits::from_bits_truncate(status);
+        self.last_status = Some(status);
+        self.scp_latched |= bits.contains(::tps55288::registers::StatusBits::SCP);
+        self.ocp_latched |= bits.contains(::tps55288::registers::StatusBits::OCP);
+        self.ovp_latched |= bits.contains(::tps55288::registers::StatusBits::OVP);
+    }
+
+    const fn fault_active(self) -> bool {
+        self.scp_latched || self.ocp_latched || self.ovp_latched
+    }
+
+    const fn over_current(self) -> bool {
+        self.scp_latched || self.ocp_latched
+    }
+
+    const fn over_voltage(self) -> bool {
+        self.ovp_latched
+    }
+
+    fn clear(&mut self) {
+        *self = Self::default();
     }
 }
 
@@ -1808,8 +1840,8 @@ pub struct PowerManager<'d, I2C> {
     last_fault_log_at: Option<Instant>,
     last_input_power_anomaly_log_at: Option<Instant>,
     last_therm_kill_hint_at: Option<Instant>,
-    tps_startup_fault_capture_until: Option<Instant>,
-    tps_startup_fault_capture_outputs: EnabledOutputs,
+    tps_a_fault_latch: TpsFaultLatch,
+    tps_b_fault_latch: TpsFaultLatch,
     fan_started_at: Instant,
     fan_rpm_tracker: FanRpmTracker,
 
@@ -2217,8 +2249,8 @@ where
             last_fault_log_at: None,
             last_input_power_anomaly_log_at: None,
             last_therm_kill_hint_at: None,
-            tps_startup_fault_capture_until: None,
-            tps_startup_fault_capture_outputs: EnabledOutputs::None,
+            tps_a_fault_latch: TpsFaultLatch::default(),
+            tps_b_fault_latch: TpsFaultLatch::default(),
             fan_started_at: now,
             fan_rpm_tracker: FanRpmTracker::new(),
 
@@ -2490,7 +2522,6 @@ where
 
         self.bms_activation_isolation_until = None;
         self.maybe_retry();
-        self.maybe_capture_tps_startup_fault(irq);
         self.maybe_handle_fault(irq);
         self.maybe_poll_charger(irq);
         self.maybe_auto_request_bms_activation();
@@ -2617,9 +2648,11 @@ where
         self.output_state.active_outputs = restore;
         let now = Instant::now();
         if restore.is_enabled(OutputChannel::OutA) {
+            self.clear_tps_fault_latch(OutputChannel::OutA);
             self.tps_a_next_retry_at = Some(now);
         }
         if restore.is_enabled(OutputChannel::OutB) {
+            self.clear_tps_fault_latch(OutputChannel::OutB);
             self.tps_b_next_retry_at = Some(now);
         }
         if !self.ina_ready {
@@ -5610,18 +5643,8 @@ where
             if !self.output_state.requested_outputs.is_enabled(ch) {
                 continue;
             }
-            let status = ::tps55288::Tps55288::with_address(&mut self.i2c, ch.addr())
-                .read_reg(::tps55288::registers::addr::STATUS)
-                .ok()
-                .map(::tps55288::registers::StatusBits::from_bits_truncate);
-            if let Some(bits) = status {
-                if bits.intersects(
-                    ::tps55288::registers::StatusBits::SCP
-                        | ::tps55288::registers::StatusBits::OCP
-                        | ::tps55288::registers::StatusBits::OVP,
-                ) {
-                    return OutputGateReason::TpsFault;
-                }
+            if self.tps_fault_latch(ch).fault_active() {
+                return OutputGateReason::TpsFault;
             }
         }
 
@@ -5986,16 +6009,9 @@ where
             if !self.cfg.detected_tps_outputs.is_enabled(ch) {
                 continue;
             }
-            let status = ::tps55288::Tps55288::with_address(&mut self.i2c, ch.addr())
-                .read_reg(::tps55288::registers::addr::STATUS)
-                .ok()
-                .map(::tps55288::registers::StatusBits::from_bits_truncate);
-            let Some(bits) = status else {
-                continue;
-            };
-            let over_voltage = bits.contains(::tps55288::registers::StatusBits::OVP);
-            let over_current = bits.contains(::tps55288::registers::StatusBits::OCP)
-                || bits.contains(::tps55288::registers::StatusBits::SCP);
+            let latch = self.tps_fault_latch(ch);
+            let over_voltage = latch.over_voltage();
+            let over_current = latch.over_current();
             match ch {
                 OutputChannel::OutA => {
                     self.tps_audio.out_a_over_voltage = over_voltage;
@@ -6098,7 +6114,7 @@ where
         match tps55288::configure_one(&mut self.i2c, ch, enabled, self.cfg.vout_mv, ilimit_ma) {
             Ok(()) => {
                 if enabled {
-                    self.arm_tps_startup_fault_capture(ch);
+                    self.clear_tps_fault_latch(ch);
                 }
                 tps55288::log_configured(&mut self.i2c, ch, enabled, enabled);
                 self.mark_tps_ok(ch);
@@ -6162,75 +6178,26 @@ where
         }
     }
 
-    fn arm_tps_startup_fault_capture(&mut self, ch: OutputChannel) {
-        let now = Instant::now();
-        self.tps_startup_fault_capture_until = Some(now + TPS_STARTUP_FAULT_CAPTURE_WINDOW);
-        self.tps_startup_fault_capture_outputs = enabled_outputs_from_flags(
-            self.tps_startup_fault_capture_outputs
-                .is_enabled(OutputChannel::OutA)
-                || ch == OutputChannel::OutA,
-            self.tps_startup_fault_capture_outputs
-                .is_enabled(OutputChannel::OutB)
-                || ch == OutputChannel::OutB,
-        );
-        defmt::info!(
-            "power: startup_fault_capture armed outputs={} window_ms={=u64}",
-            self.tps_startup_fault_capture_outputs.describe(),
-            TPS_STARTUP_FAULT_CAPTURE_WINDOW.as_millis() as u64
-        );
+    fn tps_fault_latch(&self, ch: OutputChannel) -> TpsFaultLatch {
+        match ch {
+            OutputChannel::OutA => self.tps_a_fault_latch,
+            OutputChannel::OutB => self.tps_b_fault_latch,
+        }
     }
 
-    fn clear_tps_startup_fault_capture(&mut self) {
-        self.tps_startup_fault_capture_until = None;
-        self.tps_startup_fault_capture_outputs = EnabledOutputs::None;
+    fn tps_fault_latch_mut(&mut self, ch: OutputChannel) -> &mut TpsFaultLatch {
+        match ch {
+            OutputChannel::OutA => &mut self.tps_a_fault_latch,
+            OutputChannel::OutB => &mut self.tps_b_fault_latch,
+        }
     }
 
-    fn maybe_capture_tps_startup_fault(&mut self, irq: &IrqSnapshot) {
-        let now = Instant::now();
-        let Some(until) = self.tps_startup_fault_capture_until else {
-            return;
-        };
+    fn clear_tps_fault_latch(&mut self, ch: OutputChannel) {
+        self.tps_fault_latch_mut(ch).clear();
+    }
 
-        if self.tps_startup_fault_capture_outputs == EnabledOutputs::None
-            || self.output_state.active_outputs == EnabledOutputs::None
-        {
-            self.clear_tps_startup_fault_capture();
-            return;
-        }
-
-        if now >= until {
-            defmt::info!(
-                "power: startup_fault_capture expired outputs={}",
-                self.tps_startup_fault_capture_outputs.describe()
-            );
-            self.clear_tps_startup_fault_capture();
-            return;
-        }
-
-        let line_low = self.i2c1_int.is_low();
-        if !line_low && irq.i2c1_int == 0 {
-            return;
-        }
-
-        defmt::warn!(
-            "power: startup_fault_capture triggered outputs={} line_low={=bool} irq_count={=u32}",
-            self.tps_startup_fault_capture_outputs.describe(),
-            line_low,
-            irq.i2c1_int
-        );
-        if self
-            .tps_startup_fault_capture_outputs
-            .is_enabled(OutputChannel::OutA)
-        {
-            tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutA, self.ina_ready);
-        }
-        if self
-            .tps_startup_fault_capture_outputs
-            .is_enabled(OutputChannel::OutB)
-        {
-            tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutB, self.ina_ready);
-        }
-        self.clear_tps_startup_fault_capture();
+    fn record_tps_fault_status(&mut self, ch: OutputChannel, status: u8) {
+        self.tps_fault_latch_mut(ch).record_status(status);
     }
 
     fn maybe_handle_fault(&mut self, irq: &IrqSnapshot) {
@@ -6240,24 +6207,37 @@ where
 
         let now = Instant::now();
         if self.i2c1_int.is_low() || irq.i2c1_int != 0 {
-            if tps55288::should_log_fault(
+            let should_log = tps55288::should_log_fault(
                 now,
                 &mut self.last_fault_log_at,
                 self.cfg.fault_log_min_interval,
-            ) {
-                if self
-                    .output_state
-                    .requested_outputs
-                    .is_enabled(OutputChannel::OutA)
-                {
-                    tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutA, self.ina_ready);
+            );
+            if self
+                .output_state
+                .requested_outputs
+                .is_enabled(OutputChannel::OutA)
+            {
+                let status = if should_log {
+                    tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutA, self.ina_ready)
+                } else {
+                    tps55288::read_status_snapshot(&mut self.i2c, OutputChannel::OutA)
+                };
+                if let Some(status) = status {
+                    self.record_tps_fault_status(OutputChannel::OutA, status);
                 }
-                if self
-                    .output_state
-                    .requested_outputs
-                    .is_enabled(OutputChannel::OutB)
-                {
-                    tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutB, self.ina_ready);
+            }
+            if self
+                .output_state
+                .requested_outputs
+                .is_enabled(OutputChannel::OutB)
+            {
+                let status = if should_log {
+                    tps55288::log_fault_status(&mut self.i2c, OutputChannel::OutB, self.ina_ready)
+                } else {
+                    tps55288::read_status_snapshot(&mut self.i2c, OutputChannel::OutB)
+                };
+                if let Some(status) = status {
+                    self.record_tps_fault_status(OutputChannel::OutB, status);
                 }
             }
             self.refresh_tps_audio_state();
@@ -6377,12 +6357,19 @@ where
             .requested_outputs
             .is_enabled(OutputChannel::OutA)
         {
+            let fault_latch = self.tps_fault_latch(OutputChannel::OutA);
             let capture = tps55288::print_telemetry_line(
                 &mut self.i2c,
                 OutputChannel::OutA,
                 self.ina_ready,
                 therm_kill_n,
+                fault_latch.last_status,
+                fault_latch.fault_active(),
+                self.i2c1_int.is_high(),
             );
+            if let Some(status) = capture.status_sample {
+                self.record_tps_fault_status(OutputChannel::OutA, status);
+            }
             self.ui_snapshot.tps_a = if !capture.comm_ok {
                 SelfCheckCommState::Err
             } else if capture.fault_active {
@@ -6408,12 +6395,19 @@ where
             .requested_outputs
             .is_enabled(OutputChannel::OutB)
         {
+            let fault_latch = self.tps_fault_latch(OutputChannel::OutB);
             let capture = tps55288::print_telemetry_line(
                 &mut self.i2c,
                 OutputChannel::OutB,
                 self.ina_ready,
                 therm_kill_n,
+                fault_latch.last_status,
+                fault_latch.fault_active(),
+                self.i2c1_int.is_high(),
             );
+            if let Some(status) = capture.status_sample {
+                self.record_tps_fault_status(OutputChannel::OutB, status);
+            }
             self.ui_snapshot.tps_b = if !capture.comm_ok {
                 SelfCheckCommState::Err
             } else if capture.fault_active {
