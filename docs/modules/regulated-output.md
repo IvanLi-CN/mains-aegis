@@ -70,7 +70,7 @@
 稳压输出模块不是独立上电就能判定成功的模块。只要本轮模式请求输出，它在启动期就必须依赖 `BQ40Z50` 的放电授权状态：
 
 1. 先做 `TPS/TMP/INA` 的只读探测，得到模块自身的原始健康状态。
-2. 再结合 `BQ40Z50` 的 `discharge_ready`、`no_battery`、`RCA alarm` 与输入电源状态，决定是否批准“放电授权恢复尝试”。
+2. 再结合 `BQ40Z50` 的 `discharge_ready`、`no_battery`、`RCA alarm` 与输入电源状态，决定是否允许发起“放电授权恢复尝试”。
 3. 只有当放电路径已经 ready，或者授权恢复成功后，输出模块才允许进入 `active_outputs`。
 
 这意味着：
@@ -103,7 +103,7 @@
 1. 启动阶段按 boot self-test 结果生成初始状态：
    - 可直接运行的通道进入 `active_outputs`
    - 因 `BMS` 门控而暂不允许启动的通道进入 `recoverable_outputs`
-   - 若模式请求输出且 `BMS` 在线但放电路径未就绪，固件会先记录一条显式的 `discharge_authorization decision=...` 日志，再决定是否发起恢复尝试
+   - 若模式请求输出且 `BMS` 在线但放电路径未就绪，固件会先记录一条显式的 `discharge_authorization decision=eligible/...` 日志，再决定是否发起恢复尝试
 2. 运行态只要命中任一门控源：
    - 保存当前 `active_outputs` 到 `recoverable_outputs`
    - 把 `active_outputs` 置为 `none`
@@ -139,6 +139,8 @@
 - `RCA alarm != true`
 - `THERM_KILL_N` 未断言
 - `BQ25792` 正常且输入电源在线
+
+执行层会把 `Type-C / charger` 的输入存在作为冷启动放电授权的前置条件之一；它不要求 `INA3221 CH3` 的 `VIN` 遥测先稳定下来。恢复链路也只有在 `BQ40Z50` 最终回到 `discharge_ready == true` 时才算成功；若只是普通访问恢复、但放电路径仍未就绪，模块继续保持 `bms_not_ready -> HOLD`。
 
 如果任一条件不满足，模块保持 `bms_not_ready -> HOLD`，不把输出模块直接判成故障。
 

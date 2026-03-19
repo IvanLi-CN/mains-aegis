@@ -247,9 +247,11 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 未命中紧急条件时，自检阶段不主动改 `TPS55288` 输出状态。
 - 固定顺序：`SYNC` → 独立传感器（`INA3221`/`TMP112`）→ 屏幕模块 → `BQ40Z50` → `BQ25792` → `TPS55288`。
 - 初始化应用阶段按探测结果与授权决策门控模块；其中 `BQ40Z50` 缺失或放电未就绪时会先把输出保持在 `HOLD`，只有安全条件满足时才允许发起一次放电授权恢复尝试。
+- 启动期这条放电授权链以 `Type-C / BQ25792` 的输入存在为前置条件之一，不要求 `INA3221 CH3` 的 `VIN` 采样先稳定。
 - `BQ25792` 充电默认也会被禁用；仅 `--features force-min-charge` 构建时保留充电模块，并以最小 `ICHG/IINDPM` 唤醒（不改充电电压）。
 - `BQ40Z50` 默认只使用 `7-bit 0x0B`（等价 `8-bit W=0x16/R=0x17`）；只有 `--features bms-dual-probe-diag` 才会额外探测 `0x16` 以做兼容诊断。
 - 只要 `BQ40Z50` 普通通信正常，就不走“离线激活”语义；启动期这类状态属于“放电授权恢复”而不是“激活缺失设备”。
+- 启动期自检里的 `self_test: discharge_authorization decision=eligible` 只代表“允许发起恢复尝试”，不代表放电已经恢复；只有运行期真正观测到 `discharge_ready=true`，这次授权才算成功。
 - 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。运行态门控解除后，本轮固件只转入“可恢复未恢复”，不会自动重新打开输出。
 
 ## 前面板屏幕显示（Spec 6qrjs / 7n4qd）

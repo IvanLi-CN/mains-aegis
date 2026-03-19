@@ -859,6 +859,13 @@ fn stable_mains_present(
     stable_mains_state(vin_mains_present, vin_vbus_mv, charger_present).present
 }
 
+fn discharge_authorization_input_ready(
+    mains_present: Option<bool>,
+    charger_present: Option<bool>,
+) -> bool {
+    charger_present == Some(true) || mains_present == Some(true)
+}
+
 fn record_vin_sample_failure(vin_mains_present: &mut Option<bool>, missing_streak: &mut u8) {
     *missing_streak = missing_streak.saturating_add(1);
     if *missing_streak >= VIN_MAINS_LATCH_FAILURE_LIMIT {
@@ -1648,7 +1655,7 @@ where
     } else if charger_input_present != Some(true) {
         "input_not_present"
     } else {
-        "approved"
+        "eligible"
     };
     defmt::info!(
         "self_test: discharge_authorization decision={} requested_outputs={} bms_present={=bool} dsg_ready={=?} no_battery={=?} rca_alarm={=?} charger_probe_ok={=bool} input_present={=?} therm_kill_asserted={=bool}",
@@ -1846,6 +1853,7 @@ pub struct PowerManager<'d, I2C> {
     bms_activation_auto_poll_release_at: Instant,
     bms_activation_auto_attempted: bool,
     bms_activation_current_is_auto: bool,
+    bms_activation_request_kind: BmsRecoveryRequestKind,
     bms_activation_auto_force_charge_until: Option<Instant>,
     bms_activation_auto_force_charge_programmed: bool,
     bms_activation_auto_defer_logged: bool,
@@ -1881,6 +1889,21 @@ enum BmsActivationPhase {
     WaitMinChargeSettle,
     MinChargeProbe,
     WakeProbe,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BmsRecoveryRequestKind {
+    Activation,
+    DischargeAuthorization,
+}
+
+impl BmsRecoveryRequestKind {
+    const fn request_name(self) -> &'static str {
+        match self {
+            Self::Activation => "activation",
+            Self::DischargeAuthorization => "discharge_authorization",
+        }
+    }
 }
 
 fn bms_activation_phase_name(phase: BmsActivationPhase) -> &'static str {
@@ -2237,6 +2260,7 @@ where
             bms_activation_auto_poll_release_at: now + BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY,
             bms_activation_auto_attempted: false,
             bms_activation_current_is_auto: false,
+            bms_activation_request_kind: BmsRecoveryRequestKind::Activation,
             bms_activation_auto_force_charge_until: if BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE {
                 Some(
                     now + BMS_ACTIVATION_AUTO_DELAY
@@ -2842,7 +2866,10 @@ where
             && self.ui_snapshot.bq40z50_no_battery != Some(true)
             && self.ui_snapshot.bq40z50_rca_alarm != Some(true)
             && self.ui_snapshot.bq40z50_discharge_ready == Some(false)
-            && self.current_mains_present() == Some(true)
+            && discharge_authorization_input_ready(
+                self.current_mains_present(),
+                self.ui_snapshot.fusb302_vbus_present,
+            )
             && self.charger_allowed
             && self.ui_snapshot.bq25792 != SelfCheckCommState::Err
             && !self.therm_kill.is_low()
@@ -2875,11 +2902,15 @@ where
             self.current_mains_present(),
             auto_request
         );
-        self.request_bms_activation_with_diag_override(true, auto_request);
+        self.request_bms_recovery(
+            BmsRecoveryRequestKind::DischargeAuthorization,
+            true,
+            auto_request,
+        );
     }
 
     pub fn request_bms_activation(&mut self) {
-        self.request_bms_activation_with_diag_override(false, false);
+        self.request_bms_recovery(BmsRecoveryRequestKind::Activation, false, false);
     }
 
     fn request_bms_activation_with_diag_override(
@@ -2887,23 +2918,45 @@ where
         allow_diag_warn: bool,
         auto_request: bool,
     ) {
+        self.request_bms_recovery(
+            BmsRecoveryRequestKind::Activation,
+            allow_diag_warn,
+            auto_request,
+        );
+    }
+
+    fn request_bms_recovery(
+        &mut self,
+        request_kind: BmsRecoveryRequestKind,
+        allow_diag_warn: bool,
+        auto_request: bool,
+    ) {
         if self.bms_activation_state == BmsActivationState::Pending {
-            defmt::info!("bms: activation ignored reason=already_pending");
+            defmt::info!(
+                "bms: {} ignored reason=already_pending",
+                request_kind.request_name()
+            );
             return;
         }
-        let activation_needed = if allow_diag_warn {
-            self.ui_snapshot.bq40z50_last_result.is_none()
-                && match self.ui_snapshot.bq40z50 {
-                    SelfCheckCommState::Err => true,
-                    SelfCheckCommState::Warn => !self.has_trusted_bq40_runtime_evidence(),
-                    _ => false,
+        let recovery_needed = match request_kind {
+            BmsRecoveryRequestKind::Activation => {
+                if allow_diag_warn {
+                    self.ui_snapshot.bq40z50_last_result.is_none()
+                        && match self.ui_snapshot.bq40z50 {
+                            SelfCheckCommState::Err => true,
+                            SelfCheckCommState::Warn => !self.has_trusted_bq40_runtime_evidence(),
+                            _ => false,
+                        }
+                } else {
+                    is_bq40_activation_needed(&self.ui_snapshot)
                 }
-        } else {
-            is_bq40_activation_needed(&self.ui_snapshot)
+            }
+            BmsRecoveryRequestKind::DischargeAuthorization => true,
         };
-        if !activation_needed {
+        if !recovery_needed {
             defmt::info!(
-                "bms: activation ignored reason=not_needed bq40_state={} trusted_evidence={=bool} dsg_ready={=?} last_result={} diag_override={=bool}",
+                "bms: {} ignored reason=not_needed bq40_state={} trusted_evidence={=bool} dsg_ready={=?} last_result={} diag_override={=bool}",
+                request_kind.request_name(),
                 self_check_comm_state_name(self.ui_snapshot.bq40z50),
                 self.has_trusted_bq40_runtime_evidence(),
                 self.ui_snapshot.bq40z50_discharge_ready,
@@ -2913,7 +2966,8 @@ where
             return;
         }
         defmt::info!(
-            "bms: activation requested bq40_state={} soc_pct={=?} rca_alarm={=?} dsg_ready={=?} charger_state={} charger_allowed={=bool} vbat_present={=?} input_present={=?} last_result={} diag_override={=bool}",
+            "bms: {} requested bq40_state={} soc_pct={=?} rca_alarm={=?} dsg_ready={=?} charger_state={} charger_allowed={=bool} vbat_present={=?} input_present={=?} last_result={} diag_override={=bool}",
+            request_kind.request_name(),
             self_check_comm_state_name(self.ui_snapshot.bq40z50),
             self.ui_snapshot.bq40z50_soc_pct,
             self.ui_snapshot.bq40z50_rca_alarm,
@@ -2927,6 +2981,7 @@ where
         );
         bms_diag_breadcrumb_note(2, allow_diag_warn as u8);
         self.bms_activation_current_is_auto = auto_request;
+        self.bms_activation_request_kind = request_kind;
         if !(allow_diag_warn && self.cfg.bms_boot_diag_auto_validate) {
             self.bms_activation_auto_force_charge_until = None;
             self.bms_activation_auto_force_charge_programmed = false;
@@ -4827,13 +4882,7 @@ where
             primary_reason
         );
 
-        if low_pack_runtime {
-            BmsResultKind::NoBattery
-        } else if state == SelfCheckCommState::Ok {
-            BmsResultKind::Success
-        } else {
-            BmsResultKind::Abnormal
-        }
+        self.bms_recovery_result_from_snapshot(state, discharge_ready, low_pack_runtime)
     }
 
     fn crc8_smbus(bytes: &[u8]) -> u8 {
@@ -4993,6 +5042,16 @@ where
                 }
                 Bq40ActivationProbeResult::Working { addr, snapshot } => {
                     let result = self.apply_bq40_activation_snapshot(addr, &snapshot);
+                    if self.bms_recovery_requires_discharge_ready()
+                        && result == BmsResultKind::Abnormal
+                    {
+                        defmt::info!(
+                            "bms: discharge_authorization pending phase={} dsg_ready={=?} primary_reason=path_still_blocked",
+                            bms_activation_phase_name(self.bms_activation_phase),
+                            self.ui_snapshot.bq40z50_discharge_ready
+                        );
+                        return true;
+                    }
                     let reason = match result {
                         BmsResultKind::Success => "bq40_probe_without_charge_ready",
                         BmsResultKind::Abnormal => "bq40_probe_without_charge_abnormal",
@@ -5045,6 +5104,16 @@ where
                 }
                 Bq40ActivationProbeResult::Working { addr, snapshot } => {
                     let result = self.apply_bq40_activation_snapshot(addr, &snapshot);
+                    if self.bms_recovery_requires_discharge_ready()
+                        && result == BmsResultKind::Abnormal
+                    {
+                        defmt::info!(
+                            "bms: discharge_authorization pending phase={} dsg_ready={=?} primary_reason=path_still_blocked",
+                            bms_activation_phase_name(self.bms_activation_phase),
+                            self.ui_snapshot.bq40z50_discharge_ready
+                        );
+                        return true;
+                    }
                     let reason = match result {
                         BmsResultKind::Success => "bq40_min_charge_probe_ready",
                         BmsResultKind::Abnormal => "bq40_min_charge_probe_abnormal",
@@ -5078,6 +5147,16 @@ where
                 }
                 Bq40ActivationProbeResult::Working { addr, snapshot } => {
                     let result = self.apply_bq40_activation_snapshot(addr, &snapshot);
+                    if self.bms_recovery_requires_discharge_ready()
+                        && result == BmsResultKind::Abnormal
+                    {
+                        defmt::info!(
+                            "bms: discharge_authorization pending phase={} dsg_ready={=?} primary_reason=path_still_blocked",
+                            bms_activation_phase_name(self.bms_activation_phase),
+                            self.ui_snapshot.bq40z50_discharge_ready
+                        );
+                        return true;
+                    }
                     let reason = match result {
                         BmsResultKind::Success => "bq40_confirmed_ready",
                         BmsResultKind::Abnormal => "bq40_confirmed_abnormal",
@@ -5117,6 +5196,16 @@ where
                 }
                 Bq40ActivationProbeResult::Working { addr, snapshot } => {
                     let result = self.apply_bq40_activation_snapshot(addr, &snapshot);
+                    if self.bms_recovery_requires_discharge_ready()
+                        && result == BmsResultKind::Abnormal
+                    {
+                        defmt::info!(
+                            "bms: discharge_authorization pending phase={} dsg_ready={=?} primary_reason=path_still_blocked",
+                            bms_activation_phase_name(self.bms_activation_phase),
+                            self.ui_snapshot.bq40z50_discharge_ready
+                        );
+                        return true;
+                    }
                     let reason = match result {
                         BmsResultKind::Success => "bq40_followup_ready",
                         BmsResultKind::Abnormal => "bq40_followup_abnormal",
@@ -5140,11 +5229,14 @@ where
         }
 
         match self.ui_snapshot.bq40z50 {
-            SelfCheckCommState::Ok => {
+            SelfCheckCommState::Ok if !self.bms_recovery_requires_discharge_ready() => {
                 self.finish_bms_activation(BmsResultKind::Success, "bq40_ready");
                 return bms_i2c_active;
             }
-            SelfCheckCommState::Warn if self.has_trusted_bq40_runtime_evidence() => {
+            SelfCheckCommState::Warn
+                if !self.bms_recovery_requires_discharge_ready()
+                    && self.has_trusted_bq40_runtime_evidence() =>
+            {
                 self.finish_bms_activation(BmsResultKind::Abnormal, "bq40_warn_after_activation");
                 return bms_i2c_active;
             }
@@ -5327,6 +5419,33 @@ where
             || self.ui_snapshot.bq40z50_discharge_ready.is_some()
     }
 
+    fn bms_recovery_requires_discharge_ready(&self) -> bool {
+        self.bms_activation_request_kind == BmsRecoveryRequestKind::DischargeAuthorization
+    }
+
+    fn bms_recovery_result_from_snapshot(
+        &self,
+        state: SelfCheckCommState,
+        discharge_ready: Option<bool>,
+        low_pack_runtime: bool,
+    ) -> BmsResultKind {
+        if low_pack_runtime {
+            return BmsResultKind::NoBattery;
+        }
+
+        if self.bms_recovery_requires_discharge_ready() {
+            if state == SelfCheckCommState::Ok && discharge_ready == Some(true) {
+                BmsResultKind::Success
+            } else {
+                BmsResultKind::Abnormal
+            }
+        } else if state == SelfCheckCommState::Ok {
+            BmsResultKind::Success
+        } else {
+            BmsResultKind::Abnormal
+        }
+    }
+
     fn apply_bms_activation_min_charge_profile(&mut self) -> Result<(), &'static str> {
         self.chg_ilim_hiz_brk.set_low();
         defmt::info!(
@@ -5391,13 +5510,16 @@ where
         self.bms_activation_isolation_until = None;
         self.bms_activation_force_charge_requested = false;
         self.bms_activation_current_is_auto = false;
+        let request_kind = self.bms_activation_request_kind;
+        self.bms_activation_request_kind = BmsRecoveryRequestKind::Activation;
         self.bms_activation_state = BmsActivationState::Result(result);
         self.ui_snapshot.bq40z50_last_result = Some(result);
         self.chg_next_poll_at = Instant::now();
         self.maybe_restore_charger_watchdog_after_activation();
         match result {
             BmsResultKind::Success => defmt::info!(
-                "bms: activation finish result={} reason={} bq40_state={} soc_pct={=?} rca_alarm={=?} dsg_ready={=?} charger_state={} allow_charge={=?} vbat_present={=?} input_present={=?} restore_chg_enabled={=bool}",
+                "bms: activation finish request={} result={} reason={} bq40_state={} soc_pct={=?} rca_alarm={=?} dsg_ready={=?} charger_state={} allow_charge={=?} vbat_present={=?} input_present={=?} restore_chg_enabled={=bool}",
+                request_kind.request_name(),
                 bms_result_name(result),
                 reason,
                 self_check_comm_state_name(self.ui_snapshot.bq40z50),
@@ -5411,7 +5533,8 @@ where
                 restore_chg_enabled
             ),
             _ => defmt::warn!(
-                "bms: activation finish result={} reason={} bq40_state={} soc_pct={=?} rca_alarm={=?} dsg_ready={=?} charger_state={} allow_charge={=?} vbat_present={=?} input_present={=?} restore_chg_enabled={=bool}",
+                "bms: activation finish request={} result={} reason={} bq40_state={} soc_pct={=?} rca_alarm={=?} dsg_ready={=?} charger_state={} allow_charge={=?} vbat_present={=?} input_present={=?} restore_chg_enabled={=bool}",
+                request_kind.request_name(),
                 bms_result_name(result),
                 reason,
                 self_check_comm_state_name(self.ui_snapshot.bq40z50),
@@ -7859,6 +7982,18 @@ mod tests {
                 source: AudioMainsSource::Vin,
             }
         );
+    }
+
+    #[test]
+    fn discharge_authorization_input_ready_accepts_charger_presence_fallback() {
+        assert!(!discharge_authorization_input_ready(None, None));
+        assert!(!discharge_authorization_input_ready(
+            Some(false),
+            Some(false)
+        ));
+        assert!(discharge_authorization_input_ready(None, Some(true)));
+        assert!(discharge_authorization_input_ready(Some(true), Some(false)));
+        assert!(discharge_authorization_input_ready(Some(false), Some(true)));
     }
 
     #[test]
