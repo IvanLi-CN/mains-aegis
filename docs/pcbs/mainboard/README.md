@@ -22,7 +22,7 @@
 - 4S 电池座（`H1`）与电芯均衡/保护相关外围（`U1(BQ40Z50RSMR-R2)`、`U7(BQ296100DSGR)`、均衡 MOSFET `Q6/Q7/Q10/Q12` + 放电电阻 `R14/R19/R25/R27` 等）。
 - 充电与电源路径：`U11(BQ25792RQMR)`（双输入；`VAC1=UCM_VBUS`，`VAC2=VIN`；`SYS=VSYS`）。
 - 外部输入防护/热插拔：`U10(TPS2490DGSR)`（`VIN_UNSAFE -> VIN`，`PG=UPS_IN_PG`）。
-- 两路可编程升降压输出：`U17/U18(TPS55288RPMR)`（共享输出网络 `VOUT_TPS`，电流采样网络 `ISP_TPSA/ISP_TPSB`）。
+- 两路可编程升降压输出：`U17/U18(TPS55288RPMR)`（每路输出侧网络 `ISP_TPSA/ISP_TPSB`，经分流电阻汇入共享节点 `VOUT_TPS`）。
 - 电源监控：`U22(INA3221AIRGVR)`（告警 `INA3221_PV/CRITICAL/WARNING`）。
 - 温度监控：`U23/U24(TMP112AIDRLR)`。
 - 系统电源轨：`U19/U20(TPS62933DRLR)` 从 `VSYS` 生成 `+5V` 与 `3V3`（`EN=VSYS_OK`）。
@@ -119,10 +119,10 @@
 
 ### 2.8 `VOUT_TPS`（TPS55288 共享输出节点）
 
-当前网表不再包含 `J1/J2/J3` 焊盘跳线。两路 `TPS55288` 的输出都汇到共享节点 `VOUT_TPS`，再经后级理想二极管/功率 MOSFET 路径接入主输出 `VOUT`：
+当前网表不再包含 `J1/J2/J3` 焊盘跳线。两路 `TPS55288` 先各自输出到独立的输出侧网络，再通过 `10mΩ` 分流电阻汇到共享节点 `VOUT_TPS`，最后经后级理想二极管/功率 MOSFET 路径接入主输出 `VOUT`：
 
-- `U17.VOUT = VOUT_TPS`
-- `U18.VOUT = VOUT_TPS`
+- `U17.VOUT/ISP = ISP_TPSA`，`R68: ISP_TPSA -> VOUT_TPS`
+- `U18.VOUT/ISP = ISP_TPSB`，`R83: ISP_TPSB -> VOUT_TPS`
 - `U21(MX5050L)` + `Q28`：`VOUT_TPS -> VOUT`
 
 ## 3. 电源/地与关键网络（对齐系统设计）
@@ -148,9 +148,10 @@
 
 ### 3.3 主输出 `VOUT` 与共享输出 `VOUT_TPS`
 
-网表中 `VOUT`（DC 输出口 `U4`）与两路 `TPS55288` 的关系可直接从共享输出节点与后级理想二极管路径看出：
+网表中 `VOUT`（DC 输出口 `U4`）与两路 `TPS55288` 的关系可直接从每路输出侧网络、共享节点以及后级理想二极管路径看出：
 
-- `U17/U18`：两路输出都接到 `VOUT_TPS`
+- `U17`: `ISP_TPSA -> R68 -> VOUT_TPS`
+- `U18`: `ISP_TPSB -> R83 -> VOUT_TPS`
 - `U21(MX5050L)` + `Q28`：`VOUT_TPS -> VOUT`
 - `Q11`：`VIN -> VOUT`（外部输入直通到输出母线的路径）
 
