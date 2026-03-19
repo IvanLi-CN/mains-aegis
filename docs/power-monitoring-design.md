@@ -18,8 +18,8 @@
 | 通道 | 节点 | 分流电阻 | 备注 |
 |---|---|---:|---|
 | CH3 | `UPS VIN` | `7 mΩ` | `IN+3=VIN_SP`，`IN-3=VIN_SN` |
-| CH2 | `TPS55288 OUT-A` | `10 mΩ` | `IN+2=ISP_TPSA`，`IN-2=ISN_TPSA` |
-| CH1 | `TPS55288 OUT-B` | `10 mΩ` | `IN+1=ISP_TPSB`，`IN-1=ISN_TPSB` |
+| CH2 | `TPS55288 OUT-A` | `10 mΩ` | `IN+2=ISP_TPSA`，`IN-2=VOUT_TPS` |
+| CH1 | `TPS55288 OUT-B` | `10 mΩ` | `IN+1=ISP_TPSB`，`IN-1=VOUT_TPS` |
 
 ### 1.2 边界条件（已知）
 
@@ -67,6 +67,7 @@ I = VSHUNT / RSHUNT
 - 分流电阻到 `INA3221 IN+/IN-` 走线务必 **Kelvin 取样（四线/并行贴近）**，避免大电流铜皮压降与开关噪声耦合进测量。
 - `VBUS`（bus voltage）读数对应的是每通道 `IN-` 对地电压；因此应明确 `IN-` 落点是“分流后/负载侧”还是“分流前/源侧”，并保持三个通道的定义一致，避免固件解释混乱。
 - 注意 `IN-` 输入偏置电流：若在 `IN+/IN-` 前串了较大的电阻（`kΩ` 档位误贴等），可能引入明显的 `VBUS` DC 偏差；本板网表里该串阻为 `10Ω`（见 `docs/pcbs/mainboard/netlist.enet` 的 `R103..R108`）。
+- 当前主板网表中，TPS 两路采样均以共享输出节点 `VOUT_TPS` 作为 `IN-` 落点：`CH2` 通过 `R105/R106` 观察 `ISP_TPSA -> VOUT_TPS`，`CH1` 通过 `R108/R107` 观察 `ISP_TPSB -> VOUT_TPS`。
 
 ### 2.4 已知问题：VBUS 读数偏高（待排查）
 

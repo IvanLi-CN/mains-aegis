@@ -22,7 +22,7 @@
 - 4S 电池座（`H1`）与电芯均衡/保护相关外围（`U1(BQ40Z50RSMR-R2)`、`U7(BQ296100DSGR)`、均衡 MOSFET `Q6/Q7/Q10/Q12` + 放电电阻 `R14/R19/R25/R27` 等）。
 - 充电与电源路径：`U11(BQ25792RQMR)`（双输入；`VAC1=UCM_VBUS`，`VAC2=VIN`；`SYS=VSYS`）。
 - 外部输入防护/热插拔：`U10(TPS2490DGSR)`（`VIN_UNSAFE -> VIN`，`PG=UPS_IN_PG`）。
-- 两路可编程升降压输出：`U17/U18(TPS55288RPMR)`（输出网络 `VOUT_TPSA/VOUT_TPSB`，电流采样网络 `ISP_TPSA/ISP_TPSB`）。
+- 两路可编程升降压输出：`U17/U18(TPS55288RPMR)`（每路输出侧网络 `ISP_TPSA/ISP_TPSB`，经分流电阻汇入共享节点 `VOUT_TPS`）。
 - 电源监控：`U22(INA3221AIRGVR)`（告警 `INA3221_PV/CRITICAL/WARNING`）。
 - 温度监控：`U23/U24(TMP112AIDRLR)`。
 - 系统电源轨：`U19/U20(TPS62933DRLR)` 从 `VSYS` 生成 `+5V` 与 `3V3`（`EN=VSYS_OK`）。
@@ -38,24 +38,26 @@
 
 |Pin|Net|说明（按网名）|
 |---:|---|---|
-|1|`UCM_DP`|USB D+（通往 `U13`）|
-|2|`UCM_DM`|USB D-（通往 `U13`）|
+|1|`3V3`|3.3V|
+|2|`BTN_CENTER`|中键|
 |3|`CHGND`|GND|
-|4|`SCLK`|SPI SCLK（屏幕）|
-|5|`MOSI`|SPI MOSI（屏幕）|
-|6|`DC`|屏幕 D/C|
-|7|`BLK`|背光控制|
-|8|`CHGND`|GND|
-|9|`I2C2_SDA`|I2C2 SDA|
-|10|`I2C2_SCL`|I2C2 SCL|
-|11|`I2C2_INT`|I2C2 共享中断线|
-|12|`CTP_IRQ`|触摸 IRQ（独立）|
-|13|`TCA_RESET#`|面板 IO 扩展器复位|
+|4|`TCA_RESET#`|面板 IO 扩展器复位|
+|5|`CTP_IRQ`|触摸 IRQ（独立）|
+|6|`I2C2_INT`|I2C2 共享中断线|
+|7|`I2C2_SCL`|I2C2 SCL|
+|8|`I2C2_SDA`|I2C2 SDA|
+|9|`CHGND`|GND|
+|10|`BLK`|背光控制|
+|11|`DC`|屏幕 D/C|
+|12|`MOSI`|SPI MOSI（屏幕）|
+|13|`SCLK`|SPI SCLK（屏幕）|
 |14|`CHGND`|GND|
-|15|`BTN_CENTER`|中键|
-|16|`3V3`|3.3V|
+|15|`UCM_DM`|USB D-（通往 `U13`）|
+|16|`UCM_DP`|USB D+（通往 `U13`）|
 |17|`CHGND`|GND（额外焊盘）|
 |18|`CHGND`|GND（额外焊盘）|
+
+> 备注：主板与前面板的 `FPC1` 编号方向在当前网表中为镜像配对关系，因此主板侧 pin 序与 `docs/pcbs/front-panel/README.md` 中的前面板侧 pin 表不同；两侧以各自网表为事实来源，网名保持一一对应。
 
 ### 2.2 `H1`（4S 电池座/电芯抽头）
 
@@ -115,13 +117,13 @@
 |5|`CHGND`|
 |6|`CHGND`|
 
-### 2.8 `J1/J2/J3`（焊盘跳线：输出路由）
+### 2.8 `VOUT_TPS`（TPS55288 共享输出节点）
 
-网表里 `J1/J2/J3` 为 2-pin 焊盘跳线（`JMP-SMD_L5.2_W1.5`），用于把两路 `TPS55288` 输出接到 `VOUT_A/VOUT_B` 或把两路并联：
+当前网表不再包含 `J1/J2/J3` 焊盘跳线。两路 `TPS55288` 先各自输出到独立的输出侧网络，再通过 `10mΩ` 分流电阻汇到共享节点 `VOUT_TPS`，最后经后级理想二极管/功率 MOSFET 路径接入主输出 `VOUT`：
 
-- `J1`: `VOUT_TPSA <-> VOUT_A`
-- `J3`: `VOUT_TPSB <-> VOUT_B`
-- `J2`: `VOUT_TPSA <-> VOUT_TPSB`
+- `U17.VOUT/ISP = ISP_TPSA`，`R68: ISP_TPSA -> VOUT_TPS`
+- `U18.VOUT/ISP = ISP_TPSB`，`R83: ISP_TPSB -> VOUT_TPS`
+- `U21(MX5050L)` + `Q28`：`VOUT_TPS -> VOUT`
 
 ## 3. 电源/地与关键网络（对齐系统设计）
 
@@ -144,18 +146,18 @@
 
 这与 `docs/bms-design.md` 对 `BQ40Z50-R2` 的推荐连接一致。
 
-### 3.3 主输出 `VOUT` 与两路输出 `VOUT_A/VOUT_B`
+### 3.3 主输出 `VOUT` 与共享输出 `VOUT_TPS`
 
-网表中 `VOUT`（DC 输出口 `U4`）与 `VOUT_A/VOUT_B` 的关系可直接从大电流 MOSFET 连接看出：
+网表中 `VOUT`（DC 输出口 `U4`）与两路 `TPS55288` 的关系可直接从每路输出侧网络、共享节点以及后级理想二极管路径看出：
 
-- `Q28`：`VOUT_A -> VOUT`
-- `Q1`：`VOUT_B -> VOUT`
+- `U17`: `ISP_TPSA -> R68 -> VOUT_TPS`
+- `U18`: `ISP_TPSB -> R83 -> VOUT_TPS`
+- `U21(MX5050L)` + `Q28`：`VOUT_TPS -> VOUT`
 - `Q11`：`VIN -> VOUT`（外部输入直通到输出母线的路径）
 
 同时对外侧有 TVS：
 
-- `D15`：`VOUT_A` 对地 TVS
-- `D4`：`VOUT_B` 对地 TVS
+- `D15`：`VOUT_TPS` 对地 TVS
 - `D1`：`VOUT` 对地 TVS
 
 ### 3.4 充电/系统电源 `VSYS`、`+5V`、`3V3`
