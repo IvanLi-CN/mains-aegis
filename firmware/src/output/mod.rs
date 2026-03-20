@@ -78,6 +78,7 @@ const BMS_ACTIVATION_WORD_GAP: Duration = Duration::from_millis(2);
 const BMS_DETAIL_MAC_REFRESH_PERIOD: Duration = Duration::from_secs(8);
 const BMS_DETAIL_MAC_REFRESH_STAGGER: Duration = Duration::from_secs(2);
 const BMS_BLOCK_DETAIL_LOG_PERIOD: Duration = Duration::from_secs(10);
+const BMS_CONFIG_LOG_RETRY_PERIOD: Duration = Duration::from_secs(10);
 const BMS_SUSPICIOUS_VOLTAGE_MV: u16 = 5_911;
 const BMS_SUSPICIOUS_CURRENT_MA: i16 = 5_911;
 const BMS_SUSPICIOUS_STATUS: u16 = 0x1717;
@@ -263,6 +264,25 @@ fn bq40_mac_bit(raw: Option<u32>, mask: u32) -> Option<bool> {
     raw.map(|value| (value & mask) != 0)
 }
 
+fn bq40_df_bit(raw: Option<u16>, mask: u16) -> Option<bool> {
+    raw.map(|value| (value & mask) != 0)
+}
+
+fn bq40_pin16_mode_name(da_configuration: Option<u16>) -> &'static str {
+    let Some(da_configuration) = da_configuration else {
+        return "unknown";
+    };
+    let nr = (da_configuration & bq40z50::da_configuration::NR) != 0;
+    let emshut_en = (da_configuration & bq40z50::da_configuration::EMSHUT_EN) != 0;
+    if !nr {
+        "pres"
+    } else if emshut_en {
+        "shutdown"
+    } else {
+        "non_removable_no_emshut"
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OutputExpectedMode {
     Unknown,
@@ -372,10 +392,52 @@ fn log_output_path_diag(
     );
 }
 
-fn log_bq40_block_detail<I2C>(i2c: &mut I2C, addr: u8, stage: &'static str)
+fn log_bq40_config_detail<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    stage: &'static str,
+    op_status: Option<u32>,
+) -> bool
 where
     I2C: embedded_hal::i2c::I2c,
 {
+    let da_configuration =
+        bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::DA_CONFIGURATION)
+            .ok()
+            .flatten();
+    let power_config = bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::POWER_CONFIG)
+        .ok()
+        .flatten();
+
+    defmt::info!(
+        "bms_diag_cfg: addr=0x{=u8:x} stage={} op_status={=?} emshut={=?} sec0={=?} btp_int={=?} da_configuration={=?} power_config={=?} pin16_mode={} nr={=?} emshut_en={=?} emshut_pexit_dis={=?} in_system_sleep={=?} sleep_df={=?} emshut_exit_comm={=?} emshut_exit_vpack={=?} auto_ship_en={=?}",
+        addr,
+        stage,
+        op_status,
+        bq40_op_bit(op_status, bq40z50::operation_status::EMSHUT),
+        bq40_op_bit(op_status, bq40z50::operation_status::SEC0),
+        bq40_op_bit(op_status, bq40z50::operation_status::BTP_INT),
+        da_configuration,
+        power_config,
+        bq40_pin16_mode_name(da_configuration),
+        bq40_df_bit(da_configuration, bq40z50::da_configuration::NR),
+        bq40_df_bit(da_configuration, bq40z50::da_configuration::EMSHUT_EN),
+        bq40_df_bit(da_configuration, bq40z50::da_configuration::EMSHUT_PEXIT_DIS),
+        bq40_df_bit(da_configuration, bq40z50::da_configuration::IN_SYSTEM_SLEEP),
+        bq40_df_bit(da_configuration, bq40z50::da_configuration::SLEEP),
+        bq40_df_bit(power_config, bq40z50::power_config::EMSHUT_EXIT_COMM),
+        bq40_df_bit(power_config, bq40z50::power_config::EMSHUT_EXIT_VPACK),
+        bq40_df_bit(power_config, bq40z50::power_config::AUTO_SHIP_EN),
+    );
+
+    da_configuration.is_some() || power_config.is_some()
+}
+
+fn log_bq40_block_detail<I2C>(i2c: &mut I2C, addr: u8, stage: &'static str, op_status: Option<u32>)
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let _ = log_bq40_config_detail(i2c, addr, stage, op_status);
     let safety_status = bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::SAFETY_STATUS)
         .ok()
         .flatten();
@@ -1499,7 +1561,7 @@ where
                     bq40z50::decode_error_code(err_code)
                 );
                 if primary_reason == "xdsg_blocked" || primary_reason == "xchg_blocked" {
-                    log_bq40_block_detail(&mut *i2c, addr, "self_test_blocked");
+                    log_bq40_block_detail(&mut *i2c, addr, "self_test_blocked", op_status);
                 }
                 bms_addr = Some(addr);
                 initial_bms_protection_active = protection_active;
@@ -2041,6 +2103,8 @@ pub struct PowerManager<'d, I2C> {
     bms_next_da_status2_refresh_at: Instant,
     bms_next_filter_capacity_refresh_at: Instant,
     bms_next_block_detail_log_at: Instant,
+    bms_config_logged: bool,
+    bms_next_config_log_at: Instant,
     out_a_next_path_diag_log_at: Instant,
     out_b_next_path_diag_log_at: Instant,
 
@@ -2453,6 +2517,8 @@ where
             bms_next_da_status2_refresh_at: now,
             bms_next_filter_capacity_refresh_at: now + BMS_DETAIL_MAC_REFRESH_STAGGER,
             bms_next_block_detail_log_at: now,
+            bms_config_logged: false,
+            bms_next_config_log_at: now,
             out_a_next_path_diag_log_at: now,
             out_b_next_path_diag_log_at: now,
 
@@ -5770,12 +5836,32 @@ where
         }
         if result != BmsResultKind::Success {
             if let Some(addr) = self.bms_addr {
-                log_bq40_block_detail(&mut self.i2c, addr, "activation_finish_blocked");
+                log_bq40_block_detail(&mut self.i2c, addr, "activation_finish_blocked", None);
             }
         }
     }
 
-    fn maybe_log_bq40_block_detail_runtime(&mut self, addr: u8, primary_reason: &'static str) {
+    fn maybe_log_bq40_config_runtime(&mut self, addr: u8, op_status: Option<u32>) {
+        if self.bms_config_logged {
+            return;
+        }
+        let now = Instant::now();
+        if now < self.bms_next_config_log_at {
+            return;
+        }
+        if log_bq40_config_detail(&mut self.i2c, addr, "runtime_config", op_status) {
+            self.bms_config_logged = true;
+        } else {
+            self.bms_next_config_log_at = now + BMS_CONFIG_LOG_RETRY_PERIOD;
+        }
+    }
+
+    fn maybe_log_bq40_block_detail_runtime(
+        &mut self,
+        addr: u8,
+        primary_reason: &'static str,
+        op_status: Option<u32>,
+    ) {
         let should_log = matches!(primary_reason, "xdsg_blocked" | "xchg_blocked");
         let now = Instant::now();
         if !should_log {
@@ -5785,7 +5871,7 @@ where
         if now < self.bms_next_block_detail_log_at {
             return;
         }
-        log_bq40_block_detail(&mut self.i2c, addr, "runtime_blocked");
+        log_bq40_block_detail(&mut self.i2c, addr, "runtime_blocked", op_status);
         self.bms_next_block_detail_log_at = now + BMS_BLOCK_DETAIL_LOG_PERIOD;
     }
 
@@ -7395,6 +7481,7 @@ where
                         module_fault: false,
                     };
                     self.log_bq40z50_snapshot(addr, poll_seq, self.bms_ok_streak, btp_int_h, &s);
+                    self.maybe_log_bq40_config_runtime(addr, s.op_status);
                     let (_, charge_reason) = bq40_decode_charge_path(s.op_status);
                     let (_, discharge_reason) = bq40_decode_discharge_path(s.op_status);
                     let primary_reason = bq40_primary_reason(
@@ -7403,7 +7490,7 @@ where
                         charge_reason,
                         discharge_reason,
                     );
-                    self.maybe_log_bq40_block_detail_runtime(addr, primary_reason);
+                    self.maybe_log_bq40_block_detail_runtime(addr, primary_reason, s.op_status);
                     return true;
                 }
                 Err(Bq40SnapshotReadError::Invalid(s)) => {

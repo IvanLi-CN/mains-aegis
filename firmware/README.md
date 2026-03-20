@@ -255,6 +255,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 启动期自检里的 `self_test: discharge_authorization decision=eligible` 只代表“允许发起恢复尝试”，不代表放电已经恢复；只有运行期真正观测到 `discharge_ready=true`，这次授权才算成功。
 - 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。运行态门控解除后，本轮固件只转入“可恢复未恢复”，不会自动重新打开输出。
 - 当 `BQ40Z50` 普通通信正常、但路径仍被 `XDSG/XCHG` 阻断时，固件会额外打印 `bms_diag_block: ...`，把 `SafetyStatus/PFStatus/ManufacturingStatus` 和常用保护位一起展开；这条诊断在自检、放电授权恢复失败、以及运行期持续阻断时都会使用。
+- 运行期首次拿到 `BQ40Z50` 有效快照时，固件会额外打印 `bms_diag_cfg: ...`，展开 `OperationStatus[EMSHUT]`、`DA Configuration`、`Power Config`，并给出 `pin16_mode`（`pres` / `shutdown` / `non_removable_no_emshut`）用于判断 `PRES#/SHUTDN#` 的真实配置与 `EMSHUT` 退出条件。
 - 运行期若某路输出已经 `OE=1`、`TPS55288` 没有报告 `SCP/OCP/OVP`、但 `INA3221` 看到该路实际电压长时间低于目标且输出电流几乎为零，固件会打印 `power: output_diag ... anomaly=output_not_rising`。这条日志只用于运行期定位，不参与自检判定。
 - `power: output_diag` 会同时给出 `expected_mode`、`status_mode`、`suspected_path` 和 `check_parts`。例如当目标是 `12V`、包电压约 `16.7V` 时，它会推断 `expected_mode=buck`；若这时输出仍停在几百毫伏并且无 fault，则优先怀疑 `DR1H/DR1L`、`Q9/Q16`、`L5`、`BOOT1`、`SW1` 这条外置 buck 功率链。
 

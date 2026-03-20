@@ -56,6 +56,7 @@
   - 若可通信但 `OperationStatus` 显示放电未就绪（`XDSG=1` 或 `DSG=0`），视为 `BMS LIMITED`，同样门控 `TPS55288` 输出。
   - 只要 `BMS` 普通通信正常，就不走“离线激活”语义；这类情况在启动期进入“放电授权决策”而不是“激活缺失设备”。
   - 当路径被 `XDSG/XCHG` 阻断时，固件必须额外记录 `bms_diag_block: ...`，展开 `SafetyStatus/PFStatus/ManufacturingStatus` 与常用保护位，作为后续排查包侧拒绝放电的真相源。
+  - 运行期首次拿到有效 `BQ40Z50` 快照时，固件必须记录 `bms_diag_cfg: ...`，展开 `OperationStatus[EMSHUT]`、`DA Configuration`、`Power Config` 与 `pin16_mode`，作为 `PRES#/SHUTDN#` 语义和 `EMSHUT` 退出条件的真相源。
   - 当以下条件同时满足时，初始化阶段允许自动发起一次放电授权恢复尝试：
     - 当前模式确实请求输出
     - `BQ40Z50` 已在线

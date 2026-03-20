@@ -49,6 +49,11 @@ pub mod mac {
     pub const FILTER_CAPACITY: u16 = 0x0078;
 }
 
+pub mod data_flash {
+    pub const POWER_CONFIG: u16 = 0x488B;
+    pub const DA_CONFIGURATION: u16 = 0x4A7D;
+}
+
 const MAC_WRITE_SETTLE: Duration = Duration::from_millis(66);
 
 pub mod battery_mode {
@@ -56,15 +61,36 @@ pub mod battery_mode {
 }
 
 pub mod operation_status {
+    pub const EMSHUT: u32 = 1 << 29;
     pub const CB: u32 = 1 << 28;
     pub const SLEEP: u32 = 1 << 15;
     pub const XCHG: u32 = 1 << 14;
     pub const XDSG: u32 = 1 << 13;
     pub const PF: u32 = 1 << 12;
+    pub const SEC0: u32 = 1 << 8;
+    pub const BTP_INT: u32 = 1 << 7;
     pub const PCHG: u32 = 1 << 3;
     pub const CHG: u32 = 1 << 2;
     pub const DSG: u32 = 1 << 1;
     pub const PRES: u32 = 1 << 0;
+}
+
+pub mod da_configuration {
+    pub const EMSHUT_PEXIT_DIS: u16 = 1 << 8;
+    pub const FTEMP: u16 = 1 << 7;
+    pub const EMSHUT_EN: u16 = 1 << 5;
+    pub const SLEEP: u16 = 1 << 4;
+    pub const IN_SYSTEM_SLEEP: u16 = 1 << 3;
+    pub const NR: u16 = 1 << 2;
+}
+
+pub mod power_config {
+    pub const CHECK_WAKE_FET: u16 = 1 << 5;
+    pub const CHECK_WAKE: u16 = 1 << 4;
+    pub const EMSHUT_EXIT_COMM: u16 = 1 << 3;
+    pub const EMSHUT_EXIT_VPACK: u16 = 1 << 2;
+    pub const PWR_SAVE_VSHUT: u16 = 1 << 1;
+    pub const AUTO_SHIP_EN: u16 = 1 << 0;
 }
 
 pub mod battery_status {
@@ -305,7 +331,7 @@ pub fn read_mac_block_raw<I2C>(
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    let mac_cmd = mac_cmd.to_be_bytes();
+    let mac_cmd = mac_cmd.to_le_bytes();
     i2c.write(addr, &[cmd::MANUFACTURER_ACCESS, mac_cmd[0], mac_cmd[1]])?;
     spin_delay(MAC_WRITE_SETTLE);
     read_block_raw(i2c, addr, cmd::MANUFACTURER_DATA)
@@ -415,6 +441,31 @@ where
         raw.payload[2],
         raw.payload[3],
     ])))
+}
+
+pub fn read_mac_u16<I2C>(i2c: &mut I2C, addr: u8, mac_cmd: u16) -> Result<Option<u16>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let Some(raw) = read_mac_block_raw(i2c, addr, mac_cmd)? else {
+        return Ok(None);
+    };
+    if raw.payload_len < 2 {
+        return Ok(None);
+    }
+
+    Ok(Some(u16::from_le_bytes([raw.payload[0], raw.payload[1]])))
+}
+
+pub fn read_data_flash_u16<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+) -> Result<Option<u16>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    read_mac_u16(i2c, addr, df_addr)
 }
 
 /// Convert Temperature() units (0.1 K) to 0.1 C (i.e., C * 10).
@@ -576,7 +627,7 @@ mod tests {
         plain_frame[1..5].copy_from_slice(&payload);
 
         let mut i2c = ScriptedI2c::new([
-            Step::Write(addr, vec![cmd::MANUFACTURER_ACCESS, 0x00, 0x72]),
+            Step::Write(addr, vec![cmd::MANUFACTURER_ACCESS, 0x72, 0x00]),
             Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
             Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
             Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
@@ -613,5 +664,28 @@ mod tests {
         assert_eq!(filter.remaining_energy_cwh, 0x5678);
         assert_eq!(filter.full_charge_capacity_mah, 0x9abc);
         assert_eq!(filter.full_charge_energy_cwh, 0xdef0);
+    }
+
+    #[test]
+    fn read_data_flash_u16_decodes_little_endian_values() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let payload = [0x27, 0x81];
+        let mut plain_frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+        plain_frame[0] = 2;
+        plain_frame[1..3].copy_from_slice(&payload);
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd::MANUFACTURER_ACCESS, 0x7d, 0x4a]),
+            Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
+            Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
+            Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
+            Step::Read(addr, plain_frame),
+        ]);
+
+        let value = read_data_flash_u16(&mut i2c, addr, data_flash::DA_CONFIGURATION)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(value, 0x8127);
     }
 }
