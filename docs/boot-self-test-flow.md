@@ -55,6 +55,7 @@
   - 且作为硬门控条件：初始化后必须禁用 `TPS55288` 输出。
   - 若可通信但 `OperationStatus` 显示放电未就绪（`XDSG=1` 或 `DSG=0`），视为 `BMS LIMITED`，同样门控 `TPS55288` 输出。
   - 只要 `BMS` 普通通信正常，就不走“离线激活”语义；这类情况在启动期进入“放电授权决策”而不是“激活缺失设备”。
+  - 当路径被 `XDSG/XCHG` 阻断时，固件必须额外记录 `bms_diag_block: ...`，展开 `SafetyStatus/PFStatus/ManufacturingStatus` 与常用保护位，作为后续排查包侧拒绝放电的真相源。
   - 当以下条件同时满足时，初始化阶段允许自动发起一次放电授权恢复尝试：
     - 当前模式确实请求输出
     - `BQ40Z50` 已在线
@@ -66,6 +67,7 @@
     - `Type-C / charger` 已确认输入存在；这一步不要求 `INA3221 CH3` 的 `VIN` 采样已经先稳定
   - 授权恢复尝试使用现有的 `BQ25792` 辅助恢复链路；其目的是恢复放电路径，不代表“离线 BMS 激活”。
   - 这条恢复链路只有在 `discharge_ready == true` 时才算成功；若只是普通寄存器读通、但放电路径仍未释放，则流程继续保持 `LIMITED/HOLD`，直到阶段耗尽或超时收口。
+  - 若恢复链路最终未把 `discharge_ready` 拉回 `true`，固件必须再次记录 `bms_diag_block: ... stage=activation_finish_blocked`，把失败时刻的包侧状态固化到日志里。
   - 运行时若 BMS 恢复到放电就绪（`XDSG=0` 且 `DSG=1`），仅清除 `bms_not_ready` 门控；若 `VIN` 在线则进入“可恢复未恢复”，仍需后续显式 restore 请求才重新使能输出。
   - `BQ25792` 充电默认同样禁用；仅当固件以 `force-min-charge` 特性构建时，允许保留 charger 模块并以最小电流做唤醒尝试（不改 `VREG`）。
 - **BQ25792**：

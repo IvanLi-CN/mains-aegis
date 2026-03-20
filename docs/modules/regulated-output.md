@@ -219,6 +219,25 @@
 - 恢复请求：`bms: discharge_authorization requested ...`
 - 恢复请求：`power: output restore requested outputs=...`
 
+## 内建诊断
+
+以下诊断属于固件基线能力，不是临时 bring-up 脚本：
+
+- 自检期若 `BQ40Z50` 普通通信正常、但 `primary_reason` 落在 `xdsg_blocked` / `xchg_blocked`，固件会追加一条 `bms_diag_block: ... stage=self_test_blocked`
+- 运行期若放电路径再次进入 `xdsg_blocked` / `xchg_blocked`，固件会以节流方式持续输出 `bms_diag_block: ... stage=runtime_blocked`
+- 启动期若已经批准“放电授权恢复尝试”，但恢复链路最终没有把 `discharge_ready` 拉回 `true`，固件会输出 `bms_diag_block: ... stage=activation_finish_blocked`
+
+`bms_diag_block` 会补充以下原始状态，供排查包侧为什么拒绝放电：
+
+- `SafetyStatus()`
+- `PFStatus()`
+- `ManufacturingStatus()`
+- 其中会直接展开常用位，例如 `FET_EN / DSG_EN / CHG_EN / PF_EN`
+- 以及 `CUV / COV / OCC1 / OCC2 / OCD1 / OCD2 / ASCD / ASCC / OTC / OTD`
+- 以及 `SUV / SOV / SOCD / SOCC / DFETF / CFETF / AFEC / AFER`
+
+这条诊断的目的不是替代 `BQ40Z50` 常规摘要，而是把“普通通信正常但路径仍被 pack 自己压住”的根因证据固化到启动期和运行期日志里，避免再次只能看到 `xdsg_blocked` 却不知道更深层状态。
+
 ## 与其它文档的关系
 
 - 启动顺序与模块探测：`docs/boot-self-test-flow.md`

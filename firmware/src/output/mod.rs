@@ -77,6 +77,7 @@ const BMS_DEVICE_TYPE_BQ40Z50: u16 = 0x4500;
 const BMS_ACTIVATION_WORD_GAP: Duration = Duration::from_millis(2);
 const BMS_DETAIL_MAC_REFRESH_PERIOD: Duration = Duration::from_secs(8);
 const BMS_DETAIL_MAC_REFRESH_STAGGER: Duration = Duration::from_secs(2);
+const BMS_BLOCK_DETAIL_LOG_PERIOD: Duration = Duration::from_secs(10);
 const BMS_SUSPICIOUS_VOLTAGE_MV: u16 = 5_911;
 const BMS_SUSPICIOUS_CURRENT_MA: i16 = 5_911;
 const BMS_SUSPICIOUS_STATUS: u16 = 0x1717;
@@ -252,6 +253,64 @@ where
 
 fn bq40_op_bit(op_status: Option<u32>, mask: u32) -> Option<bool> {
     op_status.map(|raw| (raw & mask) != 0)
+}
+
+fn bq40_mac_bit(raw: Option<u32>, mask: u32) -> Option<bool> {
+    raw.map(|value| (value & mask) != 0)
+}
+
+fn log_bq40_block_detail<I2C>(i2c: &mut I2C, addr: u8, stage: &'static str)
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let safety_status = bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::SAFETY_STATUS)
+        .ok()
+        .flatten();
+    let pf_status = bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::PF_STATUS)
+        .ok()
+        .flatten();
+    let manufacturing_status = bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::MANUFACTURING_STATUS)
+        .ok()
+        .flatten();
+
+    defmt::info!(
+        "bms_diag_block: addr=0x{=u8:x} stage={} safety_status={=?} pf_status={=?} manufacturing_status={=?} fet_en={=?} gauge_en={=?} pf_en={=?} lf_en={=?} pchg_en={=?} chg_en={=?} dsg_en={=?} cuv={=?} cuvc={=?} ocd1={=?} ocd2={=?} ascd={=?} ascdl={=?} aold={=?} aoldl={=?} cov={=?} occ1={=?} occ2={=?} ascc={=?} asccl={=?} otc={=?} otd={=?} suv={=?} sov={=?} socd={=?} socc={=?} dfetf={=?} cfetf={=?} afec={=?} afer={=?}",
+        addr,
+        stage,
+        safety_status,
+        pf_status,
+        manufacturing_status,
+        bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::FET_EN),
+        bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::GAUGE_EN),
+        bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::PF_EN),
+        bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::LF_EN),
+        bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::PCHG_EN),
+        bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::CHG_EN),
+        bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::DSG_EN),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::CUV),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::CUVC),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::OCD1),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::OCD2),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::ASCD),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::ASCDL),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::AOLD),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::AOLDL),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::COV),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::OCC1),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::OCC2),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::ASCC),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::ASCCL),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::OTC),
+        bq40_mac_bit(safety_status, bq40z50::safety_status::OTD),
+        bq40_mac_bit(pf_status, bq40z50::pf_status::SUV),
+        bq40_mac_bit(pf_status, bq40z50::pf_status::SOV),
+        bq40_mac_bit(pf_status, bq40z50::pf_status::SOCD),
+        bq40_mac_bit(pf_status, bq40z50::pf_status::SOCC),
+        bq40_mac_bit(pf_status, bq40z50::pf_status::DFETF),
+        bq40_mac_bit(pf_status, bq40z50::pf_status::CFETF),
+        bq40_mac_bit(pf_status, bq40z50::pf_status::AFEC),
+        bq40_mac_bit(pf_status, bq40z50::pf_status::AFER),
+    );
 }
 
 fn bq40_decode_charge_path(op_status: Option<u32>) -> (Option<bool>, &'static str) {
@@ -1326,6 +1385,9 @@ where
                     err_code,
                     bq40z50::decode_error_code(err_code)
                 );
+                if primary_reason == "xdsg_blocked" || primary_reason == "xchg_blocked" {
+                    log_bq40_block_detail(&mut *i2c, addr, "self_test_blocked");
+                }
                 bms_addr = Some(addr);
                 initial_bms_protection_active = protection_active;
                 bms_voltage_mv = Some(voltage_mv);
@@ -1865,6 +1927,7 @@ pub struct PowerManager<'d, I2C> {
     bms_cached_filter_capacity: Option<bq40z50::FilterCapacity>,
     bms_next_da_status2_refresh_at: Instant,
     bms_next_filter_capacity_refresh_at: Instant,
+    bms_next_block_detail_log_at: Instant,
 
     chg_next_poll_at: Instant,
     chg_next_retry_at: Option<Instant>,
@@ -2274,6 +2337,7 @@ where
             bms_cached_filter_capacity: None,
             bms_next_da_status2_refresh_at: now,
             bms_next_filter_capacity_refresh_at: now + BMS_DETAIL_MAC_REFRESH_STAGGER,
+            bms_next_block_detail_log_at: now,
 
             chg_next_poll_at: now,
             chg_next_retry_at: if charger_allowed { Some(now) } else { None },
@@ -5587,6 +5651,25 @@ where
                 restore_chg_enabled
             ),
         }
+        if result != BmsResultKind::Success {
+            if let Some(addr) = self.bms_addr {
+                log_bq40_block_detail(&mut self.i2c, addr, "activation_finish_blocked");
+            }
+        }
+    }
+
+    fn maybe_log_bq40_block_detail_runtime(&mut self, addr: u8, primary_reason: &'static str) {
+        let should_log = matches!(primary_reason, "xdsg_blocked" | "xchg_blocked");
+        let now = Instant::now();
+        if !should_log {
+            self.bms_next_block_detail_log_at = now;
+            return;
+        }
+        if now < self.bms_next_block_detail_log_at {
+            return;
+        }
+        log_bq40_block_detail(&mut self.i2c, addr, "runtime_blocked");
+        self.bms_next_block_detail_log_at = now + BMS_BLOCK_DETAIL_LOG_PERIOD;
     }
 
     fn is_bq40_rom_mode_detected(&mut self) -> bool {
@@ -7125,6 +7208,15 @@ where
                         module_fault: false,
                     };
                     self.log_bq40z50_snapshot(addr, poll_seq, self.bms_ok_streak, btp_int_h, &s);
+                    let (_, charge_reason) = bq40_decode_charge_path(s.op_status);
+                    let (_, discharge_reason) = bq40_decode_discharge_path(s.op_status);
+                    let primary_reason = bq40_primary_reason(
+                        s.batt_status,
+                        s.op_status,
+                        charge_reason,
+                        discharge_reason,
+                    );
+                    self.maybe_log_bq40_block_detail_runtime(addr, primary_reason);
                     return true;
                 }
                 Err(Bq40SnapshotReadError::Invalid(s)) => {

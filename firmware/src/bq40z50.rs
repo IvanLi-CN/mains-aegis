@@ -42,6 +42,9 @@ pub mod cmd {
 }
 
 pub mod mac {
+    pub const SAFETY_STATUS: u16 = 0x0051;
+    pub const PF_STATUS: u16 = 0x0053;
+    pub const MANUFACTURING_STATUS: u16 = 0x0057;
     pub const DA_STATUS_2: u16 = 0x0072;
     pub const FILTER_CAPACITY: u16 = 0x0078;
 }
@@ -80,6 +83,62 @@ pub mod battery_status {
     pub const fn error_code(raw: u16) -> u8 {
         (raw & 0x0F) as u8
     }
+}
+
+pub mod safety_status {
+    pub const CUV: u32 = 1 << 0;
+    pub const COV: u32 = 1 << 1;
+    pub const OCC1: u32 = 1 << 2;
+    pub const OCC2: u32 = 1 << 3;
+    pub const OCD1: u32 = 1 << 4;
+    pub const OCD2: u32 = 1 << 5;
+    pub const AOLD: u32 = 1 << 6;
+    pub const AOLDL: u32 = 1 << 7;
+    pub const ASCC: u32 = 1 << 8;
+    pub const ASCCL: u32 = 1 << 9;
+    pub const ASCD: u32 = 1 << 10;
+    pub const ASCDL: u32 = 1 << 11;
+    pub const OTC: u32 = 1 << 12;
+    pub const OTD: u32 = 1 << 13;
+    pub const CUVC: u32 = 1 << 14;
+}
+
+pub mod pf_status {
+    pub const SUV: u32 = 1 << 0;
+    pub const SOV: u32 = 1 << 1;
+    pub const SOCC: u32 = 1 << 2;
+    pub const SOCD: u32 = 1 << 3;
+    pub const COVL: u32 = 1 << 5;
+    pub const QIM: u32 = 1 << 8;
+    pub const IMP: u32 = 1 << 9;
+    pub const CD: u32 = 1 << 10;
+    pub const VIMR: u32 = 1 << 11;
+    pub const VIMA: u32 = 1 << 12;
+    pub const AOLDL: u32 = 1 << 13;
+    pub const ASCCL: u32 = 1 << 14;
+    pub const ASCDL: u32 = 1 << 15;
+    pub const CFETF: u32 = 1 << 16;
+    pub const DFETF: u32 = 1 << 17;
+    pub const OCDL: u32 = 1 << 18;
+    pub const FUSE: u32 = 1 << 19;
+    pub const AFER: u32 = 1 << 20;
+    pub const AFEC: u32 = 1 << 21;
+    pub const SECOND_LEVEL: u32 = 1 << 22;
+}
+
+pub mod manufacturing_status {
+    pub const PCHG_EN: u32 = 1 << 0;
+    pub const CHG_EN: u32 = 1 << 1;
+    pub const DSG_EN: u32 = 1 << 2;
+    pub const GAUGE_EN: u32 = 1 << 3;
+    pub const FET_EN: u32 = 1 << 4;
+    pub const LF_EN: u32 = 1 << 5;
+    pub const PF_EN: u32 = 1 << 6;
+    pub const BBR_EN: u32 = 1 << 7;
+    pub const FUSE_EN: u32 = 1 << 8;
+    pub const LED_EN: u32 = 1 << 9;
+    pub const LT_TEST: u32 = 1 << 14;
+    pub const CAL_TEST: u32 = 1 << 15;
 }
 
 pub const fn decode_error_code(code: u8) -> &'static str {
@@ -325,6 +384,25 @@ where
     I2C: embedded_hal::i2c::I2c,
 {
     let Some(raw) = read_block_raw(i2c, addr, cmd::OPERATION_STATUS)? else {
+        return Ok(None);
+    };
+    if raw.payload_len < 4 {
+        return Ok(None);
+    }
+
+    Ok(Some(u32::from_le_bytes([
+        raw.payload[0],
+        raw.payload[1],
+        raw.payload[2],
+        raw.payload[3],
+    ])))
+}
+
+pub fn read_mac_u32<I2C>(i2c: &mut I2C, addr: u8, mac_cmd: u16) -> Result<Option<u32>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let Some(raw) = read_mac_block_raw(i2c, addr, mac_cmd)? else {
         return Ok(None);
     };
     if raw.payload_len < 4 {

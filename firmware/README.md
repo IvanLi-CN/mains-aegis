@@ -254,6 +254,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 只要 `BQ40Z50` 普通通信正常，就不走“离线激活”语义；启动期这类状态属于“放电授权恢复”而不是“激活缺失设备”。
 - 启动期自检里的 `self_test: discharge_authorization decision=eligible` 只代表“允许发起恢复尝试”，不代表放电已经恢复；只有运行期真正观测到 `discharge_ready=true`，这次授权才算成功。
 - 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。运行态门控解除后，本轮固件只转入“可恢复未恢复”，不会自动重新打开输出。
+- 当 `BQ40Z50` 普通通信正常、但路径仍被 `XDSG/XCHG` 阻断时，固件会额外打印 `bms_diag_block: ...`，把 `SafetyStatus/PFStatus/ManufacturingStatus` 和常用保护位一起展开；这条诊断在自检、放电授权恢复失败、以及运行期持续阻断时都会使用。
 
 ## TPS 冻结控制项
 
