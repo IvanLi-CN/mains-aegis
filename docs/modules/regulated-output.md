@@ -226,6 +226,7 @@
 - 自检期若 `BQ40Z50` 普通通信正常、但 `primary_reason` 落在 `xdsg_blocked` / `xchg_blocked`，固件会追加一条 `bms_diag_block: ... stage=self_test_blocked`
 - 运行期若放电路径再次进入 `xdsg_blocked` / `xchg_blocked`，固件会以节流方式持续输出 `bms_diag_block: ... stage=runtime_blocked`
 - 启动期若已经批准“放电授权恢复尝试”，但恢复链路最终没有把 `discharge_ready` 拉回 `true`，固件会输出 `bms_diag_block: ... stage=activation_finish_blocked`
+- 运行期若某路 `TPS55288` 已 `OE=1`、当前没有 `SCP/OCP/OVP`、但 `INA3221` 看到该路 `VOUT` 长时间停留在低电压且电流几乎为零，固件会节流输出 `power: output_diag ... anomaly=output_not_rising`
 
 `bms_diag_block` 会补充以下原始状态，供排查包侧为什么拒绝放电：
 
@@ -237,6 +238,14 @@
 - 以及 `SUV / SOV / SOCD / SOCC / DFETF / CFETF / AFEC / AFER`
 
 这条诊断的目的不是替代 `BQ40Z50` 常规摘要，而是把“普通通信正常但路径仍被 pack 自己压住”的根因证据固化到启动期和运行期日志里，避免再次只能看到 `xdsg_blocked` 却不知道更深层状态。
+
+`power: output_diag` 只属于运行期定位能力，不参与自检判定，也不改变页面流转。当前实现会根据目标电压与 `BQ40Z50` 包电压推断预期工作区间：
+
+- 目标电压明显低于包电压：标记 `expected_mode=buck`
+- 目标电压明显高于包电压：标记 `expected_mode=boost`
+- 两者接近：标记 `expected_mode=buck_boost`
+
+随后结合 `TPS55288 STATUS[1:0]` 的工作区间与板级网表，给出最可疑的链路提示。例如 `expected_mode=buck` 且输出不起时，会提示优先检查 `DR1H/DR1L`、`Q9/Q16`、`L5`、`BOOT1`、`SW1`。这条诊断的目的是把“芯片可访问、无 fault、但输出静默不起”的信息固化到固件日志中，避免每次都回到口头排查。
 
 ## 与其它文档的关系
 

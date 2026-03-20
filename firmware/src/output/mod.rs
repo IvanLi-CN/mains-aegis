@@ -85,6 +85,10 @@ const BMS_NO_BATTERY_VPACK_MAX_MV: u16 = 2_500;
 const BMS_SELF_TEST_DISCHARGE_READY_RETRIES: usize = 6;
 const BMS_SELF_TEST_DISCHARGE_READY_RETRY_DELAY: Duration = Duration::from_millis(500);
 const BQ40_CURRENT_IDLE_THRESHOLD_MA: i16 = 20;
+const OUTPUT_PATH_DIAG_LOG_PERIOD: Duration = Duration::from_secs(5);
+const OUTPUT_PATH_NOT_RISING_MAX_CURRENT_MA: i32 = 200;
+const OUTPUT_PATH_NOT_RISING_MAX_ABS_VOUT_MV: u16 = 2_000;
+const OUTPUT_PATH_EXPECTED_MODE_HYSTERESIS_MV: u16 = 500;
 const CHARGER_FAULT0_VBUS_OVP: u8 = 1 << 6;
 const CHARGER_FAULT0_VBAT_OVP: u8 = 1 << 5;
 const CHARGER_FAULT0_IBUS_OCP: u8 = 1 << 4;
@@ -257,6 +261,115 @@ fn bq40_op_bit(op_status: Option<u32>, mask: u32) -> Option<bool> {
 
 fn bq40_mac_bit(raw: Option<u32>, mask: u32) -> Option<bool> {
     raw.map(|value| (value & mask) != 0)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutputExpectedMode {
+    Unknown,
+    Buck,
+    Boost,
+    BuckBoost,
+}
+
+impl OutputExpectedMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Buck => "buck",
+            Self::Boost => "boost",
+            Self::BuckBoost => "buck_boost",
+        }
+    }
+}
+
+fn expected_output_mode(target_vout_mv: u16, vpack_mv: Option<u16>) -> OutputExpectedMode {
+    let Some(vpack_mv) = vpack_mv else {
+        return OutputExpectedMode::Unknown;
+    };
+    if vpack_mv > target_vout_mv.saturating_add(OUTPUT_PATH_EXPECTED_MODE_HYSTERESIS_MV) {
+        OutputExpectedMode::Buck
+    } else if target_vout_mv > vpack_mv.saturating_add(OUTPUT_PATH_EXPECTED_MODE_HYSTERESIS_MV) {
+        OutputExpectedMode::Boost
+    } else {
+        OutputExpectedMode::BuckBoost
+    }
+}
+
+fn status_mode_name(status_sample: Option<u8>) -> &'static str {
+    match status_sample.map(|status| status & 0b11) {
+        Some(0b00) => "boost",
+        Some(0b01) => "buck",
+        Some(0b10) => "buck_boost",
+        Some(_) => "reserved",
+        None => "na",
+    }
+}
+
+fn output_diag_suspected_path(expected_mode: OutputExpectedMode) -> &'static str {
+    match expected_mode {
+        OutputExpectedMode::Buck => "buck_path_open_or_driver_missing",
+        OutputExpectedMode::Boost => "boost_leg_or_output_path_issue",
+        OutputExpectedMode::BuckBoost => "shared_power_stage_or_comp_issue",
+        OutputExpectedMode::Unknown => "output_path_issue",
+    }
+}
+
+fn output_diag_check_parts(expected_mode: OutputExpectedMode) -> &'static str {
+    match expected_mode {
+        OutputExpectedMode::Buck => "DR1H/DR1L,Q9/Q16,L5,BOOT1,SW1",
+        OutputExpectedMode::Boost => "SW2,BOOT2,ISP/ISN,VOUT_path",
+        OutputExpectedMode::BuckBoost => "COMP,TPS_COMP,SW1/SW2,both power stages",
+        OutputExpectedMode::Unknown => "power_stage_and_output_path",
+    }
+}
+
+fn output_not_rising_anomaly(
+    target_vout_mv: u16,
+    vbus_mv: Option<u16>,
+    current_ma: Option<i32>,
+    output_enabled: Option<bool>,
+    fault_active: bool,
+) -> bool {
+    if output_enabled != Some(true) || fault_active {
+        return false;
+    }
+    let Some(vbus_mv) = vbus_mv else {
+        return false;
+    };
+    let Some(current_ma) = current_ma else {
+        return false;
+    };
+    let severe_low = vbus_mv <= OUTPUT_PATH_NOT_RISING_MAX_ABS_VOUT_MV
+        || vbus_mv <= target_vout_mv.saturating_div(4);
+    severe_low && current_ma.unsigned_abs() <= OUTPUT_PATH_NOT_RISING_MAX_CURRENT_MA as u32
+}
+
+fn log_output_path_diag(
+    ch: OutputChannel,
+    stage: &'static str,
+    target_vout_mv: u16,
+    vpack_mv: Option<u16>,
+    vbus_mv: Option<u16>,
+    current_ma: Option<i32>,
+    output_enabled: Option<bool>,
+    status_sample: Option<u8>,
+) {
+    let expected_mode = expected_output_mode(target_vout_mv, vpack_mv);
+    defmt::warn!(
+        "power: output_diag ch={} stage={} anomaly=output_not_rising target_vout_mv={=u16} vpack_mv={=?} vout_mv={=?} current_ma={=?} oe={=?} expected_mode={} status_mode={} status_raw={=?} suspected_path={} check_parts={}",
+        ch.name(),
+        stage,
+        target_vout_mv,
+        vpack_mv,
+        vbus_mv,
+        current_ma,
+        output_enabled,
+        expected_mode.as_str(),
+        status_mode_name(status_sample),
+        status_sample,
+        output_diag_suspected_path(expected_mode),
+        output_diag_check_parts(expected_mode),
+    );
 }
 
 fn log_bq40_block_detail<I2C>(i2c: &mut I2C, addr: u8, stage: &'static str)
@@ -1928,6 +2041,8 @@ pub struct PowerManager<'d, I2C> {
     bms_next_da_status2_refresh_at: Instant,
     bms_next_filter_capacity_refresh_at: Instant,
     bms_next_block_detail_log_at: Instant,
+    out_a_next_path_diag_log_at: Instant,
+    out_b_next_path_diag_log_at: Instant,
 
     chg_next_poll_at: Instant,
     chg_next_retry_at: Option<Instant>,
@@ -2338,6 +2453,8 @@ where
             bms_next_da_status2_refresh_at: now,
             bms_next_filter_capacity_refresh_at: now + BMS_DETAIL_MAC_REFRESH_STAGGER,
             bms_next_block_detail_log_at: now,
+            out_a_next_path_diag_log_at: now,
+            out_b_next_path_diag_log_at: now,
 
             chg_next_poll_at: now,
             chg_next_retry_at: if charger_allowed { Some(now) } else { None },
@@ -5672,6 +5789,56 @@ where
         self.bms_next_block_detail_log_at = now + BMS_BLOCK_DETAIL_LOG_PERIOD;
     }
 
+    fn output_path_diag_next_log_at_mut(&mut self, ch: OutputChannel) -> &mut Instant {
+        match ch {
+            OutputChannel::OutA => &mut self.out_a_next_path_diag_log_at,
+            OutputChannel::OutB => &mut self.out_b_next_path_diag_log_at,
+        }
+    }
+
+    fn note_output_path_diag(
+        &mut self,
+        ch: OutputChannel,
+        stage: &'static str,
+        output_enabled: Option<bool>,
+        vbus_mv: Option<u16>,
+        current_ma: Option<i32>,
+        fault_active: bool,
+        status_sample: Option<u8>,
+        rate_limit: bool,
+    ) -> bool {
+        let anomaly = output_not_rising_anomaly(
+            self.cfg.vout_mv,
+            vbus_mv,
+            current_ma,
+            output_enabled,
+            fault_active,
+        );
+        let now = Instant::now();
+        let target_vout_mv = self.cfg.vout_mv;
+        let pack_mv = self.ui_snapshot.bq40z50_pack_mv;
+        let next_log_at = self.output_path_diag_next_log_at_mut(ch);
+        if !anomaly {
+            *next_log_at = now;
+            return false;
+        }
+        if rate_limit && now < *next_log_at {
+            return true;
+        }
+        log_output_path_diag(
+            ch,
+            stage,
+            target_vout_mv,
+            pack_mv,
+            vbus_mv,
+            current_ma,
+            output_enabled,
+            status_sample,
+        );
+        *next_log_at = now + OUTPUT_PATH_DIAG_LOG_PERIOD;
+        true
+    }
+
     fn is_bq40_rom_mode_detected(&mut self) -> bool {
         for addr in bms_probe_candidates().iter().copied() {
             match bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE) {
@@ -6453,6 +6620,16 @@ where
             if let Some(status) = capture.status_sample {
                 self.record_tps_fault_status(OutputChannel::OutA, status);
             }
+            let _ = self.note_output_path_diag(
+                OutputChannel::OutA,
+                "runtime",
+                capture.output_enabled,
+                capture.vbus_mv,
+                capture.current_ma,
+                capture.fault_active,
+                capture.status_sample,
+                true,
+            );
             self.ui_snapshot.tps_a = if !capture.comm_ok {
                 SelfCheckCommState::Err
             } else if capture.fault_active {
@@ -6491,6 +6668,16 @@ where
             if let Some(status) = capture.status_sample {
                 self.record_tps_fault_status(OutputChannel::OutB, status);
             }
+            let _ = self.note_output_path_diag(
+                OutputChannel::OutB,
+                "runtime",
+                capture.output_enabled,
+                capture.vbus_mv,
+                capture.current_ma,
+                capture.fault_active,
+                capture.status_sample,
+                true,
+            );
             self.ui_snapshot.tps_b = if !capture.comm_ok {
                 SelfCheckCommState::Err
             } else if capture.fault_active {
