@@ -255,6 +255,22 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 启动期自检里的 `self_test: discharge_authorization decision=eligible` 只代表“允许发起恢复尝试”，不代表放电已经恢复；只有运行期真正观测到 `discharge_ready=true`，这次授权才算成功。
 - 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。运行态门控解除后，本轮固件只转入“可恢复未恢复”，不会自动重新打开输出。
 
+## TPS 冻结控制项
+
+`TPS55288` 的以下控制项属于开发冻结项：
+
+- `PFM/FPWM`
+- `MODE` 控制来源与 override/strap 语义
+- `SYNC` 相关配置
+
+没有主人的明确批准，不允许为了诊断或 bring-up 临时改动这些项。默认允许的诊断动作仅限于：
+
+- 读取寄存器、状态位与中断
+- 采集 `INA/TMP/BMS/charger` 遥测
+- 记录日志与外部仪器观测
+
+若确需改动冻结项，必须先在开发文档中记录变更目的、范围、回退方式与批准结论，然后才能执行。
+
 ## 前面板屏幕显示（Spec 6qrjs / 7n4qd）
 
 固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，有效显示区 `320x172`，横屏，SPI）并渲染工业仪表风 UI：
