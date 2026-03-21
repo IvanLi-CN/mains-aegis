@@ -579,6 +579,18 @@ fn output_hold_for(snapshot: &SelfCheckUiSnapshot, selector: OutputSelector) -> 
         && snapshot.output_gate_reason == OutputGateReason::BmsNotReady
 }
 
+fn tps_upstream_warning_reason(snapshot: &SelfCheckUiSnapshot) -> Option<&'static str> {
+    if snapshot.bq40z50_discharge_ready == Some(false)
+        || snapshot.output_gate_reason == OutputGateReason::BmsNotReady
+    {
+        Some("WAIT BMS")
+    } else if snapshot.bq25792_vbat_present != Some(true) {
+        Some("VBAT UNK")
+    } else {
+        None
+    }
+}
+
 fn snapshot_tps_state(
     snapshot: &SelfCheckUiSnapshot,
     selector: OutputSelector,
@@ -596,11 +608,23 @@ fn snapshot_tps_enabled(snapshot: &SelfCheckUiSnapshot, selector: OutputSelector
     }
 }
 
+fn display_tps_state(
+    snapshot: &SelfCheckUiSnapshot,
+    selector: OutputSelector,
+) -> SelfCheckCommState {
+    match snapshot_tps_state(snapshot, selector) {
+        SelfCheckCommState::Err if tps_upstream_warning_reason(snapshot).is_some() => {
+            SelfCheckCommState::Warn
+        }
+        state => state,
+    }
+}
+
 fn self_check_tps_summary_name(
     snapshot: &SelfCheckUiSnapshot,
     selector: OutputSelector,
 ) -> &'static str {
-    match snapshot_tps_state(snapshot, selector) {
+    match display_tps_state(snapshot, selector) {
         SelfCheckCommState::Pending => "pending",
         SelfCheckCommState::Ok => "ok",
         SelfCheckCommState::Warn => "warn",
@@ -5139,13 +5163,18 @@ fn render_variant_c<P: UiPainter>(
     } else {
         format_args!("SOC N/A")
     };
+    let tps_warning_reason = tps_upstream_warning_reason(&snapshot).unwrap_or("IOUT N/A");
     let tps_a_key = if tps_a_has {
         format_args!("IOUT {}{:>1}.{:02}A", tps_a_sign, tps_a_whole, tps_a_frac)
+    } else if display_tps_state(&snapshot, OutputSelector::OutA) == SelfCheckCommState::Warn {
+        format_args!("{}", tps_warning_reason)
     } else {
         format_args!("IOUT N/A")
     };
     let tps_b_key = if tps_b_has {
         format_args!("IOUT {}{:>1}.{:02}A", tps_b_sign, tps_b_whole, tps_b_frac)
+    } else if display_tps_state(&snapshot, OutputSelector::OutB) == SelfCheckCommState::Warn {
+        format_args!("{}", tps_warning_reason)
     } else {
         format_args!("IOUT N/A")
     };
@@ -5159,8 +5188,8 @@ fn render_variant_c<P: UiPainter>(
     } else {
         format_args!("TMAX N/A")
     };
-    let tps_a_status_state = snapshot_tps_state(&snapshot, OutputSelector::OutA);
-    let tps_b_status_state = snapshot_tps_state(&snapshot, OutputSelector::OutB);
+    let tps_a_status_state = display_tps_state(&snapshot, OutputSelector::OutA);
+    let tps_b_status_state = display_tps_state(&snapshot, OutputSelector::OutB);
 
     draw_diag_card(
         painter,
@@ -7758,16 +7787,26 @@ mod tests {
     }
 
     #[test]
-    fn self_check_tps_summary_uses_raw_probe_state() {
+    fn self_check_tps_summary_maps_expected_unpowered_tps_probe_failures_to_warn() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
-        snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
-        snapshot.active_outputs = EnabledOutputs::None;
-        snapshot.recoverable_outputs = EnabledOutputs::Only(OutputSelector::OutA);
         snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
-        snapshot.tps_a = SelfCheckCommState::Ok;
+        snapshot.bq25792_vbat_present = Some(false);
+        snapshot.tps_a = SelfCheckCommState::Err;
         snapshot.tps_b = SelfCheckCommState::Err;
 
-        assert_eq!(self_check_tps_a_summary_name(&snapshot), "ok");
+        assert_eq!(self_check_tps_a_summary_name(&snapshot), "warn");
+        assert_eq!(self_check_tps_b_summary_name(&snapshot), "warn");
+    }
+
+    #[test]
+    fn self_check_tps_summary_keeps_err_when_upstream_power_is_available() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq25792_vbat_present = Some(true);
+        snapshot.bq40z50_discharge_ready = Some(true);
+        snapshot.tps_a = SelfCheckCommState::Err;
+        snapshot.tps_b = SelfCheckCommState::Err;
+
+        assert_eq!(self_check_tps_a_summary_name(&snapshot), "err");
         assert_eq!(self_check_tps_b_summary_name(&snapshot), "err");
     }
 
