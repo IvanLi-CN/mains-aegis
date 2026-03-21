@@ -127,17 +127,18 @@ mcu-agentd monitor esp --reset
 
 ## TPS55288 双路输出控制（Plan #0005）
 
-本固件在启动时会通过 `I2C1` 对两颗 `TPS55288` 做最小 bring-up，并冻结一个“默认 profile”（用于上板联调与回归）。
+本固件在启动时会通过 `I2C1` 对两颗 `TPS55288` 做最小 bring-up，并冻结一个“默认 profile”（用于上板联调与回归）。模块 SoT 见 `docs/modules/regulated-output.md`。
 
 ### 默认 profile（冻结口径）
 
-- I2C 总线：`I2C1`（`GPIO48=SDA`，`GPIO47=SCL`），`100kHz`
+- I2C 总线：`I2C1`（`GPIO48=SDA`，`GPIO47=SCL`），`25kHz`
 - OUT-A：`addr=0x74`（`TPS55288 OUT-A` / `VOUT_TPSA`）
 - OUT-B：`addr=0x75`（`TPS55288 OUT-B` / `VOUT_TPSB`）
-- 默认启用：`out_a+out_b`
+- 默认启用：`out_a`
 - 目标输出：`19V`
 - 目标限流：`3.5A`
 - 非默认输出路：通过寄存器关闭输出（`OE=0`），不主动稳压输出
+- 运行态软保护：温度/电流超阈值时会逐步下调 `IOUT_LIMIT`，若降额期间 `VOUT < 14V` 持续则进入 `active_protection` 关断
 
 > 以上默认 profile 由 `firmware/src/main.rs` 的编译期常量决定，可按联调需要调整（不要在上电状态下频繁刷写造成误判）。
 
@@ -145,25 +146,28 @@ mcu-agentd monitor esp --reset
 
 启动阶段（配置结果）：
 
-- `power: enabled_outputs=out_a+out_b target_vout_mv=19000 target_ilimit_ma=3500`
+- `power: requested_outputs=out_a active_outputs=out_a recoverable_outputs=none gate_reason=none target_vout_mv=19000 target_ilimit_ma=3500`
 - `power: ina3221 ok ...`
 - `power: tps addr=0x74 configured enabled=true ...`
-- `power: tps addr=0x75 configured enabled=true ...`
+- `power: tps addr=0x75 configured enabled=false ...`
 
 故障/告警（`I2C1_INT(GPIO33)` 触发时，最小可观测口径）：
 
 - `power: fault ch=out_a addr=0x74 status=0x..`
 - `power: fault ch=out_b addr=0x75 status=0x..`
+- `TPS55288` 配置阶段不会在 `enable_output()` 之后立刻读取 `STATUS`；固件会先把 `SC/OCP/OVP` 指示重新打开，再由 `I2C1_INT` 常驻捕获并在软件侧锁存故障位
 
 若 I2C 通信失败（缺件/焊接/总线故障等）：
 
 - 固件不会 panic
 - 日志包含 `addr` + `stage` + `err=<i2c_nack|i2c_timeout|i2c_...>`
-- 固件会限频重试（默认 `5s` 一次），避免刷屏
+- `i2c_nack / i2c_timeout / i2c_arbitration / i2c` 这类瞬态错误只给有限次退避重试（默认 `5s` 一次）
+- 超出预算后会锁存为运行期 `tps_config_failed`，停止无限整套重配，等待显式 restore
+- `invalid_config / out_of_range` 这类非瞬态错误不进入延迟重试，直接锁存
 
 ## INA3221 遥测（Plan #0005）
 
-固件会初始化 `INA3221 (addr=0x40)` 并每 `500ms` 输出两行遥测（`out_a/out_b` 各一行）。
+固件会初始化 `INA3221 (addr=0x40)` 并每 `500ms` 输出两行遥测（`out_a/out_b` 各一行）。`CH1/CH2` 属于稳压输出模块，`CH3` 只作为输入侧 `VIN` 共享观测，不改变输出模块的通道契约。
 
 若自检门控导致 `enabled_outputs=none`（例如 `BQ40Z50` 缺失），固件仍会继续输出 INA 诊断行，便于单独验证 INA3221 是否可读：
 
@@ -200,7 +204,7 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0
 
 ### I2C（冻结口径）
 
-- 总线：`I2C1`（`GPIO48=SDA`，`GPIO47=SCL`），`100kHz`
+- 总线：`I2C1`（`GPIO48=SDA`，`GPIO47=SCL`），`25kHz`
 - 地址：
   - `out_a`：`TMP112A addr=0x48`
   - `out_b`：`TMP112A addr=0x49`
@@ -245,10 +249,33 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 
 - 未命中紧急条件时，自检阶段不主动改 `TPS55288` 输出状态。
 - 固定顺序：`SYNC` → 独立传感器（`INA3221`/`TMP112`）→ 屏幕模块 → `BQ40Z50` → `BQ25792` → `TPS55288`。
-- 初始化应用阶段按探测结果门控模块；其中 `BQ40Z50` 缺失时强制禁用 `TPS55288` 输出。
+- 初始化应用阶段按探测结果与授权决策门控模块；其中 `BQ40Z50` 缺失或放电未就绪时会先把输出保持在 `HOLD`，只有安全条件满足时才允许发起一次放电授权恢复尝试。
+- 启动期这条放电授权链以 `Type-C / BQ25792` 的输入存在为前置条件之一，不要求 `INA3221 CH3` 的 `VIN` 采样先稳定。
 - `BQ25792` 充电默认也会被禁用；仅 `--features force-min-charge` 构建时保留充电模块，并以最小 `ICHG/IINDPM` 唤醒（不改充电电压）。
 - `BQ40Z50` 默认只使用 `7-bit 0x0B`（等价 `8-bit W=0x16/R=0x17`）；只有 `--features bms-dual-probe-diag` 才会额外探测 `0x16` 以做兼容诊断。
-- 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。
+- 只要 `BQ40Z50` 普通通信正常，就不走“离线激活”语义；启动期这类状态属于“放电授权恢复”而不是“激活缺失设备”。
+- 启动期自检里的 `self_test: discharge_authorization decision=eligible` 只代表“允许发起恢复尝试”，不代表放电已经恢复；只有运行期真正观测到 `discharge_ready=true`，这次授权才算成功。
+- 仅在 emergency-stop（如 `THERM_KILL_N` 断言、`TPS` 保护位命中）时，允许在自检阶段执行 `TPS disable_output()`。运行态门控解除后，本轮固件只转入“可恢复未恢复”，不会自动重新打开输出。
+- 当 `BQ40Z50` 普通通信正常、但路径仍被 `XDSG/XCHG` 阻断时，固件会额外打印 `bms_diag_block: ...`，把 `SafetyStatus/PFStatus/ManufacturingStatus` 和常用保护位一起展开；这条诊断在自检、放电授权恢复失败、以及运行期持续阻断时都会使用。
+- 运行期首次拿到 `BQ40Z50` 有效快照时，固件会额外打印 `bms_diag_cfg: ...`，展开 `OperationStatus[EMSHUT]`、`DA Configuration`、`Power Config`，并给出 `pin16_mode`（`pres` / `shutdown` / `non_removable_no_emshut`）用于判断 `PRES#/SHUTDN#` 的真实配置与 `EMSHUT` 退出条件。
+- 运行期若某路输出已经 `OE=1`、`TPS55288` 没有报告 `SCP/OCP/OVP`、但 `INA3221` 看到该路实际电压长时间低于目标且输出电流几乎为零，固件会打印 `power: output_diag ... anomaly=output_not_rising`。这条日志只用于运行期定位，不参与自检判定。
+- `power: output_diag` 会同时给出 `expected_mode`、`status_mode`、`suspected_path` 和 `check_parts`。例如当目标是 `12V`、包电压约 `16.7V` 时，它会推断 `expected_mode=buck`；若这时输出仍停在几百毫伏并且无 fault，则优先怀疑 `DR1H/DR1L`、`Q9/Q16`、`L5`、`BOOT1`、`SW1` 这条外置 buck 功率链。
+
+## TPS 冻结控制项
+
+`TPS55288` 的以下控制项属于开发冻结项：
+
+- `PFM/FPWM`
+- `MODE` 控制来源与 override/strap 语义
+- `SYNC` 相关配置
+
+没有主人的明确批准，不允许为了诊断或 bring-up 临时改动这些项。默认允许的诊断动作仅限于：
+
+- 读取寄存器、状态位与中断
+- 采集 `INA/TMP/BMS/charger` 遥测
+- 记录日志与外部仪器观测
+
+若确需改动冻结项，必须先在开发文档中记录变更目的、范围、回退方式与批准结论，然后才能执行。
 
 ## 前面板屏幕显示（Spec 6qrjs / 7n4qd）
 
@@ -273,8 +300,14 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
 - 五向按键映射为功能焦点切换：`UP->OUT-A`、`DOWN->OUT-B`、`LEFT->BMS`、`RIGHT->CHARGER`、`CENTER->THERM`
 - 触摸中断仅作为告警指示（`IRQ ON/OFF`）
 - 上电自检页：屏幕可用时先进入 `Variant C Self-check`，自检阶段按探测进度实时刷新模块状态（`PEND -> OK/WARN/ERR/N/A`）
-- `BQ40Z50` 卡片语义：`OK`=普通访问可信正常态，`WARN`=设备存在但非正常态，`ERR`=普通访问未识别；`ERR` 时允许尝试激活。
-- 自检完成后保持 `Variant C` 常驻，并持续显示运行期真实数据（`TPS/INA/TMP/BQ25792/BQ40`）
+- `BQ40Z50` 卡片语义：
+  - `OK`=普通访问可信且放电路径 ready
+  - `LIMIT`=普通访问可信，但 `DSG` 路径未就绪
+  - `RECOVER`=启动期已批准放电恢复尝试，恢复链路进行中
+  - `ERR`=普通访问未识别；只有这种情况才允许手动打开“激活”对话框
+- `BQ25792` 卡片语义：芯片正常但当前未充电时显示 `IDLE`，不把“电池路径受限”误判成 charger 故障。
+- `TPS55288-A/B` 卡片语义：自检阶段两路都只做相同的只读探测，并保持 `OE=0`；当 `BMS` 尚未允许放电或仍无法确认 `VBAT` 网络有合理电压时，`TPS` 的 `I2C NACK/not_present` 要显示为 `WARN`（并给出上游等待提示），而不是 `ERR`；只有在上游供电前提已满足后仍探测失败，才显示 `ERR`。
+- 自检页只有在本模式必需模块全部 clear 时才会切到 Dashboard；若 `BMS` 仍为 `LIMIT`，页面继续停留在 `Variant C` 并显示运行期真实数据。
 - 页面切换：本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard
 - Dashboard 视觉基线：`Variant B`（仅用于 Dashboard 场景）
 - `Variant C` 重定位为“高级设置/自检页”风格，不作为默认 Dashboard

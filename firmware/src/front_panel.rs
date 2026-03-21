@@ -360,7 +360,15 @@ impl FrontPanel {
             return;
         }
         self.bms_activation_state = state;
-        self.self_check_overlay = if self.ui_variant == SELF_CHECK_VARIANT {
+        let overlay_allowed = self.ui_variant == SELF_CHECK_VARIANT
+            && (front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
+                || matches!(
+                    self.self_check_overlay,
+                    SelfCheckOverlay::BmsActivateConfirm
+                        | SelfCheckOverlay::BmsActivateProgress
+                        | SelfCheckOverlay::BmsActivateResult(..)
+                ));
+        self.self_check_overlay = if overlay_allowed {
             match state {
                 BmsActivationState::Idle => SelfCheckOverlay::None,
                 BmsActivationState::Pending => SelfCheckOverlay::BmsActivateProgress,
@@ -1189,8 +1197,8 @@ fn log_self_check_snapshot_transition(previous: &SelfCheckUiSnapshot, next: &Sel
             self_check_comm_state_name(next.ina3221),
             self_check_comm_state_name(next.bq25792),
             self_check_comm_state_name(next.bq40z50),
-            self_check_comm_state_name(next.tps_a),
-            self_check_comm_state_name(next.tps_b),
+            front_panel_scene::self_check_tps_a_summary_name(next),
+            front_panel_scene::self_check_tps_b_summary_name(next),
             self_check_comm_state_name(next.tmp_a),
             self_check_comm_state_name(next.tmp_b)
         );

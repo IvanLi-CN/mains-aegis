@@ -5,6 +5,7 @@ use embedded_graphics_core::{
     prelude::RawData,
     Pixel,
 };
+use esp_firmware::output_state::{EnabledOutputs, OutputGateReason, OutputSelector};
 use u8g2_fonts::{
     fonts,
     types::{FontColor, HorizontalAlignment, VerticalPosition},
@@ -105,7 +106,7 @@ const HEADER_H: u16 = 18;
 const FOOTER_H: u16 = 0;
 const ERROR_COLOR: u16 = 0xF800;
 const SUCCESS_COLOR: u16 = 0x07E0;
-const PROGRESS_COLOR: u16 = 0xFD20;
+const ATTENTION_COLOR: u16 = 0xFCA0;
 const DETAIL_TITLE_X: i32 = 74;
 const DETAIL_STATUS_X: i32 = (UI_W - 8) as i32;
 const DETAIL_ROW_Y_1: u16 = 78;
@@ -279,6 +280,10 @@ impl DashboardDetailSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SelfCheckUiSnapshot {
     pub mode: UpsMode,
+    pub requested_outputs: EnabledOutputs,
+    pub active_outputs: EnabledOutputs,
+    pub recoverable_outputs: EnabledOutputs,
+    pub output_gate_reason: OutputGateReason,
     pub gc9307: SelfCheckCommState,
     pub tca6408a: SelfCheckCommState,
     pub fusb302: SelfCheckCommState,
@@ -301,6 +306,7 @@ pub struct SelfCheckUiSnapshot {
     pub bq40z50_rca_alarm: Option<bool>,
     pub bq40z50_no_battery: Option<bool>,
     pub bq40z50_discharge_ready: Option<bool>,
+    pub bq40z50_recovery_pending: bool,
     pub bq40z50_last_result: Option<BmsResultKind>,
     pub tps_a: SelfCheckCommState,
     pub tps_a_enabled: Option<bool>,
@@ -323,6 +329,10 @@ impl SelfCheckUiSnapshot {
     pub const fn pending(mode: UpsMode) -> Self {
         Self {
             mode,
+            requested_outputs: EnabledOutputs::None,
+            active_outputs: EnabledOutputs::None,
+            recoverable_outputs: EnabledOutputs::None,
+            output_gate_reason: OutputGateReason::None,
             gc9307: SelfCheckCommState::Pending,
             tca6408a: SelfCheckCommState::Pending,
             fusb302: SelfCheckCommState::Pending,
@@ -345,6 +355,7 @@ impl SelfCheckUiSnapshot {
             bq40z50_rca_alarm: None,
             bq40z50_no_battery: None,
             bq40z50_discharge_ready: None,
+            bq40z50_recovery_pending: false,
             bq40z50_last_result: None,
             tps_a: SelfCheckCommState::Pending,
             tps_a_enabled: None,
@@ -523,6 +534,145 @@ pub fn is_bq40_offline(snapshot: &SelfCheckUiSnapshot) -> bool {
 #[allow(dead_code)]
 pub fn is_bq40_activation_needed(snapshot: &SelfCheckUiSnapshot) -> bool {
     snapshot.bq40z50_last_result.is_none() && is_bq40_offline(snapshot)
+}
+
+fn outputs_include(snapshot: &SelfCheckUiSnapshot, selector: OutputSelector) -> bool {
+    matches!(
+        (snapshot.requested_outputs, selector),
+        (EnabledOutputs::Both, _)
+            | (
+                EnabledOutputs::Only(OutputSelector::OutA),
+                OutputSelector::OutA
+            )
+            | (
+                EnabledOutputs::Only(OutputSelector::OutB),
+                OutputSelector::OutB
+            )
+    )
+}
+
+fn active_outputs_include(snapshot: &SelfCheckUiSnapshot, selector: OutputSelector) -> bool {
+    matches!(
+        (snapshot.active_outputs, selector),
+        (EnabledOutputs::Both, _)
+            | (
+                EnabledOutputs::Only(OutputSelector::OutA),
+                OutputSelector::OutA
+            )
+            | (
+                EnabledOutputs::Only(OutputSelector::OutB),
+                OutputSelector::OutB
+            )
+    )
+}
+
+fn bms_limited(snapshot: &SelfCheckUiSnapshot) -> bool {
+    snapshot.bq40z50 != SelfCheckCommState::Err
+        && !snapshot.bq40z50_recovery_pending
+        && snapshot.bq40z50_no_battery != Some(true)
+        && snapshot.bq40z50_discharge_ready == Some(false)
+}
+
+fn output_hold_for(snapshot: &SelfCheckUiSnapshot, selector: OutputSelector) -> bool {
+    outputs_include(snapshot, selector)
+        && !active_outputs_include(snapshot, selector)
+        && snapshot.output_gate_reason == OutputGateReason::BmsNotReady
+}
+
+fn tps_upstream_warning_reason(snapshot: &SelfCheckUiSnapshot) -> Option<&'static str> {
+    if snapshot.bq40z50_discharge_ready == Some(false)
+        || snapshot.output_gate_reason == OutputGateReason::BmsNotReady
+    {
+        Some("WAIT BMS")
+    } else if snapshot.bq25792_vbat_present != Some(true) {
+        Some("VBAT UNK")
+    } else {
+        None
+    }
+}
+
+fn snapshot_tps_state(
+    snapshot: &SelfCheckUiSnapshot,
+    selector: OutputSelector,
+) -> SelfCheckCommState {
+    match selector {
+        OutputSelector::OutA => snapshot.tps_a,
+        OutputSelector::OutB => snapshot.tps_b,
+    }
+}
+
+fn snapshot_tps_enabled(snapshot: &SelfCheckUiSnapshot, selector: OutputSelector) -> Option<bool> {
+    match selector {
+        OutputSelector::OutA => snapshot.tps_a_enabled,
+        OutputSelector::OutB => snapshot.tps_b_enabled,
+    }
+}
+
+fn display_tps_state(
+    snapshot: &SelfCheckUiSnapshot,
+    selector: OutputSelector,
+) -> SelfCheckCommState {
+    match snapshot_tps_state(snapshot, selector) {
+        SelfCheckCommState::Err if tps_upstream_warning_reason(snapshot).is_some() => {
+            SelfCheckCommState::Warn
+        }
+        state => state,
+    }
+}
+
+fn self_check_tps_summary_name(
+    snapshot: &SelfCheckUiSnapshot,
+    selector: OutputSelector,
+) -> &'static str {
+    match display_tps_state(snapshot, selector) {
+        SelfCheckCommState::Pending => "pending",
+        SelfCheckCommState::Ok => "ok",
+        SelfCheckCommState::Warn => "warn",
+        SelfCheckCommState::Err => "err",
+        SelfCheckCommState::NotAvailable => "na",
+    }
+}
+
+pub fn self_check_tps_a_summary_name(snapshot: &SelfCheckUiSnapshot) -> &'static str {
+    self_check_tps_summary_name(snapshot, OutputSelector::OutA)
+}
+
+pub fn self_check_tps_b_summary_name(snapshot: &SelfCheckUiSnapshot) -> &'static str {
+    self_check_tps_summary_name(snapshot, OutputSelector::OutB)
+}
+
+pub fn self_check_can_enter_dashboard(snapshot: &SelfCheckUiSnapshot) -> bool {
+    fn state_ok(state: SelfCheckCommState) -> bool {
+        matches!(
+            state,
+            SelfCheckCommState::Ok | SelfCheckCommState::NotAvailable
+        )
+    }
+
+    let bms_clear = snapshot.bq40z50 == SelfCheckCommState::Ok
+        && snapshot.bq40z50_no_battery != Some(true)
+        && snapshot.bq40z50_discharge_ready != Some(false)
+        && !snapshot.bq40z50_recovery_pending;
+    let out_a_clear = !outputs_include(snapshot, OutputSelector::OutA)
+        || (state_ok(snapshot.tps_a)
+            && !output_hold_for(snapshot, OutputSelector::OutA)
+            && active_outputs_include(snapshot, OutputSelector::OutA));
+    let out_b_clear = !outputs_include(snapshot, OutputSelector::OutB)
+        || (state_ok(snapshot.tps_b)
+            && !output_hold_for(snapshot, OutputSelector::OutB)
+            && active_outputs_include(snapshot, OutputSelector::OutB));
+
+    state_ok(snapshot.gc9307)
+        && state_ok(snapshot.tca6408a)
+        && state_ok(snapshot.fusb302)
+        && state_ok(snapshot.ina3221)
+        && state_ok(snapshot.bq25792)
+        && bms_clear
+        && snapshot.output_gate_reason == OutputGateReason::None
+        && out_a_clear
+        && out_b_clear
+        && state_ok(snapshot.tmp_a)
+        && state_ok(snapshot.tmp_b)
 }
 
 #[allow(dead_code)]
@@ -894,6 +1044,9 @@ struct DashboardLiveData {
     touch_irq: bool,
     frame_no: u32,
     mains_present: bool,
+    requested_outputs: EnabledOutputs,
+    active_outputs: EnabledOutputs,
+    output_gate_reason: OutputGateReason,
     out_a_on: bool,
     out_b_on: bool,
     bms_on: bool,
@@ -921,6 +1074,7 @@ struct DashboardLiveData {
     bms_rca_alarm: Option<bool>,
     bms_no_battery: Option<bool>,
     bms_discharge_ready: Option<bool>,
+    bms_recovery_pending: bool,
     detail: DashboardDetailSnapshot,
 }
 
@@ -932,6 +1086,9 @@ impl DashboardLiveData {
             touch_irq: model.touch_irq,
             frame_no: model.frame_no,
             mains_present: snapshot_mains_present(snapshot),
+            requested_outputs: snapshot.requested_outputs,
+            active_outputs: snapshot.active_outputs,
+            output_gate_reason: snapshot.output_gate_reason,
             out_a_on: snapshot.tps_a_enabled == Some(true),
             out_b_on: snapshot.tps_b_enabled == Some(true),
             bms_on: model.bms_on,
@@ -959,6 +1116,7 @@ impl DashboardLiveData {
             bms_rca_alarm: snapshot.bq40z50_rca_alarm,
             bms_no_battery: snapshot.bq40z50_no_battery,
             bms_discharge_ready: snapshot.bq40z50_discharge_ready,
+            bms_recovery_pending: snapshot.bq40z50_recovery_pending,
             detail: snapshot.dashboard_detail,
         }
     }
@@ -1027,6 +1185,42 @@ impl DashboardLiveData {
             Some(_) => Some(0),
             None => None,
         }
+    }
+
+    fn output_requested(self, selector: OutputSelector) -> bool {
+        matches!(
+            (self.requested_outputs, selector),
+            (EnabledOutputs::Both, _)
+                | (
+                    EnabledOutputs::Only(OutputSelector::OutA),
+                    OutputSelector::OutA
+                )
+                | (
+                    EnabledOutputs::Only(OutputSelector::OutB),
+                    OutputSelector::OutB
+                )
+        )
+    }
+
+    fn output_hold(self, selector: OutputSelector) -> bool {
+        self.output_requested(selector)
+            && self.output_gate_reason == OutputGateReason::BmsNotReady
+            && !matches!(
+                (self.active_outputs, selector),
+                (EnabledOutputs::Both, _)
+                    | (
+                        EnabledOutputs::Only(OutputSelector::OutA),
+                        OutputSelector::OutA
+                    )
+                    | (
+                        EnabledOutputs::Only(OutputSelector::OutB),
+                        OutputSelector::OutB
+                    )
+            )
+    }
+
+    fn output_recovery_pending(self, selector: OutputSelector) -> bool {
+        self.output_hold(selector) && self.bms_recovery_pending
     }
 
     fn page_notice(self, page: DashboardDetailPage) -> &'static str {
@@ -2782,12 +2976,14 @@ fn render_variant_b_live<P: UiPainter>(
 
     let battery_note = if data.bms_state == SelfCheckCommState::Err {
         "FAULT"
+    } else if data.bms_recovery_pending {
+        "RECOV"
     } else if data.bms_no_battery == Some(true) {
         "NOBAT"
     } else if data.bms_rca_alarm == Some(true) {
         "ALARM"
     } else if data.bms_discharge_ready == Some(false) {
-        "BLOCK"
+        "LIMIT"
     } else if matches!(data.bms_current_ma, Some(ma) if ma < 0) {
         "DSG"
     } else if matches!(data.bms_current_ma, Some(ma) if ma > 0) {
@@ -2808,7 +3004,7 @@ fn render_variant_b_live<P: UiPainter>(
         }
         Some(false) => {
             if data.mains_present {
-                "LOCK"
+                "IDLE"
             } else {
                 "NOAC"
             }
@@ -2816,20 +3012,27 @@ fn render_variant_b_live<P: UiPainter>(
         None => "N/A",
     };
     let charge_note_color = comm_state_color(palette, data.charger_state);
-    let discharge_note = if data.bms_state == SelfCheckCommState::Err {
-        "FAULT"
-    } else if data.bms_no_battery == Some(true) {
-        "NOBAT"
-    } else if data.bms_discharge_ready == Some(false) {
-        "BLOCK"
-    } else {
-        match data.mode {
-            UpsMode::Off => "BYP",
-            UpsMode::Standby => "IDLE",
-            UpsMode::Supplement => "ASSIST",
-            UpsMode::Backup => "LOAD",
-        }
-    };
+    let discharge_note =
+        if data.output_hold(OutputSelector::OutA) || data.output_hold(OutputSelector::OutB) {
+            if data.bms_recovery_pending {
+                "RECOV"
+            } else {
+                "HOLD"
+            }
+        } else if data.bms_state == SelfCheckCommState::Err {
+            "FAULT"
+        } else if data.bms_no_battery == Some(true) {
+            "NOBAT"
+        } else if data.bms_discharge_ready == Some(false) {
+            "LIMIT"
+        } else {
+            match data.mode {
+                UpsMode::Off => "BYP",
+                UpsMode::Standby => "IDLE",
+                UpsMode::Supplement => "ASSIST",
+                UpsMode::Backup => "LOAD",
+            }
+        };
     let discharge_note_color = comm_state_color(palette, data.bms_state);
     let battery_soc = data.bms_soc_pct.unwrap_or(0);
     let charge_current = charge_batt_ma.unwrap_or(0);
@@ -3532,7 +3735,11 @@ fn render_dashboard_output_detail<P: UiPainter>(
         14,
         DETAIL_ROW_Y_3,
         "STATE",
-        if data.out_a_on {
+        if data.output_recovery_pending(OutputSelector::OutA) {
+            DetailTextValue::Static("RECOVER")
+        } else if data.output_hold(OutputSelector::OutA) {
+            DetailTextValue::Static("HOLD")
+        } else if data.out_a_on {
             DetailTextValue::Static("RUN")
         } else {
             DetailTextValue::Static("OFF")
@@ -3548,6 +3755,8 @@ fn render_dashboard_output_detail<P: UiPainter>(
         DetailTextValue::Static(output_fault_row_text(
             data.tps_a_state,
             data.out_a_on,
+            data.output_hold(OutputSelector::OutA),
+            data.output_recovery_pending(OutputSelector::OutA),
             "HOLD",
         )),
     )?;
@@ -3588,7 +3797,11 @@ fn render_dashboard_output_detail<P: UiPainter>(
         172,
         DETAIL_ROW_Y_3,
         "STATE",
-        if data.out_b_on {
+        if data.output_recovery_pending(OutputSelector::OutB) {
+            DetailTextValue::Static("RECOVER")
+        } else if data.output_hold(OutputSelector::OutB) {
+            DetailTextValue::Static("HOLD")
+        } else if data.out_b_on {
             DetailTextValue::Static("RUN")
         } else {
             DetailTextValue::Static("OFF")
@@ -3604,6 +3817,8 @@ fn render_dashboard_output_detail<P: UiPainter>(
         DetailTextValue::Static(output_fault_row_text(
             data.tps_b_state,
             data.out_b_on,
+            data.output_hold(OutputSelector::OutB),
+            data.output_recovery_pending(OutputSelector::OutB),
             "STBY",
         )),
     )?;
@@ -3774,12 +3989,18 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         172,
         DETAIL_ROW_Y_2,
         "BMS",
-        DetailTextValue::Static(match data.bms_state {
-            SelfCheckCommState::Ok => "READY",
-            SelfCheckCommState::Warn => "WARN",
-            SelfCheckCommState::Err => "FAULT",
-            SelfCheckCommState::Pending => "PEND",
-            SelfCheckCommState::NotAvailable => "N/A",
+        DetailTextValue::Static(if data.bms_recovery_pending {
+            "RECOVER"
+        } else if data.bms_discharge_ready == Some(false) {
+            "LIMIT"
+        } else {
+            match data.bms_state {
+                SelfCheckCommState::Ok => "READY",
+                SelfCheckCommState::Warn => "WARN",
+                SelfCheckCommState::Err => "FAULT",
+                SelfCheckCommState::Pending => "PEND",
+                SelfCheckCommState::NotAvailable => "N/A",
+            }
         }),
     )?;
     draw_detail_text_row(
@@ -3990,6 +4211,8 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
         DashboardDetailPage::Cells => {
             if data.bms_state == SelfCheckCommState::Err {
                 "FAULT"
+            } else if data.bms_recovery_pending || data.bms_discharge_ready == Some(false) {
+                "LIMIT"
             } else if data.bms_state == SelfCheckCommState::Warn || data.bms_rca_alarm == Some(true)
             {
                 "WARN"
@@ -4004,6 +4227,8 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
         DashboardDetailPage::BatteryFlow => {
             if data.bms_state == SelfCheckCommState::Err {
                 "FAULT"
+            } else if data.bms_recovery_pending || data.bms_discharge_ready == Some(false) {
+                "LIMIT"
             } else if data.bms_state == SelfCheckCommState::Warn || data.bms_rca_alarm == Some(true)
             {
                 "WARN"
@@ -4019,7 +4244,13 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
             }
         }
         DashboardDetailPage::Output => {
-            if data.tps_a_state == SelfCheckCommState::Err
+            if data.output_hold(OutputSelector::OutA) || data.output_hold(OutputSelector::OutB) {
+                if data.bms_recovery_pending {
+                    "RECOV"
+                } else {
+                    "HOLD"
+                }
+            } else if data.tps_a_state == SelfCheckCommState::Err
                 || data.tps_b_state == SelfCheckCommState::Err
             {
                 "FAULT"
@@ -4047,7 +4278,7 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
             } else if !data.mains_present {
                 "NOAC"
             } else if data.charge_allowed == Some(false) {
-                "LOCK"
+                "IDLE"
             } else if charger_data_ready(data) {
                 "IDLE"
             } else {
@@ -4074,7 +4305,7 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
 fn detail_status_color(palette: Palette, status: &'static str) -> u16 {
     match status {
         "FAULT" | "HOT" => ERROR_COLOR,
-        "WARN" | "WARM" | "LOCK" | "NOAC" => PROGRESS_COLOR,
+        "WARN" | "WARM" | "LOCK" | "NOAC" => ATTENTION_COLOR,
         _ => palette.accent,
     }
 }
@@ -4478,7 +4709,10 @@ fn charger_data_ready(data: DashboardLiveData) -> bool {
         || data.detail.charger_status.is_some()
         || data.charge_allowed.is_some()
         || data.chg_iin_ma.is_some()
-        || data.charger_state == SelfCheckCommState::Err
+        || matches!(
+            data.charger_state,
+            SelfCheckCommState::Err | SelfCheckCommState::Warn | SelfCheckCommState::Ok
+        )
 }
 
 fn charger_active_value(data: DashboardLiveData) -> Option<bool> {
@@ -4497,7 +4731,7 @@ fn charger_state_text(data: DashboardLiveData) -> &'static str {
     } else if data.charger_state == SelfCheckCommState::Err {
         "FAULT"
     } else if data.charge_allowed == Some(false) && data.mains_present {
-        "LOCK"
+        "IDLE"
     } else if !data.mains_present {
         "NOAC"
     } else {
@@ -4527,6 +4761,9 @@ fn detail_footer_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &
     match detail_status_tag(page, data) {
         "FAULT" => detail_fault_notice(page, data),
         "WARN" => "WARNING ACTIVE - CHECK DETAIL ROWS",
+        "LIMIT" => "UPSTREAM PATH LIMITED - CHECK MODULE STATUS",
+        "HOLD" => "OUTPUT WAITING FOR BMS DISCHARGE PERMISSION",
+        "RECOV" => "RECOVERY IN PROGRESS - HOLD OUTPUTS",
         _ => data.page_notice(page),
     }
 }
@@ -4536,6 +4773,10 @@ fn detail_fault_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &'
         DashboardDetailPage::BatteryFlow => {
             if data.bms_state == SelfCheckCommState::Err {
                 "BMS LINK FAULT"
+            } else if data.bms_recovery_pending {
+                "BMS RECOVERY IN PROGRESS"
+            } else if data.bms_discharge_ready == Some(false) {
+                "DISCHARGE PATH LIMITED"
             } else if data.bms_rca_alarm == Some(true) {
                 "PACK ALARM ACTIVE"
             } else if !battery_flow_detail_ready(data) {
@@ -4549,6 +4790,25 @@ fn detail_fault_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &'
                 "CHARGER LINK FAULT"
             } else if !charger_data_ready(data) {
                 "N/A"
+            } else {
+                data.page_notice(page)
+            }
+        }
+        DashboardDetailPage::Output => {
+            if data.output_hold(OutputSelector::OutA) || data.output_hold(OutputSelector::OutB) {
+                if data.bms_recovery_pending {
+                    "OUTPUT WAITING FOR BMS RECOVERY"
+                } else {
+                    "OUTPUT HELD BY BMS DISCHARGE POLICY"
+                }
+            } else if data.tps_a_state == SelfCheckCommState::Err
+                || data.tps_b_state == SelfCheckCommState::Err
+            {
+                "TPS LINK FAULT"
+            } else if data.tps_a_state == SelfCheckCommState::Warn
+                || data.tps_b_state == SelfCheckCommState::Warn
+            {
+                "TPS PROTECTION ACTIVE"
             } else {
                 data.page_notice(page)
             }
@@ -4607,7 +4867,9 @@ fn detail_footer_badge(
                 _ => "FAULT",
             },
         ),
-        "WARN" | "HOT" | "WARM" | "LOCK" | "NOAC" => (DetailFooterIcon::Warn, "CHECK ROWS"),
+        "WARN" | "HOT" | "WARM" | "LOCK" | "NOAC" | "LIMIT" | "HOLD" | "RECOV" => {
+            (DetailFooterIcon::Warn, "CHECK ROWS")
+        }
         _ if notice.contains("PENDING")
             || notice.contains("SOURCE")
             || notice.contains("UI ONLY") =>
@@ -4661,6 +4923,8 @@ fn detail_fault_row_text(page: DashboardDetailPage, data: DashboardLiveData) -> 
         DashboardDetailPage::BatteryFlow => {
             if data.bms_state == SelfCheckCommState::Err {
                 "LINK"
+            } else if data.bms_recovery_pending || data.bms_discharge_ready == Some(false) {
+                "LIMIT"
             } else if data.bms_state == SelfCheckCommState::Warn {
                 "WARN"
             } else if data.bms_rca_alarm == Some(true) {
@@ -4700,9 +4964,15 @@ fn detail_fault_row_text(page: DashboardDetailPage, data: DashboardLiveData) -> 
 fn output_fault_row_text(
     state: SelfCheckCommState,
     enabled: bool,
+    hold: bool,
+    recovering: bool,
     off_text: &'static str,
 ) -> &'static str {
-    if state == SelfCheckCommState::Err {
+    if recovering {
+        "RECOV"
+    } else if hold {
+        "HOLD"
+    } else if state == SelfCheckCommState::Err {
         "FAULT"
     } else if state == SelfCheckCommState::Warn {
         "WARN"
@@ -4864,17 +5134,26 @@ fn render_variant_c<P: UiPainter>(
     } else {
         format_args!("ISUM N/A")
     };
-    let chg_key = if snapshot.bq25792_allow_charge == Some(false) {
-        format_args!("CHG DISABLED")
+    let chg_key = if snapshot.bq25792 == SelfCheckCommState::Ok
+        && snapshot.bq25792_allow_charge == Some(false)
+        && snapshot.fusb302_vbus_present == Some(true)
+    {
+        format_args!("INPUT ONLY")
+    } else if snapshot.bq25792_allow_charge == Some(false) {
+        format_args!("CHG IDLE")
     } else if ichg_has {
         format_args!("ICHG {:>1}.{:02}A", ichg_whole, ichg_frac)
     } else {
         format_args!("ICHG N/A")
     };
-    let bms_key = if snapshot.bq40z50 == SelfCheckCommState::Err {
+    let bms_key = if snapshot.bq40z50_recovery_pending {
+        format_args!("AUTH ACTIVE")
+    } else if snapshot.bq40z50 == SelfCheckCommState::Err {
         format_args!("NOT DETECTED")
     } else if snapshot.bq40z50_no_battery == Some(true) {
         format_args!("NO BATTERY")
+    } else if snapshot.bq40z50_discharge_ready == Some(false) {
+        format_args!("DSG BLOCKED")
     } else if snapshot.bq40z50_rca_alarm == Some(true) {
         format_args!("RCA ALARM")
     } else if snapshot.bq40z50 == SelfCheckCommState::Warn {
@@ -4884,13 +5163,18 @@ fn render_variant_c<P: UiPainter>(
     } else {
         format_args!("SOC N/A")
     };
+    let tps_warning_reason = tps_upstream_warning_reason(&snapshot).unwrap_or("IOUT N/A");
     let tps_a_key = if tps_a_has {
         format_args!("IOUT {}{:>1}.{:02}A", tps_a_sign, tps_a_whole, tps_a_frac)
+    } else if display_tps_state(&snapshot, OutputSelector::OutA) == SelfCheckCommState::Warn {
+        format_args!("{}", tps_warning_reason)
     } else {
         format_args!("IOUT N/A")
     };
     let tps_b_key = if tps_b_has {
         format_args!("IOUT {}{:>1}.{:02}A", tps_b_sign, tps_b_whole, tps_b_frac)
+    } else if display_tps_state(&snapshot, OutputSelector::OutB) == SelfCheckCommState::Warn {
+        format_args!("{}", tps_warning_reason)
     } else {
         format_args!("IOUT N/A")
     };
@@ -4904,6 +5188,8 @@ fn render_variant_c<P: UiPainter>(
     } else {
         format_args!("TMAX N/A")
     };
+    let tps_a_status_state = display_tps_state(&snapshot, OutputSelector::OutA);
+    let tps_b_status_state = display_tps_state(&snapshot, OutputSelector::OutB);
 
     draw_diag_card(
         painter,
@@ -4984,7 +5270,11 @@ fn render_variant_c<P: UiPainter>(
             h: row_h,
             module: "BQ25792",
             status_state: snapshot.bq25792,
-            status: charger_label(snapshot.bq25792, snapshot.bq25792_allow_charge),
+            status: charger_label(
+                snapshot.bq25792,
+                snapshot.bq25792_allow_charge,
+                snapshot.fusb302_vbus_present,
+            ),
             key: chg_key,
             active: data.focus == UiFocus::Right,
             accent: palette.right,
@@ -5002,7 +5292,7 @@ fn render_variant_c<P: UiPainter>(
             h: row_h,
             module: "BQ40Z50",
             status_state: snapshot.bq40z50,
-            status: bms_label(snapshot.bq40z50, snapshot.bq40z50_rca_alarm),
+            status: bms_label(&snapshot),
             key: bms_key,
             active: data.focus == UiFocus::Left,
             accent: palette.left,
@@ -5018,8 +5308,13 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "TPS55288-A",
-            status_state: snapshot.tps_a,
-            status: tps_label(snapshot.tps_a, snapshot.tps_a_enabled),
+            status_state: tps_a_status_state,
+            status: tps_label(
+                &snapshot,
+                OutputSelector::OutA,
+                tps_a_status_state,
+                snapshot_tps_enabled(&snapshot, OutputSelector::OutA),
+            ),
             key: tps_a_key,
             active: data.focus == UiFocus::Up,
             accent: palette.up,
@@ -5035,8 +5330,13 @@ fn render_variant_c<P: UiPainter>(
             w: col_w,
             h: row_h,
             module: "TPS55288-B",
-            status_state: snapshot.tps_b,
-            status: tps_label(snapshot.tps_b, snapshot.tps_b_enabled),
+            status_state: tps_b_status_state,
+            status: tps_label(
+                &snapshot,
+                OutputSelector::OutB,
+                tps_b_status_state,
+                snapshot_tps_enabled(&snapshot, OutputSelector::OutB),
+            ),
             key: tps_b_key,
             active: data.focus == UiFocus::Down,
             accent: palette.down,
@@ -5277,7 +5577,7 @@ fn draw_self_check_overlay<P: UiPainter>(
                 "Checking pack state...",
                 Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 50) as i32),
                 HorizontalAlignment::Left,
-                PROGRESS_COLOR,
+                ATTENTION_COLOR,
             )?;
         }
         SelfCheckOverlay::BmsActivateResult(result) => {
@@ -5296,21 +5596,21 @@ fn draw_self_check_overlay<P: UiPainter>(
                     "Battery not detected.",
                     "Check pack connection.",
                     "Tap to close",
-                    PROGRESS_COLOR,
+                    ATTENTION_COLOR,
                     ActivationIcon::Failed,
                 ),
                 BmsResultKind::RomMode => (
                     "Gauge is in ROM mode.",
                     "Use BQ40 tool recovery.",
                     "Tap to close",
-                    PROGRESS_COLOR,
+                    ATTENTION_COLOR,
                     ActivationIcon::Failed,
                 ),
                 BmsResultKind::Abnormal => (
                     "Gauge responded abnormally.",
                     "Review pack status.",
                     "Tap to close",
-                    PROGRESS_COLOR,
+                    ATTENTION_COLOR,
                     ActivationIcon::Failed,
                 ),
                 BmsResultKind::NotDetected => (
@@ -5372,7 +5672,7 @@ fn draw_activation_icon<P: UiPainter>(
     // Icon source: Iconify / carbon.
     // Use original glyphs directly (no secondary reinterpretation/composition).
     let (icon_color, icon_blocks) = match icon {
-        ActivationIcon::Progress => (PROGRESS_COLOR, CARBON_IN_PROGRESS_32),
+        ActivationIcon::Progress => (ATTENTION_COLOR, CARBON_IN_PROGRESS_32),
         ActivationIcon::Success => (SUCCESS_COLOR, CARBON_CHECKMARK_OUTLINE_32),
         ActivationIcon::Failed => (ERROR_COLOR, CARBON_CLOSE_OUTLINE_32),
     };
@@ -6137,7 +6437,14 @@ fn comm_label(state: SelfCheckCommState) -> &'static str {
     }
 }
 
-fn tps_label(state: SelfCheckCommState, enabled: Option<bool>) -> &'static str {
+fn tps_label(
+    snapshot: &SelfCheckUiSnapshot,
+    selector: OutputSelector,
+    state: SelfCheckCommState,
+    enabled: Option<bool>,
+) -> &'static str {
+    let _ = snapshot;
+    let _ = selector;
     match state {
         SelfCheckCommState::Pending => "PEND",
         SelfCheckCommState::Warn => "WARN",
@@ -6151,7 +6458,11 @@ fn tps_label(state: SelfCheckCommState, enabled: Option<bool>) -> &'static str {
     }
 }
 
-fn charger_label(state: SelfCheckCommState, allow_charge: Option<bool>) -> &'static str {
+fn charger_label(
+    state: SelfCheckCommState,
+    allow_charge: Option<bool>,
+    input_present: Option<bool>,
+) -> &'static str {
     match state {
         SelfCheckCommState::Pending => "PEND",
         SelfCheckCommState::Warn => "WARN",
@@ -6159,14 +6470,22 @@ fn charger_label(state: SelfCheckCommState, allow_charge: Option<bool>) -> &'sta
         SelfCheckCommState::NotAvailable => "N/A",
         SelfCheckCommState::Ok => match allow_charge {
             Some(true) => "RUN",
-            Some(false) => "LOCK",
+            Some(false) if input_present == Some(true) => "IDLE",
+            Some(false) => "IDLE",
             None => "OK",
         },
     }
 }
 
-fn bms_label(state: SelfCheckCommState, _rca_alarm: Option<bool>) -> &'static str {
-    match state {
+fn bms_label(snapshot: &SelfCheckUiSnapshot) -> &'static str {
+    if snapshot.bq40z50_recovery_pending {
+        return "RECOVER";
+    }
+    if snapshot.bq40z50_no_battery == Some(true) || bms_limited(snapshot) {
+        return "LIMIT";
+    }
+
+    match snapshot.bq40z50 {
         SelfCheckCommState::Pending => "PEND",
         SelfCheckCommState::Warn => "WARN",
         SelfCheckCommState::Err => "ERR",
@@ -6200,7 +6519,7 @@ fn vbus_key_text(vbus_present: Option<bool>) -> &'static str {
 fn comm_state_color(palette: Palette, state: SelfCheckCommState) -> u16 {
     match state {
         SelfCheckCommState::Ok => SUCCESS_COLOR,
-        SelfCheckCommState::Warn => PROGRESS_COLOR,
+        SelfCheckCommState::Warn => ATTENTION_COLOR,
         SelfCheckCommState::Err => ERROR_COLOR,
         SelfCheckCommState::Pending | SelfCheckCommState::NotAvailable => palette.text_dim,
     }
@@ -6272,10 +6591,21 @@ fn draw_diag_card<P: UiPainter, T: Content>(
     };
     let status_color = if spec.active {
         palette.bg
-    } else if spec.status_state == SelfCheckCommState::Err {
-        ERROR_COLOR
     } else {
-        dim_color
+        match spec.status_state {
+            SelfCheckCommState::Err => ERROR_COLOR,
+            SelfCheckCommState::Warn => ATTENTION_COLOR,
+            _ => dim_color,
+        }
+    };
+    let key_color = if spec.active {
+        text_color
+    } else {
+        match spec.status_state {
+            SelfCheckCommState::Warn => ATTENTION_COLOR,
+            SelfCheckCommState::Err => text_color,
+            _ => text_color,
+        }
     };
     text(
         painter,
@@ -6302,7 +6632,7 @@ fn draw_diag_card<P: UiPainter, T: Content>(
         spec.key,
         Point::new((spec.x + 6) as i32, (spec.y + 15) as i32),
         HorizontalAlignment::Left,
-        text_color,
+        key_color,
     )?;
     Ok(())
 }
@@ -7387,6 +7717,127 @@ mod tests {
     }
 
     #[test]
+    fn bq40_activation_requires_offline_state() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_discharge_ready = Some(false);
+
+        assert!(!is_bq40_activation_needed(&snapshot));
+
+        snapshot.bq40z50 = SelfCheckCommState::Err;
+        assert!(is_bq40_activation_needed(&snapshot));
+    }
+
+    #[test]
+    fn self_check_can_enter_dashboard_only_when_all_modules_clear() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.gc9307 = SelfCheckCommState::Ok;
+        snapshot.tca6408a = SelfCheckCommState::Ok;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.ina3221 = SelfCheckCommState::Ok;
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Ok;
+        snapshot.bq40z50_discharge_ready = Some(true);
+        snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.active_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.tps_a = SelfCheckCommState::Ok;
+        snapshot.tps_b = SelfCheckCommState::Ok;
+        snapshot.tmp_a = SelfCheckCommState::Ok;
+        snapshot.tmp_b = SelfCheckCommState::Ok;
+
+        assert!(self_check_can_enter_dashboard(&snapshot));
+
+        snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
+        snapshot.active_outputs = EnabledOutputs::None;
+        assert!(!self_check_can_enter_dashboard(&snapshot));
+    }
+
+    #[test]
+    fn battery_flow_uses_limit_when_bms_blocks_discharge() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_discharge_ready = Some(false);
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BatteryFlow, live),
+            "LIMIT"
+        );
+        assert_eq!(
+            detail_fault_row_text(DashboardDetailPage::BatteryFlow, live),
+            "LIMIT"
+        );
+    }
+
+    #[test]
+    fn output_detail_uses_hold_when_bms_gate_blocks_requested_output() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.active_outputs = EnabledOutputs::None;
+        snapshot.recoverable_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_discharge_ready = Some(false);
+        snapshot.tps_a = SelfCheckCommState::Err;
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(detail_status_tag(DashboardDetailPage::Output, live), "HOLD");
+        assert_eq!(
+            output_fault_row_text(
+                live.tps_a_state,
+                live.out_a_on,
+                live.output_hold(OutputSelector::OutA),
+                live.output_recovery_pending(OutputSelector::OutA),
+                "HOLD",
+            ),
+            "HOLD"
+        );
+    }
+
+    #[test]
+    fn self_check_tps_summary_maps_expected_unpowered_tps_probe_failures_to_warn() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
+        snapshot.bq25792_vbat_present = Some(false);
+        snapshot.tps_a = SelfCheckCommState::Err;
+        snapshot.tps_b = SelfCheckCommState::Err;
+
+        assert_eq!(self_check_tps_a_summary_name(&snapshot), "warn");
+        assert_eq!(self_check_tps_b_summary_name(&snapshot), "warn");
+    }
+
+    #[test]
+    fn self_check_tps_summary_keeps_err_when_upstream_power_is_available() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq25792_vbat_present = Some(true);
+        snapshot.bq40z50_discharge_ready = Some(true);
+        snapshot.tps_a = SelfCheckCommState::Err;
+        snapshot.tps_b = SelfCheckCommState::Err;
+
+        assert_eq!(self_check_tps_a_summary_name(&snapshot), "err");
+        assert_eq!(self_check_tps_b_summary_name(&snapshot), "err");
+    }
+
+    #[test]
+    fn charger_detail_keeps_idle_when_input_present_but_charge_not_allowed() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq25792_allow_charge = Some(false);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Charger, live),
+            "IDLE"
+        );
+        assert_eq!(charger_state_text(live), "IDLE");
+    }
+
+    #[test]
     fn live_dashboard_clamps_reverse_input_current_to_zero_power() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.fusb302_vbus_present = Some(true);
@@ -7717,7 +8168,7 @@ mod tests {
         );
 
         assert_eq!(
-            output_fault_row_text(SelfCheckCommState::Err, true, "HOLD"),
+            output_fault_row_text(SelfCheckCommState::Err, true, false, false, "HOLD"),
             "FAULT"
         );
     }
@@ -7756,7 +8207,7 @@ mod tests {
         );
 
         assert_eq!(
-            output_fault_row_text(SelfCheckCommState::Warn, true, "HOLD"),
+            output_fault_row_text(SelfCheckCommState::Warn, true, false, false, "HOLD"),
             "WARN"
         );
     }

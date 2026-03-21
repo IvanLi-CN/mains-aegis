@@ -68,6 +68,17 @@ const TMP112_OUT_A_ADDR: u8 = 0x48;
 const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 50 * 16;
 const TMP112_TLOW_C_X16: i16 = 40 * 16;
+const OUTPUT_PROTECT_TEMP_DERATE_C_X16: i16 = 40 * 16;
+const OUTPUT_PROTECT_TEMP_RESUME_C_X16: i16 = 38 * 16;
+const OUTPUT_PROTECT_TEMP_HOLD: Duration = Duration::from_secs(5);
+const OUTPUT_PROTECT_CURRENT_DERATE_MA: i32 = 3_250;
+const OUTPUT_PROTECT_CURRENT_RESUME_MA: i32 = 3_000;
+const OUTPUT_PROTECT_CURRENT_HOLD: Duration = Duration::from_secs(3);
+const OUTPUT_PROTECT_ILIM_STEP_MA: u16 = 250;
+const OUTPUT_PROTECT_ILIM_STEP_INTERVAL: Duration = Duration::from_secs(2);
+const OUTPUT_PROTECT_MIN_ILIM_MA: u16 = 1_000;
+const OUTPUT_PROTECT_SHUTDOWN_VOUT_MV: u16 = 14_000;
+const OUTPUT_PROTECT_SHUTDOWN_HOLD: Duration = Duration::from_secs(2);
 const FAN_PWM_FREQ_KHZ: u32 = 25;
 const FAN_MID_PWM_PCT: u8 = 60;
 const FAN_LOW_TEMP_C_X16: i16 = 40 * 16;
@@ -934,9 +945,10 @@ fn main() -> ! {
         ina_detected: self_test.ina_detected,
         detected_tmp_outputs: self_test.detected_tmp_outputs,
         detected_tps_outputs: self_test.detected_tps_outputs,
-        enabled_outputs: self_test.enabled_outputs,
-        outputs_restore_on_bms_ready: self_test.outputs_restore_on_bms_ready,
-        outputs_blocked_by_bms: self_test.outputs_blocked_by_bms,
+        requested_outputs: self_test.requested_outputs,
+        active_outputs: self_test.active_outputs,
+        recoverable_outputs: self_test.recoverable_outputs,
+        output_gate_reason: self_test.output_gate_reason,
         vout_mv: DEFAULT_VOUT_MV,
         ilimit_ma: DEFAULT_ILIMIT_MA,
         telemetry_period: TELEMETRY_PERIOD,
@@ -945,6 +957,17 @@ fn main() -> ! {
         telemetry_include_vin_ch3: TELEMETRY_INCLUDE_VIN_CH3,
         tmp112_tlow_c_x16: TMP112_TLOW_C_X16,
         tmp112_thigh_c_x16: TMP112_THIGH_C_X16,
+        protect_temp_derate_c_x16: OUTPUT_PROTECT_TEMP_DERATE_C_X16,
+        protect_temp_resume_c_x16: OUTPUT_PROTECT_TEMP_RESUME_C_X16,
+        protect_temp_hold: OUTPUT_PROTECT_TEMP_HOLD,
+        protect_current_derate_ma: OUTPUT_PROTECT_CURRENT_DERATE_MA,
+        protect_current_resume_ma: OUTPUT_PROTECT_CURRENT_RESUME_MA,
+        protect_current_hold: OUTPUT_PROTECT_CURRENT_HOLD,
+        protect_ilim_step_ma: OUTPUT_PROTECT_ILIM_STEP_MA,
+        protect_ilim_step_interval: OUTPUT_PROTECT_ILIM_STEP_INTERVAL,
+        protect_min_ilim_ma: OUTPUT_PROTECT_MIN_ILIM_MA,
+        protect_shutdown_vout_mv: OUTPUT_PROTECT_SHUTDOWN_VOUT_MV,
+        protect_shutdown_hold: OUTPUT_PROTECT_SHUTDOWN_HOLD,
         fan_config: esp_firmware::fan::Config {
             low_temp_c_x16: FAN_LOW_TEMP_C_X16,
             high_temp_c_x16: FAN_HIGH_TEMP_C_X16,
@@ -978,15 +1001,23 @@ fn main() -> ! {
         cfg,
     );
     defmt::info!(
-        "power: enabled_outputs={} target_vout_mv={=u16} target_ilimit_ma={=u16}",
-        cfg.enabled_outputs.describe(),
+        "power: requested_outputs={} active_outputs={} recoverable_outputs={} gate_reason={} target_vout_mv={=u16} target_ilimit_ma={=u16}",
+        cfg.requested_outputs.describe(),
+        cfg.active_outputs.describe(),
+        cfg.recoverable_outputs.describe(),
+        cfg.output_gate_reason.as_str(),
         cfg.vout_mv,
         cfg.ilimit_ma
     );
     power.init_best_effort();
-    front_panel.update_self_check_snapshot(power.ui_snapshot());
+    let initial_snapshot = power.ui_snapshot();
+    front_panel.update_self_check_snapshot(initial_snapshot);
     front_panel.update_bms_activation_state(power.bms_activation_state());
-    front_panel.enter_dashboard();
+    if front_panel_scene::self_check_can_enter_dashboard(&initial_snapshot) {
+        front_panel.enter_dashboard();
+    } else {
+        defmt::warn!("ui: stay on self-check reason=boot_self_check_not_clear");
+    }
     let mut applied_fan = None;
     let mut fan_pwm_degraded = false;
     let mut applied_fan_state = output::AppliedFanState {

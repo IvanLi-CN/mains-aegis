@@ -4,7 +4,7 @@
 
 | 总线 | 目标速率 | SDA | SCL | INT/告警汇总 |
 |---|---:|---|---|---|
-| `I2C1` | `100kHz`（当前固件） | `GPIO48`（`I2C1_SDA`） | `GPIO47`（`I2C1_SCL`） | `GPIO33`（`I2C1_INT`） |
+| `I2C1` | `25kHz`（当前固件） | `GPIO48`（`I2C1_SDA`） | `GPIO47`（`I2C1_SCL`） | `GPIO33`（`I2C1_INT`） |
 | `I2C2` | `400kHz` | `GPIO8`（`I2C2_SDA`） | `GPIO9`（`I2C2_SCL`） | `GPIO7`（`I2C2_INT`） |
 
 ## 设备地址（7-bit）

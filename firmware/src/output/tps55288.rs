@@ -15,7 +15,7 @@ use super::{
     TelemetryU8, TelemetryValue,
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputChannel {
     OutA,
     OutB,
@@ -104,10 +104,13 @@ where
         .map_err(|e| (ConfigureStage::VoutSr, e))?;
     tps.set_feedback(FeedbackSource::Internal, InternalFeedbackRatio::R0_0564)
         .map_err(|e| (ConfigureStage::Feedback, e))?;
+    // Keep FB/INT fault indication disabled until OE is asserted. The datasheet requires OCP_MASK=0
+    // while enabling the output; after OE goes high we re-enable SC/OCP/OVP indication so the shared
+    // interrupt pin becomes the long-lived source of truth for fault capture.
     tps.set_cable_comp(
         CableCompOption::Internal,
         CableCompLevel::V0p0,
-        false, // do not mask faults; we want interrupts + observable status during bring-up
+        false,
         false,
         false,
     )
@@ -120,6 +123,14 @@ where
     if enabled {
         tps.enable_output()
             .map_err(|e| (ConfigureStage::Enable, e))?;
+        tps.set_cable_comp(
+            CableCompOption::Internal,
+            CableCompLevel::V0p0,
+            true,
+            true,
+            true,
+        )
+        .map_err(|e| (ConfigureStage::CdcPostEnable, e))?;
     }
 
     Ok(())
@@ -136,6 +147,7 @@ pub enum ConfigureStage {
     Vout,
     Ilim,
     Enable,
+    CdcPostEnable,
 }
 
 impl ConfigureStage {
@@ -150,11 +162,12 @@ impl ConfigureStage {
             ConfigureStage::Vout => "vout",
             ConfigureStage::Ilim => "ilim",
             ConfigureStage::Enable => "enable",
+            ConfigureStage::CdcPostEnable => "cdc_post_enable",
         }
     }
 }
 
-pub fn log_configured<I2C>(i2c: &mut I2C, ch: OutputChannel, enabled: bool)
+pub fn log_configured<I2C>(i2c: &mut I2C, ch: OutputChannel, enabled: bool, defer_status_read: bool)
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
@@ -172,9 +185,13 @@ where
         Ok(v) => TelemetryU8::Value(v),
         Err(e) => TelemetryU8::Err(tps_error_kind(e)),
     };
-    let status = match tps.read_reg(tps_addr::STATUS) {
-        Ok(v) => TelemetryU8::Value(v),
-        Err(e) => TelemetryU8::Err(tps_error_kind(e)),
+    let status = if defer_status_read {
+        None
+    } else {
+        Some(match tps.read_reg(tps_addr::STATUS) {
+            Ok(v) => TelemetryU8::Value(v),
+            Err(e) => TelemetryU8::Err(tps_error_kind(e)),
+        })
     };
 
     let oe = match mode {
@@ -202,19 +219,27 @@ where
         TelemetryU8::Err(e) => TelemetryBool::Err(e),
     };
 
-    let (scp, ocp, ovp) = match status {
-        TelemetryU8::Value(v) => {
+    let (status, scp, ocp, ovp) = match status {
+        Some(TelemetryU8::Value(v)) => {
             let bits = StatusBits::from_bits_truncate(v);
             (
+                TelemetryU8::Value(v),
                 TelemetryBool::Value(bits.contains(StatusBits::SCP)),
                 TelemetryBool::Value(bits.contains(StatusBits::OCP)),
                 TelemetryBool::Value(bits.contains(StatusBits::OVP)),
             )
         }
-        TelemetryU8::Err(e) => (
+        Some(TelemetryU8::Err(e)) => (
+            TelemetryU8::Err(e),
             TelemetryBool::Err(e),
             TelemetryBool::Err(e),
             TelemetryBool::Err(e),
+        ),
+        None => (
+            TelemetryU8::Err("startup_capture"),
+            TelemetryBool::Err("startup_capture"),
+            TelemetryBool::Err("startup_capture"),
+            TelemetryBool::Err("startup_capture"),
         ),
     };
 
@@ -237,12 +262,13 @@ where
     );
 }
 
-pub fn log_fault_status<I2C>(i2c: &mut I2C, ch: OutputChannel, ina_ready: bool)
+pub fn log_fault_status<I2C>(i2c: &mut I2C, ch: OutputChannel, ina_ready: bool) -> Option<u8>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     let addr = ch.addr();
     let mut should_log_ina = false;
+    let mut captured_status = None;
     {
         let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, addr);
 
@@ -256,6 +282,7 @@ where
         match (status, mode, vout_sr, vout_fs, cdc, iout_limit) {
             (Ok(status), Ok(mode), Ok(vout_sr), Ok(vout_fs), Ok(cdc), Ok(iout_limit)) => {
                 should_log_ina = ina_ready;
+                captured_status = Some(status.bits());
 
                 let faults = StatusBits::from_bits_truncate(status.bits());
                 let mode_bits = status.bits() & 0b11;
@@ -357,6 +384,17 @@ where
             ),
         }
     }
+
+    captured_status
+}
+
+pub fn read_status_snapshot<I2C>(i2c: &mut I2C, ch: OutputChannel) -> Option<u8>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let addr = ch.addr();
+    let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, addr);
+    tps.read_reg(tps_addr::STATUS).ok()
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -367,6 +405,7 @@ pub struct TelemetryCapture {
     pub vbus_mv: Option<u16>,
     pub current_ma: Option<i32>,
     pub temp_c_x16: Option<i16>,
+    pub status_sample: Option<u8>,
 }
 
 pub fn print_telemetry_line<I2C>(
@@ -374,6 +413,9 @@ pub fn print_telemetry_line<I2C>(
     ch: OutputChannel,
     ina_ready: bool,
     therm_kill_n: u8,
+    status_override: Option<u8>,
+    fault_latched: bool,
+    allow_status_read: bool,
 ) -> TelemetryCapture
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
@@ -389,9 +431,16 @@ where
             Ok(v) => TelemetryU8::Value(v),
             Err(e) => TelemetryU8::Err(tps_error_kind(e)),
         };
-        let status = match tps.read_reg(tps_addr::STATUS) {
-            Ok(v) => TelemetryU8::Value(v),
-            Err(e) => TelemetryU8::Err(tps_error_kind(e)),
+        let status = if allow_status_read {
+            match tps.read_reg(tps_addr::STATUS) {
+                Ok(v) => TelemetryU8::Value(v),
+                Err(e) => TelemetryU8::Err(tps_error_kind(e)),
+            }
+        } else {
+            match status_override {
+                Some(v) => TelemetryU8::Value(v),
+                None => TelemetryU8::Err("irq_pending"),
+            }
         };
         let vout_sr = match tps.read_reg(tps_addr::VOUT_SR) {
             Ok(v) => TelemetryU8::Value(v),
@@ -509,8 +558,13 @@ where
         ),
     }
 
-    let comm_ok = matches!(mode, TelemetryU8::Value(_)) && matches!(status, TelemetryU8::Value(_));
-    let fault_active = matches!(scp, TelemetryBool::Value(true))
+    let status_sample = match status {
+        TelemetryU8::Value(v) => Some(v),
+        TelemetryU8::Err(_) => None,
+    };
+    let comm_ok = matches!(mode, TelemetryU8::Value(_));
+    let fault_active = fault_latched
+        || matches!(scp, TelemetryBool::Value(true))
         || matches!(ocp, TelemetryBool::Value(true))
         || matches!(ovp, TelemetryBool::Value(true));
     let output_enabled = match oe {
@@ -537,6 +591,7 @@ where
         vbus_mv,
         current_ma,
         temp_c_x16,
+        status_sample,
     }
 }
 
