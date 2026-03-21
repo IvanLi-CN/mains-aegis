@@ -161,7 +161,9 @@ mcu-agentd monitor esp --reset
 
 - 固件不会 panic
 - 日志包含 `addr` + `stage` + `err=<i2c_nack|i2c_timeout|i2c_...>`
-- 固件会限频重试（默认 `5s` 一次），避免刷屏
+- `i2c_nack / i2c_timeout / i2c_arbitration / i2c` 这类瞬态错误只给有限次退避重试（默认 `5s` 一次）
+- 超出预算后会锁存为运行期 `tps_config_failed`，停止无限整套重配，等待显式 restore
+- `invalid_config / out_of_range` 这类非瞬态错误不进入延迟重试，直接锁存
 
 ## INA3221 遥测（Plan #0005）
 

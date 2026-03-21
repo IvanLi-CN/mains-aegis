@@ -17,6 +17,7 @@ pub enum OutputGateReason {
     BmsNotReady,
     ThermKill,
     TpsFault,
+    TpsConfigFailed,
     ActiveProtection,
 }
 
@@ -27,6 +28,7 @@ impl OutputGateReason {
             OutputGateReason::BmsNotReady => "bms_not_ready",
             OutputGateReason::ThermKill => "therm_kill",
             OutputGateReason::TpsFault => "tps_fault",
+            OutputGateReason::TpsConfigFailed => "tps_config_failed",
             OutputGateReason::ActiveProtection => "active_protection",
         }
     }
@@ -89,8 +91,10 @@ pub fn output_restore_pending_from_state(
     state: OutputRuntimeState,
     mains_present: Option<bool>,
 ) -> bool {
-    state.gate_reason == OutputGateReason::None
-        && state.active_outputs == EnabledOutputs::None
+    matches!(
+        state.gate_reason,
+        OutputGateReason::None | OutputGateReason::TpsFault | OutputGateReason::TpsConfigFailed
+    ) && state.active_outputs == EnabledOutputs::None
         && state.recoverable_outputs != EnabledOutputs::None
         && mains_present == Some(true)
 }
@@ -162,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn output_restore_pending_requires_vin_online_and_no_gate() {
+    fn output_restore_pending_requires_vin_online_and_restoreable_gate() {
         let state = OutputRuntimeState::new(
             EnabledOutputs::Only(OutputSelector::OutA),
             EnabledOutputs::None,
@@ -175,6 +179,12 @@ mod tests {
         assert!(output_restore_pending_from_state(state, Some(true)));
 
         let fault_gated = output_state_gate_transition(state, OutputGateReason::TpsFault);
-        assert!(!output_restore_pending_from_state(fault_gated, Some(true)));
+        assert!(output_restore_pending_from_state(fault_gated, Some(true)));
+
+        let config_failed = output_state_gate_transition(state, OutputGateReason::TpsConfigFailed);
+        assert!(output_restore_pending_from_state(config_failed, Some(true)));
+
+        let bms_blocked = output_state_gate_transition(state, OutputGateReason::BmsNotReady);
+        assert!(!output_restore_pending_from_state(bms_blocked, Some(true)));
     }
 }

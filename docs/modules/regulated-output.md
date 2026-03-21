@@ -86,6 +86,7 @@
 - `bms_not_ready`：`BQ40Z50` 缺失，或放电路径未就绪
 - `therm_kill`：`THERM_KILL_N` 被拉低
 - `tps_fault`：任一路 `TPS55288 STATUS` 命中 `SCP/OCP/OVP`
+- `tps_config_failed`：任一路 `TPS55288` 运行期配置失败在有限重试后被锁存
 - `active_protection`：软保护链路已执行主动停机，等待条件恢复后进入显式恢复
 
 `tps_fault` 的判定不是靠周期轮询 `STATUS`。运行态基线是：
@@ -94,6 +95,12 @@
 - `OE=1` 之后立刻重新打开 `FB/INT` 故障指示
 - 共享的 `I2C1_INT(GPIO33)` 作为常驻故障捕获入口
 - 固件在软件侧锁存 `SCP/OCP/OVP`，直到该路被重新配置或显式 restore
+
+`tps_config_failed` 的判定只针对运行期重新配置失败，不进入自检判定：
+
+- `i2c_nack / i2c_timeout / i2c_arbitration / i2c` 这类瞬态总线错误，最多只给有限次退避重试
+- `invalid_config / out_of_range` 这类非瞬态错误，不进入延迟重试，直接锁存
+- 一旦锁存为 `tps_config_failed`，该路停止周期性整套 `disable -> init -> enable` 重配，等待显式 restore
 
 ## 启动期与 BMS 的耦合
 
@@ -138,6 +145,7 @@
    - 保存当前 `active_outputs` 到 `recoverable_outputs`
    - 把 `active_outputs` 置为 `none`
    - 执行一次统一 `disable_output()` 关断
+   - 若门控源是 `tps_config_failed`，说明运行期重配已经收敛，不再继续无限重试
 3. 门控解除后：
    - 仅清除 `gate_reason`
    - 不自动恢复输出
@@ -155,6 +163,7 @@
 
 - `THERM_KILL_N` 解除后，不自动开输出
 - `TPS fault` 位清除后，不自动开输出
+- `TPS` 运行期配置失败锁存后，不自动开输出
 - `BMS` 恢复到放电就绪后，也不自动开输出；只转为 recoverable，并等待显式 restore 请求
 - 主动保护停机条件解除后，也不自动开输出；只清除门控并等待显式 restore 请求
 
@@ -214,6 +223,8 @@
 典型日志分三类：
 
 - 配置：`power: tps addr=0x.. configured enabled=...`
+- 配置重试：`power: tps addr=0x.. action=retry_config ...`
+- 配置锁存：`power: tps addr=0x.. action=latch_config_failure ...`
 - 门控：`power: outputs gated reason=...`
 - 启动授权：`self_test: discharge_authorization decision=...`
 - 恢复请求：`bms: discharge_authorization requested ...`

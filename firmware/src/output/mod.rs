@@ -10,6 +10,7 @@ use esp_firmware::bq40z50;
 use esp_firmware::fan;
 use esp_firmware::ina3221;
 use esp_firmware::output_protection;
+use esp_firmware::output_retry::{self, TpsConfigRetryDecision};
 use esp_firmware::output_state as output_state_logic;
 use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
@@ -90,6 +91,7 @@ const OUTPUT_PATH_DIAG_LOG_PERIOD: Duration = Duration::from_secs(5);
 const OUTPUT_PATH_NOT_RISING_MAX_CURRENT_MA: i32 = 200;
 const OUTPUT_PATH_NOT_RISING_MAX_ABS_VOUT_MV: u16 = 2_000;
 const OUTPUT_PATH_EXPECTED_MODE_HYSTERESIS_MV: u16 = 500;
+const TPS_CONFIG_MAX_RETRY_ATTEMPTS: u8 = output_retry::DEFAULT_TPS_CONFIG_MAX_RETRY_ATTEMPTS;
 const CHARGER_FAULT0_VBUS_OVP: u8 = 1 << 6;
 const CHARGER_FAULT0_VBAT_OVP: u8 = 1 << 5;
 const CHARGER_FAULT0_IBUS_OCP: u8 = 1 << 4;
@@ -390,6 +392,38 @@ fn log_output_path_diag(
         output_diag_suspected_path(expected_mode),
         output_diag_check_parts(expected_mode),
     );
+}
+
+fn log_tps_config_retry_decision(
+    ch: OutputChannel,
+    addr: u8,
+    stage: &'static str,
+    kind: &'static str,
+    consecutive_failures: u8,
+    decision: TpsConfigRetryDecision,
+    retry_backoff: Duration,
+) {
+    match decision {
+        TpsConfigRetryDecision::Retry => defmt::warn!(
+            "power: tps addr=0x{=u8:x} ch={} action=retry_config stage={} err={} failures={=u8} retry_in_ms={=u64} max_retry_attempts={=u8}",
+            addr,
+            ch.name(),
+            stage,
+            kind,
+            consecutive_failures,
+            retry_backoff.as_millis() as u64,
+            TPS_CONFIG_MAX_RETRY_ATTEMPTS,
+        ),
+        TpsConfigRetryDecision::Latch => defmt::error!(
+            "power: tps addr=0x{=u8:x} ch={} action=latch_config_failure stage={} err={} failures={=u8} max_retry_attempts={=u8}",
+            addr,
+            ch.name(),
+            stage,
+            kind,
+            consecutive_failures,
+            TPS_CONFIG_MAX_RETRY_ATTEMPTS,
+        ),
+    }
 }
 
 fn log_bq40_config_detail<I2C>(
@@ -1053,6 +1087,8 @@ struct TpsFaultLatch {
     scp_latched: bool,
     ocp_latched: bool,
     ovp_latched: bool,
+    config_failure_latched: bool,
+    config_retry_failures: u8,
 }
 
 impl TpsFaultLatch {
@@ -1074,6 +1110,19 @@ impl TpsFaultLatch {
 
     const fn over_voltage(self) -> bool {
         self.ovp_latched
+    }
+
+    fn record_config_failure(&mut self, _stage: &'static str, _kind: &'static str) -> u8 {
+        self.config_retry_failures = self.config_retry_failures.saturating_add(1);
+        self.config_retry_failures
+    }
+
+    fn latch_config_failure(&mut self) {
+        self.config_failure_latched = true;
+    }
+
+    const fn config_failure_active(self) -> bool {
+        self.config_failure_latched
     }
 
     fn clear(&mut self) {
@@ -2854,6 +2903,10 @@ where
             } else {
                 Some("OUTPUT HELD BY BMS DISCHARGE POLICY")
             }
+        } else if self.output_state.gate_reason == OutputGateReason::TpsConfigFailed {
+            Some("OUTPUT HELD BY TPS CONFIG FAILURE")
+        } else if self.output_state.gate_reason == OutputGateReason::TpsFault {
+            Some("OUTPUT HELD BY TPS FAULT LATCH")
         } else {
             Some("LIVE DATA")
         };
@@ -5979,7 +6032,11 @@ where
             if !self.output_state.requested_outputs.is_enabled(ch) {
                 continue;
             }
-            if self.tps_fault_latch(ch).fault_active() {
+            let latch = self.tps_fault_latch(ch);
+            if latch.config_failure_active() {
+                return OutputGateReason::TpsConfigFailed;
+            }
+            if latch.fault_active() {
                 return OutputGateReason::TpsFault;
             }
         }
@@ -6467,7 +6524,20 @@ where
             }
             Err((stage, e)) => {
                 let kind = tps_error_kind(e);
-                self.mark_tps_failed(ch, Instant::now() + self.cfg.retry_backoff);
+                let consecutive_failures = self
+                    .tps_fault_latch_mut(ch)
+                    .record_config_failure(stage.as_str(), kind);
+                let decision = output_retry::tps_config_retry_decision(
+                    kind,
+                    consecutive_failures,
+                    TPS_CONFIG_MAX_RETRY_ATTEMPTS,
+                );
+                if matches!(decision, TpsConfigRetryDecision::Latch) {
+                    self.tps_fault_latch_mut(ch).latch_config_failure();
+                }
+                let next_retry = matches!(decision, TpsConfigRetryDecision::Retry)
+                    .then_some(Instant::now() + self.cfg.retry_backoff);
+                self.mark_tps_failed(ch, next_retry);
                 match ch {
                     OutputChannel::OutA => {
                         self.ui_snapshot.tps_a = SelfCheckCommState::Err;
@@ -6478,11 +6548,14 @@ where
                         self.ui_snapshot.tps_b_enabled = Some(false);
                     }
                 }
-                defmt::error!(
-                    "power: tps addr=0x{=u8:x} stage={} err={}",
+                log_tps_config_retry_decision(
+                    ch,
                     addr,
                     stage.as_str(),
-                    kind
+                    kind,
+                    consecutive_failures,
+                    decision,
+                    self.cfg.retry_backoff,
                 );
                 if kind == "i2c_nack" && ch == OutputChannel::OutB {
                     defmt::warn!(
@@ -6496,20 +6569,26 @@ where
 
     fn mark_tps_ok(&mut self, ch: OutputChannel) {
         match ch {
-            OutputChannel::OutA => self.tps_a_ready = true,
-            OutputChannel::OutB => self.tps_b_ready = true,
+            OutputChannel::OutA => {
+                self.tps_a_ready = true;
+                self.tps_a_next_retry_at = None;
+            }
+            OutputChannel::OutB => {
+                self.tps_b_ready = true;
+                self.tps_b_next_retry_at = None;
+            }
         }
     }
 
-    fn mark_tps_failed(&mut self, ch: OutputChannel, next: Instant) {
+    fn mark_tps_failed(&mut self, ch: OutputChannel, next: Option<Instant>) {
         match ch {
             OutputChannel::OutA => {
                 self.tps_a_ready = false;
-                self.tps_a_next_retry_at = Some(next);
+                self.tps_a_next_retry_at = next;
             }
             OutputChannel::OutB => {
                 self.tps_b_ready = false;
-                self.tps_b_next_retry_at = Some(next);
+                self.tps_b_next_retry_at = next;
             }
         }
     }
@@ -6718,6 +6797,8 @@ where
             );
             self.ui_snapshot.tps_a = if !capture.comm_ok {
                 SelfCheckCommState::Err
+            } else if fault_latch.config_failure_active() {
+                SelfCheckCommState::Err
             } else if capture.fault_active {
                 SelfCheckCommState::Warn
             } else {
@@ -6765,6 +6846,8 @@ where
                 true,
             );
             self.ui_snapshot.tps_b = if !capture.comm_ok {
+                SelfCheckCommState::Err
+            } else if fault_latch.config_failure_active() {
                 SelfCheckCommState::Err
             } else if capture.fault_active {
                 SelfCheckCommState::Warn

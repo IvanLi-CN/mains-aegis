@@ -12,6 +12,7 @@ pub mod bq40z50;
 pub mod display_pipeline;
 pub mod fan;
 pub mod output_protection;
+pub mod output_retry;
 pub mod output_state;
 pub mod tmp112;
 
