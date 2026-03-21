@@ -106,7 +106,7 @@ const HEADER_H: u16 = 18;
 const FOOTER_H: u16 = 0;
 const ERROR_COLOR: u16 = 0xF800;
 const SUCCESS_COLOR: u16 = 0x07E0;
-const PROGRESS_COLOR: u16 = 0xFD20;
+const ATTENTION_COLOR: u16 = 0xFCA0;
 const DETAIL_TITLE_X: i32 = 74;
 const DETAIL_STATUS_X: i32 = (UI_W - 8) as i32;
 const DETAIL_ROW_Y_1: u16 = 78;
@@ -4305,7 +4305,7 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
 fn detail_status_color(palette: Palette, status: &'static str) -> u16 {
     match status {
         "FAULT" | "HOT" => ERROR_COLOR,
-        "WARN" | "WARM" | "LOCK" | "NOAC" => PROGRESS_COLOR,
+        "WARN" | "WARM" | "LOCK" | "NOAC" => ATTENTION_COLOR,
         _ => palette.accent,
     }
 }
@@ -5312,7 +5312,7 @@ fn render_variant_c<P: UiPainter>(
             status: tps_label(
                 &snapshot,
                 OutputSelector::OutA,
-                snapshot_tps_state(&snapshot, OutputSelector::OutA),
+                tps_a_status_state,
                 snapshot_tps_enabled(&snapshot, OutputSelector::OutA),
             ),
             key: tps_a_key,
@@ -5334,7 +5334,7 @@ fn render_variant_c<P: UiPainter>(
             status: tps_label(
                 &snapshot,
                 OutputSelector::OutB,
-                snapshot_tps_state(&snapshot, OutputSelector::OutB),
+                tps_b_status_state,
                 snapshot_tps_enabled(&snapshot, OutputSelector::OutB),
             ),
             key: tps_b_key,
@@ -5577,7 +5577,7 @@ fn draw_self_check_overlay<P: UiPainter>(
                 "Checking pack state...",
                 Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 50) as i32),
                 HorizontalAlignment::Left,
-                PROGRESS_COLOR,
+                ATTENTION_COLOR,
             )?;
         }
         SelfCheckOverlay::BmsActivateResult(result) => {
@@ -5596,21 +5596,21 @@ fn draw_self_check_overlay<P: UiPainter>(
                     "Battery not detected.",
                     "Check pack connection.",
                     "Tap to close",
-                    PROGRESS_COLOR,
+                    ATTENTION_COLOR,
                     ActivationIcon::Failed,
                 ),
                 BmsResultKind::RomMode => (
                     "Gauge is in ROM mode.",
                     "Use BQ40 tool recovery.",
                     "Tap to close",
-                    PROGRESS_COLOR,
+                    ATTENTION_COLOR,
                     ActivationIcon::Failed,
                 ),
                 BmsResultKind::Abnormal => (
                     "Gauge responded abnormally.",
                     "Review pack status.",
                     "Tap to close",
-                    PROGRESS_COLOR,
+                    ATTENTION_COLOR,
                     ActivationIcon::Failed,
                 ),
                 BmsResultKind::NotDetected => (
@@ -5672,7 +5672,7 @@ fn draw_activation_icon<P: UiPainter>(
     // Icon source: Iconify / carbon.
     // Use original glyphs directly (no secondary reinterpretation/composition).
     let (icon_color, icon_blocks) = match icon {
-        ActivationIcon::Progress => (PROGRESS_COLOR, CARBON_IN_PROGRESS_32),
+        ActivationIcon::Progress => (ATTENTION_COLOR, CARBON_IN_PROGRESS_32),
         ActivationIcon::Success => (SUCCESS_COLOR, CARBON_CHECKMARK_OUTLINE_32),
         ActivationIcon::Failed => (ERROR_COLOR, CARBON_CLOSE_OUTLINE_32),
     };
@@ -6519,7 +6519,7 @@ fn vbus_key_text(vbus_present: Option<bool>) -> &'static str {
 fn comm_state_color(palette: Palette, state: SelfCheckCommState) -> u16 {
     match state {
         SelfCheckCommState::Ok => SUCCESS_COLOR,
-        SelfCheckCommState::Warn => PROGRESS_COLOR,
+        SelfCheckCommState::Warn => ATTENTION_COLOR,
         SelfCheckCommState::Err => ERROR_COLOR,
         SelfCheckCommState::Pending | SelfCheckCommState::NotAvailable => palette.text_dim,
     }
@@ -6591,10 +6591,21 @@ fn draw_diag_card<P: UiPainter, T: Content>(
     };
     let status_color = if spec.active {
         palette.bg
-    } else if spec.status_state == SelfCheckCommState::Err {
-        ERROR_COLOR
     } else {
-        dim_color
+        match spec.status_state {
+            SelfCheckCommState::Err => ERROR_COLOR,
+            SelfCheckCommState::Warn => ATTENTION_COLOR,
+            _ => dim_color,
+        }
+    };
+    let key_color = if spec.active {
+        text_color
+    } else {
+        match spec.status_state {
+            SelfCheckCommState::Warn => ATTENTION_COLOR,
+            SelfCheckCommState::Err => text_color,
+            _ => text_color,
+        }
     };
     text(
         painter,
@@ -6621,7 +6632,7 @@ fn draw_diag_card<P: UiPainter, T: Content>(
         spec.key,
         Point::new((spec.x + 6) as i32, (spec.y + 15) as i32),
         HorizontalAlignment::Left,
-        text_color,
+        key_color,
     )?;
     Ok(())
 }

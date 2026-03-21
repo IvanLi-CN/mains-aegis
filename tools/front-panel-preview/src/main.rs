@@ -8,6 +8,11 @@ use std::{
 
 use image::{Rgb, RgbImage};
 
+extern crate self as esp_firmware;
+
+#[path = "../../../firmware/src/output_state.rs"]
+pub mod output_state;
+
 #[path = "../../../firmware/src/front_panel_scene.rs"]
 mod front_panel_scene;
 
@@ -234,6 +239,34 @@ fn bq40_snapshot_for_scenario(
 ) -> (SelfCheckUiSnapshot, SelfCheckOverlay) {
     let mut snapshot = base_bq40_snapshot(mode);
     let overlay = match scenario {
+        ScenarioArg::SelfCheckBmsMissingTpsWarn => {
+            snapshot.bq25792 = SelfCheckCommState::Ok;
+            snapshot.bq25792_allow_charge = Some(false);
+            snapshot.bq25792_vbat_present = Some(false);
+            snapshot.bq40z50 = SelfCheckCommState::Err;
+            snapshot.bq40z50_pack_mv = None;
+            snapshot.bq40z50_current_ma = None;
+            snapshot.bq40z50_soc_pct = None;
+            snapshot.bq40z50_rca_alarm = None;
+            snapshot.bq40z50_discharge_ready = None;
+            snapshot.tps_a = SelfCheckCommState::Err;
+            snapshot.tps_a_enabled = Some(false);
+            snapshot.out_a_vbus_mv = None;
+            snapshot.tps_a_iout_ma = None;
+            snapshot.tps_b = SelfCheckCommState::Err;
+            snapshot.tps_b_enabled = Some(false);
+            snapshot.out_b_vbus_mv = None;
+            snapshot.tps_b_iout_ma = None;
+            snapshot.requested_outputs = esp_firmware::output_state::EnabledOutputs::Only(
+                esp_firmware::output_state::OutputSelector::OutA,
+            );
+            snapshot.active_outputs = esp_firmware::output_state::EnabledOutputs::None;
+            snapshot.recoverable_outputs = esp_firmware::output_state::EnabledOutputs::Only(
+                esp_firmware::output_state::OutputSelector::OutA,
+            );
+            snapshot.output_gate_reason = esp_firmware::output_state::OutputGateReason::BmsNotReady;
+            SelfCheckOverlay::None
+        }
         ScenarioArg::Bq40Offline => SelfCheckOverlay::None,
         ScenarioArg::Bq40OfflineDialog => SelfCheckOverlay::BmsActivateConfirm,
         ScenarioArg::Bq40Activating => SelfCheckOverlay::BmsActivateProgress,
@@ -404,6 +437,7 @@ fn run() -> Result<(), String> {
             .map_err(|_| "render failed unexpectedly".to_string())?;
         }
         ScenarioArg::Bq40Offline
+        | ScenarioArg::SelfCheckBmsMissingTpsWarn
         | ScenarioArg::Bq40OfflineDialog
         | ScenarioArg::Bq40Activating
         | ScenarioArg::Bq40ResultSuccess
@@ -611,6 +645,7 @@ enum ScenarioArg {
     DashboardDetailOutput,
     DashboardDetailCharger,
     DashboardDetailThermal,
+    SelfCheckBmsMissingTpsWarn,
     Bq40Offline,
     Bq40OfflineDialog,
     Bq40Activating,
@@ -636,6 +671,7 @@ impl ScenarioArg {
             "dashboard-detail-output" => Ok(Self::DashboardDetailOutput),
             "dashboard-detail-charger" => Ok(Self::DashboardDetailCharger),
             "dashboard-detail-thermal" => Ok(Self::DashboardDetailThermal),
+            "self-check-bms-missing-tps-warn" => Ok(Self::SelfCheckBmsMissingTpsWarn),
             "bq40-offline" => Ok(Self::Bq40Offline),
             "bq40-offline-dialog" => Ok(Self::Bq40OfflineDialog),
             "bq40-activating" => Ok(Self::Bq40Activating),
@@ -647,7 +683,7 @@ impl ScenarioArg {
             "test-audio" => Ok(Self::TestAudio),
             "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation)"
             )),
         }
     }
@@ -664,6 +700,7 @@ impl ScenarioArg {
             ScenarioArg::DashboardDetailOutput => "dashboard-detail-output",
             ScenarioArg::DashboardDetailCharger => "dashboard-detail-charger",
             ScenarioArg::DashboardDetailThermal => "dashboard-detail-thermal",
+            ScenarioArg::SelfCheckBmsMissingTpsWarn => "self-check-bms-missing-tps-warn",
             ScenarioArg::Bq40Offline => "bq40-offline",
             ScenarioArg::Bq40OfflineDialog => "bq40-offline-dialog",
             ScenarioArg::Bq40Activating => "bq40-activating",
@@ -757,7 +794,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",
