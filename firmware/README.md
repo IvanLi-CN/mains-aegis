@@ -416,6 +416,60 @@ mcu-agentd flash esp-test
 - 先拍整屏（含四角和顶部 `UP ^`），再近拍中部色条与灰阶条；
 - 若出现颜色/方向/镜像异常，保持同角度再拍一张，用于前后对比修复结果。
 
+### 电源链路测试固件（`tps-test-fw`，固定配置）
+
+用于独立验证 `BQ25792 + 双路 TPS55288 + INA3221 + TMP112 + 前面板`，绕开 `BQ40Z50/BMS` 授权链，只保留基础硬件保护与故障锁存。
+
+重要警示：
+
+- 此固件**不会**执行主固件的 `BQ40Z50` 自检/授权恢复流程。
+- 此固件按编译期常量直接驱动 charger 与两路 TPS，适合上板排障，不适合作为日常业务固件。
+- 运行期仍保留以下保护：
+  - `THERM_KILL_N` 断言后锁存关闭双路输出
+  - `TPS55288` 的 `SCP/OCP/OVP` 锁存关闭对应输出
+  - `BQ25792` 输入缺失、`TS_COLD/TS_HOT`、通信失败时强制关充
+
+固定 profile 位于 [`firmware/src/tps_test_runtime.rs`](/Users/ivan/.codex/worktrees/f4f2/mains-aegis/firmware/src/tps_test_runtime.rs) 顶部常量：
+
+- `TEST_CHARGER_ENABLE`
+- `TEST_CHARGE_VREG_MV`
+- `TEST_CHARGE_ICHG_MA`
+- `TEST_INPUT_LIMIT_MA`
+- `TEST_OUT_A_OE`
+- `TEST_OUT_B_OE`
+- `TEST_VOUT_PROFILE = V5 | V12 | V19`
+- `TEST_ILIMIT_MA`
+
+默认值：
+
+- `charger=false`
+- `out_a_oe=false`
+- `out_b_oe=false`
+- `vout=5V`
+- `charge=16.8V / 200mA / 500mA`
+- `ilimit=3500mA`
+
+构建：
+
+```bash
+cd firmware
+cargo build --release --bin tps-test-fw --features tps-test-fw
+```
+
+屏幕页内容：
+
+- 顶部：`TPS TEST`、共享输出档位、`ILIM`、build profile / build id
+- `BQ25792` 卡片：请求态 / 实际态、输入存在、`VBUS/IBUS/VBAT/ICHG`、故障标签
+- `OUT-A` / `OUT-B` 卡片：配置 OE、实际 OE、目标档位、`VSET/VOUT/IOUT/TEMP`、`STATUS`
+- 底栏：固定 profile 提示与锁存告警（如 `THERM KILL LATCHED`、`TPS RETRY PENDING`）
+
+建议测试顺序：
+
+1. 默认安全待机配置刷机确认屏幕与遥测正常。
+2. 仅打开一路 `OE`，保持 charger 关闭，验证 `5V / 12V / 19V` 三档。
+3. 两路输出稳定后，再单独打开 charger 测 `BQ25792` 状态。
+4. 最后才回到“电池组 + 充电器在线”的真实工况。
+
 ### 1:1 预览工具（主机）
 
 预览工具会输出与固件同源渲染的两类产物：

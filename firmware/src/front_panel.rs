@@ -3,7 +3,8 @@ use core::convert::Infallible;
 use crate::front_panel_scene::{
     self, AudioTestUiState, BmsActivationState, BmsResultKind, DashboardRoute,
     DashboardTouchTarget, SelfCheckCommState, SelfCheckOverlay, SelfCheckTouchTarget,
-    SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel, UiPainter, UiVariant, UpsMode,
+    SelfCheckUiSnapshot, TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant,
+    UpsMode,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -614,6 +615,25 @@ impl FrontPanel {
             front_panel_scene::render_test_audio_playback(painter, back_enabled, state)
         }) {
             defmt::error!("ui: render audio playback test failed err={=?}", e);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn render_tps_test_status(&mut self, snapshot: TpsTestUiSnapshot) {
+        if self.state != InitState::Ready {
+            return;
+        }
+
+        let model = UiModel {
+            mode: UpsMode::Standby,
+            focus: UiFocus::Idle,
+            touch_irq: false,
+            frame_no: self.frame_no,
+        };
+        if let Err(e) = self.render_scene(|painter| {
+            front_panel_scene::render_tps_test_status(painter, &model, DASHBOARD_VARIANT, &snapshot)
+        }) {
+            defmt::error!("ui: render tps test status failed err={=?}", e);
         }
     }
 

@@ -12,6 +12,7 @@ force-min-charge = []
 bms-dual-probe-diag = []
 # Test firmware gate (prevents default cargo build/check from forcing test-fw feature selection).
 test-fw = []
+tps-test-fw = []
 # Test firmware function set.
 test-fw-screen-static = ["test-fw"]
 test-fw-audio-playback = ["test-fw"]
@@ -25,6 +26,11 @@ display-spi-40mhz = []
 name = "test-fw"
 path = "src/bin/test-fw.rs"
 required-features = ["test-fw"]
+
+[[bin]]
+name = "tps-test-fw"
+path = "src/bin/tps-test-fw.rs"
+required-features = ["tps-test-fw"]
 
 [dependencies]
 defmt = "1.0.1"
