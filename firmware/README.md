@@ -306,8 +306,8 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_ad
   - `RECOVER`=启动期已批准放电恢复尝试，恢复链路进行中
   - `ERR`=普通访问未识别；只有这种情况才允许手动打开“激活”对话框
 - `BQ25792` 卡片语义：芯片正常但当前未充电时显示 `IDLE`，不把“电池路径受限”误判成 charger 故障。
-- `TPS55288-A/B` 卡片语义：若上游 `BMS` 尚未放行，显示 `HOLD`/`RECOVER`，不把该路直接显示成输出故障。
-- 自检页只有在本模式必需模块全部 clear 时才会切到 Dashboard；若 `BMS` 仍为 `LIMIT`、输出仍为 `HOLD`，页面继续停留在 `Variant C` 并显示运行期真实数据。
+- `TPS55288-A/B` 卡片语义：自检阶段两路都只做相同的只读探测，并保持 `OE=0`；卡片只显示各自原始初始化结果（`IDLE/RUN/WARN/ERR/N/A`），不再把 `BMS` 门控只覆盖到被请求的一路。
+- 自检页只有在本模式必需模块全部 clear 时才会切到 Dashboard；若 `BMS` 仍为 `LIMIT`，页面继续停留在 `Variant C` 并显示运行期真实数据。
 - 页面切换：本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard
 - Dashboard 视觉基线：`Variant B`（仅用于 Dashboard 场景）
 - `Variant C` 重定位为“高级设置/自检页”风格，不作为默认 Dashboard

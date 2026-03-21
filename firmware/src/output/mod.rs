@@ -2056,8 +2056,8 @@ where
     ui.recoverable_outputs = logic_outputs_from_enabled(recoverable_outputs);
     ui.output_gate_reason = output_gate_reason;
     ui.bq40z50_recovery_pending = false;
-    ui.tps_a_enabled = Some(out_a_allowed);
-    ui.tps_b_enabled = Some(out_b_allowed);
+    ui.tps_a_enabled = Some(false);
+    ui.tps_b_enabled = Some(false);
     ui.bq25792_allow_charge = Some(charger_enabled);
     reporter(SelfCheckStage::Tps, ui);
 
