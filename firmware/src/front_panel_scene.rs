@@ -2126,9 +2126,9 @@ pub fn render_tps_test_status<P: UiPainter>(
         palette,
         "OUT-A",
         6,
-        76,
+        74,
         151,
-        86,
+        90,
         snapshot.vout_profile,
         snapshot.out_a,
         palette.up,
@@ -2139,9 +2139,9 @@ pub fn render_tps_test_status<P: UiPainter>(
         palette,
         "OUT-B",
         163,
-        76,
+        74,
         151,
-        86,
+        90,
         snapshot.vout_profile,
         snapshot.out_b,
         palette.down,
@@ -7768,23 +7768,29 @@ fn render_tps_test_output_card<P: UiPainter>(
         variant,
         FontRole::DetailBody,
         format_args!("T {}", TpsTestTemperature(snapshot.temp_c_x16)),
-        Point::new((x + 6) as i32, (y + 60) as i32),
+        Point::new((x + 6) as i32, (y + 58) as i32),
         HorizontalAlignment::Left,
         palette.text,
     )?;
-    text(
-        painter,
-        variant,
-        FontRole::DetailBody,
-        tps_test_status_or_fault(snapshot),
-        Point::new((x + w - 6) as i32, (y + 60) as i32),
-        HorizontalAlignment::Right,
-        if snapshot.fault.is_some() {
-            palette.touch
-        } else {
-            palette.text_dim
-        },
-    )?;
+    if let Some(status_line) = tps_test_detail_line(snapshot) {
+        text(
+            painter,
+            variant,
+            if snapshot.fault.is_some() {
+                FontRole::TextBody
+            } else {
+                FontRole::DetailBody
+            },
+            status_line,
+            Point::new((x + w / 2) as i32, (y + 74) as i32),
+            HorizontalAlignment::Center,
+            if snapshot.fault.is_some() {
+                palette.touch
+            } else {
+                palette.text_dim
+            },
+        )?;
+    }
 
     Ok(())
 }
@@ -7914,16 +7920,14 @@ fn tps_test_opt_bool(value: Option<bool>) -> &'static str {
 }
 
 #[allow(dead_code)]
-fn tps_test_status_or_fault(snapshot: TpsTestOutputSnapshot) -> &'static str {
+fn tps_test_detail_line(snapshot: TpsTestOutputSnapshot) -> Option<&'static str> {
     if let Some(fault) = tps_test_fault_text(snapshot.fault) {
-        return fault;
+        return Some(fault);
     }
     match snapshot.status_bits {
-        Some(bits) => match bits {
-            0 => "STAT 0x00",
-            _ => "STAT SET",
-        },
-        None => "--",
+        Some(0) => Some("STAT 0x00"),
+        Some(_) => Some("STAT SET"),
+        None => None,
     }
 }
 
