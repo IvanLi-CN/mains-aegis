@@ -33,6 +33,7 @@ pub mod reg {
     pub const ADC_FUNCTION_DISABLE_0: u8 = 0x2F;
     pub const ADC_FUNCTION_DISABLE_1: u8 = 0x30;
     pub const IBUS_ADC: u8 = 0x31;
+    pub const IBAT_ADC: u8 = 0x33;
     pub const VBUS_ADC: u8 = 0x35;
     pub const VBAT_ADC: u8 = 0x3B;
     pub const VSYS_ADC: u8 = 0x3D;
@@ -163,14 +164,15 @@ where
 {
     let mut buf = [0u8; 2];
     i2c.write_read(I2C_ADDRESS, &[reg_lsb], &mut buf)?;
-    Ok(u16::from_le_bytes(buf))
+    // Datasheet section 9.3.14.3: multi-byte I2C transfers are MSB first.
+    Ok(u16::from_be_bytes(buf))
 }
 
 pub fn read_i16<I2C>(i2c: &mut I2C, reg_lsb: u8) -> Result<i16, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    read_u16(i2c, reg_lsb).map(|value| i16::from_le_bytes(value.to_le_bytes()))
+    read_u16(i2c, reg_lsb).map(|value| i16::from_be_bytes(value.to_be_bytes()))
 }
 
 pub fn write_u8<I2C>(i2c: &mut I2C, reg: u8, value: u8) -> Result<(), I2C::Error>
@@ -184,8 +186,8 @@ pub fn write_u16<I2C>(i2c: &mut I2C, reg_lsb: u8, value: u16) -> Result<(), I2C:
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    let [lsb, msb] = value.to_le_bytes();
-    i2c.write(I2C_ADDRESS, &[reg_lsb, lsb, msb])
+    let [msb, lsb] = value.to_be_bytes();
+    i2c.write(I2C_ADDRESS, &[reg_lsb, msb, lsb])
 }
 
 /// Read-modify-write a single 8-bit register.
@@ -238,6 +240,10 @@ where
     Ok(new)
 }
 
+pub const fn decode_charge_voltage_limit_mv(reg: u16) -> u16 {
+    (reg & 0x07FF) * 10
+}
+
 pub fn set_charge_current_limit_ma<I2C>(i2c: &mut I2C, ma: u16) -> Result<u16, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -256,6 +262,10 @@ where
         write_u16(i2c, reg::CHARGE_CURRENT_LIMIT, new)?;
     }
     Ok(new)
+}
+
+pub const fn decode_charge_current_limit_ma(reg: u16) -> u16 {
+    (reg & 0x01FF) * 10
 }
 
 pub fn set_input_current_limit_ma<I2C>(i2c: &mut I2C, ma: u16) -> Result<u16, I2C::Error>

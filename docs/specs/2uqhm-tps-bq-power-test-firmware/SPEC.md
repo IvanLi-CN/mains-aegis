@@ -103,13 +103,13 @@
   - `OutA/OutB` 独立 OE
   - 两路共享 `5V/12V/19V` 输出档位与统一 `ILIM`
 - 进入 steady-state 后，周期性轮询：
-  - `BQ25792` 状态寄存器与 `VBUS/IBUS/VBAT`
+  - `BQ25792` 状态寄存器与 `VBAT/IBAT/VREG/ICHG`
   - `INA3221 CH1/CH2` 输出电压、电流
   - `TMP112 A/B` 温度
   - 两路 `TPS55288` 状态、OE、故障位
 - 屏幕显示：
   - 顶部：固件名、build id、共享 profile
-  - Charger 卡片：请求态、实际态、输入存在、`VBUS/IBUS/VBAT`、`ICHG`、fault
+  - Charger 卡片：请求态、实际态、输入存在、`VBAT/IBAT/VREG/ICHG`、fault
   - OUT-A / OUT-B 卡片：配置 OE、实际 OE、目标电压档、实测 `V/I/T`、TPS 通信状态、fault bits
   - 页脚：总线/保护告警
 

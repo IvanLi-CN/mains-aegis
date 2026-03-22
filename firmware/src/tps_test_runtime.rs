@@ -16,8 +16,6 @@ use esp_hal::Blocking;
 
 const INA_REINIT_RESET_CFG: u16 = 0x8000;
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
-const CHARGER_INPUT_VBUS_MAX_MV: u16 = 30_000;
-const CHARGER_INPUT_IBUS_MAX_MA: i16 = 5_000;
 const TMP112_OUT_A_ADDR: u8 = 0x48;
 const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 50 * 16;
@@ -54,40 +52,6 @@ pub const TEST_PROFILE: FixedTestProfile = FixedTestProfile {
     vout_profile: TEST_VOUT_PROFILE,
     ilimit_ma: TEST_ILIMIT_MA,
 };
-
-fn normalize_charger_vbus_mv(
-    input_present: bool,
-    adc_ready: bool,
-    raw_vbus_mv: Option<u16>,
-) -> Option<u16> {
-    if !input_present || !adc_ready {
-        return None;
-    }
-
-    match raw_vbus_mv {
-        Some(vbus_mv) if vbus_mv <= CHARGER_INPUT_VBUS_MAX_MV => Some(vbus_mv),
-        _ => None,
-    }
-}
-
-fn normalize_charger_ibus_ma(
-    input_present: bool,
-    adc_ready: bool,
-    raw_ibus_ma: Option<i16>,
-) -> Option<i32> {
-    if !input_present || !adc_ready {
-        return None;
-    }
-
-    match raw_ibus_ma {
-        Some(ibus_ma)
-            if (-CHARGER_INPUT_IBUS_MAX_MA..=CHARGER_INPUT_IBUS_MAX_MA).contains(&ibus_ma) =>
-        {
-            Some(if ibus_ma <= 0 { 0 } else { i32::from(ibus_ma) })
-        }
-        _ => None,
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OutputRuntimeState {
@@ -152,9 +116,9 @@ struct ChargerRuntimeState {
     actual_enabled: bool,
     input_present: Option<bool>,
     vbat_present: Option<bool>,
-    vbus_mv: Option<u16>,
-    ibus_ma: Option<i32>,
     vbat_mv: Option<u16>,
+    ibat_ma: Option<i32>,
+    vreg_mv: Option<u16>,
     ichg_ma: Option<u16>,
     status: &'static str,
     fault: Option<&'static str>,
@@ -167,9 +131,9 @@ impl ChargerRuntimeState {
             actual_enabled: false,
             input_present: None,
             vbat_present: None,
-            vbus_mv: None,
-            ibus_ma: None,
             vbat_mv: None,
+            ibat_ma: None,
+            vreg_mv: None,
             ichg_ma: Some(TEST_CHARGE_ICHG_MA),
             status: "PEND",
             fault: None,
@@ -183,9 +147,9 @@ impl ChargerRuntimeState {
             comm_state: self.comm_state,
             input_present: self.input_present,
             vbat_present: self.vbat_present,
-            vbus_mv: self.vbus_mv,
-            ibus_ma: self.ibus_ma,
             vbat_mv: self.vbat_mv,
+            ibat_ma: self.ibat_ma,
+            vreg_mv: self.vreg_mv,
             ichg_ma: self.ichg_ma,
             status: self.status,
             fault: self.fault,
@@ -416,62 +380,64 @@ impl TpsTestRuntime {
         let ts_hot = (status4 & bq25792::status4::TS_HOT_STAT) != 0;
         let charger_fault = fault0 != 0 || fault1 != 0 || ts_cold || ts_hot;
 
+        let allow_charge =
+            TEST_CHARGER_ENABLE && input_present && !charger_fault && !self.therm_kill_latched;
+
+        if let Err(err) = bq25792::set_charge_voltage_limit_mv(&mut self.i2c, TEST_CHARGE_VREG_MV) {
+            self.mark_charger_comm_failed("vreg_write", err);
+            return;
+        }
+        if let Err(err) = bq25792::set_charge_current_limit_ma(&mut self.i2c, TEST_CHARGE_ICHG_MA) {
+            self.mark_charger_comm_failed("ichg_write", err);
+            return;
+        }
+        if let Err(err) = bq25792::set_input_current_limit_ma(&mut self.i2c, TEST_INPUT_LIMIT_MA) {
+            self.mark_charger_comm_failed("iindpm_write", err);
+            return;
+        }
+
+        let ctrl0_target = if allow_charge {
+            (ctrl0 | bq25792::ctrl0::EN_CHG) & !bq25792::ctrl0::EN_HIZ
+        } else {
+            (ctrl0 & !bq25792::ctrl0::EN_CHG) & !bq25792::ctrl0::EN_HIZ
+        };
+        if ctrl0_target != ctrl0 {
+            if let Err(err) =
+                bq25792::write_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0, ctrl0_target)
+            {
+                self.mark_charger_comm_failed("ctrl0_write", err);
+                return;
+            }
+        }
+
+        if allow_charge {
+            self.chg_ce.set_low();
+        } else {
+            self.chg_ce.set_high();
+        }
+
         let adc_state = bq25792::ensure_adc_power_path(&mut self.i2c).ok();
         let adc_ready = adc_state
             .map(|state| bq25792::power_path_adc_ready(state, status3))
             .unwrap_or(false);
-        let raw_vbus_mv = if adc_ready {
-            bq25792::read_u16(&mut self.i2c, bq25792::reg::VBUS_ADC).ok()
-        } else {
-            None
-        };
-        let raw_ibus_ma = if adc_ready {
-            bq25792::read_i16(&mut self.i2c, bq25792::reg::IBUS_ADC).ok()
-        } else {
-            None
-        };
-        let vbus_mv = normalize_charger_vbus_mv(input_present, adc_ready, raw_vbus_mv);
-        let ibus_ma = normalize_charger_ibus_ma(input_present, adc_ready, raw_ibus_ma);
         let vbat_mv = if adc_ready {
             bq25792::read_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok()
         } else {
             None
         };
-
-        let allow_charge =
-            TEST_CHARGER_ENABLE && input_present && !charger_fault && !self.therm_kill_latched;
-
-        if allow_charge {
-            if let Err(err) =
-                bq25792::set_charge_voltage_limit_mv(&mut self.i2c, TEST_CHARGE_VREG_MV)
-            {
-                self.mark_charger_comm_failed("vreg_write", err);
-                return;
-            }
-            if let Err(err) =
-                bq25792::set_charge_current_limit_ma(&mut self.i2c, TEST_CHARGE_ICHG_MA)
-            {
-                self.mark_charger_comm_failed("ichg_write", err);
-                return;
-            }
-            if let Err(err) =
-                bq25792::set_input_current_limit_ma(&mut self.i2c, TEST_INPUT_LIMIT_MA)
-            {
-                self.mark_charger_comm_failed("iindpm_write", err);
-                return;
-            }
-            if let Err(err) = bq25792::write_u8(
-                &mut self.i2c,
-                bq25792::reg::CHARGER_CONTROL_0,
-                (ctrl0 | bq25792::ctrl0::EN_CHG) & !bq25792::ctrl0::EN_HIZ,
-            ) {
-                self.mark_charger_comm_failed("ctrl0_write", err);
-                return;
-            }
-            self.chg_ce.set_low();
+        let ibat_ma = if adc_ready {
+            bq25792::read_i16(&mut self.i2c, bq25792::reg::IBAT_ADC)
+                .ok()
+                .map(i32::from)
         } else {
-            self.chg_ce.set_high();
-        }
+            None
+        };
+        let vreg_mv = bq25792::read_u16(&mut self.i2c, bq25792::reg::CHARGE_VOLTAGE_LIMIT)
+            .ok()
+            .map(bq25792::decode_charge_voltage_limit_mv);
+        let ichg_ma = bq25792::read_u16(&mut self.i2c, bq25792::reg::CHARGE_CURRENT_LIMIT)
+            .ok()
+            .map(bq25792::decode_charge_current_limit_ma);
 
         self.charger.actual_enabled = allow_charge;
         self.charger.comm_state = if charger_fault {
@@ -481,10 +447,10 @@ impl TpsTestRuntime {
         };
         self.charger.input_present = Some(input_present);
         self.charger.vbat_present = Some(vbat_present);
-        self.charger.vbus_mv = vbus_mv;
-        self.charger.ibus_ma = ibus_ma;
         self.charger.vbat_mv = vbat_mv;
-        self.charger.ichg_ma = Some(TEST_CHARGE_ICHG_MA);
+        self.charger.ibat_ma = ibat_ma;
+        self.charger.vreg_mv = vreg_mv;
+        self.charger.ichg_ma = ichg_ma;
         self.charger.status =
             charger_status_text(charger_fault, input_present, allow_charge, status1);
         self.charger.fault = decode_charger_fault(
@@ -501,15 +467,16 @@ impl TpsTestRuntime {
         }
 
         defmt::info!(
-            "tps-test: charger status={} actual={=bool} input_present={=bool} vbat_present={=bool} therm_latched={=bool} vbus_mv={=?} ibus_ma={=?} vbat_mv={=?} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x}",
+            "tps-test: charger status={} actual={=bool} input_present={=bool} vbat_present={=bool} therm_latched={=bool} vbat_mv={=?} ibat_ma={=?} vreg_mv={=?} ichg_ma={=?} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x}",
             self.charger.status,
             self.charger.actual_enabled,
             input_present,
             vbat_present,
             self.therm_kill_latched,
-            self.charger.vbus_mv,
-            self.charger.ibus_ma,
             self.charger.vbat_mv,
+            self.charger.ibat_ma,
+            self.charger.vreg_mv,
+            self.charger.ichg_ma,
             status0,
             status1,
             status2,
@@ -528,9 +495,10 @@ impl TpsTestRuntime {
         self.charger.comm_state = SelfCheckCommState::Err;
         self.charger.input_present = None;
         self.charger.vbat_present = None;
-        self.charger.vbus_mv = None;
-        self.charger.ibus_ma = None;
         self.charger.vbat_mv = None;
+        self.charger.ibat_ma = None;
+        self.charger.vreg_mv = None;
+        self.charger.ichg_ma = None;
         self.charger.status = "ERR";
         self.charger.fault = Some("COMM");
         defmt::error!(

@@ -459,7 +459,7 @@ cargo build --release --bin tps-test-fw --features tps-test-fw
 屏幕页内容：
 
 - 顶部：`TPS TEST`、共享输出档位、`ILIM`、build profile / build id
-- `BQ25792` 卡片：请求态 / 实际态、输入存在、`VBUS/IBUS/VBAT/ICHG`、故障标签
+- `BQ25792` 卡片：请求态 / 实际态、输入存在、`VBAT/IBAT/VREG/ICHG`、故障标签
 - `OUT-A` / `OUT-B` 卡片：配置 OE、实际 OE、目标档位、`VSET/VOUT/IOUT/TEMP`、`STATUS`
 - 底栏：固定 profile 提示与锁存告警（如 `THERM KILL LATCHED`、`TPS RETRY PENDING`）
 
