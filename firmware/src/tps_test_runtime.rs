@@ -16,6 +16,8 @@ use esp_hal::Blocking;
 
 const INA_REINIT_RESET_CFG: u16 = 0x8000;
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
+const CHARGER_INPUT_VBUS_MAX_MV: u16 = 30_000;
+const CHARGER_INPUT_IBUS_MAX_MA: i16 = 5_000;
 const TMP112_OUT_A_ADDR: u8 = 0x48;
 const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 50 * 16;
@@ -52,6 +54,40 @@ pub const TEST_PROFILE: FixedTestProfile = FixedTestProfile {
     vout_profile: TEST_VOUT_PROFILE,
     ilimit_ma: TEST_ILIMIT_MA,
 };
+
+fn normalize_charger_vbus_mv(
+    input_present: bool,
+    adc_ready: bool,
+    raw_vbus_mv: Option<u16>,
+) -> Option<u16> {
+    if !input_present || !adc_ready {
+        return None;
+    }
+
+    match raw_vbus_mv {
+        Some(vbus_mv) if vbus_mv <= CHARGER_INPUT_VBUS_MAX_MV => Some(vbus_mv),
+        _ => None,
+    }
+}
+
+fn normalize_charger_ibus_ma(
+    input_present: bool,
+    adc_ready: bool,
+    raw_ibus_ma: Option<i16>,
+) -> Option<i32> {
+    if !input_present || !adc_ready {
+        return None;
+    }
+
+    match raw_ibus_ma {
+        Some(ibus_ma)
+            if (-CHARGER_INPUT_IBUS_MAX_MA..=CHARGER_INPUT_IBUS_MAX_MA).contains(&ibus_ma) =>
+        {
+            Some(if ibus_ma <= 0 { 0 } else { i32::from(ibus_ma) })
+        }
+        _ => None,
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OutputRuntimeState {
@@ -384,18 +420,18 @@ impl TpsTestRuntime {
         let adc_ready = adc_state
             .map(|state| bq25792::power_path_adc_ready(state, status3))
             .unwrap_or(false);
-        let vbus_mv = if adc_ready {
+        let raw_vbus_mv = if adc_ready {
             bq25792::read_u16(&mut self.i2c, bq25792::reg::VBUS_ADC).ok()
         } else {
             None
         };
-        let ibus_ma = if adc_ready {
-            bq25792::read_i16(&mut self.i2c, bq25792::reg::IBUS_ADC)
-                .ok()
-                .map(i32::from)
+        let raw_ibus_ma = if adc_ready {
+            bq25792::read_i16(&mut self.i2c, bq25792::reg::IBUS_ADC).ok()
         } else {
             None
         };
+        let vbus_mv = normalize_charger_vbus_mv(input_present, adc_ready, raw_vbus_mv);
+        let ibus_ma = normalize_charger_ibus_ma(input_present, adc_ready, raw_ibus_ma);
         let vbat_mv = if adc_ready {
             bq25792::read_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok()
         } else {

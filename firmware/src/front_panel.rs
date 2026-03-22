@@ -49,12 +49,12 @@ const CMD_CASET: u8 = 0x2A;
 const CMD_RASET: u8 = 0x2B;
 const CMD_RAMWR: u8 = 0x2C;
 
-// Diagnostic step: rotate 180° via driver orientation API (LandscapeSwapped).
+// Front panel is currently mounted 180° from the original lab orientation.
 const LCD_W: u16 = 320;
 const LCD_H: u16 = 172;
 const OFFSET_X: u16 = 0;
 const OFFSET_Y: u16 = 34;
-const PANEL_ORIENTATION: Orientation = Orientation::LandscapeSwapped;
+const PANEL_ORIENTATION: Orientation = Orientation::Landscape;
 const PANEL_RGB_ORDER: bool = false;
 const UI_ORIENTATION_MARKER: &str = "FP_ORI_PROBE_20260227";
 
@@ -921,9 +921,20 @@ impl FrontPanel {
         let ui_h = front_panel_scene::UI_H;
 
         // CST816D on this board reports in a portrait-like space (x=0..UI_H, y=0..UI_W).
-        // Front panel is rendered as LandscapeSwapped, so map by axis swap + horizontal mirror.
         if x_raw < ui_h && y_raw < ui_w {
-            return Some((ui_w.saturating_sub(1).saturating_sub(y_raw), x_raw));
+            return match PANEL_ORIENTATION {
+                Orientation::Landscape => {
+                    Some((y_raw, ui_h.saturating_sub(1).saturating_sub(x_raw)))
+                }
+                Orientation::LandscapeSwapped => {
+                    Some((ui_w.saturating_sub(1).saturating_sub(y_raw), x_raw))
+                }
+                Orientation::Portrait => Some((x_raw, y_raw)),
+                Orientation::PortraitSwapped => Some((
+                    ui_w.saturating_sub(1).saturating_sub(x_raw),
+                    ui_h.saturating_sub(1).saturating_sub(y_raw),
+                )),
+            };
         }
 
         // Fallback path for legacy coordinate orderings.
