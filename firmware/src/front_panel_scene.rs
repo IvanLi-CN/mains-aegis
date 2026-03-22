@@ -2093,15 +2093,6 @@ pub fn render_tps_test_status<P: UiPainter>(
         painter,
         variant,
         FontRole::DetailTitle,
-        "TPS TEST",
-        Point::new(8, 2),
-        HorizontalAlignment::Left,
-        palette.text,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::TextBody,
         format_args!(
             "{}  {:>1}.{:01}A  A{}  B{}",
             snapshot.vout_profile.label(),
@@ -2110,14 +2101,14 @@ pub fn render_tps_test_status<P: UiPainter>(
             tps_test_bool_compact(snapshot.out_a.requested_enabled),
             tps_test_bool_compact(snapshot.out_b.requested_enabled),
         ),
-        Point::new(78, 2),
+        Point::new(8, 2),
         HorizontalAlignment::Left,
-        palette.text_dim,
+        palette.text,
     )?;
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailTitle,
         tps_test_build_label(snapshot.build_profile),
         Point::new((UI_W - 8) as i32, 2),
         HorizontalAlignment::Right,
@@ -2135,9 +2126,9 @@ pub fn render_tps_test_status<P: UiPainter>(
         palette,
         "OUT-A",
         6,
-        82,
+        76,
         151,
-        66,
+        86,
         snapshot.vout_profile,
         snapshot.out_a,
         palette.up,
@@ -2148,14 +2139,13 @@ pub fn render_tps_test_status<P: UiPainter>(
         palette,
         "OUT-B",
         163,
-        82,
+        76,
         151,
-        66,
+        86,
         snapshot.vout_profile,
         snapshot.out_b,
         palette.down,
     )?;
-    render_tps_test_footer(painter, variant, palette, snapshot)?;
 
     Ok(())
 }
@@ -7591,7 +7581,7 @@ fn render_tps_test_charger_card<P: UiPainter>(
     let x = 8;
     let y = 24;
     let w = 304;
-    let h = 52;
+    let h = 46;
     let accent = if snapshot.charger.actual_enabled && ((frame_no / 8) & 1) == 0 {
         palette.right
     } else {
@@ -7646,9 +7636,9 @@ fn render_tps_test_charger_card<P: UiPainter>(
         variant,
         FontRole::TextBody,
         format_args!(
-            "BAT {}/{}",
-            TpsTestMetricVoltage(snapshot.charger.vbat_mv),
-            TpsTestMetricCurrent(snapshot.charger.ibat_ma),
+            "CHG {}/{}",
+            TpsTestMetricVoltage(snapshot.charger.vreg_mv),
+            TpsTestMetricChargeCurrent(snapshot.charger.ichg_ma),
         ),
         Point::new((x + 6) as i32, (y + 30) as i32),
         HorizontalAlignment::Left,
@@ -7658,30 +7648,17 @@ fn render_tps_test_charger_card<P: UiPainter>(
         painter,
         variant,
         FontRole::TextBody,
-        format_args!(
-            "CHG {}/{}",
-            TpsTestMetricVoltage(snapshot.charger.vreg_mv),
-            TpsTestMetricChargeCurrent(snapshot.charger.ichg_ma),
-        ),
-        Point::new((x + 6) as i32, (y + 42) as i32),
-        HorizontalAlignment::Left,
-        palette.text,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::TextBody,
         "VOUT",
-        Point::new((x + 220) as i32, (y + 16) as i32),
+        Point::new((x + 214) as i32, (y + 11) as i32),
         HorizontalAlignment::Left,
         palette.text_dim,
     )?;
     text(
         painter,
         variant,
-        FontRole::NumBig,
+        FontRole::NumHero,
         format_args!("{}", TpsTestVoltage(tps_test_shared_vout_mv(snapshot))),
-        Point::new((x + 216) as i32, (y + 30) as i32),
+        Point::new((x + 214) as i32, (y + 28) as i32),
         HorizontalAlignment::Left,
         tps_test_shared_vout_color(palette, snapshot),
     )?;
@@ -7773,7 +7750,7 @@ fn render_tps_test_output_card<P: UiPainter>(
         variant,
         FontRole::TextBody,
         format_args!("SET {}", TpsTestVoltage(snapshot.vset_mv)),
-        Point::new((x + 6) as i32, (y + 36) as i32),
+        Point::new((x + 6) as i32, (y + 42) as i32),
         HorizontalAlignment::Left,
         palette.text,
     )?;
@@ -7782,7 +7759,7 @@ fn render_tps_test_output_card<P: UiPainter>(
         variant,
         FontRole::TextBody,
         format_args!("I {}", TpsTestCurrent(snapshot.iout_ma)),
-        Point::new((x + w - 6) as i32, (y + 36) as i32),
+        Point::new((x + w - 6) as i32, (y + 42) as i32),
         HorizontalAlignment::Right,
         palette.text,
     )?;
@@ -7791,7 +7768,7 @@ fn render_tps_test_output_card<P: UiPainter>(
         variant,
         FontRole::TextBody,
         format_args!("T {}", TpsTestTemperature(snapshot.temp_c_x16)),
-        Point::new((x + 6) as i32, (y + 50) as i32),
+        Point::new((x + 6) as i32, (y + 60) as i32),
         HorizontalAlignment::Left,
         palette.text,
     )?;
@@ -7800,7 +7777,7 @@ fn render_tps_test_output_card<P: UiPainter>(
         variant,
         FontRole::TextBody,
         tps_test_status_or_fault(snapshot),
-        Point::new((x + w - 6) as i32, (y + 50) as i32),
+        Point::new((x + w - 6) as i32, (y + 60) as i32),
         HorizontalAlignment::Right,
         if snapshot.fault.is_some() {
             palette.touch
