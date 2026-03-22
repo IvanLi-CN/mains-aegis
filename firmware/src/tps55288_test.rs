@@ -5,7 +5,7 @@ use ::tps55288::data_types::{
     CableCompLevel, CableCompOption, FeedbackSource, I2cAddress, InternalFeedbackRatio,
     LightLoadMode, LightLoadOverride, OcpDelay, VccSource, VoutSlewRate,
 };
-use ::tps55288::registers::{addr as tps_addr, ModeBits, StatusBits};
+use ::tps55288::registers::{addr as tps_addr, CdcBits, ModeBits, StatusBits};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputChannel {
@@ -99,6 +99,32 @@ pub struct TpsTelemetrySnapshot {
     pub scp: bool,
     pub ocp: bool,
     pub ovp: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TpsDiagSnapshot {
+    pub mode: u8,
+    pub status: u8,
+    pub vout_sr: Option<u8>,
+    pub cdc: Option<u8>,
+    pub iout_limit: Option<u8>,
+    pub output_enabled: bool,
+    pub dischg_enabled: bool,
+    pub fpwm_enabled: bool,
+    pub register_mode: bool,
+    pub external_vcc: bool,
+    pub ilim_enabled: Option<bool>,
+    pub ilim_ma: Option<u16>,
+    pub vset_mv: Option<u16>,
+    pub vbus_mv: Option<u16>,
+    pub current_ma: Option<i32>,
+    pub temp_c_x16: Option<i16>,
+    pub scp: bool,
+    pub ocp: bool,
+    pub ovp: bool,
+    pub sc_mask: Option<bool>,
+    pub ocp_mask: Option<bool>,
+    pub ovp_mask: Option<bool>,
 }
 
 pub fn i2c_error_kind(err: esp_hal::i2c::master::Error) -> &'static str {
@@ -376,5 +402,69 @@ where
         scp: status_bits.contains(StatusBits::SCP),
         ocp: status_bits.contains(StatusBits::OCP),
         ovp: status_bits.contains(StatusBits::OVP),
+    })
+}
+
+pub fn read_diag_snapshot<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+    ina_ready: bool,
+) -> Result<TpsDiagSnapshot, &'static str>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, ch.addr());
+    let mode = tps
+        .read_reg(tps_addr::MODE)
+        .map_err(|err| tps_error_kind(&err))?;
+    let status = tps
+        .read_reg(tps_addr::STATUS)
+        .map_err(|err| tps_error_kind(&err))?;
+
+    let mode_bits = ModeBits::from_bits_truncate(mode);
+    let status_bits = StatusBits::from_bits_truncate(status);
+    let vout_sr = tps.read_reg(tps_addr::VOUT_SR).ok();
+    let cdc = tps.read_reg(tps_addr::CDC).ok();
+    let iout_limit = tps.read_reg(tps_addr::IOUT_LIMIT).ok();
+    let ilim = tps.get_ilim_ma().ok();
+    let vset_mv = tps.get_vout_mv().ok();
+
+    let (vbus_mv, current_ma) = if ina_ready {
+        let vbus_mv = ina3221::read_bus_mv(i2c, ch.ina_ch())
+            .ok()
+            .and_then(|mv| u16::try_from(mv).ok());
+        let current_ma = ina3221::read_shunt_uv(i2c, ch.ina_ch())
+            .ok()
+            .map(|shunt_uv| ina3221::shunt_uv_to_current_ma(shunt_uv, 10));
+        (vbus_mv, current_ma)
+    } else {
+        (None, None)
+    };
+
+    let temp_c_x16 = tmp112::read_temp_c_x16(i2c, ch.tmp_addr()).ok();
+
+    Ok(TpsDiagSnapshot {
+        mode,
+        status,
+        vout_sr,
+        cdc,
+        iout_limit,
+        output_enabled: mode_bits.contains(ModeBits::OE),
+        dischg_enabled: mode_bits.contains(ModeBits::DISCHG),
+        fpwm_enabled: mode_bits.contains(ModeBits::PFM),
+        register_mode: mode_bits.contains(ModeBits::MODE),
+        external_vcc: mode_bits.contains(ModeBits::VCC_EXT),
+        ilim_enabled: ilim.map(|(_, enabled)| enabled),
+        ilim_ma: ilim.map(|(ma, _)| ma),
+        vset_mv,
+        vbus_mv,
+        current_ma,
+        temp_c_x16,
+        scp: status_bits.contains(StatusBits::SCP),
+        ocp: status_bits.contains(StatusBits::OCP),
+        ovp: status_bits.contains(StatusBits::OVP),
+        sc_mask: cdc.map(|raw| CdcBits::from_bits_truncate(raw).contains(CdcBits::SC_MASK)),
+        ocp_mask: cdc.map(|raw| CdcBits::from_bits_truncate(raw).contains(CdcBits::OCP_MASK)),
+        ovp_mask: cdc.map(|raw| CdcBits::from_bits_truncate(raw).contains(CdcBits::OVP_MASK)),
     })
 }

@@ -4,7 +4,7 @@ use crate::front_panel_scene::{
 };
 use crate::tps55288_test::{
     configure_output, configure_output_disabled, force_disable_output, i2c_error_kind,
-    ina_error_kind, read_telemetry_snapshot, OutputChannel,
+    ina_error_kind, read_diag_snapshot, read_telemetry_snapshot, OutputChannel,
 };
 use esp_firmware::bq25792;
 use esp_firmware::ina3221;
@@ -20,6 +20,7 @@ const TMP112_OUT_A_ADDR: u8 = 0x48;
 const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 50 * 16;
 const TMP112_TLOW_C_X16: i16 = 40 * 16;
+const TPS_DIAG_LOG_PERIOD: Duration = Duration::from_secs(1);
 
 pub const TEST_CHARGER_ENABLE: bool = false;
 pub const TEST_CHARGE_VREG_MV: u16 = 16_800;
@@ -169,6 +170,7 @@ pub struct TpsTestRuntime {
     tmp_config_mask: u8,
     tmp_retry_at: Option<Instant>,
     therm_kill_latched: bool,
+    tps_diag_log_at: Option<Instant>,
     charger: ChargerRuntimeState,
     out_a: OutputRuntimeState,
     out_b: OutputRuntimeState,
@@ -195,6 +197,7 @@ impl TpsTestRuntime {
             tmp_config_mask: 0,
             tmp_retry_at: None,
             therm_kill_latched: false,
+            tps_diag_log_at: None,
             charger: ChargerRuntimeState::new(),
             out_a: OutputRuntimeState::new(TEST_OUT_A_OE),
             out_b: OutputRuntimeState::new(TEST_OUT_B_OE),
@@ -228,6 +231,7 @@ impl TpsTestRuntime {
             OutputChannel::OutB,
             &mut self.out_b,
         );
+        self.maybe_log_tps_diag(now);
 
         self.snapshot()
     }
@@ -536,6 +540,78 @@ impl TpsTestRuntime {
         } else {
             None
         }
+    }
+
+    fn maybe_log_tps_diag(&mut self, now: Instant) {
+        if matches!(
+            self.tps_diag_log_at,
+            Some(last) if now < last + TPS_DIAG_LOG_PERIOD
+        ) {
+            return;
+        }
+        self.tps_diag_log_at = Some(now);
+        self.log_one_tps_diag(OutputChannel::OutA, self.out_a);
+        self.log_one_tps_diag(OutputChannel::OutB, self.out_b);
+    }
+
+    fn log_one_tps_diag(&mut self, ch: OutputChannel, state: OutputRuntimeState) {
+        match read_diag_snapshot(&mut self.i2c, ch, self.ina_ready) {
+            Ok(diag) => {
+                defmt::info!(
+                    "tps-test: diag ch={} requested={=bool} applied={=bool} comm={} retry={=?} fault={=?} mode=0x{=u8:x} status=0x{=u8:x} oe={=bool} reg_mode={=bool} ext_vcc={=bool} fpwm={=bool} dischg={=bool} ilim_en={=?} ilim_ma={=?} vset_mv={=?} vbus_mv={=?} current_ma={=?} temp_c_x16={=?} vout_sr={=?} cdc={=?} iout_limit={=?} scp={=bool} ocp={=bool} ovp={=bool} sc_mask={=?} ocp_mask={=?} ovp_mask={=?}",
+                    ch.name(),
+                    state.requested_enabled,
+                    state.applied,
+                    comm_state_name(state.comm_state),
+                    state.retry_reason,
+                    state.terminal_fault,
+                    diag.mode,
+                    diag.status,
+                    diag.output_enabled,
+                    diag.register_mode,
+                    diag.external_vcc,
+                    diag.fpwm_enabled,
+                    diag.dischg_enabled,
+                    diag.ilim_enabled,
+                    diag.ilim_ma,
+                    diag.vset_mv,
+                    diag.vbus_mv,
+                    diag.current_ma,
+                    diag.temp_c_x16,
+                    diag.vout_sr,
+                    diag.cdc,
+                    diag.iout_limit,
+                    diag.scp,
+                    diag.ocp,
+                    diag.ovp,
+                    diag.sc_mask,
+                    diag.ocp_mask,
+                    diag.ovp_mask
+                );
+            }
+            Err(kind) => {
+                defmt::warn!(
+                    "tps-test: diag ch={} requested={=bool} applied={=bool} comm={} retry={=?} fault={=?} read_err={}",
+                    ch.name(),
+                    state.requested_enabled,
+                    state.applied,
+                    comm_state_name(state.comm_state),
+                    state.retry_reason,
+                    state.terminal_fault,
+                    kind
+                );
+            }
+        }
+    }
+}
+
+fn comm_state_name(state: SelfCheckCommState) -> &'static str {
+    match state {
+        SelfCheckCommState::Pending => "pending",
+        SelfCheckCommState::Ok => "ok",
+        SelfCheckCommState::Warn => "warn",
+        SelfCheckCommState::Err => "err",
+        SelfCheckCommState::NotAvailable => "na",
     }
 }
 
