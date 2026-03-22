@@ -527,16 +527,65 @@ impl TpsTestRuntime {
             Some("THERM KILL LATCHED")
         } else if self.charger.comm_state == SelfCheckCommState::Err {
             Some("CHARGER COMM ERROR")
-        } else if self.out_a.terminal_fault.is_some() || self.out_b.terminal_fault.is_some() {
-            Some("TPS FAULT LATCHED")
-        } else if self.out_a.retry_reason.is_some() || self.out_b.retry_reason.is_some() {
-            Some("TPS RETRY PENDING")
+        } else if let Some(alert) = output_footer_alert("OUT-A", &self.out_a) {
+            Some(alert)
+        } else if let Some(alert) = output_footer_alert("OUT-B", &self.out_b) {
+            Some(alert)
         } else if !self.ina_ready {
             Some("INA OFFLINE")
         } else {
             None
         }
     }
+}
+
+fn output_footer_alert(label: &'static str, state: &OutputRuntimeState) -> Option<&'static str> {
+    if !state.requested_enabled {
+        return None;
+    }
+    if state.terminal_fault == Some("THERM") {
+        return Some(match label {
+            "OUT-A" => "OUT-A THERM",
+            "OUT-B" => "OUT-B THERM",
+            _ => "THERM",
+        });
+    }
+    if matches!(state.retry_reason, Some("i2c_nack")) {
+        return Some(match label {
+            "OUT-A" => "OUT-A I2C NACK",
+            "OUT-B" => "OUT-B I2C NACK",
+            _ => "I2C NACK",
+        });
+    }
+    if matches!(state.retry_reason, Some("i2c_timeout")) {
+        return Some(match label {
+            "OUT-A" => "OUT-A I2C TIMEOUT",
+            "OUT-B" => "OUT-B I2C TIMEOUT",
+            _ => "I2C TIMEOUT",
+        });
+    }
+    if state.actual_enabled == Some(true) && state.vbus_mv.is_some_and(|mv| mv < 500) {
+        return Some(match label {
+            "OUT-A" => "OUT-A NO OUTPUT",
+            "OUT-B" => "OUT-B NO OUTPUT",
+            _ => "NO OUTPUT",
+        });
+    }
+    if state.terminal_fault.is_some() {
+        return Some(match label {
+            "OUT-A" => "OUT-A FAULT",
+            "OUT-B" => "OUT-B FAULT",
+            _ => "FAULT",
+        });
+    }
+    if state.retry_reason.is_some() {
+        return Some(match label {
+            "OUT-A" => "OUT-A RETRY",
+            "OUT-B" => "OUT-B RETRY",
+            _ => "RETRY",
+        });
+    }
+    None
 }
 
 fn step_output(
@@ -549,6 +598,22 @@ fn step_output(
     ch: OutputChannel,
     state: &mut OutputRuntimeState,
 ) {
+    if !state.requested_enabled {
+        if !state.applied {
+            let _ = force_disable_output(i2c, ch);
+            state.applied = true;
+        }
+        state.retry_at = None;
+        state.retry_reason = None;
+        state.terminal_fault = None;
+        state.actual_enabled = Some(false);
+        state.comm_state = SelfCheckCommState::NotAvailable;
+        state.vset_mv = Some(target_vout_mv);
+        state.status_bits = None;
+        refresh_output_aux(i2c, ina_ready, ch, state);
+        return;
+    }
+
     if therm_kill_latched && state.terminal_fault.is_none() {
         state.terminal_fault = Some("THERM");
     }

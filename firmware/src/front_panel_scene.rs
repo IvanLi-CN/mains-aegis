@@ -7682,7 +7682,7 @@ fn render_tps_test_output_card<P: UiPainter>(
     y: u16,
     w: u16,
     h: u16,
-    profile: TpsTestVoutProfile,
+    _profile: TpsTestVoutProfile,
     snapshot: TpsTestOutputSnapshot,
     accent: u16,
 ) -> Result<(), P::Error> {
@@ -7720,17 +7720,16 @@ fn render_tps_test_output_card<P: UiPainter>(
         variant,
         FontRole::DetailBody,
         format_args!(
-            "REQ {}  ACT {}  TGT {}",
+            "REQ {}  ACT {}",
             tps_test_bool(snapshot.requested_enabled),
             tps_test_opt_bool(snapshot.actual_enabled),
-            profile.label(),
         ),
         Point::new((x + 6) as i32, (y + 20) as i32),
         HorizontalAlignment::Left,
         palette.text_dim,
     )?;
 
-    if let Some(fault) = snapshot.fault {
+    if let Some(fault) = tps_test_fault_text(snapshot.fault) {
         text(
             painter,
             variant,
@@ -7746,36 +7745,51 @@ fn render_tps_test_output_card<P: UiPainter>(
         painter,
         variant,
         FontRole::DetailBody,
-        format_args!(
-            "VSET {}  VOUT {}",
-            TpsTestVoltage(snapshot.vset_mv),
-            TpsTestVoltage(snapshot.vbus_mv),
-        ),
-        Point::new((x + 6) as i32, (y + 36) as i32),
-        HorizontalAlignment::Left,
-        palette.text,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::DetailBody,
-        format_args!(
-            "IOUT {}  TEMP {}",
-            TpsTestCurrent(snapshot.iout_ma),
-            TpsTestTemperature(snapshot.temp_c_x16),
-        ),
-        Point::new((x + 6) as i32, (y + 50) as i32),
-        HorizontalAlignment::Left,
-        palette.text,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::DetailBody,
-        format_args!("STAT {}", TpsTestStatusBits(snapshot.status_bits)),
-        Point::new((x + 6) as i32, (y + 64) as i32),
+        "ACTUAL VOUT",
+        Point::new((x + 6) as i32, (y + 32) as i32),
         HorizontalAlignment::Left,
         palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::NumBig,
+        format_args!("{}", TpsTestVoltage(snapshot.vbus_mv)),
+        Point::new((x + w - 6) as i32, (y + 28) as i32),
+        HorizontalAlignment::Right,
+        if snapshot.fault.is_some() {
+            palette.touch
+        } else if snapshot.actual_enabled == Some(true) {
+            palette.accent
+        } else {
+            palette.text
+        },
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        format_args!(
+            "TARGET {}  CUR {}",
+            TpsTestVoltage(snapshot.vset_mv),
+            TpsTestCurrent(snapshot.iout_ma),
+        ),
+        Point::new((x + 6) as i32, (y + 54) as i32),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        format_args!(
+            "TEMP {}  STAT {}",
+            TpsTestTemperature(snapshot.temp_c_x16),
+            TpsTestStatusBits(snapshot.status_bits),
+        ),
+        Point::new((x + 6) as i32, (y + 66) as i32),
+        HorizontalAlignment::Left,
+        palette.text,
     )?;
 
     Ok(())
@@ -7826,20 +7840,36 @@ fn render_tps_test_footer<P: UiPainter>(
 
 #[allow(dead_code)]
 fn tps_test_output_status(snapshot: TpsTestOutputSnapshot) -> &'static str {
-    if snapshot.fault.is_some() {
-        "FAULT"
-    } else {
-        match snapshot.comm_state {
-            SelfCheckCommState::Pending => "PEND",
-            SelfCheckCommState::Warn => "WARN",
-            SelfCheckCommState::Err => "ERR",
-            SelfCheckCommState::NotAvailable => "N/A",
-            SelfCheckCommState::Ok => match snapshot.actual_enabled {
-                Some(true) => "RUN",
-                Some(false) => "IDLE",
-                None => "OK",
-            },
-        }
+    if !snapshot.requested_enabled {
+        return "STBY";
+    }
+    if let Some(fault) = snapshot.fault {
+        return match fault {
+            "i2c_nack" | "i2c_timeout" | "i2c_arbitration" | "i2c" => "COMM",
+            "THERM" => "THERM",
+            _ => "FAULT",
+        };
+    }
+    match snapshot.comm_state {
+        SelfCheckCommState::Pending => "PEND",
+        SelfCheckCommState::Warn => "WARN",
+        SelfCheckCommState::Err => "ERR",
+        SelfCheckCommState::NotAvailable => "STBY",
+        SelfCheckCommState::Ok => match snapshot.actual_enabled {
+            Some(true) => "RUN",
+            Some(false) => "IDLE",
+            None => "OK",
+        },
+    }
+}
+
+fn tps_test_fault_text(fault: Option<&'static str>) -> Option<&'static str> {
+    match fault {
+        Some("i2c_nack") => Some("I2C NACK"),
+        Some("i2c_timeout") => Some("I2C TIMEOUT"),
+        Some("i2c_arbitration") => Some("I2C ARB"),
+        Some(other) => Some(other),
+        None => None,
     }
 }
 
