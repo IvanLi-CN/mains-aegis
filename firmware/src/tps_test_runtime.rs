@@ -3,8 +3,8 @@ use crate::front_panel_scene::{
     TpsTestVoutProfile,
 };
 use crate::tps55288_test::{
-    configure_output, force_disable_output, i2c_error_kind, ina_error_kind,
-    read_telemetry_snapshot, OutputChannel,
+    configure_output, configure_output_disabled, force_disable_output, i2c_error_kind,
+    ina_error_kind, read_telemetry_snapshot, OutputChannel,
 };
 use esp_firmware::bq25792;
 use esp_firmware::ina3221;
@@ -598,16 +598,51 @@ fn step_output(
     ch: OutputChannel,
     state: &mut OutputRuntimeState,
 ) {
+    let retry_due = state
+        .retry_at
+        .map(|deadline| now >= deadline)
+        .unwrap_or(true);
+
     if !state.requested_enabled {
-        if !state.applied {
-            let _ = force_disable_output(i2c, ch);
-            state.applied = true;
+        if !state.applied && retry_due {
+            match configure_output_disabled(i2c, ch, target_vout_mv, ilimit_ma) {
+                Ok(()) => {
+                    state.applied = true;
+                    state.retry_at = None;
+                    state.retry_reason = None;
+                    state.comm_state = SelfCheckCommState::Ok;
+                }
+                Err(err) => {
+                    state.applied = false;
+                    state.actual_enabled = Some(false);
+                    state.vset_mv = Some(target_vout_mv);
+                    state.status_bits = None;
+                    refresh_output_aux(i2c, ina_ready, ch, state);
+                    if err.retryable {
+                        state.retry_reason = Some(err.kind);
+                        state.retry_at = Some(now + RETRY_BACKOFF);
+                        state.comm_state = SelfCheckCommState::Err;
+                    } else {
+                        state.terminal_fault = Some("CFG");
+                        state.retry_reason = None;
+                        state.retry_at = None;
+                        state.comm_state = SelfCheckCommState::Warn;
+                    }
+                    defmt::error!(
+                        "tps-test: tps park err ch={} stage={} kind={} retryable={=bool}",
+                        ch.name(),
+                        err.stage.as_str(),
+                        err.kind,
+                        err.retryable
+                    );
+                    return;
+                }
+            }
         }
         state.retry_at = None;
         state.retry_reason = None;
         state.terminal_fault = None;
         state.actual_enabled = Some(false);
-        state.comm_state = SelfCheckCommState::NotAvailable;
         state.vset_mv = Some(target_vout_mv);
         state.status_bits = None;
         refresh_output_aux(i2c, ina_ready, ch, state);
@@ -632,10 +667,6 @@ fn step_output(
         return;
     }
 
-    let retry_due = state
-        .retry_at
-        .map(|deadline| now >= deadline)
-        .unwrap_or(true);
     if !state.applied && retry_due {
         match configure_output(i2c, ch, state.requested_enabled, target_vout_mv, ilimit_ma) {
             Ok(()) => {

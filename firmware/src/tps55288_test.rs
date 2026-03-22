@@ -229,6 +229,109 @@ where
     tps.disable_output().map_err(|err| tps_error_kind(&err))
 }
 
+pub fn configure_output_disabled<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+    target_vout_mv: u16,
+    ilimit_ma: u16,
+) -> Result<(), ConfigureFailure>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, ch.addr());
+
+    let mut mode = ModeBits::from_bits_truncate(tps.read_reg(tps_addr::MODE).map_err(|e| {
+        ConfigureFailure {
+            stage: ConfigureStage::Disable,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        }
+    })?);
+    mode.insert(ModeBits::MODE | ModeBits::VCC_EXT);
+    mode.remove(ModeBits::OE | ModeBits::DISCHG | ModeBits::PFM);
+    match ch.addr_enum() {
+        I2cAddress::Addr0x74 => mode.remove(ModeBits::I2CADD),
+        I2cAddress::Addr0x75 => mode.insert(ModeBits::I2CADD),
+    }
+    tps.write_reg(tps_addr::MODE, mode.bits())
+        .map_err(|e| ConfigureFailure {
+            stage: ConfigureStage::Disable,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        })?;
+
+    tps.init().map_err(|e| ConfigureFailure {
+        stage: ConfigureStage::Init,
+        kind: tps_error_kind(&e),
+        retryable: matches!(e, ::tps55288::Error::I2c(_)),
+    })?;
+    tps.set_mode_control(
+        LightLoadOverride::FromRegister,
+        VccSource::External5v,
+        ch.addr_enum(),
+        LightLoadMode::Pfm,
+    )
+    .map_err(|e| ConfigureFailure {
+        stage: ConfigureStage::Mode,
+        kind: tps_error_kind(&e),
+        retryable: matches!(e, ::tps55288::Error::I2c(_)),
+    })?;
+
+    let mut mode = ModeBits::from_bits_truncate(tps.read_reg(tps_addr::MODE).map_err(|e| {
+        ConfigureFailure {
+            stage: ConfigureStage::Mode,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        }
+    })?);
+    mode.remove(ModeBits::OE | ModeBits::DISCHG);
+    tps.write_reg(tps_addr::MODE, mode.bits())
+        .map_err(|e| ConfigureFailure {
+            stage: ConfigureStage::Mode,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        })?;
+
+    tps.set_vout_sr(VoutSlewRate::Sr1p25MvPerUs, OcpDelay::Ms12_288)
+        .map_err(|e| ConfigureFailure {
+            stage: ConfigureStage::VoutSr,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        })?;
+    tps.set_feedback(FeedbackSource::Internal, InternalFeedbackRatio::R0_0564)
+        .map_err(|e| ConfigureFailure {
+            stage: ConfigureStage::Feedback,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        })?;
+    tps.set_cable_comp(
+        CableCompOption::Internal,
+        CableCompLevel::V0p0,
+        false,
+        false,
+        false,
+    )
+    .map_err(|e| ConfigureFailure {
+        stage: ConfigureStage::Cdc,
+        kind: tps_error_kind(&e),
+        retryable: matches!(e, ::tps55288::Error::I2c(_)),
+    })?;
+    tps.set_vout_mv(target_vout_mv)
+        .map_err(|e| ConfigureFailure {
+            stage: ConfigureStage::Vout,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        })?;
+    tps.set_ilim_ma(ilimit_ma, false)
+        .map_err(|e| ConfigureFailure {
+            stage: ConfigureStage::Ilim,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        })?;
+
+    Ok(())
+}
+
 pub fn read_telemetry_snapshot<I2C>(
     i2c: &mut I2C,
     ch: OutputChannel,
