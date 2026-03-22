@@ -7602,7 +7602,7 @@ fn render_tps_test_charger_card<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailTitle,
         "BQ25792",
         Point::new((x + 6) as i32, (y + 4) as i32),
         HorizontalAlignment::Left,
@@ -7620,7 +7620,7 @@ fn render_tps_test_charger_card<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         format_args!(
             "CHG {}  INPUT {}  PACK {}",
             tps_test_bool(snapshot.charger.actual_enabled),
@@ -7634,7 +7634,7 @@ fn render_tps_test_charger_card<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         format_args!(
             "CHG {}/{}",
             TpsTestMetricVoltage(snapshot.charger.vreg_mv),
@@ -7647,7 +7647,7 @@ fn render_tps_test_charger_card<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         "VOUT",
         Point::new((x + 214) as i32, (y + 11) as i32),
         HorizontalAlignment::Left,
@@ -7667,7 +7667,7 @@ fn render_tps_test_charger_card<P: UiPainter>(
         text(
             painter,
             variant,
-            FontRole::TextBody,
+            FontRole::DetailBody,
             fault,
             Point::new((x + w - 6) as i32, (y + 18) as i32),
             HorizontalAlignment::Right,
@@ -7707,7 +7707,7 @@ fn render_tps_test_output_card<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailTitle,
         title,
         Point::new((x + 6) as i32, (y + 4) as i32),
         HorizontalAlignment::Left,
@@ -7725,7 +7725,7 @@ fn render_tps_test_output_card<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         format_args!("CFG {}", tps_test_bool(snapshot.requested_enabled)),
         Point::new((x + 6) as i32, (y + 20) as i32),
         HorizontalAlignment::Left,
@@ -7734,7 +7734,7 @@ fn render_tps_test_output_card<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         format_args!("LIVE {}", tps_test_opt_bool(snapshot.actual_enabled)),
         Point::new((x + w - 6) as i32, (y + 20) as i32),
         HorizontalAlignment::Right,
@@ -7748,7 +7748,7 @@ fn render_tps_test_output_card<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         format_args!("SET {}", TpsTestVoltage(snapshot.vset_mv)),
         Point::new((x + 6) as i32, (y + 42) as i32),
         HorizontalAlignment::Left,
@@ -7757,7 +7757,7 @@ fn render_tps_test_output_card<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         format_args!("I {}", TpsTestCurrent(snapshot.iout_ma)),
         Point::new((x + w - 6) as i32, (y + 42) as i32),
         HorizontalAlignment::Right,
@@ -7766,7 +7766,7 @@ fn render_tps_test_output_card<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         format_args!("T {}", TpsTestTemperature(snapshot.temp_c_x16)),
         Point::new((x + 6) as i32, (y + 60) as i32),
         HorizontalAlignment::Left,
@@ -7775,7 +7775,7 @@ fn render_tps_test_output_card<P: UiPainter>(
     text(
         painter,
         variant,
-        FontRole::TextBody,
+        FontRole::DetailBody,
         tps_test_status_or_fault(snapshot),
         Point::new((x + w - 6) as i32, (y + 60) as i32),
         HorizontalAlignment::Right,
