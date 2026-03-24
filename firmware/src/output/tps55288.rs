@@ -104,9 +104,8 @@ where
         .map_err(|e| (ConfigureStage::VoutSr, e))?;
     tps.set_feedback(FeedbackSource::Internal, InternalFeedbackRatio::R0_0564)
         .map_err(|e| (ConfigureStage::Feedback, e))?;
-    // Keep FB/INT fault indication disabled until OE is asserted. The datasheet requires OCP_MASK=0
-    // while enabling the output; after OE goes high we re-enable SC/OCP/OVP indication so the shared
-    // interrupt pin becomes the long-lived source of truth for fault capture.
+    // Keep FB/INT fault indication disabled for bring-up. Do not touch CDC after OE is asserted;
+    // once output enable is requested, only VOUT/ILIM are allowed to change.
     tps.set_cable_comp(
         CableCompOption::Internal,
         CableCompLevel::V0p0,
@@ -123,14 +122,6 @@ where
     if enabled {
         tps.enable_output()
             .map_err(|e| (ConfigureStage::Enable, e))?;
-        tps.set_cable_comp(
-            CableCompOption::Internal,
-            CableCompLevel::V0p0,
-            true,
-            true,
-            true,
-        )
-        .map_err(|e| (ConfigureStage::CdcPostEnable, e))?;
     }
 
     Ok(())
@@ -147,7 +138,6 @@ pub enum ConfigureStage {
     Vout,
     Ilim,
     Enable,
-    CdcPostEnable,
 }
 
 impl ConfigureStage {
@@ -162,7 +152,6 @@ impl ConfigureStage {
             ConfigureStage::Vout => "vout",
             ConfigureStage::Ilim => "ilim",
             ConfigureStage::Enable => "enable",
-            ConfigureStage::CdcPostEnable => "cdc_post_enable",
         }
     }
 }

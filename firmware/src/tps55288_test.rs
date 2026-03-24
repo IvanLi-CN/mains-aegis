@@ -61,7 +61,6 @@ pub enum ConfigureStage {
     Vout,
     Ilim,
     Enable,
-    CdcPostEnable,
 }
 
 impl ConfigureStage {
@@ -76,7 +75,6 @@ impl ConfigureStage {
             Self::Vout => "vout",
             Self::Ilim => "ilim",
             Self::Enable => "enable",
-            Self::CdcPostEnable => "cdc_post_enable",
         }
     }
 }
@@ -227,18 +225,6 @@ where
     if enabled {
         tps.enable_output().map_err(|e| ConfigureFailure {
             stage: ConfigureStage::Enable,
-            kind: tps_error_kind(&e),
-            retryable: matches!(e, ::tps55288::Error::I2c(_)),
-        })?;
-        tps.set_cable_comp(
-            CableCompOption::Internal,
-            CableCompLevel::V0p0,
-            true,
-            true,
-            true,
-        )
-        .map_err(|e| ConfigureFailure {
-            stage: ConfigureStage::CdcPostEnable,
             kind: tps_error_kind(&e),
             retryable: matches!(e, ::tps55288::Error::I2c(_)),
         })?;
