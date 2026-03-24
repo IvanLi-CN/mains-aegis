@@ -200,9 +200,9 @@ where
     tps.set_cable_comp(
         CableCompOption::Internal,
         CableCompLevel::V0p0,
-        false,
-        false,
-        false,
+        true,
+        true,
+        true,
     )
     .map_err(|e| ConfigureFailure {
         stage: ConfigureStage::Cdc,

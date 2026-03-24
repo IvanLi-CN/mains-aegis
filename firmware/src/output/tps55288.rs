@@ -104,14 +104,14 @@ where
         .map_err(|e| (ConfigureStage::VoutSr, e))?;
     tps.set_feedback(FeedbackSource::Internal, InternalFeedbackRatio::R0_0564)
         .map_err(|e| (ConfigureStage::Feedback, e))?;
-    // Keep FB/INT fault indication disabled for bring-up. Do not touch CDC after OE is asserted;
-    // once output enable is requested, only VOUT/ILIM are allowed to change.
+    // Configure SC/OCP/OVP indication before OE is asserted, and do not touch CDC after OE.
+    // This keeps the post-enable phase limited to the actual output enable transition.
     tps.set_cable_comp(
         CableCompOption::Internal,
         CableCompLevel::V0p0,
-        false,
-        false,
-        false,
+        true,
+        true,
+        true,
     )
     .map_err(|e| (ConfigureStage::Cdc, e))?;
     tps.set_vout_mv(default_vout_mv)
