@@ -42,7 +42,7 @@ esp-backtrace = { version = "0.18.1", features = ["esp32s3", "panic-handler", "d
 esp-hal = { version = "1.0.0", features = ["esp32s3", "rt", "unstable", "defmt", "psram"] }
 esp-println = { version = "0.16.1", default-features = false, features = ["esp32s3", "defmt-espflash", "jtag-serial"] }
 ina3221-async = { path = "../ina3221-async", features = ["defmt"] }
-tps55288 = { path = "../tps55288", features = ["defmt"] }
+tps55288 = { package = "tps55288-rs", git = "https://github.com/IvanLi-CN/tps55288-rs", rev = "e451aa816ef97fb08ae162ed2baca414d0b22823", features = ["defmt"] }
 u8g2-fonts = { version = "0.7.2", default-features = false }
 
 [profile.dev.package.xtensa-lx-rt]

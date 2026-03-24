@@ -3,8 +3,7 @@ use esp_firmware::tmp112;
 use esp_hal::time::{Duration, Instant};
 
 use ::tps55288::data_types::{
-    CableCompLevel, CableCompOption, FeedbackSource, I2cAddress, InternalFeedbackRatio,
-    LightLoadMode, LightLoadOverride, OcpDelay, VccSource, VoutSlewRate,
+    CableCompLevel, CableCompOption, FeedbackSource, InternalFeedbackRatio, OcpDelay, VoutSlewRate,
 };
 use ::tps55288::registers::{
     addr as tps_addr, CdcBits, ModeBits, StatusBits, VoutFsBits, VoutSrBits,
@@ -26,13 +25,6 @@ impl OutputChannel {
         match self {
             OutputChannel::OutA => 0x74,
             OutputChannel::OutB => 0x75,
-        }
-    }
-
-    pub const fn addr_enum(self) -> I2cAddress {
-        match self {
-            OutputChannel::OutA => I2cAddress::Addr0x74,
-            OutputChannel::OutB => I2cAddress::Addr0x75,
         }
     }
 
@@ -58,6 +50,23 @@ impl OutputChannel {
             OutputChannel::OutB => 0x49,
         }
     }
+}
+
+fn configure_mode_register<I2C>(
+    tps: &mut ::tps55288::Tps55288<I2C>,
+    ch: OutputChannel,
+) -> Result<(), ::tps55288::Error<esp_hal::i2c::master::Error>>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut mode = ModeBits::from_bits_truncate(tps.read_reg(tps_addr::MODE)?);
+    mode.insert(ModeBits::MODE | ModeBits::VCC_EXT);
+    mode.remove(ModeBits::PFM);
+    match ch {
+        OutputChannel::OutA => mode.remove(ModeBits::I2CADD),
+        OutputChannel::OutB => mode.insert(ModeBits::I2CADD),
+    }
+    tps.write_reg(tps_addr::MODE, mode.bits())
 }
 
 pub fn configure_one<I2C>(
@@ -90,13 +99,7 @@ where
     // - Light-load mode (PFM/FPWM)
     //
     // This board intends to use external 5V VCC and 0x74/0x75 split addresses.
-    tps.set_mode_control(
-        LightLoadOverride::FromRegister,
-        VccSource::External5v,
-        ch.addr_enum(),
-        LightLoadMode::Pfm, // Do not force PWM (FPWM disabled)
-    )
-    .map_err(|e| (ConfigureStage::Mode, e))?;
+    configure_mode_register(&mut tps, ch).map_err(|e| (ConfigureStage::Mode, e))?;
 
     // Start-up transients can falsely trip OCP on some boards (large Cout, wiring, or sense noise).
     // Keep the same ILIM target, but widen the OCP response delay + slow the ramp for bring-up.

@@ -2,8 +2,7 @@ use esp_firmware::ina3221;
 use esp_firmware::tmp112;
 
 use ::tps55288::data_types::{
-    CableCompLevel, CableCompOption, FeedbackSource, I2cAddress, InternalFeedbackRatio,
-    LightLoadMode, LightLoadOverride, OcpDelay, VccSource, VoutSlewRate,
+    CableCompLevel, CableCompOption, FeedbackSource, InternalFeedbackRatio, OcpDelay, VoutSlewRate,
 };
 use ::tps55288::registers::{addr as tps_addr, CdcBits, ModeBits, StatusBits};
 
@@ -18,13 +17,6 @@ impl OutputChannel {
         match self {
             Self::OutA => 0x74,
             Self::OutB => 0x75,
-        }
-    }
-
-    pub const fn addr_enum(self) -> I2cAddress {
-        match self {
-            Self::OutA => I2cAddress::Addr0x74,
-            Self::OutB => I2cAddress::Addr0x75,
         }
     }
 
@@ -48,6 +40,23 @@ impl OutputChannel {
             Self::OutB => 0x49,
         }
     }
+}
+
+fn configure_mode_register<I2C>(
+    tps: &mut ::tps55288::Tps55288<I2C>,
+    ch: OutputChannel,
+) -> Result<(), ::tps55288::Error<esp_hal::i2c::master::Error>>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut mode = ModeBits::from_bits_truncate(tps.read_reg(tps_addr::MODE)?);
+    mode.insert(ModeBits::MODE | ModeBits::VCC_EXT);
+    mode.remove(ModeBits::PFM);
+    match ch {
+        OutputChannel::OutA => mode.remove(ModeBits::I2CADD),
+        OutputChannel::OutB => mode.insert(ModeBits::I2CADD),
+    }
+    tps.write_reg(tps_addr::MODE, mode.bits())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,13 +183,7 @@ where
         kind: tps_error_kind(&e),
         retryable: matches!(e, ::tps55288::Error::I2c(_)),
     })?;
-    tps.set_mode_control(
-        LightLoadOverride::FromRegister,
-        VccSource::External5v,
-        ch.addr_enum(),
-        LightLoadMode::Pfm,
-    )
-    .map_err(|e| ConfigureFailure {
+    configure_mode_register(&mut tps, ch).map_err(|e| ConfigureFailure {
         stage: ConfigureStage::Mode,
         kind: tps_error_kind(&e),
         retryable: matches!(e, ::tps55288::Error::I2c(_)),
@@ -261,9 +264,9 @@ where
     })?);
     mode.insert(ModeBits::MODE | ModeBits::VCC_EXT);
     mode.remove(ModeBits::OE | ModeBits::DISCHG | ModeBits::PFM);
-    match ch.addr_enum() {
-        I2cAddress::Addr0x74 => mode.remove(ModeBits::I2CADD),
-        I2cAddress::Addr0x75 => mode.insert(ModeBits::I2CADD),
+    match ch {
+        OutputChannel::OutA => mode.remove(ModeBits::I2CADD),
+        OutputChannel::OutB => mode.insert(ModeBits::I2CADD),
     }
     tps.write_reg(tps_addr::MODE, mode.bits())
         .map_err(|e| ConfigureFailure {
@@ -277,13 +280,7 @@ where
         kind: tps_error_kind(&e),
         retryable: matches!(e, ::tps55288::Error::I2c(_)),
     })?;
-    tps.set_mode_control(
-        LightLoadOverride::FromRegister,
-        VccSource::External5v,
-        ch.addr_enum(),
-        LightLoadMode::Pfm,
-    )
-    .map_err(|e| ConfigureFailure {
+    configure_mode_register(&mut tps, ch).map_err(|e| ConfigureFailure {
         stage: ConfigureStage::Mode,
         kind: tps_error_kind(&e),
         retryable: matches!(e, ::tps55288::Error::I2c(_)),
