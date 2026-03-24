@@ -249,23 +249,27 @@ where
     let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, ch.addr());
 
     if enabled {
+        log_minimal_raw_regs(&mut tps, ch, "pre");
         tps.set_ilim_ma(ilimit_ma, true)
             .map_err(|e| ConfigureFailure {
                 stage: ConfigureStage::Ilim,
                 kind: tps_error_kind(&e),
                 retryable: matches!(e, ::tps55288::Error::I2c(_)),
             })?;
+        log_minimal_raw_regs(&mut tps, ch, "post_ilim");
         tps.set_vout_mv(target_vout_mv)
             .map_err(|e| ConfigureFailure {
                 stage: ConfigureStage::Vout,
                 kind: tps_error_kind(&e),
                 retryable: matches!(e, ::tps55288::Error::I2c(_)),
             })?;
-        tps.enable_output().map_err(|e| ConfigureFailure {
+        log_minimal_raw_regs(&mut tps, ch, "post_vout");
+        raw_enable_output_probe(&mut tps, ch).map_err(|e| ConfigureFailure {
             stage: ConfigureStage::Enable,
             kind: tps_error_kind(&e),
             retryable: matches!(e, ::tps55288::Error::I2c(_)),
         })?;
+        log_minimal_raw_regs(&mut tps, ch, "post_oe");
     } else {
         tps.disable_output().map_err(|e| ConfigureFailure {
             stage: ConfigureStage::Disable,
@@ -277,12 +281,75 @@ where
     Ok(())
 }
 
+fn raw_enable_output_probe<I2C>(
+    tps: &mut ::tps55288::Tps55288<I2C>,
+    ch: OutputChannel,
+) -> Result<(), ::tps55288::Error<esp_hal::i2c::master::Error>>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let pre = tps.read_reg(tps_addr::MODE)?;
+    let target = pre | ModeBits::OE.bits();
+    tps.write_reg(tps_addr::MODE, target)?;
+    let rb0 = tps.read_reg(tps_addr::MODE)?;
+    let rb1 = tps.read_reg(tps_addr::MODE)?;
+    let rb2 = tps.read_reg(tps_addr::MODE)?;
+    defmt::info!(
+        "tps-test: mode_probe ch={} pre=0x{:02x} target=0x{:02x} rb0=0x{:02x} rb1=0x{:02x} rb2=0x{:02x}",
+        ch.name(),
+        pre,
+        target,
+        rb0,
+        rb1,
+        rb2,
+    );
+    Ok(())
+}
+
+fn log_minimal_raw_regs<I2C>(
+    tps: &mut ::tps55288::Tps55288<I2C>,
+    ch: OutputChannel,
+    stage: &'static str,
+) where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mode = tps.read_reg(tps_addr::MODE);
+    let vout_sr = tps.read_reg(tps_addr::VOUT_SR);
+    let vout_fs = tps.read_reg(tps_addr::VOUT_FS);
+    let cdc = tps.read_reg(tps_addr::CDC);
+    let iout_limit = tps.read_reg(tps_addr::IOUT_LIMIT);
+    let ref0 = tps.read_reg(tps_addr::REF0);
+    let ref1 = tps.read_reg(tps_addr::REF1);
+
+    defmt::info!(
+        "tps-test: minimal_raw ch={} stage={} mode={=?} vout_sr={=?} vout_fs={=?} cdc={=?} iout_limit={=?} ref0={=?} ref1={=?}",
+        ch.name(),
+        stage,
+        mode.map_err(|err| tps_error_kind(&err)),
+        vout_sr.map_err(|err| tps_error_kind(&err)),
+        vout_fs.map_err(|err| tps_error_kind(&err)),
+        cdc.map_err(|err| tps_error_kind(&err)),
+        iout_limit.map_err(|err| tps_error_kind(&err)),
+        ref0.map_err(|err| tps_error_kind(&err)),
+        ref1.map_err(|err| tps_error_kind(&err)),
+    );
+}
+
 pub fn force_disable_output<I2C>(i2c: &mut I2C, ch: OutputChannel) -> Result<(), &'static str>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, ch.addr());
     tps.disable_output().map_err(|err| tps_error_kind(&err))
+}
+
+pub fn read_status_snapshot<I2C>(i2c: &mut I2C, ch: OutputChannel) -> Result<u8, &'static str>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, ch.addr());
+    tps.read_reg(tps_addr::STATUS)
+        .map_err(|err| tps_error_kind(&err))
 }
 
 pub fn configure_output_disabled<I2C>(

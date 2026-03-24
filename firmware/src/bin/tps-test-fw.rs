@@ -16,7 +16,7 @@ mod tps_test_runtime;
 
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{DriveMode, Flex, Input, InputConfig, Io, OutputConfig, Pull};
+use esp_hal::gpio::{DriveMode, Event, Flex, Input, InputConfig, Io, OutputConfig, Pull};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c, SoftwareTimeout};
 use esp_hal::ledc::channel::{self, ChannelIFace};
 use esp_hal::ledc::timer::{self, TimerIFace};
@@ -200,6 +200,11 @@ fn main() -> ! {
         .with_sda(i2c1_sda.into_peripheral_output())
         .with_scl(i2c1_scl.into_peripheral_output());
 
+    let i2c1_int_cfg = InputConfig::default().with_pull(Pull::Up);
+    let mut i2c1_int = Input::new(peripherals.GPIO33, i2c1_int_cfg);
+    i2c1_int.clear_interrupt();
+    i2c1_int.listen(Event::FallingEdge);
+
     let mut chg_ce = Flex::new(peripherals.GPIO15);
     chg_ce.apply_output_config(
         &OutputConfig::default()
@@ -296,6 +301,7 @@ fn main() -> ! {
     }
 
     let mut next_poll = Instant::now();
+    let mut irq_tracker = irq::IrqTracker::new();
     loop {
         let now = Instant::now();
         if now < next_poll {
@@ -303,7 +309,8 @@ fn main() -> ! {
         }
         next_poll += POLL_INTERVAL;
 
-        let snapshot = runtime.tick(now);
+        let irq_events = irq_tracker.take_delta();
+        let snapshot = runtime.tick(now, &irq_events, i2c1_int.is_low());
         if panel.is_ready() && last_snapshot != Some(snapshot) {
             panel.render_tps_test_status(snapshot);
             last_snapshot = Some(snapshot);

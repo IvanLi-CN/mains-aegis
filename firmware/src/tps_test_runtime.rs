@@ -2,9 +2,11 @@ use crate::front_panel_scene::{
     SelfCheckCommState, TpsTestChargerSnapshot, TpsTestOutputSnapshot, TpsTestUiSnapshot,
     TpsTestVoutProfile,
 };
+use crate::irq::IrqSnapshot;
 use crate::tps55288_test::{
     apply_minimal_output, configure_output, configure_output_disabled, force_disable_output,
-    i2c_error_kind, ina_error_kind, read_diag_snapshot, read_telemetry_snapshot, OutputChannel,
+    i2c_error_kind, ina_error_kind, read_diag_snapshot, read_status_snapshot,
+    read_telemetry_snapshot, ConfigureStage, OutputChannel,
 };
 use esp_firmware::bq25792;
 use esp_firmware::ina3221;
@@ -70,6 +72,7 @@ struct OutputRuntimeState {
     iout_ma: Option<i32>,
     temp_c_x16: Option<i16>,
     status_bits: Option<u8>,
+    sticky_fault: Option<&'static str>,
 }
 
 impl OutputRuntimeState {
@@ -87,14 +90,17 @@ impl OutputRuntimeState {
             iout_ma: None,
             temp_c_x16: None,
             status_bits: None,
+            sticky_fault: None,
         }
     }
 
     const fn fault_text(&self) -> Option<&'static str> {
         if let Some(fault) = self.terminal_fault {
             Some(fault)
+        } else if let Some(reason) = self.retry_reason {
+            Some(reason)
         } else {
-            self.retry_reason
+            self.sticky_fault
         }
     }
 
@@ -160,6 +166,38 @@ impl ChargerRuntimeState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct TpsFaultLatch {
+    last_status: Option<u8>,
+    scp_latched: bool,
+    ocp_latched: bool,
+    ovp_latched: bool,
+}
+
+impl TpsFaultLatch {
+    fn record_status(&mut self, status: u8) {
+        let bits = ::tps55288::registers::StatusBits::from_bits_truncate(status);
+        self.last_status = Some(status);
+        self.scp_latched |= bits.contains(::tps55288::registers::StatusBits::SCP);
+        self.ocp_latched |= bits.contains(::tps55288::registers::StatusBits::OCP);
+        self.ovp_latched |= bits.contains(::tps55288::registers::StatusBits::OVP);
+    }
+
+    const fn sticky_fault(self) -> Option<&'static str> {
+        if self.scp_latched && self.ocp_latched {
+            Some("SCP+OCP")
+        } else if self.scp_latched {
+            Some("SCP")
+        } else if self.ocp_latched {
+            Some("OCP")
+        } else if self.ovp_latched {
+            Some("OVP")
+        } else {
+            None
+        }
+    }
+}
+
 pub struct TpsTestRuntime {
     build_profile: &'static str,
     build_id: &'static str,
@@ -176,6 +214,8 @@ pub struct TpsTestRuntime {
     charger: ChargerRuntimeState,
     out_a: OutputRuntimeState,
     out_b: OutputRuntimeState,
+    tps_a_fault_latch: TpsFaultLatch,
+    tps_b_fault_latch: TpsFaultLatch,
 }
 
 impl TpsTestRuntime {
@@ -203,10 +243,17 @@ impl TpsTestRuntime {
             charger: ChargerRuntimeState::new(),
             out_a: OutputRuntimeState::new(TEST_OUT_A_OE),
             out_b: OutputRuntimeState::new(TEST_OUT_B_OE),
+            tps_a_fault_latch: TpsFaultLatch::default(),
+            tps_b_fault_latch: TpsFaultLatch::default(),
         }
     }
 
-    pub fn tick(&mut self, now: Instant) -> TpsTestUiSnapshot {
+    pub fn tick(
+        &mut self,
+        now: Instant,
+        irq: &IrqSnapshot,
+        i2c1_int_low: bool,
+    ) -> TpsTestUiSnapshot {
         self.ensure_tmp_alerts(now);
         self.ensure_ina_ready(now);
         self.sample_therm_kill();
@@ -233,9 +280,69 @@ impl TpsTestRuntime {
             OutputChannel::OutB,
             &mut self.out_b,
         );
+        self.capture_tps_fault_irq(irq, i2c1_int_low);
         self.maybe_log_tps_diag(now);
 
         self.snapshot()
+    }
+
+    fn fault_latch_mut(&mut self, ch: OutputChannel) -> &mut TpsFaultLatch {
+        match ch {
+            OutputChannel::OutA => &mut self.tps_a_fault_latch,
+            OutputChannel::OutB => &mut self.tps_b_fault_latch,
+        }
+    }
+
+    fn output_state_mut(&mut self, ch: OutputChannel) -> &mut OutputRuntimeState {
+        match ch {
+            OutputChannel::OutA => &mut self.out_a,
+            OutputChannel::OutB => &mut self.out_b,
+        }
+    }
+
+    fn capture_tps_fault_irq(&mut self, irq: &IrqSnapshot, i2c1_int_low: bool) {
+        if !i2c1_int_low && irq.i2c1_int == 0 {
+            return;
+        }
+
+        for ch in [OutputChannel::OutA, OutputChannel::OutB] {
+            let should_probe = {
+                let state = match ch {
+                    OutputChannel::OutA => self.out_a,
+                    OutputChannel::OutB => self.out_b,
+                };
+                state.requested_enabled || state.applied
+            };
+            if !should_probe {
+                continue;
+            }
+
+            match read_status_snapshot(&mut self.i2c, ch) {
+                Ok(status) => {
+                    let bits = ::tps55288::registers::StatusBits::from_bits_truncate(status);
+                    let latch = self.fault_latch_mut(ch);
+                    latch.record_status(status);
+                    let sticky = latch.sticky_fault();
+                    let state = self.output_state_mut(ch);
+                    state.sticky_fault = sticky;
+                    if sticky.is_some() || status != 0 {
+                        state.status_bits = Some(status);
+                        defmt::warn!(
+                            "tps-test: fault_irq ch={} status=0x{=u8:x} scp={=bool} ocp={=bool} ovp={=bool} sticky={=?}",
+                            ch.name(),
+                            status,
+                            bits.contains(::tps55288::registers::StatusBits::SCP),
+                            bits.contains(::tps55288::registers::StatusBits::OCP),
+                            bits.contains(::tps55288::registers::StatusBits::OVP),
+                            sticky
+                        );
+                    }
+                }
+                Err(kind) => {
+                    defmt::warn!("tps-test: fault_irq ch={} read_err={}", ch.name(), kind);
+                }
+            }
+        }
     }
 
     fn ensure_tmp_alerts(&mut self, now: Instant) {
@@ -784,7 +891,12 @@ fn step_output(
                 state.vset_mv = Some(target_vout_mv);
                 state.status_bits = None;
                 refresh_output_aux(i2c, ina_ready, ch, state);
-                if err.retryable {
+                if err.stage == ConfigureStage::Enable {
+                    state.terminal_fault = Some("ENABLE");
+                    state.retry_reason = None;
+                    state.retry_at = None;
+                    state.comm_state = SelfCheckCommState::Warn;
+                } else if err.retryable {
                     state.retry_reason = Some(err.kind);
                     state.retry_at = Some(now + RETRY_BACKOFF);
                     state.comm_state = SelfCheckCommState::Err;
