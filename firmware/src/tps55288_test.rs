@@ -236,6 +236,47 @@ where
     Ok(())
 }
 
+pub fn apply_minimal_output<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+    enabled: bool,
+    target_vout_mv: u16,
+    ilimit_ma: u16,
+) -> Result<(), ConfigureFailure>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, ch.addr());
+
+    if enabled {
+        tps.set_ilim_ma(ilimit_ma, true)
+            .map_err(|e| ConfigureFailure {
+                stage: ConfigureStage::Ilim,
+                kind: tps_error_kind(&e),
+                retryable: matches!(e, ::tps55288::Error::I2c(_)),
+            })?;
+        tps.set_vout_mv(target_vout_mv)
+            .map_err(|e| ConfigureFailure {
+                stage: ConfigureStage::Vout,
+                kind: tps_error_kind(&e),
+                retryable: matches!(e, ::tps55288::Error::I2c(_)),
+            })?;
+        tps.enable_output().map_err(|e| ConfigureFailure {
+            stage: ConfigureStage::Enable,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        })?;
+    } else {
+        tps.disable_output().map_err(|e| ConfigureFailure {
+            stage: ConfigureStage::Disable,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        })?;
+    }
+
+    Ok(())
+}
+
 pub fn force_disable_output<I2C>(i2c: &mut I2C, ch: OutputChannel) -> Result<(), &'static str>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,

@@ -3,8 +3,8 @@ use crate::front_panel_scene::{
     TpsTestVoutProfile,
 };
 use crate::tps55288_test::{
-    configure_output, configure_output_disabled, force_disable_output, i2c_error_kind,
-    ina_error_kind, read_diag_snapshot, read_telemetry_snapshot, OutputChannel,
+    apply_minimal_output, configure_output, configure_output_disabled, force_disable_output,
+    i2c_error_kind, ina_error_kind, read_diag_snapshot, read_telemetry_snapshot, OutputChannel,
 };
 use esp_firmware::bq25792;
 use esp_firmware::ina3221;
@@ -21,6 +21,8 @@ const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 50 * 16;
 const TMP112_TLOW_C_X16: i16 = 40 * 16;
 const TPS_DIAG_LOG_PERIOD: Duration = Duration::from_secs(1);
+const TEST_SKIP_DISABLED_TPS_TOUCH: bool = true;
+const TEST_MINIMAL_WRITE_CHANNEL_A_ONLY: bool = true;
 
 pub const TEST_CHARGER_ENABLE: bool = false;
 pub const TEST_CHARGE_VREG_MV: u16 = 16_800;
@@ -550,8 +552,12 @@ impl TpsTestRuntime {
             return;
         }
         self.tps_diag_log_at = Some(now);
-        self.log_one_tps_diag(OutputChannel::OutA, self.out_a);
-        self.log_one_tps_diag(OutputChannel::OutB, self.out_b);
+        if self.out_a.requested_enabled || self.out_a.applied {
+            self.log_one_tps_diag(OutputChannel::OutA, self.out_a);
+        }
+        if self.out_b.requested_enabled || self.out_b.applied {
+            self.log_one_tps_diag(OutputChannel::OutB, self.out_b);
+        }
     }
 
     fn log_one_tps_diag(&mut self, ch: OutputChannel, state: OutputRuntimeState) {
@@ -674,6 +680,21 @@ fn step_output(
     ch: OutputChannel,
     state: &mut OutputRuntimeState,
 ) {
+    if !state.requested_enabled && TEST_SKIP_DISABLED_TPS_TOUCH {
+        state.applied = false;
+        state.retry_at = None;
+        state.retry_reason = None;
+        state.terminal_fault = None;
+        state.actual_enabled = None;
+        state.vset_mv = Some(target_vout_mv);
+        state.vbus_mv = None;
+        state.iout_ma = None;
+        state.temp_c_x16 = None;
+        state.status_bits = None;
+        state.comm_state = SelfCheckCommState::NotAvailable;
+        return;
+    }
+
     let retry_due = state
         .retry_at
         .map(|deadline| now >= deadline)
@@ -744,7 +765,12 @@ fn step_output(
     }
 
     if !state.applied && retry_due {
-        match configure_output(i2c, ch, state.requested_enabled, target_vout_mv, ilimit_ma) {
+        let configure_result = if TEST_MINIMAL_WRITE_CHANNEL_A_ONLY && ch == OutputChannel::OutA {
+            apply_minimal_output(i2c, ch, state.requested_enabled, target_vout_mv, ilimit_ma)
+        } else {
+            configure_output(i2c, ch, state.requested_enabled, target_vout_mv, ilimit_ma)
+        };
+        match configure_result {
             Ok(()) => {
                 state.applied = true;
                 state.retry_at = None;
