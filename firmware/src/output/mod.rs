@@ -2628,20 +2628,7 @@ where
         let _ = bms_diag_breadcrumb_take();
         if self.output_state.requested_outputs != EnabledOutputs::None {
             self.try_init_ina();
-            if self
-                .output_state
-                .active_outputs
-                .is_enabled(OutputChannel::OutA)
-            {
-                self.try_configure_tps(OutputChannel::OutA);
-            }
-            if self
-                .output_state
-                .active_outputs
-                .is_enabled(OutputChannel::OutB)
-            {
-                self.try_configure_tps(OutputChannel::OutB);
-            }
+            self.try_configure_requested_tps();
         } else {
             defmt::warn!("power: outputs disabled (boot self-test)");
             self.force_disable_outputs();
@@ -6091,6 +6078,36 @@ where
     }
 
     fn apply_output_current_limit(&mut self, limit_ma: u16) {
+        if self.output_state.active_outputs == EnabledOutputs::Both {
+            let out_a =
+                ::tps55288::Tps55288::with_address(&mut self.i2c, OutputChannel::OutA.addr())
+                    .set_ilim_ma(limit_ma, true)
+                    .map_err(tps_error_kind);
+            let out_b =
+                ::tps55288::Tps55288::with_address(&mut self.i2c, OutputChannel::OutB.addr())
+                    .set_ilim_ma(limit_ma, true)
+                    .map_err(tps_error_kind);
+
+            match (out_a, out_b) {
+                (Ok(()), Ok(())) => {
+                    defmt::warn!(
+                        "power: active_protection set_ilim ch=out_a+out_b limit_ma={=u16}",
+                        limit_ma
+                    );
+                }
+                (res_a, res_b) => {
+                    defmt::warn!(
+                        "power: active_protection set_ilim_pair_failed limit_ma={=u16} out_a={=?} out_b={=?}; force_disable_outputs",
+                        limit_ma,
+                        res_a,
+                        res_b
+                    );
+                    self.force_disable_outputs();
+                }
+            }
+            return;
+        }
+
         for ch in [OutputChannel::OutA, OutputChannel::OutB] {
             if !self.output_state.active_outputs.is_enabled(ch) {
                 continue;
@@ -6430,18 +6447,27 @@ where
             }
         }
 
+        if self.output_state.active_outputs == EnabledOutputs::Both {
+            let retry_due = (!self.tps_a_ready
+                && self.tps_a_next_retry_at.is_some_and(|t| now >= t))
+                || (!self.tps_b_ready && self.tps_b_next_retry_at.is_some_and(|t| now >= t));
+            if retry_due {
+                self.tps_a_next_retry_at = None;
+                self.tps_b_next_retry_at = None;
+                self.try_configure_tps_pair();
+            }
+            return;
+        }
+
         if !self.tps_a_ready
             && self
                 .output_state
                 .active_outputs
                 .is_enabled(OutputChannel::OutA)
+            && self.tps_a_next_retry_at.is_some_and(|t| now >= t)
         {
-            if let Some(t) = self.tps_a_next_retry_at {
-                if now >= t {
-                    self.tps_a_next_retry_at = None;
-                    self.try_configure_tps(OutputChannel::OutA);
-                }
-            }
+            self.tps_a_next_retry_at = None;
+            self.try_configure_tps(OutputChannel::OutA);
         }
 
         if !self.tps_b_ready
@@ -6449,13 +6475,10 @@ where
                 .output_state
                 .active_outputs
                 .is_enabled(OutputChannel::OutB)
+            && self.tps_b_next_retry_at.is_some_and(|t| now >= t)
         {
-            if let Some(t) = self.tps_b_next_retry_at {
-                if now >= t {
-                    self.tps_b_next_retry_at = None;
-                    self.try_configure_tps(OutputChannel::OutB);
-                }
-            }
+            self.tps_b_next_retry_at = None;
+            self.try_configure_tps(OutputChannel::OutB);
         }
     }
 
@@ -6496,6 +6519,14 @@ where
                 self.ina_next_retry_at = Some(Instant::now() + self.cfg.retry_backoff);
                 defmt::error!("power: ina3221 err={}", ina_error_kind(e));
             }
+        }
+    }
+
+    fn try_configure_requested_tps(&mut self) {
+        match self.output_state.active_outputs {
+            EnabledOutputs::Both => self.try_configure_tps_pair(),
+            EnabledOutputs::Only(ch) => self.try_configure_tps(ch),
+            EnabledOutputs::None => {}
         }
     }
 
@@ -6565,6 +6596,106 @@ where
             }
         }
         self.recompute_ui_mode();
+    }
+
+    fn try_configure_tps_pair(&mut self) {
+        let ilimit_ma = self.current_output_ilimit_ma();
+
+        let prepare_a = tps55288::prepare_enabled_output(
+            &mut self.i2c,
+            OutputChannel::OutA,
+            self.cfg.vout_mv,
+            ilimit_ma,
+        );
+        if let Err((stage, e)) = prepare_a {
+            self.handle_tps_joint_failure(OutputChannel::OutA, stage, e);
+            self.recompute_ui_mode();
+            return;
+        }
+
+        let prepare_b = tps55288::prepare_enabled_output(
+            &mut self.i2c,
+            OutputChannel::OutB,
+            self.cfg.vout_mv,
+            ilimit_ma,
+        );
+        if let Err((stage, e)) = prepare_b {
+            self.handle_tps_joint_failure(OutputChannel::OutB, stage, e);
+            self.recompute_ui_mode();
+            return;
+        }
+
+        if let Err((stage, e)) = tps55288::enable_output_only(&mut self.i2c, OutputChannel::OutA) {
+            self.handle_tps_joint_failure(OutputChannel::OutA, stage, e);
+            self.recompute_ui_mode();
+            return;
+        }
+
+        if let Err((stage, e)) = tps55288::enable_output_only(&mut self.i2c, OutputChannel::OutB) {
+            self.handle_tps_joint_failure(OutputChannel::OutB, stage, e);
+            self.recompute_ui_mode();
+            return;
+        }
+
+        self.clear_tps_fault_latch(OutputChannel::OutA);
+        self.clear_tps_fault_latch(OutputChannel::OutB);
+        tps55288::log_configured(&mut self.i2c, OutputChannel::OutA, true, true);
+        tps55288::log_configured(&mut self.i2c, OutputChannel::OutB, true, true);
+        self.mark_tps_ok(OutputChannel::OutA);
+        self.mark_tps_ok(OutputChannel::OutB);
+        self.ui_snapshot.tps_a = SelfCheckCommState::Ok;
+        self.ui_snapshot.tps_b = SelfCheckCommState::Ok;
+        self.ui_snapshot.tps_a_enabled = Some(true);
+        self.ui_snapshot.tps_b_enabled = Some(true);
+        self.recompute_ui_mode();
+    }
+
+    fn handle_tps_joint_failure(
+        &mut self,
+        failed_ch: OutputChannel,
+        stage: tps55288::ConfigureStage,
+        e: ::tps55288::Error<esp_hal::i2c::master::Error>,
+    ) {
+        let kind = tps_error_kind(e);
+        let consecutive_failures = self
+            .tps_fault_latch_mut(failed_ch)
+            .record_config_failure(stage.as_str(), kind);
+        let decision = output_retry::tps_config_retry_decision(
+            kind,
+            consecutive_failures,
+            TPS_CONFIG_MAX_RETRY_ATTEMPTS,
+        );
+        if matches!(decision, TpsConfigRetryDecision::Latch) {
+            self.tps_fault_latch_mut(failed_ch).latch_config_failure();
+        }
+        let next_retry = matches!(decision, TpsConfigRetryDecision::Retry)
+            .then_some(Instant::now() + self.cfg.retry_backoff);
+
+        let _ = tps55288::disable_output_only(&mut self.i2c, OutputChannel::OutA);
+        let _ = tps55288::disable_output_only(&mut self.i2c, OutputChannel::OutB);
+
+        self.mark_tps_failed(OutputChannel::OutA, next_retry);
+        self.mark_tps_failed(OutputChannel::OutB, next_retry);
+        self.ui_snapshot.tps_a_enabled = Some(false);
+        self.ui_snapshot.tps_b_enabled = Some(false);
+        match failed_ch {
+            OutputChannel::OutA => self.ui_snapshot.tps_a = SelfCheckCommState::Err,
+            OutputChannel::OutB => self.ui_snapshot.tps_b = SelfCheckCommState::Err,
+        }
+        log_tps_config_retry_decision(
+            failed_ch,
+            failed_ch.addr(),
+            stage.as_str(),
+            kind,
+            consecutive_failures,
+            decision,
+            self.cfg.retry_backoff,
+        );
+        if kind == "i2c_nack" && failed_ch == OutputChannel::OutB {
+            defmt::warn!(
+                "power: tps addr=0x75 nack_hint=maybe_address_changed; power-cycle TPS rails to restore preset address"
+            );
+        }
     }
 
     fn mark_tps_ok(&mut self, ch: OutputChannel) {

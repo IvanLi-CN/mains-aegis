@@ -54,7 +54,7 @@ const LCD_W: u16 = 320;
 const LCD_H: u16 = 172;
 const OFFSET_X: u16 = 0;
 const OFFSET_Y: u16 = 34;
-const PANEL_ORIENTATION: Orientation = Orientation::Landscape;
+const PANEL_ORIENTATION: Orientation = Orientation::LandscapeSwapped;
 const PANEL_RGB_ORDER: bool = false;
 const UI_ORIENTATION_MARKER: &str = "FP_ORI_PROBE_20260227";
 

@@ -69,10 +69,13 @@ where
     tps.write_reg(tps_addr::MODE, mode.bits())
 }
 
-pub fn configure_one<I2C>(
+fn fpwm_enabled_from_mode(mode: u8) -> bool {
+    ModeBits::from_bits_truncate(mode).contains(ModeBits::PFM)
+}
+
+fn configure_for_requested_output<I2C>(
     i2c: &mut I2C,
     ch: OutputChannel,
-    enabled: bool,
     default_vout_mv: u16,
     default_ilimit_ma: u16,
 ) -> Result<
@@ -119,13 +122,101 @@ where
     .map_err(|e| (ConfigureStage::Cdc, e))?;
     tps.set_vout_mv(default_vout_mv)
         .map_err(|e| (ConfigureStage::Vout, e))?;
-    tps.set_ilim_ma(default_ilimit_ma, enabled)
+    tps.set_ilim_ma(default_ilimit_ma, true)
         .map_err(|e| (ConfigureStage::Ilim, e))?;
 
-    if enabled {
-        tps.enable_output()
-            .map_err(|e| (ConfigureStage::Enable, e))?;
+    Ok(())
+}
+
+pub fn prepare_enabled_output<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+    default_vout_mv: u16,
+    default_ilimit_ma: u16,
+) -> Result<
+    (),
+    (
+        ConfigureStage,
+        ::tps55288::Error<esp_hal::i2c::master::Error>,
+    ),
+>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    configure_for_requested_output(i2c, ch, default_vout_mv, default_ilimit_ma)
+}
+
+pub fn enable_output_only<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+) -> Result<
+    (),
+    (
+        ConfigureStage,
+        ::tps55288::Error<esp_hal::i2c::master::Error>,
+    ),
+>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let addr = ch.addr();
+    let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, addr);
+
+    tps.enable_output()
+        .map_err(|e| (ConfigureStage::Enable, e))?;
+
+    Ok(())
+}
+
+pub fn disable_output_only<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+) -> Result<
+    (),
+    (
+        ConfigureStage,
+        ::tps55288::Error<esp_hal::i2c::master::Error>,
+    ),
+>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let addr = ch.addr();
+    let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, addr);
+
+    tps.disable_output()
+        .map_err(|e| (ConfigureStage::Disable, e))?;
+
+    Ok(())
+}
+
+pub fn configure_one<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+    enabled: bool,
+    default_vout_mv: u16,
+    default_ilimit_ma: u16,
+) -> Result<
+    (),
+    (
+        ConfigureStage,
+        ::tps55288::Error<esp_hal::i2c::master::Error>,
+    ),
+>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    configure_for_requested_output(i2c, ch, default_vout_mv, default_ilimit_ma)?;
+
+    if !enabled {
+        disable_output_only(i2c, ch)?;
+        let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, ch.addr());
+        tps.set_ilim_ma(default_ilimit_ma, false)
+            .map_err(|e| (ConfigureStage::Ilim, e))?;
+        return Ok(());
     }
+
+    enable_output_only(i2c, ch)?;
 
     Ok(())
 }
@@ -193,9 +284,7 @@ where
         TelemetryU8::Err(e) => TelemetryBool::Err(e),
     };
     let fpwm = match mode {
-        TelemetryU8::Value(v) => {
-            TelemetryBool::Value(ModeBits::from_bits_truncate(v).contains(ModeBits::PFM))
-        }
+        TelemetryU8::Value(v) => TelemetryBool::Value(fpwm_enabled_from_mode(v)),
         TelemetryU8::Err(e) => TelemetryBool::Err(e),
     };
     let mode_override = match mode {
@@ -298,7 +387,7 @@ where
                     mode_bits_reg.contains(ModeBits::OE),
                     mode_bits_reg.contains(ModeBits::I2CADD),
                     mode_bits_reg.contains(ModeBits::VCC_EXT),
-                    mode_bits_reg.contains(ModeBits::PFM),
+                    fpwm_enabled_from_mode(mode),
                     mode_bits_reg.contains(ModeBits::HICCUP),
                     mode_bits_reg.contains(ModeBits::DISCHG),
                     mode_bits_reg.contains(ModeBits::FSWDBL),
@@ -458,9 +547,7 @@ where
         };
 
         let fpwm = match mode {
-            TelemetryU8::Value(v) => {
-                TelemetryBool::Value(ModeBits::from_bits_truncate(v).contains(ModeBits::PFM))
-            }
+            TelemetryU8::Value(v) => TelemetryBool::Value(fpwm_enabled_from_mode(v)),
             TelemetryU8::Err(e) => TelemetryBool::Err(e),
         };
 
