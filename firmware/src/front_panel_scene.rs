@@ -376,6 +376,141 @@ impl SelfCheckUiSnapshot {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TpsTestVoutProfile {
+    V5,
+    V12,
+    V15,
+    V19,
+}
+
+impl TpsTestVoutProfile {
+    #[allow(dead_code)]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::V5 => "5V",
+            Self::V12 => "12V",
+            Self::V15 => "15V",
+            Self::V19 => "19V",
+        }
+    }
+
+    #[allow(dead_code)]
+    pub const fn target_mv(self) -> u16 {
+        match self {
+            Self::V5 => 5_000,
+            Self::V12 => 12_000,
+            Self::V15 => 15_000,
+            Self::V19 => 19_000,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TpsTestChargerSnapshot {
+    pub requested_enabled: bool,
+    pub actual_enabled: bool,
+    pub comm_state: SelfCheckCommState,
+    pub input_present: Option<bool>,
+    pub vbat_present: Option<bool>,
+    pub vbat_mv: Option<u16>,
+    pub ibat_ma: Option<i32>,
+    pub vreg_mv: Option<u16>,
+    pub ichg_ma: Option<u16>,
+    pub status: &'static str,
+    pub fault: Option<&'static str>,
+}
+
+impl TpsTestChargerSnapshot {
+    #[allow(dead_code)]
+    pub const fn pending() -> Self {
+        Self {
+            requested_enabled: false,
+            actual_enabled: false,
+            comm_state: SelfCheckCommState::Pending,
+            input_present: None,
+            vbat_present: None,
+            vbat_mv: None,
+            ibat_ma: None,
+            vreg_mv: None,
+            ichg_ma: None,
+            status: "PEND",
+            fault: None,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TpsTestOutputSnapshot {
+    pub requested_enabled: bool,
+    pub actual_enabled: Option<bool>,
+    pub comm_state: SelfCheckCommState,
+    pub vset_mv: Option<u16>,
+    pub vbus_mv: Option<u16>,
+    pub iout_ma: Option<i32>,
+    pub temp_c_x16: Option<i16>,
+    pub status_bits: Option<u8>,
+    pub fault: Option<&'static str>,
+}
+
+impl TpsTestOutputSnapshot {
+    #[allow(dead_code)]
+    pub const fn pending(requested_enabled: bool) -> Self {
+        Self {
+            requested_enabled,
+            actual_enabled: None,
+            comm_state: SelfCheckCommState::Pending,
+            vset_mv: None,
+            vbus_mv: None,
+            iout_ma: None,
+            temp_c_x16: None,
+            status_bits: None,
+            fault: None,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TpsTestUiSnapshot {
+    pub build_profile: &'static str,
+    pub build_id: &'static str,
+    pub vout_profile: TpsTestVoutProfile,
+    pub ilim_ma: u16,
+    pub charger: TpsTestChargerSnapshot,
+    pub out_a: TpsTestOutputSnapshot,
+    pub out_b: TpsTestOutputSnapshot,
+    pub footer_notice: Option<&'static str>,
+    pub footer_alert: Option<&'static str>,
+}
+
+impl TpsTestUiSnapshot {
+    #[allow(dead_code)]
+    pub const fn pending(
+        build_profile: &'static str,
+        build_id: &'static str,
+        vout_profile: TpsTestVoutProfile,
+        ilim_ma: u16,
+        out_a_enabled: bool,
+        out_b_enabled: bool,
+    ) -> Self {
+        Self {
+            build_profile,
+            build_id,
+            vout_profile,
+            ilim_ma,
+            charger: TpsTestChargerSnapshot::pending(),
+            out_a: TpsTestOutputSnapshot::pending(out_a_enabled),
+            out_b: TpsTestOutputSnapshot::pending(out_b_enabled),
+            footer_notice: Some("FIXED PROFILE / NO TOUCH CONTROLS"),
+            footer_alert: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum SelfCheckTouchTarget {
@@ -1939,6 +2074,98 @@ pub fn render_frame_with_dashboard_route_overlay<P: UiPainter>(
         }
         UiVariant::InstrumentD => render_variant_d(painter, variant, palette, data, self_check)?,
     }
+
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn render_tps_test_status<P: UiPainter>(
+    painter: &mut P,
+    model: &UiModel,
+    variant: UiVariant,
+    snapshot: &TpsTestUiSnapshot,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+
+    fill(painter, 0, 0, UI_W, UI_H, palette.bg)?;
+    draw_background_grid(painter, palette)?;
+    draw_outline(painter, 0, 0, UI_W, UI_H, palette.border)?;
+
+    fill(painter, 0, 0, UI_W, HEADER_H, palette.panel)?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        format_args!(
+            "{}  {:>1}.{:01}A  A{}  B{}",
+            snapshot.vout_profile.label(),
+            snapshot.ilim_ma / 1000,
+            (snapshot.ilim_ma % 1000) / 100,
+            tps_test_bool_compact(snapshot.out_a.requested_enabled),
+            tps_test_bool_compact(snapshot.out_b.requested_enabled),
+        ),
+        Point::new(8, 2),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        tps_test_build_label(snapshot.build_profile),
+        Point::new((UI_W - 8) as i32, 2),
+        HorizontalAlignment::Right,
+        if snapshot.footer_alert.is_some() {
+            palette.touch
+        } else {
+            palette.accent
+        },
+    )?;
+
+    render_tps_test_charger_card(painter, variant, palette, snapshot, model.frame_no)?;
+    fill(
+        painter,
+        8,
+        68,
+        UI_W - 16,
+        1,
+        fade_color(palette.panel, palette.border),
+    )?;
+    fill(
+        painter,
+        160,
+        72,
+        1,
+        UI_H - 80,
+        fade_color(palette.panel, palette.border),
+    )?;
+    render_tps_test_output_card(
+        painter,
+        variant,
+        palette,
+        "OUT-A",
+        8,
+        72,
+        146,
+        90,
+        snapshot.vout_profile,
+        snapshot.out_a,
+        palette.up,
+    )?;
+    render_tps_test_output_card(
+        painter,
+        variant,
+        palette,
+        "OUT-B",
+        168,
+        72,
+        144,
+        90,
+        snapshot.vout_profile,
+        snapshot.out_b,
+        palette.down,
+    )?;
+    render_tps_test_footer(painter, variant, palette, snapshot)?;
 
     Ok(())
 }
@@ -7361,6 +7588,481 @@ fn draw_bottom_bar<P: UiPainter>(
         HorizontalAlignment::Left,
         palette.text_dim,
     )
+}
+
+#[allow(dead_code)]
+fn render_tps_test_charger_card<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    snapshot: &TpsTestUiSnapshot,
+    frame_no: u32,
+) -> Result<(), P::Error> {
+    let x = 8;
+    let y = 24;
+    let w = 304;
+    let _h = 46;
+    let _accent = if snapshot.charger.actual_enabled && ((frame_no / 8) & 1) == 0 {
+        palette.right
+    } else {
+        palette.accent
+    };
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        "BQ25792",
+        Point::new((x + 0) as i32, (y + 2) as i32),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::Num,
+        snapshot.charger.status,
+        Point::new((x + 180) as i32, (y + 2) as i32),
+        HorizontalAlignment::Right,
+        tps_test_comm_color(palette, snapshot.charger.comm_state, snapshot.charger.fault),
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        format_args!(
+            "CHG {}  INPUT {}  PACK {}",
+            tps_test_bool(snapshot.charger.actual_enabled),
+            tps_test_opt_bool(snapshot.charger.input_present),
+            tps_test_opt_bool(snapshot.charger.vbat_present),
+        ),
+        Point::new((x + 0) as i32, (y + 18) as i32),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        format_args!(
+            "CHG {}/{}",
+            TpsTestMetricVoltage(snapshot.charger.vreg_mv),
+            TpsTestMetricChargeCurrent(snapshot.charger.ichg_ma),
+        ),
+        Point::new((x + 0) as i32, (y + 34) as i32),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "VOUT",
+        Point::new((x + 212) as i32, (y + 8) as i32),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::NumHero,
+        format_args!("{}", TpsTestVoltage(tps_test_shared_vout_mv(snapshot))),
+        Point::new((x + 208) as i32, (y + 28) as i32),
+        HorizontalAlignment::Left,
+        tps_test_shared_vout_color(palette, snapshot),
+    )?;
+
+    if let Some(fault) = snapshot.charger.fault {
+        text(
+            painter,
+            variant,
+            FontRole::DetailBody,
+            fault,
+            Point::new((x + w - 6) as i32, (y + 18) as i32),
+            HorizontalAlignment::Right,
+            palette.touch,
+        )?;
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
+fn render_tps_test_output_card<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    title: &'static str,
+    x: u16,
+    y: u16,
+    w: u16,
+    _h: u16,
+    _profile: TpsTestVoutProfile,
+    snapshot: TpsTestOutputSnapshot,
+    _accent: u16,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        title,
+        Point::new((x + 0) as i32, (y + 2) as i32),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::Num,
+        tps_test_output_status(snapshot),
+        Point::new((x + w - 2) as i32, (y + 2) as i32),
+        HorizontalAlignment::Right,
+        tps_test_comm_color(palette, snapshot.comm_state, snapshot.fault),
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        format_args!("CFG {}", tps_test_bool(snapshot.requested_enabled)),
+        Point::new((x + 0) as i32, (y + 16) as i32),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        format_args!("LIVE {}", tps_test_opt_bool(snapshot.actual_enabled)),
+        Point::new((x + w - 2) as i32, (y + 16) as i32),
+        HorizontalAlignment::Right,
+        if snapshot.actual_enabled == Some(true) {
+            palette.accent
+        } else {
+            palette.text_dim
+        },
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        format_args!("V {}", TpsTestVoltage(snapshot.vset_mv)),
+        Point::new((x + 0) as i32, (y + 34) as i32),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        format_args!("I {}", TpsTestCurrent(snapshot.iout_ma)),
+        Point::new((x + 0) as i32, (y + 50) as i32),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        format_args!("T {}", TpsTestTemperature(snapshot.temp_c_x16)),
+        Point::new((x + 0) as i32, (y + 66) as i32),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    if let Some(status_line) = tps_test_detail_line(snapshot) {
+        text(
+            painter,
+            variant,
+            if snapshot.fault.is_some() {
+                FontRole::TextBody
+            } else {
+                FontRole::DetailBody
+            },
+            status_line,
+            Point::new((x + 0) as i32, (y + 82) as i32),
+            HorizontalAlignment::Left,
+            if snapshot.fault.is_some() {
+                palette.touch
+            } else {
+                palette.text_dim
+            },
+        )?;
+    }
+
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn render_tps_test_footer<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    snapshot: &TpsTestUiSnapshot,
+) -> Result<(), P::Error> {
+    let y = 154;
+    let h = 12;
+    fill(
+        painter,
+        8,
+        y,
+        UI_W - 16,
+        h,
+        fade_color(palette.panel, palette.panel_alt),
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        if let Some(alert) = snapshot.footer_alert {
+            alert
+        } else {
+            snapshot.footer_notice.unwrap_or("FIXED PROFILE")
+        },
+        Point::new((UI_W / 2) as i32, (y + 1) as i32),
+        HorizontalAlignment::Center,
+        if snapshot.footer_alert.is_some() {
+            palette.touch
+        } else {
+            palette.text_dim
+        },
+    )
+}
+
+#[allow(dead_code)]
+fn tps_test_output_status(snapshot: TpsTestOutputSnapshot) -> &'static str {
+    if !snapshot.requested_enabled {
+        return "STBY";
+    }
+    if let Some(fault) = snapshot.fault {
+        return match fault {
+            "i2c_nack" | "i2c_timeout" | "i2c_arbitration" | "i2c" => "COMM",
+            "THERM" => "THERM",
+            _ => "FAULT",
+        };
+    }
+    match snapshot.comm_state {
+        SelfCheckCommState::Pending => "PEND",
+        SelfCheckCommState::Warn => "WARN",
+        SelfCheckCommState::Err => "ERR",
+        SelfCheckCommState::NotAvailable => "STBY",
+        SelfCheckCommState::Ok => match snapshot.actual_enabled {
+            Some(true) => "RUN",
+            Some(false) => "IDLE",
+            None => "OK",
+        },
+    }
+}
+
+fn tps_test_fault_text(fault: Option<&'static str>) -> Option<&'static str> {
+    match fault {
+        Some("i2c_nack") => Some("I2C NACK"),
+        Some("i2c_timeout") => Some("I2C TIMEOUT"),
+        Some("i2c_arbitration") => Some("I2C ARB"),
+        Some(other) => Some(other),
+        None => None,
+    }
+}
+
+#[allow(dead_code)]
+fn tps_test_comm_color(
+    palette: Palette,
+    state: SelfCheckCommState,
+    fault: Option<&'static str>,
+) -> u16 {
+    if fault.is_some() {
+        return palette.touch;
+    }
+    match state {
+        SelfCheckCommState::Pending | SelfCheckCommState::NotAvailable => palette.text_dim,
+        SelfCheckCommState::Ok => palette.accent,
+        SelfCheckCommState::Warn => ATTENTION_COLOR,
+        SelfCheckCommState::Err => ERROR_COLOR,
+    }
+}
+
+#[allow(dead_code)]
+fn tps_test_bool(value: bool) -> &'static str {
+    if value {
+        "ON"
+    } else {
+        "OFF"
+    }
+}
+
+#[allow(dead_code)]
+fn tps_test_bool_compact(value: bool) -> &'static str {
+    if value {
+        "ON"
+    } else {
+        "OFF"
+    }
+}
+
+#[allow(dead_code)]
+fn tps_test_build_label(profile: &'static str) -> &'static str {
+    match profile {
+        "release" => "REL",
+        "debug" => "DBG",
+        other => other,
+    }
+}
+
+#[allow(dead_code)]
+fn tps_test_opt_bool(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "ON",
+        Some(false) => "OFF",
+        None => "NA",
+    }
+}
+
+#[allow(dead_code)]
+fn tps_test_detail_line(snapshot: TpsTestOutputSnapshot) -> Option<&'static str> {
+    if let Some(fault) = tps_test_fault_text(snapshot.fault) {
+        return Some(fault);
+    }
+    match snapshot.status_bits {
+        Some(0) => Some("STAT 0x00"),
+        Some(_) => Some("STAT SET"),
+        None => None,
+    }
+}
+
+#[allow(dead_code)]
+fn tps_test_shared_vout_mv(snapshot: &TpsTestUiSnapshot) -> Option<u16> {
+    if snapshot.out_a.actual_enabled == Some(true) {
+        return snapshot.out_a.vbus_mv;
+    }
+    if snapshot.out_b.actual_enabled == Some(true) {
+        return snapshot.out_b.vbus_mv;
+    }
+    snapshot.out_a.vbus_mv.or(snapshot.out_b.vbus_mv)
+}
+
+#[allow(dead_code)]
+fn tps_test_shared_vout_color(palette: Palette, snapshot: &TpsTestUiSnapshot) -> u16 {
+    if snapshot.out_a.fault.is_some() || snapshot.out_b.fault.is_some() {
+        palette.touch
+    } else if snapshot.out_a.actual_enabled == Some(true)
+        || snapshot.out_b.actual_enabled == Some(true)
+    {
+        palette.accent
+    } else {
+        palette.text
+    }
+}
+
+#[allow(dead_code)]
+struct TpsTestVoltage(Option<u16>);
+#[allow(dead_code)]
+struct TpsTestCurrent(Option<i32>);
+#[allow(dead_code)]
+struct TpsTestChargeCurrent(Option<u16>);
+#[allow(dead_code)]
+struct TpsTestMetricVoltage(Option<u16>);
+#[allow(dead_code)]
+struct TpsTestMetricCurrent(Option<i32>);
+#[allow(dead_code)]
+struct TpsTestMetricChargeCurrent(Option<u16>);
+#[allow(dead_code)]
+struct TpsTestTemperature(Option<i16>);
+#[allow(dead_code)]
+struct TpsTestStatusBits(Option<u8>);
+
+impl core::fmt::Display for TpsTestVoltage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(mv) => {
+                let whole = mv / 1000;
+                let frac = (mv % 1000) / 10;
+                write!(f, "{:>2}.{:02}V", whole, frac)
+            }
+            None => write!(f, " N/A "),
+        }
+    }
+}
+
+impl core::fmt::Display for TpsTestCurrent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(ma) => {
+                let sign = if ma < 0 { '-' } else { ' ' };
+                let abs = ma.unsigned_abs();
+                let whole = abs / 1000;
+                let frac = (abs % 1000) / 10;
+                write!(f, "{}{}.{:02}A", sign, whole, frac)
+            }
+            None => write!(f, " N/A "),
+        }
+    }
+}
+
+impl core::fmt::Display for TpsTestChargeCurrent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(ma) => write!(f, "{:>4}mA", ma),
+            None => write!(f, " N/A "),
+        }
+    }
+}
+
+impl core::fmt::Display for TpsTestMetricVoltage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(mv) => write!(f, "{:>2}.{:02}V", mv / 1000, (mv % 1000) / 10),
+            None => write!(f, "N/A"),
+        }
+    }
+}
+
+impl core::fmt::Display for TpsTestMetricCurrent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(ma) => {
+                let abs = ma.unsigned_abs();
+                write!(f, "{:>1}.{:02}A", abs / 1000, (abs % 1000) / 10)
+            }
+            None => write!(f, "N/A"),
+        }
+    }
+}
+
+impl core::fmt::Display for TpsTestMetricChargeCurrent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(ma) if ma >= 1000 => write!(f, "{:>1}.{:02}A", ma / 1000, (ma % 1000) / 10),
+            Some(ma) => write!(f, "{}mA", ma),
+            None => write!(f, "N/A"),
+        }
+    }
+}
+
+impl core::fmt::Display for TpsTestTemperature {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(temp_c_x16) => {
+                let temp_abs = temp_c_x16.unsigned_abs() as u16;
+                let whole = temp_abs / 16;
+                let frac = ((temp_abs % 16) * 10) / 16;
+                if temp_c_x16 < 0 {
+                    write!(f, "-{:>2}.{}C", whole, frac)
+                } else {
+                    write!(f, " {:>2}.{}C", whole, frac)
+                }
+            }
+            None => write!(f, " N/A "),
+        }
+    }
+}
+
+impl core::fmt::Display for TpsTestStatusBits {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(bits) => write!(f, "0x{:02X}", bits),
+            None => write!(f, " N/A "),
+        }
+    }
 }
 
 fn draw_panel<P: UiPainter>(

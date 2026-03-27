@@ -19,8 +19,9 @@ mod front_panel_scene;
 use front_panel_scene::{
     demo_mode_from_focus, AudioTestUiState, BmsResultKind, DashboardDetailPage,
     DashboardDetailSnapshot, DashboardInputSource, DashboardRoute, DisplayDiagnosticMeta,
-    SelfCheckCommState, SelfCheckOverlay, SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel,
-    UiPainter, UiVariant, UpsMode, UI_H, UI_W,
+    SelfCheckCommState, SelfCheckOverlay, SelfCheckUiSnapshot, TestFunctionUi,
+    TpsTestChargerSnapshot, TpsTestOutputSnapshot, TpsTestUiSnapshot, TpsTestVoutProfile, UiFocus,
+    UiModel, UiPainter, UiVariant, UpsMode, UI_H, UI_W,
 };
 
 #[allow(dead_code)]
@@ -232,6 +233,52 @@ fn dashboard_detail_snapshot_for_page(page: DashboardDetailPage) -> (UpsMode, Se
     (mode, snapshot)
 }
 
+fn tps_test_snapshot_fixture() -> TpsTestUiSnapshot {
+    TpsTestUiSnapshot {
+        build_profile: "release",
+        build_id: "preview-local",
+        vout_profile: TpsTestVoutProfile::V5,
+        ilim_ma: 3_500,
+        charger: TpsTestChargerSnapshot {
+            requested_enabled: false,
+            actual_enabled: false,
+            comm_state: SelfCheckCommState::Ok,
+            input_present: Some(true),
+            vbat_present: Some(true),
+            vbat_mv: Some(12_060),
+            ibat_ma: Some(0),
+            vreg_mv: Some(16_800),
+            ichg_ma: Some(200),
+            status: "LOCK",
+            fault: None,
+        },
+        out_a: TpsTestOutputSnapshot {
+            requested_enabled: true,
+            actual_enabled: Some(false),
+            comm_state: SelfCheckCommState::Err,
+            vset_mv: Some(5_000),
+            vbus_mv: Some(0),
+            iout_ma: Some(0),
+            temp_c_x16: Some(32 * 16),
+            status_bits: None,
+            fault: Some("i2c_nack"),
+        },
+        out_b: TpsTestOutputSnapshot {
+            requested_enabled: false,
+            actual_enabled: Some(false),
+            comm_state: SelfCheckCommState::NotAvailable,
+            vset_mv: Some(5_000),
+            vbus_mv: None,
+            iout_ma: None,
+            temp_c_x16: Some(31 * 16),
+            status_bits: None,
+            fault: None,
+        },
+        footer_notice: Some("FIXED PROFILE / NO TOUCH CONTROLS"),
+        footer_alert: Some("OUT-A I2C NACK"),
+    }
+}
+
 #[allow(dead_code)]
 fn bq40_snapshot_for_scenario(
     mode: UpsMode,
@@ -311,6 +358,7 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardDetailOutput
         | ScenarioArg::DashboardDetailCharger
         | ScenarioArg::DashboardDetailThermal
+        | ScenarioArg::TpsTest
         | ScenarioArg::TestAudio
         | ScenarioArg::TestNavigation => SelfCheckOverlay::None,
     };
@@ -467,6 +515,22 @@ fn run() -> Result<(), String> {
             };
             front_panel_scene::render_test_audio_playback(&mut framebuffer, false, state)
                 .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
+        ScenarioArg::TpsTest => {
+            let snapshot = tps_test_snapshot_fixture();
+            let tps_model = UiModel {
+                mode: UpsMode::Standby,
+                focus: UiFocus::Idle,
+                touch_irq: false,
+                frame_no: args.frame_no,
+            };
+            front_panel_scene::render_tps_test_status(
+                &mut framebuffer,
+                &tps_model,
+                UiVariant::InstrumentB,
+                &snapshot,
+            )
+            .map_err(|_| "render failed unexpectedly".to_string())?;
         }
         ScenarioArg::TestNavigation => {
             front_panel_scene::render_test_navigation(
@@ -654,6 +718,7 @@ enum ScenarioArg {
     Bq40ResultRomMode,
     Bq40ResultAbnormal,
     Bq40ResultNotDetected,
+    TpsTest,
     TestAudio,
     TestNavigation,
 }
@@ -680,10 +745,11 @@ impl ScenarioArg {
             "bq40-result-rom-mode" => Ok(Self::Bq40ResultRomMode),
             "bq40-result-abnormal" => Ok(Self::Bq40ResultAbnormal),
             "bq40-result-not-detected" => Ok(Self::Bq40ResultNotDetected),
+            "tps-test" => Ok(Self::TpsTest),
             "test-audio" => Ok(Self::TestAudio),
             "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation)"
             )),
         }
     }
@@ -709,6 +775,7 @@ impl ScenarioArg {
             ScenarioArg::Bq40ResultRomMode => "bq40-result-rom-mode",
             ScenarioArg::Bq40ResultAbnormal => "bq40-result-abnormal",
             ScenarioArg::Bq40ResultNotDetected => "bq40-result-not-detected",
+            ScenarioArg::TpsTest => "tps-test",
             ScenarioArg::TestAudio => "test-audio",
             ScenarioArg::TestNavigation => "test-navigation",
         }
@@ -794,7 +861,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",

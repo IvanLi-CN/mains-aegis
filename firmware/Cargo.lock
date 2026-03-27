@@ -488,7 +488,7 @@ dependencies = [
  "esp-println",
  "gc9307-async",
  "ina3221-async",
- "tps55288",
+ "tps55288-rs",
  "u8g2-fonts",
 ]
 
@@ -1369,8 +1369,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "tps55288"
-version = "0.2.0"
+name = "tps55288-rs"
+version = "0.1.0"
+source = "git+https://github.com/IvanLi-CN/tps55288-rs?rev=e451aa816ef97fb08ae162ed2baca414d0b22823#e451aa816ef97fb08ae162ed2baca414d0b22823"
 dependencies = [
  "bitflags 2.10.0",
  "defmt 0.3.100",

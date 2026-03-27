@@ -33,6 +33,7 @@ pub mod reg {
     pub const ADC_FUNCTION_DISABLE_0: u8 = 0x2F;
     pub const ADC_FUNCTION_DISABLE_1: u8 = 0x30;
     pub const IBUS_ADC: u8 = 0x31;
+    pub const IBAT_ADC: u8 = 0x33;
     pub const VBUS_ADC: u8 = 0x35;
     pub const VBAT_ADC: u8 = 0x3B;
     pub const VSYS_ADC: u8 = 0x3D;
@@ -238,6 +239,10 @@ where
     Ok(new)
 }
 
+pub const fn decode_charge_voltage_limit_mv(reg: u16) -> u16 {
+    (reg & 0x07FF) * 10
+}
+
 pub fn set_charge_current_limit_ma<I2C>(i2c: &mut I2C, ma: u16) -> Result<u16, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -256,6 +261,10 @@ where
         write_u16(i2c, reg::CHARGE_CURRENT_LIMIT, new)?;
     }
     Ok(new)
+}
+
+pub const fn decode_charge_current_limit_ma(reg: u16) -> u16 {
+    (reg & 0x01FF) * 10
 }
 
 pub fn set_input_current_limit_ma<I2C>(i2c: &mut I2C, ma: u16) -> Result<u16, I2C::Error>

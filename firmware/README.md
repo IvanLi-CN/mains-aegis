@@ -416,6 +416,136 @@ mcu-agentd flash esp-test
 - 先拍整屏（含四角和顶部 `UP ^`），再近拍中部色条与灰阶条；
 - 若出现颜色/方向/镜像异常，保持同角度再拍一张，用于前后对比修复结果。
 
+### 电源链路测试固件（`tps-test-fw`，feature 驱动测试套件）
+
+`tps-test-fw` 用于独立验证 `BQ25792 + 双路 TPS55288 + INA3221 + TMP112 + 前面板`，绕开 `BQ40Z50/BMS` 授权链，只保留基础硬件保护与故障锁存。它现在是本项目的**标准电源联调套件**，推荐用于 `TPS55288` 单路验证、并联验证、charger 基线核对和板级波形排查。
+
+重要警示：
+
+- 此固件**不会**执行主固件的 `BQ40Z50` 自检/授权恢复流程。
+- 此固件按编译期 feature 固定测试 profile；改变输出通道、模式、电压、限流或强制充电档位，都需要重新编译并重新烧录。
+- 运行期仍保留以下保护：
+  - `THERM_KILL_N` 断言后锁存关闭双路输出
+  - `TPS55288` 的 `SCP/OCP/OVP` 锁存关闭对应输出
+  - `BQ25792` 输入缺失、`TS_COLD/TS_HOT`、通信失败时强制关充
+
+#### Profile 选择（编译期 feature）
+
+`tps-test-fw` 的 profile 由 feature 组控制；**同一组只能选一个**，未显式选择时会回落到最保守默认值。
+
+- 输出使能组：
+  - `tps-test-out-a`
+  - `tps-test-out-b`
+  - `tps-test-out-both`
+  - 默认：`tps-test-out-a`
+- 轻载模式组：
+  - `tps-test-fpwm`
+  - `tps-test-pfm`
+  - 默认：`tps-test-fpwm`
+- 输出电压组：
+  - `tps-test-vout-5v`
+  - `tps-test-vout-12v`
+  - `tps-test-vout-15v`
+  - `tps-test-vout-19v`
+  - 默认：`tps-test-vout-5v`
+- 每路限流组：
+  - `tps-test-ilim-1p5a`
+  - `tps-test-ilim-3p5a`
+  - 默认：`tps-test-ilim-1p5a`
+- 强制充电组：
+  - `tps-test-charge-off`
+  - `tps-test-charge-min`
+  - `tps-test-charge-1a`
+  - 默认：`tps-test-charge-off`
+
+充电 feature 的冻结口径：
+
+- `tps-test-charge-off`
+  - charger 请求关闭
+  - 仍预写 `VREG=16.8V`、`ICHG=50mA`、`IINDPM=100mA`
+- `tps-test-charge-min`
+  - charger 请求开启
+  - `VREG=16.8V`
+  - `ICHG=50mA`（`BQ25792` 的最小合法充电电流）
+  - `IINDPM=100mA`（`BQ25792` 的最小合法输入限流）
+- `tps-test-charge-1a`
+  - charger 请求开启
+  - `VREG=16.8V`
+  - `ICHG=1000mA`
+  - `IINDPM=2000mA`
+
+> 说明：这里的 “min” 指芯片寄存器定义允许的最小档位，不等同于项目级“推荐唤醒偏置”。若后续要冻结专门的 pack wake-up 档位，应单独引入新的 charger profile，而不是复用 `min`。
+
+#### 推荐构建命令
+
+默认安全基线（`A-only + FPWM + 5V + 1.5A/路 + 不强制充电`）：
+
+```bash
+cd firmware
+cargo build --release --bin tps-test-fw --features tps-test-fw
+```
+
+单测 A 通道、`FPWM`、`15V`、`1.5A/路`、不强制充电：
+
+```bash
+cd firmware
+cargo build --release --bin tps-test-fw --features "tps-test-fw tps-test-out-a tps-test-fpwm tps-test-vout-15v tps-test-ilim-1p5a tps-test-charge-off"
+```
+
+双路并联、`PFM`、`19V`、`3.5A/路`、强制 `1A` 充电：
+
+```bash
+cd firmware
+cargo build --release --bin tps-test-fw --features "tps-test-fw tps-test-out-both tps-test-pfm tps-test-vout-19v tps-test-ilim-3p5a tps-test-charge-1a"
+```
+
+屏幕页内容：
+
+- 顶部：共享输出档位、每路 `ILIM`、`A/B` 请求态、build profile
+- `BQ25792` 区：请求态 / 实际态、输入存在、`VBAT/IBAT/VREG/ICHG`、故障标签
+- `OUT-A` / `OUT-B` 区：配置 OE、实际 OE、目标档位、`VOUT/IOUT/TEMP`、锁存故障
+
+#### 板级 bring-up / 排查笔记
+
+以下笔记针对当前 `TPS55288` 并联样机，属于**样机联调流程**，不是器件通用应用笔记。
+
+1. 外部供电起步条件
+   - 首轮排查不要强制充电，优先使用外部台式电源直接供 `VBAT`
+   - 输入建议保持在 `10V ~ 20V` 之间
+   - 先用 `1.5A/路`，先不直接上 `3.5A/路`
+
+2. 单通道验证阶段
+   - 并联 `COMP` 连接电阻（当前样机为 `R90`）先保持 `DNP/开路`
+   - A/B 两路各自的 `COMP` 引脚环路补偿网络（例如 `Rcomp/Ccomp/Cff`）分别独立装配并验证
+   - 在 `FPWM` 模式下，分别验证单路 `5V / 15V / 19V / 12V` 输出
+   - 每个档位至少覆盖：
+     - 空载纹波
+     - 轻载纹波
+
+3. 并联补偿阶段
+   - 单路波形与纹波都稳定后，再装 `COMP` 连接电阻
+   - 当前样机可优先评估“只保留一套共享补偿网络”的做法；若采用该口径，可去掉 B 通道的 `COMP` 引脚补偿网络，只保留一套共享网络后再连 `COMP`
+   - 重新验证 `5V / 12V / 15V / 19V` 的空载与轻载输出
+
+4. 大电流并联系统阶段
+   - 确认前两阶段稳定后，再切到 `3.5A/路`
+   - `PFM` 模式下验证总输出 `2A ~ 2.5A` 时的稳定性与温升
+   - 对双路电流分担的观察，建议额外记录 `COMP` 共点 + `180°` 反相 `SYNC` 条件下的对比结果；当前样机经验是，在 PWM/FPWM 连续开关条件下，两路电流更容易表现出较好的均衡性
+   - 没问题后再做 `6A` 级短时间测试
+   - 最后装好散热再跑稳态/时长测试
+
+5. 调试观察重点
+   - `PFM` 模式下，单路输出电流约 `1A` 以内时，可能出现较轻的可闻啸叫；若声音柔和且不大，属于可接受待观察项
+   - 温度异常时先撤负载，不要一边升负载一边临时改探头位置
+   - 建议先把示波器探头固定好，再缓慢增加负载；中途插拔/改挂点容易把系统直接打崩
+
+6. 当前样机已验证可行的装配结论
+   - 外置 MOS gate 串联电阻：不装有阻值器件（保持 `0Ω` 直连）
+   - `SW` 节点 RC snubber：不装
+   - B 通道 `COMP` 引脚补偿网络：不装
+
+> 术语说明：这里统一使用 “`COMP` 引脚环路补偿网络” 表达控制环补偿，不再使用“COMP 阻容”这类口语化叫法。
+
 ### 1:1 预览工具（主机）
 
 预览工具会输出与固件同源渲染的两类产物：

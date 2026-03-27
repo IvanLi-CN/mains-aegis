@@ -12,6 +12,23 @@ force-min-charge = []
 bms-dual-probe-diag = []
 # Test firmware gate (prevents default cargo build/check from forcing test-fw feature selection).
 test-fw = []
+tps-test-fw = []
+# `tps-test-fw` compile-time profile selectors. Each selector group is mutually exclusive; when a
+# group is omitted the firmware falls back to the safest default for board bring-up.
+tps-test-out-a = ["tps-test-fw"]
+tps-test-out-b = ["tps-test-fw"]
+tps-test-out-both = ["tps-test-fw"]
+tps-test-fpwm = ["tps-test-fw"]
+tps-test-pfm = ["tps-test-fw"]
+tps-test-vout-5v = ["tps-test-fw"]
+tps-test-vout-12v = ["tps-test-fw"]
+tps-test-vout-15v = ["tps-test-fw"]
+tps-test-vout-19v = ["tps-test-fw"]
+tps-test-ilim-1p5a = ["tps-test-fw"]
+tps-test-ilim-3p5a = ["tps-test-fw"]
+tps-test-charge-off = ["tps-test-fw"]
+tps-test-charge-min = ["tps-test-fw"]
+tps-test-charge-1a = ["tps-test-fw"]
 # Test firmware function set.
 test-fw-screen-static = ["test-fw"]
 test-fw-audio-playback = ["test-fw"]
@@ -26,6 +43,11 @@ name = "test-fw"
 path = "src/bin/test-fw.rs"
 required-features = ["test-fw"]
 
+[[bin]]
+name = "tps-test-fw"
+path = "src/bin/tps-test-fw.rs"
+required-features = ["tps-test-fw"]
+
 [dependencies]
 defmt = "1.0.1"
 embedded-graphics-core = "0.4.1"
@@ -36,7 +58,7 @@ esp-backtrace = { version = "0.18.1", features = ["esp32s3", "panic-handler", "d
 esp-hal = { version = "1.0.0", features = ["esp32s3", "rt", "unstable", "defmt", "psram"] }
 esp-println = { version = "0.16.1", default-features = false, features = ["esp32s3", "defmt-espflash", "jtag-serial"] }
 ina3221-async = { path = "../ina3221-async", features = ["defmt"] }
-tps55288 = { path = "../tps55288", features = ["defmt"] }
+tps55288 = { package = "tps55288-rs", git = "https://github.com/IvanLi-CN/tps55288-rs", rev = "e451aa816ef97fb08ae162ed2baca414d0b22823", features = ["defmt"] }
 u8g2-fonts = { version = "0.7.2", default-features = false }
 
 [profile.dev.package.xtensa-lx-rt]

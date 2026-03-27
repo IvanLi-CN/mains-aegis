@@ -3,7 +3,8 @@ use core::convert::Infallible;
 use crate::front_panel_scene::{
     self, AudioTestUiState, BmsActivationState, BmsResultKind, DashboardRoute,
     DashboardTouchTarget, SelfCheckCommState, SelfCheckOverlay, SelfCheckTouchTarget,
-    SelfCheckUiSnapshot, TestFunctionUi, UiFocus, UiModel, UiPainter, UiVariant, UpsMode,
+    SelfCheckUiSnapshot, TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant,
+    UpsMode,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -48,7 +49,7 @@ const CMD_CASET: u8 = 0x2A;
 const CMD_RASET: u8 = 0x2B;
 const CMD_RAMWR: u8 = 0x2C;
 
-// Diagnostic step: rotate 180° via driver orientation API (LandscapeSwapped).
+// Front panel is currently mounted 180° from the original lab orientation.
 const LCD_W: u16 = 320;
 const LCD_H: u16 = 172;
 const OFFSET_X: u16 = 0;
@@ -618,6 +619,25 @@ impl FrontPanel {
     }
 
     #[allow(dead_code)]
+    pub fn render_tps_test_status(&mut self, snapshot: TpsTestUiSnapshot) {
+        if self.state != InitState::Ready {
+            return;
+        }
+
+        let model = UiModel {
+            mode: UpsMode::Standby,
+            focus: UiFocus::Idle,
+            touch_irq: false,
+            frame_no: self.frame_no,
+        };
+        if let Err(e) = self.render_scene(|painter| {
+            front_panel_scene::render_tps_test_status(painter, &model, DASHBOARD_VARIANT, &snapshot)
+        }) {
+            defmt::error!("ui: render tps test status failed err={=?}", e);
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn poll_test_input_event(&mut self) -> Option<TestInputEvent> {
         if self.state != InitState::Ready {
             return None;
@@ -901,9 +921,20 @@ impl FrontPanel {
         let ui_h = front_panel_scene::UI_H;
 
         // CST816D on this board reports in a portrait-like space (x=0..UI_H, y=0..UI_W).
-        // Front panel is rendered as LandscapeSwapped, so map by axis swap + horizontal mirror.
         if x_raw < ui_h && y_raw < ui_w {
-            return Some((ui_w.saturating_sub(1).saturating_sub(y_raw), x_raw));
+            return match PANEL_ORIENTATION {
+                Orientation::Landscape => {
+                    Some((y_raw, ui_h.saturating_sub(1).saturating_sub(x_raw)))
+                }
+                Orientation::LandscapeSwapped => {
+                    Some((ui_w.saturating_sub(1).saturating_sub(y_raw), x_raw))
+                }
+                Orientation::Portrait => Some((x_raw, y_raw)),
+                Orientation::PortraitSwapped => Some((
+                    ui_w.saturating_sub(1).saturating_sub(x_raw),
+                    ui_h.saturating_sub(1).saturating_sub(y_raw),
+                )),
+            };
         }
 
         // Fallback path for legacy coordinate orderings.

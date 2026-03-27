@@ -36,3 +36,4 @@
 | 6n4qm | PCB netlist sync (2026-03-19) | 已完成 | `6n4qm-pcb-netlist-sync-20260319/SPEC.md` | 2026-03-19 | 主板网表已同步到 2026-03-19 导出版本；前面板导出已确认与仓库零差异 |
 | cqd8u | Regulated output module docs + runtime gate state machine | 已完成 | `cqd8u-regulated-output-module/SPEC.md` | 2026-03-16 | 已建立 `docs/modules/`、收敛稳压输出 SoT，并落地显式恢复状态机与本地验证 |
 | frsr9 | Regulated output active derating + shutdown | 已完成 | `frsr9-regulated-output-active-protection/SPEC.md` | 2026-03-16 | 已落地温度/电流双门限主动降额、低压主动停机与显式恢复前置条件 |
+| 2uqhm | TPS/BQ power test firmware | 已完成 | `2uqhm-tps-bq-power-test-firmware/SPEC.md` | 2026-03-21 | 已实现独立 `tps-test-fw`、固定 profile 电源运行时、专用 `TPS TEST` 屏显与三组 `cargo +esp check` 验证 |

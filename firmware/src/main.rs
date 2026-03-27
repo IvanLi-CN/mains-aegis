@@ -28,9 +28,8 @@ use esp_hal::{main, Blocking};
 use esp_println as _;
 
 // Bring-up default profile.
-const DEFAULT_ENABLED_OUTPUTS: output::EnabledOutputs =
-    output::EnabledOutputs::Only(output::OutputChannel::OutA);
-const DEFAULT_VOUT_MV: u16 = 19_000;
+const DEFAULT_ENABLED_OUTPUTS: output::EnabledOutputs = output::EnabledOutputs::Both;
+const DEFAULT_VOUT_MV: u16 = 12_000;
 const DEFAULT_ILIMIT_MA: u16 = 3_500;
 const TELEMETRY_PERIOD: Duration = Duration::from_millis(500);
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
@@ -77,7 +76,7 @@ const OUTPUT_PROTECT_CURRENT_HOLD: Duration = Duration::from_secs(3);
 const OUTPUT_PROTECT_ILIM_STEP_MA: u16 = 250;
 const OUTPUT_PROTECT_ILIM_STEP_INTERVAL: Duration = Duration::from_secs(2);
 const OUTPUT_PROTECT_MIN_ILIM_MA: u16 = 1_000;
-const OUTPUT_PROTECT_SHUTDOWN_VOUT_MV: u16 = 14_000;
+const OUTPUT_PROTECT_SHUTDOWN_VOUT_MV: u16 = 11_000;
 const OUTPUT_PROTECT_SHUTDOWN_HOLD: Duration = Duration::from_secs(2);
 const FAN_PWM_FREQ_KHZ: u32 = 25;
 const FAN_MID_PWM_PCT: u8 = 60;

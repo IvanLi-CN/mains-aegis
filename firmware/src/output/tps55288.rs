@@ -3,8 +3,7 @@ use esp_firmware::tmp112;
 use esp_hal::time::{Duration, Instant};
 
 use ::tps55288::data_types::{
-    CableCompLevel, CableCompOption, FeedbackSource, I2cAddress, InternalFeedbackRatio,
-    LightLoadMode, LightLoadOverride, OcpDelay, VccSource, VoutSlewRate,
+    CableCompLevel, CableCompOption, FeedbackSource, InternalFeedbackRatio, OcpDelay, VoutSlewRate,
 };
 use ::tps55288::registers::{
     addr as tps_addr, CdcBits, ModeBits, StatusBits, VoutFsBits, VoutSrBits,
@@ -26,13 +25,6 @@ impl OutputChannel {
         match self {
             OutputChannel::OutA => 0x74,
             OutputChannel::OutB => 0x75,
-        }
-    }
-
-    pub const fn addr_enum(self) -> I2cAddress {
-        match self {
-            OutputChannel::OutA => I2cAddress::Addr0x74,
-            OutputChannel::OutB => I2cAddress::Addr0x75,
         }
     }
 
@@ -60,10 +52,30 @@ impl OutputChannel {
     }
 }
 
-pub fn configure_one<I2C>(
+fn configure_mode_register<I2C>(
+    tps: &mut ::tps55288::Tps55288<I2C>,
+    ch: OutputChannel,
+) -> Result<(), ::tps55288::Error<esp_hal::i2c::master::Error>>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut mode = ModeBits::from_bits_truncate(tps.read_reg(tps_addr::MODE)?);
+    mode.insert(ModeBits::MODE | ModeBits::VCC_EXT);
+    mode.remove(ModeBits::PFM);
+    match ch {
+        OutputChannel::OutA => mode.remove(ModeBits::I2CADD),
+        OutputChannel::OutB => mode.insert(ModeBits::I2CADD),
+    }
+    tps.write_reg(tps_addr::MODE, mode.bits())
+}
+
+fn fpwm_enabled_from_mode(mode: u8) -> bool {
+    ModeBits::from_bits_truncate(mode).contains(ModeBits::PFM)
+}
+
+fn configure_for_requested_output<I2C>(
     i2c: &mut I2C,
     ch: OutputChannel,
-    enabled: bool,
     default_vout_mv: u16,
     default_ilimit_ma: u16,
 ) -> Result<
@@ -90,13 +102,7 @@ where
     // - Light-load mode (PFM/FPWM)
     //
     // This board intends to use external 5V VCC and 0x74/0x75 split addresses.
-    tps.set_mode_control(
-        LightLoadOverride::FromRegister,
-        VccSource::External5v,
-        ch.addr_enum(),
-        LightLoadMode::Pfm, // Do not force PWM (FPWM disabled)
-    )
-    .map_err(|e| (ConfigureStage::Mode, e))?;
+    configure_mode_register(&mut tps, ch).map_err(|e| (ConfigureStage::Mode, e))?;
 
     // Start-up transients can falsely trip OCP on some boards (large Cout, wiring, or sense noise).
     // Keep the same ILIM target, but widen the OCP response delay + slow the ramp for bring-up.
@@ -104,9 +110,8 @@ where
         .map_err(|e| (ConfigureStage::VoutSr, e))?;
     tps.set_feedback(FeedbackSource::Internal, InternalFeedbackRatio::R0_0564)
         .map_err(|e| (ConfigureStage::Feedback, e))?;
-    // Keep FB/INT fault indication disabled until OE is asserted. The datasheet requires OCP_MASK=0
-    // while enabling the output; after OE goes high we re-enable SC/OCP/OVP indication so the shared
-    // interrupt pin becomes the long-lived source of truth for fault capture.
+    // Keep SC/OCP/OVP indication disabled during the 0->1 transitions on ILIM/OE.
+    // The datasheet requires OCP_MASK=0 during bring-up to avoid false trips on noisy starts.
     tps.set_cable_comp(
         CableCompOption::Internal,
         CableCompLevel::V0p0,
@@ -117,21 +122,101 @@ where
     .map_err(|e| (ConfigureStage::Cdc, e))?;
     tps.set_vout_mv(default_vout_mv)
         .map_err(|e| (ConfigureStage::Vout, e))?;
-    tps.set_ilim_ma(default_ilimit_ma, enabled)
+    tps.set_ilim_ma(default_ilimit_ma, true)
         .map_err(|e| (ConfigureStage::Ilim, e))?;
 
-    if enabled {
-        tps.enable_output()
-            .map_err(|e| (ConfigureStage::Enable, e))?;
-        tps.set_cable_comp(
-            CableCompOption::Internal,
-            CableCompLevel::V0p0,
-            true,
-            true,
-            true,
-        )
-        .map_err(|e| (ConfigureStage::CdcPostEnable, e))?;
+    Ok(())
+}
+
+pub fn prepare_enabled_output<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+    default_vout_mv: u16,
+    default_ilimit_ma: u16,
+) -> Result<
+    (),
+    (
+        ConfigureStage,
+        ::tps55288::Error<esp_hal::i2c::master::Error>,
+    ),
+>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    configure_for_requested_output(i2c, ch, default_vout_mv, default_ilimit_ma)
+}
+
+pub fn enable_output_only<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+) -> Result<
+    (),
+    (
+        ConfigureStage,
+        ::tps55288::Error<esp_hal::i2c::master::Error>,
+    ),
+>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let addr = ch.addr();
+    let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, addr);
+
+    tps.enable_output()
+        .map_err(|e| (ConfigureStage::Enable, e))?;
+
+    Ok(())
+}
+
+pub fn disable_output_only<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+) -> Result<
+    (),
+    (
+        ConfigureStage,
+        ::tps55288::Error<esp_hal::i2c::master::Error>,
+    ),
+>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let addr = ch.addr();
+    let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, addr);
+
+    tps.disable_output()
+        .map_err(|e| (ConfigureStage::Disable, e))?;
+
+    Ok(())
+}
+
+pub fn configure_one<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+    enabled: bool,
+    default_vout_mv: u16,
+    default_ilimit_ma: u16,
+) -> Result<
+    (),
+    (
+        ConfigureStage,
+        ::tps55288::Error<esp_hal::i2c::master::Error>,
+    ),
+>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    configure_for_requested_output(i2c, ch, default_vout_mv, default_ilimit_ma)?;
+
+    if !enabled {
+        disable_output_only(i2c, ch)?;
+        let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, ch.addr());
+        tps.set_ilim_ma(default_ilimit_ma, false)
+            .map_err(|e| (ConfigureStage::Ilim, e))?;
+        return Ok(());
     }
+
+    enable_output_only(i2c, ch)?;
 
     Ok(())
 }
@@ -147,7 +232,6 @@ pub enum ConfigureStage {
     Vout,
     Ilim,
     Enable,
-    CdcPostEnable,
 }
 
 impl ConfigureStage {
@@ -162,7 +246,6 @@ impl ConfigureStage {
             ConfigureStage::Vout => "vout",
             ConfigureStage::Ilim => "ilim",
             ConfigureStage::Enable => "enable",
-            ConfigureStage::CdcPostEnable => "cdc_post_enable",
         }
     }
 }
@@ -201,9 +284,7 @@ where
         TelemetryU8::Err(e) => TelemetryBool::Err(e),
     };
     let fpwm = match mode {
-        TelemetryU8::Value(v) => {
-            TelemetryBool::Value(ModeBits::from_bits_truncate(v).contains(ModeBits::PFM))
-        }
+        TelemetryU8::Value(v) => TelemetryBool::Value(fpwm_enabled_from_mode(v)),
         TelemetryU8::Err(e) => TelemetryBool::Err(e),
     };
     let mode_override = match mode {
@@ -306,7 +387,7 @@ where
                     mode_bits_reg.contains(ModeBits::OE),
                     mode_bits_reg.contains(ModeBits::I2CADD),
                     mode_bits_reg.contains(ModeBits::VCC_EXT),
-                    mode_bits_reg.contains(ModeBits::PFM),
+                    fpwm_enabled_from_mode(mode),
                     mode_bits_reg.contains(ModeBits::HICCUP),
                     mode_bits_reg.contains(ModeBits::DISCHG),
                     mode_bits_reg.contains(ModeBits::FSWDBL),
@@ -466,9 +547,7 @@ where
         };
 
         let fpwm = match mode {
-            TelemetryU8::Value(v) => {
-                TelemetryBool::Value(ModeBits::from_bits_truncate(v).contains(ModeBits::PFM))
-            }
+            TelemetryU8::Value(v) => TelemetryBool::Value(fpwm_enabled_from_mode(v)),
             TelemetryU8::Err(e) => TelemetryBool::Err(e),
         };
 
