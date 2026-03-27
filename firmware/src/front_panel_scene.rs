@@ -2165,6 +2165,7 @@ pub fn render_tps_test_status<P: UiPainter>(
         snapshot.out_b,
         palette.down,
     )?;
+    render_tps_test_footer(painter, variant, palette, snapshot)?;
 
     Ok(())
 }

@@ -110,14 +110,14 @@ where
         .map_err(|e| (ConfigureStage::VoutSr, e))?;
     tps.set_feedback(FeedbackSource::Internal, InternalFeedbackRatio::R0_0564)
         .map_err(|e| (ConfigureStage::Feedback, e))?;
-    // Configure SC/OCP/OVP indication before OE is asserted, and do not touch CDC after OE.
-    // This keeps the post-enable phase limited to the actual output enable transition.
+    // Keep SC/OCP/OVP indication disabled during the 0->1 transitions on ILIM/OE.
+    // The datasheet requires OCP_MASK=0 during bring-up to avoid false trips on noisy starts.
     tps.set_cable_comp(
         CableCompOption::Internal,
         CableCompLevel::V0p0,
-        true,
-        true,
-        true,
+        false,
+        false,
+        false,
     )
     .map_err(|e| (ConfigureStage::Cdc, e))?;
     tps.set_vout_mv(default_vout_mv)
