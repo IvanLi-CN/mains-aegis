@@ -42,21 +42,44 @@ impl OutputChannel {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestSwitchingMode {
+    Fpwm,
+    Pfm,
+}
+
+impl TestSwitchingMode {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Fpwm => "FPWM",
+            Self::Pfm => "PFM",
+        }
+    }
+}
+
 fn configure_mode_register<I2C>(
     tps: &mut ::tps55288::Tps55288<I2C>,
     ch: OutputChannel,
+    switching_mode: TestSwitchingMode,
 ) -> Result<(), ::tps55288::Error<esp_hal::i2c::master::Error>>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     let mut mode = ModeBits::from_bits_truncate(tps.read_reg(tps_addr::MODE)?);
     mode.insert(ModeBits::MODE | ModeBits::VCC_EXT);
-    mode.remove(ModeBits::PFM);
+    match switching_mode {
+        TestSwitchingMode::Fpwm => mode.insert(ModeBits::PFM),
+        TestSwitchingMode::Pfm => mode.remove(ModeBits::PFM),
+    }
     match ch {
         OutputChannel::OutA => mode.remove(ModeBits::I2CADD),
         OutputChannel::OutB => mode.insert(ModeBits::I2CADD),
     }
     tps.write_reg(tps_addr::MODE, mode.bits())
+}
+
+fn fpwm_enabled_from_mode(mode: u8) -> bool {
+    ModeBits::from_bits_truncate(mode).contains(ModeBits::PFM)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,6 +190,7 @@ pub fn configure_output<I2C>(
     enabled: bool,
     target_vout_mv: u16,
     ilimit_ma: u16,
+    switching_mode: TestSwitchingMode,
 ) -> Result<(), ConfigureFailure>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
@@ -183,7 +207,7 @@ where
         kind: tps_error_kind(&e),
         retryable: matches!(e, ::tps55288::Error::I2c(_)),
     })?;
-    configure_mode_register(&mut tps, ch).map_err(|e| ConfigureFailure {
+    configure_mode_register(&mut tps, ch, switching_mode).map_err(|e| ConfigureFailure {
         stage: ConfigureStage::Mode,
         kind: tps_error_kind(&e),
         retryable: matches!(e, ::tps55288::Error::I2c(_)),
@@ -242,40 +266,64 @@ pub fn apply_minimal_output<I2C>(
     enabled: bool,
     target_vout_mv: u16,
     ilimit_ma: u16,
+    switching_mode: TestSwitchingMode,
 ) -> Result<(), ConfigureFailure>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, ch.addr());
 
+    log_minimal_raw_regs(&mut tps, ch, "pre");
+    if !enabled {
+        tps.disable_output().map_err(|e| ConfigureFailure {
+            stage: ConfigureStage::Disable,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        })?;
+        log_minimal_raw_regs(&mut tps, ch, "post_disable");
+    }
+
+    configure_mode_register(&mut tps, ch, switching_mode).map_err(|e| ConfigureFailure {
+        stage: ConfigureStage::Mode,
+        kind: tps_error_kind(&e),
+        retryable: matches!(e, ::tps55288::Error::I2c(_)),
+    })?;
+    log_minimal_raw_regs(&mut tps, ch, "post_mode");
+    tps.set_cable_comp(
+        CableCompOption::Internal,
+        CableCompLevel::V0p0,
+        false,
+        false,
+        false,
+    )
+    .map_err(|e| ConfigureFailure {
+        stage: ConfigureStage::Cdc,
+        kind: tps_error_kind(&e),
+        retryable: matches!(e, ::tps55288::Error::I2c(_)),
+    })?;
+    log_minimal_raw_regs(&mut tps, ch, "post_cdc");
+    tps.set_ilim_ma(ilimit_ma, true)
+        .map_err(|e| ConfigureFailure {
+            stage: ConfigureStage::Ilim,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        })?;
+    log_minimal_raw_regs(&mut tps, ch, "post_ilim");
+    tps.set_vout_mv(target_vout_mv)
+        .map_err(|e| ConfigureFailure {
+            stage: ConfigureStage::Vout,
+            kind: tps_error_kind(&e),
+            retryable: matches!(e, ::tps55288::Error::I2c(_)),
+        })?;
+    log_minimal_raw_regs(&mut tps, ch, "post_vout");
+
     if enabled {
-        log_minimal_raw_regs(&mut tps, ch, "pre");
-        tps.set_ilim_ma(ilimit_ma, true)
-            .map_err(|e| ConfigureFailure {
-                stage: ConfigureStage::Ilim,
-                kind: tps_error_kind(&e),
-                retryable: matches!(e, ::tps55288::Error::I2c(_)),
-            })?;
-        log_minimal_raw_regs(&mut tps, ch, "post_ilim");
-        tps.set_vout_mv(target_vout_mv)
-            .map_err(|e| ConfigureFailure {
-                stage: ConfigureStage::Vout,
-                kind: tps_error_kind(&e),
-                retryable: matches!(e, ::tps55288::Error::I2c(_)),
-            })?;
-        log_minimal_raw_regs(&mut tps, ch, "post_vout");
         raw_enable_output_probe(&mut tps, ch).map_err(|e| ConfigureFailure {
             stage: ConfigureStage::Enable,
             kind: tps_error_kind(&e),
             retryable: matches!(e, ::tps55288::Error::I2c(_)),
         })?;
         log_minimal_raw_regs(&mut tps, ch, "post_oe");
-    } else {
-        tps.disable_output().map_err(|e| ConfigureFailure {
-            stage: ConfigureStage::Disable,
-            kind: tps_error_kind(&e),
-            retryable: matches!(e, ::tps55288::Error::I2c(_)),
-        })?;
     }
 
     Ok(())
@@ -357,6 +405,7 @@ pub fn configure_output_disabled<I2C>(
     ch: OutputChannel,
     target_vout_mv: u16,
     ilimit_ma: u16,
+    switching_mode: TestSwitchingMode,
 ) -> Result<(), ConfigureFailure>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
@@ -388,7 +437,7 @@ where
         kind: tps_error_kind(&e),
         retryable: matches!(e, ::tps55288::Error::I2c(_)),
     })?;
-    configure_mode_register(&mut tps, ch).map_err(|e| ConfigureFailure {
+    configure_mode_register(&mut tps, ch, switching_mode).map_err(|e| ConfigureFailure {
         stage: ConfigureStage::Mode,
         kind: tps_error_kind(&e),
         retryable: matches!(e, ::tps55288::Error::I2c(_)),
@@ -542,7 +591,7 @@ where
         iout_limit,
         output_enabled: mode_bits.contains(ModeBits::OE),
         dischg_enabled: mode_bits.contains(ModeBits::DISCHG),
-        fpwm_enabled: mode_bits.contains(ModeBits::PFM),
+        fpwm_enabled: fpwm_enabled_from_mode(mode),
         register_mode: mode_bits.contains(ModeBits::MODE),
         external_vcc: mode_bits.contains(ModeBits::VCC_EXT),
         ilim_enabled: ilim.map(|(_, enabled)| enabled),

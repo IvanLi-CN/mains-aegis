@@ -13,6 +13,22 @@ bms-dual-probe-diag = []
 # Test firmware gate (prevents default cargo build/check from forcing test-fw feature selection).
 test-fw = []
 tps-test-fw = []
+# `tps-test-fw` compile-time profile selectors. Each selector group is mutually exclusive; when a
+# group is omitted the firmware falls back to the safest default for board bring-up.
+tps-test-out-a = ["tps-test-fw"]
+tps-test-out-b = ["tps-test-fw"]
+tps-test-out-both = ["tps-test-fw"]
+tps-test-fpwm = ["tps-test-fw"]
+tps-test-pfm = ["tps-test-fw"]
+tps-test-vout-5v = ["tps-test-fw"]
+tps-test-vout-12v = ["tps-test-fw"]
+tps-test-vout-15v = ["tps-test-fw"]
+tps-test-vout-19v = ["tps-test-fw"]
+tps-test-ilim-1p5a = ["tps-test-fw"]
+tps-test-ilim-3p5a = ["tps-test-fw"]
+tps-test-charge-off = ["tps-test-fw"]
+tps-test-charge-min = ["tps-test-fw"]
+tps-test-charge-1a = ["tps-test-fw"]
 # Test firmware function set.
 test-fw-screen-static = ["test-fw"]
 test-fw-audio-playback = ["test-fw"]

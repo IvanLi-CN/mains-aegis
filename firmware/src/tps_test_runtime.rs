@@ -4,9 +4,8 @@ use crate::front_panel_scene::{
 };
 use crate::irq::IrqSnapshot;
 use crate::tps55288_test::{
-    apply_minimal_output, configure_output, configure_output_disabled, force_disable_output,
-    i2c_error_kind, ina_error_kind, read_diag_snapshot, read_status_snapshot,
-    read_telemetry_snapshot, ConfigureStage, OutputChannel,
+    apply_minimal_output, force_disable_output, i2c_error_kind, ina_error_kind, read_diag_snapshot,
+    read_status_snapshot, read_telemetry_snapshot, OutputChannel, TestSwitchingMode,
 };
 use esp_firmware::bq25792;
 use esp_firmware::ina3221;
@@ -23,20 +22,155 @@ const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 50 * 16;
 const TMP112_TLOW_C_X16: i16 = 40 * 16;
 const TPS_DIAG_LOG_PERIOD: Duration = Duration::from_secs(1);
-const TEST_SKIP_DISABLED_TPS_TOUCH: bool = true;
-const TEST_MINIMAL_WRITE_CHANNEL_A_ONLY: bool = true;
+const TEST_SKIP_DISABLED_TPS_TOUCH: bool = false;
 
-pub const TEST_CHARGER_ENABLE: bool = false;
-pub const TEST_CHARGE_VREG_MV: u16 = 16_800;
-pub const TEST_CHARGE_ICHG_MA: u16 = 200;
-pub const TEST_INPUT_LIMIT_MA: u16 = 500;
-pub const TEST_OUT_A_OE: bool = true;
-pub const TEST_OUT_B_OE: bool = false;
-pub const TEST_VOUT_PROFILE: TpsTestVoutProfile = TpsTestVoutProfile::V5;
-pub const TEST_ILIMIT_MA: u16 = 3_500;
+#[cfg(any(
+    all(feature = "tps-test-out-a", feature = "tps-test-out-b"),
+    all(feature = "tps-test-out-a", feature = "tps-test-out-both"),
+    all(feature = "tps-test-out-b", feature = "tps-test-out-both"),
+))]
+compile_error!("Select only one tps-test output feature: out-a, out-b, or out-both.");
+
+#[cfg(all(feature = "tps-test-fpwm", feature = "tps-test-pfm"))]
+compile_error!("Select only one tps-test switching-mode feature: fpwm or pfm.");
+
+#[cfg(any(
+    all(feature = "tps-test-vout-5v", feature = "tps-test-vout-12v"),
+    all(feature = "tps-test-vout-5v", feature = "tps-test-vout-15v"),
+    all(feature = "tps-test-vout-5v", feature = "tps-test-vout-19v"),
+    all(feature = "tps-test-vout-12v", feature = "tps-test-vout-15v"),
+    all(feature = "tps-test-vout-12v", feature = "tps-test-vout-19v"),
+    all(feature = "tps-test-vout-15v", feature = "tps-test-vout-19v"),
+))]
+compile_error!("Select only one tps-test voltage feature: 5v, 12v, 15v, or 19v.");
+
+#[cfg(all(feature = "tps-test-ilim-1p5a", feature = "tps-test-ilim-3p5a"))]
+compile_error!("Select only one tps-test current-limit feature: 1p5a or 3p5a.");
+
+#[cfg(any(
+    all(feature = "tps-test-charge-off", feature = "tps-test-charge-min"),
+    all(feature = "tps-test-charge-off", feature = "tps-test-charge-1a"),
+    all(feature = "tps-test-charge-min", feature = "tps-test-charge-1a"),
+))]
+compile_error!("Select only one tps-test charge feature: charge-off, charge-min, or charge-1a.");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestOutputSelection {
+    OutA,
+    OutB,
+    Both,
+}
+
+impl TestOutputSelection {
+    pub const fn out_a_oe(self) -> bool {
+        matches!(self, Self::OutA | Self::Both)
+    }
+
+    pub const fn out_b_oe(self) -> bool {
+        matches!(self, Self::OutB | Self::Both)
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::OutA => "A-only",
+            Self::OutB => "B-only",
+            Self::Both => "A+B",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestChargeProfile {
+    Off,
+    Min,
+    I1A,
+}
+
+impl TestChargeProfile {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "OFF",
+            Self::Min => "MIN",
+            Self::I1A => "1A",
+        }
+    }
+
+    pub const fn charger_enable(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    pub const fn charge_vreg_mv(self) -> u16 {
+        16_800
+    }
+
+    pub const fn charge_ichg_ma(self) -> u16 {
+        match self {
+            Self::Off | Self::Min => 50,
+            Self::I1A => 1_000,
+        }
+    }
+
+    pub const fn input_limit_ma(self) -> u16 {
+        match self {
+            Self::Off | Self::Min => 100,
+            Self::I1A => 2_000,
+        }
+    }
+}
+
+const fn selected_output_selection() -> TestOutputSelection {
+    if cfg!(feature = "tps-test-out-both") {
+        TestOutputSelection::Both
+    } else if cfg!(feature = "tps-test-out-b") {
+        TestOutputSelection::OutB
+    } else {
+        TestOutputSelection::OutA
+    }
+}
+
+const fn selected_switching_mode() -> TestSwitchingMode {
+    if cfg!(feature = "tps-test-pfm") {
+        TestSwitchingMode::Pfm
+    } else {
+        TestSwitchingMode::Fpwm
+    }
+}
+
+const fn selected_vout_profile() -> TpsTestVoutProfile {
+    if cfg!(feature = "tps-test-vout-19v") {
+        TpsTestVoutProfile::V19
+    } else if cfg!(feature = "tps-test-vout-15v") {
+        TpsTestVoutProfile::V15
+    } else if cfg!(feature = "tps-test-vout-12v") {
+        TpsTestVoutProfile::V12
+    } else {
+        TpsTestVoutProfile::V5
+    }
+}
+
+const fn selected_ilimit_ma() -> u16 {
+    if cfg!(feature = "tps-test-ilim-3p5a") {
+        3_500
+    } else {
+        1_500
+    }
+}
+
+const fn selected_charge_profile() -> TestChargeProfile {
+    if cfg!(feature = "tps-test-charge-1a") {
+        TestChargeProfile::I1A
+    } else if cfg!(feature = "tps-test-charge-min") {
+        TestChargeProfile::Min
+    } else {
+        TestChargeProfile::Off
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FixedTestProfile {
+    pub output_selection: TestOutputSelection,
+    pub switching_mode: TestSwitchingMode,
+    pub charge_profile: TestChargeProfile,
     pub charger_enable: bool,
     pub charge_vreg_mv: u16,
     pub charge_ichg_ma: u16,
@@ -47,13 +181,22 @@ pub struct FixedTestProfile {
     pub ilimit_ma: u16,
 }
 
+const TEST_OUTPUT_SELECTION: TestOutputSelection = selected_output_selection();
+const TEST_SWITCHING_MODE: TestSwitchingMode = selected_switching_mode();
+const TEST_VOUT_PROFILE: TpsTestVoutProfile = selected_vout_profile();
+const TEST_ILIMIT_MA: u16 = selected_ilimit_ma();
+const TEST_CHARGE_PROFILE: TestChargeProfile = selected_charge_profile();
+
 pub const TEST_PROFILE: FixedTestProfile = FixedTestProfile {
-    charger_enable: TEST_CHARGER_ENABLE,
-    charge_vreg_mv: TEST_CHARGE_VREG_MV,
-    charge_ichg_ma: TEST_CHARGE_ICHG_MA,
-    input_limit_ma: TEST_INPUT_LIMIT_MA,
-    out_a_oe: TEST_OUT_A_OE,
-    out_b_oe: TEST_OUT_B_OE,
+    output_selection: TEST_OUTPUT_SELECTION,
+    switching_mode: TEST_SWITCHING_MODE,
+    charge_profile: TEST_CHARGE_PROFILE,
+    charger_enable: TEST_CHARGE_PROFILE.charger_enable(),
+    charge_vreg_mv: TEST_CHARGE_PROFILE.charge_vreg_mv(),
+    charge_ichg_ma: TEST_CHARGE_PROFILE.charge_ichg_ma(),
+    input_limit_ma: TEST_CHARGE_PROFILE.input_limit_ma(),
+    out_a_oe: TEST_OUTPUT_SELECTION.out_a_oe(),
+    out_b_oe: TEST_OUTPUT_SELECTION.out_b_oe(),
     vout_profile: TEST_VOUT_PROFILE,
     ilimit_ma: TEST_ILIMIT_MA,
 };
@@ -143,7 +286,7 @@ impl ChargerRuntimeState {
             vbat_mv: None,
             ibat_ma: None,
             vreg_mv: None,
-            ichg_ma: Some(TEST_CHARGE_ICHG_MA),
+            ichg_ma: Some(TEST_PROFILE.charge_ichg_ma),
             status: "PEND",
             fault: None,
         }
@@ -151,7 +294,7 @@ impl ChargerRuntimeState {
 
     const fn snapshot(&self) -> TpsTestChargerSnapshot {
         TpsTestChargerSnapshot {
-            requested_enabled: TEST_CHARGER_ENABLE,
+            requested_enabled: TEST_PROFILE.charger_enable,
             actual_enabled: self.actual_enabled,
             comm_state: self.comm_state,
             input_present: self.input_present,
@@ -241,8 +384,8 @@ impl TpsTestRuntime {
             therm_kill_latched: false,
             tps_diag_log_at: None,
             charger: ChargerRuntimeState::new(),
-            out_a: OutputRuntimeState::new(TEST_OUT_A_OE),
-            out_b: OutputRuntimeState::new(TEST_OUT_B_OE),
+            out_a: OutputRuntimeState::new(TEST_PROFILE.out_a_oe),
+            out_b: OutputRuntimeState::new(TEST_PROFILE.out_b_oe),
             tps_a_fault_latch: TpsFaultLatch::default(),
             tps_b_fault_latch: TpsFaultLatch::default(),
         }
@@ -254,19 +397,21 @@ impl TpsTestRuntime {
         irq: &IrqSnapshot,
         i2c1_int_low: bool,
     ) -> TpsTestUiSnapshot {
+        let profile = TEST_PROFILE;
         self.ensure_tmp_alerts(now);
         self.ensure_ina_ready(now);
         self.sample_therm_kill();
         self.poll_charger(now);
 
-        let target_vout_mv = TEST_VOUT_PROFILE.target_mv();
+        let target_vout_mv = profile.vout_profile.target_mv();
         step_output(
             &mut self.i2c,
             now,
             self.ina_ready,
             self.therm_kill_latched,
             target_vout_mv,
-            TEST_ILIMIT_MA,
+            profile.ilimit_ma,
+            profile.switching_mode,
             OutputChannel::OutA,
             &mut self.out_a,
         );
@@ -276,7 +421,8 @@ impl TpsTestRuntime {
             self.ina_ready,
             self.therm_kill_latched,
             target_vout_mv,
-            TEST_ILIMIT_MA,
+            profile.ilimit_ma,
+            profile.switching_mode,
             OutputChannel::OutB,
             &mut self.out_b,
         );
@@ -493,18 +639,26 @@ impl TpsTestRuntime {
         let ts_hot = (status4 & bq25792::status4::TS_HOT_STAT) != 0;
         let charger_fault = fault0 != 0 || fault1 != 0 || ts_cold || ts_hot;
 
-        let allow_charge =
-            TEST_CHARGER_ENABLE && input_present && !charger_fault && !self.therm_kill_latched;
+        let allow_charge = TEST_PROFILE.charger_enable
+            && input_present
+            && !charger_fault
+            && !self.therm_kill_latched;
 
-        if let Err(err) = bq25792::set_charge_voltage_limit_mv(&mut self.i2c, TEST_CHARGE_VREG_MV) {
+        if let Err(err) =
+            bq25792::set_charge_voltage_limit_mv(&mut self.i2c, TEST_PROFILE.charge_vreg_mv)
+        {
             self.mark_charger_comm_failed("vreg_write", err);
             return;
         }
-        if let Err(err) = bq25792::set_charge_current_limit_ma(&mut self.i2c, TEST_CHARGE_ICHG_MA) {
+        if let Err(err) =
+            bq25792::set_charge_current_limit_ma(&mut self.i2c, TEST_PROFILE.charge_ichg_ma)
+        {
             self.mark_charger_comm_failed("ichg_write", err);
             return;
         }
-        if let Err(err) = bq25792::set_input_current_limit_ma(&mut self.i2c, TEST_INPUT_LIMIT_MA) {
+        if let Err(err) =
+            bq25792::set_input_current_limit_ma(&mut self.i2c, TEST_PROFILE.input_limit_ma)
+        {
             self.mark_charger_comm_failed("iindpm_write", err);
             return;
         }
@@ -625,8 +779,8 @@ impl TpsTestRuntime {
         TpsTestUiSnapshot {
             build_profile: self.build_profile,
             build_id: self.build_id,
-            vout_profile: TEST_VOUT_PROFILE,
-            ilim_ma: TEST_ILIMIT_MA,
+            vout_profile: TEST_PROFILE.vout_profile,
+            ilim_ma: TEST_PROFILE.ilimit_ma,
             charger: self.charger.snapshot(),
             out_a: self.out_a.snapshot(),
             out_b: self.out_b.snapshot(),
@@ -784,6 +938,7 @@ fn step_output(
     therm_kill_latched: bool,
     target_vout_mv: u16,
     ilimit_ma: u16,
+    switching_mode: TestSwitchingMode,
     ch: OutputChannel,
     state: &mut OutputRuntimeState,
 ) {
@@ -809,7 +964,7 @@ fn step_output(
 
     if !state.requested_enabled {
         if !state.applied && retry_due {
-            match configure_output_disabled(i2c, ch, target_vout_mv, ilimit_ma) {
+            match apply_minimal_output(i2c, ch, false, target_vout_mv, ilimit_ma, switching_mode) {
                 Ok(()) => {
                     state.applied = true;
                     state.retry_at = None;
@@ -872,11 +1027,14 @@ fn step_output(
     }
 
     if !state.applied && retry_due {
-        let configure_result = if TEST_MINIMAL_WRITE_CHANNEL_A_ONLY && ch == OutputChannel::OutA {
-            apply_minimal_output(i2c, ch, state.requested_enabled, target_vout_mv, ilimit_ma)
-        } else {
-            configure_output(i2c, ch, state.requested_enabled, target_vout_mv, ilimit_ma)
-        };
+        let configure_result = apply_minimal_output(
+            i2c,
+            ch,
+            state.requested_enabled,
+            target_vout_mv,
+            ilimit_ma,
+            switching_mode,
+        );
         match configure_result {
             Ok(()) => {
                 state.applied = true;
@@ -891,12 +1049,7 @@ fn step_output(
                 state.vset_mv = Some(target_vout_mv);
                 state.status_bits = None;
                 refresh_output_aux(i2c, ina_ready, ch, state);
-                if err.stage == ConfigureStage::Enable {
-                    state.terminal_fault = Some("ENABLE");
-                    state.retry_reason = None;
-                    state.retry_at = None;
-                    state.comm_state = SelfCheckCommState::Warn;
-                } else if err.retryable {
+                if err.retryable {
                     state.retry_reason = Some(err.kind);
                     state.retry_at = Some(now + RETRY_BACKOFF);
                     state.comm_state = SelfCheckCommState::Err;
@@ -1005,7 +1158,7 @@ fn charger_status_text(
         "FAULT"
     } else if !input_present {
         "NOAC"
-    } else if !TEST_CHARGER_ENABLE {
+    } else if !TEST_PROFILE.charger_enable {
         "LOCK"
     } else if !allow_charge {
         "WAIT"
@@ -1032,7 +1185,7 @@ fn decode_charger_fault(
         Some("TS_COLD")
     } else if fault0 != 0 || fault1 != 0 {
         Some("FAULT")
-    } else if !input_present && TEST_CHARGER_ENABLE {
+    } else if !input_present && TEST_PROFILE.charger_enable {
         Some("NO INPUT")
     } else {
         let _ = charger_fault;

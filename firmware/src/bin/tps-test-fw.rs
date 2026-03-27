@@ -177,7 +177,10 @@ fn main() -> ! {
         tps_sync_ok
     );
     defmt::info!(
-        "tps-test: fixed_profile charger={=bool} out_a={=bool} out_b={=bool} vout={} ilimit_ma={=u16} charge_vreg_mv={=u16} ichg_ma={=u16} iindpm_ma={=u16}",
+        "tps-test: fixed_profile outputs={} mode={} charge={} charger={=bool} out_a={=bool} out_b={=bool} vout={} ilimit_ma={=u16} charge_vreg_mv={=u16} ichg_ma={=u16} iindpm_ma={=u16}",
+        profile.output_selection.label(),
+        profile.switching_mode.label(),
+        profile.charge_profile.label(),
         profile.charger_enable,
         profile.out_a_oe,
         profile.out_b_oe,
@@ -284,13 +287,14 @@ fn main() -> ! {
         therm_kill,
     );
 
+    let profile = tps_test_runtime::TEST_PROFILE;
     let mut last_snapshot = Some(front_panel_scene::TpsTestUiSnapshot::pending(
         FW_BUILD_PROFILE,
         FW_BUILD_ID,
-        tps_test_runtime::TEST_VOUT_PROFILE,
-        tps_test_runtime::TEST_ILIMIT_MA,
-        tps_test_runtime::TEST_OUT_A_OE,
-        tps_test_runtime::TEST_OUT_B_OE,
+        profile.vout_profile,
+        profile.ilimit_ma,
+        profile.out_a_oe,
+        profile.out_b_oe,
     ));
     if panel.is_ready() {
         if let Some(snapshot) = last_snapshot {

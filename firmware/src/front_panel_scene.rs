@@ -381,6 +381,7 @@ impl SelfCheckUiSnapshot {
 pub enum TpsTestVoutProfile {
     V5,
     V12,
+    V15,
     V19,
 }
 
@@ -390,6 +391,7 @@ impl TpsTestVoutProfile {
         match self {
             Self::V5 => "5V",
             Self::V12 => "12V",
+            Self::V15 => "15V",
             Self::V19 => "19V",
         }
     }
@@ -399,6 +401,7 @@ impl TpsTestVoutProfile {
         match self {
             Self::V5 => 5_000,
             Self::V12 => 12_000,
+            Self::V15 => 15_000,
             Self::V19 => 19_000,
         }
     }
