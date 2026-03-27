@@ -1,15 +1,15 @@
-# 独立 TPS/BQ 电源测试固件（固定配置屏显版）(#2uqhm)
+# 独立 TPS/BQ 电源测试固件（feature 驱动屏显测试套件）(#2uqhm)
 
 ## 状态
 
 - Status: 已完成
 - Created: 2026-03-21
-- Last: 2026-03-21
+- Last: 2026-03-27
 
 ## 背景 / 问题陈述
 
 - 现有主固件把 `TPS55288`、`BQ25792`、`BQ40Z50`、前面板自检与运行态保护深度耦合，不适合做“只看电源链路”的快速上板测试。
-- 当前需要一套可反复烧录、绕开 `BMS/BQ40` 授权、并能直观显示两路输出与充电状态的专用测试固件，用于定位 `TPS55288` 输入侧高边 MOS 损坏与启动瞬态问题。
+- 当前需要一套可反复烧录、绕开 `BMS/BQ40` 授权、并能直观显示两路输出与充电状态的专用测试固件，用于定位 `TPS55288` 输入侧高边 MOS 损坏、并联环路稳定性与 charger/TPS 协同问题。
 - 现有 `test-fw` 已承担屏幕静态/音频测试职责，不应继续往里塞电源控制逻辑，避免职责混杂。
 
 ## 目标 / 非目标
@@ -17,13 +17,16 @@
 ### Goals
 
 - 提供独立二进制 `tps-test-fw`，与现有 `test-fw` 及主固件职责隔离。
-- 用“顶部常量 + 重新编译”方式固定测试 profile，不做运行时触摸/按键改配置。
+- 用**编译期 feature 组合**固定测试 profile，不做运行时触摸/按键改配置。
 - 直接控制 `BQ25792` 与两路 `TPS55288`，支持：
-  - charger enable/disable
-  - `OutA/OutB` 独立 OE
-  - 两路共享输出档位 `5V / 12V / 19V`
+  - charger `off / min / 1A`
+  - `OutA / OutB / Both`
+  - `FPWM / PFM`
+  - 两路共享输出档位 `5V / 12V / 15V / 19V`
+  - 每路 `1.5A / 3.5A` 限流
 - 屏幕常驻显示 charger 状态、两路输出状态、`INA3221` 电压/电流与 `TMP112` 温度。
 - 保留最基本的硬件保护与锁存语义：`THERM_KILL_N`、charger 输入/热故障/通信失败、TPS `SCP/OCP/OVP` 与通信失败。
+- 把当前样机的 `TPS55288` 并联联调方法整理成正式调试笔记，作为测试套件文档的一部分。
 
 ### Non-goals
 
@@ -37,11 +40,11 @@
 ### In scope
 
 - `firmware/Cargo.toml`
-  - 新增独立 `tps-test-fw` feature/bin，不影响现有 `test-fw` feature 组合。
+  - 新增独立 `tps-test-fw` feature/bin，并补齐 profile feature 组，不影响现有 `test-fw` feature 组合。
 - `firmware/src/bin/tps-test-fw.rs`
   - 新增独立测试固件入口。
 - `firmware/src/tps_test_runtime.rs`
-  - 新增轻量电源测试运行时与固定 profile 常量。
+  - 新增轻量电源测试运行时与 feature 驱动 profile 解析。
 - `firmware/src/front_panel.rs`
   - 新增 `render_tps_test_status(...)` 专用渲染入口。
 - `firmware/src/front_panel_scene.rs`
@@ -49,7 +52,9 @@
 - `firmware/src/tps55288_test.rs`
   - 新增测试固件专用的 TPS helper，提供配置、关断与只读 telemetry 访问，避免依赖主固件运行时与日志副作用。
 - `firmware/README.md`
-  - 增补构建、刷机、固定 profile 改值与安全警示说明。
+  - 增补构建、刷机、feature profile 说明、安全警示与板级调试笔记。
+- `docs/ups-output-design.md`
+  - 同步当前样机的并联补偿网络调试结论。
 
 ### Out of scope
 
@@ -61,15 +66,13 @@
 
 ### MUST
 
-- 顶部常量固定支持以下配置项：
-  - `TEST_CHARGER_ENABLE`
-  - `TEST_CHARGE_VREG_MV`
-  - `TEST_CHARGE_ICHG_MA`
-  - `TEST_INPUT_LIMIT_MA`
-  - `TEST_OUT_A_OE`
-  - `TEST_OUT_B_OE`
-  - `TEST_VOUT_PROFILE={5V,12V,19V}`
-  - `TEST_ILIMIT_MA`
+- `tps-test-fw` 必须通过互斥 feature 组支持以下 profile 选择：
+  - 输出：`OutA / OutB / Both`
+  - 模式：`FPWM / PFM`
+  - 输出电压：`5V / 12V / 15V / 19V`
+  - 每路限流：`1.5A / 3.5A`
+  - charger：`off / min / 1A`
+- `tps-test-charge-min` 必须使用 `BQ25792` 合法最小档位：`ICHG=50mA`、`IINDPM=100mA`
 - 测试固件必须在 `BMS/BQ40` 缺失时仍能独立运行。
 - 屏幕必须稳定点亮，并持续刷新 charger / OUT-A / OUT-B 三块 live status。
 - charger 只在“配置允许 + 通信正常 + 输入存在 + 非热故障”时才真正使能。
@@ -80,6 +83,7 @@
 - 复用主固件现有的硬件 bring-up 路径：`I2C1 bus clear`、外部同步、`TMP112` 初始化、`INA3221` 初始化、前面板基础设施。
 - UI 保持现有 industrial 风格，但内容针对电源测试重新排版。
 - 轮询周期与日志节奏适合上板排障，不产生过量串口噪音。
+- README 应给出一套从单通道到并联、从 `1.5A/路` 到 `3.5A/路` 的标准验证顺序。
 
 ### COULD
 
@@ -98,10 +102,11 @@
   - 配置 `TMP112`
   - 初始化 `INA3221`
   - 初始化前面板显示
-- Bring-up 完成后，按固定 profile 直接下发：
-  - charger enable/disable 与固定 `VREG/ICHG/IINDPM`
-  - `OutA/OutB` 独立 OE
-  - 两路共享 `5V/12V/19V` 输出档位与统一 `ILIM`
+- Bring-up 完成后，按 feature 固定 profile 直接下发：
+  - charger `off / min / 1A` 与对应 `VREG/ICHG/IINDPM`
+  - `OutA / OutB / Both`
+  - `FPWM / PFM`
+  - 两路共享 `5V / 12V / 15V / 19V` 输出档位与统一 `ILIM`
 - 进入 steady-state 后，周期性轮询：
   - `BQ25792` 状态寄存器与 `VBAT/IBAT/VREG/ICHG`
   - `INA3221 CH1/CH2` 输出电压、电流
@@ -139,13 +144,13 @@ None
 
 ## 验收标准（Acceptance Criteria）
 
-- Given 当前默认 profile
+- Given 当前默认 profile（`A-only + FPWM + 5V + 1.5A/路 + charge-off`）
   When 构建并刷入 `tps-test-fw`
-  Then 屏幕点亮并显示 `charger=off`、`OutA=off`、`OutB=off`、目标档位 `5V`
+  Then 屏幕点亮并显示 `charger=off`、`OutA=requested`、`OutB=off`、目标档位 `5V`
 
-- Given 修改顶部常量为不同组合
+- Given 修改 feature 组合为不同 profile
   When 重新编译刷机
-  Then 不改代码路径即可切换 charger enable、双路 OE 与 `5V/12V/19V` 档位，并在屏幕上同步显示配置态与实测态
+  Then 不改代码路径即可切换 charger、输出选择、`FPWM/PFM`、`5V/12V/15V/19V`、`1.5A/3.5A`，并在屏幕和日志中同步显示配置态与实测态
 
 - Given `BMS/BQ40` 缺失或未 ready
   When 运行 `tps-test-fw`
@@ -160,13 +165,14 @@ None
   Then 均通过且现有目标不回归：
   - `cargo +esp check --release`
   - `cargo +esp check --release --bin test-fw --features test-fw-screen-static,test-fw-default-screen-static`
-  - `cargo +esp check --release --bin tps-test-fw --features tps-test-fw`
+  - `cargo +esp check --release --bin tps-test-fw --features "tps-test-fw tps-test-out-a tps-test-fpwm tps-test-vout-5v tps-test-ilim-1p5a tps-test-charge-off"`
+  - `cargo +esp check --release --bin tps-test-fw --features "tps-test-fw tps-test-out-both tps-test-pfm tps-test-vout-19v tps-test-ilim-3p5a tps-test-charge-1a"`
 
 ## 实现前置条件（Definition of Ready / Preconditions）
 
-- 范围、默认 profile 与安全策略已冻结
+- 范围、feature profile 矩阵与安全策略已冻结
 - 本规格不依赖新增外部接口契约文档
-- 测试固件采用“顶部常量 + 重新编译”方式这一点已确认
+- 测试固件采用“feature 组合 + 重新编译”方式这一点已确认
 
 ## 非功能性验收 / 质量门槛（Quality Gates）
 
@@ -191,7 +197,8 @@ None
 
 ## 文档更新（Docs to Update）
 
-- `firmware/README.md`: 增补 `tps-test-fw` 构建/烧录、固定 profile 与安全警示
+- `firmware/README.md`: 增补 `tps-test-fw` 构建/烧录、feature profile、安全警示与调试笔记
+- `docs/ups-output-design.md`: 同步 `COMP` 共点与共享补偿网络调试结论
 - `docs/specs/README.md`: 新增本规格索引并更新状态
 
 ## 计划资产（Plan assets）
@@ -220,8 +227,16 @@ None
 ## 方案概述（Approach, high-level）
 
 - 不复用主固件 `PowerManager`，避免把 `BMS`/自检授权链拖进测试固件。
-- 复用已有底层驱动与板级 bring-up 代码，但把运行时状态机收缩为“固定 profile + 轮询 + 锁存”。
+- 复用已有底层驱动与板级 bring-up 代码，但把运行时状态机收缩为“feature 固定 profile + 轮询 + 锁存”。
 - 屏幕走专用渲染入口，保持前面板基础设施稳定，同时避免污染既有 dashboard / self-check 路由。
+
+## 调试笔记（Debug Notes）
+
+- 当前样机的 `COMP` 引脚环路补偿网络必须作为明确调试变量管理；单通道排查时先断开 `R90`，不要让两侧补偿网络默认并联。
+- `1.5A/路` 阶段优先在 `FPWM` 下完成单路 `5V / 12V / 15V / 19V` 的空载与轻载纹波验证。
+- 单路稳定后再恢复 `COMP` 共点联调，并优先评估“只保留一套共享补偿网络”的装配方式。
+- `3.5A/路` 阶段需要覆盖并联输出与温升；双路电流分担建议额外记录 `COMP` 共点 + `180°` 反相 `SYNC` 条件下的对比结果。
+- 当前样机最终收敛的可行装配是：外置 MOS gate 串联电阻不装有阻值器件、`SW` snubber 不装、B 通道 `COMP` 引脚补偿网络不装。
 
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）
 
@@ -237,6 +252,7 @@ None
 
 - 2026-03-21: 新建规格，冻结独立 `tps-test-fw` 的范围、默认 profile、UI 与验证门槛。
 - 2026-03-21: 实现 `tps-test-fw`、固定 profile 运行时、独立屏显页与构建验证。
+- 2026-03-27: 将 `tps-test-fw` 收敛为 feature 驱动测试套件，补齐 `5V/12V/15V/19V`、`1.5A/3.5A`、`FPWM/PFM`、`A/B/Both`、`charge off/min/1A` 选择面，并写入样机调试笔记。
 
 ## 参考（References）
 
