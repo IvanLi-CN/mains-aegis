@@ -4496,7 +4496,9 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
             }
         }
         DashboardDetailPage::Charger => {
-            if data.charger_state == SelfCheckCommState::Err {
+            if let Some(status) = data.detail.charger_status {
+                status
+            } else if data.charger_state == SelfCheckCommState::Err {
                 "FAULT"
             } else if data.charger_state == SelfCheckCommState::Warn {
                 "WARN"
@@ -4532,7 +4534,7 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
 fn detail_status_color(palette: Palette, status: &'static str) -> u16 {
     match status {
         "FAULT" | "HOT" => ERROR_COLOR,
-        "WARN" | "WARM" | "LOCK" | "NOAC" => ATTENTION_COLOR,
+        "WARN" | "WARM" | "LOCK" | "NOAC" | "TEMP" => ATTENTION_COLOR,
         _ => palette.accent,
     }
 }
@@ -5094,7 +5096,7 @@ fn detail_footer_badge(
                 _ => "FAULT",
             },
         ),
-        "WARN" | "HOT" | "WARM" | "LOCK" | "NOAC" | "LIMIT" | "HOLD" | "RECOV" => {
+        "WARN" | "HOT" | "WARM" | "LOCK" | "NOAC" | "TEMP" | "LIMIT" | "HOLD" | "RECOV" => {
             (DetailFooterIcon::Warn, "CHECK ROWS")
         }
         _ if notice.contains("PENDING")
