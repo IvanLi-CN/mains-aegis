@@ -4996,7 +4996,7 @@ fn detail_footer_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &
 
     match detail_status_tag(page, data) {
         "FAULT" => detail_fault_notice(page, data),
-        "WARN" => "WARNING ACTIVE - CHECK DETAIL ROWS",
+        "WARN" => "WARNING ACTIVE - CHECK STATUS",
         "LIMIT" => "UPSTREAM PATH LIMITED - CHECK MODULE STATUS",
         "HOLD" => "OUTPUT WAITING FOR BMS DISCHARGE PERMISSION",
         "RECOV" => "RECOVERY IN PROGRESS - HOLD OUTPUTS",
@@ -5104,7 +5104,7 @@ fn detail_footer_badge(
             },
         ),
         "WARN" | "HOT" | "WARM" | "LOCK" | "NOAC" | "TEMP" | "LIMIT" | "HOLD" | "RECOV" => {
-            (DetailFooterIcon::Warn, "CHECK ROWS")
+            (DetailFooterIcon::Warn, "CHECK STATUS")
         }
         _ if notice.contains("PENDING")
             || notice.contains("SOURCE")
@@ -8874,7 +8874,7 @@ mod tests {
             DashboardLiveData::from_snapshot(base_model(UpsMode::Supplement), &warn_snapshot);
         assert_eq!(
             detail_footer_badge(DashboardDetailPage::Output, warn_live),
-            (DetailFooterIcon::Warn, "CHECK ROWS")
+            (DetailFooterIcon::Warn, "CHECK STATUS")
         );
     }
 
