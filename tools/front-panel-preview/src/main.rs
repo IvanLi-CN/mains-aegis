@@ -40,6 +40,7 @@ fn base_bq40_snapshot(mode: UpsMode) -> SelfCheckUiSnapshot {
     snapshot.bq25792 = SelfCheckCommState::Ok;
     snapshot.bq25792_allow_charge = Some(true);
     snapshot.bq25792_ichg_ma = Some(520);
+    snapshot.bq25792_ibat_ma = Some(510);
     snapshot.bq25792_vbat_present = Some(true);
     snapshot.bq40z50 = SelfCheckCommState::Err;
     snapshot.bq40z50_pack_mv = None;
@@ -136,6 +137,7 @@ fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
             snapshot.vin_iin_ma = Some(1260);
             snapshot.bq25792_allow_charge = Some(false);
             snapshot.bq25792_ichg_ma = None;
+            snapshot.bq25792_ibat_ma = Some(0);
             snapshot.tps_a_enabled = Some(false);
             snapshot.out_a_vbus_mv = None;
             snapshot.tps_a_iout_ma = None;
@@ -155,6 +157,7 @@ fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
             snapshot.vin_iin_ma = Some(1320);
             snapshot.bq25792_allow_charge = Some(true);
             snapshot.bq25792_ichg_ma = Some(540);
+            snapshot.bq25792_ibat_ma = Some(520);
             snapshot.tps_a_enabled = Some(false);
             snapshot.out_a_vbus_mv = None;
             snapshot.tps_a_iout_ma = None;
@@ -174,6 +177,7 @@ fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
             snapshot.vin_iin_ma = Some(820);
             snapshot.bq25792_allow_charge = Some(false);
             snapshot.bq25792_ichg_ma = None;
+            snapshot.bq25792_ibat_ma = Some(0);
             snapshot.tps_a_enabled = Some(true);
             snapshot.out_a_vbus_mv = Some(19_040);
             snapshot.tps_a_iout_ma = Some(620);
@@ -193,6 +197,7 @@ fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
             snapshot.vin_iin_ma = None;
             snapshot.bq25792_allow_charge = Some(false);
             snapshot.bq25792_ichg_ma = None;
+            snapshot.bq25792_ibat_ma = None;
             snapshot.tps_a_enabled = Some(true);
             snapshot.out_a_vbus_mv = Some(18_860);
             snapshot.tps_a_iout_ma = Some(980);
@@ -230,6 +235,124 @@ fn dashboard_detail_snapshot_for_page(page: DashboardDetailPage) -> (UpsMode, Se
         snapshot.vin_vbus_mv = Some(20_060);
         snapshot.vin_iin_ma = Some(1180);
     }
+    (mode, snapshot)
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ChargerPolicyPreviewState {
+    Wait,
+    Charge500mA,
+    Charge100mADcDerated,
+    FullLatched,
+    BlockedOutputOverload,
+    BlockedNoBms,
+}
+
+fn charger_policy_snapshot_for_state(
+    state: ChargerPolicyPreviewState,
+) -> (UpsMode, SelfCheckUiSnapshot) {
+    let mode = UpsMode::Standby;
+    let mut snapshot = dashboard_snapshot_for_mode(mode);
+    snapshot.dashboard_detail = dashboard_detail_fixture(mode, Some(DashboardDetailPage::Charger));
+    snapshot.dashboard_detail.input_source = Some(DashboardInputSource::UsbC);
+    snapshot.dashboard_detail.charger_active = Some(false);
+    snapshot.dashboard_detail.charger_status = Some("WAIT");
+    snapshot.dashboard_detail.charger_notice = Some("idle_wait_threshold");
+    snapshot.bq40z50 = SelfCheckCommState::Ok;
+    snapshot.bq40z50_rca_alarm = Some(false);
+    snapshot.bq40z50_no_battery = Some(false);
+    snapshot.bq40z50_discharge_ready = Some(true);
+    snapshot.bq25792 = SelfCheckCommState::Ok;
+    snapshot.bq25792_vbat_present = Some(true);
+    snapshot.fusb302_vbus_present = Some(true);
+    snapshot.input_vbus_mv = Some(20_060);
+    snapshot.input_ibus_ma = Some(640);
+    snapshot.vin_vbus_mv = Some(20_060);
+    snapshot.vin_iin_ma = Some(640);
+    snapshot.bq25792_allow_charge = Some(false);
+    snapshot.bq25792_ichg_ma = None;
+    snapshot.bq25792_ibat_ma = Some(0);
+    snapshot.bq40z50_pack_mv = Some(15_980);
+    snapshot.bq40z50_current_ma = Some(0);
+    snapshot.bq40z50_soc_pct = Some(82);
+    snapshot.ina_total_ma = Some(0);
+    snapshot.tps_a_enabled = Some(false);
+    snapshot.out_a_vbus_mv = None;
+    snapshot.tps_a_iout_ma = None;
+    snapshot.tps_b_enabled = Some(false);
+    snapshot.out_b_vbus_mv = None;
+    snapshot.tps_b_iout_ma = None;
+
+    match state {
+        ChargerPolicyPreviewState::Wait => {}
+        ChargerPolicyPreviewState::Charge500mA => {
+            snapshot.dashboard_detail.charger_active = Some(true);
+            snapshot.dashboard_detail.charger_status = Some("CHG500");
+            snapshot.dashboard_detail.charger_notice = Some("charging_500ma");
+            snapshot.bq25792_allow_charge = Some(true);
+            snapshot.bq25792_ichg_ma = Some(500);
+            snapshot.bq25792_ibat_ma = Some(480);
+            snapshot.bq40z50_current_ma = Some(500);
+            snapshot.bq40z50_soc_pct = Some(67);
+            snapshot.bq40z50_pack_mv = Some(15_260);
+            snapshot.input_ibus_ma = Some(1_260);
+            snapshot.vin_iin_ma = Some(1_260);
+        }
+        ChargerPolicyPreviewState::Charge100mADcDerated => {
+            snapshot.dashboard_detail.input_source = Some(DashboardInputSource::DcIn);
+            snapshot.dashboard_detail.charger_active = Some(true);
+            snapshot.dashboard_detail.charger_status = Some("CHG100");
+            snapshot.dashboard_detail.charger_notice = Some("charging_100ma_dc_derated");
+            snapshot.bq25792_allow_charge = Some(true);
+            snapshot.bq25792_ichg_ma = Some(100);
+            snapshot.bq25792_ibat_ma = Some(95);
+            snapshot.bq40z50_current_ma = Some(110);
+            snapshot.bq40z50_soc_pct = Some(74);
+            snapshot.bq40z50_pack_mv = Some(15_420);
+            snapshot.input_ibus_ma = Some(3_150);
+            snapshot.vin_iin_ma = Some(3_150);
+            snapshot.ina_total_ma = Some(0);
+        }
+        ChargerPolicyPreviewState::FullLatched => {
+            snapshot.dashboard_detail.charger_status = Some("FULL");
+            snapshot.dashboard_detail.charger_notice = Some("full_latched");
+            snapshot.bq25792_ibat_ma = Some(0);
+            snapshot.bq40z50_current_ma = Some(0);
+            snapshot.bq40z50_soc_pct = Some(100);
+            snapshot.bq40z50_pack_mv = Some(16_720);
+            snapshot.input_ibus_ma = Some(180);
+            snapshot.vin_iin_ma = Some(180);
+        }
+        ChargerPolicyPreviewState::BlockedOutputOverload => {
+            snapshot.dashboard_detail.charger_status = Some("LOAD");
+            snapshot.dashboard_detail.charger_notice = Some("blocked_output_over_limit");
+            snapshot.dashboard_detail.input_source = Some(DashboardInputSource::DcIn);
+            snapshot.tps_a_enabled = Some(true);
+            snapshot.out_a_vbus_mv = Some(19_040);
+            snapshot.tps_a_iout_ma = Some(150);
+            snapshot.tps_b_enabled = Some(true);
+            snapshot.out_b_vbus_mv = Some(19_000);
+            snapshot.tps_b_iout_ma = Some(140);
+            snapshot.ina_total_ma = Some(290);
+            snapshot.input_ibus_ma = Some(1_180);
+            snapshot.vin_iin_ma = Some(1_180);
+            snapshot.bq25792_ibat_ma = Some(0);
+            snapshot.bq40z50_current_ma = Some(0);
+            snapshot.bq40z50_soc_pct = Some(68);
+            snapshot.bq40z50_pack_mv = Some(15_240);
+        }
+        ChargerPolicyPreviewState::BlockedNoBms => {
+            snapshot.dashboard_detail.charger_status = Some("LOCK");
+            snapshot.dashboard_detail.charger_notice = Some("blocked_no_bms");
+            snapshot.bq40z50 = SelfCheckCommState::Warn;
+            snapshot.bq25792_ibat_ma = Some(0);
+            snapshot.bq40z50_discharge_ready = Some(false);
+            snapshot.bq40z50_current_ma = Some(0);
+            snapshot.bq40z50_soc_pct = Some(76);
+            snapshot.bq40z50_pack_mv = Some(15_540);
+        }
+    }
+
     (mode, snapshot)
 }
 
@@ -358,6 +481,12 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardDetailOutput
         | ScenarioArg::DashboardDetailCharger
         | ScenarioArg::DashboardDetailThermal
+        | ScenarioArg::DashboardDetailChargerWait
+        | ScenarioArg::DashboardDetailCharger500mA
+        | ScenarioArg::DashboardDetailCharger100mADcDerated
+        | ScenarioArg::DashboardDetailChargerFullLatched
+        | ScenarioArg::DashboardDetailChargerBlockedOutputOverload
+        | ScenarioArg::DashboardDetailChargerBlockedNoBms
         | ScenarioArg::TpsTest
         | ScenarioArg::TestAudio
         | ScenarioArg::TestNavigation => SelfCheckOverlay::None,
@@ -388,6 +517,11 @@ fn run() -> Result<(), String> {
         ScenarioArg::DashboardDetailOutput => ModeArg::Supplement,
         ScenarioArg::DashboardDetailCharger => ModeArg::Standby,
         ScenarioArg::DashboardDetailThermal => ModeArg::Backup,
+        ScenarioArg::DashboardDetailChargerWait => ModeArg::Standby,
+        ScenarioArg::DashboardDetailCharger500mA => ModeArg::Standby,
+        ScenarioArg::DashboardDetailCharger100mADcDerated => ModeArg::Standby,
+        ScenarioArg::DashboardDetailChargerFullLatched => ModeArg::Standby,
+        ScenarioArg::DashboardDetailChargerBlockedNoBms => ModeArg::Standby,
         _ => args.mode,
     };
 
@@ -458,16 +592,52 @@ fn run() -> Result<(), String> {
         | ScenarioArg::DashboardDetailBatteryFlow
         | ScenarioArg::DashboardDetailOutput
         | ScenarioArg::DashboardDetailCharger
-        | ScenarioArg::DashboardDetailThermal => {
+        | ScenarioArg::DashboardDetailThermal
+        | ScenarioArg::DashboardDetailChargerWait
+        | ScenarioArg::DashboardDetailCharger500mA
+        | ScenarioArg::DashboardDetailCharger100mADcDerated
+        | ScenarioArg::DashboardDetailChargerFullLatched
+        | ScenarioArg::DashboardDetailChargerBlockedOutputOverload
+        | ScenarioArg::DashboardDetailChargerBlockedNoBms => {
             let page = match args.scenario {
                 ScenarioArg::DashboardDetailCells => DashboardDetailPage::Cells,
                 ScenarioArg::DashboardDetailBatteryFlow => DashboardDetailPage::BatteryFlow,
                 ScenarioArg::DashboardDetailOutput => DashboardDetailPage::Output,
                 ScenarioArg::DashboardDetailCharger => DashboardDetailPage::Charger,
                 ScenarioArg::DashboardDetailThermal => DashboardDetailPage::Thermal,
+                ScenarioArg::DashboardDetailChargerWait
+                | ScenarioArg::DashboardDetailCharger500mA
+                | ScenarioArg::DashboardDetailCharger100mADcDerated
+                | ScenarioArg::DashboardDetailChargerFullLatched
+                | ScenarioArg::DashboardDetailChargerBlockedOutputOverload
+                | ScenarioArg::DashboardDetailChargerBlockedNoBms => DashboardDetailPage::Charger,
                 _ => unreachable!(),
             };
-            let (mode, snapshot) = dashboard_detail_snapshot_for_page(page);
+            let (mode, snapshot) = match args.scenario {
+                ScenarioArg::DashboardDetailChargerWait => {
+                    charger_policy_snapshot_for_state(ChargerPolicyPreviewState::Wait)
+                }
+                ScenarioArg::DashboardDetailCharger500mA => {
+                    charger_policy_snapshot_for_state(ChargerPolicyPreviewState::Charge500mA)
+                }
+                ScenarioArg::DashboardDetailCharger100mADcDerated => {
+                    charger_policy_snapshot_for_state(
+                        ChargerPolicyPreviewState::Charge100mADcDerated,
+                    )
+                }
+                ScenarioArg::DashboardDetailChargerFullLatched => {
+                    charger_policy_snapshot_for_state(ChargerPolicyPreviewState::FullLatched)
+                }
+                ScenarioArg::DashboardDetailChargerBlockedOutputOverload => {
+                    charger_policy_snapshot_for_state(
+                        ChargerPolicyPreviewState::BlockedOutputOverload,
+                    )
+                }
+                ScenarioArg::DashboardDetailChargerBlockedNoBms => {
+                    charger_policy_snapshot_for_state(ChargerPolicyPreviewState::BlockedNoBms)
+                }
+                _ => dashboard_detail_snapshot_for_page(page),
+            };
             let dashboard_model = UiModel {
                 mode,
                 focus: UiFocus::Idle,
@@ -709,6 +879,12 @@ enum ScenarioArg {
     DashboardDetailOutput,
     DashboardDetailCharger,
     DashboardDetailThermal,
+    DashboardDetailChargerWait,
+    DashboardDetailCharger500mA,
+    DashboardDetailCharger100mADcDerated,
+    DashboardDetailChargerFullLatched,
+    DashboardDetailChargerBlockedOutputOverload,
+    DashboardDetailChargerBlockedNoBms,
     SelfCheckBmsMissingTpsWarn,
     Bq40Offline,
     Bq40OfflineDialog,
@@ -736,6 +912,20 @@ impl ScenarioArg {
             "dashboard-detail-output" => Ok(Self::DashboardDetailOutput),
             "dashboard-detail-charger" => Ok(Self::DashboardDetailCharger),
             "dashboard-detail-thermal" => Ok(Self::DashboardDetailThermal),
+            "dashboard-detail-charger-wait" => Ok(Self::DashboardDetailChargerWait),
+            "dashboard-detail-charger-500ma" => Ok(Self::DashboardDetailCharger500mA),
+            "dashboard-detail-charger-100ma-dc-derated" => {
+                Ok(Self::DashboardDetailCharger100mADcDerated)
+            }
+            "dashboard-detail-charger-full-latched" => {
+                Ok(Self::DashboardDetailChargerFullLatched)
+            }
+            "dashboard-detail-charger-blocked-output-overload" => {
+                Ok(Self::DashboardDetailChargerBlockedOutputOverload)
+            }
+            "dashboard-detail-charger-blocked-no-bms" => {
+                Ok(Self::DashboardDetailChargerBlockedNoBms)
+            }
             "self-check-bms-missing-tps-warn" => Ok(Self::SelfCheckBmsMissingTpsWarn),
             "bq40-offline" => Ok(Self::Bq40Offline),
             "bq40-offline-dialog" => Ok(Self::Bq40OfflineDialog),
@@ -749,7 +939,7 @@ impl ScenarioArg {
             "test-audio" => Ok(Self::TestAudio),
             "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation)"
             )),
         }
     }
@@ -766,6 +956,20 @@ impl ScenarioArg {
             ScenarioArg::DashboardDetailOutput => "dashboard-detail-output",
             ScenarioArg::DashboardDetailCharger => "dashboard-detail-charger",
             ScenarioArg::DashboardDetailThermal => "dashboard-detail-thermal",
+            ScenarioArg::DashboardDetailChargerWait => "dashboard-detail-charger-wait",
+            ScenarioArg::DashboardDetailCharger500mA => "dashboard-detail-charger-500ma",
+            ScenarioArg::DashboardDetailCharger100mADcDerated => {
+                "dashboard-detail-charger-100ma-dc-derated"
+            }
+            ScenarioArg::DashboardDetailChargerFullLatched => {
+                "dashboard-detail-charger-full-latched"
+            }
+            ScenarioArg::DashboardDetailChargerBlockedOutputOverload => {
+                "dashboard-detail-charger-blocked-output-overload"
+            }
+            ScenarioArg::DashboardDetailChargerBlockedNoBms => {
+                "dashboard-detail-charger-blocked-no-bms"
+            }
             ScenarioArg::SelfCheckBmsMissingTpsWarn => "self-check-bms-missing-tps-warn",
             ScenarioArg::Bq40Offline => "bq40-offline",
             ScenarioArg::Bq40OfflineDialog => "bq40-offline-dialog",
@@ -861,7 +1065,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",

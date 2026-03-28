@@ -298,6 +298,7 @@ pub struct SelfCheckUiSnapshot {
     pub bq25792: SelfCheckCommState,
     pub bq25792_allow_charge: Option<bool>,
     pub bq25792_ichg_ma: Option<u16>,
+    pub bq25792_ibat_ma: Option<i16>,
     pub bq25792_vbat_present: Option<bool>,
     pub bq40z50: SelfCheckCommState,
     pub bq40z50_pack_mv: Option<u16>,
@@ -347,6 +348,7 @@ impl SelfCheckUiSnapshot {
             bq25792: SelfCheckCommState::Pending,
             bq25792_allow_charge: None,
             bq25792_ichg_ma: None,
+            bq25792_ibat_ma: None,
             bq25792_vbat_present: None,
             bq40z50: SelfCheckCommState::Pending,
             bq40z50_pack_mv: None,
@@ -1235,7 +1237,10 @@ impl DashboardLiveData {
             out_a_ma: snapshot.tps_a_iout_ma,
             out_b_mv: snapshot.out_b_vbus_mv,
             out_b_ma: snapshot.tps_b_iout_ma,
-            chg_iin_ma: snapshot.bq25792_ichg_ma,
+            chg_iin_ma: snapshot
+                .bq25792_ibat_ma
+                .and_then(|ma| u16::try_from(ma.max(0)).ok())
+                .or(snapshot.bq25792_ichg_ma),
             batt_pack_mv: snapshot.bq40z50_pack_mv,
             bms_current_ma: snapshot.bq40z50_current_ma,
             bms_soc_pct: snapshot.bq40z50_soc_pct,
@@ -4172,7 +4177,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         palette,
         14,
         DETAIL_ROW_Y_3,
-        "ICHG",
+        "IBAT",
         data.chg_iin_ma,
         DetailValueFmt::MilliAmp,
     )?;
@@ -4500,6 +4505,8 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
                 "FAULT"
             } else if data.charger_state == SelfCheckCommState::Warn {
                 "WARN"
+            } else if let Some(status) = data.detail.charger_status {
+                status
             } else if charger_active_value(data) == Some(true) {
                 "ACTIVE"
             } else if !data.mains_present {
@@ -4532,7 +4539,7 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
 fn detail_status_color(palette: Palette, status: &'static str) -> u16 {
     match status {
         "FAULT" | "HOT" => ERROR_COLOR,
-        "WARN" | "WARM" | "LOCK" | "NOAC" => ATTENTION_COLOR,
+        "WARN" | "WARM" | "LOCK" | "NOAC" | "TEMP" => ATTENTION_COLOR,
         _ => palette.accent,
     }
 }
@@ -4953,10 +4960,12 @@ fn charger_active_value(data: DashboardLiveData) -> Option<bool> {
 }
 
 fn charger_state_text(data: DashboardLiveData) -> &'static str {
-    if let Some(status) = data.detail.charger_status {
-        status
-    } else if data.charger_state == SelfCheckCommState::Err {
+    if data.charger_state == SelfCheckCommState::Err {
         "FAULT"
+    } else if data.charger_state == SelfCheckCommState::Warn {
+        "WARN"
+    } else if let Some(status) = data.detail.charger_status {
+        status
     } else if data.charge_allowed == Some(false) && data.mains_present {
         "IDLE"
     } else if !data.mains_present {
@@ -4987,7 +4996,7 @@ fn detail_footer_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &
 
     match detail_status_tag(page, data) {
         "FAULT" => detail_fault_notice(page, data),
-        "WARN" => "WARNING ACTIVE - CHECK DETAIL ROWS",
+        "WARN" => "WARNING ACTIVE - CHECK STATUS",
         "LIMIT" => "UPSTREAM PATH LIMITED - CHECK MODULE STATUS",
         "HOLD" => "OUTPUT WAITING FOR BMS DISCHARGE PERMISSION",
         "RECOV" => "RECOVERY IN PROGRESS - HOLD OUTPUTS",
@@ -5094,8 +5103,8 @@ fn detail_footer_badge(
                 _ => "FAULT",
             },
         ),
-        "WARN" | "HOT" | "WARM" | "LOCK" | "NOAC" | "LIMIT" | "HOLD" | "RECOV" => {
-            (DetailFooterIcon::Warn, "CHECK ROWS")
+        "WARN" | "HOT" | "WARM" | "LOCK" | "NOAC" | "TEMP" | "LIMIT" | "HOLD" | "RECOV" => {
+            (DetailFooterIcon::Warn, "CHECK STATUS")
         }
         _ if notice.contains("PENDING")
             || notice.contains("SOURCE")
@@ -5329,8 +5338,12 @@ fn render_variant_c<P: UiPainter>(
     let ina_whole = ina_abs / 1000;
     let ina_frac = (ina_abs % 1000) / 10;
 
-    let ichg_has = snapshot.bq25792_ichg_ma.is_some();
-    let ichg_ma = snapshot.bq25792_ichg_ma.unwrap_or(0);
+    let ichg_ma = snapshot
+        .bq25792_ibat_ma
+        .and_then(|ma| u16::try_from(ma.max(0)).ok())
+        .or(snapshot.bq25792_ichg_ma);
+    let ichg_has = ichg_ma.is_some();
+    let ichg_ma = ichg_ma.unwrap_or(0);
     let ichg_whole = ichg_ma / 1000;
     let ichg_frac = (ichg_ma % 1000) / 10;
 
@@ -5369,9 +5382,9 @@ fn render_variant_c<P: UiPainter>(
     } else if snapshot.bq25792_allow_charge == Some(false) {
         format_args!("CHG IDLE")
     } else if ichg_has {
-        format_args!("ICHG {:>1}.{:02}A", ichg_whole, ichg_frac)
+        format_args!("IBAT {:>1}.{:02}A", ichg_whole, ichg_frac)
     } else {
-        format_args!("ICHG N/A")
+        format_args!("IBAT N/A")
     };
     let bms_key = if snapshot.bq40z50_recovery_pending {
         format_args!("AUTH ACTIVE")
@@ -7356,7 +7369,7 @@ fn render_focus_center_value<P: UiPainter>(
                 painter,
                 variant,
                 FontRole::Num,
-                "CHARGER INPUT",
+                "BATTERY CHARGE",
                 Point::new(92, 84),
                 HorizontalAlignment::Left,
                 palette.text_dim,
@@ -8593,6 +8606,30 @@ mod tests {
     }
 
     #[test]
+    fn live_dashboard_prefers_actual_ibat_over_target_ichg() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq25792_allow_charge = Some(true);
+        snapshot.bq25792_ichg_ma = Some(500);
+        snapshot.bq25792_ibat_ma = Some(460);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(live.charge_current_ma(), Some(460));
+    }
+
+    #[test]
+    fn live_dashboard_falls_back_to_target_ichg_when_ibat_is_missing() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq25792_allow_charge = Some(true);
+        snapshot.bq25792_ichg_ma = Some(500);
+        snapshot.bq25792_ibat_ma = None;
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(live.charge_current_ma(), Some(500));
+    }
+
+    #[test]
     fn dashboard_hit_test_maps_fixed_home_regions() {
         assert_eq!(
             dashboard_hit_test(DashboardRoute::Home, 30, 40),
@@ -8837,7 +8874,7 @@ mod tests {
             DashboardLiveData::from_snapshot(base_model(UpsMode::Supplement), &warn_snapshot);
         assert_eq!(
             detail_footer_badge(DashboardDetailPage::Output, warn_live),
-            (DetailFooterIcon::Warn, "CHECK ROWS")
+            (DetailFooterIcon::Warn, "CHECK STATUS")
         );
     }
 
