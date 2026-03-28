@@ -65,6 +65,7 @@ pub struct Config {
     pub tach_timeout_ms: u64,
     pub tach_pulses_per_rev: u8,
     pub mid_pwm_pct: u8,
+    pub force_full_speed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,6 +120,11 @@ impl Controller {
     const TACH_RECOVERY_CONFIRM_MS: u64 = 20;
 
     pub const fn new(cfg: Config) -> Self {
+        let initial_command = if cfg.force_full_speed {
+            FanLevel::High
+        } else {
+            FanLevel::Off
+        };
         Self {
             cfg,
             thermal_level: FanLevel::Off,
@@ -128,7 +134,7 @@ impl Controller {
             tach_recovery_pulses: 0,
             status: Status {
                 requested_command: FanLevel::Off,
-                command: FanLevel::Off,
+                command: initial_command,
                 thermal_level: FanLevel::Off,
                 temp_source: TempSource::Pending,
                 control_temp_c_x16: None,
@@ -188,7 +194,8 @@ impl Controller {
         // Keep the tach watchdog tied to the actual driven output. Once a fault
         // is latched the fan stays forced-high until sustained pulse activity
         // proves it really recovered, even if the thermal request drops to off.
-        let expecting_tach = prev.tach_fault || desired_command.enabled();
+        let expecting_tach =
+            prev.tach_fault || desired_command.enabled() || self.cfg.force_full_speed;
         let mut tach_fault = prev.tach_fault;
         if input.tach_pulse_count > 0 {
             self.last_tach_seen_ms = Some(input.now_ms);
@@ -230,7 +237,7 @@ impl Controller {
             }
         }
 
-        let command = if tach_fault {
+        let command = if tach_fault || self.cfg.force_full_speed {
             FanLevel::High
         } else {
             desired_command
@@ -334,7 +341,30 @@ mod tests {
             tach_timeout_ms: 2_000,
             tach_pulses_per_rev: 2,
             mid_pwm_pct: 60,
+            force_full_speed: false,
         }
+    }
+
+    #[test]
+    fn force_full_speed_override_starts_high_and_preserves_requested_command() {
+        let mut cfg = cfg();
+        cfg.force_full_speed = true;
+        let mut ctl = Controller::new(cfg);
+
+        let initial = ctl.status();
+        assert_eq!(initial.requested_command, FanLevel::Off);
+        assert_eq!(initial.command, FanLevel::High);
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 0,
+            temps_ready: true,
+            temp_a_c_x16: Some(35 * 16),
+            temp_b_c_x16: Some(34 * 16),
+            tach_pulse_count: 1,
+        });
+        assert_eq!(status.requested_command, FanLevel::Off);
+        assert_eq!(status.command, FanLevel::High);
+        assert!(!status.tach_fault);
     }
 
     #[test]

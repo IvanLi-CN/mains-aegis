@@ -8529,6 +8529,7 @@ mod tests {
             tach_timeout_ms: 2_000,
             tach_pulses_per_rev: 2,
             mid_pwm_pct: 60,
+            force_full_speed: false,
         };
         let status = fan::Status {
             requested_command: fan::FanLevel::High,
@@ -8556,6 +8557,7 @@ mod tests {
             tach_timeout_ms: 2_000,
             tach_pulses_per_rev: 2,
             mid_pwm_pct: 60,
+            force_full_speed: false,
         };
         let running = fan::Status {
             requested_command: fan::FanLevel::Mid,

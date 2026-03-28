@@ -87,6 +87,7 @@ const FAN_COOLDOWN: Duration = Duration::from_secs(10);
 const FAN_TACH_TIMEOUT: Duration = Duration::from_secs(2);
 // Temporary hardware assumption until the exact fan tach characteristics are confirmed.
 const FAN_TACH_PULSES_PER_REV: u8 = 2;
+const FAN_FORCE_FULL_SPEED_DIAGNOSTIC: bool = true;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct AppliedFanOutput {
@@ -975,6 +976,7 @@ fn main() -> ! {
             tach_timeout_ms: FAN_TACH_TIMEOUT.as_millis(),
             tach_pulses_per_rev: FAN_TACH_PULSES_PER_REV,
             mid_pwm_pct: FAN_MID_PWM_PCT,
+            force_full_speed: FAN_FORCE_FULL_SPEED_DIAGNOSTIC,
         },
         charger_probe_ok: self_test.charger_probe_ok,
         charger_enabled: self_test.charger_enabled,
@@ -1008,6 +1010,9 @@ fn main() -> ! {
         cfg.vout_mv,
         cfg.ilimit_ma
     );
+    if FAN_FORCE_FULL_SPEED_DIAGNOSTIC {
+        defmt::warn!("fan: diagnostic override force_full_speed=true reason=manual_debug");
+    }
     power.init_best_effort();
     let initial_snapshot = power.ui_snapshot();
     front_panel.update_self_check_snapshot(initial_snapshot);
