@@ -87,12 +87,133 @@ const FAN_COOLDOWN: Duration = Duration::from_secs(10);
 const FAN_TACH_TIMEOUT: Duration = Duration::from_secs(2);
 // Temporary hardware assumption until the exact fan tach characteristics are confirmed.
 const FAN_TACH_PULSES_PER_REV: u8 = 2;
-const FAN_FORCE_FULL_SPEED_DIAGNOSTIC: bool = true;
+const FAN_GPIO_SWEEP_DIAGNOSTIC: bool = true;
+const FAN_GPIO_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+const FAN_FORCE_FULL_SPEED_DIAGNOSTIC: bool = !FAN_GPIO_SWEEP_DIAGNOSTIC;
+
+#[derive(Clone, Copy)]
+struct FanGpioPattern {
+    label: &'static str,
+    en_high: bool,
+    vset_high: bool,
+}
+
+const FAN_GPIO_SWEEP_PATTERNS: [FanGpioPattern; 4] = [
+    FanGpioPattern {
+        label: "en=1 vset=1",
+        en_high: true,
+        vset_high: true,
+    },
+    FanGpioPattern {
+        label: "en=1 vset=0",
+        en_high: true,
+        vset_high: false,
+    },
+    FanGpioPattern {
+        label: "en=0 vset=1",
+        en_high: false,
+        vset_high: true,
+    },
+    FanGpioPattern {
+        label: "en=0 vset=0",
+        en_high: false,
+        vset_high: false,
+    },
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct AppliedFanOutput {
     enabled: bool,
     pwm_pct: u8,
+}
+
+struct FanGpioDiagnostic {
+    pattern_idx: usize,
+    next_transition_at: Instant,
+    window_tach_pulses: u32,
+}
+
+impl FanGpioDiagnostic {
+    fn new(now: Instant) -> Self {
+        Self {
+            pattern_idx: 0,
+            next_transition_at: now + FAN_GPIO_SWEEP_INTERVAL,
+            window_tach_pulses: 0,
+        }
+    }
+
+    fn current_pattern(&self) -> FanGpioPattern {
+        FAN_GPIO_SWEEP_PATTERNS[self.pattern_idx]
+    }
+
+    fn apply_current(
+        &self,
+        fan_en: &mut Flex<'_>,
+        fan_vset: &mut Flex<'_>,
+    ) -> output::AppliedFanState {
+        let pattern = self.current_pattern();
+        if pattern.en_high {
+            fan_en.set_high();
+        } else {
+            fan_en.set_low();
+        }
+        if pattern.vset_high {
+            fan_vset.set_high();
+        } else {
+            fan_vset.set_low();
+        }
+        output::AppliedFanState {
+            command: if pattern.en_high {
+                esp_firmware::fan::FanLevel::High
+            } else {
+                esp_firmware::fan::FanLevel::Off
+            },
+            pwm_pct: if pattern.vset_high { 100 } else { 0 },
+            degraded: true,
+        }
+    }
+
+    fn log_current(&self, reason: &'static str) {
+        let pattern = self.current_pattern();
+        defmt::warn!(
+            "fan: gpio_diag reason={} pattern={} en_high={=bool} vset_high={=bool} interval_ms={=u64}",
+            reason,
+            pattern.label,
+            pattern.en_high,
+            pattern.vset_high,
+            FAN_GPIO_SWEEP_INTERVAL.as_millis()
+        );
+    }
+
+    fn tick(
+        &mut self,
+        now: Instant,
+        fan_en: &mut Flex<'_>,
+        fan_vset: &mut Flex<'_>,
+        tach_pulse_delta: u32,
+    ) -> Option<output::AppliedFanState> {
+        self.window_tach_pulses = self.window_tach_pulses.saturating_add(tach_pulse_delta);
+        if now < self.next_transition_at {
+            return None;
+        }
+
+        let prev = self.current_pattern();
+        let window_ms = FAN_GPIO_SWEEP_INTERVAL.as_millis();
+        defmt::warn!(
+            "fan: gpio_diag window pattern={} tach_pulses={=u32} window_ms={=u64}",
+            prev.label,
+            self.window_tach_pulses,
+            window_ms
+        );
+
+        self.pattern_idx = (self.pattern_idx + 1) % FAN_GPIO_SWEEP_PATTERNS.len();
+        self.next_transition_at = now + FAN_GPIO_SWEEP_INTERVAL;
+        self.window_tach_pulses = 0;
+
+        let applied = self.apply_current(fan_en, fan_vset);
+        self.log_current("step");
+        Some(applied)
+    }
 }
 
 fn latch_fan_vset_fail_safe(fan_vset_fail_safe: &mut Option<Output<'static>>) {
@@ -368,8 +489,22 @@ fn main() -> ! {
     let mut _tps_sync_a = _tps_sync_ledc.channel(channel::Number::Channel0, peripherals.GPIO41);
     let mut _tps_sync_b = _tps_sync_ledc.channel(channel::Number::Channel1, peripherals.GPIO42);
     let mut _fan_pwm_timer1 = _tps_sync_ledc.timer::<LowSpeed>(timer::Number::Timer1);
-    let mut _fan_pwm_channel =
-        _tps_sync_ledc.channel(channel::Number::Channel2, peripherals.GPIO36);
+    let mut fan_pwm_channel = None;
+    let mut fan_vset_gpio = None;
+    if FAN_GPIO_SWEEP_DIAGNOSTIC {
+        let mut pin = Flex::new(peripherals.GPIO36);
+        pin.apply_output_config(
+            &OutputConfig::default()
+                .with_drive_mode(DriveMode::PushPull)
+                .with_pull(Pull::None),
+        );
+        pin.set_low();
+        pin.set_output_enable(true);
+        fan_vset_gpio = Some(pin);
+    } else {
+        fan_pwm_channel =
+            Some(_tps_sync_ledc.channel(channel::Number::Channel2, peripherals.GPIO36));
+    }
 
     let mut tps_sync_ok = true;
     if TPS_SYNC_ENABLE {
@@ -423,28 +558,39 @@ fn main() -> ! {
     }
 
     let mut fan_pwm_ready = false;
-    match _fan_pwm_timer1.configure(timer::config::Config {
-        duty: timer::config::Duty::Duty8Bit,
-        clock_source: timer::LSClockSource::APBClk,
-        frequency: Rate::from_khz(FAN_PWM_FREQ_KHZ),
-    }) {
-        Ok(()) => match _fan_pwm_channel.configure(channel::config::Config {
-            timer: &_fan_pwm_timer1,
-            duty_pct: 0,
-            drive_mode: DriveMode::PushPull,
+    if FAN_GPIO_SWEEP_DIAGNOSTIC {
+        defmt::warn!(
+            "fan: gpio sweep diagnostic enabled interval_ms={=u64} patterns={=u8}",
+            FAN_GPIO_SWEEP_INTERVAL.as_millis(),
+            FAN_GPIO_SWEEP_PATTERNS.len() as u8
+        );
+    } else {
+        match _fan_pwm_timer1.configure(timer::config::Config {
+            duty: timer::config::Duty::Duty8Bit,
+            clock_source: timer::LSClockSource::APBClk,
+            frequency: Rate::from_khz(FAN_PWM_FREQ_KHZ),
         }) {
-            Ok(()) => {
-                fan_pwm_ready = true;
-                defmt::info!(
-                    "fan: pwm ok freq_khz={} duty_pct={} mid_pwm_pct={=u8}",
-                    FAN_PWM_FREQ_KHZ,
-                    0,
-                    FAN_MID_PWM_PCT
-                );
-            }
-            Err(err) => defmt::error!("fan: pwm channel err={=?}", err),
-        },
-        Err(err) => defmt::error!("fan: pwm timer err={=?}", err),
+            Ok(()) => match fan_pwm_channel
+                .as_mut()
+                .expect("fan PWM channel must exist when GPIO sweep is disabled")
+                .configure(channel::config::Config {
+                    timer: &_fan_pwm_timer1,
+                    duty_pct: 0,
+                    drive_mode: DriveMode::PushPull,
+                }) {
+                Ok(()) => {
+                    fan_pwm_ready = true;
+                    defmt::info!(
+                        "fan: pwm ok freq_khz={} duty_pct={} mid_pwm_pct={=u8}",
+                        FAN_PWM_FREQ_KHZ,
+                        0,
+                        FAN_MID_PWM_PCT
+                    );
+                }
+                Err(err) => defmt::error!("fan: pwm channel err={=?}", err),
+            },
+            Err(err) => defmt::error!("fan: pwm timer err={=?}", err),
+        }
     }
 
     // Ensure the system timer is enabled before calling `Instant::now()`.
@@ -601,7 +747,9 @@ fn main() -> ! {
     fan_en.set_low();
     fan_en.set_output_enable(true);
     let mut fan_vset_fail_safe: Option<Output<'static>> = None;
-    if !fan_pwm_ready {
+    if FAN_GPIO_SWEEP_DIAGNOSTIC {
+        fan_vset_fail_safe = None;
+    } else if !fan_pwm_ready {
         // If PWM cannot be configured, at least power the fan continuously so cooling
         // does not silently disappear while the control path keeps logging activity.
         latch_fan_vset_fail_safe(&mut fan_vset_fail_safe);
@@ -1029,10 +1177,26 @@ fn main() -> ! {
         pwm_pct: 100,
         degraded: true,
     };
+    let mut fan_gpio_diag = if FAN_GPIO_SWEEP_DIAGNOSTIC {
+        let now = Instant::now();
+        let diag = FanGpioDiagnostic::new(now);
+        applied_fan_state = diag.apply_current(
+            &mut fan_en,
+            fan_vset_gpio
+                .as_mut()
+                .expect("fan GPIO output must exist in sweep diagnostic mode"),
+        );
+        diag.log_current("boot");
+        Some(diag)
+    } else {
+        None
+    };
     if fan_pwm_ready {
         applied_fan_state = apply_fan_command(
             &mut fan_en,
-            &_fan_pwm_channel,
+            fan_pwm_channel
+                .as_ref()
+                .expect("fan PWM channel must exist when PWM is ready"),
             &mut applied_fan,
             &mut fan_pwm_degraded,
             &mut fan_vset_fail_safe,
@@ -1060,17 +1224,30 @@ fn main() -> ! {
         while start.elapsed() < Duration::from_millis(2_000) {
             let irq_events = irq_tracker.take_delta();
             let fan_telemetry_due = power.tick(&irq_events);
-            if fan_pwm_ready {
+            if let Some(diag) = fan_gpio_diag.as_mut() {
+                if let Some(applied) = diag.tick(
+                    Instant::now(),
+                    &mut fan_en,
+                    fan_vset_gpio
+                        .as_mut()
+                        .expect("fan GPIO output must exist in sweep diagnostic mode"),
+                    irq_events.fan_tach,
+                ) {
+                    applied_fan_state = applied;
+                }
+            } else if fan_pwm_ready {
                 applied_fan_state = apply_fan_command(
                     &mut fan_en,
-                    &_fan_pwm_channel,
+                    fan_pwm_channel
+                        .as_ref()
+                        .expect("fan PWM channel must exist when PWM is ready"),
                     &mut applied_fan,
                     &mut fan_pwm_degraded,
                     &mut fan_vset_fail_safe,
                     power.fan_command(),
                 );
             }
-            if fan_telemetry_due {
+            if fan_telemetry_due && !FAN_GPIO_SWEEP_DIAGNOSTIC {
                 power.log_fan_telemetry(applied_fan_state);
             }
             let now = Instant::now();
