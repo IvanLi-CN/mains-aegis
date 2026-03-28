@@ -244,7 +244,6 @@ enum ChargerPolicyPreviewState {
     Charge500mA,
     Charge100mADcDerated,
     FullLatched,
-    BlockedNoVin,
     BlockedOutputOverload,
     BlockedNoBms,
 }
@@ -323,21 +322,6 @@ fn charger_policy_snapshot_for_state(
             snapshot.bq40z50_pack_mv = Some(16_720);
             snapshot.input_ibus_ma = Some(180);
             snapshot.vin_iin_ma = Some(180);
-        }
-        ChargerPolicyPreviewState::BlockedNoVin => {
-            snapshot.dashboard_detail.charger_status = Some("NODC");
-            snapshot.dashboard_detail.charger_notice = Some("blocked_no_vin");
-            snapshot.dashboard_detail.input_source = Some(DashboardInputSource::Auto);
-            snapshot.fusb302_vbus_present = Some(true);
-            snapshot.input_vbus_mv = Some(20_040);
-            snapshot.input_ibus_ma = Some(320);
-            snapshot.vin_vbus_mv = Some(0);
-            snapshot.vin_iin_ma = Some(0);
-            snapshot.vin_mains_present = Some(false);
-            snapshot.bq25792_ibat_ma = Some(0);
-            snapshot.bq40z50_current_ma = Some(0);
-            snapshot.bq40z50_soc_pct = Some(71);
-            snapshot.bq40z50_pack_mv = Some(15_300);
         }
         ChargerPolicyPreviewState::BlockedOutputOverload => {
             snapshot.dashboard_detail.charger_status = Some("LOAD");
@@ -501,7 +485,6 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardDetailCharger500mA
         | ScenarioArg::DashboardDetailCharger100mADcDerated
         | ScenarioArg::DashboardDetailChargerFullLatched
-        | ScenarioArg::DashboardDetailChargerBlockedNoVin
         | ScenarioArg::DashboardDetailChargerBlockedOutputOverload
         | ScenarioArg::DashboardDetailChargerBlockedNoBms
         | ScenarioArg::TpsTest
@@ -614,7 +597,6 @@ fn run() -> Result<(), String> {
         | ScenarioArg::DashboardDetailCharger500mA
         | ScenarioArg::DashboardDetailCharger100mADcDerated
         | ScenarioArg::DashboardDetailChargerFullLatched
-        | ScenarioArg::DashboardDetailChargerBlockedNoVin
         | ScenarioArg::DashboardDetailChargerBlockedOutputOverload
         | ScenarioArg::DashboardDetailChargerBlockedNoBms => {
             let page = match args.scenario {
@@ -627,7 +609,6 @@ fn run() -> Result<(), String> {
                 | ScenarioArg::DashboardDetailCharger500mA
                 | ScenarioArg::DashboardDetailCharger100mADcDerated
                 | ScenarioArg::DashboardDetailChargerFullLatched
-                | ScenarioArg::DashboardDetailChargerBlockedNoVin
                 | ScenarioArg::DashboardDetailChargerBlockedOutputOverload
                 | ScenarioArg::DashboardDetailChargerBlockedNoBms => DashboardDetailPage::Charger,
                 _ => unreachable!(),
@@ -646,9 +627,6 @@ fn run() -> Result<(), String> {
                 }
                 ScenarioArg::DashboardDetailChargerFullLatched => {
                     charger_policy_snapshot_for_state(ChargerPolicyPreviewState::FullLatched)
-                }
-                ScenarioArg::DashboardDetailChargerBlockedNoVin => {
-                    charger_policy_snapshot_for_state(ChargerPolicyPreviewState::BlockedNoVin)
                 }
                 ScenarioArg::DashboardDetailChargerBlockedOutputOverload => {
                     charger_policy_snapshot_for_state(
@@ -905,7 +883,6 @@ enum ScenarioArg {
     DashboardDetailCharger500mA,
     DashboardDetailCharger100mADcDerated,
     DashboardDetailChargerFullLatched,
-    DashboardDetailChargerBlockedNoVin,
     DashboardDetailChargerBlockedOutputOverload,
     DashboardDetailChargerBlockedNoBms,
     SelfCheckBmsMissingTpsWarn,
@@ -943,9 +920,6 @@ impl ScenarioArg {
             "dashboard-detail-charger-full-latched" => {
                 Ok(Self::DashboardDetailChargerFullLatched)
             }
-            "dashboard-detail-charger-blocked-no-vin" => {
-                Ok(Self::DashboardDetailChargerBlockedNoVin)
-            }
             "dashboard-detail-charger-blocked-output-overload" => {
                 Ok(Self::DashboardDetailChargerBlockedOutputOverload)
             }
@@ -965,7 +939,7 @@ impl ScenarioArg {
             "test-audio" => Ok(Self::TestAudio),
             "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-no-vin|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation)"
             )),
         }
     }
@@ -989,9 +963,6 @@ impl ScenarioArg {
             }
             ScenarioArg::DashboardDetailChargerFullLatched => {
                 "dashboard-detail-charger-full-latched"
-            }
-            ScenarioArg::DashboardDetailChargerBlockedNoVin => {
-                "dashboard-detail-charger-blocked-no-vin"
             }
             ScenarioArg::DashboardDetailChargerBlockedOutputOverload => {
                 "dashboard-detail-charger-blocked-output-overload"
@@ -1094,7 +1065,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-no-vin|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",

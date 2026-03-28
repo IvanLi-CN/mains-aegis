@@ -21,8 +21,7 @@
 - 充电一旦开始，保持到“满充”才停止；满充定义为 `BQ40 FC` 或 `BQ25792 termination_done` 任一成立。
 - 仅在 `DC5025` 独占输入且 `IBUS > 3.0A` 持续 `1s` 时，把 `ICHG` 降到 `100mA`；回落到 `<2.7A` 持续 `5s` 后恢复 `500mA`。
 - `TPS55288` 总输出功率超过 `5W` 时必须停充，功率回落后再按正常阈值重新判定是否开启充电。
-- `DC5025 VIN` 不在线时必须停充；`VIN` 恢复后再按正常阈值重新判定是否开启充电。
-- 扩充运行时日志与前面板 detail 状态，让 `WAIT / CHG500 / CHG100 / FULL / LOCK / NOAC / NODC / TEMP / LOAD` 等状态可直接观察，并优先显示实际 `IBAT_ADC`。
+- 扩充运行时日志与前面板 detail 状态，让 `WAIT / CHG500 / CHG100 / FULL / LOCK / NOAC / TEMP / LOAD` 等状态可直接观察，并优先显示实际 `IBAT_ADC`。
 
 ### Non-goals
 
@@ -56,7 +55,6 @@
 - 满充后进入锁存停充，直到再次跌破启动阈值才允许重启。
 - `DC5025` 独占输入下，`IBUS > 3000mA/1s` 降到 `100mA`，`IBUS < 2700mA/5s` 恢复 `500mA`。
 - `TPS55288` 输出功率超过 `5W` 时立即停充。
-- `DC5025 VIN` 不在线时立即停充；`VIN` 恢复后允许按阈值重新启动。
 - BMS 遥测缺失、`charge_ready=false`、输入缺失、`VBAT_PRESENT=false`、`TS_COLD=true` 或 `TS_HOT=true` 时 fail-safe 禁充。
 
 ### SHOULD
@@ -78,7 +76,6 @@
 - 充电保持期间，即使 `RSOC` 或 `cell_min_mv` 回升到阈值上方，也继续保持 `charging_500ma` 或 `charging_100ma_dc_derated`，直到满充。
 - 满充后策略进入 `full_latched`，固件停充并保持停充；只有当后续再次满足启动阈值才释放锁存。
 - 当输入源明确为 `DcIn` 且 `IBUS` 连续过高时，策略从 `charging_500ma` 切到 `charging_100ma_dc_derated`；当 `IBUS` 低于恢复阈值足够久后，回到 `charging_500ma`。
-- 当 `DC5025 VIN` 不在线时，策略进入 `blocked_no_vin` 并停充；`VIN` 恢复后由 `RSOC / cell_min_mv` 阈值重新决定是否开始充电。
 - 当 `TPS55288` 总输出功率超过 `5W` 时，策略进入 `blocked_output_over_limit` 并停充。
 - 前面板的 charger 电流显示优先取 `BQ25792 IBAT_ADC`，不再把 `ICHG` 设定值伪装成实测电流。
 
@@ -87,7 +84,6 @@
 - `BQ40Z50` 快照不可用、最低单体缺失、`charge_ready=false`、`VBAT_PRESENT=false` 时，策略统一进入 `blocked_no_bms`，停止任何已有的充电保持态。
 - `TS_COLD` 或 `TS_HOT` 时，策略进入 `blocked_temp`。
 - 输入消失时，策略进入 `blocked_no_input`。
-- `VIN` 不在线时，策略进入 `blocked_no_vin`。
 - `TPS55288` 输出功率超过 `5W` 时，策略进入 `blocked_output_over_limit`。
 - 双输入同时在线时，input source 记为 `Auto`，不触发 `DC > 3A -> 100mA` 降档规则。
 - BMS activation / recovery 的强制 `200mA` 唤醒路径保持独立优先级，不被正常充电策略篡改。
@@ -107,7 +103,6 @@ None。
 - Given 输入源为 `Auto`，When `IBUS > 3000mA`，Then 不应用 DC 独占降档。
 - Given `BQ40` 遥测缺失或 `charge_ready=false`，When 进入 charger poll，Then 系统进入 `blocked_no_bms` 并禁止充电。
 - Given `TS_COLD=true` 或 `TS_HOT=true`，When 进入 charger poll，Then 系统进入 `blocked_temp` 并禁止充电。
-- Given `VIN` 掉电，When 进入 charger poll，Then 系统进入 `blocked_no_vin` 并禁止充电。
 - Given `TPS55288` 总输出功率超过 `5W`，When 进入 charger poll，Then 系统进入 `blocked_output_over_limit` 并禁止充电。
 - Given `IBAT_ADC` 可用，When 前面板显示 charger 电流，Then 应显示实测 `IBAT` 而不是目标 `ICHG`。
 

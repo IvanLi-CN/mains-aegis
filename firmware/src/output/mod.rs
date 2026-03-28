@@ -644,7 +644,6 @@ fn tps_output_power_w10(snapshot: &SelfCheckUiSnapshot) -> Option<u32> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChargePolicyState {
     BlockedNoInput,
-    BlockedNoVin,
     BlockedTemp,
     BlockedOutputOverload,
     BlockedNoBms,
@@ -658,7 +657,6 @@ impl ChargePolicyState {
     const fn as_str(self) -> &'static str {
         match self {
             Self::BlockedNoInput => "blocked_no_input",
-            Self::BlockedNoVin => "blocked_no_vin",
             Self::BlockedTemp => "blocked_temp",
             Self::BlockedOutputOverload => "blocked_output_over_limit",
             Self::BlockedNoBms => "blocked_no_bms",
@@ -672,7 +670,6 @@ impl ChargePolicyState {
     const fn ui_status(self) -> &'static str {
         match self {
             Self::BlockedNoInput => "NOAC",
-            Self::BlockedNoVin => "NODC",
             Self::BlockedTemp => "TEMP",
             Self::BlockedOutputOverload => "LOAD",
             Self::BlockedNoBms => "LOCK",
@@ -818,7 +815,6 @@ struct ChargePolicyTelemetry {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ChargePolicyInput {
     input_present: bool,
-    dc_vin_present: bool,
     vbat_present: bool,
     ts_cold: bool,
     ts_hot: bool,
@@ -853,18 +849,6 @@ fn charge_policy_step(
         derate.reset();
         return ChargePolicyDecision {
             state: ChargePolicyState::BlockedNoInput,
-            allow_charge: false,
-            target_ichg_ma: None,
-            start_reason,
-            full_reason: None,
-        };
-    }
-
-    if !input.dc_vin_present {
-        memory.charge_latched = false;
-        derate.reset();
-        return ChargePolicyDecision {
-            state: ChargePolicyState::BlockedNoVin,
             allow_charge: false,
             target_ichg_ma: None,
             start_reason,
@@ -7677,9 +7661,6 @@ where
         let activation_normal_hold_charge = false;
         let boot_diag_hold_charge = false;
         let input_source = detail_input_source(vbus_present, ac1_present, ac2_present);
-        let dc_vin_present = mains_present_from_vin(self.ui_snapshot.vin_vbus_mv)
-            .or(self.ui_snapshot.vin_mains_present)
-            == Some(true);
         let output_power_w10 = tps_output_power_w10(&self.ui_snapshot);
         let charge_policy_telemetry = if activation_pending {
             None
@@ -7713,7 +7694,6 @@ where
                 charge_policy_now_ms,
                 ChargePolicyInput {
                     input_present,
-                    dc_vin_present,
                     vbat_present,
                     ts_cold,
                     ts_hot,
@@ -7917,7 +7897,7 @@ where
 
         if !(auto_force_charge || activation_pending) {
             defmt::info!(
-                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_target_ichg_ma={=?} policy_dc_vin_present={=bool} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
+                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_target_ichg_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
                 self.chg_enabled,
                 self.cfg.force_min_charge,
                 auto_force_charge,
@@ -7934,7 +7914,6 @@ where
                 policy_start_reason.map(ChargeStartReason::as_str),
                 policy_full_reason.map(ChargeFullReason::as_str),
                 policy_target_ichg_ma,
-                dc_vin_present,
                 output_power_w10,
                 self.charge_policy.charge_latched,
                 self.charge_policy.full_latched,
@@ -8855,10 +8834,6 @@ mod tests {
             "NOAC"
         );
         assert_eq!(
-            detail_charger_status_text(ChargePolicyState::BlockedNoVin),
-            "NODC"
-        );
-        assert_eq!(
             detail_charger_status_text(ChargePolicyState::BlockedTemp),
             "TEMP"
         );
@@ -8895,7 +8870,6 @@ mod tests {
     ) -> ChargePolicyInput {
         ChargePolicyInput {
             input_present: true,
-            dc_vin_present: true,
             vbat_present: true,
             ts_cold: false,
             ts_hot: false,
@@ -9138,32 +9112,6 @@ mod tests {
         assert_eq!(decision.state, ChargePolicyState::BlockedNoBms);
         assert!(!memory.charge_latched);
         assert!(!derate.derated);
-    }
-
-    #[test]
-    fn charge_policy_blocks_when_dc_vin_is_absent() {
-        let mut memory = ChargePolicyMemory {
-            charge_latched: true,
-            full_latched: false,
-        };
-        let mut derate = ChargePolicyDerateTracker::default();
-
-        let decision = charge_policy_step(
-            &mut memory,
-            &mut derate,
-            0,
-            ChargePolicyInput {
-                dc_vin_present: false,
-                ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
-                    Some(DashboardInputSource::UsbC),
-                    Some(1_000),
-                )
-            },
-        );
-
-        assert_eq!(decision.state, ChargePolicyState::BlockedNoVin);
-        assert!(!memory.charge_latched);
     }
 
     #[test]
