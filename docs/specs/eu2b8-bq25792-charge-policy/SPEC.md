@@ -144,7 +144,29 @@ None。
 
 ## Visual Evidence
 
-None.
+- `WAIT`: 充电未达到启动阈值，保持待机。
+
+![Charger WAIT](./assets/charger-wait.png)
+
+- `CHG500`: 正常 `500mA` 充电，优先显示实际 `IBAT_ADC`。
+
+![Charger CHG500](./assets/charger-500ma.png)
+
+- `CHG100`: `DC5025` 独占输入且 `IBUS > 3A` 降到 `100mA`。
+
+![Charger CHG100](./assets/charger-100ma-dc-derated.png)
+
+- `FULL`: 满充锁存后停充。
+
+![Charger FULL](./assets/charger-full-latched.png)
+
+- `LOAD`: `TPS55288` 总输出功率超过 `5W` 时停充。
+
+![Charger LOAD](./assets/charger-blocked-output-overload.png)
+
+- `LOCK`: `BMS` 不允许充电或遥测缺失时停充。
+
+![Charger LOCK](./assets/charger-blocked-no-bms.png)
 
 ## 资产晋升（Asset promotion）
 
@@ -160,7 +182,7 @@ None。
 
 ## 方案概述（Approach, high-level）
 
-- 使用轻量的 `charge_policy_step()` 状态机统一处理“开始充电、保持充电、满充停充、异常阻断、`VIN` 阻断、输出过功率阻断、DC 独占降档”。
+- 使用轻量的 `charge_policy_step()` 状态机统一处理“开始充电、保持充电、满充停充、异常阻断、输出过功率阻断、DC 独占降档”。
 - 将策略锁存与降档计时器保存在 `PowerManager` 内部，避免每轮 poll 只靠瞬时条件抖动。
 - 用现有 `dashboard_detail.charger_status / charger_notice` 承载状态 token 与精确状态名，不新增外部协议。
 - 使用 `tools/front-panel-preview/` 复用固件真实渲染链路，生成 owner-facing charger detail 预览图。
