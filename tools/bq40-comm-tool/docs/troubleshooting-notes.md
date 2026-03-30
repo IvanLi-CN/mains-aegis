@@ -82,6 +82,20 @@
   2. 异常时前台运行 `mcu-managerd run`
   3. 重跑 `./bin/run.sh diagnose ...`
 
+### 4.5 主板 DF 修复口径
+
+- 本仓库的主板修复路径固定为：**官方 TI `section1.bin` 做底 + 主板固定 DF 覆盖项**。
+- 工具应通过 `--repair-profile asset-df-mainboard` 进入这条路径，而不是依赖 live DF capture。
+- 这条路径的目标是把主板关键字段稳定写回项目基线：
+  - `DA Configuration = 0x8127`
+  - `Manufacturing Status Init = 0x0378`
+  - `FET Options = 0x18`
+  - `Temperature Enable = 0x1E`
+  - `Temperature Mode = 0x00`
+- 如果器件在进入 ROM 前还能完整回应 MB44 的这三项校准字，工具会额外保留 live 的 `CELL_GAIN` / `PACK_GAIN` / `BAT_GAIN`；只要其中任何一项抓取失败，就整体回退到 asset 默认值，避免写入半套 live、半套默认的混合校准。
+- 这不等于“直接写 TI 默认 DF 字段”。TI 默认值会把器件带回 stock 配置，典型表现就是退回 `3S / cell4=0`。
+- 因此，当器件会掉回 TI stock DF，或 live DF capture 持续 `i2c_nack` 时，支持策略应直接切换到 `asset-df-mainboard`，而不是继续等待 live capture 成功。
+
 ## 5. 可执行排障 SOP（无逻辑分析仪版本）
 
 1. 先确认 managerd 正常：
@@ -98,7 +112,7 @@
    - `canonical` 模式下不得出现 `addr=0x16`
 4. 仅在出现 ROM 签名时执行恢复：
    ```bash
-   ./bin/run.sh recover --mode dual-diag --recover if-rom --force-min-charge true --rom-image r2
+   ./bin/run.sh recover --mode dual-diag --recover if-rom --force-min-charge true --rom-image r2 --repair-profile asset-df-mainboard
    ```
 5. 恢复后必须重新刷回 canonical 并再次诊断，然后用同一份 canonical 日志做离线 verify。
 

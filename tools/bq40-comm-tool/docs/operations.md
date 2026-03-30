@@ -35,10 +35,10 @@ What to inspect:
 
 ## 2) Recover (state-changing path)
 
-Only run recover after canonical diagnose fails and the monitor log proves `stage=rom_mode_detected`. The supported repo workflow is `dual-diag + if-rom + force-min-charge`; do not escalate to `force` when ROM signature is absent.
+Only run recover after canonical diagnose fails and the monitor log proves `stage=rom_mode_detected`. The supported repo workflow is `dual-diag + if-rom + force-min-charge + asset-df-mainboard`; do not escalate to `force` when ROM signature is absent.
 
 ```bash
-./bin/run.sh recover --mode dual-diag --recover if-rom --force-min-charge true --rom-image r2
+./bin/run.sh recover --mode dual-diag --recover if-rom --force-min-charge true --rom-image r2 --repair-profile asset-df-mainboard
 ```
 
 Policy:
@@ -48,6 +48,13 @@ Policy:
 - `--recover if-rom`: recover only when ROM signature is detected
 - `--recover force`: debug-only escape hatch; not part of the supported repo recovery sequence
 - `--rom-image r2|r3|r5`: select the ROM recovery image explicitly when the bench target is not the default R2 pack
+- `--repair-profile asset-df-mainboard`: use the official TI `section1.bin` as the DF base, then apply this board's fixed DF overrides before ROM flash
+
+Mainboard policy:
+- `asset-df-mainboard` is the supported board-repair path for this repository
+- it does not depend on live MB44 DF capture, so a chip that falls back to TI stock DF or rejects live capture can still be repaired onto the board's 4S baseline
+- when the pack still answers MB44 in app mode, the tool preserves live `CELL_GAIN` / `PACK_GAIN` / `BAT_GAIN` on top of the official asset base only if all three words are captured; otherwise it falls back to the asset defaults instead of flashing a mixed live/default calibration set
+- it is intentionally different from "writing TI default DF fields"; the tool writes an official DF section base plus project-specific overrides
 
 ## 3) Verify (offline)
 
@@ -61,7 +68,7 @@ Notes:
 ## 4) Supported sequence
 
 1. `diagnose --mode canonical --force-min-charge true`
-2. If the log contains `stage=rom_mode_detected`, run `recover --mode dual-diag --recover if-rom --force-min-charge true`
+2. If the log contains `stage=rom_mode_detected`, run `recover --mode dual-diag --recover if-rom --force-min-charge true --repair-profile asset-df-mainboard`
 3. Re-flash canonical firmware and re-run `diagnose --mode canonical --force-min-charge true`
 4. Run `verify --mode canonical --monitor-file <canonical log>` on the final canonical log
 

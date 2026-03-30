@@ -222,23 +222,23 @@ const BMS_DF_ADDR_CELL_GAIN: u16 = 0x4000;
 const BMS_DF_ADDR_PACK_GAIN: u16 = 0x4002;
 const BMS_DF_ADDR_BAT_GAIN: u16 = 0x4004;
 const BMS_DF_AFE_PROTECTION_CONTROL_DEFAULT: u8 = 0x70;
-#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
 const BMS_DF_MFG_STATUS_INIT_DEFAULT: u16 = 0x0378;
-#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
 const BMS_DF_FET_OPTIONS_DEFAULT: u8 = 0x18;
-#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
 const BMS_DF_DA_CONFIGURATION_MAINBOARD: u16 = 0x8127;
-#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
 const BMS_DF_TEMPERATURE_ENABLE_MAINBOARD: u8 = 0x1E;
-#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
 const BMS_DF_TEMPERATURE_MODE_MAINBOARD: u8 = 0x00;
-#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
 const BMS_DF_SBS_GAUGING_CONFIGURATION_DEFAULT: u8 = 0x05;
-#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
 const BMS_DF_SBS_CONFIGURATION_DEFAULT: u8 = 0x20;
-#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
 const BMS_DF_AUTH_CONFIG_DEFAULT: u8 = 0x00;
-#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
 const BMS_DF_IT_GAUGING_CONFIGURATION_DEFAULT: u16 = 0xD0FE;
 const BMS_DF_REPLY_LEN_WITH_ADDR: u8 = 34;
 const BMS_MFG_STATUS_CAL_TEST: u32 = 1 << 15;
@@ -291,6 +291,21 @@ const BMS_ROM_SECTION1_IMAGE: &[u8] =
     include_bytes!("../../assets/bq40z50_r2_v2_11_build_52/section1.bin");
 #[cfg(all(not(feature = "bms-rom-image-r5"), not(feature = "bms-rom-image-r3")))]
 const BMS_ROM_SECTION1_USED_LEN: usize = 0x0DEC;
+#[derive(Clone, Copy, Default)]
+struct BmsDfCalibrationPreservation {
+    cell_gain: Option<u16>,
+    pack_gain: Option<u16>,
+    bat_gain: Option<u16>,
+}
+
+impl BmsDfCalibrationPreservation {
+    fn preserved_count(&self) -> u8 {
+        self.cell_gain.is_some() as u8
+            + self.pack_gain.is_some() as u8
+            + self.bat_gain.is_some() as u8
+    }
+}
+
 #[cfg(feature = "bms-rom-image-r5")]
 const BMS_ROM_SECTION2_IMAGE: &[u8] =
     include_bytes!("../../assets/bq40z50_r5_v5_05_build_96/section2.bin");
@@ -771,34 +786,8 @@ where
     Err(last_err)
 }
 
-#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
-fn read_bms_df_bytes_via_mb44<I2C>(
-    i2c: &mut I2C,
-    addr: u8,
-    df_addr: u16,
-    out: &mut [u8],
-) -> Result<(), bq40z50::BmsDiagError>
-where
-    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
-{
-    let mut copied = 0usize;
-    while copied < out.len() {
-        let window_addr = df_addr.wrapping_add(copied as u16);
-        let (_, raw) = read_bms_df_block_via_mb44(i2c, addr, window_addr)?;
-        let payload_len = raw.payload_len as usize;
-        if payload_len == 0 {
-            return Err(bq40z50::BmsDiagError::BadBlockLen);
-        }
-        let take = core::cmp::min(payload_len, out.len() - copied);
-        out[copied..(copied + take)].copy_from_slice(&raw.payload[..take]);
-        copied += take;
-        spin_delay(BMS_MAC_WRITE_SETTLE);
-    }
-    Ok(())
-}
-
-#[cfg(feature = "bms-rom-repair-live-df-mainboard")]
-fn patch_bms_live_df_mainboard(section1: &mut [u8]) {
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+fn patch_bms_df_section1_mainboard(section1: &mut [u8], calibration: BmsDfCalibrationPreservation) {
     let base = 0x4000u16;
     let patch_u8 = |buf: &mut [u8], addr: u16, value: u8| {
         let off = addr.wrapping_sub(base) as usize;
@@ -864,6 +853,15 @@ fn patch_bms_live_df_mainboard(section1: &mut [u8]) {
         BMS_DF_ADDR_AFE_PROTECTION_CONTROL,
         BMS_DF_AFE_PROTECTION_CONTROL_DEFAULT,
     );
+    if let Some(value) = calibration.cell_gain {
+        patch_u16(section1, BMS_DF_ADDR_CELL_GAIN, value);
+    }
+    if let Some(value) = calibration.pack_gain {
+        patch_u16(section1, BMS_DF_ADDR_PACK_GAIN, value);
+    }
+    if let Some(value) = calibration.bat_gain {
+        patch_u16(section1, BMS_DF_ADDR_BAT_GAIN, value);
+    }
 }
 
 fn read_bms_da_configuration<I2C>(i2c: &mut I2C, addr: u8) -> Result<u16, bq40z50::BmsDiagError>
@@ -5057,9 +5055,9 @@ pub struct PowerManager<'d, I2C> {
     bms_post_flash_resume_started_at: Option<Instant>,
     bms_post_flash_reexit_attempted: bool,
     bms_last_working_info_at: Option<Instant>,
-    #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+    #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
     bms_rom_df_section1_valid: bool,
-    #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+    #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
     bms_rom_df_section1: [u8; BMS_ROM_SECTION1_USED_LEN],
 }
 
@@ -5234,9 +5232,9 @@ where
             bms_post_flash_resume_started_at: None,
             bms_post_flash_reexit_attempted: false,
             bms_last_working_info_at: None,
-            #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+            #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
             bms_rom_df_section1_valid: false,
-            #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+            #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
             bms_rom_df_section1: [0u8; BMS_ROM_SECTION1_USED_LEN],
         }
     }
@@ -5421,56 +5419,109 @@ where
         }
     }
 
-    #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
-    fn capture_bms_rom_df_section1_mainboard(&mut self, addr: u8, quiet: bool) {
-        self.bms_rom_df_section1_valid = false;
+    #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+    fn capture_bms_rom_df_calibration_live(
+        &mut self,
+        addr: u8,
+        quiet: bool,
+    ) -> BmsDfCalibrationPreservation {
         let mut last_err = None;
-        for _attempt in 0..3 {
-            match read_bms_df_bytes_via_mb44(
-                &mut self.i2c,
-                addr,
-                0x4000,
-                &mut self.bms_rom_df_section1[..],
-            ) {
-                Ok(()) => {
-                    patch_bms_live_df_mainboard(&mut self.bms_rom_df_section1[..]);
-                    self.bms_rom_df_section1_valid = true;
-                    if !quiet {
-                        let da_off = (BMS_DF_ADDR_DA_CONFIGURATION - 0x4000) as usize;
-                        let da = u16::from_le_bytes([
-                            self.bms_rom_df_section1[da_off],
-                            self.bms_rom_df_section1[da_off + 1],
-                        ]);
-                        defmt::warn!(
-                            "bms_df_capture: addr=0x{=u8:x} mode=live_mainboard da_cfg=0x{=u16:x} sbs_gauging=0x{=u8:x} auth=0x{=u8:x} temp_enable=0x{=u8:x} temp_mode=0x{=u8:x} afe=0x{=u8:x}",
-                            addr,
-                            da,
-                            self.bms_rom_df_section1[(BMS_DF_ADDR_SBS_GAUGING_CONFIGURATION - 0x4000)
-                                as usize],
-                            self.bms_rom_df_section1[(BMS_DF_ADDR_AUTH_CONFIG - 0x4000) as usize],
-                            self.bms_rom_df_section1[(BMS_DF_ADDR_TEMPERATURE_ENABLE - 0x4000)
-                                as usize],
-                            self.bms_rom_df_section1[(BMS_DF_ADDR_TEMPERATURE_MODE - 0x4000)
-                                as usize],
-                            self.bms_rom_df_section1[(BMS_DF_ADDR_AFE_PROTECTION_CONTROL - 0x4000)
-                                as usize],
-                        );
-                    }
-                    return;
+        let mut best_partial = BmsDfCalibrationPreservation::default();
+        let mut best_partial_count = 0u8;
+
+        for attempt in 0..3 {
+            let mut calibration = BmsDfCalibrationPreservation::default();
+
+            match read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_CELL_GAIN) {
+                Ok(value) => calibration.cell_gain = Some(value),
+                Err(e) => last_err = Some(e),
+            }
+            spin_delay(BMS_WORD_GAP);
+            match read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_PACK_GAIN) {
+                Ok(value) => calibration.pack_gain = Some(value),
+                Err(e) => last_err = Some(e),
+            }
+            spin_delay(BMS_WORD_GAP);
+            match read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_BAT_GAIN) {
+                Ok(value) => calibration.bat_gain = Some(value),
+                Err(e) => last_err = Some(e),
+            }
+
+            let preserved = calibration.preserved_count();
+            if preserved == 3 {
+                if !quiet {
+                    defmt::warn!(
+                        "bms_df_preserve: addr=0x{=u8:x} mode=live_calibration cell_gain=0x{=u16:x} pack_gain=0x{=u16:x} bat_gain=0x{=u16:x}",
+                        addr,
+                        calibration.cell_gain.unwrap_or(0),
+                        calibration.pack_gain.unwrap_or(0),
+                        calibration.bat_gain.unwrap_or(0),
+                    );
                 }
-                Err(e) => {
-                    last_err = Some(e);
-                    spin_delay(BMS_MAC_WRITE_SETTLE);
-                }
+                return calibration;
+            }
+
+            if preserved > best_partial_count {
+                best_partial = calibration;
+                best_partial_count = preserved;
+            }
+
+            if attempt < 2 {
+                spin_delay(BMS_MAC_WRITE_SETTLE);
             }
         }
-        let e = last_err.unwrap_or(bq40z50::BmsDiagError::I2cNack);
-        self.bms_rom_df_section1_valid = false;
+
         if !quiet {
+            if best_partial_count > 0 {
+                defmt::warn!(
+                    "bms_df_preserve: addr=0x{=u8:x} mode=asset_default reason=partial preserved={=u8} cell={=bool} pack={=bool} bat={=bool}",
+                    addr,
+                    best_partial_count,
+                    best_partial.cell_gain.is_some(),
+                    best_partial.pack_gain.is_some(),
+                    best_partial.bat_gain.is_some(),
+                );
+            } else if let Some(e) = last_err {
+                defmt::warn!(
+                    "bms_df_preserve: addr=0x{=u8:x} mode=asset_default err={}",
+                    addr,
+                    e,
+                );
+            }
+        }
+
+        BmsDfCalibrationPreservation::default()
+    }
+
+    #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+    fn prepare_bms_rom_df_section1_asset_mainboard(
+        &mut self,
+        addr: u8,
+        quiet: bool,
+        calibration: BmsDfCalibrationPreservation,
+    ) {
+        self.bms_rom_df_section1_valid = false;
+        self.bms_rom_df_section1[..]
+            .copy_from_slice(&BMS_ROM_SECTION1_IMAGE[..BMS_ROM_SECTION1_USED_LEN]);
+        patch_bms_df_section1_mainboard(&mut self.bms_rom_df_section1[..], calibration);
+        self.bms_rom_df_section1_valid = true;
+        if !quiet {
+            let da_off = (BMS_DF_ADDR_DA_CONFIGURATION - 0x4000) as usize;
+            let da = u16::from_le_bytes([
+                self.bms_rom_df_section1[da_off],
+                self.bms_rom_df_section1[da_off + 1],
+            ]);
             defmt::warn!(
-                "bms_df_capture: addr=0x{=u8:x} mode=live_df_required err={}",
+                "bms_df_prepare: addr=0x{=u8:x} mode=asset_mainboard da_cfg=0x{=u16:x} sbs_gauging=0x{=u8:x} auth=0x{=u8:x} temp_enable=0x{=u8:x} temp_mode=0x{=u8:x} afe=0x{=u8:x}",
                 addr,
-                e,
+                da,
+                self.bms_rom_df_section1[(BMS_DF_ADDR_SBS_GAUGING_CONFIGURATION - 0x4000)
+                    as usize],
+                self.bms_rom_df_section1[(BMS_DF_ADDR_AUTH_CONFIG - 0x4000) as usize],
+                self.bms_rom_df_section1[(BMS_DF_ADDR_TEMPERATURE_ENABLE - 0x4000) as usize],
+                self.bms_rom_df_section1[(BMS_DF_ADDR_TEMPERATURE_MODE - 0x4000) as usize],
+                self.bms_rom_df_section1[(BMS_DF_ADDR_AFE_PROTECTION_CONTROL - 0x4000)
+                    as usize],
             );
         }
     }
@@ -5488,6 +5539,19 @@ where
     }
 
     fn attempt_bq40_rom_flash(&mut self, addr: u8, quiet: bool) {
+        #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+        let calibration = self.capture_bms_rom_df_calibration_live(addr, quiet);
+        #[cfg(not(feature = "bms-rom-repair-asset-df-mainboard"))]
+        let calibration = BmsDfCalibrationPreservation::default();
+        self.attempt_bq40_rom_flash_with_calibration(addr, quiet, calibration);
+    }
+
+    fn attempt_bq40_rom_flash_with_calibration(
+        &mut self,
+        addr: u8,
+        quiet: bool,
+        calibration: BmsDfCalibrationPreservation,
+    ) {
         let now = Instant::now();
         let recover_quiet = false;
         if !self.rom_recover_due(addr, now) {
@@ -5503,18 +5567,19 @@ where
         }
 
         self.clear_post_flash_resume();
-        #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+        #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
         {
-            self.capture_bms_rom_df_section1_mainboard(addr, recover_quiet);
-            if !self.bms_rom_df_section1_valid {
-                if !recover_quiet {
-                    defmt::warn!(
-                        "bms_diag: addr=0x{=u8:x} stage=rom_flash_live_df_capture_required",
-                        addr
-                    );
-                }
-                return;
+            self.prepare_bms_rom_df_section1_asset_mainboard(addr, recover_quiet, calibration);
+        }
+        #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+        if !self.bms_rom_df_section1_valid {
+            if !recover_quiet {
+                defmt::warn!(
+                    "bms_diag: addr=0x{=u8:x} stage=rom_flash_asset_df_prepare_required",
+                    addr
+                );
             }
+            return;
         }
         if let Err(e) = self.maybe_disable_charger_watchdog_for_recovery(recover_quiet) {
             self.clear_post_flash_resume();
@@ -5533,13 +5598,13 @@ where
                 // Only commit to the "recover attempt" backoff once we truly start a ROM flash.
                 self.note_rom_recover_attempt(addr, Instant::now());
                 self.bms_rom_flash_attempted = true;
-                #[cfg(feature = "bms-rom-repair-live-df-mainboard")]
+                #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
                 let section1_override = if self.bms_rom_df_section1_valid {
                     Some(&self.bms_rom_df_section1[..])
                 } else {
                     None
                 };
-                #[cfg(not(feature = "bms-rom-repair-live-df-mainboard"))]
+                #[cfg(not(feature = "bms-rom-repair-asset-df-mainboard"))]
                 let section1_override: Option<&[u8]> = None;
                 match run_bms_rom_flash_recover_sequence(
                     &mut self.i2c,
@@ -6510,6 +6575,7 @@ where
                     last_recover_at.map_or(true, |last| now >= last + BMS_ROM_RECOVER_MIN_INTERVAL);
                 if should_recover {
                     let mut rom_mode_ready = false;
+                    let mut live_df_calibration = BmsDfCalibrationPreservation::default();
                     if self.bms_rom_flash_attempted {
                         match read_u16_with_optional_pec(
                             &mut self.i2c,
@@ -6546,6 +6612,11 @@ where
                                     self.cfg.bms_address_mode,
                                     bq40z50::BmsAddressMode::DualProbeDiag
                                 ) {
+                                    #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+                                    {
+                                        live_df_calibration =
+                                            self.capture_bms_rom_df_calibration_live(addr, quiet);
+                                    }
                                     match maybe_enter_bms_rom_mode_diag(&mut self.i2c, addr, quiet)
                                     {
                                         Ok(true) => {
@@ -6562,7 +6633,11 @@ where
                                             // signature is not observed.
                                             if blind_force_recover && !self.bms_rom_flash_attempted
                                             {
-                                                self.attempt_bq40_rom_flash(addr, quiet);
+                                                self.attempt_bq40_rom_flash_with_calibration(
+                                                    addr,
+                                                    quiet,
+                                                    live_df_calibration,
+                                                );
                                             }
                                         }
                                         Err(e) => {
@@ -6593,6 +6668,11 @@ where
                                     self.cfg.bms_address_mode,
                                     bq40z50::BmsAddressMode::DualProbeDiag
                                 ) {
+                                    #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+                                    {
+                                        live_df_calibration =
+                                            self.capture_bms_rom_df_calibration_live(addr, quiet);
+                                    }
                                     match maybe_enter_bms_rom_mode_diag(&mut self.i2c, addr, quiet)
                                     {
                                         Ok(true) => {
@@ -6607,7 +6687,11 @@ where
                                         Ok(false) => {
                                             if blind_force_recover && !self.bms_rom_flash_attempted
                                             {
-                                                self.attempt_bq40_rom_flash(addr, quiet);
+                                                self.attempt_bq40_rom_flash_with_calibration(
+                                                    addr,
+                                                    quiet,
+                                                    live_df_calibration,
+                                                );
                                             }
                                         }
                                         Err(enter_err) => {
@@ -6638,7 +6722,11 @@ where
                             bq40z50::BmsAddressMode::DualProbeDiag
                         ) {
                             if !self.bms_rom_flash_attempted {
-                                self.attempt_bq40_rom_flash(addr, quiet);
+                                self.attempt_bq40_rom_flash_with_calibration(
+                                    addr,
+                                    quiet,
+                                    live_df_calibration,
+                                );
                             } else if should_recover && force_rom_recover {
                                 if !quiet {
                                     defmt::warn!(
@@ -6646,7 +6734,11 @@ where
                                         addr
                                     );
                                 }
-                                self.attempt_bq40_rom_flash(addr, quiet);
+                                self.attempt_bq40_rom_flash_with_calibration(
+                                    addr,
+                                    quiet,
+                                    live_df_calibration,
+                                );
                             }
                         }
 
