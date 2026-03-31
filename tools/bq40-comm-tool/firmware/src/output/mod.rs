@@ -3967,6 +3967,9 @@ fn probe_bq40z50_after_wake_touch<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
+    let mut wake_calibration = BmsDfCalibrationPreservation::default();
+    let mut wake_calibration_attempted = false;
+
     match touch_then_read_wake_probe(
         i2c,
         addr,
@@ -4001,6 +4004,13 @@ where
                     quiet,
                 ) {
                     Ok(temp) if (2_000..=4_300).contains(&temp) => {
+                        capture_wake_window_live_calibration_once(
+                            i2c,
+                            addr,
+                            quiet,
+                            &mut wake_calibration_attempted,
+                            &mut wake_calibration,
+                        );
                         if confirm_bq40_wake_snapshot(
                             i2c,
                             addr,
@@ -4110,6 +4120,15 @@ where
                                     temp
                                 );
                             }
+                            if (2_000..=4_300).contains(&temp) {
+                                capture_wake_window_live_calibration_once(
+                                    i2c,
+                                    addr,
+                                    quiet,
+                                    &mut wake_calibration_attempted,
+                                    &mut wake_calibration,
+                                );
+                            }
                             if (2_000..=4_300).contains(&temp)
                                 && confirm_bq40_wake_snapshot(
                                     i2c,
@@ -4150,10 +4169,40 @@ where
                 delay_ms
             );
         }
-        return Ok(WakeWindowProbeResult::EnteredRom(addr));
+        return Ok(WakeWindowProbeResult::EnteredRom(addr, wake_calibration));
     }
 
     Ok(WakeWindowProbeResult::Miss)
+}
+
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+fn capture_wake_window_live_calibration_once<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    quiet: bool,
+    attempted: &mut bool,
+    calibration: &mut BmsDfCalibrationPreservation,
+) where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if *attempted {
+        return;
+    }
+    *attempted = true;
+    *calibration = capture_bms_rom_df_calibration_live_i2c(i2c, addr, quiet);
+}
+
+#[cfg(not(feature = "bms-rom-repair-asset-df-mainboard"))]
+fn capture_wake_window_live_calibration_once<I2C>(
+    _i2c: &mut I2C,
+    _addr: u8,
+    _quiet: bool,
+    attempted: &mut bool,
+    _calibration: &mut BmsDfCalibrationPreservation,
+) where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    *attempted = true;
 }
 
 fn maybe_enter_bms_rom_mode_diag<I2C>(
@@ -5058,7 +5107,7 @@ enum WakeWindowProbeResult {
     Miss,
     Working(u8),
     Rom(u8),
-    EnteredRom(u8),
+    EnteredRom(u8, BmsDfCalibrationPreservation),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -5756,8 +5805,8 @@ where
                             Ok(WakeWindowProbeResult::Rom(found)) => {
                                 return Some(WakeWindowProbeResult::Rom(found));
                             }
-                            Ok(WakeWindowProbeResult::EnteredRom(found)) => {
-                                return Some(WakeWindowProbeResult::EnteredRom(found));
+                            Ok(WakeWindowProbeResult::EnteredRom(found, calibration)) => {
+                                return Some(WakeWindowProbeResult::EnteredRom(found, calibration));
                             }
                             Ok(WakeWindowProbeResult::Miss) => {}
                             Err(e) => {
@@ -6077,9 +6126,9 @@ where
                             }
                         }
                     }
-                    WakeWindowProbeResult::EnteredRom(addr) => {
+                    WakeWindowProbeResult::EnteredRom(addr, calibration) => {
                         if self.cfg.bms_rom_recover && self.bms_post_flash_resume_addr.is_none() {
-                            self.attempt_bq40_rom_flash(addr, false);
+                            self.attempt_bq40_rom_flash_with_calibration(addr, false, calibration);
                             if self.bms_post_flash_resume_addr.is_some() {
                                 return true;
                             }
@@ -6179,10 +6228,14 @@ where
                                 }
                             }
                         }
-                        WakeWindowProbeResult::EnteredRom(addr) => {
+                        WakeWindowProbeResult::EnteredRom(addr, calibration) => {
                             if self.cfg.bms_rom_recover && self.bms_post_flash_resume_addr.is_none()
                             {
-                                self.attempt_bq40_rom_flash(addr, quiet);
+                                self.attempt_bq40_rom_flash_with_calibration(
+                                    addr,
+                                    quiet,
+                                    calibration,
+                                );
                                 if self.bms_post_flash_resume_addr.is_some() {
                                     return true;
                                 }
@@ -7201,7 +7254,7 @@ where
                         }
                         return WakeWindowProbeResult::Rom(addr);
                     }
-                    Ok(WakeWindowProbeResult::EnteredRom(addr)) => {
+                    Ok(WakeWindowProbeResult::EnteredRom(addr, calibration)) => {
                         if !quiet {
                             defmt::warn!(
                                 "bms_diag: stage=wake_window_rom_entered addr=0x{=u8:x} probe_mode={} step={=u8} delay_ms={=u64}",
@@ -7211,7 +7264,7 @@ where
                                 *delay_ms
                             );
                         }
-                        return WakeWindowProbeResult::EnteredRom(addr);
+                        return WakeWindowProbeResult::EnteredRom(addr, calibration);
                     }
                     Ok(WakeWindowProbeResult::Miss) => {}
                     Err(e) => {
