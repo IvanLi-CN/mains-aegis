@@ -133,7 +133,7 @@ esac
 case "$repair_profile" in
   none) ;;
   afe-default) features+=("bms-df-repair-afe-default") ;;
-  asset-df-mainboard) features+=("bms-rom-repair-asset-df-mainboard") ;;
+  live-df-mainboard|asset-df-mainboard) features+=("bms-rom-repair-asset-df-mainboard") ;;
   *)
     echo "Invalid --repair-profile: $repair_profile" >&2
     exit 9

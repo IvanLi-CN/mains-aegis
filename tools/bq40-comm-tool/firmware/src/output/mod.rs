@@ -5132,8 +5132,6 @@ pub struct PowerManager<'d, I2C> {
     bms_post_flash_reexit_attempted: bool,
     bms_last_working_info_at: Option<Instant>,
     #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
-    bms_last_live_df_calibration: BmsDfCalibrationPreservation,
-    #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
     bms_rom_df_section1_valid: bool,
     #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
     bms_rom_df_section1: [u8; BMS_ROM_SECTION1_USED_LEN],
@@ -5310,8 +5308,6 @@ where
             bms_post_flash_resume_started_at: None,
             bms_post_flash_reexit_attempted: false,
             bms_last_working_info_at: None,
-            #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
-            bms_last_live_df_calibration: BmsDfCalibrationPreservation::default(),
             #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
             bms_rom_df_section1_valid: false,
             #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
@@ -5505,11 +5501,7 @@ where
         addr: u8,
         quiet: bool,
     ) -> BmsDfCalibrationPreservation {
-        let calibration = capture_bms_rom_df_calibration_live_i2c(&mut self.i2c, addr, quiet);
-        if calibration.preserved_count() == 3 {
-            self.bms_last_live_df_calibration = calibration;
-        }
-        calibration
+        capture_bms_rom_df_calibration_live_i2c(&mut self.i2c, addr, quiet)
     }
 
     #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
@@ -5558,26 +5550,20 @@ where
     }
 
     fn attempt_bq40_rom_flash(&mut self, addr: u8, quiet: bool) {
-        #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
-        let calibration = {
-            let live_calibration = self.capture_bms_rom_df_calibration_live(addr, quiet);
-            if live_calibration.preserved_count() == 3 {
-                live_calibration
-            } else if self.bms_last_live_df_calibration.preserved_count() == 3 {
-                if !quiet {
-                    defmt::warn!(
-                        "bms_df_preserve: addr=0x{=u8:x} mode=cached_live_calibration cell_gain=0x{=u16:x} pack_gain=0x{=u16:x} bat_gain=0x{=u16:x}",
-                        addr,
-                        self.bms_last_live_df_calibration.cell_gain.unwrap_or(0),
-                        self.bms_last_live_df_calibration.pack_gain.unwrap_or(0),
-                        self.bms_last_live_df_calibration.bat_gain.unwrap_or(0),
-                    );
-                }
-                self.bms_last_live_df_calibration
-            } else {
-                live_calibration
+        let now = Instant::now();
+        if !self.rom_recover_due(addr, now) {
+            if !quiet {
+                defmt::warn!(
+                    "bms_flow: stage={} addr=0x{=u8:x} recover=deferred wait_ms={=u64}",
+                    self.bms_startup_stage.as_str(),
+                    addr,
+                    BMS_ROM_RECOVER_MIN_INTERVAL.as_millis() as u64
+                );
             }
-        };
+            return;
+        }
+        #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+        let calibration = self.capture_bms_rom_df_calibration_live(addr, quiet);
         #[cfg(not(feature = "bms-rom-repair-asset-df-mainboard"))]
         let calibration = BmsDfCalibrationPreservation::default();
         self.attempt_bq40_rom_flash_with_calibration(addr, quiet, calibration);
