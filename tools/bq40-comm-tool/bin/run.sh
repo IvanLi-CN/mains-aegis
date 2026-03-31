@@ -65,8 +65,8 @@ MIN_DURATION_RECOVER_SEC=0
 usage() {
   cat <<USAGE
 Usage:
-  $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default|live-df-mainboard] [--monitor-file PATH] [--report-out DIR]
-  $(basename "$0") recover  [--mode dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default|live-df-mainboard] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default|asset-df-mainboard] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") recover  [--mode dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default|asset-df-mainboard] [--monitor-file PATH] [--report-out DIR]
   $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--report-out DIR]
 USAGE
 }
@@ -336,7 +336,7 @@ else
   esac
 
   case "$repair_profile" in
-    none|afe-default|live-df-mainboard) ;;
+    none|afe-default|asset-df-mainboard) ;;
     *)
       echo "Invalid --repair-profile: $repair_profile" >&2
       exit 17
