@@ -336,7 +336,7 @@ else
   esac
 
   case "$repair_profile" in
-    none|afe-default|live-df-mainboard|asset-df-mainboard) ;;
+    none|afe-default|asset-df-mainboard) ;;
     *)
       echo "Invalid --repair-profile: $repair_profile" >&2
       exit 17
