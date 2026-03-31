@@ -291,7 +291,7 @@ const BMS_ROM_SECTION1_IMAGE: &[u8] =
     include_bytes!("../../assets/bq40z50_r2_v2_11_build_52/section1.bin");
 #[cfg(all(not(feature = "bms-rom-image-r5"), not(feature = "bms-rom-image-r3")))]
 const BMS_ROM_SECTION1_USED_LEN: usize = 0x0DEC;
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct BmsDfCalibrationPreservation {
     cell_gain: Option<u16>,
     pack_gain: Option<u16>,
@@ -862,6 +862,82 @@ fn patch_bms_df_section1_mainboard(section1: &mut [u8], calibration: BmsDfCalibr
     if let Some(value) = calibration.bat_gain {
         patch_u16(section1, BMS_DF_ADDR_BAT_GAIN, value);
     }
+}
+
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+fn capture_bms_rom_df_calibration_live_i2c<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    quiet: bool,
+) -> BmsDfCalibrationPreservation
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut aggregate = BmsDfCalibrationPreservation::default();
+    let mut last_err = None;
+
+    for attempt in 0..3 {
+        if aggregate.cell_gain.is_none() {
+            match read_bms_df_u16_via_mb44(i2c, addr, BMS_DF_ADDR_CELL_GAIN) {
+                Ok(value) => aggregate.cell_gain = Some(value),
+                Err(e) => last_err = Some(e),
+            }
+            spin_delay(BMS_WORD_GAP);
+        }
+        if aggregate.pack_gain.is_none() {
+            match read_bms_df_u16_via_mb44(i2c, addr, BMS_DF_ADDR_PACK_GAIN) {
+                Ok(value) => aggregate.pack_gain = Some(value),
+                Err(e) => last_err = Some(e),
+            }
+            spin_delay(BMS_WORD_GAP);
+        }
+        if aggregate.bat_gain.is_none() {
+            match read_bms_df_u16_via_mb44(i2c, addr, BMS_DF_ADDR_BAT_GAIN) {
+                Ok(value) => aggregate.bat_gain = Some(value),
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        let preserved = aggregate.preserved_count();
+        if preserved == 3 {
+            if !quiet {
+                defmt::warn!(
+                    "bms_df_preserve: addr=0x{=u8:x} mode=live_calibration cell_gain=0x{=u16:x} pack_gain=0x{=u16:x} bat_gain=0x{=u16:x}",
+                    addr,
+                    aggregate.cell_gain.unwrap_or(0),
+                    aggregate.pack_gain.unwrap_or(0),
+                    aggregate.bat_gain.unwrap_or(0),
+                );
+            }
+            return aggregate;
+        }
+
+        if attempt < 2 {
+            spin_delay(BMS_MAC_WRITE_SETTLE);
+        }
+    }
+
+    if !quiet {
+        let preserved = aggregate.preserved_count();
+        if preserved > 0 {
+            defmt::warn!(
+                "bms_df_preserve: addr=0x{=u8:x} mode=asset_default reason=partial preserved={=u8} cell={=bool} pack={=bool} bat={=bool}",
+                addr,
+                preserved,
+                aggregate.cell_gain.is_some(),
+                aggregate.pack_gain.is_some(),
+                aggregate.bat_gain.is_some(),
+            );
+        } else if let Some(e) = last_err {
+            defmt::warn!(
+                "bms_df_preserve: addr=0x{=u8:x} mode=asset_default err={}",
+                addr,
+                e,
+            );
+        }
+    }
+
+    BmsDfCalibrationPreservation::default()
 }
 
 fn read_bms_da_configuration<I2C>(i2c: &mut I2C, addr: u8) -> Result<u16, bq40z50::BmsDiagError>
@@ -4065,6 +4141,11 @@ where
         }
     }
 
+    #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+    let calibration = capture_bms_rom_df_calibration_live_i2c(i2c, addr, quiet);
+    #[cfg(not(feature = "bms-rom-repair-asset-df-mainboard"))]
+    let calibration = BmsDfCalibrationPreservation::default();
+
     if try_enter_bms_rom_mode_wake_diag(i2c, addr, step, delay_ms, quiet)? {
         if !quiet {
             defmt::warn!(
@@ -4074,7 +4155,7 @@ where
                 delay_ms
             );
         }
-        return Ok(WakeWindowProbeResult::EnteredRom(addr));
+        return Ok(WakeWindowProbeResult::EnteredRom(addr, calibration));
     }
 
     Ok(WakeWindowProbeResult::Miss)
@@ -4982,7 +5063,7 @@ enum WakeWindowProbeResult {
     Miss,
     Working(u8),
     Rom(u8),
-    EnteredRom(u8),
+    EnteredRom(u8, BmsDfCalibrationPreservation),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -5425,72 +5506,7 @@ where
         addr: u8,
         quiet: bool,
     ) -> BmsDfCalibrationPreservation {
-        let mut last_err = None;
-        let mut best_partial = BmsDfCalibrationPreservation::default();
-        let mut best_partial_count = 0u8;
-
-        for attempt in 0..3 {
-            let mut calibration = BmsDfCalibrationPreservation::default();
-
-            match read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_CELL_GAIN) {
-                Ok(value) => calibration.cell_gain = Some(value),
-                Err(e) => last_err = Some(e),
-            }
-            spin_delay(BMS_WORD_GAP);
-            match read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_PACK_GAIN) {
-                Ok(value) => calibration.pack_gain = Some(value),
-                Err(e) => last_err = Some(e),
-            }
-            spin_delay(BMS_WORD_GAP);
-            match read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_BAT_GAIN) {
-                Ok(value) => calibration.bat_gain = Some(value),
-                Err(e) => last_err = Some(e),
-            }
-
-            let preserved = calibration.preserved_count();
-            if preserved == 3 {
-                if !quiet {
-                    defmt::warn!(
-                        "bms_df_preserve: addr=0x{=u8:x} mode=live_calibration cell_gain=0x{=u16:x} pack_gain=0x{=u16:x} bat_gain=0x{=u16:x}",
-                        addr,
-                        calibration.cell_gain.unwrap_or(0),
-                        calibration.pack_gain.unwrap_or(0),
-                        calibration.bat_gain.unwrap_or(0),
-                    );
-                }
-                return calibration;
-            }
-
-            if preserved > best_partial_count {
-                best_partial = calibration;
-                best_partial_count = preserved;
-            }
-
-            if attempt < 2 {
-                spin_delay(BMS_MAC_WRITE_SETTLE);
-            }
-        }
-
-        if !quiet {
-            if best_partial_count > 0 {
-                defmt::warn!(
-                    "bms_df_preserve: addr=0x{=u8:x} mode=asset_default reason=partial preserved={=u8} cell={=bool} pack={=bool} bat={=bool}",
-                    addr,
-                    best_partial_count,
-                    best_partial.cell_gain.is_some(),
-                    best_partial.pack_gain.is_some(),
-                    best_partial.bat_gain.is_some(),
-                );
-            } else if let Some(e) = last_err {
-                defmt::warn!(
-                    "bms_df_preserve: addr=0x{=u8:x} mode=asset_default err={}",
-                    addr,
-                    e,
-                );
-            }
-        }
-
-        BmsDfCalibrationPreservation::default()
+        capture_bms_rom_df_calibration_live_i2c(&mut self.i2c, addr, quiet)
     }
 
     #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
@@ -5733,8 +5749,8 @@ where
                             Ok(WakeWindowProbeResult::Rom(found)) => {
                                 return Some(WakeWindowProbeResult::Rom(found));
                             }
-                            Ok(WakeWindowProbeResult::EnteredRom(found)) => {
-                                return Some(WakeWindowProbeResult::EnteredRom(found));
+                            Ok(WakeWindowProbeResult::EnteredRom(found, calibration)) => {
+                                return Some(WakeWindowProbeResult::EnteredRom(found, calibration));
                             }
                             Ok(WakeWindowProbeResult::Miss) => {}
                             Err(e) => {
@@ -6046,9 +6062,17 @@ where
                         self.mark_bms_working(addr);
                         return true;
                     }
-                    WakeWindowProbeResult::Rom(addr) | WakeWindowProbeResult::EnteredRom(addr) => {
+                    WakeWindowProbeResult::Rom(addr) => {
                         if self.cfg.bms_rom_recover && self.bms_post_flash_resume_addr.is_none() {
                             self.attempt_bq40_rom_flash(addr, false);
+                            if self.bms_post_flash_resume_addr.is_some() {
+                                return true;
+                            }
+                        }
+                    }
+                    WakeWindowProbeResult::EnteredRom(addr, calibration) => {
+                        if self.cfg.bms_rom_recover && self.bms_post_flash_resume_addr.is_none() {
+                            self.attempt_bq40_rom_flash_with_calibration(addr, false, calibration);
                             if self.bms_post_flash_resume_addr.is_some() {
                                 return true;
                             }
@@ -6139,11 +6163,23 @@ where
                             self.mark_bms_working(addr);
                             return true;
                         }
-                        WakeWindowProbeResult::Rom(addr)
-                        | WakeWindowProbeResult::EnteredRom(addr) => {
+                        WakeWindowProbeResult::Rom(addr) => {
                             if self.cfg.bms_rom_recover && self.bms_post_flash_resume_addr.is_none()
                             {
                                 self.attempt_bq40_rom_flash(addr, quiet);
+                                if self.bms_post_flash_resume_addr.is_some() {
+                                    return true;
+                                }
+                            }
+                        }
+                        WakeWindowProbeResult::EnteredRom(addr, calibration) => {
+                            if self.cfg.bms_rom_recover && self.bms_post_flash_resume_addr.is_none()
+                            {
+                                self.attempt_bq40_rom_flash_with_calibration(
+                                    addr,
+                                    quiet,
+                                    calibration,
+                                );
                                 if self.bms_post_flash_resume_addr.is_some() {
                                     return true;
                                 }
@@ -7162,7 +7198,7 @@ where
                         }
                         return WakeWindowProbeResult::Rom(addr);
                     }
-                    Ok(WakeWindowProbeResult::EnteredRom(addr)) => {
+                    Ok(WakeWindowProbeResult::EnteredRom(addr, calibration)) => {
                         if !quiet {
                             defmt::warn!(
                                 "bms_diag: stage=wake_window_rom_entered addr=0x{=u8:x} probe_mode={} step={=u8} delay_ms={=u64}",
@@ -7172,7 +7208,7 @@ where
                                 *delay_ms
                             );
                         }
-                        return WakeWindowProbeResult::EnteredRom(addr);
+                        return WakeWindowProbeResult::EnteredRom(addr, calibration);
                     }
                     Ok(WakeWindowProbeResult::Miss) => {}
                     Err(e) => {
