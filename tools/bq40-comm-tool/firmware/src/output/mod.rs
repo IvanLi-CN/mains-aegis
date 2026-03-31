@@ -3967,8 +3967,7 @@ fn probe_bq40z50_after_wake_touch<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let mut wake_calibration = BmsDfCalibrationPreservation::default();
-    let mut wake_calibration_attempted = false;
+    let mut saw_app_contact = false;
 
     match touch_then_read_wake_probe(
         i2c,
@@ -4004,13 +4003,7 @@ where
                     quiet,
                 ) {
                     Ok(temp) if (2_000..=4_300).contains(&temp) => {
-                        capture_wake_window_live_calibration_once(
-                            i2c,
-                            addr,
-                            quiet,
-                            &mut wake_calibration_attempted,
-                            &mut wake_calibration,
-                        );
+                        saw_app_contact = true;
                         if confirm_bq40_wake_snapshot(
                             i2c,
                             addr,
@@ -4121,13 +4114,7 @@ where
                                 );
                             }
                             if (2_000..=4_300).contains(&temp) {
-                                capture_wake_window_live_calibration_once(
-                                    i2c,
-                                    addr,
-                                    quiet,
-                                    &mut wake_calibration_attempted,
-                                    &mut wake_calibration,
-                                );
+                                saw_app_contact = true;
                             }
                             if (2_000..=4_300).contains(&temp)
                                 && confirm_bq40_wake_snapshot(
@@ -4160,6 +4147,11 @@ where
         }
     }
 
+    let wake_calibration = if saw_app_contact {
+        capture_bms_rom_df_calibration_wake_i2c(i2c, addr, quiet)
+    } else {
+        BmsDfCalibrationPreservation::default()
+    };
     if try_enter_bms_rom_mode_wake_diag(i2c, addr, step, delay_ms, quiet)? {
         if !quiet {
             defmt::warn!(
@@ -4176,33 +4168,64 @@ where
 }
 
 #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
-fn capture_wake_window_live_calibration_once<I2C>(
+fn capture_bms_rom_df_calibration_wake_i2c<I2C>(
     i2c: &mut I2C,
     addr: u8,
     quiet: bool,
-    attempted: &mut bool,
-    calibration: &mut BmsDfCalibrationPreservation,
-) where
+) -> BmsDfCalibrationPreservation
+where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    if *attempted {
-        return;
+    match read_bms_df_block_via_mb44(i2c, addr, BMS_DF_ADDR_CELL_GAIN) {
+        Ok((_echoed_addr, raw)) if raw.payload_len as usize >= 6 => {
+            let calibration = BmsDfCalibrationPreservation {
+                cell_gain: Some(u16::from_le_bytes([raw.payload[0], raw.payload[1]])),
+                pack_gain: Some(u16::from_le_bytes([raw.payload[2], raw.payload[3]])),
+                bat_gain: Some(u16::from_le_bytes([raw.payload[4], raw.payload[5]])),
+            };
+            if !quiet {
+                defmt::warn!(
+                    "bms_df_preserve: addr=0x{=u8:x} mode=wake_calibration cell_gain=0x{=u16:x} pack_gain=0x{=u16:x} bat_gain=0x{=u16:x}",
+                    addr,
+                    calibration.cell_gain.unwrap_or(0),
+                    calibration.pack_gain.unwrap_or(0),
+                    calibration.bat_gain.unwrap_or(0),
+                );
+            }
+            calibration
+        }
+        Ok(_) => {
+            if !quiet {
+                defmt::warn!(
+                    "bms_df_preserve: addr=0x{=u8:x} mode=asset_default reason=wake_bad_block",
+                    addr,
+                );
+            }
+            BmsDfCalibrationPreservation::default()
+        }
+        Err(e) => {
+            if !quiet {
+                defmt::warn!(
+                    "bms_df_preserve: addr=0x{=u8:x} mode=asset_default reason=wake_err err={}",
+                    addr,
+                    e,
+                );
+            }
+            BmsDfCalibrationPreservation::default()
+        }
     }
-    *attempted = true;
-    *calibration = capture_bms_rom_df_calibration_live_i2c(i2c, addr, quiet);
 }
 
 #[cfg(not(feature = "bms-rom-repair-asset-df-mainboard"))]
-fn capture_wake_window_live_calibration_once<I2C>(
+fn capture_bms_rom_df_calibration_wake_i2c<I2C>(
     _i2c: &mut I2C,
     _addr: u8,
     _quiet: bool,
-    attempted: &mut bool,
-    _calibration: &mut BmsDfCalibrationPreservation,
-) where
+) -> BmsDfCalibrationPreservation
+where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    *attempted = true;
+    BmsDfCalibrationPreservation::default()
 }
 
 fn maybe_enter_bms_rom_mode_diag<I2C>(
