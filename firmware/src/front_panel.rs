@@ -707,7 +707,7 @@ impl FrontPanel {
     fn configure_tca_reset(&mut self) {
         self.tca_reset_n.apply_output_config(
             &OutputConfig::default()
-                .with_drive_mode(DriveMode::OpenDrain)
+                .with_drive_mode(DriveMode::PushPull)
                 .with_pull(Pull::Up),
         );
         self.tca_reset_n.set_high();
