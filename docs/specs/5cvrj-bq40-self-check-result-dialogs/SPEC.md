@@ -11,6 +11,7 @@
 - 现有 `SELF CHECK` 页面会把 `BQ40Z50` 的多种异常混在 `WARN/ERR` 与单一失败弹窗里，难以区分“设备存在但异常”与“完全未识别到设备”。
 - 当前 `BQ40Z50` 交互只对“离线未识别”给出通用激活提示，无法把 `XDSG blocked / discharge path held / no battery / RCA alarm` 等问题明确展示给主人。
 - 当问题可通过软件侧恢复时，前面板没有统一的“查看问题 -> 确认尝试消除 -> 回看最新状态”的操作路径。
+- 正式候选固件不得在 `SELF CHECK` 阶段自动触发任何 `BQ40` 恢复；未获主人确认前只能停留在问题态并等待点击。
 - 新需求要求把 `BQ40Z50` 卡片升级为问题导向的恢复入口：点击后显示具体问题、仅对可恢复问题提供确认动作，并在恢复成功后回到实时自检页，问题全部清除时自动进入 Dashboard。
 
 ## 目标 / 非目标
@@ -27,7 +28,7 @@
 - 失败结果弹窗关闭后保留最近一次结果；再次点击 `BQ40Z50` 卡片时直接回显对应失败结果弹窗。
 - `SUCCESS` 不再停留在结果弹窗；恢复成功后应立即回到自检页显示最新状态，若所有卡片均已 clear，则自动进入 Dashboard。
 - 主固件的激活链路必须移植工具已验证有效的 `wake-window + delayed read + keepalive + confirm` 读法，但该链路只在 `Try Activation` 期间生效。
-- 诊断阶段允许存在“一次性开机自动激活”临时流，用来验证主固件激活链路是否已经能把健康硬件收敛到 `SUCCESS`；验证通过后必须移除。
+- 正式候选固件不得保留任何开机自动激活/自动恢复流；恢复动作只能由前面板显式确认触发。
 
 ### Non-goals
 
@@ -51,7 +52,7 @@
   - 额外输出 `BQ40` 问题详情与当前可执行恢复动作，供前面板交互使用。
   - 激活结果分类只允许使用 BQ40 自身 SMBus/ROM 证据；其它器件状态只可用于“能否尝试激活”的门禁与诊断日志。
   - 激活唤醒参数对齐到 `VREG=16.8V / ICHG=200mA / IINDPM=500mA`。
-  - 激活路径内新增 staged wake probe、keepalive、trusted snapshot confirm，以及诊断阶段的一次性自动激活验证流。
+  - 激活路径内新增 staged wake probe、keepalive、trusted snapshot confirm，并移除自检阶段的自动恢复触发。
 - `firmware/src/bq25792.rs`
   - 补足 `CHARGE_VOLTAGE_LIMIT` 与设置 `VREG` 的 helper。
 - `tools/front-panel-preview/src/main.rs`
@@ -83,6 +84,7 @@
 - Given 普通访问未识别到设备，When 查看 `BQ40Z50` 卡片，Then 状态显示 `ERR`，副文案显示 `NOT DETECTED`。
 - Given `BQ40Z50` 卡片为 `ERR`，When 点击或按键触发恢复入口，Then 先进入 `NOT DETECTED` 问题弹窗，确认按钮文案为 `Activate`。
 - Given `BQ40Z50` 处于 `WARN + discharge blocked` 且输出因 `BmsNotReady` 被挡住，When 点击或按键触发恢复入口，Then 先进入 `DISCHARGE BLOCKED/XDSG BLOCKED` 问题弹窗，确认按钮文案为 `Recover`。
+- Given `BQ40Z50` 处于可恢复问题态但主人尚未点击确认，When `SELF CHECK` 页面持续停留，Then 固件不得自行进入 `progress/result` overlay，也不得自动启动任何 `BQ40` 恢复尝试。
 - Given 任一失败结果弹窗已关闭，When 再次点击 `BQ40Z50` 卡片，Then 直接显示最近一次失败结果弹窗，不重复进入确认流程。
 - Given 最近一次结果为 `NOT DETECTED`，When 结果弹窗关闭后回到自检页，Then `BQ40Z50` 卡片仍保持 `ERR`。
 - Given 最近一次结果为 `ABNORMAL`，When 结果弹窗关闭后回到自检页，Then `BQ40Z50` 卡片保持 `WARN`。
@@ -92,8 +94,6 @@
 - Given 激活流程没有拿到 BQ40 原生“无电池”证据，When 结束分类，Then 不得输出 `NO BATTERY`。
 - Given 激活流程进入 staged wake probe，When `0 / 800 / 1600 ms` 任一阶段命中可信运行态快照，Then 结果只能由该可信快照收敛为 `SUCCESS` 或 `ABNORMAL`。
 - Given 激活流程只拿到零散 raw 读数或无效快照，When keepalive / confirm 全部失败且窗口结束，Then 结果必须是 `NOT DETECTED`。
-- Given 诊断阶段启用临时自动激活流，When 设备启动完成且 `BQ40=ERR`、输入电源存在、充电器状态已知，Then 日志中必须只出现一次 `activation auto_request reason=boot_diag`。
-- Given 当前这块硬件已经通过项目工具验证健康，When 临时自动激活流执行，Then 它必须在同一轮激活中收敛到 `SUCCESS`，否则视为主固件激活链路仍未修复完成。
 - Given 运行 `tools/front-panel-preview` 的结果场景，When 导出 PNG，Then 5 张结果弹窗图分辨率均为 `320x172`。
 
 ## 具体判断流程（Decision flow）
@@ -156,27 +156,12 @@
 22. BQ40 诊断事务结束后仍需保留短暂的 SMBus quiet window；该 quiet window 固定为 `40 ms`，并且主循环必须像工具一样在该窗口内直接跳过后续 I2C 工作，避免 charger/BQ40 事务在窗口边界交错。该 quiet window 是附加保护，不能拿它替代激活阶段本身的 charger cadence 约束。
 23. 该 wake probe / follow-up 逻辑只允许存在于激活流程里；默认自检和常规轮询仍保持现有普通访问行为，不得复用 activation 专用的 priming、consistent-reader 或多轮 keepalive 读法。
 
-### 5. 临时自动验证流：只允许用于修复验证
+### 5. 自动恢复禁用：正式固件必须等待显式确认
 
-1. 临时自动激活只允许在诊断阶段存在，且每次开机最多执行一次。
-2. 自动激活的触发条件固定为：
-   - `BQ40Z50` 默认自检结果为 `ERR`
-   - 输入电源存在
-   - 充电器状态已经完成一次正常轮询
-   - 自动验证的开机等待时间固定为 `30 s`，与工具当前 `wake_settle` 约束保持一致
-   - 自动验证等待期间，普通 `BQ40` 轮询必须整体 defer；到达 `30 s` 边界后，必须先进入 `activation auto_request reason=boot_diag`，不能先放开普通轮询把 `BQ40` 推入无效 `WARN`
-3. 自动激活只用于验证主固件修复是否生效，不得成为正式产品行为。
-4. 自动验证阶段允许保留更细的 raw 级 `defmt::info!` 日志，用于证明主固件命中了工具同款 wake window。
-5. 自动验证一旦确认通过，必须移除自动激活入口；正式候选固件只保留激活开始、wake stage 摘要、confirm 摘要与最终结果日志。
-6. 自动验证允许绕过“手动入口仅 `ERR` 才能触发”的 UI 门禁，但仅限于“无可信运行态字段的 diag-offline `WARN`”这一类暂态；该放宽只用于临时自动验证，不得泄漏到正式手动交互。
-7. 自动验证等待窗口内，普通 `BQ40` 轮询必须整体 defer 到自动触发完成；该约束只允许存在于临时自动验证流中，目的是避免主固件在自动激活前先把设备打进无效快照状态。
-8. 自动验证等待窗口内，允许临时关闭与诊断无关的 demo 业务流（例如 audio demo playlist），保证启动后的短暂等待与后续探测尽量接近工具的安静环境；正式候选固件必须移除这类临时静默措施。
-9. 临时自动验证流允许在 `30 s` 的 `wake_settle` 窗口内临时维持工具同款 `16.8V / 200mA / 500mA` charger prewarm，用来复现工具已经验证有效的唤醒条件；该 prewarm 只服务于“自动验证是否已修复”的试验入口，不得参与结果分类。
-10. 临时自动验证流的 prewarm 必须无缝衔接到 `activation auto_request reason=boot_diag` 之后的首轮 `ProbeWithoutCharge` 观测；不得在 `auto_request` 边界先释放 wake profile，再重新依赖普通 charger 策略。是否可访问 `BQ40` 只允许由 `BQ40` 自身 SMBus/ROM 事务结果决定。
-11. 临时自动验证流启用时，boot self-test 不得在 `30 s` prewarm 之前主动访问 `BQ40`；只能把 `BQ40` 标成 `ERR` 并等待 `activation auto_request reason=boot_diag` 后的正式激活链路。这样可以避免早期普通探测扰动唤醒条件。
-12. 只要主固件准备写入 `16.8V / 200mA / 500mA` 激活档位，无论入口来自手动 `Try Activation` 还是 boot auto-validation prewarm，都必须先保存原始 charger 配置（至少包括 `CTRL0 / VREG / ICHG / IINDPM / chg_enabled`）。
-13. boot auto-validation 若在 due 时间点发现不需要激活，或 prewarm/hold 已结束而未进入真正的 activation finish，主固件也必须恢复上述原始 charger 配置，不能把预热档位残留给后续正常策略。
-14. boot auto-validation 只要把 `auto_due_at` 往后延，普通 BQ40 轮询的 quiet release 也必须同步往后延；在 auto-request 真的发生前，不得提前恢复普通 BQ40 轮询去污染 quiet bus 假设。
+1. 正式候选固件不得在开机、自检、或停留在 `SELF CHECK` 页面期间自动发起 `BQ40` 激活/恢复。
+2. 对 `BQ40Z50` 的 staged wake、keepalive、trusted confirm 只允许由前面板的显式确认动作触发。
+3. 在主人尚未点击 `Activate/Recover` 前，前面板只能显示问题态或最近一次失败结果；不得自行进入 `progress` 或新的失败结果弹窗。
+4. 默认自检和常规轮询不得再为了“自动验证”去整体 defer 普通 `BQ40` 轮询、维持 wake prewarm、或静默触发一次性恢复。
 
 ### 6. 明确禁止的误判
 
@@ -191,7 +176,7 @@
 
 - Firmware build: `cargo +esp build --manifest-path firmware/Cargo.toml --release --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
 - Preview build/run: `cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --mode standby --focus idle --scenario <scenario> --out-dir <ABS_PATH>`
-- Auto validation: 开机后允许仅为临时验证入口维持 `30 s` 的工具同款 `16.8V / 200mA / 500mA` charger prewarm；到达边界后仅在 `BQ40` 仍处于 `ERR` 且输入电源存在、充电器状态已知时自动触发且只触发一次 `activation auto_request reason=boot_diag`；同一轮激活必须收敛到 `SUCCESS`，且结果分类仍只能依赖 `BQ40` 自身证据。
+- No auto recovery: 开机后停留在 `SELF CHECK` 时，不得出现未确认即自动开始的 `BQ40` 激活/恢复；只有主人显式点击确认后，才允许进入同一条 staged wake + confirm 恢复链路。
 - Manual final validation: 移除自动流后，由主人手动触发 `SELF CHECK -> BQ40Z50 -> Try Activation`，结果必须仍可复现同一条有效激活链路。
 
 ### Quality checks
@@ -223,11 +208,13 @@
   - `self-check-c-bq40-result-not-detected.png`
   - `self-check-c-bq40-offline-activate-dialog.png`
   - `self-check-c-bq40-activating.png`
+  - `self-check-c-bq40-discharge-blocked.png`
   - `self-check-c-bq40-discharge-recovery-dialog.png`
   - `self-check-c-bq40-discharge-recovering.png`
 
 ## Visual Evidence (PR)
 
+![BQ40 self-check blocked (waiting for user confirm)](./assets/self-check-c-bq40-discharge-blocked.png)
 ![BQ40 activate confirm](./assets/self-check-c-bq40-offline-activate-dialog.png)
 ![BQ40 discharge recovery confirm](./assets/self-check-c-bq40-discharge-recovery-dialog.png)
 ![BQ40 activating](./assets/self-check-c-bq40-activating.png)

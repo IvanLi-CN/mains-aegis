@@ -64,6 +64,9 @@ const BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY: Duration = Duration::from_secs(34)
 const BMS_ACTIVATION_AUTO_DELAY: Duration = Duration::from_secs(30);
 const BMS_BOOT_DIAG_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
 const BMS_BOOT_DIAG_SHIP_RESET_SETTLE: Duration = Duration::from_millis(800);
+// Self-check recovery must stay user-driven: show the issue first, then wait for explicit
+// confirmation from the front panel before attempting any BQ40 wake/recovery sequence.
+const BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED: bool = false;
 // Temporary boot-diag validation: keep the proven 16.8V/200mA/500mA wake bias active through
 // the 30 s settle window so auto-validation matches the tool's working conditions.
 const BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE: bool = true;
@@ -1102,6 +1105,10 @@ fn fan_rpm_from_sample(pulse_count: u32, elapsed_ms: u64, pulses_per_rev: u8) ->
         .saturating_mul(60_000)
         .checked_div(elapsed_ms.saturating_mul(u64::from(pulses_per_rev)))?;
     Some(rpm.min(u64::from(u16::MAX)) as u16)
+}
+
+fn boot_diag_auto_recovery_enabled(auto_validate: bool) -> bool {
+    BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED && auto_validate
 }
 
 fn detail_battery_temp_c(snapshot: &Bq40z50Snapshot) -> Option<i16> {
@@ -3022,6 +3029,8 @@ where
         let out_b_allowed = output_state.active_outputs.is_enabled(OutputChannel::OutB);
         let charger_allowed = cfg.charger_probe_ok;
         let bms_addr = cfg.bms_addr;
+        let bms_auto_recovery_enabled =
+            boot_diag_auto_recovery_enabled(cfg.bms_boot_diag_auto_validate);
         let bms_runtime_seen = bms_addr.is_some()
             || output_state.gate_reason == OutputGateReason::BmsNotReady
             || (cfg.charger_probe_ok
@@ -3106,12 +3115,22 @@ where
             bms_activation_force_charge_requested: false,
             bms_boot_diag_started_at: now,
             bms_boot_diag_ship_reset_attempted: false,
-            bms_activation_auto_due_at: now + BMS_ACTIVATION_AUTO_DELAY,
-            bms_activation_auto_poll_release_at: now + BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY,
-            bms_activation_auto_attempted: false,
+            bms_activation_auto_due_at: if bms_auto_recovery_enabled {
+                now + BMS_ACTIVATION_AUTO_DELAY
+            } else {
+                now
+            },
+            bms_activation_auto_poll_release_at: if bms_auto_recovery_enabled {
+                now + BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY
+            } else {
+                now
+            },
+            bms_activation_auto_attempted: !bms_auto_recovery_enabled,
             bms_activation_current_is_auto: false,
             bms_activation_request_kind: BmsRecoveryRequestKind::Activation,
-            bms_activation_auto_force_charge_until: if BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE {
+            bms_activation_auto_force_charge_until: if bms_auto_recovery_enabled
+                && BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE
+            {
                 Some(
                     now + BMS_ACTIVATION_AUTO_DELAY
                         + if BMS_BOOT_DIAG_TOOL_STYLE_PROBE_ONLY {
@@ -3165,9 +3184,6 @@ where
                 "power: outputs gated reason={} (boot self-test)",
                 self.output_state.gate_reason.as_str()
             );
-        }
-        if self.can_request_bms_discharge_authorization() {
-            self.request_bms_discharge_authorization(true);
         }
 
         if self.ui_snapshot.bq25792_allow_charge.is_none() {
@@ -5793,6 +5809,10 @@ where
     }
 
     fn maybe_auto_request_bms_activation(&mut self) {
+        if !boot_diag_auto_recovery_enabled(self.cfg.bms_boot_diag_auto_validate) {
+            return;
+        }
+
         if !self.cfg.bms_boot_diag_auto_validate {
             return;
         }
@@ -5905,6 +5925,10 @@ where
     }
 
     fn maybe_auto_request_bms_discharge_authorization(&mut self) {
+        if !boot_diag_auto_recovery_enabled(self.cfg.bms_boot_diag_auto_validate) {
+            return;
+        }
+
         if self.bms_activation_state != BmsActivationState::Idle
             || bq40_last_result_blocks_recovery(self.ui_snapshot.bq40z50_last_result)
             || !self.can_request_bms_discharge_authorization()
@@ -9115,6 +9139,12 @@ mod tests {
 
         assert_eq!(decision.state, ChargePolicyState::Charging500mA);
         assert_eq!(decision.start_reason, Some(ChargeStartReason::CellLow));
+    }
+
+    #[test]
+    fn boot_diag_auto_recovery_is_disabled_even_when_validation_flag_is_set() {
+        assert!(!boot_diag_auto_recovery_enabled(true));
+        assert!(!boot_diag_auto_recovery_enabled(false));
     }
 
     #[test]
