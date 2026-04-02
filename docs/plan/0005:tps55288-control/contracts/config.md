@@ -96,7 +96,7 @@
 
 - `default_vout_mv`: integer
   - Meaning: 目标输出电压（mV）
-  - Default: `19000`
+  - Default: `12000`（主固件未显式启用 `main-vout-19v` 时）
 
 - `default_ilimit_ma`: integer
   - Meaning: 目标电流限制（mA）；实现以 `TPS55288` 的寄存器能力为准（可能是近似值/档位值）

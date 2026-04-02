@@ -6,6 +6,10 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = []
+# Main firmware output-voltage selectors. When neither is set, the main firmware falls back to
+# 12V. Enabling both is forbidden at compile time.
+main-vout-12v = []
+main-vout-19v = []
 # Development-only override: force charger enable with minimal current for pack/gauge wake-up.
 force-min-charge = []
 # Development-only diagnostics: probe BQ40Z50 on both 0x0B and 0x16.
