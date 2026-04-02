@@ -15,11 +15,11 @@
 
 ## 当前默认 profile（以代码为准）
 
-当前 SoT 以 `firmware/src/main.rs` 的编译期常量为准：
+当前 SoT 以主固件 Cargo feature 为准：未显式选择时回落到 `12V`，启用 `main-vout-19v` 时切到 `19V`。
 
 - `I2C1`: `GPIO48=SDA`、`GPIO47=SCL`、`25kHz`
 - 默认请求输出集合：`out_a`
-- 默认目标输出：`19V`
+- 默认目标输出：`12V`
 - 默认目标限流：`3.5A`
 - `TPS55288` light-load：`PFM`
 - 非活动通道不主动稳压；是否处于寄存器 `OE=0` 由运行态状态机决定

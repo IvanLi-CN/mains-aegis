@@ -65,6 +65,9 @@ cd firmware
 
 cargo build
 cargo build --release
+# Main firmware voltage defaults to 12V; enable 19V explicitly when needed.
+cargo build --release --bin esp-firmware
+cargo build --release --bin esp-firmware --features main-vout-19v
 # 开发阶段需要“最小电流强制充电唤醒”时，显式打开该特性
 cargo build --release --features force-min-charge
 # 仅在诊断阶段需要双地址探测时，显式打开该特性（默认只访问 0x0B）
@@ -135,18 +138,19 @@ mcu-agentd monitor esp --reset
 - OUT-A：`addr=0x74`（`TPS55288 OUT-A` / `VOUT_TPSA`）
 - OUT-B：`addr=0x75`（`TPS55288 OUT-B` / `VOUT_TPSB`）
 - 默认启用：`out_a`
-- 目标输出：`19V`
+- 目标输出：默认 `12V`；启用 `main-vout-19v` 时切到 `19V`
 - 目标限流：`3.5A`
 - 非默认输出路：通过寄存器关闭输出（`OE=0`），不主动稳压输出
 - 运行态软保护：温度/电流超阈值时会逐步下调 `IOUT_LIMIT`，若降额期间 `VOUT < 14V` 持续则进入 `active_protection` 关断
 
-> 以上默认 profile 由 `firmware/src/main.rs` 的编译期常量决定，可按联调需要调整（不要在上电状态下频繁刷写造成误判）。
+> 以上默认 profile 由主固件 Cargo feature 决定：未显式选择时回落到 `12V`，启用 `main-vout-19v` 时切到 `19V`。`main-vout-12v` 与 `main-vout-19v` 不允许同时启用（不要在上电状态下频繁刷写造成误判）。
 
 ### 预期日志（`defmt`）
 
 启动阶段（配置结果）：
 
-- `power: requested_outputs=out_a active_outputs=out_a recoverable_outputs=none gate_reason=none target_vout_mv=19000 target_ilimit_ma=3500`
+- 默认 12V：`power: requested_outputs=out_a active_outputs=out_a recoverable_outputs=none gate_reason=none target_vout_mv=12000 target_ilimit_ma=3500`
+- 19V feature：`power: requested_outputs=out_a active_outputs=out_a recoverable_outputs=none gate_reason=none target_vout_mv=19000 target_ilimit_ma=3500`
 - `power: ina3221 ok ...`
 - `power: tps addr=0x74 configured enabled=true ...`
 - `power: tps addr=0x75 configured enabled=false ...`
@@ -185,8 +189,8 @@ telemetry ch=ina_diag addr=0x40 ch1_vbus_mv=... ch1_current_ma=... ch2_vbus_mv=.
 每 `500ms` 输出 **2 行**，字段顺序固定：
 
 ```text
-telemetry ch=out_a addr=0x74 vset_mv=19000 vbus_mv=19000 current_ma=0
-telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0
+telemetry ch=out_a addr=0x74 vset_mv=12000 vbus_mv=12000 current_ma=0
+telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0
 ```
 
 字段含义：
@@ -220,8 +224,8 @@ telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0
 示例：
 
 ```text
-telemetry ch=out_a addr=0x74 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_addr=0x48 temp_c_x16=400 therm_kill_n=1
-telemetry ch=out_b addr=0x75 vset_mv=19000 vbus_mv=19000 current_ma=0 ... tmp_addr=0x49 temp_c_x16=err(i2c_nack) therm_kill_n=1
+telemetry ch=out_a addr=0x74 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_addr=0x48 temp_c_x16=400 therm_kill_n=1
+telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_addr=0x49 temp_c_x16=err(i2c_nack) therm_kill_n=1
 ```
 
 ### 上板验证（人类操作）

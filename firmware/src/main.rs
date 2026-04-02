@@ -29,7 +29,11 @@ use esp_println as _;
 
 // Bring-up default profile.
 const DEFAULT_ENABLED_OUTPUTS: output::EnabledOutputs = output::EnabledOutputs::Both;
-const DEFAULT_VOUT_MV: u16 = 12_000;
+const DEFAULT_VOUT_MV: u16 = if cfg!(feature = "main-vout-19v") {
+    19_000
+} else {
+    12_000
+};
 const DEFAULT_ILIMIT_MA: u16 = 3_500;
 const TELEMETRY_PERIOD: Duration = Duration::from_millis(500);
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
