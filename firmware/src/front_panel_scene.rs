@@ -561,12 +561,12 @@ const SELF_CHECK_DIALOG_W: u16 = 280;
 const SELF_CHECK_DIALOG_H: u16 = 112;
 
 const SELF_CHECK_CANCEL_BTN_X: u16 = 32;
-const SELF_CHECK_CANCEL_BTN_Y: u16 = 110;
+const SELF_CHECK_CANCEL_BTN_Y: u16 = 116;
 const SELF_CHECK_CANCEL_BTN_W: u16 = 108;
 const SELF_CHECK_CANCEL_BTN_H: u16 = 24;
 
 const SELF_CHECK_CONFIRM_BTN_X: u16 = 152;
-const SELF_CHECK_CONFIRM_BTN_Y: u16 = 110;
+const SELF_CHECK_CONFIRM_BTN_Y: u16 = 116;
 const SELF_CHECK_CONFIRM_BTN_W: u16 = 136;
 const SELF_CHECK_CONFIRM_BTN_H: u16 = 24;
 
@@ -5987,7 +5987,7 @@ fn draw_bms_confirm_dialog<P: UiPainter>(
         copy.headline,
         Point::new(
             (SELF_CHECK_DIALOG_X + 10) as i32,
-            (SELF_CHECK_DIALOG_Y + 26) as i32,
+            (SELF_CHECK_DIALOG_Y + 24) as i32,
         ),
         HorizontalAlignment::Left,
         ATTENTION_COLOR,
@@ -5999,7 +5999,7 @@ fn draw_bms_confirm_dialog<P: UiPainter>(
         copy.body1,
         Point::new(
             (SELF_CHECK_DIALOG_X + 10) as i32,
-            (SELF_CHECK_DIALOG_Y + 46) as i32,
+            (SELF_CHECK_DIALOG_Y + 44) as i32,
         ),
         HorizontalAlignment::Left,
         body_text,
@@ -6011,7 +6011,7 @@ fn draw_bms_confirm_dialog<P: UiPainter>(
         copy.body2,
         Point::new(
             (SELF_CHECK_DIALOG_X + 10) as i32,
-            (SELF_CHECK_DIALOG_Y + 66) as i32,
+            (SELF_CHECK_DIALOG_Y + 60) as i32,
         ),
         HorizontalAlignment::Left,
         body_text,
@@ -6102,7 +6102,7 @@ fn draw_bms_progress_dialog<P: UiPainter>(
         variant,
         FontRole::Num,
         copy.progress2,
-        Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 50) as i32),
+        Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 46) as i32),
         HorizontalAlignment::Left,
         ATTENTION_COLOR,
     )?;
