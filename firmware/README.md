@@ -72,6 +72,8 @@ cargo build --release --bin esp-firmware --features main-vout-19v
 cargo build --release --features force-min-charge
 # 仅在诊断阶段需要双地址探测时，显式打开该特性（默认只访问 0x0B）
 cargo build --release --features bms-dual-probe-diag
+# TMP 硬件保护测试模式：关闭 MCU 主动散热与软件热降额/热关断，但保留 TMP/THERM_KILL_N 观测
+cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 ```
 
 > 注意：本工程将 target / toolchain 配置隔离在 `firmware/` 内，不要求仓库根目录存在 Rust workspace。
@@ -571,52 +573,75 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
 
 ## 风扇温控与故障保护（Spec #ygmqn）
 
-固件会在运行期接管 `GPIO35(FAN_EN)`、`GPIO36(FAN_VSET_PWM)` 与 `GPIO34(FAN_TACH)`，形成一个以 `TMP112A/B` 为输入的 V1 风扇策略。
+固件会在运行期接管 `GPIO35(FAN_EN)`、`GPIO36(FAN_VSET_PWM)` 与 `GPIO34(FAN_TACH)`，形成一个以 `TMP112A/B` 为输入的闭环风扇策略；同时支持 `tmp-hw-protect-test` 测试构建，用于专测 TMP 硬件温度保护链路。
 
-### 冻结口径
+### 正常构建（默认）冻结口径
 
 - PWM：`25kHz`，`GPIO36 -> FAN_VSET_PWM`
-- 档位：`off=0%`、`mid=60%`、`high=100%`
-- 温控：取 `max(tmp_a, tmp_b)`
-  - `< 40C` => `off`
-  - `40C .. < 50C` => `mid`
-  - `>= 50C` => `high`
-- 回滞：`3C`
-- 余冷：从 `mid/high` 退出后保留 `10s` 低速
-- `tach` 看门狗：命令为 `mid/high` 且 `2s` 内没有 `FAN_TACH` 脉冲时，记录故障并强制 `high`
+- 控温源：取 `max(tmp_a, tmp_b)`
+- 控温目标：`40°C`
+- 停转阈值：`< 37°C => off(0%)`
+- 最低有效转速：`10%`
+- 闭环节拍：每 `500ms` 调整一次
+- 分步积分式调速：
+  - `37°C .. < 40°C`：每周期 `-5%`，但不低于 `10%`
+  - `40°C .. < 41°C`：每周期 `+5%`
+  - `41°C .. < 43°C`：每周期 `+10%`
+  - `>= 43°C`：每周期 `+15%`
+- UI 状态带：`OFF=0%`、`LOW=1..33%`、`MID=34..66%`、`HIGH=67..100%`
+- 温度退化：单路温度缺失时退化到另一侧；双路都缺失时直接 `high(100%)`
+- `tach` 看门狗：命令为运行态且 `2s` 内没有 `FAN_TACH` 脉冲时，记录故障并强制 `high`
 - `tach` 故障恢复：需要确认到连续脉冲活动，单个毛刺边沿不会解除强制 `high`
-- 温度退化：单路温度缺失时退化到另一侧；双路都缺失时直接 `high`
 - PWM 失败兜底：若 `FAN_VSET_PWM` 的 LEDC 初始化失败，或运行期 duty 更新失败，固件会直接拉高 `FAN_EN`，并把 `FAN_VSET_PWM` 切到高电平 fail-safe，避免“日志还在跑但风扇硬件失效”
+
+### TMP 硬件保护测试构建（`--features tmp-hw-protect-test`）
+
+- 关闭 MCU 主动散热：`FAN_EN=low`、PWM `0%`
+- 关闭 MCU 软件热保护分支：不执行温度触发的 `ILIM derating / software shutdown`
+- 保留：
+  - TMP112 温度采样
+  - `THERM_KILL_N` 输入采样与 IRQ 监听
+  - 遥测中的 `therm_kill_n=0/1`
+  - UI 热页提示与告警效果
+  - 音频 `shutdown_protection` 表现
+- 说明：`THERM_KILL_N` 与 TPS `EN` 为硬连线，测试模式只负责观测和反馈，不再额外新增 MCU 侧热关断动作
 
 ### 预期日志（`defmt`）
 
 策略/状态变化：
 
-- `fan: command mode=mid pwm_pct=60 ...`
-- `fan: command mode=high pwm_pct=100 ...`
-- `fan: telemetry requested_mode=off requested_pwm_pct=0 applied_mode=high applied_pwm_pct=100 output_degraded=true ...`
+- `fan: policy stop_c_x16=... target_c_x16=... test_mode=false ...`
+- `fan: command mode=low pwm_pct=15 ...`
+- `fan: command mode=mid pwm_pct=40 ...`
+- `fan: telemetry requested_mode=mid requested_pwm_pct=40 applied_mode=mid applied_pwm_pct=40 ...`
+- 测试构建：`fan: telemetry ... applied_mode=off applied_pwm_pct=0 ... disabled_by_feature=true`
 
 异常/恢复：
 
 - `fan: temp_source degraded source=tmp_a ...`
 - `fan: temp_source missing fallback=full_speed ...`
 - `fan: tach_timeout mode=high pwm_pct=100 ...`
-- `fan: tach_recovered mode=mid pwm_pct=60 ...`
+- `fan: tach_recovered mode=low pwm_pct=... ...`
+- `power: therm_kill_n asserted hint=...`
 - `irq: fan_tach=...`（限频 `info` 日志，默认 `DEFMT_LOG=info` 下即可确认 tach 脉冲可见性，不跟随每个边沿刷屏）
-- `tach_recovered` 的判定允许主循环在两次真实 tach 脉冲之间看到短暂的 `irq_events.fan_tach=0`；只有静默时间达到 `2s` 看门狗窗口后，恢复取证才会被丢弃并重新开始
 
 ### Bench 验证（人类操作）
 
 1. 正常热升路径：
    - 运行 `mcu-agentd monitor esp --reset`
    - 观察 `fan: command ...` / `fan: telemetry ...`
-   - 让 `tmp_a/tmp_b` 升过 `40C` 与 `50C`，确认依次进入 `mid` / `high`
-2. 回落路径：
-   - 温度降回阈值以下后，确认会先进入 `10s` 余冷低速，再关风扇
+   - 让 `tmp_a/tmp_b` 升过 `40°C`，确认 PWM 随温度逐步上升，而不是固定 `60%`
+2. 正常回落路径：
+   - 温度回落到 `39.x°C` 时，确认 PWM 逐步降速但不低于 `10%`
+   - 温度降到 `< 37°C` 后，确认风扇停转
 3. 故障路径：
    - 断开 `FAN_TACH` 或让风扇停转
-   - 在 `mid/high` 命令下应看到 `fan: tach_timeout ...`，并保持 `high`
+   - 在运行态命令下应看到 `fan: tach_timeout ...`，并保持 `high`
    - 恢复 tach 脉冲后应看到 `fan: tach_recovered ...`
+4. TMP 硬件保护测试路径：
+   - 使用 `cargo build --release --bin esp-firmware --features tmp-hw-protect-test`
+   - 烧录后确认风扇始终由 MCU 保持关闭
+   - 让 TMP 硬件保护触发，确认日志出现 `power: therm_kill_n asserted ...`，遥测中出现 `therm_kill_n=0`，UI/音频同步出现对应告警
 
 `mcu-agentd` 的配置文件固定在仓库根目录：`mcu-agentd.toml`。
 说明：本项目约定 `mcu_id = esp`。

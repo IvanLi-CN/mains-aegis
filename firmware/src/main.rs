@@ -83,12 +83,18 @@ const OUTPUT_PROTECT_MIN_ILIM_MA: u16 = 1_000;
 const OUTPUT_PROTECT_SHUTDOWN_VOUT_MV: u16 = 11_000;
 const OUTPUT_PROTECT_SHUTDOWN_HOLD: Duration = Duration::from_secs(2);
 const FAN_PWM_FREQ_KHZ: u32 = 25;
-const FAN_MID_PWM_PCT: u8 = 60;
-const FAN_LOW_TEMP_C_X16: i16 = 40 * 16;
-const FAN_HIGH_TEMP_C_X16: i16 = 50 * 16;
-const FAN_HYSTERESIS_C_X16: i16 = 3 * 16;
-const FAN_COOLDOWN: Duration = Duration::from_secs(10);
+const FAN_STOP_TEMP_C_X16: i16 = 37 * 16;
+const FAN_TARGET_TEMP_C_X16: i16 = 40 * 16;
+const FAN_MIN_RUN_PWM_PCT: u8 = 10;
+const FAN_STEP_DOWN_PWM_PCT: u8 = 5;
+const FAN_STEP_UP_SMALL_DELTA_C_X16: i16 = 1 * 16;
+const FAN_STEP_UP_MEDIUM_DELTA_C_X16: i16 = 3 * 16;
+const FAN_STEP_UP_SMALL_PWM_PCT: u8 = 5;
+const FAN_STEP_UP_MEDIUM_PWM_PCT: u8 = 10;
+const FAN_STEP_UP_LARGE_PWM_PCT: u8 = 15;
+const FAN_CONTROL_INTERVAL: Duration = Duration::from_millis(500);
 const FAN_TACH_TIMEOUT: Duration = Duration::from_secs(2);
+const TMP_HW_PROTECT_TEST_MODE: bool = cfg!(feature = "tmp-hw-protect-test");
 // Temporary hardware assumption until the exact fan tach characteristics are confirmed.
 const FAN_TACH_PULSES_PER_REV: u8 = 2;
 
@@ -120,9 +126,26 @@ fn apply_fan_command(
     fan_vset_fail_safe: &mut Option<Output<'static>>,
     status: esp_firmware::fan::Status,
 ) -> output::AppliedFanState {
+    if TMP_HW_PROTECT_TEST_MODE {
+        if let Err(err) = fan_pwm.set_duty(0) {
+            defmt::warn!("fan: test-mode pwm disable err={=?}", err);
+        }
+        fan_en.set_low();
+        *applied = Some(AppliedFanOutput {
+            enabled: false,
+            pwm_pct: 0,
+        });
+        return output::AppliedFanState {
+            command: esp_firmware::fan::FanLevel::Off,
+            pwm_pct: 0,
+            degraded: false,
+            disabled_by_feature: true,
+        };
+    }
+
     let next = AppliedFanOutput {
         enabled: status.command.enabled(),
-        pwm_pct: status.pwm_pct(FAN_MID_PWM_PCT),
+        pwm_pct: status.pwm_pct,
     };
     if *pwm_degraded {
         latch_fan_vset_fail_safe(fan_vset_fail_safe);
@@ -131,6 +154,7 @@ fn apply_fan_command(
             command: esp_firmware::fan::FanLevel::High,
             pwm_pct: 100,
             degraded: true,
+            disabled_by_feature: false,
         };
     }
 
@@ -139,6 +163,7 @@ fn apply_fan_command(
             command: status.command,
             pwm_pct: next.pwm_pct,
             degraded: false,
+            disabled_by_feature: false,
         };
     }
 
@@ -156,6 +181,7 @@ fn apply_fan_command(
             command: esp_firmware::fan::FanLevel::High,
             pwm_pct: 100,
             degraded: true,
+            disabled_by_feature: false,
         };
     }
 
@@ -169,6 +195,7 @@ fn apply_fan_command(
         command: status.command,
         pwm_pct: next.pwm_pct,
         degraded: false,
+        disabled_by_feature: false,
     }
 }
 // Keep enough capacity for bring-up stalls, but cap refill watermarks so runtime cues stay snappy.
@@ -439,10 +466,10 @@ fn main() -> ! {
             Ok(()) => {
                 fan_pwm_ready = true;
                 defmt::info!(
-                    "fan: pwm ok freq_khz={} duty_pct={} mid_pwm_pct={=u8}",
+                    "fan: pwm ok freq_khz={} duty_pct={} control_interval_ms={=u64}",
                     FAN_PWM_FREQ_KHZ,
                     0,
-                    FAN_MID_PWM_PCT
+                    FAN_CONTROL_INTERVAL.as_millis() as u64
                 );
             }
             Err(err) => defmt::error!("fan: pwm channel err={=?}", err),
@@ -484,13 +511,19 @@ fn main() -> ! {
         FW_GIT_DIRTY
     );
     defmt::info!(
-        "fan: policy low_c_x16={=i16} high_c_x16={=i16} hysteresis_c_x16={=i16} cooldown_ms={=u64} tach_timeout_ms={=u64} tach_ppr={=u8}",
-        FAN_LOW_TEMP_C_X16,
-        FAN_HIGH_TEMP_C_X16,
-        FAN_HYSTERESIS_C_X16,
-        FAN_COOLDOWN.as_millis() as u64,
+        "fan: policy stop_c_x16={=i16} target_c_x16={=i16} min_pwm_pct={=u8} step_down_pct={=u8} step_up_small_pct={=u8} step_up_medium_pct={=u8} step_up_large_pct={=u8} control_interval_ms={=u64} tach_timeout_ms={=u64} tach_watchdog_enabled={=bool} tach_ppr={=u8} test_mode={=bool}",
+        FAN_STOP_TEMP_C_X16,
+        FAN_TARGET_TEMP_C_X16,
+        FAN_MIN_RUN_PWM_PCT,
+        FAN_STEP_DOWN_PWM_PCT,
+        FAN_STEP_UP_SMALL_PWM_PCT,
+        FAN_STEP_UP_MEDIUM_PWM_PCT,
+        FAN_STEP_UP_LARGE_PWM_PCT,
+        FAN_CONTROL_INTERVAL.as_millis() as u64,
         FAN_TACH_TIMEOUT.as_millis() as u64,
-        FAN_TACH_PULSES_PER_REV
+        !TMP_HW_PROTECT_TEST_MODE,
+        FAN_TACH_PULSES_PER_REV,
+        TMP_HW_PROTECT_TEST_MODE
     );
     defmt::info!(
         "fw: default_vout_mv={=u16} default_ilimit_ma={=u16}",
@@ -972,14 +1005,23 @@ fn main() -> ! {
         protect_shutdown_vout_mv: OUTPUT_PROTECT_SHUTDOWN_VOUT_MV,
         protect_shutdown_hold: OUTPUT_PROTECT_SHUTDOWN_HOLD,
         fan_config: esp_firmware::fan::Config {
-            low_temp_c_x16: FAN_LOW_TEMP_C_X16,
-            high_temp_c_x16: FAN_HIGH_TEMP_C_X16,
-            hysteresis_c_x16: FAN_HYSTERESIS_C_X16,
-            cooldown_ms: FAN_COOLDOWN.as_millis(),
+            stop_temp_c_x16: FAN_STOP_TEMP_C_X16,
+            target_temp_c_x16: FAN_TARGET_TEMP_C_X16,
+            min_run_pwm_pct: FAN_MIN_RUN_PWM_PCT,
+            step_down_pwm_pct: FAN_STEP_DOWN_PWM_PCT,
+            step_up_small_delta_c_x16: FAN_STEP_UP_SMALL_DELTA_C_X16,
+            step_up_medium_delta_c_x16: FAN_STEP_UP_MEDIUM_DELTA_C_X16,
+            step_up_small_pwm_pct: FAN_STEP_UP_SMALL_PWM_PCT,
+            step_up_medium_pwm_pct: FAN_STEP_UP_MEDIUM_PWM_PCT,
+            step_up_large_pwm_pct: FAN_STEP_UP_LARGE_PWM_PCT,
+            control_interval_ms: FAN_CONTROL_INTERVAL.as_millis() as u64,
             tach_timeout_ms: FAN_TACH_TIMEOUT.as_millis(),
             tach_pulses_per_rev: FAN_TACH_PULSES_PER_REV,
-            mid_pwm_pct: FAN_MID_PWM_PCT,
+            tach_watchdog_enabled: !TMP_HW_PROTECT_TEST_MODE,
         },
+        fan_control_enabled: !TMP_HW_PROTECT_TEST_MODE,
+        thermal_protection_enabled: !TMP_HW_PROTECT_TEST_MODE,
+        tmp_hw_protect_test_mode: TMP_HW_PROTECT_TEST_MODE,
         charger_probe_ok: self_test.charger_probe_ok,
         charger_enabled: self_test.charger_enabled,
         initial_audio_charge_phase: self_test.initial_audio_charge_phase,
@@ -1024,9 +1066,10 @@ fn main() -> ! {
     let mut applied_fan = None;
     let mut fan_pwm_degraded = false;
     let mut applied_fan_state = output::AppliedFanState {
-        command: esp_firmware::fan::FanLevel::High,
-        pwm_pct: 100,
-        degraded: true,
+        command: esp_firmware::fan::FanLevel::Off,
+        pwm_pct: 0,
+        degraded: false,
+        disabled_by_feature: TMP_HW_PROTECT_TEST_MODE,
     };
     if fan_pwm_ready {
         applied_fan_state = apply_fan_command(
@@ -1038,6 +1081,7 @@ fn main() -> ! {
             power.fan_command(),
         );
     }
+    power.set_applied_fan_state(applied_fan_state);
 
     if audio_enabled {
         sync_runtime_audio(
@@ -1069,6 +1113,7 @@ fn main() -> ! {
                     power.fan_command(),
                 );
             }
+            power.set_applied_fan_state(applied_fan_state);
             if fan_telemetry_due {
                 power.log_fan_telemetry(applied_fan_state);
             }

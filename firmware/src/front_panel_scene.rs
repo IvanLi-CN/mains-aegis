@@ -4983,10 +4983,13 @@ fn thermal_fault_present(data: DashboardLiveData) -> bool {
     data.therm_a_state == SelfCheckCommState::Err
         || data.therm_b_state == SelfCheckCommState::Err
         || data.detail.fan_status == Some("FAULT")
+        || data.detail.thermal_notice == Some("THERM KILL ASSERTED")
 }
 
 fn thermal_warn_present(data: DashboardLiveData) -> bool {
-    data.therm_a_state == SelfCheckCommState::Warn || data.therm_b_state == SelfCheckCommState::Warn
+    data.therm_a_state == SelfCheckCommState::Warn
+        || data.therm_b_state == SelfCheckCommState::Warn
+        || data.detail.thermal_notice == Some("TMP HW PROTECT TEST MODE")
 }
 
 fn detail_footer_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {

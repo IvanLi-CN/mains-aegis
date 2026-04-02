@@ -1,6 +1,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FanLevel {
     Off,
+    Low,
     Mid,
     High,
 }
@@ -9,6 +10,7 @@ impl FanLevel {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Off => "off",
+            Self::Low => "low",
             Self::Mid => "mid",
             Self::High => "high",
         }
@@ -18,11 +20,12 @@ impl FanLevel {
         !matches!(self, Self::Off)
     }
 
-    pub const fn pwm_pct(self, mid_pwm_pct: u8) -> u8 {
-        match self {
-            Self::Off => 0,
-            Self::Mid => mid_pwm_pct,
-            Self::High => 100,
+    pub const fn from_pwm_pct(pwm_pct: u8) -> Self {
+        match pwm_pct {
+            0 => Self::Off,
+            1..=33 => Self::Low,
+            34..=66 => Self::Mid,
+            _ => Self::High,
         }
     }
 }
@@ -58,13 +61,19 @@ impl TempSource {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config {
-    pub low_temp_c_x16: i16,
-    pub high_temp_c_x16: i16,
-    pub hysteresis_c_x16: i16,
-    pub cooldown_ms: u64,
+    pub stop_temp_c_x16: i16,
+    pub target_temp_c_x16: i16,
+    pub min_run_pwm_pct: u8,
+    pub step_down_pwm_pct: u8,
+    pub step_up_small_delta_c_x16: i16,
+    pub step_up_medium_delta_c_x16: i16,
+    pub step_up_small_pwm_pct: u8,
+    pub step_up_medium_pwm_pct: u8,
+    pub step_up_large_pwm_pct: u8,
+    pub control_interval_ms: u64,
     pub tach_timeout_ms: u64,
     pub tach_pulses_per_rev: u8,
-    pub mid_pwm_pct: u8,
+    pub tach_watchdog_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,36 +88,26 @@ pub struct Input {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Status {
     pub requested_command: FanLevel,
+    pub requested_pwm_pct: u8,
     pub command: FanLevel,
-    pub thermal_level: FanLevel,
+    pub pwm_pct: u8,
     pub temp_source: TempSource,
     pub control_temp_c_x16: Option<i16>,
     pub tach_fault: bool,
     pub tach_pulse_seen_recently: bool,
-    pub cooldown_active: bool,
-}
-
-impl Status {
-    pub const fn requested_pwm_pct(self, mid_pwm_pct: u8) -> u8 {
-        self.requested_command.pwm_pct(mid_pwm_pct)
-    }
-
-    pub const fn pwm_pct(self, mid_pwm_pct: u8) -> u8 {
-        self.command.pwm_pct(mid_pwm_pct)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Events {
-    pub command_changed: bool,
+    pub output_changed: bool,
     pub temp_source_changed: bool,
     pub tach_fault_changed: bool,
 }
 
 pub struct Controller {
     cfg: Config,
-    thermal_level: FanLevel,
-    cooldown_until_ms: Option<u64>,
+    requested_pwm_pct: u8,
+    last_control_at_ms: Option<u64>,
     last_tach_seen_ms: Option<u64>,
     tach_recovery_started_ms: Option<u64>,
     tach_recovery_pulses: u32,
@@ -121,20 +120,20 @@ impl Controller {
     pub const fn new(cfg: Config) -> Self {
         Self {
             cfg,
-            thermal_level: FanLevel::Off,
-            cooldown_until_ms: None,
+            requested_pwm_pct: 0,
+            last_control_at_ms: None,
             last_tach_seen_ms: None,
             tach_recovery_started_ms: None,
             tach_recovery_pulses: 0,
             status: Status {
                 requested_command: FanLevel::Off,
+                requested_pwm_pct: 0,
                 command: FanLevel::Off,
-                thermal_level: FanLevel::Off,
+                pwm_pct: 0,
                 temp_source: TempSource::Pending,
                 control_temp_c_x16: None,
                 tach_fault: false,
                 tach_pulse_seen_recently: false,
-                cooldown_active: false,
             },
         }
     }
@@ -152,43 +151,19 @@ impl Controller {
         let (control_temp_c_x16, temp_source) =
             select_control_temp(input.temps_ready, input.temp_a_c_x16, input.temp_b_c_x16);
 
-        let prev_temp_available = prev.temp_source.has_control_temp();
-        self.thermal_level = match temp_source {
-            TempSource::Pending => FanLevel::Off,
-            TempSource::Missing => FanLevel::High,
-            _ => classify_thermal_level(
+        let requested_pwm_pct = match temp_source {
+            TempSource::Pending => 0,
+            TempSource::Missing => 100,
+            _ => self.next_requested_pwm_pct(
+                input.now_ms,
                 control_temp_c_x16.expect("control temp must exist when source is present"),
-                if prev_temp_available {
-                    self.thermal_level
-                } else {
-                    FanLevel::Off
-                },
-                self.cfg,
             ),
         };
+        self.requested_pwm_pct = requested_pwm_pct;
+        let requested_command = FanLevel::from_pwm_pct(requested_pwm_pct);
 
-        let mut cooldown_active = false;
-        let mut desired_command = self.thermal_level;
-        if desired_command == FanLevel::Off {
-            if self.cooldown_until_ms.is_none() && prev.thermal_level != FanLevel::Off {
-                self.cooldown_until_ms = Some(input.now_ms.saturating_add(self.cfg.cooldown_ms));
-            }
-            if let Some(until_ms) = self.cooldown_until_ms {
-                if input.now_ms < until_ms {
-                    desired_command = FanLevel::Mid;
-                    cooldown_active = true;
-                } else {
-                    self.cooldown_until_ms = None;
-                }
-            }
-        } else {
-            self.cooldown_until_ms = None;
-        }
-
-        // Keep the tach watchdog tied to the actual driven output. Once a fault
-        // is latched the fan stays forced-high until sustained pulse activity
-        // proves it really recovered, even if the thermal request drops to off.
-        let expecting_tach = prev.tach_fault || desired_command.enabled();
+        let expecting_tach =
+            self.cfg.tach_watchdog_enabled && (prev.tach_fault || requested_pwm_pct > 0);
         let mut tach_fault = prev.tach_fault;
         if input.tach_pulse_count > 0 {
             self.last_tach_seen_ms = Some(input.now_ms);
@@ -228,12 +203,16 @@ impl Controller {
                     tach_fault = true;
                 }
             }
+        } else {
+            tach_fault = false;
+            self.tach_recovery_started_ms = None;
+            self.tach_recovery_pulses = 0;
         }
 
-        let command = if tach_fault {
-            FanLevel::High
+        let (command, pwm_pct) = if tach_fault {
+            (FanLevel::High, 100)
         } else {
-            desired_command
+            (requested_command, requested_pwm_pct)
         };
         let tach_pulse_seen_recently = if expecting_tach {
             self.last_tach_seen_ms
@@ -246,25 +225,70 @@ impl Controller {
         };
 
         self.status = Status {
-            requested_command: desired_command,
+            requested_command,
+            requested_pwm_pct,
             command,
-            thermal_level: self.thermal_level,
+            pwm_pct,
             temp_source,
             control_temp_c_x16,
             tach_fault,
             tach_pulse_seen_recently,
-            cooldown_active,
         };
 
         (
             self.status,
             Events {
-                command_changed: self.status.command != prev.command,
+                output_changed: self.status.command != prev.command
+                    || self.status.pwm_pct != prev.pwm_pct
+                    || self.status.requested_command != prev.requested_command
+                    || self.status.requested_pwm_pct != prev.requested_pwm_pct,
                 temp_source_changed: self.status.temp_source != prev.temp_source,
                 tach_fault_changed: self.status.tach_fault != prev.tach_fault,
             },
         )
     }
+
+    fn next_requested_pwm_pct(&mut self, now_ms: u64, control_temp_c_x16: i16) -> u8 {
+        let should_step = self
+            .last_control_at_ms
+            .map(|last_ms| now_ms.saturating_sub(last_ms) >= self.cfg.control_interval_ms)
+            .unwrap_or(true);
+
+        if !should_step {
+            return self.requested_pwm_pct;
+        }
+        self.last_control_at_ms = Some(now_ms);
+
+        adjust_pwm_pct(self.requested_pwm_pct, control_temp_c_x16, self.cfg)
+    }
+}
+
+fn adjust_pwm_pct(current_pwm_pct: u8, temp_c_x16: i16, cfg: Config) -> u8 {
+    if temp_c_x16 < cfg.stop_temp_c_x16 {
+        return 0;
+    }
+
+    if temp_c_x16 < cfg.target_temp_c_x16 {
+        if current_pwm_pct == 0 {
+            return cfg.min_run_pwm_pct;
+        }
+        return current_pwm_pct
+            .saturating_sub(cfg.step_down_pwm_pct)
+            .max(cfg.min_run_pwm_pct);
+    }
+
+    let step_up = if temp_c_x16 >= cfg.target_temp_c_x16 + cfg.step_up_medium_delta_c_x16 {
+        cfg.step_up_large_pwm_pct
+    } else if temp_c_x16 >= cfg.target_temp_c_x16 + cfg.step_up_small_delta_c_x16 {
+        cfg.step_up_medium_pwm_pct
+    } else {
+        cfg.step_up_small_pwm_pct
+    };
+
+    current_pwm_pct
+        .max(cfg.min_run_pwm_pct)
+        .saturating_add(step_up)
+        .clamp(cfg.min_run_pwm_pct, 100)
 }
 
 fn select_control_temp(
@@ -284,153 +308,114 @@ fn select_control_temp(
     }
 }
 
-fn classify_thermal_level(temp_c_x16: i16, prev: FanLevel, cfg: Config) -> FanLevel {
-    let low_fall = cfg.low_temp_c_x16 - cfg.hysteresis_c_x16;
-    let high_fall = cfg.high_temp_c_x16 - cfg.hysteresis_c_x16;
-
-    match prev {
-        FanLevel::Off => {
-            if temp_c_x16 >= cfg.high_temp_c_x16 {
-                FanLevel::High
-            } else if temp_c_x16 >= cfg.low_temp_c_x16 {
-                FanLevel::Mid
-            } else {
-                FanLevel::Off
-            }
-        }
-        FanLevel::Mid => {
-            if temp_c_x16 >= cfg.high_temp_c_x16 {
-                FanLevel::High
-            } else if temp_c_x16 < low_fall {
-                FanLevel::Off
-            } else {
-                FanLevel::Mid
-            }
-        }
-        FanLevel::High => {
-            if temp_c_x16 < high_fall {
-                if temp_c_x16 < low_fall {
-                    FanLevel::Off
-                } else {
-                    FanLevel::Mid
-                }
-            } else {
-                FanLevel::High
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Config, Controller, FanLevel, Input, TempSource};
 
     fn cfg() -> Config {
         Config {
-            low_temp_c_x16: 40 * 16,
-            high_temp_c_x16: 50 * 16,
-            hysteresis_c_x16: 3 * 16,
-            cooldown_ms: 10_000,
+            stop_temp_c_x16: 37 * 16,
+            target_temp_c_x16: 40 * 16,
+            min_run_pwm_pct: 10,
+            step_down_pwm_pct: 5,
+            step_up_small_delta_c_x16: 1 * 16,
+            step_up_medium_delta_c_x16: 3 * 16,
+            step_up_small_pwm_pct: 5,
+            step_up_medium_pwm_pct: 10,
+            step_up_large_pwm_pct: 15,
+            control_interval_ms: 500,
             tach_timeout_ms: 2_000,
             tach_pulses_per_rev: 2,
-            mid_pwm_pct: 60,
+            tach_watchdog_enabled: true,
         }
     }
 
     #[test]
-    fn tracks_three_thermal_bands() {
+    fn ramps_up_toward_target_in_steps() {
         let mut ctl = Controller::new(cfg());
 
         let (status, _) = ctl.update(Input {
             now_ms: 0,
-            temps_ready: true,
-            temp_a_c_x16: Some(39 * 16),
-            temp_b_c_x16: Some(38 * 16),
-            tach_pulse_count: 0,
-        });
-        assert_eq!(status.command, FanLevel::Off);
-
-        let (status, _) = ctl.update(Input {
-            now_ms: 100,
             temps_ready: true,
             temp_a_c_x16: Some(40 * 16),
             temp_b_c_x16: Some(39 * 16),
             tach_pulse_count: 1,
         });
-        assert_eq!(status.command, FanLevel::Mid);
-        assert_eq!(status.temp_source, TempSource::Max);
+        assert_eq!(status.requested_pwm_pct, 15);
+        assert_eq!(status.command, FanLevel::Low);
 
         let (status, _) = ctl.update(Input {
-            now_ms: 200,
+            now_ms: 500,
             temps_ready: true,
-            temp_a_c_x16: Some(50 * 16),
-            temp_b_c_x16: Some(47 * 16),
+            temp_a_c_x16: Some(42 * 16),
+            temp_b_c_x16: Some(39 * 16),
             tach_pulse_count: 1,
         });
-        assert_eq!(status.command, FanLevel::High);
+        assert_eq!(status.requested_pwm_pct, 25);
+        assert_eq!(status.command, FanLevel::Low);
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 1_000,
+            temps_ready: true,
+            temp_a_c_x16: Some(44 * 16),
+            temp_b_c_x16: Some(39 * 16),
+            tach_pulse_count: 1,
+        });
+        assert_eq!(status.requested_pwm_pct, 40);
+        assert_eq!(status.command, FanLevel::Mid);
     }
 
     #[test]
-    fn applies_hysteresis_near_thresholds() {
+    fn drops_to_minimum_then_stops_below_stop_threshold() {
         let mut ctl = Controller::new(cfg());
+
         ctl.update(Input {
             now_ms: 0,
             temps_ready: true,
-            temp_a_c_x16: Some(41 * 16),
+            temp_a_c_x16: Some(43 * 16),
             temp_b_c_x16: None,
             tach_pulse_count: 1,
         });
 
         let (status, _) = ctl.update(Input {
-            now_ms: 100,
+            now_ms: 500,
             temps_ready: true,
-            temp_a_c_x16: Some(38 * 16),
+            temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
             tach_pulse_count: 1,
         });
-        assert_eq!(status.command, FanLevel::Mid);
+        assert_eq!(status.requested_pwm_pct, 20);
+        assert_eq!(status.command, FanLevel::Low);
 
         let (status, _) = ctl.update(Input {
-            now_ms: 200,
+            now_ms: 1_000,
+            temps_ready: true,
+            temp_a_c_x16: Some(39 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 1,
+        });
+        assert_eq!(status.requested_pwm_pct, 15);
+        assert_eq!(status.command, FanLevel::Low);
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 1_500,
+            temps_ready: true,
+            temp_a_c_x16: Some(39 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 1,
+        });
+        assert_eq!(status.requested_pwm_pct, 10);
+        assert_eq!(status.command, FanLevel::Low);
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 2_000,
             temps_ready: true,
             temp_a_c_x16: Some(36 * 16),
             temp_b_c_x16: None,
-            tach_pulse_count: 1,
-        });
-        assert_eq!(status.command, FanLevel::Mid);
-        assert!(status.cooldown_active);
-    }
-
-    #[test]
-    fn keeps_low_speed_during_cooldown_then_stops() {
-        let mut ctl = Controller::new(cfg());
-        ctl.update(Input {
-            now_ms: 0,
-            temps_ready: true,
-            temp_a_c_x16: Some(52 * 16),
-            temp_b_c_x16: None,
-            tach_pulse_count: 1,
-        });
-
-        let (status, _) = ctl.update(Input {
-            now_ms: 100,
-            temps_ready: true,
-            temp_a_c_x16: Some(35 * 16),
-            temp_b_c_x16: None,
-            tach_pulse_count: 1,
-        });
-        assert_eq!(status.command, FanLevel::Mid);
-        assert!(status.cooldown_active);
-
-        let (status, _) = ctl.update(Input {
-            now_ms: 10_200,
-            temps_ready: true,
-            temp_a_c_x16: Some(35 * 16),
-            temp_b_c_x16: None,
             tach_pulse_count: 0,
         });
+        assert_eq!(status.requested_pwm_pct, 0);
         assert_eq!(status.command, FanLevel::Off);
-        assert!(!status.cooldown_active);
     }
 
     #[test]
@@ -444,154 +429,88 @@ mod tests {
             temp_b_c_x16: None,
             tach_pulse_count: 1,
         });
-        assert_eq!(status.command, FanLevel::Mid);
         assert_eq!(status.temp_source, TempSource::TmpA);
+        assert_eq!(status.command, FanLevel::Low);
 
         let (status, _) = ctl.update(Input {
-            now_ms: 100,
+            now_ms: 500,
             temps_ready: true,
             temp_a_c_x16: None,
             temp_b_c_x16: None,
             tach_pulse_count: 1,
         });
+        assert_eq!(status.requested_pwm_pct, 100);
         assert_eq!(status.command, FanLevel::High);
         assert_eq!(status.temp_source, TempSource::Missing);
     }
 
     #[test]
-    fn escalates_on_tach_timeout_and_recovers_on_pulse() {
+    fn latches_tach_fault_until_recovered() {
         let mut ctl = Controller::new(cfg());
-        ctl.update(Input {
+
+        let (_, _) = ctl.update(Input {
             now_ms: 0,
             temps_ready: true,
-            temp_a_c_x16: Some(42 * 16),
+            temp_a_c_x16: Some(41 * 16),
             temp_b_c_x16: None,
-            tach_pulse_count: 1,
+            tach_pulse_count: 0,
         });
 
         let (status, _) = ctl.update(Input {
             now_ms: 2_100,
             temps_ready: true,
-            temp_a_c_x16: Some(42 * 16),
+            temp_a_c_x16: Some(41 * 16),
             temp_b_c_x16: None,
             tach_pulse_count: 0,
         });
-        assert_eq!(status.command, FanLevel::High);
         assert!(status.tach_fault);
+        assert_eq!(status.command, FanLevel::High);
+        assert_eq!(status.pwm_pct, 100);
 
         let (status, _) = ctl.update(Input {
-            now_ms: 2_150,
+            now_ms: 2_130,
             temps_ready: true,
-            temp_a_c_x16: Some(35 * 16),
-            temp_b_c_x16: None,
-            tach_pulse_count: 0,
-        });
-        assert_eq!(status.command, FanLevel::High);
-        assert!(status.tach_fault);
-
-        let (status, _) = ctl.update(Input {
-            now_ms: 2_200,
-            temps_ready: true,
-            temp_a_c_x16: Some(42 * 16),
+            temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
             tach_pulse_count: 1,
         });
-        assert_eq!(status.command, FanLevel::High);
         assert!(status.tach_fault);
 
         let (status, _) = ctl.update(Input {
-            now_ms: 2_201,
+            now_ms: 2_160,
             temps_ready: true,
-            temp_a_c_x16: Some(42 * 16),
+            temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
             tach_pulse_count: 1,
         });
-        assert_eq!(status.command, FanLevel::High);
-        assert!(status.tach_fault);
-
-        let (status, _) = ctl.update(Input {
-            now_ms: 2_210,
-            temps_ready: true,
-            temp_a_c_x16: Some(42 * 16),
-            temp_b_c_x16: None,
-            tach_pulse_count: 0,
-        });
-        assert_eq!(status.command, FanLevel::High);
-        assert!(status.tach_fault);
-
-        let (status, _) = ctl.update(Input {
-            now_ms: 2_225,
-            temps_ready: true,
-            temp_a_c_x16: Some(42 * 16),
-            temp_b_c_x16: None,
-            tach_pulse_count: 1,
-        });
-        assert_eq!(status.command, FanLevel::Mid);
         assert!(!status.tach_fault);
+        assert_eq!(status.command, FanLevel::Low);
+        assert_eq!(status.pwm_pct, 30);
     }
 
     #[test]
-    fn ignores_sparse_glitches_after_recovery_window_expires() {
-        let mut ctl = Controller::new(cfg());
-        ctl.update(Input {
+    fn disables_tach_watchdog_in_test_mode() {
+        let mut test_cfg = cfg();
+        test_cfg.tach_watchdog_enabled = false;
+        let mut ctl = Controller::new(test_cfg);
+
+        let (status, _) = ctl.update(Input {
             now_ms: 0,
             temps_ready: true,
-            temp_a_c_x16: Some(42 * 16),
-            temp_b_c_x16: None,
-            tach_pulse_count: 1,
-        });
-
-        let (status, _) = ctl.update(Input {
-            now_ms: 2_100,
-            temps_ready: true,
-            temp_a_c_x16: Some(42 * 16),
+            temp_a_c_x16: Some(44 * 16),
             temp_b_c_x16: None,
             tach_pulse_count: 0,
         });
-        assert_eq!(status.command, FanLevel::High);
-        assert!(status.tach_fault);
-
-        let (status, _) = ctl.update(Input {
-            now_ms: 13_000,
-            temps_ready: true,
-            temp_a_c_x16: Some(35 * 16),
-            temp_b_c_x16: None,
-            tach_pulse_count: 1,
-        });
-        assert_eq!(status.requested_command, FanLevel::Mid);
-        assert_eq!(status.command, FanLevel::High);
-        assert!(status.tach_fault);
-
-        let (status, _) = ctl.update(Input {
-            now_ms: 26_000,
-            temps_ready: true,
-            temp_a_c_x16: Some(35 * 16),
-            temp_b_c_x16: None,
-            tach_pulse_count: 0,
-        });
-        assert_eq!(status.requested_command, FanLevel::Off);
-        assert_eq!(status.command, FanLevel::High);
-        assert!(status.tach_fault);
-
-        let (status, _) = ctl.update(Input {
-            now_ms: 26_100,
-            temps_ready: true,
-            temp_a_c_x16: Some(35 * 16),
-            temp_b_c_x16: None,
-            tach_pulse_count: 1,
-        });
-        assert_eq!(status.requested_command, FanLevel::Off);
-        assert_eq!(status.command, FanLevel::High);
-        assert!(status.tach_fault);
-
-        let (status, _) = ctl.update(Input {
-            now_ms: 26_125,
-            temps_ready: true,
-            temp_a_c_x16: Some(35 * 16),
-            temp_b_c_x16: None,
-            tach_pulse_count: 1,
-        });
-        assert_eq!(status.command, FanLevel::Off);
         assert!(!status.tach_fault);
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 3_000,
+            temps_ready: true,
+            temp_a_c_x16: Some(44 * 16),
+            temp_b_c_x16: None,
+            tach_pulse_count: 0,
+        });
+        assert!(!status.tach_fault);
+        assert_eq!(status.command, FanLevel::Mid);
     }
 }
