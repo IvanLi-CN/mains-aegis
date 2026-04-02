@@ -1003,6 +1003,32 @@ fn thermal_notice_text(therm_kill_asserted: bool, tmp_hw_protect_test_mode: bool
     }
 }
 
+fn temp_c_to_x16(temp_c: Option<i16>) -> Option<i16> {
+    temp_c.map(|value| value.saturating_mul(16))
+}
+
+fn accumulate_max_temp_c_x16(max_temp_c_x16: Option<i16>, temp_c_x16: Option<i16>) -> Option<i16> {
+    match (max_temp_c_x16, temp_c_x16) {
+        (Some(current), Some(sample)) => Some(current.max(sample)),
+        (None, Some(sample)) => Some(sample),
+        (current, None) => current,
+    }
+}
+
+fn bms_thermal_max_c_x16(snapshot: &SelfCheckUiSnapshot) -> Option<i16> {
+    let detail = &snapshot.dashboard_detail;
+    let mut max_temp_c_x16 = None;
+
+    max_temp_c_x16 = accumulate_max_temp_c_x16(max_temp_c_x16, temp_c_to_x16(detail.board_temp_c));
+    max_temp_c_x16 =
+        accumulate_max_temp_c_x16(max_temp_c_x16, temp_c_to_x16(detail.battery_temp_c));
+    for sample in detail.cell_temp_c {
+        max_temp_c_x16 = accumulate_max_temp_c_x16(max_temp_c_x16, temp_c_to_x16(sample));
+    }
+
+    max_temp_c_x16
+}
+
 fn accumulate_protection_temp(
     max_temp_c_x16: Option<i16>,
     temp_c_x16: Option<i16>,
@@ -1012,11 +1038,7 @@ fn accumulate_protection_temp(
         return max_temp_c_x16;
     }
 
-    match (max_temp_c_x16, temp_c_x16) {
-        (Some(current), Some(sample)) => Some(current.max(sample)),
-        (None, Some(sample)) => Some(sample),
-        (current, None) => current,
-    }
+    accumulate_max_temp_c_x16(max_temp_c_x16, temp_c_x16)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -3399,6 +3421,18 @@ where
             || self.ui_snapshot.tmp_b != SelfCheckCommState::Pending
     }
 
+    fn bms_thermal_ready(&self) -> bool {
+        self.ui_snapshot.bq40z50 != SelfCheckCommState::Pending
+    }
+
+    fn shared_bms_thermal_max_c_x16(&self) -> Option<i16> {
+        bms_thermal_max_c_x16(&self.ui_snapshot)
+    }
+
+    fn thermal_control_inputs_ready(&self) -> bool {
+        self.fan_temps_ready() || self.bms_thermal_ready()
+    }
+
     fn clear_bms_detail_snapshot(&mut self) {
         let detail = &mut self.ui_snapshot.dashboard_detail;
         detail.cell_mv = [None, None, None, None];
@@ -3500,11 +3534,13 @@ where
         self.refresh_fan_temp_snapshots_if_due();
         let prev = self.fan.status();
         let now_ms = self.fan_now_ms();
+        let bms_temp_c_x16 = self.shared_bms_thermal_max_c_x16();
         let (status, events) = self.fan.update(fan::Input {
             now_ms,
-            temps_ready: self.fan_temps_ready(),
+            temps_ready: self.thermal_control_inputs_ready(),
             temp_a_c_x16: self.ui_snapshot.tmp_a_c_x16,
             temp_b_c_x16: self.ui_snapshot.tmp_b_c_x16,
+            temp_bms_c_x16: bms_temp_c_x16,
             tach_pulse_count: irq.fan_tach,
         });
         let rpm = self
@@ -3521,7 +3557,7 @@ where
                         status.control_temp_c_x16
                     );
                 }
-                fan::TempSource::TmpA | fan::TempSource::TmpB => {
+                fan::TempSource::TmpA | fan::TempSource::TmpB | fan::TempSource::Bms => {
                     defmt::warn!(
                         "fan: temp_source degraded source={} control_temp_c_x16={=?}",
                         status.temp_source.as_str(),
@@ -6581,20 +6617,26 @@ where
         let mut max_current_ma = None;
         let mut min_vout_mv = None;
 
+        max_temp_c_x16 = accumulate_protection_temp(
+            max_temp_c_x16,
+            self.ui_snapshot.tmp_a_c_x16,
+            self.cfg.thermal_protection_enabled,
+        );
+        max_temp_c_x16 = accumulate_protection_temp(
+            max_temp_c_x16,
+            self.ui_snapshot.tmp_b_c_x16,
+            self.cfg.thermal_protection_enabled,
+        );
+        max_temp_c_x16 = accumulate_protection_temp(
+            max_temp_c_x16,
+            self.shared_bms_thermal_max_c_x16(),
+            self.cfg.thermal_protection_enabled,
+        );
+
         for ch in [OutputChannel::OutA, OutputChannel::OutB] {
             if !self.output_state.requested_outputs.is_enabled(ch) {
                 continue;
             }
-
-            let temp = match ch {
-                OutputChannel::OutA => self.ui_snapshot.tmp_a_c_x16,
-                OutputChannel::OutB => self.ui_snapshot.tmp_b_c_x16,
-            };
-            max_temp_c_x16 = accumulate_protection_temp(
-                max_temp_c_x16,
-                temp,
-                self.cfg.thermal_protection_enabled,
-            );
 
             let current = match ch {
                 OutputChannel::OutA => self.ui_snapshot.tps_a_iout_ma,
@@ -9512,6 +9554,16 @@ mod tests {
             accumulate_protection_temp(Some(41 * 16), Some(45 * 16), true),
             Some(45 * 16)
         );
+    }
+
+    #[test]
+    fn bms_thermal_max_uses_highest_available_detail_sensor() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::BatteryOnly);
+        snapshot.dashboard_detail.board_temp_c = Some(35);
+        snapshot.dashboard_detail.battery_temp_c = Some(41);
+        snapshot.dashboard_detail.cell_temp_c = [Some(39), Some(44), None, Some(42)];
+
+        assert_eq!(bms_thermal_max_c_x16(&snapshot), Some(44 * 16));
     }
 
     #[test]

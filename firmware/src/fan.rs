@@ -36,6 +36,7 @@ pub enum TempSource {
     Missing,
     TmpA,
     TmpB,
+    Bms,
     Max,
 }
 
@@ -46,16 +47,17 @@ impl TempSource {
             Self::Missing => "missing",
             Self::TmpA => "tmp_a",
             Self::TmpB => "tmp_b",
+            Self::Bms => "bms",
             Self::Max => "max",
         }
     }
 
     pub const fn has_control_temp(self) -> bool {
-        matches!(self, Self::TmpA | Self::TmpB | Self::Max)
+        matches!(self, Self::TmpA | Self::TmpB | Self::Bms | Self::Max)
     }
 
     pub const fn is_degraded(self) -> bool {
-        matches!(self, Self::Missing | Self::TmpA | Self::TmpB)
+        matches!(self, Self::Missing | Self::TmpA | Self::TmpB | Self::Bms)
     }
 }
 
@@ -82,6 +84,7 @@ pub struct Input {
     pub temps_ready: bool,
     pub temp_a_c_x16: Option<i16>,
     pub temp_b_c_x16: Option<i16>,
+    pub temp_bms_c_x16: Option<i16>,
     pub tach_pulse_count: u32,
 }
 
@@ -148,8 +151,12 @@ impl Controller {
 
     pub fn update(&mut self, input: Input) -> (Status, Events) {
         let prev = self.status;
-        let (control_temp_c_x16, temp_source) =
-            select_control_temp(input.temps_ready, input.temp_a_c_x16, input.temp_b_c_x16);
+        let (control_temp_c_x16, temp_source) = select_control_temp(
+            input.temps_ready,
+            input.temp_a_c_x16,
+            input.temp_b_c_x16,
+            input.temp_bms_c_x16,
+        );
 
         let requested_pwm_pct = match temp_source {
             TempSource::Pending => 0,
@@ -295,16 +302,33 @@ fn select_control_temp(
     temps_ready: bool,
     temp_a_c_x16: Option<i16>,
     temp_b_c_x16: Option<i16>,
+    temp_bms_c_x16: Option<i16>,
 ) -> (Option<i16>, TempSource) {
     if !temps_ready {
         return (None, TempSource::Pending);
     }
 
-    match (temp_a_c_x16, temp_b_c_x16) {
-        (Some(a), Some(b)) => (Some(a.max(b)), TempSource::Max),
-        (Some(a), None) => (Some(a), TempSource::TmpA),
-        (None, Some(b)) => (Some(b), TempSource::TmpB),
-        (None, None) => (None, TempSource::Missing),
+    let mut control_temp_c_x16 = None;
+    let mut seen_count = 0u8;
+    let mut last_source = TempSource::Missing;
+
+    for (source, sample) in [
+        (TempSource::TmpA, temp_a_c_x16),
+        (TempSource::TmpB, temp_b_c_x16),
+        (TempSource::Bms, temp_bms_c_x16),
+    ] {
+        if let Some(sample_c_x16) = sample {
+            control_temp_c_x16 =
+                Some(control_temp_c_x16.map_or(sample_c_x16, |cur: i16| cur.max(sample_c_x16)));
+            seen_count = seen_count.saturating_add(1);
+            last_source = source;
+        }
+    }
+
+    match seen_count {
+        0 => (None, TempSource::Missing),
+        1 => (control_temp_c_x16, last_source),
+        _ => (control_temp_c_x16, TempSource::Max),
     }
 }
 
@@ -339,6 +363,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(40 * 16),
             temp_b_c_x16: Some(39 * 16),
+            temp_bms_c_x16: None,
             tach_pulse_count: 1,
         });
         assert_eq!(status.requested_pwm_pct, 15);
@@ -349,6 +374,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(42 * 16),
             temp_b_c_x16: Some(39 * 16),
+            temp_bms_c_x16: None,
             tach_pulse_count: 1,
         });
         assert_eq!(status.requested_pwm_pct, 25);
@@ -359,6 +385,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(44 * 16),
             temp_b_c_x16: Some(39 * 16),
+            temp_bms_c_x16: None,
             tach_pulse_count: 1,
         });
         assert_eq!(status.requested_pwm_pct, 40);
@@ -374,6 +401,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(43 * 16),
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 1,
         });
 
@@ -382,6 +410,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 1,
         });
         assert_eq!(status.requested_pwm_pct, 20);
@@ -392,6 +421,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 1,
         });
         assert_eq!(status.requested_pwm_pct, 15);
@@ -402,6 +432,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 1,
         });
         assert_eq!(status.requested_pwm_pct, 10);
@@ -412,6 +443,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(36 * 16),
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 0,
         });
         assert_eq!(status.requested_pwm_pct, 0);
@@ -427,6 +459,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(42 * 16),
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 1,
         });
         assert_eq!(status.temp_source, TempSource::TmpA);
@@ -437,6 +470,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: None,
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 1,
         });
         assert_eq!(status.requested_pwm_pct, 100);
@@ -453,6 +487,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(41 * 16),
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 0,
         });
 
@@ -461,6 +496,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(41 * 16),
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 0,
         });
         assert!(status.tach_fault);
@@ -472,6 +508,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 1,
         });
         assert!(status.tach_fault);
@@ -481,6 +518,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 1,
         });
         assert!(!status.tach_fault);
@@ -499,6 +537,7 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(44 * 16),
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 0,
         });
         assert!(!status.tach_fault);
@@ -508,9 +547,46 @@ mod tests {
             temps_ready: true,
             temp_a_c_x16: Some(44 * 16),
             temp_b_c_x16: None,
+            temp_bms_c_x16: None,
             tach_pulse_count: 0,
         });
         assert!(!status.tach_fault);
         assert_eq!(status.command, FanLevel::Mid);
+    }
+
+    #[test]
+    fn uses_bms_thermal_max_when_tmp_is_missing() {
+        let mut ctl = Controller::new(cfg());
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 0,
+            temps_ready: true,
+            temp_a_c_x16: None,
+            temp_b_c_x16: None,
+            temp_bms_c_x16: Some(42 * 16),
+            tach_pulse_count: 1,
+        });
+
+        assert_eq!(status.temp_source, TempSource::Bms);
+        assert_eq!(status.control_temp_c_x16, Some(42 * 16));
+        assert_eq!(status.command, FanLevel::Low);
+    }
+
+    #[test]
+    fn picks_max_across_tmp_and_bms_inputs() {
+        let mut ctl = Controller::new(cfg());
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 0,
+            temps_ready: true,
+            temp_a_c_x16: Some(39 * 16),
+            temp_b_c_x16: Some(41 * 16),
+            temp_bms_c_x16: Some(43 * 16),
+            tach_pulse_count: 1,
+        });
+
+        assert_eq!(status.temp_source, TempSource::Max);
+        assert_eq!(status.control_temp_c_x16, Some(43 * 16));
+        assert_eq!(status.requested_pwm_pct, 25);
     }
 }

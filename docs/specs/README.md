@@ -38,3 +38,4 @@
 | frsr9 | Regulated output active derating + shutdown | 已完成 | `frsr9-regulated-output-active-protection/SPEC.md` | 2026-03-16 | 已落地温度/电流双门限主动降额、低压主动停机与显式恢复前置条件 |
 | 2uqhm | TPS/BQ power test firmware | 已完成 | `2uqhm-tps-bq-power-test-firmware/SPEC.md` | 2026-03-21 | 已实现独立 `tps-test-fw`、固定 profile 电源运行时、专用 `TPS TEST` 屏显与三组 `cargo +esp check` 验证 |
 | eu2b8 | BQ25792 500mA charge policy + DC derate | 部分完成（4/5） | `eu2b8-bq25792-charge-policy/SPEC.md` | 2026-03-28 | 主线已落地 `80% / 3.70V` 启停、满充锁存、`DC5025` 独占输入 `3.0A -> 100mA` 降档、`TPS>5W` 停充门控、`IBAT_ADC` 实测显示与 host-side 预览场景；等待最终视觉证据晋升与 PR 收口 |
+| 2drzf | BQ40 mainboard DF protection baseline | 已完成 | `2drzf-bq40-mainboard-df-protection-baseline/SPEC.md` | 2026-04-03 | 冻结 `asset-df-mainboard` 的 `OCC/OCD/SOCC/SOCD` 主板基线，并把 `TMP + BMS` 最高温收敛为共享热控真相源 |

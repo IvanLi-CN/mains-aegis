@@ -55,6 +55,7 @@ Mainboard policy:
 - it does not depend on live MB44 DF capture, so a chip that falls back to TI stock DF or rejects live capture can still be repaired onto the board's 4S baseline
 - when the pack still answers MB44 in app mode, the tool preserves live `CELL_GAIN` / `PACK_GAIN` / `BAT_GAIN` on top of the official asset base only if all three words are captured; otherwise it falls back to the asset defaults instead of flashing a mixed live/default calibration set
 - it is intentionally different from "writing TI default DF fields"; the tool writes an official DF section base plus project-specific overrides
+- current fixed protection overrides include `OCC1=4500mA/6s`, `OCC2=5200mA/3s`, `SOCC=6000mA/5s`, `OCD1=-14500mA/6s`, `OCD2=-15000mA/3s`, `SOCD=-16000mA/5s`
 
 ## 3) Verify (offline)
 

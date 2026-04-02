@@ -573,12 +573,12 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
 
 ## 风扇温控与故障保护（Spec #ygmqn）
 
-固件会在运行期接管 `GPIO35(FAN_EN)`、`GPIO36(FAN_VSET_PWM)` 与 `GPIO34(FAN_TACH)`，形成一个以 `TMP112A/B` 为输入的闭环风扇策略；同时支持 `tmp-hw-protect-test` 测试构建，用于专测 TMP 硬件温度保护链路。
+固件会在运行期接管 `GPIO35(FAN_EN)`、`GPIO36(FAN_VSET_PWM)` 与 `GPIO34(FAN_TACH)`，形成一个以 `TMP112A/B + BQ40 board/battery/TS1..TS4` 最高温为输入的闭环风扇策略；同时支持 `tmp-hw-protect-test` 测试构建，用于专测 TMP 硬件温度保护链路。
 
 ### 正常构建（默认）冻结口径
 
 - PWM：`25kHz`，`GPIO36 -> FAN_VSET_PWM`
-- 控温源：取 `max(tmp_a, tmp_b)`
+- 控温源：取 `max(tmp_a, tmp_b, bms_board, bms_battery, bms_ts1..ts4)`
 - 控温目标：`40°C`
 - 停转阈值：`< 37°C => off(0%)`
 - 最低有效转速：`10%`
@@ -589,7 +589,7 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
   - `41°C .. < 43°C`：每周期 `+10%`
   - `>= 43°C`：每周期 `+15%`
 - UI 状态带：`OFF=0%`、`LOW=1..33%`、`MID=34..66%`、`HIGH=67..100%`
-- 温度退化：单路温度缺失时退化到另一侧；双路都缺失时直接 `high(100%)`
+- 温度退化：`TMP` 缺失时可退化到 `BQ40` 温度；若 `TMP + BQ40` 全部缺失才直接 `high(100%)`
 - `tach` 看门狗：命令为运行态且 `2s` 内没有 `FAN_TACH` 脉冲时，记录故障并强制 `high`
 - `tach` 故障恢复：需要确认到连续脉冲活动，单个毛刺边沿不会解除强制 `high`
 - PWM 失败兜底：若 `FAN_VSET_PWM` 的 LEDC 初始化失败，或运行期 duty 更新失败，固件会直接拉高 `FAN_EN`，并把 `FAN_VSET_PWM` 切到高电平 fail-safe，避免“日志还在跑但风扇硬件失效”
@@ -619,6 +619,7 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
 异常/恢复：
 
 - `fan: temp_source degraded source=tmp_a ...`
+- `fan: temp_source degraded source=bms ...`
 - `fan: temp_source missing fallback=full_speed ...`
 - `fan: tach_timeout mode=high pwm_pct=100 ...`
 - `fan: tach_recovered mode=low pwm_pct=... ...`

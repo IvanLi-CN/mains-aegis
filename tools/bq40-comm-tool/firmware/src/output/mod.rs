@@ -218,6 +218,18 @@ const BMS_DF_ADDR_ENABLED_PF_D: u16 = 0x49C2;
 const BMS_DF_ADDR_TEMPERATURE_ENABLE: u16 = 0x4A7B;
 const BMS_DF_ADDR_TEMPERATURE_MODE: u16 = 0x4A7C;
 const BMS_DF_ADDR_AFE_PROTECTION_CONTROL: u16 = 0x4A80;
+const BMS_DF_ADDR_OCC1_THRESHOLD: u16 = 0x495E;
+const BMS_DF_ADDR_OCC1_DELAY: u16 = 0x4960;
+const BMS_DF_ADDR_OCC2_THRESHOLD: u16 = 0x4961;
+const BMS_DF_ADDR_OCC2_DELAY: u16 = 0x4963;
+const BMS_DF_ADDR_OCD1_THRESHOLD: u16 = 0x4967;
+const BMS_DF_ADDR_OCD1_DELAY: u16 = 0x4969;
+const BMS_DF_ADDR_OCD2_THRESHOLD: u16 = 0x496A;
+const BMS_DF_ADDR_OCD2_DELAY: u16 = 0x496C;
+const BMS_DF_ADDR_SOCC_THRESHOLD: u16 = 0x49C9;
+const BMS_DF_ADDR_SOCC_DELAY: u16 = 0x49CB;
+const BMS_DF_ADDR_SOCD_THRESHOLD: u16 = 0x49CC;
+const BMS_DF_ADDR_SOCD_DELAY: u16 = 0x49CE;
 const BMS_DF_ADDR_CELL_GAIN: u16 = 0x4000;
 const BMS_DF_ADDR_PACK_GAIN: u16 = 0x4002;
 const BMS_DF_ADDR_BAT_GAIN: u16 = 0x4004;
@@ -240,6 +252,30 @@ const BMS_DF_SBS_CONFIGURATION_DEFAULT: u8 = 0x20;
 const BMS_DF_AUTH_CONFIG_DEFAULT: u8 = 0x00;
 #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
 const BMS_DF_IT_GAUGING_CONFIGURATION_DEFAULT: u16 = 0xD0FE;
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+const BMS_DF_OCC1_THRESHOLD_MAINBOARD_MA: i16 = 4_500;
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+const BMS_DF_OCC1_DELAY_MAINBOARD_S: u8 = 6;
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+const BMS_DF_OCC2_THRESHOLD_MAINBOARD_MA: i16 = 5_200;
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+const BMS_DF_OCC2_DELAY_MAINBOARD_S: u8 = 3;
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+const BMS_DF_SOCC_THRESHOLD_MAINBOARD_MA: i16 = 6_000;
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+const BMS_DF_SOCC_DELAY_MAINBOARD_S: u8 = 5;
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+const BMS_DF_OCD1_THRESHOLD_MAINBOARD_MA: i16 = -14_500;
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+const BMS_DF_OCD1_DELAY_MAINBOARD_S: u8 = 6;
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+const BMS_DF_OCD2_THRESHOLD_MAINBOARD_MA: i16 = -15_000;
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+const BMS_DF_OCD2_DELAY_MAINBOARD_S: u8 = 3;
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+const BMS_DF_SOCD_THRESHOLD_MAINBOARD_MA: i16 = -16_000;
+#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+const BMS_DF_SOCD_DELAY_MAINBOARD_S: u8 = 5;
 const BMS_DF_REPLY_LEN_WITH_ADDR: u8 = 34;
 const BMS_MFG_STATUS_CAL_TEST: u32 = 1 << 15;
 const BMS_MFG_STATUS_GAUGE_EN: u32 = 1 << 3;
@@ -803,6 +839,9 @@ fn patch_bms_df_section1_mainboard(section1: &mut [u8], calibration: BmsDfCalibr
             buf[off + 1] = bytes[1];
         }
     };
+    let patch_i16 = |buf: &mut [u8], addr: u16, value: i16| {
+        patch_u16(buf, addr, value as u16);
+    };
     patch_u16(
         section1,
         BMS_DF_ADDR_MFG_STATUS_INIT,
@@ -852,6 +891,66 @@ fn patch_bms_df_section1_mainboard(section1: &mut [u8], calibration: BmsDfCalibr
         section1,
         BMS_DF_ADDR_AFE_PROTECTION_CONTROL,
         BMS_DF_AFE_PROTECTION_CONTROL_DEFAULT,
+    );
+    patch_i16(
+        section1,
+        BMS_DF_ADDR_OCC1_THRESHOLD,
+        BMS_DF_OCC1_THRESHOLD_MAINBOARD_MA,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_OCC1_DELAY,
+        BMS_DF_OCC1_DELAY_MAINBOARD_S,
+    );
+    patch_i16(
+        section1,
+        BMS_DF_ADDR_OCC2_THRESHOLD,
+        BMS_DF_OCC2_THRESHOLD_MAINBOARD_MA,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_OCC2_DELAY,
+        BMS_DF_OCC2_DELAY_MAINBOARD_S,
+    );
+    patch_i16(
+        section1,
+        BMS_DF_ADDR_OCD1_THRESHOLD,
+        BMS_DF_OCD1_THRESHOLD_MAINBOARD_MA,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_OCD1_DELAY,
+        BMS_DF_OCD1_DELAY_MAINBOARD_S,
+    );
+    patch_i16(
+        section1,
+        BMS_DF_ADDR_OCD2_THRESHOLD,
+        BMS_DF_OCD2_THRESHOLD_MAINBOARD_MA,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_OCD2_DELAY,
+        BMS_DF_OCD2_DELAY_MAINBOARD_S,
+    );
+    patch_i16(
+        section1,
+        BMS_DF_ADDR_SOCC_THRESHOLD,
+        BMS_DF_SOCC_THRESHOLD_MAINBOARD_MA,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_SOCC_DELAY,
+        BMS_DF_SOCC_DELAY_MAINBOARD_S,
+    );
+    patch_i16(
+        section1,
+        BMS_DF_ADDR_SOCD_THRESHOLD,
+        BMS_DF_SOCD_THRESHOLD_MAINBOARD_MA,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_SOCD_DELAY,
+        BMS_DF_SOCD_DELAY_MAINBOARD_S,
     );
     if let Some(value) = calibration.cell_gain {
         patch_u16(section1, BMS_DF_ADDR_CELL_GAIN, value);
