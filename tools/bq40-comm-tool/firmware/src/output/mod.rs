@@ -234,47 +234,110 @@ const BMS_DF_ADDR_CELL_GAIN: u16 = 0x4000;
 const BMS_DF_ADDR_PACK_GAIN: u16 = 0x4002;
 const BMS_DF_ADDR_BAT_GAIN: u16 = 0x4004;
 const BMS_DF_AFE_PROTECTION_CONTROL_DEFAULT: u8 = 0x70;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_MFG_STATUS_INIT_DEFAULT: u16 = 0x0378;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_FET_OPTIONS_DEFAULT: u8 = 0x18;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_DA_CONFIGURATION_MAINBOARD: u16 = 0x8127;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_TEMPERATURE_ENABLE_MAINBOARD: u8 = 0x1E;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_TEMPERATURE_MODE_MAINBOARD: u8 = 0x00;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_SBS_GAUGING_CONFIGURATION_DEFAULT: u8 = 0x05;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_SBS_CONFIGURATION_DEFAULT: u8 = 0x20;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_AUTH_CONFIG_DEFAULT: u8 = 0x00;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_IT_GAUGING_CONFIGURATION_DEFAULT: u16 = 0xD0FE;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_OCC1_THRESHOLD_MAINBOARD_MA: i16 = 4_500;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_OCC1_DELAY_MAINBOARD_S: u8 = 6;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_OCC2_THRESHOLD_MAINBOARD_MA: i16 = 5_200;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_OCC2_DELAY_MAINBOARD_S: u8 = 3;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_SOCC_THRESHOLD_MAINBOARD_MA: i16 = 6_000;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_SOCC_DELAY_MAINBOARD_S: u8 = 5;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_OCD1_THRESHOLD_MAINBOARD_MA: i16 = -14_500;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_OCD1_DELAY_MAINBOARD_S: u8 = 6;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_OCD2_THRESHOLD_MAINBOARD_MA: i16 = -15_000;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_OCD2_DELAY_MAINBOARD_S: u8 = 3;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_SOCD_THRESHOLD_MAINBOARD_MA: i16 = -16_000;
-#[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_SOCD_DELAY_MAINBOARD_S: u8 = 5;
 const BMS_DF_REPLY_LEN_WITH_ADDR: u8 = 34;
 const BMS_MFG_STATUS_CAL_TEST: u32 = 1 << 15;
@@ -341,6 +404,104 @@ impl BmsDfCalibrationPreservation {
             + self.bat_gain.is_some() as u8
     }
 }
+
+#[cfg(feature = "bms-live-df-mainboard")]
+#[derive(Clone, Copy)]
+struct BmsDfLiveFieldTarget {
+    label: &'static str,
+    df_addr: u16,
+    len: u8,
+    bytes: [u8; 2],
+}
+
+#[cfg(feature = "bms-live-df-mainboard")]
+impl BmsDfLiveFieldTarget {
+    const fn byte(label: &'static str, df_addr: u16, value: u8) -> Self {
+        Self {
+            label,
+            df_addr,
+            len: 1,
+            bytes: [value, 0],
+        }
+    }
+
+    const fn u16(label: &'static str, df_addr: u16, value: u16) -> Self {
+        Self {
+            label,
+            df_addr,
+            len: 2,
+            bytes: [value as u8, (value >> 8) as u8],
+        }
+    }
+
+    const fn i16(label: &'static str, df_addr: u16, value: i16) -> Self {
+        Self::u16(label, df_addr, value as u16)
+    }
+}
+
+#[cfg(feature = "bms-live-df-mainboard")]
+const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 12] = [
+    BmsDfLiveFieldTarget::i16(
+        "occ1_threshold",
+        BMS_DF_ADDR_OCC1_THRESHOLD,
+        BMS_DF_OCC1_THRESHOLD_MAINBOARD_MA,
+    ),
+    BmsDfLiveFieldTarget::byte(
+        "occ1_delay",
+        BMS_DF_ADDR_OCC1_DELAY,
+        BMS_DF_OCC1_DELAY_MAINBOARD_S,
+    ),
+    BmsDfLiveFieldTarget::i16(
+        "occ2_threshold",
+        BMS_DF_ADDR_OCC2_THRESHOLD,
+        BMS_DF_OCC2_THRESHOLD_MAINBOARD_MA,
+    ),
+    BmsDfLiveFieldTarget::byte(
+        "occ2_delay",
+        BMS_DF_ADDR_OCC2_DELAY,
+        BMS_DF_OCC2_DELAY_MAINBOARD_S,
+    ),
+    BmsDfLiveFieldTarget::i16(
+        "ocd1_threshold",
+        BMS_DF_ADDR_OCD1_THRESHOLD,
+        BMS_DF_OCD1_THRESHOLD_MAINBOARD_MA,
+    ),
+    BmsDfLiveFieldTarget::byte(
+        "ocd1_delay",
+        BMS_DF_ADDR_OCD1_DELAY,
+        BMS_DF_OCD1_DELAY_MAINBOARD_S,
+    ),
+    BmsDfLiveFieldTarget::i16(
+        "ocd2_threshold",
+        BMS_DF_ADDR_OCD2_THRESHOLD,
+        BMS_DF_OCD2_THRESHOLD_MAINBOARD_MA,
+    ),
+    BmsDfLiveFieldTarget::byte(
+        "ocd2_delay",
+        BMS_DF_ADDR_OCD2_DELAY,
+        BMS_DF_OCD2_DELAY_MAINBOARD_S,
+    ),
+    BmsDfLiveFieldTarget::i16(
+        "socc_threshold",
+        BMS_DF_ADDR_SOCC_THRESHOLD,
+        BMS_DF_SOCC_THRESHOLD_MAINBOARD_MA,
+    ),
+    BmsDfLiveFieldTarget::byte(
+        "socc_delay",
+        BMS_DF_ADDR_SOCC_DELAY,
+        BMS_DF_SOCC_DELAY_MAINBOARD_S,
+    ),
+    BmsDfLiveFieldTarget::i16(
+        "socd_threshold",
+        BMS_DF_ADDR_SOCD_THRESHOLD,
+        BMS_DF_SOCD_THRESHOLD_MAINBOARD_MA,
+    ),
+    BmsDfLiveFieldTarget::byte(
+        "socd_delay",
+        BMS_DF_ADDR_SOCD_DELAY,
+        BMS_DF_SOCD_DELAY_MAINBOARD_S,
+    ),
+];
 
 #[cfg(feature = "bms-rom-image-r5")]
 const BMS_ROM_SECTION2_IMAGE: &[u8] =
@@ -1156,6 +1317,46 @@ where
         match read_bms_df_byte_via_mb44(i2c, addr, df_addr) {
             Ok(value) => return Ok(value),
             Err(e) => last_err = e,
+        }
+        spin_delay(BMS_MAC_WRITE_SETTLE);
+    }
+    Err(last_err)
+}
+
+#[cfg(feature = "bms-live-df-mainboard")]
+fn verify_bms_df_bytes<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+    len: u8,
+    retries: u8,
+) -> Result<[u8; 2], bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    if len == 0 || len > 2 {
+        return Err(bq40z50::BmsDiagError::BadRange);
+    }
+
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+    for _ in 0..retries {
+        let mut out = [0u8; 2];
+        let mut ok = true;
+        for index in 0..len as usize {
+            match read_bms_df_byte_via_mb44(i2c, addr, df_addr + index as u16) {
+                Ok(value) => out[index] = value,
+                Err(e) => {
+                    last_err = e;
+                    ok = false;
+                    break;
+                }
+            }
+            if index + 1 < len as usize {
+                spin_delay(BMS_WORD_GAP);
+            }
+        }
+        if ok {
+            return Ok(out);
         }
         spin_delay(BMS_MAC_WRITE_SETTLE);
     }
@@ -5302,6 +5503,8 @@ pub struct PowerManager<'d, I2C> {
     bms_post_flash_resume_started_at: Option<Instant>,
     bms_post_flash_reexit_attempted: bool,
     bms_last_working_info_at: Option<Instant>,
+    #[cfg(feature = "bms-live-df-mainboard")]
+    bms_live_df_mainboard_verified: bool,
     #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
     bms_rom_df_section1_valid: bool,
     #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
@@ -5393,6 +5596,203 @@ where
         defmt::warn!("charger: bq25792 stage=boot_restore_wake_profile_done");
     }
 
+    #[cfg(feature = "bms-live-df-mainboard")]
+    fn best_effort_bms_default_full_access(&mut self, addr: u8) -> Option<u32> {
+        for (stage, lo, hi) in [
+            ("security_unseal_0414", 0x14, 0x04),
+            ("security_unseal_3672", 0x72, 0x36),
+            ("security_full_access_ffff_1", 0xFF, 0xFF),
+            ("security_full_access_ffff_2", 0xFF, 0xFF),
+        ] {
+            match write_bms_rom_word(&mut self.i2c, addr, 0x00, lo, hi) {
+                Ok(()) => {
+                    defmt::warn!(
+                        "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage={} write=ok",
+                        addr,
+                        stage,
+                    );
+                    spin_delay(BMS_MAC_TOGGLE_SETTLE);
+                }
+                Err(e) => {
+                    defmt::warn!(
+                        "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage={} write_err={}",
+                        addr,
+                        stage,
+                        e,
+                    );
+                }
+            }
+        }
+
+        match read_bms_operation_status_raw(&mut self.i2c, addr) {
+            Ok(op) => {
+                defmt::warn!(
+                    "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=security_after op=0x{:08x} sec={}",
+                    addr,
+                    op,
+                    bms_security_mode_from_op(op),
+                );
+                Some(op)
+            }
+            Err(e) => {
+                defmt::warn!(
+                    "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=security_after err={}",
+                    addr,
+                    e,
+                );
+                None
+            }
+        }
+    }
+
+    #[cfg(feature = "bms-live-df-mainboard")]
+    fn maybe_apply_live_bms_df_mainboard(&mut self, addr: u8, now: Instant) -> bool {
+        if self.bms_live_df_mainboard_verified {
+            return false;
+        }
+
+        let op_before = read_bms_operation_status_raw(&mut self.i2c, addr).ok();
+        let pf_before = read_bms_pf_status_raw(&mut self.i2c, addr).ok();
+        let mut op_effective = op_before;
+
+        if matches!(op_before.map(|op| ((op >> 8) & 0x3) as u8), Some(0b11)) {
+            defmt::warn!(
+                "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=security_begin op=0x{:08x} sec={} pf=0x{:08x}",
+                addr,
+                op_before.unwrap_or(0),
+                bms_security_mode_from_op(op_before.unwrap_or(0)),
+                pf_before.unwrap_or(0),
+            );
+            op_effective = self.best_effort_bms_default_full_access(addr).or(op_before);
+        }
+
+        for field in BMS_DF_LIVE_MAINBOARD_TARGETS {
+            let current = match verify_bms_df_bytes(
+                &mut self.i2c,
+                addr,
+                field.df_addr,
+                field.len,
+                4,
+            ) {
+                Ok(value) => value,
+                Err(e) => {
+                    defmt::warn!(
+                        "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=read_err field={} df_addr=0x{=u16:x} err={} op=0x{:08x} sec={} pf=0x{:08x}",
+                        addr,
+                        field.label,
+                        field.df_addr,
+                        e,
+                        op_effective.unwrap_or(0),
+                        bms_security_mode_from_op(op_effective.unwrap_or(0)),
+                        pf_before.unwrap_or(0),
+                    );
+                    return false;
+                }
+            };
+
+            if current[..field.len as usize] == field.bytes[..field.len as usize] {
+                continue;
+            }
+
+            defmt::warn!(
+                "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=field_mismatch field={} df_addr=0x{=u16:x} current_lo=0x{=u8:x} current_hi=0x{=u8:x} target_lo=0x{=u8:x} target_hi=0x{=u8:x}",
+                addr,
+                field.label,
+                field.df_addr,
+                current[0],
+                current[1],
+                field.bytes[0],
+                field.bytes[1],
+            );
+
+            for via in [BmsDfWriteVia::Direct, BmsDfWriteVia::Pec] {
+                match write_bms_df_bytes_via_mb44_once(
+                    &mut self.i2c,
+                    addr,
+                    field.df_addr,
+                    &field.bytes[..field.len as usize],
+                    via,
+                ) {
+                    Ok(()) => {
+                        match verify_bms_df_bytes(&mut self.i2c, addr, field.df_addr, field.len, 4)
+                        {
+                            Ok(verify)
+                                if verify[..field.len as usize]
+                                    == field.bytes[..field.len as usize] =>
+                            {
+                                defmt::warn!(
+                                "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=field_written field={} df_addr=0x{=u16:x} via={} verify_lo=0x{=u8:x} verify_hi=0x{=u8:x}",
+                                addr,
+                                field.label,
+                                field.df_addr,
+                                via.as_str(),
+                                verify[0],
+                                verify[1],
+                            );
+                                self.bms_next_poll_at = now + BMS_POLL_PERIOD;
+                                return true;
+                            }
+                            Ok(verify) => {
+                                defmt::warn!(
+                                "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=pending_recheck field={} df_addr=0x{=u16:x} via={} result=verify_mismatch verify_lo=0x{=u8:x} verify_hi=0x{=u8:x}",
+                                addr,
+                                field.label,
+                                field.df_addr,
+                                via.as_str(),
+                                verify[0],
+                                verify[1],
+                            );
+                                self.bms_next_poll_at = now + BMS_POLL_PERIOD;
+                                return true;
+                            }
+                            Err(e) => {
+                                defmt::warn!(
+                                "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=pending_recheck field={} df_addr=0x{=u16:x} via={} result=verify_err err={}",
+                                addr,
+                                field.label,
+                                field.df_addr,
+                                via.as_str(),
+                                e,
+                            );
+                                self.bms_next_poll_at = now + BMS_POLL_PERIOD;
+                                return true;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        defmt::warn!(
+                            "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=write_err field={} df_addr=0x{=u16:x} via={} err={}",
+                            addr,
+                            field.label,
+                            field.df_addr,
+                            via.as_str(),
+                            e,
+                        );
+                    }
+                }
+            }
+            let op_after = read_bms_operation_status_raw(&mut self.i2c, addr).ok();
+            let pf_after = read_bms_pf_status_raw(&mut self.i2c, addr).ok();
+            defmt::warn!(
+                "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=field_failed field={} df_addr=0x{=u16:x} op=0x{:08x} sec={} pf=0x{:08x}",
+                addr,
+                field.label,
+                field.df_addr,
+                op_after.unwrap_or(0),
+                bms_security_mode_from_op(op_after.unwrap_or(0)),
+                pf_after.unwrap_or(0),
+            );
+            return false;
+        }
+        self.bms_live_df_mainboard_verified = true;
+        defmt::warn!(
+            "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=done fields={=u8}",
+            addr,
+            BMS_DF_LIVE_MAINBOARD_TARGETS.len() as u8,
+        );
+        false
+    }
+
     pub fn new(
         i2c: I2C,
         i2c1_int: Input<'d>,
@@ -5479,6 +5879,8 @@ where
             bms_post_flash_resume_started_at: None,
             bms_post_flash_reexit_attempted: false,
             bms_last_working_info_at: None,
+            #[cfg(feature = "bms-live-df-mainboard")]
+            bms_live_df_mainboard_verified: false,
             #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
             bms_rom_df_section1_valid: false,
             #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
@@ -8849,6 +9251,10 @@ where
                                 }
                             }
                         }
+                    }
+                    #[cfg(feature = "bms-live-df-mainboard")]
+                    if self.maybe_apply_live_bms_df_mainboard(addr, now) {
+                        return true;
                     }
                     let df_cell_gain =
                         read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_CELL_GAIN)

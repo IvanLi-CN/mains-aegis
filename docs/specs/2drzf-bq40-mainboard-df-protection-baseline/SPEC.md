@@ -77,6 +77,7 @@
 
 - `tools/bq40-comm-tool/firmware/src/output/mod.rs`
   - `asset-df-mainboard` 新增 `OCC/OCD/SOCC/SOCD` 覆写。
+  - 新增 app-mode live DF 基线写入入口 `live-df-mainboard`，通过 `./bin/run.sh apply-df ... --repair-profile live-df-mainboard` 写回 pack。
 - `firmware/src/fan.rs`
   - 风扇温控输入新增 BMS 聚合温度。
 - `firmware/src/output/mod.rs`
