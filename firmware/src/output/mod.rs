@@ -1,8 +1,8 @@
 pub mod tps55288;
 
 use crate::front_panel_scene::{
-    is_bq40_activation_needed, BmsActivationState, BmsResultKind, DashboardInputSource,
-    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+    is_bq40_activation_needed, BmsActivationState, BmsRecoveryUiAction, BmsResultKind,
+    DashboardInputSource, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
 };
 use crate::irq::IrqSnapshot;
 use esp_firmware::bq25792;
@@ -1602,6 +1602,64 @@ fn discharge_authorization_input_ready(
     charger_present == Some(true) || mains_present == Some(true)
 }
 
+fn bq40_ui_issue_detail(low_pack: bool, primary_reason: &'static str) -> Option<&'static str> {
+    if low_pack {
+        Some("no_battery")
+    } else if primary_reason == "nominal" {
+        None
+    } else {
+        Some(primary_reason)
+    }
+}
+
+fn bq40_last_result_blocks_recovery(result: Option<BmsResultKind>) -> bool {
+    matches!(
+        result,
+        Some(
+            BmsResultKind::NoBattery
+                | BmsResultKind::RomMode
+                | BmsResultKind::Abnormal
+                | BmsResultKind::NotDetected
+        )
+    )
+}
+
+fn bq40_recovery_action_for_snapshot(
+    snapshot: &SelfCheckUiSnapshot,
+    requested_outputs: output_state_logic::EnabledOutputs,
+    gate_reason: OutputGateReason,
+    bms_addr: Option<u8>,
+    charger_allowed: bool,
+    therm_kill_asserted: bool,
+) -> Option<BmsRecoveryUiAction> {
+    if is_bq40_activation_needed(snapshot) {
+        Some(BmsRecoveryUiAction::Activation)
+    } else if !bq40_last_result_blocks_recovery(snapshot.bq40z50_last_result)
+        && requested_outputs != output_state_logic::EnabledOutputs::None
+        && gate_reason == OutputGateReason::BmsNotReady
+        && bms_addr.is_some()
+        && snapshot.bq40z50 != SelfCheckCommState::Err
+        && snapshot.bq40z50_no_battery != Some(true)
+        && snapshot.bq40z50_rca_alarm != Some(true)
+        && snapshot.bq40z50_discharge_ready == Some(false)
+        && discharge_authorization_input_ready(
+            stable_mains_present(
+                snapshot.vin_mains_present,
+                snapshot.vin_vbus_mv,
+                snapshot.fusb302_vbus_present,
+            ),
+            snapshot.fusb302_vbus_present,
+        )
+        && charger_allowed
+        && snapshot.bq25792 != SelfCheckCommState::Err
+        && !therm_kill_asserted
+    {
+        Some(BmsRecoveryUiAction::DischargeAuthorization)
+    } else {
+        None
+    }
+}
+
 fn record_vin_sample_failure(vin_mains_present: &mut Option<bool>, missing_streak: &mut u8) {
     *missing_streak = missing_streak.saturating_add(1);
     if *missing_streak >= VIN_MAINS_LATCH_FAILURE_LIMIT {
@@ -2103,6 +2161,11 @@ where
     ui.bq40z50_rca_alarm = bms_rca_alarm;
     ui.bq40z50_no_battery = bms_no_battery;
     ui.bq40z50_discharge_ready = bms_discharge_ready;
+    ui.bq40z50_issue_detail = match (bms_no_battery, bms_primary_reason) {
+        (Some(true), _) => Some("no_battery"),
+        (_, Some(primary_reason)) => bq40_ui_issue_detail(false, primary_reason),
+        _ => None,
+    };
     reporter(SelfCheckStage::Bms, ui);
 
     // Stage 3: BQ25792.
@@ -2480,6 +2543,14 @@ where
         logic_outputs_from_enabled(enabled_outputs_from_flags(out_a_allowed, out_b_allowed));
     ui.recoverable_outputs = logic_outputs_from_enabled(recoverable_outputs);
     ui.output_gate_reason = output_gate_reason;
+    ui.bq40z50_recovery_action = bq40_recovery_action_for_snapshot(
+        &ui,
+        logic_outputs_from_enabled(desired_outputs),
+        output_gate_reason,
+        bms_addr,
+        charger_probe_ok,
+        therm_kill_asserted,
+    );
     ui.bq40z50_recovery_pending = false;
     ui.tps_a_enabled = Some(false);
     ui.tps_b_enabled = Some(false);
@@ -3312,6 +3383,14 @@ where
         snapshot.recoverable_outputs =
             logic_outputs_from_enabled(self.output_state.recoverable_outputs);
         snapshot.output_gate_reason = self.output_state.gate_reason;
+        snapshot.bq40z50_recovery_action = bq40_recovery_action_for_snapshot(
+            &snapshot,
+            snapshot.requested_outputs,
+            self.output_state.gate_reason,
+            self.bms_addr,
+            self.charger_allowed,
+            self.therm_kill.is_low(),
+        );
         snapshot.bq40z50_recovery_pending = bms_recovery_pending;
         detail.out_a_temp_c = snapshot.tmp_a_c;
         detail.out_b_temp_c = snapshot.tmp_b_c;
@@ -3713,6 +3792,15 @@ where
 
     pub fn request_bms_activation(&mut self) {
         self.request_bms_recovery(BmsRecoveryRequestKind::Activation, false, false);
+    }
+
+    pub fn request_bms_recovery_action(&mut self, action: BmsRecoveryUiAction) {
+        match action {
+            BmsRecoveryUiAction::Activation => self.request_bms_activation(),
+            BmsRecoveryUiAction::DischargeAuthorization => {
+                self.request_bms_discharge_authorization(false)
+            }
+        }
     }
 
     fn request_bms_activation_with_diag_override(
@@ -5655,6 +5743,8 @@ where
         self.ui_snapshot.bq40z50_rca_alarm = Some(rca_alarm);
         self.ui_snapshot.bq40z50_no_battery = Some(low_pack_runtime);
         self.ui_snapshot.bq40z50_discharge_ready = discharge_ready;
+        self.ui_snapshot.bq40z50_issue_detail =
+            bq40_ui_issue_detail(low_pack_runtime, primary_reason);
         self.apply_bms_detail_snapshot(snapshot);
         self.bms_audio = BmsAudioState {
             rca_alarm: Some(rca_alarm),
@@ -5726,8 +5816,9 @@ where
             return;
         }
 
-        let auto_activation_needed = self.ui_snapshot.bq40z50_last_result.is_none()
-            && self.ui_snapshot.bq40z50 == SelfCheckCommState::Err;
+        let auto_activation_needed =
+            !bq40_last_result_blocks_recovery(self.ui_snapshot.bq40z50_last_result)
+                && self.ui_snapshot.bq40z50 == SelfCheckCommState::Err;
         if !auto_activation_needed {
             self.bms_activation_auto_attempted = true;
             self.bms_activation_auto_force_charge_until = None;
@@ -5815,7 +5906,7 @@ where
 
     fn maybe_auto_request_bms_discharge_authorization(&mut self) {
         if self.bms_activation_state != BmsActivationState::Idle
-            || self.ui_snapshot.bq40z50_last_result.is_some()
+            || bq40_last_result_blocks_recovery(self.ui_snapshot.bq40z50_last_result)
             || !self.can_request_bms_discharge_authorization()
         {
             return;
@@ -6890,6 +6981,7 @@ where
         self.ui_snapshot.bq40z50_rca_alarm = Some(true);
         self.ui_snapshot.bq40z50_no_battery = Some(true);
         self.ui_snapshot.bq40z50_discharge_ready = Some(false);
+        self.ui_snapshot.bq40z50_issue_detail = Some("no_battery");
         self.bms_audio = BmsAudioState {
             rca_alarm: Some(true),
             protection_active: false,
@@ -8319,6 +8411,8 @@ where
                         charge_reason,
                         discharge_reason,
                     );
+                    self.ui_snapshot.bq40z50_issue_detail =
+                        bq40_ui_issue_detail(low_pack, primary_reason);
                     self.maybe_log_bq40_block_detail_runtime(addr, primary_reason, s.op_status);
                     return true;
                 }
@@ -8344,6 +8438,7 @@ where
                             self.ui_snapshot.bq40z50_rca_alarm = None;
                             self.ui_snapshot.bq40z50_no_battery = None;
                             self.ui_snapshot.bq40z50_discharge_ready = None;
+                            self.ui_snapshot.bq40z50_issue_detail = None;
                             self.clear_bms_detail_snapshot();
                             self.bms_audio = BmsAudioState {
                                 rca_alarm: None,
@@ -8402,6 +8497,7 @@ where
                             self.ui_snapshot.bq40z50_rca_alarm = None;
                             self.ui_snapshot.bq40z50_no_battery = None;
                             self.ui_snapshot.bq40z50_discharge_ready = None;
+                            self.ui_snapshot.bq40z50_issue_detail = None;
                             self.clear_bms_detail_snapshot();
                             self.bms_audio = BmsAudioState {
                                 rca_alarm: None,

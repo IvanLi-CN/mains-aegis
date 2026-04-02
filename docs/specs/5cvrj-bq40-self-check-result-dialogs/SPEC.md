@@ -4,13 +4,14 @@
 
 - Status: 部分完成（4/5）
 - Created: 2026-03-11
-- Last: 2026-03-12
+- Last: 2026-04-03
 
 ## 背景 / 问题陈述
 
 - 现有 `SELF CHECK` 页面会把 `BQ40Z50` 的多种异常混在 `WARN/ERR` 与单一失败弹窗里，难以区分“设备存在但异常”与“完全未识别到设备”。
-- 激活结果弹窗关闭后不会保留结果语义，后续再次点击 `BQ40Z50` 卡片时无法直接回看最近一次结果。
-- 新需求要求先补足结果弹窗渲染图，并让运行时把激活结果固化为可复看的状态。
+- 当前 `BQ40Z50` 交互只对“离线未识别”给出通用激活提示，无法把 `XDSG blocked / discharge path held / no battery / RCA alarm` 等问题明确展示给主人。
+- 当问题可通过软件侧恢复时，前面板没有统一的“查看问题 -> 确认尝试消除 -> 回看最新状态”的操作路径。
+- 新需求要求把 `BQ40Z50` 卡片升级为问题导向的恢复入口：点击后显示具体问题、仅对可恢复问题提供确认动作，并在恢复成功后回到实时自检页，问题全部清除时自动进入 Dashboard。
 
 ## 目标 / 非目标
 
@@ -19,9 +20,12 @@
 - 把 `BQ40Z50` 卡片收敛为三层状态：`OK`、`WARN`、`ERR`。
 - `WARN` 固定表示“设备存在但非正常态”，不再把 `RCA` 作为独立卡片状态词；`RCA ALARM` 仅作为副文案显示。
 - 默认自检只做普通 SMBus/SBS 访问探测；普通访问未识别到设备时显示 `ERR`，并允许尝试激活。
+- 点击 `BQ40Z50` 卡片时，必须先展示问题导向的恢复弹窗：至少区分 `NOT DETECTED` 与 `DISCHARGE BLOCKED/XDSG BLOCKED` 两类可恢复问题。
+- 对 `NOT DETECTED` 使用 `Activate` 动作；对 `BQ40` 放电路径被挡住的可恢复问题使用 `Recover` 动作；其它不可恢复问题仅保留状态展示，不在前面板扩展 ROM/DF 写入类操作。
 - 激活结果词汇固定保留 5 类：`SUCCESS`、`NO BATTERY`、`ROM MODE`、`ABNORMAL`、`NOT DETECTED`。
 - `NO BATTERY` 只能由 BQ40 自身可读证据触发，禁止由 `BQ25792`、`FUSB302` 或其它器件状态推断。
-- 结果弹窗关闭后保留最近一次结果；再次点击 `BQ40Z50` 卡片时直接回显对应结果弹窗。
+- 失败结果弹窗关闭后保留最近一次结果；再次点击 `BQ40Z50` 卡片时直接回显对应失败结果弹窗。
+- `SUCCESS` 不再停留在结果弹窗；恢复成功后应立即回到自检页显示最新状态，若所有卡片均已 clear，则自动进入 Dashboard。
 - 主固件的激活链路必须移植工具已验证有效的 `wake-window + delayed read + keepalive + confirm` 读法，但该链路只在 `Try Activation` 期间生效。
 - 诊断阶段允许存在“一次性开机自动激活”临时流，用来验证主固件激活链路是否已经能把健康硬件收敛到 `SUCCESS`；验证通过后必须移除。
 
@@ -39,18 +43,19 @@
   - 新增持久结果枚举与结果驱动 overlay。
   - 更新 `BQ40Z50` 卡片状态词与副文案映射。
 - `firmware/src/front_panel.rs`
-  - 点击/按键行为改为“`ERR` 首次可激活；已有结果则直接回显结果弹窗”。
-  - 关闭结果弹窗时仅清 overlay，不清最近一次结果。
+  - 点击/按键行为改为“先看问题，再确认恢复”；当存在失败结果时优先回显失败结果弹窗。
+  - 成功恢复时自动收起 overlay，回到自检页；若自检页已全部 clear，则自动进入 Dashboard。
 - `firmware/src/output/mod.rs`
   - 普通访问状态映射：`OK/WARN/ERR`。
   - 激活结果状态持久化，并把运行态结果同步到 `SelfCheckUiSnapshot`。
+  - 额外输出 `BQ40` 问题详情与当前可执行恢复动作，供前面板交互使用。
   - 激活结果分类只允许使用 BQ40 自身 SMBus/ROM 证据；其它器件状态只可用于“能否尝试激活”的门禁与诊断日志。
   - 激活唤醒参数对齐到 `VREG=16.8V / ICHG=200mA / IINDPM=500mA`。
   - 激活路径内新增 staged wake probe、keepalive、trusted snapshot confirm，以及诊断阶段的一次性自动激活验证流。
 - `firmware/src/bq25792.rs`
   - 补足 `CHARGE_VOLTAGE_LIMIT` 与设置 `VREG` 的 helper。
 - `tools/front-panel-preview/src/main.rs`
-  - 新增 5 个结果弹窗场景与对应 PNG 导出。
+  - 新增问题导向恢复弹窗/进度场景与对应 PNG 导出。
 - 视觉文档与规格资产
   - `firmware/ui/self-check-design.md`
   - `firmware/ui/visual-regression-checklist.md`
@@ -76,10 +81,13 @@
 - Given 普通访问拿到可信且正常的 BQ40 快照，When 查看 `BQ40Z50` 卡片，Then 状态显示 `OK`。
 - Given 普通访问确认设备存在但状态不正常，When 查看 `BQ40Z50` 卡片，Then 状态显示 `WARN`，副文案显示 `ABNORMAL` 或 `RCA ALARM`。
 - Given 普通访问未识别到设备，When 查看 `BQ40Z50` 卡片，Then 状态显示 `ERR`，副文案显示 `NOT DETECTED`。
-- Given `BQ40Z50` 卡片为 `ERR`，When 点击或按键触发激活，Then 先进入确认弹窗，再进入进度弹窗，并最终落到 5 类结果之一。
-- Given 任一结果弹窗已关闭，When 再次点击 `BQ40Z50` 卡片，Then 直接显示最近一次结果弹窗，不重复进入确认流程。
+- Given `BQ40Z50` 卡片为 `ERR`，When 点击或按键触发恢复入口，Then 先进入 `NOT DETECTED` 问题弹窗，确认按钮文案为 `Activate`。
+- Given `BQ40Z50` 处于 `WARN + discharge blocked` 且输出因 `BmsNotReady` 被挡住，When 点击或按键触发恢复入口，Then 先进入 `DISCHARGE BLOCKED/XDSG BLOCKED` 问题弹窗，确认按钮文案为 `Recover`。
+- Given 任一失败结果弹窗已关闭，When 再次点击 `BQ40Z50` 卡片，Then 直接显示最近一次失败结果弹窗，不重复进入确认流程。
 - Given 最近一次结果为 `NOT DETECTED`，When 结果弹窗关闭后回到自检页，Then `BQ40Z50` 卡片仍保持 `ERR`。
 - Given 最近一次结果为 `ABNORMAL`，When 结果弹窗关闭后回到自检页，Then `BQ40Z50` 卡片保持 `WARN`。
+- Given 恢复动作最终收敛到 `SUCCESS`，When 前面板收到最新自检快照，Then 立即关闭弹窗并在自检页显示最新 `BQ40/TPS` 状态。
+- Given 恢复成功后自检页所有模块均已 clear，When 当前页面仍停留在 `SELF CHECK`，Then 自动进入 Dashboard。
 - Given 激活窗口内 `BQ40Z50` 始终 `i2c_nack` / `i2c_timeout` 或无有效快照，When 激活流程结束，Then 结果必须是 `NOT DETECTED`，不得因为其它芯片状态改判为 `NO BATTERY`。
 - Given 激活流程没有拿到 BQ40 原生“无电池”证据，When 结束分类，Then 不得输出 `NO BATTERY`。
 - Given 激活流程进入 staged wake probe，When `0 / 800 / 1600 ms` 任一阶段命中可信运行态快照，Then 结果只能由该可信快照收敛为 `SUCCESS` 或 `ABNORMAL`。
@@ -215,12 +223,16 @@
   - `self-check-c-bq40-result-not-detected.png`
   - `self-check-c-bq40-offline-activate-dialog.png`
   - `self-check-c-bq40-activating.png`
+  - `self-check-c-bq40-discharge-recovery-dialog.png`
+  - `self-check-c-bq40-discharge-recovering.png`
 
 ## Visual Evidence (PR)
 
 ![BQ40 activate confirm](./assets/self-check-c-bq40-offline-activate-dialog.png)
+![BQ40 discharge recovery confirm](./assets/self-check-c-bq40-discharge-recovery-dialog.png)
 ![BQ40 activating](./assets/self-check-c-bq40-activating.png)
-![BQ40 result success](./assets/self-check-c-bq40-result-success.png)
+![BQ40 discharge recovering](./assets/self-check-c-bq40-discharge-recovering.png)
+![BQ40 self-check after success](./assets/self-check-c-bq40-result-success.png)
 ![BQ40 result no battery](./assets/self-check-c-bq40-result-no-battery.png)
 ![BQ40 result ROM mode](./assets/self-check-c-bq40-result-rom-mode.png)
 ![BQ40 result abnormal](./assets/self-check-c-bq40-result-abnormal.png)
@@ -235,7 +247,7 @@
 ## 实现里程碑（Milestones / Delivery checklist）
 
 - [x] M1: 新增 `BQ40Z50` 三层卡片状态与结果持久化枚举
-- [x] M2: 补齐 5 类结果弹窗 renderer 与预览场景
+- [x] M2: 补齐问题详情/恢复弹窗 renderer 与预览场景
 - [x] M3: 激活运行态改为 BQ40-only 分类，完全不可访问时固定落 `NOT DETECTED`
 - [x] M4: 文档与规格资产同步完成
 - [ ] M5: 构建、预览验证与快车道 PR 收敛完成
@@ -243,8 +255,8 @@
 ## 方案概述（Approach, high-level）
 
 - 用显式结果枚举替代布尔成功/失败 overlay，避免文案与交互逻辑继续分叉。
-- 普通访问仅负责区分“正常 / 异常 / 未识别”；激活结果负责补充更明确的弹窗级结论。
-- 最近一次结果作为只读 UI 状态保存在运行态快照中，由前面板统一渲染，不额外引入新页面。
+- 普通访问仅负责区分“正常 / 异常 / 未识别”；点击卡片时再根据当前问题选择 `Activate / Recover / 失败结果回显`。
+- 最近一次失败结果作为只读 UI 状态保存在运行态快照中；成功恢复则直接回到实时自检页，并把“是否自动进入 Dashboard”交给自检清零逻辑统一处理。
 
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）
 

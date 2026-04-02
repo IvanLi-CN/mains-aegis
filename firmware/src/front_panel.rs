@@ -1,7 +1,7 @@
 use core::convert::Infallible;
 
 use crate::front_panel_scene::{
-    self, AudioTestUiState, BmsActivationState, BmsResultKind, DashboardRoute,
+    self, AudioTestUiState, BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardRoute,
     DashboardTouchTarget, SelfCheckCommState, SelfCheckOverlay, SelfCheckTouchTarget,
     SelfCheckUiSnapshot, TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant,
     UpsMode,
@@ -73,7 +73,7 @@ const DASHBOARD_VARIANT: UiVariant = UiVariant::InstrumentB;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiAction {
-    RequestBmsActivation,
+    RequestBmsRecovery(BmsRecoveryUiAction),
     ClearBmsActivationResult,
 }
 
@@ -332,11 +332,13 @@ impl FrontPanel {
         }
         log_self_check_snapshot_transition(&previous, &snapshot);
         self.self_check_snapshot = snapshot;
-        if self.self_check_overlay == SelfCheckOverlay::BmsActivateConfirm
-            && !front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
+        if matches!(
+            self.self_check_overlay,
+            SelfCheckOverlay::BmsActivateConfirm | SelfCheckOverlay::BmsDischargeAuthorizeConfirm
+        ) && front_panel_scene::bq40_recovery_overlay(&self.self_check_snapshot).is_none()
         {
             defmt::info!(
-                "ui: bms activation dialog auto_close reason=activation_not_needed bq40_state={} last_result={}",
+                "ui: bms recovery dialog auto_close reason=recovery_not_needed bq40_state={} last_result={}",
                 self_check_comm_state_name(self.self_check_snapshot.bq40z50),
                 bms_result_option_name(self.self_check_snapshot.bq40z50_last_result)
             );
@@ -361,18 +363,33 @@ impl FrontPanel {
             return;
         }
         self.bms_activation_state = state;
+        let recovery_overlay = front_panel_scene::bq40_recovery_overlay(&self.self_check_snapshot);
         let overlay_allowed = self.ui_variant == SELF_CHECK_VARIANT
-            && (front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot)
+            && (recovery_overlay.is_some()
                 || matches!(
                     self.self_check_overlay,
                     SelfCheckOverlay::BmsActivateConfirm
                         | SelfCheckOverlay::BmsActivateProgress
+                        | SelfCheckOverlay::BmsDischargeAuthorizeConfirm
+                        | SelfCheckOverlay::BmsDischargeAuthorizeProgress
                         | SelfCheckOverlay::BmsActivateResult(..)
                 ));
         self.self_check_overlay = if overlay_allowed {
             match state {
                 BmsActivationState::Idle => SelfCheckOverlay::None,
-                BmsActivationState::Pending => SelfCheckOverlay::BmsActivateProgress,
+                BmsActivationState::Pending => {
+                    match current_recovery_overlay_action(self.self_check_overlay, recovery_overlay)
+                    {
+                        Some(BmsRecoveryUiAction::Activation) => {
+                            SelfCheckOverlay::BmsActivateProgress
+                        }
+                        Some(BmsRecoveryUiAction::DischargeAuthorization) => {
+                            SelfCheckOverlay::BmsDischargeAuthorizeProgress
+                        }
+                        None => SelfCheckOverlay::None,
+                    }
+                }
+                BmsActivationState::Result(BmsResultKind::Success) => SelfCheckOverlay::None,
                 BmsActivationState::Result(result) => SelfCheckOverlay::BmsActivateResult(result),
             }
         } else {
@@ -504,28 +521,45 @@ impl FrontPanel {
                         self.self_check_overlay = result_overlay;
                         self.needs_redraw = true;
                         defmt::info!("ui: bms result dialog reopen via key");
-                    } else if front_panel_scene::is_bq40_activation_needed(
-                        &self.self_check_snapshot,
-                    ) {
-                        self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
+                    } else if let Some(recovery_overlay) =
+                        front_panel_scene::bq40_recovery_overlay(&self.self_check_snapshot)
+                    {
+                        self.self_check_overlay = recovery_overlay;
                         self.needs_redraw = true;
-                        defmt::info!("ui: bms activation dialog open via key");
+                        defmt::info!("ui: bms recovery dialog open via key");
                     }
                 }
             }
-            SelfCheckOverlay::BmsActivateConfirm => {
+            SelfCheckOverlay::BmsActivateConfirm
+            | SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
                 if right_edge {
                     self.self_check_overlay = SelfCheckOverlay::None;
                     self.needs_redraw = true;
-                    defmt::info!("ui: bms activation dialog cancel via key");
+                    defmt::info!("ui: bms recovery dialog cancel via key");
                 } else if left_edge || center_edge {
-                    self.self_check_overlay = SelfCheckOverlay::BmsActivateProgress;
+                    let action = match self.self_check_overlay {
+                        SelfCheckOverlay::BmsActivateConfirm => BmsRecoveryUiAction::Activation,
+                        SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
+                            BmsRecoveryUiAction::DischargeAuthorization
+                        }
+                        _ => unreachable!(),
+                    };
+                    self.self_check_overlay = match action {
+                        BmsRecoveryUiAction::Activation => SelfCheckOverlay::BmsActivateProgress,
+                        BmsRecoveryUiAction::DischargeAuthorization => {
+                            SelfCheckOverlay::BmsDischargeAuthorizeProgress
+                        }
+                    };
                     self.needs_redraw = true;
-                    defmt::info!("ui: bms activation request via key");
-                    return Some(UiAction::RequestBmsActivation);
+                    defmt::info!(
+                        "ui: bms recovery request via key action={}",
+                        bms_recovery_ui_action_name(action)
+                    );
+                    return Some(UiAction::RequestBmsRecovery(action));
                 }
             }
-            SelfCheckOverlay::BmsActivateProgress => {}
+            SelfCheckOverlay::BmsActivateProgress
+            | SelfCheckOverlay::BmsDischargeAuthorizeProgress => {}
             SelfCheckOverlay::BmsActivateResult(..) => {}
         }
 
@@ -979,13 +1013,25 @@ impl FrontPanel {
                 None
             }
             Some(SelfCheckTouchTarget::ActivateConfirm) => {
-                self.self_check_overlay = SelfCheckOverlay::BmsActivateProgress;
+                let action = match self.self_check_overlay {
+                    SelfCheckOverlay::BmsActivateConfirm => BmsRecoveryUiAction::Activation,
+                    SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
+                        BmsRecoveryUiAction::DischargeAuthorization
+                    }
+                    _ => return None,
+                };
+                self.self_check_overlay = match action {
+                    BmsRecoveryUiAction::Activation => SelfCheckOverlay::BmsActivateProgress,
+                    BmsRecoveryUiAction::DischargeAuthorization => {
+                        SelfCheckOverlay::BmsDischargeAuthorizeProgress
+                    }
+                };
                 self.needs_redraw = true;
-                Some(UiAction::RequestBmsActivation)
+                Some(UiAction::RequestBmsRecovery(action))
             }
             Some(SelfCheckTouchTarget::Bq40Card) => {
-                let activation_needed =
-                    front_panel_scene::is_bq40_activation_needed(&self.self_check_snapshot);
+                let recovery_overlay =
+                    front_panel_scene::bq40_recovery_overlay(&self.self_check_snapshot);
                 if self.self_check_overlay == SelfCheckOverlay::None
                     && self.bms_activation_state != BmsActivationState::Pending
                 {
@@ -995,23 +1041,23 @@ impl FrontPanel {
                         self.self_check_overlay = result_overlay;
                         self.needs_redraw = true;
                         defmt::info!("ui: bms result dialog reopen via touch");
-                    } else if activation_needed {
-                        self.self_check_overlay = SelfCheckOverlay::BmsActivateConfirm;
+                    } else if let Some(recovery_overlay) = recovery_overlay {
+                        self.self_check_overlay = recovery_overlay;
                         self.needs_redraw = true;
-                        defmt::info!("ui: bms activation dialog open via touch");
+                        defmt::info!("ui: bms recovery dialog open via touch");
                     } else {
                         defmt::info!(
-                            "ui: bms touch ignored overlay={} activation_needed={=bool} bms_state={}",
+                            "ui: bms touch ignored overlay={} recovery_available={=bool} bms_state={}",
                             overlay_name(self.self_check_overlay),
-                            activation_needed,
+                            recovery_overlay.is_some(),
                             bms_activation_state_name(self.bms_activation_state)
                         );
                     }
                 } else {
                     defmt::info!(
-                        "ui: bms touch ignored overlay={} activation_needed={=bool} bms_state={}",
+                        "ui: bms touch ignored overlay={} recovery_available={=bool} bms_state={}",
                         overlay_name(self.self_check_overlay),
-                        activation_needed,
+                        recovery_overlay.is_some(),
                         bms_activation_state_name(self.bms_activation_state)
                     );
                 }
@@ -1243,10 +1289,12 @@ fn log_self_check_snapshot_transition(previous: &SelfCheckUiSnapshot, next: &Sel
         || previous.bq40z50_rca_alarm != next.bq40z50_rca_alarm
         || previous.bq40z50_no_battery != next.bq40z50_no_battery
         || previous.bq40z50_discharge_ready != next.bq40z50_discharge_ready
+        || previous.bq40z50_issue_detail != next.bq40z50_issue_detail
+        || previous.bq40z50_recovery_action != next.bq40z50_recovery_action
         || previous.bq40z50_last_result != next.bq40z50_last_result;
     if power_detail_changed {
         defmt::info!(
-            "ui: self_check power_detail vbus_present={=?} chg_allow={=?} chg_ichg_ma={=?} vbat_present={=?} bq40_soc_pct={=?} bq40_rca_alarm={=?} bq40_no_battery={=?} bq40_dsg_ready={=?} bq40_last_result={}",
+            "ui: self_check power_detail vbus_present={=?} chg_allow={=?} chg_ichg_ma={=?} vbat_present={=?} bq40_soc_pct={=?} bq40_rca_alarm={=?} bq40_no_battery={=?} bq40_dsg_ready={=?} bq40_issue_detail={=?} bq40_recovery_action={} bq40_last_result={}",
             next.fusb302_vbus_present,
             next.bq25792_allow_charge,
             next.bq25792_ichg_ma,
@@ -1255,6 +1303,8 @@ fn log_self_check_snapshot_transition(previous: &SelfCheckUiSnapshot, next: &Sel
             next.bq40z50_rca_alarm,
             next.bq40z50_no_battery,
             next.bq40z50_discharge_ready,
+            next.bq40z50_issue_detail,
+            bms_recovery_ui_action_option_name(next.bq40z50_recovery_action),
             bms_result_option_name(next.bq40z50_last_result)
         );
     }
@@ -1263,8 +1313,10 @@ fn log_self_check_snapshot_transition(previous: &SelfCheckUiSnapshot, next: &Sel
 fn overlay_name(overlay: SelfCheckOverlay) -> &'static str {
     match overlay {
         SelfCheckOverlay::None => "none",
-        SelfCheckOverlay::BmsActivateConfirm => "confirm",
-        SelfCheckOverlay::BmsActivateProgress => "progress",
+        SelfCheckOverlay::BmsActivateConfirm => "confirm_activation",
+        SelfCheckOverlay::BmsActivateProgress => "progress_activation",
+        SelfCheckOverlay::BmsDischargeAuthorizeConfirm => "confirm_discharge",
+        SelfCheckOverlay::BmsDischargeAuthorizeProgress => "progress_discharge",
         SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::Success) => {
             "result_success"
         }
@@ -1314,6 +1366,41 @@ fn bms_result_name(result: BmsResultKind) -> &'static str {
 
 fn bms_result_option_name(result: Option<BmsResultKind>) -> &'static str {
     result.map_or("none", bms_result_name)
+}
+
+fn bms_recovery_ui_action_name(action: BmsRecoveryUiAction) -> &'static str {
+    match action {
+        BmsRecoveryUiAction::Activation => "activation",
+        BmsRecoveryUiAction::DischargeAuthorization => "discharge_authorization",
+    }
+}
+
+fn bms_recovery_ui_action_option_name(action: Option<BmsRecoveryUiAction>) -> &'static str {
+    action.map_or("none", bms_recovery_ui_action_name)
+}
+
+fn current_recovery_overlay_action(
+    overlay: SelfCheckOverlay,
+    recovery_overlay: Option<SelfCheckOverlay>,
+) -> Option<BmsRecoveryUiAction> {
+    match overlay {
+        SelfCheckOverlay::BmsActivateConfirm | SelfCheckOverlay::BmsActivateProgress => {
+            Some(BmsRecoveryUiAction::Activation)
+        }
+        SelfCheckOverlay::BmsDischargeAuthorizeConfirm
+        | SelfCheckOverlay::BmsDischargeAuthorizeProgress => {
+            Some(BmsRecoveryUiAction::DischargeAuthorization)
+        }
+        SelfCheckOverlay::BmsActivateResult(..) | SelfCheckOverlay::None => {
+            match recovery_overlay {
+                Some(SelfCheckOverlay::BmsActivateConfirm) => Some(BmsRecoveryUiAction::Activation),
+                Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm) => {
+                    Some(BmsRecoveryUiAction::DischargeAuthorization)
+                }
+                _ => None,
+            }
+        }
+    }
 }
 
 fn bms_activation_state_name(state: BmsActivationState) -> &'static str {

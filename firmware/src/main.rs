@@ -1171,12 +1171,13 @@ fn main() -> ! {
                     audio_manager.stop();
                 }
             }
-            front_panel.update_self_check_snapshot(power.ui_snapshot());
+            let ui_snapshot = power.ui_snapshot();
+            front_panel.update_self_check_snapshot(ui_snapshot);
             front_panel.update_bms_activation_state(power.bms_activation_state());
             if let Some(action) = front_panel.tick() {
                 match action {
-                    front_panel::UiAction::RequestBmsActivation => {
-                        power.request_bms_activation();
+                    front_panel::UiAction::RequestBmsRecovery(action) => {
+                        power.request_bms_recovery_action(action);
                         front_panel.update_bms_activation_state(power.bms_activation_state());
                     }
                     front_panel::UiAction::ClearBmsActivationResult => {
@@ -1184,6 +1185,18 @@ fn main() -> ! {
                         front_panel.update_bms_activation_state(power.bms_activation_state());
                     }
                 }
+            }
+            if front_panel_scene::self_check_can_enter_dashboard(&ui_snapshot) {
+                if matches!(
+                    power.bms_activation_state(),
+                    front_panel_scene::BmsActivationState::Result(
+                        front_panel_scene::BmsResultKind::Success
+                    )
+                ) {
+                    power.clear_bms_activation_state();
+                    front_panel.update_bms_activation_state(power.bms_activation_state());
+                }
+                front_panel.enter_dashboard();
             }
             if audio_enabled {
                 let now = Instant::now();
