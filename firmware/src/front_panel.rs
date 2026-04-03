@@ -332,7 +332,6 @@ impl FrontPanel {
         self.set_backlight(true);
         self.state = InitState::Ready;
         self.next_frame_deadline = Instant::now();
-        defmt::info!("ui: display_reinit trigger={} stage=ok", trigger);
         Ok(())
     }
 
@@ -355,7 +354,7 @@ impl FrontPanel {
         let _ = self.tca_set_cs_enabled(false);
         let _ = self.tca_set_res_released(false);
         let _ = self.tca_set_tp_reset_released(false);
-        self.set_backlight(true);
+        self.set_backlight(false);
         self.state = InitState::Disabled;
     }
 
@@ -404,6 +403,7 @@ impl FrontPanel {
 
         self.needs_redraw = false;
         defmt::info!("ui: display_reinit trigger=center_long_press stage=redraw_restore result=ok");
+        defmt::info!("ui: display_reinit trigger=center_long_press stage=ok");
     }
 
     fn log_display_diag(&mut self, snapshot: InputSnapshot) {
