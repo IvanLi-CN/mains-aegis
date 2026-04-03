@@ -81,6 +81,21 @@ cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 > 备注：当前固件将 CPU 频率固定为 `160MHz`（early bring-up 更稳），避免上电初始化阶段的偶发异常影响验证。
 > 备注：本计划的音频素材已收敛为 PCM-only（`WAV(PCM16LE)`），固件侧不再包含 ADPCM 解码路径。
 
+## Host 侧纯逻辑单测
+
+```bash
+cd firmware
+bash scripts/run-host-unit-tests.sh
+# 或直接：
+cargo test --manifest-path host-unit-tests/Cargo.toml
+```
+
+这条验证链只覆盖不依赖 `esp-hal / esp-backtrace / xtensa` 的纯逻辑模块，当前包含：
+
+- `src/fan.rs`
+- `src/output_protection.rs`
+- `src/output_state.rs`
+
 ## 运行时音效服务（Plan #h43mk）
 
 主固件已改为常驻运行时音效服务；上电进入自检后就会请求一次 `boot_startup`，音频播放与自检并行推进，后续由主循环按电源/BMS/保护状态驱动 cue 播放，不再阻塞播放 6 段 Demo playlist。
