@@ -101,21 +101,30 @@ const FAN_TACH_PULSES_PER_REV: u8 = 2;
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct AppliedFanOutput {
     enabled: bool,
-    pwm_pct: u8,
+    drive_pct: u8,
+    vset_duty_pct: u8,
 }
 
 fn latch_fan_vset_fail_safe(fan_vset_fail_safe: &mut Option<Output<'static>>) {
     if fan_vset_fail_safe.is_none() {
         *fan_vset_fail_safe = Some(Output::new(
             unsafe { AnyPin::steal(36) },
-            Level::High,
+            Level::Low,
             OutputConfig::default()
                 .with_drive_mode(DriveMode::PushPull)
                 .with_pull(Pull::None),
         ));
     } else if let Some(pin) = fan_vset_fail_safe.as_mut() {
-        pin.set_high();
+        pin.set_low();
     }
+}
+
+fn fan_vset_duty_pct_from_drive_pct(enabled: bool, drive_pct: u8) -> u8 {
+    if !enabled {
+        return 0;
+    }
+
+    100u8.saturating_sub(drive_pct.min(100))
 }
 
 fn apply_fan_command(
@@ -133,11 +142,13 @@ fn apply_fan_command(
         fan_en.set_low();
         *applied = Some(AppliedFanOutput {
             enabled: false,
-            pwm_pct: 0,
+            drive_pct: 0,
+            vset_duty_pct: 0,
         });
         return output::AppliedFanState {
             command: esp_firmware::fan::FanLevel::Off,
             pwm_pct: 0,
+            vset_duty_pct: 0,
             degraded: false,
             disabled_by_feature: true,
         };
@@ -145,7 +156,8 @@ fn apply_fan_command(
 
     let next = AppliedFanOutput {
         enabled: status.command.enabled(),
-        pwm_pct: status.pwm_pct,
+        drive_pct: status.pwm_pct,
+        vset_duty_pct: fan_vset_duty_pct_from_drive_pct(status.command.enabled(), status.pwm_pct),
     };
     if *pwm_degraded {
         latch_fan_vset_fail_safe(fan_vset_fail_safe);
@@ -153,6 +165,7 @@ fn apply_fan_command(
         return output::AppliedFanState {
             command: esp_firmware::fan::FanLevel::High,
             pwm_pct: 100,
+            vset_duty_pct: 0,
             degraded: true,
             disabled_by_feature: false,
         };
@@ -161,16 +174,17 @@ fn apply_fan_command(
     if applied.as_ref() == Some(&next) {
         return output::AppliedFanState {
             command: status.command,
-            pwm_pct: next.pwm_pct,
+            pwm_pct: next.drive_pct,
+            vset_duty_pct: next.vset_duty_pct,
             degraded: false,
             disabled_by_feature: false,
         };
     }
 
-    if let Err(err) = fan_pwm.set_duty(next.pwm_pct) {
+    if let Err(err) = fan_pwm.set_duty(next.vset_duty_pct) {
         defmt::error!(
-            "fan: pwm apply err duty_pct={} err={=?} fallback=fan_en_high_vset_high",
-            next.pwm_pct,
+            "fan: pwm apply err vset_duty_pct={} err={=?} fallback=fan_en_high_vset_low",
+            next.vset_duty_pct,
             err
         );
         *pwm_degraded = true;
@@ -180,6 +194,7 @@ fn apply_fan_command(
         return output::AppliedFanState {
             command: esp_firmware::fan::FanLevel::High,
             pwm_pct: 100,
+            vset_duty_pct: 0,
             degraded: true,
             disabled_by_feature: false,
         };
@@ -193,7 +208,8 @@ fn apply_fan_command(
     *applied = Some(next);
     output::AppliedFanState {
         command: status.command,
-        pwm_pct: next.pwm_pct,
+        pwm_pct: next.drive_pct,
+        vset_duty_pct: next.vset_duty_pct,
         degraded: false,
         disabled_by_feature: false,
     }
@@ -642,7 +658,7 @@ fn main() -> ! {
         // does not silently disappear while the control path keeps logging activity.
         latch_fan_vset_fail_safe(&mut fan_vset_fail_safe);
         fan_en.set_high();
-        defmt::warn!("fan: pwm unavailable; forcing fan_en/vset high for fail-safe cooling");
+        defmt::warn!("fan: pwm unavailable; forcing fan_en high + vset low for fail-safe cooling");
     }
 
     // Front panel: I2C2 + SPI display bring-up (Plan #3kz8p).
@@ -1068,6 +1084,7 @@ fn main() -> ! {
     let mut applied_fan_state = output::AppliedFanState {
         command: esp_firmware::fan::FanLevel::Off,
         pwm_pct: 0,
+        vset_duty_pct: 0,
         degraded: false,
         disabled_by_feature: TMP_HW_PROTECT_TEST_MODE,
     };

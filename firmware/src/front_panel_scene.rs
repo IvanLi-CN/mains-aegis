@@ -4468,7 +4468,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         palette,
         172,
         DETAIL_ROW_Y_2,
-        "PWM",
+        "CTRL",
         data.detail.fan_pwm_pct,
         DetailValueFmt::Percent,
     )?;
@@ -4930,15 +4930,15 @@ fn thermal_fan_motion(
     status: Option<&'static str>,
 ) -> ThermalFanMotion {
     match (rpm, pwm_pct, status) {
-        (Some(rpm), _, _) if rpm >= 3_600 => ThermalFanMotion::High,
-        (_, Some(pwm), _) if pwm >= 90 => ThermalFanMotion::High,
         (_, _, Some("HIGH")) => ThermalFanMotion::High,
-        (Some(rpm), _, _) if rpm >= 1_800 => ThermalFanMotion::Mid,
-        (_, Some(pwm), _) if pwm >= 55 => ThermalFanMotion::Mid,
+        (_, Some(pwm), _) if pwm >= 67 => ThermalFanMotion::High,
+        (Some(rpm), _, _) if rpm >= 3_600 => ThermalFanMotion::High,
         (_, _, Some("MID")) => ThermalFanMotion::Mid,
-        (Some(rpm), _, _) if rpm > 0 => ThermalFanMotion::Low,
-        (_, Some(pwm), _) if pwm > 0 => ThermalFanMotion::Low,
+        (_, Some(pwm), _) if pwm >= 34 => ThermalFanMotion::Mid,
+        (Some(rpm), _, _) if rpm >= 1_800 => ThermalFanMotion::Mid,
         (_, _, Some("LOW" | "RUN")) => ThermalFanMotion::Low,
+        (_, Some(pwm), _) if pwm > 0 => ThermalFanMotion::Low,
+        (Some(rpm), _, _) if rpm > 0 => ThermalFanMotion::Low,
         _ => ThermalFanMotion::Off,
     }
 }
@@ -9019,6 +9019,18 @@ mod tests {
         );
         assert_eq!(
             thermal_fan_motion(Some(4_120), Some(100), Some("HIGH")),
+            ThermalFanMotion::High
+        );
+    }
+
+    #[test]
+    fn thermal_fan_motion_prefers_control_band_over_noisy_rpm() {
+        assert_eq!(
+            thermal_fan_motion(Some(4_200), Some(25), Some("LOW")),
+            ThermalFanMotion::Low
+        );
+        assert_eq!(
+            thermal_fan_motion(Some(900), Some(72), Some("HIGH")),
             ThermalFanMotion::High
         );
     }

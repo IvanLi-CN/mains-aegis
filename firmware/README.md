@@ -578,6 +578,8 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
 ### 正常构建（默认）冻结口径
 
 - PWM：`25kHz`，`GPIO36 -> FAN_VSET_PWM`
+- 硬件极性：`FAN_VSET_PWM` 经过 `R13/R49/C52/C53/R11` 注入 `RT9043(FB)`，属于**反相调速**；更高的 `VSET duty` 会拉低 `FAN_VCC`
+- 日志 / UI 口径：`applied_pwm_pct` 表示**实际风扇驱动百分比**（越大越快），原始硬件占空比单独记为 `applied_vset_duty_pct`
 - 控温源：取 `max(tmp_a, tmp_b, bms_board, bms_battery, bms_ts1..ts4)`
 - 控温目标：`40°C`
 - 停转阈值：`< 37°C => off(0%)`
@@ -592,7 +594,8 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
 - 温度退化：`TMP` 缺失时可退化到 `BQ40` 温度；若 `TMP + BQ40` 全部缺失才直接 `high(100%)`
 - `tach` 看门狗：命令为运行态且 `2s` 内没有 `FAN_TACH` 脉冲时，记录故障并强制 `high`
 - `tach` 故障恢复：需要确认到连续脉冲活动，单个毛刺边沿不会解除强制 `high`
-- PWM 失败兜底：若 `FAN_VSET_PWM` 的 LEDC 初始化失败，或运行期 duty 更新失败，固件会直接拉高 `FAN_EN`，并把 `FAN_VSET_PWM` 切到高电平 fail-safe，避免“日志还在跑但风扇硬件失效”
+- RPM 显示：前面板使用更长采样窗 + 平滑后的显示值，避免短窗脉冲把 `RPM` 放大成失真尖峰
+- PWM 失败兜底：若 `FAN_VSET_PWM` 的 LEDC 初始化失败，或运行期 duty 更新失败，固件会直接拉高 `FAN_EN`，并把 `FAN_VSET_PWM` 切到低电平 fail-safe，避免“日志还在跑但风扇硬件失效”
 
 ### TMP 硬件保护测试构建（`--features tmp-hw-protect-test`）
 
@@ -613,8 +616,8 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
 - `fan: policy stop_c_x16=... target_c_x16=... test_mode=false ...`
 - `fan: command mode=low pwm_pct=15 ...`
 - `fan: command mode=mid pwm_pct=40 ...`
-- `fan: telemetry requested_mode=mid requested_pwm_pct=40 applied_mode=mid applied_pwm_pct=40 ...`
-- 测试构建：`fan: telemetry ... applied_mode=off applied_pwm_pct=0 ... disabled_by_feature=true`
+- `fan: telemetry requested_mode=mid requested_pwm_pct=40 applied_mode=mid applied_pwm_pct=40 applied_vset_duty_pct=60 rpm=... rpm_raw=...`
+- 测试构建：`fan: telemetry ... applied_mode=off applied_pwm_pct=0 applied_vset_duty_pct=0 ... disabled_by_feature=true`
 
 异常/恢复：
 
