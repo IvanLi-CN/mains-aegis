@@ -352,18 +352,43 @@ else
       ;;
   esac
 
-  case "$repair_profile" in
-    none|afe-default|live-df-mainboard|asset-df-mainboard) ;;
+  case "$subcommand" in
+    diagnose)
+      case "$repair_profile" in
+        none|afe-default) ;;
+        live-df-mainboard|asset-df-mainboard)
+          echo "diagnose mode does not accept --repair-profile $repair_profile; use apply-df or recover" >&2
+          exit 21
+          ;;
+        *)
+          echo "Invalid --repair-profile: $repair_profile" >&2
+          exit 17
+          ;;
+      esac
+      ;;
+    recover)
+      case "$repair_profile" in
+        none|afe-default|asset-df-mainboard) ;;
+        live-df-mainboard)
+          echo "recover mode does not accept --repair-profile live-df-mainboard; use apply-df" >&2
+          exit 22
+          ;;
+        *)
+          echo "Invalid --repair-profile: $repair_profile" >&2
+          exit 17
+          ;;
+      esac
+      ;;
     *)
-      echo "Invalid --repair-profile: $repair_profile" >&2
-      exit 17
+      case "$repair_profile" in
+        none|afe-default|live-df-mainboard|asset-df-mainboard) ;;
+        *)
+          echo "Invalid --repair-profile: $repair_profile" >&2
+          exit 17
+          ;;
+      esac
       ;;
   esac
-
-  if [[ "$subcommand" == "diagnose" && "$repair_profile" == "asset-df-mainboard" ]]; then
-    echo "diagnose mode does not accept --repair-profile asset-df-mainboard; use recover or apply-df" >&2
-    exit 21
-  fi
 
   if [[ "$recover_policy" == "force" && "$mode" != "dual-diag" ]]; then
     echo "--recover force requires --mode dual-diag" >&2
