@@ -87,7 +87,7 @@ cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 cd firmware
 bash scripts/run-host-unit-tests.sh
 # 或直接：
-cargo test --manifest-path host-unit-tests/Cargo.toml
+cargo +stable test --target "$(rustc +stable -vV | sed -n 's/^host: //p')" --manifest-path host-unit-tests/Cargo.toml
 ```
 
 这条验证链只覆盖不依赖 `esp-hal / esp-backtrace / xtensa` 的纯逻辑模块，当前包含：

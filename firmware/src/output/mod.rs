@@ -1638,7 +1638,7 @@ fn bq40_ui_issue_detail(low_pack: bool, primary_reason: &'static str) -> Option<
     }
 }
 
-fn bq40_last_result_blocks_recovery(result: Option<BmsResultKind>) -> bool {
+fn bq40_last_result_blocks_auto_recovery(result: Option<BmsResultKind>) -> bool {
     matches!(
         result,
         Some(
@@ -1660,8 +1660,7 @@ fn bq40_recovery_action_for_snapshot(
 ) -> Option<BmsRecoveryUiAction> {
     if is_bq40_activation_needed(snapshot) {
         Some(BmsRecoveryUiAction::Activation)
-    } else if !bq40_last_result_blocks_recovery(snapshot.bq40z50_last_result)
-        && requested_outputs != output_state_logic::EnabledOutputs::None
+    } else if requested_outputs != output_state_logic::EnabledOutputs::None
         && gate_reason == OutputGateReason::BmsNotReady
         && bms_addr.is_some()
         && snapshot.bq40z50 != SelfCheckCommState::Err
@@ -5873,7 +5872,7 @@ where
         }
 
         let auto_activation_needed =
-            !bq40_last_result_blocks_recovery(self.ui_snapshot.bq40z50_last_result)
+            !bq40_last_result_blocks_auto_recovery(self.ui_snapshot.bq40z50_last_result)
                 && self.ui_snapshot.bq40z50 == SelfCheckCommState::Err;
         if !auto_activation_needed {
             self.bms_activation_auto_attempted = true;
@@ -5966,7 +5965,7 @@ where
         }
 
         if self.bms_activation_state != BmsActivationState::Idle
-            || bq40_last_result_blocks_recovery(self.ui_snapshot.bq40z50_last_result)
+            || bq40_last_result_blocks_auto_recovery(self.ui_snapshot.bq40z50_last_result)
             || !self.can_request_bms_discharge_authorization()
         {
             return;

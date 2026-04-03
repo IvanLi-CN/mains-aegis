@@ -25,7 +25,7 @@
 - 对 `NOT DETECTED` 使用 `Activate` 动作；对 `BQ40` 放电路径被挡住的可恢复问题使用 `Recover` 动作；其它不可恢复问题仅保留状态展示，不在前面板扩展 ROM/DF 写入类操作。
 - 激活结果词汇固定保留 5 类：`SUCCESS`、`NO BATTERY`、`ROM MODE`、`ABNORMAL`、`NOT DETECTED`。
 - `NO BATTERY` 只能由 BQ40 自身可读证据触发，禁止由 `BQ25792`、`FUSB302` 或其它器件状态推断。
-- 失败结果弹窗关闭后保留最近一次结果；再次点击 `BQ40Z50` 卡片时直接回显对应失败结果弹窗。
+- 失败结果弹窗关闭后保留最近一次结果；若当前问题仍属于可恢复态，再次点击 `BQ40Z50` 卡片时应优先进入新的 `Activate/Recover` 确认弹窗，而不是把主人困在旧失败结果里。
 - `SUCCESS` 不再停留在结果弹窗；恢复成功后应立即回到自检页显示最新状态，若所有卡片均已 clear，则自动进入 Dashboard。
 - 主固件的激活链路必须移植工具已验证有效的 `wake-window + delayed read + keepalive + confirm` 读法，但该链路只在 `Try Activation` 期间生效。
 - 正式候选固件不得保留任何开机自动激活/自动恢复流；恢复动作只能由前面板显式确认触发。

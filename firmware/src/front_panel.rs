@@ -1035,16 +1035,16 @@ impl FrontPanel {
                 if self.self_check_overlay == SelfCheckOverlay::None
                     && self.bms_activation_state != BmsActivationState::Pending
                 {
-                    if let Some(result_overlay) =
+                    if let Some(recovery_overlay) = recovery_overlay {
+                        self.self_check_overlay = recovery_overlay;
+                        self.needs_redraw = true;
+                        defmt::info!("ui: bms recovery dialog open via touch");
+                    } else if let Some(result_overlay) =
                         front_panel_scene::bq40_result_overlay(&self.self_check_snapshot)
                     {
                         self.self_check_overlay = result_overlay;
                         self.needs_redraw = true;
                         defmt::info!("ui: bms result dialog reopen via touch");
-                    } else if let Some(recovery_overlay) = recovery_overlay {
-                        self.self_check_overlay = recovery_overlay;
-                        self.needs_redraw = true;
-                        defmt::info!("ui: bms recovery dialog open via touch");
                     } else {
                         defmt::info!(
                             "ui: bms touch ignored overlay={} recovery_available={=bool} bms_state={}",

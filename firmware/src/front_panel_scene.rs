@@ -680,21 +680,9 @@ pub fn is_bq40_offline(snapshot: &SelfCheckUiSnapshot) -> bool {
     snapshot.bq40z50 == SelfCheckCommState::Err
 }
 
-fn has_blocking_bq40_result(snapshot: &SelfCheckUiSnapshot) -> bool {
-    matches!(
-        snapshot.bq40z50_last_result,
-        Some(
-            BmsResultKind::NoBattery
-                | BmsResultKind::RomMode
-                | BmsResultKind::Abnormal
-                | BmsResultKind::NotDetected
-        )
-    )
-}
-
 #[allow(dead_code)]
 pub fn is_bq40_activation_needed(snapshot: &SelfCheckUiSnapshot) -> bool {
-    !has_blocking_bq40_result(snapshot) && is_bq40_offline(snapshot)
+    is_bq40_offline(snapshot)
 }
 
 fn discharge_authorization_input_ready(snapshot: &SelfCheckUiSnapshot) -> bool {
@@ -705,8 +693,7 @@ fn discharge_authorization_input_ready(snapshot: &SelfCheckUiSnapshot) -> bool {
 pub fn bq40_recovery_action(snapshot: &SelfCheckUiSnapshot) -> Option<BmsRecoveryUiAction> {
     if is_bq40_activation_needed(snapshot) {
         Some(BmsRecoveryUiAction::Activation)
-    } else if !has_blocking_bq40_result(snapshot)
-        && snapshot.requested_outputs != EnabledOutputs::None
+    } else if snapshot.requested_outputs != EnabledOutputs::None
         && snapshot.output_gate_reason == OutputGateReason::BmsNotReady
         && snapshot.bq40z50 != SelfCheckCommState::Err
         && snapshot.bq40z50_no_battery != Some(true)
@@ -8657,7 +8644,7 @@ mod tests {
         assert!(is_bq40_activation_needed(&snapshot));
 
         snapshot.bq40z50_last_result = Some(BmsResultKind::NotDetected);
-        assert!(!is_bq40_activation_needed(&snapshot));
+        assert!(is_bq40_activation_needed(&snapshot));
     }
 
     #[test]
@@ -8705,6 +8692,31 @@ mod tests {
         assert_eq!(
             bq40_recovery_overlay(&snapshot),
             Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm)
+        );
+    }
+
+    #[test]
+    fn bq40_failed_result_does_not_block_retryable_recovery_action() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_discharge_ready = Some(false);
+        snapshot.bq40z50_last_result = Some(BmsResultKind::Abnormal);
+
+        assert_eq!(
+            bq40_recovery_action(&snapshot),
+            Some(BmsRecoveryUiAction::DischargeAuthorization)
+        );
+
+        snapshot.bq40z50 = SelfCheckCommState::Err;
+        snapshot.bq40z50_last_result = Some(BmsResultKind::NotDetected);
+        assert_eq!(
+            bq40_recovery_action(&snapshot),
+            Some(BmsRecoveryUiAction::Activation)
         );
     }
 
