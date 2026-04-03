@@ -69,10 +69,14 @@ const FORCE_THERM_KILL_N_ASSERTED: bool = false;
 // TMP112A alert settings (Plan v5hze).
 const TMP112_OUT_A_ADDR: u8 = 0x48;
 const TMP112_OUT_B_ADDR: u8 = 0x49;
-const TMP112_THIGH_C_X16: i16 = 50 * 16;
-const TMP112_TLOW_C_X16: i16 = 40 * 16;
-const OUTPUT_PROTECT_TEMP_DERATE_C_X16: i16 = 48 * 16;
-const OUTPUT_PROTECT_TEMP_RESUME_C_X16: i16 = 45 * 16;
+const TMP112_THIGH_C_X16: i16 = 62 * 16;
+const TMP112_TLOW_C_X16: i16 = 60 * 16;
+const TMP_OUTPUT_PROTECT_DERATE_C_X16: i16 = 55 * 16;
+const TMP_OUTPUT_PROTECT_RESUME_C_X16: i16 = 52 * 16;
+const TMP_OUTPUT_PROTECT_SHUTDOWN_C_X16: i16 = 60 * 16;
+const OTHER_OUTPUT_PROTECT_DERATE_C_X16: i16 = 50 * 16;
+const OTHER_OUTPUT_PROTECT_RESUME_C_X16: i16 = 47 * 16;
+const OTHER_OUTPUT_PROTECT_SHUTDOWN_C_X16: i16 = 55 * 16;
 const OUTPUT_PROTECT_TEMP_HOLD: Duration = Duration::from_secs(5);
 const OUTPUT_PROTECT_CURRENT_DERATE_MA: i32 = 3_250;
 const OUTPUT_PROTECT_CURRENT_RESUME_MA: i32 = 3_000;
@@ -1009,8 +1013,12 @@ fn main() -> ! {
         telemetry_include_vin_ch3: TELEMETRY_INCLUDE_VIN_CH3,
         tmp112_tlow_c_x16: TMP112_TLOW_C_X16,
         tmp112_thigh_c_x16: TMP112_THIGH_C_X16,
-        protect_temp_derate_c_x16: OUTPUT_PROTECT_TEMP_DERATE_C_X16,
-        protect_temp_resume_c_x16: OUTPUT_PROTECT_TEMP_RESUME_C_X16,
+        protect_tmp_temp_derate_c_x16: TMP_OUTPUT_PROTECT_DERATE_C_X16,
+        protect_tmp_temp_resume_c_x16: TMP_OUTPUT_PROTECT_RESUME_C_X16,
+        protect_tmp_temp_shutdown_c_x16: TMP_OUTPUT_PROTECT_SHUTDOWN_C_X16,
+        protect_other_temp_derate_c_x16: OTHER_OUTPUT_PROTECT_DERATE_C_X16,
+        protect_other_temp_resume_c_x16: OTHER_OUTPUT_PROTECT_RESUME_C_X16,
+        protect_other_temp_shutdown_c_x16: OTHER_OUTPUT_PROTECT_SHUTDOWN_C_X16,
         protect_temp_hold: OUTPUT_PROTECT_TEMP_HOLD,
         protect_current_derate_ma: OUTPUT_PROTECT_CURRENT_DERATE_MA,
         protect_current_resume_ma: OUTPUT_PROTECT_CURRENT_RESUME_MA,

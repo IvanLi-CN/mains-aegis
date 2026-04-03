@@ -1,7 +1,11 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProtectionConfig {
-    pub temp_enter_c_x16: i16,
-    pub temp_exit_c_x16: i16,
+    pub tmp_temp_enter_c_x16: i16,
+    pub tmp_temp_exit_c_x16: i16,
+    pub tmp_temp_shutdown_c_x16: i16,
+    pub other_temp_enter_c_x16: i16,
+    pub other_temp_exit_c_x16: i16,
+    pub other_temp_shutdown_c_x16: i16,
     pub temp_hold_ms: u64,
     pub current_enter_ma: i32,
     pub current_exit_ma: i32,
@@ -15,7 +19,8 @@ pub struct ProtectionConfig {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProtectionInputs {
-    pub max_temp_c_x16: Option<i16>,
+    pub max_tmp_temp_c_x16: Option<i16>,
+    pub max_other_temp_c_x16: Option<i16>,
     pub max_current_ma: Option<i32>,
     pub min_vout_mv: Option<u16>,
 }
@@ -70,6 +75,7 @@ pub struct ProtectionRuntime {
     pub status: ProtectionStatus,
     pub shutdown_reason: ProtectionReason,
     temp_over_since_ms: Option<u64>,
+    thermal_shutdown_latched: bool,
     current_over_since_ms: Option<u64>,
     next_step_due_ms: Option<u64>,
     low_vout_since_ms: Option<u64>,
@@ -86,6 +92,7 @@ impl ProtectionRuntime {
             },
             shutdown_reason: ProtectionReason::None,
             temp_over_since_ms: None,
+            thermal_shutdown_latched: false,
             current_over_since_ms: None,
             next_step_due_ms: None,
             low_vout_since_ms: None,
@@ -117,10 +124,16 @@ pub fn step(
     let temp_state = classify_temp(
         now_ms,
         cfg,
-        inputs.max_temp_c_x16,
+        inputs.max_tmp_temp_c_x16,
+        inputs.max_other_temp_c_x16,
         runtime.temp_over_since_ms,
     );
     runtime.temp_over_since_ms = temp_state.over_since_ms;
+    if temp_shutdown_requested(cfg, inputs) {
+        runtime.thermal_shutdown_latched = true;
+    } else if runtime.thermal_shutdown_latched && temp_below_exit(cfg, inputs) {
+        runtime.thermal_shutdown_latched = false;
+    }
 
     let current_state = classify_current(
         now_ms,
@@ -132,7 +145,7 @@ pub fn step(
     runtime.current_over_since_ms = current_state.over_since_ms;
 
     runtime.status = ProtectionStatus {
-        thermal_active: temp_state.active,
+        thermal_active: temp_state.active || runtime.thermal_shutdown_latched,
         current_active: current_state.active,
     };
 
@@ -153,6 +166,17 @@ pub fn step(
         return ProtectionStepResult {
             runtime,
             action: ProtectionAction::None,
+        };
+    }
+
+    if runtime.thermal_shutdown_latched {
+        runtime.phase = ProtectionPhase::Shutdown;
+        runtime.shutdown_reason = reason;
+        runtime.next_step_due_ms = None;
+        runtime.low_vout_since_ms = None;
+        return ProtectionStepResult {
+            runtime,
+            action: ProtectionAction::Shutdown(reason),
         };
     }
 
@@ -229,17 +253,24 @@ struct ConditionState {
 fn classify_temp(
     now_ms: u64,
     cfg: ProtectionConfig,
-    max_temp_c_x16: Option<i16>,
+    max_tmp_temp_c_x16: Option<i16>,
+    max_other_temp_c_x16: Option<i16>,
     mut over_since_ms: Option<u64>,
 ) -> ConditionState {
-    if let Some(temp_c_x16) = max_temp_c_x16 {
-        if temp_c_x16 >= cfg.temp_enter_c_x16 {
-            if over_since_ms.is_none() {
-                over_since_ms = Some(now_ms);
-            }
-        } else if temp_c_x16 <= cfg.temp_exit_c_x16 {
-            over_since_ms = None;
+    if temp_over_enter(cfg, max_tmp_temp_c_x16, max_other_temp_c_x16) {
+        if over_since_ms.is_none() {
+            over_since_ms = Some(now_ms);
         }
+    } else if temp_below_exit(
+        cfg,
+        ProtectionInputs {
+            max_tmp_temp_c_x16,
+            max_other_temp_c_x16,
+            max_current_ma: None,
+            min_vout_mv: None,
+        },
+    ) {
+        over_since_ms = None;
     }
 
     let active =
@@ -248,6 +279,33 @@ fn classify_temp(
         active,
         over_since_ms,
     }
+}
+
+fn temp_over_enter(
+    cfg: ProtectionConfig,
+    max_tmp_temp_c_x16: Option<i16>,
+    max_other_temp_c_x16: Option<i16>,
+) -> bool {
+    max_tmp_temp_c_x16.is_some_and(|temp| temp >= cfg.tmp_temp_enter_c_x16)
+        || max_other_temp_c_x16.is_some_and(|temp| temp >= cfg.other_temp_enter_c_x16)
+}
+
+fn temp_below_exit(cfg: ProtectionConfig, inputs: ProtectionInputs) -> bool {
+    inputs
+        .max_tmp_temp_c_x16
+        .map_or(true, |temp| temp <= cfg.tmp_temp_exit_c_x16)
+        && inputs
+            .max_other_temp_c_x16
+            .map_or(true, |temp| temp <= cfg.other_temp_exit_c_x16)
+}
+
+fn temp_shutdown_requested(cfg: ProtectionConfig, inputs: ProtectionInputs) -> bool {
+    inputs
+        .max_tmp_temp_c_x16
+        .is_some_and(|temp| temp >= cfg.tmp_temp_shutdown_c_x16)
+        || inputs
+            .max_other_temp_c_x16
+            .is_some_and(|temp| temp >= cfg.other_temp_shutdown_c_x16)
 }
 
 fn classify_current(
@@ -287,8 +345,12 @@ mod tests {
     };
 
     const CFG: ProtectionConfig = ProtectionConfig {
-        temp_enter_c_x16: 48 * 16,
-        temp_exit_c_x16: 45 * 16,
+        tmp_temp_enter_c_x16: 55 * 16,
+        tmp_temp_exit_c_x16: 52 * 16,
+        tmp_temp_shutdown_c_x16: 60 * 16,
+        other_temp_enter_c_x16: 50 * 16,
+        other_temp_exit_c_x16: 47 * 16,
+        other_temp_shutdown_c_x16: 55 * 16,
         temp_hold_ms: 5_000,
         current_enter_ma: 3_250,
         current_exit_ma: 3_000,
@@ -307,7 +369,8 @@ mod tests {
             ..ProtectionRuntime::new(3_500)
         };
         let inputs = ProtectionInputs {
-            max_temp_c_x16: Some(49 * 16),
+            max_tmp_temp_c_x16: Some(56 * 16),
+            max_other_temp_c_x16: Some(45 * 16),
             max_current_ma: Some(1_000),
             min_vout_mv: Some(19_000),
         };
@@ -325,7 +388,8 @@ mod tests {
             ..ProtectionRuntime::new(3_250)
         };
         let inputs = ProtectionInputs {
-            max_temp_c_x16: Some(25 * 16),
+            max_tmp_temp_c_x16: Some(25 * 16),
+            max_other_temp_c_x16: Some(30 * 16),
             max_current_ma: Some(3_050),
             min_vout_mv: Some(18_000),
         };
@@ -339,26 +403,31 @@ mod tests {
     fn low_vout_escalates_to_shutdown_when_derating_persists() {
         let runtime = ProtectionRuntime {
             phase: ProtectionPhase::Derating,
-            status: Default::default(),
+            status: super::ProtectionStatus {
+                thermal_active: false,
+                current_active: true,
+            },
             shutdown_reason: ProtectionReason::None,
-            temp_over_since_ms: Some(0),
-            current_over_since_ms: None,
+            temp_over_since_ms: None,
+            thermal_shutdown_latched: false,
+            current_over_since_ms: Some(0),
             next_step_due_ms: Some(10_000),
             low_vout_since_ms: Some(1_000),
             applied_ilim_ma: 3_000,
         };
         let inputs = ProtectionInputs {
-            max_temp_c_x16: Some(41 * 16),
-            max_current_ma: Some(2_900),
+            max_tmp_temp_c_x16: Some(41 * 16),
+            max_other_temp_c_x16: Some(42 * 16),
+            max_current_ma: Some(3_050),
             min_vout_mv: Some(13_500),
         };
 
         let result = step(5_100, CFG, 3_500, runtime, inputs);
         assert_eq!(result.runtime.phase, ProtectionPhase::Shutdown);
-        assert_eq!(result.runtime.shutdown_reason, ProtectionReason::Thermal);
+        assert_eq!(result.runtime.shutdown_reason, ProtectionReason::Current);
         assert_eq!(
             result.action,
-            ProtectionAction::Shutdown(ProtectionReason::Thermal)
+            ProtectionAction::Shutdown(ProtectionReason::Current)
         );
     }
 
@@ -370,12 +439,14 @@ mod tests {
             status: Default::default(),
             shutdown_reason: ProtectionReason::None,
             temp_over_since_ms: Some(0),
+            thermal_shutdown_latched: false,
             current_over_since_ms: Some(0),
             next_step_due_ms: Some(10_000),
             low_vout_since_ms: None,
         };
         let inputs = ProtectionInputs {
-            max_temp_c_x16: Some(35 * 16),
+            max_tmp_temp_c_x16: Some(35 * 16),
+            max_other_temp_c_x16: Some(36 * 16),
             max_current_ma: Some(1_500),
             min_vout_mv: Some(19_000),
         };
@@ -384,5 +455,71 @@ mod tests {
         assert_eq!(result.runtime.phase, ProtectionPhase::Normal);
         assert_eq!(result.runtime.applied_ilim_ma, 3_500);
         assert_eq!(result.action, ProtectionAction::RestoreDefaultIlim(3_500));
+    }
+
+    #[test]
+    fn tmp_shutdown_trips_immediately_without_waiting_for_hold() {
+        let inputs = ProtectionInputs {
+            max_tmp_temp_c_x16: Some(60 * 16),
+            max_other_temp_c_x16: Some(45 * 16),
+            max_current_ma: Some(1_000),
+            min_vout_mv: Some(19_000),
+        };
+
+        let result = step(500, CFG, 3_500, ProtectionRuntime::new(3_500), inputs);
+        assert_eq!(result.runtime.phase, ProtectionPhase::Shutdown);
+        assert_eq!(result.runtime.shutdown_reason, ProtectionReason::Thermal);
+        assert_eq!(
+            result.action,
+            ProtectionAction::Shutdown(ProtectionReason::Thermal)
+        );
+    }
+
+    #[test]
+    fn thermal_shutdown_stays_latched_until_all_temps_drop_below_exit() {
+        let runtime = ProtectionRuntime {
+            applied_ilim_ma: 3_000,
+            phase: ProtectionPhase::Shutdown,
+            status: super::ProtectionStatus {
+                thermal_active: true,
+                current_active: false,
+            },
+            shutdown_reason: ProtectionReason::Thermal,
+            temp_over_since_ms: Some(0),
+            thermal_shutdown_latched: true,
+            current_over_since_ms: None,
+            next_step_due_ms: None,
+            low_vout_since_ms: None,
+        };
+
+        let still_hot = step(
+            6_000,
+            CFG,
+            3_500,
+            runtime,
+            ProtectionInputs {
+                max_tmp_temp_c_x16: Some(54 * 16),
+                max_other_temp_c_x16: Some(46 * 16),
+                max_current_ma: Some(1_000),
+                min_vout_mv: Some(19_000),
+            },
+        );
+        assert_eq!(still_hot.runtime.phase, ProtectionPhase::Shutdown);
+        assert_eq!(still_hot.action, ProtectionAction::None);
+
+        let cooled = step(
+            7_000,
+            CFG,
+            3_500,
+            still_hot.runtime,
+            ProtectionInputs {
+                max_tmp_temp_c_x16: Some(52 * 16),
+                max_other_temp_c_x16: Some(47 * 16),
+                max_current_ma: Some(1_000),
+                min_vout_mv: Some(19_000),
+            },
+        );
+        assert_eq!(cooled.runtime.phase, ProtectionPhase::Normal);
+        assert_eq!(cooled.action, ProtectionAction::RestoreDefaultIlim(3_500));
     }
 }

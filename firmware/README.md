@@ -243,7 +243,7 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
 - 极性：active-low（`ALERT` 拉低；`THERM_KILL_N=0`）
 - 去抖：Fault queue = `4`
 - 采样：Conversion rate = `1 Hz`
-- 阈值：`T(HIGH)=50°C`，`T(LOW)=40°C`（两路一致）
+- 阈值：`T(HIGH)=62°C`，`T(LOW)=60°C`（两路一致）
 
 若任一 `TMP112A` 配置写入失败，固件会进入 fail-safe：**不允许使能 TPS 输出**，并打印错误信息（包含地址与错误类型）。
 
@@ -596,6 +596,17 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
 - `tach` 故障恢复：需要确认到连续脉冲活动，单个毛刺边沿不会解除强制 `high`
 - RPM 显示：前面板使用更长采样窗 + 平滑后的显示值，避免短窗脉冲把 `RPM` 放大成失真尖峰
 - PWM 失败兜底：若 `FAN_VSET_PWM` 的 LEDC 初始化失败，或运行期 duty 更新失败，固件会直接拉高 `FAN_EN`，并把 `FAN_VSET_PWM` 切到低电平 fail-safe，避免“日志还在跑但风扇硬件失效”
+
+### 主动热保护（正常构建）
+
+- `TMP112A/B` 任一路达到 `55°C` 并持续 `5s` 后，开始主动降额（递减 `IOUT_LIMIT`）
+- `TMP112A/B` 任一路达到 `60°C` 后，直接执行软件主动停机（关闭输出 `OE`，进入 `active_protection`）
+- `BQ40 board / battery / TS1..TS4` 的最高温达到 `50°C` 并持续 `5s` 后，开始主动降额
+- `BQ40 board / battery / TS1..TS4` 的最高温达到 `55°C` 后，直接执行软件主动停机
+- 热降额恢复阈值：`TMP <= 52°C` 且 `other <= 47°C`
+- 降额动作仍保持原口径：每 `2s` 下调 `250mA`，最低到 `1000mA`
+- 若已经在降额链路里且输出电压继续跌到 `14V` 以下并持续 `2s`，仍会升级为主动停机
+- 主动停机条件解除后，不自动重新开输出；仍需显式恢复
 
 ### TMP 硬件保护测试构建（`--features tmp-hw-protect-test`）
 

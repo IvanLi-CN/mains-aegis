@@ -1033,16 +1033,8 @@ fn bms_thermal_max_c_x16(snapshot: &SelfCheckUiSnapshot) -> Option<i16> {
     max_temp_c_x16
 }
 
-fn accumulate_protection_temp(
-    max_temp_c_x16: Option<i16>,
-    temp_c_x16: Option<i16>,
-    thermal_protection_enabled: bool,
-) -> Option<i16> {
-    if !thermal_protection_enabled {
-        return max_temp_c_x16;
-    }
-
-    accumulate_max_temp_c_x16(max_temp_c_x16, temp_c_x16)
+fn max_optional_temp(a: Option<i16>, b: Option<i16>) -> Option<i16> {
+    accumulate_max_temp_c_x16(a, b)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2808,8 +2800,12 @@ pub struct Config {
     pub telemetry_include_vin_ch3: bool,
     pub tmp112_tlow_c_x16: i16,
     pub tmp112_thigh_c_x16: i16,
-    pub protect_temp_derate_c_x16: i16,
-    pub protect_temp_resume_c_x16: i16,
+    pub protect_tmp_temp_derate_c_x16: i16,
+    pub protect_tmp_temp_resume_c_x16: i16,
+    pub protect_tmp_temp_shutdown_c_x16: i16,
+    pub protect_other_temp_derate_c_x16: i16,
+    pub protect_other_temp_resume_c_x16: i16,
+    pub protect_other_temp_shutdown_c_x16: i16,
     pub protect_temp_hold: Duration,
     pub protect_current_derate_ma: i32,
     pub protect_current_resume_ma: i32,
@@ -6628,8 +6624,12 @@ where
 
     fn output_protection_config(&self) -> output_protection::ProtectionConfig {
         output_protection::ProtectionConfig {
-            temp_enter_c_x16: self.cfg.protect_temp_derate_c_x16,
-            temp_exit_c_x16: self.cfg.protect_temp_resume_c_x16,
+            tmp_temp_enter_c_x16: self.cfg.protect_tmp_temp_derate_c_x16,
+            tmp_temp_exit_c_x16: self.cfg.protect_tmp_temp_resume_c_x16,
+            tmp_temp_shutdown_c_x16: self.cfg.protect_tmp_temp_shutdown_c_x16,
+            other_temp_enter_c_x16: self.cfg.protect_other_temp_derate_c_x16,
+            other_temp_exit_c_x16: self.cfg.protect_other_temp_resume_c_x16,
+            other_temp_shutdown_c_x16: self.cfg.protect_other_temp_shutdown_c_x16,
             temp_hold_ms: self.cfg.protect_temp_hold.as_millis() as u64,
             current_enter_ma: self.cfg.protect_current_derate_ma,
             current_exit_ma: self.cfg.protect_current_resume_ma,
@@ -6773,25 +6773,19 @@ where
             return;
         }
 
-        let mut max_temp_c_x16 = None;
+        let max_tmp_temp_c_x16 = if self.cfg.thermal_protection_enabled {
+            max_optional_temp(self.ui_snapshot.tmp_a_c_x16, self.ui_snapshot.tmp_b_c_x16)
+        } else {
+            None
+        };
+        let max_other_temp_c_x16 = if self.cfg.thermal_protection_enabled {
+            self.shared_bms_thermal_max_c_x16()
+        } else {
+            None
+        };
+        let max_temp_c_x16 = max_optional_temp(max_tmp_temp_c_x16, max_other_temp_c_x16);
         let mut max_current_ma = None;
         let mut min_vout_mv = None;
-
-        max_temp_c_x16 = accumulate_protection_temp(
-            max_temp_c_x16,
-            self.ui_snapshot.tmp_a_c_x16,
-            self.cfg.thermal_protection_enabled,
-        );
-        max_temp_c_x16 = accumulate_protection_temp(
-            max_temp_c_x16,
-            self.ui_snapshot.tmp_b_c_x16,
-            self.cfg.thermal_protection_enabled,
-        );
-        max_temp_c_x16 = accumulate_protection_temp(
-            max_temp_c_x16,
-            self.shared_bms_thermal_max_c_x16(),
-            self.cfg.thermal_protection_enabled,
-        );
 
         for ch in [OutputChannel::OutA, OutputChannel::OutB] {
             if !self.output_state.requested_outputs.is_enabled(ch) {
@@ -6823,7 +6817,8 @@ where
             self.cfg.ilimit_ma,
             self.output_protection,
             output_protection::ProtectionInputs {
-                max_temp_c_x16,
+                max_tmp_temp_c_x16,
+                max_other_temp_c_x16,
                 max_current_ma,
                 min_vout_mv,
             },
@@ -6836,9 +6831,11 @@ where
             output_protection::ProtectionAction::ApplyIlim(limit_ma) => {
                 self.apply_output_current_limit(limit_ma);
                 defmt::warn!(
-                    "power: active_protection derating reason={} ilim_ma={=u16} max_temp_c_x16={=?} max_current_ma={=?} min_vout_mv={=?}",
+                    "power: active_protection derating reason={} ilim_ma={=u16} max_tmp_temp_c_x16={=?} max_other_temp_c_x16={=?} max_temp_c_x16={=?} max_current_ma={=?} min_vout_mv={=?}",
                     self.output_protection.status.reason().as_str(),
                     limit_ma,
+                    max_tmp_temp_c_x16,
+                    max_other_temp_c_x16,
                     max_temp_c_x16,
                     max_current_ma,
                     min_vout_mv
@@ -6853,10 +6850,12 @@ where
             }
             output_protection::ProtectionAction::Shutdown(reason) => {
                 defmt::error!(
-                    "power: active_protection shutdown reason={} ilim_ma={=u16} min_vout_mv={=?} max_temp_c_x16={=?} max_current_ma={=?}",
+                    "power: active_protection shutdown reason={} ilim_ma={=u16} min_vout_mv={=?} max_tmp_temp_c_x16={=?} max_other_temp_c_x16={=?} max_temp_c_x16={=?} max_current_ma={=?}",
                     reason.as_str(),
                     prev.applied_ilim_ma,
                     min_vout_mv,
+                    max_tmp_temp_c_x16,
+                    max_other_temp_c_x16,
                     max_temp_c_x16,
                     max_current_ma
                 );
@@ -6890,18 +6889,16 @@ where
             .cfg
             .detected_tmp_outputs
             .is_enabled(OutputChannel::OutA)
-            && self
-                .ui_snapshot
-                .tmp_a_c
-                .is_some_and(|temp_c| temp_c.saturating_mul(16) >= self.cfg.tmp112_tlow_c_x16);
+            && self.ui_snapshot.tmp_a_c.is_some_and(|temp_c| {
+                temp_c.saturating_mul(16) >= self.cfg.protect_tmp_temp_derate_c_x16
+            });
         let tmp_b_hot = self
             .cfg
             .detected_tmp_outputs
             .is_enabled(OutputChannel::OutB)
-            && self
-                .ui_snapshot
-                .tmp_b_c
-                .is_some_and(|temp_c| temp_c.saturating_mul(16) >= self.cfg.tmp112_tlow_c_x16);
+            && self.ui_snapshot.tmp_b_c.is_some_and(|temp_c| {
+                temp_c.saturating_mul(16) >= self.cfg.protect_tmp_temp_derate_c_x16
+            });
         let raw_battery_low = match self.bms_audio.rca_alarm {
             Some(true) => match mains_present {
                 Some(true) => AudioBatteryLowState::WithMains,
@@ -9720,13 +9717,10 @@ mod tests {
 
     #[test]
     fn accumulate_protection_temp_disables_thermal_branch_in_test_mode() {
-        assert_eq!(accumulate_protection_temp(None, Some(45 * 16), false), None);
+        assert_eq!(max_optional_temp(None, Some(45 * 16)), Some(45 * 16));
+        assert_eq!(max_optional_temp(Some(41 * 16), None), Some(41 * 16));
         assert_eq!(
-            accumulate_protection_temp(Some(41 * 16), Some(45 * 16), false),
-            Some(41 * 16)
-        );
-        assert_eq!(
-            accumulate_protection_temp(Some(41 * 16), Some(45 * 16), true),
+            max_optional_temp(Some(41 * 16), Some(45 * 16)),
             Some(45 * 16)
         );
     }
