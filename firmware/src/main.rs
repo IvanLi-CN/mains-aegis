@@ -888,7 +888,10 @@ fn main() -> ! {
                             audio_transfer = Some(transfer);
                             RuntimeAudioReprimeResult::Ready { refill_budget: 0 }
                         }
-                        Err(DmaError::Late) => RuntimeAudioReprimeResult::Late,
+                        Err(DmaError::Late) => {
+                            audio_transfer = Some(transfer);
+                            RuntimeAudioReprimeResult::Late
+                        }
                         Err(err) => {
                             defmt::warn!($available_failed_msg, err);
                             RuntimeAudioReprimeResult::Fatal
