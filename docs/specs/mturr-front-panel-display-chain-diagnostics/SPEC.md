@@ -2,9 +2,9 @@
 
 ## 状态
 
-- Status: 部分完成（4/5）
+- Status: 已完成
 - Created: 2026-04-03
-- Last: 2026-04-03
+- Last: 2026-04-04
 
 ## 背景 / 问题陈述
 
@@ -101,6 +101,13 @@
 - `cargo +esp check --release`
 - 真机 `mcu-agentd` 烧录 + `defmt` 观察：至少覆盖自检页、Dashboard 首页、Dashboard 详情页三类场景。
 
+### 验证证据
+
+- 2026-04-04 使用 `mcu-agentd --non-interactive flash esp` 将 `th/front-panel-display-chain-diagnostics` / `aeead36` 烧录到已绑定设备 `/dev/cu.usbmodem412101`。
+- 监视日志写入 `/.mcu-agentd/monitor/esp/20260403_193616.mon.ndjson`；启动阶段可见 `ui: display_reinit trigger=boot_init stage=tca_reset|tca_init|release_lines|gc9307_init`。
+- 在 Dashboard Home 实机长按 `CENTER` 后，日志出现且仅出现一次 `ui: display_diag trigger=center_long_press page=B route=home overlay=none bms_state=idle center=true touch=false`。
+- 同一次长按后，日志按顺序出现 `ui: display_reinit trigger=center_long_press stage=tca_reset|tca_init|release_lines|gc9307_init|redraw_restore|ok`，且未出现 `result=err`。
+
 ### Quality checks
 
 - 所有新增日志前缀必须稳定为 `ui: display_diag` 或 `ui: display_reinit`。
@@ -117,7 +124,7 @@
 - [x] M2: 在主固件里新增 `CENTER` 长按状态机与单次按压闸门
 - [x] M3: 新增长按诊断采样日志与共享显示链路重初始化 helper
 - [x] M4: README 同步长按诊断入口、日志契约与运行时行为
-- [ ] M5: 真机验证 + fast-track PR 收敛到 merge-ready
+- [x] M5: 真机验证 + fast-track PR 收敛到 merge-ready
 
 ## 风险 / 假设（Risks, Assumptions）
 
@@ -128,3 +135,4 @@
 ## 变更记录（Change log）
 
 - 2026-04-03: 新增显示链路长按诊断与重初始化规格，冻结采样矩阵、触发策略与恢复口径。
+- 2026-04-04: 完成真机 flash/monitor 验证，确认 `CENTER` 长按日志单次触发与显示链路重初始化阶段完整。
