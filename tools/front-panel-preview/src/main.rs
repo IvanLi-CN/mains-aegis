@@ -573,10 +573,10 @@ fn bq40_snapshot_for_scenario(
         }
         ScenarioArg::Bq40ResultAbnormal => {
             snapshot.bq40z50 = SelfCheckCommState::Warn;
-            snapshot.bq40z50_soc_pct = Some(61);
-            snapshot.bq40z50_rca_alarm = Some(true);
+            snapshot.bq40z50_soc_pct = Some(77);
+            snapshot.bq40z50_rca_alarm = Some(false);
             snapshot.bq40z50_discharge_ready = Some(false);
-            snapshot.bq40z50_issue_detail = Some("remaining_capacity_alarm");
+            snapshot.bq40z50_issue_detail = Some("xdsg_blocked");
             snapshot.bq40z50_recovery_action = None;
             snapshot.bq25792_vbat_present = Some(true);
             snapshot.bq40z50_last_result = Some(BmsResultKind::Abnormal);

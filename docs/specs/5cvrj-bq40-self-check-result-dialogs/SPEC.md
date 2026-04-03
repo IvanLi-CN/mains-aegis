@@ -88,6 +88,7 @@
 - Given 任一失败结果弹窗已关闭，When 再次点击 `BQ40Z50` 卡片，Then 直接显示最近一次失败结果弹窗，不重复进入确认流程。
 - Given 最近一次结果为 `NOT DETECTED`，When 结果弹窗关闭后回到自检页，Then `BQ40Z50` 卡片仍保持 `ERR`。
 - Given 最近一次结果为 `ABNORMAL`，When 结果弹窗关闭后回到自检页，Then `BQ40Z50` 卡片保持 `WARN`。
+- Given 手动 `Recover` 超时但 `BQ40Z50` 仍在线且问题详情仍是 `XDSG blocked`，When 结果弹窗出现，Then 结果必须是 `ABNORMAL`，不得误报成 `NOT DETECTED`。
 - Given 恢复动作最终收敛到 `SUCCESS`，When 前面板收到最新自检快照，Then 立即关闭弹窗并在自检页显示最新 `BQ40/TPS` 状态。
 - Given 恢复成功后自检页所有模块均已 clear，When 当前页面仍停留在 `SELF CHECK`，Then 自动进入 Dashboard。
 - Given 激活窗口内 `BQ40Z50` 始终 `i2c_nack` / `i2c_timeout` 或无有效快照，When 激活流程结束，Then 结果必须是 `NOT DETECTED`，不得因为其它芯片状态改判为 `NO BATTERY`。

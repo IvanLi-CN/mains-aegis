@@ -10,6 +10,7 @@
 
 - 主板当前已经收敛出 `asset-df-mainboard` 修复路径，但该路径此前只覆写了 `DA Configuration / Manufacturing Status Init / Temperature / AFE Protection Control / calibration` 等字段，没有真正冻结 `OCC/OCD/SOCC/SOCD`。
 - 实板 `19V / 5A` 负载下曾出现 `OCD1 + XDSG blocked` 掉电，说明 live pack 的实际 DF 阈值与系统目标功率窗口不一致。
+- 手动 `Recover` 实测只能把 pack 拉到约 `+112mA` 充电电流；若仍保留 `OCD Recovery Threshold=200mA / 5s` 的 stock 默认值，`XDSG` 不会清除，前面板恢复流程会稳定超时。
 - 主固件已经具备主动热降额、闭环风扇、TMP 硬件保护测试模式与 `THERM_KILL_N` 观测，但风扇与主动热保护此前只看 `TMP112A/B`，没有把 `BQ40Z50` 提供的电池/板载/TS 传感器温度纳入同一套热控口径。
 
 ## 目标 / 非目标
@@ -64,6 +65,8 @@
 | `OCD1 Delay` | `0x4969` | `6s` | 持续过载才锁定 `XDSG` |
 | `OCD2 Threshold` | `0x496A` | `-15000mA` | 接近电芯连续放电边界，不再留大余量 |
 | `OCD2 Delay` | `0x496C` | `3s` | 第二层快速保护 |
+| `OCD Recovery Threshold` | `0x496D` | `100mA` | 贴合主板恢复流程的最小充电偏置，允许 `Recover` 真实清除 `XDSG` |
+| `OCD Recovery Delay` | `0x496F` | `3s` | 避免因为恢复确认过慢而把 `Recover` 稳定卡死在 timeout |
 | `SOCD Threshold` | `0x49CC` | `-16000mA` | 仅给瞬态和测量误差保留有限 PF 裕量 |
 | `SOCD Delay` | `0x49CE` | `5s` | 避免短脉冲直上 PF |
 
@@ -89,7 +92,8 @@
 
 ## 验收标准（Acceptance Criteria）
 
-- `asset-df-mainboard` 生成的 section1 覆写中，`OCC1/OCC2/OCD1/OCD2/SOCC/SOCD` 地址被明确写入仓库冻结值。
+- `asset-df-mainboard` 生成的 section1 覆写中，`OCC1/OCC2/OCD1/OCD2/OCD Recovery/SOCC/SOCD` 地址被明确写入仓库冻结值。
+- `live-df-mainboard` app-mode 写入路径必须把 `OCD Recovery Threshold/Delay` 一并写回 live pack，不允许只改 trip threshold 而保留 stock recovery 条件。
 - 主固件风扇策略在 `TMP` 缺失但 BMS 温度可用时，仍能继续闭环调速而不是直接退到 full-speed fail-safe。
 - 主动热保护使用与风扇相同的共享热控最高温；当 BMS 温度高于 `TMP` 时，日志中的 `max_temp_c_x16` 体现 BMS 侧热点。
 - `tmp-hw-protect-test` 构建下，风扇仍保持 `off` 且 `thermal_protection_enabled=false`，但共享热控温度的遥测/详情页仍可读。

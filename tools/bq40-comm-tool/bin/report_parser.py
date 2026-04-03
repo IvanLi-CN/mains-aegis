@@ -40,7 +40,7 @@ POLL_RETRY_RE = re.compile(
 LIVE_DF_APPLY_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=(?P<stage>[a-zA-Z0-9_]+)"
-    rf"(?: .*?writes=(?P<writes>\d+))?"
+    rf"(?: .*?(?:writes|fields)=(?P<count>\d+))?"
 )
 ROM_DETECTED_RE = re.compile(
     r"stage=(?:rom_mode_detected(?:_after_enter|_post_flash)?|wake_window_rom_entered|wake_window_rom_signature)\b"
@@ -233,13 +233,16 @@ def main() -> int:
                 if live_df_match and live_df_match.group("profile") == "live_df_mainboard":
                     live_df_apply_attempted = True
                     stage = live_df_match.group("stage")
-                    if stage == "applied":
+                    count = live_df_match.group("count")
+                    if stage == "field_written":
                         live_df_apply_applied = True
-                        writes = live_df_match.group("writes")
-                        if writes is not None:
-                            live_df_apply_writes = max(live_df_apply_writes, int(writes))
+                        live_df_apply_writes += 1
                     elif stage == "done":
                         live_df_apply_done = True
+                        if count is not None:
+                            live_df_apply_writes = max(live_df_apply_writes, int(count))
+                        if live_df_apply_writes > 0:
+                            live_df_apply_applied = True
                     elif stage in {
                         "read_err",
                         "write_err",

@@ -226,6 +226,8 @@ const BMS_DF_ADDR_OCD1_THRESHOLD: u16 = 0x4967;
 const BMS_DF_ADDR_OCD1_DELAY: u16 = 0x4969;
 const BMS_DF_ADDR_OCD2_THRESHOLD: u16 = 0x496A;
 const BMS_DF_ADDR_OCD2_DELAY: u16 = 0x496C;
+const BMS_DF_ADDR_OCD_RECOVERY_THRESHOLD: u16 = 0x496D;
+const BMS_DF_ADDR_OCD_RECOVERY_DELAY: u16 = 0x496F;
 const BMS_DF_ADDR_SOCC_THRESHOLD: u16 = 0x49C9;
 const BMS_DF_ADDR_SOCC_DELAY: u16 = 0x49CB;
 const BMS_DF_ADDR_SOCD_THRESHOLD: u16 = 0x49CC;
@@ -329,6 +331,16 @@ const BMS_DF_OCD2_THRESHOLD_MAINBOARD_MA: i16 = -15_000;
     feature = "bms-live-df-mainboard"
 ))]
 const BMS_DF_OCD2_DELAY_MAINBOARD_S: u8 = 3;
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_OCD_RECOVERY_THRESHOLD_MAINBOARD_MA: i16 = 100;
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_OCD_RECOVERY_DELAY_MAINBOARD_S: u8 = 3;
 #[cfg(any(
     feature = "bms-rom-repair-asset-df-mainboard",
     feature = "bms-live-df-mainboard"
@@ -440,7 +452,7 @@ impl BmsDfLiveFieldTarget {
 }
 
 #[cfg(feature = "bms-live-df-mainboard")]
-const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 12] = [
+const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 14] = [
     BmsDfLiveFieldTarget::i16(
         "occ1_threshold",
         BMS_DF_ADDR_OCC1_THRESHOLD,
@@ -480,6 +492,16 @@ const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 12] = [
         "ocd2_delay",
         BMS_DF_ADDR_OCD2_DELAY,
         BMS_DF_OCD2_DELAY_MAINBOARD_S,
+    ),
+    BmsDfLiveFieldTarget::i16(
+        "ocd_recovery_threshold",
+        BMS_DF_ADDR_OCD_RECOVERY_THRESHOLD,
+        BMS_DF_OCD_RECOVERY_THRESHOLD_MAINBOARD_MA,
+    ),
+    BmsDfLiveFieldTarget::byte(
+        "ocd_recovery_delay",
+        BMS_DF_ADDR_OCD_RECOVERY_DELAY,
+        BMS_DF_OCD_RECOVERY_DELAY_MAINBOARD_S,
     ),
     BmsDfLiveFieldTarget::i16(
         "socc_threshold",
@@ -1092,6 +1114,16 @@ fn patch_bms_df_section1_mainboard(section1: &mut [u8], calibration: BmsDfCalibr
         section1,
         BMS_DF_ADDR_OCD2_DELAY,
         BMS_DF_OCD2_DELAY_MAINBOARD_S,
+    );
+    patch_i16(
+        section1,
+        BMS_DF_ADDR_OCD_RECOVERY_THRESHOLD,
+        BMS_DF_OCD_RECOVERY_THRESHOLD_MAINBOARD_MA,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_OCD_RECOVERY_DELAY,
+        BMS_DF_OCD_RECOVERY_DELAY_MAINBOARD_S,
     );
     patch_i16(
         section1,

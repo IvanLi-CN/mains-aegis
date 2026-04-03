@@ -6167,14 +6167,19 @@ where
         if Instant::now() >= deadline {
             let result = if self.is_bq40_rom_mode_detected() {
                 BmsResultKind::RomMode
+            } else if self.bms_recovery_requires_discharge_ready()
+                && self.ui_snapshot.bq40z50 != SelfCheckCommState::Err
+                && self.has_trusted_bq40_runtime_evidence()
+            {
+                BmsResultKind::Abnormal
             } else {
                 BmsResultKind::NotDetected
             };
             let reason = match result {
                 BmsResultKind::RomMode => "deadline_elapsed_rom_mode",
+                BmsResultKind::Abnormal => "deadline_elapsed_discharge_still_blocked",
                 BmsResultKind::NotDetected => "deadline_elapsed_not_detected",
                 BmsResultKind::Success => "deadline_elapsed_success",
-                BmsResultKind::Abnormal => "deadline_elapsed_abnormal",
                 BmsResultKind::NoBattery => "deadline_elapsed_no_battery",
             };
             self.finish_bms_activation(result, reason);
