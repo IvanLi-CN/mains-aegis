@@ -7,6 +7,7 @@ mod front_panel;
 mod front_panel_scene;
 mod irq;
 mod output;
+mod runtime_audio_recovery;
 
 use esp_backtrace as _;
 use esp_firmware::audio::{AudioCue, AudioManager, PLAYBACK_SAMPLE_RATE_HZ};
@@ -26,6 +27,7 @@ use esp_hal::time::{Duration, Instant, Rate};
 use esp_hal::timer::{systimer::SystemTimer, timg::TimerGroup};
 use esp_hal::{main, Blocking};
 use esp_println as _;
+use runtime_audio_recovery::{RuntimeAudioRecoveryDecision, RuntimeAudioRecoveryState};
 
 // Bring-up default profile.
 const DEFAULT_ENABLED_OUTPUTS: output::EnabledOutputs = output::EnabledOutputs::Both;
@@ -225,6 +227,13 @@ const AUDIO_SELF_TEST_WATERMARK_BYTES: usize = 7 * 4092;
 // Opening modal overlays can stall the main loop close to a second while the
 // panel redraw completes, so runtime audio needs a larger steady-state buffer.
 const AUDIO_RUNTIME_WATERMARK_BYTES: usize = 10 * 4092;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeAudioReprimeResult {
+    Ready { refill_budget: u32 },
+    Late,
+    Fatal,
+}
 
 fn audio_refill_budget(available: usize, target_buffered_bytes: usize) -> usize {
     let buffered = AUDIO_DMA_BUFFER_BYTES.saturating_sub(available);
@@ -837,62 +846,202 @@ fn main() -> ! {
         None => None,
     };
     let mut audio_enabled = audio_transfer.is_some();
+    let mut audio_recovery = RuntimeAudioRecoveryState::new();
 
-    macro_rules! restart_runtime_audio_dma {
+    macro_rules! disable_runtime_audio {
         () => {{
+            audio_enabled = false;
+            audio_transfer = None;
+            audio_manager.stop();
+            audio_recovery.clear();
+        }};
+    }
+
+    macro_rules! reprime_runtime_audio_dma {
+        ($push_failed_msg:literal, $available_failed_msg:literal, $restart_failed_msg:literal) => {{
             audio_transfer = None;
             tx_buffer.fill(0);
-            let mut disable_audio = false;
             if let Some(i2s_tx) = i2s_tx.as_mut() {
                 match i2s_tx.write_dma_circular(&tx_buffer) {
-                    Ok(mut transfer) => {
-                        match transfer.available() {
-                            Ok(available) if available >= 4 => {
-                                let budget =
-                                    audio_refill_budget(available, AUDIO_RUNTIME_WATERMARK_BYTES);
-                                if budget >= 4
-                                    && transfer
-                                        .push_with(|buf| {
-                                            let len = budget.min(buf.len()) & !0x3;
-                                            audio_manager.fill(&mut buf[..len])
-                                        })
-                                        .is_err()
-                                {
-                                    defmt::warn!(
-                                        "audio: dma push failed during runtime flush; disabling runtime audio"
-                                    );
-                                    disable_audio = true;
-                                } else {
-                                    audio_transfer = Some(transfer);
+                    Ok(mut transfer) => match transfer.available() {
+                        Ok(available) if available >= 4 => {
+                            let budget =
+                                audio_refill_budget(available, AUDIO_RUNTIME_WATERMARK_BYTES);
+                            if budget >= 4
+                                && transfer
+                                    .push_with(|buf| {
+                                        let len = budget.min(buf.len()) & !0x3;
+                                        audio_manager.fill(&mut buf[..len])
+                                    })
+                                    .is_err()
+                            {
+                                defmt::warn!($push_failed_msg);
+                                RuntimeAudioReprimeResult::Fatal
+                            } else {
+                                audio_transfer = Some(transfer);
+                                RuntimeAudioReprimeResult::Ready {
+                                    refill_budget: budget as u32,
                                 }
                             }
-                            Ok(_) => {
-                                audio_transfer = Some(transfer);
-                            }
-                            Err(err) => {
-                                defmt::warn!(
-                                    "audio: dma available failed during runtime flush err={=?}; disabling runtime audio",
-                                    err
-                                );
-                                disable_audio = true;
-                            }
                         }
-                    }
+                        Ok(_) => {
+                            audio_transfer = Some(transfer);
+                            RuntimeAudioReprimeResult::Ready { refill_budget: 0 }
+                        }
+                        Err(DmaError::Late) => RuntimeAudioReprimeResult::Late,
+                        Err(err) => {
+                            defmt::warn!($available_failed_msg, err);
+                            RuntimeAudioReprimeResult::Fatal
+                        }
+                    },
                     Err(err) => {
-                        defmt::warn!(
-                            "audio: dma restart failed err={=?}; disabling runtime audio",
-                            err
-                        );
-                        disable_audio = true;
+                        defmt::warn!($restart_failed_msg, err);
+                        RuntimeAudioReprimeResult::Fatal
                     }
                 }
             } else {
-                disable_audio = true;
+                RuntimeAudioReprimeResult::Fatal
             }
-            if disable_audio {
-                audio_enabled = false;
-                audio_transfer = None;
-                audio_manager.stop();
+        }};
+    }
+
+    macro_rules! service_runtime_audio {
+        ($power:ident) => {{
+            if audio_enabled {
+                let now = Instant::now();
+                let audio_edges = $power.take_audio_edges();
+                let flush_runtime_audio = audio_edges.battery_low_changed.is_some()
+                    || audio_edges.module_fault_changed.is_some()
+                    || audio_edges.battery_protection_changed.is_some();
+                sync_runtime_audio(&mut audio_manager, now, $power.audio_signals(), audio_edges);
+                audio_manager.tick(now);
+                if flush_runtime_audio {
+                    audio_manager.arm_transition_bridge();
+                    match reprime_runtime_audio_dma!(
+                        "audio: dma transition flush push failed; disabling runtime audio",
+                        "audio: dma transition flush available failed err={=?}; disabling runtime audio",
+                        "audio: dma transition flush restart failed err={=?}; disabling runtime audio"
+                    ) {
+                        RuntimeAudioReprimeResult::Ready { .. } => {}
+                        RuntimeAudioReprimeResult::Late | RuntimeAudioReprimeResult::Fatal => {
+                            disable_runtime_audio!();
+                        }
+                    }
+                    continue;
+                }
+
+                let mut disable_audio = false;
+                let mut underrun_disable_logged = false;
+                if let Some(audio_transfer) = audio_transfer.as_mut() {
+                    match audio_transfer.available() {
+                        Ok(available) if available >= 4 => {
+                            let budget =
+                                audio_refill_budget(available, AUDIO_RUNTIME_WATERMARK_BYTES);
+                            if budget >= 4
+                                && audio_transfer
+                                    .push_with(|buf| {
+                                        let len = budget.min(buf.len()) & !0x3;
+                                        audio_manager.fill(&mut buf[..len])
+                                    })
+                                    .is_err()
+                            {
+                                defmt::warn!("audio: dma push failed; disabling runtime audio");
+                                disable_audio = true;
+                            } else if let Some(snapshot) = audio_recovery.note_healthy_refill() {
+                                let status = audio_manager.status();
+                                defmt::info!(
+                                    "audio: dma underrun recovered current={=?} queued={=u8} refill_budget={=u32} consecutive_late={=u8} recovery_attempts={=u8}",
+                                    status.current,
+                                    status.queued,
+                                    budget as u32,
+                                    snapshot.consecutive_late,
+                                    snapshot.recovery_attempts
+                                );
+                            }
+                        }
+                        Ok(_) => {
+                            if let Some(snapshot) = audio_recovery.note_healthy_refill() {
+                                let status = audio_manager.status();
+                                defmt::info!(
+                                    "audio: dma underrun recovered current={=?} queued={=u8} refill_budget={=u32} consecutive_late={=u8} recovery_attempts={=u8}",
+                                    status.current,
+                                    status.queued,
+                                    0u32,
+                                    snapshot.consecutive_late,
+                                    snapshot.recovery_attempts
+                                );
+                            }
+                        }
+                        Err(DmaError::Late) => {
+                            let status = audio_manager.status();
+                            match audio_recovery.note_late(now) {
+                                RuntimeAudioRecoveryDecision::AttemptRecover {
+                                    first_in_burst,
+                                    snapshot,
+                                } => {
+                                    if first_in_burst {
+                                        defmt::warn!(
+                                            "audio: dma underrun detected current={=?} queued={=u8} refill_budget={=u32} consecutive_late={=u8} recovery_attempts={=u8}",
+                                            status.current,
+                                            status.queued,
+                                            0u32,
+                                            snapshot.consecutive_late,
+                                            snapshot.recovery_attempts
+                                        );
+                                    }
+                                    match reprime_runtime_audio_dma!(
+                                        "audio: dma recovery push failed; disabling runtime audio",
+                                        "audio: dma recovery available failed err={=?}; disabling runtime audio",
+                                        "audio: dma recovery restart failed err={=?}; disabling runtime audio"
+                                    ) {
+                                        RuntimeAudioReprimeResult::Ready { .. }
+                                        | RuntimeAudioReprimeResult::Late => {}
+                                        RuntimeAudioReprimeResult::Fatal => {
+                                            disable_audio = true;
+                                        }
+                                    }
+                                }
+                                RuntimeAudioRecoveryDecision::Disable { snapshot } => {
+                                    defmt::warn!(
+                                        "audio: dma underrun disabled current={=?} queued={=u8} refill_budget={=u32} consecutive_late={=u8} recovery_attempts={=u8}",
+                                        status.current,
+                                        status.queued,
+                                        0u32,
+                                        snapshot.consecutive_late,
+                                        snapshot.recovery_attempts
+                                    );
+                                    disable_audio = true;
+                                    underrun_disable_logged = true;
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            defmt::warn!(
+                                "audio: dma available failed err={=?}; disabling runtime audio",
+                                err
+                            );
+                            disable_audio = true;
+                        }
+                    }
+                } else {
+                    disable_audio = true;
+                }
+                if disable_audio {
+                    if !underrun_disable_logged {
+                        if let Some(snapshot) = audio_recovery.snapshot_if_active() {
+                            let status = audio_manager.status();
+                            defmt::warn!(
+                                "audio: dma underrun disabled current={=?} queued={=u8} refill_budget={=u32} consecutive_late={=u8} recovery_attempts={=u8}",
+                                status.current,
+                                status.queued,
+                                0u32,
+                                snapshot.consecutive_late,
+                                snapshot.recovery_attempts
+                            );
+                        }
+                    }
+                    disable_runtime_audio!();
+                }
             }
         }};
     }
@@ -1142,60 +1291,8 @@ fn main() -> ! {
             if fan_telemetry_due {
                 power.log_fan_telemetry(applied_fan_state);
             }
+            service_runtime_audio!(power);
             let now = Instant::now();
-            if audio_enabled {
-                let audio_edges = power.take_audio_edges();
-                let flush_runtime_audio = audio_edges.battery_low_changed.is_some()
-                    || audio_edges.module_fault_changed.is_some()
-                    || audio_edges.battery_protection_changed.is_some();
-                sync_runtime_audio(&mut audio_manager, now, power.audio_signals(), audio_edges);
-                audio_manager.tick(now);
-                if flush_runtime_audio {
-                    audio_manager.arm_transition_bridge();
-                    restart_runtime_audio_dma!();
-                    continue;
-                }
-                let mut disable_audio = false;
-                if let Some(audio_transfer) = audio_transfer.as_mut() {
-                    match audio_transfer.available() {
-                        Ok(available) if available >= 4 => {
-                            let budget =
-                                audio_refill_budget(available, AUDIO_RUNTIME_WATERMARK_BYTES);
-                            if budget >= 4
-                                && audio_transfer
-                                    .push_with(|buf| {
-                                        let len = budget.min(buf.len()) & !0x3;
-                                        audio_manager.fill(&mut buf[..len])
-                                    })
-                                    .is_err()
-                            {
-                                defmt::warn!("audio: dma push failed; disabling runtime audio");
-                                disable_audio = true;
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(DmaError::Late) => {
-                            defmt::warn!(
-                                "audio: dma available failed err=Late; recover runtime audio on next refill"
-                            );
-                        }
-                        Err(err) => {
-                            defmt::warn!(
-                                "audio: dma available failed err={=?}; disabling runtime audio",
-                                err
-                            );
-                            disable_audio = true;
-                        }
-                    }
-                } else {
-                    disable_audio = true;
-                }
-                if disable_audio {
-                    audio_enabled = false;
-                    audio_transfer = None;
-                    audio_manager.stop();
-                }
-            }
             let ui_snapshot = power.ui_snapshot();
             front_panel.update_self_check_snapshot(ui_snapshot);
             front_panel.update_bms_activation_state(power.bms_activation_state());
@@ -1223,60 +1320,7 @@ fn main() -> ! {
                 }
                 front_panel.enter_dashboard();
             }
-            if audio_enabled {
-                let now = Instant::now();
-                let audio_edges = power.take_audio_edges();
-                let flush_runtime_audio = audio_edges.battery_low_changed.is_some()
-                    || audio_edges.module_fault_changed.is_some()
-                    || audio_edges.battery_protection_changed.is_some();
-                sync_runtime_audio(&mut audio_manager, now, power.audio_signals(), audio_edges);
-                audio_manager.tick(now);
-                if flush_runtime_audio {
-                    audio_manager.arm_transition_bridge();
-                    restart_runtime_audio_dma!();
-                    continue;
-                }
-                let mut disable_audio = false;
-                if let Some(audio_transfer) = audio_transfer.as_mut() {
-                    match audio_transfer.available() {
-                        Ok(available) if available >= 4 => {
-                            let budget =
-                                audio_refill_budget(available, AUDIO_RUNTIME_WATERMARK_BYTES);
-                            if budget >= 4
-                                && audio_transfer
-                                    .push_with(|buf| {
-                                        let len = budget.min(buf.len()) & !0x3;
-                                        audio_manager.fill(&mut buf[..len])
-                                    })
-                                    .is_err()
-                            {
-                                defmt::warn!("audio: dma push failed; disabling runtime audio");
-                                disable_audio = true;
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(DmaError::Late) => {
-                            defmt::warn!(
-                                "audio: dma available failed err=Late; recover runtime audio on next refill"
-                            );
-                        }
-                        Err(err) => {
-                            defmt::warn!(
-                                "audio: dma available failed err={=?}; disabling runtime audio",
-                                err
-                            );
-                            disable_audio = true;
-                        }
-                    }
-                } else {
-                    disable_audio = true;
-                }
-                if disable_audio {
-                    audio_enabled = false;
-                    audio_transfer = None;
-                    audio_manager.stop();
-                }
-            }
+            service_runtime_audio!(power);
             if irq_events.any()
                 && output::tps55288::should_log_fault(
                     now,
