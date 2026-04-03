@@ -8,7 +8,7 @@ bq40_tool_acquire_flash_monitor_lock "$TOOL_ROOT"
 
 subcommand="${1:-}"
 if [[ -z "$subcommand" ]]; then
-  echo "Usage: $(basename "$0") <diagnose|recover|verify> [options]" >&2
+  echo "Usage: $(basename "$0") <diagnose|apply-df|recover|verify> [options]" >&2
   exit 2
 fi
 if [[ "$subcommand" == "-h" || "$subcommand" == "--help" ]]; then
@@ -65,7 +65,8 @@ MIN_DURATION_RECOVER_SEC=0
 usage() {
   cat <<USAGE
 Usage:
-  $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default|asset-df-mainboard] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") apply-df [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--repair-profile live-df-mainboard] [--monitor-file PATH] [--report-out DIR]
   $(basename "$0") recover  [--mode dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default|asset-df-mainboard] [--monitor-file PATH] [--report-out DIR]
   $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--report-out DIR]
 USAGE
@@ -164,6 +165,17 @@ case "$subcommand" in
     fi
     recover_policy="never"
     ;;
+  apply-df)
+    if [[ "$recover_arg_set" == "true" ]]; then
+      echo "apply-df mode does not accept --recover" >&2
+      exit 11
+    fi
+    if [[ "$rom_image_arg_set" == "true" ]]; then
+      echo "apply-df mode does not accept --rom-image" >&2
+      exit 19
+    fi
+    recover_policy="never"
+    ;;
   recover)
     if [[ "$mode_arg_set" != "true" ]]; then
       mode="dual-diag"
@@ -215,6 +227,11 @@ if [[ "$subcommand" != "verify" ]]; then
       exit 17
       ;;
   esac
+fi
+
+if [[ "$subcommand" == "apply-df" && "$repair_profile" != "live-df-mainboard" ]]; then
+  echo "apply-df requires --repair-profile live-df-mainboard" >&2
+  exit 20
 fi
 
 if [[ "$subcommand" == "recover" ]]; then
@@ -335,11 +352,41 @@ else
       ;;
   esac
 
-  case "$repair_profile" in
-    none|afe-default|asset-df-mainboard) ;;
+  case "$subcommand" in
+    diagnose)
+      case "$repair_profile" in
+        none|afe-default) ;;
+        live-df-mainboard|asset-df-mainboard)
+          echo "diagnose mode does not accept --repair-profile $repair_profile; use apply-df or recover" >&2
+          exit 21
+          ;;
+        *)
+          echo "Invalid --repair-profile: $repair_profile" >&2
+          exit 17
+          ;;
+      esac
+      ;;
+    recover)
+      case "$repair_profile" in
+        none|afe-default|asset-df-mainboard) ;;
+        live-df-mainboard)
+          echo "recover mode does not accept --repair-profile live-df-mainboard; use apply-df" >&2
+          exit 22
+          ;;
+        *)
+          echo "Invalid --repair-profile: $repair_profile" >&2
+          exit 17
+          ;;
+      esac
+      ;;
     *)
-      echo "Invalid --repair-profile: $repair_profile" >&2
-      exit 17
+      case "$repair_profile" in
+        none|afe-default|live-df-mainboard|asset-df-mainboard) ;;
+        *)
+          echo "Invalid --repair-profile: $repair_profile" >&2
+          exit 17
+          ;;
+      esac
       ;;
   esac
 
@@ -382,9 +429,11 @@ if [[ ! -r "$monitor_file" ]]; then
 fi
 
 report_args=(
+  --action "$subcommand"
   --mode "$mode"
   --duration-sec "$duration_sec"
   --monitor-file "$monitor_file"
+  --repair-profile "$repair_profile"
 )
 if [[ "$subcommand" != "verify" ]]; then
   report_args+=(

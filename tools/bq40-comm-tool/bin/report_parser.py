@@ -37,6 +37,11 @@ POLL_RETRY_RE = re.compile(
     rf"stage=poll_snapshot_retry_(?P<result>ok|fail) first_err=(?P<first>[a-zA-Z0-9_]+)"
     rf"(?: retry_err=(?P<retry>[a-zA-Z0-9_]+))?"
 )
+LIVE_DF_APPLY_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=(?P<stage>[a-zA-Z0-9_]+)"
+    rf"(?: .*?(?:writes|fields)=(?P<count>\d+))?"
+)
 ROM_DETECTED_RE = re.compile(
     r"stage=(?:rom_mode_detected(?:_after_enter|_post_flash)?|wake_window_rom_entered|wake_window_rom_signature)\b"
 )
@@ -92,6 +97,11 @@ def parse_entry_ts(entry: dict) -> Optional[float]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--action",
+        choices=["diagnose", "apply-df", "recover", "verify"],
+        required=True,
+    )
     parser.add_argument("--mode", choices=["canonical", "dual-diag"], required=True)
     parser.add_argument("--duration-sec", type=int, required=True)
     parser.add_argument("--monitor-file", required=True)
@@ -100,6 +110,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force-min-charge", choices=["true", "false"])
     parser.add_argument("--probe-mode", choices=["strict", "mac-only"])
     parser.add_argument("--rom-image", choices=["r2", "r3", "r5"])
+    parser.add_argument(
+        "--repair-profile",
+        choices=["none", "afe-default", "live-df-mainboard", "asset-df-mainboard"],
+        required=True,
+    )
     parser.add_argument("--report-out", required=True)
     return parser.parse_args()
 
@@ -123,6 +138,11 @@ def main() -> int:
     rom_fw_seen = False
     rom_fw_invalid_runtime = False
     rom_runtime_status_unconfirmed = False
+    live_df_apply_attempted = False
+    live_df_apply_done = False
+    live_df_apply_applied = False
+    live_df_apply_writes = 0
+    live_df_apply_errors: Counter[str] = Counter()
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
     in_preexisting_segment = False
@@ -131,11 +151,13 @@ def main() -> int:
     allowed_addrs = {0x0B} if args.mode == "canonical" else {0x0B, 0x16}
 
     run_config = {
+        "action": args.action,
         "force_min_charge": None
         if args.force_min_charge is None
         else (args.force_min_charge == "true"),
         "probe_mode": args.probe_mode,
         "rom_image": args.rom_image,
+        "repair_profile": args.repair_profile,
     }
 
     if not monitor_file.is_file():
@@ -207,6 +229,30 @@ def main() -> int:
                 if ROM_RUNTIME_STATUS_UNCONFIRMED_RE.search(text):
                     rom_runtime_status_unconfirmed = True
 
+                live_df_match = LIVE_DF_APPLY_RE.search(text)
+                if live_df_match and live_df_match.group("profile") == "live_df_mainboard":
+                    live_df_apply_attempted = True
+                    stage = live_df_match.group("stage")
+                    count = live_df_match.group("count")
+                    if stage == "field_written":
+                        live_df_apply_applied = True
+                        live_df_apply_writes += 1
+                    elif stage == "done":
+                        live_df_apply_done = True
+                        if count is not None:
+                            live_df_apply_writes = max(live_df_apply_writes, int(count))
+                        if live_df_apply_writes > 0:
+                            live_df_apply_applied = True
+                    elif stage in {
+                        "read_err",
+                        "write_err",
+                        "verify_err",
+                        "verify_mismatch",
+                        "field_failed",
+                        "reset_err",
+                    }:
+                        live_df_apply_errors[stage] += 1
+
                 err_match = POLL_ERR_RE.search(text)
                 if err_match:
                     poll_errors[err_match.group("err")] += 1
@@ -265,6 +311,8 @@ def main() -> int:
         reasons.append("max_valid_streak_lt_10")
     if args.mode == "canonical" and canonical_touched_0x16:
         reasons.append("canonical_mode_touched_0x16")
+    if args.action == "apply-df" and args.repair_profile == "live-df-mainboard" and not live_df_apply_done:
+        reasons.append("live_df_apply_not_done")
 
     verdict_pass = len(reasons) == 0
     verdict_reason = "ok" if verdict_pass else ";".join(reasons)
@@ -285,6 +333,13 @@ def main() -> int:
             "fw_seen": rom_fw_seen,
             "runtime_invalid": rom_fw_invalid_runtime,
             "runtime_status_unconfirmed": rom_runtime_status_unconfirmed,
+        },
+        "live_df_apply": {
+            "attempted": live_df_apply_attempted,
+            "applied": live_df_apply_applied,
+            "done": live_df_apply_done,
+            "writes": live_df_apply_writes,
+            "errors": dict(sorted(live_df_apply_errors.items())),
         },
         "verdict": {
             "pass": verdict_pass,
@@ -317,9 +372,11 @@ def main() -> int:
         "",
         "## Run Config",
         "",
+        f"- action: `{fmt_cfg_str(run_config['action'])}`",
         f"- force_min_charge: `{fmt_cfg_bool(run_config['force_min_charge'])}`",
         f"- probe_mode: `{fmt_cfg_str(run_config['probe_mode'])}`",
         f"- rom_image: `{fmt_cfg_str(run_config['rom_image'])}`",
+        f"- repair_profile: `{fmt_cfg_str(run_config['repair_profile'])}`",
         "",
         "## Poll Errors",
         "",
@@ -343,6 +400,24 @@ def main() -> int:
             f"- fw_seen: `{summary['rom_events']['fw_seen']}`",
             f"- runtime_invalid: `{summary['rom_events']['runtime_invalid']}`",
             f"- runtime_status_unconfirmed: `{summary['rom_events']['runtime_status_unconfirmed']}`",
+            "",
+            "## Live DF Apply",
+            "",
+            f"- attempted: `{summary['live_df_apply']['attempted']}`",
+            f"- applied: `{summary['live_df_apply']['applied']}`",
+            f"- done: `{summary['live_df_apply']['done']}`",
+            f"- writes: `{summary['live_df_apply']['writes']}`",
+        ]
+    )
+
+    if summary["live_df_apply"]["errors"]:
+        for key, value in summary["live_df_apply"]["errors"].items():
+            md.append(f"- {key}: {value}")
+    else:
+        md.append("- errors: none")
+
+    md.extend(
+        [
             "",
             f"source_log: `{monitor_file}`",
         ]

@@ -8,14 +8,18 @@ mode="canonical"
 duration_sec=120
 monitor_file=""
 report_out=""
+action="diagnose"
 force_min_charge=""
 probe_mode=""
 rom_image=""
+repair_profile="none"
 
 usage() {
   cat <<USAGE
 Usage: $(basename "$0") --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--report-out DIR]
-                         [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5]
+                         [--action diagnose|apply-df|recover|verify] [--force-min-charge true|false]
+                         [--probe-mode strict|mac-only] [--rom-image r2|r3|r5]
+                         [--repair-profile none|afe-default|live-df-mainboard|asset-df-mainboard]
 USAGE
 }
 
@@ -31,6 +35,11 @@ require_value() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --action)
+      require_value "$1" "$#"
+      action="${2:-}"
+      shift 2
+      ;;
     --mode)
       require_value "$1" "$#"
       mode="${2:-}"
@@ -61,6 +70,11 @@ while [[ $# -gt 0 ]]; do
       rom_image="${2:-}"
       shift 2
       ;;
+    --repair-profile)
+      require_value "$1" "$#"
+      repair_profile="${2:-}"
+      shift 2
+      ;;
     --report-out)
       require_value "$1" "$#"
       report_out="${2:-}"
@@ -89,9 +103,11 @@ if [[ -z "$report_out" ]]; then
 fi
 
 parser_args=(
+  --action "$action"
   --mode "$mode"
   --duration-sec "$duration_sec"
   --monitor-file "$monitor_file"
+  --repair-profile "$repair_profile"
   --report-out "$report_out"
 )
 if [[ -n "$force_min_charge" ]]; then

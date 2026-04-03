@@ -30,6 +30,7 @@ bms-rom-force-pec = []
 bms-rom-image-r3 = []
 bms-rom-image-r5 = []
 bms-df-repair-afe-default = []
+bms-live-df-mainboard = []
 bms-rom-repair-asset-df-mainboard = []
 
 [dependencies]

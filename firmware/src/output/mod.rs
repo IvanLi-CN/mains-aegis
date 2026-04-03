@@ -1,8 +1,8 @@
 pub mod tps55288;
 
 use crate::front_panel_scene::{
-    is_bq40_activation_needed, BmsActivationState, BmsResultKind, DashboardInputSource,
-    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+    is_bq40_activation_needed, BmsActivationState, BmsRecoveryUiAction, BmsResultKind,
+    DashboardInputSource, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
 };
 use crate::irq::IrqSnapshot;
 use esp_firmware::bq25792;
@@ -64,6 +64,9 @@ const BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY: Duration = Duration::from_secs(34)
 const BMS_ACTIVATION_AUTO_DELAY: Duration = Duration::from_secs(30);
 const BMS_BOOT_DIAG_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
 const BMS_BOOT_DIAG_SHIP_RESET_SETTLE: Duration = Duration::from_millis(800);
+// Self-check recovery must stay user-driven: show the issue first, then wait for explicit
+// confirmation from the front panel before attempting any BQ40 wake/recovery sequence.
+const BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED: bool = false;
 // Temporary boot-diag validation: keep the proven 16.8V/200mA/500mA wake bias active through
 // the 30 s settle window so auto-validation matches the tool's working conditions.
 const BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE: bool = true;
@@ -116,8 +119,9 @@ const CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10: u32 = 50;
 const CHARGER_INPUT_IBUS_MAX_MA: i16 = 5_000;
 const CHARGER_INPUT_VBUS_MAX_MV: u16 = 30_000;
 const CHARGER_INPUT_POWER_ANOMALY_W10: u32 = 2_000;
-const FAN_RPM_SAMPLE_WINDOW_MS: u64 = 1_000;
-const FAN_RPM_MIN_SAMPLE_WINDOW_MS: u64 = 400;
+const FAN_RPM_SAMPLE_WINDOW_MS: u64 = 1_200;
+const FAN_RPM_MAX_SAMPLE_WINDOW_MS: u64 = 2_000;
+const FAN_RPM_MIN_SAMPLE_REVS: u32 = 2;
 const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
 const VIN_MAINS_LATCH_FAILURE_LIMIT: u8 = 2;
 const BMS_DIAG_BREADCRUMB_LEN: usize = 8;
@@ -980,23 +984,65 @@ fn charge_policy_step(
     }
 }
 
-fn detail_fan_status_text(status: fan::Status) -> &'static str {
-    if status.tach_fault {
+fn detail_fan_status_text(applied: AppliedFanState, tach_fault: bool) -> &'static str {
+    if tach_fault {
         "FAULT"
     } else {
-        match status.command {
+        match applied.command {
             fan::FanLevel::Off => "OFF",
+            fan::FanLevel::Low => "LOW",
             fan::FanLevel::Mid => "MID",
             fan::FanLevel::High => "HIGH",
         }
     }
 }
 
+fn thermal_notice_text(therm_kill_asserted: bool, tmp_hw_protect_test_mode: bool) -> &'static str {
+    if therm_kill_asserted {
+        "THERM KILL ASSERTED"
+    } else if tmp_hw_protect_test_mode {
+        "TMP HW PROTECT TEST MODE"
+    } else {
+        "LIVE DATA"
+    }
+}
+
+fn temp_c_to_x16(temp_c: Option<i16>) -> Option<i16> {
+    temp_c.map(|value| value.saturating_mul(16))
+}
+
+fn accumulate_max_temp_c_x16(max_temp_c_x16: Option<i16>, temp_c_x16: Option<i16>) -> Option<i16> {
+    match (max_temp_c_x16, temp_c_x16) {
+        (Some(current), Some(sample)) => Some(current.max(sample)),
+        (None, Some(sample)) => Some(sample),
+        (current, None) => current,
+    }
+}
+
+fn bms_thermal_max_c_x16(snapshot: &SelfCheckUiSnapshot) -> Option<i16> {
+    let detail = &snapshot.dashboard_detail;
+    let mut max_temp_c_x16 = None;
+
+    max_temp_c_x16 = accumulate_max_temp_c_x16(max_temp_c_x16, temp_c_to_x16(detail.board_temp_c));
+    max_temp_c_x16 =
+        accumulate_max_temp_c_x16(max_temp_c_x16, temp_c_to_x16(detail.battery_temp_c));
+    for sample in detail.cell_temp_c {
+        max_temp_c_x16 = accumulate_max_temp_c_x16(max_temp_c_x16, temp_c_to_x16(sample));
+    }
+
+    max_temp_c_x16
+}
+
+fn max_optional_temp(a: Option<i16>, b: Option<i16>) -> Option<i16> {
+    accumulate_max_temp_c_x16(a, b)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FanRpmTracker {
     window_started_ms: Option<u64>,
     window_pulses: u32,
-    rpm: Option<u16>,
+    raw_rpm: Option<u16>,
+    display_rpm: Option<u16>,
 }
 
 impl FanRpmTracker {
@@ -1004,14 +1050,24 @@ impl FanRpmTracker {
         Self {
             window_started_ms: None,
             window_pulses: 0,
-            rpm: None,
+            raw_rpm: None,
+            display_rpm: None,
         }
     }
 
     fn reset(&mut self) {
         self.window_started_ms = None;
         self.window_pulses = 0;
-        self.rpm = None;
+        self.raw_rpm = None;
+        self.display_rpm = None;
+    }
+
+    const fn raw_rpm(&self) -> Option<u16> {
+        self.raw_rpm
+    }
+
+    const fn display_rpm(&self) -> Option<u16> {
+        self.display_rpm
     }
 
     fn observe(
@@ -1030,17 +1086,22 @@ impl FanRpmTracker {
         self.window_pulses = self.window_pulses.saturating_add(pulse_delta);
 
         let elapsed_ms = now_ms.saturating_sub(*started_ms);
-        let enough_pulses = self.window_pulses >= u32::from(cfg.tach_pulses_per_rev);
-        let should_refresh = elapsed_ms >= FAN_RPM_SAMPLE_WINDOW_MS
-            || (elapsed_ms >= FAN_RPM_MIN_SAMPLE_WINDOW_MS && enough_pulses);
+        let enough_pulses = self.window_pulses
+            >= u32::from(cfg.tach_pulses_per_rev).saturating_mul(FAN_RPM_MIN_SAMPLE_REVS);
+        let should_refresh = elapsed_ms >= FAN_RPM_MAX_SAMPLE_WINDOW_MS
+            || (elapsed_ms >= FAN_RPM_SAMPLE_WINDOW_MS && enough_pulses);
 
         if should_refresh {
-            self.rpm = fan_rpm_from_sample(self.window_pulses, elapsed_ms, cfg.tach_pulses_per_rev);
+            self.raw_rpm =
+                fan_rpm_from_sample(self.window_pulses, elapsed_ms, cfg.tach_pulses_per_rev);
+            if let Some(raw_rpm) = self.raw_rpm {
+                self.display_rpm = smooth_fan_rpm(self.display_rpm, raw_rpm);
+            }
             self.window_started_ms = Some(now_ms);
             self.window_pulses = 0;
         }
 
-        self.rpm
+        self.display_rpm
     }
 }
 
@@ -1053,6 +1114,20 @@ fn fan_rpm_from_sample(pulse_count: u32, elapsed_ms: u64, pulses_per_rev: u8) ->
         .saturating_mul(60_000)
         .checked_div(elapsed_ms.saturating_mul(u64::from(pulses_per_rev)))?;
     Some(rpm.min(u64::from(u16::MAX)) as u16)
+}
+
+fn smooth_fan_rpm(previous_rpm: Option<u16>, raw_rpm: u16) -> Option<u16> {
+    match previous_rpm {
+        None => Some(raw_rpm),
+        Some(previous_rpm) => Some(
+            (((u32::from(previous_rpm) * 2) + u32::from(raw_rpm) + 1) / 3).min(u32::from(u16::MAX))
+                as u16,
+        ),
+    }
+}
+
+fn boot_diag_auto_recovery_enabled(auto_validate: bool) -> bool {
+    BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED && auto_validate
 }
 
 fn detail_battery_temp_c(snapshot: &Bq40z50Snapshot) -> Option<i16> {
@@ -1551,6 +1626,63 @@ fn discharge_authorization_input_ready(
     charger_present: Option<bool>,
 ) -> bool {
     charger_present == Some(true) || mains_present == Some(true)
+}
+
+fn bq40_ui_issue_detail(low_pack: bool, primary_reason: &'static str) -> Option<&'static str> {
+    if low_pack {
+        Some("no_battery")
+    } else if primary_reason == "nominal" {
+        None
+    } else {
+        Some(primary_reason)
+    }
+}
+
+fn bq40_last_result_blocks_auto_recovery(result: Option<BmsResultKind>) -> bool {
+    matches!(
+        result,
+        Some(
+            BmsResultKind::NoBattery
+                | BmsResultKind::RomMode
+                | BmsResultKind::Abnormal
+                | BmsResultKind::NotDetected
+        )
+    )
+}
+
+fn bq40_recovery_action_for_snapshot(
+    snapshot: &SelfCheckUiSnapshot,
+    requested_outputs: output_state_logic::EnabledOutputs,
+    gate_reason: OutputGateReason,
+    bms_addr: Option<u8>,
+    charger_allowed: bool,
+    therm_kill_asserted: bool,
+) -> Option<BmsRecoveryUiAction> {
+    if is_bq40_activation_needed(snapshot) {
+        Some(BmsRecoveryUiAction::Activation)
+    } else if requested_outputs != output_state_logic::EnabledOutputs::None
+        && gate_reason == OutputGateReason::BmsNotReady
+        && bms_addr.is_some()
+        && snapshot.bq40z50 != SelfCheckCommState::Err
+        && snapshot.bq40z50_no_battery != Some(true)
+        && snapshot.bq40z50_rca_alarm != Some(true)
+        && snapshot.bq40z50_discharge_ready == Some(false)
+        && discharge_authorization_input_ready(
+            stable_mains_present(
+                snapshot.vin_mains_present,
+                snapshot.vin_vbus_mv,
+                snapshot.fusb302_vbus_present,
+            ),
+            snapshot.fusb302_vbus_present,
+        )
+        && charger_allowed
+        && snapshot.bq25792 != SelfCheckCommState::Err
+        && !therm_kill_asserted
+    {
+        Some(BmsRecoveryUiAction::DischargeAuthorization)
+    } else {
+        None
+    }
 }
 
 fn record_vin_sample_failure(vin_mains_present: &mut Option<bool>, missing_streak: &mut u8) {
@@ -2054,6 +2186,11 @@ where
     ui.bq40z50_rca_alarm = bms_rca_alarm;
     ui.bq40z50_no_battery = bms_no_battery;
     ui.bq40z50_discharge_ready = bms_discharge_ready;
+    ui.bq40z50_issue_detail = match (bms_no_battery, bms_primary_reason) {
+        (Some(true), _) => Some("no_battery"),
+        (_, Some(primary_reason)) => bq40_ui_issue_detail(false, primary_reason),
+        _ => None,
+    };
     reporter(SelfCheckStage::Bms, ui);
 
     // Stage 3: BQ25792.
@@ -2431,6 +2568,14 @@ where
         logic_outputs_from_enabled(enabled_outputs_from_flags(out_a_allowed, out_b_allowed));
     ui.recoverable_outputs = logic_outputs_from_enabled(recoverable_outputs);
     ui.output_gate_reason = output_gate_reason;
+    ui.bq40z50_recovery_action = bq40_recovery_action_for_snapshot(
+        &ui,
+        logic_outputs_from_enabled(desired_outputs),
+        output_gate_reason,
+        bms_addr,
+        charger_probe_ok,
+        therm_kill_asserted,
+    );
     ui.bq40z50_recovery_pending = false;
     ui.tps_a_enabled = Some(false);
     ui.tps_b_enabled = Some(false);
@@ -2506,6 +2651,7 @@ pub struct PowerManager<'d, I2C> {
     tps_b_fault_latch: TpsFaultLatch,
     fan_started_at: Instant,
     fan_rpm_tracker: FanRpmTracker,
+    applied_fan_state: AppliedFanState,
 
     ina_ready: bool,
     ina_next_retry_at: Option<Instant>,
@@ -2653,8 +2799,12 @@ pub struct Config {
     pub telemetry_include_vin_ch3: bool,
     pub tmp112_tlow_c_x16: i16,
     pub tmp112_thigh_c_x16: i16,
-    pub protect_temp_derate_c_x16: i16,
-    pub protect_temp_resume_c_x16: i16,
+    pub protect_tmp_temp_derate_c_x16: i16,
+    pub protect_tmp_temp_resume_c_x16: i16,
+    pub protect_tmp_temp_shutdown_c_x16: i16,
+    pub protect_other_temp_derate_c_x16: i16,
+    pub protect_other_temp_resume_c_x16: i16,
+    pub protect_other_temp_shutdown_c_x16: i16,
     pub protect_temp_hold: Duration,
     pub protect_current_derate_ma: i32,
     pub protect_current_resume_ma: i32,
@@ -2665,6 +2815,9 @@ pub struct Config {
     pub protect_shutdown_vout_mv: u16,
     pub protect_shutdown_hold: Duration,
     pub fan_config: fan::Config,
+    pub fan_control_enabled: bool,
+    pub thermal_protection_enabled: bool,
+    pub tmp_hw_protect_test_mode: bool,
     pub charger_probe_ok: bool,
     pub charger_enabled: bool,
     pub initial_audio_charge_phase: AudioChargePhase,
@@ -2683,7 +2836,9 @@ pub struct Config {
 pub struct AppliedFanState {
     pub command: fan::FanLevel,
     pub pwm_pct: u8,
+    pub vset_duty_pct: u8,
     pub degraded: bool,
+    pub disabled_by_feature: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2897,6 +3052,8 @@ where
         let out_b_allowed = output_state.active_outputs.is_enabled(OutputChannel::OutB);
         let charger_allowed = cfg.charger_probe_ok;
         let bms_addr = cfg.bms_addr;
+        let bms_auto_recovery_enabled =
+            boot_diag_auto_recovery_enabled(cfg.bms_boot_diag_auto_validate);
         let bms_runtime_seen = bms_addr.is_some()
             || output_state.gate_reason == OutputGateReason::BmsNotReady
             || (cfg.charger_probe_ok
@@ -2925,6 +3082,13 @@ where
             tps_b_fault_latch: TpsFaultLatch::default(),
             fan_started_at: now,
             fan_rpm_tracker: FanRpmTracker::new(),
+            applied_fan_state: AppliedFanState {
+                command: fan::FanLevel::Off,
+                pwm_pct: 0,
+                vset_duty_pct: 0,
+                degraded: false,
+                disabled_by_feature: cfg.tmp_hw_protect_test_mode,
+            },
 
             ina_ready: false,
             ina_next_retry_at: if outputs_allowed { Some(now) } else { None },
@@ -2975,12 +3139,22 @@ where
             bms_activation_force_charge_requested: false,
             bms_boot_diag_started_at: now,
             bms_boot_diag_ship_reset_attempted: false,
-            bms_activation_auto_due_at: now + BMS_ACTIVATION_AUTO_DELAY,
-            bms_activation_auto_poll_release_at: now + BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY,
-            bms_activation_auto_attempted: false,
+            bms_activation_auto_due_at: if bms_auto_recovery_enabled {
+                now + BMS_ACTIVATION_AUTO_DELAY
+            } else {
+                now
+            },
+            bms_activation_auto_poll_release_at: if bms_auto_recovery_enabled {
+                now + BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY
+            } else {
+                now
+            },
+            bms_activation_auto_attempted: !bms_auto_recovery_enabled,
             bms_activation_current_is_auto: false,
             bms_activation_request_kind: BmsRecoveryRequestKind::Activation,
-            bms_activation_auto_force_charge_until: if BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE {
+            bms_activation_auto_force_charge_until: if bms_auto_recovery_enabled
+                && BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE
+            {
                 Some(
                     now + BMS_ACTIVATION_AUTO_DELAY
                         + if BMS_BOOT_DIAG_TOOL_STYLE_PROBE_ONLY {
@@ -3034,9 +3208,6 @@ where
                 "power: outputs gated reason={} (boot self-test)",
                 self.output_state.gate_reason.as_str()
             );
-        }
-        if self.can_request_bms_discharge_authorization() {
-            self.request_bms_discharge_authorization(true);
         }
 
         if self.ui_snapshot.bq25792_allow_charge.is_none() {
@@ -3242,6 +3413,7 @@ where
         let mut snapshot = self.ui_snapshot;
         let mut detail = snapshot.dashboard_detail;
         let fan_status = self.fan.status();
+        let applied_fan = self.applied_fan_state;
         let bms_recovery_pending = self.bms_activation_state == BmsActivationState::Pending
             && snapshot.bq40z50 != SelfCheckCommState::Err;
 
@@ -3251,12 +3423,20 @@ where
         snapshot.recoverable_outputs =
             logic_outputs_from_enabled(self.output_state.recoverable_outputs);
         snapshot.output_gate_reason = self.output_state.gate_reason;
+        snapshot.bq40z50_recovery_action = bq40_recovery_action_for_snapshot(
+            &snapshot,
+            snapshot.requested_outputs,
+            self.output_state.gate_reason,
+            self.bms_addr,
+            self.charger_allowed,
+            self.therm_kill.is_low(),
+        );
         snapshot.bq40z50_recovery_pending = bms_recovery_pending;
         detail.out_a_temp_c = snapshot.tmp_a_c;
         detail.out_b_temp_c = snapshot.tmp_b_c;
-        detail.fan_rpm = self.fan_rpm_tracker.rpm;
-        detail.fan_pwm_pct = Some(fan_status.pwm_pct(self.cfg.fan_config.mid_pwm_pct));
-        detail.fan_status = Some(detail_fan_status_text(fan_status));
+        detail.fan_rpm = self.fan_rpm_tracker.display_rpm();
+        detail.fan_pwm_pct = Some(applied_fan.pwm_pct);
+        detail.fan_status = Some(detail_fan_status_text(applied_fan, fan_status.tach_fault));
         detail.battery_notice = if bms_recovery_pending {
             Some("DISCHARGE AUTHORIZATION IN PROGRESS")
         } else if snapshot.bq40z50_no_battery == Some(true) {
@@ -3293,7 +3473,10 @@ where
         } else {
             Some("LIVE DATA")
         };
-        detail.thermal_notice = Some("LIVE DATA");
+        detail.thermal_notice = Some(thermal_notice_text(
+            self.therm_kill.is_low(),
+            self.cfg.tmp_hw_protect_test_mode,
+        ));
 
         snapshot.dashboard_detail = detail;
         snapshot
@@ -3344,6 +3527,10 @@ where
         self.fan.status()
     }
 
+    pub fn set_applied_fan_state(&mut self, applied: AppliedFanState) {
+        self.applied_fan_state = applied;
+    }
+
     fn fan_now_ms(&self) -> u64 {
         self.fan_started_at.elapsed().as_millis()
     }
@@ -3351,6 +3538,18 @@ where
     fn fan_temps_ready(&self) -> bool {
         self.ui_snapshot.tmp_a != SelfCheckCommState::Pending
             || self.ui_snapshot.tmp_b != SelfCheckCommState::Pending
+    }
+
+    fn bms_thermal_ready(&self) -> bool {
+        self.ui_snapshot.bq40z50 != SelfCheckCommState::Pending
+    }
+
+    fn shared_bms_thermal_max_c_x16(&self) -> Option<i16> {
+        bms_thermal_max_c_x16(&self.ui_snapshot)
+    }
+
+    fn thermal_control_inputs_ready(&self) -> bool {
+        self.fan_temps_ready() || self.bms_thermal_ready()
     }
 
     fn clear_bms_detail_snapshot(&mut self) {
@@ -3454,17 +3653,20 @@ where
         self.refresh_fan_temp_snapshots_if_due();
         let prev = self.fan.status();
         let now_ms = self.fan_now_ms();
+        let bms_temp_c_x16 = self.shared_bms_thermal_max_c_x16();
         let (status, events) = self.fan.update(fan::Input {
             now_ms,
-            temps_ready: self.fan_temps_ready(),
+            temps_ready: self.thermal_control_inputs_ready(),
             temp_a_c_x16: self.ui_snapshot.tmp_a_c_x16,
             temp_b_c_x16: self.ui_snapshot.tmp_b_c_x16,
+            temp_bms_c_x16: bms_temp_c_x16,
             tach_pulse_count: irq.fan_tach,
         });
         let rpm = self
             .fan_rpm_tracker
             .observe(now_ms, irq.fan_tach, status, self.cfg.fan_config);
-        let pwm_pct = status.pwm_pct(self.cfg.fan_config.mid_pwm_pct);
+        let raw_rpm = self.fan_rpm_tracker.raw_rpm();
+        let pwm_pct = status.pwm_pct;
 
         if events.temp_source_changed {
             match status.temp_source {
@@ -3475,7 +3677,7 @@ where
                         status.control_temp_c_x16
                     );
                 }
-                fan::TempSource::TmpA | fan::TempSource::TmpB => {
+                fan::TempSource::TmpA | fan::TempSource::TmpB | fan::TempSource::Bms => {
                     defmt::warn!(
                         "fan: temp_source degraded source={} control_temp_c_x16={=?}",
                         status.temp_source.as_str(),
@@ -3494,15 +3696,15 @@ where
             }
         }
 
-        if events.command_changed {
+        if events.output_changed {
             defmt::info!(
-                "fan: command mode={} pwm_pct={=u8} rpm={=?} temp_source={} control_temp_c_x16={=?} cooldown_active={=bool} tach_fault={=bool}",
+                "fan: command mode={} pwm_pct={=u8} rpm={=?} temp_source={} control_temp_c_x16={=?} closed_loop={=bool} tach_fault={=bool}",
                 status.command.as_str(),
                 pwm_pct,
                 rpm,
                 status.temp_source.as_str(),
                 status.control_temp_c_x16,
-                status.cooldown_active,
+                self.cfg.fan_control_enabled,
                 status.tach_fault
             );
         }
@@ -3529,23 +3731,33 @@ where
                 );
             }
         }
+
+        if raw_rpm != rpm && events.output_changed {
+            defmt::debug!(
+                "fan: command_rpm smoothing rpm_display={=?} rpm_raw={=?}",
+                rpm,
+                raw_rpm
+            );
+        }
     }
 
     pub fn log_fan_telemetry(&self, applied: AppliedFanState) {
         let status = self.fan.status();
         defmt::info!(
-            "fan: telemetry requested_mode={} requested_pwm_pct={=u8} applied_mode={} applied_pwm_pct={=u8} rpm={=?} output_degraded={=bool} temp_source={} control_temp_c_x16={=?} tach_recent={=bool} tach_fault={=bool} cooldown_active={=bool}",
+            "fan: telemetry requested_mode={} requested_pwm_pct={=u8} applied_mode={} applied_pwm_pct={=u8} applied_vset_duty_pct={=u8} rpm={=?} rpm_raw={=?} output_degraded={=bool} temp_source={} control_temp_c_x16={=?} tach_recent={=bool} tach_fault={=bool} disabled_by_feature={=bool}",
             status.requested_command.as_str(),
-            status.requested_pwm_pct(self.cfg.fan_config.mid_pwm_pct),
+            status.requested_pwm_pct,
             applied.command.as_str(),
             applied.pwm_pct,
-            self.fan_rpm_tracker.rpm,
+            applied.vset_duty_pct,
+            self.fan_rpm_tracker.display_rpm(),
+            self.fan_rpm_tracker.raw_rpm(),
             applied.degraded,
             status.temp_source.as_str(),
             status.control_temp_c_x16,
             status.tach_pulse_seen_recently,
             status.tach_fault,
-            status.cooldown_active
+            applied.disabled_by_feature
         );
     }
 
@@ -3631,6 +3843,15 @@ where
 
     pub fn request_bms_activation(&mut self) {
         self.request_bms_recovery(BmsRecoveryRequestKind::Activation, false, false);
+    }
+
+    pub fn request_bms_recovery_action(&mut self, action: BmsRecoveryUiAction) {
+        match action {
+            BmsRecoveryUiAction::Activation => self.request_bms_activation(),
+            BmsRecoveryUiAction::DischargeAuthorization => {
+                self.request_bms_discharge_authorization(false)
+            }
+        }
     }
 
     fn request_bms_activation_with_diag_override(
@@ -5573,6 +5794,8 @@ where
         self.ui_snapshot.bq40z50_rca_alarm = Some(rca_alarm);
         self.ui_snapshot.bq40z50_no_battery = Some(low_pack_runtime);
         self.ui_snapshot.bq40z50_discharge_ready = discharge_ready;
+        self.ui_snapshot.bq40z50_issue_detail =
+            bq40_ui_issue_detail(low_pack_runtime, primary_reason);
         self.apply_bms_detail_snapshot(snapshot);
         self.bms_audio = BmsAudioState {
             rca_alarm: Some(rca_alarm),
@@ -5621,6 +5844,10 @@ where
     }
 
     fn maybe_auto_request_bms_activation(&mut self) {
+        if !boot_diag_auto_recovery_enabled(self.cfg.bms_boot_diag_auto_validate) {
+            return;
+        }
+
         if !self.cfg.bms_boot_diag_auto_validate {
             return;
         }
@@ -5644,8 +5871,9 @@ where
             return;
         }
 
-        let auto_activation_needed = self.ui_snapshot.bq40z50_last_result.is_none()
-            && self.ui_snapshot.bq40z50 == SelfCheckCommState::Err;
+        let auto_activation_needed =
+            !bq40_last_result_blocks_auto_recovery(self.ui_snapshot.bq40z50_last_result)
+                && self.ui_snapshot.bq40z50 == SelfCheckCommState::Err;
         if !auto_activation_needed {
             self.bms_activation_auto_attempted = true;
             self.bms_activation_auto_force_charge_until = None;
@@ -5732,8 +5960,12 @@ where
     }
 
     fn maybe_auto_request_bms_discharge_authorization(&mut self) {
+        if !boot_diag_auto_recovery_enabled(self.cfg.bms_boot_diag_auto_validate) {
+            return;
+        }
+
         if self.bms_activation_state != BmsActivationState::Idle
-            || self.ui_snapshot.bq40z50_last_result.is_some()
+            || bq40_last_result_blocks_auto_recovery(self.ui_snapshot.bq40z50_last_result)
             || !self.can_request_bms_discharge_authorization()
         {
             return;
@@ -5970,14 +6202,19 @@ where
         if Instant::now() >= deadline {
             let result = if self.is_bq40_rom_mode_detected() {
                 BmsResultKind::RomMode
+            } else if self.bms_recovery_requires_discharge_ready()
+                && self.ui_snapshot.bq40z50 != SelfCheckCommState::Err
+                && self.has_trusted_bq40_runtime_evidence()
+            {
+                BmsResultKind::Abnormal
             } else {
                 BmsResultKind::NotDetected
             };
             let reason = match result {
                 BmsResultKind::RomMode => "deadline_elapsed_rom_mode",
+                BmsResultKind::Abnormal => "deadline_elapsed_discharge_still_blocked",
                 BmsResultKind::NotDetected => "deadline_elapsed_not_detected",
                 BmsResultKind::Success => "deadline_elapsed_success",
-                BmsResultKind::Abnormal => "deadline_elapsed_abnormal",
                 BmsResultKind::NoBattery => "deadline_elapsed_no_battery",
             };
             self.finish_bms_activation(result, reason);
@@ -6386,8 +6623,12 @@ where
 
     fn output_protection_config(&self) -> output_protection::ProtectionConfig {
         output_protection::ProtectionConfig {
-            temp_enter_c_x16: self.cfg.protect_temp_derate_c_x16,
-            temp_exit_c_x16: self.cfg.protect_temp_resume_c_x16,
+            tmp_temp_enter_c_x16: self.cfg.protect_tmp_temp_derate_c_x16,
+            tmp_temp_exit_c_x16: self.cfg.protect_tmp_temp_resume_c_x16,
+            tmp_temp_shutdown_c_x16: self.cfg.protect_tmp_temp_shutdown_c_x16,
+            other_temp_enter_c_x16: self.cfg.protect_other_temp_derate_c_x16,
+            other_temp_exit_c_x16: self.cfg.protect_other_temp_resume_c_x16,
+            other_temp_shutdown_c_x16: self.cfg.protect_other_temp_shutdown_c_x16,
             temp_hold_ms: self.cfg.protect_temp_hold.as_millis() as u64,
             current_enter_ma: self.cfg.protect_current_derate_ma,
             current_exit_ma: self.cfg.protect_current_resume_ma,
@@ -6531,22 +6772,23 @@ where
             return;
         }
 
-        let mut max_temp_c_x16 = None;
+        let max_tmp_temp_c_x16 = if self.cfg.thermal_protection_enabled {
+            max_optional_temp(self.ui_snapshot.tmp_a_c_x16, self.ui_snapshot.tmp_b_c_x16)
+        } else {
+            None
+        };
+        let max_other_temp_c_x16 = if self.cfg.thermal_protection_enabled {
+            self.shared_bms_thermal_max_c_x16()
+        } else {
+            None
+        };
+        let max_temp_c_x16 = max_optional_temp(max_tmp_temp_c_x16, max_other_temp_c_x16);
         let mut max_current_ma = None;
         let mut min_vout_mv = None;
 
         for ch in [OutputChannel::OutA, OutputChannel::OutB] {
             if !self.output_state.requested_outputs.is_enabled(ch) {
                 continue;
-            }
-
-            let temp = match ch {
-                OutputChannel::OutA => self.ui_snapshot.tmp_a_c_x16,
-                OutputChannel::OutB => self.ui_snapshot.tmp_b_c_x16,
-            };
-            if let Some(temp_c_x16) = temp {
-                max_temp_c_x16 =
-                    Some(max_temp_c_x16.map_or(temp_c_x16, |cur: i16| cur.max(temp_c_x16)));
             }
 
             let current = match ch {
@@ -6574,7 +6816,8 @@ where
             self.cfg.ilimit_ma,
             self.output_protection,
             output_protection::ProtectionInputs {
-                max_temp_c_x16,
+                max_tmp_temp_c_x16,
+                max_other_temp_c_x16,
                 max_current_ma,
                 min_vout_mv,
             },
@@ -6587,9 +6830,11 @@ where
             output_protection::ProtectionAction::ApplyIlim(limit_ma) => {
                 self.apply_output_current_limit(limit_ma);
                 defmt::warn!(
-                    "power: active_protection derating reason={} ilim_ma={=u16} max_temp_c_x16={=?} max_current_ma={=?} min_vout_mv={=?}",
+                    "power: active_protection derating reason={} ilim_ma={=u16} max_tmp_temp_c_x16={=?} max_other_temp_c_x16={=?} max_temp_c_x16={=?} max_current_ma={=?} min_vout_mv={=?}",
                     self.output_protection.status.reason().as_str(),
                     limit_ma,
+                    max_tmp_temp_c_x16,
+                    max_other_temp_c_x16,
                     max_temp_c_x16,
                     max_current_ma,
                     min_vout_mv
@@ -6604,10 +6849,12 @@ where
             }
             output_protection::ProtectionAction::Shutdown(reason) => {
                 defmt::error!(
-                    "power: active_protection shutdown reason={} ilim_ma={=u16} min_vout_mv={=?} max_temp_c_x16={=?} max_current_ma={=?}",
+                    "power: active_protection shutdown reason={} ilim_ma={=u16} min_vout_mv={=?} max_tmp_temp_c_x16={=?} max_other_temp_c_x16={=?} max_temp_c_x16={=?} max_current_ma={=?}",
                     reason.as_str(),
                     prev.applied_ilim_ma,
                     min_vout_mv,
+                    max_tmp_temp_c_x16,
+                    max_other_temp_c_x16,
                     max_temp_c_x16,
                     max_current_ma
                 );
@@ -6641,18 +6888,16 @@ where
             .cfg
             .detected_tmp_outputs
             .is_enabled(OutputChannel::OutA)
-            && self
-                .ui_snapshot
-                .tmp_a_c
-                .is_some_and(|temp_c| temp_c.saturating_mul(16) >= self.cfg.tmp112_tlow_c_x16);
+            && self.ui_snapshot.tmp_a_c.is_some_and(|temp_c| {
+                temp_c.saturating_mul(16) >= self.cfg.protect_tmp_temp_derate_c_x16
+            });
         let tmp_b_hot = self
             .cfg
             .detected_tmp_outputs
             .is_enabled(OutputChannel::OutB)
-            && self
-                .ui_snapshot
-                .tmp_b_c
-                .is_some_and(|temp_c| temp_c.saturating_mul(16) >= self.cfg.tmp112_tlow_c_x16);
+            && self.ui_snapshot.tmp_b_c.is_some_and(|temp_c| {
+                temp_c.saturating_mul(16) >= self.cfg.protect_tmp_temp_derate_c_x16
+            });
         let raw_battery_low = match self.bms_audio.rca_alarm {
             Some(true) => match mains_present {
                 Some(true) => AudioBatteryLowState::WithMains,
@@ -6801,6 +7046,7 @@ where
         self.ui_snapshot.bq40z50_rca_alarm = Some(true);
         self.ui_snapshot.bq40z50_no_battery = Some(true);
         self.ui_snapshot.bq40z50_discharge_ready = Some(false);
+        self.ui_snapshot.bq40z50_issue_detail = Some("no_battery");
         self.bms_audio = BmsAudioState {
             rca_alarm: Some(true),
             protection_active: false,
@@ -8230,6 +8476,8 @@ where
                         charge_reason,
                         discharge_reason,
                     );
+                    self.ui_snapshot.bq40z50_issue_detail =
+                        bq40_ui_issue_detail(low_pack, primary_reason);
                     self.maybe_log_bq40_block_detail_runtime(addr, primary_reason, s.op_status);
                     return true;
                 }
@@ -8255,6 +8503,7 @@ where
                             self.ui_snapshot.bq40z50_rca_alarm = None;
                             self.ui_snapshot.bq40z50_no_battery = None;
                             self.ui_snapshot.bq40z50_discharge_ready = None;
+                            self.ui_snapshot.bq40z50_issue_detail = None;
                             self.clear_bms_detail_snapshot();
                             self.bms_audio = BmsAudioState {
                                 rca_alarm: None,
@@ -8313,6 +8562,7 @@ where
                             self.ui_snapshot.bq40z50_rca_alarm = None;
                             self.ui_snapshot.bq40z50_no_battery = None;
                             self.ui_snapshot.bq40z50_discharge_ready = None;
+                            self.ui_snapshot.bq40z50_issue_detail = None;
                             self.clear_bms_detail_snapshot();
                             self.bms_audio = BmsAudioState {
                                 rca_alarm: None,
@@ -8933,6 +9183,12 @@ mod tests {
     }
 
     #[test]
+    fn boot_diag_auto_recovery_is_disabled_even_when_validation_flag_is_set() {
+        assert!(!boot_diag_auto_recovery_enabled(true));
+        assert!(!boot_diag_auto_recovery_enabled(false));
+    }
+
+    #[test]
     fn charge_policy_holds_until_full_signal_arrives() {
         let mut memory = ChargePolicyMemory::default();
         let mut derate = ChargePolicyDerateTracker::default();
@@ -9353,66 +9609,166 @@ mod tests {
     fn fan_rpm_tracker_uses_two_pulses_per_rev() {
         let mut tracker = FanRpmTracker::new();
         let cfg = fan::Config {
-            low_temp_c_x16: 40 * 16,
-            high_temp_c_x16: 50 * 16,
-            hysteresis_c_x16: 3 * 16,
-            cooldown_ms: 10_000,
+            stop_temp_c_x16: 37 * 16,
+            target_temp_c_x16: 40 * 16,
+            min_run_pwm_pct: 10,
+            step_down_pwm_pct: 5,
+            step_up_small_delta_c_x16: 1 * 16,
+            step_up_medium_delta_c_x16: 3 * 16,
+            step_up_small_pwm_pct: 5,
+            step_up_medium_pwm_pct: 10,
+            step_up_large_pwm_pct: 15,
+            control_interval_ms: 500,
             tach_timeout_ms: 2_000,
             tach_pulses_per_rev: 2,
-            mid_pwm_pct: 60,
+            tach_watchdog_enabled: true,
         };
         let status = fan::Status {
             requested_command: fan::FanLevel::High,
+            requested_pwm_pct: 100,
             command: fan::FanLevel::High,
-            thermal_level: fan::FanLevel::High,
+            pwm_pct: 100,
             temp_source: fan::TempSource::Max,
             control_temp_c_x16: Some(55 * 16),
             tach_fault: false,
             tach_pulse_seen_recently: true,
-            cooldown_active: false,
         };
 
         assert_eq!(tracker.observe(0, 0, status, cfg), None);
-        assert_eq!(tracker.observe(500, 40, status, cfg), Some(2400));
+        assert_eq!(tracker.observe(1_200, 40, status, cfg), Some(1000));
+        assert_eq!(tracker.raw_rpm(), Some(1000));
     }
 
     #[test]
     fn fan_rpm_tracker_clears_when_fan_turns_off() {
         let mut tracker = FanRpmTracker::new();
         let cfg = fan::Config {
-            low_temp_c_x16: 40 * 16,
-            high_temp_c_x16: 50 * 16,
-            hysteresis_c_x16: 3 * 16,
-            cooldown_ms: 10_000,
+            stop_temp_c_x16: 37 * 16,
+            target_temp_c_x16: 40 * 16,
+            min_run_pwm_pct: 10,
+            step_down_pwm_pct: 5,
+            step_up_small_delta_c_x16: 1 * 16,
+            step_up_medium_delta_c_x16: 3 * 16,
+            step_up_small_pwm_pct: 5,
+            step_up_medium_pwm_pct: 10,
+            step_up_large_pwm_pct: 15,
+            control_interval_ms: 500,
             tach_timeout_ms: 2_000,
             tach_pulses_per_rev: 2,
-            mid_pwm_pct: 60,
+            tach_watchdog_enabled: true,
         };
         let running = fan::Status {
             requested_command: fan::FanLevel::Mid,
+            requested_pwm_pct: 52,
             command: fan::FanLevel::Mid,
-            thermal_level: fan::FanLevel::Mid,
+            pwm_pct: 52,
             temp_source: fan::TempSource::Max,
             control_temp_c_x16: Some(45 * 16),
             tach_fault: false,
             tach_pulse_seen_recently: true,
-            cooldown_active: false,
         };
         let off = fan::Status {
             requested_command: fan::FanLevel::Off,
+            requested_pwm_pct: 0,
             command: fan::FanLevel::Off,
-            thermal_level: fan::FanLevel::Off,
+            pwm_pct: 0,
             temp_source: fan::TempSource::Max,
             control_temp_c_x16: Some(35 * 16),
             tach_fault: false,
             tach_pulse_seen_recently: false,
-            cooldown_active: false,
         };
 
         assert_eq!(tracker.observe(0, 0, running, cfg), None);
-        assert_eq!(tracker.observe(500, 20, running, cfg), Some(1200));
-        assert_eq!(tracker.observe(800, 0, off, cfg), None);
-        assert_eq!(tracker.rpm, None);
+        assert_eq!(tracker.observe(1_200, 20, running, cfg), Some(500));
+        assert_eq!(tracker.observe(1_500, 0, off, cfg), None);
+        assert_eq!(tracker.display_rpm(), None);
+        assert_eq!(tracker.raw_rpm(), None);
+    }
+
+    #[test]
+    fn detail_fan_status_uses_applied_state_bands() {
+        let low = AppliedFanState {
+            command: fan::FanLevel::Low,
+            pwm_pct: 25,
+            vset_duty_pct: 75,
+            degraded: false,
+            disabled_by_feature: false,
+        };
+        let off = AppliedFanState {
+            command: fan::FanLevel::Off,
+            pwm_pct: 0,
+            vset_duty_pct: 0,
+            degraded: false,
+            disabled_by_feature: true,
+        };
+
+        assert_eq!(detail_fan_status_text(low, false), "LOW");
+        assert_eq!(detail_fan_status_text(off, false), "OFF");
+        assert_eq!(detail_fan_status_text(low, true), "FAULT");
+    }
+
+    #[test]
+    fn thermal_notice_prefers_therm_kill_over_test_mode() {
+        assert_eq!(thermal_notice_text(false, false), "LIVE DATA");
+        assert_eq!(thermal_notice_text(false, true), "TMP HW PROTECT TEST MODE");
+        assert_eq!(thermal_notice_text(true, true), "THERM KILL ASSERTED");
+    }
+
+    #[test]
+    fn accumulate_protection_temp_disables_thermal_branch_in_test_mode() {
+        assert_eq!(max_optional_temp(None, Some(45 * 16)), Some(45 * 16));
+        assert_eq!(max_optional_temp(Some(41 * 16), None), Some(41 * 16));
+        assert_eq!(
+            max_optional_temp(Some(41 * 16), Some(45 * 16)),
+            Some(45 * 16)
+        );
+    }
+
+    #[test]
+    fn bms_thermal_max_uses_highest_available_detail_sensor() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::BatteryOnly);
+        snapshot.dashboard_detail.board_temp_c = Some(35);
+        snapshot.dashboard_detail.battery_temp_c = Some(41);
+        snapshot.dashboard_detail.cell_temp_c = [Some(39), Some(44), None, Some(42)];
+
+        assert_eq!(bms_thermal_max_c_x16(&snapshot), Some(44 * 16));
+    }
+
+    #[test]
+    fn fan_rpm_tracker_uses_longer_window_and_smoothing() {
+        let mut tracker = FanRpmTracker::new();
+        let cfg = fan::Config {
+            stop_temp_c_x16: 37 * 16,
+            target_temp_c_x16: 40 * 16,
+            min_run_pwm_pct: 10,
+            step_down_pwm_pct: 5,
+            step_up_small_delta_c_x16: 1 * 16,
+            step_up_medium_delta_c_x16: 3 * 16,
+            step_up_small_pwm_pct: 5,
+            step_up_medium_pwm_pct: 10,
+            step_up_large_pwm_pct: 15,
+            control_interval_ms: 500,
+            tach_timeout_ms: 2_000,
+            tach_pulses_per_rev: 2,
+            tach_watchdog_enabled: true,
+        };
+        let status = fan::Status {
+            requested_command: fan::FanLevel::High,
+            requested_pwm_pct: 100,
+            command: fan::FanLevel::High,
+            pwm_pct: 100,
+            temp_source: fan::TempSource::Max,
+            control_temp_c_x16: Some(55 * 16),
+            tach_fault: false,
+            tach_pulse_seen_recently: true,
+        };
+
+        assert_eq!(tracker.observe(0, 0, status, cfg), None);
+        assert_eq!(tracker.observe(800, 40, status, cfg), None);
+        assert_eq!(tracker.observe(1_200, 20, status, cfg), Some(1_500));
+        assert_eq!(tracker.raw_rpm(), Some(1_500));
+        assert_eq!(tracker.observe(2_400, 100, status, cfg), Some(1_833));
+        assert_eq!(tracker.raw_rpm(), Some(2_500));
     }
 
     #[test]

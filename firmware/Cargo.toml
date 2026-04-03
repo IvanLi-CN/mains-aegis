@@ -14,6 +14,8 @@ main-vout-19v = []
 force-min-charge = []
 # Development-only diagnostics: probe BQ40Z50 on both 0x0B and 0x16.
 bms-dual-probe-diag = []
+# Disable MCU-driven fan and software thermal derating/shutdown while keeping TMP/THERM_KILL_N observation active.
+tmp-hw-protect-test = []
 # Test firmware gate (prevents default cargo build/check from forcing test-fw feature selection).
 test-fw = []
 tps-test-fw = []

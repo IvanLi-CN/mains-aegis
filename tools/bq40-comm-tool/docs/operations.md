@@ -55,6 +55,32 @@ Mainboard policy:
 - it does not depend on live MB44 DF capture, so a chip that falls back to TI stock DF or rejects live capture can still be repaired onto the board's 4S baseline
 - when the pack still answers MB44 in app mode, the tool preserves live `CELL_GAIN` / `PACK_GAIN` / `BAT_GAIN` on top of the official asset base only if all three words are captured; otherwise it falls back to the asset defaults instead of flashing a mixed live/default calibration set
 - it is intentionally different from "writing TI default DF fields"; the tool writes an official DF section base plus project-specific overrides
+- current fixed protection overrides include `OCC1=4500mA/6s`, `OCC2=5200mA/3s`, `SOCC=6000mA/5s`, `OCD1=-14500mA/6s`, `OCD2=-15000mA/3s`, `OCD recovery=100mA/3s`, `SOCD=-16000mA/5s`
+
+## 2.1) Live DF baseline apply (app-mode, state-changing path)
+
+Use this when canonical/app-mode communication already passes and you need to write this repository's
+mainboard DF current-protection baseline into the live pack without forcing ROM recovery.
+
+```bash
+./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile live-df-mainboard
+```
+
+Policy:
+- `apply-df` is app-mode only; it rejects `--recover` and `--rom-image`
+- `--repair-profile live-df-mainboard` is mandatory for this subcommand
+- the tool writes only the live current-protection baseline fields (`OCC1/OCC2/SOCC/OCD1/OCD2/OCD recovery/SOCD`) via MB44
+- the monitor log must contain `bms_df_apply: ... stage=done fields=14`
+- `summary.json` records the live apply outcome under `live_df_apply`
+
+Current fixed live baseline:
+- `OCC1=4500mA/6s`
+- `OCC2=5200mA/3s`
+- `SOCC=6000mA/5s`
+- `OCD1=-14500mA/6s`
+- `OCD2=-15000mA/3s`
+- `OCD recovery=100mA/3s`
+- `SOCD=-16000mA/5s`
 
 ## 3) Verify (offline)
 
@@ -68,9 +94,10 @@ Notes:
 ## 4) Supported sequence
 
 1. `diagnose --mode canonical --force-min-charge true`
-2. If the log contains `stage=rom_mode_detected`, run `recover --mode dual-diag --recover if-rom --force-min-charge true --repair-profile asset-df-mainboard`
-3. Re-flash canonical firmware and re-run `diagnose --mode canonical --force-min-charge true`
-4. Run `verify --mode canonical --monitor-file <canonical log>` on the final canonical log
+2. If canonical diagnose passes but the live pack still needs the repo baseline, run `apply-df --mode canonical --force-min-charge true --repair-profile live-df-mainboard`
+3. If the log contains `stage=rom_mode_detected`, run `recover --mode dual-diag --recover if-rom --force-min-charge true --repair-profile asset-df-mainboard`
+4. Re-flash canonical firmware and re-run `diagnose --mode canonical --force-min-charge true`
+5. Run `verify --mode canonical --monitor-file <canonical log>` on the final canonical log
 
 
 ## 5) Scenario checklist

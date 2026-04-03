@@ -217,6 +217,12 @@ pub enum BmsResultKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BmsRecoveryUiAction {
+    Activation,
+    DischargeAuthorization,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DashboardDetailSnapshot {
     pub cell_mv: [Option<u16>; 4],
     pub cell_temp_c: [Option<i16>; 4],
@@ -307,6 +313,8 @@ pub struct SelfCheckUiSnapshot {
     pub bq40z50_rca_alarm: Option<bool>,
     pub bq40z50_no_battery: Option<bool>,
     pub bq40z50_discharge_ready: Option<bool>,
+    pub bq40z50_issue_detail: Option<&'static str>,
+    pub bq40z50_recovery_action: Option<BmsRecoveryUiAction>,
     pub bq40z50_recovery_pending: bool,
     pub bq40z50_last_result: Option<BmsResultKind>,
     pub tps_a: SelfCheckCommState,
@@ -357,6 +365,8 @@ impl SelfCheckUiSnapshot {
             bq40z50_rca_alarm: None,
             bq40z50_no_battery: None,
             bq40z50_discharge_ready: None,
+            bq40z50_issue_detail: None,
+            bq40z50_recovery_action: None,
             bq40z50_recovery_pending: false,
             bq40z50_last_result: None,
             tps_a: SelfCheckCommState::Pending,
@@ -527,6 +537,8 @@ pub enum SelfCheckOverlay {
     None,
     BmsActivateConfirm,
     BmsActivateProgress,
+    BmsDischargeAuthorizeConfirm,
+    BmsDischargeAuthorizeProgress,
     BmsActivateResult(BmsResultKind),
 }
 
@@ -549,12 +561,12 @@ const SELF_CHECK_DIALOG_W: u16 = 280;
 const SELF_CHECK_DIALOG_H: u16 = 112;
 
 const SELF_CHECK_CANCEL_BTN_X: u16 = 32;
-const SELF_CHECK_CANCEL_BTN_Y: u16 = 110;
+const SELF_CHECK_CANCEL_BTN_Y: u16 = 116;
 const SELF_CHECK_CANCEL_BTN_W: u16 = 108;
 const SELF_CHECK_CANCEL_BTN_H: u16 = 24;
 
 const SELF_CHECK_CONFIRM_BTN_X: u16 = 152;
-const SELF_CHECK_CONFIRM_BTN_Y: u16 = 110;
+const SELF_CHECK_CONFIRM_BTN_Y: u16 = 116;
 const SELF_CHECK_CONFIRM_BTN_W: u16 = 136;
 const SELF_CHECK_CONFIRM_BTN_H: u16 = 24;
 
@@ -670,7 +682,30 @@ pub fn is_bq40_offline(snapshot: &SelfCheckUiSnapshot) -> bool {
 
 #[allow(dead_code)]
 pub fn is_bq40_activation_needed(snapshot: &SelfCheckUiSnapshot) -> bool {
-    snapshot.bq40z50_last_result.is_none() && is_bq40_offline(snapshot)
+    is_bq40_offline(snapshot)
+}
+
+fn discharge_authorization_input_ready(snapshot: &SelfCheckUiSnapshot) -> bool {
+    snapshot.fusb302_vbus_present == Some(true) || snapshot_mains_present(snapshot)
+}
+
+#[allow(dead_code)]
+pub fn bq40_recovery_action(snapshot: &SelfCheckUiSnapshot) -> Option<BmsRecoveryUiAction> {
+    if is_bq40_activation_needed(snapshot) {
+        Some(BmsRecoveryUiAction::Activation)
+    } else if snapshot.requested_outputs != EnabledOutputs::None
+        && snapshot.output_gate_reason == OutputGateReason::BmsNotReady
+        && snapshot.bq40z50 != SelfCheckCommState::Err
+        && snapshot.bq40z50_no_battery != Some(true)
+        && snapshot.bq40z50_rca_alarm != Some(true)
+        && snapshot.bq40z50_discharge_ready == Some(false)
+        && discharge_authorization_input_ready(snapshot)
+        && snapshot.bq25792 != SelfCheckCommState::Err
+    {
+        Some(BmsRecoveryUiAction::DischargeAuthorization)
+    } else {
+        None
+    }
 }
 
 fn outputs_include(snapshot: &SelfCheckUiSnapshot, selector: OutputSelector) -> bool {
@@ -816,7 +851,19 @@ pub fn self_check_can_enter_dashboard(snapshot: &SelfCheckUiSnapshot) -> bool {
 pub fn bq40_result_overlay(snapshot: &SelfCheckUiSnapshot) -> Option<SelfCheckOverlay> {
     snapshot
         .bq40z50_last_result
+        .filter(|result| *result != BmsResultKind::Success)
         .map(SelfCheckOverlay::BmsActivateResult)
+}
+
+#[allow(dead_code)]
+pub fn bq40_recovery_overlay(snapshot: &SelfCheckUiSnapshot) -> Option<SelfCheckOverlay> {
+    match snapshot.bq40z50_recovery_action {
+        Some(BmsRecoveryUiAction::Activation) => Some(SelfCheckOverlay::BmsActivateConfirm),
+        Some(BmsRecoveryUiAction::DischargeAuthorization) => {
+            Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm)
+        }
+        None => None,
+    }
 }
 
 #[allow(dead_code)]
@@ -840,7 +887,7 @@ pub fn self_check_hit_test(
                 None
             }
         }
-        SelfCheckOverlay::BmsActivateConfirm => {
+        SelfCheckOverlay::BmsActivateConfirm | SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
             if contains(
                 x,
                 y,
@@ -863,7 +910,9 @@ pub fn self_check_hit_test(
                 None
             }
         }
-        SelfCheckOverlay::BmsActivateProgress | SelfCheckOverlay::BmsActivateResult(..) => None,
+        SelfCheckOverlay::BmsActivateProgress
+        | SelfCheckOverlay::BmsDischargeAuthorizeProgress
+        | SelfCheckOverlay::BmsActivateResult(..) => None,
     }
 }
 
@@ -4403,7 +4452,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
         palette,
         172,
         DETAIL_ROW_Y_2,
-        "PWM",
+        "CTRL",
         data.detail.fan_pwm_pct,
         DetailValueFmt::Percent,
     )?;
@@ -4865,15 +4914,16 @@ fn thermal_fan_motion(
     status: Option<&'static str>,
 ) -> ThermalFanMotion {
     match (rpm, pwm_pct, status) {
-        (Some(rpm), _, _) if rpm >= 3_600 => ThermalFanMotion::High,
-        (_, Some(pwm), _) if pwm >= 90 => ThermalFanMotion::High,
+        (_, _, Some("OFF")) => ThermalFanMotion::Off,
         (_, _, Some("HIGH")) => ThermalFanMotion::High,
-        (Some(rpm), _, _) if rpm >= 1_800 => ThermalFanMotion::Mid,
-        (_, Some(pwm), _) if pwm >= 55 => ThermalFanMotion::Mid,
         (_, _, Some("MID")) => ThermalFanMotion::Mid,
-        (Some(rpm), _, _) if rpm > 0 => ThermalFanMotion::Low,
-        (_, Some(pwm), _) if pwm > 0 => ThermalFanMotion::Low,
         (_, _, Some("LOW" | "RUN")) => ThermalFanMotion::Low,
+        (_, Some(pwm), _) if pwm >= 67 => ThermalFanMotion::High,
+        (Some(rpm), _, _) if rpm >= 3_600 => ThermalFanMotion::High,
+        (_, Some(pwm), _) if pwm >= 34 => ThermalFanMotion::Mid,
+        (Some(rpm), _, _) if rpm >= 1_800 => ThermalFanMotion::Mid,
+        (_, Some(pwm), _) if pwm > 0 => ThermalFanMotion::Low,
+        (Some(rpm), _, _) if rpm > 0 => ThermalFanMotion::Low,
         _ => ThermalFanMotion::Off,
     }
 }
@@ -4983,10 +5033,13 @@ fn thermal_fault_present(data: DashboardLiveData) -> bool {
     data.therm_a_state == SelfCheckCommState::Err
         || data.therm_b_state == SelfCheckCommState::Err
         || data.detail.fan_status == Some("FAULT")
+        || data.detail.thermal_notice == Some("THERM KILL ASSERTED")
 }
 
 fn thermal_warn_present(data: DashboardLiveData) -> bool {
-    data.therm_a_state == SelfCheckCommState::Warn || data.therm_b_state == SelfCheckCommState::Warn
+    data.therm_a_state == SelfCheckCommState::Warn
+        || data.therm_b_state == SelfCheckCommState::Warn
+        || data.detail.thermal_notice == Some("TMP HW PROTECT TEST MODE")
 }
 
 fn detail_footer_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
@@ -5386,22 +5439,13 @@ fn render_variant_c<P: UiPainter>(
     } else {
         format_args!("IBAT N/A")
     };
+    let bms_issue_key = bq40_issue_card_key(&snapshot);
     let bms_key = if snapshot.bq40z50_recovery_pending {
         format_args!("AUTH ACTIVE")
-    } else if snapshot.bq40z50 == SelfCheckCommState::Err {
-        format_args!("NOT DETECTED")
-    } else if snapshot.bq40z50_no_battery == Some(true) {
-        format_args!("NO BATTERY")
-    } else if snapshot.bq40z50_discharge_ready == Some(false) {
-        format_args!("DSG BLOCKED")
-    } else if snapshot.bq40z50_rca_alarm == Some(true) {
-        format_args!("RCA ALARM")
-    } else if snapshot.bq40z50 == SelfCheckCommState::Warn {
-        format_args!("ABNORMAL")
-    } else if bms_soc_has {
+    } else if snapshot.bq40z50 == SelfCheckCommState::Ok && bms_soc_has {
         format_args!("SOC {:>2}%", bms_soc)
     } else {
-        format_args!("SOC N/A")
+        format_args!("{}", bms_issue_key)
     };
     let tps_warning_reason = tps_upstream_warning_reason(&snapshot).unwrap_or("IOUT N/A");
     let tps_a_key = if tps_a_has {
@@ -5617,7 +5661,7 @@ fn render_variant_c<P: UiPainter>(
         },
     )?;
 
-    draw_self_check_overlay(painter, variant, palette, overlay)?;
+    draw_self_check_overlay(painter, variant, palette, &snapshot, overlay)?;
 
     Ok(())
 }
@@ -5626,6 +5670,7 @@ fn draw_self_check_overlay<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
     palette: Palette,
+    snapshot: &SelfCheckUiSnapshot,
     overlay: SelfCheckOverlay,
 ) -> Result<(), P::Error> {
     if overlay == SelfCheckOverlay::None {
@@ -5657,9 +5702,10 @@ fn draw_self_check_overlay<P: UiPainter>(
     let confirm_text = fade_color(palette.bg, 0x0000);
 
     let title = match overlay {
-        SelfCheckOverlay::BmsActivateConfirm | SelfCheckOverlay::BmsActivateProgress => {
-            "BQ40 ACTIVATE"
-        }
+        SelfCheckOverlay::BmsActivateConfirm
+        | SelfCheckOverlay::BmsActivateProgress
+        | SelfCheckOverlay::BmsDischargeAuthorizeConfirm
+        | SelfCheckOverlay::BmsDischargeAuthorizeProgress => "BQ40 RECOVERY",
         SelfCheckOverlay::BmsActivateResult(..) => "BQ40 RESULT",
         SelfCheckOverlay::None => "",
     };
@@ -5711,114 +5757,44 @@ fn draw_self_check_overlay<P: UiPainter>(
 
     match overlay {
         SelfCheckOverlay::BmsActivateConfirm => {
-            text(
+            let copy = bq40_recovery_dialog_copy(snapshot, BmsRecoveryUiAction::Activation);
+            draw_bms_confirm_dialog(
                 painter,
                 variant,
-                FontRole::TextBody,
-                "No SBS response yet.",
-                Point::new(
-                    (SELF_CHECK_DIALOG_X + 10) as i32,
-                    (SELF_CHECK_DIALOG_Y + 26) as i32,
-                ),
-                HorizontalAlignment::Left,
                 body_text,
-            )?;
-            text(
-                painter,
-                variant,
-                FontRole::TextBody,
-                "Try activation now?",
-                Point::new(
-                    (SELF_CHECK_DIALOG_X + 10) as i32,
-                    (SELF_CHECK_DIALOG_Y + 46) as i32,
-                ),
-                HorizontalAlignment::Left,
-                body_text,
-            )?;
-
-            fill(
-                painter,
-                SELF_CHECK_CANCEL_BTN_X,
-                SELF_CHECK_CANCEL_BTN_Y,
-                SELF_CHECK_CANCEL_BTN_W,
-                SELF_CHECK_CANCEL_BTN_H,
                 cancel_border,
-            )?;
-            fill(
-                painter,
-                SELF_CHECK_CANCEL_BTN_X + 1,
-                SELF_CHECK_CANCEL_BTN_Y + 1,
-                SELF_CHECK_CANCEL_BTN_W - 2,
-                SELF_CHECK_CANCEL_BTN_H - 2,
                 cancel_fill,
-            )?;
-            fill(
-                painter,
-                SELF_CHECK_CONFIRM_BTN_X,
-                SELF_CHECK_CONFIRM_BTN_Y,
-                SELF_CHECK_CONFIRM_BTN_W,
-                SELF_CHECK_CONFIRM_BTN_H,
-                confirm_border,
-            )?;
-            fill(
-                painter,
-                SELF_CHECK_CONFIRM_BTN_X + 1,
-                SELF_CHECK_CONFIRM_BTN_Y + 1,
-                SELF_CHECK_CONFIRM_BTN_W - 2,
-                SELF_CHECK_CONFIRM_BTN_H - 2,
-                confirm_fill,
-            )?;
-            text(
-                painter,
-                variant,
-                FontRole::Num,
-                "Cancel",
-                Point::new(
-                    (SELF_CHECK_CANCEL_BTN_X + (SELF_CHECK_CANCEL_BTN_W.saturating_sub(6 * 8)) / 2)
-                        as i32,
-                    (SELF_CHECK_CANCEL_BTN_Y + 6) as i32,
-                ),
-                HorizontalAlignment::Left,
                 cancel_text,
+                confirm_border,
+                confirm_fill,
+                confirm_text,
+                copy,
             )?;
-            text(
+        }
+        SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
+            let copy =
+                bq40_recovery_dialog_copy(snapshot, BmsRecoveryUiAction::DischargeAuthorization);
+            draw_bms_confirm_dialog(
                 painter,
                 variant,
-                FontRole::Num,
-                "Activate",
-                Point::new(
-                    (SELF_CHECK_CONFIRM_BTN_X
-                        + (SELF_CHECK_CONFIRM_BTN_W.saturating_sub(8 * 8)) / 2)
-                        as i32,
-                    (SELF_CHECK_CONFIRM_BTN_Y + 6) as i32,
-                ),
-                HorizontalAlignment::Left,
+                body_text,
+                cancel_border,
+                cancel_fill,
+                cancel_text,
+                confirm_border,
+                confirm_fill,
                 confirm_text,
+                copy,
             )?;
         }
         SelfCheckOverlay::BmsActivateProgress => {
-            let icon_x = SELF_CHECK_DIALOG_X + 10;
-            let icon_y = SELF_CHECK_DIALOG_Y + 28;
-            let text_x = SELF_CHECK_DIALOG_X + 50;
-            draw_activation_icon(painter, icon_x, icon_y, ActivationIcon::Progress)?;
-            text(
-                painter,
-                variant,
-                FontRole::TextBody,
-                "Applying wake profile.",
-                Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 28) as i32),
-                HorizontalAlignment::Left,
-                body_text,
-            )?;
-            text(
-                painter,
-                variant,
-                FontRole::Num,
-                "Checking pack state...",
-                Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 50) as i32),
-                HorizontalAlignment::Left,
-                ATTENTION_COLOR,
-            )?;
+            let copy = bq40_recovery_dialog_copy(snapshot, BmsRecoveryUiAction::Activation);
+            draw_bms_progress_dialog(painter, variant, body_text, copy)?;
+        }
+        SelfCheckOverlay::BmsDischargeAuthorizeProgress => {
+            let copy =
+                bq40_recovery_dialog_copy(snapshot, BmsRecoveryUiAction::DischargeAuthorization);
+            draw_bms_progress_dialog(painter, variant, body_text, copy)?;
         }
         SelfCheckOverlay::BmsActivateResult(result) => {
             let icon_x = SELF_CHECK_DIALOG_X + 10;
@@ -5826,9 +5802,9 @@ fn draw_self_check_overlay<P: UiPainter>(
             let text_x = SELF_CHECK_DIALOG_X + 50;
             let (headline, body1, body2, accent, icon) = match result {
                 BmsResultKind::Success => (
-                    "Activation succeeded.",
-                    "BQ40Z50 is ready.",
-                    "Tap to close",
+                    "Problem cleared.",
+                    "Self-check state refreshed.",
+                    "Returning to live status...",
                     SUCCESS_COLOR,
                     ActivationIcon::Success,
                 ),
@@ -5847,8 +5823,8 @@ fn draw_self_check_overlay<P: UiPainter>(
                     ActivationIcon::Failed,
                 ),
                 BmsResultKind::Abnormal => (
-                    "Gauge responded abnormally.",
-                    "Review pack status.",
+                    "Recovery did not clear it.",
+                    bq40_issue_detail_body(snapshot),
                     "Tap to close",
                     ATTENTION_COLOR,
                     ActivationIcon::Failed,
@@ -5893,6 +5869,228 @@ fn draw_self_check_overlay<P: UiPainter>(
         SelfCheckOverlay::None => {}
     }
 
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct Bq40RecoveryDialogCopy {
+    headline: &'static str,
+    body1: &'static str,
+    body2: &'static str,
+    confirm_label: &'static str,
+    progress1: &'static str,
+    progress2: &'static str,
+}
+
+fn bq40_issue_card_key(snapshot: &SelfCheckUiSnapshot) -> &'static str {
+    match snapshot.bq40z50_issue_detail {
+        Some("xdsg_blocked") => "XDSG BLOCKED",
+        Some("dsg_fet_off") => "DSG FET OFF",
+        Some("xchg_blocked") => "CHG BLOCKED",
+        Some("remaining_capacity_alarm") => "RCA ALARM",
+        Some("permanent_failure") => "PERM FAIL",
+        Some("sleep_mode") => "SLEEP MODE",
+        Some("no_battery") => "NO BATTERY",
+        _ if snapshot.bq40z50 == SelfCheckCommState::Err => "NOT DETECTED",
+        _ if snapshot.bq40z50_no_battery == Some(true) => "NO BATTERY",
+        _ if snapshot.bq40z50_discharge_ready == Some(false) => "DSG BLOCKED",
+        _ if snapshot.bq40z50_rca_alarm == Some(true) => "RCA ALARM",
+        _ if snapshot.bq40z50 == SelfCheckCommState::Warn => "ABNORMAL",
+        _ => "SOC N/A",
+    }
+}
+
+fn bq40_issue_headline(
+    snapshot: &SelfCheckUiSnapshot,
+    action: BmsRecoveryUiAction,
+) -> &'static str {
+    match action {
+        BmsRecoveryUiAction::Activation => "NOT DETECTED",
+        BmsRecoveryUiAction::DischargeAuthorization => match snapshot.bq40z50_issue_detail {
+            Some("xdsg_blocked") => "XDSG BLOCKED",
+            Some("dsg_fet_off") => "DSG FET OFF",
+            Some("remaining_capacity_alarm") => "RCA ALARM",
+            Some("permanent_failure") => "PERMANENT FAILURE",
+            _ => "DISCHARGE BLOCKED",
+        },
+    }
+}
+
+fn bq40_issue_detail_body(snapshot: &SelfCheckUiSnapshot) -> &'static str {
+    match snapshot.bq40z50_issue_detail {
+        Some("xdsg_blocked") => "BQ40 keeps discharge path off.",
+        Some("dsg_fet_off") => "Discharge FET is still off.",
+        Some("xchg_blocked") => "Charge path is still blocked.",
+        Some("remaining_capacity_alarm") => "Pack is in remaining-capacity alarm.",
+        Some("permanent_failure") => "Pack reports permanent failure.",
+        Some("sleep_mode") => "Gauge is asleep but still responds.",
+        Some("no_battery") => "Pack present check failed.",
+        _ => "Gauge did not answer the expected state.",
+    }
+}
+
+fn bq40_recovery_dialog_copy(
+    snapshot: &SelfCheckUiSnapshot,
+    action: BmsRecoveryUiAction,
+) -> Bq40RecoveryDialogCopy {
+    match action {
+        BmsRecoveryUiAction::Activation => Bq40RecoveryDialogCopy {
+            headline: bq40_issue_headline(snapshot, action),
+            body1: "Gauge is not answering SMBus.",
+            body2: "Try activation now?",
+            confirm_label: "Activate",
+            progress1: "Applying wake profile.",
+            progress2: "Checking gauge state...",
+        },
+        BmsRecoveryUiAction::DischargeAuthorization => Bq40RecoveryDialogCopy {
+            headline: bq40_issue_headline(snapshot, action),
+            body1: bq40_issue_detail_body(snapshot),
+            body2: "Try discharge recovery?",
+            confirm_label: "Recover",
+            progress1: "Trying discharge recovery.",
+            progress2: "Checking path ready...",
+        },
+    }
+}
+
+fn draw_bms_confirm_dialog<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    body_text: u16,
+    cancel_border: u16,
+    cancel_fill: u16,
+    cancel_text: u16,
+    confirm_border: u16,
+    confirm_fill: u16,
+    confirm_text: u16,
+    copy: Bq40RecoveryDialogCopy,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        copy.headline,
+        Point::new(
+            (SELF_CHECK_DIALOG_X + 10) as i32,
+            (SELF_CHECK_DIALOG_Y + 24) as i32,
+        ),
+        HorizontalAlignment::Left,
+        ATTENTION_COLOR,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        copy.body1,
+        Point::new(
+            (SELF_CHECK_DIALOG_X + 10) as i32,
+            (SELF_CHECK_DIALOG_Y + 44) as i32,
+        ),
+        HorizontalAlignment::Left,
+        body_text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        copy.body2,
+        Point::new(
+            (SELF_CHECK_DIALOG_X + 10) as i32,
+            (SELF_CHECK_DIALOG_Y + 60) as i32,
+        ),
+        HorizontalAlignment::Left,
+        body_text,
+    )?;
+
+    fill(
+        painter,
+        SELF_CHECK_CANCEL_BTN_X,
+        SELF_CHECK_CANCEL_BTN_Y,
+        SELF_CHECK_CANCEL_BTN_W,
+        SELF_CHECK_CANCEL_BTN_H,
+        cancel_border,
+    )?;
+    fill(
+        painter,
+        SELF_CHECK_CANCEL_BTN_X + 1,
+        SELF_CHECK_CANCEL_BTN_Y + 1,
+        SELF_CHECK_CANCEL_BTN_W - 2,
+        SELF_CHECK_CANCEL_BTN_H - 2,
+        cancel_fill,
+    )?;
+    fill(
+        painter,
+        SELF_CHECK_CONFIRM_BTN_X,
+        SELF_CHECK_CONFIRM_BTN_Y,
+        SELF_CHECK_CONFIRM_BTN_W,
+        SELF_CHECK_CONFIRM_BTN_H,
+        confirm_border,
+    )?;
+    fill(
+        painter,
+        SELF_CHECK_CONFIRM_BTN_X + 1,
+        SELF_CHECK_CONFIRM_BTN_Y + 1,
+        SELF_CHECK_CONFIRM_BTN_W - 2,
+        SELF_CHECK_CONFIRM_BTN_H - 2,
+        confirm_fill,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::Num,
+        "Cancel",
+        Point::new(
+            (SELF_CHECK_CANCEL_BTN_X + (SELF_CHECK_CANCEL_BTN_W.saturating_sub(6 * 8)) / 2) as i32,
+            (SELF_CHECK_CANCEL_BTN_Y + 6) as i32,
+        ),
+        HorizontalAlignment::Left,
+        cancel_text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::Num,
+        copy.confirm_label,
+        Point::new(
+            (SELF_CHECK_CONFIRM_BTN_X
+                + (SELF_CHECK_CONFIRM_BTN_W.saturating_sub(copy.confirm_label.len() as u16 * 8))
+                    / 2) as i32,
+            (SELF_CHECK_CONFIRM_BTN_Y + 6) as i32,
+        ),
+        HorizontalAlignment::Left,
+        confirm_text,
+    )?;
+    Ok(())
+}
+
+fn draw_bms_progress_dialog<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    body_text: u16,
+    copy: Bq40RecoveryDialogCopy,
+) -> Result<(), P::Error> {
+    let icon_x = SELF_CHECK_DIALOG_X + 10;
+    let icon_y = SELF_CHECK_DIALOG_Y + 28;
+    let text_x = SELF_CHECK_DIALOG_X + 50;
+    draw_activation_icon(painter, icon_x, icon_y, ActivationIcon::Progress)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        copy.progress1,
+        Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 28) as i32),
+        HorizontalAlignment::Left,
+        body_text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::Num,
+        copy.progress2,
+        Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 46) as i32),
+        HorizontalAlignment::Left,
+        ATTENTION_COLOR,
+    )?;
     Ok(())
 }
 
@@ -8441,6 +8639,98 @@ mod tests {
 
         snapshot.bq40z50 = SelfCheckCommState::Err;
         assert!(is_bq40_activation_needed(&snapshot));
+
+        snapshot.bq40z50_last_result = Some(BmsResultKind::Success);
+        assert!(is_bq40_activation_needed(&snapshot));
+
+        snapshot.bq40z50_last_result = Some(BmsResultKind::NotDetected);
+        assert!(is_bq40_activation_needed(&snapshot));
+    }
+
+    #[test]
+    fn bq40_recovery_action_surfaces_discharge_authorization_when_bms_gate_is_recoverable() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_discharge_ready = Some(false);
+        snapshot.bq40z50_issue_detail = Some("xdsg_blocked");
+        snapshot.bq40z50_recovery_action = Some(BmsRecoveryUiAction::DischargeAuthorization);
+
+        assert_eq!(
+            bq40_recovery_action(&snapshot),
+            Some(BmsRecoveryUiAction::DischargeAuthorization)
+        );
+        assert_eq!(
+            bq40_recovery_overlay(&snapshot),
+            Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm)
+        );
+    }
+
+    #[test]
+    fn bq40_recovery_overlay_only_uses_backend_authorized_action() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_discharge_ready = Some(false);
+        snapshot.bq40z50_issue_detail = Some("xdsg_blocked");
+
+        assert_eq!(
+            bq40_recovery_action(&snapshot),
+            Some(BmsRecoveryUiAction::DischargeAuthorization)
+        );
+        assert_eq!(bq40_recovery_overlay(&snapshot), None);
+
+        snapshot.bq40z50_recovery_action = Some(BmsRecoveryUiAction::DischargeAuthorization);
+        assert_eq!(
+            bq40_recovery_overlay(&snapshot),
+            Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm)
+        );
+    }
+
+    #[test]
+    fn bq40_failed_result_does_not_block_retryable_recovery_action() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_discharge_ready = Some(false);
+        snapshot.bq40z50_last_result = Some(BmsResultKind::Abnormal);
+
+        assert_eq!(
+            bq40_recovery_action(&snapshot),
+            Some(BmsRecoveryUiAction::DischargeAuthorization)
+        );
+
+        snapshot.bq40z50 = SelfCheckCommState::Err;
+        snapshot.bq40z50_last_result = Some(BmsResultKind::NotDetected);
+        assert_eq!(
+            bq40_recovery_action(&snapshot),
+            Some(BmsRecoveryUiAction::Activation)
+        );
+    }
+
+    #[test]
+    fn bq40_result_overlay_ignores_success_but_keeps_failures_reopenable() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq40z50_last_result = Some(BmsResultKind::Success);
+        assert_eq!(bq40_result_overlay(&snapshot), None);
+
+        snapshot.bq40z50_last_result = Some(BmsResultKind::Abnormal);
+        assert_eq!(
+            bq40_result_overlay(&snapshot),
+            Some(SelfCheckOverlay::BmsActivateResult(BmsResultKind::Abnormal))
+        );
     }
 
     #[test]
@@ -8765,6 +9055,18 @@ mod tests {
         );
         assert_eq!(
             thermal_fan_motion(Some(4_120), Some(100), Some("HIGH")),
+            ThermalFanMotion::High
+        );
+    }
+
+    #[test]
+    fn thermal_fan_motion_prefers_control_band_over_noisy_rpm() {
+        assert_eq!(
+            thermal_fan_motion(Some(4_200), Some(25), Some("LOW")),
+            ThermalFanMotion::Low
+        );
+        assert_eq!(
+            thermal_fan_motion(Some(900), Some(72), Some("HIGH")),
             ThermalFanMotion::High
         );
     }
