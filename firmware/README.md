@@ -330,6 +330,7 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
 - `TPS55288-A/B` 卡片语义：自检阶段两路都只做相同的只读探测，并保持 `OE=0`；当 `BMS` 尚未允许放电或仍无法确认 `VBAT` 网络有合理电压时，`TPS` 的 `I2C NACK/not_present` 要显示为 `WARN`（并给出上游等待提示），而不是 `ERR`；只有在上游供电前提已满足后仍探测失败，才显示 `ERR`。
 - 自检页只有在本模式必需模块全部 clear 时才会切到 Dashboard；若 `BMS` 仍为 `LIMIT`，页面继续停留在 `Variant C` 并显示运行期真实数据。
 - 页面切换：本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard
+- 显示链路诊断：前面板 ready 后，全局按住 `CENTER` 约 `800ms` 会打印 `ui: display_diag ...` 并立即重走一次 `TCA_RESET# -> TCA6408A -> RES/TP_RESET/CS -> GC9307` 初始化链路；若当前位于 Dashboard 详情页，短按返回 Home 仍会先触发，继续按住才会进入长按诊断。
 - Dashboard 视觉基线：`Variant B`（仅用于 Dashboard 场景）
 - `Variant C` 重定位为“高级设置/自检页”风格，不作为默认 Dashboard
 - `Variant C` 自检页固定显示 10 个可通信模块，采用“双列大字号诊断卡”布局（每卡两行：`MODULE+COMM` 与 `KEY PARAM`）：
@@ -396,6 +397,8 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
 预期日志（`defmt`）：
 
 - 成功：`ui: front panel ready (driver=gc9307-async mode=industrial-demo variant=C ...)`
+- 长按诊断：`ui: display_diag trigger=center_long_press ...`
+- 重初始化：`ui: display_reinit trigger=center_long_press stage=...`
 - 失败：`ui: ... failed ...`（并退回到安全态：屏幕不选中、复位保持、背光关闭）
 
 ### 功能验证测试固件（`test-fw`，feature 驱动）
