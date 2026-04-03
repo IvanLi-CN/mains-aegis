@@ -287,8 +287,8 @@ mod tests {
     };
 
     const CFG: ProtectionConfig = ProtectionConfig {
-        temp_enter_c_x16: 40 * 16,
-        temp_exit_c_x16: 38 * 16,
+        temp_enter_c_x16: 48 * 16,
+        temp_exit_c_x16: 45 * 16,
         temp_hold_ms: 5_000,
         current_enter_ma: 3_250,
         current_exit_ma: 3_000,
@@ -307,7 +307,7 @@ mod tests {
             ..ProtectionRuntime::new(3_500)
         };
         let inputs = ProtectionInputs {
-            max_temp_c_x16: Some(41 * 16),
+            max_temp_c_x16: Some(49 * 16),
             max_current_ma: Some(1_000),
             min_vout_mv: Some(19_000),
         };
