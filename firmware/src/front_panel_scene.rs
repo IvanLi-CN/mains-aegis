@@ -870,10 +870,7 @@ pub fn bq40_result_overlay(snapshot: &SelfCheckUiSnapshot) -> Option<SelfCheckOv
 
 #[allow(dead_code)]
 pub fn bq40_recovery_overlay(snapshot: &SelfCheckUiSnapshot) -> Option<SelfCheckOverlay> {
-    match snapshot
-        .bq40z50_recovery_action
-        .or_else(|| bq40_recovery_action(snapshot))
-    {
+    match snapshot.bq40z50_recovery_action {
         Some(BmsRecoveryUiAction::Activation) => Some(SelfCheckOverlay::BmsActivateConfirm),
         Some(BmsRecoveryUiAction::DischargeAuthorization) => {
             Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm)
@@ -8673,11 +8670,37 @@ mod tests {
         snapshot.bq40z50 = SelfCheckCommState::Warn;
         snapshot.bq40z50_discharge_ready = Some(false);
         snapshot.bq40z50_issue_detail = Some("xdsg_blocked");
+        snapshot.bq40z50_recovery_action = Some(BmsRecoveryUiAction::DischargeAuthorization);
 
         assert_eq!(
             bq40_recovery_action(&snapshot),
             Some(BmsRecoveryUiAction::DischargeAuthorization)
         );
+        assert_eq!(
+            bq40_recovery_overlay(&snapshot),
+            Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm)
+        );
+    }
+
+    #[test]
+    fn bq40_recovery_overlay_only_uses_backend_authorized_action() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_discharge_ready = Some(false);
+        snapshot.bq40z50_issue_detail = Some("xdsg_blocked");
+
+        assert_eq!(
+            bq40_recovery_action(&snapshot),
+            Some(BmsRecoveryUiAction::DischargeAuthorization)
+        );
+        assert_eq!(bq40_recovery_overlay(&snapshot), None);
+
+        snapshot.bq40z50_recovery_action = Some(BmsRecoveryUiAction::DischargeAuthorization);
         assert_eq!(
             bq40_recovery_overlay(&snapshot),
             Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm)

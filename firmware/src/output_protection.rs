@@ -75,7 +75,8 @@ pub struct ProtectionRuntime {
     pub status: ProtectionStatus,
     pub shutdown_reason: ProtectionReason,
     temp_over_since_ms: Option<u64>,
-    thermal_shutdown_latched: bool,
+    tmp_shutdown_latched: bool,
+    other_shutdown_latched: bool,
     current_over_since_ms: Option<u64>,
     next_step_due_ms: Option<u64>,
     low_vout_since_ms: Option<u64>,
@@ -92,7 +93,8 @@ impl ProtectionRuntime {
             },
             shutdown_reason: ProtectionReason::None,
             temp_over_since_ms: None,
-            thermal_shutdown_latched: false,
+            tmp_shutdown_latched: false,
+            other_shutdown_latched: false,
             current_over_since_ms: None,
             next_step_due_ms: None,
             low_vout_since_ms: None,
@@ -129,11 +131,24 @@ pub fn step(
         runtime.temp_over_since_ms,
     );
     runtime.temp_over_since_ms = temp_state.over_since_ms;
-    if temp_shutdown_requested(cfg, inputs) {
-        runtime.thermal_shutdown_latched = true;
-    } else if runtime.thermal_shutdown_latched && temp_below_exit(cfg, inputs) {
-        runtime.thermal_shutdown_latched = false;
+    let shutdown_latch = temp_shutdown_latch(cfg, inputs);
+    runtime.tmp_shutdown_latched |= shutdown_latch.tmp;
+    runtime.other_shutdown_latched |= shutdown_latch.other;
+    if runtime.tmp_shutdown_latched
+        && inputs
+            .max_tmp_temp_c_x16
+            .is_some_and(|temp| temp <= cfg.tmp_temp_exit_c_x16)
+    {
+        runtime.tmp_shutdown_latched = false;
     }
+    if runtime.other_shutdown_latched
+        && inputs
+            .max_other_temp_c_x16
+            .is_some_and(|temp| temp <= cfg.other_temp_exit_c_x16)
+    {
+        runtime.other_shutdown_latched = false;
+    }
+    let thermal_shutdown_latched = runtime.tmp_shutdown_latched || runtime.other_shutdown_latched;
 
     let current_state = classify_current(
         now_ms,
@@ -145,7 +160,7 @@ pub fn step(
     runtime.current_over_since_ms = current_state.over_since_ms;
 
     runtime.status = ProtectionStatus {
-        thermal_active: temp_state.active || runtime.thermal_shutdown_latched,
+        thermal_active: temp_state.active || thermal_shutdown_latched,
         current_active: current_state.active,
     };
 
@@ -169,7 +184,7 @@ pub fn step(
         };
     }
 
-    if runtime.thermal_shutdown_latched {
+    if thermal_shutdown_latched {
         runtime.phase = ProtectionPhase::Shutdown;
         runtime.shutdown_reason = reason;
         runtime.next_step_due_ms = None;
@@ -299,13 +314,21 @@ fn temp_below_exit(cfg: ProtectionConfig, inputs: ProtectionInputs) -> bool {
             .map_or(true, |temp| temp <= cfg.other_temp_exit_c_x16)
 }
 
-fn temp_shutdown_requested(cfg: ProtectionConfig, inputs: ProtectionInputs) -> bool {
-    inputs
-        .max_tmp_temp_c_x16
-        .is_some_and(|temp| temp >= cfg.tmp_temp_shutdown_c_x16)
-        || inputs
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ThermalShutdownLatch {
+    tmp: bool,
+    other: bool,
+}
+
+fn temp_shutdown_latch(cfg: ProtectionConfig, inputs: ProtectionInputs) -> ThermalShutdownLatch {
+    ThermalShutdownLatch {
+        tmp: inputs
+            .max_tmp_temp_c_x16
+            .is_some_and(|temp| temp >= cfg.tmp_temp_shutdown_c_x16),
+        other: inputs
             .max_other_temp_c_x16
-            .is_some_and(|temp| temp >= cfg.other_temp_shutdown_c_x16)
+            .is_some_and(|temp| temp >= cfg.other_temp_shutdown_c_x16),
+    }
 }
 
 fn classify_current(
@@ -409,7 +432,8 @@ mod tests {
             },
             shutdown_reason: ProtectionReason::None,
             temp_over_since_ms: None,
-            thermal_shutdown_latched: false,
+            tmp_shutdown_latched: false,
+            other_shutdown_latched: false,
             current_over_since_ms: Some(0),
             next_step_due_ms: Some(10_000),
             low_vout_since_ms: Some(1_000),
@@ -439,7 +463,8 @@ mod tests {
             status: Default::default(),
             shutdown_reason: ProtectionReason::None,
             temp_over_since_ms: Some(0),
-            thermal_shutdown_latched: false,
+            tmp_shutdown_latched: false,
+            other_shutdown_latched: false,
             current_over_since_ms: Some(0),
             next_step_due_ms: Some(10_000),
             low_vout_since_ms: None,
@@ -486,7 +511,8 @@ mod tests {
             },
             shutdown_reason: ProtectionReason::Thermal,
             temp_over_since_ms: Some(0),
-            thermal_shutdown_latched: true,
+            tmp_shutdown_latched: true,
+            other_shutdown_latched: true,
             current_over_since_ms: None,
             next_step_due_ms: None,
             low_vout_since_ms: None,
@@ -521,5 +547,40 @@ mod tests {
         );
         assert_eq!(cooled.runtime.phase, ProtectionPhase::Normal);
         assert_eq!(cooled.action, ProtectionAction::RestoreDefaultIlim(3_500));
+    }
+
+    #[test]
+    fn thermal_shutdown_does_not_clear_when_tripping_sensor_disappears() {
+        let runtime = ProtectionRuntime {
+            applied_ilim_ma: 3_000,
+            phase: ProtectionPhase::Shutdown,
+            status: super::ProtectionStatus {
+                thermal_active: true,
+                current_active: false,
+            },
+            shutdown_reason: ProtectionReason::Thermal,
+            temp_over_since_ms: Some(0),
+            tmp_shutdown_latched: false,
+            other_shutdown_latched: true,
+            current_over_since_ms: None,
+            next_step_due_ms: None,
+            low_vout_since_ms: None,
+        };
+
+        let missing_sample = step(
+            8_000,
+            CFG,
+            3_500,
+            runtime,
+            ProtectionInputs {
+                max_tmp_temp_c_x16: Some(45 * 16),
+                max_other_temp_c_x16: None,
+                max_current_ma: Some(1_000),
+                min_vout_mv: Some(19_000),
+            },
+        );
+
+        assert_eq!(missing_sample.runtime.phase, ProtectionPhase::Shutdown);
+        assert_eq!(missing_sample.action, ProtectionAction::None);
     }
 }
