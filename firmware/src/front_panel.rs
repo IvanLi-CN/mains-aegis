@@ -515,18 +515,18 @@ impl FrontPanel {
                 if (left_edge || center_edge)
                     && self.bms_activation_state != BmsActivationState::Pending
                 {
-                    if let Some(result_overlay) =
-                        front_panel_scene::bq40_result_overlay(&self.self_check_snapshot)
-                    {
-                        self.self_check_overlay = result_overlay;
-                        self.needs_redraw = true;
-                        defmt::info!("ui: bms result dialog reopen via key");
-                    } else if let Some(recovery_overlay) =
+                    if let Some(recovery_overlay) =
                         front_panel_scene::bq40_recovery_overlay(&self.self_check_snapshot)
                     {
                         self.self_check_overlay = recovery_overlay;
                         self.needs_redraw = true;
                         defmt::info!("ui: bms recovery dialog open via key");
+                    } else if let Some(result_overlay) =
+                        front_panel_scene::bq40_result_overlay(&self.self_check_snapshot)
+                    {
+                        self.self_check_overlay = result_overlay;
+                        self.needs_redraw = true;
+                        defmt::info!("ui: bms result dialog reopen via key");
                     }
                 }
             }
