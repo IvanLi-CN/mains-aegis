@@ -405,7 +405,7 @@ impl FrontPanel {
     }
 
     pub fn enter_dashboard(&mut self) {
-        if self.ui_variant == DASHBOARD_VARIANT && self.dashboard_route == DashboardRoute::Home {
+        if !dashboard_enter_requires_variant_switch(self.ui_variant) {
             return;
         }
 
@@ -1214,6 +1214,10 @@ fn dashboard_touch_target_name(target: DashboardTouchTarget) -> &'static str {
     }
 }
 
+fn dashboard_enter_requires_variant_switch(variant: UiVariant) -> bool {
+    variant != DASHBOARD_VARIANT
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1249,6 +1253,12 @@ mod tests {
             DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal),
             &thermal_active,
         ));
+    }
+
+    #[test]
+    fn enter_dashboard_only_transitions_from_self_check_variant() {
+        assert!(dashboard_enter_requires_variant_switch(SELF_CHECK_VARIANT));
+        assert!(!dashboard_enter_requires_variant_switch(DASHBOARD_VARIANT));
     }
 }
 
