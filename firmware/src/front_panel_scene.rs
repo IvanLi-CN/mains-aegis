@@ -4927,13 +4927,14 @@ fn thermal_fan_motion(
     status: Option<&'static str>,
 ) -> ThermalFanMotion {
     match (rpm, pwm_pct, status) {
+        (_, _, Some("OFF")) => ThermalFanMotion::Off,
         (_, _, Some("HIGH")) => ThermalFanMotion::High,
+        (_, _, Some("MID")) => ThermalFanMotion::Mid,
+        (_, _, Some("LOW" | "RUN")) => ThermalFanMotion::Low,
         (_, Some(pwm), _) if pwm >= 67 => ThermalFanMotion::High,
         (Some(rpm), _, _) if rpm >= 3_600 => ThermalFanMotion::High,
-        (_, _, Some("MID")) => ThermalFanMotion::Mid,
         (_, Some(pwm), _) if pwm >= 34 => ThermalFanMotion::Mid,
         (Some(rpm), _, _) if rpm >= 1_800 => ThermalFanMotion::Mid,
-        (_, _, Some("LOW" | "RUN")) => ThermalFanMotion::Low,
         (_, Some(pwm), _) if pwm > 0 => ThermalFanMotion::Low,
         (Some(rpm), _, _) if rpm > 0 => ThermalFanMotion::Low,
         _ => ThermalFanMotion::Off,
