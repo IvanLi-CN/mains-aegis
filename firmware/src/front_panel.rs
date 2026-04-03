@@ -61,6 +61,7 @@ const UI_ORIENTATION_MARKER: &str = "FP_ORI_PROBE_20260227";
 const BACKLIGHT_ACTIVE_LOW: bool = true;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
+const CENTER_LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(800);
 const BOOT_SPLASH_HOLD: Duration = Duration::from_millis(900);
 const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
 const PANEL_INIT_SPI_FREQ_MHZ: u32 = 10;
@@ -121,6 +122,23 @@ impl InputSnapshot {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TcaDiagSnapshot {
+    input: u8,
+    output: u8,
+    polarity: u8,
+    config: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Cst816dDiagSnapshot {
+    gesture: u8,
+    finger_count: u8,
+    raw_x: u16,
+    raw_y: u16,
+    mapped_point: Option<(u16, u16)>,
+}
+
 pub struct FrontPanel {
     i2c: HalI2c<'static, Blocking>,
     panel_io: PanelIo,
@@ -136,6 +154,8 @@ pub struct FrontPanel {
     state: InitState,
     next_frame_deadline: Instant,
     last_inputs: Option<InputSnapshot>,
+    center_press_started_at: Option<Instant>,
+    center_long_press_fired: bool,
     last_test_touch_point: Option<(u16, u16)>,
     needs_redraw: bool,
     ui_variant: UiVariant,
@@ -200,6 +220,8 @@ impl FrontPanel {
             state: InitState::Disabled,
             next_frame_deadline: Instant::now(),
             last_inputs: None,
+            center_press_started_at: None,
+            center_long_press_fired: false,
             last_test_touch_point: None,
             needs_redraw: false,
             ui_variant: SELF_CHECK_VARIANT,
@@ -213,76 +235,9 @@ impl FrontPanel {
     }
 
     pub fn init_best_effort(&mut self) {
-        self.panel_io.configure_dc();
-        self.configure_backlight();
-        self.configure_tca_reset();
-
-        // Reset expander and force known screen-safe defaults.
-        self.pulse_tca_reset(Duration::from_millis(10));
-
-        if let Err(e) = self.tca_init() {
-            defmt::error!("ui: tca6408a init failed err={}", i2c_error_kind(e));
-            self.set_backlight(true);
-            self.state = InitState::Disabled;
+        if self.reinitialize_display_path("boot_init").is_err() {
             return;
         }
-
-        if let Err(e) = self.tca_set_res_released(false) {
-            defmt::error!("ui: tca set res failed err={}", i2c_error_kind(e));
-            self.set_backlight(true);
-            self.state = InitState::Disabled;
-            return;
-        }
-        if let Err(e) = self.tca_set_tp_reset_released(false) {
-            defmt::error!("ui: tca set tp_reset failed err={}", i2c_error_kind(e));
-            self.set_backlight(true);
-            self.state = InitState::Disabled;
-            return;
-        }
-        if let Err(e) = self.tca_set_cs_enabled(false) {
-            defmt::error!("ui: tca set cs failed err={}", i2c_error_kind(e));
-            self.set_backlight(true);
-            self.state = InitState::Disabled;
-            return;
-        }
-
-        busy_wait(Duration::from_millis(10));
-
-        // Hardware reset through expander lines before handing over to driver init.
-        if let Err(e) = self.tca_set_res_released(true) {
-            defmt::error!("ui: tca release res failed err={}", i2c_error_kind(e));
-            self.set_backlight(true);
-            self.state = InitState::Disabled;
-            return;
-        }
-        if let Err(e) = self.tca_set_tp_reset_released(true) {
-            defmt::error!("ui: tca release tp_reset failed err={}", i2c_error_kind(e));
-            self.set_backlight(true);
-            self.state = InitState::Disabled;
-            return;
-        }
-        busy_wait(Duration::from_millis(120));
-
-        if let Err(e) = self.tca_set_cs_enabled(true) {
-            defmt::error!("ui: tca enable cs failed err={}", i2c_error_kind(e));
-            self.set_backlight(true);
-            self.state = InitState::Disabled;
-            return;
-        }
-        busy_wait(Duration::from_millis(5));
-
-        if self.gc9307_driver_init().is_err() {
-            defmt::error!("ui: gc9307 driver init failed");
-            let _ = self.tca_set_cs_enabled(false);
-            let _ = self.tca_set_res_released(false);
-            self.set_backlight(true);
-            self.state = InitState::Disabled;
-            return;
-        }
-
-        self.set_backlight(true);
-        self.state = InitState::Ready;
-        self.next_frame_deadline = Instant::now();
 
         self.render_boot_confirmation_splash();
         busy_wait(BOOT_SPLASH_HOLD);
@@ -323,6 +278,250 @@ impl FrontPanel {
             PANEL_ORIENTATION as u8
         );
         esp_println::println!("ui: boot splash -> self-check");
+    }
+
+    fn reinitialize_display_path(&mut self, trigger: &'static str) -> Result<(), ()> {
+        self.panel_io.configure_dc();
+        self.configure_backlight();
+        self.configure_tca_reset();
+
+        defmt::info!("ui: display_reinit trigger={} stage=tca_reset", trigger);
+        self.pulse_tca_reset(Duration::from_millis(10));
+
+        defmt::info!("ui: display_reinit trigger={} stage=tca_init", trigger);
+        if let Err(e) = self.tca_init() {
+            self.fail_display_reinit(trigger, "tca_init", i2c_error_kind(e));
+            return Err(());
+        }
+        if let Err(e) = self.tca_set_res_released(false) {
+            self.fail_display_reinit(trigger, "safe_lines_res", i2c_error_kind(e));
+            return Err(());
+        }
+        if let Err(e) = self.tca_set_tp_reset_released(false) {
+            self.fail_display_reinit(trigger, "safe_lines_tp_reset", i2c_error_kind(e));
+            return Err(());
+        }
+        if let Err(e) = self.tca_set_cs_enabled(false) {
+            self.fail_display_reinit(trigger, "safe_lines_cs", i2c_error_kind(e));
+            return Err(());
+        }
+        busy_wait(Duration::from_millis(10));
+
+        defmt::info!("ui: display_reinit trigger={} stage=release_lines", trigger);
+        if let Err(e) = self.tca_set_res_released(true) {
+            self.fail_display_reinit(trigger, "release_lines_res", i2c_error_kind(e));
+            return Err(());
+        }
+        if let Err(e) = self.tca_set_tp_reset_released(true) {
+            self.fail_display_reinit(trigger, "release_lines_tp_reset", i2c_error_kind(e));
+            return Err(());
+        }
+        busy_wait(Duration::from_millis(120));
+        if let Err(e) = self.tca_set_cs_enabled(true) {
+            self.fail_display_reinit(trigger, "release_lines_cs", i2c_error_kind(e));
+            return Err(());
+        }
+        busy_wait(Duration::from_millis(5));
+
+        defmt::info!("ui: display_reinit trigger={} stage=gc9307_init", trigger);
+        if self.gc9307_driver_init().is_err() {
+            self.fail_display_reinit(trigger, "gc9307_init", "gc9307_init_failed");
+            return Err(());
+        }
+
+        self.set_backlight(true);
+        self.state = InitState::Ready;
+        self.next_frame_deadline = Instant::now();
+        defmt::info!("ui: display_reinit trigger={} stage=ok", trigger);
+        Ok(())
+    }
+
+    fn fail_display_reinit(
+        &mut self,
+        trigger: &'static str,
+        stage: &'static str,
+        err: &'static str,
+    ) {
+        defmt::error!(
+            "ui: display_reinit trigger={} stage={} result=err err={}",
+            trigger,
+            stage,
+            err
+        );
+        self.enter_display_fail_safe();
+    }
+
+    fn enter_display_fail_safe(&mut self) {
+        let _ = self.tca_set_cs_enabled(false);
+        let _ = self.tca_set_res_released(false);
+        let _ = self.tca_set_tp_reset_released(false);
+        self.set_backlight(true);
+        self.state = InitState::Disabled;
+    }
+
+    fn maybe_trigger_center_long_press(&mut self, snapshot: InputSnapshot) -> bool {
+        let now = Instant::now();
+        if !snapshot.center {
+            self.center_press_started_at = None;
+            self.center_long_press_fired = false;
+            return false;
+        }
+
+        match self.center_press_started_at {
+            Some(started_at)
+                if !self.center_long_press_fired
+                    && now >= started_at + CENTER_LONG_PRESS_THRESHOLD =>
+            {
+                self.center_long_press_fired = true;
+                self.run_center_long_press_diag(snapshot);
+                true
+            }
+            Some(_) => false,
+            None => {
+                self.center_press_started_at = Some(now);
+                self.center_long_press_fired = false;
+                false
+            }
+        }
+    }
+
+    fn run_center_long_press_diag(&mut self, snapshot: InputSnapshot) {
+        self.log_display_diag(snapshot);
+        if self.reinitialize_display_path("center_long_press").is_err() {
+            return;
+        }
+
+        defmt::info!("ui: display_reinit trigger=center_long_press stage=redraw_restore");
+        if let Err(e) = self.render_inputs(snapshot) {
+            defmt::error!(
+                "ui: display_reinit trigger=center_long_press stage=redraw_restore result=err err={=?}",
+                e
+            );
+            self.enter_display_fail_safe();
+            self.needs_redraw = true;
+            return;
+        }
+
+        self.needs_redraw = false;
+        defmt::info!("ui: display_reinit trigger=center_long_press stage=redraw_restore result=ok");
+    }
+
+    fn log_display_diag(&mut self, snapshot: InputSnapshot) {
+        defmt::info!(
+            "ui: display_diag trigger=center_long_press page={} route={} overlay={} bms_state={} center={=bool} touch={=bool}",
+            variant_name(self.ui_variant),
+            dashboard_route_name(self.dashboard_route),
+            overlay_name(self.self_check_overlay),
+            bms_activation_state_name(self.bms_activation_state),
+            snapshot.center,
+            snapshot.touch
+        );
+
+        match self.read_tca_diag_snapshot() {
+            Ok(diag) => {
+                let actual = diag.input;
+                defmt::info!(
+                    "ui: display_diag tca_raw input=0x{=u8:02x} output=0x{=u8:02x} polarity=0x{=u8:02x} config=0x{=u8:02x}",
+                    diag.input,
+                    diag.output,
+                    diag.polarity,
+                    diag.config
+                );
+                defmt::info!(
+                    "ui: display_diag tca_state up={=bool} down={=bool} left={=bool} right={=bool} usb2_pg={=bool} cs_enabled={=bool} res_released={=bool} tp_reset_released={=bool}",
+                    (actual & (1 << 3)) == 0,
+                    (actual & (1 << 0)) == 0,
+                    (actual & (1 << 1)) == 0,
+                    (actual & (1 << 2)) == 0,
+                    (actual & (1 << 4)) != 0,
+                    (diag.output & (1 << TCA_BIT_CS)) == 0,
+                    (diag.output & (1 << TCA_BIT_RES)) != 0,
+                    (diag.output & (1 << TCA_BIT_TP_RESET)) != 0
+                );
+            }
+            Err(e) => {
+                defmt::error!("ui: display_diag tca_read err={}", i2c_error_kind(e));
+            }
+        }
+
+        let tca_reset_high = self.tca_reset_n.is_high();
+        let dc_high = self.panel_io.dc.is_high();
+        let bl_high = self.bl.is_high();
+        let center_low = self.btn_center.is_low();
+        let ctp_irq_low = self.ctp_irq.is_low();
+        defmt::info!(
+            "ui: display_diag gpio gpio1_tca_reset_high={=bool} gpio10_dc_high={=bool} gpio13_blk_high={=bool} gpio0_center_low={=bool} gpio14_ctp_irq_low={=bool} backlight_on={=bool}",
+            tca_reset_high,
+            dc_high,
+            bl_high,
+            center_low,
+            ctp_irq_low,
+            self.backlight_is_on_raw_level(bl_high)
+        );
+
+        match self.read_touch_diag_snapshot() {
+            Ok(diag) => {
+                let (mapped_x, mapped_y) = match diag.mapped_point {
+                    Some((x, y)) => (Some(x), Some(y)),
+                    None => (None, None),
+                };
+                defmt::info!(
+                    "ui: display_diag cst816d probe=ok gesture=0x{=u8:02x} fingers={=u8} raw_x={=u16} raw_y={=u16} mapped_x={=?} mapped_y={=?}",
+                    diag.gesture,
+                    diag.finger_count,
+                    diag.raw_x,
+                    diag.raw_y,
+                    mapped_x,
+                    mapped_y
+                );
+            }
+            Err(e) => {
+                defmt::error!(
+                    "ui: display_diag cst816d probe=err err={}",
+                    i2c_error_kind(e)
+                );
+            }
+        }
+    }
+
+    fn read_tca_diag_snapshot(&mut self) -> Result<TcaDiagSnapshot, esp_hal::i2c::master::Error> {
+        Ok(TcaDiagSnapshot {
+            input: self.read_tca_reg(TCA_REG_INPUT)?,
+            output: self.read_tca_reg(TCA_REG_OUTPUT)?,
+            polarity: self.read_tca_reg(TCA_REG_POLARITY)?,
+            config: self.read_tca_reg(TCA_REG_CONFIG)?,
+        })
+    }
+
+    fn read_tca_reg(&mut self, reg: u8) -> Result<u8, esp_hal::i2c::master::Error> {
+        let mut buf = [0u8; 1];
+        self.i2c.write_read(TCA6408A_ADDR, &[reg], &mut buf)?;
+        Ok(buf[0])
+    }
+
+    fn read_touch_diag_snapshot(
+        &mut self,
+    ) -> Result<Cst816dDiagSnapshot, esp_hal::i2c::master::Error> {
+        let mut buf = [0u8; CST816D_TOUCH_REG_LEN];
+        self.i2c
+            .write_read(CST816D_ADDR, &[CST816D_REG_GESTURE], &mut buf)?;
+        let raw_x = (((buf[2] & 0x0f) as u16) << 8) | buf[3] as u16;
+        let raw_y = (((buf[4] & 0x0f) as u16) << 8) | buf[5] as u16;
+        Ok(Cst816dDiagSnapshot {
+            gesture: buf[0],
+            finger_count: buf[1] & 0x0f,
+            raw_x,
+            raw_y,
+            mapped_point: Self::map_touch_to_ui(raw_x, raw_y),
+        })
+    }
+
+    fn backlight_is_on_raw_level(&self, bl_high: bool) -> bool {
+        if BACKLIGHT_ACTIVE_LOW {
+            !bl_high
+        } else {
+            bl_high
+        }
     }
 
     pub fn update_self_check_snapshot(&mut self, snapshot: SelfCheckUiSnapshot) {
@@ -461,6 +660,10 @@ impl FrontPanel {
                 } else {
                     self.process_dashboard_button_action(snapshot);
                     self.process_dashboard_touch_action(snapshot);
+                }
+                if self.maybe_trigger_center_long_press(snapshot) {
+                    self.last_inputs = Some(snapshot);
+                    return ui_action;
                 }
                 let inputs_changed = self.last_inputs != Some(snapshot);
                 let should_render = self.needs_redraw
@@ -734,6 +937,7 @@ impl FrontPanel {
                 .with_drive_mode(DriveMode::PushPull)
                 .with_pull(Pull::None),
         );
+        self.bl.set_input_enable(true);
         self.set_backlight(false);
         self.bl.set_output_enable(true);
     }
@@ -744,6 +948,7 @@ impl FrontPanel {
                 .with_drive_mode(DriveMode::PushPull)
                 .with_pull(Pull::Up),
         );
+        self.tca_reset_n.set_input_enable(true);
         self.tca_reset_n.set_high();
         self.tca_reset_n.set_output_enable(true);
     }
@@ -1449,6 +1654,7 @@ impl PanelIo {
                 .with_drive_mode(DriveMode::PushPull)
                 .with_pull(Pull::None),
         );
+        self.dc.set_input_enable(true);
         self.dc.set_low();
         self.dc.set_output_enable(true);
     }
