@@ -42,9 +42,9 @@ impl RuntimeAudioRecoveryState {
 
     pub(crate) fn note_late(&mut self, now: Instant) -> RuntimeAudioRecoveryDecision {
         #[cfg(not(any(test, feature = "host-test")))]
-        let reset_window = self.burst_started_at.map_or(true, |started| {
-            now >= started + AUDIO_RUNTIME_LATE_RECOVERY_WINDOW
-        });
+        let reset_window = self
+            .burst_started_at
+            .is_none_or(|started| now >= started + AUDIO_RUNTIME_LATE_RECOVERY_WINDOW);
 
         #[cfg(any(test, feature = "host-test"))]
         let reset_window = self.burst_started_at.map_or(true, |started| {
