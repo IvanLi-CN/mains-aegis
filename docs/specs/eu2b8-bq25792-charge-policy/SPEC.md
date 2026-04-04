@@ -4,7 +4,7 @@
 
 - Status: 部分完成（4/5）
 - Created: 2026-03-28
-- Last: 2026-03-28
+- Last: 2026-04-05
 
 ## 背景 / 问题陈述
 
@@ -21,7 +21,9 @@
 - 充电一旦开始，保持到“满充”才停止；满充定义为 `BQ40 FC` 或 `BQ25792 termination_done` 任一成立。
 - 仅在 `DC5025` 独占输入且 `IBUS > 3.0A` 持续 `1s` 时，把 `ICHG` 降到 `100mA`；回落到 `<2.7A` 持续 `5s` 后恢复 `500mA`。
 - `TPS55288` 总输出功率超过 `5W` 时必须停充，功率回落后再按正常阈值重新判定是否开启充电。
-- 扩充运行时日志与前面板 detail 状态，让 `WAIT / CHG500 / CHG100 / FULL / LOCK / NOAC / TEMP / LOAD` 等状态可直接观察，并优先显示实际 `IBAT_ADC`。
+- 扩充运行时日志与前面板 detail 状态，让 `WAIT / CHG500 / CHG100 / FULL / LOCK / NOAC / TEMP / LOAD / WARM` 等状态可直接观察，并优先显示实际 `IBAT_ADC`。
+- 当 `BQ25792 TS_WARM=true` 且未进入 `TS_HOT/TREG/fault` 时，charger detail 必须显示 `WARM`，并明确说明这是 charger TS warm。
+- 当 `BQ40 OperationStatus()[XCHG]=1` 导致 `LOCK` 时，运行时日志必须额外输出 `ChargingStatus(0x55)` 原始值与关键位，便于区分包侧阻断来源。
 
 ### Non-goals
 
@@ -61,6 +63,7 @@
 
 - 日志应直接输出策略状态、启动原因、满充原因、目标 `ICHG`、输入源与 DC 降档计时器。
 - Dashboard charger detail 应显示短状态 token，同时在 notice 里保留精确状态名。
+- `TS_WARM` 时 Dashboard charger detail 应优先显示 `WARM`，即使充电策略本身仍处于 `CHG500/CHG100`。
 - Dashboard charger detail 与首页 charge 区域应优先显示 `BQ25792 IBAT_ADC` 实测电流；若 `IBAT_ADC` 暂时不可用，则回退到目标 `ICHG`。
 
 ### COULD
@@ -78,6 +81,7 @@
 - 当输入源明确为 `DcIn` 且 `IBUS` 连续过高时，策略从 `charging_500ma` 切到 `charging_100ma_dc_derated`；当 `IBUS` 低于恢复阈值足够久后，回到 `charging_500ma`。
 - 当 `TPS55288` 总输出功率超过 `5W` 时，策略进入 `blocked_output_over_limit` 并停充。
 - 前面板的 charger 电流显示优先取 `BQ25792 IBAT_ADC`，不再把 `ICHG` 设定值伪装成实测电流。
+- `TS_WARM` 期间前面板 charger detail 的状态 token 必须显示 `WARM`，notice 要说明风扇已被强制拉到高转。
 
 ### Edge cases / errors
 
@@ -103,8 +107,10 @@ None。
 - Given 输入源为 `Auto`，When `IBUS > 3000mA`，Then 不应用 DC 独占降档。
 - Given `BQ40` 遥测缺失或 `charge_ready=false`，When 进入 charger poll，Then 系统进入 `blocked_no_bms` 并禁止充电。
 - Given `TS_COLD=true` 或 `TS_HOT=true`，When 进入 charger poll，Then 系统进入 `blocked_temp` 并禁止充电。
+- Given `TS_WARM=true` 且 `TS_HOT=false`，When 进入 charger poll，Then 充电策略可继续运行，但 charger detail 必须显示 `WARM` 且 notice 说明这是 charger TS warm。
 - Given `TPS55288` 总输出功率超过 `5W`，When 进入 charger poll，Then 系统进入 `blocked_output_over_limit` 并禁止充电。
 - Given `IBAT_ADC` 可用，When 前面板显示 charger 电流，Then 应显示实测 `IBAT` 而不是目标 `ICHG`。
+- Given `LOCK` 由 `XCHG` 触发，When 输出运行时阻断诊断，Then monitor 中必须包含 `ChargingStatus(0x55)` 原始位图与 `UT/LT/STL/RT/STH/HT/OT/PV/LV/MV/HV/IN/SU` 等关键字段。
 
 ## 实现前置条件（Definition of Ready / Preconditions）
 
@@ -168,6 +174,10 @@ None。
 
 ![Charger LOCK](./assets/charger-blocked-no-bms.png)
 
+- `WARM`: `BQ25792 TS_WARM` 已进入预警温区，UI 提示并强制风扇高转，但不因此停充。
+
+![Charger WARM](./assets/charger-warm.png)
+
 ## 资产晋升（Asset promotion）
 
 None。
@@ -196,6 +206,7 @@ None。
 ## 变更记录（Change log）
 
 - 2026-03-28: 建立规格并按“500mA 常规充电 + DC 独占过流降到 100mA + 80%/3.70V 启停 + 满充锁存”收敛主线策略口径。
+- 2026-04-05: charger detail 补充 `TS_WARM -> WARM` 状态与说明文案；`LOCK` 诊断补充 `ChargingStatus(0x55)` 原始位图，便于区分包侧 inhibit / suspend。
 
 ## 参考（References）
 

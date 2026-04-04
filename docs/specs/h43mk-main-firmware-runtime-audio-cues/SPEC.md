@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-03-12
-- Last: 2026-04-04
+- Last: 2026-04-05
 
 ## 背景 / 问题陈述
 
@@ -67,7 +67,7 @@
 - `mains_present_dc` / `mains_absent_dc`：以 `DC5025 VIN>=3V` 的运行时采样作为真相源，在“已知状态之间”变化时触发；charger 通信从 unknown 恢复到 known 时保持静默；仅当 `VIN <-> charger fallback` 的来源切换未伴随 `mains_present` 真假翻转时保持静默，若真假确实变化则仍应触发边沿。
 - `charge_started` / `charge_completed`：charger 状态在“已知相位之间”进入“充电中 / 完成”时触发；首次建链或通信恢复后的 unknown -> known 不补播 one-shot。
 - `battery_low_no_mains` / `battery_low_with_mains`：BMS `RCA` 低电告警按市电有无拆分。
-- `high_stress`：`TS_COOL` / `TS_WARM` / `TREG` 或 TMP112 到达 `TLOW` 但尚未触发停机时触发。
+- `high_stress`：`TS_COOL` / `TREG` 或 TMP112 到达 `TLOW` 但尚未触发停机时触发；`TS_WARM` 仅驱动 UI/散热，不再播放 warning cue。
 - `shutdown_protection`：`THERM_KILL_N` 断言或保护导致输出被关时触发。
 - `io_over_voltage` / `io_over_current`：charger/TPS 解码后的保护位触发。
 - `module_fault`：运行期关键模块通信错误期间触发。
@@ -98,6 +98,7 @@
   - 优先级：`Error > Warning > Status > Boot`
   - 同优先级 `one_shot` 保持 FIFO。
 - 运行时场景正确触发/停播：市电恢复/丢失、充电开始/完成、电池低电（区分有无市电）、高压力进入/退出、模块通信故障进入/恢复、保护/过压/过流进入/清除。
+- `BQ25792 TS_WARM` 期间不得触发 `high_stress` 提示音；若同时存在 `TS_COOL`、`TREG` 或 TMP112 `TLOW`，仍按原 warning/error 口径播报更高等级热事件。
 - 当 `battery_protection` 与低电条件同时成立时，只允许播放 `battery_protection`；`BatteryLowNoMains` / `BatteryLowWithMains` 必须被全局压制，直到保护解除后再按当前 `RCA + mains_present` 状态恢复。
 - `continuous_loop` cue 必须在单段 PCM 末尾无缝回绕，不能每播完 1 段就重新触发一次 `start_playback`；否则错误音会在每轮边界听出额外起音/断点。
 - 通信恢复语义：
@@ -194,3 +195,4 @@
 - 2026-03-15: hotfix，运行时市电音效判定改为只消费 `DC5025 VIN>=3V`，修复 charger `input_present` 抖动导致的误判来电/断电音。
 - 2026-03-15: hotfix，`VIN` 瞬时采样缺失时保留最近一次已知市电状态，避免 INA CH3 单次读失败伪造 `mains_absent_dc` / `battery_low_no_mains`；连续缺失则退回 charger `input_present` 兜底。
 - 2026-04-04: hotfix，针对 idle 主板周期性“滴”声回归，把运行期 `DmaError::Late` 从每轮噪声日志改为 burst 级 `detected / recovered / disabled` 状态机；首次 `Late` 立即 re-prime transport，恢复成功后清 burst，5 秒窗口内连续 3 次 recovery attempt 仍失败则静默降级，避免在无业务 cue 边沿时由 DMA underrun 继续制造杂音。
+- 2026-04-05: hotfix，`BQ25792 TS_WARM` 从 `high_stress` 播报条件中移除，避免温区预警在正常充电 warm 档位下每 2 秒重复提示；`TS_WARM` 改由界面状态与风扇全速 override 承载。
