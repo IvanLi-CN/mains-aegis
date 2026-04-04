@@ -928,7 +928,8 @@ fn main() -> ! {
                         RuntimeAudioReprimeResult::Ready { .. } => {
                             audio_recovery.clear();
                         }
-                        RuntimeAudioReprimeResult::Late | RuntimeAudioReprimeResult::Fatal => {
+                        RuntimeAudioReprimeResult::Late => {}
+                        RuntimeAudioReprimeResult::Fatal => {
                             disable_runtime_audio!();
                         }
                     }

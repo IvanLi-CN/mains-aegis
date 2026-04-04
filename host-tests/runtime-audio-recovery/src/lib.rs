@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-#[path = "../../../src/runtime_audio_recovery.rs"]
+#[path = "../../../firmware/src/runtime_audio_recovery.rs"]
 mod runtime_audio_recovery;
 
 #[cfg(test)]
