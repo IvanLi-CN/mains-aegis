@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-03-12
-- Last: 2026-03-15
+- Last: 2026-04-04
 
 ## 背景 / 问题陈述
 
@@ -88,6 +88,8 @@
 - 启动 / 自检阶段不得因 DMA underrun 打出 `audio: dma available failed during self-test err=Late`；`boot_startup` 听感必须连续，不得出现明显截断后整机永久静音。
 - DMA ring 容量可大于运行期常驻水位，但启动 / 自检与运行期都必须使用受控 refill 水位，避免把 `boot_startup` 或静音一次性灌满整条 ring，导致高优先级 cue 听感延迟失控。
 - 若运行期 DMA `available()` / `push_with()` 连续失败，主固件必须关闭运行时音频调度并静默降级；不得让 cue 在无 DMA 消费者时停留在“假播放”状态。
+- 对当前 idle 主板（BMS `rca=false`、无业务 cue 新边沿）连续 monitor 至少 120 秒时，不得出现用户可感知的周期性“滴”声；若存在 DMA underrun，只允许出现有界的 `detected -> recovered` 或 `detected -> disabled` 日志序列，不得再按主循环频率重复刷同一条 `Late` 告警。
+- 运行期 DMA underrun 恢复策略冻结为：首次 `Late` 立即触发一次 transport re-prime；后续正常 `available()/push_with()` 必须清除 burst；若同一 5 秒窗口内 3 次 recovery attempt 后仍再次命中 `Late`，则主固件必须静默降级并只输出一次终止告警。
 - BMS 激活 / isolation 窗口期间，运行时音效快照仍需持续刷新；激活流程可以短路主循环中的其他动作，但不能让 cue 状态冻结。
 - 调度语义固定为：
   - `status` -> `one_shot`
@@ -142,6 +144,7 @@
 - BMS 激活若以 `no_battery` 收尾，后续短时间内的 BQ40 invalid / absent 轮询不得立刻把语义翻回 `module_fault`；在下一次明确的正常 pack 快照或新的激活尝试之前，应继续维持 `no_battery + rca_alarm` 的 warning 音频语义，并压住由同一轮自检残留的 `module_fault` 聚合结果，避免 warning / error cue 交替打架。
 - BMS 激活若以 `no_battery` 收尾，则同一保持窗口内也不得再额外拉起 `battery_protection`；`PF/OCA/TCA/OTA/TDA` 这类位若来自该次 `no_battery` 快照，只能保留给诊断/UI，不得与 `BatteryLowWithMains` 同时播报。
 - 运行期若出现 `DmaError::Late`，允许后续 refill 恢复 DMA 供给，但不得通过 `audio_manager.stop()` 把当前 warning cue 从头重启；否则用户会听到额外的重复起音/“嘟声”伪装成第二个提示音。
+- 运行期 `DmaError::Late` 的诊断日志必须从“每轮一条噪声 warn”收敛为 burst 级事件：`detected`、`recovered`、`disabled` 三类，并附带 `current cue / queued / refill_budget / consecutive_late / recovery_attempts`，方便把“业务 cue 误触发”和“transport underrun”区分开。
 - 当 `module_fault` / `battery_protection` / `battery_low` 发生切换时，运行期必须刷新 DMA ring，清掉已缓冲的旧 cue 采样；否则即使逻辑层已切 cue，扬声器仍可能继续播出上一段错误音并与新 cue 混音。
 - 运行期强制刷新 DMA ring 时，切换边界必须附带短淡出/淡入过渡，避免直接从旧采样硬切到 0 或新 cue 导致 click/pop 爆音。
 - 电池相关音效优先级现在固定为：`BatteryProtection > BatteryLowNoMains/BatteryLowWithMains`；若两者同时为真，运行时音频快照必须把低电状态收敛为 `Inactive`，从源头禁止 warning/error 并发。
@@ -149,6 +152,7 @@
 - 对开机即缺失的 BMS，只要自检已判定 “missing/err” 且当前板级仍存在 charger path 或 BMS 输出恢复门控，运行时音频快照就必须在首次刷新时携带 `module_fault=true`，避免故障音被 `runtime_seen` 门控吞掉。
 - 运行时后接入的 BMS 现在会把“曾成功建链”状态保留下来；即便后续轮询掉线，`module_fault` 也不会再被启动快照门控吞掉。
 - `shutdown_mode_entered` 与 `io_over_power` 继续保持 dormant，并在主固件中明确不触发。
+- 运行期 DMA transport 现在单独维护 underrun burst 状态机：transition flush 仍用于 cue 切换，underrun recovery 只负责零填充 + re-prime transport，不再额外 arm transition bridge 或伪造新的 cue 起音。
 
 ## 验证记录
 
@@ -160,7 +164,7 @@
 
 - 当前 worktree 初始化前 `ina3221-async` 与 `tps55288` submodule 为空目录；本轮实现前需要补齐子模块内容后再执行构建验证。
 - 运行时资产继续复用 `firmware/assets/audio/test-fw-cues/*.wav`，不直接从 `docs/audio-cues-preview/**` 读取。
-- 当前 `esp-hal` I2S circular DMA 生命周期未提供无缝重绑 ring 的现成路径；本轮 hotfix 通过“统一大 ring 容量 + 分阶段 refill 水位”消除启动期 underrun，而不是在运行期热切 ring。
+- 当前 `esp-hal` I2S circular DMA 生命周期仍未提供无缝热恢复路径；本轮修复继续采用“保留现有 cue 状态 + transport 级 re-prime + 有界止损”策略，而不是重做整套音频框架。
 - 当前主固件没有真实 shutdown flow，且没有独立 over-power 状态源，因此对应 cue 必须保持 dormant。
 
 ## 变更记录（Change log）
@@ -189,3 +193,4 @@
 - 2026-03-14: hotfix，`continuous_loop` 的样本回绕现在保留重采样余量，不再在边界重复开头样本或丢掉尾部样本，进一步降低保护音循环接缝感。
 - 2026-03-15: hotfix，运行时市电音效判定改为只消费 `DC5025 VIN>=3V`，修复 charger `input_present` 抖动导致的误判来电/断电音。
 - 2026-03-15: hotfix，`VIN` 瞬时采样缺失时保留最近一次已知市电状态，避免 INA CH3 单次读失败伪造 `mains_absent_dc` / `battery_low_no_mains`；连续缺失则退回 charger `input_present` 兜底。
+- 2026-04-04: hotfix，针对 idle 主板周期性“滴”声回归，把运行期 `DmaError::Late` 从每轮噪声日志改为 burst 级 `detected / recovered / disabled` 状态机；首次 `Late` 立即 re-prime transport，恢复成功后清 burst，5 秒窗口内连续 3 次 recovery attempt 仍失败则静默降级，避免在无业务 cue 边沿时由 DMA underrun 继续制造杂音。

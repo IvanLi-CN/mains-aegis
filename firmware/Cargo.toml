@@ -69,3 +69,6 @@ u8g2-fonts = { version = "0.7.2", default-features = false }
 
 [profile.dev.package.xtensa-lx-rt]
 opt-level = "z"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(codex_host_test)'] }
