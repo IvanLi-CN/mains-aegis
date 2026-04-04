@@ -908,6 +908,22 @@ fn main() -> ! {
         }};
     }
 
+    macro_rules! log_runtime_audio_recovered {
+        ($refill_budget:expr) => {{
+            if let Some(snapshot) = audio_recovery.note_transport_healthy() {
+                let status = audio_manager.status();
+                defmt::info!(
+                    "audio: dma underrun recovered current={=?} queued={=u8} refill_budget={=u32} consecutive_late={=u8} recovery_attempts={=u8}",
+                    status.current,
+                    status.queued,
+                    ($refill_budget) as u32,
+                    snapshot.consecutive_late,
+                    snapshot.recovery_attempts
+                );
+            }
+        }};
+    }
+
     macro_rules! service_runtime_audio {
         ($power:ident) => {{
             if audio_enabled {
@@ -953,18 +969,8 @@ fn main() -> ! {
                             {
                                 defmt::warn!("audio: dma push failed; disabling runtime audio");
                                 disable_audio = true;
-                            } else if budget >= 4 {
-                                if let Some(snapshot) = audio_recovery.note_healthy_refill() {
-                                    let status = audio_manager.status();
-                                    defmt::info!(
-                                        "audio: dma underrun recovered current={=?} queued={=u8} refill_budget={=u32} consecutive_late={=u8} recovery_attempts={=u8}",
-                                        status.current,
-                                        status.queued,
-                                        budget as u32,
-                                        snapshot.consecutive_late,
-                                        snapshot.recovery_attempts
-                                    );
-                                }
+                            } else {
+                                log_runtime_audio_recovered!(budget);
                             }
                         }
                         Ok(_) => {}
@@ -990,8 +996,10 @@ fn main() -> ! {
                                         "audio: dma recovery available failed err={=?}; disabling runtime audio",
                                         "audio: dma recovery restart failed err={=?}; disabling runtime audio"
                                     ) {
-                                        RuntimeAudioReprimeResult::Ready { .. }
-                                        | RuntimeAudioReprimeResult::Late => {}
+                                        RuntimeAudioReprimeResult::Ready { refill_budget } => {
+                                            log_runtime_audio_recovered!(refill_budget);
+                                        }
+                                        RuntimeAudioReprimeResult::Late => {}
                                         RuntimeAudioReprimeResult::Fatal => {
                                             disable_audio = true;
                                         }

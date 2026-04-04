@@ -36,13 +36,43 @@ mod tests {
             }
         );
         assert_eq!(
-            state.note_healthy_refill(),
+            state.note_transport_healthy(),
             Some(RuntimeAudioRecoverySnapshot {
                 consecutive_late: 2,
                 recovery_attempts: 2,
             })
         );
-        assert_eq!(state.note_healthy_refill(), None);
+        assert_eq!(state.note_transport_healthy(), None);
+    }
+
+    #[test]
+    fn runtime_audio_recovery_treats_post_recovery_late_as_new_burst() {
+        let start = Instant::now();
+        let mut state = RuntimeAudioRecoveryState::new();
+        assert!(matches!(
+            state.note_late(start),
+            RuntimeAudioRecoveryDecision::AttemptRecover {
+                first_in_burst: true,
+                ..
+            }
+        ));
+        assert_eq!(
+            state.note_transport_healthy(),
+            Some(RuntimeAudioRecoverySnapshot {
+                consecutive_late: 1,
+                recovery_attempts: 1,
+            })
+        );
+        assert_eq!(
+            state.note_late(start + Duration::from_secs(1)),
+            RuntimeAudioRecoveryDecision::AttemptRecover {
+                first_in_burst: true,
+                snapshot: RuntimeAudioRecoverySnapshot {
+                    consecutive_late: 1,
+                    recovery_attempts: 1,
+                },
+            }
+        );
     }
 
     #[test]

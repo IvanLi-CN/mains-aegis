@@ -61,7 +61,7 @@ impl RuntimeAudioRecoveryState {
         self.start_recovery(false)
     }
 
-    pub(crate) fn note_healthy_refill(&mut self) -> Option<RuntimeAudioRecoverySnapshot> {
+    pub(crate) fn note_transport_healthy(&mut self) -> Option<RuntimeAudioRecoverySnapshot> {
         let snapshot = self.snapshot_if_active()?;
         self.clear();
         Some(snapshot)
