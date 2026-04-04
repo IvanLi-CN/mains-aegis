@@ -1,7 +1,7 @@
-#[cfg(not(any(test, feature = "host-test")))]
+#[cfg(not(any(test, codex_host_test)))]
 use esp_hal::time::{Duration, Instant};
 
-#[cfg(any(test, feature = "host-test"))]
+#[cfg(any(test, codex_host_test))]
 use std::time::{Duration, Instant};
 
 pub(crate) const AUDIO_RUNTIME_LATE_RECOVERY_WINDOW: Duration = Duration::from_secs(5);
@@ -41,12 +41,12 @@ impl RuntimeAudioRecoveryState {
     }
 
     pub(crate) fn note_late(&mut self, now: Instant) -> RuntimeAudioRecoveryDecision {
-        #[cfg(not(any(test, feature = "host-test")))]
+        #[cfg(not(any(test, codex_host_test)))]
         let reset_window = self
             .burst_started_at
             .is_none_or(|started| now >= started + AUDIO_RUNTIME_LATE_RECOVERY_WINDOW);
 
-        #[cfg(any(test, feature = "host-test"))]
+        #[cfg(any(test, codex_host_test))]
         let reset_window = self.burst_started_at.map_or(true, |started| {
             now.duration_since(started) >= AUDIO_RUNTIME_LATE_RECOVERY_WINDOW
         });

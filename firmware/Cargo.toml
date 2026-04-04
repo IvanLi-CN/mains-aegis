@@ -18,7 +18,6 @@ bms-dual-probe-diag = []
 tmp-hw-protect-test = []
 # Test firmware gate (prevents default cargo build/check from forcing test-fw feature selection).
 test-fw = []
-host-test = []
 tps-test-fw = []
 # `tps-test-fw` compile-time profile selectors. Each selector group is mutually exclusive; when a
 # group is omitted the firmware falls back to the safest default for board bring-up.
@@ -70,3 +69,6 @@ u8g2-fonts = { version = "0.7.2", default-features = false }
 
 [profile.dev.package.xtensa-lx-rt]
 opt-level = "z"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(codex_host_test)'] }

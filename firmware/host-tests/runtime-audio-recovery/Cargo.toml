@@ -3,9 +3,5 @@ name = "runtime-audio-recovery-tests"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-default = ["host-test"]
-host-test = []
-
 [lib]
 path = "src/lib.rs"
