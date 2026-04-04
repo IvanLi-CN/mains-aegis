@@ -858,9 +858,11 @@ fn main() -> ! {
     }
 
     macro_rules! reprime_runtime_audio_dma {
-        ($push_failed_msg:literal, $available_failed_msg:literal, $restart_failed_msg:literal) => {{
+        ($zero_buffer:expr, $push_failed_msg:literal, $available_failed_msg:literal, $restart_failed_msg:literal) => {{
             audio_transfer = None;
-            audio_manager.fill(&mut tx_buffer[..]);
+            if $zero_buffer {
+                tx_buffer.fill(0);
+            }
             if let Some(i2s_tx) = i2s_tx.as_mut() {
                 match i2s_tx.write_dma_circular(&tx_buffer) {
                     Ok(mut transfer) => match transfer.available() {
@@ -886,7 +888,7 @@ fn main() -> ! {
                         }
                         Ok(_) => {
                             audio_transfer = Some(transfer);
-                            RuntimeAudioReprimeResult::Ready { refill_budget: 0 }
+                            RuntimeAudioReprimeResult::Late
                         }
                         Err(DmaError::Late) => {
                             audio_transfer = Some(transfer);
@@ -921,6 +923,7 @@ fn main() -> ! {
                 if flush_runtime_audio {
                     audio_manager.arm_transition_bridge();
                     match reprime_runtime_audio_dma!(
+                        true,
                         "audio: dma transition flush push failed; disabling runtime audio",
                         "audio: dma transition flush available failed err={=?}; disabling runtime audio",
                         "audio: dma transition flush restart failed err={=?}; disabling runtime audio"
@@ -952,31 +955,21 @@ fn main() -> ! {
                             {
                                 defmt::warn!("audio: dma push failed; disabling runtime audio");
                                 disable_audio = true;
-                            } else if let Some(snapshot) = audio_recovery.note_healthy_refill() {
-                                let status = audio_manager.status();
-                                defmt::info!(
-                                    "audio: dma underrun recovered current={=?} queued={=u8} refill_budget={=u32} consecutive_late={=u8} recovery_attempts={=u8}",
-                                    status.current,
-                                    status.queued,
-                                    budget as u32,
-                                    snapshot.consecutive_late,
-                                    snapshot.recovery_attempts
-                                );
+                            } else if budget >= 4 {
+                                if let Some(snapshot) = audio_recovery.note_healthy_refill() {
+                                    let status = audio_manager.status();
+                                    defmt::info!(
+                                        "audio: dma underrun recovered current={=?} queued={=u8} refill_budget={=u32} consecutive_late={=u8} recovery_attempts={=u8}",
+                                        status.current,
+                                        status.queued,
+                                        budget as u32,
+                                        snapshot.consecutive_late,
+                                        snapshot.recovery_attempts
+                                    );
+                                }
                             }
                         }
-                        Ok(_) => {
-                            if let Some(snapshot) = audio_recovery.note_healthy_refill() {
-                                let status = audio_manager.status();
-                                defmt::info!(
-                                    "audio: dma underrun recovered current={=?} queued={=u8} refill_budget={=u32} consecutive_late={=u8} recovery_attempts={=u8}",
-                                    status.current,
-                                    status.queued,
-                                    0u32,
-                                    snapshot.consecutive_late,
-                                    snapshot.recovery_attempts
-                                );
-                            }
-                        }
+                        Ok(_) => {}
                         Err(DmaError::Late) => {
                             let status = audio_manager.status();
                             match audio_recovery.note_late(now) {
@@ -995,6 +988,7 @@ fn main() -> ! {
                                         );
                                     }
                                     match reprime_runtime_audio_dma!(
+                                        false,
                                         "audio: dma recovery push failed; disabling runtime audio",
                                         "audio: dma recovery available failed err={=?}; disabling runtime audio",
                                         "audio: dma recovery restart failed err={=?}; disabling runtime audio"
