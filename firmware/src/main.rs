@@ -959,18 +959,19 @@ fn main() -> ! {
                         Ok(available) if available >= 4 => {
                             let budget =
                                 audio_refill_budget(available, AUDIO_RUNTIME_WATERMARK_BYTES);
-                            if budget >= 4
-                                && audio_transfer
+                            if budget >= 4 {
+                                if audio_transfer
                                     .push_with(|buf| {
                                         let len = budget.min(buf.len()) & !0x3;
                                         audio_manager.fill(&mut buf[..len])
                                     })
                                     .is_err()
-                            {
-                                defmt::warn!("audio: dma push failed; disabling runtime audio");
-                                disable_audio = true;
-                            } else {
-                                log_runtime_audio_recovered!(budget);
+                                {
+                                    defmt::warn!("audio: dma push failed; disabling runtime audio");
+                                    disable_audio = true;
+                                } else {
+                                    log_runtime_audio_recovered!(budget);
+                                }
                             }
                         }
                         Ok(_) => {}
@@ -996,9 +997,7 @@ fn main() -> ! {
                                         "audio: dma recovery available failed err={=?}; disabling runtime audio",
                                         "audio: dma recovery restart failed err={=?}; disabling runtime audio"
                                     ) {
-                                        RuntimeAudioReprimeResult::Ready { refill_budget } => {
-                                            log_runtime_audio_recovered!(refill_budget);
-                                        }
+                                        RuntimeAudioReprimeResult::Ready { .. } => {}
                                         RuntimeAudioReprimeResult::Late => {}
                                         RuntimeAudioReprimeResult::Fatal => {
                                             disable_audio = true;
