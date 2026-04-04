@@ -860,7 +860,7 @@ fn main() -> ! {
     macro_rules! reprime_runtime_audio_dma {
         ($push_failed_msg:literal, $available_failed_msg:literal, $restart_failed_msg:literal) => {{
             audio_transfer = None;
-            tx_buffer.fill(0);
+            audio_manager.fill(&mut tx_buffer[..]);
             if let Some(i2s_tx) = i2s_tx.as_mut() {
                 match i2s_tx.write_dma_circular(&tx_buffer) {
                     Ok(mut transfer) => match transfer.available() {
@@ -925,7 +925,9 @@ fn main() -> ! {
                         "audio: dma transition flush available failed err={=?}; disabling runtime audio",
                         "audio: dma transition flush restart failed err={=?}; disabling runtime audio"
                     ) {
-                        RuntimeAudioReprimeResult::Ready { .. } => {}
+                        RuntimeAudioReprimeResult::Ready { .. } => {
+                            audio_recovery.clear();
+                        }
                         RuntimeAudioReprimeResult::Late | RuntimeAudioReprimeResult::Fatal => {
                             disable_runtime_audio!();
                         }
