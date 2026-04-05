@@ -53,7 +53,7 @@
 - 必须定义字体字高白名单（用于后续新增字体准入），不允许未审批字高进入实现。
 - 组件契约必须覆盖 `TopBar`、`KpiPanel`、`InfoPanel`、`BatteryCard`、`ChargeCard`、`DischgCard`、`DiagCard`、`ActivationDialog`。
 - 状态语义必须统一 `UpsMode`、`SelfCheckCommState`、`BmsActivationState`、`UiFocus`、`touch_irq`。
-- 业务口径固定：`ChargeCard` 仅 `STANDBY` 可充电，其他模式显示 `LOCK/NOAC`。
+- 业务口径固定：`ChargeCard` 状态来自主线 charger state machine；首页只做 `CHG500/CHG100 -> CHG` 的紧凑映射，其余 `WAIT/FULL/WARM/TEMP/LOAD/LOCK/NOAC` 保持不变。
 - 视觉回归清单中的视觉规则必须绑定 `firmware/ui/assets` 资产；全局离线/入口/白名单检查允许使用命令或 targets 验证。
 
 ### SHOULD

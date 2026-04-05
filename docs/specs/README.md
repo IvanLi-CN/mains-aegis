@@ -37,6 +37,6 @@
 | cqd8u | Regulated output module docs + runtime gate state machine | 已完成 | `cqd8u-regulated-output-module/SPEC.md` | 2026-03-16 | 已建立 `docs/modules/`、收敛稳压输出 SoT，并落地显式恢复状态机与本地验证 |
 | frsr9 | Regulated output active derating + shutdown | 已完成 | `frsr9-regulated-output-active-protection/SPEC.md` | 2026-03-16 | 已落地温度/电流双门限主动降额、低压主动停机与显式恢复前置条件 |
 | 2uqhm | TPS/BQ power test firmware | 已完成 | `2uqhm-tps-bq-power-test-firmware/SPEC.md` | 2026-03-21 | 已实现独立 `tps-test-fw`、固定 profile 电源运行时、专用 `TPS TEST` 屏显与三组 `cargo +esp check` 验证 |
-| eu2b8 | BQ25792 500mA charge policy + DC derate | 已完成 | `eu2b8-bq25792-charge-policy/SPEC.md` | 2026-04-05 | 主线已收敛 `80% / 3.70V` 启停、满充锁存、`DC5025` 独占输入降档、`TS_WARM` 前台提示与风扇联动；`BQ25792` ADC 遥测改为 `MSB-first` 解码，`IBUS/VBUS` 不再出现 byte-swapped 假值 |
+| eu2b8 | BQ25792 500mA charge policy + DC derate | 已完成 | `eu2b8-bq25792-charge-policy/SPEC.md` | 2026-04-06 | 主线 charger state machine 已作为 SoT；已补齐 `LOAD` 的 `2入3出` 回差、输出功率未知保守禁充、首页 `ChargeCard` runtime 紧凑映射，以及 `BQ25792` ADC 的 `MSB-first` 遥测解码 |
 | 2drzf | BQ40 mainboard DF protection baseline | 已完成 | `2drzf-bq40-mainboard-df-protection-baseline/SPEC.md` | 2026-04-03 | 冻结 `asset-df-mainboard` 的 `OCC/OCD/SOCC/SOCD` 主板基线，并把 `TMP + BMS` 最高温收敛为共享热控真相源 |
 | mturr | Front panel display-chain long-press diagnostics | 已完成 | `mturr-front-panel-display-chain-diagnostics/SPEC.md` | 2026-04-04 | 已完成主固件实现、本地构建、真机 flash/monitor 与 `CENTER` 长按 defmt 取证 |

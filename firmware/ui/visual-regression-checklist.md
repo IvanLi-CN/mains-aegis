@@ -40,7 +40,7 @@
 - Pass criteria:
   - `ChargeCard` 仅显示充电字段，不混入放电或负载字段。
   - `DischgCard` 仅显示放电字段，不混入充电字段。
-  - 非 `STANDBY` 模式下 `ChargeCard` 状态固定 `LOCK/NOAC`。
+  - `ChargeCard` 首页状态必须来自 runtime 紧凑 token，而不是 `UpsMode` 直推。
 
 ### VR-D-04 Battery card semantics
 
@@ -67,7 +67,7 @@
   - `assets/self-check-c-assist-up.png`
   - `assets/self-check-c-backup-touch.png`
 - Pass criteria:
-  - `COMM` 状态词仅出现规范词汇：基础态 `PEND/OK/WARN/ERR/N/A` 与派生态 `RUN/LOCK/IDLE/HOT`。
+  - `COMM` 状态词仅出现规范词汇：基础态 `PEND/OK/WARN/ERR/N/A` 与派生态 `RUN/LOCK/IDLE/HOT/CHG/WAIT/FULL/WARM/TEMP/LOAD/CHG500/CHG100`。
   - 交互高亮由 `UiFocus` 驱动，不改变模块业务语义。
 
 ### VR-S-03 Module naming consistency

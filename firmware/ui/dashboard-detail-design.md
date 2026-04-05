@@ -57,7 +57,7 @@
 ### `Charger`
 
 - 顶栏标题：`CHARGER DETAIL`
-- 状态 chip：`ACTIVE / IDLE / LOCK / FAULT`
+- 状态 chip：`CHG500 / CHG100 / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC / WARN / FAULT`
 - 主区：输入来源图标 + `IN W`；电池图标 + `CHARGE W`
 - 次区：charging state / source select / status detail
 - 底栏：charger abnormal summary

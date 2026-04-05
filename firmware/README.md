@@ -310,9 +310,11 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
   - `STANDBY`（待机）：输入存在，TPS55288 无实际输出电流
   - `ASSIST`（补充）：输入存在，TPS55288 有实际输出电流
   - `BACKUP`（后备）：输入不存在
-- 充电策略（本轮 UI 冻结）：
-  - 仅 `STANDBY` 允许电池充电
-  - `BYPASS/ASSIST/BACKUP` 不允许充电（`BYPASS` 手动充电能力不在本轮 Dashboard 展示范围）
+- 充电策略（主线运行时 SoT）：
+  - 以 `firmware/src/output/mod.rs` 中的 charger state machine 为准
+  - 首页 `CHARGE` 卡显示紧凑 token：`CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`
+  - charger detail 保留完整运行时 token：`CHG500 / CHG100 / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`
+  - `CHG500/CHG100 -> CHG` 仅发生在首页紧凑映射，不改变运行时状态机语义
 - Dashboard 字段分层（项目口径）：
   - 市电存在（`BYPASS/STANDBY/ASSIST`）：主 KPI 显示 `PIN` 与 `POUT`
   - 市电缺失（`BACKUP`）：主 KPI 显示 `POUT` 与 `IOUT`
@@ -326,7 +328,7 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
   - `LIMIT`=普通访问可信，但 `DSG` 路径未就绪
   - `RECOVER`=启动期已批准放电恢复尝试，恢复链路进行中
   - `ERR`=普通访问未识别；只有这种情况才允许手动打开“激活”对话框
-- `BQ25792` 卡片语义：芯片正常但当前未充电时显示 `IDLE`，不把“电池路径受限”误判成 charger 故障。
+- `BQ25792` 卡片语义：芯片正常但当前未充电时优先显示运行时 `WAIT/FULL/LOAD/LOCK/NOAC/TEMP/WARM`，不再使用旧的 `IDLE/READY` 概括状态。
 - `TPS55288-A/B` 卡片语义：自检阶段两路都只做相同的只读探测，并保持 `OE=0`；当 `BMS` 尚未允许放电或仍无法确认 `VBAT` 网络有合理电压时，`TPS` 的 `I2C NACK/not_present` 要显示为 `WARN`（并给出上游等待提示），而不是 `ERR`；只有在上游供电前提已满足后仍探测失败，才显示 `ERR`。
 - 自检页只有在本模式必需模块全部 clear 时才会切到 Dashboard；若 `BMS` 仍为 `LIMIT`，页面继续停留在 `Variant C` 并显示运行期真实数据。
 - 页面切换：本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard
