@@ -174,6 +174,36 @@ where
     read_u16(i2c, reg_lsb).map(|value| i16::from_le_bytes(value.to_le_bytes()))
 }
 
+pub const fn decode_adc_u16_bytes(bytes: [u8; 2]) -> u16 {
+    u16::from_be_bytes(bytes)
+}
+
+pub const fn decode_adc_i16_bytes(bytes: [u8; 2]) -> i16 {
+    i16::from_be_bytes(bytes)
+}
+
+/// ADC telemetry registers on BQ25792 return the 16-bit sample in MSB-first byte order.
+///
+/// This differs from the little-endian layout used by the writable limit/configuration words,
+/// so ADC reads need a dedicated helper.
+pub fn read_adc_u16<I2C>(i2c: &mut I2C, reg: u8) -> Result<u16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let mut buf = [0u8; 2];
+    i2c.write_read(I2C_ADDRESS, &[reg], &mut buf)?;
+    Ok(decode_adc_u16_bytes(buf))
+}
+
+pub fn read_adc_i16<I2C>(i2c: &mut I2C, reg: u8) -> Result<i16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let mut buf = [0u8; 2];
+    i2c.write_read(I2C_ADDRESS, &[reg], &mut buf)?;
+    Ok(decode_adc_i16_bytes(buf))
+}
+
 pub fn write_u8<I2C>(i2c: &mut I2C, reg: u8, value: u8) -> Result<(), I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -523,6 +553,16 @@ mod tests {
         assert!(power_path_adc_config_ok(state));
         assert!(!power_path_adc_ready(state, 0));
         assert!(power_path_adc_ready(state, status3::ADC_DONE_STAT));
+    }
+
+    #[test]
+    fn decode_adc_u16_bytes_uses_msb_first_order() {
+        assert_eq!(decode_adc_u16_bytes([0x14, 0x55]), 5_205);
+    }
+
+    #[test]
+    fn decode_adc_i16_bytes_preserves_signed_samples() {
+        assert_eq!(decode_adc_i16_bytes([0xFF, 0x9C]), -100);
     }
 }
 

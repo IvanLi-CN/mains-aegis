@@ -688,12 +688,12 @@ impl TpsTestRuntime {
             .map(|state| bq25792::power_path_adc_ready(state, status3))
             .unwrap_or(false);
         let vbat_mv = if adc_ready {
-            bq25792::read_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok()
+            bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok()
         } else {
             None
         };
         let ibat_ma = if adc_ready {
-            bq25792::read_i16(&mut self.i2c, bq25792::reg::IBAT_ADC)
+            bq25792::read_adc_i16(&mut self.i2c, bq25792::reg::IBAT_ADC)
                 .ok()
                 .map(i32::from)
         } else {
