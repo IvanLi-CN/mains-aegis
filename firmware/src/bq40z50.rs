@@ -73,7 +73,17 @@ pub mod mac {
 }
 
 pub mod data_flash {
+    pub const SBS_CONFIGURATION: u16 = 0x4889;
     pub const POWER_CONFIG: u16 = 0x488B;
+    pub const CHARGE_TEMP_T1: u16 = 0x4A0B;
+    pub const CHARGE_TEMP_T2: u16 = 0x4A0D;
+    pub const CHARGE_TEMP_T5: u16 = 0x4A0F;
+    pub const CHARGE_TEMP_T6: u16 = 0x4A11;
+    pub const CHARGE_TEMP_T3: u16 = 0x4A13;
+    pub const CHARGE_TEMP_T4: u16 = 0x4A15;
+    pub const CHARGE_TEMP_HYSTERESIS: u16 = 0x4A17;
+    pub const TEMPERATURE_ENABLE: u16 = 0x4A7B;
+    pub const TEMPERATURE_MODE: u16 = 0x4A7C;
     pub const DA_CONFIGURATION: u16 = 0x4A7D;
 }
 
@@ -447,6 +457,29 @@ where
     ])))
 }
 
+/// Read the 32-bit ChargingStatus() block response.
+///
+/// TRM marks 0x55 as an H4/block command, so reading it as a plain word can
+/// return stale or truncated bytes.
+pub fn read_charging_status<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<u32>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let Some(raw) = read_block_raw(i2c, addr, cmd::CHARGING_STATUS)? else {
+        return Ok(None);
+    };
+    if raw.payload_len < 4 {
+        return Ok(None);
+    }
+
+    Ok(Some(u32::from_le_bytes([
+        raw.payload[0],
+        raw.payload[1],
+        raw.payload[2],
+        raw.payload[3],
+    ])))
+}
+
 pub fn read_mac_u32<I2C>(i2c: &mut I2C, addr: u8, mac_cmd: u16) -> Result<Option<u32>, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -489,6 +522,24 @@ where
     I2C: embedded_hal::i2c::I2c,
 {
     read_mac_u16(i2c, addr, df_addr)
+}
+
+pub fn read_data_flash_u8<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+) -> Result<Option<u8>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let Some(raw) = read_mac_block_raw(i2c, addr, df_addr)? else {
+        return Ok(None);
+    };
+    if raw.payload_len < 1 {
+        return Ok(None);
+    }
+
+    Ok(Some(raw.payload[0]))
 }
 
 /// Convert Temperature() units (0.1 K) to 0.1 C (i.e., C * 10).
@@ -710,5 +761,48 @@ mod tests {
             .unwrap();
 
         assert_eq!(value, 0x8127);
+    }
+
+    #[test]
+    fn read_charging_status_decodes_h4_block_payloads() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let payload = [0x03, 0x20, 0x00, 0x00];
+        let mut plain_frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+        plain_frame[0] = 4;
+        plain_frame[1..5].copy_from_slice(&payload);
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd::CHARGING_STATUS]),
+            Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
+            Step::Write(addr, vec![cmd::CHARGING_STATUS]),
+            Step::Read(addr, plain_frame),
+        ]);
+
+        let value = read_charging_status(&mut i2c, addr).unwrap().unwrap();
+
+        assert_eq!(value, 0x0000_2003);
+    }
+
+    #[test]
+    fn read_data_flash_u8_reads_single_byte_payloads() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let payload = [0x1e];
+        let mut plain_frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+        plain_frame[0] = 1;
+        plain_frame[1] = payload[0];
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd::MANUFACTURER_ACCESS, 0x7b, 0x4a]),
+            Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
+            Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
+            Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
+            Step::Read(addr, plain_frame),
+        ]);
+
+        let value = read_data_flash_u8(&mut i2c, addr, data_flash::TEMPERATURE_ENABLE)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(value, 0x1e);
     }
 }

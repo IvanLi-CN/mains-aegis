@@ -126,6 +126,7 @@ const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
 const VIN_MAINS_LATCH_FAILURE_LIMIT: u8 = 2;
 const BMS_DIAG_BREADCRUMB_LEN: usize = 8;
 const BMS_DIAG_BREADCRUMB_VERSION: u8 = 1;
+const BMS_SBS_CONFIGURATION_SMB_CELL_TEMP: u8 = 1 << 6;
 
 #[ram(unstable(rtc_fast, persistent))]
 static mut BMS_DIAG_BREADCRUMB_RTC: [u8; BMS_DIAG_BREADCRUMB_LEN] = [0; BMS_DIAG_BREADCRUMB_LEN];
@@ -282,6 +283,19 @@ fn bq40_mac_bit(raw: Option<u32>, mask: u32) -> Option<bool> {
 
 fn bq40_df_bit(raw: Option<u16>, mask: u16) -> Option<bool> {
     raw.map(|value| (value & mask) != 0)
+}
+
+fn bq40_df_byte_bit(raw: Option<u8>, mask: u8) -> Option<bool> {
+    raw.map(|value| (value & mask) != 0)
+}
+
+fn bq40_temp_c_x10(raw_k_x10: Option<u16>) -> Option<i16> {
+    raw_k_x10.and_then(|value| {
+        let temp_c_x10 = bq40z50::temp_c_x10_from_k_x10(value);
+        (-400..=1250)
+            .contains(&temp_c_x10)
+            .then_some(temp_c_x10 as i16)
+    })
 }
 
 fn bq40_pin16_mode_name(da_configuration: Option<u16>) -> &'static str {
@@ -449,6 +463,18 @@ fn log_bq40_config_detail<I2C>(
 where
     I2C: embedded_hal::i2c::I2c,
 {
+    let sbs_configuration =
+        bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::SBS_CONFIGURATION)
+            .ok()
+            .flatten();
+    let temperature_enable =
+        bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::TEMPERATURE_ENABLE)
+            .ok()
+            .flatten();
+    let temperature_mode =
+        bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::TEMPERATURE_MODE)
+            .ok()
+            .flatten();
     let da_configuration =
         bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::DA_CONFIGURATION)
             .ok()
@@ -458,17 +484,22 @@ where
         .flatten();
 
     defmt::info!(
-        "bms_diag_cfg: addr=0x{=u8:x} stage={} op_status={=?} emshut={=?} sec0={=?} btp_int={=?} da_configuration={=?} power_config={=?} pin16_mode={} nr={=?} emshut_en={=?} emshut_pexit_dis={=?} in_system_sleep={=?} sleep_df={=?} emshut_exit_comm={=?} emshut_exit_vpack={=?} auto_ship_en={=?}",
+        "bms_diag_cfg: addr=0x{=u8:x} stage={} op_status={=?} emshut={=?} sec0={=?} btp_int={=?} sbs_configuration={=?} smb_cell_temp={=?} temperature_enable={=?} temperature_mode={=?} da_configuration={=?} power_config={=?} pin16_mode={} nr={=?} ftemp={=?} emshut_en={=?} emshut_pexit_dis={=?} in_system_sleep={=?} sleep_df={=?} emshut_exit_comm={=?} emshut_exit_vpack={=?} auto_ship_en={=?}",
         addr,
         stage,
         op_status,
         bq40_op_bit(op_status, bq40z50::operation_status::EMSHUT),
         bq40_op_bit(op_status, bq40z50::operation_status::SEC0),
         bq40_op_bit(op_status, bq40z50::operation_status::BTP_INT),
+        sbs_configuration,
+        bq40_df_byte_bit(sbs_configuration, BMS_SBS_CONFIGURATION_SMB_CELL_TEMP),
+        temperature_enable,
+        temperature_mode,
         da_configuration,
         power_config,
         bq40_pin16_mode_name(da_configuration),
         bq40_df_bit(da_configuration, bq40z50::da_configuration::NR),
+        bq40_df_bit(da_configuration, bq40z50::da_configuration::FTEMP),
         bq40_df_bit(da_configuration, bq40z50::da_configuration::EMSHUT_EN),
         bq40_df_bit(da_configuration, bq40z50::da_configuration::EMSHUT_PEXIT_DIS),
         bq40_df_bit(da_configuration, bq40z50::da_configuration::IN_SYSTEM_SLEEP),
@@ -479,6 +510,87 @@ where
     );
 
     da_configuration.is_some() || power_config.is_some()
+}
+
+fn log_bq40_charge_temp_detail<I2C>(i2c: &mut I2C, addr: u8, stage: &'static str)
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let sbs_configuration =
+        bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::SBS_CONFIGURATION)
+            .ok()
+            .flatten();
+    let temperature_enable =
+        bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::TEMPERATURE_ENABLE)
+            .ok()
+            .flatten();
+    let temperature_mode =
+        bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::TEMPERATURE_MODE)
+            .ok()
+            .flatten();
+    let temp_word_c_x10 =
+        bq40_temp_c_x10(bq40z50::read_u16(i2c, addr, bq40z50::cmd::TEMPERATURE).ok());
+    let t1_c_x10 = bq40_temp_c_x10(
+        bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CHARGE_TEMP_T1)
+            .ok()
+            .flatten(),
+    );
+    let t2_c_x10 = bq40_temp_c_x10(
+        bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CHARGE_TEMP_T2)
+            .ok()
+            .flatten(),
+    );
+    let t5_c_x10 = bq40_temp_c_x10(
+        bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CHARGE_TEMP_T5)
+            .ok()
+            .flatten(),
+    );
+    let t6_c_x10 = bq40_temp_c_x10(
+        bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CHARGE_TEMP_T6)
+            .ok()
+            .flatten(),
+    );
+    let t3_c_x10 = bq40_temp_c_x10(
+        bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CHARGE_TEMP_T3)
+            .ok()
+            .flatten(),
+    );
+    let t4_c_x10 = bq40_temp_c_x10(
+        bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CHARGE_TEMP_T4)
+            .ok()
+            .flatten(),
+    );
+    let hysteresis_c_x10 = bq40_temp_c_x10(
+        bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CHARGE_TEMP_HYSTERESIS)
+            .ok()
+            .flatten()
+            .map(|value| 2731u16.saturating_add(value)),
+    );
+    let da_status2 = bq40z50::read_da_status2(i2c, addr).ok().flatten();
+
+    defmt::info!(
+        "bms_diag_temp: addr=0x{=u8:x} stage={} smb_cell_temp={=?} temperature_enable={=?} temperature_mode={=?} temp_word_c_x10={=?} t1_c_x10={=?} t2_c_x10={=?} t5_c_x10={=?} t6_c_x10={=?} t3_c_x10={=?} t4_c_x10={=?} hysteresis_c_x10={=?} ts1_c_x10={=?} ts2_c_x10={=?} ts3_c_x10={=?} ts4_c_x10={=?} cell_c_x10={=?} fet_c_x10={=?} gauging_c_x10={=?}",
+        addr,
+        stage,
+        bq40_df_byte_bit(sbs_configuration, BMS_SBS_CONFIGURATION_SMB_CELL_TEMP),
+        temperature_enable,
+        temperature_mode,
+        temp_word_c_x10,
+        t1_c_x10,
+        t2_c_x10,
+        t5_c_x10,
+        t6_c_x10,
+        t3_c_x10,
+        t4_c_x10,
+        hysteresis_c_x10,
+        da_status2.and_then(|detail| bq40_temp_c_x10(Some(detail.ts_temp_k_x10[0]))),
+        da_status2.and_then(|detail| bq40_temp_c_x10(Some(detail.ts_temp_k_x10[1]))),
+        da_status2.and_then(|detail| bq40_temp_c_x10(Some(detail.ts_temp_k_x10[2]))),
+        da_status2.and_then(|detail| bq40_temp_c_x10(Some(detail.ts_temp_k_x10[3]))),
+        da_status2.and_then(|detail| bq40_temp_c_x10(Some(detail.cell_temp_k_x10))),
+        da_status2.and_then(|detail| bq40_temp_c_x10(Some(detail.fet_temp_k_x10))),
+        da_status2.and_then(|detail| bq40_temp_c_x10(Some(detail.gauging_temp_k_x10))),
+    );
 }
 
 fn log_bq40_block_detail<I2C>(i2c: &mut I2C, addr: u8, stage: &'static str, op_status: Option<u32>)
@@ -535,9 +647,8 @@ where
         bq40_mac_bit(pf_status, bq40z50::pf_status::AFER),
     );
 
-    match bq40z50::read_u16(i2c, addr, bq40z50::cmd::CHARGING_STATUS) {
-        Ok(raw) => {
-            let raw = u32::from(raw);
+    match bq40z50::read_charging_status(i2c, addr) {
+        Ok(Some(raw)) => {
             defmt::info!(
                 "bms_diag_charge: addr=0x{=u8:x} stage={} raw=0x{=u32:x} ut={=?} lt={=?} stl={=?} rt={=?} sth={=?} ht={=?} ot={=?} pv={=?} lv={=?} mv={=?} hv={=?} inhibit={=?} suspend={=?} maintenance={=?} term={=?} ccr={=?} cvr={=?} ccc={=?} nct={=?}",
                 addr,
@@ -564,6 +675,13 @@ where
                 bq40_mac_bit(Some(raw), bq40z50::charging_status::NCT),
             );
         }
+        Ok(None) => {
+            defmt::warn!(
+                "bms_diag_charge: addr=0x{=u8:x} stage={} err=block_too_short",
+                addr,
+                stage
+            );
+        }
         Err(e) => {
             defmt::warn!(
                 "bms_diag_charge: addr=0x{=u8:x} stage={} err=read_failed",
@@ -573,6 +691,8 @@ where
             let _ = e;
         }
     }
+
+    log_bq40_charge_temp_detail(i2c, addr, stage);
 }
 
 fn bq40_decode_charge_path(op_status: Option<u32>) -> (Option<bool>, &'static str) {
