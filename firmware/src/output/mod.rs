@@ -2413,11 +2413,14 @@ where
         let charger_status2 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_2).ok();
         let charger_status3 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_3).ok();
         let adc_state = bq25792::ensure_adc_power_path(&mut *i2c).ok();
-        let charger_vbus_adc_mv_local = bq25792::read_u16(&mut *i2c, bq25792::reg::VBUS_ADC).ok();
-        let charger_ibus_adc_ma_local = bq25792::read_i16(&mut *i2c, bq25792::reg::IBUS_ADC).ok();
-        let charger_ibat_adc_ma_local = bq25792::read_i16(&mut *i2c, bq25792::reg::IBAT_ADC).ok();
-        let charger_vbat_adc_mv = bq25792::read_u16(&mut *i2c, bq25792::reg::VBAT_ADC).ok();
-        let charger_vsys_adc_mv = bq25792::read_u16(&mut *i2c, bq25792::reg::VSYS_ADC).ok();
+        let charger_vbus_adc_mv_local =
+            bq25792::read_adc_u16(&mut *i2c, bq25792::reg::VBUS_ADC).ok();
+        let charger_ibus_adc_ma_local =
+            bq25792::read_adc_i16(&mut *i2c, bq25792::reg::IBUS_ADC).ok();
+        let charger_ibat_adc_ma_local =
+            bq25792::read_adc_i16(&mut *i2c, bq25792::reg::IBAT_ADC).ok();
+        let charger_vbat_adc_mv = bq25792::read_adc_u16(&mut *i2c, bq25792::reg::VBAT_ADC).ok();
+        let charger_vsys_adc_mv = bq25792::read_adc_u16(&mut *i2c, bq25792::reg::VSYS_ADC).ok();
 
         if let Some(status1) = charger_status1 {
             initial_audio_charge_phase =
@@ -8076,16 +8079,16 @@ where
         let adc_enabled = adc_state
             .map(|adc_state| bq25792::power_path_adc_enabled(adc_state.ctrl))
             .unwrap_or(false);
-        let raw_ibus_adc_ma =
-            adc_state.and_then(|_| bq25792::read_i16(&mut self.i2c, bq25792::reg::IBUS_ADC).ok());
-        let raw_ibat_adc_ma =
-            adc_state.and_then(|_| bq25792::read_i16(&mut self.i2c, bq25792::reg::IBAT_ADC).ok());
-        let raw_vbus_adc_mv =
-            adc_state.and_then(|_| bq25792::read_u16(&mut self.i2c, bq25792::reg::VBUS_ADC).ok());
-        let vbat_adc_mv =
-            adc_state.and_then(|_| bq25792::read_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok());
-        let vsys_adc_mv =
-            adc_state.and_then(|_| bq25792::read_u16(&mut self.i2c, bq25792::reg::VSYS_ADC).ok());
+        let raw_ibus_adc_ma = adc_state
+            .and_then(|_| bq25792::read_adc_i16(&mut self.i2c, bq25792::reg::IBUS_ADC).ok());
+        let raw_ibat_adc_ma = adc_state
+            .and_then(|_| bq25792::read_adc_i16(&mut self.i2c, bq25792::reg::IBAT_ADC).ok());
+        let raw_vbus_adc_mv = adc_state
+            .and_then(|_| bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VBUS_ADC).ok());
+        let vbat_adc_mv = adc_state
+            .and_then(|_| bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok());
+        let vsys_adc_mv = adc_state
+            .and_then(|_| bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VSYS_ADC).ok());
         let adc_ready = match adc_state {
             Some(adc_state) => bq25792::power_path_adc_ready(adc_state, status3),
             None => false,
