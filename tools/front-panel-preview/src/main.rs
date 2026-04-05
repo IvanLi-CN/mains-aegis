@@ -260,6 +260,7 @@ fn dashboard_detail_snapshot_for_thermal_notice(
 enum ChargerPolicyPreviewState {
     Wait,
     Charge500mA,
+    Warm,
     Charge100mADcDerated,
     FullLatched,
     BlockedOutputOverload,
@@ -315,6 +316,22 @@ fn charger_policy_snapshot_for_state(
             snapshot.bq40z50_pack_mv = Some(15_260);
             snapshot.input_ibus_ma = Some(1_260);
             snapshot.vin_iin_ma = Some(1_260);
+        }
+        ChargerPolicyPreviewState::Warm => {
+            snapshot.dashboard_detail.charger_active = Some(true);
+            snapshot.dashboard_detail.charger_status = Some("WARM");
+            snapshot.dashboard_detail.charger_notice = Some("BQ25792 TS WARM - FAN FORCED HIGH");
+            snapshot.dashboard_detail.fan_status = Some("HIGH");
+            snapshot.dashboard_detail.fan_pwm_pct = Some(100);
+            snapshot.dashboard_detail.fan_rpm = Some(4_120);
+            snapshot.bq25792_allow_charge = Some(true);
+            snapshot.bq25792_ichg_ma = Some(500);
+            snapshot.bq25792_ibat_ma = Some(470);
+            snapshot.bq40z50_current_ma = Some(455);
+            snapshot.bq40z50_soc_pct = Some(76);
+            snapshot.bq40z50_pack_mv = Some(15_710);
+            snapshot.input_ibus_ma = Some(1_180);
+            snapshot.vin_iin_ma = Some(1_180);
         }
         ChargerPolicyPreviewState::Charge100mADcDerated => {
             snapshot.dashboard_detail.input_source = Some(DashboardInputSource::DcIn);
@@ -602,6 +619,7 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardDetailThermKillAsserted
         | ScenarioArg::DashboardDetailChargerWait
         | ScenarioArg::DashboardDetailCharger500mA
+        | ScenarioArg::DashboardDetailChargerWarm
         | ScenarioArg::DashboardDetailCharger100mADcDerated
         | ScenarioArg::DashboardDetailChargerFullLatched
         | ScenarioArg::DashboardDetailChargerBlockedOutputOverload
@@ -638,6 +656,7 @@ fn run() -> Result<(), String> {
         ScenarioArg::DashboardDetailThermal => ModeArg::Backup,
         ScenarioArg::DashboardDetailChargerWait => ModeArg::Standby,
         ScenarioArg::DashboardDetailCharger500mA => ModeArg::Standby,
+        ScenarioArg::DashboardDetailChargerWarm => ModeArg::Standby,
         ScenarioArg::DashboardDetailCharger100mADcDerated => ModeArg::Standby,
         ScenarioArg::DashboardDetailChargerFullLatched => ModeArg::Standby,
         ScenarioArg::DashboardDetailChargerBlockedNoBms => ModeArg::Standby,
@@ -716,6 +735,7 @@ fn run() -> Result<(), String> {
         | ScenarioArg::DashboardDetailThermKillAsserted
         | ScenarioArg::DashboardDetailChargerWait
         | ScenarioArg::DashboardDetailCharger500mA
+        | ScenarioArg::DashboardDetailChargerWarm
         | ScenarioArg::DashboardDetailCharger100mADcDerated
         | ScenarioArg::DashboardDetailChargerFullLatched
         | ScenarioArg::DashboardDetailChargerBlockedOutputOverload
@@ -730,6 +750,7 @@ fn run() -> Result<(), String> {
                 | ScenarioArg::DashboardDetailThermKillAsserted => DashboardDetailPage::Thermal,
                 ScenarioArg::DashboardDetailChargerWait
                 | ScenarioArg::DashboardDetailCharger500mA
+                | ScenarioArg::DashboardDetailChargerWarm
                 | ScenarioArg::DashboardDetailCharger100mADcDerated
                 | ScenarioArg::DashboardDetailChargerFullLatched
                 | ScenarioArg::DashboardDetailChargerBlockedOutputOverload
@@ -742,6 +763,9 @@ fn run() -> Result<(), String> {
                 }
                 ScenarioArg::DashboardDetailCharger500mA => {
                     charger_policy_snapshot_for_state(ChargerPolicyPreviewState::Charge500mA)
+                }
+                ScenarioArg::DashboardDetailChargerWarm => {
+                    charger_policy_snapshot_for_state(ChargerPolicyPreviewState::Warm)
                 }
                 ScenarioArg::DashboardDetailCharger100mADcDerated => {
                     charger_policy_snapshot_for_state(
@@ -1025,6 +1049,7 @@ enum ScenarioArg {
     DashboardDetailThermKillAsserted,
     DashboardDetailChargerWait,
     DashboardDetailCharger500mA,
+    DashboardDetailChargerWarm,
     DashboardDetailCharger100mADcDerated,
     DashboardDetailChargerFullLatched,
     DashboardDetailChargerBlockedOutputOverload,
@@ -1063,6 +1088,7 @@ impl ScenarioArg {
             "dashboard-detail-therm-kill-asserted" => Ok(Self::DashboardDetailThermKillAsserted),
             "dashboard-detail-charger-wait" => Ok(Self::DashboardDetailChargerWait),
             "dashboard-detail-charger-500ma" => Ok(Self::DashboardDetailCharger500mA),
+            "dashboard-detail-charger-warm" => Ok(Self::DashboardDetailChargerWarm),
             "dashboard-detail-charger-100ma-dc-derated" => {
                 Ok(Self::DashboardDetailCharger100mADcDerated)
             }
@@ -1091,7 +1117,7 @@ impl ScenarioArg {
             "test-audio" => Ok(Self::TestAudio),
             "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation)"
             )),
         }
     }
@@ -1112,6 +1138,7 @@ impl ScenarioArg {
             ScenarioArg::DashboardDetailThermKillAsserted => "dashboard-detail-therm-kill-asserted",
             ScenarioArg::DashboardDetailChargerWait => "dashboard-detail-charger-wait",
             ScenarioArg::DashboardDetailCharger500mA => "dashboard-detail-charger-500ma",
+            ScenarioArg::DashboardDetailChargerWarm => "dashboard-detail-charger-warm",
             ScenarioArg::DashboardDetailCharger100mADcDerated => {
                 "dashboard-detail-charger-100ma-dc-derated"
             }
@@ -1222,7 +1249,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",

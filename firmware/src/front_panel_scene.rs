@@ -9299,6 +9299,30 @@ mod tests {
     }
 
     #[test]
+    fn charger_warm_detail_uses_warm_status_and_warn_footer() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.dashboard_detail.charger_active = Some(true);
+        snapshot.dashboard_detail.charger_status = Some("WARM");
+        snapshot.dashboard_detail.charger_notice = Some("BQ25792 TS WARM - FAN FORCED HIGH");
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Charger, live),
+            "WARM"
+        );
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::Charger, live),
+            (DetailFooterIcon::Warn, "CHECK STATUS")
+        );
+        assert_eq!(
+            detail_footer_notice(DashboardDetailPage::Charger, live),
+            "BQ25792 TS WARM - FAN FORCED HIGH"
+        );
+    }
+
+    #[test]
     fn live_dashboard_ignores_charger_present_when_vin_is_below_threshold() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.fusb302_vbus_present = Some(true);

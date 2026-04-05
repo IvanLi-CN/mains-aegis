@@ -34,6 +34,7 @@ impl FanLevel {
 pub enum TempSource {
     Pending,
     Missing,
+    ChargerThermal,
     TmpA,
     TmpB,
     Bms,
@@ -45,6 +46,7 @@ impl TempSource {
         match self {
             Self::Pending => "pending",
             Self::Missing => "missing",
+            Self::ChargerThermal => "charger_thermal",
             Self::TmpA => "tmp_a",
             Self::TmpB => "tmp_b",
             Self::Bms => "bms",
@@ -57,7 +59,10 @@ impl TempSource {
     }
 
     pub const fn is_degraded(self) -> bool {
-        matches!(self, Self::Missing | Self::TmpA | Self::TmpB | Self::Bms)
+        matches!(
+            self,
+            Self::Missing | Self::ChargerThermal | Self::TmpA | Self::TmpB | Self::Bms
+        )
     }
 }
 
@@ -82,6 +87,7 @@ pub struct Config {
 pub struct Input {
     pub now_ms: u64,
     pub temps_ready: bool,
+    pub force_high: bool,
     pub temp_a_c_x16: Option<i16>,
     pub temp_b_c_x16: Option<i16>,
     pub temp_bms_c_x16: Option<i16>,
@@ -151,16 +157,22 @@ impl Controller {
 
     pub fn update(&mut self, input: Input) -> (Status, Events) {
         let prev = self.status;
-        let (control_temp_c_x16, temp_source) = select_control_temp(
+        let (control_temp_c_x16, selected_temp_source) = select_control_temp(
             input.temps_ready,
             input.temp_a_c_x16,
             input.temp_b_c_x16,
             input.temp_bms_c_x16,
         );
+        let temp_source = if input.force_high {
+            TempSource::ChargerThermal
+        } else {
+            selected_temp_source
+        };
 
         let requested_pwm_pct = match temp_source {
             TempSource::Pending => 0,
             TempSource::Missing => 100,
+            TempSource::ChargerThermal => 100,
             _ => self.next_requested_pwm_pct(
                 input.now_ms,
                 control_temp_c_x16.expect("control temp must exist when source is present"),
@@ -361,6 +373,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 0,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(40 * 16),
             temp_b_c_x16: Some(39 * 16),
             temp_bms_c_x16: None,
@@ -372,6 +385,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 500,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(42 * 16),
             temp_b_c_x16: Some(39 * 16),
             temp_bms_c_x16: None,
@@ -383,6 +397,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 1_000,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(44 * 16),
             temp_b_c_x16: Some(39 * 16),
             temp_bms_c_x16: None,
@@ -399,6 +414,7 @@ mod tests {
         ctl.update(Input {
             now_ms: 0,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(43 * 16),
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -408,6 +424,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 500,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -419,6 +436,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 1_000,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -430,6 +448,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 1_500,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -441,6 +460,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 2_000,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(36 * 16),
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -457,6 +477,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 0,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(42 * 16),
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -468,6 +489,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 500,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: None,
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -485,6 +507,7 @@ mod tests {
         let (_, _) = ctl.update(Input {
             now_ms: 0,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(41 * 16),
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -494,6 +517,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 2_100,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(41 * 16),
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -506,6 +530,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 2_130,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -516,6 +541,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 2_160,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -535,6 +561,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 0,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(44 * 16),
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -545,6 +572,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 3_000,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(44 * 16),
             temp_b_c_x16: None,
             temp_bms_c_x16: None,
@@ -561,6 +589,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 0,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: None,
             temp_b_c_x16: None,
             temp_bms_c_x16: Some(42 * 16),
@@ -579,6 +608,7 @@ mod tests {
         let (status, _) = ctl.update(Input {
             now_ms: 0,
             temps_ready: true,
+            force_high: false,
             temp_a_c_x16: Some(39 * 16),
             temp_b_c_x16: Some(41 * 16),
             temp_bms_c_x16: Some(43 * 16),
@@ -588,5 +618,46 @@ mod tests {
         assert_eq!(status.temp_source, TempSource::Max);
         assert_eq!(status.control_temp_c_x16, Some(43 * 16));
         assert_eq!(status.requested_pwm_pct, 25);
+    }
+
+    #[test]
+    fn charger_thermal_override_forces_high_with_ready_temps() {
+        let mut ctl = Controller::new(cfg());
+
+        let (status, events) = ctl.update(Input {
+            now_ms: 0,
+            temps_ready: true,
+            force_high: true,
+            temp_a_c_x16: Some(34 * 16),
+            temp_b_c_x16: Some(35 * 16),
+            temp_bms_c_x16: Some(33 * 16),
+            tach_pulse_count: 0,
+        });
+
+        assert_eq!(status.temp_source, TempSource::ChargerThermal);
+        assert_eq!(status.control_temp_c_x16, Some(35 * 16));
+        assert_eq!(status.requested_pwm_pct, 100);
+        assert_eq!(status.command, FanLevel::High);
+        assert!(events.output_changed);
+    }
+
+    #[test]
+    fn charger_thermal_override_forces_high_without_ready_temps() {
+        let mut ctl = Controller::new(cfg());
+
+        let (status, _) = ctl.update(Input {
+            now_ms: 0,
+            temps_ready: false,
+            force_high: true,
+            temp_a_c_x16: None,
+            temp_b_c_x16: None,
+            temp_bms_c_x16: None,
+            tach_pulse_count: 0,
+        });
+
+        assert_eq!(status.temp_source, TempSource::ChargerThermal);
+        assert_eq!(status.control_temp_c_x16, None);
+        assert_eq!(status.requested_pwm_pct, 100);
+        assert_eq!(status.command, FanLevel::High);
     }
 }

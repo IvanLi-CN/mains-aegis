@@ -534,6 +534,45 @@ where
         bq40_mac_bit(pf_status, bq40z50::pf_status::AFEC),
         bq40_mac_bit(pf_status, bq40z50::pf_status::AFER),
     );
+
+    match bq40z50::read_u16(i2c, addr, bq40z50::cmd::CHARGING_STATUS) {
+        Ok(raw) => {
+            let raw = u32::from(raw);
+            defmt::info!(
+                "bms_diag_charge: addr=0x{=u8:x} stage={} raw=0x{=u32:x} ut={=?} lt={=?} stl={=?} rt={=?} sth={=?} ht={=?} ot={=?} pv={=?} lv={=?} mv={=?} hv={=?} inhibit={=?} suspend={=?} maintenance={=?} term={=?} ccr={=?} cvr={=?} ccc={=?} nct={=?}",
+                addr,
+                stage,
+                raw,
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::UT),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::LT),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::STL),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::RT),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::STH),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::HT),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::OT),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::PV),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::LV),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::MV),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::HV),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::IN),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::SU),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::MCHG),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::VCT),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::CCR),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::CVR),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::CCC),
+                bq40_mac_bit(Some(raw), bq40z50::charging_status::NCT),
+            );
+        }
+        Err(e) => {
+            defmt::warn!(
+                "bms_diag_charge: addr=0x{=u8:x} stage={} err=read_failed",
+                addr,
+                stage
+            );
+            let _ = e;
+        }
+    }
 }
 
 fn bq40_decode_charge_path(op_status: Option<u32>) -> (Option<bool>, &'static str) {
@@ -994,6 +1033,38 @@ fn detail_fan_status_text(applied: AppliedFanState, tach_fault: bool) -> &'stati
             fan::FanLevel::Mid => "MID",
             fan::FanLevel::High => "HIGH",
         }
+    }
+}
+
+fn charger_audio_thermal_stress(ts_cool: bool, treg: bool) -> bool {
+    ts_cool || treg
+}
+
+fn charger_detail_status_text(
+    charger_fault: bool,
+    ts_warm: bool,
+    policy_status_text: &'static str,
+) -> &'static str {
+    if charger_fault {
+        "FAULT"
+    } else if ts_warm {
+        "WARM"
+    } else {
+        policy_status_text
+    }
+}
+
+fn charger_detail_notice_text(
+    charger_fault: bool,
+    ts_warm: bool,
+    policy_notice_text: &'static str,
+) -> &'static str {
+    if charger_fault {
+        "CHARGER PROTECTION ACTIVE"
+    } else if ts_warm {
+        "BQ25792 TS WARM - FAN FORCED HIGH"
+    } else {
+        policy_notice_text
     }
 }
 
@@ -2901,6 +2972,9 @@ struct ChargerAudioState {
     input_present: Option<bool>,
     phase: AudioChargePhase,
     thermal_stress: bool,
+    ts_warm: bool,
+    ts_hot: bool,
+    treg: bool,
     over_voltage: bool,
     over_current: bool,
     shutdown_protection: bool,
@@ -3657,6 +3731,9 @@ where
         let (status, events) = self.fan.update(fan::Input {
             now_ms,
             temps_ready: self.thermal_control_inputs_ready(),
+            force_high: self.charger_audio.ts_warm
+                || self.charger_audio.ts_hot
+                || self.charger_audio.treg,
             temp_a_c_x16: self.ui_snapshot.tmp_a_c_x16,
             temp_b_c_x16: self.ui_snapshot.tmp_b_c_x16,
             temp_bms_c_x16: bms_temp_c_x16,
@@ -3675,6 +3752,15 @@ where
                     defmt::warn!(
                         "fan: temp_source missing fallback=full_speed control_temp_c_x16={=?}",
                         status.control_temp_c_x16
+                    );
+                }
+                fan::TempSource::ChargerThermal => {
+                    defmt::warn!(
+                        "fan: temp_source charger_thermal fallback=full_speed control_temp_c_x16={=?} ts_warm={=bool} ts_hot={=bool} treg={=bool}",
+                        status.control_temp_c_x16,
+                        self.charger_audio.ts_warm,
+                        self.charger_audio.ts_hot,
+                        self.charger_audio.treg
                     );
                 }
                 fan::TempSource::TmpA | fan::TempSource::TmpB | fan::TempSource::Bms => {
@@ -8216,7 +8302,10 @@ where
         self.charger_audio = ChargerAudioState {
             input_present: Some(input_present),
             phase: audio_charge_phase_from_chg_stat(bq25792::status1::chg_stat(status1)),
-            thermal_stress: ts_cool || ts_warm || treg,
+            thermal_stress: charger_audio_thermal_stress(ts_cool, treg),
+            ts_warm,
+            ts_hot,
+            treg,
             over_voltage: (fault0
                 & (CHARGER_FAULT0_VBUS_OVP
                     | CHARGER_FAULT0_VBAT_OVP
@@ -8263,16 +8352,16 @@ where
                 .map(ChargePolicyState::charger_active)
                 .unwrap_or(false)
         });
-        self.ui_snapshot.dashboard_detail.charger_status = Some(if charger_fault {
-            "FAULT"
-        } else {
-            policy_status_text
-        });
-        self.ui_snapshot.dashboard_detail.charger_notice = Some(if charger_fault {
-            "charger_fault"
-        } else {
-            policy_notice_text
-        });
+        self.ui_snapshot.dashboard_detail.charger_status = Some(charger_detail_status_text(
+            charger_fault,
+            ts_warm,
+            policy_status_text,
+        ));
+        self.ui_snapshot.dashboard_detail.charger_notice = Some(charger_detail_notice_text(
+            charger_fault,
+            ts_warm,
+            policy_notice_text,
+        ));
         self.recompute_ui_mode();
 
         if auto_force_charge {
@@ -8338,6 +8427,9 @@ where
             input_present: None,
             phase: AudioChargePhase::Unknown,
             thermal_stress: false,
+            ts_warm: false,
+            ts_hot: false,
+            treg: false,
             over_voltage: false,
             over_current: false,
             shutdown_protection: false,
@@ -9712,6 +9804,22 @@ mod tests {
         assert_eq!(thermal_notice_text(false, false), "LIVE DATA");
         assert_eq!(thermal_notice_text(false, true), "TMP HW PROTECT TEST MODE");
         assert_eq!(thermal_notice_text(true, true), "THERM KILL ASSERTED");
+    }
+
+    #[test]
+    fn charger_warm_status_overrides_policy_without_escalating_to_fault() {
+        assert_eq!(charger_detail_status_text(false, true, "CHG500"), "WARM");
+        assert_eq!(
+            charger_detail_notice_text(false, true, "charging_500ma"),
+            "BQ25792 TS WARM - FAN FORCED HIGH"
+        );
+    }
+
+    #[test]
+    fn charger_audio_thermal_stress_ignores_ts_warm_only() {
+        assert!(!charger_audio_thermal_stress(false, false));
+        assert!(charger_audio_thermal_stress(true, false));
+        assert!(charger_audio_thermal_stress(false, true));
     }
 
     #[test]

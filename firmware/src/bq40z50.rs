@@ -34,11 +34,34 @@ pub mod cmd {
     pub const BATTERY_STATUS: u8 = 0x16;
     pub const MANUFACTURER_DATA: u8 = 0x23;
     pub const OPERATION_STATUS: u8 = 0x54;
+    pub const CHARGING_STATUS: u8 = 0x55;
 
     pub const CELL_VOLTAGE_4: u8 = 0x3C;
     pub const CELL_VOLTAGE_3: u8 = 0x3D;
     pub const CELL_VOLTAGE_2: u8 = 0x3E;
     pub const CELL_VOLTAGE_1: u8 = 0x3F;
+}
+
+pub mod charging_status {
+    pub const UT: u32 = 1 << 0;
+    pub const LT: u32 = 1 << 1;
+    pub const STL: u32 = 1 << 2;
+    pub const RT: u32 = 1 << 3;
+    pub const STH: u32 = 1 << 4;
+    pub const HT: u32 = 1 << 5;
+    pub const OT: u32 = 1 << 6;
+    pub const PV: u32 = 1 << 8;
+    pub const LV: u32 = 1 << 9;
+    pub const MV: u32 = 1 << 10;
+    pub const HV: u32 = 1 << 11;
+    pub const IN: u32 = 1 << 12;
+    pub const SU: u32 = 1 << 13;
+    pub const MCHG: u32 = 1 << 14;
+    pub const VCT: u32 = 1 << 15;
+    pub const CCR: u32 = 1 << 16;
+    pub const CVR: u32 = 1 << 17;
+    pub const CCC: u32 = 1 << 18;
+    pub const NCT: u32 = 1 << 19;
 }
 
 pub mod mac {
