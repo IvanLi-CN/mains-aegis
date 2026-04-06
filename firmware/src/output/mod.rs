@@ -748,7 +748,7 @@ fn audio_charge_phase_from_chg_stat(code: u8) -> AudioChargePhase {
     match code & 0x07 {
         0 => AudioChargePhase::NotCharging,
         1 | 2 | 3 | 4 | 6 => AudioChargePhase::Charging,
-        5 => AudioChargePhase::Completed,
+        _ if bq25792::is_charge_termination_done(code) => AudioChargePhase::Completed,
         _ => AudioChargePhase::Unknown,
     }
 }
