@@ -33,10 +33,20 @@
 ### `Cells`
 
 - 顶栏标题：`CELL DETAIL`
-- 状态 chip：`BAL ON / READY / WARN / FAULT`
+- 状态 chip：`BAL ON / READY / OFF / WARN / FAULT`
 - 主区：4 节电压栅格
-- 次区：均衡状态、4 路温度、充放电状态
-- 底栏：cell fault / balance hint
+- 次区：`BAL STATE`、4 路温度、充放电状态
+- `BAL STATE` 冻结语义：
+  - `OFF`：均衡 DF 可读且 `CB=0`
+  - `IDLE`：均衡 DF 可读且 `CB=1`，但 `OperationStatus[CB]=0`
+  - `C1 / C2 / C3 / C4`：`CB=1` 且 `AFE Register[KK]` 为 one-hot
+  - `MULTI`：`CB=1` 且 `AFE Register[KK]` 为多 bit
+  - `ACTIVE`：`CB=1` 但缺少可用 `AFE KK`
+  - `N/A`：均衡配置或活动态未读到
+- 底栏 notice：
+  - `EXT CHG+RELAX`：主板均衡基线匹配（外部均衡 + charge/rest 开启）
+  - `CFG MISMATCH`：DF 可读但与主板均衡基线不匹配
+  - `BAL CFG PENDING`：均衡配置尚未读到
 
 ### `Battery Flow`
 

@@ -226,6 +226,8 @@ pub enum BmsRecoveryUiAction {
 pub struct DashboardDetailSnapshot {
     pub cell_mv: [Option<u16>; 4],
     pub cell_temp_c: [Option<i16>; 4],
+    pub balance_enabled: Option<bool>,
+    pub balance_cfg_match: Option<bool>,
     pub balance_active: Option<bool>,
     pub balance_mask: Option<u8>,
     pub balance_cell: Option<u8>,
@@ -257,6 +259,8 @@ impl DashboardDetailSnapshot {
         Self {
             cell_mv: [None, None, None, None],
             cell_temp_c: [None, None, None, None],
+            balance_enabled: None,
+            balance_cfg_match: None,
             balance_active: None,
             balance_mask: None,
             balance_cell: None,
@@ -3534,24 +3538,21 @@ fn render_dashboard_detail_page<P: UiPainter>(
 }
 
 fn detail_balance_summary_text(detail: DashboardDetailSnapshot) -> &'static str {
-    match detail.balance_mask {
-        Some(0) => "NONE",
-        Some(0b0001) => "C1",
-        Some(0b0010) => "C2",
-        Some(0b0100) => "C3",
-        Some(0b1000) => "C4",
-        Some(0b0011) => "C1+C2",
-        Some(0b0101) => "C1+C3",
-        Some(0b0110) => "C2+C3",
-        Some(0b1001) => "C1+C4",
-        Some(0b1010) => "C2+C4",
-        Some(0b1100) => "C3+C4",
-        Some(_) => "MULTI",
-        None => match detail.balance_active {
-            Some(true) => "ACTIVE",
-            Some(false) => "NONE",
+    match detail.balance_enabled {
+        Some(false) => "OFF",
+        Some(true) => match detail.balance_active {
+            Some(false) => "IDLE",
+            Some(true) => match detail.balance_mask.map(|mask| mask & 0x0F) {
+                Some(0b0001) => "C1",
+                Some(0b0010) => "C2",
+                Some(0b0100) => "C3",
+                Some(0b1000) => "C4",
+                Some(mask) if mask.count_ones() > 1 => "MULTI",
+                _ => "ACTIVE",
+            },
             None => "N/A",
         },
+        None => "N/A",
     }
 }
 
@@ -4485,6 +4486,8 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
                 "WARN"
             } else if !cells_detail_ready(data) {
                 "N/A"
+            } else if data.detail.balance_enabled == Some(false) {
+                "OFF"
             } else if data.detail.balance_active == Some(true) {
                 "BAL ON"
             } else {
@@ -4937,6 +4940,8 @@ fn thermal_fan_icon_color(palette: Palette, data: DashboardLiveData) -> u16 {
 
 fn cells_detail_ready(data: DashboardLiveData) -> bool {
     data.batt_pack_mv.is_some()
+        || data.detail.balance_enabled.is_some()
+        || data.detail.balance_cfg_match.is_some()
         || data.detail.balance_active.is_some()
         || data.detail.balance_mask.is_some()
         || data.detail.balance_cell.is_some()
@@ -5157,8 +5162,12 @@ fn detail_footer_badge(
         return (DetailFooterIcon::Mock, "MOCK DATA");
     }
 
-    if notice.contains("BALANCE") {
-        return (DetailFooterIcon::Live, "BAL ACTIVE");
+    if page == DashboardDetailPage::Cells && notice == "EXT CHG+RELAX" {
+        return (DetailFooterIcon::Live, "BAL CFG");
+    }
+
+    if page == DashboardDetailPage::Cells && notice == "CFG MISMATCH" {
+        return (DetailFooterIcon::Warn, "CHECK STATUS");
     }
 
     match status {
@@ -9194,6 +9203,7 @@ mod tests {
     fn cells_warn_status_beats_balance_indicator() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.bq40z50_rca_alarm = Some(true);
+        snapshot.dashboard_detail.balance_enabled = Some(true);
         snapshot.dashboard_detail.balance_active = Some(true);
         snapshot.dashboard_detail.balance_mask = Some(0b0010);
         snapshot.dashboard_detail.balance_cell = Some(2);
@@ -9206,6 +9216,7 @@ mod tests {
     #[test]
     fn cells_detail_shows_multi_balance_summary_when_multiple_cells_are_active() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.dashboard_detail.balance_enabled = Some(true);
         snapshot.dashboard_detail.balance_active = Some(true);
         snapshot.dashboard_detail.balance_mask = Some(0b0101);
 
@@ -9215,7 +9226,65 @@ mod tests {
             detail_status_tag(DashboardDetailPage::Cells, live),
             "BAL ON"
         );
-        assert_eq!(detail_balance_summary_text(live.detail), "C1+C3");
+        assert_eq!(detail_balance_summary_text(live.detail), "MULTI");
+    }
+
+    #[test]
+    fn cells_detail_balance_summary_distinguishes_off_idle_and_active_without_mask() {
+        let mut off_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        off_snapshot.dashboard_detail.balance_enabled = Some(false);
+        let off_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &off_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Cells, off_live),
+            "OFF"
+        );
+        assert_eq!(detail_balance_summary_text(off_live.detail), "OFF");
+
+        let mut idle_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        idle_snapshot.dashboard_detail.balance_enabled = Some(true);
+        idle_snapshot.dashboard_detail.balance_active = Some(false);
+        let idle_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &idle_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Cells, idle_live),
+            "READY"
+        );
+        assert_eq!(detail_balance_summary_text(idle_live.detail), "IDLE");
+
+        let mut active_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        active_snapshot.dashboard_detail.balance_enabled = Some(true);
+        active_snapshot.dashboard_detail.balance_active = Some(true);
+        let active_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &active_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Cells, active_live),
+            "BAL ON"
+        );
+        assert_eq!(detail_balance_summary_text(active_live.detail), "ACTIVE");
+    }
+
+    #[test]
+    fn cells_footer_badge_uses_balance_config_notice() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.dashboard_detail.balance_enabled = Some(true);
+        snapshot.dashboard_detail.balance_cfg_match = Some(true);
+        snapshot.dashboard_detail.cells_notice = Some("EXT CHG+RELAX");
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::Cells, live),
+            (DetailFooterIcon::Live, "BAL CFG")
+        );
+
+        let mut mismatch_snapshot = snapshot;
+        mismatch_snapshot.dashboard_detail.balance_cfg_match = Some(false);
+        mismatch_snapshot.dashboard_detail.cells_notice = Some("CFG MISMATCH");
+        let mismatch_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &mismatch_snapshot);
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::Cells, mismatch_live),
+            (DetailFooterIcon::Warn, "CHECK STATUS")
+        );
     }
 
     #[test]

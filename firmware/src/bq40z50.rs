@@ -35,6 +35,7 @@ pub mod cmd {
     pub const MANUFACTURER_DATA: u8 = 0x23;
     pub const OPERATION_STATUS: u8 = 0x54;
     pub const CHARGING_STATUS: u8 = 0x55;
+    pub const AFE_REGISTER: u8 = 0x58;
 
     pub const CELL_VOLTAGE_4: u8 = 0x3C;
     pub const CELL_VOLTAGE_3: u8 = 0x3D;
@@ -75,6 +76,10 @@ pub mod mac {
 pub mod data_flash {
     pub const SBS_CONFIGURATION: u16 = 0x4889;
     pub const POWER_CONFIG: u16 = 0x488B;
+    pub const BALANCING_CONFIGURATION: u16 = 0x4908;
+    pub const MIN_START_BALANCE_DELTA: u16 = 0x490D;
+    pub const RELAX_BALANCE_INTERVAL: u16 = 0x490E;
+    pub const MIN_RSOC_FOR_BALANCING: u16 = 0x4912;
     pub const CHARGE_TEMP_T1: u16 = 0x4A0B;
     pub const CHARGE_TEMP_T2: u16 = 0x4A0D;
     pub const CHARGE_TEMP_T5: u16 = 0x4A0F;
@@ -387,6 +392,37 @@ pub struct FilterCapacity {
     pub full_charge_energy_cwh: u16,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BalanceConfig {
+    pub raw: u8,
+    pub min_start_balance_delta_mv: u8,
+    pub relax_balance_interval_s: u32,
+    pub min_rsoc_for_balancing_pct: u8,
+}
+
+impl BalanceConfig {
+    pub const fn cb(self) -> bool {
+        (self.raw & (1 << 0)) != 0
+    }
+
+    pub const fn cbm(self) -> bool {
+        (self.raw & (1 << 1)) != 0
+    }
+
+    pub const fn cbr(self) -> bool {
+        (self.raw & (1 << 2)) != 0
+    }
+
+    pub const fn cbs(self) -> bool {
+        (self.raw & (1 << 5)) != 0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AfeRegister {
+    pub cell_balance_status: u8,
+}
+
 pub fn read_da_status2<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<DaStatus2>, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -431,6 +467,56 @@ where
         remaining_energy_cwh: u16::from_le_bytes([raw.payload[2], raw.payload[3]]),
         full_charge_capacity_mah: u16::from_le_bytes([raw.payload[4], raw.payload[5]]),
         full_charge_energy_cwh: u16::from_le_bytes([raw.payload[6], raw.payload[7]]),
+    }))
+}
+
+pub fn read_balance_config<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+) -> Result<Option<BalanceConfig>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let Some(raw) = read_data_flash_u8(i2c, addr, data_flash::BALANCING_CONFIGURATION)? else {
+        return Ok(None);
+    };
+    let Some(min_start_balance_delta_mv) =
+        read_data_flash_u8(i2c, addr, data_flash::MIN_START_BALANCE_DELTA)?
+    else {
+        return Ok(None);
+    };
+    let Some(relax_balance_interval_s) =
+        read_data_flash_u32(i2c, addr, data_flash::RELAX_BALANCE_INTERVAL)?
+    else {
+        return Ok(None);
+    };
+    let Some(min_rsoc_for_balancing_pct) =
+        read_data_flash_u8(i2c, addr, data_flash::MIN_RSOC_FOR_BALANCING)?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(BalanceConfig {
+        raw,
+        min_start_balance_delta_mv,
+        relax_balance_interval_s,
+        min_rsoc_for_balancing_pct,
+    }))
+}
+
+pub fn read_afe_register<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<AfeRegister>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let Some(raw) = read_block_raw(i2c, addr, cmd::AFE_REGISTER)? else {
+        return Ok(None);
+    };
+    if raw.payload_len < 11 {
+        return Ok(None);
+    }
+
+    Ok(Some(AfeRegister {
+        cell_balance_status: raw.payload[10],
     }))
 }
 
@@ -522,6 +608,17 @@ where
     I2C: embedded_hal::i2c::I2c,
 {
     read_mac_u16(i2c, addr, df_addr)
+}
+
+pub fn read_data_flash_u32<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+) -> Result<Option<u32>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    read_mac_u32(i2c, addr, df_addr)
 }
 
 pub fn read_data_flash_u8<I2C>(

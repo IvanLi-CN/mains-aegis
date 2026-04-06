@@ -55,7 +55,18 @@ Mainboard policy:
 - it does not depend on live MB44 DF capture, so a chip that falls back to TI stock DF or rejects live capture can still be repaired onto the board's 4S baseline
 - when the pack still answers MB44 in app mode, the tool preserves live `CELL_GAIN` / `PACK_GAIN` / `BAT_GAIN` on top of the official asset base only if all three words are captured; otherwise it falls back to the asset defaults instead of flashing a mixed live/default calibration set
 - it is intentionally different from "writing TI default DF fields"; the tool writes an official DF section base plus project-specific overrides
-- current fixed protection overrides include `OCC1=4500mA/6s`, `OCC2=5200mA/3s`, `SOCC=6000mA/5s`, `OCD1=-14500mA/6s`, `OCD2=-15000mA/3s`, `OCD recovery=100mA/3s`, `SOCD=-16000mA/5s`
+- current fixed mainboard overrides include:
+  - `OCC1=4500mA/6s`
+  - `OCC2=5200mA/3s`
+  - `SOCC=6000mA/5s`
+  - `OCD1=-14500mA/6s`
+  - `OCD2=-15000mA/3s`
+  - `OCD recovery=100mA/3s`
+  - `SOCD=-16000mA/5s`
+  - `Balancing Configuration=0x07` (`CB=1 / CBM=1 / CBR=1 / CBS=0`)
+  - `Min Start Balance Delta=3mV`
+  - `Relax Balance Interval=18000s`
+  - `Min RSOC for Balancing=80%`
 
 ## 2.1) Live DF baseline apply (app-mode, state-changing path)
 
@@ -69,8 +80,8 @@ mainboard DF current-protection baseline into the live pack without forcing ROM 
 Policy:
 - `apply-df` is app-mode only; it rejects `--recover` and `--rom-image`
 - `--repair-profile live-df-mainboard` is mandatory for this subcommand
-- the tool writes only the live current-protection baseline fields (`OCC1/OCC2/SOCC/OCD1/OCD2/OCD recovery/SOCD`) via MB44
-- the monitor log must contain `bms_df_apply: ... stage=done fields=14`
+- the tool writes the live current-protection + balance baseline fields via MB44
+- the monitor log must contain `bms_df_apply: ... stage=done fields=18`
 - `summary.json` records the live apply outcome under `live_df_apply`
 
 Current fixed live baseline:
@@ -81,6 +92,10 @@ Current fixed live baseline:
 - `OCD2=-15000mA/3s`
 - `OCD recovery=100mA/3s`
 - `SOCD=-16000mA/5s`
+- `Balancing Configuration=0x07`
+- `Min Start Balance Delta=3mV`
+- `Relax Balance Interval=18000s`
+- `Min RSOC for Balancing=80%`
 
 ## 3) Verify (offline)
 
