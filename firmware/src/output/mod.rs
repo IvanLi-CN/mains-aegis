@@ -2087,6 +2087,7 @@ pub struct PowerManager<'d, I2C> {
     charger_allowed: bool,
     charge_policy: ChargePolicyMemory,
     charge_policy_derate: ChargePolicyDerateTracker,
+    charge_policy_output_load: ChargePolicyOutputLoadTracker,
     bms_charge_ready: Option<bool>,
     bms_full: Option<bool>,
     bms_cell_min_mv: Option<u16>,
@@ -2518,6 +2519,7 @@ where
             charger_allowed,
             charge_policy: ChargePolicyMemory::default(),
             charge_policy_derate: ChargePolicyDerateTracker::default(),
+            charge_policy_output_load: ChargePolicyOutputLoadTracker::default(),
             bms_charge_ready: None,
             bms_full: None,
             bms_cell_min_mv: None,
@@ -2972,6 +2974,7 @@ where
         self.bms_cell_min_mv = None;
         self.charge_policy.charge_latched = false;
         self.charge_policy_derate.reset();
+        self.charge_policy_output_load.reset();
     }
 
     fn reset_bms_detail_mac_cache(&mut self, now: Instant) {
@@ -7315,7 +7318,8 @@ where
         let activation_normal_hold_charge = false;
         let boot_diag_hold_charge = false;
         let input_source = detail_input_source(vbus_present, ac1_present, ac2_present);
-        let output_power_w10 = tps_output_power_w10(&self.ui_snapshot);
+        let output_power_w10 =
+            charge_policy_output_power_w10(&self.ui_snapshot, self.output_state.active_outputs);
         let charge_policy_telemetry = if activation_pending {
             None
         } else {
@@ -7345,6 +7349,7 @@ where
             Some(charge_policy_step(
                 &mut self.charge_policy,
                 &mut self.charge_policy_derate,
+                &mut self.charge_policy_output_load,
                 charge_policy_now_ms,
                 ChargePolicyInput {
                     input_present,
@@ -7353,6 +7358,10 @@ where
                     ts_hot,
                     input_source,
                     ibus_ma: input_sample.ui_ibus_ma,
+                    output_enabled: charge_policy_output_enabled(
+                        &self.ui_snapshot,
+                        self.output_state.active_outputs,
+                    ),
                     output_power_w10,
                     telemetry: charge_policy_telemetry,
                     charger_done: matches!(
@@ -7378,6 +7387,8 @@ where
             charge_policy_decision.and_then(|decision| decision.target_ichg_ma);
         let policy_start_reason = charge_policy_decision.and_then(|decision| decision.start_reason);
         let policy_full_reason = charge_policy_decision.and_then(|decision| decision.full_reason);
+        let policy_output_block_reason =
+            charge_policy_decision.and_then(|decision| decision.output_block_reason);
         let policy_status_text = if force_allow_charge {
             "WAKE"
         } else if activation_force_charge_off {
@@ -7396,8 +7407,9 @@ where
         } else if activation_probe_without_charge {
             "activation_probe_without_charge"
         } else {
-            policy_state
-                .map(ChargePolicyState::as_str)
+            policy_output_block_reason
+                .map(ChargePolicyOutputBlockReason::as_str)
+                .or_else(|| policy_state.map(ChargePolicyState::as_str))
                 .unwrap_or("charger_policy_pending")
         };
         let mut applied_ctrl0 = ctrl0;
@@ -7551,7 +7563,7 @@ where
 
         if !(auto_force_charge || activation_pending) {
             defmt::info!(
-                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_target_ichg_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
+                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_output_block_reason={=?} policy_target_ichg_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} policy_output_blocked={=bool} policy_output_enter_streak={=u8} policy_output_exit_streak={=u8} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
                 self.chg_enabled,
                 self.cfg.force_min_charge,
                 auto_force_charge,
@@ -7567,6 +7579,7 @@ where
                 dashboard_input_source_name(input_source),
                 policy_start_reason.map(ChargeStartReason::as_str),
                 policy_full_reason.map(ChargeFullReason::as_str),
+                policy_output_block_reason.map(ChargePolicyOutputBlockReason::as_str),
                 policy_target_ichg_ma,
                 output_power_w10,
                 self.charge_policy.charge_latched,
@@ -7574,6 +7587,9 @@ where
                 self.charge_policy_derate.derated,
                 self.charge_policy_derate.over_limit_since_ms,
                 self.charge_policy_derate.recover_since_ms,
+                self.charge_policy_output_load.blocked,
+                self.charge_policy_output_load.enter_streak,
+                self.charge_policy_output_load.exit_streak,
                 input_present,
                 vbus_present,
                 ac1_present,
@@ -7674,6 +7690,13 @@ where
                 .map(ChargePolicyState::charger_active)
                 .unwrap_or(false)
         });
+        self.ui_snapshot.dashboard_detail.charger_home_status = Some(charger_home_status_text(
+            charger_fault,
+            ts_cold,
+            ts_hot,
+            ts_warm,
+            policy_status_text,
+        ));
         self.ui_snapshot.dashboard_detail.charger_status = Some(charger_detail_status_text(
             charger_fault,
             ts_warm,

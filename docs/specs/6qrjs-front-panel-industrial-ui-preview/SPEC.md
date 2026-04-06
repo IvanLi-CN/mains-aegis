@@ -54,7 +54,7 @@
 - 预览输出像素必须是 `320x172`、`RGB565 little-endian`。
 - 支持 `UiFocus` 七态与 `touch_irq` 状态展示。
 - 支持 `UpsMode` 四态展示：`BYPASS`（关闭/旁路）、`STANDBY`（待机）、`ASSIST`（补充）、`BACKUP`（后备）。
-- 充电策略口径固定：仅 `STANDBY` 允许电池充电；`BYPASS/ASSIST/BACKUP` 在本轮 Dashboard 一律显示充电锁定（`LOCK` 或 `NOAC`）。
+- 充电显示口径以主线 charger state machine 为准：首页 `ChargeCard` 使用紧凑 token `CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`，detail 保留完整 runtime token。
 - 字体策略固定：非数值文本使用 A（现代无衬线），数值/对齐字段使用 B（等宽）。
 - 自检页（Variant C）必须覆盖全部通信模块：`GC9307 / TCA6408A / FUSB302 / INA3221 / BQ25792 / BQ40Z50 / TPS55288-A / TPS55288-B / TMP112-A / TMP112-B`。
 - 自检页每行必须同时包含 `module + comm + key param` 三列。
@@ -78,10 +78,10 @@
 - 长按 `CENTER` 约 `800ms` 在两页间切换：`Variant B Dashboard <-> Variant C Self-check`。
 - 主机工具根据 `--variant`、`--mode` 与 `--focus` 调用同一 renderer，输出 raw framebuffer 与 PNG。
 - Dashboard 冻结语义（项目工作模式口径）：
-  - `BYPASS`（关闭）: 输入直通输出（bypass），不提供 UPS 功能；本轮 UI 充电状态固定为 `LOCK`。
-  - `STANDBY`（待机）: 输入存在，TPS 无实际输出电流；允许充电。
-  - `ASSIST`（补充）: 输入存在，TPS 有实际输出电流；不允许充电。
-  - `BACKUP`（后备）: 输入不存在；不允许充电，输出由电池侧供能。
+  - `BYPASS`（关闭）: 输入直通输出（bypass），不提供 UPS 功能。
+  - `STANDBY`（待机）: 输入存在，TPS 无实际输出电流。
+  - `ASSIST`（补充）: 输入存在，TPS 有实际输出电流。
+  - `BACKUP`（后备）: 输入不存在，输出由电池侧供能。
   - 右侧三卡固定语义：`BATTERY`（SOC + 最高电池温度 + 电池状态）、`CHARGE`（仅电池充电电流与状态）、`DISCHG`（电池放电电流与状态）。
 
 ### Self-check 视觉冻结（Variant C）
@@ -118,7 +118,7 @@
 ### 冲突检查（按四模式口径）
 
 - 旧冲突 1：将 `focus` 直接当作工作模式来源。已修正为显式 `UiModel.mode`，`focus` 仅用于高亮。
-- 旧冲突 2：非待机模式仍显示可充电语义。已修正为仅 `STANDBY` 显示 `READY/CHG`，其余模式显示 `LOCK/NOAC`。
+- 旧冲突 2：用 `UpsMode` 直接推导充电状态。已修正为首页/详情统一从 runtime charger token 派生；首页仅做 `CHG500/CHG100 -> CHG` 的紧凑映射。
 - 旧冲突 3：放电卡片和输出负载混用。已修正为 `DISCHG` 卡片仅表示电池侧放电电流（`BYPASS/STANDBY=0`）。
 - 旧冲突 4：电池卡片值区语义漂移。已修正为 `BATTERY` 值区固定显示 `SOC + Tmax`（不再显示电压），状态位单独显示 `BAL/CHG/DSG/...`。
 
@@ -177,8 +177,8 @@ None
 
 - Given 固件构建成功且屏幕硬件可访问，When 前面板输入状态变化，Then 屏幕渲染由共享 scene renderer 产出并正确显示对应 focus 高亮。
 - Given 主机运行预览工具，When 指定任意 `variant/mode/focus`，Then 产出 `framebuffer.bin`（固定 `110080` bytes）与 `preview.png`（固定 `320x172`）。
-- Given `mode=standby`，When 查看 CHARGE 卡片，Then 仅显示电池充电电流且状态允许充电（`READY/CHG`）。
-- Given `mode=off/supplement/backup`，When 查看 CHARGE 卡片，Then 状态必须为非充电（`LOCK/NOAC`）且充电电流为 0。
+- Given runtime charger state=`CHG500/CHG100`，When 查看首页 CHARGE 卡片，Then 状态必须压缩为 `CHG`。
+- Given runtime charger state=`WAIT/FULL/WARM/TEMP/LOAD/LOCK/NOAC`，When 查看首页 CHARGE 卡片，Then 状态必须原样显示对应紧凑 token。
 - Given 切到 `Variant C` 自检页，When 查看诊断卡，Then 必须完整显示 10 个可通信模块且每卡包含 `COMM` 与 `KEY PARAM`。
 - Given 自检页已显示，When 长按 `CENTER` 约 `800ms`，Then 页面在 Dashboard 与 Self-check 间切换且不会连发抖动切换。
 - Given 文档更新完成，When 查阅前面板说明，Then 不再以 `Hello World + fps` 作为当前 UI 目标。
@@ -258,7 +258,7 @@ None
 - 2026-02-26: 根据评审反馈将默认 Dashboard 切换为 Variant B，并将 Variant C 重定位为自检页视觉。
 - 2026-02-26: 冻结 Variant B Dashboard 间距与留白（主 KPI 面板 + 次级面板行距），并归档 AC/BATT 参考图。
 - 2026-02-27: 修正 AC 电流语义（`ICHG BAT` 不再混同为线侧输入电流），并移除 BATT 模式次级面板中的 `POUT` 重复字段。
-- 2026-02-27: 按 UPS 四工作模式重构 Dashboard 语义：新增 `UpsMode`、明确充电策略（仅 STANDBY 可充）、并归档四张冻结参考图。
+- 2026-02-27: 按 UPS 四工作模式重构 Dashboard 语义：新增 `UpsMode` 并归档四张冻结参考图。
 - 2026-02-27: 模式命名统一升级为专业全称（`BYPASS / STANDBY / ASSIST / BACKUP`），界面右上状态位不再使用缩写。
 - 2026-02-27: 自检页升级为“全模块通信诊断表”（10 模块覆盖），并新增长按 CENTER 页面切换（Dashboard <-> Self-check）。
 - 2026-02-27: 自检页再优化为“双列大字号诊断卡”，提升小屏可读性并保留全模块覆盖。

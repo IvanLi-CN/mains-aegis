@@ -27,6 +27,9 @@ const CHARGE_POLICY_DC_DERATE_EXIT_IBUS_MA: i32 = 2_700;
 const CHARGE_POLICY_DC_DERATE_ENTER_HOLD: Duration = Duration::from_secs(1);
 const CHARGE_POLICY_DC_DERATE_EXIT_HOLD: Duration = Duration::from_secs(5);
 const CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10: u32 = 50;
+const CHARGE_POLICY_OUTPUT_POWER_RESUME_W10: u32 = 45;
+const CHARGE_POLICY_OUTPUT_BLOCK_ENTER_POLLS: u8 = 2;
+const CHARGE_POLICY_OUTPUT_BLOCK_EXIT_POLLS: u8 = 3;
 const FAN_RPM_SAMPLE_WINDOW_MS: u64 = 1_200;
 const FAN_RPM_MAX_SAMPLE_WINDOW_MS: u64 = 2_000;
 const FAN_RPM_MIN_SAMPLE_REVS: u32 = 2;
@@ -71,35 +74,62 @@ pub(super) fn dashboard_input_source_name(source: Option<DashboardInputSource>) 
     }
 }
 
+fn charge_policy_channel_enabled(
+    snapshot_enabled: Option<bool>,
+    active_outputs: EnabledOutputs,
+    channel: OutputChannel,
+) -> bool {
+    active_outputs.is_enabled(channel) || snapshot_enabled == Some(true)
+}
+
 pub(super) fn tps_channel_output_power_w10(
-    enabled: Option<bool>,
+    enabled: bool,
     vbus_mv: Option<u16>,
     current_ma: Option<i32>,
 ) -> Option<u32> {
-    if enabled != Some(true) {
+    if !enabled {
         return Some(0);
     }
     Some((u32::from(vbus_mv?) * current_ma?.max(0) as u32) / 100_000)
 }
 
-pub(super) fn tps_output_power_w10(snapshot: &SelfCheckUiSnapshot) -> Option<u32> {
+pub(super) fn charge_policy_output_power_w10(
+    snapshot: &SelfCheckUiSnapshot,
+    active_outputs: EnabledOutputs,
+) -> Option<u32> {
+    let out_a_enabled =
+        charge_policy_channel_enabled(snapshot.tps_a_enabled, active_outputs, OutputChannel::OutA);
+    let out_b_enabled =
+        charge_policy_channel_enabled(snapshot.tps_b_enabled, active_outputs, OutputChannel::OutB);
     let out_a = tps_channel_output_power_w10(
-        snapshot.tps_a_enabled,
+        out_a_enabled,
         snapshot.out_a_vbus_mv,
         snapshot.tps_a_iout_ma,
     );
     let out_b = tps_channel_output_power_w10(
-        snapshot.tps_b_enabled,
+        out_b_enabled,
         snapshot.out_b_vbus_mv,
         snapshot.tps_b_iout_ma,
     );
 
     match (out_a, out_b) {
         (Some(a), Some(b)) => Some(a + b),
-        (Some(a), None) if snapshot.tps_b_enabled != Some(true) => Some(a),
-        (None, Some(b)) if snapshot.tps_a_enabled != Some(true) => Some(b),
+        (Some(a), None) if !out_b_enabled => Some(a),
+        (None, Some(b)) if !out_a_enabled => Some(b),
         _ => None,
     }
+}
+
+pub(super) fn charge_policy_output_enabled(
+    snapshot: &SelfCheckUiSnapshot,
+    active_outputs: EnabledOutputs,
+) -> bool {
+    charge_policy_channel_enabled(snapshot.tps_a_enabled, active_outputs, OutputChannel::OutA)
+        || charge_policy_channel_enabled(
+            snapshot.tps_b_enabled,
+            active_outputs,
+            OutputChannel::OutB,
+        )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +142,21 @@ pub(super) enum ChargePolicyState {
     Charging500mA,
     Charging100mADcDerated,
     FullLatched,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ChargePolicyOutputBlockReason {
+    OverLimit,
+    PowerUnknown,
+}
+
+impl ChargePolicyOutputBlockReason {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::OverLimit => "blocked_output_over_limit",
+            Self::PowerUnknown => "blocked_output_power_unknown",
+        }
+    }
 }
 
 impl ChargePolicyState {
@@ -218,6 +263,64 @@ pub(super) struct ChargePolicyMemory {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct ChargePolicyOutputLoadTracker {
+    pub(super) blocked: bool,
+    pub(super) enter_streak: u8,
+    pub(super) exit_streak: u8,
+}
+
+impl ChargePolicyOutputLoadTracker {
+    pub(super) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub(super) fn note_unknown_sample(&mut self) {
+        self.blocked = true;
+        self.enter_streak = 0;
+        self.exit_streak = 0;
+    }
+
+    pub(super) fn observe(&mut self, output_enabled: bool, output_power_w10: Option<u32>) -> bool {
+        let Some(output_power_w10) = output_power_w10 else {
+            self.reset();
+            return false;
+        };
+
+        if !output_enabled {
+            self.reset();
+            return false;
+        }
+
+        if self.blocked {
+            self.enter_streak = 0;
+            if output_power_w10 < CHARGE_POLICY_OUTPUT_POWER_RESUME_W10 {
+                self.exit_streak = self.exit_streak.saturating_add(1);
+                if self.exit_streak >= CHARGE_POLICY_OUTPUT_BLOCK_EXIT_POLLS {
+                    self.reset();
+                    return false;
+                }
+            } else {
+                self.exit_streak = 0;
+            }
+            true
+        } else {
+            self.exit_streak = 0;
+            if output_power_w10 > CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10 {
+                self.enter_streak = self.enter_streak.saturating_add(1);
+                if self.enter_streak >= CHARGE_POLICY_OUTPUT_BLOCK_ENTER_POLLS {
+                    self.blocked = true;
+                    self.enter_streak = 0;
+                    return true;
+                }
+            } else {
+                self.enter_streak = 0;
+            }
+            false
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct ChargePolicyDerateTracker {
     pub(super) derated: bool,
     pub(super) over_limit_since_ms: Option<u64>,
@@ -287,6 +390,7 @@ pub(super) struct ChargePolicyInput {
     pub(super) ts_hot: bool,
     pub(super) input_source: Option<DashboardInputSource>,
     pub(super) ibus_ma: Option<i32>,
+    pub(super) output_enabled: bool,
     pub(super) output_power_w10: Option<u32>,
     pub(super) telemetry: Option<ChargePolicyTelemetry>,
     pub(super) charger_done: bool,
@@ -299,11 +403,13 @@ pub(super) struct ChargePolicyDecision {
     pub(super) target_ichg_ma: Option<u16>,
     pub(super) start_reason: Option<ChargeStartReason>,
     pub(super) full_reason: Option<ChargeFullReason>,
+    pub(super) output_block_reason: Option<ChargePolicyOutputBlockReason>,
 }
 
 pub(super) fn charge_policy_step(
     memory: &mut ChargePolicyMemory,
     derate: &mut ChargePolicyDerateTracker,
+    output_load: &mut ChargePolicyOutputLoadTracker,
     now_ms: u64,
     input: ChargePolicyInput,
 ) -> ChargePolicyDecision {
@@ -314,28 +420,46 @@ pub(super) fn charge_policy_step(
     if !input.input_present {
         memory.charge_latched = false;
         derate.reset();
+        output_load.reset();
         return ChargePolicyDecision {
             state: ChargePolicyState::BlockedNoInput,
             allow_charge: false,
             target_ichg_ma: None,
             start_reason,
             full_reason: None,
+            output_block_reason: None,
         };
     }
 
     if input.ts_cold || input.ts_hot {
         memory.charge_latched = false;
         derate.reset();
+        output_load.reset();
         return ChargePolicyDecision {
             state: ChargePolicyState::BlockedTemp,
             allow_charge: false,
             target_ichg_ma: None,
             start_reason,
             full_reason: None,
+            output_block_reason: None,
         };
     }
 
-    if input.output_power_w10.unwrap_or(0) > CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10 {
+    if input.output_enabled && input.output_power_w10.is_none() {
+        memory.charge_latched = false;
+        derate.reset();
+        output_load.note_unknown_sample();
+        return ChargePolicyDecision {
+            state: ChargePolicyState::BlockedOutputOverload,
+            allow_charge: false,
+            target_ichg_ma: None,
+            start_reason,
+            full_reason: None,
+            output_block_reason: Some(ChargePolicyOutputBlockReason::PowerUnknown),
+        };
+    }
+
+    if output_load.observe(input.output_enabled, input.output_power_w10) {
         memory.charge_latched = false;
         derate.reset();
         return ChargePolicyDecision {
@@ -344,30 +468,35 @@ pub(super) fn charge_policy_step(
             target_ichg_ma: None,
             start_reason,
             full_reason: None,
+            output_block_reason: Some(ChargePolicyOutputBlockReason::OverLimit),
         };
     }
 
     let Some(telemetry) = input.telemetry else {
         memory.charge_latched = false;
         derate.reset();
+        output_load.reset();
         return ChargePolicyDecision {
             state: ChargePolicyState::BlockedNoBms,
             allow_charge: false,
             target_ichg_ma: None,
             start_reason,
             full_reason: None,
+            output_block_reason: None,
         };
     };
 
     if !input.vbat_present || !telemetry.charge_ready {
         memory.charge_latched = false;
         derate.reset();
+        output_load.reset();
         return ChargePolicyDecision {
             state: ChargePolicyState::BlockedNoBms,
             allow_charge: false,
             target_ichg_ma: None,
             start_reason,
             full_reason: None,
+            output_block_reason: None,
         };
     }
 
@@ -391,6 +520,7 @@ pub(super) fn charge_policy_step(
             target_ichg_ma: None,
             start_reason,
             full_reason: Some(full_reason),
+            output_block_reason: None,
         };
     }
 
@@ -403,6 +533,7 @@ pub(super) fn charge_policy_step(
             target_ichg_ma: None,
             start_reason,
             full_reason: None,
+            output_block_reason: None,
         };
     }
 
@@ -417,6 +548,7 @@ pub(super) fn charge_policy_step(
                 target_ichg_ma: None,
                 start_reason: None,
                 full_reason: None,
+                output_block_reason: None,
             };
         }
     }
@@ -444,6 +576,7 @@ pub(super) fn charge_policy_step(
         target_ichg_ma,
         start_reason,
         full_reason: None,
+        output_block_reason: None,
     }
 }
 
@@ -471,6 +604,24 @@ pub(super) fn charger_detail_status_text(
 ) -> &'static str {
     if charger_fault {
         "FAULT"
+    } else if ts_warm {
+        "WARM"
+    } else {
+        policy_status_text
+    }
+}
+
+pub(super) fn charger_home_status_text(
+    charger_fault: bool,
+    ts_cold: bool,
+    ts_hot: bool,
+    ts_warm: bool,
+    policy_status_text: &'static str,
+) -> &'static str {
+    if ts_cold || ts_hot {
+        "TEMP"
+    } else if charger_fault {
+        "LOCK"
     } else if ts_warm {
         "WARM"
     } else {
@@ -1019,6 +1170,51 @@ mod tests {
     }
 
     #[test]
+    fn charge_policy_output_enabled_prefers_runtime_active_outputs() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.tps_a_enabled = Some(false);
+        snapshot.tps_b_enabled = Some(false);
+
+        assert!(charge_policy_output_enabled(
+            &snapshot,
+            EnabledOutputs::Only(OutputChannel::OutA)
+        ));
+        assert!(!charge_policy_output_enabled(
+            &snapshot,
+            EnabledOutputs::None
+        ));
+
+        snapshot.tps_b_enabled = Some(true);
+        assert!(charge_policy_output_enabled(
+            &snapshot,
+            EnabledOutputs::None
+        ));
+    }
+
+    #[test]
+    fn charge_policy_output_power_uses_runtime_enabled_source() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.tps_a_enabled = Some(false);
+        snapshot.tps_b_enabled = Some(false);
+
+        assert_eq!(
+            charge_policy_output_power_w10(&snapshot, EnabledOutputs::Only(OutputChannel::OutA)),
+            None
+        );
+        assert_eq!(
+            charge_policy_output_power_w10(&snapshot, EnabledOutputs::None),
+            Some(0)
+        );
+
+        snapshot.out_a_vbus_mv = Some(20_000);
+        snapshot.tps_a_iout_ma = Some(420);
+        assert_eq!(
+            charge_policy_output_power_w10(&snapshot, EnabledOutputs::Only(OutputChannel::OutA)),
+            Some(84)
+        );
+    }
+
+    #[test]
     fn detail_charger_status_maps_runtime_states_to_short_tokens() {
         assert_eq!(
             detail_charger_status_text(ChargePolicyState::BlockedNoInput),
@@ -1054,6 +1250,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn charger_detail_status_preserves_fault_chip() {
+        assert_eq!(charger_detail_status_text(true, false, "TEMP"), "FAULT");
+        assert_eq!(charger_detail_status_text(false, true, "CHG500"), "WARM");
+    }
+
+    #[test]
+    fn charger_home_status_keeps_runtime_temp_token_under_warn() {
+        assert_eq!(
+            charger_home_status_text(false, false, false, false, "TEMP"),
+            "TEMP"
+        );
+        assert_eq!(
+            charger_home_status_text(true, true, false, false, "CHG500"),
+            "TEMP"
+        );
+        assert_eq!(
+            charger_home_status_text(true, false, false, false, "CHG500"),
+            "LOCK"
+        );
+        assert_eq!(
+            charger_home_status_text(false, false, false, true, "CHG500"),
+            "WARM"
+        );
+    }
+
     fn policy_input(
         telemetry: Option<ChargePolicyTelemetry>,
         input_source: Option<DashboardInputSource>,
@@ -1066,6 +1288,7 @@ mod tests {
             ts_hot: false,
             input_source,
             ibus_ma,
+            output_enabled: false,
             output_power_w10: Some(0),
             telemetry,
             charger_done: false,
@@ -1085,10 +1308,12 @@ mod tests {
     fn charge_policy_starts_when_rsoc_is_below_threshold() {
         let mut memory = ChargePolicyMemory::default();
         let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
 
         let decision = charge_policy_step(
             &mut memory,
             &mut derate,
+            &mut output_load,
             0,
             policy_input(
                 Some(policy_telemetry(79, CHARGE_POLICY_START_CELL_MIN_MV)),
@@ -1098,22 +1323,26 @@ mod tests {
         );
 
         assert_eq!(decision.state, ChargePolicyState::Charging500mA);
+        assert!(decision.allow_charge);
         assert_eq!(decision.target_ichg_ma, Some(CHARGE_POLICY_NORMAL_ICHG_MA));
         assert_eq!(decision.start_reason, Some(ChargeStartReason::RsocLow));
         assert!(memory.charge_latched);
+        assert!(!memory.full_latched);
     }
 
     #[test]
-    fn charge_policy_starts_when_cell_min_is_below_threshold() {
+    fn charge_policy_starts_when_cell_voltage_is_below_threshold() {
         let mut memory = ChargePolicyMemory::default();
         let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
 
         let decision = charge_policy_step(
             &mut memory,
             &mut derate,
+            &mut output_load,
             0,
             policy_input(
-                Some(policy_telemetry(CHARGE_POLICY_START_RSOC_PCT, 3_690)),
+                Some(policy_telemetry(90, 3_650)),
                 Some(DashboardInputSource::UsbC),
                 Some(1_000),
             ),
@@ -1121,27 +1350,50 @@ mod tests {
 
         assert_eq!(decision.state, ChargePolicyState::Charging500mA);
         assert_eq!(decision.start_reason, Some(ChargeStartReason::CellLow));
+        assert!(memory.charge_latched);
     }
 
     #[test]
-    fn boot_diag_auto_recovery_is_disabled_even_when_validation_flag_is_set() {
-        assert!(!boot_diag_auto_recovery_enabled(true));
-        assert!(!boot_diag_auto_recovery_enabled(false));
-    }
-
-    #[test]
-    fn charge_policy_holds_until_full_signal_arrives() {
+    fn charge_policy_waits_when_thresholds_are_not_crossed() {
         let mut memory = ChargePolicyMemory::default();
         let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+
+        let decision = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            0,
+            policy_input(
+                Some(policy_telemetry(95, 3_900)),
+                Some(DashboardInputSource::UsbC),
+                Some(0),
+            ),
+        );
+
+        assert_eq!(decision.state, ChargePolicyState::IdleWaitThreshold);
+        assert!(!decision.allow_charge);
+        assert!(!memory.charge_latched);
+    }
+
+    #[test]
+    fn charge_policy_full_latches_until_threshold_drop() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            full_latched: false,
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
 
         let first = charge_policy_step(
             &mut memory,
             &mut derate,
+            &mut output_load,
             0,
             policy_input(
-                Some(policy_telemetry(79, 3_850)),
+                Some(policy_telemetry(95, 4_050)),
                 Some(DashboardInputSource::UsbC),
-                Some(1_000),
+                Some(200),
             ),
         );
         assert_eq!(first.state, ChargePolicyState::Charging500mA);
@@ -1149,11 +1401,12 @@ mod tests {
         let hold = charge_policy_step(
             &mut memory,
             &mut derate,
+            &mut output_load,
             100,
             policy_input(
-                Some(policy_telemetry(85, 3_900)),
+                Some(policy_telemetry(95, 4_050)),
                 Some(DashboardInputSource::UsbC),
-                Some(900),
+                Some(200),
             ),
         );
         assert_eq!(hold.state, ChargePolicyState::Charging500mA);
@@ -1161,6 +1414,7 @@ mod tests {
         let full = charge_policy_step(
             &mut memory,
             &mut derate,
+            &mut output_load,
             200,
             ChargePolicyInput {
                 charger_done: true,
@@ -1184,10 +1438,12 @@ mod tests {
             full_latched: true,
         };
         let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
 
         let still_full = charge_policy_step(
             &mut memory,
             &mut derate,
+            &mut output_load,
             0,
             policy_input(
                 Some(policy_telemetry(90, 3_950)),
@@ -1200,6 +1456,7 @@ mod tests {
         let restart = charge_policy_step(
             &mut memory,
             &mut derate,
+            &mut output_load,
             100,
             policy_input(
                 Some(policy_telemetry(79, 3_950)),
@@ -1219,16 +1476,19 @@ mod tests {
             full_latched: false,
         };
         let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
         let input = policy_input(
             Some(policy_telemetry(79, 3_850)),
             Some(DashboardInputSource::DcIn),
             Some(3_200),
         );
 
-        let before_hold = charge_policy_step(&mut memory, &mut derate, 900, input);
+        let before_hold =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 900, input);
         assert_eq!(before_hold.state, ChargePolicyState::Charging500mA);
 
-        let after_hold = charge_policy_step(&mut memory, &mut derate, 1_900, input);
+        let after_hold =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 1_900, input);
         assert_eq!(after_hold.state, ChargePolicyState::Charging100mADcDerated);
         assert_eq!(
             after_hold.target_ichg_ma,
@@ -1247,19 +1507,22 @@ mod tests {
             over_limit_since_ms: None,
             recover_since_ms: None,
         };
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
         let input = policy_input(
             Some(policy_telemetry(79, 3_850)),
             Some(DashboardInputSource::DcIn),
             Some(2_600),
         );
 
-        let before_recover = charge_policy_step(&mut memory, &mut derate, 4_900, input);
+        let before_recover =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 4_900, input);
         assert_eq!(
             before_recover.state,
             ChargePolicyState::Charging100mADcDerated
         );
 
-        let after_recover = charge_policy_step(&mut memory, &mut derate, 9_950, input);
+        let after_recover =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 9_950, input);
         assert_eq!(after_recover.state, ChargePolicyState::Charging500mA);
         assert!(!derate.derated);
     }
@@ -1271,10 +1534,12 @@ mod tests {
             full_latched: false,
         };
         let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
 
         let decision = charge_policy_step(
             &mut memory,
             &mut derate,
+            &mut output_load,
             5_000,
             policy_input(
                 Some(policy_telemetry(79, 3_850)),
@@ -1298,10 +1563,16 @@ mod tests {
             over_limit_since_ms: Some(0),
             recover_since_ms: None,
         };
+        let mut output_load = ChargePolicyOutputLoadTracker {
+            blocked: true,
+            enter_streak: 0,
+            exit_streak: 1,
+        };
 
         let decision = charge_policy_step(
             &mut memory,
             &mut derate,
+            &mut output_load,
             0,
             policy_input(None, Some(DashboardInputSource::UsbC), Some(1_000)),
         );
@@ -1309,21 +1580,25 @@ mod tests {
         assert_eq!(decision.state, ChargePolicyState::BlockedNoBms);
         assert!(!memory.charge_latched);
         assert!(!derate.derated);
+        assert_eq!(output_load, ChargePolicyOutputLoadTracker::default());
     }
 
     #[test]
-    fn charge_policy_blocks_when_output_power_exceeds_limit() {
+    fn charge_policy_requires_two_high_samples_before_blocking_output_power() {
         let mut memory = ChargePolicyMemory {
             charge_latched: true,
             full_latched: false,
         };
         let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
 
-        let decision = charge_policy_step(
+        let first = charge_policy_step(
             &mut memory,
             &mut derate,
+            &mut output_load,
             0,
             ChargePolicyInput {
+                output_enabled: true,
                 output_power_w10: Some(CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10 + 1),
                 ..policy_input(
                     Some(policy_telemetry(79, 3_850)),
@@ -1333,8 +1608,243 @@ mod tests {
             },
         );
 
-        assert_eq!(decision.state, ChargePolicyState::BlockedOutputOverload);
+        assert_eq!(first.state, ChargePolicyState::Charging500mA);
+        assert!(memory.charge_latched);
+
+        let second = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            1_000,
+            ChargePolicyInput {
+                output_enabled: true,
+                output_power_w10: Some(CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10 + 1),
+                ..policy_input(
+                    Some(policy_telemetry(79, 3_850)),
+                    Some(DashboardInputSource::DcIn),
+                    Some(1_000),
+                )
+            },
+        );
+
+        assert_eq!(second.state, ChargePolicyState::BlockedOutputOverload);
+        assert_eq!(
+            second.output_block_reason,
+            Some(ChargePolicyOutputBlockReason::OverLimit)
+        );
         assert!(!memory.charge_latched);
+    }
+
+    #[test]
+    fn charge_policy_recovers_output_block_after_three_low_samples() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            full_latched: false,
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+        let mut high_input = policy_input(
+            Some(policy_telemetry(79, 3_850)),
+            Some(DashboardInputSource::DcIn),
+            Some(1_000),
+        );
+        high_input.output_enabled = true;
+        high_input.output_power_w10 = Some(CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10 + 1);
+
+        let _ = charge_policy_step(&mut memory, &mut derate, &mut output_load, 0, high_input);
+        let blocked = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            1_000,
+            high_input,
+        );
+        assert_eq!(blocked.state, ChargePolicyState::BlockedOutputOverload);
+
+        let mut low_input = high_input;
+        low_input.output_power_w10 = Some(CHARGE_POLICY_OUTPUT_POWER_RESUME_W10 - 1);
+        let low_1 =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 2_000, low_input);
+        let low_2 =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 3_000, low_input);
+        let low_3 =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 4_000, low_input);
+
+        assert_eq!(low_1.state, ChargePolicyState::BlockedOutputOverload);
+        assert_eq!(low_2.state, ChargePolicyState::BlockedOutputOverload);
+        assert_eq!(low_3.state, ChargePolicyState::Charging500mA);
+    }
+
+    #[test]
+    fn charge_policy_unknown_output_power_preserves_existing_load_block() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            full_latched: false,
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker {
+            blocked: true,
+            enter_streak: 0,
+            exit_streak: 2,
+        };
+
+        let unknown = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            0,
+            ChargePolicyInput {
+                output_enabled: true,
+                output_power_w10: None,
+                ..policy_input(
+                    Some(policy_telemetry(79, 3_850)),
+                    Some(DashboardInputSource::UsbC),
+                    Some(1_000),
+                )
+            },
+        );
+        assert_eq!(unknown.state, ChargePolicyState::BlockedOutputOverload);
+        assert_eq!(
+            unknown.output_block_reason,
+            Some(ChargePolicyOutputBlockReason::PowerUnknown)
+        );
+        assert!(output_load.blocked);
+        assert_eq!(output_load.exit_streak, 0);
+
+        let mut low_input = policy_input(
+            Some(policy_telemetry(79, 3_850)),
+            Some(DashboardInputSource::UsbC),
+            Some(1_000),
+        );
+        low_input.output_enabled = true;
+        low_input.output_power_w10 = Some(CHARGE_POLICY_OUTPUT_POWER_RESUME_W10 - 1);
+
+        let low_1 =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 1_000, low_input);
+        let low_2 =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 2_000, low_input);
+        let low_3 =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 3_000, low_input);
+
+        assert_eq!(low_1.state, ChargePolicyState::BlockedOutputOverload);
+        assert_eq!(low_2.state, ChargePolicyState::BlockedOutputOverload);
+        assert_eq!(low_3.state, ChargePolicyState::Charging500mA);
+    }
+
+    #[test]
+    fn charge_policy_blocks_conservatively_when_output_power_is_unknown() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            full_latched: false,
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+
+        let decision = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            0,
+            ChargePolicyInput {
+                output_enabled: true,
+                output_power_w10: None,
+                ..policy_input(
+                    Some(policy_telemetry(79, 3_850)),
+                    Some(DashboardInputSource::UsbC),
+                    Some(1_000),
+                )
+            },
+        );
+
+        assert_eq!(decision.state, ChargePolicyState::BlockedOutputOverload);
+        assert_eq!(
+            decision.output_block_reason,
+            Some(ChargePolicyOutputBlockReason::PowerUnknown)
+        );
+        assert!(!memory.charge_latched);
+        assert!(output_load.blocked);
+        assert_eq!(output_load.exit_streak, 0);
+    }
+
+    #[test]
+    fn charge_policy_ignores_unknown_output_power_when_outputs_are_disabled() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            full_latched: false,
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+
+        let decision = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            0,
+            ChargePolicyInput {
+                output_enabled: false,
+                output_power_w10: None,
+                ..policy_input(
+                    Some(policy_telemetry(79, 3_850)),
+                    Some(DashboardInputSource::UsbC),
+                    Some(1_000),
+                )
+            },
+        );
+
+        assert_eq!(decision.state, ChargePolicyState::Charging500mA);
+    }
+
+    #[test]
+    fn charge_policy_resets_output_load_when_no_input_or_temp_blocks() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            full_latched: false,
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker {
+            blocked: true,
+            enter_streak: 1,
+            exit_streak: 2,
+        };
+
+        let no_input = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            0,
+            ChargePolicyInput {
+                input_present: false,
+                ..policy_input(
+                    Some(policy_telemetry(79, 3_850)),
+                    Some(DashboardInputSource::UsbC),
+                    Some(1_000),
+                )
+            },
+        );
+        assert_eq!(no_input.state, ChargePolicyState::BlockedNoInput);
+        assert_eq!(output_load, ChargePolicyOutputLoadTracker::default());
+
+        output_load = ChargePolicyOutputLoadTracker {
+            blocked: true,
+            enter_streak: 1,
+            exit_streak: 2,
+        };
+        let temp_block = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            100,
+            ChargePolicyInput {
+                ts_hot: true,
+                ..policy_input(
+                    Some(policy_telemetry(79, 3_850)),
+                    Some(DashboardInputSource::UsbC),
+                    Some(1_000),
+                )
+            },
+        );
+        assert_eq!(temp_block.state, ChargePolicyState::BlockedTemp);
+        assert_eq!(output_load, ChargePolicyOutputLoadTracker::default());
     }
 
     #[test]

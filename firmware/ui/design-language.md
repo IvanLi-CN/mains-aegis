@@ -128,10 +128,9 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 
 ### 4.1 UpsMode
 
-- `BYPASS`: 输入直通输出，`ChargeCard` 显示 `LOCK/NOAC`。
-- `STANDBY`: 允许充电，`ChargeCard` 显示 `READY/CHG`。
-- `ASSIST`: 负载补偿，`ChargeCard` 显示 `LOCK/NOAC`。
-- `BACKUP`: 电池供电，`ChargeCard` 显示 `LOCK/NOAC`。
+- `BYPASS / STANDBY / ASSIST / BACKUP`: 仅提供页面模式语义，不再直接决定 `ChargeCard` 状态。
+- `ChargeCard` 首页状态来自主线 charger state machine 的紧凑映射：`CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`。
+- Charger detail 保留完整运行时 token：`CHG500 / CHG100 / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`。
 
 ### 4.2 SelfCheckCommState
 
@@ -165,7 +164,7 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 ## 5. Naming and copywriting rules
 
 - 文档说明使用中文，组件/Token/状态标识使用英文。
-- 状态词必须使用固定词形：`BYPASS`、`STANDBY`、`ASSIST`、`BACKUP`、`PEND`、`OK`、`WARN`、`ERR`、`N/A`、`LOCK`、`NOAC`、`RUN`、`IDLE`、`HOT`。
+- 状态词必须使用固定词形：`BYPASS`、`STANDBY`、`ASSIST`、`BACKUP`、`PEND`、`OK`、`WARN`、`ERR`、`N/A`、`LOCK`、`NOAC`、`RUN`、`IDLE`、`HOT`、`CHG`、`WAIT`、`FULL`、`WARM`、`TEMP`、`LOAD`、`CHG500`、`CHG100`。
 - 模块名必须与实现一致：`GC9307`、`TCA6408A`、`FUSB302`、`INA3221`、`BQ25792`、`BQ40Z50`、`TPS55288-A`、`TPS55288-B`、`TMP112-A`、`TMP112-B`。
 - 单位规范：`W`（功率）、`A`（电流）、`C`（温度）、`%`（SOC）。
 - 禁止同义词漂移：同一状态不得在不同文档中出现别名。
