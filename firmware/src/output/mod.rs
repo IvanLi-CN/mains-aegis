@@ -7357,8 +7357,10 @@ where
                     ts_hot,
                     input_source,
                     ibus_ma: input_sample.ui_ibus_ma,
-                    output_enabled: self.ui_snapshot.tps_a_enabled == Some(true)
-                        || self.ui_snapshot.tps_b_enabled == Some(true),
+                    output_enabled: charge_policy_output_enabled(
+                        &self.ui_snapshot,
+                        self.output_state.active_outputs,
+                    ),
                     output_power_w10,
                     telemetry: charge_policy_telemetry,
                     charger_done: matches!(

@@ -105,6 +105,15 @@ pub(super) fn tps_output_power_w10(snapshot: &SelfCheckUiSnapshot) -> Option<u32
     }
 }
 
+pub(super) fn charge_policy_output_enabled(
+    snapshot: &SelfCheckUiSnapshot,
+    active_outputs: EnabledOutputs,
+) -> bool {
+    active_outputs != EnabledOutputs::None
+        || snapshot.tps_a_enabled == Some(true)
+        || snapshot.tps_b_enabled == Some(true)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ChargePolicyState {
     BlockedNoInput,
@@ -245,6 +254,11 @@ pub(super) struct ChargePolicyOutputLoadTracker {
 impl ChargePolicyOutputLoadTracker {
     pub(super) fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    pub(super) fn note_unknown_sample(&mut self) {
+        self.enter_streak = 0;
+        self.exit_streak = 0;
     }
 
     pub(super) fn observe(&mut self, output_enabled: bool, output_power_w10: Option<u32>) -> bool {
@@ -413,7 +427,7 @@ pub(super) fn charge_policy_step(
     if input.output_enabled && input.output_power_w10.is_none() {
         memory.charge_latched = false;
         derate.reset();
-        output_load.reset();
+        output_load.note_unknown_sample();
         return ChargePolicyDecision {
             state: ChargePolicyState::BlockedOutputOverload,
             allow_charge: false,
@@ -1117,6 +1131,28 @@ mod tests {
     }
 
     #[test]
+    fn charge_policy_output_enabled_prefers_runtime_active_outputs() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.tps_a_enabled = Some(false);
+        snapshot.tps_b_enabled = Some(false);
+
+        assert!(charge_policy_output_enabled(
+            &snapshot,
+            EnabledOutputs::Only(OutputChannel::OutA)
+        ));
+        assert!(!charge_policy_output_enabled(
+            &snapshot,
+            EnabledOutputs::None
+        ));
+
+        snapshot.tps_b_enabled = Some(true);
+        assert!(charge_policy_output_enabled(
+            &snapshot,
+            EnabledOutputs::None
+        ));
+    }
+
+    #[test]
     fn detail_charger_status_maps_runtime_states_to_short_tokens() {
         assert_eq!(
             detail_charger_status_text(ChargePolicyState::BlockedNoInput),
@@ -1545,6 +1581,62 @@ mod tests {
             charge_policy_step(&mut memory, &mut derate, &mut output_load, 3_000, low_input);
         let low_3 =
             charge_policy_step(&mut memory, &mut derate, &mut output_load, 4_000, low_input);
+
+        assert_eq!(low_1.state, ChargePolicyState::BlockedOutputOverload);
+        assert_eq!(low_2.state, ChargePolicyState::BlockedOutputOverload);
+        assert_eq!(low_3.state, ChargePolicyState::Charging500mA);
+    }
+
+    #[test]
+    fn charge_policy_unknown_output_power_preserves_existing_load_block() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            full_latched: false,
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker {
+            blocked: true,
+            enter_streak: 0,
+            exit_streak: 2,
+        };
+
+        let unknown = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            0,
+            ChargePolicyInput {
+                output_enabled: true,
+                output_power_w10: None,
+                ..policy_input(
+                    Some(policy_telemetry(79, 3_850)),
+                    Some(DashboardInputSource::UsbC),
+                    Some(1_000),
+                )
+            },
+        );
+        assert_eq!(unknown.state, ChargePolicyState::BlockedOutputOverload);
+        assert_eq!(
+            unknown.output_block_reason,
+            Some(ChargePolicyOutputBlockReason::PowerUnknown)
+        );
+        assert!(output_load.blocked);
+        assert_eq!(output_load.exit_streak, 0);
+
+        let mut low_input = policy_input(
+            Some(policy_telemetry(79, 3_850)),
+            Some(DashboardInputSource::UsbC),
+            Some(1_000),
+        );
+        low_input.output_enabled = true;
+        low_input.output_power_w10 = Some(CHARGE_POLICY_OUTPUT_POWER_RESUME_W10 - 1);
+
+        let low_1 =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 1_000, low_input);
+        let low_2 =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 2_000, low_input);
+        let low_3 =
+            charge_policy_step(&mut memory, &mut derate, &mut output_load, 3_000, low_input);
 
         assert_eq!(low_1.state, ChargePolicyState::BlockedOutputOverload);
         assert_eq!(low_2.state, ChargePolicyState::BlockedOutputOverload);
