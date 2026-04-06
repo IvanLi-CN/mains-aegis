@@ -612,10 +612,17 @@ pub(super) fn charger_detail_status_text(
 }
 
 pub(super) fn charger_home_status_text(
+    charger_fault: bool,
+    ts_cold: bool,
+    ts_hot: bool,
     ts_warm: bool,
     policy_status_text: &'static str,
 ) -> &'static str {
-    if ts_warm {
+    if ts_cold || ts_hot {
+        "TEMP"
+    } else if charger_fault {
+        "LOCK"
+    } else if ts_warm {
         "WARM"
     } else {
         policy_status_text
@@ -1251,8 +1258,22 @@ mod tests {
 
     #[test]
     fn charger_home_status_keeps_runtime_temp_token_under_warn() {
-        assert_eq!(charger_home_status_text(false, "TEMP"), "TEMP");
-        assert_eq!(charger_home_status_text(true, "CHG500"), "WARM");
+        assert_eq!(
+            charger_home_status_text(false, false, false, false, "TEMP"),
+            "TEMP"
+        );
+        assert_eq!(
+            charger_home_status_text(true, true, false, false, "CHG500"),
+            "TEMP"
+        );
+        assert_eq!(
+            charger_home_status_text(true, false, false, false, "CHG500"),
+            "LOCK"
+        );
+        assert_eq!(
+            charger_home_status_text(false, false, false, true, "CHG500"),
+            "WARM"
+        );
     }
 
     fn policy_input(

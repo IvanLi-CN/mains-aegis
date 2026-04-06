@@ -8896,6 +8896,7 @@ mod tests {
         let mut warn_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         warn_snapshot.bq25792 = SelfCheckCommState::Warn;
         warn_snapshot.fusb302_vbus_present = Some(true);
+        warn_snapshot.dashboard_detail.charger_home_status = Some("TEMP");
         warn_snapshot.dashboard_detail.charger_status = Some("TEMP");
         let warn_live =
             DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &warn_snapshot);
@@ -8904,6 +8905,7 @@ mod tests {
         let mut fault_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         fault_snapshot.bq25792 = SelfCheckCommState::Err;
         fault_snapshot.fusb302_vbus_present = Some(true);
+        fault_snapshot.dashboard_detail.charger_home_status = Some("LOCK");
         fault_snapshot.dashboard_detail.charger_status = Some("FAULT");
         let fault_live =
             DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &fault_snapshot);

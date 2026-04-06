@@ -7690,8 +7690,13 @@ where
                 .map(ChargePolicyState::charger_active)
                 .unwrap_or(false)
         });
-        self.ui_snapshot.dashboard_detail.charger_home_status =
-            Some(charger_home_status_text(ts_warm, policy_status_text));
+        self.ui_snapshot.dashboard_detail.charger_home_status = Some(charger_home_status_text(
+            charger_fault,
+            ts_cold,
+            ts_hot,
+            ts_warm,
+            policy_status_text,
+        ));
         self.ui_snapshot.dashboard_detail.charger_status = Some(charger_detail_status_text(
             charger_fault,
             ts_warm,
