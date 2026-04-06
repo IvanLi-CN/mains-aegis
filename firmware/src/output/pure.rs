@@ -257,6 +257,7 @@ impl ChargePolicyOutputLoadTracker {
     }
 
     pub(super) fn note_unknown_sample(&mut self) {
+        self.blocked = true;
         self.enter_streak = 0;
         self.exit_streak = 0;
     }
@@ -401,6 +402,7 @@ pub(super) fn charge_policy_step(
     if !input.input_present {
         memory.charge_latched = false;
         derate.reset();
+        output_load.reset();
         return ChargePolicyDecision {
             state: ChargePolicyState::BlockedNoInput,
             allow_charge: false,
@@ -414,6 +416,7 @@ pub(super) fn charge_policy_step(
     if input.ts_cold || input.ts_hot {
         memory.charge_latched = false;
         derate.reset();
+        output_load.reset();
         return ChargePolicyDecision {
             state: ChargePolicyState::BlockedTemp,
             allow_charge: false,
@@ -1674,6 +1677,8 @@ mod tests {
             Some(ChargePolicyOutputBlockReason::PowerUnknown)
         );
         assert!(!memory.charge_latched);
+        assert!(output_load.blocked);
+        assert_eq!(output_load.exit_streak, 0);
     }
 
     #[test]
@@ -1702,6 +1707,59 @@ mod tests {
         );
 
         assert_eq!(decision.state, ChargePolicyState::Charging500mA);
+    }
+
+    #[test]
+    fn charge_policy_resets_output_load_when_no_input_or_temp_blocks() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            full_latched: false,
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker {
+            blocked: true,
+            enter_streak: 1,
+            exit_streak: 2,
+        };
+
+        let no_input = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            0,
+            ChargePolicyInput {
+                input_present: false,
+                ..policy_input(
+                    Some(policy_telemetry(79, 3_850)),
+                    Some(DashboardInputSource::UsbC),
+                    Some(1_000),
+                )
+            },
+        );
+        assert_eq!(no_input.state, ChargePolicyState::BlockedNoInput);
+        assert_eq!(output_load, ChargePolicyOutputLoadTracker::default());
+
+        output_load = ChargePolicyOutputLoadTracker {
+            blocked: true,
+            enter_streak: 1,
+            exit_streak: 2,
+        };
+        let temp_block = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            100,
+            ChargePolicyInput {
+                ts_hot: true,
+                ..policy_input(
+                    Some(policy_telemetry(79, 3_850)),
+                    Some(DashboardInputSource::UsbC),
+                    Some(1_000),
+                )
+            },
+        );
+        assert_eq!(temp_block.state, ChargePolicyState::BlockedTemp);
+        assert_eq!(output_load, ChargePolicyOutputLoadTracker::default());
     }
 
     #[test]
