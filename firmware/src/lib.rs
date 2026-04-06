@@ -6,6 +6,8 @@ extern crate std;
 #[cfg(all(feature = "main-vout-12v", feature = "main-vout-19v"))]
 compile_error!("Select only one main firmware voltage feature: main-vout-12v or main-vout-19v.");
 
+pub mod time;
+
 pub mod ina3221 {
     pub use ina3221_async::*;
 }

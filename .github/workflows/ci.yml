@@ -27,3 +27,15 @@ jobs:
         run: |
           cd firmware
           cargo +stable fmt --all -- --check
+
+  host-tests:
+    name: Host pure-logic tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run host unit tests
+        run: bash firmware/scripts/run-host-unit-tests.sh

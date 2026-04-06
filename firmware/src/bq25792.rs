@@ -404,8 +404,7 @@ pub const fn power_path_adc_enabled(ctrl: u8) -> bool {
 }
 
 pub const fn power_path_adc_config_ok(state: AdcState) -> bool {
-    let ctrl_ok = (state.ctrl
-        & (adc_ctrl::ADC_EN | adc_ctrl::ADC_RATE | adc_ctrl::ADC_SAMPLE_MASK | adc_ctrl::ADC_AVG))
+    let ctrl_ok = (state.ctrl & (adc_ctrl::ADC_EN | adc_ctrl::ADC_SAMPLE_MASK | adc_ctrl::ADC_AVG))
         == (adc_ctrl::ADC_EN | adc_ctrl::ADC_SAMPLE_15BIT | adc_ctrl::ADC_AVG);
     let disable0_ok = (state.disable0
         & (adc_disable0::IBUS_ADC_DIS
@@ -530,7 +529,7 @@ mod tests {
         assert!(!power_path_adc_ready(state, status3::ADC_DONE_STAT));
 
         state.reconfigured = false;
-        state.ctrl |= adc_ctrl::ADC_RATE;
+        state.ctrl = adc_ctrl::ADC_EN | adc_ctrl::ADC_AVG | adc_ctrl::ADC_SAMPLE_MASK;
         assert!(!power_path_adc_config_ok(state));
 
         state.ctrl = adc_ctrl::ADC_EN | adc_ctrl::ADC_AVG | adc_ctrl::ADC_SAMPLE_15BIT;
