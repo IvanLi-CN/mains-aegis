@@ -1,5 +1,7 @@
 use esp_firmware::ina3221;
 use esp_firmware::tmp112;
+
+use super::channel::OutputChannel;
 use esp_hal::time::{Duration, Instant};
 
 use ::tps55288::data_types::{
@@ -13,44 +15,6 @@ use super::{
     i2c_error_kind, ina_error_kind, tps_error_kind, TelemetryBool, TelemetryTempC, TelemetryU16,
     TelemetryU8, TelemetryValue,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OutputChannel {
-    OutA,
-    OutB,
-}
-
-impl OutputChannel {
-    pub const fn addr(self) -> u8 {
-        match self {
-            OutputChannel::OutA => 0x74,
-            OutputChannel::OutB => 0x75,
-        }
-    }
-
-    pub const fn name(self) -> &'static str {
-        match self {
-            OutputChannel::OutA => "out_a",
-            OutputChannel::OutB => "out_b",
-        }
-    }
-
-    pub const fn ina_ch(self) -> ina3221::Channel {
-        // Frozen by docs/plan/0005:tps55288-control/contracts/config.md:
-        // INA3221 CH2 -> OUT-A, CH1 -> OUT-B
-        match self {
-            OutputChannel::OutA => ina3221::Channel::Ch2,
-            OutputChannel::OutB => ina3221::Channel::Ch1,
-        }
-    }
-
-    pub const fn tmp_addr(self) -> u8 {
-        match self {
-            OutputChannel::OutA => 0x48,
-            OutputChannel::OutB => 0x49,
-        }
-    }
-}
 
 fn configure_mode_register<I2C>(
     tps: &mut ::tps55288::Tps55288<I2C>,

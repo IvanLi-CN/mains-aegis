@@ -83,18 +83,35 @@ cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 
 ## Host 侧纯逻辑单测
 
+Host 侧纯逻辑测试的**唯一权威入口**是：
+
 ```bash
 cd firmware
 bash scripts/run-host-unit-tests.sh
-# 或直接：
-cargo +stable test --target "$(rustc +stable -vV | sed -n 's/^host: //p')" --manifest-path host-unit-tests/Cargo.toml
 ```
 
-这条验证链只覆盖不依赖 `esp-hal / esp-backtrace / xtensa` 的纯逻辑模块，当前包含：
+这条脚本会先执行 `scripts/audit-host-tests.py`，确认 `firmware/src/**` 中的 `#[test]` 只出现在已声明的 host-safe 模块里，然后按 host target 串行运行当前所有 host manifests：
 
+- `firmware/host-unit-tests/Cargo.toml`
+- `host-tests/runtime-audio-recovery/Cargo.toml`
+
+当前纳入 host CI 的纯逻辑覆盖面包括：
+
+- `src/audio.rs`
+- `src/bq25792.rs`
+- `src/bq40z50.rs`
+- `src/display_pipeline.rs`
 - `src/fan.rs`
+- `src/front_panel_logic.rs`
+- `src/front_panel_scene.rs`
+- `src/output/pure.rs`
 - `src/output_protection.rs`
+- `src/output_retry.rs`
 - `src/output_state.rs`
+- `src/runtime_audio_recovery.rs`
+- `src/tmp112.rs`
+
+> `cd firmware && cargo test` 不是权威路径。`firmware` crate 默认 target 固定为 `xtensa-esp32s3-none-elf`，因此 CI 中的纯逻辑验证统一走 host test script；设备侧 `firmware` 只做 `fmt` / `clippy` / `build`。
 
 ## 运行时音效服务（Plan #h43mk）
 

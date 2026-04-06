@@ -9,7 +9,7 @@
 //! - TRM: `docs/manuals/BQ40Z50-R2-TRM/BQ40Z50-R2-TRM.md`
 //! - I2C map: `docs/i2c-address-map.md`
 
-use esp_hal::time::{Duration, Instant};
+use crate::time::{Duration, Instant};
 
 /// Default (project) 7-bit SMBus address for BQ40Z50 (per `docs/i2c-address-map.md`).
 pub const I2C_ADDRESS_PRIMARY: u8 = 0x0B;
@@ -597,7 +597,7 @@ mod tests {
                             panic!("missing scripted write step");
                         };
                         assert_eq!(address, expected_addr);
-                        assert_eq!(buf, expected.as_slice());
+                        assert_eq!(buf.to_vec(), expected);
                     }
                     Operation::Read(buf) => {
                         let Some(Step::Read(expected_addr, data)) = self.steps.pop_front() else {
@@ -725,7 +725,7 @@ mod tests {
         plain_frame[1..9].copy_from_slice(&payload);
 
         let mut i2c = ScriptedI2c::new([
-            Step::Write(addr, vec![cmd::MANUFACTURER_ACCESS, 0x00, 0x78]),
+            Step::Write(addr, vec![cmd::MANUFACTURER_ACCESS, 0x78, 0x00]),
             Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
             Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
             Step::Write(addr, vec![cmd::MANUFACTURER_DATA]),
