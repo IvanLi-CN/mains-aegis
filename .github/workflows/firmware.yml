@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   build:
-    name: Firmware build (ESP32-S3)
+    name: Firmware quality (ESP32-S3)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +47,12 @@ jobs:
           version: latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: cargo clippy (firmware)
+        if: steps.changes.outputs.firmware == 'true'
+        run: |
+          cd firmware
+          cargo clippy
 
       - name: cargo build (firmware)
         if: steps.changes.outputs.firmware == 'true'

@@ -1,5 +1,9 @@
 use core::convert::Infallible;
 
+use crate::front_panel_logic::{
+    dashboard_enter_requires_variant_switch, dashboard_uses_frame_animation, DASHBOARD_VARIANT,
+    SELF_CHECK_VARIANT,
+};
 use crate::front_panel_scene::{
     self, AudioTestUiState, BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardRoute,
     DashboardTouchTarget, SelfCheckCommState, SelfCheckOverlay, SelfCheckTouchTarget,
@@ -63,14 +67,12 @@ const BACKLIGHT_ACTIVE_LOW: bool = true;
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const CENTER_LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(800);
 const BOOT_SPLASH_HOLD: Duration = Duration::from_millis(900);
-const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
 const PANEL_INIT_SPI_FREQ_MHZ: u32 = 10;
 const PANEL_RUNTIME_SPI_FREQ_MHZ: u32 = if cfg!(feature = "display-spi-20mhz") {
     20
 } else {
     40
 };
-const DASHBOARD_VARIANT: UiVariant = UiVariant::InstrumentB;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiAction {
@@ -1399,15 +1401,6 @@ fn dashboard_route_name(route: DashboardRoute) -> &'static str {
     }
 }
 
-fn dashboard_uses_frame_animation(
-    variant: UiVariant,
-    route: DashboardRoute,
-    snapshot: &SelfCheckUiSnapshot,
-) -> bool {
-    variant == DASHBOARD_VARIANT
-        && front_panel_scene::dashboard_route_has_active_animation(route, snapshot)
-}
-
 fn dashboard_touch_target_name(target: DashboardTouchTarget) -> &'static str {
     match target {
         DashboardTouchTarget::HomeOutput => "home_output",
@@ -1416,54 +1409,6 @@ fn dashboard_touch_target_name(target: DashboardTouchTarget) -> &'static str {
         DashboardTouchTarget::HomeCharger => "home_charger",
         DashboardTouchTarget::HomeBatteryFlow => "home_battery_flow",
         DashboardTouchTarget::DetailBack => "detail_back",
-    }
-}
-
-fn dashboard_enter_requires_variant_switch(variant: UiVariant) -> bool {
-    variant != DASHBOARD_VARIANT
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_animated_thermal_detail_uses_frame_animation() {
-        let mut thermal_active = SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby);
-        thermal_active.dashboard_detail.fan_status = Some("HIGH");
-        let thermal_idle = SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby);
-
-        assert!(dashboard_uses_frame_animation(
-            DASHBOARD_VARIANT,
-            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal),
-            &thermal_active,
-        ));
-        assert!(!dashboard_uses_frame_animation(
-            DASHBOARD_VARIANT,
-            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal),
-            &thermal_idle,
-        ));
-        assert!(!dashboard_uses_frame_animation(
-            DASHBOARD_VARIANT,
-            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Output),
-            &thermal_active,
-        ));
-        assert!(!dashboard_uses_frame_animation(
-            DASHBOARD_VARIANT,
-            DashboardRoute::Home,
-            &thermal_active,
-        ));
-        assert!(!dashboard_uses_frame_animation(
-            UiVariant::RetroC,
-            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal),
-            &thermal_active,
-        ));
-    }
-
-    #[test]
-    fn enter_dashboard_only_transitions_from_self_check_variant() {
-        assert!(dashboard_enter_requires_variant_switch(SELF_CHECK_VARIANT));
-        assert!(!dashboard_enter_requires_variant_switch(DASHBOARD_VARIANT));
     }
 }
 

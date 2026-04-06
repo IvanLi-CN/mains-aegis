@@ -1,4 +1,4 @@
-use esp_hal::time::Instant;
+use crate::time::{Duration, Instant};
 
 #[derive(defmt::Format, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AudioCue {
@@ -381,7 +381,7 @@ impl AudioManager {
                 CuePlaybackMode::OneShot => None,
                 CuePlaybackMode::ContinuousLoop => Some(now),
                 CuePlaybackMode::IntervalLoop { interval_ms } => {
-                    Some(now + esp_hal::time::Duration::from_millis(interval_ms as u64))
+                    Some(now + Duration::from_millis(interval_ms as u64))
                 }
             };
         }
@@ -506,7 +506,6 @@ impl Default for AudioManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use esp_hal::time::Duration;
 
     fn drain_current(manager: &mut AudioManager) {
         let mut buf = [0u8; 512];
@@ -521,7 +520,7 @@ mod tests {
     #[test]
     fn warning_loop_keeps_interval_during_steady_state_updates() {
         let cue = AudioCue::HighStress;
-        let start = Instant::EPOCH;
+        let start = Instant::now();
         let early = start + Duration::from_millis(500);
         let due = start + Duration::from_millis(WARNING_INTERVAL_MS as u64);
 
@@ -545,7 +544,7 @@ mod tests {
     fn preempted_loop_cue_resumes_without_waiting_for_next_interval() {
         let warning = AudioCue::HighStress;
         let error = AudioCue::ModuleFault;
-        let now = Instant::EPOCH;
+        let now = Instant::now();
 
         let mut manager = AudioManager::new();
         manager.set_cue_active(warning, true, now);
@@ -565,7 +564,7 @@ mod tests {
     #[test]
     fn continuous_loop_wraps_without_retrigger() {
         let cue = AudioCue::BatteryProtection;
-        let now = Instant::EPOCH;
+        let now = Instant::now();
 
         let mut manager = AudioManager::new();
         manager.set_cue_active(cue, true, now);
