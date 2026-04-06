@@ -148,12 +148,15 @@
 
 ### Cells balance active
 
+PR: include
 ![Cells balance active](./assets/cells-balance-active.png)
 
 ### Cells balance idle
 
+PR: include
 ![Cells balance idle](./assets/cells-balance-idle.png)
 
 ### Cells balance config mismatch
 
+PR: include
 ![Cells balance config mismatch](./assets/cells-balance-config-mismatch.png)
