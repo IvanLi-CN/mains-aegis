@@ -598,7 +598,20 @@ pub(super) fn charger_audio_thermal_stress(ts_cool: bool, treg: bool) -> bool {
 }
 
 pub(super) fn charger_detail_status_text(
-    _charger_fault: bool,
+    charger_fault: bool,
+    ts_warm: bool,
+    policy_status_text: &'static str,
+) -> &'static str {
+    if charger_fault {
+        "FAULT"
+    } else if ts_warm {
+        "WARM"
+    } else {
+        policy_status_text
+    }
+}
+
+pub(super) fn charger_home_status_text(
     ts_warm: bool,
     policy_status_text: &'static str,
 ) -> &'static str {
@@ -1231,9 +1244,15 @@ mod tests {
     }
 
     #[test]
-    fn charger_detail_status_keeps_runtime_temp_token_under_warn() {
-        assert_eq!(charger_detail_status_text(true, false, "TEMP"), "TEMP");
-        assert_eq!(charger_detail_status_text(true, true, "CHG500"), "WARM");
+    fn charger_detail_status_preserves_fault_chip() {
+        assert_eq!(charger_detail_status_text(true, false, "TEMP"), "FAULT");
+        assert_eq!(charger_detail_status_text(false, true, "CHG500"), "WARM");
+    }
+
+    #[test]
+    fn charger_home_status_keeps_runtime_temp_token_under_warn() {
+        assert_eq!(charger_home_status_text(false, "TEMP"), "TEMP");
+        assert_eq!(charger_home_status_text(true, "CHG500"), "WARM");
     }
 
     fn policy_input(

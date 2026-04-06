@@ -85,12 +85,13 @@ fn dashboard_detail_fixture(
         _ => DashboardInputSource::DcIn,
     });
     detail.charger_active = Some(matches!(mode, UpsMode::Standby));
-    detail.charger_status = Some(match mode {
+    detail.charger_home_status = Some(match mode {
         UpsMode::Standby => "CHG500",
         UpsMode::Supplement => "LOAD",
         UpsMode::Backup => "NOAC",
         UpsMode::Off => "WAIT",
     });
+    detail.charger_status = detail.charger_home_status;
     detail.out_a_temp_c = Some(41);
     detail.out_b_temp_c = Some(43);
     detail.board_temp_c = Some(36);
@@ -412,6 +413,8 @@ fn charger_policy_snapshot_for_state(
             snapshot.bq40z50_pack_mv = Some(15_540);
         }
     }
+
+    snapshot.dashboard_detail.charger_home_status = snapshot.dashboard_detail.charger_status;
 
     (mode, snapshot)
 }

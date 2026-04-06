@@ -236,6 +236,7 @@ pub struct DashboardDetailSnapshot {
     pub precharge_fet_on: Option<bool>,
     pub input_source: Option<DashboardInputSource>,
     pub charger_active: Option<bool>,
+    pub charger_home_status: Option<&'static str>,
     pub charger_status: Option<&'static str>,
     pub out_a_temp_c: Option<i16>,
     pub out_b_temp_c: Option<i16>,
@@ -266,6 +267,7 @@ impl DashboardDetailSnapshot {
             precharge_fet_on: None,
             input_source: None,
             charger_active: None,
+            charger_home_status: None,
             charger_status: None,
             out_a_temp_c: None,
             out_b_temp_c: None,
@@ -5011,6 +5013,10 @@ fn home_charge_state_text(data: DashboardLiveData) -> &'static str {
             "FULL" | "WARM" | "TEMP" | "LOAD" | "LOCK" | "NOAC" => Some(status),
             _ => None,
         }
+    }
+
+    if let Some(status) = data.detail.charger_home_status.and_then(clamp) {
+        return status;
     }
 
     if let Some(status) = data.detail.charger_status.and_then(clamp) {
