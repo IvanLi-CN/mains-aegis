@@ -2821,6 +2821,8 @@ fn render_variant_b_live<P: UiPainter>(
     let charge_batt_ma = data.charge_current_ma();
     let tps_out_ma = data.output_current_ma();
     let batt_discharge_ma = data.battery_discharge_ma();
+    let battery_flow_charge_note = battery_flow_charge_state_text(data);
+    let battery_flow_charge_note_color = detail_status_color(palette, battery_flow_charge_note);
     draw_top_bar_with_status(
         painter,
         variant,
@@ -2996,10 +2998,10 @@ fn render_variant_b_live<P: UiPainter>(
                 painter,
                 variant,
                 FontRole::DetailNum,
-                if data.mains_present { "LOCK" } else { "NOAC" },
+                battery_flow_charge_note,
                 Point::new(194, 132),
                 HorizontalAlignment::Right,
-                palette.text,
+                battery_flow_charge_note_color,
             )?;
             draw_meter(
                 painter,
@@ -3134,10 +3136,10 @@ fn render_variant_b_live<P: UiPainter>(
                 painter,
                 variant,
                 FontRole::DetailNum,
-                "LOCK",
+                battery_flow_charge_note,
                 Point::new(194, 132),
                 HorizontalAlignment::Right,
-                palette.text,
+                battery_flow_charge_note_color,
             )?;
             draw_meter(
                 painter,
@@ -5007,6 +5009,10 @@ fn home_charge_state_text(data: DashboardLiveData) -> &'static str {
         "IDLE" | "READY" => "WAIT",
         status => status,
     }
+}
+
+fn battery_flow_charge_state_text(data: DashboardLiveData) -> &'static str {
+    home_charge_state_text(data)
 }
 
 fn thermal_fault_present(data: DashboardLiveData) -> bool {
@@ -8851,6 +8857,38 @@ mod tests {
             let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
             assert_eq!(home_charge_state_text(live), status);
         }
+    }
+
+    #[test]
+    fn battery_flow_charge_state_uses_runtime_wait_in_assist_mode() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Supplement);
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.dashboard_detail.charger_status = Some("WAIT");
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Supplement), &snapshot);
+
+        assert_eq!(battery_flow_charge_state_text(live), "WAIT");
+    }
+
+    #[test]
+    fn battery_flow_charge_state_preserves_runtime_load_and_noac_tokens() {
+        let mut assist_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Supplement);
+        assist_snapshot.bq25792 = SelfCheckCommState::Ok;
+        assist_snapshot.fusb302_vbus_present = Some(true);
+        assist_snapshot.dashboard_detail.charger_status = Some("LOAD");
+
+        let assist_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Supplement), &assist_snapshot);
+        assert_eq!(battery_flow_charge_state_text(assist_live), "LOAD");
+
+        let mut off_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Off);
+        off_snapshot.bq25792 = SelfCheckCommState::Ok;
+        off_snapshot.fusb302_vbus_present = Some(false);
+        off_snapshot.dashboard_detail.charger_status = Some("NOAC");
+
+        let off_live = DashboardLiveData::from_snapshot(base_model(UpsMode::Off), &off_snapshot);
+        assert_eq!(battery_flow_charge_state_text(off_live), "NOAC");
     }
 
     #[test]
