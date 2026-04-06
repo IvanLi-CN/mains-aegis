@@ -74,33 +74,48 @@ pub(super) fn dashboard_input_source_name(source: Option<DashboardInputSource>) 
     }
 }
 
+fn charge_policy_channel_enabled(
+    snapshot_enabled: Option<bool>,
+    active_outputs: EnabledOutputs,
+    channel: OutputChannel,
+) -> bool {
+    active_outputs.is_enabled(channel) || snapshot_enabled == Some(true)
+}
+
 pub(super) fn tps_channel_output_power_w10(
-    enabled: Option<bool>,
+    enabled: bool,
     vbus_mv: Option<u16>,
     current_ma: Option<i32>,
 ) -> Option<u32> {
-    if enabled != Some(true) {
+    if !enabled {
         return Some(0);
     }
     Some((u32::from(vbus_mv?) * current_ma?.max(0) as u32) / 100_000)
 }
 
-pub(super) fn tps_output_power_w10(snapshot: &SelfCheckUiSnapshot) -> Option<u32> {
+pub(super) fn charge_policy_output_power_w10(
+    snapshot: &SelfCheckUiSnapshot,
+    active_outputs: EnabledOutputs,
+) -> Option<u32> {
+    let out_a_enabled =
+        charge_policy_channel_enabled(snapshot.tps_a_enabled, active_outputs, OutputChannel::OutA);
+    let out_b_enabled =
+        charge_policy_channel_enabled(snapshot.tps_b_enabled, active_outputs, OutputChannel::OutB);
     let out_a = tps_channel_output_power_w10(
-        snapshot.tps_a_enabled,
+        out_a_enabled,
         snapshot.out_a_vbus_mv,
         snapshot.tps_a_iout_ma,
     );
     let out_b = tps_channel_output_power_w10(
-        snapshot.tps_b_enabled,
+        out_b_enabled,
         snapshot.out_b_vbus_mv,
         snapshot.tps_b_iout_ma,
     );
 
     match (out_a, out_b) {
         (Some(a), Some(b)) => Some(a + b),
-        (Some(a), None) if snapshot.tps_b_enabled != Some(true) => Some(a),
-        (None, Some(b)) if snapshot.tps_a_enabled != Some(true) => Some(b),
+        (Some(a), None) if !out_b_enabled => Some(a),
+        (None, Some(b)) if !out_a_enabled => Some(b),
         _ => None,
     }
 }
@@ -109,9 +124,12 @@ pub(super) fn charge_policy_output_enabled(
     snapshot: &SelfCheckUiSnapshot,
     active_outputs: EnabledOutputs,
 ) -> bool {
-    active_outputs != EnabledOutputs::None
-        || snapshot.tps_a_enabled == Some(true)
-        || snapshot.tps_b_enabled == Some(true)
+    charge_policy_channel_enabled(snapshot.tps_a_enabled, active_outputs, OutputChannel::OutA)
+        || charge_policy_channel_enabled(
+            snapshot.tps_b_enabled,
+            active_outputs,
+            OutputChannel::OutB,
+        )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -580,13 +598,11 @@ pub(super) fn charger_audio_thermal_stress(ts_cool: bool, treg: bool) -> bool {
 }
 
 pub(super) fn charger_detail_status_text(
-    charger_fault: bool,
+    _charger_fault: bool,
     ts_warm: bool,
     policy_status_text: &'static str,
 ) -> &'static str {
-    if charger_fault {
-        "FAULT"
-    } else if ts_warm {
+    if ts_warm {
         "WARM"
     } else {
         policy_status_text
@@ -1156,6 +1172,29 @@ mod tests {
     }
 
     #[test]
+    fn charge_policy_output_power_uses_runtime_enabled_source() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.tps_a_enabled = Some(false);
+        snapshot.tps_b_enabled = Some(false);
+
+        assert_eq!(
+            charge_policy_output_power_w10(&snapshot, EnabledOutputs::Only(OutputChannel::OutA)),
+            None
+        );
+        assert_eq!(
+            charge_policy_output_power_w10(&snapshot, EnabledOutputs::None),
+            Some(0)
+        );
+
+        snapshot.out_a_vbus_mv = Some(20_000);
+        snapshot.tps_a_iout_ma = Some(420);
+        assert_eq!(
+            charge_policy_output_power_w10(&snapshot, EnabledOutputs::Only(OutputChannel::OutA)),
+            Some(84)
+        );
+    }
+
+    #[test]
     fn detail_charger_status_maps_runtime_states_to_short_tokens() {
         assert_eq!(
             detail_charger_status_text(ChargePolicyState::BlockedNoInput),
@@ -1189,6 +1228,12 @@ mod tests {
             detail_charger_status_text(ChargePolicyState::FullLatched),
             "FULL"
         );
+    }
+
+    #[test]
+    fn charger_detail_status_keeps_runtime_temp_token_under_warn() {
+        assert_eq!(charger_detail_status_text(true, false, "TEMP"), "TEMP");
+        assert_eq!(charger_detail_status_text(true, true, "CHG500"), "WARM");
     }
 
     fn policy_input(

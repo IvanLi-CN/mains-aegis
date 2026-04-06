@@ -7318,7 +7318,8 @@ where
         let activation_normal_hold_charge = false;
         let boot_diag_hold_charge = false;
         let input_source = detail_input_source(vbus_present, ac1_present, ac2_present);
-        let output_power_w10 = tps_output_power_w10(&self.ui_snapshot);
+        let output_power_w10 =
+            charge_policy_output_power_w10(&self.ui_snapshot, self.output_state.active_outputs);
         let charge_policy_telemetry = if activation_pending {
             None
         } else {

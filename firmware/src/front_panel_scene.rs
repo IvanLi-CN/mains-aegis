@@ -5004,10 +5004,36 @@ fn charger_state_text(data: DashboardLiveData) -> &'static str {
 }
 
 fn home_charge_state_text(data: DashboardLiveData) -> &'static str {
-    match charger_state_text(data) {
-        "CHG500" | "CHG100" | "CHG" => "CHG",
-        "IDLE" | "READY" => "WAIT",
-        status => status,
+    fn clamp(status: &'static str) -> Option<&'static str> {
+        match status {
+            "CHG500" | "CHG100" | "CHG" => Some("CHG"),
+            "IDLE" | "READY" | "WAIT" => Some("WAIT"),
+            "FULL" | "WARM" | "TEMP" | "LOAD" | "LOCK" | "NOAC" => Some(status),
+            _ => None,
+        }
+    }
+
+    if let Some(status) = data.detail.charger_status.and_then(clamp) {
+        return status;
+    }
+
+    if let Some(status) = clamp(charger_state_text(data)) {
+        return status;
+    }
+
+    if !data.mains_present {
+        "NOAC"
+    } else if matches!(
+        data.charger_state,
+        SelfCheckCommState::Err | SelfCheckCommState::Warn
+    ) {
+        "LOCK"
+    } else if matches!((data.charge_allowed, data.chg_iin_ma), (Some(true), Some(ma)) if ma > 0) {
+        "CHG"
+    } else if charger_data_ready(data) {
+        "WAIT"
+    } else {
+        "LOCK"
     }
 }
 
@@ -8857,6 +8883,25 @@ mod tests {
             let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
             assert_eq!(home_charge_state_text(live), status);
         }
+    }
+
+    #[test]
+    fn home_charge_state_clamps_unsupported_fault_tokens() {
+        let mut warn_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        warn_snapshot.bq25792 = SelfCheckCommState::Warn;
+        warn_snapshot.fusb302_vbus_present = Some(true);
+        warn_snapshot.dashboard_detail.charger_status = Some("TEMP");
+        let warn_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &warn_snapshot);
+        assert_eq!(home_charge_state_text(warn_live), "TEMP");
+
+        let mut fault_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        fault_snapshot.bq25792 = SelfCheckCommState::Err;
+        fault_snapshot.fusb302_vbus_present = Some(true);
+        fault_snapshot.dashboard_detail.charger_status = Some("FAULT");
+        let fault_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &fault_snapshot);
+        assert_eq!(home_charge_state_text(fault_live), "LOCK");
     }
 
     #[test]
