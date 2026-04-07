@@ -164,6 +164,8 @@ pub mod output {
         op_status: Option<u32>,
         da_status2: Option<bq40z50::DaStatus2>,
         filter_capacity: Option<bq40z50::FilterCapacity>,
+        balance_config: Option<bq40z50::BalanceConfig>,
+        afe_register: Option<bq40z50::AfeRegister>,
         cell_mv: [u16; 4],
     }
 

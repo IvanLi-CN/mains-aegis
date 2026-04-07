@@ -211,6 +211,10 @@ const BMS_DF_ADDR_ENABLED_PROTECTIONS_B: u16 = 0x4939;
 const BMS_DF_ADDR_ENABLED_PROTECTIONS_C: u16 = 0x493A;
 const BMS_DF_ADDR_ENABLED_PROTECTIONS_D: u16 = 0x493B;
 const BMS_DF_ADDR_IT_GAUGING_CONFIGURATION: u16 = 0x4917;
+const BMS_DF_ADDR_BALANCING_CONFIGURATION: u16 = 0x4908;
+const BMS_DF_ADDR_MIN_START_BALANCE_DELTA: u16 = 0x490D;
+const BMS_DF_ADDR_RELAX_BALANCE_INTERVAL: u16 = 0x490E;
+const BMS_DF_ADDR_MIN_RSOC_FOR_BALANCING: u16 = 0x4912;
 const BMS_DF_ADDR_ENABLED_PF_A: u16 = 0x49BF;
 const BMS_DF_ADDR_ENABLED_PF_B: u16 = 0x49C0;
 const BMS_DF_ADDR_ENABLED_PF_C: u16 = 0x49C1;
@@ -281,6 +285,26 @@ const BMS_DF_AUTH_CONFIG_DEFAULT: u8 = 0x00;
     feature = "bms-live-df-mainboard"
 ))]
 const BMS_DF_IT_GAUGING_CONFIGURATION_DEFAULT: u16 = 0xD0FE;
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_BALANCING_CONFIGURATION_MAINBOARD: u8 = 0x07;
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_MIN_START_BALANCE_DELTA_MAINBOARD_MV: u8 = 3;
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_RELAX_BALANCE_INTERVAL_MAINBOARD_S: u32 = 18_000;
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_MIN_RSOC_FOR_BALANCING_MAINBOARD_PCT: u8 = 80;
 #[cfg(any(
     feature = "bms-rom-repair-asset-df-mainboard",
     feature = "bms-live-df-mainboard"
@@ -423,7 +447,7 @@ struct BmsDfLiveFieldTarget {
     label: &'static str,
     df_addr: u16,
     len: u8,
-    bytes: [u8; 2],
+    bytes: [u8; 4],
 }
 
 #[cfg(feature = "bms-live-df-mainboard")]
@@ -433,7 +457,7 @@ impl BmsDfLiveFieldTarget {
             label,
             df_addr,
             len: 1,
-            bytes: [value, 0],
+            bytes: [value, 0, 0, 0],
         }
     }
 
@@ -442,17 +466,47 @@ impl BmsDfLiveFieldTarget {
             label,
             df_addr,
             len: 2,
-            bytes: [value as u8, (value >> 8) as u8],
+            bytes: [value as u8, (value >> 8) as u8, 0, 0],
         }
     }
 
     const fn i16(label: &'static str, df_addr: u16, value: i16) -> Self {
         Self::u16(label, df_addr, value as u16)
     }
+
+    const fn u32(label: &'static str, df_addr: u16, value: u32) -> Self {
+        let bytes = value.to_le_bytes();
+        Self {
+            label,
+            df_addr,
+            len: 4,
+            bytes,
+        }
+    }
 }
 
 #[cfg(feature = "bms-live-df-mainboard")]
-const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 14] = [
+const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 18] = [
+    BmsDfLiveFieldTarget::byte(
+        "balancing_configuration",
+        BMS_DF_ADDR_BALANCING_CONFIGURATION,
+        BMS_DF_BALANCING_CONFIGURATION_MAINBOARD,
+    ),
+    BmsDfLiveFieldTarget::byte(
+        "min_start_balance_delta",
+        BMS_DF_ADDR_MIN_START_BALANCE_DELTA,
+        BMS_DF_MIN_START_BALANCE_DELTA_MAINBOARD_MV,
+    ),
+    BmsDfLiveFieldTarget::u32(
+        "relax_balance_interval",
+        BMS_DF_ADDR_RELAX_BALANCE_INTERVAL,
+        BMS_DF_RELAX_BALANCE_INTERVAL_MAINBOARD_S,
+    ),
+    BmsDfLiveFieldTarget::byte(
+        "min_rsoc_for_balancing",
+        BMS_DF_ADDR_MIN_RSOC_FOR_BALANCING,
+        BMS_DF_MIN_RSOC_FOR_BALANCING_MAINBOARD_PCT,
+    ),
     BmsDfLiveFieldTarget::i16(
         "occ1_threshold",
         BMS_DF_ADDR_OCC1_THRESHOLD,
@@ -1022,6 +1076,16 @@ fn patch_bms_df_section1_mainboard(section1: &mut [u8], calibration: BmsDfCalibr
             buf[off + 1] = bytes[1];
         }
     };
+    let patch_u32 = |buf: &mut [u8], addr: u16, value: u32| {
+        let off = addr.wrapping_sub(base) as usize;
+        if off + 3 < buf.len() {
+            let bytes = value.to_le_bytes();
+            buf[off] = bytes[0];
+            buf[off + 1] = bytes[1];
+            buf[off + 2] = bytes[2];
+            buf[off + 3] = bytes[3];
+        }
+    };
     let patch_i16 = |buf: &mut [u8], addr: u16, value: i16| {
         patch_u16(buf, addr, value as u16);
     };
@@ -1059,6 +1123,26 @@ fn patch_bms_df_section1_mainboard(section1: &mut [u8], calibration: BmsDfCalibr
         section1,
         BMS_DF_ADDR_IT_GAUGING_CONFIGURATION,
         BMS_DF_IT_GAUGING_CONFIGURATION_DEFAULT,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_BALANCING_CONFIGURATION,
+        BMS_DF_BALANCING_CONFIGURATION_MAINBOARD,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_MIN_START_BALANCE_DELTA,
+        BMS_DF_MIN_START_BALANCE_DELTA_MAINBOARD_MV,
+    );
+    patch_u32(
+        section1,
+        BMS_DF_ADDR_RELAX_BALANCE_INTERVAL,
+        BMS_DF_RELAX_BALANCE_INTERVAL_MAINBOARD_S,
+    );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_MIN_RSOC_FOR_BALANCING,
+        BMS_DF_MIN_RSOC_FOR_BALANCING_MAINBOARD_PCT,
     );
     patch_u8(
         section1,
@@ -1362,17 +1446,17 @@ fn verify_bms_df_bytes<I2C>(
     df_addr: u16,
     len: u8,
     retries: u8,
-) -> Result<[u8; 2], bq40z50::BmsDiagError>
+) -> Result<[u8; 4], bq40z50::BmsDiagError>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    if len == 0 || len > 2 {
+    if len == 0 || len > 4 {
         return Err(bq40z50::BmsDiagError::BadRange);
     }
 
     let mut last_err = bq40z50::BmsDiagError::I2cNack;
     for _ in 0..retries {
-        let mut out = [0u8; 2];
+        let mut out = [0u8; 4];
         let mut ok = true;
         for index in 0..len as usize {
             match read_bms_df_byte_via_mb44(i2c, addr, df_addr + index as u16) {
@@ -5727,14 +5811,18 @@ where
             }
 
             defmt::warn!(
-                "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=field_mismatch field={} df_addr=0x{=u16:x} current_lo=0x{=u8:x} current_hi=0x{=u8:x} target_lo=0x{=u8:x} target_hi=0x{=u8:x}",
+                "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=field_mismatch field={} df_addr=0x{=u16:x} current_b0=0x{=u8:x} current_b1=0x{=u8:x} current_b2=0x{=u8:x} current_b3=0x{=u8:x} target_b0=0x{=u8:x} target_b1=0x{=u8:x} target_b2=0x{=u8:x} target_b3=0x{=u8:x}",
                 addr,
                 field.label,
                 field.df_addr,
                 current[0],
                 current[1],
+                current[2],
+                current[3],
                 field.bytes[0],
                 field.bytes[1],
+                field.bytes[2],
+                field.bytes[3],
             );
 
             for via in [BmsDfWriteVia::Direct, BmsDfWriteVia::Pec] {
@@ -5753,26 +5841,30 @@ where
                                     == field.bytes[..field.len as usize] =>
                             {
                                 defmt::warn!(
-                                "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=field_written field={} df_addr=0x{=u16:x} via={} verify_lo=0x{=u8:x} verify_hi=0x{=u8:x}",
+                                "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=field_written field={} df_addr=0x{=u16:x} via={} verify_b0=0x{=u8:x} verify_b1=0x{=u8:x} verify_b2=0x{=u8:x} verify_b3=0x{=u8:x}",
                                 addr,
                                 field.label,
                                 field.df_addr,
                                 via.as_str(),
                                 verify[0],
                                 verify[1],
+                                verify[2],
+                                verify[3],
                             );
                                 self.bms_next_poll_at = now + BMS_POLL_PERIOD;
                                 return true;
                             }
                             Ok(verify) => {
                                 defmt::warn!(
-                                "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=pending_recheck field={} df_addr=0x{=u16:x} via={} result=verify_mismatch verify_lo=0x{=u8:x} verify_hi=0x{=u8:x}",
+                                "bms_df_apply: addr=0x{=u8:x} profile=live_df_mainboard stage=pending_recheck field={} df_addr=0x{=u16:x} via={} result=verify_mismatch verify_b0=0x{=u8:x} verify_b1=0x{=u8:x} verify_b2=0x{=u8:x} verify_b3=0x{=u8:x}",
                                 addr,
                                 field.label,
                                 field.df_addr,
                                 via.as_str(),
                                 verify[0],
                                 verify[1],
+                                verify[2],
+                                verify[3],
                             );
                                 self.bms_next_poll_at = now + BMS_POLL_PERIOD;
                                 return true;

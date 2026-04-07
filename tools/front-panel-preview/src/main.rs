@@ -74,6 +74,10 @@ fn dashboard_detail_fixture(
     let mut detail = DashboardDetailSnapshot::pending();
     detail.cell_mv = [Some(4088), Some(4094), Some(4102), Some(4098)];
     detail.cell_temp_c = [Some(31), Some(32), Some(33), Some(31)];
+    detail.balance_enabled = Some(true);
+    detail.balance_cfg_match = Some(true);
+    detail.balance_active = Some(true);
+    detail.balance_mask = Some(0b0100);
     detail.balance_cell = Some(3);
     detail.battery_energy_mwh = Some(46_850);
     detail.battery_full_capacity_mwh = Some(63_200);
@@ -111,7 +115,7 @@ fn dashboard_detail_fixture(
     } else {
         "MID"
     });
-    detail.cells_notice = Some("CELL DELTA 14mV - BALANCE ACTIVE");
+    detail.cells_notice = Some("EXT CHG+RELAX");
     detail.battery_notice = Some("PACK FLOW MOCKED - LIVE SOURCE NEXT");
     detail.output_notice = Some("OUT-B STANDBY PATH HELD");
     detail.charger_notice = Some(match mode {
@@ -127,6 +131,13 @@ fn dashboard_detail_fixture(
     }
 
     detail
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CellsBalancePreviewState {
+    Active,
+    Idle,
+    ConfigMismatch,
 }
 
 fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
@@ -244,6 +255,42 @@ fn dashboard_detail_snapshot_for_page(page: DashboardDetailPage) -> (UpsMode, Se
         snapshot.vin_vbus_mv = Some(20_060);
         snapshot.vin_iin_ma = Some(1180);
     }
+    (mode, snapshot)
+}
+
+fn dashboard_detail_snapshot_for_cells_balance(
+    state: CellsBalancePreviewState,
+) -> (UpsMode, SelfCheckUiSnapshot) {
+    let (mode, mut snapshot) = dashboard_detail_snapshot_for_page(DashboardDetailPage::Cells);
+    let detail = &mut snapshot.dashboard_detail;
+
+    match state {
+        CellsBalancePreviewState::Active => {
+            detail.balance_enabled = Some(true);
+            detail.balance_cfg_match = Some(true);
+            detail.balance_active = Some(true);
+            detail.balance_mask = Some(0b0100);
+            detail.balance_cell = Some(3);
+            detail.cells_notice = Some("EXT CHG+RELAX");
+        }
+        CellsBalancePreviewState::Idle => {
+            detail.balance_enabled = Some(true);
+            detail.balance_cfg_match = Some(true);
+            detail.balance_active = Some(false);
+            detail.balance_mask = Some(0);
+            detail.balance_cell = None;
+            detail.cells_notice = Some("EXT CHG+RELAX");
+        }
+        CellsBalancePreviewState::ConfigMismatch => {
+            detail.balance_enabled = Some(true);
+            detail.balance_cfg_match = Some(false);
+            detail.balance_active = Some(false);
+            detail.balance_mask = Some(0);
+            detail.balance_cell = None;
+            detail.cells_notice = Some("CFG MISMATCH");
+        }
+    }
+
     (mode, snapshot)
 }
 
@@ -639,6 +686,9 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardRuntimeAssist
         | ScenarioArg::DashboardRuntimeBackup
         | ScenarioArg::DashboardDetailCells
+        | ScenarioArg::DashboardDetailCellsBalanceActive
+        | ScenarioArg::DashboardDetailCellsBalanceIdle
+        | ScenarioArg::DashboardDetailCellsBalanceConfigMismatch
         | ScenarioArg::DashboardDetailBatteryFlow
         | ScenarioArg::DashboardDetailOutput
         | ScenarioArg::DashboardDetailCharger
@@ -679,6 +729,9 @@ fn run() -> Result<(), String> {
         ScenarioArg::DashboardRuntimeAssist => ModeArg::Supplement,
         ScenarioArg::DashboardRuntimeBackup => ModeArg::Backup,
         ScenarioArg::DashboardDetailCells => ModeArg::Standby,
+        ScenarioArg::DashboardDetailCellsBalanceActive => ModeArg::Standby,
+        ScenarioArg::DashboardDetailCellsBalanceIdle => ModeArg::Standby,
+        ScenarioArg::DashboardDetailCellsBalanceConfigMismatch => ModeArg::Standby,
         ScenarioArg::DashboardDetailBatteryFlow => ModeArg::Backup,
         ScenarioArg::DashboardDetailOutput => ModeArg::Supplement,
         ScenarioArg::DashboardDetailCharger => ModeArg::Standby,
@@ -756,6 +809,9 @@ fn run() -> Result<(), String> {
             .map_err(|_| "render failed unexpectedly".to_string())?;
         }
         ScenarioArg::DashboardDetailCells
+        | ScenarioArg::DashboardDetailCellsBalanceActive
+        | ScenarioArg::DashboardDetailCellsBalanceIdle
+        | ScenarioArg::DashboardDetailCellsBalanceConfigMismatch
         | ScenarioArg::DashboardDetailBatteryFlow
         | ScenarioArg::DashboardDetailOutput
         | ScenarioArg::DashboardDetailCharger
@@ -771,7 +827,12 @@ fn run() -> Result<(), String> {
         | ScenarioArg::DashboardDetailChargerBlockedOutputUnknown
         | ScenarioArg::DashboardDetailChargerBlockedNoBms => {
             let page = match args.scenario {
-                ScenarioArg::DashboardDetailCells => DashboardDetailPage::Cells,
+                ScenarioArg::DashboardDetailCells
+                | ScenarioArg::DashboardDetailCellsBalanceActive
+                | ScenarioArg::DashboardDetailCellsBalanceIdle
+                | ScenarioArg::DashboardDetailCellsBalanceConfigMismatch => {
+                    DashboardDetailPage::Cells
+                }
                 ScenarioArg::DashboardDetailBatteryFlow => DashboardDetailPage::BatteryFlow,
                 ScenarioArg::DashboardDetailOutput => DashboardDetailPage::Output,
                 ScenarioArg::DashboardDetailCharger => DashboardDetailPage::Charger,
@@ -833,6 +894,17 @@ fn run() -> Result<(), String> {
                         0,
                         "OFF",
                         None,
+                    )
+                }
+                ScenarioArg::DashboardDetailCellsBalanceActive => {
+                    dashboard_detail_snapshot_for_cells_balance(CellsBalancePreviewState::Active)
+                }
+                ScenarioArg::DashboardDetailCellsBalanceIdle => {
+                    dashboard_detail_snapshot_for_cells_balance(CellsBalancePreviewState::Idle)
+                }
+                ScenarioArg::DashboardDetailCellsBalanceConfigMismatch => {
+                    dashboard_detail_snapshot_for_cells_balance(
+                        CellsBalancePreviewState::ConfigMismatch,
                     )
                 }
                 _ => dashboard_detail_snapshot_for_page(page),
@@ -1077,6 +1149,9 @@ enum ScenarioArg {
     DashboardRuntimeAssist,
     DashboardRuntimeBackup,
     DashboardDetailCells,
+    DashboardDetailCellsBalanceActive,
+    DashboardDetailCellsBalanceIdle,
+    DashboardDetailCellsBalanceConfigMismatch,
     DashboardDetailBatteryFlow,
     DashboardDetailOutput,
     DashboardDetailCharger,
@@ -1117,6 +1192,11 @@ impl ScenarioArg {
             "dashboard-runtime-assist" => Ok(Self::DashboardRuntimeAssist),
             "dashboard-runtime-backup" => Ok(Self::DashboardRuntimeBackup),
             "dashboard-detail-cells" => Ok(Self::DashboardDetailCells),
+            "dashboard-detail-cells-balance-active" => Ok(Self::DashboardDetailCellsBalanceActive),
+            "dashboard-detail-cells-balance-idle" => Ok(Self::DashboardDetailCellsBalanceIdle),
+            "dashboard-detail-cells-balance-config-mismatch" => {
+                Ok(Self::DashboardDetailCellsBalanceConfigMismatch)
+            }
             "dashboard-detail-battery-flow" => Ok(Self::DashboardDetailBatteryFlow),
             "dashboard-detail-output" => Ok(Self::DashboardDetailOutput),
             "dashboard-detail-charger" => Ok(Self::DashboardDetailCharger),
@@ -1157,7 +1237,7 @@ impl ScenarioArg {
             "test-audio" => Ok(Self::TestAudio),
             "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation)"
             )),
         }
     }
@@ -1170,6 +1250,13 @@ impl ScenarioArg {
             ScenarioArg::DashboardRuntimeAssist => "dashboard-runtime-assist",
             ScenarioArg::DashboardRuntimeBackup => "dashboard-runtime-backup",
             ScenarioArg::DashboardDetailCells => "dashboard-detail-cells",
+            ScenarioArg::DashboardDetailCellsBalanceActive => {
+                "dashboard-detail-cells-balance-active"
+            }
+            ScenarioArg::DashboardDetailCellsBalanceIdle => "dashboard-detail-cells-balance-idle",
+            ScenarioArg::DashboardDetailCellsBalanceConfigMismatch => {
+                "dashboard-detail-cells-balance-config-mismatch"
+            }
             ScenarioArg::DashboardDetailBatteryFlow => "dashboard-detail-battery-flow",
             ScenarioArg::DashboardDetailOutput => "dashboard-detail-output",
             ScenarioArg::DashboardDetailCharger => "dashboard-detail-charger",
@@ -1292,7 +1379,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",

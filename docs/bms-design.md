@@ -219,6 +219,24 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 
 > 热设计提示：按 `I≈0.2A`、`R=16Ω` 估算，电阻平均功耗约 `0.64W`，需要结合 PCB 铜皮/风道/热隔离做校核。
 
+主板量产基线按 `BQ40Z50` 的常规外部均衡做法冻结为：
+
+- `Balancing Configuration (0x4908) = 0x07`
+  - `CB=1`：允许均衡
+  - `CBM=1`：使用外部均衡链路
+  - `CBR=1`：允许静置（RELAX）均衡
+  - `CBS=0`：禁止睡眠均衡
+- `Min Start Balance Delta (0x490D) = 3mV`
+- `Relax Balance Interval (0x490E) = 18000s`
+- `Min RSOC for Balancing (0x4912) = 80%`
+
+项目口径：
+
+- 主线策略为 **charge + rest balancing enabled, sleep balancing disabled**。
+- `0x4913..0x4915`（`Bal Time/mAh Cell 1/2-4`）保持默认值，本轮不做项目化重标定。
+- `OperationStatus[CB]` 只表示算法认为“正在均衡”；若需要知道当前具体均衡哪一串，必须结合 `AFE Register[KK]` 的 live mask。
+- 包内 `200mA` 被动均衡仅用于维护均衡 / 小到中等失衡修正；`>200mV` 初始失衡不纳入常规自动拉回承诺，`0.5V` 初始失衡应归预均衡 / 服务处理。
+
 ## 4. 二次保护链路（OVP → 熔断）
 
 ### 4.1 目标

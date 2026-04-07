@@ -860,7 +860,14 @@ pub(super) fn detail_bms_full_capacity_mwh(snapshot: &Bq40z50Snapshot) -> Option
 pub(super) fn detail_bms_balance_mask(snapshot: &Bq40z50Snapshot) -> Option<u8> {
     match bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CB) {
         Some(false) => Some(0),
-        Some(true) => None,
+        Some(true) => snapshot.afe_register.and_then(|afe| {
+            let mask = afe.cell_balance_status & 0x0F;
+            if mask == 0 {
+                None
+            } else {
+                Some(mask)
+            }
+        }),
         None => None,
     }
 }
@@ -1861,6 +1868,8 @@ mod tests {
             op_status: Some(0),
             da_status2: None,
             filter_capacity: None,
+            balance_config: None,
+            afe_register: None,
             cell_mv: [4100, 4098, 4102, 4099],
         };
 
@@ -1917,6 +1926,8 @@ mod tests {
             op_status: Some(bq40z50::operation_status::CB),
             da_status2: None,
             filter_capacity: None,
+            balance_config: None,
+            afe_register: None,
             cell_mv: [4100, 4098, 4102, 4099],
         };
 
@@ -1947,6 +1958,8 @@ mod tests {
                 gauging_temp_k_x10: 3141,
             }),
             filter_capacity: None,
+            balance_config: None,
+            afe_register: None,
             cell_mv: [4100, 4098, 4102, 4099],
         };
 
@@ -1972,6 +1985,8 @@ mod tests {
             op_status: Some(0),
             da_status2: None,
             filter_capacity: None,
+            balance_config: None,
+            afe_register: None,
             cell_mv: [4100, 4098, 4102, 4099],
         };
 
@@ -1997,6 +2012,8 @@ mod tests {
                 full_charge_capacity_mah: 5000,
                 full_charge_energy_cwh: 6320,
             }),
+            balance_config: None,
+            afe_register: None,
             cell_mv: [4100, 4098, 4102, 4099],
         };
 
@@ -2023,6 +2040,8 @@ mod tests {
                 full_charge_capacity_mah: 0,
                 full_charge_energy_cwh: 1,
             }),
+            balance_config: None,
+            afe_register: None,
             cell_mv: [4100, 4098, 4102, 4099],
         };
 
@@ -2049,11 +2068,41 @@ mod tests {
                 full_charge_capacity_mah: 3917,
                 full_charge_energy_cwh: u16::MAX,
             }),
+            balance_config: None,
+            afe_register: None,
             cell_mv: [4184, 4188, 4149, 4157],
         };
 
         assert_eq!(detail_bms_energy_mwh(&snapshot), Some(65_519));
         assert_eq!(detail_bms_full_capacity_mwh(&snapshot), Some(65_519));
+    }
+
+    #[test]
+    fn detail_bms_balance_mask_prefers_afe_cell_balance_status() {
+        let snapshot = Bq40z50Snapshot {
+            battery_mode: 0,
+            temp_k_x10: 2981,
+            vpack_mv: 15_200,
+            current_ma: 1200,
+            rsoc_pct: 67,
+            remcap: 0,
+            fcc: 0,
+            batt_status: 0,
+            op_status: Some(bq40z50::operation_status::CB),
+            da_status2: None,
+            filter_capacity: None,
+            balance_config: None,
+            afe_register: Some(bq40z50::AfeRegister {
+                cell_balance_status: 0b0101,
+            }),
+            cell_mv: [4100, 4098, 4102, 4099],
+        };
+
+        assert_eq!(detail_bms_balance_mask(&snapshot), Some(0b0101));
+        assert_eq!(
+            detail_bms_single_balance_cell(detail_bms_balance_mask(&snapshot)),
+            None
+        );
     }
 
     #[test]
