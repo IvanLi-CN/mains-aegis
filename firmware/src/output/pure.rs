@@ -12,9 +12,9 @@ use super::{
     discharge_authorization_input_ready, mains_present_edge, mains_present_from_vin,
     mark_vin_telemetry_unavailable, normalize_charger_input_power_sample,
     record_vin_sample_failure, stable_mains_present, stable_mains_state, ups_mode_from_mains,
-    AudioBatteryLowState, AudioChargePhase, AudioMainsSource, Bq40z50Snapshot,
-    ChargerInputPowerSample, ChargerInputSampleIssue, OutputRuntimeState, StableMainsState,
-    CHARGER_INPUT_POWER_ANOMALY_W10,
+    AudioBatteryLowState, AudioChargeCueEvent, AudioChargeCueState, AudioChargePhase,
+    AudioMainsSource, Bq40z50Snapshot, ChargerInputPowerSample, ChargerInputSampleIssue,
+    OutputRuntimeState, StableMainsState, CHARGER_INPUT_POWER_ANOMALY_W10,
 };
 
 const BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED: bool = false;
@@ -577,6 +577,81 @@ pub(super) fn charge_policy_step(
         start_reason,
         full_reason: None,
         output_block_reason: None,
+    }
+}
+
+pub(super) fn audio_charge_cue_state(
+    policy_state: Option<ChargePolicyState>,
+    allow_charge: bool,
+    ts_warm: bool,
+    raw_phase: AudioChargePhase,
+) -> AudioChargeCueState {
+    match policy_state {
+        Some(ChargePolicyState::FullLatched) => AudioChargeCueState::Completed,
+        Some(ChargePolicyState::Charging500mA | ChargePolicyState::Charging100mADcDerated) => {
+            if !allow_charge {
+                AudioChargeCueState::Idle
+            } else if ts_warm {
+                AudioChargeCueState::WarmHold
+            } else {
+                AudioChargeCueState::Charging
+            }
+        }
+        Some(ChargePolicyState::BlockedNoBms | ChargePolicyState::IdleWaitThreshold) => {
+            observed_audio_charge_cue_state(ts_warm, raw_phase)
+        }
+        Some(
+            ChargePolicyState::BlockedNoInput
+            | ChargePolicyState::BlockedTemp
+            | ChargePolicyState::BlockedOutputOverload,
+        ) => AudioChargeCueState::Idle,
+        None => observed_audio_charge_cue_state(ts_warm, raw_phase),
+    }
+}
+
+pub(super) fn initial_audio_charge_cue_state(
+    ts_warm: bool,
+    raw_phase: AudioChargePhase,
+) -> AudioChargeCueState {
+    observed_audio_charge_cue_state(ts_warm, raw_phase)
+}
+
+fn observed_audio_charge_cue_state(
+    ts_warm: bool,
+    raw_phase: AudioChargePhase,
+) -> AudioChargeCueState {
+    match raw_phase {
+        AudioChargePhase::Unknown => AudioChargeCueState::Unknown,
+        AudioChargePhase::NotCharging => AudioChargeCueState::Idle,
+        AudioChargePhase::Completed => AudioChargeCueState::Completed,
+        AudioChargePhase::Charging => {
+            if ts_warm {
+                AudioChargeCueState::WarmHold
+            } else {
+                AudioChargeCueState::Charging
+            }
+        }
+    }
+}
+
+pub(super) fn audio_charge_cue_event(
+    prev: AudioChargeCueState,
+    next: AudioChargeCueState,
+) -> Option<AudioChargeCueEvent> {
+    if prev == next {
+        return None;
+    }
+
+    match (prev, next) {
+        (
+            AudioChargeCueState::Idle | AudioChargeCueState::Completed,
+            AudioChargeCueState::Charging | AudioChargeCueState::WarmHold,
+        ) => Some(AudioChargeCueEvent::Started),
+        (
+            AudioChargeCueState::Charging | AudioChargeCueState::WarmHold,
+            AudioChargeCueState::Completed,
+        ) => Some(AudioChargeCueEvent::Completed),
+        _ => None,
     }
 }
 
@@ -2228,6 +2303,196 @@ mod tests {
         assert!(!charger_audio_thermal_stress(false, false));
         assert!(charger_audio_thermal_stress(true, false));
         assert!(charger_audio_thermal_stress(false, true));
+    }
+
+    #[test]
+    fn audio_charge_cue_state_maps_warm_to_silent_hold() {
+        assert_eq!(
+            audio_charge_cue_state(
+                Some(ChargePolicyState::Charging500mA),
+                true,
+                true,
+                AudioChargePhase::NotCharging,
+            ),
+            AudioChargeCueState::WarmHold
+        );
+        assert_eq!(
+            audio_charge_cue_state(
+                Some(ChargePolicyState::FullLatched),
+                false,
+                true,
+                AudioChargePhase::Completed,
+            ),
+            AudioChargeCueState::Completed
+        );
+    }
+
+    #[test]
+    fn audio_charge_cue_state_prefers_policy_backed_business_state() {
+        assert_eq!(
+            audio_charge_cue_state(
+                Some(ChargePolicyState::Charging500mA),
+                true,
+                false,
+                AudioChargePhase::NotCharging,
+            ),
+            AudioChargeCueState::Charging
+        );
+        assert_eq!(
+            audio_charge_cue_state(
+                Some(ChargePolicyState::FullLatched),
+                false,
+                false,
+                AudioChargePhase::Charging,
+            ),
+            AudioChargeCueState::Completed
+        );
+        assert_eq!(
+            audio_charge_cue_state(None, false, false, AudioChargePhase::Charging),
+            AudioChargeCueState::Charging
+        );
+        assert_eq!(
+            audio_charge_cue_state(None, false, false, AudioChargePhase::Unknown),
+            AudioChargeCueState::Unknown
+        );
+        assert_eq!(
+            audio_charge_cue_state(
+                Some(ChargePolicyState::Charging500mA),
+                false,
+                false,
+                AudioChargePhase::Charging,
+            ),
+            AudioChargeCueState::Idle
+        );
+        assert_eq!(
+            audio_charge_cue_state(
+                Some(ChargePolicyState::BlockedNoBms),
+                true,
+                false,
+                AudioChargePhase::Charging,
+            ),
+            AudioChargeCueState::Charging
+        );
+        assert_eq!(
+            audio_charge_cue_state(
+                Some(ChargePolicyState::BlockedNoBms),
+                false,
+                true,
+                AudioChargePhase::Charging,
+            ),
+            AudioChargeCueState::WarmHold
+        );
+        assert_eq!(
+            audio_charge_cue_state(
+                Some(ChargePolicyState::BlockedNoBms),
+                false,
+                false,
+                AudioChargePhase::Completed,
+            ),
+            AudioChargeCueState::Completed
+        );
+        assert_eq!(
+            audio_charge_cue_state(
+                Some(ChargePolicyState::BlockedNoBms),
+                false,
+                false,
+                AudioChargePhase::NotCharging,
+            ),
+            AudioChargeCueState::Idle
+        );
+        assert_eq!(
+            audio_charge_cue_state(
+                Some(ChargePolicyState::IdleWaitThreshold),
+                false,
+                false,
+                AudioChargePhase::Charging,
+            ),
+            AudioChargeCueState::Charging
+        );
+        assert_eq!(
+            audio_charge_cue_state(None, false, false, AudioChargePhase::Completed),
+            AudioChargeCueState::Completed
+        );
+    }
+
+    #[test]
+    fn initial_audio_charge_cue_state_seeds_known_boot_phases() {
+        assert_eq!(
+            initial_audio_charge_cue_state(false, AudioChargePhase::Unknown),
+            AudioChargeCueState::Unknown
+        );
+        assert_eq!(
+            initial_audio_charge_cue_state(false, AudioChargePhase::NotCharging),
+            AudioChargeCueState::Idle
+        );
+        assert_eq!(
+            initial_audio_charge_cue_state(false, AudioChargePhase::Completed),
+            AudioChargeCueState::Completed
+        );
+        assert_eq!(
+            initial_audio_charge_cue_state(false, AudioChargePhase::Charging),
+            AudioChargeCueState::Charging
+        );
+        assert_eq!(
+            initial_audio_charge_cue_state(true, AudioChargePhase::Charging),
+            AudioChargeCueState::WarmHold
+        );
+    }
+
+    #[test]
+    fn audio_charge_cue_event_keeps_warm_transitions_silent() {
+        assert_eq!(
+            audio_charge_cue_event(AudioChargeCueState::Charging, AudioChargeCueState::WarmHold),
+            None
+        );
+        assert_eq!(
+            audio_charge_cue_event(AudioChargeCueState::WarmHold, AudioChargeCueState::Charging),
+            None
+        );
+    }
+
+    #[test]
+    fn audio_charge_cue_event_emits_only_real_started_and_completed_edges() {
+        assert_eq!(
+            audio_charge_cue_event(AudioChargeCueState::Idle, AudioChargeCueState::Charging),
+            Some(AudioChargeCueEvent::Started)
+        );
+        assert_eq!(
+            audio_charge_cue_event(
+                AudioChargeCueState::Completed,
+                AudioChargeCueState::Charging
+            ),
+            Some(AudioChargeCueEvent::Started)
+        );
+        assert_eq!(
+            audio_charge_cue_event(AudioChargeCueState::Idle, AudioChargeCueState::WarmHold),
+            Some(AudioChargeCueEvent::Started)
+        );
+        assert_eq!(
+            audio_charge_cue_event(
+                AudioChargeCueState::Completed,
+                AudioChargeCueState::WarmHold
+            ),
+            Some(AudioChargeCueEvent::Started)
+        );
+        assert_eq!(
+            audio_charge_cue_event(
+                AudioChargeCueState::Charging,
+                AudioChargeCueState::Completed
+            ),
+            Some(AudioChargeCueEvent::Completed)
+        );
+        assert_eq!(
+            audio_charge_cue_event(
+                AudioChargeCueState::WarmHold,
+                AudioChargeCueState::Completed
+            ),
+            Some(AudioChargeCueEvent::Completed)
+        );
+        assert_eq!(
+            audio_charge_cue_event(AudioChargeCueState::Unknown, AudioChargeCueState::Charging),
+            None
+        );
     }
 
     #[test]

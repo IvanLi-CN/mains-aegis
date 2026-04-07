@@ -93,6 +93,27 @@ pub mod output {
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum AudioChargeCueState {
+        Unknown,
+        Idle,
+        WarmHold,
+        Charging,
+        Completed,
+    }
+
+    impl Default for AudioChargeCueState {
+        fn default() -> Self {
+            Self::Unknown
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum AudioChargeCueEvent {
+        Started,
+        Completed,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum AudioBatteryLowState {
         Unknown,
         Inactive,
@@ -347,4 +368,26 @@ pub mod output {
             "/../src/output/pure.rs"
         ));
     }
+}
+
+#[cfg(test)]
+#[no_mangle]
+extern "Rust" fn _defmt_acquire() {}
+
+#[cfg(test)]
+#[no_mangle]
+extern "Rust" fn _defmt_release() {}
+
+#[cfg(test)]
+#[no_mangle]
+extern "Rust" fn _defmt_write(_bytes: &[u8]) {}
+
+#[cfg(test)]
+#[no_mangle]
+extern "Rust" fn _defmt_timestamp(_fmt: defmt::Formatter<'_>) {}
+
+#[cfg(test)]
+#[no_mangle]
+extern "Rust" fn _defmt_panic() -> ! {
+    panic!("defmt panic")
 }
