@@ -4,7 +4,7 @@ pub mod tps55288;
 
 use crate::front_panel_scene::{
     is_bq40_activation_needed, BmsActivationState, BmsRecoveryUiAction, BmsResultKind,
-    DashboardInputSource, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
 };
 use crate::irq::IrqSnapshot;
 use esp_firmware::bq25792;
@@ -2274,6 +2274,27 @@ impl Default for AudioChargePhase {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioChargeCueState {
+    Unknown,
+    Idle,
+    WarmHold,
+    Charging,
+    Completed,
+}
+
+impl Default for AudioChargeCueState {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioChargeCueEvent {
+    Started,
+    Completed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AudioBatteryLowState {
     Unknown,
     Inactive,
@@ -2292,6 +2313,7 @@ pub struct AudioSignalSnapshot {
     pub mains_present: Option<bool>,
     pub mains_source: AudioMainsSource,
     pub charge_phase: AudioChargePhase,
+    pub charge_cue_state: AudioChargeCueState,
     pub thermal_stress: bool,
     pub battery_low: AudioBatteryLowState,
     pub battery_protection: bool,
@@ -2304,7 +2326,7 @@ pub struct AudioSignalSnapshot {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AudioSignalEvents {
     pub mains_present_changed: Option<bool>,
-    pub charge_phase_changed: Option<AudioChargePhase>,
+    pub charge_cue_event: Option<AudioChargeCueEvent>,
     pub thermal_stress_changed: Option<bool>,
     pub battery_low_changed: Option<AudioBatteryLowState>,
     pub battery_protection_changed: Option<bool>,
@@ -2318,6 +2340,7 @@ pub struct AudioSignalEvents {
 struct ChargerAudioState {
     input_present: Option<bool>,
     phase: AudioChargePhase,
+    cue_state: AudioChargeCueState,
     thermal_stress: bool,
     ts_warm: bool,
     ts_hot: bool,
@@ -2654,6 +2677,8 @@ where
         }
         self.charger_audio.input_present = self.ui_snapshot.fusb302_vbus_present;
         self.charger_audio.phase = self.cfg.initial_audio_charge_phase;
+        self.charger_audio.cue_state =
+            initial_audio_charge_cue_state(false, self.cfg.initial_audio_charge_phase);
         self.charger_audio.module_fault =
             matches!(self.ui_snapshot.bq25792, SelfCheckCommState::Err);
         self.bms_audio.rca_alarm = self.ui_snapshot.bq40z50_rca_alarm;
@@ -6405,6 +6430,7 @@ where
             mains_present,
             mains_source: mains_state.source,
             charge_phase: self.charger_audio.phase,
+            charge_cue_state: self.charger_audio.cue_state,
             thermal_stress: self.charger_audio.thermal_stress || tmp_a_hot || tmp_b_hot,
             battery_low,
             battery_protection,
@@ -6436,11 +6462,10 @@ where
         ) {
             self.audio_events.mains_present_changed = Some(edge);
         }
-        if prev.charge_phase != AudioChargePhase::Unknown
-            && snapshot.charge_phase != AudioChargePhase::Unknown
-            && prev.charge_phase != snapshot.charge_phase
+        if let Some(event) =
+            audio_charge_cue_event(prev.charge_cue_state, snapshot.charge_cue_state)
         {
-            self.audio_events.charge_phase_changed = Some(snapshot.charge_phase);
+            self.audio_events.charge_cue_event = Some(event);
         }
         if prev.thermal_stress != snapshot.thermal_stress {
             self.audio_events.thermal_stress_changed = Some(snapshot.thermal_stress);
@@ -7681,9 +7706,14 @@ where
             );
         }
 
+        let charge_phase = audio_charge_phase_from_chg_stat(bq25792::status1::chg_stat(status1));
+        let charge_cue_state =
+            audio_charge_cue_state(policy_state, allow_charge, ts_warm, charge_phase);
+
         self.charger_audio = ChargerAudioState {
             input_present: Some(input_present),
-            phase: audio_charge_phase_from_chg_stat(bq25792::status1::chg_stat(status1)),
+            phase: charge_phase,
+            cue_state: charge_cue_state,
             thermal_stress: charger_audio_thermal_stress(ts_cool, treg),
             ts_warm,
             ts_hot,
@@ -7815,6 +7845,7 @@ where
         self.charger_audio = ChargerAudioState {
             input_present: None,
             phase: AudioChargePhase::Unknown,
+            cue_state: AudioChargeCueState::Unknown,
             thermal_stress: false,
             ts_warm: false,
             ts_hot: false,

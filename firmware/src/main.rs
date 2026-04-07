@@ -1367,17 +1367,13 @@ fn sync_runtime_audio(
     if edges.mains_present_changed == Some(true) {
         audio_manager.trigger(AudioCue::MainsPresentDc);
     }
-    if matches!(
-        edges.charge_phase_changed,
-        Some(output::AudioChargePhase::Charging)
-    ) {
-        audio_manager.trigger(AudioCue::ChargeStarted);
-    }
-    if matches!(
-        edges.charge_phase_changed,
-        Some(output::AudioChargePhase::Completed)
-    ) {
-        audio_manager.trigger(AudioCue::ChargeCompleted);
+    if let Some(event) = edges.charge_cue_event {
+        match event {
+            output::AudioChargeCueEvent::Started => audio_manager.trigger(AudioCue::ChargeStarted),
+            output::AudioChargeCueEvent::Completed => {
+                audio_manager.trigger(AudioCue::ChargeCompleted)
+            }
+        }
     }
     let mains_absent_active = match signals.mains_present {
         Some(false) => {

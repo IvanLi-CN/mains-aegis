@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-03-12
-- Last: 2026-04-05
+- Last: 2026-04-07
 
 ## 背景 / 问题陈述
 
@@ -54,7 +54,8 @@
   - 面向主固件的循环/抢占策略入口。
 - `PowerManager` 新增供主循环消费的音效信号访问器，输出：
   - mains presence 边沿
-  - charge phase 边沿
+  - 充电原始相位快照
+  - 充电业务 cue 事件（`Started` / `Completed`）
   - thermal stress 状态
   - battery low / battery protection 状态
   - module fault 状态
@@ -65,7 +66,7 @@
 
 - `boot_startup`：上电进入自检后立即请求一次，可与自检并行，且允许被更高优先级 cue 抢占。
 - `mains_present_dc` / `mains_absent_dc`：以 `DC5025 VIN>=3V` 的运行时采样作为真相源，在“已知状态之间”变化时触发；charger 通信从 unknown 恢复到 known 时保持静默；仅当 `VIN <-> charger fallback` 的来源切换未伴随 `mains_present` 真假翻转时保持静默，若真假确实变化则仍应触发边沿。
-- `charge_started` / `charge_completed`：charger 状态在“已知相位之间”进入“充电中 / 完成”时触发；首次建链或通信恢复后的 unknown -> known 不补播 one-shot。
+- `charge_started` / `charge_completed`：只允许由音频业务充电态边沿触发，不再直接消费裸 `CHG_STAT` 相位边沿；活跃充电会话在 `TS_WARM` 期间进入 `WarmHold` 静默态，`NORMAL <-> WARM` 不得补播 one-shot；若业务态已经 `Completed/FullLatched`，则保持完成态真相源，不因短暂 `TS_WARM` 重放完成音；当策略层暂时退化到 `BlockedNoBms`、`IdleWaitThreshold` 或 activation/recovery pending 这类“不足以表达真实会话”的窗口时，不得无脑塌缩到单一非充电态，而应优先沿用当前 charger raw phase 区分 `Idle/Charging/WarmHold/Completed`，仅在 raw phase 也无法判定时退回 `Unknown`；冷启动首帧的 cue state 也要由 boot raw phase 种子化，避免把真实的 `Idle/Completed -> Charging` 首次边沿吞掉；首次建链或通信恢复后的 unknown -> known 仍保持静默。
 - `battery_low_no_mains` / `battery_low_with_mains`：BMS `RCA` 低电告警按市电有无拆分。
 - `high_stress`：`TS_COOL` / `TREG` 或 TMP112 到达 `TLOW` 但尚未触发停机时触发；`TS_WARM` 仅驱动 UI/散热，不再播放 warning cue。
 - `shutdown_protection`：`THERM_KILL_N` 断言或保护导致输出被关时触发。
@@ -99,6 +100,14 @@
   - 同优先级 `one_shot` 保持 FIFO。
 - 运行时场景正确触发/停播：市电恢复/丢失、充电开始/完成、电池低电（区分有无市电）、高压力进入/退出、模块通信故障进入/恢复、保护/过压/过流进入/清除。
 - `BQ25792 TS_WARM` 期间不得触发 `high_stress` 提示音；若同时存在 `TS_COOL`、`TREG` 或 TMP112 `TLOW`，仍按原 warning/error 口径播报更高等级热事件。
+- 正常充电会话内若 `BQ25792 TS_WARM` 断言，则 `Charging -> WarmHold` 期间不得伪造 `charge_completed`；同一会话内 `WarmHold -> Charging` 恢复时也不得伪造 `charge_started`。
+- `charge_completed` 只允许在真实业务完成态（例如 `FullLatched`）首次可见时触发；若只是 `CHG_STAT` 因温区/恢复抖动而离开 `Charging`，则不得播报完成音。
+- 已经处于 `Completed` 的会话若短暂进入 `TS_WARM` 再恢复，也不得重复触发 `charge_completed`。
+- `charge_started` 只允许在 `Idle/Completed -> Charging` 的真实新充电会话上触发；`Unknown -> known`、`WarmHold -> Charging` 与其他恢复型转换都必须保持静默。
+- 若真实新充电会话在 `TS_WARM` 已断言时直接进入 `WarmHold`，则仍必须只触发一次 `charge_started`；后续同一会话内 `WarmHold -> Charging` 恢复继续保持静默。
+- BMS 遥测若在充电会话中短暂丢失，运行时充电 cue 语义不得因此退化成 `Idle -> Charging` 伪边沿；若 charger raw phase 仍能证明会话处于 `Charging/WarmHold/Completed`，则恢复后不得补播 `charge_started`，也不得吞掉后续真实 `charge_completed`。
+- 冷启动若 boot raw phase 已能判定 `Idle` 或 `Completed`，则运行时初始 cue state 必须继承该已知状态；后续真实 `Idle/Completed -> Charging` 首次边沿仍应正常触发 `charge_started`。
+- BMS activation / recovery pending 期间若 charger raw phase 仍能观察到 `NotCharging/Charging/Completed`，则对应的 `Idle/Charging/WarmHold/Completed` 语义必须继续可见；不得因为策略层暂时返回 `None` 而把真实 `charge_started` / `charge_completed` 边沿吞掉。
 - 当 `battery_protection` 与低电条件同时成立时，只允许播放 `battery_protection`；`BatteryLowNoMains` / `BatteryLowWithMains` 必须被全局压制，直到保护解除后再按当前 `RCA + mains_present` 状态恢复。
 - `continuous_loop` cue 必须在单段 PCM 末尾无缝回绕，不能每播完 1 段就重新触发一次 `start_playback`；否则错误音会在每轮边界听出额外起音/断点。
 - 通信恢复语义：
@@ -129,6 +138,7 @@
 - Active loop cue 被更高优先级 cue 抢占后会回灌待播队列，避免 warning/error loop 在抢占场景下丢失“首次恢复播放”机会。
 - `test-fw` 已改为复用共享音频模块，保留人工点播、抢占和同级 FIFO 验证能力。
 - `PowerManager` 已输出运行时音效快照与边沿接口，主固件不再依赖 UI snapshot 差分来判定业务音效。
+- 充电提示音的真相源已从裸 `CHG_STAT` 相位边沿切换为音频业务充电态边沿；运行时显式区分 `Unknown / Idle / WarmHold / Charging / Completed`，其中 `WarmHold` 只覆盖活跃充电会话，`Completed` 会话保持完成态真相源，不再误播“停充/重启充电” one-shot。
 - BMS 激活 / isolation 路径上的 early-return 现在也会刷新音效快照，避免运行时 cue 在激活窗口内冻结。
 - `mains_absent_dc` 已区分“初始无市电”与“已知状态之间掉电边沿”，避免电池冷启动时误报一次市电丢失告警。
 - `mains_absent_dc` 在 charger 通信临时退回 `Unknown` 期间会保留已激活 loop；只有明确恢复到 `Some(true)` 才停播，避免断电告警在链路抖动后永久静默。
@@ -196,3 +206,4 @@
 - 2026-03-15: hotfix，`VIN` 瞬时采样缺失时保留最近一次已知市电状态，避免 INA CH3 单次读失败伪造 `mains_absent_dc` / `battery_low_no_mains`；连续缺失则退回 charger `input_present` 兜底。
 - 2026-04-04: hotfix，针对 idle 主板周期性“滴”声回归，把运行期 `DmaError::Late` 从每轮噪声日志改为 burst 级 `detected / recovered / disabled` 状态机；首次 `Late` 立即 re-prime transport，恢复成功后清 burst，5 秒窗口内连续 3 次 recovery attempt 仍失败则静默降级，避免在无业务 cue 边沿时由 DMA underrun 继续制造杂音。
 - 2026-04-05: hotfix，`BQ25792 TS_WARM` 从 `high_stress` 播报条件中移除，避免温区预警在正常充电 warm 档位下每 2 秒重复提示；`TS_WARM` 改由界面状态与风扇全速 override 承载。
+- 2026-04-07: hotfix，充电 one-shot 改为只消费业务充电态边沿而非裸 `CHG_STAT`；新增 `WarmHold` 静默态，并在 `BlockedNoBms`、`IdleWaitThreshold`、activation/recovery pending 与冷启动种子阶段回退到 charger raw phase 区分 `Idle/Charging/WarmHold/Completed/Unknown`，同时补齐“新会话直接起于 `WarmHold`”的 `charge_started` 触发，修复 `NORMAL <-> WARM`、BMS 瞬断、激活窗口与 boot-after-self-check 场景下的充电 one-shot 误播/漏播。
