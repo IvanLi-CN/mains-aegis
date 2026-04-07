@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 部分完成（4/5）
+- Status: 已完成
 
 ## 背景 / 问题陈述
 
@@ -129,12 +129,14 @@
 - 工具文档与设计文档明确写出：**外部均衡 + charge/rest 开启 + sleep 关闭**，并声明严重初始失衡不纳入自动拉回承诺。
 - 主固件 `bms_diag_cfg` 能打印并解码均衡 DF；Cells 详情页在同一套输入下稳定区分 `OFF / IDLE / Cn / MULTI / ACTIVE / N/A`。
 - 至少生成三张稳定 preview：`cells-balance-active`、`cells-balance-idle`、`cells-balance-config-mismatch`，并写入本 spec 的 `## Visual Evidence`。
+- 实板只要求验证 **配置已对齐且可观测性生效**；是否在当前样机上立即触发均衡，不作为本轮收口条件。
 
 ## 实现记录
 
 - 工具侧已把主板均衡基线加入 `asset-df-mainboard` 与 `live-df-mainboard`。
 - 主固件已补齐 `BalanceConfig` 与 `AFE Register[KK]` 观测，并把 Cells 页 `BAL STATE` 与 footer 语义对齐到本规格。
 - Preview 工具已新增三组稳定 Cells 详情场景，用于冻结均衡 active / idle / config mismatch 画面。
+- 实板已完成一次 `live-df-mainboard` 写入，主固件 monitor 已确认 `balance_raw=Some(7)` 且 `balance_match=Some(true)`。
 
 ## 验证记录
 
@@ -143,6 +145,19 @@
 - `cargo run --manifest-path /Users/ivan/.codex/worktrees/8824/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells-balance-active --out-dir /Users/ivan/.codex/worktrees/8824/mains-aegis/docs/specs/nq7s2-bq40-balance-baseline-and-observability/assets/render`
 - `cargo run --manifest-path /Users/ivan/.codex/worktrees/8824/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells-balance-idle --out-dir /Users/ivan/.codex/worktrees/8824/mains-aegis/docs/specs/nq7s2-bq40-balance-baseline-and-observability/assets/render`
 - `cargo run --manifest-path /Users/ivan/.codex/worktrees/8824/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells-balance-config-mismatch --out-dir /Users/ivan/.codex/worktrees/8824/mains-aegis/docs/specs/nq7s2-bq40-balance-baseline-and-observability/assets/render`
+- `./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile live-df-mainboard`（tool report: `tools/bq40-comm-tool/reports/20260407_121248/summary.json`）
+- `mcu-agentd --non-interactive monitor esp --reset`（主固件 monitor: `.mcu-agentd/monitor/esp/20260407_041848.mon.ndjson`）
+- `./bin/run.sh diagnose --mode canonical --duration-sec 60 --force-min-charge true`（观测 `REST / Update Status / CBStatus`：`tools/bq40-comm-tool/.mcu-agentd/monitor/esp/20260407_065018.mon.ndjson`）
+
+## 实板说明
+
+- 本轮已确认主板均衡 DF 基线成功写入 live pack，且主固件能稳定观测 `balance_match=true`。
+- 当前样机上“尚未实际开始均衡”的直接原因是：
+  - `GaugingStatus` 已显示 `REST=1 / BAL_EN=1`
+  - 但 `Update Status=0x04`
+  - 且 `CBStatus` 返回 `CellnBalanceTimer=[0,0,0,0]`
+- 这说明本轮 blocker 不在均衡配置，而在 pack 仍未完成足以生成 balance timer 的学习状态。
+- 因此，本规格把“实板立即进入 active balancing”从收口条件中剥离，后续只需在具备完整 charge/relax 学习条件时继续复核。
 
 ## Visual Evidence
 

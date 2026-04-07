@@ -19,7 +19,7 @@
 
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
-| nq7s2 | BQ40 balance baseline + observability | 部分完成（4/5） | `nq7s2-bq40-balance-baseline-and-observability/SPEC.md` | 2026-04-06 | 已冻结主板均衡 DF 基线、Cells 页 BAL STATE 语义与三组预览场景；待 push/PR 收口 |
+| nq7s2 | BQ40 balance baseline + observability | 已完成 | `nq7s2-bq40-balance-baseline-and-observability/SPEC.md` | 2026-04-07 | PR #59 已完成实现/文档/预览收口；实板已确认 DF 对齐，active balancing 触发待后续在完整 charge/relax 条件下复核 |
 | edbpk | BQ40 Cell4 protocol-safe diagnostics | 已完成 | `edbpk-bq40-cell4-protocol-diagnostics/SPEC.md` | 2026-03-15 | 已完成协议修正、只读诊断收敛、flash/monitor 互斥与 reply PEC 探测；`Cell4` 根因已排除工具误读路径 |
 | tmdtq | BQ40 tool reflash / recovery convergence | 已完成 | `tmdtq-bq40-tool-reflash-recovery/SPEC.md` | 2026-03-11 | 工具链已可区分 ROM 检测/写入/退出与 post-flash 无效运行态；剩余问题收敛为样片硬件状态 |
 | g2kte | Dashboard live after self-check | 已完成 | `g2kte-dashboard-live-after-self-check/SPEC.md` | 2026-03-15 | 主固件改为“自检完成后自动进入 Dashboard”，并把 live Dashboard 的市电真相源统一到 `DC5025 VIN>=3V`；同时补齐 `PIN W` 的输入 ADC 样本净化与异常日志，避免 `~1000W` 误显 |
