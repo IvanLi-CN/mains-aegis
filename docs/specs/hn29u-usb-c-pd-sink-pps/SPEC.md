@@ -185,6 +185,7 @@ None。
 
 ## 变更记录（Change log）
 
+- 2026-04-07: PR #62 已创建，收口目标切换为 review-loop 后的可审阅态；台架风险保持显式记录。
 - 2026-04-07: 已完成 `usb_pd` 模块、I2C2 共享、`BQ25792` 输入限制 helper、主循环/`PowerManager` 接线，以及 host-unit-tests + feature matrix 本地验证；状态更新为 `部分完成（4/5）`，等待 PR/review-loop 收口。
 - 2026-04-07: 初版规格创建，冻结 USB-C PD/PPS sink v1 的范围、feature、边界与验收标准。
 
