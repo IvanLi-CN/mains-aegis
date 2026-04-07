@@ -41,3 +41,4 @@
 | eu2b8 | BQ25792 500mA charge policy + DC derate | 已完成 | `eu2b8-bq25792-charge-policy/SPEC.md` | 2026-04-06 | 主线 charger state machine 已作为 SoT；已补齐 `LOAD` 的 `2入3出` 回差、输出功率未知保守禁充、首页 `ChargeCard` runtime 紧凑映射，以及 `BQ25792` ADC 的 `MSB-first` 遥测解码 |
 | 2drzf | BQ40 mainboard DF protection baseline | 已完成 | `2drzf-bq40-mainboard-df-protection-baseline/SPEC.md` | 2026-04-03 | 冻结 `asset-df-mainboard` 的 `OCC/OCD/SOCC/SOCD` 主板基线，并把 `TMP + BMS` 最高温收敛为共享热控真相源 |
 | mturr | Front panel display-chain long-press diagnostics | 已完成 | `mturr-front-panel-display-chain-diagnostics/SPEC.md` | 2026-04-04 | 已完成主固件实现、本地构建、真机 flash/monitor 与 `CENTER` 长按 defmt 取证 |
+| zp4cg | Manual charge dashboard page + EEPROM prefs | 已完成 | `zp4cg-manual-charge-dashboard/SPEC.md` | 2026-04-07 | 已完成 `MANUAL` 三级页面、小屏触控布局、运行时手动接管/停止抑制、仅保存 prefs 的 EEPROM schema v1，以及预览/真机验证闭环 |

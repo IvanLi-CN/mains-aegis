@@ -1,6 +1,6 @@
 use crate::front_panel_scene::{
     is_bq40_activation_needed, BmsRecoveryUiAction, BmsResultKind, DashboardInputSource,
-    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+    ManualChargeSpeed, ManualChargeStopReason, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
 };
 use esp_firmware::bq40z50;
 use esp_firmware::fan;
@@ -72,6 +72,30 @@ pub(super) fn dashboard_input_source_name(source: Option<DashboardInputSource>) 
         Some(DashboardInputSource::Auto) => "auto",
         None => "none",
     }
+}
+
+pub(super) const fn manual_charge_stop_hold_blocks_charge(
+    stop_inhibit: bool,
+    activation_pending: bool,
+    activation_force_charge: bool,
+) -> bool {
+    stop_inhibit && !activation_pending && !activation_force_charge
+}
+
+pub(super) fn manual_charge_speed_derated(speed: ManualChargeSpeed, dc_derated: bool) -> bool {
+    speed != ManualChargeSpeed::Ma100 && dc_derated
+}
+
+pub(super) const fn manual_charge_safety_notice_active(
+    last_stop_reason: ManualChargeStopReason,
+    active: bool,
+    stop_inhibit: bool,
+    blocked: bool,
+) -> bool {
+    matches!(last_stop_reason, ManualChargeStopReason::SafetyBlocked)
+        && !active
+        && !stop_inhibit
+        && blocked
 }
 
 fn charge_policy_channel_enabled(
@@ -1174,6 +1198,75 @@ mod tests {
             Some(DashboardInputSource::Auto)
         );
         assert_eq!(detail_input_source(false, false, false), None);
+    }
+
+    #[test]
+    fn manual_stop_hold_blocks_only_plain_charge_policy() {
+        assert!(manual_charge_stop_hold_blocks_charge(true, false, false));
+    }
+
+    #[test]
+    fn manual_stop_hold_does_not_block_activation_sequences() {
+        assert!(!manual_charge_stop_hold_blocks_charge(true, true, false));
+    }
+
+    #[test]
+    fn manual_stop_hold_does_not_block_explicit_activation_force_charge() {
+        assert!(!manual_charge_stop_hold_blocks_charge(true, false, true));
+    }
+
+    #[test]
+    fn manual_stop_hold_still_blocks_boot_auto_force_charge() {
+        assert!(manual_charge_stop_hold_blocks_charge(true, false, false));
+    }
+
+    #[test]
+    fn manual_charge_derate_only_applies_to_above_100ma_profiles() {
+        assert!(!manual_charge_speed_derated(ManualChargeSpeed::Ma100, true));
+        assert!(!manual_charge_speed_derated(
+            ManualChargeSpeed::Ma500,
+            false
+        ));
+        assert!(!manual_charge_speed_derated(
+            ManualChargeSpeed::Ma1000,
+            false
+        ));
+        assert!(manual_charge_speed_derated(ManualChargeSpeed::Ma500, true));
+        assert!(manual_charge_speed_derated(ManualChargeSpeed::Ma1000, true));
+    }
+
+    #[test]
+    fn manual_charge_safety_notice_persists_only_while_blocked() {
+        assert!(manual_charge_safety_notice_active(
+            ManualChargeStopReason::SafetyBlocked,
+            false,
+            false,
+            true
+        ));
+        assert!(!manual_charge_safety_notice_active(
+            ManualChargeStopReason::SafetyBlocked,
+            true,
+            false,
+            true
+        ));
+        assert!(!manual_charge_safety_notice_active(
+            ManualChargeStopReason::SafetyBlocked,
+            false,
+            true,
+            true
+        ));
+        assert!(!manual_charge_safety_notice_active(
+            ManualChargeStopReason::SafetyBlocked,
+            false,
+            false,
+            false
+        ));
+        assert!(!manual_charge_safety_notice_active(
+            ManualChargeStopReason::UserStop,
+            false,
+            false,
+            true
+        ));
     }
 
     #[test]

@@ -29,9 +29,10 @@
 
 - 工作模式固定四态：`BYPASS / STANDBY / ASSIST / BACKUP`。
 - 充电策略以主线 charger state machine 为准；`UpsMode` 不再直接冻结 `CHARGE` 卡状态。
-- 首页 `CHARGE` 卡只做紧凑映射：`CHG500/CHG100 -> CHG`，其余 runtime token 保留 `WAIT/FULL/WARM/TEMP/LOAD/LOCK/NOAC`。
+- 首页 `CHARGE` 卡只做紧凑映射：`CHG1A/CHG500/CHG100 -> CHG`，其余 runtime token 保留 `WAIT/FULL/WARM/TEMP/LOAD/LOCK/NOAC`。
 - 右侧三卡语义固定，不与负载侧字段混用。
 - 首页 5 个模块同时承担二级仪表盘入口：主 KPI=`Output`、次级信息=`Thermal`、`BATTERY`=`Cells`、`CHARGE`=`Charger`、`DISCHG`=`Battery Flow`。
+- `CHARGER DETAIL` 不是终点页：其左侧会话面板继续向下钻取到 `MANUAL`，用于手动充电偏好与运行时控制；该页采用小屏优先布局，顶部压缩为单层只读信息条、操作集中在底部唯一 action bar。
 - 视觉样式（色板、字体分工、状态词形）以 [design-language.md](design-language.md) 为准，本页不再重复定义 Token 细节。
 
 详情页冻结口径见：[dashboard-detail-design.md](dashboard-detail-design.md)
