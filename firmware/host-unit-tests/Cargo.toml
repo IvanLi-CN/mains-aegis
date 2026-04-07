@@ -7,6 +7,15 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+pd-sink-fixed-5v = []
+pd-sink-fixed-9v = []
+pd-sink-fixed-12v = []
+pd-sink-fixed-15v = []
+pd-sink-fixed-20v = []
+pd-sink-pps = []
+
 [dependencies]
 defmt = "1.0.1"
 embedded-graphics-core = "0.4.1"

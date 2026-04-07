@@ -1,5 +1,17 @@
 #![allow(dead_code)]
 
+#[cfg(all(
+    feature = "pd-sink-pps",
+    not(any(
+        feature = "pd-sink-fixed-5v",
+        feature = "pd-sink-fixed-9v",
+        feature = "pd-sink-fixed-12v",
+        feature = "pd-sink-fixed-15v",
+        feature = "pd-sink-fixed-20v",
+    ))
+))]
+compile_error!("pd-sink-pps requires at least one pd-sink-fixed-* feature");
+
 extern crate self as esp_firmware;
 
 pub mod time {
@@ -42,6 +54,8 @@ pub mod front_panel_scene;
 
 #[path = "../../src/front_panel_logic.rs"]
 pub mod front_panel_logic;
+
+pub mod usb_pd;
 
 pub mod output {
     use crate::bq40z50;

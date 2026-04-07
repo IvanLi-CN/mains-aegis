@@ -17,7 +17,6 @@ use esp_firmware::display_pipeline::{
 };
 use esp_hal::dma::{DmaChannelFor, DmaRxBuf, DmaTxBuf};
 use esp_hal::gpio::{DriveMode, Flex, Input, OutputConfig, Pull};
-use esp_hal::i2c::master::I2c as HalI2c;
 use esp_hal::peripherals::PSRAM;
 use esp_hal::psram;
 use esp_hal::spi::{
@@ -142,8 +141,11 @@ struct Cst816dDiagSnapshot {
     mapped_point: Option<(u16, u16)>,
 }
 
-pub struct FrontPanel {
-    i2c: HalI2c<'static, Blocking>,
+pub struct FrontPanel<I2C>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    i2c: I2C,
     panel_io: PanelIo,
     btn_center: Input<'static>,
     ctp_irq: Input<'static>,
@@ -170,10 +172,13 @@ pub struct FrontPanel {
     frame_no: u32,
 }
 
-impl FrontPanel {
+impl<I2C> FrontPanel<I2C>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        i2c: HalI2c<'static, Blocking>,
+        i2c: I2C,
         spi: HalSpi<'static, Blocking>,
         dma_channel: impl DmaChannelFor<AnySpi<'static>>,
         psram: PSRAM<'static>,

@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 
+use core::cell::RefCell;
+
 esp_bootloader_esp_idf::esp_app_desc!();
 
 mod front_panel;
@@ -10,8 +12,10 @@ mod irq;
 mod output;
 mod runtime_audio_recovery;
 
+use embedded_hal_bus::i2c::RefCellDevice;
 use esp_backtrace as _;
 use esp_firmware::audio::{AudioCue, AudioManager, PLAYBACK_SAMPLE_RATE_HZ};
+use esp_firmware::usb_pd::UsbPdSinkManager;
 use esp_hal::clock::CpuClock;
 use esp_hal::dma::DmaError;
 use esp_hal::gpio::{
@@ -680,7 +684,7 @@ fn main() -> ! {
     let i2c2_config = I2cConfig::default()
         .with_frequency(Rate::from_khz(400))
         .with_software_timeout(SoftwareTimeout::Transaction(Duration::from_millis(100)));
-    let mut i2c2: I2c<'static, Blocking> = I2c::new(peripherals.I2C0, i2c2_config)
+    let i2c2: I2c<'static, Blocking> = I2c::new(peripherals.I2C0, i2c2_config)
         .unwrap()
         .with_sda(peripherals.GPIO8)
         .with_scl(peripherals.GPIO9);
@@ -779,7 +783,11 @@ fn main() -> ! {
     }
 
     // Boot self-test: detect online devices and decide which modules are allowed to run.
-    let panel_probe = output::log_i2c2_presence(&mut i2c2);
+    let i2c2_bus = RefCell::new(i2c2);
+    let panel_probe = {
+        let mut i2c2_probe = RefCellDevice::new(&i2c2_bus);
+        output::log_i2c2_presence(&mut i2c2_probe)
+    };
     defmt::info!(
         "self_test: panel screen_present={=bool} typec_present={=bool}",
         panel_probe.screen_present(),
@@ -787,7 +795,7 @@ fn main() -> ! {
     );
 
     let mut front_panel = front_panel::FrontPanel::new(
-        i2c2,
+        RefCellDevice::new(&i2c2_bus),
         spi,
         peripherals.DMA_CH1,
         peripherals.PSRAM,
@@ -848,6 +856,8 @@ fn main() -> ! {
     };
     let mut audio_enabled = audio_transfer.is_some();
     let mut audio_recovery = RuntimeAudioRecoveryState::new();
+    let mut usb_pd = UsbPdSinkManager::new(RefCellDevice::new(&i2c2_bus));
+    let initial_pd_state = usb_pd.init_best_effort();
 
     macro_rules! disable_runtime_audio {
         () => {{
@@ -1232,6 +1242,7 @@ fn main() -> ! {
         cfg.ilimit_ma
     );
     power.init_best_effort();
+    power.update_usb_pd_state(initial_pd_state);
     let initial_snapshot = power.ui_snapshot();
     front_panel.update_self_check_snapshot(initial_snapshot);
     front_panel.update_bms_activation_state(power.bms_activation_state());
@@ -1272,6 +1283,7 @@ fn main() -> ! {
     }
 
     let mut irq_tracker = irq::IrqTracker::new();
+    let pd_started_at = Instant::now();
     let mut last_irq_log_at: Option<Instant> = None;
     let mut last_fan_tach_log_at: Option<Instant> = None;
 
@@ -1281,6 +1293,12 @@ fn main() -> ! {
         while start.elapsed() < Duration::from_millis(2_000) {
             let irq_events = irq_tracker.take_delta();
             let fan_telemetry_due = power.tick(&irq_events);
+            let pd_state = usb_pd.tick(
+                power.usb_pd_demand(),
+                irq_events.i2c2_int != 0,
+                pd_started_at.elapsed().as_millis() as u32,
+            );
+            power.update_usb_pd_state(pd_state);
             if fan_pwm_ready {
                 applied_fan_state = apply_fan_command(
                     &mut fan_en,

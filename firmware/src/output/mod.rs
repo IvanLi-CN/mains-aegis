@@ -17,6 +17,7 @@ use esp_firmware::output_protection;
 use esp_firmware::output_retry::{self, TpsConfigRetryDecision};
 use esp_firmware::output_state as output_state_logic;
 use esp_firmware::tmp112;
+use esp_firmware::usb_pd;
 use esp_hal::gpio::{Flex, Input};
 use esp_hal::ram;
 use esp_hal::time::{Duration, Instant};
@@ -2589,6 +2590,9 @@ pub struct PowerManager<'d, I2C> {
     output_protection: output_protection::ProtectionRuntime,
     fan: fan::Controller,
     vin_sample_missing_streak: u8,
+    usb_pd_state: usb_pd::UsbPdPortState,
+    usb_pd_input_current_limit_ma: Option<u16>,
+    usb_pd_vindpm_mv: Option<u16>,
 
     ui_snapshot: SelfCheckUiSnapshot,
     audio_snapshot: AudioSignalSnapshot,
@@ -3060,6 +3064,9 @@ where
             output_protection: output_protection::ProtectionRuntime::new(cfg.ilimit_ma),
             fan: fan::Controller::new(cfg.fan_config),
             vin_sample_missing_streak: 0,
+            usb_pd_state: usb_pd::UsbPdPortState::default(),
+            usb_pd_input_current_limit_ma: None,
+            usb_pd_vindpm_mv: None,
             ui_snapshot: initial_ui_snapshot,
             audio_snapshot: AudioSignalSnapshot::default(),
             audio_events: AudioSignalEvents::default(),
@@ -3361,7 +3368,9 @@ where
         } else {
             Some("LIVE DATA")
         };
-        detail.charger_notice = if snapshot.bq25792 == SelfCheckCommState::Ok
+        detail.charger_notice = if self.usb_pd_state.unsafe_source_latched {
+            Some("USB-C INPUT UNSAFE")
+        } else if snapshot.bq25792 == SelfCheckCommState::Ok
             && snapshot.bq25792_allow_charge == Some(false)
             && snapshot.fusb302_vbus_present == Some(true)
         {
@@ -3378,6 +3387,65 @@ where
 
         snapshot.dashboard_detail = detail;
         snapshot
+    }
+
+    pub fn usb_pd_demand(&self) -> usb_pd::UsbPdPowerDemand {
+        let activation_pending = self.bms_activation_state == BmsActivationState::Pending;
+        let requested_charge_voltage_mv =
+            if activation_pending && self.bms_activation_force_charge_requested {
+                BMS_ACTIVATION_FORCE_VREG_MV
+            } else {
+                CHARGE_POLICY_VREG_MV
+            };
+        let requested_charge_current_ma =
+            if activation_pending && self.bms_activation_force_charge_requested {
+                BMS_ACTIVATION_FORCE_ICHG_MA
+            } else {
+                self.ui_snapshot
+                    .bq25792_ichg_ma
+                    .unwrap_or(CHARGE_POLICY_NORMAL_ICHG_MA)
+            };
+
+        usb_pd::UsbPdPowerDemand {
+            requested_charge_voltage_mv,
+            requested_charge_current_ma,
+            battery_voltage_mv: self.ui_snapshot.bq40z50_pack_mv,
+            measured_input_voltage_mv: self.ui_snapshot.input_vbus_mv,
+            charging_enabled: self.cfg.charger_enabled && self.charger_allowed,
+        }
+    }
+
+    pub fn update_usb_pd_state(&mut self, state: usb_pd::UsbPdPortState) {
+        if self.usb_pd_state != state {
+            defmt::info!(
+                "usb_pd: state attached={=bool} ready={=bool} vbus_present={=?} contract_mv={=?} contract_ma={=?} unsafe={=bool}",
+                state.attached,
+                state.controller_ready,
+                state.vbus_present,
+                state.contract.map(|contract| contract.voltage_mv),
+                state.contract.map(|contract| contract.current_ma),
+                state.unsafe_source_latched
+            );
+        }
+        self.usb_pd_state = state;
+        self.usb_pd_input_current_limit_ma = state
+            .contract
+            .and_then(|contract| contract.input_current_limit_ma);
+        self.usb_pd_vindpm_mv = state.contract.and_then(|contract| contract.vindpm_mv);
+
+        if state.enabled {
+            self.ui_snapshot.fusb302 = if !state.controller_ready {
+                SelfCheckCommState::Err
+            } else if state.unsafe_source_latched {
+                SelfCheckCommState::Warn
+            } else {
+                SelfCheckCommState::Ok
+            };
+            if state.vbus_present.is_some() {
+                self.ui_snapshot.fusb302_vbus_present = state.vbus_present;
+            }
+        }
+        self.recompute_ui_mode();
     }
 
     #[allow(dead_code)]
@@ -7927,6 +7995,7 @@ where
         let vsys_min_reg = (status3 & bq25792::status3::VSYS_STAT) != 0;
 
         let input_present = vbus_present || ac1_present || ac2_present || pg;
+        let usb_pd_unsafe_latched = self.usb_pd_state.unsafe_source_latched;
         let adc_state = match bq25792::ensure_adc_power_path(&mut self.i2c) {
             Ok(adc_state) => Some(adc_state),
             Err(e) => {
@@ -7971,7 +8040,7 @@ where
             status3,
         );
 
-        let can_enable = input_present && !ts_cold && !ts_hot;
+        let can_enable = input_present && !ts_cold && !ts_hot && !usb_pd_unsafe_latched;
         let activation_probe_without_charge = activation_pending
             && self.bms_activation_phase == BmsActivationPhase::ProbeWithoutCharge;
         let activation_normal_hold_charge = false;
@@ -8033,7 +8102,9 @@ where
         let normal_allow_charge =
             charge_policy_decision.map_or(false, |decision| decision.allow_charge);
         let force_allow_charge = (activation_force_charge || auto_force_charge) && can_enable;
-        let mut allow_charge = if activation_force_charge_off {
+        let mut allow_charge = if usb_pd_unsafe_latched {
+            false
+        } else if activation_force_charge_off {
             false
         } else {
             (normal_allow_charge && self.cfg.charger_enabled)
@@ -8048,7 +8119,9 @@ where
         let policy_full_reason = charge_policy_decision.and_then(|decision| decision.full_reason);
         let policy_output_block_reason =
             charge_policy_decision.and_then(|decision| decision.output_block_reason);
-        let mut policy_status_text = if force_allow_charge {
+        let mut policy_status_text = if usb_pd_unsafe_latched {
+            "FAULT"
+        } else if force_allow_charge {
             "WAKE"
         } else if activation_force_charge_off {
             "LOCK"
@@ -8059,7 +8132,9 @@ where
                 .map(detail_charger_status_text)
                 .unwrap_or("READY")
         };
-        let mut policy_notice_text = if force_allow_charge {
+        let mut policy_notice_text = if usb_pd_unsafe_latched {
+            "unsafe_source_latched"
+        } else if force_allow_charge {
             "activation_force_charge"
         } else if activation_force_charge_off {
             "activation_force_charge_off"
@@ -8190,6 +8265,7 @@ where
         let mut applied_ctrl0 = ctrl0;
         let mut applied_vreg_mv: Option<u16> = None;
         let mut applied_ichg_ma: Option<u16> = None;
+        let mut applied_vindpm_mv: Option<u16> = None;
         let mut applied_iindpm_ma: Option<u16> = None;
 
         fn decode_voltage_mv(reg: u16) -> u16 {
@@ -8327,6 +8403,36 @@ where
                         }
                     }
                 }
+
+                if let Some(target_vindpm_mv) = self.usb_pd_vindpm_mv {
+                    match bq25792::set_input_voltage_limit_mv(&mut self.i2c, target_vindpm_mv) {
+                        Ok(v) => {
+                            applied_vindpm_mv = Some(bq25792::decode_input_voltage_limit_mv(v))
+                        }
+                        Err(e) => {
+                            self.mark_charger_poll_failed(now);
+                            defmt::error!(
+                                "charger: bq25792 err stage=vindpm_write err={}",
+                                i2c_error_kind(e)
+                            );
+                            return;
+                        }
+                    };
+                }
+
+                if let Some(target_iindpm_ma) = self.usb_pd_input_current_limit_ma {
+                    match bq25792::set_input_current_limit_ma(&mut self.i2c, target_iindpm_ma) {
+                        Ok(v) => applied_iindpm_ma = Some(decode_cur_ma(v)),
+                        Err(e) => {
+                            self.mark_charger_poll_failed(now);
+                            defmt::error!(
+                                "charger: bq25792 err stage=iindpm_write err={}",
+                                i2c_error_kind(e)
+                            );
+                            return;
+                        }
+                    }
+                }
             }
 
             self.chg_ce.set_low();
@@ -8338,7 +8444,7 @@ where
 
         if !(auto_force_charge || activation_pending) {
             defmt::info!(
-                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_output_block_reason={=?} policy_target_ichg_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} policy_output_blocked={=bool} policy_output_enter_streak={=u8} policy_output_exit_streak={=u8} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
+                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_output_block_reason={=?} policy_target_ichg_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} policy_output_blocked={=bool} policy_output_enter_streak={=u8} policy_output_exit_streak={=u8} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} vindpm_mv={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
                 self.chg_enabled,
                 self.cfg.force_min_charge,
                 auto_force_charge,
@@ -8387,6 +8493,7 @@ where
                 ts_hot,
                 applied_vreg_mv,
                 applied_ichg_ma,
+                applied_vindpm_mv,
                 applied_iindpm_ma,
                 sfet_present_before,
                 sfet_present_after,
@@ -8456,7 +8563,8 @@ where
         } else {
             None
         };
-        self.ui_snapshot.fusb302_vbus_present = Some(input_present);
+        self.ui_snapshot.fusb302_vbus_present =
+            self.usb_pd_state.vbus_present.or(Some(input_present));
         self.ui_snapshot.dashboard_detail.input_source = input_source;
         self.ui_snapshot.dashboard_detail.charger_active = Some(
             if force_allow_charge

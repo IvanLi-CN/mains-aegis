@@ -43,6 +43,13 @@ test-fw-default-screen-static = ["test-fw"]
 test-fw-default-audio-playback = ["test-fw"]
 display-spi-20mhz = []
 display-spi-40mhz = []
+# USB-C PD sink feature gates. Fixed PDO support is opt-in by voltage tier; PPS requires at least one fixed PDO feature.
+pd-sink-fixed-5v = []
+pd-sink-fixed-9v = []
+pd-sink-fixed-12v = []
+pd-sink-fixed-15v = []
+pd-sink-fixed-20v = []
+pd-sink-pps = []
 
 [[bin]]
 name = "test-fw"
@@ -58,6 +65,7 @@ required-features = ["tps-test-fw"]
 defmt = "1.0.1"
 embedded-graphics-core = "0.4.1"
 embedded-hal = "1"
+embedded-hal-bus = "0.3.0"
 gc9307-async = { version = "0.1.1", default-features = false }
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32s3"] }
 esp-backtrace = { version = "0.18.1", features = ["esp32s3", "panic-handler", "defmt"] }

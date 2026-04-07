@@ -4,6 +4,8 @@
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
+use core::cell::RefCell;
+
 #[cfg(all(
     feature = "test-fw",
     not(any(feature = "test-fw-screen-static", feature = "test-fw-audio-playback"))
@@ -29,6 +31,8 @@ compile_error!("test-fw-default-audio-playback requires test-fw-audio-playback")
 
 #[path = "../front_panel.rs"]
 mod front_panel;
+#[path = "../front_panel_logic.rs"]
+mod front_panel_logic;
 #[path = "../front_panel_scene.rs"]
 mod front_panel_scene;
 #[path = "../irq.rs"]
@@ -38,6 +42,7 @@ mod test_audio;
 #[path = "../test_harness.rs"]
 mod test_harness;
 
+use embedded_hal_bus::i2c::RefCellDevice;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Input, InputConfig, Io, Pull};
@@ -118,8 +123,10 @@ fn main() -> ! {
         InputConfig::default().with_pull(Pull::None),
     );
 
+    let i2c2_bus = RefCell::new(i2c2);
+
     let mut panel = front_panel::FrontPanel::new(
-        i2c2,
+        RefCellDevice::new(&i2c2_bus),
         spi,
         peripherals.DMA_CH1,
         peripherals.PSRAM,
@@ -294,11 +301,13 @@ fn main() -> ! {
     }
 }
 
-fn render_route(
-    panel: &mut front_panel::FrontPanel,
+fn render_route<I2C>(
+    panel: &mut front_panel::FrontPanel<I2C>,
     harness: &TestHarnessState,
     #[cfg(feature = "test-fw-audio-playback")] audio_status: test_audio::AudioStatus,
-) {
+) where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
     match harness.route() {
         TestRoute::Navigation => {
             panel.render_test_navigation(
