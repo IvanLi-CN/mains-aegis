@@ -122,6 +122,10 @@ impl FilteredSourceCapabilities {
         self.len
     }
 
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub fn get(&self, index: usize) -> Option<SourceOffer> {
         (index < self.len).then_some(self.offers[index])
     }
@@ -176,7 +180,7 @@ pub fn select_contract(
     demand: UsbPdPowerDemand,
 ) -> Option<ContractPlan> {
     let filtered = filter_source_capabilities(source);
-    if filtered.len() == 0 || !local.pd_enabled() {
+    if filtered.is_empty() || !local.pd_enabled() {
         return None;
     }
 
@@ -357,7 +361,7 @@ pub fn required_input_current_ma(power_mw: u32, input_voltage_mv: u16) -> u16 {
     }
 
     let adjusted_power_mw = power_mw.saturating_mul(POWER_EFFICIENCY_NUM) / POWER_EFFICIENCY_DEN;
-    let current_ma = (adjusted_power_mw + input_voltage_mv as u32 - 1) / input_voltage_mv as u32;
+    let current_ma = adjusted_power_mw.div_ceil(input_voltage_mv as u32);
     current_ma.min(u16::MAX as u32) as u16
 }
 

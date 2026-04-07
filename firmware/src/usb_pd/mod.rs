@@ -27,7 +27,7 @@ pub struct ActiveContract {
     pub vindpm_mv: Option<u16>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UsbPdPortState {
     pub enabled: bool,
     pub controller_ready: bool,
@@ -36,20 +36,6 @@ pub struct UsbPdPortState {
     pub polarity: Option<CcPolarity>,
     pub contract: Option<ActiveContract>,
     pub unsafe_source_latched: bool,
-}
-
-impl Default for UsbPdPortState {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            controller_ready: false,
-            attached: false,
-            vbus_present: None,
-            polarity: None,
-            contract: None,
-            unsafe_source_latched: false,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -121,8 +107,10 @@ where
 {
     pub fn new(i2c: I2C) -> Self {
         let local_capabilities = LocalCapabilities::from_features();
-        let mut state = UsbPdPortState::default();
-        state.enabled = local_capabilities.pd_enabled();
+        let state = UsbPdPortState {
+            enabled: local_capabilities.pd_enabled(),
+            ..UsbPdPortState::default()
+        };
         Self {
             phy: Fusb302::new(i2c),
             local_capabilities,
@@ -180,7 +168,7 @@ where
             if now_ms < self.next_retry_at_ms {
                 return self.state;
             }
-            if matches!(self.phy.init_sink(self.source_spec_revision), Ok(_)) {
+            if self.phy.init_sink(self.source_spec_revision).is_ok() {
                 self.initialized = true;
                 self.state.controller_ready = true;
                 self.next_retry_at_ms = 0;

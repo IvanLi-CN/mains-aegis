@@ -8102,9 +8102,7 @@ where
         let normal_allow_charge =
             charge_policy_decision.map_or(false, |decision| decision.allow_charge);
         let force_allow_charge = (activation_force_charge || auto_force_charge) && can_enable;
-        let mut allow_charge = if usb_pd_unsafe_latched {
-            false
-        } else if activation_force_charge_off {
+        let mut allow_charge = if usb_pd_unsafe_latched || activation_force_charge_off {
             false
         } else {
             (normal_allow_charge && self.cfg.charger_enabled)

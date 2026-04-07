@@ -272,8 +272,7 @@ impl RequestDataObject {
     }
 
     pub const fn for_fixed(object_position: u8, operating_current_ma: u16) -> Self {
-        let current_field =
-            ((operating_current_ma + FIXED_CURRENT_STEP_MA - 1) / FIXED_CURRENT_STEP_MA) as u32;
+        let current_field = operating_current_ma.div_ceil(FIXED_CURRENT_STEP_MA) as u32;
         let raw = ((object_position as u32) & 0x07) << 28
             | (1u32 << 24)
             | ((current_field & 0x03ff) << 10)
@@ -282,10 +281,8 @@ impl RequestDataObject {
     }
 
     pub const fn for_pps(object_position: u8, voltage_mv: u16, operating_current_ma: u16) -> Self {
-        let voltage_field =
-            ((voltage_mv + PPS_RDO_VOLTAGE_STEP_MV - 1) / PPS_RDO_VOLTAGE_STEP_MV) as u32;
-        let current_field =
-            ((operating_current_ma + PPS_RDO_CURRENT_STEP_MA - 1) / PPS_RDO_CURRENT_STEP_MA) as u32;
+        let voltage_field = voltage_mv.div_ceil(PPS_RDO_VOLTAGE_STEP_MV) as u32;
+        let current_field = operating_current_ma.div_ceil(PPS_RDO_CURRENT_STEP_MA) as u32;
         let raw = ((object_position as u32) & 0x07) << 28
             | (1u32 << 24)
             | ((voltage_field & 0x0fff) << 9)
