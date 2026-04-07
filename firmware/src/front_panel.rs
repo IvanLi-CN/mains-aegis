@@ -6,9 +6,9 @@ use crate::front_panel_logic::{
 };
 use crate::front_panel_scene::{
     self, AudioTestUiState, BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardRoute,
-    DashboardTouchTarget, SelfCheckCommState, SelfCheckOverlay, SelfCheckTouchTarget,
-    SelfCheckUiSnapshot, TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant,
-    UpsMode,
+    DashboardTouchTarget, ManualChargeUiAction, SelfCheckCommState, SelfCheckOverlay,
+    SelfCheckTouchTarget, SelfCheckUiSnapshot, TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel,
+    UiPainter, UiVariant, UpsMode,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -77,6 +77,7 @@ const PANEL_RUNTIME_SPI_FREQ_MHZ: u32 = if cfg!(feature = "display-spi-20mhz") {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiAction {
     RequestBmsRecovery(BmsRecoveryUiAction),
+    ManualCharge(ManualChargeUiAction),
     ClearBmsActivationResult,
 }
 
@@ -660,8 +661,10 @@ impl FrontPanel {
                         ui_action = self.process_touch_action(snapshot);
                     }
                 } else {
-                    self.process_dashboard_button_action(snapshot);
-                    self.process_dashboard_touch_action(snapshot);
+                    ui_action = self.process_dashboard_button_action(snapshot);
+                    if ui_action.is_none() {
+                        ui_action = self.process_dashboard_touch_action(snapshot);
+                    }
                 }
                 if self.maybe_trigger_center_long_press(snapshot) {
                     self.last_inputs = Some(snapshot);
@@ -1282,39 +1285,52 @@ impl FrontPanel {
         }
     }
 
-    fn process_dashboard_button_action(&mut self, snapshot: InputSnapshot) {
-        if !matches!(self.dashboard_route, DashboardRoute::Detail(_)) {
-            return;
-        }
-
+    fn process_dashboard_button_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
         let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
         let left_edge = snapshot.left && !prev.left;
         let center_edge = snapshot.center && !prev.center;
         if left_edge || center_edge {
-            let previous = self.dashboard_route;
-            self.dashboard_route = DashboardRoute::Home;
-            self.needs_redraw = true;
-            defmt::info!(
-                "ui: dashboard route old={} new={}",
-                dashboard_route_name(previous),
-                dashboard_route_name(self.dashboard_route)
-            );
+            let next_route = match self.dashboard_route {
+                DashboardRoute::Detail(_) => Some(DashboardRoute::Home),
+                DashboardRoute::ManualCharge => Some(DashboardRoute::Detail(
+                    front_panel_scene::DashboardDetailPage::Charger,
+                )),
+                DashboardRoute::Home => None,
+            };
+            if let Some(next_route) = next_route {
+                let previous = self.dashboard_route;
+                self.dashboard_route = next_route;
+                self.needs_redraw = true;
+                defmt::info!(
+                    "ui: dashboard route old={} new={}",
+                    dashboard_route_name(previous),
+                    dashboard_route_name(self.dashboard_route)
+                );
+            }
         }
+        None
     }
 
-    fn process_dashboard_touch_action(&mut self, snapshot: InputSnapshot) {
+    fn process_dashboard_touch_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
         let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
         if !snapshot.touch || prev.touch {
-            return;
+            return None;
         }
 
         let (x, y) = match snapshot.touch_point {
             Some(point) => point,
-            None => return,
+            None => return None,
         };
 
         if let Some(target) = front_panel_scene::dashboard_hit_test(self.dashboard_route, x, y) {
-            let next_route = front_panel_scene::dashboard_route_for_target(target);
+            let resolved_target = if matches!(target, DashboardTouchTarget::ManualStart)
+                && dashboard_manual_action_uses_stop(&self.self_check_snapshot)
+            {
+                DashboardTouchTarget::ManualStop
+            } else {
+                target
+            };
+            let next_route = front_panel_scene::dashboard_route_for_target(resolved_target);
             if next_route != self.dashboard_route {
                 let previous = self.dashboard_route;
                 self.dashboard_route = next_route;
@@ -1323,10 +1339,27 @@ impl FrontPanel {
                     "ui: dashboard route old={} new={} target={}",
                     dashboard_route_name(previous),
                     dashboard_route_name(self.dashboard_route),
-                    dashboard_touch_target_name(target)
+                    dashboard_touch_target_name(resolved_target)
+                );
+            } else {
+                defmt::info!(
+                    "ui: dashboard route keep={} target={}",
+                    dashboard_route_name(self.dashboard_route),
+                    dashboard_touch_target_name(resolved_target)
                 );
             }
+
+            if let Some(action) =
+                front_panel_scene::dashboard_manual_charge_action_for_target(resolved_target)
+            {
+                defmt::info!(
+                    "ui: manual_charge action={}",
+                    manual_charge_ui_action_name(action)
+                );
+                return Some(UiAction::ManualCharge(action));
+            }
         }
+        None
     }
 
     fn snapshot_to_model(&self, _snapshot: InputSnapshot) -> UiModel {
@@ -1398,6 +1431,7 @@ fn dashboard_route_name(route: DashboardRoute) -> &'static str {
         DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Output) => "detail_output",
         DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Charger) => "detail_charger",
         DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal) => "detail_thermal",
+        DashboardRoute::ManualCharge => "manual_charge",
     }
 }
 
@@ -1409,6 +1443,59 @@ fn dashboard_touch_target_name(target: DashboardTouchTarget) -> &'static str {
         DashboardTouchTarget::HomeCharger => "home_charger",
         DashboardTouchTarget::HomeBatteryFlow => "home_battery_flow",
         DashboardTouchTarget::DetailBack => "detail_back",
+        DashboardTouchTarget::ChargerManualEntry => "charger_manual_entry",
+        DashboardTouchTarget::ManualBack => "manual_back",
+        DashboardTouchTarget::ManualTarget3V7 => "manual_target_3v7",
+        DashboardTouchTarget::ManualTarget80 => "manual_target_80",
+        DashboardTouchTarget::ManualTarget100 => "manual_target_100",
+        DashboardTouchTarget::ManualSpeed100 => "manual_speed_100",
+        DashboardTouchTarget::ManualSpeed500 => "manual_speed_500",
+        DashboardTouchTarget::ManualSpeed1A => "manual_speed_1a",
+        DashboardTouchTarget::ManualTimer1h => "manual_timer_1h",
+        DashboardTouchTarget::ManualTimer2h => "manual_timer_2h",
+        DashboardTouchTarget::ManualTimer6h => "manual_timer_6h",
+        DashboardTouchTarget::ManualStart => "manual_start",
+        DashboardTouchTarget::ManualStop => "manual_stop",
+    }
+}
+
+fn dashboard_manual_action_uses_stop(snapshot: &SelfCheckUiSnapshot) -> bool {
+    snapshot.dashboard_detail.manual_charge.runtime.active
+        || snapshot.dashboard_detail.charger_active == Some(true)
+        || snapshot.bq25792_allow_charge == Some(true)
+}
+
+fn manual_charge_ui_action_name(action: ManualChargeUiAction) -> &'static str {
+    match action {
+        ManualChargeUiAction::SetTarget(front_panel_scene::ManualChargeTarget::Pack3V7) => {
+            "set_target_3v7"
+        }
+        ManualChargeUiAction::SetTarget(front_panel_scene::ManualChargeTarget::Rsoc80) => {
+            "set_target_80"
+        }
+        ManualChargeUiAction::SetTarget(front_panel_scene::ManualChargeTarget::Full100) => {
+            "set_target_100"
+        }
+        ManualChargeUiAction::SetSpeed(front_panel_scene::ManualChargeSpeed::Ma100) => {
+            "set_speed_100"
+        }
+        ManualChargeUiAction::SetSpeed(front_panel_scene::ManualChargeSpeed::Ma500) => {
+            "set_speed_500"
+        }
+        ManualChargeUiAction::SetSpeed(front_panel_scene::ManualChargeSpeed::Ma1000) => {
+            "set_speed_1a"
+        }
+        ManualChargeUiAction::SetTimerLimit(front_panel_scene::ManualChargeTimerLimit::H1) => {
+            "set_timer_1h"
+        }
+        ManualChargeUiAction::SetTimerLimit(front_panel_scene::ManualChargeTimerLimit::H2) => {
+            "set_timer_2h"
+        }
+        ManualChargeUiAction::SetTimerLimit(front_panel_scene::ManualChargeTimerLimit::H6) => {
+            "set_timer_6h"
+        }
+        ManualChargeUiAction::Start => "start",
+        ManualChargeUiAction::Stop => "stop",
     }
 }
 

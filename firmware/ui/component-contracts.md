@@ -52,7 +52,7 @@
 - Responsibility: 电池充电电流与充电状态。
 - Required fields: `ichg_a`, `charge_state`。
 - Forbidden fields: 放电电流、输出负载电流。
-- Allowed states: 首页紧凑 token 固定为 `CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`；其中 `CHG500/CHG100` 在首页压缩为 `CHG`。
+- Allowed states: 首页紧凑 token 固定为 `CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`；其中 `CHG1A/CHG500/CHG100` 在首页压缩为 `CHG`。
 - Token refs: `Type.Title`, `Type.Num`, `Color.State.Success|Warning|Error`（按状态选择）。
 - Geometry anchor: `x=206 y=72 w=108 h=48`。
 
@@ -82,6 +82,39 @@
 - Allowed states: 任一 `DashboardDetailPage`。
 - Token refs: `Type.Body`, `Color.Border.Default`, `Color.Text.Primary`, `Color.State.Accent`。
 - Geometry anchor: `x=8 y=2 w=56 h=14`。
+
+### ManualChargeEntryHotZone
+
+- Responsibility: `CHARGER DETAIL` 左侧会话面板进入 `MANUAL CHARGE` 的点击热区与轻量 entry marker。
+- Required fields: `target_route=DashboardRoute::ManualCharge`, `entry_marker`.
+- Forbidden fields: 独立业务数值；其展示内容仍归 `Charger` detail 页面所有。
+- Allowed states: `DashboardRoute::Detail(Charger)`。
+- Token refs: `Color.Focus.Right`, `Color.Border.Default`。
+- Geometry anchor: `x=6 y=60 w=150 h=82`。
+
+### ManualChargePage
+
+- Responsibility: 手动充电页容器，承载偏好设置、运行时模式与 `START/STOP` 控制。
+- Required fields: `prefs`, `runtime`, `status_chip`, `footer_notice`, `action_label`.
+- Forbidden fields: 持久化手动会话状态；运行时状态不得越过 `PowerManager` RAM 边界。
+- Allowed states: `DashboardRoute::ManualCharge`。
+- Token refs: `Type.Title`, `Type.Body`, `Type.Num`, `Type.NumBig`, `Color.State.Accent|Warning|Error|Success`。
+- Geometry anchor:
+  - top info bar: `x=0 y=0 w=320 h=20`（左 `MODE` / 中 `MANUAL` / 右 status）
+  - `TARGET` row: `x=6 y=24 w=308 h=30`
+  - `SPEED` row: `x=6 y=58 w=308 h=30`
+  - `TIMER` row: `x=6 y=92 w=308 h=30`
+  - action bar: `BACK x=6 y=132 w=88 h=30` / `STATUS x=100 y=132 w=120 h=30` / `START|STOP x=226 y=132 w=88 h=30`
+  - top bar is info-only on this page; no dedicated back chip，也不再保留第二层 info strip。
+
+### ManualChargeOptionGroup
+
+- Responsibility: `TARGET / SPEED / TIMER` 三组选项的单选显示与锁定态提示。
+- Required fields: `group_title`, `options[3]`, `selected`, `locked`.
+- Forbidden fields: 业务状态机副作用；点击只发出 UI action，不直接改 charger。
+- Allowed states: `DashboardRoute::ManualCharge`。
+- Token refs: `Type.Body`, `Type.Num`, `Color.Focus.Left|Right|Center`, `Color.Text.Secondary`。
+- Geometry anchor: segmented row `x=6 w=308 h=30`；label 区保留左侧 `~70px`，3 个 segment 各 `74x24`，间距 `4px`；不再绘制外层 row card，仅保留 label + segments。
 
 ## 3. Self-check components
 

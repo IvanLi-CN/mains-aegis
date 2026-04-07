@@ -174,9 +174,168 @@ pub enum DashboardDetailPage {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManualChargeTarget {
+    Pack3V7,
+    Rsoc80,
+    Full100,
+}
+
+impl ManualChargeTarget {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Pack3V7 => "3.7V",
+            Self::Rsoc80 => "80%",
+            Self::Full100 => "100%",
+        }
+    }
+}
+
+impl Default for ManualChargeTarget {
+    fn default() -> Self {
+        Self::Full100
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManualChargeSpeed {
+    Ma100,
+    Ma500,
+    Ma1000,
+}
+
+impl ManualChargeSpeed {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Ma100 => "100mA",
+            Self::Ma500 => "500mA",
+            Self::Ma1000 => "1A",
+        }
+    }
+
+    pub const fn ichg_ma(self) -> u16 {
+        match self {
+            Self::Ma100 => 100,
+            Self::Ma500 => 500,
+            Self::Ma1000 => 1_000,
+        }
+    }
+}
+
+impl Default for ManualChargeSpeed {
+    fn default() -> Self {
+        Self::Ma500
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManualChargeTimerLimit {
+    H1,
+    H2,
+    H6,
+}
+
+impl ManualChargeTimerLimit {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::H1 => "1h",
+            Self::H2 => "2h",
+            Self::H6 => "6h",
+        }
+    }
+
+    pub const fn hours(self) -> u8 {
+        match self {
+            Self::H1 => 1,
+            Self::H2 => 2,
+            Self::H6 => 6,
+        }
+    }
+}
+
+impl Default for ManualChargeTimerLimit {
+    fn default() -> Self {
+        Self::H2
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ManualChargePrefs {
+    pub target: ManualChargeTarget,
+    pub speed: ManualChargeSpeed,
+    pub timer_limit: ManualChargeTimerLimit,
+}
+
+impl ManualChargePrefs {
+    pub const fn defaults() -> Self {
+        Self {
+            target: ManualChargeTarget::Full100,
+            speed: ManualChargeSpeed::Ma500,
+            timer_limit: ManualChargeTimerLimit::H2,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManualChargeStopReason {
+    None,
+    UserStop,
+    TimerExpired,
+    PackReached,
+    RsocReached,
+    FullReached,
+    SafetyBlocked,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManualChargeRuntimeState {
+    pub active: bool,
+    pub takeover: bool,
+    pub stop_inhibit: bool,
+    pub last_stop_reason: ManualChargeStopReason,
+    pub remaining_minutes: Option<u16>,
+}
+
+impl ManualChargeRuntimeState {
+    pub const fn idle() -> Self {
+        Self {
+            active: false,
+            takeover: false,
+            stop_inhibit: false,
+            last_stop_reason: ManualChargeStopReason::None,
+            remaining_minutes: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManualChargeUiSnapshot {
+    pub prefs: ManualChargePrefs,
+    pub runtime: ManualChargeRuntimeState,
+}
+
+impl ManualChargeUiSnapshot {
+    pub const fn pending() -> Self {
+        Self {
+            prefs: ManualChargePrefs::defaults(),
+            runtime: ManualChargeRuntimeState::idle(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManualChargeUiAction {
+    SetTarget(ManualChargeTarget),
+    SetSpeed(ManualChargeSpeed),
+    SetTimerLimit(ManualChargeTimerLimit),
+    Start,
+    Stop,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DashboardRoute {
     Home,
     Detail(DashboardDetailPage),
+    ManualCharge,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,6 +346,19 @@ pub enum DashboardTouchTarget {
     HomeCharger,
     HomeBatteryFlow,
     DetailBack,
+    ChargerManualEntry,
+    ManualBack,
+    ManualTarget3V7,
+    ManualTarget80,
+    ManualTarget100,
+    ManualSpeed100,
+    ManualSpeed500,
+    ManualSpeed1A,
+    ManualTimer1h,
+    ManualTimer2h,
+    ManualTimer6h,
+    ManualStart,
+    ManualStop,
 }
 
 #[allow(dead_code)]
@@ -240,6 +412,7 @@ pub struct DashboardDetailSnapshot {
     pub charger_active: Option<bool>,
     pub charger_home_status: Option<&'static str>,
     pub charger_status: Option<&'static str>,
+    pub manual_charge: ManualChargeUiSnapshot,
     pub out_a_temp_c: Option<i16>,
     pub out_b_temp_c: Option<i16>,
     pub board_temp_c: Option<i16>,
@@ -273,6 +446,7 @@ impl DashboardDetailSnapshot {
             charger_active: None,
             charger_home_status: None,
             charger_status: None,
+            manual_charge: ManualChargeUiSnapshot::pending(),
             out_a_temp_c: None,
             out_b_temp_c: None,
             board_temp_c: None,
@@ -605,6 +779,39 @@ const DASHBOARD_DETAIL_BACK_X: u16 = 8;
 const DASHBOARD_DETAIL_BACK_Y: u16 = 2;
 const DASHBOARD_DETAIL_BACK_W: u16 = 56;
 const DASHBOARD_DETAIL_BACK_H: u16 = 14;
+
+const DASHBOARD_CHARGER_MANUAL_ENTRY_X: u16 = 6;
+const DASHBOARD_CHARGER_MANUAL_ENTRY_Y: u16 = 60;
+const DASHBOARD_CHARGER_MANUAL_ENTRY_W: u16 = 150;
+const DASHBOARD_CHARGER_MANUAL_ENTRY_H: u16 = 82;
+
+const MANUAL_ROW_X: u16 = 6;
+const MANUAL_ROW_W: u16 = 308;
+const MANUAL_ROW_H: u16 = 30;
+const MANUAL_TARGET_ROW_Y: u16 = 24;
+const MANUAL_SPEED_ROW_Y: u16 = 58;
+const MANUAL_TIMER_ROW_Y: u16 = 92;
+const MANUAL_SEGMENT_X: u16 = 76;
+const MANUAL_SEGMENT_W: u16 = 74;
+const MANUAL_SEGMENT_H: u16 = 24;
+const MANUAL_SEGMENT_GAP: u16 = 4;
+const MANUAL_SEGMENT_Y_INSET: u16 = 3;
+const MANUAL_BACK_X: u16 = 6;
+const MANUAL_BACK_Y: u16 = 132;
+const MANUAL_BACK_W: u16 = 88;
+const MANUAL_BACK_H: u16 = 30;
+const MANUAL_STATUS_X: u16 = 100;
+const MANUAL_STATUS_Y: u16 = 132;
+const MANUAL_STATUS_W: u16 = 120;
+const MANUAL_STATUS_H: u16 = 30;
+const MANUAL_ACTION_X: u16 = 226;
+const MANUAL_ACTION_Y: u16 = 132;
+const MANUAL_ACTION_W: u16 = 88;
+const MANUAL_ACTION_H: u16 = 30;
+
+const fn manual_segment_x(idx: u16) -> u16 {
+    MANUAL_SEGMENT_X + idx * (MANUAL_SEGMENT_W + MANUAL_SEGMENT_GAP)
+}
 
 #[allow(dead_code)]
 const TEST_NAV_CARD_X: u16 = 20;
@@ -985,6 +1192,121 @@ pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<Dashb
                 DASHBOARD_DETAIL_BACK_H,
             ) {
                 Some(DashboardTouchTarget::DetailBack)
+            } else if matches!(route, DashboardRoute::Detail(DashboardDetailPage::Charger))
+                && contains(
+                    x,
+                    y,
+                    DASHBOARD_CHARGER_MANUAL_ENTRY_X,
+                    DASHBOARD_CHARGER_MANUAL_ENTRY_Y,
+                    DASHBOARD_CHARGER_MANUAL_ENTRY_W,
+                    DASHBOARD_CHARGER_MANUAL_ENTRY_H,
+                )
+            {
+                Some(DashboardTouchTarget::ChargerManualEntry)
+            } else {
+                None
+            }
+        }
+        DashboardRoute::ManualCharge => {
+            if contains(
+                x,
+                y,
+                MANUAL_BACK_X,
+                MANUAL_BACK_Y,
+                MANUAL_BACK_W,
+                MANUAL_BACK_H,
+            ) {
+                Some(DashboardTouchTarget::ManualBack)
+            } else if contains(
+                x,
+                y,
+                MANUAL_ACTION_X,
+                MANUAL_ACTION_Y,
+                MANUAL_ACTION_W,
+                MANUAL_ACTION_H,
+            ) {
+                Some(DashboardTouchTarget::ManualStart)
+            } else if contains(
+                x,
+                y,
+                manual_segment_x(0),
+                MANUAL_TARGET_ROW_Y + MANUAL_SEGMENT_Y_INSET,
+                MANUAL_SEGMENT_W,
+                MANUAL_SEGMENT_H,
+            ) {
+                Some(DashboardTouchTarget::ManualTarget3V7)
+            } else if contains(
+                x,
+                y,
+                manual_segment_x(1),
+                MANUAL_TARGET_ROW_Y + MANUAL_SEGMENT_Y_INSET,
+                MANUAL_SEGMENT_W,
+                MANUAL_SEGMENT_H,
+            ) {
+                Some(DashboardTouchTarget::ManualTarget80)
+            } else if contains(
+                x,
+                y,
+                manual_segment_x(2),
+                MANUAL_TARGET_ROW_Y + MANUAL_SEGMENT_Y_INSET,
+                MANUAL_SEGMENT_W,
+                MANUAL_SEGMENT_H,
+            ) {
+                Some(DashboardTouchTarget::ManualTarget100)
+            } else if contains(
+                x,
+                y,
+                manual_segment_x(0),
+                MANUAL_SPEED_ROW_Y + MANUAL_SEGMENT_Y_INSET,
+                MANUAL_SEGMENT_W,
+                MANUAL_SEGMENT_H,
+            ) {
+                Some(DashboardTouchTarget::ManualSpeed100)
+            } else if contains(
+                x,
+                y,
+                manual_segment_x(1),
+                MANUAL_SPEED_ROW_Y + MANUAL_SEGMENT_Y_INSET,
+                MANUAL_SEGMENT_W,
+                MANUAL_SEGMENT_H,
+            ) {
+                Some(DashboardTouchTarget::ManualSpeed500)
+            } else if contains(
+                x,
+                y,
+                manual_segment_x(2),
+                MANUAL_SPEED_ROW_Y + MANUAL_SEGMENT_Y_INSET,
+                MANUAL_SEGMENT_W,
+                MANUAL_SEGMENT_H,
+            ) {
+                Some(DashboardTouchTarget::ManualSpeed1A)
+            } else if contains(
+                x,
+                y,
+                manual_segment_x(0),
+                MANUAL_TIMER_ROW_Y + MANUAL_SEGMENT_Y_INSET,
+                MANUAL_SEGMENT_W,
+                MANUAL_SEGMENT_H,
+            ) {
+                Some(DashboardTouchTarget::ManualTimer1h)
+            } else if contains(
+                x,
+                y,
+                manual_segment_x(1),
+                MANUAL_TIMER_ROW_Y + MANUAL_SEGMENT_Y_INSET,
+                MANUAL_SEGMENT_W,
+                MANUAL_SEGMENT_H,
+            ) {
+                Some(DashboardTouchTarget::ManualTimer2h)
+            } else if contains(
+                x,
+                y,
+                manual_segment_x(2),
+                MANUAL_TIMER_ROW_Y + MANUAL_SEGMENT_Y_INSET,
+                MANUAL_SEGMENT_W,
+                MANUAL_SEGMENT_H,
+            ) {
+                Some(DashboardTouchTarget::ManualTimer6h)
             } else {
                 None
             }
@@ -1003,6 +1325,57 @@ pub const fn dashboard_route_for_target(target: DashboardTouchTarget) -> Dashboa
             DashboardRoute::Detail(DashboardDetailPage::BatteryFlow)
         }
         DashboardTouchTarget::DetailBack => DashboardRoute::Home,
+        DashboardTouchTarget::ChargerManualEntry => DashboardRoute::ManualCharge,
+        DashboardTouchTarget::ManualBack => DashboardRoute::Detail(DashboardDetailPage::Charger),
+        DashboardTouchTarget::ManualTarget3V7
+        | DashboardTouchTarget::ManualTarget80
+        | DashboardTouchTarget::ManualTarget100
+        | DashboardTouchTarget::ManualSpeed100
+        | DashboardTouchTarget::ManualSpeed500
+        | DashboardTouchTarget::ManualSpeed1A
+        | DashboardTouchTarget::ManualTimer1h
+        | DashboardTouchTarget::ManualTimer2h
+        | DashboardTouchTarget::ManualTimer6h
+        | DashboardTouchTarget::ManualStart
+        | DashboardTouchTarget::ManualStop => DashboardRoute::ManualCharge,
+    }
+}
+
+#[allow(dead_code)]
+pub const fn dashboard_manual_charge_action_for_target(
+    target: DashboardTouchTarget,
+) -> Option<ManualChargeUiAction> {
+    match target {
+        DashboardTouchTarget::ManualTarget3V7 => {
+            Some(ManualChargeUiAction::SetTarget(ManualChargeTarget::Pack3V7))
+        }
+        DashboardTouchTarget::ManualTarget80 => {
+            Some(ManualChargeUiAction::SetTarget(ManualChargeTarget::Rsoc80))
+        }
+        DashboardTouchTarget::ManualTarget100 => {
+            Some(ManualChargeUiAction::SetTarget(ManualChargeTarget::Full100))
+        }
+        DashboardTouchTarget::ManualSpeed100 => {
+            Some(ManualChargeUiAction::SetSpeed(ManualChargeSpeed::Ma100))
+        }
+        DashboardTouchTarget::ManualSpeed500 => {
+            Some(ManualChargeUiAction::SetSpeed(ManualChargeSpeed::Ma500))
+        }
+        DashboardTouchTarget::ManualSpeed1A => {
+            Some(ManualChargeUiAction::SetSpeed(ManualChargeSpeed::Ma1000))
+        }
+        DashboardTouchTarget::ManualTimer1h => Some(ManualChargeUiAction::SetTimerLimit(
+            ManualChargeTimerLimit::H1,
+        )),
+        DashboardTouchTarget::ManualTimer2h => Some(ManualChargeUiAction::SetTimerLimit(
+            ManualChargeTimerLimit::H2,
+        )),
+        DashboardTouchTarget::ManualTimer6h => Some(ManualChargeUiAction::SetTimerLimit(
+            ManualChargeTimerLimit::H6,
+        )),
+        DashboardTouchTarget::ManualStart => Some(ManualChargeUiAction::Start),
+        DashboardTouchTarget::ManualStop => Some(ManualChargeUiAction::Stop),
+        _ => None,
     }
 }
 
@@ -2793,8 +3166,14 @@ fn render_variant_b_live<P: UiPainter>(
     dashboard_route: DashboardRoute,
     data: DashboardLiveData,
 ) -> Result<(), P::Error> {
-    if let DashboardRoute::Detail(page) = dashboard_route {
-        return render_dashboard_detail_page(painter, variant, palette, data, page);
+    match dashboard_route {
+        DashboardRoute::Detail(page) => {
+            return render_dashboard_detail_page(painter, variant, palette, data, page);
+        }
+        DashboardRoute::ManualCharge => {
+            return render_dashboard_manual_charge_page(painter, variant, palette, data);
+        }
+        DashboardRoute::Home => {}
     }
 
     let kpi_label_y = 27;
@@ -4289,6 +4668,179 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         "FAULT",
         DetailTextValue::Static(detail_fault_row_text(DashboardDetailPage::Charger, data)),
     )?;
+    draw_dashboard_entry_marker(
+        painter,
+        DASHBOARD_CHARGER_MANUAL_ENTRY_X,
+        DASHBOARD_CHARGER_MANUAL_ENTRY_Y,
+        DASHBOARD_CHARGER_MANUAL_ENTRY_W,
+        DASHBOARD_CHARGER_MANUAL_ENTRY_H,
+        palette.right,
+    )?;
+    Ok(())
+}
+
+fn render_dashboard_manual_charge_page<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    let status = detail_status_tag(DashboardDetailPage::Charger, data);
+    let status_color = detail_status_color(palette, status);
+    let prefs = data.detail.manual_charge.prefs;
+    let settings_locked = manual_charge_settings_locked(data);
+    let action_label = manual_charge_action_label(data);
+    let (action_fill, action_border, action_text) =
+        manual_charge_action_style(action_label, palette);
+
+    draw_manual_charge_top_bar(
+        painter,
+        variant,
+        palette,
+        manual_charge_mode_text(data),
+        status,
+        status_color,
+    )?;
+
+    draw_manual_option_row(
+        painter,
+        variant,
+        palette,
+        MANUAL_TARGET_ROW_Y,
+        "TARGET",
+        [
+            (
+                prefs.target == ManualChargeTarget::Pack3V7,
+                ManualChargeTarget::Pack3V7.label(),
+            ),
+            (
+                prefs.target == ManualChargeTarget::Rsoc80,
+                ManualChargeTarget::Rsoc80.label(),
+            ),
+            (
+                prefs.target == ManualChargeTarget::Full100,
+                ManualChargeTarget::Full100.label(),
+            ),
+        ],
+        settings_locked,
+        palette.left,
+    )?;
+    draw_manual_option_row(
+        painter,
+        variant,
+        palette,
+        MANUAL_SPEED_ROW_Y,
+        "SPEED",
+        [
+            (
+                prefs.speed == ManualChargeSpeed::Ma100,
+                ManualChargeSpeed::Ma100.label(),
+            ),
+            (
+                prefs.speed == ManualChargeSpeed::Ma500,
+                ManualChargeSpeed::Ma500.label(),
+            ),
+            (
+                prefs.speed == ManualChargeSpeed::Ma1000,
+                ManualChargeSpeed::Ma1000.label(),
+            ),
+        ],
+        settings_locked,
+        palette.right,
+    )?;
+    draw_manual_option_row(
+        painter,
+        variant,
+        palette,
+        MANUAL_TIMER_ROW_Y,
+        "TIMER",
+        [
+            (
+                prefs.timer_limit == ManualChargeTimerLimit::H1,
+                ManualChargeTimerLimit::H1.label(),
+            ),
+            (
+                prefs.timer_limit == ManualChargeTimerLimit::H2,
+                ManualChargeTimerLimit::H2.label(),
+            ),
+            (
+                prefs.timer_limit == ManualChargeTimerLimit::H6,
+                ManualChargeTimerLimit::H6.label(),
+            ),
+        ],
+        settings_locked,
+        palette.center,
+    )?;
+
+    draw_panel(
+        painter,
+        MANUAL_BACK_X,
+        MANUAL_BACK_Y,
+        MANUAL_BACK_W,
+        MANUAL_BACK_H,
+        palette,
+        false,
+        palette.accent,
+    )?;
+    draw_panel(
+        painter,
+        MANUAL_STATUS_X,
+        MANUAL_STATUS_Y,
+        MANUAL_STATUS_W,
+        MANUAL_STATUS_H,
+        palette,
+        true,
+        status_color,
+    )?;
+    draw_manual_action_button(
+        painter,
+        MANUAL_ACTION_X,
+        MANUAL_ACTION_Y,
+        MANUAL_ACTION_W,
+        MANUAL_ACTION_H,
+        action_fill,
+        action_border,
+    )?;
+    text_with_position(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "BACK",
+        Point::new(
+            (MANUAL_BACK_X + MANUAL_BACK_W / 2) as i32,
+            (MANUAL_BACK_Y + MANUAL_BACK_H / 2) as i32,
+        ),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        palette.text,
+    )?;
+    text_with_position(
+        painter,
+        variant,
+        FontRole::TextBody,
+        manual_charge_footer_text(data),
+        Point::new(
+            (MANUAL_STATUS_X + MANUAL_STATUS_W / 2) as i32,
+            (MANUAL_STATUS_Y + MANUAL_STATUS_H / 2) as i32,
+        ),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        palette.bg,
+    )?;
+    text_with_position(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        action_label,
+        Point::new(
+            (MANUAL_ACTION_X + MANUAL_ACTION_W / 2) as i32,
+            (MANUAL_ACTION_Y + MANUAL_ACTION_H / 2) as i32,
+        ),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        action_text,
+    )?;
+
     Ok(())
 }
 
@@ -4566,6 +5118,90 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
     }
 }
 
+fn manual_charge_mode_text(data: DashboardLiveData) -> &'static str {
+    let runtime = data.detail.manual_charge.runtime;
+    if runtime.active {
+        if runtime.takeover {
+            "TAKEOVER"
+        } else {
+            "MANUAL"
+        }
+    } else if charger_active_value(data) == Some(true) {
+        "AUTO CHG"
+    } else if runtime.stop_inhibit {
+        "STOPPED"
+    } else {
+        "AUTO"
+    }
+}
+
+fn manual_charge_control_active(data: DashboardLiveData) -> bool {
+    data.detail.manual_charge.runtime.active || charger_active_value(data) == Some(true)
+}
+
+const fn manual_charge_stop_footer_text(reason: ManualChargeStopReason) -> &'static str {
+    match reason {
+        ManualChargeStopReason::UserStop | ManualChargeStopReason::None => "AUTO HELD",
+        ManualChargeStopReason::TimerExpired => "TIMER DONE",
+        ManualChargeStopReason::PackReached => "3.7V DONE",
+        ManualChargeStopReason::RsocReached => "80% DONE",
+        ManualChargeStopReason::FullReached => "100% DONE",
+        ManualChargeStopReason::SafetyBlocked => "SAFETY STOP",
+    }
+}
+
+fn manual_charge_settings_locked(data: DashboardLiveData) -> bool {
+    manual_charge_control_active(data)
+}
+
+fn manual_charge_action_label(data: DashboardLiveData) -> &'static str {
+    if manual_charge_control_active(data) {
+        "STOP"
+    } else {
+        "START"
+    }
+}
+
+fn manual_charge_action_style(action_label: &'static str, palette: Palette) -> (u16, u16, u16) {
+    if action_label == "STOP" {
+        (
+            fade_color(ERROR_COLOR, palette.panel_alt),
+            fade_color(ERROR_COLOR, palette.border),
+            palette.text,
+        )
+    } else {
+        (palette.accent, palette.accent, palette.bg)
+    }
+}
+
+fn manual_charge_footer_text(data: DashboardLiveData) -> &'static str {
+    let runtime = data.detail.manual_charge.runtime;
+    if runtime.active {
+        "MANUAL ACTIVE"
+    } else if runtime.stop_inhibit && charger_active_value(data) != Some(true) {
+        manual_charge_stop_footer_text(runtime.last_stop_reason)
+    } else if let Some(minutes) = runtime.remaining_minutes {
+        if minutes > 0 {
+            "TIMER ARMED"
+        } else {
+            "TIMER DONE"
+        }
+    } else if let Some(notice) = data.detail.charger_notice {
+        match notice {
+            "charging_500ma" | "charging_100ma_dc_derated" | "charging_1a_manual" => "LIVE DATA",
+            "manual_user_stop_inhibit" => "AUTO HELD",
+            "manual_timer_expired" => "TIMER DONE",
+            "manual_target_pack_reached" => "3.7V DONE",
+            "manual_target_rsoc_reached" => "80% DONE",
+            "manual_target_full_reached" => "100% DONE",
+            "manual_safety_blocked" => "SAFETY STOP",
+            _ => "LIVE DATA",
+        }
+    } else {
+        "LIVE DATA"
+    }
+}
+
 fn detail_status_color(palette: Palette, status: &'static str) -> u16 {
     match status {
         "FAULT" | "HOT" => ERROR_COLOR,
@@ -4625,6 +5261,44 @@ fn draw_dashboard_detail_top_bar<P: UiPainter>(
     )
 }
 
+fn draw_manual_charge_top_bar<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    mode: &'static str,
+    status: &'static str,
+    status_color: u16,
+) -> Result<(), P::Error> {
+    fill(painter, 0, 0, UI_W, HEADER_H, palette.panel)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        mode,
+        Point::new(8, 4),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        "MANUAL",
+        Point::new((UI_W / 2) as i32, 2),
+        HorizontalAlignment::Center,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        status,
+        Point::new(DETAIL_STATUS_X, 2),
+        HorizontalAlignment::Right,
+        status_color,
+    )
+}
+
 fn draw_dashboard_entry_marker<P: UiPainter>(
     painter: &mut P,
     x: u16,
@@ -4637,6 +5311,75 @@ fn draw_dashboard_entry_marker<P: UiPainter>(
     let marker_y = y + h - 11;
     fill(painter, marker_x, marker_y + 6, 8, 2, accent)?;
     fill(painter, marker_x + 6, marker_y, 2, 8, accent)
+}
+
+fn draw_manual_option_row<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    y: u16,
+    title: &'static str,
+    items: [(bool, &'static str); 3],
+    locked: bool,
+    accent: u16,
+) -> Result<(), P::Error> {
+    text_with_position(
+        painter,
+        variant,
+        FontRole::TextBody,
+        title,
+        Point::new((MANUAL_ROW_X + 8) as i32, (y + MANUAL_ROW_H / 2) as i32),
+        VerticalPosition::Center,
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+
+    for (idx, (selected, label)) in items.into_iter().enumerate() {
+        let cell_x = manual_segment_x(idx as u16);
+        let cell_y = y + MANUAL_SEGMENT_Y_INSET;
+        let cell_bg = if selected {
+            accent
+        } else {
+            fade_color(palette.panel_alt, palette.bg)
+        };
+        fill(
+            painter,
+            cell_x,
+            cell_y,
+            MANUAL_SEGMENT_W,
+            MANUAL_SEGMENT_H,
+            cell_bg,
+        )?;
+        draw_outline(
+            painter,
+            cell_x,
+            cell_y,
+            MANUAL_SEGMENT_W,
+            MANUAL_SEGMENT_H,
+            palette.border,
+        )?;
+        text_with_position(
+            painter,
+            variant,
+            FontRole::DetailBody,
+            label,
+            Point::new(
+                (cell_x + MANUAL_SEGMENT_W / 2) as i32,
+                (cell_y + MANUAL_SEGMENT_H / 2) as i32,
+            ),
+            VerticalPosition::Center,
+            HorizontalAlignment::Center,
+            if selected {
+                palette.bg
+            } else if locked {
+                palette.text_dim
+            } else {
+                palette.text
+            },
+        )?;
+    }
+
+    Ok(())
 }
 
 enum DetailValueFmt {
@@ -5013,7 +5756,7 @@ fn charger_state_text(data: DashboardLiveData) -> &'static str {
 fn home_charge_state_text(data: DashboardLiveData) -> &'static str {
     fn clamp(status: &'static str) -> Option<&'static str> {
         match status {
-            "CHG500" | "CHG100" | "CHG" => Some("CHG"),
+            "CHG1A" | "CHG500" | "CHG100" | "CHG" => Some("CHG"),
             "IDLE" | "READY" | "WAIT" => Some("WAIT"),
             "FULL" | "WARM" | "TEMP" | "LOAD" | "LOCK" | "NOAC" => Some(status),
             _ => None,
@@ -8398,6 +9141,22 @@ fn draw_outline<P: UiPainter>(
     fill(painter, x + w.saturating_sub(1), y, 1, h, color)
 }
 
+fn draw_manual_action_button<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    fill_color: u16,
+    border_color: u16,
+) -> Result<(), P::Error> {
+    fill(painter, x, y, w, h, border_color)?;
+    if w > 2 && h > 2 {
+        fill(painter, x + 1, y + 1, w - 2, h - 2, fill_color)?;
+    }
+    Ok(())
+}
+
 fn fill<P: UiPainter>(
     painter: &mut P,
     x: u16,
@@ -8421,6 +9180,28 @@ fn text<P: UiPainter>(
     align: HorizontalAlignment,
     color: u16,
 ) -> Result<(), P::Error> {
+    text_with_position(
+        painter,
+        _variant,
+        role,
+        content,
+        anchor,
+        VerticalPosition::Top,
+        align,
+        color,
+    )
+}
+
+fn text_with_position<P: UiPainter>(
+    painter: &mut P,
+    _variant: UiVariant,
+    role: FontRole,
+    content: impl Content,
+    anchor: Point,
+    vpos: VerticalPosition,
+    align: HorizontalAlignment,
+    color: u16,
+) -> Result<(), P::Error> {
     let renderer = match role {
         FontRole::TextTitle => &FONT_A_TITLE,
         FontRole::TextBody => &FONT_A_BODY,
@@ -8438,7 +9219,7 @@ fn text<P: UiPainter>(
     match renderer.render_aligned(
         content,
         anchor,
-        VerticalPosition::Top,
+        vpos,
         align,
         FontColor::Transparent(rgb565_from_u16(color)),
         &mut target,
@@ -8881,6 +9662,10 @@ mod tests {
         snapshot.dashboard_detail.charger_status = Some("CHG100");
         let charge_100 = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
         assert_eq!(home_charge_state_text(charge_100), "CHG");
+
+        snapshot.dashboard_detail.charger_status = Some("CHG1A");
+        let charge_1a = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+        assert_eq!(home_charge_state_text(charge_1a), "CHG");
     }
 
     #[test]
@@ -9072,6 +9857,99 @@ mod tests {
             dashboard_route_for_target(DashboardTouchTarget::HomeOutput),
             DashboardRoute::Detail(DashboardDetailPage::Output)
         );
+    }
+
+    #[test]
+    fn charger_detail_manual_entry_maps_to_manual_page() {
+        assert_eq!(
+            dashboard_hit_test(
+                DashboardRoute::Detail(DashboardDetailPage::Charger),
+                DASHBOARD_CHARGER_MANUAL_ENTRY_X + 20,
+                DASHBOARD_CHARGER_MANUAL_ENTRY_Y + 20
+            ),
+            Some(DashboardTouchTarget::ChargerManualEntry)
+        );
+        assert_eq!(
+            dashboard_route_for_target(DashboardTouchTarget::ChargerManualEntry),
+            DashboardRoute::ManualCharge
+        );
+    }
+
+    #[test]
+    fn manual_page_routes_back_and_maps_actions() {
+        assert_eq!(
+            dashboard_hit_test(
+                DashboardRoute::ManualCharge,
+                DASHBOARD_DETAIL_BACK_X + 4,
+                DASHBOARD_DETAIL_BACK_Y + 4
+            ),
+            None
+        );
+        assert_eq!(
+            dashboard_hit_test(
+                DashboardRoute::ManualCharge,
+                MANUAL_BACK_X + 8,
+                MANUAL_BACK_Y + 8
+            ),
+            Some(DashboardTouchTarget::ManualBack)
+        );
+        assert_eq!(
+            dashboard_route_for_target(DashboardTouchTarget::ManualBack),
+            DashboardRoute::Detail(DashboardDetailPage::Charger)
+        );
+        assert_eq!(
+            dashboard_manual_charge_action_for_target(DashboardTouchTarget::ManualSpeed1A),
+            Some(ManualChargeUiAction::SetSpeed(ManualChargeSpeed::Ma1000))
+        );
+        assert_eq!(
+            dashboard_manual_charge_action_for_target(DashboardTouchTarget::ManualTimer6h),
+            Some(ManualChargeUiAction::SetTimerLimit(
+                ManualChargeTimerLimit::H6
+            ))
+        );
+    }
+
+    #[test]
+    fn manual_page_mode_text_prefers_stop_and_takeover_states() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+        assert_eq!(manual_charge_mode_text(live), "AUTO");
+
+        snapshot.dashboard_detail.manual_charge.runtime.stop_inhibit = true;
+        let held_live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+        assert_eq!(manual_charge_mode_text(held_live), "STOPPED");
+
+        snapshot.dashboard_detail.charger_active = Some(true);
+        let held_charging_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+        assert_eq!(manual_charge_mode_text(held_charging_live), "AUTO CHG");
+
+        snapshot.dashboard_detail.manual_charge.runtime.stop_inhibit = false;
+        snapshot.dashboard_detail.manual_charge.runtime.active = true;
+        snapshot.dashboard_detail.manual_charge.runtime.takeover = true;
+        let active_live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+        assert_eq!(manual_charge_mode_text(active_live), "TAKEOVER");
+    }
+
+    #[test]
+    fn manual_page_controls_treat_runtime_active_as_stop_and_locked() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.dashboard_detail.manual_charge.runtime.active = true;
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert!(manual_charge_settings_locked(live));
+        assert_eq!(manual_charge_action_label(live), "STOP");
+    }
+
+    #[test]
+    fn manual_page_footer_uses_safety_stop_notice() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.dashboard_detail.charger_notice = Some("manual_safety_blocked");
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(manual_charge_footer_text(live), "SAFETY STOP");
     }
 
     #[test]

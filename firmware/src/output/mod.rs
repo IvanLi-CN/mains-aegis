@@ -4,7 +4,9 @@ pub mod tps55288;
 
 use crate::front_panel_scene::{
     is_bq40_activation_needed, BmsActivationState, BmsRecoveryUiAction, BmsResultKind,
-    DashboardInputSource, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+    ManualChargePrefs, ManualChargeRuntimeState, ManualChargeSpeed, ManualChargeStopReason,
+    ManualChargeTarget, ManualChargeTimerLimit, ManualChargeUiAction, SelfCheckCommState,
+    SelfCheckUiSnapshot, UpsMode,
 };
 use crate::irq::IrqSnapshot;
 use esp_firmware::bq25792;
@@ -144,6 +146,445 @@ const VIN_MAINS_LATCH_FAILURE_LIMIT: u8 = 2;
 const BMS_DIAG_BREADCRUMB_LEN: usize = 8;
 const BMS_DIAG_BREADCRUMB_VERSION: u8 = 1;
 const BMS_SBS_CONFIGURATION_SMB_CELL_TEMP: u8 = 1 << 6;
+const MANUAL_CHARGE_TARGET_PACK_MV: u16 = 14_800;
+const MANUAL_CHARGE_TARGET_RSOC_PCT: u16 = 80;
+const MANUAL_CHARGE_STATUS_TEXT_100MA: &str = "CHG100";
+const MANUAL_CHARGE_STATUS_TEXT_500MA: &str = "CHG500";
+const MANUAL_CHARGE_STATUS_TEXT_1A: &str = "CHG1A";
+const EEPROM_ADDR: u8 = 0x50;
+const EEPROM_BLOCK_LEN: usize = 32;
+const EEPROM_SUPERBLOCK_OFFSET: u16 = 0x0000;
+const EEPROM_RECORD_TABLE_OFFSET: u16 = 0x0020;
+const EEPROM_MANUAL_PREFS_OFFSET: u16 = 0x0040;
+const EEPROM_LAYOUT_MAGIC: [u8; 4] = *b"AEG1";
+const EEPROM_SCHEMA_VERSION: u8 = 1;
+const EEPROM_MANUAL_PREFS_RECORD_ID: u8 = 1;
+const EEPROM_MANUAL_PREFS_RECORD_VERSION: u8 = 1;
+const EEPROM_WRITE_POLL_ATTEMPTS: usize = 32;
+const EEPROM_WRITE_POLL_GAP: Duration = Duration::from_millis(1);
+
+#[derive(Clone, Copy)]
+struct ManualChargeRuntime {
+    active: bool,
+    takeover: bool,
+    stop_inhibit: bool,
+    last_stop_reason: ManualChargeStopReason,
+    deadline: Option<Instant>,
+}
+
+impl ManualChargeRuntime {
+    const fn new() -> Self {
+        Self {
+            active: false,
+            takeover: false,
+            stop_inhibit: false,
+            last_stop_reason: ManualChargeStopReason::None,
+            deadline: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ManualChargeStorageLoad {
+    Ready {
+        prefs: ManualChargePrefs,
+        prefs_offset: u16,
+    },
+    NeedsInit(ManualChargePrefs),
+    Incompatible(u8),
+}
+
+#[derive(Clone, Copy)]
+struct StorageSuperblockV1 {
+    schema_version: u8,
+}
+
+impl StorageSuperblockV1 {
+    fn encode(self) -> [u8; EEPROM_BLOCK_LEN] {
+        let mut bytes = [0u8; EEPROM_BLOCK_LEN];
+        bytes[0] = EEPROM_LAYOUT_MAGIC[0];
+        bytes[1] = EEPROM_LAYOUT_MAGIC[1];
+        bytes[2] = EEPROM_LAYOUT_MAGIC[2];
+        bytes[3] = EEPROM_LAYOUT_MAGIC[3];
+        bytes[4] = self.schema_version;
+        bytes[5] = 1;
+        bytes[31] = storage_crc8(&bytes[..31]);
+        bytes
+    }
+
+    fn decode(bytes: [u8; EEPROM_BLOCK_LEN]) -> Option<Self> {
+        if bytes[0..4] != EEPROM_LAYOUT_MAGIC {
+            return None;
+        }
+        if bytes[31] != storage_crc8(&bytes[..31]) {
+            return None;
+        }
+        Some(Self {
+            schema_version: bytes[4],
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct StorageRecordTableV1 {
+    manual_prefs_offset: u16,
+}
+
+impl StorageRecordTableV1 {
+    fn encode(self) -> [u8; EEPROM_BLOCK_LEN] {
+        let mut bytes = [0u8; EEPROM_BLOCK_LEN];
+        bytes[0] = EEPROM_MANUAL_PREFS_RECORD_ID;
+        bytes[1] = EEPROM_MANUAL_PREFS_RECORD_VERSION;
+        bytes[2] = (self.manual_prefs_offset & 0x00ff) as u8;
+        bytes[3] = (self.manual_prefs_offset >> 8) as u8;
+        bytes[4] = EEPROM_BLOCK_LEN as u8;
+        bytes[31] = storage_crc8(&bytes[..31]);
+        bytes
+    }
+
+    fn decode(bytes: [u8; EEPROM_BLOCK_LEN]) -> Option<Self> {
+        if bytes[31] != storage_crc8(&bytes[..31]) {
+            return None;
+        }
+        if bytes[0] != EEPROM_MANUAL_PREFS_RECORD_ID
+            || bytes[1] != EEPROM_MANUAL_PREFS_RECORD_VERSION
+            || bytes[4] != EEPROM_BLOCK_LEN as u8
+        {
+            return None;
+        }
+        Some(Self {
+            manual_prefs_offset: u16::from(bytes[2]) | (u16::from(bytes[3]) << 8),
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ManualChargePrefsRecordV1 {
+    prefs: ManualChargePrefs,
+}
+
+impl ManualChargePrefsRecordV1 {
+    fn encode(self) -> [u8; EEPROM_BLOCK_LEN] {
+        let mut bytes = [0u8; EEPROM_BLOCK_LEN];
+        bytes[0] = EEPROM_MANUAL_PREFS_RECORD_VERSION;
+        bytes[1] = manual_charge_target_encode(self.prefs.target);
+        bytes[2] = manual_charge_speed_encode(self.prefs.speed);
+        bytes[3] = manual_charge_timer_encode(self.prefs.timer_limit);
+        bytes[31] = storage_crc8(&bytes[..31]);
+        bytes
+    }
+
+    fn decode(bytes: [u8; EEPROM_BLOCK_LEN]) -> Option<Self> {
+        if bytes[0] != EEPROM_MANUAL_PREFS_RECORD_VERSION {
+            return None;
+        }
+        if bytes[31] != storage_crc8(&bytes[..31]) {
+            return None;
+        }
+        Some(Self {
+            prefs: ManualChargePrefs {
+                target: manual_charge_target_decode(bytes[1])?,
+                speed: manual_charge_speed_decode(bytes[2])?,
+                timer_limit: manual_charge_timer_decode(bytes[3])?,
+            },
+        })
+    }
+}
+
+const fn storage_crc8(bytes: &[u8]) -> u8 {
+    let mut crc = 0u8;
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        crc ^= bytes[idx];
+        let mut bit = 0u8;
+        while bit < 8 {
+            crc = if (crc & 0x80) != 0 {
+                (crc << 1) ^ 0x07
+            } else {
+                crc << 1
+            };
+            bit += 1;
+        }
+        idx += 1;
+    }
+    crc
+}
+
+const fn manual_charge_target_encode(target: ManualChargeTarget) -> u8 {
+    match target {
+        ManualChargeTarget::Pack3V7 => 0,
+        ManualChargeTarget::Rsoc80 => 1,
+        ManualChargeTarget::Full100 => 2,
+    }
+}
+
+const fn manual_charge_target_decode(raw: u8) -> Option<ManualChargeTarget> {
+    match raw {
+        0 => Some(ManualChargeTarget::Pack3V7),
+        1 => Some(ManualChargeTarget::Rsoc80),
+        2 => Some(ManualChargeTarget::Full100),
+        _ => None,
+    }
+}
+
+const fn manual_charge_speed_encode(speed: ManualChargeSpeed) -> u8 {
+    match speed {
+        ManualChargeSpeed::Ma100 => 0,
+        ManualChargeSpeed::Ma500 => 1,
+        ManualChargeSpeed::Ma1000 => 2,
+    }
+}
+
+const fn manual_charge_speed_decode(raw: u8) -> Option<ManualChargeSpeed> {
+    match raw {
+        0 => Some(ManualChargeSpeed::Ma100),
+        1 => Some(ManualChargeSpeed::Ma500),
+        2 => Some(ManualChargeSpeed::Ma1000),
+        _ => None,
+    }
+}
+
+const fn manual_charge_timer_encode(limit: ManualChargeTimerLimit) -> u8 {
+    match limit {
+        ManualChargeTimerLimit::H1 => 0,
+        ManualChargeTimerLimit::H2 => 1,
+        ManualChargeTimerLimit::H6 => 2,
+    }
+}
+
+const fn manual_charge_timer_decode(raw: u8) -> Option<ManualChargeTimerLimit> {
+    match raw {
+        0 => Some(ManualChargeTimerLimit::H1),
+        1 => Some(ManualChargeTimerLimit::H2),
+        2 => Some(ManualChargeTimerLimit::H6),
+        _ => None,
+    }
+}
+
+fn manual_charge_timer_duration(limit: ManualChargeTimerLimit) -> Duration {
+    Duration::from_secs(limit.hours() as u64 * 3_600)
+}
+
+const fn manual_charge_stop_notice(reason: ManualChargeStopReason) -> &'static str {
+    match reason {
+        ManualChargeStopReason::TimerExpired => "manual_timer_expired",
+        ManualChargeStopReason::PackReached => "manual_target_pack_reached",
+        ManualChargeStopReason::RsocReached => "manual_target_rsoc_reached",
+        ManualChargeStopReason::FullReached => "manual_target_full_reached",
+        ManualChargeStopReason::SafetyBlocked => "manual_safety_blocked",
+        ManualChargeStopReason::UserStop | ManualChargeStopReason::None => {
+            "manual_user_stop_inhibit"
+        }
+    }
+}
+
+const fn manual_charge_should_hold(reason: ManualChargeStopReason) -> bool {
+    matches!(
+        reason,
+        ManualChargeStopReason::UserStop
+            | ManualChargeStopReason::TimerExpired
+            | ManualChargeStopReason::PackReached
+            | ManualChargeStopReason::RsocReached
+            | ManualChargeStopReason::FullReached
+    )
+}
+
+fn manual_charge_status_text(speed: ManualChargeSpeed, derated: bool) -> &'static str {
+    if derated {
+        MANUAL_CHARGE_STATUS_TEXT_100MA
+    } else {
+        match speed {
+            ManualChargeSpeed::Ma100 => MANUAL_CHARGE_STATUS_TEXT_100MA,
+            ManualChargeSpeed::Ma500 => MANUAL_CHARGE_STATUS_TEXT_500MA,
+            ManualChargeSpeed::Ma1000 => MANUAL_CHARGE_STATUS_TEXT_1A,
+        }
+    }
+}
+
+fn manual_charge_remaining_minutes(deadline: Option<Instant>, now: Instant) -> Option<u16> {
+    deadline.map(|deadline| {
+        if deadline > now {
+            let remaining = deadline - now;
+            ((remaining.as_secs() + 59) / 60) as u16
+        } else {
+            0
+        }
+    })
+}
+
+fn read_eeprom_block<I2C>(
+    i2c: &mut I2C,
+    offset: u16,
+) -> Result<[u8; EEPROM_BLOCK_LEN], esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut buf = [0u8; EEPROM_BLOCK_LEN];
+    i2c.write_read(EEPROM_ADDR, &offset.to_be_bytes(), &mut buf)?;
+    Ok(buf)
+}
+
+fn write_eeprom_block<I2C>(
+    i2c: &mut I2C,
+    offset: u16,
+    data: [u8; EEPROM_BLOCK_LEN],
+) -> Result<(), esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut buf = [0u8; EEPROM_BLOCK_LEN + 2];
+    let [hi, lo] = offset.to_be_bytes();
+    buf[0] = hi;
+    buf[1] = lo;
+    buf[2..].copy_from_slice(&data);
+    i2c.write(EEPROM_ADDR, &buf)?;
+    for _ in 0..EEPROM_WRITE_POLL_ATTEMPTS {
+        spin_delay(EEPROM_WRITE_POLL_GAP);
+        if i2c.write(EEPROM_ADDR, &offset.to_be_bytes()).is_ok() {
+            return Ok(());
+        }
+    }
+    spin_delay(EEPROM_WRITE_POLL_GAP);
+    i2c.write(EEPROM_ADDR, &offset.to_be_bytes())
+}
+
+fn write_manual_charge_storage_layout<I2C>(
+    i2c: &mut I2C,
+    prefs: ManualChargePrefs,
+) -> Result<(), esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    write_eeprom_block(
+        i2c,
+        EEPROM_SUPERBLOCK_OFFSET,
+        StorageSuperblockV1 {
+            schema_version: EEPROM_SCHEMA_VERSION,
+        }
+        .encode(),
+    )?;
+    write_eeprom_block(
+        i2c,
+        EEPROM_RECORD_TABLE_OFFSET,
+        StorageRecordTableV1 {
+            manual_prefs_offset: EEPROM_MANUAL_PREFS_OFFSET,
+        }
+        .encode(),
+    )?;
+    write_eeprom_block(
+        i2c,
+        EEPROM_MANUAL_PREFS_OFFSET,
+        ManualChargePrefsRecordV1 { prefs }.encode(),
+    )
+}
+
+fn write_manual_charge_prefs_record<I2C>(
+    i2c: &mut I2C,
+    offset: u16,
+    prefs: ManualChargePrefs,
+) -> Result<(), esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    write_eeprom_block(i2c, offset, ManualChargePrefsRecordV1 { prefs }.encode())
+}
+
+fn load_manual_charge_prefs_from_eeprom<I2C>(
+    i2c: &mut I2C,
+) -> Result<ManualChargeStorageLoad, esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let superblock =
+        match StorageSuperblockV1::decode(read_eeprom_block(i2c, EEPROM_SUPERBLOCK_OFFSET)?) {
+            Some(superblock) => superblock,
+            None => {
+                return Ok(ManualChargeStorageLoad::NeedsInit(
+                    ManualChargePrefs::defaults(),
+                ))
+            }
+        };
+    if superblock.schema_version > EEPROM_SCHEMA_VERSION {
+        return Ok(ManualChargeStorageLoad::Incompatible(
+            superblock.schema_version,
+        ));
+    }
+    let record_table =
+        match StorageRecordTableV1::decode(read_eeprom_block(i2c, EEPROM_RECORD_TABLE_OFFSET)?) {
+            Some(record_table) => record_table,
+            None => {
+                return Ok(ManualChargeStorageLoad::NeedsInit(
+                    ManualChargePrefs::defaults(),
+                ))
+            }
+        };
+    let record = read_eeprom_block(i2c, record_table.manual_prefs_offset)
+        .map(ManualChargePrefsRecordV1::decode)?;
+    if superblock.schema_version == EEPROM_SCHEMA_VERSION {
+        Ok(match record {
+            Some(record) => ManualChargeStorageLoad::Ready {
+                prefs: record.prefs,
+                prefs_offset: record_table.manual_prefs_offset,
+            },
+            None => ManualChargeStorageLoad::NeedsInit(ManualChargePrefs::defaults()),
+        })
+    } else {
+        Ok(ManualChargeStorageLoad::NeedsInit(
+            record
+                .map(|record| record.prefs)
+                .unwrap_or_else(ManualChargePrefs::defaults),
+        ))
+    }
+}
+
+fn load_or_init_manual_charge_prefs<I2C>(i2c: &mut I2C) -> (ManualChargePrefs, u16, bool, bool)
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    match load_manual_charge_prefs_from_eeprom(i2c) {
+        Ok(ManualChargeStorageLoad::Ready {
+            prefs,
+            prefs_offset,
+        }) => (prefs, prefs_offset, true, false),
+        Ok(ManualChargeStorageLoad::NeedsInit(prefs)) => {
+            let layout_ready = if let Err(err) = write_manual_charge_storage_layout(i2c, prefs) {
+                defmt::warn!(
+                    "eeprom: init manual_charge prefs failed err={}",
+                    i2c_error_kind(err)
+                );
+                false
+            } else {
+                true
+            };
+            (prefs, EEPROM_MANUAL_PREFS_OFFSET, layout_ready, false)
+        }
+        Ok(ManualChargeStorageLoad::Incompatible(found_version)) => {
+            defmt::warn!(
+                "eeprom: manual_charge newer schema detected found={=u8} current={=u8}; keep prefs runtime-only",
+                found_version,
+                EEPROM_SCHEMA_VERSION
+            );
+            (
+                ManualChargePrefs::defaults(),
+                EEPROM_MANUAL_PREFS_OFFSET,
+                false,
+                true,
+            )
+        }
+        Err(err) => {
+            defmt::warn!(
+                "eeprom: read manual_charge prefs failed err={}",
+                i2c_error_kind(err)
+            );
+            (
+                ManualChargePrefs::defaults(),
+                EEPROM_MANUAL_PREFS_OFFSET,
+                false,
+                false,
+            )
+        }
+    }
+}
 
 #[ram(unstable(rtc_fast, persistent))]
 static mut BMS_DIAG_BREADCRUMB_RTC: [u8; BMS_DIAG_BREADCRUMB_LEN] = [0; BMS_DIAG_BREADCRUMB_LEN];
@@ -2112,6 +2553,11 @@ pub struct PowerManager<'d, I2C> {
     charge_policy: ChargePolicyMemory,
     charge_policy_derate: ChargePolicyDerateTracker,
     charge_policy_output_load: ChargePolicyOutputLoadTracker,
+    manual_charge_prefs: ManualChargePrefs,
+    manual_charge_prefs_offset: u16,
+    manual_charge_storage_ready: bool,
+    manual_charge_storage_incompatible: bool,
+    manual_charge_runtime: ManualChargeRuntime,
     bms_charge_ready: Option<bool>,
     bms_full: Option<bool>,
     bms_cell_min_mv: Option<u16>,
@@ -2461,7 +2907,18 @@ where
         mut chg_ilim_hiz_brk: Flex<'d>,
         cfg: Config,
     ) -> Self {
+        let mut i2c = i2c;
         let now = Instant::now();
+        let (
+            manual_charge_prefs,
+            manual_charge_prefs_offset,
+            manual_charge_storage_ready,
+            manual_charge_storage_incompatible,
+        ) = load_or_init_manual_charge_prefs(&mut i2c);
+        let mut initial_ui_snapshot = cfg.self_check_snapshot;
+        initial_ui_snapshot.dashboard_detail.manual_charge.prefs = manual_charge_prefs;
+        initial_ui_snapshot.dashboard_detail.manual_charge.runtime =
+            ManualChargeRuntimeState::idle();
         let output_state = OutputRuntimeState::new(
             cfg.requested_outputs,
             cfg.active_outputs,
@@ -2546,6 +3003,11 @@ where
             charge_policy: ChargePolicyMemory::default(),
             charge_policy_derate: ChargePolicyDerateTracker::default(),
             charge_policy_output_load: ChargePolicyOutputLoadTracker::default(),
+            manual_charge_prefs,
+            manual_charge_prefs_offset,
+            manual_charge_storage_ready,
+            manual_charge_storage_incompatible,
+            manual_charge_runtime: ManualChargeRuntime::new(),
             bms_charge_ready: None,
             bms_full: None,
             bms_cell_min_mv: None,
@@ -2598,7 +3060,7 @@ where
             output_protection: output_protection::ProtectionRuntime::new(cfg.ilimit_ma),
             fan: fan::Controller::new(cfg.fan_config),
             vin_sample_missing_streak: 0,
-            ui_snapshot: cfg.self_check_snapshot,
+            ui_snapshot: initial_ui_snapshot,
             audio_snapshot: AudioSignalSnapshot::default(),
             audio_events: AudioSignalEvents::default(),
             audio_signals_ready: false,
@@ -2663,6 +3125,7 @@ where
         self.tps_audio.out_b_over_voltage = self.cfg.initial_tps_b_over_voltage;
         self.tps_audio.out_a_over_current = self.cfg.initial_tps_a_over_current;
         self.tps_audio.out_b_over_current = self.cfg.initial_tps_b_over_current;
+        self.update_manual_charge_ui_snapshot(Instant::now());
         self.recompute_ui_mode();
         self.refresh_audio_signals();
     }
@@ -2836,6 +3299,17 @@ where
     pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
         let mut snapshot = self.ui_snapshot;
         let mut detail = snapshot.dashboard_detail;
+        detail.manual_charge.prefs = self.manual_charge_prefs;
+        detail.manual_charge.runtime = ManualChargeRuntimeState {
+            active: self.manual_charge_runtime.active,
+            takeover: self.manual_charge_runtime.takeover,
+            stop_inhibit: self.manual_charge_runtime.stop_inhibit,
+            last_stop_reason: self.manual_charge_runtime.last_stop_reason,
+            remaining_minutes: manual_charge_remaining_minutes(
+                self.manual_charge_runtime.deadline,
+                Instant::now(),
+            ),
+        };
         let fan_status = self.fan.status();
         let applied_fan = self.applied_fan_state;
         let bms_recovery_pending = self.bms_activation_state == BmsActivationState::Pending
@@ -3045,6 +3519,7 @@ where
         let detail = &mut self.ui_snapshot.dashboard_detail;
         detail.input_source = None;
         detail.charger_active = None;
+        detail.charger_home_status = None;
         detail.charger_status = None;
         detail.charger_notice = None;
     }
@@ -3301,6 +3776,133 @@ where
                 self.request_bms_discharge_authorization(false)
             }
         }
+    }
+
+    pub fn request_manual_charge_action(&mut self, action: ManualChargeUiAction) {
+        let now = Instant::now();
+        let charging_active = self.current_charging_requested();
+        match action {
+            ManualChargeUiAction::SetTarget(target) => {
+                if charging_active {
+                    defmt::info!("manual_charge: ignore set_target reason=locked");
+                } else if self.manual_charge_prefs.target != target {
+                    self.manual_charge_prefs.target = target;
+                    self.persist_manual_charge_prefs();
+                }
+            }
+            ManualChargeUiAction::SetSpeed(speed) => {
+                if charging_active {
+                    defmt::info!("manual_charge: ignore set_speed reason=locked");
+                } else if self.manual_charge_prefs.speed != speed {
+                    self.manual_charge_prefs.speed = speed;
+                    self.persist_manual_charge_prefs();
+                }
+            }
+            ManualChargeUiAction::SetTimerLimit(timer_limit) => {
+                if charging_active {
+                    defmt::info!("manual_charge: ignore set_timer reason=locked");
+                } else if self.manual_charge_prefs.timer_limit != timer_limit {
+                    self.manual_charge_prefs.timer_limit = timer_limit;
+                    self.persist_manual_charge_prefs();
+                }
+            }
+            ManualChargeUiAction::Start => {
+                self.manual_charge_runtime.active = true;
+                self.manual_charge_runtime.takeover = charging_active;
+                self.manual_charge_runtime.stop_inhibit = false;
+                self.manual_charge_runtime.last_stop_reason = ManualChargeStopReason::None;
+                self.manual_charge_runtime.deadline =
+                    Some(now + manual_charge_timer_duration(self.manual_charge_prefs.timer_limit));
+                self.chg_next_poll_at = now;
+                defmt::info!(
+                    "manual_charge: start target={} speed_ma={=u16} timer_h={=u8} takeover={=bool}",
+                    self.manual_charge_target_label(),
+                    self.manual_charge_prefs.speed.ichg_ma(),
+                    self.manual_charge_prefs.timer_limit.hours(),
+                    self.manual_charge_runtime.takeover
+                );
+            }
+            ManualChargeUiAction::Stop => {
+                self.bms_activation_force_charge_requested = false;
+                self.bms_activation_auto_force_charge_until = None;
+                self.bms_activation_auto_force_charge_programmed = false;
+                self.stop_manual_charge_session(ManualChargeStopReason::UserStop, true);
+                self.chg_next_poll_at = now;
+                defmt::info!("manual_charge: stop user_requested={=bool}", true);
+            }
+        }
+        self.update_manual_charge_ui_snapshot(now);
+    }
+
+    fn current_charging_requested(&self) -> bool {
+        self.ui_snapshot.dashboard_detail.charger_active == Some(true)
+            || self.ui_snapshot.bq25792_allow_charge == Some(true)
+            || self.manual_charge_runtime.active
+    }
+
+    fn persist_manual_charge_prefs(&mut self) {
+        if self.manual_charge_storage_incompatible {
+            defmt::warn!(
+                "eeprom: skip manual_charge prefs save reason=schema_mismatch target={} speed_ma={=u16} timer_h={=u8}",
+                self.manual_charge_target_label(),
+                self.manual_charge_prefs.speed.ichg_ma(),
+                self.manual_charge_prefs.timer_limit.hours()
+            );
+            return;
+        }
+        let writing_existing_record = self.manual_charge_storage_ready;
+        let write_result = if writing_existing_record {
+            write_manual_charge_prefs_record(
+                &mut self.i2c,
+                self.manual_charge_prefs_offset,
+                self.manual_charge_prefs,
+            )
+        } else {
+            write_manual_charge_storage_layout(&mut self.i2c, self.manual_charge_prefs)
+        };
+        if let Err(err) = write_result {
+            defmt::warn!(
+                "eeprom: write manual_charge prefs failed err={}",
+                i2c_error_kind(err)
+            );
+        } else {
+            self.manual_charge_storage_ready = true;
+            if !writing_existing_record {
+                self.manual_charge_prefs_offset = EEPROM_MANUAL_PREFS_OFFSET;
+            }
+            defmt::info!(
+                "eeprom: manual_charge prefs saved target={} speed_ma={=u16} timer_h={=u8}",
+                self.manual_charge_target_label(),
+                self.manual_charge_prefs.speed.ichg_ma(),
+                self.manual_charge_prefs.timer_limit.hours()
+            );
+        }
+    }
+
+    fn manual_charge_target_label(&self) -> &'static str {
+        self.manual_charge_prefs.target.label()
+    }
+
+    fn stop_manual_charge_session(&mut self, reason: ManualChargeStopReason, inhibit: bool) {
+        self.manual_charge_runtime.active = false;
+        self.manual_charge_runtime.takeover = false;
+        self.manual_charge_runtime.stop_inhibit = inhibit;
+        self.manual_charge_runtime.last_stop_reason = reason;
+        self.manual_charge_runtime.deadline = None;
+    }
+
+    fn update_manual_charge_ui_snapshot(&mut self, now: Instant) {
+        self.ui_snapshot.dashboard_detail.manual_charge.prefs = self.manual_charge_prefs;
+        self.ui_snapshot.dashboard_detail.manual_charge.runtime = ManualChargeRuntimeState {
+            active: self.manual_charge_runtime.active,
+            takeover: self.manual_charge_runtime.takeover,
+            stop_inhibit: self.manual_charge_runtime.stop_inhibit,
+            last_stop_reason: self.manual_charge_runtime.last_stop_reason,
+            remaining_minutes: manual_charge_remaining_minutes(
+                self.manual_charge_runtime.deadline,
+                now,
+            ),
+        };
     }
 
     fn request_bms_activation_with_diag_override(
@@ -7123,11 +7725,24 @@ where
 
     fn maybe_poll_charger(&mut self, irq: &IrqSnapshot) {
         if !self.charger_allowed {
+            if self.manual_charge_runtime.active {
+                self.stop_manual_charge_session(ManualChargeStopReason::SafetyBlocked, false);
+            }
+            let preserve_manual_safety_notice = manual_charge_safety_notice_active(
+                self.manual_charge_runtime.last_stop_reason,
+                self.manual_charge_runtime.active,
+                self.manual_charge_runtime.stop_inhibit,
+                true,
+            );
             self.ui_snapshot.bq25792_allow_charge = Some(false);
             self.ui_snapshot.bq25792_ichg_ma = None;
             self.ui_snapshot.bq25792_ibat_ma = None;
             self.ui_snapshot.bq25792_vbat_present = None;
             self.clear_charger_detail_snapshot();
+            if preserve_manual_safety_notice {
+                self.ui_snapshot.dashboard_detail.charger_notice = Some("manual_safety_blocked");
+            }
+            self.update_manual_charge_ui_snapshot(Instant::now());
             self.recompute_ui_mode();
             return;
         }
@@ -7418,7 +8033,7 @@ where
         let normal_allow_charge =
             charge_policy_decision.map_or(false, |decision| decision.allow_charge);
         let force_allow_charge = (activation_force_charge || auto_force_charge) && can_enable;
-        let allow_charge = if activation_force_charge_off {
+        let mut allow_charge = if activation_force_charge_off {
             false
         } else {
             (normal_allow_charge && self.cfg.charger_enabled)
@@ -7427,13 +8042,13 @@ where
                 || force_allow_charge
         };
         let policy_state = charge_policy_decision.map(|decision| decision.state);
-        let policy_target_ichg_ma =
+        let mut policy_target_ichg_ma =
             charge_policy_decision.and_then(|decision| decision.target_ichg_ma);
         let policy_start_reason = charge_policy_decision.and_then(|decision| decision.start_reason);
         let policy_full_reason = charge_policy_decision.and_then(|decision| decision.full_reason);
         let policy_output_block_reason =
             charge_policy_decision.and_then(|decision| decision.output_block_reason);
-        let policy_status_text = if force_allow_charge {
+        let mut policy_status_text = if force_allow_charge {
             "WAKE"
         } else if activation_force_charge_off {
             "LOCK"
@@ -7444,7 +8059,7 @@ where
                 .map(detail_charger_status_text)
                 .unwrap_or("READY")
         };
-        let policy_notice_text = if force_allow_charge {
+        let mut policy_notice_text = if force_allow_charge {
             "activation_force_charge"
         } else if activation_force_charge_off {
             "activation_force_charge_off"
@@ -7456,6 +8071,122 @@ where
                 .or_else(|| policy_state.map(ChargePolicyState::as_str))
                 .unwrap_or("charger_policy_pending")
         };
+
+        let manual_stop_hold_blocks_charge = manual_charge_stop_hold_blocks_charge(
+            self.manual_charge_runtime.stop_inhibit,
+            activation_pending,
+            activation_force_charge,
+        );
+
+        if manual_stop_hold_blocks_charge {
+            allow_charge = false;
+            policy_target_ichg_ma = None;
+            if !matches!(
+                self.manual_charge_runtime.last_stop_reason,
+                ManualChargeStopReason::SafetyBlocked
+            ) && input_present
+            {
+                policy_status_text = "WAIT";
+            }
+            policy_notice_text =
+                manual_charge_stop_notice(self.manual_charge_runtime.last_stop_reason);
+        } else if !activation_pending && !force_allow_charge && !auto_force_charge {
+            let manual_blocked = !self.cfg.charger_enabled
+                || !can_enable
+                || matches!(
+                    policy_state,
+                    Some(
+                        ChargePolicyState::BlockedOutputOverload | ChargePolicyState::BlockedNoBms
+                    )
+                );
+            let preserve_manual_safety_notice = manual_charge_safety_notice_active(
+                self.manual_charge_runtime.last_stop_reason,
+                self.manual_charge_runtime.active,
+                self.manual_charge_runtime.stop_inhibit,
+                manual_blocked,
+            );
+
+            if self.manual_charge_runtime.active {
+                let stop_reason = if manual_blocked {
+                    Some(ManualChargeStopReason::SafetyBlocked)
+                } else if self
+                    .manual_charge_runtime
+                    .deadline
+                    .is_some_and(|deadline| now >= deadline)
+                {
+                    Some(ManualChargeStopReason::TimerExpired)
+                } else {
+                    match self.manual_charge_prefs.target {
+                        ManualChargeTarget::Pack3V7
+                            if self
+                                .ui_snapshot
+                                .bq40z50_pack_mv
+                                .is_some_and(|pack_mv| pack_mv >= MANUAL_CHARGE_TARGET_PACK_MV) =>
+                        {
+                            Some(ManualChargeStopReason::PackReached)
+                        }
+                        ManualChargeTarget::Rsoc80
+                            if self.ui_snapshot.bq40z50_soc_pct.is_some_and(|soc_pct| {
+                                soc_pct >= MANUAL_CHARGE_TARGET_RSOC_PCT
+                            }) =>
+                        {
+                            Some(ManualChargeStopReason::RsocReached)
+                        }
+                        ManualChargeTarget::Full100
+                            if self.charge_policy.full_latched || policy_full_reason.is_some() =>
+                        {
+                            Some(ManualChargeStopReason::FullReached)
+                        }
+                        _ => None,
+                    }
+                };
+
+                if let Some(stop_reason) = stop_reason {
+                    self.stop_manual_charge_session(
+                        stop_reason,
+                        manual_charge_should_hold(stop_reason),
+                    );
+                    allow_charge = false;
+                    policy_target_ichg_ma = None;
+                    policy_status_text = match stop_reason {
+                        ManualChargeStopReason::FullReached => "FULL",
+                        ManualChargeStopReason::SafetyBlocked => policy_status_text,
+                        _ => "WAIT",
+                    };
+                    policy_notice_text = manual_charge_stop_notice(stop_reason);
+                } else {
+                    let derated = manual_charge_speed_derated(
+                        self.manual_charge_prefs.speed,
+                        self.charge_policy_derate.derated,
+                    );
+                    allow_charge = true;
+                    policy_target_ichg_ma = Some(if derated {
+                        CHARGE_POLICY_DC_DERATED_ICHG_MA
+                    } else {
+                        self.manual_charge_prefs.speed.ichg_ma()
+                    });
+                    policy_status_text =
+                        manual_charge_status_text(self.manual_charge_prefs.speed, derated);
+                    policy_notice_text = if derated {
+                        "charging_100ma_dc_derated"
+                    } else {
+                        match self.manual_charge_prefs.speed {
+                            ManualChargeSpeed::Ma100 => "charging_100ma_manual",
+                            ManualChargeSpeed::Ma500 => "charging_500ma",
+                            ManualChargeSpeed::Ma1000 => "charging_1a_manual",
+                        }
+                    };
+                }
+            } else if preserve_manual_safety_notice {
+                policy_notice_text =
+                    manual_charge_stop_notice(ManualChargeStopReason::SafetyBlocked);
+            } else if matches!(
+                self.manual_charge_runtime.last_stop_reason,
+                ManualChargeStopReason::SafetyBlocked
+            ) {
+                self.manual_charge_runtime.last_stop_reason = ManualChargeStopReason::None;
+            }
+        }
         let mut applied_ctrl0 = ctrl0;
         let mut applied_vreg_mv: Option<u16> = None;
         let mut applied_ichg_ma: Option<u16> = None;
@@ -7727,13 +8458,18 @@ where
         };
         self.ui_snapshot.fusb302_vbus_present = Some(input_present);
         self.ui_snapshot.dashboard_detail.input_source = input_source;
-        self.ui_snapshot.dashboard_detail.charger_active = Some(if force_allow_charge {
-            allow_charge
-        } else {
-            policy_state
-                .map(ChargePolicyState::charger_active)
-                .unwrap_or(false)
-        });
+        self.ui_snapshot.dashboard_detail.charger_active = Some(
+            if force_allow_charge
+                || self.manual_charge_runtime.active
+                || self.manual_charge_runtime.stop_inhibit
+            {
+                allow_charge
+            } else {
+                policy_state
+                    .map(ChargePolicyState::charger_active)
+                    .unwrap_or(allow_charge)
+            },
+        );
         self.ui_snapshot.dashboard_detail.charger_home_status = Some(charger_home_status_text(
             charger_fault,
             ts_cold,
@@ -7751,6 +8487,7 @@ where
             ts_warm,
             policy_notice_text,
         ));
+        self.update_manual_charge_ui_snapshot(now);
         self.recompute_ui_mode();
 
         if auto_force_charge {

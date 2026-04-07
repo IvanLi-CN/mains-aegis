@@ -1,6 +1,6 @@
 # Dashboard Detail UI 设计（Variant B Drill-down）
 
-本文件定义 Dashboard 二级详情页的模块布局、入口映射与文案冻结口径。
+本文件定义 Dashboard 二级详情页的模块布局、入口映射与文案冻结口径，并补充 charger detail 向下钻取的 `MANUAL CHARGE` 三级页。
 
 ## 1. 基线
 
@@ -67,10 +67,29 @@
 ### `Charger`
 
 - 顶栏标题：`CHARGER DETAIL`
-- 状态 chip：`CHG500 / CHG100 / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC / WARN / FAULT`
+- 状态 chip：`CHG1A / CHG500 / CHG100 / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC / WARN / FAULT`
 - 主区：输入来源图标 + `IN W`；电池图标 + `CHARGE W`
 - 次区：charging state / source select / status detail
 - 底栏：charger abnormal summary
+- 左侧会话面板热区：`x=6 y=60 w=150 h=82`，进入 `MANUAL CHARGE`
+
+### `Manual Charge`
+
+- 顶栏标题：`MANUAL`
+- 顶栏为单层信息条：左侧 `MODE`，中间标题，右侧 status chip，不承载返回触摸区
+- 返回方式：底部 `BACK`、`LEFT/CENTER`
+- 中部三条横向 segmented rows：
+  - `TARGET`: `3.7V / 80% / 100%`
+  - `SPEED`: `100mA / 500mA / 1A`
+  - `TIMER`: `1h / 2h / 6h`
+- 三组字段不再绘制外层卡片边框，直接用 label + segmented options，优先保证小屏可读性与点击面积。
+- 底部唯一操作条：左侧 `BACK`，中部 footer notice，右侧 `START/STOP`
+- 运行语义：
+  - 未充电：允许编辑偏好并显示 `START`
+  - 自动充电或手动充电进行中：设置区锁定，只允许 `STOP/BACK`
+  - `MODE` 词形固定为 `AUTO / AUTO CHG / MANUAL / TAKEOVER / STOPPED`
+  - footer notice 固定映射：`LIVE DATA / MANUAL ACTIVE / AUTO HELD / TIMER DONE / 3.7V DONE / 80% DONE / 100% DONE / SAFETY STOP`
+  - `目标完成 / TIMER DONE / FULL` 后保持 runtime hold，避免自动策略在同轮立即恢复；`SAFETY STOP` 仅展示阻断原因，不建立 hold
 
 ### `Thermal`
 
@@ -95,3 +114,11 @@
 ![Dashboard Detail - Charger](assets/dashboard-b-detail-charger.png)
 ![Dashboard Detail - Thermal](assets/dashboard-b-detail-thermal.png)
 ![Dashboard Detail - Icons](assets/dashboard-detail-icons.png)
+
+## 7. Manual charge 冻结渲染图
+
+![Manual Charge - Default](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-default.png)
+![Manual Charge - Active](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-active.png)
+![Manual Charge - Stop Hold](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-stop-hold.png)
+![Manual Charge - Reset Auto](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-reset-auto.png)
+![Manual Charge - Blocked](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-blocked.png)

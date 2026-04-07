@@ -1306,6 +1306,9 @@ fn main() -> ! {
                         power.request_bms_recovery_action(action);
                         front_panel.update_bms_activation_state(power.bms_activation_state());
                     }
+                    front_panel::UiAction::ManualCharge(action) => {
+                        power.request_manual_charge_action(action);
+                    }
                     front_panel::UiAction::ClearBmsActivationResult => {
                         power.clear_bms_activation_state();
                         front_panel.update_bms_activation_state(power.bms_activation_state());

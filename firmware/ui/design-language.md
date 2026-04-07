@@ -130,7 +130,8 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 
 - `BYPASS / STANDBY / ASSIST / BACKUP`: 仅提供页面模式语义，不再直接决定 `ChargeCard` 状态。
 - `ChargeCard` 首页状态来自主线 charger state machine 的紧凑映射：`CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`。
-- Charger detail 保留完整运行时 token：`CHG500 / CHG100 / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`。
+- Charger detail 保留完整运行时 token：`CHG1A / CHG500 / CHG100 / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`。
+- `MANUAL` 页面 `MODE` 词形固定为：`AUTO / AUTO CHG / MANUAL / TAKEOVER / STOPPED`。
 
 ### 4.2 SelfCheckCommState
 
@@ -160,11 +161,13 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 
 - `UiFocus` 仅控制交互高亮，不改变 UPS 业务状态。
 - `touch_irq=true` 时优先显示触摸焦点色，保留当前业务状态文案不变。
+- `MANUAL` 遵循小屏触控约束：顶部单层 title/status 只读，主交互集中在底部唯一 action bar，避免重复返回入口分散注意力。
+- `MANUAL` 的 `TARGET / SPEED / TIMER` 采用轻量 segmented options，不再额外套 row card，避免 1.47 英寸小屏出现双层边框噪声。
 
 ## 5. Naming and copywriting rules
 
 - 文档说明使用中文，组件/Token/状态标识使用英文。
-- 状态词必须使用固定词形：`BYPASS`、`STANDBY`、`ASSIST`、`BACKUP`、`PEND`、`OK`、`WARN`、`ERR`、`N/A`、`LOCK`、`NOAC`、`RUN`、`IDLE`、`HOT`、`CHG`、`WAIT`、`FULL`、`WARM`、`TEMP`、`LOAD`、`CHG500`、`CHG100`。
+- 状态词必须使用固定词形：`BYPASS`、`STANDBY`、`ASSIST`、`BACKUP`、`PEND`、`OK`、`WARN`、`ERR`、`N/A`、`LOCK`、`NOAC`、`RUN`、`IDLE`、`HOT`、`CHG`、`WAIT`、`FULL`、`WARM`、`TEMP`、`LOAD`、`CHG1A`、`CHG500`、`CHG100`、`AUTO`、`AUTO CHG`、`MANUAL`、`TAKEOVER`、`STOPPED`。
 - 模块名必须与实现一致：`GC9307`、`TCA6408A`、`FUSB302`、`INA3221`、`BQ25792`、`BQ40Z50`、`TPS55288-A`、`TPS55288-B`、`TMP112-A`、`TMP112-B`。
 - 单位规范：`W`（功率）、`A`（电流）、`C`（温度）、`%`（SOC）。
 - 禁止同义词漂移：同一状态不得在不同文档中出现别名。
