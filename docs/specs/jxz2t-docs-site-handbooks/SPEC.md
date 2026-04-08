@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 部分完成（4/5）
+- Status: 已完成
 - Created: 2026-04-08
 - Last: 2026-04-08
 
@@ -55,7 +55,7 @@
 - 首页必须清楚说明：项目是开源硬件、没有成品、目标受众是 DIY 复刻者与半开发者。
 - 设计手册与复刻手册都必须在页尾提供“延伸阅读”，深链回仓库现有事实源文档。
 - GitHub Pages workflow 必须在 PR 上执行构建检查，在 `main` 上执行构建并部署。
-- 现有 `ci.yml`、`firmware.yml`、`dependency-review.yml` 必须把 `docs-site/**` 加入 `paths-ignore`。
+- 现有 `ci.yml` 与 `firmware.yml` 必须把 `docs-site/**` 加入 `paths-ignore`；`dependency-review.yml` 必须避免被 `docs-site/docs/**` 内容页误触发，同时保留对 `docs-site` 依赖清单变更的检查。
 - 必须提供视觉证据并回填到当前规格的 `## Visual Evidence`。
 
 ### SHOULD
@@ -103,7 +103,8 @@ None
 
 - Given 已安装 `docs-site` 依赖，When 执行 `bun run build --cwd docs-site`，Then 构建成功并生成 `docs-site/doc_build`。
 - Given `DOCS_BASE=/${repo}/`，When 预览构建产物，Then 首页、设计手册、复刻与使用手册、404 页面都能正常加载，静态资源路径不丢失。
-- Given 只修改 `docs-site/**`，When GitHub Actions 触发，Then 新增的 Docs Pages workflow 会运行，而现有 firmware / host / dependency review 构建类 workflow 不会因 `docs-site/**` 误触发。
+- Given 只修改 `docs-site/docs/**` 内容页，When GitHub Actions 触发，Then 新增的 Docs Pages workflow 会运行，而现有 firmware / host / dependency review workflow 不会被误触发。
+- Given 修改 `docs-site/package.json` 或 `docs-site/bun.lock`，When GitHub Actions 触发，Then `dependency-review` 仍会运行以覆盖 docs 站依赖变更。
 - Given 打开首页，When 首次阅读，Then 能明确理解“开源硬件 / 无成品 / DIY 复刻者与半开发者”的项目定位。
 - Given 打开设计手册与复刻手册，When 阅读各页，Then 每页都能提供明确范围与延伸阅读深链，不把 vendor 资料库暴露到主导航。
 - Given 当前规格关联视觉证据，When 快车道收口前检查，Then 当前规格的 `## Visual Evidence` 已回填最终截图，并与当前提交绑定。
@@ -174,7 +175,7 @@ None
 - [x] M2: 完成首页、设计手册与复刻与使用手册页面
 - [x] M3: 完成本地构建、预览与浏览器烟测
 - [x] M4: 回填视觉证据到当前规格
-- [ ] M5: 快车道 PR 创建并收敛到 merge-ready
+- [x] M5: 快车道 PR 创建并收敛到 merge-ready
 
 ## 方案概述（Approach, high-level）
 
@@ -182,6 +183,10 @@ None
 - 页面内容以“重写手册 + 深链原始专题文档”的方式组织，避免把现有资料树直接暴露给首次阅读者。
 - GitHub Pages 构建采用 Rspress 默认产物 `doc_build`，并用 `DOCS_BASE` 保证仓库子路径部署可用。
 - 视觉证据以本地预览截图为准，统一写回当前规格。
+
+## PR
+
+- PR: [#63](https://github.com/IvanLi-CN/mains-aegis/pull/63)
 
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）
 
