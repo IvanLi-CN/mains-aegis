@@ -11,6 +11,9 @@ use sink_policy::{ContractPlan, LocalCapabilities};
 
 const PHY_POLL_INTERVAL_MS: u32 = 250;
 const ERROR_RETRY_INTERVAL_MS: u32 = 1_000;
+const SOURCE_CAPS_WAIT_TIMEOUT_MS: u32 = 3_000;
+const VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
+const CHARGER_VBUS_PRESENT_THRESHOLD_MV: u16 = 4_500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContractKind {
@@ -66,10 +69,13 @@ pub struct UsbPdSinkManager<I2C> {
     next_retry_at_ms: u32,
     last_phy_poll_at_ms: u32,
     last_request_at_ms: u32,
+    attached_at_ms: Option<u32>,
+    source_caps_recovery_attempted: bool,
     message_id: u8,
     source_spec_revision: SpecRevision,
     source_capabilities: Option<pd::SourceCapabilities>,
     contract_tracker: ContractTracker<ActiveContract>,
+    consecutive_vbus_absent_polls: u8,
     unsafe_hard_reset_sent: bool,
 }
 
@@ -101,6 +107,32 @@ fn fusb302_error_kind(err: &fusb302::Error) -> &'static str {
     }
 }
 
+const fn charger_input_confirms_vbus(measured_input_voltage_mv: Option<u16>) -> bool {
+    matches!(
+        measured_input_voltage_mv,
+        Some(voltage_mv) if voltage_mv >= CHARGER_VBUS_PRESENT_THRESHOLD_MV
+    )
+}
+
+const fn effective_vbus_present(
+    raw_vbus_present: bool,
+    measured_input_voltage_mv: Option<u16>,
+) -> bool {
+    raw_vbus_present || charger_input_confirms_vbus(measured_input_voltage_mv)
+}
+
+const fn next_vbus_absent_polls(current: u8, vbus_present: bool) -> u8 {
+    if vbus_present {
+        0
+    } else {
+        current.saturating_add(1)
+    }
+}
+
+const fn detach_debounce_elapsed(consecutive_vbus_absent_polls: u8) -> bool {
+    consecutive_vbus_absent_polls >= VBUS_DETACH_DEBOUNCE_POLLS
+}
+
 impl<I2C> UsbPdSinkManager<I2C>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
@@ -119,10 +151,13 @@ where
             next_retry_at_ms: 0,
             last_phy_poll_at_ms: 0,
             last_request_at_ms: 0,
+            attached_at_ms: None,
+            source_caps_recovery_attempted: false,
             message_id: 0,
             source_spec_revision: pd::FUSB302_MAX_SPEC_REVISION,
             source_capabilities: None,
             contract_tracker: ContractTracker::default(),
+            consecutive_vbus_absent_polls: 0,
             unsafe_hard_reset_sent: false,
         }
     }
@@ -245,7 +280,41 @@ where
             }
         }
 
+        self.maybe_recover_missing_source_caps(now_ms);
+
         self.state
+    }
+
+    fn maybe_recover_missing_source_caps(&mut self, now_ms: u32) {
+        if !self.state.attached
+            || self.state.unsafe_source_latched
+            || self.source_capabilities.is_some()
+            || self.contract_tracker.request_in_flight()
+            || self.source_caps_recovery_attempted
+        {
+            return;
+        }
+
+        let Some(attached_at_ms) = self.attached_at_ms else {
+            return;
+        };
+        if now_ms.wrapping_sub(attached_at_ms) < SOURCE_CAPS_WAIT_TIMEOUT_MS {
+            return;
+        }
+
+        info!(
+            "usb_pd: no source caps after attach, issuing soft reset waited_ms={=u32}",
+            now_ms.wrapping_sub(attached_at_ms)
+        );
+        if let Err(err) =
+            self.send_control_message(ControlMessageType::SoftReset, self.source_spec_revision)
+        {
+            warn!(
+                "usb_pd: source caps soft reset failed err={}",
+                fusb302_error_kind(&err)
+            );
+        }
+        self.source_caps_recovery_attempted = true;
     }
 
     fn handle_irq_snapshot(
@@ -254,36 +323,92 @@ where
         demand: UsbPdPowerDemand,
         now_ms: u32,
     ) {
-        self.state.vbus_present = Some(snapshot.vbus_present());
+        let raw_vbus_present = snapshot.vbus_present();
+        let measured_input_voltage_mv = demand.measured_input_voltage_mv;
+        let vbus_present = effective_vbus_present(raw_vbus_present, measured_input_voltage_mv);
+        self.state.vbus_present = Some(vbus_present);
+        self.consecutive_vbus_absent_polls =
+            next_vbus_absent_polls(self.consecutive_vbus_absent_polls, vbus_present);
 
-        match snapshot.attached_sink_polarity() {
-            Some(polarity) => {
-                if !self.state.attached || self.state.polarity != Some(polarity) {
-                    self.state.attached = true;
-                    self.state.polarity = Some(polarity);
-                    self.message_id = 0;
-                    self.clear_contract_tracking();
-                    self.source_capabilities = None;
-                    if let Err(err) = self
-                        .phy
-                        .enable_pd_receive(polarity, self.source_spec_revision)
-                    {
-                        warn!("usb_pd: enable rx failed err={}", fusb302_error_kind(&err));
-                        self.initialized = false;
-                        self.state.controller_ready = false;
-                        return;
-                    }
-                    info!("usb_pd: attached polarity={}", polarity_name(polarity));
-                }
-            }
-            None => {
-                if self.state.attached {
-                    info!("usb_pd: detached");
-                    self.reset_contract_state(true);
-                    let _ = self.phy.start_sink_toggle();
-                }
+        if self.state.attached && !vbus_present {
+            if !detach_debounce_elapsed(self.consecutive_vbus_absent_polls) {
+                debug!(
+                    "usb_pd: detach debounce waiting raw_vbus_ok={=bool} vin_mv={=?} absent_polls={=u8}",
+                    raw_vbus_present,
+                    measured_input_voltage_mv,
+                    self.consecutive_vbus_absent_polls
+                );
                 return;
             }
+            info!("usb_pd: detached");
+            self.reset_contract_state(true);
+            let _ = self.phy.start_sink_toggle();
+            return;
+        }
+
+        if self.state.attached && !raw_vbus_present && vbus_present {
+            debug!(
+                "usb_pd: suppressing fusb302 vbus glitch vin_mv={=?} status0=0x{=u8:x} status1a=0x{=u8:x} int=0x{=u8:x}",
+                measured_input_voltage_mv,
+                snapshot.status0,
+                snapshot.status1a,
+                snapshot.interrupt
+            );
+        }
+
+        if !self.state.attached {
+            let Some(polarity) = snapshot.attached_sink_polarity() else {
+                return;
+            };
+            if !vbus_present {
+                return;
+            };
+
+            self.state.attached = true;
+            self.state.polarity = Some(polarity);
+            self.message_id = 0;
+            self.attached_at_ms = Some(now_ms);
+            self.source_caps_recovery_attempted = false;
+            self.consecutive_vbus_absent_polls = 0;
+            self.clear_contract_tracking();
+            self.source_capabilities = None;
+            if let Err(err) = self
+                .phy
+                .enable_pd_receive(polarity, self.source_spec_revision)
+            {
+                warn!("usb_pd: enable rx failed err={}", fusb302_error_kind(&err));
+                self.initialized = false;
+                self.state.controller_ready = false;
+                return;
+            }
+            info!("usb_pd: attached polarity={}", polarity_name(polarity));
+        } else if self.state.polarity.is_none() {
+            if let Some(polarity) = snapshot.attached_sink_polarity() {
+                self.state.polarity = Some(polarity);
+            }
+        }
+
+        if self.state.attached
+            && self.source_capabilities.is_none()
+            && (snapshot.interrupta != 0
+                || snapshot.interruptb != 0
+                || snapshot.interrupt != 0
+                || snapshot.rx_fifo_non_empty())
+        {
+            info!(
+                "usb_pd: irq st0a=0x{=u8:x} st1a=0x{=u8:x} inta=0x{=u8:x} intb=0x{=u8:x} st0=0x{=u8:x} st1=0x{=u8:x} int=0x{=u8:x} rx_non_empty={=bool} rx_ready={=bool} tx_sent={=bool} gcrc_sent={=bool}",
+                snapshot.status0a,
+                snapshot.status1a,
+                snapshot.interrupta,
+                snapshot.interruptb,
+                snapshot.status0,
+                snapshot.status1,
+                snapshot.interrupt,
+                snapshot.rx_fifo_non_empty(),
+                snapshot.rx_message_ready(),
+                snapshot.tx_sent(),
+                snapshot.gcrc_sent()
+            );
         }
 
         if snapshot.hard_reset_received() || snapshot.retry_failed() {
@@ -305,16 +430,39 @@ where
             self.handle_peer_soft_reset(self.source_spec_revision);
         }
 
-        if snapshot.rx_message_ready() {
-            match self.phy.read_message() {
-                Ok(Some(message)) => self.handle_message(message, demand, now_ms),
-                Ok(None) => {}
-                Err(err) => {
-                    warn!(
-                        "usb_pd: read message failed err={}",
-                        fusb302_error_kind(&err)
-                    );
-                    let _ = self.phy.flush_rx();
+        if snapshot.rx_fifo_non_empty() || snapshot.gcrc_sent() || snapshot.tx_sent() {
+            let mut trust_snapshot_fifo = snapshot.rx_fifo_non_empty();
+            loop {
+                let read_result = if trust_snapshot_fifo {
+                    trust_snapshot_fifo = false;
+                    self.phy.read_message_unchecked()
+                } else {
+                    self.phy.read_message()
+                };
+
+                match read_result {
+                    Ok(Some(message)) => self.handle_message(message, demand, now_ms),
+                    Ok(None) => break,
+                    Err(err) => {
+                        warn!(
+                            "usb_pd: read message failed err={}",
+                            fusb302_error_kind(&err)
+                        );
+                        let _ = self.phy.flush_rx();
+                        break;
+                    }
+                }
+
+                match self.phy.rx_fifo_non_empty() {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(err) => {
+                        warn!(
+                            "usb_pd: read fifo status failed err={}",
+                            fusb302_error_kind(&err)
+                        );
+                        break;
+                    }
                 }
             }
         }
@@ -356,6 +504,7 @@ where
                     self.source_spec_revision =
                         pd::clamp_fusb302_spec_revision(source_caps.spec_revision);
                     self.source_capabilities = Some(source_caps);
+                    self.source_caps_recovery_attempted = false;
                     if self.contract_tracker.request_in_flight() {
                         debug!("usb_pd: preserving in-flight contract across source caps refresh");
                         return;
@@ -467,6 +616,9 @@ where
         self.clear_contract_tracking();
         self.source_capabilities = None;
         self.message_id = 0;
+        self.consecutive_vbus_absent_polls = 0;
+        self.attached_at_ms = None;
+        self.source_caps_recovery_attempted = false;
         if detach {
             self.source_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
             self.state.attached = false;
@@ -475,5 +627,31 @@ where
             self.state.unsafe_source_latched = false;
             self.unsafe_hard_reset_sent = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn charger_input_voltage_can_confirm_vbus_presence() {
+        assert!(charger_input_confirms_vbus(Some(4_500)));
+        assert!(effective_vbus_present(false, Some(5_200)));
+        assert!(!effective_vbus_present(false, Some(4_499)));
+        assert!(!effective_vbus_present(false, None));
+    }
+
+    #[test]
+    fn detach_requires_consecutive_absent_polls() {
+        let first = next_vbus_absent_polls(0, false);
+        assert_eq!(first, 1);
+        assert!(!detach_debounce_elapsed(first));
+
+        let second = next_vbus_absent_polls(first, false);
+        assert_eq!(second, 2);
+        assert!(detach_debounce_elapsed(second));
+
+        assert_eq!(next_vbus_absent_polls(second, true), 0);
     }
 }

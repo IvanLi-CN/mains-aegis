@@ -7,16 +7,18 @@ extern crate std;
 compile_error!("Select only one main firmware voltage feature: main-vout-12v or main-vout-19v.");
 
 #[cfg(all(
-    feature = "pd-sink-pps",
+    not(feature = "no-pps"),
     not(any(
-        feature = "pd-sink-fixed-5v",
-        feature = "pd-sink-fixed-9v",
-        feature = "pd-sink-fixed-12v",
-        feature = "pd-sink-fixed-15v",
-        feature = "pd-sink-fixed-20v"
+        not(feature = "no-pd-sink-5v"),
+        not(feature = "no-pd-sink-9v"),
+        not(feature = "no-pd-sink-12v"),
+        not(feature = "no-pd-sink-15v"),
+        not(feature = "no-pd-sink-20v")
     ))
 ))]
-compile_error!("pd-sink-pps requires at least one pd-sink-fixed-* feature.");
+compile_error!(
+    "PPS requires at least one enabled fixed PDO; clear at least one no-pd-sink-* feature."
+);
 
 pub mod time;
 

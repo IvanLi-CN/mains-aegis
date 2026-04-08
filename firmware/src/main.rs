@@ -60,6 +60,12 @@ const FW_GIT_SHA: &str = env!("FW_GIT_SHA");
 const FW_SRC_HASH: &str = env!("FW_SRC_HASH");
 const FW_GIT_DIRTY: &str = env!("FW_GIT_DIRTY");
 const FW_BUILD_ID: &str = env!("FW_BUILD_ID");
+const USB_PD_FIXED_5V_ENABLED: bool = !cfg!(feature = "no-pd-sink-5v");
+const USB_PD_FIXED_9V_ENABLED: bool = !cfg!(feature = "no-pd-sink-9v");
+const USB_PD_FIXED_12V_ENABLED: bool = !cfg!(feature = "no-pd-sink-12v");
+const USB_PD_FIXED_15V_ENABLED: bool = !cfg!(feature = "no-pd-sink-15v");
+const USB_PD_FIXED_20V_ENABLED: bool = !cfg!(feature = "no-pd-sink-20v");
+const USB_PD_PPS_ENABLED: bool = !cfg!(feature = "no-pps");
 
 // External SYNC for TPS55288 DITH/SYNC pins (SYNCA=0°, SYNCB=180°).
 // RFSW on board is 43kΩ (U17/U18 pin 8), so nominal fSW ≈ 20MHz / 43kΩ ≈ 465kHz.
@@ -238,6 +244,53 @@ enum RuntimeAudioReprimeResult {
     Ready { refill_budget: u32 },
     Late,
     Fatal,
+}
+
+fn log_boot_stage(stage: &'static str) {
+    esp_println::println!("boot: stage={}", stage);
+    defmt::info!("boot: stage={}", stage);
+}
+
+fn log_usb_pd_feature_summary() {
+    esp_println::println!(
+        "fw: usb_pd_features fixed5={} fixed9={} fixed12={} fixed15={} fixed20={} pps={}",
+        USB_PD_FIXED_5V_ENABLED,
+        USB_PD_FIXED_9V_ENABLED,
+        USB_PD_FIXED_12V_ENABLED,
+        USB_PD_FIXED_15V_ENABLED,
+        USB_PD_FIXED_20V_ENABLED,
+        USB_PD_PPS_ENABLED
+    );
+    defmt::info!(
+        "fw: usb_pd_features fixed5={=bool} fixed9={=bool} fixed12={=bool} fixed15={=bool} fixed20={=bool} pps={=bool}",
+        USB_PD_FIXED_5V_ENABLED,
+        USB_PD_FIXED_9V_ENABLED,
+        USB_PD_FIXED_12V_ENABLED,
+        USB_PD_FIXED_15V_ENABLED,
+        USB_PD_FIXED_20V_ENABLED,
+        USB_PD_PPS_ENABLED
+    );
+}
+
+fn log_usb_pd_port_state(stage: &'static str, state: esp_firmware::usb_pd::UsbPdPortState) {
+    esp_println::println!(
+        "usb_pd: stage={} enabled={} ready={} attached={} unsafe={} vbus_present={}",
+        stage,
+        state.enabled,
+        state.controller_ready,
+        state.attached,
+        state.unsafe_source_latched,
+        state.vbus_present.unwrap_or(false)
+    );
+    defmt::info!(
+        "usb_pd: stage={} enabled={=bool} ready={=bool} attached={=bool} unsafe={=bool} vbus_present={=?}",
+        stage,
+        state.enabled,
+        state.controller_ready,
+        state.attached,
+        state.unsafe_source_latched,
+        state.vbus_present
+    );
 }
 
 fn audio_refill_budget(available: usize, target_buffered_bytes: usize) -> usize {
@@ -526,6 +579,7 @@ fn main() -> ! {
     // Human-readable marker (plain serial) to help bring-up when defmt decoding isn't available yet.
     esp_println::println!("esp: boot (serial)");
     defmt::info!("esp: boot");
+    log_boot_stage("early_boot");
     defmt::info!(
         "fw: pkg_version={} git_sha={} profile={}",
         env!("CARGO_PKG_VERSION"),
@@ -544,6 +598,7 @@ fn main() -> ! {
         FW_SRC_HASH,
         FW_GIT_DIRTY
     );
+    log_usb_pd_feature_summary();
     defmt::info!(
         "fan: policy stop_c_x16={=i16} target_c_x16={=i16} min_pwm_pct={=u8} step_down_pct={=u8} step_up_small_pct={=u8} step_up_medium_pct={=u8} step_up_large_pct={=u8} control_interval_ms={=u64} tach_timeout_ms={=u64} tach_watchdog_enabled={=bool} tach_ppr={=u8} test_mode={=bool}",
         FAN_STOP_TEMP_C_X16,
@@ -594,6 +649,7 @@ fn main() -> ! {
         .unwrap()
         .with_sda(i2c1_sda.into_peripheral_output())
         .with_scl(i2c1_scl.into_peripheral_output());
+    log_boot_stage("i2c1_ready");
 
     let i2c1_int_cfg = InputConfig::default().with_pull(Pull::Up);
     let mut i2c1_int = Input::new(peripherals.GPIO33, i2c1_int_cfg);
@@ -788,12 +844,18 @@ fn main() -> ! {
         let mut i2c2_probe = RefCellDevice::new(&i2c2_bus);
         output::log_i2c2_presence(&mut i2c2_probe)
     };
+    esp_println::println!(
+        "self_test: panel screen_present={} typec_present={}",
+        panel_probe.screen_present(),
+        panel_probe.fusb302_present
+    );
     defmt::info!(
         "self_test: panel screen_present={=bool} typec_present={=bool}",
         panel_probe.screen_present(),
         panel_probe.fusb302_present
     );
 
+    log_boot_stage("front_panel_init_begin");
     let mut front_panel = front_panel::FrontPanel::new(
         RefCellDevice::new(&i2c2_bus),
         spi,
@@ -811,6 +873,7 @@ fn main() -> ! {
         );
     }
     front_panel.init_best_effort();
+    log_boot_stage("front_panel_init_done");
     front_panel.update_self_check_snapshot(front_panel_scene::SelfCheckUiSnapshot::pending(
         front_panel_scene::UpsMode::Standby,
     ));
@@ -857,7 +920,9 @@ fn main() -> ! {
     let mut audio_enabled = audio_transfer.is_some();
     let mut audio_recovery = RuntimeAudioRecoveryState::new();
     let mut usb_pd = UsbPdSinkManager::new(RefCellDevice::new(&i2c2_bus));
+    log_boot_stage("usb_pd_init_begin");
     let initial_pd_state = usb_pd.init_best_effort();
+    log_usb_pd_port_state("init_done", initial_pd_state);
 
     macro_rules! disable_runtime_audio {
         () => {{
@@ -1100,6 +1165,7 @@ fn main() -> ! {
         }
     }
 
+    log_boot_stage("boot_self_test_begin");
     let self_test = output::boot_self_test_with_report(
         &mut i2c,
         DEFAULT_ENABLED_OUTPUTS,
@@ -1159,6 +1225,7 @@ fn main() -> ! {
             }
         },
     );
+    log_boot_stage("boot_self_test_done");
 
     let cfg = output::Config {
         ina_detected: self_test.ina_detected,
@@ -1242,6 +1309,7 @@ fn main() -> ! {
         cfg.ilimit_ma
     );
     power.init_best_effort();
+    log_boot_stage("power_init_done");
     power.update_usb_pd_state(initial_pd_state);
     let initial_snapshot = power.ui_snapshot();
     front_panel.update_self_check_snapshot(initial_snapshot);
@@ -1286,6 +1354,7 @@ fn main() -> ! {
     let pd_started_at = Instant::now();
     let mut last_irq_log_at: Option<Instant> = None;
     let mut last_fan_tach_log_at: Option<Instant> = None;
+    log_boot_stage("main_loop_enter");
 
     loop {
         defmt::info!("esp: heartbeat");

@@ -103,6 +103,32 @@ pub mod control3 {
     pub const AUTO_RETRY: u8 = 1 << 0;
 }
 
+pub mod mask {
+    pub const VBUS_OK: u8 = 1 << 7;
+    pub const ACTIVITY: u8 = 1 << 6;
+    pub const COMP_CHNG: u8 = 1 << 5;
+    pub const CRC_CHK: u8 = 1 << 4;
+    pub const ALERT: u8 = 1 << 3;
+    pub const WAKE: u8 = 1 << 2;
+    pub const COLLISION: u8 = 1 << 1;
+    pub const BC_LVL: u8 = 1 << 0;
+}
+
+pub mod maska {
+    pub const OCP_TEMP: u8 = 1 << 7;
+    pub const TOG_DONE: u8 = 1 << 6;
+    pub const SOFT_FAIL: u8 = 1 << 5;
+    pub const RETRY_FAIL: u8 = 1 << 4;
+    pub const HARD_SENT: u8 = 1 << 3;
+    pub const TX_SENT: u8 = 1 << 2;
+    pub const SOFT_RESET: u8 = 1 << 1;
+    pub const HARD_RESET: u8 = 1 << 0;
+}
+
+pub mod maskb {
+    pub const GCRC_SENT: u8 = 1 << 0;
+}
+
 pub mod reset {
     pub const PD_RESET: u8 = 1 << 1;
     pub const SW_RESET: u8 = 1 << 0;
@@ -211,8 +237,12 @@ impl IrqSnapshot {
         (self.interruptb & interruptb::GCRC_SENT) != 0
     }
 
-    pub const fn rx_message_ready(&self) -> bool {
+    pub const fn rx_fifo_non_empty(&self) -> bool {
         (self.status1 & status1::RX_EMPTY) == 0
+    }
+
+    pub const fn rx_message_ready(&self) -> bool {
+        self.rx_fifo_non_empty()
             && (self.status0 & status0::CRC_CHK) != 0
             && (self.status1a & status1a::RXSOP) != 0
     }
@@ -253,9 +283,18 @@ where
         self.write_reg(reg::CONTROL0, HOST_CUR_DEFAULT)?;
         self.write_reg(reg::CONTROL1, control1::RX_FLUSH)?;
         self.write_reg(reg::CONTROL3, CONTROL3_BASE)?;
-        self.write_reg(reg::MASK, 0x00)?;
-        self.write_reg(reg::MASKA, 0x00)?;
-        self.write_reg(reg::MASKB, 0x00)?;
+        self.write_reg(
+            reg::MASK,
+            mask::ACTIVITY
+                | mask::COMP_CHNG
+                | mask::CRC_CHK
+                | mask::ALERT
+                | mask::WAKE
+                | mask::COLLISION
+                | mask::BC_LVL,
+        )?;
+        self.write_reg(reg::MASKA, 0xFF)?;
+        self.write_reg(reg::MASKB, 0xFF)?;
         self.switches1_base = (spec_revision.bits() << switches1::SPECREV_SHIFT) & 0x60;
         self.write_reg(reg::SWITCHES1, self.switches1_base)?;
         self.write_reg(reg::SWITCHES0, SWITCHES0_PDWN_BOTH)?;
@@ -268,6 +307,27 @@ where
     pub fn start_sink_toggle(&mut self) -> Result<(), Error> {
         self.write_reg(reg::SWITCHES0, SWITCHES0_PDWN_BOTH)?;
         self.write_reg(reg::SWITCHES1, self.switches1_base)?;
+        self.write_reg(
+            reg::MASK,
+            mask::ACTIVITY
+                | mask::COMP_CHNG
+                | mask::CRC_CHK
+                | mask::ALERT
+                | mask::WAKE
+                | mask::COLLISION
+                | mask::BC_LVL,
+        )?;
+        self.write_reg(
+            reg::MASKA,
+            maska::OCP_TEMP
+                | maska::SOFT_FAIL
+                | maska::RETRY_FAIL
+                | maska::HARD_SENT
+                | maska::TX_SENT
+                | maska::SOFT_RESET
+                | maska::HARD_RESET,
+        )?;
+        self.write_reg(reg::MASKB, 0xFF)?;
         self.write_reg(reg::CONTROL2, control2::MODE_UFP | control2::TOGGLE)?;
         Ok(())
     }
@@ -308,6 +368,20 @@ where
             reg::SWITCHES1,
             self.switches1_base | tx_cc | switches1::AUTO_GCRC,
         )?;
+        self.write_reg(
+            reg::MASK,
+            mask::ACTIVITY
+                | mask::COMP_CHNG
+                | mask::CRC_CHK
+                | mask::ALERT
+                | mask::WAKE
+                | mask::BC_LVL,
+        )?;
+        self.write_reg(
+            reg::MASKA,
+            maska::OCP_TEMP | maska::TOG_DONE | maska::SOFT_FAIL,
+        )?;
+        self.write_reg(reg::MASKB, 0x00)?;
         Ok(())
     }
 
@@ -337,6 +411,18 @@ where
     }
 
     pub fn read_message(&mut self) -> Result<Option<Message>, Error> {
+        if !self.rx_fifo_non_empty()? {
+            return Ok(None);
+        }
+
+        self.read_message_unchecked()
+    }
+
+    pub fn read_message_unchecked(&mut self) -> Result<Option<Message>, Error> {
+        self.read_message_inner().map(Some)
+    }
+
+    fn read_message_inner(&mut self) -> Result<Message, Error> {
         let sop_token = self.read_fifo_byte()?;
         if (sop_token & SOP_TOKEN_MASK) != SOP_TOKEN_SOP {
             return Err(Error::Protocol("unsupported_sop_token"));
@@ -362,7 +448,11 @@ where
         let mut crc = [0u8; 4];
         self.read_fifo_bytes(&mut crc)?;
 
-        Ok(Some(Message::new(header, payload)))
+        Ok(Message::new(header, payload))
+    }
+
+    pub fn rx_fifo_non_empty(&mut self) -> Result<bool, Error> {
+        Ok((self.read_reg(reg::STATUS1)? & status1::RX_EMPTY) == 0)
     }
 
     pub fn send_message(&mut self, message: &Message) -> Result<(), Error> {

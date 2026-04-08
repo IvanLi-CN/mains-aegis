@@ -3422,10 +3422,9 @@ where
             requested_charge_voltage_mv,
             requested_charge_current_ma,
             battery_voltage_mv: self.ui_snapshot.bq40z50_pack_mv,
-            measured_input_voltage_mv: usb_pd_measured_input_voltage_mv(
-                self.ui_snapshot.fusb302_vbus_present,
-                self.usb_pd_vac1_mv,
-            ),
+            // Feed the PD manager the raw charger-side VAC1 sample so FUSB302 VBUS_OK glitches
+            // do not blind detach / unsafe-voltage decisions.
+            measured_input_voltage_mv: self.usb_pd_vac1_mv,
             charging_enabled: usb_pd_charging_enabled(
                 self.ui_snapshot.bq25792_allow_charge,
                 self.cfg.charger_enabled,

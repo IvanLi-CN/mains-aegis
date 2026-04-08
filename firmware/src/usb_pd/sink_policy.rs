@@ -6,6 +6,7 @@ pub const UNSAFE_INPUT_THRESHOLD_MV: u16 = 20_500;
 pub const BQ25792_MIN_VINDPM_MV: u16 = 3_600;
 pub const BQ25792_MAX_VINDPM_MV: u16 = 22_000;
 pub const BQ25792_MAX_IINDPM_MA: u16 = 3_300;
+pub const BQ25792_VSYSMIN_MV: u16 = 12_000;
 pub const PPS_HEADROOM_MV: u16 = 600;
 pub const PPS_REREQUEST_HYSTERESIS_MV: u16 = 100;
 pub const PPS_REREQUEST_MIN_INTERVAL_MS: u32 = 2_000;
@@ -14,6 +15,7 @@ const PPS_MIN_REQUEST_MV: u16 = 5_000;
 const PPS_MAX_REQUEST_MV: u16 = MAX_SAFE_PD_VOLTAGE_MV;
 const POWER_EFFICIENCY_NUM: u32 = 115;
 const POWER_EFFICIENCY_DEN: u32 = 100;
+const SYSTEM_VOLTAGE_HEADROOM_MV: u16 = 250;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LocalCapabilities {
@@ -29,23 +31,23 @@ impl LocalCapabilities {
 
         macro_rules! push_fixed {
             ($feature:literal, $mv:expr) => {
-                if cfg!(feature = $feature) {
+                if !cfg!(feature = $feature) {
                     fixed_voltages_mv[fixed_len] = $mv;
                     fixed_len += 1;
                 }
             };
         }
 
-        push_fixed!("pd-sink-fixed-5v", 5_000);
-        push_fixed!("pd-sink-fixed-9v", 9_000);
-        push_fixed!("pd-sink-fixed-12v", 12_000);
-        push_fixed!("pd-sink-fixed-15v", 15_000);
-        push_fixed!("pd-sink-fixed-20v", 20_000);
+        push_fixed!("no-pd-sink-5v", 5_000);
+        push_fixed!("no-pd-sink-9v", 9_000);
+        push_fixed!("no-pd-sink-12v", 12_000);
+        push_fixed!("no-pd-sink-15v", 15_000);
+        push_fixed!("no-pd-sink-20v", 20_000);
 
         Self {
             fixed_voltages_mv,
             fixed_len,
-            pps_enabled: cfg!(feature = "pd-sink-pps"),
+            pps_enabled: !cfg!(feature = "no-pps"),
         }
     }
 
@@ -192,7 +194,7 @@ pub fn select_contract_from_filtered(
         return None;
     }
 
-    if local.pps_enabled && demand.charging_enabled {
+    if local.pps_enabled {
         if let Some(plan) = select_pps_contract(&filtered, demand) {
             return Some(plan);
         }
@@ -227,6 +229,7 @@ pub fn select_fixed_contract(
     demand: UsbPdPowerDemand,
 ) -> Option<ContractPlan> {
     let required_power_mw = demand.required_power_mw();
+    let target_voltage_mv = compute_fixed_target_voltage_mv(demand);
     let mut best_offer: Option<FixedSourceOffer> = None;
     let mut best_required_current_ma = 0u16;
 
@@ -246,9 +249,7 @@ pub fn select_fixed_contract(
         let take = match best_offer {
             None => true,
             Some(current_best) => {
-                offer.voltage_mv < current_best.voltage_mv
-                    || (offer.voltage_mv == current_best.voltage_mv
-                        && offer.max_current_ma > current_best.max_current_ma)
+                fixed_offer_preferred_over(offer, current_best, target_voltage_mv, demand)
             }
         };
         if take {
@@ -370,21 +371,83 @@ pub const fn is_input_voltage_unsafe(measured_input_voltage_mv: Option<u16>) -> 
 }
 
 pub fn compute_pps_target_voltage_mv(demand: UsbPdPowerDemand) -> u16 {
-    if !demand.charging_enabled {
-        return PPS_MIN_REQUEST_MV;
-    }
+    let system_target_mv = compute_system_target_voltage_mv(demand);
 
-    let desired_mv = if demand.requested_charge_voltage_mv != 0 {
+    let charge_target_mv = if demand.charging_enabled && demand.requested_charge_voltage_mv != 0 {
         demand
             .requested_charge_voltage_mv
             .saturating_add(PPS_HEADROOM_MV)
-    } else if let Some(battery_voltage_mv) = demand.battery_voltage_mv {
-        battery_voltage_mv.saturating_add(PPS_HEADROOM_MV)
+    } else if demand.charging_enabled {
+        demand
+            .battery_voltage_mv
+            .unwrap_or(system_target_mv)
+            .saturating_add(PPS_HEADROOM_MV)
     } else {
-        PPS_MIN_REQUEST_MV
+        system_target_mv
     };
 
-    clamp_u16(desired_mv, PPS_MIN_REQUEST_MV, PPS_MAX_REQUEST_MV)
+    clamp_u16(
+        charge_target_mv.max(system_target_mv),
+        PPS_MIN_REQUEST_MV,
+        PPS_MAX_REQUEST_MV,
+    )
+}
+
+pub fn compute_fixed_target_voltage_mv(demand: UsbPdPowerDemand) -> u16 {
+    let system_target_mv = compute_system_target_voltage_mv(demand);
+    let charge_target_mv = if demand.charging_enabled {
+        demand.requested_charge_voltage_mv.max(system_target_mv)
+    } else {
+        system_target_mv
+    };
+
+    clamp_u16(charge_target_mv, PPS_MIN_REQUEST_MV, PPS_MAX_REQUEST_MV)
+}
+
+pub fn compute_system_target_voltage_mv(demand: UsbPdPowerDemand) -> u16 {
+    let battery_backed_target_mv = demand
+        .battery_voltage_mv
+        .unwrap_or(BQ25792_VSYSMIN_MV)
+        .saturating_add(SYSTEM_VOLTAGE_HEADROOM_MV);
+
+    clamp_u16(
+        battery_backed_target_mv.max(BQ25792_VSYSMIN_MV),
+        PPS_MIN_REQUEST_MV,
+        PPS_MAX_REQUEST_MV,
+    )
+}
+
+fn fixed_offer_preferred_over(
+    candidate: FixedSourceOffer,
+    current_best: FixedSourceOffer,
+    target_voltage_mv: u16,
+    demand: UsbPdPowerDemand,
+) -> bool {
+    if demand.charging_enabled {
+        let candidate_meets_floor = candidate.voltage_mv >= target_voltage_mv;
+        let current_best_meets_floor = current_best.voltage_mv >= target_voltage_mv;
+        if candidate_meets_floor != current_best_meets_floor {
+            return candidate_meets_floor;
+        }
+        if candidate_meets_floor {
+            return candidate.voltage_mv < current_best.voltage_mv
+                || (candidate.voltage_mv == current_best.voltage_mv
+                    && candidate.max_current_ma > current_best.max_current_ma);
+        }
+        return candidate.voltage_mv > current_best.voltage_mv
+            || (candidate.voltage_mv == current_best.voltage_mv
+                && candidate.max_current_ma > current_best.max_current_ma);
+    }
+
+    let candidate_error = candidate.voltage_mv.abs_diff(target_voltage_mv);
+    let current_best_error = current_best.voltage_mv.abs_diff(target_voltage_mv);
+    candidate_error < current_best_error
+        || (candidate_error == current_best_error
+            && candidate.voltage_mv >= target_voltage_mv
+            && current_best.voltage_mv < target_voltage_mv)
+        || (candidate_error == current_best_error
+            && candidate.voltage_mv == current_best.voltage_mv
+            && candidate.max_current_ma > current_best.max_current_ma)
 }
 
 pub fn required_input_current_ma(power_mw: u32, input_voltage_mv: u16) -> u16 {
@@ -481,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn selects_lowest_fixed_voltage_that_satisfies_power() {
+    fn charging_enabled_fixed_selection_prefers_system_floor_over_5v() {
         let caps = build_source_caps(
             [
                 fixed_pdo_raw(5_000, 3_000),
@@ -504,7 +567,7 @@ mod tests {
 
         let plan = select_contract(&LOCAL_FIXED_ONLY, &caps, demand).unwrap();
         assert_eq!(plan.contract.kind, ContractKind::Fixed);
-        assert_eq!(plan.contract.voltage_mv, 5_000);
+        assert_eq!(plan.contract.voltage_mv, 12_000);
     }
 
     #[test]
@@ -647,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn charging_disabled_forces_pps_target_back_to_5v() {
+    fn charging_disabled_pps_target_tracks_system_voltage() {
         let demand = UsbPdPowerDemand {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
@@ -656,11 +719,11 @@ mod tests {
             charging_enabled: false,
         };
 
-        assert_eq!(compute_pps_target_voltage_mv(demand), 5_000);
+        assert_eq!(compute_pps_target_voltage_mv(demand), 16_650);
     }
 
     #[test]
-    fn charging_disabled_skips_pps_and_falls_back_to_lowest_fixed_offer() {
+    fn charging_disabled_can_still_select_pps_for_system_efficiency() {
         let caps = build_source_caps(
             [
                 fixed_pdo_raw(5_000, 3_000),
@@ -682,8 +745,76 @@ mod tests {
         };
 
         let plan = select_contract(&LOCAL_FIXED_AND_PPS, &caps, demand).unwrap();
+        assert_eq!(plan.contract.kind, ContractKind::Pps);
+        assert_eq!(plan.contract.voltage_mv, 15_450);
+    }
+
+    #[test]
+    fn charging_disabled_fixed_only_prefers_voltage_near_system_rail() {
+        let caps = build_source_caps(
+            [
+                fixed_pdo_raw(5_000, 3_000),
+                fixed_pdo_raw(9_000, 3_000),
+                fixed_pdo_raw(12_000, 3_000),
+                fixed_pdo_raw(15_000, 3_000),
+                fixed_pdo_raw(20_000, 3_000),
+                0,
+                0,
+            ],
+            5,
+        );
+        let demand = UsbPdPowerDemand {
+            requested_charge_voltage_mv: 16_800,
+            requested_charge_current_ma: 500,
+            battery_voltage_mv: Some(14_820),
+            measured_input_voltage_mv: None,
+            charging_enabled: false,
+        };
+
+        let plan = select_contract(&LOCAL_FIXED_AND_PPS, &caps, demand).unwrap();
         assert_eq!(plan.contract.kind, ContractKind::Fixed);
-        assert_eq!(plan.contract.voltage_mv, 5_000);
+        assert_eq!(plan.contract.voltage_mv, 15_000);
+    }
+
+    #[test]
+    fn charging_enabled_fixed_only_prefers_voltage_above_charge_target() {
+        let caps = build_source_caps(
+            [
+                fixed_pdo_raw(5_000, 3_000),
+                fixed_pdo_raw(9_000, 3_000),
+                fixed_pdo_raw(12_000, 3_000),
+                fixed_pdo_raw(15_000, 3_000),
+                fixed_pdo_raw(20_000, 3_000),
+                0,
+                0,
+            ],
+            5,
+        );
+        let demand = UsbPdPowerDemand {
+            requested_charge_voltage_mv: 16_800,
+            requested_charge_current_ma: 500,
+            battery_voltage_mv: Some(14_820),
+            measured_input_voltage_mv: None,
+            charging_enabled: true,
+        };
+
+        let plan = select_contract(&LOCAL_FIXED_AND_PPS, &caps, demand).unwrap();
+        assert_eq!(plan.contract.kind, ContractKind::Fixed);
+        assert_eq!(plan.contract.voltage_mv, 20_000);
+    }
+
+    #[test]
+    fn no_battery_system_target_respects_vsysmin() {
+        let demand = UsbPdPowerDemand {
+            requested_charge_voltage_mv: 0,
+            requested_charge_current_ma: 0,
+            battery_voltage_mv: None,
+            measured_input_voltage_mv: None,
+            charging_enabled: false,
+        };
+
+        assert_eq!(compute_system_target_voltage_mv(demand), 12_250);
+        assert_eq!(compute_fixed_target_voltage_mv(demand), 12_250);
     }
 
     #[test]

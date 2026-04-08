@@ -9,12 +9,12 @@ path = "src/lib.rs"
 
 [features]
 default = []
-pd-sink-fixed-5v = []
-pd-sink-fixed-9v = []
-pd-sink-fixed-12v = []
-pd-sink-fixed-15v = []
-pd-sink-fixed-20v = []
-pd-sink-pps = []
+no-pd-sink-5v = []
+no-pd-sink-9v = []
+no-pd-sink-12v = []
+no-pd-sink-15v = []
+no-pd-sink-20v = []
+no-pps = []
 
 [dependencies]
 defmt = "1.0.1"
