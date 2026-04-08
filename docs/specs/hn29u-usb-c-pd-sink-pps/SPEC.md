@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 部分完成（4/5）
+- Status: 已完成
 - Created: 2026-04-07
 - Last: 2026-04-08
 
@@ -127,7 +127,7 @@ None。
 - `BQ25792` 输入电压边界已确认：工作输入 `3.6V~24V`、绝对最大 `30V`、`VINDPM` 范围 `3.6V~22V`；板级 USB-C 输入上限按 `20V` 执行。
 - `FUSB302B` 在当前硬件上挂接于 I2C2 且 `INT_N` 已接到 `GPIO7`，中断模型只做计数。
 - feature 名称、安全红线、scope 与验收口径已由本规格冻结。
-- 本轮允许修改 `firmware/` 与 `docs/specs/`，并按 fast-track 收口到“PR 可审阅”。
+- 本轮允许修改 `firmware/` 与 `docs/specs/`，并按 fast-track 收口到“merge + cleanup”。
 
 ## 非功能性验收 / 质量门槛（Quality Gates）
 
@@ -173,7 +173,7 @@ None。
 - [x] M2: 将 `FrontPanel` 改为共享 I2C2 的泛型设备，并在主固件与两个测试固件完成接线迁移
 - [x] M3: 新增 `usb_pd` 模块，完成 feature 驱动 capability 生成、固定 PDO / PPS 纯逻辑与 FUSB302 薄驱动骨架
 - [x] M4: 将 PD sink manager 接入主循环与 `PowerManager` / `BQ25792` 运行时，补齐 `IINDPM/VINDPM` 与 unsafe-source 保护
-- [ ] M5: 完成测试、feature 编译矩阵、spec sync、提交/推送/PR 与 review-loop 收口到可审阅状态
+- [x] M5: 完成测试、feature 编译矩阵、spec sync、提交/推送/PR 与 review-loop 收口
 
 ## 方案概述（Approach, high-level）
 
@@ -191,6 +191,7 @@ None。
 
 ## 变更记录（Change log）
 
+- 2026-04-08: 已完成默认全开 + blacklist feature、USB-C 协商/重协商禁充 gate、PPS keep-alive、合同保持与真机验证；状态更新为 `已完成`。
 - 2026-04-08: 规格同步到默认全开 + blacklist feature 口径，并补充“USB-C 协商/重协商期间禁充，输入稳定后再恢复”的 charge gate 要求与验收项。
 - 2026-04-07: PR #62 已创建，收口目标切换为 review-loop 后的可审阅态；台架风险保持显式记录。
 - 2026-04-07: 已完成 `usb_pd` 模块、I2C2 共享、`BQ25792` 输入限制 helper、主循环/`PowerManager` 接线，以及 host-unit-tests + feature matrix 本地验证；状态更新为 `部分完成（4/5）`，等待 PR/review-loop 收口。

@@ -118,6 +118,104 @@ pub(super) fn usb_pd_measured_input_voltage_mv(
         .flatten()
 }
 
+pub(super) fn usb_pd_vbus_present(
+    pd_vbus_present: Option<bool>,
+    usb_c_input_present: bool,
+) -> Option<bool> {
+    pd_vbus_present.or(Some(usb_c_input_present))
+}
+
+pub(super) const fn usb_pd_charging_enabled(
+    runtime_allow_charge: Option<bool>,
+    charger_enabled: bool,
+    charger_allowed: bool,
+) -> bool {
+    if let Some(runtime_allow_charge) = runtime_allow_charge {
+        runtime_allow_charge
+    } else {
+        charger_enabled && charger_allowed
+    }
+}
+
+pub(super) const fn usb_pd_charge_gate_ready(
+    usb_pd_enabled: bool,
+    usb_c_path_present: bool,
+    usb_pd_charge_ready: bool,
+) -> bool {
+    !usb_pd_enabled || !usb_c_path_present || usb_pd_charge_ready
+}
+
+pub(super) fn usb_pd_runtime_unsafe_source_latched(
+    previously_latched: bool,
+    usb_c_path_present: bool,
+    vac1_adc_mv: Option<u16>,
+) -> bool {
+    previously_latched
+        || usb_pd::sink_policy::is_input_voltage_unsafe(
+            usb_c_path_present.then_some(vac1_adc_mv).flatten(),
+        )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum UsbPdInputLimitUpdate {
+    None,
+    ApplyContract,
+    RestorePrevious,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum UsbPdRestoreTrackingUpdate {
+    None,
+    ArmRestore,
+    ClearRestorePending,
+}
+
+pub(super) const fn usb_pd_input_limit_update(
+    contract_present: bool,
+    restore_pending: bool,
+    force_allow_charge: bool,
+    auto_force_charge: bool,
+    activation_pending: bool,
+) -> UsbPdInputLimitUpdate {
+    if contract_present {
+        UsbPdInputLimitUpdate::ApplyContract
+    } else if restore_pending && !force_allow_charge && !auto_force_charge && !activation_pending {
+        UsbPdInputLimitUpdate::RestorePrevious
+    } else {
+        UsbPdInputLimitUpdate::None
+    }
+}
+
+pub(super) const fn usb_pd_restore_tracking_update(
+    previous_contract_present: bool,
+    contract_present: bool,
+    attached: bool,
+    backup_present: bool,
+) -> UsbPdRestoreTrackingUpdate {
+    if previous_contract_present && !contract_present && backup_present {
+        UsbPdRestoreTrackingUpdate::ArmRestore
+    } else if contract_present {
+        UsbPdRestoreTrackingUpdate::ClearRestorePending
+    } else {
+        let _ = attached;
+        UsbPdRestoreTrackingUpdate::None
+    }
+}
+
+pub(super) const fn usb_pd_effective_input_current_limit_ma(
+    contract_iindpm_ma: Option<u16>,
+    activation_iindpm_cap_ma: Option<u16>,
+) -> Option<u16> {
+    match (contract_iindpm_ma, activation_iindpm_cap_ma) {
+        (Some(contract_iindpm_ma), Some(cap_ma)) => Some(if contract_iindpm_ma < cap_ma {
+            contract_iindpm_ma
+        } else {
+            cap_ma
+        }),
+        (Some(contract_iindpm_ma), None) => Some(contract_iindpm_ma),
+        (None, _) => None,
+    }
+}
 
 fn charge_policy_channel_enabled(
     snapshot_enabled: Option<bool>,
