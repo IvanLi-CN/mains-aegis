@@ -139,10 +139,11 @@ pub(super) const fn usb_pd_charging_enabled(
 
 pub(super) const fn usb_pd_charge_gate_ready(
     usb_pd_enabled: bool,
+    usb_pd_controller_ready: bool,
     usb_c_path_present: bool,
     usb_pd_charge_ready: bool,
 ) -> bool {
-    !usb_pd_enabled || !usb_c_path_present || usb_pd_charge_ready
+    !usb_pd_enabled || !usb_c_path_present || !usb_pd_controller_ready || usb_pd_charge_ready
 }
 
 pub(super) fn usb_pd_runtime_unsafe_source_latched(
@@ -171,13 +172,13 @@ pub(super) enum UsbPdRestoreTrackingUpdate {
 }
 
 pub(super) const fn usb_pd_input_limit_update(
-    contract_present: bool,
+    pd_limits_present: bool,
     restore_pending: bool,
     force_allow_charge: bool,
     auto_force_charge: bool,
     activation_pending: bool,
 ) -> UsbPdInputLimitUpdate {
-    if contract_present {
+    if pd_limits_present {
         UsbPdInputLimitUpdate::ApplyContract
     } else if restore_pending {
         let _ = force_allow_charge;
@@ -190,14 +191,14 @@ pub(super) const fn usb_pd_input_limit_update(
 }
 
 pub(super) const fn usb_pd_restore_tracking_update(
-    previous_contract_present: bool,
-    contract_present: bool,
+    previous_pd_limits_present: bool,
+    pd_limits_present: bool,
     attached: bool,
     backup_present: bool,
 ) -> UsbPdRestoreTrackingUpdate {
-    if previous_contract_present && !contract_present && backup_present {
+    if previous_pd_limits_present && !pd_limits_present && backup_present {
         UsbPdRestoreTrackingUpdate::ArmRestore
-    } else if contract_present {
+    } else if pd_limits_present {
         UsbPdRestoreTrackingUpdate::ClearRestorePending
     } else {
         let _ = attached;
@@ -1432,10 +1433,11 @@ mod tests {
 
     #[test]
     fn usb_pd_charge_gate_only_blocks_live_usbc_transients() {
-        assert!(!usb_pd_charge_gate_ready(true, true, false));
-        assert!(usb_pd_charge_gate_ready(true, true, true));
-        assert!(usb_pd_charge_gate_ready(true, false, false));
-        assert!(usb_pd_charge_gate_ready(false, true, false));
+        assert!(!usb_pd_charge_gate_ready(true, true, true, false));
+        assert!(usb_pd_charge_gate_ready(true, true, true, true));
+        assert!(usb_pd_charge_gate_ready(true, false, true, false));
+        assert!(usb_pd_charge_gate_ready(false, true, true, false));
+        assert!(usb_pd_charge_gate_ready(true, true, false, false));
     }
 
     #[test]
@@ -1506,6 +1508,14 @@ mod tests {
         assert_eq!(
             usb_pd_restore_tracking_update(false, false, true, false),
             UsbPdRestoreTrackingUpdate::None
+        );
+    }
+
+    #[test]
+    fn usb_pd_restore_tracking_keeps_usb_pd_fallback_limits_active() {
+        assert_eq!(
+            usb_pd_restore_tracking_update(true, true, true, true),
+            UsbPdRestoreTrackingUpdate::ClearRestorePending
         );
     }
 

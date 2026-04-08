@@ -3450,24 +3450,27 @@ where
         let previous_state = self.usb_pd_state;
         if previous_state != state {
             defmt::info!(
-                "usb_pd: state attached={=bool} ready={=bool} charge_ready={=bool} vbus_present={=?} contract_mv={=?} contract_ma={=?} unsafe={=bool}",
+                "usb_pd: state attached={=bool} ready={=bool} charge_ready={=bool} vbus_present={=?} contract_mv={=?} contract_ma={=?} vindpm_mv={=?} input_current_limit_ma={=?} unsafe={=bool}",
                 state.attached,
                 state.controller_ready,
                 state.charge_ready,
                 state.vbus_present,
                 state.contract.map(|contract| contract.voltage_mv),
                 state.contract.map(|contract| contract.current_ma),
+                state.vindpm_mv,
+                state.input_current_limit_ma,
                 state.unsafe_source_latched
             );
         }
         self.usb_pd_state = state;
-        self.usb_pd_input_current_limit_ma = state
-            .contract
-            .and_then(|contract| contract.input_current_limit_ma);
-        self.usb_pd_vindpm_mv = state.contract.and_then(|contract| contract.vindpm_mv);
+        self.usb_pd_input_current_limit_ma = state.input_current_limit_ma;
+        self.usb_pd_vindpm_mv = state.vindpm_mv;
+        let previous_pd_limits_present =
+            previous_state.input_current_limit_ma.is_some() || previous_state.vindpm_mv.is_some();
+        let pd_limits_present = state.input_current_limit_ma.is_some() || state.vindpm_mv.is_some();
         match usb_pd_restore_tracking_update(
-            previous_state.contract.is_some(),
-            state.contract.is_some(),
+            previous_pd_limits_present,
+            pd_limits_present,
             state.attached,
             self.usb_pd_input_limit_backup.is_some(),
         ) {
@@ -8086,6 +8089,7 @@ where
         );
         let usb_pd_charge_gate_ready = usb_pd_charge_gate_ready(
             self.usb_pd_state.enabled,
+            self.usb_pd_state.controller_ready,
             usb_c_path_present,
             self.usb_pd_state.charge_ready,
         );
@@ -8477,7 +8481,7 @@ where
         }
 
         match usb_pd_input_limit_update(
-            self.usb_pd_state.contract.is_some(),
+            self.usb_pd_input_current_limit_ma.is_some() || self.usb_pd_vindpm_mv.is_some(),
             self.usb_pd_restore_input_limits_pending,
             force_allow_charge,
             auto_force_charge,

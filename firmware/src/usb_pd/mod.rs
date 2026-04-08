@@ -44,6 +44,8 @@ pub struct UsbPdPortState {
     pub vbus_present: Option<bool>,
     pub polarity: Option<CcPolarity>,
     pub contract: Option<ActiveContract>,
+    pub input_current_limit_ma: Option<u16>,
+    pub vindpm_mv: Option<u16>,
     pub unsafe_source_latched: bool,
 }
 
@@ -349,6 +351,7 @@ where
                         "usb_pd: fusb302 poll failed err={}",
                         fusb302_error_kind(&err)
                     );
+                    self.teardown_controller_state_on_phy_error();
                     self.state.controller_ready = false;
                     self.initialized = false;
                     self.next_retry_at_ms = now_ms.wrapping_add(ERROR_RETRY_INTERVAL_MS);
@@ -469,6 +472,7 @@ where
             return;
         }
 
+        self.apply_default_5v_input_limits(None, "default_5v");
         self.arm_default_5v_charge_ready(now_ms, "default_5v");
     }
 
@@ -698,6 +702,7 @@ where
                         if self.contract_tracker.active_contract().is_none()
                             && !self.contract_tracker.request_in_flight()
                         {
+                            self.apply_default_5v_input_limits(Some(&filtered), "no_safe_contract");
                             self.arm_default_5v_charge_ready(now_ms, "no_safe_contract");
                         }
                     }
@@ -727,6 +732,8 @@ where
                 if let Some(contract) = self.contract_tracker.commit_pending_contract() {
                     let same_contract = self.state.contract == Some(contract);
                     self.state.contract = Some(contract);
+                    self.state.input_current_limit_ma = contract.input_current_limit_ma;
+                    self.state.vindpm_mv = contract.vindpm_mv;
                     info!(
                         "usb_pd: contract active kind={} voltage_mv={=u16} current_ma={=u16}",
                         contract_kind_name(contract.kind),
@@ -751,6 +758,15 @@ where
                         CONTRACT_CHARGE_READY_DELAY_MS,
                         "request_deferred",
                     );
+                } else {
+                    let filtered = self
+                        .source_capabilities
+                        .map(|source_caps| sink_policy::filter_source_capabilities(&source_caps));
+                    self.apply_default_5v_input_limits(
+                        filtered.as_ref(),
+                        "request_deferred_default_5v",
+                    );
+                    self.arm_default_5v_charge_ready(now_ms, "request_deferred_default_5v");
                 }
             }
             Some(ControlMessageType::SoftReset) => {
@@ -818,6 +834,45 @@ where
     fn clear_contract_tracking(&mut self) {
         self.contract_tracker.clear_all();
         self.state.contract = None;
+        self.state.input_current_limit_ma = None;
+        self.state.vindpm_mv = None;
+    }
+
+    fn apply_default_5v_input_limits(
+        &mut self,
+        filtered: Option<&sink_policy::FilteredSourceCapabilities>,
+        reason: &'static str,
+    ) {
+        let limits = sink_policy::default_5v_input_limits(filtered);
+        if self.state.vindpm_mv != Some(limits.vindpm_mv)
+            || self.state.input_current_limit_ma != Some(limits.input_current_limit_ma)
+        {
+            info!(
+                "usb_pd: default_5v_limits reason={} vindpm_mv={=u16} input_current_limit_ma={=u16}",
+                reason,
+                limits.vindpm_mv,
+                limits.input_current_limit_ma
+            );
+        }
+        self.state.vindpm_mv = Some(limits.vindpm_mv);
+        self.state.input_current_limit_ma = Some(limits.input_current_limit_ma);
+    }
+
+    fn teardown_controller_state_on_phy_error(&mut self) {
+        self.clear_contract_tracking();
+        self.disarm_charge_ready("controller_error");
+        self.source_capabilities = None;
+        self.message_id = 0;
+        self.consecutive_vbus_absent_polls = 0;
+        self.attached_at_ms = None;
+        self.source_caps_recovery_attempted = false;
+        self.source_caps_requery_attempted = false;
+        self.tx_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
+        self.peer_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
+        self.state.attached = false;
+        self.state.vbus_present = None;
+        self.state.polarity = None;
+        self.unsafe_hard_reset_sent = false;
     }
 
     fn arm_charge_ready_after(&mut self, now_ms: u32, delay_ms: u32, reason: &'static str) {
@@ -1032,10 +1087,107 @@ mod tests {
 
         assert!(manager.state.contract.is_none());
         assert_eq!(
+            manager.state.input_current_limit_ma,
+            Some(sink_policy::DEFAULT_5V_FALLBACK_IINDPM_MA)
+        );
+        assert_eq!(manager.state.vindpm_mv, Some(4_000));
+        assert_eq!(
             manager.charge_ready_at_ms,
             Some(1_000 + DEFAULT_5V_CHARGE_READY_DELAY_MS)
         );
         assert!(!manager.state.charge_ready);
+    }
+
+    #[test]
+    fn source_caps_without_safe_contract_preserve_5v_source_current_cap() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        manager.state.attached = true;
+        manager.source_caps_recovery_attempted = true;
+
+        let message = source_caps_message(
+            SpecRevision::Rev20,
+            &[fixed_pdo_raw(5_000, 500), fixed_pdo_raw(9_000, 500)],
+        );
+        let demand = UsbPdPowerDemand {
+            system_load_power_mw: 3_000,
+            ..UsbPdPowerDemand::default()
+        };
+        manager.handle_message(message, demand, 1_000);
+
+        assert!(manager.state.contract.is_none());
+        assert_eq!(manager.state.input_current_limit_ma, Some(500));
+        assert_eq!(manager.state.vindpm_mv, Some(4_000));
+    }
+
+    #[test]
+    fn deferred_first_request_restores_default_5v_limits() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        manager.state.attached = true;
+        manager.source_capabilities = pd::SourceCapabilities::from_message(&source_caps_message(
+            SpecRevision::Rev20,
+            &[fixed_pdo_raw(5_000, 500), fixed_pdo_raw(9_000, 3_000)],
+        ));
+        manager.contract_tracker.begin_request(ActiveContract {
+            kind: ContractKind::Fixed,
+            object_position: 2,
+            voltage_mv: 9_000,
+            current_ma: 300,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(300),
+            vindpm_mv: Some(8_000),
+        });
+
+        manager.handle_message(
+            control_message(ControlMessageType::Wait, SpecRevision::Rev20),
+            UsbPdPowerDemand::default(),
+            2_000,
+        );
+
+        assert!(manager.state.contract.is_none());
+        assert_eq!(manager.state.input_current_limit_ma, Some(500));
+        assert_eq!(manager.state.vindpm_mv, Some(4_000));
+        assert_eq!(
+            manager.charge_ready_at_ms,
+            Some(2_000 + DEFAULT_5V_CHARGE_READY_DELAY_MS)
+        );
+    }
+
+    #[test]
+    fn controller_error_tears_down_stale_pd_state() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        manager.state.attached = true;
+        manager.state.charge_ready = true;
+        manager.state.vbus_present = Some(true);
+        manager.state.polarity = Some(CcPolarity::Cc1);
+        manager.state.contract = Some(ActiveContract {
+            kind: ContractKind::Fixed,
+            object_position: 2,
+            voltage_mv: 9_000,
+            current_ma: 1_000,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(1_000),
+            vindpm_mv: Some(8_000),
+        });
+        manager.state.input_current_limit_ma = Some(1_000);
+        manager.state.vindpm_mv = Some(8_000);
+        manager.source_capabilities = Some(pd::SourceCapabilities::empty(SpecRevision::Rev20));
+        manager.attached_at_ms = Some(1_000);
+        manager.source_caps_recovery_attempted = true;
+        manager.source_caps_requery_attempted = true;
+
+        manager.teardown_controller_state_on_phy_error();
+
+        assert!(!manager.state.attached);
+        assert!(!manager.state.charge_ready);
+        assert_eq!(manager.state.contract, None);
+        assert_eq!(manager.state.vbus_present, None);
+        assert_eq!(manager.state.polarity, None);
+        assert_eq!(manager.state.input_current_limit_ma, None);
+        assert_eq!(manager.state.vindpm_mv, None);
+        assert_eq!(manager.source_capabilities, None);
+        assert_eq!(manager.attached_at_ms, None);
+        assert_eq!(manager.tx_spec_revision, SpecRevision::Rev30);
+        assert_eq!(manager.peer_spec_revision, SpecRevision::Rev30);
     }
 
     #[test]

@@ -88,7 +88,8 @@
 ### Edge cases / errors
 
 - 若 source 只广告 `>20V` 能力，则固件不得请求任何高压合同，退回默认安全行为（等待默认 5V / 不建立高压合同）。
-- 若 source capabilities 里没有任何与 feature 兼容、且满足功率需求的 fixed PDO / APDO，则不得发送超出约束的 request；可保持未协商状态并记录日志。
+- 若 source capabilities 里没有任何与 feature 兼容、且满足功率需求的 fixed PDO / APDO，则不得发送超出约束的 request；应回落到稳定 5V 输入窗口，并把 `IINDPM/VINDPM` 约束在 source 广告的 5V 电流上限内；若当前拿不到 5V 广告电流，则必须使用保守默认限流而不是恢复旧高压合同的输入限流。
+- 若 `FUSB302` 未装配、初始化失败或运行期轮询失败，则固件必须清空旧 PD 合同并退回 plain 5V 受电路径；不得因为 `usb_pd_enabled` 仍为 true 就永久阻塞 USB-C 5V 充电。
 - 若 PPS 当前合同有效，但需求变化未超过迟滞窗或未达到最小重请求间隔，则不得反复刷请求。
 - 若 FUSB302 RX FIFO 收到 hard reset / soft reset / retryfail，必须清空 FIFO、重置协商状态并准备重新拉起协商。
 - 若 FUSB302 attach 结果异常（非 `SNK1/SNK2`）或运行中 VBUS 消失，则合同与 unsafe latch 以 detach 语义清零。

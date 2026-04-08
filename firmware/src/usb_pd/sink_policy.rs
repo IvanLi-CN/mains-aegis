@@ -7,6 +7,7 @@ pub const BQ25792_MIN_VINDPM_MV: u16 = 3_600;
 pub const BQ25792_MAX_VINDPM_MV: u16 = 22_000;
 pub const BQ25792_MAX_IINDPM_MA: u16 = 3_300;
 pub const BQ25792_VSYSMIN_MV: u16 = 12_000;
+pub const DEFAULT_5V_FALLBACK_IINDPM_MA: u16 = 500;
 pub const PPS_HEADROOM_MV: u16 = 600;
 pub const PPS_REREQUEST_HYSTERESIS_MV: u16 = 100;
 pub const PPS_REREQUEST_MIN_INTERVAL_MS: u32 = 2_000;
@@ -144,6 +145,12 @@ pub struct ContractPlan {
     pub request: RequestDataObject,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Default5vInputLimits {
+    pub vindpm_mv: u16,
+    pub input_current_limit_ma: u16,
+}
+
 pub fn filter_source_capabilities(source: &SourceCapabilities) -> FilteredSourceCapabilities {
     let mut filtered = FilteredSourceCapabilities::empty();
 
@@ -202,6 +209,26 @@ pub fn select_contract_from_filtered(
     }
 
     select_fixed_contract(local, &filtered, demand)
+}
+
+pub fn default_5v_input_limits(
+    filtered: Option<&FilteredSourceCapabilities>,
+) -> Default5vInputLimits {
+    let input_current_limit_ma = filtered
+        .and_then(|filtered| {
+            filtered.iter().find_map(|offer| match offer {
+                SourceOffer::Fixed(offer) if offer.voltage_mv == 5_000 => {
+                    Some(offer.max_current_ma.min(BQ25792_MAX_IINDPM_MA))
+                }
+                _ => None,
+            })
+        })
+        .unwrap_or(DEFAULT_5V_FALLBACK_IINDPM_MA);
+
+    Default5vInputLimits {
+        vindpm_mv: compute_vindpm_mv(5_000),
+        input_current_limit_ma,
+    }
 }
 
 pub fn filtered_source_supports_contract(
@@ -715,6 +742,38 @@ mod tests {
     fn computes_reasonable_vindpm_limit() {
         assert_eq!(compute_vindpm_mv(5_000), 4_000);
         assert_eq!(compute_vindpm_mv(20_000), 19_000);
+    }
+
+    #[test]
+    fn default_5v_fallback_limits_use_advertised_5v_current_cap() {
+        let filtered = filter_source_capabilities(&build_source_caps(
+            [
+                fixed_pdo_raw(5_000, 500),
+                fixed_pdo_raw(9_000, 3_000),
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
+            2,
+        ));
+
+        let fallback = default_5v_input_limits(Some(&filtered));
+
+        assert_eq!(fallback.vindpm_mv, 4_000);
+        assert_eq!(fallback.input_current_limit_ma, 500);
+    }
+
+    #[test]
+    fn default_5v_fallback_limits_default_to_conservative_cap_without_source_5v() {
+        let fallback = default_5v_input_limits(None);
+
+        assert_eq!(fallback.vindpm_mv, 4_000);
+        assert_eq!(
+            fallback.input_current_limit_ma,
+            DEFAULT_5V_FALLBACK_IINDPM_MA
+        );
     }
 
     #[test]

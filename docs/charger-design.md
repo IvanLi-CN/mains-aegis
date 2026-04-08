@@ -294,7 +294,7 @@ BQ25792 的典型连接（手册命名：`RT1/RT2`）：
 1. 上电保持 `CE=HIGH`（禁充）
 2. 通过 ADC/寄存器确认电池存在、无 TS fault、BMS 允许充电
 3. 选择输入源（VAC1/VAC2），设置 `IINDPM/VINDPM`
-4. 若 `VAC1=USB-C`，则在 Type-C/PD/PPS 协商或重协商期间保持禁充；只有输入能力被判定为稳定（稳定 5V，或 `Accept + PS_RDY` 后的稳定 PD/PPS 合同）才允许继续
+4. 若 `VAC1=USB-C`，则在 Type-C/PD/PPS 协商或重协商期间保持禁充；只有输入能力被判定为稳定（稳定 5V，或 `Accept + PS_RDY` 后的稳定 PD/PPS 合同）才允许继续；若最终只能稳定在 5V，则 `IINDPM/VINDPM` 也必须同步回落到 5V 安全窗口，优先遵循 source 广告的 5V 电流上限，拿不到时使用保守默认限流
 5. 根据档位设置 `ICHG=2000/1000/500/100mA`（默认不启用 2A，作为预留）
 6. 拉低 `CE` 并置位 `EN_CHG`
 
