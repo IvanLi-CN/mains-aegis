@@ -3,8 +3,12 @@
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
+use core::cell::RefCell;
+
 #[path = "../front_panel.rs"]
 mod front_panel;
+#[path = "../front_panel_logic.rs"]
+mod front_panel_logic;
 #[path = "../front_panel_scene.rs"]
 mod front_panel_scene;
 #[path = "../irq.rs"]
@@ -14,6 +18,7 @@ mod tps55288_test;
 #[path = "../tps_test_runtime.rs"]
 mod tps_test_runtime;
 
+use embedded_hal_bus::i2c::RefCellDevice;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{DriveMode, Event, Flex, Input, InputConfig, Io, OutputConfig, Pull};
@@ -265,8 +270,10 @@ fn main() -> ! {
         InputConfig::default().with_pull(Pull::None),
     );
 
+    let i2c2_bus = RefCell::new(i2c2);
+
     let mut panel = front_panel::FrontPanel::new(
-        i2c2,
+        RefCellDevice::new(&i2c2_bus),
         spi,
         peripherals.DMA_CH1,
         peripherals.PSRAM,

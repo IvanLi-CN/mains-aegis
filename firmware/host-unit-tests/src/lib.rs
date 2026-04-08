@@ -1,5 +1,19 @@
 #![allow(dead_code)]
 
+#[cfg(all(
+    not(feature = "no-pps"),
+    not(any(
+        not(feature = "no-pd-sink-5v"),
+        not(feature = "no-pd-sink-9v"),
+        not(feature = "no-pd-sink-12v"),
+        not(feature = "no-pd-sink-15v"),
+        not(feature = "no-pd-sink-20v"),
+    ))
+))]
+compile_error!(
+    "PPS requires at least one enabled fixed PDO; clear at least one no-pd-sink-* feature"
+);
+
 extern crate self as esp_firmware;
 
 pub mod time {
@@ -42,6 +56,8 @@ pub mod front_panel_scene;
 
 #[path = "../../src/front_panel_logic.rs"]
 pub mod front_panel_logic;
+
+pub mod usb_pd;
 
 pub mod output {
     use crate::bq40z50;

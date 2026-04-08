@@ -14,6 +14,7 @@ pub mod reg {
     // 16-bit register LSB addresses.
     pub const CHARGE_VOLTAGE_LIMIT: u8 = 0x01;
     pub const CHARGE_CURRENT_LIMIT: u8 = 0x03;
+    pub const INPUT_VOLTAGE_LIMIT: u8 = 0x05;
     pub const INPUT_CURRENT_LIMIT: u8 = 0x06;
 
     pub const CHARGER_CONTROL_0: u8 = 0x0F;
@@ -35,6 +36,8 @@ pub mod reg {
     pub const IBUS_ADC: u8 = 0x31;
     pub const IBAT_ADC: u8 = 0x33;
     pub const VBUS_ADC: u8 = 0x35;
+    pub const VAC1_ADC: u8 = 0x37;
+    pub const VAC2_ADC: u8 = 0x39;
     pub const VBAT_ADC: u8 = 0x3B;
     pub const VSYS_ADC: u8 = 0x3D;
 }
@@ -295,6 +298,53 @@ where
 
 pub const fn decode_charge_current_limit_ma(reg: u16) -> u16 {
     (reg & 0x01FF) * 10
+}
+
+pub fn set_input_voltage_limit_mv<I2C>(i2c: &mut I2C, mv: u16) -> Result<u8, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    // VINDPM range: 3600mV..=22000mV, step 100mV.
+    const MIN_MV: u16 = 3_600;
+    const MAX_MV: u16 = 22_000;
+
+    let mv = clamp_u16(mv, MIN_MV, MAX_MV);
+    let field = ((mv / 100) as u8).max(0x24);
+
+    let cur = read_u8(i2c, reg::INPUT_VOLTAGE_LIMIT)?;
+    if field != cur {
+        write_u8(i2c, reg::INPUT_VOLTAGE_LIMIT, field)?;
+    }
+    Ok(field)
+}
+
+pub const fn decode_input_voltage_limit_mv(reg: u8) -> u16 {
+    (reg as u16) * 100
+}
+
+pub const fn decode_input_current_limit_ma(reg: u16) -> u16 {
+    (reg & 0x01FF) * 10
+}
+
+pub fn read_vac1_adc_mv<I2C>(i2c: &mut I2C) -> Result<u16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    read_adc_u16(i2c, reg::VAC1_ADC)
+}
+
+pub fn read_vac2_adc_mv<I2C>(i2c: &mut I2C) -> Result<u16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    read_adc_u16(i2c, reg::VAC2_ADC)
+}
+
+pub fn read_vbus_adc_mv<I2C>(i2c: &mut I2C) -> Result<u16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    read_adc_u16(i2c, reg::VBUS_ADC)
 }
 
 pub fn set_input_current_limit_ma<I2C>(i2c: &mut I2C, ma: u16) -> Result<u16, I2C::Error>

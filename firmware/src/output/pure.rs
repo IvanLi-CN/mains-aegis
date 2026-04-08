@@ -6,6 +6,7 @@ use esp_firmware::bq40z50;
 use esp_firmware::fan;
 use esp_firmware::output_state::{self as output_state_logic, OutputGateReason};
 use esp_firmware::time::Duration;
+use esp_firmware::usb_pd;
 
 use super::channel::OutputChannel;
 use super::{
@@ -96,6 +97,128 @@ pub(super) const fn manual_charge_safety_notice_active(
         && !active
         && !stop_inhibit
         && blocked
+}
+
+pub(super) fn usb_pd_restore_vindpm_mv(measured_input_voltage_mv: Option<u16>) -> u16 {
+    match measured_input_voltage_mv {
+        Some(voltage_mv) if voltage_mv >= 7_000 => {
+            voltage_mv.saturating_sub(1_400).clamp(3_600, 22_000)
+        }
+        Some(voltage_mv) => voltage_mv.saturating_sub(700).clamp(3_600, 22_000),
+        None => 3_600,
+    }
+}
+
+pub(super) fn usb_pd_measured_input_voltage_mv(
+    usb_c_vbus_present: Option<bool>,
+    vac1_adc_mv: Option<u16>,
+) -> Option<u16> {
+    matches!(usb_c_vbus_present, Some(true))
+        .then_some(vac1_adc_mv)
+        .flatten()
+}
+
+pub(super) fn usb_pd_vbus_present(
+    pd_vbus_present: Option<bool>,
+    usb_c_input_present: bool,
+) -> Option<bool> {
+    pd_vbus_present.or(Some(usb_c_input_present))
+}
+
+pub(super) const fn usb_pd_charging_enabled(
+    runtime_allow_charge: Option<bool>,
+    charger_enabled: bool,
+    charger_allowed: bool,
+) -> bool {
+    if let Some(runtime_allow_charge) = runtime_allow_charge {
+        runtime_allow_charge
+    } else {
+        charger_enabled && charger_allowed
+    }
+}
+
+pub(super) const fn usb_pd_charge_gate_ready(
+    usb_pd_enabled: bool,
+    usb_pd_controller_ready: bool,
+    usb_c_path_present: bool,
+    usb_pd_charge_ready: bool,
+) -> bool {
+    !usb_pd_enabled || !usb_c_path_present || !usb_pd_controller_ready || usb_pd_charge_ready
+}
+
+pub(super) fn usb_pd_runtime_unsafe_source_latched(
+    previously_latched: bool,
+    usb_c_path_present: bool,
+    vac1_adc_mv: Option<u16>,
+) -> bool {
+    previously_latched
+        || usb_pd::sink_policy::is_input_voltage_unsafe(
+            usb_c_path_present.then_some(vac1_adc_mv).flatten(),
+        )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum UsbPdInputLimitUpdate {
+    None,
+    ApplyContract,
+    RestorePrevious,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum UsbPdRestoreTrackingUpdate {
+    None,
+    ArmRestore,
+    ClearRestorePending,
+}
+
+pub(super) const fn usb_pd_input_limit_update(
+    pd_limits_present: bool,
+    restore_pending: bool,
+    force_allow_charge: bool,
+    auto_force_charge: bool,
+    activation_pending: bool,
+) -> UsbPdInputLimitUpdate {
+    if pd_limits_present {
+        UsbPdInputLimitUpdate::ApplyContract
+    } else if restore_pending {
+        let _ = force_allow_charge;
+        let _ = auto_force_charge;
+        let _ = activation_pending;
+        UsbPdInputLimitUpdate::RestorePrevious
+    } else {
+        UsbPdInputLimitUpdate::None
+    }
+}
+
+pub(super) const fn usb_pd_restore_tracking_update(
+    previous_pd_limits_present: bool,
+    pd_limits_present: bool,
+    attached: bool,
+    backup_present: bool,
+) -> UsbPdRestoreTrackingUpdate {
+    if previous_pd_limits_present && !pd_limits_present && backup_present {
+        UsbPdRestoreTrackingUpdate::ArmRestore
+    } else if pd_limits_present {
+        UsbPdRestoreTrackingUpdate::ClearRestorePending
+    } else {
+        let _ = attached;
+        UsbPdRestoreTrackingUpdate::None
+    }
+}
+
+pub(super) const fn usb_pd_effective_input_current_limit_ma(
+    contract_iindpm_ma: Option<u16>,
+    activation_iindpm_cap_ma: Option<u16>,
+) -> Option<u16> {
+    match (contract_iindpm_ma, activation_iindpm_cap_ma) {
+        (Some(contract_iindpm_ma), Some(cap_ma)) => Some(if contract_iindpm_ma < cap_ma {
+            contract_iindpm_ma
+        } else {
+            cap_ma
+        }),
+        (Some(contract_iindpm_ma), None) => Some(contract_iindpm_ma),
+        (None, _) => None,
+    }
 }
 
 fn charge_policy_channel_enabled(
@@ -1267,6 +1390,149 @@ mod tests {
             false,
             true
         ));
+    }
+
+    #[test]
+    fn usb_pd_restore_vindpm_tracks_bq25792_por_detection_margin() {
+        assert_eq!(usb_pd_restore_vindpm_mv(Some(5_000)), 4_300);
+        assert_eq!(usb_pd_restore_vindpm_mv(Some(20_000)), 18_600);
+    }
+
+    #[test]
+    fn usb_pd_restore_vindpm_defaults_to_bq25792_minimum_without_sample() {
+        assert_eq!(usb_pd_restore_vindpm_mv(None), 3_600);
+    }
+
+    #[test]
+    fn usb_pd_measured_input_voltage_only_tracks_usbc_vac1_path() {
+        assert_eq!(
+            usb_pd_measured_input_voltage_mv(Some(true), Some(20_100)),
+            Some(20_100)
+        );
+        assert_eq!(
+            usb_pd_measured_input_voltage_mv(Some(false), Some(24_000)),
+            None
+        );
+        assert_eq!(usb_pd_measured_input_voltage_mv(None, Some(24_000)), None);
+    }
+
+    #[test]
+    fn usb_pd_vbus_present_stays_scoped_to_usbc_path() {
+        assert_eq!(usb_pd_vbus_present(None, false), Some(false));
+        assert_eq!(usb_pd_vbus_present(None, true), Some(true));
+        assert_eq!(usb_pd_vbus_present(Some(true), false), Some(true));
+    }
+
+    #[test]
+    fn usb_pd_charging_enabled_prefers_runtime_allow_charge() {
+        assert!(!usb_pd_charging_enabled(Some(false), true, true));
+        assert!(usb_pd_charging_enabled(Some(true), false, false));
+        assert!(usb_pd_charging_enabled(None, true, true));
+        assert!(!usb_pd_charging_enabled(None, true, false));
+    }
+
+    #[test]
+    fn usb_pd_charge_gate_only_blocks_live_usbc_transients() {
+        assert!(!usb_pd_charge_gate_ready(true, true, true, false));
+        assert!(usb_pd_charge_gate_ready(true, true, true, true));
+        assert!(usb_pd_charge_gate_ready(true, false, true, false));
+        assert!(usb_pd_charge_gate_ready(false, true, true, false));
+        assert!(usb_pd_charge_gate_ready(true, true, false, false));
+    }
+
+    #[test]
+    fn usb_pd_runtime_unsafe_source_latch_uses_live_usbc_vac1_sample() {
+        assert!(usb_pd_runtime_unsafe_source_latched(
+            false,
+            true,
+            Some(20_600)
+        ));
+        assert!(!usb_pd_runtime_unsafe_source_latched(
+            false,
+            false,
+            Some(24_000)
+        ));
+        assert!(usb_pd_runtime_unsafe_source_latched(true, false, None));
+    }
+
+    #[test]
+    fn usb_pd_input_limit_update_keeps_contract_limits_in_activation_paths() {
+        assert_eq!(
+            usb_pd_input_limit_update(true, false, true, false, true),
+            UsbPdInputLimitUpdate::ApplyContract
+        );
+        assert_eq!(
+            usb_pd_input_limit_update(true, false, false, true, false),
+            UsbPdInputLimitUpdate::ApplyContract
+        );
+    }
+
+    #[test]
+    fn usb_pd_input_limit_update_restores_limits_even_in_force_charge_paths() {
+        assert_eq!(
+            usb_pd_input_limit_update(false, true, true, false, true),
+            UsbPdInputLimitUpdate::RestorePrevious
+        );
+        assert_eq!(
+            usb_pd_input_limit_update(false, true, false, true, false),
+            UsbPdInputLimitUpdate::RestorePrevious
+        );
+        assert_eq!(
+            usb_pd_input_limit_update(false, true, false, false, false),
+            UsbPdInputLimitUpdate::RestorePrevious
+        );
+    }
+
+    #[test]
+    fn usb_pd_restore_tracking_arms_restore_when_contract_drops_on_detach() {
+        assert_eq!(
+            usb_pd_restore_tracking_update(true, false, false, true),
+            UsbPdRestoreTrackingUpdate::ArmRestore
+        );
+        assert_eq!(
+            usb_pd_restore_tracking_update(false, false, false, false),
+            UsbPdRestoreTrackingUpdate::None
+        );
+    }
+
+    #[test]
+    fn usb_pd_restore_tracking_only_arms_restore_while_attached() {
+        assert_eq!(
+            usb_pd_restore_tracking_update(true, false, true, true),
+            UsbPdRestoreTrackingUpdate::ArmRestore
+        );
+        assert_eq!(
+            usb_pd_restore_tracking_update(false, true, true, false),
+            UsbPdRestoreTrackingUpdate::ClearRestorePending
+        );
+        assert_eq!(
+            usb_pd_restore_tracking_update(false, false, true, false),
+            UsbPdRestoreTrackingUpdate::None
+        );
+    }
+
+    #[test]
+    fn usb_pd_restore_tracking_keeps_usb_pd_fallback_limits_active() {
+        assert_eq!(
+            usb_pd_restore_tracking_update(true, true, true, true),
+            UsbPdRestoreTrackingUpdate::ClearRestorePending
+        );
+    }
+
+    #[test]
+    fn usb_pd_effective_input_current_limit_preserves_activation_throttle() {
+        assert_eq!(
+            usb_pd_effective_input_current_limit_ma(Some(2_000), Some(500)),
+            Some(500)
+        );
+        assert_eq!(
+            usb_pd_effective_input_current_limit_ma(Some(300), Some(500)),
+            Some(300)
+        );
+        assert_eq!(
+            usb_pd_effective_input_current_limit_ma(Some(2_000), None),
+            Some(2_000)
+        );
     }
 
     #[test]
