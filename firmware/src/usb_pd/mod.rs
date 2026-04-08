@@ -224,6 +224,10 @@ const fn detach_debounce_elapsed(consecutive_vbus_absent_polls: u8) -> bool {
     consecutive_vbus_absent_polls >= VBUS_DETACH_DEBOUNCE_POLLS
 }
 
+const fn negotiated_spec_revision(spec_revision: SpecRevision) -> SpecRevision {
+    pd::clamp_fusb302_spec_revision(spec_revision)
+}
+
 impl<I2C> UsbPdSinkManager<I2C>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
@@ -462,7 +466,7 @@ where
             return;
         }
 
-        self.arm_charge_ready_after(now_ms, DEFAULT_5V_CHARGE_READY_DELAY_MS, "default_5v");
+        self.arm_default_5v_charge_ready(now_ms, "default_5v");
     }
 
     fn handle_irq_snapshot(
@@ -688,6 +692,11 @@ where
                         }
                     } else {
                         warn!("usb_pd: no safe PD/PPS contract available");
+                        if self.contract_tracker.active_contract().is_none()
+                            && !self.contract_tracker.request_in_flight()
+                        {
+                            self.arm_default_5v_charge_ready(now_ms, "no_safe_contract");
+                        }
                     }
                 }
                 DataMessageType::Request | DataMessageType::SinkCapabilities => {}
@@ -733,6 +742,13 @@ where
             Some(ControlMessageType::Reject) | Some(ControlMessageType::Wait) => {
                 warn!("usb_pd: source deferred request");
                 self.contract_tracker.cancel_pending_request();
+                if self.state.contract.is_some() {
+                    self.arm_charge_ready_after(
+                        now_ms,
+                        CONTRACT_CHARGE_READY_DELAY_MS,
+                        "request_deferred",
+                    );
+                }
             }
             Some(ControlMessageType::SoftReset) => {
                 self.handle_peer_soft_reset(message.header.spec_revision(), now_ms);
@@ -818,6 +834,10 @@ where
         self.charge_ready_at_ms = None;
     }
 
+    fn arm_default_5v_charge_ready(&mut self, now_ms: u32, reason: &'static str) {
+        self.arm_charge_ready_after(now_ms, DEFAULT_5V_CHARGE_READY_DELAY_MS, reason);
+    }
+
     fn update_charge_ready_state(&mut self, now_ms: u32) {
         let Some(ready_at_ms) = self.charge_ready_at_ms else {
             return;
@@ -839,7 +859,7 @@ where
     }
 
     fn observe_peer_spec_revision(&mut self, spec_revision: SpecRevision, context: &'static str) {
-        let spec_revision = pd::clamp_fusb302_spec_revision(spec_revision);
+        let spec_revision = negotiated_spec_revision(spec_revision);
         if self.peer_spec_revision != spec_revision {
             info!(
                 "usb_pd: peer_spec_update context={} peer_spec_rev_bits={=u8} tx_spec_rev_bits={=u8}",
@@ -849,6 +869,7 @@ where
             );
         }
         self.peer_spec_revision = spec_revision;
+        self.tx_spec_revision = spec_revision;
     }
 
     fn handle_peer_soft_reset(&mut self, spec_revision: SpecRevision, now_ms: u32) {
@@ -895,6 +916,55 @@ const fn deadline_elapsed(now_ms: u32, deadline_ms: u32) -> bool {
 mod tests {
     use super::*;
 
+    struct NoopI2c;
+
+    impl embedded_hal::i2c::ErrorType for NoopI2c {
+        type Error = esp_hal::i2c::master::Error;
+    }
+
+    impl embedded_hal::i2c::I2c for NoopI2c {
+        fn transaction(
+            &mut self,
+            _address: u8,
+            _operations: &mut [embedded_hal::i2c::Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            panic!("unexpected I2C transaction in usb_pd unit test");
+        }
+    }
+
+    const fn fixed_pdo_raw(voltage_mv: u16, current_ma: u16) -> u32 {
+        ((voltage_mv as u32 / pd::FIXED_VOLTAGE_STEP_MV as u32) << 10)
+            | (current_ma as u32 / pd::FIXED_CURRENT_STEP_MA as u32)
+    }
+
+    fn source_caps_message(spec_revision: SpecRevision, payload_words: &[u32]) -> Message {
+        let mut payload = [0u32; pd::MAX_DATA_OBJECTS];
+        let mut count = 0usize;
+        while count < payload_words.len() {
+            payload[count] = payload_words[count];
+            count += 1;
+        }
+
+        Message::new(
+            MessageHeader::for_data(
+                DataMessageType::SourceCapabilities,
+                count,
+                0,
+                spec_revision,
+                true,
+                false,
+            ),
+            payload,
+        )
+    }
+
+    fn control_message(kind: ControlMessageType, spec_revision: SpecRevision) -> Message {
+        Message::new(
+            MessageHeader::for_control(kind, 0, spec_revision, true, false),
+            [0u32; pd::MAX_DATA_OBJECTS],
+        )
+    }
+
     #[test]
     fn charger_input_voltage_can_confirm_vbus_presence() {
         assert!(charger_input_confirms_vbus(Some(4_500)));
@@ -921,5 +991,78 @@ mod tests {
         assert!(!deadline_elapsed(100, 200));
         assert!(deadline_elapsed(200, 200));
         assert!(deadline_elapsed(250, 200));
+    }
+
+    #[test]
+    fn peer_revision_downgrades_transmit_revision() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        assert_eq!(manager.tx_spec_revision, SpecRevision::Rev30);
+
+        manager.observe_peer_spec_revision(SpecRevision::Rev20, "test");
+
+        assert_eq!(manager.peer_spec_revision, SpecRevision::Rev20);
+        assert_eq!(manager.tx_spec_revision, SpecRevision::Rev20);
+    }
+
+    #[test]
+    fn source_caps_without_safe_contract_arm_default_5v_charge_ready() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        manager.state.attached = true;
+        manager.source_caps_recovery_attempted = true;
+
+        let message = source_caps_message(SpecRevision::Rev20, &[fixed_pdo_raw(21_000, 3_000)]);
+        manager.handle_message(message, UsbPdPowerDemand::default(), 1_000);
+
+        assert!(manager.state.contract.is_none());
+        assert_eq!(
+            manager.charge_ready_at_ms,
+            Some(1_000 + DEFAULT_5V_CHARGE_READY_DELAY_MS)
+        );
+        assert!(!manager.state.charge_ready);
+    }
+
+    #[test]
+    fn deferred_request_rearms_existing_contract_charge_gate() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        let active_contract = ActiveContract {
+            kind: ContractKind::Fixed,
+            object_position: 1,
+            voltage_mv: 9_000,
+            current_ma: 1_000,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(1_000),
+            vindpm_mv: Some(8_000),
+        };
+        let requested_contract = ActiveContract {
+            voltage_mv: 15_000,
+            ..active_contract
+        };
+
+        manager.state.contract = Some(active_contract);
+        manager.contract_tracker.begin_request(active_contract);
+        assert!(manager.contract_tracker.mark_accept_received());
+        assert_eq!(
+            manager.contract_tracker.commit_pending_contract(),
+            Some(active_contract)
+        );
+        manager.contract_tracker.begin_request(requested_contract);
+        manager.disarm_charge_ready("test");
+
+        manager.handle_message(
+            control_message(ControlMessageType::Wait, SpecRevision::Rev20),
+            UsbPdPowerDemand::default(),
+            2_000,
+        );
+
+        assert_eq!(
+            manager.contract_tracker.active_contract(),
+            Some(active_contract)
+        );
+        assert!(!manager.contract_tracker.request_in_flight());
+        assert_eq!(
+            manager.charge_ready_at_ms,
+            Some(2_000 + CONTRACT_CHARGE_READY_DELAY_MS)
+        );
+        assert!(!manager.state.charge_ready);
     }
 }
