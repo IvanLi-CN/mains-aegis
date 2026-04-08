@@ -1,7 +1,9 @@
+pub mod contract_tracker;
 pub mod fusb302;
 pub mod pd;
 pub mod sink_policy;
 
+use contract_tracker::ContractTracker;
 use defmt::{debug, info, warn};
 use fusb302::{CcPolarity, Fusb302, IrqSnapshot};
 use pd::{ControlMessageType, DataMessageType, Message, MessageHeader, SpecRevision};
@@ -67,9 +69,7 @@ pub struct UsbPdSinkManager<I2C> {
     message_id: u8,
     source_spec_revision: SpecRevision,
     source_capabilities: Option<pd::SourceCapabilities>,
-    pending_contract: Option<ActiveContract>,
-    waiting_for_accept: bool,
-    waiting_for_ps_rdy: bool,
+    contract_tracker: ContractTracker<ActiveContract>,
     unsafe_hard_reset_sent: bool,
 }
 
@@ -120,11 +120,9 @@ where
             last_phy_poll_at_ms: 0,
             last_request_at_ms: 0,
             message_id: 0,
-            source_spec_revision: SpecRevision::Rev30,
+            source_spec_revision: pd::FUSB302_MAX_SPEC_REVISION,
             source_capabilities: None,
-            pending_contract: None,
-            waiting_for_accept: false,
-            waiting_for_ps_rdy: false,
+            contract_tracker: ContractTracker::default(),
             unsafe_hard_reset_sent: false,
         }
     }
@@ -187,10 +185,7 @@ where
                 );
             }
             self.state.unsafe_source_latched = true;
-            self.state.contract = None;
-            self.pending_contract = None;
-            self.waiting_for_accept = false;
-            self.waiting_for_ps_rdy = false;
+            self.clear_contract_tracking();
             self.source_capabilities = None;
             if self.state.attached && !self.unsafe_hard_reset_sent {
                 let _ = self.phy.send_hard_reset();
@@ -220,10 +215,14 @@ where
             }
         }
 
-        if let (Some(source_caps), Some(active_contract)) =
-            (self.source_capabilities, self.state.contract)
-        {
-            if active_contract.kind == ContractKind::Pps && !self.state.unsafe_source_latched {
+        if let (Some(source_caps), Some(active_contract)) = (
+            self.source_capabilities,
+            self.contract_tracker.active_contract(),
+        ) {
+            if active_contract.kind == ContractKind::Pps
+                && !self.state.unsafe_source_latched
+                && !self.contract_tracker.request_in_flight()
+            {
                 if let Some(plan) =
                     sink_policy::select_contract(&self.local_capabilities, &source_caps, demand)
                 {
@@ -234,7 +233,7 @@ where
                         self.last_request_at_ms,
                     ) {
                         if let Err(err) =
-                            self.send_contract_request(plan, source_caps.spec_revision, now_ms)
+                            self.send_contract_request(plan, self.source_spec_revision, now_ms)
                         {
                             warn!(
                                 "usb_pd: pps refresh request failed err={}",
@@ -263,9 +262,7 @@ where
                     self.state.attached = true;
                     self.state.polarity = Some(polarity);
                     self.message_id = 0;
-                    self.waiting_for_accept = false;
-                    self.waiting_for_ps_rdy = false;
-                    self.pending_contract = None;
+                    self.clear_contract_tracking();
                     self.source_capabilities = None;
                     if let Err(err) = self
                         .phy
@@ -289,14 +286,10 @@ where
             }
         }
 
-        if snapshot.hard_reset_received()
-            || snapshot.soft_reset_received()
-            || snapshot.retry_failed()
-        {
+        if snapshot.hard_reset_received() || snapshot.retry_failed() {
             warn!(
-                "usb_pd: reset/retry event hard={=bool} soft={=bool} retry_fail={=bool}",
+                "usb_pd: reset/retry event hard={=bool} retry_fail={=bool}",
                 snapshot.hard_reset_received(),
-                snapshot.soft_reset_received(),
                 snapshot.retry_failed()
             );
             self.reset_contract_state(false);
@@ -305,6 +298,11 @@ where
                     .phy
                     .enable_pd_receive(polarity, self.source_spec_revision);
             }
+        }
+
+        if snapshot.soft_reset_received() && !snapshot.rx_message_ready() {
+            warn!("usb_pd: source requested soft reset without fifo payload");
+            self.handle_peer_soft_reset(self.source_spec_revision);
         }
 
         if snapshot.rx_message_ready() {
@@ -333,13 +331,42 @@ where
                     let Some(source_caps) = pd::SourceCapabilities::from_message(&message) else {
                         return;
                     };
-                    self.source_spec_revision = source_caps.spec_revision;
+                    let filtered = sink_policy::filter_source_capabilities(&source_caps);
+                    let pending_contract_supported = self
+                        .contract_tracker
+                        .pending_contract()
+                        .is_some_and(|pending_contract| {
+                            sink_policy::filtered_source_supports_contract(
+                                &filtered,
+                                pending_contract,
+                            )
+                        });
+                    self.contract_tracker
+                        .refresh_source_capabilities(pending_contract_supported);
+                    if let Some(active_contract) = self.contract_tracker.active_contract() {
+                        if !sink_policy::filtered_source_supports_contract(
+                            &filtered,
+                            active_contract,
+                        ) && !pending_contract_supported
+                        {
+                            warn!("usb_pd: active contract no longer advertised, clearing state");
+                            self.clear_contract_tracking();
+                        }
+                    }
+                    self.source_spec_revision =
+                        pd::clamp_fusb302_spec_revision(source_caps.spec_revision);
                     self.source_capabilities = Some(source_caps);
-                    if let Some(plan) =
-                        sink_policy::select_contract(&self.local_capabilities, &source_caps, demand)
-                    {
+                    if self.contract_tracker.request_in_flight() {
+                        debug!("usb_pd: preserving in-flight contract across source caps refresh");
+                        return;
+                    }
+                    if let Some(plan) = sink_policy::select_contract_from_filtered(
+                        &self.local_capabilities,
+                        &filtered,
+                        demand,
+                    ) {
                         if let Err(err) =
-                            self.send_contract_request(plan, source_caps.spec_revision, now_ms)
+                            self.send_contract_request(plan, self.source_spec_revision, now_ms)
                         {
                             warn!(
                                 "usb_pd: request send failed err={}",
@@ -356,15 +383,12 @@ where
         }
 
         match message.header.control_message_type() {
-            Some(ControlMessageType::Accept) if self.waiting_for_accept => {
-                self.waiting_for_accept = false;
-                self.waiting_for_ps_rdy = true;
+            Some(ControlMessageType::Accept) if self.contract_tracker.mark_accept_received() => {
                 debug!("usb_pd: contract accepted");
             }
-            Some(ControlMessageType::PsRdy) if self.waiting_for_ps_rdy => {
-                self.waiting_for_ps_rdy = false;
-                self.state.contract = self.pending_contract.take();
-                if let Some(contract) = self.state.contract {
+            Some(ControlMessageType::PsRdy) => {
+                if let Some(contract) = self.contract_tracker.commit_pending_contract() {
+                    self.state.contract = Some(contract);
                     info!(
                         "usb_pd: contract active kind={} voltage_mv={=u16} current_ma={=u16}",
                         contract_kind_name(contract.kind),
@@ -375,13 +399,10 @@ where
             }
             Some(ControlMessageType::Reject) | Some(ControlMessageType::Wait) => {
                 warn!("usb_pd: source deferred request");
-                self.waiting_for_accept = false;
-                self.waiting_for_ps_rdy = false;
-                self.pending_contract = None;
+                self.contract_tracker.cancel_pending_request();
             }
             Some(ControlMessageType::SoftReset) => {
-                warn!("usb_pd: source requested soft reset");
-                self.reset_contract_state(false);
+                self.handle_peer_soft_reset(message.header.spec_revision());
             }
             _ => {}
         }
@@ -405,22 +426,49 @@ where
         payload[0] = plan.request.raw();
         let message = Message::new(header, payload);
         self.phy.send_message(&message)?;
-        self.pending_contract = Some(plan.contract);
-        self.waiting_for_accept = true;
-        self.waiting_for_ps_rdy = false;
+        self.contract_tracker.begin_request(plan.contract);
         self.last_request_at_ms = now_ms;
         self.message_id = (self.message_id + 1) & 0x07;
         Ok(())
     }
 
-    fn reset_contract_state(&mut self, detach: bool) {
+    fn send_control_message(
+        &mut self,
+        kind: ControlMessageType,
+        spec_revision: SpecRevision,
+    ) -> Result<(), fusb302::Error> {
+        let header = MessageHeader::for_control(kind, self.message_id, spec_revision, false, false);
+        let message = Message::new(header, [0u32; pd::MAX_DATA_OBJECTS]);
+        self.phy.send_message(&message)?;
+        self.message_id = (self.message_id + 1) & 0x07;
+        Ok(())
+    }
+
+    fn clear_contract_tracking(&mut self) {
+        self.contract_tracker.clear_all();
         self.state.contract = None;
-        self.pending_contract = None;
+    }
+
+    fn handle_peer_soft_reset(&mut self, spec_revision: SpecRevision) {
+        warn!("usb_pd: source requested soft reset");
+        self.source_spec_revision = pd::clamp_fusb302_spec_revision(spec_revision);
+        self.reset_contract_state(false);
+        if let Err(err) =
+            self.send_control_message(ControlMessageType::Accept, self.source_spec_revision)
+        {
+            warn!(
+                "usb_pd: soft reset accept failed err={}",
+                fusb302_error_kind(&err)
+            );
+        }
+    }
+
+    fn reset_contract_state(&mut self, detach: bool) {
+        self.clear_contract_tracking();
         self.source_capabilities = None;
-        self.waiting_for_accept = false;
-        self.waiting_for_ps_rdy = false;
         self.message_id = 0;
         if detach {
+            self.source_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
             self.state.attached = false;
             self.state.vbus_present = Some(false);
             self.state.polarity = None;

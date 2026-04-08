@@ -157,12 +157,12 @@ pub fn filter_source_capabilities(source: &SourceCapabilities) -> FilteredSource
             }
             PowerDataObject::Pps(apdo)
                 if apdo.min_voltage_mv <= MAX_SAFE_PD_VOLTAGE_MV
-                    && apdo.max_voltage_mv <= MAX_SAFE_PD_VOLTAGE_MV =>
+                    && apdo.max_voltage_mv >= PPS_MIN_REQUEST_MV =>
             {
                 filtered.offers[filtered.len] = SourceOffer::Pps(PpsSourceOffer {
                     object_position,
                     min_voltage_mv: apdo.min_voltage_mv,
-                    max_voltage_mv: apdo.max_voltage_mv,
+                    max_voltage_mv: apdo.max_voltage_mv.min(MAX_SAFE_PD_VOLTAGE_MV),
                     max_current_ma: apdo.max_current_ma,
                 });
                 filtered.len += 1;
@@ -180,17 +180,45 @@ pub fn select_contract(
     demand: UsbPdPowerDemand,
 ) -> Option<ContractPlan> {
     let filtered = filter_source_capabilities(source);
+    select_contract_from_filtered(local, &filtered, demand)
+}
+
+pub fn select_contract_from_filtered(
+    local: &LocalCapabilities,
+    filtered: &FilteredSourceCapabilities,
+    demand: UsbPdPowerDemand,
+) -> Option<ContractPlan> {
     if filtered.is_empty() || !local.pd_enabled() {
         return None;
     }
 
-    if local.pps_enabled {
+    if local.pps_enabled && demand.charging_enabled {
         if let Some(plan) = select_pps_contract(&filtered, demand) {
             return Some(plan);
         }
     }
 
     select_fixed_contract(local, &filtered, demand)
+}
+
+pub fn filtered_source_supports_contract(
+    filtered: &FilteredSourceCapabilities,
+    contract: ActiveContract,
+) -> bool {
+    filtered.iter().any(|offer| match (contract.kind, offer) {
+        (ContractKind::Fixed, SourceOffer::Fixed(offer)) => {
+            offer.object_position == contract.object_position
+                && offer.voltage_mv == contract.voltage_mv
+                && offer.max_current_ma >= contract.current_ma
+        }
+        (ContractKind::Pps, SourceOffer::Pps(offer)) => {
+            offer.object_position == contract.object_position
+                && contract.voltage_mv >= offer.min_voltage_mv
+                && contract.voltage_mv <= offer.max_voltage_mv
+                && offer.max_current_ma >= contract.current_ma
+        }
+        _ => false,
+    })
 }
 
 pub fn select_fixed_contract(
@@ -342,6 +370,10 @@ pub const fn is_input_voltage_unsafe(measured_input_voltage_mv: Option<u16>) -> 
 }
 
 pub fn compute_pps_target_voltage_mv(demand: UsbPdPowerDemand) -> u16 {
+    if !demand.charging_enabled {
+        return PPS_MIN_REQUEST_MV;
+    }
+
     let desired_mv = if demand.requested_charge_voltage_mv != 0 {
         demand
             .requested_charge_voltage_mv
@@ -420,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_out_over_20v_fixed_and_pps_offers() {
+    fn filters_out_only_offers_without_safe_pd_window() {
         let caps = build_source_caps(
             [
                 fixed_pdo_raw(5_000, 3_000),
@@ -428,17 +460,24 @@ mod tests {
                 fixed_pdo_raw(28_000, 2_000),
                 pps_apdo_raw(5_000, 11_000, 3_000),
                 pps_apdo_raw(5_000, 21_000, 3_000),
-                0,
+                pps_apdo_raw(20_500, 21_000, 3_000),
                 0,
             ],
-            5,
+            6,
         );
 
         let filtered = filter_source_capabilities(&caps);
-        assert_eq!(filtered.len(), 3);
+        assert_eq!(filtered.len(), 4);
         assert!(matches!(filtered.get(0), Some(SourceOffer::Fixed(_))));
         assert!(matches!(filtered.get(1), Some(SourceOffer::Fixed(_))));
         assert!(matches!(filtered.get(2), Some(SourceOffer::Pps(_))));
+        match filtered.get(3) {
+            Some(SourceOffer::Pps(offer)) => {
+                assert_eq!(offer.min_voltage_mv, 5_000);
+                assert_eq!(offer.max_voltage_mv, 20_000);
+            }
+            other => panic!("unexpected offer: {other:?}"),
+        }
     }
 
     #[test]
@@ -497,6 +536,79 @@ mod tests {
     }
 
     #[test]
+    fn selects_pps_from_21v_ceiling_offer_when_safe_request_is_below_20v() {
+        let caps = build_source_caps(
+            [
+                fixed_pdo_raw(5_000, 3_000),
+                pps_apdo_raw(5_000, 21_000, 3_000),
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
+            2,
+        );
+        let demand = UsbPdPowerDemand {
+            requested_charge_voltage_mv: 16_800,
+            requested_charge_current_ma: 500,
+            battery_voltage_mv: Some(15_200),
+            measured_input_voltage_mv: None,
+            charging_enabled: true,
+        };
+
+        let plan = select_contract(&LOCAL_FIXED_AND_PPS, &caps, demand).unwrap();
+        assert_eq!(plan.contract.kind, ContractKind::Pps);
+        assert_eq!(plan.contract.voltage_mv, 17_400);
+        assert_eq!(plan.request.pps_voltage_mv(), 17_400);
+    }
+
+    #[test]
+    fn keeps_pps_contract_supported_by_21v_ceiling_offer() {
+        let caps = build_source_caps(
+            [
+                fixed_pdo_raw(5_000, 3_000),
+                pps_apdo_raw(5_000, 21_000, 3_000),
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
+            2,
+        );
+        let filtered = filter_source_capabilities(&caps);
+        let contract = ActiveContract {
+            kind: ContractKind::Pps,
+            object_position: 2,
+            voltage_mv: 17_400,
+            current_ma: 600,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(600),
+            vindpm_mv: Some(16_400),
+        };
+
+        assert!(filtered_source_supports_contract(&filtered, contract));
+    }
+
+    #[test]
+    fn rejects_stale_fixed_contract_when_source_caps_drop_voltage() {
+        let caps = build_source_caps([fixed_pdo_raw(5_000, 3_000), 0, 0, 0, 0, 0, 0], 1);
+        let filtered = filter_source_capabilities(&caps);
+        let contract = ActiveContract {
+            kind: ContractKind::Fixed,
+            object_position: 1,
+            voltage_mv: 20_000,
+            current_ma: 1_500,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(1_500),
+            vindpm_mv: Some(19_000),
+        };
+
+        assert!(!filtered_source_supports_contract(&filtered, contract));
+    }
+
+    #[test]
     fn pps_refresh_requires_hysteresis_and_interval() {
         let current = ActiveContract {
             kind: ContractKind::Pps,
@@ -532,6 +644,46 @@ mod tests {
     fn computes_reasonable_vindpm_limit() {
         assert_eq!(compute_vindpm_mv(5_000), 4_000);
         assert_eq!(compute_vindpm_mv(20_000), 19_000);
+    }
+
+    #[test]
+    fn charging_disabled_forces_pps_target_back_to_5v() {
+        let demand = UsbPdPowerDemand {
+            requested_charge_voltage_mv: 16_800,
+            requested_charge_current_ma: 500,
+            battery_voltage_mv: Some(16_400),
+            measured_input_voltage_mv: None,
+            charging_enabled: false,
+        };
+
+        assert_eq!(compute_pps_target_voltage_mv(demand), 5_000);
+    }
+
+    #[test]
+    fn charging_disabled_skips_pps_and_falls_back_to_lowest_fixed_offer() {
+        let caps = build_source_caps(
+            [
+                fixed_pdo_raw(5_000, 3_000),
+                pps_apdo_raw(5_000, 18_000, 3_000),
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
+            2,
+        );
+        let demand = UsbPdPowerDemand {
+            requested_charge_voltage_mv: 16_800,
+            requested_charge_current_ma: 500,
+            battery_voltage_mv: Some(15_200),
+            measured_input_voltage_mv: None,
+            charging_enabled: false,
+        };
+
+        let plan = select_contract(&LOCAL_FIXED_AND_PPS, &caps, demand).unwrap();
+        assert_eq!(plan.contract.kind, ContractKind::Fixed);
+        assert_eq!(plan.contract.voltage_mv, 5_000);
     }
 
     #[test]

@@ -28,6 +28,15 @@ impl SpecRevision {
     }
 }
 
+pub const FUSB302_MAX_SPEC_REVISION: SpecRevision = SpecRevision::Rev20;
+
+pub const fn clamp_fusb302_spec_revision(spec_revision: SpecRevision) -> SpecRevision {
+    match spec_revision {
+        SpecRevision::Rev10 => SpecRevision::Rev10,
+        SpecRevision::Rev20 | SpecRevision::Rev30 => FUSB302_MAX_SPEC_REVISION,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ControlMessageType {
@@ -451,5 +460,21 @@ mod tests {
             Some(ControlMessageType::Accept)
         );
         assert!(!header.is_data_message());
+    }
+
+    #[test]
+    fn clamps_fusb302_revision_to_pd20() {
+        assert_eq!(
+            clamp_fusb302_spec_revision(SpecRevision::Rev10),
+            SpecRevision::Rev10
+        );
+        assert_eq!(
+            clamp_fusb302_spec_revision(SpecRevision::Rev20),
+            SpecRevision::Rev20
+        );
+        assert_eq!(
+            clamp_fusb302_spec_revision(SpecRevision::Rev30),
+            SpecRevision::Rev20
+        );
     }
 }

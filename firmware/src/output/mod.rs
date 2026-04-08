@@ -2593,6 +2593,9 @@ pub struct PowerManager<'d, I2C> {
     usb_pd_state: usb_pd::UsbPdPortState,
     usb_pd_input_current_limit_ma: Option<u16>,
     usb_pd_vindpm_mv: Option<u16>,
+    usb_pd_vac1_mv: Option<u16>,
+    usb_pd_input_limit_backup: Option<UsbPdInputLimitBackup>,
+    usb_pd_restore_input_limits_pending: bool,
 
     ui_snapshot: SelfCheckUiSnapshot,
     audio_snapshot: AudioSignalSnapshot,
@@ -2610,6 +2613,12 @@ struct ChargerActivationBackup {
     ichg_reg: u16,
     iindpm_reg: u16,
     chg_enabled: bool,
+}
+
+#[derive(Clone, Copy)]
+struct UsbPdInputLimitBackup {
+    vindpm_mv: u16,
+    iindpm_ma: u16,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3067,6 +3076,9 @@ where
             usb_pd_state: usb_pd::UsbPdPortState::default(),
             usb_pd_input_current_limit_ma: None,
             usb_pd_vindpm_mv: None,
+            usb_pd_vac1_mv: None,
+            usb_pd_input_limit_backup: None,
+            usb_pd_restore_input_limits_pending: false,
             ui_snapshot: initial_ui_snapshot,
             audio_snapshot: AudioSignalSnapshot::default(),
             audio_events: AudioSignalEvents::default(),
@@ -3410,13 +3422,21 @@ where
             requested_charge_voltage_mv,
             requested_charge_current_ma,
             battery_voltage_mv: self.ui_snapshot.bq40z50_pack_mv,
-            measured_input_voltage_mv: self.ui_snapshot.input_vbus_mv,
-            charging_enabled: self.cfg.charger_enabled && self.charger_allowed,
+            measured_input_voltage_mv: usb_pd_measured_input_voltage_mv(
+                self.ui_snapshot.fusb302_vbus_present,
+                self.usb_pd_vac1_mv,
+            ),
+            charging_enabled: usb_pd_charging_enabled(
+                self.ui_snapshot.bq25792_allow_charge,
+                self.cfg.charger_enabled,
+                self.charger_allowed,
+            ),
         }
     }
 
     pub fn update_usb_pd_state(&mut self, state: usb_pd::UsbPdPortState) {
-        if self.usb_pd_state != state {
+        let previous_state = self.usb_pd_state;
+        if previous_state != state {
             defmt::info!(
                 "usb_pd: state attached={=bool} ready={=bool} vbus_present={=?} contract_mv={=?} contract_ma={=?} unsafe={=bool}",
                 state.attached,
@@ -3432,6 +3452,20 @@ where
             .contract
             .and_then(|contract| contract.input_current_limit_ma);
         self.usb_pd_vindpm_mv = state.contract.and_then(|contract| contract.vindpm_mv);
+        match usb_pd_restore_tracking_update(
+            previous_state.contract.is_some(),
+            state.contract.is_some(),
+            state.attached,
+            self.usb_pd_input_limit_backup.is_some(),
+        ) {
+            UsbPdRestoreTrackingUpdate::ArmRestore => {
+                self.usb_pd_restore_input_limits_pending = true;
+            }
+            UsbPdRestoreTrackingUpdate::ClearRestorePending => {
+                self.usb_pd_restore_input_limits_pending = false;
+            }
+            UsbPdRestoreTrackingUpdate::None => {}
+        }
 
         if state.enabled {
             self.ui_snapshot.fusb302 = if !state.controller_ready {
@@ -7995,7 +8029,6 @@ where
         let vsys_min_reg = (status3 & bq25792::status3::VSYS_STAT) != 0;
 
         let input_present = vbus_present || ac1_present || ac2_present || pg;
-        let usb_pd_unsafe_latched = self.usb_pd_state.unsafe_source_latched;
         let adc_state = match bq25792::ensure_adc_power_path(&mut self.i2c) {
             Ok(adc_state) => Some(adc_state),
             Err(e) => {
@@ -8013,6 +8046,7 @@ where
             .and_then(|_| bq25792::read_adc_i16(&mut self.i2c, bq25792::reg::IBUS_ADC).ok());
         let raw_ibat_adc_ma = adc_state
             .and_then(|_| bq25792::read_adc_i16(&mut self.i2c, bq25792::reg::IBAT_ADC).ok());
+        let raw_vac1_adc_mv = adc_state.and_then(|_| bq25792::read_vac1_adc_mv(&mut self.i2c).ok());
         let raw_vbus_adc_mv = adc_state
             .and_then(|_| bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VBUS_ADC).ok());
         let vbat_adc_mv = adc_state
@@ -8028,6 +8062,12 @@ where
             adc_ready,
             raw_vbus_adc_mv,
             raw_ibus_adc_ma,
+        );
+        self.usb_pd_vac1_mv = adc_ready.then_some(raw_vac1_adc_mv).flatten();
+        let usb_pd_unsafe_latched = usb_pd_runtime_unsafe_source_latched(
+            self.usb_pd_state.unsafe_source_latched,
+            ac1_present || matches!(self.usb_pd_state.vbus_present, Some(true)),
+            self.usb_pd_vac1_mv,
         );
         let ibat_adc_ma = adc_ready.then_some(raw_ibat_adc_ma).flatten();
         self.maybe_log_charger_input_power_anomaly(
@@ -8401,6 +8441,53 @@ where
                         }
                     }
                 }
+            }
+
+            self.chg_ce.set_low();
+            self.chg_enabled = true;
+        } else {
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+        }
+
+        match usb_pd_input_limit_update(
+            self.usb_pd_state.contract.is_some(),
+            self.usb_pd_restore_input_limits_pending,
+            force_allow_charge,
+            auto_force_charge,
+            activation_pending,
+        ) {
+            UsbPdInputLimitUpdate::ApplyContract => {
+                if self.usb_pd_input_limit_backup.is_none() {
+                    let vindpm_reg =
+                        match bq25792::read_u8(&mut self.i2c, bq25792::reg::INPUT_VOLTAGE_LIMIT) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                self.mark_charger_poll_failed(now);
+                                defmt::error!(
+                                    "charger: bq25792 err stage=usb_pd_backup_vindpm_read err={}",
+                                    i2c_error_kind(e)
+                                );
+                                return;
+                            }
+                        };
+                    let iindpm_reg =
+                        match bq25792::read_u16(&mut self.i2c, bq25792::reg::INPUT_CURRENT_LIMIT) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                self.mark_charger_poll_failed(now);
+                                defmt::error!(
+                                    "charger: bq25792 err stage=usb_pd_backup_iindpm_read err={}",
+                                    i2c_error_kind(e)
+                                );
+                                return;
+                            }
+                        };
+                    self.usb_pd_input_limit_backup = Some(UsbPdInputLimitBackup {
+                        vindpm_mv: bq25792::decode_input_voltage_limit_mv(vindpm_reg),
+                        iindpm_ma: bq25792::decode_input_current_limit_ma(iindpm_reg),
+                    });
+                }
 
                 if let Some(target_vindpm_mv) = self.usb_pd_vindpm_mv {
                     match bq25792::set_input_voltage_limit_mv(&mut self.i2c, target_vindpm_mv) {
@@ -8418,7 +8505,11 @@ where
                     };
                 }
 
-                if let Some(target_iindpm_ma) = self.usb_pd_input_current_limit_ma {
+                if let Some(target_iindpm_ma) = usb_pd_effective_input_current_limit_ma(
+                    self.usb_pd_input_current_limit_ma,
+                    (force_allow_charge || auto_force_charge)
+                        .then_some(BMS_ACTIVATION_FORCE_IINDPM_MA),
+                ) {
                     match bq25792::set_input_current_limit_ma(&mut self.i2c, target_iindpm_ma) {
                         Ok(v) => applied_iindpm_ma = Some(decode_cur_ma(v)),
                         Err(e) => {
@@ -8432,12 +8523,47 @@ where
                     }
                 }
             }
+            UsbPdInputLimitUpdate::RestorePrevious => {
+                let restore = self
+                    .usb_pd_input_limit_backup
+                    .map(|backup| (backup.vindpm_mv, Some(backup.iindpm_ma)))
+                    .unwrap_or_else(|| {
+                        (
+                            usb_pd_restore_vindpm_mv(self.ui_snapshot.input_vbus_mv),
+                            None,
+                        )
+                    });
 
-            self.chg_ce.set_low();
-            self.chg_enabled = true;
-        } else {
-            self.chg_ce.set_high();
-            self.chg_enabled = false;
+                match bq25792::set_input_voltage_limit_mv(&mut self.i2c, restore.0) {
+                    Ok(v) => applied_vindpm_mv = Some(bq25792::decode_input_voltage_limit_mv(v)),
+                    Err(e) => {
+                        self.mark_charger_poll_failed(now);
+                        defmt::error!(
+                            "charger: bq25792 err stage=usb_pd_restore_vindpm_write err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
+                    }
+                };
+
+                if let Some(target_iindpm_ma) = restore.1 {
+                    match bq25792::set_input_current_limit_ma(&mut self.i2c, target_iindpm_ma) {
+                        Ok(v) => applied_iindpm_ma = Some(decode_cur_ma(v)),
+                        Err(e) => {
+                            self.mark_charger_poll_failed(now);
+                            defmt::error!(
+                                "charger: bq25792 err stage=usb_pd_restore_iindpm_write err={}",
+                                i2c_error_kind(e)
+                            );
+                            return;
+                        }
+                    }
+                }
+
+                self.usb_pd_restore_input_limits_pending = false;
+                self.usb_pd_input_limit_backup = None;
+            }
+            UsbPdInputLimitUpdate::None => {}
         }
 
         if !(auto_force_charge || activation_pending) {
@@ -8562,7 +8688,7 @@ where
             None
         };
         self.ui_snapshot.fusb302_vbus_present =
-            self.usb_pd_state.vbus_present.or(Some(input_present));
+            usb_pd_vbus_present(self.usb_pd_state.vbus_present, ac1_present);
         self.ui_snapshot.dashboard_detail.input_source = input_source;
         self.ui_snapshot.dashboard_detail.charger_active = Some(
             if force_allow_charge

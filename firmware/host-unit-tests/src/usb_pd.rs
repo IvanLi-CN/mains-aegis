@@ -1,6 +1,9 @@
 #[path = "../../src/usb_pd/pd.rs"]
 pub mod pd;
 
+#[path = "../../src/usb_pd/contract_tracker.rs"]
+pub mod contract_tracker;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContractKind {
     Fixed,
