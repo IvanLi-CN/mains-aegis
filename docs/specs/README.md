@@ -19,7 +19,7 @@
 
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
-| hn29u | USB-C PD/PPS sink v1 | 已完成 | `hn29u-usb-c-pd-sink-pps/SPEC.md` | 2026-04-08 | 已完成默认全开 + blacklist feature、USB-C 协商/重协商禁充 gate、PPS keep-alive、host audit 覆盖，以及 review-loop 收敛的协议版本/5V 回落/WAIT 恢复修正 |
+| hn29u | USB-C PD/PPS sink v1 | 已完成 | `hn29u-usb-c-pd-sink-pps/SPEC.md` | 2026-04-08 | 已完成默认全开 + blacklist feature、USB-C 协商/重协商禁充 gate、PPS keep-alive、host audit 覆盖，以及 review-loop 收敛的协议版本/5V 回落/WAIT 恢复/系统负载预算修正 |
 | nq7s2 | BQ40 balance baseline + observability | 已完成 | `nq7s2-bq40-balance-baseline-and-observability/SPEC.md` | 2026-04-07 | PR #59 已完成实现/文档/预览收口；实板已确认 DF 对齐，active balancing 触发待后续在完整 charge/relax 条件下复核 |
 | edbpk | BQ40 Cell4 protocol-safe diagnostics | 已完成 | `edbpk-bq40-cell4-protocol-diagnostics/SPEC.md` | 2026-03-15 | 已完成协议修正、只读诊断收敛、flash/monitor 互斥与 reply PEC 探测；`Cell4` 根因已排除工具误读路径 |
 | tmdtq | BQ40 tool reflash / recovery convergence | 已完成 | `tmdtq-bq40-tool-reflash-recovery/SPEC.md` | 2026-03-11 | 工具链已可区分 ROM 检测/写入/退出与 post-flash 无效运行态；剩余问题收敛为样片硬件状态 |

@@ -136,6 +136,7 @@ const CHARGE_POLICY_DC_DERATE_EXIT_IBUS_MA: i32 = 2_700;
 const CHARGE_POLICY_DC_DERATE_ENTER_HOLD: Duration = Duration::from_secs(1);
 const CHARGE_POLICY_DC_DERATE_EXIT_HOLD: Duration = Duration::from_secs(5);
 const CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10: u32 = 50;
+const USB_PD_SYSTEM_LOAD_FLOOR_MW: u32 = 2_500;
 const CHARGER_INPUT_IBUS_MAX_MA: i16 = 5_000;
 const CHARGER_INPUT_VBUS_MAX_MV: u16 = 30_000;
 const CHARGER_INPUT_POWER_ANOMALY_W10: u32 = 2_000;
@@ -3403,6 +3404,17 @@ where
 
     pub fn usb_pd_demand(&self) -> usb_pd::UsbPdPowerDemand {
         let activation_pending = self.bms_activation_state == BmsActivationState::Pending;
+        let output_power_w10 =
+            charge_policy_output_power_w10(&self.ui_snapshot, self.output_state.active_outputs);
+        let output_power_mw = output_power_w10
+            .map(|power_w10| power_w10.saturating_mul(100))
+            .unwrap_or_else(|| {
+                if self.output_state.active_outputs != EnabledOutputs::None {
+                    CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10.saturating_mul(100)
+                } else {
+                    0
+                }
+            });
         let requested_charge_voltage_mv =
             if activation_pending && self.bms_activation_force_charge_requested {
                 BMS_ACTIVATION_FORCE_VREG_MV
@@ -3421,6 +3433,7 @@ where
         usb_pd::UsbPdPowerDemand {
             requested_charge_voltage_mv,
             requested_charge_current_ma,
+            system_load_power_mw: USB_PD_SYSTEM_LOAD_FLOOR_MW.saturating_add(output_power_mw),
             battery_voltage_mv: self.ui_snapshot.bq40z50_pack_mv,
             // Feed the PD manager the raw charger-side VAC1 sample so FUSB302 VBUS_OK glitches
             // do not blind detach / unsafe-voltage decisions.

@@ -191,6 +191,7 @@ None。
 
 ## 变更记录（Change log）
 
+- 2026-04-08: 已继续收敛 merge-proof review，补齐“非充电态仍计入系统负载预算”“PD state 先于 charger tick 生效”“合同丢失时强制恢复旧 `VINDPM/IINDPM`”三项修正，并同步规格说明。
 - 2026-04-08: 已根据 merge-proof review 修正 spec revision 跟随、无可用 PD 合同时的稳定 5V 回落，以及 WAIT/REJECT 后的旧合同 charge gate 恢复；规格与最新实现重新对齐。
 - 2026-04-08: 已同步 host-unit-tests allowlist 与 closeout 文档，确认 `usb_pd` 模块测试覆盖纳入 host audit，规格与实现重新对齐为 merge-ready。
 - 2026-04-08: 已完成默认全开 + blacklist feature、USB-C 协商/重协商禁充 gate、PPS keep-alive、合同保持与真机验证；状态更新为 `已完成`。

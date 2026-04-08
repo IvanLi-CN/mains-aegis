@@ -51,6 +51,7 @@ pub struct UsbPdPortState {
 pub struct UsbPdPowerDemand {
     pub requested_charge_voltage_mv: u16,
     pub requested_charge_current_ma: u16,
+    pub system_load_power_mw: u32,
     pub battery_voltage_mv: Option<u16>,
     pub measured_input_voltage_mv: Option<u16>,
     pub charging_enabled: bool,
@@ -58,10 +59,12 @@ pub struct UsbPdPowerDemand {
 
 impl UsbPdPowerDemand {
     pub fn required_power_mw(self) -> u32 {
-        if !self.charging_enabled {
-            return 0;
-        }
-        self.requested_charge_voltage_mv as u32 * self.requested_charge_current_ma as u32
+        let charge_power_mw = if self.charging_enabled {
+            self.requested_charge_voltage_mv as u32 * self.requested_charge_current_ma as u32
+        } else {
+            0
+        };
+        charge_power_mw.saturating_add(self.system_load_power_mw)
     }
 }
 
@@ -991,6 +994,20 @@ mod tests {
         assert!(!deadline_elapsed(100, 200));
         assert!(deadline_elapsed(200, 200));
         assert!(deadline_elapsed(250, 200));
+    }
+
+    #[test]
+    fn required_power_includes_system_load_when_charge_is_disabled() {
+        let demand = UsbPdPowerDemand {
+            requested_charge_voltage_mv: 16_800,
+            requested_charge_current_ma: 500,
+            system_load_power_mw: 2_500,
+            battery_voltage_mv: Some(15_000),
+            measured_input_voltage_mv: None,
+            charging_enabled: false,
+        };
+
+        assert_eq!(demand.required_power_mw(), 2_500);
     }
 
     #[test]

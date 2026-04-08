@@ -25,6 +25,7 @@ pub struct ActiveContract {
 pub struct UsbPdPowerDemand {
     pub requested_charge_voltage_mv: u16,
     pub requested_charge_current_ma: u16,
+    pub system_load_power_mw: u32,
     pub battery_voltage_mv: Option<u16>,
     pub measured_input_voltage_mv: Option<u16>,
     pub charging_enabled: bool,
@@ -32,10 +33,12 @@ pub struct UsbPdPowerDemand {
 
 impl UsbPdPowerDemand {
     pub fn required_power_mw(self) -> u32 {
-        if !self.charging_enabled {
-            return 0;
-        }
-        self.requested_charge_voltage_mv as u32 * self.requested_charge_current_ma as u32
+        let charge_power_mw = if self.charging_enabled {
+            self.requested_charge_voltage_mv as u32 * self.requested_charge_current_ma as u32
+        } else {
+            0
+        };
+        charge_power_mw.saturating_add(self.system_load_power_mw)
     }
 }
 

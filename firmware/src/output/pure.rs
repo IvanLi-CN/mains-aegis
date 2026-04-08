@@ -179,7 +179,10 @@ pub(super) const fn usb_pd_input_limit_update(
 ) -> UsbPdInputLimitUpdate {
     if contract_present {
         UsbPdInputLimitUpdate::ApplyContract
-    } else if restore_pending && !force_allow_charge && !auto_force_charge && !activation_pending {
+    } else if restore_pending {
+        let _ = force_allow_charge;
+        let _ = auto_force_charge;
+        let _ = activation_pending;
         UsbPdInputLimitUpdate::RestorePrevious
     } else {
         UsbPdInputLimitUpdate::None
@@ -1463,10 +1466,14 @@ mod tests {
     }
 
     #[test]
-    fn usb_pd_input_limit_update_defers_restore_until_activation_exits() {
+    fn usb_pd_input_limit_update_restores_limits_even_in_force_charge_paths() {
         assert_eq!(
             usb_pd_input_limit_update(false, true, true, false, true),
-            UsbPdInputLimitUpdate::None
+            UsbPdInputLimitUpdate::RestorePrevious
+        );
+        assert_eq!(
+            usb_pd_input_limit_update(false, true, false, true, false),
+            UsbPdInputLimitUpdate::RestorePrevious
         );
         assert_eq!(
             usb_pd_input_limit_update(false, true, false, false, false),

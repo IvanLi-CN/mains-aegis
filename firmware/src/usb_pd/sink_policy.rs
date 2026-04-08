@@ -564,6 +564,7 @@ mod tests {
         let demand = UsbPdPowerDemand {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
+            system_load_power_mw: 0,
             battery_voltage_mv: Some(14_800),
             measured_input_voltage_mv: None,
             charging_enabled: true,
@@ -591,6 +592,7 @@ mod tests {
         let demand = UsbPdPowerDemand {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
+            system_load_power_mw: 0,
             battery_voltage_mv: Some(15_200),
             measured_input_voltage_mv: None,
             charging_enabled: true,
@@ -619,6 +621,7 @@ mod tests {
         let demand = UsbPdPowerDemand {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
+            system_load_power_mw: 0,
             battery_voltage_mv: Some(15_200),
             measured_input_voltage_mv: None,
             charging_enabled: true,
@@ -719,6 +722,7 @@ mod tests {
         let demand = UsbPdPowerDemand {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
+            system_load_power_mw: 0,
             battery_voltage_mv: Some(16_400),
             measured_input_voltage_mv: None,
             charging_enabled: false,
@@ -744,6 +748,7 @@ mod tests {
         let demand = UsbPdPowerDemand {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
+            system_load_power_mw: 0,
             battery_voltage_mv: Some(15_200),
             measured_input_voltage_mv: None,
             charging_enabled: false,
@@ -771,6 +776,7 @@ mod tests {
         let demand = UsbPdPowerDemand {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
+            system_load_power_mw: 0,
             battery_voltage_mv: Some(14_820),
             measured_input_voltage_mv: None,
             charging_enabled: false,
@@ -798,6 +804,7 @@ mod tests {
         let demand = UsbPdPowerDemand {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
+            system_load_power_mw: 0,
             battery_voltage_mv: Some(14_820),
             measured_input_voltage_mv: None,
             charging_enabled: true,
@@ -813,6 +820,7 @@ mod tests {
         let demand = UsbPdPowerDemand {
             requested_charge_voltage_mv: 0,
             requested_charge_current_ma: 0,
+            system_load_power_mw: 0,
             battery_voltage_mv: None,
             measured_input_voltage_mv: None,
             charging_enabled: false,

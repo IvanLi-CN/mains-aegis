@@ -1363,13 +1363,13 @@ fn main() -> ! {
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(2_000) {
             let irq_events = irq_tracker.take_delta();
-            let fan_telemetry_due = power.tick(&irq_events);
             let pd_state = usb_pd.tick(
                 power.usb_pd_demand(),
                 irq_events.i2c2_int != 0,
                 pd_started_at.elapsed().as_millis() as u32,
             );
             power.update_usb_pd_state(pd_state);
+            let fan_telemetry_due = power.tick(&irq_events);
             if fan_pwm_ready {
                 applied_fan_state = apply_fan_command(
                     &mut fan_en,
