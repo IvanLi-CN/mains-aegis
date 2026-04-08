@@ -4,6 +4,7 @@ on:
   pull_request:
     paths-ignore:
       - "docs/**"
+      - "docs-site/**"
       - "README.md"
 
 permissions:
