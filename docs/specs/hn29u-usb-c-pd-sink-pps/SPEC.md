@@ -4,7 +4,7 @@
 
 - Status: 部分完成（4/5）
 - Created: 2026-04-07
-- Last: 2026-04-07
+- Last: 2026-04-08
 
 ## 背景 / 问题陈述
 
@@ -17,8 +17,8 @@
 ### Goals
 
 - 为主 USB-C 口实现 `sink-only` 的 USB-C PD 受电能力，首阶段覆盖 Type-C attach/detach、固定 PDO 请求与最小可用的 soft/hard reset 处理。
-- 支持通过 Cargo features 精确开启 `5V/9V/12V/15V/20V` 固定 PDO 与 `PPS`，便于 A/B 测试与安全回归。
-- 在启用 `pd-sink-pps` 时，按充电需求动态调整 APDO 电压，优先降低输入侧压差与热损耗，而不是固定顶到 `20V`。
+- 默认暴露 `5V/9V/12V/15V/20V` 固定 PDO 与 `PPS`，并通过 Cargo blacklist features（`no-pd-sink-*` / `no-pps`）精确裁剪能力，便于 A/B 测试与安全回归。
+- 在启用 PPS（即未设置 `no-pps`）时，按系统/充电需求动态调整 APDO 电压，优先降低输入侧压差与热损耗，而不是固定顶到 `20V`。
 - 运行时严格执行输入安全边界：`BQ25792` 工作输入 `3.6V~24V`、绝对最大 `30V`，但本项目 USB-C 输入按 `<=20V` 设计，协商/运行均不得越过此边界。
 - 保持现有前面板 UI 范围不扩张，只补齐必要的 defmt telemetry 与 `SelfCheckUiSnapshot` 真相源接线。
 
@@ -27,7 +27,7 @@
 - 不实现 USB-C source、OTG source、DRP、role swap、data-role swap、VCONN 电源管理。
 - 不实现 PD 3.1 EPR 或任何 `>20V` 合同。
 - 不改 `CH442E`、USB2/DPDM 路径选择与新的前面板页面。
-- 不在本轮调整现有 `BQ25792` 500mA 主线 charge policy 的业务规则，只补齐 PD/PPS 输入适配与安全门控。
+- 不在本轮改动 `BQ25792` 主线 charge policy 的启动/满充业务规则，但会补齐 USB-C 协商期的禁充门控与恢复条件。
 
 ## 范围（Scope）
 
@@ -50,13 +50,14 @@
 
 ### MUST
 
-- 新增 feature：`pd-sink-fixed-5v`、`pd-sink-fixed-9v`、`pd-sink-fixed-12v`、`pd-sink-fixed-15v`、`pd-sink-fixed-20v`、`pd-sink-pps`。
-- `pd-sink-pps` 必须依附至少一个固定 PDO feature；若单独启用 `pd-sink-pps`，编译必须失败。
-- 当没有任何 `pd-sink-*` feature 时，构建与运行行为必须保持当前基线，不主动发起 PD 合同。
+- 默认构建必须开启 `5V/9V/12V/15V/20V` 固定 PDO 与 `PPS`；调试时通过 `no-pd-sink-5v`、`no-pd-sink-9v`、`no-pd-sink-12v`、`no-pd-sink-15v`、`no-pd-sink-20v`、`no-pps` blacklist features 逐项禁用。
+- `no-pps` 关闭 PPS 后，固定 PDO 逻辑仍必须可独立工作；若把全部 fixed PDO 都 blacklist 掉但仍保留 PPS（即未设置 `no-pps`），编译必须失败。
+- 当所有 fixed PDO 都被 blacklist 时，构建与运行行为必须保持当前基线，不主动发起 PD 合同。
 - 任何 source capability 中 `>20V` 的 fixed PDO / APDO 一律忽略；请求报文绝不请求 `>20V`。
 - 运行时一旦测得 USB-C 输入超过 `20V + ADC 容差窗`，必须立即禁充、锁存 `unsafe_source`，直到 detach 才允许清除。
 - 固定 PDO 策略必须在已启用的 feature 中选择“满足当前功率需求的最低安全电压”，而不是默认拉到最高档。
-- PPS 策略只在 `pd-sink-pps` 打开时启用；目标电压必须跟随充电需求动态调节，并具备迟滞与最小重请求间隔。
+- PPS 策略只在未设置 `no-pps` 时启用；目标电压必须跟随系统/充电需求动态调节，并具备迟滞、最小重请求间隔与 keep-alive。
+- 只要 USB-C 口处于 attach 后的协商窗口、合同切换窗口、reset/retry 恢复窗口或 source capabilities 变化窗口，charger 都必须保持禁充；只有输入能力被判定为稳定后，才允许恢复充电。
 - I2C2 共享后不得破坏前面板初始化、触摸读取或 FUSB302 轮询；中断里仍禁止 I2C 事务。
 
 ### SHOULD
@@ -65,6 +66,7 @@
 - 前面板 snapshot / runtime log 应输出最小必要的 PD 状态：attach、contract、电压、电流、PPS/Fixed、unsafe-source。
 - 对 FUSB302 的初始化、TX/RX FIFO、CRC/重试、soft/hard reset 应保持可回放日志，便于 bench 复现。
 - PPS 目标电压应优先贴近 `充电电压或电池电压 + 安全裕量`，以降低从高压固定档直接降压带来的热损耗。
+- 稳定性判定应区分“过渡 5V”与“稳定 5V”：协商前/重协商中的默认 5V 只用于系统保底，不得被视为可立即放开正常充电的稳定输入。
 
 ### COULD
 
@@ -74,11 +76,13 @@
 
 ### Core flows
 
-- 当启用了任意 `pd-sink-fixed-*` feature 且 USB-C source attach 成功时，固件应通过 `FUSB302B` 进入 sink attach，识别极性，开启 PD RX/TX，并等待 `Source_Capabilities`。
+- 当默认 fixed PDO 能力未被全部 blacklist，且 USB-C source attach 成功时，固件应通过 `FUSB302B` 进入 sink attach，识别极性，开启 PD RX/TX，并等待 `Source_Capabilities`。
 - 收到 source capabilities 后，先过滤掉所有 `>20V` 的 fixed PDO / APDO，再根据 feature 生成的本地能力表和当前充电需求挑选候选合同。
 - 固定 PDO 模式下，策略以“满足功率需求的最低启用固定电压”为优先级，并按 source advertised current 与本地输入预算生成 RDO。
-- PPS 模式下，若 source 提供合法 PPS APDO 且 `pd-sink-pps` 打开，则目标电压按 `charge_voltage_mv / battery_mv + headroom` 计算，随后 clamp 到 `source APDO window`、`<=20V` 与本地输入预算内，再按迟滞/节流条件决定是否重请求。
+- PPS 模式下，若 source 提供合法 PPS APDO 且未设置 `no-pps`，则目标电压按 `system_target / charge_target + headroom` 计算，随后 clamp 到 `source APDO window`、`<=20V` 与本地输入预算内，再按迟滞/节流/keep-alive 条件决定是否重请求。
 - 当 source 接受请求并发送 `PS_RDY` 后，合同状态更新为 active；主 charger runtime 随后把合同映射到 `IINDPM/VINDPM` 并刷新 telemetry。
+- USB-C 充电 gate 应遵循三态：`InputTransient`（attach/重协商/reset 中，禁充）、`InputStable5V`（确认无 PD 合同但 5V 已稳定，可按 5V 上限充电）、`InputStableContract`（PD/PPS 合同已稳定，可按合同充电）。
+- 一旦收到新的 `Source_Capabilities`、`soft reset`、`hard reset`、`retry fail` 或合同丢失，charger 必须立即回到 `InputTransient` 并停充；只有新的稳定输入能力确认后，才允许恢复充电。
 - detach、hard reset、soft reset、retry fail 或 source 重新广播 capabilities 时，sink manager 应清除旧合同并回到等待协商状态。
 
 ### Edge cases / errors
@@ -96,7 +100,7 @@
 
 | 接口（Name） | 类型（Kind） | 范围（Scope） | 变更（Change） | 契约文档（Contract Doc） | 负责人（Owner） | 使用方（Consumers） | 备注（Notes） |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `pd-sink-fixed-*` / `pd-sink-pps` Cargo features | build config | internal | New | None | firmware | firmware build matrix | feature 驱动 capability 生成 |
+| `no-pd-sink-*` / `no-pps` Cargo features | build config | internal | New | None | firmware | firmware build matrix | 默认全开、按 blacklist 裁剪 capability |
 | `esp_firmware::usb_pd` | Rust module | internal | New | None | firmware | main firmware | sink policy + FUSB302 driver |
 | `PowerManager::usb_pd_demand/update_usb_pd_state` | Rust API | internal | New | None | firmware | main loop | PD 与 charger runtime 桥接 |
 | `FrontPanel<I2C>` | Rust type | internal | Modify | None | firmware | main/test-fw/tps-test-fw | I2C2 共享总线 |
@@ -107,13 +111,15 @@ None。
 
 ## 验收标准（Acceptance Criteria）
 
-- Given 启用了 `pd-sink-fixed-5v` 且 source 广告 `5V/9V/20V`，When 当前功率需求可由 `5V` 满足，Then 固件只请求 `5V` 合同。
-- Given 启用了 `5/9/12/15/20V` fixed features，When 功率需求需要高于 `5V` 档才能满足，Then 固件选择满足需求的最低固定电压档，而不是固定请求 `20V`。
-- Given 打开 `pd-sink-pps` 且 source 广告合法 PPS APDO，When 充电需求变化，Then 固件会在迟滞与最小重请求间隔约束内调整 PPS 请求电压。
+- Given 未设置 `no-pd-sink-5v` 且 source 广告 `5V/9V/20V`，When 当前功率需求可由 `5V` 满足，Then 固件只请求 `5V` 合同。
+- Given 默认 fixed 能力全开，When 功率需求需要高于 `5V` 档才能满足，Then 固件选择满足需求的最低固定电压档，而不是固定请求 `20V`。
+- Given 未设置 `no-pps` 且 source 广告合法 PPS APDO，When 系统/充电需求变化，Then 固件会在迟滞、最小重请求间隔与 keep-alive 约束内调整 PPS 请求电压。
 - Given source 广告中存在 `>20V` fixed PDO / APDO，When sink 解析 capability，Then 这些能力必须被忽略，且请求报文中不得出现 `>20V` 电压。
 - Given 运行时测得 USB-C 输入超过安全窗，When PD/charger runtime 处理该样本，Then charger 立即停充，`unsafe_source` 锁存为 true，直到 detach 才清除。
-- Given 仅启用 `pd-sink-pps`，When 编译固件，Then 编译失败并给出明确的 feature 约束错误。
-- Given 未启用任何 `pd-sink-*` feature，When 构建与运行主固件，Then 行为与当前基线保持一致，不主动建立 PD 合同。
+- Given 全部 fixed PDO 都被 blacklist 且未设置 `no-pps`，When 编译固件，Then 编译失败并给出明确的 feature 约束错误。
+- Given attach 后仍处于协商/重协商窗口，When charger runtime 评估 `allow_charge`，Then 必须保持禁充，不得把过渡中的默认 5V 视作稳定输入。
+- Given 多口电源触发功率重分配并重新广播 source capabilities，When 旧合同失效，Then charger 必须先停充，待新合同或稳定 5V 再恢复。
+- Given 所有 fixed PDO 都被 blacklist，When 构建与运行主固件，Then 行为与当前基线保持一致，不主动建立 PD 合同。
 - Given 前面板与 FUSB302 共用 I2C2，When 前面板初始化、触摸轮询与 PD IRQ 轮询同时运行，Then 不得产生总线 ownership 冲突或互锁死。
 
 ## 实现前置条件（Definition of Ready / Preconditions）
@@ -145,7 +151,7 @@ None。
 ## 文档更新（Docs to Update）
 
 - `docs/specs/README.md`: 登记本 spec，并在收口时同步状态。
-- `docs/charger-design.md`: 如实现口径与现有 PD 设计说明有偏差，收口前补同步说明。
+- `docs/charger-design.md`: 同步“USB-C 协商/重协商期间先禁充，稳定后再恢复”的固件门控口径。
 
 ## 计划资产（Plan assets）
 
@@ -179,12 +185,13 @@ None。
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）
 
 - 风险：`FUSB302B` datasheet 对 spec revision / GoodCRC 的描述更偏 PD2.0，PPS 互操作需真实台架确认；本轮先把 PPS policy 与报文路径接齐，并在 PR 中显式记录互操作风险。
-- 风险：当前主线 charger policy 仍以 `500mA` 为主，因此固定 PDO 选择在大多数正常充电场景下可能仍停留在低压档；后续若提升 charge current，选择结果会自然变化。
+- 风险：多口电源在功率重分配时可能触发 source capabilities 重广播、reset 或短暂回落默认 5V；USB-C charge gate 若实现不完整，容易在旧合同失效窗口里误充。
 - 风险：真实 PD analyzer / PPS 互操作 bench 仍未覆盖，当前只完成编译、host-unit-tests 与 feature matrix 级验证，PR 中必须保留台架验证风险。
 - 假设：USB-C 输入安全窗按 `20.5V`（`20V + 500mV ADC 容差窗`）执行；若后续硬件校准数据表明需要更窄或更宽，允许在不改 feature 口径的前提下微调实现常量。
 
 ## 变更记录（Change log）
 
+- 2026-04-08: 规格同步到默认全开 + blacklist feature 口径，并补充“USB-C 协商/重协商期间禁充，输入稳定后再恢复”的 charge gate 要求与验收项。
 - 2026-04-07: PR #62 已创建，收口目标切换为 review-loop 后的可审阅态；台架风险保持显式记录。
 - 2026-04-07: 已完成 `usb_pd` 模块、I2C2 共享、`BQ25792` 输入限制 helper、主循环/`PowerManager` 接线，以及 host-unit-tests + feature matrix 本地验证；状态更新为 `部分完成（4/5）`，等待 PR/review-loop 收口。
 - 2026-04-07: 初版规格创建，冻结 USB-C PD/PPS sink v1 的范围、feature、边界与验收标准。

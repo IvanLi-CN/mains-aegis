@@ -274,20 +274,22 @@ fn log_usb_pd_feature_summary() {
 
 fn log_usb_pd_port_state(stage: &'static str, state: esp_firmware::usb_pd::UsbPdPortState) {
     esp_println::println!(
-        "usb_pd: stage={} enabled={} ready={} attached={} unsafe={} vbus_present={}",
+        "usb_pd: stage={} enabled={} ready={} attached={} charge_ready={} unsafe={} vbus_present={}",
         stage,
         state.enabled,
         state.controller_ready,
         state.attached,
+        state.charge_ready,
         state.unsafe_source_latched,
         state.vbus_present.unwrap_or(false)
     );
     defmt::info!(
-        "usb_pd: stage={} enabled={=bool} ready={=bool} attached={=bool} unsafe={=bool} vbus_present={=?}",
+        "usb_pd: stage={} enabled={=bool} ready={=bool} attached={=bool} charge_ready={=bool} unsafe={=bool} vbus_present={=?}",
         stage,
         state.enabled,
         state.controller_ready,
         state.attached,
+        state.charge_ready,
         state.unsafe_source_latched,
         state.vbus_present
     );

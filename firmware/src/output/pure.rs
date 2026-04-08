@@ -75,7 +75,6 @@ pub(super) fn dashboard_input_source_name(source: Option<DashboardInputSource>) 
     }
 }
 
-<<<<<<< HEAD
 pub(super) const fn manual_charge_stop_hold_blocks_charge(
     stop_inhibit: bool,
     activation_pending: bool,
@@ -98,7 +97,8 @@ pub(super) const fn manual_charge_safety_notice_active(
         && !active
         && !stop_inhibit
         && blocked
-=======
+}
+
 pub(super) fn usb_pd_restore_vindpm_mv(measured_input_voltage_mv: Option<u16>) -> u16 {
     match measured_input_voltage_mv {
         Some(voltage_mv) if voltage_mv >= 7_000 => {
@@ -118,97 +118,6 @@ pub(super) fn usb_pd_measured_input_voltage_mv(
         .flatten()
 }
 
-pub(super) fn usb_pd_vbus_present(
-    pd_vbus_present: Option<bool>,
-    usb_c_input_present: bool,
-) -> Option<bool> {
-    pd_vbus_present.or(Some(usb_c_input_present))
-}
-
-pub(super) const fn usb_pd_charging_enabled(
-    runtime_allow_charge: Option<bool>,
-    charger_enabled: bool,
-    charger_allowed: bool,
-) -> bool {
-    if let Some(runtime_allow_charge) = runtime_allow_charge {
-        runtime_allow_charge
-    } else {
-        charger_enabled && charger_allowed
-    }
-}
-
-pub(super) fn usb_pd_runtime_unsafe_source_latched(
-    previously_latched: bool,
-    usb_c_path_present: bool,
-    vac1_adc_mv: Option<u16>,
-) -> bool {
-    previously_latched
-        || usb_pd::sink_policy::is_input_voltage_unsafe(
-            usb_c_path_present.then_some(vac1_adc_mv).flatten(),
-        )
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum UsbPdInputLimitUpdate {
-    None,
-    ApplyContract,
-    RestorePrevious,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum UsbPdRestoreTrackingUpdate {
-    None,
-    ArmRestore,
-    ClearRestorePending,
-}
-
-pub(super) const fn usb_pd_input_limit_update(
-    contract_present: bool,
-    restore_pending: bool,
-    force_allow_charge: bool,
-    auto_force_charge: bool,
-    activation_pending: bool,
-) -> UsbPdInputLimitUpdate {
-    if contract_present {
-        UsbPdInputLimitUpdate::ApplyContract
-    } else if restore_pending && !force_allow_charge && !auto_force_charge && !activation_pending {
-        UsbPdInputLimitUpdate::RestorePrevious
-    } else {
-        UsbPdInputLimitUpdate::None
-    }
-}
-
-pub(super) const fn usb_pd_restore_tracking_update(
-    previous_contract_present: bool,
-    contract_present: bool,
-    attached: bool,
-    backup_present: bool,
-) -> UsbPdRestoreTrackingUpdate {
-    if previous_contract_present && !contract_present && backup_present {
-        UsbPdRestoreTrackingUpdate::ArmRestore
-    } else if contract_present {
-        UsbPdRestoreTrackingUpdate::ClearRestorePending
-    } else {
-        let _ = attached;
-        UsbPdRestoreTrackingUpdate::None
-    }
-}
-
-pub(super) const fn usb_pd_effective_input_current_limit_ma(
-    contract_iindpm_ma: Option<u16>,
-    activation_iindpm_cap_ma: Option<u16>,
-) -> Option<u16> {
-    match (contract_iindpm_ma, activation_iindpm_cap_ma) {
-        (Some(contract_iindpm_ma), Some(cap_ma)) => Some(if contract_iindpm_ma < cap_ma {
-            contract_iindpm_ma
-        } else {
-            cap_ma
-        }),
-        (Some(contract_iindpm_ma), None) => Some(contract_iindpm_ma),
-        (None, _) => None,
-    }
->>>>>>> 1b062d5 (fix(power): harden usb pd sink regressions)
-}
 
 fn charge_policy_channel_enabled(
     snapshot_enabled: Option<bool>,
@@ -1313,7 +1222,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn manual_stop_hold_blocks_only_plain_charge_policy() {
         assert!(manual_charge_stop_hold_blocks_charge(true, false, false));
     }
@@ -1380,7 +1288,9 @@ mod tests {
             false,
             true
         ));
-=======
+    }
+
+    #[test]
     fn usb_pd_restore_vindpm_tracks_bq25792_por_detection_margin() {
         assert_eq!(usb_pd_restore_vindpm_mv(Some(5_000)), 4_300);
         assert_eq!(usb_pd_restore_vindpm_mv(Some(20_000)), 18_600);
@@ -1417,6 +1327,14 @@ mod tests {
         assert!(usb_pd_charging_enabled(Some(true), false, false));
         assert!(usb_pd_charging_enabled(None, true, true));
         assert!(!usb_pd_charging_enabled(None, true, false));
+    }
+
+    #[test]
+    fn usb_pd_charge_gate_only_blocks_live_usbc_transients() {
+        assert!(!usb_pd_charge_gate_ready(true, true, false));
+        assert!(usb_pd_charge_gate_ready(true, true, true));
+        assert!(usb_pd_charge_gate_ready(true, false, false));
+        assert!(usb_pd_charge_gate_ready(false, true, false));
     }
 
     #[test]
@@ -1500,7 +1418,6 @@ mod tests {
             usb_pd_effective_input_current_limit_ma(Some(2_000), None),
             Some(2_000)
         );
->>>>>>> 1b062d5 (fix(power): harden usb pd sink regressions)
     }
 
     #[test]

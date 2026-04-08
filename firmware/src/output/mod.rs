@@ -3437,9 +3437,10 @@ where
         let previous_state = self.usb_pd_state;
         if previous_state != state {
             defmt::info!(
-                "usb_pd: state attached={=bool} ready={=bool} vbus_present={=?} contract_mv={=?} contract_ma={=?} unsafe={=bool}",
+                "usb_pd: state attached={=bool} ready={=bool} charge_ready={=bool} vbus_present={=?} contract_mv={=?} contract_ma={=?} unsafe={=bool}",
                 state.attached,
                 state.controller_ready,
+                state.charge_ready,
                 state.vbus_present,
                 state.contract.map(|contract| contract.voltage_mv),
                 state.contract.map(|contract| contract.current_ma),
@@ -8063,10 +8064,17 @@ where
             raw_ibus_adc_ma,
         );
         self.usb_pd_vac1_mv = adc_ready.then_some(raw_vac1_adc_mv).flatten();
+        let usb_c_path_present =
+            ac1_present || matches!(self.usb_pd_state.vbus_present, Some(true));
         let usb_pd_unsafe_latched = usb_pd_runtime_unsafe_source_latched(
             self.usb_pd_state.unsafe_source_latched,
-            ac1_present || matches!(self.usb_pd_state.vbus_present, Some(true)),
+            usb_c_path_present,
             self.usb_pd_vac1_mv,
+        );
+        let usb_pd_charge_gate_ready = usb_pd_charge_gate_ready(
+            self.usb_pd_state.enabled,
+            usb_c_path_present,
+            self.usb_pd_state.charge_ready,
         );
         let ibat_adc_ma = adc_ready.then_some(raw_ibat_adc_ma).flatten();
         self.maybe_log_charger_input_power_anomaly(
@@ -8141,14 +8149,16 @@ where
         let normal_allow_charge =
             charge_policy_decision.map_or(false, |decision| decision.allow_charge);
         let force_allow_charge = (activation_force_charge || auto_force_charge) && can_enable;
-        let mut allow_charge = if usb_pd_unsafe_latched || activation_force_charge_off {
-            false
-        } else {
-            (normal_allow_charge && self.cfg.charger_enabled)
-                || activation_normal_hold_charge
-                || boot_diag_hold_charge
-                || force_allow_charge
-        };
+        let mut allow_charge =
+            if usb_pd_unsafe_latched || activation_force_charge_off || !usb_pd_charge_gate_ready {
+                false
+            } else {
+                (normal_allow_charge && self.cfg.charger_enabled)
+                    || activation_normal_hold_charge
+                    || boot_diag_hold_charge
+                    || force_allow_charge
+            };
+
         let policy_state = charge_policy_decision.map(|decision| decision.state);
         let mut policy_target_ichg_ma =
             charge_policy_decision.and_then(|decision| decision.target_ichg_ma);
@@ -8158,6 +8168,8 @@ where
             charge_policy_decision.and_then(|decision| decision.output_block_reason);
         let mut policy_status_text = if usb_pd_unsafe_latched {
             "FAULT"
+        } else if !usb_pd_charge_gate_ready {
+            "WAIT"
         } else if force_allow_charge {
             "WAKE"
         } else if activation_force_charge_off {
@@ -8171,6 +8183,8 @@ where
         };
         let mut policy_notice_text = if usb_pd_unsafe_latched {
             "unsafe_source_latched"
+        } else if !usb_pd_charge_gate_ready {
+            "usb_pd_wait_stable_input"
         } else if force_allow_charge {
             "activation_force_charge"
         } else if activation_force_charge_off {

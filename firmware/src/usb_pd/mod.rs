@@ -15,6 +15,8 @@ const SOURCE_CAPS_WAIT_TIMEOUT_MS: u32 = 3_000;
 const SOURCE_CAPS_REQUERY_DELAY_MS: u32 = 1_000;
 const VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const CHARGER_VBUS_PRESENT_THRESHOLD_MV: u16 = 4_500;
+const CONTRACT_CHARGE_READY_DELAY_MS: u32 = 350;
+const DEFAULT_5V_CHARGE_READY_DELAY_MS: u32 = 500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContractKind {
@@ -38,6 +40,7 @@ pub struct UsbPdPortState {
     pub enabled: bool,
     pub controller_ready: bool,
     pub attached: bool,
+    pub charge_ready: bool,
     pub vbus_present: Option<bool>,
     pub polarity: Option<CcPolarity>,
     pub contract: Option<ActiveContract>,
@@ -80,6 +83,7 @@ pub struct UsbPdSinkManager<I2C> {
     contract_tracker: ContractTracker<ActiveContract>,
     consecutive_vbus_absent_polls: u8,
     unsafe_hard_reset_sent: bool,
+    charge_ready_at_ms: Option<u32>,
 }
 
 fn polarity_name(polarity: CcPolarity) -> &'static str {
@@ -248,6 +252,7 @@ where
             contract_tracker: ContractTracker::default(),
             consecutive_vbus_absent_polls: 0,
             unsafe_hard_reset_sent: false,
+            charge_ready_at_ms: None,
         }
     }
 
@@ -405,6 +410,8 @@ where
         }
 
         self.maybe_recover_missing_source_caps(now_ms);
+        self.maybe_arm_default_5v_charge_ready(now_ms);
+        self.update_charge_ready_state(now_ms);
 
         self.state
     }
@@ -440,6 +447,22 @@ where
             );
         }
         self.source_caps_recovery_attempted = true;
+    }
+
+    fn maybe_arm_default_5v_charge_ready(&mut self, now_ms: u32) {
+        if !self.state.attached
+            || self.state.unsafe_source_latched
+            || self.state.contract.is_some()
+            || self.source_capabilities.is_some()
+            || self.contract_tracker.request_in_flight()
+            || !self.source_caps_recovery_attempted
+            || self.state.charge_ready
+            || self.charge_ready_at_ms.is_some()
+        {
+            return;
+        }
+
+        self.arm_charge_ready_after(now_ms, DEFAULT_5V_CHARGE_READY_DELAY_MS, "default_5v");
     }
 
     fn handle_irq_snapshot(
@@ -498,6 +521,7 @@ where
             self.consecutive_vbus_absent_polls = 0;
             self.clear_contract_tracking();
             self.source_capabilities = None;
+            self.disarm_charge_ready("attach");
             if let Err(err) = self.phy.enable_pd_receive(polarity, self.tx_spec_revision) {
                 warn!("usb_pd: enable rx failed err={}", fusb302_error_kind(&err));
                 self.initialized = false;
@@ -611,6 +635,7 @@ where
                         debug!("usb_pd: ignoring source caps because unsafe source is latched");
                         return;
                     }
+                    self.disarm_charge_ready("source_caps");
                     let Some(source_caps) = pd::SourceCapabilities::from_message(&message) else {
                         return;
                     };
@@ -688,6 +713,7 @@ where
             }
             Some(ControlMessageType::PsRdy) => {
                 if let Some(contract) = self.contract_tracker.commit_pending_contract() {
+                    let same_contract = self.state.contract == Some(contract);
                     self.state.contract = Some(contract);
                     info!(
                         "usb_pd: contract active kind={} voltage_mv={=u16} current_ma={=u16}",
@@ -695,6 +721,13 @@ where
                         contract.voltage_mv,
                         contract.current_ma
                     );
+                    if !same_contract || !self.state.charge_ready {
+                        self.arm_charge_ready_after(
+                            now_ms,
+                            CONTRACT_CHARGE_READY_DELAY_MS,
+                            "contract_ps_rdy",
+                        );
+                    }
                 }
             }
             Some(ControlMessageType::Reject) | Some(ControlMessageType::Wait) => {
@@ -734,6 +767,9 @@ where
             plan.contract.voltage_mv,
             plan.contract.current_ma
         );
+        if self.state.contract != Some(plan.contract) {
+            self.disarm_charge_ready("request_transition");
+        }
         self.phy.send_message(&message)?;
         self.contract_tracker.begin_request(plan.contract);
         self.last_request_at_ms = now_ms;
@@ -763,6 +799,43 @@ where
     fn clear_contract_tracking(&mut self) {
         self.contract_tracker.clear_all();
         self.state.contract = None;
+    }
+
+    fn arm_charge_ready_after(&mut self, now_ms: u32, delay_ms: u32, reason: &'static str) {
+        self.state.charge_ready = false;
+        self.charge_ready_at_ms = Some(now_ms.wrapping_add(delay_ms));
+        info!(
+            "usb_pd: charge gate arm reason={} delay_ms={=u32}",
+            reason, delay_ms
+        );
+    }
+
+    fn disarm_charge_ready(&mut self, reason: &'static str) {
+        if self.state.charge_ready || self.charge_ready_at_ms.is_some() {
+            info!("usb_pd: charge gate hold reason={}", reason);
+        }
+        self.state.charge_ready = false;
+        self.charge_ready_at_ms = None;
+    }
+
+    fn update_charge_ready_state(&mut self, now_ms: u32) {
+        let Some(ready_at_ms) = self.charge_ready_at_ms else {
+            return;
+        };
+        if !deadline_elapsed(now_ms, ready_at_ms) {
+            return;
+        }
+
+        self.charge_ready_at_ms = None;
+        self.state.charge_ready = true;
+        info!(
+            "usb_pd: charge gate ready kind={} contract_mv={=?}",
+            self.state
+                .contract
+                .map(|contract| contract_kind_name(contract.kind))
+                .unwrap_or("default_5v"),
+            self.state.contract.map(|contract| contract.voltage_mv)
+        );
     }
 
     fn observe_peer_spec_revision(&mut self, spec_revision: SpecRevision, context: &'static str) {
@@ -795,6 +868,7 @@ where
 
     fn reset_contract_state(&mut self, detach: bool) {
         self.clear_contract_tracking();
+        self.disarm_charge_ready(if detach { "detach" } else { "reset" });
         self.source_capabilities = None;
         self.message_id = 0;
         self.consecutive_vbus_absent_polls = 0;
@@ -811,6 +885,10 @@ where
             self.unsafe_hard_reset_sent = false;
         }
     }
+}
+
+const fn deadline_elapsed(now_ms: u32, deadline_ms: u32) -> bool {
+    now_ms.wrapping_sub(deadline_ms) < 0x8000_0000
 }
 
 #[cfg(test)]
@@ -836,5 +914,12 @@ mod tests {
         assert!(detach_debounce_elapsed(second));
 
         assert_eq!(next_vbus_absent_polls(second, true), 0);
+    }
+
+    #[test]
+    fn deadline_elapsed_uses_wrap_safe_half_range_compare() {
+        assert!(!deadline_elapsed(100, 200));
+        assert!(deadline_elapsed(200, 200));
+        assert!(deadline_elapsed(250, 200));
     }
 }
