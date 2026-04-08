@@ -28,12 +28,13 @@ impl SpecRevision {
     }
 }
 
-pub const FUSB302_MAX_SPEC_REVISION: SpecRevision = SpecRevision::Rev20;
+pub const FUSB302_MAX_SPEC_REVISION: SpecRevision = SpecRevision::Rev30;
 
 pub const fn clamp_fusb302_spec_revision(spec_revision: SpecRevision) -> SpecRevision {
     match spec_revision {
         SpecRevision::Rev10 => SpecRevision::Rev10,
-        SpecRevision::Rev20 | SpecRevision::Rev30 => FUSB302_MAX_SPEC_REVISION,
+        SpecRevision::Rev20 => SpecRevision::Rev20,
+        SpecRevision::Rev30 => FUSB302_MAX_SPEC_REVISION,
     }
 }
 
@@ -44,6 +45,7 @@ pub enum ControlMessageType {
     Accept = 3,
     Reject = 4,
     PsRdy = 6,
+    GetSourceCap = 7,
     Wait = 12,
     SoftReset = 13,
 }
@@ -55,6 +57,7 @@ impl ControlMessageType {
             3 => Some(Self::Accept),
             4 => Some(Self::Reject),
             6 => Some(Self::PsRdy),
+            7 => Some(Self::GetSourceCap),
             12 => Some(Self::Wait),
             13 => Some(Self::SoftReset),
             _ => None,
@@ -463,7 +466,7 @@ mod tests {
     }
 
     #[test]
-    fn clamps_fusb302_revision_to_pd20() {
+    fn clamps_fusb302_revision_to_supported_revision() {
         assert_eq!(
             clamp_fusb302_spec_revision(SpecRevision::Rev10),
             SpecRevision::Rev10
@@ -474,7 +477,7 @@ mod tests {
         );
         assert_eq!(
             clamp_fusb302_spec_revision(SpecRevision::Rev30),
-            SpecRevision::Rev20
+            SpecRevision::Rev30
         );
     }
 }

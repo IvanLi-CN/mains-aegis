@@ -385,6 +385,10 @@ where
         Ok(())
     }
 
+    pub fn read_switches1(&mut self) -> Result<u8, Error> {
+        self.read_reg(reg::SWITCHES1).map_err(Error::from)
+    }
+
     pub fn flush_rx(&mut self) -> Result<(), Error> {
         self.write_reg(reg::CONTROL1, control1::RX_FLUSH)?;
         Ok(())

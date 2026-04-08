@@ -10,6 +10,7 @@ pub const BQ25792_VSYSMIN_MV: u16 = 12_000;
 pub const PPS_HEADROOM_MV: u16 = 600;
 pub const PPS_REREQUEST_HYSTERESIS_MV: u16 = 100;
 pub const PPS_REREQUEST_MIN_INTERVAL_MS: u32 = 2_000;
+pub const PPS_KEEPALIVE_INTERVAL_MS: u32 = 5_000;
 const VINDPM_MARGIN_MV: u16 = 1_000;
 const PPS_MIN_REQUEST_MV: u16 = 5_000;
 const PPS_MAX_REQUEST_MV: u16 = MAX_SAFE_PD_VOLTAGE_MV;
@@ -355,6 +356,9 @@ pub fn should_refresh_pps_contract(
     if now_ms.wrapping_sub(last_request_at_ms) < PPS_REREQUEST_MIN_INTERVAL_MS {
         return false;
     }
+    if now_ms.wrapping_sub(last_request_at_ms) >= PPS_KEEPALIVE_INTERVAL_MS {
+        return true;
+    }
 
     current_contract
         .voltage_mv
@@ -694,6 +698,7 @@ mod tests {
         };
         assert!(!should_refresh_pps_contract(current, next, 3_500, 2_000));
         assert!(should_refresh_pps_contract(current, next, 4_500, 2_000));
+        assert!(should_refresh_pps_contract(current, current, 7_100, 2_000));
     }
 
     #[test]
