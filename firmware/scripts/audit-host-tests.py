@@ -18,6 +18,10 @@ ALLOWED = {
     "output_state.rs",
     "runtime_audio_recovery.rs",
     "tmp112.rs",
+    "usb_pd/contract_tracker.rs",
+    "usb_pd/mod.rs",
+    "usb_pd/pd.rs",
+    "usb_pd/sink_policy.rs",
 }
 
 failures = []
