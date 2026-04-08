@@ -1,26 +1,24 @@
 ---
 title: 固件烧录与首次自检
-description: 固件工具链、烧录入口与首次上电时应关注的现象。
+description: 固件环境、构建口径、烧录流程与首次上电观测点。
 ---
 
 # 固件烧录与首次自检
 
-当板级检查没有明显问题后，下一步才是固件烧录与首次 bring-up。当前仓库已经提供了相对明确的固件入口，你不需要自己从零搭骨架。
+## 1. 推荐工作流
 
-## 工具链入口
+本项目默认的人类开发者入口是 `mcu-agentd`。原因很简单：它把端口选择、烧录和 `defmt` 日志解码收拢成了一条稳定路径。
 
-当前固件 README 里已经给出了标准起步路径：
+环境准备：
 
-- 安装 `espup`
-- 准备 Rust toolchain
-- 确认 `mcu-agentd` 可用
-- 进入 `firmware/` 目录执行构建
+```bash
+cargo install espup
+espup install
+source ~/export-esp.sh
+mcu-agentd --version
+```
 
-如果你是第一次接触这个仓库，请直接以 `firmware/README.md` 作为事实源，不要自己发明另一套烧录流程。
-
-## 主固件常用构建入口
-
-仓库当前已经明确了这几个典型构建口径：
+## 2. 构建口径
 
 ```bash
 cd firmware
@@ -28,14 +26,17 @@ cargo build --release --bin esp-firmware
 cargo build --release --bin esp-firmware --features main-vout-19v
 ```
 
-一般可以把它理解为：
+| 构建方式 | 用途 |
+| --- | --- |
+| 默认无 feature | 主输出按 `12V` 口径构建 |
+| `main-vout-19v` | 主输出改成 `19V` |
+| `force-min-charge` | 诊断阶段最小电流强制充电唤醒 |
+| `bms-dual-probe-diag` | 仅用于 BMS 地址诊断 |
+| `tmp-hw-protect-test` | TMP 硬件保护测试 |
 
-- 默认构建：主输出按 `12V` 方向
-- 开启 `main-vout-19v`：切到 `19V` 方向
+`12V` 和 `19V` 是两套 bring-up 口径，烧录前先确认自己要验证哪一套。
 
-## 烧录与日志观察
-
-仓库当前推荐的人类开发者入口是 `mcu-agentd`，典型流程如下：
+## 3. 烧录与串口日志
 
 ```bash
 mcu-agentd selector get esp
@@ -43,42 +44,74 @@ mcu-agentd flash esp
 mcu-agentd monitor esp --reset
 ```
 
-这里最重要的是：**先能稳定烧录，再能稳定看到日志。** 如果你连串口日志都拿不到，先不要急着追 UI 现象。
+最低要求只有三条：
 
-## 首次上电应该关注什么
+1. 构建成功
+2. 烧录成功
+3. 串口日志持续稳定输出
 
-### 1. 固件是否正常启动
+## 4. 首次上电时应该看到什么
 
-至少应先确认：
+### 4.1 固件侧
 
-- 构建成功
-- 烧录成功
-- `monitor` 能看到稳定输出
+- MCU 正常启动
+- 自检流程开始执行
+- 日志里能看到 `INA3221`、`TMP112A`、`BQ40Z50`、`BQ25792`、`TPS55288` 的探测结果
 
-### 2. 前面板是否进入自检路径
+### 4.2 前面板侧
 
-当前仓库的运行时 UI 并不是上电直接展示一个静态首页，而是会经过自检逻辑。你第一次 bring-up 时，要重点关注：
+- 屏幕点亮
+- 页面进入 `SELF CHECK`
+- 模块卡片从 `PEND` 逐步转成 `OK / WARN / ERR / HOLD / N/A`
 
-- 屏幕是否点亮
-- 是否进入 `SELF CHECK`
-- 哪些模块通过、哪些模块卡住
+参考画面：
 
-### 3. 自检停住时怎么理解
+![首次上电时的 Self-check 参考画面](/ui/self-check-c-standby-idle.png)
 
-自检停在某一状态，不一定表示“前面板坏了”。更常见的原因是：
+![BMS 缺失时的 Self-check 参考画面](/ui/self-check-c-bms-missing-tps-warn.png)
 
-- 某个电源/BMS 模块没通过门控
-- 屏幕或触摸链路未初始化成功
-- 板级连接或总线有问题
+读图提醒：
 
-因此第一次 bring-up 不要只盯着“UI 像不像”，还要结合日志和模块状态一起看。
+- 第一张更接近“链路已经打通”的 bring-up 目标。
+- 第二张更接近“上游门控未满足”的状态；此时应先追 `BQ40Z50` 和授权链，而不是先怀疑 `TPS55288` 硬件本体。
 
-## 推荐的 bring-up 心态
+### 4.3 输出侧
 
-先追求“能构建、能烧录、能看日志、能进入自检”，再追求“全部模块都通过”。对于一个仍在演进的开源硬件项目，这是更现实也更高效的路径。
+- `BQ40Z50` 缺失或放电未授权时，`TPS55288` 停在 `HOLD` 是正常现象
+- `THERM_KILL_N=0` 或 `TPS` 保护位命中时，固件允许进入 emergency-stop
 
-## 延伸阅读
+## 5. 自检时优先观察的模块
+
+| 模块 | 为什么先看 |
+| --- | --- |
+| `TCA6408A` | 屏幕、触摸和方向键都依赖它的可达性 |
+| `BQ40Z50` | 决定放电授权；不通时输出一定被门控 |
+| `BQ25792` | 决定输入路径和充电链路是否成立 |
+| `TPS55288-A/B` | 决定主输出路径是否能建立 |
+| `INA3221 / TMP112A` | 决定遥测和热保护是否可见 |
+
+## 6. 常见现象与第一检查项
+
+| 现象 | 先查什么 |
+| --- | --- |
+| 烧录成功但屏幕不亮 | `BLK`、`TCA_RESET#`、`CS/RES/TP_RESET`、SPI |
+| 自检卡在前面板相关模块 | `TCA6408A@0x21`、`I2C2_*`、`CTP_IRQ` |
+| 自检卡在 `BQ40Z50` | `I2C1`、抽头、`BMS_BTP_INT_H` |
+| `TPS55288` 一直 `HOLD` | 先确认 `BQ40Z50` 是否在线且放电已授权 |
+| 日志连续 `i2c_nack` / `i2c_timeout` | 查总线、上拉、焊接、供电 |
+
+## 7. Bring-up 通过标准
+
+首次 bring-up 通过，不要求“所有卡片全绿”；要求的是：
+
+- 能稳定烧录
+- 能稳定看日志
+- 能进入 `SELF CHECK`
+- 能解释当前卡住的是哪个模块、为什么卡住
+
+## 8. 相关文档
 
 - [固件 bring-up README](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/README.md)
 - [开机自检流程](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/boot-self-test-flow.md)
 - [前面板与固件](/design/front-panel-and-firmware)
+- [Self-check UI 设计](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/self-check-design.md)
