@@ -20,8 +20,8 @@
 - 为主固件新增 `net_http` feature-gated 网络底座，默认构建行为保持不变。
 - 首版支持编译期 STA WiFi、DHCP/静态 IPv4、mDNS `.local` 主机名、DNS-SD 服务发现、HTTP 只读 API 与 `/api/v1/status` SSE 状态流。
 - 冻结设备身份口径：`mains-aegis-<mac后三字节hex>` 作为 `device_id` 与 hostname 真相源。
-- 抽出稳定的 `UpsStatusSnapshot` 与 `NetworkUiSummary`，供 HTTP、SSE、前面板摘要与后续上层客户端复用。
-- 提供最小但稳定的 host-side 纯逻辑验证、固件构建验证与前面板视觉证据。
+- 抽出稳定的 `UpsStatusSnapshot` 与 `NetworkUiSummary`，供 HTTP、SSE 与后续上层客户端复用。
+- 提供最小但稳定的 host-side 纯逻辑验证与固件构建验证。
 
 ### Non-goals
 
@@ -37,9 +37,8 @@
 - `firmware/build.rs` 与 `firmware/build_support/wifi_env.rs`：编译期 `MAINS_AEGIS_WIFI_*` 注入与 `net_http` 配置校验。
 - `firmware/src/net.rs`：共享 WiFi 状态、联网任务、HTTP router、CORS/PNA、SSE 与只读 JSON API。
 - `firmware/src/mdns.rs` / `firmware/src/mdns_wire.rs`：mDNS A/PTR/SRV/TXT 响应与 DNS-SD 广播。
-- `firmware/src/net_types.rs` / `firmware/src/net_contract.rs` / `firmware/src/net_bridge.rs`：只读状态模型、JSON/SSE 渲染契约、前面板桥接。
+- `firmware/src/net_types.rs` / `firmware/src/net_contract.rs` / `firmware/src/net_bridge.rs`：只读状态模型、JSON/SSE 渲染契约与主循环状态桥接。
 - `firmware/src/main.rs`：主入口拆分为默认阻塞式与 `net_http` 下 `esp_rtos + embassy` 异步入口。
-- `firmware/src/front_panel_scene.rs` 与 `tools/front-panel-preview/`：前面板网络摘要显示与四态预览图。
 - `firmware/host-unit-tests/`：env 解析、mDNS 编解码、HTTP 契约与桥接逻辑测试。
 
 ### Out of scope
@@ -47,6 +46,7 @@
 - 电脑侧 UPS companion、浏览器 UI、用户账号、鉴权、设备绑定模型。
 - 多设备目录、远程配置同步、历史采样、持久化存储或告警订阅。
 - HTTPS/TLS、身份认证、跨网段发现、IPv6、NTP、OTA。
+- 自检页面的文案、布局、状态摘要或其它可见 UI 改动。
 
 ## 需求（Requirements）
 
@@ -58,15 +58,14 @@
 - mDNS 必须发布 `.local` A 记录与 `_mains-aegis-ups._tcp.local` 服务；TXT 至少包含 `device_id`、`api_version`、`role=ups`。
 - HTTP 公开契约固定为：`GET /api/v1/ping`、`GET /health`、`GET /api/v1/identity`、`GET /api/v1/network`、`GET /api/v1/status`，以及同一路径在 `Accept: text/event-stream` 下的 SSE。
 - JSON 字段统一使用 `snake_case`；错误响应统一为 `{ "error": { code, message, retryable, details } }`。
-- `PSK` 不得出现在 API、前面板或日志里。
-- 前面板首版只显示网络摘要，不新增完整网络设置页。
+- `PSK` 不得出现在 API 或日志里。
 
 ### SHOULD
 
 - WiFi 连接失败、DHCP 超时、链路丢失、静态地址配置异常都应映射到可观测的 `state` / `last_error`。
 - HTTP 层应统一支持 `/api/v1/*` 的 `OPTIONS` 预检和 CORS/PNA 头，为后续 Web/桌面端接入保留兼容壳层。
 - SSE 至少输出 `status` 与 `heartbeat` 事件，并让浏览器 `EventSource` 与 `curl` 都能消费。
-- 主固件和前面板摘要应共享同一份 `NetworkUiSummary`，避免 UI 与 API 口径漂移。
+- 主固件网络状态与 HTTP / SSE 契约应共享同一份 `NetworkUiSummary` 真相源。
 
 ### COULD
 
@@ -81,8 +80,7 @@
 - WiFi 任务在 `Connecting -> Connected/Error` 之间循环，支持 DHCP 与静态 IPv4；连接成功后刷新 `WifiSnapshot`，断链后带退避重试并更新 `last_error`。
 - mDNS 任务在 IPv4 就绪后加入 `224.0.0.251:5353` 组播，发送 unsolicited announce，并对匹配的 hostname/service 查询返回 A/PTR/SRV/TXT 响应。
 - HTTP 任务监听 `:80`，对外暴露 ping/health、identity、network、status 与 SSE；`/api/v1/status` 在 `Accept: text/event-stream` 下切换为长连接流。
-- 主循环每次拿到新的 `SelfCheckUiSnapshot` 时，都通过桥接层同步 `NetworkUiSummary` 与 `UpsStatusSnapshot`，让 API 和前面板复用同一份运行态快照。
-- 前面板 Variant C 顶栏 subtitle 根据网络状态显示 `WIFI OFF / WIFI CONNECTING / IP a.b.c.d / WIFI RETRY <hint>`。
+- 主循环每次拿到新的 `SelfCheckUiSnapshot` 时，都通过桥接层提炼 `UpsStatusSnapshot`，同时把当前网络状态合并进只读 API / SSE 快照。
 
 ### Edge cases / errors
 
@@ -116,15 +114,14 @@
 - Given 设备获得 IPv4 地址，When 局域网内执行 mDNS / DNS-SD 查询，Then 能解析 `mains-aegis-<short_id>.local` 且能发现 `_mains-aegis-ups._tcp.local:80`。
 - Given 请求 `/api/v1/identity`、`/api/v1/network`、`/api/v1/status`，When 固件返回 JSON，Then 字段为 `snake_case`，且不包含 `PSK`。
 - Given `GET /api/v1/status` 且 `Accept: text/event-stream`，When 连接建立，Then 固件连续输出 `status` 与周期性 `heartbeat` 事件。
-- Given 前面板预览场景 `wifi_disabled / connecting / connected / error`，When 渲染 PNG，Then 顶栏网络摘要分别反映四种状态并写回当前规格的 `## Visual Evidence`。
-- Given host-side 纯逻辑测试与构建验证执行完成，When 快车道收口，Then 规格、契约、代码、预览图与 PR 证据齐全，并停在 merge-ready 而非自动合并。
+- Given host-side 纯逻辑测试与构建验证执行完成，When 快车道收口，Then 规格、契约、代码与 PR 证据齐全，并停在 merge-ready 而非自动合并。
 
 ## 实现前置条件（Definition of Ready / Preconditions）
 
 - 设备标识、服务名、API 版本、错误 envelope 与 SSE 口径已冻结。
 - 首版 scope 已明确为“UPS 本机只读能力”，不包含 host 注册和写接口。
 - `net_http` 继续作为 feature gate，而不是默认强制依赖。
-- 前面板只新增网络摘要，不扩展到设置页。
+- 当前 PR 不修改任何自检页面可见 UI。
 
 ## 非功能性验收 / 质量门槛（Quality Gates）
 
@@ -136,8 +133,7 @@
 
 ### UI / Storybook (if applicable)
 
-- Storybook覆盖：不适用（固件前面板预览）
-- Visual regression / preview：`tools/front-panel-preview` 渲染四张 WiFi 自检图
+- Storybook覆盖：不适用（非 Web UI，且当前 PR 不改自检页面）
 
 ### Quality checks
 
@@ -158,21 +154,7 @@
 
 ## Visual Evidence
 
-WiFi disabled
-
-![WiFi disabled](./assets/self-check-wifi-disabled.png)
-
-WiFi connecting
-
-![WiFi connecting](./assets/self-check-wifi-connecting.png)
-
-WiFi connected
-
-![WiFi connected](./assets/self-check-wifi-connected.png)
-
-WiFi error
-
-![WiFi error](./assets/self-check-wifi-error.png)
+本轮不适用：按主人要求，不修改自检页面。
 
 ## 资产晋升（Asset promotion）
 
@@ -182,13 +164,13 @@ None。
 
 - [x] M1: 新增 `net_http` feature、编译期 WiFi env 注入与 feature-gated 主入口
 - [x] M2: 实现共享网络状态模型、WiFi 连接任务、mDNS / DNS-SD 与只读 HTTP/SSE 底座
-- [x] M3: 抽出 `UpsStatusSnapshot` / `NetworkUiSummary`，补齐 host-side 契约测试并接入前面板网络摘要
-- [x] M4: 渲染并落盘 WiFi 四态视觉证据，同步回当前规格
+- [x] M3: 抽出 `UpsStatusSnapshot` / `NetworkUiSummary`，补齐 host-side 契约测试并接入只读 API / SSE 桥接
+- [x] M4: 视觉证据不适用（按主人要求，不修改自检页面）
 - [ ] M5: 完成 fast-track 提交、push、PR 与 review-loop 收敛到 merge-ready
 
 ## 方案概述（Approach, high-level）
 
-- 沿用 `loadlynx` 的 `esp-radio + esp-rtos + embassy-net` 技术路线，但把身份、HTTP 契约和前面板网络摘要收拢为 `mains-aegis` 自己的只读 `UPS SoT`。
+- 沿用 `loadlynx` 的 `esp-radio + esp-rtos + embassy-net` 技术路线，但把身份与 HTTP 契约收拢为 `mains-aegis` 自己的只读 `UPS SoT`。
 - 用 `net_bridge` 把现有 `SelfCheckUiSnapshot` 转为网络/API 可消费的稳定快照，避免把前面板内部结构直接暴露给外部契约。
 - 把高变化、与编译期注入相关的 WiFi 配置限定在 build script 与 feature gate 内，避免污染默认构建。
 - 把外部可见协议冻结在 `v1`，未来扩展通过新增字段或新版本进行，而不是在 `v1` 上无序漂移。
