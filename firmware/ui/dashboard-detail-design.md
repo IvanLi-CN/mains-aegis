@@ -7,19 +7,21 @@
 - 首页基线：`dashboard-design.md`
 - 视觉规范：`design-language.md`
 - 组件契约：`component-contracts.md`
+- 触摸热区约束：`touch-targets.md`
 - 分辨率：`320x172`
 
 ## 2. 首页入口映射
 
 | 首页区域 | 几何（px） | 进入页面 |
 | --- | --- | --- |
+| 头部 `WiFi` 入口 | `x=118 y=0 w=32 h=22` | `Wifi` |
 | 主 KPI 面板 | `x=6 y=22 w=196 h=52` | `Output` |
 | 次级信息面板 | `x=6 y=76 w=196 h=94` | `Thermal` |
 | `BATTERY` | `x=206 y=22 w=108 h=48` | `Cells` |
 | `CHARGE` | `x=206 y=72 w=108 h=48` | `Charger` |
 | `DISCHG` | `x=206 y=122 w=108 h=48` | `Battery Flow` |
 
-首页只加轻量可点语义，不改模块主信息架构。
+首页只加轻量可点语义，不改模块主信息架构。`WiFi` 入口是唯一一个“视觉图标小于实际热区”的控件。
 
 ## 3. 详情页通用骨架
 
@@ -113,6 +115,17 @@
 - 次区：TMP / board / battery / fan PWM / tach
 - 底栏：thermal protection hint
 
+### `Wifi`
+
+- 顶栏标题：`WIFI DETAIL`
+- 状态 chip：`OFF / JOIN / READY / FAULT`
+- 主区：标题下方摘要行，显示 `IP` 或网络状态摘要
+- 次区：双列信息卡
+  - 左列 `NETWORK`：`IPV4 / GATE / DNS / CFG`
+  - 右列 `RADIO`：`STATE / RSSI / ERROR / MAC`
+- `NETWORK` 列优先保证 IPv4 文本可读性；长 IP 不得压进右列卡片边界
+- 入口来自首页标题右侧 `WiFi` 图标热区，而不是右侧三张状态卡
+
 ## 5. 视觉方向
 
 - 保持 `Variant B` 的深色工业底板与橙色强调色。
@@ -128,6 +141,9 @@
 ![Dashboard Detail - Output](assets/dashboard-b-detail-output.png)
 ![Dashboard Detail - Charger](assets/dashboard-b-detail-charger.png)
 ![Dashboard Detail - Thermal](assets/dashboard-b-detail-thermal.png)
+![Dashboard Detail - Wifi](assets/dashboard-b-detail-wifi.png)
+![Dashboard Detail - Wifi Long IP](assets/dashboard-b-detail-wifi-long-ip.png)
+![Dashboard Detail - Wifi Disabled](assets/dashboard-b-detail-wifi-disabled.png)
 ![Dashboard Detail - Icons](assets/dashboard-detail-icons.png)
 
 ## 7. Manual charge 冻结渲染图

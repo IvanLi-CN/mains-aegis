@@ -5,6 +5,7 @@ use embedded_graphics_core::{
     prelude::RawData,
     Pixel,
 };
+use esp_firmware::net_types::{WifiConnectionState, WifiSnapshot};
 use esp_firmware::output_state::{EnabledOutputs, OutputGateReason, OutputSelector};
 use u8g2_fonts::{
     fonts,
@@ -172,6 +173,7 @@ pub enum DashboardDetailPage {
     Output,
     Charger,
     Thermal,
+    Wifi,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -341,6 +343,7 @@ pub enum DashboardRoute {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DashboardTouchTarget {
+    HomeWifi,
     HomeOutput,
     HomeThermal,
     HomeCells,
@@ -469,6 +472,7 @@ pub struct DashboardDetailSnapshot {
     pub output_notice: Option<&'static str>,
     pub charger_notice: Option<&'static str>,
     pub thermal_notice: Option<&'static str>,
+    pub wifi: WifiSnapshot,
 }
 
 impl DashboardDetailSnapshot {
@@ -520,6 +524,7 @@ impl DashboardDetailSnapshot {
             output_notice: None,
             charger_notice: None,
             thermal_notice: None,
+            wifi: WifiSnapshot::disabled(),
         }
     }
 }
@@ -819,6 +824,15 @@ const DASHBOARD_HOME_OUTPUT_X: u16 = 6;
 const DASHBOARD_HOME_OUTPUT_Y: u16 = 22;
 const DASHBOARD_HOME_OUTPUT_W: u16 = 196;
 const DASHBOARD_HOME_OUTPUT_H: u16 = 52;
+
+const DASHBOARD_HOME_WIFI_ICON_X: u16 = 128;
+const DASHBOARD_HOME_WIFI_ICON_Y: u16 = 2;
+const DASHBOARD_HOME_WIFI_ICON_W: u16 = 18;
+const DASHBOARD_HOME_WIFI_ICON_H: u16 = 14;
+const DASHBOARD_HOME_WIFI_TOUCH_X: u16 = 118;
+const DASHBOARD_HOME_WIFI_TOUCH_Y: u16 = 0;
+const DASHBOARD_HOME_WIFI_TOUCH_W: u16 = 32;
+const DASHBOARD_HOME_WIFI_TOUCH_H: u16 = 22;
 
 const DASHBOARD_HOME_THERMAL_X: u16 = 6;
 const DASHBOARD_HOME_THERMAL_Y: u16 = 76;
@@ -1292,6 +1306,15 @@ pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<Dashb
             if contains(
                 x,
                 y,
+                DASHBOARD_HOME_WIFI_TOUCH_X,
+                DASHBOARD_HOME_WIFI_TOUCH_Y,
+                DASHBOARD_HOME_WIFI_TOUCH_W,
+                DASHBOARD_HOME_WIFI_TOUCH_H,
+            ) {
+                Some(DashboardTouchTarget::HomeWifi)
+            } else if contains(
+                x,
+                y,
                 DASHBOARD_HOME_OUTPUT_X,
                 DASHBOARD_HOME_OUTPUT_Y,
                 DASHBOARD_HOME_OUTPUT_W,
@@ -1498,6 +1521,7 @@ pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<Dashb
 #[allow(dead_code)]
 pub const fn dashboard_route_for_target(target: DashboardTouchTarget) -> DashboardRoute {
     match target {
+        DashboardTouchTarget::HomeWifi => DashboardRoute::Detail(DashboardDetailPage::Wifi),
         DashboardTouchTarget::HomeOutput => DashboardRoute::Detail(DashboardDetailPage::Output),
         DashboardTouchTarget::HomeThermal => DashboardRoute::Detail(DashboardDetailPage::Thermal),
         DashboardTouchTarget::HomeCells => DashboardRoute::Detail(DashboardDetailPage::Cells),
@@ -2004,6 +2028,21 @@ impl DashboardLiveData {
                 .detail
                 .thermal_notice
                 .unwrap_or("DETAIL UI ONLY - FAN SOURCE PENDING"),
+            DashboardDetailPage::Wifi => match self.detail.wifi.state {
+                WifiConnectionState::Disabled | WifiConnectionState::Idle => "WIFI NOT ENABLED",
+                WifiConnectionState::Connecting => "JOINING ACCESS POINT",
+                WifiConnectionState::Connected => "LAN READY FOR API CLIENTS",
+                WifiConnectionState::Error => match self.detail.wifi.last_error {
+                    Some(error) => match error.ui_hint() {
+                        "STATIC CFG" => "CHECK STATIC IP SETTINGS",
+                        "JOIN FAIL" => "CHECK ACCESS POINT CREDENTIALS",
+                        "DHCP WAIT" => "CHECK DHCP SERVER AVAILABILITY",
+                        "LINK LOST" => "ACCESS POINT LINK LOST",
+                        _ => "CHECK WIFI STATUS",
+                    },
+                    None => "CHECK WIFI STATUS",
+                },
+            },
         }
     }
 
@@ -2703,6 +2742,101 @@ pub fn render_frame_with_dashboard_route_overlay<P: UiPainter>(
 }
 
 #[allow(dead_code)]
+pub fn render_dashboard_touch_regions_overlay<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    route: DashboardRoute,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+
+    match route {
+        DashboardRoute::Home => {
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                DASHBOARD_HOME_WIFI_TOUCH_X,
+                DASHBOARD_HOME_WIFI_TOUCH_Y,
+                DASHBOARD_HOME_WIFI_TOUCH_W,
+                DASHBOARD_HOME_WIFI_TOUCH_H,
+                "1",
+                palette.touch,
+                152,
+                2,
+            )?;
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                DASHBOARD_HOME_OUTPUT_X,
+                DASHBOARD_HOME_OUTPUT_Y,
+                DASHBOARD_HOME_OUTPUT_W,
+                DASHBOARD_HOME_OUTPUT_H,
+                "2",
+                palette.accent,
+                10,
+                24,
+            )?;
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                DASHBOARD_HOME_THERMAL_X,
+                DASHBOARD_HOME_THERMAL_Y,
+                DASHBOARD_HOME_THERMAL_W,
+                DASHBOARD_HOME_THERMAL_H,
+                "3",
+                palette.center,
+                10,
+                78,
+            )?;
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                DASHBOARD_HOME_CELLS_X,
+                DASHBOARD_HOME_CELLS_Y,
+                DASHBOARD_HOME_CELLS_W,
+                DASHBOARD_HOME_CELLS_H,
+                "4",
+                palette.left,
+                210,
+                24,
+            )?;
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                DASHBOARD_HOME_CHARGER_X,
+                DASHBOARD_HOME_CHARGER_Y,
+                DASHBOARD_HOME_CHARGER_W,
+                DASHBOARD_HOME_CHARGER_H,
+                "5",
+                palette.right,
+                210,
+                74,
+            )?;
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                DASHBOARD_HOME_BATTERY_FLOW_X,
+                DASHBOARD_HOME_BATTERY_FLOW_Y,
+                DASHBOARD_HOME_BATTERY_FLOW_W,
+                DASHBOARD_HOME_BATTERY_FLOW_H,
+                "6",
+                palette.down,
+                210,
+                124,
+            )?;
+        }
+        DashboardRoute::Detail(_) | DashboardRoute::ManualCharge => {}
+    }
+
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub fn render_tps_test_status<P: UiPainter>(
     painter: &mut P,
     model: &UiModel,
@@ -2887,6 +3021,7 @@ fn render_variant_b_demo<P: UiPainter>(
         mode_tag,
         mode_accent,
     )?;
+    draw_dashboard_home_wifi_icon(painter, palette, WifiSnapshot::disabled(), data.frame_no)?;
 
     draw_panel(painter, 6, 22, 196, 52, palette, true, mode_accent)?;
     if data.mains_present {
@@ -3409,6 +3544,7 @@ fn render_variant_b_live<P: UiPainter>(
         mode_tag,
         mode_accent,
     )?;
+    draw_dashboard_home_wifi_icon(painter, palette, data.detail.wifi, data.frame_no)?;
 
     draw_panel(painter, 6, 22, 196, 52, palette, true, mode_accent)?;
     if data.mains_present {
@@ -4059,6 +4195,7 @@ fn render_dashboard_detail_page<P: UiPainter>(
         DashboardDetailPage::Output => palette.accent,
         DashboardDetailPage::Charger => palette.right,
         DashboardDetailPage::Thermal => palette.center,
+        DashboardDetailPage::Wifi => dashboard_wifi_accent(palette, data.detail.wifi),
     };
     let status = detail_status_tag(page, data);
 
@@ -4093,9 +4230,32 @@ fn render_dashboard_detail_page<P: UiPainter>(
         return Ok(());
     }
 
+    let (left_panel_x, left_panel_w, right_panel_x, right_panel_w) = match page {
+        DashboardDetailPage::Wifi => (6, 172, 186, 128),
+        _ => (6, 150, 164, 150),
+    };
+
     draw_panel(painter, 6, 22, 308, 38, palette, true, accent)?;
-    draw_panel(painter, 6, 60, 150, 82, palette, false, accent)?;
-    draw_panel(painter, 164, 60, 150, 82, palette, false, accent)?;
+    draw_panel(
+        painter,
+        left_panel_x,
+        60,
+        left_panel_w,
+        82,
+        palette,
+        false,
+        accent,
+    )?;
+    draw_panel(
+        painter,
+        right_panel_x,
+        60,
+        right_panel_w,
+        82,
+        palette,
+        false,
+        accent,
+    )?;
     draw_panel(
         painter,
         6,
@@ -4124,6 +4284,7 @@ fn render_dashboard_detail_page<P: UiPainter>(
         DashboardDetailPage::Thermal => {
             render_dashboard_thermal_detail(painter, variant, palette, data)?
         }
+        DashboardDetailPage::Wifi => render_dashboard_wifi_detail(painter, variant, palette, data)?,
     }
 
     draw_dashboard_detail_footer_notice(painter, variant, palette, page, data)?;
@@ -6620,6 +6781,181 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
     Ok(())
 }
 
+fn render_dashboard_wifi_detail<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    const WIFI_DETAIL_LEFT_X: u16 = 14;
+    const WIFI_DETAIL_LEFT_W: u16 = 156;
+    const WIFI_DETAIL_RIGHT_X: u16 = 194;
+    const WIFI_DETAIL_RIGHT_W: u16 = 112;
+
+    let wifi = data.detail.wifi;
+    let status = wifi_detail_status_tag(wifi);
+    let summary_color = if status == "OFF" {
+        palette.text_dim
+    } else {
+        palette.bg
+    };
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "WIFI",
+        Point::new(14, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::NumBig,
+        status,
+        Point::new(214, 30),
+        HorizontalAlignment::Right,
+        summary_color,
+    )?;
+    draw_dashboard_wifi_icon_at(painter, 248, 28, 14, summary_color, wifi_icon_is_off(wifi))?;
+
+    match wifi.ipv4 {
+        Some([a, b, c, d]) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("IP {}.{}.{}.{}", a, b, c, d),
+            Point::new(308, 46),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+        None => text(
+            painter,
+            variant,
+            FontRole::DetailBody,
+            wifi_summary_line(wifi),
+            Point::new(308, 46),
+            HorizontalAlignment::Right,
+            palette.bg,
+        )?,
+    }
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "NETWORK",
+        Point::new(WIFI_DETAIL_LEFT_X as i32, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_ip_row(
+        painter,
+        variant,
+        palette,
+        WIFI_DETAIL_LEFT_X,
+        DETAIL_ROW_Y_1,
+        WIFI_DETAIL_LEFT_W,
+        "IPV4",
+        wifi.ipv4,
+    )?;
+    draw_detail_ip_row(
+        painter,
+        variant,
+        palette,
+        WIFI_DETAIL_LEFT_X,
+        DETAIL_ROW_Y_2,
+        WIFI_DETAIL_LEFT_W,
+        "GATE",
+        wifi.gateway,
+    )?;
+    draw_detail_ip_row(
+        painter,
+        variant,
+        palette,
+        WIFI_DETAIL_LEFT_X,
+        DETAIL_ROW_Y_3,
+        WIFI_DETAIL_LEFT_W,
+        "DNS",
+        wifi.dns,
+    )?;
+    draw_detail_text_row_with_width(
+        painter,
+        variant,
+        palette,
+        WIFI_DETAIL_LEFT_X,
+        DETAIL_ROW_Y_4,
+        WIFI_DETAIL_LEFT_W,
+        "CFG",
+        DetailTextValue::Static(
+            if matches!(
+                wifi.state,
+                WifiConnectionState::Disabled | WifiConnectionState::Idle
+            ) && wifi.ipv4.is_none()
+                && wifi.gateway.is_none()
+                && wifi.dns.is_none()
+            {
+                "N/A"
+            } else if wifi.is_static {
+                "STATIC"
+            } else {
+                "DHCP"
+            },
+        ),
+    )?;
+
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        "RADIO",
+        Point::new(WIFI_DETAIL_RIGHT_X as i32, 64),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_detail_text_row_with_width(
+        painter,
+        variant,
+        palette,
+        WIFI_DETAIL_RIGHT_X,
+        DETAIL_ROW_Y_1,
+        WIFI_DETAIL_RIGHT_W,
+        "STATE",
+        DetailTextValue::Static(wifi_state_label(wifi.state)),
+    )?;
+    draw_detail_rssi_row(
+        painter,
+        variant,
+        palette,
+        WIFI_DETAIL_RIGHT_X,
+        DETAIL_ROW_Y_2,
+        WIFI_DETAIL_RIGHT_W,
+        wifi.rssi_dbm,
+    )?;
+    draw_detail_text_row_with_width(
+        painter,
+        variant,
+        palette,
+        WIFI_DETAIL_RIGHT_X,
+        DETAIL_ROW_Y_3,
+        WIFI_DETAIL_RIGHT_W,
+        "ERROR",
+        DetailTextValue::Static(wifi_error_label(wifi)),
+    )?;
+    draw_detail_mac_tail_row(
+        painter,
+        variant,
+        palette,
+        WIFI_DETAIL_RIGHT_X,
+        DETAIL_ROW_Y_4,
+        WIFI_DETAIL_RIGHT_W,
+        wifi.mac,
+    )?;
+
+    Ok(())
+}
+
 fn detail_page_title(page: DashboardDetailPage) -> &'static str {
     match page {
         DashboardDetailPage::Cells => "CELL DETAIL",
@@ -6628,6 +6964,7 @@ fn detail_page_title(page: DashboardDetailPage) -> &'static str {
         DashboardDetailPage::Output => "OUTPUT DETAIL",
         DashboardDetailPage::Charger => "CHARGER DETAIL",
         DashboardDetailPage::Thermal => "THERMAL DETAIL",
+        DashboardDetailPage::Wifi => "WIFI DETAIL",
     }
 }
 
@@ -6749,6 +7086,7 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
                 }
             }
         }
+        DashboardDetailPage::Wifi => wifi_detail_status_tag(data.detail.wifi),
     }
 }
 
@@ -6842,6 +7180,7 @@ fn detail_status_color(palette: Palette, status: &'static str) -> u16 {
         "WARN" | "WARM" | "LOCK" | "NOAC" | "TEMP" | "LOAD" | "LIMIT" | "HOLD" | "RECOV" => {
             ATTENTION_COLOR
         }
+        "OFF" => palette.text_dim,
         _ => palette.accent,
     }
 }
@@ -6897,6 +7236,112 @@ fn draw_dashboard_detail_top_bar<P: UiPainter>(
     )
 }
 
+fn draw_dashboard_home_wifi_icon<P: UiPainter>(
+    painter: &mut P,
+    palette: Palette,
+    wifi: WifiSnapshot,
+    frame_no: u32,
+) -> Result<(), P::Error> {
+    draw_dashboard_wifi_icon_at(
+        painter,
+        DASHBOARD_HOME_WIFI_ICON_X,
+        DASHBOARD_HOME_WIFI_ICON_Y,
+        14,
+        dashboard_wifi_icon_color(palette, wifi, frame_no),
+        wifi_icon_is_off(wifi),
+    )
+}
+
+fn draw_dashboard_wifi_icon_at<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    size: u16,
+    color: u16,
+    off: bool,
+) -> Result<(), P::Error> {
+    let icon = if off {
+        WIFI_OFF_SYMBOL_ROUNDED_14
+    } else {
+        WIFI_SYMBOL_ROUNDED_14
+    };
+    let origin_x = x + size.saturating_sub(14) / 2;
+    let origin_y = y + size.saturating_sub(14) / 2;
+    draw_icon_blocks(painter, origin_x, origin_y, icon, color)?;
+    Ok(())
+}
+
+fn dashboard_wifi_icon_color(palette: Palette, wifi: WifiSnapshot, frame_no: u32) -> u16 {
+    match wifi.state {
+        WifiConnectionState::Connecting => match (frame_no / 8) % 4 {
+            0 => palette.text_dim,
+            1 | 3 => fade_color(palette.text_dim, palette.text),
+            _ => palette.text,
+        },
+        WifiConnectionState::Connected => palette.text,
+        WifiConnectionState::Disabled | WifiConnectionState::Idle | WifiConnectionState::Error => {
+            palette.text_dim
+        }
+    }
+}
+
+fn dashboard_wifi_accent(palette: Palette, wifi: WifiSnapshot) -> u16 {
+    match wifi.state {
+        WifiConnectionState::Disabled | WifiConnectionState::Idle => {
+            fade_color(palette.panel_alt, palette.border)
+        }
+        WifiConnectionState::Connecting | WifiConnectionState::Connected => palette.accent,
+        WifiConnectionState::Error => ERROR_COLOR,
+    }
+}
+
+const fn wifi_icon_is_off(wifi: WifiSnapshot) -> bool {
+    matches!(
+        wifi.state,
+        WifiConnectionState::Disabled | WifiConnectionState::Idle | WifiConnectionState::Error
+    )
+}
+
+fn wifi_detail_status_tag(wifi: WifiSnapshot) -> &'static str {
+    match wifi.state {
+        WifiConnectionState::Disabled | WifiConnectionState::Idle => "OFF",
+        WifiConnectionState::Connecting => "JOIN",
+        WifiConnectionState::Connected => "READY",
+        WifiConnectionState::Error => "FAULT",
+    }
+}
+
+fn wifi_summary_line(wifi: WifiSnapshot) -> &'static str {
+    match wifi.state {
+        WifiConnectionState::Disabled | WifiConnectionState::Idle => "WIFI NOT ENABLED",
+        WifiConnectionState::Connecting => "JOINING ACCESS POINT",
+        WifiConnectionState::Connected => "LAN READY FOR API CLIENTS",
+        WifiConnectionState::Error => wifi_error_label(wifi),
+    }
+}
+
+const fn wifi_state_label(state: WifiConnectionState) -> &'static str {
+    match state {
+        WifiConnectionState::Disabled => "DISABLED",
+        WifiConnectionState::Idle => "IDLE",
+        WifiConnectionState::Connecting => "CONNECTING",
+        WifiConnectionState::Connected => "CONNECTED",
+        WifiConnectionState::Error => "ERROR",
+    }
+}
+
+fn wifi_error_label(wifi: WifiSnapshot) -> &'static str {
+    match wifi.last_error {
+        Some(error) => error.ui_hint(),
+        None => match wifi.state {
+            WifiConnectionState::Disabled | WifiConnectionState::Idle => "NOT SET",
+            WifiConnectionState::Connecting => "ASSOC",
+            WifiConnectionState::Connected => "CLEAR",
+            WifiConnectionState::Error => "CHECK WIFI",
+        },
+    }
+}
+
 fn draw_manual_charge_top_bar<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
@@ -6947,6 +7392,47 @@ fn draw_dashboard_entry_marker<P: UiPainter>(
     let marker_y = y + h - 11;
     fill(painter, marker_x, marker_y + 6, 8, 2, accent)?;
     fill(painter, marker_x + 6, marker_y, 2, 8, accent)
+}
+
+fn draw_dashboard_touch_region_overlay<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    label: &'static str,
+    color: u16,
+    label_x: u16,
+    label_y: u16,
+) -> Result<(), P::Error> {
+    draw_outline(painter, x, y, w, h, color)?;
+    if w > 2 && h > 2 {
+        draw_outline(
+            painter,
+            x + 1,
+            y + 1,
+            w - 2,
+            h - 2,
+            fade_color(color, palette.bg),
+        )?;
+    }
+
+    let label_w = 10;
+    let label_h = 12;
+    fill(painter, label_x, label_y, label_w, label_h, color)?;
+    text(
+        painter,
+        variant,
+        FontRole::Num,
+        label,
+        Point::new((label_x + 2) as i32, label_y as i32),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+
+    Ok(())
 }
 
 fn draw_manual_option_row<P: UiPainter>(
@@ -7128,6 +7614,19 @@ fn draw_detail_text_row<P: UiPainter>(
     label: &'static str,
     value: DetailTextValue,
 ) -> Result<(), P::Error> {
+    draw_detail_text_row_with_width(painter, variant, palette, x, y, 132, label, value)
+}
+
+fn draw_detail_text_row_with_width<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    width: u16,
+    label: &'static str,
+    value: DetailTextValue,
+) -> Result<(), P::Error> {
     text(
         painter,
         variant,
@@ -7143,7 +7642,7 @@ fn draw_detail_text_row<P: UiPainter>(
             variant,
             FontRole::Num,
             value,
-            Point::new((x + 132) as i32, y as i32),
+            Point::new((x + width) as i32, y as i32),
             HorizontalAlignment::Right,
             palette.text,
         ),
@@ -7152,7 +7651,7 @@ fn draw_detail_text_row<P: UiPainter>(
             variant,
             FontRole::Num,
             format_args!("{:>3}%", value),
-            Point::new((x + 132) as i32, y as i32),
+            Point::new((x + width) as i32, y as i32),
             HorizontalAlignment::Right,
             palette.text,
         ),
@@ -7161,7 +7660,128 @@ fn draw_detail_text_row<P: UiPainter>(
             variant,
             FontRole::Num,
             "N/A",
-            Point::new((x + 132) as i32, y as i32),
+            Point::new((x + width) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+    }
+}
+
+fn draw_detail_ip_row<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    width: u16,
+    label: &'static str,
+    value: Option<[u8; 4]>,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        label,
+        Point::new(x as i32, y as i32),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    match value {
+        Some([a, b, c, d]) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{}.{}.{}.{}", a, b, c, d),
+            Point::new((x + width) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        None => text(
+            painter,
+            variant,
+            FontRole::Num,
+            "N/A",
+            Point::new((x + width) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+    }
+}
+
+fn draw_detail_rssi_row<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    width: u16,
+    rssi_dbm: Option<i8>,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "RSSI",
+        Point::new(x as i32, y as i32),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    match rssi_dbm {
+        Some(rssi) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{}dBm", rssi),
+            Point::new((x + width) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        None => text(
+            painter,
+            variant,
+            FontRole::Num,
+            "N/A",
+            Point::new((x + width) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+    }
+}
+
+fn draw_detail_mac_tail_row<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    width: u16,
+    mac: Option<[u8; 6]>,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "MAC",
+        Point::new(x as i32, y as i32),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    match mac {
+        Some([_, _, _, d, e, f]) => text(
+            painter,
+            variant,
+            FontRole::Num,
+            format_args!("{:02X}:{:02X}:{:02X}", d, e, f),
+            Point::new((x + width) as i32, y as i32),
+            HorizontalAlignment::Right,
+            palette.text,
+        ),
+        None => text(
+            painter,
+            variant,
+            FontRole::Num,
+            "N/A",
+            Point::new((x + width) as i32, y as i32),
             HorizontalAlignment::Right,
             palette.text,
         ),
@@ -7528,6 +8148,7 @@ fn detail_fault_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &'
                 "N/A"
             }
         }
+        DashboardDetailPage::Wifi => data.page_notice(page),
         _ => data.page_notice(page),
     }
 }
@@ -7562,6 +8183,17 @@ fn detail_footer_badge(
 
     if page == DashboardDetailPage::Cells && notice == "CFG MISMATCH" {
         return (DetailFooterIcon::Warn, "CHECK STATUS");
+    }
+
+    if page == DashboardDetailPage::Wifi {
+        return match data.detail.wifi.state {
+            WifiConnectionState::Disabled | WifiConnectionState::Idle => {
+                (DetailFooterIcon::Unknown, "WIFI OFF")
+            }
+            WifiConnectionState::Connecting => (DetailFooterIcon::Warn, "JOINING AP"),
+            WifiConnectionState::Connected => (DetailFooterIcon::Live, "LAN READY"),
+            WifiConnectionState::Error => (DetailFooterIcon::Fault, "CHECK WIFI"),
+        };
     }
 
     match status {
@@ -7674,6 +8306,12 @@ fn detail_fault_row_text(page: DashboardDetailPage, data: DashboardLiveData) -> 
                 "N/A"
             }
         }
+        DashboardDetailPage::Wifi => match data.detail.wifi.state {
+            WifiConnectionState::Disabled | WifiConnectionState::Idle => "OFF",
+            WifiConnectionState::Connecting => "JOIN",
+            WifiConnectionState::Connected => "CLEAR",
+            WifiConnectionState::Error => "FAULT",
+        },
         _ => "CLEAR",
     }
 }
@@ -7716,6 +8354,7 @@ fn detail_data_ready(page: DashboardDetailPage, data: DashboardLiveData) -> bool
                 || data.detail.fan_pwm_pct.is_some()
                 || data.detail.fan_status.is_some()
         }
+        DashboardDetailPage::Wifi => true,
     }
 }
 
@@ -8696,6 +9335,51 @@ fn draw_bms_progress_dialog<P: UiPainter>(
     )?;
     Ok(())
 }
+
+// Icon source: Google Material Symbols Rounded
+// - wifi_wght700_24px.svg
+// - wifi_off_wght700_24px.svg
+const WIFI_SYMBOL_ROUNDED_14: &[(u8, u8, u8, u8)] = &[
+    (3, 1, 8, 1),
+    (2, 2, 10, 1),
+    (1, 3, 12, 1),
+    (1, 4, 2, 1),
+    (10, 4, 3, 1),
+    (1, 5, 1, 1),
+    (5, 5, 4, 1),
+    (12, 5, 1, 1),
+    (3, 6, 7, 1),
+    (3, 7, 8, 1),
+    (3, 8, 2, 1),
+    (9, 8, 2, 1),
+    (6, 10, 2, 1),
+    (5, 11, 4, 1),
+    (6, 12, 2, 1),
+];
+
+const WIFI_OFF_SYMBOL_ROUNDED_14: &[(u8, u8, u8, u8)] = &[
+    (1, 1, 2, 1),
+    (6, 1, 4, 1),
+    (1, 2, 2, 1),
+    (5, 2, 6, 1),
+    (1, 3, 4, 1),
+    (6, 3, 7, 1),
+    (1, 4, 5, 1),
+    (10, 4, 3, 1),
+    (1, 5, 1, 1),
+    (4, 5, 2, 1),
+    (12, 5, 1, 1),
+    (3, 6, 5, 1),
+    (9, 6, 2, 1),
+    (3, 7, 5, 1),
+    (10, 7, 1, 1),
+    (7, 8, 2, 1),
+    (6, 9, 4, 1),
+    (5, 10, 6, 1),
+    (6, 11, 2, 1),
+    (10, 11, 2, 1),
+    (10, 12, 2, 1),
+];
 
 #[derive(Clone, Copy)]
 enum ActivationIcon {
@@ -11762,6 +12446,22 @@ mod tests {
     #[test]
     fn dashboard_hit_test_maps_fixed_home_regions() {
         assert_eq!(
+            dashboard_hit_test(
+                DashboardRoute::Home,
+                DASHBOARD_HOME_WIFI_ICON_X + 4,
+                DASHBOARD_HOME_WIFI_ICON_Y + 4
+            ),
+            Some(DashboardTouchTarget::HomeWifi)
+        );
+        assert_eq!(
+            dashboard_hit_test(
+                DashboardRoute::Home,
+                DASHBOARD_HOME_WIFI_TOUCH_X + 2,
+                DASHBOARD_HOME_WIFI_TOUCH_Y + 20
+            ),
+            Some(DashboardTouchTarget::HomeWifi)
+        );
+        assert_eq!(
             dashboard_hit_test(DashboardRoute::Home, 30, 40),
             Some(DashboardTouchTarget::HomeOutput)
         );
@@ -11800,6 +12500,10 @@ mod tests {
         assert_eq!(
             dashboard_route_for_target(DashboardTouchTarget::HomeOutput),
             DashboardRoute::Detail(DashboardDetailPage::Output)
+        );
+        assert_eq!(
+            dashboard_route_for_target(DashboardTouchTarget::HomeWifi),
+            DashboardRoute::Detail(DashboardDetailPage::Wifi)
         );
     }
 
@@ -12015,6 +12719,67 @@ mod tests {
         assert_eq!(charger_active_value(live), None);
         assert_eq!(charger_state_text(live), "N/A");
         assert_eq!(detail_status_tag(DashboardDetailPage::Charger, live), "N/A");
+    }
+
+    #[test]
+    fn wifi_detail_status_and_footer_follow_runtime_state() {
+        let disabled_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        let disabled_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &disabled_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Wifi, disabled_live),
+            "OFF"
+        );
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::Wifi, disabled_live),
+            (DetailFooterIcon::Unknown, "WIFI OFF")
+        );
+
+        let mut connecting_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        connecting_snapshot.dashboard_detail.wifi = WifiSnapshot::connecting();
+        let connecting_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &connecting_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Wifi, connecting_live),
+            "JOIN"
+        );
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::Wifi, connecting_live),
+            (DetailFooterIcon::Warn, "JOINING AP")
+        );
+
+        let mut ready_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        ready_snapshot.dashboard_detail.wifi = WifiSnapshot {
+            state: WifiConnectionState::Connected,
+            ipv4: Some([192, 168, 31, 45]),
+            ..WifiSnapshot::disabled()
+        };
+        let ready_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &ready_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::Wifi, ready_live),
+            "READY"
+        );
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::Wifi, ready_live),
+            (DetailFooterIcon::Live, "LAN READY")
+        );
+    }
+
+    #[test]
+    fn connecting_wifi_icon_color_breathes_between_frames() {
+        let palette = palette_for(UiVariant::InstrumentB);
+        let wifi = WifiSnapshot::connecting();
+
+        assert_eq!(
+            dashboard_wifi_icon_color(palette, wifi, 0),
+            palette.text_dim
+        );
+        assert_eq!(
+            dashboard_wifi_icon_color(palette, wifi, 8),
+            fade_color(palette.text_dim, palette.text)
+        );
+        assert_eq!(dashboard_wifi_icon_color(palette, wifi, 16), palette.text);
     }
 
     #[test]

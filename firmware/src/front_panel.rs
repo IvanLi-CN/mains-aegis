@@ -1601,12 +1601,14 @@ fn dashboard_route_name(route: DashboardRoute) -> &'static str {
         DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Output) => "detail_output",
         DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Charger) => "detail_charger",
         DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal) => "detail_thermal",
+        DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Wifi) => "detail_wifi",
         DashboardRoute::ManualCharge => "manual_charge",
     }
 }
 
 fn dashboard_touch_target_name(target: DashboardTouchTarget) -> &'static str {
     match target {
+        DashboardTouchTarget::HomeWifi => "home_wifi",
         DashboardTouchTarget::HomeOutput => "home_output",
         DashboardTouchTarget::HomeThermal => "home_thermal",
         DashboardTouchTarget::HomeCells => "home_cells",

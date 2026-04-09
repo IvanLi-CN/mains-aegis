@@ -2,6 +2,7 @@
 use esp_firmware::net_types::NetworkUiSummary;
 #[cfg(feature = "net_http")]
 use esp_firmware::net_types::UpsStatusSnapshot;
+use esp_firmware::net_types::WifiSnapshot;
 use esp_firmware::output_state::{EnabledOutputs, OutputSelector};
 
 use crate::front_panel_scene::SelfCheckUiSnapshot;
@@ -13,6 +14,18 @@ pub fn current_network_summary() -> NetworkUiSummary {
     #[cfg(feature = "net_http")]
     {
         return esp_firmware::net::current_network_ui_summary();
+    }
+}
+
+pub fn current_wifi_snapshot() -> WifiSnapshot {
+    #[cfg(feature = "net_http")]
+    {
+        return esp_firmware::net::current_wifi_snapshot();
+    }
+
+    #[cfg(not(feature = "net_http"))]
+    {
+        WifiSnapshot::disabled()
     }
 }
 

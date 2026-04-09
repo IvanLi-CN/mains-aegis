@@ -40,6 +40,7 @@
 - `firmware/src/net_types.rs` / `firmware/src/net_contract.rs` / `firmware/src/net_bridge.rs`：只读状态模型、JSON/SSE 渲染契约与主循环状态桥接。
 - `firmware/src/main.rs`：主入口拆分为默认阻塞式与 `net_http` 下 `esp_rtos + embassy` 异步入口。
 - `firmware/host-unit-tests/`：env 解析、mDNS 编解码、HTTP 契约与桥接逻辑测试。
+- `firmware/ui/dashboard-design.md` / `firmware/ui/dashboard-detail-design.md` / `firmware/ui/touch-targets.md`：Dashboard WiFi 入口、WiFi 详情页与首页触摸热区说明。
 
 ### Out of scope
 
@@ -145,6 +146,9 @@
 
 - `docs/specs/README.md`: 新增当前规格索引行，并在收口时同步状态与 PR 备注。
 - `docs/specs/amc32-wifi-service-discovery-api-foundation/contracts/http-apis.md`: 冻结 v1 API 口径。
+- `firmware/ui/dashboard-design.md`: 补充 Dashboard 标题栏 WiFi 入口与热区说明。
+- `firmware/ui/dashboard-detail-design.md`: 补充 `Wifi` 二级详情页的页面口径。
+- `firmware/ui/touch-targets.md`: 记录 Dashboard 首页触摸热区、命中框约束与标注图。
 
 ## 计划资产（Plan assets）
 
@@ -154,7 +158,21 @@
 
 ## Visual Evidence
 
-本轮不适用：按主人要求，不修改自检页面。
+按主人要求，本规格不修改自检页面；当前 owner-facing 视觉证据仅覆盖 Dashboard / WiFi 相关交互。
+
+### Dashboard 首页触摸热区
+
+![Dashboard touch zones](./assets/dashboard-touch-zones.png)
+
+- 标注图直接来自固件 renderer 叠加 `dashboard_hit_test()` 的真实命中范围。
+- `WiFi` 入口采用“图标小、热区放大”的策略；当前稳定热区为 `x=118 y=0 w=32 h=22`。
+- 该图同时作为 `firmware/ui/touch-targets.md` 的长期引用资产。
+
+### Wifi detail 页面
+
+![Dashboard Wifi Detail](./assets/dashboard-detail-wifi.png)
+![Dashboard Wifi Detail Long IP](./assets/dashboard-detail-wifi-long-ip.png)
+![Dashboard Wifi Detail Disabled](./assets/dashboard-detail-wifi-disabled.png)
 
 ## 资产晋升（Asset promotion）
 
@@ -174,6 +192,7 @@ None。
 - 用 `net_bridge` 把现有 `SelfCheckUiSnapshot` 转为网络/API 可消费的稳定快照，避免把前面板内部结构直接暴露给外部契约。
 - 把高变化、与编译期注入相关的 WiFi 配置限定在 build script 与 feature gate 内，避免污染默认构建。
 - 把外部可见协议冻结在 `v1`，未来扩展通过新增字段或新版本进行，而不是在 `v1` 上无序漂移。
+- 把 Dashboard 的 WiFi 入口和首页热区几何同步写入 `firmware/ui/touch-targets.md`，避免后续只改图标不改命中框，或只改命中框不更新文档。
 
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）
 
@@ -185,6 +204,7 @@ None。
 ## 变更记录（Change log）
 
 - 2026-04-09: 新建规格，冻结 WiFi / 服务发现 / 只读 API 底座的范围、契约与验收口径。
+- 2026-04-09: 增补 Dashboard WiFi 入口与首页热区文档，补充长期维护的触摸热区说明与标注图资产。
 
 ## 参考（References）
 
