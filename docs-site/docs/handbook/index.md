@@ -5,12 +5,12 @@ description: Mains Aegis 项目手册总览。
 
 # 项目手册
 
-本手册面向两类读者：
+本手册主要给两类读者使用：
 
 - 继续修改原理图、PCB、固件或屏幕文档的开发者
 - 自行复刻样机并完成 bring-up 的协作者
 
-二者使用同一套事实源；差别只在阅读起点，不在文档体系。
+两类读者看到的是同一套事实；差别只在阅读起点，不在文档体系。
 
 ## 1. 从哪里开始
 
@@ -41,9 +41,9 @@ description: Mains Aegis 项目手册总览。
 4. [固件烧录与首次自检](/manual/firmware-flash-and-self-test)
 5. [基础使用与排障](/manual/basic-use-and-troubleshooting)
 
-## 3. 当前公开边界
+## 3. 公开范围
 
-| 项目 | 当前状态 |
+| 项目 | 说明 |
 | --- | --- |
 | 系统级设计文档 | 已公开 |
 | 主板 / 前面板网表提炼 | 已公开 |
@@ -54,7 +54,7 @@ description: Mains Aegis 项目手册总览。
 | 统一生产文件打包入口 | 未作为统一发布物提供 |
 | 成品用户说明书 | 不在当前范围内 |
 
-## 4. 事实源
+## 4. 仓库内参考文档
 
 - [仓库原始文档索引](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/README.md)
 - [硬件选型总览](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/hardware-selection.md)

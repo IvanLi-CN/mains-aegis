@@ -63,7 +63,7 @@ mcu-agentd monitor esp --reset
 - 屏幕点亮
 - 页面先进入 `SELF CHECK`
 - 模块卡片从 `PEND` 逐步转成 `OK / WARN / ERR / HOLD / N/A`
-- 如果自检收口且运行态快照已准备好，steady-state 默认页会自动切到 Dashboard，而不是长期停留在 `SELF CHECK`
+- 如果自检结束且运行态快照已准备好，默认会切到 Dashboard，而不是长期停留在 `SELF CHECK`
 
 参考画面：
 
@@ -75,7 +75,7 @@ mcu-agentd monitor esp --reset
 
 - 第一张更接近链路已经打通时的目标画面。
 - 第二张更接近上游门控尚未满足时的状态；此时应先追 `BQ40Z50` 和授权链，而不是先怀疑 `TPS55288` 硬件本体。
-- 完整页面链见 [前面板屏幕页面总览](/design/front-panel-screen-pages)。
+- 想顺着看完整页面，可以看 [前面板屏幕页面总览](/design/front-panel-screen-pages)。
 
 ### 4.3 输出侧
 
@@ -104,7 +104,7 @@ mcu-agentd monitor esp --reset
 
 ## 7. Bring-up 通过标准
 
-首次 bring-up 通过，不要求“所有卡片全绿”；要求的是：
+首次 bring-up 不要求“所有卡片全绿”；更重要的是：
 
 - 能稳定烧录
 - 能稳定看日志

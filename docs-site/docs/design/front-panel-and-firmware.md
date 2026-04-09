@@ -5,7 +5,7 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 
 # 前面板与固件
 
-本页说明前面板和主板之间的硬件链路，以及固件在运行时如何组织屏幕页面。
+本页从硬件连接和运行时两部分，说明前面板为什么会显示这些页面。
 
 页面外观总览见 [前面板屏幕页面总览](/design/front-panel-screen-pages)；交互规则见 [前面板 UI 交互与设计](/design/front-panel-ui-design)。
 
@@ -71,7 +71,7 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 
 ## 5. 固件运行时基线
 
-| 项目 | 当前实现 |
+| 项目 | 说明 |
 | --- | --- |
 | 主控 | `ESP32-S3-FH4R2` |
 | 固件栈 | Rust + `esp-hal` + `no_std` |
@@ -81,7 +81,7 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 
 ### 5.1 `SELF CHECK` 模块列表
 
-当前页面跟踪以下模块：
+前面板会跟踪以下模块：
 
 - `GC9307`
 - `TCA6408A`
@@ -94,12 +94,12 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 - `TMP112-A`
 - `TMP112-B`
 
-### 5.2 运行时页面链
+### 5.2 运行时页面路径
 
-- 上电后屏幕可用即进入 `SELF CHECK`。
-- 当自检收口且首份运行态快照准备好后，页面自动进入 Dashboard。
-- Dashboard 首页暴露 5 个固定入口：`Output / Thermal / Cells / Charger / Battery Flow`。
-- `Charger Detail` 再继续下钻到 `MANUAL CHARGE`，它是当前唯一承担控制动作的页面。
+- 上电后，屏幕可用就先进入 `SELF CHECK`。
+- 当自检结束且首份运行态快照准备好后，页面自动进入 Dashboard。
+- Dashboard 首页给出 5 个入口：`Output / Thermal / Cells / Charger / Battery Flow`。
+- `Charger Detail` 再继续下钻到 `MANUAL CHARGE`；这是这套页面里负责控制动作的一页。
 
 ### 5.3 Dashboard 运行态模式
 
@@ -112,52 +112,49 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 
 右侧三卡固定为 `BATTERY / CHARGE / DISCHG`。首页 `CHARGE` 卡使用紧凑 token：`CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`。
 
-## 6. 用户会在屏幕上看到什么
+## 6. 屏幕上的典型页面
 
-### 6.1 上电先看到 `SELF CHECK`
+### 6.1 上电后先看到 `SELF CHECK`
 
 ![Self-check 正常待机画面](/ui/self-check-c-standby-idle.png)
 
 ![Self-check - BMS 缺失且 TPS 警告](/ui/self-check-c-bms-missing-tps-warn.png)
 
-其中：
+看这页时，通常先留意：
 
-- 左右共 10 张模块卡，对应当前固件跟踪的 10 个通信模块。
-- `PEND -> OK/WARN/ERR/HOLD/N/A` 的变化，就是 bring-up 时最直接的状态面板。
-- `BQ40Z50` 缺失时，`TPS55288` 可能显示等待或警告；这通常表示上游门控尚未满足，不必先把问题归到输出级本体。
+- 左右共 10 张模块卡，对应固件跟踪的 10 个通信模块。
+- 卡片从 `PEND` 走到 `OK / WARN / ERR / HOLD / N/A`，就是 bring-up 时最直接的观察点。
+- 如果 `BQ40Z50` 缺失，`TPS55288` 可能显示等待或警告；这往往表示上游前提还没满足，不必先把问题归到输出级本体。
 
-### 6.2 自检收口后自动进入 Dashboard
+### 6.2 自检结束后回到 Dashboard
 
 ![Dashboard - STANDBY](/ui/dashboard-b-standby-mode.png)
 
 ![Dashboard - BACKUP](/ui/dashboard-b-backup-mode.png)
 
-其中：
+这里可以顺着看三处：
 
-- Dashboard 是 steady-state 默认页，不再把 `SELF CHECK` 作为常驻监控页。
-- 左侧主 KPI 与次级信息块、右侧三卡，共同构成运行态最常看的首页。
-- `STANDBY` 和 `BACKUP` 的差别同时体现在输入在线性、输出参与度和电池承担负载的方式上。
+- 正常运行时默认停在 Dashboard，不会一直停在 `SELF CHECK`。
+- 左侧主 KPI、次级信息区和右侧三卡，一起构成运行态首页。
+- `STANDBY` 和 `BACKUP` 的区别，会同时反映在输入在线性、输出参与度和电池承担负载的方式上。
 
-### 6.3 `Charger Detail` 是唯一继续下钻到控制页的入口
+### 6.3 从 `Charger Detail` 可以继续进入控制页
 
 ![Dashboard detail - charger](/ui/dashboard-b-detail-charger.png)
 
-`Charger Detail` 左侧会话面板继续进入 `MANUAL CHARGE`。这也是当前页面体系里唯一明确承担控制动作的链路。
+`Charger Detail` 左侧会话面板还能继续进入 `MANUAL CHARGE`。这也是这套页面里唯一一条会继续进入手动控制页的路径。
 
-## 7. 延伸阅读
+## 7. 继续阅读
 
-- 页面全貌与当前画面： [前面板屏幕页面总览](/design/front-panel-screen-pages)
+- 页面全貌与最新画面： [前面板屏幕页面总览](/design/front-panel-screen-pages)
 - 热区、状态词和交互规则： [前面板 UI 交互与设计](/design/front-panel-ui-design)
 - 上电观察点与卡顿排查： [固件烧录与首次自检](/manual/firmware-flash-and-self-test)
-- 内部设计基线与组件约束： [前面板固件 UI 内部文档](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/README.md)
 
-## 8. 相关文档
+## 8. 内部设计文档
 
 - [前面板 PCB 说明](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/pcbs/front-panel/README.md)
 - [固件 bring-up README](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/README.md)
 - [开机自检流程](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/boot-self-test-flow.md)
-- [前面板屏幕页面总览](/design/front-panel-screen-pages)
-- [前面板 UI 交互与设计](/design/front-panel-ui-design)
 - [前面板固件 UI 内部文档](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/README.md)
 - [Dashboard UI 设计](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/dashboard-design.md)
 - [Dashboard Detail UI 设计](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/dashboard-detail-design.md)
