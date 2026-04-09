@@ -66,6 +66,9 @@ pub mod mdns_wire;
 #[path = "../../src/net_contract.rs"]
 pub mod net_contract;
 
+#[path = "../../src/net_logic.rs"]
+pub mod net_logic;
+
 #[path = "../../src/net_bridge.rs"]
 pub mod net_bridge;
 
