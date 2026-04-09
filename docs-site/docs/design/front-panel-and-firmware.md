@@ -5,10 +5,9 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 
 # 前面板与固件
 
-本页先回答“前面板是怎么接上主板的”，再回答“固件把哪些屏幕页串成运行时路径”。
+本页说明前面板和主板之间的硬件链路，以及固件在运行时如何组织屏幕页面。
 
-- 如果你想直接看每一页现在长什么样，请去 [前面板屏幕页面总览](/design/front-panel-screen-pages)。
-- 如果你想看热区、状态词和交互规则，请去 [前面板 UI 交互与设计](/design/front-panel-ui-design)。
+页面外观总览见 [前面板屏幕页面总览](/design/front-panel-screen-pages)；交互规则见 [前面板 UI 交互与设计](/design/front-panel-ui-design)。
 
 ## 1. 前面板组成
 
@@ -121,11 +120,11 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 
 ![Self-check - BMS 缺失且 TPS 警告](/ui/self-check-c-bms-missing-tps-warn.png)
 
-读图要点：
+其中：
 
-- 左右共 10 张模块卡，对应当前固件的 10 个通信模块。
+- 左右共 10 张模块卡，对应当前固件跟踪的 10 个通信模块。
 - `PEND -> OK/WARN/ERR/HOLD/N/A` 的变化，就是 bring-up 时最直接的状态面板。
-- `BQ40Z50` 缺失时，`TPS55288` 可能显示等待/警告；这通常是在表达上游门控未满足，而不是输出级本体损坏。
+- `BQ40Z50` 缺失时，`TPS55288` 可能显示等待或警告；这通常表示上游门控尚未满足，不必先把问题归到输出级本体。
 
 ### 6.2 自检收口后自动进入 Dashboard
 
@@ -133,10 +132,10 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 
 ![Dashboard - BACKUP](/ui/dashboard-b-backup-mode.png)
 
-读图要点：
+其中：
 
 - Dashboard 是 steady-state 默认页，不再把 `SELF CHECK` 作为常驻监控页。
-- 左侧主 KPI + 次级信息块，右侧三卡，构成运行态最常看的第一页。
+- 左侧主 KPI 与次级信息块、右侧三卡，共同构成运行态最常看的首页。
 - `STANDBY` 和 `BACKUP` 的差别同时体现在输入在线性、输出参与度和电池承担负载的方式上。
 
 ### 6.3 `Charger Detail` 是唯一继续下钻到控制页的入口
@@ -145,14 +144,12 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 
 `Charger Detail` 左侧会话面板继续进入 `MANUAL CHARGE`。这也是当前页面体系里唯一明确承担控制动作的链路。
 
-## 7. 相关文档怎么配合看
+## 7. 延伸阅读
 
-| 如果你要解决的问题 | 去哪里看 |
-| --- | --- |
-| 这块屏有哪些页面、分别在什么阶段出现 | [前面板屏幕页面总览](/design/front-panel-screen-pages) |
-| 点哪里能进去、状态词是什么意思、为什么会停在某页 | [前面板 UI 交互与设计](/design/front-panel-ui-design) |
-| 首次上电应该看到什么、卡住时先查哪里 | [固件烧录与首次自检](/manual/firmware-flash-and-self-test) |
-| 运行时内部 SoT、组件契约、视觉基线 | [Front panel UI docs](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/README.md) |
+- 页面全貌与当前画面： [前面板屏幕页面总览](/design/front-panel-screen-pages)
+- 热区、状态词和交互规则： [前面板 UI 交互与设计](/design/front-panel-ui-design)
+- 上电观察点与卡顿排查： [固件烧录与首次自检](/manual/firmware-flash-and-self-test)
+- 内部设计基线与组件约束： [前面板固件 UI 内部文档](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/README.md)
 
 ## 8. 相关文档
 
@@ -161,7 +158,7 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 - [开机自检流程](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/boot-self-test-flow.md)
 - [前面板屏幕页面总览](/design/front-panel-screen-pages)
 - [前面板 UI 交互与设计](/design/front-panel-ui-design)
-- [Front panel UI docs](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/README.md)
+- [前面板固件 UI 内部文档](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/README.md)
 - [Dashboard UI 设计](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/dashboard-design.md)
 - [Dashboard Detail UI 设计](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/dashboard-detail-design.md)
 - [Self-check UI 设计](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/self-check-design.md)

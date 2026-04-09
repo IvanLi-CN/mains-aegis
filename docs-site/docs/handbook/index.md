@@ -12,9 +12,9 @@ description: Mains Aegis 项目手册总览。
 
 二者使用同一套事实源；差别只在阅读起点，不在文档体系。
 
-## 1. 阅读地图
+## 1. 从哪里开始
 
-| 如果你要做的事 | 先看 |
+| 用途 | 建议先读 |
 | --- | --- |
 | 弄清系统组成、接口、电源路径和门控逻辑 | [系统设计](/design/index) |
 | 先把板子点亮、烧录、看日志、做首次上电 | [样机复刻与 Bring-up](/manual/index) |
@@ -61,4 +61,4 @@ description: Mains Aegis 项目手册总览。
 - [主板 PCB 说明](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/pcbs/mainboard/README.md)
 - [前面板 PCB 说明](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/pcbs/front-panel/README.md)
 - [固件 bring-up README](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/README.md)
-- [Front panel UI docs](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/README.md)
+- [前面板固件 UI 内部文档](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/README.md)

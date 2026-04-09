@@ -20,7 +20,7 @@ description: Mains Aegis 项目手册首页。
 | 前面板 | SPI 屏、I2C 触摸、`TCA6408A`、五向按键、背光 |
 | 启动 UI | 先进入 `SELF CHECK`，门控放行后进入 Dashboard |
 
-## 2. 手册入口
+## 2. 文档分区
 
 | 任务 | 入口 |
 | --- | --- |
@@ -29,7 +29,7 @@ description: Mains Aegis 项目手册首页。
 | 直接查看前面板屏幕页面与最新图 | [前面板屏幕页面总览](/design/front-panel-screen-pages) |
 | 直接进入复刻、烧录和首次上电 | [样机复刻与 Bring-up](/manual/index) |
 
-## 3. 推荐使用方式
+## 3. 建议阅读顺序
 
 1. 先在[系统概览](/design/system-overview)确认连接器、总线和 GPIO 映射。
 2. 需要理解前面板运行时页面时，先看[前面板屏幕页面总览](/design/front-panel-screen-pages)。

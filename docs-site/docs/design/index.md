@@ -5,12 +5,7 @@ description: 项目手册中的系统设计入口。
 
 # 系统设计导读
 
-本部分回答四个问题：
-
-1. 这台机器由哪些板、总线和功率链路构成。
-2. 哪些器件和参数已经冻结，哪些仍是样机阶段约束。
-3. 固件在启动时如何把 BMS、充电、输出和前面板串成一条自检链路。
-4. 前面板屏幕会依次出现哪些页面，用户应该去哪里读每一页的含义。
+系统设计部分按硬件结构、功率链路和前面板运行路径展开。阅读顺序建议从整机结构开始，再过渡到电源链、前面板硬件和屏幕页面。
 
 ## 1. 章节分工
 
@@ -30,11 +25,11 @@ description: 项目手册中的系统设计入口。
 4. [前面板屏幕页面总览](/design/front-panel-screen-pages)
 5. [前面板 UI 交互与设计](/design/front-panel-ui-design)
 
-## 3. 对应事实源
+## 3. 相关设计文档
 
 - [硬件选型总览](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/hardware-selection.md)
 - [主板 PCB 说明](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/pcbs/mainboard/README.md)
 - [前面板 PCB 说明](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/pcbs/front-panel/README.md)
 - [I2C / SMBus 地址映射](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/i2c-address-map.md)
 - [开机自检流程](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/boot-self-test-flow.md)
-- [Front panel UI docs](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/README.md)
+- [前面板固件 UI 内部文档](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/README.md)
