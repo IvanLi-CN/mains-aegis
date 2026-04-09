@@ -2,7 +2,6 @@
 use esp_firmware::net_types::NetworkUiSummary;
 #[cfg(feature = "net_http")]
 use esp_firmware::net_types::UpsStatusSnapshot;
-#[cfg(feature = "net_http")]
 use esp_firmware::output_state::{EnabledOutputs, OutputSelector};
 
 use crate::front_panel_scene::SelfCheckUiSnapshot;
@@ -82,13 +81,13 @@ fn mode_slug(mode: UpsMode) -> &'static str {
     }
 }
 
-#[cfg(feature = "net_http")]
+#[cfg_attr(not(any(feature = "net_http", test)), allow(dead_code))]
 fn outputs_slug(outputs: EnabledOutputs) -> &'static str {
     match outputs {
         EnabledOutputs::None => "none",
         EnabledOutputs::Only(OutputSelector::OutA) => "out_a",
         EnabledOutputs::Only(OutputSelector::OutB) => "out_b",
-        EnabledOutputs::Both => "out_a+out_b",
+        EnabledOutputs::Both => "both",
     }
 }
 
@@ -111,5 +110,24 @@ fn bms_result_slug(kind: BmsResultKind) -> &'static str {
         BmsResultKind::RomMode => "rom_mode",
         BmsResultKind::Abnormal => "abnormal",
         BmsResultKind::NotDetected => "not_detected",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::outputs_slug;
+    use esp_firmware::output_state::{EnabledOutputs, OutputSelector};
+
+    #[test]
+    fn outputs_slug_uses_frozen_dual_output_contract_value() {
+        assert_eq!(outputs_slug(EnabledOutputs::Both), "both");
+        assert_eq!(
+            outputs_slug(EnabledOutputs::Only(OutputSelector::OutA)),
+            "out_a"
+        );
+        assert_eq!(
+            outputs_slug(EnabledOutputs::Only(OutputSelector::OutB)),
+            "out_b"
+        );
     }
 }

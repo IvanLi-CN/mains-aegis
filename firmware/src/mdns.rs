@@ -57,6 +57,9 @@ pub async fn mdns_task(stack: Stack<'static>, cfg: MdnsRuntimeConfig) {
             &mut tx_storage,
         );
         socket.set_hop_limit(Some(255));
+        // Keep the socket bound to the current IPv4 address so outgoing replies use the device
+        // address instead of 0.0.0.0. In embassy-net/smoltcp, multicast queries still match this
+        // socket because UDP receive filtering only rejects mismatched unicast destinations.
         if let Err(err) = socket.bind((IpAddress::Ipv4(ip), MDNS_PORT)) {
             warn!("mdns: bind failed: {:?}", err);
             Timer::after(RETRY_DELAY).await;
