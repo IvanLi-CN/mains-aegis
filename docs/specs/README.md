@@ -45,3 +45,4 @@
 | zp4cg | Manual charge dashboard page + EEPROM prefs | 已完成 | `zp4cg-manual-charge-dashboard/SPEC.md` | 2026-04-07 | 已完成 `MANUAL` 三级页面、小屏触控布局、运行时手动接管/停止抑制、仅保存 prefs 的 EEPROM schema v1，以及预览/真机验证闭环 |
 | jxz2t | GitHub Pages docs site handbooks | 已完成 | `jxz2t-docs-site-handbooks/SPEC.md` | 2026-04-08 | 已完成 `docs-site/`、GitHub Pages workflow、双手册页面、视觉证据与 PR #63 收敛 |
 | h6sae | BQ40 `LOCK` root cause + closure | 部分完成（3/6） | `h6sae-bq40-lock-root-cause/SPEC.md` | 2026-04-13 | 已命中 `termination` 分流并提交 `ITERM` 对齐修复；下一步需要 `<90%` 解锁后的 live 闭环复验 |
+| amc32 | WiFi / service discovery / read-only API foundation | 部分完成（4/5） | `amc32-wifi-service-discovery-api-foundation/SPEC.md` | 2026-04-09 | 已完成 `net_http` feature、mDNS/HTTP/SSE、host tests、前面板网络摘要与视觉证据；等待 PR / review 收口 |

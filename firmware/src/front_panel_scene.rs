@@ -5,6 +5,7 @@ use embedded_graphics_core::{
     prelude::RawData,
     Pixel,
 };
+use esp_firmware::net_types::NetworkUiSummary;
 use esp_firmware::output_state::{EnabledOutputs, OutputGateReason, OutputSelector};
 use u8g2_fonts::{
     fonts,
@@ -573,6 +574,7 @@ pub struct SelfCheckUiSnapshot {
     pub tmp_b: SelfCheckCommState,
     pub tmp_b_c: Option<i16>,
     pub tmp_b_c_x16: Option<i16>,
+    pub network_summary: NetworkUiSummary,
     pub dashboard_detail: DashboardDetailSnapshot,
 }
 
@@ -626,6 +628,7 @@ impl SelfCheckUiSnapshot {
             tmp_b: SelfCheckCommState::Pending,
             tmp_b_c: None,
             tmp_b_c_x16: None,
+            network_summary: NetworkUiSummary::disabled(),
             dashboard_detail: DashboardDetailSnapshot::pending(),
         }
     }
@@ -7796,13 +7799,14 @@ fn render_variant_c<P: UiPainter>(
     });
 
     let mode_accent = mode_accent_color(palette, snapshot.mode, data.touch_irq);
+    let network_subtitle = snapshot.network_summary.subtitle();
     draw_top_bar_with_status(
         painter,
         variant,
         palette,
         data.focus,
         "SELF CHECK",
-        "",
+        network_subtitle.as_str(),
         mode_label(snapshot.mode),
         mode_accent,
     )?;
@@ -10362,8 +10366,8 @@ fn draw_top_bar<P: UiPainter>(
     variant: UiVariant,
     palette: Palette,
     focus: UiFocus,
-    title: &'static str,
-    subtitle: &'static str,
+    title: &str,
+    subtitle: &str,
 ) -> Result<(), P::Error> {
     draw_top_bar_with_status(
         painter,
@@ -10382,9 +10386,9 @@ fn draw_top_bar_with_status<P: UiPainter>(
     variant: UiVariant,
     palette: Palette,
     _focus: UiFocus,
-    title: &'static str,
-    subtitle: &'static str,
-    status_tag: &'static str,
+    title: &str,
+    subtitle: &str,
+    status_tag: &str,
     status_color: u16,
 ) -> Result<(), P::Error> {
     fill(painter, 0, 0, UI_W, HEADER_H, palette.panel)?;
