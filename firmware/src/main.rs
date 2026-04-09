@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+#[cfg(feature = "net_http")]
+extern crate alloc;
+
 use core::cell::RefCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -9,9 +12,12 @@ mod front_panel;
 mod front_panel_logic;
 mod front_panel_scene;
 mod irq;
+mod net_bridge;
 mod output;
 mod runtime_audio_recovery;
 
+#[cfg(feature = "net_http")]
+use embassy_executor::Spawner;
 use embedded_hal_bus::i2c::RefCellDevice;
 use esp_backtrace as _;
 use esp_firmware::audio::{AudioCue, AudioManager, PLAYBACK_SAMPLE_RATE_HZ};
@@ -26,11 +32,13 @@ use esp_hal::i2s::master::{Channels, Config as I2sConfig, DataFormat, I2s};
 use esp_hal::ledc::channel::{self, ChannelIFace};
 use esp_hal::ledc::timer::{self, TimerIFace};
 use esp_hal::ledc::{LSGlobalClkSource, Ledc, LowSpeed};
+#[cfg(not(feature = "net_http"))]
+use esp_hal::main;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::spi::Mode as SpiMode;
 use esp_hal::time::{Duration, Instant, Rate};
 use esp_hal::timer::{systimer::SystemTimer, timg::TimerGroup};
-use esp_hal::{main, Blocking};
+use esp_hal::Blocking;
 use esp_println as _;
 use runtime_audio_recovery::{RuntimeAudioRecoveryDecision, RuntimeAudioRecoveryState};
 
@@ -463,10 +471,35 @@ fn clear_i2c_bus(sda: &mut Flex<'_>, scl: &mut Flex<'_>, bus: &'static str) {
     }
 }
 
+#[cfg(not(feature = "net_http"))]
 #[main]
 fn main() -> ! {
+    firmware_main(())
+}
+
+#[cfg(feature = "net_http")]
+#[esp_rtos::main]
+async fn main(spawner: Spawner) -> ! {
+    firmware_main(spawner)
+}
+
+#[cfg(not(feature = "net_http"))]
+type MainEntry = ();
+
+#[cfg(feature = "net_http")]
+type MainEntry = Spawner;
+
+fn firmware_main(main_entry: MainEntry) -> ! {
+    #[cfg(not(feature = "net_http"))]
+    let _ = main_entry;
+
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::_160MHz);
     let peripherals = esp_hal::init(config);
+
+    #[cfg(feature = "net_http")]
+    {
+        esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
+    }
 
     // GPIO interrupt aggregator (see `docs/i2c-address-map.md`).
     let mut _io = Io::new(peripherals.IO_MUX);
@@ -571,7 +604,11 @@ fn main() -> ! {
 
     // Disable watchdog timers for the simplest possible bring-up loop.
     let timg0 = TimerGroup::new(peripherals.TIMG0);
+    #[cfg(feature = "net_http")]
+    let timg0_timer0 = timg0.timer0;
     let mut wdt0 = timg0.wdt;
+    #[cfg(feature = "net_http")]
+    esp_rtos::start(timg0_timer0);
     wdt0.disable();
 
     let timg1 = TimerGroup::new(peripherals.TIMG1);
@@ -600,6 +637,8 @@ fn main() -> ! {
         FW_SRC_HASH,
         FW_GIT_DIRTY
     );
+    #[cfg(feature = "net_http")]
+    esp_firmware::net::log_wifi_config();
     log_usb_pd_feature_summary();
     defmt::info!(
         "fan: policy stop_c_x16={=i16} target_c_x16={=i16} min_pwm_pct={=u8} step_down_pct={=u8} step_up_small_pct={=u8} step_up_medium_pct={=u8} step_up_large_pct={=u8} control_interval_ms={=u64} tach_timeout_ms={=u64} tach_watchdog_enabled={=bool} tach_ppr={=u8} test_mode={=bool}",
@@ -1313,7 +1352,10 @@ fn main() -> ! {
     power.init_best_effort();
     log_boot_stage("power_init_done");
     power.update_usb_pd_state(initial_pd_state);
-    let initial_snapshot = power.ui_snapshot();
+    #[cfg(feature = "net_http")]
+    esp_firmware::net::spawn_wifi_and_http(&main_entry, peripherals.WIFI);
+    let initial_snapshot = net_bridge::apply_live_network_summary(power.ui_snapshot());
+    net_bridge::publish_status_snapshot(initial_snapshot);
     front_panel.update_self_check_snapshot(initial_snapshot);
     front_panel.update_bms_activation_state(power.bms_activation_state());
     if front_panel_scene::self_check_can_enter_dashboard(&initial_snapshot) {
@@ -1386,7 +1428,8 @@ fn main() -> ! {
             }
             service_runtime_audio!(power);
             let now = Instant::now();
-            let ui_snapshot = power.ui_snapshot();
+            let ui_snapshot = net_bridge::apply_live_network_summary(power.ui_snapshot());
+            net_bridge::publish_status_snapshot(ui_snapshot);
             front_panel.update_self_check_snapshot(ui_snapshot);
             front_panel.update_bms_activation_state(power.bms_activation_state());
             if let Some(action) = front_panel.tick() {

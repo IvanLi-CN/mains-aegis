@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(feature = "net_http")]
+extern crate alloc;
+
 #[cfg(test)]
 extern crate std;
 
@@ -35,5 +38,13 @@ pub mod output_retry;
 pub mod output_state;
 pub mod tmp112;
 pub mod usb_pd;
+
+#[cfg(feature = "net_http")]
+pub mod mdns;
+pub mod mdns_wire;
+#[cfg(feature = "net_http")]
+pub mod net;
+pub mod net_contract;
+pub mod net_types;
 
 pub mod audio;
