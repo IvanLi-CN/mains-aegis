@@ -5,10 +5,12 @@ on:
     branches: ["main"]
     paths-ignore:
       - "docs/**"
+      - "docs-site/**"
       - "README.md"
   pull_request:
     paths-ignore:
       - "docs/**"
+      - "docs-site/**"
       - "README.md"
 
 permissions:

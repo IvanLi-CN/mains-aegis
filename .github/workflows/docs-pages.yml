@@ -1,0 +1,99 @@
+name: docs-pages
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs-site/**"
+      - ".github/workflows/docs-pages.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs-site/**"
+      - ".github/workflows/docs-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Compute DOCS_BASE
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY%%/*}"
+          repo="${GITHUB_REPOSITORY##*/}"
+          if [[ "${repo}" == "${owner}.github.io" ]]; then
+            echo "DOCS_BASE=/" >> "$GITHUB_ENV"
+          else
+            echo "DOCS_BASE=/${repo}/" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install docs dependencies
+        run: bun install --cwd docs-site --frozen-lockfile
+
+      - name: Build docs site
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd docs-site
+          DOCS_BASE="${DOCS_BASE}" bun run build
+
+      - name: Smoke check build output
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f docs-site/doc_build/index.html
+          test -f docs-site/doc_build/404.html
+          test -d docs-site/doc_build/static
+          test -f docs-site/doc_build/design/system-overview.html
+          test -f docs-site/doc_build/manual/basic-use-and-troubleshooting.html
+
+      - name: Upload build artifact (PR only)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-site-build
+          path: docs-site/doc_build
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload Pages artifact
+        if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-site/doc_build
+
+  deploy:
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    needs: [build-docs]
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
