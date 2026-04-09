@@ -45,6 +45,7 @@ pub mod mdns_wire;
 #[cfg(feature = "net_http")]
 pub mod net;
 pub mod net_contract;
+pub mod net_logic;
 pub mod net_types;
 
 pub mod audio;

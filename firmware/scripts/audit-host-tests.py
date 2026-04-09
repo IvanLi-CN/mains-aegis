@@ -15,6 +15,7 @@ ALLOWED = {
     "mdns_wire.rs",
     "net_bridge.rs",
     "net_contract.rs",
+    "net_logic.rs",
     "net_types.rs",
     "output/pure.rs",
     "output_protection.rs",

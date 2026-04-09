@@ -3,7 +3,6 @@
 use alloc::string::String as AllocString;
 use core::{
     cell::RefCell,
-    fmt::Write as _,
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -31,6 +30,10 @@ use crate::{
         accepts_event_stream, is_api_v1_path, render_identity_json, render_network_json,
         render_ping_json, render_status_json, write_error_body, write_sse_event, BuildInfo,
     },
+    net_logic::{
+        build_http_response_head, build_sse_response_head, origin_reflection_allowed,
+        resolve_net_env_config, select_active_dns,
+    },
     net_types::{
         NetworkUiSummary, UpsStatusSnapshot, WifiConnectionState, WifiErrorKind, WifiSnapshot,
     },
@@ -47,7 +50,6 @@ const WIFI_DNS: Option<&str> = option_env!("MAINS_AEGIS_WIFI_DNS");
 const HTTP_PORT: u16 = 80;
 const HTTP_WORKER_COUNT: usize = 3;
 const HTTP_RESPONSE_BODY_CAP: usize = 3072;
-const HTTP_RESPONSE_HEAD_CAP: usize = 512;
 const SSE_FRAME_CAP: usize = 3328;
 const REQUEST_BUF_CAP: usize = 1024;
 const STATUS_PUSH_INTERVAL: Duration = Duration::from_secs(2);
@@ -229,11 +231,21 @@ async fn wifi_task(
                 if let Some(v4) = stack.config_v4() {
                     let ip = v4.address.address().octets();
                     let gateway = v4.gateway.map(|value| value.octets());
+                    let mut runtime_dns = [[0u8; 4]; 3];
+                    let mut runtime_dns_len = 0usize;
+                    for dns_server in v4.dns_servers.iter() {
+                        if runtime_dns_len >= runtime_dns.len() {
+                            break;
+                        }
+                        runtime_dns[runtime_dns_len] = dns_server.octets();
+                        runtime_dns_len += 1;
+                    }
+                    let dns = select_active_dns(configured_dns, &runtime_dns[..runtime_dns_len]);
                     set_wifi_snapshot(WifiSnapshot {
                         state: WifiConnectionState::Connected,
                         ipv4: Some(ip),
                         gateway,
-                        dns: configured_dns,
+                        dns,
                         is_static,
                         last_error: static_cfg_error,
                         rssi_dbm: None,
@@ -365,6 +377,21 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
             if let Some((_, value)) = line.split_once(':') {
                 accept_sse = accepts_event_stream(value.trim());
             }
+        }
+    }
+
+    if let Some(value) = origin {
+        if !origin_reflection_allowed(value) {
+            let mut body = String::<HTTP_RESPONSE_BODY_CAP>::new();
+            write_error_body(
+                &mut body,
+                "invalid_request",
+                "origin header is too long",
+                false,
+                None,
+            );
+            write_http_response(socket, "400 Bad Request", body.as_str(), None).await?;
+            return Ok(());
         }
     }
 
@@ -510,21 +537,9 @@ async fn write_http_response(
     body: &str,
     origin: Option<&str>,
 ) -> Result<(), embassy_net::tcp::Error> {
-    let allow_origin = origin.unwrap_or("*");
-    let vary = if origin.is_some() {
-        "Vary: Origin\r\n"
-    } else {
-        ""
+    let Some(head) = build_http_response_head(status, body.as_bytes().len(), origin) else {
+        return Err(embassy_net::tcp::Error::ConnectionReset);
     };
-    let mut head = String::<HTTP_RESPONSE_HEAD_CAP>::new();
-    let _ = write!(
-        head,
-        "HTTP/1.1 {}\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: {}\r\n{}Access-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Allow-Headers: Accept, Content-Type\r\nAccess-Control-Allow-Private-Network: true\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
-        status,
-        allow_origin,
-        vary,
-        body.as_bytes().len(),
-    );
     socket_write_all(socket, head.as_bytes()).await?;
     socket_write_all(socket, body.as_bytes()).await?;
     Ok(())
@@ -534,19 +549,9 @@ async fn write_sse_response_head(
     socket: &mut TcpSocket<'_>,
     origin: Option<&str>,
 ) -> Result<(), embassy_net::tcp::Error> {
-    let allow_origin = origin.unwrap_or("*");
-    let vary = if origin.is_some() {
-        "Vary: Origin\r\n"
-    } else {
-        ""
+    let Some(head) = build_sse_response_head(origin) else {
+        return Err(embassy_net::tcp::Error::ConnectionReset);
     };
-    let mut head = String::<HTTP_RESPONSE_HEAD_CAP>::new();
-    let _ = write!(
-        head,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: {}\r\n{}Access-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Allow-Headers: Accept, Content-Type\r\nAccess-Control-Allow-Private-Network: true\r\nConnection: keep-alive\r\n\r\n",
-        allow_origin,
-        vary,
-    );
     socket_write_all(socket, head.as_bytes()).await
 }
 
@@ -574,71 +579,35 @@ fn note_wifi_error(mac: [u8; 6], dns: Option<[u8; 4]>, is_static: bool, error: W
 }
 
 fn build_net_config_from_env() -> (NetConfig, bool, Option<WifiErrorKind>, Option<[u8; 4]>) {
-    let configured_dns = WIFI_DNS.and_then(parse_ipv4);
-    if let (Some(ip), Some(mask), Some(gateway)) = (WIFI_STATIC_IP, WIFI_NETMASK, WIFI_GATEWAY) {
-        if let (Some(ip), Some(mask), Some(gateway)) =
-            (parse_ipv4(ip), parse_ipv4(mask), parse_ipv4(gateway))
-        {
-            if let Some(prefix_len) = netmask_to_prefix(mask) {
-                let mut dns_servers = Vec::<Ipv4Address, 3>::new();
-                if let Some(dns) = configured_dns {
-                    let _ = dns_servers.push(ipv4_from_octets(dns));
-                }
-                let cfg = StaticConfigV4 {
-                    address: Ipv4Cidr::new(ipv4_from_octets(ip), prefix_len),
-                    gateway: Some(ipv4_from_octets(gateway)),
-                    dns_servers,
-                };
-                return (NetConfig::ipv4_static(cfg), true, None, configured_dns);
-            }
+    let parsed = resolve_net_env_config(WIFI_STATIC_IP, WIFI_NETMASK, WIFI_GATEWAY, WIFI_DNS);
+    if let Some(static_ipv4) = parsed.static_ipv4 {
+        let mut dns_servers = Vec::<Ipv4Address, 3>::new();
+        if let Some(dns) = static_ipv4.dns {
+            let _ = dns_servers.push(ipv4_from_octets(dns));
         }
-        warn!("net: invalid static IPv4 config; fallback to dhcp");
+        let cfg = StaticConfigV4 {
+            address: Ipv4Cidr::new(ipv4_from_octets(static_ipv4.ip), static_ipv4.prefix_len),
+            gateway: Some(ipv4_from_octets(static_ipv4.gateway)),
+            dns_servers,
+        };
         return (
-            NetConfig::dhcpv4(DhcpConfig::default()),
-            false,
-            Some(WifiErrorKind::BadStaticConfig),
-            configured_dns,
+            NetConfig::ipv4_static(cfg),
+            true,
+            None,
+            parsed.configured_dns,
         );
+    }
+
+    if parsed.last_error == Some(WifiErrorKind::BadStaticConfig) {
+        warn!("net: invalid or incomplete static IPv4 config; fallback to dhcp");
     }
 
     (
         NetConfig::dhcpv4(DhcpConfig::default()),
         false,
-        None,
-        configured_dns,
+        parsed.last_error,
+        parsed.configured_dns,
     )
-}
-
-fn parse_ipv4(input: &str) -> Option<[u8; 4]> {
-    let mut octets = [0u8; 4];
-    let mut idx = 0usize;
-    for part in input.split('.') {
-        if idx >= 4 {
-            return None;
-        }
-        octets[idx] = part.parse().ok()?;
-        idx += 1;
-    }
-    if idx == 4 {
-        Some(octets)
-    } else {
-        None
-    }
-}
-
-fn netmask_to_prefix(mask: [u8; 4]) -> Option<u8> {
-    let value = u32::from_be_bytes(mask);
-    let ones = value.count_ones() as u8;
-    let reconstructed = if ones == 0 {
-        0
-    } else {
-        u32::MAX.checked_shl((32 - ones as u32) as u32)?
-    };
-    if reconstructed == value {
-        Some(ones)
-    } else {
-        None
-    }
 }
 
 fn ipv4_from_octets(octets: [u8; 4]) -> Ipv4Address {
