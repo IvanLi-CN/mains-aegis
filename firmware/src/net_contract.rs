@@ -49,6 +49,8 @@ pub fn write_error_body<const N: usize>(
     if let Some(details_json) = details_json {
         let _ = buf.push_str(",\"details\":");
         let _ = buf.push_str(details_json);
+    } else {
+        let _ = buf.push_str(",\"details\":null");
     }
     let _ = buf.push_str("}}");
 }
@@ -420,7 +422,7 @@ mod tests {
         write_error_body(&mut body, "unavailable", "wifi down", true, None);
         assert_eq!(
             body.as_str(),
-            r#"{"error":{"code":"unavailable","message":"wifi down","retryable":true}}"#
+            r#"{"error":{"code":"unavailable","message":"wifi down","retryable":true,"details":null}}"#
         );
     }
 
