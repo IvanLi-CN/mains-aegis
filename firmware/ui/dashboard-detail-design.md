@@ -117,8 +117,8 @@
 
 ## 7. Manual charge 冻结渲染图
 
-![Manual Charge - Default](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-default.png)
-![Manual Charge - Active](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-active.png)
-![Manual Charge - Stop Hold](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-stop-hold.png)
-![Manual Charge - Reset Auto](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-reset-auto.png)
-![Manual Charge - Blocked](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-blocked.png)
+![Manual Charge - Default](assets/manual-charge-default.png)
+![Manual Charge - Active](assets/manual-charge-active.png)
+![Manual Charge - Stop Hold](assets/manual-charge-stop-hold.png)
+![Manual Charge - Reset Auto](assets/manual-charge-reset-auto.png)
+![Manual Charge - Blocked](assets/manual-charge-blocked.png)

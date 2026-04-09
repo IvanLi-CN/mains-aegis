@@ -15,9 +15,7 @@ const docsFavicon = new URL("./docs/public/favicon.svg", import.meta.url);
 const handbookSidebar = [
   {
     text: "项目手册",
-    items: [
-      { text: "总览", link: "/handbook/index" },
-    ],
+    items: [{ text: "总览", link: "/handbook/index" }],
   },
   {
     text: "系统设计",
@@ -26,8 +24,8 @@ const handbookSidebar = [
       { text: "系统概览", link: "/design/system-overview" },
       { text: "电源与 BMS", link: "/design/power-and-bms" },
       { text: "前面板与固件", link: "/design/front-panel-and-firmware" },
+      { text: "前面板屏幕页面总览", link: "/design/front-panel-screen-pages" },
       { text: "前面板 UI 交互与设计", link: "/design/front-panel-ui-design" },
-      { text: "前面板 UI 图集", link: "/design/front-panel-ui-gallery" },
     ],
   },
   {

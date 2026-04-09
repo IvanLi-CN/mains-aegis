@@ -61,8 +61,9 @@ mcu-agentd monitor esp --reset
 ### 4.2 前面板侧
 
 - 屏幕点亮
-- 页面进入 `SELF CHECK`
+- 页面先进入 `SELF CHECK`
 - 模块卡片从 `PEND` 逐步转成 `OK / WARN / ERR / HOLD / N/A`
+- 如果自检收口且运行态快照已准备好，steady-state 默认页会自动切到 Dashboard，而不是长期停留在 `SELF CHECK`
 
 参考画面：
 
@@ -74,6 +75,7 @@ mcu-agentd monitor esp --reset
 
 - 第一张更接近“链路已经打通”的 bring-up 目标。
 - 第二张更接近“上游门控未满足”的状态；此时应先追 `BQ40Z50` 和授权链，而不是先怀疑 `TPS55288` 硬件本体。
+- 如果你想看完整页面链，而不只是首次上电参考图，请继续看 [前面板屏幕页面总览](/design/front-panel-screen-pages)。
 
 ### 4.3 输出侧
 
@@ -114,4 +116,5 @@ mcu-agentd monitor esp --reset
 - [固件 bring-up README](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/README.md)
 - [开机自检流程](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/boot-self-test-flow.md)
 - [前面板与固件](/design/front-panel-and-firmware)
+- [前面板屏幕页面总览](/design/front-panel-screen-pages)
 - [Self-check UI 设计](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/self-check-design.md)

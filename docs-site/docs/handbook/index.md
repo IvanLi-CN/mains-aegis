@@ -7,7 +7,7 @@ description: Mains Aegis 项目手册总览。
 
 本手册面向两类读者：
 
-- 继续修改原理图、PCB、固件或 UI 的开发者
+- 继续修改原理图、PCB、固件或屏幕文档的开发者
 - 自行复刻样机并完成 bring-up 的协作者
 
 二者使用同一套事实源；差别只在阅读起点，不在文档体系。
@@ -19,6 +19,7 @@ description: Mains Aegis 项目手册总览。
 | 弄清系统组成、接口、电源路径和门控逻辑 | [系统设计](/design/index) |
 | 先把板子点亮、烧录、看日志、做首次上电 | [样机复刻与 Bring-up](/manual/index) |
 | 快速确认整机结构与关键网络 | [系统概览](/design/system-overview) |
+| 快速确认前面板屏幕会依次出现哪些页面 | [前面板屏幕页面总览](/design/front-panel-screen-pages) |
 | 快速确认复刻顺序 | [准备与范围](/manual/prepare-and-scope) |
 
 ## 2. 目录
@@ -29,6 +30,8 @@ description: Mains Aegis 项目手册总览。
 2. [系统概览](/design/system-overview)
 3. [电源与 BMS](/design/power-and-bms)
 4. [前面板与固件](/design/front-panel-and-firmware)
+5. [前面板屏幕页面总览](/design/front-panel-screen-pages)
+6. [前面板 UI 交互与设计](/design/front-panel-ui-design)
 
 ### 样机复刻与 Bring-up
 
@@ -45,6 +48,7 @@ description: Mains Aegis 项目手册总览。
 | 系统级设计文档 | 已公开 |
 | 主板 / 前面板网表提炼 | 已公开 |
 | 固件工具链与 bring-up 入口 | 已公开 |
+| 前面板屏幕页面与交互文档 | 已公开 |
 | 离线资料库 | 已公开 |
 | 完整量产 BOM | 未作为统一发布物提供 |
 | 统一生产文件打包入口 | 未作为统一发布物提供 |
@@ -57,3 +61,4 @@ description: Mains Aegis 项目手册总览。
 - [主板 PCB 说明](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/pcbs/mainboard/README.md)
 - [前面板 PCB 说明](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/pcbs/front-panel/README.md)
 - [固件 bring-up README](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/README.md)
+- [Front panel UI docs](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/README.md)

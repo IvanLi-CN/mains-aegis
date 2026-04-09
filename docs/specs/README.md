@@ -44,3 +44,4 @@
 | mturr | Front panel display-chain long-press diagnostics | 已完成 | `mturr-front-panel-display-chain-diagnostics/SPEC.md` | 2026-04-04 | 已完成主固件实现、本地构建、真机 flash/monitor 与 `CENTER` 长按 defmt 取证 |
 | zp4cg | Manual charge dashboard page + EEPROM prefs | 已完成 | `zp4cg-manual-charge-dashboard/SPEC.md` | 2026-04-07 | 已完成 `MANUAL` 三级页面、小屏触控布局、运行时手动接管/停止抑制、仅保存 prefs 的 EEPROM schema v1，以及预览/真机验证闭环 |
 | jxz2t | GitHub Pages docs site handbooks | 已完成 | `jxz2t-docs-site-handbooks/SPEC.md` | 2026-04-08 | 已完成 `docs-site/`、GitHub Pages workflow、双手册页面、视觉证据与 PR #63 收敛 |
+| 9rmmn | Front panel screen docs restructure | 部分完成（2/3） | `9rmmn-front-panel-screen-docs/SPEC.md` | 2026-04-09 | 已完成文档 IA 重构、SoT 收敛与视觉证据；等待 PR / review-loop 收口 |

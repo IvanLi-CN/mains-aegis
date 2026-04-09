@@ -26,14 +26,16 @@ description: Mains Aegis 项目手册首页。
 | --- | --- |
 | 浏览整本手册和完整目录 | [项目手册](/handbook/index) |
 | 先看系统结构、接口和器件边界 | [系统设计](/design/index) |
+| 直接查看前面板屏幕页面与最新图 | [前面板屏幕页面总览](/design/front-panel-screen-pages) |
 | 直接进入复刻、烧录和首次上电 | [样机复刻与 Bring-up](/manual/index) |
 
 ## 3. 推荐使用方式
 
 1. 先在[系统概览](/design/system-overview)确认连接器、总线和 GPIO 映射。
-2. 做样机前，按[PCB 与连线检查](/manual/pcb-and-wiring-checks)逐项过静态检查。
-3. 烧录和首次上电时，以[固件烧录与首次自检](/manual/firmware-flash-and-self-test)为准。
-4. 需要追源码、网表或器件级推导时，直接回仓库原始文档。
+2. 需要理解前面板运行时页面时，先看[前面板屏幕页面总览](/design/front-panel-screen-pages)。
+3. 做样机前，按[PCB 与连线检查](/manual/pcb-and-wiring-checks)逐项过静态检查。
+4. 烧录和首次上电时，以[固件烧录与首次自检](/manual/firmware-flash-and-self-test)为准。
+5. 需要追源码、网表或器件级推导时，直接回仓库原始文档。
 
 ## 4. 资料边界
 

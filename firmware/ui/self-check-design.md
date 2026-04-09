@@ -1,10 +1,10 @@
-# Self-check UI 设计（Variant C）
+# Self-check UI 设计（Variant C，启动 / 恢复阶段）
 
 本文件定义固件屏幕 Self-check 页面（Variant C）的模块布局、运行语义与冻结图。
 
 ## 1. 基线
 
-- 运行语义基线：[../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md](../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md)
+- 运行语义基线：[../../docs/specs/g2kte-dashboard-live-after-self-check/SPEC.md](../../docs/specs/g2kte-dashboard-live-after-self-check/SPEC.md)
 - 视觉冻结基线：[../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md](../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md)
 - 视觉规范来源：[design-language.md](design-language.md)
 - 组件契约来源：[component-contracts.md](component-contracts.md)
@@ -41,13 +41,14 @@
 
 - 开机后屏幕可用即进入 `SELF CHECK`（Variant C）。
 - 自检阶段按模块探测进度实时更新状态：`PEND -> OK/WARN/ERR/N/A`。
-- 自检完成后保持 `SELF CHECK` 页面并持续刷新真实运行数据。
+- `SELF CHECK` 是启动 / 恢复阶段页面，不是 steady-state 默认页。
+- 当自检清零且首份运行态快照准备好后，页面自动切换到 Dashboard；运行期默认停留在 Dashboard，而不是回退到 `SELF CHECK`。
 - `BQ40Z50` 卡片语义固定为：`OK`=普通访问可信正常态，`WARN`=设备存在但非正常态，`ERR`=普通访问未识别。
 - `TPS55288-A/B` 卡片语义固定为：当 `BMS` 尚未允许放电或仍无法确认 `VBAT` 网络具备合理电压时，`TPS` 的 `I2C NACK/not_present` 归类为 `WARN`，并使用橙黄色系显示 `WAIT BMS` / `VBAT UNK`；只有在上游供电前提已满足后仍探测失败，才显示 `ERR`。
-- 本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard。
+- 本版本不提供从 Dashboard 主动返回 `SELF CHECK` 的常规入口；`SELF CHECK` 只在启动 / 恢复链路出现。
 - 视觉样式（状态颜色、字体层级、交互高亮）以 [design-language.md](design-language.md) 为准，本页保留布局与语义冻结。
 
-## 6. 冻结渲染图（含 BQ40 结果弹窗）
+## 6. 冻结渲染图（启动 / 恢复阶段，包括 BQ40 结果弹窗）
 
 ![Self-check Variant C - STANDBY idle](assets/self-check-c-standby-idle.png)
 ![Self-check Variant C - STANDBY charger-focus](assets/self-check-c-standby-right.png)
