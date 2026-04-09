@@ -32,19 +32,19 @@
 | `INA3221` | `PEND/OK/WARN/ERR/N/A` | `ISUM x.xxA` |
 | `BQ25792` | `PEND/RUN/LOCK/WARN/ERR/N/A` | `ICHG x.xxA` 或 `CHG DISABLED` |
 | `BQ40Z50` | `PEND/OK/WARN/ERR/N/A` | `SOC xx%` / `ABNORMAL` / `RCA ALARM` / `NOT DETECTED` |
-| `TPS55288-A` | `PEND/RUN/IDLE/WARN/ERR/N/A` | `IOUT x.xxA` |
-| `TPS55288-B` | `PEND/RUN/IDLE/WARN/ERR/N/A` | `IOUT x.xxA` |
+| `TPS55288-A` | `PEND/RUN/IDLE/HOLD/WARN/ERR/N/A` | `IOUT x.xxA` |
+| `TPS55288-B` | `PEND/RUN/IDLE/HOLD/WARN/ERR/N/A` | `IOUT x.xxA` |
 | `TMP112-A` | `PEND/OK/WARN/ERR/N/A` | `TMAX xxC` |
 | `TMP112-B` | `PEND/OK/WARN/ERR/N/A` | `TMAX xxC` |
 
 ## 5. 页面运行语义（冻结）
 
 - 开机后屏幕可用即进入 `SELF CHECK`（Variant C）。
-- 自检阶段按模块探测进度实时更新状态：`PEND -> OK/WARN/ERR/N/A`。
+- 自检阶段按模块探测进度实时更新状态；大多数卡片按 `PEND -> OK/WARN/ERR/N/A` 收口，输出相关卡片会按门控条件进入 `HOLD`。
 - `SELF CHECK` 是启动 / 恢复阶段页面，不是 steady-state 默认页。
 - 当自检清零且首份运行态快照准备好后，页面自动切换到 Dashboard；运行期默认停留在 Dashboard，而不是回退到 `SELF CHECK`。
 - `BQ40Z50` 卡片语义固定为：`OK`=普通访问可信正常态，`WARN`=设备存在但非正常态，`ERR`=普通访问未识别。
-- `TPS55288-A/B` 卡片语义固定为：当 `BMS` 尚未允许放电或仍无法确认 `VBAT` 网络具备合理电压时，`TPS` 的 `I2C NACK/not_present` 归类为 `WARN`，并使用橙黄色系显示 `WAIT BMS` / `VBAT UNK`；只有在上游供电前提已满足后仍探测失败，才显示 `ERR`。
+- `TPS55288-A/B` 卡片语义固定为：当 `BMS` 尚未允许放电、`VBAT` 网络仍不可确认，或输出链路还在等待上游门控前提时，卡片允许停在 `HOLD`；若此时伴随 `I2C NACK/not_present`，仍按门控未满足处理并显示 `WAIT BMS` / `VBAT UNK`。只有在上游供电前提已满足后仍探测失败，才显示 `ERR`。
 - 本版本不提供从 Dashboard 主动返回 `SELF CHECK` 的常规入口；`SELF CHECK` 只在启动 / 恢复链路出现。
 - 视觉样式（状态颜色、字体层级、交互高亮）以 [design-language.md](design-language.md) 为准，本页保留布局与语义冻结。
 
