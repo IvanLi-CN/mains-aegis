@@ -13,9 +13,6 @@ extern crate self as esp_firmware;
 #[path = "../../../firmware/src/output_state.rs"]
 pub mod output_state;
 
-#[path = "../../../firmware/src/net_types.rs"]
-pub mod net_types;
-
 #[path = "../../../firmware/src/front_panel_scene.rs"]
 mod front_panel_scene;
 
@@ -27,7 +24,6 @@ use front_panel_scene::{
     TpsTestUiSnapshot, TpsTestVoutProfile, UiFocus, UiModel, UiPainter, UiVariant, UpsMode, UI_H,
     UI_W,
 };
-use net_types::{NetworkUiSummary, WifiConnectionState, WifiErrorKind, WifiSnapshot};
 
 #[allow(dead_code)]
 fn base_bq40_snapshot(mode: UpsMode) -> SelfCheckUiSnapshot {
@@ -561,42 +557,6 @@ fn manual_charge_snapshot_for_state(
     (mode, DashboardRoute::ManualCharge, snapshot)
 }
 
-#[derive(Clone, Copy, Debug)]
-enum NetworkPreviewState {
-    Disabled,
-    Connecting,
-    Connected,
-    Error,
-}
-
-fn network_summary_snapshot_for_state(state: NetworkPreviewState) -> SelfCheckUiSnapshot {
-    let mut snapshot = base_bq40_snapshot(UpsMode::Standby);
-    snapshot.bq40z50 = SelfCheckCommState::Ok;
-    snapshot.bq40z50_pack_mv = Some(15_260);
-    snapshot.bq40z50_current_ma = Some(180);
-    snapshot.bq40z50_soc_pct = Some(67);
-    snapshot.bq40z50_no_battery = Some(false);
-    snapshot.bq40z50_discharge_ready = Some(true);
-    snapshot.network_summary = match state {
-        NetworkPreviewState::Disabled => NetworkUiSummary::disabled(),
-        NetworkPreviewState::Connecting => NetworkUiSummary::from_wifi(WifiSnapshot {
-            state: WifiConnectionState::Connecting,
-            ..WifiSnapshot::disabled()
-        }),
-        NetworkPreviewState::Connected => NetworkUiSummary::from_wifi(WifiSnapshot {
-            state: WifiConnectionState::Connected,
-            ipv4: Some([192, 168, 31, 42]),
-            ..WifiSnapshot::disabled()
-        }),
-        NetworkPreviewState::Error => NetworkUiSummary::from_wifi(WifiSnapshot {
-            state: WifiConnectionState::Error,
-            last_error: Some(WifiErrorKind::DhcpTimeout),
-            ..WifiSnapshot::disabled()
-        }),
-    };
-    snapshot
-}
-
 fn tps_test_snapshot_fixture() -> TpsTestUiSnapshot {
     TpsTestUiSnapshot {
         build_profile: "release",
@@ -839,10 +799,6 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardManualChargeStopHold
         | ScenarioArg::DashboardManualChargeResetAuto
         | ScenarioArg::DashboardManualChargeBlocked
-        | ScenarioArg::SelfCheckWifiDisabled
-        | ScenarioArg::SelfCheckWifiConnecting
-        | ScenarioArg::SelfCheckWifiConnected
-        | ScenarioArg::SelfCheckWifiError
         | ScenarioArg::TpsTest
         | ScenarioArg::TestAudio
         | ScenarioArg::TestNavigation => SelfCheckOverlay::None,
@@ -887,10 +843,6 @@ fn run() -> Result<(), String> {
         ScenarioArg::DashboardManualChargeStopHold => ModeArg::Standby,
         ScenarioArg::DashboardManualChargeResetAuto => ModeArg::Standby,
         ScenarioArg::DashboardManualChargeBlocked => ModeArg::Standby,
-        ScenarioArg::SelfCheckWifiDisabled => ModeArg::Standby,
-        ScenarioArg::SelfCheckWifiConnecting => ModeArg::Standby,
-        ScenarioArg::SelfCheckWifiConnected => ModeArg::Standby,
-        ScenarioArg::SelfCheckWifiError => ModeArg::Standby,
         _ => args.mode,
     };
 
@@ -1113,11 +1065,7 @@ fn run() -> Result<(), String> {
             )
             .map_err(|_| "render failed unexpectedly".to_string())?;
         }
-        ScenarioArg::SelfCheckWifiDisabled
-        | ScenarioArg::SelfCheckWifiConnecting
-        | ScenarioArg::SelfCheckWifiConnected
-        | ScenarioArg::SelfCheckWifiError
-        | ScenarioArg::Bq40Offline
+        ScenarioArg::Bq40Offline
         | ScenarioArg::SelfCheckBmsMissingTpsWarn
         | ScenarioArg::Bq40OfflineDialog
         | ScenarioArg::Bq40DischargeBlocked
@@ -1129,25 +1077,8 @@ fn run() -> Result<(), String> {
         | ScenarioArg::Bq40ResultRomMode
         | ScenarioArg::Bq40ResultAbnormal
         | ScenarioArg::Bq40ResultNotDetected => {
-            let (snapshot, overlay) = match args.scenario {
-                ScenarioArg::SelfCheckWifiDisabled => (
-                    network_summary_snapshot_for_state(NetworkPreviewState::Disabled),
-                    SelfCheckOverlay::None,
-                ),
-                ScenarioArg::SelfCheckWifiConnecting => (
-                    network_summary_snapshot_for_state(NetworkPreviewState::Connecting),
-                    SelfCheckOverlay::None,
-                ),
-                ScenarioArg::SelfCheckWifiConnected => (
-                    network_summary_snapshot_for_state(NetworkPreviewState::Connected),
-                    SelfCheckOverlay::None,
-                ),
-                ScenarioArg::SelfCheckWifiError => (
-                    network_summary_snapshot_for_state(NetworkPreviewState::Error),
-                    SelfCheckOverlay::None,
-                ),
-                _ => bq40_snapshot_for_scenario(args.mode.into_scene(), args.scenario),
-            };
+            let (snapshot, overlay) =
+                bq40_snapshot_for_scenario(args.mode.into_scene(), args.scenario);
             front_panel_scene::render_frame_with_dashboard_route_overlay(
                 &mut framebuffer,
                 &model,
@@ -1380,10 +1311,6 @@ enum ScenarioArg {
     DashboardManualChargeStopHold,
     DashboardManualChargeResetAuto,
     DashboardManualChargeBlocked,
-    SelfCheckWifiDisabled,
-    SelfCheckWifiConnecting,
-    SelfCheckWifiConnected,
-    SelfCheckWifiError,
     SelfCheckBmsMissingTpsWarn,
     Bq40Offline,
     Bq40OfflineDialog,
@@ -1444,10 +1371,6 @@ impl ScenarioArg {
             "dashboard-manual-charge-stop-hold" => Ok(Self::DashboardManualChargeStopHold),
             "dashboard-manual-charge-reset-auto" => Ok(Self::DashboardManualChargeResetAuto),
             "dashboard-manual-charge-blocked" => Ok(Self::DashboardManualChargeBlocked),
-            "self-check-wifi-disabled" => Ok(Self::SelfCheckWifiDisabled),
-            "self-check-wifi-connecting" => Ok(Self::SelfCheckWifiConnecting),
-            "self-check-wifi-connected" => Ok(Self::SelfCheckWifiConnected),
-            "self-check-wifi-error" => Ok(Self::SelfCheckWifiError),
             "self-check-bms-missing-tps-warn" => Ok(Self::SelfCheckBmsMissingTpsWarn),
             "bq40-offline" => Ok(Self::Bq40Offline),
             "bq40-offline-dialog" => Ok(Self::Bq40OfflineDialog),
@@ -1464,7 +1387,7 @@ impl ScenarioArg {
             "test-audio" => Ok(Self::TestAudio),
             "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|dashboard-manual-charge-default|dashboard-manual-charge-active|dashboard-manual-charge-stop-hold|dashboard-manual-charge-reset-auto|dashboard-manual-charge-blocked|self-check-wifi-disabled|self-check-wifi-connecting|self-check-wifi-connected|self-check-wifi-error|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|dashboard-manual-charge-default|dashboard-manual-charge-active|dashboard-manual-charge-stop-hold|dashboard-manual-charge-reset-auto|dashboard-manual-charge-blocked|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation)"
             )),
         }
     }
@@ -1513,10 +1436,6 @@ impl ScenarioArg {
             ScenarioArg::DashboardManualChargeStopHold => "dashboard-manual-charge-stop-hold",
             ScenarioArg::DashboardManualChargeResetAuto => "dashboard-manual-charge-reset-auto",
             ScenarioArg::DashboardManualChargeBlocked => "dashboard-manual-charge-blocked",
-            ScenarioArg::SelfCheckWifiDisabled => "self-check-wifi-disabled",
-            ScenarioArg::SelfCheckWifiConnecting => "self-check-wifi-connecting",
-            ScenarioArg::SelfCheckWifiConnected => "self-check-wifi-connected",
-            ScenarioArg::SelfCheckWifiError => "self-check-wifi-error",
             ScenarioArg::SelfCheckBmsMissingTpsWarn => "self-check-bms-missing-tps-warn",
             ScenarioArg::Bq40Offline => "bq40-offline",
             ScenarioArg::Bq40OfflineDialog => "bq40-offline-dialog",
@@ -1615,7 +1534,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|dashboard-manual-charge-default|dashboard-manual-charge-active|dashboard-manual-charge-stop-hold|dashboard-manual-charge-reset-auto|dashboard-manual-charge-blocked|self-check-wifi-disabled|self-check-wifi-connecting|self-check-wifi-connected|self-check-wifi-error|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|dashboard-manual-charge-default|dashboard-manual-charge-active|dashboard-manual-charge-stop-hold|dashboard-manual-charge-reset-auto|dashboard-manual-charge-blocked|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",

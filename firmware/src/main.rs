@@ -1354,7 +1354,7 @@ fn firmware_main(main_entry: MainEntry) -> ! {
     power.update_usb_pd_state(initial_pd_state);
     #[cfg(feature = "net_http")]
     esp_firmware::net::spawn_wifi_and_http(&main_entry, peripherals.WIFI);
-    let initial_snapshot = net_bridge::apply_live_network_summary(power.ui_snapshot());
+    let initial_snapshot = power.ui_snapshot();
     net_bridge::publish_status_snapshot(initial_snapshot);
     front_panel.update_self_check_snapshot(initial_snapshot);
     front_panel.update_bms_activation_state(power.bms_activation_state());
@@ -1428,7 +1428,7 @@ fn firmware_main(main_entry: MainEntry) -> ! {
             }
             service_runtime_audio!(power);
             let now = Instant::now();
-            let ui_snapshot = net_bridge::apply_live_network_summary(power.ui_snapshot());
+            let ui_snapshot = power.ui_snapshot();
             net_bridge::publish_status_snapshot(ui_snapshot);
             front_panel.update_self_check_snapshot(ui_snapshot);
             front_panel.update_bms_activation_state(power.bms_activation_state());

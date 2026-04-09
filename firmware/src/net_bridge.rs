@@ -1,5 +1,5 @@
+#[cfg(feature = "net_http")]
 use esp_firmware::net_types::NetworkUiSummary;
-
 #[cfg(feature = "net_http")]
 use esp_firmware::net_types::UpsStatusSnapshot;
 #[cfg(feature = "net_http")]
@@ -9,21 +9,12 @@ use crate::front_panel_scene::SelfCheckUiSnapshot;
 #[cfg(feature = "net_http")]
 use crate::front_panel_scene::{BmsResultKind, SelfCheckCommState, UpsMode};
 
+#[cfg(feature = "net_http")]
 pub fn current_network_summary() -> NetworkUiSummary {
     #[cfg(feature = "net_http")]
     {
         return esp_firmware::net::current_network_ui_summary();
     }
-
-    #[cfg(not(feature = "net_http"))]
-    {
-        NetworkUiSummary::disabled()
-    }
-}
-
-pub fn apply_live_network_summary(mut snapshot: SelfCheckUiSnapshot) -> SelfCheckUiSnapshot {
-    snapshot.network_summary = current_network_summary();
-    snapshot
 }
 
 pub fn publish_status_snapshot(snapshot: SelfCheckUiSnapshot) {
@@ -77,7 +68,7 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
         tmp_a_c: snapshot.tmp_a_c,
         tmp_b_state: comm_state_slug(snapshot.tmp_b),
         tmp_b_c: snapshot.tmp_b_c,
-        network: snapshot.network_summary,
+        network: current_network_summary(),
     }
 }
 
