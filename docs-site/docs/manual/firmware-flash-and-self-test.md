@@ -1,6 +1,6 @@
 ---
 title: 固件烧录与首次自检
-description: 固件环境、构建口径、烧录流程与首次上电观测点。
+description: 固件环境、构建方式、烧录流程与首次上电观测点。
 ---
 
 # 固件烧录与首次自检
@@ -18,7 +18,7 @@ source ~/export-esp.sh
 mcu-agentd --version
 ```
 
-## 2. 构建口径
+## 2. 构建方式
 
 ```bash
 cd firmware
@@ -28,13 +28,13 @@ cargo build --release --bin esp-firmware --features main-vout-19v
 
 | 构建方式 | 用途 |
 | --- | --- |
-| 默认无 feature | 主输出按 `12V` 口径构建 |
+| 默认无 feature | 主输出按 `12V` 方式构建 |
 | `main-vout-19v` | 主输出改成 `19V` |
 | `force-min-charge` | 诊断阶段最小电流强制充电唤醒 |
 | `bms-dual-probe-diag` | 仅用于 BMS 地址诊断 |
 | `tmp-hw-protect-test` | TMP 硬件保护测试 |
 
-`12V` 和 `19V` 是两套 bring-up 口径，烧录前先确认自己要验证哪一套。
+`12V` 和 `19V` 是两套 bring-up 设定，烧录前先确认自己要验证哪一套。
 
 ## 3. 烧录与串口日志
 
@@ -109,7 +109,7 @@ mcu-agentd monitor esp --reset
 - 能稳定烧录
 - 能稳定看日志
 - 能进入 `SELF CHECK`
-- 能解释当前卡住的是哪个模块、为什么卡住
+- 能解释这次卡住的是哪个模块、为什么卡住
 
 ## 8. 相关文档
 

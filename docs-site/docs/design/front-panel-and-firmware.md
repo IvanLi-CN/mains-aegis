@@ -66,7 +66,7 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 ## 4. 总线与中断规则
 
 - 前面板不放 `I2C2_SCL/SDA/INT` 上拉，必须由主板侧提供。
-- `I2C2_INT` 只能挂开漏源；当前挂载对象是 `TCA6408A` 和 `FUSB302B`。
+- `I2C2_INT` 只能挂开漏源；现在挂在这根线上的就是 `TCA6408A` 和 `FUSB302B`。
 - 触摸 `IRQ` 单独走 `CTP_IRQ`，不并入 `I2C2_INT`。这样做是为了规避 `CST816D IRQ` 电气类型不明确带来的 wired-OR 风险。
 
 ## 5. 固件运行时基线
@@ -99,7 +99,7 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 - 上电后，屏幕可用就先进入 `SELF CHECK`。
 - 当自检结束且首份运行态快照准备好后，页面自动进入 Dashboard。
 - Dashboard 首页给出 5 个入口：`Output / Thermal / Cells / Charger / Battery Flow`。
-- `Charger Detail` 再继续下钻到 `MANUAL CHARGE`；这是这套页面里负责控制动作的一页。
+- `Charger Detail` 再继续下钻到 `MANUAL CHARGE`；控制动作就是从这里开始的。
 
 ### 5.3 Dashboard 运行态模式
 
@@ -120,7 +120,7 @@ description: 前面板硬件链路、控制线与固件运行时基线。
 
 ![Self-check - BMS 缺失且 TPS 警告](/ui/self-check-c-bms-missing-tps-warn.png)
 
-看这页时，通常先留意：
+看这页时，先留意：
 
 - 左右共 10 张模块卡，对应固件跟踪的 10 个通信模块。
 - 卡片从 `PEND` 走到 `OK / WARN / ERR / HOLD / N/A`，就是 bring-up 时最直接的观察点。

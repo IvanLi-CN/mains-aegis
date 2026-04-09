@@ -5,7 +5,7 @@ description: 复刻前的目标定义、前置条件和资料边界。
 
 # 准备与范围
 
-## 1. 先冻结复刻目标
+## 1. 先定复刻目标
 
 | 目标等级 | 交付结果 |
 | --- | --- |
@@ -30,21 +30,21 @@ description: 复刻前的目标定义、前置条件和资料边界。
 
 | 项目 | 说明 |
 | --- | --- |
-| 输出口径 | `12V` 或 `19V`；影响固件 feature、热边界和测量口径 |
+| 输出设定 | `12V` 或 `19V`；影响固件 feature、热边界和测量方式 |
 | bring-up 深度 | 仅点亮样机，还是继续验证 BMS / 充电 / 主输出 |
 | 供电方式 | 电池、USB-C / PD、DC 输入，或先只接调试电源 |
 
-## 4. 当前仓库已提供的资料
+## 4. 仓库里能直接用的资料
 
 | 资料 | 用途 |
 | --- | --- |
 | `docs/hardware-selection.md` | 系统级选型总纲 |
 | `docs/bms-design.md` / `docs/charger-design.md` / `docs/ups-output-design.md` | 电源主线设计 |
 | `docs/pcbs/mainboard/README.md` / `docs/pcbs/front-panel/README.md` | 板级网络与接口提炼 |
-| `firmware/README.md` | 工具链、构建、烧录、日志口径 |
+| `firmware/README.md` | 工具链、构建、烧录、日志说明 |
 | `docs/datasheets/**` 等 | 器件级离线资料库 |
 
-## 5. 当前不提供的统一交付物
+## 5. 仓库里暂时没有的统一交付物
 
 - 完整量产 BOM
 - 统一生产文件打包入口

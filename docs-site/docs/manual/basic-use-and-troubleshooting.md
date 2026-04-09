@@ -59,7 +59,7 @@ description: Bring-up 后的常见现象、故障分流与记录建议。
 
 先查：
 
-- 当前输入是 USB-C / PD 还是 DC
+- 这次输入是 USB-C / PD 还是 DC
 - `BQ25792` 是否可访问
 - `CHG_CE`、`CHG_INT`、输入保护路径是否正常
 - 页面与日志是否都把问题落在 charger 模块
@@ -71,7 +71,7 @@ description: Bring-up 后的常见现象、故障分流与记录建议。
 - `TPS55288-A/B` 状态和寄存器日志
 - `INA3221` 的 `vbus/current`
 - `TMP112-A/B` 温度与 `THERM_KILL_N`
-- 当前构建口径到底是 `12V` 还是 `19V`
+- 这次刷进去的到底是 `12V` 还是 `19V`
 
 ## 4. 常见误判
 
@@ -84,8 +84,8 @@ description: Bring-up 后的常见现象、故障分流与记录建议。
 每次 bring-up 建议至少记录：
 
 - 板版本
-- 输出口径：`12V` / `19V`
-- 当前构建 feature
+- 输出设定：`12V` / `19V`
+- 本次构建 feature
 - 上电方式：电池 / USB-C / DC
 - 串口日志关键段落
 - `SELF CHECK` 停在哪个模块

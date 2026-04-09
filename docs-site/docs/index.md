@@ -15,7 +15,7 @@ description: Mains Aegis 项目手册首页。
 | 电压边界 | 标称 `14.6V`，满充 `16.8V`，截止放电 `10.0V` |
 | BMS | `BQ40Z50-R2` + `BQ296100DSGR` + `CLM1612P1412` |
 | 充电 | `BQ25792`，双输入：USB-C / PD(PPS) + DC |
-| 主输出 | `TPS55288 × 2`，固件口径 `12V` / `19V` |
+| 主输出 | `TPS55288 × 2`，固件设定 `12V` / `19V` |
 | 主控 | `ESP32-S3-FH4R2`，Rust + `esp-hal` + `no_std` |
 | 前面板 | SPI 屏、I2C 触摸、`TCA6408A`、五向按键、背光 |
 | 启动 UI | 先进入 `SELF CHECK`，门控放行后进入 Dashboard |
