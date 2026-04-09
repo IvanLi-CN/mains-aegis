@@ -4,13 +4,14 @@
 
 - Status: 已完成
 - Created: 2026-03-15
-- Last: 2026-03-17
+- Last: 2026-04-09
 
 ## 背景 / 问题陈述
 
-- 当前 `Variant B` Dashboard 已改为真实运行态首页，但仍停留在“首页摘要”层级。
+- 当前 `Variant B` Dashboard 已改为真实运行态首页，但普通详情仍停留在“首页摘要”层级。
 - 主页上的 `KPI / info panel / BATTERY / CHARGE / DISCHG` 已具备清晰信息分区，却没有点击钻取能力。
 - 新需求要求在不打散现有首页骨架的前提下，为一般用户提供 5 个二级仪表盘页面，先完成界面与交互壳层，再对接真实细粒度数据源。
+- 之后的 BMS 排障表明：`CELL DETAIL` 仍缺少一页真正用于解释 `REMCAP / FCC / FET / XCHG / RCA` 的高级信息页，用户无法在小屏上直接判断“为什么锁充/为什么判满”。
 
 ## 目标 / 非目标
 
@@ -23,16 +24,16 @@
   - `BATTERY` -> `Cells`
   - `CHARGE` -> `Charger`
   - `DISCHG` -> `Battery Flow`
-- 详情页统一采用“全屏单页 + 左上 BACK 返回”的结构，不引入滚动、横滑或多级菜单。
+- 详情页统一采用“全屏单页 + 左上 BACK 返回”的结构；仅 `Cells` 允许再下钻一层 `BMS DETAIL`，不引入通用 history stack、滚动或横滑。
 - 详情页视觉延续 `Variant B` 的工业仪表基底，但文案、留白和状态标签更偏消费级、可读性更强。
 - 未接线字段统一显示 `N/A` 或 `--`，不得伪造演示波动值。
-- 通过 `tools/front-panel-preview` 产出首页与 5 个详情页冻结 PNG，作为评审基线。
+- 通过 `tools/front-panel-preview` 产出首页、5 个详情页与 `BMS DETAIL` 冻结 PNG，作为评审基线。
 
 ### Non-goals
 
 - 不在本规格中接入新的 BQ40 单体数据、INA 历史曲线、TMP/Fan 新采样链路。
 - 不新增返回 `SELF CHECK` 页入口。
-- 不引入图表历史回放、分页容器、滚动列表或趋势线。
+- 不引入图表历史回放、分页容器、滚动列表、趋势线或通用多级页面 history stack。
 - 不改变当前 bitmap 字体白名单、分辨率和主色板基底。
 
 ## 范围（Scope）
@@ -40,18 +41,20 @@
 ### In scope
 
 - `firmware/src/front_panel_scene.rs`
-  - 新增 Dashboard 路由、触摸命中区与 5 个详情页 renderer。
-  - 新增 `DashboardDetailSnapshot` 与详情页 mock/fallback 结构。
+  - 新增 Dashboard 路由、触摸命中区与 `Cells -> BMS DETAIL` 子页 renderer。
+  - 扩展 `DashboardDetailSnapshot` 与详情页 mock/fallback 结构，承载 render-ready BMS 高级字段。
 - `firmware/src/front_panel.rs`
   - 接入 Dashboard 详情页状态机、触摸进入和返回逻辑。
+- `firmware/src/output/mod.rs`
+  - 仅复用现有 steady-state BQ40 snapshot，把 `REMCAP / FCC / TO FULL / charge-discharge path / FET / flags / reason` 投影到 UI。
 - `tools/front-panel-preview/src/main.rs`
-  - 新增 Dashboard 首页/详情页场景导出。
+  - 新增 `dashboard-detail-bms*` 预览场景导出。
 - `firmware/ui/`
-  - 更新 Dashboard 文档与新增详情页冻结文档。
+  - 更新 Dashboard 文档与新增 `BMS DETAIL` 冻结文档。
 
 ### Out of scope
 
-- `output/mod.rs` 中新增细粒度采样协议解析或实时存储。
+- `output/mod.rs` 中新增 steady-state BQ40 MAC 轮询、细粒度采样协议解析或实时存储。
 - 新增其它屏幕主题或自检页重构。
 
 ## 功能与行为规格
@@ -63,10 +66,18 @@
   - `Detail(DashboardDetailPage)`
 - 新增 `DashboardDetailPage`：
   - `Cells`
+  - `BmsDetail`
   - `BatteryFlow`
   - `Output`
   - `Charger`
   - `Thermal`
+
+### 1.1 `Cells` 下钻例外
+
+- `DashboardRoute::Detail(Cells)` 主体区（不含顶栏/底栏）作为唯一高级入口热区。
+- 点击该区域进入 `DashboardRoute::Detail(BmsDetail)`。
+- `BMS DETAIL` 的 `BACK`、`LEFT`、`CENTER` 都返回 `Cells`。
+- 其它二级详情页仍保持“返回首页”的单层规则。
 
 ### 2. 首页入口映射
 
@@ -87,6 +98,7 @@
 - 返回规则：
   - 点击左上 `BACK` 返回首页。
   - 详情页状态下按 `LEFT` 或 `CENTER` 视为返回首页。
+  - 唯一例外：`BMS DETAIL` 的 `BACK` / `LEFT` / `CENTER` 返回 `CELL DETAIL`。
 
 ### 4. 页面口径
 
@@ -95,6 +107,12 @@
   - balancing 状态
   - 4 路 cell temp
   - 充/放电状态与异常条
+- `BMS Detail`
+  - 顶部只显示 `REMCAP / FCC / TO FULL`（单位固定 `mAh`）
+  - 中部显示友好 `REASON` pill，不显示内部 token/raw reason
+  - `BAL MASK` 只以 4 节 cell 高亮图形表达，不显示 `0101 / 0x5`
+  - 下部状态组使用 icon-first：`CHG READY / XCHG / CHG FET / FC / PF / DSG READY / XDSG / DSG FET / FD / RCA`
+  - 有限状态统一语义色：`绿色=ok`、`黄色=warn/limit`、`红色=fault/alarm`、`灰色=off/unknown`
 - `Battery Flow`
   - pack voltage / current
   - stored energy / full capacity（mWh）
@@ -127,13 +145,17 @@
   - 新增 `DashboardRoute`
   - 新增 `DashboardDetailPage`
   - 新增 `DashboardTouchTarget`
-  - 新增 `DashboardDetailSnapshot`
+  - 扩展 `DashboardDetailSnapshot`
 - `FrontPanel`
   - 新增 Dashboard 当前 route 状态
   - 运行态输入处理从“Dashboard 无触摸行为”扩展为“首页触摸钻取 + 详情返回”
 - `front-panel-preview`
   - 新增 `dashboard-home`
   - 新增 `dashboard-detail-cells`
+  - 新增 `dashboard-detail-bms`
+  - 新增 `dashboard-detail-bms-charge-blocked`
+  - 新增 `dashboard-detail-bms-balance-multi`
+  - 新增 `dashboard-detail-bms-no-data`
   - 新增 `dashboard-detail-battery-flow`
   - 新增 `dashboard-detail-output`
   - 新增 `dashboard-detail-charger`
@@ -143,8 +165,12 @@
 
 - Given Dashboard 首页，When 点击任一入口区，Then 必须进入唯一绑定的详情页。
 - Given 任一详情页，When 点击 `BACK` 或按 `LEFT/CENTER`，Then 返回 Dashboard 首页。
+- Given `CELL DETAIL` 主体区，When 点击非顶栏/底栏任意位置，Then 进入 `BMS DETAIL`。
+- Given `BMS DETAIL`，When 点击 `BACK` 或按 `LEFT/CENTER`，Then 返回 `CELL DETAIL`，而不是首页。
 - Given `Output` 详情页中某一路 `TPS` 关闭，When 渲染对应电流，Then 显示 `--`。
 - Given 详情字段未接入真实数据，When 渲染页面，Then 使用 `N/A` / `--`，且不回落到 demo 波动值。
+- Given `BMS DETAIL`，When `BAL MASK` 可用，Then 只用 4 节 cell 高亮图形表达，不显示 raw bitmask 文本。
+- Given `BMS DETAIL`，When `REASON` 可用，Then 显示友好短标签，不显示 `xchg_blocked` 之类内部 token。
 - Given preview 导出详情页，When 检查图片，Then 每张图均为 `320x172`。
 - Given 首页和详情页对比评审，When 观察视觉语言，Then 首页仍可识别为现有 Variant B，详情页明显更易读、更像一般用户仪表盘。
 
@@ -154,21 +180,20 @@
 - 首页 5 个固定热区已接入触摸钻取，并补上详情页 `BACK` 返回。
 - 新增 `DashboardDetailSnapshot` 作为详情页 UI 壳层字段容器；未接线字段统一走 `N/A` / `--`。
 - `Output` 详情页把“TPS 关闭时电流显示 `--`”固化为渲染规则。
-- 预览工具新增 5 个详情页场景，并已导出冻结 PNG 到 `firmware/ui/assets/` 与本 spec `assets/`。
+- 本轮新增 `Cells -> BMS DETAIL` 单一子页例外，不引入通用 history stack。
+- `BMS DETAIL` 只消费现有 runtime snapshot；未新增 steady-state BQ40 诊断轮询。
+- 预览工具新增 `dashboard-detail-bms*` 4 个场景，并已导出冻结 PNG 到本 spec `assets/`。
 
 ## 验证记录
 
-- `cargo build --manifest-path /Users/ivan/.codex/worktrees/5efd/mains-aegis/tools/front-panel-preview/Cargo.toml`
-- `cargo test --manifest-path /Users/ivan/.codex/worktrees/5efd/mains-aegis/tools/front-panel-preview/Cargo.toml`
-- `cargo run --manifest-path /Users/ivan/.codex/worktrees/5efd/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-runtime-standby --out-dir /tmp/mains-aegis-dashboard-detail-preview`
-- `cargo run --manifest-path /Users/ivan/.codex/worktrees/5efd/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells --out-dir /tmp/mains-aegis-dashboard-detail-preview`
-- `cargo run --manifest-path /Users/ivan/.codex/worktrees/5efd/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-battery-flow --out-dir /tmp/mains-aegis-dashboard-detail-preview`
-- `cargo run --manifest-path /Users/ivan/.codex/worktrees/5efd/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-output --out-dir /tmp/mains-aegis-dashboard-detail-preview`
-- `cargo run --manifest-path /Users/ivan/.codex/worktrees/5efd/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-charger --out-dir /tmp/mains-aegis-dashboard-detail-preview`
-- `cargo run --manifest-path /Users/ivan/.codex/worktrees/5efd/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-thermal --out-dir /tmp/mains-aegis-dashboard-detail-preview`
-- 说明：`firmware/Cargo.toml` 当前依赖本地路径 `../ina3221-async`，该 worktree 中缺少对应目录，因此无法在本地完成整包 firmware build；本轮已用同源 renderer 的 preview crate 完成构建与单测验证。
+- `cargo test --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/tools/front-panel-preview/Cargo.toml`
+- `cargo +esp check --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/firmware/Cargo.toml --features main-vout-19v`
+- `cargo run --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-bms --out-dir /tmp/mains-aegis-bms-detail-preview`
+- `cargo run --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-bms-charge-blocked --out-dir /tmp/mains-aegis-bms-detail-preview`
+- `cargo run --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-bms-balance-multi --out-dir /tmp/mains-aegis-bms-detail-preview`
+- `cargo run --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-bms-no-data --out-dir /tmp/mains-aegis-bms-detail-preview`
 
-## Visual Evidence (PR)
+## Visual Evidence
 
 当前冻结版评审图如下，包含首页与 5 个二级详情页：
 
@@ -181,6 +206,24 @@
 ### Cells
 
 ![Dashboard cells detail](./assets/dashboard-detail-cells.png)
+
+### BMS Detail
+
+#### Nominal
+
+![Dashboard BMS detail nominal](./assets/dashboard-detail-bms.png)
+
+#### Charge blocked / lock
+
+![Dashboard BMS detail charge blocked](./assets/dashboard-detail-bms-charge-blocked.png)
+
+#### Balance multi-cell
+
+![Dashboard BMS detail balance multi](./assets/dashboard-detail-bms-balance-multi.png)
+
+#### No data / unknown
+
+![Dashboard BMS detail no data](./assets/dashboard-detail-bms-no-data.png)
 
 ### Battery Flow
 

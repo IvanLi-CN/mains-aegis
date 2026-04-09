@@ -1,6 +1,6 @@
 # Dashboard Detail UI 设计（Variant B Drill-down）
 
-本文件定义 Dashboard 二级详情页的模块布局、入口映射与文案冻结口径，并补充 charger detail 向下钻取的 `MANUAL CHARGE` 三级页。
+本文件定义 Dashboard 二级详情页的模块布局、入口映射与文案冻结口径，并补充 `Cells -> BMS DETAIL` 与 charger detail 向下钻取的 `MANUAL CHARGE` 三级页。
 
 ## 1. 基线
 
@@ -27,6 +27,7 @@
 - 主体上半区：主指标块（大数值 + 摘要标签）。
 - 主体下半区：2~4 个信息卡，承载状态、分组指标与子系统摘要。
 - 底栏：异常/提示条，固定 1 行。
+- 唯一多一级规则：`Cells` 主体区允许进入 `BMS DETAIL`；`BMS DETAIL` 返回到 `Cells`，不引入通用 history stack。
 
 ## 4. 页面冻结口径
 
@@ -55,6 +56,19 @@
 - 主区：`VPACK` + `IPACK`
 - 次区：`ENERGY / FULL CAP / CHG / DSG / PCHG`
 - 底栏：battery abnormal summary
+
+### `BMS Detail`
+
+- 顶栏标题：`BMS DETAIL`
+- 状态 chip：`READY / LIMIT / WARN / FAULT / N/A`
+- 顶部 summary band：`REMCAP / FCC / TO FULL`（单位固定 `mAh`）
+- 中部 band：左侧 `REASON` pill，右侧 `BAL` + 4 节 cell 图形
+- `BAL` 只显示图形化活跃 cell：亮起=active，灰色=inactive，黄色未知=mask 不可读
+- 下部状态 tiles：
+  - 第一行：`CRDY / XCG / CFET / FC / PF`
+  - 第二行：`DRDY / XDG / DFET / FD / RCA`
+- tiles 统一使用 icon-first：`绿色=ok`、`黄色=warn/limit`、`红色=fault/alarm`、`灰色=off/unknown`
+- 不显示 raw `BAL MASK`、raw reason token 或十六进制状态字
 
 ### `Output`
 
@@ -109,6 +123,7 @@
 
 ![Dashboard Detail - Home](assets/dashboard-b-detail-home.png)
 ![Dashboard Detail - Cells](assets/dashboard-b-detail-cells.png)
+![Dashboard Detail - BMS](../../docs/specs/f3c2g-dashboard-detail-drilldown/assets/dashboard-detail-bms.png)
 ![Dashboard Detail - Battery Flow](assets/dashboard-b-detail-battery-flow.png)
 ![Dashboard Detail - Output](assets/dashboard-b-detail-output.png)
 ![Dashboard Detail - Charger](assets/dashboard-b-detail-charger.png)

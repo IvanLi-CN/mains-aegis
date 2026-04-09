@@ -3572,6 +3572,9 @@ where
         let detail = &mut self.ui_snapshot.dashboard_detail;
         detail.cell_mv = [None, None, None, None];
         detail.cell_temp_c = [None, None, None, None];
+        detail.remcap_mah = None;
+        detail.fcc_mah = None;
+        detail.to_full_mah = None;
         detail.balance_enabled = None;
         detail.balance_cfg_match = None;
         detail.balance_active = None;
@@ -3579,13 +3582,24 @@ where
         detail.balance_cell = None;
         detail.battery_energy_mwh = None;
         detail.battery_full_capacity_mwh = None;
+        detail.charge_ready = None;
+        detail.discharge_ready = None;
+        detail.xchg = None;
+        detail.xdsg = None;
         detail.charge_fet_on = None;
         detail.discharge_fet_on = None;
         detail.precharge_fet_on = None;
+        detail.fc = None;
+        detail.fd = None;
+        detail.pf = None;
+        detail.rca_alarm = None;
+        detail.reason_key = None;
+        detail.reason_label = None;
         detail.board_temp_c = None;
         detail.battery_temp_c = None;
         detail.cells_notice = None;
         detail.battery_notice = None;
+        detail.bms_notice = None;
     }
 
     fn clear_bms_charge_policy_inputs(&mut self) {
@@ -3611,8 +3625,19 @@ where
         let balance_mask = detail_bms_balance_mask(snapshot);
         let balance_config = snapshot.balance_config;
         let balance_cfg_match = balance_config.map(bq40_balance_config_matches_mainboard);
+        let (charge_ready, charge_reason) = bq40_decode_charge_path(snapshot.op_status);
+        let (discharge_ready, discharge_reason) = bq40_decode_discharge_path(snapshot.op_status);
+        let primary_reason = bq40_primary_reason(
+            snapshot.batt_status,
+            snapshot.op_status,
+            charge_reason,
+            discharge_reason,
+        );
         detail.cell_mv = snapshot.cell_mv.map(Some);
         detail.cell_temp_c = detail_bms_cell_sensor_temps(snapshot);
+        detail.remcap_mah = Some(snapshot.remcap);
+        detail.fcc_mah = Some(snapshot.fcc);
+        detail.to_full_mah = Some(snapshot.fcc.saturating_sub(snapshot.remcap));
         detail.balance_enabled = balance_config.map(|config| config.cb());
         detail.balance_cfg_match = balance_cfg_match;
         detail.balance_active = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CB);
@@ -3620,9 +3645,19 @@ where
         detail.balance_cell = detail_bms_single_balance_cell(balance_mask);
         detail.battery_energy_mwh = detail_bms_energy_mwh(snapshot);
         detail.battery_full_capacity_mwh = detail_bms_full_capacity_mwh(snapshot);
+        detail.charge_ready = charge_ready;
+        detail.discharge_ready = discharge_ready;
+        detail.xchg = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::XCHG);
+        detail.xdsg = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::XDSG);
         detail.charge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CHG);
         detail.discharge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::DSG);
         detail.precharge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::PCHG);
+        detail.fc = Some((snapshot.batt_status & bq40z50::battery_status::FC) != 0);
+        detail.fd = Some((snapshot.batt_status & bq40z50::battery_status::FD) != 0);
+        detail.pf = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::PF);
+        detail.rca_alarm = Some((snapshot.batt_status & bq40z50::battery_status::RCA) != 0);
+        detail.reason_key = Some(primary_reason);
+        detail.reason_label = Some(detail_bms_reason_label(primary_reason));
         detail.board_temp_c = detail_bms_board_temp_c(snapshot);
         detail.battery_temp_c = detail_battery_temp_c(snapshot);
         detail.cells_notice = match balance_cfg_match {
@@ -3631,6 +3666,7 @@ where
             None => Some("BAL CFG PENDING"),
         };
         detail.battery_notice = Some("LIVE DATA");
+        detail.bms_notice = Some("LIVE DATA");
     }
 
     fn clear_charger_detail_snapshot(&mut self) {

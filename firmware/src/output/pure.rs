@@ -1058,6 +1058,21 @@ pub(super) fn bq40_primary_reason(
     "nominal"
 }
 
+pub(super) fn detail_bms_reason_label(primary_reason: &'static str) -> &'static str {
+    match primary_reason {
+        "nominal" => "SYSTEM READY",
+        "xchg_blocked" => "CHG BLOCKED",
+        "xdsg_blocked" => "DSG BLOCKED",
+        "dsg_fet_off" => "DSG FET OFF",
+        "remaining_capacity_alarm" => "RCA ALARM",
+        "permanent_failure" => "PERM FAIL",
+        "sleep_mode" => "SLEEP MODE",
+        "op_status_unavailable" => "STATUS N/A",
+        "sbs_error_code" => "SBS ERROR",
+        _ => "CHECK STATUS",
+    }
+}
+
 pub(super) fn bq40_protection_active(batt_status: u16, op_status: Option<u32>) -> bool {
     // BatteryStatus alarm bits like TCA/OTA/OCA/TDA are advisory thresholds and
     // should not drive the hard "battery protection" UI/audio state on their own.
