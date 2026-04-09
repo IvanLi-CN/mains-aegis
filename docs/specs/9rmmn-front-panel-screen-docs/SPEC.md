@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 部分完成（2/3）
+- Status: 已完成
 - Created: 2026-04-09
 - Last: 2026-04-09
 
@@ -173,7 +173,7 @@ None
 
 - [x] M1: 新建规格并冻结前面板屏幕文档 IA、路由改名与当前 SoT 修正范围
 - [x] M2: 完成 docs-site 与 firmware/ui 的文档重构、路由切换和 manual-charge 资产引用统一
-- [ ] M3: 完成 docs-site build / preview / 浏览器取证，并把结果推进到 merge-ready PR
+- [x] M3: 完成 docs-site build / preview / 浏览器取证，并把结果推进到 merge-ready PR
 
 ## 方案概述（Approach, high-level）
 
@@ -191,6 +191,7 @@ None
 ## 变更记录（Change log）
 
 - 2026-04-09: 新建规格，冻结“移除 gallery / 新增页面总览 / 同步 current SoT”的范围与验收口径。
+- 2026-04-09: 完成 active docs / current SoT 收敛、preview / visual evidence、PR #65 与 review-loop 收口。
 
 ## 参考（References）
 
