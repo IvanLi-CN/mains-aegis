@@ -3945,15 +3945,24 @@ fn render_dashboard_detail_page<P: UiPainter>(
     )?;
 
     if page == DashboardDetailPage::BmsDetail {
-        render_dashboard_bms_detail_page(
+        render_dashboard_bms_detail_page(painter, variant, palette, data, accent)?;
+        draw_panel(
+            painter,
+            6,
+            146,
+            308,
+            20,
+            palette,
+            true,
+            detail_status_color(palette, status),
+        )?;
+        draw_bms_detail_footer_reason(
             painter,
             variant,
             palette,
             data,
-            accent,
             detail_status_color(palette, status),
         )?;
-        draw_dashboard_detail_footer_notice(painter, variant, palette, page, data)?;
         return Ok(());
     }
 
@@ -4093,13 +4102,649 @@ fn bms_detail_status_tone_color(palette: Palette, tone: BmsDetailStateTone) -> u
     }
 }
 
-fn bms_detail_status_icon(tone: BmsDetailStateTone) -> DetailFooterIcon {
-    match tone {
-        BmsDetailStateTone::Ok => DetailFooterIcon::Live,
-        BmsDetailStateTone::Warn => DetailFooterIcon::Warn,
-        BmsDetailStateTone::Fault => DetailFooterIcon::Fault,
-        BmsDetailStateTone::Off => DetailFooterIcon::Mock,
-        BmsDetailStateTone::Unknown => DetailFooterIcon::Unknown,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BmsDetailStateGlyph {
+    BatteryCharge,
+    BatteryDischarge,
+    PathBlocked,
+    PathAllowed,
+    FetOn,
+    FetOff,
+    BatteryFull,
+    BatteryEmpty,
+    BatteryAlert,
+    WarningTriangle,
+}
+
+const LUCIDE_LOCK_22: &[(u8, u8, u8, u8)] = &[
+    (8, 1, 6, 1),
+    (7, 2, 8, 1),
+    (6, 3, 3, 1),
+    (13, 3, 3, 1),
+    (5, 4, 3, 1),
+    (14, 4, 3, 1),
+    (5, 5, 3, 1),
+    (14, 5, 3, 1),
+    (5, 6, 3, 1),
+    (14, 6, 3, 1),
+    (5, 7, 3, 1),
+    (14, 7, 3, 1),
+    (5, 8, 3, 1),
+    (14, 8, 3, 1),
+    (3, 9, 16, 1),
+    (2, 10, 18, 1),
+    (2, 11, 2, 1),
+    (18, 11, 2, 1),
+    (1, 12, 3, 1),
+    (18, 12, 3, 1),
+    (1, 13, 3, 1),
+    (18, 13, 3, 1),
+    (1, 14, 3, 1),
+    (18, 14, 3, 1),
+    (1, 15, 3, 1),
+    (18, 15, 3, 1),
+    (1, 16, 3, 1),
+    (18, 16, 3, 1),
+    (1, 17, 3, 1),
+    (18, 17, 3, 1),
+    (2, 18, 2, 1),
+    (18, 18, 2, 1),
+    (2, 19, 18, 1),
+    (2, 20, 18, 1),
+];
+
+const LUCIDE_LOCK_OPEN_22: &[(u8, u8, u8, u8)] = &[
+    (8, 1, 6, 1),
+    (7, 2, 8, 1),
+    (6, 3, 3, 1),
+    (12, 3, 4, 1),
+    (5, 4, 3, 1),
+    (14, 4, 3, 1),
+    (5, 5, 3, 1),
+    (14, 5, 3, 1),
+    (5, 6, 3, 1),
+    (15, 6, 1, 1),
+    (5, 7, 3, 1),
+    (5, 8, 3, 1),
+    (3, 9, 16, 1),
+    (2, 10, 18, 1),
+    (2, 11, 2, 1),
+    (18, 11, 2, 1),
+    (1, 12, 3, 1),
+    (18, 12, 3, 1),
+    (1, 13, 3, 1),
+    (18, 13, 3, 1),
+    (1, 14, 3, 1),
+    (18, 14, 3, 1),
+    (1, 15, 3, 1),
+    (18, 15, 3, 1),
+    (1, 16, 3, 1),
+    (18, 16, 3, 1),
+    (1, 17, 3, 1),
+    (18, 17, 3, 1),
+    (2, 18, 2, 1),
+    (18, 18, 2, 1),
+    (2, 19, 18, 1),
+    (2, 20, 18, 1),
+];
+
+const LUCIDE_TOGGLE_LEFT_22: &[(u8, u8, u8, u8)] = &[
+    (7, 3, 8, 1),
+    (4, 4, 14, 1),
+    (3, 5, 16, 1),
+    (2, 6, 4, 1),
+    (16, 6, 4, 1),
+    (1, 7, 3, 1),
+    (6, 7, 4, 1),
+    (18, 7, 3, 1),
+    (1, 8, 3, 1),
+    (5, 8, 6, 1),
+    (18, 8, 3, 1),
+    (1, 9, 2, 1),
+    (5, 9, 7, 1),
+    (19, 9, 2, 1),
+    (1, 10, 2, 1),
+    (4, 10, 3, 1),
+    (10, 10, 2, 1),
+    (19, 10, 2, 1),
+    (1, 11, 2, 1),
+    (4, 11, 3, 1),
+    (10, 11, 2, 1),
+    (19, 11, 2, 1),
+    (1, 12, 2, 1),
+    (5, 12, 7, 1),
+    (19, 12, 2, 1),
+    (1, 13, 3, 1),
+    (5, 13, 6, 1),
+    (18, 13, 3, 1),
+    (1, 14, 3, 1),
+    (6, 14, 4, 1),
+    (17, 14, 4, 1),
+    (2, 15, 4, 1),
+    (16, 15, 4, 1),
+    (3, 16, 16, 1),
+    (4, 17, 14, 1),
+    (7, 18, 8, 1),
+];
+
+const LUCIDE_TOGGLE_RIGHT_22: &[(u8, u8, u8, u8)] = &[
+    (7, 3, 8, 1),
+    (4, 4, 14, 1),
+    (3, 5, 16, 1),
+    (2, 6, 4, 1),
+    (16, 6, 4, 1),
+    (1, 7, 3, 1),
+    (12, 7, 4, 1),
+    (18, 7, 3, 1),
+    (1, 8, 3, 1),
+    (11, 8, 6, 1),
+    (18, 8, 3, 1),
+    (1, 9, 2, 1),
+    (10, 9, 7, 1),
+    (19, 9, 2, 1),
+    (1, 10, 2, 1),
+    (10, 10, 2, 1),
+    (15, 10, 3, 1),
+    (19, 10, 2, 1),
+    (1, 11, 2, 1),
+    (10, 11, 2, 1),
+    (15, 11, 3, 1),
+    (19, 11, 2, 1),
+    (1, 12, 2, 1),
+    (10, 12, 7, 1),
+    (19, 12, 2, 1),
+    (1, 13, 3, 1),
+    (11, 13, 6, 1),
+    (18, 13, 3, 1),
+    (1, 14, 3, 1),
+    (12, 14, 4, 1),
+    (17, 14, 4, 1),
+    (2, 15, 4, 1),
+    (16, 15, 4, 1),
+    (3, 16, 16, 1),
+    (4, 17, 14, 1),
+    (7, 18, 8, 1),
+];
+
+const LUCIDE_TRIANGLE_ALERT_22: &[(u8, u8, u8, u8)] = &[
+    (9, 2, 4, 1),
+    (8, 3, 6, 1),
+    (7, 4, 3, 1),
+    (12, 4, 3, 1),
+    (7, 5, 3, 1),
+    (12, 5, 3, 1),
+    (6, 6, 3, 1),
+    (13, 6, 3, 1),
+    (6, 7, 3, 1),
+    (10, 7, 2, 1),
+    (13, 7, 3, 1),
+    (5, 8, 3, 1),
+    (10, 8, 2, 1),
+    (14, 8, 3, 1),
+    (5, 9, 3, 1),
+    (10, 9, 2, 1),
+    (14, 9, 3, 1),
+    (4, 10, 3, 1),
+    (10, 10, 2, 1),
+    (15, 10, 3, 1),
+    (3, 11, 3, 1),
+    (10, 11, 2, 1),
+    (16, 11, 3, 1),
+    (3, 12, 3, 1),
+    (10, 12, 2, 1),
+    (16, 12, 3, 1),
+    (2, 13, 3, 1),
+    (17, 13, 3, 1),
+    (2, 14, 3, 1),
+    (10, 14, 2, 1),
+    (17, 14, 3, 1),
+    (1, 15, 3, 1),
+    (10, 15, 2, 1),
+    (18, 15, 3, 1),
+    (1, 16, 3, 1),
+    (10, 16, 2, 1),
+    (18, 16, 3, 1),
+    (1, 17, 2, 1),
+    (19, 17, 2, 1),
+    (1, 18, 20, 1),
+    (1, 19, 19, 1),
+    (4, 20, 14, 1),
+];
+
+const LUCIDE_BATTERY_FULL_22: &[(u8, u8, u8, u8)] = &[
+    (2, 4, 14, 1),
+    (1, 5, 16, 1),
+    (1, 6, 17, 1),
+    (1, 7, 2, 1),
+    (15, 7, 3, 1),
+    (1, 8, 2, 1),
+    (4, 8, 3, 1),
+    (8, 8, 2, 1),
+    (12, 8, 2, 1),
+    (15, 8, 3, 1),
+    (19, 8, 2, 1),
+    (1, 9, 2, 1),
+    (4, 9, 3, 1),
+    (8, 9, 2, 1),
+    (12, 9, 2, 1),
+    (15, 9, 3, 1),
+    (19, 9, 2, 1),
+    (1, 10, 2, 1),
+    (4, 10, 3, 1),
+    (8, 10, 2, 1),
+    (12, 10, 2, 1),
+    (15, 10, 3, 1),
+    (19, 10, 2, 1),
+    (1, 11, 2, 1),
+    (4, 11, 3, 1),
+    (8, 11, 2, 1),
+    (12, 11, 2, 1),
+    (15, 11, 3, 1),
+    (19, 11, 2, 1),
+    (1, 12, 2, 1),
+    (4, 12, 3, 1),
+    (8, 12, 2, 1),
+    (12, 12, 2, 1),
+    (15, 12, 3, 1),
+    (19, 12, 2, 1),
+    (1, 13, 2, 1),
+    (4, 13, 3, 1),
+    (8, 13, 2, 1),
+    (12, 13, 2, 1),
+    (15, 13, 3, 1),
+    (19, 13, 2, 1),
+    (1, 14, 2, 1),
+    (15, 14, 3, 1),
+    (1, 15, 17, 1),
+    (1, 16, 16, 1),
+    (3, 17, 13, 1),
+];
+
+const LUCIDE_BATTERY_LOW_22: &[(u8, u8, u8, u8)] = &[
+    (2, 4, 14, 1),
+    (1, 5, 16, 1),
+    (1, 6, 17, 1),
+    (1, 7, 2, 1),
+    (15, 7, 3, 1),
+    (1, 8, 2, 1),
+    (4, 8, 3, 1),
+    (15, 8, 3, 1),
+    (19, 8, 2, 1),
+    (1, 9, 2, 1),
+    (4, 9, 3, 1),
+    (15, 9, 3, 1),
+    (19, 9, 2, 1),
+    (1, 10, 2, 1),
+    (4, 10, 3, 1),
+    (15, 10, 3, 1),
+    (19, 10, 2, 1),
+    (1, 11, 2, 1),
+    (4, 11, 3, 1),
+    (15, 11, 3, 1),
+    (19, 11, 2, 1),
+    (1, 12, 2, 1),
+    (4, 12, 3, 1),
+    (15, 12, 3, 1),
+    (19, 12, 2, 1),
+    (1, 13, 2, 1),
+    (4, 13, 3, 1),
+    (15, 13, 3, 1),
+    (19, 13, 2, 1),
+    (1, 14, 2, 1),
+    (15, 14, 3, 1),
+    (1, 15, 17, 1),
+    (1, 16, 16, 1),
+    (3, 17, 13, 1),
+];
+
+const LUCIDE_BATTERY_WARNING_22: &[(u8, u8, u8, u8)] = &[
+    (2, 4, 4, 1),
+    (12, 4, 4, 1),
+    (1, 5, 6, 1),
+    (8, 5, 2, 1),
+    (12, 5, 5, 1),
+    (1, 6, 5, 1),
+    (8, 6, 2, 1),
+    (12, 6, 6, 1),
+    (1, 7, 2, 1),
+    (8, 7, 2, 1),
+    (15, 7, 3, 1),
+    (1, 8, 2, 1),
+    (8, 8, 2, 1),
+    (15, 8, 3, 1),
+    (19, 8, 2, 1),
+    (1, 9, 2, 1),
+    (8, 9, 2, 1),
+    (15, 9, 3, 1),
+    (19, 9, 2, 1),
+    (1, 10, 2, 1),
+    (8, 10, 2, 1),
+    (15, 10, 3, 1),
+    (19, 10, 2, 1),
+    (1, 11, 2, 1),
+    (8, 11, 2, 1),
+    (15, 11, 3, 1),
+    (19, 11, 2, 1),
+    (1, 12, 2, 1),
+    (8, 12, 2, 1),
+    (15, 12, 3, 1),
+    (19, 12, 2, 1),
+    (1, 13, 2, 1),
+    (15, 13, 3, 1),
+    (19, 13, 2, 1),
+    (1, 14, 2, 1),
+    (9, 14, 1, 1),
+    (15, 14, 3, 1),
+    (1, 15, 5, 1),
+    (8, 15, 2, 1),
+    (12, 15, 6, 1),
+    (1, 16, 6, 1),
+    (8, 16, 2, 1),
+    (12, 16, 5, 1),
+    (3, 17, 3, 1),
+    (12, 17, 4, 1),
+];
+
+const BMS_FLOW_CHARGE_22: &[(u8, u8, u8, u8)] = &[
+    (7, 0, 12, 1),
+    (6, 1, 14, 1),
+    (6, 2, 2, 1),
+    (18, 2, 2, 1),
+    (6, 3, 2, 1),
+    (18, 3, 2, 1),
+    (6, 4, 2, 1),
+    (18, 4, 2, 1),
+    (6, 5, 2, 1),
+    (18, 5, 2, 1),
+    (6, 6, 2, 1),
+    (18, 6, 2, 1),
+    (6, 7, 2, 1),
+    (9, 7, 2, 1),
+    (18, 7, 4, 1),
+    (9, 8, 3, 1),
+    (18, 8, 4, 1),
+    (0, 9, 13, 1),
+    (18, 9, 4, 1),
+    (0, 10, 14, 1),
+    (18, 10, 4, 1),
+    (0, 11, 6, 1),
+    (9, 11, 4, 1),
+    (18, 11, 4, 1),
+    (9, 12, 3, 1),
+    (18, 12, 4, 1),
+    (6, 13, 2, 1),
+    (9, 13, 2, 1),
+    (18, 13, 4, 1),
+    (6, 14, 2, 1),
+    (18, 14, 2, 1),
+    (6, 15, 2, 1),
+    (18, 15, 2, 1),
+    (6, 16, 2, 1),
+    (18, 16, 2, 1),
+    (6, 17, 2, 1),
+    (18, 17, 2, 1),
+    (6, 18, 2, 1),
+    (18, 18, 2, 1),
+    (6, 19, 14, 1),
+    (7, 20, 12, 1),
+];
+
+const BMS_FLOW_DISCHARGE_22: &[(u8, u8, u8, u8)] = &[
+    (1, 0, 12, 1),
+    (0, 1, 14, 1),
+    (0, 2, 2, 1),
+    (12, 2, 2, 1),
+    (0, 3, 2, 1),
+    (12, 3, 2, 1),
+    (0, 4, 2, 1),
+    (12, 4, 2, 1),
+    (0, 5, 2, 1),
+    (12, 5, 2, 1),
+    (0, 6, 2, 1),
+    (12, 6, 2, 1),
+    (0, 7, 2, 1),
+    (12, 7, 2, 1),
+    (16, 7, 1, 1),
+    (0, 8, 2, 1),
+    (16, 8, 2, 1),
+    (0, 9, 2, 1),
+    (16, 9, 3, 1),
+    (0, 10, 2, 1),
+    (7, 10, 14, 1),
+    (0, 11, 2, 1),
+    (7, 11, 13, 1),
+    (0, 12, 2, 1),
+    (16, 12, 3, 1),
+    (0, 13, 2, 1),
+    (13, 13, 1, 1),
+    (16, 13, 2, 1),
+    (0, 14, 2, 1),
+    (12, 14, 2, 1),
+    (16, 14, 1, 1),
+    (0, 15, 2, 1),
+    (12, 15, 2, 1),
+    (0, 16, 2, 1),
+    (12, 16, 2, 1),
+    (0, 17, 2, 1),
+    (12, 17, 2, 1),
+    (0, 18, 2, 1),
+    (12, 18, 2, 1),
+    (0, 19, 2, 1),
+    (12, 19, 2, 1),
+    (0, 20, 14, 1),
+    (1, 21, 12, 1),
+];
+
+const BMS_PATH_ALLOWED_22: &[(u8, u8, u8, u8)] = &[
+    (1, 8, 3, 1),
+    (8, 8, 7, 1),
+    (18, 8, 3, 1),
+    (0, 9, 2, 1),
+    (3, 9, 1, 1),
+    (7, 9, 8, 1),
+    (18, 9, 1, 1),
+    (20, 9, 2, 1),
+    (0, 10, 1, 1),
+    (4, 10, 14, 1),
+    (21, 10, 1, 1),
+    (0, 11, 2, 1),
+    (3, 11, 1, 1),
+    (7, 11, 8, 1),
+    (18, 11, 1, 1),
+    (20, 11, 2, 1),
+    (1, 12, 3, 1),
+    (8, 12, 7, 1),
+    (18, 12, 3, 1),
+];
+
+const BMS_PATH_BLOCKED_22: &[(u8, u8, u8, u8)] = &[
+    (1, 8, 3, 1),
+    (10, 8, 2, 1),
+    (18, 8, 3, 1),
+    (0, 9, 2, 1),
+    (3, 9, 2, 1),
+    (10, 9, 2, 1),
+    (17, 9, 2, 1),
+    (20, 9, 2, 1),
+    (0, 10, 1, 1),
+    (4, 10, 5, 1),
+    (10, 10, 2, 1),
+    (13, 10, 5, 1),
+    (21, 10, 1, 1),
+    (0, 11, 2, 1),
+    (3, 11, 2, 1),
+    (10, 11, 2, 1),
+    (17, 11, 2, 1),
+    (20, 11, 2, 1),
+    (1, 12, 3, 1),
+    (10, 12, 2, 1),
+    (18, 12, 3, 1),
+];
+
+fn draw_bms_glyph_battery_charge<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, BMS_FLOW_CHARGE_22, rgb565)
+}
+
+fn draw_bms_glyph_battery_discharge<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, BMS_FLOW_DISCHARGE_22, rgb565)
+}
+
+fn draw_bms_glyph_lock<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    closed: bool,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    let blocks = if closed {
+        LUCIDE_LOCK_22
+    } else {
+        LUCIDE_LOCK_OPEN_22
+    };
+    draw_icon_blocks(painter, x, y, blocks, rgb565)
+}
+
+fn draw_bms_glyph_path_terminal<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    fill(painter, x + 2, y, 3, 1, rgb565)?;
+    fill(painter, x + 1, y + 1, 5, 1, rgb565)?;
+    fill(painter, x, y + 2, 2, 3, rgb565)?;
+    fill(painter, x + 5, y + 2, 2, 3, rgb565)?;
+    fill(painter, x + 1, y + 5, 5, 1, rgb565)?;
+    fill(painter, x + 2, y + 6, 3, 1, rgb565)
+}
+
+fn draw_bms_glyph_path_enabled<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, BMS_PATH_ALLOWED_22, rgb565)
+}
+
+fn draw_bms_glyph_path_blocked<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, BMS_PATH_BLOCKED_22, rgb565)
+}
+
+fn draw_bms_glyph_fet_base<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    fill(painter, x + 1, y + 10, 5, 2, rgb565)?;
+    fill(painter, x + 7, y + 6, 8, 1, rgb565)?;
+    fill(painter, x + 6, y + 7, 10, 8, rgb565)?;
+    fill(painter, x + 7, y + 15, 8, 1, rgb565)?;
+    fill(painter, x + 16, y + 10, 5, 2, rgb565)?;
+    fill(painter, x + 10, y + 2, 2, 5, rgb565)
+}
+
+fn draw_bms_glyph_fet_on<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_bms_glyph_fet_base(painter, x, y, rgb565)
+}
+
+fn draw_bms_glyph_fet_off<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    fg: u16,
+    bg: u16,
+) -> Result<(), P::Error> {
+    draw_bms_glyph_fet_base(painter, x, y, fg)?;
+
+    // keep the slash in the same glyph color, but carve a 1px gutter on both
+    // sides so the strike-through stays visually separated from the device body.
+    const SLASH_SEGMENTS: &[(u16, u16)] = &[
+        (5, 18),
+        (6, 16),
+        (7, 14),
+        (8, 12),
+        (9, 10),
+        (10, 8),
+        (11, 6),
+        (12, 4),
+        (13, 2),
+        (14, 0),
+    ];
+
+    for &(sx, sy) in SLASH_SEGMENTS {
+        fill(painter, x + sx - 1, y + sy, 1, 2, bg)?;
+        fill(painter, x + sx, y + sy, 1, 2, fg)?;
+        fill(painter, x + sx + 1, y + sy, 1, 2, bg)?;
+    }
+
+    Ok(())
+}
+
+fn draw_bms_glyph_warning_triangle<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, LUCIDE_TRIANGLE_ALERT_22, rgb565)
+}
+
+fn draw_bms_glyph_battery_alert<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, LUCIDE_BATTERY_WARNING_22, rgb565)
+}
+
+fn draw_bms_state_glyph<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    glyph: BmsDetailStateGlyph,
+    fg: u16,
+    bg: u16,
+) -> Result<(), P::Error> {
+    match glyph {
+        BmsDetailStateGlyph::BatteryCharge => draw_bms_glyph_battery_charge(painter, x, y, fg),
+        BmsDetailStateGlyph::BatteryDischarge => {
+            draw_bms_glyph_battery_discharge(painter, x, y, fg)
+        }
+        BmsDetailStateGlyph::PathBlocked => draw_bms_glyph_path_blocked(painter, x, y, fg),
+        BmsDetailStateGlyph::PathAllowed => draw_bms_glyph_path_enabled(painter, x, y, fg),
+        BmsDetailStateGlyph::FetOn => draw_bms_glyph_fet_on(painter, x, y, fg),
+        BmsDetailStateGlyph::FetOff => draw_bms_glyph_fet_off(painter, x, y, fg, bg),
+        BmsDetailStateGlyph::BatteryFull => {
+            draw_icon_blocks(painter, x, y, LUCIDE_BATTERY_FULL_22, fg)
+        }
+        BmsDetailStateGlyph::BatteryEmpty => {
+            draw_icon_blocks(painter, x, y, LUCIDE_BATTERY_LOW_22, fg)
+        }
+        BmsDetailStateGlyph::BatteryAlert => draw_bms_glyph_battery_alert(painter, x, y, fg),
+        BmsDetailStateGlyph::WarningTriangle => draw_bms_glyph_warning_triangle(painter, x, y, fg),
     }
 }
 
@@ -4142,7 +4787,122 @@ fn draw_bms_detail_metric<P: UiPainter>(
     }
 }
 
+fn draw_bms_detail_balance_summary<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "BAL",
+        Point::new(220, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+
+    for idx in 0..4 {
+        let x = 246 + (idx as u16) * 15;
+        let label = match idx {
+            0 => "1",
+            1 => "2",
+            2 => "3",
+            _ => "4",
+        };
+        draw_bms_balance_cell_icon(
+            painter,
+            variant,
+            palette,
+            x,
+            24,
+            label,
+            bms_detail_balance_cell_state(data.detail, idx),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn draw_bms_detail_balance_cluster<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        "BAL",
+        Point::new(184, 68),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+
+    for idx in 0..4 {
+        let x = 209 + (idx as u16) * 22;
+        let label = match idx {
+            0 => "1",
+            1 => "2",
+            2 => "3",
+            _ => "4",
+        };
+        draw_bms_balance_cell_icon_large(
+            painter,
+            variant,
+            palette,
+            x,
+            72,
+            label,
+            bms_detail_balance_cell_state(data.detail, idx),
+        )?;
+    }
+    Ok(())
+}
+
 fn draw_bms_balance_cell_icon<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    label: &'static str,
+    state: BalanceCellVisualState,
+) -> Result<(), P::Error> {
+    let (border, fill_color, text_color) = match state {
+        BalanceCellVisualState::Active => (
+            SUCCESS_COLOR,
+            fade_color(SUCCESS_COLOR, palette.bg),
+            palette.bg,
+        ),
+        BalanceCellVisualState::Inactive => (
+            palette.text_dim,
+            fade_color(palette.panel, palette.bg),
+            palette.text,
+        ),
+        BalanceCellVisualState::Unknown => (
+            ATTENTION_COLOR,
+            fade_color(ATTENTION_COLOR, palette.bg),
+            palette.bg,
+        ),
+    };
+    fill(painter, x + 4, y + 1, 4, 2, border)?;
+    draw_outline(painter, x + 1, y + 3, 10, 12, border)?;
+    fill(painter, x + 3, y + 5, 6, 8, fill_color)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        label,
+        Point::new((x + 6) as i32, (y + 6) as i32),
+        HorizontalAlignment::Center,
+        text_color,
+    )
+}
+
+fn draw_bms_balance_cell_icon_large<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
     palette: Palette,
@@ -4160,87 +4920,135 @@ fn draw_bms_balance_cell_icon<P: UiPainter>(
             (ATTENTION_COLOR, fade_color(ATTENTION_COLOR, palette.bg))
         }
     };
-    fill(painter, x + 4, y, 4, 2, border)?;
-    draw_outline(painter, x + 1, y + 2, 10, 11, border)?;
-    if fill_color != fade_color(palette.panel, palette.bg) {
-        fill(painter, x + 3, y + 4, 6, 7, fill_color)?;
-    }
+    fill(painter, x + 4, y, 6, 2, border)?;
+    draw_outline(painter, x + 1, y + 2, 12, 14, border)?;
+    fill(painter, x + 3, y + 4, 8, 10, fill_color)?;
     text(
         painter,
         variant,
         FontRole::TextCompact,
         label,
-        Point::new((x + 6) as i32, (y + 14) as i32),
+        Point::new((x + 7) as i32, (y + 19) as i32),
         HorizontalAlignment::Center,
         palette.text,
     )
 }
 
-fn draw_bms_reason_and_balance_band<P: UiPainter>(
+fn bms_detail_footer_reason(data: DashboardLiveData) -> &'static str {
+    if data.bms_state == SelfCheckCommState::Err {
+        "BMS LINK FAULT"
+    } else if data.detail.reason_label.is_some() {
+        bms_detail_reason_text(data.detail)
+    } else {
+        data.page_notice(DashboardDetailPage::BmsDetail)
+    }
+}
+
+fn draw_bms_detail_footer_reason<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
     palette: Palette,
     data: DashboardLiveData,
-    accent: u16,
     status_color: u16,
 ) -> Result<(), P::Error> {
-    draw_panel(painter, 6, 62, 308, 18, palette, false, accent)?;
+    let reason_text = bms_detail_footer_reason(data);
+    let fill_color = fade_color(status_color, palette.panel_alt);
+    fill(painter, 10, 150, 300, 12, fill_color)?;
+    draw_outline(painter, 10, 150, 300, 12, status_color)?;
     text(
         painter,
         variant,
-        FontRole::TextBody,
-        "REASON",
-        Point::new(14, 65),
-        HorizontalAlignment::Left,
-        palette.text_dim,
-    )?;
-    let pill_x = 64;
-    let pill_w = 152;
-    let pill_fill = fade_color(status_color, palette.panel_alt);
-    fill(painter, pill_x, 65, pill_w, 12, pill_fill)?;
-    draw_outline(painter, pill_x, 65, pill_w, 12, status_color)?;
-    text(
-        painter,
-        variant,
-        FontRole::TextBody,
-        bms_detail_reason_text(data.detail),
-        Point::new((pill_x + pill_w / 2) as i32, 65),
+        FontRole::DetailBody,
+        reason_text,
+        Point::new(160, 150),
         HorizontalAlignment::Center,
         palette.text,
-    )?;
-    text(
-        painter,
-        variant,
-        FontRole::TextBody,
-        "BAL",
-        Point::new(224, 65),
-        HorizontalAlignment::Left,
-        palette.text_dim,
-    )?;
-
-    for idx in 0..4 {
-        let x = 248 + (idx as u16) * 16;
-        let label = match idx {
-            0 => "1",
-            1 => "2",
-            2 => "3",
-            _ => "4",
-        };
-        draw_bms_balance_cell_icon(
-            painter,
-            variant,
-            palette,
-            x,
-            64,
-            label,
-            bms_detail_balance_cell_state(data.detail, idx),
-        )?;
-    }
-
-    Ok(())
+    )
 }
 
 fn draw_bms_detail_state_tile<P: UiPainter>(
+    painter: &mut P,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    glyph: BmsDetailStateGlyph,
+    tone: BmsDetailStateTone,
+) -> Result<(), P::Error> {
+    let tint = match tone {
+        BmsDetailStateTone::Ok => fade_color(SUCCESS_COLOR, palette.panel_alt),
+        BmsDetailStateTone::Warn => fade_color(ATTENTION_COLOR, palette.panel_alt),
+        BmsDetailStateTone::Fault => fade_color(ERROR_COLOR, palette.panel_alt),
+        BmsDetailStateTone::Off | BmsDetailStateTone::Unknown => {
+            fade_color(palette.panel_alt, palette.bg)
+        }
+    };
+    let border = fade_color(bms_detail_status_tone_color(palette, tone), palette.border);
+    fill(painter, x + 3, y, w.saturating_sub(6), h, tint)?;
+    fill(painter, x, y + 3, w, h.saturating_sub(6), tint)?;
+    fill(painter, x + 3, y, w.saturating_sub(6), 1, border)?;
+    fill(
+        painter,
+        x + 3,
+        y + h.saturating_sub(1),
+        w.saturating_sub(6),
+        1,
+        border,
+    )?;
+    fill(painter, x, y + 3, 1, h.saturating_sub(6), border)?;
+    fill(
+        painter,
+        x + w.saturating_sub(1),
+        y + 3,
+        1,
+        h.saturating_sub(6),
+        border,
+    )?;
+    fill(painter, x + 1, y + 1, 1, 1, border)?;
+    fill(painter, x + 2, y + 1, 1, 1, border)?;
+    fill(painter, x + 1, y + 2, 1, 1, border)?;
+    fill(painter, x + w.saturating_sub(2), y + 1, 1, 1, border)?;
+    fill(painter, x + w.saturating_sub(3), y + 1, 1, 1, border)?;
+    fill(painter, x + w.saturating_sub(2), y + 2, 1, 1, border)?;
+    fill(painter, x + 1, y + h.saturating_sub(2), 1, 1, border)?;
+    fill(painter, x + 2, y + h.saturating_sub(2), 1, 1, border)?;
+    fill(painter, x + 1, y + h.saturating_sub(3), 1, 1, border)?;
+    fill(
+        painter,
+        x + w.saturating_sub(2),
+        y + h.saturating_sub(2),
+        1,
+        1,
+        border,
+    )?;
+    fill(
+        painter,
+        x + w.saturating_sub(3),
+        y + h.saturating_sub(2),
+        1,
+        1,
+        border,
+    )?;
+    fill(
+        painter,
+        x + w.saturating_sub(2),
+        y + h.saturating_sub(3),
+        1,
+        1,
+        border,
+    )?;
+    draw_bms_state_glyph(
+        painter,
+        x + (w.saturating_sub(22)) / 2,
+        y + (h.saturating_sub(22)) / 2,
+        glyph,
+        bms_detail_status_tone_color(palette, tone),
+        tint,
+    )
+}
+
+fn draw_bms_detail_state_text_tile<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
     palette: Palette,
@@ -4259,31 +5067,68 @@ fn draw_bms_detail_state_tile<P: UiPainter>(
             fade_color(palette.panel_alt, palette.bg)
         }
     };
-    fill(painter, x, y, w, h, tint)?;
-    draw_outline(
+    let border = fade_color(bms_detail_status_tone_color(palette, tone), palette.border);
+    fill(painter, x + 3, y, w.saturating_sub(6), h, tint)?;
+    fill(painter, x, y + 3, w, h.saturating_sub(6), tint)?;
+    fill(painter, x + 3, y, w.saturating_sub(6), 1, border)?;
+    fill(
         painter,
-        x,
-        y,
-        w,
-        h,
-        fade_color(bms_detail_status_tone_color(palette, tone), palette.border),
+        x + 3,
+        y + h.saturating_sub(1),
+        w.saturating_sub(6),
+        1,
+        border,
     )?;
-    draw_detail_footer_icon(
+    fill(painter, x, y + 3, 1, h.saturating_sub(6), border)?;
+    fill(
         painter,
-        x + 4,
-        y + 4,
-        bms_detail_status_icon(tone),
-        bms_detail_status_tone_color(palette, tone),
+        x + w.saturating_sub(1),
+        y + 3,
+        1,
+        h.saturating_sub(6),
+        border,
     )?;
-    text_with_position(
+    fill(painter, x + 1, y + 1, 1, 1, border)?;
+    fill(painter, x + 2, y + 1, 1, 1, border)?;
+    fill(painter, x + 1, y + 2, 1, 1, border)?;
+    fill(painter, x + w.saturating_sub(2), y + 1, 1, 1, border)?;
+    fill(painter, x + w.saturating_sub(3), y + 1, 1, 1, border)?;
+    fill(painter, x + w.saturating_sub(2), y + 2, 1, 1, border)?;
+    fill(painter, x + 1, y + h.saturating_sub(2), 1, 1, border)?;
+    fill(painter, x + 2, y + h.saturating_sub(2), 1, 1, border)?;
+    fill(painter, x + 1, y + h.saturating_sub(3), 1, 1, border)?;
+    fill(
+        painter,
+        x + w.saturating_sub(2),
+        y + h.saturating_sub(2),
+        1,
+        1,
+        border,
+    )?;
+    fill(
+        painter,
+        x + w.saturating_sub(3),
+        y + h.saturating_sub(2),
+        1,
+        1,
+        border,
+    )?;
+    fill(
+        painter,
+        x + w.saturating_sub(2),
+        y + h.saturating_sub(3),
+        1,
+        1,
+        border,
+    )?;
+    text(
         painter,
         variant,
         FontRole::TextCompact,
         label,
-        Point::new((x + 34) as i32, (y + h / 2) as i32),
-        VerticalPosition::Center,
-        HorizontalAlignment::Left,
-        palette.text,
+        Point::new((x + w / 2) as i32, (y + 10) as i32),
+        HorizontalAlignment::Center,
+        bms_detail_status_tone_color(palette, tone),
     )
 }
 
@@ -4293,11 +5138,9 @@ fn render_dashboard_bms_detail_page<P: UiPainter>(
     palette: Palette,
     data: DashboardLiveData,
     accent: u16,
-    status_color: u16,
 ) -> Result<(), P::Error> {
     draw_panel(painter, 6, 22, 308, 38, palette, true, accent)?;
-    fill(painter, 108, 24, 1, 34, fade_color(palette.bg, accent))?;
-    fill(painter, 211, 24, 1, 34, fade_color(palette.bg, accent))?;
+    fill(painter, 158, 24, 1, 34, fade_color(palette.bg, accent))?;
     draw_bms_detail_metric(
         painter,
         variant,
@@ -4306,22 +5149,31 @@ fn render_dashboard_bms_detail_page<P: UiPainter>(
         "REMCAP",
         data.detail.remcap_mah,
     )?;
-    draw_bms_detail_metric(painter, variant, palette, 113, "FCC", data.detail.fcc_mah)?;
-    draw_bms_detail_metric(
+    draw_bms_detail_metric(painter, variant, palette, 160, "FCC", data.detail.fcc_mah)?;
+    draw_panel(painter, 6, 62, 308, 82, palette, false, accent)?;
+    fill(painter, 176, 66, 1, 74, fade_color(palette.border, accent))?;
+    text(
         painter,
         variant,
-        palette,
-        216,
-        "TO FULL",
-        data.detail.to_full_mah,
+        FontRole::TextCompact,
+        "CHG",
+        Point::new(14, 78),
+        HorizontalAlignment::Left,
+        palette.text_dim,
     )?;
-
-    draw_bms_reason_and_balance_band(painter, variant, palette, data, accent, status_color)?;
-    draw_panel(painter, 6, 84, 308, 58, palette, false, accent)?;
-
-    let tiles = [
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        "DSG",
+        Point::new(14, 112),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    draw_bms_detail_balance_cluster(painter, variant, palette, data)?;
+    let charge_tiles = [
         (
-            "CRDY",
+            BmsDetailStateGlyph::BatteryCharge,
             bms_detail_state_tone(
                 data.detail.charge_ready,
                 BmsDetailStateTone::Ok,
@@ -4329,7 +5181,11 @@ fn render_dashboard_bms_detail_page<P: UiPainter>(
             ),
         ),
         (
-            "XCG",
+            if data.detail.xchg == Some(true) {
+                BmsDetailStateGlyph::PathBlocked
+            } else {
+                BmsDetailStateGlyph::PathAllowed
+            },
             bms_detail_state_tone(
                 data.detail.xchg,
                 BmsDetailStateTone::Fault,
@@ -4337,31 +5193,21 @@ fn render_dashboard_bms_detail_page<P: UiPainter>(
             ),
         ),
         (
-            "CFET",
+            match data.detail.charge_fet_on {
+                Some(true) => BmsDetailStateGlyph::FetOn,
+                Some(false) => BmsDetailStateGlyph::FetOff,
+                None => BmsDetailStateGlyph::FetOff,
+            },
             bms_detail_state_tone(
                 data.detail.charge_fet_on,
                 BmsDetailStateTone::Ok,
                 BmsDetailStateTone::Off,
             ),
         ),
+    ];
+    let discharge_tiles = [
         (
-            "FC",
-            bms_detail_state_tone(
-                data.detail.fc,
-                BmsDetailStateTone::Warn,
-                BmsDetailStateTone::Off,
-            ),
-        ),
-        (
-            "PF",
-            bms_detail_state_tone(
-                data.detail.pf,
-                BmsDetailStateTone::Fault,
-                BmsDetailStateTone::Ok,
-            ),
-        ),
-        (
-            "DRDY",
+            BmsDetailStateGlyph::BatteryDischarge,
             bms_detail_state_tone(
                 data.detail.discharge_ready,
                 BmsDetailStateTone::Ok,
@@ -4369,7 +5215,11 @@ fn render_dashboard_bms_detail_page<P: UiPainter>(
             ),
         ),
         (
-            "XDG",
+            if data.detail.xdsg == Some(true) {
+                BmsDetailStateGlyph::PathBlocked
+            } else {
+                BmsDetailStateGlyph::PathAllowed
+            },
             bms_detail_state_tone(
                 data.detail.xdsg,
                 BmsDetailStateTone::Fault,
@@ -4377,15 +5227,37 @@ fn render_dashboard_bms_detail_page<P: UiPainter>(
             ),
         ),
         (
-            "DFET",
+            match data.detail.discharge_fet_on {
+                Some(true) => BmsDetailStateGlyph::FetOn,
+                Some(false) => BmsDetailStateGlyph::FetOff,
+                None => BmsDetailStateGlyph::FetOff,
+            },
             bms_detail_state_tone(
                 data.detail.discharge_fet_on,
                 BmsDetailStateTone::Ok,
                 BmsDetailStateTone::Off,
             ),
         ),
+    ];
+    let flag_tiles = [
         (
-            "FD",
+            BmsDetailStateGlyph::BatteryFull,
+            bms_detail_state_tone(
+                data.detail.fc,
+                BmsDetailStateTone::Warn,
+                BmsDetailStateTone::Off,
+            ),
+        ),
+        (
+            BmsDetailStateGlyph::WarningTriangle,
+            bms_detail_state_tone(
+                data.detail.pf,
+                BmsDetailStateTone::Fault,
+                BmsDetailStateTone::Off,
+            ),
+        ),
+        (
+            BmsDetailStateGlyph::BatteryEmpty,
             bms_detail_state_tone(
                 data.detail.fd,
                 BmsDetailStateTone::Fault,
@@ -4393,23 +5265,26 @@ fn render_dashboard_bms_detail_page<P: UiPainter>(
             ),
         ),
         (
-            "RCA",
+            BmsDetailStateGlyph::BatteryAlert,
             bms_detail_state_tone(
                 data.detail.rca_alarm,
                 BmsDetailStateTone::Warn,
-                BmsDetailStateTone::Ok,
+                BmsDetailStateTone::Off,
             ),
         ),
     ];
 
-    for (idx, (label, tone)) in tiles.into_iter().enumerate() {
-        let col = (idx % 5) as u16;
-        let row = (idx / 5) as u16;
-        let tile_x = 10 + col * 61;
-        let tile_y = 88 + row * 28;
-        draw_bms_detail_state_tile(
-            painter, variant, palette, tile_x, tile_y, 58, 24, label, tone,
-        )?;
+    for (idx, (glyph, tone)) in charge_tiles.into_iter().enumerate() {
+        let tile_x = 46 + idx as u16 * 35;
+        draw_bms_detail_state_tile(painter, palette, tile_x, 70, 30, 30, glyph, tone)?;
+    }
+    for (idx, (glyph, tone)) in discharge_tiles.into_iter().enumerate() {
+        let tile_x = 46 + idx as u16 * 35;
+        draw_bms_detail_state_tile(painter, palette, tile_x, 104, 30, 30, glyph, tone)?;
+    }
+    for (idx, (glyph, tone)) in flag_tiles.into_iter().enumerate() {
+        let tile_x = 181 + idx as u16 * 33;
+        draw_bms_detail_state_tile(painter, palette, tile_x, 105, 28, 28, glyph, tone)?;
     }
 
     Ok(())
@@ -10809,6 +11684,23 @@ mod tests {
             detail_status_tag(DashboardDetailPage::BmsDetail, warn_live),
             "WARN"
         );
+    }
+
+    #[test]
+    fn bms_detail_footer_reason_prefers_reason_label_and_link_fault() {
+        let mut ready_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        ready_snapshot.dashboard_detail.remcap_mah = Some(3666);
+        ready_snapshot.dashboard_detail.fcc_mah = Some(3704);
+        ready_snapshot.dashboard_detail.reason_label = Some("CHG BLOCKED");
+        let ready_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &ready_snapshot);
+        assert_eq!(bms_detail_footer_reason(ready_live), "CHG BLOCKED");
+
+        let mut fault_snapshot = ready_snapshot;
+        fault_snapshot.bq40z50 = SelfCheckCommState::Err;
+        let fault_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &fault_snapshot);
+        assert_eq!(bms_detail_footer_reason(fault_live), "BMS LINK FAULT");
     }
 
     #[test]
