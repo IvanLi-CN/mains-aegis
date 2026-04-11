@@ -46,7 +46,7 @@
 - `firmware/src/front_panel.rs`
   - 接入 Dashboard 详情页状态机、触摸进入和返回逻辑。
 - `firmware/src/output/mod.rs`
-  - 仅复用现有 steady-state BQ40 snapshot，把 `REMCAP / FCC / TO FULL / charge-discharge path / FET / flags / reason` 投影到 UI。
+  - 复用现有 steady-state BQ40 snapshot，并新增 1 条常规 `GaugingStatus()` block read，把 `REMCAP / FCC / learn / balance config / charge-discharge path / FET / flags / reason` 投影到 UI。
 - `tools/front-panel-preview/src/main.rs`
   - 新增 `dashboard-detail-bms*` 预览场景导出。
 - `firmware/ui/`
@@ -54,7 +54,7 @@
 
 ### Out of scope
 
-- `output/mod.rs` 中新增 steady-state BQ40 MAC 轮询、细粒度采样协议解析或实时存储。
+- `output/mod.rs` 中新增 Data Flash / SafetyStatus 常驻诊断轮询、细粒度采样协议解析或实时存储。
 - 新增其它屏幕主题或自检页重构。
 
 ## 功能与行为规格
@@ -108,10 +108,13 @@
   - 4 路 cell temp
   - 充/放电状态与异常条
 - `BMS Detail`
-  - 顶部只显示 `REMCAP / FCC / TO FULL`（单位固定 `mAh`）
-  - 中部显示友好 `REASON` pill，不显示内部 token/raw reason
+  - 顶部主数值只显示 `REMCAP / FCC`（单位固定 `mAh`）
+  - 顶部右侧补充两个高价值 badge：`LEARN` 与 `BALCFG`
+  - `LEARN` 基于 `QEN / VOK / REST` 显示 `LEARN OFF / OK / REST / WAIT / ?`
+  - `BALCFG` 基于 `balance_cfg_match` 显示 `BALCFG OK / MIS / ?`
   - `BAL MASK` 只以 4 节 cell 高亮图形表达，不显示 `0101 / 0x5`
-  - 下部状态组使用 icon-first：`CHG READY / XCHG / CHG FET / FC / PF / DSG READY / XDSG / DSG FET / FD / RCA`
+  - 中部状态组使用 icon-first：`CHG flow / CHG path / CHG FET / DSG flow / DSG path / DSG FET / FC / PF / FD / RCA`
+  - 底栏显示友好主原因，不显示内部 token/raw reason
   - 有限状态统一语义色：`绿色=ok`、`黄色=warn/limit`、`红色=fault/alarm`、`灰色=off/unknown`
 - `Battery Flow`
   - pack voltage / current
@@ -170,7 +173,9 @@
 - Given `Output` 详情页中某一路 `TPS` 关闭，When 渲染对应电流，Then 显示 `--`。
 - Given 详情字段未接入真实数据，When 渲染页面，Then 使用 `N/A` / `--`，且不回落到 demo 波动值。
 - Given `BMS DETAIL`，When `BAL MASK` 可用，Then 只用 4 节 cell 高亮图形表达，不显示 raw bitmask 文本。
-- Given `BMS DETAIL`，When `REASON` 可用，Then 显示友好短标签，不显示 `xchg_blocked` 之类内部 token。
+- Given `BMS DETAIL`，When `GaugingStatus()` 可用，Then `LEARN` badge 按 `QEN / VOK / REST` 显示 `OFF / OK / REST / WAIT / ?`。
+- Given `BMS DETAIL`，When `balance_cfg_match` 可用，Then `BALCFG` badge 显示 `OK / MIS / ?`。
+- Given `BMS DETAIL`，When `REASON` 可用，Then 底栏显示友好短标签，不显示 `xchg_blocked` 之类内部 token。
 - Given preview 导出详情页，When 检查图片，Then 每张图均为 `320x172`。
 - Given 首页和详情页对比评审，When 观察视觉语言，Then 首页仍可识别为现有 Variant B，详情页明显更易读、更像一般用户仪表盘。
 
@@ -181,7 +186,8 @@
 - 新增 `DashboardDetailSnapshot` 作为详情页 UI 壳层字段容器；未接线字段统一走 `N/A` / `--`。
 - `Output` 详情页把“TPS 关闭时电流显示 `--`”固化为渲染规则。
 - 本轮新增 `Cells -> BMS DETAIL` 单一子页例外，不引入通用 history stack。
-- `BMS DETAIL` 只消费现有 runtime snapshot；未新增 steady-state BQ40 诊断轮询。
+- `BMS DETAIL` 在现有 runtime snapshot 基础上补充了 1 条 steady-state `GaugingStatus()` block read，用于 `LEARN` badge。
+- `BMS DETAIL` 顶栏已收敛为 `REMCAP / FCC + LEARN / BALCFG`，底栏负责显示主阻塞原因。
 - 预览工具新增 `dashboard-detail-bms*` 4 个场景，并已导出冻结 PNG 到本 spec `assets/`。
 
 ## 验证记录
