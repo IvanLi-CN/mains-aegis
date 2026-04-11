@@ -742,6 +742,10 @@ fn bq40_mac_bit(raw: Option<u32>, mask: u32) -> Option<bool> {
     raw.map(|value| (value & mask) != 0)
 }
 
+fn bms_detail_gauging_flag(raw: Option<u32>, mask: u32) -> Option<bool> {
+    bq40_mac_bit(raw, mask)
+}
+
 fn bq40_df_bit(raw: Option<u16>, mask: u16) -> Option<bool> {
     raw.map(|value| (value & mask) != 0)
 }
@@ -3664,8 +3668,8 @@ where
         detail.learn_qen = bq40_mac_bit(snapshot.gauging_status, bq40z50::gauging_status::QEN);
         detail.learn_vok = bq40_mac_bit(snapshot.gauging_status, bq40z50::gauging_status::VOK);
         detail.learn_rest = bq40_mac_bit(snapshot.gauging_status, bq40z50::gauging_status::REST);
-        detail.fc = Some((snapshot.batt_status & bq40z50::battery_status::FC) != 0);
-        detail.fd = Some((snapshot.batt_status & bq40z50::battery_status::FD) != 0);
+        detail.fc = bms_detail_gauging_flag(snapshot.gauging_status, bq40z50::gauging_status::FC);
+        detail.fd = bms_detail_gauging_flag(snapshot.gauging_status, bq40z50::gauging_status::FD);
         detail.pf = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::PF);
         detail.rca_alarm = Some((snapshot.batt_status & bq40z50::battery_status::RCA) != 0);
         detail.reason_key = Some(primary_reason);
@@ -9476,6 +9480,30 @@ struct Bq40z50Snapshot {
     gauging_status: Option<u32>,
     afe_register: Option<bq40z50::AfeRegister>,
     cell_mv: [u16; 4],
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bms_detail_gauging_flag_reads_gauging_bits_only() {
+        assert_eq!(
+            bms_detail_gauging_flag(
+                Some(bq40z50::gauging_status::FD),
+                bq40z50::gauging_status::FD
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            bms_detail_gauging_flag(Some(0), bq40z50::gauging_status::FD),
+            Some(false)
+        );
+        assert_eq!(
+            bms_detail_gauging_flag(None, bq40z50::gauging_status::FD),
+            None
+        );
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

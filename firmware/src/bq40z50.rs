@@ -71,6 +71,8 @@ pub mod gauging_status {
     pub const VOK: u32 = 1 << 11;
     pub const R_DIS: u32 = 1 << 10;
     pub const REST: u32 = 1 << 8;
+    pub const FC: u32 = 1 << 1;
+    pub const FD: u32 = 1 << 0;
 }
 
 pub mod mac {

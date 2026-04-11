@@ -6538,6 +6538,8 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
                 "FAULT"
             } else if data.bms_no_battery == Some(true) {
                 "LIMIT"
+            } else if data.detail.reason_key == Some("op_status_unavailable") {
+                "N/A"
             } else if !bms_detail_ready(data) {
                 "N/A"
             } else if data.bms_recovery_pending
@@ -11818,6 +11820,18 @@ mod tests {
         assert_eq!(
             detail_status_tag(DashboardDetailPage::BmsDetail, warn_live),
             "WARN"
+        );
+
+        let mut unavailable_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        unavailable_snapshot.dashboard_detail.remcap_mah = Some(3666);
+        unavailable_snapshot.dashboard_detail.fcc_mah = Some(3704);
+        unavailable_snapshot.dashboard_detail.reason_key = Some("op_status_unavailable");
+        unavailable_snapshot.dashboard_detail.reason_label = Some("STATUS N/A");
+        let unavailable_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &unavailable_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BmsDetail, unavailable_live),
+            "N/A"
         );
 
         let mut full_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
