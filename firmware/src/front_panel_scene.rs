@@ -4063,6 +4063,7 @@ fn bms_detail_reason_text(detail: DashboardDetailSnapshot) -> &'static str {
 
 fn bms_detail_ready(data: DashboardLiveData) -> bool {
     data.bms_state == SelfCheckCommState::Err
+        || data.bms_no_battery == Some(true)
         || data.detail.remcap_mah.is_some()
         || data.detail.fcc_mah.is_some()
         || data.detail.learn_qen.is_some()
@@ -4810,13 +4811,13 @@ fn bms_detail_learn_badge(detail: DashboardDetailSnapshot) -> BmsDetailSummaryBa
             label: "LEARN OFF",
             tone: BmsDetailStateTone::Fault,
         },
+        (Some(true), _, Some(true)) => BmsDetailSummaryBadge {
+            label: "LEARN REST",
+            tone: BmsDetailStateTone::Warn,
+        },
         (Some(true), Some(true), _) => BmsDetailSummaryBadge {
             label: "LEARN OK",
             tone: BmsDetailStateTone::Ok,
-        },
-        (Some(true), Some(false), Some(true)) => BmsDetailSummaryBadge {
-            label: "LEARN REST",
-            tone: BmsDetailStateTone::Warn,
         },
         (Some(true), Some(false), Some(false)) => BmsDetailSummaryBadge {
             label: "LEARN WAIT",
@@ -5020,6 +5021,8 @@ fn draw_bms_balance_cell_icon_large<P: UiPainter>(
 fn bms_detail_footer_reason(data: DashboardLiveData) -> &'static str {
     if data.bms_state == SelfCheckCommState::Err {
         "BMS LINK FAULT"
+    } else if data.bms_no_battery == Some(true) {
+        "NO BATTERY"
     } else if data.detail.reason_label.is_some() {
         bms_detail_reason_text(data.detail)
     } else {
@@ -6522,6 +6525,8 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
                 || data.detail.reason_key == Some("permanent_failure")
             {
                 "FAULT"
+            } else if data.bms_no_battery == Some(true) {
+                "LIMIT"
             } else if !bms_detail_ready(data) {
                 "N/A"
             } else if data.bms_recovery_pending
@@ -11782,6 +11787,15 @@ mod tests {
             "LIMIT"
         );
 
+        let mut no_battery_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        no_battery_snapshot.bq40z50_no_battery = Some(true);
+        let no_battery_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &no_battery_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BmsDetail, no_battery_live),
+            "LIMIT"
+        );
+
         let mut warn_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         warn_snapshot.dashboard_detail.remcap_mah = Some(3666);
         warn_snapshot.dashboard_detail.fcc_mah = Some(3704);
@@ -11822,6 +11836,12 @@ mod tests {
         let fault_live =
             DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &fault_snapshot);
         assert_eq!(bms_detail_footer_reason(fault_live), "BMS LINK FAULT");
+
+        let mut no_battery_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        no_battery_snapshot.bq40z50_no_battery = Some(true);
+        let no_battery_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &no_battery_snapshot);
+        assert_eq!(bms_detail_footer_reason(no_battery_live), "NO BATTERY");
     }
 
     #[test]
@@ -11855,6 +11875,15 @@ mod tests {
             BmsDetailSummaryBadge {
                 label: "LEARN OK",
                 tone: BmsDetailStateTone::Ok,
+            }
+        );
+
+        detail.learn_rest = Some(true);
+        assert_eq!(
+            bms_detail_learn_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "LEARN REST",
+                tone: BmsDetailStateTone::Warn,
             }
         );
 
