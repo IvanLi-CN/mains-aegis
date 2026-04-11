@@ -1034,14 +1034,14 @@ pub(super) fn bq40_primary_reason(
     charge_reason: &'static str,
     discharge_reason: &'static str,
 ) -> &'static str {
+    if bq40_op_bit(op_status, bq40z50::operation_status::PF) == Some(true) {
+        return "permanent_failure";
+    }
     if bq40z50::battery_status::error_code(batt_status) != 0 {
         return "sbs_error_code";
     }
     if (batt_status & bq40z50::battery_status::RCA) != 0 {
         return "remaining_capacity_alarm";
-    }
-    if bq40_op_bit(op_status, bq40z50::operation_status::PF) == Some(true) {
-        return "permanent_failure";
     }
     if discharge_reason != "ready" && discharge_reason != "op_status_unavailable" {
         return discharge_reason;
@@ -1347,6 +1347,16 @@ mod tests {
     #[test]
     fn detail_bms_reason_label_names_charge_fet_off() {
         assert_eq!(detail_bms_reason_label("chg_fet_off"), "CHG FET OFF");
+    }
+
+    #[test]
+    fn bq40_primary_reason_prioritizes_permanent_failure_over_other_pack_alarms() {
+        let batt_status = bq40z50::battery_status::RCA | 0b1111;
+        let op_status = Some(bq40z50::operation_status::PF);
+        assert_eq!(
+            bq40_primary_reason(batt_status, op_status, "ready", "ready"),
+            "permanent_failure"
+        );
     }
 
     #[test]
