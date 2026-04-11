@@ -746,6 +746,10 @@ fn bms_detail_gauging_flag(raw: Option<u32>, mask: u32) -> Option<bool> {
     bq40_mac_bit(raw, mask)
 }
 
+fn bms_detail_to_full_mah(remcap: u16, fcc: u16) -> u16 {
+    fcc.saturating_sub(remcap)
+}
+
 fn bq40_df_bit(raw: Option<u16>, mask: u16) -> Option<bool> {
     raw.map(|value| (value & mask) != 0)
 }
@@ -3651,6 +3655,7 @@ where
         detail.cell_temp_c = detail_bms_cell_sensor_temps(snapshot);
         detail.remcap_mah = Some(snapshot.remcap);
         detail.fcc_mah = Some(snapshot.fcc);
+        detail.to_full_mah = Some(bms_detail_to_full_mah(snapshot.remcap, snapshot.fcc));
         detail.balance_enabled = balance_config.map(|config| config.cb());
         detail.balance_cfg_match = balance_cfg_match;
         detail.balance_active = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CB);
@@ -9503,6 +9508,12 @@ mod tests {
             bms_detail_gauging_flag(None, bq40z50::gauging_status::FD),
             None
         );
+    }
+
+    #[test]
+    fn bms_detail_to_full_uses_capacity_delta() {
+        assert_eq!(bms_detail_to_full_mah(3629, 3666), 37);
+        assert_eq!(bms_detail_to_full_mah(3704, 3666), 0);
     }
 }
 

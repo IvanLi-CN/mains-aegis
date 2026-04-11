@@ -1294,27 +1294,17 @@ where
         let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
         let left_edge = snapshot.left && !prev.left;
         let center_edge = snapshot.center && !prev.center;
-        if left_edge || center_edge {
-            let next_route = match self.dashboard_route {
-                DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::BmsDetail) => Some(
-                    DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Cells),
-                ),
-                DashboardRoute::Detail(_) => Some(DashboardRoute::Home),
-                DashboardRoute::ManualCharge => Some(DashboardRoute::Detail(
-                    front_panel_scene::DashboardDetailPage::Charger,
-                )),
-                DashboardRoute::Home => None,
-            };
-            if let Some(next_route) = next_route {
-                let previous = self.dashboard_route;
-                self.dashboard_route = next_route;
-                self.needs_redraw = true;
-                defmt::info!(
-                    "ui: dashboard route old={} new={}",
-                    dashboard_route_name(previous),
-                    dashboard_route_name(self.dashboard_route)
-                );
-            }
+        if let Some(next_route) =
+            dashboard_button_route_for_input(self.dashboard_route, left_edge, center_edge)
+        {
+            let previous = self.dashboard_route;
+            self.dashboard_route = next_route;
+            self.needs_redraw = true;
+            defmt::info!(
+                "ui: dashboard route old={} new={}",
+                dashboard_route_name(previous),
+                dashboard_route_name(self.dashboard_route)
+            );
         }
         None
     }
@@ -1417,6 +1407,49 @@ where
                 self_check_overlay,
             )
         })
+    }
+}
+
+fn dashboard_button_route_for_input(
+    current: DashboardRoute,
+    left_edge: bool,
+    center_edge: bool,
+) -> Option<DashboardRoute> {
+    if center_edge {
+        match current {
+            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Cells) => {
+                return Some(DashboardRoute::Detail(
+                    front_panel_scene::DashboardDetailPage::BmsDetail,
+                ));
+            }
+            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::BmsDetail) => {
+                return Some(DashboardRoute::Detail(
+                    front_panel_scene::DashboardDetailPage::Cells,
+                ));
+            }
+            DashboardRoute::Detail(_) => return Some(DashboardRoute::Home),
+            DashboardRoute::ManualCharge => {
+                return Some(DashboardRoute::Detail(
+                    front_panel_scene::DashboardDetailPage::Charger,
+                ));
+            }
+            DashboardRoute::Home => {}
+        }
+    }
+
+    if left_edge {
+        match current {
+            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::BmsDetail) => Some(
+                DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Cells),
+            ),
+            DashboardRoute::Detail(_) => Some(DashboardRoute::Home),
+            DashboardRoute::ManualCharge => Some(DashboardRoute::Detail(
+                front_panel_scene::DashboardDetailPage::Charger,
+            )),
+            DashboardRoute::Home => None,
+        }
+    } else {
+        None
     }
 }
 
@@ -1932,5 +1965,42 @@ fn i2c_error_kind(e: esp_hal::i2c::master::Error) -> &'static str {
         Error::ArbitrationLost => "i2c_arb_lost",
         Error::ExecutionIncomplete => "i2c_exec_incomplete",
         _ => "i2c_other",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dashboard_buttons_can_enter_and_exit_bms_detail() {
+        assert_eq!(
+            dashboard_button_route_for_input(
+                DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Cells),
+                false,
+                true,
+            ),
+            Some(DashboardRoute::Detail(
+                front_panel_scene::DashboardDetailPage::BmsDetail,
+            ))
+        );
+        assert_eq!(
+            dashboard_button_route_for_input(
+                DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Cells),
+                true,
+                false,
+            ),
+            Some(DashboardRoute::Home)
+        );
+        assert_eq!(
+            dashboard_button_route_for_input(
+                DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::BmsDetail),
+                false,
+                true,
+            ),
+            Some(DashboardRoute::Detail(
+                front_panel_scene::DashboardDetailPage::Cells,
+            ))
+        );
     }
 }
