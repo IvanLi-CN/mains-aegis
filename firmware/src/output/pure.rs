@@ -1043,14 +1043,14 @@ pub(super) fn bq40_primary_reason(
     if (batt_status & bq40z50::battery_status::RCA) != 0 {
         return "remaining_capacity_alarm";
     }
+    if bq40_op_bit(op_status, bq40z50::operation_status::SLEEP) == Some(true) {
+        return "sleep_mode";
+    }
     if discharge_reason != "ready" && discharge_reason != "op_status_unavailable" {
         return discharge_reason;
     }
     if charge_reason != "ready" && charge_reason != "op_status_unavailable" {
         return charge_reason;
-    }
-    if bq40_op_bit(op_status, bq40z50::operation_status::SLEEP) == Some(true) {
-        return "sleep_mode";
     }
     if op_status.is_none() {
         return "op_status_unavailable";
@@ -1356,6 +1356,19 @@ mod tests {
         assert_eq!(
             bq40_primary_reason(batt_status, op_status, "ready", "ready"),
             "permanent_failure"
+        );
+    }
+
+    #[test]
+    fn bq40_primary_reason_prioritizes_sleep_before_path_off_states() {
+        let op_status = Some(bq40z50::operation_status::SLEEP);
+        assert_eq!(
+            bq40_primary_reason(0, op_status, "chg_fet_off", "ready"),
+            "sleep_mode"
+        );
+        assert_eq!(
+            bq40_primary_reason(0, op_status, "ready", "dsg_fet_off"),
+            "sleep_mode"
         );
     }
 
