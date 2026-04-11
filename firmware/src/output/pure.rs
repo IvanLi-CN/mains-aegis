@@ -1062,6 +1062,7 @@ pub(super) fn detail_bms_reason_label(primary_reason: &'static str) -> &'static 
     match primary_reason {
         "nominal" => "SYSTEM READY",
         "xchg_blocked" => "CHG BLOCKED",
+        "chg_fet_off" => "CHG FET OFF",
         "xdsg_blocked" => "DSG BLOCKED",
         "dsg_fet_off" => "DSG FET OFF",
         "remaining_capacity_alarm" => "RCA ALARM",
@@ -1341,6 +1342,11 @@ mod tests {
     #[test]
     fn manual_stop_hold_blocks_only_plain_charge_policy() {
         assert!(manual_charge_stop_hold_blocks_charge(true, false, false));
+    }
+
+    #[test]
+    fn detail_bms_reason_label_names_charge_fet_off() {
+        assert_eq!(detail_bms_reason_label("chg_fet_off"), "CHG FET OFF");
     }
 
     #[test]

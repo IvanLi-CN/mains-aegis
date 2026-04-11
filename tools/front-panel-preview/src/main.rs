@@ -82,7 +82,6 @@ fn dashboard_detail_fixture(
     detail.balance_cell = Some(3);
     detail.remcap_mah = Some(3_666);
     detail.fcc_mah = Some(3_704);
-    detail.to_full_mah = Some(38);
     detail.battery_energy_mwh = Some(46_850);
     detail.battery_full_capacity_mwh = Some(63_200);
     detail.charge_ready = Some(true);
@@ -302,7 +301,6 @@ fn dashboard_detail_snapshot_for_bms_state(
             let detail = &mut snapshot.dashboard_detail;
             detail.remcap_mah = Some(3_666);
             detail.fcc_mah = Some(3_704);
-            detail.to_full_mah = Some(38);
             detail.charge_ready = Some(true);
             detail.discharge_ready = Some(true);
             detail.xchg = Some(false);

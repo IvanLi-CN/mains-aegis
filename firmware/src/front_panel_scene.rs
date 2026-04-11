@@ -4062,9 +4062,9 @@ fn bms_detail_reason_text(detail: DashboardDetailSnapshot) -> &'static str {
 }
 
 fn bms_detail_ready(data: DashboardLiveData) -> bool {
-    data.detail.remcap_mah.is_some()
+    data.bms_state == SelfCheckCommState::Err
+        || data.detail.remcap_mah.is_some()
         || data.detail.fcc_mah.is_some()
-        || data.detail.to_full_mah.is_some()
         || data.detail.learn_qen.is_some()
         || data.detail.learn_vok.is_some()
         || data.detail.learn_rest.is_some()
@@ -6516,14 +6516,14 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
             }
         }
         DashboardDetailPage::BmsDetail => {
-            if !bms_detail_ready(data) {
-                "N/A"
-            } else if data.bms_state == SelfCheckCommState::Err
+            if data.bms_state == SelfCheckCommState::Err
                 || data.detail.pf == Some(true)
                 || data.detail.reason_key == Some("sbs_error_code")
                 || data.detail.reason_key == Some("permanent_failure")
             {
                 "FAULT"
+            } else if !bms_detail_ready(data) {
+                "N/A"
             } else if data.bms_recovery_pending
                 || data.detail.xchg == Some(true)
                 || data.detail.xdsg == Some(true)
@@ -11772,7 +11772,6 @@ mod tests {
         let mut limit_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         limit_snapshot.dashboard_detail.remcap_mah = Some(3666);
         limit_snapshot.dashboard_detail.fcc_mah = Some(3704);
-        limit_snapshot.dashboard_detail.to_full_mah = Some(38);
         limit_snapshot.dashboard_detail.reason_key = Some("xchg_blocked");
         limit_snapshot.dashboard_detail.reason_label = Some("CHG BLOCKED");
         limit_snapshot.dashboard_detail.xchg = Some(true);
@@ -11787,7 +11786,6 @@ mod tests {
         let mut warn_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         warn_snapshot.dashboard_detail.remcap_mah = Some(3666);
         warn_snapshot.dashboard_detail.fcc_mah = Some(3704);
-        warn_snapshot.dashboard_detail.to_full_mah = Some(38);
         warn_snapshot.dashboard_detail.reason_key = Some("remaining_capacity_alarm");
         warn_snapshot.dashboard_detail.reason_label = Some("RCA ALARM");
         warn_snapshot.dashboard_detail.rca_alarm = Some(true);
@@ -11814,6 +11812,18 @@ mod tests {
         let fault_live =
             DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &fault_snapshot);
         assert_eq!(bms_detail_footer_reason(fault_live), "BMS LINK FAULT");
+    }
+
+    #[test]
+    fn bms_detail_link_fault_stays_fault_even_without_detail_metrics() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq40z50 = SelfCheckCommState::Err;
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BmsDetail, live),
+            "FAULT"
+        );
     }
 
     #[test]

@@ -3647,7 +3647,6 @@ where
         detail.cell_temp_c = detail_bms_cell_sensor_temps(snapshot);
         detail.remcap_mah = Some(snapshot.remcap);
         detail.fcc_mah = Some(snapshot.fcc);
-        detail.to_full_mah = Some(snapshot.fcc.saturating_sub(snapshot.remcap));
         detail.balance_enabled = balance_config.map(|config| config.cb());
         detail.balance_cfg_match = balance_cfg_match;
         detail.balance_active = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CB);
