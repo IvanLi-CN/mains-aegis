@@ -418,6 +418,9 @@ pub struct DashboardDetailSnapshot {
     pub charge_fet_on: Option<bool>,
     pub discharge_fet_on: Option<bool>,
     pub precharge_fet_on: Option<bool>,
+    pub learn_qen: Option<bool>,
+    pub learn_vok: Option<bool>,
+    pub learn_rest: Option<bool>,
     pub fc: Option<bool>,
     pub fd: Option<bool>,
     pub pf: Option<bool>,
@@ -466,6 +469,9 @@ impl DashboardDetailSnapshot {
             charge_fet_on: None,
             discharge_fet_on: None,
             precharge_fet_on: None,
+            learn_qen: None,
+            learn_vok: None,
+            learn_rest: None,
             fc: None,
             fd: None,
             pf: None,
@@ -4059,6 +4065,10 @@ fn bms_detail_ready(data: DashboardLiveData) -> bool {
     data.detail.remcap_mah.is_some()
         || data.detail.fcc_mah.is_some()
         || data.detail.to_full_mah.is_some()
+        || data.detail.learn_qen.is_some()
+        || data.detail.learn_vok.is_some()
+        || data.detail.learn_rest.is_some()
+        || data.detail.balance_cfg_match.is_some()
         || data.detail.charge_ready.is_some()
         || data.detail.discharge_ready.is_some()
         || data.detail.xchg.is_some()
@@ -4753,6 +4763,7 @@ fn draw_bms_detail_metric<P: UiPainter>(
     variant: UiVariant,
     palette: Palette,
     x: u16,
+    w: u16,
     label: &'static str,
     value_mah: Option<u16>,
 ) -> Result<(), P::Error> {
@@ -4771,7 +4782,7 @@ fn draw_bms_detail_metric<P: UiPainter>(
             variant,
             FontRole::DetailNum,
             format_args!("{:>4}mAh", value_mah),
-            Point::new((x + 96) as i32, 42),
+            Point::new((x + w.saturating_sub(4)) as i32, 42),
             HorizontalAlignment::Right,
             palette.bg,
         ),
@@ -4780,11 +4791,83 @@ fn draw_bms_detail_metric<P: UiPainter>(
             variant,
             FontRole::DetailNum,
             "N/A",
-            Point::new((x + 96) as i32, 42),
+            Point::new((x + w.saturating_sub(4)) as i32, 42),
             HorizontalAlignment::Right,
             palette.bg,
         ),
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BmsDetailSummaryBadge {
+    label: &'static str,
+    tone: BmsDetailStateTone,
+}
+
+fn bms_detail_learn_badge(detail: DashboardDetailSnapshot) -> BmsDetailSummaryBadge {
+    match (detail.learn_qen, detail.learn_vok, detail.learn_rest) {
+        (Some(false), _, _) => BmsDetailSummaryBadge {
+            label: "LEARN OFF",
+            tone: BmsDetailStateTone::Fault,
+        },
+        (Some(true), Some(true), _) => BmsDetailSummaryBadge {
+            label: "LEARN OK",
+            tone: BmsDetailStateTone::Ok,
+        },
+        (Some(true), Some(false), Some(true)) => BmsDetailSummaryBadge {
+            label: "LEARN REST",
+            tone: BmsDetailStateTone::Warn,
+        },
+        (Some(true), Some(false), Some(false)) => BmsDetailSummaryBadge {
+            label: "LEARN WAIT",
+            tone: BmsDetailStateTone::Warn,
+        },
+        _ => BmsDetailSummaryBadge {
+            label: "LEARN ?",
+            tone: BmsDetailStateTone::Unknown,
+        },
+    }
+}
+
+fn bms_detail_balance_cfg_badge(detail: DashboardDetailSnapshot) -> BmsDetailSummaryBadge {
+    match detail.balance_cfg_match {
+        Some(true) => BmsDetailSummaryBadge {
+            label: "BALCFG OK",
+            tone: BmsDetailStateTone::Ok,
+        },
+        Some(false) => BmsDetailSummaryBadge {
+            label: "BALCFG MIS",
+            tone: BmsDetailStateTone::Fault,
+        },
+        None => BmsDetailSummaryBadge {
+            label: "BALCFG ?",
+            tone: BmsDetailStateTone::Unknown,
+        },
+    }
+}
+
+fn draw_bms_detail_summary_badge<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    badge: BmsDetailSummaryBadge,
+) -> Result<(), P::Error> {
+    let border = bms_detail_status_tone_color(palette, badge.tone);
+    fill(painter, x, y, w, h, palette.panel_alt)?;
+    draw_outline(painter, x, y, w, h, fade_color(border, palette.border))?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        badge.label,
+        Point::new((x + w / 2) as i32, (y + 1) as i32),
+        HorizontalAlignment::Center,
+        border,
+    )
 }
 
 fn draw_bms_detail_balance_summary<P: UiPainter>(
@@ -5140,16 +5223,46 @@ fn render_dashboard_bms_detail_page<P: UiPainter>(
     accent: u16,
 ) -> Result<(), P::Error> {
     draw_panel(painter, 6, 22, 308, 38, palette, true, accent)?;
-    fill(painter, 158, 24, 1, 34, fade_color(palette.bg, accent))?;
+    fill(painter, 108, 24, 1, 34, fade_color(palette.bg, accent))?;
+    fill(painter, 208, 24, 1, 34, fade_color(palette.bg, accent))?;
     draw_bms_detail_metric(
         painter,
         variant,
         palette,
         10,
+        94,
         "REMCAP",
         data.detail.remcap_mah,
     )?;
-    draw_bms_detail_metric(painter, variant, palette, 160, "FCC", data.detail.fcc_mah)?;
+    draw_bms_detail_metric(
+        painter,
+        variant,
+        palette,
+        110,
+        94,
+        "FCC",
+        data.detail.fcc_mah,
+    )?;
+    draw_bms_detail_summary_badge(
+        painter,
+        variant,
+        palette,
+        216,
+        25,
+        88,
+        14,
+        bms_detail_learn_badge(data.detail),
+    )?;
+    draw_bms_detail_summary_badge(
+        painter,
+        variant,
+        palette,
+        216,
+        41,
+        88,
+        14,
+        bms_detail_balance_cfg_badge(data.detail),
+    )?;
     draw_panel(painter, 6, 62, 308, 82, palette, false, accent)?;
     fill(painter, 176, 66, 1, 74, fade_color(palette.border, accent))?;
     text(
@@ -11701,6 +11814,87 @@ mod tests {
         let fault_live =
             DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &fault_snapshot);
         assert_eq!(bms_detail_footer_reason(fault_live), "BMS LINK FAULT");
+    }
+
+    #[test]
+    fn bms_detail_learning_badge_prefers_ok_rest_wait_and_off_states() {
+        let mut detail = DashboardDetailSnapshot::pending();
+        assert_eq!(
+            bms_detail_learn_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "LEARN ?",
+                tone: BmsDetailStateTone::Unknown,
+            }
+        );
+
+        detail.learn_qen = Some(true);
+        detail.learn_vok = Some(true);
+        detail.learn_rest = Some(false);
+        assert_eq!(
+            bms_detail_learn_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "LEARN OK",
+                tone: BmsDetailStateTone::Ok,
+            }
+        );
+
+        detail.learn_vok = Some(false);
+        detail.learn_rest = Some(true);
+        assert_eq!(
+            bms_detail_learn_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "LEARN REST",
+                tone: BmsDetailStateTone::Warn,
+            }
+        );
+
+        detail.learn_rest = Some(false);
+        assert_eq!(
+            bms_detail_learn_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "LEARN WAIT",
+                tone: BmsDetailStateTone::Warn,
+            }
+        );
+
+        detail.learn_qen = Some(false);
+        assert_eq!(
+            bms_detail_learn_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "LEARN OFF",
+                tone: BmsDetailStateTone::Fault,
+            }
+        );
+    }
+
+    #[test]
+    fn bms_detail_balance_cfg_badge_tracks_match_state() {
+        let mut detail = DashboardDetailSnapshot::pending();
+        assert_eq!(
+            bms_detail_balance_cfg_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "BALCFG ?",
+                tone: BmsDetailStateTone::Unknown,
+            }
+        );
+
+        detail.balance_cfg_match = Some(true);
+        assert_eq!(
+            bms_detail_balance_cfg_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "BALCFG OK",
+                tone: BmsDetailStateTone::Ok,
+            }
+        );
+
+        detail.balance_cfg_match = Some(false);
+        assert_eq!(
+            bms_detail_balance_cfg_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "BALCFG MIS",
+                tone: BmsDetailStateTone::Fault,
+            }
+        );
     }
 
     #[test]

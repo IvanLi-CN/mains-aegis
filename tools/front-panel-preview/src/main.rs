@@ -92,6 +92,9 @@ fn dashboard_detail_fixture(
     detail.charge_fet_on = Some(matches!(mode, UpsMode::Standby));
     detail.discharge_fet_on = Some(matches!(mode, UpsMode::Supplement | UpsMode::Backup));
     detail.precharge_fet_on = Some(matches!(mode, UpsMode::Standby));
+    detail.learn_qen = Some(true);
+    detail.learn_vok = Some(true);
+    detail.learn_rest = Some(false);
     detail.fc = Some(false);
     detail.fd = Some(false);
     detail.pf = Some(false);
@@ -306,6 +309,9 @@ fn dashboard_detail_snapshot_for_bms_state(
             detail.xdsg = Some(false);
             detail.charge_fet_on = Some(true);
             detail.discharge_fet_on = Some(true);
+            detail.learn_qen = Some(true);
+            detail.learn_vok = Some(true);
+            detail.learn_rest = Some(false);
             detail.fc = Some(false);
             detail.fd = Some(false);
             detail.pf = Some(false);
@@ -322,6 +328,9 @@ fn dashboard_detail_snapshot_for_bms_state(
             detail.charge_ready = Some(false);
             detail.xchg = Some(true);
             detail.charge_fet_on = Some(false);
+            detail.learn_qen = Some(true);
+            detail.learn_vok = Some(false);
+            detail.learn_rest = Some(true);
             detail.reason_key = Some("xchg_blocked");
             detail.reason_label = Some("CHG BLOCKED");
             detail.bms_notice = Some("LIVE DATA");

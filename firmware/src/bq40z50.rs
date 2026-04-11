@@ -35,6 +35,7 @@ pub mod cmd {
     pub const MANUFACTURER_DATA: u8 = 0x23;
     pub const OPERATION_STATUS: u8 = 0x54;
     pub const CHARGING_STATUS: u8 = 0x55;
+    pub const GAUGING_STATUS: u8 = 0x56;
     pub const AFE_REGISTER: u8 = 0x58;
 
     pub const CELL_VOLTAGE_4: u8 = 0x3C;
@@ -63,6 +64,13 @@ pub mod charging_status {
     pub const CVR: u32 = 1 << 17;
     pub const CCC: u32 = 1 << 18;
     pub const NCT: u32 = 1 << 19;
+}
+
+pub mod gauging_status {
+    pub const QEN: u32 = 1 << 12;
+    pub const VOK: u32 = 1 << 11;
+    pub const R_DIS: u32 = 1 << 10;
+    pub const REST: u32 = 1 << 8;
 }
 
 pub mod mac {
@@ -566,6 +574,29 @@ where
     ])))
 }
 
+/// Read the 32-bit GaugingStatus() block response.
+///
+/// TRM marks 0x56 as an H4/block command, so reading it as a plain word can
+/// return stale or truncated bytes.
+pub fn read_gauging_status<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<u32>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let Some(raw) = read_block_raw(i2c, addr, cmd::GAUGING_STATUS)? else {
+        return Ok(None);
+    };
+    if raw.payload_len < 4 {
+        return Ok(None);
+    }
+
+    Ok(Some(u32::from_le_bytes([
+        raw.payload[0],
+        raw.payload[1],
+        raw.payload[2],
+        raw.payload[3],
+    ])))
+}
+
 pub fn read_mac_u32<I2C>(i2c: &mut I2C, addr: u8, mac_cmd: u16) -> Result<Option<u32>, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -878,6 +909,29 @@ mod tests {
         let value = read_charging_status(&mut i2c, addr).unwrap().unwrap();
 
         assert_eq!(value, 0x0000_2003);
+    }
+
+    #[test]
+    fn read_gauging_status_decodes_h4_block_payloads() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let payload = [0x00, 0x19, 0x00, 0x00];
+        let mut plain_frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+        plain_frame[0] = 4;
+        plain_frame[1..5].copy_from_slice(&payload);
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd::GAUGING_STATUS]),
+            Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
+            Step::Write(addr, vec![cmd::GAUGING_STATUS]),
+            Step::Read(addr, plain_frame),
+        ]);
+
+        let value = read_gauging_status(&mut i2c, addr).unwrap().unwrap();
+
+        assert_eq!(value, 0x0000_1900);
+        assert!(value & gauging_status::QEN != 0);
+        assert!(value & gauging_status::VOK != 0);
+        assert!(value & gauging_status::REST != 0);
     }
 
     #[test]
