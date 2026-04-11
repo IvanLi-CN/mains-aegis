@@ -4119,6 +4119,7 @@ enum BmsDetailStateGlyph {
     BatteryDischarge,
     PathBlocked,
     PathAllowed,
+    Unknown,
     FetOn,
     FetOff,
     BatteryFull,
@@ -4657,6 +4658,15 @@ fn draw_bms_glyph_path_blocked<P: UiPainter>(
     draw_icon_blocks(painter, x, y, BMS_PATH_BLOCKED_22, rgb565)
 }
 
+fn draw_bms_glyph_unknown<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks_centered(painter, x, y, 22, 22, CARBON_HELP_18, rgb565)
+}
+
 fn draw_bms_glyph_fet_base<P: UiPainter>(
     painter: &mut P,
     x: u16,
@@ -4746,6 +4756,7 @@ fn draw_bms_state_glyph<P: UiPainter>(
         }
         BmsDetailStateGlyph::PathBlocked => draw_bms_glyph_path_blocked(painter, x, y, fg),
         BmsDetailStateGlyph::PathAllowed => draw_bms_glyph_path_enabled(painter, x, y, fg),
+        BmsDetailStateGlyph::Unknown => draw_bms_glyph_unknown(painter, x, y, fg),
         BmsDetailStateGlyph::FetOn => draw_bms_glyph_fet_on(painter, x, y, fg),
         BmsDetailStateGlyph::FetOff => draw_bms_glyph_fet_off(painter, x, y, fg, bg),
         BmsDetailStateGlyph::BatteryFull => {
@@ -4809,7 +4820,7 @@ fn bms_detail_learn_badge(detail: DashboardDetailSnapshot) -> BmsDetailSummaryBa
     match (detail.learn_qen, detail.learn_vok, detail.learn_rest) {
         (Some(false), _, _) => BmsDetailSummaryBadge {
             label: "LEARN OFF",
-            tone: BmsDetailStateTone::Fault,
+            tone: BmsDetailStateTone::Off,
         },
         (Some(true), _, Some(true)) => BmsDetailSummaryBadge {
             label: "LEARN REST",
@@ -4844,6 +4855,22 @@ fn bms_detail_balance_cfg_badge(detail: DashboardDetailSnapshot) -> BmsDetailSum
             label: "BALCFG ?",
             tone: BmsDetailStateTone::Unknown,
         },
+    }
+}
+
+fn bms_detail_path_glyph(blocked: Option<bool>) -> BmsDetailStateGlyph {
+    match blocked {
+        Some(true) => BmsDetailStateGlyph::PathBlocked,
+        Some(false) => BmsDetailStateGlyph::PathAllowed,
+        None => BmsDetailStateGlyph::Unknown,
+    }
+}
+
+fn bms_detail_fet_glyph(on: Option<bool>) -> BmsDetailStateGlyph {
+    match on {
+        Some(true) => BmsDetailStateGlyph::FetOn,
+        Some(false) => BmsDetailStateGlyph::FetOff,
+        None => BmsDetailStateGlyph::Unknown,
     }
 }
 
@@ -5297,11 +5324,7 @@ fn render_dashboard_bms_detail_page<P: UiPainter>(
             ),
         ),
         (
-            if data.detail.xchg == Some(true) {
-                BmsDetailStateGlyph::PathBlocked
-            } else {
-                BmsDetailStateGlyph::PathAllowed
-            },
+            bms_detail_path_glyph(data.detail.xchg),
             bms_detail_state_tone(
                 data.detail.xchg,
                 BmsDetailStateTone::Fault,
@@ -5309,11 +5332,7 @@ fn render_dashboard_bms_detail_page<P: UiPainter>(
             ),
         ),
         (
-            match data.detail.charge_fet_on {
-                Some(true) => BmsDetailStateGlyph::FetOn,
-                Some(false) => BmsDetailStateGlyph::FetOff,
-                None => BmsDetailStateGlyph::FetOff,
-            },
+            bms_detail_fet_glyph(data.detail.charge_fet_on),
             bms_detail_state_tone(
                 data.detail.charge_fet_on,
                 BmsDetailStateTone::Ok,
@@ -5331,11 +5350,7 @@ fn render_dashboard_bms_detail_page<P: UiPainter>(
             ),
         ),
         (
-            if data.detail.xdsg == Some(true) {
-                BmsDetailStateGlyph::PathBlocked
-            } else {
-                BmsDetailStateGlyph::PathAllowed
-            },
+            bms_detail_path_glyph(data.detail.xdsg),
             bms_detail_state_tone(
                 data.detail.xdsg,
                 BmsDetailStateTone::Fault,
@@ -5343,11 +5358,7 @@ fn render_dashboard_bms_detail_page<P: UiPainter>(
             ),
         ),
         (
-            match data.detail.discharge_fet_on {
-                Some(true) => BmsDetailStateGlyph::FetOn,
-                Some(false) => BmsDetailStateGlyph::FetOff,
-                None => BmsDetailStateGlyph::FetOff,
-            },
+            bms_detail_fet_glyph(data.detail.discharge_fet_on),
             bms_detail_state_tone(
                 data.detail.discharge_fet_on,
                 BmsDetailStateTone::Ok,
@@ -11911,9 +11922,29 @@ mod tests {
             bms_detail_learn_badge(detail),
             BmsDetailSummaryBadge {
                 label: "LEARN OFF",
-                tone: BmsDetailStateTone::Fault,
+                tone: BmsDetailStateTone::Off,
             }
         );
+    }
+
+    #[test]
+    fn bms_detail_state_glyphs_keep_unknown_telemetry_unknown() {
+        assert_eq!(
+            bms_detail_path_glyph(Some(true)),
+            BmsDetailStateGlyph::PathBlocked
+        );
+        assert_eq!(
+            bms_detail_path_glyph(Some(false)),
+            BmsDetailStateGlyph::PathAllowed
+        );
+        assert_eq!(bms_detail_path_glyph(None), BmsDetailStateGlyph::Unknown);
+
+        assert_eq!(bms_detail_fet_glyph(Some(true)), BmsDetailStateGlyph::FetOn);
+        assert_eq!(
+            bms_detail_fet_glyph(Some(false)),
+            BmsDetailStateGlyph::FetOff
+        );
+        assert_eq!(bms_detail_fet_glyph(None), BmsDetailStateGlyph::Unknown);
     }
 
     #[test]
