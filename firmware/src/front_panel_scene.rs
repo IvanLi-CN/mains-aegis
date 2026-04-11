@@ -6532,7 +6532,6 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
             {
                 "LIMIT"
             } else if data.bms_state == SelfCheckCommState::Warn
-                || data.detail.fc == Some(true)
                 || data.detail.fd == Some(true)
                 || data.detail.rca_alarm == Some(true)
             {
@@ -11794,6 +11793,17 @@ mod tests {
         assert_eq!(
             detail_status_tag(DashboardDetailPage::BmsDetail, warn_live),
             "WARN"
+        );
+
+        let mut full_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        full_snapshot.dashboard_detail.remcap_mah = Some(3666);
+        full_snapshot.dashboard_detail.fcc_mah = Some(3704);
+        full_snapshot.dashboard_detail.fc = Some(true);
+        let full_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &full_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BmsDetail, full_live),
+            "READY"
         );
     }
 
