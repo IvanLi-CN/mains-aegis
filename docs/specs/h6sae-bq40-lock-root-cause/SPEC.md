@@ -160,7 +160,8 @@ None
 - 当前唯一已实施修复分支是 `termination`：
   - 主线固件会把 `BQ40 Current at EoC` 对齐到 `BQ25792 ITERM` 的 `40mA` 步进，当前 pack 的 `109mA` 会下调为 `80mA` 目标。
   - `/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260412_232036.mon.ndjson` 已证明新固件在 runtime 中产生了 `policy_term_target_ma=Some(80)`。
-  - 同一份 monitor 里 `applied_iterm_ma` 仍为 `None`，因为 pack 还处于 `blocked_no_bms/LOCK`，没有进入允许写入正常充电参数的路径；因此完整修复效果仍需 `<90%` 解锁后的闭环复验。
+  - `/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260412_233444.mon.ndjson` 已进一步证明该对齐值在 `LOCK` 态也真正落到了 charger 寄存器：同一段日志里同时出现 `policy_term_target_ma=Some(80)`、`iterm_ma=Some(80)`、`applied_iterm_ma=Some(80)` 与 `term_ctrl=Some(58114)`。
+  - 同一份最新 monitor 也确认 pack 仍处于 `rsoc_pct=97`、`SafetyStatus[OC]=1`、`XCHG=1`、`VCT=false`、`No Valid Charge Term=2` 的旧失败态，因此当前硬 blocker 已经收窄为：必须先获得一次 `<90%` 解锁基线，才能完成 M3/M5 的闭环复验。
 
 ## 计划资产（Plan assets）
 
