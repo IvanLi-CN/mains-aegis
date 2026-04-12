@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 部分完成（2/6）
+- Status: 部分完成（3/6）
 - Created: 2026-04-13
 - Last: 2026-04-13
 
@@ -143,6 +143,25 @@ None
 - `/Users/ivan/Projects/Ivan/mains-aegis/docs/specs/eu2b8-bq25792-charge-policy/SPEC.md`: 若命中 `termination` 分支，补一条 superseded 说明，收敛旧非目标口径。
 - `/Users/ivan/Projects/Ivan/mains-aegis/docs/solutions/**`: 若形成可复用经验，再新增或刷新对应 solution。
 
+## 当前证据快照（Current evidence snapshot）
+
+- `ChargingStatus(0x55)` 已确认是 `H3` 三字节块读而不是 `H4`；runtime 现在能稳定输出 `declared_len/payload_len/raw bytes/source/failure`，不再只有 `block_too_short`。
+- `/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260412_224305.mon.ndjson` 里的失败态证据已经满足 `termination` 分流门：
+  - `ChargingStatus raw=0x1820`，`VCT=false`，`IN=true`，`HV=true`
+  - `SafetyStatus[OC]=1`
+  - `OperationStatus[XCHG]=1`，`CHG FET=false`
+  - `No Valid Charge Term=2`
+  - `Update Status=4`
+  - `No Of Qmax Updates=0`
+  - `No Of Ra Updates=0`
+  - `BQ25792 EN_TERM=true`
+  - `BQ25792 ITERM=200mA`
+  - `BQ40 Current at EoC=109mA`
+- 当前唯一已实施修复分支是 `termination`：
+  - 主线固件会把 `BQ40 Current at EoC` 对齐到 `BQ25792 ITERM` 的 `40mA` 步进，当前 pack 的 `109mA` 会下调为 `80mA` 目标。
+  - `/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260412_232036.mon.ndjson` 已证明新固件在 runtime 中产生了 `policy_term_target_ma=Some(80)`。
+  - 同一份 monitor 里 `applied_iterm_ma` 仍为 `None`，因为 pack 还处于 `blocked_no_bms/LOCK`，没有进入允许写入正常充电参数的路径；因此完整修复效果仍需 `<90%` 解锁后的闭环复验。
+
 ## 计划资产（Plan assets）
 
 - Directory: `docs/specs/h6sae-bq40-lock-root-cause/assets/`
@@ -163,7 +182,7 @@ None
 - [x] M1: 创建 `LOCK` 根因 spec 并冻结证据模型、三分流规则与修复边界。
 - [x] M2: 补齐 `ChargingStatus(0x55)` 原始块读与 lifetime/termination 观测字段，并完成本地验证。
 - [ ] M3: 完成一次从 `<90%` 解锁基线开始的 live pack 闭环抓取，产出单份时间线证据包。
-- [ ] M4: 按证据命中唯一修复分支并完成实现。
+- [x] M4: 按证据命中唯一修复分支并完成实现。
 - [ ] M5: 完成修复后的 live pack 闭环复验，证明不再重入 `OC/LOCK`。
 - [ ] M6: PR 收敛、合并与最终上板确认完成。
 
@@ -184,6 +203,7 @@ None
 
 - 2026-04-13: 新建 spec，冻结 `LOCK` 根因锁定与修复的证据门、分流规则与快车道收口条件。
 - 2026-04-13: 完成 `0x55` 原始块读与 BQ40/BQ25792 低频诊断观测补强，并通过主机侧验证。
+- 2026-04-13: 依据 live failure evidence 命中 `termination` 分流门；实施 `BQ40 Current at EoC -> BQ25792 ITERM` 对齐修复，并完成 clean build 上板验证。
 
 ## 参考（References）
 
