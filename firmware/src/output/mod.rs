@@ -91,6 +91,7 @@ const BMS_DETAIL_MAC_REFRESH_PERIOD: Duration = Duration::from_secs(8);
 const BMS_DETAIL_MAC_REFRESH_STAGGER: Duration = Duration::from_secs(2);
 const BMS_DETAIL_BALANCE_CONFIG_REFRESH_STAGGER: Duration = Duration::from_secs(4);
 const BMS_DETAIL_GAUGING_STATUS_REFRESH_STAGGER: Duration = Duration::from_secs(6);
+const BMS_DETAIL_LOCK_DIAG_REFRESH_STAGGER: Duration = Duration::from_secs(7);
 const BMS_BLOCK_DETAIL_LOG_PERIOD: Duration = Duration::from_secs(10);
 const BMS_CONFIG_LOG_RETRY_PERIOD: Duration = Duration::from_secs(10);
 const BMS_SUSPICIOUS_VOLTAGE_MV: u16 = 5_911;
@@ -1068,6 +1069,196 @@ where
     );
 }
 
+fn bq40_block_probe_byte(probe: &bq40z50::BlockReadProbe, index: usize) -> u8 {
+    if index < probe.prefix_len as usize {
+        probe.prefix[index]
+    } else {
+        0
+    }
+}
+
+fn bq40_selected_probe(trace: &bq40z50::BlockReadTrace) -> Option<&bq40z50::BlockReadProbe> {
+    match trace.selected_source {
+        Some(bq40z50::BlockReadSource::Pec) => Some(&trace.pec),
+        Some(bq40z50::BlockReadSource::Plain) => Some(&trace.plain),
+        None => None,
+    }
+}
+
+fn bq40_charge_trace_failure_reason(
+    charging: Option<&bq40z50::ChargingStatusTrace>,
+) -> &'static str {
+    let Some(charging) = charging else {
+        return "read_failed";
+    };
+    if charging.value.is_some() {
+        return "none";
+    }
+    if charging.block.raw.is_some() {
+        return "value_too_short";
+    }
+    if !matches!(
+        charging.block.plain.status,
+        bq40z50::BlockReadProbeStatus::NotAttempted
+    ) {
+        return bq40z50::block_read_probe_status_name(charging.block.plain.status);
+    }
+    bq40z50::block_read_probe_status_name(charging.block.pec.status)
+}
+
+fn log_bq40_charging_status_trace(
+    addr: u8,
+    stage: &'static str,
+    charging: Option<&bq40z50::ChargingStatusTrace>,
+) {
+    let selected_source = charging
+        .map(|charging| bq40z50::block_read_source_name(charging.block.selected_source))
+        .unwrap_or("none");
+    let selected_probe = charging.and_then(|charging| bq40_selected_probe(&charging.block));
+    let selected_declared_len = selected_probe.map(|probe| probe.declared_len).unwrap_or(0);
+    let selected_payload_len = selected_probe.map(|probe| probe.payload_len).unwrap_or(0);
+    let selected_b0 = selected_probe
+        .map(|probe| bq40_block_probe_byte(probe, 0))
+        .unwrap_or(0);
+    let selected_b1 = selected_probe
+        .map(|probe| bq40_block_probe_byte(probe, 1))
+        .unwrap_or(0);
+    let selected_b2 = selected_probe
+        .map(|probe| bq40_block_probe_byte(probe, 2))
+        .unwrap_or(0);
+    let selected_b3 = selected_probe
+        .map(|probe| bq40_block_probe_byte(probe, 3))
+        .unwrap_or(0);
+    let pec_probe = charging.map(|charging| charging.block.pec);
+    let plain_probe = charging.map(|charging| charging.block.plain);
+    let raw = charging.and_then(|charging| charging.value);
+
+    defmt::info!(
+        "bms_diag_charge: addr=0x{=u8:x} stage={} source={} selected_declared_len={=u8} selected_payload_len={=u8} selected_b0=0x{=u8:x} selected_b1=0x{=u8:x} selected_b2=0x{=u8:x} selected_b3=0x{=u8:x} failure={} raw={=?} pv={=?} lv={=?} mv={=?} hv={=?} inhibit={=?} suspend={=?} maintenance={=?} vct={=?} ccr={=?} cvr={=?} ccc={=?} nct={=?} pec_status={} pec_declared_len={=u8} pec_payload_len={=u8} pec_b0=0x{=u8:x} pec_b1=0x{=u8:x} pec_b2=0x{=u8:x} pec_b3=0x{=u8:x} plain_status={} plain_declared_len={=u8} plain_payload_len={=u8} plain_b0=0x{=u8:x} plain_b1=0x{=u8:x} plain_b2=0x{=u8:x} plain_b3=0x{=u8:x}",
+        addr,
+        stage,
+        selected_source,
+        selected_declared_len,
+        selected_payload_len,
+        selected_b0,
+        selected_b1,
+        selected_b2,
+        selected_b3,
+        bq40_charge_trace_failure_reason(charging),
+        raw,
+        bq40_mac_bit(raw, bq40z50::charging_status::PV),
+        bq40_mac_bit(raw, bq40z50::charging_status::LV),
+        bq40_mac_bit(raw, bq40z50::charging_status::MV),
+        bq40_mac_bit(raw, bq40z50::charging_status::HV),
+        bq40_mac_bit(raw, bq40z50::charging_status::IN),
+        bq40_mac_bit(raw, bq40z50::charging_status::SU),
+        bq40_mac_bit(raw, bq40z50::charging_status::MCHG),
+        bq40_mac_bit(raw, bq40z50::charging_status::VCT),
+        bq40_mac_bit(raw, bq40z50::charging_status::CCR),
+        bq40_mac_bit(raw, bq40z50::charging_status::CVR),
+        bq40_mac_bit(raw, bq40z50::charging_status::CCC),
+        bq40_mac_bit(raw, bq40z50::charging_status::NCT),
+        pec_probe
+            .map(|probe| bq40z50::block_read_probe_status_name(probe.status))
+            .unwrap_or("read_failed"),
+        pec_probe.map(|probe| probe.declared_len).unwrap_or(0),
+        pec_probe.map(|probe| probe.payload_len).unwrap_or(0),
+        pec_probe.map(|probe| bq40_block_probe_byte(&probe, 0)).unwrap_or(0),
+        pec_probe.map(|probe| bq40_block_probe_byte(&probe, 1)).unwrap_or(0),
+        pec_probe.map(|probe| bq40_block_probe_byte(&probe, 2)).unwrap_or(0),
+        pec_probe.map(|probe| bq40_block_probe_byte(&probe, 3)).unwrap_or(0),
+        plain_probe
+            .map(|probe| bq40z50::block_read_probe_status_name(probe.status))
+            .unwrap_or("read_failed"),
+        plain_probe.map(|probe| probe.declared_len).unwrap_or(0),
+        plain_probe.map(|probe| probe.payload_len).unwrap_or(0),
+        plain_probe.map(|probe| bq40_block_probe_byte(&probe, 0)).unwrap_or(0),
+        plain_probe.map(|probe| bq40_block_probe_byte(&probe, 1)).unwrap_or(0),
+        plain_probe.map(|probe| bq40_block_probe_byte(&probe, 2)).unwrap_or(0),
+        plain_probe.map(|probe| bq40_block_probe_byte(&probe, 3)).unwrap_or(0),
+    );
+}
+
+fn read_bq40_lock_diag_snapshot<I2C>(i2c: &mut I2C, addr: u8) -> Bq40LockDiagSnapshot
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    Bq40LockDiagSnapshot {
+        charging: bq40z50::read_charging_status_trace(i2c, addr).ok(),
+        safety_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::SAFETY_STATUS)
+            .ok()
+            .flatten(),
+        gauging_status: bq40z50::read_gauging_status(i2c, addr).ok().flatten(),
+        op_status: bq40z50::read_operation_status(i2c, addr).ok().flatten(),
+        update_status: bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::UPDATE_STATUS)
+            .ok()
+            .flatten(),
+        current_at_eoc_ma: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::CURRENT_AT_EOC,
+        )
+        .ok()
+        .flatten(),
+        no_valid_charge_term: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::NO_VALID_CHARGE_TERM,
+        )
+        .ok()
+        .flatten(),
+        last_valid_charge_term: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::LAST_VALID_CHARGE_TERM,
+        )
+        .ok()
+        .flatten(),
+        no_of_qmax_updates: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::NO_OF_QMAX_UPDATES,
+        )
+        .ok()
+        .flatten(),
+        no_of_ra_updates: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::NO_OF_RA_UPDATES,
+        )
+        .ok()
+        .flatten(),
+    }
+}
+
+fn log_bq40_lock_diag_snapshot(addr: u8, stage: &'static str, diag: &Bq40LockDiagSnapshot) {
+    log_bq40_charging_status_trace(addr, stage, diag.charging.as_ref());
+    defmt::info!(
+        "bms_diag_state: addr=0x{=u8:x} stage={} safety_status={=?} oc={=?} gauging_status={=?} qen={=?} vok={=?} rest={=?} fc={=?} fd={=?} op_status={=?} xchg={=?} chg_fet={=?} dsg_fet={=?} pchg_fet={=?} update_status={=?} current_at_eoc_ma={=?} no_valid_charge_term={=?} last_valid_charge_term={=?} no_of_qmax_updates={=?} no_of_ra_updates={=?}",
+        addr,
+        stage,
+        diag.safety_status,
+        bq40_mac_bit(diag.safety_status, bq40z50::safety_status::OC),
+        diag.gauging_status,
+        bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::QEN),
+        bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::VOK),
+        bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::REST),
+        bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::FC),
+        bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::FD),
+        diag.op_status,
+        bq40_op_bit(diag.op_status, bq40z50::operation_status::XCHG),
+        bq40_op_bit(diag.op_status, bq40z50::operation_status::CHG),
+        bq40_op_bit(diag.op_status, bq40z50::operation_status::DSG),
+        bq40_op_bit(diag.op_status, bq40z50::operation_status::PCHG),
+        diag.update_status,
+        diag.current_at_eoc_ma,
+        diag.no_valid_charge_term,
+        diag.last_valid_charge_term,
+        diag.no_of_qmax_updates,
+        diag.no_of_ra_updates,
+    );
+}
+
 fn log_bq40_block_detail<I2C>(i2c: &mut I2C, addr: u8, stage: &'static str, op_status: Option<u32>)
 where
     I2C: embedded_hal::i2c::I2c,
@@ -1122,50 +1313,8 @@ where
         bq40_mac_bit(pf_status, bq40z50::pf_status::AFER),
     );
 
-    match bq40z50::read_charging_status(i2c, addr) {
-        Ok(Some(raw)) => {
-            defmt::info!(
-                "bms_diag_charge: addr=0x{=u8:x} stage={} raw=0x{=u32:x} ut={=?} lt={=?} stl={=?} rt={=?} sth={=?} ht={=?} ot={=?} pv={=?} lv={=?} mv={=?} hv={=?} inhibit={=?} suspend={=?} maintenance={=?} term={=?} ccr={=?} cvr={=?} ccc={=?} nct={=?}",
-                addr,
-                stage,
-                raw,
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::UT),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::LT),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::STL),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::RT),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::STH),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::HT),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::OT),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::PV),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::LV),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::MV),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::HV),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::IN),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::SU),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::MCHG),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::VCT),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::CCR),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::CVR),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::CCC),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::NCT),
-            );
-        }
-        Ok(None) => {
-            defmt::warn!(
-                "bms_diag_charge: addr=0x{=u8:x} stage={} err=block_too_short",
-                addr,
-                stage
-            );
-        }
-        Err(e) => {
-            defmt::warn!(
-                "bms_diag_charge: addr=0x{=u8:x} stage={} err=read_failed",
-                addr,
-                stage
-            );
-            let _ = e;
-        }
-    }
+    let diag = read_bq40_lock_diag_snapshot(i2c, addr);
+    log_bq40_lock_diag_snapshot(addr, stage, &diag);
 
     log_bq40_charge_temp_detail(i2c, addr, stage);
 }
@@ -2545,10 +2694,12 @@ pub struct PowerManager<'d, I2C> {
     bms_cached_filter_capacity: Option<bq40z50::FilterCapacity>,
     bms_cached_balance_config: Option<bq40z50::BalanceConfig>,
     bms_cached_gauging_status: Option<u32>,
+    bms_cached_lock_diag: Option<Bq40LockDiagSnapshot>,
     bms_next_da_status2_refresh_at: Instant,
     bms_next_filter_capacity_refresh_at: Instant,
     bms_next_balance_config_refresh_at: Instant,
     bms_next_gauging_status_refresh_at: Instant,
+    bms_next_lock_diag_refresh_at: Instant,
     bms_next_block_detail_log_at: Instant,
     bms_config_logged: bool,
     bms_next_config_log_at: Instant,
@@ -3009,10 +3160,12 @@ where
             bms_cached_filter_capacity: None,
             bms_cached_balance_config: None,
             bms_cached_gauging_status: None,
+            bms_cached_lock_diag: None,
             bms_next_da_status2_refresh_at: now,
             bms_next_filter_capacity_refresh_at: now + BMS_DETAIL_MAC_REFRESH_STAGGER,
             bms_next_balance_config_refresh_at: now + BMS_DETAIL_BALANCE_CONFIG_REFRESH_STAGGER,
             bms_next_gauging_status_refresh_at: now + BMS_DETAIL_GAUGING_STATUS_REFRESH_STAGGER,
+            bms_next_lock_diag_refresh_at: now + BMS_DETAIL_LOCK_DIAG_REFRESH_STAGGER,
             bms_next_block_detail_log_at: now,
             bms_config_logged: false,
             bms_next_config_log_at: now,
@@ -3627,10 +3780,12 @@ where
         self.bms_cached_filter_capacity = None;
         self.bms_cached_balance_config = None;
         self.bms_cached_gauging_status = None;
+        self.bms_cached_lock_diag = None;
         self.bms_next_da_status2_refresh_at = now;
         self.bms_next_filter_capacity_refresh_at = now + BMS_DETAIL_MAC_REFRESH_STAGGER;
         self.bms_next_balance_config_refresh_at = now + BMS_DETAIL_BALANCE_CONFIG_REFRESH_STAGGER;
         self.bms_next_gauging_status_refresh_at = now + BMS_DETAIL_GAUGING_STATUS_REFRESH_STAGGER;
+        self.bms_next_lock_diag_refresh_at = now + BMS_DETAIL_LOCK_DIAG_REFRESH_STAGGER;
     }
 
     fn apply_bms_detail_snapshot(&mut self, snapshot: &Bq40z50Snapshot) {
@@ -5626,6 +5781,7 @@ where
             balance_config: None,
             gauging_status: None,
             afe_register: None,
+            lock_diag: None,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
     }
@@ -5660,6 +5816,7 @@ where
             balance_config: None,
             gauging_status: None,
             afe_register: None,
+            lock_diag: None,
             cell_mv: [0; 4],
         })
     }
@@ -5704,6 +5861,7 @@ where
             balance_config: None,
             gauging_status: None,
             afe_register: None,
+            lock_diag: None,
             cell_mv: [0; 4],
         })
     }
@@ -7986,6 +8144,10 @@ where
                 return;
             }
         };
+        let termination_ctrl =
+            bq25792::read_u16(&mut self.i2c, bq25792::reg::TERMINATION_CONTROL).ok();
+        let en_term = (ctrl0 & bq25792::ctrl0::EN_TERM) != 0;
+        let iterm_ma = termination_ctrl.map(bq25792::decode_termination_current_ma);
 
         // Only enforce ship-FET path when charging is policy-enabled.
         let (sfet_present_before, sfet_present_after, ship_mode_before, ship_mode_after) =
@@ -8652,7 +8814,7 @@ where
 
         if !(auto_force_charge || activation_pending) {
             defmt::info!(
-                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_output_block_reason={=?} policy_target_ichg_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} policy_output_blocked={=bool} policy_output_enter_streak={=u8} policy_output_exit_streak={=u8} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} vindpm_mv={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
+                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_output_block_reason={=?} policy_target_ichg_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} policy_output_blocked={=bool} policy_output_enter_streak={=u8} policy_output_exit_streak={=u8} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} vindpm_mv={=?} iindpm_ma={=?} iterm_ma={=?} en_term={=bool} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x} term_ctrl={=?}",
                 self.chg_enabled,
                 self.cfg.force_min_charge,
                 auto_force_charge,
@@ -8703,6 +8865,8 @@ where
                 applied_ichg_ma,
                 applied_vindpm_mv,
                 applied_iindpm_ma,
+                iterm_ma,
+                en_term,
                 sfet_present_before,
                 sfet_present_after,
                 ship_mode_before,
@@ -8723,7 +8887,8 @@ where
                 status4,
                 fault0,
                 fault1,
-                applied_ctrl0
+                applied_ctrl0,
+                termination_ctrl
             );
         }
 
@@ -9307,6 +9472,13 @@ where
             }
             self.bms_next_gauging_status_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
         }
+        if now >= self.bms_next_lock_diag_refresh_at {
+            spin_delay(BMS_ACTIVATION_WORD_GAP);
+            let snapshot = read_bq40_lock_diag_snapshot(&mut self.i2c, addr);
+            self.bms_cached_lock_diag = Some(snapshot);
+            self.bms_next_lock_diag_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
+            log_bq40_lock_diag_snapshot(addr, "runtime_periodic", &snapshot);
+        }
         let afe_register = if matches!(
             bq40_op_bit(op_status, bq40z50::operation_status::CB),
             Some(true)
@@ -9332,6 +9504,7 @@ where
             filter_capacity,
             balance_config,
             gauging_status,
+            lock_diag: self.bms_cached_lock_diag,
             afe_register,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
@@ -9363,6 +9536,7 @@ where
         let xdsg = bq40_op_bit(s.op_status, bq40z50::operation_status::XDSG);
         let chg_fet = bq40_op_bit(s.op_status, bq40z50::operation_status::CHG);
         let dsg_fet = bq40_op_bit(s.op_status, bq40z50::operation_status::DSG);
+        let pchg_fet = bq40_op_bit(s.op_status, bq40z50::operation_status::PCHG);
         let (chg_ready, chg_reason) = bq40_decode_charge_path(s.op_status);
         let (dsg_ready, dsg_reason) = bq40_decode_discharge_path(s.op_status);
         let pres = bq40_op_bit(s.op_status, bq40z50::operation_status::PRES);
@@ -9375,11 +9549,42 @@ where
         let no_battery = bq40_pack_indicates_no_battery(s.vpack_mv);
         let (cell_min_mv, cell_max_mv, cell_delta_mv) = bq40_cell_min_max_delta(&s.cell_mv);
         let op_status_read_ok = s.op_status.is_some();
+        let lock_diag = s.lock_diag;
+        let charging_status = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| charging.value);
+        let oc =
+            lock_diag.and_then(|diag| bq40_mac_bit(diag.safety_status, bq40z50::safety_status::OC));
+        let learn_qen = lock_diag
+            .and_then(|diag| bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::QEN));
+        let learn_vok = lock_diag
+            .and_then(|diag| bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::VOK));
+        let learn_rest = lock_diag
+            .and_then(|diag| bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::REST));
+        let gs_fc = lock_diag
+            .and_then(|diag| bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::FC));
+        let gs_fd = lock_diag
+            .and_then(|diag| bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::FD));
+        let vct = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::VCT));
+        let nct = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::NCT));
+        let ccr = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::CCR));
+        let cvr = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::CVR));
+        let ccc = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::CCC));
 
         let ec = bq40z50::battery_status::error_code(bs);
 
         defmt::info!(
-            "bms: bq40z50 addr=0x{=u8:x} poll_seq={=u32} ok_streak={=u16} btp_int_h={=bool} temp_c_x10={=i32} vpack_mv={=u16} no_battery={=bool} current_ma={=i16} flow={} flow_abs_ma={=u16} pack_power_mw={=i32} rsoc_pct={=u16} remcap={=u16} fcc={=u16} batt_status=0x{=u16:x} op_status={=?} op_status_read_ok={=bool} init={=bool} dsg={=bool} fc={=bool} fd={=bool} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} chg_ready={=?} dsg_ready={=?} chg_reason={} dsg_reason={} primary_reason={} pres={=?} sleep={=?} pf={=?} oca={=bool} tca={=bool} ota={=bool} tda={=bool} rca={=bool} rta={=bool} ec=0x{=u8:x} ec_str={} cell_min_mv={=u16} cell_max_mv={=u16} cell_delta_mv={=u16} c1_mv={=u16} c2_mv={=u16} c3_mv={=u16} c4_mv={=u16}",
+            "bms: bq40z50 addr=0x{=u8:x} poll_seq={=u32} ok_streak={=u16} btp_int_h={=bool} temp_c_x10={=i32} vpack_mv={=u16} no_battery={=bool} current_ma={=i16} flow={} flow_abs_ma={=u16} pack_power_mw={=i32} rsoc_pct={=u16} remcap={=u16} fcc={=u16} batt_status=0x{=u16:x} op_status={=?} op_status_read_ok={=bool} charging_status={=?} init={=bool} dsg={=bool} fc={=bool} fd={=bool} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} pchg_fet={=?} chg_ready={=?} dsg_ready={=?} chg_reason={} dsg_reason={} primary_reason={} pres={=?} sleep={=?} pf={=?} oc={=?} learn_qen={=?} learn_vok={=?} learn_rest={=?} gs_fc={=?} gs_fd={=?} vct={=?} ccr={=?} cvr={=?} ccc={=?} nct={=?} update_status={=?} no_valid_charge_term={=?} current_at_eoc_ma={=?} qmax_updates={=?} ra_updates={=?} oca={=bool} tca={=bool} ota={=bool} tda={=bool} rca={=bool} rta={=bool} ec=0x{=u8:x} ec_str={} cell_min_mv={=u16} cell_max_mv={=u16} cell_delta_mv={=u16} c1_mv={=u16} c2_mv={=u16} c3_mv={=u16} c4_mv={=u16}",
             addr,
             poll_seq,
             ok_streak,
@@ -9397,6 +9602,7 @@ where
             bs,
             s.op_status,
             op_status_read_ok,
+            charging_status,
             init,
             dsg,
             fc,
@@ -9405,6 +9611,7 @@ where
             xdsg,
             chg_fet,
             dsg_fet,
+            pchg_fet,
             chg_ready,
             dsg_ready,
             chg_reason,
@@ -9413,6 +9620,22 @@ where
             pres,
             sleep,
             pf,
+            oc,
+            learn_qen,
+            learn_vok,
+            learn_rest,
+            gs_fc,
+            gs_fd,
+            vct,
+            ccr,
+            cvr,
+            ccc,
+            nct,
+            lock_diag.and_then(|diag| diag.update_status),
+            lock_diag.and_then(|diag| diag.no_valid_charge_term),
+            lock_diag.and_then(|diag| diag.current_at_eoc_ma),
+            lock_diag.and_then(|diag| diag.no_of_qmax_updates),
+            lock_diag.and_then(|diag| diag.no_of_ra_updates),
             oca,
             tca,
             ota,
@@ -9477,8 +9700,23 @@ struct Bq40z50Snapshot {
     filter_capacity: Option<bq40z50::FilterCapacity>,
     balance_config: Option<bq40z50::BalanceConfig>,
     gauging_status: Option<u32>,
+    lock_diag: Option<Bq40LockDiagSnapshot>,
     afe_register: Option<bq40z50::AfeRegister>,
     cell_mv: [u16; 4],
+}
+
+#[derive(Clone, Copy)]
+struct Bq40LockDiagSnapshot {
+    charging: Option<bq40z50::ChargingStatusTrace>,
+    safety_status: Option<u32>,
+    gauging_status: Option<u32>,
+    op_status: Option<u32>,
+    update_status: Option<u8>,
+    current_at_eoc_ma: Option<u16>,
+    no_valid_charge_term: Option<u16>,
+    last_valid_charge_term: Option<u16>,
+    no_of_qmax_updates: Option<u16>,
+    no_of_ra_updates: Option<u16>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

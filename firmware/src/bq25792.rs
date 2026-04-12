@@ -16,6 +16,7 @@ pub mod reg {
     pub const CHARGE_CURRENT_LIMIT: u8 = 0x03;
     pub const INPUT_VOLTAGE_LIMIT: u8 = 0x05;
     pub const INPUT_CURRENT_LIMIT: u8 = 0x06;
+    pub const TERMINATION_CONTROL: u8 = 0x09;
 
     pub const CHARGER_CONTROL_0: u8 = 0x0F;
     pub const CHARGER_CONTROL_1: u8 = 0x10;
@@ -49,6 +50,8 @@ pub mod ctrl0 {
     pub const EN_CHG: u8 = 1 << 5;
     /// `REGOF_Charger_Control_0.EN_HIZ` (bit 2).
     pub const EN_HIZ: u8 = 1 << 2;
+    /// `REG0F.Charger_Control_0.EN_TERM` (bit 1).
+    pub const EN_TERM: u8 = 1 << 1;
 }
 
 pub mod ctrl1 {
@@ -620,6 +623,12 @@ mod tests {
         assert!(!is_charge_termination_done(5));
         assert_eq!(decode_chg_stat(7), "termination_done");
     }
+
+    #[test]
+    fn decode_termination_current_ma_uses_40ma_steps() {
+        assert_eq!(decode_termination_current_ma(0x0005), 200);
+        assert_eq!(decode_termination_current_ma(0x0018), 960);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -678,6 +687,10 @@ pub const fn decode_chg_stat(code: u8) -> &'static str {
 
 pub const fn is_charge_termination_done(code: u8) -> bool {
     (code & 0x07) == 7
+}
+
+pub const fn decode_termination_current_ma(reg09: u16) -> u16 {
+    (reg09 & 0x001f) * 40
 }
 
 pub const fn decode_vbus_stat(code: u8) -> &'static str {
