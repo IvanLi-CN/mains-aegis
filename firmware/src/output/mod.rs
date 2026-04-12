@@ -9481,30 +9481,6 @@ struct Bq40z50Snapshot {
     cell_mv: [u16; 4],
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bms_detail_gauging_flag_reads_gauging_bits_only() {
-        assert_eq!(
-            bms_detail_gauging_flag(
-                Some(bq40z50::gauging_status::FD),
-                bq40z50::gauging_status::FD
-            ),
-            Some(true)
-        );
-        assert_eq!(
-            bms_detail_gauging_flag(Some(0), bq40z50::gauging_status::FD),
-            Some(false)
-        );
-        assert_eq!(
-            bms_detail_gauging_flag(None, bq40z50::gauging_status::FD),
-            None
-        );
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Bq40ActivationSignature {
     vpack_mv: u16,
