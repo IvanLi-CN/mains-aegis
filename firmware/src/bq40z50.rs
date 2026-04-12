@@ -71,6 +71,7 @@ pub mod gauging_status {
     pub const VOK: u32 = 1 << 11;
     pub const R_DIS: u32 = 1 << 10;
     pub const REST: u32 = 1 << 8;
+    pub const BAL_EN: u32 = 1 << 4;
     pub const FC: u32 = 1 << 1;
     pub const FD: u32 = 1 << 0;
 }
@@ -716,10 +717,29 @@ where
     ])))
 }
 
-/// Read the 32-bit ChargingStatus() block response.
+fn decode_h3_or_h4_status_word(raw: &BlockReadRaw) -> Option<u32> {
+    match raw.payload_len {
+        3 => Some(u32::from_le_bytes([
+            raw.payload[0],
+            raw.payload[1],
+            raw.payload[2],
+            0,
+        ])),
+        len if len >= 4 => Some(u32::from_le_bytes([
+            raw.payload[0],
+            raw.payload[1],
+            raw.payload[2],
+            raw.payload[3],
+        ])),
+        _ => None,
+    }
+}
+
+/// Read the 24-bit/32-bit ChargingStatus() block response.
 ///
-/// TRM marks 0x55 as an H4/block command, so reading it as a plain word can
-/// return stale or truncated bytes.
+/// TRM marks 0x55 as a block command and the returned status word only defines
+/// bits 23..0 (H3). Some devices still report four payload bytes, so accept
+/// either H3 or H4 and zero-extend the H3 form.
 pub fn read_charging_status<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<u32>, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -727,16 +747,7 @@ where
     let Some(raw) = read_block_raw(i2c, addr, cmd::CHARGING_STATUS)? else {
         return Ok(None);
     };
-    if raw.payload_len < 4 {
-        return Ok(None);
-    }
-
-    Ok(Some(u32::from_le_bytes([
-        raw.payload[0],
-        raw.payload[1],
-        raw.payload[2],
-        raw.payload[3],
-    ])))
+    Ok(decode_h3_or_h4_status_word(&raw))
 }
 
 pub fn read_charging_status_trace<I2C>(
@@ -747,21 +758,15 @@ where
     I2C: embedded_hal::i2c::I2c,
 {
     let block = read_block_raw_trace(i2c, addr, cmd::CHARGING_STATUS)?;
-    let value = block.raw.and_then(|raw| {
-        (raw.payload_len >= 4).then_some(u32::from_le_bytes([
-            raw.payload[0],
-            raw.payload[1],
-            raw.payload[2],
-            raw.payload[3],
-        ]))
-    });
+    let value = block.raw.and_then(|raw| decode_h3_or_h4_status_word(&raw));
     Ok(ChargingStatusTrace { block, value })
 }
 
-/// Read the 32-bit GaugingStatus() block response.
+/// Read the 24-bit/32-bit GaugingStatus() block response.
 ///
-/// TRM marks 0x56 as an H4/block command, so reading it as a plain word can
-/// return stale or truncated bytes.
+/// TRM marks 0x56 as a block command and the returned status word only defines
+/// bits 23..0 (H3). Some devices still report four payload bytes, so accept
+/// either H3 or H4 and zero-extend the H3 form.
 pub fn read_gauging_status<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<u32>, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -769,16 +774,7 @@ where
     let Some(raw) = read_block_raw(i2c, addr, cmd::GAUGING_STATUS)? else {
         return Ok(None);
     };
-    if raw.payload_len < 4 {
-        return Ok(None);
-    }
-
-    Ok(Some(u32::from_le_bytes([
-        raw.payload[0],
-        raw.payload[1],
-        raw.payload[2],
-        raw.payload[3],
-    ])))
+    Ok(decode_h3_or_h4_status_word(&raw))
 }
 
 pub fn read_mac_u32<I2C>(i2c: &mut I2C, addr: u8, mac_cmd: u16) -> Result<Option<u32>, I2C::Error>
@@ -1096,18 +1092,44 @@ mod tests {
     }
 
     #[test]
-    fn read_charging_status_trace_reports_plain_short_payloads() {
+    fn read_charging_status_decodes_h3_block_payloads() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let payload = [0x20, 0x18, 0x00];
+        let mut plain_frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+        plain_frame[0] = 3;
+        plain_frame[1..4].copy_from_slice(&payload);
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd::CHARGING_STATUS]),
+            Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
+            Step::Write(addr, vec![cmd::CHARGING_STATUS]),
+            Step::Read(addr, plain_frame),
+        ]);
+
+        let value = read_charging_status(&mut i2c, addr).unwrap().unwrap();
+
+        assert_eq!(value, 0x0000_1820);
+        assert_ne!(value & charging_status::IN, 0);
+        assert_ne!(value & charging_status::HV, 0);
+        assert_ne!(value & charging_status::HT, 0);
+        assert_eq!(value & charging_status::VCT, 0);
+    }
+
+    #[test]
+    fn read_charging_status_trace_decodes_plain_h3_payloads() {
         let addr = I2C_ADDRESS_PRIMARY;
 
         let mut pec_probe = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2];
-        pec_probe[0] = 2;
-        pec_probe[1] = 0x34;
-        pec_probe[2] = 0x12;
+        pec_probe[0] = 3;
+        pec_probe[1] = 0x20;
+        pec_probe[2] = 0x18;
+        pec_probe[3] = 0x00;
 
         let mut plain_frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
-        plain_frame[0] = 2;
-        plain_frame[1] = 0x34;
-        plain_frame[2] = 0x12;
+        plain_frame[0] = 3;
+        plain_frame[1] = 0x20;
+        plain_frame[2] = 0x18;
+        plain_frame[3] = 0x00;
 
         let mut i2c = ScriptedI2c::new([
             Step::Write(addr, vec![cmd::CHARGING_STATUS]),
@@ -1121,11 +1143,12 @@ mod tests {
         assert_eq!(trace.block.selected_source, Some(BlockReadSource::Plain));
         assert_eq!(trace.block.pec.status, BlockReadProbeStatus::PecMismatch);
         assert_eq!(trace.block.plain.status, BlockReadProbeStatus::Ok);
-        assert_eq!(trace.block.plain.declared_len, 2);
-        assert_eq!(trace.block.plain.payload_len, 2);
-        assert_eq!(trace.block.plain.prefix[0], 0x34);
-        assert_eq!(trace.block.plain.prefix[1], 0x12);
-        assert_eq!(trace.value, None);
+        assert_eq!(trace.block.plain.declared_len, 3);
+        assert_eq!(trace.block.plain.payload_len, 3);
+        assert_eq!(trace.block.plain.prefix[0], 0x20);
+        assert_eq!(trace.block.plain.prefix[1], 0x18);
+        assert_eq!(trace.block.plain.prefix[2], 0x00);
+        assert_eq!(trace.value, Some(0x0000_1820));
     }
 
     #[test]
@@ -1184,6 +1207,30 @@ mod tests {
         assert!(value & gauging_status::QEN != 0);
         assert!(value & gauging_status::VOK != 0);
         assert!(value & gauging_status::REST != 0);
+    }
+
+    #[test]
+    fn read_gauging_status_decodes_h3_block_payloads() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let payload = [0x10, 0x1f, 0x00];
+        let mut plain_frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+        plain_frame[0] = 3;
+        plain_frame[1..4].copy_from_slice(&payload);
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd::GAUGING_STATUS]),
+            Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
+            Step::Write(addr, vec![cmd::GAUGING_STATUS]),
+            Step::Read(addr, plain_frame),
+        ]);
+
+        let value = read_gauging_status(&mut i2c, addr).unwrap().unwrap();
+
+        assert_eq!(value, 0x0000_1f10);
+        assert!(value & gauging_status::QEN != 0);
+        assert!(value & gauging_status::VOK != 0);
+        assert!(value & gauging_status::REST != 0);
+        assert!(value & gauging_status::BAL_EN != 0);
     }
 
     #[test]
