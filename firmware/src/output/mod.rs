@@ -8569,6 +8569,22 @@ where
             (reg & 0x01FF) * 10
         }
 
+        if !force_allow_charge && !auto_force_charge && !activation_pending {
+            if let Some(target_iterm_ma) = policy_term_target_ma {
+                match bq25792::set_termination_current_ma(&mut self.i2c, target_iterm_ma) {
+                    Ok(v) => applied_iterm_ma = Some(v),
+                    Err(e) => {
+                        self.mark_charger_poll_failed(now);
+                        defmt::error!(
+                            "charger: bq25792 err stage=iterm_write err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+
         if allow_charge {
             // Ensure we are not braking the converter (ILIM_HIZ < 0.75V forces non-switching).
             self.chg_ilim_hiz_brk.set_low();
@@ -8670,19 +8686,6 @@ where
             }
 
             if !force_allow_charge && !auto_force_charge && !activation_pending {
-                if let Some(target_iterm_ma) = policy_term_target_ma {
-                    match bq25792::set_termination_current_ma(&mut self.i2c, target_iterm_ma) {
-                        Ok(v) => applied_iterm_ma = Some(v),
-                        Err(e) => {
-                            self.mark_charger_poll_failed(now);
-                            defmt::error!(
-                                "charger: bq25792 err stage=iterm_write err={}",
-                                i2c_error_kind(e)
-                            );
-                            return;
-                        }
-                    }
-                }
                 if let Some(target_ichg_ma) = policy_target_ichg_ma {
                     match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, CHARGE_POLICY_VREG_MV)
                     {
