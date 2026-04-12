@@ -116,6 +116,10 @@ pub mod status4 {
     pub const TS_HOT_STAT: u8 = 1 << 0;
 }
 
+pub const TERMINATION_CURRENT_MIN_MA: u16 = 40;
+pub const TERMINATION_CURRENT_MAX_MA: u16 = 1000;
+pub const TERMINATION_CURRENT_STEP_MA: u16 = 40;
+
 pub mod status3 {
     pub const ACRB2_STAT: u8 = 1 << 7;
     pub const ACRB1_STAT: u8 = 1 << 6;
@@ -629,6 +633,16 @@ mod tests {
         assert_eq!(decode_termination_current_ma(0x0005), 200);
         assert_eq!(decode_termination_current_ma(0x0018), 960);
     }
+
+    #[test]
+    fn align_termination_current_ma_rounds_down_to_supported_step() {
+        assert_eq!(align_termination_current_ma(0), 40);
+        assert_eq!(align_termination_current_ma(41), 40);
+        assert_eq!(align_termination_current_ma(80), 80);
+        assert_eq!(align_termination_current_ma(109), 80);
+        assert_eq!(align_termination_current_ma(200), 200);
+        assert_eq!(align_termination_current_ma(1001), 1000);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -689,8 +703,36 @@ pub const fn is_charge_termination_done(code: u8) -> bool {
     (code & 0x07) == 7
 }
 
+pub const fn align_termination_current_ma(target_ma: u16) -> u16 {
+    let clamped = if target_ma < TERMINATION_CURRENT_MIN_MA {
+        TERMINATION_CURRENT_MIN_MA
+    } else if target_ma > TERMINATION_CURRENT_MAX_MA {
+        TERMINATION_CURRENT_MAX_MA
+    } else {
+        target_ma
+    };
+    (clamped / TERMINATION_CURRENT_STEP_MA) * TERMINATION_CURRENT_STEP_MA
+}
+
+pub const fn encode_termination_current_bits(target_ma: u16) -> u8 {
+    (align_termination_current_ma(target_ma) / TERMINATION_CURRENT_STEP_MA) as u8
+}
+
 pub const fn decode_termination_current_ma(reg09: u16) -> u16 {
-    (reg09 & 0x001f) * 40
+    (reg09 & 0x001f) * TERMINATION_CURRENT_STEP_MA
+}
+
+pub fn set_termination_current_ma<I2C>(i2c: &mut I2C, target_ma: u16) -> Result<u16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let reg09 = update_u8(
+        i2c,
+        reg::TERMINATION_CONTROL,
+        0x1f,
+        encode_termination_current_bits(target_ma),
+    )?;
+    Ok(decode_termination_current_ma(reg09 as u16))
 }
 
 pub const fn decode_vbus_stat(code: u8) -> &'static str {

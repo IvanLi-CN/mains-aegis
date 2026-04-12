@@ -8551,6 +8551,15 @@ where
         let mut applied_ichg_ma: Option<u16> = None;
         let mut applied_vindpm_mv: Option<u16> = None;
         let mut applied_iindpm_ma: Option<u16> = None;
+        let mut applied_iterm_ma: Option<u16> = None;
+        let policy_term_target_ma =
+            (!force_allow_charge && !auto_force_charge && !activation_pending)
+                .then(|| {
+                    self.bms_cached_lock_diag
+                        .and_then(|diag| diag.current_at_eoc_ma)
+                        .map(bq25792::align_termination_current_ma)
+                })
+                .flatten();
 
         fn decode_voltage_mv(reg: u16) -> u16 {
             (reg & 0x07FF) * 10
@@ -8661,6 +8670,19 @@ where
             }
 
             if !force_allow_charge && !auto_force_charge && !activation_pending {
+                if let Some(target_iterm_ma) = policy_term_target_ma {
+                    match bq25792::set_termination_current_ma(&mut self.i2c, target_iterm_ma) {
+                        Ok(v) => applied_iterm_ma = Some(v),
+                        Err(e) => {
+                            self.mark_charger_poll_failed(now);
+                            defmt::error!(
+                                "charger: bq25792 err stage=iterm_write err={}",
+                                i2c_error_kind(e)
+                            );
+                            return;
+                        }
+                    }
+                }
                 if let Some(target_ichg_ma) = policy_target_ichg_ma {
                     match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, CHARGE_POLICY_VREG_MV)
                     {
@@ -8814,7 +8836,7 @@ where
 
         if !(auto_force_charge || activation_pending) {
             defmt::info!(
-                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_output_block_reason={=?} policy_target_ichg_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} policy_output_blocked={=bool} policy_output_enter_streak={=u8} policy_output_exit_streak={=u8} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} vindpm_mv={=?} iindpm_ma={=?} iterm_ma={=?} en_term={=bool} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x} term_ctrl={=?}",
+                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_output_block_reason={=?} policy_target_ichg_ma={=?} policy_term_target_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} policy_output_blocked={=bool} policy_output_enter_streak={=u8} policy_output_exit_streak={=u8} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} vindpm_mv={=?} iindpm_ma={=?} iterm_ma={=?} applied_iterm_ma={=?} en_term={=bool} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x} term_ctrl={=?}",
                 self.chg_enabled,
                 self.cfg.force_min_charge,
                 auto_force_charge,
@@ -8832,6 +8854,7 @@ where
                 policy_full_reason.map(ChargeFullReason::as_str),
                 policy_output_block_reason.map(ChargePolicyOutputBlockReason::as_str),
                 policy_target_ichg_ma,
+                policy_term_target_ma,
                 output_power_w10,
                 self.charge_policy.charge_latched,
                 self.charge_policy.full_latched,
@@ -8866,6 +8889,7 @@ where
                 applied_vindpm_mv,
                 applied_iindpm_ma,
                 iterm_ma,
+                applied_iterm_ma,
                 en_term,
                 sfet_present_before,
                 sfet_present_after,
