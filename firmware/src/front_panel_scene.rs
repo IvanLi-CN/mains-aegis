@@ -167,6 +167,7 @@ pub enum UpsMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DashboardDetailPage {
     Cells,
+    BmsDetail,
     BatteryFlow,
     Output,
     Charger,
@@ -346,6 +347,8 @@ pub enum DashboardTouchTarget {
     HomeCharger,
     HomeBatteryFlow,
     DetailBack,
+    CellsAdvancedEntry,
+    CellsAdvancedBack,
     ChargerManualEntry,
     ManualBack,
     ManualTarget3V7,
@@ -403,11 +406,26 @@ pub struct DashboardDetailSnapshot {
     pub balance_active: Option<bool>,
     pub balance_mask: Option<u8>,
     pub balance_cell: Option<u8>,
+    pub remcap_mah: Option<u16>,
+    pub fcc_mah: Option<u16>,
     pub battery_energy_mwh: Option<u32>,
     pub battery_full_capacity_mwh: Option<u32>,
+    pub charge_ready: Option<bool>,
+    pub discharge_ready: Option<bool>,
+    pub xchg: Option<bool>,
+    pub xdsg: Option<bool>,
     pub charge_fet_on: Option<bool>,
     pub discharge_fet_on: Option<bool>,
     pub precharge_fet_on: Option<bool>,
+    pub learn_qen: Option<bool>,
+    pub learn_vok: Option<bool>,
+    pub learn_rest: Option<bool>,
+    pub fc: Option<bool>,
+    pub fd: Option<bool>,
+    pub pf: Option<bool>,
+    pub rca_alarm: Option<bool>,
+    pub reason_key: Option<&'static str>,
+    pub reason_label: Option<&'static str>,
     pub input_source: Option<DashboardInputSource>,
     pub charger_active: Option<bool>,
     pub charger_home_status: Option<&'static str>,
@@ -422,6 +440,7 @@ pub struct DashboardDetailSnapshot {
     pub fan_status: Option<&'static str>,
     pub cells_notice: Option<&'static str>,
     pub battery_notice: Option<&'static str>,
+    pub bms_notice: Option<&'static str>,
     pub output_notice: Option<&'static str>,
     pub charger_notice: Option<&'static str>,
     pub thermal_notice: Option<&'static str>,
@@ -437,11 +456,26 @@ impl DashboardDetailSnapshot {
             balance_active: None,
             balance_mask: None,
             balance_cell: None,
+            remcap_mah: None,
+            fcc_mah: None,
             battery_energy_mwh: None,
             battery_full_capacity_mwh: None,
+            charge_ready: None,
+            discharge_ready: None,
+            xchg: None,
+            xdsg: None,
             charge_fet_on: None,
             discharge_fet_on: None,
             precharge_fet_on: None,
+            learn_qen: None,
+            learn_vok: None,
+            learn_rest: None,
+            fc: None,
+            fd: None,
+            pf: None,
+            rca_alarm: None,
+            reason_key: None,
+            reason_label: None,
             input_source: None,
             charger_active: None,
             charger_home_status: None,
@@ -456,6 +490,7 @@ impl DashboardDetailSnapshot {
             fan_status: None,
             cells_notice: None,
             battery_notice: None,
+            bms_notice: None,
             output_notice: None,
             charger_notice: None,
             thermal_notice: None,
@@ -779,6 +814,11 @@ const DASHBOARD_DETAIL_BACK_X: u16 = 8;
 const DASHBOARD_DETAIL_BACK_Y: u16 = 2;
 const DASHBOARD_DETAIL_BACK_W: u16 = 56;
 const DASHBOARD_DETAIL_BACK_H: u16 = 14;
+
+const DASHBOARD_CELLS_ADVANCED_ENTRY_X: u16 = 6;
+const DASHBOARD_CELLS_ADVANCED_ENTRY_Y: u16 = 22;
+const DASHBOARD_CELLS_ADVANCED_ENTRY_W: u16 = 308;
+const DASHBOARD_CELLS_ADVANCED_ENTRY_H: u16 = 120;
 
 const DASHBOARD_CHARGER_MANUAL_ENTRY_X: u16 = 6;
 const DASHBOARD_CHARGER_MANUAL_ENTRY_Y: u16 = 60;
@@ -1191,7 +1231,25 @@ pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<Dashb
                 DASHBOARD_DETAIL_BACK_W,
                 DASHBOARD_DETAIL_BACK_H,
             ) {
-                Some(DashboardTouchTarget::DetailBack)
+                if matches!(
+                    route,
+                    DashboardRoute::Detail(DashboardDetailPage::BmsDetail)
+                ) {
+                    Some(DashboardTouchTarget::CellsAdvancedBack)
+                } else {
+                    Some(DashboardTouchTarget::DetailBack)
+                }
+            } else if matches!(route, DashboardRoute::Detail(DashboardDetailPage::Cells))
+                && contains(
+                    x,
+                    y,
+                    DASHBOARD_CELLS_ADVANCED_ENTRY_X,
+                    DASHBOARD_CELLS_ADVANCED_ENTRY_Y,
+                    DASHBOARD_CELLS_ADVANCED_ENTRY_W,
+                    DASHBOARD_CELLS_ADVANCED_ENTRY_H,
+                )
+            {
+                Some(DashboardTouchTarget::CellsAdvancedEntry)
             } else if matches!(route, DashboardRoute::Detail(DashboardDetailPage::Charger))
                 && contains(
                     x,
@@ -1325,6 +1383,12 @@ pub const fn dashboard_route_for_target(target: DashboardTouchTarget) -> Dashboa
             DashboardRoute::Detail(DashboardDetailPage::BatteryFlow)
         }
         DashboardTouchTarget::DetailBack => DashboardRoute::Home,
+        DashboardTouchTarget::CellsAdvancedEntry => {
+            DashboardRoute::Detail(DashboardDetailPage::BmsDetail)
+        }
+        DashboardTouchTarget::CellsAdvancedBack => {
+            DashboardRoute::Detail(DashboardDetailPage::Cells)
+        }
         DashboardTouchTarget::ChargerManualEntry => DashboardRoute::ManualCharge,
         DashboardTouchTarget::ManualBack => DashboardRoute::Detail(DashboardDetailPage::Charger),
         DashboardTouchTarget::ManualTarget3V7
@@ -1797,6 +1861,10 @@ impl DashboardLiveData {
                 .detail
                 .cells_notice
                 .unwrap_or("CELL DETAIL SOURCE PENDING"),
+            DashboardDetailPage::BmsDetail => self
+                .detail
+                .bms_notice
+                .unwrap_or("BMS DETAIL SOURCE PENDING"),
             DashboardDetailPage::BatteryFlow => self
                 .detail
                 .battery_notice
@@ -3857,6 +3925,7 @@ fn render_dashboard_detail_page<P: UiPainter>(
 ) -> Result<(), P::Error> {
     let accent = match page {
         DashboardDetailPage::Cells => palette.left,
+        DashboardDetailPage::BmsDetail => palette.left,
         DashboardDetailPage::BatteryFlow => {
             if data.mains_present {
                 palette.accent
@@ -3879,6 +3948,28 @@ fn render_dashboard_detail_page<P: UiPainter>(
         detail_status_color(palette, status),
     )?;
 
+    if page == DashboardDetailPage::BmsDetail {
+        render_dashboard_bms_detail_page(painter, variant, palette, data, accent)?;
+        draw_panel(
+            painter,
+            6,
+            146,
+            308,
+            20,
+            palette,
+            true,
+            detail_status_color(palette, status),
+        )?;
+        draw_bms_detail_footer_reason(
+            painter,
+            variant,
+            palette,
+            data,
+            detail_status_color(palette, status),
+        )?;
+        return Ok(());
+    }
+
     draw_panel(painter, 6, 22, 308, 38, palette, true, accent)?;
     draw_panel(painter, 6, 60, 150, 82, palette, false, accent)?;
     draw_panel(painter, 164, 60, 150, 82, palette, false, accent)?;
@@ -3897,6 +3988,7 @@ fn render_dashboard_detail_page<P: UiPainter>(
         DashboardDetailPage::Cells => {
             render_dashboard_cells_detail(painter, variant, palette, data)?
         }
+        DashboardDetailPage::BmsDetail => unreachable!(),
         DashboardDetailPage::BatteryFlow => {
             render_dashboard_battery_flow_detail(painter, variant, palette, data)?
         }
@@ -3933,6 +4025,1394 @@ fn detail_balance_summary_text(detail: DashboardDetailSnapshot) -> &'static str 
         },
         None => "N/A",
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BmsDetailStateTone {
+    Ok,
+    Warn,
+    Fault,
+    Off,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BalanceCellVisualState {
+    Active,
+    Inactive,
+    Unknown,
+}
+
+fn bms_detail_state_tone(
+    value: Option<bool>,
+    true_tone: BmsDetailStateTone,
+    false_tone: BmsDetailStateTone,
+) -> BmsDetailStateTone {
+    match value {
+        Some(true) => true_tone,
+        Some(false) => false_tone,
+        None => BmsDetailStateTone::Unknown,
+    }
+}
+
+fn bms_detail_reason_text(detail: DashboardDetailSnapshot) -> &'static str {
+    detail.reason_label.unwrap_or("STATUS N/A")
+}
+
+fn bms_detail_ready(data: DashboardLiveData) -> bool {
+    data.bms_state == SelfCheckCommState::Err
+        || data.bms_no_battery == Some(true)
+        || data.detail.remcap_mah.is_some()
+        || data.detail.fcc_mah.is_some()
+        || data.detail.learn_qen.is_some()
+        || data.detail.learn_vok.is_some()
+        || data.detail.learn_rest.is_some()
+        || data.detail.balance_cfg_match.is_some()
+        || data.detail.charge_ready.is_some()
+        || data.detail.discharge_ready.is_some()
+        || data.detail.xchg.is_some()
+        || data.detail.xdsg.is_some()
+        || data.detail.charge_fet_on.is_some()
+        || data.detail.discharge_fet_on.is_some()
+        || data.detail.fc.is_some()
+        || data.detail.fd.is_some()
+        || data.detail.pf.is_some()
+        || data.detail.rca_alarm.is_some()
+        || data.detail.reason_label.is_some()
+        || data.detail.balance_mask.is_some()
+}
+
+fn bms_detail_balance_cell_state(
+    detail: DashboardDetailSnapshot,
+    cell_idx: usize,
+) -> BalanceCellVisualState {
+    match (
+        detail.balance_active,
+        detail.balance_mask.map(|mask| mask & 0x0F),
+    ) {
+        (Some(true), Some(mask)) => {
+            if mask & (1 << cell_idx) != 0 {
+                BalanceCellVisualState::Active
+            } else {
+                BalanceCellVisualState::Inactive
+            }
+        }
+        (Some(true), None) | (None, _) => BalanceCellVisualState::Unknown,
+        _ => BalanceCellVisualState::Inactive,
+    }
+}
+
+fn bms_detail_status_tone_color(palette: Palette, tone: BmsDetailStateTone) -> u16 {
+    match tone {
+        BmsDetailStateTone::Ok => SUCCESS_COLOR,
+        BmsDetailStateTone::Warn => ATTENTION_COLOR,
+        BmsDetailStateTone::Fault => ERROR_COLOR,
+        BmsDetailStateTone::Off | BmsDetailStateTone::Unknown => palette.text_dim,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BmsDetailStateGlyph {
+    BatteryCharge,
+    BatteryDischarge,
+    PathBlocked,
+    PathAllowed,
+    Unknown,
+    FetOn,
+    FetOff,
+    BatteryFull,
+    BatteryEmpty,
+    BatteryAlert,
+    WarningTriangle,
+}
+
+const LUCIDE_LOCK_22: &[(u8, u8, u8, u8)] = &[
+    (8, 1, 6, 1),
+    (7, 2, 8, 1),
+    (6, 3, 3, 1),
+    (13, 3, 3, 1),
+    (5, 4, 3, 1),
+    (14, 4, 3, 1),
+    (5, 5, 3, 1),
+    (14, 5, 3, 1),
+    (5, 6, 3, 1),
+    (14, 6, 3, 1),
+    (5, 7, 3, 1),
+    (14, 7, 3, 1),
+    (5, 8, 3, 1),
+    (14, 8, 3, 1),
+    (3, 9, 16, 1),
+    (2, 10, 18, 1),
+    (2, 11, 2, 1),
+    (18, 11, 2, 1),
+    (1, 12, 3, 1),
+    (18, 12, 3, 1),
+    (1, 13, 3, 1),
+    (18, 13, 3, 1),
+    (1, 14, 3, 1),
+    (18, 14, 3, 1),
+    (1, 15, 3, 1),
+    (18, 15, 3, 1),
+    (1, 16, 3, 1),
+    (18, 16, 3, 1),
+    (1, 17, 3, 1),
+    (18, 17, 3, 1),
+    (2, 18, 2, 1),
+    (18, 18, 2, 1),
+    (2, 19, 18, 1),
+    (2, 20, 18, 1),
+];
+
+const LUCIDE_LOCK_OPEN_22: &[(u8, u8, u8, u8)] = &[
+    (8, 1, 6, 1),
+    (7, 2, 8, 1),
+    (6, 3, 3, 1),
+    (12, 3, 4, 1),
+    (5, 4, 3, 1),
+    (14, 4, 3, 1),
+    (5, 5, 3, 1),
+    (14, 5, 3, 1),
+    (5, 6, 3, 1),
+    (15, 6, 1, 1),
+    (5, 7, 3, 1),
+    (5, 8, 3, 1),
+    (3, 9, 16, 1),
+    (2, 10, 18, 1),
+    (2, 11, 2, 1),
+    (18, 11, 2, 1),
+    (1, 12, 3, 1),
+    (18, 12, 3, 1),
+    (1, 13, 3, 1),
+    (18, 13, 3, 1),
+    (1, 14, 3, 1),
+    (18, 14, 3, 1),
+    (1, 15, 3, 1),
+    (18, 15, 3, 1),
+    (1, 16, 3, 1),
+    (18, 16, 3, 1),
+    (1, 17, 3, 1),
+    (18, 17, 3, 1),
+    (2, 18, 2, 1),
+    (18, 18, 2, 1),
+    (2, 19, 18, 1),
+    (2, 20, 18, 1),
+];
+
+const LUCIDE_TOGGLE_LEFT_22: &[(u8, u8, u8, u8)] = &[
+    (7, 3, 8, 1),
+    (4, 4, 14, 1),
+    (3, 5, 16, 1),
+    (2, 6, 4, 1),
+    (16, 6, 4, 1),
+    (1, 7, 3, 1),
+    (6, 7, 4, 1),
+    (18, 7, 3, 1),
+    (1, 8, 3, 1),
+    (5, 8, 6, 1),
+    (18, 8, 3, 1),
+    (1, 9, 2, 1),
+    (5, 9, 7, 1),
+    (19, 9, 2, 1),
+    (1, 10, 2, 1),
+    (4, 10, 3, 1),
+    (10, 10, 2, 1),
+    (19, 10, 2, 1),
+    (1, 11, 2, 1),
+    (4, 11, 3, 1),
+    (10, 11, 2, 1),
+    (19, 11, 2, 1),
+    (1, 12, 2, 1),
+    (5, 12, 7, 1),
+    (19, 12, 2, 1),
+    (1, 13, 3, 1),
+    (5, 13, 6, 1),
+    (18, 13, 3, 1),
+    (1, 14, 3, 1),
+    (6, 14, 4, 1),
+    (17, 14, 4, 1),
+    (2, 15, 4, 1),
+    (16, 15, 4, 1),
+    (3, 16, 16, 1),
+    (4, 17, 14, 1),
+    (7, 18, 8, 1),
+];
+
+const LUCIDE_TOGGLE_RIGHT_22: &[(u8, u8, u8, u8)] = &[
+    (7, 3, 8, 1),
+    (4, 4, 14, 1),
+    (3, 5, 16, 1),
+    (2, 6, 4, 1),
+    (16, 6, 4, 1),
+    (1, 7, 3, 1),
+    (12, 7, 4, 1),
+    (18, 7, 3, 1),
+    (1, 8, 3, 1),
+    (11, 8, 6, 1),
+    (18, 8, 3, 1),
+    (1, 9, 2, 1),
+    (10, 9, 7, 1),
+    (19, 9, 2, 1),
+    (1, 10, 2, 1),
+    (10, 10, 2, 1),
+    (15, 10, 3, 1),
+    (19, 10, 2, 1),
+    (1, 11, 2, 1),
+    (10, 11, 2, 1),
+    (15, 11, 3, 1),
+    (19, 11, 2, 1),
+    (1, 12, 2, 1),
+    (10, 12, 7, 1),
+    (19, 12, 2, 1),
+    (1, 13, 3, 1),
+    (11, 13, 6, 1),
+    (18, 13, 3, 1),
+    (1, 14, 3, 1),
+    (12, 14, 4, 1),
+    (17, 14, 4, 1),
+    (2, 15, 4, 1),
+    (16, 15, 4, 1),
+    (3, 16, 16, 1),
+    (4, 17, 14, 1),
+    (7, 18, 8, 1),
+];
+
+const LUCIDE_TRIANGLE_ALERT_22: &[(u8, u8, u8, u8)] = &[
+    (9, 2, 4, 1),
+    (8, 3, 6, 1),
+    (7, 4, 3, 1),
+    (12, 4, 3, 1),
+    (7, 5, 3, 1),
+    (12, 5, 3, 1),
+    (6, 6, 3, 1),
+    (13, 6, 3, 1),
+    (6, 7, 3, 1),
+    (10, 7, 2, 1),
+    (13, 7, 3, 1),
+    (5, 8, 3, 1),
+    (10, 8, 2, 1),
+    (14, 8, 3, 1),
+    (5, 9, 3, 1),
+    (10, 9, 2, 1),
+    (14, 9, 3, 1),
+    (4, 10, 3, 1),
+    (10, 10, 2, 1),
+    (15, 10, 3, 1),
+    (3, 11, 3, 1),
+    (10, 11, 2, 1),
+    (16, 11, 3, 1),
+    (3, 12, 3, 1),
+    (10, 12, 2, 1),
+    (16, 12, 3, 1),
+    (2, 13, 3, 1),
+    (17, 13, 3, 1),
+    (2, 14, 3, 1),
+    (10, 14, 2, 1),
+    (17, 14, 3, 1),
+    (1, 15, 3, 1),
+    (10, 15, 2, 1),
+    (18, 15, 3, 1),
+    (1, 16, 3, 1),
+    (10, 16, 2, 1),
+    (18, 16, 3, 1),
+    (1, 17, 2, 1),
+    (19, 17, 2, 1),
+    (1, 18, 20, 1),
+    (1, 19, 19, 1),
+    (4, 20, 14, 1),
+];
+
+const LUCIDE_BATTERY_FULL_22: &[(u8, u8, u8, u8)] = &[
+    (2, 4, 14, 1),
+    (1, 5, 16, 1),
+    (1, 6, 17, 1),
+    (1, 7, 2, 1),
+    (15, 7, 3, 1),
+    (1, 8, 2, 1),
+    (4, 8, 3, 1),
+    (8, 8, 2, 1),
+    (12, 8, 2, 1),
+    (15, 8, 3, 1),
+    (19, 8, 2, 1),
+    (1, 9, 2, 1),
+    (4, 9, 3, 1),
+    (8, 9, 2, 1),
+    (12, 9, 2, 1),
+    (15, 9, 3, 1),
+    (19, 9, 2, 1),
+    (1, 10, 2, 1),
+    (4, 10, 3, 1),
+    (8, 10, 2, 1),
+    (12, 10, 2, 1),
+    (15, 10, 3, 1),
+    (19, 10, 2, 1),
+    (1, 11, 2, 1),
+    (4, 11, 3, 1),
+    (8, 11, 2, 1),
+    (12, 11, 2, 1),
+    (15, 11, 3, 1),
+    (19, 11, 2, 1),
+    (1, 12, 2, 1),
+    (4, 12, 3, 1),
+    (8, 12, 2, 1),
+    (12, 12, 2, 1),
+    (15, 12, 3, 1),
+    (19, 12, 2, 1),
+    (1, 13, 2, 1),
+    (4, 13, 3, 1),
+    (8, 13, 2, 1),
+    (12, 13, 2, 1),
+    (15, 13, 3, 1),
+    (19, 13, 2, 1),
+    (1, 14, 2, 1),
+    (15, 14, 3, 1),
+    (1, 15, 17, 1),
+    (1, 16, 16, 1),
+    (3, 17, 13, 1),
+];
+
+const LUCIDE_BATTERY_LOW_22: &[(u8, u8, u8, u8)] = &[
+    (2, 4, 14, 1),
+    (1, 5, 16, 1),
+    (1, 6, 17, 1),
+    (1, 7, 2, 1),
+    (15, 7, 3, 1),
+    (1, 8, 2, 1),
+    (4, 8, 3, 1),
+    (15, 8, 3, 1),
+    (19, 8, 2, 1),
+    (1, 9, 2, 1),
+    (4, 9, 3, 1),
+    (15, 9, 3, 1),
+    (19, 9, 2, 1),
+    (1, 10, 2, 1),
+    (4, 10, 3, 1),
+    (15, 10, 3, 1),
+    (19, 10, 2, 1),
+    (1, 11, 2, 1),
+    (4, 11, 3, 1),
+    (15, 11, 3, 1),
+    (19, 11, 2, 1),
+    (1, 12, 2, 1),
+    (4, 12, 3, 1),
+    (15, 12, 3, 1),
+    (19, 12, 2, 1),
+    (1, 13, 2, 1),
+    (4, 13, 3, 1),
+    (15, 13, 3, 1),
+    (19, 13, 2, 1),
+    (1, 14, 2, 1),
+    (15, 14, 3, 1),
+    (1, 15, 17, 1),
+    (1, 16, 16, 1),
+    (3, 17, 13, 1),
+];
+
+const LUCIDE_BATTERY_WARNING_22: &[(u8, u8, u8, u8)] = &[
+    (2, 4, 4, 1),
+    (12, 4, 4, 1),
+    (1, 5, 6, 1),
+    (8, 5, 2, 1),
+    (12, 5, 5, 1),
+    (1, 6, 5, 1),
+    (8, 6, 2, 1),
+    (12, 6, 6, 1),
+    (1, 7, 2, 1),
+    (8, 7, 2, 1),
+    (15, 7, 3, 1),
+    (1, 8, 2, 1),
+    (8, 8, 2, 1),
+    (15, 8, 3, 1),
+    (19, 8, 2, 1),
+    (1, 9, 2, 1),
+    (8, 9, 2, 1),
+    (15, 9, 3, 1),
+    (19, 9, 2, 1),
+    (1, 10, 2, 1),
+    (8, 10, 2, 1),
+    (15, 10, 3, 1),
+    (19, 10, 2, 1),
+    (1, 11, 2, 1),
+    (8, 11, 2, 1),
+    (15, 11, 3, 1),
+    (19, 11, 2, 1),
+    (1, 12, 2, 1),
+    (8, 12, 2, 1),
+    (15, 12, 3, 1),
+    (19, 12, 2, 1),
+    (1, 13, 2, 1),
+    (15, 13, 3, 1),
+    (19, 13, 2, 1),
+    (1, 14, 2, 1),
+    (9, 14, 1, 1),
+    (15, 14, 3, 1),
+    (1, 15, 5, 1),
+    (8, 15, 2, 1),
+    (12, 15, 6, 1),
+    (1, 16, 6, 1),
+    (8, 16, 2, 1),
+    (12, 16, 5, 1),
+    (3, 17, 3, 1),
+    (12, 17, 4, 1),
+];
+
+const BMS_FLOW_CHARGE_22: &[(u8, u8, u8, u8)] = &[
+    (7, 0, 12, 1),
+    (6, 1, 14, 1),
+    (6, 2, 2, 1),
+    (18, 2, 2, 1),
+    (6, 3, 2, 1),
+    (18, 3, 2, 1),
+    (6, 4, 2, 1),
+    (18, 4, 2, 1),
+    (6, 5, 2, 1),
+    (18, 5, 2, 1),
+    (6, 6, 2, 1),
+    (18, 6, 2, 1),
+    (6, 7, 2, 1),
+    (9, 7, 2, 1),
+    (18, 7, 4, 1),
+    (9, 8, 3, 1),
+    (18, 8, 4, 1),
+    (0, 9, 13, 1),
+    (18, 9, 4, 1),
+    (0, 10, 14, 1),
+    (18, 10, 4, 1),
+    (0, 11, 6, 1),
+    (9, 11, 4, 1),
+    (18, 11, 4, 1),
+    (9, 12, 3, 1),
+    (18, 12, 4, 1),
+    (6, 13, 2, 1),
+    (9, 13, 2, 1),
+    (18, 13, 4, 1),
+    (6, 14, 2, 1),
+    (18, 14, 2, 1),
+    (6, 15, 2, 1),
+    (18, 15, 2, 1),
+    (6, 16, 2, 1),
+    (18, 16, 2, 1),
+    (6, 17, 2, 1),
+    (18, 17, 2, 1),
+    (6, 18, 2, 1),
+    (18, 18, 2, 1),
+    (6, 19, 14, 1),
+    (7, 20, 12, 1),
+];
+
+const BMS_FLOW_DISCHARGE_22: &[(u8, u8, u8, u8)] = &[
+    (1, 0, 12, 1),
+    (0, 1, 14, 1),
+    (0, 2, 2, 1),
+    (12, 2, 2, 1),
+    (0, 3, 2, 1),
+    (12, 3, 2, 1),
+    (0, 4, 2, 1),
+    (12, 4, 2, 1),
+    (0, 5, 2, 1),
+    (12, 5, 2, 1),
+    (0, 6, 2, 1),
+    (12, 6, 2, 1),
+    (0, 7, 2, 1),
+    (12, 7, 2, 1),
+    (16, 7, 1, 1),
+    (0, 8, 2, 1),
+    (16, 8, 2, 1),
+    (0, 9, 2, 1),
+    (16, 9, 3, 1),
+    (0, 10, 2, 1),
+    (7, 10, 14, 1),
+    (0, 11, 2, 1),
+    (7, 11, 13, 1),
+    (0, 12, 2, 1),
+    (16, 12, 3, 1),
+    (0, 13, 2, 1),
+    (13, 13, 1, 1),
+    (16, 13, 2, 1),
+    (0, 14, 2, 1),
+    (12, 14, 2, 1),
+    (16, 14, 1, 1),
+    (0, 15, 2, 1),
+    (12, 15, 2, 1),
+    (0, 16, 2, 1),
+    (12, 16, 2, 1),
+    (0, 17, 2, 1),
+    (12, 17, 2, 1),
+    (0, 18, 2, 1),
+    (12, 18, 2, 1),
+    (0, 19, 2, 1),
+    (12, 19, 2, 1),
+    (0, 20, 14, 1),
+    (1, 21, 12, 1),
+];
+
+const BMS_PATH_ALLOWED_22: &[(u8, u8, u8, u8)] = &[
+    (1, 8, 3, 1),
+    (8, 8, 7, 1),
+    (18, 8, 3, 1),
+    (0, 9, 2, 1),
+    (3, 9, 1, 1),
+    (7, 9, 8, 1),
+    (18, 9, 1, 1),
+    (20, 9, 2, 1),
+    (0, 10, 1, 1),
+    (4, 10, 14, 1),
+    (21, 10, 1, 1),
+    (0, 11, 2, 1),
+    (3, 11, 1, 1),
+    (7, 11, 8, 1),
+    (18, 11, 1, 1),
+    (20, 11, 2, 1),
+    (1, 12, 3, 1),
+    (8, 12, 7, 1),
+    (18, 12, 3, 1),
+];
+
+const BMS_PATH_BLOCKED_22: &[(u8, u8, u8, u8)] = &[
+    (1, 8, 3, 1),
+    (10, 8, 2, 1),
+    (18, 8, 3, 1),
+    (0, 9, 2, 1),
+    (3, 9, 2, 1),
+    (10, 9, 2, 1),
+    (17, 9, 2, 1),
+    (20, 9, 2, 1),
+    (0, 10, 1, 1),
+    (4, 10, 5, 1),
+    (10, 10, 2, 1),
+    (13, 10, 5, 1),
+    (21, 10, 1, 1),
+    (0, 11, 2, 1),
+    (3, 11, 2, 1),
+    (10, 11, 2, 1),
+    (17, 11, 2, 1),
+    (20, 11, 2, 1),
+    (1, 12, 3, 1),
+    (10, 12, 2, 1),
+    (18, 12, 3, 1),
+];
+
+fn draw_bms_glyph_battery_charge<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, BMS_FLOW_CHARGE_22, rgb565)
+}
+
+fn draw_bms_glyph_battery_discharge<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, BMS_FLOW_DISCHARGE_22, rgb565)
+}
+
+fn draw_bms_glyph_lock<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    closed: bool,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    let blocks = if closed {
+        LUCIDE_LOCK_22
+    } else {
+        LUCIDE_LOCK_OPEN_22
+    };
+    draw_icon_blocks(painter, x, y, blocks, rgb565)
+}
+
+fn draw_bms_glyph_path_terminal<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    fill(painter, x + 2, y, 3, 1, rgb565)?;
+    fill(painter, x + 1, y + 1, 5, 1, rgb565)?;
+    fill(painter, x, y + 2, 2, 3, rgb565)?;
+    fill(painter, x + 5, y + 2, 2, 3, rgb565)?;
+    fill(painter, x + 1, y + 5, 5, 1, rgb565)?;
+    fill(painter, x + 2, y + 6, 3, 1, rgb565)
+}
+
+fn draw_bms_glyph_path_enabled<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, BMS_PATH_ALLOWED_22, rgb565)
+}
+
+fn draw_bms_glyph_path_blocked<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, BMS_PATH_BLOCKED_22, rgb565)
+}
+
+fn draw_bms_glyph_unknown<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks_centered(painter, x, y, 22, 22, CARBON_HELP_18, rgb565)
+}
+
+fn draw_bms_glyph_fet_base<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    fill(painter, x + 1, y + 10, 5, 2, rgb565)?;
+    fill(painter, x + 7, y + 6, 8, 1, rgb565)?;
+    fill(painter, x + 6, y + 7, 10, 8, rgb565)?;
+    fill(painter, x + 7, y + 15, 8, 1, rgb565)?;
+    fill(painter, x + 16, y + 10, 5, 2, rgb565)?;
+    fill(painter, x + 10, y + 2, 2, 5, rgb565)
+}
+
+fn draw_bms_glyph_fet_on<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_bms_glyph_fet_base(painter, x, y, rgb565)
+}
+
+fn draw_bms_glyph_fet_off<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    fg: u16,
+    bg: u16,
+) -> Result<(), P::Error> {
+    draw_bms_glyph_fet_base(painter, x, y, fg)?;
+
+    // keep the slash in the same glyph color, but carve a 1px gutter on both
+    // sides so the strike-through stays visually separated from the device body.
+    const SLASH_SEGMENTS: &[(u16, u16)] = &[
+        (5, 18),
+        (6, 16),
+        (7, 14),
+        (8, 12),
+        (9, 10),
+        (10, 8),
+        (11, 6),
+        (12, 4),
+        (13, 2),
+        (14, 0),
+    ];
+
+    for &(sx, sy) in SLASH_SEGMENTS {
+        fill(painter, x + sx - 1, y + sy, 1, 2, bg)?;
+        fill(painter, x + sx, y + sy, 1, 2, fg)?;
+        fill(painter, x + sx + 1, y + sy, 1, 2, bg)?;
+    }
+
+    Ok(())
+}
+
+fn draw_bms_glyph_warning_triangle<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, LUCIDE_TRIANGLE_ALERT_22, rgb565)
+}
+
+fn draw_bms_glyph_battery_alert<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, LUCIDE_BATTERY_WARNING_22, rgb565)
+}
+
+fn draw_bms_state_glyph<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    glyph: BmsDetailStateGlyph,
+    fg: u16,
+    bg: u16,
+) -> Result<(), P::Error> {
+    match glyph {
+        BmsDetailStateGlyph::BatteryCharge => draw_bms_glyph_battery_charge(painter, x, y, fg),
+        BmsDetailStateGlyph::BatteryDischarge => {
+            draw_bms_glyph_battery_discharge(painter, x, y, fg)
+        }
+        BmsDetailStateGlyph::PathBlocked => draw_bms_glyph_path_blocked(painter, x, y, fg),
+        BmsDetailStateGlyph::PathAllowed => draw_bms_glyph_path_enabled(painter, x, y, fg),
+        BmsDetailStateGlyph::Unknown => draw_bms_glyph_unknown(painter, x, y, fg),
+        BmsDetailStateGlyph::FetOn => draw_bms_glyph_fet_on(painter, x, y, fg),
+        BmsDetailStateGlyph::FetOff => draw_bms_glyph_fet_off(painter, x, y, fg, bg),
+        BmsDetailStateGlyph::BatteryFull => {
+            draw_icon_blocks(painter, x, y, LUCIDE_BATTERY_FULL_22, fg)
+        }
+        BmsDetailStateGlyph::BatteryEmpty => {
+            draw_icon_blocks(painter, x, y, LUCIDE_BATTERY_LOW_22, fg)
+        }
+        BmsDetailStateGlyph::BatteryAlert => draw_bms_glyph_battery_alert(painter, x, y, fg),
+        BmsDetailStateGlyph::WarningTriangle => draw_bms_glyph_warning_triangle(painter, x, y, fg),
+    }
+}
+
+fn draw_bms_detail_metric<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    w: u16,
+    label: &'static str,
+    value_mah: Option<u16>,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        label,
+        Point::new((x + 4) as i32, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+    match value_mah {
+        Some(value_mah) => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            format_args!("{:>4}mAh", value_mah),
+            Point::new((x + w.saturating_sub(4)) as i32, 42),
+            HorizontalAlignment::Right,
+            palette.bg,
+        ),
+        None => text(
+            painter,
+            variant,
+            FontRole::DetailNum,
+            "N/A",
+            Point::new((x + w.saturating_sub(4)) as i32, 42),
+            HorizontalAlignment::Right,
+            palette.bg,
+        ),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BmsDetailSummaryBadge {
+    label: &'static str,
+    tone: BmsDetailStateTone,
+}
+
+fn bms_detail_learn_badge(detail: DashboardDetailSnapshot) -> BmsDetailSummaryBadge {
+    match (detail.learn_qen, detail.learn_vok, detail.learn_rest) {
+        (Some(false), _, _) => BmsDetailSummaryBadge {
+            label: "LEARN OFF",
+            tone: BmsDetailStateTone::Off,
+        },
+        (Some(true), _, Some(true)) => BmsDetailSummaryBadge {
+            label: "LEARN REST",
+            tone: BmsDetailStateTone::Warn,
+        },
+        (Some(true), Some(true), _) => BmsDetailSummaryBadge {
+            label: "LEARN OK",
+            tone: BmsDetailStateTone::Ok,
+        },
+        (Some(true), Some(false), Some(false)) => BmsDetailSummaryBadge {
+            label: "LEARN WAIT",
+            tone: BmsDetailStateTone::Warn,
+        },
+        _ => BmsDetailSummaryBadge {
+            label: "LEARN ?",
+            tone: BmsDetailStateTone::Unknown,
+        },
+    }
+}
+
+fn bms_detail_balance_cfg_badge(detail: DashboardDetailSnapshot) -> BmsDetailSummaryBadge {
+    match detail.balance_cfg_match {
+        Some(true) => BmsDetailSummaryBadge {
+            label: "BALCFG OK",
+            tone: BmsDetailStateTone::Ok,
+        },
+        Some(false) => BmsDetailSummaryBadge {
+            label: "BALCFG MIS",
+            tone: BmsDetailStateTone::Fault,
+        },
+        None => BmsDetailSummaryBadge {
+            label: "BALCFG ?",
+            tone: BmsDetailStateTone::Unknown,
+        },
+    }
+}
+
+fn bms_detail_path_glyph(blocked: Option<bool>) -> BmsDetailStateGlyph {
+    match blocked {
+        Some(true) => BmsDetailStateGlyph::PathBlocked,
+        Some(false) => BmsDetailStateGlyph::PathAllowed,
+        None => BmsDetailStateGlyph::Unknown,
+    }
+}
+
+fn bms_detail_fet_glyph(on: Option<bool>) -> BmsDetailStateGlyph {
+    match on {
+        Some(true) => BmsDetailStateGlyph::FetOn,
+        Some(false) => BmsDetailStateGlyph::FetOff,
+        None => BmsDetailStateGlyph::Unknown,
+    }
+}
+
+fn draw_bms_detail_summary_badge<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    badge: BmsDetailSummaryBadge,
+) -> Result<(), P::Error> {
+    let border = bms_detail_status_tone_color(palette, badge.tone);
+    fill(painter, x, y, w, h, palette.panel_alt)?;
+    draw_outline(painter, x, y, w, h, fade_color(border, palette.border))?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        badge.label,
+        Point::new((x + w / 2) as i32, (y + 1) as i32),
+        HorizontalAlignment::Center,
+        border,
+    )
+}
+
+fn draw_bms_detail_balance_summary<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "BAL",
+        Point::new(220, 26),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )?;
+
+    for idx in 0..4 {
+        let x = 246 + (idx as u16) * 15;
+        let label = match idx {
+            0 => "1",
+            1 => "2",
+            2 => "3",
+            _ => "4",
+        };
+        draw_bms_balance_cell_icon(
+            painter,
+            variant,
+            palette,
+            x,
+            24,
+            label,
+            bms_detail_balance_cell_state(data.detail, idx),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn draw_bms_detail_balance_cluster<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+) -> Result<(), P::Error> {
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        "BAL",
+        Point::new(184, 68),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+
+    for idx in 0..4 {
+        let x = 209 + (idx as u16) * 22;
+        let label = match idx {
+            0 => "1",
+            1 => "2",
+            2 => "3",
+            _ => "4",
+        };
+        draw_bms_balance_cell_icon_large(
+            painter,
+            variant,
+            palette,
+            x,
+            72,
+            label,
+            bms_detail_balance_cell_state(data.detail, idx),
+        )?;
+    }
+    Ok(())
+}
+
+fn draw_bms_balance_cell_icon<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    label: &'static str,
+    state: BalanceCellVisualState,
+) -> Result<(), P::Error> {
+    let (border, fill_color, text_color) = match state {
+        BalanceCellVisualState::Active => (
+            SUCCESS_COLOR,
+            fade_color(SUCCESS_COLOR, palette.bg),
+            palette.bg,
+        ),
+        BalanceCellVisualState::Inactive => (
+            palette.text_dim,
+            fade_color(palette.panel, palette.bg),
+            palette.text,
+        ),
+        BalanceCellVisualState::Unknown => (
+            ATTENTION_COLOR,
+            fade_color(ATTENTION_COLOR, palette.bg),
+            palette.bg,
+        ),
+    };
+    fill(painter, x + 4, y + 1, 4, 2, border)?;
+    draw_outline(painter, x + 1, y + 3, 10, 12, border)?;
+    fill(painter, x + 3, y + 5, 6, 8, fill_color)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        label,
+        Point::new((x + 6) as i32, (y + 6) as i32),
+        HorizontalAlignment::Center,
+        text_color,
+    )
+}
+
+fn draw_bms_balance_cell_icon_large<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    label: &'static str,
+    state: BalanceCellVisualState,
+) -> Result<(), P::Error> {
+    let (border, fill_color) = match state {
+        BalanceCellVisualState::Active => (SUCCESS_COLOR, fade_color(SUCCESS_COLOR, palette.bg)),
+        BalanceCellVisualState::Inactive => {
+            (palette.text_dim, fade_color(palette.panel, palette.bg))
+        }
+        BalanceCellVisualState::Unknown => {
+            (ATTENTION_COLOR, fade_color(ATTENTION_COLOR, palette.bg))
+        }
+    };
+    fill(painter, x + 4, y, 6, 2, border)?;
+    draw_outline(painter, x + 1, y + 2, 12, 14, border)?;
+    fill(painter, x + 3, y + 4, 8, 10, fill_color)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        label,
+        Point::new((x + 7) as i32, (y + 19) as i32),
+        HorizontalAlignment::Center,
+        palette.text,
+    )
+}
+
+fn bms_detail_footer_reason(data: DashboardLiveData) -> &'static str {
+    if data.bms_state == SelfCheckCommState::Err {
+        "BMS LINK FAULT"
+    } else if data.bms_no_battery == Some(true) {
+        "NO BATTERY"
+    } else if data.detail.reason_label.is_some() {
+        bms_detail_reason_text(data.detail)
+    } else {
+        data.page_notice(DashboardDetailPage::BmsDetail)
+    }
+}
+
+fn draw_bms_detail_footer_reason<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+    status_color: u16,
+) -> Result<(), P::Error> {
+    let reason_text = bms_detail_footer_reason(data);
+    let fill_color = fade_color(status_color, palette.panel_alt);
+    fill(painter, 10, 150, 300, 12, fill_color)?;
+    draw_outline(painter, 10, 150, 300, 12, status_color)?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        reason_text,
+        Point::new(160, 150),
+        HorizontalAlignment::Center,
+        palette.text,
+    )
+}
+
+fn draw_bms_detail_state_tile<P: UiPainter>(
+    painter: &mut P,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    glyph: BmsDetailStateGlyph,
+    tone: BmsDetailStateTone,
+) -> Result<(), P::Error> {
+    let tint = match tone {
+        BmsDetailStateTone::Ok => fade_color(SUCCESS_COLOR, palette.panel_alt),
+        BmsDetailStateTone::Warn => fade_color(ATTENTION_COLOR, palette.panel_alt),
+        BmsDetailStateTone::Fault => fade_color(ERROR_COLOR, palette.panel_alt),
+        BmsDetailStateTone::Off | BmsDetailStateTone::Unknown => {
+            fade_color(palette.panel_alt, palette.bg)
+        }
+    };
+    let border = fade_color(bms_detail_status_tone_color(palette, tone), palette.border);
+    fill(painter, x + 3, y, w.saturating_sub(6), h, tint)?;
+    fill(painter, x, y + 3, w, h.saturating_sub(6), tint)?;
+    fill(painter, x + 3, y, w.saturating_sub(6), 1, border)?;
+    fill(
+        painter,
+        x + 3,
+        y + h.saturating_sub(1),
+        w.saturating_sub(6),
+        1,
+        border,
+    )?;
+    fill(painter, x, y + 3, 1, h.saturating_sub(6), border)?;
+    fill(
+        painter,
+        x + w.saturating_sub(1),
+        y + 3,
+        1,
+        h.saturating_sub(6),
+        border,
+    )?;
+    fill(painter, x + 1, y + 1, 1, 1, border)?;
+    fill(painter, x + 2, y + 1, 1, 1, border)?;
+    fill(painter, x + 1, y + 2, 1, 1, border)?;
+    fill(painter, x + w.saturating_sub(2), y + 1, 1, 1, border)?;
+    fill(painter, x + w.saturating_sub(3), y + 1, 1, 1, border)?;
+    fill(painter, x + w.saturating_sub(2), y + 2, 1, 1, border)?;
+    fill(painter, x + 1, y + h.saturating_sub(2), 1, 1, border)?;
+    fill(painter, x + 2, y + h.saturating_sub(2), 1, 1, border)?;
+    fill(painter, x + 1, y + h.saturating_sub(3), 1, 1, border)?;
+    fill(
+        painter,
+        x + w.saturating_sub(2),
+        y + h.saturating_sub(2),
+        1,
+        1,
+        border,
+    )?;
+    fill(
+        painter,
+        x + w.saturating_sub(3),
+        y + h.saturating_sub(2),
+        1,
+        1,
+        border,
+    )?;
+    fill(
+        painter,
+        x + w.saturating_sub(2),
+        y + h.saturating_sub(3),
+        1,
+        1,
+        border,
+    )?;
+    draw_bms_state_glyph(
+        painter,
+        x + (w.saturating_sub(22)) / 2,
+        y + (h.saturating_sub(22)) / 2,
+        glyph,
+        bms_detail_status_tone_color(palette, tone),
+        tint,
+    )
+}
+
+fn draw_bms_detail_state_text_tile<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    label: &'static str,
+    tone: BmsDetailStateTone,
+) -> Result<(), P::Error> {
+    let tint = match tone {
+        BmsDetailStateTone::Ok => fade_color(SUCCESS_COLOR, palette.panel_alt),
+        BmsDetailStateTone::Warn => fade_color(ATTENTION_COLOR, palette.panel_alt),
+        BmsDetailStateTone::Fault => fade_color(ERROR_COLOR, palette.panel_alt),
+        BmsDetailStateTone::Off | BmsDetailStateTone::Unknown => {
+            fade_color(palette.panel_alt, palette.bg)
+        }
+    };
+    let border = fade_color(bms_detail_status_tone_color(palette, tone), palette.border);
+    fill(painter, x + 3, y, w.saturating_sub(6), h, tint)?;
+    fill(painter, x, y + 3, w, h.saturating_sub(6), tint)?;
+    fill(painter, x + 3, y, w.saturating_sub(6), 1, border)?;
+    fill(
+        painter,
+        x + 3,
+        y + h.saturating_sub(1),
+        w.saturating_sub(6),
+        1,
+        border,
+    )?;
+    fill(painter, x, y + 3, 1, h.saturating_sub(6), border)?;
+    fill(
+        painter,
+        x + w.saturating_sub(1),
+        y + 3,
+        1,
+        h.saturating_sub(6),
+        border,
+    )?;
+    fill(painter, x + 1, y + 1, 1, 1, border)?;
+    fill(painter, x + 2, y + 1, 1, 1, border)?;
+    fill(painter, x + 1, y + 2, 1, 1, border)?;
+    fill(painter, x + w.saturating_sub(2), y + 1, 1, 1, border)?;
+    fill(painter, x + w.saturating_sub(3), y + 1, 1, 1, border)?;
+    fill(painter, x + w.saturating_sub(2), y + 2, 1, 1, border)?;
+    fill(painter, x + 1, y + h.saturating_sub(2), 1, 1, border)?;
+    fill(painter, x + 2, y + h.saturating_sub(2), 1, 1, border)?;
+    fill(painter, x + 1, y + h.saturating_sub(3), 1, 1, border)?;
+    fill(
+        painter,
+        x + w.saturating_sub(2),
+        y + h.saturating_sub(2),
+        1,
+        1,
+        border,
+    )?;
+    fill(
+        painter,
+        x + w.saturating_sub(3),
+        y + h.saturating_sub(2),
+        1,
+        1,
+        border,
+    )?;
+    fill(
+        painter,
+        x + w.saturating_sub(2),
+        y + h.saturating_sub(3),
+        1,
+        1,
+        border,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        label,
+        Point::new((x + w / 2) as i32, (y + 10) as i32),
+        HorizontalAlignment::Center,
+        bms_detail_status_tone_color(palette, tone),
+    )
+}
+
+fn render_dashboard_bms_detail_page<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    data: DashboardLiveData,
+    accent: u16,
+) -> Result<(), P::Error> {
+    draw_panel(painter, 6, 22, 308, 38, palette, true, accent)?;
+    fill(painter, 108, 24, 1, 34, fade_color(palette.bg, accent))?;
+    fill(painter, 208, 24, 1, 34, fade_color(palette.bg, accent))?;
+    draw_bms_detail_metric(
+        painter,
+        variant,
+        palette,
+        10,
+        94,
+        "REMCAP",
+        data.detail.remcap_mah,
+    )?;
+    draw_bms_detail_metric(
+        painter,
+        variant,
+        palette,
+        110,
+        94,
+        "FCC",
+        data.detail.fcc_mah,
+    )?;
+    draw_bms_detail_summary_badge(
+        painter,
+        variant,
+        palette,
+        216,
+        25,
+        88,
+        14,
+        bms_detail_learn_badge(data.detail),
+    )?;
+    draw_bms_detail_summary_badge(
+        painter,
+        variant,
+        palette,
+        216,
+        41,
+        88,
+        14,
+        bms_detail_balance_cfg_badge(data.detail),
+    )?;
+    draw_panel(painter, 6, 62, 308, 82, palette, false, accent)?;
+    fill(painter, 176, 66, 1, 74, fade_color(palette.border, accent))?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        "CHG",
+        Point::new(14, 78),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        "DSG",
+        Point::new(14, 112),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    draw_bms_detail_balance_cluster(painter, variant, palette, data)?;
+    let charge_tiles = [
+        (
+            BmsDetailStateGlyph::BatteryCharge,
+            bms_detail_state_tone(
+                data.detail.charge_ready,
+                BmsDetailStateTone::Ok,
+                BmsDetailStateTone::Warn,
+            ),
+        ),
+        (
+            bms_detail_path_glyph(data.detail.xchg),
+            bms_detail_state_tone(
+                data.detail.xchg,
+                BmsDetailStateTone::Fault,
+                BmsDetailStateTone::Ok,
+            ),
+        ),
+        (
+            bms_detail_fet_glyph(data.detail.charge_fet_on),
+            bms_detail_state_tone(
+                data.detail.charge_fet_on,
+                BmsDetailStateTone::Ok,
+                BmsDetailStateTone::Off,
+            ),
+        ),
+    ];
+    let discharge_tiles = [
+        (
+            BmsDetailStateGlyph::BatteryDischarge,
+            bms_detail_state_tone(
+                data.detail.discharge_ready,
+                BmsDetailStateTone::Ok,
+                BmsDetailStateTone::Warn,
+            ),
+        ),
+        (
+            bms_detail_path_glyph(data.detail.xdsg),
+            bms_detail_state_tone(
+                data.detail.xdsg,
+                BmsDetailStateTone::Fault,
+                BmsDetailStateTone::Ok,
+            ),
+        ),
+        (
+            bms_detail_fet_glyph(data.detail.discharge_fet_on),
+            bms_detail_state_tone(
+                data.detail.discharge_fet_on,
+                BmsDetailStateTone::Ok,
+                BmsDetailStateTone::Off,
+            ),
+        ),
+    ];
+    let flag_tiles = [
+        (
+            BmsDetailStateGlyph::BatteryFull,
+            bms_detail_state_tone(
+                data.detail.fc,
+                BmsDetailStateTone::Warn,
+                BmsDetailStateTone::Off,
+            ),
+        ),
+        (
+            BmsDetailStateGlyph::WarningTriangle,
+            bms_detail_state_tone(
+                data.detail.pf,
+                BmsDetailStateTone::Fault,
+                BmsDetailStateTone::Off,
+            ),
+        ),
+        (
+            BmsDetailStateGlyph::BatteryEmpty,
+            bms_detail_state_tone(
+                data.detail.fd,
+                BmsDetailStateTone::Fault,
+                BmsDetailStateTone::Off,
+            ),
+        ),
+        (
+            BmsDetailStateGlyph::BatteryAlert,
+            bms_detail_state_tone(
+                data.detail.rca_alarm,
+                BmsDetailStateTone::Warn,
+                BmsDetailStateTone::Off,
+            ),
+        ),
+    ];
+
+    for (idx, (glyph, tone)) in charge_tiles.into_iter().enumerate() {
+        let tile_x = 46 + idx as u16 * 35;
+        draw_bms_detail_state_tile(painter, palette, tile_x, 70, 30, 30, glyph, tone)?;
+    }
+    for (idx, (glyph, tone)) in discharge_tiles.into_iter().enumerate() {
+        let tile_x = 46 + idx as u16 * 35;
+        draw_bms_detail_state_tile(painter, palette, tile_x, 104, 30, 30, glyph, tone)?;
+    }
+    for (idx, (glyph, tone)) in flag_tiles.into_iter().enumerate() {
+        let tile_x = 181 + idx as u16 * 33;
+        draw_bms_detail_state_tile(painter, palette, tile_x, 105, 28, 28, glyph, tone)?;
+    }
+
+    Ok(())
 }
 
 fn render_dashboard_cells_detail<P: UiPainter>(
@@ -5019,6 +6499,7 @@ fn render_dashboard_thermal_detail<P: UiPainter>(
 fn detail_page_title(page: DashboardDetailPage) -> &'static str {
     match page {
         DashboardDetailPage::Cells => "CELL DETAIL",
+        DashboardDetailPage::BmsDetail => "BMS DETAIL",
         DashboardDetailPage::BatteryFlow => "BATTERY FLOW",
         DashboardDetailPage::Output => "OUTPUT DETAIL",
         DashboardDetailPage::Charger => "CHARGER DETAIL",
@@ -5042,6 +6523,35 @@ fn detail_status_tag(page: DashboardDetailPage, data: DashboardLiveData) -> &'st
                 "OFF"
             } else if data.detail.balance_active == Some(true) {
                 "BAL ON"
+            } else {
+                "READY"
+            }
+        }
+        DashboardDetailPage::BmsDetail => {
+            if data.bms_state == SelfCheckCommState::Err
+                || data.detail.pf == Some(true)
+                || data.detail.reason_key == Some("sbs_error_code")
+                || data.detail.reason_key == Some("permanent_failure")
+            {
+                "FAULT"
+            } else if data.bms_no_battery == Some(true) {
+                "LIMIT"
+            } else if data.detail.reason_key == Some("op_status_unavailable") {
+                "N/A"
+            } else if !bms_detail_ready(data) {
+                "N/A"
+            } else if data.bms_recovery_pending
+                || data.detail.xchg == Some(true)
+                || data.detail.xdsg == Some(true)
+                || data.detail.charge_ready == Some(false)
+                || data.detail.discharge_ready == Some(false)
+            {
+                "LIMIT"
+            } else if data.bms_state == SelfCheckCommState::Warn
+                || data.detail.fd == Some(true)
+                || data.detail.rca_alarm == Some(true)
+            {
+                "WARN"
             } else {
                 "READY"
             }
@@ -5205,7 +6715,9 @@ fn manual_charge_footer_text(data: DashboardLiveData) -> &'static str {
 fn detail_status_color(palette: Palette, status: &'static str) -> u16 {
     match status {
         "FAULT" | "HOT" => ERROR_COLOR,
-        "WARN" | "WARM" | "LOCK" | "NOAC" | "TEMP" | "LOAD" => ATTENTION_COLOR,
+        "WARN" | "WARM" | "LOCK" | "NOAC" | "TEMP" | "LOAD" | "LIMIT" | "HOLD" | "RECOV" => {
+            ATTENTION_COLOR
+        }
         _ => palette.accent,
     }
 }
@@ -5825,6 +7337,21 @@ fn detail_footer_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &
 
 fn detail_fault_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &'static str {
     match page {
+        DashboardDetailPage::BmsDetail => {
+            if data.bms_state == SelfCheckCommState::Err {
+                "BMS LINK FAULT"
+            } else if data.detail.pf == Some(true)
+                || data.detail.reason_key == Some("permanent_failure")
+            {
+                "PERMANENT FAILURE"
+            } else if data.detail.reason_key == Some("sbs_error_code") {
+                "SBS ERROR ACTIVE"
+            } else if !bms_detail_ready(data) {
+                "N/A"
+            } else {
+                data.page_notice(page)
+            }
+        }
         DashboardDetailPage::BatteryFlow => {
             if data.bms_state == SelfCheckCommState::Err {
                 "BMS LINK FAULT"
@@ -5920,6 +7447,13 @@ fn detail_footer_badge(
                 DashboardDetailPage::BatteryFlow if data.bms_state == SelfCheckCommState::Err => {
                     "BMS FAULT"
                 }
+                DashboardDetailPage::BmsDetail if data.detail.pf == Some(true) => "PF ACTIVE",
+                DashboardDetailPage::BmsDetail
+                    if data.detail.reason_key == Some("sbs_error_code") =>
+                {
+                    "SBS ERROR"
+                }
+                DashboardDetailPage::BmsDetail => "BMS FAULT",
                 DashboardDetailPage::BatteryFlow => "PACK ALARM",
                 DashboardDetailPage::Charger => "LINK FAULT",
                 DashboardDetailPage::Thermal => "SENSE FAULT",
@@ -6047,6 +7581,7 @@ fn output_fault_row_text(
 fn detail_data_ready(page: DashboardDetailPage, data: DashboardLiveData) -> bool {
     match page {
         DashboardDetailPage::Cells => cells_detail_ready(data),
+        DashboardDetailPage::BmsDetail => bms_detail_ready(data),
         DashboardDetailPage::BatteryFlow => battery_flow_detail_ready(data),
         DashboardDetailPage::Output => output_detail_ready(data),
         DashboardDetailPage::Charger => charger_data_ready(data),
@@ -9860,6 +11395,34 @@ mod tests {
     }
 
     #[test]
+    fn cells_detail_body_maps_to_bms_detail_and_bms_back_returns_to_cells() {
+        assert_eq!(
+            dashboard_hit_test(
+                DashboardRoute::Detail(DashboardDetailPage::Cells),
+                DASHBOARD_CELLS_ADVANCED_ENTRY_X + 24,
+                DASHBOARD_CELLS_ADVANCED_ENTRY_Y + 24
+            ),
+            Some(DashboardTouchTarget::CellsAdvancedEntry)
+        );
+        assert_eq!(
+            dashboard_route_for_target(DashboardTouchTarget::CellsAdvancedEntry),
+            DashboardRoute::Detail(DashboardDetailPage::BmsDetail)
+        );
+        assert_eq!(
+            dashboard_hit_test(
+                DashboardRoute::Detail(DashboardDetailPage::BmsDetail),
+                DASHBOARD_DETAIL_BACK_X + 4,
+                DASHBOARD_DETAIL_BACK_Y + 4
+            ),
+            Some(DashboardTouchTarget::CellsAdvancedBack)
+        );
+        assert_eq!(
+            dashboard_route_for_target(DashboardTouchTarget::CellsAdvancedBack),
+            DashboardRoute::Detail(DashboardDetailPage::Cells)
+        );
+    }
+
+    #[test]
     fn charger_detail_manual_entry_maps_to_manual_page() {
         assert_eq!(
             dashboard_hit_test(
@@ -10172,6 +11735,10 @@ mod tests {
 
         assert_eq!(detail_status_tag(DashboardDetailPage::Cells, live), "N/A");
         assert_eq!(
+            detail_status_tag(DashboardDetailPage::BmsDetail, live),
+            "N/A"
+        );
+        assert_eq!(
             detail_status_tag(DashboardDetailPage::BatteryFlow, live),
             "N/A"
         );
@@ -10185,12 +11752,240 @@ mod tests {
             "PACK DETAIL SOURCE PENDING"
         );
         assert_eq!(
+            detail_footer_notice(DashboardDetailPage::BmsDetail, live),
+            "BMS DETAIL SOURCE PENDING"
+        );
+        assert_eq!(
             detail_footer_notice(DashboardDetailPage::Output, live),
             "OUTPUT DETAIL SOURCE PENDING"
         );
         assert_eq!(
             detail_footer_badge(DashboardDetailPage::BatteryFlow, live),
             (DetailFooterIcon::Unknown, "NO DATA")
+        );
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::BmsDetail, live),
+            (DetailFooterIcon::Unknown, "NO DATA")
+        );
+    }
+
+    #[test]
+    fn bms_detail_status_prioritizes_fault_limit_and_warn_states() {
+        let mut fault_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        fault_snapshot.dashboard_detail.remcap_mah = Some(3666);
+        fault_snapshot.dashboard_detail.fcc_mah = Some(3704);
+        fault_snapshot.dashboard_detail.reason_key = Some("permanent_failure");
+        fault_snapshot.dashboard_detail.reason_label = Some("PERM FAIL");
+        fault_snapshot.dashboard_detail.pf = Some(true);
+        let fault_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &fault_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BmsDetail, fault_live),
+            "FAULT"
+        );
+
+        let mut limit_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        limit_snapshot.dashboard_detail.remcap_mah = Some(3666);
+        limit_snapshot.dashboard_detail.fcc_mah = Some(3704);
+        limit_snapshot.dashboard_detail.reason_key = Some("xchg_blocked");
+        limit_snapshot.dashboard_detail.reason_label = Some("CHG BLOCKED");
+        limit_snapshot.dashboard_detail.xchg = Some(true);
+        limit_snapshot.dashboard_detail.charge_ready = Some(false);
+        let limit_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &limit_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BmsDetail, limit_live),
+            "LIMIT"
+        );
+
+        let mut no_battery_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        no_battery_snapshot.bq40z50_no_battery = Some(true);
+        let no_battery_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &no_battery_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BmsDetail, no_battery_live),
+            "LIMIT"
+        );
+
+        let mut warn_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        warn_snapshot.dashboard_detail.remcap_mah = Some(3666);
+        warn_snapshot.dashboard_detail.fcc_mah = Some(3704);
+        warn_snapshot.dashboard_detail.reason_key = Some("remaining_capacity_alarm");
+        warn_snapshot.dashboard_detail.reason_label = Some("RCA ALARM");
+        warn_snapshot.dashboard_detail.rca_alarm = Some(true);
+        let warn_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &warn_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BmsDetail, warn_live),
+            "WARN"
+        );
+
+        let mut unavailable_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        unavailable_snapshot.dashboard_detail.remcap_mah = Some(3666);
+        unavailable_snapshot.dashboard_detail.fcc_mah = Some(3704);
+        unavailable_snapshot.dashboard_detail.reason_key = Some("op_status_unavailable");
+        unavailable_snapshot.dashboard_detail.reason_label = Some("STATUS N/A");
+        let unavailable_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &unavailable_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BmsDetail, unavailable_live),
+            "N/A"
+        );
+
+        let mut full_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        full_snapshot.dashboard_detail.remcap_mah = Some(3666);
+        full_snapshot.dashboard_detail.fcc_mah = Some(3704);
+        full_snapshot.dashboard_detail.fc = Some(true);
+        let full_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &full_snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BmsDetail, full_live),
+            "READY"
+        );
+    }
+
+    #[test]
+    fn bms_detail_footer_reason_prefers_reason_label_and_link_fault() {
+        let mut ready_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        ready_snapshot.dashboard_detail.remcap_mah = Some(3666);
+        ready_snapshot.dashboard_detail.fcc_mah = Some(3704);
+        ready_snapshot.dashboard_detail.reason_label = Some("CHG BLOCKED");
+        let ready_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &ready_snapshot);
+        assert_eq!(bms_detail_footer_reason(ready_live), "CHG BLOCKED");
+
+        let mut fault_snapshot = ready_snapshot;
+        fault_snapshot.bq40z50 = SelfCheckCommState::Err;
+        let fault_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &fault_snapshot);
+        assert_eq!(bms_detail_footer_reason(fault_live), "BMS LINK FAULT");
+
+        let mut no_battery_snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        no_battery_snapshot.bq40z50_no_battery = Some(true);
+        let no_battery_live =
+            DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &no_battery_snapshot);
+        assert_eq!(bms_detail_footer_reason(no_battery_live), "NO BATTERY");
+    }
+
+    #[test]
+    fn bms_detail_link_fault_stays_fault_even_without_detail_metrics() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq40z50 = SelfCheckCommState::Err;
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+        assert_eq!(
+            detail_status_tag(DashboardDetailPage::BmsDetail, live),
+            "FAULT"
+        );
+    }
+
+    #[test]
+    fn bms_detail_learning_badge_prefers_ok_rest_wait_and_off_states() {
+        let mut detail = DashboardDetailSnapshot::pending();
+        assert_eq!(
+            bms_detail_learn_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "LEARN ?",
+                tone: BmsDetailStateTone::Unknown,
+            }
+        );
+
+        detail.learn_qen = Some(true);
+        detail.learn_vok = Some(true);
+        detail.learn_rest = Some(false);
+        assert_eq!(
+            bms_detail_learn_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "LEARN OK",
+                tone: BmsDetailStateTone::Ok,
+            }
+        );
+
+        detail.learn_rest = Some(true);
+        assert_eq!(
+            bms_detail_learn_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "LEARN REST",
+                tone: BmsDetailStateTone::Warn,
+            }
+        );
+
+        detail.learn_vok = Some(false);
+        detail.learn_rest = Some(true);
+        assert_eq!(
+            bms_detail_learn_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "LEARN REST",
+                tone: BmsDetailStateTone::Warn,
+            }
+        );
+
+        detail.learn_rest = Some(false);
+        assert_eq!(
+            bms_detail_learn_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "LEARN WAIT",
+                tone: BmsDetailStateTone::Warn,
+            }
+        );
+
+        detail.learn_qen = Some(false);
+        assert_eq!(
+            bms_detail_learn_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "LEARN OFF",
+                tone: BmsDetailStateTone::Off,
+            }
+        );
+    }
+
+    #[test]
+    fn bms_detail_state_glyphs_keep_unknown_telemetry_unknown() {
+        assert_eq!(
+            bms_detail_path_glyph(Some(true)),
+            BmsDetailStateGlyph::PathBlocked
+        );
+        assert_eq!(
+            bms_detail_path_glyph(Some(false)),
+            BmsDetailStateGlyph::PathAllowed
+        );
+        assert_eq!(bms_detail_path_glyph(None), BmsDetailStateGlyph::Unknown);
+
+        assert_eq!(bms_detail_fet_glyph(Some(true)), BmsDetailStateGlyph::FetOn);
+        assert_eq!(
+            bms_detail_fet_glyph(Some(false)),
+            BmsDetailStateGlyph::FetOff
+        );
+        assert_eq!(bms_detail_fet_glyph(None), BmsDetailStateGlyph::Unknown);
+    }
+
+    #[test]
+    fn bms_detail_balance_cfg_badge_tracks_match_state() {
+        let mut detail = DashboardDetailSnapshot::pending();
+        assert_eq!(
+            bms_detail_balance_cfg_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "BALCFG ?",
+                tone: BmsDetailStateTone::Unknown,
+            }
+        );
+
+        detail.balance_cfg_match = Some(true);
+        assert_eq!(
+            bms_detail_balance_cfg_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "BALCFG OK",
+                tone: BmsDetailStateTone::Ok,
+            }
+        );
+
+        detail.balance_cfg_match = Some(false);
+        assert_eq!(
+            bms_detail_balance_cfg_badge(detail),
+            BmsDetailSummaryBadge {
+                label: "BALCFG MIS",
+                tone: BmsDetailStateTone::Fault,
+            }
         );
     }
 

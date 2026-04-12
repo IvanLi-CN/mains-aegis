@@ -1034,14 +1034,17 @@ pub(super) fn bq40_primary_reason(
     charge_reason: &'static str,
     discharge_reason: &'static str,
 ) -> &'static str {
+    if bq40_op_bit(op_status, bq40z50::operation_status::PF) == Some(true) {
+        return "permanent_failure";
+    }
     if bq40z50::battery_status::error_code(batt_status) != 0 {
         return "sbs_error_code";
     }
     if (batt_status & bq40z50::battery_status::RCA) != 0 {
         return "remaining_capacity_alarm";
     }
-    if bq40_op_bit(op_status, bq40z50::operation_status::PF) == Some(true) {
-        return "permanent_failure";
+    if bq40_op_bit(op_status, bq40z50::operation_status::SLEEP) == Some(true) {
+        return "sleep_mode";
     }
     if discharge_reason != "ready" && discharge_reason != "op_status_unavailable" {
         return discharge_reason;
@@ -1049,13 +1052,26 @@ pub(super) fn bq40_primary_reason(
     if charge_reason != "ready" && charge_reason != "op_status_unavailable" {
         return charge_reason;
     }
-    if bq40_op_bit(op_status, bq40z50::operation_status::SLEEP) == Some(true) {
-        return "sleep_mode";
-    }
     if op_status.is_none() {
         return "op_status_unavailable";
     }
     "nominal"
+}
+
+pub(super) fn detail_bms_reason_label(primary_reason: &'static str) -> &'static str {
+    match primary_reason {
+        "nominal" => "SYSTEM READY",
+        "xchg_blocked" => "CHG BLOCKED",
+        "chg_fet_off" => "CHG FET OFF",
+        "xdsg_blocked" => "DSG BLOCKED",
+        "dsg_fet_off" => "DSG FET OFF",
+        "remaining_capacity_alarm" => "RCA ALARM",
+        "permanent_failure" => "PERM FAIL",
+        "sleep_mode" => "SLEEP MODE",
+        "op_status_unavailable" => "STATUS N/A",
+        "sbs_error_code" => "SBS ERROR",
+        _ => "CHECK STATUS",
+    }
 }
 
 pub(super) fn bq40_protection_active(batt_status: u16, op_status: Option<u32>) -> bool {
@@ -1326,6 +1342,34 @@ mod tests {
     #[test]
     fn manual_stop_hold_blocks_only_plain_charge_policy() {
         assert!(manual_charge_stop_hold_blocks_charge(true, false, false));
+    }
+
+    #[test]
+    fn detail_bms_reason_label_names_charge_fet_off() {
+        assert_eq!(detail_bms_reason_label("chg_fet_off"), "CHG FET OFF");
+    }
+
+    #[test]
+    fn bq40_primary_reason_prioritizes_permanent_failure_over_other_pack_alarms() {
+        let batt_status = bq40z50::battery_status::RCA | 0b1111;
+        let op_status = Some(bq40z50::operation_status::PF);
+        assert_eq!(
+            bq40_primary_reason(batt_status, op_status, "ready", "ready"),
+            "permanent_failure"
+        );
+    }
+
+    #[test]
+    fn bq40_primary_reason_prioritizes_sleep_before_path_off_states() {
+        let op_status = Some(bq40z50::operation_status::SLEEP);
+        assert_eq!(
+            bq40_primary_reason(0, op_status, "chg_fet_off", "ready"),
+            "sleep_mode"
+        );
+        assert_eq!(
+            bq40_primary_reason(0, op_status, "ready", "dsg_fet_off"),
+            "sleep_mode"
+        );
     }
 
     #[test]

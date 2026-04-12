@@ -1296,6 +1296,9 @@ where
         let center_edge = snapshot.center && !prev.center;
         if left_edge || center_edge {
             let next_route = match self.dashboard_route {
+                DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::BmsDetail) => Some(
+                    DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Cells),
+                ),
                 DashboardRoute::Detail(_) => Some(DashboardRoute::Home),
                 DashboardRoute::ManualCharge => Some(DashboardRoute::Detail(
                     front_panel_scene::DashboardDetailPage::Charger,
@@ -1430,6 +1433,7 @@ fn dashboard_route_name(route: DashboardRoute) -> &'static str {
     match route {
         DashboardRoute::Home => "home",
         DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Cells) => "detail_cells",
+        DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::BmsDetail) => "detail_bms",
         DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::BatteryFlow) => {
             "detail_battery_flow"
         }
@@ -1448,6 +1452,8 @@ fn dashboard_touch_target_name(target: DashboardTouchTarget) -> &'static str {
         DashboardTouchTarget::HomeCharger => "home_charger",
         DashboardTouchTarget::HomeBatteryFlow => "home_battery_flow",
         DashboardTouchTarget::DetailBack => "detail_back",
+        DashboardTouchTarget::CellsAdvancedEntry => "cells_advanced_entry",
+        DashboardTouchTarget::CellsAdvancedBack => "cells_advanced_back",
         DashboardTouchTarget::ChargerManualEntry => "charger_manual_entry",
         DashboardTouchTarget::ManualBack => "manual_back",
         DashboardTouchTarget::ManualTarget3V7 => "manual_target_3v7",

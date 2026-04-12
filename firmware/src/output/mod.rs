@@ -90,6 +90,7 @@ const BMS_ACTIVATION_WORD_GAP: Duration = Duration::from_millis(2);
 const BMS_DETAIL_MAC_REFRESH_PERIOD: Duration = Duration::from_secs(8);
 const BMS_DETAIL_MAC_REFRESH_STAGGER: Duration = Duration::from_secs(2);
 const BMS_DETAIL_BALANCE_CONFIG_REFRESH_STAGGER: Duration = Duration::from_secs(4);
+const BMS_DETAIL_GAUGING_STATUS_REFRESH_STAGGER: Duration = Duration::from_secs(6);
 const BMS_BLOCK_DETAIL_LOG_PERIOD: Duration = Duration::from_secs(10);
 const BMS_CONFIG_LOG_RETRY_PERIOD: Duration = Duration::from_secs(10);
 const BMS_SUSPICIOUS_VOLTAGE_MV: u16 = 5_911;
@@ -739,6 +740,10 @@ fn bq40_op_bit(op_status: Option<u32>, mask: u32) -> Option<bool> {
 
 fn bq40_mac_bit(raw: Option<u32>, mask: u32) -> Option<bool> {
     raw.map(|value| (value & mask) != 0)
+}
+
+fn bms_detail_gauging_flag(raw: Option<u32>, mask: u32) -> Option<bool> {
+    bq40_mac_bit(raw, mask)
 }
 
 fn bq40_df_bit(raw: Option<u16>, mask: u16) -> Option<bool> {
@@ -2539,9 +2544,11 @@ pub struct PowerManager<'d, I2C> {
     bms_cached_da_status2: Option<bq40z50::DaStatus2>,
     bms_cached_filter_capacity: Option<bq40z50::FilterCapacity>,
     bms_cached_balance_config: Option<bq40z50::BalanceConfig>,
+    bms_cached_gauging_status: Option<u32>,
     bms_next_da_status2_refresh_at: Instant,
     bms_next_filter_capacity_refresh_at: Instant,
     bms_next_balance_config_refresh_at: Instant,
+    bms_next_gauging_status_refresh_at: Instant,
     bms_next_block_detail_log_at: Instant,
     bms_config_logged: bool,
     bms_next_config_log_at: Instant,
@@ -3001,9 +3008,11 @@ where
             bms_cached_da_status2: None,
             bms_cached_filter_capacity: None,
             bms_cached_balance_config: None,
+            bms_cached_gauging_status: None,
             bms_next_da_status2_refresh_at: now,
             bms_next_filter_capacity_refresh_at: now + BMS_DETAIL_MAC_REFRESH_STAGGER,
             bms_next_balance_config_refresh_at: now + BMS_DETAIL_BALANCE_CONFIG_REFRESH_STAGGER,
+            bms_next_gauging_status_refresh_at: now + BMS_DETAIL_GAUGING_STATUS_REFRESH_STAGGER,
             bms_next_block_detail_log_at: now,
             bms_config_logged: false,
             bms_next_config_log_at: now,
@@ -3572,6 +3581,8 @@ where
         let detail = &mut self.ui_snapshot.dashboard_detail;
         detail.cell_mv = [None, None, None, None];
         detail.cell_temp_c = [None, None, None, None];
+        detail.remcap_mah = None;
+        detail.fcc_mah = None;
         detail.balance_enabled = None;
         detail.balance_cfg_match = None;
         detail.balance_active = None;
@@ -3579,13 +3590,27 @@ where
         detail.balance_cell = None;
         detail.battery_energy_mwh = None;
         detail.battery_full_capacity_mwh = None;
+        detail.charge_ready = None;
+        detail.discharge_ready = None;
+        detail.xchg = None;
+        detail.xdsg = None;
         detail.charge_fet_on = None;
         detail.discharge_fet_on = None;
         detail.precharge_fet_on = None;
+        detail.learn_qen = None;
+        detail.learn_vok = None;
+        detail.learn_rest = None;
+        detail.fc = None;
+        detail.fd = None;
+        detail.pf = None;
+        detail.rca_alarm = None;
+        detail.reason_key = None;
+        detail.reason_label = None;
         detail.board_temp_c = None;
         detail.battery_temp_c = None;
         detail.cells_notice = None;
         detail.battery_notice = None;
+        detail.bms_notice = None;
     }
 
     fn clear_bms_charge_policy_inputs(&mut self) {
@@ -3601,9 +3626,11 @@ where
         self.bms_cached_da_status2 = None;
         self.bms_cached_filter_capacity = None;
         self.bms_cached_balance_config = None;
+        self.bms_cached_gauging_status = None;
         self.bms_next_da_status2_refresh_at = now;
         self.bms_next_filter_capacity_refresh_at = now + BMS_DETAIL_MAC_REFRESH_STAGGER;
         self.bms_next_balance_config_refresh_at = now + BMS_DETAIL_BALANCE_CONFIG_REFRESH_STAGGER;
+        self.bms_next_gauging_status_refresh_at = now + BMS_DETAIL_GAUGING_STATUS_REFRESH_STAGGER;
     }
 
     fn apply_bms_detail_snapshot(&mut self, snapshot: &Bq40z50Snapshot) {
@@ -3611,8 +3638,18 @@ where
         let balance_mask = detail_bms_balance_mask(snapshot);
         let balance_config = snapshot.balance_config;
         let balance_cfg_match = balance_config.map(bq40_balance_config_matches_mainboard);
+        let (charge_ready, charge_reason) = bq40_decode_charge_path(snapshot.op_status);
+        let (discharge_ready, discharge_reason) = bq40_decode_discharge_path(snapshot.op_status);
+        let primary_reason = bq40_primary_reason(
+            snapshot.batt_status,
+            snapshot.op_status,
+            charge_reason,
+            discharge_reason,
+        );
         detail.cell_mv = snapshot.cell_mv.map(Some);
         detail.cell_temp_c = detail_bms_cell_sensor_temps(snapshot);
+        detail.remcap_mah = Some(snapshot.remcap);
+        detail.fcc_mah = Some(snapshot.fcc);
         detail.balance_enabled = balance_config.map(|config| config.cb());
         detail.balance_cfg_match = balance_cfg_match;
         detail.balance_active = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CB);
@@ -3620,9 +3657,22 @@ where
         detail.balance_cell = detail_bms_single_balance_cell(balance_mask);
         detail.battery_energy_mwh = detail_bms_energy_mwh(snapshot);
         detail.battery_full_capacity_mwh = detail_bms_full_capacity_mwh(snapshot);
+        detail.charge_ready = charge_ready;
+        detail.discharge_ready = discharge_ready;
+        detail.xchg = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::XCHG);
+        detail.xdsg = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::XDSG);
         detail.charge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CHG);
         detail.discharge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::DSG);
         detail.precharge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::PCHG);
+        detail.learn_qen = bq40_mac_bit(snapshot.gauging_status, bq40z50::gauging_status::QEN);
+        detail.learn_vok = bq40_mac_bit(snapshot.gauging_status, bq40z50::gauging_status::VOK);
+        detail.learn_rest = bq40_mac_bit(snapshot.gauging_status, bq40z50::gauging_status::REST);
+        detail.fc = bms_detail_gauging_flag(snapshot.gauging_status, bq40z50::gauging_status::FC);
+        detail.fd = bms_detail_gauging_flag(snapshot.gauging_status, bq40z50::gauging_status::FD);
+        detail.pf = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::PF);
+        detail.rca_alarm = Some((snapshot.batt_status & bq40z50::battery_status::RCA) != 0);
+        detail.reason_key = Some(primary_reason);
+        detail.reason_label = Some(detail_bms_reason_label(primary_reason));
         detail.board_temp_c = detail_bms_board_temp_c(snapshot);
         detail.battery_temp_c = detail_battery_temp_c(snapshot);
         detail.cells_notice = match balance_cfg_match {
@@ -3631,6 +3681,7 @@ where
             None => Some("BAL CFG PENDING"),
         };
         detail.battery_notice = Some("LIVE DATA");
+        detail.bms_notice = Some("LIVE DATA");
     }
 
     fn clear_charger_detail_snapshot(&mut self) {
@@ -5573,6 +5624,7 @@ where
             da_status2: None,
             filter_capacity: None,
             balance_config: None,
+            gauging_status: None,
             afe_register: None,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
@@ -5606,6 +5658,7 @@ where
             da_status2: None,
             filter_capacity: None,
             balance_config: None,
+            gauging_status: None,
             afe_register: None,
             cell_mv: [0; 4],
         })
@@ -5649,6 +5702,7 @@ where
             da_status2: None,
             filter_capacity: None,
             balance_config: None,
+            gauging_status: None,
             afe_register: None,
             cell_mv: [0; 4],
         })
@@ -9244,6 +9298,15 @@ where
             }
             self.bms_next_balance_config_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
         }
+        let mut gauging_status = self.bms_cached_gauging_status;
+        if now >= self.bms_next_gauging_status_refresh_at {
+            spin_delay(BMS_ACTIVATION_WORD_GAP);
+            if let Ok(snapshot) = bq40z50::read_gauging_status(&mut self.i2c, addr) {
+                gauging_status = snapshot;
+                self.bms_cached_gauging_status = snapshot;
+            }
+            self.bms_next_gauging_status_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
+        }
         let afe_register = if matches!(
             bq40_op_bit(op_status, bq40z50::operation_status::CB),
             Some(true)
@@ -9268,6 +9331,7 @@ where
             da_status2,
             filter_capacity,
             balance_config,
+            gauging_status,
             afe_register,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
@@ -9412,6 +9476,7 @@ struct Bq40z50Snapshot {
     da_status2: Option<bq40z50::DaStatus2>,
     filter_capacity: Option<bq40z50::FilterCapacity>,
     balance_config: Option<bq40z50::BalanceConfig>,
+    gauging_status: Option<u32>,
     afe_register: Option<bq40z50::AfeRegister>,
     cell_mv: [u16; 4],
 }
