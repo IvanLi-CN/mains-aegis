@@ -1,3 +1,6 @@
+#[path = "build_support/wifi_env.rs"]
+mod wifi_env;
+
 use std::path::{Path, PathBuf};
 
 fn main() {
@@ -78,6 +81,17 @@ fn main() {
         "cargo:rustc-env=FW_BUILD_ID={}-{}-{}",
         git_sha, git_dirty, src_hash_hex
     );
+
+    let repo_root = manifest_dir.parent().map(Path::to_path_buf);
+    if let Some(repo_root) = repo_root.as_deref() {
+        for env_path in wifi_env::candidate_env_paths(repo_root) {
+            emit_rerun_if_exists(&env_path);
+        }
+    }
+    for key in wifi_env::WIFI_ENV_KEYS {
+        println!("cargo:rerun-if-env-changed={}", key);
+    }
+    emit_wifi_env(repo_root.as_deref());
 
     // Only apply embedded linker scripts when building for Xtensa.
     //
@@ -184,5 +198,22 @@ fn git_dirty_state(manifest_dir: &Path) -> &'static str {
             }
         }
         _ => "unknown",
+    }
+}
+
+fn emit_wifi_env(repo_root: Option<&Path>) {
+    let cfg = wifi_env::WifiEnvConfig::from_sources(repo_root);
+    let net_http_enabled = std::env::var_os("CARGO_FEATURE_NET_HTTP").is_some();
+    if net_http_enabled {
+        if let Err(err) = cfg.require_station_credentials() {
+            eprintln!("error: {}", err);
+            std::process::exit(1);
+        }
+    }
+
+    for key in wifi_env::WIFI_ENV_KEYS {
+        if let Some(value) = cfg.get(key) {
+            println!("cargo:rustc-env={}={}", key, value);
+        }
     }
 }

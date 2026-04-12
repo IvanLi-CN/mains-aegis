@@ -9,6 +9,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
+net_http = []
 no-pd-sink-5v = []
 no-pd-sink-9v = []
 no-pd-sink-12v = []
@@ -20,5 +21,6 @@ no-pps = []
 defmt = "1.0.1"
 embedded-graphics-core = "0.4.1"
 embedded-hal = "1"
+heapless = "0.8"
 ina3221-async = { path = "../../ina3221-async", features = ["defmt"] }
 u8g2-fonts = { version = "0.7.2", default-features = false }
