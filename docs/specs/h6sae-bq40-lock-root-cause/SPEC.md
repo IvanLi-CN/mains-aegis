@@ -162,6 +162,12 @@ None
   - `/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260412_232036.mon.ndjson` 已证明新固件在 runtime 中产生了 `policy_term_target_ma=Some(80)`。
   - `/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260412_233444.mon.ndjson` 已进一步证明该对齐值在 `LOCK` 态也真正落到了 charger 寄存器：同一段日志里同时出现 `policy_term_target_ma=Some(80)`、`iterm_ma=Some(80)`、`applied_iterm_ma=Some(80)` 与 `term_ctrl=Some(58114)`。
   - 同一份最新 monitor 也确认 pack 仍处于 `rsoc_pct=97`、`SafetyStatus[OC]=1`、`XCHG=1`、`VCT=false`、`No Valid Charge Term=2` 的旧失败态，因此当前硬 blocker 已经收窄为：必须先获得一次 `<90%` 解锁基线，才能完成 M3/M5 的闭环复验。
+- `/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260412_233444.mon.ndjson` 的后续观测显示，当 pack 降到 `rsoc_pct=80` 后，旧 `OC` 已清除（`safety_status=0`、`oc=false`），但 `ChargingStatus raw=0x1820` 同时出现 `HT=true`、`HV=true`、`IN=true`，并继续维持 `OperationStatus[XCHG]=1`、`CHG FET=false`。同段 `bms_diag_temp` 里 `t3_c_x10=301`、`t4_c_x10=551`、`hysteresis_c_x10=10`，而实时温度只有 `31.7~32.5°C`；这证明当前 pack 的起充高温门槛过低，新的前置 blocker 是 `HT -> Charge Inhibit` 而不是 `OC`。
+- 基于上述 live evidence，本轮额外把 live DF 主板基线的充电温区参数调整为：
+  - `T3 Temp: 30.1°C -> 40.0°C`
+  - `T4 Temp: 55.1°C -> 55.0°C`
+  - `Hysteresis Temp: 1.0°C -> 2.0°C`
+  目的不是掩盖 `OC`，而是去掉 `30°C` 环境下就被 `HT/IN` 禁充的错误前置 blocker，使后续闭环复验能够在合理环境温度下继续推进。
 
 ## 计划资产（Plan assets）
 
@@ -205,6 +211,7 @@ None
 - 2026-04-13: 新建 spec，冻结 `LOCK` 根因锁定与修复的证据门、分流规则与快车道收口条件。
 - 2026-04-13: 完成 `0x55` 原始块读与 BQ40/BQ25792 低频诊断观测补强，并通过主机侧验证。
 - 2026-04-13: 依据 live failure evidence 命中 `termination` 分流门；实施 `BQ40 Current at EoC -> BQ25792 ITERM` 对齐修复，并完成 clean build 上板验证。
+- 2026-04-13: 依据后续 live evidence 补充确认 `HT -> IN -> XCHG` 是新的前置 blocker，并把 live DF 主板基线的起充高温门槛上调到 `40°C`、回差上调到 `2°C`。
 
 ## 参考（References）
 
