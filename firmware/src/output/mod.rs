@@ -8351,6 +8351,7 @@ where
             }
         };
         let charge_policy_now_ms = self.fan_now_ms();
+        let charger_chg_stat = bq25792::status1::chg_stat(status1);
         let charge_policy_decision = if activation_pending {
             None
         } else {
@@ -8373,9 +8374,10 @@ where
                     output_power_w10,
                     telemetry: charge_policy_telemetry,
                     charger_done: matches!(
-                        audio_charge_phase_from_chg_stat(bq25792::status1::chg_stat(status1)),
+                        audio_charge_phase_from_chg_stat(charger_chg_stat),
                         AudioChargePhase::Completed
                     ),
+                    charger_taper_cv: charger_chg_stat == 4,
                 },
             ))
         };

@@ -20,9 +20,11 @@ use super::{
 
 const BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED: bool = false;
 const CHARGE_POLICY_NORMAL_ICHG_MA: u16 = 500;
+const CHARGE_POLICY_TOPOFF_ICHG_MA: u16 = 200;
 const CHARGE_POLICY_DC_DERATED_ICHG_MA: u16 = 100;
 const CHARGE_POLICY_START_RSOC_PCT: u16 = 80;
 const CHARGE_POLICY_START_CELL_MIN_MV: u16 = 3_700;
+const CHARGE_POLICY_TOPOFF_RSOC_PCT: u16 = 99;
 const CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA: i32 = 3_000;
 const CHARGE_POLICY_DC_DERATE_EXIT_IBUS_MA: i32 = 2_700;
 const CHARGE_POLICY_DC_DERATE_ENTER_HOLD: Duration = Duration::from_secs(1);
@@ -287,6 +289,7 @@ pub(super) enum ChargePolicyState {
     BlockedNoBms,
     IdleWaitThreshold,
     Charging500mA,
+    ChargingTopoff200mA,
     Charging100mADcDerated,
     FullLatched,
 }
@@ -315,6 +318,7 @@ impl ChargePolicyState {
             Self::BlockedNoBms => "blocked_no_bms",
             Self::IdleWaitThreshold => "idle_wait_threshold",
             Self::Charging500mA => "charging_500ma",
+            Self::ChargingTopoff200mA => "charging_topoff_200ma",
             Self::Charging100mADcDerated => "charging_100ma_dc_derated",
             Self::FullLatched => "full_latched",
         }
@@ -328,13 +332,17 @@ impl ChargePolicyState {
             Self::BlockedNoBms => "LOCK",
             Self::IdleWaitThreshold => "WAIT",
             Self::Charging500mA => "CHG500",
+            Self::ChargingTopoff200mA => "CHG500",
             Self::Charging100mADcDerated => "CHG100",
             Self::FullLatched => "FULL",
         }
     }
 
     pub(super) const fn charger_active(self) -> bool {
-        matches!(self, Self::Charging500mA | Self::Charging100mADcDerated)
+        matches!(
+            self,
+            Self::Charging500mA | Self::ChargingTopoff200mA | Self::Charging100mADcDerated
+        )
     }
 }
 
@@ -541,6 +549,7 @@ pub(super) struct ChargePolicyInput {
     pub(super) output_power_w10: Option<u32>,
     pub(super) telemetry: Option<ChargePolicyTelemetry>,
     pub(super) charger_done: bool,
+    pub(super) charger_taper_cv: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -706,13 +715,24 @@ pub(super) fn charge_policy_step(
         input.ibus_ma,
     );
 
+    let topoff_active = !derate.derated
+        && input.charger_taper_cv
+        && input.telemetry.is_some_and(|telemetry| {
+            telemetry.rsoc_pct >= CHARGE_POLICY_TOPOFF_RSOC_PCT
+                && telemetry.charge_ready
+                && !telemetry.bms_full
+        });
     let state = if derate.derated {
         ChargePolicyState::Charging100mADcDerated
+    } else if topoff_active {
+        ChargePolicyState::ChargingTopoff200mA
     } else {
         ChargePolicyState::Charging500mA
     };
     let target_ichg_ma = Some(if derate.derated {
         CHARGE_POLICY_DC_DERATED_ICHG_MA
+    } else if topoff_active {
+        CHARGE_POLICY_TOPOFF_ICHG_MA
     } else {
         CHARGE_POLICY_NORMAL_ICHG_MA
     });
@@ -1651,6 +1671,10 @@ mod tests {
             "CHG500"
         );
         assert_eq!(
+            detail_charger_status_text(ChargePolicyState::ChargingTopoff200mA),
+            "CHG500"
+        );
+        assert_eq!(
             detail_charger_status_text(ChargePolicyState::Charging100mADcDerated),
             "CHG100"
         );
@@ -1702,6 +1726,7 @@ mod tests {
             output_power_w10: Some(0),
             telemetry,
             charger_done: false,
+            charger_taper_cv: false,
         }
     }
 
@@ -1761,6 +1786,27 @@ mod tests {
         assert_eq!(decision.state, ChargePolicyState::Charging500mA);
         assert_eq!(decision.start_reason, Some(ChargeStartReason::CellLow));
         assert!(memory.charge_latched);
+    }
+
+    #[test]
+    fn charge_policy_enters_topoff_current_when_taper_cv_and_rsoc_is_99() {
+        let mut memory = ChargePolicyMemory::default();
+        memory.charge_latched = true;
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+
+        let mut input = policy_input(
+            Some(policy_telemetry(99, CHARGE_POLICY_START_CELL_MIN_MV)),
+            Some(DashboardInputSource::UsbC),
+            Some(1_000),
+        );
+        input.charger_taper_cv = true;
+
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 0, input);
+
+        assert_eq!(decision.state, ChargePolicyState::ChargingTopoff200mA);
+        assert!(decision.allow_charge);
+        assert_eq!(decision.target_ichg_ma, Some(CHARGE_POLICY_TOPOFF_ICHG_MA));
     }
 
     #[test]
