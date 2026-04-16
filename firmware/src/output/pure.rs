@@ -25,6 +25,7 @@ const CHARGE_POLICY_DC_DERATED_ICHG_MA: u16 = 100;
 const CHARGE_POLICY_START_RSOC_PCT: u16 = 80;
 const CHARGE_POLICY_START_CELL_MIN_MV: u16 = 3_700;
 const CHARGE_POLICY_TOPOFF_RSOC_PCT: u16 = 99;
+const CHARGE_POLICY_TOPOFF_CELL_MAX_MV: u16 = 4140;
 const CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA: i32 = 3_000;
 const CHARGE_POLICY_DC_DERATE_EXIT_IBUS_MA: i32 = 2_700;
 const CHARGE_POLICY_DC_DERATE_ENTER_HOLD: Duration = Duration::from_secs(1);
@@ -533,6 +534,7 @@ impl ChargePolicyDerateTracker {
 pub(super) struct ChargePolicyTelemetry {
     pub(super) rsoc_pct: u16,
     pub(super) cell_min_mv: u16,
+    pub(super) cell_max_mv: u16,
     pub(super) charge_ready: bool,
     pub(super) bms_full: bool,
 }
@@ -716,11 +718,12 @@ pub(super) fn charge_policy_step(
     );
 
     let topoff_active = !derate.derated
-        && input.charger_taper_cv
         && input.telemetry.is_some_and(|telemetry| {
             telemetry.rsoc_pct >= CHARGE_POLICY_TOPOFF_RSOC_PCT
                 && telemetry.charge_ready
                 && !telemetry.bms_full
+                && (input.charger_taper_cv
+                    || telemetry.cell_max_mv >= CHARGE_POLICY_TOPOFF_CELL_MAX_MV)
         });
     let state = if derate.derated {
         ChargePolicyState::Charging100mADcDerated
@@ -971,6 +974,10 @@ pub(super) fn detail_battery_temp_c(snapshot: &Bq40z50Snapshot) -> Option<i16> {
 
 pub(super) fn bq40_cell_min_mv(snapshot: &Bq40z50Snapshot) -> u16 {
     snapshot.cell_mv.into_iter().min().unwrap_or_default()
+}
+
+pub(super) fn bq40_cell_max_mv(snapshot: &Bq40z50Snapshot) -> u16 {
+    snapshot.cell_mv.into_iter().max().unwrap_or_default()
 }
 
 pub(super) fn detail_da_status2_temp_c(temp_k_x10: u16) -> Option<i16> {
@@ -1730,10 +1737,15 @@ mod tests {
         }
     }
 
-    fn policy_telemetry(rsoc_pct: u16, cell_min_mv: u16) -> ChargePolicyTelemetry {
+    fn policy_telemetry(
+        rsoc_pct: u16,
+        cell_min_mv: u16,
+        cell_max_mv: u16,
+    ) -> ChargePolicyTelemetry {
         ChargePolicyTelemetry {
             rsoc_pct,
             cell_min_mv,
+            cell_max_mv,
             charge_ready: true,
             bms_full: false,
         }
@@ -1751,7 +1763,7 @@ mod tests {
             &mut output_load,
             0,
             policy_input(
-                Some(policy_telemetry(79, CHARGE_POLICY_START_CELL_MIN_MV)),
+                Some(policy_telemetry(79, CHARGE_POLICY_START_CELL_MIN_MV, 4000)),
                 Some(DashboardInputSource::UsbC),
                 Some(1_000),
             ),
@@ -1777,7 +1789,7 @@ mod tests {
             &mut output_load,
             0,
             policy_input(
-                Some(policy_telemetry(90, 3_650)),
+                Some(policy_telemetry(90, 3_650, 3900)),
                 Some(DashboardInputSource::UsbC),
                 Some(1_000),
             ),
@@ -1796,11 +1808,39 @@ mod tests {
         let mut output_load = ChargePolicyOutputLoadTracker::default();
 
         let mut input = policy_input(
-            Some(policy_telemetry(99, CHARGE_POLICY_START_CELL_MIN_MV)),
+            Some(policy_telemetry(
+                99,
+                CHARGE_POLICY_START_CELL_MIN_MV,
+                CHARGE_POLICY_TOPOFF_CELL_MAX_MV,
+            )),
             Some(DashboardInputSource::UsbC),
             Some(1_000),
         );
         input.charger_taper_cv = true;
+
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 0, input);
+
+        assert_eq!(decision.state, ChargePolicyState::ChargingTopoff200mA);
+        assert!(decision.allow_charge);
+        assert_eq!(decision.target_ichg_ma, Some(CHARGE_POLICY_TOPOFF_ICHG_MA));
+    }
+
+    #[test]
+    fn charge_policy_enters_topoff_before_taper_cv_when_rsoc_is_99_and_cell_max_is_high() {
+        let mut memory = ChargePolicyMemory::default();
+        memory.charge_latched = true;
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+
+        let input = policy_input(
+            Some(policy_telemetry(
+                99,
+                CHARGE_POLICY_START_CELL_MIN_MV,
+                CHARGE_POLICY_TOPOFF_CELL_MAX_MV,
+            )),
+            Some(DashboardInputSource::UsbC),
+            Some(1_000),
+        );
 
         let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 0, input);
 
@@ -1821,7 +1861,7 @@ mod tests {
             &mut output_load,
             0,
             policy_input(
-                Some(policy_telemetry(95, 3_900)),
+                Some(policy_telemetry(95, 3_900, 4000)),
                 Some(DashboardInputSource::UsbC),
                 Some(0),
             ),
@@ -1847,7 +1887,7 @@ mod tests {
             &mut output_load,
             0,
             policy_input(
-                Some(policy_telemetry(95, 4_050)),
+                Some(policy_telemetry(95, 4_050, 4_050)),
                 Some(DashboardInputSource::UsbC),
                 Some(200),
             ),
@@ -1860,7 +1900,7 @@ mod tests {
             &mut output_load,
             100,
             policy_input(
-                Some(policy_telemetry(95, 4_050)),
+                Some(policy_telemetry(95, 4_050, 4_050)),
                 Some(DashboardInputSource::UsbC),
                 Some(200),
             ),
@@ -1875,7 +1915,7 @@ mod tests {
             ChargePolicyInput {
                 charger_done: true,
                 ..policy_input(
-                    Some(policy_telemetry(95, 4_050)),
+                    Some(policy_telemetry(95, 4_050, 4_050)),
                     Some(DashboardInputSource::UsbC),
                     Some(200),
                 )
@@ -1902,7 +1942,7 @@ mod tests {
             &mut output_load,
             0,
             policy_input(
-                Some(policy_telemetry(90, 3_950)),
+                Some(policy_telemetry(90, 3_950, 3_950)),
                 Some(DashboardInputSource::UsbC),
                 Some(0),
             ),
@@ -1915,7 +1955,7 @@ mod tests {
             &mut output_load,
             100,
             policy_input(
-                Some(policy_telemetry(79, 3_950)),
+                Some(policy_telemetry(79, 3_950, 3_950)),
                 Some(DashboardInputSource::UsbC),
                 Some(900),
             ),
@@ -1934,7 +1974,7 @@ mod tests {
         let mut derate = ChargePolicyDerateTracker::default();
         let mut output_load = ChargePolicyOutputLoadTracker::default();
         let input = policy_input(
-            Some(policy_telemetry(79, 3_850)),
+            Some(policy_telemetry(79, 3_850, 3_850)),
             Some(DashboardInputSource::DcIn),
             Some(3_200),
         );
@@ -1965,7 +2005,7 @@ mod tests {
         };
         let mut output_load = ChargePolicyOutputLoadTracker::default();
         let input = policy_input(
-            Some(policy_telemetry(79, 3_850)),
+            Some(policy_telemetry(79, 3_850, 3_850)),
             Some(DashboardInputSource::DcIn),
             Some(2_600),
         );
@@ -1998,7 +2038,7 @@ mod tests {
             &mut output_load,
             5_000,
             policy_input(
-                Some(policy_telemetry(79, 3_850)),
+                Some(policy_telemetry(79, 3_850, 3_850)),
                 Some(DashboardInputSource::Auto),
                 Some(3_500),
             ),
@@ -2057,7 +2097,7 @@ mod tests {
                 output_enabled: true,
                 output_power_w10: Some(CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10 + 1),
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::DcIn),
                     Some(1_000),
                 )
@@ -2076,7 +2116,7 @@ mod tests {
                 output_enabled: true,
                 output_power_w10: Some(CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10 + 1),
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::DcIn),
                     Some(1_000),
                 )
@@ -2100,7 +2140,7 @@ mod tests {
         let mut derate = ChargePolicyDerateTracker::default();
         let mut output_load = ChargePolicyOutputLoadTracker::default();
         let mut high_input = policy_input(
-            Some(policy_telemetry(79, 3_850)),
+            Some(policy_telemetry(79, 3_850, 3_850)),
             Some(DashboardInputSource::DcIn),
             Some(1_000),
         );
@@ -2153,7 +2193,7 @@ mod tests {
                 output_enabled: true,
                 output_power_w10: None,
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::UsbC),
                     Some(1_000),
                 )
@@ -2168,7 +2208,7 @@ mod tests {
         assert_eq!(output_load.exit_streak, 0);
 
         let mut low_input = policy_input(
-            Some(policy_telemetry(79, 3_850)),
+            Some(policy_telemetry(79, 3_850, 3_850)),
             Some(DashboardInputSource::UsbC),
             Some(1_000),
         );
@@ -2205,7 +2245,7 @@ mod tests {
                 output_enabled: true,
                 output_power_w10: None,
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::UsbC),
                     Some(1_000),
                 )
@@ -2240,7 +2280,7 @@ mod tests {
                 output_enabled: false,
                 output_power_w10: None,
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::UsbC),
                     Some(1_000),
                 )
@@ -2271,7 +2311,7 @@ mod tests {
             ChargePolicyInput {
                 input_present: false,
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::UsbC),
                     Some(1_000),
                 )
@@ -2293,7 +2333,7 @@ mod tests {
             ChargePolicyInput {
                 ts_hot: true,
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::UsbC),
                     Some(1_000),
                 )

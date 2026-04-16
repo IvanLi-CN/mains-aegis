@@ -2721,6 +2721,7 @@ pub struct PowerManager<'d, I2C> {
     bms_charge_ready: Option<bool>,
     bms_full: Option<bool>,
     bms_cell_min_mv: Option<u16>,
+    bms_cell_max_mv: Option<u16>,
     chg_last_int_poll_at: Option<Instant>,
     bms_activation_state: BmsActivationState,
     bms_activation_phase: BmsActivationPhase,
@@ -3187,6 +3188,7 @@ where
             bms_charge_ready: None,
             bms_full: None,
             bms_cell_min_mv: None,
+            bms_cell_max_mv: None,
             chg_last_int_poll_at: None,
             bms_activation_state: BmsActivationState::Idle,
             bms_activation_phase: BmsActivationPhase::WakeProbe,
@@ -3770,6 +3772,7 @@ where
         self.bms_charge_ready = None;
         self.bms_full = None;
         self.bms_cell_min_mv = None;
+        self.bms_cell_max_mv = None;
         self.charge_policy.charge_latched = false;
         self.charge_policy_derate.reset();
         self.charge_policy_output_load.reset();
@@ -8334,15 +8337,21 @@ where
             match (
                 self.ui_snapshot.bq40z50_soc_pct,
                 self.bms_cell_min_mv,
+                self.bms_cell_max_mv,
                 self.bms_charge_ready,
                 self.bms_full,
             ) {
-                (Some(rsoc_pct), Some(cell_min_mv), Some(charge_ready), Some(bms_full))
-                    if self.ui_snapshot.bq40z50_no_battery != Some(true) =>
-                {
+                (
+                    Some(rsoc_pct),
+                    Some(cell_min_mv),
+                    Some(cell_max_mv),
+                    Some(charge_ready),
+                    Some(bms_full),
+                ) if self.ui_snapshot.bq40z50_no_battery != Some(true) => {
                     Some(ChargePolicyTelemetry {
                         rsoc_pct,
                         cell_min_mv,
+                        cell_max_mv,
                         charge_ready,
                         bms_full,
                     })
@@ -9187,6 +9196,7 @@ where
                     self.bms_charge_ready = bq40_decode_charge_path(s.op_status).0;
                     self.bms_full = Some((s.batt_status & bq40z50::battery_status::FC) != 0);
                     self.bms_cell_min_mv = Some(bq40_cell_min_mv(&s));
+                    self.bms_cell_max_mv = Some(bq40_cell_max_mv(&s));
                     self.apply_bms_detail_snapshot(&s);
                     let protection_active = bq40_protection_active(s.batt_status, s.op_status);
                     self.bms_audio = BmsAudioState {
