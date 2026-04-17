@@ -8977,6 +8977,8 @@ where
         self.ui_snapshot.fusb302_vbus_present =
             usb_pd_vbus_present(self.usb_pd_state.vbus_present, ac1_present);
         self.ui_snapshot.dashboard_detail.input_source = input_source;
+        self.ui_snapshot.dashboard_detail.charger_protocol =
+            charger_protocol_from_usb_pd(input_source, self.usb_pd_state);
         self.ui_snapshot.dashboard_detail.charger_active = Some(
             if force_allow_charge
                 || self.manual_charge_runtime.active

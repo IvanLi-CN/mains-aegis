@@ -225,6 +225,7 @@ const BMS_DF_ADDR_AFE_PROTECTION_CONTROL: u16 = 0x4A80;
 const BMS_DF_ADDR_CHARGE_TEMP_T3: u16 = 0x4A13;
 const BMS_DF_ADDR_CHARGE_TEMP_T4: u16 = 0x4A15;
 const BMS_DF_ADDR_CHARGE_TEMP_HYSTERESIS: u16 = 0x4A17;
+const BMS_DF_ADDR_CHARGE_TERM_VOLTAGE: u16 = 0x4A71;
 const BMS_DF_ADDR_OCC1_THRESHOLD: u16 = 0x495E;
 const BMS_DF_ADDR_OCC1_DELAY: u16 = 0x4960;
 const BMS_DF_ADDR_OCC2_THRESHOLD: u16 = 0x4961;
@@ -393,6 +394,11 @@ const BMS_DF_CHARGE_TEMP_T4_MAINBOARD_K_X10: u16 = 3281; // 55.0 °C
     feature = "bms-live-df-mainboard"
 ))]
 const BMS_DF_CHARGE_TEMP_HYSTERESIS_MAINBOARD_DK_X10: u16 = 20; // 2.0 °C delta
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_CHARGE_TERM_VOLTAGE_MAINBOARD_MV: u16 = 100;
 const BMS_DF_REPLY_LEN_WITH_ADDR: u8 = 34;
 const BMS_MFG_STATUS_CAL_TEST: u32 = 1 << 15;
 const BMS_MFG_STATUS_GAUGE_EN: u32 = 1 << 3;
@@ -504,7 +510,7 @@ impl BmsDfLiveFieldTarget {
 }
 
 #[cfg(feature = "bms-live-df-mainboard")]
-const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 21] = [
+const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 22] = [
     BmsDfLiveFieldTarget::byte(
         "balancing_configuration",
         BMS_DF_ADDR_BALANCING_CONFIGURATION,
@@ -539,6 +545,11 @@ const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 21] = [
         "charge_temp_hysteresis",
         BMS_DF_ADDR_CHARGE_TEMP_HYSTERESIS,
         BMS_DF_CHARGE_TEMP_HYSTERESIS_MAINBOARD_DK_X10,
+    ),
+    BmsDfLiveFieldTarget::u16(
+        "charge_term_voltage",
+        BMS_DF_ADDR_CHARGE_TERM_VOLTAGE,
+        BMS_DF_CHARGE_TERM_VOLTAGE_MAINBOARD_MV,
     ),
     BmsDfLiveFieldTarget::i16(
         "occ1_threshold",

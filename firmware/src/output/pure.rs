@@ -1,6 +1,7 @@
 use crate::front_panel_scene::{
-    is_bq40_activation_needed, BmsRecoveryUiAction, BmsResultKind, DashboardInputSource,
-    ManualChargeSpeed, ManualChargeStopReason, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+    is_bq40_activation_needed, BmsRecoveryUiAction, BmsResultKind, DashboardChargerProtocol,
+    DashboardInputSource, ManualChargeSpeed, ManualChargeStopReason, SelfCheckCommState,
+    SelfCheckUiSnapshot, UpsMode,
 };
 use esp_firmware::bq40z50;
 use esp_firmware::fan;
@@ -75,6 +76,37 @@ pub(super) fn dashboard_input_source_name(source: Option<DashboardInputSource>) 
         Some(DashboardInputSource::UsbC) => "usbc",
         Some(DashboardInputSource::Auto) => "auto",
         None => "none",
+    }
+}
+
+pub(super) fn charger_protocol_from_usb_pd(
+    input_source: Option<DashboardInputSource>,
+    state: usb_pd::UsbPdPortState,
+) -> Option<DashboardChargerProtocol> {
+    match input_source {
+        Some(DashboardInputSource::DcIn) => Some(DashboardChargerProtocol::DcIn),
+        Some(DashboardInputSource::UsbC) | Some(DashboardInputSource::Auto) => {
+            if !state.attached {
+                return Some(DashboardChargerProtocol::NoCc);
+            }
+
+            if let Some(contract) = state.contract {
+                return Some(match contract.kind {
+                    usb_pd::ContractKind::Pps => DashboardChargerProtocol::Pps,
+                    usb_pd::ContractKind::Fixed if contract.voltage_mv <= 5_500 => {
+                        DashboardChargerProtocol::Usb5V
+                    }
+                    usb_pd::ContractKind::Fixed => DashboardChargerProtocol::PdFixed,
+                });
+            }
+
+            if matches!(state.vbus_present, Some(true)) {
+                Some(DashboardChargerProtocol::SourceCapsUnknown)
+            } else {
+                Some(DashboardChargerProtocol::NoCc)
+            }
+        }
+        None => None,
     }
 }
 
@@ -1364,6 +1396,66 @@ mod tests {
             Some(DashboardInputSource::Auto)
         );
         assert_eq!(detail_input_source(false, false, false), None);
+    }
+
+    #[test]
+    fn charger_protocol_reports_pps_contract() {
+        let state = usb_pd::UsbPdPortState {
+            attached: true,
+            vbus_present: Some(true),
+            contract: Some(usb_pd::ActiveContract {
+                kind: usb_pd::ContractKind::Pps,
+                object_position: 1,
+                voltage_mv: 16_000,
+                current_ma: 1_000,
+                source_max_current_ma: 3_000,
+                input_current_limit_ma: Some(2_000),
+                vindpm_mv: Some(15_500),
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            charger_protocol_from_usb_pd(Some(DashboardInputSource::UsbC), state),
+            Some(DashboardChargerProtocol::Pps)
+        );
+    }
+
+    #[test]
+    fn charger_protocol_reports_5v_fallback_when_fixed_contract_is_usb_level() {
+        let state = usb_pd::UsbPdPortState {
+            attached: true,
+            vbus_present: Some(true),
+            contract: Some(usb_pd::ActiveContract {
+                kind: usb_pd::ContractKind::Fixed,
+                object_position: 1,
+                voltage_mv: 5_000,
+                current_ma: 500,
+                source_max_current_ma: 3_000,
+                input_current_limit_ma: Some(500),
+                vindpm_mv: Some(4_500),
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            charger_protocol_from_usb_pd(Some(DashboardInputSource::UsbC), state),
+            Some(DashboardChargerProtocol::Usb5V)
+        );
+    }
+
+    #[test]
+    fn charger_protocol_reports_uncaptured_caps_when_attached_without_contract() {
+        let state = usb_pd::UsbPdPortState {
+            attached: true,
+            vbus_present: Some(true),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            charger_protocol_from_usb_pd(Some(DashboardInputSource::UsbC), state),
+            Some(DashboardChargerProtocol::SourceCapsUnknown)
+        );
     }
 
     #[test]

@@ -22,6 +22,19 @@ pub struct ActiveContract {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UsbPdPortState {
+    pub enabled: bool,
+    pub controller_ready: bool,
+    pub attached: bool,
+    pub charge_ready: bool,
+    pub vbus_present: Option<bool>,
+    pub contract: Option<ActiveContract>,
+    pub input_current_limit_ma: Option<u16>,
+    pub vindpm_mv: Option<u16>,
+    pub unsafe_source_latched: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UsbPdPowerDemand {
     pub requested_charge_voltage_mv: u16,
     pub requested_charge_current_ma: u16,
