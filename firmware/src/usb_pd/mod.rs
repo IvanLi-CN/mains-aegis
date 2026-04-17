@@ -13,6 +13,7 @@ const PHY_POLL_INTERVAL_MS: u32 = 250;
 const ERROR_RETRY_INTERVAL_MS: u32 = 1_000;
 const SOURCE_CAPS_WAIT_TIMEOUT_MS: u32 = 3_000;
 const SOURCE_CAPS_REQUERY_DELAY_MS: u32 = 1_000;
+const SOURCE_CAPS_REQUERY_RETRY_MS: u32 = 5_000;
 const SOURCE_CAPS_RECOVERY_RETRY_MS: u32 = 5_000;
 const VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const CHARGER_VBUS_PRESENT_THRESHOLD_MV: u16 = 4_500;
@@ -81,11 +82,11 @@ pub struct UsbPdSinkManager<I2C> {
     last_request_at_ms: u32,
     attached_at_ms: Option<u32>,
     source_caps_recovery_attempted: bool,
+    last_source_caps_requery_at_ms: Option<u32>,
     message_id: u8,
     tx_spec_revision: SpecRevision,
     peer_spec_revision: SpecRevision,
     source_capabilities: Option<pd::SourceCapabilities>,
-    source_caps_requery_attempted: bool,
     last_source_caps_recovery_at_ms: Option<u32>,
     contract_tracker: ContractTracker<ActiveContract>,
     consecutive_vbus_absent_polls: u8,
@@ -255,7 +256,7 @@ where
             last_request_at_ms: 0,
             attached_at_ms: None,
             source_caps_recovery_attempted: false,
-            source_caps_requery_attempted: false,
+            last_source_caps_requery_at_ms: None,
             last_source_caps_recovery_at_ms: None,
             message_id: 0,
             tx_spec_revision: pd::FUSB302_MAX_SPEC_REVISION,
@@ -368,22 +369,31 @@ where
             self.contract_tracker.active_contract(),
         ) {
             let filtered = sink_policy::filter_source_capabilities(&source_caps);
-            if !self.source_caps_requery_attempted
-                && active_contract.kind == ContractKind::Fixed
+            if active_contract.kind == ContractKind::Fixed
                 && !filtered_source_has_pps(&filtered)
                 && !self.contract_tracker.request_in_flight()
-                && now_ms.wrapping_sub(self.last_request_at_ms) >= SOURCE_CAPS_REQUERY_DELAY_MS
+                && self.source_caps_requery_due(now_ms)
             {
-                info!(
-                    "usb_pd: probing source caps after fixed contract tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
-                    self.tx_spec_revision.bits(),
-                    self.peer_spec_revision.bits()
-                );
+                let retrying = self.last_source_caps_requery_at_ms.is_some();
+                if retrying {
+                    info!(
+                        "usb_pd: retrying source caps probe after fixed fallback retry_after_ms={=u32} tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
+                        now_ms.wrapping_sub(self.last_source_caps_requery_at_ms.unwrap_or(now_ms)),
+                        self.tx_spec_revision.bits(),
+                        self.peer_spec_revision.bits()
+                    );
+                } else {
+                    info!(
+                        "usb_pd: probing source caps after fixed contract tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
+                        self.tx_spec_revision.bits(),
+                        self.peer_spec_revision.bits()
+                    );
+                }
                 match self
                     .send_control_message(ControlMessageType::GetSourceCap, self.tx_spec_revision)
                 {
                     Ok(()) => {
-                        self.source_caps_requery_attempted = true;
+                        self.last_source_caps_requery_at_ms = Some(now_ms);
                     }
                     Err(err) => {
                         warn!(
@@ -449,10 +459,6 @@ where
 
         let first_attempt = !self.source_caps_recovery_attempted;
         if !first_attempt {
-            let retry_charge_path_active = demand.charging_enabled || self.state.charge_ready;
-            if !retry_charge_path_active {
-                return;
-            }
             let Some(last_recovery_at_ms) = self.last_source_caps_recovery_at_ms else {
                 return;
             };
@@ -485,6 +491,14 @@ where
         }
         self.source_caps_recovery_attempted = true;
         self.last_source_caps_recovery_at_ms = Some(now_ms);
+    }
+
+    fn source_caps_requery_due(&self, now_ms: u32) -> bool {
+        if let Some(last_requery_at_ms) = self.last_source_caps_requery_at_ms {
+            now_ms.wrapping_sub(last_requery_at_ms) >= SOURCE_CAPS_REQUERY_RETRY_MS
+        } else {
+            now_ms.wrapping_sub(self.last_request_at_ms) >= SOURCE_CAPS_REQUERY_DELAY_MS
+        }
     }
 
     fn maybe_arm_default_5v_charge_ready(&mut self, now_ms: u32) {
@@ -556,7 +570,7 @@ where
             self.message_id = 0;
             self.attached_at_ms = Some(now_ms);
             self.source_caps_recovery_attempted = false;
-            self.source_caps_requery_attempted = false;
+            self.last_source_caps_requery_at_ms = None;
             self.last_source_caps_recovery_at_ms = None;
             self.consecutive_vbus_absent_polls = 0;
             self.clear_contract_tracking();
@@ -706,7 +720,7 @@ where
                     self.source_capabilities = Some(source_caps);
                     self.source_caps_recovery_attempted = false;
                     if filtered_source_has_pps(&filtered) {
-                        self.source_caps_requery_attempted = true;
+                        self.last_source_caps_requery_at_ms = None;
                     }
                     if self.contract_tracker.request_in_flight() {
                         debug!("usb_pd: preserving in-flight contract across source caps refresh");
@@ -895,7 +909,7 @@ where
         self.consecutive_vbus_absent_polls = 0;
         self.attached_at_ms = None;
         self.source_caps_recovery_attempted = false;
-        self.source_caps_requery_attempted = false;
+        self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         self.tx_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
         self.peer_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
@@ -983,7 +997,7 @@ where
         self.consecutive_vbus_absent_polls = 0;
         self.attached_at_ms = None;
         self.source_caps_recovery_attempted = false;
-        self.source_caps_requery_attempted = false;
+        self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         if detach {
             self.tx_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
@@ -1204,7 +1218,6 @@ mod tests {
         manager.source_capabilities = Some(pd::SourceCapabilities::empty(SpecRevision::Rev20));
         manager.attached_at_ms = Some(1_000);
         manager.source_caps_recovery_attempted = true;
-        manager.source_caps_requery_attempted = true;
 
         manager.teardown_controller_state_on_phy_error();
 
@@ -1267,6 +1280,53 @@ mod tests {
     }
 
     #[test]
+    fn source_caps_requery_uses_initial_delay_before_first_probe() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        manager.last_request_at_ms = 0;
+
+        assert!(!manager.source_caps_requery_due(SOURCE_CAPS_REQUERY_DELAY_MS - 1));
+        assert!(manager.source_caps_requery_due(SOURCE_CAPS_REQUERY_DELAY_MS));
+    }
+
+    #[test]
+    fn source_caps_requery_uses_retry_interval_after_probe() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        manager.last_source_caps_requery_at_ms = Some(0);
+
+        assert!(!manager.source_caps_requery_due(SOURCE_CAPS_REQUERY_RETRY_MS - 1));
+        assert!(manager.source_caps_requery_due(SOURCE_CAPS_REQUERY_RETRY_MS));
+    }
+
+    #[test]
+    fn source_caps_with_pps_clears_requery_retry_timer() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        manager.last_source_caps_requery_at_ms = Some(1_234);
+
+        let message = source_caps_message(
+            SpecRevision::Rev20,
+            &[
+                fixed_pdo_raw(5_000, 3_000),
+                (0xC0000000u32
+                    | ((5_000u32 / 100) << 17)
+                    | ((18_000u32 / 100) << 8)
+                    | (3_000u32 / 50)),
+            ],
+        );
+        manager.contract_tracker.begin_request(ActiveContract {
+            kind: ContractKind::Fixed,
+            object_position: 1,
+            voltage_mv: 5_000,
+            current_ma: 500,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(500),
+            vindpm_mv: Some(4_000),
+        });
+        manager.handle_message(message, UsbPdPowerDemand::default(), 2_000);
+
+        assert_eq!(manager.last_source_caps_requery_at_ms, None);
+    }
+
+    #[test]
     fn missing_source_caps_retry_reissues_soft_reset_when_charge_path_is_active() {
         let mut manager = UsbPdSinkManager::new(NoopI2c);
         manager.state.attached = true;
@@ -1285,6 +1345,27 @@ mod tests {
         );
 
         assert_eq!(manager.message_id, 4);
+        assert_eq!(
+            manager.last_source_caps_recovery_at_ms,
+            Some(SOURCE_CAPS_RECOVERY_RETRY_MS)
+        );
+    }
+
+    #[test]
+    fn missing_source_caps_retry_reissues_soft_reset_even_when_charge_path_is_idle() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        manager.state.attached = true;
+        manager.attached_at_ms = Some(0);
+        manager.source_caps_recovery_attempted = true;
+        manager.last_source_caps_recovery_at_ms = Some(0);
+        manager.message_id = 7;
+
+        manager.maybe_recover_missing_source_caps(
+            UsbPdPowerDemand::default(),
+            SOURCE_CAPS_RECOVERY_RETRY_MS,
+        );
+
+        assert_eq!(manager.message_id, 8);
         assert_eq!(
             manager.last_source_caps_recovery_at_ms,
             Some(SOURCE_CAPS_RECOVERY_RETRY_MS)
