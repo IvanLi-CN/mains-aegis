@@ -1,13 +1,13 @@
 ---
 title: 固件烧录与首次自检
-description: 固件环境、构建口径、烧录流程与首次上电观测点。
+description: 固件环境、构建方式、烧录流程与首次上电观测点。
 ---
 
 # 固件烧录与首次自检
 
 ## 1. 推荐工作流
 
-本项目默认的人类开发者入口是 `mcu-agentd`。原因很简单：它把端口选择、烧录和 `defmt` 日志解码收拢成了一条稳定路径。
+本项目默认通过 `mcu-agentd` 完成端口选择、烧录和 `defmt` 日志解码。这条路径最稳定，也最适合 bring-up。
 
 环境准备：
 
@@ -18,7 +18,7 @@ source ~/export-esp.sh
 mcu-agentd --version
 ```
 
-## 2. 构建口径
+## 2. 构建方式
 
 ```bash
 cd firmware
@@ -28,13 +28,13 @@ cargo build --release --bin esp-firmware --features main-vout-19v
 
 | 构建方式 | 用途 |
 | --- | --- |
-| 默认无 feature | 主输出按 `12V` 口径构建 |
+| 默认无 feature | 主输出按 `12V` 方式构建 |
 | `main-vout-19v` | 主输出改成 `19V` |
 | `force-min-charge` | 诊断阶段最小电流强制充电唤醒 |
 | `bms-dual-probe-diag` | 仅用于 BMS 地址诊断 |
 | `tmp-hw-protect-test` | TMP 硬件保护测试 |
 
-`12V` 和 `19V` 是两套 bring-up 口径，烧录前先确认自己要验证哪一套。
+`12V` 和 `19V` 是两套 bring-up 设定，烧录前先确认自己要验证哪一套。
 
 ## 3. 烧录与串口日志
 
@@ -61,8 +61,9 @@ mcu-agentd monitor esp --reset
 ### 4.2 前面板侧
 
 - 屏幕点亮
-- 页面进入 `SELF CHECK`
+- 页面先进入 `SELF CHECK`
 - 模块卡片从 `PEND` 逐步转成 `OK / WARN / ERR / HOLD / N/A`
+- 如果自检结束且运行态快照已准备好，默认会切到 Dashboard，而不是长期停留在 `SELF CHECK`
 
 参考画面：
 
@@ -70,10 +71,11 @@ mcu-agentd monitor esp --reset
 
 ![BMS 缺失时的 Self-check 参考画面](/ui/self-check-c-bms-missing-tps-warn.png)
 
-读图提醒：
+这两张图分别对应两种常见情况：
 
-- 第一张更接近“链路已经打通”的 bring-up 目标。
-- 第二张更接近“上游门控未满足”的状态；此时应先追 `BQ40Z50` 和授权链，而不是先怀疑 `TPS55288` 硬件本体。
+- 第一张更接近链路已经打通时的目标画面。
+- 第二张更接近上游门控尚未满足时的状态；此时应先追 `BQ40Z50` 和授权链，而不是先怀疑 `TPS55288` 硬件本体。
+- 想顺着看完整页面，可以看 [前面板屏幕页面总览](/design/front-panel-screen-pages)。
 
 ### 4.3 输出侧
 
@@ -102,16 +104,17 @@ mcu-agentd monitor esp --reset
 
 ## 7. Bring-up 通过标准
 
-首次 bring-up 通过，不要求“所有卡片全绿”；要求的是：
+首次 bring-up 不要求“所有卡片全绿”；更重要的是：
 
 - 能稳定烧录
 - 能稳定看日志
 - 能进入 `SELF CHECK`
-- 能解释当前卡住的是哪个模块、为什么卡住
+- 能解释这次卡住的是哪个模块、为什么卡住
 
 ## 8. 相关文档
 
 - [固件 bring-up README](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/README.md)
 - [开机自检流程](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/boot-self-test-flow.md)
 - [前面板与固件](/design/front-panel-and-firmware)
+- [前面板屏幕页面总览](/design/front-panel-screen-pages)
 - [Self-check UI 设计](https://github.com/IvanLi-CN/mains-aegis/blob/main/firmware/ui/self-check-design.md)
