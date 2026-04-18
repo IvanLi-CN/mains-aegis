@@ -16,6 +16,7 @@ const SOURCE_CAPS_REQUERY_DELAY_MS: u32 = 1_000;
 const SOURCE_CAPS_REQUERY_RETRY_MS: u32 = 5_000;
 const SOURCE_CAPS_RECOVERY_RETRY_MS: u32 = 5_000;
 const VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
+const CC_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const CHARGER_VBUS_PRESENT_THRESHOLD_MV: u16 = 4_500;
 const CONTRACT_CHARGE_READY_DELAY_MS: u32 = 350;
 const DEFAULT_5V_CHARGE_READY_DELAY_MS: u32 = 500;
@@ -90,6 +91,7 @@ pub struct UsbPdSinkManager<I2C> {
     last_source_caps_recovery_at_ms: Option<u32>,
     contract_tracker: ContractTracker<ActiveContract>,
     consecutive_vbus_absent_polls: u8,
+    consecutive_cc_absent_polls: u8,
     unsafe_hard_reset_sent: bool,
     charge_ready_at_ms: Option<u32>,
 }
@@ -264,6 +266,7 @@ where
             source_capabilities: None,
             contract_tracker: ContractTracker::default(),
             consecutive_vbus_absent_polls: 0,
+            consecutive_cc_absent_polls: 0,
             unsafe_hard_reset_sent: false,
             charge_ready_at_ms: None,
         }
@@ -439,7 +442,7 @@ where
         self.state
     }
 
-    fn maybe_recover_missing_source_caps(&mut self, demand: UsbPdPowerDemand, now_ms: u32) {
+    fn maybe_recover_missing_source_caps(&mut self, _demand: UsbPdPowerDemand, now_ms: u32) {
         if !self.state.attached
             || self.state.unsafe_source_latched
             || self.source_capabilities.is_some()
@@ -524,12 +527,38 @@ where
         demand: UsbPdPowerDemand,
         now_ms: u32,
     ) {
+        let attached_polarity = snapshot.attached_sink_polarity();
         let raw_vbus_present = snapshot.vbus_present();
         let measured_input_voltage_mv = demand.measured_input_voltage_mv;
         let vbus_present = effective_vbus_present(raw_vbus_present, measured_input_voltage_mv);
         self.state.vbus_present = Some(vbus_present);
         self.consecutive_vbus_absent_polls =
             next_vbus_absent_polls(self.consecutive_vbus_absent_polls, vbus_present);
+
+        self.consecutive_cc_absent_polls = if attached_polarity.is_some() {
+            0
+        } else {
+            self.consecutive_cc_absent_polls.saturating_add(1)
+        };
+
+        if self.state.attached && attached_polarity.is_none() {
+            if self.consecutive_cc_absent_polls < CC_DETACH_DEBOUNCE_POLLS {
+                debug!(
+                    "usb_pd: cc detach debounce waiting raw_vbus_ok={=bool} vin_mv={=?} absent_polls={=u8}",
+                    raw_vbus_present,
+                    measured_input_voltage_mv,
+                    self.consecutive_cc_absent_polls
+                );
+            } else {
+                info!(
+                    "usb_pd: detached cc_lost raw_vbus_ok={=bool} vin_mv={=?}",
+                    raw_vbus_present, measured_input_voltage_mv
+                );
+                self.reset_contract_state(true);
+                let _ = self.phy.start_sink_toggle();
+                return;
+            }
+        }
 
         if self.state.attached && !vbus_present {
             if !detach_debounce_elapsed(self.consecutive_vbus_absent_polls) {
@@ -558,7 +587,7 @@ where
         }
 
         if !self.state.attached {
-            let Some(polarity) = snapshot.attached_sink_polarity() else {
+            let Some(polarity) = attached_polarity else {
                 return;
             };
             if !vbus_present {
@@ -573,6 +602,7 @@ where
             self.last_source_caps_requery_at_ms = None;
             self.last_source_caps_recovery_at_ms = None;
             self.consecutive_vbus_absent_polls = 0;
+            self.consecutive_cc_absent_polls = 0;
             self.clear_contract_tracking();
             self.source_capabilities = None;
             self.disarm_charge_ready("attach");
@@ -590,7 +620,7 @@ where
                 self.tx_spec_revision.bits()
             );
         } else if self.state.polarity.is_none() {
-            if let Some(polarity) = snapshot.attached_sink_polarity() {
+            if let Some(polarity) = attached_polarity {
                 self.state.polarity = Some(polarity);
             }
         }
@@ -907,6 +937,7 @@ where
         self.source_capabilities = None;
         self.message_id = 0;
         self.consecutive_vbus_absent_polls = 0;
+        self.consecutive_cc_absent_polls = 0;
         self.attached_at_ms = None;
         self.source_caps_recovery_attempted = false;
         self.last_source_caps_requery_at_ms = None;
@@ -1020,6 +1051,7 @@ mod tests {
     use super::*;
 
     struct NoopI2c;
+    struct LenientI2c;
 
     impl embedded_hal::i2c::ErrorType for NoopI2c {
         type Error = esp_hal::i2c::master::Error;
@@ -1035,9 +1067,44 @@ mod tests {
         }
     }
 
+    impl embedded_hal::i2c::ErrorType for LenientI2c {
+        type Error = esp_hal::i2c::master::Error;
+    }
+
+    impl embedded_hal::i2c::I2c for LenientI2c {
+        fn transaction(
+            &mut self,
+            _address: u8,
+            operations: &mut [embedded_hal::i2c::Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            for operation in operations {
+                if let embedded_hal::i2c::Operation::Read(buffer) = operation {
+                    buffer.fill(0);
+                }
+            }
+            Ok(())
+        }
+    }
+
     const fn fixed_pdo_raw(voltage_mv: u16, current_ma: u16) -> u32 {
         ((voltage_mv as u32 / pd::FIXED_VOLTAGE_STEP_MV as u32) << 10)
             | (current_ma as u32 / pd::FIXED_CURRENT_STEP_MA as u32)
+    }
+
+    const fn irq_snapshot_with_cc_and_vbus(status1a: u8, vbus_ok: bool) -> IrqSnapshot {
+        IrqSnapshot {
+            status0a: 0,
+            status1a,
+            interrupta: 0,
+            interruptb: 0,
+            status0: if vbus_ok {
+                fusb302::status0::VBUS_OK
+            } else {
+                0
+            },
+            status1: 0,
+            interrupt: 0,
+        }
     }
 
     fn source_caps_message(spec_revision: SpecRevision, payload_words: &[u32]) -> Message {
@@ -1232,6 +1299,165 @@ mod tests {
         assert_eq!(manager.attached_at_ms, None);
         assert_eq!(manager.tx_spec_revision, SpecRevision::Rev30);
         assert_eq!(manager.peer_spec_revision, SpecRevision::Rev30);
+    }
+
+    #[test]
+    fn cc_loss_with_lingering_vbus_detaches_existing_session() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.state.attached = true;
+        manager.state.charge_ready = true;
+        manager.state.vbus_present = Some(true);
+        manager.state.polarity = Some(CcPolarity::Cc1);
+        manager.state.contract = Some(ActiveContract {
+            kind: ContractKind::Pps,
+            object_position: 3,
+            voltage_mv: 16_000,
+            current_ma: 1_000,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(1_000),
+            vindpm_mv: Some(14_000),
+        });
+        manager.source_capabilities = Some(pd::SourceCapabilities::empty(SpecRevision::Rev30));
+        manager.attached_at_ms = Some(1_000);
+        manager.source_caps_recovery_attempted = true;
+        manager.last_source_caps_requery_at_ms = Some(1_500);
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(0, false),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(5_100),
+                ..UsbPdPowerDemand::default()
+            },
+            1_500,
+        );
+
+        assert!(manager.state.attached);
+        assert_eq!(manager.consecutive_cc_absent_polls, 1);
+        assert_eq!(
+            manager.state.contract.map(|contract| contract.kind),
+            Some(ContractKind::Pps)
+        );
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(0, false),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(5_100),
+                ..UsbPdPowerDemand::default()
+            },
+            2_000,
+        );
+
+        assert!(!manager.state.attached);
+        assert_eq!(manager.state.contract, None);
+        assert_eq!(manager.state.polarity, None);
+        assert_eq!(manager.state.vbus_present, Some(false));
+        assert_eq!(manager.attached_at_ms, None);
+        assert!(!manager.source_caps_recovery_attempted);
+        assert_eq!(manager.last_source_caps_requery_at_ms, None);
+    }
+
+    #[test]
+    fn cc_loss_rearms_attach_and_source_caps_recovery_on_replug() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.state.attached = true;
+        manager.state.polarity = Some(CcPolarity::Cc1);
+        manager.state.vbus_present = Some(true);
+        manager.state.contract = Some(ActiveContract {
+            kind: ContractKind::Fixed,
+            object_position: 1,
+            voltage_mv: 5_000,
+            current_ma: 500,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(500),
+            vindpm_mv: Some(4_000),
+        });
+        manager.attached_at_ms = Some(500);
+        manager.source_caps_recovery_attempted = true;
+        manager.last_source_caps_requery_at_ms = Some(900);
+        manager.last_source_caps_recovery_at_ms = Some(900);
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(0, false),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(5_100),
+                ..UsbPdPowerDemand::default()
+            },
+            1_000,
+        );
+
+        assert!(manager.state.attached);
+        assert_eq!(manager.consecutive_cc_absent_polls, 1);
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(0, false),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(5_100),
+                ..UsbPdPowerDemand::default()
+            },
+            1_500,
+        );
+
+        assert!(!manager.state.attached);
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_SNK2, true),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(5_100),
+                ..UsbPdPowerDemand::default()
+            },
+            2_000,
+        );
+
+        assert!(manager.state.attached);
+        assert_eq!(manager.state.polarity, Some(CcPolarity::Cc2));
+        assert_eq!(manager.state.contract, None);
+        assert_eq!(manager.attached_at_ms, Some(2_000));
+        assert!(!manager.source_caps_recovery_attempted);
+        assert_eq!(manager.last_source_caps_requery_at_ms, None);
+        assert_eq!(manager.last_source_caps_recovery_at_ms, None);
+    }
+
+    #[test]
+    fn single_cc_loss_glitch_does_not_detach_active_session() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.state.attached = true;
+        manager.state.polarity = Some(CcPolarity::Cc2);
+        manager.state.vbus_present = Some(true);
+        manager.state.contract = Some(ActiveContract {
+            kind: ContractKind::Fixed,
+            object_position: 1,
+            voltage_mv: 5_000,
+            current_ma: 500,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(500),
+            vindpm_mv: Some(4_000),
+        });
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(0, false),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(5_100),
+                ..UsbPdPowerDemand::default()
+            },
+            1_000,
+        );
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_SNK2, true),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(5_100),
+                ..UsbPdPowerDemand::default()
+            },
+            1_500,
+        );
+
+        assert!(manager.state.attached);
+        assert_eq!(manager.state.polarity, Some(CcPolarity::Cc2));
+        assert_eq!(manager.consecutive_cc_absent_polls, 0);
+        assert_eq!(
+            manager.state.contract.map(|contract| contract.kind),
+            Some(ContractKind::Fixed)
+        );
     }
 
     #[test]
