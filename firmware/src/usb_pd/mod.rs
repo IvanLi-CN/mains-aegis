@@ -91,6 +91,7 @@ pub struct UsbPdSinkManager<I2C> {
     source_capabilities: Option<pd::SourceCapabilities>,
     last_source_caps_recovery_at_ms: Option<u32>,
     contract_tracker: ContractTracker<ActiveContract>,
+    consecutive_cc_absent_polls: u8,
     consecutive_raw_vbus_absent_polls: u8,
     consecutive_effective_vbus_absent_polls: u8,
     unsafe_hard_reset_sent: bool,
@@ -272,6 +273,7 @@ where
             peer_spec_revision: pd::FUSB302_MAX_SPEC_REVISION,
             source_capabilities: None,
             contract_tracker: ContractTracker::default(),
+            consecutive_cc_absent_polls: 0,
             consecutive_raw_vbus_absent_polls: 0,
             consecutive_effective_vbus_absent_polls: 0,
             unsafe_hard_reset_sent: false,
@@ -602,18 +604,34 @@ where
         let measured_input_voltage_mv = demand.measured_input_voltage_mv;
         let vbus_present = effective_vbus_present(raw_vbus_present, measured_input_voltage_mv);
         self.state.vbus_present = Some(vbus_present);
+        self.consecutive_cc_absent_polls = next_absent_polls(
+            self.consecutive_cc_absent_polls,
+            attached_polarity.is_some(),
+        );
         self.consecutive_raw_vbus_absent_polls =
             next_absent_polls(self.consecutive_raw_vbus_absent_polls, raw_vbus_present);
         self.consecutive_effective_vbus_absent_polls =
             next_absent_polls(self.consecutive_effective_vbus_absent_polls, vbus_present);
 
-        if self.state.attached && attached_polarity.is_none() && !vbus_present {
-            info!(
-                "usb_pd: detached cc_lost vbus_absent raw_vbus_ok={=bool} vin_mv={=?}",
-                raw_vbus_present, measured_input_voltage_mv
+        if self.state.attached && attached_polarity.is_none() {
+            if self.consecutive_cc_absent_polls >= RAW_VBUS_DETACH_DEBOUNCE_POLLS {
+                info!(
+                    "usb_pd: detached cc_lost raw_vbus_ok={=bool} effective_vbus_ok={=bool} vin_mv={=?}",
+                    raw_vbus_present,
+                    vbus_present,
+                    measured_input_voltage_mv
+                );
+                self.reset_contract_state(true);
+                let _ = self.phy.start_sink_toggle();
+                return;
+            }
+            debug!(
+                "usb_pd: cc detach debounce waiting raw_vbus_ok={=bool} effective_vbus_ok={=bool} vin_mv={=?} absent_polls={=u8}",
+                raw_vbus_present,
+                vbus_present,
+                measured_input_voltage_mv,
+                self.consecutive_cc_absent_polls
             );
-            self.reset_contract_state(true);
-            let _ = self.phy.start_sink_toggle();
             return;
         }
 
@@ -668,6 +686,7 @@ where
             self.source_caps_recovery_attempted = false;
             self.last_source_caps_requery_at_ms = None;
             self.last_source_caps_recovery_at_ms = None;
+            self.consecutive_cc_absent_polls = 0;
             self.consecutive_raw_vbus_absent_polls = 0;
             self.consecutive_effective_vbus_absent_polls = 0;
             self.clear_contract_tracking();
@@ -1003,6 +1022,7 @@ where
         self.disarm_charge_ready("controller_error");
         self.source_capabilities = None;
         self.message_id = 0;
+        self.consecutive_cc_absent_polls = 0;
         self.consecutive_raw_vbus_absent_polls = 0;
         self.consecutive_effective_vbus_absent_polls = 0;
         self.attached_at_ms = None;
@@ -1425,7 +1445,7 @@ mod tests {
     }
 
     #[test]
-    fn cc_loss_with_vbus_absent_detaches_immediately_and_rearms_hotplug_recovery() {
+    fn cc_loss_with_vbus_present_detaches_after_debounce_and_rearms_hotplug_recovery() {
         let mut manager = UsbPdSinkManager::new(LenientI2c);
         manager.state.attached = true;
         manager.state.polarity = Some(CcPolarity::Cc1);
@@ -1445,18 +1465,33 @@ mod tests {
         manager.last_source_caps_recovery_at_ms = Some(900);
 
         manager.handle_irq_snapshot(
-            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_OFF, false),
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_OFF, true),
             UsbPdPowerDemand {
-                measured_input_voltage_mv: None,
+                measured_input_voltage_mv: Some(5_100),
                 ..UsbPdPowerDemand::default()
             },
             1_000,
         );
 
+        assert!(manager.state.attached);
+        assert_eq!(manager.consecutive_cc_absent_polls, 1);
+        assert_eq!(
+            manager.state.contract.map(|contract| contract.kind),
+            Some(ContractKind::Pps)
+        );
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_OFF, true),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(5_100),
+                ..UsbPdPowerDemand::default()
+            },
+            1_500,
+        );
+
         assert!(!manager.state.attached);
         assert_eq!(manager.state.contract, None);
         assert_eq!(manager.state.polarity, None);
-        assert_eq!(manager.state.vbus_present, Some(false));
         assert_eq!(manager.attached_at_ms, None);
         assert!(!manager.source_caps_recovery_attempted);
         assert_eq!(manager.last_source_caps_requery_at_ms, None);
@@ -1468,13 +1503,13 @@ mod tests {
                 measured_input_voltage_mv: Some(5_100),
                 ..UsbPdPowerDemand::default()
             },
-            1_500,
+            2_000,
         );
 
         assert!(manager.state.attached);
         assert_eq!(manager.state.polarity, Some(CcPolarity::Cc2));
         assert_eq!(manager.state.contract, None);
-        assert_eq!(manager.attached_at_ms, Some(1_500));
+        assert_eq!(manager.attached_at_ms, Some(2_000));
         assert!(!manager.source_caps_recovery_attempted);
         assert_eq!(manager.last_source_caps_requery_at_ms, None);
         assert_eq!(manager.last_source_caps_recovery_at_ms, None);
