@@ -5998,7 +5998,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         26,
         12,
     )?;
-    draw_charger_protocol_badge(painter, variant, palette, data.detail, 46, 32, 44, 14)?;
+    draw_charger_protocol_badge(painter, variant, palette, data.detail, 46, 60)?;
     draw_icon_blocks_centered(
         painter,
         174,
@@ -8570,18 +8570,15 @@ fn draw_charger_source_indicator<P: UiPainter>(
     }
 }
 
-fn charger_protocol_badge(
-    detail: DashboardDetailSnapshot,
-    palette: Palette,
-) -> (&'static str, u16) {
+fn charger_protocol_badge(detail: DashboardDetailSnapshot) -> &'static str {
     match detail.charger_protocol {
-        Some(DashboardChargerProtocol::Pps) => ("PPS", SUCCESS_COLOR),
-        Some(DashboardChargerProtocol::PdFixed) => ("PD", ATTENTION_COLOR),
-        Some(DashboardChargerProtocol::Usb5V) => ("5V", ATTENTION_COLOR),
-        Some(DashboardChargerProtocol::DcIn) => ("DC", ATTENTION_COLOR),
-        Some(DashboardChargerProtocol::NoCc) => ("NO CC", ERROR_COLOR),
-        Some(DashboardChargerProtocol::SourceCapsUnknown) => ("CAP?", ERROR_COLOR),
-        None => ("N/A", palette.bg),
+        Some(DashboardChargerProtocol::Pps) => "PPS",
+        Some(DashboardChargerProtocol::PdFixed) => "PD",
+        Some(DashboardChargerProtocol::Usb5V) => "5V",
+        Some(DashboardChargerProtocol::DcIn) => "DC",
+        Some(DashboardChargerProtocol::NoCc) => "NO CC",
+        Some(DashboardChargerProtocol::SourceCapsUnknown) => "CAP?",
+        None => "N/A",
     }
 }
 
@@ -8592,24 +8589,16 @@ fn draw_charger_protocol_badge<P: UiPainter>(
     detail: DashboardDetailSnapshot,
     x: u16,
     y: u16,
-    w: u16,
-    h: u16,
 ) -> Result<(), P::Error> {
-    let (label, accent) = charger_protocol_badge(detail, palette);
-    fill(painter, x, y, w, h, palette.panel_alt)?;
-    draw_outline(painter, x, y, w, h, fade_color(accent, palette.border))?;
-    text(
+    text_with_position(
         painter,
         variant,
-        FontRole::TextCompact,
-        label,
-        Point::new((x + w / 2) as i32, (y + 1) as i32),
-        HorizontalAlignment::Center,
-        if detail.charger_protocol.is_some() {
-            accent
-        } else {
-            palette.bg
-        },
+        FontRole::DetailBody,
+        charger_protocol_badge(detail),
+        Point::new(x as i32, y as i32),
+        VerticalPosition::Bottom,
+        HorizontalAlignment::Left,
+        palette.bg,
     )
 }
 
