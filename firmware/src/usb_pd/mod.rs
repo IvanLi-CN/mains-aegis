@@ -621,8 +621,7 @@ where
                     vbus_present,
                     measured_input_voltage_mv
                 );
-                self.reset_contract_state(true);
-                let _ = self.phy.start_sink_toggle();
+                self.rearm_after_detach(now_ms, "cc_lost");
                 return;
             }
             debug!(
@@ -649,8 +648,7 @@ where
                 "usb_pd: detached raw_vbus_lost effective_vbus_ok={=bool} vin_mv={=?}",
                 vbus_present, measured_input_voltage_mv
             );
-            self.reset_contract_state(true);
-            let _ = self.phy.start_sink_toggle();
+            self.rearm_after_detach(now_ms, "raw_vbus_lost");
             return;
         }
 
@@ -666,8 +664,7 @@ where
                 return;
             }
             info!("usb_pd: detached effective_vbus_lost");
-            self.reset_contract_state(true);
-            let _ = self.phy.start_sink_toggle();
+            self.rearm_after_detach(now_ms, "effective_vbus_lost");
             return;
         }
 
@@ -995,6 +992,32 @@ where
         self.state.contract = None;
         self.state.input_current_limit_ma = None;
         self.state.vindpm_mv = None;
+    }
+
+    fn rearm_after_detach(&mut self, now_ms: u32, reason: &'static str) {
+        self.reset_contract_state(true);
+        match self.phy.init_sink(self.tx_spec_revision) {
+            Ok(_) => {
+                self.initialized = true;
+                self.state.controller_ready = true;
+                self.next_retry_at_ms = 0;
+                info!(
+                    "usb_pd: phy rearmed after detach reason={} tx_spec_rev_bits={=u8}",
+                    reason,
+                    self.tx_spec_revision.bits()
+                );
+            }
+            Err(err) => {
+                warn!(
+                    "usb_pd: phy rearm after detach failed reason={} err={}",
+                    reason,
+                    fusb302_error_kind(&err)
+                );
+                self.initialized = false;
+                self.state.controller_ready = false;
+                self.next_retry_at_ms = now_ms.wrapping_add(ERROR_RETRY_INTERVAL_MS);
+            }
+        }
     }
 
     fn apply_default_5v_input_limits(
