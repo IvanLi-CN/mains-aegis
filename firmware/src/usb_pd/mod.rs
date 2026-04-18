@@ -15,6 +15,7 @@ const SOURCE_CAPS_WAIT_TIMEOUT_MS: u32 = 3_000;
 const SOURCE_CAPS_REQUERY_DELAY_MS: u32 = 1_000;
 const SOURCE_CAPS_REQUERY_RETRY_MS: u32 = 5_000;
 const SOURCE_CAPS_RECOVERY_RETRY_MS: u32 = 5_000;
+const CONTRACT_REQUEST_TIMEOUT_MS: u32 = 1_500;
 const RAW_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const CHARGER_VBUS_PRESENT_THRESHOLD_MV: u16 = 4_500;
@@ -373,71 +374,76 @@ where
             }
         }
 
-        if let (Some(source_caps), Some(active_contract)) = (
-            self.source_capabilities,
-            self.contract_tracker.active_contract(),
-        ) {
+        self.maybe_recover_stalled_contract_request(now_ms);
+
+        if let Some(source_caps) = self.source_capabilities {
             let filtered = sink_policy::filter_source_capabilities(&source_caps);
-            if active_contract.kind == ContractKind::Fixed
-                && !filtered_source_has_pps(&filtered)
-                && !self.contract_tracker.request_in_flight()
-                && self.source_caps_requery_due(now_ms)
-            {
-                let retrying = self.last_source_caps_requery_at_ms.is_some();
-                if retrying {
-                    info!(
-                        "usb_pd: retrying source caps probe after fixed fallback retry_after_ms={=u32} tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
-                        now_ms.wrapping_sub(self.last_source_caps_requery_at_ms.unwrap_or(now_ms)),
-                        self.tx_spec_revision.bits(),
-                        self.peer_spec_revision.bits()
-                    );
-                } else {
-                    info!(
-                        "usb_pd: probing source caps after fixed contract tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
-                        self.tx_spec_revision.bits(),
-                        self.peer_spec_revision.bits()
-                    );
-                }
-                match self
-                    .send_control_message(ControlMessageType::GetSourceCap, self.tx_spec_revision)
+
+            if let Some(active_contract) = self.contract_tracker.active_contract() {
+                if active_contract.kind == ContractKind::Fixed
+                    && !filtered_source_has_pps(&filtered)
+                    && !self.contract_tracker.request_in_flight()
+                    && self.source_caps_requery_due(now_ms)
                 {
-                    Ok(()) => {
-                        self.last_source_caps_requery_at_ms = Some(now_ms);
-                    }
-                    Err(err) => {
-                        warn!(
-                            "usb_pd: get_source_cap probe failed err={}",
-                            fusb302_error_kind(&err)
+                    let retrying = self.last_source_caps_requery_at_ms.is_some();
+                    if retrying {
+                        info!(
+                            "usb_pd: retrying source caps probe after fixed fallback retry_after_ms={=u32} tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
+                            now_ms.wrapping_sub(self.last_source_caps_requery_at_ms.unwrap_or(now_ms)),
+                            self.tx_spec_revision.bits(),
+                            self.peer_spec_revision.bits()
+                        );
+                    } else {
+                        info!(
+                            "usb_pd: probing source caps after fixed contract tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
+                            self.tx_spec_revision.bits(),
+                            self.peer_spec_revision.bits()
                         );
                     }
-                }
-            }
-
-            if active_contract.kind == ContractKind::Pps
-                && !self.state.unsafe_source_latched
-                && !self.contract_tracker.request_in_flight()
-            {
-                if let Some(plan) = sink_policy::select_contract_from_filtered(
-                    &self.local_capabilities,
-                    &filtered,
-                    demand,
-                ) {
-                    if sink_policy::should_refresh_pps_contract(
-                        active_contract,
-                        plan.contract,
-                        now_ms,
-                        self.last_request_at_ms,
+                    match self.send_control_message(
+                        ControlMessageType::GetSourceCap,
+                        self.tx_spec_revision,
                     ) {
-                        if let Err(err) =
-                            self.send_contract_request(plan, self.tx_spec_revision, now_ms)
-                        {
+                        Ok(()) => {
+                            self.last_source_caps_requery_at_ms = Some(now_ms);
+                        }
+                        Err(err) => {
                             warn!(
-                                "usb_pd: pps refresh request failed err={}",
+                                "usb_pd: get_source_cap probe failed err={}",
                                 fusb302_error_kind(&err)
                             );
                         }
                     }
                 }
+
+                if active_contract.kind == ContractKind::Pps
+                    && !self.state.unsafe_source_latched
+                    && !self.contract_tracker.request_in_flight()
+                {
+                    if let Some(plan) = sink_policy::select_contract_from_filtered(
+                        &self.local_capabilities,
+                        &filtered,
+                        demand,
+                    ) {
+                        if sink_policy::should_refresh_pps_contract(
+                            active_contract,
+                            plan.contract,
+                            now_ms,
+                            self.last_request_at_ms,
+                        ) {
+                            if let Err(err) =
+                                self.send_contract_request(plan, self.tx_spec_revision, now_ms)
+                            {
+                                warn!(
+                                    "usb_pd: pps refresh request failed err={}",
+                                    fusb302_error_kind(&err)
+                                );
+                            }
+                        }
+                    }
+                }
+            } else {
+                self.maybe_request_contract_from_cached_source_caps(filtered, demand, now_ms);
             }
         }
 
@@ -446,6 +452,64 @@ where
         self.update_charge_ready_state(now_ms);
 
         self.state
+    }
+
+    fn maybe_recover_stalled_contract_request(&mut self, now_ms: u32) {
+        if !self.contract_tracker.request_in_flight() {
+            return;
+        }
+
+        if now_ms.wrapping_sub(self.last_request_at_ms) < CONTRACT_REQUEST_TIMEOUT_MS {
+            return;
+        }
+
+        warn!(
+            "usb_pd: contract request timed out accept_wait={=bool} ps_rdy_wait={=bool} active_kind={=?}",
+            self.contract_tracker.waiting_for_accept(),
+            self.contract_tracker.waiting_for_ps_rdy(),
+            self.contract_tracker
+                .active_contract()
+                .map(|contract| contract_kind_name(contract.kind))
+        );
+        self.contract_tracker.cancel_pending_request();
+        self.last_source_caps_requery_at_ms = None;
+
+        if self.contract_tracker.active_contract().is_none() {
+            self.disarm_charge_ready("request_timeout");
+        }
+    }
+
+    fn maybe_request_contract_from_cached_source_caps(
+        &mut self,
+        filtered: sink_policy::FilteredSourceCapabilities,
+        demand: UsbPdPowerDemand,
+        now_ms: u32,
+    ) {
+        if self.state.unsafe_source_latched
+            || self.contract_tracker.request_in_flight()
+            || !self.source_caps_requery_due(now_ms)
+        {
+            return;
+        }
+
+        let Some(plan) =
+            sink_policy::select_contract_from_filtered(&self.local_capabilities, &filtered, demand)
+        else {
+            return;
+        };
+
+        info!(
+            "usb_pd: retrying contract request from cached source caps tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
+            self.tx_spec_revision.bits(),
+            self.peer_spec_revision.bits()
+        );
+        log_contract_plan(&plan, demand);
+        if let Err(err) = self.send_contract_request(plan, self.tx_spec_revision, now_ms) {
+            warn!(
+                "usb_pd: cached source caps request failed err={}",
+                fusb302_error_kind(&err)
+            );
+        }
     }
 
     fn maybe_recover_missing_source_caps(&mut self, _demand: UsbPdPowerDemand, now_ms: u32) {
@@ -1544,6 +1608,78 @@ mod tests {
         manager.handle_message(message, UsbPdPowerDemand::default(), 2_000);
 
         assert_eq!(manager.last_source_caps_requery_at_ms, None);
+    }
+
+    #[test]
+    fn stalled_contract_request_times_out_and_clears_in_flight_state() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.state.attached = true;
+        manager.attached_at_ms = Some(0);
+        manager.contract_tracker.begin_request(ActiveContract {
+            kind: ContractKind::Pps,
+            object_position: 2,
+            voltage_mv: 16_000,
+            current_ma: 1_000,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(1_000),
+            vindpm_mv: Some(14_000),
+        });
+        manager.last_request_at_ms = 0;
+
+        manager.tick(
+            UsbPdPowerDemand::default(),
+            false,
+            CONTRACT_REQUEST_TIMEOUT_MS - 1,
+        );
+        assert!(manager.contract_tracker.request_in_flight());
+
+        manager.tick(
+            UsbPdPowerDemand::default(),
+            false,
+            CONTRACT_REQUEST_TIMEOUT_MS,
+        );
+        assert!(!manager.contract_tracker.request_in_flight());
+    }
+
+    #[test]
+    fn stalled_contract_request_retries_from_cached_source_caps() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.state.attached = true;
+        manager.attached_at_ms = Some(0);
+        manager.source_capabilities = pd::SourceCapabilities::from_message(&source_caps_message(
+            SpecRevision::Rev30,
+            &[
+                fixed_pdo_raw(5_000, 3_000),
+                pd::Apdo::new_pps(15_000, 21_000, 3_000).raw(),
+            ],
+        ));
+        manager.contract_tracker.begin_request(ActiveContract {
+            kind: ContractKind::Pps,
+            object_position: 2,
+            voltage_mv: 16_000,
+            current_ma: 1_000,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(1_000),
+            vindpm_mv: Some(14_000),
+        });
+        manager.last_request_at_ms = 0;
+
+        let demand = UsbPdPowerDemand {
+            requested_charge_voltage_mv: 16_800,
+            requested_charge_current_ma: 500,
+            system_load_power_mw: 2_500,
+            charging_enabled: true,
+            ..UsbPdPowerDemand::default()
+        };
+
+        manager.tick(demand, false, CONTRACT_REQUEST_TIMEOUT_MS);
+
+        assert!(manager.contract_tracker.request_in_flight());
+        assert_eq!(manager.last_request_at_ms, CONTRACT_REQUEST_TIMEOUT_MS);
+        assert_eq!(
+            manager.contract_tracker.pending_contract().map(|c| c.kind),
+            Some(ContractKind::Pps)
+        );
     }
 
     #[test]
