@@ -58,8 +58,9 @@ pub(super) fn detail_input_source(
     vbus_present: bool,
     ac1_present: bool,
     ac2_present: bool,
+    usb_pd_attached: bool,
 ) -> Option<DashboardInputSource> {
-    if ac1_present && !ac2_present {
+    if usb_pd_attached || (ac1_present && !ac2_present) {
         Some(DashboardInputSource::UsbC)
     } else if ac2_present && !ac1_present {
         Some(DashboardInputSource::DcIn)
@@ -1384,18 +1385,26 @@ mod tests {
     #[test]
     fn detail_input_source_prefers_explicit_usb_and_dc_routes() {
         assert_eq!(
-            detail_input_source(true, true, false),
+            detail_input_source(true, true, false, false),
             Some(DashboardInputSource::UsbC)
         );
         assert_eq!(
-            detail_input_source(true, false, true),
+            detail_input_source(true, false, true, false),
             Some(DashboardInputSource::DcIn)
         );
         assert_eq!(
-            detail_input_source(true, true, true),
+            detail_input_source(true, true, true, false),
             Some(DashboardInputSource::Auto)
         );
-        assert_eq!(detail_input_source(false, false, false), None);
+        assert_eq!(detail_input_source(false, false, false, false), None);
+    }
+
+    #[test]
+    fn detail_input_source_keeps_usbc_route_while_pd_session_is_attached() {
+        assert_eq!(
+            detail_input_source(false, false, false, true),
+            Some(DashboardInputSource::UsbC)
+        );
     }
 
     #[test]

@@ -682,15 +682,27 @@ where
             self.clear_contract_tracking();
             self.source_capabilities = None;
             self.disarm_charge_ready("attach");
+            if let Err(err) = self.phy.init_sink(self.tx_spec_revision) {
+                warn!(
+                    "usb_pd: attach reinit failed err={}",
+                    fusb302_error_kind(&err)
+                );
+                self.initialized = false;
+                self.state.controller_ready = false;
+                return;
+            }
             if let Err(err) = self.phy.enable_pd_receive(polarity, self.tx_spec_revision) {
                 warn!("usb_pd: enable rx failed err={}", fusb302_error_kind(&err));
                 self.initialized = false;
                 self.state.controller_ready = false;
                 return;
             }
+            self.initialized = true;
+            self.state.controller_ready = true;
+            self.next_retry_at_ms = 0;
             let switches1 = self.phy.read_switches1().ok();
             info!(
-                "usb_pd: attached polarity={} switches1={=?} spec_rev_bits={=u8}",
+                "usb_pd: attached polarity={} switches1={=?} spec_rev_bits={=u8} action=full_reinit",
                 polarity_name(polarity),
                 switches1,
                 self.tx_spec_revision.bits()
@@ -1515,6 +1527,29 @@ mod tests {
         assert!(manager.source_caps_recovery_attempted);
         assert_eq!(manager.last_source_caps_requery_at_ms, Some(900));
         assert_eq!(manager.last_source_caps_recovery_at_ms, Some(900));
+    }
+
+    #[test]
+    fn fresh_attach_fully_reinitializes_phy_before_enabling_receive() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.initialized = true;
+        manager.state.enabled = true;
+        manager.state.controller_ready = true;
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_SNK2, true),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(5_100),
+                ..UsbPdPowerDemand::default()
+            },
+            2_000,
+        );
+
+        assert!(manager.state.attached);
+        assert_eq!(manager.state.polarity, Some(CcPolarity::Cc2));
+        assert!(manager.initialized);
+        assert!(manager.state.controller_ready);
+        assert_eq!(manager.attached_at_ms, Some(2_000));
     }
 
     #[test]

@@ -8328,7 +8328,12 @@ where
             && self.bms_activation_phase == BmsActivationPhase::ProbeWithoutCharge;
         let activation_normal_hold_charge = false;
         let boot_diag_hold_charge = false;
-        let input_source = detail_input_source(vbus_present, ac1_present, ac2_present);
+        let input_source = detail_input_source(
+            vbus_present,
+            ac1_present,
+            ac2_present,
+            self.usb_pd_state.attached,
+        );
         let output_power_w10 =
             charge_policy_output_power_w10(&self.ui_snapshot, self.output_state.active_outputs);
         let charge_policy_telemetry = if activation_pending {
