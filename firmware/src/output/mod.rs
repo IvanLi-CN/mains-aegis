@@ -3482,7 +3482,7 @@ where
                 record.controller_ready,
                 record.charge_ready,
                 record.vbus_present,
-                record.contract_kind,
+                record.contract_kind.map(|kind| match kind { usb_pd::ContractKind::Fixed => "fixed", usb_pd::ContractKind::Pps => "pps" }),
                 record.contract_mv,
                 record.contract_ma,
                 record.unsafe_source_latched
@@ -3935,7 +3935,7 @@ where
             event.name(),
             record.attached,
             record.vbus_present,
-            record.contract_kind,
+            record.contract_kind.map(|kind| match kind { usb_pd::ContractKind::Fixed => "fixed", usb_pd::ContractKind::Pps => "pps" }),
             record.contract_mv,
         );
     }

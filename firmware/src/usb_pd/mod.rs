@@ -16,6 +16,7 @@ const SOURCE_CAPS_REQUERY_DELAY_MS: u32 = 1_000;
 const SOURCE_CAPS_REQUERY_RETRY_MS: u32 = 5_000;
 const SOURCE_CAPS_RECOVERY_RETRY_MS: u32 = 1_000;
 const SOURCE_CAPS_HARD_RECOVERY_TIMEOUT_MS: u32 = 2_500;
+const NO_CONTRACT_SOURCE_CAPS_REARM_TIMEOUT_MS: u32 = 3_000;
 const CONTRACT_REQUEST_TIMEOUT_MS: u32 = 1_500;
 const RAW_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
@@ -451,6 +452,7 @@ where
         }
 
         self.maybe_recover_missing_source_caps(demand, now_ms);
+        self.maybe_recover_stalled_no_contract_with_cached_caps(now_ms);
         self.maybe_arm_default_5v_charge_ready(now_ms);
         self.update_charge_ready_state(now_ms);
 
@@ -578,6 +580,35 @@ where
         self.last_source_caps_recovery_at_ms = Some(now_ms);
     }
 
+    fn maybe_recover_stalled_no_contract_with_cached_caps(&mut self, now_ms: u32) {
+        if !self.state.attached
+            || self.state.unsafe_source_latched
+            || self.state.contract.is_some()
+            || self.source_capabilities.is_none()
+            || self.contract_tracker.request_in_flight()
+            || !matches!(self.state.vbus_present, Some(true))
+        {
+            return;
+        }
+
+        let Some(attached_at_ms) = self.attached_at_ms else {
+            return;
+        };
+
+        let waited_ms = now_ms.wrapping_sub(attached_at_ms);
+        if waited_ms < NO_CONTRACT_SOURCE_CAPS_REARM_TIMEOUT_MS {
+            return;
+        }
+
+        warn!(
+            "usb_pd: cached source caps stalled without contract, rearming phy waited_ms={=u32} tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
+            waited_ms,
+            self.tx_spec_revision.bits(),
+            self.peer_spec_revision.bits()
+        );
+        self.rearm_after_detach(now_ms, "cached_caps_no_contract");
+    }
+
     fn source_caps_requery_due(&self, now_ms: u32) -> bool {
         if let Some(last_requery_at_ms) = self.last_source_caps_requery_at_ms {
             now_ms.wrapping_sub(last_requery_at_ms) >= SOURCE_CAPS_REQUERY_RETRY_MS
@@ -628,7 +659,6 @@ where
             next_absent_polls(self.consecutive_effective_vbus_absent_polls, vbus_present);
         let attach_recovery_in_progress = self.state.attached
             && self.state.contract.is_none()
-            && self.source_capabilities.is_none()
             && detected_attach_polarity.is_some();
 
         if attach_recovery_in_progress {
@@ -1782,6 +1812,54 @@ mod tests {
             Some(2_000 + CONTRACT_CHARGE_READY_DELAY_MS)
         );
         assert!(!manager.state.charge_ready);
+    }
+
+    #[test]
+    fn cached_source_caps_stall_rearms_phy_after_timeout() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.initialized = true;
+        manager.state.enabled = true;
+        manager.state.attached = true;
+        manager.state.controller_ready = true;
+        manager.state.vbus_present = Some(true);
+        manager.state.polarity = Some(CcPolarity::Cc1);
+        manager.attached_at_ms = Some(1_000);
+        manager.source_capabilities = Some(pd::SourceCapabilities::empty(SpecRevision::Rev30));
+
+        manager.maybe_recover_stalled_no_contract_with_cached_caps(
+            1_000 + NO_CONTRACT_SOURCE_CAPS_REARM_TIMEOUT_MS,
+        );
+
+        assert!(!manager.state.attached);
+        assert_eq!(manager.state.contract, None);
+        assert_eq!(manager.state.polarity, None);
+        assert_eq!(manager.attached_at_ms, None);
+        assert!(manager.initialized);
+        assert!(manager.state.controller_ready);
+    }
+
+    #[test]
+    fn cached_source_caps_recovery_ignores_vbus_glitches_while_cc_is_present() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.state.attached = true;
+        manager.state.polarity = Some(CcPolarity::Cc2);
+        manager.state.vbus_present = Some(true);
+        manager.attached_at_ms = Some(500);
+        manager.source_capabilities = Some(pd::SourceCapabilities::empty(SpecRevision::Rev30));
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_SNK2, false),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(320),
+                ..UsbPdPowerDemand::default()
+            },
+            1_000,
+        );
+
+        assert!(manager.state.attached);
+        assert_eq!(manager.state.polarity, Some(CcPolarity::Cc2));
+        assert_eq!(manager.consecutive_raw_vbus_absent_polls, 0);
+        assert_eq!(manager.consecutive_effective_vbus_absent_polls, 0);
     }
 
     #[test]
