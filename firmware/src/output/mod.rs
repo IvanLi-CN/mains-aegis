@@ -164,6 +164,10 @@ const EEPROM_LAYOUT_MAGIC: [u8; 4] = *b"AEG1";
 const EEPROM_SCHEMA_VERSION: u8 = 1;
 const EEPROM_MANUAL_PREFS_RECORD_ID: u8 = 1;
 const EEPROM_MANUAL_PREFS_RECORD_VERSION: u8 = 1;
+const EEPROM_PD_BREADCRUMB_BASE_OFFSET: u16 = 0x0060;
+const EEPROM_PD_BREADCRUMB_SLOT_COUNT: usize = 8;
+const EEPROM_PD_BREADCRUMB_MAGIC: [u8; 4] = *b"PDBG";
+const EEPROM_PD_BREADCRUMB_VERSION: u8 = 1;
 const EEPROM_WRITE_POLL_ATTEMPTS: usize = 32;
 const EEPROM_WRITE_POLL_GAP: Duration = Duration::from_millis(1);
 
@@ -293,6 +297,211 @@ impl ManualChargePrefsRecordV1 {
             },
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PdBreadcrumbEvent {
+    Attach = 1,
+    Detach = 2,
+    ContractPps = 3,
+    ContractFixed = 4,
+    ContractLost = 5,
+    VbusPresent = 6,
+    VbusLost = 7,
+    StateChange = 8,
+}
+
+impl PdBreadcrumbEvent {
+    const fn code(self) -> u8 {
+        self as u8
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Attach => "attach",
+            Self::Detach => "detach",
+            Self::ContractPps => "contract_pps",
+            Self::ContractFixed => "contract_fixed",
+            Self::ContractLost => "contract_lost",
+            Self::VbusPresent => "vbus_present",
+            Self::VbusLost => "vbus_lost",
+            Self::StateChange => "state_change",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PdBreadcrumbRecordV1 {
+    seq: u16,
+    tick_100ms: u32,
+    event: PdBreadcrumbEvent,
+    attached: bool,
+    controller_ready: bool,
+    charge_ready: bool,
+    vbus_present: Option<bool>,
+    unsafe_source_latched: bool,
+    contract_kind: Option<usb_pd::ContractKind>,
+    contract_mv: Option<u16>,
+    contract_ma: Option<u16>,
+}
+
+impl PdBreadcrumbRecordV1 {
+    fn encode(self) -> [u8; EEPROM_BLOCK_LEN] {
+        let mut bytes = [0u8; EEPROM_BLOCK_LEN];
+        bytes[0..4].copy_from_slice(&EEPROM_PD_BREADCRUMB_MAGIC);
+        bytes[4] = EEPROM_PD_BREADCRUMB_VERSION;
+        bytes[5] = self.event.code();
+        bytes[6] = self.attached as u8;
+        bytes[7] = self.controller_ready as u8;
+        bytes[8] = self.charge_ready as u8;
+        bytes[9] = match self.vbus_present {
+            Some(false) => 0,
+            Some(true) => 1,
+            None => 2,
+        };
+        bytes[10] = self.unsafe_source_latched as u8;
+        bytes[11] = match self.contract_kind {
+            Some(usb_pd::ContractKind::Fixed) => 1,
+            Some(usb_pd::ContractKind::Pps) => 2,
+            None => 0,
+        };
+        bytes[12] = (self.seq & 0x00ff) as u8;
+        bytes[13] = (self.seq >> 8) as u8;
+        bytes[14] = (self.tick_100ms & 0xff) as u8;
+        bytes[15] = ((self.tick_100ms >> 8) & 0xff) as u8;
+        bytes[16] = ((self.tick_100ms >> 16) & 0xff) as u8;
+        bytes[17] = ((self.tick_100ms >> 24) & 0xff) as u8;
+        if let Some(contract_mv) = self.contract_mv {
+            bytes[18] = (contract_mv & 0x00ff) as u8;
+            bytes[19] = (contract_mv >> 8) as u8;
+        }
+        if let Some(contract_ma) = self.contract_ma {
+            bytes[20] = (contract_ma & 0x00ff) as u8;
+            bytes[21] = (contract_ma >> 8) as u8;
+        }
+        bytes[31] = storage_crc8(&bytes[..31]);
+        bytes
+    }
+
+    fn decode(bytes: [u8; EEPROM_BLOCK_LEN]) -> Option<Self> {
+        if bytes[0..4] != EEPROM_PD_BREADCRUMB_MAGIC {
+            return None;
+        }
+        if bytes[4] != EEPROM_PD_BREADCRUMB_VERSION {
+            return None;
+        }
+        if bytes[31] != storage_crc8(&bytes[..31]) {
+            return None;
+        }
+        let event = match bytes[5] {
+            1 => PdBreadcrumbEvent::Attach,
+            2 => PdBreadcrumbEvent::Detach,
+            3 => PdBreadcrumbEvent::ContractPps,
+            4 => PdBreadcrumbEvent::ContractFixed,
+            5 => PdBreadcrumbEvent::ContractLost,
+            6 => PdBreadcrumbEvent::VbusPresent,
+            7 => PdBreadcrumbEvent::VbusLost,
+            8 => PdBreadcrumbEvent::StateChange,
+            _ => return None,
+        };
+        let contract_kind = match bytes[11] {
+            0 => None,
+            1 => Some(usb_pd::ContractKind::Fixed),
+            2 => Some(usb_pd::ContractKind::Pps),
+            _ => return None,
+        };
+        let contract_mv = {
+            let raw = u16::from(bytes[18]) | (u16::from(bytes[19]) << 8);
+            (raw != 0).then_some(raw)
+        };
+        let contract_ma = {
+            let raw = u16::from(bytes[20]) | (u16::from(bytes[21]) << 8);
+            (raw != 0).then_some(raw)
+        };
+        Some(Self {
+            seq: u16::from(bytes[12]) | (u16::from(bytes[13]) << 8),
+            tick_100ms: u32::from(bytes[14])
+                | (u32::from(bytes[15]) << 8)
+                | (u32::from(bytes[16]) << 16)
+                | (u32::from(bytes[17]) << 24),
+            event,
+            attached: bytes[6] != 0,
+            controller_ready: bytes[7] != 0,
+            charge_ready: bytes[8] != 0,
+            vbus_present: match bytes[9] {
+                0 => Some(false),
+                1 => Some(true),
+                2 => None,
+                _ => return None,
+            },
+            unsafe_source_latched: bytes[10] != 0,
+            contract_kind,
+            contract_mv,
+            contract_ma,
+        })
+    }
+}
+
+const fn pd_breadcrumb_slot_offset(slot: usize) -> u16 {
+    EEPROM_PD_BREADCRUMB_BASE_OFFSET + (slot as u16) * (EEPROM_BLOCK_LEN as u16)
+}
+
+fn load_latest_pd_breadcrumb_record<I2C>(
+    i2c: &mut I2C,
+) -> Result<Option<PdBreadcrumbRecordV1>, esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut latest: Option<PdBreadcrumbRecordV1> = None;
+    let mut slot = 0usize;
+    while slot < EEPROM_PD_BREADCRUMB_SLOT_COUNT {
+        let block = read_eeprom_block(i2c, pd_breadcrumb_slot_offset(slot))?;
+        if let Some(record) = PdBreadcrumbRecordV1::decode(block) {
+            latest = match latest {
+                Some(current) if current.seq >= record.seq => Some(current),
+                _ => Some(record),
+            };
+        }
+        slot += 1;
+    }
+    Ok(latest)
+}
+
+fn write_pd_breadcrumb_record<I2C>(
+    i2c: &mut I2C,
+    record: PdBreadcrumbRecordV1,
+) -> Result<(), esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let slot = (usize::from(record.seq)) % EEPROM_PD_BREADCRUMB_SLOT_COUNT;
+    write_eeprom_block(i2c, pd_breadcrumb_slot_offset(slot), record.encode())
+}
+
+fn pd_breadcrumb_event_from_states(
+    previous: usb_pd::UsbPdPortState,
+    current: usb_pd::UsbPdPortState,
+) -> Option<PdBreadcrumbEvent> {
+    if !previous.attached && current.attached {
+        return Some(PdBreadcrumbEvent::Attach);
+    }
+    if previous.attached && !current.attached {
+        return Some(PdBreadcrumbEvent::Detach);
+    }
+    if previous.contract != current.contract {
+        return Some(match current.contract.map(|contract| contract.kind) {
+            Some(usb_pd::ContractKind::Pps) => PdBreadcrumbEvent::ContractPps,
+            Some(usb_pd::ContractKind::Fixed) => PdBreadcrumbEvent::ContractFixed,
+            None => PdBreadcrumbEvent::ContractLost,
+        });
+    }
+    if previous.vbus_present != current.vbus_present {
+        return Some(match current.vbus_present {
+            Some(true) => PdBreadcrumbEvent::VbusPresent,
+            _ => PdBreadcrumbEvent::VbusLost,
+        });
+    }
+    (previous != current).then_some(PdBreadcrumbEvent::StateChange)
 }
 
 const fn storage_crc8(bytes: &[u8]) -> u8 {
@@ -2756,6 +2965,7 @@ pub struct PowerManager<'d, I2C> {
     usb_pd_vac1_mv: Option<u16>,
     usb_pd_input_limit_backup: Option<UsbPdInputLimitBackup>,
     usb_pd_restore_input_limits_pending: bool,
+    pd_breadcrumb_next_seq: u16,
 
     ui_snapshot: SelfCheckUiSnapshot,
     audio_snapshot: AudioSignalSnapshot,
@@ -3088,6 +3298,11 @@ where
             manual_charge_storage_ready,
             manual_charge_storage_incompatible,
         ) = load_or_init_manual_charge_prefs(&mut i2c);
+        let pd_breadcrumb_next_seq = load_latest_pd_breadcrumb_record(&mut i2c)
+            .ok()
+            .flatten()
+            .map(|record| record.seq.wrapping_add(1))
+            .unwrap_or(0);
         let mut initial_ui_snapshot = cfg.self_check_snapshot;
         initial_ui_snapshot.dashboard_detail.manual_charge.prefs = manual_charge_prefs;
         initial_ui_snapshot.dashboard_detail.manual_charge.runtime =
@@ -3244,6 +3459,7 @@ where
             usb_pd_vac1_mv: None,
             usb_pd_input_limit_backup: None,
             usb_pd_restore_input_limits_pending: false,
+            pd_breadcrumb_next_seq,
             ui_snapshot: initial_ui_snapshot,
             audio_snapshot: AudioSignalSnapshot::default(),
             audio_events: AudioSignalEvents::default(),
@@ -3256,6 +3472,27 @@ where
 
     pub fn init_best_effort(&mut self) {
         let _ = bms_diag_breadcrumb_take();
+        match load_latest_pd_breadcrumb_record(&mut self.i2c) {
+            Ok(Some(record)) => defmt::info!(
+                "eeprom: pd_breadcrumb seq={=u16} tick_100ms={=u32} event={} attached={=bool} ready={=bool} charge_ready={=bool} vbus_present={=?} contract_kind={=?} contract_mv={=?} contract_ma={=?} unsafe={=bool}",
+                record.seq,
+                record.tick_100ms,
+                record.event.name(),
+                record.attached,
+                record.controller_ready,
+                record.charge_ready,
+                record.vbus_present,
+                record.contract_kind,
+                record.contract_mv,
+                record.contract_ma,
+                record.unsafe_source_latched
+            ),
+            Ok(None) => {}
+            Err(err) => defmt::warn!(
+                "eeprom: read pd_breadcrumb failed err={}",
+                i2c_error_kind(err)
+            ),
+        }
         if self.output_state.requested_outputs != EnabledOutputs::None {
             self.try_init_ina();
             self.try_configure_requested_tps();
@@ -3625,6 +3862,7 @@ where
                 state.input_current_limit_ma,
                 state.unsafe_source_latched
             );
+            self.persist_pd_breadcrumb(previous_state, state);
         }
         self.usb_pd_state = state;
         self.usb_pd_input_current_limit_ma = state.input_current_limit_ma;
@@ -3660,6 +3898,46 @@ where
             }
         }
         self.recompute_ui_mode();
+    }
+
+    fn persist_pd_breadcrumb(
+        &mut self,
+        previous: usb_pd::UsbPdPortState,
+        current: usb_pd::UsbPdPortState,
+    ) {
+        let Some(event) = pd_breadcrumb_event_from_states(previous, current) else {
+            return;
+        };
+        let record = PdBreadcrumbRecordV1 {
+            seq: self.pd_breadcrumb_next_seq,
+            tick_100ms: 0,
+            event,
+            attached: current.attached,
+            controller_ready: current.controller_ready,
+            charge_ready: current.charge_ready,
+            vbus_present: current.vbus_present,
+            unsafe_source_latched: current.unsafe_source_latched,
+            contract_kind: current.contract.map(|contract| contract.kind),
+            contract_mv: current.contract.map(|contract| contract.voltage_mv),
+            contract_ma: current.contract.map(|contract| contract.current_ma),
+        };
+        if let Err(err) = write_pd_breadcrumb_record(&mut self.i2c, record) {
+            defmt::warn!(
+                "eeprom: write pd_breadcrumb failed err={}",
+                i2c_error_kind(err)
+            );
+            return;
+        }
+        self.pd_breadcrumb_next_seq = self.pd_breadcrumb_next_seq.wrapping_add(1);
+        defmt::info!(
+            "eeprom: pd_breadcrumb saved seq={=u16} event={} attached={=bool} vbus_present={=?} contract_kind={=?} contract_mv={=?}",
+            record.seq,
+            event.name(),
+            record.attached,
+            record.vbus_present,
+            record.contract_kind,
+            record.contract_mv,
+        );
     }
 
     #[allow(dead_code)]
