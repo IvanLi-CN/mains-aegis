@@ -15,6 +15,7 @@ const SOURCE_CAPS_WAIT_TIMEOUT_MS: u32 = 3_000;
 const SOURCE_CAPS_REQUERY_DELAY_MS: u32 = 1_000;
 const SOURCE_CAPS_REQUERY_RETRY_MS: u32 = 5_000;
 const SOURCE_CAPS_RECOVERY_RETRY_MS: u32 = 5_000;
+const SOURCE_CAPS_HARD_RECOVERY_TIMEOUT_MS: u32 = 8_000;
 const CONTRACT_REQUEST_TIMEOUT_MS: u32 = 1_500;
 const RAW_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
@@ -537,6 +538,15 @@ where
             let Some(last_recovery_at_ms) = self.last_source_caps_recovery_at_ms else {
                 return;
             };
+            if waited_ms >= SOURCE_CAPS_HARD_RECOVERY_TIMEOUT_MS {
+                warn!(
+                    "usb_pd: source caps recovery stalled, rearming phy waited_ms={=u32} retry_after_ms={=u32}",
+                    waited_ms,
+                    now_ms.wrapping_sub(last_recovery_at_ms)
+                );
+                self.rearm_after_detach(now_ms, "source_caps_stalled");
+                return;
+            }
             if now_ms.wrapping_sub(last_recovery_at_ms) < SOURCE_CAPS_RECOVERY_RETRY_MS {
                 return;
             }
@@ -1525,6 +1535,31 @@ mod tests {
 
         assert!(manager.state.attached);
         assert_eq!(manager.state.polarity, Some(CcPolarity::Cc2));
+    }
+
+    #[test]
+    fn persistent_no_source_caps_rearms_phy_after_hard_timeout() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.initialized = true;
+        manager.state.enabled = true;
+        manager.state.attached = true;
+        manager.state.controller_ready = true;
+        manager.state.vbus_present = Some(true);
+        manager.state.polarity = Some(CcPolarity::Cc1);
+        manager.attached_at_ms = Some(1_000);
+        manager.source_caps_recovery_attempted = true;
+        manager.last_source_caps_recovery_at_ms = Some(4_000);
+
+        manager.maybe_recover_missing_source_caps(UsbPdPowerDemand::default(), 9_500);
+
+        assert!(!manager.state.attached);
+        assert_eq!(manager.state.contract, None);
+        assert_eq!(manager.state.polarity, None);
+        assert_eq!(manager.attached_at_ms, None);
+        assert!(manager.initialized);
+        assert!(manager.state.controller_ready);
+        assert!(!manager.source_caps_recovery_attempted);
+        assert_eq!(manager.last_source_caps_recovery_at_ms, None);
     }
 
     fn raw_vbus_loss_rearms_attach_and_source_caps_recovery_on_replug() {
