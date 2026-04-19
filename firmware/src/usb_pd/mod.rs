@@ -627,7 +627,7 @@ where
         self.consecutive_effective_vbus_absent_polls =
             next_absent_polls(self.consecutive_effective_vbus_absent_polls, vbus_present);
 
-        if self.state.attached && !raw_vbus_present {
+        if self.state.attached && !raw_vbus_present && !vbus_present {
             if !raw_vbus_detach_debounce_elapsed(self.consecutive_raw_vbus_absent_polls) {
                 debug!(
                     "usb_pd: raw vbus detach debounce waiting effective_vbus_ok={=bool} vin_mv={=?} absent_polls={=u8}",
@@ -1418,7 +1418,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_vbus_loss_with_lingering_input_voltage_detaches_existing_session() {
+    fn raw_vbus_loss_with_lingering_input_voltage_keeps_existing_session() {
         let mut manager = UsbPdSinkManager::new(LenientI2c);
         manager.state.attached = true;
         manager.state.charge_ready = true;
@@ -1463,13 +1463,16 @@ mod tests {
             2_000,
         );
 
-        assert!(!manager.state.attached);
-        assert_eq!(manager.state.contract, None);
-        assert_eq!(manager.state.polarity, None);
-        assert_eq!(manager.state.vbus_present, Some(false));
-        assert_eq!(manager.attached_at_ms, None);
-        assert!(!manager.source_caps_recovery_attempted);
-        assert_eq!(manager.last_source_caps_requery_at_ms, None);
+        assert!(manager.state.attached);
+        assert_eq!(
+            manager.state.contract.map(|contract| contract.kind),
+            Some(ContractKind::Pps)
+        );
+        assert_eq!(manager.state.polarity, Some(CcPolarity::Cc1));
+        assert_eq!(manager.state.vbus_present, Some(true));
+        assert_eq!(manager.attached_at_ms, Some(1_000));
+        assert!(manager.source_caps_recovery_attempted);
+        assert_eq!(manager.last_source_caps_requery_at_ms, Some(1_500));
     }
 
     #[test]
@@ -1631,7 +1634,7 @@ mod tests {
         manager.handle_irq_snapshot(
             irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_SNK1, false),
             UsbPdPowerDemand {
-                measured_input_voltage_mv: Some(5_100),
+                measured_input_voltage_mv: Some(300),
                 ..UsbPdPowerDemand::default()
             },
             1_500,
