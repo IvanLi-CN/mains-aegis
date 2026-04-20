@@ -793,6 +793,15 @@ where
                 snapshot.hard_reset_received(),
                 snapshot.retry_failed()
             );
+            if self.state.contract.is_none() {
+                let reason = if snapshot.hard_reset_received() {
+                    "hard_reset_no_contract"
+                } else {
+                    "retry_fail_no_contract"
+                };
+                self.rearm_after_detach(now_ms, reason);
+                return;
+            }
             self.reset_contract_state(false);
             self.attached_at_ms = Some(now_ms);
             if let Some(polarity) = self.state.polarity {
@@ -1263,6 +1272,22 @@ mod tests {
             status0a: 0,
             status1a,
             interrupta: 0,
+            interruptb: 0,
+            status0: if vbus_ok {
+                fusb302::status0::VBUS_OK
+            } else {
+                0
+            },
+            status1: 0,
+            interrupt: 0,
+        }
+    }
+
+    const fn irq_snapshot_with_retry_fail(status1a: u8, vbus_ok: bool) -> IrqSnapshot {
+        IrqSnapshot {
+            status0a: 0,
+            status1a,
+            interrupta: fusb302::interrupta::RETRY_FAIL,
             interruptb: 0,
             status0: if vbus_ok {
                 fusb302::status0::VBUS_OK
@@ -1921,6 +1946,29 @@ mod tests {
 
         assert!(!manager.state.attached);
         assert_eq!(manager.state.vbus_present, Some(false));
+    }
+
+    #[test]
+    fn retry_fail_without_contract_forces_full_rearm() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.state.attached = true;
+        manager.state.vbus_present = Some(true);
+        manager.state.polarity = Some(CcPolarity::Cc1);
+        manager.attached_at_ms = Some(0);
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_retry_fail(fusb302::status1a::TOGS_SNK1, true),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(5_100),
+                ..UsbPdPowerDemand::default()
+            },
+            1_000,
+        );
+
+        assert!(!manager.state.attached);
+        assert_eq!(manager.state.vbus_present, Some(false));
+        assert!(manager.initialized);
+        assert!(manager.state.controller_ready);
     }
 
     #[test]
