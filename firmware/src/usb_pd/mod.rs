@@ -17,6 +17,7 @@ const SOURCE_CAPS_REQUERY_RETRY_MS: u32 = 5_000;
 const SOURCE_CAPS_RECOVERY_RETRY_MS: u32 = 1_000;
 const SOURCE_CAPS_HARD_RECOVERY_TIMEOUT_MS: u32 = 2_500;
 const NO_CONTRACT_SOURCE_CAPS_REARM_TIMEOUT_MS: u32 = 3_000;
+const NO_CONTRACT_ATTACH_STABILIZE_MS: u32 = 12_000;
 const CONTRACT_REQUEST_TIMEOUT_MS: u32 = 1_500;
 const RAW_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
@@ -580,6 +581,18 @@ where
         self.last_source_caps_recovery_at_ms = Some(now_ms);
     }
 
+    fn no_contract_attach_stabilizing(&self, now_ms: u32) -> bool {
+        if !self.state.attached || self.state.contract.is_some() {
+            return false;
+        }
+
+        let Some(attached_at_ms) = self.attached_at_ms else {
+            return false;
+        };
+
+        now_ms.wrapping_sub(attached_at_ms) < NO_CONTRACT_ATTACH_STABILIZE_MS
+    }
+
     fn maybe_recover_stalled_no_contract_with_cached_caps(&mut self, now_ms: u32) {
         if !self.state.attached
             || self.state.unsafe_source_latched
@@ -657,9 +670,7 @@ where
             next_absent_polls(self.consecutive_raw_vbus_absent_polls, raw_vbus_present);
         self.consecutive_effective_vbus_absent_polls =
             next_absent_polls(self.consecutive_effective_vbus_absent_polls, vbus_present);
-        let attach_recovery_in_progress = self.state.attached
-            && self.state.contract.is_none()
-            && detected_attach_polarity.is_some();
+        let attach_recovery_in_progress = self.no_contract_attach_stabilizing(now_ms);
 
         if attach_recovery_in_progress {
             self.consecutive_raw_vbus_absent_polls = 0;
@@ -1860,6 +1871,56 @@ mod tests {
         assert_eq!(manager.state.polarity, Some(CcPolarity::Cc2));
         assert_eq!(manager.consecutive_raw_vbus_absent_polls, 0);
         assert_eq!(manager.consecutive_effective_vbus_absent_polls, 0);
+    }
+
+    #[test]
+    fn no_contract_attach_stabilization_suppresses_detach_without_cc() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.state.attached = true;
+        manager.state.vbus_present = Some(true);
+        manager.attached_at_ms = Some(1_000);
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_NONE, false),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(2_950),
+                ..UsbPdPowerDemand::default()
+            },
+            1_500,
+        );
+
+        assert!(manager.state.attached);
+        assert_eq!(manager.state.vbus_present, Some(false));
+        assert_eq!(manager.consecutive_raw_vbus_absent_polls, 0);
+        assert_eq!(manager.consecutive_effective_vbus_absent_polls, 0);
+    }
+
+    #[test]
+    fn no_contract_attach_stabilization_expires_and_allows_detach() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.state.attached = true;
+        manager.state.vbus_present = Some(true);
+        manager.attached_at_ms = Some(0);
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_NONE, false),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(2_950),
+                ..UsbPdPowerDemand::default()
+            },
+            NO_CONTRACT_ATTACH_STABILIZE_MS + 10,
+        );
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_NONE, false),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(2_950),
+                ..UsbPdPowerDemand::default()
+            },
+            NO_CONTRACT_ATTACH_STABILIZE_MS + 20,
+        );
+
+        assert!(!manager.state.attached);
+        assert_eq!(manager.state.vbus_present, Some(false));
     }
 
     #[test]
