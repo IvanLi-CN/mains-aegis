@@ -1071,17 +1071,26 @@ where
         kind: ControlMessageType,
         spec_revision: SpecRevision,
     ) -> Result<(), fusb302::Error> {
-        let header = MessageHeader::for_control(kind, self.message_id, spec_revision, false, false);
+        let message_id = if matches!(kind, ControlMessageType::SoftReset) {
+            0
+        } else {
+            self.message_id
+        };
+        let header = MessageHeader::for_control(kind, message_id, spec_revision, false, false);
         let message = Message::new(header, [0u32; pd::MAX_DATA_OBJECTS]);
         info!(
             "usb_pd: tx ctrl kind={} spec_rev_bits={=u8} peer_spec_rev_bits={=u8} msg_id={=u8}",
             control_message_name(kind),
             spec_revision.bits(),
             self.peer_spec_revision.bits(),
-            self.message_id
+            message_id
         );
         self.phy.send_message(&message)?;
-        self.message_id = (self.message_id + 1) & 0x07;
+        if matches!(kind, ControlMessageType::SoftReset) {
+            self.message_id = 0;
+        } else {
+            self.message_id = (self.message_id + 1) & 0x07;
+        }
         Ok(())
     }
 
@@ -2281,7 +2290,7 @@ mod tests {
             SOURCE_CAPS_RECOVERY_RETRY_MS,
         );
 
-        assert_eq!(manager.message_id, 5);
+        assert_eq!(manager.message_id, 0);
         assert!(manager.source_caps_soft_reset_attempted);
         assert_eq!(
             manager.last_source_caps_recovery_at_ms,
