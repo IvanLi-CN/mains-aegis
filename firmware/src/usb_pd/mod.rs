@@ -804,6 +804,15 @@ where
                 snapshot.hard_reset_received(),
                 snapshot.retry_failed()
             );
+            if no_contract_before_reset {
+                let reason = if snapshot.hard_reset_received() {
+                    "hard_reset_no_contract"
+                } else {
+                    "retry_fail_no_contract"
+                };
+                self.rearm_after_detach(now_ms, reason);
+                return;
+            }
             self.reset_contract_state(false);
             self.prefer_fast_source_caps_probe = no_contract_before_reset;
             self.attached_at_ms = Some(now_ms);
@@ -1988,7 +1997,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_fail_without_contract_keeps_attach_and_restarts_recovery() {
+    fn retry_fail_without_contract_forces_full_rearm() {
         let mut manager = UsbPdSinkManager::new(LenientI2c);
         manager.state.attached = true;
         manager.state.vbus_present = Some(true);
@@ -2004,42 +2013,51 @@ mod tests {
             1_000,
         );
 
-        assert!(manager.state.attached);
-        assert_eq!(manager.state.vbus_present, Some(true));
+        assert!(!manager.state.attached);
+        assert_eq!(manager.state.vbus_present, Some(false));
         assert!(manager.initialized);
         assert!(manager.state.controller_ready);
-        assert_eq!(manager.attached_at_ms, Some(1_000));
+        assert_eq!(manager.attached_at_ms, None);
     }
 
     #[test]
-    fn retry_fail_without_contract_arms_fast_source_caps_probe() {
-        let mut manager = UsbPdSinkManager::new(NoopI2c);
+    fn hard_reset_with_existing_contract_keeps_attach_and_restarts_recovery() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
         manager.state.attached = true;
         manager.state.vbus_present = Some(true);
         manager.state.polarity = Some(CcPolarity::Cc1);
+        manager.state.contract = Some(Contract {
+            kind: ContractKind::Pps,
+            object_position: 1,
+            voltage_mv: 16_000,
+            current_ma: 100,
+            pdo_type: PdoType::Augmented,
+        });
         manager.attached_at_ms = Some(0);
 
         manager.handle_irq_snapshot(
-            irq_snapshot_with_retry_fail(fusb302::status1a::TOGS_SNK1, true),
-            UsbPdPowerDemand::default(),
+            IrqSnapshot {
+                status0a: 0,
+                status1a: fusb302::status1a::TOGS_SNK1,
+                interrupta: fusb302::interrupta::HARD_RESET,
+                interruptb: 0,
+                status0: fusb302::status0::VBUS_OK,
+                status1: 0,
+                interrupt: 0,
+            },
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(16_000),
+                ..UsbPdPowerDemand::default()
+            },
             1_000,
         );
 
-        manager.maybe_recover_missing_source_caps(
-            UsbPdPowerDemand::default(),
-            1_000 + SOURCE_CAPS_WAIT_AFTER_RESET_MS - 1,
-        );
-        assert_eq!(manager.message_id, 0);
-
-        manager.maybe_recover_missing_source_caps(
-            UsbPdPowerDemand::default(),
-            1_000 + SOURCE_CAPS_WAIT_AFTER_RESET_MS,
-        );
-        assert_eq!(manager.message_id, 1);
-        assert_eq!(
-            manager.last_source_caps_recovery_at_ms,
-            Some(1_000 + SOURCE_CAPS_WAIT_AFTER_RESET_MS)
-        );
+        assert!(manager.state.attached);
+        assert_eq!(manager.state.vbus_present, Some(true));
+        assert!(manager.state.contract.is_none());
+        assert!(manager.initialized);
+        assert!(manager.state.controller_ready);
+        assert_eq!(manager.attached_at_ms, Some(1_000));
     }
 
     #[test]
