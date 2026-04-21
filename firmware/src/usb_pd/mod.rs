@@ -88,6 +88,7 @@ pub struct UsbPdSinkManager<I2C> {
     last_request_at_ms: u32,
     attached_at_ms: Option<u32>,
     source_caps_recovery_attempted: bool,
+    source_caps_soft_reset_attempted: bool,
     prefer_fast_source_caps_probe: bool,
     last_source_caps_requery_at_ms: Option<u32>,
     message_id: u8,
@@ -271,6 +272,7 @@ where
             last_request_at_ms: 0,
             attached_at_ms: None,
             source_caps_recovery_attempted: false,
+            source_caps_soft_reset_attempted: false,
             prefer_fast_source_caps_probe: false,
             last_source_caps_requery_at_ms: None,
             last_source_caps_recovery_at_ms: None,
@@ -563,10 +565,17 @@ where
             }
         }
 
+        let send_soft_reset = !first_attempt && !self.source_caps_soft_reset_attempted;
         if first_attempt {
             info!(
                 "usb_pd: no source caps after attach, probing with get_source_cap waited_ms={=u32} tx_spec_rev_bits={=u8}",
                 waited_ms,
+                self.tx_spec_revision.bits()
+            );
+        } else if send_soft_reset {
+            info!(
+                "usb_pd: source caps probe still missing, issuing soft_reset retry_after_ms={=u32} tx_spec_rev_bits={=u8}",
+                now_ms.wrapping_sub(self.last_source_caps_recovery_at_ms.unwrap_or(now_ms)),
                 self.tx_spec_revision.bits()
             );
         } else {
@@ -576,16 +585,23 @@ where
                 self.tx_spec_revision.bits()
             );
         }
-        if let Err(err) =
-            self.send_control_message(ControlMessageType::GetSourceCap, self.tx_spec_revision)
-        {
+        let recovery_message = if send_soft_reset {
+            ControlMessageType::SoftReset
+        } else {
+            ControlMessageType::GetSourceCap
+        };
+        if let Err(err) = self.send_control_message(recovery_message, self.tx_spec_revision) {
             warn!(
-                "usb_pd: source caps get_source_cap probe failed err={}",
+                "usb_pd: source caps recovery send failed kind={} err={}",
+                control_message_name(recovery_message),
                 fusb302_error_kind(&err)
             );
             return;
         }
         self.source_caps_recovery_attempted = true;
+        if send_soft_reset {
+            self.source_caps_soft_reset_attempted = true;
+        }
         self.prefer_fast_source_caps_probe = false;
         self.last_source_caps_recovery_at_ms = Some(now_ms);
     }
@@ -731,6 +747,7 @@ where
 
             self.state.attached = true;
             self.state.polarity = Some(polarity);
+            self.source_caps_soft_reset_attempted = false;
             self.prefer_fast_source_caps_probe = false;
             self.message_id = 0;
             self.attached_at_ms = Some(now_ms);
@@ -911,6 +928,7 @@ where
                     self.observe_peer_spec_revision(source_caps.spec_revision, "source_caps");
                     self.source_capabilities = Some(source_caps);
                     self.source_caps_recovery_attempted = false;
+                    self.source_caps_soft_reset_attempted = false;
                     self.prefer_fast_source_caps_probe = false;
                     if filtered_source_has_pps(&filtered) {
                         self.last_source_caps_requery_at_ms = None;
@@ -1130,6 +1148,7 @@ where
         self.consecutive_effective_vbus_absent_polls = 0;
         self.attached_at_ms = None;
         self.source_caps_recovery_attempted = false;
+        self.source_caps_soft_reset_attempted = false;
         self.prefer_fast_source_caps_probe = false;
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
@@ -1221,6 +1240,7 @@ where
         self.consecutive_raw_vbus_absent_polls = 0;
         self.attached_at_ms = None;
         self.source_caps_recovery_attempted = false;
+        self.source_caps_soft_reset_attempted = false;
         self.prefer_fast_source_caps_probe = false;
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
@@ -2245,5 +2265,27 @@ mod tests {
 
         assert_eq!(manager.message_id, 3);
         assert_eq!(manager.last_source_caps_recovery_at_ms, Some(0));
+    }
+
+    #[test]
+    fn missing_source_caps_second_stage_arms_soft_reset_before_full_rearm() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.state.attached = true;
+        manager.attached_at_ms = Some(0);
+        manager.source_caps_recovery_attempted = true;
+        manager.last_source_caps_recovery_at_ms = Some(0);
+        manager.message_id = 4;
+
+        manager.maybe_recover_missing_source_caps(
+            UsbPdPowerDemand::default(),
+            SOURCE_CAPS_RECOVERY_RETRY_MS,
+        );
+
+        assert_eq!(manager.message_id, 5);
+        assert!(manager.source_caps_soft_reset_attempted);
+        assert_eq!(
+            manager.last_source_caps_recovery_at_ms,
+            Some(SOURCE_CAPS_RECOVERY_RETRY_MS)
+        );
     }
 }
