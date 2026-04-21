@@ -18,8 +18,9 @@ const SOURCE_CAPS_REQUERY_RETRY_MS: u32 = 5_000;
 const SOURCE_CAPS_RECOVERY_RETRY_MS: u32 = 1_000;
 const SOURCE_CAPS_HARD_RECOVERY_TIMEOUT_MS: u32 = 2_500;
 const NO_CONTRACT_SOURCE_CAPS_REARM_TIMEOUT_MS: u32 = 3_000;
-const NO_CONTRACT_ATTACH_STABILIZE_MS: u32 = 12_000;
+const NO_CONTRACT_ATTACH_STABILIZE_MS: u32 = 1_500;
 const CONTRACT_REQUEST_TIMEOUT_MS: u32 = 1_500;
+const CC_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const RAW_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const CHARGER_VBUS_PRESENT_THRESHOLD_MV: u16 = 4_500;
@@ -240,6 +241,10 @@ const fn next_absent_polls(current: u8, signal_present: bool) -> u8 {
 
 const fn raw_vbus_detach_debounce_elapsed(consecutive_raw_vbus_absent_polls: u8) -> bool {
     consecutive_raw_vbus_absent_polls >= RAW_VBUS_DETACH_DEBOUNCE_POLLS
+}
+
+const fn cc_detach_debounce_elapsed(consecutive_cc_absent_polls: u8) -> bool {
+    consecutive_cc_absent_polls >= CC_DETACH_DEBOUNCE_POLLS
 }
 
 const fn effective_vbus_detach_debounce_elapsed(
@@ -687,28 +692,37 @@ where
         let raw_vbus_present = snapshot.vbus_present();
         let measured_input_voltage_mv = demand.measured_input_voltage_mv;
         let vbus_present = effective_vbus_present(raw_vbus_present, measured_input_voltage_mv);
+        let live_cc_present = detected_attach_polarity.is_some()
+            || snapshot.cc_activity_present()
+            || snapshot.cc_source_present();
         self.state.vbus_present = Some(vbus_present);
-        self.consecutive_cc_absent_polls = if self.state.attached {
-            0
-        } else {
-            next_absent_polls(
-                self.consecutive_cc_absent_polls,
-                detected_attach_polarity.is_some(),
-            )
-        };
+        self.consecutive_cc_absent_polls =
+            next_absent_polls(self.consecutive_cc_absent_polls, live_cc_present);
         self.consecutive_raw_vbus_absent_polls =
             next_absent_polls(self.consecutive_raw_vbus_absent_polls, raw_vbus_present);
         self.consecutive_effective_vbus_absent_polls =
             next_absent_polls(self.consecutive_effective_vbus_absent_polls, vbus_present);
-        let attach_recovery_in_progress = self.no_contract_attach_stabilizing(now_ms);
+        let attach_recovery_in_progress = self.no_contract_attach_stabilizing(now_ms)
+            && (live_cc_present || raw_vbus_present || vbus_present);
 
         if attach_recovery_in_progress {
+            self.consecutive_cc_absent_polls = 0;
             self.consecutive_raw_vbus_absent_polls = 0;
             self.consecutive_effective_vbus_absent_polls = 0;
         }
 
         if self.state.attached && !attach_recovery_in_progress && !raw_vbus_present && !vbus_present
         {
+            if !cc_detach_debounce_elapsed(self.consecutive_cc_absent_polls) {
+                debug!(
+                    "usb_pd: suppressing raw_vbus detach while cc remains present vin_mv={=?} cc_absent_polls={=u8} bc_lvl={=u8} cc_activity={=bool}",
+                    measured_input_voltage_mv,
+                    self.consecutive_cc_absent_polls,
+                    snapshot.cc_source_level(),
+                    snapshot.cc_activity_present()
+                );
+                return;
+            }
             if !raw_vbus_detach_debounce_elapsed(self.consecutive_raw_vbus_absent_polls) {
                 debug!(
                     "usb_pd: raw vbus detach debounce waiting effective_vbus_ok={=bool} vin_mv={=?} absent_polls={=u8}",
@@ -727,6 +741,17 @@ where
         }
 
         if self.state.attached && !attach_recovery_in_progress && !vbus_present {
+            if !cc_detach_debounce_elapsed(self.consecutive_cc_absent_polls) {
+                debug!(
+                    "usb_pd: suppressing effective_vbus detach while cc remains present raw_vbus_ok={=bool} vin_mv={=?} cc_absent_polls={=u8} bc_lvl={=u8} cc_activity={=bool}",
+                    raw_vbus_present,
+                    measured_input_voltage_mv,
+                    self.consecutive_cc_absent_polls,
+                    snapshot.cc_source_level(),
+                    snapshot.cc_activity_present()
+                );
+                return;
+            }
             if !effective_vbus_detach_debounce_elapsed(self.consecutive_effective_vbus_absent_polls)
             {
                 debug!(
@@ -1385,6 +1410,31 @@ mod tests {
         }
     }
 
+    const fn irq_snapshot_with_status0(
+        status1a: u8,
+        raw_vbus_ok: bool,
+        cc_activity: bool,
+        bc_lvl: u8,
+    ) -> IrqSnapshot {
+        IrqSnapshot {
+            status0a: 0,
+            status1a,
+            interrupta: 0,
+            interruptb: 0,
+            status0: (if raw_vbus_ok {
+                fusb302::status0::VBUS_OK
+            } else {
+                0
+            }) | (if cc_activity {
+                fusb302::status0::ACTIVITY
+            } else {
+                0
+            }) | (bc_lvl & fusb302::status0::BC_LVL_MASK),
+            status1: 0,
+            interrupt: 0,
+        }
+    }
+
     const fn irq_snapshot_with_retry_fail(status1a: u8, vbus_ok: bool) -> IrqSnapshot {
         IrqSnapshot {
             status0a: 0,
@@ -1957,6 +2007,48 @@ mod tests {
     }
 
     #[test]
+    fn attached_session_ignores_vbus_loss_when_bc_lvl_still_shows_source_present() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.state.attached = true;
+        manager.state.polarity = Some(CcPolarity::Cc2);
+        manager.state.vbus_present = Some(true);
+        manager.state.contract = Some(ActiveContract {
+            kind: ContractKind::Fixed,
+            object_position: 1,
+            voltage_mv: 5_000,
+            current_ma: 500,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(500),
+            vindpm_mv: Some(4_000),
+        });
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_status0(fusb302::status1a::TOGS_NONE, false, false, 0b01),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(3_200),
+                ..UsbPdPowerDemand::default()
+            },
+            1_000,
+        );
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_status0(fusb302::status1a::TOGS_NONE, false, false, 0b01),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(3_100),
+                ..UsbPdPowerDemand::default()
+            },
+            1_250,
+        );
+
+        assert!(manager.state.attached);
+        assert_eq!(
+            manager.state.contract.map(|contract| contract.kind),
+            Some(ContractKind::Fixed)
+        );
+        assert_eq!(manager.consecutive_cc_absent_polls, 0);
+    }
+
+    #[test]
     fn deferred_request_rearms_existing_contract_charge_gate() {
         let mut manager = UsbPdSinkManager::new(NoopI2c);
         let active_contract = ActiveContract {
@@ -2050,7 +2142,7 @@ mod tests {
     }
 
     #[test]
-    fn no_contract_attach_stabilization_suppresses_detach_without_cc() {
+    fn no_contract_attach_stabilization_does_not_mask_true_signal_loss() {
         let mut manager = UsbPdSinkManager::new(LenientI2c);
         manager.state.attached = true;
         manager.state.vbus_present = Some(true);
@@ -2066,6 +2158,16 @@ mod tests {
         );
 
         assert!(manager.state.attached);
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_NONE, false),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(2_950),
+                ..UsbPdPowerDemand::default()
+            },
+            1_750,
+        );
+
+        assert!(!manager.state.attached);
         assert_eq!(manager.state.vbus_present, Some(false));
         assert_eq!(manager.consecutive_raw_vbus_absent_polls, 0);
         assert_eq!(manager.consecutive_effective_vbus_absent_polls, 0);
@@ -2092,7 +2194,7 @@ mod tests {
                 measured_input_voltage_mv: Some(2_950),
                 ..UsbPdPowerDemand::default()
             },
-            NO_CONTRACT_ATTACH_STABILIZE_MS + 20,
+            NO_CONTRACT_ATTACH_STABILIZE_MS + 260,
         );
 
         assert!(!manager.state.attached);
