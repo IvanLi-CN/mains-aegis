@@ -557,22 +557,22 @@ where
 
         if first_attempt {
             info!(
-                "usb_pd: no source caps after attach, issuing soft reset waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                "usb_pd: no source caps after attach, probing with get_source_cap waited_ms={=u32} tx_spec_rev_bits={=u8}",
                 waited_ms,
                 self.tx_spec_revision.bits()
             );
         } else {
             info!(
-                "usb_pd: retrying source caps recovery after default_5v fallback retry_after_ms={=u32} tx_spec_rev_bits={=u8}",
+                "usb_pd: retrying source caps probe after default_5v fallback retry_after_ms={=u32} tx_spec_rev_bits={=u8}",
                 now_ms.wrapping_sub(self.last_source_caps_recovery_at_ms.unwrap_or(now_ms)),
                 self.tx_spec_revision.bits()
             );
         }
         if let Err(err) =
-            self.send_control_message(ControlMessageType::SoftReset, self.tx_spec_revision)
+            self.send_control_message(ControlMessageType::GetSourceCap, self.tx_spec_revision)
         {
             warn!(
-                "usb_pd: source caps soft reset failed err={}",
+                "usb_pd: source caps get_source_cap probe failed err={}",
                 fusb302_error_kind(&err)
             );
             return;
@@ -2116,7 +2116,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_source_caps_retry_reissues_soft_reset_when_charge_path_is_active() {
+    fn missing_source_caps_retry_reissues_source_caps_probe_when_charge_path_is_active() {
         let mut manager = UsbPdSinkManager::new(NoopI2c);
         manager.state.attached = true;
         manager.state.charge_ready = true;
@@ -2141,7 +2141,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_source_caps_retry_reissues_soft_reset_even_when_charge_path_is_idle() {
+    fn missing_source_caps_retry_reissues_source_caps_probe_even_when_charge_path_is_idle() {
         let mut manager = UsbPdSinkManager::new(NoopI2c);
         manager.state.attached = true;
         manager.attached_at_ms = Some(0);
