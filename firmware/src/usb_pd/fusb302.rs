@@ -262,6 +262,9 @@ impl From<esp_hal::i2c::master::Error> for Error {
 pub struct Fusb302<I2C> {
     i2c: I2C,
     switches1_base: u8,
+    pd_rx_enabled: bool,
+    rx_polarity: Option<CcPolarity>,
+    rx_spec_revision: Option<SpecRevision>,
 }
 
 impl<I2C> Fusb302<I2C>
@@ -272,10 +275,14 @@ where
         Self {
             i2c,
             switches1_base: 0,
+            pd_rx_enabled: false,
+            rx_polarity: None,
+            rx_spec_revision: None,
         }
     }
 
     pub fn init_sink(&mut self, spec_revision: SpecRevision) -> Result<u8, Error> {
+        self.clear_pd_rx_state();
         self.write_reg(reg::RESET, reset::SW_RESET)?;
         self.write_reg(reg::RESET, reset::PD_RESET)?;
         self.write_reg(reg::POWER, POWER_ALL)?;
@@ -304,6 +311,7 @@ where
     }
 
     pub fn start_sink_toggle(&mut self) -> Result<(), Error> {
+        self.clear_pd_rx_state();
         self.write_reg(reg::SWITCHES0, SWITCHES0_PDWN_BOTH)?;
         self.write_reg(reg::SWITCHES1, self.switches1_base)?;
         self.write_reg(
@@ -356,6 +364,13 @@ where
         polarity: CcPolarity,
         spec_revision: SpecRevision,
     ) -> Result<(), Error> {
+        if self.pd_rx_enabled
+            && self.rx_polarity == Some(polarity)
+            && self.rx_spec_revision == Some(spec_revision)
+        {
+            return Ok(());
+        }
+
         self.flush_rx()?;
         self.flush_tx()?;
         self.configure_sink_polarity(polarity, spec_revision)?;
@@ -381,6 +396,9 @@ where
             maska::OCP_TEMP | maska::TOG_DONE | maska::SOFT_FAIL,
         )?;
         self.write_reg(reg::MASKB, 0x00)?;
+        self.pd_rx_enabled = true;
+        self.rx_polarity = Some(polarity);
+        self.rx_spec_revision = Some(spec_revision);
         Ok(())
     }
 
@@ -544,5 +562,11 @@ where
         buf[1..1 + bytes.len()].copy_from_slice(bytes);
         self.i2c.write(I2C_ADDRESS, &buf[..1 + bytes.len()])?;
         Ok(())
+    }
+
+    fn clear_pd_rx_state(&mut self) {
+        self.pd_rx_enabled = false;
+        self.rx_polarity = None;
+        self.rx_spec_revision = None;
     }
 }

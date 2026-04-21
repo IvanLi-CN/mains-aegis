@@ -765,14 +765,16 @@ where
             self.clear_contract_tracking();
             self.source_capabilities = None;
             self.disarm_charge_ready("attach");
-            if let Err(err) = self.phy.init_sink(self.tx_spec_revision) {
-                warn!(
-                    "usb_pd: attach reinit failed err={}",
-                    fusb302_error_kind(&err)
-                );
-                self.initialized = false;
-                self.state.controller_ready = false;
-                return;
+            if !self.initialized {
+                if let Err(err) = self.phy.init_sink(self.tx_spec_revision) {
+                    warn!(
+                        "usb_pd: attach init failed err={}",
+                        fusb302_error_kind(&err)
+                    );
+                    self.initialized = false;
+                    self.state.controller_ready = false;
+                    return;
+                }
             }
             if let Err(err) = self.phy.enable_pd_receive(polarity, self.tx_spec_revision) {
                 warn!("usb_pd: enable rx failed err={}", fusb302_error_kind(&err));
@@ -785,7 +787,7 @@ where
             self.next_retry_at_ms = 0;
             let switches1 = self.phy.read_switches1().ok();
             info!(
-                "usb_pd: attached polarity={} switches1={=?} spec_rev_bits={=u8} action=full_reinit",
+                "usb_pd: attached polarity={} switches1={=?} spec_rev_bits={=u8} action=enable_rx",
                 polarity_name(polarity),
                 switches1,
                 self.tx_spec_revision.bits()
@@ -1290,9 +1292,16 @@ const fn deadline_elapsed(now_ms: u32, deadline_ms: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+    use std::rc::Rc;
 
     struct NoopI2c;
     struct LenientI2c;
+    #[derive(Clone, Default)]
+    struct CountingI2c {
+        writes_by_reg: Rc<RefCell<BTreeMap<u8, usize>>>,
+    }
 
     impl embedded_hal::i2c::ErrorType for NoopI2c {
         type Error = esp_hal::i2c::master::Error;
@@ -1321,6 +1330,30 @@ mod tests {
             for operation in operations {
                 if let embedded_hal::i2c::Operation::Read(buffer) = operation {
                     buffer.fill(0);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    impl embedded_hal::i2c::ErrorType for CountingI2c {
+        type Error = esp_hal::i2c::master::Error;
+    }
+
+    impl embedded_hal::i2c::I2c for CountingI2c {
+        fn transaction(
+            &mut self,
+            _address: u8,
+            operations: &mut [embedded_hal::i2c::Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            for operation in operations {
+                match operation {
+                    embedded_hal::i2c::Operation::Read(buffer) => buffer.fill(0),
+                    embedded_hal::i2c::Operation::Write(bytes) => {
+                        if let Some((&reg, _payload)) = bytes.split_first() {
+                            *self.writes_by_reg.borrow_mut().entry(reg).or_default() += 1;
+                        }
+                    }
                 }
             }
             Ok(())
@@ -1674,10 +1707,10 @@ mod tests {
     }
 
     #[test]
-    fn fresh_attach_fully_reinitializes_phy_before_enabling_receive() {
-        let mut manager = UsbPdSinkManager::new(LenientI2c);
-        manager.initialized = true;
+    fn fresh_attach_reuses_initialized_phy_without_resetting_controller() {
+        let mut manager = UsbPdSinkManager::new(CountingI2c::default());
         manager.state.enabled = true;
+        manager.initialized = true;
         manager.state.controller_ready = true;
 
         manager.handle_irq_snapshot(
@@ -1694,6 +1727,29 @@ mod tests {
         assert!(manager.initialized);
         assert!(manager.state.controller_ready);
         assert_eq!(manager.attached_at_ms, Some(2_000));
+        let i2c = manager.phy.release_i2c();
+        assert_eq!(
+            i2c.writes_by_reg
+                .borrow()
+                .get(&fusb302::reg::RESET)
+                .copied(),
+            None
+        );
+    }
+
+    #[test]
+    fn enabling_pd_receive_twice_with_same_polarity_is_idempotent() {
+        let i2c = CountingI2c::default();
+        let writes_by_reg = Rc::clone(&i2c.writes_by_reg);
+        let mut phy = fusb302::Fusb302::new(i2c);
+        phy.enable_pd_receive(CcPolarity::Cc2, SpecRevision::Rev30)
+            .unwrap();
+        let writes_after_first_enable = writes_by_reg.borrow().clone();
+
+        phy.enable_pd_receive(CcPolarity::Cc2, SpecRevision::Rev30)
+            .unwrap();
+
+        assert_eq!(*writes_by_reg.borrow(), writes_after_first_enable);
     }
 
     #[test]
