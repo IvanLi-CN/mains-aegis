@@ -248,6 +248,11 @@ const fn effective_vbus_detach_debounce_elapsed(
     consecutive_effective_vbus_absent_polls >= EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS
 }
 
+const fn retry_fail_should_defer_for_rx(snapshot: IrqSnapshot) -> bool {
+    snapshot.retry_failed()
+        && (snapshot.rx_fifo_non_empty() || snapshot.tx_sent() || snapshot.gcrc_sent())
+}
+
 const fn negotiated_spec_revision(spec_revision: SpecRevision) -> SpecRevision {
     pd::clamp_fusb302_spec_revision(spec_revision)
 }
@@ -814,20 +819,14 @@ where
             );
         }
 
-        if snapshot.hard_reset_received() || snapshot.retry_failed() {
+        if snapshot.hard_reset_received() {
             let no_contract_before_reset = self.state.contract.is_none();
             warn!(
-                "usb_pd: reset/retry event hard={=bool} retry_fail={=bool}",
-                snapshot.hard_reset_received(),
+                "usb_pd: reset/retry event hard=true retry_fail={=bool}",
                 snapshot.retry_failed()
             );
             if no_contract_before_reset {
-                let reason = if snapshot.hard_reset_received() {
-                    "hard_reset_no_contract"
-                } else {
-                    "retry_fail_no_contract"
-                };
-                self.rearm_after_detach(now_ms, reason);
+                self.rearm_after_detach(now_ms, "hard_reset_no_contract");
                 return;
             }
             self.reset_contract_state(false);
@@ -880,6 +879,25 @@ where
                     }
                 }
             }
+        }
+
+        if retry_fail_should_defer_for_rx(snapshot) {
+            debug!("usb_pd: deferring retry_fail handling until rx activity is drained");
+        } else if snapshot.retry_failed() {
+            let no_contract_before_reset = self.state.contract.is_none();
+            warn!("usb_pd: reset/retry event hard=false retry_fail=true");
+            if no_contract_before_reset {
+                self.rearm_after_detach(now_ms, "retry_fail_no_contract");
+                return;
+            }
+            self.reset_contract_state(false);
+            self.prefer_fast_source_caps_probe = false;
+            self.attached_at_ms = Some(now_ms);
+            if let Some(polarity) = self.state.polarity {
+                let _ = self.phy.enable_pd_receive(polarity, self.tx_spec_revision);
+            }
+            self.state.vbus_present = Some(vbus_present);
+            return;
         }
     }
 
@@ -2296,5 +2314,20 @@ mod tests {
             manager.last_source_caps_recovery_at_ms,
             Some(SOURCE_CAPS_RECOVERY_RETRY_MS)
         );
+    }
+
+    #[test]
+    fn retry_fail_is_deferred_when_rx_activity_is_present() {
+        let snapshot = IrqSnapshot {
+            status0a: fusb302::status0a::RETRY_FAIL,
+            status1a: 0,
+            interrupta: fusb302::interrupta::RETRY_FAIL | fusb302::interrupta::TX_SENT,
+            interruptb: 0,
+            status0: 0,
+            status1: 0,
+            interrupt: 0,
+        };
+
+        assert!(retry_fail_should_defer_for_rx(snapshot));
     }
 }
