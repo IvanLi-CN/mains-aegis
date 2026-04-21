@@ -12,6 +12,7 @@ use sink_policy::{ContractPlan, LocalCapabilities, SourceOffer};
 const PHY_POLL_INTERVAL_MS: u32 = 250;
 const ERROR_RETRY_INTERVAL_MS: u32 = 1_000;
 const SOURCE_CAPS_WAIT_TIMEOUT_MS: u32 = 800;
+const SOURCE_CAPS_WAIT_AFTER_RESET_MS: u32 = 250;
 const SOURCE_CAPS_REQUERY_DELAY_MS: u32 = 1_000;
 const SOURCE_CAPS_REQUERY_RETRY_MS: u32 = 5_000;
 const SOURCE_CAPS_RECOVERY_RETRY_MS: u32 = 1_000;
@@ -87,6 +88,7 @@ pub struct UsbPdSinkManager<I2C> {
     last_request_at_ms: u32,
     attached_at_ms: Option<u32>,
     source_caps_recovery_attempted: bool,
+    prefer_fast_source_caps_probe: bool,
     last_source_caps_requery_at_ms: Option<u32>,
     message_id: u8,
     tx_spec_revision: SpecRevision,
@@ -269,6 +271,7 @@ where
             last_request_at_ms: 0,
             attached_at_ms: None,
             source_caps_recovery_attempted: false,
+            prefer_fast_source_caps_probe: false,
             last_source_caps_requery_at_ms: None,
             last_source_caps_recovery_at_ms: None,
             message_id: 0,
@@ -532,7 +535,12 @@ where
         };
 
         let waited_ms = now_ms.wrapping_sub(attached_at_ms);
-        if waited_ms < SOURCE_CAPS_WAIT_TIMEOUT_MS {
+        let wait_timeout_ms = if self.prefer_fast_source_caps_probe {
+            SOURCE_CAPS_WAIT_AFTER_RESET_MS
+        } else {
+            SOURCE_CAPS_WAIT_TIMEOUT_MS
+        };
+        if waited_ms < wait_timeout_ms {
             return;
         }
 
@@ -578,6 +586,7 @@ where
             return;
         }
         self.source_caps_recovery_attempted = true;
+        self.prefer_fast_source_caps_probe = false;
         self.last_source_caps_recovery_at_ms = Some(now_ms);
     }
 
@@ -722,6 +731,7 @@ where
 
             self.state.attached = true;
             self.state.polarity = Some(polarity);
+            self.prefer_fast_source_caps_probe = false;
             self.message_id = 0;
             self.attached_at_ms = Some(now_ms);
             self.source_caps_recovery_attempted = false;
@@ -788,12 +798,14 @@ where
         }
 
         if snapshot.hard_reset_received() || snapshot.retry_failed() {
+            let no_contract_before_reset = self.state.contract.is_none();
             warn!(
                 "usb_pd: reset/retry event hard={=bool} retry_fail={=bool}",
                 snapshot.hard_reset_received(),
                 snapshot.retry_failed()
             );
             self.reset_contract_state(false);
+            self.prefer_fast_source_caps_probe = no_contract_before_reset;
             self.attached_at_ms = Some(now_ms);
             if let Some(polarity) = self.state.polarity {
                 let _ = self.phy.enable_pd_receive(polarity, self.tx_spec_revision);
@@ -890,6 +902,7 @@ where
                     self.observe_peer_spec_revision(source_caps.spec_revision, "source_caps");
                     self.source_capabilities = Some(source_caps);
                     self.source_caps_recovery_attempted = false;
+                    self.prefer_fast_source_caps_probe = false;
                     if filtered_source_has_pps(&filtered) {
                         self.last_source_caps_requery_at_ms = None;
                     }
@@ -1108,6 +1121,7 @@ where
         self.consecutive_effective_vbus_absent_polls = 0;
         self.attached_at_ms = None;
         self.source_caps_recovery_attempted = false;
+        self.prefer_fast_source_caps_probe = false;
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         self.tx_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
@@ -1198,6 +1212,7 @@ where
         self.consecutive_raw_vbus_absent_polls = 0;
         self.attached_at_ms = None;
         self.source_caps_recovery_attempted = false;
+        self.prefer_fast_source_caps_probe = false;
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         if detach {
@@ -1994,6 +2009,37 @@ mod tests {
         assert!(manager.initialized);
         assert!(manager.state.controller_ready);
         assert_eq!(manager.attached_at_ms, Some(1_000));
+    }
+
+    #[test]
+    fn retry_fail_without_contract_arms_fast_source_caps_probe() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        manager.state.attached = true;
+        manager.state.vbus_present = Some(true);
+        manager.state.polarity = Some(CcPolarity::Cc1);
+        manager.attached_at_ms = Some(0);
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_retry_fail(fusb302::status1a::TOGS_SNK1, true),
+            UsbPdPowerDemand::default(),
+            1_000,
+        );
+
+        manager.maybe_recover_missing_source_caps(
+            UsbPdPowerDemand::default(),
+            1_000 + SOURCE_CAPS_WAIT_AFTER_RESET_MS - 1,
+        );
+        assert_eq!(manager.message_id, 0);
+
+        manager.maybe_recover_missing_source_caps(
+            UsbPdPowerDemand::default(),
+            1_000 + SOURCE_CAPS_WAIT_AFTER_RESET_MS,
+        );
+        assert_eq!(manager.message_id, 1);
+        assert_eq!(
+            manager.last_source_caps_recovery_at_ms,
+            Some(1_000 + SOURCE_CAPS_WAIT_AFTER_RESET_MS)
+        );
     }
 
     #[test]
