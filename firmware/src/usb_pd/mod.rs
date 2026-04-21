@@ -2317,6 +2317,21 @@ mod tests {
     }
 
     #[test]
+    fn sticky_status0a_retry_fail_does_not_trigger_retry_event_without_interrupt() {
+        let snapshot = IrqSnapshot {
+            status0a: fusb302::status0a::RETRY_FAIL,
+            status1a: 0,
+            interrupta: 0,
+            interruptb: 0,
+            status0: 0,
+            status1: 0,
+            interrupt: 0,
+        };
+
+        assert!(!snapshot.retry_failed());
+    }
+
+    #[test]
     fn retry_fail_is_deferred_when_rx_activity_is_present() {
         let snapshot = IrqSnapshot {
             status0a: fusb302::status0a::RETRY_FAIL,

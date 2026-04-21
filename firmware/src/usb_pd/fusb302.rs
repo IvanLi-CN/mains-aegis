@@ -218,7 +218,6 @@ impl IrqSnapshot {
 
     pub const fn retry_failed(&self) -> bool {
         (self.interrupta & interrupta::RETRY_FAIL) != 0
-            || (self.status0a & status0a::RETRY_FAIL) != 0
     }
 
     pub const fn soft_reset_received(&self) -> bool {
