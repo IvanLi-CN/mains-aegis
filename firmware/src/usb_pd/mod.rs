@@ -19,6 +19,7 @@ const SOURCE_CAPS_HARD_RECOVERY_TIMEOUT_MS: u32 = 2_500;
 const NO_CONTRACT_SOURCE_CAPS_REARM_TIMEOUT_MS: u32 = 3_000;
 const NO_CONTRACT_ATTACH_STABILIZE_MS: u32 = 12_000;
 const CONTRACT_REQUEST_TIMEOUT_MS: u32 = 1_500;
+const CC_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const RAW_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const CHARGER_VBUS_PRESENT_THRESHOLD_MV: u16 = 4_500;
@@ -233,6 +234,10 @@ const fn next_absent_polls(current: u8, signal_present: bool) -> u8 {
     } else {
         current.saturating_add(1)
     }
+}
+
+const fn cc_detach_debounce_elapsed(consecutive_cc_absent_polls: u8) -> bool {
+    consecutive_cc_absent_polls >= CC_DETACH_DEBOUNCE_POLLS
 }
 
 const fn raw_vbus_detach_debounce_elapsed(consecutive_raw_vbus_absent_polls: u8) -> bool {
@@ -658,14 +663,10 @@ where
         let measured_input_voltage_mv = demand.measured_input_voltage_mv;
         let vbus_present = effective_vbus_present(raw_vbus_present, measured_input_voltage_mv);
         self.state.vbus_present = Some(vbus_present);
-        self.consecutive_cc_absent_polls = if self.state.attached {
-            0
-        } else {
-            next_absent_polls(
-                self.consecutive_cc_absent_polls,
-                detected_attach_polarity.is_some(),
-            )
-        };
+        self.consecutive_cc_absent_polls = next_absent_polls(
+            self.consecutive_cc_absent_polls,
+            detected_attach_polarity.is_some(),
+        );
         self.consecutive_raw_vbus_absent_polls =
             next_absent_polls(self.consecutive_raw_vbus_absent_polls, raw_vbus_present);
         self.consecutive_effective_vbus_absent_polls =
@@ -675,6 +676,22 @@ where
         if attach_recovery_in_progress {
             self.consecutive_raw_vbus_absent_polls = 0;
             self.consecutive_effective_vbus_absent_polls = 0;
+        }
+
+        if self.state.attached && detected_attach_polarity.is_none() {
+            if !cc_detach_debounce_elapsed(self.consecutive_cc_absent_polls) {
+                debug!(
+                    "usb_pd: cc detach debounce waiting vbus_present={=bool} absent_polls={=u8}",
+                    vbus_present, self.consecutive_cc_absent_polls
+                );
+                return;
+            }
+            info!(
+                "usb_pd: detached cc_lost vbus_present={=bool}",
+                vbus_present
+            );
+            self.rearm_after_detach(now_ms, "cc_lost");
+            return;
         }
 
         if self.state.attached && !attach_recovery_in_progress && !raw_vbus_present && !vbus_present
@@ -1942,6 +1959,36 @@ mod tests {
                 ..UsbPdPowerDemand::default()
             },
             NO_CONTRACT_ATTACH_STABILIZE_MS + 20,
+        );
+
+        assert!(!manager.state.attached);
+        assert_eq!(manager.state.vbus_present, Some(false));
+    }
+
+    #[test]
+    fn cc_loss_while_attached_forces_detach_even_during_no_contract_stabilization() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.state.attached = true;
+        manager.state.vbus_present = Some(true);
+        manager.attached_at_ms = Some(1_000);
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_NONE, true),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(5_100),
+                ..UsbPdPowerDemand::default()
+            },
+            1_100,
+        );
+        assert!(manager.state.attached);
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_NONE, true),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(5_100),
+                ..UsbPdPowerDemand::default()
+            },
+            1_200,
         );
 
         assert!(!manager.state.attached);
