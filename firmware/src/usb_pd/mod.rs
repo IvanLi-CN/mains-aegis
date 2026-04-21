@@ -793,20 +793,13 @@ where
                 snapshot.hard_reset_received(),
                 snapshot.retry_failed()
             );
-            if self.state.contract.is_none() {
-                let reason = if snapshot.hard_reset_received() {
-                    "hard_reset_no_contract"
-                } else {
-                    "retry_fail_no_contract"
-                };
-                self.rearm_after_detach(now_ms, reason);
-                return;
-            }
             self.reset_contract_state(false);
             self.attached_at_ms = Some(now_ms);
             if let Some(polarity) = self.state.polarity {
                 let _ = self.phy.enable_pd_receive(polarity, self.tx_spec_revision);
             }
+            self.state.vbus_present = Some(vbus_present);
+            return;
         }
 
         if snapshot.soft_reset_received() && !snapshot.rx_message_ready() {
@@ -1980,7 +1973,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_fail_without_contract_forces_full_rearm() {
+    fn retry_fail_without_contract_keeps_attach_and_restarts_recovery() {
         let mut manager = UsbPdSinkManager::new(LenientI2c);
         manager.state.attached = true;
         manager.state.vbus_present = Some(true);
@@ -1996,10 +1989,11 @@ mod tests {
             1_000,
         );
 
-        assert!(!manager.state.attached);
-        assert_eq!(manager.state.vbus_present, Some(false));
+        assert!(manager.state.attached);
+        assert_eq!(manager.state.vbus_present, Some(true));
         assert!(manager.initialized);
         assert!(manager.state.controller_ready);
+        assert_eq!(manager.attached_at_ms, Some(1_000));
     }
 
     #[test]
