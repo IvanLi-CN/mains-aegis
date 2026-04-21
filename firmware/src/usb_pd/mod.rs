@@ -1301,6 +1301,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct CountingI2c {
         writes_by_reg: Rc<RefCell<BTreeMap<u8, usize>>>,
+        last_write_by_reg: Rc<RefCell<BTreeMap<u8, Vec<u8>>>>,
     }
 
     impl embedded_hal::i2c::ErrorType for NoopI2c {
@@ -1352,6 +1353,9 @@ mod tests {
                     embedded_hal::i2c::Operation::Write(bytes) => {
                         if let Some((&reg, _payload)) = bytes.split_first() {
                             *self.writes_by_reg.borrow_mut().entry(reg).or_default() += 1;
+                            self.last_write_by_reg
+                                .borrow_mut()
+                                .insert(reg, bytes[1..].to_vec());
                         }
                     }
                 }
@@ -1750,6 +1754,32 @@ mod tests {
             .unwrap();
 
         assert_eq!(*writes_by_reg.borrow(), writes_after_first_enable);
+    }
+
+    #[test]
+    fn init_sink_does_not_enable_auto_protocol_resets() {
+        let i2c = CountingI2c::default();
+        let writes_by_reg = Rc::clone(&i2c.writes_by_reg);
+        let mut phy = fusb302::Fusb302::new(i2c);
+
+        phy.init_sink(SpecRevision::Rev30).unwrap();
+
+        let control3_writes = writes_by_reg
+            .borrow()
+            .get(&fusb302::reg::CONTROL3)
+            .copied()
+            .unwrap_or_default();
+        assert_eq!(control3_writes, 1);
+        assert_eq!(
+            phy.release_i2c()
+                .last_write_by_reg
+                .borrow()
+                .get(&fusb302::reg::CONTROL3)
+                .cloned(),
+            Some(vec![
+                fusb302::control3::AUTO_RETRY | fusb302::control3::N_RETRIES_3
+            ])
+        );
     }
 
     #[test]

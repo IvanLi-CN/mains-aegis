@@ -19,10 +19,10 @@ const SOP_TOKEN_SOP: u8 = 0b1110_0000;
 const POWER_ALL: u8 = 0x0F;
 const HOST_CUR_DEFAULT: u8 = 0b01 << 2;
 const SWITCHES0_PDWN_BOTH: u8 = switches0::PDWN1 | switches0::PDWN2;
-const CONTROL3_BASE: u8 = control3::AUTO_RETRY
-    | control3::N_RETRIES_3
-    | control3::AUTO_SOFT_RESET
-    | control3::AUTO_HARD_RESET;
+// Keep retry generation in hardware, but let firmware own SoftReset/HardReset recovery.
+// AUTO_SOFT_RESET / AUTO_HARD_RESET make FUSB302 autonomously escalate a RETRYFAIL into
+// protocol resets, which races our policy engine and can strand recovery in contract=None.
+const CONTROL3_BASE: u8 = control3::AUTO_RETRY | control3::N_RETRIES_3;
 
 pub mod reg {
     pub const DEVICE_ID: u8 = 0x01;
