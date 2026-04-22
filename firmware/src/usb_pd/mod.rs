@@ -12,7 +12,6 @@ use sink_policy::{ContractPlan, LocalCapabilities, SourceOffer};
 const PHY_POLL_INTERVAL_MS: u32 = 250;
 const ERROR_RETRY_INTERVAL_MS: u32 = 1_000;
 const SOURCE_CAPS_WAIT_TIMEOUT_MS: u32 = 800;
-const SOURCE_CAPS_WAIT_AFTER_RESET_MS: u32 = 250;
 const SOURCE_CAPS_REQUERY_DELAY_MS: u32 = 1_000;
 const SOURCE_CAPS_REQUERY_RETRY_MS: u32 = 5_000;
 const SOURCE_CAPS_RECOVERY_RETRY_MS: u32 = 1_000;
@@ -88,8 +87,6 @@ pub struct UsbPdSinkManager<I2C> {
     last_request_at_ms: u32,
     attached_at_ms: Option<u32>,
     source_caps_recovery_attempted: bool,
-    source_caps_soft_reset_attempted: bool,
-    prefer_fast_source_caps_probe: bool,
     last_source_caps_requery_at_ms: Option<u32>,
     message_id: u8,
     tx_spec_revision: SpecRevision,
@@ -248,11 +245,6 @@ const fn effective_vbus_detach_debounce_elapsed(
     consecutive_effective_vbus_absent_polls >= EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS
 }
 
-const fn retry_fail_should_defer_for_rx(snapshot: IrqSnapshot) -> bool {
-    snapshot.retry_failed()
-        && (snapshot.rx_fifo_non_empty() || snapshot.tx_sent() || snapshot.gcrc_sent())
-}
-
 const fn negotiated_spec_revision(spec_revision: SpecRevision) -> SpecRevision {
     pd::clamp_fusb302_spec_revision(spec_revision)
 }
@@ -277,8 +269,6 @@ where
             last_request_at_ms: 0,
             attached_at_ms: None,
             source_caps_recovery_attempted: false,
-            source_caps_soft_reset_attempted: false,
-            prefer_fast_source_caps_probe: false,
             last_source_caps_requery_at_ms: None,
             last_source_caps_recovery_at_ms: None,
             message_id: 0,
@@ -542,12 +532,7 @@ where
         };
 
         let waited_ms = now_ms.wrapping_sub(attached_at_ms);
-        let wait_timeout_ms = if self.prefer_fast_source_caps_probe {
-            SOURCE_CAPS_WAIT_AFTER_RESET_MS
-        } else {
-            SOURCE_CAPS_WAIT_TIMEOUT_MS
-        };
-        if waited_ms < wait_timeout_ms {
+        if waited_ms < SOURCE_CAPS_WAIT_TIMEOUT_MS {
             return;
         }
 
@@ -570,44 +555,29 @@ where
             }
         }
 
-        let send_soft_reset = !first_attempt && !self.source_caps_soft_reset_attempted;
         if first_attempt {
             info!(
-                "usb_pd: no source caps after attach, probing with get_source_cap waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                "usb_pd: no source caps after attach, issuing soft reset waited_ms={=u32} tx_spec_rev_bits={=u8}",
                 waited_ms,
-                self.tx_spec_revision.bits()
-            );
-        } else if send_soft_reset {
-            info!(
-                "usb_pd: source caps probe still missing, issuing soft_reset retry_after_ms={=u32} tx_spec_rev_bits={=u8}",
-                now_ms.wrapping_sub(self.last_source_caps_recovery_at_ms.unwrap_or(now_ms)),
                 self.tx_spec_revision.bits()
             );
         } else {
             info!(
-                "usb_pd: retrying source caps probe after default_5v fallback retry_after_ms={=u32} tx_spec_rev_bits={=u8}",
+                "usb_pd: retrying source caps recovery after default_5v fallback retry_after_ms={=u32} tx_spec_rev_bits={=u8}",
                 now_ms.wrapping_sub(self.last_source_caps_recovery_at_ms.unwrap_or(now_ms)),
                 self.tx_spec_revision.bits()
             );
         }
-        let recovery_message = if send_soft_reset {
-            ControlMessageType::SoftReset
-        } else {
-            ControlMessageType::GetSourceCap
-        };
-        if let Err(err) = self.send_control_message(recovery_message, self.tx_spec_revision) {
+        if let Err(err) =
+            self.send_control_message(ControlMessageType::SoftReset, self.tx_spec_revision)
+        {
             warn!(
-                "usb_pd: source caps recovery send failed kind={} err={}",
-                control_message_name(recovery_message),
+                "usb_pd: source caps soft reset failed err={}",
                 fusb302_error_kind(&err)
             );
             return;
         }
         self.source_caps_recovery_attempted = true;
-        if send_soft_reset {
-            self.source_caps_soft_reset_attempted = true;
-        }
-        self.prefer_fast_source_caps_probe = false;
         self.last_source_caps_recovery_at_ms = Some(now_ms);
     }
 
@@ -752,8 +722,6 @@ where
 
             self.state.attached = true;
             self.state.polarity = Some(polarity);
-            self.source_caps_soft_reset_attempted = false;
-            self.prefer_fast_source_caps_probe = false;
             self.message_id = 0;
             self.attached_at_ms = Some(now_ms);
             self.source_caps_recovery_attempted = false;
@@ -765,16 +733,14 @@ where
             self.clear_contract_tracking();
             self.source_capabilities = None;
             self.disarm_charge_ready("attach");
-            if !self.initialized {
-                if let Err(err) = self.phy.init_sink(self.tx_spec_revision) {
-                    warn!(
-                        "usb_pd: attach init failed err={}",
-                        fusb302_error_kind(&err)
-                    );
-                    self.initialized = false;
-                    self.state.controller_ready = false;
-                    return;
-                }
+            if let Err(err) = self.phy.init_sink(self.tx_spec_revision) {
+                warn!(
+                    "usb_pd: attach reinit failed err={}",
+                    fusb302_error_kind(&err)
+                );
+                self.initialized = false;
+                self.state.controller_ready = false;
+                return;
             }
             if let Err(err) = self.phy.enable_pd_receive(polarity, self.tx_spec_revision) {
                 warn!("usb_pd: enable rx failed err={}", fusb302_error_kind(&err));
@@ -787,7 +753,7 @@ where
             self.next_retry_at_ms = 0;
             let switches1 = self.phy.read_switches1().ok();
             info!(
-                "usb_pd: attached polarity={} switches1={=?} spec_rev_bits={=u8} action=enable_rx",
+                "usb_pd: attached polarity={} switches1={=?} spec_rev_bits={=u8} action=full_reinit",
                 polarity_name(polarity),
                 switches1,
                 self.tx_spec_revision.bits()
@@ -821,18 +787,13 @@ where
             );
         }
 
-        if snapshot.hard_reset_received() {
-            let no_contract_before_reset = self.state.contract.is_none();
+        if snapshot.hard_reset_received() || snapshot.retry_failed() {
             warn!(
-                "usb_pd: reset/retry event hard=true retry_fail={=bool}",
+                "usb_pd: reset/retry event hard={=bool} retry_fail={=bool}",
+                snapshot.hard_reset_received(),
                 snapshot.retry_failed()
             );
-            if no_contract_before_reset {
-                self.rearm_after_detach(now_ms, "hard_reset_no_contract");
-                return;
-            }
             self.reset_contract_state(false);
-            self.prefer_fast_source_caps_probe = no_contract_before_reset;
             self.attached_at_ms = Some(now_ms);
             if let Some(polarity) = self.state.polarity {
                 let _ = self.phy.enable_pd_receive(polarity, self.tx_spec_revision);
@@ -882,25 +843,6 @@ where
                 }
             }
         }
-
-        if retry_fail_should_defer_for_rx(snapshot) {
-            debug!("usb_pd: deferring retry_fail handling until rx activity is drained");
-        } else if snapshot.retry_failed() {
-            let no_contract_before_reset = self.state.contract.is_none();
-            warn!("usb_pd: reset/retry event hard=false retry_fail=true");
-            if no_contract_before_reset {
-                self.rearm_after_detach(now_ms, "retry_fail_no_contract");
-                return;
-            }
-            self.reset_contract_state(false);
-            self.prefer_fast_source_caps_probe = false;
-            self.attached_at_ms = Some(now_ms);
-            if let Some(polarity) = self.state.polarity {
-                let _ = self.phy.enable_pd_receive(polarity, self.tx_spec_revision);
-            }
-            self.state.vbus_present = Some(vbus_present);
-            return;
-        }
     }
 
     fn handle_message(&mut self, message: Message, demand: UsbPdPowerDemand, now_ms: u32) {
@@ -948,8 +890,6 @@ where
                     self.observe_peer_spec_revision(source_caps.spec_revision, "source_caps");
                     self.source_capabilities = Some(source_caps);
                     self.source_caps_recovery_attempted = false;
-                    self.source_caps_soft_reset_attempted = false;
-                    self.prefer_fast_source_caps_probe = false;
                     if filtered_source_has_pps(&filtered) {
                         self.last_source_caps_requery_at_ms = None;
                     }
@@ -1091,26 +1031,17 @@ where
         kind: ControlMessageType,
         spec_revision: SpecRevision,
     ) -> Result<(), fusb302::Error> {
-        let message_id = if matches!(kind, ControlMessageType::SoftReset) {
-            0
-        } else {
-            self.message_id
-        };
-        let header = MessageHeader::for_control(kind, message_id, spec_revision, false, false);
+        let header = MessageHeader::for_control(kind, self.message_id, spec_revision, false, false);
         let message = Message::new(header, [0u32; pd::MAX_DATA_OBJECTS]);
         info!(
             "usb_pd: tx ctrl kind={} spec_rev_bits={=u8} peer_spec_rev_bits={=u8} msg_id={=u8}",
             control_message_name(kind),
             spec_revision.bits(),
             self.peer_spec_revision.bits(),
-            message_id
+            self.message_id
         );
         self.phy.send_message(&message)?;
-        if matches!(kind, ControlMessageType::SoftReset) {
-            self.message_id = 0;
-        } else {
-            self.message_id = (self.message_id + 1) & 0x07;
-        }
+        self.message_id = (self.message_id + 1) & 0x07;
         Ok(())
     }
 
@@ -1177,8 +1108,6 @@ where
         self.consecutive_effective_vbus_absent_polls = 0;
         self.attached_at_ms = None;
         self.source_caps_recovery_attempted = false;
-        self.source_caps_soft_reset_attempted = false;
-        self.prefer_fast_source_caps_probe = false;
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         self.tx_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
@@ -1269,8 +1198,6 @@ where
         self.consecutive_raw_vbus_absent_polls = 0;
         self.attached_at_ms = None;
         self.source_caps_recovery_attempted = false;
-        self.source_caps_soft_reset_attempted = false;
-        self.prefer_fast_source_caps_probe = false;
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         if detach {
@@ -1292,17 +1219,9 @@ const fn deadline_elapsed(now_ms: u32, deadline_ms: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-    use std::collections::BTreeMap;
-    use std::rc::Rc;
 
     struct NoopI2c;
     struct LenientI2c;
-    #[derive(Clone, Default)]
-    struct CountingI2c {
-        writes_by_reg: Rc<RefCell<BTreeMap<u8, usize>>>,
-        last_write_by_reg: Rc<RefCell<BTreeMap<u8, Vec<u8>>>>,
-    }
 
     impl embedded_hal::i2c::ErrorType for NoopI2c {
         type Error = esp_hal::i2c::master::Error;
@@ -1331,33 +1250,6 @@ mod tests {
             for operation in operations {
                 if let embedded_hal::i2c::Operation::Read(buffer) = operation {
                     buffer.fill(0);
-                }
-            }
-            Ok(())
-        }
-    }
-
-    impl embedded_hal::i2c::ErrorType for CountingI2c {
-        type Error = esp_hal::i2c::master::Error;
-    }
-
-    impl embedded_hal::i2c::I2c for CountingI2c {
-        fn transaction(
-            &mut self,
-            _address: u8,
-            operations: &mut [embedded_hal::i2c::Operation<'_>],
-        ) -> Result<(), Self::Error> {
-            for operation in operations {
-                match operation {
-                    embedded_hal::i2c::Operation::Read(buffer) => buffer.fill(0),
-                    embedded_hal::i2c::Operation::Write(bytes) => {
-                        if let Some((&reg, _payload)) = bytes.split_first() {
-                            *self.writes_by_reg.borrow_mut().entry(reg).or_default() += 1;
-                            self.last_write_by_reg
-                                .borrow_mut()
-                                .insert(reg, bytes[1..].to_vec());
-                        }
-                    }
                 }
             }
             Ok(())
@@ -1711,10 +1603,10 @@ mod tests {
     }
 
     #[test]
-    fn fresh_attach_reuses_initialized_phy_without_resetting_controller() {
-        let mut manager = UsbPdSinkManager::new(CountingI2c::default());
-        manager.state.enabled = true;
+    fn fresh_attach_fully_reinitializes_phy_before_enabling_receive() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
         manager.initialized = true;
+        manager.state.enabled = true;
         manager.state.controller_ready = true;
 
         manager.handle_irq_snapshot(
@@ -1731,55 +1623,6 @@ mod tests {
         assert!(manager.initialized);
         assert!(manager.state.controller_ready);
         assert_eq!(manager.attached_at_ms, Some(2_000));
-        let i2c = manager.phy.release_i2c();
-        assert_eq!(
-            i2c.writes_by_reg
-                .borrow()
-                .get(&fusb302::reg::RESET)
-                .copied(),
-            None
-        );
-    }
-
-    #[test]
-    fn enabling_pd_receive_twice_with_same_polarity_is_idempotent() {
-        let i2c = CountingI2c::default();
-        let writes_by_reg = Rc::clone(&i2c.writes_by_reg);
-        let mut phy = fusb302::Fusb302::new(i2c);
-        phy.enable_pd_receive(CcPolarity::Cc2, SpecRevision::Rev30)
-            .unwrap();
-        let writes_after_first_enable = writes_by_reg.borrow().clone();
-
-        phy.enable_pd_receive(CcPolarity::Cc2, SpecRevision::Rev30)
-            .unwrap();
-
-        assert_eq!(*writes_by_reg.borrow(), writes_after_first_enable);
-    }
-
-    #[test]
-    fn init_sink_does_not_enable_auto_protocol_resets() {
-        let i2c = CountingI2c::default();
-        let writes_by_reg = Rc::clone(&i2c.writes_by_reg);
-        let mut phy = fusb302::Fusb302::new(i2c);
-
-        phy.init_sink(SpecRevision::Rev30).unwrap();
-
-        let control3_writes = writes_by_reg
-            .borrow()
-            .get(&fusb302::reg::CONTROL3)
-            .copied()
-            .unwrap_or_default();
-        assert_eq!(control3_writes, 1);
-        assert_eq!(
-            phy.release_i2c()
-                .last_write_by_reg
-                .borrow()
-                .get(&fusb302::reg::CONTROL3)
-                .cloned(),
-            Some(vec![
-                fusb302::control3::AUTO_RETRY | fusb302::control3::N_RETRIES_3
-            ])
-        );
     }
 
     #[test]
@@ -2130,7 +1973,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_fail_without_contract_forces_full_rearm() {
+    fn retry_fail_without_contract_keeps_attach_and_restarts_recovery() {
         let mut manager = UsbPdSinkManager::new(LenientI2c);
         manager.state.attached = true;
         manager.state.vbus_present = Some(true);
@@ -2146,48 +1989,8 @@ mod tests {
             1_000,
         );
 
-        assert!(!manager.state.attached);
-        assert_eq!(manager.state.vbus_present, Some(false));
-        assert!(manager.initialized);
-        assert!(manager.state.controller_ready);
-        assert_eq!(manager.attached_at_ms, None);
-    }
-
-    #[test]
-    fn hard_reset_with_existing_contract_keeps_attach_and_restarts_recovery() {
-        let mut manager = UsbPdSinkManager::new(LenientI2c);
-        manager.state.attached = true;
-        manager.state.vbus_present = Some(true);
-        manager.state.polarity = Some(CcPolarity::Cc1);
-        manager.state.contract = Some(Contract {
-            kind: ContractKind::Pps,
-            object_position: 1,
-            voltage_mv: 16_000,
-            current_ma: 100,
-            pdo_type: PdoType::Augmented,
-        });
-        manager.attached_at_ms = Some(0);
-
-        manager.handle_irq_snapshot(
-            IrqSnapshot {
-                status0a: 0,
-                status1a: fusb302::status1a::TOGS_SNK1,
-                interrupta: fusb302::interrupta::HARD_RESET,
-                interruptb: 0,
-                status0: fusb302::status0::VBUS_OK,
-                status1: 0,
-                interrupt: 0,
-            },
-            UsbPdPowerDemand {
-                measured_input_voltage_mv: Some(16_000),
-                ..UsbPdPowerDemand::default()
-            },
-            1_000,
-        );
-
         assert!(manager.state.attached);
         assert_eq!(manager.state.vbus_present, Some(true));
-        assert!(manager.state.contract.is_none());
         assert!(manager.initialized);
         assert!(manager.state.controller_ready);
         assert_eq!(manager.attached_at_ms, Some(1_000));
@@ -2313,7 +2116,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_source_caps_retry_reissues_source_caps_probe_when_charge_path_is_active() {
+    fn missing_source_caps_retry_reissues_soft_reset_when_charge_path_is_active() {
         let mut manager = UsbPdSinkManager::new(NoopI2c);
         manager.state.attached = true;
         manager.state.charge_ready = true;
@@ -2338,7 +2141,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_source_caps_retry_reissues_source_caps_probe_even_when_charge_path_is_idle() {
+    fn missing_source_caps_retry_reissues_soft_reset_even_when_charge_path_is_idle() {
         let mut manager = UsbPdSinkManager::new(NoopI2c);
         manager.state.attached = true;
         manager.attached_at_ms = Some(0);
@@ -2378,57 +2181,5 @@ mod tests {
 
         assert_eq!(manager.message_id, 3);
         assert_eq!(manager.last_source_caps_recovery_at_ms, Some(0));
-    }
-
-    #[test]
-    fn missing_source_caps_second_stage_arms_soft_reset_before_full_rearm() {
-        let mut manager = UsbPdSinkManager::new(LenientI2c);
-        manager.state.attached = true;
-        manager.attached_at_ms = Some(0);
-        manager.source_caps_recovery_attempted = true;
-        manager.last_source_caps_recovery_at_ms = Some(0);
-        manager.message_id = 4;
-
-        manager.maybe_recover_missing_source_caps(
-            UsbPdPowerDemand::default(),
-            SOURCE_CAPS_RECOVERY_RETRY_MS,
-        );
-
-        assert_eq!(manager.message_id, 0);
-        assert!(manager.source_caps_soft_reset_attempted);
-        assert_eq!(
-            manager.last_source_caps_recovery_at_ms,
-            Some(SOURCE_CAPS_RECOVERY_RETRY_MS)
-        );
-    }
-
-    #[test]
-    fn sticky_status0a_retry_fail_does_not_trigger_retry_event_without_interrupt() {
-        let snapshot = IrqSnapshot {
-            status0a: fusb302::status0a::RETRY_FAIL,
-            status1a: 0,
-            interrupta: 0,
-            interruptb: 0,
-            status0: 0,
-            status1: 0,
-            interrupt: 0,
-        };
-
-        assert!(!snapshot.retry_failed());
-    }
-
-    #[test]
-    fn retry_fail_is_deferred_when_rx_activity_is_present() {
-        let snapshot = IrqSnapshot {
-            status0a: fusb302::status0a::RETRY_FAIL,
-            status1a: 0,
-            interrupta: fusb302::interrupta::RETRY_FAIL | fusb302::interrupta::TX_SENT,
-            interruptb: 0,
-            status0: 0,
-            status1: 0,
-            interrupt: 0,
-        };
-
-        assert!(retry_fail_should_defer_for_rx(snapshot));
     }
 }
