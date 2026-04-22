@@ -245,6 +245,11 @@ const fn effective_vbus_detach_debounce_elapsed(
     consecutive_effective_vbus_absent_polls >= EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS
 }
 
+const fn retry_fail_should_defer_for_rx(snapshot: IrqSnapshot) -> bool {
+    snapshot.retry_failed()
+        && (snapshot.rx_fifo_non_empty() || snapshot.tx_sent() || snapshot.gcrc_sent())
+}
+
 const fn negotiated_spec_revision(spec_revision: SpecRevision) -> SpecRevision {
     pd::clamp_fusb302_spec_revision(spec_revision)
 }
@@ -787,7 +792,15 @@ where
             );
         }
 
-        if snapshot.hard_reset_received() || snapshot.retry_failed() {
+        if retry_fail_should_defer_for_rx(snapshot) {
+            warn!(
+                "usb_pd: defer retry fail during rx activity retry_fail={=bool} rx_non_empty={=bool} tx_sent={=bool} gcrc_sent={=bool}",
+                snapshot.retry_failed(),
+                snapshot.rx_fifo_non_empty(),
+                snapshot.tx_sent(),
+                snapshot.gcrc_sent()
+            );
+        } else if snapshot.hard_reset_received() || snapshot.retry_failed() {
             warn!(
                 "usb_pd: reset/retry event hard={=bool} retry_fail={=bool}",
                 snapshot.hard_reset_received(),
@@ -1031,17 +1044,26 @@ where
         kind: ControlMessageType,
         spec_revision: SpecRevision,
     ) -> Result<(), fusb302::Error> {
-        let header = MessageHeader::for_control(kind, self.message_id, spec_revision, false, false);
+        let message_id = if matches!(kind, ControlMessageType::SoftReset) {
+            0
+        } else {
+            self.message_id
+        };
+        let header = MessageHeader::for_control(kind, message_id, spec_revision, false, false);
         let message = Message::new(header, [0u32; pd::MAX_DATA_OBJECTS]);
         info!(
             "usb_pd: tx ctrl kind={} spec_rev_bits={=u8} peer_spec_rev_bits={=u8} msg_id={=u8}",
             control_message_name(kind),
             spec_revision.bits(),
             self.peer_spec_revision.bits(),
-            self.message_id
+            message_id
         );
         self.phy.send_message(&message)?;
-        self.message_id = (self.message_id + 1) & 0x07;
+        if matches!(kind, ControlMessageType::SoftReset) {
+            self.message_id = 0;
+        } else {
+            self.message_id = (self.message_id + 1) & 0x07;
+        }
         Ok(())
     }
 
@@ -2181,5 +2203,47 @@ mod tests {
 
         assert_eq!(manager.message_id, 3);
         assert_eq!(manager.last_source_caps_recovery_at_ms, Some(0));
+    }
+
+    #[test]
+    fn soft_reset_uses_message_id_zero_and_resets_counter() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        manager.message_id = 5;
+
+        manager
+            .send_control_message(ControlMessageType::SoftReset, SpecRevision::Rev30)
+            .unwrap();
+
+        assert_eq!(manager.message_id, 0);
+    }
+
+    #[test]
+    fn sticky_status0a_retry_fail_does_not_trigger_retry_event_without_interrupt() {
+        let snapshot = IrqSnapshot {
+            status0a: fusb302::status0a::RETRY_FAIL,
+            status1a: 0,
+            interrupta: 0,
+            interruptb: 0,
+            status0: 0,
+            status1: 0,
+            interrupt: 0,
+        };
+
+        assert!(!snapshot.retry_failed());
+    }
+
+    #[test]
+    fn retry_fail_is_deferred_when_rx_activity_is_present() {
+        let snapshot = IrqSnapshot {
+            status0a: 0,
+            status1a: 0,
+            interrupta: fusb302::interrupta::RETRY_FAIL | fusb302::interrupta::TX_SENT,
+            interruptb: 0,
+            status0: 0,
+            status1: 0,
+            interrupt: 0,
+        };
+
+        assert!(retry_fail_should_defer_for_rx(snapshot));
     }
 }
