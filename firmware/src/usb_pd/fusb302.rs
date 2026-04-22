@@ -167,7 +167,6 @@ pub mod status0 {
     pub const VBUS_OK: u8 = 1 << 7;
     pub const ACTIVITY: u8 = 1 << 6;
     pub const CRC_CHK: u8 = 1 << 4;
-    pub const BC_LVL_MASK: u8 = 0b11;
 }
 
 pub mod status1 {
@@ -215,18 +214,6 @@ impl IrqSnapshot {
 
     pub const fn vbus_present(&self) -> bool {
         (self.status0 & status0::VBUS_OK) != 0
-    }
-
-    pub const fn cc_activity_present(&self) -> bool {
-        (self.status0 & status0::ACTIVITY) != 0
-    }
-
-    pub const fn cc_source_level(&self) -> u8 {
-        self.status0 & status0::BC_LVL_MASK
-    }
-
-    pub const fn cc_source_present(&self) -> bool {
-        self.cc_source_level() != 0
     }
 
     pub const fn retry_failed(&self) -> bool {
