@@ -14,7 +14,7 @@ const ERROR_RETRY_INTERVAL_MS: u32 = 1_000;
 const SOURCE_CAPS_WAIT_TIMEOUT_MS: u32 = 800;
 const SOURCE_CAPS_REQUERY_DELAY_MS: u32 = 1_000;
 const SOURCE_CAPS_REQUERY_RETRY_MS: u32 = 5_000;
-const SOURCE_CAPS_RECOVERY_RETRY_MS: u32 = 1_000;
+const SOURCE_CAPS_RECOVERY_RETRY_MS: u32 = 1_500;
 const SOURCE_CAPS_HARD_RECOVERY_TIMEOUT_MS: u32 = 2_500;
 const NO_CONTRACT_SOURCE_CAPS_REARM_TIMEOUT_MS: u32 = 3_000;
 const NO_CONTRACT_ATTACH_STABILIZE_MS: u32 = 12_000;
@@ -583,34 +583,35 @@ where
             }
         }
 
-        if first_attempt {
+        let recovery_message = if first_attempt {
             esp_println::println!(
-                "usb_pd: no source caps after attach, issuing soft reset waited_ms={} tx_spec_rev_bits={}",
+                "usb_pd: no source caps after attach, probing with get_source_cap waited_ms={} tx_spec_rev_bits={}",
                 waited_ms,
                 self.tx_spec_revision.bits()
             );
             info!(
-                "usb_pd: no source caps after attach, issuing soft reset waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                "usb_pd: no source caps after attach, probing with get_source_cap waited_ms={=u32} tx_spec_rev_bits={=u8}",
                 waited_ms,
                 self.tx_spec_revision.bits()
             );
+            ControlMessageType::GetSourceCap
         } else {
             esp_println::println!(
-                "usb_pd: retrying source caps recovery after default_5v fallback retry_after_ms={} tx_spec_rev_bits={}",
+                "usb_pd: retrying source caps recovery with soft reset retry_after_ms={} tx_spec_rev_bits={}",
                 now_ms.wrapping_sub(self.last_source_caps_recovery_at_ms.unwrap_or(now_ms)),
                 self.tx_spec_revision.bits()
             );
             info!(
-                "usb_pd: retrying source caps recovery after default_5v fallback retry_after_ms={=u32} tx_spec_rev_bits={=u8}",
+                "usb_pd: retrying source caps recovery with soft reset retry_after_ms={=u32} tx_spec_rev_bits={=u8}",
                 now_ms.wrapping_sub(self.last_source_caps_recovery_at_ms.unwrap_or(now_ms)),
                 self.tx_spec_revision.bits()
             );
-        }
-        if let Err(err) =
-            self.send_control_message(ControlMessageType::SoftReset, self.tx_spec_revision)
-        {
+            ControlMessageType::SoftReset
+        };
+        if let Err(err) = self.send_control_message(recovery_message, self.tx_spec_revision) {
             warn!(
-                "usb_pd: source caps soft reset failed err={}",
+                "usb_pd: source caps recovery message failed kind={} err={}",
+                control_message_name(recovery_message),
                 fusb302_error_kind(&err)
             );
             return;
@@ -786,6 +787,7 @@ where
                 self.state.controller_ready = false;
                 return;
             }
+            let _ = self.phy.poll_status();
             self.initialized = true;
             self.state.controller_ready = true;
             self.next_retry_at_ms = 0;
@@ -801,6 +803,7 @@ where
                 switches1,
                 self.tx_spec_revision.bits()
             );
+            return;
         } else if self.state.polarity.is_none() {
             if let Some(polarity) = detected_attach_polarity {
                 self.state.polarity = Some(polarity);

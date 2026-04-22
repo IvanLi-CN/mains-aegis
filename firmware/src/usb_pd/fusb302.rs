@@ -19,10 +19,7 @@ const SOP_TOKEN_SOP: u8 = 0b1110_0000;
 const POWER_ALL: u8 = 0x0F;
 const HOST_CUR_DEFAULT: u8 = 0b01 << 2;
 const SWITCHES0_PDWN_BOTH: u8 = switches0::PDWN1 | switches0::PDWN2;
-const CONTROL3_BASE: u8 = control3::AUTO_RETRY
-    | control3::N_RETRIES_3
-    | control3::AUTO_SOFT_RESET
-    | control3::AUTO_HARD_RESET;
+const CONTROL3_BASE: u8 = control3::AUTO_RETRY | control3::N_RETRIES_3;
 
 pub mod reg {
     pub const DEVICE_ID: u8 = 0x01;

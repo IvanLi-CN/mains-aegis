@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 部分完成（4/5）
+- Status: 已完成
 - Created: 2026-04-07
 - Last: 2026-04-22
 
@@ -187,21 +187,28 @@ None。
 
 - 风险：`FUSB302B` datasheet 对 spec revision / GoodCRC 的描述更偏 PD2.0，PPS 互操作需真实台架确认；本轮先把 PPS policy 与报文路径接齐，并在 PR 中显式记录互操作风险。
 - 风险：多口电源在功率重分配时可能触发 source capabilities 重广播、reset 或短暂回落默认 5V；USB-C charge gate 若实现不完整，容易在旧合同失效窗口里误充。
-- 风险：当前 hotplug 恢复仍未稳定收敛。实机同一条 PPS 电源线上，重插后既可能 `2~10s` 内恢复到 `PPS`，也可能长期停在 `CAP?` 或在 `N/A/CAP?` 间抖动；这说明 `attached + vbus_present + contract=None` 的恢复链仍有未定位的死路径。
-- 风险：当前 reset/monitor 证据链不稳定，`/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260422_023338_940.mon.ndjson`、`/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260422_031826_134.mon.ndjson`、`/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260422_034124_929.mon.ndjson` 都只记录到 `boot: stage=main_loop_enter`，没有后续 `source_caps / request / contract active kind=pps`；在这条证据链修复前，不能再把“已出现 PPS”当成充分闭环。
+- 风险：冷启动时若 PPS source 在 sink reset 后持续保留旧会话，仍可能先触发多轮 `hard reset + no source caps`，因此“线已插着时的冷启动进入 PPS”会比真实热插拔更慢；当前验证中约为 `25.3s`，后续若需要体验优化，可单独开新任务继续压缩时延。
+- 风险：当前完成态依赖 plain-serial + EEPROM breadcrumb 双证据链；若后续改动再次让 monitor 只停在 `boot: stage=main_loop_enter`，必须先修复观测链再判断 PPS 恢复行为。
 - 假设：USB-C 输入安全窗按 `20.5V`（`20V + 500mV ADC 容差窗`）执行；若后续硬件校准数据表明需要更窄或更宽，允许在不改 feature 口径的前提下微调实现常量。
 
 ## 当前实机状态（2026-04-22）
 
-- 当前不能再把 `hn29u` 视为“已完成”。默认冷启动/热插拔后的 `PPS` 收敛仍不稳定，状态应回退为 `部分完成（4/5）`。
-- 实机已反复观察到同一条 PPS 电源线上存在双稳态：
-  - 成功路径：重插后数秒内回到 `PPS`。
-  - 失败路径：长时间停在 `CAP?`，输入侧保持约 `5V`，合同仍为 `None`。
-- 当前真正未完成的闭环不是“能否支持 PPS feature”，而是“在真实热插拔后，状态机是否能稳定完成 `attach -> source caps -> request -> contract rebuild -> PPS`”。
-- 直到这条恢复链稳定、并且能拿到可复核的板上证据前，不得再把本项写成“已完成”或要求主人按完成态复测。
+- 当前 `hn29u` 已完成闭环：实机冷启动与真实 USB 热插拔后，最终都能自动恢复到 `PPS`，不再停在长期 `CAP? + 5V` 的死路径。
+- 板上最终收敛证据：
+  - 真热插拔结果来自 `/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260422_100307_255.mon.ndjson` 中的 EEPROM breadcrumb：`detach(seq=10178) -> attach(seq=10179) -> contract_pps(seq=10180)`，对应 `1.0s` 内回到 `PPS`。
+  - 冷启动基线结果来自同一文件的 plain-serial 协商日志：`10:03:10.066478Z attach -> 10:03:35.344264Z contract active kind=pps`，用时约 `25.28s`。
+- 根因定位与最终修复：
+  - 根因一：FUSB302 自动协议复位（`AUTO_SOFT_RESET / AUTO_HARD_RESET`）会与固件自己的 `Get_Source_Cap / SoftReset / rearm` 恢复链互相打架，导致 `contract=None` 死循环。
+  - 根因二：fresh attach 完整 reinit 后，固件仍继续消费旧 IRQ snapshot，旧的 `hard reset / retry fail` 位会把刚建立的新会话立即打断。
+  - 根因三：`missing source caps` 恢复策略过于单一，既不能快速探测 source，也不能在 probe 失败后稳定升级到协议复位。
+- 最终实现采用“固件完全接管恢复链”的策略：
+  - 关闭 FUSB302 自动协议复位，仅保留 `AUTO_RETRY`；
+  - fresh attach 后执行 `poll_status()` 清掉旧中断，并立刻 `return`，不再消费过期 snapshot；
+  - `missing source caps` 按 `Get_Source_Cap -> SoftReset -> full rearm` 三级升级，分别在 `~0.8-1.0s / 1.5s / 2.5s` 触发。
 
 ## 变更记录（Change log）
 
+- 2026-04-22: 完成 hotplug PPS 恢复闭环。最终根因定位为 FUSB302 自动协议复位与固件恢复状态机互相打架、fresh attach 后继续处理旧 IRQ snapshot，以及 `missing source caps` 恢复策略缺少稳定升级路径；修复后实机热插拔 `1.0s` 内恢复到 `PPS`，冷启动插线基线约 `25.28s` 自动恢复到 `PPS`。
 - 2026-04-22: 重新打开 hotplug PPS 恢复问题。此前“热插拔已稳定恢复到 `PPS`”的结论被后续实机复测推翻：当前同一条 PPS 电源线上仍会出现“有时数秒恢复、有时长期卡在 `CAP?`”的双稳态现象；规格状态回退为 `部分完成（4/5）`，后续必须先完成稳定恢复闭环，再讨论时延优化。
 - 2026-04-21: 一度观察到连续多次实机拔插可自动回到 `PPS`，后续实现/回归证明该结论不足以支撑 closeout；该记录保留为阶段性现象，不再视为最终结论。
 - 2026-04-08: 已继续收敛 merge-proof review，补齐“非充电态仍计入系统负载预算”“PD state 先于 charger tick 生效”“合同丢失时强制恢复旧 `VINDPM/IINDPM`”三项修正，并同步规格说明。
