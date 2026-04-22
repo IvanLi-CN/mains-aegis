@@ -2,9 +2,9 @@
 
 ## 状态
 
-- Status: 已完成
+- Status: 部分完成（4/5）
 - Created: 2026-04-07
-- Last: 2026-04-08
+- Last: 2026-04-22
 
 ## 背景 / 问题陈述
 
@@ -187,12 +187,23 @@ None。
 
 - 风险：`FUSB302B` datasheet 对 spec revision / GoodCRC 的描述更偏 PD2.0，PPS 互操作需真实台架确认；本轮先把 PPS policy 与报文路径接齐，并在 PR 中显式记录互操作风险。
 - 风险：多口电源在功率重分配时可能触发 source capabilities 重广播、reset 或短暂回落默认 5V；USB-C charge gate 若实现不完整，容易在旧合同失效窗口里误充。
-- 风险：真实 PD analyzer / PPS 互操作 bench 仍未覆盖，当前只完成编译、host-unit-tests 与 feature matrix 级验证，PR 中必须保留台架验证风险。
+- 风险：当前 hotplug 恢复仍未稳定收敛。实机同一条 PPS 电源线上，重插后既可能 `2~10s` 内恢复到 `PPS`，也可能长期停在 `CAP?` 或在 `N/A/CAP?` 间抖动；这说明 `attached + vbus_present + contract=None` 的恢复链仍有未定位的死路径。
+- 风险：当前 reset/monitor 证据链不稳定，`/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260422_023338_940.mon.ndjson`、`/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260422_031826_134.mon.ndjson`、`/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260422_034124_929.mon.ndjson` 都只记录到 `boot: stage=main_loop_enter`，没有后续 `source_caps / request / contract active kind=pps`；在这条证据链修复前，不能再把“已出现 PPS”当成充分闭环。
 - 假设：USB-C 输入安全窗按 `20.5V`（`20V + 500mV ADC 容差窗`）执行；若后续硬件校准数据表明需要更窄或更宽，允许在不改 feature 口径的前提下微调实现常量。
+
+## 当前实机状态（2026-04-22）
+
+- 当前不能再把 `hn29u` 视为“已完成”。默认冷启动/热插拔后的 `PPS` 收敛仍不稳定，状态应回退为 `部分完成（4/5）`。
+- 实机已反复观察到同一条 PPS 电源线上存在双稳态：
+  - 成功路径：重插后数秒内回到 `PPS`。
+  - 失败路径：长时间停在 `CAP?`，输入侧保持约 `5V`，合同仍为 `None`。
+- 当前真正未完成的闭环不是“能否支持 PPS feature”，而是“在真实热插拔后，状态机是否能稳定完成 `attach -> source caps -> request -> contract rebuild -> PPS`”。
+- 直到这条恢复链稳定、并且能拿到可复核的板上证据前，不得再把本项写成“已完成”或要求主人按完成态复测。
 
 ## 变更记录（Change log）
 
-- 2026-04-21: 冻结热插拔 PPS 恢复基线：连续多次实机拔插已能自动回到 `PPS`，现阶段后续优化仅收敛 `attach -> source caps -> request -> PPS` 的恢复时延与过渡态显示，不再重开 feature / scope。
+- 2026-04-22: 重新打开 hotplug PPS 恢复问题。此前“热插拔已稳定恢复到 `PPS`”的结论被后续实机复测推翻：当前同一条 PPS 电源线上仍会出现“有时数秒恢复、有时长期卡在 `CAP?`”的双稳态现象；规格状态回退为 `部分完成（4/5）`，后续必须先完成稳定恢复闭环，再讨论时延优化。
+- 2026-04-21: 一度观察到连续多次实机拔插可自动回到 `PPS`，后续实现/回归证明该结论不足以支撑 closeout；该记录保留为阶段性现象，不再视为最终结论。
 - 2026-04-08: 已继续收敛 merge-proof review，补齐“非充电态仍计入系统负载预算”“PD state 先于 charger tick 生效”“合同丢失时强制恢复旧 `VINDPM/IINDPM`”三项修正，并同步规格说明。
 - 2026-04-08: 已根据 merge-proof review 修正 spec revision 跟随、无可用 PD 合同时的稳定 5V 回落，以及 WAIT/REJECT 后的旧合同 charge gate 恢复；规格与最新实现重新对齐。
 - 2026-04-08: 已同步 host-unit-tests allowlist 与 closeout 文档，确认 `usb_pd` 模块测试覆盖纳入 host audit，规格与实现重新对齐为 merge-ready。
