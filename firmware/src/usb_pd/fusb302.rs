@@ -164,6 +164,7 @@ pub mod status0 {
     pub const VBUS_OK: u8 = 1 << 7;
     pub const ACTIVITY: u8 = 1 << 6;
     pub const CRC_CHK: u8 = 1 << 4;
+    pub const BC_LVL_MASK: u8 = 0b11;
 }
 
 pub mod status1 {
@@ -211,6 +212,22 @@ impl IrqSnapshot {
 
     pub const fn vbus_present(&self) -> bool {
         (self.status0 & status0::VBUS_OK) != 0
+    }
+
+    pub const fn cc_activity(&self) -> bool {
+        (self.status0 & status0::ACTIVITY) != 0
+    }
+
+    pub const fn cc_level_status(&self) -> u8 {
+        self.status0 & status0::BC_LVL_MASK
+    }
+
+    pub const fn attached_cc_present_hint(&self) -> Option<bool> {
+        if self.cc_activity() {
+            None
+        } else {
+            Some(self.cc_level_status() != 0)
+        }
     }
 
     pub const fn retry_failed(&self) -> bool {
@@ -396,6 +413,13 @@ where
         Ok(())
     }
 
+    pub fn reset_pd_logic(&mut self) -> Result<(), Error> {
+        self.write_reg(reg::RESET, reset::PD_RESET)?;
+        self.flush_rx()?;
+        self.flush_tx()?;
+        Ok(())
+    }
+
     pub fn poll_status(&mut self) -> Result<IrqSnapshot, Error> {
         let mut buf = [0u8; 7];
         self.read_block(reg::STATUS0A, &mut buf)?;
@@ -411,7 +435,7 @@ where
     }
 
     pub fn read_message(&mut self) -> Result<Option<Message>, Error> {
-        if !self.rx_fifo_non_empty()? {
+        if !self.rx_message_ready()? {
             return Ok(None);
         }
 
@@ -453,6 +477,17 @@ where
 
     pub fn rx_fifo_non_empty(&mut self) -> Result<bool, Error> {
         Ok((self.read_reg(reg::STATUS1)? & status1::RX_EMPTY) == 0)
+    }
+
+    pub fn rx_message_ready(&mut self) -> Result<bool, Error> {
+        let status1 = self.read_reg(reg::STATUS1)?;
+        if (status1 & status1::RX_EMPTY) != 0 {
+            return Ok(false);
+        }
+
+        let status0 = self.read_reg(reg::STATUS0)?;
+        let status1a = self.read_reg(reg::STATUS1A)?;
+        Ok((status0 & status0::CRC_CHK) != 0 && (status1a & status1a::RXSOP) != 0)
     }
 
     pub fn send_message(&mut self, message: &Message) -> Result<(), Error> {
