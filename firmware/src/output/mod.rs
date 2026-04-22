@@ -3509,6 +3509,23 @@ where
                     if let Some(record) = records[idx] {
                         let delta_100ms = previous_tick_100ms
                             .map(|previous| record.tick_100ms.wrapping_sub(previous));
+                        esp_println::println!(
+                            "eeprom: pd_breadcrumb idx={}/{} seq={} tick_100ms={} delta_100ms={:?} event={} attached={} ready={} charge_ready={} vbus_present={:?} contract_kind={:?} contract_mv={:?} contract_ma={:?} unsafe={}",
+                            idx as u8,
+                            count as u8,
+                            record.seq,
+                            record.tick_100ms,
+                            delta_100ms,
+                            record.event.name(),
+                            record.attached,
+                            record.controller_ready,
+                            record.charge_ready,
+                            record.vbus_present,
+                            record.contract_kind.map(|kind| match kind { usb_pd::ContractKind::Fixed => "fixed", usb_pd::ContractKind::Pps => "pps" }),
+                            record.contract_mv,
+                            record.contract_ma,
+                            record.unsafe_source_latched
+                        );
                         defmt::info!(
                             "eeprom: pd_breadcrumb idx={=u8}/{=u8} seq={=u16} tick_100ms={=u32} delta_100ms={=?} event={} attached={=bool} ready={=bool} charge_ready={=bool} vbus_present={=?} contract_kind={=?} contract_mv={=?} contract_ma={=?} unsafe={=bool}",
                             idx as u8,
@@ -3965,6 +3982,10 @@ where
             contract_ma: current.contract.map(|contract| contract.current_ma),
         };
         if let Err(err) = write_pd_breadcrumb_record(&mut self.i2c, record) {
+            esp_println::println!(
+                "eeprom: write pd_breadcrumb failed err={}",
+                i2c_error_kind(err)
+            );
             defmt::warn!(
                 "eeprom: write pd_breadcrumb failed err={}",
                 i2c_error_kind(err)
@@ -3972,6 +3993,18 @@ where
             return;
         }
         self.pd_breadcrumb_next_seq = self.pd_breadcrumb_next_seq.wrapping_add(1);
+        esp_println::println!(
+            "eeprom: pd_breadcrumb saved seq={} event={} attached={} vbus_present={:?} contract_kind={:?} contract_mv={:?}",
+            record.seq,
+            event.name(),
+            current.attached,
+            current.vbus_present,
+            current.contract.map(|contract| match contract.kind {
+                usb_pd::ContractKind::Fixed => "fixed",
+                usb_pd::ContractKind::Pps => "pps",
+            }),
+            current.contract.map(|contract| contract.voltage_mv)
+        );
         defmt::info!(
             "eeprom: pd_breadcrumb saved seq={=u16} event={} attached={=bool} vbus_present={=?} contract_kind={=?} contract_mv={=?}",
             record.seq,

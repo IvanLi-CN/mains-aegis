@@ -140,6 +140,13 @@ fn log_filtered_source_capabilities(
     source_caps: &pd::SourceCapabilities,
     filtered: &sink_policy::FilteredSourceCapabilities,
 ) {
+    esp_println::println!(
+        "usb_pd: source_caps spec_rev_bits={} header=0x{:x} raw_len={} filtered_len={}",
+        source_caps.spec_revision.bits(),
+        message.header.raw(),
+        source_caps.len(),
+        filtered.len()
+    );
     info!(
         "usb_pd: source_caps spec_rev_bits={=u8} header=0x{=u16:x} raw_len={=usize} filtered_len={=usize}",
         source_caps.spec_revision.bits(),
@@ -397,6 +404,12 @@ where
                 {
                     let retrying = self.last_source_caps_requery_at_ms.is_some();
                     if retrying {
+                        esp_println::println!(
+                            "usb_pd: retrying source caps probe after fixed fallback retry_after_ms={} tx_spec_rev_bits={} peer_spec_rev_bits={}",
+                            now_ms.wrapping_sub(self.last_source_caps_requery_at_ms.unwrap_or(now_ms)),
+                            self.tx_spec_revision.bits(),
+                            self.peer_spec_revision.bits()
+                        );
                         info!(
                             "usb_pd: retrying source caps probe after fixed fallback retry_after_ms={=u32} tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
                             now_ms.wrapping_sub(self.last_source_caps_requery_at_ms.unwrap_or(now_ms)),
@@ -404,6 +417,11 @@ where
                             self.peer_spec_revision.bits()
                         );
                     } else {
+                        esp_println::println!(
+                            "usb_pd: probing source caps after fixed contract tx_spec_rev_bits={} peer_spec_rev_bits={}",
+                            self.tx_spec_revision.bits(),
+                            self.peer_spec_revision.bits()
+                        );
                         info!(
                             "usb_pd: probing source caps after fixed contract tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
                             self.tx_spec_revision.bits(),
@@ -547,6 +565,11 @@ where
                 return;
             };
             if waited_ms >= SOURCE_CAPS_HARD_RECOVERY_TIMEOUT_MS {
+                esp_println::println!(
+                    "usb_pd: source caps recovery stalled, rearming phy waited_ms={} retry_after_ms={}",
+                    waited_ms,
+                    now_ms.wrapping_sub(last_recovery_at_ms)
+                );
                 warn!(
                     "usb_pd: source caps recovery stalled, rearming phy waited_ms={=u32} retry_after_ms={=u32}",
                     waited_ms,
@@ -561,12 +584,22 @@ where
         }
 
         if first_attempt {
+            esp_println::println!(
+                "usb_pd: no source caps after attach, issuing soft reset waited_ms={} tx_spec_rev_bits={}",
+                waited_ms,
+                self.tx_spec_revision.bits()
+            );
             info!(
                 "usb_pd: no source caps after attach, issuing soft reset waited_ms={=u32} tx_spec_rev_bits={=u8}",
                 waited_ms,
                 self.tx_spec_revision.bits()
             );
         } else {
+            esp_println::println!(
+                "usb_pd: retrying source caps recovery after default_5v fallback retry_after_ms={} tx_spec_rev_bits={}",
+                now_ms.wrapping_sub(self.last_source_caps_recovery_at_ms.unwrap_or(now_ms)),
+                self.tx_spec_revision.bits()
+            );
             info!(
                 "usb_pd: retrying source caps recovery after default_5v fallback retry_after_ms={=u32} tx_spec_rev_bits={=u8}",
                 now_ms.wrapping_sub(self.last_source_caps_recovery_at_ms.unwrap_or(now_ms)),
@@ -757,6 +790,11 @@ where
             self.state.controller_ready = true;
             self.next_retry_at_ms = 0;
             let switches1 = self.phy.read_switches1().ok();
+            esp_println::println!(
+                "usb_pd: attached polarity={} spec_rev_bits={} action=full_reinit",
+                polarity_name(polarity),
+                self.tx_spec_revision.bits()
+            );
             info!(
                 "usb_pd: attached polarity={} switches1={=?} spec_rev_bits={=u8} action=full_reinit",
                 polarity_name(polarity),
@@ -801,6 +839,11 @@ where
                 snapshot.gcrc_sent()
             );
         } else if snapshot.hard_reset_received() || snapshot.retry_failed() {
+            esp_println::println!(
+                "usb_pd: reset/retry event hard={} retry_fail={}",
+                snapshot.hard_reset_received(),
+                snapshot.retry_failed()
+            );
             warn!(
                 "usb_pd: reset/retry event hard={=bool} retry_fail={=bool}",
                 snapshot.hard_reset_received(),
@@ -961,6 +1004,12 @@ where
                     self.state.contract = Some(contract);
                     self.state.input_current_limit_ma = contract.input_current_limit_ma;
                     self.state.vindpm_mv = contract.vindpm_mv;
+                    esp_println::println!(
+                        "usb_pd: contract active kind={} voltage_mv={} current_ma={}",
+                        contract_kind_name(contract.kind),
+                        contract.voltage_mv,
+                        contract.current_ma
+                    );
                     info!(
                         "usb_pd: contract active kind={} voltage_mv={=u16} current_ma={=u16}",
                         contract_kind_name(contract.kind),
@@ -1020,6 +1069,15 @@ where
         let mut payload = [0u32; pd::MAX_DATA_OBJECTS];
         payload[0] = plan.request.raw();
         let message = Message::new(header, payload);
+        esp_println::println!(
+            "usb_pd: tx data kind=request spec_rev_bits={} peer_spec_rev_bits={} msg_id={} obj_pos={} voltage_mv={} current_ma={}",
+            spec_revision.bits(),
+            self.peer_spec_revision.bits(),
+            self.message_id,
+            plan.contract.object_position,
+            plan.contract.voltage_mv,
+            plan.contract.current_ma
+        );
         info!(
             "usb_pd: tx data kind=request spec_rev_bits={=u8} peer_spec_rev_bits={=u8} msg_id={=u8} obj_pos={=u8} voltage_mv={=u16} current_ma={=u16}",
             spec_revision.bits(),
