@@ -446,25 +446,54 @@ const fn pd_breadcrumb_slot_offset(slot: usize) -> u16 {
     EEPROM_PD_BREADCRUMB_BASE_OFFSET + (slot as u16) * (EEPROM_BLOCK_LEN as u16)
 }
 
+fn load_sorted_pd_breadcrumb_records<I2C>(
+    i2c: &mut I2C,
+) -> Result<
+    (
+        [Option<PdBreadcrumbRecordV1>; EEPROM_PD_BREADCRUMB_SLOT_COUNT],
+        usize,
+    ),
+    esp_hal::i2c::master::Error,
+>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut records: [Option<PdBreadcrumbRecordV1>; EEPROM_PD_BREADCRUMB_SLOT_COUNT] =
+        [None; EEPROM_PD_BREADCRUMB_SLOT_COUNT];
+    let mut count = 0usize;
+    let mut slot = 0usize;
+    while slot < EEPROM_PD_BREADCRUMB_SLOT_COUNT {
+        let block = read_eeprom_block(i2c, pd_breadcrumb_slot_offset(slot))?;
+        if let Some(record) = PdBreadcrumbRecordV1::decode(block) {
+            let mut insert_at = count;
+            while insert_at > 0 {
+                let previous = records[insert_at - 1].unwrap();
+                if previous.seq <= record.seq {
+                    break;
+                }
+                insert_at -= 1;
+            }
+            let mut idx = count;
+            while idx > insert_at {
+                records[idx] = records[idx - 1];
+                idx -= 1;
+            }
+            records[insert_at] = Some(record);
+            count += 1;
+        }
+        slot += 1;
+    }
+    Ok((records, count))
+}
+
 fn load_latest_pd_breadcrumb_record<I2C>(
     i2c: &mut I2C,
 ) -> Result<Option<PdBreadcrumbRecordV1>, esp_hal::i2c::master::Error>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let mut latest: Option<PdBreadcrumbRecordV1> = None;
-    let mut slot = 0usize;
-    while slot < EEPROM_PD_BREADCRUMB_SLOT_COUNT {
-        let block = read_eeprom_block(i2c, pd_breadcrumb_slot_offset(slot))?;
-        if let Some(record) = PdBreadcrumbRecordV1::decode(block) {
-            latest = match latest {
-                Some(current) if current.seq >= record.seq => Some(current),
-                _ => Some(record),
-            };
-        }
-        slot += 1;
-    }
-    Ok(latest)
+    let (records, count) = load_sorted_pd_breadcrumb_records(i2c)?;
+    Ok(if count == 0 { None } else { records[count - 1] })
 }
 
 fn write_pd_breadcrumb_record<I2C>(
@@ -3472,22 +3501,36 @@ where
 
     pub fn init_best_effort(&mut self) {
         let _ = bms_diag_breadcrumb_take();
-        match load_latest_pd_breadcrumb_record(&mut self.i2c) {
-            Ok(Some(record)) => defmt::info!(
-                "eeprom: pd_breadcrumb seq={=u16} tick_100ms={=u32} event={} attached={=bool} ready={=bool} charge_ready={=bool} vbus_present={=?} contract_kind={=?} contract_mv={=?} contract_ma={=?} unsafe={=bool}",
-                record.seq,
-                record.tick_100ms,
-                record.event.name(),
-                record.attached,
-                record.controller_ready,
-                record.charge_ready,
-                record.vbus_present,
-                record.contract_kind.map(|kind| match kind { usb_pd::ContractKind::Fixed => "fixed", usb_pd::ContractKind::Pps => "pps" }),
-                record.contract_mv,
-                record.contract_ma,
-                record.unsafe_source_latched
-            ),
-            Ok(None) => {}
+        match load_sorted_pd_breadcrumb_records(&mut self.i2c) {
+            Ok((records, count)) => {
+                let mut idx = 0usize;
+                let mut previous_tick_100ms: Option<u32> = None;
+                while idx < count {
+                    if let Some(record) = records[idx] {
+                        let delta_100ms = previous_tick_100ms
+                            .map(|previous| record.tick_100ms.wrapping_sub(previous));
+                        defmt::info!(
+                            "eeprom: pd_breadcrumb idx={=u8}/{=u8} seq={=u16} tick_100ms={=u32} delta_100ms={=?} event={} attached={=bool} ready={=bool} charge_ready={=bool} vbus_present={=?} contract_kind={=?} contract_mv={=?} contract_ma={=?} unsafe={=bool}",
+                            idx as u8,
+                            count as u8,
+                            record.seq,
+                            record.tick_100ms,
+                            delta_100ms,
+                            record.event.name(),
+                            record.attached,
+                            record.controller_ready,
+                            record.charge_ready,
+                            record.vbus_present,
+                            record.contract_kind.map(|kind| match kind { usb_pd::ContractKind::Fixed => "fixed", usb_pd::ContractKind::Pps => "pps" }),
+                            record.contract_mv,
+                            record.contract_ma,
+                            record.unsafe_source_latched
+                        );
+                        previous_tick_100ms = Some(record.tick_100ms);
+                    }
+                    idx += 1;
+                }
+            }
             Err(err) => defmt::warn!(
                 "eeprom: read pd_breadcrumb failed err={}",
                 i2c_error_kind(err)
@@ -3910,7 +3953,7 @@ where
         };
         let record = PdBreadcrumbRecordV1 {
             seq: self.pd_breadcrumb_next_seq,
-            tick_100ms: 0,
+            tick_100ms: (self.fan_now_ms() / 100) as u32,
             event,
             attached: current.attached,
             controller_ready: current.controller_ready,
