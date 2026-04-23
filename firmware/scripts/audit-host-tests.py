@@ -20,6 +20,7 @@ ALLOWED = {
     "tmp112.rs",
     "usb_pd/contract_tracker.rs",
     "usb_pd/mod.rs",
+    "usb_pd/tests.rs",
     "usb_pd/pd.rs",
     "usb_pd/sink_policy.rs",
 }
