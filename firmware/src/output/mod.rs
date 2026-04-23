@@ -8703,6 +8703,11 @@ where
         );
         let output_power_w10 =
             charge_policy_output_power_w10(&self.ui_snapshot, self.output_state.active_outputs);
+        let charge_policy_hv = self
+            .bms_cached_lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::HV))
+            .unwrap_or(false);
         let charge_policy_telemetry = if activation_pending {
             None
         } else {
@@ -8726,6 +8731,7 @@ where
                         cell_max_mv,
                         charge_ready,
                         bms_full,
+                        hv: charge_policy_hv,
                     })
                 }
                 _ => None,

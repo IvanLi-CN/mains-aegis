@@ -580,6 +580,7 @@ pub(super) struct ChargePolicyTelemetry {
     pub(super) cell_max_mv: u16,
     pub(super) charge_ready: bool,
     pub(super) bms_full: bool,
+    pub(super) hv: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -766,6 +767,7 @@ pub(super) fn charge_policy_step(
                 && telemetry.charge_ready
                 && !telemetry.bms_full
                 && (input.charger_taper_cv
+                    || telemetry.hv
                     || telemetry.cell_max_mv >= CHARGE_POLICY_TOPOFF_CELL_MAX_MV)
         });
     let state = if derate.derated {
@@ -1876,6 +1878,7 @@ mod tests {
             cell_max_mv,
             charge_ready: true,
             bms_full: false,
+            hv: false,
         }
     }
 
@@ -1966,6 +1969,28 @@ mod tests {
                 CHARGE_POLICY_START_CELL_MIN_MV,
                 CHARGE_POLICY_TOPOFF_CELL_MAX_MV,
             )),
+            Some(DashboardInputSource::UsbC),
+            Some(1_000),
+        );
+
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 0, input);
+
+        assert_eq!(decision.state, ChargePolicyState::ChargingTopoff200mA);
+        assert!(decision.allow_charge);
+        assert_eq!(decision.target_ichg_ma, Some(CHARGE_POLICY_TOPOFF_ICHG_MA));
+    }
+
+    #[test]
+    fn charge_policy_enters_topoff_when_rsoc_is_99_and_bms_reports_hv() {
+        let mut memory = ChargePolicyMemory::default();
+        memory.charge_latched = true;
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+
+        let mut telemetry = policy_telemetry(99, CHARGE_POLICY_START_CELL_MIN_MV, 4_105);
+        telemetry.hv = true;
+        let input = policy_input(
+            Some(telemetry),
             Some(DashboardInputSource::UsbC),
             Some(1_000),
         );
