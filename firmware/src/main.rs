@@ -1362,13 +1362,46 @@ fn main() -> ! {
         defmt::info!("esp: heartbeat");
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(2_000) {
-            let irq_events = irq_tracker.take_delta();
-            let pd_state = usb_pd.tick(
+            let mut irq_events = irq_tracker.take_delta();
+            let mut pd_state = usb_pd.tick(
                 power.usb_pd_demand(),
                 irq_events.i2c2_int != 0,
                 pd_started_at.elapsed().as_millis() as u32,
             );
             power.update_usb_pd_state(pd_state);
+
+            if pd_state.attached && pd_state.contract.is_none() {
+                let focus_start = Instant::now();
+                while focus_start.elapsed() < Duration::from_millis(450)
+                    && pd_state.attached
+                    && pd_state.contract.is_none()
+                {
+                    let extra_irq = irq_tracker.take_delta();
+                    irq_events.i2c1_int = irq_events.i2c1_int.wrapping_add(extra_irq.i2c1_int);
+                    irq_events.i2c2_int = irq_events.i2c2_int.wrapping_add(extra_irq.i2c2_int);
+                    irq_events.chg_int = irq_events.chg_int.wrapping_add(extra_irq.chg_int);
+                    irq_events.fan_tach = irq_events.fan_tach.wrapping_add(extra_irq.fan_tach);
+                    irq_events.ina_pv = irq_events.ina_pv.wrapping_add(extra_irq.ina_pv);
+                    irq_events.ina_warning =
+                        irq_events.ina_warning.wrapping_add(extra_irq.ina_warning);
+                    irq_events.ina_critical =
+                        irq_events.ina_critical.wrapping_add(extra_irq.ina_critical);
+                    irq_events.bms_btp_int_h = irq_events
+                        .bms_btp_int_h
+                        .wrapping_add(extra_irq.bms_btp_int_h);
+                    irq_events.therm_kill_n =
+                        irq_events.therm_kill_n.wrapping_add(extra_irq.therm_kill_n);
+
+                    pd_state = usb_pd.tick(
+                        power.usb_pd_demand(),
+                        extra_irq.i2c2_int != 0,
+                        pd_started_at.elapsed().as_millis() as u32,
+                    );
+                    power.update_usb_pd_state(pd_state);
+                    service_runtime_audio!(power);
+                }
+            }
+
             let fan_telemetry_due = power.tick(&irq_events);
             if fan_pwm_ready {
                 applied_fan_state = apply_fan_command(

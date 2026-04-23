@@ -10,23 +10,23 @@ use pd::{ControlMessageType, DataMessageType, Message, MessageHeader, SpecRevisi
 use sink_policy::{ContractPlan, LocalCapabilities, SourceOffer};
 
 const PHY_POLL_INTERVAL_MS: u32 = 250;
+const PHY_NEGOTIATION_POLL_INTERVAL_MS: u32 = 50;
 const ERROR_RETRY_INTERVAL_MS: u32 = 1_000;
-const SOURCE_CAPS_WAIT_TIMEOUT_MS: u32 = 800;
+const SOURCE_CAPS_WAIT_TIMEOUT_MS: u32 = 400;
 const SOURCE_CAPS_REQUERY_DELAY_MS: u32 = 1_000;
 const SOURCE_CAPS_REQUERY_RETRY_MS: u32 = 5_000;
-const SOURCE_CAPS_RECOVERY_RETRY_MS: u32 = 1_500;
-const SOURCE_CAPS_HARD_RECOVERY_TIMEOUT_MS: u32 = 2_500;
 const NO_CONTRACT_SOURCE_CAPS_REARM_TIMEOUT_MS: u32 = 3_000;
 const NO_CONTRACT_ATTACH_STABILIZE_MS: u32 = 12_000;
-const HARD_RESET_WAIT_FOR_SOURCE_CAPS_MS: u32 = 1_500;
+const HARD_RESET_SEND_SETTLE_MS: u32 = 120;
+const HARD_RESET_WAIT_FOR_SOURCE_CAPS_MS: u32 = 1_200;
 const CONTRACT_REQUEST_TIMEOUT_MS: u32 = 1_500;
+const PARTIAL_RX_RECOVERY_GRACE_MS: u32 = 250;
 const RAW_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const CC_ABSENT_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const CHARGER_VBUS_PRESENT_THRESHOLD_MV: u16 = 4_500;
 const CONTRACT_CHARGE_READY_DELAY_MS: u32 = 350;
 const DEFAULT_5V_CHARGE_READY_DELAY_MS: u32 = 500;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContractKind {
     Fixed,
@@ -47,6 +47,7 @@ pub struct ActiveContract {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NoContractRecoveryPhase {
     FreshAttach,
+    HardResetSent,
     HardResetWaitCaps,
 }
 
@@ -109,6 +110,7 @@ pub struct UsbPdSinkManager<I2C> {
     consecutive_effective_vbus_absent_polls: u8,
     unsafe_hard_reset_sent: bool,
     charge_ready_at_ms: Option<u32>,
+    last_partial_rx_seen_at_ms: Option<u32>,
 }
 
 fn polarity_name(polarity: CcPolarity) -> &'static str {
@@ -309,6 +311,7 @@ where
             consecutive_effective_vbus_absent_polls: 0,
             unsafe_hard_reset_sent: false,
             charge_ready_at_ms: None,
+            last_partial_rx_seen_at_ms: None,
         }
     }
 
@@ -384,8 +387,8 @@ where
             }
         }
 
-        let poll_due =
-            irq_asserted || now_ms.wrapping_sub(self.last_phy_poll_at_ms) >= PHY_POLL_INTERVAL_MS;
+        let poll_due = irq_asserted
+            || now_ms.wrapping_sub(self.last_phy_poll_at_ms) >= self.phy_poll_interval_ms();
         if poll_due {
             self.last_phy_poll_at_ms = now_ms;
             match self.phy.poll_status() {
@@ -557,11 +560,36 @@ where
         }
     }
 
+    fn phy_poll_interval_ms(&self) -> u32 {
+        if self.state.attached && self.state.contract.is_none() {
+            PHY_NEGOTIATION_POLL_INTERVAL_MS
+        } else {
+            PHY_POLL_INTERVAL_MS
+        }
+    }
+
     fn in_no_contract_hard_reset_wait(&self) -> bool {
         matches!(
             self.no_contract_recovery_phase,
             Some(NoContractRecoveryPhase::HardResetWaitCaps)
         )
+    }
+
+    fn in_no_contract_hard_reset_sent(&self) -> bool {
+        matches!(
+            self.no_contract_recovery_phase,
+            Some(NoContractRecoveryPhase::HardResetSent)
+        )
+    }
+
+    fn enter_no_contract_hard_reset_sent(&mut self, now_ms: u32) {
+        self.no_contract_phase_started_at_ms = Some(now_ms);
+        self.no_contract_recovery_phase = Some(NoContractRecoveryPhase::HardResetSent);
+        self.attached_at_ms = Some(now_ms);
+        self.source_caps_recovery_attempted = false;
+        self.last_source_caps_requery_at_ms = None;
+        self.last_source_caps_recovery_at_ms = None;
+        self.disarm_charge_ready("hard_reset_sent");
     }
 
     fn enter_no_contract_hard_reset_wait(&mut self, now_ms: u32) {
@@ -574,6 +602,65 @@ where
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         self.disarm_charge_ready("hard_reset_wait");
+    }
+
+    fn restart_no_contract_wait_for_caps(
+        &mut self,
+        now_ms: u32,
+        reason: &'static str,
+        preserve_wait_started_at_ms: Option<u32>,
+    ) {
+        self.reset_contract_state(false);
+        self.enter_no_contract_hard_reset_wait(now_ms);
+        if let Some(started_at_ms) = preserve_wait_started_at_ms {
+            self.no_contract_phase_started_at_ms = Some(started_at_ms);
+        }
+
+        info!(
+            "usb_pd: restart_wait_for_caps reason={} tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
+            reason,
+            self.tx_spec_revision.bits(),
+            self.peer_spec_revision.bits()
+        );
+
+        if let Err(err) = self.phy.reset_pd_logic() {
+            warn!(
+                "usb_pd: pd_reset failed reason={} err={}",
+                reason,
+                fusb302_error_kind(&err)
+            );
+        } else if let Some(polarity) = self.state.polarity {
+            if let Err(err) = self
+                .phy
+                .enable_pd_receive(polarity, self.recovery_spec_revision())
+            {
+                warn!(
+                    "usb_pd: rx re-enable failed reason={} err={}",
+                    reason,
+                    fusb302_error_kind(&err)
+                );
+            }
+        }
+    }
+
+    fn begin_no_contract_hard_reset_recovery(&mut self, now_ms: u32, reason: &'static str) {
+        self.reset_contract_state(false);
+        self.enter_no_contract_hard_reset_sent(now_ms);
+        info!(
+            "usb_pd: begin_hard_reset_recovery reason={} tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
+            reason,
+            self.tx_spec_revision.bits(),
+            self.peer_spec_revision.bits()
+        );
+
+        if let Err(err) = self.phy.send_hard_reset() {
+            warn!(
+                "usb_pd: hard reset send failed reason={} err={}",
+                reason,
+                fusb302_error_kind(&err)
+            );
+            self.restart_no_contract_wait_for_caps(now_ms, "hard_reset_send_failed", None);
+        }
     }
 
     fn maybe_recover_missing_source_caps(&mut self, _demand: UsbPdPowerDemand, now_ms: u32) {
@@ -590,6 +677,33 @@ where
         };
 
         let waited_ms = now_ms.wrapping_sub(attached_at_ms);
+        if let Some(last_partial_rx_seen_at_ms) = self.last_partial_rx_seen_at_ms {
+            let partial_rx_age_ms = now_ms.wrapping_sub(last_partial_rx_seen_at_ms);
+            if partial_rx_age_ms < PARTIAL_RX_RECOVERY_GRACE_MS {
+                debug!(
+                    "usb_pd: defer source caps recovery while partial rx is active age_ms={=u32}",
+                    partial_rx_age_ms
+                );
+                return;
+            }
+        }
+        if self.in_no_contract_hard_reset_sent() {
+            let hard_reset_sent_at_ms = self
+                .no_contract_phase_started_at_ms
+                .unwrap_or(attached_at_ms);
+            let sent_waited_ms = now_ms.wrapping_sub(hard_reset_sent_at_ms);
+            if sent_waited_ms < HARD_RESET_SEND_SETTLE_MS {
+                return;
+            }
+
+            warn!(
+                "usb_pd: hard reset send settle elapsed without irq waited_ms={=u32}",
+                sent_waited_ms
+            );
+            self.restart_no_contract_wait_for_caps(now_ms, "hard_reset_send_settle", None);
+            return;
+        }
+
         if self.in_no_contract_hard_reset_wait() {
             let hard_reset_wait_started_at_ms = self
                 .no_contract_phase_started_at_ms
@@ -611,67 +725,17 @@ where
             return;
         }
 
-        let first_attempt = !self.source_caps_recovery_attempted;
-        if !first_attempt {
-            let Some(last_recovery_at_ms) = self.last_source_caps_recovery_at_ms else {
-                return;
-            };
-            if waited_ms >= SOURCE_CAPS_HARD_RECOVERY_TIMEOUT_MS {
-                esp_println::println!(
-                    "usb_pd: source caps recovery stalled, rearming phy waited_ms={} retry_after_ms={}",
-                    waited_ms,
-                    now_ms.wrapping_sub(last_recovery_at_ms)
-                );
-                warn!(
-                    "usb_pd: source caps recovery stalled, rearming phy waited_ms={=u32} retry_after_ms={=u32}",
-                    waited_ms,
-                    now_ms.wrapping_sub(last_recovery_at_ms)
-                );
-                self.rearm_after_detach(now_ms, "source_caps_stalled");
-                return;
-            }
-            if now_ms.wrapping_sub(last_recovery_at_ms) < SOURCE_CAPS_RECOVERY_RETRY_MS {
-                return;
-            }
-        }
-
-        let recovery_spec_revision = self.recovery_spec_revision();
-
-        let recovery_message = if first_attempt {
-            esp_println::println!(
-                "usb_pd: no source caps after attach, probing with get_source_cap waited_ms={} tx_spec_rev_bits={}",
-                waited_ms,
-                recovery_spec_revision.bits()
-            );
-            info!(
-                "usb_pd: no source caps after attach, probing with get_source_cap waited_ms={=u32} tx_spec_rev_bits={=u8}",
-                waited_ms,
-                self.tx_spec_revision.bits()
-            );
-            ControlMessageType::GetSourceCap
-        } else {
-            esp_println::println!(
-                "usb_pd: retrying source caps recovery with soft reset retry_after_ms={} tx_spec_rev_bits={}",
-                now_ms.wrapping_sub(self.last_source_caps_recovery_at_ms.unwrap_or(now_ms)),
-                self.tx_spec_revision.bits()
-            );
-            info!(
-                "usb_pd: retrying source caps recovery with soft reset retry_after_ms={=u32} tx_spec_rev_bits={=u8}",
-                now_ms.wrapping_sub(self.last_source_caps_recovery_at_ms.unwrap_or(now_ms)),
-                recovery_spec_revision.bits()
-            );
-            ControlMessageType::SoftReset
-        };
-        if let Err(err) = self.send_control_message(recovery_message, recovery_spec_revision) {
-            warn!(
-                "usb_pd: source caps recovery message failed kind={} err={}",
-                control_message_name(recovery_message),
-                fusb302_error_kind(&err)
-            );
-            return;
-        }
-        self.source_caps_recovery_attempted = true;
-        self.last_source_caps_recovery_at_ms = Some(now_ms);
+        esp_println::println!(
+            "usb_pd: no source caps after attach, issuing hard reset waited_ms={} tx_spec_rev_bits={}",
+            waited_ms,
+            self.tx_spec_revision.bits()
+        );
+        info!(
+            "usb_pd: no source caps after attach, issuing hard reset waited_ms={=u32} tx_spec_rev_bits={=u8}",
+            waited_ms,
+            self.tx_spec_revision.bits()
+        );
+        self.begin_no_contract_hard_reset_recovery(now_ms, "source_caps_timeout");
     }
 
     fn no_contract_attach_stabilizing(&self, now_ms: u32) -> bool {
@@ -785,7 +849,8 @@ where
             self.consecutive_effective_vbus_absent_polls = 0;
         }
 
-        let hard_reset_waiting = self.in_no_contract_hard_reset_wait();
+        let hard_reset_recovering =
+            self.in_no_contract_hard_reset_sent() || self.in_no_contract_hard_reset_wait();
 
         if self.state.attached
             && cc_absent_detach_debounce_elapsed(self.consecutive_cc_absent_polls)
@@ -802,7 +867,7 @@ where
 
         if self.state.attached
             && !attach_recovery_in_progress
-            && !hard_reset_waiting
+            && !hard_reset_recovering
             && !raw_vbus_present
             && !vbus_present
         {
@@ -825,7 +890,7 @@ where
 
         if self.state.attached
             && !attach_recovery_in_progress
-            && !hard_reset_waiting
+            && !hard_reset_recovering
             && !vbus_present
         {
             if !effective_vbus_detach_debounce_elapsed(self.consecutive_effective_vbus_absent_polls)
@@ -946,6 +1011,17 @@ where
                 snapshot.tx_sent(),
                 snapshot.gcrc_sent()
             );
+        } else if snapshot.retry_failed()
+            && self.state.contract.is_none()
+            && (self.in_no_contract_hard_reset_sent() || self.in_no_contract_hard_reset_wait())
+        {
+            warn!(
+                "usb_pd: ignore retry fail during no-contract hard reset recovery waiting_send={=bool} waiting_caps={=bool}",
+                self.in_no_contract_hard_reset_sent(),
+                self.in_no_contract_hard_reset_wait()
+            );
+            self.state.vbus_present = Some(vbus_present);
+            return;
         } else if snapshot.hard_reset_received() || snapshot.retry_failed() {
             let had_active_contract = self.state.contract.is_some();
             let had_source_caps = self.source_capabilities.is_some();
@@ -966,30 +1042,11 @@ where
                     None
                 };
 
-                self.reset_contract_state(false);
-                if let Some(started_at_ms) = prior_wait_started_at_ms {
-                    self.no_contract_phase_started_at_ms = Some(started_at_ms);
-                    self.no_contract_recovery_phase =
-                        Some(NoContractRecoveryPhase::HardResetWaitCaps);
-                }
-                self.enter_no_contract_hard_reset_wait(now_ms);
-
-                if let Err(err) = self.phy.reset_pd_logic() {
-                    warn!(
-                        "usb_pd: no-contract hard reset pd_reset failed err={}",
-                        fusb302_error_kind(&err)
-                    );
-                } else if let Some(polarity) = self.state.polarity {
-                    if let Err(err) = self
-                        .phy
-                        .enable_pd_receive(polarity, self.recovery_spec_revision())
-                    {
-                        warn!(
-                            "usb_pd: no-contract hard reset rx re-enable failed err={}",
-                            fusb302_error_kind(&err)
-                        );
-                    }
-                }
+                self.restart_no_contract_wait_for_caps(
+                    now_ms,
+                    "peer_hard_reset_no_contract",
+                    prior_wait_started_at_ms,
+                );
                 self.state.vbus_present = Some(vbus_present);
                 return;
             }
@@ -1023,12 +1080,21 @@ where
             return;
         }
 
+        if snapshot.interrupta & fusb302::interrupta::HARD_SENT != 0
+            && self.in_no_contract_hard_reset_sent()
+        {
+            self.restart_no_contract_wait_for_caps(now_ms, "hard_reset_sent", None);
+            self.state.vbus_present = Some(vbus_present);
+            return;
+        }
+
         if snapshot.soft_reset_received() && !snapshot.rx_message_ready() {
             warn!("usb_pd: source requested soft reset without fifo payload");
             self.handle_peer_soft_reset(self.peer_spec_revision, now_ms);
         }
 
         if snapshot.rx_fifo_non_empty() && !snapshot.rx_message_ready() {
+            self.last_partial_rx_seen_at_ms = Some(now_ms);
             debug!(
                 "usb_pd: defer partial rx rx_non_empty={=bool} rx_ready={=bool} gcrc_sent={=bool}",
                 snapshot.rx_fifo_non_empty(),
@@ -1059,6 +1125,7 @@ where
                             "usb_pd: read message failed err={}",
                             fusb302_error_kind(&err)
                         );
+                        self.last_partial_rx_seen_at_ms = None;
                         let _ = self.phy.flush_rx();
                         break;
                     }
@@ -1066,12 +1133,16 @@ where
 
                 match self.phy.rx_fifo_non_empty() {
                     Ok(true) => {}
-                    Ok(false) => break,
+                    Ok(false) => {
+                        self.last_partial_rx_seen_at_ms = None;
+                        break;
+                    }
                     Err(err) => {
                         warn!(
                             "usb_pd: read fifo status failed err={}",
                             fusb302_error_kind(&err)
                         );
+                        self.last_partial_rx_seen_at_ms = None;
                         break;
                     }
                 }
@@ -1468,6 +1539,7 @@ where
         self.source_caps_recovery_attempted = false;
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
+        self.last_partial_rx_seen_at_ms = None;
         if detach {
             self.tx_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
             self.peer_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
@@ -2547,12 +2619,98 @@ mod tests {
     }
 
     #[test]
+    fn hard_reset_sent_vbus_drop_does_not_detach_before_settle_timeout() {
+        let mut manager = UsbPdSinkManager::new(LenientI2c);
+        manager.initialized = true;
+        manager.state.enabled = true;
+        manager.state.controller_ready = true;
+        manager.state.attached = true;
+        manager.state.vbus_present = Some(true);
+        manager.state.polarity = Some(CcPolarity::Cc1);
+        manager.attached_at_ms = Some(0);
+        manager.no_contract_phase_started_at_ms = Some(0);
+        manager.no_contract_recovery_phase = Some(NoContractRecoveryPhase::HardResetSent);
+
+        manager.handle_irq_snapshot(
+            irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_NONE, false),
+            UsbPdPowerDemand {
+                measured_input_voltage_mv: Some(2_950),
+                ..UsbPdPowerDemand::default()
+            },
+            50,
+        );
+        assert!(manager.state.attached);
+        assert_eq!(
+            manager.no_contract_recovery_phase,
+            Some(NoContractRecoveryPhase::HardResetSent)
+        );
+
+        manager.maybe_recover_missing_source_caps(
+            UsbPdPowerDemand::default(),
+            HARD_RESET_SEND_SETTLE_MS,
+        );
+
+        assert!(manager.state.attached);
+        assert_eq!(
+            manager.no_contract_recovery_phase,
+            Some(NoContractRecoveryPhase::HardResetWaitCaps)
+        );
+    }
+
+    #[test]
+    fn recent_partial_rx_defers_missing_source_caps_recovery() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        manager.state.attached = true;
+        manager.state.vbus_present = Some(true);
+        manager.attached_at_ms = Some(0);
+        manager.last_partial_rx_seen_at_ms = Some(SOURCE_CAPS_WAIT_TIMEOUT_MS);
+
+        manager.maybe_recover_missing_source_caps(
+            UsbPdPowerDemand::default(),
+            SOURCE_CAPS_WAIT_TIMEOUT_MS + PARTIAL_RX_RECOVERY_GRACE_MS - 1,
+        );
+
+        assert!(manager.state.attached);
+        assert!(!manager.in_no_contract_hard_reset_sent());
+
+        manager.maybe_recover_missing_source_caps(
+            UsbPdPowerDemand::default(),
+            SOURCE_CAPS_WAIT_TIMEOUT_MS + PARTIAL_RX_RECOVERY_GRACE_MS,
+        );
+
+        assert!(manager.in_no_contract_hard_reset_sent());
+    }
+
     fn source_caps_requery_uses_initial_delay_before_first_probe() {
         let mut manager = UsbPdSinkManager::new(NoopI2c);
         manager.last_request_at_ms = 0;
 
         assert!(!manager.source_caps_requery_due(SOURCE_CAPS_REQUERY_DELAY_MS - 1));
         assert!(manager.source_caps_requery_due(SOURCE_CAPS_REQUERY_DELAY_MS));
+    }
+
+    #[test]
+    fn negotiation_poll_interval_is_faster_while_attached_without_contract() {
+        let mut manager = UsbPdSinkManager::new(NoopI2c);
+        manager.state.attached = true;
+        manager.state.contract = None;
+
+        assert_eq!(
+            manager.phy_poll_interval_ms(),
+            PHY_NEGOTIATION_POLL_INTERVAL_MS
+        );
+
+        manager.state.contract = Some(ActiveContract {
+            kind: ContractKind::Pps,
+            object_position: 1,
+            voltage_mv: 16_000,
+            current_ma: 100,
+            source_max_current_ma: 100,
+            input_current_limit_ma: Some(100),
+            vindpm_mv: Some(15_000),
+        });
+
+        assert_eq!(manager.phy_poll_interval_ms(), PHY_POLL_INTERVAL_MS);
     }
 
     #[test]
