@@ -1894,6 +1894,16 @@ fn bq40_ui_issue_detail(low_pack: bool, primary_reason: &'static str) -> Option<
     }
 }
 
+fn seed_bms_charge_ready_from_self_check(snapshot: &SelfCheckUiSnapshot) -> Option<bool> {
+    match snapshot.bq40z50_issue_detail {
+        Some("xchg_blocked" | "chg_fet_off") => Some(false),
+        Some("no_battery") => None,
+        Some(_) => None,
+        None if matches!(snapshot.bq40z50, SelfCheckCommState::Ok) => Some(true),
+        None => None,
+    }
+}
+
 fn bq40_last_result_blocks_auto_recovery(result: Option<BmsResultKind>) -> bool {
     matches!(
         result,
@@ -3347,6 +3357,8 @@ where
         let out_b_allowed = output_state.active_outputs.is_enabled(OutputChannel::OutB);
         let charger_allowed = cfg.charger_probe_ok;
         let bms_addr = cfg.bms_addr;
+        let initial_bms_charge_ready =
+            seed_bms_charge_ready_from_self_check(&cfg.self_check_snapshot);
         let bms_auto_recovery_enabled =
             boot_diag_auto_recovery_enabled(cfg.bms_boot_diag_auto_validate);
         let bms_runtime_seen = bms_addr.is_some()
@@ -3429,7 +3441,7 @@ where
             manual_charge_storage_ready,
             manual_charge_storage_incompatible,
             manual_charge_runtime: ManualChargeRuntime::new(),
-            bms_charge_ready: None,
+            bms_charge_ready: initial_bms_charge_ready,
             bms_full: None,
             bms_cell_min_mv: None,
             bms_cell_max_mv: None,
@@ -3899,10 +3911,11 @@ where
             // Feed the PD manager the raw charger-side VAC1 sample so FUSB302 VBUS_OK glitches
             // do not blind detach / unsafe-voltage decisions.
             measured_input_voltage_mv: self.usb_pd_vac1_mv,
-            charging_enabled: usb_pd_charging_enabled(
+            charging_enabled: usb_pd_demand_charging_enabled(
                 self.ui_snapshot.bq25792_allow_charge,
                 self.cfg.charger_enabled,
                 self.charger_allowed,
+                self.bms_charge_ready,
             ),
         }
     }

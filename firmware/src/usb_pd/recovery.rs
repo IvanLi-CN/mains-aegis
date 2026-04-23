@@ -186,8 +186,8 @@ where
         };
 
         let waited_ms = now_ms.wrapping_sub(attached_at_ms);
-        if let Some(last_partial_rx_seen_at_ms) = self.last_partial_rx_seen_at_ms {
-            let partial_rx_age_ms = now_ms.wrapping_sub(last_partial_rx_seen_at_ms);
+        if let Some(partial_rx_started_at_ms) = self.partial_rx_started_at_ms {
+            let partial_rx_age_ms = now_ms.wrapping_sub(partial_rx_started_at_ms);
             if partial_rx_age_ms < PARTIAL_RX_RECOVERY_GRACE_MS {
                 debug!(
                     "usb_pd: defer source caps recovery while partial rx is active age_ms={=u32}",

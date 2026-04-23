@@ -1101,7 +1101,7 @@ fn recent_partial_rx_defers_missing_source_caps_recovery() {
     manager.state.attached = true;
     manager.state.vbus_present = Some(true);
     manager.attached_at_ms = Some(0);
-    manager.last_partial_rx_seen_at_ms = Some(SOURCE_CAPS_WAIT_TIMEOUT_MS);
+    manager.partial_rx_started_at_ms = Some(SOURCE_CAPS_WAIT_TIMEOUT_MS);
 
     manager.maybe_recover_missing_source_caps(
         UsbPdPowerDemand::default(),
@@ -1110,6 +1110,41 @@ fn recent_partial_rx_defers_missing_source_caps_recovery() {
 
     assert!(manager.state.attached);
     assert!(!manager.in_no_contract_hard_reset_sent());
+
+    manager.maybe_recover_missing_source_caps(
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS + PARTIAL_RX_RECOVERY_GRACE_MS,
+    );
+
+    assert!(manager.in_no_contract_hard_reset_sent());
+}
+
+#[test]
+fn repeated_partial_rx_observations_do_not_extend_recovery_grace() {
+    let mut manager = UsbPdSinkManager::new(LenientI2c);
+    manager.state.attached = true;
+    manager.state.vbus_present = Some(true);
+    manager.attached_at_ms = Some(0);
+
+    manager.handle_irq_snapshot(
+        irq_snapshot_with_partial_rx_hard_reset(fusb302::status1a::TOGS_SNK2, true),
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS,
+    );
+    assert_eq!(
+        manager.partial_rx_started_at_ms,
+        Some(SOURCE_CAPS_WAIT_TIMEOUT_MS)
+    );
+
+    manager.handle_irq_snapshot(
+        irq_snapshot_with_partial_rx_hard_reset(fusb302::status1a::TOGS_SNK2, true),
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS + 100,
+    );
+    assert_eq!(
+        manager.partial_rx_started_at_ms,
+        Some(SOURCE_CAPS_WAIT_TIMEOUT_MS)
+    );
 
     manager.maybe_recover_missing_source_caps(
         UsbPdPowerDemand::default(),

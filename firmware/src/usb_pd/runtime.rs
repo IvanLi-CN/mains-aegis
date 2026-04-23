@@ -282,13 +282,15 @@ where
         }
 
         if snapshot.rx_fifo_non_empty() && !snapshot.rx_message_ready() {
-            self.last_partial_rx_seen_at_ms = Some(now_ms);
+            self.partial_rx_started_at_ms.get_or_insert(now_ms);
             debug!(
                 "usb_pd: defer partial rx rx_non_empty={=bool} rx_ready={=bool} gcrc_sent={=bool}",
                 snapshot.rx_fifo_non_empty(),
                 snapshot.rx_message_ready(),
                 snapshot.gcrc_sent()
             );
+        } else {
+            self.partial_rx_started_at_ms = None;
         }
 
         if snapshot.rx_message_ready()
@@ -313,7 +315,7 @@ where
                             "usb_pd: read message failed err={}",
                             fusb302_error_kind(&err)
                         );
-                        self.last_partial_rx_seen_at_ms = None;
+                        self.partial_rx_started_at_ms = None;
                         let _ = self.phy.flush_rx();
                         break;
                     }
@@ -322,7 +324,7 @@ where
                 match self.phy.rx_fifo_non_empty() {
                     Ok(true) => {}
                     Ok(false) => {
-                        self.last_partial_rx_seen_at_ms = None;
+                        self.partial_rx_started_at_ms = None;
                         break;
                     }
                     Err(err) => {
@@ -330,7 +332,7 @@ where
                             "usb_pd: read fifo status failed err={}",
                             fusb302_error_kind(&err)
                         );
-                        self.last_partial_rx_seen_at_ms = None;
+                        self.partial_rx_started_at_ms = None;
                         break;
                     }
                 }
@@ -741,7 +743,7 @@ where
         self.source_caps_recovery_attempted = false;
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
-        self.last_partial_rx_seen_at_ms = None;
+        self.partial_rx_started_at_ms = None;
         if detach {
             self.tx_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
             self.peer_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;

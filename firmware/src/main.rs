@@ -1372,7 +1372,7 @@ fn main() -> ! {
 
             if pd_state.attached && pd_state.contract.is_none() {
                 let focus_start = Instant::now();
-                while focus_start.elapsed() < Duration::from_millis(450)
+                while focus_start.elapsed() < Duration::from_millis(2_000)
                     && pd_state.attached
                     && pd_state.contract.is_none()
                 {

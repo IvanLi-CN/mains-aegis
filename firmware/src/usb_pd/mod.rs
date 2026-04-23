@@ -113,7 +113,7 @@ pub struct UsbPdSinkManager<I2C> {
     consecutive_effective_vbus_absent_polls: u8,
     unsafe_hard_reset_sent: bool,
     charge_ready_at_ms: Option<u32>,
-    last_partial_rx_seen_at_ms: Option<u32>,
+    partial_rx_started_at_ms: Option<u32>,
 }
 
 fn polarity_name(polarity: CcPolarity) -> &'static str {
@@ -314,7 +314,7 @@ where
             consecutive_effective_vbus_absent_polls: 0,
             unsafe_hard_reset_sent: false,
             charge_ready_at_ms: None,
-            last_partial_rx_seen_at_ms: None,
+            partial_rx_started_at_ms: None,
         }
     }
 

@@ -173,6 +173,16 @@ pub(super) const fn usb_pd_charging_enabled(
     }
 }
 
+pub(super) const fn usb_pd_demand_charging_enabled(
+    runtime_allow_charge: Option<bool>,
+    charger_enabled: bool,
+    charger_allowed: bool,
+    bms_charge_ready: Option<bool>,
+) -> bool {
+    !matches!(bms_charge_ready, Some(false))
+        && usb_pd_charging_enabled(runtime_allow_charge, charger_enabled, charger_allowed)
+}
+
 pub(super) const fn usb_pd_charge_gate_ready(
     usb_pd_enabled: bool,
     usb_pd_controller_ready: bool,
@@ -1601,6 +1611,23 @@ mod tests {
         assert!(usb_pd_charging_enabled(Some(true), false, false));
         assert!(usb_pd_charging_enabled(None, true, true));
         assert!(!usb_pd_charging_enabled(None, true, false));
+    }
+
+    #[test]
+    fn usb_pd_demand_charging_enabled_respects_bms_charge_path() {
+        assert!(!usb_pd_demand_charging_enabled(
+            Some(true),
+            true,
+            true,
+            Some(false)
+        ));
+        assert!(usb_pd_demand_charging_enabled(
+            Some(true),
+            true,
+            true,
+            Some(true)
+        ));
+        assert!(usb_pd_demand_charging_enabled(None, true, true, None));
     }
 
     #[test]
