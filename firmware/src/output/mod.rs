@@ -9069,6 +9069,28 @@ where
             // Ensure we are not braking the converter (ILIM_HIZ < 0.75V forces non-switching).
             self.chg_ilim_hiz_brk.set_low();
 
+            match bq25792::ensure_managed_current_limits(&mut self.i2c) {
+                Ok(state) => {
+                    if state.ctrl5_after != state.ctrl5_before {
+                        defmt::info!(
+                            "charger: current_limit_path ctrl5_before=0x{=u8:x} ctrl5_after=0x{=u8:x} indpm_en={=bool} extilim_en={=bool}",
+                            state.ctrl5_before,
+                            state.ctrl5_after,
+                            (state.ctrl5_after & bq25792::ctrl5::EN_INDPM) != 0,
+                            (state.ctrl5_after & bq25792::ctrl5::EN_EXTILIM) != 0,
+                        );
+                    }
+                }
+                Err(e) => {
+                    self.mark_charger_poll_failed(now);
+                    defmt::error!(
+                        "charger: bq25792 err stage=current_limit_path err={}",
+                        i2c_error_kind(e)
+                    );
+                    return;
+                }
+            }
+
             if force_allow_charge {
                 if let Err(reason) = self.ensure_bms_activation_charger_backup() {
                     self.mark_charger_poll_failed(now);

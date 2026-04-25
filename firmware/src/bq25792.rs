@@ -70,6 +70,12 @@ pub mod ctrl2 {
 pub mod ctrl5 {
     /// `REG14.SFET_PRESENT` (bit 7).
     pub const SFET_PRESENT: u8 = 1 << 7;
+    /// `REG14.EN_IBAT` (bit 5).
+    pub const EN_IBAT: u8 = 1 << 5;
+    /// `REG14.EN_INDPM` (bit 2).
+    pub const EN_INDPM: u8 = 1 << 2;
+    /// `REG14.EN_EXTILIM` (bit 1).
+    pub const EN_EXTILIM: u8 = 1 << 1;
 }
 
 pub mod status0 {
@@ -557,6 +563,39 @@ where
     })
 }
 
+#[derive(Clone, Copy)]
+pub struct ManagedCurrentLimitState {
+    pub ctrl5_before: u8,
+    pub ctrl5_after: u8,
+}
+
+pub const fn managed_current_limit_ctrl5(ctrl5: u8) -> u8 {
+    (ctrl5 | ctrl5::EN_INDPM) & !ctrl5::EN_EXTILIM
+}
+
+/// Keep charge/input-current limiting under explicit firmware control.
+///
+/// The project already programs `REG03/REG06`, so we keep the internal IINDPM path enabled and
+/// disable the external ILIM clamp override to avoid stale hardware-side limits dominating the
+/// programmed current targets.
+pub fn ensure_managed_current_limits<I2C>(
+    i2c: &mut I2C,
+) -> Result<ManagedCurrentLimitState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl5_before = read_u8(i2c, reg::CHARGER_CONTROL_5)?;
+    let ctrl5_after = managed_current_limit_ctrl5(ctrl5_before);
+    if ctrl5_after != ctrl5_before {
+        write_u8(i2c, reg::CHARGER_CONTROL_5, ctrl5_after)?;
+    }
+
+    Ok(ManagedCurrentLimitState {
+        ctrl5_before,
+        ctrl5_after,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,6 +681,16 @@ mod tests {
         assert_eq!(align_termination_current_ma(109), 80);
         assert_eq!(align_termination_current_ma(200), 200);
         assert_eq!(align_termination_current_ma(1001), 1000);
+    }
+
+    #[test]
+    fn managed_current_limit_ctrl5_enables_indpm_and_disables_extilim() {
+        let input = ctrl5::SFET_PRESENT | ctrl5::EN_EXTILIM;
+        let output = managed_current_limit_ctrl5(input);
+
+        assert_ne!(output & ctrl5::SFET_PRESENT, 0);
+        assert_ne!(output & ctrl5::EN_INDPM, 0);
+        assert_eq!(output & ctrl5::EN_EXTILIM, 0);
     }
 }
 
