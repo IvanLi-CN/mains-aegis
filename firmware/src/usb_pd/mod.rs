@@ -403,8 +403,8 @@ where
             if self.state.attached && !self.unsafe_hard_reset_sent {
                 if self.phy.send_hard_reset().is_ok() {
                     self.note_recovery_event(UsbPdRecoveryEvent::HardResetSent);
-                    self.unsafe_hard_reset_sent = true;
                 }
+                self.unsafe_hard_reset_sent = true;
             }
         }
 

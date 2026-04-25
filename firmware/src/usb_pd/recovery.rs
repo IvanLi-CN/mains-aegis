@@ -349,19 +349,24 @@ where
             }
 
             if self.source_caps_recovery_attempted {
-                if self.state.recovery_event != Some(UsbPdRecoveryEvent::HardResetInhibited) {
+                if self.charge_ready_at_ms.is_none() && !self.state.charge_ready {
+                    if self.state.recovery_event != Some(UsbPdRecoveryEvent::HardResetInhibited) {
+                        self.note_recovery_event(UsbPdRecoveryEvent::HardResetInhibited);
+                    }
+                    esp_println::println!(
+                        "usb_pd: no source caps after inherited attach, holding 5v until replug waited_ms={} tx_spec_rev_bits={}",
+                        waited_ms,
+                        self.tx_spec_revision.bits()
+                    );
+                    warn!(
+                        "usb_pd: no source caps after inherited attach, suppress hard reset until replug waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                        waited_ms,
+                        self.tx_spec_revision.bits()
+                    );
+                } else if self.state.recovery_event != Some(UsbPdRecoveryEvent::HardResetInhibited)
+                {
                     self.note_recovery_event(UsbPdRecoveryEvent::HardResetInhibited);
                 }
-                esp_println::println!(
-                    "usb_pd: no source caps after inherited attach, holding 5v until replug waited_ms={} tx_spec_rev_bits={}",
-                    waited_ms,
-                    self.tx_spec_revision.bits()
-                );
-                warn!(
-                    "usb_pd: no source caps after inherited attach, suppress hard reset until replug waited_ms={=u32} tx_spec_rev_bits={=u8}",
-                    waited_ms,
-                    self.tx_spec_revision.bits()
-                );
             }
             return;
         }
