@@ -110,7 +110,7 @@
 - 如果器件在进入 ROM 前还能完整回应 MB44 的这三项校准字，工具会额外保留 live 的 `CELL_GAIN` / `PACK_GAIN` / `BAT_GAIN`；只要其中任何一项抓取失败，就整体回退到 asset 默认值，避免写入半套 live、半套默认的混合校准。
 - 这不等于“直接写 TI 默认 DF 字段”。TI 默认值会把器件带回 stock 配置，典型表现就是退回 `3S / cell4=0`。
 - 因此，当器件会掉回 TI stock DF，或 live DF capture 持续 `i2c_nack` 时，支持策略应直接切换到 `asset-df-mainboard`，而不是继续等待 live capture 成功。
-- `apply-df` 的收敛信号不是 ROM 事件，而是 monitor 日志里的 `bms_df_apply: ... stage=done fields=18`；对应 `summary.json` 里的 `live_df_apply.done` 也必须为 `true`。
+- `apply-df` 的收敛信号不是 ROM 事件，而是 monitor 日志里的 `bms_df_apply: ... stage=done fields=21`；对应 `summary.json` 里的 `live_df_apply.done` 也必须为 `true`。
 
 ## 5. 可执行排障 SOP（无逻辑分析仪版本）
 

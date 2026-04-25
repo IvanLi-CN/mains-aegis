@@ -16,6 +16,7 @@ pub mod reg {
     pub const CHARGE_CURRENT_LIMIT: u8 = 0x03;
     pub const INPUT_VOLTAGE_LIMIT: u8 = 0x05;
     pub const INPUT_CURRENT_LIMIT: u8 = 0x06;
+    pub const TERMINATION_CONTROL: u8 = 0x09;
 
     pub const CHARGER_CONTROL_0: u8 = 0x0F;
     pub const CHARGER_CONTROL_1: u8 = 0x10;
@@ -49,6 +50,8 @@ pub mod ctrl0 {
     pub const EN_CHG: u8 = 1 << 5;
     /// `REGOF_Charger_Control_0.EN_HIZ` (bit 2).
     pub const EN_HIZ: u8 = 1 << 2;
+    /// `REG0F.Charger_Control_0.EN_TERM` (bit 1).
+    pub const EN_TERM: u8 = 1 << 1;
 }
 
 pub mod ctrl1 {
@@ -67,6 +70,12 @@ pub mod ctrl2 {
 pub mod ctrl5 {
     /// `REG14.SFET_PRESENT` (bit 7).
     pub const SFET_PRESENT: u8 = 1 << 7;
+    /// `REG14.EN_IBAT` (bit 5).
+    pub const EN_IBAT: u8 = 1 << 5;
+    /// `REG14.EN_INDPM` (bit 2).
+    pub const EN_INDPM: u8 = 1 << 2;
+    /// `REG14.EN_EXTILIM` (bit 1).
+    pub const EN_EXTILIM: u8 = 1 << 1;
 }
 
 pub mod status0 {
@@ -112,6 +121,10 @@ pub mod status4 {
     pub const TS_WARM_STAT: u8 = 1 << 1;
     pub const TS_HOT_STAT: u8 = 1 << 0;
 }
+
+pub const TERMINATION_CURRENT_MIN_MA: u16 = 40;
+pub const TERMINATION_CURRENT_MAX_MA: u16 = 1000;
+pub const TERMINATION_CURRENT_STEP_MA: u16 = 40;
 
 pub mod status3 {
     pub const ACRB2_STAT: u8 = 1 << 7;
@@ -550,6 +563,39 @@ where
     })
 }
 
+#[derive(Clone, Copy)]
+pub struct ManagedCurrentLimitState {
+    pub ctrl5_before: u8,
+    pub ctrl5_after: u8,
+}
+
+pub const fn managed_current_limit_ctrl5(ctrl5: u8) -> u8 {
+    (ctrl5 | ctrl5::EN_INDPM) & !ctrl5::EN_EXTILIM
+}
+
+/// Keep charge/input-current limiting under explicit firmware control.
+///
+/// The project already programs `REG03/REG06`, so we keep the internal IINDPM path enabled and
+/// disable the external ILIM clamp override to avoid stale hardware-side limits dominating the
+/// programmed current targets.
+pub fn ensure_managed_current_limits<I2C>(
+    i2c: &mut I2C,
+) -> Result<ManagedCurrentLimitState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl5_before = read_u8(i2c, reg::CHARGER_CONTROL_5)?;
+    let ctrl5_after = managed_current_limit_ctrl5(ctrl5_before);
+    if ctrl5_after != ctrl5_before {
+        write_u8(i2c, reg::CHARGER_CONTROL_5, ctrl5_after)?;
+    }
+
+    Ok(ManagedCurrentLimitState {
+        ctrl5_before,
+        ctrl5_after,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,6 +666,32 @@ mod tests {
         assert!(!is_charge_termination_done(5));
         assert_eq!(decode_chg_stat(7), "termination_done");
     }
+
+    #[test]
+    fn decode_termination_current_ma_uses_40ma_steps() {
+        assert_eq!(decode_termination_current_ma(0x0005), 200);
+        assert_eq!(decode_termination_current_ma(0x0018), 960);
+    }
+
+    #[test]
+    fn align_termination_current_ma_rounds_down_to_supported_step() {
+        assert_eq!(align_termination_current_ma(0), 40);
+        assert_eq!(align_termination_current_ma(41), 40);
+        assert_eq!(align_termination_current_ma(80), 80);
+        assert_eq!(align_termination_current_ma(109), 80);
+        assert_eq!(align_termination_current_ma(200), 200);
+        assert_eq!(align_termination_current_ma(1001), 1000);
+    }
+
+    #[test]
+    fn managed_current_limit_ctrl5_enables_indpm_and_disables_extilim() {
+        let input = ctrl5::SFET_PRESENT | ctrl5::EN_EXTILIM;
+        let output = managed_current_limit_ctrl5(input);
+
+        assert_ne!(output & ctrl5::SFET_PRESENT, 0);
+        assert_ne!(output & ctrl5::EN_INDPM, 0);
+        assert_eq!(output & ctrl5::EN_EXTILIM, 0);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -678,6 +750,38 @@ pub const fn decode_chg_stat(code: u8) -> &'static str {
 
 pub const fn is_charge_termination_done(code: u8) -> bool {
     (code & 0x07) == 7
+}
+
+pub const fn align_termination_current_ma(target_ma: u16) -> u16 {
+    let clamped = if target_ma < TERMINATION_CURRENT_MIN_MA {
+        TERMINATION_CURRENT_MIN_MA
+    } else if target_ma > TERMINATION_CURRENT_MAX_MA {
+        TERMINATION_CURRENT_MAX_MA
+    } else {
+        target_ma
+    };
+    (clamped / TERMINATION_CURRENT_STEP_MA) * TERMINATION_CURRENT_STEP_MA
+}
+
+pub const fn encode_termination_current_bits(target_ma: u16) -> u8 {
+    (align_termination_current_ma(target_ma) / TERMINATION_CURRENT_STEP_MA) as u8
+}
+
+pub const fn decode_termination_current_ma(reg09: u16) -> u16 {
+    (reg09 & 0x001f) * TERMINATION_CURRENT_STEP_MA
+}
+
+pub fn set_termination_current_ma<I2C>(i2c: &mut I2C, target_ma: u16) -> Result<u16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let reg09 = update_u8(
+        i2c,
+        reg::TERMINATION_CONTROL,
+        0x1f,
+        encode_termination_current_bits(target_ma),
+    )?;
+    Ok(decode_termination_current_ma(reg09 as u16))
 }
 
 pub const fn decode_vbus_stat(code: u8) -> &'static str {

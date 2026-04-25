@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-04-07
-- Last: 2026-04-08
+- Last: 2026-04-23
 
 ## 背景 / 问题陈述
 
@@ -187,11 +187,33 @@ None。
 
 - 风险：`FUSB302B` datasheet 对 spec revision / GoodCRC 的描述更偏 PD2.0，PPS 互操作需真实台架确认；本轮先把 PPS policy 与报文路径接齐，并在 PR 中显式记录互操作风险。
 - 风险：多口电源在功率重分配时可能触发 source capabilities 重广播、reset 或短暂回落默认 5V；USB-C charge gate 若实现不完整，容易在旧合同失效窗口里误充。
-- 风险：真实 PD analyzer / PPS 互操作 bench 仍未覆盖，当前只完成编译、host-unit-tests 与 feature matrix 级验证，PR 中必须保留台架验证风险。
+- 风险：冷启动或 no-contract 恢复窗口若无法得到足够高的 `usb_pd.tick()` 服务频率，协商超时会被主循环其它任务拖长，导致热插拔恢复时间抖动；当前通过协商优先窗口已把 reset 基线压到约 `1.67s`，后续如再扩展主循环负载，需重新验证该窗口仍能保证秒级恢复。
+- 风险：当前完成态依赖 plain-serial + EEPROM breadcrumb 双证据链；若后续改动再次让 monitor 只停在 `boot: stage=main_loop_enter`，必须先修复观测链再判断 PPS 恢复行为。
 - 假设：USB-C 输入安全窗按 `20.5V`（`20V + 500mV ADC 容差窗`）执行；若后续硬件校准数据表明需要更窄或更宽，允许在不改 feature 口径的前提下微调实现常量。
+
+## 当前实机状态（2026-04-23）
+
+- 当前 `hn29u` 已完成闭环：实机冷启动与真实 USB 热插拔后，`PPS` 都能在秒级恢复，不再出现“随机卡在 `CAP? + 5V` 或需要十几秒以上才恢复”的主故障。
+- 最新板上证据：
+  - reset 基线日志：`/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260422_204331_570.mon.ndjson`
+    - `2026-04-22T20:43:34.370942Z attach`
+    - `2026-04-22T20:43:36.036427Z contract active kind=pps`
+    - `attach -> PPS ≈ 1.67s`
+  - 主人实机热插拔复测：已确认“重新插拔已经能秒协商成功”，不再出现此前 3s / 10s / 45s 的双稳态恢复。
+- 最终根因收敛为两层：
+  - 协议恢复正确性：`partial RX` 被过早读取/flush、`retry/hard reset` 与 `missing source caps` 恢复链交叉打断，导致同一条会话里不断重复 `Get_Source_Cap / reset / rearm`。
+  - 主循环调度：`attached && contract=None` 窗口里，`usb_pd.tick()` 之前被 `power.tick()`、BMS/charger/UI 轮询拖慢，导致明明配置了 `400ms` 的恢复超时，却经常要到 `~1s` 之后才真正执行。
+- 最终修复由两部分组成：
+  - 协议层：只在完整帧 ready 后读取 RX；`partial RX + hard reset` 先 defer；`no-contract` 恢复维持 `PD_RESET + 等 Source Caps`，避免把协议层 reset 当作物理 detach 乱拆。
+  - 调度层：在 `/Users/ivan/Projects/Ivan/mains-aegis/firmware/src/main.rs` 为 `attached && contract=None` 增加约 `450ms` 的协商优先窗口，优先连续服务 `usb_pd.tick()` 与 IRQ 收敛，再回到 `power.tick()` 等其它周期任务。
+- 结果：`SOURCE_CAPS_WAIT_TIMEOUT_MS = 400ms` 现在能按预期生效，reset 基线已从约 `2.41s` 压到约 `1.67s`，真实热插拔也回到秒级恢复。
 
 ## 变更记录（Change log）
 
+- 2026-04-23: 完成最终 hotplug PPS 恢复收口。根因最终确认还包括 `attached && contract=None` 窗口里 `usb_pd.tick()` 服务频率不足，导致恢复超时被主循环其它任务拖长；通过补齐 partial-RX / hard-reset 恢复正确性，并在主循环中为 no-contract 协商增加优先窗口后，reset 基线已稳定到约 `1.67s`，实机热插拔也恢复到秒级 `PPS`。
+- 2026-04-22: 完成 hotplug PPS 恢复闭环。最终根因定位为 FUSB302 自动协议复位与固件恢复状态机互相打架、fresh attach 后继续处理旧 IRQ snapshot，以及 `missing source caps` 恢复策略缺少稳定升级路径；修复后实机热插拔 `1.0s` 内恢复到 `PPS`，冷启动插线基线约 `25.28s` 自动恢复到 `PPS`。
+- 2026-04-22: 重新打开 hotplug PPS 恢复问题。此前“热插拔已稳定恢复到 `PPS`”的结论被后续实机复测推翻：当前同一条 PPS 电源线上仍会出现“有时数秒恢复、有时长期卡在 `CAP?`”的双稳态现象；规格状态回退为 `部分完成（4/5）`，后续必须先完成稳定恢复闭环，再讨论时延优化。
+- 2026-04-21: 一度观察到连续多次实机拔插可自动回到 `PPS`，后续实现/回归证明该结论不足以支撑 closeout；该记录保留为阶段性现象，不再视为最终结论。
 - 2026-04-08: 已继续收敛 merge-proof review，补齐“非充电态仍计入系统负载预算”“PD state 先于 charger tick 生效”“合同丢失时强制恢复旧 `VINDPM/IINDPM`”三项修正，并同步规格说明。
 - 2026-04-08: 已根据 merge-proof review 修正 spec revision 跟随、无可用 PD 合同时的稳定 5V 回落，以及 WAIT/REJECT 后的旧合同 charge gate 恢复；规格与最新实现重新对齐。
 - 2026-04-08: 已同步 host-unit-tests allowlist 与 closeout 文档，确认 `usb_pd` 模块测试覆盖纳入 host audit，规格与实现重新对齐为 merge-ready。

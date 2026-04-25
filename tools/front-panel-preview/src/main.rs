@@ -18,11 +18,11 @@ mod front_panel_scene;
 
 use front_panel_scene::{
     demo_mode_from_focus, AudioTestUiState, BmsRecoveryUiAction, BmsResultKind,
-    DashboardDetailPage, DashboardDetailSnapshot, DashboardInputSource, DashboardRoute,
-    DisplayDiagnosticMeta, ManualChargeStopReason, SelfCheckCommState, SelfCheckOverlay,
-    SelfCheckUiSnapshot, TestFunctionUi, TpsTestChargerSnapshot, TpsTestOutputSnapshot,
-    TpsTestUiSnapshot, TpsTestVoutProfile, UiFocus, UiModel, UiPainter, UiVariant, UpsMode, UI_H,
-    UI_W,
+    DashboardChargerProtocol, DashboardDetailPage, DashboardDetailSnapshot, DashboardInputSource,
+    DashboardRoute, DisplayDiagnosticMeta, ManualChargeStopReason, SelfCheckCommState,
+    SelfCheckOverlay, SelfCheckUiSnapshot, TestFunctionUi, TpsTestChargerSnapshot,
+    TpsTestOutputSnapshot, TpsTestUiSnapshot, TpsTestVoutProfile, UiFocus, UiModel, UiPainter,
+    UiVariant, UpsMode, UI_H, UI_W,
 };
 
 #[allow(dead_code)]
@@ -103,6 +103,10 @@ fn dashboard_detail_fixture(
     detail.input_source = Some(match page {
         Some(DashboardDetailPage::Charger) => DashboardInputSource::UsbC,
         _ => DashboardInputSource::DcIn,
+    });
+    detail.charger_protocol = Some(match page {
+        Some(DashboardDetailPage::Charger) => DashboardChargerProtocol::Pps,
+        _ => DashboardChargerProtocol::DcIn,
     });
     detail.charger_active = Some(matches!(mode, UpsMode::Standby));
     detail.charger_home_status = Some(match mode {
@@ -418,6 +422,7 @@ fn charger_policy_snapshot_for_state(
     let mut snapshot = dashboard_snapshot_for_mode(mode);
     snapshot.dashboard_detail = dashboard_detail_fixture(mode, Some(DashboardDetailPage::Charger));
     snapshot.dashboard_detail.input_source = Some(DashboardInputSource::UsbC);
+    snapshot.dashboard_detail.charger_protocol = Some(DashboardChargerProtocol::Pps);
     snapshot.dashboard_detail.charger_active = Some(false);
     snapshot.dashboard_detail.charger_status = Some("WAIT");
     snapshot.dashboard_detail.charger_notice = Some("idle_wait_threshold");
@@ -479,6 +484,7 @@ fn charger_policy_snapshot_for_state(
         }
         ChargerPolicyPreviewState::Charge100mADcDerated => {
             snapshot.dashboard_detail.input_source = Some(DashboardInputSource::DcIn);
+            snapshot.dashboard_detail.charger_protocol = Some(DashboardChargerProtocol::DcIn);
             snapshot.dashboard_detail.charger_active = Some(true);
             snapshot.dashboard_detail.charger_status = Some("CHG100");
             snapshot.dashboard_detail.charger_notice = Some("charging_100ma_dc_derated");
@@ -506,6 +512,7 @@ fn charger_policy_snapshot_for_state(
             snapshot.dashboard_detail.charger_status = Some("LOAD");
             snapshot.dashboard_detail.charger_notice = Some("blocked_output_over_limit");
             snapshot.dashboard_detail.input_source = Some(DashboardInputSource::DcIn);
+            snapshot.dashboard_detail.charger_protocol = Some(DashboardChargerProtocol::DcIn);
             snapshot.tps_a_enabled = Some(true);
             snapshot.out_a_vbus_mv = Some(19_040);
             snapshot.tps_a_iout_ma = Some(150);
@@ -524,6 +531,7 @@ fn charger_policy_snapshot_for_state(
             snapshot.dashboard_detail.charger_status = Some("LOAD");
             snapshot.dashboard_detail.charger_notice = Some("blocked_output_power_unknown");
             snapshot.dashboard_detail.input_source = Some(DashboardInputSource::DcIn);
+            snapshot.dashboard_detail.charger_protocol = Some(DashboardChargerProtocol::DcIn);
             snapshot.tps_a_enabled = Some(true);
             snapshot.out_a_vbus_mv = Some(19_040);
             snapshot.tps_a_iout_ma = None;
@@ -571,6 +579,7 @@ fn manual_charge_snapshot_for_state(
     let mut snapshot = dashboard_snapshot_for_mode(mode);
     snapshot.dashboard_detail = dashboard_detail_fixture(mode, Some(DashboardDetailPage::Charger));
     snapshot.dashboard_detail.input_source = Some(DashboardInputSource::UsbC);
+    snapshot.dashboard_detail.charger_protocol = Some(DashboardChargerProtocol::Pps);
     snapshot.dashboard_detail.manual_charge.prefs =
         front_panel_scene::ManualChargePrefs::defaults();
     snapshot

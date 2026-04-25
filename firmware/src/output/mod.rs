@@ -72,6 +72,8 @@ const BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY: Duration = Duration::from_secs(34)
 const BMS_ACTIVATION_AUTO_DELAY: Duration = Duration::from_secs(30);
 const BMS_BOOT_DIAG_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
 const BMS_BOOT_DIAG_SHIP_RESET_SETTLE: Duration = Duration::from_millis(800);
+const CHARGER_LIMIT_DIAG_PERIOD: Duration = Duration::from_secs(1);
+const CHARGER_LIMIT_DIAG_MARGIN_MA: i16 = 200;
 // Self-check recovery must stay user-driven: show the issue first, then wait for explicit
 // confirmation from the front panel before attempting any BQ40 wake/recovery sequence.
 const BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED: bool = false;
@@ -91,6 +93,7 @@ const BMS_DETAIL_MAC_REFRESH_PERIOD: Duration = Duration::from_secs(8);
 const BMS_DETAIL_MAC_REFRESH_STAGGER: Duration = Duration::from_secs(2);
 const BMS_DETAIL_BALANCE_CONFIG_REFRESH_STAGGER: Duration = Duration::from_secs(4);
 const BMS_DETAIL_GAUGING_STATUS_REFRESH_STAGGER: Duration = Duration::from_secs(6);
+const BMS_DETAIL_LOCK_DIAG_REFRESH_STAGGER: Duration = Duration::from_secs(7);
 const BMS_BLOCK_DETAIL_LOG_PERIOD: Duration = Duration::from_secs(10);
 const BMS_CONFIG_LOG_RETRY_PERIOD: Duration = Duration::from_secs(10);
 const BMS_SUSPICIOUS_VOLTAGE_MV: u16 = 5_911;
@@ -163,6 +166,10 @@ const EEPROM_LAYOUT_MAGIC: [u8; 4] = *b"AEG1";
 const EEPROM_SCHEMA_VERSION: u8 = 1;
 const EEPROM_MANUAL_PREFS_RECORD_ID: u8 = 1;
 const EEPROM_MANUAL_PREFS_RECORD_VERSION: u8 = 1;
+const EEPROM_PD_BREADCRUMB_BASE_OFFSET: u16 = 0x0060;
+const EEPROM_PD_BREADCRUMB_SLOT_COUNT: usize = 8;
+const EEPROM_PD_BREADCRUMB_MAGIC: [u8; 4] = *b"PDBG";
+const EEPROM_PD_BREADCRUMB_VERSION: u8 = 1;
 const EEPROM_WRITE_POLL_ATTEMPTS: usize = 32;
 const EEPROM_WRITE_POLL_GAP: Duration = Duration::from_millis(1);
 
@@ -292,6 +299,240 @@ impl ManualChargePrefsRecordV1 {
             },
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PdBreadcrumbEvent {
+    Attach = 1,
+    Detach = 2,
+    ContractPps = 3,
+    ContractFixed = 4,
+    ContractLost = 5,
+    VbusPresent = 6,
+    VbusLost = 7,
+    StateChange = 8,
+}
+
+impl PdBreadcrumbEvent {
+    const fn code(self) -> u8 {
+        self as u8
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Attach => "attach",
+            Self::Detach => "detach",
+            Self::ContractPps => "contract_pps",
+            Self::ContractFixed => "contract_fixed",
+            Self::ContractLost => "contract_lost",
+            Self::VbusPresent => "vbus_present",
+            Self::VbusLost => "vbus_lost",
+            Self::StateChange => "state_change",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PdBreadcrumbRecordV1 {
+    seq: u16,
+    tick_100ms: u32,
+    event: PdBreadcrumbEvent,
+    attached: bool,
+    controller_ready: bool,
+    charge_ready: bool,
+    vbus_present: Option<bool>,
+    unsafe_source_latched: bool,
+    contract_kind: Option<usb_pd::ContractKind>,
+    contract_mv: Option<u16>,
+    contract_ma: Option<u16>,
+}
+
+impl PdBreadcrumbRecordV1 {
+    fn encode(self) -> [u8; EEPROM_BLOCK_LEN] {
+        let mut bytes = [0u8; EEPROM_BLOCK_LEN];
+        bytes[0..4].copy_from_slice(&EEPROM_PD_BREADCRUMB_MAGIC);
+        bytes[4] = EEPROM_PD_BREADCRUMB_VERSION;
+        bytes[5] = self.event.code();
+        bytes[6] = self.attached as u8;
+        bytes[7] = self.controller_ready as u8;
+        bytes[8] = self.charge_ready as u8;
+        bytes[9] = match self.vbus_present {
+            Some(false) => 0,
+            Some(true) => 1,
+            None => 2,
+        };
+        bytes[10] = self.unsafe_source_latched as u8;
+        bytes[11] = match self.contract_kind {
+            Some(usb_pd::ContractKind::Fixed) => 1,
+            Some(usb_pd::ContractKind::Pps) => 2,
+            None => 0,
+        };
+        bytes[12] = (self.seq & 0x00ff) as u8;
+        bytes[13] = (self.seq >> 8) as u8;
+        bytes[14] = (self.tick_100ms & 0xff) as u8;
+        bytes[15] = ((self.tick_100ms >> 8) & 0xff) as u8;
+        bytes[16] = ((self.tick_100ms >> 16) & 0xff) as u8;
+        bytes[17] = ((self.tick_100ms >> 24) & 0xff) as u8;
+        if let Some(contract_mv) = self.contract_mv {
+            bytes[18] = (contract_mv & 0x00ff) as u8;
+            bytes[19] = (contract_mv >> 8) as u8;
+        }
+        if let Some(contract_ma) = self.contract_ma {
+            bytes[20] = (contract_ma & 0x00ff) as u8;
+            bytes[21] = (contract_ma >> 8) as u8;
+        }
+        bytes[31] = storage_crc8(&bytes[..31]);
+        bytes
+    }
+
+    fn decode(bytes: [u8; EEPROM_BLOCK_LEN]) -> Option<Self> {
+        if bytes[0..4] != EEPROM_PD_BREADCRUMB_MAGIC {
+            return None;
+        }
+        if bytes[4] != EEPROM_PD_BREADCRUMB_VERSION {
+            return None;
+        }
+        if bytes[31] != storage_crc8(&bytes[..31]) {
+            return None;
+        }
+        let event = match bytes[5] {
+            1 => PdBreadcrumbEvent::Attach,
+            2 => PdBreadcrumbEvent::Detach,
+            3 => PdBreadcrumbEvent::ContractPps,
+            4 => PdBreadcrumbEvent::ContractFixed,
+            5 => PdBreadcrumbEvent::ContractLost,
+            6 => PdBreadcrumbEvent::VbusPresent,
+            7 => PdBreadcrumbEvent::VbusLost,
+            8 => PdBreadcrumbEvent::StateChange,
+            _ => return None,
+        };
+        let contract_kind = match bytes[11] {
+            0 => None,
+            1 => Some(usb_pd::ContractKind::Fixed),
+            2 => Some(usb_pd::ContractKind::Pps),
+            _ => return None,
+        };
+        let contract_mv = {
+            let raw = u16::from(bytes[18]) | (u16::from(bytes[19]) << 8);
+            (raw != 0).then_some(raw)
+        };
+        let contract_ma = {
+            let raw = u16::from(bytes[20]) | (u16::from(bytes[21]) << 8);
+            (raw != 0).then_some(raw)
+        };
+        Some(Self {
+            seq: u16::from(bytes[12]) | (u16::from(bytes[13]) << 8),
+            tick_100ms: u32::from(bytes[14])
+                | (u32::from(bytes[15]) << 8)
+                | (u32::from(bytes[16]) << 16)
+                | (u32::from(bytes[17]) << 24),
+            event,
+            attached: bytes[6] != 0,
+            controller_ready: bytes[7] != 0,
+            charge_ready: bytes[8] != 0,
+            vbus_present: match bytes[9] {
+                0 => Some(false),
+                1 => Some(true),
+                2 => None,
+                _ => return None,
+            },
+            unsafe_source_latched: bytes[10] != 0,
+            contract_kind,
+            contract_mv,
+            contract_ma,
+        })
+    }
+}
+
+const fn pd_breadcrumb_slot_offset(slot: usize) -> u16 {
+    EEPROM_PD_BREADCRUMB_BASE_OFFSET + (slot as u16) * (EEPROM_BLOCK_LEN as u16)
+}
+
+fn load_sorted_pd_breadcrumb_records<I2C>(
+    i2c: &mut I2C,
+) -> Result<
+    (
+        [Option<PdBreadcrumbRecordV1>; EEPROM_PD_BREADCRUMB_SLOT_COUNT],
+        usize,
+    ),
+    esp_hal::i2c::master::Error,
+>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut records: [Option<PdBreadcrumbRecordV1>; EEPROM_PD_BREADCRUMB_SLOT_COUNT] =
+        [None; EEPROM_PD_BREADCRUMB_SLOT_COUNT];
+    let mut count = 0usize;
+    let mut slot = 0usize;
+    while slot < EEPROM_PD_BREADCRUMB_SLOT_COUNT {
+        let block = read_eeprom_block(i2c, pd_breadcrumb_slot_offset(slot))?;
+        if let Some(record) = PdBreadcrumbRecordV1::decode(block) {
+            let mut insert_at = count;
+            while insert_at > 0 {
+                let previous = records[insert_at - 1].unwrap();
+                if previous.seq <= record.seq {
+                    break;
+                }
+                insert_at -= 1;
+            }
+            let mut idx = count;
+            while idx > insert_at {
+                records[idx] = records[idx - 1];
+                idx -= 1;
+            }
+            records[insert_at] = Some(record);
+            count += 1;
+        }
+        slot += 1;
+    }
+    Ok((records, count))
+}
+
+fn load_latest_pd_breadcrumb_record<I2C>(
+    i2c: &mut I2C,
+) -> Result<Option<PdBreadcrumbRecordV1>, esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let (records, count) = load_sorted_pd_breadcrumb_records(i2c)?;
+    Ok(if count == 0 { None } else { records[count - 1] })
+}
+
+fn write_pd_breadcrumb_record<I2C>(
+    i2c: &mut I2C,
+    record: PdBreadcrumbRecordV1,
+) -> Result<(), esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let slot = (usize::from(record.seq)) % EEPROM_PD_BREADCRUMB_SLOT_COUNT;
+    write_eeprom_block(i2c, pd_breadcrumb_slot_offset(slot), record.encode())
+}
+
+fn pd_breadcrumb_event_from_states(
+    previous: usb_pd::UsbPdPortState,
+    current: usb_pd::UsbPdPortState,
+) -> Option<PdBreadcrumbEvent> {
+    if !previous.attached && current.attached {
+        return Some(PdBreadcrumbEvent::Attach);
+    }
+    if previous.attached && !current.attached {
+        return Some(PdBreadcrumbEvent::Detach);
+    }
+    if previous.contract != current.contract {
+        return Some(match current.contract.map(|contract| contract.kind) {
+            Some(usb_pd::ContractKind::Pps) => PdBreadcrumbEvent::ContractPps,
+            Some(usb_pd::ContractKind::Fixed) => PdBreadcrumbEvent::ContractFixed,
+            None => PdBreadcrumbEvent::ContractLost,
+        });
+    }
+    if previous.vbus_present != current.vbus_present {
+        return Some(match current.vbus_present {
+            Some(true) => PdBreadcrumbEvent::VbusPresent,
+            _ => PdBreadcrumbEvent::VbusLost,
+        });
+    }
+    (previous != current).then_some(PdBreadcrumbEvent::StateChange)
 }
 
 const fn storage_crc8(bytes: &[u8]) -> u8 {
@@ -1068,6 +1309,196 @@ where
     );
 }
 
+fn bq40_block_probe_byte(probe: &bq40z50::BlockReadProbe, index: usize) -> u8 {
+    if index < probe.prefix_len as usize {
+        probe.prefix[index]
+    } else {
+        0
+    }
+}
+
+fn bq40_selected_probe(trace: &bq40z50::BlockReadTrace) -> Option<&bq40z50::BlockReadProbe> {
+    match trace.selected_source {
+        Some(bq40z50::BlockReadSource::Pec) => Some(&trace.pec),
+        Some(bq40z50::BlockReadSource::Plain) => Some(&trace.plain),
+        None => None,
+    }
+}
+
+fn bq40_charge_trace_failure_reason(
+    charging: Option<&bq40z50::ChargingStatusTrace>,
+) -> &'static str {
+    let Some(charging) = charging else {
+        return "read_failed";
+    };
+    if charging.value.is_some() {
+        return "none";
+    }
+    if charging.block.raw.is_some() {
+        return "value_too_short";
+    }
+    if !matches!(
+        charging.block.plain.status,
+        bq40z50::BlockReadProbeStatus::NotAttempted
+    ) {
+        return bq40z50::block_read_probe_status_name(charging.block.plain.status);
+    }
+    bq40z50::block_read_probe_status_name(charging.block.pec.status)
+}
+
+fn log_bq40_charging_status_trace(
+    addr: u8,
+    stage: &'static str,
+    charging: Option<&bq40z50::ChargingStatusTrace>,
+) {
+    let selected_source = charging
+        .map(|charging| bq40z50::block_read_source_name(charging.block.selected_source))
+        .unwrap_or("none");
+    let selected_probe = charging.and_then(|charging| bq40_selected_probe(&charging.block));
+    let selected_declared_len = selected_probe.map(|probe| probe.declared_len).unwrap_or(0);
+    let selected_payload_len = selected_probe.map(|probe| probe.payload_len).unwrap_or(0);
+    let selected_b0 = selected_probe
+        .map(|probe| bq40_block_probe_byte(probe, 0))
+        .unwrap_or(0);
+    let selected_b1 = selected_probe
+        .map(|probe| bq40_block_probe_byte(probe, 1))
+        .unwrap_or(0);
+    let selected_b2 = selected_probe
+        .map(|probe| bq40_block_probe_byte(probe, 2))
+        .unwrap_or(0);
+    let selected_b3 = selected_probe
+        .map(|probe| bq40_block_probe_byte(probe, 3))
+        .unwrap_or(0);
+    let pec_probe = charging.map(|charging| charging.block.pec);
+    let plain_probe = charging.map(|charging| charging.block.plain);
+    let raw = charging.and_then(|charging| charging.value);
+
+    defmt::info!(
+        "bms_diag_charge: addr=0x{=u8:x} stage={} source={} selected_declared_len={=u8} selected_payload_len={=u8} selected_b0=0x{=u8:x} selected_b1=0x{=u8:x} selected_b2=0x{=u8:x} selected_b3=0x{=u8:x} failure={} raw={=?} pv={=?} lv={=?} mv={=?} hv={=?} inhibit={=?} suspend={=?} maintenance={=?} vct={=?} ccr={=?} cvr={=?} ccc={=?} nct={=?} pec_status={} pec_declared_len={=u8} pec_payload_len={=u8} pec_b0=0x{=u8:x} pec_b1=0x{=u8:x} pec_b2=0x{=u8:x} pec_b3=0x{=u8:x} plain_status={} plain_declared_len={=u8} plain_payload_len={=u8} plain_b0=0x{=u8:x} plain_b1=0x{=u8:x} plain_b2=0x{=u8:x} plain_b3=0x{=u8:x}",
+        addr,
+        stage,
+        selected_source,
+        selected_declared_len,
+        selected_payload_len,
+        selected_b0,
+        selected_b1,
+        selected_b2,
+        selected_b3,
+        bq40_charge_trace_failure_reason(charging),
+        raw,
+        bq40_mac_bit(raw, bq40z50::charging_status::PV),
+        bq40_mac_bit(raw, bq40z50::charging_status::LV),
+        bq40_mac_bit(raw, bq40z50::charging_status::MV),
+        bq40_mac_bit(raw, bq40z50::charging_status::HV),
+        bq40_mac_bit(raw, bq40z50::charging_status::IN),
+        bq40_mac_bit(raw, bq40z50::charging_status::SU),
+        bq40_mac_bit(raw, bq40z50::charging_status::MCHG),
+        bq40_mac_bit(raw, bq40z50::charging_status::VCT),
+        bq40_mac_bit(raw, bq40z50::charging_status::CCR),
+        bq40_mac_bit(raw, bq40z50::charging_status::CVR),
+        bq40_mac_bit(raw, bq40z50::charging_status::CCC),
+        bq40_mac_bit(raw, bq40z50::charging_status::NCT),
+        pec_probe
+            .map(|probe| bq40z50::block_read_probe_status_name(probe.status))
+            .unwrap_or("read_failed"),
+        pec_probe.map(|probe| probe.declared_len).unwrap_or(0),
+        pec_probe.map(|probe| probe.payload_len).unwrap_or(0),
+        pec_probe.map(|probe| bq40_block_probe_byte(&probe, 0)).unwrap_or(0),
+        pec_probe.map(|probe| bq40_block_probe_byte(&probe, 1)).unwrap_or(0),
+        pec_probe.map(|probe| bq40_block_probe_byte(&probe, 2)).unwrap_or(0),
+        pec_probe.map(|probe| bq40_block_probe_byte(&probe, 3)).unwrap_or(0),
+        plain_probe
+            .map(|probe| bq40z50::block_read_probe_status_name(probe.status))
+            .unwrap_or("read_failed"),
+        plain_probe.map(|probe| probe.declared_len).unwrap_or(0),
+        plain_probe.map(|probe| probe.payload_len).unwrap_or(0),
+        plain_probe.map(|probe| bq40_block_probe_byte(&probe, 0)).unwrap_or(0),
+        plain_probe.map(|probe| bq40_block_probe_byte(&probe, 1)).unwrap_or(0),
+        plain_probe.map(|probe| bq40_block_probe_byte(&probe, 2)).unwrap_or(0),
+        plain_probe.map(|probe| bq40_block_probe_byte(&probe, 3)).unwrap_or(0),
+    );
+}
+
+fn read_bq40_lock_diag_snapshot<I2C>(i2c: &mut I2C, addr: u8) -> Bq40LockDiagSnapshot
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    Bq40LockDiagSnapshot {
+        charging: bq40z50::read_charging_status_trace(i2c, addr).ok(),
+        safety_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::SAFETY_STATUS)
+            .ok()
+            .flatten(),
+        gauging_status: bq40z50::read_gauging_status(i2c, addr).ok().flatten(),
+        op_status: bq40z50::read_operation_status(i2c, addr).ok().flatten(),
+        update_status: bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::UPDATE_STATUS)
+            .ok()
+            .flatten(),
+        current_at_eoc_ma: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::CURRENT_AT_EOC,
+        )
+        .ok()
+        .flatten(),
+        no_valid_charge_term: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::NO_VALID_CHARGE_TERM,
+        )
+        .ok()
+        .flatten(),
+        last_valid_charge_term: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::LAST_VALID_CHARGE_TERM,
+        )
+        .ok()
+        .flatten(),
+        no_of_qmax_updates: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::NO_OF_QMAX_UPDATES,
+        )
+        .ok()
+        .flatten(),
+        no_of_ra_updates: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::NO_OF_RA_UPDATES,
+        )
+        .ok()
+        .flatten(),
+    }
+}
+
+fn log_bq40_lock_diag_snapshot(addr: u8, stage: &'static str, diag: &Bq40LockDiagSnapshot) {
+    log_bq40_charging_status_trace(addr, stage, diag.charging.as_ref());
+    defmt::info!(
+        "bms_diag_state: addr=0x{=u8:x} stage={} safety_status={=?} oc={=?} gauging_status={=?} qen={=?} vok={=?} rest={=?} fc={=?} fd={=?} op_status={=?} xchg={=?} chg_fet={=?} dsg_fet={=?} pchg_fet={=?} update_status={=?} current_at_eoc_ma={=?} no_valid_charge_term={=?} last_valid_charge_term={=?} no_of_qmax_updates={=?} no_of_ra_updates={=?}",
+        addr,
+        stage,
+        diag.safety_status,
+        bq40_mac_bit(diag.safety_status, bq40z50::safety_status::OC),
+        diag.gauging_status,
+        bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::QEN),
+        bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::VOK),
+        bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::REST),
+        bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::FC),
+        bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::FD),
+        diag.op_status,
+        bq40_op_bit(diag.op_status, bq40z50::operation_status::XCHG),
+        bq40_op_bit(diag.op_status, bq40z50::operation_status::CHG),
+        bq40_op_bit(diag.op_status, bq40z50::operation_status::DSG),
+        bq40_op_bit(diag.op_status, bq40z50::operation_status::PCHG),
+        diag.update_status,
+        diag.current_at_eoc_ma,
+        diag.no_valid_charge_term,
+        diag.last_valid_charge_term,
+        diag.no_of_qmax_updates,
+        diag.no_of_ra_updates,
+    );
+}
+
 fn log_bq40_block_detail<I2C>(i2c: &mut I2C, addr: u8, stage: &'static str, op_status: Option<u32>)
 where
     I2C: embedded_hal::i2c::I2c,
@@ -1122,50 +1553,8 @@ where
         bq40_mac_bit(pf_status, bq40z50::pf_status::AFER),
     );
 
-    match bq40z50::read_charging_status(i2c, addr) {
-        Ok(Some(raw)) => {
-            defmt::info!(
-                "bms_diag_charge: addr=0x{=u8:x} stage={} raw=0x{=u32:x} ut={=?} lt={=?} stl={=?} rt={=?} sth={=?} ht={=?} ot={=?} pv={=?} lv={=?} mv={=?} hv={=?} inhibit={=?} suspend={=?} maintenance={=?} term={=?} ccr={=?} cvr={=?} ccc={=?} nct={=?}",
-                addr,
-                stage,
-                raw,
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::UT),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::LT),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::STL),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::RT),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::STH),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::HT),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::OT),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::PV),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::LV),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::MV),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::HV),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::IN),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::SU),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::MCHG),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::VCT),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::CCR),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::CVR),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::CCC),
-                bq40_mac_bit(Some(raw), bq40z50::charging_status::NCT),
-            );
-        }
-        Ok(None) => {
-            defmt::warn!(
-                "bms_diag_charge: addr=0x{=u8:x} stage={} err=block_too_short",
-                addr,
-                stage
-            );
-        }
-        Err(e) => {
-            defmt::warn!(
-                "bms_diag_charge: addr=0x{=u8:x} stage={} err=read_failed",
-                addr,
-                stage
-            );
-            let _ = e;
-        }
-    }
+    let diag = read_bq40_lock_diag_snapshot(i2c, addr);
+    log_bq40_lock_diag_snapshot(addr, stage, &diag);
 
     log_bq40_charge_temp_detail(i2c, addr, stage);
 }
@@ -1504,6 +1893,16 @@ fn bq40_ui_issue_detail(low_pack: bool, primary_reason: &'static str) -> Option<
         None
     } else {
         Some(primary_reason)
+    }
+}
+
+fn seed_bms_charge_ready_from_self_check(snapshot: &SelfCheckUiSnapshot) -> Option<bool> {
+    match snapshot.bq40z50_issue_detail {
+        Some("xchg_blocked" | "chg_fet_off") => Some(false),
+        Some("no_battery") => None,
+        Some(_) => None,
+        None if matches!(snapshot.bq40z50, SelfCheckCommState::Ok) => Some(true),
+        None => None,
     }
 }
 
@@ -2545,10 +2944,12 @@ pub struct PowerManager<'d, I2C> {
     bms_cached_filter_capacity: Option<bq40z50::FilterCapacity>,
     bms_cached_balance_config: Option<bq40z50::BalanceConfig>,
     bms_cached_gauging_status: Option<u32>,
+    bms_cached_lock_diag: Option<Bq40LockDiagSnapshot>,
     bms_next_da_status2_refresh_at: Instant,
     bms_next_filter_capacity_refresh_at: Instant,
     bms_next_balance_config_refresh_at: Instant,
     bms_next_gauging_status_refresh_at: Instant,
+    bms_next_lock_diag_refresh_at: Instant,
     bms_next_block_detail_log_at: Instant,
     bms_config_logged: bool,
     bms_next_config_log_at: Instant,
@@ -2557,6 +2958,7 @@ pub struct PowerManager<'d, I2C> {
 
     chg_next_poll_at: Instant,
     chg_next_retry_at: Option<Instant>,
+    chg_limit_diag_next_at: Instant,
     chg_enabled: bool,
     charger_allowed: bool,
     charge_policy: ChargePolicyMemory,
@@ -2570,6 +2972,7 @@ pub struct PowerManager<'d, I2C> {
     bms_charge_ready: Option<bool>,
     bms_full: Option<bool>,
     bms_cell_min_mv: Option<u16>,
+    bms_cell_max_mv: Option<u16>,
     chg_last_int_poll_at: Option<Instant>,
     bms_activation_state: BmsActivationState,
     bms_activation_phase: BmsActivationPhase,
@@ -2604,6 +3007,7 @@ pub struct PowerManager<'d, I2C> {
     usb_pd_vac1_mv: Option<u16>,
     usb_pd_input_limit_backup: Option<UsbPdInputLimitBackup>,
     usb_pd_restore_input_limits_pending: bool,
+    pd_breadcrumb_next_seq: u16,
 
     ui_snapshot: SelfCheckUiSnapshot,
     audio_snapshot: AudioSignalSnapshot,
@@ -2936,6 +3340,11 @@ where
             manual_charge_storage_ready,
             manual_charge_storage_incompatible,
         ) = load_or_init_manual_charge_prefs(&mut i2c);
+        let pd_breadcrumb_next_seq = load_latest_pd_breadcrumb_record(&mut i2c)
+            .ok()
+            .flatten()
+            .map(|record| record.seq.wrapping_add(1))
+            .unwrap_or(0);
         let mut initial_ui_snapshot = cfg.self_check_snapshot;
         initial_ui_snapshot.dashboard_detail.manual_charge.prefs = manual_charge_prefs;
         initial_ui_snapshot.dashboard_detail.manual_charge.runtime =
@@ -2951,6 +3360,8 @@ where
         let out_b_allowed = output_state.active_outputs.is_enabled(OutputChannel::OutB);
         let charger_allowed = cfg.charger_probe_ok;
         let bms_addr = cfg.bms_addr;
+        let initial_bms_charge_ready =
+            seed_bms_charge_ready_from_self_check(&cfg.self_check_snapshot);
         let bms_auto_recovery_enabled =
             boot_diag_auto_recovery_enabled(cfg.bms_boot_diag_auto_validate);
         let bms_runtime_seen = bms_addr.is_some()
@@ -3009,10 +3420,12 @@ where
             bms_cached_filter_capacity: None,
             bms_cached_balance_config: None,
             bms_cached_gauging_status: None,
+            bms_cached_lock_diag: None,
             bms_next_da_status2_refresh_at: now,
             bms_next_filter_capacity_refresh_at: now + BMS_DETAIL_MAC_REFRESH_STAGGER,
             bms_next_balance_config_refresh_at: now + BMS_DETAIL_BALANCE_CONFIG_REFRESH_STAGGER,
             bms_next_gauging_status_refresh_at: now + BMS_DETAIL_GAUGING_STATUS_REFRESH_STAGGER,
+            bms_next_lock_diag_refresh_at: now + BMS_DETAIL_LOCK_DIAG_REFRESH_STAGGER,
             bms_next_block_detail_log_at: now,
             bms_config_logged: false,
             bms_next_config_log_at: now,
@@ -3021,6 +3434,7 @@ where
 
             chg_next_poll_at: now,
             chg_next_retry_at: if charger_allowed { Some(now) } else { None },
+            chg_limit_diag_next_at: now,
             chg_enabled: false,
             charger_allowed,
             charge_policy: ChargePolicyMemory::default(),
@@ -3031,9 +3445,10 @@ where
             manual_charge_storage_ready,
             manual_charge_storage_incompatible,
             manual_charge_runtime: ManualChargeRuntime::new(),
-            bms_charge_ready: None,
+            bms_charge_ready: initial_bms_charge_ready,
             bms_full: None,
             bms_cell_min_mv: None,
+            bms_cell_max_mv: None,
             chg_last_int_poll_at: None,
             bms_activation_state: BmsActivationState::Idle,
             bms_activation_phase: BmsActivationPhase::WakeProbe,
@@ -3089,6 +3504,7 @@ where
             usb_pd_vac1_mv: None,
             usb_pd_input_limit_backup: None,
             usb_pd_restore_input_limits_pending: false,
+            pd_breadcrumb_next_seq,
             ui_snapshot: initial_ui_snapshot,
             audio_snapshot: AudioSignalSnapshot::default(),
             audio_events: AudioSignalEvents::default(),
@@ -3101,6 +3517,58 @@ where
 
     pub fn init_best_effort(&mut self) {
         let _ = bms_diag_breadcrumb_take();
+        match load_sorted_pd_breadcrumb_records(&mut self.i2c) {
+            Ok((records, count)) => {
+                let mut idx = 0usize;
+                let mut previous_tick_100ms: Option<u32> = None;
+                while idx < count {
+                    if let Some(record) = records[idx] {
+                        let delta_100ms = previous_tick_100ms
+                            .map(|previous| record.tick_100ms.wrapping_sub(previous));
+                        esp_println::println!(
+                            "eeprom: pd_breadcrumb idx={}/{} seq={} tick_100ms={} delta_100ms={:?} event={} attached={} ready={} charge_ready={} vbus_present={:?} contract_kind={:?} contract_mv={:?} contract_ma={:?} unsafe={}",
+                            idx as u8,
+                            count as u8,
+                            record.seq,
+                            record.tick_100ms,
+                            delta_100ms,
+                            record.event.name(),
+                            record.attached,
+                            record.controller_ready,
+                            record.charge_ready,
+                            record.vbus_present,
+                            record.contract_kind.map(|kind| match kind { usb_pd::ContractKind::Fixed => "fixed", usb_pd::ContractKind::Pps => "pps" }),
+                            record.contract_mv,
+                            record.contract_ma,
+                            record.unsafe_source_latched
+                        );
+                        defmt::info!(
+                            "eeprom: pd_breadcrumb idx={=u8}/{=u8} seq={=u16} tick_100ms={=u32} delta_100ms={=?} event={} attached={=bool} ready={=bool} charge_ready={=bool} vbus_present={=?} contract_kind={=?} contract_mv={=?} contract_ma={=?} unsafe={=bool}",
+                            idx as u8,
+                            count as u8,
+                            record.seq,
+                            record.tick_100ms,
+                            delta_100ms,
+                            record.event.name(),
+                            record.attached,
+                            record.controller_ready,
+                            record.charge_ready,
+                            record.vbus_present,
+                            record.contract_kind.map(|kind| match kind { usb_pd::ContractKind::Fixed => "fixed", usb_pd::ContractKind::Pps => "pps" }),
+                            record.contract_mv,
+                            record.contract_ma,
+                            record.unsafe_source_latched
+                        );
+                        previous_tick_100ms = Some(record.tick_100ms);
+                    }
+                    idx += 1;
+                }
+            }
+            Err(err) => defmt::warn!(
+                "eeprom: read pd_breadcrumb failed err={}",
+                i2c_error_kind(err)
+            ),
+        }
         if self.output_state.requested_outputs != EnabledOutputs::None {
             self.try_init_ina();
             self.try_configure_requested_tps();
@@ -3447,10 +3915,11 @@ where
             // Feed the PD manager the raw charger-side VAC1 sample so FUSB302 VBUS_OK glitches
             // do not blind detach / unsafe-voltage decisions.
             measured_input_voltage_mv: self.usb_pd_vac1_mv,
-            charging_enabled: usb_pd_charging_enabled(
+            charging_enabled: usb_pd_demand_charging_enabled(
                 self.ui_snapshot.bq25792_allow_charge,
                 self.cfg.charger_enabled,
                 self.charger_allowed,
+                self.bms_charge_ready,
             ),
         }
     }
@@ -3470,6 +3939,7 @@ where
                 state.input_current_limit_ma,
                 state.unsafe_source_latched
             );
+            self.persist_pd_breadcrumb(previous_state, state);
         }
         self.usb_pd_state = state;
         self.usb_pd_input_current_limit_ma = state.input_current_limit_ma;
@@ -3505,6 +3975,62 @@ where
             }
         }
         self.recompute_ui_mode();
+    }
+
+    fn persist_pd_breadcrumb(
+        &mut self,
+        previous: usb_pd::UsbPdPortState,
+        current: usb_pd::UsbPdPortState,
+    ) {
+        let Some(event) = pd_breadcrumb_event_from_states(previous, current) else {
+            return;
+        };
+        let record = PdBreadcrumbRecordV1 {
+            seq: self.pd_breadcrumb_next_seq,
+            tick_100ms: (self.fan_now_ms() / 100) as u32,
+            event,
+            attached: current.attached,
+            controller_ready: current.controller_ready,
+            charge_ready: current.charge_ready,
+            vbus_present: current.vbus_present,
+            unsafe_source_latched: current.unsafe_source_latched,
+            contract_kind: current.contract.map(|contract| contract.kind),
+            contract_mv: current.contract.map(|contract| contract.voltage_mv),
+            contract_ma: current.contract.map(|contract| contract.current_ma),
+        };
+        if let Err(err) = write_pd_breadcrumb_record(&mut self.i2c, record) {
+            esp_println::println!(
+                "eeprom: write pd_breadcrumb failed err={}",
+                i2c_error_kind(err)
+            );
+            defmt::warn!(
+                "eeprom: write pd_breadcrumb failed err={}",
+                i2c_error_kind(err)
+            );
+            return;
+        }
+        self.pd_breadcrumb_next_seq = self.pd_breadcrumb_next_seq.wrapping_add(1);
+        esp_println::println!(
+            "eeprom: pd_breadcrumb saved seq={} event={} attached={} vbus_present={:?} contract_kind={:?} contract_mv={:?}",
+            record.seq,
+            event.name(),
+            current.attached,
+            current.vbus_present,
+            current.contract.map(|contract| match contract.kind {
+                usb_pd::ContractKind::Fixed => "fixed",
+                usb_pd::ContractKind::Pps => "pps",
+            }),
+            current.contract.map(|contract| contract.voltage_mv)
+        );
+        defmt::info!(
+            "eeprom: pd_breadcrumb saved seq={=u16} event={} attached={=bool} vbus_present={=?} contract_kind={=?} contract_mv={=?}",
+            record.seq,
+            event.name(),
+            record.attached,
+            record.vbus_present,
+            record.contract_kind.map(|kind| match kind { usb_pd::ContractKind::Fixed => "fixed", usb_pd::ContractKind::Pps => "pps" }),
+            record.contract_mv,
+        );
     }
 
     #[allow(dead_code)]
@@ -3617,6 +4143,7 @@ where
         self.bms_charge_ready = None;
         self.bms_full = None;
         self.bms_cell_min_mv = None;
+        self.bms_cell_max_mv = None;
         self.charge_policy.charge_latched = false;
         self.charge_policy_derate.reset();
         self.charge_policy_output_load.reset();
@@ -3627,10 +4154,12 @@ where
         self.bms_cached_filter_capacity = None;
         self.bms_cached_balance_config = None;
         self.bms_cached_gauging_status = None;
+        self.bms_cached_lock_diag = None;
         self.bms_next_da_status2_refresh_at = now;
         self.bms_next_filter_capacity_refresh_at = now + BMS_DETAIL_MAC_REFRESH_STAGGER;
         self.bms_next_balance_config_refresh_at = now + BMS_DETAIL_BALANCE_CONFIG_REFRESH_STAGGER;
         self.bms_next_gauging_status_refresh_at = now + BMS_DETAIL_GAUGING_STATUS_REFRESH_STAGGER;
+        self.bms_next_lock_diag_refresh_at = now + BMS_DETAIL_LOCK_DIAG_REFRESH_STAGGER;
     }
 
     fn apply_bms_detail_snapshot(&mut self, snapshot: &Bq40z50Snapshot) {
@@ -3952,27 +4481,49 @@ where
         let charging_active = self.current_charging_requested();
         match action {
             ManualChargeUiAction::SetTarget(target) => {
-                if charging_active {
-                    defmt::info!("manual_charge: ignore set_target reason=locked");
-                } else if self.manual_charge_prefs.target != target {
+                if self.manual_charge_prefs.target != target {
                     self.manual_charge_prefs.target = target;
                     self.persist_manual_charge_prefs();
+                    if charging_active {
+                        self.chg_next_poll_at = now;
+                    }
+                    defmt::info!(
+                        "manual_charge: set_target target={} active={=bool}",
+                        self.manual_charge_target_label(),
+                        charging_active
+                    );
                 }
             }
             ManualChargeUiAction::SetSpeed(speed) => {
-                if charging_active {
-                    defmt::info!("manual_charge: ignore set_speed reason=locked");
-                } else if self.manual_charge_prefs.speed != speed {
+                if self.manual_charge_prefs.speed != speed {
                     self.manual_charge_prefs.speed = speed;
                     self.persist_manual_charge_prefs();
+                    if charging_active {
+                        self.chg_next_poll_at = now;
+                    }
+                    defmt::info!(
+                        "manual_charge: set_speed speed_ma={=u16} active={=bool}",
+                        self.manual_charge_prefs.speed.ichg_ma(),
+                        charging_active
+                    );
                 }
             }
             ManualChargeUiAction::SetTimerLimit(timer_limit) => {
-                if charging_active {
-                    defmt::info!("manual_charge: ignore set_timer reason=locked");
-                } else if self.manual_charge_prefs.timer_limit != timer_limit {
+                if self.manual_charge_prefs.timer_limit != timer_limit {
                     self.manual_charge_prefs.timer_limit = timer_limit;
+                    if self.manual_charge_runtime.active {
+                        self.manual_charge_runtime.deadline =
+                            Some(now + manual_charge_timer_duration(timer_limit));
+                    }
                     self.persist_manual_charge_prefs();
+                    if charging_active {
+                        self.chg_next_poll_at = now;
+                    }
+                    defmt::info!(
+                        "manual_charge: set_timer timer_h={=u8} active={=bool}",
+                        self.manual_charge_prefs.timer_limit.hours(),
+                        charging_active
+                    );
                 }
             }
             ManualChargeUiAction::Start => {
@@ -4050,6 +4601,71 @@ where
 
     fn manual_charge_target_label(&self) -> &'static str {
         self.manual_charge_prefs.target.label()
+    }
+
+    fn maybe_log_charger_limit_mismatch(
+        &mut self,
+        now: Instant,
+        allow_charge: bool,
+        policy_target_ichg_ma: Option<u16>,
+        applied_ichg_ma: Option<u16>,
+        applied_iindpm_ma: Option<u16>,
+        raw_ibus_adc_ma: Option<i16>,
+        ibat_adc_ma: Option<i16>,
+        status0: u8,
+        status1: u8,
+    ) {
+        if !allow_charge || now < self.chg_limit_diag_next_at {
+            return;
+        }
+
+        let target_ichg_ma = match policy_target_ichg_ma {
+            Some(v) => v as i32,
+            None => return,
+        };
+        let actual_ibat_ma = ibat_adc_ma.map(|v| i32::from(v.abs()));
+        let actual_ibus_ma = raw_ibus_adc_ma.map(|v| i32::from(v.abs()));
+
+        let charge_limit_mismatch = actual_ibat_ma
+            .map(|v| v > target_ichg_ma + i32::from(CHARGER_LIMIT_DIAG_MARGIN_MA))
+            .unwrap_or(false);
+        let input_limit_mismatch = matches!(
+            (applied_iindpm_ma, actual_ibus_ma),
+            (Some(limit_ma), Some(actual_ma))
+                if actual_ma > i32::from(limit_ma) + i32::from(CHARGER_LIMIT_DIAG_MARGIN_MA)
+        );
+
+        if !(charge_limit_mismatch || input_limit_mismatch) {
+            return;
+        }
+
+        self.chg_limit_diag_next_at = now + CHARGER_LIMIT_DIAG_PERIOD;
+
+        let reg03 = bq25792::read_u16(&mut self.i2c, bq25792::reg::CHARGE_CURRENT_LIMIT).ok();
+        let reg06 = bq25792::read_u16(&mut self.i2c, bq25792::reg::INPUT_CURRENT_LIMIT).ok();
+        let reg10 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_1).ok();
+        let reg14 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_5).ok();
+
+        defmt::warn!(
+            "charger: limit_mismatch manual_active={=bool} manual_speed_ma={=u16} policy_target_ichg_ma={=?} applied_ichg_ma={=?} applied_iindpm_ma={=?} raw_ibus_adc_ma={=?} ibat_adc_ma={=?} reg03={=?} reg03_ma={=?} reg06={=?} reg06_ma={=?} reg10={=?} reg14={=?} chg_stat={} vbus_stat={} st0=0x{=u8:x} st1=0x{=u8:x}",
+            self.manual_charge_runtime.active,
+            self.manual_charge_prefs.speed.ichg_ma(),
+            policy_target_ichg_ma,
+            applied_ichg_ma,
+            applied_iindpm_ma,
+            raw_ibus_adc_ma,
+            ibat_adc_ma,
+            reg03,
+            reg03.map(bq25792::decode_charge_current_limit_ma),
+            reg06,
+            reg06.map(bq25792::decode_input_current_limit_ma),
+            reg10,
+            reg14,
+            bq25792::decode_chg_stat(bq25792::status1::chg_stat(status1)),
+            bq25792::decode_vbus_stat(bq25792::status1::vbus_stat(status1)),
+            status0,
+            status1
+        );
     }
 
     fn stop_manual_charge_session(&mut self, reason: ManualChargeStopReason, inhibit: bool) {
@@ -5626,6 +6242,7 @@ where
             balance_config: None,
             gauging_status: None,
             afe_register: None,
+            lock_diag: None,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
     }
@@ -5660,6 +6277,7 @@ where
             balance_config: None,
             gauging_status: None,
             afe_register: None,
+            lock_diag: None,
             cell_mv: [0; 4],
         })
     }
@@ -5704,6 +6322,7 @@ where
             balance_config: None,
             gauging_status: None,
             afe_register: None,
+            lock_diag: None,
             cell_mv: [0; 4],
         })
     }
@@ -7986,6 +8605,10 @@ where
                 return;
             }
         };
+        let termination_ctrl =
+            bq25792::read_u16(&mut self.i2c, bq25792::reg::TERMINATION_CONTROL).ok();
+        let en_term = (ctrl0 & bq25792::ctrl0::EN_TERM) != 0;
+        let iterm_ma = termination_ctrl.map(bq25792::decode_termination_current_ma);
 
         // Only enforce ship-FET path when charging is policy-enabled.
         let (sfet_present_before, sfet_present_after, ship_mode_before, ship_mode_after) =
@@ -8163,32 +8786,50 @@ where
             && self.bms_activation_phase == BmsActivationPhase::ProbeWithoutCharge;
         let activation_normal_hold_charge = false;
         let boot_diag_hold_charge = false;
-        let input_source = detail_input_source(vbus_present, ac1_present, ac2_present);
+        let input_source = detail_input_source(
+            vbus_present,
+            ac1_present,
+            ac2_present,
+            self.usb_pd_state.attached,
+        );
         let output_power_w10 =
             charge_policy_output_power_w10(&self.ui_snapshot, self.output_state.active_outputs);
+        let charge_policy_hv = self
+            .bms_cached_lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::HV))
+            .unwrap_or(false);
         let charge_policy_telemetry = if activation_pending {
             None
         } else {
             match (
                 self.ui_snapshot.bq40z50_soc_pct,
                 self.bms_cell_min_mv,
+                self.bms_cell_max_mv,
                 self.bms_charge_ready,
                 self.bms_full,
             ) {
-                (Some(rsoc_pct), Some(cell_min_mv), Some(charge_ready), Some(bms_full))
-                    if self.ui_snapshot.bq40z50_no_battery != Some(true) =>
-                {
+                (
+                    Some(rsoc_pct),
+                    Some(cell_min_mv),
+                    Some(cell_max_mv),
+                    Some(charge_ready),
+                    Some(bms_full),
+                ) if self.ui_snapshot.bq40z50_no_battery != Some(true) => {
                     Some(ChargePolicyTelemetry {
                         rsoc_pct,
                         cell_min_mv,
+                        cell_max_mv,
                         charge_ready,
                         bms_full,
+                        hv: charge_policy_hv,
                     })
                 }
                 _ => None,
             }
         };
         let charge_policy_now_ms = self.fan_now_ms();
+        let charger_chg_stat = bq25792::status1::chg_stat(status1);
         let charge_policy_decision = if activation_pending {
             None
         } else {
@@ -8211,9 +8852,10 @@ where
                     output_power_w10,
                     telemetry: charge_policy_telemetry,
                     charger_done: matches!(
-                        audio_charge_phase_from_chg_stat(bq25792::status1::chg_stat(status1)),
+                        audio_charge_phase_from_chg_stat(charger_chg_stat),
                         AudioChargePhase::Completed
                     ),
+                    charger_taper_cv: charger_chg_stat == 4,
                 },
             ))
         };
@@ -8389,6 +9031,15 @@ where
         let mut applied_ichg_ma: Option<u16> = None;
         let mut applied_vindpm_mv: Option<u16> = None;
         let mut applied_iindpm_ma: Option<u16> = None;
+        let mut applied_iterm_ma: Option<u16> = None;
+        let policy_term_target_ma =
+            (!force_allow_charge && !auto_force_charge && !activation_pending)
+                .then(|| {
+                    self.bms_cached_lock_diag
+                        .and_then(|diag| diag.current_at_eoc_ma)
+                        .map(bq25792::align_termination_current_ma)
+                })
+                .flatten();
 
         fn decode_voltage_mv(reg: u16) -> u16 {
             (reg & 0x07FF) * 10
@@ -8398,9 +9049,47 @@ where
             (reg & 0x01FF) * 10
         }
 
+        if !force_allow_charge && !auto_force_charge && !activation_pending {
+            if let Some(target_iterm_ma) = policy_term_target_ma {
+                match bq25792::set_termination_current_ma(&mut self.i2c, target_iterm_ma) {
+                    Ok(v) => applied_iterm_ma = Some(v),
+                    Err(e) => {
+                        self.mark_charger_poll_failed(now);
+                        defmt::error!(
+                            "charger: bq25792 err stage=iterm_write err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+
         if allow_charge {
             // Ensure we are not braking the converter (ILIM_HIZ < 0.75V forces non-switching).
             self.chg_ilim_hiz_brk.set_low();
+
+            match bq25792::ensure_managed_current_limits(&mut self.i2c) {
+                Ok(state) => {
+                    if state.ctrl5_after != state.ctrl5_before {
+                        defmt::info!(
+                            "charger: current_limit_path ctrl5_before=0x{=u8:x} ctrl5_after=0x{=u8:x} indpm_en={=bool} extilim_en={=bool}",
+                            state.ctrl5_before,
+                            state.ctrl5_after,
+                            (state.ctrl5_after & bq25792::ctrl5::EN_INDPM) != 0,
+                            (state.ctrl5_after & bq25792::ctrl5::EN_EXTILIM) != 0,
+                        );
+                    }
+                }
+                Err(e) => {
+                    self.mark_charger_poll_failed(now);
+                    defmt::error!(
+                        "charger: bq25792 err stage=current_limit_path err={}",
+                        i2c_error_kind(e)
+                    );
+                    return;
+                }
+            }
 
             if force_allow_charge {
                 if let Err(reason) = self.ensure_bms_activation_charger_backup() {
@@ -8650,9 +9339,21 @@ where
             UsbPdInputLimitUpdate::None => {}
         }
 
+        self.maybe_log_charger_limit_mismatch(
+            now,
+            allow_charge,
+            policy_target_ichg_ma,
+            applied_ichg_ma,
+            applied_iindpm_ma,
+            raw_ibus_adc_ma,
+            ibat_adc_ma,
+            status0,
+            status1,
+        );
+
         if !(auto_force_charge || activation_pending) {
             defmt::info!(
-                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_output_block_reason={=?} policy_target_ichg_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} policy_output_blocked={=bool} policy_output_enter_streak={=u8} policy_output_exit_streak={=u8} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} vindpm_mv={=?} iindpm_ma={=?} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x}",
+                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_output_block_reason={=?} policy_target_ichg_ma={=?} policy_term_target_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} policy_output_blocked={=bool} policy_output_enter_streak={=u8} policy_output_exit_streak={=u8} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} vindpm_mv={=?} iindpm_ma={=?} iterm_ma={=?} applied_iterm_ma={=?} en_term={=bool} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x} term_ctrl={=?}",
                 self.chg_enabled,
                 self.cfg.force_min_charge,
                 auto_force_charge,
@@ -8670,6 +9371,7 @@ where
                 policy_full_reason.map(ChargeFullReason::as_str),
                 policy_output_block_reason.map(ChargePolicyOutputBlockReason::as_str),
                 policy_target_ichg_ma,
+                policy_term_target_ma,
                 output_power_w10,
                 self.charge_policy.charge_latched,
                 self.charge_policy.full_latched,
@@ -8703,6 +9405,9 @@ where
                 applied_ichg_ma,
                 applied_vindpm_mv,
                 applied_iindpm_ma,
+                iterm_ma,
+                applied_iterm_ma,
+                en_term,
                 sfet_present_before,
                 sfet_present_after,
                 ship_mode_before,
@@ -8723,7 +9428,8 @@ where
                 status4,
                 fault0,
                 fault1,
-                applied_ctrl0
+                applied_ctrl0,
+                termination_ctrl
             );
         }
 
@@ -8774,6 +9480,8 @@ where
         self.ui_snapshot.fusb302_vbus_present =
             usb_pd_vbus_present(self.usb_pd_state.vbus_present, ac1_present);
         self.ui_snapshot.dashboard_detail.input_source = input_source;
+        self.ui_snapshot.dashboard_detail.charger_protocol =
+            charger_protocol_from_usb_pd(input_source, self.usb_pd_state);
         self.ui_snapshot.dashboard_detail.charger_active = Some(
             if force_allow_charge
                 || self.manual_charge_runtime.active
@@ -8993,6 +9701,7 @@ where
                     self.bms_charge_ready = bq40_decode_charge_path(s.op_status).0;
                     self.bms_full = Some((s.batt_status & bq40z50::battery_status::FC) != 0);
                     self.bms_cell_min_mv = Some(bq40_cell_min_mv(&s));
+                    self.bms_cell_max_mv = Some(bq40_cell_max_mv(&s));
                     self.apply_bms_detail_snapshot(&s);
                     let protection_active = bq40_protection_active(s.batt_status, s.op_status);
                     self.bms_audio = BmsAudioState {
@@ -9307,6 +10016,13 @@ where
             }
             self.bms_next_gauging_status_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
         }
+        if now >= self.bms_next_lock_diag_refresh_at {
+            spin_delay(BMS_ACTIVATION_WORD_GAP);
+            let snapshot = read_bq40_lock_diag_snapshot(&mut self.i2c, addr);
+            self.bms_cached_lock_diag = Some(snapshot);
+            self.bms_next_lock_diag_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
+            log_bq40_lock_diag_snapshot(addr, "runtime_periodic", &snapshot);
+        }
         let afe_register = if matches!(
             bq40_op_bit(op_status, bq40z50::operation_status::CB),
             Some(true)
@@ -9332,6 +10048,7 @@ where
             filter_capacity,
             balance_config,
             gauging_status,
+            lock_diag: self.bms_cached_lock_diag,
             afe_register,
             cell_mv: [cell1_mv, cell2_mv, cell3_mv, cell4_mv],
         })
@@ -9363,6 +10080,7 @@ where
         let xdsg = bq40_op_bit(s.op_status, bq40z50::operation_status::XDSG);
         let chg_fet = bq40_op_bit(s.op_status, bq40z50::operation_status::CHG);
         let dsg_fet = bq40_op_bit(s.op_status, bq40z50::operation_status::DSG);
+        let pchg_fet = bq40_op_bit(s.op_status, bq40z50::operation_status::PCHG);
         let (chg_ready, chg_reason) = bq40_decode_charge_path(s.op_status);
         let (dsg_ready, dsg_reason) = bq40_decode_discharge_path(s.op_status);
         let pres = bq40_op_bit(s.op_status, bq40z50::operation_status::PRES);
@@ -9375,11 +10093,42 @@ where
         let no_battery = bq40_pack_indicates_no_battery(s.vpack_mv);
         let (cell_min_mv, cell_max_mv, cell_delta_mv) = bq40_cell_min_max_delta(&s.cell_mv);
         let op_status_read_ok = s.op_status.is_some();
+        let lock_diag = s.lock_diag;
+        let charging_status = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| charging.value);
+        let oc =
+            lock_diag.and_then(|diag| bq40_mac_bit(diag.safety_status, bq40z50::safety_status::OC));
+        let learn_qen = lock_diag
+            .and_then(|diag| bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::QEN));
+        let learn_vok = lock_diag
+            .and_then(|diag| bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::VOK));
+        let learn_rest = lock_diag
+            .and_then(|diag| bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::REST));
+        let gs_fc = lock_diag
+            .and_then(|diag| bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::FC));
+        let gs_fd = lock_diag
+            .and_then(|diag| bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::FD));
+        let vct = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::VCT));
+        let nct = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::NCT));
+        let ccr = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::CCR));
+        let cvr = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::CVR));
+        let ccc = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::CCC));
 
         let ec = bq40z50::battery_status::error_code(bs);
 
         defmt::info!(
-            "bms: bq40z50 addr=0x{=u8:x} poll_seq={=u32} ok_streak={=u16} btp_int_h={=bool} temp_c_x10={=i32} vpack_mv={=u16} no_battery={=bool} current_ma={=i16} flow={} flow_abs_ma={=u16} pack_power_mw={=i32} rsoc_pct={=u16} remcap={=u16} fcc={=u16} batt_status=0x{=u16:x} op_status={=?} op_status_read_ok={=bool} init={=bool} dsg={=bool} fc={=bool} fd={=bool} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} chg_ready={=?} dsg_ready={=?} chg_reason={} dsg_reason={} primary_reason={} pres={=?} sleep={=?} pf={=?} oca={=bool} tca={=bool} ota={=bool} tda={=bool} rca={=bool} rta={=bool} ec=0x{=u8:x} ec_str={} cell_min_mv={=u16} cell_max_mv={=u16} cell_delta_mv={=u16} c1_mv={=u16} c2_mv={=u16} c3_mv={=u16} c4_mv={=u16}",
+            "bms: bq40z50 addr=0x{=u8:x} poll_seq={=u32} ok_streak={=u16} btp_int_h={=bool} temp_c_x10={=i32} vpack_mv={=u16} no_battery={=bool} current_ma={=i16} flow={} flow_abs_ma={=u16} pack_power_mw={=i32} rsoc_pct={=u16} remcap={=u16} fcc={=u16} batt_status=0x{=u16:x} op_status={=?} op_status_read_ok={=bool} charging_status={=?} init={=bool} dsg={=bool} fc={=bool} fd={=bool} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} pchg_fet={=?} chg_ready={=?} dsg_ready={=?} chg_reason={} dsg_reason={} primary_reason={} pres={=?} sleep={=?} pf={=?} oc={=?} learn_qen={=?} learn_vok={=?} learn_rest={=?} gs_fc={=?} gs_fd={=?} vct={=?} ccr={=?} cvr={=?} ccc={=?} nct={=?} update_status={=?} no_valid_charge_term={=?} current_at_eoc_ma={=?} qmax_updates={=?} ra_updates={=?} oca={=bool} tca={=bool} ota={=bool} tda={=bool} rca={=bool} rta={=bool} ec=0x{=u8:x} ec_str={} cell_min_mv={=u16} cell_max_mv={=u16} cell_delta_mv={=u16} c1_mv={=u16} c2_mv={=u16} c3_mv={=u16} c4_mv={=u16}",
             addr,
             poll_seq,
             ok_streak,
@@ -9397,6 +10146,7 @@ where
             bs,
             s.op_status,
             op_status_read_ok,
+            charging_status,
             init,
             dsg,
             fc,
@@ -9405,6 +10155,7 @@ where
             xdsg,
             chg_fet,
             dsg_fet,
+            pchg_fet,
             chg_ready,
             dsg_ready,
             chg_reason,
@@ -9413,6 +10164,22 @@ where
             pres,
             sleep,
             pf,
+            oc,
+            learn_qen,
+            learn_vok,
+            learn_rest,
+            gs_fc,
+            gs_fd,
+            vct,
+            ccr,
+            cvr,
+            ccc,
+            nct,
+            lock_diag.and_then(|diag| diag.update_status),
+            lock_diag.and_then(|diag| diag.no_valid_charge_term),
+            lock_diag.and_then(|diag| diag.current_at_eoc_ma),
+            lock_diag.and_then(|diag| diag.no_of_qmax_updates),
+            lock_diag.and_then(|diag| diag.no_of_ra_updates),
             oca,
             tca,
             ota,
@@ -9477,8 +10244,23 @@ struct Bq40z50Snapshot {
     filter_capacity: Option<bq40z50::FilterCapacity>,
     balance_config: Option<bq40z50::BalanceConfig>,
     gauging_status: Option<u32>,
+    lock_diag: Option<Bq40LockDiagSnapshot>,
     afe_register: Option<bq40z50::AfeRegister>,
     cell_mv: [u16; 4],
+}
+
+#[derive(Clone, Copy)]
+struct Bq40LockDiagSnapshot {
+    charging: Option<bq40z50::ChargingStatusTrace>,
+    safety_status: Option<u32>,
+    gauging_status: Option<u32>,
+    op_status: Option<u32>,
+    update_status: Option<u8>,
+    current_at_eoc_ma: Option<u16>,
+    no_valid_charge_term: Option<u16>,
+    last_valid_charge_term: Option<u16>,
+    no_of_qmax_updates: Option<u16>,
+    no_of_ra_updates: Option<u16>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -80,8 +80,8 @@ mainboard DF current-protection baseline into the live pack without forcing ROM 
 Policy:
 - `apply-df` is app-mode only; it rejects `--recover` and `--rom-image`
 - `--repair-profile live-df-mainboard` is mandatory for this subcommand
-- the tool writes the live current-protection + balance baseline fields via MB44
-- the monitor log must contain `bms_df_apply: ... stage=done fields=18`
+- the tool writes the live current-protection + balance + charge-temperature baseline fields via MB44
+- the monitor log must contain `bms_df_apply: ... stage=done fields=21`
 - `summary.json` records the live apply outcome under `live_df_apply`
 
 Current fixed live baseline:
@@ -96,6 +96,9 @@ Current fixed live baseline:
 - `Min Start Balance Delta=3mV`
 - `Relax Balance Interval=18000s`
 - `Min RSOC for Balancing=80%`
+- `Charge Temp T3=40.0°C`
+- `Charge Temp T4=55.0°C`
+- `Charge Temp Hysteresis=2.0°C`
 
 ## 3) Verify (offline)
 

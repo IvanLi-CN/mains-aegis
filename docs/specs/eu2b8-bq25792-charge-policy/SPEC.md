@@ -31,7 +31,7 @@
 ### Non-goals
 
 - 不实现 `1A/2A` 快充、不调 USB-C/PD/PPS 协商。
-- 不修改 `BQ40Z50` Data Flash、JEITA 曲线或 termination current 校准。
+- 不修改 `BQ40Z50` Data Flash、JEITA 曲线或 termination current 校准；针对重复 `OC/LOCK` 的顶充终止对齐例外由 `/Users/ivan/Projects/Ivan/mains-aegis/docs/specs/h6sae-bq40-lock-root-cause/SPEC.md` 单独承接。
 - 不改 `tps-test-fw` 的独立充电逻辑。
 
 ## 范围（Scope）

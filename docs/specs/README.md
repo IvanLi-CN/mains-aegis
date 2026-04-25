@@ -19,7 +19,7 @@
 
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
-| hn29u | USB-C PD/PPS sink v1 | 已完成 | `hn29u-usb-c-pd-sink-pps/SPEC.md` | 2026-04-08 | 已完成默认全开 + blacklist feature、USB-C 协商/重协商禁充 gate、PPS keep-alive、host audit 覆盖，以及 review-loop 收敛的协议版本/5V 回落/WAIT 恢复/系统负载预算修正 |
+| hn29u | USB-C PD/PPS sink v1 | 已完成 | `hn29u-usb-c-pd-sink-pps/SPEC.md` | 2026-04-23 | hotplug PPS 恢复已稳定闭环：reset 基线约 `1.67s` 回到 `PPS`，主人实测真实热插拔也已恢复到秒级协商成功 |
 | nq7s2 | BQ40 balance baseline + observability | 已完成 | `nq7s2-bq40-balance-baseline-and-observability/SPEC.md` | 2026-04-07 | PR #59 已完成实现/文档/预览收口；实板已确认 DF 对齐，active balancing 触发待后续在完整 charge/relax 条件下复核 |
 | edbpk | BQ40 Cell4 protocol-safe diagnostics | 已完成 | `edbpk-bq40-cell4-protocol-diagnostics/SPEC.md` | 2026-03-15 | 已完成协议修正、只读诊断收敛、flash/monitor 互斥与 reply PEC 探测；`Cell4` 根因已排除工具误读路径 |
 | tmdtq | BQ40 tool reflash / recovery convergence | 已完成 | `tmdtq-bq40-tool-reflash-recovery/SPEC.md` | 2026-03-11 | 工具链已可区分 ROM 检测/写入/退出与 post-flash 无效运行态；剩余问题收敛为样片硬件状态 |
@@ -44,3 +44,4 @@
 | mturr | Front panel display-chain long-press diagnostics | 已完成 | `mturr-front-panel-display-chain-diagnostics/SPEC.md` | 2026-04-04 | 已完成主固件实现、本地构建、真机 flash/monitor 与 `CENTER` 长按 defmt 取证 |
 | zp4cg | Manual charge dashboard page + EEPROM prefs | 已完成 | `zp4cg-manual-charge-dashboard/SPEC.md` | 2026-04-07 | 已完成 `MANUAL` 三级页面、小屏触控布局、运行时手动接管/停止抑制、仅保存 prefs 的 EEPROM schema v1，以及预览/真机验证闭环 |
 | jxz2t | GitHub Pages docs site handbooks | 已完成 | `jxz2t-docs-site-handbooks/SPEC.md` | 2026-04-08 | 已完成 `docs-site/`、GitHub Pages workflow、双手册页面、视觉证据与 PR #63 收敛 |
+| h6sae | BQ40 `LOCK` root cause + closure | 部分完成（3/6） | `h6sae-bq40-lock-root-cause/SPEC.md` | 2026-04-13 | 已命中 `termination` 分流并提交 `ITERM` 对齐修复；下一步需要 `<90%` 解锁后的 live 闭环复验 |

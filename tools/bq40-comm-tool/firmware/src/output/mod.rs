@@ -222,6 +222,10 @@ const BMS_DF_ADDR_ENABLED_PF_D: u16 = 0x49C2;
 const BMS_DF_ADDR_TEMPERATURE_ENABLE: u16 = 0x4A7B;
 const BMS_DF_ADDR_TEMPERATURE_MODE: u16 = 0x4A7C;
 const BMS_DF_ADDR_AFE_PROTECTION_CONTROL: u16 = 0x4A80;
+const BMS_DF_ADDR_CHARGE_TEMP_T3: u16 = 0x4A13;
+const BMS_DF_ADDR_CHARGE_TEMP_T4: u16 = 0x4A15;
+const BMS_DF_ADDR_CHARGE_TEMP_HYSTERESIS: u16 = 0x4A17;
+const BMS_DF_ADDR_CHARGE_TERM_VOLTAGE: u16 = 0x4A71;
 const BMS_DF_ADDR_OCC1_THRESHOLD: u16 = 0x495E;
 const BMS_DF_ADDR_OCC1_DELAY: u16 = 0x4960;
 const BMS_DF_ADDR_OCC2_THRESHOLD: u16 = 0x4961;
@@ -375,6 +379,26 @@ const BMS_DF_SOCD_THRESHOLD_MAINBOARD_MA: i16 = -16_000;
     feature = "bms-live-df-mainboard"
 ))]
 const BMS_DF_SOCD_DELAY_MAINBOARD_S: u8 = 5;
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_CHARGE_TEMP_T3_MAINBOARD_K_X10: u16 = 3131; // 40.0 °C
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_CHARGE_TEMP_T4_MAINBOARD_K_X10: u16 = 3281; // 55.0 °C
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_CHARGE_TEMP_HYSTERESIS_MAINBOARD_DK_X10: u16 = 20; // 2.0 °C delta
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_CHARGE_TERM_VOLTAGE_MAINBOARD_MV: u16 = 100;
 const BMS_DF_REPLY_LEN_WITH_ADDR: u8 = 34;
 const BMS_MFG_STATUS_CAL_TEST: u32 = 1 << 15;
 const BMS_MFG_STATUS_GAUGE_EN: u32 = 1 << 3;
@@ -486,7 +510,7 @@ impl BmsDfLiveFieldTarget {
 }
 
 #[cfg(feature = "bms-live-df-mainboard")]
-const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 18] = [
+const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 22] = [
     BmsDfLiveFieldTarget::byte(
         "balancing_configuration",
         BMS_DF_ADDR_BALANCING_CONFIGURATION,
@@ -506,6 +530,26 @@ const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 18] = [
         "min_rsoc_for_balancing",
         BMS_DF_ADDR_MIN_RSOC_FOR_BALANCING,
         BMS_DF_MIN_RSOC_FOR_BALANCING_MAINBOARD_PCT,
+    ),
+    BmsDfLiveFieldTarget::u16(
+        "charge_temp_t3",
+        BMS_DF_ADDR_CHARGE_TEMP_T3,
+        BMS_DF_CHARGE_TEMP_T3_MAINBOARD_K_X10,
+    ),
+    BmsDfLiveFieldTarget::u16(
+        "charge_temp_t4",
+        BMS_DF_ADDR_CHARGE_TEMP_T4,
+        BMS_DF_CHARGE_TEMP_T4_MAINBOARD_K_X10,
+    ),
+    BmsDfLiveFieldTarget::u16(
+        "charge_temp_hysteresis",
+        BMS_DF_ADDR_CHARGE_TEMP_HYSTERESIS,
+        BMS_DF_CHARGE_TEMP_HYSTERESIS_MAINBOARD_DK_X10,
+    ),
+    BmsDfLiveFieldTarget::u16(
+        "charge_term_voltage",
+        BMS_DF_ADDR_CHARGE_TERM_VOLTAGE,
+        BMS_DF_CHARGE_TERM_VOLTAGE_MAINBOARD_MV,
     ),
     BmsDfLiveFieldTarget::i16(
         "occ1_threshold",

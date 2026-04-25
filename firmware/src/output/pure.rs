@@ -1,6 +1,7 @@
 use crate::front_panel_scene::{
-    is_bq40_activation_needed, BmsRecoveryUiAction, BmsResultKind, DashboardInputSource,
-    ManualChargeSpeed, ManualChargeStopReason, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+    is_bq40_activation_needed, BmsRecoveryUiAction, BmsResultKind, DashboardChargerProtocol,
+    DashboardInputSource, ManualChargeSpeed, ManualChargeStopReason, SelfCheckCommState,
+    SelfCheckUiSnapshot, UpsMode,
 };
 use esp_firmware::bq40z50;
 use esp_firmware::fan;
@@ -20,9 +21,12 @@ use super::{
 
 const BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED: bool = false;
 const CHARGE_POLICY_NORMAL_ICHG_MA: u16 = 500;
+const CHARGE_POLICY_TOPOFF_ICHG_MA: u16 = 200;
 const CHARGE_POLICY_DC_DERATED_ICHG_MA: u16 = 100;
 const CHARGE_POLICY_START_RSOC_PCT: u16 = 80;
 const CHARGE_POLICY_START_CELL_MIN_MV: u16 = 3_700;
+const CHARGE_POLICY_TOPOFF_RSOC_PCT: u16 = 99;
+const CHARGE_POLICY_TOPOFF_CELL_MAX_MV: u16 = 4140;
 const CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA: i32 = 3_000;
 const CHARGE_POLICY_DC_DERATE_EXIT_IBUS_MA: i32 = 2_700;
 const CHARGE_POLICY_DC_DERATE_ENTER_HOLD: Duration = Duration::from_secs(1);
@@ -54,8 +58,9 @@ pub(super) fn detail_input_source(
     vbus_present: bool,
     ac1_present: bool,
     ac2_present: bool,
+    usb_pd_attached: bool,
 ) -> Option<DashboardInputSource> {
-    if ac1_present && !ac2_present {
+    if usb_pd_attached || (ac1_present && !ac2_present) {
         Some(DashboardInputSource::UsbC)
     } else if ac2_present && !ac1_present {
         Some(DashboardInputSource::DcIn)
@@ -72,6 +77,37 @@ pub(super) fn dashboard_input_source_name(source: Option<DashboardInputSource>) 
         Some(DashboardInputSource::UsbC) => "usbc",
         Some(DashboardInputSource::Auto) => "auto",
         None => "none",
+    }
+}
+
+pub(super) fn charger_protocol_from_usb_pd(
+    input_source: Option<DashboardInputSource>,
+    state: usb_pd::UsbPdPortState,
+) -> Option<DashboardChargerProtocol> {
+    match input_source {
+        Some(DashboardInputSource::DcIn) => Some(DashboardChargerProtocol::DcIn),
+        Some(DashboardInputSource::UsbC) | Some(DashboardInputSource::Auto) => {
+            if !state.attached {
+                return Some(DashboardChargerProtocol::NoCc);
+            }
+
+            if let Some(contract) = state.contract {
+                return Some(match contract.kind {
+                    usb_pd::ContractKind::Pps => DashboardChargerProtocol::Pps,
+                    usb_pd::ContractKind::Fixed if contract.voltage_mv <= 5_500 => {
+                        DashboardChargerProtocol::Usb5V
+                    }
+                    usb_pd::ContractKind::Fixed => DashboardChargerProtocol::PdFixed,
+                });
+            }
+
+            if matches!(state.vbus_present, Some(true)) {
+                Some(DashboardChargerProtocol::SourceCapsUnknown)
+            } else {
+                Some(DashboardChargerProtocol::NoCc)
+            }
+        }
+        None => None,
     }
 }
 
@@ -135,6 +171,16 @@ pub(super) const fn usb_pd_charging_enabled(
     } else {
         charger_enabled && charger_allowed
     }
+}
+
+pub(super) const fn usb_pd_demand_charging_enabled(
+    runtime_allow_charge: Option<bool>,
+    charger_enabled: bool,
+    charger_allowed: bool,
+    bms_charge_ready: Option<bool>,
+) -> bool {
+    !matches!(bms_charge_ready, Some(false))
+        && usb_pd_charging_enabled(runtime_allow_charge, charger_enabled, charger_allowed)
 }
 
 pub(super) const fn usb_pd_charge_gate_ready(
@@ -287,6 +333,7 @@ pub(super) enum ChargePolicyState {
     BlockedNoBms,
     IdleWaitThreshold,
     Charging500mA,
+    ChargingTopoff200mA,
     Charging100mADcDerated,
     FullLatched,
 }
@@ -315,6 +362,7 @@ impl ChargePolicyState {
             Self::BlockedNoBms => "blocked_no_bms",
             Self::IdleWaitThreshold => "idle_wait_threshold",
             Self::Charging500mA => "charging_500ma",
+            Self::ChargingTopoff200mA => "charging_topoff_200ma",
             Self::Charging100mADcDerated => "charging_100ma_dc_derated",
             Self::FullLatched => "full_latched",
         }
@@ -328,13 +376,17 @@ impl ChargePolicyState {
             Self::BlockedNoBms => "LOCK",
             Self::IdleWaitThreshold => "WAIT",
             Self::Charging500mA => "CHG500",
+            Self::ChargingTopoff200mA => "CHG500",
             Self::Charging100mADcDerated => "CHG100",
             Self::FullLatched => "FULL",
         }
     }
 
     pub(super) const fn charger_active(self) -> bool {
-        matches!(self, Self::Charging500mA | Self::Charging100mADcDerated)
+        matches!(
+            self,
+            Self::Charging500mA | Self::ChargingTopoff200mA | Self::Charging100mADcDerated
+        )
     }
 }
 
@@ -525,8 +577,10 @@ impl ChargePolicyDerateTracker {
 pub(super) struct ChargePolicyTelemetry {
     pub(super) rsoc_pct: u16,
     pub(super) cell_min_mv: u16,
+    pub(super) cell_max_mv: u16,
     pub(super) charge_ready: bool,
     pub(super) bms_full: bool,
+    pub(super) hv: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -541,6 +595,7 @@ pub(super) struct ChargePolicyInput {
     pub(super) output_power_w10: Option<u32>,
     pub(super) telemetry: Option<ChargePolicyTelemetry>,
     pub(super) charger_done: bool,
+    pub(super) charger_taper_cv: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -706,13 +761,26 @@ pub(super) fn charge_policy_step(
         input.ibus_ma,
     );
 
+    let topoff_active = !derate.derated
+        && input.telemetry.is_some_and(|telemetry| {
+            telemetry.rsoc_pct >= CHARGE_POLICY_TOPOFF_RSOC_PCT
+                && telemetry.charge_ready
+                && !telemetry.bms_full
+                && (input.charger_taper_cv
+                    || telemetry.hv
+                    || telemetry.cell_max_mv >= CHARGE_POLICY_TOPOFF_CELL_MAX_MV)
+        });
     let state = if derate.derated {
         ChargePolicyState::Charging100mADcDerated
+    } else if topoff_active {
+        ChargePolicyState::ChargingTopoff200mA
     } else {
         ChargePolicyState::Charging500mA
     };
     let target_ichg_ma = Some(if derate.derated {
         CHARGE_POLICY_DC_DERATED_ICHG_MA
+    } else if topoff_active {
+        CHARGE_POLICY_TOPOFF_ICHG_MA
     } else {
         CHARGE_POLICY_NORMAL_ICHG_MA
     });
@@ -951,6 +1019,10 @@ pub(super) fn detail_battery_temp_c(snapshot: &Bq40z50Snapshot) -> Option<i16> {
 
 pub(super) fn bq40_cell_min_mv(snapshot: &Bq40z50Snapshot) -> u16 {
     snapshot.cell_mv.into_iter().min().unwrap_or_default()
+}
+
+pub(super) fn bq40_cell_max_mv(snapshot: &Bq40z50Snapshot) -> u16 {
+    snapshot.cell_mv.into_iter().max().unwrap_or_default()
 }
 
 pub(super) fn detail_da_status2_temp_c(temp_k_x10: u16) -> Option<i16> {
@@ -1325,18 +1397,86 @@ mod tests {
     #[test]
     fn detail_input_source_prefers_explicit_usb_and_dc_routes() {
         assert_eq!(
-            detail_input_source(true, true, false),
+            detail_input_source(true, true, false, false),
             Some(DashboardInputSource::UsbC)
         );
         assert_eq!(
-            detail_input_source(true, false, true),
+            detail_input_source(true, false, true, false),
             Some(DashboardInputSource::DcIn)
         );
         assert_eq!(
-            detail_input_source(true, true, true),
+            detail_input_source(true, true, true, false),
             Some(DashboardInputSource::Auto)
         );
-        assert_eq!(detail_input_source(false, false, false), None);
+        assert_eq!(detail_input_source(false, false, false, false), None);
+    }
+
+    #[test]
+    fn detail_input_source_keeps_usbc_route_while_pd_session_is_attached() {
+        assert_eq!(
+            detail_input_source(false, false, false, true),
+            Some(DashboardInputSource::UsbC)
+        );
+    }
+
+    #[test]
+    fn charger_protocol_reports_pps_contract() {
+        let state = usb_pd::UsbPdPortState {
+            attached: true,
+            vbus_present: Some(true),
+            contract: Some(usb_pd::ActiveContract {
+                kind: usb_pd::ContractKind::Pps,
+                object_position: 1,
+                voltage_mv: 16_000,
+                current_ma: 1_000,
+                source_max_current_ma: 3_000,
+                input_current_limit_ma: Some(2_000),
+                vindpm_mv: Some(15_500),
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            charger_protocol_from_usb_pd(Some(DashboardInputSource::UsbC), state),
+            Some(DashboardChargerProtocol::Pps)
+        );
+    }
+
+    #[test]
+    fn charger_protocol_reports_5v_fallback_when_fixed_contract_is_usb_level() {
+        let state = usb_pd::UsbPdPortState {
+            attached: true,
+            vbus_present: Some(true),
+            contract: Some(usb_pd::ActiveContract {
+                kind: usb_pd::ContractKind::Fixed,
+                object_position: 1,
+                voltage_mv: 5_000,
+                current_ma: 500,
+                source_max_current_ma: 3_000,
+                input_current_limit_ma: Some(500),
+                vindpm_mv: Some(4_500),
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            charger_protocol_from_usb_pd(Some(DashboardInputSource::UsbC), state),
+            Some(DashboardChargerProtocol::Usb5V)
+        );
+    }
+
+    #[test]
+    fn charger_protocol_reports_uncaptured_caps_when_attached_without_contract() {
+        let state = usb_pd::UsbPdPortState {
+            attached: true,
+            vbus_present: Some(true),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            charger_protocol_from_usb_pd(Some(DashboardInputSource::UsbC), state),
+            Some(DashboardChargerProtocol::SourceCapsUnknown)
+        );
     }
 
     #[test]
@@ -1473,6 +1613,23 @@ mod tests {
         assert!(usb_pd_charging_enabled(Some(true), false, false));
         assert!(usb_pd_charging_enabled(None, true, true));
         assert!(!usb_pd_charging_enabled(None, true, false));
+    }
+
+    #[test]
+    fn usb_pd_demand_charging_enabled_respects_bms_charge_path() {
+        assert!(!usb_pd_demand_charging_enabled(
+            Some(true),
+            true,
+            true,
+            Some(false)
+        ));
+        assert!(usb_pd_demand_charging_enabled(
+            Some(true),
+            true,
+            true,
+            Some(true)
+        ));
+        assert!(usb_pd_demand_charging_enabled(None, true, true, None));
     }
 
     #[test]
@@ -1651,6 +1808,10 @@ mod tests {
             "CHG500"
         );
         assert_eq!(
+            detail_charger_status_text(ChargePolicyState::ChargingTopoff200mA),
+            "CHG500"
+        );
+        assert_eq!(
             detail_charger_status_text(ChargePolicyState::Charging100mADcDerated),
             "CHG100"
         );
@@ -1702,15 +1863,22 @@ mod tests {
             output_power_w10: Some(0),
             telemetry,
             charger_done: false,
+            charger_taper_cv: false,
         }
     }
 
-    fn policy_telemetry(rsoc_pct: u16, cell_min_mv: u16) -> ChargePolicyTelemetry {
+    fn policy_telemetry(
+        rsoc_pct: u16,
+        cell_min_mv: u16,
+        cell_max_mv: u16,
+    ) -> ChargePolicyTelemetry {
         ChargePolicyTelemetry {
             rsoc_pct,
             cell_min_mv,
+            cell_max_mv,
             charge_ready: true,
             bms_full: false,
+            hv: false,
         }
     }
 
@@ -1726,7 +1894,7 @@ mod tests {
             &mut output_load,
             0,
             policy_input(
-                Some(policy_telemetry(79, CHARGE_POLICY_START_CELL_MIN_MV)),
+                Some(policy_telemetry(79, CHARGE_POLICY_START_CELL_MIN_MV, 4000)),
                 Some(DashboardInputSource::UsbC),
                 Some(1_000),
             ),
@@ -1752,7 +1920,7 @@ mod tests {
             &mut output_load,
             0,
             policy_input(
-                Some(policy_telemetry(90, 3_650)),
+                Some(policy_telemetry(90, 3_650, 3900)),
                 Some(DashboardInputSource::UsbC),
                 Some(1_000),
             ),
@@ -1761,6 +1929,77 @@ mod tests {
         assert_eq!(decision.state, ChargePolicyState::Charging500mA);
         assert_eq!(decision.start_reason, Some(ChargeStartReason::CellLow));
         assert!(memory.charge_latched);
+    }
+
+    #[test]
+    fn charge_policy_enters_topoff_current_when_taper_cv_and_rsoc_is_99() {
+        let mut memory = ChargePolicyMemory::default();
+        memory.charge_latched = true;
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+
+        let mut input = policy_input(
+            Some(policy_telemetry(
+                99,
+                CHARGE_POLICY_START_CELL_MIN_MV,
+                CHARGE_POLICY_TOPOFF_CELL_MAX_MV,
+            )),
+            Some(DashboardInputSource::UsbC),
+            Some(1_000),
+        );
+        input.charger_taper_cv = true;
+
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 0, input);
+
+        assert_eq!(decision.state, ChargePolicyState::ChargingTopoff200mA);
+        assert!(decision.allow_charge);
+        assert_eq!(decision.target_ichg_ma, Some(CHARGE_POLICY_TOPOFF_ICHG_MA));
+    }
+
+    #[test]
+    fn charge_policy_enters_topoff_before_taper_cv_when_rsoc_is_99_and_cell_max_is_high() {
+        let mut memory = ChargePolicyMemory::default();
+        memory.charge_latched = true;
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+
+        let input = policy_input(
+            Some(policy_telemetry(
+                99,
+                CHARGE_POLICY_START_CELL_MIN_MV,
+                CHARGE_POLICY_TOPOFF_CELL_MAX_MV,
+            )),
+            Some(DashboardInputSource::UsbC),
+            Some(1_000),
+        );
+
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 0, input);
+
+        assert_eq!(decision.state, ChargePolicyState::ChargingTopoff200mA);
+        assert!(decision.allow_charge);
+        assert_eq!(decision.target_ichg_ma, Some(CHARGE_POLICY_TOPOFF_ICHG_MA));
+    }
+
+    #[test]
+    fn charge_policy_enters_topoff_when_rsoc_is_99_and_bms_reports_hv() {
+        let mut memory = ChargePolicyMemory::default();
+        memory.charge_latched = true;
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+
+        let mut telemetry = policy_telemetry(99, CHARGE_POLICY_START_CELL_MIN_MV, 4_105);
+        telemetry.hv = true;
+        let input = policy_input(
+            Some(telemetry),
+            Some(DashboardInputSource::UsbC),
+            Some(1_000),
+        );
+
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 0, input);
+
+        assert_eq!(decision.state, ChargePolicyState::ChargingTopoff200mA);
+        assert!(decision.allow_charge);
+        assert_eq!(decision.target_ichg_ma, Some(CHARGE_POLICY_TOPOFF_ICHG_MA));
     }
 
     #[test]
@@ -1775,7 +2014,7 @@ mod tests {
             &mut output_load,
             0,
             policy_input(
-                Some(policy_telemetry(95, 3_900)),
+                Some(policy_telemetry(95, 3_900, 4000)),
                 Some(DashboardInputSource::UsbC),
                 Some(0),
             ),
@@ -1801,7 +2040,7 @@ mod tests {
             &mut output_load,
             0,
             policy_input(
-                Some(policy_telemetry(95, 4_050)),
+                Some(policy_telemetry(95, 4_050, 4_050)),
                 Some(DashboardInputSource::UsbC),
                 Some(200),
             ),
@@ -1814,7 +2053,7 @@ mod tests {
             &mut output_load,
             100,
             policy_input(
-                Some(policy_telemetry(95, 4_050)),
+                Some(policy_telemetry(95, 4_050, 4_050)),
                 Some(DashboardInputSource::UsbC),
                 Some(200),
             ),
@@ -1829,7 +2068,7 @@ mod tests {
             ChargePolicyInput {
                 charger_done: true,
                 ..policy_input(
-                    Some(policy_telemetry(95, 4_050)),
+                    Some(policy_telemetry(95, 4_050, 4_050)),
                     Some(DashboardInputSource::UsbC),
                     Some(200),
                 )
@@ -1856,7 +2095,7 @@ mod tests {
             &mut output_load,
             0,
             policy_input(
-                Some(policy_telemetry(90, 3_950)),
+                Some(policy_telemetry(90, 3_950, 3_950)),
                 Some(DashboardInputSource::UsbC),
                 Some(0),
             ),
@@ -1869,7 +2108,7 @@ mod tests {
             &mut output_load,
             100,
             policy_input(
-                Some(policy_telemetry(79, 3_950)),
+                Some(policy_telemetry(79, 3_950, 3_950)),
                 Some(DashboardInputSource::UsbC),
                 Some(900),
             ),
@@ -1888,7 +2127,7 @@ mod tests {
         let mut derate = ChargePolicyDerateTracker::default();
         let mut output_load = ChargePolicyOutputLoadTracker::default();
         let input = policy_input(
-            Some(policy_telemetry(79, 3_850)),
+            Some(policy_telemetry(79, 3_850, 3_850)),
             Some(DashboardInputSource::DcIn),
             Some(3_200),
         );
@@ -1919,7 +2158,7 @@ mod tests {
         };
         let mut output_load = ChargePolicyOutputLoadTracker::default();
         let input = policy_input(
-            Some(policy_telemetry(79, 3_850)),
+            Some(policy_telemetry(79, 3_850, 3_850)),
             Some(DashboardInputSource::DcIn),
             Some(2_600),
         );
@@ -1952,7 +2191,7 @@ mod tests {
             &mut output_load,
             5_000,
             policy_input(
-                Some(policy_telemetry(79, 3_850)),
+                Some(policy_telemetry(79, 3_850, 3_850)),
                 Some(DashboardInputSource::Auto),
                 Some(3_500),
             ),
@@ -2011,7 +2250,7 @@ mod tests {
                 output_enabled: true,
                 output_power_w10: Some(CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10 + 1),
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::DcIn),
                     Some(1_000),
                 )
@@ -2030,7 +2269,7 @@ mod tests {
                 output_enabled: true,
                 output_power_w10: Some(CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10 + 1),
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::DcIn),
                     Some(1_000),
                 )
@@ -2054,7 +2293,7 @@ mod tests {
         let mut derate = ChargePolicyDerateTracker::default();
         let mut output_load = ChargePolicyOutputLoadTracker::default();
         let mut high_input = policy_input(
-            Some(policy_telemetry(79, 3_850)),
+            Some(policy_telemetry(79, 3_850, 3_850)),
             Some(DashboardInputSource::DcIn),
             Some(1_000),
         );
@@ -2107,7 +2346,7 @@ mod tests {
                 output_enabled: true,
                 output_power_w10: None,
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::UsbC),
                     Some(1_000),
                 )
@@ -2122,7 +2361,7 @@ mod tests {
         assert_eq!(output_load.exit_streak, 0);
 
         let mut low_input = policy_input(
-            Some(policy_telemetry(79, 3_850)),
+            Some(policy_telemetry(79, 3_850, 3_850)),
             Some(DashboardInputSource::UsbC),
             Some(1_000),
         );
@@ -2159,7 +2398,7 @@ mod tests {
                 output_enabled: true,
                 output_power_w10: None,
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::UsbC),
                     Some(1_000),
                 )
@@ -2194,7 +2433,7 @@ mod tests {
                 output_enabled: false,
                 output_power_w10: None,
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::UsbC),
                     Some(1_000),
                 )
@@ -2225,7 +2464,7 @@ mod tests {
             ChargePolicyInput {
                 input_present: false,
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::UsbC),
                     Some(1_000),
                 )
@@ -2247,7 +2486,7 @@ mod tests {
             ChargePolicyInput {
                 ts_hot: true,
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850)),
+                    Some(policy_telemetry(79, 3_850, 3_850)),
                     Some(DashboardInputSource::UsbC),
                     Some(1_000),
                 )

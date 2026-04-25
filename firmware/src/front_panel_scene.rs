@@ -373,6 +373,16 @@ pub enum DashboardInputSource {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardChargerProtocol {
+    DcIn,
+    Pps,
+    PdFixed,
+    Usb5V,
+    NoCc,
+    SourceCapsUnknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelfCheckCommState {
     Pending,
     Ok,
@@ -427,6 +437,7 @@ pub struct DashboardDetailSnapshot {
     pub reason_key: Option<&'static str>,
     pub reason_label: Option<&'static str>,
     pub input_source: Option<DashboardInputSource>,
+    pub charger_protocol: Option<DashboardChargerProtocol>,
     pub charger_active: Option<bool>,
     pub charger_home_status: Option<&'static str>,
     pub charger_status: Option<&'static str>,
@@ -477,6 +488,7 @@ impl DashboardDetailSnapshot {
             reason_key: None,
             reason_label: None,
             input_source: None,
+            charger_protocol: None,
             charger_active: None,
             charger_home_status: None,
             charger_status: None,
@@ -5986,6 +5998,7 @@ fn render_dashboard_charger_detail<P: UiPainter>(
         26,
         12,
     )?;
+    draw_charger_protocol_badge(painter, variant, palette, data.detail, 46, 60)?;
     draw_icon_blocks_centered(
         painter,
         174,
@@ -8555,6 +8568,38 @@ fn draw_charger_source_indicator<P: UiPainter>(
             palette.bg,
         ),
     }
+}
+
+fn charger_protocol_badge(detail: DashboardDetailSnapshot) -> &'static str {
+    match detail.charger_protocol {
+        Some(DashboardChargerProtocol::Pps) => "PPS",
+        Some(DashboardChargerProtocol::PdFixed) => "PD",
+        Some(DashboardChargerProtocol::Usb5V) => "5V",
+        Some(DashboardChargerProtocol::DcIn) => "DC",
+        Some(DashboardChargerProtocol::NoCc) => "NO CC",
+        Some(DashboardChargerProtocol::SourceCapsUnknown) => "CAP?",
+        None => "N/A",
+    }
+}
+
+fn draw_charger_protocol_badge<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    detail: DashboardDetailSnapshot,
+    x: u16,
+    y: u16,
+) -> Result<(), P::Error> {
+    text_with_position(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        charger_protocol_badge(detail),
+        Point::new(x as i32, y as i32),
+        VerticalPosition::Bottom,
+        HorizontalAlignment::Left,
+        palette.bg,
+    )
 }
 
 const CARBON_IN_PROGRESS_32: &[(u8, u8, u8, u8)] = &[

@@ -20,6 +20,7 @@ This folder stores project documentation and offline-renderable datasheets.
 - Audio alert output (buzzer -> TDM speaker): `docs/audio-design.md`
 - Speaker cue previews (status/warning/error): `docs/audio-cues-preview/README.md`
 - ESP32-S3 GPIO assignment: `docs/hardware-selection/esp32-s3-fh4r2-gpio.md`
+- Solutions index: `docs/solutions/README.md`
 
 ## UI docs
 
