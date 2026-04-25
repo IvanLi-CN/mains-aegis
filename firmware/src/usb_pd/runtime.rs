@@ -41,9 +41,10 @@ where
             self.in_no_contract_hard_reset_sent() || self.in_no_contract_hard_reset_wait();
 
         if !self.state.attached {
-            self.observe_boot_unattached_candidate(cc_absent_detach_debounce_elapsed(
-                self.consecutive_cc_absent_polls,
-            ));
+            self.observe_boot_unattached_candidate(
+                cc_absent_detach_debounce_elapsed(self.consecutive_cc_absent_polls)
+                    && raw_vbus_detach_debounce_elapsed(self.consecutive_raw_vbus_absent_polls),
+            );
         }
 
         if self.state.attached

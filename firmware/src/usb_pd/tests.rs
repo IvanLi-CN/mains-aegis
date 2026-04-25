@@ -801,6 +801,25 @@ fn boot_unattached_evidence_requires_debounced_absence() {
 
     let mut manager = UsbPdSinkManager::new(NoopI2c);
     manager.handle_irq_snapshot(
+        irq_snapshot_with_cc_and_vbus(0, true),
+        UsbPdPowerDemand {
+            measured_input_voltage_mv: Some(5_100),
+            ..UsbPdPowerDemand::default()
+        },
+        0,
+    );
+    manager.handle_irq_snapshot(
+        irq_snapshot_with_cc_and_vbus(0, true),
+        UsbPdPowerDemand {
+            measured_input_voltage_mv: Some(5_100),
+            ..UsbPdPowerDemand::default()
+        },
+        PHY_NEGOTIATION_POLL_INTERVAL_MS,
+    );
+    assert!(!manager.active_no_contract_recovery_allowed());
+
+    let mut manager = UsbPdSinkManager::new(NoopI2c);
+    manager.handle_irq_snapshot(
         irq_snapshot_with_cc_and_vbus(0, false),
         UsbPdPowerDemand::default(),
         0,
