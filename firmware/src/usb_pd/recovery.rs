@@ -294,16 +294,27 @@ where
 
             if self.last_source_caps_recovery_at_ms.is_none() {
                 esp_println::println!(
-                    "usb_pd: no source caps after inherited attach, requesting source caps waited_ms={} tx_spec_rev_bits={}",
+                    "usb_pd: no source caps after inherited attach, inhibiting hard reset waited_ms={} tx_spec_rev_bits={}",
                     waited_ms,
                     self.tx_spec_revision.bits()
                 );
                 warn!(
-                    "usb_pd: inherited attach missing source caps, suppress hard reset and request caps waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                    "usb_pd: inherited attach missing source caps, suppress hard reset waited_ms={=u32} tx_spec_rev_bits={=u8}",
                     waited_ms,
                     self.tx_spec_revision.bits()
                 );
                 self.note_recovery_event(UsbPdRecoveryEvent::HardResetInhibited);
+                self.inherited_source_caps_probe_pending = true;
+                self.last_source_caps_recovery_at_ms = Some(now_ms);
+                return;
+            }
+
+            if self.inherited_source_caps_probe_pending {
+                esp_println::println!(
+                    "usb_pd: inherited attach requesting source caps waited_ms={} tx_spec_rev_bits={}",
+                    waited_ms,
+                    self.tx_spec_revision.bits()
+                );
                 if let Err(err) = self.send_control_message(
                     ControlMessageType::GetSourceCap,
                     self.recovery_spec_revision(),
@@ -313,6 +324,7 @@ where
                         fusb302_error_kind(&err)
                     );
                 }
+                self.inherited_source_caps_probe_pending = false;
                 self.last_source_caps_recovery_at_ms = Some(now_ms);
                 return;
             }

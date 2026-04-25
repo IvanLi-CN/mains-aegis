@@ -27,7 +27,7 @@ const PARTIAL_RX_RECOVERY_GRACE_MS: u32 = 250;
 const RAW_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const CC_ABSENT_DETACH_DEBOUNCE_POLLS: u8 = 2;
-const BOOT_UNATTACHED_STABLE_MS: u32 = 2_000;
+const BOOT_UNATTACHED_STABLE_MS: u32 = PHY_POLL_INTERVAL_MS * 2;
 const CHARGER_VBUS_PRESENT_THRESHOLD_MV: u16 = 4_500;
 const CONTRACT_CHARGE_READY_DELAY_MS: u32 = 350;
 const DEFAULT_5V_CHARGE_READY_DELAY_MS: u32 = 500;
@@ -114,6 +114,7 @@ pub struct UsbPdSinkManager<I2C> {
     no_contract_phase_started_at_ms: Option<u32>,
     no_contract_recovery_phase: Option<NoContractRecoveryPhase>,
     source_caps_recovery_attempted: bool,
+    inherited_source_caps_probe_pending: bool,
     last_source_caps_requery_at_ms: Option<u32>,
     message_id: u8,
     tx_spec_revision: SpecRevision,
@@ -317,6 +318,7 @@ where
             no_contract_phase_started_at_ms: None,
             no_contract_recovery_phase: None,
             source_caps_recovery_attempted: false,
+            inherited_source_caps_probe_pending: false,
             last_source_caps_requery_at_ms: None,
             last_source_caps_recovery_at_ms: None,
             message_id: 0,

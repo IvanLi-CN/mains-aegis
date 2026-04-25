@@ -655,6 +655,7 @@ where
         self.no_contract_phase_started_at_ms = None;
         self.no_contract_recovery_phase = None;
         self.source_caps_recovery_attempted = false;
+        self.inherited_source_caps_probe_pending = false;
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         self.tx_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
@@ -759,6 +760,7 @@ where
         self.no_contract_phase_started_at_ms = None;
         self.no_contract_recovery_phase = None;
         self.source_caps_recovery_attempted = false;
+        self.inherited_source_caps_probe_pending = false;
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         self.partial_rx_started_at_ms = None;
