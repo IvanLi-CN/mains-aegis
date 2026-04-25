@@ -312,6 +312,8 @@ where
                             "usb_pd: inherited get_source_cap failed err={}",
                             fusb302_error_kind(&err)
                         );
+                        self.inherited_source_caps_probe_pending = false;
+                        self.last_source_caps_recovery_at_ms = Some(now_ms);
                     }
                 }
                 return;
@@ -339,6 +341,8 @@ where
                             "usb_pd: inherited soft reset failed err={}",
                             fusb302_error_kind(&err)
                         );
+                        self.source_caps_recovery_attempted = true;
+                        self.last_source_caps_recovery_at_ms = Some(now_ms);
                     }
                 }
                 return;

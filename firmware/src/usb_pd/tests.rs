@@ -3,6 +3,7 @@ use std::vec::Vec;
 
 struct NoopI2c;
 struct LenientI2c;
+struct FailingWriteI2c;
 #[derive(Default)]
 struct RecordingI2c {
     writes: Vec<Vec<u8>>,
@@ -35,6 +36,28 @@ impl embedded_hal::i2c::I2c for LenientI2c {
         for operation in operations {
             if let embedded_hal::i2c::Operation::Read(buffer) = operation {
                 buffer.fill(0);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl embedded_hal::i2c::ErrorType for FailingWriteI2c {
+    type Error = esp_hal::i2c::master::Error;
+}
+
+impl embedded_hal::i2c::I2c for FailingWriteI2c {
+    fn transaction(
+        &mut self,
+        _address: u8,
+        operations: &mut [embedded_hal::i2c::Operation<'_>],
+    ) -> Result<(), Self::Error> {
+        for operation in operations {
+            match operation {
+                embedded_hal::i2c::Operation::Read(buffer) => buffer.fill(0),
+                embedded_hal::i2c::Operation::Write(_) => {
+                    return Err(esp_hal::i2c::master::Error::Timeout);
+                }
             }
         }
         Ok(())
@@ -734,6 +757,49 @@ fn inherited_attach_timeout_holds_5v_and_skips_hard_reset_until_replug() {
     assert_eq!(i2c.hard_reset_tx_count(), 0);
     assert_eq!(i2c.get_source_cap_tx_count(), 1);
     assert_eq!(i2c.soft_reset_tx_count(), 1);
+}
+
+#[test]
+fn inherited_attach_failed_recovery_tx_still_reaches_5v_fallback() {
+    let mut manager = UsbPdSinkManager::new(FailingWriteI2c);
+    manager.state.attached = true;
+    manager.state.enabled = true;
+    manager.state.controller_ready = true;
+    manager.state.vbus_present = Some(true);
+    manager.state.polarity = Some(CcPolarity::Cc1);
+    manager.attached_at_ms = Some(0);
+
+    manager.maybe_recover_missing_source_caps(
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS,
+    );
+    assert!(manager.inherited_source_caps_probe_pending);
+
+    manager.maybe_recover_missing_source_caps(
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS + 1,
+    );
+    assert!(!manager.inherited_source_caps_probe_pending);
+    assert!(!manager.source_caps_recovery_attempted);
+
+    manager.maybe_recover_missing_source_caps(
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS + SOURCE_CAPS_REQUERY_DELAY_MS + 1,
+    );
+    assert!(manager.source_caps_recovery_attempted);
+
+    manager.maybe_arm_default_5v_charge_ready(
+        SOURCE_CAPS_WAIT_TIMEOUT_MS + SOURCE_CAPS_REQUERY_DELAY_MS + 1,
+    );
+    assert_eq!(
+        manager.charge_ready_at_ms,
+        Some(
+            SOURCE_CAPS_WAIT_TIMEOUT_MS
+                + SOURCE_CAPS_REQUERY_DELAY_MS
+                + 1
+                + DEFAULT_5V_CHARGE_READY_DELAY_MS
+        )
+    );
 }
 
 #[test]
