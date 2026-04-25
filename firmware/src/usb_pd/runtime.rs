@@ -41,9 +41,7 @@ where
             self.in_no_contract_hard_reset_sent() || self.in_no_contract_hard_reset_wait();
 
         if !self.state.attached {
-            self.observe_boot_unattached_candidate(
-                detected_attach_polarity.is_none() && !vbus_present,
-            );
+            self.observe_boot_unattached_candidate(detected_attach_polarity.is_none());
         }
 
         if self.state.attached

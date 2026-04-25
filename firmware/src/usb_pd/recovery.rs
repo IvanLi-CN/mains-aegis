@@ -298,17 +298,21 @@ where
                     waited_ms,
                     self.tx_spec_revision.bits()
                 );
-                if let Err(err) = self.send_control_message(
+                match self.send_control_message(
                     ControlMessageType::GetSourceCap,
                     self.recovery_spec_revision(),
                 ) {
-                    warn!(
-                        "usb_pd: inherited get_source_cap failed err={}",
-                        fusb302_error_kind(&err)
-                    );
+                    Ok(()) => {
+                        self.inherited_source_caps_probe_pending = false;
+                        self.last_source_caps_recovery_at_ms = Some(now_ms);
+                    }
+                    Err(err) => {
+                        warn!(
+                            "usb_pd: inherited get_source_cap failed err={}",
+                            fusb302_error_kind(&err)
+                        );
+                    }
                 }
-                self.inherited_source_caps_probe_pending = false;
-                self.last_source_caps_recovery_at_ms = Some(now_ms);
                 return;
             }
 
@@ -320,17 +324,21 @@ where
                     waited_ms,
                     self.tx_spec_revision.bits()
                 );
-                if let Err(err) = self.send_control_message(
+                match self.send_control_message(
                     ControlMessageType::SoftReset,
                     self.recovery_spec_revision(),
                 ) {
-                    warn!(
-                        "usb_pd: inherited soft reset failed err={}",
-                        fusb302_error_kind(&err)
-                    );
+                    Ok(()) => {
+                        self.source_caps_recovery_attempted = true;
+                        self.last_source_caps_recovery_at_ms = Some(now_ms);
+                    }
+                    Err(err) => {
+                        warn!(
+                            "usb_pd: inherited soft reset failed err={}",
+                            fusb302_error_kind(&err)
+                        );
+                    }
                 }
-                self.source_caps_recovery_attempted = true;
-                self.last_source_caps_recovery_at_ms = Some(now_ms);
                 return;
             }
 
