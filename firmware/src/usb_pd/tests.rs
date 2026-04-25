@@ -683,7 +683,7 @@ fn inherited_attach_timeout_holds_5v_and_skips_hard_reset_until_replug() {
     assert!(!manager.source_caps_recovery_attempted);
     assert_eq!(
         manager.state.recovery_event,
-        Some(UsbPdRecoveryEvent::HardResetInhibited)
+        Some(UsbPdRecoveryEvent::GetSourceCapSent)
     );
 
     manager.maybe_recover_missing_source_caps(
@@ -695,6 +695,15 @@ fn inherited_attach_timeout_holds_5v_and_skips_hard_reset_until_replug() {
     assert_eq!(
         manager.state.recovery_event,
         Some(UsbPdRecoveryEvent::SoftResetSent)
+    );
+
+    manager.maybe_recover_missing_source_caps(
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS + SOURCE_CAPS_REQUERY_DELAY_MS + 1,
+    );
+    assert_eq!(
+        manager.state.recovery_event,
+        Some(UsbPdRecoveryEvent::HardResetInhibited)
     );
 
     manager.maybe_arm_default_5v_charge_ready(

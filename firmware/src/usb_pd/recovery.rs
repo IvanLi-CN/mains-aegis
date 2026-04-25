@@ -313,7 +313,6 @@ where
                         fusb302_error_kind(&err)
                     );
                 }
-                self.state.recovery_event = Some(UsbPdRecoveryEvent::HardResetInhibited);
                 self.last_source_caps_recovery_at_ms = Some(now_ms);
                 return;
             }
@@ -341,6 +340,9 @@ where
             }
 
             if self.source_caps_recovery_attempted {
+                if self.state.recovery_event != Some(UsbPdRecoveryEvent::HardResetInhibited) {
+                    self.note_recovery_event(UsbPdRecoveryEvent::HardResetInhibited);
+                }
                 esp_println::println!(
                     "usb_pd: no source caps after inherited attach, holding 5v until replug waited_ms={} tx_spec_rev_bits={}",
                     waited_ms,
