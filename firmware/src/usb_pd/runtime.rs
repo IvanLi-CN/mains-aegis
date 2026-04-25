@@ -41,7 +41,9 @@ where
             self.in_no_contract_hard_reset_sent() || self.in_no_contract_hard_reset_wait();
 
         if !self.state.attached {
-            self.observe_boot_unattached_candidate(detected_attach_polarity.is_none());
+            self.observe_boot_unattached_candidate(cc_absent_detach_debounce_elapsed(
+                self.consecutive_cc_absent_polls,
+            ));
         }
 
         if self.state.attached
@@ -574,11 +576,6 @@ where
             message_id
         );
         self.phy.send_message(&message)?;
-        if matches!(kind, ControlMessageType::GetSourceCap) {
-            self.note_recovery_event(UsbPdRecoveryEvent::GetSourceCapSent);
-        } else if matches!(kind, ControlMessageType::SoftReset) {
-            self.note_recovery_event(UsbPdRecoveryEvent::SoftResetSent);
-        }
         if matches!(kind, ControlMessageType::SoftReset) {
             self.message_id = 0;
         } else {

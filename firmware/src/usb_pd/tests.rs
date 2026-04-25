@@ -776,6 +776,44 @@ fn boot_unattached_physical_absence_allows_active_recovery_before_first_attach()
 }
 
 #[test]
+fn boot_unattached_evidence_requires_debounced_absence() {
+    let mut manager = UsbPdSinkManager::new(NoopI2c);
+
+    manager.handle_irq_snapshot(
+        irq_snapshot_with_cc_and_vbus(0, true),
+        UsbPdPowerDemand {
+            measured_input_voltage_mv: Some(5_100),
+            ..UsbPdPowerDemand::default()
+        },
+        0,
+    );
+    assert!(!manager.active_no_contract_recovery_allowed());
+
+    manager.handle_irq_snapshot(
+        irq_snapshot_with_cc_and_vbus(fusb302::status1a::TOGS_SNK1, true),
+        UsbPdPowerDemand {
+            measured_input_voltage_mv: Some(5_100),
+            ..UsbPdPowerDemand::default()
+        },
+        PHY_NEGOTIATION_POLL_INTERVAL_MS,
+    );
+    assert!(!manager.active_no_contract_recovery_allowed());
+
+    let mut manager = UsbPdSinkManager::new(NoopI2c);
+    manager.handle_irq_snapshot(
+        irq_snapshot_with_cc_and_vbus(0, false),
+        UsbPdPowerDemand::default(),
+        0,
+    );
+    manager.handle_irq_snapshot(
+        irq_snapshot_with_cc_and_vbus(0, false),
+        UsbPdPowerDemand::default(),
+        PHY_NEGOTIATION_POLL_INTERVAL_MS,
+    );
+    assert!(manager.active_no_contract_recovery_allowed());
+}
+
+#[test]
 fn inherited_attach_resume_does_not_repeat_full_fusb_reset() {
     let mut manager = UsbPdSinkManager::new(RecordingI2c::default());
     manager.initialized = true;
@@ -1430,6 +1468,47 @@ fn source_caps_requery_uses_retry_interval_after_probe() {
 
     assert!(!manager.source_caps_requery_due(SOURCE_CAPS_REQUERY_RETRY_MS - 1));
     assert!(manager.source_caps_requery_due(SOURCE_CAPS_REQUERY_RETRY_MS));
+}
+
+#[test]
+fn steady_state_source_caps_requery_does_not_record_recovery_breadcrumb() {
+    let mut manager = UsbPdSinkManager::new(RecordingI2c::default());
+    let active_contract = ActiveContract {
+        kind: ContractKind::Fixed,
+        object_position: 1,
+        voltage_mv: 5_000,
+        current_ma: 500,
+        source_max_current_ma: 3_000,
+        input_current_limit_ma: Some(500),
+        vindpm_mv: Some(4_000),
+    };
+    manager.initialized = true;
+    manager.state.attached = true;
+    manager.state.contract = Some(active_contract);
+    manager.source_capabilities = pd::SourceCapabilities::from_message(&source_caps_message(
+        SpecRevision::Rev30,
+        &[fixed_pdo_raw(5_000, 3_000)],
+    ));
+    manager.contract_tracker.begin_request(active_contract);
+    assert!(manager.contract_tracker.mark_accept_received());
+    assert_eq!(
+        manager.contract_tracker.commit_pending_contract(),
+        Some(active_contract)
+    );
+    manager.last_request_at_ms = 0;
+    manager.last_phy_poll_at_ms = SOURCE_CAPS_REQUERY_DELAY_MS;
+
+    manager.tick(
+        UsbPdPowerDemand::default(),
+        false,
+        SOURCE_CAPS_REQUERY_DELAY_MS,
+    );
+
+    assert_eq!(manager.state.recovery_event, None);
+    assert_eq!(manager.state.recovery_event_counter, 0);
+
+    let i2c = manager.phy.release_i2c();
+    assert_eq!(i2c.get_source_cap_tx_count(), 1);
 }
 
 #[test]

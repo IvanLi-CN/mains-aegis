@@ -303,6 +303,7 @@ where
                     self.recovery_spec_revision(),
                 ) {
                     Ok(()) => {
+                        self.note_recovery_event(UsbPdRecoveryEvent::GetSourceCapSent);
                         self.inherited_source_caps_probe_pending = false;
                         self.last_source_caps_recovery_at_ms = Some(now_ms);
                     }
@@ -329,6 +330,7 @@ where
                     self.recovery_spec_revision(),
                 ) {
                     Ok(()) => {
+                        self.note_recovery_event(UsbPdRecoveryEvent::SoftResetSent);
                         self.source_caps_recovery_attempted = true;
                         self.last_source_caps_recovery_at_ms = Some(now_ms);
                     }
