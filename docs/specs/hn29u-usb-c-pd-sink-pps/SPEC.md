@@ -58,6 +58,7 @@
 - 固定 PDO 策略必须在已启用的 feature 中选择“满足当前功率需求的最低安全电压”，而不是默认拉到最高档。
 - PPS 策略只在未设置 `no-pps` 时启用；目标电压必须跟随系统/充电需求动态调节，并具备迟滞、最小重请求间隔与 keep-alive。
 - 只要 USB-C 口处于 attach 后的协商窗口、合同切换窗口、reset/retry 恢复窗口或 source capabilities 变化窗口，charger 都必须保持禁充；只有输入能力被判定为稳定后，才允许恢复充电。
+- MCU 冷启动时若 USB-C 已经处于 inherited attach，sink manager 不得主动发送 PD Hard Reset；必须先用非破坏式 RX resume、`Get_Source_Cap`、Soft Reset 与稳定 5V fallback 保住系统供电。
 - I2C2 共享后不得破坏前面板初始化、触摸读取或 FUSB302 轮询；中断里仍禁止 I2C 事务。
 
 ### SHOULD
@@ -94,6 +95,7 @@
 - 若 FUSB302 RX FIFO 收到 hard reset / soft reset / retryfail，必须清空 FIFO、重置协商状态并准备重新拉起协商。
 - 若 FUSB302 attach 结果异常（非 `SNK1/SNK2`）或运行中 VBUS 消失，则合同与 unsafe latch 以 detach 语义清零。
 - 若运行时检测到 `unsafe_source`，charger 必须立即停充并拒绝继续高压协商，直到 detach。
+- 若 inherited attach 后迟迟没有 `Source_Capabilities`，恢复阶梯必须保持供电优先：记录 Hard Reset 被抑制，先请求 source caps，再尝试 Soft Reset，随后按稳定 5V fallback 放开受限充电；只有观察到可靠 physical detach/replug 后，才允许恢复主动 Hard Reset 策略。
 
 ## 接口契约（Interfaces & Contracts）
 
@@ -187,6 +189,7 @@ None。
 
 - 风险：`FUSB302B` datasheet 对 spec revision / GoodCRC 的描述更偏 PD2.0，PPS 互操作需真实台架确认；本轮先把 PPS policy 与报文路径接齐，并在 PR 中显式记录互操作风险。
 - 风险：多口电源在功率重分配时可能触发 source capabilities 重广播、reset 或短暂回落默认 5V；USB-C charge gate 若实现不完整，容易在旧合同失效窗口里误充。
+- 风险：若 MCU 由同一 USB-C Source 供电，冷启动继承 attach 期间主动 Hard Reset 会让 Source 短暂移除 VBUS，从而造成 MCU brownout/reset loop；该路径必须默认抑制 Hard Reset，并通过 EEPROM breadcrumb 记录 `boot_inherited_attach` / `hard_reset_inhibited` / recovery TX 事件以支持无日志复盘。
 - 风险：冷启动或 no-contract 恢复窗口若无法得到足够高的 `usb_pd.tick()` 服务频率，协商超时会被主循环其它任务拖长，导致热插拔恢复时间抖动；当前通过协商优先窗口已把 reset 基线压到约 `1.67s`，后续如再扩展主循环负载，需重新验证该窗口仍能保证秒级恢复。
 - 风险：当前完成态依赖 plain-serial + EEPROM breadcrumb 双证据链；若后续改动再次让 monitor 只停在 `boot: stage=main_loop_enter`，必须先修复观测链再判断 PPS 恢复行为。
 - 假设：USB-C 输入安全窗按 `20.5V`（`20V + 500mV ADC 容差窗`）执行；若后续硬件校准数据表明需要更窄或更宽，允许在不改 feature 口径的前提下微调实现常量。

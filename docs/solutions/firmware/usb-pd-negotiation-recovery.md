@@ -90,6 +90,21 @@ This avoids both extremes:
 - waiting too long before trying recovery
 - thrashing the PHY so hard that the source never gets a stable window to answer
 
+### Cold inherited attach must not hard reset the source
+
+When the MCU boots from the same USB-C source that is already attached, a sink-initiated Hard Reset can make the source briefly remove VBUS and reset the MCU again.
+
+**Rule:** do not treat boot-time transient no-CC/no-VBUS samples as proof of a real detach. Only enable active Hard Reset recovery after reliable physical detach evidence or a real replug.
+
+For inherited attach with missing source caps, use the non-destructive ladder:
+
+1. resume PD receive on the detected polarity without full FUSB302 `SW_RESET`
+2. send `Get_Source_Cap`
+3. send Soft Reset if caps still do not arrive
+4. hold the system on conservative stable 5V fallback
+
+Record EEPROM breadcrumbs for `boot_inherited_attach`, `hard_reset_inhibited`, `get_source_cap_sent`, `soft_reset_sent`, and `hard_reset_sent` so the last recovery action is recoverable even when serial logs are unavailable.
+
 ### Defer recovery while RX is still incomplete
 
 If partial RX activity has just been seen, do not immediately fire recovery actions such as hard reset or rearm.
@@ -122,6 +137,7 @@ The following signals were the most useful for debugging this path:
 - `contract_pps`
 - explicit `hard reset` / retry events
 - `no source caps` timeout messages
+- cold-boot recovery breadcrumbs, especially `hard_reset_inhibited` vs `hard_reset_sent`
 - EEPROM breadcrumbs with ordered `seq` and `tick_100ms`
 
 For timing analysis, the only number that matters is:

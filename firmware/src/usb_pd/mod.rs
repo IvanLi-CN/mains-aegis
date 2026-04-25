@@ -27,6 +27,7 @@ const PARTIAL_RX_RECOVERY_GRACE_MS: u32 = 250;
 const RAW_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const CC_ABSENT_DETACH_DEBOUNCE_POLLS: u8 = 2;
+const BOOT_UNATTACHED_STABLE_MS: u32 = 2_000;
 const CHARGER_VBUS_PRESENT_THRESHOLD_MV: u16 = 4_500;
 const CONTRACT_CHARGE_READY_DELAY_MS: u32 = 350;
 const DEFAULT_5V_CHARGE_READY_DELAY_MS: u32 = 500;
@@ -48,6 +49,15 @@ pub struct ActiveContract {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsbPdRecoveryEvent {
+    BootInheritedAttach,
+    HardResetInhibited,
+    GetSourceCapSent,
+    SoftResetSent,
+    HardResetSent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NoContractRecoveryPhase {
     FreshAttach,
     HardResetSent,
@@ -66,6 +76,8 @@ pub struct UsbPdPortState {
     pub input_current_limit_ma: Option<u16>,
     pub vindpm_mv: Option<u16>,
     pub unsafe_source_latched: bool,
+    pub recovery_event: Option<UsbPdRecoveryEvent>,
+    pub recovery_event_counter: u16,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -116,6 +128,7 @@ pub struct UsbPdSinkManager<I2C> {
     charge_ready_at_ms: Option<u32>,
     partial_rx_started_at_ms: Option<u32>,
     observed_unattached_since_boot: bool,
+    boot_unattached_candidate_since_ms: Option<u32>,
 }
 
 fn polarity_name(polarity: CcPolarity) -> &'static str {
@@ -318,6 +331,7 @@ where
             charge_ready_at_ms: None,
             partial_rx_started_at_ms: None,
             observed_unattached_since_boot: false,
+            boot_unattached_candidate_since_ms: None,
         }
     }
 
@@ -388,8 +402,10 @@ where
             self.clear_contract_tracking();
             self.source_capabilities = None;
             if self.state.attached && !self.unsafe_hard_reset_sent {
-                let _ = self.phy.send_hard_reset();
-                self.unsafe_hard_reset_sent = true;
+                if self.phy.send_hard_reset().is_ok() {
+                    self.note_recovery_event(UsbPdRecoveryEvent::HardResetSent);
+                    self.unsafe_hard_reset_sent = true;
+                }
             }
         }
 

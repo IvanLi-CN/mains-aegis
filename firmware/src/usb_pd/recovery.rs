@@ -165,6 +165,8 @@ where
                 fusb302_error_kind(&err)
             );
             self.restart_no_contract_wait_for_caps(now_ms, "hard_reset_send_failed", None);
+        } else {
+            self.note_recovery_event(UsbPdRecoveryEvent::HardResetSent);
         }
     }
 
@@ -174,6 +176,34 @@ where
 
     pub(super) fn mark_unattached_observed(&mut self) {
         self.observed_unattached_since_boot = true;
+        self.boot_unattached_candidate_since_ms = None;
+    }
+
+    pub(super) fn observe_boot_unattached_candidate(
+        &mut self,
+        physically_absent: bool,
+        now_ms: u32,
+    ) {
+        if self.observed_unattached_since_boot {
+            return;
+        }
+
+        if !physically_absent {
+            self.boot_unattached_candidate_since_ms = None;
+            return;
+        }
+
+        let started_at_ms = *self
+            .boot_unattached_candidate_since_ms
+            .get_or_insert(now_ms);
+        if now_ms.wrapping_sub(started_at_ms) >= BOOT_UNATTACHED_STABLE_MS {
+            self.mark_unattached_observed();
+        }
+    }
+
+    pub(super) fn note_recovery_event(&mut self, event: UsbPdRecoveryEvent) {
+        self.state.recovery_event = Some(event);
+        self.state.recovery_event_counter = self.state.recovery_event_counter.wrapping_add(1);
     }
 
     pub(super) fn enter_passive_no_contract_wait(&mut self, now_ms: u32, reason: &'static str) {
@@ -258,7 +288,59 @@ where
         }
 
         if !self.active_no_contract_recovery_allowed() {
-            if !self.source_caps_recovery_attempted {
+            let last_attempt_age_ms = self
+                .last_source_caps_recovery_at_ms
+                .map(|last| now_ms.wrapping_sub(last));
+
+            if self.last_source_caps_recovery_at_ms.is_none() {
+                esp_println::println!(
+                    "usb_pd: no source caps after inherited attach, requesting source caps waited_ms={} tx_spec_rev_bits={}",
+                    waited_ms,
+                    self.tx_spec_revision.bits()
+                );
+                warn!(
+                    "usb_pd: inherited attach missing source caps, suppress hard reset and request caps waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                    waited_ms,
+                    self.tx_spec_revision.bits()
+                );
+                self.note_recovery_event(UsbPdRecoveryEvent::HardResetInhibited);
+                if let Err(err) = self.send_control_message(
+                    ControlMessageType::GetSourceCap,
+                    self.recovery_spec_revision(),
+                ) {
+                    warn!(
+                        "usb_pd: inherited get_source_cap failed err={}",
+                        fusb302_error_kind(&err)
+                    );
+                }
+                self.state.recovery_event = Some(UsbPdRecoveryEvent::HardResetInhibited);
+                self.last_source_caps_recovery_at_ms = Some(now_ms);
+                return;
+            }
+
+            if !self.source_caps_recovery_attempted
+                && last_attempt_age_ms.is_some_and(|age| age >= SOURCE_CAPS_REQUERY_DELAY_MS)
+            {
+                warn!(
+                    "usb_pd: inherited attach still missing source caps, sending soft reset waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                    waited_ms,
+                    self.tx_spec_revision.bits()
+                );
+                if let Err(err) = self.send_control_message(
+                    ControlMessageType::SoftReset,
+                    self.recovery_spec_revision(),
+                ) {
+                    warn!(
+                        "usb_pd: inherited soft reset failed err={}",
+                        fusb302_error_kind(&err)
+                    );
+                }
+                self.source_caps_recovery_attempted = true;
+                self.last_source_caps_recovery_at_ms = Some(now_ms);
+                return;
+            }
+
+            if self.source_caps_recovery_attempted {
                 esp_println::println!(
                     "usb_pd: no source caps after inherited attach, holding 5v until replug waited_ms={} tx_spec_rev_bits={}",
                     waited_ms,
@@ -269,8 +351,6 @@ where
                     waited_ms,
                     self.tx_spec_revision.bits()
                 );
-                self.source_caps_recovery_attempted = true;
-                self.last_source_caps_recovery_at_ms = Some(now_ms);
             }
             return;
         }

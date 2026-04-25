@@ -311,6 +311,11 @@ enum PdBreadcrumbEvent {
     VbusPresent = 6,
     VbusLost = 7,
     StateChange = 8,
+    BootInheritedAttach = 9,
+    HardResetInhibited = 10,
+    GetSourceCapSent = 11,
+    SoftResetSent = 12,
+    HardResetSent = 13,
 }
 
 impl PdBreadcrumbEvent {
@@ -328,6 +333,23 @@ impl PdBreadcrumbEvent {
             Self::VbusPresent => "vbus_present",
             Self::VbusLost => "vbus_lost",
             Self::StateChange => "state_change",
+            Self::BootInheritedAttach => "boot_inherited_attach",
+            Self::HardResetInhibited => "hard_reset_inhibited",
+            Self::GetSourceCapSent => "get_source_cap_sent",
+            Self::SoftResetSent => "soft_reset_sent",
+            Self::HardResetSent => "hard_reset_sent",
+        }
+    }
+}
+
+impl From<usb_pd::UsbPdRecoveryEvent> for PdBreadcrumbEvent {
+    fn from(value: usb_pd::UsbPdRecoveryEvent) -> Self {
+        match value {
+            usb_pd::UsbPdRecoveryEvent::BootInheritedAttach => Self::BootInheritedAttach,
+            usb_pd::UsbPdRecoveryEvent::HardResetInhibited => Self::HardResetInhibited,
+            usb_pd::UsbPdRecoveryEvent::GetSourceCapSent => Self::GetSourceCapSent,
+            usb_pd::UsbPdRecoveryEvent::SoftResetSent => Self::SoftResetSent,
+            usb_pd::UsbPdRecoveryEvent::HardResetSent => Self::HardResetSent,
         }
     }
 }
@@ -404,6 +426,11 @@ impl PdBreadcrumbRecordV1 {
             6 => PdBreadcrumbEvent::VbusPresent,
             7 => PdBreadcrumbEvent::VbusLost,
             8 => PdBreadcrumbEvent::StateChange,
+            9 => PdBreadcrumbEvent::BootInheritedAttach,
+            10 => PdBreadcrumbEvent::HardResetInhibited,
+            11 => PdBreadcrumbEvent::GetSourceCapSent,
+            12 => PdBreadcrumbEvent::SoftResetSent,
+            13 => PdBreadcrumbEvent::HardResetSent,
             _ => return None,
         };
         let contract_kind = match bytes[11] {
@@ -513,6 +540,9 @@ fn pd_breadcrumb_event_from_states(
     previous: usb_pd::UsbPdPortState,
     current: usb_pd::UsbPdPortState,
 ) -> Option<PdBreadcrumbEvent> {
+    if previous.recovery_event_counter != current.recovery_event_counter {
+        return current.recovery_event.map(PdBreadcrumbEvent::from);
+    }
     if !previous.attached && current.attached {
         return Some(PdBreadcrumbEvent::Attach);
     }

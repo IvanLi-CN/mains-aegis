@@ -40,8 +40,11 @@ where
         let hard_reset_recovering =
             self.in_no_contract_hard_reset_sent() || self.in_no_contract_hard_reset_wait();
 
-        if !self.state.attached && (detected_attach_polarity.is_none() || !vbus_present) {
-            self.mark_unattached_observed();
+        if !self.state.attached {
+            self.observe_boot_unattached_candidate(
+                detected_attach_polarity.is_none() && !vbus_present,
+                now_ms,
+            );
         }
 
         if self.state.attached
@@ -123,15 +126,6 @@ where
             self.clear_contract_tracking();
             self.source_capabilities = None;
             self.disarm_charge_ready("attach");
-            if let Err(err) = self.phy.init_sink(self.tx_spec_revision) {
-                warn!(
-                    "usb_pd: attach reinit failed err={}",
-                    fusb302_error_kind(&err)
-                );
-                self.initialized = false;
-                self.state.controller_ready = false;
-                return;
-            }
             if let Err(err) = self.phy.enable_pd_receive(polarity, self.tx_spec_revision) {
                 warn!("usb_pd: enable rx failed err={}", fusb302_error_kind(&err));
                 self.initialized = false;
@@ -143,13 +137,16 @@ where
             self.state.controller_ready = true;
             self.next_retry_at_ms = 0;
             let switches1 = self.phy.read_switches1().ok();
+            if !self.active_no_contract_recovery_allowed() {
+                self.note_recovery_event(UsbPdRecoveryEvent::BootInheritedAttach);
+            }
             esp_println::println!(
-                "usb_pd: attached polarity={} spec_rev_bits={} action=full_reinit",
+                "usb_pd: attached polarity={} spec_rev_bits={} action=rx_resume",
                 polarity_name(polarity),
                 self.tx_spec_revision.bits()
             );
             info!(
-                "usb_pd: attached polarity={} switches1={=?} spec_rev_bits={=u8} action=full_reinit",
+                "usb_pd: attached polarity={} switches1={=?} spec_rev_bits={=u8} action=rx_resume",
                 polarity_name(polarity),
                 switches1,
                 self.tx_spec_revision.bits()
@@ -580,6 +577,11 @@ where
             message_id
         );
         self.phy.send_message(&message)?;
+        if matches!(kind, ControlMessageType::GetSourceCap) {
+            self.note_recovery_event(UsbPdRecoveryEvent::GetSourceCapSent);
+        } else if matches!(kind, ControlMessageType::SoftReset) {
+            self.note_recovery_event(UsbPdRecoveryEvent::SoftResetSent);
+        }
         if matches!(kind, ControlMessageType::SoftReset) {
             self.message_id = 0;
         } else {
@@ -661,6 +663,7 @@ where
         self.state.vbus_present = None;
         self.state.polarity = None;
         self.unsafe_hard_reset_sent = false;
+        self.boot_unattached_candidate_since_ms = None;
     }
 
     pub(super) fn arm_charge_ready_after(
@@ -759,6 +762,7 @@ where
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         self.partial_rx_started_at_ms = None;
+        self.boot_unattached_candidate_since_ms = None;
         if detach {
             self.mark_unattached_observed();
             self.tx_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
