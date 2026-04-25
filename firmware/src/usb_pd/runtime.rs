@@ -43,7 +43,6 @@ where
         if !self.state.attached {
             self.observe_boot_unattached_candidate(
                 detected_attach_polarity.is_none() && !vbus_present,
-                now_ms,
             );
         }
 
@@ -664,7 +663,6 @@ where
         self.state.vbus_present = None;
         self.state.polarity = None;
         self.unsafe_hard_reset_sent = false;
-        self.boot_unattached_candidate_since_ms = None;
     }
 
     pub(super) fn arm_charge_ready_after(
@@ -764,7 +762,6 @@ where
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         self.partial_rx_started_at_ms = None;
-        self.boot_unattached_candidate_since_ms = None;
         if detach {
             self.mark_unattached_observed();
             self.tx_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;

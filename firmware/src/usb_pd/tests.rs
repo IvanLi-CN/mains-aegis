@@ -765,17 +765,13 @@ fn first_attach_after_observed_detach_can_still_issue_hard_reset_recovery() {
 }
 
 #[test]
-fn boot_unattached_must_be_stable_before_active_recovery_is_allowed() {
+fn boot_unattached_physical_absence_allows_active_recovery_before_first_attach() {
     let mut manager = UsbPdSinkManager::new(NoopI2c);
 
-    manager.observe_boot_unattached_candidate(true, 1_000);
+    manager.observe_boot_unattached_candidate(false);
     assert!(!manager.active_no_contract_recovery_allowed());
 
-    manager.observe_boot_unattached_candidate(false, 1_500);
-    assert!(!manager.active_no_contract_recovery_allowed());
-
-    manager.observe_boot_unattached_candidate(true, 2_000);
-    manager.observe_boot_unattached_candidate(true, 2_000 + BOOT_UNATTACHED_STABLE_MS);
+    manager.observe_boot_unattached_candidate(true);
     assert!(manager.active_no_contract_recovery_allowed());
 }
 

@@ -27,7 +27,6 @@ const PARTIAL_RX_RECOVERY_GRACE_MS: u32 = 250;
 const RAW_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const CC_ABSENT_DETACH_DEBOUNCE_POLLS: u8 = 2;
-const BOOT_UNATTACHED_STABLE_MS: u32 = PHY_POLL_INTERVAL_MS * 2;
 const CHARGER_VBUS_PRESENT_THRESHOLD_MV: u16 = 4_500;
 const CONTRACT_CHARGE_READY_DELAY_MS: u32 = 350;
 const DEFAULT_5V_CHARGE_READY_DELAY_MS: u32 = 500;
@@ -129,7 +128,6 @@ pub struct UsbPdSinkManager<I2C> {
     charge_ready_at_ms: Option<u32>,
     partial_rx_started_at_ms: Option<u32>,
     observed_unattached_since_boot: bool,
-    boot_unattached_candidate_since_ms: Option<u32>,
 }
 
 fn polarity_name(polarity: CcPolarity) -> &'static str {
@@ -333,7 +331,6 @@ where
             charge_ready_at_ms: None,
             partial_rx_started_at_ms: None,
             observed_unattached_since_boot: false,
-            boot_unattached_candidate_since_ms: None,
         }
     }
 

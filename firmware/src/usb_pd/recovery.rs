@@ -176,27 +176,10 @@ where
 
     pub(super) fn mark_unattached_observed(&mut self) {
         self.observed_unattached_since_boot = true;
-        self.boot_unattached_candidate_since_ms = None;
     }
 
-    pub(super) fn observe_boot_unattached_candidate(
-        &mut self,
-        physically_absent: bool,
-        now_ms: u32,
-    ) {
-        if self.observed_unattached_since_boot {
-            return;
-        }
-
-        if !physically_absent {
-            self.boot_unattached_candidate_since_ms = None;
-            return;
-        }
-
-        let started_at_ms = *self
-            .boot_unattached_candidate_since_ms
-            .get_or_insert(now_ms);
-        if now_ms.wrapping_sub(started_at_ms) >= BOOT_UNATTACHED_STABLE_MS {
+    pub(super) fn observe_boot_unattached_candidate(&mut self, physically_absent: bool) {
+        if !self.observed_unattached_since_boot && physically_absent {
             self.mark_unattached_observed();
         }
     }
