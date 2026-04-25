@@ -47,7 +47,8 @@ pub struct UsbPdPowerDemand {
 impl UsbPdPowerDemand {
     pub fn required_power_mw(self) -> u32 {
         let charge_power_mw = if self.charging_enabled {
-            self.requested_charge_voltage_mv as u32 * self.requested_charge_current_ma as u32
+            (self.requested_charge_voltage_mv as u32 * self.requested_charge_current_ma as u32)
+                / 1000
         } else {
             0
         };

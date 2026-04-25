@@ -81,7 +81,8 @@ pub struct UsbPdPowerDemand {
 impl UsbPdPowerDemand {
     pub fn required_power_mw(self) -> u32 {
         let charge_power_mw = if self.charging_enabled {
-            self.requested_charge_voltage_mv as u32 * self.requested_charge_current_ma as u32
+            (self.requested_charge_voltage_mv as u32 * self.requested_charge_current_ma as u32)
+                / 1000
         } else {
             0
         };
@@ -114,6 +115,7 @@ pub struct UsbPdSinkManager<I2C> {
     unsafe_hard_reset_sent: bool,
     charge_ready_at_ms: Option<u32>,
     partial_rx_started_at_ms: Option<u32>,
+    observed_unattached_since_boot: bool,
 }
 
 fn polarity_name(polarity: CcPolarity) -> &'static str {
@@ -315,6 +317,7 @@ where
             unsafe_hard_reset_sent: false,
             charge_ready_at_ms: None,
             partial_rx_started_at_ms: None,
+            observed_unattached_since_boot: false,
         }
     }
 

@@ -72,6 +72,8 @@ const BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY: Duration = Duration::from_secs(34)
 const BMS_ACTIVATION_AUTO_DELAY: Duration = Duration::from_secs(30);
 const BMS_BOOT_DIAG_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
 const BMS_BOOT_DIAG_SHIP_RESET_SETTLE: Duration = Duration::from_millis(800);
+const CHARGER_LIMIT_DIAG_PERIOD: Duration = Duration::from_secs(1);
+const CHARGER_LIMIT_DIAG_MARGIN_MA: i16 = 200;
 // Self-check recovery must stay user-driven: show the issue first, then wait for explicit
 // confirmation from the front panel before attempting any BQ40 wake/recovery sequence.
 const BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED: bool = false;
@@ -2956,6 +2958,7 @@ pub struct PowerManager<'d, I2C> {
 
     chg_next_poll_at: Instant,
     chg_next_retry_at: Option<Instant>,
+    chg_limit_diag_next_at: Instant,
     chg_enabled: bool,
     charger_allowed: bool,
     charge_policy: ChargePolicyMemory,
@@ -3431,6 +3434,7 @@ where
 
             chg_next_poll_at: now,
             chg_next_retry_at: if charger_allowed { Some(now) } else { None },
+            chg_limit_diag_next_at: now,
             chg_enabled: false,
             charger_allowed,
             charge_policy: ChargePolicyMemory::default(),
@@ -4477,27 +4481,49 @@ where
         let charging_active = self.current_charging_requested();
         match action {
             ManualChargeUiAction::SetTarget(target) => {
-                if charging_active {
-                    defmt::info!("manual_charge: ignore set_target reason=locked");
-                } else if self.manual_charge_prefs.target != target {
+                if self.manual_charge_prefs.target != target {
                     self.manual_charge_prefs.target = target;
                     self.persist_manual_charge_prefs();
+                    if charging_active {
+                        self.chg_next_poll_at = now;
+                    }
+                    defmt::info!(
+                        "manual_charge: set_target target={} active={=bool}",
+                        self.manual_charge_target_label(),
+                        charging_active
+                    );
                 }
             }
             ManualChargeUiAction::SetSpeed(speed) => {
-                if charging_active {
-                    defmt::info!("manual_charge: ignore set_speed reason=locked");
-                } else if self.manual_charge_prefs.speed != speed {
+                if self.manual_charge_prefs.speed != speed {
                     self.manual_charge_prefs.speed = speed;
                     self.persist_manual_charge_prefs();
+                    if charging_active {
+                        self.chg_next_poll_at = now;
+                    }
+                    defmt::info!(
+                        "manual_charge: set_speed speed_ma={=u16} active={=bool}",
+                        self.manual_charge_prefs.speed.ichg_ma(),
+                        charging_active
+                    );
                 }
             }
             ManualChargeUiAction::SetTimerLimit(timer_limit) => {
-                if charging_active {
-                    defmt::info!("manual_charge: ignore set_timer reason=locked");
-                } else if self.manual_charge_prefs.timer_limit != timer_limit {
+                if self.manual_charge_prefs.timer_limit != timer_limit {
                     self.manual_charge_prefs.timer_limit = timer_limit;
+                    if self.manual_charge_runtime.active {
+                        self.manual_charge_runtime.deadline =
+                            Some(now + manual_charge_timer_duration(timer_limit));
+                    }
                     self.persist_manual_charge_prefs();
+                    if charging_active {
+                        self.chg_next_poll_at = now;
+                    }
+                    defmt::info!(
+                        "manual_charge: set_timer timer_h={=u8} active={=bool}",
+                        self.manual_charge_prefs.timer_limit.hours(),
+                        charging_active
+                    );
                 }
             }
             ManualChargeUiAction::Start => {
@@ -4575,6 +4601,71 @@ where
 
     fn manual_charge_target_label(&self) -> &'static str {
         self.manual_charge_prefs.target.label()
+    }
+
+    fn maybe_log_charger_limit_mismatch(
+        &mut self,
+        now: Instant,
+        allow_charge: bool,
+        policy_target_ichg_ma: Option<u16>,
+        applied_ichg_ma: Option<u16>,
+        applied_iindpm_ma: Option<u16>,
+        raw_ibus_adc_ma: Option<i16>,
+        ibat_adc_ma: Option<i16>,
+        status0: u8,
+        status1: u8,
+    ) {
+        if !allow_charge || now < self.chg_limit_diag_next_at {
+            return;
+        }
+
+        let target_ichg_ma = match policy_target_ichg_ma {
+            Some(v) => v as i32,
+            None => return,
+        };
+        let actual_ibat_ma = ibat_adc_ma.map(|v| i32::from(v.abs()));
+        let actual_ibus_ma = raw_ibus_adc_ma.map(|v| i32::from(v.abs()));
+
+        let charge_limit_mismatch = actual_ibat_ma
+            .map(|v| v > target_ichg_ma + i32::from(CHARGER_LIMIT_DIAG_MARGIN_MA))
+            .unwrap_or(false);
+        let input_limit_mismatch = matches!(
+            (applied_iindpm_ma, actual_ibus_ma),
+            (Some(limit_ma), Some(actual_ma))
+                if actual_ma > i32::from(limit_ma) + i32::from(CHARGER_LIMIT_DIAG_MARGIN_MA)
+        );
+
+        if !(charge_limit_mismatch || input_limit_mismatch) {
+            return;
+        }
+
+        self.chg_limit_diag_next_at = now + CHARGER_LIMIT_DIAG_PERIOD;
+
+        let reg03 = bq25792::read_u16(&mut self.i2c, bq25792::reg::CHARGE_CURRENT_LIMIT).ok();
+        let reg06 = bq25792::read_u16(&mut self.i2c, bq25792::reg::INPUT_CURRENT_LIMIT).ok();
+        let reg10 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_1).ok();
+        let reg14 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_5).ok();
+
+        defmt::warn!(
+            "charger: limit_mismatch manual_active={=bool} manual_speed_ma={=u16} policy_target_ichg_ma={=?} applied_ichg_ma={=?} applied_iindpm_ma={=?} raw_ibus_adc_ma={=?} ibat_adc_ma={=?} reg03={=?} reg03_ma={=?} reg06={=?} reg06_ma={=?} reg10={=?} reg14={=?} chg_stat={} vbus_stat={} st0=0x{=u8:x} st1=0x{=u8:x}",
+            self.manual_charge_runtime.active,
+            self.manual_charge_prefs.speed.ichg_ma(),
+            policy_target_ichg_ma,
+            applied_ichg_ma,
+            applied_iindpm_ma,
+            raw_ibus_adc_ma,
+            ibat_adc_ma,
+            reg03,
+            reg03.map(bq25792::decode_charge_current_limit_ma),
+            reg06,
+            reg06.map(bq25792::decode_input_current_limit_ma),
+            reg10,
+            reg14,
+            bq25792::decode_chg_stat(bq25792::status1::chg_stat(status1)),
+            bq25792::decode_vbus_stat(bq25792::status1::vbus_stat(status1)),
+            status0,
+            status1
+        );
     }
 
     fn stop_manual_charge_session(&mut self, reason: ManualChargeStopReason, inhibit: bool) {
@@ -9225,6 +9316,18 @@ where
             }
             UsbPdInputLimitUpdate::None => {}
         }
+
+        self.maybe_log_charger_limit_mismatch(
+            now,
+            allow_charge,
+            policy_target_ichg_ma,
+            applied_ichg_ma,
+            applied_iindpm_ma,
+            raw_ibus_adc_ma,
+            ibat_adc_ma,
+            status0,
+            status1,
+        );
 
         if !(auto_force_charge || activation_pending) {
             defmt::info!(

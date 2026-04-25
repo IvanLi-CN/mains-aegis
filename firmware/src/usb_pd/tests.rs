@@ -188,6 +188,20 @@ fn required_power_includes_system_load_when_charge_is_disabled() {
 }
 
 #[test]
+fn required_power_includes_charge_power_in_mw_when_enabled() {
+    let demand = UsbPdPowerDemand {
+        requested_charge_voltage_mv: 16_800,
+        requested_charge_current_ma: 500,
+        system_load_power_mw: 2_500,
+        battery_voltage_mv: Some(15_000),
+        measured_input_voltage_mv: None,
+        charging_enabled: true,
+    };
+
+    assert_eq!(demand.required_power_mw(), 10_900);
+}
+
+#[test]
 fn peer_revision_downgrades_transmit_revision() {
     let mut manager = UsbPdSinkManager::new(NoopI2c);
     assert_eq!(manager.tx_spec_revision, SpecRevision::Rev30);
@@ -563,6 +577,54 @@ fn persistent_no_source_caps_rearms_phy_after_hard_timeout() {
     assert!(manager.state.controller_ready);
     assert!(!manager.source_caps_recovery_attempted);
     assert_eq!(manager.last_source_caps_recovery_at_ms, None);
+}
+
+#[test]
+fn inherited_attach_timeout_holds_5v_and_skips_hard_reset_until_replug() {
+    let mut manager = UsbPdSinkManager::new(NoopI2c);
+    manager.state.attached = true;
+    manager.state.enabled = true;
+    manager.state.controller_ready = true;
+    manager.state.vbus_present = Some(true);
+    manager.state.polarity = Some(CcPolarity::Cc1);
+    manager.attached_at_ms = Some(0);
+
+    manager.maybe_recover_missing_source_caps(
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS,
+    );
+
+    assert!(manager.state.attached);
+    assert!(!manager.in_no_contract_hard_reset_sent());
+    assert!(!manager.in_no_contract_hard_reset_wait());
+    assert!(manager.source_caps_recovery_attempted);
+
+    manager.maybe_arm_default_5v_charge_ready(SOURCE_CAPS_WAIT_TIMEOUT_MS);
+    assert_eq!(
+        manager.charge_ready_at_ms,
+        Some(SOURCE_CAPS_WAIT_TIMEOUT_MS + DEFAULT_5V_CHARGE_READY_DELAY_MS)
+    );
+}
+
+#[test]
+fn first_attach_after_observed_detach_can_still_issue_hard_reset_recovery() {
+    let mut manager = UsbPdSinkManager::new(NoopI2c);
+    manager.mark_unattached_observed();
+    manager.state.attached = true;
+    manager.state.enabled = true;
+    manager.state.controller_ready = true;
+    manager.state.vbus_present = Some(true);
+    manager.state.polarity = Some(CcPolarity::Cc1);
+    manager.attached_at_ms = Some(0);
+
+    manager.maybe_recover_missing_source_caps(
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS,
+    );
+
+    assert!(manager.state.attached);
+    assert!(manager.in_no_contract_hard_reset_sent());
+    assert!(!manager.source_caps_recovery_attempted);
 }
 
 fn raw_vbus_loss_rearms_attach_and_source_caps_recovery_on_replug() {

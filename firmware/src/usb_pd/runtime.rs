@@ -40,6 +40,10 @@ where
         let hard_reset_recovering =
             self.in_no_contract_hard_reset_sent() || self.in_no_contract_hard_reset_wait();
 
+        if !self.state.attached && (detected_attach_polarity.is_none() || !vbus_present) {
+            self.mark_unattached_observed();
+        }
+
         if self.state.attached
             && cc_absent_detach_debounce_elapsed(self.consecutive_cc_absent_polls)
         {
@@ -224,6 +228,12 @@ where
                 snapshot.retry_failed()
             );
             if snapshot.hard_reset_received() && !had_active_contract {
+                if !self.active_no_contract_recovery_allowed() {
+                    self.enter_passive_no_contract_wait(now_ms, "peer_hard_reset_inherited_attach");
+                    self.state.vbus_present = Some(vbus_present);
+                    return;
+                }
+
                 let prior_wait_started_at_ms = if self.in_no_contract_hard_reset_wait() {
                     self.no_contract_phase_started_at_ms
                 } else {
@@ -241,6 +251,11 @@ where
 
             self.reset_contract_state(false);
             if snapshot.retry_failed() && !had_active_contract && had_source_caps {
+                if !self.active_no_contract_recovery_allowed() {
+                    self.enter_passive_no_contract_wait(now_ms, "retry_fail_inherited_attach");
+                    self.state.vbus_present = Some(vbus_present);
+                    return;
+                }
                 if let Err(err) = self.phy.reset_pd_logic() {
                     warn!(
                         "usb_pd: retry-fail pd_reset failed err={}",
@@ -745,6 +760,7 @@ where
         self.last_source_caps_recovery_at_ms = None;
         self.partial_rx_started_at_ms = None;
         if detach {
+            self.mark_unattached_observed();
             self.tx_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
             self.peer_spec_revision = pd::FUSB302_MAX_SPEC_REVISION;
             self.state.attached = false;

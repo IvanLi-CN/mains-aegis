@@ -487,7 +487,9 @@ pub fn required_input_current_ma(power_mw: u32, input_voltage_mv: u16) -> u16 {
     }
 
     let adjusted_power_mw = power_mw.saturating_mul(POWER_EFFICIENCY_NUM) / POWER_EFFICIENCY_DEN;
-    let current_ma = adjusted_power_mw.div_ceil(input_voltage_mv as u32);
+    let current_ma = adjusted_power_mw
+        .saturating_mul(1000)
+        .div_ceil(input_voltage_mv as u32);
     current_ma.min(u16::MAX as u32) as u16
 }
 
@@ -816,6 +818,41 @@ mod tests {
         let plan = select_contract(&LOCAL_FIXED_AND_PPS, &caps, demand).unwrap();
         assert_eq!(plan.contract.kind, ContractKind::Pps);
         assert_eq!(plan.contract.voltage_mv, 15_450);
+    }
+
+    #[test]
+    fn required_input_current_uses_milliunit_conversion() {
+        assert_eq!(required_input_current_ma(2_500, 16_800), 172);
+        assert_eq!(required_input_current_ma(10_900, 16_800), 747);
+    }
+
+    #[test]
+    fn charging_disabled_pps_selection_requests_more_than_minimum_for_system_load() {
+        let caps = build_source_caps(
+            [
+                fixed_pdo_raw(5_000, 3_000),
+                pps_apdo_raw(5_000, 18_000, 3_000),
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
+            2,
+        );
+        let demand = UsbPdPowerDemand {
+            requested_charge_voltage_mv: 16_800,
+            requested_charge_current_ma: 500,
+            system_load_power_mw: 2_500,
+            battery_voltage_mv: Some(15_200),
+            measured_input_voltage_mv: None,
+            charging_enabled: false,
+        };
+
+        let plan = select_contract(&LOCAL_FIXED_AND_PPS, &caps, demand).unwrap();
+        assert_eq!(plan.contract.kind, ContractKind::Pps);
+        assert_eq!(plan.contract.voltage_mv, 15_450);
+        assert_eq!(plan.contract.current_ma, 187);
     }
 
     #[test]

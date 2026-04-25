@@ -168,6 +168,29 @@ where
         }
     }
 
+    pub(super) fn active_no_contract_recovery_allowed(&self) -> bool {
+        self.observed_unattached_since_boot
+    }
+
+    pub(super) fn mark_unattached_observed(&mut self) {
+        self.observed_unattached_since_boot = true;
+    }
+
+    pub(super) fn enter_passive_no_contract_wait(&mut self, now_ms: u32, reason: &'static str) {
+        self.reset_contract_state(false);
+        self.attached_at_ms = Some(now_ms);
+        self.no_contract_phase_started_at_ms = Some(now_ms);
+        self.no_contract_recovery_phase = Some(NoContractRecoveryPhase::FreshAttach);
+        self.source_caps_recovery_attempted = false;
+        self.last_source_caps_requery_at_ms = None;
+        self.last_source_caps_recovery_at_ms = None;
+        info!(
+            "usb_pd: passive_wait_for_caps reason={} waiting_for_replug={=bool}",
+            reason,
+            !self.active_no_contract_recovery_allowed()
+        );
+    }
+
     pub(super) fn maybe_recover_missing_source_caps(
         &mut self,
         _demand: UsbPdPowerDemand,
@@ -231,6 +254,24 @@ where
         }
 
         if waited_ms < SOURCE_CAPS_WAIT_TIMEOUT_MS {
+            return;
+        }
+
+        if !self.active_no_contract_recovery_allowed() {
+            if !self.source_caps_recovery_attempted {
+                esp_println::println!(
+                    "usb_pd: no source caps after inherited attach, holding 5v until replug waited_ms={} tx_spec_rev_bits={}",
+                    waited_ms,
+                    self.tx_spec_revision.bits()
+                );
+                warn!(
+                    "usb_pd: no source caps after inherited attach, suppress hard reset until replug waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                    waited_ms,
+                    self.tx_spec_revision.bits()
+                );
+                self.source_caps_recovery_attempted = true;
+                self.last_source_caps_recovery_at_ms = Some(now_ms);
+            }
             return;
         }
 
