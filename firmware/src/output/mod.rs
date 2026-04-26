@@ -4783,10 +4783,6 @@ where
             return;
         }
 
-        if now < self.chg_limit_diag_next_at {
-            return;
-        }
-
         let vindpm = (status0 & bq25792::status0::VINDPM_STAT) != 0;
         let iindpm = (status0 & bq25792::status0::IINDPM_STAT) != 0;
         let diag_kind = charger_delivery_diag_kind(
@@ -4821,6 +4817,10 @@ where
             }
         } else {
             self.chg_under_delivery_since_at = None;
+        }
+
+        if now < self.chg_limit_diag_next_at {
+            return;
         }
 
         self.chg_limit_diag_next_at = now

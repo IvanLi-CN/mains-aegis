@@ -6755,7 +6755,7 @@ fn manual_charge_mode_text(data: DashboardLiveData) -> &'static str {
 }
 
 fn manual_charge_control_active(data: DashboardLiveData) -> bool {
-    data.detail.manual_charge.runtime.active || charger_active_value(data) == Some(true)
+    data.detail.manual_charge.runtime.active
 }
 
 const fn manual_charge_stop_footer_text(reason: ManualChargeStopReason) -> &'static str {
@@ -11897,6 +11897,19 @@ mod tests {
 
         assert!(manual_charge_settings_locked(live));
         assert_eq!(manual_charge_action_label(live), "STOP");
+    }
+
+    #[test]
+    fn manual_page_allows_takeover_start_while_auto_charging() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.dashboard_detail.charger_active = Some(true);
+        snapshot.bq25792_allow_charge = Some(true);
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+
+        assert_eq!(manual_charge_mode_text(live), "AUTO CHG");
+        assert!(!manual_charge_settings_locked(live));
+        assert_eq!(manual_charge_action_label(live), "START");
     }
 
     #[test]

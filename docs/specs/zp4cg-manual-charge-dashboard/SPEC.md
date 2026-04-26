@@ -87,7 +87,7 @@
   - `TIMER` row：`1h / 2h / 6h`
 - 三组字段不再额外包一层 row card，只保留左侧标签与右侧可点选项，减少小屏视觉噪声。
 - 底部统一为唯一操作条：`BACK + footer notice + START/STOP`。
-- 当系统当前正在充电时，设置区锁定只读，只允许 `STOP/BACK`。
+- 仅当手动会话 `active=true` 时，设置区锁定只读，只允许 `STOP/BACK`；系统自动充电但手动会话未 active 时，页面仍显示 `START` 并允许调整偏好，点击后以 `takeover=true` 接管自动充电。
 
 ### 3. 目标定义与停止条件
 
@@ -181,6 +181,7 @@
 - `front-panel-preview`
   - `dashboard-manual-charge-default`
   - `dashboard-manual-charge-active`
+  - `dashboard-manual-charge-auto-charging`
   - `dashboard-manual-charge-stop-hold`
   - `dashboard-manual-charge-reset-auto`
   - `dashboard-manual-charge-blocked`
@@ -191,7 +192,8 @@
 - Given `MANUAL CHARGE`，When 点击 `BACK` 或按 `LEFT/CENTER`，Then 返回 `CHARGER DETAIL`。
 - Given EEPROM 首次为空、CRC 失败或 schema 不兼容，When 进入手动页，Then 默认选中 `100% / 500mA / 2h`。
 - Given 用户修改偏好并重启，When 再次进入手动页，Then 能读回相同偏好。
-- Given 系统已在自动充电，When 进入手动页，Then 动作按钮显示 `STOP` 且设置锁定。
+- Given 系统已在自动充电但手动会话尚未 active，When 进入手动页，Then 动作按钮显示 `START` 且设置保持可调；用户点击后进入 `takeover=true` 的手动会话。
+- Given 手动会话已 active，When 进入手动页，Then 动作按钮显示 `STOP` 且设置锁定。
 - Given 用户在本次运行中执行 `STOP`，When charger 下一轮 poll，Then 自动策略不得立刻恢复充电。
 - Given MCU 在手动会话中复位，When 系统重新启动，Then 手动会话状态与停止抑制必须全部清空。
 - Given 用户执行手动充电 `START/STOP`，When monitor 正在运行，Then 普通串口输出必须记录 `manual_charge` 事件、目标档位、速度、计时器与 takeover 状态，便于确认前面板动作已送达运行态。
@@ -208,7 +210,7 @@
 - 已将手动 `START/STOP` 事件镜像到普通串口输出，便于在不依赖 defmt 解码的 monitor 中确认手动动作是否进入固件。
 - 已为手动 `1A` 场景补齐 under-delivery 诊断：当目标电流已生效但实际充电电流持续不足时，日志保留手动档位、目标/实测电流、PD 合约、BQ25792 限流寄存器和 `IINDPM/VINDPM` 状态。
 - 已在 EEPROM 中实现 `schema_version + record table + ManualChargePrefsV1` 布局，并在设置变化时仅写入 prefs record，避免每次偏好调整都重写 superblock / table。
-- 已扩展 `front-panel-preview`，覆盖默认、活动、停止抑制、复位后回自动、以及安全阻断 5 类场景，并与最终 UI 配色/对齐同步。
+- 已扩展 `front-panel-preview`，覆盖默认、手动活动、自动充电待接管、停止抑制、复位后回自动、以及安全阻断场景，并与最终 UI 配色/对齐同步。
 
 ## 验证记录
 
@@ -217,13 +219,16 @@
 - `cargo test --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/firmware/host-unit-tests/Cargo.toml`
 - `cargo build --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/tools/front-panel-preview/Cargo.toml`
 - `cargo +esp check --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/firmware/Cargo.toml --bin esp-firmware --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
+- `cargo +esp build --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/firmware/Cargo.toml --bin esp-firmware --release --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
 - `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode standby --scenario dashboard-manual-charge-default --out-dir /tmp/mains-aegis-manual-charge-final`
 - `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode standby --scenario dashboard-manual-charge-active --out-dir /tmp/mains-aegis-manual-charge-final`
+- `cargo run --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --mode standby --scenario dashboard-manual-charge-auto-charging --out-dir /tmp/mains-aegis-manual-charge-takeover-preview`
 - `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode standby --scenario dashboard-manual-charge-stop-hold --out-dir /tmp/mains-aegis-manual-charge-final`
 - `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode standby --scenario dashboard-manual-charge-reset-auto --out-dir /tmp/mains-aegis-manual-charge-final`
 - `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode standby --scenario dashboard-manual-charge-blocked --out-dir /tmp/mains-aegis-manual-charge-final`
 - `mcu-agentd --non-interactive flash esp`
-- `mcu-agentd --non-interactive monitor esp --reset`
+- `mcu-agentd --non-interactive reset esp`
+- `mcu-agentd --non-interactive monitor esp --from-start`
 
 ## Visual Evidence
 
@@ -236,6 +241,10 @@
 ### Active
 
 ![Manual charge active](./assets/manual-charge-active.png)
+
+### Auto charging takeover
+
+![Manual charge auto charging takeover](./assets/manual-charge-auto-charging.png)
 
 ### Stop hold
 

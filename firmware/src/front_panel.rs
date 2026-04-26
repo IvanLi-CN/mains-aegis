@@ -1503,8 +1503,6 @@ fn dashboard_touch_target_name(target: DashboardTouchTarget) -> &'static str {
 
 fn dashboard_manual_action_uses_stop(snapshot: &SelfCheckUiSnapshot) -> bool {
     snapshot.dashboard_detail.manual_charge.runtime.active
-        || snapshot.dashboard_detail.charger_active == Some(true)
-        || snapshot.bq25792_allow_charge == Some(true)
 }
 
 fn manual_charge_ui_action_name(action: ManualChargeUiAction) -> &'static str {
