@@ -172,12 +172,12 @@ pub(super) fn charger_delivery_diag_kind(
         None => return ChargerDeliveryDiagKind::None,
     };
     let margin_ma = i32::from(margin_ma);
-    let actual_ibat_ma = ibat_adc_ma
-        .map(|v| i32::from(v.abs()))
-        .or_else(|| bms_current_ma.filter(|v| *v > 0).map(i32::from));
+    let actual_charge_ma = ibat_adc_ma
+        .map(|v| i32::from(v).max(0))
+        .or_else(|| bms_current_ma.map(|v| i32::from(v).max(0)));
     let actual_ibus_ma = actual_ibus_ma.map(|v| i32::from(v.abs()));
 
-    if actual_ibat_ma
+    if actual_charge_ma
         .map(|v| v > target_ichg_ma + margin_ma)
         .unwrap_or(false)
     {
@@ -192,7 +192,7 @@ pub(super) fn charger_delivery_diag_kind(
     }
 
     if under_delivery_watch
-        && actual_ibat_ma
+        && actual_charge_ma
             .map(|v| target_ichg_ma > v + margin_ma)
             .unwrap_or(false)
     {
@@ -1677,6 +1677,25 @@ mod tests {
                 200,
             ),
             ChargerDeliveryDiagKind::None
+        );
+    }
+
+    #[test]
+    fn charger_delivery_diag_treats_negative_battery_current_as_zero_delivery() {
+        assert_eq!(
+            charger_delivery_diag_kind(
+                true,
+                true,
+                Some(1_000),
+                Some(1_300),
+                Some(420),
+                Some(-900),
+                Some(-850),
+                false,
+                true,
+                200,
+            ),
+            ChargerDeliveryDiagKind::ChargeUnderTargetInputDpm
         );
     }
 

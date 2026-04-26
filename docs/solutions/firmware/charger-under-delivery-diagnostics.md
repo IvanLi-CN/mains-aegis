@@ -36,7 +36,7 @@ The failure mode is easy to miss if diagnostics only report over-limit mismatche
 ## Resolution
 
 - Keep manual charge target propagation separate from actual delivered current in logs and UI.
-- Add a stable under-delivery diagnostic when target `ICHG` exceeds `IBAT_ADC` or positive BMS current by a clear margin for several polls.
+- Add a stable under-delivery diagnostic when target `ICHG` exceeds positive `IBAT_ADC` or positive BMS current by a clear margin for several polls; negative battery current is discharge and must count as zero delivered charge current.
 - Include the limiter context in the diagnostic: `IINDPM/VINDPM`, PD contract, programmed input current limit, `REG03`, `REG06`, `REG10`, and `REG14`.
 - Classify input-DPM under-delivery distinctly, for example `reason=charge_under_target_input_dpm`.
 

@@ -90,7 +90,7 @@
 - 当任一路输出已开启但聚合输出功率不可可信计算时，策略进入保守禁充分支；前台 token 继续显示 `LOAD`，notice/log 使用 `blocked_output_power_unknown`。
 - 前面板的 charger 电流显示优先取 `BQ25792 IBAT_ADC`，不再把 `ICHG` 设定值伪装成实测电流。
 - `BQ25792` ADC 遥测读数使用专用 helper，以 `MSB-first` 解释只读 ADC word；普通限流/配置 word 继续沿用 little-endian 读写，禁止混用。
-- 充电保持期间若目标 `ICHG` 与实测电流出现稳定差异，固件必须把它记录为 delivery diagnostic，而不是把目标电流当作实际充电结果；当 `IINDPM/VINDPM` 正在调节时，诊断原因应指向输入 DPM 限流。
+- 充电保持期间若目标 `ICHG` 与实测电流出现稳定差异，固件必须把它记录为 delivery diagnostic，而不是把目标电流当作实际充电结果；当 `IINDPM/VINDPM` 正在调节时，诊断原因应指向输入 DPM 限流。负的 `IBAT/BMS current` 表示放电，在 under-delivery 判定中必须按 `0mA` 已交付充电电流处理。
 - `TS_WARM` 期间前面板 charger detail 的状态 token 必须显示 `WARM`，notice 要说明风扇已被强制拉到高转。
 - 首页 `ChargeCard` 只做 `CHG500/CHG100 -> CHG` 的紧凑映射；`WAIT/FULL/WARM/TEMP/LOAD/LOCK/NOAC` 必须与 runtime token 同形。
 
