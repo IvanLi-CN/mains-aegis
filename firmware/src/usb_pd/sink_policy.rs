@@ -211,6 +211,30 @@ pub fn select_contract_from_filtered(
     select_fixed_contract(local, &filtered, demand)
 }
 
+pub fn select_startup_contract_from_filtered(
+    local: &LocalCapabilities,
+    filtered: &FilteredSourceCapabilities,
+    demand: UsbPdPowerDemand,
+) -> Option<ContractPlan> {
+    if filtered.is_empty() || !local.pd_enabled() {
+        return None;
+    }
+
+    if local.pps_enabled {
+        if let Some(plan) = select_pps_contract_with_target_policy(filtered, demand, true, 500) {
+            return Some(plan);
+        }
+    }
+
+    select_fixed_voltage_contract(local, filtered, demand, 12_000)
+        .or_else(|| select_fixed_voltage_contract(local, filtered, demand, 9_000))
+        .or_else(|| {
+            local
+                .pps_enabled
+                .then(|| select_pps_contract_with_target_policy(filtered, demand, false, 500))?
+        })
+}
+
 pub fn default_5v_input_limits(
     filtered: Option<&FilteredSourceCapabilities>,
 ) -> Default5vInputLimits {
@@ -304,9 +328,55 @@ pub fn select_fixed_contract(
     })
 }
 
+pub fn select_fixed_voltage_contract(
+    local: &LocalCapabilities,
+    filtered: &FilteredSourceCapabilities,
+    demand: UsbPdPowerDemand,
+    voltage_mv: u16,
+) -> Option<ContractPlan> {
+    if !local.supports_fixed_voltage_mv(voltage_mv) {
+        return None;
+    }
+    let required_power_mw = demand.required_power_mw();
+    filtered.iter().find_map(|offer| {
+        let SourceOffer::Fixed(offer) = offer else {
+            return None;
+        };
+        if offer.voltage_mv != voltage_mv {
+            return None;
+        }
+        let required_current_ma = required_input_current_ma(required_power_mw, offer.voltage_mv);
+        if offer.max_current_ma < required_current_ma {
+            return None;
+        }
+        let current_ma = required_current_ma.max(100).min(offer.max_current_ma);
+        Some(ContractPlan {
+            contract: ActiveContract {
+                kind: ContractKind::Fixed,
+                object_position: offer.object_position,
+                voltage_mv: offer.voltage_mv,
+                current_ma,
+                source_max_current_ma: offer.max_current_ma,
+                input_current_limit_ma: Some(current_ma.min(BQ25792_MAX_IINDPM_MA)),
+                vindpm_mv: Some(compute_vindpm_mv(offer.voltage_mv)),
+            },
+            request: RequestDataObject::for_fixed(offer.object_position, current_ma),
+        })
+    })
+}
+
 pub fn select_pps_contract(
     filtered: &FilteredSourceCapabilities,
     demand: UsbPdPowerDemand,
+) -> Option<ContractPlan> {
+    select_pps_contract_with_target_policy(filtered, demand, false, 100)
+}
+
+fn select_pps_contract_with_target_policy(
+    filtered: &FilteredSourceCapabilities,
+    demand: UsbPdPowerDemand,
+    require_target_in_range: bool,
+    minimum_current_ma: u16,
 ) -> Option<ContractPlan> {
     let required_power_mw = demand.required_power_mw();
     let mut best_offer: Option<PpsSourceOffer> = None;
@@ -317,6 +387,12 @@ pub fn select_pps_contract(
         let SourceOffer::Pps(offer) = offer else {
             continue;
         };
+        if require_target_in_range
+            && (target_voltage_mv < offer.min_voltage_mv
+                || target_voltage_mv > offer.max_voltage_mv)
+        {
+            continue;
+        }
         let requested_voltage_mv = clamp_u16(
             target_voltage_mv,
             offer.min_voltage_mv,
@@ -349,7 +425,7 @@ pub fn select_pps_contract(
             offer.max_voltage_mv,
         );
         let current_ma = required_input_current_ma(required_power_mw, requested_voltage_mv)
-            .max(100)
+            .max(minimum_current_ma)
             .min(offer.max_current_ma)
             .min(BQ25792_MAX_IINDPM_MA);
         ContractPlan {
@@ -437,7 +513,8 @@ pub fn compute_fixed_target_voltage_mv(demand: UsbPdPowerDemand) -> u16 {
 
 pub fn compute_system_target_voltage_mv(demand: UsbPdPowerDemand) -> u16 {
     let battery_backed_target_mv = demand
-        .battery_voltage_mv
+        .system_voltage_mv
+        .or(demand.battery_voltage_mv)
         .unwrap_or(BQ25792_VSYSMIN_MV)
         .saturating_add(SYSTEM_VOLTAGE_HEADROOM_MV);
 
@@ -594,6 +671,7 @@ mod tests {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
             system_load_power_mw: 0,
+            system_voltage_mv: None,
             battery_voltage_mv: Some(14_800),
             measured_input_voltage_mv: None,
             charging_enabled: true,
@@ -622,6 +700,7 @@ mod tests {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
             system_load_power_mw: 0,
+            system_voltage_mv: None,
             battery_voltage_mv: Some(15_200),
             measured_input_voltage_mv: None,
             charging_enabled: true,
@@ -651,6 +730,7 @@ mod tests {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
             system_load_power_mw: 0,
+            system_voltage_mv: None,
             battery_voltage_mv: Some(15_200),
             measured_input_voltage_mv: None,
             charging_enabled: true,
@@ -784,6 +864,7 @@ mod tests {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
             system_load_power_mw: 0,
+            system_voltage_mv: None,
             battery_voltage_mv: Some(16_400),
             measured_input_voltage_mv: None,
             charging_enabled: false,
@@ -810,6 +891,7 @@ mod tests {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
             system_load_power_mw: 0,
+            system_voltage_mv: None,
             battery_voltage_mv: Some(15_200),
             measured_input_voltage_mv: None,
             charging_enabled: false,
@@ -844,6 +926,7 @@ mod tests {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
             system_load_power_mw: 2_500,
+            system_voltage_mv: None,
             battery_voltage_mv: Some(15_200),
             measured_input_voltage_mv: None,
             charging_enabled: false,
@@ -873,6 +956,7 @@ mod tests {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
             system_load_power_mw: 0,
+            system_voltage_mv: None,
             battery_voltage_mv: Some(14_820),
             measured_input_voltage_mv: None,
             charging_enabled: false,
@@ -901,6 +985,7 @@ mod tests {
             requested_charge_voltage_mv: 16_800,
             requested_charge_current_ma: 500,
             system_load_power_mw: 0,
+            system_voltage_mv: None,
             battery_voltage_mv: Some(14_820),
             measured_input_voltage_mv: None,
             charging_enabled: true,
@@ -917,6 +1002,7 @@ mod tests {
             requested_charge_voltage_mv: 0,
             requested_charge_current_ma: 0,
             system_load_power_mw: 0,
+            system_voltage_mv: None,
             battery_voltage_mv: None,
             measured_input_voltage_mv: None,
             charging_enabled: false,

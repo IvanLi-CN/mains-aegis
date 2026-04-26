@@ -311,6 +311,11 @@ enum PdBreadcrumbEvent {
     VbusPresent = 6,
     VbusLost = 7,
     StateChange = 8,
+    BootInheritedAttach = 9,
+    HardResetInhibited = 10,
+    GetSourceCapSent = 11,
+    SoftResetSent = 12,
+    HardResetSent = 13,
 }
 
 impl PdBreadcrumbEvent {
@@ -328,6 +333,23 @@ impl PdBreadcrumbEvent {
             Self::VbusPresent => "vbus_present",
             Self::VbusLost => "vbus_lost",
             Self::StateChange => "state_change",
+            Self::BootInheritedAttach => "boot_inherited_attach",
+            Self::HardResetInhibited => "hard_reset_inhibited",
+            Self::GetSourceCapSent => "get_source_cap_sent",
+            Self::SoftResetSent => "soft_reset_sent",
+            Self::HardResetSent => "hard_reset_sent",
+        }
+    }
+}
+
+impl From<usb_pd::UsbPdRecoveryEvent> for PdBreadcrumbEvent {
+    fn from(value: usb_pd::UsbPdRecoveryEvent) -> Self {
+        match value {
+            usb_pd::UsbPdRecoveryEvent::BootInheritedAttach => Self::BootInheritedAttach,
+            usb_pd::UsbPdRecoveryEvent::HardResetInhibited => Self::HardResetInhibited,
+            usb_pd::UsbPdRecoveryEvent::GetSourceCapSent => Self::GetSourceCapSent,
+            usb_pd::UsbPdRecoveryEvent::SoftResetSent => Self::SoftResetSent,
+            usb_pd::UsbPdRecoveryEvent::HardResetSent => Self::HardResetSent,
         }
     }
 }
@@ -404,6 +426,11 @@ impl PdBreadcrumbRecordV1 {
             6 => PdBreadcrumbEvent::VbusPresent,
             7 => PdBreadcrumbEvent::VbusLost,
             8 => PdBreadcrumbEvent::StateChange,
+            9 => PdBreadcrumbEvent::BootInheritedAttach,
+            10 => PdBreadcrumbEvent::HardResetInhibited,
+            11 => PdBreadcrumbEvent::GetSourceCapSent,
+            12 => PdBreadcrumbEvent::SoftResetSent,
+            13 => PdBreadcrumbEvent::HardResetSent,
             _ => return None,
         };
         let contract_kind = match bytes[11] {
@@ -513,6 +540,9 @@ fn pd_breadcrumb_event_from_states(
     previous: usb_pd::UsbPdPortState,
     current: usb_pd::UsbPdPortState,
 ) -> Option<PdBreadcrumbEvent> {
+    if previous.recovery_event_counter != current.recovery_event_counter {
+        return current.recovery_event.map(PdBreadcrumbEvent::from);
+    }
     if !previous.attached && current.attached {
         return Some(PdBreadcrumbEvent::Attach);
     }
@@ -2483,6 +2513,7 @@ where
     let mut charger_vbus_adc_mv: Option<u16> = None;
     let mut charger_ibus_adc_ma: Option<i32> = None;
     let mut charger_ibat_adc_ma: Option<i16> = None;
+    let mut charger_vsys_adc_mv: Option<u16> = None;
     let mut initial_audio_charge_phase = AudioChargePhase::Unknown;
     if charger_enabled {
         charger_status0 = bq25792::read_u8(&mut *i2c, bq25792::reg::CHARGER_STATUS_0).ok();
@@ -2497,7 +2528,7 @@ where
         let charger_ibat_adc_ma_local =
             bq25792::read_adc_i16(&mut *i2c, bq25792::reg::IBAT_ADC).ok();
         let charger_vbat_adc_mv = bq25792::read_adc_u16(&mut *i2c, bq25792::reg::VBAT_ADC).ok();
-        let charger_vsys_adc_mv = bq25792::read_adc_u16(&mut *i2c, bq25792::reg::VSYS_ADC).ok();
+        charger_vsys_adc_mv = bq25792::read_adc_u16(&mut *i2c, bq25792::reg::VSYS_ADC).ok();
 
         if let Some(status1) = charger_status1 {
             initial_audio_charge_phase =
@@ -2562,6 +2593,7 @@ where
         .map(|v| (v & 0x01ff) * 10);
     ui.bq25792_ibat_ma = charger_ibat_adc_ma;
     ui.bq25792_vbat_present = charger_vbat_present;
+    ui.bq25792_vsys_mv = charger_vsys_adc_mv.filter(|mv| *mv >= 5_000);
     ui.input_vbus_mv = charger_vbus_adc_mv;
     ui.input_ibus_ma = charger_ibus_adc_ma;
     if let Some(status0) = charger_status0 {
@@ -3005,6 +3037,7 @@ pub struct PowerManager<'d, I2C> {
     usb_pd_input_current_limit_ma: Option<u16>,
     usb_pd_vindpm_mv: Option<u16>,
     usb_pd_vac1_mv: Option<u16>,
+    usb_pd_vsys_mv: Option<u16>,
     usb_pd_input_limit_backup: Option<UsbPdInputLimitBackup>,
     usb_pd_restore_input_limits_pending: bool,
     pd_breadcrumb_next_seq: u16,
@@ -3502,6 +3535,7 @@ where
             usb_pd_input_current_limit_ma: None,
             usb_pd_vindpm_mv: None,
             usb_pd_vac1_mv: None,
+            usb_pd_vsys_mv: initial_ui_snapshot.bq25792_vsys_mv,
             usb_pd_input_limit_backup: None,
             usb_pd_restore_input_limits_pending: false,
             pd_breadcrumb_next_seq,
@@ -3911,6 +3945,7 @@ where
             requested_charge_voltage_mv,
             requested_charge_current_ma,
             system_load_power_mw: USB_PD_SYSTEM_LOAD_FLOOR_MW.saturating_add(output_power_mw),
+            system_voltage_mv: self.usb_pd_vsys_mv,
             battery_voltage_mv: self.ui_snapshot.bq40z50_pack_mv,
             // Feed the PD manager the raw charger-side VAC1 sample so FUSB302 VBUS_OK glitches
             // do not blind detach / unsafe-voltage decisions.
@@ -8529,6 +8564,8 @@ where
             self.ui_snapshot.bq25792_ichg_ma = None;
             self.ui_snapshot.bq25792_ibat_ma = None;
             self.ui_snapshot.bq25792_vbat_present = None;
+            self.ui_snapshot.bq25792_vsys_mv = None;
+            self.usb_pd_vsys_mv = None;
             self.clear_charger_detail_snapshot();
             if preserve_manual_safety_notice {
                 self.ui_snapshot.dashboard_detail.charger_notice = Some("manual_safety_blocked");
@@ -8757,6 +8794,10 @@ where
             raw_ibus_adc_ma,
         );
         self.usb_pd_vac1_mv = adc_ready.then_some(raw_vac1_adc_mv).flatten();
+        self.usb_pd_vsys_mv = adc_ready
+            .then_some(vsys_adc_mv)
+            .flatten()
+            .filter(|mv| *mv >= 5_000);
         let usb_c_path_present =
             ac1_present || matches!(self.usb_pd_state.vbus_present, Some(true));
         let usb_pd_unsafe_latched = usb_pd_runtime_unsafe_source_latched(
@@ -9466,6 +9507,7 @@ where
         self.ui_snapshot.input_vbus_mv = input_sample.ui_vbus_mv;
         self.ui_snapshot.input_ibus_ma = input_sample.ui_ibus_ma;
         self.ui_snapshot.bq25792_ibat_ma = ibat_adc_ma;
+        self.ui_snapshot.bq25792_vsys_mv = vsys_adc_mv.filter(|mv| *mv >= 5_000);
         self.ui_snapshot.bq25792_ichg_ma = if allow_charge {
             if let Some(v) = applied_ichg_ma {
                 Some(v)
@@ -9590,6 +9632,8 @@ where
         self.ui_snapshot.bq25792_ichg_ma = None;
         self.ui_snapshot.bq25792_ibat_ma = None;
         self.ui_snapshot.bq25792_vbat_present = None;
+        self.ui_snapshot.bq25792_vsys_mv = None;
+        self.usb_pd_vsys_mv = None;
         self.ui_snapshot.fusb302_vbus_present = None;
         self.ui_snapshot.input_vbus_mv = None;
         self.ui_snapshot.input_ibus_ma = None;

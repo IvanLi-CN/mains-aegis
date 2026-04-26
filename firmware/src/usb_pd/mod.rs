@@ -48,6 +48,15 @@ pub struct ActiveContract {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsbPdRecoveryEvent {
+    BootInheritedAttach,
+    HardResetInhibited,
+    GetSourceCapSent,
+    SoftResetSent,
+    HardResetSent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NoContractRecoveryPhase {
     FreshAttach,
     HardResetSent,
@@ -66,6 +75,8 @@ pub struct UsbPdPortState {
     pub input_current_limit_ma: Option<u16>,
     pub vindpm_mv: Option<u16>,
     pub unsafe_source_latched: bool,
+    pub recovery_event: Option<UsbPdRecoveryEvent>,
+    pub recovery_event_counter: u16,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -73,6 +84,7 @@ pub struct UsbPdPowerDemand {
     pub requested_charge_voltage_mv: u16,
     pub requested_charge_current_ma: u16,
     pub system_load_power_mw: u32,
+    pub system_voltage_mv: Option<u16>,
     pub battery_voltage_mv: Option<u16>,
     pub measured_input_voltage_mv: Option<u16>,
     pub charging_enabled: bool,
@@ -102,6 +114,7 @@ pub struct UsbPdSinkManager<I2C> {
     no_contract_phase_started_at_ms: Option<u32>,
     no_contract_recovery_phase: Option<NoContractRecoveryPhase>,
     source_caps_recovery_attempted: bool,
+    inherited_source_caps_probe_pending: bool,
     last_source_caps_requery_at_ms: Option<u32>,
     message_id: u8,
     tx_spec_revision: SpecRevision,
@@ -202,7 +215,7 @@ fn log_filtered_source_capabilities(
 
 fn log_contract_plan(plan: &ContractPlan, demand: UsbPdPowerDemand) {
     info!(
-        "usb_pd: select_plan kind={} obj_pos={=u8} voltage_mv={=u16} current_ma={=u16} source_max_current_ma={=u16} vindpm_mv={=?} input_current_limit_ma={=?} charging_enabled={=bool} requested_charge_voltage_mv={=u16} requested_charge_current_ma={=u16} battery_voltage_mv={=?}",
+        "usb_pd: select_plan kind={} obj_pos={=u8} voltage_mv={=u16} current_ma={=u16} source_max_current_ma={=u16} vindpm_mv={=?} input_current_limit_ma={=?} charging_enabled={=bool} requested_charge_voltage_mv={=u16} requested_charge_current_ma={=u16} system_voltage_mv={=?} battery_voltage_mv={=?}",
         contract_kind_name(plan.contract.kind),
         plan.contract.object_position,
         plan.contract.voltage_mv,
@@ -213,6 +226,7 @@ fn log_contract_plan(plan: &ContractPlan, demand: UsbPdPowerDemand) {
         demand.charging_enabled,
         demand.requested_charge_voltage_mv,
         demand.requested_charge_current_ma,
+        demand.system_voltage_mv,
         demand.battery_voltage_mv
     );
 }
@@ -304,6 +318,7 @@ where
             no_contract_phase_started_at_ms: None,
             no_contract_recovery_phase: None,
             source_caps_recovery_attempted: false,
+            inherited_source_caps_probe_pending: false,
             last_source_caps_requery_at_ms: None,
             last_source_caps_recovery_at_ms: None,
             message_id: 0,
@@ -388,7 +403,9 @@ where
             self.clear_contract_tracking();
             self.source_capabilities = None;
             if self.state.attached && !self.unsafe_hard_reset_sent {
-                let _ = self.phy.send_hard_reset();
+                if self.phy.send_hard_reset().is_ok() {
+                    self.note_recovery_event(UsbPdRecoveryEvent::HardResetSent);
+                }
                 self.unsafe_hard_reset_sent = true;
             }
         }

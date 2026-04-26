@@ -58,6 +58,7 @@
 - 固定 PDO 策略必须在已启用的 feature 中选择“满足当前功率需求的最低安全电压”，而不是默认拉到最高档。
 - PPS 策略只在未设置 `no-pps` 时启用；目标电压必须跟随系统/充电需求动态调节，并具备迟滞、最小重请求间隔与 keep-alive。
 - 只要 USB-C 口处于 attach 后的协商窗口、合同切换窗口、reset/retry 恢复窗口或 source capabilities 变化窗口，charger 都必须保持禁充；只有输入能力被判定为稳定后，才允许恢复充电。
+- MCU 冷启动时若 USB-C 已经处于 inherited attach，sink manager 不得主动发送 PD Hard Reset；必须先用非破坏式 RX resume、`Get_Source_Cap`、Soft Reset 与稳定 5V fallback 保住系统供电。
 - I2C2 共享后不得破坏前面板初始化、触摸读取或 FUSB302 轮询；中断里仍禁止 I2C 事务。
 
 ### SHOULD
@@ -94,6 +95,7 @@
 - 若 FUSB302 RX FIFO 收到 hard reset / soft reset / retryfail，必须清空 FIFO、重置协商状态并准备重新拉起协商。
 - 若 FUSB302 attach 结果异常（非 `SNK1/SNK2`）或运行中 VBUS 消失，则合同与 unsafe latch 以 detach 语义清零。
 - 若运行时检测到 `unsafe_source`，charger 必须立即停充并拒绝继续高压协商，直到 detach。
+- 若 inherited attach 后迟迟没有 `Source_Capabilities`，恢复阶梯必须保持供电优先：记录 Hard Reset 被抑制，先请求 source caps，再尝试 Soft Reset，随后按稳定 5V fallback 放开受限充电；只有观察到可靠 physical detach/replug 后，才允许恢复主动 Hard Reset 策略。
 
 ## 接口契约（Interfaces & Contracts）
 
@@ -187,6 +189,7 @@ None。
 
 - 风险：`FUSB302B` datasheet 对 spec revision / GoodCRC 的描述更偏 PD2.0，PPS 互操作需真实台架确认；本轮先把 PPS policy 与报文路径接齐，并在 PR 中显式记录互操作风险。
 - 风险：多口电源在功率重分配时可能触发 source capabilities 重广播、reset 或短暂回落默认 5V；USB-C charge gate 若实现不完整，容易在旧合同失效窗口里误充。
+- 风险：若 MCU 由同一 USB-C Source 供电，冷启动继承 attach 期间主动 Hard Reset 会让 Source 短暂移除 VBUS，从而造成 MCU brownout/reset loop；该路径必须默认抑制 Hard Reset，并通过 EEPROM breadcrumb 记录 `boot_inherited_attach` / `hard_reset_inhibited` / recovery TX 事件以支持无日志复盘。
 - 风险：冷启动或 no-contract 恢复窗口若无法得到足够高的 `usb_pd.tick()` 服务频率，协商超时会被主循环其它任务拖长，导致热插拔恢复时间抖动；当前通过协商优先窗口已把 reset 基线压到约 `1.67s`，后续如再扩展主循环负载，需重新验证该窗口仍能保证秒级恢复。
 - 风险：当前完成态依赖 plain-serial + EEPROM breadcrumb 双证据链；若后续改动再次让 monitor 只停在 `boot: stage=main_loop_enter`，必须先修复观测链再判断 PPS 恢复行为。
 - 假设：USB-C 输入安全窗按 `20.5V`（`20V + 500mV ADC 容差窗`）执行；若后续硬件校准数据表明需要更窄或更宽，允许在不改 feature 口径的前提下微调实现常量。
@@ -210,6 +213,7 @@ None。
 
 ## 变更记录（Change log）
 
+- 2026-04-26: 修复 `MCU reset + inherited attach` 仍可能掉进无限重启的回归。实机日志显示 source 在继承 attach 的 `default_5v` fallback 期仍可能主动发出 `peer hard reset`；旧实现把这类协议级 reset 当作需要整段清空 no-contract fallback，导致 `charge_ready/vindpm/iindpm` 出现空窗。当前改为在 inherited attach 已进入安全 fallback 时保留该 fallback，仅重启非破坏式 `wait for caps` 恢复梯子，避免在无电池兜底时被 source 的协议 reset 拉进复位环。
 - 2026-04-23: 完成最终 hotplug PPS 恢复收口。根因最终确认还包括 `attached && contract=None` 窗口里 `usb_pd.tick()` 服务频率不足，导致恢复超时被主循环其它任务拖长；通过补齐 partial-RX / hard-reset 恢复正确性，并在主循环中为 no-contract 协商增加优先窗口后，reset 基线已稳定到约 `1.67s`，实机热插拔也恢复到秒级 `PPS`。
 - 2026-04-22: 完成 hotplug PPS 恢复闭环。最终根因定位为 FUSB302 自动协议复位与固件恢复状态机互相打架、fresh attach 后继续处理旧 IRQ snapshot，以及 `missing source caps` 恢复策略缺少稳定升级路径；修复后实机热插拔 `1.0s` 内恢复到 `PPS`，冷启动插线基线约 `25.28s` 自动恢复到 `PPS`。
 - 2026-04-22: 重新打开 hotplug PPS 恢复问题。此前“热插拔已稳定恢复到 `PPS`”的结论被后续实机复测推翻：当前同一条 PPS 电源线上仍会出现“有时数秒恢复、有时长期卡在 `CAP?`”的双稳态现象；规格状态回退为 `部分完成（4/5）`，后续必须先完成稳定恢复闭环，再讨论时延优化。

@@ -3,6 +3,14 @@ impl<I2C> UsbPdSinkManager<I2C>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
+    fn preserving_no_contract_fallback(&self) -> bool {
+        self.state.contract.is_none()
+            && (self.state.charge_ready
+                || self.charge_ready_at_ms.is_some()
+                || self.state.input_current_limit_ma.is_some()
+                || self.state.vindpm_mv.is_some())
+    }
+
     pub(super) fn maybe_recover_stalled_contract_request(&mut self, now_ms: u32) {
         if !self.contract_tracker.request_in_flight() {
             return;
@@ -36,6 +44,7 @@ where
     ) {
         if self.state.unsafe_source_latched
             || self.contract_tracker.request_in_flight()
+            || !self.active_no_contract_recovery_allowed()
             || !self.source_caps_requery_due(now_ms)
         {
             return;
@@ -165,6 +174,8 @@ where
                 fusb302_error_kind(&err)
             );
             self.restart_no_contract_wait_for_caps(now_ms, "hard_reset_send_failed", None);
+        } else {
+            self.note_recovery_event(UsbPdRecoveryEvent::HardResetSent);
         }
     }
 
@@ -176,8 +187,35 @@ where
         self.observed_unattached_since_boot = true;
     }
 
+    pub(super) fn observe_boot_unattached_candidate(&mut self, physically_absent: bool) {
+        if !self.observed_unattached_since_boot && physically_absent {
+            self.mark_unattached_observed();
+        }
+    }
+
+    pub(super) fn note_recovery_event(&mut self, event: UsbPdRecoveryEvent) {
+        self.state.recovery_event = Some(event);
+        self.state.recovery_event_counter = self.state.recovery_event_counter.wrapping_add(1);
+    }
+
     pub(super) fn enter_passive_no_contract_wait(&mut self, now_ms: u32, reason: &'static str) {
-        self.reset_contract_state(false);
+        let preserve_no_contract_fallback = self.preserving_no_contract_fallback();
+        if preserve_no_contract_fallback {
+            self.contract_tracker.clear_all();
+            self.state.contract = None;
+            self.source_capabilities = None;
+            self.message_id = 0;
+            self.consecutive_cc_absent_polls = 0;
+            self.consecutive_raw_vbus_absent_polls = 0;
+            self.consecutive_effective_vbus_absent_polls = 0;
+            self.source_caps_recovery_attempted = false;
+            self.inherited_source_caps_probe_pending = false;
+            self.last_source_caps_requery_at_ms = None;
+            self.last_source_caps_recovery_at_ms = None;
+            self.partial_rx_started_at_ms = None;
+        } else {
+            self.reset_contract_state(false);
+        }
         self.attached_at_ms = Some(now_ms);
         self.no_contract_phase_started_at_ms = Some(now_ms);
         self.no_contract_recovery_phase = Some(NoContractRecoveryPhase::FreshAttach);
@@ -185,9 +223,10 @@ where
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         info!(
-            "usb_pd: passive_wait_for_caps reason={} waiting_for_replug={=bool}",
+            "usb_pd: passive_wait_for_caps reason={} waiting_for_replug={=bool} preserve_fallback={=bool}",
             reason,
-            !self.active_no_contract_recovery_allowed()
+            !self.active_no_contract_recovery_allowed(),
+            preserve_no_contract_fallback
         );
     }
 
@@ -259,18 +298,82 @@ where
 
         if !self.active_no_contract_recovery_allowed() {
             if !self.source_caps_recovery_attempted {
+                if self.state.recovery_event != Some(UsbPdRecoveryEvent::HardResetInhibited) {
+                    self.note_recovery_event(UsbPdRecoveryEvent::HardResetInhibited);
+                }
+
+                if !self.inherited_source_caps_probe_pending {
+                    self.inherited_source_caps_probe_pending = true;
+                    self.last_source_caps_recovery_at_ms.get_or_insert(now_ms);
+                    esp_println::println!(
+                        "usb_pd: inherited attach missing source caps, probing caps without reset waited_ms={} tx_spec_rev_bits={}",
+                        waited_ms,
+                        self.recovery_spec_revision().bits()
+                    );
+                    warn!(
+                        "usb_pd: inherited attach missing source caps, probing caps without reset waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                        waited_ms,
+                        self.recovery_spec_revision().bits()
+                    );
+                    return;
+                }
+
+                self.inherited_source_caps_probe_pending = false;
+                self.source_caps_recovery_attempted = true;
+                self.last_source_caps_recovery_at_ms = Some(now_ms);
                 esp_println::println!(
-                    "usb_pd: no source caps after inherited attach, holding 5v until replug waited_ms={} tx_spec_rev_bits={}",
+                    "usb_pd: inherited attach source caps probe tx_spec_rev_bits={} peer_spec_rev_bits={}",
+                    self.recovery_spec_revision().bits(),
+                    self.peer_spec_revision.bits()
+                );
+                info!(
+                    "usb_pd: inherited attach source caps probe tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
+                    self.recovery_spec_revision().bits(),
+                    self.peer_spec_revision.bits()
+                );
+                match self.send_control_message(
+                    ControlMessageType::GetSourceCap,
+                    self.recovery_spec_revision(),
+                ) {
+                    Ok(()) => {
+                        self.last_source_caps_requery_at_ms = Some(now_ms);
+                        self.note_recovery_event(UsbPdRecoveryEvent::GetSourceCapSent);
+                    }
+                    Err(err) => {
+                        warn!(
+                            "usb_pd: inherited attach source caps probe failed err={}",
+                            fusb302_error_kind(&err)
+                        );
+                    }
+                }
+                return;
+            }
+
+            let last_probe_at_ms = self
+                .last_source_caps_recovery_at_ms
+                .unwrap_or(attached_at_ms);
+            if now_ms.wrapping_sub(last_probe_at_ms) < SOURCE_CAPS_REQUERY_DELAY_MS {
+                return;
+            }
+
+            self.inherited_source_caps_probe_pending = false;
+            self.apply_default_5v_input_limits(None, "inherited_attach_default_5v");
+            if self.charge_ready_at_ms.is_none() && !self.state.charge_ready {
+                self.arm_default_5v_charge_ready(now_ms, "inherited_attach_default_5v");
+            }
+
+            if self.last_source_caps_recovery_at_ms == Some(last_probe_at_ms) {
+                esp_println::println!(
+                    "usb_pd: no source caps after inherited attach probes, holding 5v until replug waited_ms={} tx_spec_rev_bits={}",
                     waited_ms,
                     self.tx_spec_revision.bits()
                 );
                 warn!(
-                    "usb_pd: no source caps after inherited attach, suppress hard reset until replug waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                    "usb_pd: inherited attach missing source caps after probes, suppress pd recovery until replug waited_ms={=u32} tx_spec_rev_bits={=u8}",
                     waited_ms,
                     self.tx_spec_revision.bits()
                 );
-                self.source_caps_recovery_attempted = true;
-                self.last_source_caps_recovery_at_ms = Some(now_ms);
+                self.last_source_caps_recovery_at_ms = None;
             }
             return;
         }
@@ -310,6 +413,7 @@ where
             || self.source_capabilities.is_none()
             || self.contract_tracker.request_in_flight()
             || self.in_no_contract_hard_reset_wait()
+            || !self.active_no_contract_recovery_allowed()
             || !matches!(self.state.vbus_present, Some(true))
         {
             return;

@@ -21,6 +21,15 @@ pub struct ActiveContract {
     pub vindpm_mv: Option<u16>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsbPdRecoveryEvent {
+    BootInheritedAttach,
+    HardResetInhibited,
+    GetSourceCapSent,
+    SoftResetSent,
+    HardResetSent,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UsbPdPortState {
     pub enabled: bool,
@@ -32,6 +41,8 @@ pub struct UsbPdPortState {
     pub input_current_limit_ma: Option<u16>,
     pub vindpm_mv: Option<u16>,
     pub unsafe_source_latched: bool,
+    pub recovery_event: Option<UsbPdRecoveryEvent>,
+    pub recovery_event_counter: u16,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -39,6 +50,7 @@ pub struct UsbPdPowerDemand {
     pub requested_charge_voltage_mv: u16,
     pub requested_charge_current_ma: u16,
     pub system_load_power_mw: u32,
+    pub system_voltage_mv: Option<u16>,
     pub battery_voltage_mv: Option<u16>,
     pub measured_input_voltage_mv: Option<u16>,
     pub charging_enabled: bool,
