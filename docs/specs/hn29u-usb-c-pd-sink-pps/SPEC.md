@@ -213,6 +213,7 @@ None。
 
 ## 变更记录（Change log）
 
+- 2026-04-26: 修复 `MCU reset + inherited attach` 仍可能掉进无限重启的回归。实机日志显示 source 在继承 attach 的 `default_5v` fallback 期仍可能主动发出 `peer hard reset`；旧实现把这类协议级 reset 当作需要整段清空 no-contract fallback，导致 `charge_ready/vindpm/iindpm` 出现空窗。当前改为在 inherited attach 已进入安全 fallback 时保留该 fallback，仅重启非破坏式 `wait for caps` 恢复梯子，避免在无电池兜底时被 source 的协议 reset 拉进复位环。
 - 2026-04-23: 完成最终 hotplug PPS 恢复收口。根因最终确认还包括 `attached && contract=None` 窗口里 `usb_pd.tick()` 服务频率不足，导致恢复超时被主循环其它任务拖长；通过补齐 partial-RX / hard-reset 恢复正确性，并在主循环中为 no-contract 协商增加优先窗口后，reset 基线已稳定到约 `1.67s`，实机热插拔也恢复到秒级 `PPS`。
 - 2026-04-22: 完成 hotplug PPS 恢复闭环。最终根因定位为 FUSB302 自动协议复位与固件恢复状态机互相打架、fresh attach 后继续处理旧 IRQ snapshot，以及 `missing source caps` 恢复策略缺少稳定升级路径；修复后实机热插拔 `1.0s` 内恢复到 `PPS`，冷启动插线基线约 `25.28s` 自动恢复到 `PPS`。
 - 2026-04-22: 重新打开 hotplug PPS 恢复问题。此前“热插拔已稳定恢复到 `PPS`”的结论被后续实机复测推翻：当前同一条 PPS 电源线上仍会出现“有时数秒恢复、有时长期卡在 `CAP?`”的双稳态现象；规格状态回退为 `部分完成（4/5）`，后续必须先完成稳定恢复闭环，再讨论时延优化。

@@ -1458,7 +1458,90 @@ fn retry_fail_without_contract_keeps_attach_and_restarts_recovery() {
     assert_eq!(manager.state.vbus_present, Some(true));
     assert!(manager.initialized);
     assert!(manager.state.controller_ready);
-    assert_eq!(manager.attached_at_ms, Some(0));
+    assert_eq!(manager.attached_at_ms, Some(1_000));
+    assert_eq!(
+        manager.no_contract_recovery_phase,
+        Some(NoContractRecoveryPhase::FreshAttach)
+    );
+}
+
+#[test]
+fn inherited_attach_peer_hard_reset_preserves_safe_fallback() {
+    let mut manager = UsbPdSinkManager::new(LenientI2c);
+    manager.initialized = true;
+    manager.state.enabled = true;
+    manager.state.controller_ready = true;
+    manager.state.attached = true;
+    manager.state.vbus_present = Some(true);
+    manager.state.polarity = Some(CcPolarity::Cc1);
+    manager.state.charge_ready = true;
+    manager.state.input_current_limit_ma = Some(500);
+    manager.state.vindpm_mv = Some(4_000);
+    manager.attached_at_ms = Some(0);
+    manager.source_caps_recovery_attempted = true;
+
+    manager.handle_irq_snapshot(
+        irq_snapshot_with_hard_reset(fusb302::status1a::TOGS_SNK1, true),
+        UsbPdPowerDemand {
+            measured_input_voltage_mv: Some(12_800),
+            ..UsbPdPowerDemand::default()
+        },
+        1_000,
+    );
+
+    assert!(manager.state.attached);
+    assert_eq!(manager.state.vbus_present, Some(true));
+    assert!(manager.state.charge_ready);
+    assert_eq!(manager.state.input_current_limit_ma, Some(500));
+    assert_eq!(manager.state.vindpm_mv, Some(4_000));
+    assert_eq!(manager.attached_at_ms, Some(1_000));
+    assert_eq!(
+        manager.no_contract_recovery_phase,
+        Some(NoContractRecoveryPhase::FreshAttach)
+    );
+    assert!(!manager.source_caps_recovery_attempted);
+}
+
+#[test]
+fn inherited_attach_retry_fail_preserves_safe_fallback() {
+    let mut manager = UsbPdSinkManager::new(LenientI2c);
+    manager.initialized = true;
+    manager.state.enabled = true;
+    manager.state.controller_ready = true;
+    manager.state.attached = true;
+    manager.state.vbus_present = Some(true);
+    manager.state.polarity = Some(CcPolarity::Cc1);
+    manager.state.charge_ready = true;
+    manager.state.input_current_limit_ma = Some(500);
+    manager.state.vindpm_mv = Some(4_000);
+    manager.attached_at_ms = Some(0);
+    manager.source_caps_recovery_attempted = true;
+    manager.source_capabilities = pd::SourceCapabilities::from_message(&source_caps_message(
+        SpecRevision::Rev30,
+        &[fixed_pdo_raw(5_000, 3_000)],
+    ));
+
+    manager.handle_irq_snapshot(
+        irq_snapshot_with_retry_fail(fusb302::status1a::TOGS_SNK1, true),
+        UsbPdPowerDemand {
+            measured_input_voltage_mv: Some(12_800),
+            ..UsbPdPowerDemand::default()
+        },
+        1_000,
+    );
+
+    assert!(manager.state.attached);
+    assert_eq!(manager.state.vbus_present, Some(true));
+    assert!(manager.state.charge_ready);
+    assert_eq!(manager.state.input_current_limit_ma, Some(500));
+    assert_eq!(manager.state.vindpm_mv, Some(4_000));
+    assert_eq!(manager.attached_at_ms, Some(1_000));
+    assert_eq!(manager.source_capabilities, None);
+    assert_eq!(
+        manager.no_contract_recovery_phase,
+        Some(NoContractRecoveryPhase::FreshAttach)
+    );
+    assert!(!manager.source_caps_recovery_attempted);
 }
 
 #[test]

@@ -35,6 +35,14 @@ Treating protocol reset as physical detach creates repeated `detach -> attach ->
 
 **Rule:** when attached but no contract exists yet, handle peer hard reset with `PD_RESET + wait for Source Caps`, not by tearing down the whole session immediately.
 
+### 2.5 Safe fallback must survive inherited-attach peer resets
+
+On inherited attach, the source can still send a late `Hard Reset` or retry-fail after the MCU has already fallen back to a conservative no-contract input window.
+
+If firmware clears `charge_ready`, `VINDPM`, and `IINDPM` at that moment, a battery-less board can fall into reset loops even though VBUS never physically disappeared.
+
+**Rule:** when inherited attach is already riding on a safe no-contract fallback, protocol-level reset/retry events must preserve that fallback and only restart the non-destructive `wait for caps` ladder.
+
 ### 3. Auto recovery inside FUSB302 can fight firmware recovery
 
 If hardware automatic protocol resets and firmware recovery logic both try to recover at the same time, the result is often repeated `contract=None` loops.

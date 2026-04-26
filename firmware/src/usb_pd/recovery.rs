@@ -3,6 +3,14 @@ impl<I2C> UsbPdSinkManager<I2C>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
+    fn preserving_no_contract_fallback(&self) -> bool {
+        self.state.contract.is_none()
+            && (self.state.charge_ready
+                || self.charge_ready_at_ms.is_some()
+                || self.state.input_current_limit_ma.is_some()
+                || self.state.vindpm_mv.is_some())
+    }
+
     pub(super) fn maybe_recover_stalled_contract_request(&mut self, now_ms: u32) {
         if !self.contract_tracker.request_in_flight() {
             return;
@@ -191,7 +199,23 @@ where
     }
 
     pub(super) fn enter_passive_no_contract_wait(&mut self, now_ms: u32, reason: &'static str) {
-        self.reset_contract_state(false);
+        let preserve_no_contract_fallback = self.preserving_no_contract_fallback();
+        if preserve_no_contract_fallback {
+            self.contract_tracker.clear_all();
+            self.state.contract = None;
+            self.source_capabilities = None;
+            self.message_id = 0;
+            self.consecutive_cc_absent_polls = 0;
+            self.consecutive_raw_vbus_absent_polls = 0;
+            self.consecutive_effective_vbus_absent_polls = 0;
+            self.source_caps_recovery_attempted = false;
+            self.inherited_source_caps_probe_pending = false;
+            self.last_source_caps_requery_at_ms = None;
+            self.last_source_caps_recovery_at_ms = None;
+            self.partial_rx_started_at_ms = None;
+        } else {
+            self.reset_contract_state(false);
+        }
         self.attached_at_ms = Some(now_ms);
         self.no_contract_phase_started_at_ms = Some(now_ms);
         self.no_contract_recovery_phase = Some(NoContractRecoveryPhase::FreshAttach);
@@ -199,9 +223,10 @@ where
         self.last_source_caps_requery_at_ms = None;
         self.last_source_caps_recovery_at_ms = None;
         info!(
-            "usb_pd: passive_wait_for_caps reason={} waiting_for_replug={=bool}",
+            "usb_pd: passive_wait_for_caps reason={} waiting_for_replug={=bool} preserve_fallback={=bool}",
             reason,
-            !self.active_no_contract_recovery_allowed()
+            !self.active_no_contract_recovery_allowed(),
+            preserve_no_contract_fallback
         );
     }
 

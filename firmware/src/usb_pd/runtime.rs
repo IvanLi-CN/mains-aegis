@@ -246,13 +246,17 @@ where
                 return;
             }
 
+            if snapshot.retry_failed()
+                && !had_active_contract
+                && !self.active_no_contract_recovery_allowed()
+            {
+                self.enter_passive_no_contract_wait(now_ms, "retry_fail_inherited_attach");
+                self.state.vbus_present = Some(vbus_present);
+                return;
+            }
+
             self.reset_contract_state(false);
             if snapshot.retry_failed() && !had_active_contract && had_source_caps {
-                if !self.active_no_contract_recovery_allowed() {
-                    self.enter_passive_no_contract_wait(now_ms, "retry_fail_inherited_attach");
-                    self.state.vbus_present = Some(vbus_present);
-                    return;
-                }
                 if let Err(err) = self.phy.reset_pd_logic() {
                     warn!(
                         "usb_pd: retry-fail pd_reset failed err={}",
