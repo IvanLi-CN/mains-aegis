@@ -403,10 +403,23 @@ where
                     self.source_capabilities = Some(source_caps);
                     self.no_contract_phase_started_at_ms = None;
                     self.no_contract_recovery_phase = None;
-                    self.source_caps_recovery_attempted = false;
                     if filtered_source_has_pps(&filtered) {
                         self.last_source_caps_requery_at_ms = None;
                     }
+                    if !self.active_no_contract_recovery_allowed() && self.state.contract.is_none()
+                    {
+                        warn!(
+                            "usb_pd: inherited attach source caps recovered, staying on default 5v until replug"
+                        );
+                        self.source_caps_recovery_attempted = false;
+                        self.apply_default_5v_input_limits(
+                            Some(&filtered),
+                            "inherited_recovery_default_5v",
+                        );
+                        self.arm_default_5v_charge_ready(now_ms, "inherited_recovery_default_5v");
+                        return;
+                    }
+                    self.source_caps_recovery_attempted = false;
                     if self.contract_tracker.request_in_flight() {
                         debug!("usb_pd: preserving in-flight contract across source caps refresh");
                         return;

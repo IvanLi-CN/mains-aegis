@@ -36,6 +36,7 @@ where
     ) {
         if self.state.unsafe_source_latched
             || self.contract_tracker.request_in_flight()
+            || !self.active_no_contract_recovery_allowed()
             || !self.source_caps_requery_due(now_ms)
         {
             return;
@@ -271,102 +272,29 @@ where
         }
 
         if !self.active_no_contract_recovery_allowed() {
-            let last_attempt_age_ms = self
-                .last_source_caps_recovery_at_ms
-                .map(|last| now_ms.wrapping_sub(last));
-
-            if self.last_source_caps_recovery_at_ms.is_none() {
-                esp_println::println!(
-                    "usb_pd: no source caps after inherited attach, inhibiting hard reset waited_ms={} tx_spec_rev_bits={}",
-                    waited_ms,
-                    self.tx_spec_revision.bits()
-                );
-                warn!(
-                    "usb_pd: inherited attach missing source caps, suppress hard reset waited_ms={=u32} tx_spec_rev_bits={=u8}",
-                    waited_ms,
-                    self.tx_spec_revision.bits()
-                );
+            if self.state.recovery_event != Some(UsbPdRecoveryEvent::HardResetInhibited) {
                 self.note_recovery_event(UsbPdRecoveryEvent::HardResetInhibited);
-                self.inherited_source_caps_probe_pending = true;
-                self.last_source_caps_recovery_at_ms = Some(now_ms);
-                return;
             }
 
-            if self.inherited_source_caps_probe_pending {
+            self.inherited_source_caps_probe_pending = false;
+            self.source_caps_recovery_attempted = true;
+            self.last_source_caps_recovery_at_ms.get_or_insert(now_ms);
+            self.apply_default_5v_input_limits(None, "inherited_attach_default_5v");
+            if self.charge_ready_at_ms.is_none() && !self.state.charge_ready {
+                self.arm_default_5v_charge_ready(now_ms, "inherited_attach_default_5v");
+            }
+
+            if self.last_source_caps_recovery_at_ms == Some(now_ms) {
                 esp_println::println!(
-                    "usb_pd: inherited attach requesting source caps waited_ms={} tx_spec_rev_bits={}",
+                    "usb_pd: no source caps after inherited attach, holding 5v until replug waited_ms={} tx_spec_rev_bits={}",
                     waited_ms,
                     self.tx_spec_revision.bits()
                 );
-                match self.send_control_message(
-                    ControlMessageType::GetSourceCap,
-                    self.recovery_spec_revision(),
-                ) {
-                    Ok(()) => {
-                        self.note_recovery_event(UsbPdRecoveryEvent::GetSourceCapSent);
-                        self.inherited_source_caps_probe_pending = false;
-                        self.last_source_caps_recovery_at_ms = Some(now_ms);
-                    }
-                    Err(err) => {
-                        warn!(
-                            "usb_pd: inherited get_source_cap failed err={}",
-                            fusb302_error_kind(&err)
-                        );
-                        self.inherited_source_caps_probe_pending = false;
-                        self.last_source_caps_recovery_at_ms = Some(now_ms);
-                    }
-                }
-                return;
-            }
-
-            if !self.source_caps_recovery_attempted
-                && last_attempt_age_ms.is_some_and(|age| age >= SOURCE_CAPS_REQUERY_DELAY_MS)
-            {
                 warn!(
-                    "usb_pd: inherited attach still missing source caps, sending soft reset waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                    "usb_pd: inherited attach missing source caps, suppress pd recovery until replug waited_ms={=u32} tx_spec_rev_bits={=u8}",
                     waited_ms,
                     self.tx_spec_revision.bits()
                 );
-                match self.send_control_message(
-                    ControlMessageType::SoftReset,
-                    self.recovery_spec_revision(),
-                ) {
-                    Ok(()) => {
-                        self.note_recovery_event(UsbPdRecoveryEvent::SoftResetSent);
-                        self.source_caps_recovery_attempted = true;
-                        self.last_source_caps_recovery_at_ms = Some(now_ms);
-                    }
-                    Err(err) => {
-                        warn!(
-                            "usb_pd: inherited soft reset failed err={}",
-                            fusb302_error_kind(&err)
-                        );
-                        self.source_caps_recovery_attempted = true;
-                        self.last_source_caps_recovery_at_ms = Some(now_ms);
-                    }
-                }
-                return;
-            }
-
-            if self.source_caps_recovery_attempted {
-                if self.charge_ready_at_ms.is_none() && !self.state.charge_ready {
-                    if self.state.recovery_event != Some(UsbPdRecoveryEvent::HardResetInhibited) {
-                        self.note_recovery_event(UsbPdRecoveryEvent::HardResetInhibited);
-                    }
-                    esp_println::println!(
-                        "usb_pd: no source caps after inherited attach, holding 5v until replug waited_ms={} tx_spec_rev_bits={}",
-                        waited_ms,
-                        self.tx_spec_revision.bits()
-                    );
-                    warn!(
-                        "usb_pd: no source caps after inherited attach, suppress hard reset until replug waited_ms={=u32} tx_spec_rev_bits={=u8}",
-                        waited_ms,
-                        self.tx_spec_revision.bits()
-                    );
-                } else if self.state.recovery_event != Some(UsbPdRecoveryEvent::HardResetInhibited)
-                {
-                    self.note_recovery_event(UsbPdRecoveryEvent::HardResetInhibited);
-                }
             }
             return;
         }
@@ -406,6 +334,7 @@ where
             || self.source_capabilities.is_none()
             || self.contract_tracker.request_in_flight()
             || self.in_no_contract_hard_reset_wait()
+            || !self.active_no_contract_recovery_allowed()
             || !matches!(self.state.vbus_present, Some(true))
         {
             return;
