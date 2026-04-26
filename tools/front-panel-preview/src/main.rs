@@ -20,9 +20,9 @@ use front_panel_scene::{
     demo_mode_from_focus, AudioTestUiState, BmsRecoveryUiAction, BmsResultKind,
     DashboardChargerProtocol, DashboardDetailPage, DashboardDetailSnapshot, DashboardInputSource,
     DashboardRoute, DisplayDiagnosticMeta, ManualChargeStopReason, SelfCheckCommState,
-    SelfCheckOverlay, SelfCheckUiSnapshot, TestFunctionUi, TpsTestChargerSnapshot,
-    TpsTestOutputSnapshot, TpsTestUiSnapshot, TpsTestVoutProfile, UiFocus, UiModel, UiPainter,
-    UiVariant, UpsMode, UI_H, UI_W,
+    SelfCheckHardwareTarget, SelfCheckOverlay, SelfCheckUiSnapshot, TestFunctionUi,
+    TpsTestChargerSnapshot, TpsTestOutputSnapshot, TpsTestUiSnapshot, TpsTestVoutProfile, UiFocus,
+    UiModel, UiPainter, UiVariant, UpsMode, UI_H, UI_W,
 };
 
 #[allow(dead_code)]
@@ -868,6 +868,40 @@ fn bq40_snapshot_for_scenario(
             snapshot.bq40z50_last_result = Some(BmsResultKind::NotDetected);
             SelfCheckOverlay::BmsActivateResult(BmsResultKind::NotDetected)
         }
+        ScenarioArg::Bq40IssueDialog => {
+            snapshot.bq25792_vbat_present = Some(false);
+            snapshot.bq40z50 = SelfCheckCommState::Warn;
+            snapshot.bq40z50_no_battery = Some(true);
+            snapshot.bq40z50_discharge_ready = Some(false);
+            snapshot.bq40z50_issue_detail = Some("no_battery");
+            snapshot.bq40z50_recovery_action = None;
+            snapshot.bq40z50_last_result = Some(BmsResultKind::NoBattery);
+            SelfCheckOverlay::HardwareIssue(SelfCheckHardwareTarget::Bq40z50)
+        }
+        ScenarioArg::TpsAIssueDialog => {
+            snapshot.bq40z50 = SelfCheckCommState::Warn;
+            snapshot.bq40z50_pack_mv = Some(15_420);
+            snapshot.bq40z50_current_ma = Some(115);
+            snapshot.bq40z50_soc_pct = Some(76);
+            snapshot.bq40z50_rca_alarm = Some(false);
+            snapshot.bq40z50_no_battery = Some(false);
+            snapshot.bq40z50_discharge_ready = Some(false);
+            snapshot.bq40z50_issue_detail = Some("xdsg_blocked");
+            snapshot.bq40z50_recovery_action = None;
+            snapshot.requested_outputs = esp_firmware::output_state::EnabledOutputs::Only(
+                esp_firmware::output_state::OutputSelector::OutA,
+            );
+            snapshot.active_outputs = esp_firmware::output_state::EnabledOutputs::None;
+            snapshot.recoverable_outputs = esp_firmware::output_state::EnabledOutputs::Only(
+                esp_firmware::output_state::OutputSelector::OutA,
+            );
+            snapshot.output_gate_reason = esp_firmware::output_state::OutputGateReason::BmsNotReady;
+            snapshot.tps_a = SelfCheckCommState::Warn;
+            snapshot.tps_a_enabled = Some(false);
+            snapshot.out_a_vbus_mv = None;
+            snapshot.tps_a_iout_ma = None;
+            SelfCheckOverlay::HardwareIssue(SelfCheckHardwareTarget::TpsA)
+        }
         ScenarioArg::Default
         | ScenarioArg::DisplayDiag
         | ScenarioArg::DashboardRuntimeStandby
@@ -1201,7 +1235,9 @@ fn run() -> Result<(), String> {
         | ScenarioArg::Bq40ResultNoBattery
         | ScenarioArg::Bq40ResultRomMode
         | ScenarioArg::Bq40ResultAbnormal
-        | ScenarioArg::Bq40ResultNotDetected => {
+        | ScenarioArg::Bq40ResultNotDetected
+        | ScenarioArg::Bq40IssueDialog
+        | ScenarioArg::TpsAIssueDialog => {
             let (snapshot, overlay) =
                 bq40_snapshot_for_scenario(args.mode.into_scene(), args.scenario);
             front_panel_scene::render_frame_with_dashboard_route_overlay(
@@ -1452,6 +1488,8 @@ enum ScenarioArg {
     Bq40ResultRomMode,
     Bq40ResultAbnormal,
     Bq40ResultNotDetected,
+    Bq40IssueDialog,
+    TpsAIssueDialog,
     TpsTest,
     TestAudio,
     TestNavigation,
@@ -1516,11 +1554,13 @@ impl ScenarioArg {
             "bq40-result-rom-mode" => Ok(Self::Bq40ResultRomMode),
             "bq40-result-abnormal" => Ok(Self::Bq40ResultAbnormal),
             "bq40-result-not-detected" => Ok(Self::Bq40ResultNotDetected),
+            "bq40-issue-dialog" => Ok(Self::Bq40IssueDialog),
+            "tps-a-issue-dialog" => Ok(Self::TpsAIssueDialog),
             "tps-test" => Ok(Self::TpsTest),
             "test-audio" => Ok(Self::TestAudio),
             "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-bms|dashboard-detail-bms-charge-blocked|dashboard-detail-bms-balance-multi|dashboard-detail-bms-no-data|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|dashboard-manual-charge-default|dashboard-manual-charge-active|dashboard-manual-charge-stop-hold|dashboard-manual-charge-reset-auto|dashboard-manual-charge-blocked|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-bms|dashboard-detail-bms-charge-blocked|dashboard-detail-bms-balance-multi|dashboard-detail-bms-no-data|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|dashboard-manual-charge-default|dashboard-manual-charge-active|dashboard-manual-charge-stop-hold|dashboard-manual-charge-reset-auto|dashboard-manual-charge-blocked|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|bq40-issue-dialog|tps-a-issue-dialog|tps-test|test-audio|test-navigation)"
             )),
         }
     }
@@ -1585,6 +1625,8 @@ impl ScenarioArg {
             ScenarioArg::Bq40ResultRomMode => "bq40-result-rom-mode",
             ScenarioArg::Bq40ResultAbnormal => "bq40-result-abnormal",
             ScenarioArg::Bq40ResultNotDetected => "bq40-result-not-detected",
+            ScenarioArg::Bq40IssueDialog => "bq40-issue-dialog",
+            ScenarioArg::TpsAIssueDialog => "tps-a-issue-dialog",
             ScenarioArg::TpsTest => "tps-test",
             ScenarioArg::TestAudio => "test-audio",
             ScenarioArg::TestNavigation => "test-navigation",
@@ -1671,7 +1713,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-bms|dashboard-detail-bms-charge-blocked|dashboard-detail-bms-balance-multi|dashboard-detail-bms-no-data|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|dashboard-manual-charge-default|dashboard-manual-charge-active|dashboard-manual-charge-stop-hold|dashboard-manual-charge-reset-auto|dashboard-manual-charge-blocked|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-bms|dashboard-detail-bms-charge-blocked|dashboard-detail-bms-balance-multi|dashboard-detail-bms-no-data|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|dashboard-manual-charge-default|dashboard-manual-charge-active|dashboard-manual-charge-stop-hold|dashboard-manual-charge-reset-auto|dashboard-manual-charge-blocked|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|bq40-issue-dialog|tps-a-issue-dialog|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",
