@@ -424,6 +424,15 @@ where
             snapshot.center,
             snapshot.touch
         );
+        esp_println::println!(
+            "ui: display_diag trigger=center_long_press page={} route={} overlay={} bms_state={} center={} touch={}",
+            variant_name(self.ui_variant),
+            dashboard_route_name(self.dashboard_route),
+            overlay_name(self.self_check_overlay),
+            bms_activation_state_name(self.bms_activation_state),
+            snapshot.center,
+            snapshot.touch
+        );
 
         match self.read_tca_diag_snapshot() {
             Ok(diag) => {
@@ -446,9 +455,28 @@ where
                     (diag.output & (1 << TCA_BIT_RES)) != 0,
                     (diag.output & (1 << TCA_BIT_TP_RESET)) != 0
                 );
+                esp_println::println!(
+                    "ui: display_diag tca_raw input=0x{:02x} output=0x{:02x} polarity=0x{:02x} config=0x{:02x}",
+                    diag.input,
+                    diag.output,
+                    diag.polarity,
+                    diag.config
+                );
+                esp_println::println!(
+                    "ui: display_diag tca_state up={} down={} left={} right={} usb2_pg={} cs_enabled={} res_released={} tp_reset_released={}",
+                    (actual & (1 << 3)) == 0,
+                    (actual & (1 << 0)) == 0,
+                    (actual & (1 << 1)) == 0,
+                    (actual & (1 << 2)) == 0,
+                    (actual & (1 << 4)) != 0,
+                    (diag.output & (1 << TCA_BIT_CS)) == 0,
+                    (diag.output & (1 << TCA_BIT_RES)) != 0,
+                    (diag.output & (1 << TCA_BIT_TP_RESET)) != 0
+                );
             }
             Err(e) => {
                 defmt::error!("ui: display_diag tca_read err={}", i2c_error_kind(e));
+                esp_println::println!("ui: display_diag tca_read err={}", i2c_error_kind(e));
             }
         }
 
@@ -459,6 +487,15 @@ where
         let ctp_irq_low = self.ctp_irq.is_low();
         defmt::info!(
             "ui: display_diag gpio gpio1_tca_reset_high={=bool} gpio10_dc_high={=bool} gpio13_blk_high={=bool} gpio0_center_low={=bool} gpio14_ctp_irq_low={=bool} backlight_on={=bool}",
+            tca_reset_high,
+            dc_high,
+            bl_high,
+            center_low,
+            ctp_irq_low,
+            self.backlight_is_on_raw_level(bl_high)
+        );
+        esp_println::println!(
+            "ui: display_diag gpio gpio1_tca_reset_high={} gpio10_dc_high={} gpio13_blk_high={} gpio0_center_low={} gpio14_ctp_irq_low={} backlight_on={}",
             tca_reset_high,
             dc_high,
             bl_high,
@@ -482,9 +519,27 @@ where
                     mapped_x,
                     mapped_y
                 );
+                let (mapped_present, mapped_x, mapped_y) = match diag.mapped_point {
+                    Some((x, y)) => (true, x, y),
+                    None => (false, 0, 0),
+                };
+                esp_println::println!(
+                    "ui: display_diag cst816d probe=ok gesture=0x{:02x} fingers={} raw_x={} raw_y={} mapped_present={} mapped_x={} mapped_y={}",
+                    diag.gesture,
+                    diag.finger_count,
+                    diag.raw_x,
+                    diag.raw_y,
+                    mapped_present,
+                    mapped_x,
+                    mapped_y
+                );
             }
             Err(e) => {
                 defmt::error!(
+                    "ui: display_diag cst816d probe=err err={}",
+                    i2c_error_kind(e)
+                );
+                esp_println::println!(
                     "ui: display_diag cst816d probe=err err={}",
                     i2c_error_kind(e)
                 );
@@ -1134,6 +1189,9 @@ where
                 defmt::warn!(
                     "ui: ctp_irq active without coordinates; ignore irq-only touch to avoid stuck edge"
                 );
+                esp_println::println!(
+                    "ui: ctp_irq active_without_coordinates action=ignore_irq_only_touch"
+                );
                 self.touch_irq_stuck_hint_logged = true;
             }
         } else if !touch_irq_active {
@@ -1219,6 +1277,7 @@ where
             self.self_check_overlay = SelfCheckOverlay::None;
             self.needs_redraw = true;
             defmt::info!("ui: self-check dialog close via touch");
+            esp_println::println!("ui: self-check dialog close via touch");
             return was_result.then_some(UiAction::ClearBmsActivationResult);
         }
 
@@ -1230,11 +1289,18 @@ where
             y,
             overlay_name(self.self_check_overlay)
         );
+        esp_println::println!(
+            "ui: touch edge page=self_check x={} y={} overlay={}",
+            x,
+            y,
+            overlay_name(self.self_check_overlay)
+        );
 
         match front_panel_scene::self_check_hit_test(x, y, self.self_check_overlay) {
             Some(SelfCheckTouchTarget::ActivateCancel) => {
                 self.self_check_overlay = SelfCheckOverlay::None;
                 self.needs_redraw = true;
+                esp_println::println!("ui: touch target=activate_cancel action=close_dialog");
                 None
             }
             Some(SelfCheckTouchTarget::ActivateConfirm) => {
@@ -1252,15 +1318,29 @@ where
                     }
                 };
                 self.needs_redraw = true;
+                esp_println::println!(
+                    "ui: touch target=activate_confirm action={}",
+                    bms_recovery_ui_action_name(action)
+                );
                 Some(UiAction::RequestBmsRecovery(action))
             }
             Some(SelfCheckTouchTarget::HardwareCard(target)) => {
+                esp_println::println!(
+                    "ui: touch target=hardware_card card={}",
+                    self_check_hardware_target_name(target)
+                );
                 self.open_self_check_hardware_overlay(target);
                 None
             }
             None => {
                 defmt::info!(
                     "ui: touch target none x={=u16} y={=u16} overlay={}",
+                    x,
+                    y,
+                    overlay_name(self.self_check_overlay)
+                );
+                esp_println::println!(
+                    "ui: touch target=none page=self_check x={} y={} overlay={}",
                     x,
                     y,
                     overlay_name(self.self_check_overlay)
@@ -1290,6 +1370,10 @@ where
             self.self_check_overlay = recovery_overlay;
             self.needs_redraw = true;
             defmt::info!("ui: bms recovery dialog open via touch");
+            esp_println::println!(
+                "ui: bms recovery dialog open via touch overlay={}",
+                overlay_name(self.self_check_overlay)
+            );
             return;
         }
 
@@ -1300,6 +1384,10 @@ where
                 self.self_check_overlay = result_overlay;
                 self.needs_redraw = true;
                 defmt::info!("ui: bms result dialog reopen via touch");
+                esp_println::println!(
+                    "ui: bms result dialog reopen via touch overlay={}",
+                    overlay_name(self.self_check_overlay)
+                );
                 return;
             }
         }
@@ -1313,8 +1401,16 @@ where
                 "ui: self-check hardware issue open target={}",
                 self_check_hardware_target_name(target)
             );
+            esp_println::println!(
+                "ui: self-check hardware issue open target={}",
+                self_check_hardware_target_name(target)
+            );
         } else {
             defmt::info!(
+                "ui: self-check hardware touch ignored target={} reason=no_issue",
+                self_check_hardware_target_name(target)
+            );
+            esp_println::println!(
                 "ui: self-check hardware touch ignored target={} reason=no_issue",
                 self_check_hardware_target_name(target)
             );
@@ -1345,6 +1441,11 @@ where
                     dashboard_route_name(previous),
                     dashboard_route_name(self.dashboard_route)
                 );
+                esp_println::println!(
+                    "ui: dashboard route old={} new={} source=key",
+                    dashboard_route_name(previous),
+                    dashboard_route_name(self.dashboard_route)
+                );
             }
         }
         None
@@ -1360,6 +1461,13 @@ where
             Some(point) => point,
             None => return None,
         };
+
+        esp_println::println!(
+            "ui: touch edge page=dashboard route={} x={} y={}",
+            dashboard_route_name(self.dashboard_route),
+            x,
+            y
+        );
 
         if let Some(target) = front_panel_scene::dashboard_hit_test(self.dashboard_route, x, y) {
             let resolved_target = if matches!(target, DashboardTouchTarget::ManualStart)
@@ -1380,9 +1488,20 @@ where
                     dashboard_route_name(self.dashboard_route),
                     dashboard_touch_target_name(resolved_target)
                 );
+                esp_println::println!(
+                    "ui: dashboard route old={} new={} target={} source=touch",
+                    dashboard_route_name(previous),
+                    dashboard_route_name(self.dashboard_route),
+                    dashboard_touch_target_name(resolved_target)
+                );
             } else {
                 defmt::info!(
                     "ui: dashboard route keep={} target={}",
+                    dashboard_route_name(self.dashboard_route),
+                    dashboard_touch_target_name(resolved_target)
+                );
+                esp_println::println!(
+                    "ui: dashboard route keep={} target={} source=touch",
                     dashboard_route_name(self.dashboard_route),
                     dashboard_touch_target_name(resolved_target)
                 );
@@ -1395,8 +1514,19 @@ where
                     "ui: manual_charge action={}",
                     manual_charge_ui_action_name(action)
                 );
+                esp_println::println!(
+                    "ui: manual_charge action={}",
+                    manual_charge_ui_action_name(action)
+                );
                 return Some(UiAction::ManualCharge(action));
             }
+        } else {
+            esp_println::println!(
+                "ui: touch target=none page=dashboard route={} x={} y={}",
+                dashboard_route_name(self.dashboard_route),
+                x,
+                y
+            );
         }
         None
     }

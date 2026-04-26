@@ -194,6 +194,7 @@
 - Given 用户修改偏好并重启，When 再次进入手动页，Then 能读回相同偏好。
 - Given 系统已在自动充电但手动会话尚未 active，When 进入手动页，Then 动作按钮显示 `START` 且设置保持可调；用户点击后进入 `takeover=true` 的手动会话。
 - Given 手动会话已 active，When 进入手动页，Then 动作按钮显示 `STOP` 且设置锁定。
+- Given 用户在 Dashboard 或 `MANUAL CHARGE` 页面触摸屏幕，When monitor 正在运行，Then 普通串口输出必须记录触摸边沿、当前 route、命中 target 或 `target=none`，便于确认触摸坐标映射与返回/动作热区是否命中。
 - Given 用户在本次运行中执行 `STOP`，When charger 下一轮 poll，Then 自动策略不得立刻恢复充电。
 - Given MCU 在手动会话中复位，When 系统重新启动，Then 手动会话状态与停止抑制必须全部清空。
 - Given 用户执行手动充电 `START/STOP`，When monitor 正在运行，Then 普通串口输出必须记录 `manual_charge` 事件、目标档位、速度、计时器与 takeover 状态，便于确认前面板动作已送达运行态。
@@ -205,6 +206,7 @@
 - 已在 charger detail 左侧面板增加 `MANUAL CHARGE` 入口热区与高亮 marker。
 - 已将手动页重排为 1.47 英寸小屏优先布局：顶部压缩为单层只读信息条、三条无外层卡片的横向 segmented rows、底部唯一操作条与单一 `BACK`。
 - 已新增手动页路由、命中区、`START/STOP` 动作映射与 `LEFT/CENTER/BACK` 返回逻辑。
+- 已将 Dashboard 触摸边沿、route 变化、命中 target 与 `target=none` 诊断镜像到普通串口，避免无法解码 defmt 时无法判断触摸是否进入路由/热区。
 - 已新增 `ManualChargePrefs`、`ManualChargeRuntimeState`、`ManualChargeUiSnapshot`，并把 runtime 状态保持在 `PowerManager` RAM 中。
 - 已把手动会话接到 charger state machine，支持：用户启动/停止、目标完成停充、timer expiry、safety blocked、stop inhibit 与自动恢复。
 - 已将手动 `START/STOP` 事件镜像到普通串口输出，便于在不依赖 defmt 解码的 monitor 中确认手动动作是否进入固件。
