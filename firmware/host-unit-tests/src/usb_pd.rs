@@ -50,6 +50,7 @@ pub struct UsbPdPowerDemand {
     pub requested_charge_voltage_mv: u16,
     pub requested_charge_current_ma: u16,
     pub system_load_power_mw: u32,
+    pub system_voltage_mv: Option<u16>,
     pub battery_voltage_mv: Option<u16>,
     pub measured_input_voltage_mv: Option<u16>,
     pub charging_enabled: bool,

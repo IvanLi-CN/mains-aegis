@@ -272,29 +272,83 @@ where
         }
 
         if !self.active_no_contract_recovery_allowed() {
-            if self.state.recovery_event != Some(UsbPdRecoveryEvent::HardResetInhibited) {
-                self.note_recovery_event(UsbPdRecoveryEvent::HardResetInhibited);
+            if !self.source_caps_recovery_attempted {
+                if self.state.recovery_event != Some(UsbPdRecoveryEvent::HardResetInhibited) {
+                    self.note_recovery_event(UsbPdRecoveryEvent::HardResetInhibited);
+                }
+
+                if !self.inherited_source_caps_probe_pending {
+                    self.inherited_source_caps_probe_pending = true;
+                    self.last_source_caps_recovery_at_ms.get_or_insert(now_ms);
+                    esp_println::println!(
+                        "usb_pd: inherited attach missing source caps, probing caps without reset waited_ms={} tx_spec_rev_bits={}",
+                        waited_ms,
+                        self.recovery_spec_revision().bits()
+                    );
+                    warn!(
+                        "usb_pd: inherited attach missing source caps, probing caps without reset waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                        waited_ms,
+                        self.recovery_spec_revision().bits()
+                    );
+                    return;
+                }
+
+                self.inherited_source_caps_probe_pending = false;
+                self.source_caps_recovery_attempted = true;
+                self.last_source_caps_recovery_at_ms = Some(now_ms);
+                esp_println::println!(
+                    "usb_pd: inherited attach source caps probe tx_spec_rev_bits={} peer_spec_rev_bits={}",
+                    self.recovery_spec_revision().bits(),
+                    self.peer_spec_revision.bits()
+                );
+                info!(
+                    "usb_pd: inherited attach source caps probe tx_spec_rev_bits={=u8} peer_spec_rev_bits={=u8}",
+                    self.recovery_spec_revision().bits(),
+                    self.peer_spec_revision.bits()
+                );
+                match self.send_control_message(
+                    ControlMessageType::GetSourceCap,
+                    self.recovery_spec_revision(),
+                ) {
+                    Ok(()) => {
+                        self.last_source_caps_requery_at_ms = Some(now_ms);
+                        self.note_recovery_event(UsbPdRecoveryEvent::GetSourceCapSent);
+                    }
+                    Err(err) => {
+                        warn!(
+                            "usb_pd: inherited attach source caps probe failed err={}",
+                            fusb302_error_kind(&err)
+                        );
+                    }
+                }
+                return;
+            }
+
+            let last_probe_at_ms = self
+                .last_source_caps_recovery_at_ms
+                .unwrap_or(attached_at_ms);
+            if now_ms.wrapping_sub(last_probe_at_ms) < SOURCE_CAPS_REQUERY_DELAY_MS {
+                return;
             }
 
             self.inherited_source_caps_probe_pending = false;
-            self.source_caps_recovery_attempted = true;
-            self.last_source_caps_recovery_at_ms.get_or_insert(now_ms);
             self.apply_default_5v_input_limits(None, "inherited_attach_default_5v");
             if self.charge_ready_at_ms.is_none() && !self.state.charge_ready {
                 self.arm_default_5v_charge_ready(now_ms, "inherited_attach_default_5v");
             }
 
-            if self.last_source_caps_recovery_at_ms == Some(now_ms) {
+            if self.last_source_caps_recovery_at_ms == Some(last_probe_at_ms) {
                 esp_println::println!(
-                    "usb_pd: no source caps after inherited attach, holding 5v until replug waited_ms={} tx_spec_rev_bits={}",
+                    "usb_pd: no source caps after inherited attach probes, holding 5v until replug waited_ms={} tx_spec_rev_bits={}",
                     waited_ms,
                     self.tx_spec_revision.bits()
                 );
                 warn!(
-                    "usb_pd: inherited attach missing source caps, suppress pd recovery until replug waited_ms={=u32} tx_spec_rev_bits={=u8}",
+                    "usb_pd: inherited attach missing source caps after probes, suppress pd recovery until replug waited_ms={=u32} tx_spec_rev_bits={=u8}",
                     waited_ms,
                     self.tx_spec_revision.bits()
                 );
+                self.last_source_caps_recovery_at_ms = None;
             }
             return;
         }

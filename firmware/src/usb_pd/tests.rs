@@ -697,7 +697,7 @@ fn persistent_no_source_caps_rearms_phy_after_hard_timeout() {
 }
 
 #[test]
-fn inherited_attach_timeout_holds_5v_and_skips_hard_reset_until_replug() {
+fn inherited_attach_timeout_probes_source_caps_then_holds_5v_if_silent() {
     let mut manager = UsbPdSinkManager::new(RecordingI2c::default());
     manager.state.attached = true;
     manager.state.enabled = true;
@@ -714,31 +714,50 @@ fn inherited_attach_timeout_holds_5v_and_skips_hard_reset_until_replug() {
     assert!(manager.state.attached);
     assert!(!manager.in_no_contract_hard_reset_sent());
     assert!(!manager.in_no_contract_hard_reset_wait());
+    assert!(!manager.source_caps_recovery_attempted);
+    assert!(manager.inherited_source_caps_probe_pending);
+    assert_eq!(
+        manager.state.recovery_event,
+        Some(UsbPdRecoveryEvent::HardResetInhibited)
+    );
+    assert_eq!(manager.state.vindpm_mv, None);
+    assert_eq!(manager.state.input_current_limit_ma, None);
+    assert_eq!(manager.charge_ready_at_ms, None);
+
+    manager.maybe_recover_missing_source_caps(
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS + 1,
+    );
+
     assert!(manager.source_caps_recovery_attempted);
     assert!(!manager.inherited_source_caps_probe_pending);
     assert_eq!(
         manager.state.recovery_event,
-        Some(UsbPdRecoveryEvent::HardResetInhibited)
+        Some(UsbPdRecoveryEvent::GetSourceCapSent)
+    );
+    assert_eq!(manager.state.vindpm_mv, None);
+    assert_eq!(manager.state.input_current_limit_ma, None);
+    assert_eq!(manager.charge_ready_at_ms, None);
+
+    manager.maybe_recover_missing_source_caps(
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS + SOURCE_CAPS_REQUERY_DELAY_MS + 2,
     );
     assert_eq!(manager.state.vindpm_mv, Some(4_000));
     assert_eq!(manager.state.input_current_limit_ma, Some(500));
     assert_eq!(
         manager.charge_ready_at_ms,
-        Some(SOURCE_CAPS_WAIT_TIMEOUT_MS + DEFAULT_5V_CHARGE_READY_DELAY_MS)
-    );
-
-    manager.maybe_recover_missing_source_caps(
-        UsbPdPowerDemand::default(),
-        SOURCE_CAPS_WAIT_TIMEOUT_MS + SOURCE_CAPS_REQUERY_DELAY_MS + 1,
-    );
-    assert_eq!(
-        manager.state.recovery_event,
-        Some(UsbPdRecoveryEvent::HardResetInhibited)
+        Some(
+            SOURCE_CAPS_WAIT_TIMEOUT_MS
+                + SOURCE_CAPS_REQUERY_DELAY_MS
+                + 2
+                + DEFAULT_5V_CHARGE_READY_DELAY_MS
+        )
     );
 
     let i2c = manager.phy.release_i2c();
     assert_eq!(i2c.hard_reset_tx_count(), 0);
-    assert_eq!(i2c.get_source_cap_tx_count(), 0);
+    assert_eq!(i2c.get_source_cap_tx_count(), 1);
     assert_eq!(i2c.soft_reset_tx_count(), 0);
 }
 
@@ -756,18 +775,40 @@ fn inherited_attach_failed_recovery_tx_still_reaches_5v_fallback() {
         UsbPdPowerDemand::default(),
         SOURCE_CAPS_WAIT_TIMEOUT_MS,
     );
+    assert!(manager.inherited_source_caps_probe_pending);
+    assert!(!manager.source_caps_recovery_attempted);
+    assert_eq!(manager.state.vindpm_mv, None);
+    assert_eq!(manager.state.input_current_limit_ma, None);
+
+    manager.maybe_recover_missing_source_caps(
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS + 1,
+    );
     assert!(!manager.inherited_source_caps_probe_pending);
     assert!(manager.source_caps_recovery_attempted);
+    assert_eq!(manager.state.vindpm_mv, None);
+    assert_eq!(manager.state.input_current_limit_ma, None);
+    assert_eq!(manager.charge_ready_at_ms, None);
+
+    manager.maybe_recover_missing_source_caps(
+        UsbPdPowerDemand::default(),
+        SOURCE_CAPS_WAIT_TIMEOUT_MS + SOURCE_CAPS_REQUERY_DELAY_MS + 2,
+    );
     assert_eq!(manager.state.vindpm_mv, Some(4_000));
     assert_eq!(manager.state.input_current_limit_ma, Some(500));
     assert_eq!(
         manager.charge_ready_at_ms,
-        Some(SOURCE_CAPS_WAIT_TIMEOUT_MS + DEFAULT_5V_CHARGE_READY_DELAY_MS)
+        Some(
+            SOURCE_CAPS_WAIT_TIMEOUT_MS
+                + SOURCE_CAPS_REQUERY_DELAY_MS
+                + 2
+                + DEFAULT_5V_CHARGE_READY_DELAY_MS
+        )
     );
 }
 
 #[test]
-fn inherited_attach_recovered_source_caps_stays_on_5v_until_replug() {
+fn inherited_attach_recovered_source_caps_requests_startup_pps_from_vsys() {
     let mut manager = UsbPdSinkManager::new(RecordingI2c::default());
     manager.state.attached = true;
     manager.state.enabled = true;
@@ -783,13 +824,14 @@ fn inherited_attach_recovered_source_caps_stays_on_5v_until_replug() {
             &[
                 fixed_pdo_raw(5_000, 3_000),
                 fixed_pdo_raw(9_000, 3_000),
+                fixed_pdo_raw(12_000, 3_000),
                 pd::Apdo::new_pps(3_300, 20_000, 3_000).raw(),
             ],
         ),
         UsbPdPowerDemand {
-            requested_charge_voltage_mv: 16_800,
             system_load_power_mw: 2_500,
-            charging_enabled: true,
+            system_voltage_mv: Some(12_400),
+            charging_enabled: false,
             ..UsbPdPowerDemand::default()
         },
         SOURCE_CAPS_WAIT_TIMEOUT_MS + SOURCE_CAPS_REQUERY_DELAY_MS + 10,
@@ -797,40 +839,80 @@ fn inherited_attach_recovered_source_caps_stays_on_5v_until_replug() {
 
     assert_eq!(manager.state.contract, None);
     assert!(!manager.source_caps_recovery_attempted);
-    assert_eq!(manager.state.vindpm_mv, Some(4_000));
-    assert_eq!(manager.state.input_current_limit_ma, Some(3_000));
-    assert_eq!(
-        manager.charge_ready_at_ms,
-        Some(
-            SOURCE_CAPS_WAIT_TIMEOUT_MS
-                + SOURCE_CAPS_REQUERY_DELAY_MS
-                + 10
-                + DEFAULT_5V_CHARGE_READY_DELAY_MS
-        )
-    );
-
-    manager.tick(
-        UsbPdPowerDemand {
-            requested_charge_voltage_mv: 16_800,
-            system_load_power_mw: 2_500,
-            charging_enabled: true,
-            ..UsbPdPowerDemand::default()
-        },
-        false,
-        SOURCE_CAPS_WAIT_TIMEOUT_MS + SOURCE_CAPS_REQUERY_DELAY_MS * 2 + 10,
-    );
-    assert_eq!(manager.state.contract, None);
-    assert!(!manager.contract_tracker.request_in_flight());
-
-    manager.maybe_recover_stalled_no_contract_with_cached_caps(
-        SOURCE_CAPS_WAIT_TIMEOUT_MS
-            + SOURCE_CAPS_REQUERY_DELAY_MS * 2
-            + NO_CONTRACT_SOURCE_CAPS_REARM_TIMEOUT_MS,
-    );
-    assert!(manager.state.attached);
+    assert!(manager.contract_tracker.request_in_flight());
+    assert_eq!(manager.charge_ready_at_ms, None);
+    let pending = manager.contract_tracker.pending_contract().unwrap();
+    assert_eq!(pending.kind, ContractKind::Pps);
+    assert_eq!(pending.voltage_mv, 12_650);
+    assert_eq!(pending.vindpm_mv, Some(11_650));
 
     let i2c = manager.phy.release_i2c();
-    assert_eq!(i2c.request_tx_count(), 0);
+    assert_eq!(i2c.request_tx_count(), 1);
+    assert_eq!(i2c.hard_reset_tx_count(), 0);
+    assert_eq!(i2c.soft_reset_tx_count(), 0);
+}
+
+#[test]
+fn inherited_attach_recovered_source_caps_falls_back_to_12v_then_9v_fixed() {
+    let mut manager = UsbPdSinkManager::new(RecordingI2c::default());
+    manager.state.attached = true;
+    manager.state.enabled = true;
+    manager.state.controller_ready = true;
+    manager.state.vbus_present = Some(true);
+    manager.state.polarity = Some(CcPolarity::Cc1);
+    manager.attached_at_ms = Some(0);
+    manager.source_caps_recovery_attempted = true;
+
+    manager.handle_message(
+        source_caps_message(
+            SpecRevision::Rev30,
+            &[
+                fixed_pdo_raw(5_000, 3_000),
+                fixed_pdo_raw(9_000, 3_000),
+                fixed_pdo_raw(12_000, 3_000),
+            ],
+        ),
+        UsbPdPowerDemand {
+            system_load_power_mw: 2_500,
+            system_voltage_mv: Some(12_400),
+            charging_enabled: false,
+            ..UsbPdPowerDemand::default()
+        },
+        SOURCE_CAPS_WAIT_TIMEOUT_MS + SOURCE_CAPS_REQUERY_DELAY_MS + 10,
+    );
+
+    assert!(manager.contract_tracker.request_in_flight());
+    let pending = manager.contract_tracker.pending_contract().unwrap();
+    assert_eq!(pending.kind, ContractKind::Fixed);
+    assert_eq!(pending.voltage_mv, 12_000);
+
+    let mut manager = UsbPdSinkManager::new(RecordingI2c::default());
+    manager.state.attached = true;
+    manager.state.enabled = true;
+    manager.state.controller_ready = true;
+    manager.state.vbus_present = Some(true);
+    manager.state.polarity = Some(CcPolarity::Cc1);
+    manager.attached_at_ms = Some(0);
+    manager.source_caps_recovery_attempted = true;
+
+    manager.handle_message(
+        source_caps_message(
+            SpecRevision::Rev30,
+            &[fixed_pdo_raw(5_000, 3_000), fixed_pdo_raw(9_000, 3_000)],
+        ),
+        UsbPdPowerDemand {
+            system_load_power_mw: 2_500,
+            system_voltage_mv: Some(12_400),
+            charging_enabled: false,
+            ..UsbPdPowerDemand::default()
+        },
+        SOURCE_CAPS_WAIT_TIMEOUT_MS + SOURCE_CAPS_REQUERY_DELAY_MS + 10,
+    );
+
+    assert!(manager.contract_tracker.request_in_flight());
+    let pending = manager.contract_tracker.pending_contract().unwrap();
+    assert_eq!(pending.kind, ContractKind::Fixed);
+    assert_eq!(pending.voltage_mv, 9_000);
 }
 
 #[test]

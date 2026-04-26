@@ -377,7 +377,18 @@ where
                         return;
                     };
                     let filtered = sink_policy::filter_source_capabilities(&source_caps);
-                    log_filtered_source_capabilities(&message, &source_caps, &filtered);
+                    let inherited_startup = !self.active_no_contract_recovery_allowed()
+                        && self.state.contract.is_none();
+                    if !inherited_startup {
+                        log_filtered_source_capabilities(&message, &source_caps, &filtered);
+                    } else {
+                        esp_println::println!(
+                            "usb_pd: source_caps inherited_startup spec_rev_bits={} raw_len={} filtered_len={}",
+                            source_caps.spec_revision.bits(),
+                            source_caps.len(),
+                            filtered.len()
+                        );
+                    }
                     let pending_contract_supported = self
                         .contract_tracker
                         .pending_contract()
@@ -406,10 +417,53 @@ where
                     if filtered_source_has_pps(&filtered) {
                         self.last_source_caps_requery_at_ms = None;
                     }
-                    if !self.active_no_contract_recovery_allowed() && self.state.contract.is_none()
-                    {
+                    if inherited_startup {
+                        let startup_demand = UsbPdPowerDemand {
+                            requested_charge_voltage_mv: 0,
+                            requested_charge_current_ma: 0,
+                            system_load_power_mw: demand.system_load_power_mw,
+                            system_voltage_mv: demand.system_voltage_mv,
+                            battery_voltage_mv: demand.battery_voltage_mv,
+                            measured_input_voltage_mv: demand.measured_input_voltage_mv,
+                            charging_enabled: false,
+                        };
+                        if let Some(plan) = sink_policy::select_startup_contract_from_filtered(
+                            &self.local_capabilities,
+                            &filtered,
+                            startup_demand,
+                        ) {
+                            self.source_caps_recovery_attempted = false;
+                            let request_result =
+                                self.send_contract_request(plan, self.tx_spec_revision, now_ms);
+                            esp_println::println!(
+                                "usb_pd: inherited startup request kind={} voltage_mv={} current_ma={} sent={}",
+                                contract_kind_name(plan.contract.kind),
+                                plan.contract.voltage_mv,
+                                plan.contract.current_ma,
+                                request_result.is_ok()
+                            );
+                            warn!(
+                                "usb_pd: inherited attach source caps recovered, requesting startup contract"
+                            );
+                            log_contract_plan(&plan, startup_demand);
+                            if let Err(err) = request_result {
+                                warn!(
+                                    "usb_pd: inherited startup request failed err={}",
+                                    fusb302_error_kind(&err)
+                                );
+                                self.apply_default_5v_input_limits(
+                                    Some(&filtered),
+                                    "inherited_recovery_default_5v",
+                                );
+                                self.arm_default_5v_charge_ready(
+                                    now_ms,
+                                    "inherited_recovery_default_5v",
+                                );
+                            }
+                            return;
+                        }
                         warn!(
-                            "usb_pd: inherited attach source caps recovered, staying on default 5v until replug"
+                            "usb_pd: inherited attach source caps recovered without startup contract, staying on default 5v until replug"
                         );
                         self.source_caps_recovery_attempted = false;
                         self.apply_default_5v_input_limits(

@@ -84,6 +84,7 @@ pub struct UsbPdPowerDemand {
     pub requested_charge_voltage_mv: u16,
     pub requested_charge_current_ma: u16,
     pub system_load_power_mw: u32,
+    pub system_voltage_mv: Option<u16>,
     pub battery_voltage_mv: Option<u16>,
     pub measured_input_voltage_mv: Option<u16>,
     pub charging_enabled: bool,
@@ -214,7 +215,7 @@ fn log_filtered_source_capabilities(
 
 fn log_contract_plan(plan: &ContractPlan, demand: UsbPdPowerDemand) {
     info!(
-        "usb_pd: select_plan kind={} obj_pos={=u8} voltage_mv={=u16} current_ma={=u16} source_max_current_ma={=u16} vindpm_mv={=?} input_current_limit_ma={=?} charging_enabled={=bool} requested_charge_voltage_mv={=u16} requested_charge_current_ma={=u16} battery_voltage_mv={=?}",
+        "usb_pd: select_plan kind={} obj_pos={=u8} voltage_mv={=u16} current_ma={=u16} source_max_current_ma={=u16} vindpm_mv={=?} input_current_limit_ma={=?} charging_enabled={=bool} requested_charge_voltage_mv={=u16} requested_charge_current_ma={=u16} system_voltage_mv={=?} battery_voltage_mv={=?}",
         contract_kind_name(plan.contract.kind),
         plan.contract.object_position,
         plan.contract.voltage_mv,
@@ -225,6 +226,7 @@ fn log_contract_plan(plan: &ContractPlan, demand: UsbPdPowerDemand) {
         demand.charging_enabled,
         demand.requested_charge_voltage_mv,
         demand.requested_charge_current_ma,
+        demand.system_voltage_mv,
         demand.battery_voltage_mv
     );
 }
