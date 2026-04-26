@@ -195,6 +195,7 @@
 - Given 用户在本次运行中执行 `STOP`，When charger 下一轮 poll，Then 自动策略不得立刻恢复充电。
 - Given MCU 在手动会话中复位，When 系统重新启动，Then 手动会话状态与停止抑制必须全部清空。
 - Given 手动速度偏好为 `1A` 且输入侧超出 derate 阈值，When charger runtime 决策，Then 允许降为 `100mA`，同时状态文案更新为实际 runtime token。
+- Given 手动速度偏好为 `1A` 且策略已写入 `ICHG=1000mA`，When 实测 `IBAT/BMS current` 持续明显低于目标且 `IINDPM/VINDPM` 表明输入侧调节，Then monitor 必须输出 `charger: delivery_diag`，明确这是输入/电源路径限流导致的 under-delivery，而不是手动档位未生效。
 
 ## 实现记录
 
@@ -203,6 +204,7 @@
 - 已新增手动页路由、命中区、`START/STOP` 动作映射与 `LEFT/CENTER/BACK` 返回逻辑。
 - 已新增 `ManualChargePrefs`、`ManualChargeRuntimeState`、`ManualChargeUiSnapshot`，并把 runtime 状态保持在 `PowerManager` RAM 中。
 - 已把手动会话接到 charger state machine，支持：用户启动/停止、目标完成停充、timer expiry、safety blocked、stop inhibit 与自动恢复。
+- 已为手动 `1A` 场景补齐 under-delivery 诊断：当目标电流已生效但实际充电电流持续不足时，日志保留手动档位、目标/实测电流、PD 合约、BQ25792 限流寄存器和 `IINDPM/VINDPM` 状态。
 - 已在 EEPROM 中实现 `schema_version + record table + ManualChargePrefsV1` 布局，并在设置变化时仅写入 prefs record，避免每次偏好调整都重写 superblock / table。
 - 已扩展 `front-panel-preview`，覆盖默认、活动、停止抑制、复位后回自动、以及安全阻断 5 类场景，并与最终 UI 配色/对齐同步。
 

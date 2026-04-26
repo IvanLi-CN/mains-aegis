@@ -74,6 +74,7 @@ const BMS_BOOT_DIAG_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
 const BMS_BOOT_DIAG_SHIP_RESET_SETTLE: Duration = Duration::from_millis(800);
 const CHARGER_LIMIT_DIAG_PERIOD: Duration = Duration::from_secs(1);
 const CHARGER_LIMIT_DIAG_MARGIN_MA: i16 = 200;
+const CHARGER_UNDER_DELIVERY_DIAG_HOLD: Duration = Duration::from_secs(5);
 // Temporary boot-diag validation: keep the proven 16.8V/200mA/500mA wake bias active through
 // the 30 s settle window so auto-validation matches the tool's working conditions.
 const BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE: bool = true;
@@ -2996,6 +2997,7 @@ pub struct PowerManager<'d, I2C> {
     chg_next_poll_at: Instant,
     chg_next_retry_at: Option<Instant>,
     chg_limit_diag_next_at: Instant,
+    chg_under_delivery_since_at: Option<Instant>,
     chg_enabled: bool,
     charger_allowed: bool,
     charge_policy: ChargePolicyMemory,
@@ -3474,6 +3476,7 @@ where
             chg_next_poll_at: now,
             chg_next_retry_at: if charger_allowed { Some(now) } else { None },
             chg_limit_diag_next_at: now,
+            chg_under_delivery_since_at: None,
             chg_enabled: false,
             charger_allowed,
             charge_policy: ChargePolicyMemory::default(),
@@ -4695,31 +4698,53 @@ where
         applied_iindpm_ma: Option<u16>,
         raw_ibus_adc_ma: Option<i16>,
         ibat_adc_ma: Option<i16>,
+        bms_current_ma: Option<i16>,
         status0: u8,
         status1: u8,
     ) {
-        if !allow_charge || now < self.chg_limit_diag_next_at {
+        if !allow_charge {
+            self.chg_under_delivery_since_at = None;
             return;
         }
 
-        let target_ichg_ma = match policy_target_ichg_ma {
-            Some(v) => v as i32,
-            None => return,
-        };
-        let actual_ibat_ma = ibat_adc_ma.map(|v| i32::from(v.abs()));
-        let actual_ibus_ma = raw_ibus_adc_ma.map(|v| i32::from(v.abs()));
+        if now < self.chg_limit_diag_next_at {
+            return;
+        }
 
-        let charge_limit_mismatch = actual_ibat_ma
-            .map(|v| v > target_ichg_ma + i32::from(CHARGER_LIMIT_DIAG_MARGIN_MA))
-            .unwrap_or(false);
-        let input_limit_mismatch = matches!(
-            (applied_iindpm_ma, actual_ibus_ma),
-            (Some(limit_ma), Some(actual_ma))
-                if actual_ma > i32::from(limit_ma) + i32::from(CHARGER_LIMIT_DIAG_MARGIN_MA)
+        let vindpm = (status0 & bq25792::status0::VINDPM_STAT) != 0;
+        let iindpm = (status0 & bq25792::status0::IINDPM_STAT) != 0;
+        let diag_kind = charger_delivery_diag_kind(
+            allow_charge,
+            self.manual_charge_runtime.active || vindpm || iindpm,
+            policy_target_ichg_ma,
+            applied_iindpm_ma,
+            raw_ibus_adc_ma,
+            ibat_adc_ma,
+            bms_current_ma,
+            vindpm,
+            iindpm,
+            CHARGER_LIMIT_DIAG_MARGIN_MA,
         );
 
-        if !(charge_limit_mismatch || input_limit_mismatch) {
+        if diag_kind == ChargerDeliveryDiagKind::None {
+            self.chg_under_delivery_since_at = None;
             return;
+        }
+
+        if diag_kind.is_under_delivery() {
+            let first_seen = match self.chg_under_delivery_since_at {
+                Some(first_seen) => first_seen,
+                None => {
+                    self.chg_under_delivery_since_at = Some(now);
+                    return;
+                }
+            };
+
+            if now < first_seen + CHARGER_UNDER_DELIVERY_DIAG_HOLD {
+                return;
+            }
+        } else {
+            self.chg_under_delivery_since_at = None;
         }
 
         self.chg_limit_diag_next_at = now + CHARGER_LIMIT_DIAG_PERIOD;
@@ -4730,7 +4755,8 @@ where
         let reg14 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_5).ok();
 
         defmt::warn!(
-            "charger: limit_mismatch manual_active={=bool} manual_speed_ma={=u16} policy_target_ichg_ma={=?} applied_ichg_ma={=?} applied_iindpm_ma={=?} raw_ibus_adc_ma={=?} ibat_adc_ma={=?} reg03={=?} reg03_ma={=?} reg06={=?} reg06_ma={=?} reg10={=?} reg14={=?} chg_stat={} vbus_stat={} st0=0x{=u8:x} st1=0x{=u8:x}",
+            "charger: delivery_diag reason={} manual_active={=bool} manual_speed_ma={=u16} policy_target_ichg_ma={=?} applied_ichg_ma={=?} applied_iindpm_ma={=?} raw_ibus_adc_ma={=?} ibat_adc_ma={=?} bms_current_ma={=?} usb_pd_contract_mv={=?} usb_pd_contract_ma={=?} usb_pd_vindpm_mv={=?} usb_pd_input_current_limit_ma={=?} reg03={=?} reg03_ma={=?} reg06={=?} reg06_ma={=?} reg10={=?} reg14={=?} chg_stat={} vbus_stat={} vindpm={=bool} iindpm={=bool} poorsrc={=bool} st0=0x{=u8:x} st1=0x{=u8:x}",
+            diag_kind.as_str(),
             self.manual_charge_runtime.active,
             self.manual_charge_prefs.speed.ichg_ma(),
             policy_target_ichg_ma,
@@ -4738,6 +4764,11 @@ where
             applied_iindpm_ma,
             raw_ibus_adc_ma,
             ibat_adc_ma,
+            bms_current_ma,
+            self.usb_pd_state.contract.map(|contract| contract.voltage_mv),
+            self.usb_pd_state.contract.map(|contract| contract.current_ma),
+            self.usb_pd_vindpm_mv,
+            self.usb_pd_input_current_limit_ma,
             reg03,
             reg03.map(bq25792::decode_charge_current_limit_ma),
             reg06,
@@ -4746,6 +4777,9 @@ where
             reg14,
             bq25792::decode_chg_stat(bq25792::status1::chg_stat(status1)),
             bq25792::decode_vbus_stat(bq25792::status1::vbus_stat(status1)),
+            vindpm,
+            iindpm,
+            (status0 & bq25792::status0::POORSRC_STAT) != 0,
             status0,
             status1
         );
@@ -9456,6 +9490,7 @@ where
             applied_iindpm_ma,
             raw_ibus_adc_ma,
             ibat_adc_ma,
+            self.ui_snapshot.bq40z50_current_ma,
             status0,
             status1,
         );

@@ -123,6 +123,89 @@ pub(super) fn manual_charge_speed_derated(speed: ManualChargeSpeed, dc_derated: 
     speed != ManualChargeSpeed::Ma100 && dc_derated
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ChargerDeliveryDiagKind {
+    None,
+    ChargeOverTarget,
+    InputOverLimit,
+    ChargeUnderTarget,
+    ChargeUnderTargetInputDpm,
+}
+
+impl ChargerDeliveryDiagKind {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::ChargeOverTarget => "charge_over_target",
+            Self::InputOverLimit => "input_over_limit",
+            Self::ChargeUnderTarget => "charge_under_target",
+            Self::ChargeUnderTargetInputDpm => "charge_under_target_input_dpm",
+        }
+    }
+
+    pub(super) const fn is_under_delivery(self) -> bool {
+        matches!(
+            self,
+            Self::ChargeUnderTarget | Self::ChargeUnderTargetInputDpm
+        )
+    }
+}
+
+pub(super) fn charger_delivery_diag_kind(
+    allow_charge: bool,
+    under_delivery_watch: bool,
+    target_ichg_ma: Option<u16>,
+    applied_iindpm_ma: Option<u16>,
+    actual_ibus_ma: Option<i16>,
+    ibat_adc_ma: Option<i16>,
+    bms_current_ma: Option<i16>,
+    vindpm: bool,
+    iindpm: bool,
+    margin_ma: i16,
+) -> ChargerDeliveryDiagKind {
+    if !allow_charge {
+        return ChargerDeliveryDiagKind::None;
+    }
+
+    let target_ichg_ma = match target_ichg_ma {
+        Some(v) => i32::from(v),
+        None => return ChargerDeliveryDiagKind::None,
+    };
+    let margin_ma = i32::from(margin_ma);
+    let actual_ibat_ma = ibat_adc_ma
+        .map(|v| i32::from(v.abs()))
+        .or_else(|| bms_current_ma.filter(|v| *v > 0).map(i32::from));
+    let actual_ibus_ma = actual_ibus_ma.map(|v| i32::from(v.abs()));
+
+    if actual_ibat_ma
+        .map(|v| v > target_ichg_ma + margin_ma)
+        .unwrap_or(false)
+    {
+        return ChargerDeliveryDiagKind::ChargeOverTarget;
+    }
+
+    if matches!(
+        (applied_iindpm_ma, actual_ibus_ma),
+        (Some(limit_ma), Some(actual_ma)) if actual_ma > i32::from(limit_ma) + margin_ma
+    ) {
+        return ChargerDeliveryDiagKind::InputOverLimit;
+    }
+
+    if under_delivery_watch
+        && actual_ibat_ma
+            .map(|v| target_ichg_ma > v + margin_ma)
+            .unwrap_or(false)
+    {
+        if vindpm || iindpm {
+            ChargerDeliveryDiagKind::ChargeUnderTargetInputDpm
+        } else {
+            ChargerDeliveryDiagKind::ChargeUnderTarget
+        }
+    } else {
+        ChargerDeliveryDiagKind::None
+    }
+}
+
 pub(super) const fn manual_charge_safety_notice_active(
     last_stop_reason: ManualChargeStopReason,
     active: bool,
@@ -1552,6 +1635,83 @@ mod tests {
         ));
         assert!(manual_charge_speed_derated(ManualChargeSpeed::Ma500, true));
         assert!(manual_charge_speed_derated(ManualChargeSpeed::Ma1000, true));
+    }
+
+    #[test]
+    fn manual_charge_1a_profile_maps_to_1000ma() {
+        assert_eq!(ManualChargeSpeed::Ma1000.ichg_ma(), 1_000);
+    }
+
+    #[test]
+    fn charger_delivery_diag_detects_manual_1a_under_delivery_on_iindpm() {
+        assert_eq!(
+            charger_delivery_diag_kind(
+                true,
+                true,
+                Some(1_000),
+                Some(1_300),
+                Some(420),
+                Some(470),
+                Some(465),
+                false,
+                true,
+                200,
+            ),
+            ChargerDeliveryDiagKind::ChargeUnderTargetInputDpm
+        );
+    }
+
+    #[test]
+    fn charger_delivery_diag_does_not_warn_when_actual_current_matches_target() {
+        assert_eq!(
+            charger_delivery_diag_kind(
+                true,
+                true,
+                Some(1_000),
+                Some(1_300),
+                Some(1_120),
+                Some(940),
+                Some(950),
+                false,
+                false,
+                200,
+            ),
+            ChargerDeliveryDiagKind::None
+        );
+    }
+
+    #[test]
+    fn charger_delivery_diag_preserves_existing_over_limit_checks() {
+        assert_eq!(
+            charger_delivery_diag_kind(
+                true,
+                false,
+                Some(500),
+                Some(740),
+                Some(421),
+                Some(760),
+                None,
+                false,
+                false,
+                200,
+            ),
+            ChargerDeliveryDiagKind::ChargeOverTarget
+        );
+        assert_eq!(
+            charger_delivery_diag_kind(
+                true,
+                false,
+                Some(500),
+                Some(740),
+                Some(1_000),
+                Some(500),
+                None,
+                false,
+                false,
+                200,
+            ),
+            ChargerDeliveryDiagKind::InputOverLimit
+        );
     }
 
     #[test]
