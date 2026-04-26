@@ -84,6 +84,17 @@
 - live Dashboard 的 `mains_present` 改为只消费 `vin_vbus_mv>=3V`；即使 charger `input_present` 临时抖动，只要 `DC5025 VIN` 在线，模式、强调色与 `NOAC/LOCK` 分支都保持一致。
 - 若 `VIN` 只发生瞬时采样缺失，或因运行态暂时跳过 `VIN` 遥测而错过单个采样周期，live Dashboard 继续沿用最近一次已知的 `VIN` 市电状态；只把 `PIN W` 数值回退为 `N/A`。
 - 若 `VIN` 连续缺失，或连续多个周期都在跳过 `VIN` 遥测而超出瞬时容错窗口，live Dashboard 回退到 charger `input_present` 作为降级兜底，避免整页长期卡在过期的市电状态。
+- 自检页会把安全的 `BMS` 放电授权恢复自动发起；恢复成功且输出恢复条件满足时，自动恢复启动期请求的输出，从而继续进入 Dashboard。
+- 当 BMS 在线且确认电池存在，但 `RCA/低电芯电压` 阻断放电时，充电策略以可信 BMS 遥测为准自动开启低电量充电恢复，不因 `BQ25792 VBAT_PRESENT=false` 把恢复锁死。
+- 对需要用户确认或无法恢复的硬件问题，自检页支持点击对应硬件条目打开确认弹窗或问题说明弹窗。
+
+## Visual Evidence
+
+![BMS discharge authorization confirmation](assets/self-check-recovery/bq40-discharge-dialog.png)
+
+![Unrecoverable BMS issue dialog](assets/self-check-recovery/bq40-issue-dialog.png)
+
+![Output hold issue dialog](assets/self-check-recovery/tps-a-issue-dialog.png)
 
 ## 验证记录
 

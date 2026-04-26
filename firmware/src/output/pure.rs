@@ -647,7 +647,7 @@ pub(super) fn charge_policy_step(
         };
     }
 
-    if input.output_enabled && input.output_power_w10.is_none() {
+    if input.output_enabled && input.output_power_w10.is_none() && start_reason.is_none() {
         memory.charge_latched = false;
         derate.reset();
         output_load.note_unknown_sample();
@@ -688,7 +688,7 @@ pub(super) fn charge_policy_step(
         };
     };
 
-    if !input.vbat_present || !telemetry.charge_ready {
+    if !telemetry.charge_ready {
         memory.charge_latched = false;
         derate.reset();
         output_load.reset();
@@ -743,6 +743,17 @@ pub(super) fn charge_policy_step(
         if start_reason.is_some() {
             memory.charge_latched = true;
         } else {
+            if !input.vbat_present {
+                derate.reset();
+                return ChargePolicyDecision {
+                    state: ChargePolicyState::BlockedNoBms,
+                    allow_charge: false,
+                    target_ichg_ma: None,
+                    start_reason: None,
+                    full_reason: None,
+                    output_block_reason: None,
+                };
+            }
             derate.reset();
             return ChargePolicyDecision {
                 state: ChargePolicyState::IdleWaitThreshold,
@@ -1138,6 +1149,7 @@ pub(super) fn detail_bms_reason_label(primary_reason: &'static str) -> &'static 
         "xdsg_blocked" => "DSG BLOCKED",
         "dsg_fet_off" => "DSG FET OFF",
         "remaining_capacity_alarm" => "RCA ALARM",
+        "cell_undervoltage" => "CELL UV",
         "permanent_failure" => "PERM FAIL",
         "sleep_mode" => "SLEEP MODE",
         "op_status_unavailable" => "STATUS N/A",
@@ -1932,6 +1944,62 @@ mod tests {
     }
 
     #[test]
+    fn charge_policy_starts_low_battery_recovery_from_trusted_bms_even_when_charger_vbat_absent() {
+        let mut memory = ChargePolicyMemory::default();
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+        let mut input = policy_input(
+            Some(policy_telemetry(0, 2_912, 3_015)),
+            Some(DashboardInputSource::UsbC),
+            Some(112),
+        );
+        input.vbat_present = false;
+
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 0, input);
+
+        assert_eq!(decision.state, ChargePolicyState::Charging500mA);
+        assert!(decision.allow_charge);
+        assert_eq!(
+            decision.start_reason,
+            Some(ChargeStartReason::RsocAndCellLow)
+        );
+        assert!(memory.charge_latched);
+    }
+
+    #[test]
+    fn charge_policy_starts_low_battery_recovery_when_output_power_is_unknown() {
+        let mut memory = ChargePolicyMemory::default();
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+
+        let decision = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            0,
+            ChargePolicyInput {
+                output_enabled: true,
+                output_power_w10: None,
+                ..policy_input(
+                    Some(policy_telemetry(0, 2_994, 3_077)),
+                    Some(DashboardInputSource::UsbC),
+                    Some(170),
+                )
+            },
+        );
+
+        assert_eq!(decision.state, ChargePolicyState::Charging500mA);
+        assert!(decision.allow_charge);
+        assert_eq!(
+            decision.start_reason,
+            Some(ChargeStartReason::RsocAndCellLow)
+        );
+        assert_eq!(decision.output_block_reason, None);
+        assert_eq!(output_load, ChargePolicyOutputLoadTracker::default());
+        assert!(memory.charge_latched);
+    }
+
+    #[test]
     fn charge_policy_enters_topoff_current_when_taper_cv_and_rsoc_is_99() {
         let mut memory = ChargePolicyMemory::default();
         memory.charge_latched = true;
@@ -2346,7 +2414,7 @@ mod tests {
                 output_enabled: true,
                 output_power_w10: None,
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850, 3_850)),
+                    Some(policy_telemetry(80, 3_850, 3_850)),
                     Some(DashboardInputSource::UsbC),
                     Some(1_000),
                 )
@@ -2398,7 +2466,7 @@ mod tests {
                 output_enabled: true,
                 output_power_w10: None,
                 ..policy_input(
-                    Some(policy_telemetry(79, 3_850, 3_850)),
+                    Some(policy_telemetry(80, 3_850, 3_850)),
                     Some(DashboardInputSource::UsbC),
                     Some(1_000),
                 )

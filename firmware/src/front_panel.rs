@@ -6,9 +6,9 @@ use crate::front_panel_logic::{
 };
 use crate::front_panel_scene::{
     self, AudioTestUiState, BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardRoute,
-    DashboardTouchTarget, ManualChargeUiAction, SelfCheckCommState, SelfCheckOverlay,
-    SelfCheckTouchTarget, SelfCheckUiSnapshot, TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel,
-    UiPainter, UiVariant, UpsMode,
+    DashboardTouchTarget, ManualChargeUiAction, SelfCheckCommState, SelfCheckHardwareTarget,
+    SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot, TestFunctionUi, TpsTestUiSnapshot,
+    UiFocus, UiModel, UiPainter, UiVariant, UpsMode,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -712,13 +712,19 @@ where
 
         if matches!(
             self.self_check_overlay,
-            SelfCheckOverlay::BmsActivateResult(..)
+            SelfCheckOverlay::BmsActivateResult(..) | SelfCheckOverlay::HardwareIssue(..)
         ) {
             if left_edge || right_edge || center_edge {
+                let was_result = matches!(
+                    self.self_check_overlay,
+                    SelfCheckOverlay::BmsActivateResult(..)
+                );
                 self.self_check_overlay = SelfCheckOverlay::None;
                 self.needs_redraw = true;
-                defmt::info!("ui: bms result dialog close via key");
-                return Some(UiAction::ClearBmsActivationResult);
+                defmt::info!("ui: self-check dialog close via key");
+                if was_result {
+                    return Some(UiAction::ClearBmsActivationResult);
+                }
             }
             return None;
         }
@@ -773,7 +779,7 @@ where
             }
             SelfCheckOverlay::BmsActivateProgress
             | SelfCheckOverlay::BmsDischargeAuthorizeProgress => {}
-            SelfCheckOverlay::BmsActivateResult(..) => {}
+            SelfCheckOverlay::BmsActivateResult(..) | SelfCheckOverlay::HardwareIssue(..) => {}
         }
 
         None
@@ -1204,12 +1210,16 @@ where
 
         if matches!(
             self.self_check_overlay,
-            SelfCheckOverlay::BmsActivateResult(..)
+            SelfCheckOverlay::BmsActivateResult(..) | SelfCheckOverlay::HardwareIssue(..)
         ) {
+            let was_result = matches!(
+                self.self_check_overlay,
+                SelfCheckOverlay::BmsActivateResult(..)
+            );
             self.self_check_overlay = SelfCheckOverlay::None;
             self.needs_redraw = true;
-            defmt::info!("ui: bms result dialog close via touch");
-            return Some(UiAction::ClearBmsActivationResult);
+            defmt::info!("ui: self-check dialog close via touch");
+            return was_result.then_some(UiAction::ClearBmsActivationResult);
         }
 
         let (x, y) = snapshot.touch_point?;
@@ -1244,38 +1254,8 @@ where
                 self.needs_redraw = true;
                 Some(UiAction::RequestBmsRecovery(action))
             }
-            Some(SelfCheckTouchTarget::Bq40Card) => {
-                let recovery_overlay =
-                    front_panel_scene::bq40_recovery_overlay(&self.self_check_snapshot);
-                if self.self_check_overlay == SelfCheckOverlay::None
-                    && self.bms_activation_state != BmsActivationState::Pending
-                {
-                    if let Some(recovery_overlay) = recovery_overlay {
-                        self.self_check_overlay = recovery_overlay;
-                        self.needs_redraw = true;
-                        defmt::info!("ui: bms recovery dialog open via touch");
-                    } else if let Some(result_overlay) =
-                        front_panel_scene::bq40_result_overlay(&self.self_check_snapshot)
-                    {
-                        self.self_check_overlay = result_overlay;
-                        self.needs_redraw = true;
-                        defmt::info!("ui: bms result dialog reopen via touch");
-                    } else {
-                        defmt::info!(
-                            "ui: bms touch ignored overlay={} recovery_available={=bool} bms_state={}",
-                            overlay_name(self.self_check_overlay),
-                            recovery_overlay.is_some(),
-                            bms_activation_state_name(self.bms_activation_state)
-                        );
-                    }
-                } else {
-                    defmt::info!(
-                        "ui: bms touch ignored overlay={} recovery_available={=bool} bms_state={}",
-                        overlay_name(self.self_check_overlay),
-                        recovery_overlay.is_some(),
-                        bms_activation_state_name(self.bms_activation_state)
-                    );
-                }
+            Some(SelfCheckTouchTarget::HardwareCard(target)) => {
+                self.open_self_check_hardware_overlay(target);
                 None
             }
             None => {
@@ -1287,6 +1267,57 @@ where
                 );
                 None
             }
+        }
+    }
+
+    fn open_self_check_hardware_overlay(&mut self, target: SelfCheckHardwareTarget) {
+        if self.self_check_overlay != SelfCheckOverlay::None {
+            defmt::info!(
+                "ui: self-check hardware touch ignored overlay={}",
+                overlay_name(self.self_check_overlay)
+            );
+            return;
+        }
+
+        let recovery_overlay = if target == SelfCheckHardwareTarget::Bq40z50
+            && self.bms_activation_state != BmsActivationState::Pending
+        {
+            front_panel_scene::bq40_recovery_overlay(&self.self_check_snapshot)
+        } else {
+            None
+        };
+        if let Some(recovery_overlay) = recovery_overlay {
+            self.self_check_overlay = recovery_overlay;
+            self.needs_redraw = true;
+            defmt::info!("ui: bms recovery dialog open via touch");
+            return;
+        }
+
+        if target == SelfCheckHardwareTarget::Bq40z50 {
+            if let Some(result_overlay) =
+                front_panel_scene::bq40_result_overlay(&self.self_check_snapshot)
+            {
+                self.self_check_overlay = result_overlay;
+                self.needs_redraw = true;
+                defmt::info!("ui: bms result dialog reopen via touch");
+                return;
+            }
+        }
+
+        if let Some(issue_overlay) =
+            front_panel_scene::self_check_hardware_issue_overlay(&self.self_check_snapshot, target)
+        {
+            self.self_check_overlay = issue_overlay;
+            self.needs_redraw = true;
+            defmt::info!(
+                "ui: self-check hardware issue open target={}",
+                self_check_hardware_target_name(target)
+            );
+        } else {
+            defmt::info!(
+                "ui: self-check hardware touch ignored target={} reason=no_issue",
+                self_check_hardware_target_name(target)
+            );
         }
     }
 
@@ -1590,6 +1621,22 @@ fn overlay_name(overlay: SelfCheckOverlay) -> &'static str {
         SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::NotDetected) => {
             "result_not_detected"
         }
+        SelfCheckOverlay::HardwareIssue(target) => self_check_hardware_target_name(target),
+    }
+}
+
+fn self_check_hardware_target_name(target: SelfCheckHardwareTarget) -> &'static str {
+    match target {
+        SelfCheckHardwareTarget::Gc9307 => "gc9307",
+        SelfCheckHardwareTarget::Tca6408a => "tca6408a",
+        SelfCheckHardwareTarget::Fusb302 => "fusb302",
+        SelfCheckHardwareTarget::Ina3221 => "ina3221",
+        SelfCheckHardwareTarget::Bq25792 => "bq25792",
+        SelfCheckHardwareTarget::Bq40z50 => "bq40z50",
+        SelfCheckHardwareTarget::TpsA => "tps_a",
+        SelfCheckHardwareTarget::TpsB => "tps_b",
+        SelfCheckHardwareTarget::TmpA => "tmp_a",
+        SelfCheckHardwareTarget::TmpB => "tmp_b",
     }
 }
 
@@ -1649,15 +1696,15 @@ fn current_recovery_overlay_action(
         | SelfCheckOverlay::BmsDischargeAuthorizeProgress => {
             Some(BmsRecoveryUiAction::DischargeAuthorization)
         }
-        SelfCheckOverlay::BmsActivateResult(..) | SelfCheckOverlay::None => {
-            match recovery_overlay {
-                Some(SelfCheckOverlay::BmsActivateConfirm) => Some(BmsRecoveryUiAction::Activation),
-                Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm) => {
-                    Some(BmsRecoveryUiAction::DischargeAuthorization)
-                }
-                _ => None,
+        SelfCheckOverlay::BmsActivateResult(..)
+        | SelfCheckOverlay::HardwareIssue(..)
+        | SelfCheckOverlay::None => match recovery_overlay {
+            Some(SelfCheckOverlay::BmsActivateConfirm) => Some(BmsRecoveryUiAction::Activation),
+            Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm) => {
+                Some(BmsRecoveryUiAction::DischargeAuthorization)
             }
-        }
+            _ => None,
+        },
     }
 }
 

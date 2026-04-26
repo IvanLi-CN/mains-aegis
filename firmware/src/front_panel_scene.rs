@@ -408,6 +408,20 @@ pub enum BmsRecoveryUiAction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelfCheckHardwareTarget {
+    Gc9307,
+    Tca6408a,
+    Fusb302,
+    Ina3221,
+    Bq25792,
+    Bq40z50,
+    TpsA,
+    TpsB,
+    TmpA,
+    TmpB,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DashboardDetailSnapshot {
     pub cell_mv: [Option<u16>; 4],
     pub cell_temp_c: [Option<i16>; 4],
@@ -755,7 +769,7 @@ impl TpsTestUiSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum SelfCheckTouchTarget {
-    Bq40Card,
+    HardwareCard(SelfCheckHardwareTarget),
     ActivateCancel,
     ActivateConfirm,
 }
@@ -769,6 +783,7 @@ pub enum SelfCheckOverlay {
     BmsDischargeAuthorizeConfirm,
     BmsDischargeAuthorizeProgress,
     BmsActivateResult(BmsResultKind),
+    HardwareIssue(SelfCheckHardwareTarget),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -779,10 +794,11 @@ pub enum BmsActivationState {
     Result(BmsResultKind),
 }
 
-const SELF_CHECK_BQ40_CARD_X: u16 = 163;
-const SELF_CHECK_BQ40_CARD_Y: u16 = 22;
-const SELF_CHECK_BQ40_CARD_W: u16 = 151;
-const SELF_CHECK_BQ40_CARD_H: u16 = 29;
+const SELF_CHECK_LEFT_CARD_X: u16 = 6;
+const SELF_CHECK_RIGHT_CARD_X: u16 = 163;
+const SELF_CHECK_CARD_Y: u16 = 22;
+const SELF_CHECK_CARD_W: u16 = 151;
+const SELF_CHECK_CARD_H: u16 = 29;
 
 const SELF_CHECK_DIALOG_X: u16 = 20;
 const SELF_CHECK_DIALOG_Y: u16 = 34;
@@ -965,6 +981,7 @@ pub fn bq40_recovery_action(snapshot: &SelfCheckUiSnapshot) -> Option<BmsRecover
         && snapshot.bq40z50 != SelfCheckCommState::Err
         && snapshot.bq40z50_no_battery != Some(true)
         && snapshot.bq40z50_rca_alarm != Some(true)
+        && snapshot.bq40z50_issue_detail != Some("cell_undervoltage")
         && snapshot.bq40z50_discharge_ready == Some(false)
         && discharge_authorization_input_ready(snapshot)
         && snapshot.bq25792 != SelfCheckCommState::Err
@@ -1134,6 +1151,93 @@ pub fn bq40_recovery_overlay(snapshot: &SelfCheckUiSnapshot) -> Option<SelfCheck
 }
 
 #[allow(dead_code)]
+pub fn self_check_hardware_issue_overlay(
+    snapshot: &SelfCheckUiSnapshot,
+    target: SelfCheckHardwareTarget,
+) -> Option<SelfCheckOverlay> {
+    if self_check_hardware_target_has_issue(snapshot, target) {
+        Some(SelfCheckOverlay::HardwareIssue(target))
+    } else {
+        None
+    }
+}
+
+fn self_check_hardware_target_at(x: u16, y: u16) -> Option<SelfCheckHardwareTarget> {
+    const LEFT: [SelfCheckHardwareTarget; 5] = [
+        SelfCheckHardwareTarget::Gc9307,
+        SelfCheckHardwareTarget::Tca6408a,
+        SelfCheckHardwareTarget::Fusb302,
+        SelfCheckHardwareTarget::Ina3221,
+        SelfCheckHardwareTarget::Bq25792,
+    ];
+    const RIGHT: [SelfCheckHardwareTarget; 5] = [
+        SelfCheckHardwareTarget::Bq40z50,
+        SelfCheckHardwareTarget::TpsA,
+        SelfCheckHardwareTarget::TpsB,
+        SelfCheckHardwareTarget::TmpA,
+        SelfCheckHardwareTarget::TmpB,
+    ];
+
+    let target_from_column = |col_x, targets: [SelfCheckHardwareTarget; 5]| {
+        if !contains(
+            x,
+            y,
+            col_x,
+            SELF_CHECK_CARD_Y,
+            SELF_CHECK_CARD_W,
+            SELF_CHECK_CARD_H * 5,
+        ) {
+            return None;
+        }
+        let row = ((y - SELF_CHECK_CARD_Y) / SELF_CHECK_CARD_H) as usize;
+        targets.get(row).copied()
+    };
+
+    target_from_column(SELF_CHECK_LEFT_CARD_X, LEFT)
+        .or_else(|| target_from_column(SELF_CHECK_RIGHT_CARD_X, RIGHT))
+}
+
+fn self_check_state_has_issue(state: SelfCheckCommState) -> bool {
+    !matches!(
+        state,
+        SelfCheckCommState::Ok | SelfCheckCommState::NotAvailable
+    )
+}
+
+fn self_check_hardware_target_has_issue(
+    snapshot: &SelfCheckUiSnapshot,
+    target: SelfCheckHardwareTarget,
+) -> bool {
+    match target {
+        SelfCheckHardwareTarget::Gc9307 => self_check_state_has_issue(snapshot.gc9307),
+        SelfCheckHardwareTarget::Tca6408a => self_check_state_has_issue(snapshot.tca6408a),
+        SelfCheckHardwareTarget::Fusb302 => {
+            self_check_state_has_issue(snapshot.fusb302)
+                || snapshot.fusb302_vbus_present == Some(false)
+        }
+        SelfCheckHardwareTarget::Ina3221 => self_check_state_has_issue(snapshot.ina3221),
+        SelfCheckHardwareTarget::Bq25792 => self_check_state_has_issue(snapshot.bq25792),
+        SelfCheckHardwareTarget::Bq40z50 => {
+            self_check_state_has_issue(snapshot.bq40z50)
+                || snapshot.bq40z50_issue_detail.is_some()
+                || snapshot.bq40z50_no_battery == Some(true)
+                || snapshot.bq40z50_discharge_ready == Some(false)
+                || snapshot.bq40z50_rca_alarm == Some(true)
+        }
+        SelfCheckHardwareTarget::TpsA => {
+            self_check_state_has_issue(display_tps_state(snapshot, OutputSelector::OutA))
+                || output_hold_for(snapshot, OutputSelector::OutA)
+        }
+        SelfCheckHardwareTarget::TpsB => {
+            self_check_state_has_issue(display_tps_state(snapshot, OutputSelector::OutB))
+                || output_hold_for(snapshot, OutputSelector::OutB)
+        }
+        SelfCheckHardwareTarget::TmpA => self_check_state_has_issue(snapshot.tmp_a),
+        SelfCheckHardwareTarget::TmpB => self_check_state_has_issue(snapshot.tmp_b),
+    }
+}
+
+#[allow(dead_code)]
 pub fn self_check_hit_test(
     x: u16,
     y: u16,
@@ -1141,18 +1245,7 @@ pub fn self_check_hit_test(
 ) -> Option<SelfCheckTouchTarget> {
     match overlay {
         SelfCheckOverlay::None => {
-            if contains(
-                x,
-                y,
-                SELF_CHECK_BQ40_CARD_X,
-                SELF_CHECK_BQ40_CARD_Y,
-                SELF_CHECK_BQ40_CARD_W,
-                SELF_CHECK_BQ40_CARD_H,
-            ) {
-                Some(SelfCheckTouchTarget::Bq40Card)
-            } else {
-                None
-            }
+            self_check_hardware_target_at(x, y).map(SelfCheckTouchTarget::HardwareCard)
         }
         SelfCheckOverlay::BmsActivateConfirm | SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
             if contains(
@@ -1179,7 +1272,8 @@ pub fn self_check_hit_test(
         }
         SelfCheckOverlay::BmsActivateProgress
         | SelfCheckOverlay::BmsDischargeAuthorizeProgress
-        | SelfCheckOverlay::BmsActivateResult(..) => None,
+        | SelfCheckOverlay::BmsActivateResult(..)
+        | SelfCheckOverlay::HardwareIssue(..) => None,
     }
 }
 
@@ -8027,6 +8121,7 @@ fn draw_self_check_overlay<P: UiPainter>(
         | SelfCheckOverlay::BmsDischargeAuthorizeConfirm
         | SelfCheckOverlay::BmsDischargeAuthorizeProgress => "BQ40 RECOVERY",
         SelfCheckOverlay::BmsActivateResult(..) => "BQ40 RESULT",
+        SelfCheckOverlay::HardwareIssue(..) => "SELF CHECK ISSUE",
         SelfCheckOverlay::None => "",
     };
 
@@ -8186,10 +8281,63 @@ fn draw_self_check_overlay<P: UiPainter>(
                 palette.text_dim,
             )?;
         }
+        SelfCheckOverlay::HardwareIssue(target) => {
+            let copy = self_check_hardware_issue_copy(snapshot, target);
+            draw_activation_icon(
+                painter,
+                SELF_CHECK_DIALOG_X + 10,
+                SELF_CHECK_DIALOG_Y + 28,
+                ActivationIcon::Failed,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                copy.headline,
+                Point::new(
+                    (SELF_CHECK_DIALOG_X + 50) as i32,
+                    (SELF_CHECK_DIALOG_Y + 28) as i32,
+                ),
+                HorizontalAlignment::Left,
+                copy.accent,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                copy.body1,
+                Point::new(
+                    (SELF_CHECK_DIALOG_X + 50) as i32,
+                    (SELF_CHECK_DIALOG_Y + 46) as i32,
+                ),
+                HorizontalAlignment::Left,
+                body_text,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                copy.body2,
+                Point::new(
+                    (SELF_CHECK_DIALOG_X + 50) as i32,
+                    (SELF_CHECK_DIALOG_Y + 84) as i32,
+                ),
+                HorizontalAlignment::Left,
+                palette.text_dim,
+            )?;
+        }
         SelfCheckOverlay::None => {}
     }
 
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct HardwareIssueDialogCopy {
+    headline: &'static str,
+    body1: &'static str,
+    body2: &'static str,
+    accent: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -8202,11 +8350,114 @@ struct Bq40RecoveryDialogCopy {
     progress2: &'static str,
 }
 
+fn self_check_hardware_issue_copy(
+    snapshot: &SelfCheckUiSnapshot,
+    target: SelfCheckHardwareTarget,
+) -> HardwareIssueDialogCopy {
+    match target {
+        SelfCheckHardwareTarget::Gc9307 => HardwareIssueDialogCopy {
+            headline: "GC9307 DISPLAY",
+            body1: "Screen path is not ready.",
+            body2: "Check panel power and flex.",
+            accent: ERROR_COLOR,
+        },
+        SelfCheckHardwareTarget::Tca6408a => HardwareIssueDialogCopy {
+            headline: "TCA6408A IO",
+            body1: "Panel IO expander failed.",
+            body2: "Check I2C2 and reset lines.",
+            accent: ERROR_COLOR,
+        },
+        SelfCheckHardwareTarget::Fusb302 => HardwareIssueDialogCopy {
+            headline: "FUSB302 TYPE-C",
+            body1: if snapshot.fusb302_vbus_present == Some(false) {
+                "Input VBUS is not present."
+            } else {
+                "PD controller is not ready."
+            },
+            body2: "Check Type-C source and CC path.",
+            accent: ATTENTION_COLOR,
+        },
+        SelfCheckHardwareTarget::Ina3221 => HardwareIssueDialogCopy {
+            headline: "INA3221 MONITOR",
+            body1: "Power monitor is not ready.",
+            body2: "Check I2C1 and shunt rails.",
+            accent: ERROR_COLOR,
+        },
+        SelfCheckHardwareTarget::Bq25792 => HardwareIssueDialogCopy {
+            headline: "BQ25792 CHARGER",
+            body1: if snapshot.bq25792 == SelfCheckCommState::Warn {
+                "Charger reports a warning."
+            } else {
+                "Charger did not initialize."
+            },
+            body2: "Check input and battery path.",
+            accent: ATTENTION_COLOR,
+        },
+        SelfCheckHardwareTarget::Bq40z50 => HardwareIssueDialogCopy {
+            headline: bq40_issue_card_key(snapshot),
+            body1: bq40_issue_detail_body(snapshot),
+            body2: bq40_issue_detail_footer(snapshot),
+            accent: ATTENTION_COLOR,
+        },
+        SelfCheckHardwareTarget::TpsA => tps_issue_dialog_copy(snapshot, OutputSelector::OutA),
+        SelfCheckHardwareTarget::TpsB => tps_issue_dialog_copy(snapshot, OutputSelector::OutB),
+        SelfCheckHardwareTarget::TmpA => HardwareIssueDialogCopy {
+            headline: "TMP112-A SENSOR",
+            body1: "Output A thermal sensor issue.",
+            body2: "Check TMP112-A and ALERT path.",
+            accent: ATTENTION_COLOR,
+        },
+        SelfCheckHardwareTarget::TmpB => HardwareIssueDialogCopy {
+            headline: "TMP112-B SENSOR",
+            body1: "Output B thermal sensor issue.",
+            body2: "Check TMP112-B and ALERT path.",
+            accent: ATTENTION_COLOR,
+        },
+    }
+}
+
+fn tps_issue_dialog_copy(
+    snapshot: &SelfCheckUiSnapshot,
+    selector: OutputSelector,
+) -> HardwareIssueDialogCopy {
+    let headline = match selector {
+        OutputSelector::OutA => "TPS55288-A",
+        OutputSelector::OutB => "TPS55288-B",
+    };
+    let state = display_tps_state(snapshot, selector);
+    let (body1, body2, accent) = if output_hold_for(snapshot, selector) {
+        (
+            tps_upstream_warning_reason(snapshot).unwrap_or("Output is held."),
+            "Recover BMS before output.",
+            ATTENTION_COLOR,
+        )
+    } else if state == SelfCheckCommState::Warn {
+        (
+            "Converter reports warning.",
+            "Check fault status and load.",
+            ATTENTION_COLOR,
+        )
+    } else {
+        (
+            "Converter is not reachable.",
+            "Check I2C1, VCC and MODE.",
+            ERROR_COLOR,
+        )
+    };
+    HardwareIssueDialogCopy {
+        headline,
+        body1,
+        body2,
+        accent,
+    }
+}
+
 fn bq40_issue_card_key(snapshot: &SelfCheckUiSnapshot) -> &'static str {
     match snapshot.bq40z50_issue_detail {
         Some("xdsg_blocked") => "XDSG BLOCKED",
         Some("dsg_fet_off") => "DSG FET OFF",
         Some("xchg_blocked") => "CHG BLOCKED",
+        Some("cell_undervoltage") => "CELL UV",
         Some("remaining_capacity_alarm") => "RCA ALARM",
         Some("permanent_failure") => "PERM FAIL",
         Some("sleep_mode") => "SLEEP MODE",
@@ -8241,11 +8492,28 @@ fn bq40_issue_detail_body(snapshot: &SelfCheckUiSnapshot) -> &'static str {
         Some("xdsg_blocked") => "BQ40 keeps discharge path off.",
         Some("dsg_fet_off") => "Discharge FET is still off.",
         Some("xchg_blocked") => "Charge path is still blocked.",
+        Some("cell_undervoltage") => "Pack is below discharge voltage.",
         Some("remaining_capacity_alarm") => "Pack is in remaining-capacity alarm.",
         Some("permanent_failure") => "Pack reports permanent failure.",
         Some("sleep_mode") => "Gauge is asleep but still responds.",
         Some("no_battery") => "Pack present check failed.",
         _ => "Gauge did not answer the expected state.",
+    }
+}
+
+fn bq40_issue_detail_footer(snapshot: &SelfCheckUiSnapshot) -> &'static str {
+    if (snapshot.bq40z50_rca_alarm == Some(true)
+        || snapshot.bq40z50_issue_detail == Some("cell_undervoltage"))
+        && snapshot.bq25792_allow_charge == Some(true)
+        && snapshot.fusb302_vbus_present == Some(true)
+    {
+        "Charging recovery is active."
+    } else if snapshot.bq40z50_rca_alarm == Some(true)
+        || snapshot.bq40z50_issue_detail == Some("cell_undervoltage")
+    {
+        "Connect input and charge pack."
+    } else {
+        "No safe auto recovery."
     }
 }
 
@@ -11061,6 +11329,28 @@ mod tests {
     }
 
     #[test]
+    fn bq40_recovery_action_blocks_discharge_authorization_during_cell_undervoltage() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq25792_allow_charge = Some(true);
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_discharge_ready = Some(false);
+        snapshot.bq40z50_issue_detail = Some("cell_undervoltage");
+
+        assert_eq!(bq40_recovery_action(&snapshot), None);
+        assert_eq!(
+            self_check_hardware_issue_overlay(&snapshot, SelfCheckHardwareTarget::Bq40z50),
+            Some(SelfCheckOverlay::HardwareIssue(
+                SelfCheckHardwareTarget::Bq40z50
+            ))
+        );
+    }
+
+    #[test]
     fn bq40_recovery_overlay_only_uses_backend_authorized_action() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
@@ -11120,6 +11410,63 @@ mod tests {
         assert_eq!(
             bq40_result_overlay(&snapshot),
             Some(SelfCheckOverlay::BmsActivateResult(BmsResultKind::Abnormal))
+        );
+    }
+
+    #[test]
+    fn self_check_hit_test_maps_all_hardware_cards() {
+        let cases = [
+            (8, 24, SelfCheckHardwareTarget::Gc9307),
+            (8, 53, SelfCheckHardwareTarget::Tca6408a),
+            (8, 82, SelfCheckHardwareTarget::Fusb302),
+            (8, 111, SelfCheckHardwareTarget::Ina3221),
+            (8, 140, SelfCheckHardwareTarget::Bq25792),
+            (165, 24, SelfCheckHardwareTarget::Bq40z50),
+            (165, 53, SelfCheckHardwareTarget::TpsA),
+            (165, 82, SelfCheckHardwareTarget::TpsB),
+            (165, 111, SelfCheckHardwareTarget::TmpA),
+            (165, 140, SelfCheckHardwareTarget::TmpB),
+        ];
+
+        for (x, y, target) in cases {
+            assert_eq!(
+                self_check_hit_test(x, y, SelfCheckOverlay::None),
+                Some(SelfCheckTouchTarget::HardwareCard(target))
+            );
+        }
+    }
+
+    #[test]
+    fn hardware_issue_overlay_surfaces_unrecoverable_bq40_issue() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_no_battery = Some(true);
+        snapshot.bq40z50_issue_detail = Some("no_battery");
+        snapshot.bq40z50_recovery_action = None;
+
+        assert_eq!(
+            self_check_hardware_issue_overlay(&snapshot, SelfCheckHardwareTarget::Bq40z50),
+            Some(SelfCheckOverlay::HardwareIssue(
+                SelfCheckHardwareTarget::Bq40z50
+            ))
+        );
+    }
+
+    #[test]
+    fn hardware_issue_overlay_ignores_clear_modules() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.gc9307 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Ok;
+        snapshot.bq40z50_no_battery = Some(false);
+        snapshot.bq40z50_discharge_ready = Some(true);
+
+        assert_eq!(
+            self_check_hardware_issue_overlay(&snapshot, SelfCheckHardwareTarget::Gc9307),
+            None
+        );
+        assert_eq!(
+            self_check_hardware_issue_overlay(&snapshot, SelfCheckHardwareTarget::Bq40z50),
+            None
         );
     }
 

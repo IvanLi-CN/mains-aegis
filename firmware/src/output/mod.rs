@@ -74,9 +74,6 @@ const BMS_BOOT_DIAG_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
 const BMS_BOOT_DIAG_SHIP_RESET_SETTLE: Duration = Duration::from_millis(800);
 const CHARGER_LIMIT_DIAG_PERIOD: Duration = Duration::from_secs(1);
 const CHARGER_LIMIT_DIAG_MARGIN_MA: i16 = 200;
-// Self-check recovery must stay user-driven: show the issue first, then wait for explicit
-// confirmation from the front panel before attempting any BQ40 wake/recovery sequence.
-const BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED: bool = false;
 // Temporary boot-diag validation: keep the proven 16.8V/200mA/500mA wake bias active through
 // the 30 s settle window so auto-validation matches the tool's working conditions.
 const BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE: bool = true;
@@ -1948,6 +1945,13 @@ fn bq40_last_result_blocks_auto_recovery(result: Option<BmsResultKind>) -> bool 
     )
 }
 
+fn bq40_lock_diag_low_voltage_blocked(diag: Option<Bq40LockDiagSnapshot>) -> bool {
+    diag.and_then(|diag| bq40_mac_bit(diag.safety_status, bq40z50::safety_status::CUV))
+        == Some(true)
+        || diag.and_then(|diag| bq40_mac_bit(diag.safety_status, bq40z50::safety_status::CUVC))
+            == Some(true)
+}
+
 fn bq40_recovery_action_for_snapshot(
     snapshot: &SelfCheckUiSnapshot,
     requested_outputs: output_state_logic::EnabledOutputs,
@@ -1964,6 +1968,7 @@ fn bq40_recovery_action_for_snapshot(
         && snapshot.bq40z50 != SelfCheckCommState::Err
         && snapshot.bq40z50_no_battery != Some(true)
         && snapshot.bq40z50_rca_alarm != Some(true)
+        && snapshot.bq40z50_issue_detail != Some("cell_undervoltage")
         && snapshot.bq40z50_discharge_ready == Some(false)
         && discharge_authorization_input_ready(
             stable_mains_present(
@@ -3030,6 +3035,7 @@ pub struct PowerManager<'d, I2C> {
     bms_activation_backup: Option<ChargerActivationBackup>,
     chg_watchdog_restore: Option<u8>,
     output_state: OutputRuntimeState,
+    output_restore_after_bms_recovery: bool,
     output_protection: output_protection::ProtectionRuntime,
     fan: fan::Controller,
     vin_sample_missing_streak: u8,
@@ -3528,6 +3534,7 @@ where
             bms_activation_backup: None,
             chg_watchdog_restore: None,
             output_state,
+            output_restore_after_bms_recovery: false,
             output_protection: output_protection::ProtectionRuntime::new(cfg.ilimit_ma),
             fan: fan::Controller::new(cfg.fan_config),
             vin_sample_missing_streak: 0,
@@ -3817,10 +3824,12 @@ where
         }
         self.update_output_protection();
         self.reconcile_output_state();
+        self.maybe_restore_outputs_after_bms_recovery();
         let telemetry_printed = self.maybe_print_telemetry();
         if telemetry_printed {
             self.update_output_protection();
             self.reconcile_output_state();
+            self.maybe_restore_outputs_after_bms_recovery();
         }
         self.update_fan_state(irq);
         self.refresh_audio_signals();
@@ -4107,6 +4116,43 @@ where
             "power: output restore requested outputs={}",
             restore.describe()
         );
+    }
+
+    fn maybe_restore_outputs_after_bms_recovery(&mut self) {
+        if !self.output_restore_after_bms_recovery {
+            return;
+        }
+
+        if self.output_state.active_outputs != EnabledOutputs::None {
+            self.output_restore_after_bms_recovery = false;
+            return;
+        }
+
+        if self.output_state.recoverable_outputs == EnabledOutputs::None {
+            self.output_restore_after_bms_recovery = false;
+            defmt::info!("power: output auto_restore skipped reason=no_recoverable_outputs");
+            esp_println::println!(
+                "power: output auto_restore skipped reason=no_recoverable_outputs"
+            );
+            return;
+        }
+
+        if self.output_state.gate_reason != OutputGateReason::None {
+            return;
+        }
+
+        if self.can_request_output_restore() {
+            self.output_restore_after_bms_recovery = false;
+            defmt::info!(
+                "power: output auto_restore reason=bms_recovery_success outputs={}",
+                self.output_state.recoverable_outputs.describe()
+            );
+            esp_println::println!(
+                "power: output auto_restore reason=bms_recovery_success outputs={}",
+                self.output_state.recoverable_outputs.describe()
+            );
+            self.request_output_restore();
+        }
     }
 
     pub fn fan_command(&self) -> fan::Status {
@@ -4454,6 +4500,8 @@ where
             && self.ui_snapshot.bq40z50 != SelfCheckCommState::Err
             && self.ui_snapshot.bq40z50_no_battery != Some(true)
             && self.ui_snapshot.bq40z50_rca_alarm != Some(true)
+            && self.ui_snapshot.bq40z50_issue_detail != Some("cell_undervoltage")
+            && !bq40_lock_diag_low_voltage_blocked(self.bms_cached_lock_diag)
             && self.ui_snapshot.bq40z50_discharge_ready == Some(false)
             && discharge_authorization_input_ready(
                 self.current_mains_present(),
@@ -6678,7 +6726,11 @@ where
         self.ui_snapshot.bq40z50_no_battery = Some(low_pack_runtime);
         self.ui_snapshot.bq40z50_discharge_ready = discharge_ready;
         self.ui_snapshot.bq40z50_issue_detail =
-            bq40_ui_issue_detail(low_pack_runtime, primary_reason);
+            if bq40_lock_diag_low_voltage_blocked(self.bms_cached_lock_diag) {
+                Some("cell_undervoltage")
+            } else {
+                bq40_ui_issue_detail(low_pack_runtime, primary_reason)
+            };
         self.apply_bms_detail_snapshot(snapshot);
         self.bms_audio = BmsAudioState {
             rca_alarm: Some(rca_alarm),
@@ -6843,10 +6895,6 @@ where
     }
 
     fn maybe_auto_request_bms_discharge_authorization(&mut self) {
-        if !boot_diag_auto_recovery_enabled(self.cfg.bms_boot_diag_auto_validate) {
-            return;
-        }
-
         if self.bms_activation_state != BmsActivationState::Idle
             || bq40_last_result_blocks_auto_recovery(self.ui_snapshot.bq40z50_last_result)
             || !self.can_request_bms_discharge_authorization()
@@ -6854,6 +6902,20 @@ where
             return;
         }
 
+        defmt::info!(
+            "bms: discharge_authorization auto_request reason=safe_boot_recovery requested_outputs={} gate_reason={} dsg_ready={=?} input_present={=?}",
+            self.output_state.requested_outputs.describe(),
+            self.output_state.gate_reason.as_str(),
+            self.ui_snapshot.bq40z50_discharge_ready,
+            self.ui_snapshot.fusb302_vbus_present
+        );
+        esp_println::println!(
+            "bms: discharge_authorization auto_request reason=safe_boot_recovery requested_outputs={} gate_reason={} dsg_ready={:?} input_present={:?}",
+            self.output_state.requested_outputs.describe(),
+            self.output_state.gate_reason.as_str(),
+            self.ui_snapshot.bq40z50_discharge_ready,
+            self.ui_snapshot.fusb302_vbus_present
+        );
         self.request_bms_discharge_authorization(true);
     }
 
@@ -7318,6 +7380,13 @@ where
     }
 
     fn finish_bms_activation(&mut self, result: BmsResultKind, reason: &'static str) {
+        let request_kind = self.bms_activation_request_kind;
+        if result == BmsResultKind::Success
+            && request_kind == BmsRecoveryRequestKind::DischargeAuthorization
+        {
+            self.output_restore_after_bms_recovery = true;
+        }
+
         bms_diag_breadcrumb_note(
             13,
             match result {
@@ -7350,7 +7419,6 @@ where
         self.bms_activation_isolation_until = None;
         self.bms_activation_force_charge_requested = false;
         self.bms_activation_current_is_auto = false;
-        let request_kind = self.bms_activation_request_kind;
         self.bms_activation_request_kind = BmsRecoveryRequestKind::Activation;
         self.bms_activation_state = BmsActivationState::Result(result);
         self.ui_snapshot.bq40z50_last_result = Some(result);
@@ -9764,7 +9832,11 @@ where
                         discharge_reason,
                     );
                     self.ui_snapshot.bq40z50_issue_detail =
-                        bq40_ui_issue_detail(low_pack, primary_reason);
+                        if bq40_lock_diag_low_voltage_blocked(self.bms_cached_lock_diag) {
+                            Some("cell_undervoltage")
+                        } else {
+                            bq40_ui_issue_detail(low_pack, primary_reason)
+                        };
                     self.maybe_log_bq40_block_detail_runtime(addr, primary_reason, s.op_status);
                     return true;
                 }
