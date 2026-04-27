@@ -240,25 +240,22 @@ function DeviceCard({ record }: { record: DeviceRecord }) {
           <strong>{formatPercent(status?.battery.soc_pct)}</strong>
         </div>
         <div>
-          <span className="metric-label">Pack</span>
-          <strong>{formatVoltage(status?.battery.pack_mv)}</strong>
+          <span className="metric-label">Power</span>
+          <strong>{powerSourceLabel(record)}</strong>
         </div>
       </div>
 
-      <dl className="status-list">
-        <StatusPair label="Input" value={boolLabel(status?.input.mains_present, "Mains", "No mains")} />
-        <StatusPair label="OUT A" value={channelLabel(status?.output.out_a)} />
-        <StatusPair label="OUT B" value={channelLabel(status?.output.out_b)} />
-        <StatusPair label="Charger" value={status?.charger.state ?? "--"} />
-        <StatusPair label="Thermal" value={formatTemp(maxTemp(status))} />
-        <StatusPair label="Network" value={record.network?.state ?? status?.network.state ?? "--"} />
+      <dl className="summary-list">
+        <StatusPair label="Load" value={loadSummary(record)} />
+        <StatusPair label="Battery" value={batterySummary(record)} />
+        <StatusPair label="Attention" value={attentionSummary(record)} />
+        <StatusPair label="Connection" value={connectionSummary(record)} />
       </dl>
 
       <div className="card-footer">
         <span>{record.target.location} · {timeAgo(record.lastUpdated)}</span>
         <div>
-          <button className="text-button" onClick={() => navigate(deviceHref(record.target.deviceId, "api"))}>API</button>
-          <button className="primary-button small" onClick={() => navigate(deviceHref(record.target.deviceId, "overview"))}>Open</button>
+          <button className="primary-button small" onClick={() => navigate(deviceHref(record.target.deviceId, "overview"))}>Details</button>
         </div>
       </div>
     </article>
@@ -591,6 +588,60 @@ function MissingDevice() {
       <button className="primary-button" onClick={() => navigate("/")}>Back to fleet</button>
     </section>
   );
+}
+
+function powerSourceLabel(record: DeviceRecord): string {
+  if (record.connectionState === "offline") return "Offline";
+  const status = record.status;
+  if (!status) return "--";
+  if (status.mode === "backup") return "Battery";
+  if (status.input.mains_present === true) return "Mains";
+  if (status.input.mains_present === false) return "No mains";
+  return "--";
+}
+
+function loadSummary(record: DeviceRecord): string {
+  if (record.connectionState === "offline") return "Unknown";
+  const status = record.status;
+  if (!status) return "--";
+  if (status.output.active === "none") return "Not powered";
+  if (status.output.active === "both") return "Powered";
+  if (status.output.active === "out_a" || status.output.active === "out_b") return "Partially powered";
+  return "--";
+}
+
+function batterySummary(record: DeviceRecord): string {
+  if (record.connectionState === "offline") return "Unknown";
+  const status = record.status;
+  const battery = status?.battery;
+  if (!battery) return "--";
+  if (battery.no_battery) return "Not detected";
+  if (battery.state === "fault") return "Needs check";
+  if (battery.soc_pct !== null && battery.soc_pct < 20) return "Low";
+  if (battery.discharge_ready === false) return "Not ready";
+  return "Ready";
+}
+
+function attentionSummary(record: DeviceRecord): string {
+  const status = record.status;
+  const severity = deviceSeverity(record);
+  if (severity === "offline") return "Reconnect device";
+  if (!status) return record.error?.message ?? "--";
+  if (status.output.gate_reason && status.output.gate_reason !== "none") return "Protection active";
+  if (status.thermal.tmp_a_state === "hot" || status.thermal.tmp_b_state === "hot") return "High temperature";
+  if (status.battery.issue_detail) return "Battery attention";
+  if (severity === "critical") return "Immediate attention";
+  if (severity === "warning") return "Check soon";
+  if (status.mode === "backup") return "On battery";
+  return "Normal";
+}
+
+function connectionSummary(record: DeviceRecord): string {
+  if (record.connectionState === "online") return "Online";
+  if (record.connectionState === "connecting") return "Connecting";
+  if (record.connectionState === "offline") return "Offline";
+  if (record.network?.state === "connected" || record.status?.network.state === "connected") return "Online";
+  return "Check connection";
 }
 
 function channelLabel(channel: UpsStatus["output"]["out_a"] | undefined): string {

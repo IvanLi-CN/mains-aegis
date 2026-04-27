@@ -36,7 +36,8 @@
 ### Fleet 总览
 
 - `/` 为默认入口，使用响应式设备卡片网格。
-- 每张卡片固定展示设备别名/hostname、位置、在线状态、运行模式、最高告警、SOC、pack voltage、输入、OUT A/B、charger、最高温度、network state 和 stale 时间。
+- 每张卡片固定展示设备别名/hostname、位置、在线状态、运行模式、最高告警、SOC、供电来源、负载是否供电、电池是否可用、是否需要处理、连接状态和 stale 时间。
+- Fleet 卡片不得默认展示 OUT A/B、charger、pack voltage 等技术细节；这些字段保留在单设备详情与 API 调试页。
 - 支持搜索设备、hostname、位置，并支持 `all / critical / warning / offline` 过滤。
 - 排序规则：Critical 优先，Warning 次之，Info/OK 在后，Offline 保留并显示 stale 时间。
 

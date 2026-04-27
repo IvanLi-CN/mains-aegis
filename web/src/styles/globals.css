@@ -380,20 +380,20 @@ a {
   line-height: 1.1;
 }
 
-.status-list {
+.summary-list {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 8px 16px;
   margin: 0;
 }
 
-.status-list dt,
+.summary-list dt,
 .metric-line span {
   color: var(--color-muted);
   font-size: 12px;
 }
 
-.status-list dd {
+.summary-list dd {
   margin: 0;
   text-align: right;
 }

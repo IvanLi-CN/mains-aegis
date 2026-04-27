@@ -7,6 +7,7 @@
 - `DeviceRegistry` 维护浏览器侧设备清单、localStorage 持久化、只读探活、SSE 订阅与轮询兜底。
 - `mock:` 设备用于稳定开发预览和视觉证据，不发真实网络请求。
 - 管理端页面已覆盖 Fleet、Connect、Overview、Power、Battery、Thermal、Device、API。
+- Fleet 卡片使用用户可理解的摘要字段，技术细节保留到单设备详情与 API 调试页。
 
 ## 验证状态
 

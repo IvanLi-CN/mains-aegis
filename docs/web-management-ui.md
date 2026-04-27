@@ -19,14 +19,13 @@ Web 管理界面是 UPS 的浏览器侧只读运维台，首版负责设备发�
 
 #### 设备卡片结构
 
-每张设备卡片固定展示同一套字段，避免不同状态下卡片高度乱跳：
+每张设备卡片固定展示同一套面向日常判断的字段，避免把通道、电流、寄存器语义等技术细节放到总览第一屏：
 
 - 顶部：设备别名 / hostname、位置标签、在线状态点、最后更新时间。
 - 主状态：运行模式（`STANDBY / ASSIST / BACKUP / FAULT / OFFLINE`）和最高告警级别。
-- 电池：SOC 百分比、pack voltage、充放电方向。
-- 输入 / 输出：mains present、OUT A、OUT B 的 enabled/state 摘要。
-- 次级状态：charger state、最高温度、network state。
-- 底部操作：`Open` 进入详情；`API` 进入该设备接口调试。
+- 用户摘要：SOC、供电来源、负载是否供电、电池是否可用、是否需要处理、连接状态。
+- 技术细节：OUT A/B、charger、pack voltage、raw API payload 等只在单设备详情或 API 调试页展示。
+- 底部操作：`Details` 进入详情。
 
 网格规则：
 
