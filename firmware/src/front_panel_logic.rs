@@ -19,6 +19,7 @@ pub fn dashboard_enter_requires_variant_switch(variant: UiVariant) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net_types::WifiSnapshot;
 
     #[test]
     fn only_animated_thermal_detail_uses_frame_animation() {
@@ -56,7 +57,7 @@ mod tests {
     #[test]
     fn connecting_wifi_uses_frame_animation_on_dashboard() {
         let mut snapshot = SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby);
-        snapshot.dashboard_detail.wifi = front_panel_scene::WifiSnapshot::connecting();
+        snapshot.dashboard_detail.wifi = WifiSnapshot::connecting();
 
         assert!(dashboard_uses_frame_animation(
             DASHBOARD_VARIANT,
