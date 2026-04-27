@@ -673,6 +673,7 @@ mod tests {
             system_load_power_mw: 0,
             system_voltage_mv: None,
             battery_voltage_mv: Some(14_800),
+            battery_rsoc_pct: None,
             measured_input_voltage_mv: None,
             charging_enabled: true,
         };
@@ -702,6 +703,7 @@ mod tests {
             system_load_power_mw: 0,
             system_voltage_mv: None,
             battery_voltage_mv: Some(15_200),
+            battery_rsoc_pct: None,
             measured_input_voltage_mv: None,
             charging_enabled: true,
         };
@@ -732,6 +734,7 @@ mod tests {
             system_load_power_mw: 0,
             system_voltage_mv: None,
             battery_voltage_mv: Some(15_200),
+            battery_rsoc_pct: None,
             measured_input_voltage_mv: None,
             charging_enabled: true,
         };
@@ -866,6 +869,7 @@ mod tests {
             system_load_power_mw: 0,
             system_voltage_mv: None,
             battery_voltage_mv: Some(16_400),
+            battery_rsoc_pct: None,
             measured_input_voltage_mv: None,
             charging_enabled: false,
         };
@@ -893,6 +897,7 @@ mod tests {
             system_load_power_mw: 0,
             system_voltage_mv: None,
             battery_voltage_mv: Some(15_200),
+            battery_rsoc_pct: None,
             measured_input_voltage_mv: None,
             charging_enabled: false,
         };
@@ -928,6 +933,7 @@ mod tests {
             system_load_power_mw: 2_500,
             system_voltage_mv: None,
             battery_voltage_mv: Some(15_200),
+            battery_rsoc_pct: None,
             measured_input_voltage_mv: None,
             charging_enabled: false,
         };
@@ -958,6 +964,7 @@ mod tests {
             system_load_power_mw: 0,
             system_voltage_mv: None,
             battery_voltage_mv: Some(14_820),
+            battery_rsoc_pct: None,
             measured_input_voltage_mv: None,
             charging_enabled: false,
         };
@@ -987,6 +994,7 @@ mod tests {
             system_load_power_mw: 0,
             system_voltage_mv: None,
             battery_voltage_mv: Some(14_820),
+            battery_rsoc_pct: None,
             measured_input_voltage_mv: None,
             charging_enabled: true,
         };
@@ -1004,6 +1012,7 @@ mod tests {
             system_load_power_mw: 0,
             system_voltage_mv: None,
             battery_voltage_mv: None,
+            battery_rsoc_pct: None,
             measured_input_voltage_mv: None,
             charging_enabled: false,
         };

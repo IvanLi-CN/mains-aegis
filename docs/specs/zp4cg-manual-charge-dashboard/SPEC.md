@@ -210,6 +210,7 @@
 - 已新增手动页路由、命中区、`START/STOP` 动作映射与 `LEFT/CENTER/BACK` 返回逻辑。
 - 已放大 Dashboard detail 与手动页返回热区，使贴边点击和轻微坐标漂移不再卡在详情页。
 - 已将 USB-PD no-contract 协商优先窗口切成短时间片，避免 #67 引入的长 PD 内循环持续阻塞 `front_panel.tick()`，导致触摸短按很难被采样。
+- 已将 inherited attach 的无合同 5V fallback 与 BMS RSOC 连接：当电量超过 `10%` 后，PD manager 会退出只等重插的保守状态，恢复 active recovery 以重新协商合适的 PD/PPS 合同。
 - 已将 Dashboard 触摸边沿、route 变化、命中 target 与 `target=none` 诊断镜像到普通串口，避免无法解码 defmt 时无法判断触摸是否进入路由/热区。
 - 已新增 `ManualChargePrefs`、`ManualChargeRuntimeState`、`ManualChargeUiSnapshot`，并把 runtime 状态保持在 `PowerManager` RAM 中。
 - 已把手动会话接到 charger state machine，支持：用户启动/停止、目标完成停充、timer expiry、safety blocked、stop inhibit 与自动恢复。

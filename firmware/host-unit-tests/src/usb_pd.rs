@@ -52,6 +52,7 @@ pub struct UsbPdPowerDemand {
     pub system_load_power_mw: u32,
     pub system_voltage_mv: Option<u16>,
     pub battery_voltage_mv: Option<u16>,
+    pub battery_rsoc_pct: Option<u16>,
     pub measured_input_voltage_mv: Option<u16>,
     pub charging_enabled: bool,
 }

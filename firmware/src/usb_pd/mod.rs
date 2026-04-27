@@ -24,6 +24,7 @@ const HARD_RESET_SEND_SETTLE_MS: u32 = 120;
 const HARD_RESET_WAIT_FOR_SOURCE_CAPS_MS: u32 = 1_200;
 const CONTRACT_REQUEST_TIMEOUT_MS: u32 = 1_500;
 const PARTIAL_RX_RECOVERY_GRACE_MS: u32 = 250;
+const INHERITED_ATTACH_ACTIVE_RECOVERY_MIN_RSOC_PCT: u16 = 10;
 const RAW_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const EFFECTIVE_VBUS_DETACH_DEBOUNCE_POLLS: u8 = 2;
 const CC_ABSENT_DETACH_DEBOUNCE_POLLS: u8 = 2;
@@ -86,6 +87,7 @@ pub struct UsbPdPowerDemand {
     pub system_load_power_mw: u32,
     pub system_voltage_mv: Option<u16>,
     pub battery_voltage_mv: Option<u16>,
+    pub battery_rsoc_pct: Option<u16>,
     pub measured_input_voltage_mv: Option<u16>,
     pub charging_enabled: bool,
 }
