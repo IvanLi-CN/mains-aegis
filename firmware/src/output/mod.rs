@@ -3963,7 +3963,7 @@ where
             system_load_power_mw: USB_PD_SYSTEM_LOAD_FLOOR_MW.saturating_add(output_power_mw),
             system_voltage_mv: self.usb_pd_vsys_mv,
             battery_voltage_mv: self.ui_snapshot.bq40z50_pack_mv,
-            battery_rsoc_pct: self.ui_snapshot.bq40z50_soc_pct,
+            battery_rsoc_pct: trusted_usb_pd_recovery_rsoc_pct(&self.ui_snapshot),
             // Feed the PD manager the raw charger-side VAC1 sample so FUSB302 VBUS_OK glitches
             // do not blind detach / unsafe-voltage decisions.
             measured_input_voltage_mv: self.usb_pd_vac1_mv,

@@ -45,9 +45,9 @@ If firmware clears `charge_ready`, `VINDPM`, and `IINDPM` at that moment, a batt
 
 ### 2.6 Battery-backed inherited attach can leave fallback
 
-The conservative inherited-attach path protects a board that may be running only from the same USB-C source. Once BMS RSOC is known to be above `10%`, the battery can cover a brief source reset window.
+The conservative inherited-attach path protects a board that may be running only from the same USB-C source. Once BMS is `Ok`, non no-battery, discharge-ready, and RSOC is known to be above `10%`, the battery can cover a brief source reset window.
 
-**Rule:** after inherited attach has fallen back to stable 5V without a contract, use trusted BMS RSOC to unlock active no-contract recovery. Keep `10%` and unknown RSOC in the conservative path; only `>10%` should allow a sink-initiated hard reset to reacquire Source Caps and negotiate PPS.
+**Rule:** after inherited attach has fallen back to stable 5V without a contract, use trusted BMS RSOC to unlock active no-contract recovery. Trusted RSOC requires `BMS=Ok`, non no-battery, discharge-ready, and a valid percentage. Keep `10%`, unknown RSOC, `Warn`, no-battery, discharge-not-ready, and invalid percentages in the conservative path; only trusted `>10%` should allow a sink-initiated hard reset to reacquire Source Caps and negotiate PPS.
 
 ### 3. Auto recovery inside FUSB302 can fight firmware recovery
 
@@ -108,7 +108,7 @@ This avoids both extremes:
 
 When the MCU boots from the same USB-C source that is already attached, a sink-initiated Hard Reset can make the source briefly remove VBUS and reset the MCU again.
 
-**Rule:** do not treat boot-time transient no-CC/no-VBUS samples as proof of a real detach. Only enable active Hard Reset recovery after reliable physical detach evidence, a real replug, or trusted BMS RSOC above the battery-backed threshold.
+**Rule:** do not treat boot-time transient no-CC/no-VBUS samples as proof of a real detach. Only enable active Hard Reset recovery after reliable physical detach evidence, a real replug, or trusted BMS RSOC above the battery-backed threshold. Trusted RSOC requires `BMS=Ok`, non no-battery, discharge-ready, and a valid percentage.
 
 For inherited attach with missing source caps, use the non-destructive ladder:
 
@@ -116,7 +116,7 @@ For inherited attach with missing source caps, use the non-destructive ladder:
 2. send `Get_Source_Cap`
 3. send Soft Reset if caps still do not arrive
 4. hold the system on conservative stable 5V fallback
-5. if trusted BMS RSOC later exceeds `10%`, unlock active recovery and reacquire Source Caps with the normal hard-reset path
+5. if trusted BMS RSOC later exceeds `10%`, with BMS `Ok`, non no-battery, discharge-ready, and a valid percentage, unlock active recovery and reacquire Source Caps with the normal hard-reset path
 
 Record EEPROM breadcrumbs for `boot_inherited_attach`, `hard_reset_inhibited`, `get_source_cap_sent`, `soft_reset_sent`, and `hard_reset_sent` so the last recovery action is recoverable even when serial logs are unavailable.
 

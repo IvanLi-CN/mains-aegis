@@ -111,6 +111,17 @@ pub(super) fn charger_protocol_from_usb_pd(
     }
 }
 
+pub(super) fn trusted_usb_pd_recovery_rsoc_pct(snapshot: &SelfCheckUiSnapshot) -> Option<u16> {
+    if snapshot.bq40z50 == SelfCheckCommState::Ok
+        && snapshot.bq40z50_no_battery == Some(false)
+        && snapshot.bq40z50_discharge_ready == Some(true)
+    {
+        snapshot.bq40z50_soc_pct.filter(|pct| *pct <= 100)
+    } else {
+        None
+    }
+}
+
 pub(super) const fn manual_charge_stop_hold_blocks_charge(
     stop_inhibit: bool,
     activation_pending: bool,
@@ -1512,6 +1523,39 @@ mod tests {
             detail_input_source(false, false, false, true),
             Some(DashboardInputSource::UsbC)
         );
+    }
+
+    #[test]
+    fn trusted_usb_pd_recovery_rsoc_requires_safe_bms_state() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq40z50 = SelfCheckCommState::Ok;
+        snapshot.bq40z50_soc_pct = Some(53);
+        snapshot.bq40z50_no_battery = Some(false);
+        snapshot.bq40z50_discharge_ready = Some(true);
+
+        assert_eq!(trusted_usb_pd_recovery_rsoc_pct(&snapshot), Some(53));
+
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        assert_eq!(trusted_usb_pd_recovery_rsoc_pct(&snapshot), None);
+
+        snapshot.bq40z50 = SelfCheckCommState::Ok;
+        snapshot.bq40z50_no_battery = Some(true);
+        assert_eq!(trusted_usb_pd_recovery_rsoc_pct(&snapshot), None);
+
+        snapshot.bq40z50_no_battery = Some(false);
+        snapshot.bq40z50_discharge_ready = Some(false);
+        assert_eq!(trusted_usb_pd_recovery_rsoc_pct(&snapshot), None);
+    }
+
+    #[test]
+    fn trusted_usb_pd_recovery_rsoc_rejects_invalid_percent() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.bq40z50 = SelfCheckCommState::Ok;
+        snapshot.bq40z50_soc_pct = Some(101);
+        snapshot.bq40z50_no_battery = Some(false);
+        snapshot.bq40z50_discharge_ready = Some(true);
+
+        assert_eq!(trusted_usb_pd_recovery_rsoc_pct(&snapshot), None);
     }
 
     #[test]

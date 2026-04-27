@@ -58,7 +58,7 @@
 - 固定 PDO 策略必须在已启用的 feature 中选择“满足当前功率需求的最低安全电压”，而不是默认拉到最高档。
 - PPS 策略只在未设置 `no-pps` 时启用；目标电压必须跟随系统/充电需求动态调节，并具备迟滞、最小重请求间隔与 keep-alive。
 - 只要 USB-C 口处于 attach 后的协商窗口、合同切换窗口、reset/retry 恢复窗口或 source capabilities 变化窗口，charger 都必须保持禁充；只有输入能力被判定为稳定后，才允许恢复充电。
-- MCU 冷启动时若 USB-C 已经处于 inherited attach，sink manager 不得立即发送 PD Hard Reset；必须先用非破坏式 RX resume、`Get_Source_Cap`、Soft Reset 与稳定 5V fallback 保住系统供电。若 BMS 已提供可信 RSOC 且电量超过 `10%`，允许退出该保守 fallback 并恢复主动 PD recovery，以重新协商合适的 PD/PPS 合同。
+- MCU 冷启动时若 USB-C 已经处于 inherited attach，sink manager 不得立即发送 PD Hard Reset；必须先用非破坏式 RX resume、`Get_Source_Cap`、Soft Reset 与稳定 5V fallback 保住系统供电。若 BMS 已提供可信 RSOC 且电量超过 `10%`，允许退出该保守 fallback 并恢复主动 PD recovery，以重新协商合适的 PD/PPS 合同；可信 RSOC 必须来自 `BMS=Ok`、非 no-battery、且 discharge-ready 的电池状态。
 - I2C2 共享后不得破坏前面板初始化、触摸读取或 FUSB302 轮询；中断里仍禁止 I2C 事务。
 
 ### SHOULD
@@ -95,7 +95,7 @@
 - 若 FUSB302 RX FIFO 收到 hard reset / soft reset / retryfail，必须清空 FIFO、重置协商状态并准备重新拉起协商。
 - 若 FUSB302 attach 结果异常（非 `SNK1/SNK2`）或运行中 VBUS 消失，则合同与 unsafe latch 以 detach 语义清零。
 - 若运行时检测到 `unsafe_source`，charger 必须立即停充并拒绝继续高压协商，直到 detach。
-- 若 inherited attach 后迟迟没有 `Source_Capabilities`，恢复阶梯必须保持供电优先：记录 Hard Reset 被抑制，先请求 source caps，再尝试 Soft Reset，随后按稳定 5V fallback 放开受限充电。只有观察到可靠 physical detach/replug，或 BMS RSOC 已超过 `10%`，才允许恢复主动 Hard Reset 策略。
+- 若 inherited attach 后迟迟没有 `Source_Capabilities`，恢复阶梯必须保持供电优先：记录 Hard Reset 被抑制，先请求 source caps，再尝试 Soft Reset，随后按稳定 5V fallback 放开受限充电。只有观察到可靠 physical detach/replug，或可信 BMS RSOC 已超过 `10%`，才允许恢复主动 Hard Reset 策略；`Warn`、no-battery、discharge-not-ready 或无效百分比不得解锁该路径。
 
 ## 接口契约（Interfaces & Contracts）
 
