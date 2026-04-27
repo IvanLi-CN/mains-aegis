@@ -183,6 +183,47 @@ where
         self.observed_unattached_since_boot
     }
 
+    fn battery_allows_inherited_attach_active_recovery(demand: UsbPdPowerDemand) -> Option<u16> {
+        match demand.battery_rsoc_pct {
+            Some(rsoc_pct)
+                if rsoc_pct > INHERITED_ATTACH_ACTIVE_RECOVERY_MIN_RSOC_PCT && rsoc_pct <= 100 =>
+            {
+                Some(rsoc_pct)
+            }
+            _ => None,
+        }
+    }
+
+    fn allow_active_no_contract_recovery_after_battery_safe(
+        &mut self,
+        demand: UsbPdPowerDemand,
+        now_ms: u32,
+    ) -> bool {
+        if self.active_no_contract_recovery_allowed() {
+            return false;
+        }
+
+        let Some(rsoc_pct) = Self::battery_allows_inherited_attach_active_recovery(demand) else {
+            return false;
+        };
+
+        self.mark_unattached_observed();
+        self.inherited_source_caps_probe_pending = false;
+        self.last_source_caps_requery_at_ms = None;
+        self.last_source_caps_recovery_at_ms = None;
+        self.no_contract_phase_started_at_ms = Some(now_ms);
+        esp_println::println!(
+            "usb_pd: inherited attach active recovery enabled rsoc_pct={} threshold_pct={}",
+            rsoc_pct,
+            INHERITED_ATTACH_ACTIVE_RECOVERY_MIN_RSOC_PCT
+        );
+        warn!(
+            "usb_pd: inherited attach active recovery enabled rsoc_pct={=u16} threshold_pct={=u16}",
+            rsoc_pct, INHERITED_ATTACH_ACTIVE_RECOVERY_MIN_RSOC_PCT
+        );
+        true
+    }
+
     pub(super) fn mark_unattached_observed(&mut self) {
         self.observed_unattached_since_boot = true;
     }
@@ -232,7 +273,7 @@ where
 
     pub(super) fn maybe_recover_missing_source_caps(
         &mut self,
-        _demand: UsbPdPowerDemand,
+        demand: UsbPdPowerDemand,
         now_ms: u32,
     ) {
         if !self.state.attached
@@ -295,6 +336,8 @@ where
         if waited_ms < SOURCE_CAPS_WAIT_TIMEOUT_MS {
             return;
         }
+
+        self.allow_active_no_contract_recovery_after_battery_safe(demand, now_ms);
 
         if !self.active_no_contract_recovery_allowed() {
             if !self.source_caps_recovery_attempted {

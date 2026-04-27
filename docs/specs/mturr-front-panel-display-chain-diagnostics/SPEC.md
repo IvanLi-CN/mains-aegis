@@ -17,7 +17,7 @@
 ### Goals
 
 - 在主固件里新增一个前面板就绪后全局可用的 `CENTER` 长按诊断入口，阈值固定为约 `800ms`。
-- 长按命中后先通过 `defmt` 打印显示链路现场状态，再执行一次完整的面板重初始化。
+- 长按命中后先通过 `defmt` 与普通串口同时打印显示链路现场状态，再执行一次完整的面板重初始化。
 - 诊断日志必须覆盖 `TCA6408A` 原始寄存器、解释后的关键位状态、`CST816D` 可达性/触摸头信息，以及 `GPIO1/10/13/0/14` 电平。
 - 重初始化必须复用启动链路时序：`TCA_RESET# -> TCA 安全态 -> RES/TP_RESET/CS -> GC9307 init`，成功后恢复当前 UI 页面与上层状态。
 - 保持现有中键短按行为即时生效；若继续按住超过阈值，再额外触发一次长按诊断，且同次按压只触发一次。
@@ -34,7 +34,7 @@
 
 - `firmware/src/front_panel.rs`
   - `CENTER` 长按状态机与单次按压闸门。
-  - `ui: display_diag ...` / `ui: display_reinit ...` 日志。
+  - `ui: display_diag ...` / `ui: display_reinit ...` 日志，其中 `display_diag` 必须在普通串口 monitor 中可见。
   - 共享显示链路 bring-up / recover helper。
   - 运行时恢复后的当前页面重绘。
 - `firmware/README.md`
@@ -88,6 +88,7 @@
   - 解释后的 `up/down/left/right/usb2_pg/cs_enabled/res_released/tp_reset_released`。
   - `GPIO1/10/13/0/14` 当前电平。
   - `CST816D` probe 成功或失败结果。
+- 普通串口 monitor 必须能看到 `ui: display_diag` 的 page/route/overlay、TCA raw/state、GPIO 和 CST816D probe 结果，避免现场只有 plain serial 时无法判断触摸控制器是否读到坐标。
 - `ui: display_reinit` 必须能区分 `tca_reset`、`tca_init`、`release_lines`、`gc9307_init`、`redraw_restore`、最终 `ok/err`。
 - 自检页与 Dashboard 首页长按后，页面必须恢复到触发前所在页面。
 - Dashboard detail 页长按后，允许先执行短按返回 Home，再在同次长按中触发诊断与恢复。
@@ -99,7 +100,7 @@
 
 - `cargo +esp fmt --all`
 - `cargo +esp check --release`
-- 真机 `mcu-agentd` 烧录 + `defmt` 观察：至少覆盖自检页、Dashboard 首页、Dashboard 详情页三类场景。
+- 真机 `mcu-agentd` 烧录 + monitor 观察：至少覆盖自检页、Dashboard 首页、Dashboard 详情页三类场景；普通串口日志必须可用于确认 `display_diag` 采样结果。
 
 ### 验证证据
 
@@ -110,7 +111,7 @@
 
 ### Quality checks
 
-- 所有新增日志前缀必须稳定为 `ui: display_diag` 或 `ui: display_reinit`。
+- 显示链路诊断日志前缀必须稳定为 `ui: display_diag` 或 `ui: display_reinit`。
 - 不得改变现有页面布局或新增额外导航入口。
 
 ## 文档更新（Docs to Update）

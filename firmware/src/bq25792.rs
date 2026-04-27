@@ -11,7 +11,7 @@
 pub const I2C_ADDRESS: u8 = 0x6B;
 
 pub mod reg {
-    // 16-bit register LSB addresses.
+    // 16-bit register start addresses. Multi-byte fields are transferred MSB first.
     pub const CHARGE_VOLTAGE_LIMIT: u8 = 0x01;
     pub const CHARGE_CURRENT_LIMIT: u8 = 0x03;
     pub const INPUT_VOLTAGE_LIMIT: u8 = 0x05;
@@ -174,20 +174,20 @@ where
     i2c.write_read(I2C_ADDRESS, &[start_reg], buf)
 }
 
-pub fn read_u16<I2C>(i2c: &mut I2C, reg_lsb: u8) -> Result<u16, I2C::Error>
+pub fn read_u16<I2C>(i2c: &mut I2C, reg_msb: u8) -> Result<u16, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
     let mut buf = [0u8; 2];
-    i2c.write_read(I2C_ADDRESS, &[reg_lsb], &mut buf)?;
-    Ok(u16::from_le_bytes(buf))
+    i2c.write_read(I2C_ADDRESS, &[reg_msb], &mut buf)?;
+    Ok(u16::from_be_bytes(buf))
 }
 
-pub fn read_i16<I2C>(i2c: &mut I2C, reg_lsb: u8) -> Result<i16, I2C::Error>
+pub fn read_i16<I2C>(i2c: &mut I2C, reg_msb: u8) -> Result<i16, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    read_u16(i2c, reg_lsb).map(|value| i16::from_le_bytes(value.to_le_bytes()))
+    read_u16(i2c, reg_msb).map(|value| i16::from_be_bytes(value.to_be_bytes()))
 }
 
 pub const fn decode_adc_u16_bytes(bytes: [u8; 2]) -> u16 {
@@ -200,8 +200,8 @@ pub const fn decode_adc_i16_bytes(bytes: [u8; 2]) -> i16 {
 
 /// ADC telemetry registers on BQ25792 return the 16-bit sample in MSB-first byte order.
 ///
-/// This differs from the little-endian layout used by the writable limit/configuration words,
-/// so ADC reads need a dedicated helper.
+/// This helper keeps ADC decoding explicit even though the writable 16-bit
+/// configuration words use the same transfer order.
 pub fn read_adc_u16<I2C>(i2c: &mut I2C, reg: u8) -> Result<u16, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -227,12 +227,12 @@ where
     i2c.write(I2C_ADDRESS, &[reg, value])
 }
 
-pub fn write_u16<I2C>(i2c: &mut I2C, reg_lsb: u8, value: u16) -> Result<(), I2C::Error>
+pub fn write_u16<I2C>(i2c: &mut I2C, reg_msb: u8, value: u16) -> Result<(), I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    let [lsb, msb] = value.to_le_bytes();
-    i2c.write(I2C_ADDRESS, &[reg_lsb, lsb, msb])
+    let [msb, lsb] = value.to_be_bytes();
+    i2c.write(I2C_ADDRESS, &[reg_msb, msb, lsb])
 }
 
 /// Read-modify-write a single 8-bit register.
@@ -599,6 +599,46 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::convert::Infallible;
+    use std::vec::Vec;
+
+    struct RegisterWordI2c {
+        read_bytes: [u8; 2],
+        writes: Vec<Vec<u8>>,
+    }
+
+    impl RegisterWordI2c {
+        fn new(read_bytes: [u8; 2]) -> Self {
+            Self {
+                read_bytes,
+                writes: Vec::new(),
+            }
+        }
+    }
+
+    impl embedded_hal::i2c::ErrorType for RegisterWordI2c {
+        type Error = Infallible;
+    }
+
+    impl embedded_hal::i2c::I2c for RegisterWordI2c {
+        fn transaction(
+            &mut self,
+            _address: u8,
+            operations: &mut [embedded_hal::i2c::Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            for operation in operations {
+                match operation {
+                    embedded_hal::i2c::Operation::Read(buffer) => {
+                        buffer.copy_from_slice(&self.read_bytes[..buffer.len()]);
+                    }
+                    embedded_hal::i2c::Operation::Write(bytes) => {
+                        self.writes.push(bytes.to_vec());
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
 
     #[test]
     fn power_path_adc_ready_accepts_continuous_mode_without_done_flag() {
@@ -658,6 +698,42 @@ mod tests {
     #[test]
     fn decode_adc_i16_bytes_preserves_signed_samples() {
         assert_eq!(decode_adc_i16_bytes([0xFF, 0x9C]), -100);
+    }
+
+    #[test]
+    fn register_word_reads_use_msb_first_order() {
+        let mut i2c = RegisterWordI2c::new([0x01, 0x2c]);
+
+        assert_eq!(
+            read_u16(&mut i2c, reg::INPUT_CURRENT_LIMIT).unwrap(),
+            0x012c
+        );
+    }
+
+    #[test]
+    fn register_word_writes_use_msb_first_order() {
+        let mut i2c = RegisterWordI2c::new([0x00, 0x00]);
+
+        write_u16(&mut i2c, reg::INPUT_CURRENT_LIMIT, 0x0082).unwrap();
+
+        assert_eq!(
+            i2c.writes.as_slice(),
+            [std::vec![reg::INPUT_CURRENT_LIMIT, 0x00, 0x82]].as_slice()
+        );
+    }
+
+    #[test]
+    fn set_input_current_limit_writes_msb_first_field() {
+        let mut i2c = RegisterWordI2c::new([0x00, 0x00]);
+
+        let applied = set_input_current_limit_ma(&mut i2c, 1_300).unwrap();
+
+        assert_eq!(applied, 0x0082);
+        assert_eq!(decode_input_current_limit_ma(applied), 1_300);
+        assert_eq!(
+            i2c.writes.last().unwrap().as_slice(),
+            &[reg::INPUT_CURRENT_LIMIT, 0x00, 0x82]
+        );
     }
 
     #[test]

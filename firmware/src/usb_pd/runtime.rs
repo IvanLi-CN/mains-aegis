@@ -428,6 +428,7 @@ where
                             system_load_power_mw: demand.system_load_power_mw,
                             system_voltage_mv: demand.system_voltage_mv,
                             battery_voltage_mv: demand.battery_voltage_mv,
+                            battery_rsoc_pct: None,
                             measured_input_voltage_mv: demand.measured_input_voltage_mv,
                             charging_enabled: false,
                         };

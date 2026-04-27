@@ -58,7 +58,7 @@
 - 固定 PDO 策略必须在已启用的 feature 中选择“满足当前功率需求的最低安全电压”，而不是默认拉到最高档。
 - PPS 策略只在未设置 `no-pps` 时启用；目标电压必须跟随系统/充电需求动态调节，并具备迟滞、最小重请求间隔与 keep-alive。
 - 只要 USB-C 口处于 attach 后的协商窗口、合同切换窗口、reset/retry 恢复窗口或 source capabilities 变化窗口，charger 都必须保持禁充；只有输入能力被判定为稳定后，才允许恢复充电。
-- MCU 冷启动时若 USB-C 已经处于 inherited attach，sink manager 不得主动发送 PD Hard Reset；必须先用非破坏式 RX resume、`Get_Source_Cap`、Soft Reset 与稳定 5V fallback 保住系统供电。
+- MCU 冷启动时若 USB-C 已经处于 inherited attach，sink manager 不得立即发送 PD Hard Reset；必须先用非破坏式 RX resume、`Get_Source_Cap`、Soft Reset 与稳定 5V fallback 保住系统供电。若 BMS 已提供可信 RSOC 且电量超过 `10%`，允许退出该保守 fallback 并恢复主动 PD recovery，以重新协商合适的 PD/PPS 合同；可信 RSOC 必须来自 `BMS=Ok`、非 no-battery、且 discharge-ready 的电池状态。
 - I2C2 共享后不得破坏前面板初始化、触摸读取或 FUSB302 轮询；中断里仍禁止 I2C 事务。
 
 ### SHOULD
@@ -95,7 +95,7 @@
 - 若 FUSB302 RX FIFO 收到 hard reset / soft reset / retryfail，必须清空 FIFO、重置协商状态并准备重新拉起协商。
 - 若 FUSB302 attach 结果异常（非 `SNK1/SNK2`）或运行中 VBUS 消失，则合同与 unsafe latch 以 detach 语义清零。
 - 若运行时检测到 `unsafe_source`，charger 必须立即停充并拒绝继续高压协商，直到 detach。
-- 若 inherited attach 后迟迟没有 `Source_Capabilities`，恢复阶梯必须保持供电优先：记录 Hard Reset 被抑制，先请求 source caps，再尝试 Soft Reset，随后按稳定 5V fallback 放开受限充电；只有观察到可靠 physical detach/replug 后，才允许恢复主动 Hard Reset 策略。
+- 若 inherited attach 后迟迟没有 `Source_Capabilities`，恢复阶梯必须保持供电优先：记录 Hard Reset 被抑制，先请求 source caps，再尝试 Soft Reset，随后按稳定 5V fallback 放开受限充电。只有观察到可靠 physical detach/replug，或可信 BMS RSOC 已超过 `10%`，才允许恢复主动 Hard Reset 策略；`Warn`、no-battery、discharge-not-ready 或无效百分比不得解锁该路径。
 
 ## 接口契约（Interfaces & Contracts）
 
@@ -208,7 +208,7 @@ None。
   - 主循环调度：`attached && contract=None` 窗口里，`usb_pd.tick()` 之前被 `power.tick()`、BMS/charger/UI 轮询拖慢，导致明明配置了 `400ms` 的恢复超时，却经常要到 `~1s` 之后才真正执行。
 - 最终修复由两部分组成：
   - 协议层：只在完整帧 ready 后读取 RX；`partial RX + hard reset` 先 defer；`no-contract` 恢复维持 `PD_RESET + 等 Source Caps`，避免把协议层 reset 当作物理 detach 乱拆。
-  - 调度层：在 `/Users/ivan/Projects/Ivan/mains-aegis/firmware/src/main.rs` 为 `attached && contract=None` 增加约 `450ms` 的协商优先窗口，优先连续服务 `usb_pd.tick()` 与 IRQ 收敛，再回到 `power.tick()` 等其它周期任务。
+  - 调度层：在 `/Users/ivan/Projects/Ivan/mains-aegis/firmware/src/main.rs` 为 `attached && contract=None` 增加短时间片协商优先窗口，优先连续服务 `usb_pd.tick()` 与 IRQ 收敛，但每个时间片必须很快回到 `power.tick()`、前面板触摸轮询等其它周期任务。
 - 结果：`SOURCE_CAPS_WAIT_TIMEOUT_MS = 400ms` 现在能按预期生效，reset 基线已从约 `2.41s` 压到约 `1.67s`，真实热插拔也回到秒级恢复。
 
 ## 变更记录（Change log）

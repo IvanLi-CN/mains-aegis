@@ -74,6 +74,9 @@ const BMS_BOOT_DIAG_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
 const BMS_BOOT_DIAG_SHIP_RESET_SETTLE: Duration = Duration::from_millis(800);
 const CHARGER_LIMIT_DIAG_PERIOD: Duration = Duration::from_secs(1);
 const CHARGER_LIMIT_DIAG_MARGIN_MA: i16 = 200;
+const CHARGER_UNDER_DELIVERY_DIAG_HOLD: Duration = Duration::from_secs(5);
+const CHARGER_UNDER_DELIVERY_DIAG_PERIOD: Duration = Duration::from_secs(10);
+const USB_PD_CHARGER_DELIVERY_DIAG_PERIOD: Duration = Duration::from_secs(10);
 // Temporary boot-diag validation: keep the proven 16.8V/200mA/500mA wake bias active through
 // the 30 s settle window so auto-validation matches the tool's working conditions.
 const BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE: bool = true;
@@ -2996,6 +2999,8 @@ pub struct PowerManager<'d, I2C> {
     chg_next_poll_at: Instant,
     chg_next_retry_at: Option<Instant>,
     chg_limit_diag_next_at: Instant,
+    chg_under_delivery_since_at: Option<Instant>,
+    usb_pd_charger_delivery_diag_next_at: Instant,
     chg_enabled: bool,
     charger_allowed: bool,
     charge_policy: ChargePolicyMemory,
@@ -3474,6 +3479,8 @@ where
             chg_next_poll_at: now,
             chg_next_retry_at: if charger_allowed { Some(now) } else { None },
             chg_limit_diag_next_at: now,
+            chg_under_delivery_since_at: None,
+            usb_pd_charger_delivery_diag_next_at: now,
             chg_enabled: false,
             charger_allowed,
             charge_policy: ChargePolicyMemory::default(),
@@ -3956,6 +3963,7 @@ where
             system_load_power_mw: USB_PD_SYSTEM_LOAD_FLOOR_MW.saturating_add(output_power_mw),
             system_voltage_mv: self.usb_pd_vsys_mv,
             battery_voltage_mv: self.ui_snapshot.bq40z50_pack_mv,
+            battery_rsoc_pct: trusted_usb_pd_recovery_rsoc_pct(&self.ui_snapshot),
             // Feed the PD manager the raw charger-side VAC1 sample so FUSB302 VBUS_OK glitches
             // do not blind detach / unsafe-voltage decisions.
             measured_input_voltage_mv: self.usb_pd_vac1_mv,
@@ -3988,6 +3996,7 @@ where
         self.usb_pd_state = state;
         self.usb_pd_input_current_limit_ma = state.input_current_limit_ma;
         self.usb_pd_vindpm_mv = state.vindpm_mv;
+        self.maybe_log_usb_pd_charger_delivery_diag(Instant::now(), state);
         let previous_pd_limits_present =
             previous_state.input_current_limit_ma.is_some() || previous_state.vindpm_mv.is_some();
         let pd_limits_present = state.input_current_limit_ma.is_some() || state.vindpm_mv.is_some();
@@ -4019,6 +4028,69 @@ where
             }
         }
         self.recompute_ui_mode();
+    }
+
+    fn maybe_log_usb_pd_charger_delivery_diag(
+        &mut self,
+        now: Instant,
+        state: usb_pd::UsbPdPortState,
+    ) {
+        if now < self.usb_pd_charger_delivery_diag_next_at {
+            return;
+        }
+
+        let Some(target_ichg_ma) = self.ui_snapshot.bq25792_ichg_ma else {
+            return;
+        };
+        if !self.manual_charge_runtime.active
+            && target_ichg_ma < ManualChargeSpeed::Ma1000.ichg_ma()
+        {
+            return;
+        }
+
+        let actual_charge_ma = self
+            .ui_snapshot
+            .bq25792_ibat_ma
+            .or(self.ui_snapshot.bq40z50_current_ma)
+            .map(|ma| ma.max(0));
+        let Some(actual_charge_ma) = actual_charge_ma else {
+            return;
+        };
+        if i32::from(target_ichg_ma)
+            <= i32::from(actual_charge_ma) + i32::from(CHARGER_LIMIT_DIAG_MARGIN_MA)
+        {
+            return;
+        }
+
+        self.usb_pd_charger_delivery_diag_next_at = now + USB_PD_CHARGER_DELIVERY_DIAG_PERIOD;
+        let contract_mv = state.contract.map(|contract| contract.voltage_mv);
+        let contract_ma = state.contract.map(|contract| contract.current_ma);
+        esp_println::println!(
+            "usb_pd: charger_delivery_diag reason=charge_under_target_runtime manual_active={} manual_speed_ma={} applied_ichg_ma={:?} ibat_adc_ma={:?} bms_current_ma={:?} input_ibus_ma={:?} contract_mv={:?} contract_ma={:?} pd_vindpm_mv={:?} pd_input_current_limit_ma={:?}",
+            self.manual_charge_runtime.active,
+            self.manual_charge_prefs.speed.ichg_ma(),
+            self.ui_snapshot.bq25792_ichg_ma,
+            self.ui_snapshot.bq25792_ibat_ma,
+            self.ui_snapshot.bq40z50_current_ma,
+            self.ui_snapshot.input_ibus_ma,
+            contract_mv,
+            contract_ma,
+            self.usb_pd_vindpm_mv,
+            self.usb_pd_input_current_limit_ma
+        );
+        defmt::warn!(
+            "usb_pd: charger_delivery_diag reason=charge_under_target_runtime manual_active={=bool} manual_speed_ma={=u16} applied_ichg_ma={=?} ibat_adc_ma={=?} bms_current_ma={=?} input_ibus_ma={=?} contract_mv={=?} contract_ma={=?} pd_vindpm_mv={=?} pd_input_current_limit_ma={=?}",
+            self.manual_charge_runtime.active,
+            self.manual_charge_prefs.speed.ichg_ma(),
+            self.ui_snapshot.bq25792_ichg_ma,
+            self.ui_snapshot.bq25792_ibat_ma,
+            self.ui_snapshot.bq40z50_current_ma,
+            self.ui_snapshot.input_ibus_ma,
+            contract_mv,
+            contract_ma,
+            self.usb_pd_vindpm_mv,
+            self.usb_pd_input_current_limit_ma
+        );
     }
 
     fn persist_pd_breadcrumb(
@@ -4617,6 +4689,13 @@ where
                 self.manual_charge_runtime.deadline =
                     Some(now + manual_charge_timer_duration(self.manual_charge_prefs.timer_limit));
                 self.chg_next_poll_at = now;
+                esp_println::println!(
+                    "manual_charge: start target={} speed_ma={} timer_h={} takeover={}",
+                    self.manual_charge_target_label(),
+                    self.manual_charge_prefs.speed.ichg_ma(),
+                    self.manual_charge_prefs.timer_limit.hours(),
+                    self.manual_charge_runtime.takeover
+                );
                 defmt::info!(
                     "manual_charge: start target={} speed_ma={=u16} timer_h={=u8} takeover={=bool}",
                     self.manual_charge_target_label(),
@@ -4631,6 +4710,7 @@ where
                 self.bms_activation_auto_force_charge_programmed = false;
                 self.stop_manual_charge_session(ManualChargeStopReason::UserStop, true);
                 self.chg_next_poll_at = now;
+                esp_println::println!("manual_charge: stop user_requested=true");
                 defmt::info!("manual_charge: stop user_requested={=bool}", true);
             }
         }
@@ -4695,42 +4775,70 @@ where
         applied_iindpm_ma: Option<u16>,
         raw_ibus_adc_ma: Option<i16>,
         ibat_adc_ma: Option<i16>,
+        bms_current_ma: Option<i16>,
         status0: u8,
         status1: u8,
     ) {
-        if !allow_charge || now < self.chg_limit_diag_next_at {
+        if !allow_charge {
+            self.chg_under_delivery_since_at = None;
             return;
         }
 
-        let target_ichg_ma = match policy_target_ichg_ma {
-            Some(v) => v as i32,
-            None => return,
-        };
-        let actual_ibat_ma = ibat_adc_ma.map(|v| i32::from(v.abs()));
-        let actual_ibus_ma = raw_ibus_adc_ma.map(|v| i32::from(v.abs()));
-
-        let charge_limit_mismatch = actual_ibat_ma
-            .map(|v| v > target_ichg_ma + i32::from(CHARGER_LIMIT_DIAG_MARGIN_MA))
-            .unwrap_or(false);
-        let input_limit_mismatch = matches!(
-            (applied_iindpm_ma, actual_ibus_ma),
-            (Some(limit_ma), Some(actual_ma))
-                if actual_ma > i32::from(limit_ma) + i32::from(CHARGER_LIMIT_DIAG_MARGIN_MA)
+        let vindpm = (status0 & bq25792::status0::VINDPM_STAT) != 0;
+        let iindpm = (status0 & bq25792::status0::IINDPM_STAT) != 0;
+        let diag_kind = charger_delivery_diag_kind(
+            allow_charge,
+            self.manual_charge_runtime.active || vindpm || iindpm,
+            policy_target_ichg_ma,
+            applied_iindpm_ma,
+            raw_ibus_adc_ma,
+            ibat_adc_ma,
+            bms_current_ma,
+            vindpm,
+            iindpm,
+            CHARGER_LIMIT_DIAG_MARGIN_MA,
         );
 
-        if !(charge_limit_mismatch || input_limit_mismatch) {
+        if diag_kind == ChargerDeliveryDiagKind::None {
+            self.chg_under_delivery_since_at = None;
             return;
         }
 
-        self.chg_limit_diag_next_at = now + CHARGER_LIMIT_DIAG_PERIOD;
+        if diag_kind.is_under_delivery() {
+            let first_seen = match self.chg_under_delivery_since_at {
+                Some(first_seen) => first_seen,
+                None => {
+                    self.chg_under_delivery_since_at = Some(now);
+                    return;
+                }
+            };
+
+            if now < first_seen + CHARGER_UNDER_DELIVERY_DIAG_HOLD {
+                return;
+            }
+        } else {
+            self.chg_under_delivery_since_at = None;
+        }
+
+        if now < self.chg_limit_diag_next_at {
+            return;
+        }
+
+        self.chg_limit_diag_next_at = now
+            + if diag_kind.is_under_delivery() {
+                CHARGER_UNDER_DELIVERY_DIAG_PERIOD
+            } else {
+                CHARGER_LIMIT_DIAG_PERIOD
+            };
 
         let reg03 = bq25792::read_u16(&mut self.i2c, bq25792::reg::CHARGE_CURRENT_LIMIT).ok();
         let reg06 = bq25792::read_u16(&mut self.i2c, bq25792::reg::INPUT_CURRENT_LIMIT).ok();
         let reg10 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_1).ok();
         let reg14 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_5).ok();
 
-        defmt::warn!(
-            "charger: limit_mismatch manual_active={=bool} manual_speed_ma={=u16} policy_target_ichg_ma={=?} applied_ichg_ma={=?} applied_iindpm_ma={=?} raw_ibus_adc_ma={=?} ibat_adc_ma={=?} reg03={=?} reg03_ma={=?} reg06={=?} reg06_ma={=?} reg10={=?} reg14={=?} chg_stat={} vbus_stat={} st0=0x{=u8:x} st1=0x{=u8:x}",
+        esp_println::println!(
+            "charger: delivery_diag reason={} manual_active={} manual_speed_ma={} policy_target_ichg_ma={:?} applied_ichg_ma={:?} applied_iindpm_ma={:?} raw_ibus_adc_ma={:?} ibat_adc_ma={:?} bms_current_ma={:?} usb_pd_contract_mv={:?} usb_pd_contract_ma={:?} usb_pd_vindpm_mv={:?} usb_pd_input_current_limit_ma={:?} reg03={:?} reg03_ma={:?} reg06={:?} reg06_ma={:?} reg10={:?} reg14={:?} chg_stat={} vbus_stat={} vindpm={} iindpm={} poorsrc={} st0=0x{:02x} st1=0x{:02x}",
+            diag_kind.as_str(),
             self.manual_charge_runtime.active,
             self.manual_charge_prefs.speed.ichg_ma(),
             policy_target_ichg_ma,
@@ -4738,6 +4846,11 @@ where
             applied_iindpm_ma,
             raw_ibus_adc_ma,
             ibat_adc_ma,
+            bms_current_ma,
+            self.usb_pd_state.contract.map(|contract| contract.voltage_mv),
+            self.usb_pd_state.contract.map(|contract| contract.current_ma),
+            self.usb_pd_vindpm_mv,
+            self.usb_pd_input_current_limit_ma,
             reg03,
             reg03.map(bq25792::decode_charge_current_limit_ma),
             reg06,
@@ -4746,6 +4859,38 @@ where
             reg14,
             bq25792::decode_chg_stat(bq25792::status1::chg_stat(status1)),
             bq25792::decode_vbus_stat(bq25792::status1::vbus_stat(status1)),
+            vindpm,
+            iindpm,
+            (status0 & bq25792::status0::POORSRC_STAT) != 0,
+            status0,
+            status1
+        );
+        defmt::warn!(
+            "charger: delivery_diag reason={} manual_active={=bool} manual_speed_ma={=u16} policy_target_ichg_ma={=?} applied_ichg_ma={=?} applied_iindpm_ma={=?} raw_ibus_adc_ma={=?} ibat_adc_ma={=?} bms_current_ma={=?} usb_pd_contract_mv={=?} usb_pd_contract_ma={=?} usb_pd_vindpm_mv={=?} usb_pd_input_current_limit_ma={=?} reg03={=?} reg03_ma={=?} reg06={=?} reg06_ma={=?} reg10={=?} reg14={=?} chg_stat={} vbus_stat={} vindpm={=bool} iindpm={=bool} poorsrc={=bool} st0=0x{=u8:x} st1=0x{=u8:x}",
+            diag_kind.as_str(),
+            self.manual_charge_runtime.active,
+            self.manual_charge_prefs.speed.ichg_ma(),
+            policy_target_ichg_ma,
+            applied_ichg_ma,
+            applied_iindpm_ma,
+            raw_ibus_adc_ma,
+            ibat_adc_ma,
+            bms_current_ma,
+            self.usb_pd_state.contract.map(|contract| contract.voltage_mv),
+            self.usb_pd_state.contract.map(|contract| contract.current_ma),
+            self.usb_pd_vindpm_mv,
+            self.usb_pd_input_current_limit_ma,
+            reg03,
+            reg03.map(bq25792::decode_charge_current_limit_ma),
+            reg06,
+            reg06.map(bq25792::decode_input_current_limit_ma),
+            reg10,
+            reg14,
+            bq25792::decode_chg_stat(bq25792::status1::chg_stat(status1)),
+            bq25792::decode_vbus_stat(bq25792::status1::vbus_stat(status1)),
+            vindpm,
+            iindpm,
+            (status0 & bq25792::status0::POORSRC_STAT) != 0,
             status0,
             status1
         );
@@ -9456,6 +9601,7 @@ where
             applied_iindpm_ma,
             raw_ibus_adc_ma,
             ibat_adc_ma,
+            self.ui_snapshot.bq40z50_current_ma,
             status0,
             status1,
         );

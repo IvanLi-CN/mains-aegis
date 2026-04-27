@@ -66,6 +66,7 @@ const USB_PD_FIXED_12V_ENABLED: bool = !cfg!(feature = "no-pd-sink-12v");
 const USB_PD_FIXED_15V_ENABLED: bool = !cfg!(feature = "no-pd-sink-15v");
 const USB_PD_FIXED_20V_ENABLED: bool = !cfg!(feature = "no-pd-sink-20v");
 const USB_PD_PPS_ENABLED: bool = !cfg!(feature = "no-pps");
+const USB_PD_NEGOTIATION_FOCUS_SLICE: Duration = Duration::from_millis(25);
 
 // External SYNC for TPS55288 DITH/SYNC pins (SYNCA=0°, SYNCB=180°).
 // RFSW on board is 43kΩ (U17/U18 pin 8), so nominal fSW ≈ 20MHz / 43kΩ ≈ 465kHz.
@@ -1372,7 +1373,7 @@ fn main() -> ! {
 
             if pd_state.attached && pd_state.contract.is_none() {
                 let focus_start = Instant::now();
-                while focus_start.elapsed() < Duration::from_millis(2_000)
+                while focus_start.elapsed() < USB_PD_NEGOTIATION_FOCUS_SLICE
                     && pd_state.attached
                     && pd_state.contract.is_none()
                 {

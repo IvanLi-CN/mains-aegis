@@ -87,7 +87,7 @@
   - `TIMER` row：`1h / 2h / 6h`
 - 三组字段不再额外包一层 row card，只保留左侧标签与右侧可点选项，减少小屏视觉噪声。
 - 底部统一为唯一操作条：`BACK + footer notice + START/STOP`。
-- 当系统当前正在充电时，设置区锁定只读，只允许 `STOP/BACK`。
+- 仅当手动会话 `active=true` 时，设置区锁定只读，只允许 `STOP/BACK`；系统自动充电但手动会话未 active 时，页面仍显示 `START` 并允许调整偏好，点击后以 `takeover=true` 接管自动充电。
 
 ### 3. 目标定义与停止条件
 
@@ -181,6 +181,7 @@
 - `front-panel-preview`
   - `dashboard-manual-charge-default`
   - `dashboard-manual-charge-active`
+  - `dashboard-manual-charge-auto-charging`
   - `dashboard-manual-charge-stop-hold`
   - `dashboard-manual-charge-reset-auto`
   - `dashboard-manual-charge-blocked`
@@ -189,22 +190,35 @@
 
 - Given `CHARGER DETAIL`，When 点击左侧会话面板热区，Then 必须进入 `MANUAL CHARGE` 页面。
 - Given `MANUAL CHARGE`，When 点击 `BACK` 或按 `LEFT/CENTER`，Then 返回 `CHARGER DETAIL`。
+- Given Dashboard detail / BMS detail 页面，When 用户点击左上角 header 边缘返回区域（包括 `x=5,y=1` 或 `x=48,y=1` 这类贴边坐标），Then 必须命中返回而不是落成 `target=none`。
 - Given EEPROM 首次为空、CRC 失败或 schema 不兼容，When 进入手动页，Then 默认选中 `100% / 500mA / 2h`。
 - Given 用户修改偏好并重启，When 再次进入手动页，Then 能读回相同偏好。
-- Given 系统已在自动充电，When 进入手动页，Then 动作按钮显示 `STOP` 且设置锁定。
+- Given 系统已在自动充电但手动会话尚未 active，When 进入手动页，Then 动作按钮显示 `START` 且设置保持可调；用户点击后进入 `takeover=true` 的手动会话。
+- Given 手动会话已 active，When 进入手动页，Then 动作按钮显示 `STOP` 且设置锁定。
+- Given 用户在 Dashboard 或 `MANUAL CHARGE` 页面触摸屏幕，When monitor 正在运行，Then 普通串口输出必须记录触摸边沿、当前 route、命中 target 或 `target=none`，便于确认触摸坐标映射与返回/动作热区是否命中。
+- Given USB-PD 处于 `attached && contract=None` 协商/恢复窗口，When 用户短按 Dashboard 或 `MANUAL CHARGE` 页面，Then 主循环不得用长时间 PD 内循环饿死前面板触摸轮询，短按仍应进入 `front_panel.tick()` 的采样路径。
 - Given 用户在本次运行中执行 `STOP`，When charger 下一轮 poll，Then 自动策略不得立刻恢复充电。
 - Given MCU 在手动会话中复位，When 系统重新启动，Then 手动会话状态与停止抑制必须全部清空。
+- Given 用户执行手动充电 `START/STOP`，When monitor 正在运行，Then 普通串口输出必须记录 `manual_charge` 事件、目标档位、速度、计时器与 takeover 状态，便于确认前面板动作已送达运行态。
 - Given 手动速度偏好为 `1A` 且输入侧超出 derate 阈值，When charger runtime 决策，Then 允许降为 `100mA`，同时状态文案更新为实际 runtime token。
+- Given 手动速度偏好为 `1A` 且策略已写入 `ICHG=1000mA`，When 实测 `IBAT/BMS current` 持续明显低于目标且 `IINDPM/VINDPM` 表明输入侧调节，Then monitor 必须输出 `charger: delivery_diag`，明确这是输入/电源路径限流导致的 under-delivery，而不是手动档位未生效。
 
 ## 实现记录
 
 - 已在 charger detail 左侧面板增加 `MANUAL CHARGE` 入口热区与高亮 marker。
 - 已将手动页重排为 1.47 英寸小屏优先布局：顶部压缩为单层只读信息条、三条无外层卡片的横向 segmented rows、底部唯一操作条与单一 `BACK`。
 - 已新增手动页路由、命中区、`START/STOP` 动作映射与 `LEFT/CENTER/BACK` 返回逻辑。
+- 已放大 Dashboard detail 与手动页返回热区，使贴边点击和轻微坐标漂移不再卡在详情页。
+- 已将 USB-PD no-contract 协商优先窗口切成短时间片，避免 #67 引入的长 PD 内循环持续阻塞 `front_panel.tick()`，导致触摸短按很难被采样。
+- 已将 inherited attach 的无合同 5V fallback 与可信 BMS RSOC 连接：当 `BMS=Ok`、非 no-battery、discharge-ready 且电量超过 `10%` 后，PD manager 会退出只等重插的保守状态，恢复 active recovery 以重新协商合适的 PD/PPS 合同。
+- 已将 Dashboard 触摸边沿、route 变化、命中 target 与 `target=none` 诊断镜像到普通串口，避免无法解码 defmt 时无法判断触摸是否进入路由/热区。
 - 已新增 `ManualChargePrefs`、`ManualChargeRuntimeState`、`ManualChargeUiSnapshot`，并把 runtime 状态保持在 `PowerManager` RAM 中。
 - 已把手动会话接到 charger state machine，支持：用户启动/停止、目标完成停充、timer expiry、safety blocked、stop inhibit 与自动恢复。
+- 已将手动 `START/STOP` 事件镜像到普通串口输出，便于在不依赖 defmt 解码的 monitor 中确认手动动作是否进入固件。
+- 已为手动 `1A` 场景补齐 under-delivery 诊断：当目标电流已生效但实际充电电流持续不足时，日志保留手动档位、目标/实测电流、PD 合约、BQ25792 限流寄存器和 `IINDPM/VINDPM` 状态。
+- 已修正 BQ25792 16-bit 配置寄存器字节序，避免 `ICHG/IINDPM/VREG` 写成 byte-swapped 值，导致日志显示软件目标已应用但芯片读回 `REG03/REG06` 实际为错误字段。
 - 已在 EEPROM 中实现 `schema_version + record table + ManualChargePrefsV1` 布局，并在设置变化时仅写入 prefs record，避免每次偏好调整都重写 superblock / table。
-- 已扩展 `front-panel-preview`，覆盖默认、活动、停止抑制、复位后回自动、以及安全阻断 5 类场景，并与最终 UI 配色/对齐同步。
+- 已扩展 `front-panel-preview`，覆盖默认、手动活动、自动充电待接管、停止抑制、复位后回自动、以及安全阻断场景，并与最终 UI 配色/对齐同步。
 
 ## 验证记录
 
@@ -213,13 +227,16 @@
 - `cargo test --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/firmware/host-unit-tests/Cargo.toml`
 - `cargo build --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/tools/front-panel-preview/Cargo.toml`
 - `cargo +esp check --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/firmware/Cargo.toml --bin esp-firmware --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
+- `cargo +esp build --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/firmware/Cargo.toml --bin esp-firmware --release --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
 - `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode standby --scenario dashboard-manual-charge-default --out-dir /tmp/mains-aegis-manual-charge-final`
 - `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode standby --scenario dashboard-manual-charge-active --out-dir /tmp/mains-aegis-manual-charge-final`
+- `cargo run --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --mode standby --scenario dashboard-manual-charge-auto-charging --out-dir /tmp/mains-aegis-manual-charge-takeover-preview`
 - `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode standby --scenario dashboard-manual-charge-stop-hold --out-dir /tmp/mains-aegis-manual-charge-final`
 - `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode standby --scenario dashboard-manual-charge-reset-auto --out-dir /tmp/mains-aegis-manual-charge-final`
 - `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode standby --scenario dashboard-manual-charge-blocked --out-dir /tmp/mains-aegis-manual-charge-final`
 - `mcu-agentd --non-interactive flash esp`
-- `mcu-agentd --non-interactive monitor esp --reset`
+- `mcu-agentd --non-interactive reset esp`
+- `mcu-agentd --non-interactive monitor esp --from-start`
 
 ## Visual Evidence
 
@@ -232,6 +249,10 @@
 ### Active
 
 ![Manual charge active](./assets/manual-charge-active.png)
+
+### Auto charging takeover
+
+![Manual charge auto charging takeover](./assets/manual-charge-auto-charging.png)
 
 ### Stop hold
 
