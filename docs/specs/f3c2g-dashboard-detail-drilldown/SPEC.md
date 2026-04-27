@@ -189,6 +189,8 @@
 - `BMS DETAIL` 在现有 runtime snapshot 基础上补充了 1 条 steady-state `GaugingStatus()` block read，用于 `LEARN` badge。
 - `BMS DETAIL` 顶栏已收敛为 `REMCAP / FCC + LEARN / BALCFG`，底栏负责显示主阻塞原因。
 - 预览工具新增 `dashboard-detail-bms*` 4 个场景，并已导出冻结 PNG 到本 spec `assets/`。
+- 预览工具新增 5 个详情页场景，并已导出冻结 PNG 到 `firmware/ui/assets/` 与本 spec `assets/`。
+- 当前首页另外存在一个顶部 `WiFi` 入口，归属后续规格 `#amc32`；它不改变本规格冻结的 5 个卡片钻取映射。
 
 ## 验证记录
 

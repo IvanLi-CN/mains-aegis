@@ -13,6 +13,9 @@ extern crate self as esp_firmware;
 #[path = "../../../firmware/src/output_state.rs"]
 pub mod output_state;
 
+#[path = "../../../firmware/src/net_types.rs"]
+pub mod net_types;
+
 #[path = "../../../firmware/src/front_panel_scene.rs"]
 mod front_panel_scene;
 
@@ -24,6 +27,7 @@ use front_panel_scene::{
     TpsTestChargerSnapshot, TpsTestOutputSnapshot, TpsTestUiSnapshot, TpsTestVoutProfile, UiFocus,
     UiModel, UiPainter, UiVariant, UpsMode, UI_H, UI_W,
 };
+use net_types::{WifiConnectionState, WifiErrorKind, WifiSnapshot};
 
 #[allow(dead_code)]
 fn base_bq40_snapshot(mode: UpsMode) -> SelfCheckUiSnapshot {
@@ -146,6 +150,11 @@ fn dashboard_detail_fixture(
         UpsMode::Off => "idle_wait_threshold",
     });
     detail.thermal_notice = Some("FAN RPM MOCKED - SENSOR WIRING NEXT");
+    detail.wifi = wifi_snapshot_for_state(if matches!(page, Some(DashboardDetailPage::Wifi)) {
+        WifiPreviewState::Connected
+    } else {
+        WifiPreviewState::Disabled
+    });
 
     if matches!(page, Some(DashboardDetailPage::Output)) {
         detail.out_b_temp_c = None;
@@ -167,6 +176,75 @@ enum BmsDetailPreviewState {
     ChargeBlocked,
     BalanceMulti,
     NoData,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum WifiPreviewState {
+    Disabled,
+    Connecting,
+    ConnectedWeak,
+    ConnectedMedium,
+    Connected,
+    ConnectedLongIp,
+    Error,
+}
+
+fn wifi_snapshot_for_state(state: WifiPreviewState) -> WifiSnapshot {
+    match state {
+        WifiPreviewState::Disabled => WifiSnapshot::disabled(),
+        WifiPreviewState::Connecting => WifiSnapshot {
+            state: WifiConnectionState::Connecting,
+            mac: Some([0xAC, 0x13, 0xF3, 0x52, 0x88, 0x19]),
+            ..WifiSnapshot::disabled()
+        },
+        WifiPreviewState::ConnectedWeak => WifiSnapshot {
+            state: WifiConnectionState::Connected,
+            ipv4: Some([192, 168, 31, 45]),
+            gateway: Some([192, 168, 31, 1]),
+            dns: Some([192, 168, 31, 1]),
+            is_static: false,
+            rssi_dbm: Some(-82),
+            mac: Some([0xAC, 0x13, 0xF3, 0x52, 0x88, 0x19]),
+            ..WifiSnapshot::disabled()
+        },
+        WifiPreviewState::ConnectedMedium => WifiSnapshot {
+            state: WifiConnectionState::Connected,
+            ipv4: Some([192, 168, 31, 45]),
+            gateway: Some([192, 168, 31, 1]),
+            dns: Some([192, 168, 31, 1]),
+            is_static: false,
+            rssi_dbm: Some(-67),
+            mac: Some([0xAC, 0x13, 0xF3, 0x52, 0x88, 0x19]),
+            ..WifiSnapshot::disabled()
+        },
+        WifiPreviewState::Connected => WifiSnapshot {
+            state: WifiConnectionState::Connected,
+            ipv4: Some([192, 168, 31, 45]),
+            gateway: Some([192, 168, 31, 1]),
+            dns: Some([192, 168, 31, 1]),
+            is_static: false,
+            rssi_dbm: Some(-54),
+            mac: Some([0xAC, 0x13, 0xF3, 0x52, 0x88, 0x19]),
+            ..WifiSnapshot::disabled()
+        },
+        WifiPreviewState::ConnectedLongIp => WifiSnapshot {
+            state: WifiConnectionState::Connected,
+            ipv4: Some([255, 255, 255, 255]),
+            gateway: Some([192, 168, 255, 254]),
+            dns: Some([208, 67, 222, 222]),
+            is_static: false,
+            rssi_dbm: Some(-54),
+            mac: Some([0xAC, 0x13, 0xF3, 0x52, 0x88, 0x19]),
+            ..WifiSnapshot::disabled()
+        },
+        WifiPreviewState::Error => WifiSnapshot {
+            state: WifiConnectionState::Error,
+            is_static: false,
+            last_error: Some(WifiErrorKind::DhcpTimeout),
+            mac: Some([0xAC, 0x13, 0xF3, 0x52, 0x88, 0x19]),
+            ..WifiSnapshot::disabled()
+        },
+    }
 }
 
 fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
@@ -271,6 +349,7 @@ fn dashboard_detail_snapshot_for_page(page: DashboardDetailPage) -> (UpsMode, Se
         DashboardDetailPage::Output => UpsMode::Supplement,
         DashboardDetailPage::Charger => UpsMode::Standby,
         DashboardDetailPage::Thermal => UpsMode::Backup,
+        DashboardDetailPage::Wifi => UpsMode::Standby,
     };
     let mut snapshot = dashboard_snapshot_for_mode(mode);
     snapshot.dashboard_detail = dashboard_detail_fixture(mode, Some(page));
@@ -349,6 +428,20 @@ fn dashboard_detail_snapshot_for_bms_state(
             (mode, snapshot)
         }
     }
+}
+
+fn dashboard_runtime_snapshot_for_wifi(state: WifiPreviewState) -> SelfCheckUiSnapshot {
+    let mut snapshot = dashboard_snapshot_for_mode(UpsMode::Standby);
+    snapshot.dashboard_detail.wifi = wifi_snapshot_for_state(state);
+    snapshot
+}
+
+fn dashboard_detail_snapshot_for_wifi(state: WifiPreviewState) -> (UpsMode, SelfCheckUiSnapshot) {
+    let mut snapshot = dashboard_snapshot_for_mode(UpsMode::Standby);
+    snapshot.dashboard_detail =
+        dashboard_detail_fixture(UpsMode::Standby, Some(DashboardDetailPage::Wifi));
+    snapshot.dashboard_detail.wifi = wifi_snapshot_for_state(state);
+    (UpsMode::Standby, snapshot)
 }
 
 fn dashboard_detail_snapshot_for_cells_balance(
@@ -918,6 +1011,13 @@ fn bq40_snapshot_for_scenario(
         ScenarioArg::Default
         | ScenarioArg::DisplayDiag
         | ScenarioArg::DashboardRuntimeStandby
+        | ScenarioArg::DashboardRuntimeStandbyTouchZones
+        | ScenarioArg::DashboardRuntimeStandbyWifiDisabled
+        | ScenarioArg::DashboardRuntimeStandbyWifiConnecting
+        | ScenarioArg::DashboardRuntimeStandbyWifiConnectedWeak
+        | ScenarioArg::DashboardRuntimeStandbyWifiConnectedMedium
+        | ScenarioArg::DashboardRuntimeStandbyWifiConnected
+        | ScenarioArg::DashboardRuntimeStandbyWifiError
         | ScenarioArg::DashboardRuntimeAssist
         | ScenarioArg::DashboardRuntimeBackup
         | ScenarioArg::DashboardDetailCells
@@ -932,6 +1032,9 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardDetailOutput
         | ScenarioArg::DashboardDetailCharger
         | ScenarioArg::DashboardDetailThermal
+        | ScenarioArg::DashboardDetailWifiConnected
+        | ScenarioArg::DashboardDetailWifiConnectedLongIp
+        | ScenarioArg::DashboardDetailWifiDisabled
         | ScenarioArg::DashboardDetailThermalTestMode
         | ScenarioArg::DashboardDetailThermKillAsserted
         | ScenarioArg::DashboardDetailChargerWait
@@ -948,6 +1051,7 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardManualChargeStopHold
         | ScenarioArg::DashboardManualChargeResetAuto
         | ScenarioArg::DashboardManualChargeBlocked
+        | ScenarioArg::WifiIconGallery
         | ScenarioArg::TpsTest
         | ScenarioArg::TestAudio
         | ScenarioArg::TestNavigation => SelfCheckOverlay::None,
@@ -971,6 +1075,14 @@ fn run() -> Result<(), String> {
 
     let effective_mode = match args.scenario {
         ScenarioArg::DashboardRuntimeStandby => ModeArg::Standby,
+        ScenarioArg::DashboardRuntimeStandbyTouchZones => ModeArg::Standby,
+        ScenarioArg::DashboardRuntimeStandbyWifiDisabled => ModeArg::Standby,
+        ScenarioArg::DashboardRuntimeStandbyWifiConnecting => ModeArg::Standby,
+        ScenarioArg::DashboardRuntimeStandbyWifiConnectedWeak => ModeArg::Standby,
+        ScenarioArg::DashboardRuntimeStandbyWifiConnectedMedium => ModeArg::Standby,
+        ScenarioArg::DashboardRuntimeStandbyWifiConnected => ModeArg::Standby,
+        ScenarioArg::DashboardRuntimeStandbyWifiError => ModeArg::Standby,
+        ScenarioArg::WifiIconGallery => ModeArg::Standby,
         ScenarioArg::DashboardRuntimeAssist => ModeArg::Supplement,
         ScenarioArg::DashboardRuntimeBackup => ModeArg::Backup,
         ScenarioArg::DashboardDetailCells => ModeArg::Standby,
@@ -985,6 +1097,9 @@ fn run() -> Result<(), String> {
         ScenarioArg::DashboardDetailOutput => ModeArg::Supplement,
         ScenarioArg::DashboardDetailCharger => ModeArg::Standby,
         ScenarioArg::DashboardDetailThermal => ModeArg::Backup,
+        ScenarioArg::DashboardDetailWifiConnected => ModeArg::Standby,
+        ScenarioArg::DashboardDetailWifiConnectedLongIp => ModeArg::Standby,
+        ScenarioArg::DashboardDetailWifiDisabled => ModeArg::Standby,
         ScenarioArg::DashboardDetailChargerWait => ModeArg::Standby,
         ScenarioArg::DashboardDetailCharger500mA => ModeArg::Standby,
         ScenarioArg::DashboardDetailChargerWarm => ModeArg::Standby,
@@ -1037,16 +1152,63 @@ fn run() -> Result<(), String> {
             front_panel_scene::render_display_diagnostic(&mut framebuffer, &meta)
                 .map_err(|_| "render failed unexpectedly".to_string())?;
         }
+        ScenarioArg::WifiIconGallery => {
+            front_panel_scene::render_wifi_icon_gallery(&mut framebuffer, UiVariant::InstrumentB)
+                .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
         ScenarioArg::DashboardRuntimeStandby
+        | ScenarioArg::DashboardRuntimeStandbyTouchZones
+        | ScenarioArg::DashboardRuntimeStandbyWifiDisabled
+        | ScenarioArg::DashboardRuntimeStandbyWifiConnecting
+        | ScenarioArg::DashboardRuntimeStandbyWifiConnectedWeak
+        | ScenarioArg::DashboardRuntimeStandbyWifiConnectedMedium
+        | ScenarioArg::DashboardRuntimeStandbyWifiConnected
+        | ScenarioArg::DashboardRuntimeStandbyWifiError
         | ScenarioArg::DashboardRuntimeAssist
         | ScenarioArg::DashboardRuntimeBackup => {
-            let mode = match args.scenario {
-                ScenarioArg::DashboardRuntimeStandby => UpsMode::Standby,
-                ScenarioArg::DashboardRuntimeAssist => UpsMode::Supplement,
-                ScenarioArg::DashboardRuntimeBackup => UpsMode::Backup,
+            let (mode, snapshot) = match args.scenario {
+                ScenarioArg::DashboardRuntimeStandby => (
+                    UpsMode::Standby,
+                    dashboard_snapshot_for_mode(UpsMode::Standby),
+                ),
+                ScenarioArg::DashboardRuntimeStandbyTouchZones => (
+                    UpsMode::Standby,
+                    dashboard_runtime_snapshot_for_wifi(WifiPreviewState::Connected),
+                ),
+                ScenarioArg::DashboardRuntimeStandbyWifiDisabled => (
+                    UpsMode::Standby,
+                    dashboard_runtime_snapshot_for_wifi(WifiPreviewState::Disabled),
+                ),
+                ScenarioArg::DashboardRuntimeStandbyWifiConnecting => (
+                    UpsMode::Standby,
+                    dashboard_runtime_snapshot_for_wifi(WifiPreviewState::Connecting),
+                ),
+                ScenarioArg::DashboardRuntimeStandbyWifiConnectedWeak => (
+                    UpsMode::Standby,
+                    dashboard_runtime_snapshot_for_wifi(WifiPreviewState::ConnectedWeak),
+                ),
+                ScenarioArg::DashboardRuntimeStandbyWifiConnectedMedium => (
+                    UpsMode::Standby,
+                    dashboard_runtime_snapshot_for_wifi(WifiPreviewState::ConnectedMedium),
+                ),
+                ScenarioArg::DashboardRuntimeStandbyWifiConnected => (
+                    UpsMode::Standby,
+                    dashboard_runtime_snapshot_for_wifi(WifiPreviewState::Connected),
+                ),
+                ScenarioArg::DashboardRuntimeStandbyWifiError => (
+                    UpsMode::Standby,
+                    dashboard_runtime_snapshot_for_wifi(WifiPreviewState::Error),
+                ),
+                ScenarioArg::DashboardRuntimeAssist => (
+                    UpsMode::Supplement,
+                    dashboard_snapshot_for_mode(UpsMode::Supplement),
+                ),
+                ScenarioArg::DashboardRuntimeBackup => (
+                    UpsMode::Backup,
+                    dashboard_snapshot_for_mode(UpsMode::Backup),
+                ),
                 _ => unreachable!(),
             };
-            let snapshot = dashboard_snapshot_for_mode(mode);
             let dashboard_model = UiModel {
                 mode,
                 focus: UiFocus::Idle,
@@ -1062,6 +1224,17 @@ fn run() -> Result<(), String> {
                 SelfCheckOverlay::None,
             )
             .map_err(|_| "render failed unexpectedly".to_string())?;
+            if matches!(
+                args.scenario,
+                ScenarioArg::DashboardRuntimeStandbyTouchZones
+            ) {
+                front_panel_scene::render_dashboard_touch_regions_overlay(
+                    &mut framebuffer,
+                    UiVariant::InstrumentB,
+                    DashboardRoute::Home,
+                )
+                .map_err(|_| "touch overlay render failed unexpectedly".to_string())?;
+            }
         }
         ScenarioArg::DashboardDetailCells
         | ScenarioArg::DashboardDetailCellsBalanceActive
@@ -1075,6 +1248,9 @@ fn run() -> Result<(), String> {
         | ScenarioArg::DashboardDetailOutput
         | ScenarioArg::DashboardDetailCharger
         | ScenarioArg::DashboardDetailThermal
+        | ScenarioArg::DashboardDetailWifiConnected
+        | ScenarioArg::DashboardDetailWifiConnectedLongIp
+        | ScenarioArg::DashboardDetailWifiDisabled
         | ScenarioArg::DashboardDetailThermalTestMode
         | ScenarioArg::DashboardDetailThermKillAsserted
         | ScenarioArg::DashboardDetailChargerWait
@@ -1102,6 +1278,9 @@ fn run() -> Result<(), String> {
                 ScenarioArg::DashboardDetailThermal
                 | ScenarioArg::DashboardDetailThermalTestMode
                 | ScenarioArg::DashboardDetailThermKillAsserted => DashboardDetailPage::Thermal,
+                ScenarioArg::DashboardDetailWifiConnected
+                | ScenarioArg::DashboardDetailWifiConnectedLongIp
+                | ScenarioArg::DashboardDetailWifiDisabled => DashboardDetailPage::Wifi,
                 ScenarioArg::DashboardDetailChargerWait
                 | ScenarioArg::DashboardDetailCharger500mA
                 | ScenarioArg::DashboardDetailChargerWarm
@@ -1181,6 +1360,15 @@ fn run() -> Result<(), String> {
                 }
                 ScenarioArg::DashboardDetailBmsNoData => {
                     dashboard_detail_snapshot_for_bms_state(BmsDetailPreviewState::NoData)
+                }
+                ScenarioArg::DashboardDetailWifiConnected => {
+                    dashboard_detail_snapshot_for_wifi(WifiPreviewState::Connected)
+                }
+                ScenarioArg::DashboardDetailWifiConnectedLongIp => {
+                    dashboard_detail_snapshot_for_wifi(WifiPreviewState::ConnectedLongIp)
+                }
+                ScenarioArg::DashboardDetailWifiDisabled => {
+                    dashboard_detail_snapshot_for_wifi(WifiPreviewState::Disabled)
                 }
                 _ => dashboard_detail_snapshot_for_page(page),
             };
@@ -1466,6 +1654,14 @@ enum ScenarioArg {
     Default,
     DisplayDiag,
     DashboardRuntimeStandby,
+    DashboardRuntimeStandbyTouchZones,
+    DashboardRuntimeStandbyWifiDisabled,
+    DashboardRuntimeStandbyWifiConnecting,
+    DashboardRuntimeStandbyWifiConnectedWeak,
+    DashboardRuntimeStandbyWifiConnectedMedium,
+    DashboardRuntimeStandbyWifiConnected,
+    DashboardRuntimeStandbyWifiError,
+    WifiIconGallery,
     DashboardRuntimeAssist,
     DashboardRuntimeBackup,
     DashboardDetailCells,
@@ -1480,6 +1676,9 @@ enum ScenarioArg {
     DashboardDetailOutput,
     DashboardDetailCharger,
     DashboardDetailThermal,
+    DashboardDetailWifiConnected,
+    DashboardDetailWifiConnectedLongIp,
+    DashboardDetailWifiDisabled,
     DashboardDetailThermalTestMode,
     DashboardDetailThermKillAsserted,
     DashboardDetailChargerWait,
@@ -1521,6 +1720,24 @@ impl ScenarioArg {
             "default" => Ok(Self::Default),
             "display-diag" => Ok(Self::DisplayDiag),
             "dashboard-runtime-standby" => Ok(Self::DashboardRuntimeStandby),
+            "dashboard-runtime-standby-touch-zones" => Ok(Self::DashboardRuntimeStandbyTouchZones),
+            "dashboard-runtime-standby-wifi-disabled" => {
+                Ok(Self::DashboardRuntimeStandbyWifiDisabled)
+            }
+            "dashboard-runtime-standby-wifi-connecting" => {
+                Ok(Self::DashboardRuntimeStandbyWifiConnecting)
+            }
+            "dashboard-runtime-standby-wifi-connected-weak" => {
+                Ok(Self::DashboardRuntimeStandbyWifiConnectedWeak)
+            }
+            "dashboard-runtime-standby-wifi-connected-medium" => {
+                Ok(Self::DashboardRuntimeStandbyWifiConnectedMedium)
+            }
+            "dashboard-runtime-standby-wifi-connected" => {
+                Ok(Self::DashboardRuntimeStandbyWifiConnected)
+            }
+            "dashboard-runtime-standby-wifi-error" => Ok(Self::DashboardRuntimeStandbyWifiError),
+            "wifi-icon-gallery" => Ok(Self::WifiIconGallery),
             "dashboard-runtime-assist" => Ok(Self::DashboardRuntimeAssist),
             "dashboard-runtime-backup" => Ok(Self::DashboardRuntimeBackup),
             "dashboard-detail-cells" => Ok(Self::DashboardDetailCells),
@@ -1537,6 +1754,11 @@ impl ScenarioArg {
             "dashboard-detail-output" => Ok(Self::DashboardDetailOutput),
             "dashboard-detail-charger" => Ok(Self::DashboardDetailCharger),
             "dashboard-detail-thermal" => Ok(Self::DashboardDetailThermal),
+            "dashboard-detail-wifi-connected" => Ok(Self::DashboardDetailWifiConnected),
+            "dashboard-detail-wifi-connected-long-ip" => {
+                Ok(Self::DashboardDetailWifiConnectedLongIp)
+            }
+            "dashboard-detail-wifi-disabled" => Ok(Self::DashboardDetailWifiDisabled),
             "dashboard-detail-thermal-test-mode" => Ok(Self::DashboardDetailThermalTestMode),
             "dashboard-detail-therm-kill-asserted" => Ok(Self::DashboardDetailThermKillAsserted),
             "dashboard-detail-charger-wait" => Ok(Self::DashboardDetailChargerWait),
@@ -1581,7 +1803,7 @@ impl ScenarioArg {
             "test-audio" => Ok(Self::TestAudio),
             "test-navigation" => Ok(Self::TestNavigation),
             _ => Err(format!(
-                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-bms|dashboard-detail-bms-charge-blocked|dashboard-detail-bms-balance-multi|dashboard-detail-bms-no-data|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|dashboard-manual-charge-default|dashboard-manual-charge-auto-charging|dashboard-manual-charge-active|dashboard-manual-charge-stop-hold|dashboard-manual-charge-reset-auto|dashboard-manual-charge-blocked|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|bq40-issue-dialog|tps-a-issue-dialog|tps-test|test-audio|test-navigation)"
+                "unsupported --scenario value: {raw} (expected default|display-diag|dashboard-runtime-standby|dashboard-runtime-standby-touch-zones|dashboard-runtime-standby-wifi-disabled|dashboard-runtime-standby-wifi-connecting|dashboard-runtime-standby-wifi-connected|dashboard-runtime-standby-wifi-error|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-bms|dashboard-detail-bms-charge-blocked|dashboard-detail-bms-balance-multi|dashboard-detail-bms-no-data|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-wifi-connected|dashboard-detail-wifi-connected-long-ip|dashboard-detail-wifi-disabled|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|dashboard-manual-charge-default|dashboard-manual-charge-auto-charging|dashboard-manual-charge-active|dashboard-manual-charge-stop-hold|dashboard-manual-charge-reset-auto|dashboard-manual-charge-blocked|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|bq40-issue-dialog|tps-a-issue-dialog|tps-test|test-audio|test-navigation)"
             )),
         }
     }
@@ -1591,6 +1813,26 @@ impl ScenarioArg {
             ScenarioArg::Default => "default",
             ScenarioArg::DisplayDiag => "display-diag",
             ScenarioArg::DashboardRuntimeStandby => "dashboard-runtime-standby",
+            ScenarioArg::DashboardRuntimeStandbyTouchZones => {
+                "dashboard-runtime-standby-touch-zones"
+            }
+            ScenarioArg::DashboardRuntimeStandbyWifiDisabled => {
+                "dashboard-runtime-standby-wifi-disabled"
+            }
+            ScenarioArg::DashboardRuntimeStandbyWifiConnecting => {
+                "dashboard-runtime-standby-wifi-connecting"
+            }
+            ScenarioArg::DashboardRuntimeStandbyWifiConnectedWeak => {
+                "dashboard-runtime-standby-wifi-connected-weak"
+            }
+            ScenarioArg::DashboardRuntimeStandbyWifiConnectedMedium => {
+                "dashboard-runtime-standby-wifi-connected-medium"
+            }
+            ScenarioArg::DashboardRuntimeStandbyWifiConnected => {
+                "dashboard-runtime-standby-wifi-connected"
+            }
+            ScenarioArg::DashboardRuntimeStandbyWifiError => "dashboard-runtime-standby-wifi-error",
+            ScenarioArg::WifiIconGallery => "wifi-icon-gallery",
             ScenarioArg::DashboardRuntimeAssist => "dashboard-runtime-assist",
             ScenarioArg::DashboardRuntimeBackup => "dashboard-runtime-backup",
             ScenarioArg::DashboardDetailCells => "dashboard-detail-cells",
@@ -1609,6 +1851,11 @@ impl ScenarioArg {
             ScenarioArg::DashboardDetailOutput => "dashboard-detail-output",
             ScenarioArg::DashboardDetailCharger => "dashboard-detail-charger",
             ScenarioArg::DashboardDetailThermal => "dashboard-detail-thermal",
+            ScenarioArg::DashboardDetailWifiConnected => "dashboard-detail-wifi-connected",
+            ScenarioArg::DashboardDetailWifiConnectedLongIp => {
+                "dashboard-detail-wifi-connected-long-ip"
+            }
+            ScenarioArg::DashboardDetailWifiDisabled => "dashboard-detail-wifi-disabled",
             ScenarioArg::DashboardDetailThermalTestMode => "dashboard-detail-thermal-test-mode",
             ScenarioArg::DashboardDetailThermKillAsserted => "dashboard-detail-therm-kill-asserted",
             ScenarioArg::DashboardDetailChargerWait => "dashboard-detail-charger-wait",
@@ -1737,7 +1984,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-bms|dashboard-detail-bms-charge-blocked|dashboard-detail-bms-balance-multi|dashboard-detail-bms-no-data|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|dashboard-manual-charge-default|dashboard-manual-charge-auto-charging|dashboard-manual-charge-active|dashboard-manual-charge-stop-hold|dashboard-manual-charge-reset-auto|dashboard-manual-charge-blocked|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|bq40-issue-dialog|tps-a-issue-dialog|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario {default|display-diag|dashboard-runtime-standby|dashboard-runtime-standby-touch-zones|dashboard-runtime-standby-wifi-disabled|dashboard-runtime-standby-wifi-connecting|dashboard-runtime-standby-wifi-connected|dashboard-runtime-standby-wifi-error|dashboard-runtime-assist|dashboard-runtime-backup|dashboard-detail-cells|dashboard-detail-cells-balance-active|dashboard-detail-cells-balance-idle|dashboard-detail-cells-balance-config-mismatch|dashboard-detail-bms|dashboard-detail-bms-charge-blocked|dashboard-detail-bms-balance-multi|dashboard-detail-bms-no-data|dashboard-detail-battery-flow|dashboard-detail-output|dashboard-detail-charger|dashboard-detail-thermal|dashboard-detail-wifi-connected|dashboard-detail-wifi-connected-long-ip|dashboard-detail-wifi-disabled|dashboard-detail-thermal-test-mode|dashboard-detail-therm-kill-asserted|dashboard-detail-charger-wait|dashboard-detail-charger-500ma|dashboard-detail-charger-warm|dashboard-detail-charger-100ma-dc-derated|dashboard-detail-charger-full-latched|dashboard-detail-charger-blocked-output-overload|dashboard-detail-charger-blocked-output-unknown|dashboard-detail-charger-blocked-no-bms|dashboard-manual-charge-default|dashboard-manual-charge-auto-charging|dashboard-manual-charge-active|dashboard-manual-charge-stop-hold|dashboard-manual-charge-reset-auto|dashboard-manual-charge-blocked|self-check-bms-missing-tps-warn|bq40-offline|bq40-offline-dialog|bq40-discharge-blocked|bq40-discharge-dialog|bq40-discharge-recovering|bq40-activating|bq40-result-success|bq40-result-no-battery|bq40-result-rom-mode|bq40-result-abnormal|bq40-result-not-detected|bq40-issue-dialog|tps-a-issue-dialog|tps-test|test-audio|test-navigation}] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Example:",
         "  cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario bq40-offline-dialog --out-dir /tmp/front-panel-preview",

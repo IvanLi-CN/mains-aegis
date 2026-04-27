@@ -57,6 +57,24 @@ pub mod front_panel_scene;
 #[path = "../../src/front_panel_logic.rs"]
 pub mod front_panel_logic;
 
+#[path = "../../src/net_types.rs"]
+pub mod net_types;
+
+#[path = "../../src/mdns_wire.rs"]
+pub mod mdns_wire;
+
+#[path = "../../src/net_contract.rs"]
+pub mod net_contract;
+
+#[path = "../../src/net_logic.rs"]
+pub mod net_logic;
+
+#[path = "../../src/net_bridge.rs"]
+pub mod net_bridge;
+
+#[path = "../../build_support/wifi_env.rs"]
+pub mod wifi_env;
+
 pub mod usb_pd;
 
 pub mod output {

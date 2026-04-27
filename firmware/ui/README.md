@@ -7,6 +7,7 @@ This directory consolidates the current confirmed front panel UI design view fro
 - Firmware screen UI (implemented now):
   - Design language (SoT): [design-language.md](design-language.md)
   - Component contracts: [component-contracts.md](component-contracts.md)
+  - Touch target design: [touch-targets.md](touch-targets.md)
   - Visual regression checklist: [visual-regression-checklist.md](visual-regression-checklist.md)
   - Dashboard module design: [dashboard-design.md](dashboard-design.md)
   - Dashboard detail design: [dashboard-detail-design.md](dashboard-detail-design.md)
@@ -20,6 +21,8 @@ This directory consolidates the current confirmed front panel UI design view fro
 
 - Frozen renders: `assets/dashboard-b-*.png`, `assets/self-check-c-*.png`（含 BQ40 结果弹窗 5 态）
 - Dashboard detail renders: `assets/dashboard-b-detail-*.png`
+- WiFi detail renders: `assets/dashboard-b-detail-wifi*.png`
+- Dashboard touch target overlay: `assets/dashboard-b-touch-zones.png`
 - Dashboard detail icons: `assets/dashboard-detail-icons.png`
 - Module maps (2):
   - `assets/dashboard-b-module-map.png`
@@ -39,11 +42,12 @@ This directory consolidates the current confirmed front panel UI design view fro
 
 1. [design-language.md](design-language.md)
 2. [component-contracts.md](component-contracts.md)
-3. [dashboard-design.md](dashboard-design.md)
-4. [dashboard-detail-design.md](dashboard-detail-design.md)
-5. [self-check-design.md](self-check-design.md)
-6. [visual-regression-checklist.md](visual-regression-checklist.md)
-6. Source specs for traceability:
+3. [touch-targets.md](touch-targets.md)
+4. [dashboard-design.md](dashboard-design.md)
+5. [dashboard-detail-design.md](dashboard-detail-design.md)
+6. [self-check-design.md](self-check-design.md)
+7. [visual-regression-checklist.md](visual-regression-checklist.md)
+8. Source specs for traceability:
    - [../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md](../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md)
    - [../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md](../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md)
    - [../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md](../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md)
@@ -55,5 +59,6 @@ This directory consolidates the current confirmed front panel UI design view fro
 - `firmware/ui` is the stable entry for current confirmed firmware UI design.
 - `docs/specs` remains the source of record for historical scope, milestones, and acceptance details.
 - Visual style and token-level constraints are normalized in `design-language.md`; page docs reference it instead of redefining style terms.
+- `touch-targets.md` 是 Dashboard 命中框几何与约束的集中说明，命中范围变更时优先更新该文件。
 - Asset synchronization rule: `firmware/ui/assets/` is the display source for current reviews; when visual baseline changes, update `firmware/ui/assets` and reference specs in the same PR.
 - Historical reference images `dashboard-b-ac-mode.png` and `dashboard-b-batt-mode.png` stay only under `docs/specs/.../assets/`.
