@@ -16,9 +16,10 @@
 - 本地预览：已通过端口租约启动 `web-preview`。
 - 浏览器验证：已确认 Fleet、Connect 和单设备 Dashboard 可渲染，控制台无 warn/error。
 - 视觉证据：已生成 desktop Fleet、mobile Fleet、single-device Dashboard 的 mock UI 截图并回传给主人；按计划不提交截图资产。
+- Review-loop：已通过，未发现剩余可操作问题。
+- PR #71 CI：已通过 Rust fmt check、PR title lint、Host pure-logic tests、Firmware quality、dependency-review。
 
-## 剩余工作
+## PR 状态
 
-- 创建 PR。
-- 完成 fast-track review-loop / CI 收敛。
-- PR 达到 merge-ready 后，将 spec 状态更新到最终收口状态。
+- PR: https://github.com/IvanLi-CN/mains-aegis/pull/71
+- Stop condition: Step 5C Ready，等待主人确认后再合并。

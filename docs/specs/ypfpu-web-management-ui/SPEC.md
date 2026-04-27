@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 部分完成（4/5）
+- Status: 部分完成（5/5）
 - Created: 2026-04-28
 - Last: 2026-04-28
 
@@ -90,4 +90,4 @@
 - [x] M2: 新增 `web/` Vite + React + TypeScript + Bun 应用骨架。
 - [x] M3: 完成多设备 Fleet 卡片网格、设备管理与单设备详情页。
 - [x] M4: 完成只读 API/SSE 客户端、mock fixtures、类型检查、生产构建和 mock UI 视觉验证。
-- [ ] M5: 创建 PR 并完成快车道 review / CI 收敛到 merge-ready。
+- [x] M5: 创建 PR #71 并完成快车道 review / CI 收敛到 merge-ready。
