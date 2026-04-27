@@ -1540,8 +1540,7 @@ fn sync_runtime_audio(
 }
 
 fn front_panel_attention_hold(signals: output::AudioSignalSnapshot) -> bool {
-    signals.mains_present == Some(false)
-        || signals.thermal_stress
+    signals.thermal_stress
         || matches!(
             signals.battery_low,
             output::AudioBatteryLowState::NoMains | output::AudioBatteryLowState::WithMains

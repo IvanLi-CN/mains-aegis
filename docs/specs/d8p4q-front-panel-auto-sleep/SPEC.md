@@ -48,6 +48,7 @@
 - `Sleeping`：空闲 `40s` 后发送 `Display OFF (0x28)` 和 `Sleep IN (0x10)`。
 - 唤醒：触摸或任意按键在非 `Awake` 状态下只负责唤醒，不透传为业务点击；从 sleep 唤醒时发送 `Sleep OUT (0x11)`，等待 `120ms` 后发送 `Display ON (0x29)`，再恢复 DBV/背光并重绘。
 - `attention_hold=true` 时立即保持/恢复 `Awake`，并把 idle 计时重置到当前时刻；解除后重新从完整阈值开始计时。
+- `attention_hold` 只覆盖用户可处理或需要避险的状态：高温压力、低电、保护、模块故障、输出过压/过流、关断保护。USB-PD recovery、充电策略等待、单纯输入源缺失等内部恢复/状态提示不阻断熄屏。
 
 ## 验收标准
 
