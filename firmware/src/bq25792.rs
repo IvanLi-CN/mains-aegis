@@ -200,8 +200,8 @@ pub const fn decode_adc_i16_bytes(bytes: [u8; 2]) -> i16 {
 
 /// ADC telemetry registers on BQ25792 return the 16-bit sample in MSB-first byte order.
 ///
-/// This differs from the little-endian layout used by the writable limit/configuration words,
-/// so ADC reads need a dedicated helper.
+/// This helper keeps ADC decoding explicit even though the writable 16-bit
+/// configuration words use the same transfer order.
 pub fn read_adc_u16<I2C>(i2c: &mut I2C, reg: u8) -> Result<u16, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
