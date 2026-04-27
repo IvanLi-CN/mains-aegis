@@ -190,6 +190,7 @@
 
 - Given `CHARGER DETAIL`，When 点击左侧会话面板热区，Then 必须进入 `MANUAL CHARGE` 页面。
 - Given `MANUAL CHARGE`，When 点击 `BACK` 或按 `LEFT/CENTER`，Then 返回 `CHARGER DETAIL`。
+- Given Dashboard detail / BMS detail 页面，When 用户点击左上角 header 边缘返回区域（包括 `x=5,y=1` 或 `x=48,y=1` 这类贴边坐标），Then 必须命中返回而不是落成 `target=none`。
 - Given EEPROM 首次为空、CRC 失败或 schema 不兼容，When 进入手动页，Then 默认选中 `100% / 500mA / 2h`。
 - Given 用户修改偏好并重启，When 再次进入手动页，Then 能读回相同偏好。
 - Given 系统已在自动充电但手动会话尚未 active，When 进入手动页，Then 动作按钮显示 `START` 且设置保持可调；用户点击后进入 `takeover=true` 的手动会话。
@@ -206,6 +207,7 @@
 - 已在 charger detail 左侧面板增加 `MANUAL CHARGE` 入口热区与高亮 marker。
 - 已将手动页重排为 1.47 英寸小屏优先布局：顶部压缩为单层只读信息条、三条无外层卡片的横向 segmented rows、底部唯一操作条与单一 `BACK`。
 - 已新增手动页路由、命中区、`START/STOP` 动作映射与 `LEFT/CENTER/BACK` 返回逻辑。
+- 已放大 Dashboard detail 与手动页返回热区，使贴边点击和轻微坐标漂移不再卡在详情页。
 - 已将 Dashboard 触摸边沿、route 变化、命中 target 与 `target=none` 诊断镜像到普通串口，避免无法解码 defmt 时无法判断触摸是否进入路由/热区。
 - 已新增 `ManualChargePrefs`、`ManualChargeRuntimeState`、`ManualChargeUiSnapshot`，并把 runtime 状态保持在 `PowerManager` RAM 中。
 - 已把手动会话接到 charger state machine，支持：用户启动/停止、目标完成停充、timer expiry、safety blocked、stop inhibit 与自动恢复。

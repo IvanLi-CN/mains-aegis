@@ -844,6 +844,10 @@ const DASHBOARD_DETAIL_BACK_X: u16 = 8;
 const DASHBOARD_DETAIL_BACK_Y: u16 = 2;
 const DASHBOARD_DETAIL_BACK_W: u16 = 56;
 const DASHBOARD_DETAIL_BACK_H: u16 = 14;
+const DASHBOARD_DETAIL_BACK_HIT_X: u16 = 0;
+const DASHBOARD_DETAIL_BACK_HIT_Y: u16 = 0;
+const DASHBOARD_DETAIL_BACK_HIT_W: u16 = 96;
+const DASHBOARD_DETAIL_BACK_HIT_H: u16 = 24;
 
 const DASHBOARD_CELLS_ADVANCED_ENTRY_X: u16 = 6;
 const DASHBOARD_CELLS_ADVANCED_ENTRY_Y: u16 = 22;
@@ -870,6 +874,10 @@ const MANUAL_BACK_X: u16 = 6;
 const MANUAL_BACK_Y: u16 = 132;
 const MANUAL_BACK_W: u16 = 88;
 const MANUAL_BACK_H: u16 = 30;
+const MANUAL_BACK_HIT_X: u16 = 0;
+const MANUAL_BACK_HIT_Y: u16 = 126;
+const MANUAL_BACK_HIT_W: u16 = 112;
+const MANUAL_BACK_HIT_H: u16 = UI_H - MANUAL_BACK_HIT_Y;
 const MANUAL_STATUS_X: u16 = 100;
 const MANUAL_STATUS_Y: u16 = 132;
 const MANUAL_STATUS_W: u16 = 120;
@@ -1334,10 +1342,10 @@ pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<Dashb
             if contains(
                 x,
                 y,
-                DASHBOARD_DETAIL_BACK_X,
-                DASHBOARD_DETAIL_BACK_Y,
-                DASHBOARD_DETAIL_BACK_W,
-                DASHBOARD_DETAIL_BACK_H,
+                DASHBOARD_DETAIL_BACK_HIT_X,
+                DASHBOARD_DETAIL_BACK_HIT_Y,
+                DASHBOARD_DETAIL_BACK_HIT_W,
+                DASHBOARD_DETAIL_BACK_HIT_H,
             ) {
                 if matches!(
                     route,
@@ -1377,10 +1385,17 @@ pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<Dashb
             if contains(
                 x,
                 y,
-                MANUAL_BACK_X,
-                MANUAL_BACK_Y,
-                MANUAL_BACK_W,
-                MANUAL_BACK_H,
+                MANUAL_BACK_HIT_X,
+                MANUAL_BACK_HIT_Y,
+                MANUAL_BACK_HIT_W,
+                MANUAL_BACK_HIT_H,
+            ) || contains(
+                x,
+                y,
+                DASHBOARD_DETAIL_BACK_HIT_X,
+                DASHBOARD_DETAIL_BACK_HIT_Y,
+                DASHBOARD_DETAIL_BACK_HIT_W,
+                DASHBOARD_DETAIL_BACK_HIT_H,
             ) {
                 Some(DashboardTouchTarget::ManualBack)
             } else if contains(
@@ -11789,6 +11804,22 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_detail_back_hit_zone_accepts_edge_taps() {
+        assert_eq!(
+            dashboard_hit_test(DashboardRoute::Detail(DashboardDetailPage::Output), 5, 1),
+            Some(DashboardTouchTarget::DetailBack)
+        );
+        assert_eq!(
+            dashboard_hit_test(
+                DashboardRoute::Detail(DashboardDetailPage::BmsDetail),
+                48,
+                1
+            ),
+            Some(DashboardTouchTarget::CellsAdvancedBack)
+        );
+    }
+
+    #[test]
     fn cells_detail_body_maps_to_bms_detail_and_bms_back_returns_to_cells() {
         assert_eq!(
             dashboard_hit_test(
@@ -11840,7 +11871,7 @@ mod tests {
                 DASHBOARD_DETAIL_BACK_X + 4,
                 DASHBOARD_DETAIL_BACK_Y + 4
             ),
-            None
+            Some(DashboardTouchTarget::ManualBack)
         );
         assert_eq!(
             dashboard_hit_test(
@@ -11853,6 +11884,10 @@ mod tests {
         assert_eq!(
             dashboard_route_for_target(DashboardTouchTarget::ManualBack),
             DashboardRoute::Detail(DashboardDetailPage::Charger)
+        );
+        assert_eq!(
+            dashboard_hit_test(DashboardRoute::ManualCharge, 4, UI_H - 2),
+            Some(DashboardTouchTarget::ManualBack)
         );
         assert_eq!(
             dashboard_manual_charge_action_for_target(DashboardTouchTarget::ManualSpeed1A),
