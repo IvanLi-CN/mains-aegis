@@ -216,6 +216,7 @@
 - 已把手动会话接到 charger state machine，支持：用户启动/停止、目标完成停充、timer expiry、safety blocked、stop inhibit 与自动恢复。
 - 已将手动 `START/STOP` 事件镜像到普通串口输出，便于在不依赖 defmt 解码的 monitor 中确认手动动作是否进入固件。
 - 已为手动 `1A` 场景补齐 under-delivery 诊断：当目标电流已生效但实际充电电流持续不足时，日志保留手动档位、目标/实测电流、PD 合约、BQ25792 限流寄存器和 `IINDPM/VINDPM` 状态。
+- 已修正 BQ25792 16-bit 配置寄存器字节序，避免 `ICHG/IINDPM/VREG` 写成 byte-swapped 值，导致日志显示软件目标已应用但芯片读回 `REG03/REG06` 实际为错误字段。
 - 已在 EEPROM 中实现 `schema_version + record table + ManualChargePrefsV1` 布局，并在设置变化时仅写入 prefs record，避免每次偏好调整都重写 superblock / table。
 - 已扩展 `front-panel-preview`，覆盖默认、手动活动、自动充电待接管、停止抑制、复位后回自动、以及安全阻断场景，并与最终 UI 配色/对齐同步。
 

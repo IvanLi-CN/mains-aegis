@@ -33,11 +33,14 @@ The charger policy can correctly program a target `ICHG` while the BQ25792 still
 
 The failure mode is easy to miss if diagnostics only report over-limit mismatches. Under-delivery needs a separate signal that records both target and actual current with the limiter state.
 
+In this project another concrete failure mode was a BQ25792 register byte-order mismatch. The 16-bit configuration words such as `REG01`, `REG03`, and `REG06` are transferred MSB first. Writing `REG03=1000mA` little-endian produces a readback like `0x6400`, which decodes to `0mA` even though software may log the attempted target as `1000mA`.
+
 ## Resolution
 
 - Keep manual charge target propagation separate from actual delivered current in logs and UI.
 - Add a stable under-delivery diagnostic when target `ICHG` exceeds positive `IBAT_ADC` or positive BMS current by a clear margin for several polls; negative battery current is discharge and must count as zero delivered charge current.
 - Include the limiter context in the diagnostic: `IINDPM/VINDPM`, PD contract, programmed input current limit, `REG03`, `REG06`, `REG10`, and `REG14`.
+- Decode `REG03/REG06` readback from the same bytes the device stores, not from the software value returned by the setter. If readback shows byte-swapped values such as `0x6400` or `0x2c00`, fix the register transfer order before chasing external power limits.
 - Classify input-DPM under-delivery distinctly, for example `reason=charge_under_target_input_dpm`.
 - Mirror the diagnostic and manual `START/STOP` events to the plain serial monitor when the field workflow does not decode defmt, and rate-limit sustained under-delivery output so live monitoring remains readable.
 
