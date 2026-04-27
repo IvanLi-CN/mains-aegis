@@ -76,6 +76,8 @@ const TPS_SYNC_ENABLE: bool = true;
 const TPS_SYNC_FREQ_KHZ: u32 = 465;
 const TPS_SYNC_DUTY_PCT: u8 = 50;
 const TPS_SYNC_PHASE_TICKS: u16 = 64; // 180° at Duty7Bit => 128 ticks/period.
+const FRONT_PANEL_BACKLIGHT_PWM_FREQ_KHZ: u32 = 20;
+const FRONT_PANEL_BACKLIGHT_PWM_OFF_OUTPUT_HIGH_PCT: u8 = 100;
 
 // Do not assert THERM_KILL_N during normal bring-up.
 const FORCE_THERM_KILL_N_ASSERTED: bool = false;
@@ -490,6 +492,8 @@ fn main() -> ! {
     let mut _fan_pwm_timer1 = _tps_sync_ledc.timer::<LowSpeed>(timer::Number::Timer1);
     let mut _fan_pwm_channel =
         _tps_sync_ledc.channel(channel::Number::Channel2, peripherals.GPIO36);
+    let mut _front_panel_bl_pwm_timer2 = _tps_sync_ledc.timer::<LowSpeed>(timer::Number::Timer2);
+    let mut _front_panel_bl_pwm_channel = None;
 
     let mut tps_sync_ok = true;
     if TPS_SYNC_ENABLE {
@@ -566,6 +570,46 @@ fn main() -> ! {
         },
         Err(err) => defmt::error!("fan: pwm timer err={=?}", err),
     }
+
+    let front_panel_backlight = match _front_panel_bl_pwm_timer2.configure(timer::config::Config {
+        duty: timer::config::Duty::Duty10Bit,
+        clock_source: timer::LSClockSource::APBClk,
+        frequency: Rate::from_khz(FRONT_PANEL_BACKLIGHT_PWM_FREQ_KHZ),
+    }) {
+        Ok(()) => {
+            let mut channel3 =
+                _tps_sync_ledc.channel(channel::Number::Channel3, peripherals.GPIO13);
+            match channel3.configure(channel::config::Config {
+                timer: &_front_panel_bl_pwm_timer2,
+                duty_pct: FRONT_PANEL_BACKLIGHT_PWM_OFF_OUTPUT_HIGH_PCT,
+                drive_mode: DriveMode::PushPull,
+            }) {
+                Ok(()) => {
+                    defmt::info!(
+                        "ui: backlight_pwm ok channel=3 freq_khz={} duty_bits=10 idle_output_high_pct={=u8}",
+                        FRONT_PANEL_BACKLIGHT_PWM_FREQ_KHZ,
+                        FRONT_PANEL_BACKLIGHT_PWM_OFF_OUTPUT_HIGH_PCT
+                    );
+                    _front_panel_bl_pwm_channel = Some(channel3);
+                    front_panel::BacklightControl::LedcChannel3 { brightness_pct: 0 }
+                }
+                Err(err) => {
+                    defmt::error!("ui: backlight_pwm channel err={=?}", err);
+                    esp_println::println!(
+                        "ui: backlight_pwm channel configure failed; refusing unconfigured PWM backend"
+                    );
+                    panic!("front panel backlight pwm channel configure failed");
+                }
+            }
+        }
+        Err(err) => {
+            defmt::error!(
+                "ui: backlight_pwm timer err={=?}; falling back to gpio backlight",
+                err
+            );
+            front_panel::BacklightControl::Gpio(Flex::new(peripherals.GPIO13))
+        }
+    };
 
     // Ensure the system timer is enabled before calling `Instant::now()`.
     let _systimer = SystemTimer::new(peripherals.SYSTIMER);
@@ -758,7 +802,6 @@ fn main() -> ! {
 
     let tca_reset_n = Flex::new(peripherals.GPIO1);
     let dc = Flex::new(peripherals.GPIO10);
-    let bl = Flex::new(peripherals.GPIO13);
     let btn_center = Input::new(
         peripherals.GPIO0,
         InputConfig::default().with_pull(Pull::None),
@@ -868,7 +911,7 @@ fn main() -> ! {
         ctp_irq,
         tca_reset_n,
         dc,
-        bl,
+        front_panel_backlight,
     );
     if !panel_probe.screen_present() {
         defmt::warn!(

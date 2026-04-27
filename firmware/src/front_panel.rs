@@ -59,6 +59,7 @@ const CMD_SLEEP_OUT: u8 = 0x11;
 const CMD_DISPLAY_OFF: u8 = 0x28;
 const CMD_DISPLAY_ON: u8 = 0x29;
 const CMD_WRITE_DISPLAY_BRIGHTNESS: u8 = 0x51;
+const CMD_WRITE_CTRL_DISPLAY: u8 = 0x53;
 
 // Front panel is currently mounted 180° from the original lab orientation.
 const LCD_W: u16 = 320;
@@ -70,8 +71,14 @@ const PANEL_RGB_ORDER: bool = false;
 const UI_ORIENTATION_MARKER: &str = "FP_ORI_PROBE_20260227";
 
 const BACKLIGHT_ACTIVE_LOW: bool = true;
+const BACKLIGHT_PWM_CHANNEL: usize = 3;
+const BACKLIGHT_PWM_DUTY_BITS: u32 = 10;
+const BACKLIGHT_PWM_FULL_PCT: u8 = 100;
+const BACKLIGHT_PWM_DIM_PCT: u8 = 12;
 const DISPLAY_BRIGHTNESS_FULL: u8 = 0xFF;
-const DISPLAY_BRIGHTNESS_DIM: u8 = 0x01;
+const DISPLAY_BRIGHTNESS_DIM: u8 = 0x40;
+const DISPLAY_CTRL_BRIGHTNESS_ON_BACKLIGHT_ON: u8 = 0x24;
+const DISPLAY_CTRL_BRIGHTNESS_DIM_BACKLIGHT_ON: u8 = 0x2C;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const CENTER_LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(800);
@@ -160,6 +167,113 @@ struct Cst816dDiagSnapshot {
     mapped_point: Option<(u16, u16)>,
 }
 
+pub enum BacklightControl {
+    Gpio(Flex<'static>),
+    LedcChannel3 { brightness_pct: u8 },
+}
+
+impl From<Flex<'static>> for BacklightControl {
+    fn from(bl: Flex<'static>) -> Self {
+        Self::Gpio(bl)
+    }
+}
+
+impl BacklightControl {
+    fn configure(&mut self) {
+        match self {
+            Self::Gpio(bl) => {
+                bl.apply_output_config(
+                    &OutputConfig::default()
+                        .with_drive_mode(DriveMode::PushPull)
+                        .with_pull(Pull::None),
+                );
+                bl.set_input_enable(true);
+                bl.set_output_enable(true);
+            }
+            Self::LedcChannel3 { .. } => {}
+        }
+    }
+
+    fn set_brightness_pct(&mut self, pct: u8) {
+        let pct = pct.min(100);
+        match self {
+            Self::Gpio(bl) => {
+                let on = pct > 0;
+                if BACKLIGHT_ACTIVE_LOW {
+                    if on {
+                        bl.set_low();
+                    } else {
+                        bl.set_high();
+                    }
+                } else if on {
+                    bl.set_high();
+                } else {
+                    bl.set_low();
+                }
+            }
+            Self::LedcChannel3 { brightness_pct } => {
+                *brightness_pct = pct;
+                set_backlight_pwm_channel3_pct(pct);
+            }
+        }
+    }
+
+    fn raw_level_high(&self) -> Option<bool> {
+        match self {
+            Self::Gpio(bl) => Some(bl.is_high()),
+            Self::LedcChannel3 { .. } => None,
+        }
+    }
+
+    fn brightness_pct(&self) -> u8 {
+        match self {
+            Self::Gpio(bl) => {
+                let is_on = if BACKLIGHT_ACTIVE_LOW {
+                    bl.is_low()
+                } else {
+                    bl.is_high()
+                };
+                if is_on {
+                    BACKLIGHT_PWM_FULL_PCT
+                } else {
+                    0
+                }
+            }
+            Self::LedcChannel3 { brightness_pct } => *brightness_pct,
+        }
+    }
+
+    fn is_on(&self) -> bool {
+        self.brightness_pct() > 0
+    }
+}
+
+fn set_backlight_pwm_channel3_pct(brightness_pct: u8) {
+    let output_high_pct = if BACKLIGHT_ACTIVE_LOW {
+        100 - brightness_pct.min(100)
+    } else {
+        brightness_pct.min(100)
+    };
+    let duty_range = 1u32 << BACKLIGHT_PWM_DUTY_BITS;
+    let duty = (duty_range * output_high_pct as u32) / 100;
+    let ledc = esp_hal::peripherals::LEDC::regs();
+    ledc.ch(BACKLIGHT_PWM_CHANNEL)
+        .duty()
+        .write(|w| unsafe { w.duty().bits(duty << 4) });
+    ledc.ch(BACKLIGHT_PWM_CHANNEL).conf1().write(|w| {
+        w.duty_start().set_bit();
+        w.duty_inc().set_bit();
+        unsafe {
+            w.duty_num().bits(0x1);
+            w.duty_cycle().bits(0x1);
+            w.duty_scale().bits(0x0)
+        }
+    });
+    ledc.ch(BACKLIGHT_PWM_CHANNEL)
+        .conf0()
+        .modify(|_, w| w.para_up().set_bit());
+}
+
 pub struct FrontPanel<I2C>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
@@ -169,7 +283,7 @@ where
     btn_center: Input<'static>,
     ctp_irq: Input<'static>,
     tca_reset_n: Flex<'static>,
-    bl: Flex<'static>,
+    backlight: BacklightControl,
     display_buffers: DisplayBuffers,
     dirty_rows: DirtyRows,
 
@@ -208,7 +322,7 @@ where
         ctp_irq: Input<'static>,
         tca_reset_n: Flex<'static>,
         dc: Flex<'static>,
-        bl: Flex<'static>,
+        backlight: impl Into<BacklightControl>,
     ) -> Self {
         let display_buffers = unsafe {
             let (psram_ptr, psram_bytes) = psram::psram_raw_parts(&psram);
@@ -243,7 +357,7 @@ where
             btn_center,
             ctp_irq,
             tca_reset_n,
-            bl,
+            backlight: backlight.into(),
             display_buffers,
             dirty_rows: DirtyRows::new(),
             tca_output: 0,
@@ -363,7 +477,10 @@ where
         }
 
         if self
-            .set_display_brightness(DISPLAY_BRIGHTNESS_FULL)
+            .set_display_brightness(
+                DISPLAY_BRIGHTNESS_FULL,
+                DISPLAY_CTRL_BRIGHTNESS_ON_BACKLIGHT_ON,
+            )
             .is_err()
         {
             self.fail_display_reinit(trigger, "brightness_full", "spi_write_failed");
@@ -515,26 +632,29 @@ where
 
         let tca_reset_high = self.tca_reset_n.is_high();
         let dc_high = self.panel_io.dc.is_high();
-        let bl_high = self.bl.is_high();
+        let bl_high = self.backlight.raw_level_high();
+        let bl_pwm_pct = self.backlight.brightness_pct();
         let center_low = self.btn_center.is_low();
         let ctp_irq_low = self.ctp_irq.is_low();
         defmt::info!(
-            "ui: display_diag gpio gpio1_tca_reset_high={=bool} gpio10_dc_high={=bool} gpio13_blk_high={=bool} gpio0_center_low={=bool} gpio14_ctp_irq_low={=bool} backlight_on={=bool}",
+            "ui: display_diag gpio gpio1_tca_reset_high={=bool} gpio10_dc_high={=bool} gpio13_blk_high={=?} gpio13_blk_pwm_pct={=u8} gpio0_center_low={=bool} gpio14_ctp_irq_low={=bool} backlight_on={=bool}",
             tca_reset_high,
             dc_high,
             bl_high,
+            bl_pwm_pct,
             center_low,
             ctp_irq_low,
-            self.backlight_is_on_raw_level(bl_high)
+            self.backlight.is_on()
         );
         esp_println::println!(
-            "ui: display_diag gpio gpio1_tca_reset_high={} gpio10_dc_high={} gpio13_blk_high={} gpio0_center_low={} gpio14_ctp_irq_low={} backlight_on={}",
+            "ui: display_diag gpio gpio1_tca_reset_high={} gpio10_dc_high={} gpio13_blk_high={:?} gpio13_blk_pwm_pct={} gpio0_center_low={} gpio14_ctp_irq_low={} backlight_on={}",
             tca_reset_high,
             dc_high,
             bl_high,
+            bl_pwm_pct,
             center_low,
             ctp_irq_low,
-            self.backlight_is_on_raw_level(bl_high)
+            self.backlight.is_on()
         );
 
         match self.read_touch_diag_snapshot() {
@@ -612,14 +732,6 @@ where
         })
     }
 
-    fn backlight_is_on_raw_level(&self, bl_high: bool) -> bool {
-        if BACKLIGHT_ACTIVE_LOW {
-            !bl_high
-        } else {
-            bl_high
-        }
-    }
-
     pub fn set_attention_hold(&mut self, hold: bool) {
         if self.attention_hold == hold {
             return;
@@ -651,26 +763,34 @@ where
                 if previous_mode == DisplayPowerMode::Sleeping {
                     self.panel_io.wake_display()?;
                 }
-                self.set_display_brightness(DISPLAY_BRIGHTNESS_FULL)?;
-                self.set_backlight(true);
+                self.set_display_brightness(
+                    DISPLAY_BRIGHTNESS_FULL,
+                    DISPLAY_CTRL_BRIGHTNESS_ON_BACKLIGHT_ON,
+                )?;
+                self.set_backlight_pct(BACKLIGHT_PWM_FULL_PCT);
                 self.needs_redraw = true;
                 defmt::info!("ui: display_power mode=awake");
             }
             DisplayPowerCommand::Dim => {
-                self.set_display_brightness(DISPLAY_BRIGHTNESS_DIM)?;
-                self.set_backlight(true);
+                self.set_display_brightness(
+                    DISPLAY_BRIGHTNESS_DIM,
+                    DISPLAY_CTRL_BRIGHTNESS_DIM_BACKLIGHT_ON,
+                )?;
+                self.set_backlight_pct(BACKLIGHT_PWM_DIM_PCT);
                 defmt::info!(
-                    "ui: display_power mode=dimmed brightness={=u8}",
-                    DISPLAY_BRIGHTNESS_DIM
+                    "ui: display_power mode=dimmed brightness={=u8} ctrl=0x{=u8:x} backlight_pwm_pct={=u8}",
+                    DISPLAY_BRIGHTNESS_DIM,
+                    DISPLAY_CTRL_BRIGHTNESS_DIM_BACKLIGHT_ON,
+                    BACKLIGHT_PWM_DIM_PCT
                 );
             }
             DisplayPowerCommand::BacklightOff => {
-                self.set_backlight(false);
+                self.set_backlight_pct(0);
                 self.needs_redraw = true;
                 defmt::info!("ui: display_power mode=backlight_off");
             }
             DisplayPowerCommand::Sleep => {
-                self.set_backlight(false);
+                self.set_backlight_pct(0);
                 self.panel_io.sleep_display()?;
                 self.needs_redraw = true;
                 defmt::info!("ui: display_power mode=sleeping");
@@ -679,7 +799,9 @@ where
         Ok(())
     }
 
-    fn set_display_brightness(&mut self, value: u8) -> Result<(), esp_hal::spi::Error> {
+    fn set_display_brightness(&mut self, value: u8, ctrl: u8) -> Result<(), esp_hal::spi::Error> {
+        self.panel_io.write_cmd(CMD_WRITE_CTRL_DISPLAY)?;
+        self.panel_io.write_data(&[ctrl])?;
         self.panel_io.write_cmd(CMD_WRITE_DISPLAY_BRIGHTNESS)?;
         self.panel_io.write_data(&[value])
     }
@@ -1132,14 +1254,8 @@ where
     }
 
     fn configure_backlight(&mut self) {
-        self.bl.apply_output_config(
-            &OutputConfig::default()
-                .with_drive_mode(DriveMode::PushPull)
-                .with_pull(Pull::None),
-        );
-        self.bl.set_input_enable(true);
-        self.set_backlight(false);
-        self.bl.set_output_enable(true);
+        self.backlight.configure();
+        self.set_backlight_pct(0);
     }
 
     fn configure_tca_reset(&mut self) {
@@ -1161,17 +1277,11 @@ where
     }
 
     fn set_backlight(&mut self, on: bool) {
-        if BACKLIGHT_ACTIVE_LOW {
-            if on {
-                self.bl.set_low();
-            } else {
-                self.bl.set_high();
-            }
-        } else if on {
-            self.bl.set_high();
-        } else {
-            self.bl.set_low();
-        }
+        self.set_backlight_pct(if on { BACKLIGHT_PWM_FULL_PCT } else { 0 });
+    }
+
+    fn set_backlight_pct(&mut self, pct: u8) {
+        self.backlight.set_brightness_pct(pct);
     }
 
     fn tca_init(&mut self) -> Result<(), esp_hal::i2c::master::Error> {

@@ -42,9 +42,9 @@
 
 ## 行为规格
 
-- `Awake`：正常全亮，GC9307 DBV 写 `0xFF`，`BLK(GPIO13)` 打开。
-- `Dimmed`：空闲 `30s` 后写 GC9307 `0x51` DBV 为最低非零值，背光仍保持打开。
-- `BacklightOff`：空闲 `35s` 后关闭 `BLK`。
+- `Awake`：正常全亮，GC9307 `0x53` 使能 brightness block/backlight，DBV `0x51=0xFF`，`BLK(GPIO13)` 通过 LEDC PWM 输出 `100%` 亮度。
+- `Dimmed`：空闲 `30s` 后写 GC9307 `0x53` 使能 dimming/backlight，DBV `0x51=0x40` 作为辅助；实际低亮由 `BLK(GPIO13)` LEDC PWM 输出 `12%` 亮度。
+- `BacklightOff`：空闲 `35s` 后将 `BLK(GPIO13)` LEDC PWM 输出降到 `0%` 亮度。
 - `Sleeping`：空闲 `40s` 后发送 `Display OFF (0x28)` 和 `Sleep IN (0x10)`。
 - 唤醒：触摸或任意按键在非 `Awake` 状态下只负责唤醒，不透传为业务点击；从 sleep 唤醒时发送 `Sleep OUT (0x11)`，等待 `120ms` 后发送 `Display ON (0x29)`，再恢复 DBV/背光并重绘。
 - `attention_hold=true` 时立即保持/恢复 `Awake`，并把 idle 计时重置到当前时刻；解除后重新从完整阈值开始计时。
