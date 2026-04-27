@@ -174,6 +174,14 @@
 ![Dashboard Wifi Detail Long IP](./assets/dashboard-detail-wifi-long-ip.png)
 ![Dashboard Wifi Detail Disabled](./assets/dashboard-detail-wifi-disabled.png)
 
+### Dashboard WiFi 图标状态
+
+![Dashboard WiFi icons gallery](./assets/dashboard-wifi-icons-gallery.png)
+
+- 图集由固件 renderer 按 `320x172` 前面板尺寸 1:1 导出。
+- `CONN 0 -> CONN 1 -> CONN 2 -> CONN 0` 对应连接中动画帧；图标结构为完整底部点、点加第一弧、点加两弧。
+- 已连接态按 RSSI 映射为 `LOW / MID / HIGH`，正常强度使用 Dashboard 文本同色白色，低强度使用注意色。
+
 ## 资产晋升（Asset promotion）
 
 None。
@@ -183,7 +191,7 @@ None。
 - [x] M1: 新增 `net_http` feature、编译期 WiFi env 注入与 feature-gated 主入口
 - [x] M2: 实现共享网络状态模型、WiFi 连接任务、mDNS / DNS-SD 与只读 HTTP/SSE 底座
 - [x] M3: 抽出 `UpsStatusSnapshot` / `NetworkUiSummary`，补齐 host-side 契约测试并接入只读 API / SSE 桥接
-- [x] M4: 视觉证据不适用（按主人要求，不修改自检页面）
+- [x] M4: 补齐 Dashboard / WiFi 相关视觉证据（不修改自检页面）
 - [ ] M5: 完成 fast-track 提交、push、PR 与 review-loop 收敛到 merge-ready
 
 ## 方案概述（Approach, high-level）

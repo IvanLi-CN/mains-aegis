@@ -2277,6 +2277,106 @@ pub fn render_display_diagnostic<P: UiPainter>(
 }
 
 #[allow(dead_code)]
+pub fn render_wifi_icon_gallery<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+    fill(painter, 0, 0, UI_W, UI_H, palette.bg)?;
+    draw_background_grid(painter, palette)?;
+    draw_outline(painter, 0, 0, UI_W, UI_H, palette.border)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextTitle,
+        "WIFI ICONS 1:1",
+        Point::new(8, 5),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+
+    let entries = [
+        ("OFF", WifiSnapshot::disabled(), 0),
+        (
+            "ERROR",
+            WifiSnapshot {
+                state: WifiConnectionState::Error,
+                last_error: Some(esp_firmware::net_types::WifiErrorKind::DhcpTimeout),
+                ..WifiSnapshot::disabled()
+            },
+            0,
+        ),
+        ("CONN 0", WifiSnapshot::connecting(), 0),
+        ("CONN 1", WifiSnapshot::connecting(), 4),
+        ("CONN 2", WifiSnapshot::connecting(), 8),
+        (
+            "LOW",
+            WifiSnapshot {
+                state: WifiConnectionState::Connected,
+                rssi_dbm: Some(-82),
+                ..WifiSnapshot::disabled()
+            },
+            0,
+        ),
+        (
+            "MID",
+            WifiSnapshot {
+                state: WifiConnectionState::Connected,
+                rssi_dbm: Some(-67),
+                ..WifiSnapshot::disabled()
+            },
+            0,
+        ),
+        (
+            "HIGH",
+            WifiSnapshot {
+                state: WifiConnectionState::Connected,
+                rssi_dbm: Some(-50),
+                ..WifiSnapshot::disabled()
+            },
+            0,
+        ),
+    ];
+
+    for (idx, (label, wifi, frame_no)) in entries.iter().enumerate() {
+        let col = (idx % 3) as u16;
+        let row = (idx / 3) as u16;
+        let cell_x = 8 + col * 104;
+        let cell_y = 30 + row * 44;
+        draw_panel(
+            painter,
+            cell_x,
+            cell_y,
+            96,
+            36,
+            palette,
+            false,
+            palette.accent,
+        )?;
+        text(
+            painter,
+            variant,
+            FontRole::TextCompact,
+            *label,
+            Point::new((cell_x + 6) as i32, (cell_y + 5) as i32),
+            HorizontalAlignment::Left,
+            palette.text_dim,
+        )?;
+        draw_dashboard_wifi_icon_at(
+            painter,
+            cell_x + 41,
+            cell_y + 18,
+            14,
+            palette,
+            *wifi,
+            *frame_no,
+        )?;
+    }
+
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub fn render_test_navigation<P: UiPainter>(
     painter: &mut P,
     selected: TestFunctionUi,
@@ -7285,26 +7385,9 @@ fn draw_dashboard_wifi_icon_at<P: UiPainter>(
             )?;
         }
         WifiConnectionState::Connecting => {
-            let inactive = fade_color(palette.panel_alt, palette.text_dim);
-            let bars = connecting_wifi_signal_bars(frame_no);
-            draw_icon_blocks(
-                painter,
-                origin_x,
-                origin_y,
-                WIFI_SYMBOL_ROUNDED_14,
-                inactive,
-            )?;
+            let level = connecting_wifi_signal_level(frame_no);
             let active = dashboard_wifi_icon_color(palette, wifi, frame_no);
-            draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_DOT_14, active)?;
-            if bars >= 1 {
-                draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_BAR_1_14, active)?;
-            }
-            if bars >= 2 {
-                draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_BAR_2_14, active)?;
-            }
-            if bars >= 3 {
-                draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_BAR_3_14, active)?;
-            }
+            draw_wifi_signal_level(painter, origin_x, origin_y, level, active)?;
         }
         WifiConnectionState::Connected => {
             let inactive = fade_color(palette.panel_alt, palette.text_dim);
@@ -7315,15 +7398,9 @@ fn draw_dashboard_wifi_icon_at<P: UiPainter>(
                 WIFI_SYMBOL_ROUNDED_14,
                 inactive,
             )?;
-            let bars = wifi_signal_bars(wifi.rssi_dbm);
-            let active = dashboard_connected_wifi_icon_color(palette, bars);
-            draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_BAR_1_14, active)?;
-            if bars >= 2 {
-                draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_BAR_2_14, active)?;
-            }
-            if bars >= 3 {
-                draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_BAR_3_14, active)?;
-            }
+            let level = wifi_signal_level(wifi.rssi_dbm);
+            let active = dashboard_connected_wifi_icon_color(palette, level);
+            draw_wifi_signal_level(painter, origin_x, origin_y, level, active)?;
         }
     }
     Ok(())
@@ -7333,7 +7410,7 @@ fn dashboard_wifi_icon_color(palette: Palette, wifi: WifiSnapshot, _frame_no: u3
     match wifi.state {
         WifiConnectionState::Connecting => ATTENTION_COLOR,
         WifiConnectionState::Connected => {
-            dashboard_connected_wifi_icon_color(palette, wifi_signal_bars(wifi.rssi_dbm))
+            dashboard_connected_wifi_icon_color(palette, wifi_signal_level(wifi.rssi_dbm))
         }
         WifiConnectionState::Disabled | WifiConnectionState::Idle | WifiConnectionState::Error => {
             palette.text_dim
@@ -7341,27 +7418,55 @@ fn dashboard_wifi_icon_color(palette: Palette, wifi: WifiSnapshot, _frame_no: u3
     }
 }
 
-const fn connecting_wifi_signal_bars(frame_no: u32) -> u8 {
-    match (frame_no / 4) % 4 {
+fn draw_wifi_signal_level<P: UiPainter>(
+    painter: &mut P,
+    origin_x: u16,
+    origin_y: u16,
+    level: u8,
+    active: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_DOT_14, active)?;
+    if level >= 1 {
+        draw_icon_blocks(
+            painter,
+            origin_x,
+            origin_y,
+            WIFI_SIGNAL_INNER_ARC_14,
+            active,
+        )?;
+    }
+    if level >= 2 {
+        draw_icon_blocks(
+            painter,
+            origin_x,
+            origin_y,
+            WIFI_SIGNAL_OUTER_ARC_14,
+            active,
+        )?;
+    }
+    Ok(())
+}
+
+const fn connecting_wifi_signal_level(frame_no: u32) -> u8 {
+    match (frame_no / 4) % 3 {
         0 => 0,
         1 => 1,
-        2 => 2,
-        _ => 3,
+        _ => 2,
     }
 }
 
-const fn wifi_signal_bars(rssi_dbm: Option<i8>) -> u8 {
+const fn wifi_signal_level(rssi_dbm: Option<i8>) -> u8 {
     match rssi_dbm {
-        None => 3,
-        Some(rssi) if rssi >= -60 => 3,
-        Some(rssi) if rssi >= -75 => 2,
-        Some(_) => 1,
+        None => 2,
+        Some(rssi) if rssi >= -60 => 2,
+        Some(rssi) if rssi >= -75 => 1,
+        Some(_) => 0,
     }
 }
 
-const fn dashboard_connected_wifi_icon_color(palette: Palette, bars: u8) -> u16 {
-    match bars {
-        0 | 1 => ATTENTION_COLOR,
+const fn dashboard_connected_wifi_icon_color(palette: Palette, level: u8) -> u16 {
+    match level {
+        0 => ATTENTION_COLOR,
         _ => palette.text,
     }
 }
@@ -9431,14 +9536,12 @@ const WIFI_SYMBOL_ROUNDED_14: &[(u8, u8, u8, u8)] = &[
     (6, 12, 2, 1),
 ];
 
-const WIFI_SIGNAL_DOT_14: &[(u8, u8, u8, u8)] = &[(6, 12, 2, 1)];
+const WIFI_SIGNAL_DOT_14: &[(u8, u8, u8, u8)] = &[(6, 10, 2, 1), (5, 11, 4, 1), (6, 12, 2, 1)];
 
-const WIFI_SIGNAL_BAR_1_14: &[(u8, u8, u8, u8)] = &[(6, 10, 2, 1), (5, 11, 4, 1), (6, 12, 2, 1)];
-
-const WIFI_SIGNAL_BAR_2_14: &[(u8, u8, u8, u8)] =
+const WIFI_SIGNAL_INNER_ARC_14: &[(u8, u8, u8, u8)] =
     &[(3, 6, 7, 1), (3, 7, 8, 1), (3, 8, 2, 1), (9, 8, 2, 1)];
 
-const WIFI_SIGNAL_BAR_3_14: &[(u8, u8, u8, u8)] = &[
+const WIFI_SIGNAL_OUTER_ARC_14: &[(u8, u8, u8, u8)] = &[
     (3, 1, 8, 1),
     (2, 2, 10, 1),
     (1, 3, 12, 1),
@@ -12869,12 +12972,12 @@ mod tests {
     }
 
     #[test]
-    fn connecting_wifi_signal_bars_sweep_from_dot_to_full() {
-        assert_eq!(connecting_wifi_signal_bars(0), 0);
-        assert_eq!(connecting_wifi_signal_bars(4), 1);
-        assert_eq!(connecting_wifi_signal_bars(8), 2);
-        assert_eq!(connecting_wifi_signal_bars(12), 3);
-        assert_eq!(connecting_wifi_signal_bars(16), 0);
+    fn connecting_wifi_signal_steps_sweep_dot_inner_full() {
+        assert_eq!(connecting_wifi_signal_level(0), 0);
+        assert_eq!(connecting_wifi_signal_level(4), 1);
+        assert_eq!(connecting_wifi_signal_level(8), 2);
+        assert_eq!(connecting_wifi_signal_level(12), 0);
+        assert_eq!(connecting_wifi_signal_level(16), 1);
     }
 
     #[test]
@@ -12893,11 +12996,11 @@ mod tests {
     }
 
     #[test]
-    fn connected_wifi_signal_bars_follow_rssi_thresholds() {
-        assert_eq!(wifi_signal_bars(None), 3);
-        assert_eq!(wifi_signal_bars(Some(-50)), 3);
-        assert_eq!(wifi_signal_bars(Some(-67)), 2);
-        assert_eq!(wifi_signal_bars(Some(-82)), 1);
+    fn connected_wifi_signal_levels_follow_rssi_thresholds() {
+        assert_eq!(wifi_signal_level(None), 2);
+        assert_eq!(wifi_signal_level(Some(-50)), 2);
+        assert_eq!(wifi_signal_level(Some(-67)), 1);
+        assert_eq!(wifi_signal_level(Some(-82)), 0);
     }
 
     #[test]

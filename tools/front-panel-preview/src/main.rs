@@ -182,6 +182,8 @@ enum BmsDetailPreviewState {
 enum WifiPreviewState {
     Disabled,
     Connecting,
+    ConnectedWeak,
+    ConnectedMedium,
     Connected,
     ConnectedLongIp,
     Error,
@@ -192,6 +194,26 @@ fn wifi_snapshot_for_state(state: WifiPreviewState) -> WifiSnapshot {
         WifiPreviewState::Disabled => WifiSnapshot::disabled(),
         WifiPreviewState::Connecting => WifiSnapshot {
             state: WifiConnectionState::Connecting,
+            mac: Some([0xAC, 0x13, 0xF3, 0x52, 0x88, 0x19]),
+            ..WifiSnapshot::disabled()
+        },
+        WifiPreviewState::ConnectedWeak => WifiSnapshot {
+            state: WifiConnectionState::Connected,
+            ipv4: Some([192, 168, 31, 45]),
+            gateway: Some([192, 168, 31, 1]),
+            dns: Some([192, 168, 31, 1]),
+            is_static: false,
+            rssi_dbm: Some(-82),
+            mac: Some([0xAC, 0x13, 0xF3, 0x52, 0x88, 0x19]),
+            ..WifiSnapshot::disabled()
+        },
+        WifiPreviewState::ConnectedMedium => WifiSnapshot {
+            state: WifiConnectionState::Connected,
+            ipv4: Some([192, 168, 31, 45]),
+            gateway: Some([192, 168, 31, 1]),
+            dns: Some([192, 168, 31, 1]),
+            is_static: false,
+            rssi_dbm: Some(-67),
             mac: Some([0xAC, 0x13, 0xF3, 0x52, 0x88, 0x19]),
             ..WifiSnapshot::disabled()
         },
@@ -992,6 +1014,8 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardRuntimeStandbyTouchZones
         | ScenarioArg::DashboardRuntimeStandbyWifiDisabled
         | ScenarioArg::DashboardRuntimeStandbyWifiConnecting
+        | ScenarioArg::DashboardRuntimeStandbyWifiConnectedWeak
+        | ScenarioArg::DashboardRuntimeStandbyWifiConnectedMedium
         | ScenarioArg::DashboardRuntimeStandbyWifiConnected
         | ScenarioArg::DashboardRuntimeStandbyWifiError
         | ScenarioArg::DashboardRuntimeAssist
@@ -1027,6 +1051,7 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardManualChargeStopHold
         | ScenarioArg::DashboardManualChargeResetAuto
         | ScenarioArg::DashboardManualChargeBlocked
+        | ScenarioArg::WifiIconGallery
         | ScenarioArg::TpsTest
         | ScenarioArg::TestAudio
         | ScenarioArg::TestNavigation => SelfCheckOverlay::None,
@@ -1053,8 +1078,11 @@ fn run() -> Result<(), String> {
         ScenarioArg::DashboardRuntimeStandbyTouchZones => ModeArg::Standby,
         ScenarioArg::DashboardRuntimeStandbyWifiDisabled => ModeArg::Standby,
         ScenarioArg::DashboardRuntimeStandbyWifiConnecting => ModeArg::Standby,
+        ScenarioArg::DashboardRuntimeStandbyWifiConnectedWeak => ModeArg::Standby,
+        ScenarioArg::DashboardRuntimeStandbyWifiConnectedMedium => ModeArg::Standby,
         ScenarioArg::DashboardRuntimeStandbyWifiConnected => ModeArg::Standby,
         ScenarioArg::DashboardRuntimeStandbyWifiError => ModeArg::Standby,
+        ScenarioArg::WifiIconGallery => ModeArg::Standby,
         ScenarioArg::DashboardRuntimeAssist => ModeArg::Supplement,
         ScenarioArg::DashboardRuntimeBackup => ModeArg::Backup,
         ScenarioArg::DashboardDetailCells => ModeArg::Standby,
@@ -1124,10 +1152,16 @@ fn run() -> Result<(), String> {
             front_panel_scene::render_display_diagnostic(&mut framebuffer, &meta)
                 .map_err(|_| "render failed unexpectedly".to_string())?;
         }
+        ScenarioArg::WifiIconGallery => {
+            front_panel_scene::render_wifi_icon_gallery(&mut framebuffer, UiVariant::InstrumentB)
+                .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
         ScenarioArg::DashboardRuntimeStandby
         | ScenarioArg::DashboardRuntimeStandbyTouchZones
         | ScenarioArg::DashboardRuntimeStandbyWifiDisabled
         | ScenarioArg::DashboardRuntimeStandbyWifiConnecting
+        | ScenarioArg::DashboardRuntimeStandbyWifiConnectedWeak
+        | ScenarioArg::DashboardRuntimeStandbyWifiConnectedMedium
         | ScenarioArg::DashboardRuntimeStandbyWifiConnected
         | ScenarioArg::DashboardRuntimeStandbyWifiError
         | ScenarioArg::DashboardRuntimeAssist
@@ -1148,6 +1182,14 @@ fn run() -> Result<(), String> {
                 ScenarioArg::DashboardRuntimeStandbyWifiConnecting => (
                     UpsMode::Standby,
                     dashboard_runtime_snapshot_for_wifi(WifiPreviewState::Connecting),
+                ),
+                ScenarioArg::DashboardRuntimeStandbyWifiConnectedWeak => (
+                    UpsMode::Standby,
+                    dashboard_runtime_snapshot_for_wifi(WifiPreviewState::ConnectedWeak),
+                ),
+                ScenarioArg::DashboardRuntimeStandbyWifiConnectedMedium => (
+                    UpsMode::Standby,
+                    dashboard_runtime_snapshot_for_wifi(WifiPreviewState::ConnectedMedium),
                 ),
                 ScenarioArg::DashboardRuntimeStandbyWifiConnected => (
                     UpsMode::Standby,
@@ -1615,8 +1657,11 @@ enum ScenarioArg {
     DashboardRuntimeStandbyTouchZones,
     DashboardRuntimeStandbyWifiDisabled,
     DashboardRuntimeStandbyWifiConnecting,
+    DashboardRuntimeStandbyWifiConnectedWeak,
+    DashboardRuntimeStandbyWifiConnectedMedium,
     DashboardRuntimeStandbyWifiConnected,
     DashboardRuntimeStandbyWifiError,
+    WifiIconGallery,
     DashboardRuntimeAssist,
     DashboardRuntimeBackup,
     DashboardDetailCells,
@@ -1682,10 +1727,17 @@ impl ScenarioArg {
             "dashboard-runtime-standby-wifi-connecting" => {
                 Ok(Self::DashboardRuntimeStandbyWifiConnecting)
             }
+            "dashboard-runtime-standby-wifi-connected-weak" => {
+                Ok(Self::DashboardRuntimeStandbyWifiConnectedWeak)
+            }
+            "dashboard-runtime-standby-wifi-connected-medium" => {
+                Ok(Self::DashboardRuntimeStandbyWifiConnectedMedium)
+            }
             "dashboard-runtime-standby-wifi-connected" => {
                 Ok(Self::DashboardRuntimeStandbyWifiConnected)
             }
             "dashboard-runtime-standby-wifi-error" => Ok(Self::DashboardRuntimeStandbyWifiError),
+            "wifi-icon-gallery" => Ok(Self::WifiIconGallery),
             "dashboard-runtime-assist" => Ok(Self::DashboardRuntimeAssist),
             "dashboard-runtime-backup" => Ok(Self::DashboardRuntimeBackup),
             "dashboard-detail-cells" => Ok(Self::DashboardDetailCells),
@@ -1770,10 +1822,17 @@ impl ScenarioArg {
             ScenarioArg::DashboardRuntimeStandbyWifiConnecting => {
                 "dashboard-runtime-standby-wifi-connecting"
             }
+            ScenarioArg::DashboardRuntimeStandbyWifiConnectedWeak => {
+                "dashboard-runtime-standby-wifi-connected-weak"
+            }
+            ScenarioArg::DashboardRuntimeStandbyWifiConnectedMedium => {
+                "dashboard-runtime-standby-wifi-connected-medium"
+            }
             ScenarioArg::DashboardRuntimeStandbyWifiConnected => {
                 "dashboard-runtime-standby-wifi-connected"
             }
             ScenarioArg::DashboardRuntimeStandbyWifiError => "dashboard-runtime-standby-wifi-error",
+            ScenarioArg::WifiIconGallery => "wifi-icon-gallery",
             ScenarioArg::DashboardRuntimeAssist => "dashboard-runtime-assist",
             ScenarioArg::DashboardRuntimeBackup => "dashboard-runtime-backup",
             ScenarioArg::DashboardDetailCells => "dashboard-detail-cells",
