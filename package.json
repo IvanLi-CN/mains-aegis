@@ -17,6 +17,8 @@
     "web:dev": "cd web && bun run dev",
     "web:preview": "cd web && bun run preview",
     "web:build": "cd web && bun run build",
-    "web:check": "cd web && bun run check"
+    "web:check": "cd web && bun run check",
+    "web:storybook": "cd web && bun run storybook",
+    "web:storybook:build": "cd web && bun run storybook:build"
   }
 }

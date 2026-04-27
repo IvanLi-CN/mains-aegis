@@ -27,6 +27,10 @@ type Route = {
   section: "fleet" | "connect" | "overview" | "power" | "battery" | "thermal" | "device" | "api";
 };
 
+type AppProps = {
+  initialPath?: string;
+};
+
 const deviceSections = [
   { id: "overview", label: "Overview", icon: Gauge },
   { id: "power", label: "Power", icon: PlugZap },
@@ -36,9 +40,9 @@ const deviceSections = [
   { id: "api", label: "API", icon: Cable },
 ] as const;
 
-export function App() {
+export function App({ initialPath }: AppProps = {}) {
   const registry = useDeviceRegistry();
-  const route = useRoute();
+  const route = useRoute(initialPath);
   const selected = route.deviceId ? (registry.records.find((record) => record.target.deviceId === route.deviceId) ?? null) : null;
 
   return (
@@ -102,8 +106,12 @@ function renderRoute(route: Route, records: DeviceRecord[], selected: DeviceReco
   }
 }
 
-function useRoute(): Route {
-  const [path, setPath] = useState(window.location.pathname);
+function useRoute(initialPath?: string): Route {
+  const [path, setPath] = useState(initialPath ?? window.location.pathname);
+
+  useEffect(() => {
+    if (initialPath) setPath(initialPath);
+  }, [initialPath]);
 
   useEffect(() => {
     const listener = () => setPath(window.location.pathname);

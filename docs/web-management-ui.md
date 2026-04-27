@@ -16,6 +16,7 @@ Web 管理界面是 UPS 的浏览器侧只读运维台，首版负责设备发�
 - 接口对接：对每台已知设备读取 `GET /api/v1/identity`、`GET /api/v1/network`、`GET /api/v1/status`；在线设备优先建立 status SSE。
 - 布局：顶部显示设备总数、在线数、critical/warning 数；主体使用响应式设备卡片网格。
 - 交互：点击设备行进入单设备总览；支持按状态、位置或 hostname 搜索过滤。
+- 示例组织：所有页面级示例统一放在 Storybook，提供可交互 demo 和 `play` 覆盖，避免只依赖临时预览路由。
 
 #### 设备卡片结构
 
@@ -153,6 +154,7 @@ web/
 3. 完成设备卡片网格、连接与设备管理、单设备总览。
 4. 补齐电源路径、电池与 BMS、温度与保护页面。
 5. 增加 API 调试页、mock fixtures、多设备模拟数据与基础视觉回归入口。
+6. 为 Fleet、Connect、单设备 Dashboard 和 API Debug 维护 Storybook stories，作为后续 UI 验收入口。
 
 ## 当前实现
 
@@ -161,3 +163,4 @@ web/
 - 默认数据：内置 6 台 mock UPS，覆盖 standby、assist、backup、warning、critical、offline。
 - 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、只读探活、SSE 订阅与轮询兜底。
 - 验证命令：`bun run web:check`、`bun run web:build`。
+- Storybook：`bun run web:storybook`、`bun run web:storybook:build`。

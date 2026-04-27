@@ -8,12 +8,14 @@
 - `mock:` 设备用于稳定开发预览和视觉证据，不发真实网络请求。
 - 管理端页面已覆盖 Fleet、Connect、Overview、Power、Battery、Thermal、Device、API。
 - Fleet 卡片使用用户可理解的摘要字段，技术细节保留到单设备详情与 API 调试页。
+- Storybook 已作为页面示例入口，覆盖 Fleet、Connect、Critical Device Dashboard、API Debug，并使用 `play` 断言关键交互。
 
 ## 验证状态
 
 - `bun install`: 已通过。
 - `bun run web:check`: 已通过。
 - `bun run web:build`: 已通过。
+- `bun run web:storybook:build`: 已通过。
 - 本地预览：已通过端口租约启动 `web-preview`。
 - 浏览器验证：已确认 Fleet、Connect 和单设备 Dashboard 可渲染，控制台无 warn/error。
 - 视觉证据：已生成 desktop Fleet、mobile Fleet、single-device Dashboard 的 mock UI 截图并回传给主人；按计划不提交截图资产。

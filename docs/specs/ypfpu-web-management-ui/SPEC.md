@@ -21,7 +21,7 @@
 - 实现多设备 Fleet 卡片网格，覆盖 online、offline、warning、critical、assist、backup 等状态。
 - 实现设备接入页、单设备总览、电源路径、电池与 BMS、温度与保护、设备信息、API 调试页面。
 - 对接设备侧现有只读接口：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status` 和 status SSE。
-- 提供 mock fixtures，使无实机环境也能稳定预览与截图验证。
+- 提供 mock fixtures 和 Storybook stories，使无实机环境也能稳定预览、交互测试与截图验证。
 
 ### Non-goals
 
@@ -29,7 +29,7 @@
 - 不新增设备侧聚合 API；多设备汇总由浏览器端 `DeviceRegistry` 完成。
 - 不做用户账号、鉴权、设备绑定、TLS、跨网段发现或云端服务。
 - 不改造 `docs-site/`；文档站与管理端保持独立。
-- 不引入 Storybook；当前仓库没有现成 Storybook 能力，视觉证据使用 mock UI + 本地预览。
+- Storybook 是 Web 管理端示例和交互 demo 的标准入口；首版不把截图资产提交到仓库。
 
 ## 功能规格
 
@@ -73,6 +73,7 @@
 - `/connect` 能显示已保存设备，支持添加设备与探活错误显示。
 - 单设备详情页可从 Fleet 卡片进入，并展示 power、battery、thermal、device、api 子页。
 - 浏览器视觉验证覆盖 desktop Fleet、mobile Fleet 和单设备 Dashboard。
+- Storybook 覆盖 Fleet、Connect、单设备 Dashboard、API Debug，并提供基础 `play` 交互断言。
 
 ## 文档更新
 

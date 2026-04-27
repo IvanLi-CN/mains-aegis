@@ -24,4 +24,5 @@ tools/front-panel-preview/target/
 node_modules/
 bun.lockb
 web/dist/
+web/storybook-static/
 web/tsconfig.tsbuildinfo
