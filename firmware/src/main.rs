@@ -18,6 +18,10 @@ mod runtime_audio_recovery;
 
 #[cfg(feature = "net_http")]
 use embassy_executor::Spawner;
+#[cfg(not(feature = "net_http"))]
+use embassy_futures::block_on;
+#[cfg(feature = "net_http")]
+use embassy_futures::yield_now;
 use embedded_hal_bus::i2c::RefCellDevice;
 use esp_backtrace as _;
 use esp_firmware::audio::{AudioCue, AudioManager, PLAYBACK_SAMPLE_RATE_HZ};
@@ -475,13 +479,13 @@ fn clear_i2c_bus(sda: &mut Flex<'_>, scl: &mut Flex<'_>, bus: &'static str) {
 #[cfg(not(feature = "net_http"))]
 #[main]
 fn main() -> ! {
-    firmware_main(())
+    block_on(firmware_main(()))
 }
 
 #[cfg(feature = "net_http")]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    firmware_main(spawner)
+    firmware_main(spawner).await
 }
 
 #[cfg(not(feature = "net_http"))]
@@ -490,8 +494,10 @@ type MainEntry = ();
 #[cfg(feature = "net_http")]
 type MainEntry = Spawner;
 
-fn firmware_main(main_entry: MainEntry) -> ! {
+async fn firmware_main(main_entry: MainEntry) -> ! {
     #[cfg(not(feature = "net_http"))]
+    let _ = main_entry;
+    #[cfg(feature = "net_http")]
     let _ = main_entry;
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::_160MHz);
@@ -1354,7 +1360,10 @@ fn firmware_main(main_entry: MainEntry) -> ! {
     log_boot_stage("power_init_done");
     power.update_usb_pd_state(initial_pd_state);
     #[cfg(feature = "net_http")]
-    esp_firmware::net::spawn_wifi_and_http(&main_entry, peripherals.WIFI);
+    {
+        esp_firmware::net::spawn_wifi_and_http(&main_entry, peripherals.WIFI);
+        yield_now().await;
+    }
     let initial_snapshot = power.ui_snapshot();
     net_bridge::publish_status_snapshot(initial_snapshot);
     front_panel.update_self_check_snapshot(initial_snapshot);
@@ -1523,6 +1532,8 @@ fn firmware_main(main_entry: MainEntry) -> ! {
             {
                 defmt::info!("irq: fan_tach={=u32}", irq_events.fan_tach);
             }
+            #[cfg(feature = "net_http")]
+            yield_now().await;
         }
     }
 }

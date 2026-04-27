@@ -54,6 +54,28 @@ mod tests {
     }
 
     #[test]
+    fn connecting_wifi_uses_frame_animation_on_dashboard() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby);
+        snapshot.dashboard_detail.wifi = front_panel_scene::WifiSnapshot::connecting();
+
+        assert!(dashboard_uses_frame_animation(
+            DASHBOARD_VARIANT,
+            DashboardRoute::Home,
+            &snapshot,
+        ));
+        assert!(dashboard_uses_frame_animation(
+            DASHBOARD_VARIANT,
+            DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Wifi),
+            &snapshot,
+        ));
+        assert!(!dashboard_uses_frame_animation(
+            UiVariant::RetroC,
+            DashboardRoute::Home,
+            &snapshot,
+        ));
+    }
+
+    #[test]
     fn enter_dashboard_only_transitions_from_self_check_variant() {
         assert!(dashboard_enter_requires_variant_switch(SELF_CHECK_VARIANT));
         assert!(!dashboard_enter_requires_variant_switch(DASHBOARD_VARIANT));

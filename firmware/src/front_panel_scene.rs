@@ -1595,12 +1595,13 @@ pub fn dashboard_route_has_active_animation(
     route: DashboardRoute,
     snapshot: &SelfCheckUiSnapshot,
 ) -> bool {
-    matches!(route, DashboardRoute::Detail(DashboardDetailPage::Thermal))
-        && thermal_fan_motion(
-            snapshot.dashboard_detail.fan_rpm,
-            snapshot.dashboard_detail.fan_pwm_pct,
-            snapshot.dashboard_detail.fan_status,
-        ) != ThermalFanMotion::Off
+    snapshot.dashboard_detail.wifi.state == WifiConnectionState::Connecting
+        || (matches!(route, DashboardRoute::Detail(DashboardDetailPage::Thermal))
+            && thermal_fan_motion(
+                snapshot.dashboard_detail.fan_rpm,
+                snapshot.dashboard_detail.fan_pwm_pct,
+                snapshot.dashboard_detail.fan_status,
+            ) != ThermalFanMotion::Off)
 }
 
 #[allow(dead_code)]
@@ -6818,7 +6819,7 @@ fn render_dashboard_wifi_detail<P: UiPainter>(
         HorizontalAlignment::Right,
         summary_color,
     )?;
-    draw_dashboard_wifi_icon_at(painter, 248, 28, 14, summary_color, wifi_icon_is_off(wifi))?;
+    draw_dashboard_wifi_icon_at(painter, 248, 28, 14, palette, wifi, data.frame_no)?;
 
     match wifi.ipv4 {
         Some([a, b, c, d]) => text(
@@ -7247,8 +7248,9 @@ fn draw_dashboard_home_wifi_icon<P: UiPainter>(
         DASHBOARD_HOME_WIFI_ICON_X,
         DASHBOARD_HOME_WIFI_ICON_Y,
         14,
-        dashboard_wifi_icon_color(palette, wifi, frame_no),
-        wifi_icon_is_off(wifi),
+        palette,
+        wifi,
+        frame_no,
     )
 }
 
@@ -7257,31 +7259,110 @@ fn draw_dashboard_wifi_icon_at<P: UiPainter>(
     x: u16,
     y: u16,
     size: u16,
-    color: u16,
-    off: bool,
+    palette: Palette,
+    wifi: WifiSnapshot,
+    frame_no: u32,
 ) -> Result<(), P::Error> {
-    let icon = if off {
-        WIFI_OFF_SYMBOL_ROUNDED_14
-    } else {
-        WIFI_SYMBOL_ROUNDED_14
-    };
     let origin_x = x + size.saturating_sub(14) / 2;
     let origin_y = y + size.saturating_sub(14) / 2;
-    draw_icon_blocks(painter, origin_x, origin_y, icon, color)?;
+    match wifi.state {
+        WifiConnectionState::Disabled | WifiConnectionState::Idle => {
+            draw_icon_blocks(
+                painter,
+                origin_x,
+                origin_y,
+                WIFI_OFF_SYMBOL_ROUNDED_14,
+                palette.text_dim,
+            )?;
+        }
+        WifiConnectionState::Error => {
+            draw_icon_blocks(
+                painter,
+                origin_x,
+                origin_y,
+                WIFI_OFF_SYMBOL_ROUNDED_14,
+                ERROR_COLOR,
+            )?;
+        }
+        WifiConnectionState::Connecting => {
+            let inactive = fade_color(palette.panel_alt, palette.text_dim);
+            let bars = connecting_wifi_signal_bars(frame_no);
+            draw_icon_blocks(
+                painter,
+                origin_x,
+                origin_y,
+                WIFI_SYMBOL_ROUNDED_14,
+                inactive,
+            )?;
+            let active = dashboard_wifi_icon_color(palette, wifi, frame_no);
+            draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_DOT_14, active)?;
+            if bars >= 1 {
+                draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_BAR_1_14, active)?;
+            }
+            if bars >= 2 {
+                draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_BAR_2_14, active)?;
+            }
+            if bars >= 3 {
+                draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_BAR_3_14, active)?;
+            }
+        }
+        WifiConnectionState::Connected => {
+            let inactive = fade_color(palette.panel_alt, palette.text_dim);
+            draw_icon_blocks(
+                painter,
+                origin_x,
+                origin_y,
+                WIFI_SYMBOL_ROUNDED_14,
+                inactive,
+            )?;
+            let bars = wifi_signal_bars(wifi.rssi_dbm);
+            let active = dashboard_connected_wifi_icon_color(palette, bars);
+            draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_BAR_1_14, active)?;
+            if bars >= 2 {
+                draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_BAR_2_14, active)?;
+            }
+            if bars >= 3 {
+                draw_icon_blocks(painter, origin_x, origin_y, WIFI_SIGNAL_BAR_3_14, active)?;
+            }
+        }
+    }
     Ok(())
 }
 
-fn dashboard_wifi_icon_color(palette: Palette, wifi: WifiSnapshot, frame_no: u32) -> u16 {
+fn dashboard_wifi_icon_color(palette: Palette, wifi: WifiSnapshot, _frame_no: u32) -> u16 {
     match wifi.state {
-        WifiConnectionState::Connecting => match (frame_no / 8) % 4 {
-            0 => palette.text_dim,
-            1 | 3 => fade_color(palette.text_dim, palette.text),
-            _ => palette.text,
-        },
-        WifiConnectionState::Connected => palette.text,
+        WifiConnectionState::Connecting => ATTENTION_COLOR,
+        WifiConnectionState::Connected => {
+            dashboard_connected_wifi_icon_color(palette, wifi_signal_bars(wifi.rssi_dbm))
+        }
         WifiConnectionState::Disabled | WifiConnectionState::Idle | WifiConnectionState::Error => {
             palette.text_dim
         }
+    }
+}
+
+const fn connecting_wifi_signal_bars(frame_no: u32) -> u8 {
+    match (frame_no / 4) % 4 {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        _ => 3,
+    }
+}
+
+const fn wifi_signal_bars(rssi_dbm: Option<i8>) -> u8 {
+    match rssi_dbm {
+        None => 3,
+        Some(rssi) if rssi >= -60 => 3,
+        Some(rssi) if rssi >= -75 => 2,
+        Some(_) => 1,
+    }
+}
+
+const fn dashboard_connected_wifi_icon_color(palette: Palette, bars: u8) -> u16 {
+    match bars {
+        0 | 1 => ATTENTION_COLOR,
+        _ => palette.text,
     }
 }
 
@@ -7293,13 +7374,6 @@ fn dashboard_wifi_accent(palette: Palette, wifi: WifiSnapshot) -> u16 {
         WifiConnectionState::Connecting | WifiConnectionState::Connected => palette.accent,
         WifiConnectionState::Error => ERROR_COLOR,
     }
-}
-
-const fn wifi_icon_is_off(wifi: WifiSnapshot) -> bool {
-    matches!(
-        wifi.state,
-        WifiConnectionState::Disabled | WifiConnectionState::Idle | WifiConnectionState::Error
-    )
 }
 
 fn wifi_detail_status_tag(wifi: WifiSnapshot) -> &'static str {
@@ -9355,6 +9429,24 @@ const WIFI_SYMBOL_ROUNDED_14: &[(u8, u8, u8, u8)] = &[
     (6, 10, 2, 1),
     (5, 11, 4, 1),
     (6, 12, 2, 1),
+];
+
+const WIFI_SIGNAL_DOT_14: &[(u8, u8, u8, u8)] = &[(6, 12, 2, 1)];
+
+const WIFI_SIGNAL_BAR_1_14: &[(u8, u8, u8, u8)] = &[(6, 10, 2, 1), (5, 11, 4, 1), (6, 12, 2, 1)];
+
+const WIFI_SIGNAL_BAR_2_14: &[(u8, u8, u8, u8)] =
+    &[(3, 6, 7, 1), (3, 7, 8, 1), (3, 8, 2, 1), (9, 8, 2, 1)];
+
+const WIFI_SIGNAL_BAR_3_14: &[(u8, u8, u8, u8)] = &[
+    (3, 1, 8, 1),
+    (2, 2, 10, 1),
+    (1, 3, 12, 1),
+    (1, 4, 2, 1),
+    (10, 4, 3, 1),
+    (1, 5, 1, 1),
+    (5, 5, 4, 1),
+    (12, 5, 1, 1),
 ];
 
 const WIFI_OFF_SYMBOL_ROUNDED_14: &[(u8, u8, u8, u8)] = &[
@@ -12767,19 +12859,45 @@ mod tests {
     }
 
     #[test]
-    fn connecting_wifi_icon_color_breathes_between_frames() {
+    fn connecting_wifi_icon_color_stays_attention() {
         let palette = palette_for(UiVariant::InstrumentB);
         let wifi = WifiSnapshot::connecting();
 
-        assert_eq!(
-            dashboard_wifi_icon_color(palette, wifi, 0),
-            palette.text_dim
-        );
-        assert_eq!(
-            dashboard_wifi_icon_color(palette, wifi, 8),
-            fade_color(palette.text_dim, palette.text)
-        );
-        assert_eq!(dashboard_wifi_icon_color(palette, wifi, 16), palette.text);
+        assert_eq!(dashboard_wifi_icon_color(palette, wifi, 0), ATTENTION_COLOR);
+        assert_eq!(dashboard_wifi_icon_color(palette, wifi, 4), ATTENTION_COLOR);
+        assert_eq!(dashboard_wifi_icon_color(palette, wifi, 8), ATTENTION_COLOR);
+    }
+
+    #[test]
+    fn connecting_wifi_signal_bars_sweep_from_dot_to_full() {
+        assert_eq!(connecting_wifi_signal_bars(0), 0);
+        assert_eq!(connecting_wifi_signal_bars(4), 1);
+        assert_eq!(connecting_wifi_signal_bars(8), 2);
+        assert_eq!(connecting_wifi_signal_bars(12), 3);
+        assert_eq!(connecting_wifi_signal_bars(16), 0);
+    }
+
+    #[test]
+    fn connecting_wifi_keeps_dashboard_frame_animation_active() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.dashboard_detail.wifi = WifiSnapshot::connecting();
+
+        assert!(dashboard_route_has_active_animation(
+            DashboardRoute::Home,
+            &snapshot
+        ));
+        assert!(dashboard_route_has_active_animation(
+            DashboardRoute::Detail(DashboardDetailPage::Wifi),
+            &snapshot
+        ));
+    }
+
+    #[test]
+    fn connected_wifi_signal_bars_follow_rssi_thresholds() {
+        assert_eq!(wifi_signal_bars(None), 3);
+        assert_eq!(wifi_signal_bars(Some(-50)), 3);
+        assert_eq!(wifi_signal_bars(Some(-67)), 2);
+        assert_eq!(wifi_signal_bars(Some(-82)), 1);
     }
 
     #[test]

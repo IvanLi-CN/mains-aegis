@@ -17,7 +17,7 @@ use embassy_time::{Duration, Timer};
 use esp_hal::{peripherals::WIFI, rng::Rng};
 use esp_radio::{
     init as radio_init,
-    wifi::{self, ClientConfig, ModeConfig, WifiController, WifiDevice, WifiEvent},
+    wifi::{self, ClientConfig, ModeConfig, WifiController, WifiDevice},
     Controller as RadioController,
 };
 use heapless::{String, Vec};
@@ -54,6 +54,7 @@ const SSE_FRAME_CAP: usize = 3328;
 const REQUEST_BUF_CAP: usize = 1024;
 const STATUS_PUSH_INTERVAL: Duration = Duration::from_secs(2);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const RSSI_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 static STATUS_SSE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static RADIO_CONTROLLER: StaticCell<RadioController<'static>> = StaticCell::new();
@@ -92,6 +93,12 @@ pub fn current_identity() -> Option<DeviceIdentity> {
 }
 
 pub fn log_wifi_config() {
+    esp_println::println!(
+        "net: feature=net_http ssid={} static_ip={:?} hostname_override={:?}",
+        WIFI_SSID,
+        WIFI_STATIC_IP,
+        WIFI_HOSTNAME
+    );
     info!(
         "net: feature=net_http ssid={} static_ip={:?} hostname_override={:?}",
         WIFI_SSID, WIFI_STATIC_IP, WIFI_HOSTNAME,
@@ -99,9 +106,12 @@ pub fn log_wifi_config() {
 }
 
 pub fn spawn_wifi_and_http(spawner: &Spawner, wifi_peripheral: WIFI<'static>) {
+    esp_println::println!("net: spawn begin");
+    info!("net: spawn begin");
     let radio = match radio_init() {
         Ok(radio) => radio,
         Err(err) => {
+            esp_println::println!("net: radio init failed");
             warn!("net: radio init failed: {:?}", err);
             return;
         }
@@ -111,6 +121,7 @@ pub fn spawn_wifi_and_http(spawner: &Spawner, wifi_peripheral: WIFI<'static>) {
     let (controller, interfaces) = match wifi::new(radio, wifi_peripheral, Default::default()) {
         Ok(v) => v,
         Err(err) => {
+            esp_println::println!("net: wifi::new failed");
             warn!("net: wifi::new failed: {:?}", err);
             return;
         }
@@ -118,6 +129,15 @@ pub fn spawn_wifi_and_http(spawner: &Spawner, wifi_peripheral: WIFI<'static>) {
 
     let wifi_device: WifiDevice<'static> = interfaces.sta;
     let mac = wifi_device.mac_address();
+    esp_println::println!(
+        "net: wifi device ready mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        mac[0],
+        mac[1],
+        mac[2],
+        mac[3],
+        mac[4],
+        mac[5]
+    );
     let identity = derive_device_identity(mac);
     critical_section::with(|cs| {
         *DEVICE_IDENTITY.borrow_ref_mut(cs) = Some(identity.clone());
@@ -159,6 +179,8 @@ pub fn spawn_wifi_and_http(spawner: &Spawner, wifi_peripheral: WIFI<'static>) {
             .spawn(http_worker(stack, worker_id))
             .expect("spawn http_worker");
     }
+    esp_println::println!("net: tasks spawned");
+    info!("net: tasks spawned");
 }
 
 #[embassy_executor::task]
@@ -176,6 +198,8 @@ async fn wifi_task(
     mac: [u8; 6],
 ) {
     let mut backoff_secs = 2u64;
+    esp_println::println!("net: wifi task start");
+    info!("net: wifi task start");
     loop {
         set_wifi_snapshot(WifiSnapshot {
             state: WifiConnectionState::Connecting,
@@ -195,25 +219,32 @@ async fn wifi_task(
         );
 
         if !matches!(controller.is_started(), Ok(true)) {
+            esp_println::println!("net: wifi set_config");
             if let Err(err) = controller.set_config(&client_config) {
+                esp_println::println!("net: set_config failed");
                 warn!("net: set_config failed: {:?}", err);
                 note_wifi_error(mac, configured_dns, is_static, WifiErrorKind::ConnectFailed);
                 Timer::after(Duration::from_secs(backoff_secs)).await;
                 backoff_secs = backoff_secs.saturating_mul(2).min(30);
                 continue;
             }
+            esp_println::println!("net: wifi start_async begin");
             if let Err(err) = controller.start_async().await {
+                esp_println::println!("net: start_async failed");
                 warn!("net: start_async failed: {:?}", err);
                 note_wifi_error(mac, configured_dns, is_static, WifiErrorKind::ConnectFailed);
                 Timer::after(Duration::from_secs(backoff_secs)).await;
                 backoff_secs = backoff_secs.saturating_mul(2).min(30);
                 continue;
             }
+            esp_println::println!("net: wifi start_async ok");
         }
 
+        esp_println::println!("net: connecting to ssid={}", WIFI_SSID);
         info!("net: connecting to ssid={}", WIFI_SSID);
         match controller.connect_async().await {
             Ok(()) => {
+                esp_println::println!("net: connect_async ok");
                 let mut ready = false;
                 for _ in 0..30 {
                     if stack.is_config_up() {
@@ -223,6 +254,7 @@ async fn wifi_task(
                     Timer::after(Duration::from_millis(500)).await;
                 }
                 if !ready {
+                    esp_println::println!("net: config wait timeout");
                     note_wifi_error(mac, configured_dns, is_static, WifiErrorKind::DhcpTimeout);
                     Timer::after(Duration::from_secs(backoff_secs)).await;
                     backoff_secs = backoff_secs.saturating_mul(2).min(30);
@@ -241,6 +273,7 @@ async fn wifi_task(
                         runtime_dns_len += 1;
                     }
                     let dns = select_active_dns(configured_dns, &runtime_dns[..runtime_dns_len]);
+                    let rssi_dbm = read_controller_rssi(&controller);
                     set_wifi_snapshot(WifiSnapshot {
                         state: WifiConnectionState::Connected,
                         ipv4: Some(ip),
@@ -248,7 +281,7 @@ async fn wifi_task(
                         dns,
                         is_static,
                         last_error: static_cfg_error,
-                        rssi_dbm: None,
+                        rssi_dbm,
                         mac: Some(mac),
                     });
                     backoff_secs = 2;
@@ -256,14 +289,35 @@ async fn wifi_task(
                         "net: wifi connected ip={}.{}.{}.{}",
                         ip[0], ip[1], ip[2], ip[3]
                     );
+                    esp_println::println!(
+                        "net: wifi connected ip={}.{}.{}.{}",
+                        ip[0],
+                        ip[1],
+                        ip[2],
+                        ip[3]
+                    );
                 }
 
-                controller.wait_for_event(WifiEvent::StaDisconnected).await;
+                loop {
+                    Timer::after(RSSI_REFRESH_INTERVAL).await;
+                    if !matches!(controller.is_connected(), Ok(true)) {
+                        break;
+                    }
+                    let rssi_dbm = read_controller_rssi(&controller);
+                    let snapshot = current_wifi_snapshot();
+                    set_wifi_snapshot(WifiSnapshot {
+                        rssi_dbm,
+                        mac: Some(mac),
+                        ..snapshot
+                    });
+                }
+                esp_println::println!("net: wifi disconnected");
                 warn!("net: wifi disconnected");
                 note_wifi_error(mac, configured_dns, is_static, WifiErrorKind::LinkLost);
                 Timer::after(Duration::from_secs(3)).await;
             }
             Err(err) => {
+                esp_println::println!("net: connect_async failed");
                 warn!("net: connect_async failed: {:?}", err);
                 note_wifi_error(mac, configured_dns, is_static, WifiErrorKind::ConnectFailed);
                 Timer::after(Duration::from_secs(backoff_secs)).await;
@@ -271,6 +325,13 @@ async fn wifi_task(
             }
         }
     }
+}
+
+fn read_controller_rssi(controller: &WifiController<'static>) -> Option<i8> {
+    controller
+        .rssi()
+        .ok()
+        .and_then(|rssi| i8::try_from(rssi).ok())
 }
 
 #[embassy_executor::task(pool_size = HTTP_WORKER_COUNT)]

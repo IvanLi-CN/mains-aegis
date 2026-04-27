@@ -905,6 +905,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "162ec711c8d06e79c67b75d01595539e86b0aac209643af98ca87a12250428b3"
 dependencies = [
+ "allocator-api2",
  "cfg-if",
  "defmt 1.0.1",
  "document-features",
@@ -916,6 +917,7 @@ dependencies = [
  "esp-hal",
  "esp-hal-procmacros",
  "esp-metadata-generated",
+ "esp-radio-rtos-driver",
  "esp-sync",
  "portable-atomic",
 ]
