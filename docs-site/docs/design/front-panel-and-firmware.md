@@ -73,6 +73,7 @@ description: 前面板硬件、控制线与固件运行时页面。
 | 固件栈 | Rust + `esp-hal` + `no_std` |
 | 主界面 | `SELF CHECK`、Dashboard |
 | 音频 | `GPIO4/5/6 -> MAX98357A -> 8Ω/1W speaker` |
+| 自动熄屏 | 测试版 `30s` 低亮、`35s` 关背光、`40s` GC9307 sleep；触摸/按键唤醒 |
 | 观测入口 | 串口日志 + 前面板页面 |
 
 ### 5.1 `SELF CHECK` 模块列表
@@ -100,6 +101,12 @@ description: 前面板硬件、控制线与固件运行时页面。
 | `BACKUP` | 输入离线，电池供电 |
 
 右侧三卡固定为 `BATTERY / CHARGE / DISCHG`。首页 `CHARGE` 卡使用紧凑 token：`CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`。
+
+### 5.3 自动熄屏
+
+当前主固件采用测试版时序：空闲 `30s` 后通过 GC9307 `Write Display Brightness (0x51)` 降到最低非零亮度，`35s` 后关闭 `BLK(GPIO13)` 背光，`40s` 后发送 `Display OFF (0x28)` 与 `Sleep IN (0x10)`。触摸或任意按键会唤醒；从 sleep 唤醒时发送 `Sleep OUT (0x11)`，等待 `120ms` 后发送 `Display ON (0x29)` 并重绘当前页面。
+
+若运行时存在需要用户关注的异常或告警音效状态，前面板会保持全亮并重置 idle 计时。正式默认目标为 `180s / 240s / 245s`，待硬件确认后恢复。
 
 ## 6. 前面板 UI 冻结渲染图
 

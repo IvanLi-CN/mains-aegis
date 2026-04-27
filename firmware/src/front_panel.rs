@@ -15,6 +15,9 @@ use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
 use esp_firmware::display_pipeline::{
     DirtyRows, DisplayBufferError, DisplayBuffers, DMA_STAGING_BYTES, FRAME_HEIGHT, FRAME_WIDTH,
 };
+use esp_firmware::display_power::{
+    DisplayPowerCommand, DisplayPowerController, DisplayPowerMode, DisplayPowerPolicy,
+};
 use esp_hal::dma::{DmaChannelFor, DmaRxBuf, DmaTxBuf};
 use esp_hal::gpio::{DriveMode, Flex, Input, OutputConfig, Pull};
 use esp_hal::peripherals::PSRAM;
@@ -51,6 +54,11 @@ const TCA_BIT_TP_RESET: u8 = 7; // P7, active-low
 const CMD_CASET: u8 = 0x2A;
 const CMD_RASET: u8 = 0x2B;
 const CMD_RAMWR: u8 = 0x2C;
+const CMD_SLEEP_IN: u8 = 0x10;
+const CMD_SLEEP_OUT: u8 = 0x11;
+const CMD_DISPLAY_OFF: u8 = 0x28;
+const CMD_DISPLAY_ON: u8 = 0x29;
+const CMD_WRITE_DISPLAY_BRIGHTNESS: u8 = 0x51;
 
 // Front panel is currently mounted 180° from the original lab orientation.
 const LCD_W: u16 = 320;
@@ -62,6 +70,8 @@ const PANEL_RGB_ORDER: bool = false;
 const UI_ORIENTATION_MARKER: &str = "FP_ORI_PROBE_20260227";
 
 const BACKLIGHT_ACTIVE_LOW: bool = true;
+const DISPLAY_BRIGHTNESS_FULL: u8 = 0xFF;
+const DISPLAY_BRIGHTNESS_DIM: u8 = 0x01;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const CENTER_LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(800);
@@ -124,6 +134,15 @@ impl InputSnapshot {
     }
 }
 
+const fn input_snapshot_has_activity(snapshot: InputSnapshot) -> bool {
+    snapshot.up
+        || snapshot.down
+        || snapshot.left
+        || snapshot.right
+        || snapshot.center
+        || snapshot.touch
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TcaDiagSnapshot {
     input: u8,
@@ -170,6 +189,9 @@ where
     self_check_overlay: SelfCheckOverlay,
     touch_irq_stuck_hint_logged: bool,
     frame_no: u32,
+    display_power_epoch: Instant,
+    display_power: DisplayPowerController,
+    attention_hold: bool,
 }
 
 impl<I2C> FrontPanel<I2C>
@@ -239,6 +261,9 @@ where
             self_check_overlay: SelfCheckOverlay::None,
             touch_irq_stuck_hint_logged: false,
             frame_no: 0,
+            display_power_epoch: Instant::now(),
+            display_power: DisplayPowerController::new(DisplayPowerPolicy::test_default(), 0),
+            attention_hold: false,
         }
     }
 
@@ -337,8 +362,16 @@ where
             return Err(());
         }
 
+        if self
+            .set_display_brightness(DISPLAY_BRIGHTNESS_FULL)
+            .is_err()
+        {
+            self.fail_display_reinit(trigger, "brightness_full", "spi_write_failed");
+            return Err(());
+        }
         self.set_backlight(true);
         self.state = InitState::Ready;
+        self.display_power.reset(self.display_power_now_ms());
         self.next_frame_deadline = Instant::now();
         Ok(())
     }
@@ -587,6 +620,70 @@ where
         }
     }
 
+    pub fn set_attention_hold(&mut self, hold: bool) {
+        if self.attention_hold == hold {
+            return;
+        }
+        self.attention_hold = hold;
+        defmt::info!("ui: display attention_hold={=bool}", hold);
+    }
+
+    fn display_power_now_ms(&self) -> u64 {
+        self.display_power_epoch.elapsed().as_millis() as u64
+    }
+
+    fn display_accepts_scene_updates(&self) -> bool {
+        self.state == InitState::Ready
+            && matches!(
+                self.display_power.mode(),
+                DisplayPowerMode::Awake | DisplayPowerMode::Dimmed
+            )
+    }
+
+    fn apply_display_power_command(
+        &mut self,
+        previous_mode: DisplayPowerMode,
+        command: DisplayPowerCommand,
+    ) -> Result<(), esp_hal::spi::Error> {
+        match command {
+            DisplayPowerCommand::None => {}
+            DisplayPowerCommand::FullBrightness => {
+                if previous_mode == DisplayPowerMode::Sleeping {
+                    self.panel_io.wake_display()?;
+                }
+                self.set_display_brightness(DISPLAY_BRIGHTNESS_FULL)?;
+                self.set_backlight(true);
+                self.needs_redraw = true;
+                defmt::info!("ui: display_power mode=awake");
+            }
+            DisplayPowerCommand::Dim => {
+                self.set_display_brightness(DISPLAY_BRIGHTNESS_DIM)?;
+                self.set_backlight(true);
+                defmt::info!(
+                    "ui: display_power mode=dimmed brightness={=u8}",
+                    DISPLAY_BRIGHTNESS_DIM
+                );
+            }
+            DisplayPowerCommand::BacklightOff => {
+                self.set_backlight(false);
+                self.needs_redraw = true;
+                defmt::info!("ui: display_power mode=backlight_off");
+            }
+            DisplayPowerCommand::Sleep => {
+                self.set_backlight(false);
+                self.panel_io.sleep_display()?;
+                self.needs_redraw = true;
+                defmt::info!("ui: display_power mode=sleeping");
+            }
+        }
+        Ok(())
+    }
+
+    fn set_display_brightness(&mut self, value: u8) -> Result<(), esp_hal::spi::Error> {
+        self.panel_io.write_cmd(CMD_WRITE_DISPLAY_BRIGHTNESS)?;
+        self.panel_io.write_data(&[value])
+    }
+
     pub fn update_self_check_snapshot(&mut self, snapshot: SelfCheckUiSnapshot) {
         let previous = self.self_check_snapshot;
         if previous == snapshot {
@@ -607,7 +704,7 @@ where
             self.self_check_overlay = SelfCheckOverlay::None;
         }
         self.needs_redraw = true;
-        if self.state != InitState::Ready {
+        if !self.display_accepts_scene_updates() {
             return;
         }
         let current_inputs = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
@@ -687,7 +784,7 @@ where
             variant_name(self.ui_variant)
         );
 
-        if self.state != InitState::Ready {
+        if !self.display_accepts_scene_updates() {
             return;
         }
 
@@ -715,6 +812,38 @@ where
         let mut ui_action = None;
         match self.read_inputs() {
             Ok(snapshot) => {
+                let previous_power_mode = self.display_power.mode();
+                let power_command = self.display_power.step(
+                    self.display_power_now_ms(),
+                    input_snapshot_has_activity(snapshot),
+                    self.attention_hold,
+                );
+                if let Err(e) = self.apply_display_power_command(previous_power_mode, power_command)
+                {
+                    defmt::error!("ui: display_power apply failed err={=?}", e);
+                    self.needs_redraw = true;
+                }
+
+                if power_command == DisplayPowerCommand::FullBrightness
+                    && previous_power_mode != DisplayPowerMode::Awake
+                {
+                    if self.display_accepts_scene_updates() {
+                        if let Err(e) = self.render_inputs(snapshot) {
+                            defmt::error!("ui: wake redraw failed err={=?}", e);
+                            self.needs_redraw = true;
+                        } else {
+                            self.needs_redraw = false;
+                        }
+                    }
+                    self.last_inputs = Some(snapshot);
+                    return None;
+                }
+
+                if !self.display_accepts_scene_updates() {
+                    self.last_inputs = Some(snapshot);
+                    return None;
+                }
+
                 if self.ui_variant == SELF_CHECK_VARIANT {
                     ui_action = self.process_bms_activation_button_action(snapshot);
                     if ui_action.is_none() {
@@ -1899,6 +2028,17 @@ impl PanelIo {
     fn write_data(&mut self, data: &[u8]) -> Result<(), esp_hal::spi::Error> {
         self.dc.set_high();
         self.spi.write(data)
+    }
+
+    fn sleep_display(&mut self) -> Result<(), esp_hal::spi::Error> {
+        self.write_cmd(CMD_DISPLAY_OFF)?;
+        self.write_cmd(CMD_SLEEP_IN)
+    }
+
+    fn wake_display(&mut self) -> Result<(), esp_hal::spi::Error> {
+        self.write_cmd(CMD_SLEEP_OUT)?;
+        busy_wait(Duration::from_millis(120));
+        self.write_cmd(CMD_DISPLAY_ON)
     }
 
     fn set_window(

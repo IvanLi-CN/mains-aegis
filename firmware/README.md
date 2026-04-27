@@ -100,6 +100,7 @@ bash scripts/run-host-unit-tests.sh
 - `src/audio.rs`
 - `src/bq25792.rs`
 - `src/bq40z50.rs`
+- `src/display_power.rs`
 - `src/display_pipeline.rs`
 - `src/fan.rs`
 - `src/front_panel_logic.rs`
@@ -350,6 +351,8 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
 - 自检页只有在本模式必需模块全部 clear 时才会切到 Dashboard；若 `BMS` 仍为 `LIMIT`，页面继续停留在 `Variant C` 并显示运行期真实数据。
 - 页面切换：本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard
 - 显示链路诊断：前面板 ready 后，全局按住 `CENTER` 约 `800ms` 会打印 `ui: display_diag ...` 并立即重走一次 `TCA_RESET# -> TCA6408A -> RES/TP_RESET/CS -> GC9307` 初始化链路；若当前位于 Dashboard 详情页，短按返回 Home 仍会先触发，继续按住才会进入长按诊断。
+- 自动熄屏：测试版空闲 `30s` 写 GC9307 DBV 最低亮度，`35s` 关闭 `BLK` 背光，`40s` 发送 `Display OFF + Sleep IN`；触摸或任意按键唤醒并重绘。正式默认目标为 `180s / 240s / 245s`，待硬件确认后恢复。
+- 异常保持亮屏：市电丢失、低电、热压力、保护、模块故障、过压/过流等运行时用户关注状态会设置 `attention_hold`，保持或恢复全亮并重置 idle 计时。
 - Dashboard 视觉基线：`Variant B`（仅用于 Dashboard 场景）
 - `Variant C` 重定位为“高级设置/自检页”风格，不作为默认 Dashboard
 - `Variant C` 自检页固定显示 10 个可通信模块，采用“双列大字号诊断卡”布局（每卡两行：`MODULE+COMM` 与 `KEY PARAM`）：

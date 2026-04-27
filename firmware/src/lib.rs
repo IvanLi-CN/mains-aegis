@@ -29,6 +29,7 @@ pub mod ina3221 {
 pub mod bq25792;
 pub mod bq40z50;
 pub mod display_pipeline;
+pub mod display_power;
 pub mod fan;
 pub mod output_protection;
 pub mod output_retry;

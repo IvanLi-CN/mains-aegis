@@ -33,6 +33,9 @@ pub mod bq40z50;
 #[path = "../../src/display_pipeline.rs"]
 pub mod display_pipeline;
 
+#[path = "../../src/display_power.rs"]
+pub mod display_power;
+
 #[path = "../../src/fan.rs"]
 pub mod fan;
 

@@ -1352,6 +1352,7 @@ fn main() -> ! {
         );
         audio_manager.tick(Instant::now());
     }
+    front_panel.set_attention_hold(front_panel_attention_hold(power.audio_signals()));
 
     let mut irq_tracker = irq::IrqTracker::new();
     let pd_started_at = Instant::now();
@@ -1423,6 +1424,7 @@ fn main() -> ! {
             let ui_snapshot = power.ui_snapshot();
             front_panel.update_self_check_snapshot(ui_snapshot);
             front_panel.update_bms_activation_state(power.bms_activation_state());
+            front_panel.set_attention_hold(front_panel_attention_hold(power.audio_signals()));
             if let Some(action) = front_panel.tick() {
                 match action {
                     front_panel::UiAction::RequestBmsRecovery(action) => {
@@ -1535,4 +1537,18 @@ fn sync_runtime_audio(
     audio_manager.set_cue_active(AudioCue::IoOverCurrent, signals.io_over_current, now);
     audio_manager.set_cue_active(AudioCue::ModuleFault, signals.module_fault, now);
     audio_manager.set_cue_active(AudioCue::BatteryProtection, signals.battery_protection, now);
+}
+
+fn front_panel_attention_hold(signals: output::AudioSignalSnapshot) -> bool {
+    signals.mains_present == Some(false)
+        || signals.thermal_stress
+        || matches!(
+            signals.battery_low,
+            output::AudioBatteryLowState::NoMains | output::AudioBatteryLowState::WithMains
+        )
+        || signals.battery_protection
+        || signals.module_fault
+        || signals.io_over_voltage
+        || signals.io_over_current
+        || signals.shutdown_protection
 }
