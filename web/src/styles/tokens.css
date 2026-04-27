@@ -1,0 +1,23 @@
+:root {
+  color-scheme: light;
+  --color-canvas: oklch(98.8% 0.006 105);
+  --color-surface: oklch(96.3% 0.009 90);
+  --color-panel: oklch(99.2% 0.005 105);
+  --color-ink: oklch(22% 0.012 250);
+  --color-muted: oklch(52% 0.025 260);
+  --color-hairline: oklch(87% 0.012 250);
+  --color-primary: oklch(24% 0.04 170);
+  --color-primary-strong: oklch(19% 0.05 170);
+  --color-blue: oklch(48% 0.18 258);
+  --color-coral: oklch(68% 0.17 35);
+  --color-warning: oklch(66% 0.13 75);
+  --color-critical: oklch(52% 0.18 25);
+  --color-ok: oklch(52% 0.12 155);
+  --color-offline: oklch(50% 0.025 260);
+  --radius-card: 8px;
+  --radius-pill: 999px;
+  --shadow-focus: 0 0 0 3px oklch(62% 0.15 258 / 0.24);
+  --font-ui: "Unica77 Cohere Web", Inter, Arial, ui-sans-serif, system-ui, sans-serif;
+  --font-display: CohereText, "Space Grotesk", Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: CohereMono, "SFMono-Regular", Consolas, monospace;
+}
