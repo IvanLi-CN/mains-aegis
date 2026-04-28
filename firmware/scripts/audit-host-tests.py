@@ -8,6 +8,7 @@ ALLOWED = {
     "audio.rs",
     "bq25792.rs",
     "bq40z50.rs",
+    "display_power.rs",
     "display_pipeline.rs",
     "fan.rs",
     "front_panel_logic.rs",
