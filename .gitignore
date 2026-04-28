@@ -1,6 +1,10 @@
 # OS / editor
 .DS_Store
 
+# Local secrets / build-time environment
+.env
+firmware/.env
+
 # MinerU / local conversion artifacts
 downloads/
 

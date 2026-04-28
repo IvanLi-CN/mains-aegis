@@ -9,6 +9,7 @@ use crate::front_panel_scene::{
     SelfCheckUiSnapshot, UpsMode,
 };
 use crate::irq::IrqSnapshot;
+use crate::net_bridge;
 use esp_firmware::bq25792;
 use esp_firmware::bq40z50;
 use esp_firmware::fan;
@@ -3924,6 +3925,7 @@ where
             self.therm_kill.is_low(),
             self.cfg.tmp_hw_protect_test_mode,
         ));
+        detail.wifi = net_bridge::current_wifi_snapshot();
 
         snapshot.dashboard_detail = detail;
         snapshot

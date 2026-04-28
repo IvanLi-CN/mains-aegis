@@ -27,6 +27,7 @@ This folder stores project documentation and offline-renderable datasheets.
 - UI docs index: `firmware/ui/README.md`
 - Front panel design language (SoT): `firmware/ui/design-language.md`
 - Front panel component contracts: `firmware/ui/component-contracts.md`
+- Front panel touch target design: `firmware/ui/touch-targets.md`
 - Front panel visual regression checklist: `firmware/ui/visual-regression-checklist.md`
 
 ## Datasheets
