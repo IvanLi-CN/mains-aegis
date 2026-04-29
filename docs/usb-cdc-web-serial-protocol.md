@@ -93,7 +93,7 @@ The firmware stores the PSK but never echoes it in `response`, `error`, or `log`
 {"type":"log","level":"info","target":"wifi_config","message":"WiFi credentials updated in EEPROM"}
 ```
 
-`log` frames are structured Web-facing events. Raw firmware monitor output remains a development-only stream decoded by `mcu-agentd monitor`; the Web log panel does not display undecoded raw serial bytes.
+`log` frames are structured Web-facing events. A successful `hello` emits a `usb_cdc` session log. `get_status` emits an initial status log set for `status`, `output`, `charger`, `battery`, and `network`; later status requests emit periodic summaries and state-change logs for those targets. Raw firmware monitor output remains a development-only stream decoded by `mcu-agentd monitor`; the Web log panel does not display undecoded raw serial bytes.
 
 ### `error`
 

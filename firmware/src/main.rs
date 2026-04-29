@@ -30,6 +30,7 @@ use esp_firmware::usb_pd::UsbPdSinkManager;
 use esp_firmware::{
     mdns_wire::{derive_device_identity, DeviceIdentity},
     net_contract::{render_identity_json_with_write_controls, render_status_json, BuildInfo},
+    net_types::{UpsStatusSnapshot, WifiConnectionState, WifiErrorKind},
     usb_cdc_protocol::{
         parse_frame, render_error_json, render_hello_json, render_log_json,
         render_protocol_error_json, render_response_json, render_status_frame_json,
@@ -1494,6 +1495,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let pd_started_at = Instant::now();
     let mut last_irq_log_at: Option<Instant> = None;
     let mut last_fan_tach_log_at: Option<Instant> = None;
+    #[cfg(feature = "web_serial")]
+    let mut web_serial_log_state = UsbCdcLogState::new();
     log_boot_stage("main_loop_enter");
 
     loop {
@@ -1566,6 +1569,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 &web_serial_identity,
                 &mut power,
                 ui_snapshot,
+                &mut web_serial_log_state,
             );
             front_panel.update_self_check_snapshot(ui_snapshot);
             front_panel.update_bms_activation_state(power.bms_activation_state());
@@ -1640,6 +1644,7 @@ fn service_web_serial<'d, I2C>(
     identity: &DeviceIdentity,
     power: &mut output::PowerManager<'d, I2C>,
     ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
+    log_state: &mut UsbCdcLogState,
 ) where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
@@ -1657,7 +1662,14 @@ fn service_web_serial<'d, I2C>(
     for byte in rx.iter().take(count) {
         match lines.push_byte(*byte) {
             Ok(Some(line)) => {
-                handle_web_serial_frame(serial, identity, power, ui_snapshot, line.as_str());
+                handle_web_serial_frame(
+                    serial,
+                    identity,
+                    power,
+                    ui_snapshot,
+                    line.as_str(),
+                    log_state,
+                );
             }
             Ok(None) => {}
             Err(err) => {
@@ -1676,6 +1688,7 @@ fn handle_web_serial_frame<'d, I2C>(
     power: &mut output::PowerManager<'d, I2C>,
     ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
     line: &str,
+    log_state: &mut UsbCdcLogState,
 ) where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
@@ -1685,6 +1698,7 @@ fn handle_web_serial_frame<'d, I2C>(
 
     match parse_frame(line) {
         Ok(UsbCdcFrame::Hello { request_id }) => {
+            log_state.reset();
             render_identity_json_with_write_controls(
                 &mut body,
                 identity,
@@ -1724,6 +1738,7 @@ fn handle_web_serial_frame<'d, I2C>(
                 write_web_serial_line(serial, frame.as_str());
                 render_status_frame_json(&mut frame, body.as_str());
                 write_web_serial_line(serial, frame.as_str());
+                log_state.emit_status_logs(serial, status);
             }
             UsbCdcRequest::SetLogLevel(level) => {
                 let _ = write!(body, r#"{{"log_level":"{}"}}"#, level.as_str());
@@ -1826,6 +1841,269 @@ fn handle_web_serial_frame<'d, I2C>(
 fn write_web_serial_line(serial: &mut UsbSerialJtag<'static, Blocking>, line: &str) {
     let _ = serial.write(line.as_bytes());
     let _ = serial.write(b"\n");
+}
+
+#[cfg(feature = "web_serial")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct UsbCdcStatusLogSnapshot {
+    mode: &'static str,
+    active_outputs: &'static str,
+    output_gate_reason: &'static str,
+    network_state: WifiConnectionState,
+    network_error: Option<WifiErrorKind>,
+    charger_state: &'static str,
+    charger_allow_charge: Option<bool>,
+    battery_state: &'static str,
+    battery_soc_pct: Option<u16>,
+    battery_issue_detail: Option<&'static str>,
+}
+
+#[cfg(feature = "web_serial")]
+impl UsbCdcStatusLogSnapshot {
+    const fn from_status(status: UpsStatusSnapshot) -> Self {
+        Self {
+            mode: status.mode,
+            active_outputs: status.active_outputs,
+            output_gate_reason: status.output_gate_reason,
+            network_state: status.network.state,
+            network_error: status.network.last_error,
+            charger_state: status.charger_state,
+            charger_allow_charge: status.charger_allow_charge,
+            battery_state: status.battery_state,
+            battery_soc_pct: status.battery_soc_pct,
+            battery_issue_detail: status.battery_issue_detail,
+        }
+    }
+}
+
+#[cfg(feature = "web_serial")]
+struct UsbCdcLogState {
+    previous: Option<UsbCdcStatusLogSnapshot>,
+    last_summary_at: Option<Instant>,
+}
+
+#[cfg(feature = "web_serial")]
+impl UsbCdcLogState {
+    const fn new() -> Self {
+        Self {
+            previous: None,
+            last_summary_at: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.previous = None;
+        self.last_summary_at = None;
+    }
+
+    fn emit_status_logs(
+        &mut self,
+        serial: &mut UsbSerialJtag<'static, Blocking>,
+        status: UpsStatusSnapshot,
+    ) {
+        let now = Instant::now();
+        let current = UsbCdcStatusLogSnapshot::from_status(status);
+        let Some(previous) = self.previous else {
+            self.emit_summary(serial, status);
+            self.emit_output(serial, status);
+            self.emit_charger(serial, status);
+            self.emit_battery(serial, status);
+            self.emit_network(serial, status);
+            self.previous = Some(current);
+            self.last_summary_at = Some(now);
+            return;
+        };
+
+        if self
+            .last_summary_at
+            .map(|last| last.elapsed() >= Duration::from_secs(30))
+            .unwrap_or(true)
+        {
+            self.emit_summary(serial, status);
+            self.last_summary_at = Some(now);
+        }
+
+        if current.mode != previous.mode {
+            self.emit_summary(serial, status);
+        }
+        if current.active_outputs != previous.active_outputs
+            || current.output_gate_reason != previous.output_gate_reason
+        {
+            self.emit_output(serial, status);
+        }
+        if current.charger_state != previous.charger_state
+            || current.charger_allow_charge != previous.charger_allow_charge
+        {
+            self.emit_charger(serial, status);
+        }
+        if current.battery_state != previous.battery_state
+            || current.battery_issue_detail != previous.battery_issue_detail
+            || current.battery_soc_pct != previous.battery_soc_pct
+        {
+            self.emit_battery(serial, status);
+        }
+        if current.network_state != previous.network_state
+            || current.network_error != previous.network_error
+        {
+            self.emit_network(serial, status);
+        }
+        self.previous = Some(current);
+    }
+
+    fn emit_summary(
+        &self,
+        serial: &mut UsbSerialJtag<'static, Blocking>,
+        status: UpsStatusSnapshot,
+    ) {
+        let mut message = heapless::String::<192>::new();
+        let _ = write!(
+            message,
+            "mode={} active={} gate={} battery_soc=",
+            status.mode, status.active_outputs, status.output_gate_reason
+        );
+        push_opt_u16(&mut message, status.battery_soc_pct);
+        let _ = message.push_str(" input_vbus_mv=");
+        push_opt_u16(&mut message, status.input_vbus_mv);
+        let _ = write!(message, " network={}", status.network.state.as_str());
+        self.emit(serial, LogLevel::Info, "status", message.as_str());
+    }
+
+    fn emit_output(
+        &self,
+        serial: &mut UsbSerialJtag<'static, Blocking>,
+        status: UpsStatusSnapshot,
+    ) {
+        let mut message = heapless::String::<192>::new();
+        let _ = write!(
+            message,
+            "active={} gate={} out_a={} enabled=",
+            status.active_outputs, status.output_gate_reason, status.out_a_state
+        );
+        push_opt_bool(&mut message, status.out_a_enabled);
+        let _ = write!(message, " out_b={} enabled=", status.out_b_state);
+        push_opt_bool(&mut message, status.out_b_enabled);
+        let level = if status.output_gate_reason == "none" {
+            LogLevel::Info
+        } else {
+            LogLevel::Warn
+        };
+        self.emit(serial, level, "output", message.as_str());
+    }
+
+    fn emit_charger(
+        &self,
+        serial: &mut UsbSerialJtag<'static, Blocking>,
+        status: UpsStatusSnapshot,
+    ) {
+        let mut message = heapless::String::<160>::new();
+        let _ = write!(message, "state={} allow_charge=", status.charger_state);
+        push_opt_bool(&mut message, status.charger_allow_charge);
+        let _ = message.push_str(" ichg_ma=");
+        push_opt_u16(&mut message, status.charger_ichg_ma);
+        let _ = message.push_str(" ibat_ma=");
+        push_opt_i16(&mut message, status.charger_ibat_ma);
+        self.emit(
+            serial,
+            comm_state_log_level(status.charger_state),
+            "charger",
+            message.as_str(),
+        );
+    }
+
+    fn emit_battery(
+        &self,
+        serial: &mut UsbSerialJtag<'static, Blocking>,
+        status: UpsStatusSnapshot,
+    ) {
+        let mut message = heapless::String::<192>::new();
+        let _ = write!(message, "state={} soc=", status.battery_state);
+        push_opt_u16(&mut message, status.battery_soc_pct);
+        let _ = message.push_str(" pack_mv=");
+        push_opt_u16(&mut message, status.battery_pack_mv);
+        if let Some(issue) = status.battery_issue_detail {
+            let _ = write!(message, " issue={}", issue);
+        } else {
+            let _ = message.push_str(" issue=none");
+        }
+        self.emit(
+            serial,
+            comm_state_log_level(status.battery_state),
+            "battery",
+            message.as_str(),
+        );
+    }
+
+    fn emit_network(
+        &self,
+        serial: &mut UsbSerialJtag<'static, Blocking>,
+        status: UpsStatusSnapshot,
+    ) {
+        let mut message = heapless::String::<160>::new();
+        let _ = write!(message, "state={}", status.network.state.as_str());
+        if let Some(ipv4) = status.network.ipv4 {
+            let _ = write!(
+                message,
+                " ipv4={}.{}.{}.{}",
+                ipv4[0], ipv4[1], ipv4[2], ipv4[3]
+            );
+        }
+        if let Some(error) = status.network.last_error {
+            let _ = write!(message, " error={}", error.as_str());
+        }
+        let level = if matches!(status.network.state, WifiConnectionState::Error) {
+            LogLevel::Warn
+        } else {
+            LogLevel::Info
+        };
+        self.emit(serial, level, "network", message.as_str());
+    }
+
+    fn emit(
+        &self,
+        serial: &mut UsbSerialJtag<'static, Blocking>,
+        level: LogLevel,
+        target: &str,
+        message: &str,
+    ) {
+        let mut frame = heapless::String::<256>::new();
+        render_log_json(&mut frame, level, target, message);
+        write_web_serial_line(serial, frame.as_str());
+    }
+}
+
+#[cfg(feature = "web_serial")]
+fn comm_state_log_level(state: &str) -> LogLevel {
+    match state {
+        "err" | "warn" | "not_available" => LogLevel::Warn,
+        _ => LogLevel::Info,
+    }
+}
+
+#[cfg(feature = "web_serial")]
+fn push_opt_u16<const N: usize>(out: &mut heapless::String<N>, value: Option<u16>) {
+    if let Some(value) = value {
+        let _ = write!(out, "{}", value);
+    } else {
+        let _ = out.push_str("none");
+    }
+}
+
+#[cfg(feature = "web_serial")]
+fn push_opt_i16<const N: usize>(out: &mut heapless::String<N>, value: Option<i16>) {
+    if let Some(value) = value {
+        let _ = write!(out, "{}", value);
+    } else {
+        let _ = out.push_str("none");
+    }
+}
+
+#[cfg(feature = "web_serial")]
+fn push_opt_bool<const N: usize>(out: &mut heapless::String<N>, value: Option<bool>) {
+    if let Some(value) = value {
+        let _ = out.push_str(if value { "true" } else { "false" });
+    } else {
+        let _ = out.push_str("none");
+    }
 }
 
 fn sync_runtime_audio(

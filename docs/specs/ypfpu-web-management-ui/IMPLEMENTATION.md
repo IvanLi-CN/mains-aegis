@@ -8,7 +8,7 @@
 - USB CDC / Web Serial 设备使用 `serial:` target，不持久化真实 `SerialPort`；刷新后需要重新授权。
 - `web/src/serial/transport.ts` 实现 JSONL framing、`request_id` response matching、握手、状态读取、WiFi 配网、日志级别与手动充电偏好命令。
 - 固件新增 `usb_cdc_protocol` host-testable 协议模块，定义 `hello/status/log/request/response/error/wifi_config` frame、WiFi secret validation、PSK redaction 与 128B EEPROM WiFi config record CRC。
-- 主固件新增 `web_serial` feature，使用 ESP32-S3 USB Serial/JTAG CDC 通道读取 JSONL 命令，返回 identity/status/ack/error/log frame，并把 WiFi config 写入 EEPROM `0x0160` 起始的 4 个 32B block；`net_http` 启用时优先加载该记录，并在 USB 写入后更新运行时 WiFi 配置。
+- 主固件新增 `web_serial` feature，使用 ESP32-S3 USB Serial/JTAG CDC 通道读取 JSONL 命令，返回 identity/status/ack/error/log frame，并在 `get_status` 上生成 `status` / `output` / `charger` / `battery` / `network` 结构化日志；WiFi config 写入 EEPROM `0x0160` 起始的 4 个 32B block，`net_http` 启用时优先加载该记录，并在 USB 写入后更新运行时 WiFi 配置。
 - `mock:` 设备用于稳定开发预览和视觉证据，不发真实网络请求。
 - 管理端页面已覆盖 Fleet、Connect、Overview、Power、Battery、Thermal、Device、Settings、API。
 - Settings 页仅对 USB CDC 连接设备开放，提供 WiFi SSID/PSK 覆盖/清除、手动充电偏好、USB session 日志级别和 structured log 面板。
