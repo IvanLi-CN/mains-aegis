@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { getStatus, normalizeBaseUrl, probeDevice, toErrorEnvelope } from "../api/client";
 import { subscribeStatusStream, type StatusStream } from "../api/statusStream";
-import type { DeviceRecord, DeviceTarget, ProbeResult, SafeSettingsState, SerialLogEntry } from "../api/types";
+import type { DeviceRecord, DeviceTarget, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry } from "../api/types";
 import { isDemoSeed, makeMockRecord, makeMockRecords, makeMockUsbSerialRecord, type DemoSeed } from "../fixtures/mockDevices";
 import {
   errorFromSerialFailure,
@@ -9,6 +9,7 @@ import {
   type SerialFrame,
   type SerialLogFrame,
   type SerialStatusFrame,
+  type SerialTraceEvent,
   WebSerialTransport,
 } from "../serial/transport";
 
@@ -394,10 +395,34 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       let openedTransport: WebSerialTransport | null = null;
       try {
         let transportRef: WebSerialTransport | null = null;
+        const pendingLogs: SerialLogEntry[] = [];
+        const pendingTrace: SerialTraceEntry[] = [];
         const transport = await WebSerialTransport.request({
           onFrame: (frame) => {
             const deviceId = transportRef ? findSessionDeviceId(transportRef) : null;
+            if (!deviceId) {
+              if (frame.type === "log") pendingLogs.push(serialLogFromFrame(frame));
+              if (frame.type === "error") {
+                pendingLogs.push(
+                  serialLogFromFrame({
+                    type: "log",
+                    level: "error",
+                    target: "usb_cdc",
+                    message: `${frame.error.code}: ${frame.error.message}`,
+                  }),
+                );
+              }
+              return;
+            }
             handleSerialFrame(frame, deviceId);
+          },
+          onTrace: (entry) => {
+            const deviceId = transportRef ? findSessionDeviceId(transportRef) : null;
+            if (!deviceId) {
+              pendingTrace.push(serialTraceFromEvent(entry));
+              return;
+            }
+            appendSerialTraceToSession(entry, deviceId);
           },
           onClose: (error) => {
             if (!transportRef) return;
@@ -433,14 +458,21 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         };
         serialSessions.current.set(identity.device_id, transport);
         openedTransport = null;
-        const record = recordFromSerialProbe(target, { identity, network: identity.network, status }, hello.protocol, [
-          serialLogFromFrame({
-            type: "log",
-            level: "info",
-            target: "web",
-            message: "USB CDC connected",
-          }),
-        ]);
+        const record = recordFromSerialProbe(
+          target,
+          { identity, network: identity.network, status },
+          hello.protocol,
+          [
+            ...pendingLogs,
+            serialLogFromFrame({
+              type: "log",
+              level: "info",
+              target: "web",
+              message: "USB CDC connected",
+            }),
+          ],
+          pendingTrace,
+        );
         setRecords((current) => upsertRecord(current, record));
         return { ok: true, record };
       } catch (error) {
@@ -649,6 +681,16 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     );
   }
 
+  function appendSerialTraceToSession(entry: SerialTraceEvent | SerialTraceEntry, deviceId: string | null) {
+    if (!deviceId) return;
+    const trace = "timestamp" in entry ? entry : serialTraceFromEvent(entry);
+    setRecords((current) =>
+      current.map((record) =>
+        record.target.deviceId === deviceId && record.serial?.connected ? appendSerialTrace(record, trace) : record,
+      ),
+    );
+  }
+
   const removeDevice = useCallback((deviceId: string) => {
     streams.current.get(deviceId)?.close();
     streams.current.delete(deviceId);
@@ -767,6 +809,7 @@ function recordFromSerialProbe(
   result: ProbeResult,
   protocol: string,
   logs: SerialLogEntry[] = [],
+  trace: SerialTraceEntry[] = [],
 ): DeviceRecord {
   return {
     target,
@@ -781,6 +824,7 @@ function recordFromSerialProbe(
       connected: true,
       protocol,
       logs,
+      trace,
       safeSettings: defaultSafeSettings(),
     },
   };
@@ -815,6 +859,14 @@ function serialLogFromFrame(frame: SerialLogFrame): SerialLogEntry {
   };
 }
 
+function serialTraceFromEvent(entry: SerialTraceEvent): SerialTraceEntry {
+  return {
+    id: `${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`,
+    timestamp: new Date().toISOString(),
+    ...entry,
+  };
+}
+
 function appendSerialLog(record: DeviceRecord, entry: SerialLogEntry): DeviceRecord {
   if (!record.serial) return record;
   return {
@@ -822,6 +874,17 @@ function appendSerialLog(record: DeviceRecord, entry: SerialLogEntry): DeviceRec
     serial: {
       ...record.serial,
       logs: [...record.serial.logs, entry].slice(-200),
+    },
+  };
+}
+
+function appendSerialTrace(record: DeviceRecord, entry: SerialTraceEntry): DeviceRecord {
+  if (!record.serial) return record;
+  return {
+    ...record,
+    serial: {
+      ...record.serial,
+      trace: [...record.serial.trace, entry],
     },
   };
 }

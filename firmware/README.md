@@ -102,7 +102,7 @@ cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 
 开发期日志策略：
 
-- Web App 连接 USB CDC 时，structured `log` frame 进入 Web 日志面板；握手会输出 `usb_cdc` session 日志，`get_status` 会输出 `status` / `output` / `charger` / `battery` / `network` 初始摘要，后续按周期或状态变化追加。
+- Web App 连接 USB CDC 时，structured `log` frame 进入 Web 日志面板；握手会输出 `usb_cdc` session 日志，`get_status` 会输出 `status` / `output` / `charger` / `battery` / `network` 初始摘要，后续按周期或状态变化追加。Web App 的 USB Developer Console 还会显示当前 Web Serial session 中的 tx/rx frame 与 raw / ignored CDC 行；WiFi PSK 在 trace 中脱敏。
 - 需要传统 monitor 时，先断开 Web App USB session，再使用 `mcu-agentd monitor esp`。
 
 ## Host 侧纯逻辑单测

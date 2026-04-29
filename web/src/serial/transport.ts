@@ -1,4 +1,4 @@
-import type { Identity, UpsStatus } from "../api/types";
+import type { Identity, SerialTraceEntry, UpsStatus } from "../api/types";
 
 type SerialPortRequestOptions = {
   filters?: Array<{ usbVendorId?: number; usbProductId?: number }>;
@@ -76,9 +76,11 @@ export type SerialErrorFrame = {
 };
 
 export type SerialFrame = SerialHelloFrame | SerialStatusFrame | SerialLogFrame | SerialResponseFrame | SerialErrorFrame;
+export type SerialTraceEvent = Omit<SerialTraceEntry, "id" | "timestamp">;
 
 type SerialTransportOptions = {
   onFrame: (frame: SerialFrame) => void;
+  onTrace: (entry: SerialTraceEvent) => void;
   onClose: (error?: Error) => void;
 };
 
@@ -210,7 +212,9 @@ export class WebSerialTransport {
   private async writeFrame(frame: Record<string, unknown>): Promise<void> {
     if (!this.port.writable) throw new Error("Serial port is not writable");
     this.writer ??= this.port.writable.getWriter();
-    await this.writer.write(this.encoder.encode(`${JSON.stringify(frame)}\n`));
+    const payload = JSON.stringify(frame);
+    this.options.onTrace(traceFromFrame("tx", frame, JSON.stringify(redactTraceFrame(frame))));
+    await this.writer.write(this.encoder.encode(`${payload}\n`));
   }
 
   private startReadLoop() {
@@ -242,16 +246,37 @@ export class WebSerialTransport {
       this.readBuffer = this.readBuffer.slice(newlineIndex + 1);
       if (!rawLine) continue;
       const candidate = this.extractJsonCandidate(rawLine);
-      if (!candidate) continue;
+      if (!candidate) {
+        this.options.onTrace({
+          direction: "rx",
+          kind: "raw",
+          frameType: null,
+          requestId: null,
+          target: null,
+          summary: "raw CDC line",
+          payload: rawLine,
+        });
+        continue;
+      }
       let frame: SerialFrame;
       try {
         frame = JSON.parse(candidate) as SerialFrame;
       } catch {
         // The CDC endpoint can still carry legacy defmt/plain monitor bytes.
-        // They are not Web Serial protocol frames, so keep them out of the
-        // structured log panel instead of surfacing noisy parse errors.
+        // They are not Web Serial protocol frames, but the developer console
+        // still records them so CDC ownership is observable from the browser.
+        this.options.onTrace({
+          direction: "rx",
+          kind: "ignored",
+          frameType: null,
+          requestId: null,
+          target: null,
+          summary: "non-protocol CDC line",
+          payload: rawLine,
+        });
         continue;
       }
+      this.options.onTrace(traceFromFrame("rx", frame, candidate));
       this.options.onFrame(frame);
       this.resolvePending(frame);
     }
@@ -315,4 +340,52 @@ export function errorFromSerialFailure(error: unknown): SerialErrorFrame["error"
 
 function nextRequestId(): string {
   return `web-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function traceFromFrame(direction: SerialTraceEntry["direction"], frame: Record<string, unknown>, payload: string): SerialTraceEvent {
+  const frameType = typeof frame.type === "string" ? frame.type : null;
+  const requestId = typeof frame.request_id === "string" ? frame.request_id : null;
+  const target = typeof frame.target === "string" ? frame.target : null;
+  return {
+    direction,
+    kind: "frame",
+    frameType,
+    requestId,
+    target,
+    summary: summarizeFrame(frame),
+    payload,
+  };
+}
+
+function summarizeFrame(frame: Record<string, unknown>): string {
+  if (frame.type === "log") {
+    return typeof frame.message === "string" ? frame.message : "log";
+  }
+  if (frame.type === "error") {
+    const error = frame.error as { code?: unknown; message?: unknown } | undefined;
+    return `${typeof error?.code === "string" ? error.code : "error"}: ${typeof error?.message === "string" ? error.message : "USB CDC error"}`;
+  }
+  if (frame.type === "response") {
+    return "command response";
+  }
+  if (frame.type === "status") {
+    return "status snapshot";
+  }
+  if (frame.type === "hello") {
+    return "protocol handshake";
+  }
+  if (frame.type === "request") {
+    return typeof frame.op === "string" ? frame.op : "request";
+  }
+  if (frame.type === "wifi_config") {
+    return typeof frame.op === "string" ? `wifi_config ${frame.op}` : "wifi_config";
+  }
+  return typeof frame.type === "string" ? frame.type : "serial frame";
+}
+
+function redactTraceFrame(frame: Record<string, unknown>): Record<string, unknown> {
+  if (frame.type === "wifi_config" && typeof frame.psk === "string") {
+    return { ...frame, psk: "[redacted]" };
+  }
+  return frame;
 }

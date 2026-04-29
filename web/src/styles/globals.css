@@ -950,6 +950,80 @@ a {
   overflow-wrap: anywhere;
 }
 
+.developer-console {
+  gap: 14px;
+}
+
+.developer-console-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.developer-console-metrics .metric-line {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-card);
+  padding: 10px 12px;
+}
+
+.trace-panel {
+  display: grid;
+  max-height: 560px;
+  overflow: auto;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-card);
+  background: var(--color-code-surface);
+}
+
+.trace-row {
+  display: grid;
+  grid-template-columns: 74px 38px minmax(72px, 0.24fr) minmax(110px, 0.34fr) minmax(160px, 0.7fr);
+  gap: 10px;
+  align-items: baseline;
+  border-bottom: 1px solid color-mix(in oklch, var(--color-code-text) 12%, transparent);
+  padding: 9px 10px;
+  color: var(--color-code-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.trace-row:last-child {
+  border-bottom: 0;
+}
+
+.trace-row span,
+.trace-row code,
+.trace-row em {
+  color: color-mix(in oklch, var(--color-code-text) 72%, var(--color-muted));
+  font-style: normal;
+}
+
+.trace-row strong {
+  color: var(--color-blue);
+  text-transform: uppercase;
+}
+
+.trace-row.kind-raw strong,
+.trace-row.kind-ignored strong {
+  color: var(--color-warning);
+}
+
+.trace-row p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.trace-row pre {
+  grid-column: 1 / -1;
+  overflow: auto;
+  max-height: 180px;
+  margin: 0;
+  border-top: 1px solid color-mix(in oklch, var(--color-code-text) 10%, transparent);
+  padding-top: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .json-view {
   overflow: auto;
   max-height: 680px;
@@ -1056,10 +1130,20 @@ a {
   .detail-grid.three,
   .api-layout,
   .settings-layout,
+  .developer-console-metrics,
   .connect-grid,
   .connect-form,
   .status-band {
     grid-template-columns: 1fr;
+  }
+
+  .trace-row {
+    grid-template-columns: 72px 36px minmax(64px, 1fr);
+  }
+
+  .trace-row em,
+  .trace-row p {
+    grid-column: 1 / -1;
   }
 
   .connect-form.compact,

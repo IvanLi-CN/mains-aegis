@@ -124,6 +124,18 @@ export type SerialLogEntry = {
   message: string;
 };
 
+export type SerialTraceEntry = {
+  id: string;
+  timestamp: string;
+  direction: "rx" | "tx";
+  kind: "raw" | "frame" | "ignored";
+  frameType: string | null;
+  requestId: string | null;
+  target: string | null;
+  summary: string;
+  payload: string;
+};
+
 export type SafeSettingsState = {
   wifi_configured: boolean | null;
   wifi_ssid: string | null;
@@ -148,6 +160,7 @@ export type DeviceRecord = {
     connected: boolean;
     protocol: string;
     logs: SerialLogEntry[];
+    trace: SerialTraceEntry[];
     safeSettings: SafeSettingsState;
   };
 };

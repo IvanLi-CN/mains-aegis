@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
-import type { DeviceRecord, SafeSettingsState, SerialLogEntry, UpsStatus } from "../api/types";
+import type { DeviceRecord, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 import { useDeviceRegistry } from "../device-registry/DeviceRegistry";
 import { isDemoSeed } from "../fixtures/mockDevices";
 import { isWebSerialSupported } from "../serial/transport";
@@ -859,6 +859,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
           <SerialLogsPanel logs={record.serial?.logs ?? []} />
         </section>
       </div>
+      <UsbDeveloperConsole logs={record.serial?.logs ?? []} trace={record.serial?.trace ?? []} />
       {message ? <p className="form-message" role="status" aria-live="polite">{message}</p> : null}
     </section>
   );
@@ -893,6 +894,7 @@ function ApiDebugPage({ record }: { record: DeviceRecord }) {
         <pre className="json-view">{JSON.stringify(payload, null, 2)}</pre>
       </div>
       {record.serial ? <SerialLogsPanel logs={record.serial.logs} /> : null}
+      {record.serial ? <UsbDeveloperConsole logs={record.serial.logs} trace={record.serial.trace} /> : null}
     </section>
   );
 }
@@ -1000,6 +1002,42 @@ function SerialLogsPanel({ logs }: { logs: SerialLogEntry[] }) {
         <p className="panel-note">No structured USB logs in this session.</p>
       )}
     </div>
+  );
+}
+
+function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: SerialTraceEntry[] }) {
+  const protocolFrames = trace.filter((entry) => entry.kind === "frame").length;
+  const rawLines = trace.filter((entry) => entry.kind !== "frame").length;
+  const visibleTrace = [...trace].reverse();
+  return (
+    <section className="info-panel developer-console" data-evidence-target="usb-developer-console">
+      <header>
+        <Terminal size={18} />
+        <h2>USB Developer Console</h2>
+      </header>
+      <div className="developer-console-metrics">
+        <MetricLine label="CDC records" value={String(trace.length)} />
+        <MetricLine label="Protocol frames" value={String(protocolFrames)} />
+        <MetricLine label="Structured logs" value={String(logs.length)} />
+        <MetricLine label="Raw / ignored" value={String(rawLines)} />
+      </div>
+      <div className="trace-panel">
+        {visibleTrace.length > 0 ? (
+          visibleTrace.map((entry) => (
+            <div className={`trace-row kind-${entry.kind}`} key={entry.id}>
+              <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
+              <strong>{entry.direction}</strong>
+              <code>{entry.frameType ?? entry.kind}</code>
+              <em>{entry.requestId ?? entry.target ?? "--"}</em>
+              <p>{entry.summary}</p>
+              <pre>{entry.payload}</pre>
+            </div>
+          ))
+        ) : (
+          <p className="panel-note">No CDC records in this session.</p>
+        )}
+      </div>
+    </section>
   );
 }
 

@@ -8,9 +8,9 @@ type MockDefinition = {
   connectionState: DeviceRecord["connectionState"];
 };
 
-export type DemoSeed = "default" | "empty" | "offline" | "large";
+export type DemoSeed = "default" | "empty" | "offline" | "large" | "usb";
 
-const demoSeedIds: DemoSeed[] = ["default", "empty", "offline", "large"];
+const demoSeedIds: DemoSeed[] = ["default", "empty", "offline", "large", "usb"];
 const now = "2026-04-28T00:00:00.000Z";
 
 function identity(deviceId: string, shortId: string, state: NetworkSummary["state"], ipv4: string | null): Identity {
@@ -264,6 +264,7 @@ export function isDemoSeed(value: string | null | undefined): value is DemoSeed 
 
 export function makeMockRecords(seed: DemoSeed = "default"): DeviceRecord[] {
   if (seed === "empty") return [];
+  if (seed === "usb") return [makeMockUsbSerialRecord()];
   if (seed === "large") return largeMockDefinitions.map((definition) => recordFromDefinition(definition));
   if (seed === "offline") {
     return mockDefinitions.map((definition) => ({
@@ -370,6 +371,41 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
           level: "debug",
           target: "status",
           message: "status snapshot published over serial",
+        },
+      ],
+      trace: [
+        {
+          id: "mock-usb-trace-1",
+          timestamp: new Date().toISOString(),
+          direction: "tx",
+          kind: "frame",
+          frameType: "hello",
+          requestId: "web-demo-hello",
+          target: null,
+          summary: "protocol handshake",
+          payload: "{\"type\":\"hello\",\"request_id\":\"web-demo-hello\"}",
+        },
+        {
+          id: "mock-usb-trace-2",
+          timestamp: new Date().toISOString(),
+          direction: "rx",
+          kind: "frame",
+          frameType: "log",
+          requestId: null,
+          target: "usb_cdc",
+          summary: "mock USB CDC session ready",
+          payload: "{\"type\":\"log\",\"level\":\"info\",\"target\":\"usb_cdc\",\"message\":\"mock USB CDC session ready\"}",
+        },
+        {
+          id: "mock-usb-trace-3",
+          timestamp: new Date().toISOString(),
+          direction: "rx",
+          kind: "raw",
+          frameType: null,
+          requestId: null,
+          target: null,
+          summary: "raw CDC line",
+          payload: "[INFO ] telemetry ch=out_a vbus_mv=12064 current_ma=20",
         },
       ],
       safeSettings: defaultMockSafeSettings(),
