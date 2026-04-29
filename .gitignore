@@ -23,3 +23,6 @@ tools/front-panel-preview/target/
 # JS tooling (bun)
 node_modules/
 bun.lockb
+web/dist/
+web/storybook-static/
+web/tsconfig.tsbuildinfo
