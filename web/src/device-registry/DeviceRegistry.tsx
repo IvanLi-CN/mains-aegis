@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { getStatus, normalizeBaseUrl, probeDevice, toErrorEnvelope } from "../api/client";
 import { subscribeStatusStream, type StatusStream } from "../api/statusStream";
 import type { DeviceRecord, DeviceTarget, ProbeResult } from "../api/types";
-import { makeMockRecord, mockTargets } from "../fixtures/mockDevices";
+import { isDemoSeed, makeMockRecord, makeMockRecords, type DemoSeed } from "../fixtures/mockDevices";
 
 type AddDeviceInput = {
   target: string;
@@ -26,13 +26,35 @@ const STORAGE_KEY = "mains-aegis-web.devices.v1";
 const DeviceRegistryContext = createContext<DeviceRegistryContextValue | null>(null);
 
 export function DeviceRegistryProvider({ children }: { children: React.ReactNode }) {
-  const [records, setRecords] = useState<DeviceRecord[]>(() => loadInitialRecords());
+  const seedRef = useRef<DemoSeed | null>(getDemoSeed());
+  const [demoSeed, setDemoSeed] = useState<DemoSeed | null>(seedRef.current);
+  const [records, setRecords] = useState<DeviceRecord[]>(() => loadInitialRecords(seedRef.current));
   const streams = useRef(new Map<string, StatusStream>());
 
   useEffect(() => {
+    if (demoSeed) return;
     const targets = records.map((record) => record.target);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(targets));
-  }, [records]);
+  }, [demoSeed, records]);
+
+  useEffect(() => {
+    const syncSeedFromUrl = () => {
+      const nextSeed = getDemoSeed();
+      if (seedRef.current === nextSeed) return;
+      seedRef.current = nextSeed;
+      setDemoSeed(nextSeed);
+      for (const stream of streams.current.values()) stream.close();
+      streams.current.clear();
+      if (!nextSeed) {
+        setRecords(loadInitialRecords(null));
+        return;
+      }
+      setRecords(makeMockRecords(nextSeed));
+    };
+
+    window.addEventListener("popstate", syncSeedFromUrl);
+    return () => window.removeEventListener("popstate", syncSeedFromUrl);
+  }, []);
 
   const refreshDevice = useCallback(async (deviceId: string) => {
     const target = records.find((record) => record.target.deviceId === deviceId)?.target;
@@ -54,7 +76,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       const result = await probeDevice(target.baseUrl);
       setRecords((current) => {
         const previous = current.find((record) => record.target.deviceId === deviceId);
-        const streamState = result.identity.capabilities.sse && previous?.streamState !== "polling" ? "idle" : "polling";
+        if (!previous) return current;
+        const streamState = result.identity.capabilities.sse && previous.streamState !== "polling" ? "idle" : "polling";
         return upsertRecord(current, recordFromProbe(target, result, "online", streamState));
       });
     } catch (error) {
@@ -216,7 +239,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const resetDemo = useCallback(() => {
     for (const stream of streams.current.values()) stream.close();
     streams.current.clear();
-    setRecords(mockTargets.map((target) => makeMockRecord(target)));
+    setRecords(makeMockRecords("default"));
   }, []);
 
   const value = useMemo(
@@ -233,13 +256,20 @@ export function useDeviceRegistry(): DeviceRegistryContextValue {
   return context;
 }
 
-function loadInitialRecords(): DeviceRecord[] {
+function getDemoSeed(): DemoSeed | null {
+  const seed = new URLSearchParams(window.location.search).get("seed");
+  return isDemoSeed(seed) ? seed : null;
+}
+
+function loadInitialRecords(seed: DemoSeed | null): DeviceRecord[] {
+  if (seed) return makeMockRecords(seed);
+
   const stored = localStorage.getItem(STORAGE_KEY);
-  if (!stored) return mockTargets.map((target) => makeMockRecord(target));
+  if (!stored) return makeMockRecords("default");
 
   try {
     const targets = JSON.parse(stored) as DeviceTarget[];
-    if (!Array.isArray(targets) || targets.length === 0) return mockTargets.map((target) => makeMockRecord(target));
+    if (!Array.isArray(targets)) return makeMockRecords("default");
     return targets.map((target) => {
       if (target.mock) return makeMockRecord(target);
       return {
@@ -254,7 +284,7 @@ function loadInitialRecords(): DeviceRecord[] {
       };
     });
   } catch {
-    return mockTargets.map((target) => makeMockRecord(target));
+    return makeMockRecords("default");
   }
 }
 

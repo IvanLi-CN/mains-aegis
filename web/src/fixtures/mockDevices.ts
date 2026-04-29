@@ -8,6 +8,9 @@ type MockDefinition = {
   connectionState: DeviceRecord["connectionState"];
 };
 
+export type DemoSeed = "default" | "empty" | "offline" | "large";
+
+const demoSeedIds: DemoSeed[] = ["default", "empty", "offline", "large"];
 const now = "2026-04-28T00:00:00.000Z";
 
 function identity(deviceId: string, shortId: string, state: NetworkSummary["state"], ipv4: string | null): Identity {
@@ -191,7 +194,93 @@ export const mockDefinitions: MockDefinition[] = [
   },
 ];
 
+const largeLocations = ["Bench 1", "Bench 2", "Rack 2U", "Network closet", "Storage bay", "Studio", "Shelf", "Lab cart"];
+const largeAliases = [
+  "Lab rack A",
+  "NAS shelf UPS",
+  "Router backup",
+  "Printer shelf",
+  "Storage bay",
+  "Spare pack",
+  "Camera bridge",
+  "Switch stack",
+  "Build bench",
+  "Instrument rail",
+  "Server shelf",
+  "Door controller",
+  "Fiber closet",
+  "Studio lights",
+  "QA cart",
+  "Reception AP",
+  "Cold aisle",
+  "Long hostname UPS for wrapping validation",
+];
+
+const largeModes: Array<UpsStatus["mode"]> = ["standby", "assist", "backup", "standby", "fault", "off"];
+
+const largeMockDefinitions: MockDefinition[] = largeAliases.map((alias, index) => {
+  const n = index + 1;
+  const shortId = `l${String(n).padStart(5, "0")}`;
+  const deviceId = `mains-aegis-${shortId}`;
+  const mode = largeModes[index % largeModes.length];
+  const isOffline = mode === "off" || index % 11 === 8;
+  const isFault = mode === "fault";
+  const soc = isOffline ? null : Math.max(9, 82 - index * 4);
+  const network = identity(deviceId, shortId, isOffline ? "error" : "connected", isOffline ? null : `192.168.31.${60 + n}`).network;
+  return {
+    target: {
+      deviceId,
+      baseUrl: `mock:large-${String(n).padStart(2, "0")}`,
+      alias,
+      location: largeLocations[index % largeLocations.length],
+      addedAt: now,
+      mock: true,
+    },
+    identity: identity(deviceId, shortId, isOffline ? "error" : "connected", isOffline ? null : `192.168.31.${60 + n}`),
+    network,
+    status: status(mode, soc, {
+      network: { state: isOffline ? "error" : "connected", ipv4: network.ipv4, last_error: isOffline ? "link_lost" : null },
+      battery: {
+        state: isFault ? "fault" : soc !== null && soc < 25 ? "warning" : isOffline ? "missing" : "ok",
+        pack_mv: soc === null ? null : 15100 - index * 32,
+        current_ma: mode === "backup" ? -320 : isOffline ? null : 160,
+        soc_pct: soc,
+        no_battery: isOffline,
+        discharge_ready: !isFault && !isOffline,
+        issue_detail: isFault ? "battery_protection" : soc !== null && soc < 25 ? "low_soc" : null,
+        recovery_pending: isFault,
+        last_result: isFault ? "bms_discharge_blocked" : null,
+      },
+    }),
+    connectionState: isOffline ? "offline" : isFault ? "error" : "online",
+  };
+});
+
 export const mockTargets = mockDefinitions.map((definition) => definition.target);
+
+export function isDemoSeed(value: string | null | undefined): value is DemoSeed {
+  return demoSeedIds.includes(value as DemoSeed);
+}
+
+export function makeMockRecords(seed: DemoSeed = "default"): DeviceRecord[] {
+  if (seed === "empty") return [];
+  if (seed === "large") return largeMockDefinitions.map((definition) => recordFromDefinition(definition));
+  if (seed === "offline") {
+    return mockDefinitions.map((definition) => ({
+      ...recordFromDefinition(definition),
+      connectionState: "offline",
+      streamState: "polling",
+      error: { code: "link_lost", message: "device is offline", retryable: true, details: null },
+      status: definition.status
+        ? {
+            ...definition.status,
+            network: { state: "error", ipv4: null, last_error: "link_lost" },
+          }
+        : null,
+    }));
+  }
+  return mockDefinitions.map((definition) => recordFromDefinition(definition));
+}
 
 export function getMockIdentity(baseUrl: string): Identity {
   return findMock(baseUrl).identity;
@@ -207,8 +296,12 @@ export function getMockStatus(baseUrl: string): UpsStatus {
 
 export function makeMockRecord(target: DeviceTarget): DeviceRecord {
   const mock = findMock(target.baseUrl);
+  return recordFromDefinition({ ...mock, target });
+}
+
+function recordFromDefinition(mock: MockDefinition): DeviceRecord {
   return {
-    target,
+    target: mock.target,
     identity: mock.identity,
     network: mock.network,
     status: mock.status,
@@ -220,7 +313,7 @@ export function makeMockRecord(target: DeviceTarget): DeviceRecord {
 }
 
 function findMock(baseUrl: string): MockDefinition {
-  const match = mockDefinitions.find((definition) => definition.target.baseUrl === baseUrl);
+  const match = [...mockDefinitions, ...largeMockDefinitions].find((definition) => definition.target.baseUrl === baseUrl);
   if (!match) throw new Error(`unknown mock device: ${baseUrl}`);
   return match;
 }

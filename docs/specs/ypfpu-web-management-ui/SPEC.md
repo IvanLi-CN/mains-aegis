@@ -4,7 +4,7 @@
 
 - Status: 部分完成（5/5）
 - Created: 2026-04-28
-- Last: 2026-04-28
+- Last: 2026-04-29
 
 ## 背景 / 问题陈述
 
@@ -21,7 +21,7 @@
 - 实现多设备 Fleet 卡片网格，覆盖 online、offline、warning、critical、assist、backup 等状态。
 - 实现设备接入页、单设备总览、电源路径、电池与 BMS、温度与保护、设备信息、API 调试页面。
 - 对接设备侧现有只读接口：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status` 和 status SSE。
-- 提供 mock fixtures 和 Storybook stories，使无实机环境也能稳定预览、交互测试与截图验证。
+- 提供 mock fixtures 和正式路由 seed 场景，使无实机环境也能稳定预览、交互测试与截图验证。
 
 ### Non-goals
 
@@ -29,7 +29,7 @@
 - 不新增设备侧聚合 API；多设备汇总由浏览器端 `DeviceRegistry` 完成。
 - 不做用户账号、鉴权、设备绑定、TLS、跨网段发现或云端服务。
 - 不改造 `docs-site/`；文档站与管理端保持独立。
-- Storybook 是 Web 管理端示例和交互 demo 的标准入口；首版不把截图资产提交到仓库。
+- Demo 复用 Web 管理端正式路由和正式交互，仅通过 mock 数据源替换真实设备接口；截图资产默认作为 owner-facing evidence，不自动进入 PR 正文。
 
 ## 功能规格
 
@@ -56,6 +56,16 @@
 - `/devices/:device_id/device` 展示 identity、network、firmware。
 - `/devices/:device_id/api` 展示固定只读 endpoints 与当前 JSON snapshot。
 
+### 纯前端 Demo
+
+- Demo 站点与正式站点使用同一套前端、同一套路由、同一套导航和交互，只把设备接口替换为 `mock:` 数据源。
+- 支持 `seed=default|empty|offline|large` 查询参数，用于一键复现默认 fleet、空数据、全离线和大数量设备场景。
+- 典型演示脚本：
+  - 普通路径：`/` -> `/devices/mains-aegis-c7d8e9` -> `/devices/mains-aegis-c7d8e9/api`
+  - 异常路径：`/devices/mains-aegis-e4f5a6/battery?seed=default`
+  - 空数据路径：`/?seed=empty` -> `/connect?seed=empty`
+  - 大数量路径：`/?seed=large`
+
 ## 接口与数据流
 
 - Web 端以 `docs/specs/amc32-wifi-service-discovery-api-foundation/contracts/http-apis.md` 为只读 API 契约来源。
@@ -71,9 +81,9 @@
 - `bun run web:build` 通过。
 - Fleet mock 页至少显示 6 台设备，覆盖 standby、assist、backup、warning、critical、offline。
 - `/connect` 能显示已保存设备，支持添加设备与探活错误显示。
+- 正式路由能通过 `seed` 参数打开可复现 mock 场景，并保持与正式产品一致的导航和页面结构。
 - 单设备详情页可从 Fleet 卡片进入，并展示 power、battery、thermal、device、api 子页。
-- 浏览器视觉验证覆盖 desktop Fleet、mobile Fleet 和单设备 Dashboard。
-- Storybook 覆盖 Fleet、Connect、单设备 Dashboard、API Debug，并提供基础 `play` 交互断言。
+- 浏览器视觉验证覆盖 desktop Fleet、mobile Fleet、empty Fleet、large Fleet 和单设备 Dashboard。
 
 ## 文档更新
 
@@ -84,7 +94,62 @@
 
 ## Visual Evidence
 
-视觉证据由 `web/` mock UI 本地预览生成；按本轮计划，截图只回传给主人验收，不提交截图资产或 PR 图片引用，除非主人明确批准。
+视觉证据由 Vite 纯前端 mock UI 生成，使用正式路由和 mock fixtures，不连接真实 UPS 设备。以下截图用于 owner review；未标记 `PR: include`，因此不默认进入 PR 正文。
+
+- source_type: mock_ui
+  demo_entry_or_title: `/`
+  requested_viewport: `1440x1000`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: desktop fleet overview
+  evidence_note: 验证多设备卡片网格、严重程度排序、owner-facing 摘要字段，以及总览页不暴露 OUT A/B、charger、API 等技术细节。
+
+![Fleet desktop frontend demo evidence](./assets/fleet-desktop-demo.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/`
+  requested_viewport: `390x844`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: mobile fleet overview
+  evidence_note: 验证 Fleet 卡片在移动端单列布局下可读、可扫描，顶部统计和设备摘要不横向溢出，并保留主要设备操作入口。
+
+![Fleet mobile frontend demo evidence](./assets/fleet-mobile-demo.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/?seed=empty`
+  requested_viewport: `390x844`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: mobile empty fleet
+  evidence_note: 验证空数据场景复用正式 Fleet 路由，并提供进入 Connect 的自然恢复路径。
+
+![Empty fleet mobile evidence](./assets/fleet-empty-mobile.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/?seed=large`
+  requested_viewport: `1440x1000`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: large fleet
+  evidence_note: 验证大数量 mock 设备仍使用正式 Fleet 路由、排序和卡片网格，且顶部计数与列表一致。
+
+![Large fleet desktop evidence](./assets/fleet-large-desktop.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/devices/mains-aegis-e4f5a6/battery?seed=default`
+  requested_viewport: `1280x900`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: critical device battery
+  evidence_note: 验证单设备 critical 状态、battery fault、BMS readiness 和 issue detail 的视觉层级。
+
+![Critical device frontend demo evidence](./assets/device-critical-demo.png)
 
 ## 实现里程碑
 

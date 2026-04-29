@@ -7,9 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port ${WEB_PORT:-5173}",
     "preview": "vite preview --host 127.0.0.1 --port ${WEB_PORT:-5173}",
     "build": "tsc -b && vite build",
-    "check": "tsc -b --noEmit",
-    "storybook": "storybook dev --host 127.0.0.1 --port ${STORYBOOK_PORT:-6006}",
-    "storybook:build": "storybook build"
+    "check": "tsc -b --noEmit"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -17,11 +15,9 @@
     "react-dom": "^19.2.1"
   },
   "devDependencies": {
-    "@storybook/react-vite": "^10.3.5",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
-    "storybook": "^10.3.5",
     "typescript": "^5.9.3",
     "vite": "^7.2.4"
   }

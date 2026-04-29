@@ -1,12 +1,17 @@
 import {
   Activity,
   AlertTriangle,
+  BatteryFull,
+  BatteryLow,
+  BatteryMedium,
+  BatteryWarning,
   BatteryCharging,
   Cable,
   Cpu,
   Gauge,
   Globe2,
   LayoutGrid,
+  Menu,
   PlugZap,
   RefreshCw,
   Search,
@@ -15,7 +20,8 @@ import {
   Wifi,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState, type SVGProps } from "react";
+import type { LucideIcon } from "lucide-react";
 import type { DeviceRecord, UpsStatus } from "../api/types";
 import { useDeviceRegistry } from "../device-registry/DeviceRegistry";
 import { formatCurrent, formatPercent, formatTemp, formatVoltage, timeAgo } from "../utils/format";
@@ -44,40 +50,57 @@ export function App({ initialPath }: AppProps = {}) {
   const registry = useDeviceRegistry();
   const route = useRoute(initialPath);
   const selected = route.deviceId ? (registry.records.find((record) => record.target.deviceId === route.deviceId) ?? null) : null;
+  const [navOpen, setNavOpen] = useState(false);
+
+  useEffect(() => {
+    setNavOpen(false);
+  }, [route.path]);
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">MA</span>
-          <div>
+      <aside className={`sidebar ${navOpen ? "is-open" : ""}`}>
+        <div className="mobile-nav-bar">
+          <button className="icon-button" type="button" aria-label={navOpen ? "Close navigation" : "Open navigation"} onClick={() => setNavOpen((open) => !open)}>
+            {navOpen ? <X size={18} /> : <Menu size={18} />}
+          </button>
+          <div className="mobile-nav-title">
             <strong>Mains Aegis</strong>
-            <span>UPS fleet console</span>
+            <span>{route.section === "connect" ? "Connect" : selected?.target.alias ?? "Fleet"}</span>
           </div>
         </div>
+        <button className="mobile-nav-backdrop" type="button" aria-label="Close navigation" onClick={() => setNavOpen(false)} />
+        <div className="sidebar-panel">
+          <div className="brand">
+            <span className="brand-mark">MA</span>
+            <div>
+              <strong>Mains Aegis</strong>
+              <span>UPS fleet console</span>
+            </div>
+          </div>
 
-        <nav className="nav-group" aria-label="Fleet navigation">
-          <NavLink href="/" active={route.section === "fleet"} icon={LayoutGrid} label="Fleet" />
-          <NavLink href="/connect" active={route.section === "connect"} icon={Wifi} label="Connect" />
-        </nav>
-
-        {selected ? (
-          <nav className="nav-group" aria-label="Device navigation">
-            <div className="nav-caption">{selected.target.alias}</div>
-            {deviceSections.map((section) => (
-              <NavLink
-                key={section.id}
-                href={deviceHref(selected.target.deviceId, section.id)}
-                active={route.section === section.id}
-                icon={section.icon}
-                label={section.label}
-              />
-            ))}
+          <nav className="nav-group" aria-label="Fleet navigation">
+            <NavLink href="/" active={route.section === "fleet"} icon={LayoutGrid} label="Fleet" />
+            <NavLink href="/connect" active={route.section === "connect"} icon={Wifi} label="Connect" />
           </nav>
-        ) : null}
+
+          {selected ? (
+            <nav className="nav-group" aria-label="Device navigation">
+              <div className="nav-caption">{selected.target.alias}</div>
+              {deviceSections.map((section) => (
+                <NavLink
+                  key={section.id}
+                  href={deviceHref(selected.target.deviceId, section.id)}
+                  active={route.section === section.id}
+                  icon={section.icon}
+                  label={section.label}
+                />
+              ))}
+            </nav>
+          ) : null}
+        </div>
       </aside>
 
-      <main className="main-surface">
+      <main className={`main-surface ${route.section === "connect" ? "connect-adapt-command" : ""}`}>
         <TopBar records={registry.records} selected={selected} />
         {renderRoute(route, registry.records, selected)}
       </main>
@@ -133,7 +156,10 @@ function parseRoute(path: string): Route {
 }
 
 function navigate(path: string) {
-  window.history.pushState(null, "", path);
+  const next = new URL(path, window.location.origin);
+  const currentSeed = new URLSearchParams(window.location.search).get("seed");
+  if (!next.search && currentSeed) next.searchParams.set("seed", currentSeed);
+  window.history.pushState(null, "", `${next.pathname}${next.search}${next.hash}`);
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
@@ -141,7 +167,7 @@ function deviceHref(deviceId: string, section: string) {
   return section === "overview" ? `/devices/${encodeURIComponent(deviceId)}` : `/devices/${encodeURIComponent(deviceId)}/${section}`;
 }
 
-function NavLink({ href, active, icon: Icon, label }: { href: string; active: boolean; icon: typeof LayoutGrid; label: string }) {
+function NavLink({ href, active, icon: Icon, label }: { href: string; active: boolean; icon: LucideIcon; label: string }) {
   return (
     <a
       className={`nav-link ${active ? "is-active" : ""}`}
@@ -169,11 +195,14 @@ function TopBar({ records, selected }: { records: DeviceRecord[]; selected: Devi
     };
   }, [records]);
 
+  const title = selected ? selected.target.alias : "UPS Fleet";
+  const eyebrow = selected ? selected.target.location : "Fleet";
+
   return (
     <header className="topbar">
       <div>
-        <div className="eyebrow">{selected ? selected.target.location : "Fleet"}</div>
-        <h1>{selected ? selected.target.alias : "UPS Fleet"}</h1>
+        <div className="eyebrow">{eyebrow}</div>
+        <h1>{title}</h1>
       </div>
       <div className="topbar-metrics">
         <Metric label="Total" value={counts.total} />
@@ -203,7 +232,12 @@ function FleetPage({ records }: { records: DeviceRecord[] }) {
       <div className="toolbar">
         <label className="search-box">
           <Search size={16} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search device, hostname, location" />
+          <input
+            name="fleet-search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search device, hostname, location"
+          />
         </label>
         <div className="segmented" aria-label="Fleet filter">
           {(["all", "critical", "warning", "offline"] as const).map((item) => (
@@ -215,10 +249,27 @@ function FleetPage({ records }: { records: DeviceRecord[] }) {
       </div>
 
       <div className="fleet-grid" data-evidence-target="fleet-grid">
-        {filtered.map((record) => (
+        {filtered.length > 0 ? filtered.map((record) => (
           <DeviceCard key={record.target.deviceId} record={record} />
-        ))}
+        )) : <FleetEmptyState hasDevices={records.length > 0} />}
       </div>
+    </section>
+  );
+}
+
+function FleetEmptyState({ hasDevices }: { hasDevices: boolean }) {
+  return (
+    <section className="empty-state fleet-empty">
+      <Server size={28} />
+      <h2>{hasDevices ? "No matching devices" : "No UPS devices saved"}</h2>
+      <p>
+        {hasDevices
+          ? "Adjust the search or status filter to bring devices back into view."
+          : "Add a .local hostname, IP address, or mock target from the connect page to build this browser's device registry."}
+      </p>
+      <button className="primary-button" type="button" onClick={() => navigate("/connect")}>
+        Connect devices
+      </button>
     </section>
   );
 }
@@ -242,16 +293,23 @@ function DeviceCard({ record }: { record: DeviceRecord }) {
         <SeverityBadge severity={severity} />
       </div>
 
-      <div className="card-main">
-        <div>
-          <span className="metric-label">SOC</span>
-          <strong>{formatPercent(status?.battery.soc_pct)}</strong>
+      <div className="card-main card-main-icon-duo metric-duo-stack">
+        <div className="metric-tile">
+          <span className="metric-icon metric-icon-size-a"><BatteryLevelIcon status={status} /></span>
+          <span className="metric-copy">
+            <span className="metric-label">Battery</span>
+            <strong>{formatPercent(status?.battery.soc_pct)}</strong>
+          </span>
         </div>
-        <div>
-          <span className="metric-label">Power</span>
-          <strong>{powerSourceLabel(record)}</strong>
+        <div className="metric-tile">
+          <span className="metric-icon metric-icon-size-a"><PowerMetricIcon record={record} /></span>
+          <span className="metric-copy">
+            <span className="metric-label">Power</span>
+            <strong>{powerSourceLabel(record)}</strong>
+          </span>
         </div>
       </div>
+
 
       <dl className="summary-list">
         <StatusPair label="Load" value={loadSummary(record)} />
@@ -260,10 +318,18 @@ function DeviceCard({ record }: { record: DeviceRecord }) {
         <StatusPair label="Connection" value={connectionSummary(record)} />
       </dl>
 
+
       <div className="card-footer">
         <span>{record.target.location} · {timeAgo(record.lastUpdated)}</span>
         <div>
-          <button className="primary-button small" onClick={() => navigate(deviceHref(record.target.deviceId, "overview"))}>Details</button>
+          <button
+            className="primary-button small"
+            type="button"
+            aria-label={`Open ${record.target.alias} details`}
+            onClick={() => navigate(deviceHref(record.target.deviceId, "overview"))}
+          >
+            Details
+          </button>
         </div>
       </div>
     </article>
@@ -295,7 +361,7 @@ function ConnectPage() {
   }
 
   return (
-    <section className="page-flow narrow">
+    <section className="page-flow connect-wide">
       <div className="section-heading">
         <h2>Connect devices</h2>
         <p>Add UPS targets by `.local` hostname or IP. The console probes ping, identity, network, and status before saving.</p>
@@ -304,15 +370,21 @@ function ConnectPage() {
       <form className="connect-form" onSubmit={onSubmit}>
         <label>
           Target
-          <input value={target} onChange={(event) => setTarget(event.target.value)} placeholder="mains-aegis-a1b2c3.local or 192.168.31.42" required />
+          <input
+            name="device-target"
+            value={target}
+            onChange={(event) => setTarget(event.target.value)}
+            placeholder="mains-aegis-a1b2c3.local or 192.168.31.42"
+            required
+          />
         </label>
         <label>
           Alias
-          <input value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="Lab rack A" />
+          <input name="device-alias" value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="Lab rack A" />
         </label>
         <label>
           Location
-          <input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Bench 1" />
+          <input name="device-location" value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Bench 1" />
         </label>
         <div className="form-actions">
           <button className="primary-button" type="submit" disabled={busy}>{busy ? "Connecting" : "Add device"}</button>
@@ -320,7 +392,11 @@ function ConnectPage() {
         </div>
       </form>
 
-      {message ? <p className="form-message">{message}</p> : null}
+      {message ? (
+        <p className="form-message" role="status" aria-live="polite">
+          {message}
+        </p>
+      ) : null}
 
       <div className="table-list">
         {records.map((record) => (
@@ -330,10 +406,22 @@ function ConnectPage() {
               <span>{record.target.baseUrl}</span>
             </div>
             <div className="row-actions">
-              <button className="icon-button" title="Refresh" onClick={() => void refreshDevice(record.target.deviceId)}>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={`Refresh ${record.target.alias}`}
+                title={`Refresh ${record.target.alias}`}
+                onClick={() => void refreshDevice(record.target.deviceId)}
+              >
                 <RefreshCw size={16} />
               </button>
-              <button className="icon-button" title="Remove" onClick={() => removeDevice(record.target.deviceId)}>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={`Remove ${record.target.alias}`}
+                title={`Remove ${record.target.alias}`}
+                onClick={() => removeDevice(record.target.deviceId)}
+              >
                 <X size={16} />
               </button>
             </div>
@@ -522,24 +610,24 @@ function DeviceStatusBand({ record }: { record: DeviceRecord }) {
   const status = record.status;
   const severity = deviceSeverity(record);
   return (
-    <div className="status-band">
-      <div>
-        <span className="eyebrow">Current mode</span>
-        <strong>{modeLabel(status?.mode)}</strong>
+    <div className="status-band status-band-color-warm">
+      <div className="live-cell">
+        <span className="eyebrow">Operating state</span>
+        <strong className="live-value">{modeLabel(status?.mode)}</strong>
       </div>
-      <div>
+      <div className="live-cell">
         <span className="eyebrow">Output</span>
-        <strong>{status?.output.active ?? "--"}</strong>
+        <strong className="live-value">{status?.output.active ?? "--"}</strong>
       </div>
-      <div>
+      <div className="live-cell">
         <span className="eyebrow">Battery</span>
-        <strong>{formatPercent(status?.battery.soc_pct)}</strong>
+        <strong className="live-value">{formatPercent(status?.battery.soc_pct)}</strong>
       </div>
-      <div>
+      <div className="live-cell">
         <span className="eyebrow">Stream</span>
-        <strong>{record.streamState}</strong>
+        <strong className="live-value">{record.streamState}</strong>
       </div>
-      <SeverityBadge severity={severity} />
+      <span className={`severity-badge live-state severity-${severity}`}>{severity}</span>
     </div>
   );
 }
@@ -580,6 +668,28 @@ function StatusPair({ label, value }: { label: string; value: string }) {
       <dt>{label}</dt>
       <dd>{value}</dd>
     </>
+  );
+}
+
+function BatteryLevelIcon({ status }: { status: UpsStatus | null | undefined }) {
+  const soc = status?.battery.soc_pct;
+  const Icon = soc === null || soc === undefined ? BatteryWarning : soc < 20 ? BatteryWarning : soc < 45 ? BatteryLow : soc < 75 ? BatteryMedium : BatteryFull;
+  return <Icon size={18} aria-hidden="true" />;
+}
+
+function PowerMetricIcon({ record }: { record: DeviceRecord }) {
+  const source = powerSourceLabel(record);
+  if (source === "Battery") return <BatteryBackupIcon size={18} aria-hidden="true" />;
+  const Icon = source === "Offline" || source === "No mains" ? AlertTriangle : PlugZap;
+  return <Icon size={18} aria-hidden="true" />;
+}
+
+function BatteryBackupIcon({ size = 18, ...props }: SVGProps<SVGSVGElement> & { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" {...props}>
+      <rect x="3" y="7" width="16" height="10" rx="2.4" fill="currentColor" />
+      <rect x="20" y="10" width="2" height="4" rx="0.8" fill="currentColor" />
+    </svg>
   );
 }
 

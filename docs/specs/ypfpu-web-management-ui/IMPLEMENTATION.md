@@ -8,19 +8,19 @@
 - `mock:` 设备用于稳定开发预览和视觉证据，不发真实网络请求。
 - 管理端页面已覆盖 Fleet、Connect、Overview、Power、Battery、Thermal、Device、API。
 - Fleet 卡片使用用户可理解的摘要字段，技术细节保留到单设备详情与 API 调试页。
-- Storybook 已作为页面示例入口，覆盖 Fleet、Connect、Critical Device Dashboard、API Debug，并使用 `play` 断言关键交互。
+- Demo 复用正式前端路由，通过 `seed` 参数切换 mock 数据场景，覆盖默认 fleet、空数据、全离线、大数量、Critical Battery、Backup、API Debug 等路径。
 
 ## 验证状态
 
 - `bun install`: 已通过。
 - `bun run web:check`: 已通过。
 - `bun run web:build`: 已通过。
-- `bun run web:storybook:build`: 已通过。
-- 本地预览：已通过端口租约启动 `web-preview`。
+- Storybook：已从 Demo 工作流移除。
+- 本地预览：已通过端口租约启动 Vite mock-data 前端。
 - 浏览器验证：已确认 Fleet、Connect 和单设备 Dashboard 可渲染，控制台无 warn/error。
-- 视觉证据：已生成 desktop Fleet、mobile Fleet、single-device Dashboard 的 mock UI 截图并回传给主人；按计划不提交截图资产。
+- 视觉证据：已生成 desktop Fleet、mobile Fleet、empty Fleet、large Fleet、single-device Dashboard 的 mock UI 截图；截图已回传给主人，并作为 spec assets 落盘供 owner-facing review 使用。
 - Review-loop：已通过，未发现剩余可操作问题。
-- PR #71 CI：已通过 Rust fmt check、PR title lint、Host pure-logic tests、Firmware quality、dependency-review。
+- PR #71 CI：当前分支推送后以 GitHub checks 最新结果为准。
 
 ## PR 状态
 
