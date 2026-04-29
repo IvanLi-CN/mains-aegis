@@ -247,15 +247,9 @@ export class WebSerialTransport {
       try {
         frame = JSON.parse(candidate) as SerialFrame;
       } catch {
-        this.options.onFrame({
-          type: "error",
-          error: {
-            code: "serial_parse_error",
-            message: "received an invalid JSON line from USB CDC",
-            retryable: true,
-            details: null,
-          },
-        });
+        // The CDC endpoint can still carry legacy defmt/plain monitor bytes.
+        // They are not Web Serial protocol frames, so keep them out of the
+        // structured log panel instead of surfacing noisy parse errors.
         continue;
       }
       this.options.onFrame(frame);
@@ -265,25 +259,8 @@ export class WebSerialTransport {
 
   private extractJsonCandidate(rawLine: string): string | null {
     const jsonStart = rawLine.indexOf("{");
-    if (jsonStart === -1) {
-      this.emitRawSerialLog(rawLine);
-      return null;
-    }
-    if (jsonStart > 0) {
-      this.emitRawSerialLog(rawLine.slice(0, jsonStart));
-    }
+    if (jsonStart === -1) return null;
     return rawLine.slice(jsonStart);
-  }
-
-  private emitRawSerialLog(rawLine: string) {
-    const message = rawLine.replace(/[^\x20-\x7e]+/g, " ").trim();
-    if (!message) return;
-    this.options.onFrame({
-      type: "log",
-      level: "debug",
-      target: "raw_serial",
-      message: message.slice(0, 240),
-    });
   }
 
   private resolvePending(frame: SerialFrame) {

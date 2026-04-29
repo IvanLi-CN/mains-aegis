@@ -20,7 +20,7 @@ High-risk operations such as output enable/disable, fault clear, and charge star
 - Protocol name: `mains-aegis.cdc.v1`.
 - Every Web write command carries `request_id`.
 - Firmware returns `response` or `error` with the same `request_id`.
-- During bring-up, legacy plain serial lines may still appear on the same CDC stream. The Web App treats non-JSON lines as `raw_serial` debug log entries; protocol responses must still be valid JSONL frames.
+- During bring-up, legacy `defmt` or plain serial bytes may still appear on the same CDC stream. Browser clients ignore non-JSONL and malformed non-protocol lines; protocol responses must still be valid JSONL frames.
 
 ## Frame Types
 
@@ -92,6 +92,8 @@ The firmware stores the PSK but never echoes it in `response`, `error`, or `log`
 ```json
 {"type":"log","level":"info","target":"wifi_config","message":"WiFi credentials updated in EEPROM"}
 ```
+
+`log` frames are structured Web-facing events. Raw firmware monitor output remains a development-only stream decoded by `mcu-agentd monitor`; the Web log panel does not display undecoded raw serial bytes.
 
 ### `error`
 
