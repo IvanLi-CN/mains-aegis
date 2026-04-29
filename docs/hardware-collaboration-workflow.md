@@ -8,7 +8,7 @@
 - Agent 不枚举候选端口，不运行 `mcu-agentd selector list <MCU_ID>`，也不扫描 `/dev/*`。
 - Agent 不切换端口，不运行 `mcu-agentd selector set <MCU_ID> <PORT>`。
 - Agent 可以运行非枚举、非切换的 `mcu-agentd` 操作，包括 `config validate`、`mcu list`、`selector get`、`flash`、`monitor`、`logs`、`reset`。
-- USB CDC 同一时刻只有一个消费者：`mcu-agentd monitor` 与 Web App Web Serial 不能并发占用。
+- USB CDC 同一时刻只有一个消费者：`mcu-agentd monitor`、持有串口的 `mcu-agentd serve` 与 Web App Web Serial 不能并发占用。
 
 ## One-Time Human Setup
 
@@ -55,7 +55,17 @@ Agent 接管真机验证时按以下顺序执行：
    mcu-agentd --non-interactive monitor esp --reset
    ```
 
-5. 进入 Web Serial 验证前，停止 `monitor`，释放 CDC 口。
+5. 进入 Web Serial 验证前，停止 `monitor` 或当前项目 `mcu-agentd` daemon，释放 CDC 口：
+
+   ```bash
+   mcu-agentd --non-interactive stop
+   ```
+
+   如果需要确认占用状态，只检查已绑定 selector 对应的设备节点，不枚举其它端口：
+
+   ```bash
+   lsof /dev/cu.usbmodemXXXX
+   ```
 
 6. 启动 Web App 预览并打开 `/connect`。浏览器 Web Serial 设备选择器需要人类选择 CDC 设备；Agent 不替代人类操作系统级 USB 选择器。
 
@@ -83,6 +93,6 @@ Next step: <next action>
 
 - `E_SELECTOR_MISSING`：停止，要求人类完成 selector 绑定。
 - `E_RESOURCE_BUSY`：报告占用者，不自动抢占。
-- 浏览器提示 port already open：确认 `mcu-agentd monitor` 已停止，再重新连接 Web Serial。
+- 浏览器提示 port already open：确认 `mcu-agentd monitor` 与当前项目 daemon 已停止，再重新连接 Web Serial。
 - Web Serial permission denied：重新点击连接并由人类在浏览器授权；Agent 不绕过浏览器权限模型。
 - WiFi PSK 不写入命令行、不写入日志、不截图展示；只在 Web App 表单中提交给设备。
