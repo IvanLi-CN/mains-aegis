@@ -30,6 +30,7 @@ import { FormEvent, useEffect, useMemo, useState, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { DeviceRecord, SafeSettingsState, SerialLogEntry, UpsStatus } from "../api/types";
 import { useDeviceRegistry } from "../device-registry/DeviceRegistry";
+import { isDemoSeed } from "../fixtures/mockDevices";
 import { isWebSerialSupported } from "../serial/transport";
 import { formatCurrent, formatPercent, formatTemp, formatVoltage, timeAgo } from "../utils/format";
 import { deviceSeverity, modeLabel, severityRank, type Severity } from "../utils/severity";
@@ -367,6 +368,7 @@ function ConnectPage() {
   const [busy, setBusy] = useState(false);
   const [usbBusy, setUsbBusy] = useState(false);
   const serialSupported = isWebSerialSupported();
+  const demoMode = isDemoSeed(new URLSearchParams(window.location.search).get("seed"));
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -436,9 +438,11 @@ function ConnectPage() {
               <button className="primary-button" type="button" disabled={usbBusy || !serialSupported} onClick={() => void onUsbConnect()}>
                 <Usb size={16} /> {usbBusy ? "Connecting" : "Connect USB"}
               </button>
-              <button className="secondary-button" type="button" onClick={onMockUsbConnect}>
-                <Terminal size={16} /> Mock USB
-              </button>
+              {demoMode ? (
+                <button className="secondary-button" type="button" onClick={onMockUsbConnect}>
+                  <Terminal size={16} /> Mock USB
+                </button>
+              ) : null}
             </div>
           </div>
           {usbMessage ? <p className="form-message" role="status" aria-live="polite">{usbMessage}</p> : null}
@@ -473,7 +477,9 @@ function ConnectPage() {
             </label>
             <div className="form-actions">
               <button className="primary-button" type="submit" disabled={busy}>{busy ? "Connecting" : "Add LAN"}</button>
-              <button className="secondary-button" type="button" onClick={resetDemo}>Reset demo fleet</button>
+              {demoMode ? (
+                <button className="secondary-button" type="button" onClick={resetDemo}>Reset demo fleet</button>
+              ) : null}
             </div>
           </form>
           {message ? (

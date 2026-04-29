@@ -59,7 +59,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   useEffect(() => {
     if (demoSeed) return;
     const targets = records
-      .filter((record) => record.target.transport !== "serial" || record.target.mock)
+      .filter((record) => record.target.transport !== "serial" && !record.target.mock)
       .map((record) => record.target);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(targets));
   }, [demoSeed, records]);
@@ -714,13 +714,12 @@ function loadInitialRecords(seed: DemoSeed | null): DeviceRecord[] {
   if (seed) return makeMockRecords(seed);
 
   const stored = localStorage.getItem(STORAGE_KEY);
-  if (!stored) return makeMockRecords("default");
+  if (!stored) return [];
 
   try {
     const targets = JSON.parse(stored) as DeviceTarget[];
-    if (!Array.isArray(targets)) return makeMockRecords("default");
-    return targets.map((target) => {
-      if (target.mock) return makeMockRecord(target);
+    if (!Array.isArray(targets)) return [];
+    return targets.filter((target) => !target.mock).map((target) => {
       return {
         target,
         identity: null,
@@ -741,7 +740,7 @@ function loadInitialRecords(seed: DemoSeed | null): DeviceRecord[] {
       };
     });
   } catch {
-    return makeMockRecords("default");
+    return [];
   }
 }
 
