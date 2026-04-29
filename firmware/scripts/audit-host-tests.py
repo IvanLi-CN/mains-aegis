@@ -24,6 +24,7 @@ ALLOWED = {
     "output_state.rs",
     "runtime_audio_recovery.rs",
     "tmp112.rs",
+    "usb_cdc_protocol.rs",
     "usb_pd/contract_tracker.rs",
     "usb_pd/mod.rs",
     "usb_pd/tests.rs",

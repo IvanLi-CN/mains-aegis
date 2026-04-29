@@ -2,7 +2,7 @@
 
 ## 目标
 
-Web 管理界面是 UPS 的浏览器侧只读运维台，首版负责设备发现、多设备实时状态查看、基础诊断与接口验证。界面不替代前面板小屏，也不提供远程写控制；所有数据先对齐设备侧 `v1` 只读 API 与 SSE。
+Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设备实时状态查看、基础诊断、接口验证与 USB CDC 安全设置。界面不替代前面板小屏；LAN HTTP/SSE 保持只读，USB CDC / Web Serial 是首个受限写入通道。
 
 设计基线使用根目录 `DESIGN.md` 的 Cohere 风格：白色编辑式主画布、深绿黑状态带、克制企业感、少量高信号色。管理端以任务效率为优先，使用紧凑网格、清晰状态标签、稳定表格和可扫描的数据层级。
 
@@ -39,10 +39,10 @@ Web 管理界面是 UPS 的浏览器侧只读运维台，首版负责设备发�
 ### 2. 连接与设备管理
 
 - 入口：`/connect`
-- 目的：维护浏览器当前关注的 UPS 清单，优先使用 `.local` hostname，也允许手动输入 IP 或 hostname。
-- 主要内容：新增连接目标、探活结果、设备身份摘要、网络状态、API 版本兼容提示、已保存设备列表。
-- 接口对接：`GET /api/v1/ping`、`GET /api/v1/identity`、`GET /api/v1/network`。
-- 空状态：提示用户输入 `mains-aegis-<short_id>.local` 或局域网 IP。
+- 目的：维护浏览器当前关注的 UPS 清单；USB CDC 用于安全设置与配网，LAN 用于只读状态。
+- 主要内容：USB CDC 连接入口、浏览器支持状态、串口授权/占用错误、LAN 新增连接目标、探活结果、设备身份摘要、网络状态、API 版本兼容提示、已保存设备列表。
+- 接口对接：USB CDC 使用 Web Serial JSONL frame；LAN 使用 `GET /api/v1/ping`、`GET /api/v1/identity`、`GET /api/v1/network`。
+- 空状态：提示用户连接 USB CDC 或输入 `mains-aegis-<short_id>.local` / 局域网 IP。
 
 ### 3. 单设备总览 Dashboard
 
@@ -84,13 +84,32 @@ Web 管理界面是 UPS 的浏览器侧只读运维台，首版负责设备发�
 - 接口对接：`GET /api/v1/identity`、`GET /api/v1/network`。
 - 结构：设备身份在上，网络状态在中，能力矩阵和固件构建信息在下。
 
-### 8. 接口调试
+### 8. 安全设置与 WiFi 配网
+
+- 入口：`/devices/:device_id/settings`
+- 目的：通过 USB CDC 对单台实机执行受限安全设置。
+- 可写范围：WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别。
+- Secret 规则：PSK 只在用户提交时通过 USB 写入固件 EEPROM，不在 UI、API payload、日志或 ack 中回显；提交后清空表单。固件 `net_http` 启用时会优先读取 EEPROM WiFi config，并在 USB 写入后更新运行时 WiFi 配置。
+- LAN 限制：HTTP/SSE 设备进入该页时只显示 USB required 状态，不提供写表单。
+- 日志：展示当前 USB session 的 structured log；开发期夹杂的 legacy plain serial line 会作为 `raw_serial` debug log 展示，替代 Web App 连接期间的 `mcu-agentd monitor` 并发需求。
+
+### 9. 接口调试
 
 - 入口：`/devices/:device_id/api`
 - 目的：为开发和 bench 调试提供最小 API 可视化，验证 JSON 和 SSE 是否工作。
-- 主要内容：endpoint 列表、最近一次响应、SSE 连接状态、错误 envelope 展示。
+- 主要内容：endpoint 列表、最近一次响应、SSE 连接状态、USB CDC protocol 状态、错误 envelope 展示、structured log。
 - 接口对接：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、status SSE。
 - 限制：只读请求，不提供任意 URL fetch，避免浏览器端变成不受控代理。
+
+## USB CDC / Web Serial 协议
+
+- Framing：LF 分隔 JSON frame。
+- Protocol：`mains-aegis.cdc.v1`。
+- Frame types：`hello`、`status`、`log`、`request`、`response`、`error`、`wifi_config`。
+- Web 写命令必须带 `request_id`，固件返回同 ID 的 `response` 或 `error`。
+- Safe requests：`get_identity`、`get_status`、`set_log_level`、`set_manual_charge_prefs`。
+- WiFi config：`{"type":"wifi_config","request_id":"...","op":"set","ssid":"...","psk":"..."}` 或 `op:"clear"`。
+- Error envelope：`{ code, message, retryable, details }`，与 HTTP API 错误形状一致。
 
 ## 应用结构
 
@@ -137,13 +156,14 @@ web/
 - `status`：所有运行态页面共享的实时快照。
 - `status-stream`：在线时使用 SSE；断开、409、503 或浏览器限制时退回定时 `GET /api/v1/status`。
 - `device registry`：浏览器侧维护多设备清单；设备侧首版不需要新增聚合 API。
+- `serial transport`：浏览器侧持有当前 session 的 `SerialPort`，解析 USB CDC JSONL frame，复用 `Identity`、`NetworkSummary`、`UpsStatus`，并把 write ack/error/log 映射回设备记录。
 - `error envelope`：所有页面统一渲染 `{ code, message, retryable, details }`，不要在组件里各自拼错误文案。
 
 ## 导航结构
 
 - 顶部：当前视图、设备数量、在线状态、全局告警摘要。
 - 群总览左侧导航：Fleet、Connect。
-- 单设备左侧导航：Overview、Power、Battery、Thermal、Device、API。
+- 单设备左侧导航：Overview、Power、Battery、Thermal、Device、Settings、API。
 - 内容区：宽屏使用 12 栅格；平板降为 2 列；手机保留顶部设备条并把侧边导航折叠为菜单。
 - 状态层级：`critical` 优先于 `warning`，`warning` 优先于 `info`，正常态只在必要位置显示。
 
@@ -161,6 +181,6 @@ web/
 - 应用目录：`web/`
 - 技术栈：Vite + React + TypeScript + Bun。
 - 默认数据：内置 6 台 mock UPS，覆盖 standby、assist、backup、warning、critical、offline。
-- 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、只读探活、SSE 订阅与轮询兜底。
-- 验证命令：`bun run web:check`、`bun run web:build`。
+- 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、LAN 只读探活、SSE 订阅与轮询兜底，以及当前 session 的 USB CDC transport。
+- 验证命令：`bun run web:check`、`bun run web:build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cd firmware && cargo +esp check --features web_serial`。
 - 纯前端 Demo：`bun run web:dev` 后访问正式路由，例如 `/`、`/?seed=empty`、`/?seed=large`、`/devices/mains-aegis-e4f5a6/battery?seed=default`。

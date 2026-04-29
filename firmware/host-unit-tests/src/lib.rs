@@ -16,6 +16,21 @@ compile_error!(
 
 extern crate self as esp_firmware;
 
+#[no_mangle]
+pub extern "Rust" fn _defmt_acquire() {}
+
+#[no_mangle]
+pub extern "Rust" fn _defmt_release() {}
+
+#[no_mangle]
+pub extern "Rust" fn _defmt_write(_bytes: &[u8]) {}
+
+#[no_mangle]
+pub extern "Rust" fn _defmt_timestamp(_fmt: defmt::Formatter<'_>) {}
+
+#[no_mangle]
+pub extern "Rust" fn _defmt_flush() {}
+
 pub mod time {
     pub use std::time::{Duration, Instant};
 }
@@ -74,6 +89,9 @@ pub mod net_logic;
 
 #[path = "../../src/net_bridge.rs"]
 pub mod net_bridge;
+
+#[path = "../../src/usb_cdc_protocol.rs"]
+pub mod usb_cdc_protocol;
 
 #[path = "../../build_support/wifi_env.rs"]
 pub mod wifi_env;

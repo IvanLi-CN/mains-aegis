@@ -1,19 +1,20 @@
-#[cfg(feature = "net_http")]
 use esp_firmware::net_types::NetworkUiSummary;
-#[cfg(feature = "net_http")]
 use esp_firmware::net_types::UpsStatusSnapshot;
 use esp_firmware::net_types::WifiSnapshot;
 use esp_firmware::output_state::{EnabledOutputs, OutputSelector};
 
 use crate::front_panel_scene::SelfCheckUiSnapshot;
-#[cfg(feature = "net_http")]
 use crate::front_panel_scene::{BmsResultKind, SelfCheckCommState, UpsMode};
 
-#[cfg(feature = "net_http")]
 pub fn current_network_summary() -> NetworkUiSummary {
     #[cfg(feature = "net_http")]
     {
         return esp_firmware::net::current_network_ui_summary();
+    }
+
+    #[cfg(not(feature = "net_http"))]
+    {
+        NetworkUiSummary::disabled()
     }
 }
 
@@ -41,7 +42,6 @@ pub fn publish_status_snapshot(snapshot: SelfCheckUiSnapshot) {
     }
 }
 
-#[cfg(feature = "net_http")]
 pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot {
     UpsStatusSnapshot {
         mode: mode_slug(snapshot.mode),
@@ -84,7 +84,6 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
     }
 }
 
-#[cfg(feature = "net_http")]
 fn mode_slug(mode: UpsMode) -> &'static str {
     match mode {
         UpsMode::Off => "off",
@@ -104,7 +103,6 @@ fn outputs_slug(outputs: EnabledOutputs) -> &'static str {
     }
 }
 
-#[cfg(feature = "net_http")]
 fn comm_state_slug(state: SelfCheckCommState) -> &'static str {
     match state {
         SelfCheckCommState::Pending => "pending",
@@ -115,7 +113,6 @@ fn comm_state_slug(state: SelfCheckCommState) -> &'static str {
     }
 }
 
-#[cfg(feature = "net_http")]
 fn bms_result_slug(kind: BmsResultKind) -> &'static str {
     match kind {
         BmsResultKind::Success => "success",

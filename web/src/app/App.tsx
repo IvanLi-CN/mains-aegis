@@ -10,27 +10,34 @@ import {
   Cpu,
   Gauge,
   Globe2,
+  KeyRound,
   LayoutGrid,
   Menu,
   PlugZap,
   RefreshCw,
   Search,
   Server,
+  Settings,
+  SlidersHorizontal,
+  Terminal,
   Thermometer,
+  Trash2,
+  Usb,
   Wifi,
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
-import type { DeviceRecord, UpsStatus } from "../api/types";
+import type { DeviceRecord, SafeSettingsState, SerialLogEntry, UpsStatus } from "../api/types";
 import { useDeviceRegistry } from "../device-registry/DeviceRegistry";
+import { isWebSerialSupported } from "../serial/transport";
 import { formatCurrent, formatPercent, formatTemp, formatVoltage, timeAgo } from "../utils/format";
 import { deviceSeverity, modeLabel, severityRank, type Severity } from "../utils/severity";
 
 type Route = {
   path: string;
   deviceId: string | null;
-  section: "fleet" | "connect" | "overview" | "power" | "battery" | "thermal" | "device" | "api";
+  section: "fleet" | "connect" | "overview" | "power" | "battery" | "thermal" | "device" | "settings" | "api";
 };
 
 type AppProps = {
@@ -43,6 +50,7 @@ const deviceSections = [
   { id: "battery", label: "Battery", icon: BatteryCharging },
   { id: "thermal", label: "Thermal", icon: Thermometer },
   { id: "device", label: "Device", icon: Cpu },
+  { id: "settings", label: "Settings", icon: Settings },
   { id: "api", label: "API", icon: Cable },
 ] as const;
 
@@ -122,6 +130,8 @@ function renderRoute(route: Route, records: DeviceRecord[], selected: DeviceReco
       return <ThermalPage record={selected} />;
     case "device":
       return <DeviceInfoPage record={selected} />;
+    case "settings":
+      return <SettingsPage record={selected} />;
     case "api":
       return <ApiDebugPage record={selected} />;
     default:
@@ -337,12 +347,26 @@ function DeviceCard({ record }: { record: DeviceRecord }) {
 }
 
 function ConnectPage() {
-  const { records, addDevice, removeDevice, refreshDevice, resetDemo } = useDeviceRegistry();
+  const {
+    records,
+    addDevice,
+    connectUsbSerialDevice,
+    attachMockUsbSerialDevice,
+    disconnectUsbSerialDevice,
+    removeDevice,
+    refreshDevice,
+    resetDemo,
+  } = useDeviceRegistry();
   const [target, setTarget] = useState("");
   const [alias, setAlias] = useState("");
   const [location, setLocation] = useState("");
+  const [usbAlias, setUsbAlias] = useState("");
+  const [usbLocation, setUsbLocation] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [usbMessage, setUsbMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [usbBusy, setUsbBusy] = useState(false);
+  const serialSupported = isWebSerialSupported();
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -360,52 +384,117 @@ function ConnectPage() {
     }
   }
 
+  async function onUsbConnect() {
+    setUsbBusy(true);
+    setUsbMessage(null);
+    const result = await connectUsbSerialDevice({ alias: usbAlias, location: usbLocation });
+    setUsbBusy(false);
+    if (result.ok) {
+      setUsbAlias("");
+      setUsbLocation("");
+      setUsbMessage(`USB connected ${result.record.target.alias}`);
+      navigate(deviceHref(result.record.target.deviceId, "settings"));
+    } else {
+      setUsbMessage(`${result.error?.code}: ${result.error?.message}`);
+    }
+  }
+
+  function onMockUsbConnect() {
+    const result = attachMockUsbSerialDevice();
+    if (result.ok) {
+      setUsbMessage(`USB demo attached ${result.record.target.alias}`);
+      navigate(deviceHref(result.record.target.deviceId, "settings"));
+    }
+  }
+
   return (
     <section className="page-flow connect-wide">
       <div className="section-heading">
         <h2>Connect devices</h2>
-        <p>Add UPS targets by `.local` hostname or IP. The console probes ping, identity, network, and status before saving.</p>
+        <p>USB CDC is the control path. LAN targets remain read-only status sources.</p>
       </div>
 
-      <form className="connect-form" onSubmit={onSubmit}>
-        <label>
-          Target
-          <input
-            name="device-target"
-            value={target}
-            onChange={(event) => setTarget(event.target.value)}
-            placeholder="mains-aegis-a1b2c3.local or 192.168.31.42"
-            required
-          />
-        </label>
-        <label>
-          Alias
-          <input name="device-alias" value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="Lab rack A" />
-        </label>
-        <label>
-          Location
-          <input name="device-location" value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Bench 1" />
-        </label>
-        <div className="form-actions">
-          <button className="primary-button" type="submit" disabled={busy}>{busy ? "Connecting" : "Add device"}</button>
-          <button className="secondary-button" type="button" onClick={resetDemo}>Reset demo fleet</button>
-        </div>
-      </form>
+      <div className="connect-grid" data-evidence-target="usb-connect">
+        <section className="connect-panel usb-panel">
+          <header className="connect-panel-header">
+            <div>
+              <h3><Usb size={18} /> USB CDC</h3>
+              <p>{serialSupported ? "Chromium Web Serial available" : "Web Serial unavailable in this browser"}</p>
+            </div>
+            <span className={`transport-badge ${serialSupported ? "serial" : "offline"}`}>{serialSupported ? "ready" : "unsupported"}</span>
+          </header>
+          <div className="connect-form compact">
+            <label>
+              Alias
+              <input name="usb-alias" value={usbAlias} onChange={(event) => setUsbAlias(event.target.value)} placeholder="Lab bench USB" />
+            </label>
+            <label>
+              Location
+              <input name="usb-location" value={usbLocation} onChange={(event) => setUsbLocation(event.target.value)} placeholder="Bench 1" />
+            </label>
+            <div className="form-actions">
+              <button className="primary-button" type="button" disabled={usbBusy || !serialSupported} onClick={() => void onUsbConnect()}>
+                <Usb size={16} /> {usbBusy ? "Connecting" : "Connect USB"}
+              </button>
+              <button className="secondary-button" type="button" onClick={onMockUsbConnect}>
+                <Terminal size={16} /> Mock USB
+              </button>
+            </div>
+          </div>
+          {usbMessage ? <p className="form-message" role="status" aria-live="polite">{usbMessage}</p> : null}
+        </section>
 
-      {message ? (
-        <p className="form-message" role="status" aria-live="polite">
-          {message}
-        </p>
-      ) : null}
+        <section className="connect-panel">
+          <header className="connect-panel-header">
+            <div>
+              <h3><Globe2 size={18} /> LAN status</h3>
+              <p>HTTP/SSE identity, network, and status probe</p>
+            </div>
+            <span className="transport-badge http">read-only</span>
+          </header>
+          <form className="connect-form compact" onSubmit={onSubmit}>
+            <label>
+              Target
+              <input
+                name="device-target"
+                value={target}
+                onChange={(event) => setTarget(event.target.value)}
+                placeholder="mains-aegis-a1b2c3.local or 192.168.31.42"
+                required
+              />
+            </label>
+            <label>
+              Alias
+              <input name="device-alias" value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="Lab rack A" />
+            </label>
+            <label>
+              Location
+              <input name="device-location" value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Bench 1" />
+            </label>
+            <div className="form-actions">
+              <button className="primary-button" type="submit" disabled={busy}>{busy ? "Connecting" : "Add LAN"}</button>
+              <button className="secondary-button" type="button" onClick={resetDemo}>Reset demo fleet</button>
+            </div>
+          </form>
+          {message ? (
+            <p className="form-message" role="status" aria-live="polite">
+              {message}
+            </p>
+          ) : null}
+        </section>
+      </div>
 
       <div className="table-list">
         {records.map((record) => (
           <div className="table-row" key={record.target.deviceId}>
             <div>
               <strong>{record.target.alias}</strong>
-              <span>{record.target.baseUrl}</span>
+              <span>{connectionEndpointLabel(record)}</span>
             </div>
             <div className="row-actions">
+              <span className={`transport-badge ${record.target.transport === "serial" ? "serial" : "http"}`}>
+                {record.target.transport === "serial" ? "USB" : "LAN"}
+              </span>
               <button
                 className="icon-button"
                 type="button"
@@ -415,6 +504,17 @@ function ConnectPage() {
               >
                 <RefreshCw size={16} />
               </button>
+              {record.target.transport === "serial" && record.serial?.connected ? (
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label={`Disconnect ${record.target.alias}`}
+                  title={`Disconnect ${record.target.alias}`}
+                  onClick={() => void disconnectUsbSerialDevice(record.target.deviceId)}
+                >
+                  <Cable size={16} />
+                </button>
+              ) : null}
               <button
                 className="icon-button"
                 type="button"
@@ -582,12 +682,195 @@ function DeviceInfoPage({ record }: { record: DeviceRecord }) {
   );
 }
 
+function SettingsPage({ record }: { record: DeviceRecord }) {
+  const { sendWifiConfig, clearWifiConfig, setSerialLogLevel, setManualChargePrefs } = useDeviceRegistry();
+  const settings = record.serial?.safeSettings;
+  const [ssid, setSsid] = useState(settings?.wifi_ssid ?? "");
+  const [psk, setPsk] = useState("");
+  const [logLevel, setLogLevel] = useState<SafeSettingsState["log_level"]>(settings?.log_level ?? "info");
+  const [manualPrefs, setManualPrefs] = useState<SafeSettingsState["manual_charge"]>(
+    settings?.manual_charge ?? { target: "full_100", speed: "ma_500", timer_h: 2 },
+  );
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const usbReady = record.target.transport === "serial" && Boolean(record.serial?.connected);
+
+  useEffect(() => {
+    if (!settings) return;
+    setLogLevel(settings.log_level);
+    setManualPrefs(settings.manual_charge);
+    if (settings.wifi_ssid) setSsid(settings.wifi_ssid);
+  }, [settings]);
+
+  async function onWifiSubmit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage(null);
+    const result = await sendWifiConfig(record.target.deviceId, { ssid, psk });
+    setBusy(false);
+    setPsk("");
+    setMessage(result.ok ? `WiFi credentials saved for ${ssid}` : `${result.error?.code}: ${result.error?.message}`);
+  }
+
+  async function onWifiClear() {
+    setBusy(true);
+    setMessage(null);
+    const result = await clearWifiConfig(record.target.deviceId);
+    setBusy(false);
+    if (result.ok) {
+      setSsid("");
+      setPsk("");
+      setMessage("WiFi credentials cleared");
+    } else {
+      setMessage(`${result.error?.code}: ${result.error?.message}`);
+    }
+  }
+
+  async function onLogLevel(nextLevel: SafeSettingsState["log_level"]) {
+    setLogLevel(nextLevel);
+    const result = await setSerialLogLevel(record.target.deviceId, nextLevel);
+    setMessage(result.ok ? `Log level set to ${nextLevel}` : `${result.error?.code}: ${result.error?.message}`);
+  }
+
+  async function onManualPrefsSubmit(event: FormEvent) {
+    event.preventDefault();
+    const result = await setManualChargePrefs(record.target.deviceId, manualPrefs);
+    setMessage(result.ok ? "Manual charge preferences updated" : `${result.error?.code}: ${result.error?.message}`);
+  }
+
+  if (!usbReady) {
+    return (
+      <section className="page-flow">
+        <DeviceStatusBand record={record} />
+        <section className="empty-state">
+          <Usb size={28} />
+          <h2>USB CDC required</h2>
+          <p>Safe settings and WiFi provisioning are only available through a connected USB CDC session.</p>
+          <button className="primary-button" type="button" onClick={() => navigate("/connect")}>
+            Connect USB
+          </button>
+        </section>
+      </section>
+    );
+  }
+
+  return (
+    <section className="page-flow" data-evidence-target="wifi-settings">
+      <DeviceStatusBand record={record} />
+      <div className="settings-layout">
+        <section className="info-panel settings-panel">
+          <header>
+            <Wifi size={18} />
+            <h2>WiFi provisioning</h2>
+          </header>
+          <form className="settings-form" onSubmit={onWifiSubmit}>
+            <label>
+              SSID
+              <input name="wifi-ssid" value={ssid} onChange={(event) => setSsid(event.target.value)} maxLength={32} required />
+            </label>
+            <label>
+              PSK
+              <input
+                name="wifi-psk"
+                value={psk}
+                onChange={(event) => setPsk(event.target.value)}
+                type="password"
+                minLength={8}
+                maxLength={63}
+                autoComplete="new-password"
+                required
+              />
+            </label>
+            <div className="secret-note"><KeyRound size={15} /> PSK is written over USB and cleared from the form after submit.</div>
+            <div className="form-actions">
+              <button className="primary-button" type="submit" disabled={busy || !ssid || psk.length < 8}>
+                Save WiFi
+              </button>
+              <button className="secondary-button" type="button" onClick={() => void onWifiClear()} disabled={busy}>
+                <Trash2 size={16} /> Clear
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section className="info-panel settings-panel">
+          <header>
+            <SlidersHorizontal size={18} />
+            <h2>Safe settings</h2>
+          </header>
+          <form className="settings-form" onSubmit={onManualPrefsSubmit}>
+            <SegmentedControl
+              label="Charge target"
+              value={manualPrefs.target}
+              options={[
+                ["pack_3v7", "3.7V"],
+                ["rsoc_80", "80%"],
+                ["full_100", "100%"],
+              ]}
+              onChange={(target) => setManualPrefs((current) => ({ ...current, target: target as SafeSettingsState["manual_charge"]["target"] }))}
+            />
+            <SegmentedControl
+              label="Charge speed"
+              value={manualPrefs.speed}
+              options={[
+                ["ma_100", "100mA"],
+                ["ma_500", "500mA"],
+                ["ma_1000", "1A"],
+              ]}
+              onChange={(speed) => setManualPrefs((current) => ({ ...current, speed: speed as SafeSettingsState["manual_charge"]["speed"] }))}
+            />
+            <SegmentedControl
+              label="Timer"
+              value={String(manualPrefs.timer_h)}
+              options={[
+                ["1", "1h"],
+                ["2", "2h"],
+                ["6", "6h"],
+              ]}
+              onChange={(timer) => setManualPrefs((current) => ({ ...current, timer_h: Number(timer) as 1 | 2 | 6 }))}
+            />
+            <button className="primary-button" type="submit">Apply prefs</button>
+          </form>
+        </section>
+
+        <section className="info-panel settings-panel">
+          <header>
+            <Terminal size={18} />
+            <h2>USB logs</h2>
+          </header>
+          <SegmentedControl
+            label="Log level"
+            value={logLevel}
+            options={[
+              ["error", "Error"],
+              ["warn", "Warn"],
+              ["info", "Info"],
+              ["debug", "Debug"],
+              ["trace", "Trace"],
+            ]}
+            onChange={(level) => void onLogLevel(level as SafeSettingsState["log_level"])}
+          />
+          <SerialLogsPanel logs={record.serial?.logs ?? []} />
+        </section>
+      </div>
+      {message ? <p className="form-message" role="status" aria-live="polite">{message}</p> : null}
+    </section>
+  );
+}
+
 function ApiDebugPage({ record }: { record: DeviceRecord }) {
   const payload = {
     identity: record.identity,
     network: record.network,
     status: record.status,
     error: record.error,
+    serial: record.serial
+      ? {
+          connected: record.serial.connected,
+          protocol: record.serial.protocol,
+          safeSettings: record.serial.safeSettings,
+        }
+      : null,
   };
   return (
     <section className="page-flow">
@@ -599,9 +882,11 @@ function ApiDebugPage({ record }: { record: DeviceRecord }) {
           <MetricLine label="Network" value="/api/v1/network" />
           <MetricLine label="Status" value="/api/v1/status" />
           <MetricLine label="SSE" value="Accept: text/event-stream" />
+          <MetricLine label="USB CDC" value={record.target.transport === "serial" ? "JSONL frames" : "not connected"} />
         </InfoPanel>
         <pre className="json-view">{JSON.stringify(payload, null, 2)}</pre>
       </div>
+      {record.serial ? <SerialLogsPanel logs={record.serial.logs} /> : null}
     </section>
   );
 }
@@ -658,6 +943,56 @@ function MetricLine({ label, value }: { label: string; value: string }) {
     <div className="metric-line">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function SegmentedControl({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: Array<[string, string]>;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="control-row">
+      <span>{label}</span>
+      <div className="segmented compact" aria-label={label}>
+        {options.map(([optionValue, optionLabel]) => (
+          <button
+            key={optionValue}
+            type="button"
+            className={value === optionValue ? "is-active" : ""}
+            onClick={() => onChange(optionValue)}
+          >
+            {optionLabel}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SerialLogsPanel({ logs }: { logs: SerialLogEntry[] }) {
+  const visibleLogs = logs.slice(-80).reverse();
+  return (
+    <div className="log-panel" data-evidence-target="structured-logs">
+      {visibleLogs.length > 0 ? (
+        visibleLogs.map((entry) => (
+          <div className={`log-row level-${entry.level}`} key={entry.id}>
+            <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
+            <strong>{entry.level}</strong>
+            <code>{entry.target}</code>
+            <p>{entry.message}</p>
+          </div>
+        ))
+      ) : (
+        <p className="panel-note">No structured USB logs in this session.</p>
+      )}
     </div>
   );
 }
@@ -760,6 +1095,13 @@ function connectionSummary(record: DeviceRecord): string {
   if (record.connectionState === "offline") return "Offline";
   if (record.network?.state === "connected" || record.status?.network.state === "connected") return "Online";
   return "Check connection";
+}
+
+function connectionEndpointLabel(record: DeviceRecord): string {
+  if (record.target.transport === "serial") {
+    return `${record.target.serialProtocol ?? record.serial?.protocol ?? "USB CDC"} · ${record.serial?.connected ? "connected" : "disconnected"}`;
+  }
+  return record.target.baseUrl;
 }
 
 function channelLabel(channel: UpsStatus["output"]["out_a"] | undefined): string {

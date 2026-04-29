@@ -1,4 +1,4 @@
-import type { DeviceRecord, DeviceTarget, Identity, NetworkSummary, UpsStatus } from "../api/types";
+import type { DeviceRecord, DeviceTarget, Identity, NetworkSummary, SafeSettingsState, UpsStatus } from "../api/types";
 
 type MockDefinition = {
   target: DeviceTarget;
@@ -295,8 +295,86 @@ export function getMockStatus(baseUrl: string): UpsStatus {
 }
 
 export function makeMockRecord(target: DeviceTarget): DeviceRecord {
+  if (target.transport === "serial") return makeMockUsbSerialRecord(target);
   const mock = findMock(target.baseUrl);
   return recordFromDefinition({ ...mock, target });
+}
+
+export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>): DeviceRecord {
+  const base = mockDefinitions[0];
+  const identity: Identity = {
+    ...base.identity,
+    device_id: targetOverride?.deviceId ?? "mains-aegis-usb-demo",
+    hostname: "mains-aegis-usb-demo",
+    hostname_fqdn: "mains-aegis-usb-demo.local",
+    short_id: "usb001",
+    network: {
+      ...base.network,
+      device_id: targetOverride?.deviceId ?? "mains-aegis-usb-demo",
+      hostname: "mains-aegis-usb-demo",
+      hostname_fqdn: "mains-aegis-usb-demo.local",
+      state: "idle",
+      ipv4: null,
+      gateway: null,
+      dns: null,
+      rssi_dbm: null,
+    },
+    capabilities: {
+      sse: false,
+      mdns: false,
+      dns_sd: false,
+      write_controls: true,
+    },
+  };
+  const target: DeviceTarget = {
+    deviceId: identity.device_id,
+    baseUrl: "serial:mock-usb-cdc",
+    alias: "USB demo CDC",
+    location: "Bench USB",
+    addedAt: now,
+    transport: "serial",
+    serialProtocol: "mains-aegis.cdc.v1",
+    mock: true,
+    ...targetOverride,
+  };
+  return {
+    target,
+    identity,
+    network: identity.network,
+    status: {
+      ...base.status,
+      network: {
+        state: "idle",
+        ipv4: null,
+        last_error: null,
+      },
+    },
+    connectionState: "online",
+    streamState: "streaming",
+    error: null,
+    lastUpdated: new Date().toISOString(),
+    serial: {
+      connected: true,
+      protocol: "mains-aegis.cdc.v1",
+      logs: [
+        {
+          id: "mock-usb-log-1",
+          timestamp: new Date().toISOString(),
+          level: "info",
+          target: "usb_cdc",
+          message: "mock USB CDC session ready",
+        },
+        {
+          id: "mock-usb-log-2",
+          timestamp: new Date().toISOString(),
+          level: "debug",
+          target: "status",
+          message: "status snapshot published over serial",
+        },
+      ],
+      safeSettings: defaultMockSafeSettings(),
+    },
+  };
 }
 
 function recordFromDefinition(mock: MockDefinition): DeviceRecord {
@@ -309,6 +387,19 @@ function recordFromDefinition(mock: MockDefinition): DeviceRecord {
     streamState: mock.connectionState === "online" ? "streaming" : "polling",
     error: mock.connectionState === "offline" ? { code: "link_lost", message: "device is offline", retryable: true, details: null } : null,
     lastUpdated: new Date().toISOString(),
+  };
+}
+
+function defaultMockSafeSettings(): SafeSettingsState {
+  return {
+    wifi_configured: false,
+    wifi_ssid: null,
+    log_level: "info",
+    manual_charge: {
+      target: "full_100",
+      speed: "ma_500",
+      timer_h: 2,
+    },
   };
 }
 

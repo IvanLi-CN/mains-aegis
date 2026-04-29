@@ -4,7 +4,7 @@
 #[cfg(feature = "net_http")]
 extern crate alloc;
 
-use core::cell::RefCell;
+use core::{cell::RefCell, fmt::Write as _};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -26,6 +26,17 @@ use embedded_hal_bus::i2c::RefCellDevice;
 use esp_backtrace as _;
 use esp_firmware::audio::{AudioCue, AudioManager, PLAYBACK_SAMPLE_RATE_HZ};
 use esp_firmware::usb_pd::UsbPdSinkManager;
+#[cfg(feature = "web_serial")]
+use esp_firmware::{
+    mdns_wire::{derive_device_identity, DeviceIdentity},
+    net_contract::{render_identity_json_with_write_controls, render_status_json, BuildInfo},
+    usb_cdc_protocol::{
+        parse_frame, render_error_json, render_hello_json, render_log_json,
+        render_protocol_error_json, render_response_json, render_status_frame_json,
+        render_wifi_config_ack_json, request_id_hint, LogLevel, UsbCdcFrame, UsbCdcLineBuffer,
+        UsbCdcRequest, WifiConfigCommand,
+    },
+};
 use esp_hal::clock::CpuClock;
 use esp_hal::dma::DmaError;
 use esp_hal::gpio::{
@@ -42,6 +53,8 @@ use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::spi::Mode as SpiMode;
 use esp_hal::time::{Duration, Instant, Rate};
 use esp_hal::timer::{systimer::SystemTimer, timg::TimerGroup};
+#[cfg(feature = "web_serial")]
+use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::Blocking;
 use esp_println as _;
 use runtime_audio_recovery::{RuntimeAudioRecoveryDecision, RuntimeAudioRecoveryState};
@@ -72,6 +85,15 @@ const FW_GIT_SHA: &str = env!("FW_GIT_SHA");
 const FW_SRC_HASH: &str = env!("FW_SRC_HASH");
 const FW_GIT_DIRTY: &str = env!("FW_GIT_DIRTY");
 const FW_BUILD_ID: &str = env!("FW_BUILD_ID");
+#[cfg(feature = "web_serial")]
+const WEB_SERIAL_BUILD_INFO: BuildInfo = BuildInfo {
+    package_version: env!("CARGO_PKG_VERSION"),
+    build_profile: env!("FW_BUILD_PROFILE"),
+    build_id: env!("FW_BUILD_ID"),
+    git_sha: env!("FW_GIT_SHA"),
+    src_hash: env!("FW_SRC_HASH"),
+    git_dirty: env!("FW_GIT_DIRTY"),
+};
 const USB_PD_FIXED_5V_ENABLED: bool = !cfg!(feature = "no-pd-sink-5v");
 const USB_PD_FIXED_9V_ENABLED: bool = !cfg!(feature = "no-pd-sink-9v");
 const USB_PD_FIXED_12V_ENABLED: bool = !cfg!(feature = "no-pd-sink-12v");
@@ -504,6 +526,12 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::_160MHz);
     let peripherals = esp_hal::init(config);
+    #[cfg(feature = "web_serial")]
+    let mut web_serial = UsbSerialJtag::new(peripherals.USB_DEVICE);
+    #[cfg(feature = "web_serial")]
+    let mut web_serial_lines = UsbCdcLineBuffer::<1024>::new();
+    #[cfg(feature = "web_serial")]
+    let web_serial_identity = derive_device_identity(esp_hal::efuse::Efuse::mac_address());
 
     #[cfg(feature = "net_http")]
     {
@@ -1404,7 +1432,21 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     power.update_usb_pd_state(initial_pd_state);
     #[cfg(feature = "net_http")]
     {
-        esp_firmware::net::spawn_wifi_and_http(&main_entry, peripherals.WIFI);
+        let usb_wifi_config = match power.read_web_serial_wifi_config() {
+            Ok(config) => {
+                if config.is_some() {
+                    esp_println::println!("net: usb wifi config loaded from eeprom");
+                    defmt::info!("net: usb wifi config loaded from eeprom");
+                }
+                config
+            }
+            Err(_) => {
+                esp_println::println!("net: usb wifi config load failed; using build credentials");
+                defmt::warn!("net: usb wifi config load failed; using build credentials");
+                None
+            }
+        };
+        esp_firmware::net::spawn_wifi_and_http(&main_entry, peripherals.WIFI, usb_wifi_config);
         yield_now().await;
     }
     let initial_snapshot = power.ui_snapshot();
@@ -1517,6 +1559,14 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             let now = Instant::now();
             let ui_snapshot = power.ui_snapshot();
             net_bridge::publish_status_snapshot(ui_snapshot);
+            #[cfg(feature = "web_serial")]
+            service_web_serial(
+                &mut web_serial,
+                &mut web_serial_lines,
+                &web_serial_identity,
+                &mut power,
+                ui_snapshot,
+            );
             front_panel.update_self_check_snapshot(ui_snapshot);
             front_panel.update_bms_activation_state(power.bms_activation_state());
             front_panel.set_attention_hold(front_panel_attention_hold(power.audio_signals()));
@@ -1581,6 +1631,201 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             yield_now().await;
         }
     }
+}
+
+#[cfg(feature = "web_serial")]
+fn service_web_serial<'d, I2C>(
+    serial: &mut UsbSerialJtag<'static, Blocking>,
+    lines: &mut UsbCdcLineBuffer<1024>,
+    identity: &DeviceIdentity,
+    power: &mut output::PowerManager<'d, I2C>,
+    ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
+) where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut rx = [0u8; 128];
+    let mut count = 0;
+    while count < rx.len() {
+        match serial.read_byte() {
+            Ok(byte) => {
+                rx[count] = byte;
+                count += 1;
+            }
+            Err(_) => break,
+        }
+    }
+    for byte in rx.iter().take(count) {
+        match lines.push_byte(*byte) {
+            Ok(Some(line)) => {
+                handle_web_serial_frame(serial, identity, power, ui_snapshot, line.as_str());
+            }
+            Ok(None) => {}
+            Err(err) => {
+                let mut frame = heapless::String::<512>::new();
+                render_protocol_error_json(&mut frame, None, err);
+                write_web_serial_line(serial, frame.as_str());
+            }
+        }
+    }
+}
+
+#[cfg(feature = "web_serial")]
+fn handle_web_serial_frame<'d, I2C>(
+    serial: &mut UsbSerialJtag<'static, Blocking>,
+    identity: &DeviceIdentity,
+    power: &mut output::PowerManager<'d, I2C>,
+    ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
+    line: &str,
+) where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut body = heapless::String::<4096>::new();
+    let mut frame = heapless::String::<4608>::new();
+    let status = net_bridge::build_status_snapshot(ui_snapshot);
+
+    match parse_frame(line) {
+        Ok(UsbCdcFrame::Hello { request_id }) => {
+            render_identity_json_with_write_controls(
+                &mut body,
+                identity,
+                net_bridge::current_wifi_snapshot(),
+                WEB_SERIAL_BUILD_INFO,
+                true,
+            );
+            render_hello_json(
+                &mut frame,
+                request_id.as_ref().map(|id| id.as_str()),
+                body.as_str(),
+            );
+            write_web_serial_line(serial, frame.as_str());
+            render_log_json(
+                &mut frame,
+                LogLevel::Info,
+                "usb_cdc",
+                "web serial session negotiated",
+            );
+            write_web_serial_line(serial, frame.as_str());
+        }
+        Ok(UsbCdcFrame::Request { request_id, op }) => match op {
+            UsbCdcRequest::GetIdentity => {
+                render_identity_json_with_write_controls(
+                    &mut body,
+                    identity,
+                    net_bridge::current_wifi_snapshot(),
+                    WEB_SERIAL_BUILD_INFO,
+                    true,
+                );
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
+            }
+            UsbCdcRequest::GetStatus => {
+                render_status_json(&mut body, status);
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
+                render_status_frame_json(&mut frame, body.as_str());
+                write_web_serial_line(serial, frame.as_str());
+            }
+            UsbCdcRequest::SetLogLevel(level) => {
+                let _ = write!(body, r#"{{"log_level":"{}"}}"#, level.as_str());
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
+                render_log_json(
+                    &mut frame,
+                    level,
+                    "usb_cdc",
+                    "log level updated for USB session",
+                );
+                write_web_serial_line(serial, frame.as_str());
+            }
+            UsbCdcRequest::SetManualChargePrefs(prefs) => {
+                power.set_web_serial_manual_charge_prefs(prefs);
+                let _ = body.push_str(r#"{"manual_charge_prefs":"updated"}"#);
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
+                render_log_json(
+                    &mut frame,
+                    LogLevel::Info,
+                    "manual_charge",
+                    "safe manual charge preferences updated over USB",
+                );
+                write_web_serial_line(serial, frame.as_str());
+            }
+        },
+        Ok(UsbCdcFrame::WifiConfig {
+            request_id,
+            command,
+        }) => match command {
+            WifiConfigCommand::Set(secret) => {
+                let ssid = secret.ssid.clone();
+                match power.write_web_serial_wifi_config(Some(&secret)) {
+                    Ok(()) => {
+                        #[cfg(feature = "net_http")]
+                        esp_firmware::net::set_usb_wifi_config(Some(secret.clone()));
+                        render_wifi_config_ack_json(
+                            &mut frame,
+                            request_id.as_str(),
+                            true,
+                            Some(ssid.as_str()),
+                        );
+                        write_web_serial_line(serial, frame.as_str());
+                        render_log_json(
+                            &mut frame,
+                            LogLevel::Info,
+                            "wifi_config",
+                            "WiFi credentials updated in EEPROM",
+                        );
+                        write_web_serial_line(serial, frame.as_str());
+                    }
+                    Err(_) => {
+                        render_error_json(
+                            &mut frame,
+                            Some(request_id.as_str()),
+                            "wifi_config_write_failed",
+                            "failed to persist WiFi credentials",
+                            true,
+                        );
+                        write_web_serial_line(serial, frame.as_str());
+                    }
+                }
+            }
+            WifiConfigCommand::Clear => match power.write_web_serial_wifi_config(None) {
+                Ok(()) => {
+                    #[cfg(feature = "net_http")]
+                    esp_firmware::net::set_usb_wifi_config(None);
+                    render_wifi_config_ack_json(&mut frame, request_id.as_str(), false, None);
+                    write_web_serial_line(serial, frame.as_str());
+                    render_log_json(
+                        &mut frame,
+                        LogLevel::Info,
+                        "wifi_config",
+                        "WiFi credentials cleared from EEPROM",
+                    );
+                    write_web_serial_line(serial, frame.as_str());
+                }
+                Err(_) => {
+                    render_error_json(
+                        &mut frame,
+                        Some(request_id.as_str()),
+                        "wifi_config_clear_failed",
+                        "failed to clear WiFi credentials",
+                        true,
+                    );
+                    write_web_serial_line(serial, frame.as_str());
+                }
+            },
+        },
+        Err(err) => {
+            let request_id = request_id_hint(line);
+            render_protocol_error_json(&mut frame, request_id.as_ref().map(|id| id.as_str()), err);
+            write_web_serial_line(serial, frame.as_str());
+        }
+    }
+}
+
+#[cfg(feature = "web_serial")]
+fn write_web_serial_line(serial: &mut UsbSerialJtag<'static, Blocking>, line: &str) {
+    let _ = serial.write(line.as_bytes());
+    let _ = serial.write(b"\n");
 }
 
 fn sync_runtime_audio(

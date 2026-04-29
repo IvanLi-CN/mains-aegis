@@ -72,6 +72,8 @@ cargo build --release --bin esp-firmware --features main-vout-19v
 cargo build --release --features force-min-charge
 # 仅在诊断阶段需要双地址探测时，显式打开该特性（默认只访问 0x0B）
 cargo build --release --features bms-dual-probe-diag
+# Web App USB CDC / Web Serial 安全设置通道
+cargo +esp check --features web_serial
 # TMP 硬件保护测试模式：关闭 MCU 主动散热与软件热降额/热关断，但保留 TMP/THERM_KILL_N 观测
 cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 ```
@@ -80,6 +82,27 @@ cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 
 > 备注：当前固件将 CPU 频率固定为 `160MHz`（early bring-up 更稳），避免上电初始化阶段的偶发异常影响验证。
 > 备注：本计划的音频素材已收敛为 PCM-only（`WAV(PCM16LE)`），固件侧不再包含 ADPCM 解码路径。
+
+## USB CDC / Web Serial 控制通道
+
+`web_serial` feature 会在 ESP32-S3 USB Serial/JTAG CDC 口上启用 Web App structured protocol。浏览器端使用 Web Serial 连接 CDC 设备；同一时刻该 CDC 口只能被一个消费者占用，因此 Web App 连接期间不并发使用 `mcu-agentd monitor`。
+
+协议口径：
+
+- Framing：LF 分隔 JSON frame。
+- Protocol：`mains-aegis.cdc.v1`。
+- Frame type：`hello`、`status`、`log`、`request`、`response`、`error`、`wifi_config`。
+- 每条 Web 写命令必须带 `request_id`；固件返回同 ID 的 ack 或 error。
+- Safe requests：`get_identity`、`get_status`、`set_log_level`、`set_manual_charge_prefs`。
+- WiFi config：`wifi_config op=set|clear`；`set` 写入 SSID/PSK，ack 不回显 PSK。
+- EEPROM：WiFi config record 从 `0x0160` 开始，占 4 个 32B block，含 magic/version/enabled/ssid_len/psk_len 和 CRC8。
+- `net_http` 同时启用时，启动会优先读取 EEPROM WiFi config；USB 配网写入成功后会更新运行时 WiFi 配置并触发重连，清除后回退到构建期 `MAINS_AEGIS_WIFI_*` 凭据。
+- 高风险写操作不在协议中实现：输出启停、故障清除、主动开始/停止充电等命令会被拒绝或不支持。
+
+开发期日志策略：
+
+- Web App 连接 USB CDC 时，structured `log` frame 进入 Web 日志面板。
+- 需要传统 monitor 时，先断开 Web App USB session，再使用 `mcu-agentd monitor esp`。
 
 ## Host 侧纯逻辑单测
 
