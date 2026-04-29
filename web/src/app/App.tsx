@@ -12,7 +12,9 @@ import {
   Globe2,
   KeyRound,
   LayoutGrid,
+  Maximize2,
   Menu,
+  Minimize2,
   PlugZap,
   RefreshCw,
   Search,
@@ -1006,14 +1008,27 @@ function SerialLogsPanel({ logs }: { logs: SerialLogEntry[] }) {
 }
 
 function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: SerialTraceEntry[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const [wrapLines, setWrapLines] = useState(true);
   const protocolFrames = trace.filter((entry) => entry.kind === "frame").length;
   const rawLines = trace.filter((entry) => entry.kind !== "frame").length;
   const visibleTrace = [...trace].reverse();
   return (
-    <section className="info-panel developer-console" data-evidence-target="usb-developer-console">
-      <header>
-        <Terminal size={18} />
-        <h2>USB Developer Console</h2>
+    <section className={`info-panel developer-console ${expanded ? "is-expanded" : ""} ${wrapLines ? "wrap-lines" : "no-wrap-lines"}`} data-evidence-target="usb-developer-console">
+      <header className="developer-console-header">
+        <div>
+          <Terminal size={18} />
+          <h2>USB Developer Console</h2>
+        </div>
+        <div className="developer-console-actions">
+          <label className="switch-control">
+            <input type="checkbox" checked={wrapLines} onChange={(event) => setWrapLines(event.target.checked)} />
+            <span>Wrap lines</span>
+          </label>
+          <button className="icon-button" type="button" onClick={() => setExpanded((current) => !current)} aria-label={expanded ? "Exit fullscreen console" : "Open fullscreen console"} title={expanded ? "Exit fullscreen" : "Fullscreen"}>
+            {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
+        </div>
       </header>
       <div className="developer-console-metrics">
         <MetricLine label="CDC records" value={String(trace.length)} />

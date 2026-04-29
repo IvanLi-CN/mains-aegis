@@ -954,6 +954,51 @@ a {
   gap: 14px;
 }
 
+.developer-console.is-expanded {
+  position: fixed;
+  z-index: 80;
+  inset: 16px;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  background: var(--color-panel);
+  box-shadow: var(--shadow-sidebar-panel);
+}
+
+.developer-console-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.developer-console-header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.developer-console-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.switch-control {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  gap: 8px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-pill);
+  padding: 4px 10px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.switch-control input {
+  accent-color: var(--color-primary);
+}
+
 .developer-console-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -968,11 +1013,15 @@ a {
 
 .trace-panel {
   display: grid;
-  max-height: 560px;
+  max-height: 720px;
   overflow: auto;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-card);
   background: var(--color-code-surface);
+}
+
+.developer-console.is-expanded .trace-panel {
+  max-height: none;
 }
 
 .trace-row {
@@ -1020,8 +1069,20 @@ a {
   margin: 0;
   border-top: 1px solid color-mix(in oklch, var(--color-code-text) 10%, transparent);
   padding-top: 8px;
+}
+
+.developer-console.wrap-lines .trace-row pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.developer-console.no-wrap-lines .trace-row pre {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.developer-console.is-expanded .trace-row pre {
+  max-height: 320px;
 }
 
 .json-view {
@@ -1139,6 +1200,16 @@ a {
 
   .trace-row {
     grid-template-columns: 72px 36px minmax(64px, 1fr);
+  }
+
+  .developer-console.is-expanded {
+    inset: 8px;
+  }
+
+  .developer-console-header,
+  .developer-console-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .trace-row em,

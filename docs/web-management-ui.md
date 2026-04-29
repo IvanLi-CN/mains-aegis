@@ -91,7 +91,7 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 - 可写范围：WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别。
 - Secret 规则：PSK 只在用户提交时通过 USB 写入固件 EEPROM，不在 UI、API payload、日志或 ack 中回显；提交后清空表单。固件 `net_http` 启用时会优先读取 EEPROM WiFi config，并在 USB 写入后更新运行时 WiFi 配置。
 - LAN 限制：HTTP/SSE 设备进入该页时只显示 USB required 状态，不提供写表单。
-- 日志：Settings 页保留简洁 USB structured logs，同时提供 USB Developer Console。Developer Console 展示当前 Web Serial session 内 Web 可见的完整 CDC trace：Web 发出的 `tx` frame、固件返回的 `rx` frame、structured `log`、`status`、`hello`、`response`、`error`，以及夹杂在 CDC 行流中的 raw / ignored 非协议行。WiFi PSK 在 trace 中脱敏。完整 `defmt` monitor 仍需断开 Web Serial 后用 `mcu-agentd monitor` 解码。
+- 日志：Settings 页保留简洁 USB structured logs，同时提供 USB Developer Console。Developer Console 展示当前 Web Serial session 内 Web 可见的完整 CDC trace：Web 发出的 `tx` frame、固件返回的 `rx` frame、structured `log`、`status`、`hello`、`response`、`error`，以及夹杂在 CDC 行流中的 raw / ignored 非协议行。控制台支持展开为全屏大界面，并允许用户切换 payload 自动折行或横向滚动。WiFi PSK 在 trace 中脱敏。完整 `defmt` monitor 仍需断开 Web Serial 后用 `mcu-agentd monitor` 解码。
 
 ### 9. 接口调试
 
