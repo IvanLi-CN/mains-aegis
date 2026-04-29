@@ -979,20 +979,27 @@ a {
 
 .developer-console-actions {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: stretch;
+  gap: 6px;
 }
 
 .switch-control {
   display: inline-flex;
   align-items: center;
-  min-height: 32px;
+  min-height: 36px;
+  height: 36px;
   gap: 8px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-pill);
-  padding: 4px 10px;
+  padding: 0 10px;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: 11px;
+}
+
+.developer-console-actions .icon-button {
+  width: 36px;
+  min-height: 36px;
+  height: 36px;
 }
 
 .switch-control input {
