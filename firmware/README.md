@@ -10,6 +10,7 @@
 - Agent 禁止枚举候选端口（例如 `mcu-agentd selector list <MCU_ID>`、列 `/dev/*`）。
 - Agent 禁止切换端口（例如 `mcu-agentd selector set <MCU_ID> <PORT>`），也不得自行“换一个端口试试”。
 - 除端口枚举/切换外，Agent 可以执行其他 `mcu-agentd` 命令（含 `flash` / `monitor` / `erase` / `reset` 等），且不需要额外确认或频繁读取当前端口。
+- Agent 真机协作流程见 `docs/hardware-collaboration-workflow.md`；首次使用某个 worktree 前需要人类完成 selector 绑定。
 
 ## 目录结构（契约）
 
