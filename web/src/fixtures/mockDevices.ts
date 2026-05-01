@@ -1,4 +1,4 @@
-import type { DeviceRecord, DeviceTarget, Identity, NetworkSummary, SafeSettingsState, UpsStatus } from "../api/types";
+import type { DeviceRecord, DeviceTarget, Identity, NetworkSummary, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 
 type MockDefinition = {
   target: DeviceTarget;
@@ -338,6 +338,405 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
     mock: true,
     ...targetOverride,
   };
+  const serialBase = Date.now() - 240_000;
+  const serialTimestamp = (seconds: number) => new Date(serialBase + seconds * 1000).toISOString();
+  const serialLogs: SerialLogEntry[] = [
+    {
+      id: "mock-usb-log-1",
+      timestamp: serialTimestamp(3),
+      level: "info",
+      target: "usb_cdc",
+      message: "mock USB CDC session ready",
+    },
+    {
+      id: "mock-usb-log-2",
+      timestamp: serialTimestamp(8),
+      level: "debug",
+      target: "protocol",
+      message: "hello capabilities negotiated",
+    },
+    {
+      id: "mock-usb-log-3",
+      timestamp: serialTimestamp(14),
+      level: "trace",
+      target: "status",
+      message: "status snapshot published over serial",
+    },
+    {
+      id: "mock-usb-log-4",
+      timestamp: serialTimestamp(22),
+      level: "debug",
+      target: "telemetry",
+      message: "output A sample vbus=12064mV current=20mA",
+    },
+    {
+      id: "mock-usb-log-5",
+      timestamp: serialTimestamp(29),
+      level: "info",
+      target: "settings",
+      message: "safe setting manual_charge target=rsoc_80 queued",
+    },
+    {
+      id: "mock-usb-log-6",
+      timestamp: serialTimestamp(36),
+      level: "warn",
+      target: "wifi",
+      message: "wifi credentials pending reboot to apply",
+    },
+    {
+      id: "mock-usb-log-7",
+      timestamp: serialTimestamp(45),
+      level: "debug",
+      target: "eeprom",
+      message: "wifi config crc updated",
+    },
+    {
+      id: "mock-usb-log-8",
+      timestamp: serialTimestamp(52),
+      level: "info",
+      target: "network",
+      message: "station state idle until reboot",
+    },
+    {
+      id: "mock-usb-log-9",
+      timestamp: serialTimestamp(63),
+      level: "error",
+      target: "protocol",
+      message: "rejected unsafe output_control request in demo session",
+    },
+    {
+      id: "mock-usb-log-10",
+      timestamp: serialTimestamp(76),
+      level: "trace",
+      target: "serial_rx",
+      message: "ignored legacy console line",
+    },
+  ];
+  serialLogs.push(
+    ...Array.from({ length: 72 }, (_, index): SerialLogEntry => {
+      const level = (["trace", "debug", "info", "debug", "warn", "trace"] as const)[index % 6];
+      const target = (["status", "telemetry", "charger", "network", "wifi", "serial_rx"] as const)[index % 6];
+      const sample = index + 1;
+      return {
+        id: `mock-usb-log-generated-${sample}`,
+        timestamp: serialTimestamp(90 + index * 2),
+        level,
+        target,
+        message:
+          target === "telemetry"
+            ? `stream sample ${sample} out_a=${12040 + (index % 18)}mV current=${18 + (index % 9)}mA`
+            : target === "wifi"
+              ? `wifi station check ${sample} state=idle`
+              : target === "serial_rx"
+                ? `legacy console line ${sample} ignored`
+                : `${target} loop sample ${sample} ok`,
+      };
+    }),
+  );
+  const serialTrace: SerialTraceEntry[] = [
+    {
+      id: "mock-usb-trace-1",
+      timestamp: serialTimestamp(1),
+      direction: "tx",
+      kind: "frame",
+      frameType: "hello",
+      requestId: "web-demo-hello",
+      target: null,
+      summary: "protocol handshake",
+      payload: "{\"type\":\"hello\",\"request_id\":\"web-demo-hello\"}",
+    },
+    {
+      id: "mock-usb-trace-2",
+      timestamp: serialTimestamp(3),
+      direction: "rx",
+      kind: "frame",
+      frameType: "hello",
+      requestId: "web-demo-hello",
+      target: null,
+      summary: "capabilities negotiated",
+      payload: "{\"type\":\"hello\",\"request_id\":\"web-demo-hello\",\"protocol\":\"mains-aegis.cdc.v1\",\"capabilities\":{\"status_stream\":true,\"structured_logs\":true,\"wifi_config\":true}}",
+    },
+    {
+      id: "mock-usb-trace-3",
+      timestamp: serialTimestamp(8),
+      direction: "rx",
+      kind: "frame",
+      frameType: "log",
+      requestId: null,
+      target: "protocol",
+      summary: "hello capabilities negotiated",
+      payload: "{\"type\":\"log\",\"level\":\"debug\",\"target\":\"protocol\",\"message\":\"hello capabilities negotiated\"}",
+    },
+    {
+      id: "mock-usb-trace-4",
+      timestamp: serialTimestamp(12),
+      direction: "tx",
+      kind: "frame",
+      frameType: "request",
+      requestId: "web-status-001",
+      target: "status",
+      summary: "request current status",
+      payload: "{\"type\":\"request\",\"request_id\":\"web-status-001\",\"target\":\"status.get\"}",
+    },
+    {
+      id: "mock-usb-trace-5",
+      timestamp: serialTimestamp(14),
+      direction: "rx",
+      kind: "frame",
+      frameType: "status",
+      requestId: "web-status-001",
+      target: null,
+      summary: "status snapshot standby battery 67%",
+      payload: "{\"type\":\"status\",\"request_id\":\"web-status-001\",\"mode\":\"standby\",\"battery\":{\"soc_pct\":67},\"output\":{\"active\":\"both\"}}",
+    },
+    {
+      id: "mock-usb-trace-6",
+      timestamp: serialTimestamp(22),
+      direction: "rx",
+      kind: "raw",
+      frameType: null,
+      requestId: null,
+      target: null,
+      summary: "raw CDC line",
+      payload: "[INFO ] telemetry ch=out_a vbus_mv=12064 current_ma=20",
+    },
+    {
+      id: "mock-usb-trace-7",
+      timestamp: serialTimestamp(29),
+      direction: "tx",
+      kind: "frame",
+      frameType: "request",
+      requestId: "web-settings-002",
+      target: "settings",
+      summary: "apply manual charge preference",
+      payload: "{\"type\":\"request\",\"request_id\":\"web-settings-002\",\"target\":\"settings.safe.update\",\"manual_charge\":{\"target\":\"rsoc_80\",\"speed\":\"ma_500\",\"timer\":\"h_2\"}}",
+    },
+    {
+      id: "mock-usb-trace-8",
+      timestamp: serialTimestamp(31),
+      direction: "rx",
+      kind: "frame",
+      frameType: "response",
+      requestId: "web-settings-002",
+      target: "settings",
+      summary: "manual charge preference accepted",
+      payload: "{\"type\":\"response\",\"request_id\":\"web-settings-002\",\"ok\":true,\"target\":\"settings.safe.update\"}",
+    },
+    {
+      id: "mock-usb-trace-9",
+      timestamp: serialTimestamp(36),
+      direction: "tx",
+      kind: "frame",
+      frameType: "wifi_config",
+      requestId: "web-wifi-003",
+      target: "wifi",
+      summary: "write WiFi credentials",
+      payload: "{\"type\":\"wifi_config\",\"request_id\":\"web-wifi-003\",\"ssid\":\"Lab-UPS\",\"psk\":\"***redacted***\"}",
+    },
+    {
+      id: "mock-usb-trace-10",
+      timestamp: serialTimestamp(39),
+      direction: "rx",
+      kind: "frame",
+      frameType: "response",
+      requestId: "web-wifi-003",
+      target: "wifi",
+      summary: "wifi config stored without PSK echo",
+      payload: "{\"type\":\"response\",\"request_id\":\"web-wifi-003\",\"ok\":true,\"target\":\"wifi_config\",\"ssid\":\"Lab-UPS\"}",
+    },
+    {
+      id: "mock-usb-trace-11",
+      timestamp: serialTimestamp(45),
+      direction: "rx",
+      kind: "frame",
+      frameType: "log",
+      requestId: null,
+      target: "eeprom",
+      summary: "wifi config crc updated",
+      payload: "{\"type\":\"log\",\"level\":\"debug\",\"target\":\"eeprom\",\"message\":\"wifi config crc updated\"}",
+    },
+    {
+      id: "mock-usb-trace-12",
+      timestamp: serialTimestamp(52),
+      direction: "rx",
+      kind: "frame",
+      frameType: "log",
+      requestId: null,
+      target: "network",
+      summary: "station state idle until reboot",
+      payload: "{\"type\":\"log\",\"level\":\"info\",\"target\":\"network\",\"message\":\"station state idle until reboot\"}",
+    },
+    {
+      id: "mock-usb-trace-13",
+      timestamp: serialTimestamp(63),
+      direction: "tx",
+      kind: "frame",
+      frameType: "request",
+      requestId: "web-unsafe-004",
+      target: "output",
+      summary: "unsafe output control blocked",
+      payload: "{\"type\":\"request\",\"request_id\":\"web-unsafe-004\",\"target\":\"output_control\",\"action\":\"enable\"}",
+    },
+    {
+      id: "mock-usb-trace-14",
+      timestamp: serialTimestamp(64),
+      direction: "rx",
+      kind: "frame",
+      frameType: "error",
+      requestId: "web-unsafe-004",
+      target: "output",
+      summary: "unsafe request rejected",
+      payload: "{\"type\":\"error\",\"request_id\":\"web-unsafe-004\",\"code\":\"unsafe_operation\",\"message\":\"output control is not available over Web Serial\"}",
+    },
+    {
+      id: "mock-usb-trace-15",
+      timestamp: serialTimestamp(76),
+      direction: "rx",
+      kind: "ignored",
+      frameType: null,
+      requestId: null,
+      target: null,
+      summary: "ignored legacy console line",
+      payload: "ets Jul 29 2019 12:21:46 rst:0x1 boot:0x13",
+    },
+    {
+      id: "mock-usb-trace-16",
+      timestamp: serialTimestamp(84),
+      direction: "rx",
+      kind: "raw",
+      frameType: null,
+      requestId: null,
+      target: null,
+      summary: "raw CDC line",
+      payload: "[DEBUG] heap_free=183224 loop_ms=4 serial_rx=ok",
+    },
+  ];
+  serialTrace.push(
+    ...Array.from({ length: 120 }, (_, index): SerialTraceEntry => {
+      const sample = index + 1;
+      const sequence = sample + 16;
+      const timestamp = serialTimestamp(90 + index);
+      const requestId = `web-stream-${String(sample).padStart(3, "0")}`;
+      switch (index % 8) {
+        case 0:
+          return {
+            id: `mock-usb-trace-generated-${sequence}`,
+            timestamp,
+            direction: "rx",
+            kind: "frame",
+            frameType: "status",
+            requestId,
+            target: null,
+            summary: `status stream sample ${sample}`,
+            payload: JSON.stringify({
+              type: "status",
+              request_id: requestId,
+              mode: "standby",
+              battery: { soc_pct: 67 - (index % 4) },
+              output: { active: "both", out_a_mv: 12040 + (index % 18), out_a_ma: 18 + (index % 9) },
+            }),
+          };
+        case 1:
+          return {
+            id: `mock-usb-trace-generated-${sequence}`,
+            timestamp,
+            direction: "rx",
+            kind: "frame",
+            frameType: "log",
+            requestId: null,
+            target: "telemetry",
+            summary: `telemetry log sample ${sample}`,
+            payload: JSON.stringify({
+              type: "log",
+              level: index % 16 === 1 ? "warn" : "debug",
+              target: "telemetry",
+              message: `out_a=${12040 + (index % 18)}mV current=${18 + (index % 9)}mA`,
+            }),
+          };
+        case 2:
+          return {
+            id: `mock-usb-trace-generated-${sequence}`,
+            timestamp,
+            direction: "rx",
+            kind: "raw",
+            frameType: null,
+            requestId: null,
+            target: null,
+            summary: "raw CDC telemetry line",
+            payload: `[INFO ] telemetry sample=${sample} ch=out_a vbus_mv=${12040 + (index % 18)} current_ma=${18 + (index % 9)}`,
+          };
+        case 3:
+          return {
+            id: `mock-usb-trace-generated-${sequence}`,
+            timestamp,
+            direction: "tx",
+            kind: "frame",
+            frameType: "request",
+            requestId,
+            target: "status",
+            summary: `poll status request ${sample}`,
+            payload: JSON.stringify({ type: "request", request_id: requestId, target: "status.get" }),
+          };
+        case 4:
+          return {
+            id: `mock-usb-trace-generated-${sequence}`,
+            timestamp,
+            direction: "rx",
+            kind: "frame",
+            frameType: "response",
+            requestId,
+            target: "status",
+            summary: `poll status response ${sample}`,
+            payload: JSON.stringify({ type: "response", request_id: requestId, ok: true, target: "status.get" }),
+          };
+        case 5:
+          return {
+            id: `mock-usb-trace-generated-${sequence}`,
+            timestamp,
+            direction: "rx",
+            kind: "ignored",
+            frameType: null,
+            requestId: null,
+            target: null,
+            summary: "ignored legacy console line",
+            payload: `rst:0x1 boot:0x13 legacy diagnostic sample=${sample}`,
+          };
+        case 6:
+          return {
+            id: `mock-usb-trace-generated-${sequence}`,
+            timestamp,
+            direction: "tx",
+            kind: "frame",
+            frameType: "request",
+            requestId,
+            target: "settings",
+            summary: `safe settings dry-run ${sample}`,
+            payload: JSON.stringify({
+              type: "request",
+              request_id: requestId,
+              target: "settings.safe.update",
+              display: { log_level: sample % 3 === 0 ? "trace" : "debug" },
+            }),
+          };
+        default:
+          return {
+            id: `mock-usb-trace-generated-${sequence}`,
+            timestamp,
+            direction: "rx",
+            kind: "frame",
+            frameType: index % 24 === 7 ? "error" : "response",
+            requestId,
+            target: "settings",
+            summary: index % 24 === 7 ? `settings validation warning ${sample}` : `safe settings accepted ${sample}`,
+            payload: JSON.stringify(
+              index % 24 === 7
+                ? { type: "error", request_id: requestId, code: "demo_validation", message: "demo warning sample" }
+                : { type: "response", request_id: requestId, ok: true, target: "settings.safe.update" },
+            ),
+          };
+      }
+    }),
+  );
   return {
     target,
     identity,
@@ -357,57 +756,8 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
     serial: {
       connected: true,
       protocol: "mains-aegis.cdc.v1",
-      logs: [
-        {
-          id: "mock-usb-log-1",
-          timestamp: new Date().toISOString(),
-          level: "info",
-          target: "usb_cdc",
-          message: "mock USB CDC session ready",
-        },
-        {
-          id: "mock-usb-log-2",
-          timestamp: new Date().toISOString(),
-          level: "debug",
-          target: "status",
-          message: "status snapshot published over serial",
-        },
-      ],
-      trace: [
-        {
-          id: "mock-usb-trace-1",
-          timestamp: new Date().toISOString(),
-          direction: "tx",
-          kind: "frame",
-          frameType: "hello",
-          requestId: "web-demo-hello",
-          target: null,
-          summary: "protocol handshake",
-          payload: "{\"type\":\"hello\",\"request_id\":\"web-demo-hello\"}",
-        },
-        {
-          id: "mock-usb-trace-2",
-          timestamp: new Date().toISOString(),
-          direction: "rx",
-          kind: "frame",
-          frameType: "log",
-          requestId: null,
-          target: "usb_cdc",
-          summary: "mock USB CDC session ready",
-          payload: "{\"type\":\"log\",\"level\":\"info\",\"target\":\"usb_cdc\",\"message\":\"mock USB CDC session ready\"}",
-        },
-        {
-          id: "mock-usb-trace-3",
-          timestamp: new Date().toISOString(),
-          direction: "rx",
-          kind: "raw",
-          frameType: null,
-          requestId: null,
-          target: null,
-          summary: "raw CDC line",
-          payload: "[INFO ] telemetry ch=out_a vbus_mv=12064 current_ma=20",
-        },
-      ],
+      logs: serialLogs,
+      trace: serialTrace,
       safeSettings: defaultMockSafeSettings(),
     },
   };

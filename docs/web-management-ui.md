@@ -40,8 +40,8 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 
 - 入口：`/connect`
 - 目的：维护浏览器当前关注的 UPS 清单；USB CDC 用于安全设置与配网，LAN 用于只读状态。
-- 主要内容：USB CDC 连接入口、浏览器支持状态、串口授权/占用错误、LAN 新增连接目标、探活结果、设备身份摘要、网络状态、API 版本兼容提示、已保存设备列表。
-- 接口对接：USB CDC 使用 Web Serial JSONL frame；LAN 使用 `GET /api/v1/ping`、`GET /api/v1/identity`、`GET /api/v1/network`。
+- 主要内容：USB CDC 连接入口、本地 USB HTTP Adapter 连接入口、浏览器支持状态、串口授权/占用错误、LAN 新增连接目标、探活结果、设备身份摘要、网络状态、API 版本兼容提示、已保存设备列表。
+- 接口对接：USB CDC 使用 Web Serial JSONL frame；本地 Adapter 使用 `http://127.0.0.1:30080` 风格的 localhost HTTP；LAN 使用 `GET /api/v1/ping`、`GET /api/v1/identity`、`GET /api/v1/network`。
 - 空状态：提示用户连接 USB CDC 或输入 `mains-aegis-<short_id>.local` / 局域网 IP。
 
 ### 3. 单设备总览 Dashboard
@@ -91,13 +91,14 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 - 可写范围：WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别。
 - Secret 规则：PSK 只在用户提交时通过 USB 写入固件 EEPROM，不在 UI、API payload、日志或 ack 中回显；提交后清空表单。固件 `net_http` 启用时会优先读取 EEPROM WiFi config，并在 USB 写入后更新运行时 WiFi 配置。
 - LAN 限制：HTTP/SSE 设备进入该页时只显示 USB required 状态，不提供写表单。
-- 日志：Settings 页保留简洁 USB structured logs，同时提供 USB Developer Console。Developer Console 展示当前 Web Serial session 内 Web 可见的完整 CDC trace：Web 发出的 `tx` frame、固件返回的 `rx` frame、structured `log`、`status`、`hello`、`response`、`error`，以及夹杂在 CDC 行流中的 raw / ignored 非协议行。控制台支持展开为全屏大界面，并允许用户切换 payload 自动折行或横向滚动。WiFi PSK 在 trace 中脱敏。完整 `defmt` monitor 仍需断开 Web Serial 后用 `mcu-agentd monitor` 解码。
+- 本地 Adapter：通过 Rust 适配层把 USB CDC 转成 localhost HTTP 后，Web App 可使用同一 Settings 表单；Adapter 仍然独占 CDC，但日志与 trace 通过 `/api/v1/serial/session` 呈现在 USB Console。
+- 日志：Settings 页提供 USB Console。USB Console 展示当前 Web Serial 或本地 Adapter session 内 Web 可见的 CDC trace：Web 发出的 `tx` frame、固件返回的 `rx` frame、structured `log`、`status`、`hello`、`response`、`error`，以及夹杂在 CDC 行流中的 raw / ignored 非协议行。控制台支持等级过滤、方向过滤、关键词搜索高亮、虚拟滚动、全屏查看，并允许用户切换 payload 自动折行或横向滚动。WiFi PSK 在 trace 中脱敏。完整 `defmt` monitor 仍需断开 CDC owner 后用 `mcu-agentd monitor` 解码。
 
 ### 9. 接口调试
 
 - 入口：`/devices/:device_id/api`
 - 目的：为开发和 bench 调试提供最小 API 可视化，验证 JSON 和 SSE 是否工作。
-- 主要内容：endpoint 列表、最近一次响应、SSE 连接状态、USB CDC protocol 状态、错误 envelope 展示、structured log 与 USB Developer Console。
+- 主要内容：endpoint 列表、最近一次响应、SSE 连接状态、USB CDC protocol 状态、错误 envelope 展示、structured log 与 USB Console。
 - 接口对接：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、status SSE。
 - 限制：只读请求，不提供任意 URL fetch，避免浏览器端变成不受控代理。
 
@@ -157,6 +158,7 @@ web/
 - `status-stream`：在线时使用 SSE；断开、409、503 或浏览器限制时退回定时 `GET /api/v1/status`。
 - `device registry`：浏览器侧维护多设备清单；设备侧首版不需要新增聚合 API。
 - `serial transport`：浏览器侧持有当前 session 的 `SerialPort`，解析 USB CDC JSONL frame，复用 `Identity`、`NetworkSummary`、`UpsStatus`，并把 write ack/error/log 映射回设备记录。
+- `local adapter transport`：Rust adapter 持有 USB CDC，Web/App/CLI 通过 localhost HTTP 读取 identity/status/network、提交 safe settings，并通过 `/api/v1/serial/session` 读取 bounded tail structured logs 与 CDC trace，避免 Web 页面反复搬运完整环形缓冲。
 - `error envelope`：所有页面统一渲染 `{ code, message, retryable, details }`，不要在组件里各自拼错误文案。
 
 ## 导航结构
@@ -181,6 +183,7 @@ web/
 - 应用目录：`web/`
 - 技术栈：Vite + React + TypeScript + Bun。
 - 默认数据：内置 6 台 mock UPS，覆盖 standby、assist、backup、warning、critical、offline。
-- 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、LAN 只读探活、SSE 订阅与轮询兜底，以及当前 session 的 USB CDC transport。
-- 验证命令：`bun run web:check`、`bun run web:build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cd firmware && cargo +esp check --features web_serial`。
+- 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、LAN 只读探活、SSE 订阅与轮询兜底、当前 session 的 Web Serial USB CDC transport，以及本地 USB HTTP Adapter transport。
+- 验证命令：`bun run web:check`、`bun run web:build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cargo test --manifest-path tools/mains-aegis-usb-http-adapter/Cargo.toml`、`cd firmware && cargo +esp check --features web_serial`。
+- 本地适配层：运行时使用 `cargo run --manifest-path tools/mains-aegis-usb-http-adapter/Cargo.toml -- --port <serial-path> --bind 127.0.0.1:30080`。
 - 纯前端 Demo：`bun run web:dev` 后访问正式路由，例如 `/`、`/?seed=empty`、`/?seed=large`、`/devices/mains-aegis-e4f5a6/battery?seed=default`。

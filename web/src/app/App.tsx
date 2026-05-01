@@ -28,9 +28,10 @@ import {
   Wifi,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState, type SVGProps } from "react";
+import { FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { DeviceRecord, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { useDeviceRegistry } from "../device-registry/DeviceRegistry";
 import { isDemoSeed } from "../fixtures/mockDevices";
 import { isWebSerialSupported } from "../serial/transport";
@@ -178,6 +179,10 @@ function navigate(path: string) {
 
 function deviceHref(deviceId: string, section: string) {
   return section === "overview" ? `/devices/${encodeURIComponent(deviceId)}` : `/devices/${encodeURIComponent(deviceId)}/${section}`;
+}
+
+function deviceDefaultHref(record: DeviceRecord) {
+  return deviceHref(record.target.deviceId, record.target.transport === "serial" || record.target.transport === "adapter" ? "settings" : "overview");
 }
 
 function NavLink({ href, active, icon: Icon, label }: { href: string; active: boolean; icon: LucideIcon; label: string }) {
@@ -353,6 +358,7 @@ function ConnectPage() {
   const {
     records,
     addDevice,
+    addLocalAdapterDevice,
     connectUsbSerialDevice,
     attachMockUsbSerialDevice,
     disconnectUsbSerialDevice,
@@ -365,10 +371,15 @@ function ConnectPage() {
   const [location, setLocation] = useState("");
   const [usbAlias, setUsbAlias] = useState("");
   const [usbLocation, setUsbLocation] = useState("");
+  const [adapterTarget, setAdapterTarget] = useState("127.0.0.1:30080");
+  const [adapterAlias, setAdapterAlias] = useState("");
+  const [adapterLocation, setAdapterLocation] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [usbMessage, setUsbMessage] = useState<string | null>(null);
+  const [adapterMessage, setAdapterMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [usbBusy, setUsbBusy] = useState(false);
+  const [adapterBusy, setAdapterBusy] = useState(false);
   const serialSupported = isWebSerialSupported();
   const demoMode = isDemoSeed(new URLSearchParams(window.location.search).get("seed"));
 
@@ -400,6 +411,22 @@ function ConnectPage() {
       navigate(deviceHref(result.record.target.deviceId, "settings"));
     } else {
       setUsbMessage(`${result.error?.code}: ${result.error?.message}`);
+    }
+  }
+
+  async function onAdapterSubmit(event: FormEvent) {
+    event.preventDefault();
+    setAdapterBusy(true);
+    setAdapterMessage(null);
+    const result = await addLocalAdapterDevice({ target: adapterTarget, alias: adapterAlias, location: adapterLocation });
+    setAdapterBusy(false);
+    if (result.ok) {
+      setAdapterAlias("");
+      setAdapterLocation("");
+      setAdapterMessage(`Local adapter connected ${result.record.target.alias}`);
+      navigate(deviceHref(result.record.target.deviceId, "settings"));
+    } else {
+      setAdapterMessage(`${result.error?.code}: ${result.error?.message}`);
     }
   }
 
@@ -450,6 +477,42 @@ function ConnectPage() {
           {usbMessage ? <p className="form-message" role="status" aria-live="polite">{usbMessage}</p> : null}
         </section>
 
+        <section className="connect-panel adapter-panel">
+          <header className="connect-panel-header">
+            <div>
+              <h3><Server size={18} /> Local USB Adapter</h3>
+              <p>Rust HTTP bridge for Web, App, and CLI clients</p>
+            </div>
+            <span className="transport-badge adapter">localhost</span>
+          </header>
+          <form className="connect-form compact" onSubmit={onAdapterSubmit}>
+            <label>
+              Adapter URL
+              <input
+                name="adapter-target"
+                value={adapterTarget}
+                onChange={(event) => setAdapterTarget(event.target.value)}
+                placeholder="127.0.0.1:30080"
+                required
+              />
+            </label>
+            <label>
+              Alias
+              <input name="adapter-alias" value={adapterAlias} onChange={(event) => setAdapterAlias(event.target.value)} placeholder="Lab bench adapter" />
+            </label>
+            <label>
+              Location
+              <input name="adapter-location" value={adapterLocation} onChange={(event) => setAdapterLocation(event.target.value)} placeholder="Bench 1" />
+            </label>
+            <div className="form-actions">
+              <button className="primary-button" type="submit" disabled={adapterBusy}>
+                <Server size={16} /> {adapterBusy ? "Connecting" : "Connect Adapter"}
+              </button>
+            </div>
+          </form>
+          {adapterMessage ? <p className="form-message" role="status" aria-live="polite">{adapterMessage}</p> : null}
+        </section>
+
         <section className="connect-panel">
           <header className="connect-panel-header">
             <div>
@@ -495,13 +558,22 @@ function ConnectPage() {
       <div className="table-list">
         {records.map((record) => (
           <div className="table-row" key={record.target.deviceId}>
-            <div>
+            <button
+              className="table-row-main"
+              type="button"
+              onClick={() => navigate(deviceDefaultHref(record))}
+              aria-label={`Open ${record.target.alias}`}
+            >
               <strong>{record.target.alias}</strong>
               <span>{connectionEndpointLabel(record)}</span>
-            </div>
+            </button>
             <div className="row-actions">
-              <span className={`transport-badge ${record.target.transport === "serial" ? "serial" : "http"}`}>
-                {record.target.transport === "serial" ? "USB" : "LAN"}
+              <span
+                className={`transport-badge ${
+                  record.target.transport === "serial" ? "serial" : record.target.transport === "adapter" ? "adapter" : "http"
+                }`}
+              >
+                {record.target.transport === "serial" ? "USB" : record.target.transport === "adapter" ? "Adapter" : "LAN"}
               </span>
               <button
                 className="icon-button"
@@ -691,21 +763,19 @@ function DeviceInfoPage({ record }: { record: DeviceRecord }) {
 }
 
 function SettingsPage({ record }: { record: DeviceRecord }) {
-  const { sendWifiConfig, clearWifiConfig, setSerialLogLevel, setManualChargePrefs } = useDeviceRegistry();
+  const { sendWifiConfig, clearWifiConfig, setManualChargePrefs } = useDeviceRegistry();
   const settings = record.serial?.safeSettings;
   const [ssid, setSsid] = useState(settings?.wifi_ssid ?? "");
   const [psk, setPsk] = useState("");
-  const [logLevel, setLogLevel] = useState<SafeSettingsState["log_level"]>(settings?.log_level ?? "info");
   const [manualPrefs, setManualPrefs] = useState<SafeSettingsState["manual_charge"]>(
     settings?.manual_charge ?? { target: "full_100", speed: "ma_500", timer_h: 2 },
   );
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const usbReady = record.target.transport === "serial" && Boolean(record.serial?.connected);
+  const usbReady = (record.target.transport === "serial" || record.target.transport === "adapter") && Boolean(record.serial?.connected);
 
   useEffect(() => {
     if (!settings) return;
-    setLogLevel(settings.log_level);
     setManualPrefs(settings.manual_charge);
     if (settings.wifi_ssid) setSsid(settings.wifi_ssid);
   }, [settings]);
@@ -734,12 +804,6 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
     }
   }
 
-  async function onLogLevel(nextLevel: SafeSettingsState["log_level"]) {
-    setLogLevel(nextLevel);
-    const result = await setSerialLogLevel(record.target.deviceId, nextLevel);
-    setMessage(result.ok ? `Log level set to ${nextLevel}` : `${result.error?.code}: ${result.error?.message}`);
-  }
-
   async function onManualPrefsSubmit(event: FormEvent) {
     event.preventDefault();
     const result = await setManualChargePrefs(record.target.deviceId, manualPrefs);
@@ -752,8 +816,8 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
         <DeviceStatusBand record={record} />
         <section className="empty-state">
           <Usb size={28} />
-          <h2>USB CDC required</h2>
-          <p>Safe settings and WiFi provisioning are only available through a connected USB CDC session.</p>
+          <h2>USB control path required</h2>
+          <p>Safe settings and WiFi provisioning require Web Serial or the local USB HTTP adapter.</p>
           <button className="primary-button" type="button" onClick={() => navigate("/connect")}>
             Connect USB
           </button>
@@ -765,7 +829,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   return (
     <section className="page-flow" data-evidence-target="wifi-settings">
       <DeviceStatusBand record={record} />
-      <div className="settings-layout">
+      <div className="settings-layout settings-layout-balanced">
         <section className="info-panel settings-panel">
           <header>
             <Wifi size={18} />
@@ -841,25 +905,6 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
           </form>
         </section>
 
-        <section className="info-panel settings-panel">
-          <header>
-            <Terminal size={18} />
-            <h2>USB logs</h2>
-          </header>
-          <SegmentedControl
-            label="Log level"
-            value={logLevel}
-            options={[
-              ["error", "Error"],
-              ["warn", "Warn"],
-              ["info", "Info"],
-              ["debug", "Debug"],
-              ["trace", "Trace"],
-            ]}
-            onChange={(level) => void onLogLevel(level as SafeSettingsState["log_level"])}
-          />
-          <SerialLogsPanel logs={record.serial?.logs ?? []} />
-        </section>
       </div>
       <UsbDeveloperConsole logs={record.serial?.logs ?? []} trace={record.serial?.trace ?? []} />
       {message ? <p className="form-message" role="status" aria-live="polite">{message}</p> : null}
@@ -895,7 +940,6 @@ function ApiDebugPage({ record }: { record: DeviceRecord }) {
         </InfoPanel>
         <pre className="json-view">{JSON.stringify(payload, null, 2)}</pre>
       </div>
-      {record.serial ? <SerialLogsPanel logs={record.serial.logs} /> : null}
       {record.serial ? <UsbDeveloperConsole logs={record.serial.logs} trace={record.serial.trace} /> : null}
     </section>
   );
@@ -987,22 +1031,111 @@ function SegmentedControl({
   );
 }
 
-function SerialLogsPanel({ logs }: { logs: SerialLogEntry[] }) {
-  const visibleLogs = logs.slice(-80).reverse();
+type TraceLevelFilter = "all" | "error" | "warn" | "info" | "debug" | "trace";
+type TraceDirectionFilter = "all" | SerialTraceEntry["direction"];
+
+const traceLevelRank: Record<Exclude<TraceLevelFilter, "all">, number> = {
+  error: 0,
+  warn: 1,
+  info: 2,
+  debug: 3,
+  trace: 4,
+};
+
+function traceEntryLevel(entry: SerialTraceEntry): Exclude<TraceLevelFilter, "all"> {
+  if (entry.frameType === "error") return "error";
+  if (entry.kind === "ignored") return "trace";
+  const bracketLevel = entry.payload.match(/^\[(ERROR|WARN|INFO|DEBUG|TRACE)\s*\]/i)?.[1]?.toLowerCase();
+  if (bracketLevel && bracketLevel in traceLevelRank) return bracketLevel as Exclude<TraceLevelFilter, "all">;
+  try {
+    const parsed = JSON.parse(entry.payload) as { level?: unknown };
+    if (typeof parsed.level === "string" && parsed.level in traceLevelRank) return parsed.level as Exclude<TraceLevelFilter, "all">;
+  } catch {
+    // Payloads can be plain boot logs or legacy console text.
+  }
+  if (entry.kind === "raw") return "debug";
+  return "info";
+}
+
+function traceSearchText(entry: SerialTraceEntry, level: string) {
+  return [entry.direction, level, entry.kind, entry.frameType, entry.requestId, entry.target, entry.summary, entry.payload].filter(Boolean).join(" ").toLowerCase();
+}
+
+function HighlightText({ value, query }: { value: string; query: string }) {
+  const needle = query.trim();
+  if (!needle) return <>{value}</>;
+  const lowerValue = value.toLowerCase();
+  const lowerNeedle = needle.toLowerCase();
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  let matchIndex = lowerValue.indexOf(lowerNeedle);
+  while (matchIndex >= 0) {
+    if (matchIndex > cursor) parts.push(value.slice(cursor, matchIndex));
+    parts.push(<mark key={`${matchIndex}-${cursor}`}>{value.slice(matchIndex, matchIndex + needle.length)}</mark>);
+    cursor = matchIndex + needle.length;
+    matchIndex = lowerValue.indexOf(lowerNeedle, cursor);
+  }
+  if (cursor < value.length) parts.push(value.slice(cursor));
+  return <>{parts}</>;
+}
+
+function TraceFilterTabs<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: Array<[T, string]>;
+  onChange: (value: T) => void;
+}) {
   return (
-    <div className="log-panel" data-evidence-target="structured-logs">
-      {visibleLogs.length > 0 ? (
-        visibleLogs.map((entry) => (
-          <div className={`log-row level-${entry.level}`} key={entry.id}>
-            <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
-            <strong>{entry.level}</strong>
-            <code>{entry.target}</code>
-            <p>{entry.message}</p>
-          </div>
-        ))
-      ) : (
-        <p className="panel-note">No structured USB logs in this session.</p>
-      )}
+    <div className="trace-filter-group">
+      <span className="trace-filter-label">{label}</span>
+      <div className="trace-filter-tabs" aria-label={label}>
+        {options.map(([optionValue, optionLabel]) => (
+          <button key={optionValue} className={value === optionValue ? "is-active" : ""} type="button" onClick={() => onChange(optionValue)}>
+            {optionLabel}
+          </button>
+        ))}
+      </div>
+      <TraceSelectControl label={label} value={value} options={options} onChange={onChange} />
+    </div>
+  );
+}
+
+function TraceSelectControl<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+  className,
+}: {
+  label: string;
+  value: T;
+  options: Array<[T, string]>;
+  onChange: (value: T) => void;
+  className?: string;
+}) {
+  const labelId = useId();
+  return (
+    <div className={`trace-select-control${className ? ` ${className}` : ""}`}>
+      <span id={labelId}>{label}</span>
+      <Select value={value} onValueChange={(nextValue) => onChange(nextValue as T)}>
+        <SelectTrigger aria-labelledby={labelId}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {options.map(([optionValue, optionLabel]) => (
+              <SelectItem key={optionValue} value={optionValue}>
+                {optionLabel}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
     </div>
   );
 }
@@ -1010,24 +1143,176 @@ function SerialLogsPanel({ logs }: { logs: SerialLogEntry[] }) {
 function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: SerialTraceEntry[] }) {
   const [expanded, setExpanded] = useState(false);
   const [wrapLines, setWrapLines] = useState(true);
+  const [traceMode, setTraceMode] = useState<"raw" | "parsed" | "compare">("compare");
+  const [levelFilter, setLevelFilter] = useState<TraceLevelFilter>("all");
+  const [directionFilter, setDirectionFilter] = useState<TraceDirectionFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [traceScrollTop, setTraceScrollTop] = useState(0);
+  const [traceViewportHeight, setTraceViewportHeight] = useState(720);
+  const [measuredTraceHeights, setMeasuredTraceHeights] = useState<Record<string, number>>({});
+  const [tracePinnedToBottom, setTracePinnedToBottom] = useState(true);
+  const tracePanelRef = useRef<HTMLDivElement | null>(null);
   const protocolFrames = trace.filter((entry) => entry.kind === "frame").length;
   const rawLines = trace.filter((entry) => entry.kind !== "frame").length;
-  const visibleTrace = [...trace].reverse();
+  const visibleTrace = trace;
+  const traceModeOptions: Array<["raw" | "parsed" | "compare", string]> = [
+    ["raw", "Raw"],
+    ["parsed", "Parsed"],
+    ["compare", "Compare"],
+  ];
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredTrace = useMemo(
+    () =>
+      visibleTrace.filter((entry) => {
+        const level = traceEntryLevel(entry);
+        const matchesLevel = levelFilter === "all" || traceLevelRank[level] <= traceLevelRank[levelFilter];
+        const matchesDirection = directionFilter === "all" || entry.direction === directionFilter;
+        const matchesSearch = !normalizedQuery || traceSearchText(entry, level).includes(normalizedQuery);
+        return matchesLevel && matchesDirection && matchesSearch;
+      }),
+    [directionFilter, levelFilter, normalizedQuery, visibleTrace],
+  );
+  const estimatedTraceHeight = traceMode === "compare" ? (wrapLines ? 128 : 112) : wrapLines ? 72 : 64;
+  const traceHeightKey = (entry: SerialTraceEntry) => `${traceMode}:${wrapLines ? "wrap" : "nowrap"}:${entry.id}`;
+  const traceLayout = useMemo(() => {
+    const offsets: number[] = [];
+    let totalHeight = 0;
+    for (const entry of filteredTrace) {
+      offsets.push(totalHeight);
+      totalHeight += measuredTraceHeights[traceHeightKey(entry)] ?? estimatedTraceHeight;
+    }
+    return { offsets, totalHeight };
+  }, [estimatedTraceHeight, filteredTrace, measuredTraceHeights, traceMode, wrapLines]);
+  const overscanPx = estimatedTraceHeight * 8;
+  const virtualTop = Math.max(0, traceScrollTop - overscanPx);
+  const virtualBottom = traceScrollTop + traceViewportHeight + overscanPx;
+  let virtualStart = 0;
+  while (
+    virtualStart < filteredTrace.length &&
+    traceLayout.offsets[virtualStart] + (measuredTraceHeights[traceHeightKey(filteredTrace[virtualStart])] ?? estimatedTraceHeight) < virtualTop
+  ) {
+    virtualStart += 1;
+  }
+  let virtualEnd = virtualStart;
+  while (virtualEnd < filteredTrace.length && traceLayout.offsets[virtualEnd] < virtualBottom) {
+    virtualEnd += 1;
+  }
+  const virtualTrace = filteredTrace.slice(virtualStart, virtualEnd);
+  useLayoutEffect(() => {
+    setTracePinnedToBottom(true);
+  }, [directionFilter, levelFilter, normalizedQuery, traceMode, wrapLines]);
+
+  useLayoutEffect(() => {
+    const panel = tracePanelRef.current;
+    if (!panel) return;
+    const maxScrollTop = Math.max(0, traceLayout.totalHeight - traceViewportHeight);
+    const nextScrollTop = tracePinnedToBottom ? maxScrollTop : Math.min(panel.scrollTop, maxScrollTop);
+    if (panel.scrollTop !== nextScrollTop) panel.scrollTop = nextScrollTop;
+    if (traceScrollTop !== nextScrollTop) setTraceScrollTop(nextScrollTop);
+  }, [traceLayout.totalHeight, tracePinnedToBottom, traceScrollTop, traceViewportHeight]);
+
+  useEffect(() => {
+    const panel = tracePanelRef.current;
+    if (!panel) return;
+    const updateViewportHeight = () => setTraceViewportHeight(panel.clientHeight || 720);
+    updateViewportHeight();
+    const observer = new ResizeObserver(updateViewportHeight);
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [expanded]);
+
+  function measureTraceItem(entry: SerialTraceEntry, node: HTMLDivElement | null) {
+    if (!node) return;
+    const key = traceHeightKey(entry);
+    const measuredHeight = Math.ceil(node.getBoundingClientRect().height);
+    if (!measuredHeight) return;
+    setMeasuredTraceHeights((current) => (current[key] === measuredHeight ? current : { ...current, [key]: measuredHeight }));
+  }
+
+  const renderRawRow = (entry: SerialTraceEntry, key: string, className = `trace-row kind-${entry.kind}`) => (
+    <div className={className} key={key}>
+      <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
+      <strong>{entry.direction}</strong>
+      <code>raw</code>
+      <em>{entry.requestId ?? entry.target ?? "--"}</em>
+      <p><HighlightText value={entry.kind === "frame" ? "raw JSONL frame" : entry.summary} query={searchQuery} /></p>
+      <pre><HighlightText value={entry.payload} query={searchQuery} /></pre>
+    </div>
+  );
+  const renderParsedRow = (entry: SerialTraceEntry, key: string, className = `trace-row kind-${entry.kind}`) => (
+    <div className={className} key={key}>
+      <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
+      <strong>{entry.direction}</strong>
+      <code>{entry.frameType ?? entry.kind}</code>
+      <em>{entry.requestId ?? entry.target ?? "--"}</em>
+      <p><HighlightText value={entry.kind === "frame" ? entry.summary : "unparsed raw CDC line"} query={searchQuery} /></p>
+      <pre><HighlightText value={entry.kind === "frame" ? `${entry.frameType ?? "frame"} ${entry.requestId ?? entry.target ?? ""}`.trim() : entry.payload} query={searchQuery} /></pre>
+    </div>
+  );
+  const renderTraceEntry = (entry: SerialTraceEntry) => {
+    if (traceMode === "raw") return renderRawRow(entry, entry.id);
+    if (traceMode === "parsed") return renderParsedRow(entry, entry.id);
+    return (
+      <div className={`trace-compare-group kind-${entry.kind}`} key={entry.id}>
+        {renderParsedRow(entry, `${entry.id}-parsed`)}
+        {renderRawRow(entry, `${entry.id}-raw`, "trace-row trace-row-original kind-raw")}
+      </div>
+    );
+  };
+
   return (
     <section className={`info-panel developer-console ${expanded ? "is-expanded" : ""} ${wrapLines ? "wrap-lines" : "no-wrap-lines"}`} data-evidence-target="usb-developer-console">
       <header className="developer-console-header">
-        <div>
+        <div className="developer-console-title">
           <Terminal size={18} />
-          <h2>USB Developer Console</h2>
+          <h2>USB Console</h2>
         </div>
         <div className="developer-console-actions">
-          <label className="switch-control">
-            <input type="checkbox" checked={wrapLines} onChange={(event) => setWrapLines(event.target.checked)} />
-            <span>Wrap lines</span>
+          <TraceSelectControl label="View" value={traceMode} options={traceModeOptions} onChange={setTraceMode} className="trace-mode-select" />
+          <div className="trace-mode-tabs compact" aria-label="Trace view mode">
+            {traceModeOptions.map(([mode, label]) => (
+              <button key={mode} className={traceMode === mode ? "is-active" : ""} type="button" onClick={() => setTraceMode(mode as "raw" | "parsed" | "compare")}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <TraceFilterTabs<TraceLevelFilter>
+            label="Level"
+            value={levelFilter}
+            options={[
+              ["all", "All"],
+              ["error", "Error"],
+              ["warn", "Warn+"],
+              ["info", "Info+"],
+              ["debug", "Debug+"],
+              ["trace", "Trace+"],
+            ]}
+            onChange={setLevelFilter}
+          />
+          <TraceFilterTabs<TraceDirectionFilter>
+            label="Direction"
+            value={directionFilter}
+            options={[
+              ["all", "All"],
+              ["rx", "RX"],
+              ["tx", "TX"],
+            ]}
+            onChange={setDirectionFilter}
+          />
+          <label className="trace-search">
+            <Search size={14} />
+            <input type="search" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search logs" aria-label="Search USB console logs" />
           </label>
-          <button className="icon-button" type="button" onClick={() => setExpanded((current) => !current)} aria-label={expanded ? "Exit fullscreen console" : "Open fullscreen console"} title={expanded ? "Exit fullscreen" : "Fullscreen"}>
-            {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-          </button>
+          <span className="trace-filter-count">{filteredTrace.length} shown</span>
+          <div className="developer-console-ops">
+            <label className="switch-control">
+              <input type="checkbox" checked={wrapLines} onChange={(event) => setWrapLines(event.target.checked)} />
+              <span>Wrap lines</span>
+            </label>
+            <button className="icon-button" type="button" onClick={() => setExpanded((current) => !current)} aria-label={expanded ? "Exit fullscreen console" : "Open fullscreen console"} title={expanded ? "Exit fullscreen" : "Fullscreen"}>
+              {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            </button>
+          </div>
         </div>
       </header>
       <div className="developer-console-metrics">
@@ -1036,20 +1321,31 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
         <MetricLine label="Structured logs" value={String(logs.length)} />
         <MetricLine label="Raw / ignored" value={String(rawLines)} />
       </div>
-      <div className="trace-panel">
-        {visibleTrace.length > 0 ? (
-          visibleTrace.map((entry) => (
-            <div className={`trace-row kind-${entry.kind}`} key={entry.id}>
-              <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
-              <strong>{entry.direction}</strong>
-              <code>{entry.frameType ?? entry.kind}</code>
-              <em>{entry.requestId ?? entry.target ?? "--"}</em>
-              <p>{entry.summary}</p>
-              <pre>{entry.payload}</pre>
-            </div>
-          ))
+      <div
+        className="trace-panel is-virtualized"
+        ref={tracePanelRef}
+        onScroll={(event) => {
+          const panel = event.currentTarget;
+          const maxScrollTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
+          setTracePinnedToBottom(maxScrollTop - panel.scrollTop < 24);
+          setTraceScrollTop(panel.scrollTop);
+        }}
+      >
+        {filteredTrace.length > 0 ? (
+          <div className="trace-virtual-spacer" style={{ height: traceLayout.totalHeight }}>
+            {virtualTrace.map((entry, index) => (
+              <div
+                className="trace-virtual-item"
+                key={entry.id}
+                ref={(node) => measureTraceItem(entry, node)}
+                style={{ transform: `translateY(${traceLayout.offsets[virtualStart + index]}px)` }}
+              >
+                {renderTraceEntry(entry)}
+              </div>
+            ))}
+          </div>
         ) : (
-          <p className="panel-note">No CDC records in this session.</p>
+          <p className="panel-note">No CDC records match the current filters.</p>
         )}
       </div>
     </section>
@@ -1159,6 +1455,9 @@ function connectionSummary(record: DeviceRecord): string {
 function connectionEndpointLabel(record: DeviceRecord): string {
   if (record.target.transport === "serial") {
     return `${record.target.serialProtocol ?? record.serial?.protocol ?? "USB CDC"} · ${record.serial?.connected ? "connected" : "disconnected"}`;
+  }
+  if (record.target.transport === "adapter") {
+    return `${record.target.baseUrl} · USB adapter ${record.serial?.connected ? "connected" : "disconnected"}`;
   }
   return record.target.baseUrl;
 }

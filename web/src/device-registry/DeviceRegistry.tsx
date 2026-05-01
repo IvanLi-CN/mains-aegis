@@ -1,5 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { getStatus, normalizeBaseUrl, probeDevice, toErrorEnvelope } from "../api/client";
+import {
+  clearAdapterWifiConfig,
+  getAdapterSerialSession,
+  getStatus,
+  normalizeBaseUrl,
+  probeDevice,
+  sendAdapterWifiConfig,
+  setAdapterLogLevel,
+  setAdapterManualChargePrefs,
+  toErrorEnvelope,
+  type AdapterSerialSession,
+} from "../api/client";
 import { subscribeStatusStream, type StatusStream } from "../api/statusStream";
 import type { DeviceRecord, DeviceTarget, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry } from "../api/types";
 import { isDemoSeed, makeMockRecord, makeMockRecords, makeMockUsbSerialRecord, type DemoSeed } from "../fixtures/mockDevices";
@@ -12,6 +23,11 @@ import {
   type SerialTraceEvent,
   WebSerialTransport,
 } from "../serial/transport";
+
+const ADAPTER_SERIAL_SESSION_LIMITS = {
+  logsLimit: 200,
+  traceLimit: 600,
+};
 
 type AddDeviceInput = {
   target: string;
@@ -35,6 +51,7 @@ type ManualChargePrefsInput = SafeSettingsState["manual_charge"];
 type DeviceRegistryContextValue = {
   records: DeviceRecord[];
   addDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
+  addLocalAdapterDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
   connectUsbSerialDevice: (input?: Pick<AddDeviceInput, "alias" | "location">) => Promise<AddDeviceResult>;
   attachMockUsbSerialDevice: () => AddDeviceResult;
   disconnectUsbSerialDevice: (deviceId: string) => Promise<void>;
@@ -106,7 +123,30 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const setSerialCommandError = useCallback(
     (deviceId: string, error: DeviceRecord["error"]) => {
       if (!serialSessions.current.has(deviceId)) {
-        setRecordError(deviceId, error);
+        let handledByAdapter = false;
+        setRecords((current) =>
+          current.map((record) => {
+            if (record.target.deviceId !== deviceId || record.target.transport !== "adapter" || !record.serial) return record;
+            handledByAdapter = true;
+            return appendSerialLog(
+              {
+                ...record,
+                connectionState: "online",
+                streamState: "polling",
+                error,
+                serial: { ...record.serial, connected: true },
+                lastUpdated: new Date().toISOString(),
+              },
+              serialLogFromFrame({
+                type: "log",
+                level: "error",
+                target: "usb_http_adapter",
+                message: `${error?.code ?? "adapter_error"}: ${error?.message ?? "USB HTTP adapter command failed"}`,
+              }),
+            );
+          }),
+        );
+        if (!handledByAdapter) setRecordError(deviceId, error);
         return;
       }
       const log = serialLogFromFrame({
@@ -222,6 +262,34 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       setRecords((current) => {
         const previous = current.find((record) => record.target.deviceId === deviceId);
         if (!previous) return current;
+        if (target.transport === "adapter") {
+          const streamState = result.identity.capabilities.sse && previous.streamState !== "polling" ? "idle" : "polling";
+          const previousSerial = previous.serial;
+          void getAdapterSerialSession(target.baseUrl, ADAPTER_SERIAL_SESSION_LIMITS)
+            .then((session) => {
+              setRecords((latest) =>
+                latest.map((candidate) =>
+                  candidate.target.deviceId === deviceId && candidate.target.transport === "adapter"
+                    ? mergeAdapterSerial(candidate, session)
+                    : candidate,
+                ),
+              );
+            })
+            .catch(() => undefined);
+          return upsertRecord(
+            current,
+            {
+              ...recordFromProbe(target, result, "online", streamState),
+              serial: previousSerial
+                ? {
+                    ...previousSerial,
+                    connected: true,
+                    protocol: target.serialProtocol ?? previousSerial.protocol,
+                  }
+                : previousSerial,
+            },
+          );
+        }
         const streamState = result.identity.capabilities.sse && previous.streamState !== "polling" ? "idle" : "polling";
         return upsertRecord(current, recordFromProbe(target, result, "online", streamState));
       });
@@ -258,6 +326,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     for (const record of records) {
       if (
         record.target.transport === "serial" ||
+        record.target.transport === "adapter" ||
         record.target.mock ||
         !record.identity?.capabilities.sse ||
         record.streamState !== "idle" ||
@@ -371,6 +440,29 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         addedAt: new Date().toISOString(),
       };
       const record = recordFromProbe(target, result, "online", result.identity.capabilities.sse ? "idle" : "polling");
+      setRecords((current) => upsertRecord(current, record));
+      return { ok: true, record };
+    } catch (error) {
+      return { ok: false, error: toErrorEnvelope(error) };
+    }
+  }, []);
+
+  const addLocalAdapterDevice = useCallback(async (input: AddDeviceInput): Promise<AddDeviceResult> => {
+    const baseUrl = normalizeBaseUrl(input.target);
+
+    try {
+      const result = await probeDevice(baseUrl);
+      const session = await getAdapterSerialSession(baseUrl, ADAPTER_SERIAL_SESSION_LIMITS);
+      const target: DeviceTarget = {
+        deviceId: result.identity.device_id,
+        baseUrl,
+        alias: input.alias?.trim() || result.identity.hostname,
+        location: input.location?.trim() || "Local adapter",
+        addedAt: new Date().toISOString(),
+        transport: "adapter",
+        serialProtocol: session.protocol,
+      };
+      const record = recordFromAdapterProbe(target, result, session);
       setRecords((current) => upsertRecord(current, record));
       return { ok: true, record };
     } catch (error) {
@@ -524,6 +616,27 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       );
       return { ok: true };
     }
+    if (record.target.transport === "adapter") {
+      try {
+        await sendAdapterWifiConfig(record.target.baseUrl, input);
+        await updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+        setRecords((current) =>
+          current.map((candidate) =>
+            candidate.target.deviceId === deviceId
+              ? updateSerialSettings(candidate, {
+                  wifi_configured: true,
+                  wifi_ssid: input.ssid,
+                }, "wifi_config", `WiFi credentials saved for ${input.ssid}`)
+              : candidate,
+          ),
+        );
+        return { ok: true };
+      } catch (error) {
+        const envelope = toErrorEnvelope(error);
+        setSerialCommandError(deviceId, envelope);
+        return { ok: false, error: envelope };
+      }
+    }
     const session = serialSessions.current.get(deviceId);
     if (!session) return serialCommandUnavailable();
     try {
@@ -559,6 +672,24 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       );
       return { ok: true };
     }
+    if (record.target.transport === "adapter") {
+      try {
+        await clearAdapterWifiConfig(record.target.baseUrl);
+        await updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+        setRecords((current) =>
+          current.map((candidate) =>
+            candidate.target.deviceId === deviceId
+              ? updateSerialSettings(candidate, { wifi_configured: false, wifi_ssid: null }, "wifi_config", "WiFi credentials cleared")
+              : candidate,
+          ),
+        );
+        return { ok: true };
+      } catch (error) {
+        const envelope = toErrorEnvelope(error);
+        setSerialCommandError(deviceId, envelope);
+        return { ok: false, error: envelope };
+      }
+    }
     const session = serialSessions.current.get(deviceId);
     if (!session) return serialCommandUnavailable();
     try {
@@ -581,7 +712,16 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const setSerialLogLevel = useCallback(async (deviceId: string, level: SafeSettingsState["log_level"]): Promise<CommandResult> => {
     const record = records.find((candidate) => candidate.target.deviceId === deviceId);
     if (!record?.serial) return serialCommandUnavailable();
-    if (!record.target.mock) {
+    if (record.target.transport === "adapter") {
+      try {
+        await setAdapterLogLevel(record.target.baseUrl, level);
+        await updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+      } catch (error) {
+        const envelope = toErrorEnvelope(error);
+        setSerialCommandError(deviceId, envelope);
+        return { ok: false, error: envelope };
+      }
+    } else if (!record.target.mock) {
       const session = serialSessions.current.get(deviceId);
       if (!session) return serialCommandUnavailable();
       try {
@@ -605,7 +745,16 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const setManualChargePrefs = useCallback(async (deviceId: string, prefs: ManualChargePrefsInput): Promise<CommandResult> => {
     const record = records.find((candidate) => candidate.target.deviceId === deviceId);
     if (!record?.serial) return serialCommandUnavailable();
-    if (!record.target.mock) {
+    if (record.target.transport === "adapter") {
+      try {
+        await setAdapterManualChargePrefs(record.target.baseUrl, prefs);
+        await updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+      } catch (error) {
+        const envelope = toErrorEnvelope(error);
+        setSerialCommandError(deviceId, envelope);
+        return { ok: false, error: envelope };
+      }
+    } else if (!record.target.mock) {
       const session = serialSessions.current.get(deviceId);
       if (!session) return serialCommandUnavailable();
       try {
@@ -691,6 +840,13 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     );
   }
 
+  async function updateAdapterSerialSnapshot(deviceId: string, baseUrl: string) {
+    const session = await getAdapterSerialSession(baseUrl, ADAPTER_SERIAL_SESSION_LIMITS);
+    setRecords((current) =>
+      current.map((record) => (record.target.deviceId === deviceId && record.target.transport === "adapter" ? mergeAdapterSerial(record, session) : record)),
+    );
+  }
+
   const removeDevice = useCallback((deviceId: string) => {
     streams.current.get(deviceId)?.close();
     streams.current.delete(deviceId);
@@ -711,6 +867,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     () => ({
       records,
       addDevice,
+      addLocalAdapterDevice,
       connectUsbSerialDevice,
       attachMockUsbSerialDevice,
       disconnectUsbSerialDevice,
@@ -725,6 +882,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     [
       records,
       addDevice,
+      addLocalAdapterDevice,
       connectUsbSerialDevice,
       attachMockUsbSerialDevice,
       disconnectUsbSerialDevice,
@@ -826,6 +984,30 @@ function recordFromSerialProbe(
       logs,
       trace,
       safeSettings: defaultSafeSettings(),
+    },
+  };
+}
+
+function recordFromAdapterProbe(target: DeviceTarget, result: ProbeResult, session: AdapterSerialSession): DeviceRecord {
+  return mergeAdapterSerial(recordFromProbe(target, result, "online", "polling"), session);
+}
+
+function mergeAdapterSerial(record: DeviceRecord, session: AdapterSerialSession): DeviceRecord {
+  return {
+    ...record,
+    target: {
+      ...record.target,
+      serialProtocol: session.protocol,
+    },
+    connectionState: session.connected ? "online" : record.connectionState,
+    error: session.connected ? null : record.error,
+    lastUpdated: new Date().toISOString(),
+    serial: {
+      connected: session.connected,
+      protocol: session.protocol,
+      logs: session.logs,
+      trace: session.trace,
+      safeSettings: session.safeSettings,
     },
   };
 }

@@ -109,7 +109,7 @@ export type DeviceTarget = {
   alias: string;
   location: string;
   addedAt: string;
-  transport?: "http" | "serial";
+  transport?: "http" | "serial" | "adapter";
   serialProtocol?: string;
   mock?: boolean;
 };

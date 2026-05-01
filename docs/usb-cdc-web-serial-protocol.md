@@ -13,6 +13,33 @@ LAN HTTP/SSE remains read-only. The USB CDC protocol only accepts safe settings:
 
 High-risk operations such as output enable/disable, fault clear, and charge start/stop are not part of this protocol.
 
+## Local HTTP Adapter
+
+The Rust adapter in `tools/mains-aegis-usb-http-adapter/` opens one explicit USB CDC serial path and exposes the same safe-control surface as localhost HTTP. It is intended for the Web App, future native Apps, and CLI tooling when the browser should not own the CDC port directly.
+
+The adapter does not enumerate ports. Operators must provide the selected CDC path with `--port <serial-path>` or `MAINS_AEGIS_USB_PORT`.
+
+Default startup:
+
+```sh
+cargo run --manifest-path tools/mains-aegis-usb-http-adapter/Cargo.toml -- --port <serial-path> --bind 127.0.0.1:30080
+```
+
+HTTP endpoints:
+
+- `GET /health`
+- `GET /api/v1/ping`
+- `GET /api/v1/identity`
+- `GET /api/v1/network`
+- `GET /api/v1/status`
+- `GET /api/v1/serial/session?logs_limit=<n>&trace_limit=<n>`
+- `POST /api/v1/wifi-config`
+- `DELETE /api/v1/wifi-config`
+- `POST /api/v1/settings/log-level`
+- `POST /api/v1/settings/manual-charge`
+
+`/api/v1/serial/session` returns Web-compatible `logs`, `trace`, `protocol`, and `safeSettings`. The adapter keeps bounded in-memory ring buffers and returns a bounded tail by default (`logs_limit=200`, `trace_limit=600`; capped at `500` and `2000`). TX trace payloads redact WiFi PSK before storage or HTTP exposure.
+
 ## Framing
 
 - Encoding: UTF-8 JSON.
@@ -95,7 +122,7 @@ The firmware stores the PSK but never echoes it in `response`, `error`, or `log`
 
 `log` frames are structured Web-facing events. A successful `hello` emits a `usb_cdc` session log. `get_status` emits an initial status log set for `status`, `output`, `charger`, `battery`, and `network`; later status requests emit periodic summaries and state-change logs for those targets.
 
-The Web App records a complete per-session CDC trace for developer inspection: transmitted request frames, received protocol frames, structured logs, and raw / ignored non-protocol CDC lines. WiFi PSK values are redacted from transmitted trace payloads. Raw firmware monitor output remains a development-only stream decoded by `mcu-agentd monitor`; the Web trace makes raw CDC ownership visible but does not decode `defmt`.
+The Web App records per-session CDC trace entries for developer inspection: transmitted request frames, received protocol frames, structured logs, and raw / ignored non-protocol CDC lines. Adapter-backed sessions expose a bounded tail to the browser while keeping the local ring buffer bounded in memory. WiFi PSK values are redacted from transmitted trace payloads. Raw firmware monitor output remains a development-only stream decoded by `mcu-agentd monitor`; the Web trace makes raw CDC ownership visible but does not decode `defmt`.
 
 ### `error`
 

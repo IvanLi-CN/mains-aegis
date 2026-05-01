@@ -11,7 +11,7 @@
 - 主固件新增 `web_serial` feature，使用 ESP32-S3 USB Serial/JTAG CDC 通道读取 JSONL 命令，返回 identity/status/ack/error/log frame，并在 `get_status` 上生成 `status` / `output` / `charger` / `battery` / `network` 结构化日志；WiFi config 写入 EEPROM `0x0160` 起始的 4 个 32B block，`net_http` 启用时优先加载该记录，并在 USB 写入后更新运行时 WiFi 配置。
 - `mock:` 设备用于稳定开发预览和视觉证据，不发真实网络请求。
 - 管理端页面已覆盖 Fleet、Connect、Overview、Power、Battery、Thermal、Device、Settings、API。
-- Settings 页仅对 USB CDC 连接设备开放，提供 WiFi SSID/PSK 覆盖/清除、手动充电偏好、USB session 日志级别、structured log 面板和 USB Developer Console；Developer Console 保留当前 Web Serial session 的 tx/rx frame、raw / ignored CDC 行和协议 payload，支持全屏查看与 payload 折行开关，PSK 脱敏。
+- Settings 页仅对 USB CDC 或本地 Adapter 连接设备开放，提供 WiFi SSID/PSK 覆盖/清除、手动充电偏好、USB session 日志级别和 USB Console；USB Console 保留当前 Web Serial 或 Adapter session 的 tx/rx frame、raw / ignored CDC 行和协议 payload，支持等级过滤、方向过滤、搜索高亮、虚拟滚动、全屏查看与 payload 折行开关，PSK 脱敏。
 - Fleet 卡片使用用户可理解的摘要字段，技术细节保留到单设备详情与 API 调试页。
 - Demo 复用正式前端路由，通过 `seed` 参数切换 mock 数据场景，覆盖默认 fleet、空数据、全离线、大数量、Critical Battery、Backup、API Debug 等路径。
 

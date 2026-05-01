@@ -23,13 +23,14 @@
 - 对接设备侧现有只读接口：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status` 和 status SSE。
 - 提供 mock fixtures 和正式路由 seed 场景，使无实机环境也能稳定预览、交互测试与截图验证。
 - 在现有 `web/` 管理台上新增 USB CDC / Web Serial 数据源，复用 `Identity`、`NetworkSummary`、`UpsStatus` 状态模型。
+- 新增 Rust 本地 USB HTTP Adapter，使 Web App、未来 App 与 CLI 可以通过 localhost HTTP 使用同一 USB CDC 安全控制面。
 - 通过 USB CDC structured JSONL 协议支持握手、状态读取、结构化日志、安全设置与 WiFi 配网。
 - 首版写入范围限制为 WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别；PSK 不在 API、日志或 UI 中回显。
 
 ### Non-goals
 
 - LAN HTTP/SSE 不实现远程写控制、清故障、切输出、改充电动作或高风险 UPS 状态改变。
-- 不实现 broker、本地 helper、桌面 companion、多消费者串口分发或 WebUSB 首版路径。
+- 不实现 broker、桌面 companion、多消费者串口分发或 WebUSB 首版路径；本地 USB HTTP Adapter 是允许的单 owner CDC 适配层。
 - 不新增设备侧聚合 API；多设备汇总由浏览器端 `DeviceRegistry` 完成。
 - 不做用户账号、鉴权、设备绑定、TLS、跨网段发现或云端服务。
 - 不改造 `docs-site/`；文档站与管理端保持独立。
@@ -47,7 +48,7 @@
 
 ### 设备管理
 
-- `/connect` 支持 USB CDC / Web Serial 连接入口，并保留手动添加 `.local` hostname、IP 或完整 URL 的 LAN 只读入口。
+- `/connect` 支持 USB CDC / Web Serial 连接入口、本地 USB HTTP Adapter 入口，并保留手动添加 `.local` hostname、IP 或完整 URL 的 LAN 只读入口。
 - USB 连接入口必须显示浏览器支持状态、连接/断开状态、用户取消授权、串口不可用或已占用等错误。
 - 真实 USB `SerialPort` 不写入 localStorage；刷新页面后需要重新授权。mock USB 设备可用于视觉证据与无硬件验证。
 - 添加时按 `ping -> identity -> network -> status` 探活；失败显示 API-compatible error envelope。
@@ -74,6 +75,13 @@
 - `log` frame 是结构化开发日志入口，字段至少包含 `level`、`target`、`message`。
 - Web App 将非 JSON legacy serial line 降级为 `raw_serial` debug log；协议响应必须保持 JSONL，以免阻塞 request ack。
 - `error` frame 与 HTTP error envelope 对齐：`{ code, message, retryable, details }`。
+
+### 本地 USB HTTP Adapter
+
+- Adapter 位于 `tools/mains-aegis-usb-http-adapter/`，使用 Rust 实现。
+- Adapter 不枚举串口、不切换串口，只打开调用方显式传入的 CDC path。
+- Adapter 对 Web/App/CLI 暴露 localhost HTTP：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、`/api/v1/serial/session`、WiFi config 与 safe settings endpoints。
+- `/api/v1/serial/session` 返回 bounded tail logs/trace，默认 `logs_limit=200`、`trace_limit=600`，上限分别为 `500` 和 `2000`。
 
 ### 纯前端 Demo
 
@@ -194,6 +202,28 @@
   evidence_note: 验证 USB settings 页包含 WiFi SSID/PSK 写入、清除、手动充电偏好、日志级别和 structured log 面板；PSK 提交后清空且不出现在页面文本中。
 
 ![USB WiFi settings evidence](./assets/usb-wifi-settings-desktop.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/devices/mains-aegis-usb-demo/settings?seed=usb`
+  requested_viewport: `1440x1000`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: USB Console desktop
+  evidence_note: 验证 Settings 页只保留 USB Console，过滤器、搜索、折行开关、全屏入口、计数指标和虚拟滚动日志区域位于同一控制面，且 mock trace 至少覆盖 100 条 CDC records。
+
+![USB Console desktop evidence](./assets/usb-console-settings-desktop.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/devices/mains-aegis-usb-demo/settings?seed=usb`
+  requested_viewport: `390x844`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: USB Console mobile
+  evidence_note: 验证小屏下 USB Console 控件仍可访问，日志区域使用稳定高度与虚拟滚动，不依赖桌面宽度。
+
+![USB Console mobile evidence](./assets/usb-console-settings-mobile.png)
 
 - source_type: mock_ui
   demo_entry_or_title: `/devices/mains-aegis-usb-demo/api`
