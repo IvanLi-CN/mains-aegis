@@ -323,6 +323,17 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   }, [records, refreshDevice]);
 
   useEffect(() => {
+    if (demoSeed) return;
+    const interval = window.setInterval(() => {
+      for (const record of records) {
+        if (record.target.transport !== "adapter" || !record.serial?.connected) continue;
+        void updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+      }
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [demoSeed, records]);
+
+  useEffect(() => {
     for (const record of records) {
       if (
         record.target.transport === "serial" ||
