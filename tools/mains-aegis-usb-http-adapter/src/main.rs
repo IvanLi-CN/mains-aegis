@@ -37,6 +37,7 @@ const SESSION_LOG_MAX_LIMIT: usize = 500;
 struct Config {
     port: String,
     bind: SocketAddr,
+    allowed_origins: Vec<HeaderValue>,
 }
 
 #[derive(Clone)]
@@ -163,7 +164,7 @@ async fn main() {
         Err(message) => {
             eprintln!("{message}");
             eprintln!(
-                "usage: mains-aegis-usb-http-adapter --port <serial-path> [--bind 127.0.0.1:30080]"
+                "usage: mains-aegis-usb-http-adapter --port <serial-path> [--bind 127.0.0.1:30080] [--allow-origin http://127.0.0.1:5173]"
             );
             std::process::exit(2);
         }
@@ -179,19 +180,7 @@ async fn main() {
 
     let app_state = AppState { session };
     let cors = CorsLayer::new()
-        .allow_origin(
-            [
-                "http://127.0.0.1:30000",
-                "http://localhost:30000",
-                "http://127.0.0.1:5173",
-                "http://localhost:5173",
-            ]
-            .map(|origin| {
-                origin
-                    .parse::<HeaderValue>()
-                    .expect("static origin is valid")
-            }),
-        )
+        .allow_origin(config.allowed_origins)
         .allow_methods([Method::GET, Method::POST, Method::DELETE])
         .allow_headers(tower_http::cors::Any);
     let app = Router::new()
@@ -226,6 +215,7 @@ fn parse_args() -> Result<Config, String> {
     let mut bind = env::var("MAINS_AEGIS_ADAPTER_BIND")
         .ok()
         .unwrap_or_else(|| "127.0.0.1:30080".to_string());
+    let mut origins = env::var("MAINS_AEGIS_WEB_ORIGINS").ok();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -235,6 +225,7 @@ fn parse_args() -> Result<Config, String> {
                     .next()
                     .ok_or_else(|| "--bind requires an address".to_string())?
             }
+            "--allow-origin" => origins = args.next(),
             "--help" | "-h" => return Err(String::from("mains-aegis USB CDC to HTTP adapter")),
             value => return Err(format!("unknown argument: {value}")),
         }
@@ -244,7 +235,56 @@ fn parse_args() -> Result<Config, String> {
     let bind = bind
         .parse()
         .map_err(|_| format!("invalid --bind address: {bind}"))?;
-    Ok(Config { port, bind })
+    let allowed_origins = parse_allowed_origins(origins.as_deref())?;
+    Ok(Config {
+        port,
+        bind,
+        allowed_origins,
+    })
+}
+
+fn parse_allowed_origins(input: Option<&str>) -> Result<Vec<HeaderValue>, String> {
+    let mut origins = Vec::new();
+    for origin in [
+        "http://127.0.0.1:30000",
+        "http://localhost:30000",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ] {
+        push_origin(&mut origins, origin)?;
+    }
+    if let Ok(web_port) = env::var("WEB_PORT") {
+        if !web_port.trim().is_empty() {
+            push_origin(
+                &mut origins,
+                &format!("http://127.0.0.1:{}", web_port.trim()),
+            )?;
+            push_origin(
+                &mut origins,
+                &format!("http://localhost:{}", web_port.trim()),
+            )?;
+        }
+    }
+    if let Some(input) = input {
+        for origin in input
+            .split(',')
+            .map(str::trim)
+            .filter(|origin| !origin.is_empty())
+        {
+            push_origin(&mut origins, origin)?;
+        }
+    }
+    Ok(origins)
+}
+
+fn push_origin(origins: &mut Vec<HeaderValue>, origin: &str) -> Result<(), String> {
+    let value = origin
+        .parse::<HeaderValue>()
+        .map_err(|_| format!("invalid allowed origin: {origin}"))?;
+    if !origins.iter().any(|existing| existing == &value) {
+        origins.push(value);
+    }
+    Ok(())
 }
 
 impl UsbSession {
@@ -310,12 +350,12 @@ impl UsbSession {
         let trace = Arc::clone(&self.trace);
         let connected = Arc::clone(&self.connected);
         thread::spawn(move || {
-            let mut read_buffer = String::new();
+            let mut read_buffer = Vec::new();
             let mut buf = [0_u8; 256];
             while connected.load(Ordering::SeqCst) {
                 match reader.read(&mut buf) {
                     Ok(n) if n > 0 => {
-                        read_buffer.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        read_buffer.extend_from_slice(&buf[..n]);
                         consume_reader_buffer(
                             &mut read_buffer,
                             &pending,
@@ -680,16 +720,36 @@ impl ApiError {
 }
 
 fn consume_reader_buffer(
-    read_buffer: &mut String,
+    read_buffer: &mut Vec<u8>,
     pending: &Arc<Mutex<HashMap<String, oneshot::Sender<Result<Value, ApiError>>>>>,
     identity: &Arc<RwLock<Option<Value>>>,
     status: &Arc<RwLock<Option<Value>>>,
     logs: &Arc<Mutex<VecDeque<SerialLogEntry>>>,
     trace: &Arc<Mutex<VecDeque<SerialTraceEntry>>>,
 ) {
-    while let Some(newline_index) = read_buffer.find('\n') {
-        let raw_line = read_buffer[..newline_index].trim().to_string();
-        *read_buffer = read_buffer[newline_index + 1..].to_string();
+    while let Some(newline_index) = read_buffer.iter().position(|byte| *byte == b'\n') {
+        let mut raw_bytes = read_buffer.drain(..=newline_index).collect::<Vec<_>>();
+        if raw_bytes.last() == Some(&b'\n') {
+            raw_bytes.pop();
+        }
+        if raw_bytes.last() == Some(&b'\r') {
+            raw_bytes.pop();
+        }
+        let raw_line = match String::from_utf8(raw_bytes) {
+            Ok(line) => line.trim().to_string(),
+            Err(error) => {
+                push_trace_to(
+                    trace,
+                    raw_trace(
+                        "rx",
+                        "ignored",
+                        "invalid UTF-8 CDC line",
+                        &String::from_utf8_lossy(error.as_bytes()),
+                    ),
+                );
+                continue;
+            }
+        };
         if raw_line.is_empty() {
             continue;
         }
@@ -956,7 +1016,7 @@ mod tests {
         let logs = Arc::new(Mutex::new(VecDeque::new()));
         let trace = Arc::new(Mutex::new(VecDeque::new()));
         let mut read_buffer =
-            "I (123) app: {\"type\":\"log\",\"level\":\"debug\",\"target\":\"wifi\",\"message\":\"associated\"}\n".to_string();
+            b"I (123) app: {\"type\":\"log\",\"level\":\"debug\",\"target\":\"wifi\",\"message\":\"associated\"}\n".to_vec();
 
         consume_reader_buffer(
             &mut read_buffer,
@@ -975,6 +1035,42 @@ mod tests {
     }
 
     #[test]
+    fn preserves_utf8_split_across_serial_chunks() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let identity = Arc::new(RwLock::new(None));
+        let status = Arc::new(RwLock::new(None));
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        let trace = Arc::new(Mutex::new(VecDeque::new()));
+        let line = "{\"type\":\"log\",\"level\":\"info\",\"target\":\"wifi\",\"message\":\"ssid=实验室\"}\n";
+        let split = line.find("验").expect("split point") + 1;
+        let mut read_buffer = line.as_bytes()[..split].to_vec();
+
+        consume_reader_buffer(
+            &mut read_buffer,
+            &pending,
+            &identity,
+            &status,
+            &logs,
+            &trace,
+        );
+        assert!(logs.lock().expect("logs lock").is_empty());
+
+        read_buffer.extend_from_slice(&line.as_bytes()[split..]);
+        consume_reader_buffer(
+            &mut read_buffer,
+            &pending,
+            &identity,
+            &status,
+            &logs,
+            &trace,
+        );
+
+        let logs = logs.lock().expect("logs lock");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].message, "ssid=实验室");
+    }
+
+    #[test]
     fn routes_error_frames_to_matching_request() {
         let (tx, rx) = oneshot::channel();
         let pending = Arc::new(Mutex::new(HashMap::from([("req-1".to_string(), tx)])));
@@ -983,8 +1079,8 @@ mod tests {
         let logs = Arc::new(Mutex::new(VecDeque::new()));
         let trace = Arc::new(Mutex::new(VecDeque::new()));
         let mut read_buffer =
-            "{\"type\":\"error\",\"request_id\":\"req-1\",\"error\":{\"code\":\"invalid_wifi_psk\",\"message\":\"bad psk\",\"retryable\":false,\"details\":null}}\n"
-                .to_string();
+            b"{\"type\":\"error\",\"request_id\":\"req-1\",\"error\":{\"code\":\"invalid_wifi_psk\",\"message\":\"bad psk\",\"retryable\":false,\"details\":null}}\n"
+                .to_vec();
 
         consume_reader_buffer(
             &mut read_buffer,

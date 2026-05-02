@@ -25,6 +25,8 @@ Default startup:
 cargo run --manifest-path tools/mains-aegis-usb-http-adapter/Cargo.toml -- --port <serial-path> --bind 127.0.0.1:30080
 ```
 
+The adapter allows `http://127.0.0.1:30000`, `http://localhost:30000`, `http://127.0.0.1:5173`, and `http://localhost:5173` by default. Add the active Web origin with `--allow-origin <origin>`, `MAINS_AEGIS_WEB_ORIGINS=<origin>[,<origin>]`, or `WEB_PORT=<port>` when the Web App runs on another local port.
+
 HTTP endpoints:
 
 - `GET /health`

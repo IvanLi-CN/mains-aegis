@@ -185,5 +185,5 @@ web/
 - 默认数据：内置 6 台 mock UPS，覆盖 standby、assist、backup、warning、critical、offline。
 - 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、LAN 只读探活、SSE 订阅与轮询兜底、当前 session 的 Web Serial USB CDC transport，以及本地 USB HTTP Adapter transport。
 - 验证命令：`bun run web:check`、`bun run web:build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cargo test --manifest-path tools/mains-aegis-usb-http-adapter/Cargo.toml`、`cd firmware && cargo +esp check --features web_serial`。
-- 本地适配层：运行时使用 `cargo run --manifest-path tools/mains-aegis-usb-http-adapter/Cargo.toml -- --port <serial-path> --bind 127.0.0.1:30080`。
+- 本地适配层：运行时使用 `cargo run --manifest-path tools/mains-aegis-usb-http-adapter/Cargo.toml -- --port <serial-path> --bind 127.0.0.1:30080`；若 Web 预览端口不是默认值，使用 `--allow-origin <origin>`、`MAINS_AEGIS_WEB_ORIGINS` 或 `WEB_PORT` 放行当前 Web origin。
 - 纯前端 Demo：`bun run web:dev` 后访问正式路由，例如 `/`、`/?seed=empty`、`/?seed=large`、`/devices/mains-aegis-e4f5a6/battery?seed=default`。
