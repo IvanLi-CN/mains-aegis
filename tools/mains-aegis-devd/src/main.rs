@@ -222,6 +222,9 @@ async fn main() {
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/api/v1/ping", get(health))
+        .route("/api/v1/identity", get(adapter_compat_identity))
+        .route("/api/v1/network", get(adapter_compat_network))
+        .route("/api/v1/status", get(adapter_compat_status))
         .route("/api/v1/devices", get(list_devices))
         .route("/api/v1/devices/scan", post(scan_devices))
         .route("/api/v1/devices/{id}/bind", post(bind_device))
@@ -795,6 +798,89 @@ async fn adapter_compat_session(
             "manual_charge": {"target": "rsoc_80", "speed": "ma_500", "timer_h": 2}
         }
     }))
+}
+
+async fn adapter_compat_identity(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
+    let guard = state.inner.lock().expect("state lock");
+    let device = select_compat_device(&guard).ok_or_else(|| {
+        HttpError::not_found(
+            "identity_unavailable",
+            "no device identity is available through the adapter",
+        )
+    })?;
+    let identity = device.identity.clone().ok_or_else(|| {
+        HttpError::non_retryable(
+            "identity_unavailable",
+            "device identity is unavailable until a devd device is connected",
+        )
+    })?;
+    Ok(Json(identity))
+}
+
+async fn adapter_compat_network(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
+    let Json(identity) = adapter_compat_identity(State(state)).await?;
+    let network = identity.get("network").cloned().ok_or_else(|| {
+        HttpError::non_retryable(
+            "network_unavailable",
+            "device identity does not include network",
+        )
+    })?;
+    Ok(Json(network))
+}
+
+async fn adapter_compat_status(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
+    let Json(identity) = adapter_compat_identity(State(state)).await?;
+    let network = identity
+        .get("network")
+        .cloned()
+        .unwrap_or_else(|| json!({"state": "disabled", "ipv4": null, "last_error": null}));
+    Ok(Json(json!({
+        "mode": "standby",
+        "input": {
+            "mains_present": false,
+            "input_vbus_mv": null,
+            "input_ibus_ma": null,
+            "vin_vbus_mv": null,
+            "vin_iin_ma": null
+        },
+        "output": {
+            "requested": "none",
+            "active": "none",
+            "recoverable": "none",
+            "gate_reason": "none",
+            "out_a": {"state": "unknown", "enabled": false, "vbus_mv": null, "iout_ma": null},
+            "out_b": {"state": "unknown", "enabled": false, "vbus_mv": null, "iout_ma": null}
+        },
+        "charger": {
+            "state": "unknown",
+            "allow_charge": false,
+            "ichg_ma": null,
+            "ibat_ma": null,
+            "vbat_present": false
+        },
+        "battery": {
+            "state": "unknown",
+            "pack_mv": null,
+            "current_ma": null,
+            "soc_pct": null,
+            "no_battery": false,
+            "discharge_ready": false,
+            "issue_detail": null,
+            "recovery_pending": false,
+            "last_result": null
+        },
+        "thermal": {
+            "tmp_a_state": "unknown",
+            "tmp_a_c": null,
+            "tmp_b_state": "unknown",
+            "tmp_b_c": null
+        },
+        "network": {
+            "state": network.get("state").cloned().unwrap_or_else(|| json!("disabled")),
+            "ipv4": network.get("ipv4").cloned().unwrap_or(Value::Null),
+            "last_error": network.get("last_error").cloned().unwrap_or(Value::Null)
+        }
+    })))
 }
 
 fn select_compat_device(state: &DevdState) -> Option<&DeviceRecord> {

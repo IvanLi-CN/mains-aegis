@@ -26,6 +26,8 @@ export const isMockBaseUrl = (baseUrl: string) => baseUrl.startsWith("mock:");
 
 export function normalizeBaseUrl(input: string): string {
   const value = input.trim();
+  if (value === "" || value === "same-origin" || value === "devd") return "";
+  if (value.startsWith("/")) return "";
   if (value.startsWith("mock:")) return value;
   if (/^https?:\/\//i.test(value)) return value.replace(/\/+$/, "");
   return `http://${value.replace(/\/+$/, "")}`;

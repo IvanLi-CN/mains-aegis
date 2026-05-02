@@ -371,7 +371,7 @@ function ConnectPage() {
   const [location, setLocation] = useState("");
   const [usbAlias, setUsbAlias] = useState("");
   const [usbLocation, setUsbLocation] = useState("");
-  const [adapterTarget, setAdapterTarget] = useState("127.0.0.1:30080");
+  const [adapterTarget, setAdapterTarget] = useState("same-origin");
   const [adapterAlias, setAdapterAlias] = useState("");
   const [adapterLocation, setAdapterLocation] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -492,7 +492,7 @@ function ConnectPage() {
                 name="adapter-target"
                 value={adapterTarget}
                 onChange={(event) => setAdapterTarget(event.target.value)}
-                placeholder="127.0.0.1:30080"
+                placeholder="same-origin"
                 required
               />
             </label>
