@@ -1066,7 +1066,7 @@ function appendSerialTrace(record: DeviceRecord, entry: SerialTraceEntry): Devic
     ...record,
     serial: {
       ...record.serial,
-      trace: [...record.serial.trace, entry],
+      trace: [...record.serial.trace, entry].slice(-ADAPTER_SERIAL_SESSION_LIMITS.traceLimit),
     },
   };
 }
