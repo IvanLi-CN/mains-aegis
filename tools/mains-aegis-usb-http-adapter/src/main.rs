@@ -396,6 +396,18 @@ impl UsbSession {
         Ok(response.get("result").cloned().unwrap_or(Value::Null))
     }
 
+    async fn refresh_identity(&self) -> Result<Value, ApiError> {
+        let identity = self.request("get_identity", Map::new()).await?;
+        if !identity.is_object() {
+            return Err(ApiError::retryable(
+                "identity_unavailable",
+                "USB CDC identity response was not an object",
+            ));
+        }
+        *self.identity.write().expect("identity lock") = Some(identity.clone());
+        Ok(identity)
+    }
+
     async fn wifi_config(
         &self,
         op: &str,
@@ -509,32 +521,14 @@ async fn ping() -> Json<PingResponse> {
 async fn identity(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
     state
         .session
-        .identity
-        .read()
-        .expect("identity lock")
-        .clone()
+        .refresh_identity()
+        .await
         .map(Json)
-        .ok_or_else(|| {
-            HttpError(ApiError::retryable(
-                "identity_unavailable",
-                "USB identity is not available yet",
-            ))
-        })
+        .map_err(HttpError)
 }
 
 async fn network(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
-    let identity = state
-        .session
-        .identity
-        .read()
-        .expect("identity lock")
-        .clone()
-        .ok_or_else(|| {
-            HttpError(ApiError::retryable(
-                "identity_unavailable",
-                "USB identity is not available yet",
-            ))
-        })?;
+    let identity = state.session.refresh_identity().await.map_err(HttpError)?;
     identity.get("network").cloned().map(Json).ok_or_else(|| {
         HttpError(ApiError::retryable(
             "network_unavailable",
