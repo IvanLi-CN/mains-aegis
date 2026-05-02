@@ -936,7 +936,7 @@ function ApiDebugPage({ record }: { record: DeviceRecord }) {
           <MetricLine label="Network" value="/api/v1/network" />
           <MetricLine label="Status" value="/api/v1/status" />
           <MetricLine label="SSE" value="Accept: text/event-stream" />
-          <MetricLine label="USB CDC" value={record.target.transport === "serial" ? "JSONL frames" : "not connected"} />
+          <MetricLine label="USB CDC" value={record.serial?.connected ? "JSONL frames" : "not connected"} />
         </InfoPanel>
         <pre className="json-view">{JSON.stringify(payload, null, 2)}</pre>
       </div>
