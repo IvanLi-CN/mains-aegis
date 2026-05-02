@@ -13,9 +13,34 @@ LAN HTTP/SSE remains read-only. The USB CDC protocol only accepts safe settings:
 
 High-risk operations such as output enable/disable, fault clear, and charge start/stop are not part of this protocol.
 
-## Local HTTP Adapter
+## Mains Aegis Device Daemon
+
+`mains-aegis-devd` is the preferred local device owner. It manages device scan/list/bind/connect/disconnect/unbind, firmware artifact selection, flash/reset/monitor operations, and the USB CDC safe-control bridge behind localhost HTTP.
+
+Development mode uses the Web dev server as the API reverse proxy: the browser talks to the Vite origin, and Vite proxies `/api` to `http://127.0.0.1:30080`. Production mode may serve static Web assets directly from devd.
+
+Device management endpoints:
+
+- `GET /api/v1/devices`
+- `POST /api/v1/devices/scan`
+- `POST /api/v1/devices/{id}/bind`
+- `POST /api/v1/devices/{id}/connect`
+- `POST /api/v1/devices/{id}/disconnect`
+- `DELETE /api/v1/devices/{id}/binding`
+- `GET /api/v1/devices/{id}/identity`
+- `GET|POST /api/v1/devices/{id}/artifact`
+- `POST /api/v1/devices/{id}/flash`
+- `POST /api/v1/devices/{id}/reset`
+- `POST /api/v1/devices/{id}/monitor/start`
+- `POST /api/v1/devices/{id}/monitor/stop`
+- `GET /api/v1/devices/{id}/session`
+- `GET /api/v1/devices/{id}/events`
+
+## Legacy Local HTTP Adapter
 
 The Rust adapter in `tools/mains-aegis-usb-http-adapter/` opens one explicit USB CDC serial path and exposes the same safe-control surface as localhost HTTP. It is intended for the Web App, future native Apps, and CLI tooling when the browser should not own the CDC port directly.
+
+This adapter is now a compatibility path. New device workflows should use `tools/mains-aegis-devd/`.
 
 The adapter does not enumerate ports. Operators must provide the selected CDC path with `--port <serial-path>` or `MAINS_AEGIS_USB_PORT`.
 
@@ -124,7 +149,7 @@ The firmware stores the PSK but never echoes it in `response`, `error`, or `log`
 
 `log` frames are structured Web-facing events. A successful `hello` emits a `usb_cdc` session log. `get_status` emits an initial status log set for `status`, `output`, `charger`, `battery`, and `network`; later status requests emit periodic summaries and state-change logs for those targets.
 
-The Web App records per-session CDC trace entries for developer inspection: transmitted request frames, received protocol frames, structured logs, and raw / ignored non-protocol CDC lines. Adapter-backed sessions expose a bounded tail to the browser while keeping the local ring buffer bounded in memory. WiFi PSK values are redacted from transmitted trace payloads. Raw firmware monitor output remains a development-only stream decoded by `mcu-agentd monitor`; the Web trace makes raw CDC ownership visible but does not decode `defmt`.
+The Web App records per-session CDC trace entries for developer inspection: transmitted request frames, received protocol frames, structured logs, and raw / ignored non-protocol CDC lines. devd/adapter-backed sessions expose a bounded tail to the browser while keeping the local ring buffer bounded in memory. WiFi PSK values are redacted from transmitted trace payloads. Raw firmware monitor output is decoded only when `mains-aegis-devd` has a selected artifact whose identity matches the connected device; otherwise it remains `unverified`.
 
 ### `error`
 

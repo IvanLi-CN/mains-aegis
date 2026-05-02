@@ -16,6 +16,13 @@ export type FirmwareInfo = {
   git_sha: string;
   src_hash: string;
   git_dirty: string;
+  features?: string[];
+  protocol?: "mains-aegis.cdc.v1" | string;
+  defmt?: {
+    enabled: boolean;
+    encoding: string;
+    table_hash: string | null;
+  };
 };
 
 export type NetworkSummary = {
@@ -169,4 +176,51 @@ export type ProbeResult = {
   identity: Identity;
   network: NetworkSummary;
   status: UpsStatus;
+};
+
+export type FirmwareArtifactFile = {
+  kind: "elf" | "image" | "defmt_metadata";
+  path: string;
+  sha256: string;
+  size: number;
+};
+
+export type FirmwareArtifact = {
+  artifact_id: string;
+  name: string;
+  version: string;
+  git_sha: string;
+  build_id: string;
+  target_chip: "esp32s3";
+  profile: "debug" | "release" | "dev";
+  features: string[];
+  protocol: "mains-aegis.cdc.v1";
+  defmt: {
+    enabled: boolean;
+    encoding: string;
+    elf_sha256: string | null;
+    metadata_sha256: string | null;
+  };
+  files: FirmwareArtifactFile[];
+};
+
+export type FirmwareCatalog = {
+  schema_version: 1;
+  artifacts: FirmwareArtifact[];
+};
+
+export type DevdDevice = {
+  id: string;
+  display_name: string;
+  port_path: string | null;
+  transport: "native_serial" | "mock";
+  binding: unknown | null;
+  connection: "disconnected" | "connected" | "busy" | "error";
+  identity: Identity | null;
+  selected_artifact_id: string | null;
+  log_decode: {
+    status: "verified" | "unverified" | string;
+    reason: string | null;
+    artifact_id: string | null;
+  };
 };

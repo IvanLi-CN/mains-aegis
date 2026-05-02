@@ -12,6 +12,9 @@ To avoid operating the wrong device in multi-device / multi-port environments, t
 - No port enumeration: never run `mcu-agentd selector list <MCU_ID>` and never enumerate `/dev/*` to discover candidate ports.
 - No port switching: never run `mcu-agentd selector set <MCU_ID> <PORT>` and never switch ports “to try”.
 - `mcu-agentd` commands are otherwise allowed: aside from port enumeration/switching, the Agent may run other `mcu-agentd` commands (including `flash` / `monitor` / `erase` / `reset`) without extra confirmation prompts.
+- Preferred workflow: use `mains-aegis-devd` for Mains Aegis device work. `mcu-agentd` is a legacy/fallback path.
+- `mains-aegis-devd` may scan/list serial candidates for owner-visible binding, but must not auto-connect, auto-switch, or try alternate ports. Real flash/reset/monitor still requires a known bound device and owner authorization; mock/dry-run validation is allowed.
+- `mains-aegis-devd` flash may invoke its internal `espflash` backend; Agents must not invoke `espflash` directly from the shell.
 - Decision summary required: for every device-related operation (including denials), output a minimal, copy-pastable decision summary: `Operation type` (`read-only` / `state-changing` / `write`), `Command`, `Decision` (`allow|deny`), `Rationale` (which gate G0–G4), and `Next step`.
 
 Gates (G0–G4) for the `Rationale` field:
@@ -21,6 +24,7 @@ Gates (G0–G4) for the `Rationale` field:
 - G2 (no port switching): deny any port switching (including `mcu-agentd selector set`).
 - G3 (no automatic port switching): deny any attempt to “try another port”.
 - G4 (mcu-agentd allowed): allow other `mcu-agentd` device ops when G0–G3 are satisfied.
+- G5 (devd preferred): allow `mains-aegis-devd` mock/dry-run operations and owner-visible scan/list/bind flows; real flash/reset/monitor still requires explicit bound-device context.
 
 ## Project Structure & Module Organization
 
@@ -35,6 +39,8 @@ There is no build system or test runner yet. Useful local commands:
 
 - Search content: `rg "BQ40Z50" docs`
 - Preview docs via a local server: `python -m http.server -d docs 8000`
+- Start device daemon API: `cargo run --manifest-path tools/mains-aegis-devd/Cargo.toml -- serve`
+- Generate firmware catalog entry: `python3 tools/firmware-artifact/build-catalog-entry.py --elf <firmware-elf> --out firmware/target/mains-aegis-artifacts`
 - Review changes before PR: `git status` / `git diff`
 
 ## Coding Style & Naming Conventions

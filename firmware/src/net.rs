@@ -75,6 +75,7 @@ const BUILD_INFO: BuildInfo = BuildInfo {
     git_sha: env!("FW_GIT_SHA"),
     src_hash: env!("FW_SRC_HASH"),
     git_dirty: env!("FW_GIT_DIRTY"),
+    features: env!("FW_FEATURES"),
 };
 
 pub fn publish_ups_status(snapshot: UpsStatusSnapshot) {

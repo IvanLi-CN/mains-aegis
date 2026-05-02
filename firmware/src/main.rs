@@ -86,6 +86,7 @@ const FW_GIT_SHA: &str = env!("FW_GIT_SHA");
 const FW_SRC_HASH: &str = env!("FW_SRC_HASH");
 const FW_GIT_DIRTY: &str = env!("FW_GIT_DIRTY");
 const FW_BUILD_ID: &str = env!("FW_BUILD_ID");
+const FW_FEATURES: &str = env!("FW_FEATURES");
 #[cfg(feature = "web_serial")]
 const WEB_SERIAL_BUILD_INFO: BuildInfo = BuildInfo {
     package_version: env!("CARGO_PKG_VERSION"),
@@ -94,6 +95,7 @@ const WEB_SERIAL_BUILD_INFO: BuildInfo = BuildInfo {
     git_sha: env!("FW_GIT_SHA"),
     src_hash: env!("FW_SRC_HASH"),
     git_dirty: env!("FW_GIT_DIRTY"),
+    features: env!("FW_FEATURES"),
 };
 const USB_PD_FIXED_5V_ENABLED: bool = !cfg!(feature = "no-pd-sink-5v");
 const USB_PD_FIXED_9V_ENABLED: bool = !cfg!(feature = "no-pd-sink-9v");

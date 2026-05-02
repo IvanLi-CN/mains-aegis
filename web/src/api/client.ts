@@ -1,5 +1,16 @@
 import { getMockIdentity, getMockNetwork, getMockStatus } from "../fixtures/mockDevices";
-import type { ApiErrorEnvelope, Identity, NetworkSummary, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "./types";
+import type {
+  ApiErrorEnvelope,
+  DevdDevice,
+  FirmwareCatalog,
+  Identity,
+  NetworkSummary,
+  ProbeResult,
+  SafeSettingsState,
+  SerialLogEntry,
+  SerialTraceEntry,
+  UpsStatus,
+} from "./types";
 
 export class MainsAegisApiError extends Error {
   envelope: ApiErrorEnvelope["error"];
@@ -137,3 +148,17 @@ export function toErrorEnvelope(error: unknown): ApiErrorEnvelope["error"] {
     details: null,
   };
 }
+
+export const loadBundledFirmwareCatalog = () => requestJson<FirmwareCatalog>("", "/firmware/firmware-catalog.json");
+export const listDevdDevices = (baseUrl = "") => requestJson<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices");
+export const scanDevdDevices = (baseUrl = "") => requestWithBody<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices/scan", "POST");
+export const bindDevdDevice = (deviceId: string, alias?: string, baseUrl = "") =>
+  requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/bind`, "POST", { alias });
+export const connectDevdDevice = (deviceId: string, baseUrl = "") =>
+  requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/connect`, "POST");
+export const disconnectDevdDevice = (deviceId: string, baseUrl = "") =>
+  requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/disconnect`, "POST");
+export const selectDevdArtifact = (deviceId: string, input: { artifact_id?: string; manifest_path?: string }, baseUrl = "") =>
+  requestWithBody<unknown>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/artifact`, "POST", input);
+export const flashDevdDevice = (deviceId: string, input: { artifact_id?: string; dry_run?: boolean }, baseUrl = "") =>
+  requestWithBody<unknown>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/flash`, "POST", input);

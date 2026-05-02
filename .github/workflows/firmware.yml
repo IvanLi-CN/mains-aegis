@@ -35,6 +35,7 @@ jobs:
               - ".gitmodules"
               - "tps55288"
               - "ina3221-async"
+              - "tools/firmware-artifact/**"
               - ".github/workflows/firmware.yml"
       - name: Skip (no firmware changes)
         if: steps.changes.outputs.firmware != 'true'
@@ -61,3 +62,23 @@ jobs:
         run: |
           cd firmware
           cargo build
+
+      - name: cargo build release web_serial artifact
+        if: steps.changes.outputs.firmware == 'true'
+        run: |
+          cd firmware
+          cargo build --release --bin esp-firmware --features web_serial
+          cd ..
+          python3 tools/firmware-artifact/build-catalog-entry.py \
+            --elf firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware \
+            --out firmware/target/mains-aegis-artifacts \
+            --features web_serial \
+            --profile release
+
+      - name: Upload firmware artifacts
+        if: steps.changes.outputs.firmware == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mains-aegis-firmware-catalog
+          path: |
+            firmware/target/mains-aegis-artifacts/*
