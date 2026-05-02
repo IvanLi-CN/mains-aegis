@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 [features]
 default = []
 net_http = ["dep:critical-section", "dep:embassy-executor", "dep:embassy-net", "dep:embassy-time", "dep:embedded-io-async", "dep:esp-alloc", "dep:esp-radio", "dep:esp-rtos", "dep:smoltcp", "dep:static_cell"]
+web_serial = []
 # Main firmware output-voltage selectors. When neither is set, the main firmware falls back to
 # 12V. Enabling both is forbidden at compile time.
 main-vout-12v = []

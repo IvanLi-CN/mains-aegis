@@ -3,7 +3,7 @@
 use alloc::string::String as AllocString;
 use core::{
     cell::RefCell,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
 use critical_section::Mutex;
@@ -37,6 +37,7 @@ use crate::{
     net_types::{
         NetworkUiSummary, UpsStatusSnapshot, WifiConnectionState, WifiErrorKind, WifiSnapshot,
     },
+    usb_cdc_protocol::WifiConfigSecret,
 };
 
 const WIFI_SSID: &str = env!("MAINS_AEGIS_WIFI_SSID");
@@ -64,6 +65,8 @@ static WIFI_STATE: Mutex<RefCell<WifiSnapshot>> =
 static UPS_STATUS: Mutex<RefCell<UpsStatusSnapshot>> =
     Mutex::new(RefCell::new(UpsStatusSnapshot::empty()));
 static DEVICE_IDENTITY: Mutex<RefCell<Option<DeviceIdentity>>> = Mutex::new(RefCell::new(None));
+static USB_WIFI_CONFIG: Mutex<RefCell<Option<WifiConfigSecret>>> = Mutex::new(RefCell::new(None));
+static WIFI_CONFIG_GENERATION: AtomicU32 = AtomicU32::new(0);
 
 const BUILD_INFO: BuildInfo = BuildInfo {
     package_version: env!("CARGO_PKG_VERSION"),
@@ -105,7 +108,27 @@ pub fn log_wifi_config() {
     );
 }
 
-pub fn spawn_wifi_and_http(spawner: &Spawner, wifi_peripheral: WIFI<'static>) {
+pub fn set_usb_wifi_config(config: Option<WifiConfigSecret>) {
+    critical_section::with(|cs| {
+        *USB_WIFI_CONFIG.borrow_ref_mut(cs) = config;
+    });
+    WIFI_CONFIG_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+fn current_usb_wifi_config() -> Option<WifiConfigSecret> {
+    critical_section::with(|cs| USB_WIFI_CONFIG.borrow_ref(cs).clone())
+}
+
+fn wifi_config_generation() -> u32 {
+    WIFI_CONFIG_GENERATION.load(Ordering::SeqCst)
+}
+
+pub fn spawn_wifi_and_http(
+    spawner: &Spawner,
+    wifi_peripheral: WIFI<'static>,
+    usb_wifi_config: Option<WifiConfigSecret>,
+) {
+    set_usb_wifi_config(usb_wifi_config);
     esp_println::println!("net: spawn begin");
     info!("net: spawn begin");
     let radio = match radio_init() {
@@ -198,9 +221,18 @@ async fn wifi_task(
     mac: [u8; 6],
 ) {
     let mut backoff_secs = 2u64;
+    let mut configured_generation: Option<u32> = None;
     esp_println::println!("net: wifi task start");
     info!("net: wifi task start");
     loop {
+        let credential_generation = wifi_config_generation();
+        let usb_wifi_config = current_usb_wifi_config();
+        let (ssid, psk, credential_source) = match usb_wifi_config.as_ref() {
+            Some(config) => (config.ssid.as_str(), config.psk.as_str(), "eeprom"),
+            None => (WIFI_SSID, WIFI_PSK, "build"),
+        };
+        let config_changed = configured_generation != Some(credential_generation);
+
         set_wifi_snapshot(WifiSnapshot {
             state: WifiConnectionState::Connecting,
             gateway: None,
@@ -214,11 +246,20 @@ async fn wifi_task(
 
         let client_config = ModeConfig::Client(
             ClientConfig::default()
-                .with_ssid(AllocString::from(WIFI_SSID))
-                .with_password(AllocString::from(WIFI_PSK)),
+                .with_ssid(AllocString::from(ssid))
+                .with_password(AllocString::from(psk)),
         );
 
-        if !matches!(controller.is_started(), Ok(true)) {
+        if config_changed && matches!(controller.is_connected(), Ok(true)) {
+            esp_println::println!("net: wifi credential change disconnect");
+            let _ = controller.disconnect_async().await;
+        }
+        if config_changed && matches!(controller.is_started(), Ok(true)) {
+            esp_println::println!("net: wifi credential change stop");
+            let _ = controller.stop_async().await;
+        }
+
+        if config_changed || !matches!(controller.is_started(), Ok(true)) {
             esp_println::println!("net: wifi set_config");
             if let Err(err) = controller.set_config(&client_config) {
                 esp_println::println!("net: set_config failed");
@@ -228,6 +269,7 @@ async fn wifi_task(
                 backoff_secs = backoff_secs.saturating_mul(2).min(30);
                 continue;
             }
+            configured_generation = Some(credential_generation);
             esp_println::println!("net: wifi start_async begin");
             if let Err(err) = controller.start_async().await {
                 esp_println::println!("net: start_async failed");
@@ -240,8 +282,15 @@ async fn wifi_task(
             esp_println::println!("net: wifi start_async ok");
         }
 
-        esp_println::println!("net: connecting to ssid={}", WIFI_SSID);
-        info!("net: connecting to ssid={}", WIFI_SSID);
+        esp_println::println!(
+            "net: connecting to ssid={} source={}",
+            ssid,
+            credential_source
+        );
+        info!(
+            "net: connecting to ssid={} source={}",
+            ssid, credential_source
+        );
         match controller.connect_async().await {
             Ok(()) => {
                 esp_println::println!("net: connect_async ok");
@@ -300,6 +349,11 @@ async fn wifi_task(
 
                 loop {
                     Timer::after(RSSI_REFRESH_INTERVAL).await;
+                    if wifi_config_generation() != credential_generation {
+                        esp_println::println!("net: wifi credential change reconnect");
+                        let _ = controller.disconnect_async().await;
+                        break;
+                    }
                     if !matches!(controller.is_connected(), Ok(true)) {
                         break;
                     }

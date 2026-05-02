@@ -48,5 +48,6 @@ pub mod net;
 pub mod net_contract;
 pub mod net_logic;
 pub mod net_types;
+pub mod usb_cdc_protocol;
 
 pub mod audio;

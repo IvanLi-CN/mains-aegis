@@ -61,6 +61,16 @@ pub fn render_identity_json<const N: usize>(
     wifi: WifiSnapshot,
     build: BuildInfo,
 ) {
+    render_identity_json_with_write_controls(buf, identity, wifi, build, false);
+}
+
+pub fn render_identity_json_with_write_controls<const N: usize>(
+    buf: &mut String<N>,
+    identity: &DeviceIdentity,
+    wifi: WifiSnapshot,
+    build: BuildInfo,
+    write_controls: bool,
+) {
     buf.clear();
     let _ = buf.push('{');
     json_field_str(buf, "device_id", identity.device_id.as_str(), true);
@@ -79,8 +89,10 @@ pub fn render_identity_json<const N: usize>(
     let _ = buf.push_str("},\"network\":");
     write_network_object(buf, wifi);
     let _ = buf.push_str(
-        ",\"capabilities\":{\"sse\":true,\"mdns\":true,\"dns_sd\":true,\"write_controls\":false}}",
+        ",\"capabilities\":{\"sse\":true,\"mdns\":true,\"dns_sd\":true,\"write_controls\":",
     );
+    let _ = buf.push_str(if write_controls { "true" } else { "false" });
+    let _ = buf.push_str("}}");
 }
 
 pub fn render_network_json<const N: usize>(

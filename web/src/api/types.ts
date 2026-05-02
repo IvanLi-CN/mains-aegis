@@ -109,10 +109,43 @@ export type DeviceTarget = {
   alias: string;
   location: string;
   addedAt: string;
+  transport?: "http" | "serial" | "adapter";
+  serialProtocol?: string;
   mock?: boolean;
 };
 
 export type ConnectionState = "online" | "connecting" | "offline" | "error";
+
+export type SerialLogEntry = {
+  id: string;
+  timestamp: string;
+  level: "error" | "warn" | "info" | "debug" | "trace" | string;
+  target: string;
+  message: string;
+};
+
+export type SerialTraceEntry = {
+  id: string;
+  timestamp: string;
+  direction: "rx" | "tx";
+  kind: "raw" | "frame" | "ignored";
+  frameType: string | null;
+  requestId: string | null;
+  target: string | null;
+  summary: string;
+  payload: string;
+};
+
+export type SafeSettingsState = {
+  wifi_configured: boolean | null;
+  wifi_ssid: string | null;
+  log_level: "error" | "warn" | "info" | "debug" | "trace";
+  manual_charge: {
+    target: "pack_3v7" | "rsoc_80" | "full_100";
+    speed: "ma_100" | "ma_500" | "ma_1000";
+    timer_h: 1 | 2 | 6;
+  };
+};
 
 export type DeviceRecord = {
   target: DeviceTarget;
@@ -123,6 +156,13 @@ export type DeviceRecord = {
   streamState: "idle" | "streaming" | "polling" | "error";
   error: ApiErrorEnvelope["error"] | null;
   lastUpdated: string | null;
+  serial?: {
+    connected: boolean;
+    protocol: string;
+    logs: SerialLogEntry[];
+    trace: SerialTraceEntry[];
+    safeSettings: SafeSettingsState;
+  };
 };
 
 export type ProbeResult = {

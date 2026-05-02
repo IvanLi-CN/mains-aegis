@@ -171,6 +171,7 @@ const EEPROM_PD_BREADCRUMB_BASE_OFFSET: u16 = 0x0060;
 const EEPROM_PD_BREADCRUMB_SLOT_COUNT: usize = 8;
 const EEPROM_PD_BREADCRUMB_MAGIC: [u8; 4] = *b"PDBG";
 const EEPROM_PD_BREADCRUMB_VERSION: u8 = 1;
+const EEPROM_WIFI_CONFIG_OFFSET: u16 = 0x0160;
 const EEPROM_WRITE_POLL_ATTEMPTS: usize = 32;
 const EEPROM_WRITE_POLL_GAP: Duration = Duration::from_millis(1);
 
@@ -636,6 +637,36 @@ const fn manual_charge_timer_decode(raw: u8) -> Option<ManualChargeTimerLimit> {
     }
 }
 
+const fn web_serial_manual_charge_target(
+    target: esp_firmware::usb_cdc_protocol::ManualChargeTarget,
+) -> ManualChargeTarget {
+    match target {
+        esp_firmware::usb_cdc_protocol::ManualChargeTarget::Pack3V7 => ManualChargeTarget::Pack3V7,
+        esp_firmware::usb_cdc_protocol::ManualChargeTarget::Rsoc80 => ManualChargeTarget::Rsoc80,
+        esp_firmware::usb_cdc_protocol::ManualChargeTarget::Full100 => ManualChargeTarget::Full100,
+    }
+}
+
+const fn web_serial_manual_charge_speed(
+    speed: esp_firmware::usb_cdc_protocol::ManualChargeSpeed,
+) -> ManualChargeSpeed {
+    match speed {
+        esp_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma100 => ManualChargeSpeed::Ma100,
+        esp_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma500 => ManualChargeSpeed::Ma500,
+        esp_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma1000 => ManualChargeSpeed::Ma1000,
+    }
+}
+
+const fn web_serial_manual_charge_timer(
+    timer: esp_firmware::usb_cdc_protocol::ManualChargeTimerLimit,
+) -> ManualChargeTimerLimit {
+    match timer {
+        esp_firmware::usb_cdc_protocol::ManualChargeTimerLimit::H1 => ManualChargeTimerLimit::H1,
+        esp_firmware::usb_cdc_protocol::ManualChargeTimerLimit::H2 => ManualChargeTimerLimit::H2,
+        esp_firmware::usb_cdc_protocol::ManualChargeTimerLimit::H6 => ManualChargeTimerLimit::H6,
+    }
+}
+
 fn manual_charge_timer_duration(limit: ManualChargeTimerLimit) -> Duration {
     Duration::from_secs(limit.hours() as u64 * 3_600)
 }
@@ -762,6 +793,48 @@ where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     write_eeprom_block(i2c, offset, ManualChargePrefsRecordV1 { prefs }.encode())
+}
+
+fn write_wifi_config_record<I2C>(
+    i2c: &mut I2C,
+    record: [u8; esp_firmware::usb_cdc_protocol::WIFI_CONFIG_RECORD_LEN],
+) -> Result<(), esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    for (idx, chunk) in record.chunks(EEPROM_BLOCK_LEN).enumerate() {
+        let mut block = [0u8; EEPROM_BLOCK_LEN];
+        block.copy_from_slice(chunk);
+        write_eeprom_block(
+            i2c,
+            EEPROM_WIFI_CONFIG_OFFSET + (idx as u16 * EEPROM_BLOCK_LEN as u16),
+            block,
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn read_wifi_config_record<I2C>(
+    i2c: &mut I2C,
+) -> Result<
+    Option<esp_firmware::usb_cdc_protocol::WifiConfigSecret>,
+    esp_firmware::usb_cdc_protocol::WifiConfigStorageError,
+>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut record = [0u8; esp_firmware::usb_cdc_protocol::WIFI_CONFIG_RECORD_LEN];
+    for idx in 0..(esp_firmware::usb_cdc_protocol::WIFI_CONFIG_RECORD_LEN / EEPROM_BLOCK_LEN) {
+        let block = read_eeprom_block(
+            i2c,
+            EEPROM_WIFI_CONFIG_OFFSET + (idx as u16 * EEPROM_BLOCK_LEN as u16),
+        )
+        .map_err(|_| esp_firmware::usb_cdc_protocol::WifiConfigStorageError::InvalidSecret)?;
+        let start = idx * EEPROM_BLOCK_LEN;
+        record[start..start + EEPROM_BLOCK_LEN].copy_from_slice(&block);
+    }
+    esp_firmware::usb_cdc_protocol::decode_wifi_config_record(&record)
 }
 
 fn load_manual_charge_prefs_from_eeprom<I2C>(
@@ -4717,6 +4790,39 @@ where
             }
         }
         self.update_manual_charge_ui_snapshot(now);
+    }
+
+    pub fn set_web_serial_manual_charge_prefs(
+        &mut self,
+        prefs: esp_firmware::usb_cdc_protocol::ManualChargePrefsCommand,
+    ) {
+        self.request_manual_charge_action(ManualChargeUiAction::SetTarget(
+            web_serial_manual_charge_target(prefs.target),
+        ));
+        self.request_manual_charge_action(ManualChargeUiAction::SetSpeed(
+            web_serial_manual_charge_speed(prefs.speed),
+        ));
+        self.request_manual_charge_action(ManualChargeUiAction::SetTimerLimit(
+            web_serial_manual_charge_timer(prefs.timer_limit),
+        ));
+    }
+
+    pub fn write_web_serial_wifi_config(
+        &mut self,
+        config: Option<&esp_firmware::usb_cdc_protocol::WifiConfigSecret>,
+    ) -> Result<(), esp_hal::i2c::master::Error> {
+        let record = esp_firmware::usb_cdc_protocol::encode_wifi_config_record(config);
+        write_wifi_config_record(&mut self.i2c, record)
+    }
+
+    #[cfg(feature = "net_http")]
+    pub fn read_web_serial_wifi_config(
+        &mut self,
+    ) -> Result<
+        Option<esp_firmware::usb_cdc_protocol::WifiConfigSecret>,
+        esp_firmware::usb_cdc_protocol::WifiConfigStorageError,
+    > {
+        read_wifi_config_record(&mut self.i2c)
     }
 
     fn current_charging_requested(&self) -> bool {

@@ -1,5 +1,5 @@
 import { getMockIdentity, getMockNetwork, getMockStatus } from "../fixtures/mockDevices";
-import type { ApiErrorEnvelope, Identity, NetworkSummary, ProbeResult, UpsStatus } from "./types";
+import type { ApiErrorEnvelope, Identity, NetworkSummary, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "./types";
 
 export class MainsAegisApiError extends Error {
   envelope: ApiErrorEnvelope["error"];
@@ -21,15 +21,21 @@ export function normalizeBaseUrl(input: string): string {
 }
 
 async function requestJson<T>(baseUrl: string, path: string): Promise<T> {
+  return requestWithBody<T>(baseUrl, path, "GET");
+}
+
+async function requestWithBody<T>(baseUrl: string, path: string, method: "GET" | "POST" | "DELETE", body?: unknown): Promise<T> {
   if (isMockBaseUrl(baseUrl)) {
     return requestMock<T>(baseUrl, path);
   }
 
   const response = await fetch(`${baseUrl}${path}`, {
-    method: "GET",
+    method,
     headers: {
       Accept: "application/json",
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
 
   const payload = (await response.json().catch(() => null)) as T | ApiErrorEnvelope | null;
@@ -74,6 +80,37 @@ export const ping = (baseUrl: string) => requestJson<{ ok: true }>(baseUrl, "/ap
 export const getIdentity = (baseUrl: string) => requestJson<Identity>(baseUrl, "/api/v1/identity");
 export const getNetwork = (baseUrl: string) => requestJson<NetworkSummary>(baseUrl, "/api/v1/network");
 export const getStatus = (baseUrl: string) => requestJson<UpsStatus>(baseUrl, "/api/v1/status");
+
+export type AdapterSerialSession = {
+  connected: boolean;
+  protocol: string;
+  logs: SerialLogEntry[];
+  trace: SerialTraceEntry[];
+  safeSettings: SafeSettingsState;
+};
+
+type AdapterSerialSessionOptions = {
+  logsLimit?: number;
+  traceLimit?: number;
+};
+
+function adapterSerialSessionPath(options: AdapterSerialSessionOptions = {}) {
+  const params = new URLSearchParams();
+  if (options.logsLimit !== undefined) params.set("logs_limit", String(options.logsLimit));
+  if (options.traceLimit !== undefined) params.set("trace_limit", String(options.traceLimit));
+  const query = params.toString();
+  return `/api/v1/serial/session${query ? `?${query}` : ""}`;
+}
+
+export const getAdapterSerialSession = (baseUrl: string, options?: AdapterSerialSessionOptions) =>
+  requestJson<AdapterSerialSession>(baseUrl, adapterSerialSessionPath(options));
+export const sendAdapterWifiConfig = (baseUrl: string, input: { ssid: string; psk: string }) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/wifi-config", "POST", input);
+export const clearAdapterWifiConfig = (baseUrl: string) => requestWithBody<unknown>(baseUrl, "/api/v1/wifi-config", "DELETE");
+export const setAdapterLogLevel = (baseUrl: string, level: SafeSettingsState["log_level"]) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/settings/log-level", "POST", { level });
+export const setAdapterManualChargePrefs = (baseUrl: string, prefs: SafeSettingsState["manual_charge"]) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/settings/manual-charge", "POST", prefs);
 
 export async function probeDevice(baseUrl: string): Promise<ProbeResult> {
   await ping(baseUrl);
