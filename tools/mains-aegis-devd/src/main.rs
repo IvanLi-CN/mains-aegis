@@ -690,15 +690,40 @@ async fn reset_device(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
-    ensure_device(&state, &id)?;
+    let (transport, port_path) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (device.transport.clone(), device.port_path.clone())
+    };
+    if matches!(transport, DeviceTransport::NativeSerial) {
+        let port_path = port_path.ok_or_else(|| {
+            HttpError::retryable(
+                "device_port_missing",
+                "native serial device has no port path",
+            )
+        })?;
+        reset_native_serial_async(port_path).await?;
+    }
+    {
+        let mut guard = state.inner.lock().expect("state lock");
+        if let Some(device) = guard.devices.get_mut(&id) {
+            device.connection = ConnectionState::Disconnected;
+            push_log(device, "info", "reset", "device reset requested");
+        }
+    }
     emit(
         &state,
         Some(id),
         "reset",
         "reset requested",
-        json!({"backend": "serial-signals-placeholder"}),
+        json!({"backend": reset_backend_name(&transport)}),
     );
-    Ok(Json(json!({"ok": true})))
+    Ok(Json(
+        json!({"ok": true, "backend": reset_backend_name(&transport)}),
+    ))
 }
 
 async fn monitor_start(
@@ -1016,6 +1041,34 @@ async fn read_native_identity_async(port_path: String) -> Result<Value, HttpErro
         .map_err(|error| HttpError::retryable("native_identity_join_failed", error.to_string()))?
 }
 
+async fn reset_native_serial_async(port_path: String) -> Result<(), HttpError> {
+    let status = Command::new(
+        env::var("MAINS_AEGIS_DEVD_ESPFLASH_BIN").unwrap_or_else(|_| "espflash".to_string()),
+    )
+    .arg("reset")
+    .arg("--port")
+    .arg(&port_path)
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .status()
+    .await
+    .map_err(|error| HttpError::retryable("espflash_reset_launch_failed", error.to_string()))?;
+    if !status.success() {
+        return Err(HttpError::retryable(
+            "espflash_reset_failed",
+            format!("espflash reset exited with {status}"),
+        ));
+    }
+    Ok(())
+}
+
+fn reset_backend_name(transport: &DeviceTransport) -> &'static str {
+    match transport {
+        DeviceTransport::NativeSerial => "espflash_reset",
+        DeviceTransport::Mock => "mock",
+    }
+}
+
 fn read_native_identity(port_path: &str) -> Result<Value, HttpError> {
     let mut port = serialport::new(port_path, 115_200)
         .timeout(Duration::from_millis(250))
@@ -1035,7 +1088,7 @@ fn read_native_identity(port_path: &str) -> Result<Value, HttpError> {
             )
         })?;
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
     while std::time::Instant::now() < deadline {
