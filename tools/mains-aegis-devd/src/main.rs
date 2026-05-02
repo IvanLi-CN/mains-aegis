@@ -733,22 +733,54 @@ async fn monitor_start(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
+    let (transport, port_path) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (device.transport.clone(), device.port_path.clone())
+    };
+    let sample = if matches!(transport, DeviceTransport::NativeSerial) {
+        let port_path = port_path.ok_or_else(|| {
+            HttpError::retryable(
+                "device_port_missing",
+                "native serial device has no port path",
+            )
+        })?;
+        Some(capture_native_cdc_sample_async(port_path).await?)
+    } else {
+        None
+    };
     let mut guard = state.inner.lock().expect("state lock");
     let device = guard
         .devices
         .get_mut(&id)
         .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
     push_log(device, "info", "monitor", "monitor started");
+    if let Some(sample) = sample {
+        device.connection = ConnectionState::Connected;
+        for entry in sample.trace {
+            push_bounded(&mut device.trace, entry, LOG_LIMIT);
+        }
+        for entry in sample.logs {
+            push_bounded(&mut device.logs, entry, LOG_LIMIT);
+        }
+    }
     let decode = device.log_decode.clone();
+    let trace_count = device.trace.len();
+    let log_count = device.logs.len();
     drop(guard);
     emit(
         &state,
         Some(id),
         "monitor",
         "monitor started",
-        json!({"log_decode": decode}),
+        json!({"log_decode": decode, "trace_count": trace_count, "log_count": log_count}),
     );
-    Ok(Json(json!({"ok": true, "log_decode": decode})))
+    Ok(Json(
+        json!({"ok": true, "log_decode": decode, "trace_count": trace_count, "log_count": log_count}),
+    ))
 }
 
 async fn monitor_stop(
@@ -894,10 +926,27 @@ fn select_compat_device(state: &DevdState) -> Option<&DeviceRecord> {
                 && !matches!(device.transport, DeviceTransport::Mock)
         })
         .or_else(|| {
+            devices.iter().copied().find(|device| {
+                !matches!(device.transport, DeviceTransport::Mock) && device.identity.is_some()
+            })
+        })
+        .or_else(|| {
+            devices.iter().copied().find(|device| {
+                !matches!(device.transport, DeviceTransport::Mock)
+                    && (!device.trace.is_empty() || !device.logs.is_empty())
+            })
+        })
+        .or_else(|| {
             devices
                 .iter()
                 .copied()
                 .find(|device| matches!(device.connection, ConnectionState::Connected))
+        })
+        .or_else(|| {
+            devices
+                .iter()
+                .copied()
+                .find(|device| !matches!(device.transport, DeviceTransport::Mock))
         })
         .or_else(|| devices.first().copied())
 }
@@ -1148,6 +1197,94 @@ async fn reset_native_serial_async(port_path: String) -> Result<(), HttpError> {
     Ok(())
 }
 
+struct NativeCdcSample {
+    trace: Vec<SerialTraceEntry>,
+    logs: Vec<SerialLogEntry>,
+}
+
+async fn capture_native_cdc_sample_async(port_path: String) -> Result<NativeCdcSample, HttpError> {
+    tokio::task::spawn_blocking(move || capture_native_cdc_sample(&port_path))
+        .await
+        .map_err(|error| HttpError::retryable("native_monitor_join_failed", error.to_string()))?
+}
+
+fn capture_native_cdc_sample(port_path: &str) -> Result<NativeCdcSample, HttpError> {
+    let mut port = serialport::new(port_path, 115_200)
+        .timeout(Duration::from_millis(250))
+        .open()
+        .map_err(|error| {
+            HttpError::retryable(
+                "native_serial_open_failed",
+                format!("failed to open {port_path}: {error}"),
+            )
+        })?;
+    let request = r#"{"type":"request","request_id":"devd-monitor-status","op":"get_status"}"#;
+    port.write_all(request.as_bytes())
+        .and_then(|_| port.write_all(b"\n"))
+        .map_err(|error| {
+            HttpError::retryable(
+                "native_monitor_write_failed",
+                format!("failed to request monitor sample from {port_path}: {error}"),
+            )
+        })?;
+
+    let mut sample = NativeCdcSample {
+        trace: vec![trace_entry("tx", request)],
+        logs: Vec::new(),
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    while std::time::Instant::now() < deadline {
+        match port.read(&mut byte) {
+            Ok(0) => continue,
+            Ok(_) if byte[0] == b'\n' => {
+                if !line.is_empty() {
+                    if let Some((trace, log)) = parse_cdc_line_for_monitor(&line) {
+                        sample.trace.push(trace);
+                        if let Some(log) = log {
+                            sample.logs.push(log);
+                        }
+                    }
+                    line.clear();
+                }
+                let saw_response = sample.trace.iter().any(|entry| {
+                    entry.frame_type.as_deref() == Some("response")
+                        && entry.request_id.as_deref() == Some("devd-monitor-status")
+                });
+                let saw_status = sample
+                    .trace
+                    .iter()
+                    .any(|entry| entry.frame_type.as_deref() == Some("status"));
+                if saw_response && saw_status {
+                    break;
+                }
+            }
+            Ok(_) => {
+                if line.len() < 16 * 1024 {
+                    line.push(byte[0]);
+                } else {
+                    sample.trace.push(raw_trace_entry(
+                        "rx",
+                        "ignored",
+                        "CDC line exceeded 16 KiB",
+                        "<line too large>",
+                    ));
+                    line.clear();
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
+            Err(error) => {
+                return Err(HttpError::retryable(
+                    "native_monitor_read_failed",
+                    format!("failed to read monitor sample from {port_path}: {error}"),
+                ))
+            }
+        }
+    }
+    Ok(sample)
+}
+
 fn reset_backend_name(transport: &DeviceTransport) -> &'static str {
     match transport {
         DeviceTransport::NativeSerial => "espflash_reset",
@@ -1223,6 +1360,103 @@ fn parse_identity_line(line: &[u8]) -> Result<Option<Value>, HttpError> {
         }
         Some("hello") => Ok(frame.get("identity").cloned()),
         _ => Ok(None),
+    }
+}
+
+fn parse_cdc_line_for_monitor(line: &[u8]) -> Option<(SerialTraceEntry, Option<SerialLogEntry>)> {
+    let text = std::str::from_utf8(line).ok()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let trace = trace_entry("rx", text);
+    let log = serde_json::from_str::<Value>(text)
+        .ok()
+        .filter(|frame| frame.get("type").and_then(Value::as_str) == Some("log"))
+        .map(|frame| SerialLogEntry {
+            id: next_id(),
+            timestamp: now(),
+            level: frame
+                .get("level")
+                .and_then(Value::as_str)
+                .unwrap_or("info")
+                .to_string(),
+            target: frame
+                .get("target")
+                .and_then(Value::as_str)
+                .unwrap_or("usb_cdc")
+                .to_string(),
+            message: frame
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("CDC log")
+                .to_string(),
+        });
+    Some((trace, log))
+}
+
+fn trace_entry(direction: &str, payload: &str) -> SerialTraceEntry {
+    let Ok(frame) = serde_json::from_str::<Value>(payload) else {
+        return raw_trace_entry(direction, "raw", "raw CDC line", payload);
+    };
+    SerialTraceEntry {
+        id: next_id(),
+        timestamp: now(),
+        direction: direction.to_string(),
+        kind: "frame".to_string(),
+        frame_type: frame
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        request_id: frame
+            .get("request_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        target: frame
+            .get("target")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        summary: summarize_cdc_frame(&frame),
+        payload: payload.to_string(),
+    }
+}
+
+fn raw_trace_entry(direction: &str, kind: &str, summary: &str, payload: &str) -> SerialTraceEntry {
+    SerialTraceEntry {
+        id: next_id(),
+        timestamp: now(),
+        direction: direction.to_string(),
+        kind: kind.to_string(),
+        frame_type: None,
+        request_id: None,
+        target: None,
+        summary: summary.to_string(),
+        payload: payload.to_string(),
+    }
+}
+
+fn summarize_cdc_frame(frame: &Value) -> String {
+    match frame.get("type").and_then(Value::as_str) {
+        Some("log") => frame
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("log")
+            .to_string(),
+        Some("error") => frame
+            .get("error")
+            .and_then(|error| error.get("code"))
+            .and_then(Value::as_str)
+            .unwrap_or("error")
+            .to_string(),
+        Some("response") => "command response".to_string(),
+        Some("status") => "status snapshot".to_string(),
+        Some("hello") => "protocol handshake".to_string(),
+        Some("request") => frame
+            .get("op")
+            .and_then(Value::as_str)
+            .unwrap_or("request")
+            .to_string(),
+        Some(kind) => kind.to_string(),
+        None => "serial frame".to_string(),
     }
 }
 
