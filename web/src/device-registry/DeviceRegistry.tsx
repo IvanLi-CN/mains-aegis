@@ -8,7 +8,9 @@ import {
   sendAdapterWifiConfig,
   setAdapterLogLevel,
   setAdapterManualChargePrefs,
+  subscribeAdapterSerialEvents,
   toErrorEnvelope,
+  type AdapterSerialEventStream,
   type AdapterSerialSession,
 } from "../api/client";
 import { subscribeStatusStream, type StatusStream } from "../api/statusStream";
@@ -72,6 +74,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const [demoSeed, setDemoSeed] = useState<DemoSeed | null>(seedRef.current);
   const [records, setRecords] = useState<DeviceRecord[]>(() => loadInitialRecords(seedRef.current));
   const streams = useRef(new Map<string, StatusStream>());
+  const adapterStreams = useRef(new Map<string, AdapterSerialEventStream>());
   const serialSessions = useRef(new Map<string, WebSerialTransport>());
 
   useEffect(() => {
@@ -90,6 +93,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       setDemoSeed(nextSeed);
       for (const stream of streams.current.values()) stream.close();
       streams.current.clear();
+      for (const stream of adapterStreams.current.values()) stream.close();
+      adapterStreams.current.clear();
       for (const session of serialSessions.current.values()) void session.close();
       serialSessions.current.clear();
       if (!nextSeed) {
@@ -324,13 +329,39 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
 
   useEffect(() => {
     if (demoSeed) return;
-    const interval = window.setInterval(() => {
-      for (const record of records) {
-        if (record.target.transport !== "adapter" || !record.serial?.connected) continue;
-        void updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+    for (const record of records) {
+      if (record.target.transport !== "adapter" || !record.serial?.connected || adapterStreams.current.has(record.target.deviceId)) continue;
+      const subscription = subscribeAdapterSerialEvents(record.target.baseUrl, {
+        onEvent: (event) => {
+          if (event.kind === "serial_trace" && event.payload.trace) appendSerialTraceToSession(event.payload.trace, record.target.deviceId);
+          if (event.kind === "serial_log" && event.payload.log) appendSerialLogToSession(event.payload.log, record.target.deviceId);
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === record.target.deviceId
+                ? { ...candidate, streamState: "streaming", connectionState: "online", error: null, lastUpdated: new Date().toISOString() }
+                : candidate,
+            ),
+          );
+        },
+        onError: () => {
+          adapterStreams.current.get(record.target.deviceId)?.close();
+          adapterStreams.current.delete(record.target.deviceId);
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === record.target.deviceId ? { ...candidate, streamState: "polling" } : candidate,
+            ),
+          );
+          void updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+        },
+      });
+      adapterStreams.current.set(record.target.deviceId, subscription);
+    }
+    for (const [deviceId, stream] of adapterStreams.current.entries()) {
+      if (!records.some((record) => record.target.deviceId === deviceId && record.target.transport === "adapter" && record.serial?.connected)) {
+        stream.close();
+        adapterStreams.current.delete(deviceId);
       }
-    }, 1000);
-    return () => window.clearInterval(interval);
+    }
   }, [demoSeed, records]);
 
   useEffect(() => {
@@ -433,6 +464,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     return () => {
       for (const stream of streams.current.values()) stream.close();
       streams.current.clear();
+      for (const stream of adapterStreams.current.values()) stream.close();
+      adapterStreams.current.clear();
       for (const session of serialSessions.current.values()) void session.close();
       serialSessions.current.clear();
     };
@@ -861,6 +894,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const removeDevice = useCallback((deviceId: string) => {
     streams.current.get(deviceId)?.close();
     streams.current.delete(deviceId);
+    adapterStreams.current.get(deviceId)?.close();
+    adapterStreams.current.delete(deviceId);
     void serialSessions.current.get(deviceId)?.close();
     serialSessions.current.delete(deviceId);
     setRecords((current) => current.filter((record) => record.target.deviceId !== deviceId));
@@ -869,6 +904,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const resetDemo = useCallback(() => {
     for (const stream of streams.current.values()) stream.close();
     streams.current.clear();
+    for (const stream of adapterStreams.current.values()) stream.close();
+    adapterStreams.current.clear();
     for (const session of serialSessions.current.values()) void session.close();
     serialSessions.current.clear();
     setRecords(makeMockRecords("default"));

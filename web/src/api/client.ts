@@ -102,6 +102,23 @@ export type AdapterSerialSession = {
   safeSettings: SafeSettingsState;
 };
 
+export type AdapterSerialEvent = {
+  id: string;
+  timestamp: string;
+  device_id: string | null;
+  kind: "serial_trace" | "serial_log" | "monitor" | string;
+  message: string;
+  payload: {
+    trace?: SerialTraceEntry;
+    log?: SerialLogEntry;
+    [key: string]: unknown;
+  };
+};
+
+export type AdapterSerialEventStream = {
+  close: () => void;
+};
+
 type AdapterSerialSessionOptions = {
   logsLimit?: number;
   traceLimit?: number;
@@ -117,6 +134,25 @@ function adapterSerialSessionPath(options: AdapterSerialSessionOptions = {}) {
 
 export const getAdapterSerialSession = (baseUrl: string, options?: AdapterSerialSessionOptions) =>
   requestJson<AdapterSerialSession>(baseUrl, adapterSerialSessionPath(options));
+
+export function subscribeAdapterSerialEvents(
+  baseUrl: string,
+  callbacks: {
+    onEvent: (event: AdapterSerialEvent) => void;
+    onError: (event: Event) => void;
+  },
+): AdapterSerialEventStream {
+  const eventSource = new EventSource(`${baseUrl}/api/v1/serial/events`);
+  const handleEvent = (event: Event) => {
+    callbacks.onEvent(JSON.parse((event as MessageEvent<string>).data) as AdapterSerialEvent);
+  };
+  eventSource.addEventListener("serial_trace", handleEvent);
+  eventSource.addEventListener("serial_log", handleEvent);
+  eventSource.addEventListener("monitor", handleEvent);
+  eventSource.onerror = callbacks.onError;
+  return { close: () => eventSource.close() };
+}
+
 export const sendAdapterWifiConfig = (baseUrl: string, input: { ssid: string; psk: string }) =>
   requestWithBody<unknown>(baseUrl, "/api/v1/wifi-config", "POST", input);
 export const clearAdapterWifiConfig = (baseUrl: string) => requestWithBody<unknown>(baseUrl, "/api/v1/wifi-config", "DELETE");

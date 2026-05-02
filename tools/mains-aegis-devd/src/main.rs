@@ -247,6 +247,7 @@ async fn main() {
         .route("/api/v1/devices/{id}/session", get(device_session))
         .route("/api/v1/devices/{id}/events", get(device_events))
         .route("/api/v1/serial/session", get(adapter_compat_session))
+        .route("/api/v1/serial/events", get(adapter_compat_events))
         .with_state(state);
 
     if config.allow_dev_cors {
@@ -977,6 +978,21 @@ async fn device_events(
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }
 
+async fn adapter_compat_events(
+    State(state): State<AppState>,
+) -> Sse<impl futures_core::Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let receiver = state.events.subscribe();
+    let stream = async_stream::stream! {
+        let mut receiver = receiver;
+        while let Ok(event) = receiver.recv().await {
+            if matches!(event.kind.as_str(), "serial_trace" | "serial_log" | "monitor") {
+                yield Ok(Event::default().event(event.kind.clone()).id(event.id.clone()).json_data(event).expect("serialize event"));
+            }
+        }
+    };
+    Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+}
+
 fn seed_mock_device(state: &AppState) {
     let mut guard = state.inner.lock().expect("state lock");
     guard.devices.insert(
@@ -1345,6 +1361,8 @@ fn append_monitor_trace(
     trace: SerialTraceEntry,
     log: Option<SerialLogEntry>,
 ) {
+    let trace_event = trace.clone();
+    let log_event = log.clone();
     let mut guard = state.inner.lock().expect("state lock");
     if let Some(device) = guard.devices.get_mut(device_id) {
         device.connection = ConnectionState::Connected;
@@ -1352,6 +1370,23 @@ fn append_monitor_trace(
         if let Some(log) = log {
             push_bounded(&mut device.logs, log, LOG_LIMIT);
         }
+    }
+    drop(guard);
+    emit(
+        state,
+        Some(device_id.to_string()),
+        "serial_trace",
+        "CDC trace frame",
+        json!({"trace": trace_event}),
+    );
+    if let Some(log) = log_event {
+        emit(
+            state,
+            Some(device_id.to_string()),
+            "serial_log",
+            "CDC log frame",
+            json!({"log": log}),
+        );
     }
 }
 
