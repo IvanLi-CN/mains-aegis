@@ -322,7 +322,7 @@ async fn scan_devices(State(state): State<AppState>) -> Result<Json<Value>, Http
         let id = stable_device_id(&port);
         seen_native_ids.insert(id.clone());
         let port_path = port.port_name.clone();
-        let entry = {
+        {
             let entry = guard
                 .devices
                 .entry(id.clone())
@@ -339,18 +339,23 @@ async fn scan_devices(State(state): State<AppState>) -> Result<Json<Value>, Http
                     logs: VecDeque::new(),
                     trace: VecDeque::new(),
                 });
-            entry.display_name = port_path.clone();
-            entry.port_path = Some(port_path.clone());
+            let preferred_path = prefer_serial_port_path(entry.port_path.as_deref(), &port_path);
+            entry.display_name = preferred_path.clone();
+            entry.port_path = Some(preferred_path.clone());
             if let Some(binding) = entry.binding.as_mut() {
-                binding.port_path = Some(port_path.clone());
+                binding.port_path = Some(preferred_path.clone());
             }
-            entry.clone()
-        };
-        if let Some(binding) = guard.bindings.get_mut(&id) {
-            binding.port_path = Some(port_path);
+            if let Some(binding) = guard.bindings.get_mut(&id) {
+                binding.port_path = Some(preferred_path);
+            }
         }
-        discovered.push(entry.clone());
     }
+    discovered.extend(
+        seen_native_ids
+            .iter()
+            .filter_map(|id| guard.devices.get(id).cloned()),
+    );
+    discovered.sort_by(|left, right| left.id.cmp(&right.id));
     let stale_ids = guard
         .devices
         .iter()
@@ -925,6 +930,26 @@ fn bound_flash_port(device: &DeviceRecord) -> Option<String> {
         .and_then(|binding| binding.port_path.clone())
 }
 
+fn prefer_serial_port_path(current: Option<&str>, candidate: &str) -> String {
+    match current {
+        None => candidate.to_string(),
+        Some(current) if serial_path_score(candidate) > serial_path_score(current) => {
+            candidate.to_string()
+        }
+        Some(current) => current.to_string(),
+    }
+}
+
+fn serial_path_score(path: &str) -> u8 {
+    if path.contains("/cu.") {
+        2
+    } else if path.contains("/tty.") {
+        1
+    } else {
+        0
+    }
+}
+
 fn stable_device_id(port: &serialport::SerialPortInfo) -> String {
     let mut hash = Sha256::new();
     match &port.port_type {
@@ -1188,6 +1213,18 @@ mod tests {
         let left = usb_port("/dev/cu.usbmodem1", Some("board-a"));
         let right = usb_port("/dev/cu.usbmodem2", Some("board-a"));
         assert_eq!(stable_device_id(&left), stable_device_id(&right));
+    }
+
+    #[test]
+    fn prefer_serial_port_path_uses_cu_on_macos() {
+        assert_eq!(
+            prefer_serial_port_path(Some("/dev/tty.usbmodem1"), "/dev/cu.usbmodem1"),
+            "/dev/cu.usbmodem1"
+        );
+        assert_eq!(
+            prefer_serial_port_path(Some("/dev/cu.usbmodem1"), "/dev/tty.usbmodem1"),
+            "/dev/cu.usbmodem1"
+        );
     }
 
     #[test]
