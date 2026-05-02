@@ -60,6 +60,7 @@ struct DeviceRecord {
     binding: Option<DeviceBinding>,
     connection: ConnectionState,
     identity: Option<Value>,
+    status: Option<Value>,
     selected_artifact_id: Option<String>,
     log_decode: LogDecodeState,
     logs: VecDeque<SerialLogEntry>,
@@ -342,6 +343,7 @@ async fn scan_devices(State(state): State<AppState>) -> Result<Json<Value>, Http
                     binding: None,
                     connection: ConnectionState::Disconnected,
                     identity: None,
+                    status: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
                     logs: VecDeque::new(),
@@ -817,6 +819,7 @@ async fn device_session(
         "connected": matches!(device.connection, ConnectionState::Connected),
         "protocol": "mains-aegis.cdc.v1",
         "identity": device.identity,
+        "status": device.status,
         "logs": tail(&device.logs, query.logs_limit.unwrap_or(200).min(500)),
         "trace": tail(&device.trace, query.trace_limit.unwrap_or(600).min(2_000)),
         "log_decode": device.log_decode
@@ -832,6 +835,7 @@ async fn adapter_compat_session(
     Json(json!({
         "connected": device.map(|d| matches!(d.connection, ConnectionState::Connected)).unwrap_or(false),
         "protocol": "mains-aegis.cdc.v1",
+        "status": device.and_then(|d| d.status.clone()),
         "logs": device.map(|d| tail(&d.logs, query.logs_limit.unwrap_or(200).min(500))).unwrap_or_default(),
         "trace": device.map(|d| tail(&d.trace, query.trace_limit.unwrap_or(600).min(2_000))).unwrap_or_default(),
         "safeSettings": {
@@ -872,10 +876,20 @@ async fn adapter_compat_network(State(state): State<AppState>) -> Result<Json<Va
 }
 
 async fn adapter_compat_status(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
-    let Json(identity) = adapter_compat_identity(State(state)).await?;
-    let network = identity
-        .get("network")
-        .cloned()
+    let guard = state.inner.lock().expect("state lock");
+    let device = select_compat_device(&guard).ok_or_else(|| {
+        HttpError::not_found(
+            "status_unavailable",
+            "no device status is available through the adapter",
+        )
+    })?;
+    if let Some(status) = device.status.clone() {
+        return Ok(Json(status));
+    }
+    let network = device
+        .identity
+        .as_ref()
+        .and_then(|identity| identity.get("network").cloned())
         .unwrap_or_else(|| json!({"state": "disabled", "ipv4": null, "last_error": null}));
     Ok(Json(json!({
         "mode": "standby",
@@ -1005,6 +1019,7 @@ fn seed_mock_device(state: &AppState) {
             binding: None,
             connection: ConnectionState::Disconnected,
             identity: Some(mock_identity("mock-devkit")),
+            status: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             logs: VecDeque::new(),
@@ -1363,10 +1378,14 @@ fn append_monitor_trace(
 ) {
     let trace_event = trace.clone();
     let log_event = log.clone();
+    let status_event = status_from_trace_payload(&trace_event.payload);
     let mut guard = state.inner.lock().expect("state lock");
     if let Some(device) = guard.devices.get_mut(device_id) {
         device.connection = ConnectionState::Connected;
         push_bounded(&mut device.trace, trace, LOG_LIMIT);
+        if let Some(status) = status_event.clone() {
+            device.status = Some(status);
+        }
         if let Some(log) = log {
             push_bounded(&mut device.logs, log, LOG_LIMIT);
         }
@@ -1387,6 +1406,32 @@ fn append_monitor_trace(
             "CDC log frame",
             json!({"log": log}),
         );
+    }
+    if let Some(status) = status_event {
+        emit(
+            state,
+            Some(device_id.to_string()),
+            "serial_status",
+            "CDC status snapshot",
+            json!({"status": status}),
+        );
+    }
+}
+
+fn status_from_trace_payload(payload: &str) -> Option<Value> {
+    let frame = serde_json::from_str::<Value>(payload).ok()?;
+    match frame.get("type").and_then(Value::as_str) {
+        Some("status") => frame.get("status").cloned(),
+        Some("response")
+            if frame.get("ok").and_then(Value::as_bool).unwrap_or(false)
+                && frame
+                    .get("request_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|request_id| request_id == "devd-monitor-status") =>
+        {
+            frame.get("result").cloned()
+        }
+        _ => None,
     }
 }
 
@@ -1717,6 +1762,7 @@ mod tests {
             identity: Some(
                 json!({"firmware": {"build_id": "b1", "git_sha": "g1", "build_profile": "release", "features": ["web_serial"]}}),
             ),
+            status: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             logs: VecDeque::new(),
@@ -1756,6 +1802,7 @@ mod tests {
             identity: Some(
                 json!({"firmware": {"build_id": "debug-build", "git_sha": "same", "build_profile": "release", "features": ["web_serial"]}}),
             ),
+            status: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             logs: VecDeque::new(),
@@ -1795,6 +1842,7 @@ mod tests {
             identity: Some(
                 json!({"firmware": {"build_id": "same-build", "build_profile": "release", "features": ["net_http"]}}),
             ),
+            status: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             logs: VecDeque::new(),
@@ -1834,6 +1882,7 @@ mod tests {
             identity: Some(
                 json!({"firmware": {"build_id": "same-build", "build_profile": "debug", "features": ["web_serial"]}}),
             ),
+            status: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             logs: VecDeque::new(),
@@ -1871,6 +1920,7 @@ mod tests {
             binding: None,
             connection: ConnectionState::Disconnected,
             identity: None,
+            status: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             logs: VecDeque::new(),

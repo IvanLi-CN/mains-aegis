@@ -166,6 +166,7 @@ export type DeviceRecord = {
   serial?: {
     connected: boolean;
     protocol: string;
+    status?: UpsStatus | null;
     logs: SerialLogEntry[];
     trace: SerialTraceEntry[];
     safeSettings: SafeSettingsState;

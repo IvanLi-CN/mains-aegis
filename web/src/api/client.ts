@@ -97,6 +97,7 @@ export const getStatus = (baseUrl: string) => requestJson<UpsStatus>(baseUrl, "/
 export type AdapterSerialSession = {
   connected: boolean;
   protocol: string;
+  status?: UpsStatus | null;
   logs: SerialLogEntry[];
   trace: SerialTraceEntry[];
   safeSettings: SafeSettingsState;
@@ -111,6 +112,7 @@ export type AdapterSerialEvent = {
   payload: {
     trace?: SerialTraceEntry;
     log?: SerialLogEntry;
+    status?: UpsStatus;
     [key: string]: unknown;
   };
 };
@@ -148,6 +150,7 @@ export function subscribeAdapterSerialEvents(
   };
   eventSource.addEventListener("serial_trace", handleEvent);
   eventSource.addEventListener("serial_log", handleEvent);
+  eventSource.addEventListener("serial_status", handleEvent);
   eventSource.addEventListener("monitor", handleEvent);
   eventSource.onerror = callbacks.onError;
   return { close: () => eventSource.close() };

@@ -335,6 +335,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         onEvent: (event) => {
           if (event.kind === "serial_trace" && event.payload.trace) appendSerialTraceToSession(event.payload.trace, record.target.deviceId);
           if (event.kind === "serial_log" && event.payload.log) appendSerialLogToSession(event.payload.log, record.target.deviceId);
+          if (event.kind === "serial_status" && event.payload.status) appendSerialStatusToSession(event.payload.status, record.target.deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === record.target.deviceId
@@ -884,6 +885,32 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     );
   }
 
+  function appendSerialStatusToSession(status: SerialStatusFrame["status"], deviceId: string | null) {
+    if (!deviceId) return;
+    setRecords((current) =>
+      current.map((record) =>
+        record.target.deviceId === deviceId && record.serial?.connected
+          ? {
+              ...record,
+              status,
+              network: record.network
+                ? {
+                    ...record.network,
+                    state: status.network.state,
+                    ipv4: status.network.ipv4,
+                    last_error: status.network.last_error,
+                  }
+                : record.network,
+              connectionState: "online",
+              streamState: "streaming",
+              error: null,
+              lastUpdated: new Date().toISOString(),
+            }
+          : record,
+      ),
+    );
+  }
+
   async function updateAdapterSerialSnapshot(deviceId: string, baseUrl: string) {
     const session = await getAdapterSerialSession(baseUrl, ADAPTER_SERIAL_SESSION_LIMITS);
     setRecords((current) =>
@@ -1050,9 +1077,19 @@ function mergeAdapterSerial(record: DeviceRecord, session: AdapterSerialSession)
     connectionState: session.connected ? "online" : record.connectionState,
     error: session.connected ? null : record.error,
     lastUpdated: new Date().toISOString(),
+    status: session.status ?? record.status,
+    network: record.network && session.status
+      ? {
+          ...record.network,
+          state: session.status.network.state,
+          ipv4: session.status.network.ipv4,
+          last_error: session.status.network.last_error,
+        }
+      : record.network,
     serial: {
       connected: session.connected,
       protocol: session.protocol,
+      status: session.status ?? null,
       logs: session.logs,
       trace: session.trace,
       safeSettings: session.safeSettings,
