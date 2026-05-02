@@ -463,10 +463,17 @@ function ConnectPage() {
               Location
               <input name="usb-location" value={usbLocation} onChange={(event) => setUsbLocation(event.target.value)} placeholder="Bench 1" />
             </label>
-            <div className="form-actions">
-              <button className="primary-button" type="button" disabled={usbBusy || !serialSupported} onClick={() => void onUsbConnect()}>
+            <div className="form-actions with-callout">
+              <button
+                className="primary-button"
+                type="button"
+                disabled={usbBusy || !serialSupported}
+                onClick={() => void onUsbConnect()}
+                aria-describedby={usbMessage ? "usb-connect-message" : undefined}
+              >
                 <Usb size={16} /> {usbBusy ? "Connecting" : "Connect USB"}
               </button>
+              {usbMessage ? <ConnectionCallout id="usb-connect-message" message={usbMessage} /> : null}
               {demoMode ? (
                 <button className="secondary-button" type="button" onClick={onMockUsbConnect}>
                   <Terminal size={16} /> Mock USB
@@ -474,7 +481,6 @@ function ConnectPage() {
               ) : null}
             </div>
           </div>
-          {usbMessage ? <p className="form-message" role="status" aria-live="polite">{usbMessage}</p> : null}
         </section>
 
         <section className="connect-panel adapter-panel">
@@ -609,6 +615,28 @@ function ConnectPage() {
         ))}
       </div>
     </section>
+  );
+}
+
+function ConnectionCallout({ id, message }: { id: string; message: string }) {
+  const [code, body] = splitErrorMessage(message);
+  const title = code === "serial_port_unavailable" ? "USB port is in use" : "Connection failed";
+  const guidance =
+    code === "serial_port_unavailable"
+      ? "Disconnect the devd adapter session or close the app using this CDC port, then retry."
+      : "Check the selected device and try again.";
+
+  return (
+    <aside id={id} className="connection-callout" role="status" aria-live="polite">
+      <span className="connection-callout-anchor" aria-hidden="true" />
+      <AlertTriangle size={15} />
+      <span>
+        <strong>{title}</strong>
+        <span>{body || guidance}</span>
+        {body ? <em>{guidance}</em> : null}
+        {code ? <code>{code}</code> : null}
+      </span>
+    </aside>
   );
 }
 
@@ -1460,6 +1488,12 @@ function connectionEndpointLabel(record: DeviceRecord): string {
     return `${record.target.baseUrl} · USB adapter ${record.serial?.connected ? "connected" : "disconnected"}`;
   }
   return record.target.baseUrl;
+}
+
+function splitErrorMessage(message: string): [string | null, string] {
+  const separator = message.indexOf(":");
+  if (separator === -1) return [null, message];
+  return [message.slice(0, separator).trim(), message.slice(separator + 1).trim()];
 }
 
 function channelLabel(channel: UpsStatus["output"]["out_a"] | undefined): string {

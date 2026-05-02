@@ -607,6 +607,7 @@ a {
   border-radius: var(--radius-card);
   background: var(--color-panel);
   padding: 16px;
+  overflow: visible;
 }
 
 .connect-panel-header {
@@ -647,8 +648,80 @@ a {
 }
 
 .form-actions {
+  position: relative;
   grid-column: 1 / -1;
   justify-content: flex-start;
+}
+
+.form-actions.with-callout {
+  align-items: center;
+}
+
+.connection-callout {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 12px);
+  z-index: 5;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  width: min(340px, 42vw);
+  transform: translateY(-50%);
+  border: 1px solid color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
+  border-radius: var(--radius-card);
+  background: oklch(98.5% 0.018 78);
+  color: var(--color-ink);
+  box-shadow: 0 16px 36px oklch(22% 0.012 250 / 0.16);
+  padding: 12px 13px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.connection-callout svg {
+  margin-top: 1px;
+  color: var(--color-severity-warning-text);
+}
+
+.connection-callout strong,
+.connection-callout span,
+.connection-callout em,
+.connection-callout code {
+  display: block;
+}
+
+.connection-callout strong {
+  margin-bottom: 3px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.connection-callout em {
+  margin-top: 7px;
+  color: var(--color-muted);
+  font-style: normal;
+}
+
+.connection-callout code {
+  width: fit-content;
+  margin-top: 8px;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--color-warning) 16%, var(--color-panel));
+  color: var(--color-severity-warning-text);
+  padding: 3px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.connection-callout-anchor {
+  position: absolute;
+  top: 50%;
+  left: -6px;
+  width: 10px;
+  height: 10px;
+  transform: translateY(-50%) rotate(45deg);
+  border-bottom: 1px solid color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
+  border-left: 1px solid color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
+  background: inherit;
 }
 
 .connect-wide .form-actions {
@@ -1694,6 +1767,21 @@ a {
   .connect-form.compact,
   .connect-wide .connect-form.compact {
     grid-template-columns: 1fr;
+  }
+
+  .connection-callout {
+    position: relative;
+    top: auto;
+    left: auto;
+    width: min(100%, 380px);
+    margin-top: 10px;
+    transform: none;
+  }
+
+  .connection-callout-anchor {
+    top: -6px;
+    left: 24px;
+    transform: rotate(135deg);
   }
 
   .status-band-color-warm {
