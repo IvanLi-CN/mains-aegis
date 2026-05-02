@@ -485,6 +485,13 @@ async fn disconnect_device(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<DeviceRecord>, HttpError> {
+    let stop = {
+        let mut guard = state.inner.lock().expect("state lock");
+        guard.monitors.remove(&id)
+    };
+    if let Some(stop) = stop {
+        stop.store(true, Ordering::SeqCst);
+    }
     let mut guard = state.inner.lock().expect("state lock");
     let device = guard
         .devices

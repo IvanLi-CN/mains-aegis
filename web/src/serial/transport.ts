@@ -317,7 +317,7 @@ export function errorFromSerialFailure(error: unknown): SerialErrorFrame["error"
   if (error instanceof DOMException && error.name === "NetworkError") {
     return {
       code: "serial_port_unavailable",
-      message: "USB CDC port is already open or unavailable",
+      message: "USB CDC port is already open by devd or another app. Stop devd monitor/disconnect first, then retry Web Serial.",
       retryable: true,
       details: null,
     };

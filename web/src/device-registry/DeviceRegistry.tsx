@@ -1,8 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   clearAdapterWifiConfig,
+  disconnectDevdDevice,
   getAdapterSerialSession,
   getStatus,
+  listDevdDevices,
   normalizeBaseUrl,
   probeDevice,
   sendAdapterWifiConfig,
@@ -919,6 +921,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   }
 
   const removeDevice = useCallback((deviceId: string) => {
+    const record = records.find((candidate) => candidate.target.deviceId === deviceId);
     streams.current.get(deviceId)?.close();
     streams.current.delete(deviceId);
     adapterStreams.current.get(deviceId)?.close();
@@ -926,7 +929,12 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     void serialSessions.current.get(deviceId)?.close();
     serialSessions.current.delete(deviceId);
     setRecords((current) => current.filter((record) => record.target.deviceId !== deviceId));
-  }, []);
+    if (record?.target.transport === "adapter") {
+      void disconnectAdapterDevdDevice(record).catch((error) => {
+        console.warn("failed to disconnect devd adapter device", error);
+      });
+    }
+  }, [records]);
 
   const resetDemo = useCallback(() => {
     for (const stream of streams.current.values()) stream.close();
@@ -1095,6 +1103,13 @@ function mergeAdapterSerial(record: DeviceRecord, session: AdapterSerialSession)
       safeSettings: session.safeSettings,
     },
   };
+}
+
+async function disconnectAdapterDevdDevice(record: DeviceRecord): Promise<void> {
+  const devices = await listDevdDevices(record.target.baseUrl);
+  const devdDevice = devices.devices.find((device) => device.identity?.device_id === record.target.deviceId);
+  if (!devdDevice) return;
+  await disconnectDevdDevice(devdDevice.id, record.target.baseUrl);
 }
 
 function upsertRecord(records: DeviceRecord[], record: DeviceRecord): DeviceRecord[] {
