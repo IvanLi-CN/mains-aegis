@@ -58,6 +58,20 @@ impl LogLevel {
             Self::Trace => "trace",
         }
     }
+
+    pub const fn severity(self) -> u8 {
+        match self {
+            Self::Error => 0,
+            Self::Warn => 1,
+            Self::Info => 2,
+            Self::Debug => 3,
+            Self::Trace => 4,
+        }
+    }
+
+    pub const fn allows(self, emitted: Self) -> bool {
+        emitted.severity() <= self.severity()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -655,6 +669,15 @@ const fn storage_crc8(bytes: &[u8]) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_level_filter_allows_equal_and_more_severe_entries() {
+        assert!(LogLevel::Warn.allows(LogLevel::Error));
+        assert!(LogLevel::Warn.allows(LogLevel::Warn));
+        assert!(!LogLevel::Warn.allows(LogLevel::Info));
+        assert!(LogLevel::Trace.allows(LogLevel::Debug));
+        assert!(!LogLevel::Error.allows(LogLevel::Warn));
+    }
 
     #[test]
     fn parses_wifi_config_without_psk_echo_paths() {

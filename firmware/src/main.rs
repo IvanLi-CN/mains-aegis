@@ -1741,29 +1741,28 @@ fn handle_web_serial_frame<'d, I2C>(
                 log_state.emit_status_logs(serial, status);
             }
             UsbCdcRequest::SetLogLevel(level) => {
+                log_state.set_level(level);
                 let _ = write!(body, r#"{{"log_level":"{}"}}"#, level.as_str());
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
-                render_log_json(
-                    &mut frame,
-                    level,
+                log_state.emit(
+                    serial,
+                    LogLevel::Info,
                     "usb_cdc",
                     "log level updated for USB session",
                 );
-                write_web_serial_line(serial, frame.as_str());
             }
             UsbCdcRequest::SetManualChargePrefs(prefs) => {
                 power.set_web_serial_manual_charge_prefs(prefs);
                 let _ = body.push_str(r#"{"manual_charge_prefs":"updated"}"#);
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
-                render_log_json(
-                    &mut frame,
+                log_state.emit(
+                    serial,
                     LogLevel::Info,
                     "manual_charge",
                     "safe manual charge preferences updated over USB",
                 );
-                write_web_serial_line(serial, frame.as_str());
             }
         },
         Ok(UsbCdcFrame::WifiConfig {
@@ -1783,13 +1782,12 @@ fn handle_web_serial_frame<'d, I2C>(
                             Some(ssid.as_str()),
                         );
                         write_web_serial_line(serial, frame.as_str());
-                        render_log_json(
-                            &mut frame,
+                        log_state.emit(
+                            serial,
                             LogLevel::Info,
                             "wifi_config",
                             "WiFi credentials updated in EEPROM",
                         );
-                        write_web_serial_line(serial, frame.as_str());
                     }
                     Err(_) => {
                         render_error_json(
@@ -1809,13 +1807,12 @@ fn handle_web_serial_frame<'d, I2C>(
                     esp_firmware::net::set_usb_wifi_config(None);
                     render_wifi_config_ack_json(&mut frame, request_id.as_str(), false, None);
                     write_web_serial_line(serial, frame.as_str());
-                    render_log_json(
-                        &mut frame,
+                    log_state.emit(
+                        serial,
                         LogLevel::Info,
                         "wifi_config",
                         "WiFi credentials cleared from EEPROM",
                     );
-                    write_web_serial_line(serial, frame.as_str());
                 }
                 Err(_) => {
                     render_error_json(
@@ -1880,6 +1877,7 @@ impl UsbCdcStatusLogSnapshot {
 struct UsbCdcLogState {
     previous: Option<UsbCdcStatusLogSnapshot>,
     last_summary_at: Option<Instant>,
+    level: LogLevel,
 }
 
 #[cfg(feature = "web_serial")]
@@ -1888,12 +1886,18 @@ impl UsbCdcLogState {
         Self {
             previous: None,
             last_summary_at: None,
+            level: LogLevel::Info,
         }
     }
 
     fn reset(&mut self) {
         self.previous = None;
         self.last_summary_at = None;
+        self.level = LogLevel::Info;
+    }
+
+    fn set_level(&mut self, level: LogLevel) {
+        self.level = level;
     }
 
     fn emit_status_logs(
@@ -2065,6 +2069,9 @@ impl UsbCdcLogState {
         target: &str,
         message: &str,
     ) {
+        if !self.level.allows(level) {
+            return;
+        }
         let mut frame = heapless::String::<256>::new();
         render_log_json(&mut frame, level, target, message);
         write_web_serial_line(serial, frame.as_str());
