@@ -1296,16 +1296,23 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
     setMeasuredTraceHeights((current) => (current[key] === measuredHeight ? current : { ...current, [key]: measuredHeight }));
   }
 
-  const renderRawRow = (entry: SerialTraceEntry, key: string, className = `trace-row kind-${entry.kind}`) => (
-    <div className={className} key={key}>
-      <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
-      <strong>{entry.direction}</strong>
-      <code>raw</code>
-      <em>{entry.requestId ?? entry.target ?? "--"}</em>
-      <p><HighlightText value={entry.kind === "frame" ? "raw JSONL frame" : entry.summary} query={searchQuery} /></p>
-      <pre><TraceMessage entry={entry} query={searchQuery} mode="raw" /></pre>
-    </div>
-  );
+  const renderRawRow = (entry: SerialTraceEntry, key: string, className = `trace-row kind-${entry.kind}`) => {
+    const hasDistinctPayload = entry.kind === "frame" || entry.payload !== entry.summary;
+    return (
+      <div className={className} key={key}>
+        <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
+        <strong>{entry.direction}</strong>
+        <code>raw</code>
+        <em>{entry.requestId ?? entry.target ?? "--"}</em>
+        <p className={hasDistinctPayload ? "" : "trace-message-inline"}>
+          <HighlightText value={hasDistinctPayload && entry.kind === "frame" ? "raw JSONL frame" : entry.summary} query={searchQuery} />
+        </p>
+        {hasDistinctPayload ? (
+          <pre><TraceMessage entry={entry} query={searchQuery} mode="raw" /></pre>
+        ) : null}
+      </div>
+    );
+  };
   const renderParsedRow = (entry: SerialTraceEntry, key: string, className = `trace-row kind-${entry.kind}`) => (
     <div className={className} key={key}>
       <span>{new Date(entry.timestamp).toLocaleTimeString()}</span>
