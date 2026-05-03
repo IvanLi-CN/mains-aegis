@@ -1073,6 +1073,7 @@ const traceLevelRank: Record<Exclude<TraceLevelFilter, "all">, number> = {
 
 function traceEntryLevel(entry: SerialTraceEntry): Exclude<TraceLevelFilter, "all"> {
   if (entry.frameType === "error") return "error";
+  if (entry.kind === "ignored" && entry.frameType === "defmt") return "warn";
   if (entry.kind === "ignored") return "trace";
   const bracketLevel = entry.payload.match(/^\[(ERROR|WARN|INFO|DEBUG|TRACE)\s*\]/i)?.[1]?.toLowerCase();
   if (bracketLevel && bracketLevel in traceLevelRank) return bracketLevel as Exclude<TraceLevelFilter, "all">;
@@ -1109,11 +1110,20 @@ function parseTraceMessage(message: string): ParsedTraceMessage {
 }
 
 function traceSummaryLabel(entry: SerialTraceEntry): string {
+  if (entry.kind === "ignored" && entry.frameType === "defmt") return "defmt decode issue";
   if (entry.kind !== "frame" && entry.frameType === "defmt") return parseTraceMessage(entry.summary).lead;
   return entry.summary;
 }
 
 function TraceMessage({ entry, query, mode }: { entry: SerialTraceEntry; query: string; mode: "summary" | "raw" }) {
+  if (mode !== "raw" && entry.kind === "ignored" && entry.frameType === "defmt") {
+    return (
+      <div className="trace-message-readable trace-message-diagnostic">
+        <p className="trace-message-lead"><HighlightText value={entry.summary} query={query} /></p>
+        <p>Binary CDC data was captured, but the selected defmt decoder could not decode this frame.</p>
+      </div>
+    );
+  }
   if (mode === "raw" || entry.kind === "frame" || entry.frameType !== "defmt") {
     return <HighlightText value={mode === "raw" ? entry.payload : entry.summary} query={query} />;
   }

@@ -331,14 +331,15 @@ export class WebSerialTransport {
         this.options.onDefmtLog?.(decoded, frameHex);
       })
       .catch((error) => {
+        const failure = describeDefmtDecodeFailure(error);
         this.options.onTrace({
           direction: "rx",
           kind: "ignored",
           frameType: "defmt",
           requestId: null,
-          target: "defmt",
-          summary: error instanceof Error ? error.message : "defmt decode failed",
-          payload: frameHex,
+          target: "defmt_decode",
+          summary: failure.summary,
+          payload: `${failure.detail}\nframe_hex=${frameHex}`,
         });
       });
   }
@@ -418,6 +419,26 @@ export class WebSerialTransport {
     }
     if (frame.type === "response" || frame.type === "hello") pending.resolve(frame);
   }
+}
+
+function describeDefmtDecodeFailure(error: unknown): { summary: string; detail: string } {
+  const envelope = (error as { envelope?: { code?: string; message?: string; details?: unknown } } | null)?.envelope;
+  if (envelope?.code) {
+    return {
+      summary: `${envelope.code}: ${envelope.message ?? "defmt decode failed"}`,
+      detail: JSON.stringify({ source: "defmt_decode_api", ...envelope }),
+    };
+  }
+  if (error instanceof Error) {
+    return {
+      summary: `defmt_decode_error: ${error.message}`,
+      detail: JSON.stringify({ source: "defmt_decode_api", message: error.message }),
+    };
+  }
+  return {
+    summary: "defmt_decode_error: defmt decode failed",
+    detail: JSON.stringify({ source: "defmt_decode_api", message: "defmt decode failed" }),
+  };
 }
 
 export function errorFromSerialFailure(error: unknown): SerialErrorFrame["error"] {

@@ -52,7 +52,8 @@ async function requestWithBody<T>(baseUrl: string, path: string, method: "GET" |
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-  const payload = (await response.json().catch(() => null)) as T | ApiErrorEnvelope | null;
+  const responseText = await response.text();
+  const payload = parseJsonPayload<T>(responseText);
 
   if (!response.ok) {
     if (payload && typeof payload === "object" && "error" in payload) {
@@ -60,13 +61,31 @@ async function requestWithBody<T>(baseUrl: string, path: string, method: "GET" |
     }
     throw new MainsAegisApiError({
       code: `http_${response.status}`,
-      message: response.statusText || "request failed",
+      message: describeHttpFailure(response, path, responseText),
       retryable: response.status >= 500,
-      details: null,
+      details: { path, status: response.status, statusText: response.statusText, responseText: responseText.slice(0, 512) },
     });
   }
 
   return payload as T;
+}
+
+function parseJsonPayload<T>(text: string): T | ApiErrorEnvelope | null {
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as T | ApiErrorEnvelope;
+  } catch {
+    return null;
+  }
+}
+
+function describeHttpFailure(response: Response, path: string, responseText: string): string {
+  if (path === "/api/v1/defmt/decode" && response.status >= 500) {
+    return "defmt decode API is unavailable. Check that the Web dev server proxies /api to the running mains-aegis-devd instance.";
+  }
+  const statusText = response.statusText || "request failed";
+  const body = responseText.trim();
+  return body ? `${statusText}: ${body.slice(0, 160)}` : statusText;
 }
 
 function requestMock<T>(baseUrl: string, path: string): Promise<T> {
