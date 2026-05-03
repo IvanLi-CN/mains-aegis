@@ -5,6 +5,7 @@ import {
   getAdapterSerialSession,
   getStatus,
   listDevdDevices,
+  loadBundledFirmwareCatalog,
   normalizeBaseUrl,
   probeDevice,
   sendAdapterWifiConfig,
@@ -16,7 +17,7 @@ import {
   type AdapterSerialSession,
 } from "../api/client";
 import { subscribeStatusStream, type StatusStream } from "../api/statusStream";
-import type { DeviceRecord, DeviceTarget, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry } from "../api/types";
+import type { DeviceRecord, DeviceTarget, FirmwareArtifact, Identity, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry } from "../api/types";
 import { isDemoSeed, makeMockRecord, makeMockRecords, makeMockUsbSerialRecord, type DemoSeed } from "../fixtures/mockDevices";
 import {
   errorFromSerialFailure,
@@ -597,12 +598,28 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         };
         serialSessions.current.set(identity.device_id, transport);
         openedTransport = null;
+        const bundledArtifact = await findBundledFirmwareArtifact(identity);
         const record = recordFromSerialProbe(
           target,
           { identity, network: identity.network, status },
           hello.protocol,
           [
             ...pendingLogs,
+            serialLogFromFrame(
+              bundledArtifact
+                ? {
+                    type: "log",
+                    level: "info",
+                    target: "firmware_catalog",
+                    message: `Bundled firmware artifact matched: ${bundledArtifact.artifact_id}`,
+                  }
+                : {
+                    type: "log",
+                    level: "warn",
+                    target: "firmware_catalog",
+                    message: `No bundled firmware artifact matches build ${identity.firmware.build_id}; defmt binary remains undecoded`,
+                  },
+            ),
             serialLogFromFrame({
               type: "log",
               level: "info",
@@ -1147,6 +1164,30 @@ function serialTraceFromEvent(entry: SerialTraceEvent): SerialTraceEntry {
     timestamp: new Date().toISOString(),
     ...entry,
   };
+}
+
+async function findBundledFirmwareArtifact(identity: Identity): Promise<FirmwareArtifact | null> {
+  try {
+    const catalog = await loadBundledFirmwareCatalog();
+    return catalog.artifacts.find((artifact) => firmwareArtifactMatchesIdentity(artifact, identity)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function firmwareArtifactMatchesIdentity(artifact: FirmwareArtifact, identity: Identity): boolean {
+  return (
+    artifact.build_id === identity.firmware.build_id &&
+    artifact.profile === identity.firmware.build_profile &&
+    sameStringSet(artifact.features, identity.firmware.features ?? [])
+  );
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
 }
 
 function appendSerialLog(record: DeviceRecord, entry: SerialLogEntry): DeviceRecord {

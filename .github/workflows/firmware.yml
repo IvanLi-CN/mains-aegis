@@ -74,6 +74,10 @@ jobs:
             --out firmware/target/mains-aegis-artifacts \
             --features web_serial \
             --profile release
+          python3 tools/firmware-artifact/embed-web-assets.py \
+            --catalog firmware/target/mains-aegis-artifacts/firmware-catalog.json \
+            --out web/public/firmware \
+            --clean
 
       - name: Upload firmware artifacts
         if: steps.changes.outputs.firmware == 'true'
@@ -82,3 +86,4 @@ jobs:
           name: mains-aegis-firmware-catalog
           path: |
             firmware/target/mains-aegis-artifacts/*
+            web/public/firmware/*

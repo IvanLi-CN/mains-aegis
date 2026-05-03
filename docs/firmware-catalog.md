@@ -38,6 +38,18 @@ The generator writes:
 - `firmware-catalog.json`
 - `SHA256SUMS`
 
+To embed one or more local builds into the Web app static assets:
+
+```bash
+bun run firmware:embed-web
+```
+
+This stages `web/public/firmware/firmware-catalog.json`, per-artifact
+manifests, `SHA256SUMS`, and artifact files under
+`web/public/firmware/<artifact_id>/`. The browser and `mains-aegis-devd`
+static hosting then consume the same bundled fallback catalog during local
+development and production preview.
+
 ## Matching and defmt policy
 
 `mains-aegis-devd` compares connected device firmware identity with the selected artifact. Only exact `build_id`, build profile, and feature-set matches mark monitor output as `verified`; `git_sha` is provenance only because different profiles/features can share the same commit. All other cases remain `unverified` and must not be treated as a trusted defmt decode.
