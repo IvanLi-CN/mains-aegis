@@ -1530,7 +1530,8 @@ a {
 }
 
 .trace-row.kind-raw strong,
-.trace-row.kind-ignored strong {
+.trace-row.kind-ignored strong,
+.trace-row.kind-defmt strong {
   color: var(--color-warning);
 }
 

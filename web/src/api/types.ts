@@ -135,7 +135,7 @@ export type SerialTraceEntry = {
   id: string;
   timestamp: string;
   direction: "rx" | "tx";
-  kind: "raw" | "frame" | "ignored";
+  kind: "raw" | "frame" | "ignored" | "defmt";
   frameType: string | null;
   requestId: string | null;
   target: string | null;

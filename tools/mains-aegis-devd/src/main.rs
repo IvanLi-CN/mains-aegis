@@ -1521,7 +1521,13 @@ fn parse_identity_line(line: &[u8]) -> Result<Option<Value>, HttpError> {
 }
 
 fn parse_cdc_line_for_monitor(line: &[u8]) -> Option<(SerialTraceEntry, Option<SerialLogEntry>)> {
-    let text = std::str::from_utf8(line).ok()?.trim();
+    let Ok(text) = std::str::from_utf8(line) else {
+        return Some((
+            raw_trace_entry("rx", "defmt", "defmt binary frame", &hex_preview(line)),
+            None,
+        ));
+    };
+    let text = text.trim();
     if text.is_empty() {
         return None;
     }
@@ -1589,6 +1595,19 @@ fn raw_trace_entry(direction: &str, kind: &str, summary: &str, payload: &str) ->
         summary: summary.to_string(),
         payload: payload.to_string(),
     }
+}
+
+fn hex_preview(bytes: &[u8]) -> String {
+    let mut output = bytes
+        .iter()
+        .take(96)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if bytes.len() > 96 {
+        output.push_str(&format!(" ... ({} bytes)", bytes.len()));
+    }
+    output
 }
 
 fn summarize_cdc_frame(frame: &Value) -> String {

@@ -1182,7 +1182,6 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
   const tracePanelRef = useRef<HTMLDivElement | null>(null);
   const protocolFrames = trace.filter((entry) => entry.kind === "frame").length;
   const rawLines = trace.filter((entry) => entry.kind !== "frame").length;
-  const visibleTrace = trace;
   const traceModeOptions: Array<["raw" | "parsed" | "compare", string]> = [
     ["raw", "Raw"],
     ["parsed", "Parsed"],
@@ -1191,14 +1190,14 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const filteredTrace = useMemo(
     () =>
-      visibleTrace.filter((entry) => {
+      trace.filter((entry) => {
         const level = traceEntryLevel(entry);
         const matchesLevel = levelFilter === "all" || traceLevelRank[level] <= traceLevelRank[levelFilter];
         const matchesDirection = directionFilter === "all" || entry.direction === directionFilter;
         const matchesSearch = !normalizedQuery || traceSearchText(entry, level).includes(normalizedQuery);
         return matchesLevel && matchesDirection && matchesSearch;
       }),
-    [directionFilter, levelFilter, normalizedQuery, visibleTrace],
+    [directionFilter, levelFilter, normalizedQuery, trace],
   );
   const estimatedTraceHeight = traceMode === "compare" ? (wrapLines ? 128 : 112) : wrapLines ? 72 : 64;
   const traceHeightKey = (entry: SerialTraceEntry) => `${traceMode}:${wrapLines ? "wrap" : "nowrap"}:${entry.id}`;
@@ -1273,7 +1272,7 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
       <strong>{entry.direction}</strong>
       <code>{entry.frameType ?? entry.kind}</code>
       <em>{entry.requestId ?? entry.target ?? "--"}</em>
-      <p><HighlightText value={entry.kind === "frame" ? entry.summary : "unparsed raw CDC line"} query={searchQuery} /></p>
+      <p><HighlightText value={entry.kind === "frame" ? entry.summary : entry.summary} query={searchQuery} /></p>
       <pre><HighlightText value={entry.kind === "frame" ? `${entry.frameType ?? "frame"} ${entry.requestId ?? entry.target ?? ""}`.trim() : entry.payload} query={searchQuery} /></pre>
     </div>
   );

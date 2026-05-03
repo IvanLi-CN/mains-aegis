@@ -86,6 +86,7 @@ type SerialTransportOptions = {
 
 const BAUD_RATE = 115200;
 const RESPONSE_TIMEOUT_MS = 5000;
+const MAX_LINE_BYTES = 16 * 1024;
 
 export function isWebSerialSupported(): boolean {
   return typeof navigator !== "undefined" && Boolean(navigator.serial);
@@ -94,8 +95,8 @@ export function isWebSerialSupported(): boolean {
 export class WebSerialTransport {
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
-  private readBuffer = "";
-  private readonly decoder = new TextDecoder();
+  private readBuffer: number[] = [];
+  private readonly decoder = new TextDecoder("utf-8", { fatal: true });
   private readonly encoder = new TextEncoder();
   private readonly pending = new Map<
     string,
@@ -229,7 +230,7 @@ export class WebSerialTransport {
         const { value, done } = await this.reader.read();
         if (done) break;
         if (!value) continue;
-        this.consumeText(this.decoder.decode(value, { stream: true }));
+        this.consumeBytes(value);
       }
       this.options.onClose();
     } catch (error) {
@@ -237,55 +238,89 @@ export class WebSerialTransport {
     }
   }
 
-  private consumeText(text: string) {
-    this.readBuffer += text;
-    for (;;) {
-      const newlineIndex = this.readBuffer.indexOf("\n");
-      if (newlineIndex === -1) return;
-      const rawLine = this.readBuffer.slice(0, newlineIndex).trim();
-      this.readBuffer = this.readBuffer.slice(newlineIndex + 1);
-      if (!rawLine) continue;
-      const candidate = this.extractJsonCandidate(rawLine);
-      if (!candidate) {
-        this.options.onTrace({
-          direction: "rx",
-          kind: "raw",
-          frameType: null,
-          requestId: null,
-          target: null,
-          summary: "raw CDC line",
-          payload: rawLine,
-        });
+  private consumeBytes(bytes: Uint8Array) {
+    for (const byte of bytes) {
+      if (byte === 10) {
+        this.consumeLineBytes(this.readBuffer);
+        this.readBuffer = [];
         continue;
       }
-      let frame: SerialFrame;
-      try {
-        frame = JSON.parse(candidate) as SerialFrame;
-      } catch {
-        // The CDC endpoint can still carry legacy defmt/plain monitor bytes.
-        // They are not Web Serial protocol frames, but the developer console
-        // still records them so CDC ownership is observable from the browser.
+      this.readBuffer.push(byte);
+      if (this.readBuffer.length > MAX_LINE_BYTES) {
         this.options.onTrace({
           direction: "rx",
           kind: "ignored",
           frameType: null,
           requestId: null,
           target: null,
-          summary: "non-protocol CDC line",
-          payload: rawLine,
+          summary: "CDC line exceeded 16 KiB",
+          payload: hexPreview(this.readBuffer),
         });
-        continue;
+        this.readBuffer = [];
       }
-      this.options.onTrace(traceFromFrame("rx", frame, candidate));
-      this.options.onFrame(frame);
-      this.resolvePending(frame);
     }
   }
 
-  private extractJsonCandidate(rawLine: string): string | null {
-    const jsonStart = rawLine.indexOf("{");
-    if (jsonStart === -1) return null;
-    return rawLine.slice(jsonStart);
+  private consumeLineBytes(lineBytes: number[]) {
+    if (lineBytes.length === 0) return;
+    const jsonCandidate = this.extractJsonCandidate(lineBytes);
+    if (jsonCandidate) {
+      const { frame, payload } = jsonCandidate;
+      this.options.onTrace(traceFromFrame("rx", frame, payload));
+      this.options.onFrame(frame);
+      this.resolvePending(frame);
+      return;
+    }
+
+    const rawLine = this.decodeUtf8Line(lineBytes);
+    if (rawLine === null) {
+      this.options.onTrace({
+        direction: "rx",
+        kind: "defmt",
+        frameType: "defmt",
+        requestId: null,
+        target: "defmt",
+        summary: "defmt binary frame",
+        payload: hexPreview(lineBytes),
+      });
+      return;
+    }
+    if (!rawLine) return;
+    this.options.onTrace({
+      direction: "rx",
+      kind: "raw",
+      frameType: null,
+      requestId: null,
+      target: null,
+      summary: "raw CDC line",
+      payload: rawLine,
+    });
+  }
+
+  private extractJsonCandidate(lineBytes: number[]): { frame: SerialFrame; payload: string } | null {
+    const bytes = new Uint8Array(lineBytes);
+    for (let start = 0; start < bytes.length; start += 1) {
+      if (bytes[start] !== 0x7b) continue;
+      for (let end = bytes.length; end > start; end -= 1) {
+        if (bytes[end - 1] !== 0x7d) continue;
+        const payload = this.decodeUtf8Line(bytes.slice(start, end));
+        if (payload === null) continue;
+        try {
+          return { frame: JSON.parse(payload) as SerialFrame, payload };
+        } catch {
+          continue;
+        }
+      }
+    }
+    return null;
+  }
+
+  private decodeUtf8Line(lineBytes: ArrayLike<number>): string | null {
+    try {
+      return this.decoder.decode(new Uint8Array(Array.from(lineBytes))).trim();
+    } catch {
+      return null;
+    }
   }
 
   private resolvePending(frame: SerialFrame) {
@@ -340,6 +375,14 @@ export function errorFromSerialFailure(error: unknown): SerialErrorFrame["error"
 
 function nextRequestId(): string {
   return `web-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function hexPreview(bytes: ArrayLike<number>): string {
+  const preview = Array.from(bytes)
+    .slice(0, 96)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join(" ");
+  return bytes.length > 96 ? `${preview} ... (${bytes.length} bytes)` : preview;
 }
 
 function traceFromFrame(direction: SerialTraceEntry["direction"], frame: Record<string, unknown>, payload: string): SerialTraceEvent {
