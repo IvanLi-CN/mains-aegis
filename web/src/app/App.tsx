@@ -1337,7 +1337,6 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
   const renderTraceEntry = (entry: SerialTraceEntry) => {
     if (traceMode === "raw") return renderRawRow(entry, entry.id);
     if (traceMode === "parsed") return renderParsedRow(entry, entry.id);
-    if (entry.frameType === "defmt" || entry.payload === entry.summary) return renderParsedRow(entry, entry.id);
     return (
       <div className={`trace-compare-group kind-${entry.kind}`} key={entry.id}>
         {renderParsedRow(entry, `${entry.id}-parsed`)}
