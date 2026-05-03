@@ -1327,6 +1327,7 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
     const key = traceHeightKey(entry);
     const measuredHeight = Math.ceil(node.getBoundingClientRect().height);
     if (!measuredHeight) return;
+    if (measuredTraceHeights[key] === measuredHeight) return;
     setMeasuredTraceHeights((current) => (current[key] === measuredHeight ? current : { ...current, [key]: measuredHeight }));
   }
 
@@ -1353,7 +1354,10 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
       <strong>{entry.direction}</strong>
       <code>{entry.frameType ?? entry.kind}</code>
       <em>{entry.requestId ?? entry.target ?? "--"}</em>
-      <p><HighlightText value={traceSummaryLabel(entry)} query={searchQuery} /></p>
+      <p>
+        {entry.kind === "ignored" && entry.frameType === "defmt" ? <b className="trace-diagnostic-tag">Decode issue</b> : null}
+        <HighlightText value={traceSummaryLabel(entry)} query={searchQuery} />
+      </p>
       <div className="trace-row-body">
         {entry.kind === "frame" ? (
           <HighlightText value={`${entry.frameType ?? "frame"} ${entry.requestId ?? entry.target ?? ""}`.trim()} query={searchQuery} />
@@ -1438,6 +1442,9 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
       <div
         className="trace-panel is-virtualized"
         ref={tracePanelRef}
+        role="log"
+        aria-label="USB CDC trace records"
+        aria-live="off"
         onScroll={(event) => {
           const panel = event.currentTarget;
           const maxScrollTop = Math.max(0, panel.scrollHeight - panel.clientHeight);

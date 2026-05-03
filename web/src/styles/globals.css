@@ -1188,20 +1188,20 @@ a {
 .switch-control {
   display: inline-flex;
   align-items: center;
-  min-height: 36px;
-  height: 36px;
+  min-height: 40px;
+  height: 40px;
   gap: 8px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-pill);
-  padding: 0 10px;
+  padding: 0 12px;
   color: var(--color-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .developer-console-actions .icon-button {
-  width: 36px;
-  min-height: 36px;
-  height: 36px;
+  width: 40px;
+  min-height: 40px;
+  height: 40px;
 }
 
 .switch-control input {
@@ -1248,14 +1248,14 @@ a {
 
 .trace-filter-tabs button {
   flex: 0 0 auto;
-  min-height: 26px;
+  min-height: 36px;
   border: 0;
   border-radius: var(--radius-pill);
   background: transparent;
-  padding: 0 8px;
+  padding: 0 10px;
   color: var(--color-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -1433,14 +1433,14 @@ a {
 
 .trace-mode-tabs button {
   flex: 0 0 auto;
-  min-height: 28px;
+  min-height: 36px;
   border: 0;
   border-radius: var(--radius-pill);
   background: transparent;
-  padding: 0 10px;
+  padding: 0 12px;
   color: var(--color-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -1543,6 +1543,23 @@ a {
 
 .trace-row.kind-ignored {
   background: color-mix(in oklch, var(--color-code-surface) 90%, var(--color-warning) 10%);
+}
+
+.trace-diagnostic-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  margin-inline-end: 8px;
+  border: 1px solid color-mix(in oklch, var(--color-warning) 52%, var(--color-code-text));
+  border-radius: 4px;
+  background: color-mix(in oklch, var(--color-warning) 22%, var(--color-code-surface));
+  color: color-mix(in oklch, var(--color-code-text) 76%, var(--color-warning) 24%);
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  vertical-align: text-bottom;
 }
 
 .trace-row p {
@@ -1859,6 +1876,23 @@ a {
     grid-column: 1 / -1;
   }
 
+  .trace-filter-tabs,
+  .trace-filter-label {
+    display: none;
+  }
+
+  .trace-filter-group {
+    display: block;
+  }
+
+  .trace-filter-group .trace-select-control {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 4px;
+    width: 100%;
+  }
+
   .connect-form.compact,
   .connect-wide .connect-form.compact {
     grid-template-columns: 1fr;
@@ -2067,14 +2101,7 @@ a {
     align-items: start;
   }
 
-  .trace-filter-group {
-    display: block;
-    min-width: 0;
-  }
-
-  .trace-mode-tabs,
-  .trace-filter-tabs,
-  .trace-filter-label {
+  .trace-mode-tabs {
     display: none;
   }
 
