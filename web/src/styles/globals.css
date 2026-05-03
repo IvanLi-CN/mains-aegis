@@ -1486,14 +1486,16 @@ a {
 
 .trace-row {
   display: grid;
-  grid-template-columns: 74px 38px minmax(72px, 0.24fr) minmax(110px, 0.34fr) minmax(160px, 0.7fr);
-  gap: 10px;
+  grid-template-columns: 74px 38px minmax(64px, 0.18fr) minmax(104px, 0.26fr) minmax(280px, 1fr);
+  column-gap: 10px;
+  row-gap: 8px;
   align-items: baseline;
   border-bottom: 1px solid color-mix(in oklch, var(--color-code-text) 12%, transparent);
-  padding: 9px 10px;
+  padding: 10px 12px 12px;
   color: var(--color-code-text);
   font-family: var(--font-mono);
   font-size: 12px;
+  line-height: 1.45;
 }
 
 .trace-row:last-child {
@@ -1540,6 +1542,11 @@ a {
   overflow-wrap: anywhere;
 }
 
+.trace-row > p {
+  color: color-mix(in oklch, var(--color-code-text) 92%, var(--color-muted));
+  font-weight: 650;
+}
+
 .trace-row mark {
   border-radius: 3px;
   background: color-mix(in oklch, var(--color-warning) 72%, transparent);
@@ -1547,7 +1554,8 @@ a {
   padding: 0 2px;
 }
 
-.trace-row pre {
+.trace-row pre,
+.trace-row-body {
   grid-column: 1 / -1;
   overflow: auto;
   max-height: 180px;
@@ -1556,12 +1564,65 @@ a {
   padding-top: 8px;
 }
 
-.developer-console.wrap-lines .trace-row pre {
+.trace-row-body {
+  max-height: none;
+}
+
+.trace-message-readable {
+  display: grid;
+  gap: 8px;
+}
+
+.trace-message-lead {
+  color: color-mix(in oklch, var(--color-code-text) 96%, var(--color-green) 4%);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.trace-field-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.trace-field {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid color-mix(in oklch, var(--color-code-text) 12%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--color-code-surface) 86%, var(--color-green) 14%);
+  padding: 6px 8px;
+}
+
+.trace-field dt,
+.trace-field dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.trace-field dt {
+  color: color-mix(in oklch, var(--color-code-text) 58%, var(--color-muted));
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.trace-field dd {
+  color: var(--color-code-text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.developer-console.wrap-lines .trace-row pre,
+.developer-console.wrap-lines .trace-row-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.developer-console.no-wrap-lines .trace-row pre {
+.developer-console.no-wrap-lines .trace-row pre,
+.developer-console.no-wrap-lines .trace-row-body {
   white-space: pre;
   overflow-wrap: normal;
 }

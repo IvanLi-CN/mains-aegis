@@ -1089,6 +1089,46 @@ function traceSearchText(entry: SerialTraceEntry, level: string) {
   return [entry.direction, level, entry.kind, entry.frameType, entry.requestId, entry.target, entry.summary, entry.payload].filter(Boolean).join(" ").toLowerCase();
 }
 
+type ParsedTraceMessage = {
+  lead: string;
+  fields: Array<{ key: string; value: string }>;
+};
+
+function parseTraceMessage(message: string): ParsedTraceMessage {
+  const fields: Array<{ key: string; value: string }> = [];
+  const fieldPattern = /(?:^|\s)([A-Za-z][A-Za-z0-9_./-]*)=("[^"]*"|\S+)/g;
+  let leadEnd = message.length;
+  let match: RegExpExecArray | null;
+  while ((match = fieldPattern.exec(message)) !== null) {
+    if (fields.length === 0) leadEnd = match.index;
+    fields.push({ key: match[1], value: match[2] });
+  }
+  const lead = message.slice(0, leadEnd).trim() || message.split(/\s+/).slice(0, 2).join(" ");
+  return { lead, fields };
+}
+
+function TraceMessage({ entry, query, mode }: { entry: SerialTraceEntry; query: string; mode: "summary" | "raw" }) {
+  if (mode === "raw" || entry.kind === "frame" || entry.frameType !== "defmt") {
+    return <HighlightText value={mode === "raw" ? entry.payload : entry.summary} query={query} />;
+  }
+  const parsed = parseTraceMessage(entry.summary);
+  return (
+    <div className="trace-message-readable">
+      <p className="trace-message-lead"><HighlightText value={parsed.lead} query={query} /></p>
+      {parsed.fields.length > 0 ? (
+        <dl className="trace-field-list">
+          {parsed.fields.map((field, index) => (
+            <div className="trace-field" key={`${entry.id}-${field.key}-${index}`}>
+              <dt><HighlightText value={field.key} query={query} /></dt>
+              <dd><HighlightText value={field.value} query={query} /></dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </div>
+  );
+}
+
 function HighlightText({ value, query }: { value: string; query: string }) {
   const needle = query.trim();
   if (!needle) return <>{value}</>;
@@ -1263,7 +1303,7 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
       <code>raw</code>
       <em>{entry.requestId ?? entry.target ?? "--"}</em>
       <p><HighlightText value={entry.kind === "frame" ? "raw JSONL frame" : entry.summary} query={searchQuery} /></p>
-      <pre><HighlightText value={entry.payload} query={searchQuery} /></pre>
+      <pre><TraceMessage entry={entry} query={searchQuery} mode="raw" /></pre>
     </div>
   );
   const renderParsedRow = (entry: SerialTraceEntry, key: string, className = `trace-row kind-${entry.kind}`) => (
@@ -1273,12 +1313,19 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
       <code>{entry.frameType ?? entry.kind}</code>
       <em>{entry.requestId ?? entry.target ?? "--"}</em>
       <p><HighlightText value={entry.kind === "frame" ? entry.summary : entry.summary} query={searchQuery} /></p>
-      <pre><HighlightText value={entry.kind === "frame" ? `${entry.frameType ?? "frame"} ${entry.requestId ?? entry.target ?? ""}`.trim() : entry.payload} query={searchQuery} /></pre>
+      <div className="trace-row-body">
+        {entry.kind === "frame" ? (
+          <HighlightText value={`${entry.frameType ?? "frame"} ${entry.requestId ?? entry.target ?? ""}`.trim()} query={searchQuery} />
+        ) : (
+          <TraceMessage entry={entry} query={searchQuery} mode="summary" />
+        )}
+      </div>
     </div>
   );
   const renderTraceEntry = (entry: SerialTraceEntry) => {
     if (traceMode === "raw") return renderRawRow(entry, entry.id);
     if (traceMode === "parsed") return renderParsedRow(entry, entry.id);
+    if (entry.frameType === "defmt" || entry.payload === entry.summary) return renderParsedRow(entry, entry.id);
     return (
       <div className={`trace-compare-group kind-${entry.kind}`} key={entry.id}>
         {renderParsedRow(entry, `${entry.id}-parsed`)}
