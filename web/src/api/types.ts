@@ -131,6 +131,13 @@ export type SerialLogEntry = {
   message: string;
 };
 
+export type DefmtDecodeResult = {
+  level: string;
+  target: string;
+  message: string;
+  index: number;
+};
+
 export type SerialTraceEntry = {
   id: string;
   timestamp: string;

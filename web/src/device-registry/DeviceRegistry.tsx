@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   clearAdapterWifiConfig,
+  decodeDefmtFrame,
   disconnectDevdDevice,
   getAdapterSerialSession,
   getStatus,
@@ -564,6 +565,20 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
             }
             appendSerialTraceToSession(entry, deviceId);
           },
+          onDefmtLog: (decoded) => {
+            const log = serialLogFromFrame({
+              type: "log",
+              level: decoded.level,
+              target: decoded.target,
+              message: decoded.message,
+            });
+            const deviceId = transportRef ? findSessionDeviceId(transportRef) : null;
+            if (!deviceId) {
+              pendingLogs.push(log);
+              return;
+            }
+            appendSerialLogToSession(log, deviceId);
+          },
           onClose: (error) => {
             if (!transportRef) return;
             const deviceId = findSessionDeviceId(transportRef);
@@ -599,6 +614,12 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         serialSessions.current.set(identity.device_id, transport);
         openedTransport = null;
         const bundledArtifact = await findBundledFirmwareArtifact(identity);
+        const bundledElfPath = bundledArtifact ? firmwareArtifactElfPath(bundledArtifact) : null;
+        transport.setDefmtDecoder(
+          bundledElfPath
+            ? (frame) => decodeDefmtFrame({ elf_path: bundledElfPath, frame_hex: bytesToHex(frame) })
+            : null,
+        );
         const record = recordFromSerialProbe(
           target,
           { identity, network: identity.network, status },
@@ -1181,6 +1202,17 @@ function firmwareArtifactMatchesIdentity(artifact: FirmwareArtifact, identity: I
     artifact.profile === identity.firmware.build_profile &&
     sameStringSet(artifact.features, identity.firmware.features ?? [])
   );
+}
+
+function firmwareArtifactElfPath(artifact: FirmwareArtifact): string | null {
+  const file = artifact.files.find((candidate) => candidate.kind === "elf");
+  return file ? `/firmware/${file.path}` : null;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join(" ");
 }
 
 function sameStringSet(left: string[], right: string[]): boolean {

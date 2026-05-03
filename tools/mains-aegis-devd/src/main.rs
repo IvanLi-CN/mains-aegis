@@ -6,6 +6,10 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
+use defmt_decoder::{
+    log::format::{Formatter, FormatterConfig, FormatterFormat},
+    Table,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -199,6 +203,12 @@ struct FlashRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct DefmtDecodeRequest {
+    elf_path: String,
+    frame_hex: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct SessionQuery {
     logs_limit: Option<usize>,
     trace_limit: Option<usize>,
@@ -249,6 +259,7 @@ async fn main() {
         .route("/api/v1/devices/{id}/events", get(device_events))
         .route("/api/v1/serial/session", get(adapter_compat_session))
         .route("/api/v1/serial/events", get(adapter_compat_events))
+        .route("/api/v1/defmt/decode", post(defmt_decode))
         .with_state(state);
 
     if config.allow_dev_cors {
@@ -1012,6 +1023,121 @@ async fn adapter_compat_events(
         }
     };
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+}
+
+async fn defmt_decode(Json(input): Json<DefmtDecodeRequest>) -> Result<Json<Value>, HttpError> {
+    let elf_path = resolve_embedded_firmware_path(&input.elf_path)?;
+    let elf = fs::read(&elf_path).map_err(|error| {
+        HttpError::retryable(
+            "defmt_elf_read_failed",
+            format!("failed to read {}: {error}", elf_path.display()),
+        )
+    })?;
+    let table = match Table::parse(&elf) {
+        Ok(Some(table)) => table,
+        Ok(None) => {
+            return Err(HttpError::non_retryable(
+                "defmt_table_missing",
+                "ELF does not contain defmt metadata",
+            ))
+        }
+        Err(error) => {
+            return Err(HttpError::non_retryable(
+                "defmt_table_parse_failed",
+                format!("failed to parse defmt metadata: {error}"),
+            ))
+        }
+    };
+    if table.encoding() != defmt_decoder::Encoding::Rzcobs {
+        return Err(HttpError::non_retryable(
+            "defmt_encoding_unsupported",
+            format!("unsupported defmt encoding: {:?}", table.encoding()),
+        ));
+    }
+
+    let frame_bytes = decode_hex(&input.frame_hex)?;
+    let mut decoder = table.new_stream_decoder();
+    decoder.received(&frame_bytes);
+    decoder.received(&[0]);
+    let frame = decoder.decode().map_err(|error| {
+        HttpError::retryable(
+            "defmt_frame_decode_failed",
+            format!("failed to decode defmt frame: {error}"),
+        )
+    })?;
+    let formatter = Formatter::new(FormatterConfig {
+        format: FormatterFormat::Custom("{s}"),
+        is_timestamp_available: table.has_timestamp(),
+    });
+    let level = frame
+        .level()
+        .map(|level| format!("{level:?}").to_lowercase());
+    let index = frame.index();
+    let message = formatter.format_frame(frame, None, None, None);
+    Ok(Json(json!({
+        "level": level.unwrap_or_else(|| "info".to_string()),
+        "target": "defmt",
+        "message": message,
+        "index": index,
+    })))
+}
+
+fn resolve_embedded_firmware_path(input: &str) -> Result<PathBuf, HttpError> {
+    let trimmed = input.trim().trim_start_matches('/');
+    if trimmed.is_empty()
+        || trimmed.contains("..")
+        || trimmed.starts_with('~')
+        || FsPath::new(trimmed).is_absolute()
+    {
+        return Err(HttpError::non_retryable(
+            "defmt_elf_path_invalid",
+            "ELF path must be a relative embedded firmware path",
+        ));
+    }
+    let firmware_rel = trimmed.strip_prefix("firmware/").unwrap_or(trimmed);
+    let path = env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("web/public/firmware")
+        .join(firmware_rel);
+    if !path.is_file() {
+        return Err(HttpError::not_found(
+            "defmt_elf_not_found",
+            format!("embedded firmware ELF not found: {trimmed}"),
+        ));
+    }
+    Ok(path)
+}
+
+fn decode_hex(input: &str) -> Result<Vec<u8>, HttpError> {
+    let compact = input
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect::<Vec<_>>();
+    if compact.len() % 2 != 0 {
+        return Err(HttpError::non_retryable(
+            "defmt_hex_invalid",
+            "hex payload must have an even number of digits",
+        ));
+    }
+    let mut output = Vec::with_capacity(compact.len() / 2);
+    for pair in compact.chunks_exact(2) {
+        let hi = hex_value(pair[0])?;
+        let lo = hex_value(pair[1])?;
+        output.push((hi << 4) | lo);
+    }
+    Ok(output)
+}
+
+fn hex_value(byte: u8) -> Result<u8, HttpError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(HttpError::non_retryable(
+            "defmt_hex_invalid",
+            "hex payload contains a non-hex digit",
+        )),
+    }
 }
 
 fn seed_mock_device(state: &AppState) {

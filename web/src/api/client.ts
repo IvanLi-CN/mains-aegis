@@ -2,6 +2,7 @@ import { getMockIdentity, getMockNetwork, getMockStatus } from "../fixtures/mock
 import type {
   ApiErrorEnvelope,
   DevdDevice,
+  DefmtDecodeResult,
   FirmwareCatalog,
   Identity,
   NetworkSummary,
@@ -191,6 +192,8 @@ export function toErrorEnvelope(error: unknown): ApiErrorEnvelope["error"] {
 }
 
 export const loadBundledFirmwareCatalog = () => requestJson<FirmwareCatalog>("", "/firmware/firmware-catalog.json");
+export const decodeDefmtFrame = (input: { elf_path: string; frame_hex: string }, baseUrl = "") =>
+  requestWithBody<DefmtDecodeResult>(baseUrl, "/api/v1/defmt/decode", "POST", input);
 export const listDevdDevices = (baseUrl = "") => requestJson<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices");
 export const scanDevdDevices = (baseUrl = "") => requestWithBody<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices/scan", "POST");
 export const bindDevdDevice = (deviceId: string, alias?: string, baseUrl = "") =>

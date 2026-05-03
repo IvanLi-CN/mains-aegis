@@ -1,4 +1,4 @@
-import type { Identity, SerialTraceEntry, UpsStatus } from "../api/types";
+import type { DefmtDecodeResult, Identity, SerialTraceEntry, UpsStatus } from "../api/types";
 
 type SerialPortRequestOptions = {
   filters?: Array<{ usbVendorId?: number; usbProductId?: number }>;
@@ -81,6 +81,7 @@ export type SerialTraceEvent = Omit<SerialTraceEntry, "id" | "timestamp">;
 type SerialTransportOptions = {
   onFrame: (frame: SerialFrame) => void;
   onTrace: (entry: SerialTraceEvent) => void;
+  onDefmtLog?: (entry: DefmtDecodeResult, frameHex: string) => void;
   onClose: (error?: Error) => void;
 };
 
@@ -96,6 +97,9 @@ export class WebSerialTransport {
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   private readBuffer: number[] = [];
+  private defmtBuffer: number[] = [];
+  private defmtInFrame = false;
+  private defmtDecoder: ((frame: Uint8Array) => Promise<DefmtDecodeResult>) | null = null;
   private readonly decoder = new TextDecoder("utf-8", { fatal: true });
   private readonly encoder = new TextEncoder();
   private readonly pending = new Map<
@@ -140,6 +144,10 @@ export class WebSerialTransport {
     this.writer?.releaseLock();
     this.writer = null;
     await this.port.close().catch(() => undefined);
+  }
+
+  setDefmtDecoder(decoder: ((frame: Uint8Array) => Promise<DefmtDecodeResult>) | null) {
+    this.defmtDecoder = decoder;
   }
 
   async hello(): Promise<SerialHelloFrame> {
@@ -230,7 +238,7 @@ export class WebSerialTransport {
         const { value, done } = await this.reader.read();
         if (done) break;
         if (!value) continue;
-        this.consumeBytes(value);
+        this.consumeMonitorBytes(value);
       }
       this.options.onClose();
     } catch (error) {
@@ -238,8 +246,41 @@ export class WebSerialTransport {
     }
   }
 
-  private consumeBytes(bytes: Uint8Array) {
-    for (const byte of bytes) {
+  private consumeMonitorBytes(bytes: Uint8Array) {
+    this.defmtBuffer.push(...bytes);
+    this.drainDefmtBuffer();
+  }
+
+  private drainDefmtBuffer() {
+    for (;;) {
+      if (this.defmtInFrame) {
+        const end = findFrameEnd(this.defmtBuffer);
+        if (end === -1) return;
+        const frame = this.defmtBuffer.slice(0, end);
+        this.defmtBuffer.splice(0, end + 1);
+        this.defmtInFrame = false;
+        this.consumeDefmtFrame(frame);
+        continue;
+      }
+
+      const start = findFrameStart(this.defmtBuffer);
+      if (start === -1) {
+        const keep = this.defmtBuffer.at(-1) === 0xff ? 1 : 0;
+        const raw = this.defmtBuffer.splice(0, this.defmtBuffer.length - keep);
+        if (raw.length > 0) this.consumeLineBytesStream(raw);
+        return;
+      }
+
+      const raw = this.defmtBuffer.splice(0, start);
+      if (raw.length > 0) this.consumeLineBytesStream(raw);
+      this.defmtBuffer.splice(0, 2);
+      this.defmtInFrame = true;
+    }
+  }
+
+  private consumeLineBytesStream(bytes: ArrayLike<number>) {
+    for (let index = 0; index < bytes.length; index += 1) {
+      const byte = bytes[index];
       if (byte === 10) {
         this.consumeLineBytes(this.readBuffer);
         this.readBuffer = [];
@@ -259,6 +300,47 @@ export class WebSerialTransport {
         this.readBuffer = [];
       }
     }
+  }
+
+  private consumeDefmtFrame(frame: number[]) {
+    const frameHex = hexPayload(frame);
+    if (!this.defmtDecoder) {
+      this.options.onTrace({
+        direction: "rx",
+        kind: "defmt",
+        frameType: "defmt",
+        requestId: null,
+        target: "defmt",
+        summary: "defmt frame awaiting decoder",
+        payload: frameHex,
+      });
+      return;
+    }
+
+    void this.defmtDecoder(new Uint8Array(frame))
+      .then((decoded) => {
+        this.options.onTrace({
+          direction: "rx",
+          kind: "raw",
+          frameType: "defmt",
+          requestId: null,
+          target: decoded.target,
+          summary: decoded.message,
+          payload: decoded.message,
+        });
+        this.options.onDefmtLog?.(decoded, frameHex);
+      })
+      .catch((error) => {
+        this.options.onTrace({
+          direction: "rx",
+          kind: "ignored",
+          frameType: "defmt",
+          requestId: null,
+          target: "defmt",
+          summary: error instanceof Error ? error.message : "defmt decode failed",
+          payload: frameHex,
+        });
+      });
   }
 
   private consumeLineBytes(lineBytes: number[]) {
@@ -378,11 +460,28 @@ function nextRequestId(): string {
 }
 
 function hexPreview(bytes: ArrayLike<number>): string {
-  const preview = Array.from(bytes)
-    .slice(0, 96)
+  const preview = hexPayload(Array.from(bytes).slice(0, 96));
+  return bytes.length > 96 ? `${preview} ... (${bytes.length} bytes)` : preview;
+}
+
+function hexPayload(bytes: ArrayLike<number>): string {
+  return Array.from(bytes)
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join(" ");
-  return bytes.length > 96 ? `${preview} ... (${bytes.length} bytes)` : preview;
+}
+
+function findFrameStart(buffer: number[]): number {
+  for (let index = 0; index < buffer.length - 1; index += 1) {
+    if (buffer[index] === 0xff && buffer[index + 1] === 0x00) return index;
+  }
+  return -1;
+}
+
+function findFrameEnd(buffer: number[]): number {
+  const start = buffer.findIndex((byte) => byte !== 0);
+  if (start === -1) return -1;
+  const end = buffer.slice(start).findIndex((byte) => byte === 0);
+  return end === -1 ? -1 : start + end;
 }
 
 function traceFromFrame(direction: SerialTraceEntry["direction"], frame: Record<string, unknown>, payload: string): SerialTraceEvent {
