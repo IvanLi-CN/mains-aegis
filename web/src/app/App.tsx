@@ -32,7 +32,7 @@ import { FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState
 import type { LucideIcon } from "lucide-react";
 import type { DeviceRecord, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { useDeviceRegistry } from "../device-registry/DeviceRegistry";
+import { useDeviceRegistry } from "../device-registry/context";
 import { isDemoSeed } from "../fixtures/mockDevices";
 import { isWebSerialSupported } from "../serial/transport";
 import { formatCurrent, formatPercent, formatTemp, formatVoltage, timeAgo } from "../utils/format";
