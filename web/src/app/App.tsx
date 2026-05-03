@@ -1107,6 +1107,11 @@ function parseTraceMessage(message: string): ParsedTraceMessage {
   return { lead, fields };
 }
 
+function traceSummaryLabel(entry: SerialTraceEntry): string {
+  if (entry.kind !== "frame" && entry.frameType === "defmt") return parseTraceMessage(entry.summary).lead;
+  return entry.summary;
+}
+
 function TraceMessage({ entry, query, mode }: { entry: SerialTraceEntry; query: string; mode: "summary" | "raw" }) {
   if (mode === "raw" || entry.kind === "frame" || entry.frameType !== "defmt") {
     return <HighlightText value={mode === "raw" ? entry.payload : entry.summary} query={query} />;
@@ -1319,7 +1324,7 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
       <strong>{entry.direction}</strong>
       <code>{entry.frameType ?? entry.kind}</code>
       <em>{entry.requestId ?? entry.target ?? "--"}</em>
-      <p><HighlightText value={entry.kind === "frame" ? entry.summary : entry.summary} query={searchQuery} /></p>
+      <p><HighlightText value={traceSummaryLabel(entry)} query={searchQuery} /></p>
       <div className="trace-row-body">
         {entry.kind === "frame" ? (
           <HighlightText value={`${entry.frameType ?? "frame"} ${entry.requestId ?? entry.target ?? ""}`.trim()} query={searchQuery} />
