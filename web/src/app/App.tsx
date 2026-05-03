@@ -37,6 +37,7 @@ import { isDemoSeed } from "../fixtures/mockDevices";
 import { isWebSerialSupported } from "../serial/transport";
 import { formatCurrent, formatPercent, formatTemp, formatVoltage, timeAgo } from "../utils/format";
 import { deviceSeverity, modeLabel, severityRank, type Severity } from "../utils/severity";
+import { captureTraceScrollAnchor, resolveAnchoredTraceScrollTop, type TraceScrollAnchor } from "./traceScrollAnchor";
 
 type Route = {
   path: string;
@@ -1225,6 +1226,7 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
   const [measuredTraceHeights, setMeasuredTraceHeights] = useState<Record<string, number>>({});
   const [tracePinnedToBottom, setTracePinnedToBottom] = useState(true);
   const tracePanelRef = useRef<HTMLDivElement | null>(null);
+  const traceAnchorRef = useRef<TraceScrollAnchor | null>(null);
   const protocolFrames = trace.filter((entry) => entry.kind === "frame").length;
   const rawLines = trace.filter((entry) => entry.kind !== "frame").length;
   const traceModeOptions: Array<["raw" | "parsed" | "compare", string]> = [
@@ -1270,18 +1272,35 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
     virtualEnd += 1;
   }
   const virtualTrace = filteredTrace.slice(virtualStart, virtualEnd);
+  function captureTraceAnchor(scrollTop: number) {
+    traceAnchorRef.current = captureTraceScrollAnchor(filteredTrace, traceLayout.offsets, scrollTop);
+  }
+
   useLayoutEffect(() => {
     setTracePinnedToBottom(true);
+    traceAnchorRef.current = null;
   }, [directionFilter, levelFilter, normalizedQuery, traceMode, wrapLines]);
 
   useLayoutEffect(() => {
     const panel = tracePanelRef.current;
     if (!panel) return;
     const maxScrollTop = Math.max(0, traceLayout.totalHeight - traceViewportHeight);
-    const nextScrollTop = tracePinnedToBottom ? maxScrollTop : Math.min(panel.scrollTop, maxScrollTop);
+    const nextScrollTop = resolveAnchoredTraceScrollTop({
+      anchor: traceAnchorRef.current,
+      entries: filteredTrace,
+      offsets: traceLayout.offsets,
+      currentScrollTop: panel.scrollTop,
+      maxScrollTop,
+      pinnedToBottom: tracePinnedToBottom,
+    });
     if (panel.scrollTop !== nextScrollTop) panel.scrollTop = nextScrollTop;
     if (traceScrollTop !== nextScrollTop) setTraceScrollTop(nextScrollTop);
-  }, [traceLayout.totalHeight, tracePinnedToBottom, traceScrollTop, traceViewportHeight]);
+    if (tracePinnedToBottom) {
+      traceAnchorRef.current = null;
+    } else {
+      captureTraceAnchor(nextScrollTop);
+    }
+  }, [filteredTrace, traceLayout, tracePinnedToBottom, traceScrollTop, traceViewportHeight]);
 
   useEffect(() => {
     const panel = tracePanelRef.current;
@@ -1412,8 +1431,14 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
         onScroll={(event) => {
           const panel = event.currentTarget;
           const maxScrollTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
-          setTracePinnedToBottom(maxScrollTop - panel.scrollTop < 24);
+          const pinned = maxScrollTop - panel.scrollTop < 24;
+          setTracePinnedToBottom(pinned);
           setTraceScrollTop(panel.scrollTop);
+          if (pinned) {
+            traceAnchorRef.current = null;
+          } else {
+            captureTraceAnchor(panel.scrollTop);
+          }
         }}
       >
         {filteredTrace.length > 0 ? (
