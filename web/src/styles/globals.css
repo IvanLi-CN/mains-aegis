@@ -98,7 +98,7 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 44px;
+  min-height: var(--control-height-touch);
   border-radius: var(--radius-card);
   padding: 10px 11px;
   color: var(--color-muted);
@@ -311,7 +311,7 @@ a {
 
 .segmented button {
   min-width: 44px;
-  min-height: 44px;
+  min-height: var(--control-height);
   border: 0;
   border-radius: var(--radius-pill);
   background: transparent;
@@ -519,7 +519,7 @@ a {
 .secondary-button,
 .text-button,
 .icon-button {
-  min-height: 44px;
+  min-height: var(--control-height);
   border: 0;
   border-radius: var(--radius-pill);
 }
@@ -568,8 +568,8 @@ a {
 
 .icon-button {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: var(--control-height);
+  height: var(--control-height);
   place-items: center;
   border: 1px solid var(--color-hairline);
   background: var(--color-panel);
@@ -1077,7 +1077,7 @@ a {
 }
 
 .segmented.compact button {
-  min-height: 44px;
+  min-height: var(--control-height);
   padding: 6px 10px;
   font-size: 12px;
 }
@@ -1171,16 +1171,16 @@ a {
 .trace-help-bubble {
   position: relative;
   display: inline-flex;
-  flex: 0 0 44px;
-  width: 44px;
-  height: 44px;
+  flex: 0 0 var(--control-height);
+  width: var(--control-height);
+  height: var(--control-height);
 }
 
 .trace-help-trigger {
   display: inline-grid;
   width: 100%;
   height: 100%;
-  min-height: 44px;
+  min-height: var(--control-height);
   place-items: center;
   border: 0;
   border-radius: 999px;
@@ -1253,7 +1253,7 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 45px;
+  min-height: var(--control-height);
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-pill);
   background: color-mix(in oklch, var(--color-panel) 88%, var(--color-green) 12%);
@@ -1278,8 +1278,8 @@ a {
 .switch-control {
   display: inline-flex;
   align-items: center;
-  min-height: 44px;
-  height: 44px;
+  min-height: var(--control-height);
+  height: var(--control-height);
   gap: 8px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-pill);
@@ -1289,9 +1289,9 @@ a {
 }
 
 .developer-console-actions .icon-button {
-  width: 44px;
-  min-height: 44px;
-  height: 44px;
+  width: var(--control-height);
+  min-height: var(--control-height);
+  height: var(--control-height);
 }
 
 .switch-control input {
@@ -1338,7 +1338,7 @@ a {
 
 .trace-filter-tabs button {
   flex: 0 0 auto;
-  min-height: 34px;
+  min-height: calc(var(--control-height) - 6px);
   border: 0;
   border-radius: var(--radius-pill);
   background: transparent;
@@ -1375,7 +1375,7 @@ a {
   justify-content: space-between;
   width: 100%;
   min-width: 0;
-  min-height: 40px;
+  min-height: var(--control-height);
   gap: 10px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-pill);
@@ -1485,7 +1485,7 @@ a {
   align-items: center;
   width: clamp(150px, 18vw, 260px);
   min-width: 0;
-  min-height: 40px;
+  min-height: var(--control-height);
   gap: 6px;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-pill);
@@ -1523,7 +1523,7 @@ a {
 
 .trace-mode-tabs button {
   flex: 0 0 auto;
-  min-height: 34px;
+  min-height: calc(var(--control-height) - 6px);
   border: 0;
   border-radius: var(--radius-pill);
   background: transparent;
@@ -2160,7 +2160,7 @@ a {
   .connect-adapt-command .primary-button,
   .connect-adapt-command .secondary-button,
   .connect-adapt-command .icon-button {
-    min-height: 44px;
+    min-height: var(--control-height-touch);
   }
 
   .connect-adapt-command .table-list {
@@ -2223,7 +2223,7 @@ a {
   }
 
   .trace-select-control .ui-select-trigger {
-    min-height: 44px;
+    min-height: var(--control-height-touch);
     gap: 8px;
     padding-inline: 16px 14px;
     font-size: 14px;
@@ -2231,13 +2231,13 @@ a {
 
   .trace-mode-tabs button,
   .trace-filter-tabs button {
-    min-height: 44px;
+    min-height: var(--control-height-touch);
     padding: 0 12px;
   }
 
   .trace-search {
     grid-column: 1 / -1;
-    min-height: 44px;
+    min-height: var(--control-height-touch);
   }
 
   .trace-filter-count {
@@ -2255,14 +2255,14 @@ a {
   }
 
   .switch-control {
-    min-height: 44px;
-    height: 44px;
+    min-height: var(--control-height-touch);
+    height: var(--control-height-touch);
   }
 
   .developer-console-actions .icon-button {
-    width: 44px;
-    min-height: 44px;
-    height: 44px;
+    width: var(--control-height-touch);
+    min-height: var(--control-height-touch);
+    height: var(--control-height-touch);
   }
 
   .trace-panel {
