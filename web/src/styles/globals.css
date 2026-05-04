@@ -1014,7 +1014,8 @@ a {
 }
 
 .log-level-compact .segmented.compact button {
-  min-height: 31px;
+  min-width: 36px;
+  min-height: 36px;
   padding: 4px 9px;
   font-size: 11px;
 }
@@ -1076,7 +1077,7 @@ a {
 }
 
 .segmented.compact button {
-  min-height: 36px;
+  min-height: 44px;
   padding: 6px 10px;
   font-size: 12px;
 }
@@ -1176,9 +1177,9 @@ a {
 
 .trace-help-trigger {
   display: inline-grid;
-  width: 28px;
-  height: 28px;
-  min-height: 28px;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
   place-items: center;
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-pill);
