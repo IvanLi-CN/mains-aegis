@@ -1300,7 +1300,7 @@ a {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
-  margin-block-end: 0;
+  margin-block-end: 8px;
 }
 
 .developer-console-metrics .metric-line {
