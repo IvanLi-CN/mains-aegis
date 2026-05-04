@@ -32,6 +32,7 @@ import {
 import { FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
 import type { DeviceRecord, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
+import { SegmentedControl } from "../components/ui/segmented-control";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { useDeviceRegistry } from "../device-registry/context";
 import { isDemoSeed } from "../fixtures/mockDevices";
@@ -259,13 +260,17 @@ function FleetPage({ records }: { records: DeviceRecord[] }) {
             placeholder="Search device, hostname, location"
           />
         </label>
-        <div className="segmented" aria-label="Fleet filter">
-          {(["all", "critical", "warning", "offline"] as const).map((item) => (
-            <button key={item} className={filter === item ? "is-active" : ""} onClick={() => setFilter(item)}>
-              {item}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          label="Fleet filter"
+          value={filter}
+          options={[
+            ["all", "all"],
+            ["critical", "critical"],
+            ["warning", "warning"],
+            ["offline", "offline"],
+          ]}
+          onChange={setFilter}
+        />
       </div>
 
       <div className="fleet-grid" data-evidence-target="fleet-grid">
@@ -901,7 +906,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
             <h2>Safe settings</h2>
           </header>
           <form className="settings-form" onSubmit={onManualPrefsSubmit}>
-            <SegmentedControl
+            <SettingsSegmentedControl
               label="Charge target"
               value={manualPrefs.target}
               options={[
@@ -911,7 +916,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
               ]}
               onChange={(target) => setManualPrefs((current) => ({ ...current, target: target as SafeSettingsState["manual_charge"]["target"] }))}
             />
-            <SegmentedControl
+            <SettingsSegmentedControl
               label="Charge speed"
               value={manualPrefs.speed}
               options={[
@@ -921,7 +926,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
               ]}
               onChange={(speed) => setManualPrefs((current) => ({ ...current, speed: speed as SafeSettingsState["manual_charge"]["speed"] }))}
             />
-            <SegmentedControl
+            <SettingsSegmentedControl
               label="Timer"
               value={String(manualPrefs.timer_h)}
               options={[
@@ -1031,32 +1036,21 @@ function MetricLine({ label, value, title }: { label: string; value: string; tit
   );
 }
 
-function SegmentedControl({
+function SettingsSegmentedControl<T extends string>({
   label,
   value,
   options,
   onChange,
 }: {
   label: string;
-  value: string;
-  options: Array<[string, string]>;
-  onChange: (value: string) => void;
+  value: T;
+  options: Array<[T, string]>;
+  onChange: (value: T) => void;
 }) {
   return (
     <div className="control-row">
       <span>{label}</span>
-      <div className="segmented compact" aria-label={label}>
-        {options.map(([optionValue, optionLabel]) => (
-          <button
-            key={optionValue}
-            type="button"
-            className={value === optionValue ? "is-active" : ""}
-            onClick={() => onChange(optionValue)}
-          >
-            {optionLabel}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl label={label} value={value} options={options} onChange={onChange} variant="compact" />
     </div>
   );
 }
@@ -1096,12 +1090,6 @@ type DefmtDecodeStatus = {
   label: string;
   tone: "ok" | "warn" | "muted";
   detail: string;
-};
-
-const traceModeHints: Record<"raw" | "parsed" | "compare", string> = {
-  raw: "Show the decoded defmt line when available, otherwise show the captured CDC payload.",
-  parsed: "Show human-readable defmt fields and hide the original payload.",
-  compare: "Show the parsed view together with the original payload for debugging.",
 };
 
 function defmtDecodeStatus(trace: SerialTraceEntry[]): DefmtDecodeStatus {
@@ -1247,13 +1235,7 @@ function TraceFilterTabs<T extends string>({
   return (
     <div className="trace-filter-group">
       <span className="trace-filter-label">{label}</span>
-      <div className="trace-filter-tabs" aria-label={label}>
-        {options.map(([optionValue, optionLabel]) => (
-          <button key={optionValue} className={value === optionValue ? "is-active" : ""} type="button" onClick={() => onChange(optionValue)}>
-            {optionLabel}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl label={label} value={value} options={options} onChange={onChange} variant="quiet" />
       <TraceSelectControl label={label} value={value} options={options} onChange={onChange} />
     </div>
   );
@@ -1469,13 +1451,21 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
         </div>
         <div className="developer-console-actions">
           <TraceSelectControl label="View" value={traceMode} options={traceModeOptions} onChange={setTraceMode} className="trace-mode-select" />
-          <div className="trace-mode-tabs compact" aria-label="Trace view mode">
-            {traceModeOptions.map(([mode, label]) => (
-              <button key={mode} className={traceMode === mode ? "is-active" : ""} type="button" onClick={() => setTraceMode(mode as "raw" | "parsed" | "compare")} aria-label={`${label}: ${traceModeHints[mode]}`}>
-                {label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            label="Trace view mode"
+            value={traceMode}
+            options={traceModeOptions}
+            onChange={setTraceMode}
+            variant="compact"
+            className="trace-mode-tabs"
+            getOptionTitle={(mode) =>
+              ({
+                raw: "Show the decoded defmt line when available, otherwise show the captured CDC payload.",
+                parsed: "Show human-readable defmt fields and hide the original payload.",
+                compare: "Show the parsed view together with the original payload for debugging.",
+              })[mode]
+            }
+          />
           <TraceFilterTabs<TraceLevelFilter>
             label="Level"
             value={levelFilter}
