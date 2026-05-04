@@ -1140,7 +1140,7 @@ a {
   z-index: 80;
   inset: 16px;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   background: var(--color-panel);
   box-shadow: var(--shadow-sidebar-panel);
 }
@@ -1154,6 +1154,7 @@ a {
 }
 
 .developer-console-title {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1165,6 +1166,66 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.trace-help-bubble {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.trace-help-trigger {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  place-items: center;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-muted);
+  transition: background 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out;
+}
+
+.trace-help-trigger:hover,
+.trace-help-trigger:focus-visible {
+  border-color: color-mix(in oklch, var(--color-primary) 42%, var(--color-hairline));
+  background: color-mix(in oklch, var(--color-panel) 86%, var(--color-green) 14%);
+  color: var(--color-primary-strong);
+}
+
+.trace-help-popover {
+  position: absolute;
+  z-index: 8;
+  inset-block-start: calc(100% + 8px);
+  inset-inline-start: 0;
+  display: grid;
+  width: min(340px, calc(100vw - 48px));
+  gap: 5px;
+  border: 1px solid color-mix(in oklch, var(--color-primary) 24%, var(--color-hairline));
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+  box-shadow: var(--shadow-popover);
+  padding: 10px 12px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+}
+
+.trace-help-popover strong {
+  color: var(--color-primary-strong);
+  font-size: 12px;
+}
+
+.trace-help-bubble:hover .trace-help-popover,
+.trace-help-bubble:focus-within .trace-help-popover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .developer-console-actions {
@@ -1245,52 +1306,6 @@ a {
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-card);
   padding: 10px 12px;
-}
-
-.developer-console-statusbar {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-card);
-  background: var(--color-surface);
-  padding: 8px 10px;
-  color: var(--color-muted);
-  font-size: 12px;
-}
-
-.developer-console-statusbar span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  border-radius: var(--radius-pill);
-  padding: 0 9px;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.developer-console-statusbar p {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.developer-console-statusbar.decode-ok span {
-  background: color-mix(in oklch, var(--color-green) 14%, var(--color-panel));
-  color: var(--color-primary-strong);
-}
-
-.developer-console-statusbar.decode-warn span {
-  background: color-mix(in oklch, var(--color-warning) 20%, var(--color-panel));
-  color: color-mix(in oklch, var(--color-code-text) 36%, var(--color-warning) 64%);
-}
-
-.developer-console-statusbar.decode-muted span {
-  background: var(--color-panel);
-  color: var(--color-muted);
 }
 
 .trace-filter-group {
@@ -1888,16 +1903,6 @@ a {
 
   .developer-console-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .developer-console-statusbar {
-    grid-template-columns: minmax(0, 1fr);
-    align-items: start;
-    gap: 4px;
-  }
-
-  .developer-console-statusbar p {
-    white-space: normal;
   }
 
   .trace-row {

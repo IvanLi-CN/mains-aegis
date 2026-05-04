@@ -7,6 +7,7 @@ import {
   BatteryWarning,
   BatteryCharging,
   Cable,
+  CircleHelp,
   Cpu,
   Gauge,
   Globe2,
@@ -1144,6 +1145,21 @@ function defmtDecodeStatus(trace: SerialTraceEntry[]): DefmtDecodeStatus {
   };
 }
 
+function TraceHelpBubble({ status }: { status: DefmtDecodeStatus }) {
+  return (
+    <span className={`trace-help-bubble decode-${status.tone}`}>
+      <button type="button" className="trace-help-trigger" aria-label={`USB console help: ${status.label}`} title={status.detail}>
+        <CircleHelp size={15} />
+      </button>
+      <span className="trace-help-popover" aria-hidden="true">
+        <strong>{status.label}</strong>
+        <span>{status.detail}</span>
+        <span>Raw shows decoded defmt text when possible. Parsed hides original payloads. Compare shows both.</span>
+      </span>
+    </span>
+  );
+}
+
 type ParsedTraceMessage = {
   lead: string;
   fields: Array<{ key: string; value: string }>;
@@ -1451,6 +1467,7 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
         <div className="developer-console-title">
           <Terminal size={18} />
           <h2>USB Console</h2>
+          <TraceHelpBubble status={decodeStatus} />
         </div>
         <div className="developer-console-actions">
           <TraceSelectControl label="View" title="Choose how USB CDC records are rendered." value={traceMode} options={traceModeOptions} onChange={setTraceMode} className="trace-mode-select" />
@@ -1510,10 +1527,6 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
         <MetricLine label="Protocol frames" value={String(protocolFrames)} title="Structured command or response frames recognized by the app protocol parser." />
         <MetricLine label="Structured logs" value={String(logs.length)} title="Application log entries that were parsed into structured state." />
         <MetricLine label="Raw / ignored" value={String(rawLines)} title="Records that are not app protocol frames. This can include decoded defmt lines, plain text, or ignored binary payloads." />
-      </div>
-      <div className={`developer-console-statusbar decode-${decodeStatus.tone}`} title={decodeStatus.detail}>
-        <span>{decodeStatus.label}</span>
-        <p>{decodeStatus.detail}</p>
       </div>
       <div
         className="trace-panel is-virtualized"
