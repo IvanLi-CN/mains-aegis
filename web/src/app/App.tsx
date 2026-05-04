@@ -1149,7 +1149,7 @@ function TraceHelpBubble({ status }: { status: DefmtDecodeStatus }) {
   return (
     <span className={`trace-help-bubble decode-${status.tone}`}>
       <button type="button" className="trace-help-trigger" aria-label={`USB console help: ${status.label}`} title={status.detail}>
-        <CircleHelp size={15} />
+        <CircleHelp size={15} strokeWidth={1.9} />
       </button>
       <span className="trace-help-popover" aria-hidden="true">
         <strong>{status.label}</strong>

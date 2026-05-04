@@ -1148,7 +1148,7 @@ a {
 
 .developer-console > .developer-console-header {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(0, auto);
+  grid-template-columns: minmax(240px, 1fr) minmax(0, auto);
   align-items: start;
   justify-content: stretch;
   gap: 12px;
@@ -1158,41 +1158,42 @@ a {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   min-width: 0;
 }
 
 .developer-console-title h2 {
+  flex: 0 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .trace-help-bubble {
   position: relative;
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
 }
 
 .trace-help-trigger {
   display: inline-grid;
-  width: 44px;
-  height: 44px;
+  width: 100%;
+  height: 100%;
   min-height: 44px;
   place-items: center;
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-pill);
-  background: var(--color-surface);
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
   color: var(--color-muted);
-  transition: background 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out;
+  padding: 0;
+  transition: color 140ms ease-out, background 140ms ease-out;
 }
 
 .trace-help-trigger:hover,
 .trace-help-trigger:focus-visible {
-  border-color: color-mix(in oklch, var(--color-primary) 42%, var(--color-hairline));
-  background: color-mix(in oklch, var(--color-panel) 86%, var(--color-green) 14%);
   color: var(--color-primary-strong);
+  background: color-mix(in oklch, var(--color-panel) 84%, var(--color-green) 16%);
 }
 
 .trace-help-popover {
@@ -1238,6 +1239,7 @@ a {
   margin-inline-start: auto;
   max-width: 100%;
   min-width: 0;
+  padding-inline-start: 8px;
 }
 
 .developer-console-ops {
