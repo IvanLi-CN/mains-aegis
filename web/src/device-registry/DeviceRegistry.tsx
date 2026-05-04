@@ -7,6 +7,7 @@ import {
   getStatus,
   listDevdDevices,
   loadBundledFirmwareCatalog,
+  loadFirmwareCatalogFromUrl,
   normalizeBaseUrl,
   probeDevice,
   sendAdapterWifiConfig,
@@ -18,7 +19,7 @@ import {
   type AdapterSerialSession,
 } from "../api/client";
 import { subscribeStatusStream, type StatusStream } from "../api/statusStream";
-import type { DeviceRecord, DeviceTarget, FirmwareArtifact, Identity, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry } from "../api/types";
+import type { DeviceRecord, DeviceTarget, FirmwareArtifact, FirmwareArtifactMatch, Identity, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry } from "../api/types";
 import { isDemoSeed, makeMockRecord, makeMockRecords, makeMockUsbSerialRecord, type DemoSeed } from "../fixtures/mockDevices";
 import {
   errorFromSerialFailure,
@@ -44,6 +45,10 @@ const ADAPTER_SERIAL_SESSION_LIMITS = {
 };
 
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
+const BUNDLED_FIRMWARE_CATALOG_URL = "/firmware/firmware-catalog.json";
+const DEFAULT_GITHUB_FIRMWARE_CATALOG_URL =
+  "https://github.com/IvanLi-CN/mains-aegis/releases/latest/download/firmware-catalog.json";
+const GITHUB_FIRMWARE_CATALOG_URL = import.meta.env.VITE_FIRMWARE_CATALOG_URL ?? DEFAULT_GITHUB_FIRMWARE_CATALOG_URL;
 
 export function DeviceRegistryProvider({ children }: { children: React.ReactNode }) {
   const seedRef = useRef<DemoSeed | null>(getDemoSeed());
@@ -585,8 +590,9 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         };
         serialSessions.current.set(identity.device_id, transport);
         openedTransport = null;
-        const bundledArtifact = await findBundledFirmwareArtifact(identity);
-        const bundledElfPath = bundledArtifact ? firmwareArtifactElfPath(bundledArtifact) : null;
+        const firmwareMatch = await findFirmwareArtifactForIdentity(identity);
+        const decoderArtifact = firmwareMatch?.source === "bundled" ? firmwareMatch.artifact : await findBundledFirmwareArtifact(identity);
+        const bundledElfPath = decoderArtifact ? firmwareArtifactElfPath(decoderArtifact) : null;
         transport.setDefmtDecoder(
           bundledElfPath
             ? (frame) => decodeDefmtFrame({ elf_path: bundledElfPath, frame_hex: bytesToHex(frame) })
@@ -599,20 +605,32 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
           [
             ...pendingLogs,
             serialLogFromFrame(
-              bundledArtifact
+              firmwareMatch
                 ? {
                     type: "log",
                     level: "info",
                     target: "firmware_catalog",
-                    message: `Bundled firmware artifact matched: ${bundledArtifact.artifact_id}`,
+                    message: `${firmwareCatalogSourceLabel(firmwareMatch.source)} firmware artifact matched: ${firmwareMatch.artifact.artifact_id}`,
                   }
                 : {
                     type: "log",
                     level: "warn",
                     target: "firmware_catalog",
-                    message: `No bundled firmware artifact matches build ${identity.firmware.build_id}; defmt binary remains undecoded`,
+                    message: `No GitHub Release or bundled firmware artifact matches build ${identity.firmware.build_id}; defmt binary remains undecoded`,
                   },
             ),
+            ...(firmwareMatch?.source === "github_release"
+              ? [
+                  serialLogFromFrame({
+                    type: "log",
+                    level: bundledElfPath ? "info" : "warn",
+                    target: "firmware_catalog",
+                    message: bundledElfPath
+                      ? `GitHub Release firmware artifact matched: ${firmwareMatch.artifact.artifact_id}; using bundled ELF for defmt decode`
+                      : `GitHub Release firmware artifact matched: ${firmwareMatch.artifact.artifact_id}; defmt decode artifact is unavailable locally`,
+                  }),
+                ]
+              : []),
             serialLogFromFrame({
               type: "log",
               level: "info",
@@ -1153,6 +1171,36 @@ function serialTraceFromEvent(entry: SerialTraceEvent): SerialTraceEntry {
   };
 }
 
+async function findFirmwareArtifactForIdentity(identity: Identity): Promise<FirmwareArtifactMatch | null> {
+  const githubMatch = await findGitHubFirmwareArtifact(identity);
+  if (githubMatch) return githubMatch;
+  const bundled = await findBundledFirmwareArtifact(identity);
+  return bundled
+    ? {
+        artifact: bundled,
+        source: "bundled",
+        catalog_url: BUNDLED_FIRMWARE_CATALOG_URL,
+      }
+    : null;
+}
+
+async function findGitHubFirmwareArtifact(identity: Identity): Promise<FirmwareArtifactMatch | null> {
+  if (!GITHUB_FIRMWARE_CATALOG_URL.trim()) return null;
+  try {
+    const catalog = await loadFirmwareCatalogFromUrl(GITHUB_FIRMWARE_CATALOG_URL);
+    const artifact = catalog.artifacts.find((candidate) => firmwareArtifactMatchesIdentity(candidate, identity));
+    return artifact
+      ? {
+          artifact,
+          source: "github_release",
+          catalog_url: GITHUB_FIRMWARE_CATALOG_URL,
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function findBundledFirmwareArtifact(identity: Identity): Promise<FirmwareArtifact | null> {
   try {
     const catalog = await loadBundledFirmwareCatalog();
@@ -1160,6 +1208,10 @@ async function findBundledFirmwareArtifact(identity: Identity): Promise<Firmware
   } catch {
     return null;
   }
+}
+
+function firmwareCatalogSourceLabel(source: FirmwareArtifactMatch["source"]): string {
+  return source === "github_release" ? "GitHub Release" : "Bundled";
 }
 
 function firmwareArtifactMatchesIdentity(artifact: FirmwareArtifact, identity: Identity): boolean {

@@ -217,6 +217,12 @@ export type FirmwareCatalog = {
   artifacts: FirmwareArtifact[];
 };
 
+export type FirmwareArtifactMatch = {
+  artifact: FirmwareArtifact;
+  source: "github_release" | "bundled";
+  catalog_url: string;
+};
+
 export type DevdDevice = {
   id: string;
   display_name: string;

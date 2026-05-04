@@ -86,7 +86,6 @@ const FW_GIT_SHA: &str = env!("FW_GIT_SHA");
 const FW_SRC_HASH: &str = env!("FW_SRC_HASH");
 const FW_GIT_DIRTY: &str = env!("FW_GIT_DIRTY");
 const FW_BUILD_ID: &str = env!("FW_BUILD_ID");
-const FW_FEATURES: &str = env!("FW_FEATURES");
 #[cfg(feature = "web_serial")]
 const WEB_SERIAL_BUILD_INFO: BuildInfo = BuildInfo {
     package_version: env!("CARGO_PKG_VERSION"),

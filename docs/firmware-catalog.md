@@ -57,3 +57,15 @@ development and production preview.
 ## GitHub Release flow
 
 The firmware workflow builds release variants, generates manifests with this same schema, uploads them as workflow artifacts, and can publish the catalog plus artifact files to GitHub Releases. The Web App consumes catalogs rather than hard-coded artifact URLs.
+
+## Browser lookup policy
+
+When the Web App connects to a device, it first tries the configured GitHub Release catalog URL, then falls back to the bundled catalog under `web/public/firmware/firmware-catalog.json`.
+
+Default GitHub catalog URL:
+
+```text
+https://github.com/IvanLi-CN/mains-aegis/releases/latest/download/firmware-catalog.json
+```
+
+You can override it with `VITE_FIRMWARE_CATALOG_URL` during local development. The browser matches the connected device identity against the catalog, and only then selects the artifact for defmt decoding or flash flows. If the remote catalog is unavailable, the bundled catalog still keeps the app usable offline.

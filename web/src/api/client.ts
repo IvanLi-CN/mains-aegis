@@ -211,6 +211,7 @@ export function toErrorEnvelope(error: unknown): ApiErrorEnvelope["error"] {
 }
 
 export const loadBundledFirmwareCatalog = () => requestJson<FirmwareCatalog>("", "/firmware/firmware-catalog.json");
+export const loadFirmwareCatalogFromUrl = (url: string) => requestJson<FirmwareCatalog>("", url);
 export const decodeDefmtFrame = (input: { elf_path: string; frame_hex: string }, baseUrl = "") =>
   requestWithBody<DefmtDecodeResult>(baseUrl, "/api/v1/defmt/decode", "POST", input);
 export const listDevdDevices = (baseUrl = "") => requestJson<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices");
