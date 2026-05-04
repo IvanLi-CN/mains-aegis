@@ -1148,7 +1148,7 @@ function defmtDecodeStatus(trace: SerialTraceEntry[]): DefmtDecodeStatus {
 function TraceHelpBubble({ status }: { status: DefmtDecodeStatus }) {
   return (
     <span className={`trace-help-bubble decode-${status.tone}`}>
-      <button type="button" className="trace-help-trigger" aria-label={`USB console help: ${status.label}`} title={status.detail}>
+      <button type="button" className="trace-help-trigger" aria-label={`USB console help: ${status.label}`}>
         <CircleHelp size={15} strokeWidth={1.9} />
       </button>
       <span className="trace-help-popover" aria-hidden="true">
@@ -1234,7 +1234,6 @@ function HighlightText({ value, query }: { value: string; query: string }) {
 
 function TraceFilterTabs<T extends string>({
   label,
-  title,
   value,
   options,
   onChange,
@@ -1247,22 +1246,21 @@ function TraceFilterTabs<T extends string>({
 }) {
   return (
     <div className="trace-filter-group">
-      <span className="trace-filter-label" title={title}>{label}</span>
-      <div className="trace-filter-tabs" aria-label={label} title={title}>
+      <span className="trace-filter-label">{label}</span>
+      <div className="trace-filter-tabs" aria-label={label}>
         {options.map(([optionValue, optionLabel]) => (
           <button key={optionValue} className={value === optionValue ? "is-active" : ""} type="button" onClick={() => onChange(optionValue)}>
             {optionLabel}
           </button>
         ))}
       </div>
-      <TraceSelectControl label={label} title={title} value={value} options={options} onChange={onChange} />
+      <TraceSelectControl label={label} value={value} options={options} onChange={onChange} />
     </div>
   );
 }
 
 function TraceSelectControl<T extends string>({
   label,
-  title,
   value,
   options,
   onChange,
@@ -1277,7 +1275,7 @@ function TraceSelectControl<T extends string>({
 }) {
   const labelId = useId();
   return (
-    <div className={`trace-select-control${className ? ` ${className}` : ""}`} title={title}>
+    <div className={`trace-select-control${className ? ` ${className}` : ""}`}>
       <span id={labelId}>{label}</span>
       <Select value={value} onValueChange={(nextValue) => onChange(nextValue as T)}>
         <SelectTrigger aria-labelledby={labelId}>
@@ -1470,17 +1468,16 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
           <TraceHelpBubble status={decodeStatus} />
         </div>
         <div className="developer-console-actions">
-          <TraceSelectControl label="View" title="Choose how USB CDC records are rendered." value={traceMode} options={traceModeOptions} onChange={setTraceMode} className="trace-mode-select" />
-          <div className="trace-mode-tabs compact" aria-label="Trace view mode" title="Choose how USB CDC records are rendered.">
+          <TraceSelectControl label="View" value={traceMode} options={traceModeOptions} onChange={setTraceMode} className="trace-mode-select" />
+          <div className="trace-mode-tabs compact" aria-label="Trace view mode">
             {traceModeOptions.map(([mode, label]) => (
-              <button key={mode} className={traceMode === mode ? "is-active" : ""} type="button" onClick={() => setTraceMode(mode as "raw" | "parsed" | "compare")} title={traceModeHints[mode]}>
+              <button key={mode} className={traceMode === mode ? "is-active" : ""} type="button" onClick={() => setTraceMode(mode as "raw" | "parsed" | "compare")} aria-label={`${label}: ${traceModeHints[mode]}`}>
                 {label}
               </button>
             ))}
           </div>
           <TraceFilterTabs<TraceLevelFilter>
             label="Level"
-            title="Show records at this severity and above."
             value={levelFilter}
             options={[
               ["all", "All"],
@@ -1494,7 +1491,6 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
           />
           <TraceFilterTabs<TraceDirectionFilter>
             label="Direction"
-            title="Filter USB CDC traffic by receive or transmit direction."
             value={directionFilter}
             options={[
               ["all", "All"],
