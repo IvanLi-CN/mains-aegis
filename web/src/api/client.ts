@@ -1,5 +1,17 @@
 import { getMockIdentity, getMockNetwork, getMockStatus } from "../fixtures/mockDevices";
-import type { ApiErrorEnvelope, Identity, NetworkSummary, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "./types";
+import type {
+  ApiErrorEnvelope,
+  DevdDevice,
+  DefmtDecodeResult,
+  FirmwareCatalog,
+  Identity,
+  NetworkSummary,
+  ProbeResult,
+  SafeSettingsState,
+  SerialLogEntry,
+  SerialTraceEntry,
+  UpsStatus,
+} from "./types";
 
 export class MainsAegisApiError extends Error {
   envelope: ApiErrorEnvelope["error"];
@@ -15,6 +27,8 @@ export const isMockBaseUrl = (baseUrl: string) => baseUrl.startsWith("mock:");
 
 export function normalizeBaseUrl(input: string): string {
   const value = input.trim();
+  if (value === "" || value === "same-origin" || value === "devd") return "";
+  if (value.startsWith("/")) return "";
   if (value.startsWith("mock:")) return value;
   if (/^https?:\/\//i.test(value)) return value.replace(/\/+$/, "");
   return `http://${value.replace(/\/+$/, "")}`;
@@ -38,7 +52,8 @@ async function requestWithBody<T>(baseUrl: string, path: string, method: "GET" |
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-  const payload = (await response.json().catch(() => null)) as T | ApiErrorEnvelope | null;
+  const responseText = await response.text();
+  const payload = parseJsonPayload<T>(responseText);
 
   if (!response.ok) {
     if (payload && typeof payload === "object" && "error" in payload) {
@@ -46,13 +61,31 @@ async function requestWithBody<T>(baseUrl: string, path: string, method: "GET" |
     }
     throw new MainsAegisApiError({
       code: `http_${response.status}`,
-      message: response.statusText || "request failed",
+      message: describeHttpFailure(response, path, responseText),
       retryable: response.status >= 500,
-      details: null,
+      details: { path, status: response.status, statusText: response.statusText, responseText: responseText.slice(0, 512) },
     });
   }
 
   return payload as T;
+}
+
+function parseJsonPayload<T>(text: string): T | ApiErrorEnvelope | null {
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as T | ApiErrorEnvelope;
+  } catch {
+    return null;
+  }
+}
+
+function describeHttpFailure(response: Response, path: string, responseText: string): string {
+  if (path === "/api/v1/defmt/decode" && response.status >= 500) {
+    return "defmt decode API is unavailable. Check that the Web dev server proxies /api to the running mains-aegis-devd instance.";
+  }
+  const statusText = response.statusText || "request failed";
+  const body = responseText.trim();
+  return body ? `${statusText}: ${body.slice(0, 160)}` : statusText;
 }
 
 function requestMock<T>(baseUrl: string, path: string): Promise<T> {
@@ -84,9 +117,28 @@ export const getStatus = (baseUrl: string) => requestJson<UpsStatus>(baseUrl, "/
 export type AdapterSerialSession = {
   connected: boolean;
   protocol: string;
+  status?: UpsStatus | null;
   logs: SerialLogEntry[];
   trace: SerialTraceEntry[];
   safeSettings: SafeSettingsState;
+};
+
+export type AdapterSerialEvent = {
+  id: string;
+  timestamp: string;
+  device_id: string | null;
+  kind: "serial_trace" | "serial_log" | "monitor" | string;
+  message: string;
+  payload: {
+    trace?: SerialTraceEntry;
+    log?: SerialLogEntry;
+    status?: UpsStatus;
+    [key: string]: unknown;
+  };
+};
+
+export type AdapterSerialEventStream = {
+  close: () => void;
 };
 
 type AdapterSerialSessionOptions = {
@@ -104,6 +156,26 @@ function adapterSerialSessionPath(options: AdapterSerialSessionOptions = {}) {
 
 export const getAdapterSerialSession = (baseUrl: string, options?: AdapterSerialSessionOptions) =>
   requestJson<AdapterSerialSession>(baseUrl, adapterSerialSessionPath(options));
+
+export function subscribeAdapterSerialEvents(
+  baseUrl: string,
+  callbacks: {
+    onEvent: (event: AdapterSerialEvent) => void;
+    onError: (event: Event) => void;
+  },
+): AdapterSerialEventStream {
+  const eventSource = new EventSource(`${baseUrl}/api/v1/serial/events`);
+  const handleEvent = (event: Event) => {
+    callbacks.onEvent(JSON.parse((event as MessageEvent<string>).data) as AdapterSerialEvent);
+  };
+  eventSource.addEventListener("serial_trace", handleEvent);
+  eventSource.addEventListener("serial_log", handleEvent);
+  eventSource.addEventListener("serial_status", handleEvent);
+  eventSource.addEventListener("monitor", handleEvent);
+  eventSource.onerror = callbacks.onError;
+  return { close: () => eventSource.close() };
+}
+
 export const sendAdapterWifiConfig = (baseUrl: string, input: { ssid: string; psk: string }) =>
   requestWithBody<unknown>(baseUrl, "/api/v1/wifi-config", "POST", input);
 export const clearAdapterWifiConfig = (baseUrl: string) => requestWithBody<unknown>(baseUrl, "/api/v1/wifi-config", "DELETE");
@@ -137,3 +209,20 @@ export function toErrorEnvelope(error: unknown): ApiErrorEnvelope["error"] {
     details: null,
   };
 }
+
+export const loadBundledFirmwareCatalog = () => requestJson<FirmwareCatalog>("", "/firmware/firmware-catalog.json");
+export const loadFirmwareCatalogFromUrl = (url: string) => requestJson<FirmwareCatalog>("", url);
+export const decodeDefmtFrame = (input: { elf_path: string; frame_hex: string }, baseUrl = "") =>
+  requestWithBody<DefmtDecodeResult>(baseUrl, "/api/v1/defmt/decode", "POST", input);
+export const listDevdDevices = (baseUrl = "") => requestJson<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices");
+export const scanDevdDevices = (baseUrl = "") => requestWithBody<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices/scan", "POST");
+export const bindDevdDevice = (deviceId: string, alias?: string, baseUrl = "") =>
+  requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/bind`, "POST", { alias });
+export const connectDevdDevice = (deviceId: string, baseUrl = "") =>
+  requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/connect`, "POST");
+export const disconnectDevdDevice = (deviceId: string, baseUrl = "") =>
+  requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/disconnect`, "POST");
+export const selectDevdArtifact = (deviceId: string, input: { artifact_id?: string; manifest_path?: string }, baseUrl = "") =>
+  requestWithBody<unknown>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/artifact`, "POST", input);
+export const flashDevdDevice = (deviceId: string, input: { artifact_id?: string; dry_run?: boolean }, baseUrl = "") =>
+  requestWithBody<unknown>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/flash`, "POST", input);

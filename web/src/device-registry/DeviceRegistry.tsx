@@ -1,18 +1,25 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   clearAdapterWifiConfig,
+  decodeDefmtFrame,
+  disconnectDevdDevice,
   getAdapterSerialSession,
   getStatus,
+  listDevdDevices,
+  loadBundledFirmwareCatalog,
+  loadFirmwareCatalogFromUrl,
   normalizeBaseUrl,
   probeDevice,
   sendAdapterWifiConfig,
   setAdapterLogLevel,
   setAdapterManualChargePrefs,
+  subscribeAdapterSerialEvents,
   toErrorEnvelope,
+  type AdapterSerialEventStream,
   type AdapterSerialSession,
 } from "../api/client";
 import { subscribeStatusStream, type StatusStream } from "../api/statusStream";
-import type { DeviceRecord, DeviceTarget, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry } from "../api/types";
+import type { DeviceRecord, DeviceTarget, FirmwareArtifact, FirmwareArtifactMatch, Identity, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry } from "../api/types";
 import { isDemoSeed, makeMockRecord, makeMockRecords, makeMockUsbSerialRecord, type DemoSeed } from "../fixtures/mockDevices";
 import {
   errorFromSerialFailure,
@@ -23,55 +30,32 @@ import {
   type SerialTraceEvent,
   WebSerialTransport,
 } from "../serial/transport";
+import {
+  DeviceRegistryContext,
+  type AddDeviceInput,
+  type AddDeviceResult,
+  type CommandResult,
+  type ManualChargePrefsInput,
+  type WifiConfigInput,
+} from "./context";
 
 const ADAPTER_SERIAL_SESSION_LIMITS = {
   logsLimit: 200,
   traceLimit: 600,
 };
 
-type AddDeviceInput = {
-  target: string;
-  alias?: string;
-  location?: string;
-};
-
-type AddDeviceResult =
-  | { ok: true; record: DeviceRecord }
-  | { ok: false; error: DeviceRecord["error"] };
-
-type CommandResult = { ok: true } | { ok: false; error: DeviceRecord["error"] };
-
-type WifiConfigInput = {
-  ssid: string;
-  psk: string;
-};
-
-type ManualChargePrefsInput = SafeSettingsState["manual_charge"];
-
-type DeviceRegistryContextValue = {
-  records: DeviceRecord[];
-  addDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
-  addLocalAdapterDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
-  connectUsbSerialDevice: (input?: Pick<AddDeviceInput, "alias" | "location">) => Promise<AddDeviceResult>;
-  attachMockUsbSerialDevice: () => AddDeviceResult;
-  disconnectUsbSerialDevice: (deviceId: string) => Promise<void>;
-  sendWifiConfig: (deviceId: string, input: WifiConfigInput) => Promise<CommandResult>;
-  clearWifiConfig: (deviceId: string) => Promise<CommandResult>;
-  setSerialLogLevel: (deviceId: string, level: SafeSettingsState["log_level"]) => Promise<CommandResult>;
-  setManualChargePrefs: (deviceId: string, prefs: ManualChargePrefsInput) => Promise<CommandResult>;
-  removeDevice: (deviceId: string) => void;
-  refreshDevice: (deviceId: string) => Promise<void>;
-  resetDemo: () => void;
-};
-
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
-const DeviceRegistryContext = createContext<DeviceRegistryContextValue | null>(null);
+const BUNDLED_FIRMWARE_CATALOG_URL = "/firmware/firmware-catalog.json";
+const DEFAULT_GITHUB_FIRMWARE_CATALOG_URL =
+  "https://github.com/IvanLi-CN/mains-aegis/releases/latest/download/firmware-catalog.json";
+const GITHUB_FIRMWARE_CATALOG_URL = import.meta.env.VITE_FIRMWARE_CATALOG_URL ?? DEFAULT_GITHUB_FIRMWARE_CATALOG_URL;
 
 export function DeviceRegistryProvider({ children }: { children: React.ReactNode }) {
   const seedRef = useRef<DemoSeed | null>(getDemoSeed());
   const [demoSeed, setDemoSeed] = useState<DemoSeed | null>(seedRef.current);
   const [records, setRecords] = useState<DeviceRecord[]>(() => loadInitialRecords(seedRef.current));
   const streams = useRef(new Map<string, StatusStream>());
+  const adapterStreams = useRef(new Map<string, AdapterSerialEventStream>());
   const serialSessions = useRef(new Map<string, WebSerialTransport>());
 
   useEffect(() => {
@@ -90,6 +74,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       setDemoSeed(nextSeed);
       for (const stream of streams.current.values()) stream.close();
       streams.current.clear();
+      for (const stream of adapterStreams.current.values()) stream.close();
+      adapterStreams.current.clear();
       for (const session of serialSessions.current.values()) void session.close();
       serialSessions.current.clear();
       if (!nextSeed) {
@@ -323,6 +309,44 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   }, [records, refreshDevice]);
 
   useEffect(() => {
+    if (demoSeed) return;
+    for (const record of records) {
+      if (record.target.transport !== "adapter" || !record.serial?.connected || adapterStreams.current.has(record.target.deviceId)) continue;
+      const subscription = subscribeAdapterSerialEvents(record.target.baseUrl, {
+        onEvent: (event) => {
+          if (event.kind === "serial_trace" && event.payload.trace) appendSerialTraceToSession(event.payload.trace, record.target.deviceId);
+          if (event.kind === "serial_log" && event.payload.log) appendSerialLogToSession(event.payload.log, record.target.deviceId);
+          if (event.kind === "serial_status" && event.payload.status) appendSerialStatusToSession(event.payload.status, record.target.deviceId);
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === record.target.deviceId
+                ? { ...candidate, streamState: "streaming", connectionState: "online", error: null, lastUpdated: new Date().toISOString() }
+                : candidate,
+            ),
+          );
+        },
+        onError: () => {
+          adapterStreams.current.get(record.target.deviceId)?.close();
+          adapterStreams.current.delete(record.target.deviceId);
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === record.target.deviceId ? { ...candidate, streamState: "polling" } : candidate,
+            ),
+          );
+          void updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+        },
+      });
+      adapterStreams.current.set(record.target.deviceId, subscription);
+    }
+    for (const [deviceId, stream] of adapterStreams.current.entries()) {
+      if (!records.some((record) => record.target.deviceId === deviceId && record.target.transport === "adapter" && record.serial?.connected)) {
+        stream.close();
+        adapterStreams.current.delete(deviceId);
+      }
+    }
+  }, [demoSeed, records]);
+
+  useEffect(() => {
     for (const record of records) {
       if (
         record.target.transport === "serial" ||
@@ -422,6 +446,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     return () => {
       for (const stream of streams.current.values()) stream.close();
       streams.current.clear();
+      for (const stream of adapterStreams.current.values()) stream.close();
+      adapterStreams.current.clear();
       for (const session of serialSessions.current.values()) void session.close();
       serialSessions.current.clear();
     };
@@ -516,6 +542,20 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
             }
             appendSerialTraceToSession(entry, deviceId);
           },
+          onDefmtLog: (decoded) => {
+            const log = serialLogFromFrame({
+              type: "log",
+              level: decoded.level,
+              target: decoded.target,
+              message: decoded.message,
+            });
+            const deviceId = transportRef ? findSessionDeviceId(transportRef) : null;
+            if (!deviceId) {
+              pendingLogs.push(log);
+              return;
+            }
+            appendSerialLogToSession(log, deviceId);
+          },
           onClose: (error) => {
             if (!transportRef) return;
             const deviceId = findSessionDeviceId(transportRef);
@@ -550,12 +590,47 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         };
         serialSessions.current.set(identity.device_id, transport);
         openedTransport = null;
+        const firmwareMatch = await findFirmwareArtifactForIdentity(identity);
+        const decoderArtifact = firmwareMatch?.source === "bundled" ? firmwareMatch.artifact : await findBundledFirmwareArtifact(identity);
+        const bundledElfPath = decoderArtifact ? firmwareArtifactElfPath(decoderArtifact) : null;
+        transport.setDefmtDecoder(
+          bundledElfPath
+            ? (frame) => decodeDefmtFrame({ elf_path: bundledElfPath, frame_hex: bytesToHex(frame) })
+            : null,
+        );
         const record = recordFromSerialProbe(
           target,
           { identity, network: identity.network, status },
           hello.protocol,
           [
             ...pendingLogs,
+            serialLogFromFrame(
+              firmwareMatch
+                ? {
+                    type: "log",
+                    level: "info",
+                    target: "firmware_catalog",
+                    message: `${firmwareCatalogSourceLabel(firmwareMatch.source)} firmware artifact matched: ${firmwareMatch.artifact.artifact_id}`,
+                  }
+                : {
+                    type: "log",
+                    level: "warn",
+                    target: "firmware_catalog",
+                    message: `No GitHub Release or bundled firmware artifact matches build ${identity.firmware.build_id}; defmt binary remains undecoded`,
+                  },
+            ),
+            ...(firmwareMatch?.source === "github_release"
+              ? [
+                  serialLogFromFrame({
+                    type: "log",
+                    level: bundledElfPath ? "info" : "warn",
+                    target: "firmware_catalog",
+                    message: bundledElfPath
+                      ? `GitHub Release firmware artifact matched: ${firmwareMatch.artifact.artifact_id}; using bundled ELF for defmt decode`
+                      : `GitHub Release firmware artifact matched: ${firmwareMatch.artifact.artifact_id}; defmt decode artifact is unavailable locally`,
+                  }),
+                ]
+              : []),
             serialLogFromFrame({
               type: "log",
               level: "info",
@@ -840,6 +915,32 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     );
   }
 
+  function appendSerialStatusToSession(status: SerialStatusFrame["status"], deviceId: string | null) {
+    if (!deviceId) return;
+    setRecords((current) =>
+      current.map((record) =>
+        record.target.deviceId === deviceId && record.serial?.connected
+          ? {
+              ...record,
+              status,
+              network: record.network
+                ? {
+                    ...record.network,
+                    state: status.network.state,
+                    ipv4: status.network.ipv4,
+                    last_error: status.network.last_error,
+                  }
+                : record.network,
+              connectionState: "online",
+              streamState: "streaming",
+              error: null,
+              lastUpdated: new Date().toISOString(),
+            }
+          : record,
+      ),
+    );
+  }
+
   async function updateAdapterSerialSnapshot(deviceId: string, baseUrl: string) {
     const session = await getAdapterSerialSession(baseUrl, ADAPTER_SERIAL_SESSION_LIMITS);
     setRecords((current) =>
@@ -848,16 +949,26 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   }
 
   const removeDevice = useCallback((deviceId: string) => {
+    const record = records.find((candidate) => candidate.target.deviceId === deviceId);
     streams.current.get(deviceId)?.close();
     streams.current.delete(deviceId);
+    adapterStreams.current.get(deviceId)?.close();
+    adapterStreams.current.delete(deviceId);
     void serialSessions.current.get(deviceId)?.close();
     serialSessions.current.delete(deviceId);
     setRecords((current) => current.filter((record) => record.target.deviceId !== deviceId));
-  }, []);
+    if (record?.target.transport === "adapter") {
+      void disconnectAdapterDevdDevice(record).catch((error) => {
+        console.warn("failed to disconnect devd adapter device", error);
+      });
+    }
+  }, [records]);
 
   const resetDemo = useCallback(() => {
     for (const stream of streams.current.values()) stream.close();
     streams.current.clear();
+    for (const stream of adapterStreams.current.values()) stream.close();
+    adapterStreams.current.clear();
     for (const session of serialSessions.current.values()) void session.close();
     serialSessions.current.clear();
     setRecords(makeMockRecords("default"));
@@ -897,12 +1008,6 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   );
 
   return <DeviceRegistryContext.Provider value={value}>{children}</DeviceRegistryContext.Provider>;
-}
-
-export function useDeviceRegistry(): DeviceRegistryContextValue {
-  const context = useContext(DeviceRegistryContext);
-  if (!context) throw new Error("useDeviceRegistry must be used inside DeviceRegistryProvider");
-  return context;
 }
 
 function getDemoSeed(): DemoSeed | null {
@@ -1002,14 +1107,31 @@ function mergeAdapterSerial(record: DeviceRecord, session: AdapterSerialSession)
     connectionState: session.connected ? "online" : record.connectionState,
     error: session.connected ? null : record.error,
     lastUpdated: new Date().toISOString(),
+    status: session.status ?? record.status,
+    network: record.network && session.status
+      ? {
+          ...record.network,
+          state: session.status.network.state,
+          ipv4: session.status.network.ipv4,
+          last_error: session.status.network.last_error,
+        }
+      : record.network,
     serial: {
       connected: session.connected,
       protocol: session.protocol,
+      status: session.status ?? null,
       logs: session.logs,
       trace: session.trace,
       safeSettings: session.safeSettings,
     },
   };
+}
+
+async function disconnectAdapterDevdDevice(record: DeviceRecord): Promise<void> {
+  const devices = await listDevdDevices(record.target.baseUrl);
+  const devdDevice = devices.devices.find((device) => device.identity?.device_id === record.target.deviceId);
+  if (!devdDevice) return;
+  await disconnectDevdDevice(devdDevice.id, record.target.baseUrl);
 }
 
 function upsertRecord(records: DeviceRecord[], record: DeviceRecord): DeviceRecord[] {
@@ -1047,6 +1169,75 @@ function serialTraceFromEvent(entry: SerialTraceEvent): SerialTraceEntry {
     timestamp: new Date().toISOString(),
     ...entry,
   };
+}
+
+async function findFirmwareArtifactForIdentity(identity: Identity): Promise<FirmwareArtifactMatch | null> {
+  const githubMatch = await findGitHubFirmwareArtifact(identity);
+  if (githubMatch) return githubMatch;
+  const bundled = await findBundledFirmwareArtifact(identity);
+  return bundled
+    ? {
+        artifact: bundled,
+        source: "bundled",
+        catalog_url: BUNDLED_FIRMWARE_CATALOG_URL,
+      }
+    : null;
+}
+
+async function findGitHubFirmwareArtifact(identity: Identity): Promise<FirmwareArtifactMatch | null> {
+  if (!GITHUB_FIRMWARE_CATALOG_URL.trim()) return null;
+  try {
+    const catalog = await loadFirmwareCatalogFromUrl(GITHUB_FIRMWARE_CATALOG_URL);
+    const artifact = catalog.artifacts.find((candidate) => firmwareArtifactMatchesIdentity(candidate, identity));
+    return artifact
+      ? {
+          artifact,
+          source: "github_release",
+          catalog_url: GITHUB_FIRMWARE_CATALOG_URL,
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function findBundledFirmwareArtifact(identity: Identity): Promise<FirmwareArtifact | null> {
+  try {
+    const catalog = await loadBundledFirmwareCatalog();
+    return catalog.artifacts.find((artifact) => firmwareArtifactMatchesIdentity(artifact, identity)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function firmwareCatalogSourceLabel(source: FirmwareArtifactMatch["source"]): string {
+  return source === "github_release" ? "GitHub Release" : "Bundled";
+}
+
+function firmwareArtifactMatchesIdentity(artifact: FirmwareArtifact, identity: Identity): boolean {
+  return (
+    artifact.build_id === identity.firmware.build_id &&
+    artifact.profile === identity.firmware.build_profile &&
+    sameStringSet(artifact.features, identity.firmware.features ?? [])
+  );
+}
+
+function firmwareArtifactElfPath(artifact: FirmwareArtifact): string | null {
+  const file = artifact.files.find((candidate) => candidate.kind === "elf");
+  return file ? `/firmware/${file.path}` : null;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join(" ");
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
 }
 
 function appendSerialLog(record: DeviceRecord, entry: SerialLogEntry): DeviceRecord {

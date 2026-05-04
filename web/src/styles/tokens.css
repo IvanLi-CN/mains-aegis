@@ -42,6 +42,8 @@
   --color-severity-offline-surface: oklch(92% 0.012 260);
   --color-sidebar-panel: oklch(98.2% 0.006 105);
   --color-mobile-topbar: oklch(98.8% 0.006 105 / 0.94);
+  --control-height: 40px;
+  --control-height-touch: 44px;
   --radius-card: 8px;
   --radius-pill: 999px;
   --shadow-focus: 0 0 0 3px oklch(62% 0.15 258 / 0.24);

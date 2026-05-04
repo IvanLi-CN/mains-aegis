@@ -51,9 +51,17 @@ rustup toolchain list
 cargo install cargo-espflash
 ```
 
-### 3) `mcu-agentd`（默认工作流）
+### 3) `mains-aegis-devd`（默认工作流）与 `mcu-agentd`（fallback）
 
-本仓库默认使用 `mcu-agentd` 统一进行串口选择、烧录与 `defmt` 解码监视。请确保你的环境中已能运行：
+本仓库默认使用 `mains-aegis-devd` 作为 Mains Aegis 专用设备入口。它通过 HTTP API 管理设备扫描、绑定、连接、固件 artifact 匹配、烧录、reset 与 monitor，避免 Web App 和日志/烧录工具同时抢同一 USB CDC 口。
+
+开发期启动：
+
+```bash
+cargo run --manifest-path tools/mains-aegis-devd/Cargo.toml -- serve
+```
+
+`mcu-agentd` 保留为 legacy/fallback。若需要 fallback，请确保环境中已能运行：
 
 ```bash
 mcu-agentd --version
@@ -86,7 +94,7 @@ cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 
 ## USB CDC / Web Serial 控制通道
 
-`web_serial` feature 会在 ESP32-S3 USB Serial/JTAG CDC 口上启用 Web App structured protocol。浏览器端使用 Web Serial 连接 CDC 设备；同一时刻该 CDC 口只能被一个消费者占用，因此 Web App 连接期间不并发使用 `mcu-agentd monitor`。
+`web_serial` feature 会在 ESP32-S3 USB Serial/JTAG CDC 口上启用 Web App structured protocol。浏览器端使用 Web Serial 连接 CDC 设备；同一时刻该 CDC 口只能被一个消费者占用，因此 Web App 直连期间不并发使用 `mains-aegis-devd monitor` 或 `mcu-agentd monitor`。
 
 协议口径：
 
@@ -95,6 +103,7 @@ cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 - Frame type：`hello`、`status`、`log`、`request`、`response`、`error`、`wifi_config`。
 - 每条 Web 写命令必须带 `request_id`；固件返回同 ID 的 ack 或 error。
 - Safe requests：`get_identity`、`get_status`、`set_log_level`、`set_manual_charge_prefs`。
+- Identity：`firmware` 字段包含 `package_version/build_profile/build_id/git_sha/src_hash/git_dirty/features/protocol/defmt`，供 Web/devd 判断 artifact 与 defmt 解码是否可信。
 - WiFi config：`wifi_config op=set|clear`；`set` 写入 SSID/PSK，ack 不回显 PSK。
 - EEPROM：WiFi config record 从 `0x0160` 开始，占 4 个 32B block，含 magic/version/enabled/ssid_len/psk_len 和 CRC8。
 - `net_http` 同时启用时，启动会优先读取 EEPROM WiFi config；USB 配网写入成功后会更新运行时 WiFi 配置并触发重连，清除后回退到构建期 `MAINS_AEGIS_WIFI_*` 凭据。
@@ -103,7 +112,7 @@ cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 开发期日志策略：
 
 - Web App 连接 USB CDC 时，structured `log` frame 进入 Web 日志面板；握手会输出 `usb_cdc` session 日志，`get_status` 会输出 `status` / `output` / `charger` / `battery` / `network` 初始摘要，后续按周期或状态变化追加。Web App 的 USB Developer Console 还会显示当前 Web Serial session 中的 tx/rx frame 与 raw / ignored CDC 行；WiFi PSK 在 trace 中脱敏。
-- 需要传统 monitor 时，先断开 Web App USB session，再使用 `mcu-agentd monitor esp`。
+- 需要 devd/传统 monitor 时，先断开 Web App USB session，再使用 `mains-aegis-devd` 或 legacy `mcu-agentd monitor esp`。
 
 ## Host 侧纯逻辑单测
 
@@ -633,7 +642,25 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
   --frame-no 12
 ```
 
-## 烧录与监视（推荐：`mcu-agentd`，从仓库根目录运行）
+## 烧录与监视（推荐：`mains-aegis-devd`，从仓库根目录运行）
+
+```bash
+cargo run --manifest-path tools/mains-aegis-devd/Cargo.toml -- serve
+```
+
+Web 开发期由 `web/vite.config.ts` 把 `/api` 反代到 `http://127.0.0.1:30080`。本地构建固件后，用统一 Firmware Catalog 生成脚本登记 artifact：
+
+```bash
+python3 tools/firmware-artifact/build-catalog-entry.py \
+  --elf firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware \
+  --out firmware/target/mains-aegis-artifacts \
+  --features web_serial \
+  --profile release
+```
+
+devd API 流程是 `scan -> bind -> connect -> identity -> artifact/select -> monitor/reset/flash`。无硬件环境只使用 mock 设备与 `flash dry_run=true`。
+
+## 烧录与监视（legacy/fallback：`mcu-agentd`，从仓库根目录运行）
 
 ## 风扇温控与故障保护（Spec #ygmqn）
 

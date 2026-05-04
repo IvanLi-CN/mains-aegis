@@ -1,4 +1,4 @@
-import type { Identity, SerialTraceEntry, UpsStatus } from "../api/types";
+import type { DefmtDecodeResult, Identity, SerialTraceEntry, UpsStatus } from "../api/types";
 
 type SerialPortRequestOptions = {
   filters?: Array<{ usbVendorId?: number; usbProductId?: number }>;
@@ -81,11 +81,13 @@ export type SerialTraceEvent = Omit<SerialTraceEntry, "id" | "timestamp">;
 type SerialTransportOptions = {
   onFrame: (frame: SerialFrame) => void;
   onTrace: (entry: SerialTraceEvent) => void;
+  onDefmtLog?: (entry: DefmtDecodeResult, frameHex: string) => void;
   onClose: (error?: Error) => void;
 };
 
 const BAUD_RATE = 115200;
 const RESPONSE_TIMEOUT_MS = 5000;
+const MAX_LINE_BYTES = 16 * 1024;
 
 export function isWebSerialSupported(): boolean {
   return typeof navigator !== "undefined" && Boolean(navigator.serial);
@@ -94,8 +96,11 @@ export function isWebSerialSupported(): boolean {
 export class WebSerialTransport {
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
-  private readBuffer = "";
-  private readonly decoder = new TextDecoder();
+  private readBuffer: number[] = [];
+  private defmtBuffer: number[] = [];
+  private defmtInFrame = false;
+  private defmtDecoder: ((frame: Uint8Array) => Promise<DefmtDecodeResult>) | null = null;
+  private readonly decoder = new TextDecoder("utf-8", { fatal: true });
   private readonly encoder = new TextEncoder();
   private readonly pending = new Map<
     string,
@@ -139,6 +144,10 @@ export class WebSerialTransport {
     this.writer?.releaseLock();
     this.writer = null;
     await this.port.close().catch(() => undefined);
+  }
+
+  setDefmtDecoder(decoder: ((frame: Uint8Array) => Promise<DefmtDecodeResult>) | null) {
+    this.defmtDecoder = decoder;
   }
 
   async hello(): Promise<SerialHelloFrame> {
@@ -229,7 +238,7 @@ export class WebSerialTransport {
         const { value, done } = await this.reader.read();
         if (done) break;
         if (!value) continue;
-        this.consumeText(this.decoder.decode(value, { stream: true }));
+        this.consumeMonitorBytes(value);
       }
       this.options.onClose();
     } catch (error) {
@@ -237,55 +246,164 @@ export class WebSerialTransport {
     }
   }
 
-  private consumeText(text: string) {
-    this.readBuffer += text;
+  private consumeMonitorBytes(bytes: Uint8Array) {
+    this.defmtBuffer.push(...bytes);
+    this.drainDefmtBuffer();
+  }
+
+  private drainDefmtBuffer() {
     for (;;) {
-      const newlineIndex = this.readBuffer.indexOf("\n");
-      if (newlineIndex === -1) return;
-      const rawLine = this.readBuffer.slice(0, newlineIndex).trim();
-      this.readBuffer = this.readBuffer.slice(newlineIndex + 1);
-      if (!rawLine) continue;
-      const candidate = this.extractJsonCandidate(rawLine);
-      if (!candidate) {
-        this.options.onTrace({
-          direction: "rx",
-          kind: "raw",
-          frameType: null,
-          requestId: null,
-          target: null,
-          summary: "raw CDC line",
-          payload: rawLine,
-        });
+      if (this.defmtInFrame) {
+        const end = findFrameEnd(this.defmtBuffer);
+        if (end === -1) return;
+        const frame = this.defmtBuffer.slice(0, end);
+        this.defmtBuffer.splice(0, end + 1);
+        this.defmtInFrame = false;
+        this.consumeDefmtFrame(frame);
         continue;
       }
-      let frame: SerialFrame;
-      try {
-        frame = JSON.parse(candidate) as SerialFrame;
-      } catch {
-        // The CDC endpoint can still carry legacy defmt/plain monitor bytes.
-        // They are not Web Serial protocol frames, but the developer console
-        // still records them so CDC ownership is observable from the browser.
+
+      const start = findFrameStart(this.defmtBuffer);
+      if (start === -1) {
+        const keep = this.defmtBuffer.at(-1) === 0xff ? 1 : 0;
+        const raw = this.defmtBuffer.splice(0, this.defmtBuffer.length - keep);
+        if (raw.length > 0) this.consumeLineBytesStream(raw);
+        return;
+      }
+
+      const raw = this.defmtBuffer.splice(0, start);
+      if (raw.length > 0) this.consumeLineBytesStream(raw);
+      this.defmtBuffer.splice(0, 2);
+      this.defmtInFrame = true;
+    }
+  }
+
+  private consumeLineBytesStream(bytes: ArrayLike<number>) {
+    for (let index = 0; index < bytes.length; index += 1) {
+      const byte = bytes[index];
+      if (byte === 10) {
+        this.consumeLineBytes(this.readBuffer);
+        this.readBuffer = [];
+        continue;
+      }
+      this.readBuffer.push(byte);
+      if (this.readBuffer.length > MAX_LINE_BYTES) {
         this.options.onTrace({
           direction: "rx",
           kind: "ignored",
           frameType: null,
           requestId: null,
           target: null,
-          summary: "non-protocol CDC line",
-          payload: rawLine,
+          summary: "CDC line exceeded 16 KiB",
+          payload: hexPreview(this.readBuffer),
         });
-        continue;
+        this.readBuffer = [];
       }
-      this.options.onTrace(traceFromFrame("rx", frame, candidate));
-      this.options.onFrame(frame);
-      this.resolvePending(frame);
     }
   }
 
-  private extractJsonCandidate(rawLine: string): string | null {
-    const jsonStart = rawLine.indexOf("{");
-    if (jsonStart === -1) return null;
-    return rawLine.slice(jsonStart);
+  private consumeDefmtFrame(frame: number[]) {
+    const frameHex = hexPayload(frame);
+    if (!this.defmtDecoder) {
+      this.options.onTrace({
+        direction: "rx",
+        kind: "defmt",
+        frameType: "defmt",
+        requestId: null,
+        target: "defmt",
+        summary: "defmt frame awaiting decoder",
+        payload: frameHex,
+      });
+      return;
+    }
+
+    void this.defmtDecoder(new Uint8Array(frame))
+      .then((decoded) => {
+        this.options.onTrace({
+          direction: "rx",
+          kind: "raw",
+          frameType: "defmt",
+          requestId: null,
+          target: decoded.target,
+          summary: decoded.message,
+          payload: decoded.message,
+        });
+        this.options.onDefmtLog?.(decoded, frameHex);
+      })
+      .catch((error) => {
+        const failure = describeDefmtDecodeFailure(error);
+        this.options.onTrace({
+          direction: "rx",
+          kind: "ignored",
+          frameType: "defmt",
+          requestId: null,
+          target: "defmt_decode",
+          summary: failure.summary,
+          payload: `${failure.detail}\nframe_hex=${frameHex}`,
+        });
+      });
+  }
+
+  private consumeLineBytes(lineBytes: number[]) {
+    if (lineBytes.length === 0) return;
+    const jsonCandidate = this.extractJsonCandidate(lineBytes);
+    if (jsonCandidate) {
+      const { frame, payload } = jsonCandidate;
+      this.options.onTrace(traceFromFrame("rx", frame, payload));
+      this.options.onFrame(frame);
+      this.resolvePending(frame);
+      return;
+    }
+
+    const rawLine = this.decodeUtf8Line(lineBytes);
+    if (rawLine === null) {
+      this.options.onTrace({
+        direction: "rx",
+        kind: "defmt",
+        frameType: "defmt",
+        requestId: null,
+        target: "defmt",
+        summary: "defmt binary frame",
+        payload: hexPreview(lineBytes),
+      });
+      return;
+    }
+    if (!rawLine) return;
+    this.options.onTrace({
+      direction: "rx",
+      kind: "raw",
+      frameType: null,
+      requestId: null,
+      target: null,
+      summary: "raw CDC line",
+      payload: rawLine,
+    });
+  }
+
+  private extractJsonCandidate(lineBytes: number[]): { frame: SerialFrame; payload: string } | null {
+    const bytes = new Uint8Array(lineBytes);
+    for (let start = 0; start < bytes.length; start += 1) {
+      if (bytes[start] !== 0x7b) continue;
+      for (let end = bytes.length; end > start; end -= 1) {
+        if (bytes[end - 1] !== 0x7d) continue;
+        const payload = this.decodeUtf8Line(bytes.slice(start, end));
+        if (payload === null) continue;
+        try {
+          return { frame: JSON.parse(payload) as SerialFrame, payload };
+        } catch {
+          continue;
+        }
+      }
+    }
+    return null;
+  }
+
+  private decodeUtf8Line(lineBytes: ArrayLike<number>): string | null {
+    try {
+      return this.decoder.decode(new Uint8Array(Array.from(lineBytes))).trim();
+    } catch {
+      return null;
+    }
   }
 
   private resolvePending(frame: SerialFrame) {
@@ -303,6 +421,26 @@ export class WebSerialTransport {
   }
 }
 
+function describeDefmtDecodeFailure(error: unknown): { summary: string; detail: string } {
+  const envelope = (error as { envelope?: { code?: string; message?: string; details?: unknown } } | null)?.envelope;
+  if (envelope?.code) {
+    return {
+      summary: `${envelope.code}: ${envelope.message ?? "defmt decode failed"}`,
+      detail: JSON.stringify({ source: "defmt_decode_api", ...envelope }),
+    };
+  }
+  if (error instanceof Error) {
+    return {
+      summary: `defmt_decode_error: ${error.message}`,
+      detail: JSON.stringify({ source: "defmt_decode_api", message: error.message }),
+    };
+  }
+  return {
+    summary: "defmt_decode_error: defmt decode failed",
+    detail: JSON.stringify({ source: "defmt_decode_api", message: "defmt decode failed" }),
+  };
+}
+
 export function errorFromSerialFailure(error: unknown): SerialErrorFrame["error"] {
   const maybeEnvelope = error as { envelope?: SerialErrorFrame["error"] };
   if (maybeEnvelope?.envelope) return maybeEnvelope.envelope;
@@ -317,7 +455,7 @@ export function errorFromSerialFailure(error: unknown): SerialErrorFrame["error"
   if (error instanceof DOMException && error.name === "NetworkError") {
     return {
       code: "serial_port_unavailable",
-      message: "USB CDC port is already open or unavailable",
+      message: "USB CDC port is already open by devd or another app. Stop devd monitor/disconnect first, then retry Web Serial.",
       retryable: true,
       details: null,
     };
@@ -340,6 +478,31 @@ export function errorFromSerialFailure(error: unknown): SerialErrorFrame["error"
 
 function nextRequestId(): string {
   return `web-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function hexPreview(bytes: ArrayLike<number>): string {
+  const preview = hexPayload(Array.from(bytes).slice(0, 96));
+  return bytes.length > 96 ? `${preview} ... (${bytes.length} bytes)` : preview;
+}
+
+function hexPayload(bytes: ArrayLike<number>): string {
+  return Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join(" ");
+}
+
+function findFrameStart(buffer: number[]): number {
+  for (let index = 0; index < buffer.length - 1; index += 1) {
+    if (buffer[index] === 0xff && buffer[index + 1] === 0x00) return index;
+  }
+  return -1;
+}
+
+function findFrameEnd(buffer: number[]): number {
+  const start = buffer.findIndex((byte) => byte !== 0);
+  if (start === -1) return -1;
+  const end = buffer.slice(start).findIndex((byte) => byte === 0);
+  return end === -1 ? -1 : start + end;
 }
 
 function traceFromFrame(direction: SerialTraceEntry["direction"], frame: Record<string, unknown>, payload: string): SerialTraceEvent {

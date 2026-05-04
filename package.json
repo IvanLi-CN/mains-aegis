@@ -14,9 +14,11 @@
   },
   "scripts": {
     "commitlint": "commitlint",
+    "firmware:embed-web": "python3 tools/firmware-artifact/embed-web-assets.py --catalog firmware/target/mains-aegis-artifacts/firmware-catalog.json --out web/public/firmware --clean",
     "web:dev": "cd web && bun run dev",
     "web:preview": "cd web && bun run preview",
     "web:build": "cd web && bun run build",
-    "web:check": "cd web && bun run check"
+    "web:check": "cd web && bun run check",
+    "web:test": "cd web && bun run test"
   }
 }

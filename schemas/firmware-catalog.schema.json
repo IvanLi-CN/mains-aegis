@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mains-aegis.local/schemas/firmware-catalog.schema.json",
+  "title": "Mains Aegis Firmware Catalog",
+  "type": "object",
+  "required": ["schema_version", "artifacts"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/artifact" }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["artifact_id", "name", "version", "git_sha", "build_id", "target_chip", "profile", "features", "protocol", "defmt", "files"],
+      "properties": {
+        "artifact_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "git_sha": { "type": "string", "minLength": 1 },
+        "git_dirty": { "type": "string" },
+        "build_id": { "type": "string", "minLength": 1 },
+        "target_chip": { "const": "esp32s3" },
+        "profile": { "enum": ["debug", "release", "dev"] },
+        "features": { "type": "array", "items": { "type": "string" } },
+        "protocol": { "const": "mains-aegis.cdc.v1" },
+        "defmt": {
+          "type": "object",
+          "required": ["enabled", "encoding"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "encoding": { "type": "string" },
+            "elf_sha256": { "type": ["string", "null"] },
+            "metadata_sha256": { "type": ["string", "null"] }
+          },
+          "additionalProperties": true
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "path", "sha256", "size"],
+            "properties": {
+              "kind": { "enum": ["elf", "image", "defmt_metadata"] },
+              "path": { "type": "string", "minLength": 1 },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "size": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

@@ -94,6 +94,7 @@ const WEB_SERIAL_BUILD_INFO: BuildInfo = BuildInfo {
     git_sha: env!("FW_GIT_SHA"),
     src_hash: env!("FW_SRC_HASH"),
     git_dirty: env!("FW_GIT_DIRTY"),
+    features: env!("FW_FEATURES"),
 };
 const USB_PD_FIXED_5V_ENABLED: bool = !cfg!(feature = "no-pd-sink-5v");
 const USB_PD_FIXED_9V_ENABLED: bool = !cfg!(feature = "no-pd-sink-9v");

@@ -15,6 +15,7 @@ pub struct BuildInfo {
     pub git_sha: &'static str,
     pub src_hash: &'static str,
     pub git_dirty: &'static str,
+    pub features: &'static str,
 }
 
 pub fn accepts_event_stream(header_value: &str) -> bool {
@@ -85,7 +86,12 @@ pub fn render_identity_json_with_write_controls<const N: usize>(
     json_field_str(buf, "build_id", build.build_id, true);
     json_field_str(buf, "git_sha", build.git_sha, true);
     json_field_str(buf, "src_hash", build.src_hash, true);
-    json_field_str(buf, "git_dirty", build.git_dirty, false);
+    json_field_str(buf, "git_dirty", build.git_dirty, true);
+    json_array_from_csv(buf, "features", build.features, true);
+    json_field_str(buf, "protocol", "mains-aegis.cdc.v1", true);
+    let _ = buf.push_str(
+        "\"defmt\":{\"enabled\":true,\"encoding\":\"defmt-espflash\",\"table_hash\":null}",
+    );
     let _ = buf.push_str("},\"network\":");
     write_network_object(buf, wifi);
     let _ = buf.push_str(
@@ -93,6 +99,24 @@ pub fn render_identity_json_with_write_controls<const N: usize>(
     );
     let _ = buf.push_str(if write_controls { "true" } else { "false" });
     let _ = buf.push_str("}}");
+}
+
+fn json_array_from_csv<const N: usize>(buf: &mut String<N>, key: &str, csv: &str, comma: bool) {
+    let _ = write!(buf, "\"{}\":[", key);
+    let mut first = true;
+    for item in csv.split(',').filter(|item| !item.is_empty()) {
+        if !first {
+            let _ = buf.push(',');
+        }
+        first = false;
+        let _ = buf.push('"');
+        write_json_string_escaped(buf, item);
+        let _ = buf.push('"');
+    }
+    let _ = buf.push(']');
+    if comma {
+        let _ = buf.push(',');
+    }
 }
 
 pub fn render_network_json<const N: usize>(
@@ -461,6 +485,7 @@ mod tests {
                 git_sha: "deadbee",
                 src_hash: "1234",
                 git_dirty: "clean",
+                features: "web_serial",
             },
         );
         assert!(body
