@@ -1021,9 +1021,9 @@ function Metric({ label, value, tone = "neutral" }: { label: string; value: numb
   );
 }
 
-function MetricLine({ label, value }: { label: string; value: string }) {
+function MetricLine({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="metric-line">
+    <div className="metric-line" title={title}>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
@@ -1089,6 +1089,59 @@ function traceEntryLevel(entry: SerialTraceEntry): Exclude<TraceLevelFilter, "al
 
 function traceSearchText(entry: SerialTraceEntry, level: string) {
   return [entry.direction, level, entry.kind, entry.frameType, entry.requestId, entry.target, entry.summary, entry.payload].filter(Boolean).join(" ").toLowerCase();
+}
+
+type DefmtDecodeStatus = {
+  label: string;
+  tone: "ok" | "warn" | "muted";
+  detail: string;
+};
+
+const traceModeHints: Record<"raw" | "parsed" | "compare", string> = {
+  raw: "Show the decoded defmt line when available, otherwise show the captured CDC payload.",
+  parsed: "Show human-readable defmt fields and hide the original payload.",
+  compare: "Show the parsed view together with the original payload for debugging.",
+};
+
+function defmtDecodeStatus(trace: SerialTraceEntry[]): DefmtDecodeStatus {
+  const defmtEntries = trace.filter((entry) => entry.frameType === "defmt");
+  const decodeIssues = defmtEntries.filter((entry) => entry.kind === "ignored");
+  const decoded = defmtEntries.filter((entry) => entry.kind !== "ignored" && entry.summary.trim().length > 0);
+  if (decodeIssues.length > 0) {
+    const latestIssue = decodeIssues[decodeIssues.length - 1];
+    const issueText = `${latestIssue.summary} ${latestIssue.payload}`.toLowerCase();
+    if (issueText.includes("elf") || issueText.includes("artifact") || issueText.includes("metadata")) {
+      return {
+        label: "defmt artifact issue",
+        tone: "warn",
+        detail: "Binary defmt frames are arriving, but the selected firmware artifact or metadata does not match this device.",
+      };
+    }
+    if (issueText.includes("server") || issueText.includes("api") || issueText.includes("proxy") || issueText.includes("decode")) {
+      return {
+        label: "defmt decoder issue",
+        tone: "warn",
+        detail: "Binary defmt frames are arriving, but the decoder API cannot decode them. Check devd, the proxy, and the selected firmware artifact.",
+      };
+    }
+    return {
+      label: "defmt decode issue",
+      tone: "warn",
+      detail: "Binary defmt frames are arriving, but some frames cannot be decoded. Check firmware identity and catalog metadata.",
+    };
+  }
+  if (decoded.length > 0) {
+    return {
+      label: "defmt decoded",
+      tone: "ok",
+      detail: "defmt frames are being decoded with the current firmware metadata.",
+    };
+  }
+  return {
+    label: "defmt idle",
+    tone: "muted",
+    detail: "No binary defmt frames are present in the current trace window.",
+  };
 }
 
 type ParsedTraceMessage = {
@@ -1165,38 +1218,42 @@ function HighlightText({ value, query }: { value: string; query: string }) {
 
 function TraceFilterTabs<T extends string>({
   label,
+  title,
   value,
   options,
   onChange,
 }: {
   label: string;
+  title?: string;
   value: T;
   options: Array<[T, string]>;
   onChange: (value: T) => void;
 }) {
   return (
     <div className="trace-filter-group">
-      <span className="trace-filter-label">{label}</span>
-      <div className="trace-filter-tabs" aria-label={label}>
+      <span className="trace-filter-label" title={title}>{label}</span>
+      <div className="trace-filter-tabs" aria-label={label} title={title}>
         {options.map(([optionValue, optionLabel]) => (
           <button key={optionValue} className={value === optionValue ? "is-active" : ""} type="button" onClick={() => onChange(optionValue)}>
             {optionLabel}
           </button>
         ))}
       </div>
-      <TraceSelectControl label={label} value={value} options={options} onChange={onChange} />
+      <TraceSelectControl label={label} title={title} value={value} options={options} onChange={onChange} />
     </div>
   );
 }
 
 function TraceSelectControl<T extends string>({
   label,
+  title,
   value,
   options,
   onChange,
   className,
 }: {
   label: string;
+  title?: string;
   value: T;
   options: Array<[T, string]>;
   onChange: (value: T) => void;
@@ -1204,7 +1261,7 @@ function TraceSelectControl<T extends string>({
 }) {
   const labelId = useId();
   return (
-    <div className={`trace-select-control${className ? ` ${className}` : ""}`}>
+    <div className={`trace-select-control${className ? ` ${className}` : ""}`} title={title}>
       <span id={labelId}>{label}</span>
       <Select value={value} onValueChange={(nextValue) => onChange(nextValue as T)}>
         <SelectTrigger aria-labelledby={labelId}>
@@ -1239,6 +1296,7 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
   const traceAnchorRef = useRef<TraceScrollAnchor | null>(null);
   const protocolFrames = trace.filter((entry) => entry.kind === "frame").length;
   const rawLines = trace.filter((entry) => entry.kind !== "frame").length;
+  const decodeStatus = useMemo(() => defmtDecodeStatus(trace), [trace]);
   const traceModeOptions: Array<["raw" | "parsed" | "compare", string]> = [
     ["raw", "Raw"],
     ["parsed", "Parsed"],
@@ -1284,6 +1342,15 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
   const virtualTrace = filteredTrace.slice(virtualStart, virtualEnd);
   function captureTraceAnchor(scrollTop: number) {
     traceAnchorRef.current = captureTraceScrollAnchor(filteredTrace, traceLayout.offsets, scrollTop);
+  }
+
+  function scrollTraceToBottom() {
+    const panel = tracePanelRef.current;
+    const maxScrollTop = panel ? Math.max(0, panel.scrollHeight - panel.clientHeight) : Math.max(0, traceLayout.totalHeight - traceViewportHeight);
+    traceAnchorRef.current = null;
+    setTracePinnedToBottom(true);
+    setTraceScrollTop(maxScrollTop);
+    if (panel) panel.scrollTop = maxScrollTop;
   }
 
   useLayoutEffect(() => {
@@ -1386,16 +1453,17 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
           <h2>USB Console</h2>
         </div>
         <div className="developer-console-actions">
-          <TraceSelectControl label="View" value={traceMode} options={traceModeOptions} onChange={setTraceMode} className="trace-mode-select" />
-          <div className="trace-mode-tabs compact" aria-label="Trace view mode">
+          <TraceSelectControl label="View" title="Choose how USB CDC records are rendered." value={traceMode} options={traceModeOptions} onChange={setTraceMode} className="trace-mode-select" />
+          <div className="trace-mode-tabs compact" aria-label="Trace view mode" title="Choose how USB CDC records are rendered.">
             {traceModeOptions.map(([mode, label]) => (
-              <button key={mode} className={traceMode === mode ? "is-active" : ""} type="button" onClick={() => setTraceMode(mode as "raw" | "parsed" | "compare")}>
+              <button key={mode} className={traceMode === mode ? "is-active" : ""} type="button" onClick={() => setTraceMode(mode as "raw" | "parsed" | "compare")} title={traceModeHints[mode]}>
                 {label}
               </button>
             ))}
           </div>
           <TraceFilterTabs<TraceLevelFilter>
             label="Level"
+            title="Show records at this severity and above."
             value={levelFilter}
             options={[
               ["all", "All"],
@@ -1409,6 +1477,7 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
           />
           <TraceFilterTabs<TraceDirectionFilter>
             label="Direction"
+            title="Filter USB CDC traffic by receive or transmit direction."
             value={directionFilter}
             options={[
               ["all", "All"],
@@ -1423,6 +1492,9 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
           </label>
           <span className="trace-filter-count">{filteredTrace.length} shown</span>
           <div className="developer-console-ops">
+            <button className={`trace-live-button ${tracePinnedToBottom ? "is-following" : ""}`} type="button" onClick={scrollTraceToBottom} aria-pressed={tracePinnedToBottom} title={tracePinnedToBottom ? "The console is following new records." : "Jump back to the newest record and follow live updates."}>
+              {tracePinnedToBottom ? "Following latest" : "Resume live"}
+            </button>
             <label className="switch-control">
               <input type="checkbox" checked={wrapLines} onChange={(event) => setWrapLines(event.target.checked)} />
               <span>Wrap lines</span>
@@ -1434,10 +1506,14 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
         </div>
       </header>
       <div className="developer-console-metrics">
-        <MetricLine label="CDC records" value={String(trace.length)} />
-        <MetricLine label="Protocol frames" value={String(protocolFrames)} />
-        <MetricLine label="Structured logs" value={String(logs.length)} />
-        <MetricLine label="Raw / ignored" value={String(rawLines)} />
+        <MetricLine label="CDC records" value={String(trace.length)} title="All USB CDC records captured in the current in-memory trace window." />
+        <MetricLine label="Protocol frames" value={String(protocolFrames)} title="Structured command or response frames recognized by the app protocol parser." />
+        <MetricLine label="Structured logs" value={String(logs.length)} title="Application log entries that were parsed into structured state." />
+        <MetricLine label="Raw / ignored" value={String(rawLines)} title="Records that are not app protocol frames. This can include decoded defmt lines, plain text, or ignored binary payloads." />
+      </div>
+      <div className={`developer-console-statusbar decode-${decodeStatus.tone}`} title={decodeStatus.detail}>
+        <span>{decodeStatus.label}</span>
+        <p>{decodeStatus.detail}</p>
       </div>
       <div
         className="trace-panel is-virtualized"
