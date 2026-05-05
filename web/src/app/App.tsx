@@ -6,6 +6,7 @@ import {
   BatteryMedium,
   BatteryWarning,
   BatteryCharging,
+  BookOpen,
   Cable,
   CircleHelp,
   Cpu,
@@ -61,6 +62,9 @@ const deviceSections = [
   { id: "api", label: "API", icon: Cable },
 ] as const;
 
+const appBasePath = normalizeBasePath(import.meta.env.BASE_URL);
+const docsHref = `${appBasePath}docs/`;
+
 export function App({ initialPath }: AppProps = {}) {
   const registry = useDeviceRegistry();
   const route = useRoute(initialPath);
@@ -96,6 +100,7 @@ export function App({ initialPath }: AppProps = {}) {
           <nav className="nav-group" aria-label="Fleet navigation">
             <NavLink href="/" active={route.section === "fleet"} icon={LayoutGrid} label="Fleet" />
             <NavLink href="/connect" active={route.section === "connect"} icon={Wifi} label="Connect" />
+            <ExternalNavLink href={docsHref} icon={BookOpen} label="Docs" />
           </nav>
 
           {selected ? (
@@ -147,14 +152,15 @@ function renderRoute(route: Route, records: DeviceRecord[], selected: DeviceReco
 }
 
 function useRoute(initialPath?: string): Route {
-  const [path, setPath] = useState(initialPath ?? window.location.pathname);
+  const readPath = () => stripBasePath(initialPath ?? window.location.pathname);
+  const [path, setPath] = useState(readPath);
 
   useEffect(() => {
-    if (initialPath) setPath(initialPath);
+    if (initialPath) setPath(stripBasePath(initialPath));
   }, [initialPath]);
 
   useEffect(() => {
-    const listener = () => setPath(window.location.pathname);
+    const listener = () => setPath(stripBasePath(window.location.pathname));
     window.addEventListener("popstate", listener);
     return () => window.removeEventListener("popstate", listener);
   }, []);
@@ -173,11 +179,32 @@ function parseRoute(path: string): Route {
 }
 
 function navigate(path: string) {
-  const next = new URL(path, window.location.origin);
+  const next = new URL(withBasePath(path), window.location.origin);
   const currentSeed = new URLSearchParams(window.location.search).get("seed");
   if (!next.search && currentSeed) next.searchParams.set("seed", currentSeed);
   window.history.pushState(null, "", `${next.pathname}${next.search}${next.hash}`);
   window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
+function normalizeBasePath(base: string): string {
+  if (!base || base === "/") return "/";
+  const withLeading = base.startsWith("/") ? base : `/${base}`;
+  return withLeading.endsWith("/") ? withLeading : `${withLeading}/`;
+}
+
+function stripBasePath(path: string): string {
+  const pathname = path.startsWith("/") ? path : `/${path}`;
+  if (appBasePath === "/") return pathname;
+  const baseWithoutTrailingSlash = appBasePath.slice(0, -1);
+  if (pathname === baseWithoutTrailingSlash) return "/";
+  if (pathname.startsWith(appBasePath)) return pathname.slice(baseWithoutTrailingSlash.length) || "/";
+  return pathname;
+}
+
+function withBasePath(path: string): string {
+  if (appBasePath === "/") return path;
+  const pathname = path.startsWith("/") ? path : `/${path}`;
+  return `${appBasePath.slice(0, -1)}${pathname}`;
 }
 
 function deviceHref(deviceId: string, section: string) {
@@ -189,15 +216,25 @@ function deviceDefaultHref(record: DeviceRecord) {
 }
 
 function NavLink({ href, active, icon: Icon, label }: { href: string; active: boolean; icon: LucideIcon; label: string }) {
+  const publicHref = withBasePath(href);
   return (
     <a
       className={`nav-link ${active ? "is-active" : ""}`}
-      href={href}
+      href={publicHref}
       onClick={(event) => {
         event.preventDefault();
         navigate(href);
       }}
     >
+      <Icon size={17} />
+      <span>{label}</span>
+    </a>
+  );
+}
+
+function ExternalNavLink({ href, icon: Icon, label }: { href: string; icon: LucideIcon; label: string }) {
+  return (
+    <a className="nav-link" href={href} target="_blank" rel="noreferrer">
       <Icon size={17} />
       <span>{label}</span>
     </a>
