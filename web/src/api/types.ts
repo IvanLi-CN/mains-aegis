@@ -116,7 +116,7 @@ export type DeviceTarget = {
   alias: string;
   location: string;
   addedAt: string;
-  transport?: "http" | "serial" | "adapter";
+  transport?: "http" | "serial" | "devd";
   serialProtocol?: string;
   mock?: boolean;
 };
@@ -172,6 +172,8 @@ export type DeviceRecord = {
   lastUpdated: string | null;
   serial?: {
     connected: boolean;
+    source: "web_serial" | "devd" | "mock";
+    baseUrl?: string;
     protocol: string;
     status?: UpsStatus | null;
     logs: SerialLogEntry[];

@@ -23,14 +23,14 @@
 - 对接设备侧现有只读接口：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status` 和 status SSE。
 - 提供 mock fixtures 和正式路由 seed 场景，使无实机环境也能稳定预览、交互测试与截图验证。
 - 在现有 `web/` 管理台上新增 USB CDC / Web Serial 数据源，复用 `Identity`、`NetworkSummary`、`UpsStatus` 状态模型。
-- 新增 Rust 本地 USB HTTP Adapter，使 Web App、未来 App 与 CLI 可以通过 localhost HTTP 使用同一 USB CDC 安全控制面。
+- 使用 `mains-aegis-devd` 作为本地 USB HTTP 控制面，使 Web App、未来 App 与 CLI 可以通过 localhost HTTP 使用同一 USB CDC 安全控制面。
 - 通过 USB CDC structured JSONL 协议支持握手、状态读取、结构化日志、安全设置与 WiFi 配网。
 - 首版写入范围限制为 WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别；PSK 不在 API、日志或 UI 中回显。
 
 ### Non-goals
 
 - LAN HTTP/SSE 不实现远程写控制、清故障、切输出、改充电动作或高风险 UPS 状态改变。
-- 不实现 broker、桌面 companion、多消费者串口分发或 WebUSB 首版路径；本地 USB HTTP Adapter 是允许的单 owner CDC 适配层。
+- 不实现 broker、桌面 companion、多消费者串口分发或 WebUSB 首版路径；devd 是允许的单 owner CDC 本地控制层。
 - 不新增设备侧聚合 API；多设备汇总由浏览器端 `DeviceRegistry` 完成。
 - 不做用户账号、鉴权、设备绑定、TLS、跨网段发现或云端服务。
 - 不改造 `docs-site/`；文档站与管理端保持独立。
@@ -48,7 +48,7 @@
 
 ### 设备管理
 
-- `/connect` 支持 USB CDC / Web Serial 连接入口、本地 USB HTTP Adapter 入口，并保留手动添加 `.local` hostname、IP 或完整 URL 的 LAN 只读入口。
+- `/connect` 支持 USB CDC / Web Serial 连接入口、`mains-aegis-devd` 入口，并保留手动添加 `.local` hostname、IP 或完整 URL 的 LAN 只读入口。
 - USB 连接入口必须显示浏览器支持状态、连接/断开状态、用户取消授权、串口不可用或已占用等错误。
 - 真实 USB `SerialPort` 不写入 localStorage；刷新页面后需要重新授权。mock USB 设备可用于视觉证据与无硬件验证。
 - 添加时按 `ping -> identity -> network -> status` 探活；失败显示 API-compatible error envelope。
@@ -76,12 +76,14 @@
 - Web App 将非 JSON legacy serial line 降级为 `raw_serial` debug log；协议响应必须保持 JSONL，以免阻塞 request ack。
 - `error` frame 与 HTTP error envelope 对齐：`{ code, message, retryable, details }`。
 
-### 本地 USB HTTP Adapter
+### mains-aegis-devd 本地控制面
 
-- Adapter 位于 `tools/mains-aegis-usb-http-adapter/`，使用 Rust 实现。
-- Adapter 不枚举串口、不切换串口，只打开调用方显式传入的 CDC path。
-- Adapter 对 Web/App/CLI 暴露 localhost HTTP：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、`/api/v1/serial/session`、WiFi config 与 safe settings endpoints。
+- devd 位于 `tools/mains-aegis-devd/`，使用 Rust 实现。
+- devd 通过 scan/list/bind/connect 管理设备；真实写入要求已连接且 identity 可用的 USB CDC 设备。
+- Web App 的 devd 入口先执行 devd scan/connect；仅当一个 native USB 设备可用时自动建立控制 session，多设备场景拒绝自动选择。
+- devd 对 Web/App/CLI 暴露 localhost HTTP：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、`/api/v1/serial/session`、WiFi config 与 safe settings endpoints。
 - `/api/v1/serial/session` 返回 bounded tail logs/trace，默认 `logs_limit=200`、`trace_limit=600`，上限分别为 `500` 和 `2000`。
+- 同一 `identity.device_id` 通过 LAN 与 USB 同时发现时，Web App 合并为一条 `DeviceRecord`，并显示 WiFi/LAN 与 USB 两个连接标记。
 
 ### 纯前端 Demo
 
@@ -187,10 +189,21 @@
   viewport_strategy: `devtools-emulate`
   capture_scope: `browser-viewport`
   target_program: `mock-only`
-  scenario: USB CDC connect
-  evidence_note: 验证 `/connect` 同屏提供 USB CDC / Web Serial 控制入口与 LAN 只读入口，展示浏览器支持状态、mock USB 入口和已保存设备列表结构。
+  scenario: devd local USB control connect
+  evidence_note: 验证 `/connect` 同屏提供 USB CDC / Web Serial、mains-aegis-devd 本地控制面与 LAN 只读入口，旧本地桥接入口不再出现，并在已保存设备列表中显示同一设备的 WiFi / USB 连接标记。
 
-![USB CDC connect evidence](./assets/usb-connect-desktop.png)
+![devd connect evidence](./assets/devd-connect-entry.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/?seed=dual`
+  requested_viewport: `1440x1100`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: merged LAN and USB device record
+  evidence_note: 验证同一 `identity.device_id` 同时通过 LAN/WiFi 与 USB 发现时 Fleet 仍只显示一张设备卡，并同时展示 `WiFi` 与 `USB` 连接标记。
+
+![Merged WiFi and USB fleet evidence](./assets/devd-fleet-dual-connection.png)
 
 - source_type: mock_ui
   demo_entry_or_title: `/devices/mains-aegis-usb-demo/settings`

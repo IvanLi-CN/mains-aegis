@@ -8,9 +8,9 @@ type MockDefinition = {
   connectionState: DeviceRecord["connectionState"];
 };
 
-export type DemoSeed = "default" | "empty" | "offline" | "large" | "usb";
+export type DemoSeed = "default" | "dual" | "empty" | "offline" | "large" | "usb";
 
-const demoSeedIds: DemoSeed[] = ["default", "empty", "offline", "large", "usb"];
+const demoSeedIds: DemoSeed[] = ["default", "dual", "empty", "offline", "large", "usb"];
 const now = "2026-04-28T00:00:00.000Z";
 
 function identity(deviceId: string, shortId: string, state: NetworkSummary["state"], ipv4: string | null): Identity {
@@ -265,6 +265,23 @@ export function isDemoSeed(value: string | null | undefined): value is DemoSeed 
 export function makeMockRecords(seed: DemoSeed = "default"): DeviceRecord[] {
   if (seed === "empty") return [];
   if (seed === "usb") return [makeMockUsbSerialRecord()];
+  if (seed === "dual") {
+    const records = mockDefinitions.map((definition) => recordFromDefinition(definition));
+    const first = records[0];
+    const usb = makeMockUsbSerialRecord({ deviceId: first.target.deviceId });
+    return [
+      {
+        ...first,
+        target: {
+          ...first.target,
+          serialProtocol: usb.target.serialProtocol,
+        },
+        streamState: "streaming",
+        serial: usb.serial,
+      },
+      ...records.slice(1),
+    ];
+  }
   if (seed === "large") return largeMockDefinitions.map((definition) => recordFromDefinition(definition));
   if (seed === "offline") {
     return mockDefinitions.map((definition) => ({
@@ -303,17 +320,19 @@ export function makeMockRecord(target: DeviceTarget): DeviceRecord {
 
 export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>): DeviceRecord {
   const base = mockDefinitions[0];
+  const deviceId = targetOverride?.deviceId ?? base.identity.device_id;
+  const hostname = targetOverride?.deviceId ?? base.identity.hostname;
   const identity: Identity = {
     ...base.identity,
-    device_id: targetOverride?.deviceId ?? "mains-aegis-usb-demo",
-    hostname: "mains-aegis-usb-demo",
-    hostname_fqdn: "mains-aegis-usb-demo.local",
-    short_id: "usb001",
+    device_id: deviceId,
+    hostname,
+    hostname_fqdn: `${hostname}.local`,
+    short_id: targetOverride?.deviceId ? "usb001" : base.identity.short_id,
     network: {
       ...base.network,
-      device_id: targetOverride?.deviceId ?? "mains-aegis-usb-demo",
-      hostname: "mains-aegis-usb-demo",
-      hostname_fqdn: "mains-aegis-usb-demo.local",
+      device_id: deviceId,
+      hostname,
+      hostname_fqdn: `${hostname}.local`,
       state: "idle",
       ipv4: null,
       gateway: null,
@@ -755,6 +774,7 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
     lastUpdated: new Date().toISOString(),
     serial: {
       connected: true,
+      source: "mock",
       protocol: "mains-aegis.cdc.v1",
       logs: serialLogs,
       trace: serialTrace,

@@ -23,7 +23,7 @@ export type ManualChargePrefsInput = SafeSettingsState["manual_charge"];
 export type DeviceRegistryContextValue = {
   records: DeviceRecord[];
   addDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
-  addLocalAdapterDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
+  addDevdDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
   connectUsbSerialDevice: (input?: Pick<AddDeviceInput, "alias" | "location">) => Promise<AddDeviceResult>;
   attachMockUsbSerialDevice: () => AddDeviceResult;
   disconnectUsbSerialDevice: (deviceId: string) => Promise<void>;

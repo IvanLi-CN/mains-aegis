@@ -22,7 +22,7 @@ use std::{
     process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
     time::Duration,
 };
@@ -52,7 +52,22 @@ struct DevdState {
     bindings: HashMap<String, DeviceBinding>,
     artifacts: HashMap<String, FirmwareArtifact>,
     events: VecDeque<DevdEvent>,
-    monitors: HashMap<String, Arc<AtomicBool>>,
+    monitors: HashMap<String, NativeMonitorHandle>,
+}
+
+#[derive(Debug)]
+struct NativeMonitorHandle {
+    stop: Arc<AtomicBool>,
+    command_tx: mpsc::Sender<NativeMonitorCommand>,
+}
+
+#[derive(Debug)]
+enum NativeMonitorCommand {
+    SendFrame {
+        frame: Value,
+        request_id: String,
+        response_tx: mpsc::Sender<Result<Value, HttpError>>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +82,7 @@ struct DeviceRecord {
     status: Option<Value>,
     selected_artifact_id: Option<String>,
     log_decode: LogDecodeState,
+    safe_settings: SafeSettingsState,
     logs: VecDeque<SerialLogEntry>,
     trace: VecDeque<SerialTraceEntry>,
 }
@@ -177,6 +193,21 @@ struct SerialTraceEntry {
     payload: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SafeSettingsState {
+    wifi_configured: Option<bool>,
+    wifi_ssid: Option<String>,
+    log_level: String,
+    manual_charge: ManualChargePrefs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ManualChargePrefs {
+    target: String,
+    speed: String,
+    timer_h: u8,
+}
+
 #[derive(Debug, Serialize)]
 struct ApiError {
     code: String,
@@ -214,6 +245,32 @@ struct SessionQuery {
     trace_limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WifiConfigRequest {
+    ssid: String,
+    psk: String,
+    device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LogLevelRequest {
+    level: String,
+    device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManualChargeRequest {
+    target: String,
+    speed: String,
+    timer_h: u8,
+    device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SafeSettingsTargetQuery {
+    device_id: Option<String>,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -237,9 +294,15 @@ async fn main() {
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/api/v1/ping", get(health))
-        .route("/api/v1/identity", get(adapter_compat_identity))
-        .route("/api/v1/network", get(adapter_compat_network))
-        .route("/api/v1/status", get(adapter_compat_status))
+        .route("/api/v1/identity", get(devd_compat_identity))
+        .route("/api/v1/network", get(devd_compat_network))
+        .route("/api/v1/status", get(devd_compat_status))
+        .route(
+            "/api/v1/wifi-config",
+            post(set_wifi_config).delete(clear_wifi_config),
+        )
+        .route("/api/v1/settings/log-level", post(set_log_level))
+        .route("/api/v1/settings/manual-charge", post(set_manual_charge))
         .route("/api/v1/devices", get(list_devices))
         .route("/api/v1/devices/scan", post(scan_devices))
         .route("/api/v1/devices/{id}/bind", post(bind_device))
@@ -257,15 +320,20 @@ async fn main() {
         .route("/api/v1/devices/{id}/monitor/stop", post(monitor_stop))
         .route("/api/v1/devices/{id}/session", get(device_session))
         .route("/api/v1/devices/{id}/events", get(device_events))
-        .route("/api/v1/serial/session", get(adapter_compat_session))
-        .route("/api/v1/serial/events", get(adapter_compat_events))
+        .route("/api/v1/serial/session", get(devd_compat_session))
+        .route("/api/v1/serial/events", get(devd_compat_events))
         .route("/api/v1/defmt/decode", post(defmt_decode))
         .with_state(state);
 
     if config.allow_dev_cors {
         app = app.layer(
             CorsLayer::new()
-                .allow_origin(HeaderValue::from_static("http://127.0.0.1:5173"))
+                .allow_origin([
+                    HeaderValue::from_static("http://127.0.0.1:5173"),
+                    HeaderValue::from_static("http://localhost:5173"),
+                    HeaderValue::from_static("http://127.0.0.1:30000"),
+                    HeaderValue::from_static("http://localhost:30000"),
+                ])
                 .allow_methods([Method::GET, Method::POST, Method::DELETE])
                 .allow_headers(tower_http::cors::Any),
         );
@@ -357,6 +425,7 @@ async fn scan_devices(State(state): State<AppState>) -> Result<Json<Value>, Http
                     status: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
+                    safe_settings: default_safe_settings(),
                     logs: VecDeque::new(),
                     trace: VecDeque::new(),
                 });
@@ -501,7 +570,7 @@ async fn disconnect_device(
         guard.monitors.remove(&id)
     };
     if let Some(stop) = stop {
-        stop.store(true, Ordering::SeqCst);
+        stop.stop.store(true, Ordering::SeqCst);
     }
     let mut guard = state.inner.lock().expect("state lock");
     let device = guard
@@ -754,6 +823,89 @@ async fn reset_device(
     ))
 }
 
+async fn set_wifi_config(
+    State(state): State<AppState>,
+    Json(input): Json<WifiConfigRequest>,
+) -> Result<Json<Value>, HttpError> {
+    let ssid = input.ssid.clone();
+    let response = send_safe_settings_frame(
+        &state,
+        json!({"type": "wifi_config", "op": "set", "ssid": input.ssid, "psk": input.psk}),
+        input.device_id.as_deref(),
+        |settings| {
+            settings.wifi_configured = Some(true);
+            settings.wifi_ssid = Some(ssid);
+        },
+        "wifi_config",
+        "WiFi credentials saved through mains-aegis-devd",
+    )
+    .await?;
+    Ok(Json(response))
+}
+
+async fn clear_wifi_config(
+    State(state): State<AppState>,
+    Query(query): Query<SafeSettingsTargetQuery>,
+) -> Result<Json<Value>, HttpError> {
+    let response = send_safe_settings_frame(
+        &state,
+        json!({"type": "wifi_config", "op": "clear"}),
+        query.device_id.as_deref(),
+        |settings| {
+            settings.wifi_configured = Some(false);
+            settings.wifi_ssid = None;
+        },
+        "wifi_config",
+        "WiFi credentials cleared through mains-aegis-devd",
+    )
+    .await?;
+    Ok(Json(response))
+}
+
+async fn set_log_level(
+    State(state): State<AppState>,
+    Json(input): Json<LogLevelRequest>,
+) -> Result<Json<Value>, HttpError> {
+    let level = input.level.clone();
+    let response = send_safe_settings_frame(
+        &state,
+        json!({"type": "request", "op": "set_log_level", "level": input.level}),
+        input.device_id.as_deref(),
+        |settings| settings.log_level = level,
+        "usb_cdc",
+        "Log level updated through mains-aegis-devd",
+    )
+    .await?;
+    Ok(Json(response))
+}
+
+async fn set_manual_charge(
+    State(state): State<AppState>,
+    Json(input): Json<ManualChargeRequest>,
+) -> Result<Json<Value>, HttpError> {
+    let prefs = ManualChargePrefs {
+        target: input.target.clone(),
+        speed: input.speed.clone(),
+        timer_h: input.timer_h,
+    };
+    let response = send_safe_settings_frame(
+        &state,
+        json!({
+            "type": "request",
+            "op": "set_manual_charge_prefs",
+            "target": input.target,
+            "speed": input.speed,
+            "timer_h": input.timer_h
+        }),
+        input.device_id.as_deref(),
+        |settings| settings.manual_charge = prefs,
+        "manual_charge",
+        "Manual charge preferences updated through mains-aegis-devd",
+    )
+    .await?;
+    Ok(Json(response))
+}
+
 async fn monitor_start(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -815,7 +967,7 @@ async fn monitor_stop(
         guard.monitors.remove(&id)
     };
     if let Some(stop) = stop {
-        stop.store(true, Ordering::SeqCst);
+        stop.stop.store(true, Ordering::SeqCst);
     } else {
         ensure_device(&state, &id)?;
     }
@@ -840,11 +992,12 @@ async fn device_session(
         "status": device.status,
         "logs": tail(&device.logs, query.logs_limit.unwrap_or(200).min(500)),
         "trace": tail(&device.trace, query.trace_limit.unwrap_or(600).min(2_000)),
+        "safeSettings": device.safe_settings,
         "log_decode": device.log_decode
     })))
 }
 
-async fn adapter_compat_session(
+async fn devd_compat_session(
     Query(query): Query<SessionQuery>,
     State(state): State<AppState>,
 ) -> Json<Value> {
@@ -856,21 +1009,16 @@ async fn adapter_compat_session(
         "status": device.and_then(|d| d.status.clone()),
         "logs": device.map(|d| tail(&d.logs, query.logs_limit.unwrap_or(200).min(500))).unwrap_or_default(),
         "trace": device.map(|d| tail(&d.trace, query.trace_limit.unwrap_or(600).min(2_000))).unwrap_or_default(),
-        "safeSettings": {
-            "wifi_configured": null,
-            "wifi_ssid": null,
-            "log_level": "info",
-            "manual_charge": {"target": "rsoc_80", "speed": "ma_500", "timer_h": 2}
-        }
+        "safeSettings": device.map(|d| json!(d.safe_settings)).unwrap_or_else(|| json!(default_safe_settings()))
     }))
 }
 
-async fn adapter_compat_identity(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
+async fn devd_compat_identity(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
     let guard = state.inner.lock().expect("state lock");
     let device = select_compat_device(&guard).ok_or_else(|| {
         HttpError::not_found(
             "identity_unavailable",
-            "no device identity is available through the adapter",
+            "no device identity is available through devd",
         )
     })?;
     let identity = device.identity.clone().ok_or_else(|| {
@@ -882,8 +1030,8 @@ async fn adapter_compat_identity(State(state): State<AppState>) -> Result<Json<V
     Ok(Json(identity))
 }
 
-async fn adapter_compat_network(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
-    let Json(identity) = adapter_compat_identity(State(state)).await?;
+async fn devd_compat_network(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
+    let Json(identity) = devd_compat_identity(State(state)).await?;
     let network = identity.get("network").cloned().ok_or_else(|| {
         HttpError::non_retryable(
             "network_unavailable",
@@ -893,12 +1041,12 @@ async fn adapter_compat_network(State(state): State<AppState>) -> Result<Json<Va
     Ok(Json(network))
 }
 
-async fn adapter_compat_status(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
+async fn devd_compat_status(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
     let guard = state.inner.lock().expect("state lock");
     let device = select_compat_device(&guard).ok_or_else(|| {
         HttpError::not_found(
             "status_unavailable",
-            "no device status is available through the adapter",
+            "no device status is available through devd",
         )
     })?;
     if let Some(status) = device.status.clone() {
@@ -994,6 +1142,335 @@ fn select_compat_device(state: &DevdState) -> Option<&DeviceRecord> {
         .or_else(|| devices.first().copied())
 }
 
+async fn send_safe_settings_frame<F>(
+    state: &AppState,
+    mut frame: Value,
+    target_device_id: Option<&str>,
+    apply_settings: F,
+    log_target: &str,
+    log_message: &str,
+) -> Result<Value, HttpError>
+where
+    F: FnOnce(&mut SafeSettingsState),
+{
+    let (device_id, port_path, monitor_command_tx) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = select_control_device(&guard, target_device_id)?;
+        (
+            device.id.clone(),
+            device.port_path.clone(),
+            guard
+                .monitors
+                .get(&device.id)
+                .map(|monitor| monitor.command_tx.clone()),
+        )
+    };
+    let request_id = format!("devd-safe-{}", Utc::now().timestamp_millis());
+    if let Value::Object(object) = &mut frame {
+        object.insert("request_id".to_string(), Value::String(request_id.clone()));
+    }
+    let response = if let Some(command_tx) = monitor_command_tx {
+        send_monitor_cdc_frame_async(command_tx, frame.clone(), request_id.clone()).await?
+    } else {
+        let port_path = port_path.ok_or_else(|| {
+            HttpError::retryable(
+                "device_port_missing",
+                "native serial device has no port path",
+            )
+        })?;
+        send_native_cdc_frame_async(port_path, frame.clone(), request_id.clone()).await?
+    };
+
+    if response.get("type").and_then(Value::as_str) != Some("response")
+        || !response.get("ok").and_then(Value::as_bool).unwrap_or(false)
+    {
+        return Err(error_from_cdc_response(&response));
+    }
+
+    let result = response.get("result").cloned().unwrap_or(Value::Null);
+    record_safe_settings_success(
+        state,
+        &device_id,
+        frame,
+        response,
+        apply_settings,
+        log_target,
+        log_message,
+    );
+    Ok(result)
+}
+
+fn select_control_device<'a>(
+    state: &'a DevdState,
+    target_device_id: Option<&str>,
+) -> Result<&'a DeviceRecord, HttpError> {
+    let mut devices = state.devices.values().collect::<Vec<_>>();
+    devices.sort_by(|left, right| left.id.cmp(&right.id));
+    let eligible = devices
+        .iter()
+        .copied()
+        .filter(|device| {
+            matches!(device.connection, ConnectionState::Connected)
+                && device.identity.is_some()
+                && matches!(device.transport, DeviceTransport::NativeSerial)
+        })
+        .collect::<Vec<_>>();
+    if let Some(target_device_id) = target_device_id {
+        return eligible
+            .into_iter()
+            .find(|device| device_matches_identity_id(device, target_device_id))
+            .ok_or_else(|| {
+                HttpError::retryable(
+                    "devd_usb_session_required",
+                    format!("connect USB CDC device {target_device_id} through mains-aegis-devd before changing safe settings"),
+                )
+            });
+    }
+    match eligible.as_slice() {
+        [device] => Ok(*device),
+        [] => Err(HttpError::retryable(
+            "devd_usb_session_required",
+            "connect a USB CDC device through mains-aegis-devd before changing safe settings",
+        )),
+        _ => Err(HttpError::non_retryable(
+            "devd_usb_device_ambiguous",
+            "multiple USB CDC devices are connected; provide device_id for safe settings",
+        )),
+    }
+}
+
+fn device_matches_identity_id(device: &DeviceRecord, target_device_id: &str) -> bool {
+    device.id == target_device_id
+        || device
+            .identity
+            .as_ref()
+            .and_then(|identity| identity.get("device_id"))
+            .and_then(Value::as_str)
+            .is_some_and(|device_id| device_id == target_device_id)
+}
+
+async fn send_native_cdc_frame_async(
+    port_path: String,
+    frame: Value,
+    request_id: String,
+) -> Result<Value, HttpError> {
+    tokio::task::spawn_blocking(move || send_native_cdc_frame(&port_path, frame, &request_id))
+        .await
+        .map_err(|error| HttpError::retryable("native_cdc_join_failed", error.to_string()))?
+}
+
+async fn send_monitor_cdc_frame_async(
+    command_tx: mpsc::Sender<NativeMonitorCommand>,
+    frame: Value,
+    request_id: String,
+) -> Result<Value, HttpError> {
+    tokio::task::spawn_blocking(move || {
+        let (response_tx, response_rx) = mpsc::channel();
+        command_tx
+            .send(NativeMonitorCommand::SendFrame {
+                frame,
+                request_id,
+                response_tx,
+            })
+            .map_err(|_| {
+                HttpError::retryable(
+                    "native_monitor_command_unavailable",
+                    "native monitor stopped before accepting the CDC command",
+                )
+            })?;
+        response_rx
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => HttpError::retryable(
+                    "native_monitor_command_timeout",
+                    "timed out waiting for the native monitor to process the CDC command",
+                ),
+                mpsc::RecvTimeoutError::Disconnected => HttpError::retryable(
+                    "native_monitor_command_disconnected",
+                    "native monitor stopped before returning the CDC command response",
+                ),
+            })?
+    })
+    .await
+    .map_err(|error| HttpError::retryable("native_monitor_join_failed", error.to_string()))?
+}
+
+fn send_native_cdc_frame(
+    port_path: &str,
+    frame: Value,
+    request_id: &str,
+) -> Result<Value, HttpError> {
+    let mut port = serialport::new(port_path, 115_200)
+        .timeout(Duration::from_millis(250))
+        .open()
+        .map_err(|error| {
+            HttpError::retryable(
+                "native_serial_open_failed",
+                format!("failed to open {port_path}: {error}"),
+            )
+        })?;
+    send_cdc_frame_on_port(&mut *port, port_path, frame, request_id, |_| {})
+}
+
+fn send_cdc_frame_on_port<F>(
+    port: &mut dyn serialport::SerialPort,
+    port_path: &str,
+    frame: Value,
+    request_id: &str,
+    mut handle_unmatched_line: F,
+) -> Result<Value, HttpError>
+where
+    F: FnMut(&[u8]),
+{
+    let payload = serde_json::to_string(&frame)
+        .map_err(|error| HttpError::non_retryable("cdc_frame_encode_failed", error.to_string()))?;
+    port.write_all(payload.as_bytes())
+        .and_then(|_| port.write_all(b"\n"))
+        .map_err(|error| {
+            HttpError::retryable(
+                "native_cdc_write_failed",
+                format!("failed to write CDC command to {port_path}: {error}"),
+            )
+        })?;
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    while std::time::Instant::now() < deadline {
+        match port.read(&mut byte) {
+            Ok(0) => continue,
+            Ok(_) if byte[0] == b'\n' => {
+                if let Some(frame) = parse_matching_cdc_response(&line, request_id)? {
+                    return Ok(frame);
+                }
+                handle_unmatched_line(&line);
+                line.clear();
+            }
+            Ok(_) => {
+                if line.len() < 16 * 1024 {
+                    line.push(byte[0]);
+                } else {
+                    line.clear();
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
+            Err(error) => {
+                return Err(HttpError::retryable(
+                    "native_cdc_read_failed",
+                    format!("failed to read CDC response from {port_path}: {error}"),
+                ))
+            }
+        }
+    }
+    Err(HttpError::retryable(
+        "native_cdc_timeout",
+        format!("timed out waiting for CDC response from {port_path}"),
+    ))
+}
+
+fn parse_matching_cdc_response(line: &[u8], request_id: &str) -> Result<Option<Value>, HttpError> {
+    let Ok(text) = std::str::from_utf8(line) else {
+        return Ok(None);
+    };
+    let Ok(frame) = serde_json::from_str::<Value>(text.trim()) else {
+        return Ok(None);
+    };
+    let matches_request = frame
+        .get("request_id")
+        .and_then(Value::as_str)
+        .is_some_and(|candidate| candidate == request_id);
+    if matches_request
+        && matches!(
+            frame.get("type").and_then(Value::as_str),
+            Some("response" | "error")
+        )
+    {
+        Ok(Some(frame))
+    } else {
+        Ok(None)
+    }
+}
+
+fn record_safe_settings_success<F>(
+    state: &AppState,
+    device_id: &str,
+    tx_frame: Value,
+    rx_frame: Value,
+    apply_settings: F,
+    log_target: &str,
+    log_message: &str,
+) where
+    F: FnOnce(&mut SafeSettingsState),
+{
+    let tx_trace = trace_entry(
+        "tx",
+        &serde_json::to_string(&redact_cdc_frame(&tx_frame)).unwrap_or_default(),
+    );
+    let rx_trace = trace_entry(
+        "rx",
+        &serde_json::to_string(&redact_cdc_frame(&rx_frame)).unwrap_or_default(),
+    );
+    let log = SerialLogEntry {
+        id: next_id(),
+        timestamp: now(),
+        level: "info".to_string(),
+        target: log_target.to_string(),
+        message: log_message.to_string(),
+    };
+    {
+        let mut guard = state.inner.lock().expect("state lock");
+        if let Some(device) = guard.devices.get_mut(device_id) {
+            apply_settings(&mut device.safe_settings);
+            push_bounded(&mut device.trace, tx_trace.clone(), LOG_LIMIT);
+            push_bounded(&mut device.trace, rx_trace.clone(), LOG_LIMIT);
+            push_bounded(&mut device.logs, log.clone(), LOG_LIMIT);
+            device.connection = ConnectionState::Connected;
+        }
+    }
+    emit(
+        state,
+        Some(device_id.to_string()),
+        "serial_trace",
+        "CDC trace frame",
+        json!({"trace": tx_trace}),
+    );
+    emit(
+        state,
+        Some(device_id.to_string()),
+        "serial_trace",
+        "CDC trace frame",
+        json!({"trace": rx_trace}),
+    );
+    emit(
+        state,
+        Some(device_id.to_string()),
+        "serial_log",
+        "CDC log frame",
+        json!({"log": log}),
+    );
+}
+
+fn error_from_cdc_response(response: &Value) -> HttpError {
+    let error = response.get("error");
+    let code = error
+        .and_then(|error| error.get("code"))
+        .and_then(Value::as_str)
+        .unwrap_or("cdc_command_failed");
+    let message = error
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+        .unwrap_or("USB CDC command failed");
+    let retryable = error
+        .and_then(|error| error.get("retryable"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    if retryable {
+        HttpError::retryable(code, message)
+    } else {
+        HttpError::non_retryable(code, message)
+    }
+}
+
 async fn device_events(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1010,14 +1487,14 @@ async fn device_events(
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }
 
-async fn adapter_compat_events(
+async fn devd_compat_events(
     State(state): State<AppState>,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, std::convert::Infallible>>> {
     let receiver = state.events.subscribe();
     let stream = async_stream::stream! {
         let mut receiver = receiver;
         while let Ok(event) = receiver.recv().await {
-            if matches!(event.kind.as_str(), "serial_trace" | "serial_log" | "monitor") {
+            if matches!(event.kind.as_str(), "serial_trace" | "serial_log" | "serial_status" | "monitor") {
                 yield Ok(Event::default().event(event.kind.clone()).id(event.id.clone()).json_data(event).expect("serialize event"));
             }
         }
@@ -1155,6 +1632,7 @@ fn seed_mock_device(state: &AppState) {
             status: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
+            safe_settings: default_safe_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
         },
@@ -1383,6 +1861,7 @@ fn start_native_monitor(
     port_path: String,
 ) -> Result<MonitorStartResult, HttpError> {
     let stop = Arc::new(AtomicBool::new(false));
+    let (command_tx, command_rx) = mpsc::channel();
     {
         let mut guard = state.inner.lock().expect("state lock");
         if guard.monitors.contains_key(&device_id) {
@@ -1396,10 +1875,16 @@ fn start_native_monitor(
                 already_running: true,
             });
         }
-        guard.monitors.insert(device_id.clone(), stop.clone());
+        guard.monitors.insert(
+            device_id.clone(),
+            NativeMonitorHandle {
+                stop: stop.clone(),
+                command_tx,
+            },
+        );
     }
     let state = state.clone();
-    std::thread::spawn(move || run_native_monitor(state, device_id, port_path, stop));
+    std::thread::spawn(move || run_native_monitor(state, device_id, port_path, stop, command_rx));
     Ok(MonitorStartResult {
         trace_count: 0,
         log_count: 0,
@@ -1412,8 +1897,10 @@ fn run_native_monitor(
     device_id: String,
     port_path: String,
     stop: Arc<AtomicBool>,
+    command_rx: mpsc::Receiver<NativeMonitorCommand>,
 ) {
-    if let Err(error) = run_native_monitor_inner(&state, &device_id, &port_path, &stop) {
+    if let Err(error) = run_native_monitor_inner(&state, &device_id, &port_path, &stop, command_rx)
+    {
         let mut guard = state.inner.lock().expect("state lock");
         guard.monitors.remove(&device_id);
         if let Some(device) = guard.devices.get_mut(&device_id) {
@@ -1433,6 +1920,7 @@ fn run_native_monitor_inner(
     device_id: &str,
     port_path: &str,
     stop: &AtomicBool,
+    command_rx: mpsc::Receiver<NativeMonitorCommand>,
 ) -> Result<(), HttpError> {
     let mut port = serialport::new(port_path, 115_200)
         .timeout(Duration::from_millis(250))
@@ -1447,6 +1935,9 @@ fn run_native_monitor_inner(
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
     while !stop.load(Ordering::SeqCst) {
+        while let Ok(command) = command_rx.try_recv() {
+            handle_native_monitor_command(state, device_id, port_path, &mut *port, command);
+        }
         if std::time::Instant::now() >= next_status_at {
             let request =
                 r#"{"type":"request","request_id":"devd-monitor-status","op":"get_status"}"#;
@@ -1501,6 +1992,29 @@ fn run_native_monitor_inner(
     let mut guard = state.inner.lock().expect("state lock");
     guard.monitors.remove(device_id);
     Ok(())
+}
+
+fn handle_native_monitor_command(
+    state: &AppState,
+    device_id: &str,
+    port_path: &str,
+    port: &mut dyn serialport::SerialPort,
+    command: NativeMonitorCommand,
+) {
+    match command {
+        NativeMonitorCommand::SendFrame {
+            frame,
+            request_id,
+            response_tx,
+        } => {
+            let result = send_cdc_frame_on_port(port, port_path, frame, &request_id, |line| {
+                if let Some((trace, log)) = parse_cdc_line_for_monitor(line) {
+                    append_monitor_trace(state, device_id, trace, log);
+                }
+            });
+            let _ = response_tx.send(result);
+        }
+    }
 }
 
 fn append_monitor_trace(
@@ -1709,6 +2223,18 @@ fn trace_entry(direction: &str, payload: &str) -> SerialTraceEntry {
     }
 }
 
+fn redact_cdc_frame(frame: &Value) -> Value {
+    let mut redacted = frame.clone();
+    if redacted.get("type").and_then(Value::as_str) == Some("wifi_config") {
+        if let Some(object) = redacted.as_object_mut() {
+            if object.contains_key("psk") {
+                object.insert("psk".to_string(), Value::String("[redacted]".to_string()));
+            }
+        }
+    }
+    redacted
+}
+
 fn raw_trace_entry(direction: &str, kind: &str, summary: &str, payload: &str) -> SerialTraceEntry {
     SerialTraceEntry {
         id: next_id(),
@@ -1802,6 +2328,19 @@ fn push_bounded<T>(queue: &mut VecDeque<T>, item: T, limit: usize) {
 fn tail<T: Clone>(queue: &VecDeque<T>, limit: usize) -> Vec<T> {
     let skip = queue.len().saturating_sub(limit);
     queue.iter().skip(skip).cloned().collect()
+}
+
+fn default_safe_settings() -> SafeSettingsState {
+    SafeSettingsState {
+        wifi_configured: None,
+        wifi_ssid: None,
+        log_level: "info".to_string(),
+        manual_charge: ManualChargePrefs {
+            target: "full_100".to_string(),
+            speed: "ma_500".to_string(),
+            timer_h: 2,
+        },
+    }
 }
 
 fn next_id() -> String {
@@ -1903,6 +2442,23 @@ mod tests {
     }
 
     #[test]
+    fn redacts_wifi_psk_from_cdc_trace_frames() {
+        let frame = json!({
+            "type": "wifi_config",
+            "op": "set",
+            "ssid": "lab",
+            "psk": "super-secret",
+            "request_id": "req-1"
+        });
+
+        let redacted = redact_cdc_frame(&frame);
+
+        assert_eq!(frame["psk"], "super-secret");
+        assert_eq!(redacted["psk"], "[redacted]");
+        assert_eq!(redacted["ssid"], "lab");
+    }
+
+    #[test]
     fn artifact_match_uses_exact_build_id() {
         let mut device = DeviceRecord {
             id: "d".into(),
@@ -1917,6 +2473,7 @@ mod tests {
             status: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
+            safe_settings: default_safe_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
         };
@@ -1957,6 +2514,7 @@ mod tests {
             status: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
+            safe_settings: default_safe_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
         };
@@ -1997,6 +2555,7 @@ mod tests {
             status: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
+            safe_settings: default_safe_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
         };
@@ -2037,6 +2596,7 @@ mod tests {
             status: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
+            safe_settings: default_safe_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
         };
@@ -2075,6 +2635,7 @@ mod tests {
             status: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
+            safe_settings: default_safe_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
         };

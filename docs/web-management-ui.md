@@ -40,8 +40,8 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 
 - 入口：`/connect`
 - 目的：维护浏览器当前关注的 UPS 清单；USB CDC 用于安全设置与配网，LAN 用于只读状态。
-- 主要内容：USB CDC 连接入口、本地 USB HTTP Adapter 连接入口、浏览器支持状态、串口授权/占用错误、LAN 新增连接目标、探活结果、设备身份摘要、网络状态、API 版本兼容提示、已保存设备列表。
-- 接口对接：USB CDC 使用 Web Serial JSONL frame；本地 Adapter 使用 `http://127.0.0.1:30080` 风格的 localhost HTTP；LAN 使用 `GET /api/v1/ping`、`GET /api/v1/identity`、`GET /api/v1/network`。
+- 主要内容：USB CDC / Web Serial 连接入口、`mains-aegis-devd` 本地 daemon 连接入口、浏览器支持状态、串口授权/占用错误、LAN 新增连接目标、探活结果、设备身份摘要、网络状态、API 版本兼容提示、已保存设备列表。
+- 接口对接：USB CDC 使用 Web Serial JSONL frame；devd 使用 `http://127.0.0.1:30080` 风格的 localhost HTTP，并由 Connect 入口先执行 devd scan/connect，在仅有一个 native USB 设备可用时建立控制 session；LAN 使用 `GET /api/v1/ping`、`GET /api/v1/identity`、`GET /api/v1/network`。
 - 空状态：提示用户连接 USB CDC 或输入 `mains-aegis-<short_id>.local` / 局域网 IP。
 
 ### 3. 单设备总览 Dashboard
@@ -91,8 +91,8 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 - 可写范围：WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别。
 - Secret 规则：PSK 只在用户提交时通过 USB 写入固件 EEPROM，不在 UI、API payload、日志或 ack 中回显；提交后清空表单。固件 `net_http` 启用时会优先读取 EEPROM WiFi config，并在 USB 写入后更新运行时 WiFi 配置。
 - LAN 限制：HTTP/SSE 设备进入该页时只显示 USB required 状态，不提供写表单。
-- 本地 Adapter：通过 Rust 适配层把 USB CDC 转成 localhost HTTP 后，Web App 可使用同一 Settings 表单；Adapter 仍然独占 CDC，但日志与 trace 通过 `/api/v1/serial/session` 呈现在 USB Console。
-- 日志：Settings 页提供 USB Console。USB Console 展示当前 Web Serial 或本地 Adapter session 内 Web 可见的 CDC trace：Web 发出的 `tx` frame、固件返回的 `rx` frame、structured `log`、`status`、`hello`、`response`、`error`，以及夹杂在 CDC 行流中的 raw / ignored 非协议行。控制台支持等级过滤、方向过滤、关键词搜索高亮、虚拟滚动、全屏查看，并允许用户切换 payload 自动折行或横向滚动。WiFi PSK 在 trace 中脱敏。完整 `defmt` monitor 仍需断开 CDC owner 后用 `mcu-agentd monitor` 解码。
+- devd 控制面：通过 `mains-aegis-devd` 持有 USB CDC 后，Web App 可使用同一 Settings 表单；devd 仍然独占 CDC，但日志与 trace 通过 `/api/v1/serial/session` 呈现在 USB Console。
+- 日志：Settings 页提供 USB Console。USB Console 展示当前 Web Serial 或 devd session 内 Web 可见的 CDC trace：Web 发出的 `tx` frame、固件返回的 `rx` frame、structured `log`、`status`、`hello`、`response`、`error`，以及夹杂在 CDC 行流中的 raw / ignored 非协议行。控制台支持等级过滤、方向过滤、关键词搜索高亮、虚拟滚动、全屏查看，并允许用户切换 payload 自动折行或横向滚动。WiFi PSK 在 trace 中脱敏。完整 `defmt` monitor 仍由 devd 在 artifact identity 匹配后解码。
 
 ### 9. 接口调试
 
@@ -158,7 +158,7 @@ web/
 - `status-stream`：在线时使用 SSE；断开、409、503 或浏览器限制时退回定时 `GET /api/v1/status`。
 - `device registry`：浏览器侧维护多设备清单；设备侧首版不需要新增聚合 API。
 - `serial transport`：浏览器侧持有当前 session 的 `SerialPort`，解析 USB CDC JSONL frame，复用 `Identity`、`NetworkSummary`、`UpsStatus`，并把 write ack/error/log 映射回设备记录。
-- `local adapter transport`：Rust adapter 持有 USB CDC，Web/App/CLI 通过 localhost HTTP 读取 identity/status/network、提交 safe settings，并通过 `/api/v1/serial/session` 读取 bounded tail structured logs 与 CDC trace，避免 Web 页面反复搬运完整环形缓冲。
+- `devd transport`：`mains-aegis-devd` 持有 USB CDC，Web/App/CLI 通过 localhost HTTP 读取 identity/status/network、提交 safe settings，并通过 `/api/v1/serial/session` 读取 bounded tail structured logs 与 CDC trace，避免 Web 页面反复搬运完整环形缓冲。
 - `error envelope`：所有页面统一渲染 `{ code, message, retryable, details }`，不要在组件里各自拼错误文案。
 
 ## 导航结构
@@ -185,7 +185,7 @@ web/
 - 默认数据：内置 6 台 mock UPS，覆盖 standby、assist、backup、warning、critical、offline。
 - GitHub Pages：根站点发布 Web App，文档站发布在同一 Pages artifact 的 `/docs/` 子路径；App 使用 History API path router，并通过 `PAGES_BASE` / `VITE_BASE` 支持仓库子路径和未来自定义域名根路径。
 - 全局导航：App Layout 侧栏固定提供 `Docs` 入口，打开 `${BASE_URL}docs/`，保持当前运维台页面与连接状态不被替换。
-- 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、LAN 只读探活、SSE 订阅与轮询兜底、当前 session 的 Web Serial USB CDC transport，以及本地 USB HTTP Adapter transport。
-- 验证命令：`bun run web:check`、`PAGES_BASE=/mains-aegis/ bun run web:build`、`DOCS_BASE=/mains-aegis/docs/ bun run --cwd docs-site build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cargo test --manifest-path tools/mains-aegis-usb-http-adapter/Cargo.toml`、`cd firmware && cargo +esp check --features web_serial`。
-- 本地适配层：运行时使用 `cargo run --manifest-path tools/mains-aegis-usb-http-adapter/Cargo.toml -- --port <serial-path> --bind 127.0.0.1:30080`；若 Web 预览端口不是默认值，使用 `--allow-origin <origin>`、`MAINS_AEGIS_WEB_ORIGINS` 或 `WEB_PORT` 放行当前 Web origin。
+- 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、LAN 只读探活、SSE 订阅与轮询兜底、当前 session 的 Web Serial USB CDC transport，以及 devd 本地 USB control transport；同一 `identity.device_id` 的 LAN 与 USB 来源合并为一条设备记录，devd safe-control 写入始终携带当前记录的 `identity.device_id`。
+- 验证命令：`bun run web:check`、`PAGES_BASE=/mains-aegis/ bun run web:build`、`DOCS_BASE=/mains-aegis/docs/ bun run --cwd docs-site build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cargo test --manifest-path tools/mains-aegis-devd/Cargo.toml`、`cd firmware && cargo +esp check --features web_serial`。
+- 本地设备 daemon：运行时使用 `cargo run --manifest-path tools/mains-aegis-devd/Cargo.toml -- serve --bind 127.0.0.1:30080 --allow-dev-cors`，生产模式可通过 `--web-root <dir>` 托管 Web 静态资源。
 - 纯前端 Demo：`bun run web:dev` 后访问正式路由，例如 `/`、`/?seed=empty`、`/?seed=large`、`/devices/mains-aegis-e4f5a6/battery?seed=default`。

@@ -114,7 +114,7 @@ export const getIdentity = (baseUrl: string) => requestJson<Identity>(baseUrl, "
 export const getNetwork = (baseUrl: string) => requestJson<NetworkSummary>(baseUrl, "/api/v1/network");
 export const getStatus = (baseUrl: string) => requestJson<UpsStatus>(baseUrl, "/api/v1/status");
 
-export type AdapterSerialSession = {
+export type DevdSerialSession = {
   connected: boolean;
   protocol: string;
   status?: UpsStatus | null;
@@ -123,7 +123,7 @@ export type AdapterSerialSession = {
   safeSettings: SafeSettingsState;
 };
 
-export type AdapterSerialEvent = {
+export type DevdSerialEvent = {
   id: string;
   timestamp: string;
   device_id: string | null;
@@ -137,16 +137,16 @@ export type AdapterSerialEvent = {
   };
 };
 
-export type AdapterSerialEventStream = {
+export type DevdSerialEventStream = {
   close: () => void;
 };
 
-type AdapterSerialSessionOptions = {
+type DevdSerialSessionOptions = {
   logsLimit?: number;
   traceLimit?: number;
 };
 
-function adapterSerialSessionPath(options: AdapterSerialSessionOptions = {}) {
+function devdSerialSessionPath(options: DevdSerialSessionOptions = {}) {
   const params = new URLSearchParams();
   if (options.logsLimit !== undefined) params.set("logs_limit", String(options.logsLimit));
   if (options.traceLimit !== undefined) params.set("trace_limit", String(options.traceLimit));
@@ -154,19 +154,19 @@ function adapterSerialSessionPath(options: AdapterSerialSessionOptions = {}) {
   return `/api/v1/serial/session${query ? `?${query}` : ""}`;
 }
 
-export const getAdapterSerialSession = (baseUrl: string, options?: AdapterSerialSessionOptions) =>
-  requestJson<AdapterSerialSession>(baseUrl, adapterSerialSessionPath(options));
+export const getDevdSerialSession = (baseUrl: string, options?: DevdSerialSessionOptions) =>
+  requestJson<DevdSerialSession>(baseUrl, devdSerialSessionPath(options));
 
-export function subscribeAdapterSerialEvents(
+export function subscribeDevdSerialEvents(
   baseUrl: string,
   callbacks: {
-    onEvent: (event: AdapterSerialEvent) => void;
+    onEvent: (event: DevdSerialEvent) => void;
     onError: (event: Event) => void;
   },
-): AdapterSerialEventStream {
+): DevdSerialEventStream {
   const eventSource = new EventSource(`${baseUrl}/api/v1/serial/events`);
   const handleEvent = (event: Event) => {
-    callbacks.onEvent(JSON.parse((event as MessageEvent<string>).data) as AdapterSerialEvent);
+    callbacks.onEvent(JSON.parse((event as MessageEvent<string>).data) as DevdSerialEvent);
   };
   eventSource.addEventListener("serial_trace", handleEvent);
   eventSource.addEventListener("serial_log", handleEvent);
@@ -176,13 +176,14 @@ export function subscribeAdapterSerialEvents(
   return { close: () => eventSource.close() };
 }
 
-export const sendAdapterWifiConfig = (baseUrl: string, input: { ssid: string; psk: string }) =>
-  requestWithBody<unknown>(baseUrl, "/api/v1/wifi-config", "POST", input);
-export const clearAdapterWifiConfig = (baseUrl: string) => requestWithBody<unknown>(baseUrl, "/api/v1/wifi-config", "DELETE");
-export const setAdapterLogLevel = (baseUrl: string, level: SafeSettingsState["log_level"]) =>
-  requestWithBody<unknown>(baseUrl, "/api/v1/settings/log-level", "POST", { level });
-export const setAdapterManualChargePrefs = (baseUrl: string, prefs: SafeSettingsState["manual_charge"]) =>
-  requestWithBody<unknown>(baseUrl, "/api/v1/settings/manual-charge", "POST", prefs);
+export const sendDevdWifiConfig = (baseUrl: string, deviceId: string, input: { ssid: string; psk: string }) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/wifi-config", "POST", { ...input, device_id: deviceId });
+export const clearDevdWifiConfig = (baseUrl: string, deviceId: string) =>
+  requestWithBody<unknown>(baseUrl, `/api/v1/wifi-config?device_id=${encodeURIComponent(deviceId)}`, "DELETE");
+export const setDevdLogLevel = (baseUrl: string, deviceId: string, level: SafeSettingsState["log_level"]) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/settings/log-level", "POST", { level, device_id: deviceId });
+export const setDevdManualChargePrefs = (baseUrl: string, deviceId: string, prefs: SafeSettingsState["manual_charge"]) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/settings/manual-charge", "POST", { ...prefs, device_id: deviceId });
 
 export async function probeDevice(baseUrl: string): Promise<ProbeResult> {
   await ping(baseUrl);

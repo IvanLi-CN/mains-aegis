@@ -18,8 +18,8 @@
 
 - 新增 `tools/mains-aegis-devd`，作为 Mains Aegis 专用设备 daemon。
 - `serve` 启动不接收设备端口；设备通过 API 扫描、列出、绑定、连接、断开和解绑。
-- HTTP API 覆盖 identity、session、events、artifact selection、reset、monitor start/stop、flash。
-- 迁移现有 Local HTTP Adapter 的兼容面：`/api/v1/serial/session` 保留，供 Web App 旧路径过渡。
+- HTTP API 覆盖 identity、session、events、artifact selection、reset、monitor start/stop、flash 与 USB CDC safe settings 写入。
+- 吸收旧本地 USB HTTP bridge 的兼容面：`/api/v1/serial/session`、WiFi config、log level 和 manual charge endpoints 由 devd 直接提供。
 - Firmware Catalog 成为 Web Direct、devd、本地构建和 GitHub Release 的统一 artifact 合同。
 - 固件 identity 暴露 build/profile/features/protocol/defmt 信息，devd 用它与 artifact manifest 匹配；不匹配时日志解码必须标记 `unverified`。
 - Web 开发期由 Vite dev server 反代 `/api` 到 devd；生产期可由 devd 托管静态 Web。
@@ -49,6 +49,9 @@
 - `POST /api/v1/devices/{id}/monitor/start|stop`: monitor 生命周期请求。
 - `GET /api/v1/devices/{id}/session`: 返回 bounded logs/trace 与 `log_decode`。
 - `GET /api/v1/devices/{id}/events`: 设备事件 SSE。
+- `POST /api/v1/wifi-config` / `DELETE /api/v1/wifi-config`: 通过指定 `device_id` 的已连接 USB CDC 设备写入或清除 WiFi 配置，成功后返回固件 ack result；未指定 `device_id` 时仅允许单 USB 设备连接场景。
+- `POST /api/v1/settings/log-level`: 通过指定 `device_id` 的 USB CDC session 更新日志级别。
+- `POST /api/v1/settings/manual-charge`: 通过指定 `device_id` 的 USB CDC session 更新手动充电偏好。
 
 ### Firmware Catalog
 
@@ -83,7 +86,7 @@
 
 ## 实现状态
 
-- `tools/mains-aegis-devd`: v1 daemon/API/mock validation foundation。
+- `tools/mains-aegis-devd`: v1 daemon/API/mock validation foundation，并提供 Web App localhost USB safe-control surface。
 - `schemas/firmware-catalog.schema.json`: v1 catalog schema。
 - `tools/firmware-artifact/build-catalog-entry.py`: local manifest/catalog generator。
 - `web/src/api/*`: devd mode client contracts。

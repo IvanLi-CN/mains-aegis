@@ -212,7 +212,7 @@ function deviceHref(deviceId: string, section: string) {
 }
 
 function deviceDefaultHref(record: DeviceRecord) {
-  return deviceHref(record.target.deviceId, record.target.transport === "serial" || record.target.transport === "adapter" ? "settings" : "overview");
+  return deviceHref(record.target.deviceId, record.serial?.connected ? "settings" : "overview");
 }
 
 function NavLink({ href, active, icon: Icon, label }: { href: string; active: boolean; icon: LucideIcon; label: string }) {
@@ -353,6 +353,7 @@ function DeviceCard({ record }: { record: DeviceRecord }) {
       <div className="mode-row">
         <span className={`mode-pill mode-${status?.mode ?? "unknown"}`}>{modeLabel(status?.mode)}</span>
         <SeverityBadge severity={severity} />
+        <ConnectionBadges record={record} />
       </div>
 
       <div className="card-main card-main-icon-duo metric-duo-stack">
@@ -398,11 +399,26 @@ function DeviceCard({ record }: { record: DeviceRecord }) {
   );
 }
 
+function ConnectionBadges({ record }: { record: DeviceRecord }) {
+  const transport = record.target.transport ?? "http";
+  const lanConnected =
+    transport === "http" &&
+    (record.connectionState === "online" || record.network?.state === "connected" || record.status?.network.state === "connected");
+  const usbConnected = Boolean(record.serial?.connected);
+  return (
+    <span className="connection-badges">
+      {lanConnected ? <span className="transport-badge http">WiFi</span> : null}
+      {usbConnected ? <span className="transport-badge serial">USB</span> : null}
+      {!lanConnected && !usbConnected ? <span className="transport-badge offline">Offline</span> : null}
+    </span>
+  );
+}
+
 function ConnectPage() {
   const {
     records,
     addDevice,
-    addLocalAdapterDevice,
+    addDevdDevice,
     connectUsbSerialDevice,
     attachMockUsbSerialDevice,
     disconnectUsbSerialDevice,
@@ -415,15 +431,15 @@ function ConnectPage() {
   const [location, setLocation] = useState("");
   const [usbAlias, setUsbAlias] = useState("");
   const [usbLocation, setUsbLocation] = useState("");
-  const [adapterTarget, setAdapterTarget] = useState("same-origin");
-  const [adapterAlias, setAdapterAlias] = useState("");
-  const [adapterLocation, setAdapterLocation] = useState("");
+  const [devdTarget, setDevdTarget] = useState("same-origin");
+  const [devdAlias, setDevdAlias] = useState("");
+  const [devdLocation, setDevdLocation] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [usbMessage, setUsbMessage] = useState<string | null>(null);
-  const [adapterMessage, setAdapterMessage] = useState<string | null>(null);
+  const [devdMessage, setDevdMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [usbBusy, setUsbBusy] = useState(false);
-  const [adapterBusy, setAdapterBusy] = useState(false);
+  const [devdBusy, setDevdBusy] = useState(false);
   const serialSupported = isWebSerialSupported();
   const demoMode = isDemoSeed(new URLSearchParams(window.location.search).get("seed"));
 
@@ -458,19 +474,19 @@ function ConnectPage() {
     }
   }
 
-  async function onAdapterSubmit(event: FormEvent) {
+  async function onDevdSubmit(event: FormEvent) {
     event.preventDefault();
-    setAdapterBusy(true);
-    setAdapterMessage(null);
-    const result = await addLocalAdapterDevice({ target: adapterTarget, alias: adapterAlias, location: adapterLocation });
-    setAdapterBusy(false);
+    setDevdBusy(true);
+    setDevdMessage(null);
+    const result = await addDevdDevice({ target: devdTarget, alias: devdAlias, location: devdLocation });
+    setDevdBusy(false);
     if (result.ok) {
-      setAdapterAlias("");
-      setAdapterLocation("");
-      setAdapterMessage(`Local adapter connected ${result.record.target.alias}`);
+      setDevdAlias("");
+      setDevdLocation("");
+      setDevdMessage(`devd connected ${result.record.target.alias}`);
       navigate(deviceHref(result.record.target.deviceId, "settings"));
     } else {
-      setAdapterMessage(`${result.error?.code}: ${result.error?.message}`);
+      setDevdMessage(`${result.error?.code}: ${result.error?.message}`);
     }
   }
 
@@ -527,40 +543,40 @@ function ConnectPage() {
           </div>
         </section>
 
-        <section className="connect-panel adapter-panel">
+        <section className="connect-panel devd-panel">
           <header className="connect-panel-header">
             <div>
-              <h3><Server size={18} /> Local USB Adapter</h3>
-              <p>Rust HTTP bridge for Web, App, and CLI clients</p>
+              <h3><Server size={18} /> mains-aegis-devd</h3>
+              <p>Local daemon for USB control, logs, and firmware tools</p>
             </div>
-            <span className="transport-badge adapter">localhost</span>
+            <span className="transport-badge devd">devd</span>
           </header>
-          <form className="connect-form compact" onSubmit={onAdapterSubmit}>
+          <form className="connect-form compact" onSubmit={onDevdSubmit}>
             <label>
-              Adapter URL
+              devd URL
               <input
-                name="adapter-target"
-                value={adapterTarget}
-                onChange={(event) => setAdapterTarget(event.target.value)}
+                name="devd-target"
+                value={devdTarget}
+                onChange={(event) => setDevdTarget(event.target.value)}
                 placeholder="same-origin"
                 required
               />
             </label>
             <label>
               Alias
-              <input name="adapter-alias" value={adapterAlias} onChange={(event) => setAdapterAlias(event.target.value)} placeholder="Lab bench adapter" />
+              <input name="devd-alias" value={devdAlias} onChange={(event) => setDevdAlias(event.target.value)} placeholder="Lab bench devd" />
             </label>
             <label>
               Location
-              <input name="adapter-location" value={adapterLocation} onChange={(event) => setAdapterLocation(event.target.value)} placeholder="Bench 1" />
+              <input name="devd-location" value={devdLocation} onChange={(event) => setDevdLocation(event.target.value)} placeholder="Bench 1" />
             </label>
             <div className="form-actions">
-              <button className="primary-button" type="submit" disabled={adapterBusy}>
-                <Server size={16} /> {adapterBusy ? "Connecting" : "Connect Adapter"}
+              <button className="primary-button" type="submit" disabled={devdBusy}>
+                <Server size={16} /> {devdBusy ? "Connecting" : "Connect devd"}
               </button>
             </div>
           </form>
-          {adapterMessage ? <p className="form-message" role="status" aria-live="polite">{adapterMessage}</p> : null}
+          {devdMessage ? <p className="form-message" role="status" aria-live="polite">{devdMessage}</p> : null}
         </section>
 
         <section className="connect-panel">
@@ -618,13 +634,7 @@ function ConnectPage() {
               <span>{connectionEndpointLabel(record)}</span>
             </button>
             <div className="row-actions">
-              <span
-                className={`transport-badge ${
-                  record.target.transport === "serial" ? "serial" : record.target.transport === "adapter" ? "adapter" : "http"
-                }`}
-              >
-                {record.target.transport === "serial" ? "USB" : record.target.transport === "adapter" ? "Adapter" : "LAN"}
-              </span>
+              <ConnectionBadges record={record} />
               <button
                 className="icon-button"
                 type="button"
@@ -667,7 +677,7 @@ function ConnectionCallout({ id, message }: { id: string; message: string }) {
   const title = code === "serial_port_unavailable" ? "USB port is in use" : "Connection failed";
   const guidance =
     code === "serial_port_unavailable"
-      ? "Disconnect the devd adapter session or close the app using this CDC port, then retry."
+      ? "Disconnect the devd session or close the app using this CDC port, then retry."
       : "Check the selected device and try again.";
 
   return (
@@ -844,7 +854,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   );
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const usbReady = (record.target.transport === "serial" || record.target.transport === "adapter") && Boolean(record.serial?.connected);
+  const usbReady = Boolean(record.serial?.connected);
 
   useEffect(() => {
     if (!settings) return;
@@ -889,7 +899,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
         <section className="empty-state">
           <Usb size={28} />
           <h2>USB control path required</h2>
-          <p>Safe settings and WiFi provisioning require Web Serial or the local USB HTTP adapter.</p>
+          <p>Safe settings and WiFi provisioning require Web Serial or mains-aegis-devd.</p>
           <button className="primary-button" type="button" onClick={() => navigate("/connect")}>
             Connect USB
           </button>
@@ -1695,8 +1705,8 @@ function connectionEndpointLabel(record: DeviceRecord): string {
   if (record.target.transport === "serial") {
     return `${record.target.serialProtocol ?? record.serial?.protocol ?? "USB CDC"} · ${record.serial?.connected ? "connected" : "disconnected"}`;
   }
-  if (record.target.transport === "adapter") {
-    return `${record.target.baseUrl} · USB adapter ${record.serial?.connected ? "connected" : "disconnected"}`;
+  if (record.serial?.source === "devd") {
+    return `${record.serial.baseUrl ?? record.target.baseUrl} · devd USB ${record.serial.connected ? "connected" : "disconnected"}`;
   }
   return record.target.baseUrl;
 }

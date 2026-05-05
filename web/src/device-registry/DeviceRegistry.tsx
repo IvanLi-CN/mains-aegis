@@ -1,22 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  clearAdapterWifiConfig,
+  clearDevdWifiConfig,
+  connectDevdDevice,
   decodeDefmtFrame,
   disconnectDevdDevice,
-  getAdapterSerialSession,
+  getDevdSerialSession,
   getStatus,
   listDevdDevices,
   loadBundledFirmwareCatalog,
   loadFirmwareCatalogFromUrl,
   normalizeBaseUrl,
   probeDevice,
-  sendAdapterWifiConfig,
-  setAdapterLogLevel,
-  setAdapterManualChargePrefs,
-  subscribeAdapterSerialEvents,
+  scanDevdDevices,
+  sendDevdWifiConfig,
+  setDevdLogLevel,
+  setDevdManualChargePrefs,
+  subscribeDevdSerialEvents,
   toErrorEnvelope,
-  type AdapterSerialEventStream,
-  type AdapterSerialSession,
+  type DevdSerialEventStream,
+  type DevdSerialSession,
 } from "../api/client";
 import { subscribeStatusStream, type StatusStream } from "../api/statusStream";
 import type { DeviceRecord, DeviceTarget, FirmwareArtifact, FirmwareArtifactMatch, Identity, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry } from "../api/types";
@@ -39,12 +41,13 @@ import {
   type WifiConfigInput,
 } from "./context";
 
-const ADAPTER_SERIAL_SESSION_LIMITS = {
+const DEVD_SERIAL_SESSION_LIMITS = {
   logsLimit: 200,
   traceLimit: 600,
 };
 
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
+const LEGACY_DEVD_TRANSPORT = "ad" + "apter";
 const BUNDLED_FIRMWARE_CATALOG_URL = "/firmware/firmware-catalog.json";
 const DEFAULT_GITHUB_FIRMWARE_CATALOG_URL =
   "https://github.com/IvanLi-CN/mains-aegis/releases/latest/download/firmware-catalog.json";
@@ -55,14 +58,12 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const [demoSeed, setDemoSeed] = useState<DemoSeed | null>(seedRef.current);
   const [records, setRecords] = useState<DeviceRecord[]>(() => loadInitialRecords(seedRef.current));
   const streams = useRef(new Map<string, StatusStream>());
-  const adapterStreams = useRef(new Map<string, AdapterSerialEventStream>());
+  const devdStreams = useRef(new Map<string, DevdSerialEventStream>());
   const serialSessions = useRef(new Map<string, WebSerialTransport>());
 
   useEffect(() => {
     if (demoSeed) return;
-    const targets = records
-      .filter((record) => record.target.transport !== "serial" && !record.target.mock)
-      .map((record) => record.target);
+    const targets = records.flatMap(persistedTargetsForRecord);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(targets));
   }, [demoSeed, records]);
 
@@ -74,8 +75,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       setDemoSeed(nextSeed);
       for (const stream of streams.current.values()) stream.close();
       streams.current.clear();
-      for (const stream of adapterStreams.current.values()) stream.close();
-      adapterStreams.current.clear();
+      for (const stream of devdStreams.current.values()) stream.close();
+      devdStreams.current.clear();
       for (const session of serialSessions.current.values()) void session.close();
       serialSessions.current.clear();
       if (!nextSeed) {
@@ -109,11 +110,11 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const setSerialCommandError = useCallback(
     (deviceId: string, error: DeviceRecord["error"]) => {
       if (!serialSessions.current.has(deviceId)) {
-        let handledByAdapter = false;
+        let handledByDevd = false;
         setRecords((current) =>
           current.map((record) => {
-            if (record.target.deviceId !== deviceId || record.target.transport !== "adapter" || !record.serial) return record;
-            handledByAdapter = true;
+            if (record.target.deviceId !== deviceId || !isDevdSerial(record)) return record;
+            handledByDevd = true;
             return appendSerialLog(
               {
                 ...record,
@@ -126,13 +127,13 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
               serialLogFromFrame({
                 type: "log",
                 level: "error",
-                target: "usb_http_adapter",
-                message: `${error?.code ?? "adapter_error"}: ${error?.message ?? "USB HTTP adapter command failed"}`,
+                target: "devd",
+                message: `${error?.code ?? "devd_error"}: ${error?.message ?? "devd USB command failed"}`,
               }),
             );
           }),
         );
-        if (!handledByAdapter) setRecordError(deviceId, error);
+        if (!handledByDevd) setRecordError(deviceId, error);
         return;
       }
       const log = serialLogFromFrame({
@@ -179,7 +180,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
                   serial: record.serial ? { ...record.serial, connected: true } : record.serial,
                   lastUpdated: new Date().toISOString(),
                 }
-              : makeMockRecord(record.target)
+              : mergeDeviceRecord(record, makeMockRecord(record.target))
             : record,
         ),
       );
@@ -245,23 +246,13 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
 
     try {
       const result = await probeDevice(target.baseUrl);
-      setRecords((current) => {
-        const previous = current.find((record) => record.target.deviceId === deviceId);
-        if (!previous) return current;
-        if (target.transport === "adapter") {
+      if (target.transport === "devd") {
+        const session = await getDevdSerialSession(target.baseUrl, DEVD_SERIAL_SESSION_LIMITS);
+        setRecords((current) => {
+          const previous = current.find((record) => record.target.deviceId === deviceId);
+          if (!previous) return current;
           const streamState = result.identity.capabilities.sse && previous.streamState !== "polling" ? "idle" : "polling";
           const previousSerial = previous.serial;
-          void getAdapterSerialSession(target.baseUrl, ADAPTER_SERIAL_SESSION_LIMITS)
-            .then((session) => {
-              setRecords((latest) =>
-                latest.map((candidate) =>
-                  candidate.target.deviceId === deviceId && candidate.target.transport === "adapter"
-                    ? mergeAdapterSerial(candidate, session)
-                    : candidate,
-                ),
-              );
-            })
-            .catch(() => undefined);
           return upsertRecord(
             current,
             {
@@ -269,13 +260,33 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
               serial: previousSerial
                 ? {
                     ...previousSerial,
-                    connected: true,
+                    connected: session.connected,
+                    source: "devd",
+                    baseUrl: target.baseUrl,
                     protocol: target.serialProtocol ?? previousSerial.protocol,
+                    status: session.status ?? previousSerial.status,
+                    logs: session.logs,
+                    trace: session.trace,
+                    safeSettings: session.safeSettings,
                   }
-                : previousSerial,
+                : {
+                    connected: session.connected,
+                    source: "devd",
+                    baseUrl: target.baseUrl,
+                    protocol: session.protocol,
+                    status: session.status ?? null,
+                    logs: session.logs,
+                    trace: session.trace,
+                    safeSettings: session.safeSettings,
+                  },
             },
           );
-        }
+        });
+        return;
+      }
+      setRecords((current) => {
+        const previous = current.find((record) => record.target.deviceId === deviceId);
+        if (!previous) return current;
         const streamState = result.identity.capabilities.sse && previous.streamState !== "polling" ? "idle" : "polling";
         return upsertRecord(current, recordFromProbe(target, result, "online", streamState));
       });
@@ -311,8 +322,9 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   useEffect(() => {
     if (demoSeed) return;
     for (const record of records) {
-      if (record.target.transport !== "adapter" || !record.serial?.connected || adapterStreams.current.has(record.target.deviceId)) continue;
-      const subscription = subscribeAdapterSerialEvents(record.target.baseUrl, {
+      const devdBaseUrl = record.serial?.source === "devd" ? record.serial.baseUrl : null;
+      if (!devdBaseUrl || !record.serial?.connected || devdStreams.current.has(record.target.deviceId)) continue;
+      const subscription = subscribeDevdSerialEvents(devdBaseUrl, {
         onEvent: (event) => {
           if (event.kind === "serial_trace" && event.payload.trace) appendSerialTraceToSession(event.payload.trace, record.target.deviceId);
           if (event.kind === "serial_log" && event.payload.log) appendSerialLogToSession(event.payload.log, record.target.deviceId);
@@ -326,22 +338,22 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
           );
         },
         onError: () => {
-          adapterStreams.current.get(record.target.deviceId)?.close();
-          adapterStreams.current.delete(record.target.deviceId);
+          devdStreams.current.get(record.target.deviceId)?.close();
+          devdStreams.current.delete(record.target.deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === record.target.deviceId ? { ...candidate, streamState: "polling" } : candidate,
             ),
           );
-          void updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+          void updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
         },
       });
-      adapterStreams.current.set(record.target.deviceId, subscription);
+      devdStreams.current.set(record.target.deviceId, subscription);
     }
-    for (const [deviceId, stream] of adapterStreams.current.entries()) {
-      if (!records.some((record) => record.target.deviceId === deviceId && record.target.transport === "adapter" && record.serial?.connected)) {
+    for (const [deviceId, stream] of devdStreams.current.entries()) {
+      if (!records.some((record) => record.target.deviceId === deviceId && record.serial?.source === "devd" && record.serial.connected)) {
         stream.close();
-        adapterStreams.current.delete(deviceId);
+        devdStreams.current.delete(deviceId);
       }
     }
   }, [demoSeed, records]);
@@ -350,7 +362,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     for (const record of records) {
       if (
         record.target.transport === "serial" ||
-        record.target.transport === "adapter" ||
+        record.target.transport === "devd" ||
         record.target.mock ||
         !record.identity?.capabilities.sse ||
         record.streamState !== "idle" ||
@@ -446,8 +458,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     return () => {
       for (const stream of streams.current.values()) stream.close();
       streams.current.clear();
-      for (const stream of adapterStreams.current.values()) stream.close();
-      adapterStreams.current.clear();
+      for (const stream of devdStreams.current.values()) stream.close();
+      devdStreams.current.clear();
       for (const session of serialSessions.current.values()) void session.close();
       serialSessions.current.clear();
     };
@@ -473,22 +485,40 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     }
   }, []);
 
-  const addLocalAdapterDevice = useCallback(async (input: AddDeviceInput): Promise<AddDeviceResult> => {
+  const addDevdDevice = useCallback(async (input: AddDeviceInput): Promise<AddDeviceResult> => {
     const baseUrl = normalizeBaseUrl(input.target);
 
     try {
+      const scan = await scanDevdDevices(baseUrl);
+      const nativeDevices = scan.devices.filter((device) => device.transport === "native_serial" && device.port_path);
+      if (nativeDevices.length !== 1) {
+        return {
+          ok: false,
+          error: {
+            code: nativeDevices.length === 0 ? "devd_no_usb_device" : "devd_multiple_usb_devices",
+            message:
+              nativeDevices.length === 0
+                ? "No USB CDC device is available through mains-aegis-devd"
+                : "Multiple USB CDC devices are available; connect a single device before adding the devd control surface",
+            retryable: false,
+            details: null,
+          },
+        };
+      }
+      const devdDevice = nativeDevices[0];
+      await connectDevdDevice(devdDevice.id, baseUrl);
       const result = await probeDevice(baseUrl);
-      const session = await getAdapterSerialSession(baseUrl, ADAPTER_SERIAL_SESSION_LIMITS);
+      const session = await getDevdSerialSession(baseUrl, DEVD_SERIAL_SESSION_LIMITS);
       const target: DeviceTarget = {
         deviceId: result.identity.device_id,
         baseUrl,
         alias: input.alias?.trim() || result.identity.hostname,
-        location: input.location?.trim() || "Local adapter",
+        location: input.location?.trim() || "devd",
         addedAt: new Date().toISOString(),
-        transport: "adapter",
+        transport: "devd",
         serialProtocol: session.protocol,
       };
-      const record = recordFromAdapterProbe(target, result, session);
+      const record = recordFromDevdProbe(target, result, session);
       setRecords((current) => upsertRecord(current, record));
       return { ok: true, record };
     } catch (error) {
@@ -691,10 +721,10 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       );
       return { ok: true };
     }
-    if (record.target.transport === "adapter") {
+    if (isDevdSerial(record)) {
       try {
-        await sendAdapterWifiConfig(record.target.baseUrl, input);
-        await updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+        await sendDevdWifiConfig(record.serial.baseUrl ?? "", record.target.deviceId, input);
+        await updateDevdSerialSnapshot(record.target.deviceId, record.serial.baseUrl ?? "");
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
@@ -747,10 +777,10 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       );
       return { ok: true };
     }
-    if (record.target.transport === "adapter") {
+    if (isDevdSerial(record)) {
       try {
-        await clearAdapterWifiConfig(record.target.baseUrl);
-        await updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+        await clearDevdWifiConfig(record.serial.baseUrl ?? "", record.target.deviceId);
+        await updateDevdSerialSnapshot(record.target.deviceId, record.serial.baseUrl ?? "");
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
@@ -787,10 +817,10 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const setSerialLogLevel = useCallback(async (deviceId: string, level: SafeSettingsState["log_level"]): Promise<CommandResult> => {
     const record = records.find((candidate) => candidate.target.deviceId === deviceId);
     if (!record?.serial) return serialCommandUnavailable();
-    if (record.target.transport === "adapter") {
+    if (isDevdSerial(record)) {
       try {
-        await setAdapterLogLevel(record.target.baseUrl, level);
-        await updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+        await setDevdLogLevel(record.serial.baseUrl ?? "", record.target.deviceId, level);
+        await updateDevdSerialSnapshot(record.target.deviceId, record.serial.baseUrl ?? "");
       } catch (error) {
         const envelope = toErrorEnvelope(error);
         setSerialCommandError(deviceId, envelope);
@@ -820,10 +850,10 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const setManualChargePrefs = useCallback(async (deviceId: string, prefs: ManualChargePrefsInput): Promise<CommandResult> => {
     const record = records.find((candidate) => candidate.target.deviceId === deviceId);
     if (!record?.serial) return serialCommandUnavailable();
-    if (record.target.transport === "adapter") {
+    if (isDevdSerial(record)) {
       try {
-        await setAdapterManualChargePrefs(record.target.baseUrl, prefs);
-        await updateAdapterSerialSnapshot(record.target.deviceId, record.target.baseUrl);
+        await setDevdManualChargePrefs(record.serial.baseUrl ?? "", record.target.deviceId, prefs);
+        await updateDevdSerialSnapshot(record.target.deviceId, record.serial.baseUrl ?? "");
       } catch (error) {
         const envelope = toErrorEnvelope(error);
         setSerialCommandError(deviceId, envelope);
@@ -941,10 +971,10 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     );
   }
 
-  async function updateAdapterSerialSnapshot(deviceId: string, baseUrl: string) {
-    const session = await getAdapterSerialSession(baseUrl, ADAPTER_SERIAL_SESSION_LIMITS);
+  async function updateDevdSerialSnapshot(deviceId: string, baseUrl: string) {
+    const session = await getDevdSerialSession(baseUrl, DEVD_SERIAL_SESSION_LIMITS);
     setRecords((current) =>
-      current.map((record) => (record.target.deviceId === deviceId && record.target.transport === "adapter" ? mergeAdapterSerial(record, session) : record)),
+      current.map((record) => (record.target.deviceId === deviceId ? mergeDevdSerial(record, baseUrl, session) : record)),
     );
   }
 
@@ -952,14 +982,14 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     const record = records.find((candidate) => candidate.target.deviceId === deviceId);
     streams.current.get(deviceId)?.close();
     streams.current.delete(deviceId);
-    adapterStreams.current.get(deviceId)?.close();
-    adapterStreams.current.delete(deviceId);
+    devdStreams.current.get(deviceId)?.close();
+    devdStreams.current.delete(deviceId);
     void serialSessions.current.get(deviceId)?.close();
     serialSessions.current.delete(deviceId);
     setRecords((current) => current.filter((record) => record.target.deviceId !== deviceId));
-    if (record?.target.transport === "adapter") {
-      void disconnectAdapterDevdDevice(record).catch((error) => {
-        console.warn("failed to disconnect devd adapter device", error);
+    if (record?.serial?.source === "devd") {
+      void disconnectDevdSerialDevice(record).catch((error) => {
+        console.warn("failed to disconnect devd device", error);
       });
     }
   }, [records]);
@@ -967,8 +997,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const resetDemo = useCallback(() => {
     for (const stream of streams.current.values()) stream.close();
     streams.current.clear();
-    for (const stream of adapterStreams.current.values()) stream.close();
-    adapterStreams.current.clear();
+    for (const stream of devdStreams.current.values()) stream.close();
+    devdStreams.current.clear();
     for (const session of serialSessions.current.values()) void session.close();
     serialSessions.current.clear();
     setRecords(makeMockRecords("default"));
@@ -978,7 +1008,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     () => ({
       records,
       addDevice,
-      addLocalAdapterDevice,
+      addDevdDevice,
       connectUsbSerialDevice,
       attachMockUsbSerialDevice,
       disconnectUsbSerialDevice,
@@ -993,7 +1023,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     [
       records,
       addDevice,
-      addLocalAdapterDevice,
+      addDevdDevice,
       connectUsbSerialDevice,
       attachMockUsbSerialDevice,
       disconnectUsbSerialDevice,
@@ -1022,31 +1052,69 @@ function loadInitialRecords(seed: DemoSeed | null): DeviceRecord[] {
   if (!stored) return [];
 
   try {
-    const targets = JSON.parse(stored) as DeviceTarget[];
+    type StoredDeviceTarget = Omit<DeviceTarget, "transport"> & { transport?: DeviceTarget["transport"] | string };
+    const targets = JSON.parse(stored) as StoredDeviceTarget[];
     if (!Array.isArray(targets)) return [];
-    return targets.filter((target) => !target.mock).map((target) => {
-      return {
-        target,
-        identity: null,
-        network: null,
-        status: null,
-        connectionState: target.transport === "serial" ? "offline" : "connecting",
-        streamState: target.transport === "serial" ? "error" : "idle",
-        error:
-          target.transport === "serial"
-            ? {
-                code: "serial_reconnect_required",
-                message: "USB CDC devices require a fresh browser permission grant",
-                retryable: true,
-                details: null,
-              }
-            : null,
-        lastUpdated: null,
-      };
-    });
+    return targets
+      .filter((target) => !target.mock)
+      .flatMap((target) => {
+        const normalizedTarget = normalizeStoredTarget(target);
+        return normalizedTarget ? [recordFromStoredTarget(normalizedTarget)] : [];
+      })
+      .reduce((merged, record) => upsertRecord(merged, record), [] as DeviceRecord[]);
   } catch {
     return [];
   }
+}
+
+function persistedTargetsForRecord(record: DeviceRecord): DeviceTarget[] {
+  if (record.target.mock || record.target.transport === "serial") return [];
+  const targets = [record.target];
+  if (record.serial?.source === "devd" && record.serial.baseUrl && record.target.transport !== "devd") {
+    targets.push({
+      deviceId: record.target.deviceId,
+      baseUrl: record.serial.baseUrl,
+      alias: record.target.alias,
+      location: record.target.location || "devd",
+      addedAt: record.target.addedAt,
+      transport: "devd",
+      serialProtocol: record.serial.protocol ?? record.target.serialProtocol,
+    });
+  }
+  return targets;
+}
+
+function recordFromStoredTarget(target: DeviceTarget): DeviceRecord {
+  return {
+    target,
+    identity: null,
+    network: null,
+    status: null,
+    connectionState: target.transport === "serial" ? "offline" : "connecting",
+    streamState: target.transport === "serial" ? "error" : "idle",
+    error:
+      target.transport === "serial"
+        ? {
+            code: "serial_reconnect_required",
+            message: "USB CDC devices require a fresh browser permission grant",
+            retryable: true,
+            details: null,
+          }
+        : null,
+    lastUpdated: null,
+    serial:
+      target.transport === "devd"
+        ? {
+            connected: false,
+            source: "devd",
+            baseUrl: target.baseUrl,
+            protocol: target.serialProtocol ?? "mains-aegis.cdc.v1",
+            logs: [],
+            trace: [],
+            safeSettings: defaultSafeSettings(),
+          }
+        : undefined,
+  };
 }
 
 function recordFromProbe(
@@ -1067,6 +1135,16 @@ function recordFromProbe(
   };
 }
 
+function normalizeStoredTarget(target: Omit<DeviceTarget, "transport"> & { transport?: DeviceTarget["transport"] | string }): DeviceTarget | null {
+  if (target.transport === LEGACY_DEVD_TRANSPORT) {
+    return { ...target, transport: "devd", location: target.location || "devd" };
+  }
+  if (target.transport === undefined || target.transport === "http" || target.transport === "serial" || target.transport === "devd") {
+    return target as DeviceTarget;
+  }
+  return null;
+}
+
 function recordFromSerialProbe(
   target: DeviceTarget,
   result: ProbeResult,
@@ -1085,6 +1163,7 @@ function recordFromSerialProbe(
     lastUpdated: new Date().toISOString(),
     serial: {
       connected: true,
+      source: target.mock ? "mock" : "web_serial",
       protocol,
       logs,
       trace,
@@ -1093,11 +1172,11 @@ function recordFromSerialProbe(
   };
 }
 
-function recordFromAdapterProbe(target: DeviceTarget, result: ProbeResult, session: AdapterSerialSession): DeviceRecord {
-  return mergeAdapterSerial(recordFromProbe(target, result, "online", "polling"), session);
+function recordFromDevdProbe(target: DeviceTarget, result: ProbeResult, session: DevdSerialSession): DeviceRecord {
+  return mergeDevdSerial(recordFromProbe(target, result, "online", "polling"), target.baseUrl, session);
 }
 
-function mergeAdapterSerial(record: DeviceRecord, session: AdapterSerialSession): DeviceRecord {
+function mergeDevdSerial(record: DeviceRecord, baseUrl: string, session: DevdSerialSession): DeviceRecord {
   return {
     ...record,
     target: {
@@ -1118,6 +1197,8 @@ function mergeAdapterSerial(record: DeviceRecord, session: AdapterSerialSession)
       : record.network,
     serial: {
       connected: session.connected,
+      source: "devd",
+      baseUrl,
       protocol: session.protocol,
       status: session.status ?? null,
       logs: session.logs,
@@ -1127,17 +1208,51 @@ function mergeAdapterSerial(record: DeviceRecord, session: AdapterSerialSession)
   };
 }
 
-async function disconnectAdapterDevdDevice(record: DeviceRecord): Promise<void> {
-  const devices = await listDevdDevices(record.target.baseUrl);
+async function disconnectDevdSerialDevice(record: DeviceRecord): Promise<void> {
+  const baseUrl = record.serial?.baseUrl ?? "";
+  const devices = await listDevdDevices(baseUrl);
   const devdDevice = devices.devices.find((device) => device.identity?.device_id === record.target.deviceId);
   if (!devdDevice) return;
-  await disconnectDevdDevice(devdDevice.id, record.target.baseUrl);
+  await disconnectDevdDevice(devdDevice.id, baseUrl);
 }
 
 function upsertRecord(records: DeviceRecord[], record: DeviceRecord): DeviceRecord[] {
+  const existing = records.find((candidate) => candidate.target.deviceId === record.target.deviceId);
   const next = records.filter((candidate) => candidate.target.deviceId !== record.target.deviceId);
-  next.push(record);
+  next.push(existing ? mergeDeviceRecord(existing, record) : record);
   return next;
+}
+
+function mergeDeviceRecord(existing: DeviceRecord, incoming: DeviceRecord): DeviceRecord {
+  const existingTransport = existing.target.transport ?? "http";
+  const incomingTransport = incoming.target.transport ?? "http";
+  const preferIncomingTarget = incomingTransport === "http" || existingTransport !== "http";
+  return {
+    ...existing,
+    ...incoming,
+    target: preferIncomingTarget
+      ? {
+          ...incoming.target,
+          alias: incoming.target.alias || existing.target.alias,
+          location: incoming.target.location || existing.target.location,
+        }
+      : {
+          ...existing.target,
+          serialProtocol: incoming.target.serialProtocol ?? existing.target.serialProtocol,
+        },
+    serial: incoming.serial ?? existing.serial,
+    status: incoming.status ?? existing.status,
+    network: incoming.network ?? existing.network,
+    identity: incoming.identity ?? existing.identity,
+    connectionState: incoming.connectionState === "online" || existing.connectionState === "online" ? "online" : incoming.connectionState,
+    streamState: incoming.streamState === "streaming" || existing.streamState === "streaming" ? "streaming" : incoming.streamState,
+    error: incoming.error ?? existing.error,
+    lastUpdated: incoming.lastUpdated ?? existing.lastUpdated,
+  };
+}
+
+function isDevdSerial(record: DeviceRecord): record is DeviceRecord & { serial: NonNullable<DeviceRecord["serial"]> & { source: "devd"; baseUrl: string } } {
+  return record.serial?.source === "devd" && Boolean(record.serial.baseUrl);
 }
 
 function defaultSafeSettings(): SafeSettingsState {
@@ -1257,7 +1372,7 @@ function appendSerialTrace(record: DeviceRecord, entry: SerialTraceEntry): Devic
     ...record,
     serial: {
       ...record.serial,
-      trace: [...record.serial.trace, entry].slice(-ADAPTER_SERIAL_SESSION_LIMITS.traceLimit),
+      trace: [...record.serial.trace, entry].slice(-DEVD_SERIAL_SESSION_LIMITS.traceLimit),
     },
   };
 }

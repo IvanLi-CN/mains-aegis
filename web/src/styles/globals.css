@@ -264,8 +264,7 @@ a {
 }
 
 .connect-wide {
-  width: min(100%, 1180px);
-  max-width: none;
+  width: 100%;
   gap: 22px;
 }
 
@@ -755,9 +754,15 @@ a {
   color: var(--color-ok);
 }
 
-.transport-badge.adapter {
+.transport-badge.devd {
   background: var(--color-severity-warning-surface);
   color: var(--color-warning);
+}
+
+.connection-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .transport-badge.offline {
