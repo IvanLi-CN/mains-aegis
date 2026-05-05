@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-04-08
-- Last: 2026-04-08
+- Last: 2026-05-05
 
 ## 背景 / 问题陈述
 
@@ -12,6 +12,7 @@
 - `mains-aegis` 是开源硬件项目，不存在可直接购买的成品；真正会使用它的人，通常也需要承担一部分硬件复刻、固件烧录、排障与设计理解工作。
 - 现有文档更偏“事实仓库”，对第一次接触项目的人来说，信息分散、进入路径不明确，也缺少可直接部署到 GitHub Pages 的稳定站点。
 - 需要新增一个公开文档站，把系统设计与样机复刻内容收敛到同一份项目手册中，并在不重造事实源的前提下，把现有专题文档组织成更可读的入口。
+- 当前 GitHub Pages 根路径需要交给 Web 管理 App；项目手册站继续作为公开文档入口，但发布位置调整为同一 Pages 站点下的 `/docs/` 子路径。
 
 ## 目标 / 非目标
 
@@ -22,12 +23,14 @@
 - 重写一组面向外部读者的手册页，把现有 `docs/**`、`docs/pcbs/**`、`firmware/README.md` 等资料整理成同一份项目手册中的两条阅读路径。
 - 明确站点定位：这是一个开源硬件项目的手册站，而不是产品营销页，也不是全量 vendor 资料库入口。
 - 补齐 GitHub Pages workflow、本地预览入口与视觉证据，确保快车道可以推进到 merge-ready。
+- GitHub Pages workflow 发布 Web App 为根站点，并把 Rspress 文档站复制到 `docs/` 子目录；Web App 全局导航提供文档入口。
 
 ### Non-goals
 
 - 不把 `docs/datasheets/**`、`docs/manuals/**`、`docs/reference-designs/**` 全量迁入主站导航。
 - 不凭空补造完整可下单 BOM、生产文件打包、成品说明书或未在仓库中冻结的量产承诺。
 - 不引入英文版、多版本文档、Storybook 联合发布或独立营销官网。
+- 不用 hash router 替代 Web App 的 path router。
 
 ## 范围（Scope）
 
@@ -51,6 +54,9 @@
 
 - 站点必须以 `docs-site/` 独立工作区存在，并能通过 `bun run dev/build/preview` 工作。
 - Rspress 配置必须支持 `DOCS_BASE`，以适配 GitHub Pages 的仓库子路径部署。
+- Web App Vite 构建必须支持 `PAGES_BASE` / `VITE_BASE`，以适配 GitHub Pages 仓库子路径部署和未来自定义域名根路径部署。
+- Web App 必须保持 History API path router；`/mains-aegis/devices/...` 与自定义域名下 `/devices/...` 的直接访问都必须能通过 Pages SPA fallback 回到 App。
+- Web App 全局 App Layout 必须提供文档入口，指向 `${BASE_URL}docs/`，并以新标签打开，避免替换当前运维台状态。
 - 站点公开路由必须包含：`/`、`/handbook/`、`/design/`、`/design/system-overview`、`/design/power-and-bms`、`/design/front-panel-and-firmware`、`/manual/`、`/manual/prepare-and-scope`、`/manual/pcb-and-wiring-checks`、`/manual/firmware-flash-and-self-test`、`/manual/basic-use-and-troubleshooting`。
 - 首页必须清楚说明：项目是开源硬件、没有成品、目标受众是 DIY 复刻者与半开发者。
 - 系统设计与样机复刻章节都必须在页尾提供延伸阅读，深链回仓库现有事实源文档。
@@ -80,6 +86,7 @@
 ### Edge cases / errors
 
 - 若站点部署在仓库子路径而不是根路径，静态资源与导航链接仍必须正确。
+- 若 Web App 通过 GitHub Pages 404 fallback 处理深链，`404.html` 必须等同 App `index.html`，让 path router 在浏览器端恢复正确页面。
 - 若仓库中某些设计决策仍是“候选”或“待定”，手册必须保留该状态，而不是擅自写成“已定”。
 - 若没有完整 BOM / Gerber 打包事实源，手册必须明确说明这一边界，并把读者导向现有 `docs/pcbs/**` 与设计文档，而不是编造缺失内容。
 
@@ -90,9 +97,10 @@
 | 接口（Name） | 类型（Kind） | 范围（Scope） | 变更（Change） | 契约文档（Contract Doc） | 负责人（Owner） | 使用方（Consumers） | 备注（Notes） |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `docs-site/package.json` scripts | internal | internal | New | None | docs-site | 本地开发 / CI | `dev/build/preview` |
-| `DOCS_BASE` | internal | internal | New | None | docs-site | GitHub Pages workflow | 仓库页子路径基址 |
+| `DOCS_BASE` | internal | internal | Changed | None | docs-site | GitHub Pages workflow | 文档站基址，默认 `${PAGES_BASE}docs/` |
+| `PAGES_BASE` / `VITE_BASE` | internal | internal | New | None | web | Vite / GitHub Pages workflow | Web App 基址，默认仓库页 `/${repo}/`，自定义域名可设为 `/` |
 | `DOCS_PORT` | internal | internal | New | None | docs-site | 本地预览 | 通过端口租约注入 |
-| `.github/workflows/docs-pages.yml` | internal | internal | New | None | repo | PR / main | PR 构建，main 部署 |
+| `.github/workflows/docs-pages.yml` | internal | internal | Changed | None | repo | PR / main | 构建 Web App 根站点与 `/docs/` 文档子站，PR 构建，main 部署 |
 
 ### 契约文档（按 Kind 拆分）
 
@@ -100,8 +108,10 @@ None
 
 ## 验收标准（Acceptance Criteria）
 
-- Given 已安装 `docs-site` 依赖，When 执行 `bun run build --cwd docs-site`，Then 构建成功并生成 `docs-site/doc_build`。
-- Given `DOCS_BASE=/${repo}/`，When 预览构建产物，Then 首页、项目手册、系统设计、样机复刻与 Bring-up、404 页面都能正常加载，静态资源路径不丢失。
+- Given 已安装 `docs-site` 依赖，When 执行 `bun run --cwd docs-site build`，Then 构建成功并生成 `docs-site/doc_build`。
+- Given `PAGES_BASE=/${repo}/`，When 执行 `bun run web:build`，Then Web App 构建成功，静态资源路径带仓库子路径，且 `web/dist/404.html` 可作为 SPA fallback。
+- Given `DOCS_BASE=/${repo}/docs/`，When 预览构建产物，Then 文档首页、项目手册、系统设计、样机复刻与 Bring-up、404 页面都能在 `/docs/` 下正常加载，静态资源路径不丢失。
+- Given GitHub Pages workflow 构建产物，When 检查 artifact，Then `web/dist/index.html` 是根站点，`web/dist/docs/index.html` 是文档站入口。
 - Given 只修改 `docs-site/docs/**` 内容页，When GitHub Actions 触发，Then 新增的 Docs Pages workflow 会运行，而现有 firmware / host / dependency review workflow 不会被误触发。
 - Given 修改 `docs-site/package.json` 或 `docs-site/bun.lock`，When GitHub Actions 触发，Then `dependency-review` 仍会运行以覆盖 docs 站依赖变更。
 - Given 打开首页，When 首次阅读，Then 能明确理解“开源硬件 / 无成品 / DIY 复刻者与半开发者”的项目定位。
@@ -113,6 +123,7 @@ None
 - 站点定位、导航结构、公开范围已冻结。
 - 项目手册的页面列表已确定。
 - GitHub Pages 作为部署目标已确定。
+- GitHub Pages 根路径作为 Web App 入口已确定；文档站入口为 `/docs/`。
 - 事实源范围已确定为现有 `docs/**`、`docs/pcbs/**`、`firmware/README.md` 与相关规格截图，不要求新增成体系生产资料。
 
 ## 非功能性验收 / 质量门槛（Quality Gates）
@@ -120,9 +131,11 @@ None
 ### Testing
 
 - Build: `bun install --cwd docs-site --frozen-lockfile`
-- Build: `bun run build --cwd docs-site`
-- Preview smoke: `DOCS_BASE=/<repo>/ bun run preview --cwd docs-site`
-- Browser validation: 项目手册首页、系统概览页、至少一页 bring-up 细节页截图。
+- Build: `bun run --cwd docs-site build`
+- Build: `bun run web:check`
+- Build: `PAGES_BASE=/<repo>/ bun run web:build`
+- Preview smoke: `DOCS_BASE=/<repo>/docs/ bun run --cwd docs-site preview`
+- Browser validation: Web App 根页面、App 内深链、文档入口、项目手册首页截图。
 
 ### UI / Storybook (if applicable)
 
@@ -167,6 +180,14 @@ None
 
 ![固件烧录与首次自检页（含 Self-check 参考图）](./assets/firmware-flash-with-ui.png)
 
+Pages 根站点 Web App（含 Docs 入口）
+
+![Pages 根站点 Web App（含 Docs 入口）](./assets/pages-web-app-root.png)
+
+Pages `/docs/` 文档入口
+
+![Pages `/docs/` 文档入口](./assets/pages-docs-root.png)
+
 ## 资产晋升（Asset promotion）
 
 None
@@ -183,7 +204,7 @@ None
 
 - 复用 `octo-rill` 的独立 `docs-site/` 模式，把公开文档站与仓库事实源分层：站点负责对外入口，仓库原文负责深度事实。
 - 页面内容以“重写手册 + 深链原始专题文档”的方式组织，避免把现有资料树直接暴露给首次阅读者。
-- GitHub Pages 构建采用 Rspress 默认产物 `doc_build`，并用 `DOCS_BASE` 保证仓库子路径部署可用。
+- GitHub Pages 构建采用 Vite `web/dist` 作为 Pages artifact 根，并把 Rspress `doc_build` 复制到 `web/dist/docs/`；`PAGES_BASE` 控制 Web App 基址，`DOCS_BASE=${PAGES_BASE}docs/` 控制文档站基址。
 - 视觉证据以本地预览截图为准，统一写回当前规格。
 
 ## PR
@@ -200,6 +221,7 @@ None
 ## 变更记录（Change log）
 
 - 2026-04-08: 新建规格，冻结项目手册站的范围、路由与验收口径。
+- 2026-05-05: Pages 根站点调整为 Web App，项目手册站迁移到 `/docs/` 子路径，并记录 App path router 与 SPA fallback 要求。
 
 ## 参考（References）
 
