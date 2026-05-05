@@ -2055,6 +2055,202 @@ a {
   padding: 28px;
 }
 
+.firmware-page {
+  gap: 18px;
+}
+
+.firmware-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.9fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.firmware-main-panel,
+.firmware-progress-panel {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.firmware-main-panel {
+  align-content: start;
+}
+
+.firmware-progress-panel {
+  position: sticky;
+  top: 24px;
+}
+
+.firmware-heading {
+  align-items: flex-start;
+}
+
+.firmware-heading .transport-badge {
+  max-width: 100%;
+  white-space: normal;
+  text-transform: none;
+  font-family: var(--font-ui);
+  line-height: 1.35;
+  text-align: left;
+}
+
+.firmware-step-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  gap: 16px;
+}
+
+.firmware-selector,
+.flash-method-panel,
+.flash-confirm-panel,
+.firmware-progress,
+.flash-log {
+  display: grid;
+  gap: 12px;
+}
+
+.firmware-selector select,
+.flash-method-panel select {
+  width: 100%;
+  min-height: var(--control-height);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+  padding: 10px 12px;
+  color: var(--color-ink);
+}
+
+.artifact-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.artifact-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.artifact-image-list {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--color-hairline);
+  padding-top: 10px;
+}
+
+.artifact-image-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.artifact-image-line span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-image-line code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.flash-path-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.devd-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.flash-confirm-line {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  color: var(--color-ink);
+}
+
+.flash-confirm-line input {
+  margin-top: 3px;
+}
+
+.flash-disable-reason {
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.firmware-progress-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.firmware-progress-bar {
+  height: 12px;
+  overflow: hidden;
+  border: 1px solid var(--color-hairline);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--color-panel) 86%, var(--color-primary));
+}
+
+.firmware-progress-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--color-primary), color-mix(in oklch, var(--color-primary) 72%, var(--color-blue)));
+  transition: width 220ms ease-out;
+}
+
+.firmware-progress-legend {
+  display: grid;
+  gap: 4px;
+}
+
+.firmware-progress-legend strong {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.firmware-progress-legend span {
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.firmware-progress-stats {
+  display: grid;
+  gap: 8px;
+}
+
+.firmware-progress-stats .metric-line {
+  padding-block: 8px;
+}
+
+.flash-log {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+  padding: 16px;
+}
+
+.flash-log p {
+  margin: 0;
+  color: var(--color-ink);
+  line-height: 1.5;
+}
+
 .fleet-empty {
   grid-column: 1 / -1;
 }
@@ -2077,6 +2273,18 @@ a {
   .trace-search {
     flex: 1 1 220px;
     width: auto;
+  }
+
+  .firmware-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .firmware-progress-panel {
+    position: static;
+  }
+
+  .firmware-step-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2280,6 +2488,23 @@ a {
   .status-band-color-warm .live-state {
     justify-self: start;
     margin: 0;
+  }
+
+  .firmware-heading {
+    align-items: stretch;
+  }
+
+  .artifact-image-line,
+  .artifact-source-row {
+    align-items: flex-start;
+  }
+
+  .devd-controls {
+    flex-direction: column;
+  }
+
+  .devd-controls .secondary-button {
+    width: 100%;
   }
 }
 

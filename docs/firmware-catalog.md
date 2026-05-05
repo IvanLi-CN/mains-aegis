@@ -18,6 +18,7 @@ Each catalog has `schema_version=1` and an `artifacts` array. Each artifact desc
 - `protocol`: currently `mains-aegis.cdc.v1`.
 - `defmt`: decoding metadata. Logs are verified only when identity matches this artifact.
 - `files`: local or published files with `kind`, `path`, `sha256`, and `size`.
+- `image` files may also carry `flash_address` for browser-side Web Serial flashing.
 
 ## Local build flow
 
@@ -50,6 +51,9 @@ manifests, `SHA256SUMS`, and artifact files under
 static hosting then consume the same bundled fallback catalog during local
 development and production preview.
 
+If a bundled artifact and a GitHub Release artifact share the same `artifact_id`,
+the Web App keeps the bundled copy and treats the release copy as a duplicate.
+
 ## Matching and defmt policy
 
 `mains-aegis-devd` compares connected device firmware identity with the selected artifact. Only exact `build_id`, build profile, and feature-set matches mark monitor output as `verified`; `git_sha` is provenance only because different profiles/features can share the same commit. All other cases remain `unverified` and must not be treated as a trusted defmt decode.
@@ -69,3 +73,5 @@ https://github.com/IvanLi-CN/mains-aegis/releases/latest/download/firmware-catal
 ```
 
 You can override it with `VITE_FIRMWARE_CATALOG_URL` during local development. The browser matches the connected device identity against the catalog, and only then selects the artifact for defmt decoding or flash flows. If the remote catalog is unavailable, the bundled catalog still keeps the app usable offline.
+
+Web Serial flashing only accepts `image` files with `flash_address`. The browser fetches those static assets, verifies `sha256`, and then writes the address/data pairs through the Web Serial ROM loader.

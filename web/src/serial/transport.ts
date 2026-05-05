@@ -13,7 +13,7 @@ type SerialPortOpenOptions = {
   flowControl?: "none" | "hardware";
 };
 
-type SerialPortLike = EventTarget & {
+export type SerialPortLike = EventTarget & {
   readable: ReadableStream<Uint8Array> | null;
   writable: WritableStream<Uint8Array> | null;
   open: (options: SerialPortOpenOptions) => Promise<void>;
@@ -21,7 +21,7 @@ type SerialPortLike = EventTarget & {
   close: () => Promise<void>;
 };
 
-type SerialLike = EventTarget & {
+export type SerialLike = EventTarget & {
   requestPort: (options?: SerialPortRequestOptions) => Promise<SerialPortLike>;
 };
 

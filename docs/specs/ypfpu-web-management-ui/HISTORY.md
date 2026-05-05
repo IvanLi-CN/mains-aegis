@@ -12,6 +12,10 @@
 
 - 删除独立 USB HTTP bridge 路径，统一由 `mains-aegis-devd` 承担 localhost USB 控制面。
 - 以固件 `identity.device_id` 作为同一硬件判定键；LAN 与 USB 同时存在时在 Web App 内合并成一条设备记录，并同时展示 WiFi 与 USB 连接标记。
+- 新增 Firmware 页面，统一展示 catalog 来源、去重结果、匹配 artifact、烧录方式与进度摘要。
+- 统一固件来源聚合策略：Web 静态资源与 GitHub Releases 共同入库，按 `artifact_id` 去重，Web bundled 优先，release 重复项标记为 bundled override。
+- 扩展 artifact 合同，为 `kind="image"` 文件增加 `flash_address`，浏览器端 Web Serial 仅接受可烧录 image，ELF 继续保留给 devd / defmt 解码。
+- Web Serial 路径采用 `esptool-js@0.6.0`，devd 路径复用既有绑定与 `flash` 编排，并要求真实烧录前显式确认。
 
 ## 2026-05-07
 

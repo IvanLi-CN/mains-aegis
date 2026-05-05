@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 已完成（USB CDC safe-control follow-up）
+- Status: 已完成（USB CDC safe-control follow-up, firmware flash addendum）
 - Created: 2026-04-28
 - Last: 2026-05-07
 
@@ -62,6 +62,7 @@
 - `/devices/:device_id/battery` 展示 pack status、BMS readiness 与 issue detail。
 - `/devices/:device_id/thermal` 展示 TMP A/B 与保护上下文。
 - `/devices/:device_id/device` 展示 identity、network、firmware。
+- `/devices/:device_id/firmware` 展示 firmware artifact 选择、来源去重、Web Serial 直烧与 devd 代理烧录。
 - `/devices/:device_id/settings` 仅对 USB CDC 连接设备开放，提供 WiFi 配网、手动充电偏好与日志级别设置。
 - `/devices/:device_id/api` 展示固定只读 endpoints 与当前 JSON snapshot。
 
@@ -79,6 +80,12 @@
 - `log` frame 是结构化开发日志入口，字段至少包含 `level`、`target`、`message`。
 - Web App 将非 JSON legacy serial line 降级为 `raw_serial` debug log；协议响应必须保持 JSONL，以免阻塞 request ack。
 - `error` frame 与 HTTP error envelope 对齐：`{ code, message, retryable, details }`。
+
+### 固件烧录
+
+- Web App 合并 bundled static catalog 与 GitHub Release catalog，按 `artifact_id` 去重，bundled 优先。
+- Web Serial 只烧录带 `flash_address` 的 `image` 文件，并在写入前校验 `sha256`。
+- devd 通过现有 artifact select + dry-run + flash API 完成代理烧录，仍然要求绑定设备。
 
 ### mains-aegis-devd 本地控制面
 
@@ -136,6 +143,8 @@
 - `docs/web-management-ui.md`: 管理端信息架构与实现结构。
 - `docs/README.md`: 增加 Web management UI plan 入口。
 - `docs/specs/README.md`: 增加当前 spec 索引。
+- `docs/firmware-catalog.md`: 记录 image `flash_address`、bundled 优先去重和 Web Serial flashing 约束。
+- `docs/web-management-ui.md`: 增加 Firmware/Flash 信息架构。
 
 ## Visual Evidence
 
@@ -283,6 +292,39 @@
   evidence_note: 验证 API debug 页保留只读 endpoint 视图，同时显示 USB CDC JSONL 状态、safe settings snapshot 和 structured log。
 
 ![USB structured logs evidence](./assets/usb-logs-api-desktop.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/devices/mains-aegis-e4f5a6/firmware?seed=default`
+  requested_viewport: `1440x1000`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: firmware flash desktop
+  evidence_note: 验证 Firmware 页的 catalog 去重提示、Web Serial 缺少 image 时的禁用文案、确认区、进度面板和完成态结果摘要。
+
+![Firmware flash desktop evidence](./assets/firmware-flash-desktop.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/devices/mains-aegis-e4f5a6/firmware?seed=default`
+  requested_viewport: `390x844`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: firmware flash mobile
+  evidence_note: 验证 Firmware 页在移动端保持可读、可滚动，确认区和进度摘要不横向溢出。
+
+![Firmware flash mobile evidence](./assets/firmware-flash-mobile.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/devices/mains-aegis-devd-bridge/firmware?seed=usb`
+  requested_viewport: `390x844`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: firmware devd bound mobile
+  evidence_note: 验证 devd 路径在 mock 已绑定设备上默认选中代理烧录方式，并展示绑定设备选择、确认区和进度摘要的移动端布局。
+
+![Firmware devd bound mobile evidence](./assets/firmware-devd-bound-mobile.png)
 
 ## 实现里程碑
 

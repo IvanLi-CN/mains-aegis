@@ -46,7 +46,8 @@
               "kind": { "enum": ["elf", "image", "defmt_metadata"] },
               "path": { "type": "string", "minLength": 1 },
               "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-              "size": { "type": "integer", "minimum": 0 }
+              "size": { "type": "integer", "minimum": 0 },
+              "flash_address": { "type": "integer", "minimum": 0 }
             },
             "additionalProperties": false
           }

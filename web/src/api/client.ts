@@ -91,6 +91,9 @@ function describeHttpFailure(response: Response, path: string, responseText: str
 }
 
 function requestMock<T>(baseUrl: string, path: string): Promise<T> {
+  if (baseUrl === "mock:usb" || baseUrl === "mock:devd") {
+    return requestMockDevd<T>(baseUrl, path);
+  }
   if (path === "/api/v1/ping" || path === "/health") {
     return Promise.resolve({ ok: true } as T);
   }
@@ -108,6 +111,57 @@ function requestMock<T>(baseUrl: string, path: string): Promise<T> {
     message: "mock endpoint not found",
     retryable: false,
     details: { path },
+  });
+}
+
+function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
+  const device = {
+    id: "mock-devd-esp32s3-1",
+    display_name: baseUrl === "mock:devd" ? "Bound ESP32-S3" : "USB demo CDC",
+    port_path: "/dev/tty.usbmodem-demo",
+    transport: "mock" as const,
+    binding:
+      baseUrl === "mock:devd"
+        ? { alias: "USB demo CDC", bound_at: "2026-04-28T00:00:00.000Z" }
+        : null,
+    connection: "connected" as const,
+    identity: baseUrl === "mock:devd" ? getMockIdentity("mock:lab-standby") : null,
+    selected_artifact_id: baseUrl === "mock:devd" ? "mains-aegis-esp32s3-release-web_serial-c805b6a" : null,
+    log_decode: {
+      status: baseUrl === "mock:devd" ? "verified" : "unverified",
+      reason: baseUrl === "mock:devd" ? null : "Device is not bound yet.",
+      artifact_id: baseUrl === "mock:devd" ? "mains-aegis-esp32s3-release-web_serial-c805b6a" : null,
+    },
+  };
+
+  if (path === "/api/v1/devices") return Promise.resolve({ devices: [device] } as T);
+  if (path === "/api/v1/devices/scan") return Promise.resolve({ devices: [device] } as T);
+  if (path.endsWith("/bind")) {
+    return Promise.resolve({
+      ...device,
+      binding: { alias: "USB demo CDC", bound_at: "2026-04-28T00:00:00.000Z" },
+      log_decode: { status: "unverified", reason: null, artifact_id: null },
+    } as T);
+  }
+  if (path.endsWith("/artifact")) {
+    return Promise.resolve({
+      ok: true,
+    } as T);
+  }
+  if (path.endsWith("/flash")) {
+    const dryRun = path.includes("/flash") ? true : false;
+    return Promise.resolve({
+      ok: true,
+      dry_run: dryRun,
+    } as T);
+  }
+  if (path.endsWith("/disconnect")) return Promise.resolve({ ...device, connection: "disconnected" } as T);
+  if (path.endsWith("/connect")) return Promise.resolve({ ...device, connection: "connected" } as T);
+  throw new MainsAegisApiError({
+    code: "not_found",
+    message: "mock devd endpoint not found",
+    retryable: false,
+    details: { path, baseUrl },
   });
 }
 

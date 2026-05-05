@@ -169,6 +169,7 @@ struct ArtifactFile {
     path: String,
     sha256: String,
     size: u64,
+    flash_address: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
