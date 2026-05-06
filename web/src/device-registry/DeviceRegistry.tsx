@@ -289,7 +289,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   useEffect(() => {
     const interval = window.setInterval(() => {
       for (const record of records) {
-        if (!streams.current.has(record.target.deviceId)) {
+        if (record.target.transport !== "devd" && !streams.current.has(record.target.deviceId)) {
           void refreshDevice(record.target.deviceId);
         }
       }
