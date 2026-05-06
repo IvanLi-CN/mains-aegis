@@ -47,5 +47,5 @@
 | zp4cg | Manual charge dashboard page + EEPROM prefs | 已完成 | `zp4cg-manual-charge-dashboard/SPEC.md` | 2026-04-07 | 已完成 `MANUAL` 三级页面、小屏触控布局、运行时手动接管/停止抑制、仅保存 prefs 的 EEPROM schema v1，以及预览/真机验证闭环 |
 | jxz2t | GitHub Pages docs site handbooks | 已完成 | `jxz2t-docs-site-handbooks/SPEC.md` | 2026-05-05 | Pages 根站点改由 Web App 发布，文档站保留为 `/docs/` 子路径；原 `docs-site/`、手册页面与 PR #63 记录仍为历史基线 |
 | h6sae | BQ40 `LOCK` root cause + closure | 部分完成（3/6） | `h6sae-bq40-lock-root-cause/SPEC.md` | 2026-04-13 | 已命中 `termination` 分流并提交 `ITERM` 对齐修复；下一步需要 `<90%` 解锁后的 live 闭环复验 |
-| amc32 | WiFi / service discovery / read-only API foundation | 部分完成（4/5） | `amc32-wifi-service-discovery-api-foundation/SPEC.md` | 2026-04-09 | 已完成 `net_http` feature、mDNS/HTTP/SSE、WiFi detail 与 Dashboard WiFi 热区文档；按要求不改自检页面，等待 PR / review 收口 |
+| amc32 | WiFi / service discovery / read-only API foundation | 部分完成（4/5） | `amc32-wifi-service-discovery-api-foundation/SPEC.md` | 2026-05-07 | `net_http` 与 `web_serial` 已成为默认主固件能力；无网络最小构建需显式 `--no-default-features` |
 | d8p4q | Front panel auto sleep | active | `d8p4q-front-panel-auto-sleep/SPEC.md` | 2026-04-27 | 测试版 `30s / 35s / 40s` 自动低亮、关背光、GC9307 sleep；硬件确认后恢复正式默认 `180s / 240s / 245s` |

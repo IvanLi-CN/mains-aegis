@@ -1443,8 +1443,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 config
             }
             Err(_) => {
-                esp_println::println!("net: usb wifi config load failed; using build credentials");
-                defmt::warn!("net: usb wifi config load failed; using build credentials");
+                esp_println::println!("net: usb wifi config load failed; wifi disabled");
+                defmt::warn!("net: usb wifi config load failed; wifi disabled");
                 None
             }
         };

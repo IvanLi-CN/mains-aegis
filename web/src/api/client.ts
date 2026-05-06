@@ -10,7 +10,9 @@ import type {
   SafeSettingsState,
   SerialLogEntry,
   SerialTraceEntry,
+  DevdWebLease,
   UpsStatus,
+  WifiApplyNetwork,
 } from "./types";
 
 export class MainsAegisApiError extends Error {
@@ -110,9 +112,13 @@ function requestMock<T>(baseUrl: string, path: string): Promise<T> {
 }
 
 export const ping = (baseUrl: string) => requestJson<{ ok: true }>(baseUrl, "/api/v1/ping");
-export const getIdentity = (baseUrl: string) => requestJson<Identity>(baseUrl, "/api/v1/identity");
-export const getNetwork = (baseUrl: string) => requestJson<NetworkSummary>(baseUrl, "/api/v1/network");
-export const getStatus = (baseUrl: string) => requestJson<UpsStatus>(baseUrl, "/api/v1/status");
+function leaseQuery(leaseId?: string) {
+  return leaseId ? `?lease_id=${encodeURIComponent(leaseId)}` : "";
+}
+
+export const getIdentity = (baseUrl: string, leaseId?: string) => requestJson<Identity>(baseUrl, `/api/v1/identity${leaseQuery(leaseId)}`);
+export const getNetwork = (baseUrl: string, leaseId?: string) => requestJson<NetworkSummary>(baseUrl, `/api/v1/network${leaseQuery(leaseId)}`);
+export const getStatus = (baseUrl: string, leaseId?: string) => requestJson<UpsStatus>(baseUrl, `/api/v1/status${leaseQuery(leaseId)}`);
 
 export type DevdSerialSession = {
   connected: boolean;
@@ -144,12 +150,14 @@ export type DevdSerialEventStream = {
 type DevdSerialSessionOptions = {
   logsLimit?: number;
   traceLimit?: number;
+  leaseId?: string;
 };
 
 function devdSerialSessionPath(options: DevdSerialSessionOptions = {}) {
   const params = new URLSearchParams();
   if (options.logsLimit !== undefined) params.set("logs_limit", String(options.logsLimit));
   if (options.traceLimit !== undefined) params.set("trace_limit", String(options.traceLimit));
+  if (options.leaseId) params.set("lease_id", options.leaseId);
   const query = params.toString();
   return `/api/v1/serial/session${query ? `?${query}` : ""}`;
 }
@@ -157,14 +165,27 @@ function devdSerialSessionPath(options: DevdSerialSessionOptions = {}) {
 export const getDevdSerialSession = (baseUrl: string, options?: DevdSerialSessionOptions) =>
   requestJson<DevdSerialSession>(baseUrl, devdSerialSessionPath(options));
 
+export const createDevdWebLease = (baseUrl: string, deviceId: string) =>
+  requestWithBody<DevdWebLease>(baseUrl, "/api/v1/serial/lease", "POST", { device_id: deviceId });
+export const heartbeatDevdWebLease = (baseUrl: string, leaseId: string) =>
+  requestWithBody<Omit<DevdWebLease, "device">>(baseUrl, `/api/v1/serial/lease/${encodeURIComponent(leaseId)}`, "POST");
+export const releaseDevdWebLease = (baseUrl: string, leaseId: string, keepalive = false) => {
+  const path = `/api/v1/serial/lease/${encodeURIComponent(leaseId)}`;
+  if (keepalive && !isMockBaseUrl(baseUrl)) {
+    return fetch(`${baseUrl}${path}`, { method: "DELETE", keepalive, headers: { Accept: "application/json" } }).then(() => undefined);
+  }
+  return requestWithBody<unknown>(baseUrl, path, "DELETE");
+};
+
 export function subscribeDevdSerialEvents(
   baseUrl: string,
+  leaseId: string,
   callbacks: {
     onEvent: (event: DevdSerialEvent) => void;
     onError: (event: Event) => void;
   },
 ): DevdSerialEventStream {
-  const eventSource = new EventSource(`${baseUrl}/api/v1/serial/events`);
+  const eventSource = new EventSource(`${baseUrl}/api/v1/serial/events?lease_id=${encodeURIComponent(leaseId)}`);
   const handleEvent = (event: Event) => {
     callbacks.onEvent(JSON.parse((event as MessageEvent<string>).data) as DevdSerialEvent);
   };
@@ -176,20 +197,26 @@ export function subscribeDevdSerialEvents(
   return { close: () => eventSource.close() };
 }
 
-export const sendDevdWifiConfig = (baseUrl: string, deviceId: string, input: { ssid: string; psk: string }) =>
-  requestWithBody<unknown>(baseUrl, "/api/v1/wifi-config", "POST", { ...input, device_id: deviceId });
-export const clearDevdWifiConfig = (baseUrl: string, deviceId: string) =>
-  requestWithBody<unknown>(baseUrl, `/api/v1/wifi-config?device_id=${encodeURIComponent(deviceId)}`, "DELETE");
-export const setDevdLogLevel = (baseUrl: string, deviceId: string, level: SafeSettingsState["log_level"]) =>
-  requestWithBody<unknown>(baseUrl, "/api/v1/settings/log-level", "POST", { level, device_id: deviceId });
-export const setDevdManualChargePrefs = (baseUrl: string, deviceId: string, prefs: SafeSettingsState["manual_charge"]) =>
-  requestWithBody<unknown>(baseUrl, "/api/v1/settings/manual-charge", "POST", { ...prefs, device_id: deviceId });
+export type DevdWifiConfigApplyResult = {
+  wifi_config: unknown;
+  network: WifiApplyNetwork;
+  applied: true;
+};
 
-export async function probeDevice(baseUrl: string): Promise<ProbeResult> {
+export const sendDevdWifiConfig = (baseUrl: string, deviceId: string, leaseId: string, input: { ssid: string; psk: string }) =>
+  requestWithBody<DevdWifiConfigApplyResult>(baseUrl, "/api/v1/wifi-config", "POST", { ...input, device_id: deviceId, lease_id: leaseId });
+export const clearDevdWifiConfig = (baseUrl: string, deviceId: string, leaseId: string) =>
+  requestWithBody<DevdWifiConfigApplyResult>(baseUrl, `/api/v1/wifi-config?device_id=${encodeURIComponent(deviceId)}&lease_id=${encodeURIComponent(leaseId)}`, "DELETE");
+export const setDevdLogLevel = (baseUrl: string, deviceId: string, leaseId: string, level: SafeSettingsState["log_level"]) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/settings/log-level", "POST", { level, device_id: deviceId, lease_id: leaseId });
+export const setDevdManualChargePrefs = (baseUrl: string, deviceId: string, leaseId: string, prefs: SafeSettingsState["manual_charge"]) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/settings/manual-charge", "POST", { ...prefs, device_id: deviceId, lease_id: leaseId });
+
+export async function probeDevice(baseUrl: string, leaseId?: string): Promise<ProbeResult> {
   await ping(baseUrl);
-  const identity = await getIdentity(baseUrl);
-  const network = await getNetwork(baseUrl);
-  const status = await getStatus(baseUrl);
+  const identity = await getIdentity(baseUrl, leaseId);
+  const network = await getNetwork(baseUrl, leaseId);
+  const status = await getStatus(baseUrl, leaseId);
   return { identity, network, status };
 }
 

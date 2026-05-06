@@ -392,22 +392,18 @@ pub fn encode_wifi_config_record(
     config: Option<&WifiConfigSecret>,
 ) -> [u8; WIFI_CONFIG_RECORD_LEN] {
     let mut bytes = [0u8; WIFI_CONFIG_RECORD_LEN];
+    let Some(config) = config else {
+        return bytes;
+    };
     bytes[0..4].copy_from_slice(&WIFI_CONFIG_MAGIC);
     bytes[4] = WIFI_CONFIG_VERSION;
-    match config {
-        Some(config) => {
-            bytes[5] = 1;
-            bytes[6] = config.ssid.len() as u8;
-            bytes[7] = config.psk.len() as u8;
-            bytes[WIFI_CONFIG_SSID_OFFSET..WIFI_CONFIG_SSID_OFFSET + config.ssid.len()]
-                .copy_from_slice(config.ssid.as_bytes());
-            bytes[WIFI_CONFIG_PSK_OFFSET..WIFI_CONFIG_PSK_OFFSET + config.psk.len()]
-                .copy_from_slice(config.psk.as_bytes());
-        }
-        None => {
-            bytes[5] = 0;
-        }
-    }
+    bytes[5] = 1;
+    bytes[6] = config.ssid.len() as u8;
+    bytes[7] = config.psk.len() as u8;
+    bytes[WIFI_CONFIG_SSID_OFFSET..WIFI_CONFIG_SSID_OFFSET + config.ssid.len()]
+        .copy_from_slice(config.ssid.as_bytes());
+    bytes[WIFI_CONFIG_PSK_OFFSET..WIFI_CONFIG_PSK_OFFSET + config.psk.len()]
+        .copy_from_slice(config.psk.as_bytes());
     bytes[WIFI_CONFIG_CRC_INDEX] = storage_crc8(&bytes[..WIFI_CONFIG_CRC_INDEX]);
     bytes
 }

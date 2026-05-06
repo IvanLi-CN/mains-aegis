@@ -8,7 +8,9 @@
     "preview": "vite preview --host 127.0.0.1 --port ${WEB_PORT:-5173}",
     "build": "tsc -b && vite build",
     "check": "tsc -b --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "storybook": "storybook dev --host 127.0.0.1 --port ${STORYBOOK_PORT:-6006}",
+    "build-storybook": "storybook build"
   },
   "dependencies": {
     "@radix-ui/react-select": "^2.2.6",
@@ -17,9 +19,11 @@
     "react-dom": "^19.2.1"
   },
   "devDependencies": {
+    "@storybook/react-vite": "^10.3.6",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "storybook": "^10.3.6",
     "typescript": "^5.9.3",
     "vite": "^7.2.4"
   }

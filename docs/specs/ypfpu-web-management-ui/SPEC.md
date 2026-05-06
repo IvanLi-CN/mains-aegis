@@ -4,7 +4,7 @@
 
 - Status: 已完成（USB CDC safe-control follow-up）
 - Created: 2026-04-28
-- Last: 2026-04-29
+- Last: 2026-05-07
 
 ## 背景 / 问题陈述
 
@@ -50,6 +50,7 @@
 
 - `/connect` 支持 USB CDC / Web Serial 连接入口、`mains-aegis-devd` 入口，并保留手动添加 `.local` hostname、IP 或完整 URL 的 LAN 只读入口。
 - USB 连接入口必须显示浏览器支持状态、连接/断开状态、用户取消授权、串口不可用或已占用等错误。
+- devd 入口在发现多个 USB CDC candidates 时必须显示候选设备选择器；用户明确选择某个 devd device id 后才可创建控制 session。Web 不得基于已连接、已识别、第一个或最近使用自动替用户选择硬件。
 - 真实 USB `SerialPort` 不写入 localStorage；刷新页面后需要重新授权。mock USB 设备可用于视觉证据与无硬件验证。
 - 添加时按 `ping -> identity -> network -> status` 探活；失败显示 API-compatible error envelope。
 - 浏览器侧保存 `DeviceRegistry` 到 `localStorage`，并提供 demo fleet reset。
@@ -70,8 +71,11 @@
 - 固定 frame type: `hello`、`status`、`log`、`request`、`response`、`error`、`wifi_config`。
 - Web 写命令必须带 `request_id`；固件以同一 `request_id` 返回 `response` 或 `error`。
 - `hello` 返回协议名 `mains-aegis.cdc.v1`、capabilities、identity；USB identity 的 `capabilities.write_controls=true`。
+- Web Serial 与 devd 在建立可写 USB session 前必须用 `identity.firmware.build_id`、`build_profile` 与 `features` 匹配可用 firmware artifact catalog；不匹配时必须阻断连接并显示 `firmware_artifact_mismatch` 气泡警告。用户只有点击显式的 “Ignore warning and connect” 后，才允许继续建立会话。
+- USB Console 可以保留 raw/ignored 串口记录用于调试，但不得为缺少 defmt decoder 额外发明显著诊断标签；连接前的固件 artifact 匹配门禁才负责拦截不匹配固件。
 - `request` 支持 `get_identity`、`get_status`、`set_log_level`、`set_manual_charge_prefs`。
-- `wifi_config` 支持 `op=set` 与 `op=clear`；`set` 接收 `ssid` 与 `psk`，固件仅回传 SSID 与 ack，不回传 PSK。
+- `wifi_config` 支持 `op=set` 与 `op=clear`；`set` 接收 `ssid` 与 `psk`，固件仅回传 SSID 与 ack，不回传 PSK；`clear` 必须清空 EEPROM WiFi slot 并让固件运行时 WiFi 立即进入 `disabled`。
+- WiFi 保存/清除在固件 ack 与后续 `status.network` 反馈完成前，Settings UI 必须保持对应按钮 loading/spinning，不能提前显示成功。
 - `log` frame 是结构化开发日志入口，字段至少包含 `level`、`target`、`message`。
 - Web App 将非 JSON legacy serial line 降级为 `raw_serial` debug log；协议响应必须保持 JSONL，以免阻塞 request ack。
 - `error` frame 与 HTTP error envelope 对齐：`{ code, message, retryable, details }`。
@@ -80,7 +84,13 @@
 
 - devd 位于 `tools/mains-aegis-devd/`，使用 Rust 实现。
 - devd 通过 scan/list/bind/connect 管理设备；真实写入要求已连接且 identity 可用的 USB CDC 设备。
-- Web App 的 devd 入口先执行 devd scan/connect；仅当一个 native USB 设备可用时自动建立控制 session，多设备场景拒绝自动选择。
+- Web App 的 devd 入口先执行 devd scan；没有候选时显示无设备，单候选时可直接提交，多个候选时必须渲染选择器并等待用户选择。多设备场景不得自动选择，也不得要求用户拔掉其它设备作为常规工作流。
+- Web devd 控制 session 必须由 devd Web lease 支撑。Web 创建 session 后按 devd 返回的 `heartbeat_interval_ms` 续租；所有 WiFi config、safe settings、serial session 与 event stream 请求必须携带有效 lease。
+- Web 正常断开、移除设备或页面关闭时必须尽量优雅释放 lease：优先普通 `DELETE`，页面卸载时使用 keepalive request 或 `sendBeacon`。释放成功后 UI 移除 USB connected 标记，但保留同一设备的 LAN/WiFi 记录。
+- 网络抖动时 UI 不应立即误报断开：SSE 断开或单次 heartbeat 失败先进入 reconnecting / degraded 状态；只要在 devd TTL 内续租恢复，USB 标记保持。devd 返回 `web_session_expired` 后，UI 才移除 USB connected 标记并提示重新连接。
+- Web 不得在本地 localStorage 中持久化 devd lease；刷新页面后必须重新创建 lease，不能复用过期 session。
+- 连接硬件、保存 WiFi、清除 WiFi 与 safe settings 失败必须以气泡 callout 展示；成功反馈可以保留为低噪音 inline status。
+- devd 连接在创建 Web lease 并读取 identity 后必须执行同样的 firmware artifact 匹配门禁；不匹配时释放刚创建的 lease，不得继续占用 USB，除非用户显式忽略警告并重新发起连接。
 - devd 对 Web/App/CLI 暴露 localhost HTTP：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、`/api/v1/serial/session`、WiFi config 与 safe settings endpoints。
 - `/api/v1/serial/session` 返回 bounded tail logs/trace，默认 `logs_limit=200`、`trace_limit=600`，上限分别为 `500` 和 `2000`。
 - 同一 `identity.device_id` 通过 LAN 与 USB 同时发现时，Web App 合并为一条 `DeviceRecord`，并显示 WiFi/LAN 与 USB 两个连接标记。
@@ -111,6 +121,9 @@
 - Fleet mock 页至少显示 6 台设备，覆盖 standby、assist、backup、warning、critical、offline。
 - `/connect` 能显示已保存设备，支持添加设备与探活错误显示。
 - `/connect` 能连接 USB CDC 设备、附加 mock USB 设备、断开 USB session，并展示 Web Serial 不支持或串口不可用错误。
+- `/connect` 在 devd 报告多个 USB candidates 时显示候选列表，用户选择后才占用设备；未选择时不得连接。
+- `/connect` 通过 Web Serial 或 devd 连接 USB 设备时必须先校验 firmware artifact 是否匹配；不匹配时显示 `Firmware mismatch` 气泡并要求用户显式忽略警告后才可继续。
+- Web devd session 正常断开后 devd 立即释放 USB 占用；异常断开后按 devd lease TTL 自动释放，UI 在 TTL 内抖动恢复时不误删设备。
 - USB 设备连接后能在 `/devices/:device_id/settings` 写入 WiFi SSID/PSK、清除 WiFi、调整日志级别和手动充电偏好；PSK 提交后清空且不回显。
 - `/devices/:device_id/api` 或 settings 页面能显示 USB structured logs。
 - 正式路由能通过 `seed` 参数打开可复现 mock 场景，并保持与正式产品一致的导航和页面结构。
@@ -194,6 +207,17 @@
 
 ![devd connect evidence](./assets/devd-connect-entry.png)
 
+- source_type: storybook_canvas
+  story_id_or_title: `UPS Management/Connect/Firmware mismatch warning`
+  requested_viewport: `none`
+  viewport_strategy: `storybook-viewport`
+  capture_scope: `element`
+  target_program: `mock-only`
+  scenario: USB firmware mismatch connection gate
+  evidence_note: 验证 Web Serial/devd 可写连接前的 firmware artifact 不匹配会显示 `Firmware mismatch` 气泡并提供显式 `Ignore warning and connect` 继续入口；该门禁独立于 USB Console raw/ignored 日志保留策略。
+
+![Storybook firmware mismatch warning](./assets/storybook-firmware-mismatch-warning.png)
+
 - source_type: mock_ui
   demo_entry_or_title: `/?seed=dual`
   requested_viewport: `1440x1100`
@@ -215,6 +239,17 @@
   evidence_note: 验证 USB settings 页包含 WiFi SSID/PSK 写入、清除、手动充电偏好、日志级别和 structured log 面板；PSK 提交后清空且不出现在页面文本中。
 
 ![USB WiFi settings evidence](./assets/usb-wifi-settings-desktop.png)
+
+- source_type: storybook_canvas
+  story_id_or_title: `UPS Management/Settings/WiFi Provisioning Feedback/State Gallery`
+  requested_viewport: `none`
+  viewport_strategy: `storybook-viewport`
+  capture_scope: `element`
+  target_program: `mock-only`
+  scenario: WiFi provisioning feedback state gallery
+  evidence_note: 验证连接硬件、保存 WiFi、清除 WiFi 的失败均以气泡 callout 展示；保存/清除在固件确认前保持按钮 spinning 且禁用并发写入；保存失败保留固件错误码 `wifi_connect_failed`，不再误标为 `serial_transport_error`；成功状态只显示低噪音硬件结果反馈。
+
+![Storybook WiFi feedback state gallery](./assets/wifi-feedback-gallery-canvas.png)
 
 - source_type: mock_ui
   demo_entry_or_title: `/devices/mains-aegis-usb-demo/settings?seed=usb`

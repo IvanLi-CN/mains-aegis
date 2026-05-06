@@ -17,6 +17,7 @@ type SerialPortLike = EventTarget & {
   readable: ReadableStream<Uint8Array> | null;
   writable: WritableStream<Uint8Array> | null;
   open: (options: SerialPortOpenOptions) => Promise<void>;
+  setSignals?: (signals: { dataTerminalReady?: boolean; requestToSend?: boolean }) => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -122,6 +123,7 @@ export class WebSerialTransport {
     }
     const port = await navigator.serial.requestPort();
     await port.open({ baudRate: BAUD_RATE });
+    await port.setSignals?.({ dataTerminalReady: true, requestToSend: true });
     const transport = new WebSerialTransport(port, options);
     transport.startReadLoop();
     return transport;
@@ -206,7 +208,7 @@ export class WebSerialTransport {
     const waiter = new Promise<SerialResponseFrame | SerialHelloFrame>((resolve, reject) => {
       const timer = window.setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new Error("USB CDC response timed out"));
+        reject(new Error("Selected USB serial interface did not respond to the Mains Aegis CDC handshake. Choose the other USB serial interface for this device and try again."));
       }, RESPONSE_TIMEOUT_MS);
       this.pending.set(requestId, {
         resolve,
@@ -461,6 +463,8 @@ export function errorFromSerialFailure(error: unknown): SerialErrorFrame["error"
     };
   }
   if (error instanceof Error) {
+    const classified = classifySerialCommandError(error.message);
+    if (classified) return classified;
     return {
       code: "serial_transport_error",
       message: error.message,
@@ -471,6 +475,17 @@ export function errorFromSerialFailure(error: unknown): SerialErrorFrame["error"
   return {
     code: "serial_unknown_error",
     message: "USB CDC connection failed",
+    retryable: true,
+    details: null,
+  };
+}
+
+function classifySerialCommandError(message: string): SerialErrorFrame["error"] | null {
+  const match = /^(wifi_(?:connect_failed|connect_timeout|disconnect_timeout)):\s*(.+)$/.exec(message);
+  if (!match) return null;
+  return {
+    code: match[1],
+    message: match[2],
     retryable: true,
     details: null,
   };

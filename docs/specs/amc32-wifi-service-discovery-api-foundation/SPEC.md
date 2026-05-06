@@ -4,7 +4,7 @@
 
 - Status: 部分完成（4/5）
 - Created: 2026-04-09
-- Last: 2026-04-09
+- Last: 2026-05-07
 
 ## 背景 / 问题陈述
 
@@ -17,7 +17,7 @@
 
 ### Goals
 
-- 为主固件新增 `net_http` feature-gated 网络底座，默认构建行为保持不变。
+- 为主固件提供默认启用的 `net_http` 网络底座；需要无网络最小构建时显式使用 `--no-default-features`。
 - 首版支持编译期 STA WiFi、DHCP/静态 IPv4、mDNS `.local` 主机名、DNS-SD 服务发现、HTTP 只读 API 与 `/api/v1/status` SSE 状态流。
 - 冻结设备身份口径：`mains-aegis-<mac后三字节hex>` 作为 `device_id` 与 hostname 真相源。
 - 抽出稳定的 `UpsStatusSnapshot` 与 `NetworkUiSummary`，供 HTTP、SSE 与后续上层客户端复用。
@@ -38,7 +38,7 @@
 - `firmware/src/net.rs`：共享 WiFi 状态、联网任务、HTTP router、CORS/PNA、SSE 与只读 JSON API。
 - `firmware/src/mdns.rs` / `firmware/src/mdns_wire.rs`：mDNS A/PTR/SRV/TXT 响应与 DNS-SD 广播。
 - `firmware/src/net_types.rs` / `firmware/src/net_contract.rs` / `firmware/src/net_bridge.rs`：只读状态模型、JSON/SSE 渲染契约与主循环状态桥接。
-- `firmware/src/main.rs`：主入口拆分为默认阻塞式与 `net_http` 下 `esp_rtos + embassy` 异步入口。
+- `firmware/src/main.rs`：主入口在默认构建下使用 `net_http` 的 `esp_rtos + embassy` 异步入口；无网络最小构建保留阻塞式入口。
 - `firmware/host-unit-tests/`：env 解析、mDNS 编解码、HTTP 契约与桥接逻辑测试。
 - `firmware/ui/dashboard-design.md` / `firmware/ui/dashboard-detail-design.md` / `firmware/ui/touch-targets.md`：Dashboard WiFi 入口、WiFi 详情页与首页触摸热区说明。
 
@@ -53,8 +53,9 @@
 
 ### MUST
 
-- 默认构建不得强制开启网络依赖；仅 `--features net_http` 时才编译 WiFi / mDNS / HTTP 路径。
-- `net_http` 构建必须要求 `MAINS_AEGIS_WIFI_SSID` 与 `MAINS_AEGIS_WIFI_PSK` 已提供；缺失时在 build script 阶段明确失败。
+- 默认主固件构建必须启用 `net_http` 与 `web_serial`，使 WiFi HTTP 与 USB CDC 管理能力成为默认运行能力。
+- 固件不得包含默认 WiFi SSID/PSK；启动时若 EEPROM 没有 USB 写入的 WiFi 配置，WiFi 必须保持 `disabled`。
+- 如需无网络最小构建，必须显式使用 `--no-default-features`；该路径不要求 WiFi 环境变量。
 - `device_id`、`hostname`、`hostname_fqdn`、DNS-SD `service_instance` 都必须从同一 `short_id` 真相源派生。
 - mDNS 必须发布 `.local` A 记录与 `_mains-aegis-ups._tcp.local` 服务；TXT 至少包含 `device_id`、`api_version`、`role=ups`。
 - HTTP 公开契约固定为：`GET /api/v1/ping`、`GET /health`、`GET /api/v1/identity`、`GET /api/v1/network`、`GET /api/v1/status`，以及同一路径在 `Accept: text/event-stream` 下的 SSE。
@@ -76,9 +77,9 @@
 
 ### Core flows
 
-- 编译 `net_http` 时，build script 从环境变量或仓库根/`firmware/.env` 读取 `MAINS_AEGIS_WIFI_*`，并把它们注入固件编译期环境；默认构建不会要求这些变量存在。
-- 设备启动后，`net_http` 入口初始化 heap、`esp_rtos` 调度器、WiFi 驱动与 `embassy-net` stack；默认构建仍沿用当前阻塞式主入口。
-- WiFi 任务在 `Connecting -> Connected/Error` 之间循环，支持 DHCP 与静态 IPv4；连接成功后刷新 `WifiSnapshot`，断链后带退避重试并更新 `last_error`。
+- 默认构建时，build script 只读取可选 hostname/static IPv4/DNS 环境变量，不读取或注入默认 WiFi 凭据。
+- 设备启动后，默认 `net_http` 入口初始化 heap、`esp_rtos` 调度器、WiFi 驱动与 `embassy-net` stack；仅 `--no-default-features` 构建沿用无网络阻塞式主入口。
+- WiFi 任务在 `Disabled -> Connecting -> Connected/Error` 之间切换；USB 写入凭据后立即连接，USB 清除凭据后立即断开并回到 `disabled`。
 - mDNS 任务在 IPv4 就绪后加入 `224.0.0.251:5353` 组播，发送 unsolicited announce，并对匹配的 hostname/service 查询返回 A/PTR/SRV/TXT 响应。
 - HTTP 任务监听 `:80`，对外暴露 ping/health、identity、network、status 与 SSE；`/api/v1/status` 在 `Accept: text/event-stream` 下切换为长连接流。
 - 主循环每次拿到新的 `SelfCheckUiSnapshot` 时，都通过桥接层提炼 `UpsStatusSnapshot`，同时把当前网络状态合并进只读 API / SSE 快照。
@@ -98,7 +99,7 @@
 
 | 接口（Name） | 类型（Kind） | 范围（Scope） | 变更（Change） | 契约文档（Contract Doc） | 负责人（Owner） | 使用方（Consumers） | 备注（Notes） |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `MAINS_AEGIS_WIFI_*` build env | internal | internal | New | None | firmware | build.rs / CI / bench 构建 | `PSK` 只用于构建期注入 |
+| `MAINS_AEGIS_WIFI_HOSTNAME/STATIC_IP/NETMASK/GATEWAY/DNS` build env | internal | internal | New | None | firmware | build.rs / CI / bench 构建 | 只允许网络元配置，不包含 SSID/PSK |
 | `/api/v1/*` HTTP API | http | external | New | `./contracts/http-apis.md` | firmware | 后续桌面端 / Web / bench 工具 | 只读 `v1` |
 | `_mains-aegis-ups._tcp.local` | external | external | New | None | firmware | 局域网发现方 | mDNS + DNS-SD |
 | `UpsStatusSnapshot` / `NetworkUiSummary` | internal | internal | New | None | firmware | HTTP / SSE / front-panel | 单一真相源 |
@@ -110,8 +111,9 @@
 
 ## 验收标准（Acceptance Criteria）
 
-- Given 默认固件构建未开启 `net_http`，When 执行默认 `cargo +esp check`，Then 构建继续通过且不要求任何 WiFi 环境变量。
-- Given 启用 `net_http` 且已提供 `MAINS_AEGIS_WIFI_SSID/PSK`，When 执行 `cargo +esp check --features net_http`，Then 固件成功编译链接。
+- Given 未提供 WiFi 凭据环境变量，When 执行默认 `cargo +esp check`，Then 固件以 `net_http + web_serial` 成功编译链接且不注入默认 SSID/PSK。
+- Given EEPROM 没有 WiFi 配置或 USB clear 成功，When WiFi task 观察到配置为空，Then 立即断开/停止 STA 并通过 status/network 反馈 `state=disabled`。
+- Given 需要无网络最小构建，When 执行 `cargo +esp check --no-default-features`，Then 构建继续通过且不要求任何 WiFi 环境变量。
 - Given 设备获得 IPv4 地址，When 局域网内执行 mDNS / DNS-SD 查询，Then 能解析 `mains-aegis-<short_id>.local` 且能发现 `_mains-aegis-ups._tcp.local:80`。
 - Given 请求 `/api/v1/identity`、`/api/v1/network`、`/api/v1/status`，When 固件返回 JSON，Then 字段为 `snake_case`，且不包含 `PSK`。
 - Given `GET /api/v1/status` 且 `Accept: text/event-stream`，When 连接建立，Then 固件连续输出 `status` 与周期性 `heartbeat` 事件。
@@ -121,7 +123,7 @@
 
 - 设备标识、服务名、API 版本、错误 envelope 与 SSE 口径已冻结。
 - 首版 scope 已明确为“UPS 本机只读能力”，不包含 host 注册和写接口。
-- `net_http` 继续作为 feature gate，而不是默认强制依赖。
+- `net_http` 是默认主固件能力；无网络构建必须显式 opt out。
 - 当前 PR 不修改任何自检页面可见 UI。
 
 ## 非功能性验收 / 质量门槛（Quality Gates）
@@ -129,7 +131,7 @@
 ### Testing
 
 - Unit tests: `cargo +stable test --manifest-path firmware/host-unit-tests/Cargo.toml`
-- Integration tests: 默认 `cargo +esp check` 与 `cargo +esp check --features net_http`
+- Integration tests: 默认 `cargo +esp check` 与 `cargo +esp check --no-default-features`
 - E2E tests (if applicable): bench 条件允许时，用 `.local` 解析、HTTP GET 与 SSE `curl` 做最小烟测
 
 ### UI / Storybook (if applicable)

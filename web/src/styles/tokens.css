@@ -14,6 +14,10 @@
   --color-critical: oklch(52% 0.18 25);
   --color-ok: oklch(52% 0.12 155);
   --color-offline: oklch(50% 0.025 260);
+  --color-green: var(--color-ok);
+  --color-success: var(--color-ok);
+  --color-success-text: oklch(38% 0.1 155);
+  --color-focus: oklch(48% 0.18 258);
   --color-status-info: var(--color-blue);
   --color-status-ok: var(--color-ok);
   --color-status-warning: var(--color-warning);
@@ -45,10 +49,12 @@
   --control-height: 40px;
   --control-height-touch: 44px;
   --radius-card: 8px;
+  --radius-control: 10px;
   --radius-pill: 999px;
   --shadow-focus: 0 0 0 3px oklch(62% 0.15 258 / 0.24);
   --shadow-sidebar-panel: 18px 0 44px oklch(20% 0.015 250 / 0.16);
   --shadow-command-panel: 0 18px 50px oklch(22% 0.012 250 / 0.16);
+  --shadow-popover: 0 14px 32px oklch(22% 0.012 250 / 0.14);
   --font-ui: "Unica77 Cohere Web", Inter, Arial, ui-sans-serif, system-ui, sans-serif;
   --font-display: CohereText, "Space Grotesk", Inter, ui-sans-serif, system-ui, sans-serif;
   --font-mono: CohereMono, "SFMono-Regular", Consolas, monospace;

@@ -153,6 +153,6 @@ The firmware stores WiFi credentials in EEPROM plaintext by current project deci
 - Size: 128 bytes, written as four 32-byte EEPROM blocks.
 - Layout: magic `MAWF`, version, enabled flag, SSID length, PSK length, SSID bytes, PSK bytes, CRC8.
 - Empty or clear record decodes as no configured WiFi credentials.
-- When `net_http` is enabled, the firmware loads this EEPROM record before starting WiFi and updates the running WiFi task after a successful USB write. Clearing the record falls back to build-time `MAINS_AEGIS_WIFI_*` credentials.
+- When `net_http` is enabled, the firmware loads this EEPROM record before starting WiFi and updates the running WiFi task after a successful USB write. Clearing the record wipes the EEPROM slot, disconnects WiFi immediately, and leaves WiFi disabled until new credentials are written over USB.
 
 The UI must clear the PSK field after submit and must not display stored PSK values.

@@ -40,8 +40,6 @@ use crate::{
     usb_cdc_protocol::WifiConfigSecret,
 };
 
-const WIFI_SSID: &str = env!("MAINS_AEGIS_WIFI_SSID");
-const WIFI_PSK: &str = env!("MAINS_AEGIS_WIFI_PSK");
 const WIFI_HOSTNAME: Option<&str> = option_env!("MAINS_AEGIS_WIFI_HOSTNAME");
 const WIFI_STATIC_IP: Option<&str> = option_env!("MAINS_AEGIS_WIFI_STATIC_IP");
 const WIFI_NETMASK: Option<&str> = option_env!("MAINS_AEGIS_WIFI_NETMASK");
@@ -56,6 +54,7 @@ const REQUEST_BUF_CAP: usize = 1024;
 const STATUS_PUSH_INTERVAL: Duration = Duration::from_secs(2);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const RSSI_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const WIFI_CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 static STATUS_SSE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static RADIO_CONTROLLER: StaticCell<RadioController<'static>> = StaticCell::new();
@@ -98,14 +97,13 @@ pub fn current_identity() -> Option<DeviceIdentity> {
 
 pub fn log_wifi_config() {
     esp_println::println!(
-        "net: feature=net_http ssid={} static_ip={:?} hostname_override={:?}",
-        WIFI_SSID,
+        "net: feature=net_http default_wifi=disabled static_ip={:?} hostname_override={:?}",
         WIFI_STATIC_IP,
         WIFI_HOSTNAME
     );
     info!(
-        "net: feature=net_http ssid={} static_ip={:?} hostname_override={:?}",
-        WIFI_SSID, WIFI_STATIC_IP, WIFI_HOSTNAME,
+        "net: feature=net_http default_wifi=disabled static_ip={:?} hostname_override={:?}",
+        WIFI_STATIC_IP, WIFI_HOSTNAME,
     );
 }
 
@@ -228,11 +226,26 @@ async fn wifi_task(
     loop {
         let credential_generation = wifi_config_generation();
         let usb_wifi_config = current_usb_wifi_config();
-        let (ssid, psk, credential_source) = match usb_wifi_config.as_ref() {
-            Some(config) => (config.ssid.as_str(), config.psk.as_str(), "eeprom"),
-            None => (WIFI_SSID, WIFI_PSK, "build"),
-        };
         let config_changed = configured_generation != Some(credential_generation);
+        let Some(config) = usb_wifi_config.as_ref() else {
+            set_wifi_snapshot(WifiSnapshot {
+                mac: Some(mac),
+                ..WifiSnapshot::disabled()
+            });
+            if matches!(controller.is_connected(), Ok(true)) {
+                esp_println::println!("net: wifi config cleared disconnect");
+                let _ = controller.disconnect_async().await;
+            }
+            if matches!(controller.is_started(), Ok(true)) {
+                esp_println::println!("net: wifi config cleared stop");
+                let _ = controller.stop_async().await;
+            }
+            configured_generation = Some(credential_generation);
+            Timer::after(Duration::from_millis(500)).await;
+            continue;
+        };
+        let ssid = config.ssid.as_str();
+        let psk = config.psk.as_str();
 
         set_wifi_snapshot(WifiSnapshot {
             state: WifiConnectionState::Connecting,
@@ -283,15 +296,8 @@ async fn wifi_task(
             esp_println::println!("net: wifi start_async ok");
         }
 
-        esp_println::println!(
-            "net: connecting to ssid={} source={}",
-            ssid,
-            credential_source
-        );
-        info!(
-            "net: connecting to ssid={} source={}",
-            ssid, credential_source
-        );
+        esp_println::println!("net: connecting to ssid={} source={}", ssid, "eeprom");
+        info!("net: connecting to ssid={} source={}", ssid, "eeprom");
         match controller.connect_async().await {
             Ok(()) => {
                 esp_println::println!("net: connect_async ok");
@@ -348,16 +354,39 @@ async fn wifi_task(
                     );
                 }
 
+                let mut disconnected_for_config_change = false;
+                let mut rssi_refresh_elapsed = Duration::from_millis(0);
                 loop {
-                    Timer::after(RSSI_REFRESH_INTERVAL).await;
-                    if wifi_config_generation() != credential_generation {
-                        esp_println::println!("net: wifi credential change reconnect");
-                        let _ = controller.disconnect_async().await;
+                    Timer::after(WIFI_CONFIG_POLL_INTERVAL).await;
+                    rssi_refresh_elapsed += WIFI_CONFIG_POLL_INTERVAL;
+                    let next_generation = wifi_config_generation();
+                    if next_generation != credential_generation {
+                        if current_usb_wifi_config().is_none() {
+                            esp_println::println!("net: wifi config cleared disconnect");
+                            set_wifi_snapshot(WifiSnapshot {
+                                mac: Some(mac),
+                                ..WifiSnapshot::disabled()
+                            });
+                            let _ = controller.disconnect_async().await;
+                            if matches!(controller.is_started(), Ok(true)) {
+                                esp_println::println!("net: wifi config cleared stop");
+                                let _ = controller.stop_async().await;
+                            }
+                            configured_generation = Some(next_generation);
+                        } else {
+                            esp_println::println!("net: wifi credential change reconnect");
+                            let _ = controller.disconnect_async().await;
+                        }
+                        disconnected_for_config_change = true;
                         break;
                     }
                     if !matches!(controller.is_connected(), Ok(true)) {
                         break;
                     }
+                    if rssi_refresh_elapsed < RSSI_REFRESH_INTERVAL {
+                        continue;
+                    }
+                    rssi_refresh_elapsed = Duration::from_millis(0);
                     let rssi_dbm = read_controller_rssi(&controller);
                     let snapshot = current_wifi_snapshot();
                     set_wifi_snapshot(WifiSnapshot {
@@ -365,6 +394,10 @@ async fn wifi_task(
                         mac: Some(mac),
                         ..snapshot
                     });
+                }
+                if disconnected_for_config_change {
+                    Timer::after(Duration::from_millis(100)).await;
+                    continue;
                 }
                 esp_println::println!("net: wifi disconnected");
                 warn!("net: wifi disconnected");

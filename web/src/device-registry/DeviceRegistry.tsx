@@ -2,15 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   clearDevdWifiConfig,
   connectDevdDevice,
+  createDevdWebLease,
   decodeDefmtFrame,
   disconnectDevdDevice,
   getDevdSerialSession,
+  heartbeatDevdWebLease,
   getStatus,
   listDevdDevices,
   loadBundledFirmwareCatalog,
   loadFirmwareCatalogFromUrl,
   normalizeBaseUrl,
   probeDevice,
+  releaseDevdWebLease,
   scanDevdDevices,
   sendDevdWifiConfig,
   setDevdLogLevel,
@@ -21,7 +24,7 @@ import {
   type DevdSerialSession,
 } from "../api/client";
 import { subscribeStatusStream, type StatusStream } from "../api/statusStream";
-import type { DeviceRecord, DeviceTarget, FirmwareArtifact, FirmwareArtifactMatch, Identity, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry } from "../api/types";
+import type { DevdWebLease, DeviceRecord, DeviceTarget, FirmwareArtifact, FirmwareArtifactMatch, Identity, ProbeResult, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 import { isDemoSeed, makeMockRecord, makeMockRecords, makeMockUsbSerialRecord, type DemoSeed } from "../fixtures/mockDevices";
 import {
   errorFromSerialFailure,
@@ -39,6 +42,7 @@ import {
   type CommandResult,
   type ManualChargePrefsInput,
   type WifiConfigInput,
+  type WifiProvisioningProgress,
 } from "./context";
 
 const DEVD_SERIAL_SESSION_LIMITS = {
@@ -59,6 +63,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const [records, setRecords] = useState<DeviceRecord[]>(() => loadInitialRecords(seedRef.current));
   const streams = useRef(new Map<string, StatusStream>());
   const devdStreams = useRef(new Map<string, DevdSerialEventStream>());
+  const devdLeaseHeartbeats = useRef(new Map<string, number>());
   const serialSessions = useRef(new Map<string, WebSerialTransport>());
 
   useEffect(() => {
@@ -77,6 +82,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       streams.current.clear();
       for (const stream of devdStreams.current.values()) stream.close();
       devdStreams.current.clear();
+      for (const heartbeat of devdLeaseHeartbeats.current.values()) window.clearInterval(heartbeat);
+      devdLeaseHeartbeats.current.clear();
       for (const session of serialSessions.current.values()) void session.close();
       serialSessions.current.clear();
       if (!nextSeed) {
@@ -245,45 +252,16 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     );
 
     try {
-      const result = await probeDevice(target.baseUrl);
       if (target.transport === "devd") {
-        const session = await getDevdSerialSession(target.baseUrl, DEVD_SERIAL_SESSION_LIMITS);
-        setRecords((current) => {
-          const previous = current.find((record) => record.target.deviceId === deviceId);
-          if (!previous) return current;
-          const streamState = result.identity.capabilities.sse && previous.streamState !== "polling" ? "idle" : "polling";
-          const previousSerial = previous.serial;
-          return upsertRecord(
-            current,
-            {
-              ...recordFromProbe(target, result, "online", streamState),
-              serial: previousSerial
-                ? {
-                    ...previousSerial,
-                    connected: session.connected,
-                    source: "devd",
-                    baseUrl: target.baseUrl,
-                    protocol: target.serialProtocol ?? previousSerial.protocol,
-                    status: session.status ?? previousSerial.status,
-                    logs: session.logs,
-                    trace: session.trace,
-                    safeSettings: session.safeSettings,
-                  }
-                : {
-                    connected: session.connected,
-                    source: "devd",
-                    baseUrl: target.baseUrl,
-                    protocol: session.protocol,
-                    status: session.status ?? null,
-                    logs: session.logs,
-                    trace: session.trace,
-                    safeSettings: session.safeSettings,
-                  },
-            },
-          );
+        setRecordError(deviceId, {
+          code: "web_session_required",
+          message: "Reconnect devd to create a fresh Web USB lease",
+          retryable: false,
+          details: null,
         });
         return;
       }
+      const result = await probeDevice(target.baseUrl);
       setRecords((current) => {
         const previous = current.find((record) => record.target.deviceId === deviceId);
         if (!previous) return current;
@@ -323,8 +301,9 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     if (demoSeed) return;
     for (const record of records) {
       const devdBaseUrl = record.serial?.source === "devd" ? record.serial.baseUrl : null;
-      if (!devdBaseUrl || !record.serial?.connected || devdStreams.current.has(record.target.deviceId)) continue;
-      const subscription = subscribeDevdSerialEvents(devdBaseUrl, {
+      const leaseId = record.serial?.leaseId;
+      if (!devdBaseUrl || !leaseId || !record.serial?.connected || devdStreams.current.has(record.target.deviceId)) continue;
+      const subscription = subscribeDevdSerialEvents(devdBaseUrl, leaseId, {
         onEvent: (event) => {
           if (event.kind === "serial_trace" && event.payload.trace) appendSerialTraceToSession(event.payload.trace, record.target.deviceId);
           if (event.kind === "serial_log" && event.payload.log) appendSerialLogToSession(event.payload.log, record.target.deviceId);
@@ -455,11 +434,26 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   }, [records]);
 
   useEffect(() => {
+    const releaseLeases = () => {
+      for (const record of records) releaseDevdLeaseForRecord(record, true);
+    };
+    window.addEventListener("pagehide", releaseLeases);
+    window.addEventListener("beforeunload", releaseLeases);
+    return () => {
+      window.removeEventListener("pagehide", releaseLeases);
+      window.removeEventListener("beforeunload", releaseLeases);
+    };
+  }, [records]);
+
+  useEffect(() => {
     return () => {
       for (const stream of streams.current.values()) stream.close();
       streams.current.clear();
       for (const stream of devdStreams.current.values()) stream.close();
       devdStreams.current.clear();
+      for (const heartbeat of devdLeaseHeartbeats.current.values()) window.clearInterval(heartbeat);
+      devdLeaseHeartbeats.current.clear();
+      for (const record of records) releaseDevdLeaseForRecord(record, true);
       for (const session of serialSessions.current.values()) void session.close();
       serialSessions.current.clear();
     };
@@ -491,7 +485,12 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     try {
       const scan = await scanDevdDevices(baseUrl);
       const nativeDevices = scan.devices.filter((device) => device.transport === "native_serial" && device.port_path);
-      if (nativeDevices.length !== 1) {
+      const selectedDevice = input.devdDeviceId
+        ? nativeDevices.find((device) => device.id === input.devdDeviceId)
+        : nativeDevices.length === 1
+          ? nativeDevices[0]
+          : null;
+      if (!selectedDevice) {
         return {
           ok: false,
           error: {
@@ -499,16 +498,23 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
             message:
               nativeDevices.length === 0
                 ? "No USB CDC device is available through mains-aegis-devd"
-                : "Multiple USB CDC devices are available; connect a single device before adding the devd control surface",
+                : "Multiple USB CDC devices are available; select a device before adding the devd control surface",
             retryable: false,
-            details: null,
+            details: { devices: nativeDevices },
           },
         };
       }
-      const devdDevice = nativeDevices[0];
-      await connectDevdDevice(devdDevice.id, baseUrl);
-      const result = await probeDevice(baseUrl);
-      const session = await getDevdSerialSession(baseUrl, DEVD_SERIAL_SESSION_LIMITS);
+      const lease = await createDevdWebLease(baseUrl, selectedDevice.id);
+      const result = await probeDevice(baseUrl, lease.lease_id);
+      const firmwareMatch = await findFirmwareArtifactForIdentity(result.identity);
+      if (!firmwareMatch && !input.ignoreFirmwareMismatch) {
+        await releaseDevdWebLease(baseUrl, lease.lease_id).catch(() => undefined);
+        return {
+          ok: false,
+          error: firmwareMismatchError(result.identity),
+        };
+      }
+      const session = await getDevdSerialSession(baseUrl, { ...DEVD_SERIAL_SESSION_LIMITS, leaseId: lease.lease_id });
       const target: DeviceTarget = {
         deviceId: result.identity.device_id,
         baseUrl,
@@ -518,7 +524,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         transport: "devd",
         serialProtocol: session.protocol,
       };
-      const record = recordFromDevdProbe(target, result, session);
+      const record = recordFromDevdProbe(target, result, session, lease);
+      startDevdLeaseHeartbeat(record);
       setRecords((current) => upsertRecord(current, record));
       return { ok: true, record };
     } catch (error) {
@@ -527,7 +534,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   }, []);
 
   const connectUsbSerialDevice = useCallback(
-    async (input: Pick<AddDeviceInput, "alias" | "location"> = {}): Promise<AddDeviceResult> => {
+    async (input: Pick<AddDeviceInput, "alias" | "location" | "ignoreFirmwareMismatch"> = {}): Promise<AddDeviceResult> => {
       if (!isWebSerialSupported()) {
         return {
           ok: false,
@@ -609,6 +616,15 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         const hello = await transport.hello();
         const status = await transport.requestStatus();
         const identity = hello.identity;
+        const firmwareMatch = await findFirmwareArtifactForIdentity(identity);
+        if (!firmwareMatch && !input.ignoreFirmwareMismatch) {
+          await transport.close().catch(() => undefined);
+          openedTransport = null;
+          return {
+            ok: false,
+            error: firmwareMismatchError(identity),
+          };
+        }
         const target: DeviceTarget = {
           deviceId: identity.device_id,
           baseUrl: `serial:${identity.device_id}`,
@@ -620,7 +636,6 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         };
         serialSessions.current.set(identity.device_id, transport);
         openedTransport = null;
-        const firmwareMatch = await findFirmwareArtifactForIdentity(identity);
         const decoderArtifact = firmwareMatch?.source === "bundled" ? firmwareMatch.artifact : await findBundledFirmwareArtifact(identity);
         const bundledElfPath = decoderArtifact ? firmwareArtifactElfPath(decoderArtifact) : null;
         transport.setDefmtDecoder(
@@ -705,10 +720,11 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     );
   }, []);
 
-  const sendWifiConfig = useCallback(async (deviceId: string, input: WifiConfigInput): Promise<CommandResult> => {
+  const sendWifiConfig = useCallback(async (deviceId: string, input: WifiConfigInput, onProgress?: (progress: WifiProvisioningProgress) => void): Promise<CommandResult> => {
     const record = records.find((candidate) => candidate.target.deviceId === deviceId);
-    if (!record?.serial) return serialCommandUnavailable();
+    if (!record) return serialCommandUnavailable();
     if (record.target.mock) {
+      onProgress?.({ phase: "connected", message: `WiFi connected to ${input.ssid} at 192.168.31.42`, network: { state: "connected", ipv4: "192.168.31.42", last_error: null } });
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
@@ -721,42 +737,55 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       );
       return { ok: true };
     }
-    if (isDevdSerial(record)) {
+    const devdBaseUrl = devdBaseUrlForRecord(record);
+    if (devdBaseUrl !== null) {
       try {
-        await sendDevdWifiConfig(record.serial.baseUrl ?? "", record.target.deviceId, input);
-        await updateDevdSerialSnapshot(record.target.deviceId, record.serial.baseUrl ?? "");
+        const leaseId = devdLeaseIdForRecord(record);
+        if (!leaseId) return serialCommandUnavailable();
+        onProgress?.({ phase: "saving", message: "Writing WiFi credentials to hardware" });
+        onProgress?.({ phase: "connecting", message: `Connecting to ${input.ssid} and waiting for an IP address` });
+        const applyResult = await sendDevdWifiConfig(devdBaseUrl, record.target.deviceId, leaseId, input);
+        await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+        const message = wifiConnectedMessage(input.ssid, applyResult.network);
+        onProgress?.({ phase: applyResult.network.ipv4 ? "connected" : "ip", message, network: applyResult.network });
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
               ? updateSerialSettings(candidate, {
                   wifi_configured: true,
                   wifi_ssid: input.ssid,
-                }, "wifi_config", `WiFi credentials saved for ${input.ssid}`)
+                }, "wifi_config", message)
               : candidate,
           ),
         );
-        return { ok: true };
+        return { ok: true, message, network: applyResult.network };
       } catch (error) {
         const envelope = toErrorEnvelope(error);
         setSerialCommandError(deviceId, envelope);
         return { ok: false, error: envelope };
       }
     }
+    if (!record.serial) return serialCommandUnavailable();
     const session = serialSessions.current.get(deviceId);
     if (!session) return serialCommandUnavailable();
     try {
+      onProgress?.({ phase: "saving", message: "Writing WiFi credentials to hardware" });
       await session.setWifiConfig(input.ssid, input.psk);
+      onProgress?.({ phase: "connecting", message: `Connecting to ${input.ssid} and waiting for an IP address` });
+      const status = await waitForSerialWifiConnected(session, input.ssid, onProgress);
+      const message = wifiConnectedMessage(input.ssid, status.network);
+      onProgress?.({ phase: status.network.ipv4 ? "connected" : "ip", message, network: status.network });
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
             ? updateSerialSettings(candidate, {
                 wifi_configured: true,
                 wifi_ssid: input.ssid,
-              }, "wifi_config", `WiFi credentials saved for ${input.ssid}`)
+              }, "wifi_config", message)
             : candidate,
         ),
       );
-      return { ok: true };
+      return { ok: true, message, network: status.network };
     } catch (error) {
       const envelope = errorFromSerialFailure(error);
       setSerialCommandError(deviceId, envelope);
@@ -764,10 +793,11 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     }
   }, [records, setSerialCommandError]);
 
-  const clearWifiConfig = useCallback(async (deviceId: string): Promise<CommandResult> => {
+  const clearWifiConfig = useCallback(async (deviceId: string, onProgress?: (progress: WifiProvisioningProgress) => void): Promise<CommandResult> => {
     const record = records.find((candidate) => candidate.target.deviceId === deviceId);
-    if (!record?.serial) return serialCommandUnavailable();
+    if (!record) return serialCommandUnavailable();
     if (record.target.mock) {
+      onProgress?.({ phase: "disabled", message: "WiFi credentials cleared and WiFi disconnected", network: { state: "disabled", ipv4: null, last_error: null } });
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
@@ -777,36 +807,47 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       );
       return { ok: true };
     }
-    if (isDevdSerial(record)) {
+    const devdBaseUrl = devdBaseUrlForRecord(record);
+    if (devdBaseUrl !== null) {
       try {
-        await clearDevdWifiConfig(record.serial.baseUrl ?? "", record.target.deviceId);
-        await updateDevdSerialSnapshot(record.target.deviceId, record.serial.baseUrl ?? "");
+        const leaseId = devdLeaseIdForRecord(record);
+        if (!leaseId) return serialCommandUnavailable();
+        onProgress?.({ phase: "clearing", message: "Clearing WiFi credentials from hardware" });
+        const applyResult = await clearDevdWifiConfig(devdBaseUrl, record.target.deviceId, leaseId);
+        await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+        const message = wifiDisabledMessage(applyResult.network);
+        onProgress?.({ phase: "disabled", message, network: applyResult.network });
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
-              ? updateSerialSettings(candidate, { wifi_configured: false, wifi_ssid: null }, "wifi_config", "WiFi credentials cleared")
+              ? updateSerialSettings(candidate, { wifi_configured: false, wifi_ssid: null }, "wifi_config", message)
               : candidate,
           ),
         );
-        return { ok: true };
+        return { ok: true, message, network: applyResult.network };
       } catch (error) {
         const envelope = toErrorEnvelope(error);
         setSerialCommandError(deviceId, envelope);
         return { ok: false, error: envelope };
       }
     }
+    if (!record.serial) return serialCommandUnavailable();
     const session = serialSessions.current.get(deviceId);
     if (!session) return serialCommandUnavailable();
     try {
+      onProgress?.({ phase: "clearing", message: "Clearing WiFi credentials from hardware" });
       await session.clearWifiConfig();
+      const status = await waitForSerialWifiDisabled(session, onProgress);
+      const message = wifiDisabledMessage(status.network);
+      onProgress?.({ phase: "disabled", message, network: status.network });
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
-            ? updateSerialSettings(candidate, { wifi_configured: false, wifi_ssid: null }, "wifi_config", "WiFi credentials cleared")
+            ? updateSerialSettings(candidate, { wifi_configured: false, wifi_ssid: null }, "wifi_config", message)
             : candidate,
         ),
       );
-      return { ok: true };
+      return { ok: true, message, network: status.network };
     } catch (error) {
       const envelope = errorFromSerialFailure(error);
       setSerialCommandError(deviceId, envelope);
@@ -816,17 +857,21 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
 
   const setSerialLogLevel = useCallback(async (deviceId: string, level: SafeSettingsState["log_level"]): Promise<CommandResult> => {
     const record = records.find((candidate) => candidate.target.deviceId === deviceId);
-    if (!record?.serial) return serialCommandUnavailable();
-    if (isDevdSerial(record)) {
+    if (!record) return serialCommandUnavailable();
+    const devdBaseUrl = devdBaseUrlForRecord(record);
+    if (devdBaseUrl !== null) {
       try {
-        await setDevdLogLevel(record.serial.baseUrl ?? "", record.target.deviceId, level);
-        await updateDevdSerialSnapshot(record.target.deviceId, record.serial.baseUrl ?? "");
+        const leaseId = devdLeaseIdForRecord(record);
+        if (!leaseId) return serialCommandUnavailable();
+        await setDevdLogLevel(devdBaseUrl, record.target.deviceId, leaseId, level);
+        await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
       } catch (error) {
         const envelope = toErrorEnvelope(error);
         setSerialCommandError(deviceId, envelope);
         return { ok: false, error: envelope };
       }
     } else if (!record.target.mock) {
+      if (!record.serial) return serialCommandUnavailable();
       const session = serialSessions.current.get(deviceId);
       if (!session) return serialCommandUnavailable();
       try {
@@ -849,17 +894,21 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
 
   const setManualChargePrefs = useCallback(async (deviceId: string, prefs: ManualChargePrefsInput): Promise<CommandResult> => {
     const record = records.find((candidate) => candidate.target.deviceId === deviceId);
-    if (!record?.serial) return serialCommandUnavailable();
-    if (isDevdSerial(record)) {
+    if (!record) return serialCommandUnavailable();
+    const devdBaseUrl = devdBaseUrlForRecord(record);
+    if (devdBaseUrl !== null) {
       try {
-        await setDevdManualChargePrefs(record.serial.baseUrl ?? "", record.target.deviceId, prefs);
-        await updateDevdSerialSnapshot(record.target.deviceId, record.serial.baseUrl ?? "");
+        const leaseId = devdLeaseIdForRecord(record);
+        if (!leaseId) return serialCommandUnavailable();
+        await setDevdManualChargePrefs(devdBaseUrl, record.target.deviceId, leaseId, prefs);
+        await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
       } catch (error) {
         const envelope = toErrorEnvelope(error);
         setSerialCommandError(deviceId, envelope);
         return { ok: false, error: envelope };
       }
     } else if (!record.target.mock) {
+      if (!record.serial) return serialCommandUnavailable();
       const session = serialSessions.current.get(deviceId);
       if (!session) return serialCommandUnavailable();
       try {
@@ -972,10 +1021,65 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   }
 
   async function updateDevdSerialSnapshot(deviceId: string, baseUrl: string) {
-    const session = await getDevdSerialSession(baseUrl, DEVD_SERIAL_SESSION_LIMITS);
+    const record = records.find((candidate) => candidate.target.deviceId === deviceId);
+    const leaseId = record?.serial?.leaseId;
+    if (!leaseId) throw new Error("devd Web lease is missing");
+    const session = await getDevdSerialSession(baseUrl, { ...DEVD_SERIAL_SESSION_LIMITS, leaseId });
     setRecords((current) =>
-      current.map((record) => (record.target.deviceId === deviceId ? mergeDevdSerial(record, baseUrl, session) : record)),
+      current.map((record) => (record.target.deviceId === deviceId ? mergeDevdSerial(record, baseUrl, session, {
+        lease_id: leaseId,
+        expires_at: record.serial?.leaseExpiresAt ?? "",
+        heartbeat_interval_ms: record.serial?.heartbeatIntervalMs ?? 2000,
+        lease_ttl_ms: record.serial?.leaseTtlMs ?? 8000,
+      }) : record)),
     );
+  }
+
+  function startDevdLeaseHeartbeat(record: DeviceRecord) {
+    const leaseId = record.serial?.leaseId;
+    const baseUrl = record.serial?.baseUrl ?? "";
+    if (!leaseId) return;
+    const existing = devdLeaseHeartbeats.current.get(record.target.deviceId);
+    if (existing !== undefined) window.clearInterval(existing);
+    const intervalMs = Math.max(1000, Math.min(record.serial?.heartbeatIntervalMs ?? 2000, 5000));
+    const heartbeat = window.setInterval(() => {
+      void heartbeatDevdWebLease(baseUrl, leaseId)
+        .then((lease) => {
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === record.target.deviceId && candidate.serial?.leaseId === leaseId
+                ? {
+                    ...candidate,
+                    streamState: candidate.streamState === "error" ? "polling" : candidate.streamState,
+                    serial: {
+                      ...candidate.serial,
+                      connected: true,
+                      leaseExpiresAt: lease.expires_at,
+                      heartbeatIntervalMs: lease.heartbeat_interval_ms,
+                      leaseTtlMs: lease.lease_ttl_ms,
+                    },
+                  }
+                : candidate,
+            ),
+          );
+        })
+        .catch((error) => {
+          const envelope = toErrorEnvelope(error);
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === record.target.deviceId && candidate.serial?.leaseId === leaseId
+                ? {
+                    ...candidate,
+                    streamState: "error",
+                    error: envelope,
+                    lastUpdated: new Date().toISOString(),
+                  }
+                : candidate,
+            ),
+          );
+        });
+    }, intervalMs);
+    devdLeaseHeartbeats.current.set(record.target.deviceId, heartbeat);
   }
 
   const removeDevice = useCallback((deviceId: string) => {
@@ -984,6 +1088,9 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     streams.current.delete(deviceId);
     devdStreams.current.get(deviceId)?.close();
     devdStreams.current.delete(deviceId);
+    const heartbeat = devdLeaseHeartbeats.current.get(deviceId);
+    if (heartbeat !== undefined) window.clearInterval(heartbeat);
+    devdLeaseHeartbeats.current.delete(deviceId);
     void serialSessions.current.get(deviceId)?.close();
     serialSessions.current.delete(deviceId);
     setRecords((current) => current.filter((record) => record.target.deviceId !== deviceId));
@@ -999,6 +1106,9 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     streams.current.clear();
     for (const stream of devdStreams.current.values()) stream.close();
     devdStreams.current.clear();
+    for (const heartbeat of devdLeaseHeartbeats.current.values()) window.clearInterval(heartbeat);
+    devdLeaseHeartbeats.current.clear();
+    for (const record of records) releaseDevdLeaseForRecord(record, true);
     for (const session of serialSessions.current.values()) void session.close();
     serialSessions.current.clear();
     setRecords(makeMockRecords("default"));
@@ -1172,11 +1282,13 @@ function recordFromSerialProbe(
   };
 }
 
-function recordFromDevdProbe(target: DeviceTarget, result: ProbeResult, session: DevdSerialSession): DeviceRecord {
-  return mergeDevdSerial(recordFromProbe(target, result, "online", "polling"), target.baseUrl, session);
+type DevdLeaseSnapshot = Pick<DevdWebLease, "lease_id" | "expires_at" | "heartbeat_interval_ms" | "lease_ttl_ms">;
+
+function recordFromDevdProbe(target: DeviceTarget, result: ProbeResult, session: DevdSerialSession, lease: DevdLeaseSnapshot): DeviceRecord {
+  return mergeDevdSerial(recordFromProbe(target, result, "online", "polling"), target.baseUrl, session, lease);
 }
 
-function mergeDevdSerial(record: DeviceRecord, baseUrl: string, session: DevdSerialSession): DeviceRecord {
+function mergeDevdSerial(record: DeviceRecord, baseUrl: string, session: DevdSerialSession, lease?: DevdLeaseSnapshot): DeviceRecord {
   return {
     ...record,
     target: {
@@ -1199,6 +1311,10 @@ function mergeDevdSerial(record: DeviceRecord, baseUrl: string, session: DevdSer
       connected: session.connected,
       source: "devd",
       baseUrl,
+      leaseId: lease?.lease_id ?? record.serial?.leaseId,
+      leaseExpiresAt: lease?.expires_at ?? record.serial?.leaseExpiresAt,
+      heartbeatIntervalMs: lease?.heartbeat_interval_ms ?? record.serial?.heartbeatIntervalMs,
+      leaseTtlMs: lease?.lease_ttl_ms ?? record.serial?.leaseTtlMs,
       protocol: session.protocol,
       status: session.status ?? null,
       logs: session.logs,
@@ -1210,10 +1326,19 @@ function mergeDevdSerial(record: DeviceRecord, baseUrl: string, session: DevdSer
 
 async function disconnectDevdSerialDevice(record: DeviceRecord): Promise<void> {
   const baseUrl = record.serial?.baseUrl ?? "";
+  if (record.serial?.leaseId) {
+    await releaseDevdWebLease(baseUrl, record.serial.leaseId);
+    return;
+  }
   const devices = await listDevdDevices(baseUrl);
   const devdDevice = devices.devices.find((device) => device.identity?.device_id === record.target.deviceId);
   if (!devdDevice) return;
   await disconnectDevdDevice(devdDevice.id, baseUrl);
+}
+
+function releaseDevdLeaseForRecord(record: DeviceRecord, keepalive = false) {
+  if (record.serial?.source !== "devd" || !record.serial.leaseId) return;
+  void releaseDevdWebLease(record.serial.baseUrl ?? "", record.serial.leaseId, keepalive).catch(() => undefined);
 }
 
 function upsertRecord(records: DeviceRecord[], record: DeviceRecord): DeviceRecord[] {
@@ -1253,6 +1378,16 @@ function mergeDeviceRecord(existing: DeviceRecord, incoming: DeviceRecord): Devi
 
 function isDevdSerial(record: DeviceRecord): record is DeviceRecord & { serial: NonNullable<DeviceRecord["serial"]> & { source: "devd"; baseUrl: string } } {
   return record.serial?.source === "devd" && Boolean(record.serial.baseUrl);
+}
+
+function devdBaseUrlForRecord(record: DeviceRecord): string | null {
+  if (record.serial?.source === "devd") return record.serial.baseUrl ?? "";
+  if (record.target.transport === "devd") return record.target.baseUrl ?? "";
+  return null;
+}
+
+function devdLeaseIdForRecord(record: DeviceRecord): string | null {
+  return record.serial?.source === "devd" ? record.serial.leaseId ?? null : null;
 }
 
 function defaultSafeSettings(): SafeSettingsState {
@@ -1337,6 +1472,21 @@ function firmwareArtifactMatchesIdentity(artifact: FirmwareArtifact, identity: I
   );
 }
 
+function firmwareMismatchError(identity: Identity): DeviceRecord["error"] {
+  return {
+    code: "firmware_artifact_mismatch",
+    message: `Connected firmware build ${identity.firmware.build_id} does not match any available firmware artifact. defmt decode and safe diagnostics may be wrong. Ignore only if you intentionally run an out-of-catalog build.`,
+    retryable: false,
+    details: {
+      device_id: identity.device_id,
+      build_id: identity.firmware.build_id,
+      git_sha: identity.firmware.git_sha,
+      build_profile: identity.firmware.build_profile,
+      features: identity.firmware.features,
+    },
+  };
+}
+
 function firmwareArtifactElfPath(artifact: FirmwareArtifact): string | null {
   const file = artifact.files.find((candidate) => candidate.kind === "elf");
   return file ? `/firmware/${file.path}` : null;
@@ -1412,4 +1562,69 @@ function serialCommandUnavailable(): CommandResult {
       details: null,
     },
   };
+}
+
+async function waitForSerialWifiConnected(
+  session: { requestStatus: () => Promise<UpsStatus> },
+  ssid: string,
+  onProgress?: (progress: WifiProvisioningProgress) => void,
+): Promise<UpsStatus> {
+  return waitForSerialWifiState(session, "connected", ssid, onProgress);
+}
+
+async function waitForSerialWifiDisabled(
+  session: { requestStatus: () => Promise<UpsStatus> },
+  onProgress?: (progress: WifiProvisioningProgress) => void,
+): Promise<UpsStatus> {
+  return waitForSerialWifiState(session, "disabled", undefined, onProgress);
+}
+
+async function waitForSerialWifiState(
+  session: { requestStatus: () => Promise<UpsStatus> },
+  expectedState: UpsStatus["network"]["state"],
+  ssid?: string,
+  onProgress?: (progress: WifiProvisioningProgress) => void,
+): Promise<UpsStatus> {
+  const deadline = Date.now() + 45_000;
+  let lastNetwork: UpsStatus["network"] | null = null;
+  while (Date.now() < deadline) {
+    const status = await session.requestStatus();
+    lastNetwork = status.network;
+    onProgress?.(wifiProgressFromNetwork(status.network, expectedState, ssid));
+    if (status.network.state === expectedState) return status;
+    if (expectedState !== "disabled" && status.network.state === "error") {
+      throw new Error(`wifi_connect_failed: ${status.network.last_error ?? "unknown"}`);
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 750));
+  }
+  throw new Error(`wifi_${expectedState}_timeout: last network state ${JSON.stringify(lastNetwork)}`);
+}
+
+function wifiProgressFromNetwork(
+  network: UpsStatus["network"],
+  expectedState: UpsStatus["network"]["state"],
+  ssid?: string,
+): WifiProvisioningProgress {
+  if (expectedState === "disabled") {
+    return network.state === "disabled"
+      ? { phase: "disabled", message: "WiFi credentials cleared and WiFi disconnected", network }
+      : { phase: "clearing", message: "Disconnecting WiFi and clearing runtime credentials", network };
+  }
+  if (network.state === "connected") {
+    return network.ipv4
+      ? { phase: "connected", message: wifiConnectedMessage(ssid ?? "network", network), network }
+      : { phase: "ip", message: "WiFi link is up. Waiting for an IP address", network };
+  }
+  if (network.state === "connecting") {
+    return { phase: "connecting", message: ssid ? `Connecting to ${ssid} and waiting for an IP address` : "Connecting to WiFi and waiting for an IP address", network };
+  }
+  return { phase: "starting", message: "Starting WiFi with the saved credentials", network };
+}
+
+function wifiConnectedMessage(ssid: string, network: { state: string; ipv4: string | null }): string {
+  return network.ipv4 ? `WiFi connected to ${ssid} at ${network.ipv4}` : `WiFi connected to ${ssid}`;
+}
+
+function wifiDisabledMessage(network: { state: string }): string {
+  return network.state === "disabled" ? "WiFi credentials cleared and WiFi disconnected" : "WiFi credentials cleared";
 }

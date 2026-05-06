@@ -32,6 +32,9 @@ use tower_http::{cors::CorsLayer, services::ServeDir};
 const DEFAULT_BIND: &str = "127.0.0.1:30080";
 const EVENT_LIMIT: usize = 1_000;
 const LOG_LIMIT: usize = 2_000;
+const WEB_LEASE_HEARTBEAT_INTERVAL_MS: u64 = 2_000;
+const WEB_LEASE_TTL_MS: u64 = 8_000;
+const WEB_LEASE_CLEANUP_INTERVAL_MS: u64 = 1_000;
 
 #[derive(Debug, Clone)]
 struct Config {
@@ -53,6 +56,15 @@ struct DevdState {
     artifacts: HashMap<String, FirmwareArtifact>,
     events: VecDeque<DevdEvent>,
     monitors: HashMap<String, NativeMonitorHandle>,
+    web_leases: HashMap<String, WebUsbLease>,
+}
+
+#[derive(Debug, Clone)]
+struct WebUsbLease {
+    lease_id: String,
+    device_id: String,
+    identity_device_id: Option<String>,
+    expires_at: std::time::Instant,
 }
 
 #[derive(Debug)]
@@ -243,6 +255,7 @@ struct DefmtDecodeRequest {
 struct SessionQuery {
     logs_limit: Option<usize>,
     trace_limit: Option<usize>,
+    lease_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -250,12 +263,14 @@ struct WifiConfigRequest {
     ssid: String,
     psk: String,
     device_id: Option<String>,
+    lease_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct LogLevelRequest {
     level: String,
     device_id: Option<String>,
+    lease_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -264,11 +279,23 @@ struct ManualChargeRequest {
     speed: String,
     timer_h: u8,
     device_id: Option<String>,
+    lease_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct SafeSettingsTargetQuery {
     device_id: Option<String>,
+    lease_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebLeaseCreateRequest {
+    device_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebLeaseQuery {
+    lease_id: Option<String>,
 }
 
 #[tokio::main]
@@ -290,6 +317,7 @@ async fn main() {
         events,
     };
     seed_mock_device(&state);
+    spawn_web_lease_reaper(state.clone());
 
     let mut app = Router::new()
         .route("/health", get(health))
@@ -320,6 +348,11 @@ async fn main() {
         .route("/api/v1/devices/{id}/monitor/stop", post(monitor_stop))
         .route("/api/v1/devices/{id}/session", get(device_session))
         .route("/api/v1/devices/{id}/events", get(device_events))
+        .route("/api/v1/serial/lease", post(create_web_lease))
+        .route(
+            "/api/v1/serial/lease/{lease_id}",
+            post(heartbeat_web_lease).delete(release_web_lease),
+        )
         .route("/api/v1/serial/session", get(devd_compat_session))
         .route("/api/v1/serial/events", get(devd_compat_events))
         .route("/api/v1/defmt/decode", post(defmt_decode))
@@ -407,6 +440,9 @@ async fn scan_devices(State(state): State<AppState>) -> Result<Json<Value>, Http
     let mut guard = state.inner.lock().expect("state lock");
     let mut seen_native_ids = HashSet::new();
     for port in ports {
+        if !is_native_usb_serial_candidate(&port) {
+            continue;
+        }
         let id = stable_device_id(&port);
         seen_native_ids.insert(id.clone());
         let port_path = port.port_name.clone();
@@ -512,6 +548,10 @@ async fn connect_device(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<DeviceRecord>, HttpError> {
+    Ok(Json(connect_device_inner(&state, id).await?))
+}
+
+async fn connect_device_inner(state: &AppState, id: String) -> Result<DeviceRecord, HttpError> {
     let (transport, native_port_path) = {
         let guard = state.inner.lock().expect("state lock");
         let device = guard
@@ -527,7 +567,14 @@ async fn connect_device(
                 "native serial device has no port path",
             )
         })?;
-        Some(read_native_identity_async(port_path).await?)
+        let monitor_command_tx = {
+            let guard = state.inner.lock().expect("state lock");
+            guard
+                .monitors
+                .get(&id)
+                .map(|monitor| monitor.command_tx.clone())
+        };
+        Some(read_device_identity_async(port_path, monitor_command_tx).await?)
     } else {
         None
     };
@@ -558,16 +605,20 @@ async fn connect_device(
     let device = device.clone();
     drop(guard);
     emit(&state, Some(id), "connect", "device connected", json!({}));
-    Ok(Json(device))
+    Ok(device)
 }
 
 async fn disconnect_device(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<DeviceRecord>, HttpError> {
+    Ok(Json(disconnect_device_inner(&state, &id).await?))
+}
+
+async fn disconnect_device_inner(state: &AppState, id: &str) -> Result<DeviceRecord, HttpError> {
     let stop = {
         let mut guard = state.inner.lock().expect("state lock");
-        guard.monitors.remove(&id)
+        guard.monitors.remove(id)
     };
     if let Some(stop) = stop {
         stop.stop.store(true, Ordering::SeqCst);
@@ -575,19 +626,116 @@ async fn disconnect_device(
     let mut guard = state.inner.lock().expect("state lock");
     let device = guard
         .devices
-        .get_mut(&id)
+        .get_mut(id)
         .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
     device.connection = ConnectionState::Disconnected;
     let device = device.clone();
     drop(guard);
     emit(
         &state,
-        Some(id),
+        Some(id.to_string()),
         "disconnect",
         "device disconnected",
         json!({}),
     );
-    Ok(Json(device))
+    Ok(device)
+}
+
+async fn create_web_lease(
+    State(state): State<AppState>,
+    Json(input): Json<WebLeaseCreateRequest>,
+) -> Result<Json<Value>, HttpError> {
+    cleanup_expired_web_leases(&state).await;
+    {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&input.device_id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        if matches!(device.transport, DeviceTransport::Mock) {
+            return Err(HttpError::non_retryable(
+                "device_not_usb",
+                "web USB lease requires a native serial device",
+            ));
+        }
+        if let Some(existing) = active_lease_for_device(&guard, &input.device_id) {
+            return Err(HttpError::non_retryable(
+                "device_lease_conflict",
+                format!(
+                    "device already has an active Web lease: {}",
+                    existing.lease_id
+                ),
+            ));
+        }
+    }
+
+    let device = connect_device_inner(&state, input.device_id.clone()).await?;
+    let identity_device_id = device
+        .identity
+        .as_ref()
+        .and_then(|identity| identity.get("device_id"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let lease_id = next_id();
+    let expires_at = std::time::Instant::now() + Duration::from_millis(WEB_LEASE_TTL_MS);
+    {
+        let mut guard = state.inner.lock().expect("state lock");
+        guard.web_leases.insert(
+            lease_id.clone(),
+            WebUsbLease {
+                lease_id: lease_id.clone(),
+                device_id: input.device_id.clone(),
+                identity_device_id: identity_device_id.clone(),
+                expires_at,
+            },
+        );
+    }
+    emit(
+        &state,
+        Some(input.device_id.clone()),
+        "web_lease",
+        "web USB lease created",
+        json!({"lease_id": lease_id, "identity_device_id": identity_device_id}),
+    );
+    Ok(Json(json!({
+        "lease_id": lease_id,
+        "device_id": input.device_id,
+        "identity_device_id": identity_device_id,
+        "expires_at": lease_expires_at_string(WEB_LEASE_TTL_MS),
+        "heartbeat_interval_ms": WEB_LEASE_HEARTBEAT_INTERVAL_MS,
+        "lease_ttl_ms": WEB_LEASE_TTL_MS,
+        "device": device
+    })))
+}
+
+async fn heartbeat_web_lease(
+    State(state): State<AppState>,
+    Path(lease_id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    cleanup_expired_web_leases(&state).await;
+    let mut guard = state.inner.lock().expect("state lock");
+    let lease = guard.web_leases.get_mut(&lease_id).ok_or_else(|| {
+        HttpError::non_retryable("web_session_expired", "Web USB lease is expired")
+    })?;
+    lease.expires_at = std::time::Instant::now() + Duration::from_millis(WEB_LEASE_TTL_MS);
+    let device_id = lease.device_id.clone();
+    let identity_device_id = lease.identity_device_id.clone();
+    Ok(Json(json!({
+        "lease_id": lease_id,
+        "device_id": device_id,
+        "identity_device_id": identity_device_id,
+        "expires_at": lease_expires_at_string(WEB_LEASE_TTL_MS),
+        "heartbeat_interval_ms": WEB_LEASE_HEARTBEAT_INTERVAL_MS,
+        "lease_ttl_ms": WEB_LEASE_TTL_MS
+    })))
+}
+
+async fn release_web_lease(
+    State(state): State<AppState>,
+    Path(lease_id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    let released = release_web_lease_inner(&state, &lease_id, "released").await?;
+    Ok(Json(json!({"ok": true, "released": released})))
 }
 
 async fn unbind_device(
@@ -827,6 +975,15 @@ async fn set_wifi_config(
     State(state): State<AppState>,
     Json(input): Json<WifiConfigRequest>,
 ) -> Result<Json<Value>, HttpError> {
+    {
+        let guard = state.inner.lock().expect("state lock");
+        ensure_web_lease_for_target(
+            &guard,
+            input.device_id.as_deref(),
+            input.lease_id.as_deref(),
+        )?;
+    }
+    ensure_wifi_runtime_supported(&state, input.device_id.as_deref())?;
     let ssid = input.ssid.clone();
     let response = send_safe_settings_frame(
         &state,
@@ -840,13 +997,26 @@ async fn set_wifi_config(
         "WiFi credentials saved through mains-aegis-devd",
     )
     .await?;
-    Ok(Json(response))
+    let network = wait_for_wifi_connected(&state, input.device_id.as_deref()).await?;
+    Ok(Json(json!({
+        "wifi_config": response,
+        "network": network,
+        "applied": true
+    })))
 }
 
 async fn clear_wifi_config(
     State(state): State<AppState>,
     Query(query): Query<SafeSettingsTargetQuery>,
 ) -> Result<Json<Value>, HttpError> {
+    {
+        let guard = state.inner.lock().expect("state lock");
+        ensure_web_lease_for_target(
+            &guard,
+            query.device_id.as_deref(),
+            query.lease_id.as_deref(),
+        )?;
+    }
     let response = send_safe_settings_frame(
         &state,
         json!({"type": "wifi_config", "op": "clear"}),
@@ -859,13 +1029,26 @@ async fn clear_wifi_config(
         "WiFi credentials cleared through mains-aegis-devd",
     )
     .await?;
-    Ok(Json(response))
+    let network = wait_for_wifi_state(&state, query.device_id.as_deref(), "disabled").await?;
+    Ok(Json(json!({
+        "wifi_config": response,
+        "network": network,
+        "applied": true
+    })))
 }
 
 async fn set_log_level(
     State(state): State<AppState>,
     Json(input): Json<LogLevelRequest>,
 ) -> Result<Json<Value>, HttpError> {
+    {
+        let guard = state.inner.lock().expect("state lock");
+        ensure_web_lease_for_target(
+            &guard,
+            input.device_id.as_deref(),
+            input.lease_id.as_deref(),
+        )?;
+    }
     let level = input.level.clone();
     let response = send_safe_settings_frame(
         &state,
@@ -883,6 +1066,14 @@ async fn set_manual_charge(
     State(state): State<AppState>,
     Json(input): Json<ManualChargeRequest>,
 ) -> Result<Json<Value>, HttpError> {
+    {
+        let guard = state.inner.lock().expect("state lock");
+        ensure_web_lease_for_target(
+            &guard,
+            input.device_id.as_deref(),
+            input.lease_id.as_deref(),
+        )?;
+    }
     let prefs = ManualChargePrefs {
         target: input.target.clone(),
         speed: input.speed.clone(),
@@ -981,6 +1172,7 @@ async fn device_session(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
     let guard = state.inner.lock().expect("state lock");
+    ensure_web_lease_for_target(&guard, Some(&id), query.lease_id.as_deref())?;
     let device = guard
         .devices
         .get(&id)
@@ -1000,27 +1192,26 @@ async fn device_session(
 async fn devd_compat_session(
     Query(query): Query<SessionQuery>,
     State(state): State<AppState>,
-) -> Json<Value> {
+) -> Result<Json<Value>, HttpError> {
     let guard = state.inner.lock().expect("state lock");
-    let device = select_compat_device(&guard);
-    Json(json!({
-        "connected": device.map(|d| matches!(d.connection, ConnectionState::Connected)).unwrap_or(false),
+    let device = select_compat_device(&guard, query.lease_id.as_deref())?;
+    Ok(Json(json!({
+        "connected": matches!(device.connection, ConnectionState::Connected),
         "protocol": "mains-aegis.cdc.v1",
-        "status": device.and_then(|d| d.status.clone()),
-        "logs": device.map(|d| tail(&d.logs, query.logs_limit.unwrap_or(200).min(500))).unwrap_or_default(),
-        "trace": device.map(|d| tail(&d.trace, query.trace_limit.unwrap_or(600).min(2_000))).unwrap_or_default(),
-        "safeSettings": device.map(|d| json!(d.safe_settings)).unwrap_or_else(|| json!(default_safe_settings()))
-    }))
+        "identity": device.identity,
+        "status": device.status,
+        "logs": tail(&device.logs, query.logs_limit.unwrap_or(200).min(500)),
+        "trace": tail(&device.trace, query.trace_limit.unwrap_or(600).min(2_000)),
+        "safeSettings": device.safe_settings
+    })))
 }
 
-async fn devd_compat_identity(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
+async fn devd_compat_identity(
+    Query(query): Query<WebLeaseQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, HttpError> {
     let guard = state.inner.lock().expect("state lock");
-    let device = select_compat_device(&guard).ok_or_else(|| {
-        HttpError::not_found(
-            "identity_unavailable",
-            "no device identity is available through devd",
-        )
-    })?;
+    let device = select_compat_device(&guard, query.lease_id.as_deref())?;
     let identity = device.identity.clone().ok_or_else(|| {
         HttpError::non_retryable(
             "identity_unavailable",
@@ -1030,8 +1221,11 @@ async fn devd_compat_identity(State(state): State<AppState>) -> Result<Json<Valu
     Ok(Json(identity))
 }
 
-async fn devd_compat_network(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
-    let Json(identity) = devd_compat_identity(State(state)).await?;
+async fn devd_compat_network(
+    Query(query): Query<WebLeaseQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, HttpError> {
+    let Json(identity) = devd_compat_identity(Query(query), State(state)).await?;
     let network = identity.get("network").cloned().ok_or_else(|| {
         HttpError::non_retryable(
             "network_unavailable",
@@ -1041,14 +1235,12 @@ async fn devd_compat_network(State(state): State<AppState>) -> Result<Json<Value
     Ok(Json(network))
 }
 
-async fn devd_compat_status(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
+async fn devd_compat_status(
+    Query(query): Query<WebLeaseQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, HttpError> {
     let guard = state.inner.lock().expect("state lock");
-    let device = select_compat_device(&guard).ok_or_else(|| {
-        HttpError::not_found(
-            "status_unavailable",
-            "no device status is available through devd",
-        )
-    })?;
+    let device = select_compat_device(&guard, query.lease_id.as_deref())?;
     if let Some(status) = device.status.clone() {
         return Ok(Json(status));
     }
@@ -1106,40 +1298,44 @@ async fn devd_compat_status(State(state): State<AppState>) -> Result<Json<Value>
     })))
 }
 
-fn select_compat_device(state: &DevdState) -> Option<&DeviceRecord> {
-    let mut devices = state.devices.values().collect::<Vec<_>>();
-    devices.sort_by(|left, right| left.id.cmp(&right.id));
-    devices
-        .iter()
-        .copied()
-        .find(|device| {
-            matches!(device.connection, ConnectionState::Connected)
-                && !matches!(device.transport, DeviceTransport::Mock)
-        })
-        .or_else(|| {
-            devices.iter().copied().find(|device| {
-                !matches!(device.transport, DeviceTransport::Mock) && device.identity.is_some()
-            })
-        })
-        .or_else(|| {
-            devices.iter().copied().find(|device| {
-                !matches!(device.transport, DeviceTransport::Mock)
-                    && (!device.trace.is_empty() || !device.logs.is_empty())
-            })
-        })
-        .or_else(|| {
-            devices
-                .iter()
-                .copied()
-                .find(|device| matches!(device.connection, ConnectionState::Connected))
-        })
-        .or_else(|| {
-            devices
-                .iter()
-                .copied()
-                .find(|device| !matches!(device.transport, DeviceTransport::Mock))
-        })
-        .or_else(|| devices.first().copied())
+fn select_compat_device<'a>(
+    state: &'a DevdState,
+    lease_id: Option<&str>,
+) -> Result<&'a DeviceRecord, HttpError> {
+    let lease = if let Some(lease_id) = lease_id {
+        active_lease_by_id(state, lease_id).ok_or_else(|| {
+            HttpError::non_retryable("web_session_expired", "Web USB lease is expired")
+        })?
+    } else {
+        let active = state
+            .web_leases
+            .iter()
+            .filter(|(_, lease)| lease.expires_at > std::time::Instant::now())
+            .map(|(lease_id, _)| lease_id.as_str())
+            .collect::<Vec<_>>();
+        match active.as_slice() {
+            [lease_id] => state
+                .web_leases
+                .get(*lease_id)
+                .expect("active lease exists"),
+            [] => {
+                return Err(HttpError::non_retryable(
+                    "web_session_required",
+                    "Web USB lease is required for devd USB control",
+                ))
+            }
+            _ => {
+                return Err(HttpError::non_retryable(
+                    "device_selection_required",
+                    "multiple Web USB leases are active; specify lease_id",
+                ))
+            }
+        }
+    };
+    state
+        .devices
+        .get(&lease.device_id)
+        .ok_or_else(|| HttpError::not_found("device_not_found", "leased device is not known"))
 }
 
 async fn send_safe_settings_frame<F>(
@@ -1198,6 +1394,240 @@ where
         log_message,
     );
     Ok(result)
+}
+
+fn ensure_wifi_runtime_supported(
+    state: &AppState,
+    target_device_id: Option<&str>,
+) -> Result<(), HttpError> {
+    let guard = state.inner.lock().expect("state lock");
+    let device = select_control_device(&guard, target_device_id)?;
+    let features = device
+        .identity
+        .as_ref()
+        .and_then(|identity| identity.get("firmware"))
+        .and_then(|firmware| firmware.get("features"))
+        .and_then(Value::as_array);
+    let has_net_http = features.is_some_and(|features| {
+        features
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|feature| feature == "net_http")
+    });
+    if has_net_http {
+        return Ok(());
+    }
+    Err(HttpError::non_retryable(
+        "wifi_runtime_unavailable",
+        "connected firmware was built without net_http; WiFi credentials can be stored but this firmware cannot start WiFi or connect until a net_http build is flashed",
+    ))
+}
+
+async fn wait_for_wifi_connected(
+    state: &AppState,
+    target_device_id: Option<&str>,
+) -> Result<Value, HttpError> {
+    wait_for_wifi_state(state, target_device_id, "connected").await
+}
+
+async fn wait_for_wifi_state(
+    state: &AppState,
+    target_device_id: Option<&str>,
+    expected_state: &str,
+) -> Result<Value, HttpError> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(45);
+    let mut last_network = Value::Null;
+    while std::time::Instant::now() < deadline {
+        let (device_id, port_path, monitor_command_tx) = {
+            let guard = state.inner.lock().expect("state lock");
+            let device = select_control_device(&guard, target_device_id)?;
+            (
+                device.id.clone(),
+                device.port_path.clone(),
+                guard
+                    .monitors
+                    .get(&device.id)
+                    .map(|monitor| monitor.command_tx.clone()),
+            )
+        };
+        let request_id = format!("devd-wifi-status-{}", Utc::now().timestamp_millis());
+        let frame = json!({"type": "request", "request_id": request_id, "op": "get_status"});
+        let response = if let Some(command_tx) = monitor_command_tx {
+            send_monitor_cdc_frame_async(command_tx, frame, request_id).await?
+        } else {
+            let port_path = port_path.ok_or_else(|| {
+                HttpError::retryable(
+                    "device_port_missing",
+                    "native serial device has no port path",
+                )
+            })?;
+            send_native_cdc_frame_async(port_path, frame, request_id).await?
+        };
+        let status = response.get("result").cloned().unwrap_or(Value::Null);
+        let network = status.get("network").cloned().unwrap_or(Value::Null);
+        if !network.is_null() {
+            update_device_status_snapshot(state, &device_id, status.clone());
+            last_network = network.clone();
+        }
+        match network.get("state").and_then(Value::as_str) {
+            Some(state) if state == expected_state => return Ok(network),
+            Some("error") if expected_state != "disabled" => {
+                return Err(HttpError::retryable(
+                    "wifi_connect_failed",
+                    format!(
+                        "WiFi failed to connect: {}",
+                        network
+                            .get("last_error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown")
+                    ),
+                ));
+            }
+            _ => tokio::time::sleep(Duration::from_millis(750)).await,
+        }
+    }
+    Err(HttpError::retryable(
+        if expected_state == "disabled" {
+            "wifi_disconnect_timeout"
+        } else {
+            "wifi_connect_timeout"
+        },
+        format!(
+            "timed out waiting for WiFi state {expected_state}; last network state: {last_network}"
+        ),
+    ))
+}
+
+fn update_device_status_snapshot(state: &AppState, device_id: &str, status: Value) {
+    let mut guard = state.inner.lock().expect("state lock");
+    if let Some(device) = guard.devices.get_mut(device_id) {
+        device.status = Some(status.clone());
+    }
+    drop(guard);
+    emit(
+        state,
+        Some(device_id.to_string()),
+        "serial_status",
+        "CDC status snapshot",
+        json!({"status": status}),
+    );
+}
+
+fn spawn_web_lease_reaper(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(WEB_LEASE_CLEANUP_INTERVAL_MS)).await;
+            cleanup_expired_web_leases(&state).await;
+        }
+    });
+}
+
+async fn cleanup_expired_web_leases(state: &AppState) {
+    let expired = {
+        let guard = state.inner.lock().expect("state lock");
+        let now = std::time::Instant::now();
+        guard
+            .web_leases
+            .iter()
+            .filter_map(|(lease_id, lease)| {
+                if lease.expires_at <= now {
+                    Some(lease_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    for lease_id in expired {
+        let _ = release_web_lease_inner(state, &lease_id, "expired").await;
+    }
+}
+
+async fn release_web_lease_inner(
+    state: &AppState,
+    lease_id: &str,
+    reason: &str,
+) -> Result<bool, HttpError> {
+    let lease = {
+        let mut guard = state.inner.lock().expect("state lock");
+        guard.web_leases.remove(lease_id)
+    };
+    let Some(lease) = lease else {
+        return Ok(false);
+    };
+    let should_disconnect = {
+        let guard = state.inner.lock().expect("state lock");
+        active_lease_for_device(&guard, &lease.device_id).is_none()
+    };
+    if should_disconnect {
+        let _ = disconnect_device_inner(state, &lease.device_id).await;
+    }
+    emit(
+        state,
+        Some(lease.device_id),
+        "web_lease",
+        format!("web USB lease {reason}").as_str(),
+        json!({"lease_id": lease_id}),
+    );
+    Ok(true)
+}
+
+fn active_lease_for_device<'a>(state: &'a DevdState, device_id: &str) -> Option<&'a WebUsbLease> {
+    let now = std::time::Instant::now();
+    state
+        .web_leases
+        .values()
+        .find(|lease| lease.device_id == device_id && lease.expires_at > now)
+}
+
+fn active_lease_by_id<'a>(state: &'a DevdState, lease_id: &str) -> Option<&'a WebUsbLease> {
+    let now = std::time::Instant::now();
+    state
+        .web_leases
+        .get(lease_id)
+        .filter(|lease| lease.expires_at > now)
+}
+
+fn lease_expires_at_string(ttl_ms: u64) -> String {
+    (Utc::now() + chrono::Duration::milliseconds(ttl_ms as i64)).to_rfc3339()
+}
+
+fn device_matches_target(device: &DeviceRecord, target_device_id: &str) -> bool {
+    device.id == target_device_id
+        || device
+            .identity
+            .as_ref()
+            .and_then(|identity| identity.get("device_id"))
+            .and_then(Value::as_str)
+            == Some(target_device_id)
+}
+
+fn ensure_web_lease_for_target(
+    state: &DevdState,
+    target_device_id: Option<&str>,
+    lease_id: Option<&str>,
+) -> Result<(), HttpError> {
+    let Some(lease_id) = lease_id else {
+        return Err(HttpError::non_retryable(
+            "web_session_required",
+            "Web USB lease is required for devd USB control",
+        ));
+    };
+    let lease = active_lease_by_id(state, lease_id).ok_or_else(|| {
+        HttpError::non_retryable("web_session_expired", "Web USB lease is expired")
+    })?;
+    if let Some(target_device_id) = target_device_id {
+        let device = state.devices.get(&lease.device_id).ok_or_else(|| {
+            HttpError::not_found("device_not_found", "leased device is not known")
+        })?;
+        if !device_matches_target(device, target_device_id) {
+            return Err(HttpError::non_retryable(
+                "web_session_device_mismatch",
+                "Web USB lease does not match the requested device",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn select_control_device<'a>(
@@ -1369,26 +1799,21 @@ where
 }
 
 fn parse_matching_cdc_response(line: &[u8], request_id: &str) -> Result<Option<Value>, HttpError> {
-    let Ok(text) = std::str::from_utf8(line) else {
-        return Ok(None);
-    };
-    let Ok(frame) = serde_json::from_str::<Value>(text.trim()) else {
-        return Ok(None);
-    };
-    let matches_request = frame
-        .get("request_id")
-        .and_then(Value::as_str)
-        .is_some_and(|candidate| candidate == request_id);
-    if matches_request
-        && matches!(
-            frame.get("type").and_then(Value::as_str),
-            Some("response" | "error")
-        )
-    {
-        Ok(Some(frame))
-    } else {
-        Ok(None)
+    for frame in json_frames_from_cdc_line(line) {
+        let matches_request = frame
+            .get("request_id")
+            .and_then(Value::as_str)
+            .is_some_and(|candidate| candidate == request_id);
+        if matches_request
+            && matches!(
+                frame.get("type").and_then(Value::as_str),
+                Some("response" | "error")
+            )
+        {
+            return Ok(Some(frame));
+        }
     }
+    Ok(None)
 }
 
 fn record_safe_settings_success<F>(
@@ -1472,9 +1897,15 @@ fn error_from_cdc_response(response: &Value) -> HttpError {
 }
 
 async fn device_events(
+    Query(query): Query<WebLeaseQuery>,
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Sse<impl futures_core::Stream<Item = Result<Event, std::convert::Infallible>>> {
+) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, std::convert::Infallible>>>, HttpError>
+{
+    {
+        let guard = state.inner.lock().expect("state lock");
+        ensure_web_lease_for_target(&guard, Some(&id), query.lease_id.as_deref())?;
+    }
     let receiver = state.events.subscribe();
     let stream = async_stream::stream! {
         let mut receiver = receiver;
@@ -1484,22 +1915,32 @@ async fn device_events(
             }
         }
     };
-    Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+    Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
 }
 
 async fn devd_compat_events(
+    Query(query): Query<WebLeaseQuery>,
     State(state): State<AppState>,
-) -> Sse<impl futures_core::Stream<Item = Result<Event, std::convert::Infallible>>> {
+) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, std::convert::Infallible>>>, HttpError>
+{
+    let leased_device_id = {
+        let guard = state.inner.lock().expect("state lock");
+        select_compat_device(&guard, query.lease_id.as_deref())?
+            .id
+            .clone()
+    };
     let receiver = state.events.subscribe();
     let stream = async_stream::stream! {
         let mut receiver = receiver;
         while let Ok(event) = receiver.recv().await {
-            if matches!(event.kind.as_str(), "serial_trace" | "serial_log" | "serial_status" | "monitor") {
+            if matches!(event.kind.as_str(), "serial_trace" | "serial_log" | "serial_status" | "monitor")
+                && (event.device_id.as_deref() == Some(leased_device_id.as_str()) || event.device_id.is_none())
+            {
                 yield Ok(Event::default().event(event.kind.clone()).id(event.id.clone()).json_data(event).expect("serialize event"));
             }
         }
     };
-    Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+    Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
 }
 
 async fn defmt_decode(Json(input): Json<DefmtDecodeRequest>) -> Result<Json<Value>, HttpError> {
@@ -1762,6 +2203,20 @@ fn serial_path_score(path: &str) -> u8 {
     }
 }
 
+fn is_native_usb_serial_candidate(port: &serialport::SerialPortInfo) -> bool {
+    let port_name = port.port_name.to_ascii_lowercase();
+    if port_name.contains("bluetooth") || port_name.contains("debug-console") {
+        return false;
+    }
+    if matches!(port.port_type, serialport::SerialPortType::UsbPort(_)) {
+        return true;
+    }
+    port_name.contains("usbmodem")
+        || port_name.contains("usbserial")
+        || port_name.contains("wchusbserial")
+        || port_name.contains("slab_usb")
+}
+
 fn stable_device_id(port: &serialport::SerialPortInfo) -> String {
     let mut hash = Sha256::new();
     match &port.port_type {
@@ -1802,7 +2257,7 @@ fn mock_identity(id: &str) -> Value {
             "git_sha": "unknown",
             "src_hash": "unknown",
             "git_dirty": "unknown",
-            "features": ["web_serial"],
+            "features": ["net_http", "web_serial"],
             "protocol": "mains-aegis.cdc.v1",
             "defmt": {"enabled": true, "encoding": "defmt-espflash", "table_hash": null}
         },
@@ -1826,6 +2281,24 @@ async fn read_native_identity_async(port_path: String) -> Result<Value, HttpErro
     tokio::task::spawn_blocking(move || read_native_identity(&port_path))
         .await
         .map_err(|error| HttpError::retryable("native_identity_join_failed", error.to_string()))?
+}
+
+async fn read_device_identity_async(
+    port_path: String,
+    monitor_command_tx: Option<mpsc::Sender<NativeMonitorCommand>>,
+) -> Result<Value, HttpError> {
+    if let Some(command_tx) = monitor_command_tx {
+        let request_id = "devd-identity".to_string();
+        let frame = json!({"type": "request", "request_id": request_id, "op": "get_identity"});
+        let response = send_monitor_cdc_frame_async(command_tx, frame, request_id).await?;
+        return response.get("result").cloned().ok_or_else(|| {
+            HttpError::retryable(
+                "native_identity_missing",
+                "identity response did not include result",
+            )
+        });
+    }
+    read_native_identity_async(port_path).await
 }
 
 async fn reset_native_serial_async(port_path: String) -> Result<(), HttpError> {
@@ -2143,24 +2616,46 @@ fn read_native_identity(port_path: &str) -> Result<Value, HttpError> {
 }
 
 fn parse_identity_line(line: &[u8]) -> Result<Option<Value>, HttpError> {
-    let Ok(text) = std::str::from_utf8(line) else {
-        return Ok(None);
-    };
-    let Ok(frame) = serde_json::from_str::<Value>(text.trim()) else {
-        return Ok(None);
-    };
-    match frame.get("type").and_then(Value::as_str) {
-        Some("response")
-            if frame.get("request_id").and_then(Value::as_str) == Some("devd-identity") =>
-        {
-            Ok(frame.get("result").cloned())
+    for frame in json_frames_from_cdc_line(line) {
+        match frame.get("type").and_then(Value::as_str) {
+            Some("response")
+                if frame.get("request_id").and_then(Value::as_str) == Some("devd-identity") =>
+            {
+                return Ok(frame.get("result").cloned());
+            }
+            Some("hello") => return Ok(frame.get("identity").cloned()),
+            _ => {}
         }
-        Some("hello") => Ok(frame.get("identity").cloned()),
-        _ => Ok(None),
     }
+    Ok(None)
 }
 
 fn parse_cdc_line_for_monitor(line: &[u8]) -> Option<(SerialTraceEntry, Option<SerialLogEntry>)> {
+    if let Some(frame) = json_frames_from_cdc_line(line).into_iter().next() {
+        let payload = serde_json::to_string(&frame).ok()?;
+        let trace = trace_entry("rx", &payload);
+        let log =
+            (frame.get("type").and_then(Value::as_str) == Some("log")).then(|| SerialLogEntry {
+                id: next_id(),
+                timestamp: now(),
+                level: frame
+                    .get("level")
+                    .and_then(Value::as_str)
+                    .unwrap_or("info")
+                    .to_string(),
+                target: frame
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .unwrap_or("usb_cdc")
+                    .to_string(),
+                message: frame
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("CDC log")
+                    .to_string(),
+            });
+        return Some((trace, log));
+    }
     let Ok(text) = std::str::from_utf8(line) else {
         return Some((
             raw_trace_entry("rx", "defmt", "defmt binary frame", &hex_preview(line)),
@@ -2195,6 +2690,48 @@ fn parse_cdc_line_for_monitor(line: &[u8]) -> Option<(SerialTraceEntry, Option<S
                 .to_string(),
         });
     Some((trace, log))
+}
+
+fn json_frames_from_cdc_line(line: &[u8]) -> Vec<Value> {
+    let mut frames = Vec::new();
+    for (start, byte) in line.iter().enumerate() {
+        if *byte != b'{' {
+            continue;
+        }
+        let mut depth = 0usize;
+        let mut in_string = false;
+        let mut escape = false;
+        for (offset, current) in line[start..].iter().enumerate() {
+            if in_string {
+                if escape {
+                    escape = false;
+                } else if *current == b'\\' {
+                    escape = true;
+                } else if *current == b'"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            match *current {
+                b'"' => in_string = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        let end = start + offset + 1;
+                        if let Ok(text) = std::str::from_utf8(&line[start..end]) {
+                            if let Ok(frame) = serde_json::from_str::<Value>(text) {
+                                frames.push(frame);
+                            }
+                        }
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    frames
 }
 
 fn trace_entry(direction: &str, payload: &str) -> SerialTraceEntry {
@@ -2442,6 +2979,32 @@ mod tests {
     }
 
     #[test]
+    fn native_usb_serial_candidate_filters_virtual_ports() {
+        assert!(is_native_usb_serial_candidate(&usb_port(
+            "/dev/cu.usbmodem1",
+            Some("board-a")
+        )));
+        assert!(is_native_usb_serial_candidate(
+            &serialport::SerialPortInfo {
+                port_name: "/dev/cu.usbmodem212101".into(),
+                port_type: serialport::SerialPortType::Unknown,
+            }
+        ));
+        assert!(!is_native_usb_serial_candidate(
+            &serialport::SerialPortInfo {
+                port_name: "/dev/cu.Bluetooth-Incoming-Port".into(),
+                port_type: serialport::SerialPortType::Unknown,
+            }
+        ));
+        assert!(!is_native_usb_serial_candidate(
+            &serialport::SerialPortInfo {
+                port_name: "/dev/tty.debug-console".into(),
+                port_type: serialport::SerialPortType::Unknown,
+            }
+        ));
+    }
+
+    #[test]
     fn redacts_wifi_psk_from_cdc_trace_frames() {
         let frame = json!({
             "type": "wifi_config",
@@ -2456,6 +3019,26 @@ mod tests {
         assert_eq!(frame["psk"], "super-secret");
         assert_eq!(redacted["psk"], "[redacted]");
         assert_eq!(redacted["ssid"], "lab");
+    }
+
+    #[test]
+    fn parses_json_frame_embedded_in_defmt_line() {
+        let mut line = vec![0x62, 0x7f, 0x00, 0xff, 0x00];
+        line.extend_from_slice(
+            br#"{"type":"response","request_id":"devd-identity","ok":true,"result":{"device_id":"mains-aegis-test"}}"#,
+        );
+        line.extend_from_slice(&[0x07, 0xea, 0x01]);
+
+        let identity = parse_identity_line(&line).unwrap().unwrap();
+        let response = parse_matching_cdc_response(&line, "devd-identity")
+            .unwrap()
+            .unwrap();
+        let monitor = parse_cdc_line_for_monitor(&line).unwrap().0;
+
+        assert_eq!(identity["device_id"], "mains-aegis-test");
+        assert_eq!(response["request_id"], "devd-identity");
+        assert_eq!(monitor.kind, "frame");
+        assert_eq!(monitor.frame_type.as_deref(), Some("response"));
     }
 
     #[test]

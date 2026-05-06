@@ -263,14 +263,6 @@ fn git_dirty_state(manifest_dir: &Path) -> &'static str {
 
 fn emit_wifi_env(repo_root: Option<&Path>) {
     let cfg = wifi_env::WifiEnvConfig::from_sources(repo_root);
-    let net_http_enabled = std::env::var_os("CARGO_FEATURE_NET_HTTP").is_some();
-    if net_http_enabled {
-        if let Err(err) = cfg.require_station_credentials() {
-            eprintln!("error: {}", err);
-            std::process::exit(1);
-        }
-    }
-
     for key in wifi_env::WIFI_ENV_KEYS {
         if let Some(value) = cfg.get(key) {
             println!("cargo:rustc-env={}={}", key, value);

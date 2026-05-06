@@ -4,9 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const WIFI_ENV_KEYS: [&str; 7] = [
-    "MAINS_AEGIS_WIFI_SSID",
-    "MAINS_AEGIS_WIFI_PSK",
+pub const WIFI_ENV_KEYS: [&str; 5] = [
     "MAINS_AEGIS_WIFI_HOSTNAME",
     "MAINS_AEGIS_WIFI_STATIC_IP",
     "MAINS_AEGIS_WIFI_NETMASK",
@@ -43,22 +41,6 @@ impl WifiEnvConfig {
 
     pub fn get(&self, key: &str) -> Option<&str> {
         self.values.get(key).map(|value| value.as_str())
-    }
-
-    pub fn require_station_credentials(&self) -> Result<(&str, &str), String> {
-        let ssid = self
-            .get("MAINS_AEGIS_WIFI_SSID")
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| {
-                "missing MAINS_AEGIS_WIFI_SSID (set it in .env or environment)".to_string()
-            })?;
-        let psk = self
-            .get("MAINS_AEGIS_WIFI_PSK")
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| {
-                "missing MAINS_AEGIS_WIFI_PSK (set it in .env or environment)".to_string()
-            })?;
-        Ok((ssid, psk))
     }
 }
 
@@ -101,8 +83,8 @@ pub fn load_env_file(path: &Path) -> HashMap<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{candidate_env_paths, load_env_file, WifiEnvConfig};
-    use std::{collections::HashMap, fs, path::PathBuf};
+    use super::{candidate_env_paths, load_env_file};
+    use std::{fs, path::PathBuf};
 
     fn temp_env_root() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -133,8 +115,6 @@ mod tests {
             &env_path,
             r#"
 # ignored
-MAINS_AEGIS_WIFI_SSID="lab-ap"
-MAINS_AEGIS_WIFI_PSK='test-psk'
 MAINS_AEGIS_WIFI_DNS=1.1.1.1
 INVALID_LINE
 "#,
@@ -143,31 +123,9 @@ INVALID_LINE
 
         let values = load_env_file(&env_path);
         assert_eq!(
-            values.get("MAINS_AEGIS_WIFI_SSID"),
-            Some(&"lab-ap".to_string())
-        );
-        assert_eq!(
-            values.get("MAINS_AEGIS_WIFI_PSK"),
-            Some(&"test-psk".to_string())
-        );
-        assert_eq!(
             values.get("MAINS_AEGIS_WIFI_DNS"),
             Some(&"1.1.1.1".to_string())
         );
         assert!(!values.contains_key("INVALID_LINE"));
-    }
-
-    #[test]
-    fn require_station_credentials_needs_ssid_and_psk() {
-        let mut values = HashMap::new();
-        values.insert("MAINS_AEGIS_WIFI_SSID".to_string(), "ups-lab".to_string());
-        let cfg = WifiEnvConfig { values };
-        assert!(cfg.require_station_credentials().is_err());
-
-        let mut values = HashMap::new();
-        values.insert("MAINS_AEGIS_WIFI_SSID".to_string(), "ups-lab".to_string());
-        values.insert("MAINS_AEGIS_WIFI_PSK".to_string(), "secret".to_string());
-        let cfg = WifiEnvConfig { values };
-        assert_eq!(cfg.require_station_credentials(), Ok(("ups-lab", "secret")));
     }
 }

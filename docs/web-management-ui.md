@@ -89,7 +89,8 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 - 入口：`/devices/:device_id/settings`
 - 目的：通过 USB CDC 对单台实机执行受限安全设置。
 - 可写范围：WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别。
-- Secret 规则：PSK 只在用户提交时通过 USB 写入固件 EEPROM，不在 UI、API payload、日志或 ack 中回显；提交后清空表单。固件 `net_http` 启用时会优先读取 EEPROM WiFi config，并在 USB 写入后更新运行时 WiFi 配置。
+- Secret 规则：PSK 只在用户提交时通过 USB 写入固件 EEPROM，不在 UI、API payload、日志或 ack 中回显；提交后清空表单。默认固件启用 `net_http`，但不存在默认 WiFi 凭据；固件优先读取 EEPROM WiFi config，USB 写入后更新运行时 WiFi 配置，USB 清除后清空 EEPROM slot 并立即断开 WiFi。
+- 反馈规则：WiFi 保存/清除必须等固件 ack 与连接状态反馈后才显示结果；等待期间按钮显示 loading。连接硬件、保存 WiFi、清除 WiFi 和 safe settings 失败统一以气泡 callout 展示。
 - LAN 限制：HTTP/SSE 设备进入该页时只显示 USB required 状态，不提供写表单。
 - devd 控制面：通过 `mains-aegis-devd` 持有 USB CDC 后，Web App 可使用同一 Settings 表单；devd 仍然独占 CDC，但日志与 trace 通过 `/api/v1/serial/session` 呈现在 USB Console。
 - 日志：Settings 页提供 USB Console。USB Console 展示当前 Web Serial 或 devd session 内 Web 可见的 CDC trace：Web 发出的 `tx` frame、固件返回的 `rx` frame、structured `log`、`status`、`hello`、`response`、`error`，以及夹杂在 CDC 行流中的 raw / ignored 非协议行。控制台支持等级过滤、方向过滤、关键词搜索高亮、虚拟滚动、全屏查看，并允许用户切换 payload 自动折行或横向滚动。WiFi PSK 在 trace 中脱敏。完整 `defmt` monitor 仍由 devd 在 artifact identity 匹配后解码。
@@ -186,6 +187,6 @@ web/
 - GitHub Pages：根站点发布 Web App，文档站发布在同一 Pages artifact 的 `/docs/` 子路径；App 使用 History API path router，并通过 `PAGES_BASE` / `VITE_BASE` 支持仓库子路径和未来自定义域名根路径。
 - 全局导航：App Layout 侧栏固定提供 `Docs` 入口，打开 `${BASE_URL}docs/`，保持当前运维台页面与连接状态不被替换。
 - 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、LAN 只读探活、SSE 订阅与轮询兜底、当前 session 的 Web Serial USB CDC transport，以及 devd 本地 USB control transport；同一 `identity.device_id` 的 LAN 与 USB 来源合并为一条设备记录，devd safe-control 写入始终携带当前记录的 `identity.device_id`。
-- 验证命令：`bun run web:check`、`PAGES_BASE=/mains-aegis/ bun run web:build`、`DOCS_BASE=/mains-aegis/docs/ bun run --cwd docs-site build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cargo test --manifest-path tools/mains-aegis-devd/Cargo.toml`、`cd firmware && cargo +esp check --features web_serial`。
+- 验证命令：`bun run web:check`、`PAGES_BASE=/mains-aegis/ bun run web:build`、`DOCS_BASE=/mains-aegis/docs/ bun run --cwd docs-site build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cargo test --manifest-path tools/mains-aegis-devd/Cargo.toml`、`cd firmware && cargo +esp check`。
 - 本地设备 daemon：运行时使用 `cargo run --manifest-path tools/mains-aegis-devd/Cargo.toml -- serve --bind 127.0.0.1:30080 --allow-dev-cors`，生产模式可通过 `--web-root <dir>` 托管 Web 静态资源。
 - 纯前端 Demo：`bun run web:dev` 后访问正式路由，例如 `/`、`/?seed=empty`、`/?seed=large`、`/devices/mains-aegis-e4f5a6/battery?seed=default`。

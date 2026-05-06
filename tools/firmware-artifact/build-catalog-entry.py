@@ -88,7 +88,7 @@ def main() -> int:
     parser.add_argument("--name", default="mains-aegis")
     parser.add_argument("--version", default=None)
     parser.add_argument("--profile", default="release")
-    parser.add_argument("--features", default="web_serial")
+    parser.add_argument("--features", default="net_http,web_serial")
     parser.add_argument("--bin", default=None)
     parser.add_argument("--defmt-metadata", default=None)
     parser.add_argument("--firmware-dir", default="firmware")

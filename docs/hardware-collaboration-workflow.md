@@ -38,9 +38,7 @@ Agent 接管真机验证时按以下顺序执行：
 
    ```bash
    cd firmware
-   MAINS_AEGIS_WIFI_SSID=usb-placeholder \
-     MAINS_AEGIS_WIFI_PSK=usb-placeholder \
-     cargo +esp build --release --features web_serial,net_http
+   cargo +esp build --release
    ```
 
 3. 烧录：

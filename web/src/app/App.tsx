@@ -14,6 +14,7 @@ import {
   Globe2,
   KeyRound,
   LayoutGrid,
+  Loader2,
   Maximize2,
   Menu,
   Minimize2,
@@ -32,10 +33,11 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
-import type { DeviceRecord, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
+import { normalizeBaseUrl, scanDevdDevices, toErrorEnvelope } from "../api/client";
+import type { DevdDevice, DeviceRecord, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 import { SegmentedControl } from "../components/ui/segmented-control";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { useDeviceRegistry } from "../device-registry/context";
+import { useDeviceRegistry, type WifiProvisioningProgress } from "../device-registry/context";
 import { isDemoSeed } from "../fixtures/mockDevices";
 import { isWebSerialSupported } from "../serial/transport";
 import { formatCurrent, formatPercent, formatTemp, formatVoltage, timeAgo } from "../utils/format";
@@ -50,6 +52,11 @@ type Route = {
 
 type AppProps = {
   initialPath?: string;
+};
+
+export type UiFeedback = {
+  tone: "success" | "error";
+  message: string;
 };
 
 const deviceSections = [
@@ -414,6 +421,13 @@ function ConnectionBadges({ record }: { record: DeviceRecord }) {
   );
 }
 
+function devdDeviceLabel(device: DevdDevice): string {
+  const identity = device.identity?.device_id;
+  const port = device.port_path ?? device.display_name;
+  const state = device.connection === "connected" ? "connected" : "available";
+  return identity ? `${identity} - ${port} - ${state}` : `${port} - ${state}`;
+}
+
 function ConnectPage() {
   const {
     records,
@@ -434,9 +448,13 @@ function ConnectPage() {
   const [devdTarget, setDevdTarget] = useState("same-origin");
   const [devdAlias, setDevdAlias] = useState("");
   const [devdLocation, setDevdLocation] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
-  const [usbMessage, setUsbMessage] = useState<string | null>(null);
-  const [devdMessage, setDevdMessage] = useState<string | null>(null);
+  const [devdCandidates, setDevdCandidates] = useState<DevdDevice[]>([]);
+  const [selectedDevdDeviceId, setSelectedDevdDeviceId] = useState("");
+  const [message, setMessage] = useState<UiFeedback | null>(null);
+  const [usbMessage, setUsbMessage] = useState<UiFeedback | null>(null);
+  const [devdMessage, setDevdMessage] = useState<UiFeedback | null>(null);
+  const [usbFirmwareOverridePending, setUsbFirmwareOverridePending] = useState(false);
+  const [devdFirmwareOverridePending, setDevdFirmwareOverridePending] = useState(false);
   const [busy, setBusy] = useState(false);
   const [usbBusy, setUsbBusy] = useState(false);
   const [devdBusy, setDevdBusy] = useState(false);
@@ -453,24 +471,26 @@ function ConnectPage() {
       setTarget("");
       setAlias("");
       setLocation("");
-      setMessage(`Connected ${result.record.target.alias}`);
+      setMessage(successFeedback(`Connected ${result.record.target.alias}`));
     } else {
-      setMessage(`${result.error?.code}: ${result.error?.message}`);
+      setMessage(errorFeedback(result.error));
     }
   }
 
-  async function onUsbConnect() {
+  async function onUsbConnect(ignoreFirmwareMismatch = false) {
     setUsbBusy(true);
     setUsbMessage(null);
-    const result = await connectUsbSerialDevice({ alias: usbAlias, location: usbLocation });
+    const result = await connectUsbSerialDevice({ alias: usbAlias, location: usbLocation, ignoreFirmwareMismatch });
     setUsbBusy(false);
     if (result.ok) {
+      setUsbFirmwareOverridePending(false);
       setUsbAlias("");
       setUsbLocation("");
-      setUsbMessage(`USB connected ${result.record.target.alias}`);
+      setUsbMessage(successFeedback(`USB connected ${result.record.target.alias}`));
       navigate(deviceHref(result.record.target.deviceId, "settings"));
     } else {
-      setUsbMessage(`${result.error?.code}: ${result.error?.message}`);
+      setUsbFirmwareOverridePending(result.error?.code === "firmware_artifact_mismatch");
+      setUsbMessage(errorFeedback(result.error));
     }
   }
 
@@ -478,22 +498,45 @@ function ConnectPage() {
     event.preventDefault();
     setDevdBusy(true);
     setDevdMessage(null);
-    const result = await addDevdDevice({ target: devdTarget, alias: devdAlias, location: devdLocation });
+    let devdDeviceId = selectedDevdDeviceId || undefined;
+    try {
+      const scan = await scanDevdDevices(normalizeBaseUrl(devdTarget));
+      const candidates = scan.devices.filter((device) => device.transport === "native_serial" && device.port_path);
+      setDevdCandidates(candidates);
+      if (!devdDeviceId && candidates.length === 1) {
+        devdDeviceId = candidates[0].id;
+      }
+      if (!devdDeviceId && candidates.length > 1) {
+        setDevdBusy(false);
+        setDevdMessage(errorFeedback({ code: "device_selection_required", message: "Multiple USB CDC devices are available. Select one device before connecting devd.", retryable: false, details: { devices: candidates } }));
+        return;
+      }
+    } catch (error) {
+      const envelope = toErrorEnvelope(error);
+      setDevdBusy(false);
+      setDevdMessage(errorFeedback(envelope));
+      return;
+    }
+    const result = await addDevdDevice({ target: devdTarget, alias: devdAlias, location: devdLocation, devdDeviceId, ignoreFirmwareMismatch: devdFirmwareOverridePending });
     setDevdBusy(false);
     if (result.ok) {
+      setDevdFirmwareOverridePending(false);
       setDevdAlias("");
       setDevdLocation("");
-      setDevdMessage(`devd connected ${result.record.target.alias}`);
+      setDevdCandidates([]);
+      setSelectedDevdDeviceId("");
+      setDevdMessage(successFeedback(`devd connected ${result.record.target.alias}`));
       navigate(deviceHref(result.record.target.deviceId, "settings"));
     } else {
-      setDevdMessage(`${result.error?.code}: ${result.error?.message}`);
+      setDevdFirmwareOverridePending(result.error?.code === "firmware_artifact_mismatch");
+      setDevdMessage(errorFeedback(result.error));
     }
   }
 
   function onMockUsbConnect() {
     const result = attachMockUsbSerialDevice();
     if (result.ok) {
-      setUsbMessage(`USB demo attached ${result.record.target.alias}`);
+      setUsbMessage(successFeedback(`USB demo attached ${result.record.target.alias}`));
       navigate(deviceHref(result.record.target.deviceId, "settings"));
     }
   }
@@ -529,17 +572,23 @@ function ConnectPage() {
                 type="button"
                 disabled={usbBusy || !serialSupported}
                 onClick={() => void onUsbConnect()}
-                aria-describedby={usbMessage ? "usb-connect-message" : undefined}
+                aria-describedby={usbMessage?.tone === "error" ? "usb-connect-message" : undefined}
               >
-                <Usb size={16} /> {usbBusy ? "Connecting" : "Connect USB"}
+                <ButtonLabel icon={Usb} busy={usbBusy} busyText="Connecting" text="Connect USB" />
               </button>
-              {usbMessage ? <ConnectionCallout id="usb-connect-message" message={usbMessage} /> : null}
+              {usbMessage?.tone === "error" ? <ConnectionCallout id="usb-connect-message" message={usbMessage.message} /> : null}
               {demoMode ? (
                 <button className="secondary-button" type="button" onClick={onMockUsbConnect}>
                   <Terminal size={16} /> Mock USB
                 </button>
               ) : null}
+              {usbFirmwareOverridePending ? (
+                <button className="secondary-button danger-action" type="button" onClick={() => void onUsbConnect(true)} disabled={usbBusy}>
+                  Ignore warning and connect
+                </button>
+              ) : null}
             </div>
+            {usbMessage?.tone === "success" ? <FeedbackMessage feedback={usbMessage} /> : null}
           </div>
         </section>
 
@@ -557,11 +606,34 @@ function ConnectPage() {
               <input
                 name="devd-target"
                 value={devdTarget}
-                onChange={(event) => setDevdTarget(event.target.value)}
+                onChange={(event) => {
+                  setDevdTarget(event.target.value);
+                  setDevdCandidates([]);
+                  setSelectedDevdDeviceId("");
+                }}
                 placeholder="same-origin"
                 required
               />
             </label>
+            {devdCandidates.length > 1 ? (
+              <label>
+                USB device
+                <Select value={selectedDevdDeviceId} onValueChange={setSelectedDevdDeviceId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select USB device" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {devdCandidates.map((device) => (
+                        <SelectItem key={device.id} value={device.id}>
+                          {devdDeviceLabel(device)}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </label>
+            ) : null}
             <label>
               Alias
               <input name="devd-alias" value={devdAlias} onChange={(event) => setDevdAlias(event.target.value)} placeholder="Lab bench devd" />
@@ -570,13 +642,19 @@ function ConnectPage() {
               Location
               <input name="devd-location" value={devdLocation} onChange={(event) => setDevdLocation(event.target.value)} placeholder="Bench 1" />
             </label>
-            <div className="form-actions">
+            <div className="form-actions with-callout">
               <button className="primary-button" type="submit" disabled={devdBusy}>
-                <Server size={16} /> {devdBusy ? "Connecting" : "Connect devd"}
+                <ButtonLabel icon={Server} busy={devdBusy} busyText="Connecting" text="Connect devd" />
               </button>
+              {devdFirmwareOverridePending ? (
+                <button className="secondary-button danger-action" type="submit" disabled={devdBusy}>
+                  Ignore warning and connect
+                </button>
+              ) : null}
+              {devdMessage?.tone === "error" ? <ConnectionCallout id="devd-connect-message" message={devdMessage.message} /> : null}
             </div>
           </form>
-          {devdMessage ? <p className="form-message" role="status" aria-live="polite">{devdMessage}</p> : null}
+          {devdMessage?.tone === "success" ? <FeedbackMessage feedback={devdMessage} /> : null}
         </section>
 
         <section className="connect-panel">
@@ -606,18 +684,17 @@ function ConnectPage() {
               Location
               <input name="device-location" value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Bench 1" />
             </label>
-            <div className="form-actions">
-              <button className="primary-button" type="submit" disabled={busy}>{busy ? "Connecting" : "Add LAN"}</button>
+            <div className="form-actions with-callout">
+              <button className="primary-button" type="submit" disabled={busy}>
+                <ButtonLabel busy={busy} busyText="Connecting" text="Add LAN" />
+              </button>
+              {message?.tone === "error" ? <ConnectionCallout id="lan-connect-message" message={message.message} /> : null}
               {demoMode ? (
                 <button className="secondary-button" type="button" onClick={resetDemo}>Reset demo fleet</button>
               ) : null}
             </div>
           </form>
-          {message ? (
-            <p className="form-message" role="status" aria-live="polite">
-              {message}
-            </p>
-          ) : null}
+          {message?.tone === "success" ? <FeedbackMessage feedback={message} /> : null}
         </section>
       </div>
 
@@ -672,12 +749,19 @@ function ConnectPage() {
   );
 }
 
-function ConnectionCallout({ id, message }: { id: string; message: string }) {
+export function ConnectionCallout({ id, message }: { id: string; message: string }) {
   const [code, body] = splitErrorMessage(message);
-  const title = code === "serial_port_unavailable" ? "USB port is in use" : "Connection failed";
+  const title =
+    code === "serial_port_unavailable"
+      ? "USB port is in use"
+      : code === "firmware_artifact_mismatch"
+        ? "Firmware mismatch"
+        : "Connection failed";
   const guidance =
     code === "serial_port_unavailable"
       ? "Disconnect the devd session or close the app using this CDC port, then retry."
+      : code === "firmware_artifact_mismatch"
+        ? "Select matching firmware, flash the current build, or explicitly ignore this warning to continue."
       : "Check the selected device and try again.";
 
   return (
@@ -692,6 +776,93 @@ function ConnectionCallout({ id, message }: { id: string; message: string }) {
       </span>
     </aside>
   );
+}
+
+export function WifiProvisioningCallout({
+  id,
+  progress,
+  feedback,
+}: {
+  id: string;
+  progress?: WifiProvisioningProgress | null;
+  feedback?: UiFeedback | null;
+}) {
+  const isError = feedback?.tone === "error";
+  const message = feedback?.message ?? progress?.message ?? "Waiting for hardware WiFi status";
+  const [code, body] = splitErrorMessage(message);
+  const title = wifiProvisioningTitle(isError, feedback, progress, message);
+
+  return (
+    <aside
+      id={id}
+      className={`wifi-progress-callout ${isError ? "is-error" : ""}`}
+      role={isError ? "alert" : "status"}
+      aria-live={isError ? "assertive" : "polite"}
+    >
+      <span className="connection-callout-anchor" aria-hidden="true" />
+      {progress && !feedback ? <Loader2 className="spin-icon" size={15} aria-hidden="true" /> : isError ? <AlertTriangle size={15} aria-hidden="true" /> : <Wifi size={15} aria-hidden="true" />}
+      <span>
+        <strong>{title}</strong>
+        <span>{body || message}</span>
+        {progress?.network?.state ? <em>Network state: {progress.network.state}{progress.network.ipv4 ? `, IP ${progress.network.ipv4}` : ""}</em> : null}
+        {isError && code ? <code>{code}</code> : null}
+      </span>
+    </aside>
+  );
+}
+
+function wifiProvisioningTitle(
+  isError: boolean,
+  feedback: UiFeedback | null | undefined,
+  progress: WifiProvisioningProgress | null | undefined,
+  message: string,
+): string {
+  if (isError) return "WiFi failed";
+  if (feedback?.tone === "success") return message.toLowerCase().includes("cleared") ? "WiFi disabled" : "WiFi connected";
+  if (progress?.phase === "connected") return "WiFi connected";
+  if (progress?.phase === "disabled") return "WiFi disabled";
+  if (progress?.phase === "ip") return "Getting IP address";
+  if (progress?.phase === "clearing") return "Clearing WiFi";
+  return "Connecting WiFi";
+}
+
+export function FeedbackMessage({ feedback }: { feedback: UiFeedback }) {
+  return (
+    <p className={`form-message ${feedback.tone === "error" ? "is-error" : "is-success"}`} role="status" aria-live="polite">
+      {feedback.message}
+    </p>
+  );
+}
+
+export function ButtonLabel({
+  icon: Icon,
+  busy,
+  busyText,
+  text,
+}: {
+  icon?: LucideIcon;
+  busy: boolean;
+  busyText: string;
+  text: string;
+}) {
+  const LabelIcon = busy ? Loader2 : Icon;
+  return (
+    <>
+      {LabelIcon ? <LabelIcon className={busy ? "spin-icon" : undefined} size={16} aria-hidden="true" /> : null}
+      {busy ? busyText : text}
+    </>
+  );
+}
+
+function successFeedback(message: string): UiFeedback {
+  return { tone: "success", message };
+}
+
+function errorFeedback(error: DeviceRecord["error"]): UiFeedback {
+  return {
+    tone: "error",
+    message: `${error?.code ?? "error"}: ${error?.message ?? "Operation failed"}`,
+  };
 }
 
 function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
@@ -852,9 +1023,22 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   const [manualPrefs, setManualPrefs] = useState<SafeSettingsState["manual_charge"]>(
     settings?.manual_charge ?? { target: "full_100", speed: "ma_500", timer_h: 2 },
   );
-  const [message, setMessage] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<UiFeedback | null>(null);
+  const [wifiMessage, setWifiMessage] = useState<UiFeedback | null>(null);
+  const [wifiProgress, setWifiProgress] = useState<WifiProvisioningProgress | null>(null);
+  const [busy, setBusy] = useState<"wifi-save" | "wifi-clear" | "manual" | null>(null);
   const usbReady = Boolean(record.serial?.connected);
+  const wifiValidationMessage =
+    !ssid.trim()
+      ? "Save requires an SSID."
+      : psk.length < 8
+        ? "Save requires an 8-63 character PSK."
+      : null;
+  const wifiDescribedBy = [
+    "wifi-form-help",
+    wifiValidationMessage ? "wifi-validation-help" : null,
+    wifiProgress || wifiMessage ? "wifi-provisioning-message" : null,
+  ].filter(Boolean).join(" ");
 
   useEffect(() => {
     if (!settings) return;
@@ -862,34 +1046,48 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
     if (settings.wifi_ssid) setSsid(settings.wifi_ssid);
   }, [settings]);
 
+  useEffect(() => {
+    if ((busy !== "wifi-save" && busy !== "wifi-clear") || !record.status?.network) return;
+    setWifiProgress(wifiProgressFromStatusNetwork(record.status.network, busy, ssid));
+  }, [busy, record.status?.network, ssid]);
+
   async function onWifiSubmit(event: FormEvent) {
     event.preventDefault();
-    setBusy(true);
+    setBusy("wifi-save");
     setMessage(null);
-    const result = await sendWifiConfig(record.target.deviceId, { ssid, psk });
-    setBusy(false);
+    setWifiMessage(null);
+    setWifiProgress({ phase: "saving", message: "Writing WiFi credentials to hardware" });
+    const result = await sendWifiConfig(record.target.deviceId, { ssid, psk }, setWifiProgress);
+    setBusy(null);
     setPsk("");
-    setMessage(result.ok ? `WiFi credentials saved for ${ssid}` : `${result.error?.code}: ${result.error?.message}`);
+    setWifiProgress(null);
+    setWifiMessage(result.ok ? successFeedback(result.message ?? `WiFi connected to ${ssid}`) : errorFeedback(result.error));
   }
 
   async function onWifiClear() {
-    setBusy(true);
+    setBusy("wifi-clear");
     setMessage(null);
-    const result = await clearWifiConfig(record.target.deviceId);
-    setBusy(false);
+    setWifiMessage(null);
+    setWifiProgress({ phase: "clearing", message: "Clearing WiFi credentials from hardware" });
+    const result = await clearWifiConfig(record.target.deviceId, setWifiProgress);
+    setBusy(null);
+    setWifiProgress(null);
     if (result.ok) {
       setSsid("");
       setPsk("");
-      setMessage("WiFi credentials cleared");
+      setWifiMessage(successFeedback(result.message ?? "WiFi credentials cleared and WiFi disconnected"));
     } else {
-      setMessage(`${result.error?.code}: ${result.error?.message}`);
+      setWifiMessage(errorFeedback(result.error));
     }
   }
 
   async function onManualPrefsSubmit(event: FormEvent) {
     event.preventDefault();
+    setBusy("manual");
+    setMessage(null);
     const result = await setManualChargePrefs(record.target.deviceId, manualPrefs);
-    setMessage(result.ok ? "Manual charge preferences updated" : `${result.error?.code}: ${result.error?.message}`);
+    setBusy(null);
+    setMessage(result.ok ? successFeedback("Manual charge preferences updated") : errorFeedback(result.error));
   }
 
   if (!usbReady) {
@@ -920,7 +1118,15 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
           <form className="settings-form" onSubmit={onWifiSubmit}>
             <label>
               SSID
-              <input name="wifi-ssid" value={ssid} onChange={(event) => setSsid(event.target.value)} maxLength={32} required />
+              <input
+                name="wifi-ssid"
+                value={ssid}
+                onChange={(event) => setSsid(event.target.value)}
+                maxLength={32}
+                aria-describedby={wifiDescribedBy}
+                aria-invalid={!ssid.trim()}
+                required
+              />
             </label>
             <label>
               PSK
@@ -932,16 +1138,37 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
                 minLength={8}
                 maxLength={63}
                 autoComplete="new-password"
+                aria-describedby={wifiDescribedBy}
+                aria-invalid={psk.length < 8}
                 required
               />
             </label>
-            <div className="secret-note"><KeyRound size={15} /> PSK is written over USB and cleared from the form after submit.</div>
-            <div className="form-actions">
-              <button className="primary-button" type="submit" disabled={busy || !ssid || psk.length < 8}>
-                Save WiFi
-              </button>
-              <button className="secondary-button" type="button" onClick={() => void onWifiClear()} disabled={busy}>
-                <Trash2 size={16} /> Clear
+            <div id="wifi-form-help" className="secret-note"><KeyRound size={15} /> PSK is written over USB and cleared from the form after submit.</div>
+            {wifiValidationMessage ? <p id="wifi-validation-help" className="field-help">{wifiValidationMessage}</p> : null}
+            <div className="form-actions wifi-actions">
+              <span className="wifi-save-anchor">
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={busy !== null || wifiValidationMessage !== null}
+                  aria-describedby={wifiDescribedBy}
+                  aria-busy={busy === "wifi-save"}
+                >
+                  <ButtonLabel busy={busy === "wifi-save"} busyText="Saving" text="Save WiFi" />
+                </button>
+                {wifiProgress || wifiMessage ? (
+                  <WifiProvisioningCallout id="wifi-provisioning-message" progress={wifiProgress} feedback={wifiMessage} />
+                ) : null}
+              </span>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void onWifiClear()}
+                disabled={busy !== null}
+                aria-describedby={wifiProgress || wifiMessage ? "wifi-provisioning-message" : undefined}
+                aria-busy={busy === "wifi-clear"}
+              >
+                <ButtonLabel icon={Trash2} busy={busy === "wifi-clear"} busyText="Clearing" text="Clear" />
               </button>
             </div>
           </form>
@@ -983,15 +1210,42 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
               ]}
               onChange={(timer) => setManualPrefs((current) => ({ ...current, timer_h: Number(timer) as 1 | 2 | 6 }))}
             />
-            <button className="primary-button" type="submit">Apply prefs</button>
+            <button className="primary-button" type="submit" disabled={busy !== null}>
+              <ButtonLabel busy={busy === "manual"} busyText="Applying" text="Apply prefs" />
+            </button>
           </form>
         </section>
 
       </div>
       <UsbDeveloperConsole logs={record.serial?.logs ?? []} trace={record.serial?.trace ?? []} />
-      {message ? <p className="form-message" role="status" aria-live="polite">{message}</p> : null}
+      {message ? (
+        <div className="command-feedback">
+          {message.tone === "error" ? (
+            <ConnectionCallout id="settings-command-message" message={message.message} />
+          ) : (
+            <FeedbackMessage feedback={message} />
+          )}
+        </div>
+      ) : null}
     </section>
   );
+}
+
+function wifiProgressFromStatusNetwork(network: UpsStatus["network"], busy: "wifi-save" | "wifi-clear", ssid: string): WifiProvisioningProgress {
+  if (busy === "wifi-clear") {
+    return network.state === "disabled"
+      ? { phase: "disabled", message: "WiFi credentials cleared and WiFi disconnected", network }
+      : { phase: "clearing", message: "Disconnecting WiFi and clearing runtime credentials", network };
+  }
+  if (network.state === "connected") {
+    return network.ipv4
+      ? { phase: "connected", message: `WiFi connected to ${ssid} at ${network.ipv4}`, network }
+      : { phase: "ip", message: "WiFi link is up. Waiting for an IP address", network };
+  }
+  if (network.state === "connecting") {
+    return { phase: "connecting", message: `Connecting to ${ssid} and waiting for an IP address`, network };
+  }
+  return { phase: "starting", message: "Starting WiFi with the saved credentials", network };
 }
 
 function ApiDebugPage({ record }: { record: DeviceRecord }) {
@@ -1139,33 +1393,14 @@ type DefmtDecodeStatus = {
   detail: string;
 };
 
+function isDefmtAwaitingDecoder(entry: SerialTraceEntry): boolean {
+  if (entry.frameType !== "defmt") return false;
+  return `${entry.summary} ${entry.payload}`.toLowerCase().includes("awaiting decoder");
+}
+
 function defmtDecodeStatus(trace: SerialTraceEntry[]): DefmtDecodeStatus {
   const defmtEntries = trace.filter((entry) => entry.frameType === "defmt");
-  const decodeIssues = defmtEntries.filter((entry) => entry.kind === "ignored");
-  const decoded = defmtEntries.filter((entry) => entry.kind !== "ignored" && entry.summary.trim().length > 0);
-  if (decodeIssues.length > 0) {
-    const latestIssue = decodeIssues[decodeIssues.length - 1];
-    const issueText = `${latestIssue.summary} ${latestIssue.payload}`.toLowerCase();
-    if (issueText.includes("elf") || issueText.includes("artifact") || issueText.includes("metadata")) {
-      return {
-        label: "defmt artifact issue",
-        tone: "warn",
-        detail: "Binary defmt frames are arriving, but the selected firmware artifact or metadata does not match this device.",
-      };
-    }
-    if (issueText.includes("server") || issueText.includes("api") || issueText.includes("proxy") || issueText.includes("decode")) {
-      return {
-        label: "defmt decoder issue",
-        tone: "warn",
-        detail: "Binary defmt frames are arriving, but the decoder API cannot decode them. Check devd, the proxy, and the selected firmware artifact.",
-      };
-    }
-    return {
-      label: "defmt decode issue",
-      tone: "warn",
-      detail: "Binary defmt frames are arriving, but some frames cannot be decoded. Check firmware identity and catalog metadata.",
-    };
-  }
+  const decoded = defmtEntries.filter((entry) => !isDefmtAwaitingDecoder(entry) && entry.kind !== "ignored" && entry.summary.trim().length > 0);
   if (decoded.length > 0) {
     return {
       label: "defmt decoded",
@@ -1214,20 +1449,11 @@ function parseTraceMessage(message: string): ParsedTraceMessage {
 }
 
 function traceSummaryLabel(entry: SerialTraceEntry): string {
-  if (entry.kind === "ignored" && entry.frameType === "defmt") return "defmt decode issue";
   if (entry.kind !== "frame" && entry.frameType === "defmt") return parseTraceMessage(entry.summary).lead;
   return entry.summary;
 }
 
 function TraceMessage({ entry, query, mode }: { entry: SerialTraceEntry; query: string; mode: "summary" | "raw" }) {
-  if (mode !== "raw" && entry.kind === "ignored" && entry.frameType === "defmt") {
-    return (
-      <div className="trace-message-readable trace-message-diagnostic">
-        <p className="trace-message-lead"><HighlightText value={entry.summary} query={query} /></p>
-        <p>Binary CDC data was captured, but the selected defmt decoder could not decode this frame.</p>
-      </div>
-    );
-  }
   if (mode === "raw" || entry.kind === "frame" || entry.frameType !== "defmt") {
     return <HighlightText value={mode === "raw" ? entry.payload : entry.summary} query={query} />;
   }
@@ -1464,10 +1690,7 @@ function UsbDeveloperConsole({ logs, trace }: { logs: SerialLogEntry[]; trace: S
       <strong>{entry.direction}</strong>
       <code>{entry.frameType ?? entry.kind}</code>
       <em>{entry.requestId ?? entry.target ?? "--"}</em>
-      <p>
-        {entry.kind === "ignored" && entry.frameType === "defmt" ? <b className="trace-diagnostic-tag">Decode issue</b> : null}
-        <HighlightText value={traceSummaryLabel(entry)} query={searchQuery} />
-      </p>
+      <p><HighlightText value={traceSummaryLabel(entry)} query={searchQuery} /></p>
       <div className="trace-row-body">
         {entry.kind === "frame" ? (
           <HighlightText value={`${entry.frameType ?? "frame"} ${entry.requestId ?? entry.target ?? ""}`.trim()} query={searchQuery} />
