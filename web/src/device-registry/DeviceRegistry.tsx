@@ -481,6 +481,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
 
   const addDevdDevice = useCallback(async (input: AddDeviceInput): Promise<AddDeviceResult> => {
     const baseUrl = normalizeBaseUrl(input.target);
+    let pendingLeaseId: string | null = null;
 
     try {
       const scan = await scanDevdDevices(baseUrl);
@@ -505,10 +506,12 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         };
       }
       const lease = await createDevdWebLease(baseUrl, selectedDevice.id);
+      pendingLeaseId = lease.lease_id;
       const result = await probeDevice(baseUrl, lease.lease_id);
       const firmwareMatch = await findFirmwareArtifactForIdentity(result.identity);
       if (!firmwareMatch && !input.ignoreFirmwareMismatch) {
         await releaseDevdWebLease(baseUrl, lease.lease_id).catch(() => undefined);
+        pendingLeaseId = null;
         return {
           ok: false,
           error: firmwareMismatchError(result.identity),
@@ -526,9 +529,11 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       };
       const record = recordFromDevdProbe(target, result, session, lease);
       startDevdLeaseHeartbeat(record);
+      pendingLeaseId = null;
       setRecords((current) => upsertRecord(current, record));
       return { ok: true, record };
     } catch (error) {
+      if (pendingLeaseId) await releaseDevdWebLease(baseUrl, pendingLeaseId).catch(() => undefined);
       return { ok: false, error: toErrorEnvelope(error) };
     }
   }, []);
