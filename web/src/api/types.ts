@@ -38,6 +38,12 @@ export type NetworkSummary = {
   rssi_dbm: number | null;
 };
 
+export type WifiApplyNetwork = {
+  state: NetworkState;
+  ipv4: string | null;
+  last_error: unknown | null;
+};
+
 export type Identity = {
   device_id: string;
   hostname: string;
@@ -116,7 +122,7 @@ export type DeviceTarget = {
   alias: string;
   location: string;
   addedAt: string;
-  transport?: "http" | "serial" | "adapter";
+  transport?: "http" | "serial" | "devd";
   serialProtocol?: string;
   mock?: boolean;
 };
@@ -172,6 +178,12 @@ export type DeviceRecord = {
   lastUpdated: string | null;
   serial?: {
     connected: boolean;
+    source: "web_serial" | "devd" | "mock";
+    baseUrl?: string;
+    leaseId?: string;
+    leaseExpiresAt?: string;
+    heartbeatIntervalMs?: number;
+    leaseTtlMs?: number;
     protocol: string;
     status?: UpsStatus | null;
     logs: SerialLogEntry[];
@@ -237,4 +249,14 @@ export type DevdDevice = {
     reason: string | null;
     artifact_id: string | null;
   };
+};
+
+export type DevdWebLease = {
+  lease_id: string;
+  device_id: string;
+  identity_device_id: string | null;
+  expires_at: string;
+  heartbeat_interval_ms: number;
+  lease_ttl_ms: number;
+  device: DevdDevice;
 };

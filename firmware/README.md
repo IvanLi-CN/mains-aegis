@@ -81,8 +81,10 @@ cargo build --release --bin esp-firmware --features main-vout-19v
 cargo build --release --features force-min-charge
 # 仅在诊断阶段需要双地址探测时，显式打开该特性（默认只访问 0x0B）
 cargo build --release --features bms-dual-probe-diag
-# Web App USB CDC / Web Serial 安全设置通道
-cargo +esp check --features web_serial
+# 默认主固件启用 net_http + web_serial；WiFi 凭据只能通过 USB 配网写入 EEPROM
+cargo +esp check
+# 如需验证无网络最小构建，显式关闭默认特性
+cargo +esp check --no-default-features
 # TMP 硬件保护测试模式：关闭 MCU 主动散热与软件热降额/热关断，但保留 TMP/THERM_KILL_N 观测
 cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 ```
@@ -654,7 +656,7 @@ Web 开发期由 `web/vite.config.ts` 把 `/api` 反代到 `http://127.0.0.1:300
 python3 tools/firmware-artifact/build-catalog-entry.py \
   --elf firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware \
   --out firmware/target/mains-aegis-artifacts \
-  --features web_serial \
+  --features net_http,web_serial \
   --profile release
 ```
 

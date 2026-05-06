@@ -36,23 +36,7 @@ Device management endpoints:
 - `GET /api/v1/devices/{id}/session`
 - `GET /api/v1/devices/{id}/events`
 
-## Legacy Local HTTP Adapter
-
-The Rust adapter in `tools/mains-aegis-usb-http-adapter/` opens one explicit USB CDC serial path and exposes the same safe-control surface as localhost HTTP. It is intended for the Web App, future native Apps, and CLI tooling when the browser should not own the CDC port directly.
-
-This adapter is now a compatibility path. New device workflows should use `tools/mains-aegis-devd/`.
-
-The adapter does not enumerate ports. Operators must provide the selected CDC path with `--port <serial-path>` or `MAINS_AEGIS_USB_PORT`.
-
-Default startup:
-
-```sh
-cargo run --manifest-path tools/mains-aegis-usb-http-adapter/Cargo.toml -- --port <serial-path> --bind 127.0.0.1:30080
-```
-
-The adapter allows `http://127.0.0.1:30000`, `http://localhost:30000`, `http://127.0.0.1:5173`, and `http://localhost:5173` by default. Add the active Web origin with `--allow-origin <origin>`, `MAINS_AEGIS_WEB_ORIGINS=<origin>[,<origin>]`, or `WEB_PORT=<port>` when the Web App runs on another local port.
-
-HTTP endpoints:
+devd local safe-control endpoints:
 
 - `GET /health`
 - `GET /api/v1/ping`
@@ -65,7 +49,9 @@ HTTP endpoints:
 - `POST /api/v1/settings/log-level`
 - `POST /api/v1/settings/manual-charge`
 
-`/api/v1/serial/session` returns Web-compatible `logs`, `trace`, `protocol`, and `safeSettings`. The adapter keeps bounded in-memory ring buffers and returns a bounded tail by default (`logs_limit=200`, `trace_limit=600`; capped at `500` and `2000`). TX trace payloads redact WiFi PSK before storage or HTTP exposure.
+`/api/v1/serial/session` returns Web-compatible `logs`, `trace`, `protocol`, and `safeSettings`. devd keeps bounded in-memory ring buffers and returns a bounded tail by default (`logs_limit=200`, `trace_limit=600`; capped at `500` and `2000`). TX trace payloads redact WiFi PSK before storage or HTTP exposure.
+
+Safe-control writes are device-scoped. Web/App/CLI callers pass firmware `identity.device_id` as `device_id` in POST bodies, or as the `DELETE /api/v1/wifi-config?device_id=...` query parameter. If `device_id` is omitted, devd only accepts the request when exactly one native USB CDC device is connected with identity available.
 
 ## Framing
 
@@ -149,7 +135,7 @@ The firmware stores the PSK but never echoes it in `response`, `error`, or `log`
 
 `log` frames are structured Web-facing events. A successful `hello` emits a `usb_cdc` session log. `get_status` emits an initial status log set for `status`, `output`, `charger`, `battery`, and `network`; later status requests emit periodic summaries and state-change logs for those targets.
 
-The Web App records per-session CDC trace entries for developer inspection: transmitted request frames, received protocol frames, structured logs, and raw / ignored non-protocol CDC lines. devd/adapter-backed sessions expose a bounded tail to the browser while keeping the local ring buffer bounded in memory. WiFi PSK values are redacted from transmitted trace payloads. Raw firmware monitor output is decoded only when `mains-aegis-devd` has a selected artifact whose identity matches the connected device; otherwise it remains `unverified`.
+The Web App records per-session CDC trace entries for developer inspection: transmitted request frames, received protocol frames, structured logs, and raw / ignored non-protocol CDC lines. devd-backed sessions expose a bounded tail to the browser while keeping the local ring buffer bounded in memory. WiFi PSK values are redacted from transmitted trace payloads. Raw firmware monitor output is decoded only when `mains-aegis-devd` has a selected artifact whose identity matches the connected device; otherwise it remains `unverified`.
 
 ### `error`
 
@@ -167,6 +153,6 @@ The firmware stores WiFi credentials in EEPROM plaintext by current project deci
 - Size: 128 bytes, written as four 32-byte EEPROM blocks.
 - Layout: magic `MAWF`, version, enabled flag, SSID length, PSK length, SSID bytes, PSK bytes, CRC8.
 - Empty or clear record decodes as no configured WiFi credentials.
-- When `net_http` is enabled, the firmware loads this EEPROM record before starting WiFi and updates the running WiFi task after a successful USB write. Clearing the record falls back to build-time `MAINS_AEGIS_WIFI_*` credentials.
+- When `net_http` is enabled, the firmware loads this EEPROM record before starting WiFi and updates the running WiFi task after a successful USB write. Clearing the record wipes the EEPROM slot, disconnects WiFi immediately, and leaves WiFi disabled until new credentials are written over USB.
 
 The UI must clear the PSK field after submit and must not display stored PSK values.

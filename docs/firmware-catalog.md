@@ -14,7 +14,7 @@ Each catalog has `schema_version=1` and an `artifacts` array. Each artifact desc
 - `git_sha`, `git_dirty`, `build_id`: provenance used for device identity matching.
 - `target_chip`: always `esp32s3`.
 - `profile`: `debug`, `release`, or `dev`.
-- `features`: firmware feature list such as `web_serial` or `main-vout-19v`.
+- `features`: firmware feature list such as `net_http`, `web_serial`, or `main-vout-19v`.
 - `protocol`: currently `mains-aegis.cdc.v1`.
 - `defmt`: decoding metadata. Logs are verified only when identity matches this artifact.
 - `files`: local or published files with `kind`, `path`, `sha256`, and `size`.
@@ -23,12 +23,12 @@ Each catalog has `schema_version=1` and an `artifacts` array. Each artifact desc
 
 ```bash
 cd firmware
-cargo build --release --bin esp-firmware --features web_serial
+cargo build --release --bin esp-firmware
 cd ..
 python3 tools/firmware-artifact/build-catalog-entry.py \
   --elf firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware \
   --out firmware/target/mains-aegis-artifacts \
-  --features web_serial \
+  --features net_http,web_serial \
   --profile release
 ```
 
