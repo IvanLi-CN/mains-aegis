@@ -19,6 +19,7 @@
 - 新增 `tools/mains-aegis-devd`，作为 Mains Aegis 专用设备 daemon。
 - `serve` 启动不接收设备端口；设备通过 API 扫描、列出、绑定、连接、断开和解绑。
 - HTTP API 覆盖 identity、session、events、artifact selection、reset、monitor start/stop、flash 与 USB CDC safe settings 写入。
+- HTTP API 覆盖 host power 查询、低功耗运行 profile 切换、suspend、shutdown dry-run 与事件广播。
 - 吸收旧本地 USB HTTP bridge 的兼容面：`/api/v1/serial/session`、WiFi config、log level 和 manual charge endpoints 由 devd 直接提供。
 - Firmware Catalog 成为 Web Direct、devd、本地构建和 GitHub Release 的统一 artifact 合同。
 - 固件 identity 暴露 build/profile/features/protocol/defmt 信息，devd 用它与 artifact manifest 匹配；不匹配时日志解码必须标记 `unverified`。
@@ -31,6 +32,7 @@
 - 不删除 `mcu-agentd.toml`；`mcu-agentd` 作为 legacy/fallback 保留。
 - 不优化多设备并发烧录；v1 使用 per-device 状态与安全串行模型。
 - 不在无硬件环境执行真机烧录、reset 或 monitor。
+- 不把 suspend/sleep 归类为低功耗运行；低功耗运行必须保持主机 awake，devd 和监听程序仍可继续工作。
 
 ## 功能规格
 
@@ -52,6 +54,41 @@
 - `POST /api/v1/wifi-config` / `DELETE /api/v1/wifi-config`: 通过指定 `device_id` 的已连接 USB CDC 设备写入或清除 WiFi 配置，成功后返回固件 ack result；未指定 `device_id` 时仅允许单 USB 设备连接场景。
 - `POST /api/v1/settings/log-level`: 通过指定 `device_id` 的 USB CDC session 更新日志级别。
 - `POST /api/v1/settings/manual-charge`: 通过指定 `device_id` 的 USB CDC session 更新手动充电偏好。
+
+### Host power control
+
+devd 的 host power 控制面用于 UPS 后备供电期间降低主机负载，并在电量不足时触发优雅关机流程。`low_power_running` 是主机仍然 awake/running 的节能 profile 状态，不等同于 suspend/sleep；sleep 后 devd 本身会暂停，不能继续承担 UPS 协调。
+
+- `GET /api/v1/host/power`: 返回平台后端、是否允许真实动作、dry-run 默认值、能力、当前 power profile、保存的 previous profile 与最近一次 host power action。
+- `POST /api/v1/host/power/profile`: 请求切换主机 power profile。请求体为 `{ "profile": "power_saver|balanced|performance|restore_previous", "dry_run": true }`；不支持的 profile 返回 API-compatible error envelope。
+- `POST /api/v1/host/power/suspend`: 请求主机进入 suspend/sleep。该动作独立于低功耗运行，默认只做 dry-run。
+- `POST /api/v1/host/power/shutdown`: 请求主机关机。请求体为 `{ "delay_sec": 60, "dry_run": true, "force": false }`；真实关机还必须携带 `confirm:"shutdown"`。`force:true` 只表示上游 Web App/UPS 已明确要求强制服从断电窗口，devd 不自行推断。
+- `GET /api/v1/host/power/events`: 返回 `host_power` SSE 事件，供本机监听程序得知 profile 切换、suspend、shutdown dry-run、真实执行请求和拒绝原因。
+
+安全规则：
+
+- 所有 state-changing host power 请求默认 `dry_run=true`；未显式开启真实动作时，`dry_run=false` 必须返回 `host_power_real_action_denied`。
+- 真实动作只在 devd 启动时带 `--allow-host-power-actions` 或环境变量 `MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=1` 时允许。
+- dry-run 响应必须包含 backend、action、target profile 或 delay、以及将执行的命令摘要，并且必须广播 `host_power` 事件。
+- shutdown `delay_sec` 按秒解释；真实关机请求必须立即下发给操作系统并以系统命令返回码作为 API 结果，不得由 devd 自行计时或自行决定何时关机。`delay_sec=0` 表示立即关机；`delay_sec>0` 表示使用系统级关机调度能力。
+- Linux 后端使用 `power-profiles-daemon` 的 `net.hadess.PowerProfiles` D-Bus `ActiveProfile` 作为低功耗运行入口：`power_saver` 映射为 `power-saver`，`balanced` 与 `performance` 映射到同名 profile；suspend 使用 logind D-Bus，shutdown 使用 `systemctl poweroff --no-block --when=...`，并仅在请求带 `force:true` 时附加 `--force`，确保命令一旦接收就由系统执行。
+- Linux `force:true` 仅支持 `delay_sec=0`；`force:true` 与非零延迟无法由 systemd 同时可靠表达，必须返回 `host_power_shutdown_unsupported`，由上游明确改发立即强制关机或非强制延迟关机。
+- macOS 后端使用 `pmset lowpowermode 1/0` 进入/退出低功耗运行；suspend 使用 `pmset sleepnow`，shutdown 使用系统 `shutdown`。macOS 原生命令只支持分钟粒度调度，`delay_sec>0` 会向上取整为分钟。
+- macOS 后端不接受 `force:true`；该 backend 无法用 `pmset`/`shutdown` 表达强制关机语义，必须返回 `host_power_shutdown_unsupported`，避免将普通 shutdown 误报为 forced compliance。
+- 若平台缺少 `power-profiles-daemon`、`busctl`、`pmset` 或权限不足，API 必须返回可诊断错误，不得 panic。
+
+UPS 策略建议：
+
+- 市电掉电并进入后备供电时，优先调用 profile dry-run/真实切换至 `power_saver` 并广播 `host_power` 事件，让监听程序降低负载。
+- 市电恢复后，调用 `restore_previous` 或 `balanced` 恢复正常运行 profile。
+- 电量不足时，由 Web App 或 UPS 控制程序按自己的策略决定何时发出真实 shutdown；devd 不做额外关机决策。真实 shutdown 成功发起后即可认为指令已被系统接收；若 UPS 断电窗口要求系统必须立即服从，上游必须发送 `delay_sec:0, force:true`。suspend 只用于允许暂停业务的主机场景，不等同于可断电的关机/休眠。
+
+### Host power VM validation
+
+CI 必须覆盖 devd 真实命令触发路径，而不仅是 fake command 或 dry-run：
+
+- Linux 使用 GitHub Actions `ubuntu-latest` runner 启动 QEMU Ubuntu guest VM，在 guest 内安装 `power-profiles-daemon`，以真实 `dry_run=false` 请求验证 `power_saver` profile 生效，并向 guest 下发真实 shutdown，断言 VM 关机退出。
+- macOS 使用 GitHub Actions `macos-latest` 受管 runner VM 执行真实 `pmset lowpowermode` 切换，并发起可取消的系统 scheduled shutdown，断言 macOS 接收关机命令。若 GitHub-hosted macOS runner 不暴露 `lowpowermode`，该 job 必须验证 profile 请求返回可诊断 error envelope，并继续验证真实 scheduled shutdown。GitHub-hosted macOS runner 不支持在 runner 内再启动 macOS nested VM，因此该 job 以 runner VM 本身作为 macOS VM 验证对象。
 
 ### Web USB control lease
 
@@ -101,6 +138,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 
 - `tools/mains-aegis-devd` 能编译并通过单元测试。
 - devd 可无端口启动，并通过 mock device 验证设备管理、artifact selection、dry-run flash 与 session API。
+- host power API 支持 Linux/macOS 查询、dry-run、事件广播和真实动作默认拒绝；缺少平台后端或权限不足时返回可诊断错误。
 - `tools/firmware-artifact/build-catalog-entry.py` 能为 ELF 生成 manifest、catalog 和 `SHA256SUMS`。
 - 固件 identity JSON 包含 features/protocol/defmt 字段。
 - Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 devd。
@@ -112,6 +150,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 ## 实现状态
 
 - `tools/mains-aegis-devd`: v1 daemon/API/mock validation foundation，并提供 Web App localhost USB safe-control surface。
+- `tools/mains-aegis-devd`: 提供 host power localhost control surface；低功耗运行、suspend、shutdown 默认 dry-run，真实动作受启动参数保护。
 - `schemas/firmware-catalog.schema.json`: v1 catalog schema。
 - `tools/firmware-artifact/build-catalog-entry.py`: local manifest/catalog generator。
 - `web/src/api/*`: devd mode client contracts。

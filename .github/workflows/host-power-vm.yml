@@ -1,0 +1,55 @@
+name: host-power-vm
+
+on:
+  pull_request:
+    paths:
+      - "tools/mains-aegis-devd/**"
+      - "scripts/ci/host_power_*"
+      - ".github/workflows/host-power-vm.yml"
+      - "docs/specs/p8k3d-mains-aegis-devd/**"
+      - "docs/usb-cdc-web-serial-protocol.md"
+      - "docs/web-management-ui.md"
+  push:
+    branches: ["main"]
+    paths:
+      - "tools/mains-aegis-devd/**"
+      - "scripts/ci/host_power_*"
+      - ".github/workflows/host-power-vm.yml"
+      - "docs/specs/p8k3d-mains-aegis-devd/**"
+      - "docs/usb-cdc-web-serial-protocol.md"
+      - "docs/web-management-ui.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-vm:
+    name: Linux VM real host power commands
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install VM tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils jq pkg-config libudev-dev
+      - name: Build devd for Linux guest
+        run: cargo build --manifest-path tools/mains-aegis-devd/Cargo.toml
+      - name: Run real host power commands inside Linux VM
+        run: bash scripts/ci/host_power_linux_vm_test.sh
+
+  macos-runner-vm:
+    name: macOS runner VM real host power commands
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build devd for macOS runner VM
+        run: cargo build --manifest-path tools/mains-aegis-devd/Cargo.toml
+      - name: Run real host power commands on macOS runner VM
+        run: bash scripts/ci/host_power_macos_runner_vm_test.sh

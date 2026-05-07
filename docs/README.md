@@ -17,7 +17,7 @@ This folder stores project documentation and offline-renderable datasheets.
 - UPS main output design: `docs/ups-output-design.md`
 - Web management UI plan: `docs/web-management-ui.md`
 - USB CDC / Web Serial protocol: `docs/usb-cdc-web-serial-protocol.md`
-- Mains Aegis device daemon and firmware catalog: `docs/specs/p8k3d-mains-aegis-devd/SPEC.md`, `docs/firmware-catalog.md`
+- Mains Aegis device daemon, host power control, and firmware catalog: `docs/specs/p8k3d-mains-aegis-devd/SPEC.md`, `docs/firmware-catalog.md`
 - Agent hardware collaboration workflow: `docs/hardware-collaboration-workflow.md`
 - Power monitoring & protection (INA3221 + UPS VIN/TPS outputs): `docs/power-monitoring-design.md`
 - I2C/SMBus address map: `docs/i2c-address-map.md`
