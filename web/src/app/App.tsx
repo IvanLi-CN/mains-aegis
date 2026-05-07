@@ -34,31 +34,17 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
-import {
-  flashDevdDevice,
-  listDevdDevices,
-  normalizeBaseUrl,
-  scanDevdDevices,
-  selectDevdArtifact,
-  toErrorEnvelope,
-} from "../api/client";
-import type { DeviceRecord, DevdDevice, FirmwareArtifact, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
+import { normalizeBaseUrl, scanDevdDevices, toErrorEnvelope } from "../api/client";
+import type { DeviceRecord, DevdDevice, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 import { SegmentedControl } from "../components/ui/segmented-control";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { useDeviceRegistry, type WifiProvisioningProgress } from "../device-registry/context";
 import { isDemoSeed } from "../fixtures/mockDevices";
-import {
-  firmwareArtifactHasWebFlashImages,
-  firmwareArtifactImageFiles,
-  firmwareArtifactMatchesIdentity,
-  loadResolvedFirmwareCatalog,
-  type ResolvedFirmwareArtifact,
-} from "../firmware/catalog";
-import { flashArtifactWithWebSerial, isWebSerialFlashSupported, type WebSerialFlashProgress } from "../firmware/webSerialFlasher";
 import { isWebSerialSupported } from "../serial/transport";
 import { formatCurrent, formatPercent, formatTemp, formatVoltage, timeAgo } from "../utils/format";
 import { deviceSeverity, modeLabel, severityRank, type Severity } from "../utils/severity";
 import { captureTraceScrollAnchor, resolveAnchoredTraceScrollTop, type TraceScrollAnchor } from "./traceScrollAnchor";
+import { FirmwarePage as FirmwarePageView } from "./firmware-page";
 
 type Route = {
   path: string;
@@ -167,7 +153,7 @@ function renderRoute(route: Route, records: DeviceRecord[], selected: DeviceReco
     case "device":
       return <DeviceInfoPage record={selected} />;
     case "firmware":
-      return <FirmwarePage record={selected} />;
+      return <FirmwarePageView record={selected} />;
     case "settings":
       return <SettingsPage record={selected} />;
     case "api":
@@ -238,7 +224,7 @@ function deviceHref(deviceId: string, section: string) {
 }
 
 function deviceDefaultHref(record: DeviceRecord) {
-  return deviceHref(record.target.deviceId, record.target.transport === "serial" || record.target.transport === "adapter" ? "firmware" : "overview");
+  return deviceHref(record.target.deviceId, record.target.transport === "serial" || record.target.transport === "devd" ? "firmware" : "overview");
 }
 
 function NavLink({ href, active, icon: Icon, label }: { href: string; active: boolean; icon: LucideIcon; label: string }) {
@@ -1034,261 +1020,6 @@ function DeviceInfoPage({ record }: { record: DeviceRecord }) {
   );
 }
 
-type FlashMethod = "web_serial" | "devd";
-type FlashRunState = "idle" | "running" | "success" | "error";
-
-type FlashUiProgress = WebSerialFlashProgress & {
-  source: FlashMethod | "mock";
-};
-
-function FirmwarePage({ record }: { record: DeviceRecord }) {
-  const [catalog, setCatalog] = useState<ResolvedFirmwareArtifact[]>([]);
-  const [catalogMessage, setCatalogMessage] = useState("Loading firmware catalog");
-  const [selectedArtifactId, setSelectedArtifactId] = useState<string>("");
-  const [method, setMethod] = useState<FlashMethod>(record.target.transport === "adapter" ? "devd" : "web_serial");
-  const [confirmed, setConfirmed] = useState(false);
-  const [flashState, setFlashState] = useState<FlashRunState>("idle");
-  const [progress, setProgress] = useState<FlashUiProgress>(emptyFlashProgress());
-  const [message, setMessage] = useState<string | null>(null);
-  const [devdDevices, setDevdDevices] = useState<DevdDevice[]>([]);
-  const [selectedDevdId, setSelectedDevdId] = useState<string>("");
-
-  const identity = record.identity;
-  const matchingArtifacts = useMemo(
-    () => catalog.filter((entry) => identity && firmwareArtifactMatchesIdentity(entry.artifact, identity)),
-    [catalog, identity],
-  );
-  const selectableArtifacts = catalog;
-  const selectedEntry = selectableArtifacts.find((entry) => entry.artifact.artifact_id === selectedArtifactId) ?? selectableArtifacts[0] ?? null;
-  const selectedArtifact = selectedEntry?.artifact ?? null;
-  const imageFiles = selectedArtifact ? firmwareArtifactImageFiles(selectedArtifact) : [];
-  const webSerialAvailable = isWebSerialFlashSupported();
-  const webSerialReady = method === "web_serial" && webSerialAvailable && Boolean(selectedArtifact && firmwareArtifactHasWebFlashImages(selectedArtifact));
-  const selectedDevdDevice = devdDevices.find((device) => device.id === selectedDevdId) ?? null;
-  const devdReady = method === "devd" && Boolean(selectedArtifact && selectedDevdDevice?.binding);
-  const canFlash = confirmed && flashState !== "running" && (record.target.mock || webSerialReady || devdReady);
-
-  useEffect(() => {
-    let cancelled = false;
-    loadResolvedFirmwareCatalog()
-      .then((resolution) => {
-        if (cancelled) return;
-        setCatalog(resolution.artifacts);
-        const sourceParts = [
-          `bundled ${resolution.source_status.bundled}`,
-          `release ${resolution.source_status.github_release}`,
-          `${resolution.overridden_release_count} release duplicate${resolution.overridden_release_count === 1 ? "" : "s"} overridden`,
-        ];
-        setCatalogMessage(sourceParts.join(", "));
-      })
-      .catch((error) => {
-        if (!cancelled) setCatalogMessage(error instanceof Error ? error.message : "Firmware catalog unavailable");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    const next = matchingArtifacts[0]?.artifact.artifact_id ?? selectableArtifacts[0]?.artifact.artifact_id ?? "";
-    if (!selectedArtifactId || !selectableArtifacts.some((entry) => entry.artifact.artifact_id === selectedArtifactId)) {
-      setSelectedArtifactId(next);
-    }
-  }, [matchingArtifacts, selectableArtifacts, selectedArtifactId]);
-
-  useEffect(() => {
-    setConfirmed(false);
-    setMessage(null);
-    setFlashState("idle");
-    setProgress(emptyFlashProgress());
-  }, [selectedArtifactId, method]);
-
-  async function onLoadDevdDevices(scan: boolean) {
-    setMessage(scan ? "Scanning devd devices" : "Loading devd devices");
-    try {
-      const result = scan ? await scanDevdDevices(record.target.baseUrl) : await listDevdDevices(record.target.baseUrl);
-      setDevdDevices(result.devices);
-      const match = result.devices.find((device) => device.identity?.device_id === record.target.deviceId) ?? result.devices[0];
-      setSelectedDevdId(match?.id ?? "");
-      setMessage(result.devices.length ? `devd has ${result.devices.length} device${result.devices.length === 1 ? "" : "s"}` : "No devd devices found");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "devd device list failed");
-    }
-  }
-
-  async function onFlash() {
-    if (!selectedArtifact) return;
-    setFlashState("running");
-    setMessage(null);
-    if (record.target.mock) {
-      await runMockFlash(setProgress);
-      setFlashState("success");
-      setMessage("Mock flash completed");
-      return;
-    }
-    try {
-      if (method === "web_serial") {
-        await flashArtifactWithWebSerial({
-          artifact: selectedArtifact,
-          artifactMatch: selectedEntry,
-          onProgress: (next) => setProgress({ ...next, source: "web_serial" }),
-        });
-      } else {
-        const devdId = selectedDevdId;
-        setProgress(makeFlashUiProgress("devd", "verify", "Selecting devd artifact", 12, 0, 0));
-        await selectDevdArtifact(devdId, { artifact_id: selectedArtifact.artifact_id }, record.target.baseUrl);
-        if (!selectedDevdDevice?.binding) {
-          throw new Error("Bind this devd device before flashing. Use the devd binding flow to confirm the intended serial device.");
-        }
-        setProgress(makeFlashUiProgress("devd", "verify", "Running dry-run", 36, 0, 0));
-        await flashDevdDevice(devdId, { artifact_id: selectedArtifact.artifact_id, dry_run: true }, record.target.baseUrl);
-        setProgress(makeFlashUiProgress("devd", "write", "devd flash running", 58, 0, 0));
-        await flashDevdDevice(devdId, { artifact_id: selectedArtifact.artifact_id }, record.target.baseUrl);
-        setProgress(makeFlashUiProgress("devd", "done", "devd flash completed", 100, 0, 0));
-      }
-      setFlashState("success");
-      setMessage("Flash completed. Reconnect the device if the USB CDC session was reset.");
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Firmware flash failed";
-      setFlashState("error");
-      setProgress(makeFlashUiProgress(method, "error", errorMessage, progress.percent, progress.written, progress.total));
-      setMessage(errorMessage);
-    }
-  }
-
-  const disableReason = flashDisableReason({
-    method,
-    selectedArtifact,
-    webSerialAvailable,
-    webSerialReady,
-    devdReady,
-    confirmed,
-    flashState,
-    record,
-  });
-
-  return (
-    <section className="page-flow firmware-page" data-evidence-target="firmware-flash">
-      <DeviceStatusBand record={record} />
-      <div className="firmware-layout">
-        <section className="firmware-main-panel">
-          <div className="section-heading firmware-heading">
-            <div>
-              <span className="eyebrow">Firmware</span>
-              <h2>Flash control</h2>
-            </div>
-            <span className={`transport-badge ${catalog.some((entry) => entry.source === "bundled_overrides_release") ? "adapter" : "http"}`}>
-              {catalogMessage}
-            </span>
-          </div>
-
-          <div className="firmware-step-grid">
-            <InfoPanel title="Current build" icon={Cpu}>
-              <MetricLine label="Build" value={identity?.firmware.build_id ?? "--"} />
-              <MetricLine label="Profile" value={identity?.firmware.build_profile ?? "--"} />
-              <MetricLine label="Features" value={identity?.firmware.features?.join(", ") || "--"} />
-              <MetricLine label="Git" value={identity?.firmware.git_sha ?? "--"} />
-            </InfoPanel>
-
-            <section className="info-panel firmware-selector">
-              <header>
-                <FileDown size={18} />
-                <h2>Artifact</h2>
-              </header>
-              <label className="settings-form">
-                Select firmware
-                <select name="firmware-artifact" value={selectedArtifact?.artifact_id ?? ""} onChange={(event) => setSelectedArtifactId(event.target.value)}>
-                  {selectableArtifacts.map((entry) => (
-                    <option key={entry.artifact.artifact_id} value={entry.artifact.artifact_id}>
-                      {entry.artifact.artifact_id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="artifact-source-row">
-                <SourceBadge source={selectedEntry?.source ?? "github_release"} />
-                <span>{selectedArtifact && identity && firmwareArtifactMatchesIdentity(selectedArtifact, identity) ? "matches current device" : "manual selection"}</span>
-              </div>
-              {selectedArtifact ? <ArtifactSummary artifact={selectedArtifact} /> : <p className="form-message">No firmware artifacts available</p>}
-            </section>
-          </div>
-
-          <section className="info-panel flash-method-panel">
-            <header>
-              <Usb size={18} />
-              <h2>Flash path</h2>
-            </header>
-            <SegmentedControl
-              label="Flash method"
-              value={method}
-              options={[
-                ["web_serial", "Web Serial"],
-                ["devd", "devd"],
-              ]}
-              onChange={(value) => setMethod(value as FlashMethod)}
-            />
-            <div className="flash-path-detail">
-              {method === "web_serial" ? (
-                <>
-                  <MetricLine label="Browser support" value={webSerialAvailable ? "available" : "unsupported"} />
-                  <MetricLine label="Flash images" value={imageFiles.length ? `${imageFiles.length} image${imageFiles.length === 1 ? "" : "s"}` : "missing"} />
-                </>
-              ) : (
-                <>
-                  <div className="devd-controls">
-                    <button className="secondary-button" type="button" onClick={() => void onLoadDevdDevices(false)}>
-                      Load devd
-                    </button>
-                    <button className="secondary-button" type="button" onClick={() => void onLoadDevdDevices(true)}>
-                      Scan devd
-                    </button>
-                  </div>
-                  <label className="settings-form">
-                    Bound device
-                    <select name="devd-device" value={selectedDevdId} onChange={(event) => setSelectedDevdId(event.target.value)}>
-                      <option value="">Select devd device</option>
-                      {devdDevices.map((device) => (
-                        <option key={device.id} value={device.id}>
-                          {device.display_name} ({device.connection})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </>
-              )}
-            </div>
-          </section>
-
-          <section className="info-panel flash-confirm-panel">
-            <header>
-              <AlertTriangle size={18} />
-              <h2>Confirmation</h2>
-            </header>
-            <label className="flash-confirm-line">
-              <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
-              <span>I have selected the intended ESP32-S3 device and firmware artifact.</span>
-            </label>
-            <div className="form-actions">
-              <button className="primary-button" type="button" disabled={!canFlash} onClick={() => void onFlash()}>
-                <FileDown size={16} /> {flashState === "running" ? "Flashing" : "Start flash"}
-              </button>
-              {disableReason ? <span className="flash-disable-reason">{disableReason}</span> : null}
-            </div>
-          </section>
-        </section>
-
-        <aside className="firmware-progress-panel">
-          <FlashProgressView progress={progress} state={flashState} />
-          <div className="flash-log">
-            <span className="eyebrow">Result</span>
-            <p>{message ?? "No flash operation has run in this page session."}</p>
-          </div>
-        </aside>
-      </div>
-    </section>
-  );
-}
-
 function SettingsPage({ record }: { record: DeviceRecord }) {
   const { sendWifiConfig, clearWifiConfig, setManualChargePrefs } = useDeviceRegistry();
   const settings = record.serial?.safeSettings;
@@ -1581,61 +1312,6 @@ function DeviceStatusBand({ record }: { record: DeviceRecord }) {
   );
 }
 
-function SourceBadge({ source }: { source: "bundled" | "github_release" | "bundled_overrides_release" }) {
-  const label = source === "github_release" ? "GitHub Release" : "Bundled";
-  const tone = source === "bundled" || source === "bundled_overrides_release" ? "ok" : "info";
-  return <span className={`severity-badge live-state severity-${tone}`}>{label}</span>;
-}
-
-function ArtifactSummary({ artifact }: { artifact: FirmwareArtifact }) {
-  const images = firmwareArtifactImageFiles(artifact);
-  return (
-    <div className="artifact-summary">
-      <MetricLine label="Artifact" value={artifact.artifact_id} />
-      <MetricLine label="Files" value={`${artifact.files.length}`} />
-      <MetricLine label="Web images" value={`${images.length}`} />
-      {images.length > 0 ? (
-        <div className="artifact-image-list">
-          {images.map((file) => (
-            <div key={file.path} className="artifact-image-line">
-              <span>{file.path}</span>
-              <code>0x{file.flash_address.toString(16)}</code>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="form-message">This artifact has no Web Serial flash image yet.</p>
-      )}
-    </div>
-  );
-}
-
-function FlashProgressView({ progress, state }: { progress: FlashUiProgress; state: FlashRunState }) {
-  return (
-    <section className="info-panel firmware-progress">
-      <header>
-        <Activity size={18} />
-        <h2>Progress</h2>
-      </header>
-      <div className="firmware-progress-shell">
-        <div className="firmware-progress-bar" aria-hidden="true">
-          <span style={{ width: `${progress.percent}%` }} />
-        </div>
-        <div className="firmware-progress-legend">
-          <strong>{Math.round(progress.percent)}%</strong>
-          <span>{progress.message}</span>
-        </div>
-        <div className="firmware-progress-stats">
-          <MetricLine label="Stage" value={progress.stage} />
-          <MetricLine label="Written" value={formatByteCount(progress.written)} />
-          <MetricLine label="Total" value={formatByteCount(progress.total)} />
-          <MetricLine label="State" value={state} />
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function InfoPanel({ title, icon: Icon, children }: { title: string; icon: typeof Gauge; children: React.ReactNode }) {
   return (
     <section className="info-panel">
@@ -1648,77 +1324,8 @@ function InfoPanel({ title, icon: Icon, children }: { title: string; icon: typeo
   );
 }
 
-function emptyFlashProgress(): FlashUiProgress {
-  return {
-    stage: "idle",
-    message: "Ready to flash",
-    percent: 0,
-    written: 0,
-    total: 0,
-    fileIndex: null,
-    source: "mock",
-  };
-}
-
-function makeFlashUiProgress(source: FlashMethod | "mock", stage: WebSerialFlashProgress["stage"], message: string, percent: number, written: number, total: number): FlashUiProgress {
-  return {
-    source,
-    stage,
-    message,
-    percent,
-    written,
-    total,
-    fileIndex: null,
-  };
-}
-
-function flashDisableReason(input: {
-  method: FlashMethod;
-  selectedArtifact: FirmwareArtifact | null;
-  webSerialAvailable: boolean;
-  webSerialReady: boolean;
-  devdReady: boolean;
-  confirmed: boolean;
-  flashState: FlashRunState;
-  record: DeviceRecord;
-}): string | null {
-  if (!input.selectedArtifact) return "Select a firmware artifact first.";
-  if (!input.confirmed) return "Confirm the device and firmware before flashing.";
-  if (input.flashState === "running") return "Flash is already running.";
-  if (input.method === "web_serial") {
-    if (!input.webSerialAvailable) return "Web Serial is unsupported in this browser.";
-    if (!firmwareArtifactHasWebFlashImages(input.selectedArtifact)) return "This artifact has no Web Serial image with flash_address.";
-    return null;
-  }
-  if (input.record.target.transport !== "adapter" && input.record.target.transport !== "serial") return "devd flash requires a bound local device.";
-  if (!input.devdReady) return "Select an explicitly bound devd device first.";
-  return null;
-}
-
-async function runMockFlash(onProgress: (progress: FlashUiProgress) => void): Promise<void> {
-  onProgress(makeFlashUiProgress("mock", "fetch", "Fetching mock firmware", 10, 512 * 1024, 1024 * 1024));
-  await wait(180);
-  onProgress(makeFlashUiProgress("mock", "write", "Writing mock firmware", 62, 640 * 1024, 1024 * 1024));
-  await wait(320);
-  onProgress(makeFlashUiProgress("mock", "reset", "Resetting mock device", 94, 1024 * 1024, 1024 * 1024));
-  await wait(120);
-  onProgress(makeFlashUiProgress("mock", "done", "Mock flash completed", 100, 1024 * 1024, 1024 * 1024));
-}
-
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function formatByteCount(value: number): string {
-  if (!value) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let index = 0;
-  let next = value;
-  while (next >= 1024 && index < units.length - 1) {
-    next /= 1024;
-    index += 1;
-  }
-  return `${next.toFixed(next >= 100 || index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
 function Metric({ label, value, tone = "neutral" }: { label: string; value: number; tone?: "neutral" | "critical" | "warning" | "offline" | "ok" }) {

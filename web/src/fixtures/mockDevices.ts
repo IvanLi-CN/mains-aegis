@@ -798,7 +798,7 @@ export function makeMockDevdRecord(options: { baseUrl?: string; bound?: boolean 
     alias: bound ? "USB devd bridge" : "USB devd pending bind",
     location: "Bench USB",
     addedAt: now,
-    transport: "adapter",
+    transport: "devd",
     mock: false,
   };
   const identity = {

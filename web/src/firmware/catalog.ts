@@ -2,14 +2,14 @@ import { loadBundledFirmwareCatalog } from "../api/client";
 import type { FirmwareArtifact, FirmwareArtifactFile, FirmwareArtifactMatch, FirmwareCatalog, Identity } from "../api/types";
 
 export const BUNDLED_FIRMWARE_CATALOG_URL = "/firmware/firmware-catalog.json";
-export const DEFAULT_GITHUB_FIRMWARE_CATALOG_URL =
-  "https://github.com/IvanLi-CN/mains-aegis/releases/latest/download/firmware-catalog.json";
+export const DEFAULT_GITHUB_FIRMWARE_CATALOG_URL = "github-release:IvanLi-CN/mains-aegis";
 export const GITHUB_FIRMWARE_CATALOG_URL = import.meta.env.VITE_FIRMWARE_CATALOG_URL ?? DEFAULT_GITHUB_FIRMWARE_CATALOG_URL;
 
 export type FirmwareCatalogSource = FirmwareArtifactMatch["source"];
 
 export type ResolvedFirmwareArtifact = FirmwareArtifactMatch & {
   release_duplicate?: FirmwareArtifact;
+  manifest_path?: string;
 };
 
 export type FirmwareCatalogResolution = {
@@ -26,6 +26,7 @@ export async function loadResolvedFirmwareCatalog(): Promise<FirmwareCatalogReso
   let releaseStatus: FirmwareCatalogResolution["source_status"]["github_release"] = GITHUB_FIRMWARE_CATALOG_URL.trim() ? "loaded" : "skipped";
   let bundledArtifacts: FirmwareArtifact[] = [];
   let releaseArtifacts: FirmwareArtifact[] = [];
+  let releaseCatalogUrl = GITHUB_FIRMWARE_CATALOG_URL;
 
   try {
     bundledArtifacts = (await loadBundledFirmwareCatalog()).artifacts;
@@ -35,13 +36,15 @@ export async function loadResolvedFirmwareCatalog(): Promise<FirmwareCatalogReso
 
   if (GITHUB_FIRMWARE_CATALOG_URL.trim()) {
     try {
-      releaseArtifacts = (await loadFirmwareCatalogFromUrlWithTimeout(GITHUB_FIRMWARE_CATALOG_URL, 1200)).artifacts;
+      const releaseCatalog = await loadReleaseFirmwareCatalog(GITHUB_FIRMWARE_CATALOG_URL, 1800);
+      releaseArtifacts = releaseCatalog.catalog.artifacts;
+      releaseCatalogUrl = releaseCatalog.catalog_url;
     } catch {
       releaseStatus = "error";
     }
   }
 
-  const resolution = resolveFirmwareCatalogArtifacts(bundledArtifacts, releaseArtifacts);
+  const resolution = resolveFirmwareCatalogArtifacts(bundledArtifacts, releaseArtifacts, releaseCatalogUrl);
 
   return {
     artifacts: resolution.artifacts,
@@ -72,9 +75,23 @@ async function loadFirmwareCatalogFromUrlWithTimeout(url: string, timeoutMs: num
   }
 }
 
+async function loadReleaseFirmwareCatalog(url: string, timeoutMs: number): Promise<{ catalog: FirmwareCatalog; catalog_url: string }> {
+  const releaseRef = parseGitHubReleaseRef(url);
+  if (!releaseRef) {
+    return { catalog: await loadFirmwareCatalogFromUrlWithTimeout(url, timeoutMs), catalog_url: url };
+  }
+
+  const release = await loadGitHubLatestRelease(releaseRef.owner, releaseRef.repo, timeoutMs);
+  const asset = release.assets.find((candidate) => candidate.name === "firmware-catalog.json");
+  if (!asset) throw new Error("firmware-catalog.json release asset not found");
+  const catalog = await loadGitHubReleaseAssetJson(asset.url, timeoutMs);
+  return { catalog, catalog_url: asset.browser_download_url };
+}
+
 export function resolveFirmwareCatalogArtifacts(
   bundledArtifacts: FirmwareArtifact[],
   releaseArtifacts: FirmwareArtifact[],
+  releaseCatalogUrl = GITHUB_FIRMWARE_CATALOG_URL,
 ): Pick<FirmwareCatalogResolution, "artifacts" | "overridden_release_count"> {
   const artifacts = new Map<string, ResolvedFirmwareArtifact>();
   let overriddenReleaseCount = 0;
@@ -84,6 +101,7 @@ export function resolveFirmwareCatalogArtifacts(
       artifact,
       source: "bundled",
       catalog_url: BUNDLED_FIRMWARE_CATALOG_URL,
+      manifest_path: `web/public/firmware/${artifact.artifact_id}.manifest.json`,
     });
   }
 
@@ -95,13 +113,14 @@ export function resolveFirmwareCatalogArtifacts(
         ...existing,
         source: "bundled_overrides_release",
         release_duplicate: artifact,
+        manifest_path: existing.manifest_path,
       });
       continue;
     }
     artifacts.set(artifact.artifact_id, {
       artifact,
       source: "github_release",
-      catalog_url: GITHUB_FIRMWARE_CATALOG_URL,
+      catalog_url: releaseCatalogUrl,
     });
   }
 
@@ -109,6 +128,52 @@ export function resolveFirmwareCatalogArtifacts(
     artifacts: Array.from(artifacts.values()).sort(compareResolvedArtifacts),
     overridden_release_count: overriddenReleaseCount,
   };
+}
+
+type GitHubReleaseAsset = {
+  name: string;
+  url: string;
+  browser_download_url: string;
+};
+
+type GitHubRelease = {
+  assets: GitHubReleaseAsset[];
+};
+
+function parseGitHubReleaseRef(url: string): { owner: string; repo: string } | null {
+  if (url.startsWith("github-release:")) {
+    const [owner, repo] = url.slice("github-release:".length).split("/");
+    return owner && repo ? { owner, repo } : null;
+  }
+  const match = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/releases\/latest\/download\/firmware-catalog\.json$/);
+  return match ? { owner: match[1], repo: match[2] } : null;
+}
+
+async function loadGitHubLatestRelease(owner: string, repo: string, timeoutMs: number): Promise<GitHubRelease> {
+  return fetchJsonWithTimeout(`https://api.github.com/repos/${owner}/${repo}/releases/latest`, timeoutMs, {
+    Accept: "application/vnd.github+json",
+  });
+}
+
+async function loadGitHubReleaseAssetJson(assetApiUrl: string, timeoutMs: number): Promise<FirmwareCatalog> {
+  return fetchJsonWithTimeout(assetApiUrl, timeoutMs, {
+    Accept: "application/octet-stream",
+  });
+}
+
+async function fetchJsonWithTimeout<T>(url: string, timeoutMs: number, headers: Record<string, string>): Promise<T> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers,
+    });
+    if (!response.ok) throw new Error(`request failed with ${response.status}`);
+    return (await response.json()) as T;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 export async function findFirmwareArtifactForIdentity(identity: Identity): Promise<FirmwareArtifactMatch | null> {

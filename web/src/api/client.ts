@@ -115,8 +115,24 @@ function requestMock<T>(baseUrl: string, path: string): Promise<T> {
 }
 
 function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
+  const devdIdentity =
+    baseUrl === "mock:devd"
+      ? {
+          ...getMockIdentity("mock:lab-standby"),
+          device_id: "mains-aegis-devd-bridge",
+          hostname: "mains-aegis-devd-bridge",
+          hostname_fqdn: "mains-aegis-devd-bridge.local",
+          short_id: "devd01",
+          network: {
+            ...getMockIdentity("mock:lab-standby").network,
+            device_id: "mains-aegis-devd-bridge",
+            hostname: "mains-aegis-devd-bridge",
+            hostname_fqdn: "mains-aegis-devd-bridge.local",
+          },
+        }
+      : null;
   const device = {
-    id: "mock-devd-esp32s3-1",
+    id: baseUrl === "mock:devd" ? "mains-aegis-devd-bridge" : "mock-devd-esp32s3-1",
     display_name: baseUrl === "mock:devd" ? "Bound ESP32-S3" : "USB demo CDC",
     port_path: "/dev/tty.usbmodem-demo",
     transport: "mock" as const,
@@ -125,7 +141,7 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
         ? { alias: "USB demo CDC", bound_at: "2026-04-28T00:00:00.000Z" }
         : null,
     connection: "connected" as const,
-    identity: baseUrl === "mock:devd" ? getMockIdentity("mock:lab-standby") : null,
+    identity: devdIdentity,
     selected_artifact_id: baseUrl === "mock:devd" ? "mains-aegis-esp32s3-release-web_serial-c805b6a" : null,
     log_decode: {
       status: baseUrl === "mock:devd" ? "verified" : "unverified",
@@ -146,6 +162,7 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
   if (path.endsWith("/artifact")) {
     return Promise.resolve({
       ok: true,
+      artifact: null,
     } as T);
   }
   if (path.endsWith("/flash")) {
@@ -304,7 +321,11 @@ export const connectDevdDevice = (deviceId: string, baseUrl = "") =>
   requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/connect`, "POST");
 export const disconnectDevdDevice = (deviceId: string, baseUrl = "") =>
   requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/disconnect`, "POST");
-export const selectDevdArtifact = (deviceId: string, input: { artifact_id?: string; manifest_path?: string }, baseUrl = "") =>
+export const selectDevdArtifact = (
+  deviceId: string,
+  input: { artifact_id?: string; manifest_path?: string; artifact?: FirmwareCatalog["artifacts"][number] },
+  baseUrl = "",
+) =>
   requestWithBody<unknown>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/artifact`, "POST", input);
 export const flashDevdDevice = (deviceId: string, input: { artifact_id?: string; dry_run?: boolean }, baseUrl = "") =>
   requestWithBody<unknown>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/flash`, "POST", input);

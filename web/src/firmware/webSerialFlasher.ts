@@ -1,7 +1,7 @@
-import { ESPLoader, Transport, type FlashOptions, type IEspLoaderTerminal } from "esptool-js";
+import type { After, FlashOptions, IEspLoaderTerminal, Transport } from "esptool-js";
 import type { FirmwareArtifact, FirmwareArtifactMatch } from "../api/types";
 import { firmwareArtifactFileUrl, firmwareArtifactImageFiles } from "./catalog";
-import type { SerialLike, SerialPortLike } from "../serial/transport";
+import type { SerialPortLike } from "../serial/transport";
 
 export type WebSerialFlashStage = "idle" | "request_port" | "connect" | "fetch" | "verify" | "write" | "reset" | "done" | "error";
 
@@ -17,6 +17,7 @@ export type WebSerialFlashProgress = {
 export type WebSerialFlashOptions = {
   artifact: FirmwareArtifact;
   artifactMatch: FirmwareArtifactMatch;
+  port: SerialPortLike;
   onProgress: (progress: WebSerialFlashProgress) => void;
 };
 
@@ -26,17 +27,13 @@ type FlashImage = {
   size: number;
 };
 
-const ESPRESSIF_USB_FILTERS = [
-  { usbVendorId: 0x303a },
-  { usbVendorId: 0x10c4 },
-  { usbVendorId: 0x1a86 },
-];
+const RUN_APP_RESET_SEQUENCE = "D0|R1|W100|R0|W500|D0";
 
 export function isWebSerialFlashSupported(): boolean {
   return typeof navigator !== "undefined" && Boolean(navigator.serial);
 }
 
-export async function flashArtifactWithWebSerial({ artifact, artifactMatch, onProgress }: WebSerialFlashOptions): Promise<void> {
+export async function flashArtifactWithWebSerial({ artifact, artifactMatch, port, onProgress }: WebSerialFlashOptions): Promise<void> {
   const imageFiles = firmwareArtifactImageFiles(artifact);
   if (imageFiles.length === 0) {
     throw new Error("Selected artifact does not include Web Serial flash images with flash addresses");
@@ -46,9 +43,10 @@ export async function flashArtifactWithWebSerial({ artifact, artifactMatch, onPr
   }
 
   let transport: Transport | null = null;
+  let loader: ResettableEspLoader | null = null;
   try {
-    onProgress(makeProgress("request_port", "Select the ESP32-S3 serial port", 0, 0, 0, null));
-    const port = await (navigator.serial as SerialLike).requestPort({ filters: ESPRESSIF_USB_FILTERS });
+    const { ESPLoader, Transport } = await import("esptool-js");
+    onProgress(makeProgress("connect", "Using the connected ESP32-S3 serial port", 0, 0, 0, null));
     transport = new Transport(port, true);
     const logs: string[] = [];
     const terminal: IEspLoaderTerminal = {
@@ -60,15 +58,16 @@ export async function flashArtifactWithWebSerial({ artifact, artifactMatch, onPr
         if (line.trim()) logs.push(line.trim());
       },
     };
-    const loader = new ESPLoader({
+    const espLoader = new ESPLoader({
       transport,
       baudrate: 921600,
       terminal,
       debugLogging: false,
     });
+    loader = espLoader;
 
     onProgress(makeProgress("connect", "Connecting to ESP ROM loader", 0, 0, 0, null));
-    const chip = await loader.main("default_reset");
+    const chip = await espLoader.main("default_reset");
     if (!chip.toLowerCase().includes("esp32-s3") && !chip.toLowerCase().includes("esp32s3")) {
       throw new Error(`Unexpected chip detected: ${chip}`);
     }
@@ -102,7 +101,7 @@ export async function flashArtifactWithWebSerial({ artifact, artifactMatch, onPr
       fileArray: flashImages.map((image) => ({ data: image.data, address: image.address })),
       flashMode: "dio",
       flashFreq: "40m",
-      flashSize: "detect",
+      flashSize: "4MB",
       eraseAll: false,
       compress: true,
       reportProgress: (fileIndex, written, fileTotal) => {
@@ -113,16 +112,26 @@ export async function flashArtifactWithWebSerial({ artifact, artifactMatch, onPr
     };
 
     onProgress(makeProgress("write", "Writing firmware", 12, 0, total, 0));
-    await loader.writeFlash(flashOptions);
+    await espLoader.writeFlash(flashOptions);
     onProgress(makeProgress("reset", "Resetting device", 96, total, total, null));
-    await loader.after("hard_reset");
+    await resetIntoApplication(espLoader);
     onProgress(makeProgress("done", "Flash completed", 100, total, total, null));
   } catch (error) {
+    await resetIntoApplication(loader).catch(() => undefined);
     onProgress(makeProgress("error", error instanceof Error ? error.message : "Web Serial flash failed", 0, 0, 0, null));
     throw error;
   } finally {
     await transport?.disconnect().catch(() => undefined);
   }
+}
+
+type ResettableEspLoader = {
+  after: (resetMode?: After, usingUsbOtg?: boolean, sequenceString?: string) => Promise<void>;
+};
+
+async function resetIntoApplication(loader: ResettableEspLoader | null): Promise<void> {
+  if (!loader) return;
+  await loader.after("custom_reset", false, RUN_APP_RESET_SEQUENCE);
 }
 
 function makeProgress(

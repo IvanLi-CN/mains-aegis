@@ -88,7 +88,15 @@ type SerialTransportOptions = {
 
 const BAUD_RATE = 115200;
 const RESPONSE_TIMEOUT_MS = 5000;
+const HELLO_TIMEOUT_MS = 8000;
+const HELLO_ATTEMPT_TIMEOUT_MS = 1200;
+const HELLO_RETRY_INTERVAL_MS = 250;
 const MAX_LINE_BYTES = 16 * 1024;
+export const ESPRESSIF_USB_SERIAL_FILTERS = [
+  { usbVendorId: 0x303a },
+  { usbVendorId: 0x10c4 },
+  { usbVendorId: 0x1a86 },
+];
 
 export function isWebSerialSupported(): boolean {
   return typeof navigator !== "undefined" && Boolean(navigator.serial);
@@ -97,6 +105,7 @@ export function isWebSerialSupported(): boolean {
 export class WebSerialTransport {
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
+  private suppressCloseNotification = false;
   private readBuffer: number[] = [];
   private defmtBuffer: number[] = [];
   private defmtInFrame = false;
@@ -121,15 +130,24 @@ export class WebSerialTransport {
     if (!navigator.serial) {
       throw new Error("This browser does not expose the Web Serial API");
     }
-    const port = await navigator.serial.requestPort();
+    const port = await navigator.serial.requestPort({ filters: ESPRESSIF_USB_SERIAL_FILTERS });
     await port.open({ baudRate: BAUD_RATE });
-    await port.setSignals?.({ dataTerminalReady: true, requestToSend: true });
     const transport = new WebSerialTransport(port, options);
     transport.startReadLoop();
     return transport;
   }
 
   async close(): Promise<void> {
+    await this.closePort();
+  }
+
+  async releasePort(): Promise<SerialPortLike> {
+    await this.closePort();
+    return this.port;
+  }
+
+  private async closePort(): Promise<void> {
+    this.suppressCloseNotification = true;
     for (const pending of this.pending.values()) {
       window.clearTimeout(pending.timer);
       pending.reject({
@@ -153,10 +171,21 @@ export class WebSerialTransport {
   }
 
   async hello(): Promise<SerialHelloFrame> {
-    const requestId = nextRequestId();
-    const frame = await this.sendAndWait<SerialHelloFrame>({ type: "hello", request_id: requestId }, requestId);
-    if (frame.type !== "hello") throw new Error("USB CDC handshake returned an unexpected frame");
-    return frame;
+    const deadline = Date.now() + HELLO_TIMEOUT_MS;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      const requestId = nextRequestId();
+      try {
+        const frame = await this.sendAndWait<SerialHelloFrame>({ type: "hello", request_id: requestId }, requestId, HELLO_ATTEMPT_TIMEOUT_MS);
+        if (frame.type !== "hello") throw new Error("USB CDC handshake returned an unexpected frame");
+        return frame;
+      } catch (error) {
+        lastError = error;
+        await sleep(HELLO_RETRY_INTERVAL_MS);
+      }
+    }
+    const suffix = lastError instanceof Error ? ` Last error: ${lastError.message}` : "";
+    throw new Error(`USB CDC did not return a Mains Aegis hello frame before timeout. The port opened, but the firmware did not answer.${suffix}`);
   }
 
   async requestIdentity(): Promise<Identity> {
@@ -204,12 +233,13 @@ export class WebSerialTransport {
   private async sendAndWait<TFrame extends SerialResponseFrame | SerialHelloFrame>(
     frame: Record<string, unknown>,
     requestId: string,
+    timeoutMs = RESPONSE_TIMEOUT_MS,
   ): Promise<TFrame> {
     const waiter = new Promise<SerialResponseFrame | SerialHelloFrame>((resolve, reject) => {
       const timer = window.setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new Error("Selected USB serial interface did not respond to the Mains Aegis CDC handshake. Choose the other USB serial interface for this device and try again."));
-      }, RESPONSE_TIMEOUT_MS);
+        reject(new Error("USB CDC command timed out before a response frame was received."));
+      }, timeoutMs);
       this.pending.set(requestId, {
         resolve,
         reject: (error) => reject(Object.assign(new Error(error.message), { envelope: error })),
@@ -242,8 +272,9 @@ export class WebSerialTransport {
         if (!value) continue;
         this.consumeMonitorBytes(value);
       }
-      this.options.onClose();
+      if (!this.suppressCloseNotification) this.options.onClose();
     } catch (error) {
+      if (this.suppressCloseNotification) return;
       this.options.onClose(error instanceof Error ? error : new Error("serial read failed"));
     }
   }
@@ -493,6 +524,10 @@ function classifySerialCommandError(message: string): SerialErrorFrame["error"] 
 
 function nextRequestId(): string {
   return `web-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function hexPreview(bytes: ArrayLike<number>): string {

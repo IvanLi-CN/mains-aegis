@@ -123,7 +123,7 @@ def main() -> int:
     features = [part for part in args.features.split(",") if part]
     src_hash = firmware_source_hash(firmware_dir)
     build_id = f"{git_sha}-{dirty}-{src_hash}"
-    artifact_id = f"{args.name}-esp32s3-{args.profile}-{'-'.join(features) or 'default'}-{git_sha}"
+    artifact_id = f"{args.name}-esp32s3-{args.profile}-{'-'.join(features) or 'default'}-{build_id}"
 
     files = []
     files.append(stage_artifact_file("elf", str(elf), out))

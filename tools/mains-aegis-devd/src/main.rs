@@ -238,6 +238,7 @@ struct BindRequest {
 struct ArtifactSelectRequest {
     manifest_path: Option<String>,
     artifact_id: Option<String>,
+    artifact: Option<FirmwareArtifact>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -788,6 +789,10 @@ async fn select_artifact(
 ) -> Result<Json<Value>, HttpError> {
     let mut loaded_artifact_id = None;
     let mut artifact = None;
+    if let Some(inline_artifact) = input.artifact {
+        loaded_artifact_id = Some(inline_artifact.artifact_id.clone());
+        artifact = Some(inline_artifact);
+    }
     if let Some(path) = input.manifest_path.as_deref() {
         artifact = Some(read_manifest(path)?);
     }

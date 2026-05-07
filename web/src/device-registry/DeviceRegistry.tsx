@@ -35,6 +35,7 @@ import {
   isWebSerialSupported,
   type SerialFrame,
   type SerialLogFrame,
+  type SerialPortLike,
   type SerialStatusFrame,
   type SerialTraceEvent,
   WebSerialTransport,
@@ -726,6 +727,13 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     );
   }, []);
 
+  const prepareWebSerialFlashPort = useCallback(async (deviceId: string): Promise<SerialPortLike | null> => {
+    const session = serialSessions.current.get(deviceId);
+    if (!session) return null;
+    serialSessions.current.delete(deviceId);
+    return session.releasePort();
+  }, []);
+
   const sendWifiConfig = useCallback(async (deviceId: string, input: WifiConfigInput, onProgress?: (progress: WifiProvisioningProgress) => void): Promise<CommandResult> => {
     const record = records.find((candidate) => candidate.target.deviceId === deviceId);
     if (!record) return serialCommandUnavailable();
@@ -1126,6 +1134,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       addDevice,
       addDevdDevice,
       connectUsbSerialDevice,
+      prepareWebSerialFlashPort,
       attachMockUsbSerialDevice,
       disconnectUsbSerialDevice,
       sendWifiConfig,
@@ -1141,6 +1150,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       addDevice,
       addDevdDevice,
       connectUsbSerialDevice,
+      prepareWebSerialFlashPort,
       attachMockUsbSerialDevice,
       disconnectUsbSerialDevice,
       sendWifiConfig,

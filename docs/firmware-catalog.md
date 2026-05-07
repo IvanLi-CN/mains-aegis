@@ -10,7 +10,7 @@ Firmware Catalog is the shared firmware artifact contract for Mains Aegis Web Di
 
 Each catalog has `schema_version=1` and an `artifacts` array. Each artifact describes one ESP32-S3 firmware build:
 
-- `artifact_id`: stable catalog identifier.
+- `artifact_id`: stable catalog identifier derived from name, chip, profile, features, and `build_id`.
 - `git_sha`, `git_dirty`, `build_id`: provenance used for device identity matching.
 - `target_chip`: always `esp32s3`.
 - `profile`: `debug`, `release`, or `dev`.
@@ -53,6 +53,8 @@ development and production preview.
 
 If a bundled artifact and a GitHub Release artifact share the same `artifact_id`,
 the Web App keeps the bundled copy and treats the release copy as a duplicate.
+Because `artifact_id` includes `build_id`, dirty local builds and clean release
+builds from the same commit do not mask each other.
 
 ## Matching and defmt policy
 
@@ -79,3 +81,5 @@ github-release:IvanLi-CN/mains-aegis
 The browser resolves that reference through the GitHub Releases API and reads the `firmware-catalog.json` asset with an asset API request. This avoids the CORS failure seen when fetching `https://github.com/.../releases/latest/download/...` directly from a browser. You can override it with `VITE_FIRMWARE_CATALOG_URL` during local development, including a direct CORS-safe JSON URL. The browser matches the connected device identity against the merged catalog, and only then selects the artifact for defmt decoding or flash flows. If the remote catalog is unavailable, the bundled catalog still keeps the app usable offline.
 
 Web Serial flashing only accepts `image` files with `flash_address`. The browser fetches those static assets, verifies `sha256`, and then writes the address/data pairs through the Web Serial ROM loader.
+
+`mains-aegis-devd` flashing reads firmware files from the daemon host filesystem. The Web UI therefore enables devd flashing only for bundled artifacts staged under `web/public/firmware/`; GitHub Release-only artifacts remain available to Web Serial when they include flash images.

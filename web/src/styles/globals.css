@@ -455,6 +455,11 @@ a {
   color: var(--color-ok);
 }
 
+.severity-badge.severity-source {
+  background: color-mix(in oklch, var(--color-primary-strong) 16%, var(--color-panel));
+  color: var(--color-primary-strong);
+}
+
 .severity-badge.severity-info {
   background: var(--color-severity-info-surface);
   color: var(--color-blue);
@@ -1075,6 +1080,11 @@ a {
 .transport-badge.devd {
   background: var(--color-severity-warning-surface);
   color: var(--color-warning);
+}
+
+.transport-badge.adapter {
+  background: color-mix(in oklch, var(--color-warning) 18%, var(--color-panel));
+  color: color-mix(in oklch, var(--color-warning) 78%, var(--color-ink));
 }
 
 .connection-badges {
@@ -1803,6 +1813,339 @@ a {
   background: var(--color-hairline);
 }
 
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 16px;
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  transition: background-color 180ms ease-out, border-color 180ms ease-out, color 180ms ease-out, box-shadow 180ms ease-out;
+}
+
+.ui-button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 2px var(--color-panel), 0 0 0 4px color-mix(in oklch, var(--color-primary) 42%, transparent);
+}
+
+.ui-button-default {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.ui-button-default:hover {
+  background: color-mix(in oklch, var(--color-primary) 92%, var(--color-ink));
+}
+
+.ui-button-secondary {
+  border-color: var(--color-hairline);
+  background: var(--color-panel);
+}
+
+.ui-button-secondary:hover,
+.ui-button-outline:hover,
+.ui-button-ghost:hover {
+  background: color-mix(in oklch, var(--color-panel) 88%, var(--color-primary));
+}
+
+.ui-button-ghost {
+  background: transparent;
+}
+
+.ui-button-outline {
+  border-color: var(--color-hairline);
+  background: transparent;
+}
+
+.ui-button-destructive {
+  background: color-mix(in oklch, var(--color-critical) 86%, var(--color-ink));
+  color: var(--color-on-primary);
+}
+
+.ui-button-sm {
+  min-height: 34px;
+  padding-inline: 12px;
+  font-size: 13px;
+}
+
+.ui-button-lg {
+  min-height: 44px;
+  padding-inline: 18px;
+}
+
+.ui-button-icon {
+  width: 36px;
+  min-width: 36px;
+  padding-inline: 0;
+}
+
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 999px;
+  background: var(--color-panel);
+  color: var(--color-ink);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ui-badge-muted {
+  color: var(--color-muted);
+}
+
+.ui-badge-ok {
+  border-color: color-mix(in oklch, var(--color-ok) 22%, var(--color-hairline));
+  background: color-mix(in oklch, var(--color-ok) 16%, var(--color-panel));
+  color: color-mix(in oklch, var(--color-ok) 78%, var(--color-ink));
+}
+
+.ui-badge-info {
+  border-color: color-mix(in oklch, var(--color-blue) 22%, var(--color-hairline));
+  background: color-mix(in oklch, var(--color-blue) 14%, var(--color-panel));
+  color: color-mix(in oklch, var(--color-blue) 78%, var(--color-ink));
+}
+
+.ui-badge-warning {
+  border-color: color-mix(in oklch, var(--color-warning) 24%, var(--color-hairline));
+  background: color-mix(in oklch, var(--color-warning) 15%, var(--color-panel));
+  color: color-mix(in oklch, var(--color-warning) 78%, var(--color-ink));
+}
+
+.ui-badge-current {
+  border-color: color-mix(in oklch, var(--color-primary) 24%, var(--color-hairline));
+  background: color-mix(in oklch, var(--color-primary) 12%, var(--color-panel));
+  color: var(--color-primary-strong);
+}
+
+.ui-card {
+  border: 1px solid var(--color-hairline);
+  border-radius: 18px;
+  background: var(--color-panel);
+  color: var(--color-ink);
+}
+
+.ui-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 20px 20px 0;
+}
+
+.ui-card-title {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.ui-card-description {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ui-card-content {
+  padding: 20px;
+}
+
+.ui-card-footer {
+  display: flex;
+  align-items: center;
+  padding: 0 20px 20px;
+}
+
+.ui-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.ui-progress {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--color-muted) 18%, var(--color-panel));
+}
+
+.ui-progress-indicator {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-primary);
+  transition: width 220ms ease-out;
+}
+
+.ui-checkbox {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--color-hairline);
+  border-radius: 4px;
+  background: var(--color-panel);
+  color: var(--color-primary);
+  margin-top: 1px;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+
+.ui-checkbox:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 2px var(--color-panel), 0 0 0 4px color-mix(in oklch, var(--color-primary) 42%, transparent);
+}
+
+.ui-checkbox[data-state="checked"] {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.ui-checkbox-indicator {
+  display: grid;
+  place-items: center;
+}
+
+.ui-separator {
+  width: 100%;
+  height: 1px;
+  border: 0;
+  background: var(--color-hairline);
+}
+
+.ui-sheet-content {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-panel);
+  color: var(--color-ink);
+  outline: 0;
+}
+
+.ui-sheet-overlay {
+  position: fixed;
+  z-index: 49;
+  inset: 0;
+  background: oklch(20% 0.012 250 / 0.36);
+  backdrop-filter: blur(1px);
+}
+
+.ui-sheet-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+
+.ui-sheet-content-right {
+  inset: 0 0 0 auto;
+  width: min(920px, 100vw);
+  border-left: 1px solid var(--color-hairline);
+}
+
+.ui-sheet-content-left {
+  inset: 0 auto 0 0;
+  width: min(760px, 100vw);
+  border-right: 1px solid var(--color-hairline);
+}
+
+.ui-sheet-content-top {
+  inset: 0 0 auto;
+  height: auto;
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.ui-sheet-content-bottom {
+  inset: auto 0 0;
+  height: auto;
+  border-top: 1px solid var(--color-hairline);
+}
+
+.ui-sheet-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-bottom: 1px solid var(--color-hairline);
+  padding: 14px 18px 10px;
+  padding-right: 68px;
+}
+
+.ui-sheet-title {
+  margin: 0;
+  color: var(--color-ink);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.ui-sheet-description {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.ui-sheet-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 18px 16px;
+}
+
+.ui-sheet-footer {
+  border-top: 1px solid var(--color-hairline);
+  padding: 16px 24px 24px;
+}
+
+.ui-tabs-list {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 14px;
+  background: var(--color-panel);
+  padding: 4px;
+}
+
+.ui-tabs-trigger {
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  padding: 8px 14px;
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.ui-tabs-trigger[data-state="active"] {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.ui-tabs-content {
+  margin-top: 16px;
+}
+
 .trace-search {
   display: inline-flex;
   align-items: center;
@@ -2055,204 +2398,609 @@ a {
   padding: 28px;
 }
 
+.fleet-empty {
+  grid-column: 1 / -1;
+}
+
 .firmware-page {
+  display: grid;
+  gap: 20px;
+}
+
+.firmware-hero {
+  display: grid;
   gap: 18px;
 }
 
-.firmware-layout {
+.firmware-hero-copy {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.9fr);
-  gap: 16px;
-  align-items: start;
-}
-
-.firmware-main-panel,
-.firmware-progress-panel {
-  display: grid;
-  gap: 16px;
-  min-width: 0;
-}
-
-.firmware-main-panel {
-  align-content: start;
-}
-
-.firmware-progress-panel {
-  position: sticky;
-  top: 24px;
-}
-
-.firmware-heading {
-  align-items: flex-start;
-}
-
-.firmware-heading .transport-badge {
-  max-width: 100%;
-  white-space: normal;
-  text-transform: none;
-  font-family: var(--font-ui);
-  line-height: 1.35;
-  text-align: left;
-}
-
-.firmware-step-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
-  gap: 16px;
-}
-
-.firmware-selector,
-.flash-method-panel,
-.flash-confirm-panel,
-.firmware-progress,
-.flash-log {
-  display: grid;
-  gap: 12px;
-}
-
-.firmware-selector select,
-.flash-method-panel select {
-  width: 100%;
-  min-height: var(--control-height);
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-card);
-  background: var(--color-panel);
-  padding: 10px 12px;
-  color: var(--color-ink);
-}
-
-.artifact-source-row {
-  display: flex;
-  flex-wrap: wrap;
   gap: 10px;
-  align-items: center;
+  max-width: 68ch;
+}
+
+.firmware-hero-copy h2 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 650;
+  line-height: 1.1;
+}
+
+.firmware-hero-copy p {
+  margin: 0;
   color: var(--color-muted);
-  font-size: 12px;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
-.artifact-summary {
+.firmware-hero-summary-grid {
   display: grid;
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
 }
 
-.artifact-image-list {
+.firmware-summary-card,
+.firmware-list-card,
+.firmware-detail-section {
+  border-radius: 18px;
+}
+
+.firmware-summary-body,
+.firmware-section-content {
   display: grid;
-  gap: 8px;
-  border-top: 1px solid var(--color-hairline);
-  padding-top: 10px;
+  gap: 10px;
 }
 
-.artifact-image-line {
+.firmware-list-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  min-width: 0;
-  color: var(--color-muted);
-  font-size: 12px;
 }
 
-.artifact-image-line span {
-  min-width: 0;
+.firmware-version-list {
+  display: grid;
+  gap: 12px;
+}
+
+.firmware-version-card {
+  transition: border-color 180ms ease-out, background-color 180ms ease-out, box-shadow 180ms ease-out;
+}
+
+.firmware-version-card.is-current {
+  border-color: color-mix(in oklch, var(--color-primary) 28%, var(--color-hairline));
+  background: color-mix(in oklch, var(--color-panel) 88%, var(--color-primary));
+}
+
+.firmware-version-card-content {
+  display: grid;
+  gap: 14px;
+}
+
+.firmware-version-main {
+  display: grid;
+  gap: 14px;
+}
+
+.firmware-version-title-row,
+.firmware-version-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.firmware-version-title-row h3 {
+  font-size: 18px;
+}
+
+.firmware-version-title-row p {
+  max-width: 62ch;
+}
+
+.firmware-artifact-id,
+.firmware-code-value {
+  max-width: 100%;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.firmware-artifact-id {
+  display: block;
+  margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.artifact-image-line code {
-  font-family: var(--font-mono);
-  font-size: 11px;
+.firmware-code-value {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  text-align: inherit;
 }
 
-.flash-path-detail {
+.firmware-code-value.is-truncated {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.firmware-version-meta {
   display: grid;
-  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 16px;
 }
 
-.devd-controls {
+.firmware-version-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.firmware-badge-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
-.flash-confirm-line {
-  display: flex;
+.firmware-metric-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: baseline;
   gap: 10px;
-  align-items: flex-start;
-  color: var(--color-ink);
+  min-width: 0;
+  border-bottom: 1px solid var(--color-hairline);
+  padding: 5px 0;
 }
 
-.flash-confirm-line input {
-  margin-top: 3px;
+.firmware-metric-row.is-wide {
+  grid-column: 1 / -1;
 }
 
-.flash-disable-reason {
+.firmware-metric-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.firmware-metric-row span {
+  flex: 0 0 auto;
   color: var(--color-muted);
   font-size: 12px;
-  line-height: 1.4;
+  white-space: nowrap;
 }
 
-.firmware-progress-shell {
-  display: grid;
+.firmware-metric-row strong {
+  min-width: 0;
+  text-align: right;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.firmware-dashboard-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 12px;
 }
 
-.firmware-progress-bar {
-  height: 12px;
-  overflow: hidden;
-  border: 1px solid var(--color-hairline);
-  border-radius: 999px;
-  background: color-mix(in oklch, var(--color-panel) 86%, var(--color-primary));
-}
-
-.firmware-progress-bar > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--color-primary), color-mix(in oklch, var(--color-primary) 72%, var(--color-blue)));
-  transition: width 220ms ease-out;
-}
-
-.firmware-progress-legend {
+.firmware-dashboard-head > div:first-child {
   display: grid;
-  gap: 4px;
+  gap: 2px;
+  min-width: 0;
 }
 
-.firmware-progress-legend strong {
-  font-size: 24px;
-  line-height: 1;
-}
-
-.firmware-progress-legend span {
+.firmware-dashboard-head span,
+.firmware-status-tile span,
+.firmware-identity-row span {
   color: var(--color-muted);
-  font-size: 13px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.firmware-dashboard-head strong {
+  color: var(--color-ink);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.05;
+}
+
+.firmware-stat-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.firmware-status-tile {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid var(--color-hairline);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--color-panel) 92%, var(--color-primary));
+  padding: 8px 10px;
+}
+
+.firmware-status-tile strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.firmware-identity-list {
+  display: grid;
+  gap: 6px;
+}
+
+.firmware-identity-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  border-bottom: 1px solid var(--color-hairline);
+  padding: 5px 0;
+}
+
+.firmware-identity-row code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.firmware-drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.firmware-drawer-stack {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.firmware-drawer-stack > .firmware-flash-section {
+  min-height: 0;
+  flex: 1;
+}
+
+.firmware-support-panel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+  border-top: 1px solid var(--color-hairline);
+  background: transparent;
+}
+
+.firmware-context-section {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 0 0;
+}
+
+.firmware-context-section + .firmware-context-section {
+  border-left: 1px solid var(--color-hairline);
+  padding-left: 14px;
+  margin-left: 14px;
+}
+
+.firmware-context-section header {
+  display: grid;
+  gap: 2px;
+}
+
+.firmware-context-section h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.firmware-context-section p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
   line-height: 1.35;
 }
 
-.firmware-progress-stats {
+.firmware-detail-section .ui-card-header {
+  padding: 12px 14px 0;
+}
+
+.firmware-detail-section .ui-card-content {
+  padding: 10px 14px 14px;
+}
+
+.firmware-flash-section {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.firmware-flash-section .ui-card-content {
+  min-height: 0;
+  flex: 1;
+}
+
+.firmware-flash-section {
+  border-color: var(--color-hairline);
+}
+
+.firmware-flash-header {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.firmware-flash-layout {
+  display: grid;
+  min-height: 0;
+  height: 100%;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.firmware-flash-primary {
   display: grid;
   gap: 8px;
 }
 
-.firmware-progress-stats .metric-line {
-  padding-block: 8px;
-}
-
-.flash-log {
-  border: 1px solid var(--color-hairline);
-  border-radius: var(--radius-card);
-  background: var(--color-panel);
-  padding: 16px;
-}
-
-.flash-log p {
-  margin: 0;
-  color: var(--color-ink);
-  line-height: 1.5;
-}
-
-.fleet-empty {
+.firmware-flash-action-panel {
   grid-column: 1 / -1;
+  grid-row: 2;
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--color-hairline);
+  padding-top: 10px;
+}
+
+.firmware-flash-action-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.firmware-flash-side {
+  display: contents;
+}
+
+.firmware-flash-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+
+.firmware-image-list {
+  display: grid;
+  gap: 8px;
+}
+
+.firmware-image-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+
+.firmware-image-row strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.firmware-image-row span {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.firmware-empty-note {
+  display: flex;
+  gap: 10px;
+  border: 1px dashed var(--color-hairline);
+  border-radius: 14px;
+  background: color-mix(in oklch, var(--color-panel) 88%, var(--color-primary));
+  padding: 10px;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.firmware-flash-topline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.firmware-flash-topline > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.firmware-flash-topline strong {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.firmware-flash-topline span {
+  min-width: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.firmware-confirm-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, max-content);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  cursor: pointer;
+}
+
+.firmware-confirm-row .ui-checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.firmware-confirm-row .ui-checkbox .ui-checkbox-indicator {
+  position: static;
+}
+
+.firmware-flash-action-body .ui-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.firmware-confirm-row span {
+  min-width: 0;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.firmware-action-row {
+  display: grid;
+  gap: 10px;
+}
+
+.firmware-help {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.firmware-log-panel {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  display: grid;
+  min-height: 0;
+  height: 100%;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 6px;
+  align-self: stretch;
+  --firmware-log-line-height: 22px;
+  --firmware-log-expanded-max-height: 320px;
+  border-radius: 8px;
+  background: var(--color-code-surface);
+  padding: 10px 12px;
+}
+
+.firmware-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.firmware-log-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.firmware-log-actions .ui-button {
+  min-height: 28px;
+  border-color: color-mix(in oklch, var(--color-code-text) 18%, transparent);
+  color: var(--color-code-text);
+}
+
+.firmware-log-actions .ui-button:hover {
+  background: color-mix(in oklch, var(--color-code-text) 10%, transparent);
+}
+
+.firmware-log-lines {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-height: calc(var(--firmware-log-line-height) * 10);
+  overflow: auto;
+  font-family: var(--font-mono);
+}
+
+.firmware-log-panel.is-expanded .firmware-log-lines {
+  max-height: none;
+}
+
+.firmware-log-line {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  border-radius: 8px;
+  min-height: var(--firmware-log-line-height);
+  padding: 3px 6px;
+  color: var(--color-code-text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.firmware-log-line span {
+  color: var(--color-muted);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.firmware-log-line p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.firmware-log-line.is-success span {
+  color: var(--color-ok);
+}
+
+.firmware-log-line.is-error span {
+  color: var(--color-critical);
+}
+
+.firmware-empty {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  color: var(--color-muted);
+}
+
+.firmware-empty p {
+  margin: 0;
 }
 
 @media (max-width: 1180px) {
@@ -2285,6 +3033,57 @@ a {
 
   .firmware-step-grid {
     grid-template-columns: 1fr;
+  }
+
+  .firmware-hero-summary-grid,
+  .firmware-support-panel,
+  .firmware-version-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .firmware-stat-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .firmware-context-section + .firmware-context-section {
+    border-top: 1px solid var(--color-hairline);
+    border-left: 0;
+    padding-left: 0;
+    margin-left: 0;
+  }
+
+  .firmware-flash-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .firmware-version-footer,
+  .firmware-version-title-row {
+    flex-direction: column;
+  }
+
+  .firmware-version-actions {
+    width: 100%;
+  }
+
+  .firmware-version-actions .ui-button {
+    width: 100%;
+  }
+
+  .firmware-flash-action-body {
+    align-items: flex-start;
+  }
+
+  .firmware-version-actions .ui-button,
+  .firmware-flash-action-body .ui-button,
+  .ui-sheet-close,
+  .mobile-nav-bar .icon-button {
+    min-height: 44px;
+  }
+
+  .ui-sheet-close,
+  .mobile-nav-bar .icon-button {
+    width: 44px;
+    min-width: 44px;
   }
 }
 
@@ -2494,23 +3293,42 @@ a {
     align-items: stretch;
   }
 
-  .artifact-image-line,
-  .artifact-source-row {
-    align-items: flex-start;
+  .firmware-catalog-status {
+    justify-items: start;
   }
 
-  .devd-controls {
-    flex-direction: column;
+  .firmware-catalog-summary {
+    text-align: left;
   }
 
-  .devd-controls .secondary-button {
-    width: 100%;
+  .firmware-drawer-body,
+  .ui-sheet-body {
+    padding: 12px;
   }
+
+  .ui-sheet-header {
+    padding: 16px 14px 12px;
+    padding-right: 58px;
+  }
+
+  .firmware-metric-row strong,
+  .firmware-code-value.is-truncated,
+  .firmware-confirm-row span,
+  .firmware-status-tile strong,
+  .firmware-identity-row code {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
 }
 
 @media (max-width: 520px) {
   .main-surface {
     padding: 18px 14px 36px;
+  }
+
+  .firmware-stat-strip {
+    grid-template-columns: 1fr;
   }
 
   .connect-adapt-command {

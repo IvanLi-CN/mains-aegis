@@ -83,9 +83,10 @@
 
 ### 固件烧录
 
-- Web App 合并 bundled static catalog 与 GitHub Release catalog，按 `artifact_id` 去重，bundled 优先。
+- Web App 合并 bundled static catalog 与 GitHub Release catalog，按 `artifact_id` 去重，bundled 优先；`artifact_id` 必须包含 `build_id` 级身份，避免同 commit 的 dirty/local build 遮蔽 clean release build。
 - Web Serial 只烧录带 `flash_address` 的 `image` 文件，并在写入前校验 `sha256`。
-- devd 通过现有 artifact select + dry-run + flash API 完成代理烧录，仍然要求绑定设备。
+- devd 通过现有 artifact select + dry-run + flash API 完成代理烧录，仍然要求绑定设备；devd 只允许烧录本地 staged bundled artifact，不能把 GitHub Release-only artifact 当作 daemon 本地文件。
+- devd 烧录目标必须用 `identity.device_id` 精确匹配当前 Firmware record；多设备或 identity 缺失时必须阻断，不得选择任意 bound/connected device。
 
 ### mains-aegis-devd 本地控制面
 
@@ -325,6 +326,28 @@
   evidence_note: 验证 devd 路径在 mock 已绑定设备上默认选中代理烧录方式，并展示绑定设备选择、确认区和进度摘要的移动端布局。
 
 ![Firmware devd bound mobile evidence](./assets/firmware-devd-bound-mobile.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/firmware?seed=usb`
+  requested_viewport: `1440x1000`
+  viewport_strategy: `chrome-devtools-protocol`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: firmware mock flash running lock
+  evidence_note: 验证 Web Serial mock 烧录运行中会拦截页面刷新/关闭，禁用抽屉关闭、确认框与烧录按钮，并保持进度和阶段日志可见。
+
+![Firmware mock flash running lock evidence](./assets/firmware-mock-flash-running-locked.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/firmware?seed=usb`
+  requested_viewport: `1440x1000`
+  viewport_strategy: `chrome-devtools-protocol`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: firmware mock flash completion unlock
+  evidence_note: 验证 Web Serial mock 烧录完成后解除页面刷新/关闭拦截，恢复抽屉关闭能力，并保留成功状态与完整阶段日志。
+
+![Firmware mock flash completion unlock evidence](./assets/firmware-mock-flash-done-unlocked.png)
 
 ## 实现里程碑
 
