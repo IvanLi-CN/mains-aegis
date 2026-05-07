@@ -15,7 +15,7 @@ High-risk operations such as output enable/disable, fault clear, and charge star
 
 ## Mains Aegis Device Daemon
 
-`mains-aegis-devd` is the preferred local device owner. It manages device scan/list/bind/connect/disconnect/unbind, firmware artifact selection, flash/reset/monitor operations, and the USB CDC safe-control bridge behind localhost HTTP.
+`mains-aegis-devd` is the preferred local device owner. It manages device scan/list/bind/connect/disconnect/unbind, firmware artifact selection, flash/reset/monitor operations, host power coordination, and the USB CDC safe-control bridge behind localhost HTTP.
 
 Development mode uses the Web dev server as the API reverse proxy: the browser talks to the Vite origin, and Vite proxies `/api` to `http://127.0.0.1:30080`. Production mode may serve static Web assets directly from devd.
 
@@ -48,10 +48,31 @@ devd local safe-control endpoints:
 - `DELETE /api/v1/wifi-config`
 - `POST /api/v1/settings/log-level`
 - `POST /api/v1/settings/manual-charge`
+- `GET /api/v1/host/power`
+- `POST /api/v1/host/power/profile`
+- `POST /api/v1/host/power/suspend`
+- `POST /api/v1/host/power/shutdown`
+- `GET /api/v1/host/power/events`
 
 `/api/v1/serial/session` returns Web-compatible `logs`, `trace`, `protocol`, and `safeSettings`. devd keeps bounded in-memory ring buffers and returns a bounded tail by default (`logs_limit=200`, `trace_limit=600`; capped at `500` and `2000`). TX trace payloads redact WiFi PSK before storage or HTTP exposure.
 
 Safe-control writes are device-scoped. Web/App/CLI callers pass firmware `identity.device_id` as `device_id` in POST bodies, or as the `DELETE /api/v1/wifi-config?device_id=...` query parameter. If `device_id` is omitted, devd only accepts the request when exactly one native USB CDC device is connected with identity available.
+
+Host power control is host-scoped, not device-scoped. It exists for UPS-on-battery coordination when the computer should reduce load while continuing to run. `low_power_running` means a platform power profile such as Linux `power-saver` or macOS Low Power Mode; it is not suspend/sleep. All host power state-changing requests default to `dry_run=true`. Real profile switching, suspend, and shutdown are denied unless devd was started with `--allow-host-power-actions` or `MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=1`; real shutdown also requires `confirm:"shutdown"`. devd executes the Web App or UPS instruction as requested and does not add shutdown policy decisions; callers must pass `force:true` explicitly when the UPS power-loss window requires forced system compliance. On Linux, forced shutdown is only supported for `delay_sec:0`; nonzero forced delays return `host_power_shutdown_unsupported` because systemd cannot reliably express both at once. On macOS, `force:true` also returns `host_power_shutdown_unsupported` because the pmset/shutdown backend has no forced-compliance command.
+
+Profile request example:
+
+```json
+{"profile":"power_saver","dry_run":true}
+```
+
+Shutdown request example:
+
+```json
+{"delay_sec":60,"dry_run":true,"force":false}
+```
+
+Dry-run responses include `backend`, `action`, target profile or delay, `force`, `scheduled_after_sec` for shutdown, and the command that would be executed. Real shutdown returns `dispatch:"command_accepted"` only after the platform command exits successfully; devd does not perform an internal shutdown countdown or make an extra policy decision. `GET /api/v1/host/power/events` streams `host_power` SSE events so local listeners can react to UPS load-shed and graceful-shutdown decisions.
 
 ## Framing
 

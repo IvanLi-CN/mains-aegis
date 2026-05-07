@@ -99,8 +99,8 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 
 - 入口：`/devices/:device_id/api`
 - 目的：为开发和 bench 调试提供最小 API 可视化，验证 JSON 和 SSE 是否工作。
-- 主要内容：endpoint 列表、最近一次响应、SSE 连接状态、USB CDC protocol 状态、错误 envelope 展示、structured log 与 USB Console。
-- 接口对接：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、status SSE。
+- 主要内容：endpoint 列表、最近一次响应、SSE 连接状态、USB CDC protocol 状态、host power dry-run 状态、错误 envelope 展示、structured log 与 USB Console。
+- 接口对接：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、status SSE、`/api/v1/host/power`、`/api/v1/host/power/events`。
 - 限制：只读请求，不提供任意 URL fetch，避免浏览器端变成不受控代理。
 
 ### 10. 固件烧录
@@ -171,6 +171,7 @@ web/
 - `device registry`：浏览器侧维护多设备清单；设备侧首版不需要新增聚合 API。
 - `serial transport`：浏览器侧持有当前 session 的 `SerialPort`，解析 USB CDC JSONL frame，复用 `Identity`、`NetworkSummary`、`UpsStatus`，并把 write ack/error/log 映射回设备记录。
 - `devd transport`：`mains-aegis-devd` 持有 USB CDC，Web/App/CLI 通过 localhost HTTP 读取 identity/status/network、提交 safe settings，并通过 `/api/v1/serial/session` 读取 bounded tail structured logs 与 CDC trace，避免 Web 页面反复搬运完整环形缓冲。
+- `host power transport`：devd localhost API 提供主机级 power profile 查询、低功耗运行 dry-run、suspend dry-run、shutdown dry-run 与 `host_power` SSE。它不是设备 USB 控制面；Web 首版只在 API Debug 暴露观察与 dry-run，不提供正式一键关机 UI。
 - `error envelope`：所有页面统一渲染 `{ code, message, retryable, details }`，不要在组件里各自拼错误文案。
 
 ## 导航结构

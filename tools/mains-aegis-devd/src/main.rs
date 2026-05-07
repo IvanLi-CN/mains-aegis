@@ -41,12 +41,14 @@ struct Config {
     bind: SocketAddr,
     web_root: Option<PathBuf>,
     allow_dev_cors: bool,
+    allow_host_power_actions: bool,
 }
 
 #[derive(Clone)]
 struct AppState {
     inner: Arc<Mutex<DevdState>>,
     events: broadcast::Sender<DevdEvent>,
+    allow_host_power_actions: bool,
 }
 
 #[derive(Debug, Default)]
@@ -57,6 +59,13 @@ struct DevdState {
     events: VecDeque<DevdEvent>,
     monitors: HashMap<String, NativeMonitorHandle>,
     web_leases: HashMap<String, WebUsbLease>,
+    host_power: HostPowerState,
+}
+
+#[derive(Debug, Default)]
+struct HostPowerState {
+    previous_profile: Option<String>,
+    last_action: Option<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -300,6 +309,25 @@ struct WebLeaseQuery {
     lease_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct HostPowerProfileRequest {
+    profile: String,
+    dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HostPowerDryRunRequest {
+    dry_run: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HostPowerShutdownRequest {
+    delay_sec: Option<u64>,
+    dry_run: Option<bool>,
+    confirm: Option<String>,
+    force: Option<bool>,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -309,7 +337,7 @@ async fn main() {
         Ok(config) => config,
         Err(message) => {
             eprintln!("{message}");
-            eprintln!("usage: mains-aegis-devd serve [--bind 127.0.0.1:30080] [--web-root <dir>] [--allow-dev-cors]");
+            eprintln!("usage: mains-aegis-devd serve [--bind 127.0.0.1:30080] [--web-root <dir>] [--allow-dev-cors] [--allow-host-power-actions]");
             std::process::exit(2);
         }
     };
@@ -317,6 +345,7 @@ async fn main() {
     let state = AppState {
         inner: Arc::new(Mutex::new(DevdState::default())),
         events,
+        allow_host_power_actions: config.allow_host_power_actions,
     };
     seed_mock_device(&state);
     spawn_web_lease_reaper(state.clone());
@@ -357,6 +386,11 @@ async fn main() {
         )
         .route("/api/v1/serial/session", get(devd_compat_session))
         .route("/api/v1/serial/events", get(devd_compat_events))
+        .route("/api/v1/host/power", get(host_power_status))
+        .route("/api/v1/host/power/profile", post(host_power_profile))
+        .route("/api/v1/host/power/suspend", post(host_power_suspend))
+        .route("/api/v1/host/power/shutdown", post(host_power_shutdown))
+        .route("/api/v1/host/power/events", get(host_power_events))
         .route("/api/v1/defmt/decode", post(defmt_decode))
         .with_state(state);
 
@@ -396,6 +430,10 @@ fn parse_args() -> Result<Config, String> {
         .map(PathBuf::from);
     let mut allow_dev_cors =
         env::var("MAINS_AEGIS_DEVD_ALLOW_DEV_CORS").ok().as_deref() == Some("1");
+    let mut allow_host_power_actions = env::var("MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS")
+        .ok()
+        .as_deref()
+        == Some("1");
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--bind" => {
@@ -410,6 +448,7 @@ fn parse_args() -> Result<Config, String> {
                 ))
             }
             "--allow-dev-cors" => allow_dev_cors = true,
+            "--allow-host-power-actions" => allow_host_power_actions = true,
             "-h" | "--help" => return Err("mains-aegis-devd serve".to_string()),
             value => return Err(format!("unknown argument: {value}")),
         }
@@ -420,6 +459,7 @@ fn parse_args() -> Result<Config, String> {
             .map_err(|_| format!("invalid --bind address: {bind}"))?,
         web_root,
         allow_dev_cors,
+        allow_host_power_actions,
     })
 }
 
@@ -1949,6 +1989,190 @@ async fn devd_compat_events(
     Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
 }
 
+async fn host_power_events(
+    State(state): State<AppState>,
+) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, std::convert::Infallible>>>, HttpError>
+{
+    let receiver = state.events.subscribe();
+    let stream = async_stream::stream! {
+        let mut receiver = receiver;
+        while let Ok(event) = receiver.recv().await {
+            if event.kind == "host_power" {
+                yield Ok(Event::default().event(event.kind.clone()).id(event.id.clone()).json_data(event).expect("serialize event"));
+            }
+        }
+    };
+    Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
+}
+
+async fn host_power_status(State(state): State<AppState>) -> Json<Value> {
+    let (previous_profile, last_action) = {
+        let guard = state.inner.lock().expect("state lock");
+        (
+            guard.host_power.previous_profile.clone(),
+            guard.host_power.last_action.clone(),
+        )
+    };
+    Json(json!({
+        "backend": host_power_backend_name(),
+        "platform": env::consts::OS,
+        "real_actions_allowed": state.allow_host_power_actions,
+        "default_dry_run": true,
+        "capabilities": host_power_capabilities(),
+        "state": query_host_power_state().await,
+        "previous_profile": previous_profile,
+        "last_action": last_action
+    }))
+}
+
+async fn host_power_profile(
+    State(state): State<AppState>,
+    Json(input): Json<HostPowerProfileRequest>,
+) -> Result<Json<Value>, HttpError> {
+    let dry_run = input.dry_run.unwrap_or(true);
+    ensure_host_power_action_allowed(&state, dry_run, "profile")?;
+    let requested_profile = normalize_host_power_profile(&input.profile)?;
+    let target_profile = if requested_profile == "restore_previous" {
+        let previous = {
+            let guard = state.inner.lock().expect("state lock");
+            guard.host_power.previous_profile.clone()
+        };
+        previous.ok_or_else(|| {
+            HttpError::non_retryable(
+                "host_power_previous_profile_missing",
+                "restore_previous requires a previously saved host power profile",
+            )
+        })?
+    } else {
+        requested_profile.clone()
+    };
+    let command = build_profile_command(&target_profile)?;
+    let current_profile = query_current_host_power_profile().await.map_err(|error| {
+        HttpError::retryable_with_details(
+            "host_power_profile_query_failed",
+            "failed to query current host power profile",
+            error,
+        )
+    })?;
+    if !dry_run {
+        run_command_status(&command, "host_power_profile_failed").await?;
+    }
+    let existing_previous_profile = {
+        let guard = state.inner.lock().expect("state lock");
+        guard.host_power.previous_profile.clone()
+    };
+    let next_previous_profile = next_previous_profile(
+        dry_run,
+        &requested_profile,
+        &target_profile,
+        &current_profile,
+        existing_previous_profile.as_deref(),
+    );
+    if next_previous_profile != existing_previous_profile {
+        let mut guard = state.inner.lock().expect("state lock");
+        guard.host_power.previous_profile = next_previous_profile;
+    }
+    let result = json!({
+        "ok": true,
+        "dry_run": dry_run,
+        "backend": host_power_backend_name(),
+        "action": "profile",
+        "profile": requested_profile,
+        "target_profile": target_profile,
+        "previous_profile": current_profile,
+        "profile_query": {
+            "ok": true,
+            "profile": current_profile
+        },
+        "command": command
+    });
+    record_host_power_action(&state, "host power profile requested", result.clone());
+    Ok(Json(result))
+}
+
+async fn host_power_suspend(
+    State(state): State<AppState>,
+    input: Option<Json<HostPowerDryRunRequest>>,
+) -> Result<Json<Value>, HttpError> {
+    let dry_run = input
+        .map(|Json(input)| input.dry_run)
+        .flatten()
+        .unwrap_or(true);
+    let command = build_suspend_command()?;
+    ensure_host_power_action_allowed(&state, dry_run, "suspend")?;
+    if !dry_run {
+        run_command_status(&command, "host_power_suspend_failed").await?;
+    }
+    let result = json!({
+        "ok": true,
+        "dry_run": dry_run,
+        "backend": host_power_backend_name(),
+        "action": "suspend",
+        "command": command
+    });
+    record_host_power_action(&state, "host suspend requested", result.clone());
+    Ok(Json(result))
+}
+
+async fn host_power_shutdown(
+    State(state): State<AppState>,
+    input: Option<Json<HostPowerShutdownRequest>>,
+) -> Result<Json<Value>, HttpError> {
+    let input = input
+        .map(|Json(input)| input)
+        .unwrap_or(HostPowerShutdownRequest {
+            delay_sec: None,
+            dry_run: None,
+            confirm: None,
+            force: None,
+        });
+    let dry_run = input.dry_run.unwrap_or(true);
+    let delay_sec = input.delay_sec.unwrap_or(60);
+    let force = input.force.unwrap_or(false);
+    let command = build_shutdown_command(delay_sec, force)?;
+    ensure_host_power_action_allowed(&state, dry_run, "shutdown")?;
+    if !dry_run && input.confirm.as_deref() != Some("shutdown") {
+        record_host_power_action(
+            &state,
+            "host shutdown request denied",
+            json!({
+                "ok": false,
+                "dry_run": false,
+                "backend": host_power_backend_name(),
+                "action": "shutdown",
+                "delay_sec": delay_sec,
+                "error": {
+                    "code": "host_power_shutdown_confirmation_required",
+                    "message": "real shutdown requires confirm=\"shutdown\"",
+                    "retryable": false,
+                    "details": null
+                },
+                "command": command
+            }),
+        );
+        return Err(HttpError::non_retryable(
+            "host_power_shutdown_confirmation_required",
+            "real shutdown requires confirm=\"shutdown\"",
+        ));
+    }
+    if !dry_run {
+        run_command_status(&command, "host_power_shutdown_failed").await?;
+    }
+    let result = json!({
+        "ok": true,
+        "dry_run": dry_run,
+        "backend": host_power_backend_name(),
+        "action": "shutdown",
+        "delay_sec": delay_sec,
+        "force": force,
+        "command": command,
+        "scheduled_after_sec": delay_sec,
+        "dispatch": if dry_run { "not_dispatched" } else { "command_accepted" }
+    });
+    record_host_power_action(&state, "host shutdown requested", result.clone());
+    Ok(Json(result))
+}
+
 async fn defmt_decode(Json(input): Json<DefmtDecodeRequest>) -> Result<Json<Value>, HttpError> {
     let elf_path = resolve_embedded_firmware_path(&input.elf_path)?;
     let elf = fs::read(&elf_path).map_err(|error| {
@@ -2831,6 +3055,391 @@ fn summarize_cdc_frame(frame: &Value) -> String {
     }
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct CommandSpec {
+    program: String,
+    args: Vec<String>,
+}
+
+impl CommandSpec {
+    fn new(program: impl Into<String>, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            program: program.into(),
+            args: args.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+fn host_power_backend_name() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "linux-systemd"
+    } else if cfg!(target_os = "macos") {
+        "macos-pmset"
+    } else {
+        "unsupported"
+    }
+}
+
+fn host_power_capabilities() -> Value {
+    json!({
+        "low_power_running": cfg!(any(target_os = "linux", target_os = "macos")),
+        "profiles": host_power_supported_profiles(),
+        "suspend": cfg!(any(target_os = "linux", target_os = "macos")),
+        "shutdown": cfg!(any(target_os = "linux", target_os = "macos")),
+        "dry_run": true,
+        "events": true
+    })
+}
+
+fn host_power_supported_profiles() -> Vec<&'static str> {
+    if cfg!(target_os = "linux") {
+        vec!["power_saver", "balanced", "performance", "restore_previous"]
+    } else if cfg!(target_os = "macos") {
+        vec!["power_saver", "balanced", "restore_previous"]
+    } else {
+        vec![]
+    }
+}
+
+async fn query_host_power_state() -> Value {
+    match query_current_host_power_profile().await {
+        Ok(profile) => json!({"ok": true, "profile": profile}),
+        Err(error) => json!({
+            "ok": false,
+            "error": error
+        }),
+    }
+}
+
+async fn query_current_host_power_profile() -> Result<String, Value> {
+    if cfg!(target_os = "linux") {
+        let command = linux_get_profile_command();
+        let output = run_command_output(&command).await?;
+        parse_linux_active_profile(&output).ok_or_else(|| {
+            json!({
+                "code": "host_power_profile_parse_failed",
+                "message": "power-profiles-daemon ActiveProfile output was not recognized",
+                "command": command,
+                "output": output
+            })
+        })
+    } else if cfg!(target_os = "macos") {
+        let command = CommandSpec::new("pmset", ["-g"]);
+        let output = run_command_output(&command).await?;
+        parse_macos_low_power_mode(&output)
+            .map(|enabled| if enabled { "power_saver" } else { "balanced" }.to_string())
+            .ok_or_else(|| {
+                json!({
+                    "code": "host_power_profile_parse_failed",
+                    "message": "pmset output did not include lowpowermode",
+                    "command": command,
+                    "output": output
+                })
+            })
+    } else {
+        Err(json!({
+            "code": "host_power_backend_unsupported",
+            "message": format!("host power control is not supported on {}", env::consts::OS)
+        }))
+    }
+}
+
+fn normalize_host_power_profile(profile: &str) -> Result<String, HttpError> {
+    let normalized = profile.replace('-', "_").to_ascii_lowercase();
+    if host_power_supported_profiles()
+        .iter()
+        .any(|supported| supported == &normalized.as_str())
+    {
+        Ok(normalized)
+    } else {
+        Err(HttpError::non_retryable(
+            "host_power_profile_unsupported",
+            format!("unsupported host power profile: {profile}"),
+        ))
+    }
+}
+
+fn should_save_previous_profile(
+    dry_run: bool,
+    requested_profile: &str,
+    target_profile: &str,
+    current_profile: &str,
+    existing_previous_profile: Option<&str>,
+) -> bool {
+    !dry_run
+        && requested_profile != "restore_previous"
+        && target_profile == "power_saver"
+        && current_profile != "power_saver"
+        && existing_previous_profile.is_none()
+}
+
+fn next_previous_profile(
+    dry_run: bool,
+    requested_profile: &str,
+    target_profile: &str,
+    current_profile: &str,
+    existing_previous_profile: Option<&str>,
+) -> Option<String> {
+    if should_save_previous_profile(
+        dry_run,
+        requested_profile,
+        target_profile,
+        current_profile,
+        existing_previous_profile,
+    ) {
+        Some(current_profile.to_string())
+    } else if !dry_run && requested_profile == "restore_previous" {
+        None
+    } else {
+        existing_previous_profile.map(str::to_string)
+    }
+}
+
+fn build_profile_command(profile: &str) -> Result<CommandSpec, HttpError> {
+    if cfg!(target_os = "linux") {
+        let active_profile = match profile {
+            "power_saver" => "power-saver",
+            "balanced" => "balanced",
+            "performance" => "performance",
+            value => {
+                return Err(HttpError::non_retryable(
+                    "host_power_profile_unsupported",
+                    format!("unsupported Linux host power profile: {value}"),
+                ))
+            }
+        };
+        Ok(linux_set_profile_command(active_profile))
+    } else if cfg!(target_os = "macos") {
+        match profile {
+            "power_saver" => Ok(CommandSpec::new("pmset", ["-a", "lowpowermode", "1"])),
+            "balanced" => Ok(CommandSpec::new("pmset", ["-a", "lowpowermode", "0"])),
+            value => Err(HttpError::non_retryable(
+                "host_power_profile_unsupported",
+                format!("unsupported macOS host power profile: {value}"),
+            )),
+        }
+    } else {
+        Err(HttpError::non_retryable(
+            "host_power_backend_unsupported",
+            format!("host power control is not supported on {}", env::consts::OS),
+        ))
+    }
+}
+
+fn build_suspend_command() -> Result<CommandSpec, HttpError> {
+    if cfg!(target_os = "linux") {
+        Ok(CommandSpec::new(
+            "busctl",
+            [
+                "--system",
+                "call",
+                "org.freedesktop.login1",
+                "/org/freedesktop/login1",
+                "org.freedesktop.login1.Manager",
+                "Suspend",
+                "b",
+                "false",
+            ],
+        ))
+    } else if cfg!(target_os = "macos") {
+        Ok(CommandSpec::new("pmset", ["sleepnow"]))
+    } else {
+        Err(HttpError::non_retryable(
+            "host_power_backend_unsupported",
+            format!("host suspend is not supported on {}", env::consts::OS),
+        ))
+    }
+}
+
+fn build_shutdown_command(delay_sec: u64, force: bool) -> Result<CommandSpec, HttpError> {
+    if cfg!(target_os = "linux") {
+        if force && delay_sec > 0 {
+            return Err(HttpError::non_retryable(
+                "host_power_shutdown_unsupported",
+                "Linux forced shutdown only supports delay_sec=0",
+            ));
+        }
+        let mut args = vec![
+            "poweroff".to_string(),
+            "--no-block".to_string(),
+            "--message=Mains Aegis UPS battery low".to_string(),
+        ];
+        if force {
+            args.push("--force".to_string());
+        }
+        if delay_sec > 0 {
+            args.push(format!("--when=+{delay_sec}s"));
+        }
+        Ok(CommandSpec::new("systemctl", args))
+    } else if cfg!(target_os = "macos") {
+        if force {
+            return Err(HttpError::non_retryable(
+                "host_power_shutdown_unsupported",
+                "macOS forced shutdown is not supported by the pmset/shutdown backend",
+            ));
+        }
+        let when = if delay_sec == 0 {
+            "now".to_string()
+        } else {
+            format!("+{}", delay_sec.div_ceil(60))
+        };
+        Ok(CommandSpec::new(
+            "shutdown",
+            [
+                "-h".to_string(),
+                when,
+                "Mains Aegis UPS battery low".to_string(),
+            ],
+        ))
+    } else {
+        Err(HttpError::non_retryable(
+            "host_power_backend_unsupported",
+            format!("host shutdown is not supported on {}", env::consts::OS),
+        ))
+    }
+}
+
+fn linux_get_profile_command() -> CommandSpec {
+    CommandSpec::new(
+        "busctl",
+        [
+            "--system",
+            "get-property",
+            "net.hadess.PowerProfiles",
+            "/net/hadess/PowerProfiles",
+            "net.hadess.PowerProfiles",
+            "ActiveProfile",
+        ],
+    )
+}
+
+fn linux_set_profile_command(profile: &str) -> CommandSpec {
+    CommandSpec::new(
+        "busctl",
+        [
+            "--system",
+            "set-property",
+            "net.hadess.PowerProfiles",
+            "/net/hadess/PowerProfiles",
+            "net.hadess.PowerProfiles",
+            "ActiveProfile",
+            "s",
+            profile,
+        ],
+    )
+}
+
+fn parse_linux_active_profile(output: &str) -> Option<String> {
+    let profile = output
+        .split('"')
+        .nth(1)
+        .or_else(|| output.split_whitespace().last())?;
+    match profile {
+        "power-saver" => Some("power_saver".to_string()),
+        "balanced" => Some("balanced".to_string()),
+        "performance" => Some("performance".to_string()),
+        _ => None,
+    }
+}
+
+fn parse_macos_low_power_mode(output: &str) -> Option<bool> {
+    output.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        (parts.next()? == "lowpowermode")
+            .then(|| parts.next())
+            .flatten()
+            .and_then(|value| match value {
+                "0" => Some(false),
+                "1" => Some(true),
+                _ => None,
+            })
+    })
+}
+
+async fn run_command_output(command: &CommandSpec) -> Result<String, Value> {
+    let output = Command::new(&command.program)
+        .args(&command.args)
+        .output()
+        .await
+        .map_err(|error| {
+            json!({
+                "code": "host_power_command_launch_failed",
+                "message": error.to_string(),
+                "command": command
+            })
+        })?;
+    if !output.status.success() {
+        return Err(json!({
+            "code": "host_power_command_failed",
+            "message": format!("host power command exited with {}", output.status),
+            "command": command,
+            "stderr": String::from_utf8_lossy(&output.stderr).trim()
+        }));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+async fn run_command_status(command: &CommandSpec, code: &str) -> Result<(), HttpError> {
+    let status = Command::new(&command.program)
+        .args(&command.args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map_err(|error| HttpError::retryable(code, error.to_string()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(HttpError::retryable(
+            code,
+            format!("host power command exited with {status}"),
+        ))
+    }
+}
+
+fn ensure_host_power_action_allowed(
+    state: &AppState,
+    dry_run: bool,
+    action: &str,
+) -> Result<(), HttpError> {
+    if dry_run || state.allow_host_power_actions {
+        Ok(())
+    } else {
+        record_host_power_action(
+            state,
+            "host power request denied",
+            json!({
+                "ok": false,
+                "dry_run": false,
+                "backend": host_power_backend_name(),
+                "action": action,
+                "error": {
+                    "code": "host_power_real_action_denied",
+                    "message": format!(
+                        "real host {action} requires --allow-host-power-actions or MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=1"
+                    ),
+                    "retryable": false,
+                    "details": null
+                }
+            }),
+        );
+        Err(HttpError::non_retryable(
+            "host_power_real_action_denied",
+            format!(
+                "real host {action} requires --allow-host-power-actions or MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=1"
+            ),
+        ))
+    }
+}
+
+fn record_host_power_action(state: &AppState, message: &str, payload: Value) {
+    {
+        let mut guard = state.inner.lock().expect("state lock");
+        guard.host_power.last_action = Some(payload.clone());
+    }
+    emit(state, None, "host_power", message, payload);
+}
+
 fn emit(state: &AppState, device_id: Option<String>, kind: &str, message: &str, payload: Value) {
     let event = DevdEvent {
         id: next_id(),
@@ -2908,6 +3517,17 @@ impl HttpError {
                 message: message.into(),
                 retryable: true,
                 details: None,
+            },
+            StatusCode::BAD_GATEWAY,
+        )
+    }
+    fn retryable_with_details(code: &str, message: impl Into<String>, details: Value) -> Self {
+        Self(
+            ApiError {
+                code: code.to_string(),
+                message: message.into(),
+                retryable: true,
+                details: Some(details),
             },
             StatusCode::BAD_GATEWAY,
         )
@@ -3236,6 +3856,321 @@ mod tests {
             created_at: "now".into(),
         });
         assert_eq!(bound_flash_port(&device), Some("/dev/cu.usbmodem1".into()));
+    }
+
+    #[test]
+    fn parses_linux_power_profiles_active_profile() {
+        assert_eq!(
+            parse_linux_active_profile("s \"power-saver\"\n").as_deref(),
+            Some("power_saver")
+        );
+        assert_eq!(
+            parse_linux_active_profile("s \"balanced\"\n").as_deref(),
+            Some("balanced")
+        );
+        assert_eq!(parse_linux_active_profile("s \"unknown\"\n"), None);
+    }
+
+    #[test]
+    fn builds_linux_power_profiles_dbus_command() {
+        assert_eq!(
+            linux_set_profile_command("power-saver"),
+            CommandSpec::new(
+                "busctl",
+                [
+                    "--system",
+                    "set-property",
+                    "net.hadess.PowerProfiles",
+                    "/net/hadess/PowerProfiles",
+                    "net.hadess.PowerProfiles",
+                    "ActiveProfile",
+                    "s",
+                    "power-saver",
+                ],
+            )
+        );
+    }
+
+    #[test]
+    fn parses_macos_low_power_mode_from_pmset_output() {
+        assert_eq!(
+            parse_macos_low_power_mode("System-wide power settings:\n lowpowermode 1\n"),
+            Some(true)
+        );
+        assert_eq!(
+            parse_macos_low_power_mode("System-wide power settings:\n lowpowermode 0\n"),
+            Some(false)
+        );
+        assert_eq!(
+            parse_macos_low_power_mode("System-wide power settings:\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn host_power_real_action_is_denied_by_default() {
+        let (events, mut receiver) = broadcast::channel(1);
+        let state = AppState {
+            inner: Arc::new(Mutex::new(DevdState::default())),
+            events,
+            allow_host_power_actions: false,
+        };
+        assert!(ensure_host_power_action_allowed(&state, true, "shutdown").is_ok());
+        assert!(ensure_host_power_action_allowed(&state, false, "shutdown").is_err());
+        let event = receiver.try_recv().unwrap();
+        assert_eq!(event.kind, "host_power");
+        assert_eq!(event.payload["ok"], false);
+        assert_eq!(event.payload["action"], "shutdown");
+        assert_eq!(
+            event.payload["error"]["code"],
+            "host_power_real_action_denied"
+        );
+    }
+
+    #[test]
+    fn linux_shutdown_command_uses_systemctl_poweroff_when_compiled_for_linux() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let command = build_shutdown_command(30, false).unwrap();
+
+        assert_eq!(command.program, "systemctl");
+        assert_eq!(command.args[0], "poweroff");
+        assert!(command.args.contains(&"--no-block".to_string()));
+        assert!(!command.args.contains(&"--force".to_string()));
+        assert!(command.args.contains(&"--when=+30s".to_string()));
+    }
+
+    #[test]
+    fn linux_shutdown_command_uses_force_only_when_requested() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let command = build_shutdown_command(0, true).unwrap();
+
+        assert_eq!(command.program, "systemctl");
+        assert_eq!(command.args[0], "poweroff");
+        assert!(command.args.contains(&"--no-block".to_string()));
+        assert!(command.args.contains(&"--force".to_string()));
+        assert!(!command.args.iter().any(|arg| arg.starts_with("--when=")));
+    }
+
+    #[test]
+    fn linux_forced_delayed_shutdown_is_rejected_when_compiled_for_linux() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let error = build_shutdown_command(30, true).unwrap_err();
+
+        assert_eq!(error.0.code, "host_power_shutdown_unsupported");
+    }
+
+    #[test]
+    fn macos_shutdown_command_uses_os_scheduler_when_compiled_for_macos() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let command = build_shutdown_command(30, false).unwrap();
+
+        assert_eq!(command.program, "shutdown");
+        assert_eq!(command.args[0], "-h");
+        assert_eq!(command.args[1], "+1");
+    }
+
+    #[test]
+    fn macos_forced_shutdown_is_rejected_when_compiled_for_macos() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let error = build_shutdown_command(0, true).unwrap_err();
+
+        assert_eq!(error.0.code, "host_power_shutdown_unsupported");
+    }
+
+    #[test]
+    fn previous_profile_is_saved_only_for_first_real_saver_entry() {
+        assert!(should_save_previous_profile(
+            false,
+            "power_saver",
+            "power_saver",
+            "balanced",
+            None
+        ));
+        assert!(!should_save_previous_profile(
+            false,
+            "power_saver",
+            "power_saver",
+            "power_saver",
+            Some("balanced")
+        ));
+        assert!(!should_save_previous_profile(
+            false,
+            "power_saver",
+            "power_saver",
+            "balanced",
+            Some("balanced")
+        ));
+        assert!(!should_save_previous_profile(
+            true,
+            "power_saver",
+            "power_saver",
+            "balanced",
+            None
+        ));
+    }
+
+    #[test]
+    fn previous_profile_is_cleared_after_real_restore() {
+        assert_eq!(
+            next_previous_profile(
+                false,
+                "restore_previous",
+                "balanced",
+                "power_saver",
+                Some("balanced")
+            ),
+            None
+        );
+        assert_eq!(
+            next_previous_profile(
+                true,
+                "restore_previous",
+                "balanced",
+                "power_saver",
+                Some("balanced")
+            )
+            .as_deref(),
+            Some("balanced")
+        );
+        assert_eq!(
+            next_previous_profile(false, "power_saver", "power_saver", "performance", None)
+                .as_deref(),
+            Some("performance")
+        );
+    }
+
+    #[tokio::test]
+    async fn real_profile_action_is_denied_before_backend_query() {
+        let (events, mut receiver) = broadcast::channel(4);
+        let state = AppState {
+            inner: Arc::new(Mutex::new(DevdState::default())),
+            events,
+            allow_host_power_actions: false,
+        };
+
+        let error = host_power_profile(
+            State(state),
+            Json(HostPowerProfileRequest {
+                profile: "power_saver".to_string(),
+                dry_run: Some(false),
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.0.code, "host_power_real_action_denied");
+        let event = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.kind, "host_power");
+        assert_eq!(event.payload["action"], "profile");
+        assert_eq!(
+            event.payload["error"]["code"],
+            "host_power_real_action_denied"
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_profile_is_rejected_before_backend_query() {
+        let (events, _) = broadcast::channel(4);
+        let state = AppState {
+            inner: Arc::new(Mutex::new(DevdState::default())),
+            events,
+            allow_host_power_actions: false,
+        };
+
+        let error = host_power_profile(
+            State(state),
+            Json(HostPowerProfileRequest {
+                profile: "turbo".to_string(),
+                dry_run: Some(true),
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.0.code, "host_power_profile_unsupported");
+    }
+
+    #[tokio::test]
+    async fn suspend_accepts_missing_body_as_default_dry_run() {
+        let (events, mut receiver) = broadcast::channel(4);
+        let state = AppState {
+            inner: Arc::new(Mutex::new(DevdState::default())),
+            events,
+            allow_host_power_actions: false,
+        };
+
+        let response = host_power_suspend(State(state), None).await.unwrap();
+
+        assert_eq!(response.0["dry_run"], true);
+        assert_eq!(response.0["action"], "suspend");
+        let event = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.kind, "host_power");
+        assert_eq!(event.payload["action"], "suspend");
+    }
+
+    #[tokio::test]
+    async fn shutdown_accepts_missing_body_as_default_dry_run() {
+        let (events, mut receiver) = broadcast::channel(4);
+        let state = AppState {
+            inner: Arc::new(Mutex::new(DevdState::default())),
+            events,
+            allow_host_power_actions: false,
+        };
+
+        let response = host_power_shutdown(State(state), None).await.unwrap();
+
+        assert_eq!(response.0["dry_run"], true);
+        assert_eq!(response.0["action"], "shutdown");
+        assert_eq!(response.0["delay_sec"], 60);
+        assert_eq!(response.0["force"], false);
+        let event = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.kind, "host_power");
+        assert_eq!(event.payload["action"], "shutdown");
+    }
+
+    #[tokio::test]
+    async fn host_power_action_record_emits_event() {
+        let (events, mut receiver) = broadcast::channel(4);
+        let state = AppState {
+            inner: Arc::new(Mutex::new(DevdState::default())),
+            events,
+            allow_host_power_actions: false,
+        };
+        let payload = json!({
+            "ok": true,
+            "dry_run": true,
+            "action": "profile",
+            "target_profile": "power_saver",
+            "command": linux_set_profile_command("power-saver")
+        });
+        record_host_power_action(&state, "host power profile requested", payload);
+
+        let event = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.kind, "host_power");
+        assert_eq!(event.payload["action"], "profile");
+        assert_eq!(event.payload["dry_run"], true);
     }
 
     fn usb_port(port_name: &str, serial_number: Option<&str>) -> serialport::SerialPortInfo {
