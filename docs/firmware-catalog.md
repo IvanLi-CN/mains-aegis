@@ -64,6 +64,8 @@ The firmware workflow builds release variants, generates manifests with this sam
 
 The release job publishes a release tagged with the current commit SHA and uploads the full artifact bundle produced by `tools/firmware-artifact/build-catalog-entry.py`, including `firmware-catalog.json`, `SHA256SUMS`, the manifest, and the firmware file(s) referenced by the catalog. The Web App resolves the latest release through the GitHub Releases API and reads the `firmware-catalog.json` asset from that release.
 
+The Web-serialable image is produced from the release ELF with Espressif `elf2image` and is recorded at flash address `0x10000`. That is the `image` file the browser fetches and writes during Web Serial flashing.
+
 ## Browser lookup policy
 
 When the Web App connects to a device, it merges the bundled catalog under `web/public/firmware/firmware-catalog.json` with the configured GitHub Release catalog. Bundled entries win on duplicate `artifact_id`.
