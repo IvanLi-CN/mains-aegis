@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { DeviceRecord, SafeSettingsState, WifiApplyNetwork } from "../api/types";
+import type { SerialPortLike } from "../serial/transport";
 
 export type AddDeviceInput = {
   target: string;
@@ -35,6 +36,7 @@ export type DeviceRegistryContextValue = {
   addDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
   addDevdDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
   connectUsbSerialDevice: (input?: Pick<AddDeviceInput, "alias" | "location" | "ignoreFirmwareMismatch">) => Promise<AddDeviceResult>;
+  prepareWebSerialFlashPort: (deviceId: string) => Promise<SerialPortLike | null>;
   attachMockUsbSerialDevice: () => AddDeviceResult;
   disconnectUsbSerialDevice: (deviceId: string) => Promise<void>;
   sendWifiConfig: (deviceId: string, input: WifiConfigInput, onProgress?: (progress: WifiProvisioningProgress) => void) => Promise<CommandResult>;

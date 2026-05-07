@@ -103,6 +103,17 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 - 接口对接：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、status SSE。
 - 限制：只读请求，不提供任意 URL fetch，避免浏览器端变成不受控代理。
 
+### 10. 固件烧录
+
+- 入口：`/devices/:device_id/firmware`
+- 目的：在浏览器里完成 Web Serial 直烧或通过本地 `mains-aegis-devd` 代理烧录。
+- 主要内容：当前设备固件摘要、catalog 来源、去重后的可用 artifact、Web Serial 支持状态、devd 绑定状态、校验状态、确认区、进度条、阶段日志和结果摘要。
+- 固件来源：Web App 合并 bundled static catalog 与 GitHub Release catalog，按 `artifact_id` 去重，bundled 优先。
+- Web Serial 规则：只烧录带 `flash_address` 的 `image` 文件，并在写入前校验 `sha256`。
+- devd 规则：先 select artifact，再 dry-run，然后真实 flash，必须要求显式绑定设备；devd 只能烧录已随 Web 静态资源 staging 到本地磁盘的 bundled artifact，GitHub Release-only artifact 由 Web Serial 路径烧录。
+- devd 目标选择：Firmware 抽屉只能使用 `identity.device_id` 与当前记录一致的 devd device；找不到精确匹配时必须阻断，不得 fallback 到其它已绑定设备。
+- 运行保护：Web Serial 或 devd 烧录运行中必须拦截页面刷新/关闭，锁定抽屉关闭、确认框与重复烧录入口，直到烧录成功或失败后恢复。
+
 ## USB CDC / Web Serial 协议
 
 - Framing：LF 分隔 JSON frame。

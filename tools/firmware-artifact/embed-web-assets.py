@@ -58,6 +58,8 @@ def copy_artifact_files(source_root: Path, public_root: Path, artifact: dict[str
         staged_file["path"] = f"{artifact_id}/{source.name}"
         staged_file["sha256"] = sha256(dest)
         staged_file["size"] = dest.stat().st_size
+        if "flash_address" in file_entry:
+            staged_file["flash_address"] = file_entry["flash_address"]
         staged_files.append(staged_file)
 
     staged["files"] = staged_files

@@ -68,17 +68,32 @@ def firmware_source_hash(firmware_dir: Path) -> str:
     return f"{value:016x}"
 
 
-def stage_artifact_file(kind: str, value: str, out: Path) -> dict[str, object]:
+def stage_artifact_file(kind: str, value: str, out: Path, flash_address: int | None = None) -> dict[str, object]:
     source = Path(value).resolve()
     dest = out / source.name
     if source != dest:
         shutil.copyfile(source, dest)
-    return {
+    entry = {
         "kind": kind,
         "path": dest.relative_to(out).as_posix(),
         "sha256": sha256(dest),
         "size": dest.stat().st_size,
     }
+    if flash_address is not None:
+        entry["flash_address"] = flash_address
+    return entry
+
+
+def parse_image_arg(value: str) -> tuple[int | None, str]:
+    if ":" not in value:
+        return None, value
+    maybe_address, path = value.split(":", 1)
+    if not maybe_address:
+        return None, path
+    try:
+        return int(maybe_address, 0), path
+    except ValueError as exc:
+        raise SystemExit(f"invalid image flash address in --image/--bin: {maybe_address}") from exc
 
 
 def main() -> int:
@@ -89,7 +104,8 @@ def main() -> int:
     parser.add_argument("--version", default=None)
     parser.add_argument("--profile", default="release")
     parser.add_argument("--features", default="net_http,web_serial")
-    parser.add_argument("--bin", default=None)
+    parser.add_argument("--bin", default=None, help="Compatibility alias for --image; accepts [address:]path")
+    parser.add_argument("--image", action="append", default=[], help="Flash image as [address:]path, for Web Serial flashing")
     parser.add_argument("--defmt-metadata", default=None)
     parser.add_argument("--firmware-dir", default="firmware")
     args = parser.parse_args()
@@ -107,13 +123,19 @@ def main() -> int:
     features = [part for part in args.features.split(",") if part]
     src_hash = firmware_source_hash(firmware_dir)
     build_id = f"{git_sha}-{dirty}-{src_hash}"
-    artifact_id = f"{args.name}-esp32s3-{args.profile}-{'-'.join(features) or 'default'}-{git_sha}"
+    artifact_id = f"{args.name}-esp32s3-{args.profile}-{'-'.join(features) or 'default'}-{build_id}"
 
     files = []
-    for kind, value in [("elf", str(elf)), ("image", args.bin), ("defmt_metadata", args.defmt_metadata)]:
-        if not value:
-            continue
-        files.append(stage_artifact_file(kind, value, out))
+    files.append(stage_artifact_file("elf", str(elf), out))
+    image_args = []
+    if args.bin:
+        image_args.append(args.bin)
+    image_args.extend(args.image)
+    for image_arg in image_args:
+        flash_address, path = parse_image_arg(image_arg)
+        files.append(stage_artifact_file("image", path, out, flash_address))
+    if args.defmt_metadata:
+        files.append(stage_artifact_file("defmt_metadata", args.defmt_metadata, out))
 
     elf_hash = next((item["sha256"] for item in files if item["kind"] == "elf"), None)
     metadata_hash = next((item["sha256"] for item in files if item["kind"] == "defmt_metadata"), None)

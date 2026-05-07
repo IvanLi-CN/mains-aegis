@@ -203,6 +203,7 @@ export type FirmwareArtifactFile = {
   path: string;
   sha256: string;
   size: number;
+  flash_address?: number;
 };
 
 export type FirmwareArtifact = {
@@ -231,7 +232,7 @@ export type FirmwareCatalog = {
 
 export type FirmwareArtifactMatch = {
   artifact: FirmwareArtifact;
-  source: "github_release" | "bundled";
+  source: "github_release" | "bundled" | "bundled_overrides_release";
   catalog_url: string;
 };
 

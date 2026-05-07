@@ -264,7 +264,13 @@ export function isDemoSeed(value: string | null | undefined): value is DemoSeed 
 
 export function makeMockRecords(seed: DemoSeed = "default"): DeviceRecord[] {
   if (seed === "empty") return [];
-  if (seed === "usb") return [makeMockUsbSerialRecord()];
+  if (seed === "usb") {
+    return [
+      makeMockUsbSerialRecord(),
+      makeMockDevdRecord({ baseUrl: "mock:usb", bound: false }),
+      makeMockDevdRecord({ baseUrl: "mock:devd", bound: true }),
+    ];
+  }
   if (seed === "dual") {
     const records = mockDefinitions.map((definition) => recordFromDefinition(definition));
     const first = records[0];
@@ -780,6 +786,75 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
       trace: serialTrace,
       safeSettings: defaultMockSafeSettings(),
     },
+  };
+}
+
+export function makeMockDevdRecord(options: { baseUrl?: string; bound?: boolean } = {}): DeviceRecord {
+  const baseUrl = options.baseUrl ?? "mock:devd";
+  const bound = options.bound ?? true;
+  const target: DeviceTarget = {
+    deviceId: bound ? "mains-aegis-devd-bridge" : "mains-aegis-devd-unbound",
+    baseUrl,
+    alias: bound ? "USB devd bridge" : "USB devd pending bind",
+    location: "Bench USB",
+    addedAt: now,
+    transport: "devd",
+    mock: false,
+  };
+  const identity = {
+    ...mockDefinitions[0].identity,
+      device_id: target.deviceId,
+      hostname: bound ? "mains-aegis-devd-bridge" : "mains-aegis-devd-unbound",
+      hostname_fqdn: `${bound ? "mains-aegis-devd-bridge" : "mains-aegis-devd-unbound"}.local`,
+      short_id: bound ? "devd01" : "devd00",
+      firmware: {
+        ...mockDefinitions[0].identity.firmware,
+        package_version: "0.1.0",
+        build_profile: "release",
+      build_id: `${bound ? "devd01" : "devd00"}-clean-demo`,
+      git_sha: "fea0b19",
+      src_hash: bound ? "devd01" : "devd00",
+      git_dirty: "clean",
+      features: ["web_serial", "devd"],
+    },
+    capabilities: {
+      sse: true,
+      mdns: true,
+      dns_sd: true,
+      write_controls: true,
+    },
+  } satisfies Identity;
+  const network: NetworkSummary = {
+    ...identity.network,
+    device_id: target.deviceId,
+    hostname: bound ? "mains-aegis-devd-bridge" : "mains-aegis-devd-unbound",
+    hostname_fqdn: `${bound ? "mains-aegis-devd-bridge" : "mains-aegis-devd-unbound"}.local`,
+    state: "connected",
+    ipv4: "192.168.31.63",
+    gateway: "192.168.31.1",
+    dns: "1.1.1.1",
+    is_static: false,
+    last_error: null,
+    rssi_dbm: -48,
+  };
+  const deviceStatus: UpsStatus = {
+    ...status("standby", 74),
+    network: {
+      state: "connected",
+      ipv4: "192.168.31.63",
+      last_error: null,
+    },
+  };
+
+  return {
+    target,
+    identity,
+    network,
+    status: deviceStatus,
+    connectionState: "online",
+    streamState: "polling",
+    error: null,
+    lastUpdated: new Date().toISOString(),
   };
 }
 

@@ -7,10 +7,13 @@
 - `DeviceRegistry` 维护浏览器侧设备清单、localStorage 持久化、LAN 只读探活、SSE 订阅与轮询兜底，并持有当前浏览器 session 内的 USB CDC `SerialPort`。
 - USB CDC / Web Serial 设备使用 `serial:` target，不持久化真实 `SerialPort`；刷新后需要重新授权。
 - `web/src/serial/transport.ts` 实现 JSONL framing、`request_id` response matching、握手、状态读取、WiFi 配网、日志级别与手动充电偏好命令。
+- `web/src/firmware/` 负责 firmware catalog 合并、Bundled 优先去重、Web Serial 烧录 helper 和 Firmware 页面数据流。
 - 固件新增 `usb_cdc_protocol` host-testable 协议模块，定义 `hello/status/log/request/response/error/wifi_config` frame、WiFi secret validation、PSK redaction 与 128B EEPROM WiFi config record CRC。
 - 主固件默认启用 `web_serial + net_http`，使用 ESP32-S3 USB Serial/JTAG CDC 通道读取 JSONL 命令，返回 identity/status/ack/error/log frame，并在 `get_status` 上生成 `status` / `output` / `charger` / `battery` / `network` 结构化日志；WiFi config 写入 EEPROM `0x0160` 起始的 4 个 32B block，`set` 后运行时立即连接，`clear` 后清空 EEPROM slot，并让 WiFi task 以 250ms 周期观察配置 generation，立即标记 `network.state=disabled` 后执行 disconnect/stop。
 - `mock:` 设备用于稳定开发预览和视觉证据，不发真实网络请求。
 - 管理端页面已覆盖 Fleet、Connect、Overview、Power、Battery、Thermal、Device、Settings、API。
+- 管理端新增 `/devices/:device_id/firmware`，支持 Web Serial 直烧与 devd 代理烧录，并展示 catalog 去重来源、确认区、阶段进度和终态摘要。
+- Firmware 抽屉在烧录运行中会拦截页面刷新/关闭，禁用抽屉关闭、确认框与重复烧录入口；Web Serial 烧录复用当前已连接的串口并在完成/失败路径尝试复位回应用态。
 - Settings 页仅对 USB CDC 或 devd 连接设备开放，提供 WiFi SSID/PSK 覆盖/清除、手动充电偏好、USB session 日志级别和 USB Console；USB Console 保留当前 Web Serial 或 devd session 的 tx/rx frame、raw / ignored CDC 行和协议 payload，支持等级过滤、方向过滤、搜索高亮、虚拟滚动、全屏查看与 payload 折行开关，PSK 脱敏。
 - Web App 已移除独立 USB HTTP bridge 分支，devd 成为 localhost USB 控制面；同一 `identity.device_id` 的 LAN 与 USB 来源合并为一条设备记录，并在 Fleet / Connect 中显示 WiFi 与 USB 标记。
 - devd Web USB control lease 已落地：多候选设备必须由用户选择，Web session 创建 lease 后 heartbeat 续租，断开/移除/页面卸载时释放，TTL 到期自动释放，safe settings 与 serial session 均要求有效 lease。
@@ -25,6 +28,7 @@
 - `bun install`: 已通过。
 - `bun run web:check`: 已通过。
 - `bun run web:build`: 已通过。
+- `bun test web/src/firmware/catalog.test.ts web/src/app/traceScrollAnchor.test.ts`: 已通过。
 - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`: 已通过。
 - `cd firmware && cargo +esp check`: 已通过。
 - `cd firmware && cargo +esp check --no-default-features`: 已通过。

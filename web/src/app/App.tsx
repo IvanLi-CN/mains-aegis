@@ -10,6 +10,7 @@ import {
   Cable,
   CircleHelp,
   Cpu,
+  FileDown,
   Gauge,
   Globe2,
   KeyRound,
@@ -34,7 +35,7 @@ import {
 import { FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
 import { normalizeBaseUrl, scanDevdDevices, toErrorEnvelope } from "../api/client";
-import type { DevdDevice, DeviceRecord, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
+import type { DeviceRecord, DevdDevice, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 import { SegmentedControl } from "../components/ui/segmented-control";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { useDeviceRegistry, type WifiProvisioningProgress } from "../device-registry/context";
@@ -43,11 +44,12 @@ import { isWebSerialSupported } from "../serial/transport";
 import { formatCurrent, formatPercent, formatTemp, formatVoltage, timeAgo } from "../utils/format";
 import { deviceSeverity, modeLabel, severityRank, type Severity } from "../utils/severity";
 import { captureTraceScrollAnchor, resolveAnchoredTraceScrollTop, type TraceScrollAnchor } from "./traceScrollAnchor";
+import { FirmwarePage as FirmwarePageView } from "./firmware-page";
 
 type Route = {
   path: string;
   deviceId: string | null;
-  section: "fleet" | "connect" | "overview" | "power" | "battery" | "thermal" | "device" | "settings" | "api";
+  section: "fleet" | "connect" | "overview" | "power" | "battery" | "thermal" | "device" | "firmware" | "settings" | "api";
 };
 
 type AppProps = {
@@ -65,6 +67,7 @@ const deviceSections = [
   { id: "battery", label: "Battery", icon: BatteryCharging },
   { id: "thermal", label: "Thermal", icon: Thermometer },
   { id: "device", label: "Device", icon: Cpu },
+  { id: "firmware", label: "Firmware", icon: FileDown },
   { id: "settings", label: "Settings", icon: Settings },
   { id: "api", label: "API", icon: Cable },
 ] as const;
@@ -149,6 +152,8 @@ function renderRoute(route: Route, records: DeviceRecord[], selected: DeviceReco
       return <ThermalPage record={selected} />;
     case "device":
       return <DeviceInfoPage record={selected} />;
+    case "firmware":
+      return <FirmwarePageView record={selected} />;
     case "settings":
       return <SettingsPage record={selected} />;
     case "api":
@@ -219,7 +224,7 @@ function deviceHref(deviceId: string, section: string) {
 }
 
 function deviceDefaultHref(record: DeviceRecord) {
-  return deviceHref(record.target.deviceId, record.serial?.connected ? "settings" : "overview");
+  return deviceHref(record.target.deviceId, record.target.transport === "serial" || record.target.transport === "devd" ? "firmware" : "overview");
 }
 
 function NavLink({ href, active, icon: Icon, label }: { href: string; active: boolean; icon: LucideIcon; label: string }) {
@@ -1317,6 +1322,10 @@ function InfoPanel({ title, icon: Icon, children }: { title: string; icon: typeo
       {children}
     </section>
   );
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function Metric({ label, value, tone = "neutral" }: { label: string; value: number; tone?: "neutral" | "critical" | "warning" | "offline" | "ok" }) {
