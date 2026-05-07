@@ -60,18 +60,20 @@ the Web App keeps the bundled copy and treats the release copy as a duplicate.
 
 ## GitHub Release flow
 
-The firmware workflow builds release variants, generates manifests with this same schema, uploads them as workflow artifacts, and can publish the catalog plus artifact files to GitHub Releases. The Web App consumes catalogs rather than hard-coded artifact URLs.
+The firmware workflow builds release variants, generates manifests with this same schema, uploads them as workflow artifacts, and publishes the generated catalog plus artifact files to GitHub Releases on `push` to `main`. The Web App consumes catalogs rather than hard-coded artifact URLs.
+
+The release job publishes a release tagged with the current commit SHA and uploads the full artifact bundle produced by `tools/firmware-artifact/build-catalog-entry.py`, including `firmware-catalog.json`, `SHA256SUMS`, the manifest, and the firmware file(s) referenced by the catalog. The Web App resolves the latest release through the GitHub Releases API and reads the `firmware-catalog.json` asset from that release.
 
 ## Browser lookup policy
 
-When the Web App connects to a device, it first tries the configured GitHub Release catalog URL, then falls back to the bundled catalog under `web/public/firmware/firmware-catalog.json`.
+When the Web App connects to a device, it merges the bundled catalog under `web/public/firmware/firmware-catalog.json` with the configured GitHub Release catalog. Bundled entries win on duplicate `artifact_id`.
 
-Default GitHub catalog URL:
+Default GitHub catalog reference:
 
 ```text
-https://github.com/IvanLi-CN/mains-aegis/releases/latest/download/firmware-catalog.json
+github-release:IvanLi-CN/mains-aegis
 ```
 
-You can override it with `VITE_FIRMWARE_CATALOG_URL` during local development. The browser matches the connected device identity against the catalog, and only then selects the artifact for defmt decoding or flash flows. If the remote catalog is unavailable, the bundled catalog still keeps the app usable offline.
+The browser resolves that reference through the GitHub Releases API and reads the `firmware-catalog.json` asset with an asset API request. This avoids the CORS failure seen when fetching `https://github.com/.../releases/latest/download/...` directly from a browser. You can override it with `VITE_FIRMWARE_CATALOG_URL` during local development, including a direct CORS-safe JSON URL. The browser matches the connected device identity against the merged catalog, and only then selects the artifact for defmt decoding or flash flows. If the remote catalog is unavailable, the bundled catalog still keeps the app usable offline.
 
 Web Serial flashing only accepts `image` files with `flash_address`. The browser fetches those static assets, verifies `sha256`, and then writes the address/data pairs through the Web Serial ROM loader.
