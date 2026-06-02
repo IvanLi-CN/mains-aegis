@@ -509,6 +509,12 @@ pub async fn serve_http_bridge(config: HttpBridgeConfig) -> anyhow::Result<()> {
         .route("/api/v1/defmt/decode", post(defmt_decode))
         .with_state(state);
 
+    if let Some(token) = config.auth_token.as_ref().filter(|token| !token.is_empty()) {
+        app = app.layer(middleware::from_fn_with_state(
+            token.clone(),
+            require_bearer_token,
+        ));
+    }
     if config.allow_dev_cors {
         app = app.layer(
             CorsLayer::new()
@@ -521,12 +527,6 @@ pub async fn serve_http_bridge(config: HttpBridgeConfig) -> anyhow::Result<()> {
                 .allow_methods([Method::GET, Method::POST, Method::DELETE])
                 .allow_headers(tower_http::cors::Any),
         );
-    }
-    if let Some(token) = config.auth_token.as_ref().filter(|token| !token.is_empty()) {
-        app = app.layer(middleware::from_fn_with_state(
-            token.clone(),
-            require_bearer_token,
-        ));
     }
     if let Some(web_root) = config.web_root {
         app = app.fallback_service(ServeDir::new(web_root));

@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
-import { bridgeAuthRequired, normalizeBaseUrl, saveBridgeAuthToken, scanDevdDevices, toErrorEnvelope } from "../api/client";
+import { bridgeAuthRequired, bridgeAuthToken, normalizeBaseUrl, saveBridgeAuthToken, scanDevdDevices, toErrorEnvelope } from "../api/client";
 import type { DeviceRecord, DevdDevice, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 import { SegmentedControl } from "../components/ui/segmented-control";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
@@ -467,6 +467,15 @@ function ConnectPage() {
   const [devdBusy, setDevdBusy] = useState(false);
   const serialSupported = isWebSerialSupported();
   const demoMode = isDemoSeed(new URLSearchParams(window.location.search).get("seed"));
+
+  useEffect(() => {
+    const normalizedTarget = target.trim() ? normalizeBaseUrl(target) : null;
+    setBridgeToken(normalizedTarget ? bridgeAuthToken(normalizedTarget) ?? "" : "");
+  }, [target]);
+
+  useEffect(() => {
+    setDevdBridgeToken(bridgeAuthToken(normalizeBaseUrl(devdTarget)) ?? "");
+  }, [devdTarget]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
