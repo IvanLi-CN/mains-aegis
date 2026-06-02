@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  bridgeAuthRequired,
   clearDevdWifiConfig,
   connectDevdDevice,
   createDevdWebLease,
@@ -262,7 +263,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         });
         return;
       }
-      const result = await probeDevice(target.baseUrl);
+      const result = await probeDevice(target.baseUrl, undefined, target.bridgeAuth ? { bridgeAuth: true } : undefined);
       setRecords((current) => {
         const previous = current.find((record) => record.target.deviceId === deviceId);
         if (!previous) return current;
@@ -351,6 +352,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         continue;
       }
 
+      const bridgeAuth = record.target.bridgeAuth ? { bridgeAuth: true } : undefined;
       const subscription = subscribeStatusStream(record.target.baseUrl, {
         onStatus: (status) => {
           setRecords((current) =>
@@ -387,7 +389,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
                 : candidate,
             ),
           );
-          void getStatus(record.target.baseUrl)
+          void getStatus(record.target.baseUrl, undefined, bridgeAuth)
             .then((status) => {
               setRecords((current) =>
                 current.map((candidate) =>
@@ -421,7 +423,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
               );
             });
         },
-      });
+      }, bridgeAuth);
 
       streams.current.set(record.target.deviceId, subscription);
     }
@@ -464,13 +466,15 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     const baseUrl = normalizeBaseUrl(input.target);
 
     try {
-      const result = await probeDevice(baseUrl);
+      const bridgeAuth = await bridgeAuthRequired(baseUrl);
+      const result = await probeDevice(baseUrl, undefined, bridgeAuth ? { bridgeAuth: true } : undefined);
       const target: DeviceTarget = {
         deviceId: result.identity.device_id,
         baseUrl,
         alias: input.alias?.trim() || result.identity.hostname,
         location: input.location?.trim() || "Unassigned",
         addedAt: new Date().toISOString(),
+        bridgeAuth: bridgeAuth || undefined,
       };
       const record = recordFromProbe(target, result, "online", result.identity.capabilities.sse ? "idle" : "polling");
       setRecords((current) => upsertRecord(current, record));

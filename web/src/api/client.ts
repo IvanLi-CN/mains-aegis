@@ -94,6 +94,16 @@ export function bridgeAuthToken(baseUrl: string): string | null {
   return window.localStorage.getItem(BRIDGE_AUTH_TOKEN_KEY)?.trim() || null;
 }
 
+export async function bridgeAuthRequired(baseUrl: string): Promise<boolean> {
+  if (isMockBaseUrl(baseUrl)) return false;
+  try {
+    const bootstrap = await requestJson<{ token_required?: boolean }>(baseUrl, "/api/v1/bootstrap");
+    return bootstrap.token_required === true;
+  } catch {
+    return false;
+  }
+}
+
 function parseJsonPayload<T>(text: string): T | ApiErrorEnvelope | null {
   if (!text) return null;
   try {

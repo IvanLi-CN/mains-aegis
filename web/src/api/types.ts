@@ -124,6 +124,7 @@ export type DeviceTarget = {
   addedAt: string;
   transport?: "http" | "serial" | "devd";
   serialProtocol?: string;
+  bridgeAuth?: boolean;
   mock?: boolean;
 };
 
