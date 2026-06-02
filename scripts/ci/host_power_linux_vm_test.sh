@@ -106,7 +106,8 @@ scp -q -i "${ssh_key}" -P "${ssh_port}" \
 "${ssh_base[@]}" 'sudo systemctl restart power-profiles-daemon || true'
 "${ssh_base[@]}" 'sudo install -m 0755 /home/ci/mains-aegis-devd /usr/local/bin/mains-aegis-devd'
 "${ssh_base[@]}" "printf '%s\n' '${bridge_token}' > /home/ci/mains-aegis-devd.token"
-"${ssh_base[@]}" 'sudo env MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=1 nohup /usr/local/bin/mains-aegis-devd bridge-http --bind 0.0.0.0:30080 --allow-lan-bridge --auth-token-file /home/ci/mains-aegis-devd.token > /tmp/mains-aegis-devd.log 2>&1 &'
+"${ssh_base[@]}" 'rm -f /tmp/mains-aegis-devd-linux.sock'
+"${ssh_base[@]}" 'sudo env MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=1 nohup /usr/local/bin/mains-aegis-devd bridge-http --ipc /tmp/mains-aegis-devd-linux.sock --bind 0.0.0.0:30080 --allow-lan-bridge --auth-token-file /home/ci/mains-aegis-devd.token > /tmp/mains-aegis-devd.log 2>&1 &'
 
 for _ in {1..60}; do
   if curl -fsS "${auth_header[@]}" "http://127.0.0.1:${api_port}/api/v1/host/power" >/dev/null 2>&1; then
