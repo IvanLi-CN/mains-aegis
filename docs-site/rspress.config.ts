@@ -11,6 +11,7 @@ const repoUrl = "https://github.com/IvanLi-CN/mains-aegis";
 const docsBase = normalizeBase(process.env.DOCS_BASE);
 const docsLogo = `${docsBase}brand/mark.svg`;
 const docsFavicon = new URL("./docs/public/favicon.svg", import.meta.url);
+const globalStyles = new URL("./docs/styles.css", import.meta.url).pathname;
 
 const handbookSidebar = [
   {
@@ -51,6 +52,7 @@ export default defineConfig({
   logo: docsLogo,
   logoText: "Mains Aegis",
   icon: docsFavicon,
+  globalStyles,
   outDir: "doc_build",
   themeConfig: {
     search: true,

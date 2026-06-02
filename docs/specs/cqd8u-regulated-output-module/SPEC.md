@@ -25,6 +25,8 @@
 - 运行态门控解除后，仅当 `VIN` 在线时进入“可恢复未恢复”状态；本轮不自动重新使能输出。
 - 把启动期“是否允许尝试恢复 BMS 放电路径”变成显式策略决策，并把决策结果映射到自检页：`BMS=LIMIT/RECOVER`、`Charger=IDLE`、`Output=HOLD/RECOVER`。
 - 保证只要 `BQ40Z50` 普通通信正常，就不走“离线 BMS 激活”语义；该分支只允许用于真正离线/不可访问的情况。
+- 在 `docs/modules/regulated-output.md` 固化 `TPS55288` 输出准入决策表，按优先级列出条件组合，并覆盖“尝试开启输出 / 禁止输出 / 保持原样”三类结果。
+- 明确 `RSOC >= 20%` 是 BMS 低电 hold 的准入释放阈值，不是输出保证，也不是固件侧低电关断阈值；固件不新增 `RSOC < 20%` 主动关 TPS 输出策略。
 
 ### Non-goals
 
@@ -74,6 +76,9 @@
 - 固件运行态命中 `THERM_KILL_N`、`TPS fault` 或 `BMS not ready` 时，统一进入输出门控状态，不再自动恢复输出。
 - 门控解除后，若 `VIN` 离线则保持 blocked；若 `VIN` 在线则仅进入 recoverable，不自动重开。
 - `request_output_restore()` 仅在 `VIN` 在线、无活动门控且存在 `recoverable_outputs` 时生效。
+- BMS 低电/放电路径 hold 只有在外部供电稳定在线、`BQ40Z50` 安全、`discharge_ready=true`、`RCA=false`、`no_battery=false`、无 `CUV/CUVC` 且 `RSOC >= 20%` 时才释放，并只重新进入既有输出准入。
+- `TPS fault`、`THERM_KILL_N`、主动保护停机、`TPS` 配置失败锁存来源的 `recoverable_outputs` 不允许通过低电恢复条件自动解除。
+- 低电恢复日志必须表达为 `low-battery hold released / output admission resumed`，不得表达为强制开输出。
 - 启动自检必须先记录一条显式 `discharge_authorization decision=...` 日志，再决定是否发起放电恢复尝试。
 - 只要 `BQ40Z50` 普通通信正常，自检不允许把该状态解释成“需要 BMS 激活”。
 - 自检页语义满足：
@@ -86,6 +91,9 @@
   - `gate cleared + VIN online -> recoverable not enabled`
   - `therm_kill/tps_fault never auto-restore`
   - `restore pending only when VIN online`
+  - `RSOC=20` 且 BMS 安全、VIN 在线时允许低电 hold 释放
+  - `RSOC=19`、VIN 离线、`discharge_ready=false`、`RCA=true`、`no_battery=true`、`CUV/CUVC=true` 任一成立时不释放低电 hold
+  - 低电 hold 释放谓词不覆盖 `tps_fault / therm_kill / active_protection / tps_config_failed` 来源
 
 ## 里程碑（Milestones）
 

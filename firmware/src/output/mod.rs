@@ -1958,6 +1958,23 @@ fn output_restore_pending_from_state(
     )
 }
 
+fn initial_recoverable_output_source(
+    state: OutputRuntimeState,
+    bms_known_present: bool,
+) -> OutputGateReason {
+    if state.active_outputs == EnabledOutputs::None
+        && state.recoverable_outputs != EnabledOutputs::None
+        && state.gate_reason != OutputGateReason::None
+    {
+        match state.gate_reason {
+            OutputGateReason::BmsNotReady if !bms_known_present => OutputGateReason::None,
+            reason => reason,
+        }
+    } else {
+        OutputGateReason::None
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct PanelProbeResult {
     pub tca6408_present: bool,
@@ -3114,6 +3131,7 @@ pub struct PowerManager<'d, I2C> {
     bms_activation_backup: Option<ChargerActivationBackup>,
     chg_watchdog_restore: Option<u8>,
     output_state: OutputRuntimeState,
+    recoverable_output_source: OutputGateReason,
     output_restore_after_bms_recovery: bool,
     output_protection: output_protection::ProtectionRuntime,
     fan: fan::Controller,
@@ -3473,6 +3491,8 @@ where
             cfg.recoverable_outputs,
             cfg.output_gate_reason,
         );
+        let recoverable_output_source =
+            initial_recoverable_output_source(output_state, cfg.bms_addr.is_some());
         let outputs_allowed = output_state.requested_outputs != EnabledOutputs::None;
         let out_a_allowed = output_state.active_outputs.is_enabled(OutputChannel::OutA);
         let out_b_allowed = output_state.active_outputs.is_enabled(OutputChannel::OutB);
@@ -3615,6 +3635,7 @@ where
             bms_activation_backup: None,
             chg_watchdog_restore: None,
             output_state,
+            recoverable_output_source,
             output_restore_after_bms_recovery: false,
             output_protection: output_protection::ProtectionRuntime::new(cfg.ilimit_ma),
             fan: fan::Controller::new(cfg.fan_config),
@@ -3905,11 +3926,13 @@ where
         }
         self.update_output_protection();
         self.reconcile_output_state();
+        self.maybe_release_low_battery_output_hold();
         self.maybe_restore_outputs_after_bms_recovery();
         let telemetry_printed = self.maybe_print_telemetry();
         if telemetry_printed {
             self.update_output_protection();
             self.reconcile_output_state();
+            self.maybe_release_low_battery_output_hold();
             self.maybe_restore_outputs_after_bms_recovery();
         }
         self.update_fan_state(irq);
@@ -4244,6 +4267,7 @@ where
 
         let restore = self.output_state.recoverable_outputs;
         self.output_state.active_outputs = restore;
+        self.recoverable_output_source = OutputGateReason::None;
         let now = Instant::now();
         if restore.is_enabled(OutputChannel::OutA) {
             self.clear_tps_fault_latch(OutputChannel::OutA);
@@ -4263,6 +4287,45 @@ where
             "power: output restore requested outputs={}",
             restore.describe()
         );
+    }
+
+    fn low_battery_hold_low_voltage_blocked(&self) -> Option<bool> {
+        self.bms_cached_lock_diag
+            .map(|diag| bq40_lock_diag_low_voltage_blocked(Some(diag)))
+    }
+
+    fn low_battery_output_hold_release_allowed(&self) -> bool {
+        output_state_logic::low_battery_output_hold_release_allowed(
+            output_state_logic::LowBatteryOutputHoldReleaseInput {
+                state: output_state_to_logic(self.output_state),
+                recoverable_source: self.recoverable_output_source,
+                mains_present: self.current_mains_present(),
+                discharge_ready: self.ui_snapshot.bq40z50_discharge_ready,
+                rca_alarm: self.ui_snapshot.bq40z50_rca_alarm,
+                no_battery: self.ui_snapshot.bq40z50_no_battery,
+                low_voltage_blocked: self.low_battery_hold_low_voltage_blocked(),
+                rsoc_pct: self.ui_snapshot.bq40z50_soc_pct,
+            },
+        )
+    }
+
+    fn maybe_release_low_battery_output_hold(&mut self) {
+        if !self.low_battery_output_hold_release_allowed() {
+            return;
+        }
+
+        let restore = self.output_state.recoverable_outputs;
+        defmt::info!(
+            "power: low-battery hold released; output admission resumed rsoc_pct={=?} outputs={}",
+            self.ui_snapshot.bq40z50_soc_pct,
+            restore.describe()
+        );
+        esp_println::println!(
+            "power: low-battery hold released; output admission resumed rsoc_pct={:?} outputs={}",
+            self.ui_snapshot.bq40z50_soc_pct,
+            restore.describe()
+        );
+        self.request_output_restore();
     }
 
     fn maybe_restore_outputs_after_bms_recovery(&mut self) {
@@ -7883,6 +7946,16 @@ where
             return;
         }
         self.output_state = next_state;
+        self.recoverable_output_source = if self.output_state.recoverable_outputs
+            != EnabledOutputs::None
+        {
+            match gate_reason {
+                OutputGateReason::BmsNotReady if self.bms_addr.is_none() => OutputGateReason::None,
+                reason => reason,
+            }
+        } else {
+            OutputGateReason::None
+        };
         self.force_disable_outputs();
         defmt::warn!(
             "power: outputs gated reason={} recoverable_outputs={} requested_outputs={}",

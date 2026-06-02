@@ -123,6 +123,28 @@ description: 电池、BMS、充电、主输出、监测与保护链路。
 
 这套规则保证了 bring-up 时能把“上游未授权”和“输出级自身故障”区分开。
 
+### 6.1 TPS55288 输出准入矩阵
+
+这张表是 Web 文档中的输出准入判断表。判定从上到下执行，首个命中的行给出本轮动作；`*` 表示该条件不参与本行判断。`RSOC >= 20%` 只表示“BMS 低电 hold 可以释放并重新进入本表评估”，不是输出保证，也不是固件侧低电关断阈值。当前固件没有 `RSOC < X%` 主动关闭 `TPS55288` 输出的策略；低电相关关断来自 `BQ40Z50` 的 `discharge_ready / RCA / CUV / CUVC / no_battery` 等原生保护与放电路径状态。
+
+| # | `requested_outputs` | `THERM_KILL_N` | TPS fault latch (`SCP/OCP/OVP`) | TPS 配置重试 | 主动保护 | `BQ40Z50` 状态 | recoverable 来源 | `VIN` 稳定在线 | `RSOC` | 目标通道健康/遥测 | 判定结果 | 处理动作 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `none` | * | * | * | * | * | * | * | * | * | 保持原样 | 保持输出关闭；不进入 `TPS55288` enable |
+| 2 | 非 `none` | `0` | * | * | * | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=therm_kill` |
+| 3 | 非 `none` | `1` | 有 | * | * | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=tps_fault`；不自动恢复 |
+| 4 | 非 `none` | `1` | 无 | 耗尽 | * | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=tps_config_failed`；不自动恢复 |
+| 5 | 非 `none` | `1` | 无 | 未耗尽 | shutdown | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=active_protection`；不自动恢复 |
+| 6 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 缺失 | * | * | * | * | 禁止输出 / BMS hold | force disable；`gate_reason=bms_not_ready`；保存可恢复通道 |
+| 7 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 不安全 | * | * | * | * | 禁止输出 / BMS hold | force disable；`gate_reason=bms_not_ready`；保存可恢复通道 |
+| 8 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 安全 | BMS 低电/放电路径 hold，且 `recoverable_outputs != none` | 是 | `>= 20%` | * | 尝试开启输出 | 释放 BMS hold；`recoverable_outputs -> active_outputs`；恢复 TPS/INA 配置重试 |
+| 9 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 安全 | BMS 低电/放电路径 hold，且 `recoverable_outputs != none` | 否或未知 | * | * | 保持原样 | 不直接关闭当前活动输出；阻止 recoverable 自动恢复 |
+| 10 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 安全 | BMS 低电/放电路径 hold，且 `recoverable_outputs != none` | 是 | `< 20%` 或未知 | * | 保持原样 | 继续保持 BMS hold；不恢复输出准入 |
+| 11 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 安全 | `therm_kill / tps_fault / tps_config_failed / active_protection` | * | * | * | 保持原样 | 低电恢复条件不处理这些来源；等待显式 restore 或对应恢复路径 |
+| 12 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 安全 | * | * | * | `INA3221` 或 `TMP112A` 单次遥测缺失 | 保持原样 | 单次遥测缺失不改写输出状态；只有配置/保护逻辑判定失败才改变状态 |
+| 13 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 安全 | 无活动 hold 或已由第 8 行释放 | * | * | 健康 | 尝试开启输出 | 进入或保持 `active_outputs`；允许 `TPS55288` 配置/enable 有限重试 |
+
+第 7 行的“不安全”包括 `discharge_ready != true`、`RCA=true`、`no_battery=true`、`CUV=true` 或 `CUVC=true`。第 8 行只恢复输出准入，日志使用 `low-battery hold released / output admission resumed`；最终仍必须继续通过 TPS/INA/TMP/保护条件，不保证最终 `OE=1`。
+
 ## 7. 相关文档
 
 - [BMS 设计](https://github.com/IvanLi-CN/mains-aegis/blob/main/docs/bms-design.md)

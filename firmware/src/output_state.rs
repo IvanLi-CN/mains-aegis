@@ -34,6 +34,8 @@ impl OutputGateReason {
     }
 }
 
+pub const LOW_BATTERY_OUTPUT_RESTORE_RSOC_PCT: u16 = 20;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutputRuntimeState {
     pub requested_outputs: EnabledOutputs,
@@ -99,12 +101,81 @@ pub fn output_restore_pending_from_state(
         && mains_present == Some(true)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LowBatteryOutputHoldReleaseInput {
+    pub state: OutputRuntimeState,
+    pub recoverable_source: OutputGateReason,
+    pub mains_present: Option<bool>,
+    pub discharge_ready: Option<bool>,
+    pub rca_alarm: Option<bool>,
+    pub no_battery: Option<bool>,
+    pub low_voltage_blocked: Option<bool>,
+    pub rsoc_pct: Option<u16>,
+}
+
+pub fn low_battery_output_hold_release_allowed(input: LowBatteryOutputHoldReleaseInput) -> bool {
+    if input.recoverable_source != OutputGateReason::BmsNotReady {
+        return false;
+    }
+    if input.state.gate_reason != OutputGateReason::None {
+        return false;
+    }
+    if input.state.requested_outputs == EnabledOutputs::None {
+        return false;
+    }
+    if input.state.active_outputs != EnabledOutputs::None {
+        return false;
+    }
+    if input.state.recoverable_outputs == EnabledOutputs::None {
+        return false;
+    }
+    if input.mains_present != Some(true) {
+        return false;
+    }
+    if input.discharge_ready != Some(true) {
+        return false;
+    }
+    if input.rca_alarm != Some(false) {
+        return false;
+    }
+    if input.no_battery != Some(false) {
+        return false;
+    }
+    if input.low_voltage_blocked != Some(false) {
+        return false;
+    }
+
+    match input.rsoc_pct {
+        Some(pct) => (LOW_BATTERY_OUTPUT_RESTORE_RSOC_PCT..=100).contains(&pct),
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        output_restore_pending_from_state, output_state_gate_transition, EnabledOutputs,
+        low_battery_output_hold_release_allowed, output_restore_pending_from_state,
+        output_state_gate_transition, EnabledOutputs, LowBatteryOutputHoldReleaseInput,
         OutputGateReason, OutputRuntimeState, OutputSelector,
     };
+
+    fn low_battery_release_input() -> LowBatteryOutputHoldReleaseInput {
+        LowBatteryOutputHoldReleaseInput {
+            state: OutputRuntimeState::new(
+                EnabledOutputs::Only(OutputSelector::OutA),
+                EnabledOutputs::None,
+                EnabledOutputs::Only(OutputSelector::OutA),
+                OutputGateReason::None,
+            ),
+            recoverable_source: OutputGateReason::BmsNotReady,
+            mains_present: Some(true),
+            discharge_ready: Some(true),
+            rca_alarm: Some(false),
+            no_battery: Some(false),
+            low_voltage_blocked: Some(false),
+            rsoc_pct: Some(20),
+        }
+    }
 
     #[test]
     fn output_state_bms_block_without_vin_stays_blocked() {
@@ -186,5 +257,87 @@ mod tests {
 
         let bms_blocked = output_state_gate_transition(state, OutputGateReason::BmsNotReady);
         assert!(!output_restore_pending_from_state(bms_blocked, Some(true)));
+    }
+
+    #[test]
+    fn low_battery_hold_release_accepts_rsoc_20_with_safe_bms_and_vin() {
+        assert!(low_battery_output_hold_release_allowed(
+            low_battery_release_input()
+        ));
+    }
+
+    #[test]
+    fn low_battery_hold_release_rejects_rsoc_below_20() {
+        let mut input = low_battery_release_input();
+        input.rsoc_pct = Some(19);
+
+        assert!(!low_battery_output_hold_release_allowed(input));
+    }
+
+    #[test]
+    fn low_battery_hold_release_requires_vin_online() {
+        let mut input = low_battery_release_input();
+        input.mains_present = Some(false);
+        assert!(!low_battery_output_hold_release_allowed(input));
+
+        input.mains_present = None;
+        assert!(!low_battery_output_hold_release_allowed(input));
+    }
+
+    #[test]
+    fn low_battery_hold_release_requires_safe_bq40_state() {
+        let mut input = low_battery_release_input();
+        input.discharge_ready = Some(false);
+        assert!(!low_battery_output_hold_release_allowed(input));
+
+        input = low_battery_release_input();
+        input.rca_alarm = Some(true);
+        assert!(!low_battery_output_hold_release_allowed(input));
+
+        input = low_battery_release_input();
+        input.no_battery = Some(true);
+        assert!(!low_battery_output_hold_release_allowed(input));
+
+        input = low_battery_release_input();
+        input.low_voltage_blocked = Some(true);
+        assert!(!low_battery_output_hold_release_allowed(input));
+
+        input = low_battery_release_input();
+        input.low_voltage_blocked = None;
+        assert!(!low_battery_output_hold_release_allowed(input));
+    }
+
+    #[test]
+    fn low_battery_hold_release_rejects_other_recoverable_sources() {
+        for source in [
+            OutputGateReason::ThermKill,
+            OutputGateReason::TpsFault,
+            OutputGateReason::TpsConfigFailed,
+            OutputGateReason::ActiveProtection,
+            OutputGateReason::None,
+        ] {
+            let mut input = low_battery_release_input();
+            input.recoverable_source = source;
+            assert!(!low_battery_output_hold_release_allowed(input));
+        }
+    }
+
+    #[test]
+    fn low_battery_hold_release_does_not_bypass_existing_admission_state() {
+        let mut input = low_battery_release_input();
+        input.state.active_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        assert!(!low_battery_output_hold_release_allowed(input));
+
+        input = low_battery_release_input();
+        input.state.recoverable_outputs = EnabledOutputs::None;
+        assert!(!low_battery_output_hold_release_allowed(input));
+
+        input = low_battery_release_input();
+        input.state.gate_reason = OutputGateReason::TpsFault;
+        assert!(!low_battery_output_hold_release_allowed(input));
+
+        input = low_battery_release_input();
+        input.state.requested_outputs = EnabledOutputs::None;
+        assert!(!low_battery_output_hold_release_allowed(input));
     }
 }

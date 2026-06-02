@@ -1,0 +1,138 @@
+h3[id="61-tps55288-输出准入矩阵"] + p + table {
+  --matrix-border: oklch(82% 0.018 245deg);
+  --matrix-rule: oklch(88% 0.011 245deg);
+  --matrix-surface: oklch(99% 0.004 245deg);
+  --matrix-surface-alt: oklch(97% 0.006 245deg);
+  --matrix-surface-head: oklch(94% 0.014 245deg);
+  --matrix-hover: oklch(95% 0.018 245deg);
+  --matrix-text: oklch(27% 0.035 245deg);
+  --matrix-muted: oklch(34% 0.045 245deg);
+  --matrix-code-bg: oklch(96% 0.008 245deg);
+  --matrix-code-border: oklch(86% 0.014 245deg);
+  --matrix-code-text: oklch(30% 0.045 245deg);
+}
+
+.dark h3[id="61-tps55288-输出准入矩阵"] + p + table {
+  --matrix-border: oklch(34% 0.024 245deg);
+  --matrix-rule: oklch(30% 0.018 245deg);
+  --matrix-surface: oklch(21% 0.018 245deg);
+  --matrix-surface-alt: oklch(23.5% 0.018 245deg);
+  --matrix-surface-head: oklch(27% 0.024 245deg);
+  --matrix-hover: oklch(29% 0.028 245deg);
+  --matrix-text: oklch(88% 0.012 245deg);
+  --matrix-muted: oklch(82% 0.018 245deg);
+  --matrix-code-bg: oklch(28% 0.026 245deg);
+  --matrix-code-border: oklch(40% 0.026 245deg);
+  --matrix-code-text: oklch(91% 0.022 245deg);
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table {
+  display: block;
+  width: 100%;
+  max-height: 640px;
+  margin: 24px 0 28px;
+  overflow: auto;
+  border: 1px solid var(--matrix-border);
+  border-radius: 8px;
+  border-spacing: 0;
+  background: var(--matrix-surface);
+  box-shadow: inset 0 -1px 0 var(--matrix-rule);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table th {
+  min-width: 72px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--matrix-border);
+  background: var(--matrix-surface-head);
+  color: var(--matrix-muted);
+  font-size: 11px;
+  font-weight: 680;
+  text-align: left;
+  white-space: normal;
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table th:first-child,
+h3[id="61-tps55288-输出准入矩阵"] + p + table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 42px;
+  text-align: center;
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table th:first-child {
+  z-index: 3;
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table th:nth-last-child(2),
+h3[id="61-tps55288-输出准入矩阵"] + p + table td:nth-last-child(2) {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  min-width: 100px;
+  border-left: 1px solid var(--matrix-border);
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table th:last-child,
+h3[id="61-tps55288-输出准入矩阵"] + p + table td:last-child {
+  min-width: 240px;
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table th:nth-last-child(2) {
+  z-index: 3;
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table td {
+  vertical-align: top;
+  min-width: 72px;
+  padding: 7px 9px;
+  border: 0;
+  border-bottom: 1px solid var(--matrix-rule);
+  background: var(--matrix-surface);
+  color: var(--matrix-text);
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table tbody tr:nth-child(odd) td {
+  background: var(--matrix-surface-alt);
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table tbody tr:hover td {
+  background: var(--matrix-hover);
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table td:first-child {
+  color: var(--matrix-muted);
+  font-weight: 750;
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table td:nth-last-child(2) {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+h3[id="61-tps55288-输出准入矩阵"] + p + table code {
+  padding: 1px 4px;
+  border: 1px solid var(--matrix-code-border);
+  border-radius: 4px;
+  background: var(--matrix-code-bg);
+  color: var(--matrix-code-text);
+  font-size: 0.92em;
+  white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  h3[id="61-tps55288-输出准入矩阵"] + p + table {
+    margin-right: -16px;
+    border-right: 0;
+    border-radius: 8px 0 0 8px;
+  }
+}

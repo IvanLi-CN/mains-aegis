@@ -104,6 +104,28 @@
 - `invalid_config / out_of_range` 这类非瞬态错误，不进入延迟重试，直接锁存
 - 一旦锁存为 `tps_config_failed`，该路停止周期性整套 `disable -> init -> enable` 重配，等待显式 restore
 
+### TPS55288 输出准入矩阵
+
+这张表是稳压输出模块的输出准入 SoT。判定从上到下执行，首个命中的行给出本轮动作；`*` 表示该条件不参与本行判断。`RSOC >= 20%` 只表示“BMS 低电 hold 可以释放并重新进入本表评估”，不是输出保证，也不是固件侧低电关断阈值。当前固件没有 `RSOC < X%` 主动关闭 `TPS55288` 输出的策略；低电相关关断来自 `BQ40Z50` 的 `discharge_ready / RCA / CUV / CUVC / no_battery` 等原生保护与放电路径状态。
+
+| # | `requested_outputs` | `THERM_KILL_N` | TPS fault latch (`SCP/OCP/OVP`) | TPS 配置重试 | 主动保护 | `BQ40Z50` 状态 | recoverable 来源 | `VIN` 稳定在线 | `RSOC` | 目标通道健康/遥测 | 判定结果 | 处理动作 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `none` | * | * | * | * | * | * | * | * | * | 保持原样 | 保持输出关闭；不进入 `TPS55288` enable |
+| 2 | 非 `none` | `0` | * | * | * | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=therm_kill` |
+| 3 | 非 `none` | `1` | 有 | * | * | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=tps_fault`；不自动恢复 |
+| 4 | 非 `none` | `1` | 无 | 耗尽 | * | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=tps_config_failed`；不自动恢复 |
+| 5 | 非 `none` | `1` | 无 | 未耗尽 | shutdown | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=active_protection`；不自动恢复 |
+| 6 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 缺失 | * | * | * | * | 禁止输出 / BMS hold | force disable；`gate_reason=bms_not_ready`；保存可恢复通道 |
+| 7 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 不安全 | * | * | * | * | 禁止输出 / BMS hold | force disable；`gate_reason=bms_not_ready`；保存可恢复通道 |
+| 8 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 安全 | BMS 低电/放电路径 hold，且 `recoverable_outputs != none` | 是 | `>= 20%` | * | 尝试开启输出 | 释放 BMS hold；`recoverable_outputs -> active_outputs`；恢复 TPS/INA 配置重试 |
+| 9 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 安全 | BMS 低电/放电路径 hold，且 `recoverable_outputs != none` | 否或未知 | * | * | 保持原样 | 不直接关闭当前活动输出；阻止 recoverable 自动恢复 |
+| 10 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 安全 | BMS 低电/放电路径 hold，且 `recoverable_outputs != none` | 是 | `< 20%` 或未知 | * | 保持原样 | 继续保持 BMS hold；不恢复输出准入 |
+| 11 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 安全 | `therm_kill / tps_fault / tps_config_failed / active_protection` | * | * | * | 保持原样 | 低电恢复条件不处理这些来源；等待显式 restore 或对应恢复路径 |
+| 12 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 安全 | * | * | * | `INA3221` 或 `TMP112A` 单次遥测缺失 | 保持原样 | 单次遥测缺失不改写输出状态；只有配置/保护逻辑判定失败才改变状态 |
+| 13 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 安全 | 无活动 hold 或已由第 8 行释放 | * | * | 健康 | 尝试开启输出 | 进入或保持 `active_outputs`；允许 `TPS55288` 配置/enable 有限重试 |
+
+第 7 行的“不安全”包括 `discharge_ready != true`、`RCA=true`、`no_battery=true`、`CUV=true` 或 `CUVC=true`。第 8 行只恢复输出准入，日志使用 `low-battery hold released / output admission resumed`；最终仍必须继续通过 TPS/INA/TMP/保护条件，不保证最终 `OE=1`。
+
 ## 启动期与 BMS 的耦合
 
 稳压输出模块不是独立上电就能判定成功的模块。只要本轮模式请求输出，它在启动期就必须依赖 `BQ40Z50` 的放电授权状态：
@@ -152,7 +174,8 @@
    - 若门控源是 `tps_config_failed`，说明运行期重配已经收敛，不再继续无限重试
 3. 门控解除后：
    - 默认仅清除 `gate_reason`
-   - 若门控解除来自本轮 `BMS` 放电授权恢复成功，且 `VIN` 在线、仍存在 `recoverable_outputs`，固件会自动调用内部恢复入口，把启动期请求的输出恢复为活动输出
+   - 若门控解除来自本轮 `BMS` 放电授权恢复成功，且 `VIN` 在线、仍存在 `recoverable_outputs`，固件会自动调用内部恢复入口，把启动期请求的输出重新送入输出准入
+   - 若门控解除来自 BMS 低电/放电路径 hold，且外部供电稳定在线、`BQ40Z50` 安全、`RSOC >= 20%`，固件释放该 hold 并恢复输出准入；这不是强制 `OE=1`
 4. 只有当以下条件同时满足时，模块才进入“可恢复未恢复”：
    - `gate_reason == none`
    - `active_outputs == none`
@@ -168,7 +191,7 @@
 - `THERM_KILL_N` 解除后，不自动开输出
 - `TPS fault` 位清除后，不自动开输出
 - `TPS` 运行期配置失败锁存后，不自动开输出
-- 非恢复链路触发的 `BMS` 被动恢复到放电就绪后，不自动开输出；只转为 recoverable，并等待显式 restore 请求
+- 非低电/放电路径 hold 来源的 `BMS` 被动恢复到放电就绪后，不自动开输出；只转为 recoverable，并等待显式 restore 请求
 - 主动保护停机条件解除后，也不自动开输出；只清除门控并等待显式 restore 请求
 
 ### 启动期自动恢复尝试的边界
@@ -210,6 +233,9 @@
 - `BQ40Z50` 缺失或 `discharge_ready != true`
 - `THERM_KILL_N == 0`
 - 任一路 `TPS55288 STATUS` 命中 `SCP/OCP/OVP`
+- 任一路 `TPS55288` 运行期配置重试耗尽
+- 主动保护链路进入 shutdown
+- `BQ40Z50` 原生保护或放电路径状态导致的 `discharge_ready=false`，包括低电、`RCA`、`CUV/CUVC`、`no_battery` 等
 
 ### 不会直接改输出状态的来源
 
@@ -217,6 +243,7 @@
 - `INA3221` 采样失败
 - `TMP112A` 单次温度读失败
 - `VIN` 离线本身不会直接把 recoverable 输出重新打开；它只阻止恢复
+- `RSOC < 20%` 本身不是固件侧主动关 TPS 输出阈值；是否关断由 `BQ40Z50` 的放电授权与保护状态决定
 
 ## 遥测口径
 
@@ -238,6 +265,7 @@
 - 门控：`power: outputs gated reason=...`
 - 启动授权：`self_test: discharge_authorization decision=...`
 - 恢复请求：`bms: discharge_authorization requested ...`
+- 低电 hold 释放：`power: low-battery hold released; output admission resumed ...`
 - 恢复请求：`power: output restore requested outputs=...`
 
 ## 内建诊断
