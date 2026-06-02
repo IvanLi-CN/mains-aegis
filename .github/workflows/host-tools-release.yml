@@ -34,9 +34,26 @@ jobs:
             archive: zip
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Resolve release source ref
+        id: release_ref
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
+            echo "checkout_ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git ls-remote --exit-code --refs "https://github.com/${REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "checkout_ref=refs/tags/${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "checkout_ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref_name }}
+          ref: ${{ steps.release_ref.outputs.checkout_ref }}
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -86,6 +103,23 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve release tag state
+        id: release_ref
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git ls-remote --exit-code --refs "https://github.com/${REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -105,6 +139,8 @@ jobs:
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             gh release upload "${RELEASE_TAG}" dist/* --clobber
             gh release edit "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes "${notes}"
+          elif [[ "${{ steps.release_ref.outputs.tag_exists }}" == "true" ]]; then
+            gh release create "${RELEASE_TAG}" dist/* --title "${RELEASE_TAG}" --notes "${notes}"
           else
             gh release create "${RELEASE_TAG}" dist/* --target "${GITHUB_SHA}" --title "${RELEASE_TAG}" --notes "${notes}"
           fi

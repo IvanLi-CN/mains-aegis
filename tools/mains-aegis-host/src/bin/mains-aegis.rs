@@ -1,10 +1,10 @@
 use clap::{Args, Parser, Subcommand};
-use mains_aegis_host::{default_ipc_endpoint, ipc_call};
+use mains_aegis_host::{default_ipc_endpoint, ipc_call, release_version};
 use serde_json::{json, Value};
 
 #[derive(Debug, Parser)]
 #[command(name = "mains-aegis")]
-#[command(version)]
+#[command(version = release_version())]
 #[command(about = "Mains Aegis host CLI")]
 struct Cli {
     /// IPC socket or named-pipe endpoint.

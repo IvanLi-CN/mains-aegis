@@ -3,12 +3,13 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 use mains_aegis_host::{
-    default_ipc_endpoint, serve_http_bridge, serve_ipc, HttpBridgeConfig, IpcConfig, DEFAULT_BIND,
+    default_ipc_endpoint, release_version, serve_http_bridge, serve_ipc, HttpBridgeConfig,
+    IpcConfig, DEFAULT_BIND,
 };
 
 #[derive(Debug, Parser)]
 #[command(name = "mains-aegis-devd")]
-#[command(version)]
+#[command(version = release_version())]
 #[command(about = "Mains Aegis local device daemon")]
 struct Cli {
     #[command(subcommand)]
