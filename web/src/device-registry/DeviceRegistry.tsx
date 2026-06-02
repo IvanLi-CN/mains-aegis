@@ -1235,6 +1235,7 @@ function persistedTargetsForRecord(record: DeviceRecord): DeviceTarget[] {
       alias: record.target.alias,
       location: record.target.location || "devd",
       addedAt: record.target.addedAt,
+      bridgeAuth: record.target.bridgeAuth,
       transport: "devd",
       serialProtocol: record.serial.protocol ?? record.target.serialProtocol,
     });
