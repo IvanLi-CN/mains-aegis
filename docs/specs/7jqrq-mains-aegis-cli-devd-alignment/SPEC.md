@@ -62,13 +62,13 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - Host-tools release tag 使用 `host-tools-v*`。
 - Release archive 必须至少包含 `bin/mains-aegis`、`bin/mains-aegis-devd` 和对应平台安装脚本。
 - 发布资产必须包含 `SHA256SUMS`。
-- 手动触发 release 时，构建 checkout 必须跟随输入的 host-tools tag，避免按工作流触发 ref 构建错误提交。
+- 手动触发 release 时，构建 checkout 必须跟随输入的 host-tools tag，避免按工作流触发 ref 构建错误提交；release build 必须把该 tag 注入 host-tools 二进制版本信息。
 - 用户操作 skill 只接受已安装 release 工具；缺少 release 工具时阻断并提示安装 release，不自动 `cargo run`。
 
 ### Web bridge
 
 - Web dev proxy 继续指向 `http://127.0.0.1:30080`，但该地址代表显式启动的 `bridge-http`，不是默认 daemon；需要 Web 与 CLI 共用状态时，CLI 连接同一个 `bridge-http --ipc <endpoint>`。
-- Web API client 支持从 `localStorage["mains-aegis.bridgeAuthToken"]` 读取 bearer token，以便 LAN bridge 显式授权场景使用。
+- Web API client 支持从 `localStorage["mains-aegis.bridgeAuthToken"]` 读取 bearer token，以便 devd bridge 显式授权场景使用；该 token 只能附加到明确的 devd/bridge API 与 devd EventSource 请求，不能发送给普通 LAN 设备探活或 LAN status SSE。
 - Web Serial 与 devd HTTP bridge 仍按既有租约、心跳和 release 语义工作。
 
 ## 验收标准

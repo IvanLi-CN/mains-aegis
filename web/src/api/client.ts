@@ -37,11 +37,21 @@ export function normalizeBaseUrl(input: string): string {
   return `http://${value.replace(/\/+$/, "")}`;
 }
 
-async function requestJson<T>(baseUrl: string, path: string): Promise<T> {
-  return requestWithBody<T>(baseUrl, path, "GET");
+type RequestOptions = {
+  bridgeAuth?: boolean;
+};
+
+async function requestJson<T>(baseUrl: string, path: string, options?: RequestOptions): Promise<T> {
+  return requestWithBody<T>(baseUrl, path, "GET", undefined, options);
 }
 
-async function requestWithBody<T>(baseUrl: string, path: string, method: "GET" | "POST" | "DELETE", body?: unknown): Promise<T> {
+async function requestWithBody<T>(
+  baseUrl: string,
+  path: string,
+  method: "GET" | "POST" | "DELETE",
+  body?: unknown,
+  options: RequestOptions = {},
+): Promise<T> {
   if (isMockBaseUrl(baseUrl)) {
     return requestMock<T>(baseUrl, path);
   }
@@ -50,7 +60,7 @@ async function requestWithBody<T>(baseUrl: string, path: string, method: "GET" |
     method,
     headers: {
       Accept: "application/json",
-      ...bridgeAuthHeaders(baseUrl),
+      ...(options.bridgeAuth ? bridgeAuthHeaders(baseUrl) : {}),
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -246,18 +256,18 @@ function devdSerialSessionPath(options: DevdSerialSessionOptions = {}) {
 }
 
 export const getDevdSerialSession = (baseUrl: string, options?: DevdSerialSessionOptions) =>
-  requestJson<DevdSerialSession>(baseUrl, devdSerialSessionPath(options));
+  requestJson<DevdSerialSession>(baseUrl, devdSerialSessionPath(options), { bridgeAuth: true });
 
 export const createDevdWebLease = (baseUrl: string, deviceId: string) =>
-  requestWithBody<DevdWebLease>(baseUrl, "/api/v1/serial/lease", "POST", { device_id: deviceId });
+  requestWithBody<DevdWebLease>(baseUrl, "/api/v1/serial/lease", "POST", { device_id: deviceId }, { bridgeAuth: true });
 export const heartbeatDevdWebLease = (baseUrl: string, leaseId: string) =>
-  requestWithBody<Omit<DevdWebLease, "device">>(baseUrl, `/api/v1/serial/lease/${encodeURIComponent(leaseId)}`, "POST");
+  requestWithBody<Omit<DevdWebLease, "device">>(baseUrl, `/api/v1/serial/lease/${encodeURIComponent(leaseId)}`, "POST", undefined, { bridgeAuth: true });
 export const releaseDevdWebLease = (baseUrl: string, leaseId: string, keepalive = false) => {
   const path = `/api/v1/serial/lease/${encodeURIComponent(leaseId)}`;
   if (keepalive && !isMockBaseUrl(baseUrl)) {
     return fetch(`${baseUrl}${path}`, { method: "DELETE", keepalive, headers: { Accept: "application/json", ...bridgeAuthHeaders(baseUrl) } }).then(() => undefined);
   }
-  return requestWithBody<unknown>(baseUrl, path, "DELETE");
+  return requestWithBody<unknown>(baseUrl, path, "DELETE", undefined, { bridgeAuth: true });
 };
 
 export function subscribeDevdSerialEvents(
@@ -290,13 +300,19 @@ export type DevdWifiConfigApplyResult = {
 };
 
 export const sendDevdWifiConfig = (baseUrl: string, deviceId: string, leaseId: string, input: { ssid: string; psk: string }) =>
-  requestWithBody<DevdWifiConfigApplyResult>(baseUrl, "/api/v1/wifi-config", "POST", { ...input, device_id: deviceId, lease_id: leaseId });
+  requestWithBody<DevdWifiConfigApplyResult>(baseUrl, "/api/v1/wifi-config", "POST", { ...input, device_id: deviceId, lease_id: leaseId }, { bridgeAuth: true });
 export const clearDevdWifiConfig = (baseUrl: string, deviceId: string, leaseId: string) =>
-  requestWithBody<DevdWifiConfigApplyResult>(baseUrl, `/api/v1/wifi-config?device_id=${encodeURIComponent(deviceId)}&lease_id=${encodeURIComponent(leaseId)}`, "DELETE");
+  requestWithBody<DevdWifiConfigApplyResult>(
+    baseUrl,
+    `/api/v1/wifi-config?device_id=${encodeURIComponent(deviceId)}&lease_id=${encodeURIComponent(leaseId)}`,
+    "DELETE",
+    undefined,
+    { bridgeAuth: true },
+  );
 export const setDevdLogLevel = (baseUrl: string, deviceId: string, leaseId: string, level: SafeSettingsState["log_level"]) =>
-  requestWithBody<unknown>(baseUrl, "/api/v1/settings/log-level", "POST", { level, device_id: deviceId, lease_id: leaseId });
+  requestWithBody<unknown>(baseUrl, "/api/v1/settings/log-level", "POST", { level, device_id: deviceId, lease_id: leaseId }, { bridgeAuth: true });
 export const setDevdManualChargePrefs = (baseUrl: string, deviceId: string, leaseId: string, prefs: SafeSettingsState["manual_charge"]) =>
-  requestWithBody<unknown>(baseUrl, "/api/v1/settings/manual-charge", "POST", { ...prefs, device_id: deviceId, lease_id: leaseId });
+  requestWithBody<unknown>(baseUrl, "/api/v1/settings/manual-charge", "POST", { ...prefs, device_id: deviceId, lease_id: leaseId }, { bridgeAuth: true });
 
 export async function probeDevice(baseUrl: string, leaseId?: string): Promise<ProbeResult> {
   await ping(baseUrl);
@@ -327,20 +343,20 @@ export function toErrorEnvelope(error: unknown): ApiErrorEnvelope["error"] {
 export const loadBundledFirmwareCatalog = () => requestJson<FirmwareCatalog>("", "/firmware/firmware-catalog.json");
 export const loadFirmwareCatalogFromUrl = (url: string) => requestJson<FirmwareCatalog>("", url);
 export const decodeDefmtFrame = (input: { elf_path: string; frame_hex: string }, baseUrl = "") =>
-  requestWithBody<DefmtDecodeResult>(baseUrl, "/api/v1/defmt/decode", "POST", input);
-export const listDevdDevices = (baseUrl = "") => requestJson<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices");
-export const scanDevdDevices = (baseUrl = "") => requestWithBody<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices/scan", "POST");
+  requestWithBody<DefmtDecodeResult>(baseUrl, "/api/v1/defmt/decode", "POST", input, { bridgeAuth: true });
+export const listDevdDevices = (baseUrl = "") => requestJson<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices", { bridgeAuth: true });
+export const scanDevdDevices = (baseUrl = "") => requestWithBody<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices/scan", "POST", undefined, { bridgeAuth: true });
 export const bindDevdDevice = (deviceId: string, alias?: string, baseUrl = "") =>
-  requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/bind`, "POST", { alias });
+  requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/bind`, "POST", { alias }, { bridgeAuth: true });
 export const connectDevdDevice = (deviceId: string, baseUrl = "") =>
-  requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/connect`, "POST");
+  requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/connect`, "POST", undefined, { bridgeAuth: true });
 export const disconnectDevdDevice = (deviceId: string, baseUrl = "") =>
-  requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/disconnect`, "POST");
+  requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/disconnect`, "POST", undefined, { bridgeAuth: true });
 export const selectDevdArtifact = (
   deviceId: string,
   input: { artifact_id?: string; manifest_path?: string; artifact?: FirmwareCatalog["artifacts"][number] },
   baseUrl = "",
 ) =>
-  requestWithBody<unknown>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/artifact`, "POST", input);
+  requestWithBody<unknown>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/artifact`, "POST", input, { bridgeAuth: true });
 export const flashDevdDevice = (deviceId: string, input: { artifact_id?: string; dry_run?: boolean }, baseUrl = "") =>
-  requestWithBody<unknown>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/flash`, "POST", input);
+  requestWithBody<unknown>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/flash`, "POST", input, { bridgeAuth: true });

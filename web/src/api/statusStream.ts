@@ -1,4 +1,4 @@
-import { bridgeAuthToken, isMockBaseUrl } from "./client";
+import { isMockBaseUrl } from "./client";
 import type { UpsStatus } from "./types";
 
 export type StatusStream = {
@@ -17,11 +17,7 @@ export function subscribeStatusStream(
     return { close: () => undefined };
   }
 
-  const params = new URLSearchParams();
-  const token = bridgeAuthToken(baseUrl);
-  if (token) params.set("bridge_token", token);
-  const query = params.toString();
-  const eventSource = new EventSource(`${baseUrl}/api/v1/status${query ? `?${query}` : ""}`);
+  const eventSource = new EventSource(`${baseUrl}/api/v1/status`);
 
   eventSource.addEventListener("status", (event) => {
     callbacks.onStatus(JSON.parse((event as MessageEvent<string>).data) as UpsStatus);
