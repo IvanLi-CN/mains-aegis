@@ -16,7 +16,7 @@
 
 ### Goals
 
-- 新增 `tools/mains-aegis-devd`，作为 Mains Aegis 专用设备 daemon。
+- 新增 Mains Aegis 专用设备 daemon；当前 canonical host-tools crate 为 `tools/mains-aegis-host`（见 #7jqrq）。
 - `serve` 启动不接收设备端口；设备通过 API 扫描、列出、绑定、连接、断开和解绑。
 - HTTP API 覆盖 identity、session、events、artifact selection、reset、monitor start/stop、flash 与 USB CDC safe settings 写入。
 - HTTP API 覆盖 host power 查询、低功耗运行 profile 切换、suspend、shutdown dry-run 与事件广播。
@@ -144,7 +144,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 
 ## 验收标准
 
-- `tools/mains-aegis-devd` 能编译并通过单元测试。
+- `tools/mains-aegis-host` 能编译并通过单元测试。
 - devd 可无端口启动，并通过 mock device 验证设备管理、artifact selection、dry-run flash 与 session API。
 - host power API 支持 Linux/macOS 查询、dry-run、事件广播和真实动作默认拒绝；缺少平台后端或权限不足时返回可诊断错误。
 - `tools/firmware-artifact/build-catalog-entry.py` 能为 ELF 生成 manifest、catalog 和 `SHA256SUMS`。
@@ -164,11 +164,11 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 
 ## 实现状态
 
-- `tools/mains-aegis-devd`: v1 daemon/API/mock validation foundation，并提供 Web App localhost USB safe-control surface。
-- `tools/mains-aegis-devd`: 提供设备级 `power-diag` 只读诊断 API，转发固件 USB CDC `get_power_diag` 并在 session 中缓存结果。
-- `tools/mains-aegis-devd`: flash API 与 `flash completed` 事件已暴露 backend `status/stdout/stderr`，用于现场确认底层 `espflash` 执行结果。
+- `tools/mains-aegis-host`: v1 daemon/API/mock validation foundation，并提供 CLI、IPC 与显式 HTTP bridge。
+- `tools/mains-aegis-host`: 提供设备级 `power-diag` 只读诊断 API，转发固件 USB CDC `get_power_diag` 并在 session 中缓存结果。
+- `tools/mains-aegis-host`: flash API 与 `flash completed` 事件已暴露 backend `status/stdout/stderr`，用于现场确认底层 `espflash` 执行结果。
 - `firmware/src/net_contract.rs`: `power-diag.charger` 已暴露 `vac2_adc_mv`，用于定位 BQ25792 AC2/DC IN 实际采样。
-- `tools/mains-aegis-devd`: 提供 host power localhost control surface；低功耗运行、suspend、shutdown 默认 dry-run，真实动作受启动参数保护。
+- `tools/mains-aegis-host`: 提供 host power control surface；低功耗运行、suspend、shutdown 默认 dry-run，真实动作受启动参数保护。
 - `schemas/firmware-catalog.schema.json`: v1 catalog schema。
 - `tools/firmware-artifact/build-catalog-entry.py`: local manifest/catalog generator。
 - `web/src/api/*`: devd mode client contracts。

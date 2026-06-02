@@ -2,7 +2,8 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderValue, Method, StatusCode},
+    http::{header::ACCEPT, HeaderMap, HeaderValue, Method, StatusCode, Uri},
+    middleware::{self, Next},
     response::{sse::Event, sse::Sse, IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
@@ -26,12 +27,19 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
-use tokio::{process::Command, sync::broadcast};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
+    process::Command,
+    sync::{broadcast, Mutex as AsyncMutex},
+};
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
-const DEFAULT_BIND: &str = "127.0.0.1:30080";
+pub const DEFAULT_BIND: &str = "127.0.0.1:30080";
+pub const DEFAULT_IPC_FILE_NAME: &str = "devd.sock";
+pub const DEFAULT_WINDOWS_PIPE_NAME: &str = r"\\.\pipe\mains-aegis-devd";
+pub const DEFAULT_IPC_IDLE_TIMEOUT_SECS: u64 = 30;
 const EVENT_LIMIT: usize = 1_000;
 const LOG_LIMIT: usize = 2_000;
 const WEB_LEASE_HEARTBEAT_INTERVAL_MS: u64 = 2_000;
@@ -39,11 +47,89 @@ const WEB_LEASE_TTL_MS: u64 = 8_000;
 const WEB_LEASE_CLEANUP_INTERVAL_MS: u64 = 1_000;
 
 #[derive(Debug, Clone)]
-struct Config {
-    bind: SocketAddr,
-    web_root: Option<PathBuf>,
-    allow_dev_cors: bool,
-    allow_host_power_actions: bool,
+pub struct HttpBridgeConfig {
+    pub ipc_endpoint: String,
+    pub bind: SocketAddr,
+    pub web_root: Option<PathBuf>,
+    pub allow_dev_cors: bool,
+    pub allow_host_power_actions: bool,
+    pub allow_lan_bridge: bool,
+    pub auth_token: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IpcConfig {
+    pub endpoint: String,
+    pub idle_timeout: Option<Duration>,
+    pub allow_host_power_actions: bool,
+}
+
+impl IpcConfig {
+    pub fn new(endpoint: impl Into<String>) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+            idle_timeout: Some(Duration::from_secs(DEFAULT_IPC_IDLE_TIMEOUT_SECS)),
+            allow_host_power_actions: false,
+        }
+    }
+
+    pub fn with_idle_timeout(mut self, idle_timeout: Option<Duration>) -> Self {
+        self.idle_timeout = idle_timeout;
+        self
+    }
+
+    pub fn with_host_power_actions(mut self, allow_host_power_actions: bool) -> Self {
+        self.allow_host_power_actions = allow_host_power_actions;
+        self
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IpcRequest {
+    pub id: String,
+    pub method: String,
+    #[serde(default)]
+    pub params: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IpcResponse {
+    pub id: String,
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+pub fn release_version() -> &'static str {
+    option_env!("MAINS_AEGIS_RELEASE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
+pub fn default_ipc_endpoint() -> String {
+    #[cfg(windows)]
+    {
+        DEFAULT_WINDOWS_PIPE_NAME.to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!("mains-aegis-{}", user_id_hint()))
+            });
+        base.join("mains-aegis")
+            .join(DEFAULT_IPC_FILE_NAME)
+            .to_string_lossy()
+            .to_string()
+    }
+}
+
+#[cfg(not(windows))]
+fn user_id_hint() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "user".to_string())
 }
 
 #[derive(Clone)]
@@ -51,6 +137,35 @@ struct AppState {
     inner: Arc<Mutex<DevdState>>,
     events: broadcast::Sender<DevdEvent>,
     allow_host_power_actions: bool,
+}
+
+#[derive(Clone)]
+struct IpcRuntime {
+    app: AppState,
+    lifecycle: Arc<AsyncMutex<IpcLifecycle>>,
+}
+
+impl IpcRuntime {
+    fn new(app: AppState) -> Self {
+        Self {
+            app,
+            lifecycle: Arc::new(AsyncMutex::new(IpcLifecycle::default())),
+        }
+    }
+}
+
+struct IpcLifecycle {
+    active_clients: usize,
+    last_activity: Instant,
+}
+
+impl Default for IpcLifecycle {
+    fn default() -> Self {
+        Self {
+            active_clients: 0,
+            last_activity: Instant::now(),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -331,30 +446,21 @@ struct HostPowerShutdownRequest {
     force: Option<bool>,
 }
 
-#[tokio::main]
-async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-    let config = match parse_args() {
-        Ok(config) => config,
-        Err(message) => {
-            eprintln!("{message}");
-            eprintln!("usage: mains-aegis-devd serve [--bind 127.0.0.1:30080] [--web-root <dir>] [--allow-dev-cors] [--allow-host-power-actions]");
-            std::process::exit(2);
-        }
-    };
-    let (events, _) = broadcast::channel(256);
-    let state = AppState {
-        inner: Arc::new(Mutex::new(DevdState::default())),
-        events,
-        allow_host_power_actions: config.allow_host_power_actions,
-    };
-    seed_mock_device(&state);
-    spawn_web_lease_reaper(state.clone());
+pub async fn serve_http_bridge(config: HttpBridgeConfig) -> anyhow::Result<()> {
+    if !config.bind.ip().is_loopback()
+        && (!config.allow_lan_bridge || config.auth_token.as_deref().unwrap_or("").is_empty())
+    {
+        anyhow::bail!("non-loopback HTTP bridge requires --allow-lan-bridge and --auth-token-file");
+    }
+    let state = create_app_state(config.allow_host_power_actions);
+    let ipc_config = IpcConfig::new(config.ipc_endpoint.clone())
+        .with_idle_timeout(None)
+        .with_host_power_actions(config.allow_host_power_actions);
+    let ipc_runtime = IpcRuntime::new(state.clone());
 
     let mut app = Router::new()
         .route("/health", get(health))
+        .route("/api/v1/bootstrap", get(bootstrap))
         .route("/api/v1/ping", get(health))
         .route("/api/v1/identity", get(devd_compat_identity))
         .route("/api/v1/network", get(devd_compat_network))
@@ -411,60 +517,555 @@ async fn main() {
                 .allow_headers(tower_http::cors::Any),
         );
     }
+    if let Some(token) = config.auth_token.as_ref().filter(|token| !token.is_empty()) {
+        app = app.layer(middleware::from_fn_with_state(
+            token.clone(),
+            require_bearer_token,
+        ));
+    }
     if let Some(web_root) = config.web_root {
         app = app.fallback_service(ServeDir::new(web_root));
     }
 
     let listener = tokio::net::TcpListener::bind(config.bind)
         .await
-        .expect("bind mains-aegis-devd");
+        .map_err(|error| anyhow::anyhow!("bind mains-aegis-devd: {error}"))?;
     tracing::info!("mains-aegis-devd listening on http://{}", config.bind);
-    axum::serve(listener, app).await.expect("serve devd");
+    tracing::info!(
+        "mains-aegis-devd bridge IPC listening on {}",
+        config.ipc_endpoint
+    );
+    let http_server = axum::serve(listener, app);
+    tokio::try_join!(
+        serve_ipc_with_runtime(ipc_config, ipc_runtime),
+        async move {
+            http_server
+                .await
+                .map_err(|error| anyhow::anyhow!("serve devd: {error}"))
+        }
+    )?;
+    Ok(())
 }
 
-fn parse_args() -> Result<Config, String> {
-    let mut args = env::args().skip(1);
-    if matches!(args.next().as_deref(), Some("serve")) {
-    } else {
-        return Err("missing subcommand: serve".to_string());
+async fn require_bearer_token(
+    State(token): State<String>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if request.method() == Method::OPTIONS {
+        return Ok(next.run(request).await);
     }
-    let mut bind = env::var("MAINS_AEGIS_DEVD_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
-    let mut web_root = env::var("MAINS_AEGIS_DEVD_WEB_ROOT")
-        .ok()
-        .map(PathBuf::from);
-    let mut allow_dev_cors =
-        env::var("MAINS_AEGIS_DEVD_ALLOW_DEV_CORS").ok().as_deref() == Some("1");
-    let mut allow_host_power_actions = env::var("MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS")
-        .ok()
-        .as_deref()
-        == Some("1");
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--bind" => {
-                bind = args
+    if is_static_web_asset_request(request.method(), request.uri()) {
+        return Ok(next.run(request).await);
+    }
+
+    let expected = format!("Bearer {token}");
+    let header_authorized = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|header| header.to_str().ok())
+        .is_some_and(|actual| actual == expected);
+    let event_stream_authorized =
+        is_event_stream_query_auth_request(request.method(), request.uri(), request.headers())
+            && query_param(request.uri(), "bridge_token").is_some_and(|actual| actual == token);
+    if header_authorized || event_stream_authorized {
+        Ok(next.run(request).await)
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+fn is_event_stream_query_auth_request(method: &Method, uri: &Uri, headers: &HeaderMap) -> bool {
+    *method == Method::GET && accepts_event_stream(headers) && is_event_stream_endpoint(uri.path())
+}
+
+fn is_event_stream_endpoint(path: &str) -> bool {
+    path == "/api/v1/status"
+        || path == "/api/v1/serial/events"
+        || path == "/api/v1/host/power/events"
+        || (path.starts_with("/api/v1/devices/") && path.ends_with("/events"))
+}
+
+fn accepts_event_stream(headers: &HeaderMap) -> bool {
+    headers
+        .get(ACCEPT)
+        .and_then(|header| header.to_str().ok())
+        .is_some_and(|accept| {
+            accept.split(',').any(|part| {
+                part.trim()
+                    .split(';')
                     .next()
-                    .ok_or_else(|| "--bind requires an address".to_string())?
+                    .is_some_and(|media_type| media_type.eq_ignore_ascii_case("text/event-stream"))
+            })
+        })
+}
+
+fn query_param(uri: &Uri, key: &str) -> Option<String> {
+    uri.query()?.split('&').find_map(|pair| {
+        let (name, value) = pair.split_once('=')?;
+        (name == key)
+            .then(|| percent_decode_query_value(value))
+            .and_then(Result::ok)
+    })
+}
+
+fn is_static_web_asset_request(method: &Method, uri: &Uri) -> bool {
+    matches!(*method, Method::GET | Method::HEAD)
+        && !uri.path().starts_with("/api/")
+        && uri.path() != "/health"
+}
+
+fn percent_decode_query_value(value: &str) -> Result<String, std::string::FromUtf8Error> {
+    let mut decoded = Vec::with_capacity(value.len());
+    let mut bytes = value.as_bytes().iter().copied();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            let hi = bytes.next().unwrap_or(b'0');
+            let lo = bytes.next().unwrap_or(b'0');
+            if let (Some(hi), Some(lo)) = (query_hex_value(hi), query_hex_value(lo)) {
+                decoded.push((hi << 4) | lo);
             }
-            "--web-root" => {
-                web_root = Some(PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| "--web-root requires a path".to_string())?,
-                ))
-            }
-            "--allow-dev-cors" => allow_dev_cors = true,
-            "--allow-host-power-actions" => allow_host_power_actions = true,
-            "-h" | "--help" => return Err("mains-aegis-devd serve".to_string()),
-            value => return Err(format!("unknown argument: {value}")),
+        } else if byte == b'+' {
+            decoded.push(b' ');
+        } else {
+            decoded.push(byte);
         }
     }
-    Ok(Config {
-        bind: bind
-            .parse()
-            .map_err(|_| format!("invalid --bind address: {bind}"))?,
-        web_root,
-        allow_dev_cors,
+    String::from_utf8(decoded)
+}
+
+fn query_hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+pub async fn serve_ipc(config: IpcConfig) -> anyhow::Result<()> {
+    let runtime = IpcRuntime::new(create_app_state(config.allow_host_power_actions));
+    serve_ipc_with_runtime(config, runtime).await
+}
+
+fn create_app_state(allow_host_power_actions: bool) -> AppState {
+    let (events, _) = broadcast::channel(256);
+    let state = AppState {
+        inner: Arc::new(Mutex::new(DevdState::default())),
+        events,
         allow_host_power_actions,
-    })
+    };
+    seed_mock_device(&state);
+    spawn_web_lease_reaper(state.clone());
+    state
+}
+
+async fn serve_ipc_with_runtime(config: IpcConfig, runtime: IpcRuntime) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        serve_ipc_unix(config, runtime).await
+    }
+    #[cfg(windows)]
+    {
+        serve_ipc_windows(config, runtime).await
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (config, runtime);
+        anyhow::bail!("mains-aegis-devd IPC is unsupported on this platform")
+    }
+}
+
+#[cfg(unix)]
+async fn serve_ipc_unix(config: IpcConfig, runtime: IpcRuntime) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    use tokio::net::UnixListener;
+
+    let path = PathBuf::from(&config.endpoint);
+    if let Some(parent) = path.parent() {
+        let created_parent = !parent.exists();
+        fs::create_dir_all(parent)
+            .map_err(|error| anyhow::anyhow!("create {}: {error}", parent.display()))?;
+        if created_parent {
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+                .map_err(|error| anyhow::anyhow!("chmod {}: {error}", parent.display()))?;
+        }
+    }
+    if path.exists() {
+        remove_stale_ipc_socket(&path).await?;
+    }
+    let listener = UnixListener::bind(&path)
+        .map_err(|error| anyhow::anyhow!("bind IPC {}: {error}", path.display()))?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| anyhow::anyhow!("chmod {}: {error}", path.display()))?;
+    tracing::info!("mains-aegis-devd IPC listening on {}", path.display());
+    let cleanup_path = path.clone();
+    loop {
+        if let Some(idle_timeout) = config.idle_timeout {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let (stream, _) = accepted?;
+                    spawn_ipc_client(stream, runtime.clone()).await;
+                }
+                _ = tokio::time::sleep(idle_timeout) => {
+                    if ipc_should_shutdown(&runtime, idle_timeout).await {
+                        tracing::info!("mains-aegis-devd IPC idle timeout reached; shutting down");
+                        break;
+                    }
+                }
+            }
+        } else {
+            let (stream, _) = listener.accept().await?;
+            spawn_ipc_client(stream, runtime.clone()).await;
+        }
+    }
+    let _ = fs::remove_file(cleanup_path);
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn remove_stale_ipc_socket(path: &FsPath) -> anyhow::Result<()> {
+    match tokio::net::UnixStream::connect(path).await {
+        Ok(_) => anyhow::bail!("IPC endpoint {} is already active", path.display()),
+        Err(_) => fs::remove_file(path)
+            .map_err(|error| anyhow::anyhow!("remove stale {}: {error}", path.display())),
+    }
+}
+
+#[cfg(windows)]
+async fn serve_ipc_windows(config: IpcConfig, runtime: IpcRuntime) -> anyhow::Result<()> {
+    use tokio::net::windows::named_pipe::ServerOptions;
+
+    tracing::info!("mains-aegis-devd IPC listening on {}", config.endpoint);
+    loop {
+        let server = ServerOptions::new()
+            .first_pipe_instance(false)
+            .create(&config.endpoint)
+            .map_err(|error| anyhow::anyhow!("create IPC pipe {}: {error}", config.endpoint))?;
+        if let Some(idle_timeout) = config.idle_timeout {
+            tokio::select! {
+                connected = server.connect() => {
+                    connected.map_err(|error| anyhow::anyhow!("connect IPC pipe client: {error}"))?;
+                    spawn_ipc_client(server, runtime.clone()).await;
+                }
+                _ = tokio::time::sleep(idle_timeout) => {
+                    if ipc_should_shutdown(&runtime, idle_timeout).await {
+                        tracing::info!("mains-aegis-devd IPC idle timeout reached; shutting down");
+                        break;
+                    }
+                }
+            }
+        } else {
+            server
+                .connect()
+                .await
+                .map_err(|error| anyhow::anyhow!("connect IPC pipe client: {error}"))?;
+            spawn_ipc_client(server, runtime.clone()).await;
+        }
+    }
+    Ok(())
+}
+
+async fn spawn_ipc_client<S>(stream: S, runtime: IpcRuntime)
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    ipc_client_connected(&runtime).await;
+    tokio::spawn(async move {
+        if let Err(error) = handle_ipc_stream(stream, runtime.clone()).await {
+            tracing::warn!("IPC client failed: {error:#}");
+        }
+        ipc_client_disconnected(&runtime).await;
+    });
+}
+
+async fn ipc_client_connected(runtime: &IpcRuntime) {
+    let mut lifecycle = runtime.lifecycle.lock().await;
+    lifecycle.active_clients += 1;
+    lifecycle.last_activity = Instant::now();
+}
+
+async fn ipc_client_disconnected(runtime: &IpcRuntime) {
+    let mut lifecycle = runtime.lifecycle.lock().await;
+    lifecycle.active_clients = lifecycle.active_clients.saturating_sub(1);
+    lifecycle.last_activity = Instant::now();
+}
+
+async fn ipc_mark_activity(runtime: &IpcRuntime) {
+    runtime.lifecycle.lock().await.last_activity = Instant::now();
+}
+
+async fn ipc_should_shutdown(runtime: &IpcRuntime, idle_timeout: Duration) -> bool {
+    let lifecycle = runtime.lifecycle.lock().await;
+    lifecycle.active_clients == 0 && lifecycle.last_activity.elapsed() >= idle_timeout
+}
+
+async fn handle_ipc_stream<S>(stream: S, runtime: IpcRuntime) -> anyhow::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (read, mut write) = tokio::io::split(stream);
+    let mut lines = BufReader::new(read).lines();
+    while let Some(line) = lines.next_line().await? {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = match serde_json::from_str::<IpcRequest>(&line) {
+            Ok(request) => handle_ipc_request(&runtime.app, request).await,
+            Err(error) => IpcResponse {
+                id: "invalid".to_string(),
+                ok: false,
+                result: None,
+                error: Some(format!("invalid IPC request: {error}")),
+            },
+        };
+        let mut encoded = serde_json::to_vec(&response)?;
+        encoded.push(b'\n');
+        write.write_all(&encoded).await?;
+        write.flush().await?;
+        ipc_mark_activity(&runtime).await;
+    }
+    Ok(())
+}
+
+async fn handle_ipc_request(state: &AppState, request: IpcRequest) -> IpcResponse {
+    let id = request.id;
+    match dispatch_ipc_request(state, &request.method, request.params).await {
+        Ok(result) => IpcResponse {
+            id,
+            ok: true,
+            result: Some(result),
+            error: None,
+        },
+        Err(error) => IpcResponse {
+            id,
+            ok: false,
+            result: None,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+async fn dispatch_ipc_request(
+    state: &AppState,
+    method: &str,
+    params: Value,
+) -> anyhow::Result<Value> {
+    match method {
+        "devd.health" => Ok(json!({"ok": true, "daemon": "mains-aegis-devd"})),
+        "devices.list" => Ok(list_devices(State(state.clone())).await.0),
+        "devices.scan" => json_result(scan_devices(State(state.clone())).await),
+        "device.bind" => {
+            let id = require_param(&params, "device_id")?;
+            let input: BindRequest = serde_json::from_value(params)?;
+            json_result(bind_device(State(state.clone()), Path(id), Json(input)).await)
+        }
+        "device.unbind" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(unbind_device(State(state.clone()), Path(id)).await)
+        }
+        "device.identity" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(device_identity(State(state.clone()), Path(id)).await)
+        }
+        "device.connect" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(connect_device(State(state.clone()), Path(id)).await)
+        }
+        "device.disconnect" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(disconnect_device(State(state.clone()), Path(id)).await)
+        }
+        "device.session" => {
+            let id = require_param(&params, "device_id")?;
+            let query = SessionQuery {
+                logs_limit: params
+                    .get("logs_limit")
+                    .and_then(Value::as_u64)
+                    .map(usize::try_from)
+                    .transpose()?,
+                trace_limit: params
+                    .get("trace_limit")
+                    .and_then(Value::as_u64)
+                    .map(usize::try_from)
+                    .transpose()?,
+                lease_id: params
+                    .get("lease_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            };
+            json_result(device_session(Query(query), State(state.clone()), Path(id)).await)
+        }
+        "device.artifact.select" => {
+            let id = require_param(&params, "device_id")?;
+            let input: ArtifactSelectRequest = serde_json::from_value(params)?;
+            json_result(select_artifact(State(state.clone()), Path(id), Json(input)).await)
+        }
+        "device.artifact.get" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(device_artifact(State(state.clone()), Path(id)).await)
+        }
+        "device.flash" => {
+            let id = require_param(&params, "device_id")?;
+            let input: FlashRequest = serde_json::from_value(params)?;
+            json_result(flash_device(State(state.clone()), Path(id), Json(input)).await)
+        }
+        "device.reset" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(reset_device(State(state.clone()), Path(id)).await)
+        }
+        "device.monitor.start" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(monitor_start(State(state.clone()), Path(id)).await)
+        }
+        "device.monitor.stop" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(monitor_stop(State(state.clone()), Path(id)).await)
+        }
+        "serial.lease.create" => {
+            let input: WebLeaseCreateRequest = serde_json::from_value(params)?;
+            json_result(create_web_lease(State(state.clone()), Json(input)).await)
+        }
+        "serial.lease.heartbeat" => {
+            let lease_id = require_param(&params, "lease_id")?;
+            json_result(heartbeat_web_lease(State(state.clone()), Path(lease_id)).await)
+        }
+        "serial.lease.release" => {
+            let lease_id = require_param(&params, "lease_id")?;
+            json_result(release_web_lease(State(state.clone()), Path(lease_id)).await)
+        }
+        "host.power.status" => Ok(host_power_status(State(state.clone())).await.0),
+        "host.power.profile" => {
+            let input: HostPowerProfileRequest = serde_json::from_value(params)?;
+            json_result(host_power_profile(State(state.clone()), Json(input)).await)
+        }
+        "host.power.suspend" => {
+            let input =
+                if params.is_null() || params.as_object().is_some_and(|object| object.is_empty()) {
+                    None
+                } else {
+                    Some(Json(serde_json::from_value(params)?))
+                };
+            json_result(host_power_suspend(State(state.clone()), input).await)
+        }
+        "host.power.shutdown" => {
+            let input =
+                if params.is_null() || params.as_object().is_some_and(|object| object.is_empty()) {
+                    None
+                } else {
+                    Some(Json(serde_json::from_value(params)?))
+                };
+            json_result(host_power_shutdown(State(state.clone()), input).await)
+        }
+        "settings.wifi.set" => {
+            let input: WifiConfigRequest = serde_json::from_value(params)?;
+            json_result(set_wifi_config(State(state.clone()), Json(input)).await)
+        }
+        "settings.wifi.clear" => {
+            let query = SafeSettingsTargetQuery {
+                device_id: params
+                    .get("device_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                lease_id: params
+                    .get("lease_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            };
+            json_result(clear_wifi_config(State(state.clone()), Query(query)).await)
+        }
+        "settings.log_level.set" => {
+            let input: LogLevelRequest = serde_json::from_value(params)?;
+            json_result(set_log_level(State(state.clone()), Json(input)).await)
+        }
+        "settings.manual_charge.set" => {
+            let input: ManualChargeRequest = serde_json::from_value(params)?;
+            json_result(set_manual_charge(State(state.clone()), Json(input)).await)
+        }
+        _ => anyhow::bail!("unsupported IPC method: {method}"),
+    }
+}
+
+fn json_result<T>(result: Result<Json<T>, HttpError>) -> anyhow::Result<Value>
+where
+    T: Serialize,
+{
+    result
+        .map(|Json(value)| serde_json::to_value(value))
+        .map_err(|error| anyhow::anyhow!("{error}"))?
+        .map_err(Into::into)
+}
+
+fn require_param(params: &Value, key: &str) -> anyhow::Result<String> {
+    params
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("missing required parameter: {key}"))
+}
+
+pub async fn ipc_call(endpoint: &str, method: &str, params: Value) -> anyhow::Result<Value> {
+    let request = IpcRequest {
+        id: next_id(),
+        method: method.to_string(),
+        params,
+    };
+    #[cfg(unix)]
+    {
+        let stream = tokio::net::UnixStream::connect(endpoint)
+            .await
+            .map_err(|error| anyhow::anyhow!("connect IPC socket {endpoint}: {error}"))?;
+        send_ipc_request(stream, request).await
+    }
+    #[cfg(windows)]
+    {
+        let stream = tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(endpoint)
+            .map_err(|error| anyhow::anyhow!("connect IPC pipe {endpoint}: {error}"))?;
+        send_ipc_request(stream, request).await
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (endpoint, request);
+        anyhow::bail!("mains-aegis IPC is unsupported on this platform")
+    }
+}
+
+async fn send_ipc_request<S>(mut stream: S, request: IpcRequest) -> anyhow::Result<Value>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut encoded = serde_json::to_vec(&request)?;
+    encoded.push(b'\n');
+    stream.write_all(&encoded).await?;
+    stream.flush().await?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await?;
+    let response: IpcResponse = serde_json::from_str(line.trim())?;
+    if response.ok {
+        Ok(response.result.unwrap_or_else(|| json!({})))
+    } else {
+        anyhow::bail!(
+            "{}",
+            response
+                .error
+                .unwrap_or_else(|| "IPC request failed".to_string())
+        )
+    }
+}
+
+async fn bootstrap() -> Json<Value> {
+    Json(json!({
+        "token_required": false,
+        "agent_base_url": "",
+        "app": {
+            "name": "mains-aegis-devd",
+            "version": release_version(),
+            "mode": "http_bridge"
+        }
+    }))
 }
 
 async fn health() -> Json<Value> {
@@ -3736,6 +4337,14 @@ fn now() -> String {
 #[derive(Debug)]
 struct HttpError(ApiError, StatusCode);
 
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.0.code, self.0.message)
+    }
+}
+
+impl std::error::Error for HttpError {}
+
 impl HttpError {
     fn retryable(code: &str, message: impl Into<String>) -> Self {
         Self(
@@ -3792,6 +4401,116 @@ impl IntoResponse for HttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_event_token_query_decodes_urlsafe_tokens() {
+        let uri: Uri = "/api/v1/serial/events?lease_id=abc&bridge_token=a%2Bb%3D%3D"
+            .parse()
+            .unwrap();
+        assert_eq!(query_param(&uri, "bridge_token").as_deref(), Some("a+b=="));
+    }
+
+    #[test]
+    fn bridge_event_token_query_is_path_limited_by_caller() {
+        let uri: Uri = "/api/v1/serial/events?bridge_token=secret".parse().unwrap();
+        assert_eq!(query_param(&uri, "bridge_token").as_deref(), Some("secret"));
+        assert_eq!(query_param(&uri, "missing"), None);
+    }
+
+    #[test]
+    fn bridge_query_token_accepts_known_event_stream_routes() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("application/json, text/event-stream"),
+        );
+        let status_uri: Uri = "/api/v1/status?bridge_token=secret".parse().unwrap();
+        let serial_uri: Uri = "/api/v1/serial/events?bridge_token=secret".parse().unwrap();
+        let device_uri: Uri = "/api/v1/devices/mock-devkit/events?bridge_token=secret"
+            .parse()
+            .unwrap();
+
+        assert!(is_event_stream_query_auth_request(
+            &Method::GET,
+            &status_uri,
+            &headers
+        ));
+        assert!(is_event_stream_query_auth_request(
+            &Method::GET,
+            &serial_uri,
+            &headers
+        ));
+        assert!(is_event_stream_query_auth_request(
+            &Method::GET,
+            &device_uri,
+            &headers
+        ));
+    }
+
+    #[test]
+    fn bridge_query_token_accepts_event_stream_media_params() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("TEXT/EVENT-STREAM; charset=utf-8"),
+        );
+
+        assert!(accepts_event_stream(&headers));
+    }
+
+    #[test]
+    fn bridge_query_token_rejects_mutation_api_even_with_event_stream_accept() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
+        let uri: Uri = "/api/v1/host/power/shutdown?bridge_token=secret"
+            .parse()
+            .unwrap();
+
+        assert!(!is_event_stream_query_auth_request(
+            &Method::POST,
+            &uri,
+            &headers
+        ));
+    }
+
+    #[test]
+    fn bridge_auth_allows_static_web_assets_without_opening_api() {
+        let root: Uri = "/".parse().unwrap();
+        let asset: Uri = "/assets/app.js".parse().unwrap();
+        let api: Uri = "/api/v1/status".parse().unwrap();
+        let health: Uri = "/health".parse().unwrap();
+
+        assert!(is_static_web_asset_request(&Method::GET, &root));
+        assert!(is_static_web_asset_request(&Method::HEAD, &asset));
+        assert!(!is_static_web_asset_request(&Method::GET, &api));
+        assert!(!is_static_web_asset_request(&Method::GET, &health));
+        assert!(!is_static_web_asset_request(&Method::POST, &asset));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn active_ipc_socket_is_not_unlinked() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("devd.sock");
+        let _listener = tokio::net::UnixListener::bind(&path).unwrap();
+
+        let error = remove_stale_ipc_socket(&path).await.unwrap_err();
+
+        assert!(error.to_string().contains("already active"));
+        assert!(path.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stale_ipc_path_is_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("devd.sock");
+        fs::write(&path, b"stale").unwrap();
+
+        remove_stale_ipc_socket(&path).await.unwrap();
+
+        assert!(!path.exists());
+    }
 
     #[test]
     fn stable_device_id_is_deterministic() {

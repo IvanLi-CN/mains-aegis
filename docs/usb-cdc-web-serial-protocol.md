@@ -15,9 +15,9 @@ High-risk operations such as output enable/disable, fault clear, and charge star
 
 ## Mains Aegis Device Daemon
 
-`mains-aegis-devd` is the preferred local device owner. It manages device scan/list/bind/connect/disconnect/unbind, firmware artifact selection, flash/reset/monitor operations, host power coordination, and the USB CDC safe-control bridge behind localhost HTTP.
+`mains-aegis-devd` is the preferred local device owner. It manages device scan/list/bind/connect/disconnect/unbind, firmware artifact selection, flash/reset/monitor operations, host power coordination, and USB CDC safe-control. Its default `serve` mode is IPC-only; HTTP/Web access is exposed only through explicit `bridge-http`.
 
-Development mode uses the Web dev server as the API reverse proxy: the browser talks to the Vite origin, and Vite proxies `/api` to `http://127.0.0.1:30080`. Production mode may serve static Web assets directly from devd.
+Development mode uses the Web dev server as the API reverse proxy: the browser talks to the Vite origin, and Vite proxies `/api` to the explicit `bridge-http` endpoint, default `http://127.0.0.1:30080`. Production mode may serve static Web assets directly from `bridge-http`.
 
 Device management endpoints:
 

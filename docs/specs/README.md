@@ -19,6 +19,7 @@
 
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
+| 7jqrq | Mains Aegis CLI / devd alignment | 已完成 | `7jqrq-mains-aegis-cli-devd-alignment/SPEC.md` | 2026-06-02 | 主机工具对齐为 `mains-aegis-host` single crate，发布 CLI + devd，`serve` 改为 IPC-only，HTTP/Web 通过显式 `bridge-http` |
 | p8k3d | Mains Aegis Device Daemon | 已完成 | `p8k3d-mains-aegis-devd/SPEC.md` | 2026-06-04 | 新增 `mains-aegis-devd` 设备主入口、Firmware Catalog、固件 identity/defmt 匹配与 `power-diag`；诊断快照已覆盖 VAC2/DC IN 与 CUV recovery 策略状态 |
 | ypfpu | Web management UI | 部分完成（5/5） | `ypfpu-web-management-ui/SPEC.md` | 2026-04-28 | PR #71 已创建并收敛到 merge-ready；新增 Vite/React/Bun Web 管理端，支持多设备 Fleet 卡片总览、设备接入、单设备只读详情、API/SSE 对接与 mock 视觉验证 |
 | hn29u | USB-C PD/PPS sink v1 | 已完成 | `hn29u-usb-c-pd-sink-pps/SPEC.md` | 2026-04-23 | hotplug PPS 恢复已稳定闭环：reset 基线约 `1.67s` 回到 `PPS`，主人实测真实热插拔也已恢复到秒级协商成功 |

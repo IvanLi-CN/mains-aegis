@@ -23,7 +23,7 @@
 - 对接设备侧现有只读接口：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status` 和 status SSE。
 - 提供 mock fixtures 和正式路由 seed 场景，使无实机环境也能稳定预览、交互测试与截图验证。
 - 在现有 `web/` 管理台上新增 USB CDC / Web Serial 数据源，复用 `Identity`、`NetworkSummary`、`UpsStatus` 状态模型。
-- 使用 `mains-aegis-devd` 作为本地 USB HTTP 控制面，使 Web App、未来 App 与 CLI 可以通过 localhost HTTP 使用同一 USB CDC 安全控制面。
+- 使用 `mains-aegis-devd` 作为本地 USB 控制 owner；CLI 通过 IPC 访问，Web/App 通过显式 `bridge-http` 使用同一 USB CDC 安全控制面。
 - 通过 USB CDC structured JSONL 协议支持握手、状态读取、结构化日志、安全设置与 WiFi 配网。
 - 首版写入范围限制为 WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别；PSK 不在 API、日志或 UI 中回显。
 
@@ -90,7 +90,7 @@
 
 ### mains-aegis-devd 本地控制面
 
-- devd 位于 `tools/mains-aegis-devd/`，使用 Rust 实现。
+- host tools 位于 `tools/mains-aegis-host/`，使用 Rust 实现，并产出 `mains-aegis` CLI 与 `mains-aegis-devd`。
 - devd 通过 scan/list/bind/connect 管理设备；真实写入要求已连接且 identity 可用的 USB CDC 设备。
 - Web App 的 devd 入口先执行 devd scan；没有候选时显示无设备，单候选时可直接提交，多个候选时必须渲染选择器并等待用户选择。多设备场景不得自动选择，也不得要求用户拔掉其它设备作为常规工作流。
 - Web devd 控制 session 必须由 devd Web lease 支撑。Web 创建 session 后按 devd 返回的 `heartbeat_interval_ms` 续租；所有 WiFi config、safe settings、serial session 与 event stream 请求必须携带有效 lease。
@@ -99,7 +99,7 @@
 - Web 不得在本地 localStorage 中持久化 devd lease；刷新页面后必须重新创建 lease，不能复用过期 session。
 - 连接硬件、保存 WiFi、清除 WiFi 与 safe settings 失败必须以气泡 callout 展示；成功反馈可以保留为低噪音 inline status。
 - devd 连接在创建 Web lease 并读取 identity 后必须执行同样的 firmware artifact 匹配门禁；不匹配时释放刚创建的 lease，不得继续占用 USB，除非用户显式忽略警告并重新发起连接。
-- devd 对 Web/App/CLI 暴露 localhost HTTP：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、`/api/v1/serial/session`、WiFi config 与 safe settings endpoints。
+- devd 对 Web/App 暴露显式 localhost HTTP bridge：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、`/api/v1/serial/session`、WiFi config 与 safe settings endpoints；CLI 使用 IPC。
 - `/api/v1/serial/session` 返回 bounded tail logs/trace，默认 `logs_limit=200`、`trace_limit=600`，上限分别为 `500` 和 `2000`。
 - 同一 `identity.device_id` 通过 LAN 与 USB 同时发现时，Web App 合并为一条 `DeviceRecord`，并显示 WiFi/LAN 与 USB 两个连接标记。
 

@@ -26,6 +26,7 @@ export class MainsAegisApiError extends Error {
 }
 
 export const isMockBaseUrl = (baseUrl: string) => baseUrl.startsWith("mock:");
+export const BRIDGE_AUTH_TOKEN_KEY = "mains-aegis.bridgeAuthToken";
 
 export function normalizeBaseUrl(input: string): string {
   const value = input.trim();
@@ -49,6 +50,7 @@ async function requestWithBody<T>(baseUrl: string, path: string, method: "GET" |
     method,
     headers: {
       Accept: "application/json",
+      ...bridgeAuthHeaders(baseUrl),
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -70,6 +72,16 @@ async function requestWithBody<T>(baseUrl: string, path: string, method: "GET" |
   }
 
   return payload as T;
+}
+
+function bridgeAuthHeaders(baseUrl: string): Record<string, string> {
+  const token = bridgeAuthToken(baseUrl);
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+export function bridgeAuthToken(baseUrl: string): string | null {
+  if (typeof window === "undefined" || isMockBaseUrl(baseUrl)) return null;
+  return window.localStorage.getItem(BRIDGE_AUTH_TOKEN_KEY)?.trim() || null;
 }
 
 function parseJsonPayload<T>(text: string): T | ApiErrorEnvelope | null {
@@ -243,7 +255,7 @@ export const heartbeatDevdWebLease = (baseUrl: string, leaseId: string) =>
 export const releaseDevdWebLease = (baseUrl: string, leaseId: string, keepalive = false) => {
   const path = `/api/v1/serial/lease/${encodeURIComponent(leaseId)}`;
   if (keepalive && !isMockBaseUrl(baseUrl)) {
-    return fetch(`${baseUrl}${path}`, { method: "DELETE", keepalive, headers: { Accept: "application/json" } }).then(() => undefined);
+    return fetch(`${baseUrl}${path}`, { method: "DELETE", keepalive, headers: { Accept: "application/json", ...bridgeAuthHeaders(baseUrl) } }).then(() => undefined);
   }
   return requestWithBody<unknown>(baseUrl, path, "DELETE");
 };
@@ -256,7 +268,10 @@ export function subscribeDevdSerialEvents(
     onError: (event: Event) => void;
   },
 ): DevdSerialEventStream {
-  const eventSource = new EventSource(`${baseUrl}/api/v1/serial/events?lease_id=${encodeURIComponent(leaseId)}`);
+  const params = new URLSearchParams({ lease_id: leaseId });
+  const token = bridgeAuthToken(baseUrl);
+  if (token) params.set("bridge_token", token);
+  const eventSource = new EventSource(`${baseUrl}/api/v1/serial/events?${params.toString()}`);
   const handleEvent = (event: Event) => {
     callbacks.onEvent(JSON.parse((event as MessageEvent<string>).data) as DevdSerialEvent);
   };
