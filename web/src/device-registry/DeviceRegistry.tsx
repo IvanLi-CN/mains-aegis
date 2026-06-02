@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   bridgeAuthRequired,
+  bridgeAuthToken,
   clearDevdWifiConfig,
   connectDevdDevice,
   createDevdWebLease,
@@ -17,6 +18,7 @@ import {
   sendDevdWifiConfig,
   setDevdLogLevel,
   setDevdManualChargePrefs,
+  saveBridgeAuthToken,
   subscribeDevdSerialEvents,
   toErrorEnvelope,
   type DevdSerialEventStream,
@@ -466,7 +468,19 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     const baseUrl = normalizeBaseUrl(input.target);
 
     try {
+      if (input.bridgeAuthToken !== undefined) saveBridgeAuthToken(baseUrl, input.bridgeAuthToken);
       const bridgeAuth = await bridgeAuthRequired(baseUrl);
+      if (bridgeAuth && !bridgeAuthToken(baseUrl)) {
+        return {
+          ok: false,
+          error: {
+            code: "bridge_auth_token_required",
+            message: "This bridge requires an auth token before probing",
+            retryable: false,
+            details: null,
+          },
+        };
+      }
       const result = await probeDevice(baseUrl, undefined, bridgeAuth ? { bridgeAuth: true } : undefined);
       const target: DeviceTarget = {
         deviceId: result.identity.device_id,
@@ -489,6 +503,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     let pendingLeaseId: string | null = null;
 
     try {
+      if (input.bridgeAuthToken !== undefined) saveBridgeAuthToken(baseUrl, input.bridgeAuthToken);
       const scan = await scanDevdDevices(baseUrl);
       const nativeDevices = scan.devices.filter((device) => device.transport === "native_serial" && device.port_path);
       const selectedDevice = input.devdDeviceId

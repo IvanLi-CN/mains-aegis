@@ -91,7 +91,22 @@ function bridgeAuthHeaders(baseUrl: string): Record<string, string> {
 
 export function bridgeAuthToken(baseUrl: string): string | null {
   if (typeof window === "undefined" || isMockBaseUrl(baseUrl)) return null;
-  return window.localStorage.getItem(BRIDGE_AUTH_TOKEN_KEY)?.trim() || null;
+  return window.localStorage.getItem(bridgeAuthStorageKey(baseUrl))?.trim() || null;
+}
+
+export function saveBridgeAuthToken(baseUrl: string, token: string): void {
+  if (typeof window === "undefined" || isMockBaseUrl(baseUrl)) return;
+  const key = bridgeAuthStorageKey(baseUrl);
+  const value = token.trim();
+  if (value) {
+    window.localStorage.setItem(key, value);
+  } else {
+    window.localStorage.removeItem(key);
+  }
+}
+
+function bridgeAuthStorageKey(baseUrl: string): string {
+  return `${BRIDGE_AUTH_TOKEN_KEY}.${encodeURIComponent(baseUrl || "same-origin")}`;
 }
 
 export async function bridgeAuthRequired(baseUrl: string): Promise<boolean> {

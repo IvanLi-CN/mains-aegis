@@ -98,3 +98,14 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
   evidence_note: 验证 Connect 页仍保留 USB CDC、显式 `mains-aegis-devd` bridge 与 LAN read-only 三入口；本次 host-tools 对齐没有破坏 mock UI 连接面。
 
 ![Host tools bridge connect evidence](./assets/host-tools-connect-bridge.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: Storybook `UPS Management/Connect / Add LAN target`
+  requested_viewport: `1365x900`
+  viewport_strategy: `storybook-viewport`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: bridge token inputs on devd and LAN connect forms
+  evidence_note: 验证 Connect 页为 protected `bridge-http` 提供 token 输入，同时普通 LAN 添加流程仍可连接 mock 目标。
+
+![Connect bridge token evidence](./assets/connect-bridge-token-storybook.png)

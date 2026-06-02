@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
-import { normalizeBaseUrl, scanDevdDevices, toErrorEnvelope } from "../api/client";
+import { normalizeBaseUrl, saveBridgeAuthToken, scanDevdDevices, toErrorEnvelope } from "../api/client";
 import type { DeviceRecord, DevdDevice, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 import { SegmentedControl } from "../components/ui/segmented-control";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
@@ -446,11 +446,13 @@ function ConnectPage() {
     resetDemo,
   } = useDeviceRegistry();
   const [target, setTarget] = useState("");
+  const [bridgeToken, setBridgeToken] = useState("");
   const [alias, setAlias] = useState("");
   const [location, setLocation] = useState("");
   const [usbAlias, setUsbAlias] = useState("");
   const [usbLocation, setUsbLocation] = useState("");
   const [devdTarget, setDevdTarget] = useState("same-origin");
+  const [devdBridgeToken, setDevdBridgeToken] = useState("");
   const [devdAlias, setDevdAlias] = useState("");
   const [devdLocation, setDevdLocation] = useState("");
   const [devdCandidates, setDevdCandidates] = useState<DevdDevice[]>([]);
@@ -470,10 +472,11 @@ function ConnectPage() {
     event.preventDefault();
     setBusy(true);
     setMessage(null);
-    const result = await addDevice({ target, alias, location });
+    const result = await addDevice({ target, alias, location, bridgeAuthToken: bridgeToken.trim() || undefined });
     setBusy(false);
     if (result.ok) {
       setTarget("");
+      setBridgeToken("");
       setAlias("");
       setLocation("");
       setMessage(successFeedback(`Connected ${result.record.target.alias}`));
@@ -505,7 +508,9 @@ function ConnectPage() {
     setDevdMessage(null);
     let devdDeviceId = selectedDevdDeviceId || undefined;
     try {
-      const scan = await scanDevdDevices(normalizeBaseUrl(devdTarget));
+      const devdBaseUrl = normalizeBaseUrl(devdTarget);
+      if (devdBridgeToken.trim()) saveBridgeAuthToken(devdBaseUrl, devdBridgeToken);
+      const scan = await scanDevdDevices(devdBaseUrl);
       const candidates = scan.devices.filter((device) => device.transport === "native_serial" && device.port_path);
       setDevdCandidates(candidates);
       if (!devdDeviceId && candidates.length === 1) {
@@ -522,10 +527,18 @@ function ConnectPage() {
       setDevdMessage(errorFeedback(envelope));
       return;
     }
-    const result = await addDevdDevice({ target: devdTarget, alias: devdAlias, location: devdLocation, devdDeviceId, ignoreFirmwareMismatch: devdFirmwareOverridePending });
+    const result = await addDevdDevice({
+      target: devdTarget,
+      alias: devdAlias,
+      location: devdLocation,
+      bridgeAuthToken: devdBridgeToken.trim() || undefined,
+      devdDeviceId,
+      ignoreFirmwareMismatch: devdFirmwareOverridePending,
+    });
     setDevdBusy(false);
     if (result.ok) {
       setDevdFirmwareOverridePending(false);
+      setDevdBridgeToken("");
       setDevdAlias("");
       setDevdLocation("");
       setDevdCandidates([]);
@@ -620,6 +633,17 @@ function ConnectPage() {
                 required
               />
             </label>
+            <label>
+              Bridge token
+              <input
+                name="devd-bridge-token"
+                value={devdBridgeToken}
+                onChange={(event) => setDevdBridgeToken(event.target.value)}
+                placeholder="Required for protected LAN bridge"
+                type="password"
+                autoComplete="off"
+              />
+            </label>
             {devdCandidates.length > 1 ? (
               <label>
                 USB device
@@ -679,6 +703,17 @@ function ConnectPage() {
                 onChange={(event) => setTarget(event.target.value)}
                 placeholder="mains-aegis-a1b2c3.local or 192.168.31.42"
                 required
+              />
+            </label>
+            <label>
+              Bridge token
+              <input
+                name="bridge-token"
+                value={bridgeToken}
+                onChange={(event) => setBridgeToken(event.target.value)}
+                placeholder="Only for protected bridge-http"
+                type="password"
+                autoComplete="off"
               />
             </label>
             <label>
