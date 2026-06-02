@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
-import { normalizeBaseUrl, saveBridgeAuthToken, scanDevdDevices, toErrorEnvelope } from "../api/client";
+import { bridgeAuthRequired, normalizeBaseUrl, saveBridgeAuthToken, scanDevdDevices, toErrorEnvelope } from "../api/client";
 import type { DeviceRecord, DevdDevice, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 import { SegmentedControl } from "../components/ui/segmented-control";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
@@ -472,7 +472,7 @@ function ConnectPage() {
     event.preventDefault();
     setBusy(true);
     setMessage(null);
-    const result = await addDevice({ target, alias, location, bridgeAuthToken: bridgeToken.trim() || undefined });
+    const result = await addDevice({ target, alias, location, bridgeAuthToken: bridgeToken.trim() });
     setBusy(false);
     if (result.ok) {
       setTarget("");
@@ -509,7 +509,14 @@ function ConnectPage() {
     let devdDeviceId = selectedDevdDeviceId || undefined;
     try {
       const devdBaseUrl = normalizeBaseUrl(devdTarget);
-      if (devdBridgeToken.trim()) saveBridgeAuthToken(devdBaseUrl, devdBridgeToken);
+      const trimmedDevdBridgeToken = devdBridgeToken.trim();
+      saveBridgeAuthToken(devdBaseUrl, trimmedDevdBridgeToken);
+      const devdBridgeAuth = await bridgeAuthRequired(devdBaseUrl);
+      if (devdBridgeAuth && !trimmedDevdBridgeToken) {
+        setDevdBusy(false);
+        setDevdMessage(errorFeedback({ code: "bridge_auth_token_required", message: "This bridge requires an auth token before scanning", retryable: false, details: null }));
+        return;
+      }
       const scan = await scanDevdDevices(devdBaseUrl);
       const candidates = scan.devices.filter((device) => device.transport === "native_serial" && device.port_path);
       setDevdCandidates(candidates);
@@ -531,7 +538,7 @@ function ConnectPage() {
       target: devdTarget,
       alias: devdAlias,
       location: devdLocation,
-      bridgeAuthToken: devdBridgeToken.trim() || undefined,
+      bridgeAuthToken: devdBridgeToken.trim(),
       devdDeviceId,
       ignoreFirmwareMismatch: devdFirmwareOverridePending,
     });

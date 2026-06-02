@@ -504,6 +504,18 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
 
     try {
       if (input.bridgeAuthToken !== undefined) saveBridgeAuthToken(baseUrl, input.bridgeAuthToken);
+      const bridgeAuth = await bridgeAuthRequired(baseUrl);
+      if (bridgeAuth && !bridgeAuthToken(baseUrl)) {
+        return {
+          ok: false,
+          error: {
+            code: "bridge_auth_token_required",
+            message: "This bridge requires an auth token before probing",
+            retryable: false,
+            details: null,
+          },
+        };
+      }
       const scan = await scanDevdDevices(baseUrl);
       const nativeDevices = scan.devices.filter((device) => device.transport === "native_serial" && device.port_path);
       const selectedDevice = input.devdDeviceId
@@ -527,7 +539,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       }
       const lease = await createDevdWebLease(baseUrl, selectedDevice.id);
       pendingLeaseId = lease.lease_id;
-      const result = await probeDevice(baseUrl, lease.lease_id, { bridgeAuth: true });
+      const result = await probeDevice(baseUrl, lease.lease_id, bridgeAuth ? { bridgeAuth: true } : undefined);
       const firmwareMatch = await findFirmwareArtifactForIdentity(result.identity);
       if (!firmwareMatch && !input.ignoreFirmwareMismatch) {
         await releaseDevdWebLease(baseUrl, lease.lease_id).catch(() => undefined);
@@ -544,6 +556,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         alias: input.alias?.trim() || result.identity.hostname,
         location: input.location?.trim() || "devd",
         addedAt: new Date().toISOString(),
+        bridgeAuth: bridgeAuth || undefined,
         transport: "devd",
         serialProtocol: session.protocol,
       };
