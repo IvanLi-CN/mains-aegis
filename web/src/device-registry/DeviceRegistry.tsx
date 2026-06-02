@@ -118,6 +118,12 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     );
   }, []);
 
+  const resolveBridgeAuthState = useCallback(async (target: Pick<DeviceTarget, "baseUrl" | "bridgeAuth">) => {
+    if (target.bridgeAuth) return true;
+    if (!bridgeAuthToken(target.baseUrl)) return false;
+    return bridgeAuthRequired(target.baseUrl);
+  }, []);
+
   const setSerialCommandError = useCallback(
     (deviceId: string, error: DeviceRecord["error"]) => {
       if (!serialSessions.current.has(deviceId)) {
@@ -255,6 +261,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       ),
     );
 
+    const cachedBridgeAuth = bridgeAuthToken(target.baseUrl) !== null;
     try {
       if (target.transport === "devd") {
         setRecordError(deviceId, {
@@ -265,12 +272,14 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         });
         return;
       }
-      const result = await probeDevice(target.baseUrl, undefined, target.bridgeAuth ? { bridgeAuth: true } : undefined);
+      const bridgeAuth = await resolveBridgeAuthState(target);
+      const nextTarget = bridgeAuth ? { ...target, bridgeAuth: true } : target;
+      const result = await probeDevice(target.baseUrl, undefined, bridgeAuth ? { bridgeAuth: true } : undefined);
       setRecords((current) => {
         const previous = current.find((record) => record.target.deviceId === deviceId);
         if (!previous) return current;
         const streamState = result.identity.capabilities.sse && previous.streamState !== "polling" ? "idle" : "polling";
-        return upsertRecord(current, recordFromProbe(target, result, "online", streamState));
+        return upsertRecord(current, recordFromProbe(nextTarget, result, "online", streamState));
       });
     } catch (error) {
       const envelope = toErrorEnvelope(error);
@@ -279,6 +288,10 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
           record.target.deviceId === deviceId
             ? {
                 ...record,
+                target: {
+                  ...record.target,
+                  bridgeAuth: record.target.bridgeAuth || cachedBridgeAuth ? true : undefined,
+                },
                 connectionState: envelope.retryable ? "offline" : "error",
                 streamState: "polling",
                 error: envelope,
@@ -288,7 +301,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         ),
       );
     }
-  }, [records, setRecordError]);
+  }, [records, resolveBridgeAuthState, setRecordError]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
