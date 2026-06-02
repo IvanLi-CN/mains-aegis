@@ -44,7 +44,7 @@ cleanup() {
 trap cleanup EXIT
 
 rm -f "${ipc_path}"
-sudo env MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=1 \
+sudo env MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=true \
   "${devd_bin}" bridge-http --ipc "${ipc_path}" --bind "127.0.0.1:${api_port}" \
   > "${RUNNER_TEMP:-/tmp}/mains-aegis-devd-macos.log" 2>&1 &
 devd_pid=$!
