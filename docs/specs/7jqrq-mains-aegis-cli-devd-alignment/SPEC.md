@@ -42,6 +42,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - `serve` 不接受 `--bind`、`--web-root` 或 HTTP 相关参数。
 - `mains-aegis-devd bridge-http [--ipc <endpoint>] --bind 127.0.0.1:30080 [--web-root <dir>] [--allow-dev-cors]` 启动 HTTP/Web bridge，并在同一进程内启动共享状态的 IPC listener。
 - `bridge-http` 绑定非 loopback 地址时必须同时传入 `--allow-lan-bridge` 与 `--auth-token-file <file>`；API 请求必须携带 `Authorization: Bearer <token>`，浏览器 EventSource 请求可使用 `bridge_token=<token>` query 参数。
+- `GET /api/v1/bootstrap` 必须在 token 模式下保持免认证，用于浏览器发现 bridge 是否需要 token；响应的 `token_required` 必须反映当前 `bridge-http` 配置。
 
 ### CLI commands
 
@@ -61,6 +62,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - Host-tools release tag 使用 `host-tools-v*`。
 - Release archive 必须至少包含 `bin/mains-aegis`、`bin/mains-aegis-devd` 和对应平台安装脚本。
 - 发布资产必须包含 `SHA256SUMS`。
+- 手动触发 release 时，构建 checkout 必须跟随输入的 host-tools tag，避免按工作流触发 ref 构建错误提交。
 - 用户操作 skill 只接受已安装 release 工具；缺少 release 工具时阻断并提示安装 release，不自动 `cargo run`。
 
 ### Web bridge

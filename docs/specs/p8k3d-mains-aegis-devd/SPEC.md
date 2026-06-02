@@ -76,7 +76,7 @@ devd 的 host power 控制面用于 UPS 后备供电期间降低主机负载，�
 安全规则：
 
 - 所有 state-changing host power 请求默认 `dry_run=true`；未显式开启真实动作时，`dry_run=false` 必须返回 `host_power_real_action_denied`。
-- 真实动作只在 devd 启动时带 `--allow-host-power-actions` 或环境变量 `MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=1` 时允许。
+- 真实动作只在 devd 启动时带 `--allow-host-power-actions` 或环境变量 `MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=true` 时允许。
 - dry-run 响应必须包含 backend、action、target profile 或 delay、以及将执行的命令摘要，并且必须广播 `host_power` 事件。
 - shutdown `delay_sec` 按秒解释；真实关机请求必须立即下发给操作系统并以系统命令返回码作为 API 结果，不得由 devd 自行计时或自行决定何时关机。`delay_sec=0` 表示立即关机；`delay_sec>0` 表示使用系统级关机调度能力。
 - Linux 后端使用 `power-profiles-daemon` 的 `net.hadess.PowerProfiles` D-Bus `ActiveProfile` 作为低功耗运行入口：`power_saver` 映射为 `power-saver`，`balanced` 与 `performance` 映射到同名 profile；suspend 使用 logind D-Bus，shutdown 使用 `systemctl poweroff --no-block --when=...`，并仅在请求带 `force:true` 时附加 `--force`，确保命令一旦接收就由系统执行。

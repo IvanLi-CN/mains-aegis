@@ -137,6 +137,7 @@ struct AppState {
     inner: Arc<Mutex<DevdState>>,
     events: broadcast::Sender<DevdEvent>,
     allow_host_power_actions: bool,
+    auth_token_required: bool,
 }
 
 #[derive(Clone)]
@@ -452,7 +453,11 @@ pub async fn serve_http_bridge(config: HttpBridgeConfig) -> anyhow::Result<()> {
     {
         anyhow::bail!("non-loopback HTTP bridge requires --allow-lan-bridge and --auth-token-file");
     }
-    let state = create_app_state(config.allow_host_power_actions);
+    let auth_token_required = config
+        .auth_token
+        .as_ref()
+        .is_some_and(|token| !token.is_empty());
+    let state = create_app_state_with_auth(config.allow_host_power_actions, auth_token_required);
     let ipc_config = IpcConfig::new(config.ipc_endpoint.clone())
         .with_idle_timeout(None)
         .with_host_power_actions(config.allow_host_power_actions);
@@ -555,6 +560,9 @@ async fn require_bearer_token(
     if request.method() == Method::OPTIONS {
         return Ok(next.run(request).await);
     }
+    if is_unauthenticated_bootstrap_request(request.method(), request.uri()) {
+        return Ok(next.run(request).await);
+    }
     if is_static_web_asset_request(request.method(), request.uri()) {
         return Ok(next.run(request).await);
     }
@@ -615,6 +623,10 @@ fn is_static_web_asset_request(method: &Method, uri: &Uri) -> bool {
         && uri.path() != "/health"
 }
 
+fn is_unauthenticated_bootstrap_request(method: &Method, uri: &Uri) -> bool {
+    *method == Method::GET && uri.path() == "/api/v1/bootstrap"
+}
+
 fn percent_decode_query_value(value: &str) -> Result<String, std::string::FromUtf8Error> {
     let mut decoded = Vec::with_capacity(value.len());
     let mut bytes = value.as_bytes().iter().copied();
@@ -649,11 +661,19 @@ pub async fn serve_ipc(config: IpcConfig) -> anyhow::Result<()> {
 }
 
 fn create_app_state(allow_host_power_actions: bool) -> AppState {
+    create_app_state_with_auth(allow_host_power_actions, false)
+}
+
+fn create_app_state_with_auth(
+    allow_host_power_actions: bool,
+    auth_token_required: bool,
+) -> AppState {
     let (events, _) = broadcast::channel(256);
     let state = AppState {
         inner: Arc::new(Mutex::new(DevdState::default())),
         events,
         allow_host_power_actions,
+        auth_token_required,
     };
     seed_mock_device(&state);
     spawn_web_lease_reaper(state.clone());
@@ -1056,9 +1076,9 @@ where
     }
 }
 
-async fn bootstrap() -> Json<Value> {
+async fn bootstrap(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
-        "token_required": false,
+        "token_required": state.auth_token_required,
         "agent_base_url": "",
         "app": {
             "name": "mains-aegis-devd",
@@ -4244,7 +4264,7 @@ fn ensure_host_power_action_allowed(
                 "error": {
                     "code": "host_power_real_action_denied",
                     "message": format!(
-                        "real host {action} requires --allow-host-power-actions or MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=1"
+                        "real host {action} requires --allow-host-power-actions or MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=true"
                     ),
                     "retryable": false,
                     "details": null
@@ -4254,7 +4274,7 @@ fn ensure_host_power_action_allowed(
         Err(HttpError::non_retryable(
             "host_power_real_action_denied",
             format!(
-                "real host {action} requires --allow-host-power-actions or MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=1"
+                "real host {action} requires --allow-host-power-actions or MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=true"
             ),
         ))
     }
@@ -4485,6 +4505,32 @@ mod tests {
         assert!(!is_static_web_asset_request(&Method::GET, &api));
         assert!(!is_static_web_asset_request(&Method::GET, &health));
         assert!(!is_static_web_asset_request(&Method::POST, &asset));
+    }
+
+    #[test]
+    fn bridge_auth_allows_bootstrap_probe_only() {
+        let bootstrap_uri: Uri = "/api/v1/bootstrap".parse().unwrap();
+        let status_uri: Uri = "/api/v1/status".parse().unwrap();
+
+        assert!(is_unauthenticated_bootstrap_request(
+            &Method::GET,
+            &bootstrap_uri
+        ));
+        assert!(!is_unauthenticated_bootstrap_request(
+            &Method::POST,
+            &bootstrap_uri
+        ));
+        assert!(!is_unauthenticated_bootstrap_request(
+            &Method::GET,
+            &status_uri
+        ));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_reports_auth_requirement() {
+        let response = bootstrap(State(create_app_state_with_auth(false, true))).await;
+
+        assert_eq!(response.0["token_required"], true);
     }
 
     #[cfg(unix)]
@@ -4865,6 +4911,7 @@ mod tests {
             inner: Arc::new(Mutex::new(DevdState::default())),
             events,
             allow_host_power_actions: false,
+            auth_token_required: false,
         };
         assert!(ensure_host_power_action_allowed(&state, true, "shutdown").is_ok());
         assert!(ensure_host_power_action_allowed(&state, false, "shutdown").is_err());
@@ -5007,6 +5054,7 @@ mod tests {
             inner: Arc::new(Mutex::new(DevdState::default())),
             events,
             allow_host_power_actions: false,
+            auth_token_required: false,
         };
 
         let error = host_power_profile(
@@ -5039,6 +5087,7 @@ mod tests {
             inner: Arc::new(Mutex::new(DevdState::default())),
             events,
             allow_host_power_actions: false,
+            auth_token_required: false,
         };
 
         let error = host_power_profile(
@@ -5061,6 +5110,7 @@ mod tests {
             inner: Arc::new(Mutex::new(DevdState::default())),
             events,
             allow_host_power_actions: false,
+            auth_token_required: false,
         };
 
         let response = host_power_suspend(State(state), None).await.unwrap();
@@ -5082,6 +5132,7 @@ mod tests {
             inner: Arc::new(Mutex::new(DevdState::default())),
             events,
             allow_host_power_actions: false,
+            auth_token_required: false,
         };
 
         let response = host_power_shutdown(State(state), None).await.unwrap();
@@ -5105,6 +5156,7 @@ mod tests {
             inner: Arc::new(Mutex::new(DevdState::default())),
             events,
             allow_host_power_actions: false,
+            auth_token_required: false,
         };
         let payload = json!({
             "ok": true,
