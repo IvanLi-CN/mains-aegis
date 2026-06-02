@@ -508,7 +508,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       }
       const lease = await createDevdWebLease(baseUrl, selectedDevice.id);
       pendingLeaseId = lease.lease_id;
-      const result = await probeDevice(baseUrl, lease.lease_id);
+      const result = await probeDevice(baseUrl, lease.lease_id, { bridgeAuth: true });
       const firmwareMatch = await findFirmwareArtifactForIdentity(result.identity);
       if (!firmwareMatch && !input.ignoreFirmwareMismatch) {
         await releaseDevdWebLease(baseUrl, lease.lease_id).catch(() => undefined);

@@ -204,14 +204,17 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
   });
 }
 
-export const ping = (baseUrl: string) => requestJson<{ ok: true }>(baseUrl, "/api/v1/ping");
+export const ping = (baseUrl: string, options?: RequestOptions) => requestJson<{ ok: true }>(baseUrl, "/api/v1/ping", options);
 function leaseQuery(leaseId?: string) {
   return leaseId ? `?lease_id=${encodeURIComponent(leaseId)}` : "";
 }
 
-export const getIdentity = (baseUrl: string, leaseId?: string) => requestJson<Identity>(baseUrl, `/api/v1/identity${leaseQuery(leaseId)}`);
-export const getNetwork = (baseUrl: string, leaseId?: string) => requestJson<NetworkSummary>(baseUrl, `/api/v1/network${leaseQuery(leaseId)}`);
-export const getStatus = (baseUrl: string, leaseId?: string) => requestJson<UpsStatus>(baseUrl, `/api/v1/status${leaseQuery(leaseId)}`);
+export const getIdentity = (baseUrl: string, leaseId?: string, options?: RequestOptions) =>
+  requestJson<Identity>(baseUrl, `/api/v1/identity${leaseQuery(leaseId)}`, options);
+export const getNetwork = (baseUrl: string, leaseId?: string, options?: RequestOptions) =>
+  requestJson<NetworkSummary>(baseUrl, `/api/v1/network${leaseQuery(leaseId)}`, options);
+export const getStatus = (baseUrl: string, leaseId?: string, options?: RequestOptions) =>
+  requestJson<UpsStatus>(baseUrl, `/api/v1/status${leaseQuery(leaseId)}`, options);
 
 export type DevdSerialSession = {
   connected: boolean;
@@ -314,11 +317,11 @@ export const setDevdLogLevel = (baseUrl: string, deviceId: string, leaseId: stri
 export const setDevdManualChargePrefs = (baseUrl: string, deviceId: string, leaseId: string, prefs: SafeSettingsState["manual_charge"]) =>
   requestWithBody<unknown>(baseUrl, "/api/v1/settings/manual-charge", "POST", { ...prefs, device_id: deviceId, lease_id: leaseId }, { bridgeAuth: true });
 
-export async function probeDevice(baseUrl: string, leaseId?: string): Promise<ProbeResult> {
-  await ping(baseUrl);
-  const identity = await getIdentity(baseUrl, leaseId);
-  const network = await getNetwork(baseUrl, leaseId);
-  const status = await getStatus(baseUrl, leaseId);
+export async function probeDevice(baseUrl: string, leaseId?: string, options?: RequestOptions): Promise<ProbeResult> {
+  await ping(baseUrl, options);
+  const identity = await getIdentity(baseUrl, leaseId, options);
+  const network = await getNetwork(baseUrl, leaseId, options);
+  const status = await getStatus(baseUrl, leaseId, options);
   return { identity, network, status };
 }
 

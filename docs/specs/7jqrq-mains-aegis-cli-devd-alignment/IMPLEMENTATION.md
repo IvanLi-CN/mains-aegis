@@ -7,7 +7,7 @@
 - CLI 通过 newline JSON IPC 调度设备、serial lease、safe settings、artifact、flash/reset/monitor 与 host power 命令族。
 - LAN bridge 启动时要求 `--allow-lan-bridge` 与 `--auth-token-file`，API 请求使用 bearer token；`GET /api/v1/bootstrap` 保持免认证并报告真实 token requirement；浏览器 EventSource 使用 `bridge_token` query 参数授权。
 - Host-tools release workflow 产出三平台 archive、安装脚本和 `SHA256SUMS`，手动 release checkout 跟随输入 tag，并通过 `MAINS_AEGIS_RELEASE_VERSION` 注入 release tag。
-- Web client 支持从 localStorage 读取 bridge bearer token，并且只在 devd/bridge API 与 devd EventSource 请求上附加 token。
+- Web client 支持从 localStorage 读取 bridge bearer token，并且只在 devd/bridge API、devd probe/status 请求与 devd EventSource 请求上附加 token。
 
 ## 验证
 
