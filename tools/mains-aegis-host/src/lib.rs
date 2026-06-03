@@ -13,6 +13,8 @@ use defmt_decoder::{
     log::format::{Formatter, FormatterConfig, FormatterFormat},
     Table,
 };
+#[cfg(not(test))]
+use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -45,6 +47,10 @@ const LOG_LIMIT: usize = 2_000;
 const WEB_LEASE_HEARTBEAT_INTERVAL_MS: u64 = 2_000;
 const WEB_LEASE_TTL_MS: u64 = 8_000;
 const WEB_LEASE_CLEANUP_INTERVAL_MS: u64 = 1_000;
+#[cfg(not(test))]
+const DEVD_STATE_FILE_NAME: &str = "devd-state.json";
+#[cfg(not(test))]
+const DEVD_STATE_FILE_ENV: &str = "MAINS_AEGIS_DEVD_STATE_FILE";
 
 #[derive(Debug, Clone)]
 pub struct HttpBridgeConfig {
@@ -125,7 +131,6 @@ pub fn default_ipc_endpoint() -> String {
     }
 }
 
-#[cfg(not(windows))]
 fn user_id_hint() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
@@ -138,6 +143,7 @@ struct AppState {
     events: broadcast::Sender<DevdEvent>,
     allow_host_power_actions: bool,
     auth_token_required: bool,
+    persistence: DevdPersistence,
 }
 
 #[derive(Clone)]
@@ -173,6 +179,7 @@ impl Default for IpcLifecycle {
 struct DevdState {
     devices: HashMap<String, DeviceRecord>,
     bindings: HashMap<String, DeviceBinding>,
+    selected_artifacts: HashMap<String, String>,
     artifacts: HashMap<String, FirmwareArtifact>,
     events: VecDeque<DevdEvent>,
     monitors: HashMap<String, NativeMonitorHandle>,
@@ -184,6 +191,43 @@ struct DevdState {
 struct HostPowerState {
     previous_profile: Option<String>,
     last_action: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+struct DevdPersistence {
+    state_file: Option<PathBuf>,
+}
+
+impl DevdPersistence {
+    fn enabled(state_file: PathBuf) -> Self {
+        Self {
+            state_file: Some(state_file),
+        }
+    }
+
+    #[cfg(test)]
+    fn disabled() -> Self {
+        Self { state_file: None }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PersistedDevdState {
+    version: u8,
+    bindings: HashMap<String, DeviceBinding>,
+    selected_artifacts: HashMap<String, String>,
+    artifacts: HashMap<String, FirmwareArtifact>,
+}
+
+impl Default for PersistedDevdState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            bindings: HashMap::new(),
+            selected_artifacts: HashMap::new(),
+            artifacts: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -668,16 +712,139 @@ fn create_app_state_with_auth(
     allow_host_power_actions: bool,
     auth_token_required: bool,
 ) -> AppState {
+    create_app_state_with_auth_and_persistence(
+        allow_host_power_actions,
+        auth_token_required,
+        default_devd_persistence(),
+    )
+}
+
+fn create_app_state_with_auth_and_persistence(
+    allow_host_power_actions: bool,
+    auth_token_required: bool,
+    persistence: DevdPersistence,
+) -> AppState {
     let (events, _) = broadcast::channel(256);
+    let persisted = load_devd_state(&persistence).unwrap_or_else(|error| {
+        tracing::warn!("failed to load mains-aegis-devd state: {error}");
+        PersistedDevdState::default()
+    });
     let state = AppState {
-        inner: Arc::new(Mutex::new(DevdState::default())),
+        inner: Arc::new(Mutex::new(DevdState {
+            bindings: persisted.bindings,
+            selected_artifacts: persisted.selected_artifacts,
+            artifacts: persisted.artifacts,
+            ..DevdState::default()
+        })),
         events,
         allow_host_power_actions,
         auth_token_required,
+        persistence,
     };
     seed_mock_device(&state);
     spawn_web_lease_reaper(state.clone());
     state
+}
+
+#[cfg(not(test))]
+fn default_devd_persistence() -> DevdPersistence {
+    DevdPersistence::enabled(default_devd_state_file())
+}
+
+#[cfg(test)]
+fn default_devd_persistence() -> DevdPersistence {
+    DevdPersistence::disabled()
+}
+
+#[cfg(not(test))]
+fn default_devd_state_file() -> PathBuf {
+    if let Some(path) = env::var_os(DEVD_STATE_FILE_ENV) {
+        return PathBuf::from(path);
+    }
+    ProjectDirs::from("cn", "IvanLi", "Mains Aegis")
+        .map(|dirs| dirs.config_dir().join(DEVD_STATE_FILE_NAME))
+        .unwrap_or_else(|| {
+            std::env::temp_dir()
+                .join(format!("mains-aegis-{}", user_id_hint()))
+                .join(DEVD_STATE_FILE_NAME)
+        })
+}
+
+fn load_devd_state(persistence: &DevdPersistence) -> anyhow::Result<PersistedDevdState> {
+    let Some(path) = persistence.state_file.as_ref() else {
+        return Ok(PersistedDevdState::default());
+    };
+    if !path.exists() {
+        return Ok(PersistedDevdState::default());
+    }
+    let text = fs::read_to_string(path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
+    serde_json::from_str(&text)
+        .map_err(|error| anyhow::anyhow!("parse {}: {error}", path.display()))
+}
+
+fn persisted_snapshot(state: &DevdState) -> PersistedDevdState {
+    PersistedDevdState {
+        version: 1,
+        bindings: state.bindings.clone(),
+        selected_artifacts: state.selected_artifacts.clone(),
+        artifacts: state.artifacts.clone(),
+    }
+}
+
+fn persist_devd_state(
+    persistence: &DevdPersistence,
+    snapshot: PersistedDevdState,
+) -> Result<(), HttpError> {
+    let Some(path) = persistence.state_file.as_ref() else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            HttpError::retryable(
+                "state_persist_failed",
+                format!("create {}: {error}", parent.display()),
+            )
+        })?;
+    }
+    let encoded = serde_json::to_vec_pretty(&snapshot)
+        .map_err(|error| HttpError::retryable("state_persist_failed", error.to_string()))?;
+    let temp_path = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    fs::write(&temp_path, encoded).map_err(|error| {
+        HttpError::retryable(
+            "state_persist_failed",
+            format!("write {}: {error}", temp_path.display()),
+        )
+    })?;
+    match fs::rename(&temp_path, path) {
+        Ok(()) => Ok(()),
+        Err(first_error) if path.exists() => {
+            fs::remove_file(path).map_err(|error| {
+                let _ = fs::remove_file(&temp_path);
+                HttpError::retryable(
+                    "state_persist_failed",
+                    format!("replace {}: {error}", path.display()),
+                )
+            })?;
+            fs::rename(&temp_path, path).map_err(|error| {
+                let _ = fs::remove_file(&temp_path);
+                HttpError::retryable(
+                    "state_persist_failed",
+                    format!(
+                        "replace {}: {error}; first attempt failed: {first_error}",
+                        path.display()
+                    ),
+                )
+            })
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temp_path);
+            Err(HttpError::retryable(
+                "state_persist_failed",
+                format!("replace {}: {error}", path.display()),
+            ))
+        }
+    }
 }
 
 async fn serve_ipc_with_runtime(config: IpcConfig, runtime: IpcRuntime) -> anyhow::Result<()> {
@@ -1114,6 +1281,8 @@ async fn scan_devices(State(state): State<AppState>) -> Result<Json<Value>, Http
         seen_native_ids.insert(id.clone());
         let port_path = port.port_name.clone();
         {
+            let binding = guard.bindings.get(&id).cloned();
+            let selected_artifact_id = guard.selected_artifacts.get(&id).cloned();
             let entry = guard
                 .devices
                 .entry(id.clone())
@@ -1122,12 +1291,12 @@ async fn scan_devices(State(state): State<AppState>) -> Result<Json<Value>, Http
                     display_name: port_path.clone(),
                     port_path: Some(port_path.clone()),
                     transport: DeviceTransport::NativeSerial,
-                    binding: None,
+                    binding,
                     connection: ConnectionState::Disconnected,
                     identity: None,
                     status: None,
                     power_diag: None,
-                    selected_artifact_id: None,
+                    selected_artifact_id,
                     log_decode: LogDecodeState::default(),
                     safe_settings: default_safe_settings(),
                     logs: VecDeque::new(),
@@ -1171,7 +1340,9 @@ async fn scan_devices(State(state): State<AppState>) -> Result<Json<Value>, Http
             binding.port_path = None;
         }
     }
+    let snapshot = persisted_snapshot(&guard);
     drop(guard);
+    persist_devd_state(&state.persistence, snapshot)?;
     emit(
         &state,
         None,
@@ -1201,7 +1372,9 @@ async fn bind_device(
     device.binding = Some(binding.clone());
     let device = device.clone();
     guard.bindings.insert(id.clone(), binding);
+    let snapshot = persisted_snapshot(&guard);
     drop(guard);
+    persist_devd_state(&state.persistence, snapshot)?;
     emit(
         &state,
         Some(id),
@@ -1418,7 +1591,9 @@ async fn unbind_device(
         .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
     device.binding = None;
     let device = device.clone();
+    let snapshot = persisted_snapshot(&guard);
     drop(guard);
+    persist_devd_state(&state.persistence, snapshot)?;
     emit(
         &state,
         Some(id),
@@ -1508,7 +1683,12 @@ async fn select_artifact(
     device.selected_artifact_id = Some(selected_id.clone());
     apply_artifact_match(device, Some(&selected));
     let decode = device.log_decode.clone();
+    guard
+        .selected_artifacts
+        .insert(id.clone(), selected_id.clone());
+    let snapshot = persisted_snapshot(&guard);
     drop(guard);
+    persist_devd_state(&state.persistence, snapshot)?;
     emit(
         &state,
         Some(id),
@@ -3015,25 +3195,30 @@ fn hex_value(byte: u8) -> Result<u8, HttpError> {
 
 fn seed_mock_device(state: &AppState) {
     let mut guard = state.inner.lock().expect("state lock");
-    guard.devices.insert(
-        "mock-devkit".to_string(),
-        DeviceRecord {
-            id: "mock-devkit".to_string(),
-            display_name: "Mock ESP32-S3 DevKit".to_string(),
-            port_path: None,
-            transport: DeviceTransport::Mock,
-            binding: None,
-            connection: ConnectionState::Disconnected,
-            identity: Some(mock_identity("mock-devkit")),
-            status: None,
-            power_diag: None,
-            selected_artifact_id: None,
-            log_decode: LogDecodeState::default(),
-            safe_settings: default_safe_settings(),
-            logs: VecDeque::new(),
-            trace: VecDeque::new(),
-        },
-    );
+    let id = "mock-devkit".to_string();
+    let binding = guard.bindings.get(&id).cloned();
+    let selected_artifact_id = guard.selected_artifacts.get(&id).cloned();
+    let selected_artifact = selected_artifact_id
+        .as_ref()
+        .and_then(|artifact_id| guard.artifacts.get(artifact_id).cloned());
+    let mut device = DeviceRecord {
+        id: id.clone(),
+        display_name: "Mock ESP32-S3 DevKit".to_string(),
+        port_path: None,
+        transport: DeviceTransport::Mock,
+        binding,
+        connection: ConnectionState::Disconnected,
+        identity: Some(mock_identity(&id)),
+        status: None,
+        power_diag: None,
+        selected_artifact_id,
+        log_decode: LogDecodeState::default(),
+        safe_settings: default_safe_settings(),
+        logs: VecDeque::new(),
+        trace: VecDeque::new(),
+    };
+    apply_artifact_match(&mut device, selected_artifact.as_ref());
+    guard.devices.insert(id, device);
 }
 
 fn ensure_device(state: &AppState, id: &str) -> Result<(), HttpError> {
@@ -4584,6 +4769,85 @@ mod tests {
         assert_eq!(stable_device_id(&left), stable_device_id(&right));
     }
 
+    #[tokio::test]
+    async fn device_binding_persists_across_daemon_state_recreation() {
+        let temp = tempfile::tempdir().unwrap();
+        let persistence = DevdPersistence::enabled(temp.path().join("state.json"));
+        let state = create_app_state_with_auth_and_persistence(false, false, persistence.clone());
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.devices.insert(
+                "native-a".into(),
+                DeviceRecord {
+                    id: "native-a".into(),
+                    display_name: "USB CDC".into(),
+                    port_path: Some("/dev/cu.usbmodem1".into()),
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Disconnected,
+                    identity: None,
+                    status: None,
+                    selected_artifact_id: None,
+                    log_decode: LogDecodeState::default(),
+                    safe_settings: default_safe_settings(),
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                },
+            );
+        }
+
+        let _ = bind_device(
+            State(state),
+            Path("native-a".into()),
+            Json(BindRequest {
+                alias: Some("Bench unit".into()),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let restarted =
+            create_app_state_with_auth_and_persistence(false, false, persistence.clone());
+        let guard = restarted.inner.lock().expect("state lock");
+        let binding = guard.bindings.get("native-a").unwrap();
+        assert_eq!(binding.alias.as_deref(), Some("Bench unit"));
+        assert_eq!(binding.port_path.as_deref(), Some("/dev/cu.usbmodem1"));
+    }
+
+    #[tokio::test]
+    async fn persisted_state_does_not_restore_runtime_connection() {
+        let temp = tempfile::tempdir().unwrap();
+        let persistence = DevdPersistence::enabled(temp.path().join("state.json"));
+        let state = create_app_state_with_auth_and_persistence(false, false, persistence.clone());
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            let binding = DeviceBinding {
+                alias: Some("Mock bench".into()),
+                stable_id: "mock-devkit".into(),
+                port_path: None,
+                created_at: "now".into(),
+            };
+            let device = guard.devices.get_mut("mock-devkit").unwrap();
+            device.connection = ConnectionState::Connected;
+            device.binding = Some(binding.clone());
+            guard.bindings.insert("mock-devkit".into(), binding);
+            persist_devd_state(&persistence, persisted_snapshot(&guard)).unwrap();
+        }
+
+        let restarted =
+            create_app_state_with_auth_and_persistence(false, false, persistence.clone());
+        let guard = restarted.inner.lock().expect("state lock");
+        let device = guard.devices.get("mock-devkit").unwrap();
+        assert!(matches!(device.connection, ConnectionState::Disconnected));
+        assert_eq!(
+            device
+                .binding
+                .as_ref()
+                .and_then(|binding| binding.alias.as_deref()),
+            Some("Mock bench")
+        );
+    }
+
     #[test]
     fn prefer_serial_port_path_uses_cu_on_macos() {
         assert_eq!(
@@ -4912,6 +5176,7 @@ mod tests {
             events,
             allow_host_power_actions: false,
             auth_token_required: false,
+            persistence: DevdPersistence::disabled(),
         };
         assert!(ensure_host_power_action_allowed(&state, true, "shutdown").is_ok());
         assert!(ensure_host_power_action_allowed(&state, false, "shutdown").is_err());
@@ -5055,6 +5320,7 @@ mod tests {
             events,
             allow_host_power_actions: false,
             auth_token_required: false,
+            persistence: DevdPersistence::disabled(),
         };
 
         let error = host_power_profile(
@@ -5088,6 +5354,7 @@ mod tests {
             events,
             allow_host_power_actions: false,
             auth_token_required: false,
+            persistence: DevdPersistence::disabled(),
         };
 
         let error = host_power_profile(
@@ -5111,6 +5378,7 @@ mod tests {
             events,
             allow_host_power_actions: false,
             auth_token_required: false,
+            persistence: DevdPersistence::disabled(),
         };
 
         let response = host_power_suspend(State(state), None).await.unwrap();
@@ -5133,6 +5401,7 @@ mod tests {
             events,
             allow_host_power_actions: false,
             auth_token_required: false,
+            persistence: DevdPersistence::disabled(),
         };
 
         let response = host_power_shutdown(State(state), None).await.unwrap();
@@ -5157,6 +5426,7 @@ mod tests {
             events,
             allow_host_power_actions: false,
             auth_token_required: false,
+            persistence: DevdPersistence::disabled(),
         };
         let payload = json!({
             "ok": true,

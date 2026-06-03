@@ -33,7 +33,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 ### Host tools crate
 
 - `tools/mains-aegis-host` 是 canonical host-tools crate。
-- crate 内共享 devd 状态机、HTTP bridge、IPC server/client 与 CLI 参数解析。
+- crate 内共享 devd 状态机、持久状态文件、HTTP bridge、IPC server/client 与 CLI 参数解析。
 - 旧 `tools/mains-aegis-devd` crate 不再作为构建或文档入口。
 
 ### devd commands
@@ -70,6 +70,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - Web dev proxy 继续指向 `http://127.0.0.1:30080`，但该地址代表显式启动的 `bridge-http`，不是默认 daemon；需要 Web 与 CLI 共用状态时，CLI 连接同一个 `bridge-http --ipc <endpoint>`。
 - Web API client 支持从 `localStorage["mains-aegis.bridgeAuthToken"]` 读取 bearer token，以便 devd bridge 显式授权场景使用；该 token 只能附加到明确的 devd/bridge API 与 devd EventSource 请求，不能发送给普通 LAN 设备探活或 LAN status SSE。Connect 页的 LAN 入口只接受硬件本体 HTTP/SSE 端点，不暴露 bridge token 表单，也不得把 `mains-aegis-devd bridge-http` 当作 LAN 设备添加。
 - Web Serial 与 devd HTTP bridge 仍按既有租约、心跳和 release 语义工作。
+- devd bridge 与 CLI 观察同一进程内状态；绑定、别名和 artifact selection 还会写入用户配置目录的 devd 状态文件，daemon 重启后恢复为 disconnected 的安全运行态并保留用户配置态。
 
 ## 验收标准
 
@@ -78,6 +79,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - `mains-aegis-devd serve --help` 中不出现 `--bind`。
 - `mains-aegis-devd bridge-http --bind 0.0.0.0:30080` 在缺少 token 文件时失败。
 - `mains-aegis` CLI 能通过 IPC 调用 mock devd 的 health/list/devices 命令。
+- `mains-aegis device <id> bind` 创建的绑定在 devd 重启后仍可由 `devices list` 看到；`connect` 和 Web lease 不跨重启恢复。
 - `mains-aegis device <id> flash` 和 `mains-aegis host power ...` 默认 dry-run，真实动作必须显式 `--real`。
 - `bun run --cwd web check` 通过。
 - CI 与 host-power VM workflow 使用 `tools/mains-aegis-host`。

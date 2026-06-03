@@ -19,6 +19,8 @@ High-risk operations such as output enable/disable, fault clear, and charge star
 
 Development mode uses the Web dev server as the API reverse proxy: the browser talks to the Vite origin, and Vite proxies `/api` to the explicit `bridge-http` endpoint, default `http://127.0.0.1:30080`. Production mode may serve static Web assets directly from `bridge-http`.
 
+devd persists user configuration state: device bindings, aliases, recently observed port paths, loaded artifact manifests, and selected artifact ids. Runtime ownership state is deliberately not persisted: connection status, Web leases, monitor handles, logs, and trace buffers reset on daemon restart so devd never reports a stale connected USB session.
+
 Device management endpoints:
 
 - `GET /api/v1/devices`

@@ -18,6 +18,7 @@
 
 - 新增 Mains Aegis 专用设备 daemon；当前 canonical host-tools crate 为 `tools/mains-aegis-host`（见 #7jqrq）。
 - `serve` 启动不接收设备端口；设备通过 API 扫描、列出、绑定、连接、断开和解绑。
+- 设备绑定、别名和已选择 artifact 属于用户配置态，必须持久化到 devd 状态文件；daemon 重启后 `GET /api/v1/devices` 仍能返回已知绑定，后续 `scan` 会把当前可见端口重新附加到对应绑定。
 - HTTP API 覆盖 identity、session、events、artifact selection、reset、monitor start/stop、flash 与 USB CDC safe settings 写入。
 - HTTP API 覆盖 host power 查询、低功耗运行 profile 切换、suspend、shutdown dry-run 与事件广播。
 - 吸收旧本地 USB HTTP bridge 的兼容面：`/api/v1/serial/session`、WiFi config、log level 和 manual charge endpoints 由 devd 直接提供。
@@ -40,10 +41,10 @@
 
 - `GET /api/v1/devices`: 返回当前已知设备与绑定。
 - `POST /api/v1/devices/scan`: 枚举本机 serial candidates，只发现不自动连接。
-- `POST /api/v1/devices/{id}/bind`: 为已知设备创建稳定绑定与别名。
+- `POST /api/v1/devices/{id}/bind`: 为已知设备创建稳定绑定与别名，并写入 devd 持久状态。
 - `POST /api/v1/devices/{id}/connect`: 连接设备并读取/缓存 identity。
 - `POST /api/v1/devices/{id}/disconnect`: 断开设备 session。
-- `DELETE /api/v1/devices/{id}/binding`: 移除绑定。
+- `DELETE /api/v1/devices/{id}/binding`: 移除绑定，并同步 devd 持久状态。
 - `GET /api/v1/devices/{id}/identity`: 返回设备 firmware identity。
 - `GET /api/v1/devices/{id}/power-diag`: 通过 USB CDC `get_power_diag` 获取只读电源诊断快照，并缓存到设备 session。
 - `GET|POST /api/v1/devices/{id}/artifact`: 查询或选择 artifact manifest。
@@ -102,6 +103,9 @@ CI 必须覆盖 devd 真实命令触发路径，而不仅是 fake command 或 dr
 
 devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据。设备连接不能因为扫描、页面探活或存在历史连接记录而长期保留；只有当前 Web 页面持有有效租约时，devd 才能占用对应 USB CDC 设备。
 
+- `connection`、Web lease、monitor handle、logs 和 trace 是运行态，不写入持久状态；daemon 重启后这些状态必须安全回到 disconnected / no lease，避免伪造仍连接的硬件 session。
+- 持久状态只保存用户意图：设备绑定、别名、最近可见端口路径、已加载 artifact manifest 和每个设备选择的 artifact id。端口路径是最近观测值，`scan` 负责刷新或清空，不得触发自动连接。
+
 - Web 连接流程必须是 `scan -> owner selects device -> lease/connect -> heartbeat -> release/expiry`。
 - `scan` 可以列出多个 USB CDC candidates，但不得自动选择或自动连接任何 candidate。
 - 多个 native serial candidates 存在时，devd 必须把完整候选列表返回给 Web；Web 必须让用户明确选择要控制的设备。devd 和 Web 都不得基于 “已识别 / 已连接 / 第一个 / 最近使用” 自动替用户决定。
@@ -146,6 +150,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 
 - `tools/mains-aegis-host` 能编译并通过单元测试。
 - devd 可无端口启动，并通过 mock device 验证设备管理、artifact selection、dry-run flash 与 session API。
+- devd 重启后仍保留绑定、别名和 artifact selection；但不会恢复 connected/Web lease/monitor/log ring 等运行态。
 - host power API 支持 Linux/macOS 查询、dry-run、事件广播和真实动作默认拒绝；缺少平台后端或权限不足时返回可诊断错误。
 - `tools/firmware-artifact/build-catalog-entry.py` 能为 ELF 生成 manifest、catalog 和 `SHA256SUMS`。
 - 固件 identity JSON 包含 features/protocol/defmt 字段。
