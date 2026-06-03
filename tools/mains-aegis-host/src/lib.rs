@@ -48,7 +48,7 @@ const WEB_LEASE_HEARTBEAT_INTERVAL_MS: u64 = 2_000;
 const WEB_LEASE_TTL_MS: u64 = 8_000;
 const WEB_LEASE_CLEANUP_INTERVAL_MS: u64 = 1_000;
 #[cfg(not(test))]
-const DEVD_STATE_FILE_NAME: &str = "devd-state.json";
+const DEVD_STATE_FILE_NAME: &str = "devices.json";
 #[cfg(not(test))]
 const DEVD_STATE_FILE_ENV: &str = "MAINS_AEGIS_DEVD_STATE_FILE";
 
@@ -213,7 +213,7 @@ impl DevdPersistence {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PersistedDevdState {
-    version: u8,
+    schema_version: u8,
     bindings: HashMap<String, DeviceBinding>,
     selected_artifacts: HashMap<String, String>,
     artifacts: HashMap<String, FirmwareArtifact>,
@@ -222,7 +222,7 @@ struct PersistedDevdState {
 impl Default for PersistedDevdState {
     fn default() -> Self {
         Self {
-            version: 1,
+            schema_version: 1,
             bindings: HashMap::new(),
             selected_artifacts: HashMap::new(),
             artifacts: HashMap::new(),
@@ -761,7 +761,7 @@ fn default_devd_state_file() -> PathBuf {
     if let Some(path) = env::var_os(DEVD_STATE_FILE_ENV) {
         return PathBuf::from(path);
     }
-    ProjectDirs::from("cn", "IvanLi", "Mains Aegis")
+    ProjectDirs::from("cc", "mains-aegis", "mains-aegis")
         .map(|dirs| dirs.config_dir().join(DEVD_STATE_FILE_NAME))
         .unwrap_or_else(|| {
             std::env::temp_dir()
@@ -785,7 +785,7 @@ fn load_devd_state(persistence: &DevdPersistence) -> anyhow::Result<PersistedDev
 
 fn persisted_snapshot(state: &DevdState) -> PersistedDevdState {
     PersistedDevdState {
-        version: 1,
+        schema_version: 1,
         bindings: state.bindings.clone(),
         selected_artifacts: state.selected_artifacts.clone(),
         artifacts: state.artifacts.clone(),
