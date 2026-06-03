@@ -35,8 +35,8 @@ export const AddLanTarget: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("heading", { name: "Connect devices" })).toBeInTheDocument();
-    await expect(canvas.getByLabelText("Bridge token", { selector: 'input[name="devd-bridge-token"]' })).toBeInTheDocument();
-    await expect(canvas.getByLabelText("Bridge token", { selector: 'input[name="bridge-token"]' })).toBeInTheDocument();
+    await expect(canvas.queryByLabelText("Bridge token")).not.toBeInTheDocument();
+    await expect(canvas.queryByLabelText("devd auth token")).not.toBeInTheDocument();
     await userEvent.clear(canvas.getByLabelText("Target"));
     await userEvent.type(canvas.getByLabelText("Target"), "mock:backup");
     await userEvent.click(canvas.getByRole("button", { name: "Add LAN" }));

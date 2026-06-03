@@ -74,6 +74,14 @@ const deviceSections = [
 
 const appBasePath = normalizeBasePath(import.meta.env.BASE_URL);
 const docsHref = `${appBasePath}docs/`;
+const credentiallessInputProps = {
+  autoComplete: "off",
+  autoCorrect: "off",
+  spellCheck: false,
+  "data-1p-ignore": "true",
+  "data-lpignore": "true",
+  "data-form-type": "other",
+} as const;
 
 export function App({ initialPath }: AppProps = {}) {
   const registry = useDeviceRegistry();
@@ -446,13 +454,13 @@ function ConnectPage() {
     resetDemo,
   } = useDeviceRegistry();
   const [target, setTarget] = useState("");
-  const [bridgeToken, setBridgeToken] = useState("");
   const [alias, setAlias] = useState("");
   const [location, setLocation] = useState("");
   const [usbAlias, setUsbAlias] = useState("");
   const [usbLocation, setUsbLocation] = useState("");
   const [devdTarget, setDevdTarget] = useState("same-origin");
   const [devdBridgeToken, setDevdBridgeToken] = useState("");
+  const [devdBridgeAuthRequiredState, setDevdBridgeAuthRequiredState] = useState<"unknown" | "required" | "not_required">("unknown");
   const [devdAlias, setDevdAlias] = useState("");
   const [devdLocation, setDevdLocation] = useState("");
   const [devdCandidates, setDevdCandidates] = useState<DevdDevice[]>([]);
@@ -469,23 +477,30 @@ function ConnectPage() {
   const demoMode = isDemoSeed(new URLSearchParams(window.location.search).get("seed"));
 
   useEffect(() => {
-    const normalizedTarget = target.trim() ? normalizeBaseUrl(target) : null;
-    setBridgeToken(normalizedTarget ? bridgeAuthToken(normalizedTarget) ?? "" : "");
-  }, [target]);
+    setDevdBridgeToken(bridgeAuthToken(normalizeBaseUrl(devdTarget)) ?? "");
+  }, [devdTarget]);
 
   useEffect(() => {
-    setDevdBridgeToken(bridgeAuthToken(normalizeBaseUrl(devdTarget)) ?? "");
+    let active = true;
+    const devdBaseUrl = normalizeBaseUrl(devdTarget);
+    setDevdBridgeAuthRequiredState("unknown");
+    void bridgeAuthRequired(devdBaseUrl).then((required) => {
+      if (!active) return;
+      setDevdBridgeAuthRequiredState(required ? "required" : "not_required");
+    });
+    return () => {
+      active = false;
+    };
   }, [devdTarget]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setMessage(null);
-    const result = await addDevice({ target, alias, location, bridgeAuthToken: bridgeToken.trim() });
+    const result = await addDevice({ target, alias, location });
     setBusy(false);
     if (result.ok) {
       setTarget("");
-      setBridgeToken("");
       setAlias("");
       setLocation("");
       setMessage(successFeedback(`Connected ${result.record.target.alias}`));
@@ -634,11 +649,12 @@ function ConnectPage() {
             </div>
             <span className="transport-badge devd">devd</span>
           </header>
-          <form className="connect-form compact" onSubmit={onDevdSubmit}>
+          <form className="connect-form compact" onSubmit={onDevdSubmit} autoComplete="off">
             <label>
               devd URL
               <input
-                name="devd-target"
+                {...credentiallessInputProps}
+                name="devd-endpoint"
                 value={devdTarget}
                 onChange={(event) => {
                   setDevdTarget(event.target.value);
@@ -646,20 +662,24 @@ function ConnectPage() {
                   setSelectedDevdDeviceId("");
                 }}
                 placeholder="same-origin"
+                inputMode="url"
+                autoCapitalize="none"
                 required
               />
             </label>
-            <label>
-              Bridge token
-              <input
-                name="devd-bridge-token"
-                value={devdBridgeToken}
-                onChange={(event) => setDevdBridgeToken(event.target.value)}
-                placeholder="Required for protected LAN bridge"
-                type="password"
-                autoComplete="off"
-              />
-            </label>
+            {devdBridgeAuthRequiredState === "required" || devdBridgeToken.trim() ? (
+              <label>
+                devd auth token
+                <input
+                  {...credentiallessInputProps}
+                  name="devd-auth-token"
+                  value={devdBridgeToken}
+                  onChange={(event) => setDevdBridgeToken(event.target.value)}
+                  placeholder="Required because this devd bridge is protected"
+                  autoCapitalize="none"
+                />
+              </label>
+            ) : null}
             {devdCandidates.length > 1 ? (
               <label>
                 USB device
@@ -681,11 +701,11 @@ function ConnectPage() {
             ) : null}
             <label>
               Alias
-              <input name="devd-alias" value={devdAlias} onChange={(event) => setDevdAlias(event.target.value)} placeholder="Lab bench devd" />
+              <input {...credentiallessInputProps} name="devd-device-alias" value={devdAlias} onChange={(event) => setDevdAlias(event.target.value)} placeholder="Lab bench devd" />
             </label>
             <label>
               Location
-              <input name="devd-location" value={devdLocation} onChange={(event) => setDevdLocation(event.target.value)} placeholder="Bench 1" />
+              <input {...credentiallessInputProps} name="devd-device-location" value={devdLocation} onChange={(event) => setDevdLocation(event.target.value)} placeholder="Bench 1" />
             </label>
             <div className="form-actions with-callout">
               <button className="primary-button" type="submit" disabled={devdBusy}>
@@ -706,39 +726,31 @@ function ConnectPage() {
           <header className="connect-panel-header">
             <div>
               <h3><Globe2 size={18} /> LAN status</h3>
-              <p>HTTP/SSE identity, network, and status probe</p>
+              <p>Direct hardware HTTP/SSE identity, network, and status probe</p>
             </div>
             <span className="transport-badge http">read-only</span>
           </header>
-          <form className="connect-form compact" onSubmit={onSubmit}>
+          <form className="connect-form compact" onSubmit={onSubmit} autoComplete="off">
             <label>
               Target
               <input
-                name="device-target"
+                {...credentiallessInputProps}
+                name="lan-device-endpoint"
                 value={target}
                 onChange={(event) => setTarget(event.target.value)}
                 placeholder="mains-aegis-a1b2c3.local or 192.168.31.42"
+                inputMode="url"
+                autoCapitalize="none"
                 required
               />
             </label>
             <label>
-              Bridge token
-              <input
-                name="bridge-token"
-                value={bridgeToken}
-                onChange={(event) => setBridgeToken(event.target.value)}
-                placeholder="Only for protected bridge-http"
-                type="password"
-                autoComplete="off"
-              />
-            </label>
-            <label>
               Alias
-              <input name="device-alias" value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="Lab rack A" />
+              <input {...credentiallessInputProps} name="lan-device-alias" value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="Lab rack A" />
             </label>
             <label>
               Location
-              <input name="device-location" value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Bench 1" />
+              <input {...credentiallessInputProps} name="lan-device-location" value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Bench 1" />
             </label>
             <div className="form-actions with-callout">
               <button className="primary-button" type="submit" disabled={busy}>
@@ -812,12 +824,16 @@ export function ConnectionCallout({ id, message }: { id: string; message: string
       ? "USB port is in use"
       : code === "firmware_artifact_mismatch"
         ? "Firmware mismatch"
+        : code === "devd_bridge_requires_devd_panel"
+          ? "Use the devd panel"
         : "Connection failed";
   const guidance =
     code === "serial_port_unavailable"
       ? "Disconnect the devd session or close the app using this CDC port, then retry."
       : code === "firmware_artifact_mismatch"
         ? "Select matching firmware, flash the current build, or explicitly ignore this warning to continue."
+      : code === "devd_bridge_requires_devd_panel"
+        ? "LAN status connects directly to hardware over the device HTTP API. Use the devd panel only for mains-aegis-devd bridge endpoints."
       : "Check the selected device and try again.";
 
   return (

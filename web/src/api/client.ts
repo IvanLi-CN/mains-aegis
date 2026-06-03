@@ -28,6 +28,16 @@ export class MainsAegisApiError extends Error {
 export const isMockBaseUrl = (baseUrl: string) => baseUrl.startsWith("mock:");
 export const BRIDGE_AUTH_TOKEN_KEY = "mains-aegis.bridgeAuthToken";
 
+export type BridgeBootstrap = {
+  token_required?: boolean;
+  agent_base_url?: string;
+  app?: {
+    name?: string;
+    version?: string;
+    mode?: string;
+  };
+};
+
 export function normalizeBaseUrl(input: string): string {
   const value = input.trim();
   if (value === "" || value === "same-origin" || value === "devd") return "";
@@ -109,14 +119,18 @@ function bridgeAuthStorageKey(baseUrl: string): string {
   return `${BRIDGE_AUTH_TOKEN_KEY}.${encodeURIComponent(baseUrl || "same-origin")}`;
 }
 
-export async function bridgeAuthRequired(baseUrl: string): Promise<boolean> {
-  if (isMockBaseUrl(baseUrl)) return false;
+export async function getBridgeBootstrap(baseUrl: string): Promise<BridgeBootstrap | null> {
+  if (isMockBaseUrl(baseUrl)) return null;
   try {
-    const bootstrap = await requestJson<{ token_required?: boolean }>(baseUrl, "/api/v1/bootstrap");
-    return bootstrap.token_required === true;
+    return await requestJson<BridgeBootstrap>(baseUrl, "/api/v1/bootstrap");
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function bridgeAuthRequired(baseUrl: string): Promise<boolean> {
+  const bootstrap = await getBridgeBootstrap(baseUrl);
+  return bootstrap?.token_required === true;
 }
 
 function parseJsonPayload<T>(text: string): T | ApiErrorEnvelope | null {

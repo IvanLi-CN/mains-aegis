@@ -8,6 +8,7 @@ import {
   decodeDefmtFrame,
   disconnectDevdDevice,
   getDevdSerialSession,
+  getBridgeBootstrap,
   heartbeatDevdWebLease,
   getStatus,
   listDevdDevices,
@@ -481,27 +482,25 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     const baseUrl = normalizeBaseUrl(input.target);
 
     try {
-      if (input.bridgeAuthToken !== undefined) saveBridgeAuthToken(baseUrl, input.bridgeAuthToken);
-      const bridgeAuth = await bridgeAuthRequired(baseUrl);
-      if (bridgeAuth && !bridgeAuthToken(baseUrl)) {
+      const bootstrap = await getBridgeBootstrap(baseUrl);
+      if (bootstrap?.app?.mode === "http_bridge") {
         return {
           ok: false,
           error: {
-            code: "bridge_auth_token_required",
-            message: "This bridge requires an auth token before probing",
+            code: "devd_bridge_requires_devd_panel",
+            message: "This endpoint is a mains-aegis-devd bridge. Connect it from the devd panel, not LAN status.",
             retryable: false,
             details: null,
           },
         };
       }
-      const result = await probeDevice(baseUrl, undefined, bridgeAuth ? { bridgeAuth: true } : undefined);
+      const result = await probeDevice(baseUrl);
       const target: DeviceTarget = {
         deviceId: result.identity.device_id,
         baseUrl,
         alias: input.alias?.trim() || result.identity.hostname,
         location: input.location?.trim() || "Unassigned",
         addedAt: new Date().toISOString(),
-        bridgeAuth: bridgeAuth || undefined,
       };
       const record = recordFromProbe(target, result, "online", result.identity.capabilities.sse ? "idle" : "polling");
       setRecords((current) => upsertRecord(current, record));

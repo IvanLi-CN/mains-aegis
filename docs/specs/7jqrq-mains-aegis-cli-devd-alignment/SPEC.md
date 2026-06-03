@@ -17,7 +17,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - 新增 `tools/mains-aegis-host`，统一产出 `mains-aegis` 与 `mains-aegis-devd` 两个二进制。
 - `mains-aegis-devd serve` 改为 IPC-only；HTTP/Web 暴露只能通过显式 `mains-aegis-devd bridge-http` 开启。
 - `mains-aegis` CLI 通过 IPC 调用 devd，覆盖设备、artifact、flash dry-run/reset/monitor、serial lease、safe settings 与 host power 命令族。
-- LAN HTTP bridge 只能在显式启用且配置 bearer token 时绑定非 loopback 地址。
+- devd HTTP bridge 只能在显式启用且配置 bearer token 时绑定非 loopback 地址。
 - 发布流程产出 Linux x86_64、macOS arm64、Windows x86_64 host-tools archive、安装脚本与 `SHA256SUMS`。
 - repo skills 拆分为用户操作层与开发层；用户操作层在缺少 release 安装工具时硬阻断，不回退源码构建。
 
@@ -26,7 +26,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - 不新增桌面 App。
 - 不把 CLI 变成直接串口/espflash/mcu-agentd 包装器。
 - 不删除 Web Serial 作为正式 Web 路径。
-- 不把 LAN HTTP bridge 作为默认本地控制面。
+- 不把 devd HTTP bridge 作为默认本地控制面。
 
 ## 功能规格
 
@@ -68,7 +68,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 ### Web bridge
 
 - Web dev proxy 继续指向 `http://127.0.0.1:30080`，但该地址代表显式启动的 `bridge-http`，不是默认 daemon；需要 Web 与 CLI 共用状态时，CLI 连接同一个 `bridge-http --ipc <endpoint>`。
-- Web API client 支持从 `localStorage["mains-aegis.bridgeAuthToken"]` 读取 bearer token，以便 devd bridge 显式授权场景使用；该 token 只能附加到明确的 devd/bridge API 与 devd EventSource 请求，不能发送给普通 LAN 设备探活或 LAN status SSE。
+- Web API client 支持从 `localStorage["mains-aegis.bridgeAuthToken"]` 读取 bearer token，以便 devd bridge 显式授权场景使用；该 token 只能附加到明确的 devd/bridge API 与 devd EventSource 请求，不能发送给普通 LAN 设备探活或 LAN status SSE。Connect 页的 LAN 入口只接受硬件本体 HTTP/SSE 端点，不暴露 bridge token 表单，也不得把 `mains-aegis-devd bridge-http` 当作 LAN 设备添加。
 - Web Serial 与 devd HTTP bridge 仍按既有租约、心跳和 release 语义工作。
 
 ## 验收标准
@@ -95,7 +95,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
   capture_scope: `browser-viewport`
   target_program: `mock-only`
   scenario: host-tools bridge connect entry
-  evidence_note: 验证 Connect 页仍保留 USB CDC、显式 `mains-aegis-devd` bridge 与 LAN read-only 三入口；本次 host-tools 对齐没有破坏 mock UI 连接面。
+  evidence_note: 验证 Connect 页仍保留 USB CDC、显式 `mains-aegis-devd` bridge 与硬件 LAN read-only 三入口；本次 host-tools 对齐没有破坏 mock UI 连接面。
 
 ![Host tools bridge connect evidence](./assets/host-tools-connect-bridge.png)
 
@@ -105,7 +105,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
   viewport_strategy: `storybook-viewport`
   capture_scope: `browser-viewport`
   target_program: `mock-only`
-  scenario: bridge token inputs on devd and LAN connect forms
-  evidence_note: 验证 Connect 页为 protected `bridge-http` 提供 token 输入，同时普通 LAN 添加流程仍可连接 mock 目标。
+  scenario: devd-only bridge token input
+  evidence_note: 验证 Connect 页只在 protected `mains-aegis-devd bridge-http` 场景暴露 token 输入，普通 LAN 添加流程保持硬件直连语义。
 
 ![Connect bridge token evidence](./assets/connect-bridge-token-storybook.png)

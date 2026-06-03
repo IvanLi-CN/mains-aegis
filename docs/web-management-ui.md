@@ -41,7 +41,7 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 - 入口：`/connect`
 - 目的：维护浏览器当前关注的 UPS 清单；USB CDC 用于安全设置与配网，LAN 用于只读状态。
 - 主要内容：USB CDC / Web Serial 连接入口、`mains-aegis-devd` 本地 daemon 连接入口、浏览器支持状态、串口授权/占用错误、LAN 新增连接目标、探活结果、设备身份摘要、网络状态、API 版本兼容提示、已保存设备列表。
-- 接口对接：USB CDC 使用 Web Serial JSONL frame；devd 默认通过 IPC 由 `mains-aegis` CLI 访问；Web 需要 HTTP 时显式启动 `mains-aegis-devd bridge-http`，默认本地地址为 `http://127.0.0.1:30080`，且同一 bridge 进程也持有共享状态的 IPC listener 供 CLI 使用。
+- 接口对接：USB CDC 使用 Web Serial JSONL frame；devd 默认通过 IPC 由 `mains-aegis` CLI 访问；Web 需要 HTTP 时显式启动 `mains-aegis-devd bridge-http`，默认本地地址为 `http://127.0.0.1:30080`，且同一 bridge 进程也持有共享状态的 IPC listener 供 CLI 使用。LAN 入口只连接硬件本体的 HTTP/SSE 端点，不接受 devd bridge 作为 LAN 目标。
 - 空状态：提示用户连接 USB CDC 或输入 `mains-aegis-<short_id>.local` / 局域网 IP。
 
 ### 3. 单设备总览 Dashboard
