@@ -43,7 +43,24 @@ enum Command {
 #[derive(Debug, Subcommand)]
 enum DevicesCommand {
     List,
-    Scan,
+    Scan(DevicesScanArgs),
+    ScanTrace {
+        #[arg(long)]
+        trace_limit: Option<usize>,
+    },
+}
+
+#[derive(Debug, Args)]
+struct DevicesScanArgs {
+    /// IPv4 CIDR to scan after mDNS/DNS-SD discovery, for example 192.168.1.0/24.
+    #[arg(long)]
+    cidr: Option<String>,
+    /// Skip LAN discovery and scan only local USB candidates.
+    #[arg(long)]
+    no_lan: bool,
+    /// Skip mDNS/DNS-SD discovery and only use the CIDR/default subnet path.
+    #[arg(long)]
+    no_mdns: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -55,8 +72,10 @@ enum DeviceCommand {
     Unbind,
     Connect,
     Disconnect,
+    Connection,
     Identity,
-    Session(SessionArgs),
+    Settings,
+    Trace(TraceArgs),
     Artifact {
         #[command(subcommand)]
         command: ArtifactCommand,
@@ -77,7 +96,7 @@ enum DeviceCommand {
 }
 
 #[derive(Debug, Args)]
-struct SessionArgs {
+struct TraceArgs {
     #[arg(long)]
     logs_limit: Option<usize>,
     #[arg(long)]
@@ -214,7 +233,17 @@ fn command_to_ipc(command: Command) -> (&'static str, Value) {
         Command::Health => ("devd.health", json!({})),
         Command::Devices { command } => match command {
             DevicesCommand::List => ("devices.list", json!({})),
-            DevicesCommand::Scan => ("devices.scan", json!({})),
+            DevicesCommand::Scan(args) => (
+                "devices.scan",
+                json!({
+                    "cidr": args.cidr,
+                    "lan": !args.no_lan,
+                    "mdns": !args.no_mdns,
+                }),
+            ),
+            DevicesCommand::ScanTrace { trace_limit } => {
+                ("devices.scan_trace", json!({ "trace_limit": trace_limit }))
+            }
         },
         Command::Device { device_id, command } => device_to_ipc(device_id, command),
         Command::Serial { command } => match command {
@@ -246,9 +275,11 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
         DeviceCommand::Unbind => ("device.unbind", json!({ "device_id": device_id })),
         DeviceCommand::Connect => ("device.connect", json!({ "device_id": device_id })),
         DeviceCommand::Disconnect => ("device.disconnect", json!({ "device_id": device_id })),
+        DeviceCommand::Connection => ("device.connection", json!({ "device_id": device_id })),
         DeviceCommand::Identity => ("device.identity", json!({ "device_id": device_id })),
-        DeviceCommand::Session(args) => (
-            "device.session",
+        DeviceCommand::Settings => ("device.settings", json!({ "device_id": device_id })),
+        DeviceCommand::Trace(args) => (
+            "device.trace",
             json!({
                 "device_id": device_id,
                 "logs_limit": args.logs_limit,

@@ -19,9 +19,10 @@
 
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
-| 7jqrq | Mains Aegis CLI / devd alignment | 已完成 | `7jqrq-mains-aegis-cli-devd-alignment/SPEC.md` | 2026-06-02 | 主机工具对齐为 `mains-aegis-host` single crate，发布 CLI + devd，`serve` 改为 IPC-only，HTTP/Web 通过显式 `bridge-http` |
-| p8k3d | Mains Aegis Device Daemon | 已完成 | `p8k3d-mains-aegis-devd/SPEC.md` | 2026-06-04 | 新增 `mains-aegis-devd` 设备主入口、Firmware Catalog、固件 identity/defmt 匹配与 `power-diag`；诊断快照已覆盖 VAC2/DC IN 与 CUV recovery 策略状态 |
-| ypfpu | Web management UI | 部分完成（5/5） | `ypfpu-web-management-ui/SPEC.md` | 2026-04-28 | PR #71 已创建并收敛到 merge-ready；新增 Vite/React/Bun Web 管理端，支持多设备 Fleet 卡片总览、设备接入、单设备只读详情、API/SSE 对接与 mock 视觉验证 |
+| k4vzn | LAN management convergence | 已完成 | `k4vzn-lan-management-convergence/SPEC.md` | 2026-06-03 | 设备本体 settings 读写 API、devd LAN discovery/scan trace/LAN settings 写路径、USB 优先合并、trace+connection 查询面、Web direct LAN/devd LAN settings 与最终视觉证据已收口 |
+| 7jqrq | Mains Aegis CLI / devd alignment | 已完成 | `7jqrq-mains-aegis-cli-devd-alignment/SPEC.md` | 2026-06-03 | 主机工具对齐与 release/install 基线已完成；CLI `device session` 与新查询面迁移改由 #k4vzn 接管 |
+| p8k3d | Mains Aegis Device Daemon | 已完成 | `p8k3d-mains-aegis-devd/SPEC.md` | 2026-06-04 | devd v1 foundation 已完成；`power-diag` 诊断快照已覆盖 VAC2/DC IN 与 CUV recovery 策略状态；`session`/localhost settings 兼容面与 LAN transport 收敛改由 #k4vzn 接管 |
+| ypfpu | Web management UI | 部分完成（5/5） | `ypfpu-web-management-ui/SPEC.md` | 2026-06-03 | Web 管理端 v1 基线已完成；LAN 管理、settings 与 LAN/USB 收敛改由 #k4vzn 接管 |
 | hn29u | USB-C PD/PPS sink v1 | 已完成 | `hn29u-usb-c-pd-sink-pps/SPEC.md` | 2026-04-23 | hotplug PPS 恢复已稳定闭环：reset 基线约 `1.67s` 回到 `PPS`，主人实测真实热插拔也已恢复到秒级协商成功 |
 | nq7s2 | BQ40 balance baseline + observability | 已完成 | `nq7s2-bq40-balance-baseline-and-observability/SPEC.md` | 2026-04-07 | PR #59 已完成实现/文档/预览收口；实板已确认 DF 对齐，active balancing 触发待后续在完整 charge/relax 条件下复核 |
 | edbpk | BQ40 Cell4 protocol-safe diagnostics | 已完成 | `edbpk-bq40-cell4-protocol-diagnostics/SPEC.md` | 2026-03-15 | 已完成协议修正、只读诊断收敛、flash/monitor 互斥与 reply PEC 探测；`Cell4` 根因已排除工具误读路径 |
@@ -48,5 +49,5 @@
 | zp4cg | Manual charge dashboard page + EEPROM prefs | 已完成 | `zp4cg-manual-charge-dashboard/SPEC.md` | 2026-04-07 | 已完成 `MANUAL` 三级页面、小屏触控布局、运行时手动接管/停止抑制、仅保存 prefs 的 EEPROM schema v1，以及预览/真机验证闭环 |
 | jxz2t | GitHub Pages docs site handbooks | 已完成 | `jxz2t-docs-site-handbooks/SPEC.md` | 2026-05-05 | Pages 根站点改由 Web App 发布，文档站保留为 `/docs/` 子路径；原 `docs-site/`、手册页面与 PR #63 记录仍为历史基线 |
 | h6sae | BQ40 `LOCK` root cause + closure | 部分完成（3/6） | `h6sae-bq40-lock-root-cause/SPEC.md` | 2026-04-13 | 已命中 `termination` 分流并提交 `ITERM` 对齐修复；下一步需要 `<90%` 解锁后的 live 闭环复验 |
-| amc32 | WiFi / service discovery / read-only API foundation | 部分完成（4/5） | `amc32-wifi-service-discovery-api-foundation/SPEC.md` | 2026-05-07 | `net_http` 与 `web_serial` 已成为默认主固件能力；无网络最小构建需显式 `--no-default-features` |
+| amc32 | WiFi / service discovery / read-only API foundation | 部分完成（4/5） | `amc32-wifi-service-discovery-api-foundation/SPEC.md` | 2026-06-03 | `net_http` 与 `web_serial` 已成为默认主固件能力；“LAN 只读 API” 假设由 #k4vzn 继续演进 |
 | d8p4q | Front panel auto sleep | active | `d8p4q-front-panel-auto-sleep/SPEC.md` | 2026-04-27 | 测试版 `30s / 35s / 40s` 自动低亮、关背光、GC9307 sleep；硬件确认后恢复正式默认 `180s / 240s / 245s` |

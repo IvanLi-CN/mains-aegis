@@ -4,7 +4,13 @@
 
 - Status: 部分完成（4/5）
 - Created: 2026-04-09
-- Last: 2026-05-07
+- Last: 2026-06-03
+
+## 接管说明
+
+- 本规格的“LAN 只读 API 底座”结论仅作为历史基础成立。
+- 设备本体 LAN 管理 API、`GET /api/v1/settings`、LAN 写接口与 transport 收敛设计已转由 [`#k4vzn`](../k4vzn-lan-management-convergence/SPEC.md) 接管。
+- 本规格继续保留 mDNS / DNS-SD、身份口径、`/api/v1/status` SSE 与 `net_http` 主固件底座的历史真相。
 
 ## 背景 / 问题陈述
 

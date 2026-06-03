@@ -4919,6 +4919,10 @@ where
         ));
     }
 
+    pub fn manual_charge_prefs_snapshot(&self) -> ManualChargePrefs {
+        self.manual_charge_prefs
+    }
+
     pub fn write_web_serial_wifi_config(
         &mut self,
         config: Option<&esp_firmware::usb_cdc_protocol::WifiConfigSecret>,

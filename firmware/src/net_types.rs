@@ -142,6 +142,55 @@ impl NetworkUiSummary {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WifiSettingsSnapshot {
+    pub configured: bool,
+    pub ssid: Option<String<32>>,
+}
+
+impl WifiSettingsSnapshot {
+    pub fn unconfigured() -> Self {
+        Self {
+            configured: false,
+            ssid: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManualChargeSettingsSnapshot {
+    pub target: &'static str,
+    pub speed: &'static str,
+    pub timer_h: u8,
+}
+
+impl ManualChargeSettingsSnapshot {
+    pub const fn defaults() -> Self {
+        Self {
+            target: "full_100",
+            speed: "ma_500",
+            timer_h: 2,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceSettingsSnapshot {
+    pub wifi: WifiSettingsSnapshot,
+    pub log_level: &'static str,
+    pub manual_charge: ManualChargeSettingsSnapshot,
+}
+
+impl DeviceSettingsSnapshot {
+    pub fn defaults() -> Self {
+        Self {
+            wifi: WifiSettingsSnapshot::unconfigured(),
+            log_level: "info",
+            manual_charge: ManualChargeSettingsSnapshot::defaults(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UpsStatusSnapshot {
     pub mode: &'static str,

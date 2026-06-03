@@ -2,13 +2,13 @@
 
 ## Scope
 
-This protocol is the first Web App write path for Mains Aegis. It runs over ESP32-S3 USB Serial/JTAG CDC and is consumed directly by Chromium Web Serial.
+This protocol is the USB fallback/control path for Mains Aegis. It runs over ESP32-S3 USB Serial/JTAG CDC and is consumed directly by Chromium Web Serial or by `mains-aegis-devd` when devd owns the USB transport.
 
-LAN HTTP/SSE remains read-only. The USB CDC protocol only accepts safe settings:
+The device LAN API is the canonical management contract for current HTTP-capable devices. USB CDC accepts the same bounded settings surface for local cable workflows:
 
 - WiFi SSID/PSK overwrite or clear.
 - Manual charge preferences.
-- USB session log level.
+- Device log level.
 - Identity and status reads.
 
 High-risk operations such as output enable/disable, fault clear, and charge start/stop are not part of this protocol.
@@ -19,7 +19,7 @@ High-risk operations such as output enable/disable, fault clear, and charge star
 
 Development mode uses the Web dev server as the API reverse proxy: the browser talks to the Vite origin, and Vite proxies `/api` to the explicit `bridge-http` endpoint, default `http://127.0.0.1:30080`. Production mode may serve static Web assets directly from `bridge-http`.
 
-devd persists user configuration state in `devices.json` under `directories::ProjectDirs::config_dir()`: device bindings, aliases, recently observed port paths, loaded artifact manifests, and selected artifact ids. Runtime ownership state is deliberately not persisted: connection status, Web leases, monitor handles, logs, and trace buffers reset on daemon restart so devd never reports a stale connected USB session.
+devd persists user configuration state in `devices.json` under `directories::ProjectDirs::config_dir()`: device bindings, aliases, recently observed port paths, loaded artifact manifests, and selected artifact ids. Runtime ownership state is deliberately not persisted: connection status, Web leases, monitor handles, logs, and trace buffers reset on daemon restart so devd never reports stale USB connection state.
 
 Device management endpoints:
 
@@ -35,17 +35,20 @@ Device management endpoints:
 - `POST /api/v1/devices/{id}/reset`
 - `POST /api/v1/devices/{id}/monitor/start`
 - `POST /api/v1/devices/{id}/monitor/stop`
-- `GET /api/v1/devices/{id}/session`
+- `GET /api/v1/devices/{id}/connection`
+- `GET /api/v1/devices/{id}/settings`
+- `GET /api/v1/devices/{id}/trace`
 - `GET /api/v1/devices/{id}/events`
 
-devd local safe-control endpoints:
+devd local management endpoints:
 
 - `GET /health`
 - `GET /api/v1/ping`
 - `GET /api/v1/identity`
 - `GET /api/v1/network`
 - `GET /api/v1/status`
-- `GET /api/v1/serial/session?logs_limit=<n>&trace_limit=<n>`
+- `GET /api/v1/settings`
+- `GET /api/v1/serial/session?logs_limit=<n>&trace_limit=<n>` (Web compatibility snapshot)
 - `POST /api/v1/wifi-config`
 - `DELETE /api/v1/wifi-config`
 - `POST /api/v1/settings/log-level`
@@ -56,9 +59,9 @@ devd local safe-control endpoints:
 - `POST /api/v1/host/power/shutdown`
 - `GET /api/v1/host/power/events`
 
-`/api/v1/serial/session` returns Web-compatible `logs`, `trace`, `protocol`, and `safeSettings`. devd keeps bounded in-memory ring buffers and returns a bounded tail by default (`logs_limit=200`, `trace_limit=600`; capped at `500` and `2000`). TX trace payloads redact WiFi PSK before storage or HTTP exposure.
+The owner-facing query model is `connection / identity / status / settings / trace`. `/api/v1/serial/session` remains only as a Web compatibility snapshot for USB Console hydration and returns bounded `logs`, `trace`, `protocol`, and `settings`. devd keeps bounded in-memory ring buffers and returns a bounded tail by default (`logs_limit=200`, `trace_limit=600`; capped at `500` and `2000`). TX trace payloads redact WiFi PSK before storage or HTTP exposure.
 
-Safe-control writes are device-scoped. Web/App/CLI callers pass firmware `identity.device_id` as `device_id` in POST bodies, or as the `DELETE /api/v1/wifi-config?device_id=...` query parameter. If `device_id` is omitted, devd only accepts the request when exactly one native USB CDC device is connected with identity available.
+Settings writes are device-scoped. Web/App/CLI callers pass firmware `identity.device_id` as `device_id` in POST bodies, or as the `DELETE /api/v1/wifi-config?device_id=...` query parameter. If `device_id` is omitted, devd only accepts the request when exactly one native USB CDC device is connected with identity available.
 
 Host power control is host-scoped, not device-scoped. It exists for UPS-on-battery coordination when the computer should reduce load while continuing to run. `low_power_running` means a platform power profile such as Linux `power-saver` or macOS Low Power Mode; it is not suspend/sleep. All host power state-changing requests default to `dry_run=true`. Real profile switching, suspend, and shutdown are denied unless devd was started with `--allow-host-power-actions` or `MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=true`; real shutdown also requires `confirm:"shutdown"`. devd executes the Web App or UPS instruction as requested and does not add shutdown policy decisions; callers must pass `force:true` explicitly when the UPS power-loss window requires forced system compliance. On Linux, forced shutdown is only supported for `delay_sec:0`; nonzero forced delays return `host_power_shutdown_unsupported` because systemd cannot reliably express both at once. On macOS, `force:true` also returns `host_power_shutdown_unsupported` because the pmset/shutdown backend has no forced-compliance command.
 
@@ -98,7 +101,7 @@ Web:
 Firmware:
 
 ```json
-{"type":"hello","request_id":"web-1","protocol":"mains-aegis.cdc.v1","framing":"jsonl","capabilities":{"status":true,"structured_logs":true,"safe_settings":true,"wifi_config":true,"psk_echo":false},"identity":{}}
+{"type":"hello","request_id":"web-1","protocol":"mains-aegis.cdc.v1","framing":"jsonl","capabilities":{"status":true,"structured_logs":true,"settings":true,"wifi_config":true,"psk_echo":false},"identity":{}}
 ```
 
 `identity` uses the same shape as `/api/v1/identity`; USB identity reports `capabilities.write_controls=true`.
@@ -156,9 +159,9 @@ The firmware stores the PSK but never echoes it in `response`, `error`, or `log`
 {"type":"log","level":"info","target":"wifi_config","message":"WiFi credentials updated in EEPROM"}
 ```
 
-`log` frames are structured Web-facing events. A successful `hello` emits a `usb_cdc` session log. `get_status` emits an initial status log set for `status`, `output`, `charger`, `battery`, and `network`; later status requests emit periodic summaries and state-change logs for those targets.
+`log` frames are structured Web-facing events. A successful `hello` emits a `usb_cdc` connection log. `get_status` emits an initial status log set for `status`, `output`, `charger`, `battery`, and `network`; later status requests emit periodic summaries and state-change logs for those targets.
 
-The Web App records per-session CDC trace entries for developer inspection: transmitted request frames, received protocol frames, structured logs, and raw / ignored non-protocol CDC lines. devd-backed sessions expose a bounded tail to the browser while keeping the local ring buffer bounded in memory. WiFi PSK values are redacted from transmitted trace payloads. Raw firmware monitor output is decoded only when `mains-aegis-devd` has a selected artifact whose identity matches the connected device; otherwise it remains `unverified`.
+The Web App records per-transport CDC trace entries for developer inspection: transmitted request frames, received protocol frames, structured logs, and raw / ignored non-protocol CDC lines. devd-backed USB transport exposes a bounded tail to the browser while keeping the local ring buffer bounded in memory. WiFi PSK values are redacted from transmitted trace payloads. Raw firmware monitor output is decoded only when `mains-aegis-devd` has a selected artifact whose identity matches the connected device; otherwise it remains `unverified`.
 
 ### `error`
 

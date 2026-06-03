@@ -1,13 +1,14 @@
 import { getMockIdentity, getMockNetwork, getMockStatus } from "../fixtures/mockDevices";
 import type {
   ApiErrorEnvelope,
+  DevdScanTraceEntry,
   DevdDevice,
   DefmtDecodeResult,
   FirmwareCatalog,
   Identity,
   NetworkSummary,
   ProbeResult,
-  SafeSettingsState,
+  DeviceSettings,
   SerialLogEntry,
   SerialTraceEntry,
   DevdWebLease,
@@ -167,6 +168,9 @@ function requestMock<T>(baseUrl: string, path: string): Promise<T> {
   if (path === "/api/v1/status") {
     return Promise.resolve(getMockStatus(baseUrl) as T);
   }
+  if (path === "/api/v1/settings") {
+    return Promise.resolve(defaultMockSettings() as T);
+  }
   throw new MainsAegisApiError({
     code: "not_found",
     message: "mock endpoint not found",
@@ -192,6 +196,9 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
           },
         }
       : null;
+  const identity = devdIdentity ?? getMockIdentity("mock:usb");
+  const network = identity.network;
+  const status = getMockStatus(baseUrl === "mock:devd" ? "mock:devd" : "mock:usb");
   const device = {
     id: baseUrl === "mock:devd" ? "mains-aegis-devd-bridge" : "mock-devd-esp32s3-1",
     display_name: baseUrl === "mock:devd" ? "Bound ESP32-S3" : "USB demo CDC",
@@ -202,7 +209,7 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
         ? { alias: "USB demo CDC", bound_at: "2026-04-28T00:00:00.000Z" }
         : null,
     connection: "connected" as const,
-    identity: devdIdentity,
+    identity,
     selected_artifact_id: baseUrl === "mock:devd" ? "mains-aegis-esp32s3-release-web_serial-c805b6a" : null,
     log_decode: {
       status: baseUrl === "mock:devd" ? "verified" : "unverified",
@@ -211,6 +218,21 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
     },
   };
 
+  if (path === "/api/v1/ping" || path === "/health") return Promise.resolve({ ok: true } as T);
+  if (path === "/api/v1/identity") return Promise.resolve(identity as T);
+  if (path === "/api/v1/network") return Promise.resolve(network as T);
+  if (path === "/api/v1/status") return Promise.resolve(status as T);
+  if (path === "/api/v1/settings") return Promise.resolve(defaultMockSettings() as T);
+  if (path === "/api/v1/serial/session") {
+    return Promise.resolve({
+      connected: true,
+      protocol: "mains-aegis.cdc.v1",
+      status,
+      logs: [],
+      trace: [],
+      settings: defaultMockSettings(),
+    } as T);
+  }
   if (path === "/api/v1/devices") return Promise.resolve({ devices: [device] } as T);
   if (path === "/api/v1/devices/scan") return Promise.resolve({ devices: [device] } as T);
   if (path.endsWith("/bind")) {
@@ -254,6 +276,8 @@ export const getNetwork = (baseUrl: string, leaseId?: string, options?: RequestO
   requestJson<NetworkSummary>(baseUrl, `/api/v1/network${leaseQuery(leaseId)}`, options);
 export const getStatus = (baseUrl: string, leaseId?: string, options?: RequestOptions) =>
   requestJson<UpsStatus>(baseUrl, `/api/v1/status${leaseQuery(leaseId)}`, options);
+export const getSettings = (baseUrl: string, leaseId?: string, options?: RequestOptions) =>
+  requestJson<DeviceSettings>(baseUrl, `/api/v1/settings${leaseQuery(leaseId)}`, options);
 
 export type DevdSerialSession = {
   connected: boolean;
@@ -261,7 +285,17 @@ export type DevdSerialSession = {
   status?: UpsStatus | null;
   logs: SerialLogEntry[];
   trace: SerialTraceEntry[];
-  safeSettings: SafeSettingsState;
+  settings: DeviceSettings;
+};
+
+type RawDevdSerialSession = {
+  connected: boolean;
+  protocol: string;
+  identity?: Identity | null;
+  status?: UpsStatus | null;
+  logs: SerialLogEntry[];
+  trace: SerialTraceEntry[];
+  settings?: DeviceSettings;
 };
 
 export type DevdSerialEvent = {
@@ -298,7 +332,14 @@ function devdSerialSessionPath(options: DevdSerialSessionOptions = {}) {
 }
 
 export const getDevdSerialSession = (baseUrl: string, options?: DevdSerialSessionOptions) =>
-  requestJson<DevdSerialSession>(baseUrl, devdSerialSessionPath(options), { bridgeAuth: true });
+  requestJson<RawDevdSerialSession>(baseUrl, devdSerialSessionPath(options), { bridgeAuth: true }).then((session) => ({
+    connected: session.connected,
+    protocol: session.protocol,
+    status: session.status,
+    logs: session.logs,
+    trace: session.trace,
+    settings: session.settings ?? defaultMockSettings(),
+  }));
 
 export const createDevdWebLease = (baseUrl: string, deviceId: string) =>
   requestWithBody<DevdWebLease>(baseUrl, "/api/v1/serial/lease", "POST", { device_id: deviceId }, { bridgeAuth: true });
@@ -341,27 +382,48 @@ export type DevdWifiConfigApplyResult = {
   applied: true;
 };
 
-export const sendDevdWifiConfig = (baseUrl: string, deviceId: string, leaseId: string, input: { ssid: string; psk: string }) =>
-  requestWithBody<DevdWifiConfigApplyResult>(baseUrl, "/api/v1/wifi-config", "POST", { ...input, device_id: deviceId, lease_id: leaseId }, { bridgeAuth: true });
-export const clearDevdWifiConfig = (baseUrl: string, deviceId: string, leaseId: string) =>
+export const sendDeviceWifiConfig = (baseUrl: string, input: { ssid: string; psk: string }) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/wifi-config", "POST", input);
+export const clearDeviceWifiConfig = (baseUrl: string) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/wifi-config", "DELETE", undefined);
+export const setDeviceLogLevel = (baseUrl: string, level: DeviceSettings["log_level"]) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/settings/log-level", "POST", { level });
+export const setDeviceManualChargePrefs = (baseUrl: string, prefs: DeviceSettings["manual_charge"]) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/settings/manual-charge", "POST", prefs);
+export const sendDevdWifiConfig = (baseUrl: string, deviceId: string, leaseId: string | null, input: { ssid: string; psk: string }) =>
   requestWithBody<DevdWifiConfigApplyResult>(
     baseUrl,
-    `/api/v1/wifi-config?device_id=${encodeURIComponent(deviceId)}&lease_id=${encodeURIComponent(leaseId)}`,
+    "/api/v1/wifi-config",
+    "POST",
+    { ...input, device_id: deviceId, lease_id: leaseId ?? undefined },
+    { bridgeAuth: true },
+  );
+export const clearDevdWifiConfig = (baseUrl: string, deviceId: string, leaseId: string | null) =>
+  requestWithBody<DevdWifiConfigApplyResult>(
+    baseUrl,
+    `/api/v1/wifi-config?${settingsTargetQuery(deviceId, leaseId)}`,
     "DELETE",
     undefined,
     { bridgeAuth: true },
   );
-export const setDevdLogLevel = (baseUrl: string, deviceId: string, leaseId: string, level: SafeSettingsState["log_level"]) =>
-  requestWithBody<unknown>(baseUrl, "/api/v1/settings/log-level", "POST", { level, device_id: deviceId, lease_id: leaseId }, { bridgeAuth: true });
-export const setDevdManualChargePrefs = (baseUrl: string, deviceId: string, leaseId: string, prefs: SafeSettingsState["manual_charge"]) =>
-  requestWithBody<unknown>(baseUrl, "/api/v1/settings/manual-charge", "POST", { ...prefs, device_id: deviceId, lease_id: leaseId }, { bridgeAuth: true });
+export const setDevdLogLevel = (baseUrl: string, deviceId: string, leaseId: string | null, level: DeviceSettings["log_level"]) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/settings/log-level", "POST", { level, device_id: deviceId, lease_id: leaseId ?? undefined }, { bridgeAuth: true });
+export const setDevdManualChargePrefs = (baseUrl: string, deviceId: string, leaseId: string | null, prefs: DeviceSettings["manual_charge"]) =>
+  requestWithBody<unknown>(baseUrl, "/api/v1/settings/manual-charge", "POST", { ...prefs, device_id: deviceId, lease_id: leaseId ?? undefined }, { bridgeAuth: true });
+
+function settingsTargetQuery(deviceId: string, leaseId: string | null) {
+  const query = new URLSearchParams({ device_id: deviceId });
+  if (leaseId) query.set("lease_id", leaseId);
+  return query.toString();
+}
 
 export async function probeDevice(baseUrl: string, leaseId?: string, options?: RequestOptions): Promise<ProbeResult> {
   await ping(baseUrl, options);
   const identity = await getIdentity(baseUrl, leaseId, options);
   const network = await getNetwork(baseUrl, leaseId, options);
   const status = await getStatus(baseUrl, leaseId, options);
-  return { identity, network, status };
+  const settings = await getSettings(baseUrl, leaseId, options);
+  return { identity, network, status, settings };
 }
 
 export function toErrorEnvelope(error: unknown): ApiErrorEnvelope["error"] {
@@ -387,7 +449,20 @@ export const loadFirmwareCatalogFromUrl = (url: string) => requestJson<FirmwareC
 export const decodeDefmtFrame = (input: { elf_path: string; frame_hex: string }, baseUrl = "") =>
   requestWithBody<DefmtDecodeResult>(baseUrl, "/api/v1/defmt/decode", "POST", input, { bridgeAuth: true });
 export const listDevdDevices = (baseUrl = "") => requestJson<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices", { bridgeAuth: true });
-export const scanDevdDevices = (baseUrl = "") => requestWithBody<{ devices: DevdDevice[] }>(baseUrl, "/api/v1/devices/scan", "POST", undefined, { bridgeAuth: true });
+export const scanDevdDevices = (baseUrl = "") =>
+  requestWithBody<{ devices: DevdDevice[]; scan_trace?: DevdScanTraceEntry[] }>(
+    baseUrl,
+    "/api/v1/devices/scan",
+    "POST",
+    undefined,
+    { bridgeAuth: true },
+  );
+export const getDevdDeviceIdentity = (baseUrl: string, deviceId: string) =>
+  requestJson<Identity>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/identity`, { bridgeAuth: true });
+export const getDevdDeviceSettings = (baseUrl: string, deviceId: string) =>
+  requestJson<DeviceSettings>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/settings`, { bridgeAuth: true });
+export const getDevdDeviceTrace = (baseUrl: string, deviceId: string, options?: DevdSerialSessionOptions) =>
+  requestJson<RawDevdSerialSession>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/trace${devdSerialSessionPath(options).replace("/api/v1/serial/session", "")}`, { bridgeAuth: true });
 export const bindDevdDevice = (deviceId: string, alias?: string, baseUrl = "") =>
   requestWithBody<DevdDevice>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/bind`, "POST", { alias }, { bridgeAuth: true });
 export const connectDevdDevice = (deviceId: string, baseUrl = "") =>
@@ -402,3 +477,18 @@ export const selectDevdArtifact = (
   requestWithBody<unknown>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/artifact`, "POST", input, { bridgeAuth: true });
 export const flashDevdDevice = (deviceId: string, input: { artifact_id?: string; dry_run?: boolean }, baseUrl = "") =>
   requestWithBody<unknown>(baseUrl, `/api/v1/devices/${encodeURIComponent(deviceId)}/flash`, "POST", input, { bridgeAuth: true });
+
+function defaultMockSettings(): DeviceSettings {
+  return {
+    wifi: {
+      configured: false,
+      ssid: null,
+    },
+    log_level: "info",
+    manual_charge: {
+      target: "full_100",
+      speed: "ma_500",
+      timer_h: 2,
+    },
+  };
+}

@@ -4,7 +4,10 @@ use heapless::String;
 
 use crate::{
     mdns_wire::DeviceIdentity,
-    net_types::{format_ipv4, PowerDiagSnapshot, UpsStatusSnapshot, WifiSnapshot, API_VERSION},
+    net_types::{
+        format_ipv4, DeviceSettingsSnapshot, PowerDiagSnapshot, UpsStatusSnapshot, WifiSnapshot,
+        API_VERSION,
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,6 +137,38 @@ pub fn render_network_json<const N: usize>(
     let _ = buf.push_str("\",");
     write_network_object_fields(buf, wifi, false);
     let _ = buf.push('}');
+}
+
+pub fn render_settings_json<const N: usize>(
+    buf: &mut String<N>,
+    settings: &DeviceSettingsSnapshot,
+) {
+    buf.clear();
+    let _ = buf.push('{');
+    let _ = buf.push_str("\"wifi\":{");
+    let _ = write!(
+        buf,
+        "\"configured\":{}",
+        if settings.wifi.configured {
+            "true"
+        } else {
+            "false"
+        }
+    );
+    if let Some(ssid) = settings.wifi.ssid.as_ref() {
+        let _ = buf.push_str(",\"ssid\":\"");
+        write_json_string_escaped(buf, ssid.as_str());
+        let _ = buf.push('"');
+    } else {
+        let _ = buf.push_str(",\"ssid\":null");
+    }
+    let _ = buf.push_str("},");
+    json_field_str(buf, "log_level", settings.log_level, true);
+    let _ = buf.push_str("\"manual_charge\":{");
+    json_field_str(buf, "target", settings.manual_charge.target, true);
+    json_field_str(buf, "speed", settings.manual_charge.speed, true);
+    let _ = write!(buf, "\"timer_h\":{}", settings.manual_charge.timer_h);
+    let _ = buf.push_str("}}");
 }
 
 pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {
@@ -659,12 +694,15 @@ fn json_field_opt_ipv4<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        accepts_event_stream, render_identity_json, render_status_json, write_error_body,
-        write_sse_event, BuildInfo,
+        accepts_event_stream, render_identity_json, render_settings_json, render_status_json,
+        write_error_body, write_sse_event, BuildInfo,
     };
     use crate::{
         mdns_wire::derive_device_identity,
-        net_types::{NetworkUiSummary, UpsStatusSnapshot, WifiConnectionState, WifiSnapshot},
+        net_types::{
+            DeviceSettingsSnapshot, ManualChargeSettingsSnapshot, NetworkUiSummary,
+            UpsStatusSnapshot, WifiConnectionState, WifiSettingsSnapshot, WifiSnapshot,
+        },
     };
     use heapless::String;
 
@@ -746,5 +784,32 @@ mod tests {
             frame.as_str(),
             "id: 7\nevent: status\ndata: {\"ok\":true}\n\n"
         );
+    }
+
+    #[test]
+    fn settings_json_redacts_psk_and_exposes_manual_charge() {
+        let mut body = String::<512>::new();
+        let mut ssid = String::<32>::new();
+        ssid.push_str("LabNet").unwrap();
+        render_settings_json(
+            &mut body,
+            &DeviceSettingsSnapshot {
+                wifi: WifiSettingsSnapshot {
+                    configured: true,
+                    ssid: Some(ssid),
+                },
+                log_level: "debug",
+                manual_charge: ManualChargeSettingsSnapshot {
+                    target: "rsoc_80",
+                    speed: "ma_500",
+                    timer_h: 2,
+                },
+            },
+        );
+        assert!(body.as_str().contains("\"configured\":true"));
+        assert!(body.as_str().contains("\"ssid\":\"LabNet\""));
+        assert!(body.as_str().contains("\"log_level\":\"debug\""));
+        assert!(body.as_str().contains("\"target\":\"rsoc_80\""));
+        assert!(!body.as_str().contains("psk"));
     }
 }

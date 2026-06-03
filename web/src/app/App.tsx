@@ -35,7 +35,7 @@ import {
 import { FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
 import { bridgeAuthRequired, bridgeAuthToken, normalizeBaseUrl, saveBridgeAuthToken, scanDevdDevices, toErrorEnvelope } from "../api/client";
-import type { DeviceRecord, DevdDevice, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
+import type { DeviceRecord, DeviceSettings, DevdDevice, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 import { SegmentedControl } from "../components/ui/segmented-control";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { useDeviceRegistry, type WifiProvisioningProgress } from "../device-registry/context";
@@ -424,21 +424,30 @@ function ConnectionBadges({ record }: { record: DeviceRecord }) {
   const lanConnected =
     transport === "http" &&
     (record.connectionState === "online" || record.network?.state === "connected" || record.status?.network.state === "connected");
-  const usbConnected = Boolean(record.serial?.connected);
+  const devdConnected = transport === "devd" && record.connectionState === "online" && !record.serial?.leaseId;
+  const usbConnected = Boolean(record.serial?.connected && !devdConnected);
   return (
     <span className="connection-badges">
       {lanConnected ? <span className="transport-badge http">WiFi</span> : null}
+      {devdConnected ? <span className="transport-badge devd">devd</span> : null}
       {usbConnected ? <span className="transport-badge serial">USB</span> : null}
-      {!lanConnected && !usbConnected ? <span className="transport-badge offline">Offline</span> : null}
+      {!lanConnected && !devdConnected && !usbConnected ? <span className="transport-badge offline">Offline</span> : null}
     </span>
   );
 }
 
 function devdDeviceLabel(device: DevdDevice): string {
   const identity = device.identity?.device_id;
-  const port = device.port_path ?? device.display_name;
+  const transport = device.transport === "lan" ? "LAN" : "USB";
+  const port = device.transport === "lan" ? device.lan_address ?? device.display_name : device.port_path ?? device.display_name;
   const state = device.connection === "connected" ? "connected" : "available";
-  return identity ? `${identity} - ${port} - ${state}` : `${port} - ${state}`;
+  return identity ? `${identity} - ${transport} ${port} - ${state}` : `${transport} ${port} - ${state}`;
+}
+
+function isConnectableDevdDevice(device: DevdDevice): boolean {
+  if (device.transport === "native_serial") return Boolean(device.port_path);
+  if (device.transport !== "lan") return false;
+  return Boolean(device.identity) && (device.lan_conflict_addresses?.length ?? 0) === 0;
 }
 
 function ConnectPage() {
@@ -542,14 +551,14 @@ function ConnectPage() {
         return;
       }
       const scan = await scanDevdDevices(devdBaseUrl);
-      const candidates = scan.devices.filter((device) => device.transport === "native_serial" && device.port_path);
+      const candidates = scan.devices.filter((device) => isConnectableDevdDevice(device));
       setDevdCandidates(candidates);
       if (!devdDeviceId && candidates.length === 1) {
         devdDeviceId = candidates[0].id;
       }
       if (!devdDeviceId && candidates.length > 1) {
         setDevdBusy(false);
-        setDevdMessage(errorFeedback({ code: "device_selection_required", message: "Multiple USB CDC devices are available. Select one device before connecting devd.", retryable: false, details: { devices: candidates } }));
+        setDevdMessage(errorFeedback({ code: "device_selection_required", message: "Multiple USB CDC or LAN devices are available. Select one device before connecting devd.", retryable: false, details: { devices: candidates } }));
         return;
       }
     } catch (error) {
@@ -594,7 +603,7 @@ function ConnectPage() {
     <section className="page-flow connect-wide">
       <div className="section-heading">
         <h2>Connect devices</h2>
-        <p>USB CDC is the control path. LAN targets remain read-only status sources.</p>
+        <p>USB and LAN both use the device identity, status, and settings contract.</p>
       </div>
 
       <div className="connect-grid" data-evidence-target="usb-connect">
@@ -645,7 +654,7 @@ function ConnectPage() {
           <header className="connect-panel-header">
             <div>
               <h3><Server size={18} /> mains-aegis-devd</h3>
-              <p>Local daemon for USB control, logs, and firmware tools</p>
+              <p>Local daemon for USB/LAN control, logs, and firmware tools</p>
             </div>
             <span className="transport-badge devd">devd</span>
           </header>
@@ -682,10 +691,10 @@ function ConnectPage() {
             ) : null}
             {devdCandidates.length > 1 ? (
               <label>
-                USB device
+                devd device
                 <Select value={selectedDevdDeviceId} onValueChange={setSelectedDevdDeviceId}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Select USB device" />
+                    <SelectValue placeholder="Select devd device" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
@@ -725,10 +734,10 @@ function ConnectPage() {
         <section className="connect-panel">
           <header className="connect-panel-header">
             <div>
-              <h3><Globe2 size={18} /> LAN status</h3>
-              <p>Direct hardware HTTP/SSE identity, network, and status probe</p>
+              <h3><Globe2 size={18} /> LAN device API</h3>
+              <p>Direct hardware HTTP/SSE identity, network, status, and settings</p>
             </div>
-            <span className="transport-badge http">read-only</span>
+            <span className="transport-badge http">LAN API</span>
           </header>
           <form className="connect-form compact" onSubmit={onSubmit} autoComplete="off">
             <label>
@@ -1089,17 +1098,21 @@ function DeviceInfoPage({ record }: { record: DeviceRecord }) {
 
 function SettingsPage({ record }: { record: DeviceRecord }) {
   const { sendWifiConfig, clearWifiConfig, setManualChargePrefs } = useDeviceRegistry();
-  const settings = record.serial?.safeSettings;
-  const [ssid, setSsid] = useState(settings?.wifi_ssid ?? "");
+  const settings = record.settings;
+  const [ssid, setSsid] = useState(settings?.wifi.ssid ?? "");
   const [psk, setPsk] = useState("");
-  const [manualPrefs, setManualPrefs] = useState<SafeSettingsState["manual_charge"]>(
-    settings?.manual_charge ?? { target: "full_100", speed: "ma_500", timer_h: 2 },
+  const [manualPrefs, setManualPrefs] = useState<DeviceSettings["manual_charge"]>(
+    settings?.manual_charge ?? ({ target: "full_100", speed: "ma_500", timer_h: 2 } as DeviceSettings["manual_charge"]),
   );
   const [message, setMessage] = useState<UiFeedback | null>(null);
   const [wifiMessage, setWifiMessage] = useState<UiFeedback | null>(null);
   const [wifiProgress, setWifiProgress] = useState<WifiProvisioningProgress | null>(null);
   const [busy, setBusy] = useState<"wifi-save" | "wifi-clear" | "manual" | null>(null);
   const usbReady = Boolean(record.serial?.connected);
+  const lanReady = (record.target.transport ?? "http") === "http" && Boolean(record.settings);
+  const devdReady = record.target.transport === "devd" && Boolean(record.settings);
+  const settingsReady = usbReady || lanReady || devdReady;
+  const transportLabel = lanReady && !usbReady ? "LAN" : "hardware";
   const wifiValidationMessage =
     !ssid.trim()
       ? "Save requires an SSID."
@@ -1115,7 +1128,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   useEffect(() => {
     if (!settings) return;
     setManualPrefs(settings.manual_charge);
-    if (settings.wifi_ssid) setSsid(settings.wifi_ssid);
+    if (settings.wifi.ssid) setSsid(settings.wifi.ssid);
   }, [settings]);
 
   useEffect(() => {
@@ -1162,16 +1175,16 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
     setMessage(result.ok ? successFeedback("Manual charge preferences updated") : errorFeedback(result.error));
   }
 
-  if (!usbReady) {
+  if (!settingsReady) {
     return (
       <section className="page-flow">
         <DeviceStatusBand record={record} />
         <section className="empty-state">
-          <Usb size={28} />
-          <h2>USB control path required</h2>
-          <p>Safe settings and WiFi provisioning require Web Serial or mains-aegis-devd.</p>
+          <SlidersHorizontal size={28} />
+          <h2>Settings unavailable</h2>
+          <p>Refresh this device or connect USB / mains-aegis-devd before changing settings.</p>
           <button className="primary-button" type="button" onClick={() => navigate("/connect")}>
-            Connect USB
+            Connect device
           </button>
         </section>
       </section>
@@ -1215,7 +1228,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
                 required
               />
             </label>
-            <div id="wifi-form-help" className="secret-note"><KeyRound size={15} /> PSK is written over USB and cleared from the form after submit.</div>
+            <div id="wifi-form-help" className="secret-note"><KeyRound size={15} /> PSK is written over {transportLabel} and cleared from the form after submit.</div>
             {wifiValidationMessage ? <p id="wifi-validation-help" className="field-help">{wifiValidationMessage}</p> : null}
             <div className="form-actions wifi-actions">
               <span className="wifi-save-anchor">
@@ -1249,7 +1262,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
         <section className="info-panel settings-panel">
           <header>
             <SlidersHorizontal size={18} />
-            <h2>Safe settings</h2>
+            <h2>Device settings</h2>
           </header>
           <form className="settings-form" onSubmit={onManualPrefsSubmit}>
             <SettingsSegmentedControl
@@ -1260,7 +1273,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
                 ["rsoc_80", "80%"],
                 ["full_100", "100%"],
               ]}
-              onChange={(target) => setManualPrefs((current) => ({ ...current, target: target as SafeSettingsState["manual_charge"]["target"] }))}
+              onChange={(target) => setManualPrefs((current) => ({ ...current, target: target as DeviceSettings["manual_charge"]["target"] }))}
             />
             <SettingsSegmentedControl
               label="Charge speed"
@@ -1270,7 +1283,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
                 ["ma_500", "500mA"],
                 ["ma_1000", "1A"],
               ]}
-              onChange={(speed) => setManualPrefs((current) => ({ ...current, speed: speed as SafeSettingsState["manual_charge"]["speed"] }))}
+              onChange={(speed) => setManualPrefs((current) => ({ ...current, speed: speed as DeviceSettings["manual_charge"]["speed"] }))}
             />
             <SettingsSegmentedControl
               label="Timer"
@@ -1324,15 +1337,10 @@ function ApiDebugPage({ record }: { record: DeviceRecord }) {
   const payload = {
     identity: record.identity,
     network: record.network,
+    settings: record.settings,
     status: record.status,
     error: record.error,
-    serial: record.serial
-      ? {
-          connected: record.serial.connected,
-          protocol: record.serial.protocol,
-          safeSettings: record.serial.safeSettings,
-        }
-      : null,
+    serial: record.serial ? { connected: record.serial.connected, protocol: record.serial.protocol } : null,
   };
   return (
     <section className="page-flow">

@@ -22,6 +22,8 @@ use embassy_executor::Spawner;
 use embassy_futures::block_on;
 #[cfg(feature = "net_http")]
 use embassy_futures::yield_now;
+#[cfg(feature = "net_http")]
+use embassy_time::Timer;
 use embedded_hal_bus::i2c::RefCellDevice;
 use esp_backtrace as _;
 use esp_firmware::audio::{AudioCue, AudioManager, PLAYBACK_SAMPLE_RATE_HZ};
@@ -1451,6 +1453,13 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 None
             }
         };
+        let prefs = power.manual_charge_prefs_snapshot();
+        esp_firmware::net::set_manual_charge_settings(
+            manual_charge_target_api_value(prefs.target),
+            manual_charge_speed_api_value(prefs.speed),
+            prefs.timer_limit.hours(),
+        );
+        esp_firmware::net::set_device_log_level("info");
         esp_firmware::net::spawn_wifi_and_http(&main_entry, peripherals.WIFI, usb_wifi_config);
         yield_now().await;
     }
@@ -1566,6 +1575,66 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             let now = Instant::now();
             let ui_snapshot = power.ui_snapshot();
             net_bridge::publish_status_snapshot(ui_snapshot);
+            #[cfg(feature = "net_http")]
+            {
+                while let Some(command) = esp_firmware::net::take_pending_lan_command() {
+                    match command {
+                        esp_firmware::net::LanManagementCommand::SetWifi(secret) => {
+                            let ssid = secret.ssid.clone();
+                            match power.write_web_serial_wifi_config(Some(&secret)) {
+                                Ok(()) => {
+                                    esp_firmware::net::set_usb_wifi_config(Some(secret));
+                                    defmt::info!(
+                                        "net: LAN WiFi config accepted ssid={}",
+                                        ssid.as_str()
+                                    );
+                                }
+                                Err(_) => {
+                                    defmt::warn!("net: LAN WiFi config write failed");
+                                }
+                            }
+                        }
+                        esp_firmware::net::LanManagementCommand::ClearWifi => {
+                            match power.write_web_serial_wifi_config(None) {
+                                Ok(()) => {
+                                    esp_firmware::net::set_usb_wifi_config(None);
+                                    defmt::info!("net: LAN WiFi config cleared");
+                                }
+                                Err(_) => {
+                                    defmt::warn!("net: LAN WiFi config clear failed");
+                                }
+                            }
+                        }
+                        esp_firmware::net::LanManagementCommand::SetLogLevel(level) => {
+                            #[cfg(feature = "web_serial")]
+                            web_serial_log_state.set_level(level);
+                            esp_firmware::net::set_device_log_level(level.as_str());
+                            defmt::info!("net: LAN log level updated level={}", level.as_str());
+                        }
+                        esp_firmware::net::LanManagementCommand::SetManualCharge(prefs) => {
+                            power.set_web_serial_manual_charge_prefs(prefs);
+                            let current = power.manual_charge_prefs_snapshot();
+                            esp_firmware::net::set_manual_charge_settings(
+                                manual_charge_target_api_value(current.target),
+                                manual_charge_speed_api_value(current.speed),
+                                current.timer_limit.hours(),
+                            );
+                            defmt::info!("net: LAN manual charge preferences updated");
+                        }
+                        esp_firmware::net::LanManagementCommand::Reset => {
+                            defmt::warn!("net: LAN reset requested");
+                            Timer::after(embassy_time::Duration::from_millis(100)).await;
+                            esp_hal::system::software_reset();
+                        }
+                    }
+                }
+                let prefs = power.manual_charge_prefs_snapshot();
+                esp_firmware::net::set_manual_charge_settings(
+                    manual_charge_target_api_value(prefs.target),
+                    manual_charge_speed_api_value(prefs.speed),
+                    prefs.timer_limit.hours(),
+                );
+            }
             #[cfg(feature = "web_serial")]
             service_web_serial(
                 &mut web_serial,
@@ -1751,6 +1820,8 @@ fn handle_web_serial_frame<'d, I2C>(
             }
             UsbCdcRequest::SetLogLevel(level) => {
                 log_state.set_level(level);
+                #[cfg(feature = "net_http")]
+                esp_firmware::net::set_device_log_level(level.as_str());
                 let _ = write!(body, r#"{{"log_level":"{}"}}"#, level.as_str());
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
@@ -1763,6 +1834,15 @@ fn handle_web_serial_frame<'d, I2C>(
             }
             UsbCdcRequest::SetManualChargePrefs(prefs) => {
                 power.set_web_serial_manual_charge_prefs(prefs);
+                #[cfg(feature = "net_http")]
+                {
+                    let current = power.manual_charge_prefs_snapshot();
+                    esp_firmware::net::set_manual_charge_settings(
+                        manual_charge_target_api_value(current.target),
+                        manual_charge_speed_api_value(current.speed),
+                        current.timer_limit.hours(),
+                    );
+                }
                 let _ = body.push_str(r#"{"manual_charge_prefs":"updated"}"#);
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
@@ -1847,6 +1927,28 @@ fn handle_web_serial_frame<'d, I2C>(
 fn write_web_serial_line(serial: &mut UsbSerialJtag<'static, Blocking>, line: &str) {
     let _ = serial.write(line.as_bytes());
     let _ = serial.write(b"\n");
+}
+
+#[cfg(feature = "net_http")]
+const fn manual_charge_target_api_value(
+    target: front_panel_scene::ManualChargeTarget,
+) -> &'static str {
+    match target {
+        front_panel_scene::ManualChargeTarget::Pack3V7 => "pack_3v7",
+        front_panel_scene::ManualChargeTarget::Rsoc80 => "rsoc_80",
+        front_panel_scene::ManualChargeTarget::Full100 => "full_100",
+    }
+}
+
+#[cfg(feature = "net_http")]
+const fn manual_charge_speed_api_value(
+    speed: front_panel_scene::ManualChargeSpeed,
+) -> &'static str {
+    match speed {
+        front_panel_scene::ManualChargeSpeed::Ma100 => "ma_100",
+        front_panel_scene::ManualChargeSpeed::Ma500 => "ma_500",
+        front_panel_scene::ManualChargeSpeed::Ma1000 => "ma_1000",
+    }
 }
 
 #[cfg(feature = "web_serial")]

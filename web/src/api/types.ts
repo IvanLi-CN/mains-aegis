@@ -148,8 +148,8 @@ export type DefmtDecodeResult = {
 export type SerialTraceEntry = {
   id: string;
   timestamp: string;
-  direction: "rx" | "tx";
-  kind: "raw" | "frame" | "ignored" | "defmt";
+  direction: "rx" | "tx" | "sse" | "error" | "info" | string;
+  kind: "raw" | "frame" | "ignored" | "defmt" | "http" | string;
   frameType: string | null;
   requestId: string | null;
   target: string | null;
@@ -157,14 +157,16 @@ export type SerialTraceEntry = {
   payload: string;
 };
 
-export type SafeSettingsState = {
-  wifi_configured: boolean | null;
-  wifi_ssid: string | null;
-  log_level: "error" | "warn" | "info" | "debug" | "trace";
+export type DeviceSettings = {
+  wifi: {
+    configured: boolean;
+    ssid: string | null;
+  };
+  log_level: "error" | "warn" | "info" | "debug" | "trace" | string;
   manual_charge: {
-    target: "pack_3v7" | "rsoc_80" | "full_100";
-    speed: "ma_100" | "ma_500" | "ma_1000";
-    timer_h: 1 | 2 | 6;
+    target: "pack_3v7" | "rsoc_80" | "full_100" | string;
+    speed: "ma_100" | "ma_500" | "ma_1000" | string;
+    timer_h: 1 | 2 | 6 | number;
   };
 };
 
@@ -172,6 +174,7 @@ export type DeviceRecord = {
   target: DeviceTarget;
   identity: Identity | null;
   network: NetworkSummary | null;
+  settings: DeviceSettings | null;
   status: UpsStatus | null;
   connectionState: ConnectionState;
   streamState: "idle" | "streaming" | "polling" | "error";
@@ -189,7 +192,6 @@ export type DeviceRecord = {
     status?: UpsStatus | null;
     logs: SerialLogEntry[];
     trace: SerialTraceEntry[];
-    safeSettings: SafeSettingsState;
   };
 };
 
@@ -197,6 +199,7 @@ export type ProbeResult = {
   identity: Identity;
   network: NetworkSummary;
   status: UpsStatus;
+  settings: DeviceSettings;
 };
 
 export type FirmwareArtifactFile = {
@@ -241,16 +244,31 @@ export type DevdDevice = {
   id: string;
   display_name: string;
   port_path: string | null;
-  transport: "native_serial" | "mock";
+  lan_address?: string | null;
+  lan_conflict_addresses?: string[];
+  transport: "native_serial" | "lan" | "mock";
   binding: unknown | null;
   connection: "disconnected" | "connected" | "busy" | "error";
   identity: Identity | null;
+  status?: UpsStatus | null;
   selected_artifact_id: string | null;
   log_decode: {
     status: "verified" | "unverified" | string;
     reason: string | null;
     artifact_id: string | null;
   };
+};
+
+export type DevdScanTraceEntry = {
+  id: string;
+  timestamp: string;
+  direction: string;
+  kind: string;
+  frameType?: string | null;
+  requestId?: string | null;
+  target?: string | null;
+  summary: string;
+  payload: string;
 };
 
 export type DevdWebLease = {

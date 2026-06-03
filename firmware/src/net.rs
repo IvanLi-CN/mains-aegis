@@ -28,16 +28,21 @@ use crate::{
     mdns_wire::{derive_device_identity, DeviceIdentity},
     net_contract::{
         accepts_event_stream, is_api_v1_path, render_identity_json, render_network_json,
-        render_ping_json, render_status_json, write_error_body, write_sse_event, BuildInfo,
+        render_ping_json, render_settings_json, render_status_json, write_error_body,
+        write_sse_event, BuildInfo,
     },
     net_logic::{
         build_http_response_head, build_sse_response_head, origin_reflection_allowed,
         resolve_net_env_config, select_active_dns,
     },
     net_types::{
-        NetworkUiSummary, UpsStatusSnapshot, WifiConnectionState, WifiErrorKind, WifiSnapshot,
+        DeviceSettingsSnapshot, ManualChargeSettingsSnapshot, NetworkUiSummary, UpsStatusSnapshot,
+        WifiConnectionState, WifiErrorKind, WifiSettingsSnapshot, WifiSnapshot,
     },
-    usb_cdc_protocol::WifiConfigSecret,
+    usb_cdc_protocol::{
+        parse_http_log_level_request, parse_http_manual_charge_request, parse_http_reset_request,
+        parse_http_wifi_config_request, LogLevel, ManualChargePrefsCommand, WifiConfigSecret,
+    },
 };
 
 const WIFI_HOSTNAME: Option<&str> = option_env!("MAINS_AEGIS_WIFI_HOSTNAME");
@@ -65,6 +70,10 @@ static UPS_STATUS: Mutex<RefCell<UpsStatusSnapshot>> =
     Mutex::new(RefCell::new(UpsStatusSnapshot::empty()));
 static DEVICE_IDENTITY: Mutex<RefCell<Option<DeviceIdentity>>> = Mutex::new(RefCell::new(None));
 static USB_WIFI_CONFIG: Mutex<RefCell<Option<WifiConfigSecret>>> = Mutex::new(RefCell::new(None));
+static DEVICE_SETTINGS: Mutex<RefCell<Option<DeviceSettingsSnapshot>>> =
+    Mutex::new(RefCell::new(None));
+static PENDING_LAN_COMMAND: Mutex<RefCell<Option<LanManagementCommand>>> =
+    Mutex::new(RefCell::new(None));
 static WIFI_CONFIG_GENERATION: AtomicU32 = AtomicU32::new(0);
 
 const BUILD_INFO: BuildInfo = BuildInfo {
@@ -76,6 +85,15 @@ const BUILD_INFO: BuildInfo = BuildInfo {
     git_dirty: env!("FW_GIT_DIRTY"),
     features: env!("FW_FEATURES"),
 };
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LanManagementCommand {
+    SetWifi(WifiConfigSecret),
+    ClearWifi,
+    SetLogLevel(LogLevel),
+    SetManualCharge(ManualChargePrefsCommand),
+    Reset,
+}
 
 pub fn publish_ups_status(snapshot: UpsStatusSnapshot) {
     critical_section::with(|cs| {
@@ -95,6 +113,31 @@ pub fn current_identity() -> Option<DeviceIdentity> {
     critical_section::with(|cs| DEVICE_IDENTITY.borrow_ref(cs).clone())
 }
 
+pub fn current_device_settings() -> DeviceSettingsSnapshot {
+    critical_section::with(|cs| {
+        DEVICE_SETTINGS
+            .borrow_ref(cs)
+            .clone()
+            .unwrap_or_else(DeviceSettingsSnapshot::defaults)
+    })
+}
+
+pub fn take_pending_lan_command() -> Option<LanManagementCommand> {
+    critical_section::with(|cs| PENDING_LAN_COMMAND.borrow_ref_mut(cs).take())
+}
+
+fn queue_lan_command(command: LanManagementCommand) -> Result<(), ()> {
+    critical_section::with(|cs| {
+        let mut pending = PENDING_LAN_COMMAND.borrow_ref_mut(cs);
+        if pending.is_some() {
+            Err(())
+        } else {
+            *pending = Some(command);
+            Ok(())
+        }
+    })
+}
+
 pub fn log_wifi_config() {
     esp_println::println!(
         "net: feature=net_http default_wifi=disabled static_ip={:?} hostname_override={:?}",
@@ -110,6 +153,18 @@ pub fn log_wifi_config() {
 pub fn set_usb_wifi_config(config: Option<WifiConfigSecret>) {
     critical_section::with(|cs| {
         *USB_WIFI_CONFIG.borrow_ref_mut(cs) = config;
+        let mut settings = DEVICE_SETTINGS
+            .borrow_ref(cs)
+            .clone()
+            .unwrap_or_else(DeviceSettingsSnapshot::defaults);
+        settings.wifi = match USB_WIFI_CONFIG.borrow_ref(cs).as_ref() {
+            Some(secret) => WifiSettingsSnapshot {
+                configured: true,
+                ssid: Some(secret.ssid.clone()),
+            },
+            None => WifiSettingsSnapshot::unconfigured(),
+        };
+        *DEVICE_SETTINGS.borrow_ref_mut(cs) = Some(settings);
     });
     WIFI_CONFIG_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
@@ -120,6 +175,32 @@ fn current_usb_wifi_config() -> Option<WifiConfigSecret> {
 
 fn wifi_config_generation() -> u32 {
     WIFI_CONFIG_GENERATION.load(Ordering::SeqCst)
+}
+
+pub fn set_device_log_level(level: &'static str) {
+    critical_section::with(|cs| {
+        let mut settings = DEVICE_SETTINGS
+            .borrow_ref(cs)
+            .clone()
+            .unwrap_or_else(DeviceSettingsSnapshot::defaults);
+        settings.log_level = level;
+        *DEVICE_SETTINGS.borrow_ref_mut(cs) = Some(settings);
+    });
+}
+
+pub fn set_manual_charge_settings(target: &'static str, speed: &'static str, timer_h: u8) {
+    critical_section::with(|cs| {
+        let mut settings = DEVICE_SETTINGS
+            .borrow_ref(cs)
+            .clone()
+            .unwrap_or_else(DeviceSettingsSnapshot::defaults);
+        settings.manual_charge = ManualChargeSettingsSnapshot {
+            target,
+            speed,
+            timer_h,
+        };
+        *DEVICE_SETTINGS.borrow_ref_mut(cs) = Some(settings);
+    });
 }
 
 pub fn spawn_wifi_and_http(
@@ -513,21 +594,62 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
         return Ok(());
     }
 
-    let mut origin: Option<&str> = None;
+    let mut method_buf = String::<8>::new();
+    let mut path_buf = String::<128>::new();
+    if method_buf.push_str(method).is_err() || path_buf.push_str(path).is_err() {
+        let mut body = String::<HTTP_RESPONSE_BODY_CAP>::new();
+        write_error_body(
+            &mut body,
+            "invalid_request",
+            "request line is too long",
+            false,
+            None,
+        );
+        write_http_response(socket, "400 Bad Request", body.as_str(), None).await?;
+        return Ok(());
+    }
+
+    let mut origin: Option<String<128>> = None;
     let mut accept_sse = false;
+    let mut content_length = 0usize;
     for line in lines {
         let lower = line.to_ascii_lowercase();
         if lower.starts_with("origin:") {
-            origin = line
+            if let Some(value) = line
                 .split_once(':')
                 .map(|(_, value)| value.trim())
-                .filter(|value| !value.is_empty());
+                .filter(|value| !value.is_empty())
+            {
+                let mut origin_buf = String::<128>::new();
+                if origin_buf.push_str(value).is_err() {
+                    let mut body = String::<HTTP_RESPONSE_BODY_CAP>::new();
+                    write_error_body(
+                        &mut body,
+                        "invalid_request",
+                        "origin header is too long",
+                        false,
+                        None,
+                    );
+                    write_http_response(socket, "400 Bad Request", body.as_str(), None).await?;
+                    return Ok(());
+                }
+                origin = Some(origin_buf);
+            }
         } else if lower.starts_with("accept:") {
             if let Some((_, value)) = line.split_once(':') {
                 accept_sse = accepts_event_stream(value.trim());
             }
+        } else if lower.starts_with("content-length:") {
+            content_length = line
+                .split_once(':')
+                .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                .unwrap_or(usize::MAX);
         }
     }
+
+    let origin = origin.as_ref().map(|value| value.as_str());
+    let method = method_buf.as_str();
+    let path = path_buf.as_str();
 
     if let Some(value) = origin {
         if !origin_reflection_allowed(value) {
@@ -544,6 +666,58 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
         }
     }
 
+    let body_start = header_end + 4;
+    let request_len = match body_start.checked_add(content_length) {
+        Some(request_len) if request_len <= buf.len() => request_len,
+        _ => {
+            let mut body = String::<HTTP_RESPONSE_BODY_CAP>::new();
+            write_error_body(
+                &mut body,
+                "invalid_request",
+                "request body is too large",
+                false,
+                None,
+            );
+            write_http_response(socket, "413 Payload Too Large", body.as_str(), origin).await?;
+            return Ok(());
+        }
+    };
+    while total < request_len {
+        let read = socket.read(&mut buf[total..request_len]).await?;
+        if read == 0 {
+            break;
+        }
+        total += read;
+    }
+    if total < request_len {
+        let mut body = String::<HTTP_RESPONSE_BODY_CAP>::new();
+        write_error_body(
+            &mut body,
+            "invalid_request",
+            "request body is incomplete",
+            false,
+            None,
+        );
+        write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+        return Ok(());
+    }
+    let req = match core::str::from_utf8(&buf[..request_len]) {
+        Ok(req) => req,
+        Err(_) => {
+            let mut body = String::<HTTP_RESPONSE_BODY_CAP>::new();
+            write_error_body(
+                &mut body,
+                "invalid_request",
+                "request body is not valid utf-8",
+                false,
+                None,
+            );
+            write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+            return Ok(());
+        }
+    };
+    let request_body = &req[body_start..request_len];
+
     if method == "OPTIONS" {
         if is_api_v1_path(path) {
             write_http_response(socket, "200 OK", "", origin).await?;
@@ -552,6 +726,11 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
             write_error_body(&mut body, "not_found", "not found", false, None);
             write_http_response(socket, "404 Not Found", body.as_str(), origin).await?;
         }
+        return Ok(());
+    }
+
+    if method == "POST" || method == "DELETE" {
+        handle_http_write(socket, method, path, request_body, origin).await?;
         return Ok(());
     }
 
@@ -593,6 +772,11 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
             render_network_json(&mut body, &identity, wifi);
             write_http_response(socket, "200 OK", body.as_str(), origin).await?;
         }
+        "/api/v1/settings" => {
+            let settings = current_device_settings();
+            render_settings_json(&mut body, &settings);
+            write_http_response(socket, "200 OK", body.as_str(), origin).await?;
+        }
         "/api/v1/status" if accept_sse => {
             handle_status_sse(socket, origin).await?;
         }
@@ -606,6 +790,77 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
         }
     }
 
+    Ok(())
+}
+
+async fn handle_http_write(
+    socket: &mut TcpSocket<'_>,
+    method: &str,
+    path: &str,
+    request_body: &str,
+    origin: Option<&str>,
+) -> Result<(), embassy_net::tcp::Error> {
+    let mut body = String::<HTTP_RESPONSE_BODY_CAP>::new();
+    let queued = match (method, path) {
+        ("POST", "/api/v1/wifi-config") => match parse_http_wifi_config_request(request_body) {
+            Ok(secret) => queue_lan_command(LanManagementCommand::SetWifi(secret)),
+            Err(err) => {
+                write_error_body(&mut body, err.code(), err.message(), false, None);
+                write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+                return Ok(());
+            }
+        },
+        ("DELETE", "/api/v1/wifi-config") => queue_lan_command(LanManagementCommand::ClearWifi),
+        ("POST", "/api/v1/settings/log-level") => {
+            match parse_http_log_level_request(request_body) {
+                Ok(level) => queue_lan_command(LanManagementCommand::SetLogLevel(level)),
+                Err(err) => {
+                    write_error_body(&mut body, err.code(), err.message(), false, None);
+                    write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+                    return Ok(());
+                }
+            }
+        }
+        ("POST", "/api/v1/settings/manual-charge") => {
+            match parse_http_manual_charge_request(request_body) {
+                Ok(prefs) => queue_lan_command(LanManagementCommand::SetManualCharge(prefs)),
+                Err(err) => {
+                    write_error_body(&mut body, err.code(), err.message(), false, None);
+                    write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+                    return Ok(());
+                }
+            }
+        }
+        ("POST", "/api/v1/reset") => match parse_http_reset_request(request_body) {
+            Ok(()) => queue_lan_command(LanManagementCommand::Reset),
+            Err(err) => {
+                write_error_body(&mut body, err.code(), err.message(), false, None);
+                write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+                return Ok(());
+            }
+        },
+        _ => {
+            write_error_body(&mut body, "not_found", "not found", false, None);
+            write_http_response(socket, "404 Not Found", body.as_str(), origin).await?;
+            return Ok(());
+        }
+    };
+
+    if queued.is_err() {
+        write_error_body(
+            &mut body,
+            "busy",
+            "another LAN management command is still pending",
+            true,
+            None,
+        );
+        write_http_response(socket, "409 Conflict", body.as_str(), origin).await?;
+        return Ok(());
+    }
+
+    body.clear();
+    let _ = body.push_str(r#"{"accepted":true}"#);
+    write_http_response(socket, "202 Accepted", body.as_str(), origin).await?;
     Ok(())
 }
 

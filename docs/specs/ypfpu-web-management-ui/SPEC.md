@@ -4,7 +4,13 @@
 
 - Status: 已完成（USB CDC safe-control follow-up, firmware flash addendum）
 - Created: 2026-04-28
-- Last: 2026-05-07
+- Last: 2026-06-03
+
+## 接管说明
+
+- 本规格完成的是 Web 管理端 v1 基线，其中 LAN 仍按历史前提被视为只读状态源，Settings 只对 USB CDC / devd 控制路径开放。
+- Web 无 devd 的 LAN 管理、LAN/USB logical device 收敛、`safeSettings` 废弃与新的 `connection / settings / trace` 信息架构，已转由 [`#k4vzn`](../k4vzn-lan-management-convergence/SPEC.md) 接管。
+- 本规格保留 Fleet、Connect、DeviceRegistry、USB CDC / Web Serial、firmware mismatch gate 等 v1 UI foundation 的历史记录。
 
 ## 背景 / 问题陈述
 
@@ -48,7 +54,7 @@
 
 ### 设备管理
 
-- `/connect` 支持 USB CDC / Web Serial 连接入口、`mains-aegis-devd` 入口，并保留手动添加 `.local` hostname、IP 或完整 URL 的 LAN 只读入口。
+- `/connect` 支持 USB CDC / Web Serial 连接入口、`mains-aegis-devd` 入口，并保留手动添加 `.local` hostname、IP 或完整 URL 的 LAN 入口。
 - USB 连接入口必须显示浏览器支持状态、连接/断开状态、用户取消授权、串口不可用或已占用等错误。
 - devd 入口在发现多个 USB CDC candidates 时必须显示候选设备选择器；用户明确选择某个 devd device id 后才可创建控制 session。Web 不得基于已连接、已识别、第一个或最近使用自动替用户选择硬件。
 - 真实 USB `SerialPort` 不写入 localStorage；刷新页面后需要重新授权。mock USB 设备可用于视觉证据与无硬件验证。
@@ -63,7 +69,7 @@
 - `/devices/:device_id/thermal` 展示 TMP A/B 与保护上下文。
 - `/devices/:device_id/device` 展示 identity、network、firmware。
 - `/devices/:device_id/firmware` 展示 firmware artifact 选择、来源去重、Web Serial 直烧与 devd 代理烧录。
-- `/devices/:device_id/settings` 仅对 USB CDC 连接设备开放，提供 WiFi 配网、手动充电偏好与日志级别设置。
+- `/devices/:device_id/settings` 对 LAN、USB CDC 或 devd 连接设备开放，提供 WiFi 配网、手动充电偏好与日志级别设置。
 - `/devices/:device_id/api` 展示固定只读 endpoints 与当前 JSON snapshot。
 
 ### USB CDC / Web Serial 协议
@@ -93,14 +99,14 @@
 - host tools 位于 `tools/mains-aegis-host/`，使用 Rust 实现，并产出 `mains-aegis` CLI 与 `mains-aegis-devd`。
 - devd 通过 scan/list/bind/connect 管理设备；真实写入要求已连接且 identity 可用的 USB CDC 设备。
 - Web App 的 devd 入口先执行 devd scan；没有候选时显示无设备，单候选时可直接提交，多个候选时必须渲染选择器并等待用户选择。多设备场景不得自动选择，也不得要求用户拔掉其它设备作为常规工作流。
-- Web devd 控制 session 必须由 devd Web lease 支撑。Web 创建 session 后按 devd 返回的 `heartbeat_interval_ms` 续租；所有 WiFi config、safe settings、serial session 与 event stream 请求必须携带有效 lease。
+- Web devd 控制必须由 devd Web lease 支撑。Web 创建 lease 后按 devd 返回的 `heartbeat_interval_ms` 续租；所有 WiFi config、settings、USB Console hydration 与 event stream 请求必须携带有效 lease。
 - Web 正常断开、移除设备或页面关闭时必须尽量优雅释放 lease：优先普通 `DELETE`，页面卸载时使用 keepalive request 或 `sendBeacon`。释放成功后 UI 移除 USB connected 标记，但保留同一设备的 LAN/WiFi 记录。
 - 网络抖动时 UI 不应立即误报断开：SSE 断开或单次 heartbeat 失败先进入 reconnecting / degraded 状态；只要在 devd TTL 内续租恢复，USB 标记保持。devd 返回 `web_session_expired` 后，UI 才移除 USB connected 标记并提示重新连接。
 - Web 不得在本地 localStorage 中持久化 devd lease；刷新页面后必须重新创建 lease，不能复用过期 session。
-- 连接硬件、保存 WiFi、清除 WiFi 与 safe settings 失败必须以气泡 callout 展示；成功反馈可以保留为低噪音 inline status。
+- 连接硬件、保存 WiFi、清除 WiFi 与 settings 失败必须以气泡 callout 展示；成功反馈可以保留为低噪音 inline status。
 - devd 连接在创建 Web lease 并读取 identity 后必须执行同样的 firmware artifact 匹配门禁；不匹配时释放刚创建的 lease，不得继续占用 USB，除非用户显式忽略警告并重新发起连接。
-- devd 对 Web/App 暴露显式 localhost HTTP bridge：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、`/api/v1/serial/session`、WiFi config 与 safe settings endpoints；CLI 使用 IPC。
-- `/api/v1/serial/session` 返回 bounded tail logs/trace，默认 `logs_limit=200`、`trace_limit=600`，上限分别为 `500` 和 `2000`。
+- devd 对 Web/App 暴露显式 localhost HTTP bridge：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、`/api/v1/settings`、WiFi config、settings endpoints，以及 Web Console 兼容 hydration；CLI 使用 IPC。
+- Trace 查询返回 bounded tail logs/trace，默认 `logs_limit=200`、`trace_limit=600`，上限分别为 `500` 和 `2000`。
 - 同一 `identity.device_id` 通过 LAN 与 USB 同时发现时，Web App 合并为一条 `DeviceRecord`，并显示 WiFi/LAN 与 USB 两个连接标记。
 
 ### 纯前端 Demo
@@ -213,7 +219,7 @@
   capture_scope: `browser-viewport`
   target_program: `mock-only`
   scenario: devd local USB control connect
-  evidence_note: 验证 `/connect` 同屏提供 USB CDC / Web Serial、mains-aegis-devd 本地控制面与 LAN 只读入口，旧本地桥接入口不再出现，并在已保存设备列表中显示同一设备的 WiFi / USB 连接标记。
+  evidence_note: 验证 `/connect` 同屏提供 USB CDC / Web Serial、mains-aegis-devd 本地控制面与 LAN 入口，旧本地桥接入口不再出现，并在已保存设备列表中显示同一设备的 WiFi / USB 连接标记。
 
 ![devd connect evidence](./assets/devd-connect-entry.png)
 
@@ -290,7 +296,7 @@
   capture_scope: `browser-viewport`
   target_program: `mock-only`
   scenario: USB structured logs and API debug
-  evidence_note: 验证 API debug 页保留只读 endpoint 视图，同时显示 USB CDC JSONL 状态、safe settings snapshot 和 structured log。
+  evidence_note: 验证 API debug 页保留 endpoint 视图，同时显示 USB CDC JSONL 状态、settings snapshot 和 structured log。
 
 ![USB structured logs evidence](./assets/usb-logs-api-desktop.png)
 

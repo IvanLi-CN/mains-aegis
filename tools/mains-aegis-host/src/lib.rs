@@ -22,7 +22,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     env, fs,
     io::{Read, Write},
-    net::SocketAddr,
+    net::{Ipv4Addr, SocketAddr},
     path::{Path as FsPath, PathBuf},
     process::Stdio,
     sync::{
@@ -47,6 +47,11 @@ const LOG_LIMIT: usize = 2_000;
 const WEB_LEASE_HEARTBEAT_INTERVAL_MS: u64 = 2_000;
 const WEB_LEASE_TTL_MS: u64 = 8_000;
 const WEB_LEASE_CLEANUP_INTERVAL_MS: u64 = 1_000;
+const LAN_DISCOVERY_SERVICE: &str = "_mains-aegis-ups._tcp.local";
+const LAN_DISCOVERY_PORT: u16 = 80;
+const LAN_SCAN_CONCURRENCY: usize = 32;
+const LAN_PROBE_TIMEOUT_MS: u64 = 800;
+const LAN_SCAN_MAX_HOSTS: usize = 4_096;
 #[cfg(not(test))]
 const DEVD_STATE_FILE_NAME: &str = "devices.json";
 #[cfg(not(test))]
@@ -185,6 +190,8 @@ struct DevdState {
     monitors: HashMap<String, NativeMonitorHandle>,
     web_leases: HashMap<String, WebUsbLease>,
     host_power: HostPowerState,
+    scan_trace: VecDeque<SerialTraceEntry>,
+    persisted_device_trace: HashMap<String, VecDeque<SerialTraceEntry>>,
 }
 
 #[derive(Debug, Default)]
@@ -217,6 +224,10 @@ struct PersistedDevdState {
     bindings: HashMap<String, DeviceBinding>,
     selected_artifacts: HashMap<String, String>,
     artifacts: HashMap<String, FirmwareArtifact>,
+    #[serde(default)]
+    scan_trace: VecDeque<SerialTraceEntry>,
+    #[serde(default)]
+    device_trace: HashMap<String, VecDeque<SerialTraceEntry>>,
 }
 
 impl Default for PersistedDevdState {
@@ -226,6 +237,8 @@ impl Default for PersistedDevdState {
             bindings: HashMap::new(),
             selected_artifacts: HashMap::new(),
             artifacts: HashMap::new(),
+            scan_trace: VecDeque::new(),
+            device_trace: HashMap::new(),
         }
     }
 }
@@ -258,6 +271,8 @@ struct DeviceRecord {
     id: String,
     display_name: String,
     port_path: Option<String>,
+    lan_address: Option<String>,
+    lan_conflict_addresses: Vec<String>,
     transport: DeviceTransport,
     binding: Option<DeviceBinding>,
     connection: ConnectionState,
@@ -266,7 +281,7 @@ struct DeviceRecord {
     power_diag: Option<Value>,
     selected_artifact_id: Option<String>,
     log_decode: LogDecodeState,
-    safe_settings: SafeSettingsState,
+    settings: DeviceSettingsState,
     logs: VecDeque<SerialLogEntry>,
     trace: VecDeque<SerialTraceEntry>,
 }
@@ -275,6 +290,7 @@ struct DeviceRecord {
 #[serde(rename_all = "snake_case")]
 enum DeviceTransport {
     NativeSerial,
+    Lan,
     Mock,
 }
 
@@ -379,7 +395,7 @@ struct SerialTraceEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SafeSettingsState {
+struct DeviceSettingsState {
     wifi_configured: Option<bool>,
     wifi_ssid: Option<String>,
     log_level: String,
@@ -432,6 +448,19 @@ struct SessionQuery {
     lease_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ScanDevicesQuery {
+    cidr: Option<String>,
+    lan_cidr: Option<String>,
+    lan: Option<bool>,
+    mdns: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScanTraceQuery {
+    trace_limit: Option<usize>,
+}
+
 #[derive(Debug, Deserialize)]
 struct WifiConfigRequest {
     ssid: String,
@@ -457,7 +486,7 @@ struct ManualChargeRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct SafeSettingsTargetQuery {
+struct SettingsTargetQuery {
     device_id: Option<String>,
     lease_id: Option<String>,
 }
@@ -514,6 +543,7 @@ pub async fn serve_http_bridge(config: HttpBridgeConfig) -> anyhow::Result<()> {
         .route("/api/v1/identity", get(devd_compat_identity))
         .route("/api/v1/network", get(devd_compat_network))
         .route("/api/v1/status", get(devd_compat_status))
+        .route("/api/v1/settings", get(devd_compat_settings))
         .route(
             "/api/v1/wifi-config",
             post(set_wifi_config).delete(clear_wifi_config),
@@ -522,21 +552,24 @@ pub async fn serve_http_bridge(config: HttpBridgeConfig) -> anyhow::Result<()> {
         .route("/api/v1/settings/manual-charge", post(set_manual_charge))
         .route("/api/v1/devices", get(list_devices))
         .route("/api/v1/devices/scan", post(scan_devices))
+        .route("/api/v1/devices/scan/trace", get(scan_trace))
         .route("/api/v1/devices/{id}/bind", post(bind_device))
         .route("/api/v1/devices/{id}/connect", post(connect_device))
         .route("/api/v1/devices/{id}/disconnect", post(disconnect_device))
         .route("/api/v1/devices/{id}/binding", delete(unbind_device))
         .route("/api/v1/devices/{id}/identity", get(device_identity))
         .route("/api/v1/devices/{id}/power-diag", get(device_power_diag))
+        .route("/api/v1/devices/{id}/connection", get(device_connection))
         .route(
             "/api/v1/devices/{id}/artifact",
             get(device_artifact).post(select_artifact),
         )
+        .route("/api/v1/devices/{id}/settings", get(device_settings))
+        .route("/api/v1/devices/{id}/trace", get(device_trace))
         .route("/api/v1/devices/{id}/flash", post(flash_device))
         .route("/api/v1/devices/{id}/reset", post(reset_device))
         .route("/api/v1/devices/{id}/monitor/start", post(monitor_start))
         .route("/api/v1/devices/{id}/monitor/stop", post(monitor_stop))
-        .route("/api/v1/devices/{id}/session", get(device_session))
         .route("/api/v1/devices/{id}/events", get(device_events))
         .route("/api/v1/serial/lease", post(create_web_lease))
         .route(
@@ -734,6 +767,8 @@ fn create_app_state_with_auth_and_persistence(
             bindings: persisted.bindings,
             selected_artifacts: persisted.selected_artifacts,
             artifacts: persisted.artifacts,
+            scan_trace: persisted.scan_trace,
+            persisted_device_trace: persisted.device_trace,
             ..DevdState::default()
         })),
         events,
@@ -784,12 +819,39 @@ fn load_devd_state(persistence: &DevdPersistence) -> anyhow::Result<PersistedDev
 }
 
 fn persisted_snapshot(state: &DevdState) -> PersistedDevdState {
+    let mut device_trace = state.persisted_device_trace.clone();
+    for device in state.devices.values() {
+        if !device.trace.is_empty() {
+            device_trace.insert(device.id.clone(), bounded_trace_snapshot(&device.trace));
+            if let Some(identity_device_id) = device
+                .identity
+                .as_ref()
+                .and_then(|identity| identity.get("device_id"))
+                .and_then(Value::as_str)
+            {
+                device_trace.insert(
+                    identity_device_id.to_string(),
+                    bounded_trace_snapshot(&device.trace),
+                );
+            }
+        }
+    }
     PersistedDevdState {
         schema_version: 1,
         bindings: state.bindings.clone(),
         selected_artifacts: state.selected_artifacts.clone(),
         artifacts: state.artifacts.clone(),
+        scan_trace: bounded_trace_snapshot(&state.scan_trace),
+        device_trace,
     }
+}
+
+fn bounded_trace_snapshot(trace: &VecDeque<SerialTraceEntry>) -> VecDeque<SerialTraceEntry> {
+    trace
+        .iter()
+        .skip(trace.len().saturating_sub(LOG_LIMIT))
+        .cloned()
+        .collect()
 }
 
 fn persist_devd_state(
@@ -1041,7 +1103,20 @@ async fn dispatch_ipc_request(
     match method {
         "devd.health" => Ok(json!({"ok": true, "daemon": "mains-aegis-devd"})),
         "devices.list" => Ok(list_devices(State(state.clone())).await.0),
-        "devices.scan" => json_result(scan_devices(State(state.clone())).await),
+        "devices.scan" => {
+            let query: ScanDevicesQuery = serde_json::from_value(params)?;
+            json_result(scan_devices_inner(state, query).await)
+        }
+        "devices.scan_trace" => {
+            let query = ScanTraceQuery {
+                trace_limit: params
+                    .get("trace_limit")
+                    .and_then(Value::as_u64)
+                    .map(usize::try_from)
+                    .transpose()?,
+            };
+            json_result(scan_trace(Query(query), State(state.clone())).await)
+        }
         "device.bind" => {
             let id = require_param(&params, "device_id")?;
             let input: BindRequest = serde_json::from_value(params)?;
@@ -1055,15 +1130,11 @@ async fn dispatch_ipc_request(
             let id = require_param(&params, "device_id")?;
             json_result(device_identity(State(state.clone()), Path(id)).await)
         }
-        "device.connect" => {
+        "device.settings" => {
             let id = require_param(&params, "device_id")?;
-            json_result(connect_device(State(state.clone()), Path(id)).await)
+            json_result(device_settings(State(state.clone()), Path(id)).await)
         }
-        "device.disconnect" => {
-            let id = require_param(&params, "device_id")?;
-            json_result(disconnect_device(State(state.clone()), Path(id)).await)
-        }
-        "device.session" => {
+        "device.trace" => {
             let id = require_param(&params, "device_id")?;
             let query = SessionQuery {
                 logs_limit: params
@@ -1081,7 +1152,19 @@ async fn dispatch_ipc_request(
                     .and_then(Value::as_str)
                     .map(str::to_string),
             };
-            json_result(device_session(Query(query), State(state.clone()), Path(id)).await)
+            json_result(device_trace(Query(query), State(state.clone()), Path(id)).await)
+        }
+        "device.connect" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(connect_device(State(state.clone()), Path(id)).await)
+        }
+        "device.disconnect" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(disconnect_device(State(state.clone()), Path(id)).await)
+        }
+        "device.connection" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(device_connection(State(state.clone()), Path(id)).await)
         }
         "device.artifact.select" => {
             let id = require_param(&params, "device_id")?;
@@ -1149,7 +1232,7 @@ async fn dispatch_ipc_request(
             json_result(set_wifi_config(State(state.clone()), Json(input)).await)
         }
         "settings.wifi.clear" => {
-            let query = SafeSettingsTargetQuery {
+            let query = SettingsTargetQuery {
                 device_id: params
                     .get("device_id")
                     .and_then(Value::as_str)
@@ -1267,90 +1350,904 @@ async fn list_devices(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-async fn scan_devices(State(state): State<AppState>) -> Result<Json<Value>, HttpError> {
-    let mut discovered = Vec::new();
+async fn scan_devices(
+    State(state): State<AppState>,
+    Query(query): Query<ScanDevicesQuery>,
+) -> Result<Json<Value>, HttpError> {
+    scan_devices_inner(&state, query).await
+}
+
+async fn scan_devices_inner(
+    state: &AppState,
+    query: ScanDevicesQuery,
+) -> Result<Json<Value>, HttpError> {
     let ports = serialport::available_ports()
         .map_err(|error| HttpError::retryable("serial_scan_failed", error.to_string()))?;
-    let mut guard = state.inner.lock().expect("state lock");
-    let mut seen_native_ids = HashSet::new();
-    for port in ports {
-        if !is_native_usb_serial_candidate(&port) {
-            continue;
+    let mut discovered_ids = HashSet::new();
+    let snapshot = {
+        let mut guard = state.inner.lock().expect("state lock");
+        let mut seen_native_ids = HashSet::new();
+        for port in ports {
+            if !is_native_usb_serial_candidate(&port) {
+                continue;
+            }
+            let id = stable_device_id(&port);
+            seen_native_ids.insert(id.clone());
+            let port_path = port.port_name.clone();
+            {
+                let binding = guard.bindings.get(&id).cloned();
+                let selected_artifact_id = guard.selected_artifacts.get(&id).cloned();
+                let persisted_trace = guard
+                    .persisted_device_trace
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_default();
+                let entry = guard
+                    .devices
+                    .entry(id.clone())
+                    .or_insert_with(|| DeviceRecord {
+                        id: id.clone(),
+                        display_name: port_path.clone(),
+                        port_path: Some(port_path.clone()),
+                        lan_address: None,
+                        lan_conflict_addresses: Vec::new(),
+                        transport: DeviceTransport::NativeSerial,
+                        binding,
+                        connection: ConnectionState::Disconnected,
+                        identity: None,
+                        status: None,
+                        power_diag: None,
+                        selected_artifact_id,
+                        log_decode: LogDecodeState::default(),
+                        settings: default_settings(),
+                        logs: VecDeque::new(),
+                        trace: persisted_trace,
+                    });
+                let preferred_path =
+                    prefer_serial_port_path(entry.port_path.as_deref(), &port_path);
+                entry.display_name = preferred_path.clone();
+                entry.port_path = Some(preferred_path.clone());
+                if let Some(binding) = entry.binding.as_mut() {
+                    binding.port_path = Some(preferred_path.clone());
+                }
+                if let Some(binding) = guard.bindings.get_mut(&id) {
+                    binding.port_path = Some(preferred_path);
+                }
+            }
         }
-        let id = stable_device_id(&port);
-        seen_native_ids.insert(id.clone());
-        let port_path = port.port_name.clone();
-        {
-            let binding = guard.bindings.get(&id).cloned();
-            let selected_artifact_id = guard.selected_artifacts.get(&id).cloned();
-            let entry = guard
-                .devices
-                .entry(id.clone())
-                .or_insert_with(|| DeviceRecord {
-                    id: id.clone(),
-                    display_name: port_path.clone(),
-                    port_path: Some(port_path.clone()),
-                    transport: DeviceTransport::NativeSerial,
-                    binding,
-                    connection: ConnectionState::Disconnected,
-                    identity: None,
-                    status: None,
-                    power_diag: None,
-                    selected_artifact_id,
-                    log_decode: LogDecodeState::default(),
-                    safe_settings: default_safe_settings(),
-                    logs: VecDeque::new(),
-                    trace: VecDeque::new(),
-                });
-            let preferred_path = prefer_serial_port_path(entry.port_path.as_deref(), &port_path);
-            entry.display_name = preferred_path.clone();
-            entry.port_path = Some(preferred_path.clone());
-            if let Some(binding) = entry.binding.as_mut() {
-                binding.port_path = Some(preferred_path.clone());
+        discovered_ids.extend(seen_native_ids.iter().cloned());
+        let stale_ids = guard
+            .devices
+            .iter()
+            .filter_map(|(id, device)| {
+                (matches!(device.transport, DeviceTransport::NativeSerial)
+                    && !seen_native_ids.contains(id))
+                .then(|| id.clone())
+            })
+            .collect::<Vec<_>>();
+        for id in stale_ids {
+            if let Some(device) = guard.devices.get_mut(&id) {
+                device.port_path = None;
+                device.connection = ConnectionState::Disconnected;
+                if let Some(binding) = device.binding.as_mut() {
+                    binding.port_path = None;
+                }
             }
             if let Some(binding) = guard.bindings.get_mut(&id) {
-                binding.port_path = Some(preferred_path);
-            }
-        }
-    }
-    discovered.extend(
-        seen_native_ids
-            .iter()
-            .filter_map(|id| guard.devices.get(id).cloned()),
-    );
-    discovered.sort_by(|left, right| left.id.cmp(&right.id));
-    let stale_ids = guard
-        .devices
-        .iter()
-        .filter_map(|(id, device)| {
-            (matches!(device.transport, DeviceTransport::NativeSerial)
-                && !seen_native_ids.contains(id))
-            .then(|| id.clone())
-        })
-        .collect::<Vec<_>>();
-    for id in stale_ids {
-        if let Some(device) = guard.devices.get_mut(&id) {
-            device.port_path = None;
-            device.connection = ConnectionState::Disconnected;
-            if let Some(binding) = device.binding.as_mut() {
                 binding.port_path = None;
             }
         }
-        if let Some(binding) = guard.bindings.get_mut(&id) {
-            binding.port_path = None;
-        }
-    }
-    let snapshot = persisted_snapshot(&guard);
-    drop(guard);
+        persisted_snapshot(&guard)
+    };
     persist_devd_state(&state.persistence, snapshot)?;
+    let (lan_discoveries, mut scan_trace) = if query.lan.unwrap_or(true) {
+        discover_lan_devices(&query).await?
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let mut lan_count = 0usize;
+    let mut runtime_snapshot = None;
+    if !lan_discoveries.is_empty() || !scan_trace.is_empty() {
+        let mut guard = state.inner.lock().expect("state lock");
+        merge_lan_discoveries(
+            &mut guard,
+            lan_discoveries,
+            &mut discovered_ids,
+            &mut lan_count,
+        );
+        let trace_count = scan_trace.len();
+        for trace in scan_trace.drain(..) {
+            push_bounded(&mut guard.scan_trace, trace, LOG_LIMIT);
+        }
+        push_bounded(
+            &mut guard.scan_trace,
+            structured_trace_entry(
+                "rx",
+                "scan",
+                Some("lan-discovery".to_string()),
+                "LAN scan completed",
+                json!({
+                    "lan_count": lan_count,
+                    "trace_count": trace_count,
+                    "cidr": query.cidr.as_deref().or(query.lan_cidr.as_deref())
+                })
+                .to_string(),
+            ),
+            LOG_LIMIT,
+        );
+        runtime_snapshot = Some(persisted_snapshot(&guard));
+    }
+    if let Some(snapshot) = runtime_snapshot {
+        persist_devd_state(&state.persistence, snapshot)?;
+    }
+    let guard = state.inner.lock().expect("state lock");
+    let mut discovered = discovered_ids
+        .iter()
+        .filter_map(|id| guard.devices.get(id).cloned())
+        .collect::<Vec<_>>();
+    discovered.sort_by(|left, right| left.id.cmp(&right.id));
+    let scan_trace_tail = tail(&guard.scan_trace, 200);
+    drop(guard);
     emit(
-        &state,
+        state,
         None,
         "scan",
-        "serial scan completed",
-        json!({"count": discovered.len()}),
+        "device scan completed",
+        json!({"count": discovered.len(), "lan_count": lan_count}),
     );
-    Ok(Json(json!({"devices": discovered})))
+    Ok(Json(
+        json!({"devices": discovered, "scan_trace": scan_trace_tail}),
+    ))
+}
+
+async fn scan_trace(
+    Query(query): Query<ScanTraceQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, HttpError> {
+    let guard = state.inner.lock().expect("state lock");
+    Ok(Json(json!({
+        "trace": tail(&guard.scan_trace, query.trace_limit.unwrap_or(600).min(2_000))
+    })))
+}
+
+#[derive(Debug)]
+struct LanDeviceDiscovery {
+    address: String,
+    identity: Value,
+    trace: Vec<SerialTraceEntry>,
+}
+
+async fn discover_lan_devices(
+    query: &ScanDevicesQuery,
+) -> Result<(Vec<LanDeviceDiscovery>, Vec<SerialTraceEntry>), HttpError> {
+    let mut scan_trace = vec![structured_trace_entry(
+        "tx",
+        "scan",
+        Some("lan-discovery".to_string()),
+        "LAN discovery started",
+        json!({
+            "mdns": query.mdns.unwrap_or(true),
+            "cidr": query.cidr.as_deref().or(query.lan_cidr.as_deref()),
+            "concurrency": LAN_SCAN_CONCURRENCY,
+            "probe_timeout_ms": LAN_PROBE_TIMEOUT_MS
+        })
+        .to_string(),
+    )];
+    let mut candidates = HashSet::new();
+    if query.mdns.unwrap_or(true) {
+        match discover_mdns_ipv4_candidates().await {
+            Ok(addresses) => {
+                for address in addresses {
+                    candidates.insert(address);
+                }
+                scan_trace.push(structured_trace_entry(
+                    "rx",
+                    "mdns",
+                    Some(LAN_DISCOVERY_SERVICE.to_string()),
+                    "mDNS discovery completed",
+                    json!({"candidate_count": candidates.len()}).to_string(),
+                ));
+            }
+            Err(error) => scan_trace.push(structured_trace_entry(
+                "rx",
+                "mdns",
+                Some(LAN_DISCOVERY_SERVICE.to_string()),
+                "mDNS discovery failed",
+                json!({"error": error.to_string()}).to_string(),
+            )),
+        }
+    }
+    let cidr = query.cidr.as_deref().or(query.lan_cidr.as_deref());
+    if let Some(cidr) = cidr {
+        for address in ipv4_hosts_from_cidr(cidr)? {
+            candidates.insert(address);
+        }
+    } else if candidates.is_empty() {
+        if let Some(default_cidr) = default_lan_scan_cidr() {
+            for address in ipv4_hosts_from_cidr(&default_cidr)? {
+                candidates.insert(address);
+            }
+            scan_trace.push(structured_trace_entry(
+                "tx",
+                "scan",
+                Some(default_cidr.clone()),
+                "Using default routed /24 LAN scan",
+                json!({"cidr": default_cidr}).to_string(),
+            ));
+        }
+    }
+    let mut candidates = candidates.into_iter().collect::<Vec<_>>();
+    candidates.sort();
+    scan_trace.push(structured_trace_entry(
+        "tx",
+        "scan",
+        Some("lan-probe".to_string()),
+        "LAN identity probes queued",
+        json!({"candidate_count": candidates.len()}).to_string(),
+    ));
+    let discoveries = probe_lan_candidates(candidates).await;
+    scan_trace.push(structured_trace_entry(
+        "rx",
+        "scan",
+        Some("lan-probe".to_string()),
+        "LAN identity probes completed",
+        json!({"device_count": discoveries.len()}).to_string(),
+    ));
+    Ok((discoveries, scan_trace))
+}
+
+async fn probe_lan_candidates(candidates: Vec<Ipv4Addr>) -> Vec<LanDeviceDiscovery> {
+    let mut discoveries = Vec::new();
+    let mut join_set = tokio::task::JoinSet::new();
+    let mut next = candidates.into_iter();
+    loop {
+        while join_set.len() < LAN_SCAN_CONCURRENCY {
+            let Some(address) = next.next() else {
+                break;
+            };
+            join_set.spawn(async move { probe_lan_identity(address).await });
+        }
+        if join_set.is_empty() {
+            break;
+        }
+        if let Some(Ok(Some(discovery))) = join_set.join_next().await {
+            discoveries.push(discovery);
+        }
+    }
+    discoveries
+}
+
+async fn probe_lan_identity(address: Ipv4Addr) -> Option<LanDeviceDiscovery> {
+    let target = format!("http://{address}/api/v1/identity");
+    let mut trace = vec![structured_trace_entry(
+        "tx",
+        "http",
+        Some(target.clone()),
+        "GET /api/v1/identity",
+        "GET /api/v1/identity".to_string(),
+    )];
+    let socket = tokio::time::timeout(
+        Duration::from_millis(LAN_PROBE_TIMEOUT_MS),
+        tokio::net::TcpStream::connect((address, LAN_DISCOVERY_PORT)),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let mut stream = socket;
+    let request = format!(
+        "GET /api/v1/identity HTTP/1.1\r\nHost: {address}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    );
+    tokio::time::timeout(
+        Duration::from_millis(LAN_PROBE_TIMEOUT_MS),
+        stream.write_all(request.as_bytes()),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let mut response = Vec::new();
+    tokio::time::timeout(
+        Duration::from_millis(LAN_PROBE_TIMEOUT_MS),
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut response),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let text = String::from_utf8_lossy(&response);
+    if !text.starts_with("HTTP/1.1 200") && !text.starts_with("HTTP/1.0 200") {
+        return None;
+    }
+    let (_, body) = text.split_once("\r\n\r\n")?;
+    let identity = serde_json::from_str::<Value>(body.trim()).ok()?;
+    identity.get("device_id").and_then(Value::as_str)?;
+    trace.push(structured_trace_entry(
+        "rx",
+        "http",
+        Some(target),
+        "identity response",
+        body.trim().to_string(),
+    ));
+    Some(LanDeviceDiscovery {
+        address: address.to_string(),
+        identity,
+        trace,
+    })
+}
+
+async fn lan_http_json(
+    address: &str,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+) -> Result<Value, HttpError> {
+    let mut stream = tokio::time::timeout(
+        Duration::from_millis(LAN_PROBE_TIMEOUT_MS),
+        tokio::net::TcpStream::connect((address, LAN_DISCOVERY_PORT)),
+    )
+    .await
+    .map_err(|_| {
+        HttpError::retryable(
+            "lan_http_connect_timeout",
+            format!("timed out connecting to {address}:80"),
+        )
+    })?
+    .map_err(|error| {
+        HttpError::retryable(
+            "lan_http_connect_failed",
+            format!("failed to connect to {address}:80: {error}"),
+        )
+    })?;
+    let encoded_body = body.map(Value::to_string).unwrap_or_default();
+    let request = if encoded_body.is_empty() {
+        format!(
+            "{method} {path} HTTP/1.1\r\nHost: {address}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+        )
+    } else {
+        format!(
+            "{method} {path} HTTP/1.1\r\nHost: {address}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            encoded_body.len(),
+            encoded_body
+        )
+    };
+    tokio::time::timeout(
+        Duration::from_millis(LAN_PROBE_TIMEOUT_MS),
+        stream.write_all(request.as_bytes()),
+    )
+    .await
+    .map_err(|_| {
+        HttpError::retryable(
+            "lan_http_write_timeout",
+            format!("timed out writing {method} {path} to {address}"),
+        )
+    })?
+    .map_err(|error| {
+        HttpError::retryable(
+            "lan_http_write_failed",
+            format!("failed to write {method} {path} to {address}: {error}"),
+        )
+    })?;
+    let mut response = Vec::new();
+    tokio::time::timeout(
+        Duration::from_millis(LAN_PROBE_TIMEOUT_MS),
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut response),
+    )
+    .await
+    .map_err(|_| {
+        HttpError::retryable(
+            "lan_http_read_timeout",
+            format!("timed out reading {method} {path} from {address}"),
+        )
+    })?
+    .map_err(|error| {
+        HttpError::retryable(
+            "lan_http_read_failed",
+            format!("failed to read {method} {path} from {address}: {error}"),
+        )
+    })?;
+    parse_lan_http_json_response(&response, method, path, address)
+}
+
+fn parse_lan_http_json_response(
+    response: &[u8],
+    method: &str,
+    path: &str,
+    address: &str,
+) -> Result<Value, HttpError> {
+    let text = String::from_utf8_lossy(response);
+    let (head, body) = text.split_once("\r\n\r\n").ok_or_else(|| {
+        HttpError::retryable(
+            "lan_http_response_invalid",
+            format!("{method} {path} from {address} did not return HTTP headers"),
+        )
+    })?;
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .unwrap_or(0);
+    if !(200..300).contains(&status) {
+        return Err(HttpError::retryable(
+            "lan_http_status_failed",
+            format!("{method} {path} from {address} returned HTTP {status}"),
+        ));
+    }
+    if body.trim().is_empty() {
+        return Ok(json!({ "ok": true, "status": status }));
+    }
+    serde_json::from_str::<Value>(body.trim()).map_err(|error| {
+        HttpError::retryable(
+            "lan_http_json_invalid",
+            format!("{method} {path} from {address} returned invalid JSON: {error}"),
+        )
+    })
+}
+
+fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpError> {
+    let wifi = value.get("wifi").ok_or_else(|| {
+        HttpError::retryable(
+            "settings_snapshot_invalid",
+            "settings snapshot is missing wifi",
+        )
+    })?;
+    let manual_charge = value.get("manual_charge").ok_or_else(|| {
+        HttpError::retryable(
+            "settings_snapshot_invalid",
+            "settings snapshot is missing manual_charge",
+        )
+    })?;
+    Ok(DeviceSettingsState {
+        wifi_configured: wifi.get("configured").and_then(Value::as_bool),
+        wifi_ssid: wifi.get("ssid").and_then(Value::as_str).map(str::to_string),
+        log_level: value
+            .get("log_level")
+            .and_then(Value::as_str)
+            .unwrap_or("info")
+            .to_string(),
+        manual_charge: ManualChargePrefs {
+            target: manual_charge
+                .get("target")
+                .and_then(Value::as_str)
+                .unwrap_or("full_100")
+                .to_string(),
+            speed: manual_charge
+                .get("speed")
+                .and_then(Value::as_str)
+                .unwrap_or("ma_500")
+                .to_string(),
+            timer_h: manual_charge
+                .get("timer_h")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or(2),
+        },
+    })
+}
+
+fn redact_lan_body(body: &Value) -> Value {
+    let mut redacted = body.clone();
+    if let Some(object) = redacted.as_object_mut() {
+        if object.contains_key("psk") {
+            object.insert("psk".to_string(), Value::String("[redacted]".to_string()));
+        }
+    }
+    redacted
+}
+
+fn merge_lan_discoveries(
+    state: &mut DevdState,
+    discoveries: Vec<LanDeviceDiscovery>,
+    discovered_ids: &mut HashSet<String>,
+    lan_count: &mut usize,
+) {
+    let mut by_identity: HashMap<String, Vec<LanDeviceDiscovery>> = HashMap::new();
+    for discovery in discoveries {
+        if let Some(identity_device_id) = discovery
+            .identity
+            .get("device_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
+            by_identity
+                .entry(identity_device_id)
+                .or_default()
+                .push(discovery);
+        }
+    }
+    for (identity_device_id, mut group) in by_identity {
+        group.sort_by(|left, right| left.address.cmp(&right.address));
+        let conflict_addresses = group
+            .iter()
+            .map(|discovery| discovery.address.clone())
+            .collect::<Vec<_>>();
+        let discovery = group.remove(0);
+        let record_id = find_logical_device_id_for_identity(state, &identity_device_id)
+            .unwrap_or_else(|| identity_device_id.clone());
+        let selected_artifact_id = state.selected_artifacts.get(&record_id).cloned();
+        let selected_artifact = selected_artifact_id
+            .as_ref()
+            .and_then(|artifact_id| state.artifacts.get(artifact_id).cloned());
+        let persisted_trace = state
+            .persisted_device_trace
+            .get(&record_id)
+            .or_else(|| state.persisted_device_trace.get(&identity_device_id))
+            .cloned()
+            .unwrap_or_default();
+        let device = state
+            .devices
+            .entry(record_id.clone())
+            .or_insert_with(|| DeviceRecord {
+                id: record_id.clone(),
+                display_name: discovery
+                    .identity
+                    .get("hostname")
+                    .and_then(Value::as_str)
+                    .unwrap_or(&identity_device_id)
+                    .to_string(),
+                port_path: None,
+                lan_address: None,
+                lan_conflict_addresses: Vec::new(),
+                transport: DeviceTransport::Lan,
+                binding: state.bindings.get(&record_id).cloned(),
+                connection: ConnectionState::Disconnected,
+                identity: None,
+                status: None,
+                power_diag: None,
+                selected_artifact_id,
+                log_decode: LogDecodeState::default(),
+                settings: default_settings(),
+                logs: VecDeque::new(),
+                trace: persisted_trace,
+            });
+        device.identity = Some(discovery.identity);
+        device.lan_address = Some(discovery.address.clone());
+        device.lan_conflict_addresses = if conflict_addresses.len() > 1 {
+            conflict_addresses
+        } else {
+            Vec::new()
+        };
+        if matches!(device.transport, DeviceTransport::Lan) {
+            device.connection = if device.lan_conflict_addresses.is_empty() {
+                ConnectionState::Connected
+            } else {
+                ConnectionState::Error
+            };
+        }
+        for trace in discovery.trace {
+            push_bounded(&mut device.trace, trace, LOG_LIMIT);
+        }
+        apply_artifact_match(device, selected_artifact.as_ref());
+        discovered_ids.insert(record_id);
+        *lan_count += 1;
+    }
+}
+
+fn find_logical_device_id_for_identity(
+    state: &DevdState,
+    identity_device_id: &str,
+) -> Option<String> {
+    let mut devices = state.devices.values().collect::<Vec<_>>();
+    devices.sort_by(|left, right| {
+        transport_preference(&left.transport)
+            .cmp(&transport_preference(&right.transport))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    devices
+        .into_iter()
+        .find(|device| device_matches_identity_id(device, identity_device_id))
+        .map(|device| device.id.clone())
+}
+
+fn transport_preference(transport: &DeviceTransport) -> u8 {
+    match transport {
+        DeviceTransport::NativeSerial => 0,
+        DeviceTransport::Lan => 1,
+        DeviceTransport::Mock => 2,
+    }
+}
+
+fn transport_name(transport: &DeviceTransport) -> &'static str {
+    match transport {
+        DeviceTransport::NativeSerial => "usb",
+        DeviceTransport::Lan => "lan",
+        DeviceTransport::Mock => "mock",
+    }
+}
+
+fn available_transports(device: &DeviceRecord) -> Vec<&'static str> {
+    match device.transport {
+        DeviceTransport::NativeSerial => {
+            if device.lan_address.is_some() {
+                vec!["usb", "lan"]
+            } else {
+                vec!["usb"]
+            }
+        }
+        DeviceTransport::Lan => vec!["lan"],
+        DeviceTransport::Mock => vec!["mock"],
+    }
+}
+
+fn connection_transports(device: &DeviceRecord) -> Value {
+    json!({
+        "usb": {
+            "available": device.port_path.is_some() || matches!(device.transport, DeviceTransport::NativeSerial),
+            "active": matches!(device.transport, DeviceTransport::NativeSerial),
+            "connected": matches!(device.transport, DeviceTransport::NativeSerial) && matches!(device.connection, ConnectionState::Connected),
+            "port_path": device.port_path,
+            "last_error": if matches!(device.transport, DeviceTransport::NativeSerial) && matches!(device.connection, ConnectionState::Error) {
+                Some("usb_connection_error")
+            } else if matches!(device.transport, DeviceTransport::NativeSerial) && device.port_path.is_none() {
+                Some("usb_port_missing")
+            } else {
+                None
+            }
+        },
+        "lan": {
+            "available": device.lan_address.is_some(),
+            "active": matches!(device.transport, DeviceTransport::Lan),
+            "connected": device.lan_address.is_some() && device.lan_conflict_addresses.is_empty() && (
+                matches!(device.transport, DeviceTransport::Lan) && matches!(device.connection, ConnectionState::Connected)
+                    || matches!(device.transport, DeviceTransport::NativeSerial)
+            ),
+            "address": device.lan_address,
+            "conflict_addresses": device.lan_conflict_addresses,
+            "last_error": if !device.lan_conflict_addresses.is_empty() {
+                Some("lan_identity_conflict")
+            } else if matches!(device.transport, DeviceTransport::Lan) && matches!(device.connection, ConnectionState::Error) {
+                Some("lan_connection_error")
+            } else {
+                None
+            }
+        },
+        "mock": {
+            "available": matches!(device.transport, DeviceTransport::Mock),
+            "active": matches!(device.transport, DeviceTransport::Mock),
+            "connected": matches!(device.transport, DeviceTransport::Mock) && matches!(device.connection, ConnectionState::Connected)
+        }
+    })
+}
+
+fn connection_switch_hint(device: &DeviceRecord) -> Option<&'static str> {
+    if !device.lan_conflict_addresses.is_empty() {
+        return Some("LAN identity conflict blocks automatic LAN access; use USB or resolve the duplicate addresses");
+    }
+    if matches!(device.transport, DeviceTransport::Lan) && device.port_path.is_some() {
+        return Some(
+            "USB is available and remains the default transport for state-changing operations",
+        );
+    }
+    if matches!(device.transport, DeviceTransport::NativeSerial) && device.lan_address.is_some() {
+        return Some("LAN is available; switching away from USB should be explicit");
+    }
+    None
+}
+
+fn merge_lan_record_into_primary(
+    state: &mut DevdState,
+    primary_id: &str,
+    identity_device_id: &str,
+) {
+    let Some(lan_id) = state.devices.iter().find_map(|(id, device)| {
+        (id != primary_id
+            && matches!(device.transport, DeviceTransport::Lan)
+            && device_matches_identity_id(device, identity_device_id))
+        .then(|| id.clone())
+    }) else {
+        return;
+    };
+    let Some(lan_record) = state.devices.remove(&lan_id) else {
+        return;
+    };
+    if let Some(primary) = state.devices.get_mut(primary_id) {
+        primary.lan_address = lan_record.lan_address;
+        primary.lan_conflict_addresses = lan_record.lan_conflict_addresses;
+        for trace in lan_record.trace {
+            push_bounded(&mut primary.trace, trace, LOG_LIMIT);
+        }
+        for log in lan_record.logs {
+            push_bounded(&mut primary.logs, log, LOG_LIMIT);
+        }
+    }
+}
+
+fn attach_persisted_trace_for_identity(
+    state: &mut DevdState,
+    device_id: &str,
+    identity_device_id: &str,
+) {
+    let Some(trace) = state
+        .persisted_device_trace
+        .get(identity_device_id)
+        .cloned()
+        .filter(|trace| !trace.is_empty())
+    else {
+        return;
+    };
+    if let Some(device) = state.devices.get_mut(device_id) {
+        if device.trace.is_empty() {
+            device.trace = trace;
+        }
+    }
+}
+
+async fn discover_mdns_ipv4_candidates() -> anyhow::Result<Vec<Ipv4Addr>> {
+    let socket = tokio::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
+    socket.set_multicast_ttl_v4(2)?;
+    let query = mdns_ptr_query(LAN_DISCOVERY_SERVICE);
+    socket
+        .send_to(&query, (Ipv4Addr::new(224, 0, 0, 251), 5353))
+        .await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(700);
+    let mut addresses = HashSet::new();
+    let mut buffer = [0u8; 1500];
+    loop {
+        let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now()) else {
+            break;
+        };
+        match tokio::time::timeout(remaining, socket.recv_from(&mut buffer)).await {
+            Ok(Ok((size, _))) => {
+                for address in mdns_a_records(&buffer[..size]) {
+                    addresses.insert(address);
+                }
+            }
+            _ => break,
+        }
+    }
+    let mut addresses = addresses.into_iter().collect::<Vec<_>>();
+    addresses.sort();
+    Ok(addresses)
+}
+
+fn mdns_ptr_query(service: &str) -> Vec<u8> {
+    let mut packet = Vec::new();
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    packet.extend_from_slice(&1u16.to_be_bytes());
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    for label in service.trim_end_matches('.').split('.') {
+        packet.push(label.len() as u8);
+        packet.extend_from_slice(label.as_bytes());
+    }
+    packet.push(0);
+    packet.extend_from_slice(&12u16.to_be_bytes());
+    packet.extend_from_slice(&1u16.to_be_bytes());
+    packet
+}
+
+fn mdns_a_records(packet: &[u8]) -> Vec<Ipv4Addr> {
+    if packet.len() < 12 {
+        return Vec::new();
+    }
+    let qdcount = u16::from_be_bytes([packet[4], packet[5]]) as usize;
+    let ancount = u16::from_be_bytes([packet[6], packet[7]]) as usize;
+    let nscount = u16::from_be_bytes([packet[8], packet[9]]) as usize;
+    let arcount = u16::from_be_bytes([packet[10], packet[11]]) as usize;
+    let mut offset = 12usize;
+    for _ in 0..qdcount {
+        let Some(next) = dns_skip_name(packet, offset) else {
+            return Vec::new();
+        };
+        offset = next.saturating_add(4);
+        if offset > packet.len() {
+            return Vec::new();
+        }
+    }
+    let mut addresses = Vec::new();
+    for _ in 0..(ancount + nscount + arcount) {
+        let Some(next) = dns_skip_name(packet, offset) else {
+            break;
+        };
+        if next + 10 > packet.len() {
+            break;
+        }
+        let record_type = u16::from_be_bytes([packet[next], packet[next + 1]]);
+        let class = u16::from_be_bytes([packet[next + 2], packet[next + 3]]) & 0x7fff;
+        let rdlen = u16::from_be_bytes([packet[next + 8], packet[next + 9]]) as usize;
+        let rdata = next + 10;
+        if rdata + rdlen > packet.len() {
+            break;
+        }
+        if record_type == 1 && class == 1 && rdlen == 4 {
+            addresses.push(Ipv4Addr::new(
+                packet[rdata],
+                packet[rdata + 1],
+                packet[rdata + 2],
+                packet[rdata + 3],
+            ));
+        }
+        offset = rdata + rdlen;
+    }
+    addresses
+}
+
+fn dns_skip_name(packet: &[u8], mut offset: usize) -> Option<usize> {
+    let mut jumps = 0usize;
+    loop {
+        let length = *packet.get(offset)?;
+        if length & 0xc0 == 0xc0 {
+            packet.get(offset + 1)?;
+            return Some(offset + 2);
+        }
+        offset += 1;
+        if length == 0 {
+            return Some(offset);
+        }
+        if length & 0xc0 != 0 {
+            return None;
+        }
+        offset = offset.checked_add(length as usize)?;
+        if offset > packet.len() {
+            return None;
+        }
+        jumps += 1;
+        if jumps > 128 {
+            return None;
+        }
+    }
+}
+
+fn ipv4_hosts_from_cidr(cidr: &str) -> Result<Vec<Ipv4Addr>, HttpError> {
+    let (address, prefix) = cidr.split_once('/').ok_or_else(|| {
+        HttpError::non_retryable(
+            "lan_cidr_invalid",
+            "LAN scan CIDR must look like 192.168.1.0/24",
+        )
+    })?;
+    let address = address.parse::<Ipv4Addr>().map_err(|error| {
+        HttpError::non_retryable("lan_cidr_invalid", format!("invalid IPv4 address: {error}"))
+    })?;
+    let prefix = prefix.parse::<u8>().map_err(|error| {
+        HttpError::non_retryable("lan_cidr_invalid", format!("invalid CIDR prefix: {error}"))
+    })?;
+    if prefix > 32 {
+        return Err(HttpError::non_retryable(
+            "lan_cidr_invalid",
+            "CIDR prefix must be <= 32",
+        ));
+    }
+    let host_count = if prefix == 32 {
+        1usize
+    } else {
+        1usize << (32 - prefix)
+    };
+    if host_count > LAN_SCAN_MAX_HOSTS {
+        return Err(HttpError::non_retryable(
+            "lan_cidr_too_large",
+            format!(
+                "LAN scan CIDR contains {host_count} addresses; maximum is {LAN_SCAN_MAX_HOSTS}"
+            ),
+        ));
+    }
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    };
+    let network = u32::from(address) & mask;
+    let mut hosts = Vec::new();
+    for index in 0..host_count {
+        if prefix <= 30 && (index == 0 || index == host_count - 1) {
+            continue;
+        }
+        hosts.push(Ipv4Addr::from(network + index as u32));
+    }
+    Ok(hosts)
+}
+
+fn default_lan_scan_cidr() -> Option<String> {
+    let socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(8, 8, 8, 8), 80)).ok()?;
+    let local = socket.local_addr().ok()?.ip();
+    let std::net::IpAddr::V4(address) = local else {
+        return None;
+    };
+    let octets = address.octets();
+    if octets[0] == 127 || octets[0] == 0 || octets[0] == 169 && octets[1] == 254 {
+        return None;
+    }
+    Some(format!("{}.{}.{}.0/24", octets[0], octets[1], octets[2]))
 }
 
 async fn bind_device(
@@ -1425,18 +2322,34 @@ async fn connect_device_inner(state: &AppState, id: String) -> Result<DeviceReco
         .get(&id)
         .and_then(|device| device.selected_artifact_id.clone())
         .and_then(|artifact_id| guard.artifacts.get(&artifact_id).cloned());
+    let identity_device_id = {
+        let device = guard
+            .devices
+            .get_mut(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        device.connection = ConnectionState::Connected;
+        if matches!(device.transport, DeviceTransport::Mock) && device.identity.is_none() {
+            device.identity = Some(mock_identity(&id));
+        }
+        if let Some(identity) = native_identity {
+            device.identity = Some(identity);
+        }
+        apply_artifact_match(device, selected_artifact.as_ref());
+        device
+            .identity
+            .as_ref()
+            .and_then(|identity| identity.get("device_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    if let Some(identity_device_id) = identity_device_id {
+        attach_persisted_trace_for_identity(&mut guard, &id, &identity_device_id);
+        merge_lan_record_into_primary(&mut guard, &id, &identity_device_id);
+    }
     let device = guard
         .devices
         .get_mut(&id)
         .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
-    device.connection = ConnectionState::Connected;
-    if matches!(device.transport, DeviceTransport::Mock) && device.identity.is_none() {
-        device.identity = Some(mock_identity(&id));
-    }
-    if let Some(identity) = native_identity {
-        device.identity = Some(identity);
-    }
-    apply_artifact_match(device, selected_artifact.as_ref());
     push_log(
         device,
         "info",
@@ -1856,20 +2769,22 @@ async fn set_wifi_config(
     State(state): State<AppState>,
     Json(input): Json<WifiConfigRequest>,
 ) -> Result<Json<Value>, HttpError> {
-    {
-        let guard = state.inner.lock().expect("state lock");
-        ensure_web_lease_for_target(
-            &guard,
-            input.device_id.as_deref(),
-            input.lease_id.as_deref(),
-        )?;
-    }
-    ensure_wifi_runtime_supported(&state, input.device_id.as_deref())?;
-    let ssid = input.ssid.clone();
-    let response = send_safe_settings_frame(
+    let target = resolve_settings_control_target(
         &state,
-        json!({"type": "wifi_config", "op": "set", "ssid": input.ssid, "psk": input.psk}),
         input.device_id.as_deref(),
+        input.lease_id.as_deref(),
+    )?;
+    ensure_wifi_runtime_supported(&state, &target)?;
+    let ssid = input.ssid.clone();
+    let response = send_settings_command(
+        &state,
+        &target,
+        LanSettingsRequest {
+            method: "POST",
+            path: "/api/v1/wifi-config",
+            body: Some(json!({"ssid": input.ssid, "psk": input.psk})),
+        },
+        json!({"type": "wifi_config", "op": "set", "ssid": input.ssid, "psk": input.psk}),
         |settings| {
             settings.wifi_configured = Some(true);
             settings.wifi_ssid = Some(ssid);
@@ -1878,7 +2793,7 @@ async fn set_wifi_config(
         "WiFi credentials saved through mains-aegis-devd",
     )
     .await?;
-    let network = wait_for_wifi_connected(&state, input.device_id.as_deref()).await?;
+    let network = wait_for_wifi_connected(&state, &target).await?;
     Ok(Json(json!({
         "wifi_config": response,
         "network": network,
@@ -1888,20 +2803,22 @@ async fn set_wifi_config(
 
 async fn clear_wifi_config(
     State(state): State<AppState>,
-    Query(query): Query<SafeSettingsTargetQuery>,
+    Query(query): Query<SettingsTargetQuery>,
 ) -> Result<Json<Value>, HttpError> {
-    {
-        let guard = state.inner.lock().expect("state lock");
-        ensure_web_lease_for_target(
-            &guard,
-            query.device_id.as_deref(),
-            query.lease_id.as_deref(),
-        )?;
-    }
-    let response = send_safe_settings_frame(
+    let target = resolve_settings_control_target(
         &state,
-        json!({"type": "wifi_config", "op": "clear"}),
         query.device_id.as_deref(),
+        query.lease_id.as_deref(),
+    )?;
+    let response = send_settings_command(
+        &state,
+        &target,
+        LanSettingsRequest {
+            method: "DELETE",
+            path: "/api/v1/wifi-config",
+            body: None,
+        },
+        json!({"type": "wifi_config", "op": "clear"}),
         |settings| {
             settings.wifi_configured = Some(false);
             settings.wifi_ssid = None;
@@ -1910,7 +2827,7 @@ async fn clear_wifi_config(
         "WiFi credentials cleared through mains-aegis-devd",
     )
     .await?;
-    let network = wait_for_wifi_state(&state, query.device_id.as_deref(), "disabled").await?;
+    let network = wait_for_wifi_state(&state, &target, "disabled").await?;
     Ok(Json(json!({
         "wifi_config": response,
         "network": network,
@@ -1922,19 +2839,21 @@ async fn set_log_level(
     State(state): State<AppState>,
     Json(input): Json<LogLevelRequest>,
 ) -> Result<Json<Value>, HttpError> {
-    {
-        let guard = state.inner.lock().expect("state lock");
-        ensure_web_lease_for_target(
-            &guard,
-            input.device_id.as_deref(),
-            input.lease_id.as_deref(),
-        )?;
-    }
-    let level = input.level.clone();
-    let response = send_safe_settings_frame(
+    let target = resolve_settings_control_target(
         &state,
-        json!({"type": "request", "op": "set_log_level", "level": input.level}),
         input.device_id.as_deref(),
+        input.lease_id.as_deref(),
+    )?;
+    let level = input.level.clone();
+    let response = send_settings_command(
+        &state,
+        &target,
+        LanSettingsRequest {
+            method: "POST",
+            path: "/api/v1/settings/log-level",
+            body: Some(json!({"level": input.level})),
+        },
+        json!({"type": "request", "op": "set_log_level", "level": input.level}),
         |settings| settings.log_level = level,
         "usb_cdc",
         "Log level updated through mains-aegis-devd",
@@ -1947,21 +2866,28 @@ async fn set_manual_charge(
     State(state): State<AppState>,
     Json(input): Json<ManualChargeRequest>,
 ) -> Result<Json<Value>, HttpError> {
-    {
-        let guard = state.inner.lock().expect("state lock");
-        ensure_web_lease_for_target(
-            &guard,
-            input.device_id.as_deref(),
-            input.lease_id.as_deref(),
-        )?;
-    }
+    let target = resolve_settings_control_target(
+        &state,
+        input.device_id.as_deref(),
+        input.lease_id.as_deref(),
+    )?;
     let prefs = ManualChargePrefs {
         target: input.target.clone(),
         speed: input.speed.clone(),
         timer_h: input.timer_h,
     };
-    let response = send_safe_settings_frame(
+    let response = send_settings_command(
         &state,
+        &target,
+        LanSettingsRequest {
+            method: "POST",
+            path: "/api/v1/settings/manual-charge",
+            body: Some(json!({
+                "target": input.target,
+                "speed": input.speed,
+                "timer_h": input.timer_h
+            })),
+        },
         json!({
             "type": "request",
             "op": "set_manual_charge_prefs",
@@ -1969,7 +2895,6 @@ async fn set_manual_charge(
             "speed": input.speed,
             "timer_h": input.timer_h
         }),
-        input.device_id.as_deref(),
         |settings| settings.manual_charge = prefs,
         "manual_charge",
         "Manual charge preferences updated through mains-aegis-devd",
@@ -2047,17 +2972,87 @@ async fn monitor_stop(
     Ok(Json(json!({"ok": true})))
 }
 
-async fn device_session(
+async fn device_settings(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    let guard = state.inner.lock().expect("state lock");
+    let device = guard
+        .devices
+        .get(&id)
+        .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+    Ok(Json(json!({
+        "wifi": {
+            "configured": device.settings.wifi_configured.unwrap_or(false),
+            "ssid": device.settings.wifi_ssid,
+        },
+        "log_level": device.settings.log_level,
+        "manual_charge": device.settings.manual_charge,
+    })))
+}
+
+async fn devd_compat_settings(
+    Query(query): Query<WebLeaseQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, HttpError> {
+    let guard = state.inner.lock().expect("state lock");
+    let device = select_compat_device(&guard, query.lease_id.as_deref())?;
+    Ok(Json(settings_snapshot(&device.settings)))
+}
+
+fn settings_snapshot(settings: &DeviceSettingsState) -> Value {
+    json!({
+        "wifi": {
+            "configured": settings.wifi_configured.unwrap_or(false),
+            "ssid": settings.wifi_ssid.clone(),
+        },
+        "log_level": settings.log_level.clone(),
+        "manual_charge": settings.manual_charge.clone(),
+    })
+}
+
+async fn device_connection(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    let guard = state.inner.lock().expect("state lock");
+    let device = guard
+        .devices
+        .get(&id)
+        .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+    Ok(Json(json!({
+        "device_id": device.id,
+        "transport": transport_name(&device.transport),
+        "connection": match device.connection {
+            ConnectionState::Disconnected => "disconnected",
+            ConnectionState::Connected => "connected",
+            ConnectionState::Busy => "busy",
+            ConnectionState::Error => "error",
+        },
+        "port_path": device.port_path,
+        "lan_address": device.lan_address,
+        "lan_conflict_addresses": device.lan_conflict_addresses,
+        "binding": device.binding,
+        "identity_device_id": device.identity.as_ref().and_then(|identity| identity.get("device_id")).and_then(Value::as_str),
+        "selected_artifact_id": device.selected_artifact_id,
+        "available_transports": available_transports(device),
+        "transports": connection_transports(device),
+        "switch_hint": connection_switch_hint(device),
+        "log_decode": device.log_decode,
+    })))
+}
+
+async fn device_trace(
     Query(query): Query<SessionQuery>,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
     let guard = state.inner.lock().expect("state lock");
-    ensure_web_lease_for_target(&guard, Some(&id), query.lease_id.as_deref())?;
     let device = guard
         .devices
         .get(&id)
         .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+    let trace_limit = query.trace_limit.unwrap_or(600).min(2_000);
     Ok(Json(json!({
         "connected": matches!(device.connection, ConnectionState::Connected),
         "protocol": "mains-aegis.cdc.v1",
@@ -2065,8 +3060,8 @@ async fn device_session(
         "status": device.status,
         "power_diag": device.power_diag,
         "logs": tail(&device.logs, query.logs_limit.unwrap_or(200).min(500)),
-        "trace": tail(&device.trace, query.trace_limit.unwrap_or(600).min(2_000)),
-        "safeSettings": device.safe_settings,
+        "trace": tail(&device.trace, trace_limit),
+        "transports": grouped_trace_by_transport(&device.trace, trace_limit),
         "log_decode": device.log_decode
     })))
 }
@@ -2077,6 +3072,7 @@ async fn devd_compat_session(
 ) -> Result<Json<Value>, HttpError> {
     let guard = state.inner.lock().expect("state lock");
     let device = select_compat_device(&guard, query.lease_id.as_deref())?;
+    let trace_limit = query.trace_limit.unwrap_or(600).min(2_000);
     Ok(Json(json!({
         "connected": matches!(device.connection, ConnectionState::Connected),
         "protocol": "mains-aegis.cdc.v1",
@@ -2084,8 +3080,17 @@ async fn devd_compat_session(
         "status": device.status,
         "power_diag": device.power_diag,
         "logs": tail(&device.logs, query.logs_limit.unwrap_or(200).min(500)),
-        "trace": tail(&device.trace, query.trace_limit.unwrap_or(600).min(2_000)),
-        "safeSettings": device.safe_settings
+        "trace": tail(&device.trace, trace_limit),
+        "transports": grouped_trace_by_transport(&device.trace, trace_limit),
+        "settings": {
+            "wifi": {
+                "configured": device.settings.wifi_configured.unwrap_or(false),
+                "ssid": device.settings.wifi_ssid,
+            },
+            "log_level": device.settings.log_level,
+            "manual_charge": device.settings.manual_charge,
+        },
+        "log_decode": device.log_decode
     })))
 }
 
@@ -2274,37 +3279,191 @@ async fn send_device_cdc_request(
     })
 }
 
-async fn send_safe_settings_frame<F>(
+#[derive(Debug, Clone)]
+enum SettingsControlTarget {
+    Usb {
+        device_id: String,
+        port_path: Option<String>,
+        monitor_command_tx: Option<mpsc::Sender<NativeMonitorCommand>>,
+    },
+    Lan {
+        device_id: String,
+        address: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct LanSettingsRequest {
+    method: &'static str,
+    path: &'static str,
+    body: Option<Value>,
+}
+
+fn resolve_settings_control_target(
     state: &AppState,
-    mut frame: Value,
     target_device_id: Option<&str>,
+    lease_id: Option<&str>,
+) -> Result<SettingsControlTarget, HttpError> {
+    let guard = state.inner.lock().expect("state lock");
+    if let Some(lease_id) = lease_id {
+        ensure_web_lease_for_target(&guard, target_device_id, Some(lease_id))?;
+        let lease = active_lease_by_id(&guard, lease_id).ok_or_else(|| {
+            HttpError::non_retryable("web_session_expired", "Web USB lease is expired")
+        })?;
+        let device = guard.devices.get(&lease.device_id).ok_or_else(|| {
+            HttpError::not_found("device_not_found", "leased device is not known")
+        })?;
+        if !matches!(device.transport, DeviceTransport::NativeSerial) {
+            return Err(HttpError::non_retryable(
+                "devd_usb_session_required",
+                "Web lease settings control requires a USB CDC device",
+            ));
+        }
+        return Ok(SettingsControlTarget::Usb {
+            device_id: device.id.clone(),
+            port_path: device.port_path.clone(),
+            monitor_command_tx: guard
+                .monitors
+                .get(&device.id)
+                .map(|monitor| monitor.command_tx.clone()),
+        });
+    }
+
+    let mut candidates = guard.devices.values().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        transport_preference(&left.transport)
+            .cmp(&transport_preference(&right.transport))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let candidates = candidates
+        .into_iter()
+        .filter(|device| {
+            target_device_id
+                .map(|target| device_matches_identity_id(device, target))
+                .unwrap_or(true)
+        })
+        .filter_map(|device| match device.transport {
+            DeviceTransport::NativeSerial
+                if matches!(device.connection, ConnectionState::Connected)
+                    && device.identity.is_some() =>
+            {
+                Some(Ok(SettingsControlTarget::Usb {
+                    device_id: device.id.clone(),
+                    port_path: device.port_path.clone(),
+                    monitor_command_tx: guard
+                        .monitors
+                        .get(&device.id)
+                        .map(|monitor| monitor.command_tx.clone()),
+                }))
+            }
+            DeviceTransport::Lan
+                if device.lan_address.is_some()
+                    && device.identity.is_some()
+                    && device.lan_conflict_addresses.is_empty() =>
+            {
+                Some(Ok(SettingsControlTarget::Lan {
+                    device_id: device.id.clone(),
+                    address: device.lan_address.clone().expect("lan address checked"),
+                }))
+            }
+            DeviceTransport::Lan if !device.lan_conflict_addresses.is_empty() => Some(Err(
+                HttpError::non_retryable(
+                    "lan_identity_conflict",
+                    "multiple LAN addresses reported the same device_id; select USB or resolve the LAN conflict before writing settings",
+                ),
+            )),
+            _ => None,
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some(target_device_id) = target_device_id {
+        return candidates.into_iter().next().ok_or_else(|| {
+            HttpError::retryable(
+                "settings_transport_unavailable",
+                format!("no connected USB or reachable LAN transport is available for {target_device_id}"),
+            )
+        });
+    }
+    match candidates.as_slice() {
+        [target] => Ok(target.clone()),
+        [] => Err(HttpError::retryable(
+            "settings_transport_unavailable",
+            "connect USB CDC or discover a LAN device before changing settings",
+        )),
+        _ => Err(HttpError::non_retryable(
+            "settings_device_ambiguous",
+            "multiple devices can accept settings writes; provide device_id",
+        )),
+    }
+}
+
+async fn send_settings_command<F>(
+    state: &AppState,
+    target: &SettingsControlTarget,
+    lan_request: LanSettingsRequest,
+    frame: Value,
     apply_settings: F,
     log_target: &str,
     log_message: &str,
 ) -> Result<Value, HttpError>
 where
-    F: FnOnce(&mut SafeSettingsState),
+    F: FnOnce(&mut DeviceSettingsState),
 {
-    let (device_id, port_path, monitor_command_tx) = {
-        let guard = state.inner.lock().expect("state lock");
-        let device = select_control_device(&guard, target_device_id)?;
-        (
-            device.id.clone(),
-            device.port_path.clone(),
-            guard
-                .monitors
-                .get(&device.id)
-                .map(|monitor| monitor.command_tx.clone()),
-        )
+    match target {
+        SettingsControlTarget::Usb { .. } => {
+            send_settings_frame(
+                state,
+                target,
+                frame,
+                apply_settings,
+                log_target,
+                log_message,
+            )
+            .await
+        }
+        SettingsControlTarget::Lan { .. } => {
+            send_lan_settings_request(
+                state,
+                target,
+                lan_request,
+                apply_settings,
+                log_target,
+                log_message,
+            )
+            .await
+        }
+    }
+}
+
+async fn send_settings_frame<F>(
+    state: &AppState,
+    target: &SettingsControlTarget,
+    mut frame: Value,
+    apply_settings: F,
+    log_target: &str,
+    log_message: &str,
+) -> Result<Value, HttpError>
+where
+    F: FnOnce(&mut DeviceSettingsState),
+{
+    let SettingsControlTarget::Usb {
+        device_id,
+        port_path,
+        monitor_command_tx,
+    } = target
+    else {
+        return Err(HttpError::non_retryable(
+            "settings_transport_invalid",
+            "USB settings frame requires a USB target",
+        ));
     };
     let request_id = format!("devd-safe-{}", Utc::now().timestamp_millis());
     if let Value::Object(object) = &mut frame {
         object.insert("request_id".to_string(), Value::String(request_id.clone()));
     }
-    let response = if let Some(command_tx) = monitor_command_tx {
+    let response = if let Some(command_tx) = monitor_command_tx.clone() {
         send_monitor_cdc_frame_async(command_tx, frame.clone(), request_id.clone()).await?
     } else {
-        let port_path = port_path.ok_or_else(|| {
+        let port_path = port_path.clone().ok_or_else(|| {
             HttpError::retryable(
                 "device_port_missing",
                 "native serial device has no port path",
@@ -2320,9 +3479,9 @@ where
     }
 
     let result = response.get("result").cloned().unwrap_or(Value::Null);
-    record_safe_settings_success(
+    record_settings_success(
         state,
-        &device_id,
+        device_id,
         frame,
         response,
         apply_settings,
@@ -2332,12 +3491,104 @@ where
     Ok(result)
 }
 
+async fn send_lan_settings_request<F>(
+    state: &AppState,
+    target: &SettingsControlTarget,
+    request: LanSettingsRequest,
+    apply_settings: F,
+    log_target: &str,
+    log_message: &str,
+) -> Result<Value, HttpError>
+where
+    F: FnOnce(&mut DeviceSettingsState),
+{
+    let SettingsControlTarget::Lan { device_id, address } = target else {
+        return Err(HttpError::non_retryable(
+            "settings_transport_invalid",
+            "LAN settings request requires a LAN target",
+        ));
+    };
+    let tx_payload = request
+        .body
+        .as_ref()
+        .map(redact_lan_body)
+        .map(|body| body.to_string())
+        .unwrap_or_default();
+    let tx_trace = structured_trace_entry(
+        "tx",
+        "http",
+        Some(format!("http://{address}{}", request.path)),
+        format!("{} {}", request.method, request.path).as_str(),
+        tx_payload,
+    );
+    let response =
+        lan_http_json(address, request.method, request.path, request.body.as_ref()).await?;
+    let rx_trace = structured_trace_entry(
+        "rx",
+        "http",
+        Some(format!("http://{address}{}", request.path)),
+        "settings write response",
+        response.to_string(),
+    );
+    let settings_snapshot = lan_http_json(address, "GET", "/api/v1/settings", None).await?;
+    let settings_state = settings_state_from_api(&settings_snapshot)?;
+    let log = SerialLogEntry {
+        id: next_id(),
+        timestamp: now(),
+        level: "info".to_string(),
+        target: log_target.to_string(),
+        message: log_message.to_string(),
+    };
+    let snapshot = {
+        let mut guard = state.inner.lock().expect("state lock");
+        if let Some(device) = guard.devices.get_mut(device_id) {
+            device.settings = settings_state;
+            apply_settings(&mut device.settings);
+            push_bounded(&mut device.trace, tx_trace.clone(), LOG_LIMIT);
+            push_bounded(&mut device.trace, rx_trace.clone(), LOG_LIMIT);
+            push_bounded(&mut device.logs, log.clone(), LOG_LIMIT);
+            device.connection = ConnectionState::Connected;
+        }
+        persisted_snapshot(&guard)
+    };
+    persist_devd_state(&state.persistence, snapshot)?;
+    emit(
+        state,
+        Some(device_id.clone()),
+        "lan_trace",
+        "LAN HTTP trace",
+        json!({"trace": tx_trace}),
+    );
+    emit(
+        state,
+        Some(device_id.clone()),
+        "lan_trace",
+        "LAN HTTP trace",
+        json!({"trace": rx_trace}),
+    );
+    emit(
+        state,
+        Some(device_id.clone()),
+        "serial_log",
+        "settings log frame",
+        json!({"log": log}),
+    );
+    Ok(json!({"response": response, "settings": settings_snapshot}))
+}
+
 fn ensure_wifi_runtime_supported(
     state: &AppState,
-    target_device_id: Option<&str>,
+    target: &SettingsControlTarget,
 ) -> Result<(), HttpError> {
     let guard = state.inner.lock().expect("state lock");
-    let device = select_control_device(&guard, target_device_id)?;
+    let device_id = match target {
+        SettingsControlTarget::Usb { device_id, .. }
+        | SettingsControlTarget::Lan { device_id, .. } => device_id,
+    };
+    let device = guard
+        .devices
+        .get(device_id)
+        .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
     let features = device
         .identity
         .as_ref()
@@ -2361,45 +3612,49 @@ fn ensure_wifi_runtime_supported(
 
 async fn wait_for_wifi_connected(
     state: &AppState,
-    target_device_id: Option<&str>,
+    target: &SettingsControlTarget,
 ) -> Result<Value, HttpError> {
-    wait_for_wifi_state(state, target_device_id, "connected").await
+    wait_for_wifi_state(state, target, "connected").await
 }
 
 async fn wait_for_wifi_state(
     state: &AppState,
-    target_device_id: Option<&str>,
+    target: &SettingsControlTarget,
     expected_state: &str,
 ) -> Result<Value, HttpError> {
     let deadline = std::time::Instant::now() + Duration::from_secs(45);
     let mut last_network = Value::Null;
     while std::time::Instant::now() < deadline {
-        let (device_id, port_path, monitor_command_tx) = {
-            let guard = state.inner.lock().expect("state lock");
-            let device = select_control_device(&guard, target_device_id)?;
-            (
-                device.id.clone(),
-                device.port_path.clone(),
-                guard
-                    .monitors
-                    .get(&device.id)
-                    .map(|monitor| monitor.command_tx.clone()),
-            )
-        };
-        let request_id = format!("devd-wifi-status-{}", Utc::now().timestamp_millis());
-        let frame = json!({"type": "request", "request_id": request_id, "op": "get_status"});
-        let response = if let Some(command_tx) = monitor_command_tx {
-            send_monitor_cdc_frame_async(command_tx, frame, request_id).await?
-        } else {
-            let port_path = port_path.ok_or_else(|| {
-                HttpError::retryable(
-                    "device_port_missing",
-                    "native serial device has no port path",
+        let (device_id, status) = match target {
+            SettingsControlTarget::Usb {
+                device_id,
+                port_path,
+                monitor_command_tx,
+            } => {
+                let request_id = format!("devd-wifi-status-{}", Utc::now().timestamp_millis());
+                let frame =
+                    json!({"type": "request", "request_id": request_id, "op": "get_status"});
+                let response = if let Some(command_tx) = monitor_command_tx.clone() {
+                    send_monitor_cdc_frame_async(command_tx, frame, request_id).await?
+                } else {
+                    let port_path = port_path.clone().ok_or_else(|| {
+                        HttpError::retryable(
+                            "device_port_missing",
+                            "native serial device has no port path",
+                        )
+                    })?;
+                    send_native_cdc_frame_async(port_path, frame, request_id).await?
+                };
+                (
+                    device_id.clone(),
+                    response.get("result").cloned().unwrap_or(Value::Null),
                 )
-            })?;
-            send_native_cdc_frame_async(port_path, frame, request_id).await?
+            }
+            SettingsControlTarget::Lan { device_id, address } => (
+                device_id.clone(),
+                lan_http_json(address, "GET", "/api/v1/status", None).await?,
+            ),
         };
-        let status = response.get("result").cloned().unwrap_or(Value::Null);
         let network = status.get("network").cloned().unwrap_or(Value::Null);
         if !network.is_null() {
             update_device_status_snapshot(state, &device_id, status.clone());
@@ -2581,45 +3836,6 @@ fn ensure_web_lease_for_target(
     Ok(())
 }
 
-fn select_control_device<'a>(
-    state: &'a DevdState,
-    target_device_id: Option<&str>,
-) -> Result<&'a DeviceRecord, HttpError> {
-    let mut devices = state.devices.values().collect::<Vec<_>>();
-    devices.sort_by(|left, right| left.id.cmp(&right.id));
-    let eligible = devices
-        .iter()
-        .copied()
-        .filter(|device| {
-            matches!(device.connection, ConnectionState::Connected)
-                && device.identity.is_some()
-                && matches!(device.transport, DeviceTransport::NativeSerial)
-        })
-        .collect::<Vec<_>>();
-    if let Some(target_device_id) = target_device_id {
-        return eligible
-            .into_iter()
-            .find(|device| device_matches_identity_id(device, target_device_id))
-            .ok_or_else(|| {
-                HttpError::retryable(
-                    "devd_usb_session_required",
-                    format!("connect USB CDC device {target_device_id} through mains-aegis-devd before changing safe settings"),
-                )
-            });
-    }
-    match eligible.as_slice() {
-        [device] => Ok(*device),
-        [] => Err(HttpError::retryable(
-            "devd_usb_session_required",
-            "connect a USB CDC device through mains-aegis-devd before changing safe settings",
-        )),
-        _ => Err(HttpError::non_retryable(
-            "devd_usb_device_ambiguous",
-            "multiple USB CDC devices are connected; provide device_id for safe settings",
-        )),
-    }
-}
-
 fn device_matches_identity_id(device: &DeviceRecord, target_device_id: &str) -> bool {
     device.id == target_device_id
         || device
@@ -2767,7 +3983,7 @@ fn parse_matching_cdc_response(line: &[u8], request_id: &str) -> Result<Option<V
     Ok(None)
 }
 
-fn record_safe_settings_success<F>(
+fn record_settings_success<F>(
     state: &AppState,
     device_id: &str,
     tx_frame: Value,
@@ -2776,7 +3992,7 @@ fn record_safe_settings_success<F>(
     log_target: &str,
     log_message: &str,
 ) where
-    F: FnOnce(&mut SafeSettingsState),
+    F: FnOnce(&mut DeviceSettingsState),
 {
     let tx_trace = trace_entry(
         "tx",
@@ -2793,16 +4009,18 @@ fn record_safe_settings_success<F>(
         target: log_target.to_string(),
         message: log_message.to_string(),
     };
-    {
+    let snapshot = {
         let mut guard = state.inner.lock().expect("state lock");
         if let Some(device) = guard.devices.get_mut(device_id) {
-            apply_settings(&mut device.safe_settings);
+            apply_settings(&mut device.settings);
             push_bounded(&mut device.trace, tx_trace.clone(), LOG_LIMIT);
             push_bounded(&mut device.trace, rx_trace.clone(), LOG_LIMIT);
             push_bounded(&mut device.logs, log.clone(), LOG_LIMIT);
             device.connection = ConnectionState::Connected;
         }
-    }
+        persisted_snapshot(&guard)
+    };
+    let _ = persist_devd_state(&state.persistence, snapshot);
     emit(
         state,
         Some(device_id.to_string()),
@@ -3201,10 +4419,17 @@ fn seed_mock_device(state: &AppState) {
     let selected_artifact = selected_artifact_id
         .as_ref()
         .and_then(|artifact_id| guard.artifacts.get(artifact_id).cloned());
+    let persisted_trace = guard
+        .persisted_device_trace
+        .get(&id)
+        .cloned()
+        .unwrap_or_default();
     let mut device = DeviceRecord {
         id: id.clone(),
         display_name: "Mock ESP32-S3 DevKit".to_string(),
         port_path: None,
+        lan_address: None,
+        lan_conflict_addresses: Vec::new(),
         transport: DeviceTransport::Mock,
         binding,
         connection: ConnectionState::Disconnected,
@@ -3213,9 +4438,9 @@ fn seed_mock_device(state: &AppState) {
         power_diag: None,
         selected_artifact_id,
         log_decode: LogDecodeState::default(),
-        safe_settings: default_safe_settings(),
+        settings: default_settings(),
         logs: VecDeque::new(),
-        trace: VecDeque::new(),
+        trace: persisted_trace,
     };
     apply_artifact_match(&mut device, selected_artifact.as_ref());
     guard.devices.insert(id, device);
@@ -3762,18 +4987,21 @@ fn append_monitor_trace(
     let trace_event = trace.clone();
     let log_event = log.clone();
     let status_event = status_from_trace_payload(&trace_event.payload);
-    let mut guard = state.inner.lock().expect("state lock");
-    if let Some(device) = guard.devices.get_mut(device_id) {
-        device.connection = ConnectionState::Connected;
-        push_bounded(&mut device.trace, trace, LOG_LIMIT);
-        if let Some(status) = status_event.clone() {
-            device.status = Some(status);
+    let snapshot = {
+        let mut guard = state.inner.lock().expect("state lock");
+        if let Some(device) = guard.devices.get_mut(device_id) {
+            device.connection = ConnectionState::Connected;
+            push_bounded(&mut device.trace, trace, LOG_LIMIT);
+            if let Some(status) = status_event.clone() {
+                device.status = Some(status);
+            }
+            if let Some(log) = log {
+                push_bounded(&mut device.logs, log, LOG_LIMIT);
+            }
         }
-        if let Some(log) = log {
-            push_bounded(&mut device.logs, log, LOG_LIMIT);
-        }
-    }
-    drop(guard);
+        persisted_snapshot(&guard)
+    };
+    let _ = persist_devd_state(&state.persistence, snapshot);
     emit(
         state,
         Some(device_id.to_string()),
@@ -3821,6 +5049,7 @@ fn status_from_trace_payload(payload: &str) -> Option<Value> {
 fn reset_backend_name(transport: &DeviceTransport) -> &'static str {
     match transport {
         DeviceTransport::NativeSerial => "espflash_reset",
+        DeviceTransport::Lan => "lan_http",
         DeviceTransport::Mock => "mock",
     }
 }
@@ -4033,6 +5262,26 @@ fn redact_cdc_frame(frame: &Value) -> Value {
         }
     }
     redacted
+}
+
+fn structured_trace_entry(
+    direction: &str,
+    kind: &str,
+    target: Option<String>,
+    summary: &str,
+    payload: String,
+) -> SerialTraceEntry {
+    SerialTraceEntry {
+        id: next_id(),
+        timestamp: now(),
+        direction: direction.to_string(),
+        kind: kind.to_string(),
+        frame_type: None,
+        request_id: None,
+        target,
+        summary: summary.to_string(),
+        payload,
+    }
 }
 
 fn raw_trace_entry(direction: &str, kind: &str, summary: &str, payload: &str) -> SerialTraceEntry {
@@ -4515,8 +5764,37 @@ fn tail<T: Clone>(queue: &VecDeque<T>, limit: usize) -> Vec<T> {
     queue.iter().skip(skip).cloned().collect()
 }
 
-fn default_safe_settings() -> SafeSettingsState {
-    SafeSettingsState {
+fn grouped_trace_by_transport(trace: &VecDeque<SerialTraceEntry>, limit: usize) -> Value {
+    let mut usb = VecDeque::new();
+    let mut lan = VecDeque::new();
+    for entry in trace {
+        if trace_entry_transport(entry) == "lan" {
+            push_bounded(&mut lan, entry.clone(), limit);
+        } else {
+            push_bounded(&mut usb, entry.clone(), limit);
+        }
+    }
+    json!({
+        "usb": tail(&usb, limit),
+        "lan": tail(&lan, limit),
+    })
+}
+
+fn trace_entry_transport(entry: &SerialTraceEntry) -> &'static str {
+    if entry.kind == "http"
+        || entry
+            .target
+            .as_deref()
+            .is_some_and(|target| target.starts_with("http://") || target.starts_with("https://"))
+    {
+        "lan"
+    } else {
+        "usb"
+    }
+}
+
+fn default_settings() -> DeviceSettingsState {
+    DeviceSettingsState {
         wifi_configured: None,
         wifi_ssid: None,
         log_level: "info".to_string(),
@@ -4782,14 +6060,17 @@ mod tests {
                     id: "native-a".into(),
                     display_name: "USB CDC".into(),
                     port_path: Some("/dev/cu.usbmodem1".into()),
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Disconnected,
                     identity: None,
                     status: None,
+                    power_diag: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
-                    safe_settings: default_safe_settings(),
+                    settings: default_settings(),
                     logs: VecDeque::new(),
                     trace: VecDeque::new(),
                 },
@@ -4887,6 +6168,214 @@ mod tests {
     }
 
     #[test]
+    fn ipv4_cidr_expands_hosts_without_network_or_broadcast() {
+        let hosts = ipv4_hosts_from_cidr("192.168.4.0/30").unwrap();
+
+        assert_eq!(
+            hosts,
+            vec![Ipv4Addr::new(192, 168, 4, 1), Ipv4Addr::new(192, 168, 4, 2)]
+        );
+    }
+
+    #[test]
+    fn lan_discovery_merges_into_usb_identity_record() {
+        let mut state = DevdState::default();
+        state.devices.insert(
+            "serial-a".into(),
+            DeviceRecord {
+                id: "serial-a".into(),
+                display_name: "USB CDC".into(),
+                port_path: Some("/dev/cu.usbmodem1".into()),
+                lan_address: None,
+                lan_conflict_addresses: Vec::new(),
+                transport: DeviceTransport::NativeSerial,
+                binding: None,
+                connection: ConnectionState::Connected,
+                identity: Some(json!({"device_id": "mains-aegis-abc123"})),
+                status: None,
+                power_diag: None,
+                selected_artifact_id: None,
+                log_decode: LogDecodeState::default(),
+                settings: default_settings(),
+                logs: VecDeque::new(),
+                trace: VecDeque::new(),
+            },
+        );
+        let discovery = LanDeviceDiscovery {
+            address: "192.168.4.25".into(),
+            identity: json!({"device_id": "mains-aegis-abc123", "hostname": "mains-aegis-abc123"}),
+            trace: vec![structured_trace_entry(
+                "rx",
+                "http",
+                Some("http://192.168.4.25/api/v1/identity".into()),
+                "identity response",
+                "{}".into(),
+            )],
+        };
+        let mut discovered_ids = HashSet::new();
+        let mut lan_count = 0;
+
+        merge_lan_discoveries(
+            &mut state,
+            vec![discovery],
+            &mut discovered_ids,
+            &mut lan_count,
+        );
+
+        assert_eq!(lan_count, 1);
+        assert_eq!(
+            discovered_ids.get("serial-a"),
+            Some(&"serial-a".to_string())
+        );
+        let device = state.devices.get("serial-a").unwrap();
+        assert!(matches!(device.transport, DeviceTransport::NativeSerial));
+        assert_eq!(device.lan_address.as_deref(), Some("192.168.4.25"));
+        assert_eq!(available_transports(device), vec!["usb", "lan"]);
+    }
+
+    #[test]
+    fn connection_transports_reports_usb_lan_reachability() {
+        let device = DeviceRecord {
+            id: "serial-a".into(),
+            display_name: "USB CDC".into(),
+            port_path: Some("/dev/cu.usbmodem1".into()),
+            lan_address: Some("192.168.4.25".into()),
+            lan_conflict_addresses: Vec::new(),
+            transport: DeviceTransport::NativeSerial,
+            binding: None,
+            connection: ConnectionState::Connected,
+            identity: Some(json!({"device_id": "mains-aegis-abc123"})),
+            status: None,
+            power_diag: None,
+            selected_artifact_id: None,
+            log_decode: LogDecodeState::default(),
+            settings: default_settings(),
+            logs: VecDeque::new(),
+            trace: VecDeque::new(),
+        };
+
+        let transports = connection_transports(&device);
+
+        assert_eq!(transports["usb"]["available"], true);
+        assert_eq!(transports["usb"]["active"], true);
+        assert_eq!(transports["lan"]["available"], true);
+        assert_eq!(transports["lan"]["connected"], true);
+        assert_eq!(
+            connection_switch_hint(&device),
+            Some("LAN is available; switching away from USB should be explicit")
+        );
+    }
+
+    #[test]
+    fn persisted_snapshot_includes_bounded_runtime_trace() {
+        let mut state = DevdState::default();
+        state.scan_trace.push_back(structured_trace_entry(
+            "rx",
+            "scan",
+            Some("lan-probe".into()),
+            "scan done",
+            "{}".into(),
+        ));
+        let mut device_trace = VecDeque::new();
+        device_trace.push_back(structured_trace_entry(
+            "rx",
+            "http",
+            Some("http://192.168.4.25/api/v1/identity".into()),
+            "identity response",
+            "{}".into(),
+        ));
+        state.devices.insert(
+            "serial-a".into(),
+            DeviceRecord {
+                id: "serial-a".into(),
+                display_name: "USB CDC".into(),
+                port_path: Some("/dev/cu.usbmodem1".into()),
+                lan_address: Some("192.168.4.25".into()),
+                lan_conflict_addresses: Vec::new(),
+                transport: DeviceTransport::NativeSerial,
+                binding: None,
+                connection: ConnectionState::Connected,
+                identity: Some(json!({"device_id": "mains-aegis-abc123"})),
+                status: None,
+                power_diag: None,
+                selected_artifact_id: None,
+                log_decode: LogDecodeState::default(),
+                settings: default_settings(),
+                logs: VecDeque::new(),
+                trace: device_trace,
+            },
+        );
+
+        let snapshot = persisted_snapshot(&state);
+
+        assert_eq!(snapshot.scan_trace.len(), 1);
+        assert_eq!(snapshot.device_trace.get("serial-a").unwrap().len(), 1);
+        assert_eq!(
+            snapshot
+                .device_trace
+                .get("mains-aegis-abc123")
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn groups_trace_by_transport() {
+        let mut trace = VecDeque::new();
+        trace.push_back(trace_entry(
+            "tx",
+            r#"{"type":"request","request_id":"req-1","op":"get_status"}"#,
+        ));
+        trace.push_back(structured_trace_entry(
+            "rx",
+            "http",
+            Some("http://192.168.4.25/api/v1/settings".into()),
+            "settings snapshot",
+            "{}".into(),
+        ));
+
+        let grouped = grouped_trace_by_transport(&trace, 10);
+
+        assert_eq!(grouped["usb"].as_array().unwrap().len(), 1);
+        assert_eq!(grouped["lan"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn parses_lan_http_json_response() {
+        let response =
+            b"HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\n\r\n{\"accepted\":true}";
+
+        let parsed = parse_lan_http_json_response(
+            response,
+            "POST",
+            "/api/v1/settings/log-level",
+            "192.168.4.25",
+        )
+        .unwrap();
+
+        assert_eq!(parsed["accepted"], true);
+    }
+
+    #[test]
+    fn maps_settings_snapshot_from_lan_api() {
+        let snapshot = json!({
+            "wifi": {"configured": true, "ssid": "lab"},
+            "log_level": "debug",
+            "manual_charge": {"target": "rsoc_80", "speed": "ma_1000", "timer_h": 6}
+        });
+
+        let settings = settings_state_from_api(&snapshot).unwrap();
+
+        assert_eq!(settings.wifi_configured, Some(true));
+        assert_eq!(settings.wifi_ssid.as_deref(), Some("lab"));
+        assert_eq!(settings.log_level, "debug");
+        assert_eq!(settings.manual_charge.target, "rsoc_80");
+        assert_eq!(settings.manual_charge.speed, "ma_1000");
+        assert_eq!(settings.manual_charge.timer_h, 6);
+    }
+
+    #[test]
     fn redacts_wifi_psk_from_cdc_trace_frames() {
         let frame = json!({
             "type": "wifi_config",
@@ -4929,6 +6418,8 @@ mod tests {
             id: "d".into(),
             display_name: "d".into(),
             port_path: None,
+            lan_address: None,
+            lan_conflict_addresses: Vec::new(),
             transport: DeviceTransport::Mock,
             binding: None,
             connection: ConnectionState::Disconnected,
@@ -4939,7 +6430,7 @@ mod tests {
             power_diag: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
-            safe_settings: default_safe_settings(),
+            settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
         };
@@ -4971,6 +6462,8 @@ mod tests {
             id: "d".into(),
             display_name: "d".into(),
             port_path: None,
+            lan_address: None,
+            lan_conflict_addresses: Vec::new(),
             transport: DeviceTransport::Mock,
             binding: None,
             connection: ConnectionState::Disconnected,
@@ -4981,7 +6474,7 @@ mod tests {
             power_diag: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
-            safe_settings: default_safe_settings(),
+            settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
         };
@@ -5013,6 +6506,8 @@ mod tests {
             id: "d".into(),
             display_name: "d".into(),
             port_path: None,
+            lan_address: None,
+            lan_conflict_addresses: Vec::new(),
             transport: DeviceTransport::Mock,
             binding: None,
             connection: ConnectionState::Disconnected,
@@ -5023,7 +6518,7 @@ mod tests {
             power_diag: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
-            safe_settings: default_safe_settings(),
+            settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
         };
@@ -5055,6 +6550,8 @@ mod tests {
             id: "d".into(),
             display_name: "d".into(),
             port_path: None,
+            lan_address: None,
+            lan_conflict_addresses: Vec::new(),
             transport: DeviceTransport::Mock,
             binding: None,
             connection: ConnectionState::Disconnected,
@@ -5065,7 +6562,7 @@ mod tests {
             power_diag: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
-            safe_settings: default_safe_settings(),
+            settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
         };
@@ -5097,6 +6594,8 @@ mod tests {
             id: "d".into(),
             display_name: "d".into(),
             port_path: Some("/dev/cu.usbmodem1".into()),
+            lan_address: None,
+            lan_conflict_addresses: Vec::new(),
             transport: DeviceTransport::NativeSerial,
             binding: None,
             connection: ConnectionState::Disconnected,
@@ -5105,7 +6604,7 @@ mod tests {
             power_diag: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
-            safe_settings: default_safe_settings(),
+            settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
         };

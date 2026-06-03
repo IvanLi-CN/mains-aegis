@@ -4,7 +4,13 @@
 
 - Status: 已完成
 - Created: 2026-06-02
-- Last: 2026-06-02
+- Last: 2026-06-03
+
+## 接管说明
+
+- 本规格记录的是 host-tools single-crate、IPC-only `serve`、显式 `bridge-http` 与 release/install 对齐。
+- 其中 CLI `device session` 用户命令面、`session/safeSettings` 历史模型，以及新的 `connection / identity / status / settings / trace` 查询面，已转由 [`#k4vzn`](../k4vzn-lan-management-convergence/SPEC.md) 接管。
+- 当前默认推进路径为：在当前 PR #80 上先完成该新规格与契约收敛，再视差异规模继续增量实现。
 
 ## 背景 / 问题陈述
 
@@ -16,7 +22,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 
 - 新增 `tools/mains-aegis-host`，统一产出 `mains-aegis` 与 `mains-aegis-devd` 两个二进制。
 - `mains-aegis-devd serve` 改为 IPC-only；HTTP/Web 暴露只能通过显式 `mains-aegis-devd bridge-http` 开启。
-- `mains-aegis` CLI 通过 IPC 调用 devd，覆盖设备、artifact、flash dry-run/reset/monitor、serial lease、safe settings 与 host power 命令族。
+- `mains-aegis` CLI 通过 IPC 调用 devd，覆盖设备、artifact、flash dry-run/reset/monitor、serial lease、settings 与 host power 命令族；历史 `device session` 命令面由 #k4vzn 替换为 `connection / settings / trace`。
 - devd HTTP bridge 只能在显式启用且配置 bearer token 时绑定非 loopback 地址。
 - 发布流程产出 Linux x86_64、macOS arm64、Windows x86_64 host-tools archive、安装脚本与 `SHA256SUMS`。
 - repo skills 拆分为用户操作层与开发层；用户操作层在缺少 release 安装工具时硬阻断，不回退源码构建。

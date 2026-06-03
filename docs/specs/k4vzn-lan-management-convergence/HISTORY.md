@@ -1,0 +1,19 @@
+# History（#k4vzn）
+
+## 2026-06-03
+
+- 决定设备本体 API 是 LAN 管理真相源；Web 无 devd 与 devd 走 LAN 都必须消费同一组设备端点。
+- 决定 LAN 提供所有当前已支持的功能；设备本体尚未支持的能力（如当前的 LAN flash、LAN monitor）不强行放进首版目标面。
+- 决定 Web 无 devd 场景必须支持手填 IPv4 CIDR 的子网扫描；devd 侧优先 mDNS/DNS-SD，再补子网扫描。
+- 决定扫描只探测 `GET /api/v1/identity`，并以 `identity.device_id` 作为唯一主键；同一 `device_id` 出现在多个 IP 上时阻断自动接入。
+- 决定同一 `device_id` 的 USB 与 LAN 关联为同一 logical device；默认首选 USB，切换 transport 需要显式提示，必要时可以硬阻断要求切换到 USB。
+- 决定全局废弃 `session` / `safeSettings` 概念；新的查询面固定为 `connection / identity / status / settings / trace`。
+- 决定 `connection` 属于 devd / Web / CLI 层，不进入设备本体 API；`settings` 则进入设备本体 API，提供完整快照读接口。
+- 决定 LAN 日志能力接受为结构化 HTTP client trace；Web 与 devd 都需要设备级 trace 与 scan run trace 的 bounded 持久化。
+- 决定本规格默认在当前 PR #80 上渐进推进，先做规格与契约收敛，再逐步推进 firmware、devd/CLI、Web 的实现改接。
+
+## Completion
+
+- Web devd 入口同时接受 USB CDC 与无冲突 LAN transport 候选；LAN transport 不创建 Web USB lease，settings 写入通过 devd 的设备级 LAN client 路径完成。
+- `/api/v1/serial/session` 仅作为 Web USB Console 兼容快照保留；用户可见与新实现查询面固定为 `connection / identity / status / settings / trace`。
+- USB CDC hello capability 命名改为 `settings`，不再继续传播 `safe_settings` 旧命名。

@@ -183,6 +183,170 @@ Host: mains-aegis-a1b2c3.local
 
 - `rssi_dbm` 首版允许恒为 `null`；后续若补齐真实 RSSI，不需要改版本。
 
+## Settings（GET `/api/v1/settings`）
+
+- 范围（Scope）: external
+- 变更（Change）: Modify
+- 鉴权（Auth）: none
+
+### 请求（Request）
+
+- Headers: None
+- Query: None
+- Body: None
+
+### 响应（Response）
+
+- Success schema:
+
+```json
+{
+  "wifi": {
+    "configured": true,
+    "ssid": "LabNet"
+  },
+  "log_level": "info",
+  "manual_charge": {
+    "target": "full_100",
+    "speed": "ma_500",
+    "timer_h": 2
+  }
+}
+```
+
+- `wifi.ssid` 允许为 `null`；PSK 永远不得出现在返回中。
+
+### 错误（Errors）
+
+- None（仅传输层错误）
+
+### 兼容性与迁移（Compatibility / migration）
+
+- `settings` 是设备本体当前可管理设置的完整快照；后续可新增字段，但不得把返回拆成多份零散读取端点。
+
+## WiFi Config（POST/DELETE `/api/v1/wifi-config`）
+
+- 范围（Scope）: external
+- 变更（Change）: Modify
+- 鉴权（Auth）: none
+
+### 请求（Request）
+
+- `POST /api/v1/wifi-config`
+
+```json
+{
+  "ssid": "LabNet",
+  "psk": "correct horse"
+}
+```
+
+- `DELETE /api/v1/wifi-config`
+- Query: None
+
+### 响应（Response）
+
+- Success: `202 Accepted`
+
+```json
+{"accepted":true}
+```
+
+- 语义：请求被设备 HTTP worker 接收后进入主循环串行执行队列；真实写入沿用 USB CDC WiFi config 的 EEPROM 与运行时 WiFi 更新路径。
+- PSK 不得出现在响应、日志或 trace payload 中。
+
+### 错误（Errors）
+
+- `400/invalid_wifi_ssid`: SSID 非法（retryable: no）
+- `400/invalid_wifi_psk`: PSK 非法（retryable: no）
+- `409/busy`: 已有未消费 LAN management command（retryable: yes）
+
+## Log Level（POST `/api/v1/settings/log-level`）
+
+- 范围（Scope）: external
+- 变更（Change）: Modify
+- 鉴权（Auth）: none
+
+### 请求（Request）
+
+```json
+{"level":"info"}
+```
+
+### 响应（Response）
+
+- Success: `202 Accepted`
+
+```json
+{"accepted":true}
+```
+
+### 错误（Errors）
+
+- `400/invalid_log_level`: level 不在 `error|warn|info|debug|trace` 中（retryable: no）
+- `409/busy`: 已有未消费 LAN management command（retryable: yes）
+
+## Manual Charge（POST `/api/v1/settings/manual-charge`）
+
+- 范围（Scope）: external
+- 变更（Change）: Modify
+- 鉴权（Auth）: none
+
+### 请求（Request）
+
+```json
+{
+  "target": "rsoc_80",
+  "speed": "ma_500",
+  "timer_h": 2
+}
+```
+
+- `target`: `pack_3v7 | rsoc_80 | full_100`
+- `speed`: `ma_100 | ma_500 | ma_1000`
+- `timer_h`: `1 | 2 | 6`
+
+### 响应（Response）
+
+- Success: `202 Accepted`
+
+```json
+{"accepted":true}
+```
+
+### 错误（Errors）
+
+- `400/invalid_manual_charge_prefs`: 参数不在安全集合中（retryable: no）
+- `409/busy`: 已有未消费 LAN management command（retryable: yes）
+
+## Reset（POST `/api/v1/reset`）
+
+- 范围（Scope）: external
+- 变更（Change）: New
+- 鉴权（Auth）: none
+
+### 请求（Request）
+
+```json
+{"confirm":"reset"}
+```
+
+### 响应（Response）
+
+- Success: `202 Accepted`
+
+```json
+{"accepted":true}
+```
+
+- 语义：设备主循环消费命令后短暂延迟并执行 software reset。调用方必须预期 HTTP 连接和 LAN 可达性中断。
+
+### 错误（Errors）
+
+- `400/missing_field`: 缺少 `confirm`（retryable: no）
+- `400/unsafe_operation`: `confirm` 不是 `reset`（retryable: no）
+- `409/busy`: 已有未消费 LAN management command（retryable: yes）
+
 ## Status（GET `/api/v1/status`）
 
 - 范围（Scope）: external
