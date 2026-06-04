@@ -824,18 +824,23 @@ pub(super) fn charge_policy_step(
         };
     };
 
-    let low_voltage_recovery_stage =
-        if telemetry.cell_min_mv < CHARGE_POLICY_LOW_VOLTAGE_RECOVERY_EXIT_CELL_MIN_MV {
-            if !telemetry.charge_ready && telemetry.bms_recovery_charge_allowed {
-                Some(ChargePolicyRecoveryStage::Bq40Pchg)
-            } else if telemetry.charge_ready {
-                Some(ChargePolicyRecoveryStage::Bq25792Precharge)
-            } else {
-                None
-            }
+    let low_voltage_recovery_input = matches!(
+        input.input_source,
+        Some(DashboardInputSource::DcIn | DashboardInputSource::UsbC)
+    );
+    let low_voltage_recovery_stage = if low_voltage_recovery_input
+        && telemetry.cell_min_mv < CHARGE_POLICY_LOW_VOLTAGE_RECOVERY_EXIT_CELL_MIN_MV
+    {
+        if !telemetry.charge_ready && telemetry.bms_recovery_charge_allowed {
+            Some(ChargePolicyRecoveryStage::Bq40Pchg)
+        } else if telemetry.charge_ready {
+            Some(ChargePolicyRecoveryStage::Bq25792Precharge)
         } else {
             None
-        };
+        }
+    } else {
+        None
+    };
     let bms_recovery_active = matches!(
         low_voltage_recovery_stage,
         Some(ChargePolicyRecoveryStage::Bq40Pchg)
@@ -2345,6 +2350,32 @@ mod tests {
             decision.recovery_stage,
             Some(ChargePolicyRecoveryStage::Bq40Pchg)
         );
+    }
+
+    #[test]
+    fn charge_policy_blocks_cuv_precharge_without_known_input_source() {
+        for input_source in [None, Some(DashboardInputSource::Auto)] {
+            let mut memory = ChargePolicyMemory::default();
+            let mut derate = ChargePolicyDerateTracker::default();
+            let mut output_load = ChargePolicyOutputLoadTracker::default();
+            let mut telemetry = policy_telemetry(0, 2_853, 2_974);
+            telemetry.charge_ready = false;
+            telemetry.bms_recovery_charge_allowed = true;
+
+            let decision = charge_policy_step(
+                &mut memory,
+                &mut derate,
+                &mut output_load,
+                0,
+                policy_input(Some(telemetry), input_source, Some(70)),
+            );
+
+            assert_eq!(decision.state, ChargePolicyState::BlockedNoBms);
+            assert!(!decision.allow_charge);
+            assert_eq!(decision.target_ichg_ma, None);
+            assert_eq!(decision.recovery_stage, None);
+            assert!(!memory.charge_latched);
+        }
     }
 
     #[test]
