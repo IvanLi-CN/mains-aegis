@@ -11,6 +11,8 @@ DENIED_PORT="/dev/cu.usbmodem212101"
 mode="dry-run"
 target_device_id=""
 target_port=""
+target_device_id_arg_set="false"
+target_port_arg_set="false"
 devd_url="http://127.0.0.1:30080"
 report_root=""
 require_recovery_state="false"
@@ -58,11 +60,13 @@ while [[ $# -gt 0 ]]; do
     --device-id)
       require_value "$1" "$#"
       target_device_id="${2:-}"
+      target_device_id_arg_set="true"
       shift 2
       ;;
     --port)
       require_value "$1" "$#"
       target_port="${2:-}"
+      target_port_arg_set="true"
       shift 2
       ;;
     --devd-url)
@@ -153,6 +157,10 @@ read_selector_port() {
 }
 
 require_exact_target() {
+  if [[ "$target_device_id_arg_set" != "true" || "$target_port_arg_set" != "true" ]]; then
+    decision_summary "state-changing" "$0 --real" "deny" "G5: real HIL requires explicit device id and port" "Pass --device-id $TARGET_DEVICE_ID_DEFAULT --port $TARGET_PORT_DEFAULT."
+    exit 31
+  fi
   if [[ "$target_device_id" != "$TARGET_DEVICE_ID_DEFAULT" ]]; then
     decision_summary "state-changing" "$0 --real" "deny" "G5: target device id is not the approved HIL device" "Use $TARGET_DEVICE_ID_DEFAULT or stop."
     exit 32
