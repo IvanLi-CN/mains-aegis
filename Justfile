@@ -13,8 +13,12 @@ default:
 web-check:
     bun run web:check
 
-# Start the Web dev server. Override with WEB_PORT=5173.
-web-dev:
+# Sync the generated firmware catalog into Web assets when one exists.
+firmware-sync-web:
+    if [[ -f {{ artifact_out }}/firmware-catalog.json ]]; then bun run firmware:embed-web; else echo "No generated firmware catalog at {{ artifact_out }}/firmware-catalog.json; skipping Web firmware sync."; fi
+
+# Start the Web dev server after syncing any generated firmware catalog. Override with WEB_PORT=5173.
+web-dev: firmware-sync-web
     cd web && WEB_PORT=${WEB_PORT:-5173} bun run dev
 
 # Build the Web UI.
