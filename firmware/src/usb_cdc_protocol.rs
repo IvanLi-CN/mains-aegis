@@ -745,6 +745,20 @@ mod tests {
     }
 
     #[test]
+    fn parses_power_diag_request_over_usb_cdc() {
+        let frame =
+            parse_frame(r#"{"type":"request","request_id":"req-diag","op":"get_power_diag"}"#)
+                .unwrap();
+        assert_eq!(
+            frame,
+            UsbCdcFrame::Request {
+                request_id: String::try_from("req-diag").unwrap(),
+                op: UsbCdcRequest::GetPowerDiag,
+            }
+        );
+    }
+
+    #[test]
     fn keeps_request_id_available_after_validation_errors() {
         let line = r#"{"type":"request","request_id":"req-err","op":"output_enable"}"#;
         assert_eq!(

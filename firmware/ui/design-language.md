@@ -130,7 +130,7 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 
 - `BYPASS / STANDBY / ASSIST / BACKUP`: 仅提供页面模式语义，不再直接决定 `ChargeCard` 状态。
 - `ChargeCard` 首页状态来自主线 charger state machine 的紧凑映射：`CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`。
-- Charger detail 保留完整运行时 token：`CHG1A / CHG500 / CHG100 / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`。
+- Charger detail 保留完整运行时 token：`CHG1A / CHG500 / CHG100 / RECOV / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`。
 - `MANUAL` 页面 `MODE` 词形固定为：`AUTO / AUTO CHG / MANUAL / TAKEOVER / STOPPED`。
 
 ### 4.2 SelfCheckCommState
@@ -167,7 +167,7 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 ## 5. Naming and copywriting rules
 
 - 文档说明使用中文，组件/Token/状态标识使用英文。
-- 状态词必须使用固定词形：`BYPASS`、`STANDBY`、`ASSIST`、`BACKUP`、`PEND`、`OK`、`WARN`、`ERR`、`N/A`、`LOCK`、`NOAC`、`RUN`、`IDLE`、`HOT`、`CHG`、`WAIT`、`FULL`、`WARM`、`TEMP`、`LOAD`、`CHG1A`、`CHG500`、`CHG100`、`AUTO`、`AUTO CHG`、`MANUAL`、`TAKEOVER`、`STOPPED`。
+- 状态词必须使用固定词形：`BYPASS`、`STANDBY`、`ASSIST`、`BACKUP`、`PEND`、`OK`、`WARN`、`ERR`、`N/A`、`LOCK`、`NOAC`、`RUN`、`IDLE`、`HOT`、`CHG`、`WAIT`、`FULL`、`WARM`、`TEMP`、`LOAD`、`CHG1A`、`CHG500`、`CHG100`、`RECOV`、`AUTO`、`AUTO CHG`、`MANUAL`、`TAKEOVER`、`STOPPED`。
 - 模块名必须与实现一致：`GC9307`、`TCA6408A`、`FUSB302`、`INA3221`、`BQ25792`、`BQ40Z50`、`TPS55288-A`、`TPS55288-B`、`TMP112-A`、`TMP112-B`。
 - 单位规范：`W`（功率）、`A`（电流）、`C`（温度）、`%`（SOC）。
 - 禁止同义词漂移：同一状态不得在不同文档中出现别名。

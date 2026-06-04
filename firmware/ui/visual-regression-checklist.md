@@ -67,7 +67,7 @@
   - `assets/self-check-c-assist-up.png`
   - `assets/self-check-c-backup-touch.png`
 - Pass criteria:
-  - `COMM` 状态词仅出现规范词汇：基础态 `PEND/OK/WARN/ERR/N/A` 与派生态 `RUN/LOCK/IDLE/HOT/CHG/WAIT/FULL/WARM/TEMP/LOAD/CHG500/CHG100`。
+  - `COMM` 状态词仅出现规范词汇：基础态 `PEND/OK/WARN/ERR/N/A` 与派生态 `RUN/LOCK/IDLE/HOT/CHG/WAIT/FULL/WARM/TEMP/LOAD/CHG500/CHG100/RECOV`。
   - 交互高亮由 `UiFocus` 驱动，不改变模块业务语义。
 
 ### VR-S-03 Module naming consistency

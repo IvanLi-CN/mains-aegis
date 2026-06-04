@@ -366,8 +366,8 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
 - 充电策略（主线运行时 SoT）：
   - 以 `firmware/src/output/mod.rs` 中的 charger state machine 为准
   - 首页 `CHARGE` 卡显示紧凑 token：`CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`
-  - charger detail 保留完整运行时 token：`CHG500 / CHG100 / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`
-  - `CHG500/CHG100 -> CHG` 仅发生在首页紧凑映射，不改变运行时状态机语义
+  - charger detail 保留完整运行时 token：`CHG500 / CHG100 / RECOV / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`
+  - `CHG500/CHG100/RECOV -> CHG` 仅发生在首页紧凑映射，不改变运行时状态机语义
 - Dashboard 字段分层（项目口径）：
   - 市电存在（`BYPASS/STANDBY/ASSIST`）：主 KPI 显示 `PIN` 与 `POUT`
   - 市电缺失（`BACKUP`）：主 KPI 显示 `POUT` 与 `IOUT`

@@ -16,6 +16,7 @@ pub mod reg {
     pub const CHARGE_CURRENT_LIMIT: u8 = 0x03;
     pub const INPUT_VOLTAGE_LIMIT: u8 = 0x05;
     pub const INPUT_CURRENT_LIMIT: u8 = 0x06;
+    pub const PRECHARGE_CONTROL: u8 = 0x08;
     pub const TERMINATION_CONTROL: u8 = 0x09;
 
     pub const CHARGER_CONTROL_0: u8 = 0x0F;
@@ -125,6 +126,10 @@ pub mod status4 {
 pub const TERMINATION_CURRENT_MIN_MA: u16 = 40;
 pub const TERMINATION_CURRENT_MAX_MA: u16 = 1000;
 pub const TERMINATION_CURRENT_STEP_MA: u16 = 40;
+pub const PRECHARGE_CURRENT_MIN_MA: u16 = 40;
+pub const PRECHARGE_CURRENT_MAX_MA: u16 = 2000;
+pub const PRECHARGE_CURRENT_STEP_MA: u16 = 40;
+pub const VBAT_LOWV_71P4: u8 = 0x03;
 
 pub mod status3 {
     pub const ACRB2_STAT: u8 = 1 << 7;
@@ -337,6 +342,51 @@ pub const fn decode_input_voltage_limit_mv(reg: u8) -> u16 {
 
 pub const fn decode_input_current_limit_ma(reg: u16) -> u16 {
     (reg & 0x01FF) * 10
+}
+
+pub const fn encode_precharge_current_bits(target_ma: u16) -> u8 {
+    let clamped = if target_ma < PRECHARGE_CURRENT_MIN_MA {
+        PRECHARGE_CURRENT_MIN_MA
+    } else if target_ma > PRECHARGE_CURRENT_MAX_MA {
+        PRECHARGE_CURRENT_MAX_MA
+    } else {
+        target_ma
+    };
+    (clamped / PRECHARGE_CURRENT_STEP_MA) as u8
+}
+
+pub const fn decode_precharge_current_ma(reg08: u8) -> u16 {
+    let field = reg08 & 0x3f;
+    if field == 0 {
+        PRECHARGE_CURRENT_MIN_MA
+    } else {
+        (field as u16) * PRECHARGE_CURRENT_STEP_MA
+    }
+}
+
+pub const fn decode_vbat_lowv_pct_x10(reg08: u8) -> u16 {
+    match (reg08 >> 6) & 0x03 {
+        0 => 150,
+        1 => 622,
+        2 => 667,
+        _ => 714,
+    }
+}
+
+pub fn set_precharge_control<I2C>(
+    i2c: &mut I2C,
+    vbat_lowv_code: u8,
+    iprechg_ma: u16,
+) -> Result<u8, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let new = ((vbat_lowv_code & 0x03) << 6) | (encode_precharge_current_bits(iprechg_ma) & 0x3f);
+    let cur = read_u8(i2c, reg::PRECHARGE_CONTROL)?;
+    if new != cur {
+        write_u8(i2c, reg::PRECHARGE_CONTROL, new)?;
+    }
+    Ok(new)
 }
 
 pub fn read_vac1_adc_mv<I2C>(i2c: &mut I2C) -> Result<u16, I2C::Error>
@@ -733,6 +783,22 @@ mod tests {
         assert_eq!(
             i2c.writes.last().unwrap().as_slice(),
             &[reg::INPUT_CURRENT_LIMIT, 0x00, 0x82]
+        );
+    }
+
+    #[test]
+    fn precharge_control_encodes_vbat_lowv_and_iprechg() {
+        let mut i2c = RegisterWordI2c::new([0x00, 0x00]);
+
+        let applied =
+            set_precharge_control(&mut i2c, VBAT_LOWV_71P4, PRECHARGE_CURRENT_STEP_MA * 3).unwrap();
+
+        assert_eq!(applied, 0xc3);
+        assert_eq!(decode_vbat_lowv_pct_x10(applied), 714);
+        assert_eq!(decode_precharge_current_ma(applied), 120);
+        assert_eq!(
+            i2c.writes.last().unwrap().as_slice(),
+            &[reg::PRECHARGE_CONTROL, 0xc3]
         );
     }
 

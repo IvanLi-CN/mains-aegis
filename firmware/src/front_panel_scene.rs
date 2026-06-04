@@ -8191,7 +8191,7 @@ fn charger_state_text(data: DashboardLiveData) -> &'static str {
 fn home_charge_state_text(data: DashboardLiveData) -> &'static str {
     fn clamp(status: &'static str) -> Option<&'static str> {
         match status {
-            "CHG1A" | "CHG500" | "CHG100" | "CHG" => Some("CHG"),
+            "CHG1A" | "CHG500" | "CHG100" | "RECOV" | "CHG" => Some("CHG"),
             "IDLE" | "READY" | "WAIT" => Some("WAIT"),
             "FULL" | "WARM" | "TEMP" | "LOAD" | "LOCK" | "NOAC" => Some(status),
             _ => None,
@@ -12489,6 +12489,10 @@ mod tests {
         snapshot.dashboard_detail.charger_status = Some("CHG1A");
         let charge_1a = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
         assert_eq!(home_charge_state_text(charge_1a), "CHG");
+
+        snapshot.dashboard_detail.charger_status = Some("RECOV");
+        let recovery = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
+        assert_eq!(home_charge_state_text(recovery), "CHG");
     }
 
     #[test]

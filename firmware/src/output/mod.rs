@@ -147,6 +147,7 @@ const CHARGE_POLICY_DC_DERATE_EXIT_HOLD: Duration = Duration::from_secs(5);
 const CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10: u32 = 50;
 const CHARGE_POLICY_DC_INPUT_IINDPM_MA: u16 = 3_000;
 const CHARGE_POLICY_100MA_ITERM_MA: u16 = 40;
+const CHARGE_POLICY_PRECHARGE_IPRECHG_MA: u16 = 120;
 const USB_PD_SYSTEM_LOAD_FLOOR_MW: u32 = 2_500;
 const CHARGER_INPUT_IBUS_MAX_MA: i16 = 5_000;
 const CHARGER_INPUT_VBUS_MAX_MV: u16 = 30_000;
@@ -9290,39 +9291,17 @@ where
             .and_then(|diag| diag.charging)
             .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::HV))
             .unwrap_or(false);
-        let bms_recovery_charge_allowed = self.ui_snapshot.bq40z50_no_battery == Some(false)
-            && self
-                .bms_cached_lock_diag
-                .and_then(|diag| diag.op_status)
-                .and_then(|op_status| {
-                    bq40_op_bit(Some(op_status), bq40z50::operation_status::PCHG)
-                })
-                == Some(true)
-            && self
-                .bms_cached_lock_diag
-                .and_then(|diag| diag.safety_status)
-                .and_then(|safety| bq40_mac_bit(Some(safety), bq40z50::safety_status::CUV))
-                == Some(true)
-            && self
-                .bms_cached_lock_diag
-                .and_then(|diag| diag.safety_status)
-                .and_then(|safety| bq40_mac_bit(Some(safety), bq40z50::safety_status::CUVC))
-                != Some(true)
-            && self
-                .bms_cached_lock_diag
-                .and_then(|diag| diag.pf_status)
-                .unwrap_or(0)
-                == 0
-            && self
-                .bms_cached_lock_diag
+        let bms_recovery_charge_allowed = bms_recovery_charge_allowed_from_diag(
+            self.ui_snapshot.bq40z50_no_battery,
+            self.bms_cached_lock_diag.and_then(|diag| diag.op_status),
+            self.bms_cached_lock_diag
+                .and_then(|diag| diag.safety_status),
+            self.bms_cached_lock_diag.and_then(|diag| diag.pf_status),
+            self.bms_cached_lock_diag
                 .and_then(|diag| diag.charging)
-                .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::IN))
-                != Some(true)
-            && self
-                .bms_cached_lock_diag
-                .and_then(|diag| diag.charging)
-                .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::SU))
-                != Some(true);
+                .and_then(|charging| charging.value),
+            self.bms_cell_min_mv,
+        );
         let charge_policy_telemetry = if activation_pending {
             None
         } else {
@@ -9404,6 +9383,8 @@ where
         let policy_full_reason = charge_policy_decision.and_then(|decision| decision.full_reason);
         let policy_output_block_reason =
             charge_policy_decision.and_then(|decision| decision.output_block_reason);
+        let policy_recovery_stage =
+            charge_policy_decision.and_then(|decision| decision.recovery_stage);
         let mut policy_status_text = if usb_pd_unsafe_latched {
             "FAULT"
         } else if !usb_pd_charge_gate_ready {
@@ -9556,6 +9537,8 @@ where
         let mut applied_ichg_ma: Option<u16> = None;
         let mut applied_vindpm_mv: Option<u16> = None;
         let mut applied_iindpm_ma: Option<u16> = None;
+        let mut applied_vbat_lowv_pct_x10: Option<u16> = None;
+        let mut applied_iprechg_ma: Option<u16> = None;
         let mut applied_iterm_ma: Option<u16> = None;
         let policy_low_current_charge = allow_charge
             && !force_allow_charge
@@ -9582,6 +9565,25 @@ where
         }
 
         if !force_allow_charge && !auto_force_charge && !activation_pending {
+            match bq25792::set_precharge_control(
+                &mut self.i2c,
+                bq25792::VBAT_LOWV_71P4,
+                CHARGE_POLICY_PRECHARGE_IPRECHG_MA,
+            ) {
+                Ok(v) => {
+                    applied_vbat_lowv_pct_x10 = Some(bq25792::decode_vbat_lowv_pct_x10(v));
+                    applied_iprechg_ma = Some(bq25792::decode_precharge_current_ma(v));
+                }
+                Err(e) => {
+                    self.mark_charger_poll_failed(now);
+                    defmt::error!(
+                        "charger: bq25792 err stage=precharge_ctrl_write err={}",
+                        i2c_error_kind(e)
+                    );
+                    return;
+                }
+            }
+
             if let Some(target_iterm_ma) = policy_term_target_ma {
                 match bq25792::set_termination_current_ma(&mut self.i2c, target_iterm_ma) {
                     Ok(v) => applied_iterm_ma = Some(v),
@@ -9971,6 +9973,8 @@ where
             ichg_ma: applied_ichg_ma.or(policy_target_ichg_ma),
             vindpm_mv: applied_vindpm_mv,
             iindpm_ma: applied_iindpm_ma,
+            vbat_lowv_pct_x10: applied_vbat_lowv_pct_x10,
+            iprechg_ma: applied_iprechg_ma,
             iterm_ma,
             chg_stat: bq25792::decode_chg_stat(bq25792::status1::chg_stat(status1)),
             vbus_stat: bq25792::decode_vbus_stat(bq25792::status1::vbus_stat(status1)),
@@ -10002,6 +10006,7 @@ where
             full_reason: policy_full_reason.map(ChargeFullReason::as_str),
             output_block_reason: policy_output_block_reason
                 .map(ChargePolicyOutputBlockReason::as_str),
+            recovery_stage: policy_recovery_stage.map(ChargePolicyRecoveryStage::as_str),
             target_ichg_ma: policy_target_ichg_ma,
             output_power_w10,
             charge_latched: self.charge_policy.charge_latched,
@@ -10574,6 +10579,17 @@ where
         let charging_status = lock_diag
             .and_then(|diag| diag.charging)
             .and_then(|charging| charging.value);
+        let cuv_recovery_mv =
+            bq40z50::read_data_flash_u16(&mut self.i2c, addr, bq40z50::data_flash::CUV_RECOVERY)
+                .ok()
+                .flatten();
+        let protection_configuration = bq40z50::read_data_flash_u8(
+            &mut self.i2c,
+            addr,
+            bq40z50::data_flash::PROTECTION_CONFIGURATION,
+        )
+        .ok()
+        .flatten();
         let (charge_ready, _) = bq40_decode_charge_path(op_status);
         let (discharge_ready, _) = bq40_decode_discharge_path(op_status);
 
@@ -10602,6 +10618,9 @@ where
             pchg_fet: bq40_op_bit(op_status, bq40z50::operation_status::PCHG),
             cuv: bq40_mac_bit(safety_status, bq40z50::safety_status::CUV),
             cuvc: bq40_mac_bit(safety_status, bq40z50::safety_status::CUVC),
+            cuv_recovery_mv,
+            cuv_recov_chg: protection_configuration
+                .map(|raw| (raw & bq40z50::protection_configuration::CUV_RECOV_CHG) != 0),
             fet_en: bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::FET_EN),
             chg_en: bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::CHG_EN),
             dsg_en: bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::DSG_EN),
