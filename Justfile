@@ -69,8 +69,12 @@ firmware-build:
 firmware-artifact:
     python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --out {{ artifact_out }} --firmware-dir firmware
 
+# Copy the generated firmware catalog into the Web public assets.
+firmware-embed-web:
+    bun run firmware:embed-web
+
 # Build firmware and generate a matching firmware artifact manifest.
-firmware-release: firmware-build firmware-artifact
+firmware-release: firmware-build firmware-artifact firmware-embed-web
 
 # Select an artifact manifest for a bound devd device.
 artifact-select device manifest:
@@ -84,6 +88,7 @@ flash-dry-run device:
 flash-current-dry-run device:
     just firmware-build
     manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --out {{ artifact_out }} --firmware-dir firmware)
+    bun run firmware:embed-web
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} artifact select --manifest-path "$manifest"
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --dry-run
 
@@ -92,6 +97,7 @@ flash-current-real device confirm:
     [[ "{{ confirm }}" == "flash" ]] || { echo "Refusing real flash: pass confirm=flash"; exit 2; }
     just firmware-build
     manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --out {{ artifact_out }} --firmware-dir firmware)
+    bun run firmware:embed-web
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} artifact select --manifest-path "$manifest"
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --dry-run
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --real
