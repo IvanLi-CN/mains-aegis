@@ -4,7 +4,7 @@ use heapless::String;
 
 use crate::{
     mdns_wire::DeviceIdentity,
-    net_types::{format_ipv4, UpsStatusSnapshot, WifiSnapshot, API_VERSION},
+    net_types::{format_ipv4, PowerDiagSnapshot, UpsStatusSnapshot, WifiSnapshot, API_VERSION},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -204,6 +204,185 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     let _ = buf.push('}');
 }
 
+pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDiagSnapshot) {
+    buf.clear();
+    let _ = buf.push('{');
+    let _ = buf.push_str("\"input\":{");
+    json_field_opt_bool(buf, "mains_present", diag.input.mains_present, true);
+    json_field_opt_u16(buf, "input_vbus_mv", diag.input.input_vbus_mv, true);
+    json_field_opt_i32(buf, "input_ibus_ma", diag.input.input_ibus_ma, true);
+    json_field_opt_u16(buf, "vin_vbus_mv", diag.input.vin_vbus_mv, true);
+    json_field_opt_i32(buf, "vin_iin_ma", diag.input.vin_iin_ma, true);
+    json_field_bool(buf, "usb_pd_attached", diag.input.usb_pd_attached, true);
+    json_field_bool(
+        buf,
+        "usb_pd_charge_ready",
+        diag.input.usb_pd_charge_ready,
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "usb_pd_vbus_present",
+        diag.input.usb_pd_vbus_present,
+        true,
+    );
+    json_field_bool(
+        buf,
+        "usb_pd_unsafe_source_latched",
+        diag.input.usb_pd_unsafe_source_latched,
+        true,
+    );
+    json_field_opt_str(
+        buf,
+        "usb_pd_contract_kind",
+        diag.input.usb_pd_contract_kind,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "usb_pd_contract_mv",
+        diag.input.usb_pd_contract_mv,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "usb_pd_contract_ma",
+        diag.input.usb_pd_contract_ma,
+        true,
+    );
+    json_field_opt_u16(buf, "usb_pd_vac1_mv", diag.input.usb_pd_vac1_mv, true);
+    json_field_opt_u16(buf, "usb_pd_vsys_mv", diag.input.usb_pd_vsys_mv, false);
+    let _ = buf.push_str("},\"charger\":{");
+    json_field_bool(buf, "poll_valid", diag.charger.poll_valid, true);
+    json_field_bool(buf, "enabled", diag.charger.enabled, true);
+    json_field_bool(buf, "ce_low", diag.charger.ce_low, true);
+    json_field_bool(buf, "ilim_hiz_brk_low", diag.charger.ilim_hiz_brk_low, true);
+    json_field_bool(buf, "allow_charge", diag.charger.allow_charge, true);
+    json_field_bool(
+        buf,
+        "normal_allow_charge",
+        diag.charger.normal_allow_charge,
+        true,
+    );
+    json_field_bool(
+        buf,
+        "force_allow_charge",
+        diag.charger.force_allow_charge,
+        true,
+    );
+    json_field_bool(buf, "can_enable", diag.charger.can_enable, true);
+    json_field_bool(
+        buf,
+        "usb_pd_charge_gate_ready",
+        diag.charger.usb_pd_charge_gate_ready,
+        true,
+    );
+    json_field_bool(buf, "input_present", diag.charger.input_present, true);
+    json_field_bool(buf, "vbus_present", diag.charger.vbus_present, true);
+    json_field_bool(buf, "ac1_present", diag.charger.ac1_present, true);
+    json_field_bool(buf, "ac2_present", diag.charger.ac2_present, true);
+    json_field_bool(buf, "pg", diag.charger.pg, true);
+    json_field_bool(buf, "vbat_present", diag.charger.vbat_present, true);
+    json_field_bool(buf, "adc_enabled", diag.charger.adc_enabled, true);
+    json_field_bool(buf, "adc_done", diag.charger.adc_done, true);
+    json_field_bool(buf, "adc_ready", diag.charger.adc_ready, true);
+    json_field_opt_i16(buf, "ibus_adc_ma", diag.charger.ibus_adc_ma, true);
+    json_field_opt_i16(buf, "ibat_adc_ma", diag.charger.ibat_adc_ma, true);
+    json_field_opt_u16(buf, "vbus_adc_mv", diag.charger.vbus_adc_mv, true);
+    json_field_opt_u16(buf, "vbat_adc_mv", diag.charger.vbat_adc_mv, true);
+    json_field_opt_u16(buf, "vsys_adc_mv", diag.charger.vsys_adc_mv, true);
+    json_field_opt_u16(buf, "vac1_adc_mv", diag.charger.vac1_adc_mv, true);
+    json_field_opt_u16(buf, "vreg_mv", diag.charger.vreg_mv, true);
+    json_field_opt_u16(buf, "ichg_ma", diag.charger.ichg_ma, true);
+    json_field_opt_u16(buf, "vindpm_mv", diag.charger.vindpm_mv, true);
+    json_field_opt_u16(buf, "iindpm_ma", diag.charger.iindpm_ma, true);
+    json_field_opt_u16(buf, "iterm_ma", diag.charger.iterm_ma, true);
+    json_field_str(buf, "chg_stat", diag.charger.chg_stat, true);
+    json_field_str(buf, "vbus_stat", diag.charger.vbus_stat, true);
+    json_field_str(buf, "ico_stat", diag.charger.ico_stat, true);
+    json_field_bool(buf, "treg", diag.charger.treg, true);
+    json_field_bool(buf, "dpdm", diag.charger.dpdm, true);
+    json_field_bool(buf, "wd", diag.charger.wd, true);
+    json_field_bool(buf, "poorsrc", diag.charger.poorsrc, true);
+    json_field_bool(buf, "vindpm", diag.charger.vindpm, true);
+    json_field_bool(buf, "iindpm", diag.charger.iindpm, true);
+    json_field_bool(buf, "ts_cold", diag.charger.ts_cold, true);
+    json_field_bool(buf, "ts_hot", diag.charger.ts_hot, true);
+    json_field_opt_u8(buf, "st0", diag.charger.st0, true);
+    json_field_opt_u8(buf, "st1", diag.charger.st1, true);
+    json_field_opt_u8(buf, "st2", diag.charger.st2, true);
+    json_field_opt_u8(buf, "st3", diag.charger.st3, true);
+    json_field_opt_u8(buf, "st4", diag.charger.st4, true);
+    json_field_opt_u8(buf, "fault0", diag.charger.fault0, true);
+    json_field_opt_u8(buf, "fault1", diag.charger.fault1, true);
+    json_field_opt_u8(buf, "ctrl0", diag.charger.ctrl0, true);
+    json_field_opt_u16(buf, "term_ctrl", diag.charger.term_ctrl, false);
+    let _ = buf.push_str("},\"policy\":{");
+    json_field_opt_str(buf, "state", diag.policy.state, true);
+    json_field_str(buf, "status", diag.policy.status, true);
+    json_field_str(buf, "notice", diag.policy.notice, true);
+    json_field_str(buf, "input_source", diag.policy.input_source, true);
+    json_field_opt_str(buf, "start_reason", diag.policy.start_reason, true);
+    json_field_opt_str(buf, "full_reason", diag.policy.full_reason, true);
+    json_field_opt_str(
+        buf,
+        "output_block_reason",
+        diag.policy.output_block_reason,
+        true,
+    );
+    json_field_opt_u16(buf, "target_ichg_ma", diag.policy.target_ichg_ma, true);
+    json_field_opt_u32(buf, "output_power_w10", diag.policy.output_power_w10, true);
+    json_field_bool(buf, "charge_latched", diag.policy.charge_latched, true);
+    json_field_bool(buf, "full_latched", diag.policy.full_latched, true);
+    json_field_bool(buf, "dc_derated", diag.policy.dc_derated, true);
+    json_field_bool(buf, "output_blocked", diag.policy.output_blocked, true);
+    json_field_bool(buf, "manual_active", diag.policy.manual_active, true);
+    json_field_bool(
+        buf,
+        "manual_stop_inhibit",
+        diag.policy.manual_stop_inhibit,
+        false,
+    );
+    let _ = buf.push_str("},\"bms\":{");
+    json_field_opt_u8(buf, "addr", diag.bms.addr, true);
+    json_field_str(buf, "state", diag.bms.state, true);
+    json_field_opt_u16(buf, "pack_mv", diag.bms.pack_mv, true);
+    json_field_opt_i16(buf, "current_ma", diag.bms.current_ma, true);
+    json_field_opt_u16(buf, "soc_pct", diag.bms.soc_pct, true);
+    json_field_opt_u16(buf, "cell_min_mv", diag.bms.cell_min_mv, true);
+    json_field_opt_u16(buf, "cell_max_mv", diag.bms.cell_max_mv, true);
+    json_field_opt_bool(buf, "no_battery", diag.bms.no_battery, true);
+    json_field_opt_bool(buf, "discharge_ready", diag.bms.discharge_ready, true);
+    json_field_opt_bool(buf, "charge_ready", diag.bms.charge_ready, true);
+    json_field_opt_bool(buf, "full", diag.bms.full, true);
+    json_field_opt_str(buf, "issue_detail", diag.bms.issue_detail, true);
+    json_field_opt_bool(buf, "rca_alarm", diag.bms.rca_alarm, true);
+    json_field_opt_u32(buf, "safety_status", diag.bms.safety_status, true);
+    json_field_opt_u32(buf, "pf_status", diag.bms.pf_status, true);
+    json_field_opt_u32(
+        buf,
+        "manufacturing_status",
+        diag.bms.manufacturing_status,
+        true,
+    );
+    json_field_opt_u32(buf, "gauging_status", diag.bms.gauging_status, true);
+    json_field_opt_u32(buf, "op_status", diag.bms.op_status, true);
+    json_field_opt_bool(buf, "xchg", diag.bms.xchg, true);
+    json_field_opt_bool(buf, "chg_fet", diag.bms.chg_fet, true);
+    json_field_opt_bool(buf, "dsg_fet", diag.bms.dsg_fet, true);
+    json_field_opt_bool(buf, "pchg_fet", diag.bms.pchg_fet, true);
+    json_field_opt_bool(buf, "cuv", diag.bms.cuv, true);
+    json_field_opt_bool(buf, "cuvc", diag.bms.cuvc, true);
+    json_field_opt_bool(buf, "fet_en", diag.bms.fet_en, true);
+    json_field_opt_bool(buf, "chg_en", diag.bms.chg_en, true);
+    json_field_opt_bool(buf, "dsg_en", diag.bms.dsg_en, true);
+    json_field_opt_bool(buf, "charging_inhibit", diag.bms.charging_inhibit, true);
+    json_field_opt_bool(buf, "charging_suspend", diag.bms.charging_suspend, true);
+    json_field_opt_bool(buf, "charging_hv", diag.bms.charging_hv, true);
+    json_field_opt_u16(buf, "current_at_eoc_ma", diag.bms.current_at_eoc_ma, false);
+    let _ = buf.push_str("}}");
+}
+
 pub fn write_sse_event<const N: usize>(
     buf: &mut String<N>,
     event: &str,
@@ -364,10 +543,43 @@ fn json_field_opt_bool<const N: usize>(
     }
 }
 
+fn json_field_bool<const N: usize>(
+    buf: &mut String<N>,
+    key: &str,
+    value: bool,
+    trailing_comma: bool,
+) {
+    let _ = buf.push('"');
+    let _ = buf.push_str(key);
+    let _ = buf.push_str("\":");
+    let _ = buf.push_str(if value { "true" } else { "false" });
+    if trailing_comma {
+        let _ = buf.push(',');
+    }
+}
+
+fn json_field_opt_u8<const N: usize>(
+    buf: &mut String<N>,
+    key: &str,
+    value: Option<u8>,
+    trailing_comma: bool,
+) {
+    json_field_opt_num(buf, key, value.map(|value| value as i64), trailing_comma);
+}
+
 fn json_field_opt_u16<const N: usize>(
     buf: &mut String<N>,
     key: &str,
     value: Option<u16>,
+    trailing_comma: bool,
+) {
+    json_field_opt_num(buf, key, value.map(|value| value as i64), trailing_comma);
+}
+
+fn json_field_opt_u32<const N: usize>(
+    buf: &mut String<N>,
+    key: &str,
+    value: Option<u32>,
     trailing_comma: bool,
 ) {
     json_field_opt_num(buf, key, value.map(|value| value as i64), trailing_comma);

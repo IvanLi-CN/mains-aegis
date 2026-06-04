@@ -29,7 +29,10 @@ use esp_firmware::usb_pd::UsbPdSinkManager;
 #[cfg(feature = "web_serial")]
 use esp_firmware::{
     mdns_wire::{derive_device_identity, DeviceIdentity},
-    net_contract::{render_identity_json_with_write_controls, render_status_json, BuildInfo},
+    net_contract::{
+        render_identity_json_with_write_controls, render_power_diag_json, render_status_json,
+        BuildInfo,
+    },
     net_types::{UpsStatusSnapshot, WifiConnectionState, WifiErrorKind},
     usb_cdc_protocol::{
         parse_frame, render_error_json, render_hello_json, render_log_json,
@@ -1740,6 +1743,11 @@ fn handle_web_serial_frame<'d, I2C>(
                 render_status_frame_json(&mut frame, body.as_str());
                 write_web_serial_line(serial, frame.as_str());
                 log_state.emit_status_logs(serial, status);
+            }
+            UsbCdcRequest::GetPowerDiag => {
+                render_power_diag_json(&mut body, power.power_diag_snapshot());
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
             }
             UsbCdcRequest::SetLogLevel(level) => {
                 log_state.set_level(level);

@@ -35,6 +35,7 @@ pub enum UsbCdcFrame {
 pub enum UsbCdcRequest {
     GetIdentity,
     GetStatus,
+    GetPowerDiag,
     SetLogLevel(LogLevel),
     SetManualChargePrefs(ManualChargePrefsCommand),
 }
@@ -460,6 +461,7 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
     match op {
         "get_identity" => Ok(UsbCdcRequest::GetIdentity),
         "get_status" => Ok(UsbCdcRequest::GetStatus),
+        "get_power_diag" => Ok(UsbCdcRequest::GetPowerDiag),
         "set_log_level" => {
             let level =
                 json_string_field::<16>(line, "level")?.ok_or(UsbCdcProtocolError::MissingField)?;

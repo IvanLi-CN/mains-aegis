@@ -14,6 +14,10 @@ use esp_firmware::bq25792;
 use esp_firmware::bq40z50;
 use esp_firmware::fan;
 use esp_firmware::ina3221;
+use esp_firmware::net_types::{
+    PowerDiagBmsSnapshot, PowerDiagChargerSnapshot, PowerDiagInputSnapshot,
+    PowerDiagPolicySnapshot, PowerDiagSnapshot,
+};
 use esp_firmware::output_protection;
 use esp_firmware::output_retry::{self, TpsConfigRetryDecision};
 use esp_firmware::output_state as output_state_logic;
@@ -1532,6 +1536,12 @@ where
         safety_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::SAFETY_STATUS)
             .ok()
             .flatten(),
+        pf_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::PF_STATUS)
+            .ok()
+            .flatten(),
+        manufacturing_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::MANUFACTURING_STATUS)
+            .ok()
+            .flatten(),
         gauging_status: bq40z50::read_gauging_status(i2c, addr).ok().flatten(),
         op_status: bq40z50::read_operation_status(i2c, addr).ok().flatten(),
         update_status: bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::UPDATE_STATUS)
@@ -1694,6 +1704,13 @@ fn bq40_decode_discharge_path(op_status: Option<u32>) -> (Option<bool>, &'static
         (Some(true), "ready")
     } else {
         (Some(false), "dsg_fet_off")
+    }
+}
+
+fn usb_pd_contract_kind_name(kind: usb_pd::ContractKind) -> &'static str {
+    match kind {
+        usb_pd::ContractKind::Fixed => "fixed",
+        usb_pd::ContractKind::Pps => "pps",
     }
 }
 
@@ -3144,6 +3161,7 @@ pub struct PowerManager<'d, I2C> {
     usb_pd_input_limit_backup: Option<UsbPdInputLimitBackup>,
     usb_pd_restore_input_limits_pending: bool,
     pd_breadcrumb_next_seq: u16,
+    power_diag: PowerDiagSnapshot,
 
     ui_snapshot: SelfCheckUiSnapshot,
     audio_snapshot: AudioSignalSnapshot,
@@ -3648,6 +3666,7 @@ where
             usb_pd_input_limit_backup: None,
             usb_pd_restore_input_limits_pending: false,
             pd_breadcrumb_next_seq,
+            power_diag: PowerDiagSnapshot::empty(),
             ui_snapshot: initial_ui_snapshot,
             audio_snapshot: AudioSignalSnapshot::default(),
             audio_events: AudioSignalEvents::default(),
@@ -4027,6 +4046,32 @@ where
         snapshot
     }
 
+    pub fn power_diag_snapshot(&self) -> PowerDiagSnapshot {
+        self.power_diag
+    }
+
+    fn refresh_power_diag_input_snapshot(&mut self) {
+        let usb_pd = self.usb_pd_state;
+        self.power_diag.input = PowerDiagInputSnapshot {
+            mains_present: self.ui_snapshot.vin_mains_present,
+            input_vbus_mv: self.ui_snapshot.input_vbus_mv,
+            input_ibus_ma: self.ui_snapshot.input_ibus_ma,
+            vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
+            vin_iin_ma: self.ui_snapshot.vin_iin_ma,
+            usb_pd_attached: usb_pd.attached,
+            usb_pd_charge_ready: usb_pd.charge_ready,
+            usb_pd_vbus_present: usb_pd.vbus_present,
+            usb_pd_unsafe_source_latched: usb_pd.unsafe_source_latched,
+            usb_pd_contract_kind: usb_pd
+                .contract
+                .map(|contract| usb_pd_contract_kind_name(contract.kind)),
+            usb_pd_contract_mv: usb_pd.contract.map(|contract| contract.voltage_mv),
+            usb_pd_contract_ma: usb_pd.contract.map(|contract| contract.current_ma),
+            usb_pd_vac1_mv: self.usb_pd_vac1_mv,
+            usb_pd_vsys_mv: self.usb_pd_vsys_mv,
+        };
+    }
+
     pub fn usb_pd_demand(&self) -> usb_pd::UsbPdPowerDemand {
         let activation_pending = self.bms_activation_state == BmsActivationState::Pending;
         let output_power_w10 =
@@ -4126,6 +4171,7 @@ where
             }
         }
         self.recompute_ui_mode();
+        self.refresh_power_diag_input_snapshot();
     }
 
     fn maybe_log_usb_pd_charger_delivery_diag(
@@ -8965,6 +9011,12 @@ where
                 self.ui_snapshot.dashboard_detail.charger_notice = Some("manual_safety_blocked");
             }
             self.update_manual_charge_ui_snapshot(Instant::now());
+            self.refresh_power_diag_input_snapshot();
+            self.power_diag.charger.poll_valid = false;
+            self.power_diag.charger.enabled = false;
+            self.power_diag.charger.allow_charge = false;
+            self.power_diag.policy.status = "disabled";
+            self.power_diag.policy.notice = "charger_disabled";
             self.recompute_ui_mode();
             return;
         }
@@ -9774,6 +9826,77 @@ where
             UsbPdInputLimitUpdate::None => {}
         }
 
+        self.refresh_power_diag_input_snapshot();
+        self.power_diag.charger = PowerDiagChargerSnapshot {
+            poll_valid: true,
+            enabled: self.chg_enabled,
+            ce_low: self.chg_ce.is_low(),
+            ilim_hiz_brk_low: self.chg_ilim_hiz_brk.is_low(),
+            allow_charge,
+            normal_allow_charge,
+            force_allow_charge,
+            can_enable,
+            usb_pd_charge_gate_ready,
+            input_present,
+            vbus_present,
+            ac1_present,
+            ac2_present,
+            pg,
+            vbat_present,
+            adc_enabled,
+            adc_done,
+            adc_ready,
+            ibus_adc_ma: raw_ibus_adc_ma,
+            ibat_adc_ma,
+            vbus_adc_mv: raw_vbus_adc_mv,
+            vbat_adc_mv,
+            vsys_adc_mv,
+            vac1_adc_mv: raw_vac1_adc_mv,
+            vreg_mv: applied_vreg_mv,
+            ichg_ma: applied_ichg_ma.or(policy_target_ichg_ma),
+            vindpm_mv: applied_vindpm_mv,
+            iindpm_ma: applied_iindpm_ma,
+            iterm_ma,
+            chg_stat: bq25792::decode_chg_stat(bq25792::status1::chg_stat(status1)),
+            vbus_stat: bq25792::decode_vbus_stat(bq25792::status1::vbus_stat(status1)),
+            ico_stat: bq25792::decode_ico_stat(ico_stat),
+            treg,
+            dpdm,
+            wd,
+            poorsrc,
+            vindpm,
+            iindpm,
+            ts_cold,
+            ts_hot,
+            st0: Some(status0),
+            st1: Some(status1),
+            st2: Some(status2),
+            st3: Some(status3),
+            st4: Some(status4),
+            fault0: Some(fault0),
+            fault1: Some(fault1),
+            ctrl0: Some(applied_ctrl0),
+            term_ctrl: termination_ctrl,
+        };
+        self.power_diag.policy = PowerDiagPolicySnapshot {
+            state: policy_state.map(ChargePolicyState::as_str),
+            status: policy_status_text,
+            notice: policy_notice_text,
+            input_source: dashboard_input_source_name(input_source),
+            start_reason: policy_start_reason.map(ChargeStartReason::as_str),
+            full_reason: policy_full_reason.map(ChargeFullReason::as_str),
+            output_block_reason: policy_output_block_reason
+                .map(ChargePolicyOutputBlockReason::as_str),
+            target_ichg_ma: policy_target_ichg_ma,
+            output_power_w10,
+            charge_latched: self.charge_policy.charge_latched,
+            full_latched: self.charge_policy.full_latched,
+            dc_derated: self.charge_policy_derate.derated,
+            output_blocked: self.charge_policy_output_load.blocked,
+            manual_active: self.manual_charge_runtime.active,
+            manual_stop_inhibit: self.manual_charge_runtime.stop_inhibit,
+        };
+
         self.maybe_log_charger_limit_mismatch(
             now,
             allow_charge,
@@ -10033,6 +10156,12 @@ where
         self.ui_snapshot.input_vbus_mv = None;
         self.ui_snapshot.input_ibus_ma = None;
         self.clear_charger_detail_snapshot();
+        self.refresh_power_diag_input_snapshot();
+        self.power_diag.charger.poll_valid = false;
+        self.power_diag.charger.enabled = false;
+        self.power_diag.charger.allow_charge = false;
+        self.power_diag.policy.status = "error";
+        self.power_diag.policy.notice = "charger_poll_failed";
         self.recompute_ui_mode();
     }
 
@@ -10164,6 +10293,7 @@ where
                         } else {
                             bq40_ui_issue_detail(low_pack, primary_reason)
                         };
+                    self.refresh_power_diag_bms_snapshot(addr, &s);
                     self.maybe_log_bq40_block_detail_runtime(addr, primary_reason, s.op_status);
                     return true;
                 }
@@ -10191,6 +10321,9 @@ where
                             self.ui_snapshot.bq40z50_discharge_ready = None;
                             self.ui_snapshot.bq40z50_issue_detail = None;
                             self.clear_bms_detail_snapshot();
+                            self.power_diag.bms = PowerDiagBmsSnapshot::empty();
+                            self.power_diag.bms.state =
+                                self_check_comm_state_name(self.ui_snapshot.bq40z50);
                             self.bms_audio = BmsAudioState {
                                 rca_alarm: None,
                                 protection_active: false,
@@ -10250,6 +10383,9 @@ where
                             self.ui_snapshot.bq40z50_discharge_ready = None;
                             self.ui_snapshot.bq40z50_issue_detail = None;
                             self.clear_bms_detail_snapshot();
+                            self.power_diag.bms = PowerDiagBmsSnapshot::empty();
+                            self.power_diag.bms.state =
+                                self_check_comm_state_name(self.ui_snapshot.bq40z50);
                             self.bms_audio = BmsAudioState {
                                 rca_alarm: None,
                                 protection_active: false,
@@ -10307,6 +10443,58 @@ where
 
     fn bq40_discharge_ready(op_status: Option<u32>) -> Option<bool> {
         bq40_decode_discharge_path(op_status).0
+    }
+
+    fn refresh_power_diag_bms_snapshot(&mut self, addr: u8, s: &Bq40z50Snapshot) {
+        let lock_diag = s.lock_diag;
+        let op_status = s
+            .op_status
+            .or_else(|| lock_diag.and_then(|diag| diag.op_status));
+        let safety_status = lock_diag.and_then(|diag| diag.safety_status);
+        let pf_status = lock_diag.and_then(|diag| diag.pf_status);
+        let manufacturing_status = lock_diag.and_then(|diag| diag.manufacturing_status);
+        let gauging_status = s
+            .gauging_status
+            .or_else(|| lock_diag.and_then(|diag| diag.gauging_status));
+        let charging_status = lock_diag
+            .and_then(|diag| diag.charging)
+            .and_then(|charging| charging.value);
+        let (charge_ready, _) = bq40_decode_charge_path(op_status);
+        let (discharge_ready, _) = bq40_decode_discharge_path(op_status);
+
+        self.power_diag.bms = PowerDiagBmsSnapshot {
+            addr: Some(addr),
+            state: self_check_comm_state_name(self.ui_snapshot.bq40z50),
+            pack_mv: Some(s.vpack_mv),
+            current_ma: Some(s.current_ma),
+            soc_pct: Some(s.rsoc_pct),
+            cell_min_mv: Some(bq40_cell_min_mv(s)),
+            cell_max_mv: Some(bq40_cell_max_mv(s)),
+            no_battery: self.ui_snapshot.bq40z50_no_battery,
+            discharge_ready,
+            charge_ready,
+            full: Some((s.batt_status & bq40z50::battery_status::FC) != 0),
+            issue_detail: self.ui_snapshot.bq40z50_issue_detail,
+            rca_alarm: Some((s.batt_status & bq40z50::battery_status::RCA) != 0),
+            safety_status,
+            pf_status,
+            manufacturing_status,
+            gauging_status,
+            op_status,
+            xchg: bq40_op_bit(op_status, bq40z50::operation_status::XCHG),
+            chg_fet: bq40_op_bit(op_status, bq40z50::operation_status::CHG),
+            dsg_fet: bq40_op_bit(op_status, bq40z50::operation_status::DSG),
+            pchg_fet: bq40_op_bit(op_status, bq40z50::operation_status::PCHG),
+            cuv: bq40_mac_bit(safety_status, bq40z50::safety_status::CUV),
+            cuvc: bq40_mac_bit(safety_status, bq40z50::safety_status::CUVC),
+            fet_en: bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::FET_EN),
+            chg_en: bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::CHG_EN),
+            dsg_en: bq40_mac_bit(manufacturing_status, bq40z50::manufacturing_status::DSG_EN),
+            charging_inhibit: bq40_mac_bit(charging_status, bq40z50::charging_status::IN),
+            charging_suspend: bq40_mac_bit(charging_status, bq40z50::charging_status::SU),
+            charging_hv: bq40_mac_bit(charging_status, bq40z50::charging_status::HV),
+            current_at_eoc_ma: lock_diag.and_then(|diag| diag.current_at_eoc_ma),
+        };
     }
 
     fn read_bq40z50_snapshot_strict(
@@ -10696,6 +10884,8 @@ struct Bq40z50Snapshot {
 struct Bq40LockDiagSnapshot {
     charging: Option<bq40z50::ChargingStatusTrace>,
     safety_status: Option<u32>,
+    pf_status: Option<u32>,
+    manufacturing_status: Option<u32>,
     gauging_status: Option<u32>,
     op_status: Option<u32>,
     update_status: Option<u8>,

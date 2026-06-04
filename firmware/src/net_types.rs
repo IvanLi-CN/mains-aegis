@@ -183,6 +183,287 @@ pub struct UpsStatusSnapshot {
     pub network: NetworkUiSummary,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PowerDiagSnapshot {
+    pub input: PowerDiagInputSnapshot,
+    pub charger: PowerDiagChargerSnapshot,
+    pub policy: PowerDiagPolicySnapshot,
+    pub bms: PowerDiagBmsSnapshot,
+}
+
+impl PowerDiagSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            input: PowerDiagInputSnapshot::empty(),
+            charger: PowerDiagChargerSnapshot::empty(),
+            policy: PowerDiagPolicySnapshot::empty(),
+            bms: PowerDiagBmsSnapshot::empty(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PowerDiagInputSnapshot {
+    pub mains_present: Option<bool>,
+    pub input_vbus_mv: Option<u16>,
+    pub input_ibus_ma: Option<i32>,
+    pub vin_vbus_mv: Option<u16>,
+    pub vin_iin_ma: Option<i32>,
+    pub usb_pd_attached: bool,
+    pub usb_pd_charge_ready: bool,
+    pub usb_pd_vbus_present: Option<bool>,
+    pub usb_pd_unsafe_source_latched: bool,
+    pub usb_pd_contract_kind: Option<&'static str>,
+    pub usb_pd_contract_mv: Option<u16>,
+    pub usb_pd_contract_ma: Option<u16>,
+    pub usb_pd_vac1_mv: Option<u16>,
+    pub usb_pd_vsys_mv: Option<u16>,
+}
+
+impl PowerDiagInputSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            mains_present: None,
+            input_vbus_mv: None,
+            input_ibus_ma: None,
+            vin_vbus_mv: None,
+            vin_iin_ma: None,
+            usb_pd_attached: false,
+            usb_pd_charge_ready: false,
+            usb_pd_vbus_present: None,
+            usb_pd_unsafe_source_latched: false,
+            usb_pd_contract_kind: None,
+            usb_pd_contract_mv: None,
+            usb_pd_contract_ma: None,
+            usb_pd_vac1_mv: None,
+            usb_pd_vsys_mv: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PowerDiagChargerSnapshot {
+    pub poll_valid: bool,
+    pub enabled: bool,
+    pub ce_low: bool,
+    pub ilim_hiz_brk_low: bool,
+    pub allow_charge: bool,
+    pub normal_allow_charge: bool,
+    pub force_allow_charge: bool,
+    pub can_enable: bool,
+    pub usb_pd_charge_gate_ready: bool,
+    pub input_present: bool,
+    pub vbus_present: bool,
+    pub ac1_present: bool,
+    pub ac2_present: bool,
+    pub pg: bool,
+    pub vbat_present: bool,
+    pub adc_enabled: bool,
+    pub adc_done: bool,
+    pub adc_ready: bool,
+    pub ibus_adc_ma: Option<i16>,
+    pub ibat_adc_ma: Option<i16>,
+    pub vbus_adc_mv: Option<u16>,
+    pub vbat_adc_mv: Option<u16>,
+    pub vsys_adc_mv: Option<u16>,
+    pub vac1_adc_mv: Option<u16>,
+    pub vreg_mv: Option<u16>,
+    pub ichg_ma: Option<u16>,
+    pub vindpm_mv: Option<u16>,
+    pub iindpm_ma: Option<u16>,
+    pub iterm_ma: Option<u16>,
+    pub chg_stat: &'static str,
+    pub vbus_stat: &'static str,
+    pub ico_stat: &'static str,
+    pub treg: bool,
+    pub dpdm: bool,
+    pub wd: bool,
+    pub poorsrc: bool,
+    pub vindpm: bool,
+    pub iindpm: bool,
+    pub ts_cold: bool,
+    pub ts_hot: bool,
+    pub st0: Option<u8>,
+    pub st1: Option<u8>,
+    pub st2: Option<u8>,
+    pub st3: Option<u8>,
+    pub st4: Option<u8>,
+    pub fault0: Option<u8>,
+    pub fault1: Option<u8>,
+    pub ctrl0: Option<u8>,
+    pub term_ctrl: Option<u16>,
+}
+
+impl PowerDiagChargerSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            poll_valid: false,
+            enabled: false,
+            ce_low: false,
+            ilim_hiz_brk_low: false,
+            allow_charge: false,
+            normal_allow_charge: false,
+            force_allow_charge: false,
+            can_enable: false,
+            usb_pd_charge_gate_ready: false,
+            input_present: false,
+            vbus_present: false,
+            ac1_present: false,
+            ac2_present: false,
+            pg: false,
+            vbat_present: false,
+            adc_enabled: false,
+            adc_done: false,
+            adc_ready: false,
+            ibus_adc_ma: None,
+            ibat_adc_ma: None,
+            vbus_adc_mv: None,
+            vbat_adc_mv: None,
+            vsys_adc_mv: None,
+            vac1_adc_mv: None,
+            vreg_mv: None,
+            ichg_ma: None,
+            vindpm_mv: None,
+            iindpm_ma: None,
+            iterm_ma: None,
+            chg_stat: "unknown",
+            vbus_stat: "unknown",
+            ico_stat: "unknown",
+            treg: false,
+            dpdm: false,
+            wd: false,
+            poorsrc: false,
+            vindpm: false,
+            iindpm: false,
+            ts_cold: false,
+            ts_hot: false,
+            st0: None,
+            st1: None,
+            st2: None,
+            st3: None,
+            st4: None,
+            fault0: None,
+            fault1: None,
+            ctrl0: None,
+            term_ctrl: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PowerDiagPolicySnapshot {
+    pub state: Option<&'static str>,
+    pub status: &'static str,
+    pub notice: &'static str,
+    pub input_source: &'static str,
+    pub start_reason: Option<&'static str>,
+    pub full_reason: Option<&'static str>,
+    pub output_block_reason: Option<&'static str>,
+    pub target_ichg_ma: Option<u16>,
+    pub output_power_w10: Option<u32>,
+    pub charge_latched: bool,
+    pub full_latched: bool,
+    pub dc_derated: bool,
+    pub output_blocked: bool,
+    pub manual_active: bool,
+    pub manual_stop_inhibit: bool,
+}
+
+impl PowerDiagPolicySnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            state: None,
+            status: "unknown",
+            notice: "unavailable",
+            input_source: "unknown",
+            start_reason: None,
+            full_reason: None,
+            output_block_reason: None,
+            target_ichg_ma: None,
+            output_power_w10: None,
+            charge_latched: false,
+            full_latched: false,
+            dc_derated: false,
+            output_blocked: false,
+            manual_active: false,
+            manual_stop_inhibit: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PowerDiagBmsSnapshot {
+    pub addr: Option<u8>,
+    pub state: &'static str,
+    pub pack_mv: Option<u16>,
+    pub current_ma: Option<i16>,
+    pub soc_pct: Option<u16>,
+    pub cell_min_mv: Option<u16>,
+    pub cell_max_mv: Option<u16>,
+    pub no_battery: Option<bool>,
+    pub discharge_ready: Option<bool>,
+    pub charge_ready: Option<bool>,
+    pub full: Option<bool>,
+    pub issue_detail: Option<&'static str>,
+    pub rca_alarm: Option<bool>,
+    pub safety_status: Option<u32>,
+    pub pf_status: Option<u32>,
+    pub manufacturing_status: Option<u32>,
+    pub gauging_status: Option<u32>,
+    pub op_status: Option<u32>,
+    pub xchg: Option<bool>,
+    pub chg_fet: Option<bool>,
+    pub dsg_fet: Option<bool>,
+    pub pchg_fet: Option<bool>,
+    pub cuv: Option<bool>,
+    pub cuvc: Option<bool>,
+    pub fet_en: Option<bool>,
+    pub chg_en: Option<bool>,
+    pub dsg_en: Option<bool>,
+    pub charging_inhibit: Option<bool>,
+    pub charging_suspend: Option<bool>,
+    pub charging_hv: Option<bool>,
+    pub current_at_eoc_ma: Option<u16>,
+}
+
+impl PowerDiagBmsSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            addr: None,
+            state: "pending",
+            pack_mv: None,
+            current_ma: None,
+            soc_pct: None,
+            cell_min_mv: None,
+            cell_max_mv: None,
+            no_battery: None,
+            discharge_ready: None,
+            charge_ready: None,
+            full: None,
+            issue_detail: None,
+            rca_alarm: None,
+            safety_status: None,
+            pf_status: None,
+            manufacturing_status: None,
+            gauging_status: None,
+            op_status: None,
+            xchg: None,
+            chg_fet: None,
+            dsg_fet: None,
+            pchg_fet: None,
+            cuv: None,
+            cuvc: None,
+            fet_en: None,
+            chg_en: None,
+            dsg_en: None,
+            charging_inhibit: None,
+            charging_suspend: None,
+            charging_hv: None,
+            current_at_eoc_ma: None,
+        }
+    }
+}
+
 impl UpsStatusSnapshot {
     pub const fn empty() -> Self {
         Self {

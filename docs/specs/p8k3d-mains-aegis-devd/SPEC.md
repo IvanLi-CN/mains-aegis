@@ -45,6 +45,7 @@
 - `POST /api/v1/devices/{id}/disconnect`: 断开设备 session。
 - `DELETE /api/v1/devices/{id}/binding`: 移除绑定。
 - `GET /api/v1/devices/{id}/identity`: 返回设备 firmware identity。
+- `GET /api/v1/devices/{id}/power-diag`: 通过 USB CDC `get_power_diag` 获取只读电源诊断快照，并缓存到设备 session。
 - `GET|POST /api/v1/devices/{id}/artifact`: 查询或选择 artifact manifest。
 - `POST /api/v1/devices/{id}/flash`: 校验 artifact hash 后执行烧录；无硬件验证使用 `dry_run=true`。
 - `POST /api/v1/devices/{id}/reset`: 设备 reset 请求。
@@ -54,6 +55,13 @@
 - `POST /api/v1/wifi-config` / `DELETE /api/v1/wifi-config`: 通过指定 `device_id` 的已连接 USB CDC 设备写入或清除 WiFi 配置，成功后返回固件 ack result；未指定 `device_id` 时仅允许单 USB 设备连接场景。
 - `POST /api/v1/settings/log-level`: 通过指定 `device_id` 的 USB CDC session 更新日志级别。
 - `POST /api/v1/settings/manual-charge`: 通过指定 `device_id` 的 USB CDC session 更新手动充电偏好。
+
+`power-diag` 响应必须保持只读，不触发充电策略、BMS 恢复或输出状态变化。快照至少包含：
+
+- `input`: DC IN/VIN、charger-side input ADC、USB-C attach/VBUS/contract/unsafe-source latch。
+- `charger`: BQ25792 enable/control pin state、charge/input policy gates、status/fault raw bytes、decoded `CHG_STAT/VBUS_STAT/ICO_STAT` 与 ADC values。
+- `policy`: `allow_charge=false` 或 `vbat_present=false` 相关的 policy state/status/notice、input source、target charge current、output-load and manual-charge blockers。
+- `bms`: BQ40Z50 pack/current/RSOC/cell range、RCA、charge/discharge readiness、raw safety/PF/manufacturing/gauging/operation status、XCHG/CHG/DSG/PCHG/FET enable/CUV/CUVC/charging inhibit flags。
 
 ### Host power control
 
@@ -141,6 +149,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - host power API 支持 Linux/macOS 查询、dry-run、事件广播和真实动作默认拒绝；缺少平台后端或权限不足时返回可诊断错误。
 - `tools/firmware-artifact/build-catalog-entry.py` 能为 ELF 生成 manifest、catalog 和 `SHA256SUMS`。
 - 固件 identity JSON 包含 features/protocol/defmt 字段。
+- 固件 USB CDC 支持 `get_power_diag`，devd `GET /api/v1/devices/{id}/power-diag` 能返回并缓存结构化 `input/charger/policy/bms` 诊断快照。
 - Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 devd。
 - 文档与 AGENTS guardrails 清晰说明 devd 是推荐入口，mcu-agentd 为 fallback。
 - 多 USB CDC 设备同时存在时，devd/Web 不自动选择；Web 显示候选列表，用户选择后才创建 Web lease 并占用设备。
@@ -150,8 +159,9 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 ## 实现状态
 
 - `tools/mains-aegis-devd`: v1 daemon/API/mock validation foundation，并提供 Web App localhost USB safe-control surface。
+- `tools/mains-aegis-devd`: 提供设备级 `power-diag` 只读诊断 API，转发固件 USB CDC `get_power_diag` 并在 session 中缓存结果。
 - `tools/mains-aegis-devd`: 提供 host power localhost control surface；低功耗运行、suspend、shutdown 默认 dry-run，真实动作受启动参数保护。
 - `schemas/firmware-catalog.schema.json`: v1 catalog schema。
 - `tools/firmware-artifact/build-catalog-entry.py`: local manifest/catalog generator。
 - `web/src/api/*`: devd mode client contracts。
-- `firmware/src/net_contract.rs`: firmware identity metadata extension。
+- `firmware/src/net_contract.rs`: firmware identity/status/power diagnostic JSON contract。
