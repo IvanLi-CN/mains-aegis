@@ -4,7 +4,7 @@
 
 - Status: 已完成（v1 devd foundation）
 - Created: 2026-05-02
-- Last: 2026-05-07
+- Last: 2026-06-04
 
 ## 背景 / 问题陈述
 
@@ -45,8 +45,9 @@
 - `POST /api/v1/devices/{id}/disconnect`: 断开设备 session。
 - `DELETE /api/v1/devices/{id}/binding`: 移除绑定。
 - `GET /api/v1/devices/{id}/identity`: 返回设备 firmware identity。
+- `GET /api/v1/devices/{id}/power-diag`: 通过 USB CDC `get_power_diag` 获取只读电源诊断快照，并缓存到设备 session。
 - `GET|POST /api/v1/devices/{id}/artifact`: 查询或选择 artifact manifest。
-- `POST /api/v1/devices/{id}/flash`: 校验 artifact hash 后执行烧录；无硬件验证使用 `dry_run=true`。
+- `POST /api/v1/devices/{id}/flash`: 校验 artifact hash 后执行烧录；无硬件验证使用 `dry_run=true`。真实烧录响应与 `flash completed` 事件必须同时回传 backend `status/stdout/stderr`，用于区分“artifact 选择正确但底层 flash backend 没有真正完成”和“backend 已成功写入硬件”。
 - `POST /api/v1/devices/{id}/reset`: 设备 reset 请求。
 - `POST /api/v1/devices/{id}/monitor/start|stop`: monitor 生命周期请求。
 - `GET /api/v1/devices/{id}/session`: 返回 bounded logs/trace 与 `log_decode`。
@@ -54,6 +55,13 @@
 - `POST /api/v1/wifi-config` / `DELETE /api/v1/wifi-config`: 通过指定 `device_id` 的已连接 USB CDC 设备写入或清除 WiFi 配置，成功后返回固件 ack result；未指定 `device_id` 时仅允许单 USB 设备连接场景。
 - `POST /api/v1/settings/log-level`: 通过指定 `device_id` 的 USB CDC session 更新日志级别。
 - `POST /api/v1/settings/manual-charge`: 通过指定 `device_id` 的 USB CDC session 更新手动充电偏好。
+
+`power-diag` 响应必须保持只读，不触发充电策略、BMS 恢复或输出状态变化。快照至少包含：
+
+- `input`: DC IN/VIN、charger-side input ADC、USB-C attach/VBUS/contract/unsafe-source latch。
+- `charger`: BQ25792 enable/control pin state、charge/input policy gates、status/fault raw bytes、decoded `CHG_STAT/VBUS_STAT/ICO_STAT` 与 ADC values；必须同时暴露 `vac1_adc_mv` 与 `vac2_adc_mv`，用于区分 USB-C VAC1 与 DC IN/VAC2 实际输入路径。
+- `policy`: `allow_charge=false` 或 `vbat_present=false` 相关的 policy state/status/notice、input source、target charge current、output-load and manual-charge blockers。
+- `bms`: BQ40Z50 pack/current/RSOC/cell range、RCA、charge/discharge readiness、raw safety/PF/manufacturing/gauging/operation status、XCHG/CHG/DSG/PCHG/FET enable/CUV/CUVC/charging inhibit flags。
 
 ### Host power control
 
@@ -141,17 +149,29 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - host power API 支持 Linux/macOS 查询、dry-run、事件广播和真实动作默认拒绝；缺少平台后端或权限不足时返回可诊断错误。
 - `tools/firmware-artifact/build-catalog-entry.py` 能为 ELF 生成 manifest、catalog 和 `SHA256SUMS`。
 - 固件 identity JSON 包含 features/protocol/defmt 字段。
+- 固件 USB CDC 支持 `get_power_diag`，devd `GET /api/v1/devices/{id}/power-diag` 能返回并缓存结构化 `input/charger/policy/bms` 诊断快照。
+- Given DC IN 与 USB-C 同时在线，When charger 实际 VBUS/VAC2 为约 12V 且 VAC1 为约 5V，Then `power-diag` 必须能同时呈现 `input.input_source=dcin`、`charger.vac2_adc_mv≈12V`、`charger.vac1_adc_mv≈5V`、`charger.iindpm_ma=3000`，即使 `charger.vbus_stat` 仍报告 USB SDP 类枚举值。
+- Given BMS 处于 CUV 低电恢复且 `BQ25792 CHG_STAT=termination_done`，When 读取 `power-diag`，Then `policy.state` 必须保持 `charging_100ma_bms_recovery`、`policy.status=CHG100`、`policy.full_latched=false`，不得把该快照误报为满充锁存。
 - Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 devd。
 - 文档与 AGENTS guardrails 清晰说明 devd 是推荐入口，mcu-agentd 为 fallback。
 - 多 USB CDC 设备同时存在时，devd/Web 不自动选择；Web 显示候选列表，用户选择后才创建 Web lease 并占用设备。
 - Web 正常断开后 devd 立即释放 USB 占用；Web 异常断开后 devd 按租约 TTL 自动释放，默认目标不超过 9 秒。
 - Web USB 写入请求缺少有效 lease 时失败，不得因为 devd 里有历史 connected 设备而继续写硬件。
+- Given `POST /api/v1/devices/{id}/flash` 触发真实烧录，When backend 返回成功或失败，Then HTTP 响应与设备事件都必须包含 backend `status/stdout/stderr`，便于定位 `espflash` 是否真正完成。
 
 ## 实现状态
 
 - `tools/mains-aegis-devd`: v1 daemon/API/mock validation foundation，并提供 Web App localhost USB safe-control surface。
+- `tools/mains-aegis-devd`: 提供设备级 `power-diag` 只读诊断 API，转发固件 USB CDC `get_power_diag` 并在 session 中缓存结果。
+- `tools/mains-aegis-devd`: flash API 与 `flash completed` 事件已暴露 backend `status/stdout/stderr`，用于现场确认底层 `espflash` 执行结果。
+- `firmware/src/net_contract.rs`: `power-diag.charger` 已暴露 `vac2_adc_mv`，用于定位 BQ25792 AC2/DC IN 实际采样。
 - `tools/mains-aegis-devd`: 提供 host power localhost control surface；低功耗运行、suspend、shutdown 默认 dry-run，真实动作受启动参数保护。
 - `schemas/firmware-catalog.schema.json`: v1 catalog schema。
 - `tools/firmware-artifact/build-catalog-entry.py`: local manifest/catalog generator。
 - `web/src/api/*`: devd mode client contracts。
-- `firmware/src/net_contract.rs`: firmware identity metadata extension。
+- `firmware/src/net_contract.rs`: firmware identity/status/power diagnostic JSON contract。
+
+## 变更记录（Change log）
+
+- 2026-06-04: `power-diag` 增加 `charger.vac2_adc_mv`；真机验证确认 DC IN/VAC2 约 12.23V、USB-C VAC1 约 5.10V 时，策略可保持 `dcin + CHG100 + IINDPM=3000mA`，且 CUV recovery 不再被 BQ25792 `termination_done` 误分类为 `full_latched`。
+- 2026-06-04: `flash` API 与设备事件增加 backend `status/stdout/stderr` 透传，现场可直接确认 `espflash` 是否真正完成以及目标硬件 identity 是否已经切到新 artifact。

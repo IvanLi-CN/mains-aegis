@@ -760,6 +760,19 @@ mod tests {
     }
 
     #[test]
+    fn set_termination_current_writes_low_field_msb_first() {
+        let mut i2c = RegisterWordI2c::new([0xab, 0x03]);
+
+        let applied = set_termination_current_ma(&mut i2c, 40).unwrap();
+
+        assert_eq!(applied, 40);
+        assert_eq!(
+            i2c.writes.last().unwrap().as_slice(),
+            &[reg::TERMINATION_CONTROL, 0xab, 0x01]
+        );
+    }
+
+    #[test]
     fn managed_current_limit_ctrl5_enables_indpm_and_disables_extilim() {
         let input = ctrl5::SFET_PRESENT | ctrl5::EN_EXTILIM;
         let output = managed_current_limit_ctrl5(input);
@@ -851,13 +864,14 @@ pub fn set_termination_current_ma<I2C>(i2c: &mut I2C, target_ma: u16) -> Result<
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    let reg09 = update_u8(
-        i2c,
-        reg::TERMINATION_CONTROL,
-        0x1f,
-        encode_termination_current_bits(target_ma),
-    )?;
-    Ok(decode_termination_current_ma(reg09 as u16))
+    const FIELD_MASK: u16 = 0x001f;
+
+    let cur = read_u16(i2c, reg::TERMINATION_CONTROL)?;
+    let new = (cur & !FIELD_MASK) | u16::from(encode_termination_current_bits(target_ma));
+    if new != cur {
+        write_u16(i2c, reg::TERMINATION_CONTROL, new)?;
+    }
+    Ok(decode_termination_current_ma(new))
 }
 
 pub const fn decode_vbus_stat(code: u8) -> &'static str {

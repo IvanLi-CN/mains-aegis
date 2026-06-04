@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderValue, Method, StatusCode},
@@ -101,6 +103,7 @@ struct DeviceRecord {
     connection: ConnectionState,
     identity: Option<Value>,
     status: Option<Value>,
+    power_diag: Option<Value>,
     selected_artifact_id: Option<String>,
     log_decode: LogDecodeState,
     safe_settings: SafeSettingsState,
@@ -369,6 +372,7 @@ async fn main() {
         .route("/api/v1/devices/{id}/disconnect", post(disconnect_device))
         .route("/api/v1/devices/{id}/binding", delete(unbind_device))
         .route("/api/v1/devices/{id}/identity", get(device_identity))
+        .route("/api/v1/devices/{id}/power-diag", get(device_power_diag))
         .route(
             "/api/v1/devices/{id}/artifact",
             get(device_artifact).post(select_artifact),
@@ -501,6 +505,7 @@ async fn scan_devices(State(state): State<AppState>) -> Result<Json<Value>, Http
                     connection: ConnectionState::Disconnected,
                     identity: None,
                     status: None,
+                    power_diag: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
                     safe_settings: default_safe_settings(),
@@ -822,6 +827,27 @@ async fn device_identity(
     }
 }
 
+async fn device_power_diag(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    let transport = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        device.transport.clone()
+    };
+    let diag = if matches!(transport, DeviceTransport::Mock) {
+        mock_power_diag()
+    } else {
+        send_device_cdc_request(&state, &id, "get_power_diag", "devd-power-diag").await?
+    };
+    update_device_power_diag_snapshot(&state, &id, diag.clone());
+    Ok(Json(diag))
+}
+
 async fn select_artifact(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -947,22 +973,30 @@ async fn flash_device(
                 "selected artifact does not include an ELF file",
             )
         })?;
-    let status = Command::new(
+    let output = Command::new(
         env::var("MAINS_AEGIS_DEVD_ESPFLASH_BIN").unwrap_or_else(|_| "espflash".to_string()),
     )
     .arg("flash")
     .arg("--port")
     .arg(&port_path)
     .arg(&elf.path)
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .status()
+    .output()
     .await
     .map_err(|error| HttpError::retryable("espflash_launch_failed", error.to_string()))?;
-    if !status.success() {
+    let backend = json!({
+        "status": output.status.to_string(),
+        "stdout": String::from_utf8_lossy(&output.stdout),
+        "stderr": String::from_utf8_lossy(&output.stderr),
+    });
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(HttpError::retryable(
             "espflash_failed",
-            format!("espflash exited with {status}"),
+            format!(
+                "espflash exited with {}; stdout={}; stderr={}",
+                output.status, stdout, stderr
+            ),
         ));
     }
     emit(
@@ -970,10 +1004,10 @@ async fn flash_device(
         Some(id.clone()),
         "flash",
         "flash completed",
-        json!({"artifact_id": artifact.artifact_id}),
+        json!({"artifact_id": artifact.artifact_id, "backend": backend}),
     );
     Ok(Json(
-        json!({"ok": true, "artifact_id": artifact.artifact_id}),
+        json!({"ok": true, "artifact_id": artifact.artifact_id, "backend": backend}),
     ))
 }
 
@@ -1228,6 +1262,7 @@ async fn device_session(
         "protocol": "mains-aegis.cdc.v1",
         "identity": device.identity,
         "status": device.status,
+        "power_diag": device.power_diag,
         "logs": tail(&device.logs, query.logs_limit.unwrap_or(200).min(500)),
         "trace": tail(&device.trace, query.trace_limit.unwrap_or(600).min(2_000)),
         "safeSettings": device.safe_settings,
@@ -1246,6 +1281,7 @@ async fn devd_compat_session(
         "protocol": "mains-aegis.cdc.v1",
         "identity": device.identity,
         "status": device.status,
+        "power_diag": device.power_diag,
         "logs": tail(&device.logs, query.logs_limit.unwrap_or(200).min(500)),
         "trace": tail(&device.trace, query.trace_limit.unwrap_or(600).min(2_000)),
         "safeSettings": device.safe_settings
@@ -1382,6 +1418,59 @@ fn select_compat_device<'a>(
         .devices
         .get(&lease.device_id)
         .ok_or_else(|| HttpError::not_found("device_not_found", "leased device is not known"))
+}
+
+async fn send_device_cdc_request(
+    state: &AppState,
+    device_id: &str,
+    op: &str,
+    request_prefix: &str,
+) -> Result<Value, HttpError> {
+    let (port_path, monitor_command_tx) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(device_id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        if !matches!(device.transport, DeviceTransport::NativeSerial) {
+            return Err(HttpError::non_retryable(
+                "device_transport_unsupported",
+                "CDC requests require a native serial device",
+            ));
+        }
+        (
+            device.port_path.clone(),
+            guard
+                .monitors
+                .get(device_id)
+                .map(|monitor| monitor.command_tx.clone()),
+        )
+    };
+    let request_id = format!("{request_prefix}-{}", Utc::now().timestamp_millis());
+    let frame = json!({"type": "request", "request_id": request_id, "op": op});
+    let response = if let Some(command_tx) = monitor_command_tx {
+        send_monitor_cdc_frame_async(command_tx, frame.clone(), request_id.clone()).await?
+    } else {
+        let port_path = port_path.ok_or_else(|| {
+            HttpError::retryable(
+                "device_port_missing",
+                "native serial device has no port path",
+            )
+        })?;
+        send_native_cdc_frame_async(port_path, frame.clone(), request_id.clone()).await?
+    };
+
+    if response.get("type").and_then(Value::as_str) != Some("response")
+        || !response.get("ok").and_then(Value::as_bool).unwrap_or(false)
+    {
+        return Err(error_from_cdc_response(&response));
+    }
+    response.get("result").cloned().ok_or_else(|| {
+        HttpError::retryable(
+            "cdc_response_missing_result",
+            format!("CDC {op} response did not include result"),
+        )
+    })
 }
 
 async fn send_safe_settings_frame<F>(
@@ -1556,6 +1645,21 @@ fn update_device_status_snapshot(state: &AppState, device_id: &str, status: Valu
         "serial_status",
         "CDC status snapshot",
         json!({"status": status}),
+    );
+}
+
+fn update_device_power_diag_snapshot(state: &AppState, device_id: &str, power_diag: Value) {
+    let mut guard = state.inner.lock().expect("state lock");
+    if let Some(device) = guard.devices.get_mut(device_id) {
+        device.power_diag = Some(power_diag.clone());
+    }
+    drop(guard);
+    emit(
+        state,
+        Some(device_id.to_string()),
+        "power_diag",
+        "CDC power diagnostic snapshot",
+        json!({"power_diag": power_diag}),
     );
 }
 
@@ -2301,6 +2405,7 @@ fn seed_mock_device(state: &AppState) {
             connection: ConnectionState::Disconnected,
             identity: Some(mock_identity("mock-devkit")),
             status: None,
+            power_diag: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             safe_settings: default_safe_settings(),
@@ -2504,6 +2609,128 @@ fn mock_identity(id: &str) -> Value {
             "rssi_dbm": null
         },
         "capabilities": {"sse": true, "mdns": true, "dns_sd": true, "write_controls": true, "devd": true}
+    })
+}
+
+fn mock_power_diag() -> Value {
+    json!({
+        "input": {
+            "mains_present": null,
+            "input_vbus_mv": null,
+            "input_ibus_ma": null,
+            "vin_vbus_mv": null,
+            "vin_iin_ma": null,
+            "usb_pd_attached": false,
+            "usb_pd_charge_ready": false,
+            "usb_pd_vbus_present": null,
+            "usb_pd_unsafe_source_latched": false,
+            "usb_pd_contract_kind": null,
+            "usb_pd_contract_mv": null,
+            "usb_pd_contract_ma": null,
+            "usb_pd_vac1_mv": null,
+            "usb_pd_vsys_mv": null
+        },
+        "charger": {
+            "poll_valid": false,
+            "enabled": false,
+            "ce_low": false,
+            "ilim_hiz_brk_low": false,
+            "allow_charge": false,
+            "normal_allow_charge": false,
+            "force_allow_charge": false,
+            "can_enable": false,
+            "usb_pd_charge_gate_ready": false,
+            "input_present": false,
+            "vbus_present": false,
+            "ac1_present": false,
+            "ac2_present": false,
+            "pg": false,
+            "vbat_present": false,
+            "adc_enabled": false,
+            "adc_done": false,
+            "adc_ready": false,
+            "ibus_adc_ma": null,
+            "ibat_adc_ma": null,
+            "vbus_adc_mv": null,
+            "vbat_adc_mv": null,
+            "vsys_adc_mv": null,
+            "vac1_adc_mv": null,
+            "vreg_mv": null,
+            "ichg_ma": null,
+            "vindpm_mv": null,
+            "iindpm_ma": null,
+            "iterm_ma": null,
+            "chg_stat": "unknown",
+            "vbus_stat": "unknown",
+            "ico_stat": "unknown",
+            "treg": false,
+            "dpdm": false,
+            "wd": false,
+            "poorsrc": false,
+            "vindpm": false,
+            "iindpm": false,
+            "ts_cold": false,
+            "ts_hot": false,
+            "st0": null,
+            "st1": null,
+            "st2": null,
+            "st3": null,
+            "st4": null,
+            "fault0": null,
+            "fault1": null,
+            "ctrl0": null,
+            "term_ctrl": null
+        },
+        "policy": {
+            "state": null,
+            "status": "unknown",
+            "notice": "unavailable",
+            "input_source": "unknown",
+            "start_reason": null,
+            "full_reason": null,
+            "output_block_reason": null,
+            "target_ichg_ma": null,
+            "output_power_w10": null,
+            "charge_latched": false,
+            "full_latched": false,
+            "dc_derated": false,
+            "output_blocked": false,
+            "manual_active": false,
+            "manual_stop_inhibit": false
+        },
+        "bms": {
+            "addr": null,
+            "state": "pending",
+            "pack_mv": null,
+            "current_ma": null,
+            "soc_pct": null,
+            "cell_min_mv": null,
+            "cell_max_mv": null,
+            "no_battery": null,
+            "discharge_ready": null,
+            "charge_ready": null,
+            "full": null,
+            "issue_detail": null,
+            "rca_alarm": null,
+            "safety_status": null,
+            "pf_status": null,
+            "manufacturing_status": null,
+            "gauging_status": null,
+            "op_status": null,
+            "xchg": null,
+            "chg_fet": null,
+            "dsg_fet": null,
+            "pchg_fet": null,
+            "cuv": null,
+            "cuvc": null,
+            "fet_en": null,
+            "chg_en": null,
+            "dsg_en": null,
+            "charging_inhibit": null,
+            "charging_suspend": null,
+            "charging_hv": null,
+            "current_at_eoc_ma": null
+        }
     })
 }
 
@@ -3680,6 +3907,7 @@ mod tests {
                 json!({"firmware": {"build_id": "b1", "git_sha": "g1", "build_profile": "release", "features": ["web_serial"]}}),
             ),
             status: None,
+            power_diag: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             safe_settings: default_safe_settings(),
@@ -3721,6 +3949,7 @@ mod tests {
                 json!({"firmware": {"build_id": "debug-build", "git_sha": "same", "build_profile": "release", "features": ["web_serial"]}}),
             ),
             status: None,
+            power_diag: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             safe_settings: default_safe_settings(),
@@ -3762,6 +3991,7 @@ mod tests {
                 json!({"firmware": {"build_id": "same-build", "build_profile": "release", "features": ["net_http"]}}),
             ),
             status: None,
+            power_diag: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             safe_settings: default_safe_settings(),
@@ -3803,6 +4033,7 @@ mod tests {
                 json!({"firmware": {"build_id": "same-build", "build_profile": "debug", "features": ["web_serial"]}}),
             ),
             status: None,
+            power_diag: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             safe_settings: default_safe_settings(),
@@ -3842,6 +4073,7 @@ mod tests {
             connection: ConnectionState::Disconnected,
             identity: None,
             status: None,
+            power_diag: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             safe_settings: default_safe_settings(),

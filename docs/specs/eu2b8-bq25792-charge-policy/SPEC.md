@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-03-28
-- Last: 2026-04-06
+- Last: 2026-06-04
 
 ## 背景 / 问题陈述
 
@@ -18,8 +18,10 @@
 
 - 固化主线充电策略：默认 `500mA`，不实现任何 `>500mA` 快充。
 - 使用 `BQ40Z50` 可信遥测决定是否开始充电：`RSOC < 80%` 或 `最低单体电压 < 3.70V`。
-- 充电一旦开始，保持到“满充”才停止；满充定义为 `BQ40 FC` 或 `BQ25792 termination_done` 任一成立。
+- 充电一旦开始，保持到“满充”才停止；常规充电满充定义为 `BQ40 FC` 或 `BQ25792 termination_done` 任一成立。
 - 仅在 `DC5025` 独占输入且 `IBUS > 3.0A` 持续 `1s` 时，把 `ICHG` 降到 `100mA`；回落到 `<2.7A` 持续 `5s` 后恢复 `500mA`。
+- DC IN/VAC2 被 BQ25792 实际选中时，输入源判定必须优先使用 charger-side VBUS/VAC ADC 事实，而不是 USB PD attach 状态；DC 输入 profile 必须写入 `IINDPM=3000mA`。
+- BMS CUV 低电恢复允许在 `PCHG=true`、`PF=0`、`CUVC=false` 且 DC IN 在线时进入受控 `100mA` 预充；该恢复态显示为 `CHG100`，但不同于 DC 过流降档。所有 `100mA` 充电/恢复模式必须把 BQ25792 `ITERM` 写到低于目标电流的安全值（当前 `40mA`），否则 BQ 会立即进入 `termination_done` 而不持续充电。
 - `TPS55288` 总输出功率门控必须有回差：连续 `2` 个 poll `>5.0W` 才停充，进入 `LOAD` 后连续 `3` 个 poll `<4.5W` 才恢复。
 - 任一路输出已开启但聚合输出功率不可可信计算时，必须保守禁充，并在 notice/log 中明确标成 `blocked_output_power_unknown`。
 - 扩充运行时日志与前面板 detail 状态，让 `WAIT / CHG500 / CHG100 / FULL / LOCK / NOAC / TEMP / LOAD / WARM` 等状态可直接观察，并优先显示实际 `IBAT_ADC`。
@@ -61,7 +63,8 @@
 - `DC5025` 独占输入下，`IBUS > 3000mA/1s` 降到 `100mA`，`IBUS < 2700mA/5s` 恢复 `500mA`。
 - `TPS55288` 输出功率连续 `2` 个 poll 超过 `5W` 时停充；进入 `LOAD` 后连续 `3` 个 poll 低于 `4.5W` 才允许恢复。
 - 任一路输出已开启但聚合输出功率不可可信计算时，必须 fail-safe 禁充。
-- BMS 遥测缺失、`charge_ready=false`、输入缺失、`VBAT_PRESENT=false`、`TS_COLD=true` 或 `TS_HOT=true` 时 fail-safe 禁充。
+- BMS 遥测缺失、输入缺失、`VBAT_PRESENT=false`、`TS_COLD=true` 或 `TS_HOT=true` 时 fail-safe 禁充。
+- `charge_ready=false` 默认 fail-safe 禁充；唯一例外是 DC IN 在线且 BMS 明确处于可恢复 CUV 预充窗口（`PCHG=true`、`CUV=true`、`CUVC=false`、`PF=0`、无 charge inhibit/suspend）时，允许 `charging_100ma_bms_recovery`。
 
 ### SHOULD
 
@@ -86,6 +89,9 @@
 - 充电保持期间，即使 `RSOC` 或 `cell_min_mv` 回升到阈值上方，也继续保持 `charging_500ma` 或 `charging_100ma_dc_derated`，直到满充。
 - 满充后策略进入 `full_latched`，固件停充并保持停充；只有当后续再次满足启动阈值才释放锁存。
 - 当输入源明确为 `DcIn` 且 `IBUS` 连续过高时，策略从 `charging_500ma` 切到 `charging_100ma_dc_derated`；当 `IBUS` 低于恢复阈值足够久后，回到 `charging_500ma`。
+- 当 `AC2/DC IN` 与 USB-C 同时存在，且 BQ25792 `VBUS_ADC` 约等于 `VAC2_ADC` 而明显高于 `VAC1_ADC` 时，策略输入源必须判为 `DcIn`；USB PD attach 不得覆盖这个事实。进入该路径后固件必须重新写入 DC 输入 profile，至少包括 `IINDPM=3000mA` 与基于当前 VBUS 的 `VINDPM`。
+- 当 BMS 处于 CUV 但 `PCHG` 可用、无 PF、无 CUVC 且 DC IN 在线时，策略可进入 `charging_100ma_bms_recovery`，写入 `ICHG=100mA` 并保持 `CHG100`。该状态不参与常规 top-off，不因 `charge_ready=false` 进入 `blocked_no_bms`。
+- `charging_100ma_bms_recovery` 期间，BQ25792 的 `termination_done` 不能作为满充依据；策略必须保持 `full_latched=false`，直到 BMS 离开恢复窗口并重新满足常规满充定义。该路径还必须把 `ITERM` 降到低于 `ICHG=100mA`，不能仅在软件层忽略 `termination_done`。
 - 当 `TPS55288` 总输出功率连续 `2` 个 poll 超过 `5W` 时，策略进入 `blocked_output_over_limit` 并停充；只有连续 `3` 个 poll 低于 `4.5W` 才退出该阻断态。
 - 当任一路输出已开启但聚合输出功率不可可信计算时，策略进入保守禁充分支；前台 token 继续显示 `LOAD`，notice/log 使用 `blocked_output_power_unknown`。
 - 前面板的 charger 电流显示优先取 `BQ25792 IBAT_ADC`，不再把 `ICHG` 设定值伪装成实测电流。
@@ -96,7 +102,8 @@
 
 ### Edge cases / errors
 
-- `BQ40Z50` 快照不可用、最低单体缺失、`charge_ready=false`、`VBAT_PRESENT=false` 时，策略统一进入 `blocked_no_bms`，停止任何已有的充电保持态。
+- `BQ40Z50` 快照不可用、最低单体缺失、`VBAT_PRESENT=false` 时，策略统一进入 `blocked_no_bms`，停止任何已有的充电保持态。
+- `charge_ready=false` 但不满足 CUV recovery 例外条件时，策略统一进入 `blocked_no_bms`；如果 USB-C 是当前输入源，也不得启动 CUV 预充。
 - `TS_COLD` 或 `TS_HOT` 时，策略进入 `blocked_temp`。
 - 输入消失时，策略进入 `blocked_no_input`。
 - `TPS55288` 输出功率超过门槛并满足 `2入3出` 回差时，策略进入 `blocked_output_over_limit`。
@@ -118,6 +125,11 @@ None。
 - Given 系统已处于 `charging_100ma_dc_derated`，When `IBUS < 2700mA` 连续 `5s`，Then 恢复 `500mA`。
 - Given 输入源为 `Auto`，When `IBUS > 3000mA`，Then 不应用 DC 独占降档。
 - Given `BQ40` 遥测缺失或 `charge_ready=false`，When 进入 charger poll，Then 系统进入 `blocked_no_bms` 并禁止充电。
+- Given `charge_ready=false`、`CUV=true`、`PCHG=true`、`CUVC=false`、`PF=0` 且输入源为 `DcIn`，When `RSOC < 80%` 或 `cell_min_mv < 3700`，Then 系统进入 `charging_100ma_bms_recovery`，目标 `ICHG=100mA`，状态 token 为 `CHG100`。
+- Given 同样的 BMS CUV recovery 条件但输入源为 USB-C，When 进入 charger poll，Then 系统仍进入 `blocked_no_bms`，不得从 USB-C 路径启动预充恢复。
+- Given 系统处于 `charging_100ma_bms_recovery`，When `BQ25792 CHG_STAT=termination_done`，Then 系统不得进入 `full_latched`，`full_reason` 保持为空，并继续允许 `100mA` 恢复充电。
+- Given 系统目标为 `ICHG=100mA`，When 写入 BQ25792 充电参数，Then `ITERM` 必须低于 `100mA`（当前 `40mA`），不得保留 `120mA` 或更高终止电流导致硬件立即停充。
+- Given USB PD attached、`AC1=true`、`AC2=true`、`VAC1≈5V` 且 `VBUS/VAC2≈12V`，When 进入 charger poll，Then 输入源必须判为 `DcIn`，并把 `IINDPM` 写为 `3000mA`。
 - Given `TS_COLD=true` 或 `TS_HOT=true`，When 进入 charger poll，Then 系统进入 `blocked_temp` 并禁止充电。
 - Given `TS_WARM=true` 且 `TS_HOT=false`，When 进入 charger poll，Then 充电策略可继续运行，但 charger detail 必须显示 `WARM` 且 notice 说明这是 charger TS warm。
 - Given `TPS55288` 总输出功率单次超过 `5W`，When 进入 charger poll，Then 系统不得立刻进入 `blocked_output_over_limit`。
@@ -237,7 +249,7 @@ None。
 
 - 风险：`cargo test --lib` 在当前 `xtensa-esp32s3-none-elf` 目标下需要 `std/test`，不能作为本仓库现状下的可执行验证命令；本轮以编译通过和新增单测源码覆盖为主。
 - 风险：首页与 detail 虽已同源，但首页只保留紧凑 token；若后续需要暴露更多诊断细节，仍需继续通过 notice/log 或详情页承载。
-- 假设：`BQ40 FC` 与 `BQ25792 termination_done` 任一成立即可视为满充停充。
+- 假设：常规充电中 `BQ40 FC` 与 `BQ25792 termination_done` 任一成立即可视为满充停充；CUV recovery 预充态下 `termination_done` 只作为 charger 状态观测值，不触发满充锁存。`ICHG=100mA` 模式必须配套低于目标电流的 `ITERM`。
 
 ## 变更记录（Change log）
 
@@ -245,6 +257,8 @@ None。
 - 2026-04-05: charger detail 补充 `TS_WARM -> WARM` 状态与说明文案；`LOCK` 诊断补充 `ChargingStatus(0x55)` 原始位图，便于区分包侧 inhibit / suspend。
 - 2026-04-05: `BQ25792` ADC 遥测改为 `MSB-first` 解码；`IBUS/VBUS/VBAT/VSYS` 从 byte-swapped 假值恢复到真实量级，并把 `input_power_anomaly` 的端序误报从主线诊断中排除。
 - 2026-04-06: 主线 charger state machine 正式作为 SoT；`LOAD` 增加 `2入3出` 回差，输出功率未知改为保守禁充，首页 `ChargeCard` 同步到 runtime 紧凑 token。
+- 2026-06-04: 真机 DC IN/CUV recovery 闭环后更新策略：输入源优先依据 BQ25792 VBUS/VAC ADC 判断 DC IN，DC profile 写入 `IINDPM=3000mA`；BMS CUV 且 `PCHG` 可用时允许 DC 路径 `100mA` 预充，并忽略该恢复态下的 BQ25792 `termination_done` 满充锁存。
+- 2026-06-04: 现场复核发现 `ICHG=100mA` 搭配 `ITERM=120mA` 会让 BQ25792 立即进入 `termination_done` 且 `IBAT_ADC=0`；修正 `REG09` 16-bit 写入路径，并让 `100mA` 模式写入 `ITERM=40mA`，确保硬件能持续预充。
 
 ## 参考（References）
 
