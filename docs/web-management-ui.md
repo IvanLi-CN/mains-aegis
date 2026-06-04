@@ -64,7 +64,8 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 
 - 入口：`/devices/:device_id/battery`
 - 目的：集中展示电池包和 BMS 是否可放电、是否恢复中、是否存在保护或无电池状态。
-- 主要内容：SOC、pack voltage、current、四节 `cell_mv`、`discharge_ready`、`no_battery`、`charge_fet_on` / `discharge_fet_on` / `precharge_fet_on`、`issue_detail`、`recovery_pending`、`last_result`。
+- 主要内容：SOC、pack voltage、current、四节 `cell_mv`、cell delta、均衡起步阈值、`BAL OFF / IDLE / Cn / MULTI / ACTIVE / --`、`discharge_ready`、`no_battery`、`charge_fet_on` / `discharge_fet_on` / `precharge_fet_on`、`issue_detail`、`recovery_pending`、`last_result`。
+- 均衡视觉：cell delta 不只用颜色表达，必须同时显示 mV 数值与 BAL 状态；颜色分级要呼应主板均衡基线，`<= balance_min_start_delta_mv` 为正常，超过起步阈值但不高于 `25mV` 为轻微关注，`25..200mV` 为 warning，`>200mV` 进入服务/预均衡关注，不暗示常规自动均衡一定能拉回。
 - 接口对接：`GET /api/v1/status` 的 `battery`。
 - 视觉规则：正常态用低饱和绿色；保护、无电池、恢复等待用明确但不过饱和的 warning/error 标签。
 

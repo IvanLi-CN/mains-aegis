@@ -1020,6 +1020,7 @@ function PowerPage({ record }: { record: DeviceRecord }) {
 function BatteryPage({ record }: { record: DeviceRecord }) {
   const battery = record.status?.battery;
   const cells = normalizeCellVoltages(battery?.cell_mv);
+  const cellModel = buildCellBalanceModel(cells, battery);
   return (
     <section className="page-flow">
       <DeviceStatusBand record={record} />
@@ -1031,11 +1032,22 @@ function BatteryPage({ record }: { record: DeviceRecord }) {
           <MetricLine label="Current" value={formatCurrent(battery?.current_ma)} />
         </InfoPanel>
         <InfoPanel title="Cell voltages" icon={Activity}>
+          <div className="battery-balance-summary">
+            <span className={`balance-delta balance-delta-${cellModel.severity}`}>
+              Delta {formatMillivolts(cellModel.deltaMv)}
+            </span>
+            <span>{cellModel.balanceLabel}</span>
+            <span>Start {formatMillivolts(cellModel.startDeltaMv)}</span>
+          </div>
           <div className="battery-cell-grid" aria-label="BMS cell voltages">
-            {cells.map((cell, index) => (
-              <div className="battery-cell-tile" key={index}>
-                <span>C{index + 1}</span>
-                <strong>{formatVoltage(cell)}</strong>
+            {cellModel.cells.map((cell, index) => (
+              <div className={`battery-cell-tile battery-cell-${cell.severity}`} key={index}>
+                <span>
+                  C{index + 1}
+                  {cell.isBalancing ? <em>BAL</em> : null}
+                </span>
+                <strong>{formatVoltage(cell.value)}</strong>
+                <small>{formatCellOffset(cell.offsetMv)}</small>
               </div>
             ))}
           </div>
@@ -1061,6 +1073,75 @@ function BatteryPage({ record }: { record: DeviceRecord }) {
 
 function normalizeCellVoltages(cells: Array<number | null> | null | undefined): Array<number | null> {
   return [0, 1, 2, 3].map((index) => cells?.[index] ?? null);
+}
+
+type CellBalanceModel = {
+  cells: Array<{ value: number | null; offsetMv: number | null; severity: CellDeltaSeverity; isBalancing: boolean }>;
+  deltaMv: number | null;
+  startDeltaMv: number | null;
+  severity: CellDeltaSeverity;
+  balanceLabel: string;
+};
+
+type CellDeltaSeverity = "unknown" | "ok" | "watch" | "warning" | "critical";
+
+function buildCellBalanceModel(cells: Array<number | null>, battery: UpsStatus["battery"] | undefined): CellBalanceModel {
+  const numericCells = cells.filter((cell): cell is number => typeof cell === "number");
+  const minCell = numericCells.length > 0 ? Math.min(...numericCells) : null;
+  const computedDelta = numericCells.length > 1 ? Math.max(...numericCells) - Math.min(...numericCells) : null;
+  const deltaMv = battery?.cell_delta_mv ?? computedDelta;
+  const startDeltaMv = battery?.balance_min_start_delta_mv ?? (battery?.balance_cfg_match === true ? 3 : null);
+  const balanceMask = battery?.balance_mask ?? null;
+  return {
+    cells: cells.map((value, index) => {
+      const offsetMv = value !== null && minCell !== null ? value - minCell : null;
+      return {
+        value,
+        offsetMv,
+        severity: cellDeltaSeverity(offsetMv, startDeltaMv),
+        isBalancing: isBalanceCellActive(balanceMask, index),
+      };
+    }),
+    deltaMv,
+    startDeltaMv,
+    severity: cellDeltaSeverity(deltaMv, startDeltaMv),
+    balanceLabel: balanceStateLabel(battery),
+  };
+}
+
+function cellDeltaSeverity(deltaMv: number | null, startDeltaMv: number | null): CellDeltaSeverity {
+  if (deltaMv === null) return "unknown";
+  const threshold = startDeltaMv ?? 3;
+  if (deltaMv <= threshold) return "ok";
+  if (deltaMv <= 25) return "watch";
+  if (deltaMv <= 200) return "warning";
+  return "critical";
+}
+
+function balanceStateLabel(battery: UpsStatus["battery"] | undefined): string {
+  if (!battery) return "BAL --";
+  if (battery.balance_enabled === false) return "BAL OFF";
+  if (battery.balance_enabled === true && battery.balance_active === false) return "BAL IDLE";
+  if (battery.balance_active === true) {
+    if (typeof battery.balance_cell === "number") return `BAL C${battery.balance_cell}`;
+    const mask = battery.balance_mask ?? 0;
+    if (mask !== 0 && (mask & (mask - 1)) !== 0) return "BAL MULTI";
+    return "BAL ACTIVE";
+  }
+  return "BAL --";
+}
+
+function isBalanceCellActive(mask: number | null, index: number): boolean {
+  return mask !== null && (mask & (1 << index)) !== 0;
+}
+
+function formatMillivolts(value: number | null | undefined): string {
+  return typeof value === "number" ? `${value} mV` : "--";
+}
+
+function formatCellOffset(value: number | null): string {
+  if (value === null) return "--";
+  return value === 0 ? "baseline" : `+${value} mV`;
 }
 
 function fetLabel(value: boolean | null | undefined): string {

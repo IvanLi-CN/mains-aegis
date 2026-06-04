@@ -1246,6 +1246,44 @@ a {
   font-size: 18px;
 }
 
+.battery-balance-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.battery-balance-summary span {
+  border: 1px solid var(--color-hairline);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--color-panel) 92%, var(--color-page));
+  color: var(--color-muted);
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.battery-balance-summary .balance-delta {
+  color: var(--color-ink);
+}
+
+.battery-balance-summary .balance-delta-ok {
+  border-color: color-mix(in oklch, var(--color-ok) 42%, var(--color-hairline));
+  background: color-mix(in oklch, var(--color-ok) 12%, var(--color-panel));
+}
+
+.battery-balance-summary .balance-delta-watch {
+  border-color: color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
+  background: color-mix(in oklch, var(--color-warning) 11%, var(--color-panel));
+}
+
+.battery-balance-summary .balance-delta-warning,
+.battery-balance-summary .balance-delta-critical {
+  border-color: color-mix(in oklch, var(--color-critical) 46%, var(--color-hairline));
+  background: color-mix(in oklch, var(--color-critical) 10%, var(--color-panel));
+}
+
 .battery-cell-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1260,10 +1298,38 @@ a {
   padding: 10px;
 }
 
+.battery-cell-ok {
+  border-color: color-mix(in oklch, var(--color-ok) 34%, var(--color-hairline));
+}
+
+.battery-cell-watch {
+  border-color: color-mix(in oklch, var(--color-warning) 46%, var(--color-hairline));
+  background: color-mix(in oklch, var(--color-warning) 9%, var(--color-panel));
+}
+
+.battery-cell-warning,
+.battery-cell-critical {
+  border-color: color-mix(in oklch, var(--color-critical) 44%, var(--color-hairline));
+  background: color-mix(in oklch, var(--color-critical) 8%, var(--color-panel));
+}
+
 .battery-cell-tile span {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   color: var(--color-muted);
   font-size: 12px;
+}
+
+.battery-cell-tile em {
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--color-ok) 18%, var(--color-panel));
+  color: var(--color-ok);
+  padding: 1px 5px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
 }
 
 .battery-cell-tile strong {
@@ -1272,6 +1338,14 @@ a {
   overflow-wrap: anywhere;
   font-size: 17px;
   line-height: 1.2;
+}
+
+.battery-cell-tile small {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .metric-line {

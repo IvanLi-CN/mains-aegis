@@ -98,6 +98,13 @@ export type UpsStatus = {
     current_ma: number | null;
     soc_pct: number | null;
     cell_mv?: Array<number | null>;
+    cell_delta_mv?: number | null;
+    balance_enabled?: boolean | null;
+    balance_cfg_match?: boolean | null;
+    balance_active?: boolean | null;
+    balance_mask?: number | null;
+    balance_cell?: number | null;
+    balance_min_start_delta_mv?: number | null;
     no_battery: boolean;
     discharge_ready: boolean;
     charge_fet_on?: boolean | null;

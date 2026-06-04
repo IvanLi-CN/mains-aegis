@@ -208,6 +208,23 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     json_field_opt_i16(buf, "current_ma", status.battery_current_ma, true);
     json_field_opt_u16(buf, "soc_pct", status.battery_soc_pct, true);
     json_field_opt_u16_array(buf, "cell_mv", status.battery_cell_mv, true);
+    json_field_opt_u16(buf, "cell_delta_mv", status.battery_cell_delta_mv, true);
+    json_field_opt_bool(buf, "balance_enabled", status.battery_balance_enabled, true);
+    json_field_opt_bool(
+        buf,
+        "balance_cfg_match",
+        status.battery_balance_cfg_match,
+        true,
+    );
+    json_field_opt_bool(buf, "balance_active", status.battery_balance_active, true);
+    json_field_opt_u8(buf, "balance_mask", status.battery_balance_mask, true);
+    json_field_opt_u8(buf, "balance_cell", status.battery_balance_cell, true);
+    json_field_opt_u8(
+        buf,
+        "balance_min_start_delta_mv",
+        status.battery_balance_min_start_delta_mv,
+        true,
+    );
     json_field_opt_bool(buf, "no_battery", status.battery_no_battery, true);
     json_field_opt_bool(buf, "discharge_ready", status.battery_discharge_ready, true);
     json_field_opt_bool(buf, "charge_fet_on", status.battery_charge_fet_on, true);
@@ -799,6 +816,13 @@ mod tests {
         let mut status = UpsStatusSnapshot::empty();
         status.mode = "backup";
         status.battery_cell_mv = [Some(3812), Some(3817), Some(3809), Some(3822)];
+        status.battery_cell_delta_mv = Some(13);
+        status.battery_balance_enabled = Some(true);
+        status.battery_balance_cfg_match = Some(true);
+        status.battery_balance_active = Some(true);
+        status.battery_balance_mask = Some(0b1010);
+        status.battery_balance_cell = None;
+        status.battery_balance_min_start_delta_mv = Some(3);
         status.battery_charge_fet_on = Some(false);
         status.battery_discharge_fet_on = Some(true);
         status.battery_precharge_fet_on = Some(false);
@@ -815,6 +839,12 @@ mod tests {
         render_status_json(&mut body, status);
         assert!(body.as_str().contains("\"mode\":\"backup\""));
         assert!(body.as_str().contains("\"cell_mv\":[3812,3817,3809,3822]"));
+        assert!(body.as_str().contains("\"cell_delta_mv\":13"));
+        assert!(body.as_str().contains("\"balance_enabled\":true"));
+        assert!(body.as_str().contains("\"balance_cfg_match\":true"));
+        assert!(body.as_str().contains("\"balance_active\":true"));
+        assert!(body.as_str().contains("\"balance_mask\":10"));
+        assert!(body.as_str().contains("\"balance_min_start_delta_mv\":3"));
         assert!(body.as_str().contains("\"charge_fet_on\":false"));
         assert!(body.as_str().contains("\"discharge_fet_on\":true"));
         assert!(body.as_str().contains("\"precharge_fet_on\":false"));

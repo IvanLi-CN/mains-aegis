@@ -46,8 +46,12 @@ export const BatteryDetail: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText("Cell voltages")).toBeInTheDocument();
+    await expect(await canvas.findByText("Delta 13 mV")).toBeInTheDocument();
+    await expect(await canvas.findByText("BAL MULTI")).toBeInTheDocument();
+    await expect(await canvas.findByText("Start 3 mV")).toBeInTheDocument();
     await expect(await canvas.findByText("C1")).toBeInTheDocument();
     await expect(await canvas.findByText("3.81 V")).toBeInTheDocument();
+    await expect(await canvas.findAllByText("BAL")).toHaveLength(2);
     await expect(await canvas.findByText("BMS MOS")).toBeInTheDocument();
     await expect(await canvas.findByText("CHG MOS")).toBeInTheDocument();
     await expect(await canvas.findByText("DSG MOS")).toBeInTheDocument();

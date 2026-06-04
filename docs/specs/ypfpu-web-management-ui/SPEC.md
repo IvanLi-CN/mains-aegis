@@ -65,7 +65,8 @@
 
 - `/devices/:device_id` 展示单设备运行状态带与关键摘要。
 - `/devices/:device_id/power` 展示 input、charger、output gate、OUT A/B。
-- `/devices/:device_id/battery` 展示 pack status、四节 cell voltage、BMS readiness、三路 BMS MOS 状态与 issue detail。
+- `/devices/:device_id/battery` 展示 pack status、四节 cell voltage、cell delta、均衡起步阈值、BAL 状态、BMS readiness、三路 BMS MOS 状态与 issue detail。
+- Cell voltage 面板必须把每串相对最低电芯的 mV 偏差写在 tile 内，并在当前 `balance_mask` 命中的 cell 上标注 `BAL`；颜色分级只做辅助，不能替代 delta 与 BAL 文本。
 - `/devices/:device_id/thermal` 展示 TMP A/B 与保护上下文。
 - `/devices/:device_id/device` 展示 identity、network、firmware。
 - `/devices/:device_id/firmware` 展示 firmware artifact 选择、来源去重、Web Serial 直烧与 devd 代理烧录。
@@ -218,8 +219,8 @@
   viewport_strategy: `headless-browser`
   capture_scope: `browser-viewport`
   target_program: `mock-only`
-  scenario: battery cell voltages and BMS MOS
-  evidence_note: 验证 Battery 页展示四节 cell voltage 和 CHG / DSG / PCHG 三路 BMS MOS 状态，且 mock 数据路径不依赖真实 UPS 设备。
+  scenario: battery cell balance and BMS MOS
+  evidence_note: 验证 Battery 页展示四节 cell voltage、delta、BAL 状态、起步阈值、当前均衡 cell 标记和 CHG / DSG / PCHG 三路 BMS MOS 状态，且 mock 数据路径不依赖真实 UPS 设备。
 
 ![Battery cell and MOS evidence](./assets/device-battery-cell-mos.png)
 
