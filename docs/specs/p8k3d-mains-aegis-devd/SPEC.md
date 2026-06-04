@@ -160,6 +160,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - Web 正常断开后 devd 立即释放 USB 占用；Web 异常断开后 devd 按租约 TTL 自动释放，默认目标不超过 9 秒。
 - Web USB 写入请求缺少有效 lease 时失败，不得因为 devd 里有历史 connected 设备而继续写硬件。
 - Given `POST /api/v1/devices/{id}/flash` 触发真实烧录，When backend 返回成功或失败，Then HTTP 响应与设备事件都必须包含 backend `status/stdout/stderr`，便于定位 `espflash` 是否真正完成。
+- 低压恢复 HIL 必须可通过 `tools/hil/low-voltage-recovery.sh` 完成“`tools/bq40-comm-tool` 临时固件 apply DF -> devd 烧回主固件 -> USB `power-diag` 验证”的双烧录流程；runner 必须拒绝非批准 device id / port，并在 real 模式下阻断任何指向 `/dev/cu.usbmodem212101` 的绑定。
 
 ## 实现状态
 
@@ -178,3 +179,4 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - 2026-06-04: `power-diag` 增加 `charger.vac2_adc_mv`；真机验证确认 DC IN/VAC2 约 12.23V、USB-C VAC1 约 5.10V 时，策略可保持 `dcin + RECOV/CHG100 + IINDPM=3000mA`，且 CUV/低压 recovery 不再被 BQ25792 `termination_done` 误分类为 `full_latched`。
 - 2026-06-04: `power-diag` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2900mV + CUV_RECOV_CHG=1` baseline。
 - 2026-06-04: `flash` API 与设备事件增加 backend `status/stdout/stderr` 透传，现场可直接确认 `espflash` 是否真正完成以及目标硬件 identity 是否已经切到新 artifact。
+- 2026-06-04: 新增低压恢复 HIL runner 与文档，固化 bq40 工具固件和主固件的双烧录验证路径。
