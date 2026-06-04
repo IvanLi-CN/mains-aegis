@@ -29,12 +29,29 @@ function renderApp(seed = "default") {
   );
 }
 
-export const AddLanTarget: Story = {
-  name: "Add LAN target",
-  render: () => renderApp(),
+export const DevdAutoDiscovery: Story = {
+  name: "devd auto discovery",
+  render: () => renderApp("empty"),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("heading", { name: "Connect devices" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("heading", { name: /Automatic device discovery/ })).toBeInTheDocument();
+    await expect(await canvas.findByText("mains-aegis-devd-bridge")).toBeInTheDocument();
+    await expect(await canvas.findByText("Mock")).toBeInTheDocument();
+    await expect(canvas.queryByLabelText("Target")).not.toBeInTheDocument();
+  },
+};
+
+export const ManualLanFallback: Story = {
+  name: "Manual LAN fallback",
+  render: () => renderApp("empty"),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByRole("heading", { name: /Automatic device discovery/ })).toBeInTheDocument();
+    await userEvent.clear(canvas.getByLabelText("devd URL"));
+    await userEvent.type(canvas.getByLabelText("devd URL"), "mock:missing-devd");
+    await userEvent.click(canvas.getByRole("button", { name: /Refresh discovery/ }));
+    await expect(await canvas.findByLabelText("Target")).toBeInTheDocument();
     await expect(canvas.queryByLabelText("Bridge token")).not.toBeInTheDocument();
     await expect(canvas.queryByLabelText("devd auth token")).not.toBeInTheDocument();
     await userEvent.clear(canvas.getByLabelText("Target"));
@@ -57,8 +74,8 @@ export const FirmwareMismatchWarning: Story = {
         <section className="connect-panel usb-panel">
           <header className="connect-panel-header">
             <div>
-              <h3><Usb size={18} /> USB CDC</h3>
-              <p>Chromium Web Serial available</p>
+              <h3><Usb size={18} /> Web Serial</h3>
+              <p>Chromium Web Serial available for USB CDC devices</p>
             </div>
             <span className="transport-badge serial">ready</span>
           </header>
@@ -73,7 +90,7 @@ export const FirmwareMismatchWarning: Story = {
             </label>
             <div className="form-actions with-callout">
               <button className="primary-button" type="button">
-                <ButtonLabel icon={Usb} busy={false} busyText="Connecting" text="Connect USB" />
+                <ButtonLabel icon={Usb} busy={false} busyText="Connecting" text="Connect Web Serial" />
               </button>
               <ConnectionCallout
                 id="story-firmware-mismatch"

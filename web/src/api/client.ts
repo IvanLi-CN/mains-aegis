@@ -198,7 +198,7 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
       : null;
   const identity = devdIdentity ?? getMockIdentity("mock:usb");
   const network = identity.network;
-  const status = getMockStatus(baseUrl === "mock:devd" ? "mock:devd" : "mock:usb");
+  const status = getMockStatus(baseUrl === "mock:devd" ? "mock:lab-standby" : "mock:usb");
   const device = {
     id: baseUrl === "mock:devd" ? "mains-aegis-devd-bridge" : "mock-devd-esp32s3-1",
     display_name: baseUrl === "mock:devd" ? "Bound ESP32-S3" : "USB demo CDC",
@@ -316,6 +316,15 @@ export type DevdSerialEventStream = {
   close: () => void;
 };
 
+export type DevdDeviceEvent = {
+  id: string;
+  timestamp: string;
+  device_id: string | null;
+  kind: string;
+  message: string;
+  payload: unknown;
+};
+
 type DevdSerialSessionOptions = {
   logsLimit?: number;
   traceLimit?: number;
@@ -372,6 +381,30 @@ export function subscribeDevdSerialEvents(
   eventSource.addEventListener("serial_log", handleEvent);
   eventSource.addEventListener("serial_status", handleEvent);
   eventSource.addEventListener("monitor", handleEvent);
+  eventSource.onerror = callbacks.onError;
+  return { close: () => eventSource.close() };
+}
+
+export function subscribeDevdDeviceEvents(
+  baseUrl: string,
+  callbacks: {
+    onEvent: (event: DevdDeviceEvent) => void;
+    onError: (event: Event) => void;
+  },
+): DevdSerialEventStream {
+  if (isMockBaseUrl(baseUrl)) return { close: () => undefined };
+
+  const params = new URLSearchParams();
+  const token = bridgeAuthToken(baseUrl);
+  if (token) params.set("bridge_token", token);
+  const query = params.toString();
+  const eventSource = new EventSource(`${baseUrl}/api/v1/devices/events${query ? `?${query}` : ""}`);
+  const handleEvent = (event: Event) => {
+    callbacks.onEvent(JSON.parse((event as MessageEvent<string>).data) as DevdDeviceEvent);
+  };
+  for (const kind of ["scan", "bind", "unbind", "connect", "disconnect", "artifact", "flash", "reset", "power_diag"]) {
+    eventSource.addEventListener(kind, handleEvent);
+  }
   eventSource.onerror = callbacks.onError;
   return { close: () => eventSource.close() };
 }

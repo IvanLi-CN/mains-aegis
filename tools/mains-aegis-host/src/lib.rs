@@ -551,6 +551,7 @@ pub async fn serve_http_bridge(config: HttpBridgeConfig) -> anyhow::Result<()> {
         .route("/api/v1/settings/log-level", post(set_log_level))
         .route("/api/v1/settings/manual-charge", post(set_manual_charge))
         .route("/api/v1/devices", get(list_devices))
+        .route("/api/v1/devices/events", get(devices_events))
         .route("/api/v1/devices/scan", post(scan_devices))
         .route("/api/v1/devices/scan/trace", get(scan_trace))
         .route("/api/v1/devices/{id}/bind", post(bind_device))
@@ -4080,6 +4081,25 @@ async fn device_events(
         let mut receiver = receiver;
         while let Ok(event) = receiver.recv().await {
             if event.device_id.as_deref() == Some(id.as_str()) || event.device_id.is_none() {
+                yield Ok(Event::default().event(event.kind.clone()).id(event.id.clone()).json_data(event).expect("serialize event"));
+            }
+        }
+    };
+    Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
+}
+
+async fn devices_events(
+    State(state): State<AppState>,
+) -> Result<Sse<impl futures_core::Stream<Item = Result<Event, std::convert::Infallible>>>, HttpError>
+{
+    let receiver = state.events.subscribe();
+    let stream = async_stream::stream! {
+        let mut receiver = receiver;
+        while let Ok(event) = receiver.recv().await {
+            if matches!(
+                event.kind.as_str(),
+                "scan" | "bind" | "unbind" | "connect" | "disconnect" | "artifact" | "flash" | "reset" | "power_diag"
+            ) {
                 yield Ok(Event::default().event(event.kind.clone()).id(event.id.clone()).json_data(event).expect("serialize event"));
             }
         }
