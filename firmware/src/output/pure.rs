@@ -23,6 +23,7 @@ const BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED: bool = false;
 const CHARGE_POLICY_NORMAL_ICHG_MA: u16 = 500;
 const CHARGE_POLICY_TOPOFF_ICHG_MA: u16 = 200;
 const CHARGE_POLICY_DC_DERATED_ICHG_MA: u16 = 100;
+const CHARGE_POLICY_BMS_RECOVERY_ICHG_MA: u16 = 100;
 const CHARGE_POLICY_START_RSOC_PCT: u16 = 80;
 const CHARGE_POLICY_START_CELL_MIN_MV: u16 = 3_700;
 const CHARGE_POLICY_TOPOFF_RSOC_PCT: u16 = 99;
@@ -59,8 +60,20 @@ pub(super) fn detail_input_source(
     ac1_present: bool,
     ac2_present: bool,
     usb_pd_attached: bool,
+    vbus_adc_mv: Option<u16>,
+    vac1_adc_mv: Option<u16>,
 ) -> Option<DashboardInputSource> {
-    if usb_pd_attached || (ac1_present && !ac2_present) {
+    let dc_selected = ac2_present
+        && vbus_adc_mv.is_some_and(|vbus_mv| {
+            vbus_mv >= 7_000
+                && vac1_adc_mv
+                    .map(|vac1_mv| vbus_mv > vac1_mv.saturating_add(1_000))
+                    .unwrap_or(true)
+        });
+
+    if dc_selected || (ac2_present && !ac1_present && !usb_pd_attached) {
+        Some(DashboardInputSource::DcIn)
+    } else if usb_pd_attached || (ac1_present && !ac2_present) {
         Some(DashboardInputSource::UsbC)
     } else if ac2_present && !ac1_present {
         Some(DashboardInputSource::DcIn)
@@ -429,6 +442,7 @@ pub(super) enum ChargePolicyState {
     Charging500mA,
     ChargingTopoff200mA,
     Charging100mADcDerated,
+    Charging100mABmsRecovery,
     FullLatched,
 }
 
@@ -458,6 +472,7 @@ impl ChargePolicyState {
             Self::Charging500mA => "charging_500ma",
             Self::ChargingTopoff200mA => "charging_topoff_200ma",
             Self::Charging100mADcDerated => "charging_100ma_dc_derated",
+            Self::Charging100mABmsRecovery => "charging_100ma_bms_recovery",
             Self::FullLatched => "full_latched",
         }
     }
@@ -472,6 +487,7 @@ impl ChargePolicyState {
             Self::Charging500mA => "CHG500",
             Self::ChargingTopoff200mA => "CHG500",
             Self::Charging100mADcDerated => "CHG100",
+            Self::Charging100mABmsRecovery => "CHG100",
             Self::FullLatched => "FULL",
         }
     }
@@ -479,7 +495,10 @@ impl ChargePolicyState {
     pub(super) const fn charger_active(self) -> bool {
         matches!(
             self,
-            Self::Charging500mA | Self::ChargingTopoff200mA | Self::Charging100mADcDerated
+            Self::Charging500mA
+                | Self::ChargingTopoff200mA
+                | Self::Charging100mADcDerated
+                | Self::Charging100mABmsRecovery
         )
     }
 }
@@ -673,6 +692,7 @@ pub(super) struct ChargePolicyTelemetry {
     pub(super) cell_min_mv: u16,
     pub(super) cell_max_mv: u16,
     pub(super) charge_ready: bool,
+    pub(super) bms_recovery_charge_allowed: bool,
     pub(super) bms_full: bool,
     pub(super) hv: bool,
 }
@@ -782,7 +802,12 @@ pub(super) fn charge_policy_step(
         };
     };
 
-    if !telemetry.charge_ready {
+    let bms_recovery_active = !telemetry.charge_ready
+        && telemetry.bms_recovery_charge_allowed
+        && start_reason.is_some()
+        && matches!(input.input_source, Some(DashboardInputSource::DcIn));
+
+    if !telemetry.charge_ready && !bms_recovery_active {
         memory.charge_latched = false;
         derate.reset();
         output_load.reset();
@@ -800,7 +825,7 @@ pub(super) fn charge_policy_step(
         memory.full_latched = false;
     }
 
-    let full_reason = if memory.charge_latched || memory.full_latched {
+    let full_reason = if !bms_recovery_active && (memory.charge_latched || memory.full_latched) {
         charge_policy_full_reason(telemetry.bms_full, input.charger_done)
     } else {
         None
@@ -866,7 +891,8 @@ pub(super) fn charge_policy_step(
         input.ibus_ma,
     );
 
-    let topoff_active = !derate.derated
+    let topoff_active = !bms_recovery_active
+        && !derate.derated
         && input.telemetry.is_some_and(|telemetry| {
             telemetry.rsoc_pct >= CHARGE_POLICY_TOPOFF_RSOC_PCT
                 && telemetry.charge_ready
@@ -877,6 +903,8 @@ pub(super) fn charge_policy_step(
         });
     let state = if derate.derated {
         ChargePolicyState::Charging100mADcDerated
+    } else if bms_recovery_active {
+        ChargePolicyState::Charging100mABmsRecovery
     } else if topoff_active {
         ChargePolicyState::ChargingTopoff200mA
     } else {
@@ -884,6 +912,8 @@ pub(super) fn charge_policy_step(
     };
     let target_ichg_ma = Some(if derate.derated {
         CHARGE_POLICY_DC_DERATED_ICHG_MA
+    } else if bms_recovery_active {
+        CHARGE_POLICY_BMS_RECOVERY_ICHG_MA
     } else if topoff_active {
         CHARGE_POLICY_TOPOFF_ICHG_MA
     } else {
@@ -1503,25 +1533,36 @@ mod tests {
     #[test]
     fn detail_input_source_prefers_explicit_usb_and_dc_routes() {
         assert_eq!(
-            detail_input_source(true, true, false, false),
+            detail_input_source(true, true, false, false, Some(5_000), Some(5_000)),
             Some(DashboardInputSource::UsbC)
         );
         assert_eq!(
-            detail_input_source(true, false, true, false),
+            detail_input_source(true, false, true, false, Some(12_000), None),
             Some(DashboardInputSource::DcIn)
         );
         assert_eq!(
-            detail_input_source(true, true, true, false),
+            detail_input_source(true, true, true, false, Some(5_000), Some(5_000)),
             Some(DashboardInputSource::Auto)
         );
-        assert_eq!(detail_input_source(false, false, false, false), None);
+        assert_eq!(
+            detail_input_source(false, false, false, false, None, None),
+            None
+        );
     }
 
     #[test]
     fn detail_input_source_keeps_usbc_route_while_pd_session_is_attached() {
         assert_eq!(
-            detail_input_source(false, false, false, true),
+            detail_input_source(false, false, false, true, None, None),
             Some(DashboardInputSource::UsbC)
+        );
+    }
+
+    #[test]
+    fn detail_input_source_prefers_dc_when_bq_vbus_tracks_ac2_not_usb_vac1() {
+        assert_eq!(
+            detail_input_source(true, true, true, true, Some(12_240), Some(5_100)),
+            Some(DashboardInputSource::DcIn)
         );
     }
 
@@ -2112,6 +2153,7 @@ mod tests {
             cell_min_mv,
             cell_max_mv,
             charge_ready: true,
+            bms_recovery_charge_allowed: false,
             bms_full: false,
             hv: false,
         }
@@ -2187,6 +2229,78 @@ mod tests {
             Some(ChargeStartReason::RsocAndCellLow)
         );
         assert!(memory.charge_latched);
+    }
+
+    #[test]
+    fn charge_policy_allows_cuv_precharge_only_on_dc_recovery_path() {
+        let mut memory = ChargePolicyMemory::default();
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+        let mut telemetry = policy_telemetry(0, 2_853, 2_974);
+        telemetry.charge_ready = false;
+        telemetry.bms_recovery_charge_allowed = true;
+
+        let decision = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            0,
+            policy_input(Some(telemetry), Some(DashboardInputSource::DcIn), Some(70)),
+        );
+
+        assert_eq!(decision.state, ChargePolicyState::Charging100mABmsRecovery);
+        assert!(decision.allow_charge);
+        assert_eq!(
+            decision.target_ichg_ma,
+            Some(CHARGE_POLICY_BMS_RECOVERY_ICHG_MA)
+        );
+        assert_eq!(
+            decision.start_reason,
+            Some(ChargeStartReason::RsocAndCellLow)
+        );
+    }
+
+    #[test]
+    fn charge_policy_blocks_cuv_precharge_on_usb_path() {
+        let mut memory = ChargePolicyMemory::default();
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+        let mut telemetry = policy_telemetry(0, 2_853, 2_974);
+        telemetry.charge_ready = false;
+        telemetry.bms_recovery_charge_allowed = true;
+
+        let decision = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            0,
+            policy_input(Some(telemetry), Some(DashboardInputSource::UsbC), Some(70)),
+        );
+
+        assert_eq!(decision.state, ChargePolicyState::BlockedNoBms);
+        assert!(!decision.allow_charge);
+    }
+
+    #[test]
+    fn charge_policy_cuv_precharge_ignores_charger_termination_done() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            full_latched: false,
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+        let mut telemetry = policy_telemetry(0, 2_853, 2_974);
+        telemetry.charge_ready = false;
+        telemetry.bms_recovery_charge_allowed = true;
+        let mut input = policy_input(Some(telemetry), Some(DashboardInputSource::DcIn), Some(74));
+        input.charger_done = true;
+
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 3_000, input);
+
+        assert_eq!(decision.state, ChargePolicyState::Charging100mABmsRecovery);
+        assert!(decision.allow_charge);
+        assert_eq!(decision.full_reason, None);
+        assert!(!memory.full_latched);
     }
 
     #[test]

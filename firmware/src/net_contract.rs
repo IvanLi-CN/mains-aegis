@@ -292,6 +292,7 @@ pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDi
     json_field_opt_u16(buf, "vbat_adc_mv", diag.charger.vbat_adc_mv, true);
     json_field_opt_u16(buf, "vsys_adc_mv", diag.charger.vsys_adc_mv, true);
     json_field_opt_u16(buf, "vac1_adc_mv", diag.charger.vac1_adc_mv, true);
+    json_field_opt_u16(buf, "vac2_adc_mv", diag.charger.vac2_adc_mv, true);
     json_field_opt_u16(buf, "vreg_mv", diag.charger.vreg_mv, true);
     json_field_opt_u16(buf, "ichg_ma", diag.charger.ichg_ma, true);
     json_field_opt_u16(buf, "vindpm_mv", diag.charger.vindpm_mv, true);
