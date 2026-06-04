@@ -30,7 +30,7 @@
 
 - 工作模式固定四态：`BYPASS / STANDBY / ASSIST / BACKUP`。
 - 充电策略以主线 charger state machine 为准；`UpsMode` 不再直接冻结 `CHARGE` 卡状态。
-- 首页 `CHARGE` 卡只做紧凑映射：`CHG1A/CHG500/CHG100 -> CHG`，其余 runtime token 保留 `WAIT/FULL/WARM/TEMP/LOAD/LOCK/NOAC`。
+- 首页 `CHARGE` 卡只做紧凑映射：`CHG1A/CHG500/CHG100/RECOV -> CHG`，其余 runtime token 保留 `WAIT/FULL/WARM/TEMP/LOAD/LOCK/NOAC`。
 - 右侧三卡语义固定，不与负载侧字段混用。
 - 首页 5 个模块同时承担二级仪表盘入口：主 KPI=`Output`、次级信息=`Thermal`、`BATTERY`=`Cells`、`CHARGE`=`Charger`、`DISCHG`=`Battery Flow`。
 - 标题右侧 `WiFi` 图标是独立入口；视觉图标保持小尺寸，但命中范围按 `touch-targets.md` 中的放大热区执行。

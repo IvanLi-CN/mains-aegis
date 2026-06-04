@@ -210,6 +210,7 @@ const BMS_DF_ADDR_ENABLED_PROTECTIONS_A: u16 = 0x4938;
 const BMS_DF_ADDR_ENABLED_PROTECTIONS_B: u16 = 0x4939;
 const BMS_DF_ADDR_ENABLED_PROTECTIONS_C: u16 = 0x493A;
 const BMS_DF_ADDR_ENABLED_PROTECTIONS_D: u16 = 0x493B;
+const BMS_DF_ADDR_CUV_RECOVERY: u16 = 0x493F;
 const BMS_DF_ADDR_IT_GAUGING_CONFIGURATION: u16 = 0x4917;
 const BMS_DF_ADDR_BALANCING_CONFIGURATION: u16 = 0x4908;
 const BMS_DF_ADDR_MIN_START_BALANCE_DELTA: u16 = 0x490D;
@@ -288,6 +289,11 @@ const BMS_DF_AUTH_CONFIG_DEFAULT: u8 = 0x00;
     feature = "bms-rom-repair-asset-df-mainboard",
     feature = "bms-live-df-mainboard"
 ))]
+const BMS_DF_PROTECTION_CONFIGURATION_MAINBOARD: u8 = 0x02;
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
 const BMS_DF_IT_GAUGING_CONFIGURATION_DEFAULT: u16 = 0xD0FE;
 #[cfg(any(
     feature = "bms-rom-repair-asset-df-mainboard",
@@ -309,6 +315,11 @@ const BMS_DF_RELAX_BALANCE_INTERVAL_MAINBOARD_S: u32 = 18_000;
     feature = "bms-live-df-mainboard"
 ))]
 const BMS_DF_MIN_RSOC_FOR_BALANCING_MAINBOARD_PCT: u8 = 80;
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_CUV_RECOVERY_MAINBOARD_MV: u16 = 2_900;
 #[cfg(any(
     feature = "bms-rom-repair-asset-df-mainboard",
     feature = "bms-live-df-mainboard"
@@ -510,7 +521,7 @@ impl BmsDfLiveFieldTarget {
 }
 
 #[cfg(feature = "bms-live-df-mainboard")]
-const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 22] = [
+const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 24] = [
     BmsDfLiveFieldTarget::byte(
         "balancing_configuration",
         BMS_DF_ADDR_BALANCING_CONFIGURATION,
@@ -530,6 +541,16 @@ const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 22] = [
         "min_rsoc_for_balancing",
         BMS_DF_ADDR_MIN_RSOC_FOR_BALANCING,
         BMS_DF_MIN_RSOC_FOR_BALANCING_MAINBOARD_PCT,
+    ),
+    BmsDfLiveFieldTarget::byte(
+        "protection_configuration",
+        BMS_DF_ADDR_PROTECTION_CONFIGURATION,
+        BMS_DF_PROTECTION_CONFIGURATION_MAINBOARD,
+    ),
+    BmsDfLiveFieldTarget::u16(
+        "cuv_recovery",
+        BMS_DF_ADDR_CUV_RECOVERY,
+        BMS_DF_CUV_RECOVERY_MAINBOARD_MV,
     ),
     BmsDfLiveFieldTarget::u16(
         "charge_temp_t3",
@@ -1163,6 +1184,11 @@ fn patch_bms_df_section1_mainboard(section1: &mut [u8], calibration: BmsDfCalibr
         BMS_DF_ADDR_AUTH_CONFIG,
         BMS_DF_AUTH_CONFIG_DEFAULT,
     );
+    patch_u8(
+        section1,
+        BMS_DF_ADDR_PROTECTION_CONFIGURATION,
+        BMS_DF_PROTECTION_CONFIGURATION_MAINBOARD,
+    );
     patch_u16(
         section1,
         BMS_DF_ADDR_IT_GAUGING_CONFIGURATION,
@@ -1187,6 +1213,11 @@ fn patch_bms_df_section1_mainboard(section1: &mut [u8], calibration: BmsDfCalibr
         section1,
         BMS_DF_ADDR_MIN_RSOC_FOR_BALANCING,
         BMS_DF_MIN_RSOC_FOR_BALANCING_MAINBOARD_PCT,
+    );
+    patch_u16(
+        section1,
+        BMS_DF_ADDR_CUV_RECOVERY,
+        BMS_DF_CUV_RECOVERY_MAINBOARD_MV,
     );
     patch_u8(
         section1,
@@ -9241,6 +9272,10 @@ where
                     )
                     .map(TelemetryU8::Value)
                     .unwrap_or_else(|e| TelemetryU8::Err(e.as_str()));
+                    let df_cuv_recovery =
+                        read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_CUV_RECOVERY)
+                            .map(TelemetryU16::Value)
+                            .unwrap_or_else(|e| TelemetryU16::Err(e.as_str()));
                     let df_enabled_protections_a = read_bms_df_byte_via_mb44(
                         &mut self.i2c,
                         addr,
@@ -9437,7 +9472,7 @@ where
                             .map(TelemetryU16::Value)
                             .unwrap_or_else(|e| TelemetryU16::Err(e.as_str()));
                     defmt::info!(
-                        "bms_df_cfg: addr=0x{=u8:x} mfg_status_init={} fet_options={} sbs_gauging={} sbs_cfg={} auth_cfg={} prot_cfg={} en_prot_a={} en_prot_b={} en_prot_c={} en_prot_d={} it_gauging={} en_pf_a={} en_pf_b={} en_pf_c={} en_pf_d={} temp_enable={} temperature_mode={} afe_prot_ctrl={} cell_gain={} pack_gain={} bat_gain={}",
+                        "bms_df_cfg: addr=0x{=u8:x} mfg_status_init={} fet_options={} sbs_gauging={} sbs_cfg={} auth_cfg={} prot_cfg={} cuv_recovery={} en_prot_a={} en_prot_b={} en_prot_c={} en_prot_d={} it_gauging={} en_pf_a={} en_pf_b={} en_pf_c={} en_pf_d={} temp_enable={} temperature_mode={} afe_prot_ctrl={} cell_gain={} pack_gain={} bat_gain={}",
                         addr,
                         df_mfg_status_init,
                         df_fet_options,
@@ -9445,6 +9480,7 @@ where
                         df_sbs_configuration,
                         df_auth_config,
                         df_protection_configuration,
+                        df_cuv_recovery,
                         df_enabled_protections_a,
                         df_enabled_protections_b,
                         df_enabled_protections_c,

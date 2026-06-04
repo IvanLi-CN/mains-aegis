@@ -63,6 +63,8 @@ Mainboard policy:
   - `OCD2=-15000mA/3s`
   - `OCD recovery=100mA/3s`
   - `SOCD=-16000mA/5s`
+  - `Protection Configuration=0x02` (`CUV_RECOV_CHG=1`, `PCHG_COMM=0`)
+  - `CUV Recovery=2900mV`
   - `Balancing Configuration=0x07` (`CB=1 / CBM=1 / CBR=1 / CBS=0`)
   - `Min Start Balance Delta=3mV`
   - `Relax Balance Interval=18000s`
@@ -92,6 +94,8 @@ Current fixed live baseline:
 - `OCD2=-15000mA/3s`
 - `OCD recovery=100mA/3s`
 - `SOCD=-16000mA/5s`
+- `Protection Configuration=0x02` (`CUV_RECOV_CHG=1`, `PCHG_COMM=0`)
+- `CUV Recovery=2900mV`
 - `Balancing Configuration=0x07`
 - `Min Start Balance Delta=3mV`
 - `Relax Balance Interval=18000s`

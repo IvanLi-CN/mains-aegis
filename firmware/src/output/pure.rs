@@ -28,6 +28,7 @@ const CHARGE_POLICY_START_RSOC_PCT: u16 = 80;
 const CHARGE_POLICY_START_CELL_MIN_MV: u16 = 3_700;
 const CHARGE_POLICY_TOPOFF_RSOC_PCT: u16 = 99;
 const CHARGE_POLICY_TOPOFF_CELL_MAX_MV: u16 = 4140;
+const CHARGE_POLICY_LOW_VOLTAGE_RECOVERY_EXIT_CELL_MIN_MV: u16 = 3_000;
 const CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA: i32 = 3_000;
 const CHARGE_POLICY_DC_DERATE_EXIT_IBUS_MA: i32 = 2_700;
 const CHARGE_POLICY_DC_DERATE_ENTER_HOLD: Duration = Duration::from_secs(1);
@@ -442,8 +443,23 @@ pub(super) enum ChargePolicyState {
     Charging500mA,
     ChargingTopoff200mA,
     Charging100mADcDerated,
-    Charging100mABmsRecovery,
+    RecoveringLowVoltage,
     FullLatched,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ChargePolicyRecoveryStage {
+    Bq40Pchg,
+    Bq25792Precharge,
+}
+
+impl ChargePolicyRecoveryStage {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bq40Pchg => "bq40_pchg",
+            Self::Bq25792Precharge => "bq25792_precharge",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -472,7 +488,7 @@ impl ChargePolicyState {
             Self::Charging500mA => "charging_500ma",
             Self::ChargingTopoff200mA => "charging_topoff_200ma",
             Self::Charging100mADcDerated => "charging_100ma_dc_derated",
-            Self::Charging100mABmsRecovery => "charging_100ma_bms_recovery",
+            Self::RecoveringLowVoltage => "recovering_low_voltage",
             Self::FullLatched => "full_latched",
         }
     }
@@ -487,7 +503,7 @@ impl ChargePolicyState {
             Self::Charging500mA => "CHG500",
             Self::ChargingTopoff200mA => "CHG500",
             Self::Charging100mADcDerated => "CHG100",
-            Self::Charging100mABmsRecovery => "CHG100",
+            Self::RecoveringLowVoltage => "RECOV",
             Self::FullLatched => "FULL",
         }
     }
@@ -498,7 +514,7 @@ impl ChargePolicyState {
             Self::Charging500mA
                 | Self::ChargingTopoff200mA
                 | Self::Charging100mADcDerated
-                | Self::Charging100mABmsRecovery
+                | Self::RecoveringLowVoltage
         )
     }
 }
@@ -720,6 +736,7 @@ pub(super) struct ChargePolicyDecision {
     pub(super) start_reason: Option<ChargeStartReason>,
     pub(super) full_reason: Option<ChargeFullReason>,
     pub(super) output_block_reason: Option<ChargePolicyOutputBlockReason>,
+    pub(super) recovery_stage: Option<ChargePolicyRecoveryStage>,
 }
 
 pub(super) fn charge_policy_step(
@@ -744,6 +761,7 @@ pub(super) fn charge_policy_step(
             start_reason,
             full_reason: None,
             output_block_reason: None,
+            recovery_stage: None,
         };
     }
 
@@ -758,6 +776,7 @@ pub(super) fn charge_policy_step(
             start_reason,
             full_reason: None,
             output_block_reason: None,
+            recovery_stage: None,
         };
     }
 
@@ -772,6 +791,7 @@ pub(super) fn charge_policy_step(
             start_reason,
             full_reason: None,
             output_block_reason: Some(ChargePolicyOutputBlockReason::PowerUnknown),
+            recovery_stage: None,
         };
     }
 
@@ -785,6 +805,7 @@ pub(super) fn charge_policy_step(
             start_reason,
             full_reason: None,
             output_block_reason: Some(ChargePolicyOutputBlockReason::OverLimit),
+            recovery_stage: None,
         };
     }
 
@@ -799,13 +820,31 @@ pub(super) fn charge_policy_step(
             start_reason,
             full_reason: None,
             output_block_reason: None,
+            recovery_stage: None,
         };
     };
 
-    let bms_recovery_active = !telemetry.charge_ready
-        && telemetry.bms_recovery_charge_allowed
-        && start_reason.is_some()
-        && matches!(input.input_source, Some(DashboardInputSource::DcIn));
+    let low_voltage_recovery_stage =
+        if telemetry.cell_min_mv < CHARGE_POLICY_LOW_VOLTAGE_RECOVERY_EXIT_CELL_MIN_MV {
+            if !telemetry.charge_ready && telemetry.bms_recovery_charge_allowed {
+                Some(ChargePolicyRecoveryStage::Bq40Pchg)
+            } else if telemetry.charge_ready {
+                Some(ChargePolicyRecoveryStage::Bq25792Precharge)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+    let bms_recovery_active = matches!(
+        low_voltage_recovery_stage,
+        Some(ChargePolicyRecoveryStage::Bq40Pchg)
+    ) && start_reason.is_some();
+    let bq25792_precharge_active = matches!(
+        low_voltage_recovery_stage,
+        Some(ChargePolicyRecoveryStage::Bq25792Precharge)
+    ) && start_reason.is_some();
+    let low_voltage_recovery_active = bms_recovery_active || bq25792_precharge_active;
 
     if !telemetry.charge_ready && !bms_recovery_active {
         memory.charge_latched = false;
@@ -818,6 +857,7 @@ pub(super) fn charge_policy_step(
             start_reason,
             full_reason: None,
             output_block_reason: None,
+            recovery_stage: None,
         };
     }
 
@@ -825,11 +865,12 @@ pub(super) fn charge_policy_step(
         memory.full_latched = false;
     }
 
-    let full_reason = if !bms_recovery_active && (memory.charge_latched || memory.full_latched) {
-        charge_policy_full_reason(telemetry.bms_full, input.charger_done)
-    } else {
-        None
-    };
+    let full_reason =
+        if !low_voltage_recovery_active && (memory.charge_latched || memory.full_latched) {
+            charge_policy_full_reason(telemetry.bms_full, input.charger_done)
+        } else {
+            None
+        };
 
     if let Some(full_reason) = full_reason {
         memory.charge_latched = false;
@@ -842,6 +883,7 @@ pub(super) fn charge_policy_step(
             start_reason,
             full_reason: Some(full_reason),
             output_block_reason: None,
+            recovery_stage: None,
         };
     }
 
@@ -855,6 +897,7 @@ pub(super) fn charge_policy_step(
             start_reason,
             full_reason: None,
             output_block_reason: None,
+            recovery_stage: None,
         };
     }
 
@@ -871,6 +914,7 @@ pub(super) fn charge_policy_step(
                     start_reason: None,
                     full_reason: None,
                     output_block_reason: None,
+                    recovery_stage: None,
                 };
             }
             derate.reset();
@@ -881,6 +925,7 @@ pub(super) fn charge_policy_step(
                 start_reason: None,
                 full_reason: None,
                 output_block_reason: None,
+                recovery_stage: None,
             };
         }
     }
@@ -891,7 +936,7 @@ pub(super) fn charge_policy_step(
         input.ibus_ma,
     );
 
-    let topoff_active = !bms_recovery_active
+    let topoff_active = !low_voltage_recovery_active
         && !derate.derated
         && input.telemetry.is_some_and(|telemetry| {
             telemetry.rsoc_pct >= CHARGE_POLICY_TOPOFF_RSOC_PCT
@@ -901,19 +946,19 @@ pub(super) fn charge_policy_step(
                     || telemetry.hv
                     || telemetry.cell_max_mv >= CHARGE_POLICY_TOPOFF_CELL_MAX_MV)
         });
-    let state = if derate.derated {
+    let state = if low_voltage_recovery_active {
+        ChargePolicyState::RecoveringLowVoltage
+    } else if derate.derated {
         ChargePolicyState::Charging100mADcDerated
-    } else if bms_recovery_active {
-        ChargePolicyState::Charging100mABmsRecovery
     } else if topoff_active {
         ChargePolicyState::ChargingTopoff200mA
     } else {
         ChargePolicyState::Charging500mA
     };
-    let target_ichg_ma = Some(if derate.derated {
-        CHARGE_POLICY_DC_DERATED_ICHG_MA
-    } else if bms_recovery_active {
+    let target_ichg_ma = Some(if low_voltage_recovery_active {
         CHARGE_POLICY_BMS_RECOVERY_ICHG_MA
+    } else if derate.derated {
+        CHARGE_POLICY_DC_DERATED_ICHG_MA
     } else if topoff_active {
         CHARGE_POLICY_TOPOFF_ICHG_MA
     } else {
@@ -927,6 +972,7 @@ pub(super) fn charge_policy_step(
         start_reason,
         full_reason: None,
         output_block_reason: None,
+        recovery_stage: low_voltage_recovery_stage.filter(|_| low_voltage_recovery_active),
     }
 }
 
@@ -2092,6 +2138,10 @@ mod tests {
             "CHG100"
         );
         assert_eq!(
+            detail_charger_status_text(ChargePolicyState::RecoveringLowVoltage),
+            "RECOV"
+        );
+        assert_eq!(
             detail_charger_status_text(ChargePolicyState::FullLatched),
             "FULL"
         );
@@ -2222,8 +2272,16 @@ mod tests {
 
         let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 0, input);
 
-        assert_eq!(decision.state, ChargePolicyState::Charging500mA);
+        assert_eq!(decision.state, ChargePolicyState::RecoveringLowVoltage);
         assert!(decision.allow_charge);
+        assert_eq!(
+            decision.target_ichg_ma,
+            Some(CHARGE_POLICY_BMS_RECOVERY_ICHG_MA)
+        );
+        assert_eq!(
+            decision.recovery_stage,
+            Some(ChargePolicyRecoveryStage::Bq25792Precharge)
+        );
         assert_eq!(
             decision.start_reason,
             Some(ChargeStartReason::RsocAndCellLow)
@@ -2232,7 +2290,7 @@ mod tests {
     }
 
     #[test]
-    fn charge_policy_allows_cuv_precharge_only_on_dc_recovery_path() {
+    fn charge_policy_allows_cuv_precharge_on_dc_recovery_path() {
         let mut memory = ChargePolicyMemory::default();
         let mut derate = ChargePolicyDerateTracker::default();
         let mut output_load = ChargePolicyOutputLoadTracker::default();
@@ -2248,11 +2306,15 @@ mod tests {
             policy_input(Some(telemetry), Some(DashboardInputSource::DcIn), Some(70)),
         );
 
-        assert_eq!(decision.state, ChargePolicyState::Charging100mABmsRecovery);
+        assert_eq!(decision.state, ChargePolicyState::RecoveringLowVoltage);
         assert!(decision.allow_charge);
         assert_eq!(
             decision.target_ichg_ma,
             Some(CHARGE_POLICY_BMS_RECOVERY_ICHG_MA)
+        );
+        assert_eq!(
+            decision.recovery_stage,
+            Some(ChargePolicyRecoveryStage::Bq40Pchg)
         );
         assert_eq!(
             decision.start_reason,
@@ -2261,7 +2323,7 @@ mod tests {
     }
 
     #[test]
-    fn charge_policy_blocks_cuv_precharge_on_usb_path() {
+    fn charge_policy_allows_cuv_precharge_on_usb_path() {
         let mut memory = ChargePolicyMemory::default();
         let mut derate = ChargePolicyDerateTracker::default();
         let mut output_load = ChargePolicyOutputLoadTracker::default();
@@ -2277,8 +2339,12 @@ mod tests {
             policy_input(Some(telemetry), Some(DashboardInputSource::UsbC), Some(70)),
         );
 
-        assert_eq!(decision.state, ChargePolicyState::BlockedNoBms);
-        assert!(!decision.allow_charge);
+        assert_eq!(decision.state, ChargePolicyState::RecoveringLowVoltage);
+        assert!(decision.allow_charge);
+        assert_eq!(
+            decision.recovery_stage,
+            Some(ChargePolicyRecoveryStage::Bq40Pchg)
+        );
     }
 
     #[test]
@@ -2297,7 +2363,7 @@ mod tests {
 
         let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 3_000, input);
 
-        assert_eq!(decision.state, ChargePolicyState::Charging100mABmsRecovery);
+        assert_eq!(decision.state, ChargePolicyState::RecoveringLowVoltage);
         assert!(decision.allow_charge);
         assert_eq!(decision.full_reason, None);
         assert!(!memory.full_latched);
@@ -2325,8 +2391,12 @@ mod tests {
             },
         );
 
-        assert_eq!(decision.state, ChargePolicyState::Charging500mA);
+        assert_eq!(decision.state, ChargePolicyState::RecoveringLowVoltage);
         assert!(decision.allow_charge);
+        assert_eq!(
+            decision.recovery_stage,
+            Some(ChargePolicyRecoveryStage::Bq25792Precharge)
+        );
         assert_eq!(
             decision.start_reason,
             Some(ChargeStartReason::RsocAndCellLow)

@@ -297,6 +297,13 @@ pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDi
     json_field_opt_u16(buf, "ichg_ma", diag.charger.ichg_ma, true);
     json_field_opt_u16(buf, "vindpm_mv", diag.charger.vindpm_mv, true);
     json_field_opt_u16(buf, "iindpm_ma", diag.charger.iindpm_ma, true);
+    json_field_opt_u16(
+        buf,
+        "vbat_lowv_pct_x10",
+        diag.charger.vbat_lowv_pct_x10,
+        true,
+    );
+    json_field_opt_u16(buf, "iprechg_ma", diag.charger.iprechg_ma, true);
     json_field_opt_u16(buf, "iterm_ma", diag.charger.iterm_ma, true);
     json_field_str(buf, "chg_stat", diag.charger.chg_stat, true);
     json_field_str(buf, "vbus_stat", diag.charger.vbus_stat, true);
@@ -331,6 +338,7 @@ pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDi
         diag.policy.output_block_reason,
         true,
     );
+    json_field_opt_str(buf, "recovery_stage", diag.policy.recovery_stage, true);
     json_field_opt_u16(buf, "target_ichg_ma", diag.policy.target_ichg_ma, true);
     json_field_opt_u32(buf, "output_power_w10", diag.policy.output_power_w10, true);
     json_field_bool(buf, "charge_latched", diag.policy.charge_latched, true);
@@ -374,6 +382,8 @@ pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDi
     json_field_opt_bool(buf, "pchg_fet", diag.bms.pchg_fet, true);
     json_field_opt_bool(buf, "cuv", diag.bms.cuv, true);
     json_field_opt_bool(buf, "cuvc", diag.bms.cuvc, true);
+    json_field_opt_u16(buf, "cuv_recovery_mv", diag.bms.cuv_recovery_mv, true);
+    json_field_opt_bool(buf, "cuv_recov_chg", diag.bms.cuv_recov_chg, true);
     json_field_opt_bool(buf, "fet_en", diag.bms.fet_en, true);
     json_field_opt_bool(buf, "chg_en", diag.bms.chg_en, true);
     json_field_opt_bool(buf, "dsg_en", diag.bms.dsg_en, true);

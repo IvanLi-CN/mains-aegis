@@ -118,7 +118,7 @@
 ### 冲突检查（按四模式口径）
 
 - 旧冲突 1：将 `focus` 直接当作工作模式来源。已修正为显式 `UiModel.mode`，`focus` 仅用于高亮。
-- 旧冲突 2：用 `UpsMode` 直接推导充电状态。已修正为首页/详情统一从 runtime charger token 派生；首页仅做 `CHG500/CHG100 -> CHG` 的紧凑映射。
+- 旧冲突 2：用 `UpsMode` 直接推导充电状态。已修正为首页/详情统一从 runtime charger token 派生；首页仅做 `CHG500/CHG100/RECOV -> CHG` 的紧凑映射。
 - 旧冲突 3：放电卡片和输出负载混用。已修正为 `DISCHG` 卡片仅表示电池侧放电电流（`BYPASS/STANDBY=0`）。
 - 旧冲突 4：电池卡片值区语义漂移。已修正为 `BATTERY` 值区固定显示 `SOC + Tmax`（不再显示电压），状态位单独显示 `BAL/CHG/DSG/...`。
 
@@ -177,7 +177,7 @@ None
 
 - Given 固件构建成功且屏幕硬件可访问，When 前面板输入状态变化，Then 屏幕渲染由共享 scene renderer 产出并正确显示对应 focus 高亮。
 - Given 主机运行预览工具，When 指定任意 `variant/mode/focus`，Then 产出 `framebuffer.bin`（固定 `110080` bytes）与 `preview.png`（固定 `320x172`）。
-- Given runtime charger state=`CHG500/CHG100`，When 查看首页 CHARGE 卡片，Then 状态必须压缩为 `CHG`。
+- Given runtime charger state=`CHG500/CHG100/RECOV`，When 查看首页 CHARGE 卡片，Then 状态必须压缩为 `CHG`。
 - Given runtime charger state=`WAIT/FULL/WARM/TEMP/LOAD/LOCK/NOAC`，When 查看首页 CHARGE 卡片，Then 状态必须原样显示对应紧凑 token。
 - Given 切到 `Variant C` 自检页，When 查看诊断卡，Then 必须完整显示 10 个可通信模块且每卡包含 `COMM` 与 `KEY PARAM`。
 - Given 自检页已显示，When 长按 `CENTER` 约 `800ms`，Then 页面在 Dashboard 与 Self-check 间切换且不会连发抖动切换。

@@ -26,6 +26,7 @@ The charger policy can correctly program a target `ICHG` while the BQ25792 still
 - The USB-C PD sink may renegotiate to a higher contract, such as a PPS contract around `17.4V / 1.3A`.
 - `IBAT_ADC` and BMS current remain near the previous `500mA` class current.
 - `IINDPM_STAT` or `VINDPM_STAT` is asserted, meaning the charger is reducing charge current because the input path is in regulation.
+- During low-voltage recovery, `policy.status=RECOV` and `policy.recovery_stage=bq40_pchg|bq25792_precharge`; the intentionally low delivered current must not be diagnosed as a failed `500mA` charge request.
 
 ## Root Cause
 
@@ -41,6 +42,7 @@ In this project another concrete failure mode was a BQ25792 register byte-order 
 - Add a stable under-delivery diagnostic when target `ICHG` exceeds positive `IBAT_ADC` or positive BMS current by a clear margin for several polls; negative battery current is discharge and must count as zero delivered charge current.
 - Include the limiter context in the diagnostic: `IINDPM/VINDPM`, PD contract, programmed input current limit, `REG03`, `REG06`, `REG10`, and `REG14`.
 - Decode `REG03/REG06` readback from the same bytes the device stores, not from the software value returned by the setter. If readback shows byte-swapped values such as `0x6400` or `0x2c00`, fix the register transfer order before chasing external power limits.
+- Decode and log BQ25792 `REG08` alongside low-voltage recovery. The expected Mains Aegis baseline is `VBAT_LOWV=71.4%` and `IPRECHG=120mA`; `power-diag` reports this as `charger.vbat_lowv_pct_x10=714` and `charger.iprechg_ma=120`.
 - Classify input-DPM under-delivery distinctly, for example `reason=charge_under_target_input_dpm`.
 - Mirror the diagnostic and manual `START/STOP` events to the plain serial monitor when the field workflow does not decode defmt, and rate-limit sustained under-delivery output so live monitoring remains readable.
 
@@ -48,6 +50,7 @@ In this project another concrete failure mode was a BQ25792 register byte-order 
 
 - Do not treat a low actual current as proof that manual charge preferences failed to apply. First verify target propagation, register writes, and PD demand.
 - Do not display target `ICHG` as actual battery current. Prefer `IBAT_ADC`; use BMS current as corroborating telemetry.
+- Do not treat `BQ25792 termination_done` as full-charge evidence while `policy.status=RECOV` or `cell_min_mv < 3000`; that state is a low-voltage recovery window, not top-off completion.
 - Do not “fix” under-delivery by raising limits blindly. Confirm whether `IINDPM/VINDPM`, external ILIM, PD source behavior, or the power path is the limiting factor.
 - Keep the diagnostic rate-limited and require a short hold period so startup renegotiation transients do not flood the monitor.
 

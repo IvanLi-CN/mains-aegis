@@ -390,7 +390,21 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
     - 含义：预充使用独立 `PCHG FET`
     - 选项：`1=使用 CHG FET`，`0=使用 PCHG FET`
 
-#### 5.4.4 SBS / 主机侧行为
+#### 5.4.4 CUV 低压恢复行为
+
+- `Protection Configuration` / 保护配置：推荐整字设为 `0x02`
+  - `CUV_RECOV_CHG`：设 `1`
+    - 含义：`SafetyStatus()[CUV]` 只有在最低单体达到 recovery 且检测到充电时才释放
+    - 选项：`1=需要充电检测`，`0=只看电压 recovery`
+  - `PCHG_COMM`：保持 `0`
+    - 含义：继续使用独立 `PCHG FET`
+
+- `CUV Recovery`：推荐设为 `2900mV/cell`
+  - `CUV Threshold` 保持 `2500mV/cell`，不降低硬保护 trip 点
+  - `CUVC Recovery` 保持 `3000mV/cell`
+  - 设计意图：让 BQ40 在确认充电后于 `2.9V/cell` 释放主路径，再由 BQ25792 在 `cell_min < 3.0V` 阶段以 `RECOV/100mA` 继续受控预充
+
+#### 5.4.5 SBS / 主机侧行为
 
 - `SBS Gauging Configuration` / SBS 计量配置：推荐整字设为 `0x05`
   - `LOCK0`：设 `1`
@@ -481,7 +495,7 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 - `Terminate Voltage`
 - `Remaining Capacity Alarm`
 - 充/放电温度窗口与恢复点
-- `COV/CUV/OCC/OCD/SCC/SCD`
+- `COV/SCC/SCD` 与 `CUV/CUVC` trip/delay 的量产验证；`CUV Recovery=2900mV` 与 `CUV_RECOV_CHG=1` 已作为主板恢复基线冻结
 - 均衡策略
 
 温度阈值（充/放电高温/低温、延时、恢复点）需结合电芯规格书与系统功耗/散热做定标后落到 DF（此处不写死，避免后续版本变更造成误导）。

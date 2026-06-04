@@ -91,6 +91,8 @@ pub mod data_flash {
     pub const LAST_VALID_CHARGE_TERM: u16 = 0x43D2;
     pub const NO_OF_QMAX_UPDATES: u16 = 0x43D4;
     pub const NO_OF_RA_UPDATES: u16 = 0x43D8;
+    pub const PROTECTION_CONFIGURATION: u16 = 0x4937;
+    pub const CUV_RECOVERY: u16 = 0x493F;
     pub const SBS_CONFIGURATION: u16 = 0x4889;
     pub const POWER_CONFIG: u16 = 0x488B;
     pub const BALANCING_CONFIGURATION: u16 = 0x4908;
@@ -146,6 +148,10 @@ pub mod power_config {
     pub const EMSHUT_EXIT_VPACK: u16 = 1 << 2;
     pub const PWR_SAVE_VSHUT: u16 = 1 << 1;
     pub const AUTO_SHIP_EN: u16 = 1 << 0;
+}
+
+pub mod protection_configuration {
+    pub const CUV_RECOV_CHG: u8 = 1 << 1;
 }
 
 pub mod battery_status {

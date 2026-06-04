@@ -52,7 +52,7 @@
 - Responsibility: 电池充电电流与充电状态。
 - Required fields: `ichg_a`, `charge_state`。
 - Forbidden fields: 放电电流、输出负载电流。
-- Allowed states: 首页紧凑 token 固定为 `CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`；其中 `CHG1A/CHG500/CHG100` 在首页压缩为 `CHG`。
+- Allowed states: 首页紧凑 token 固定为 `CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`；其中 `CHG1A/CHG500/CHG100/RECOV` 在首页压缩为 `CHG`。
 - Token refs: `Type.Title`, `Type.Num`, `Color.State.Success|Warning|Error`（按状态选择）。
 - Geometry anchor: `x=206 y=72 w=108 h=48`。
 
