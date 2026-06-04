@@ -65,7 +65,7 @@
 
 - `/devices/:device_id` 展示单设备运行状态带与关键摘要。
 - `/devices/:device_id/power` 展示 input、charger、output gate、OUT A/B。
-- `/devices/:device_id/battery` 展示 pack status、BMS readiness 与 issue detail。
+- `/devices/:device_id/battery` 展示 pack status、四节 cell voltage、BMS readiness、三路 BMS MOS 状态与 issue detail。
 - `/devices/:device_id/thermal` 展示 TMP A/B 与保护上下文。
 - `/devices/:device_id/device` 展示 identity、network、firmware。
 - `/devices/:device_id/firmware` 展示 firmware artifact 选择、来源去重、Web Serial 直烧与 devd 代理烧录。
@@ -211,6 +211,17 @@
   evidence_note: 验证单设备 critical 状态、battery fault、BMS readiness 和 issue detail 的视觉层级。
 
 ![Critical device frontend demo evidence](./assets/device-critical-demo.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/battery?seed=default`
+  requested_viewport: `1800x980`
+  viewport_strategy: `headless-browser`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: battery cell voltages and BMS MOS
+  evidence_note: 验证 Battery 页展示四节 cell voltage 和 CHG / DSG / PCHG 三路 BMS MOS 状态，且 mock 数据路径不依赖真实 UPS 设备。
+
+![Battery cell and MOS evidence](./assets/device-battery-cell-mos.png)
 
 - source_type: mock_ui
   demo_entry_or_title: `/connect`

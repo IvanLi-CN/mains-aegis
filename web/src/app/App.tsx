@@ -1019,6 +1019,7 @@ function PowerPage({ record }: { record: DeviceRecord }) {
 
 function BatteryPage({ record }: { record: DeviceRecord }) {
   const battery = record.status?.battery;
+  const cells = normalizeCellVoltages(battery?.cell_mv);
   return (
     <section className="page-flow">
       <DeviceStatusBand record={record} />
@@ -1029,11 +1030,26 @@ function BatteryPage({ record }: { record: DeviceRecord }) {
           <MetricLine label="Pack voltage" value={formatVoltage(battery?.pack_mv)} />
           <MetricLine label="Current" value={formatCurrent(battery?.current_ma)} />
         </InfoPanel>
+        <InfoPanel title="Cell voltages" icon={Activity}>
+          <div className="battery-cell-grid" aria-label="BMS cell voltages">
+            {cells.map((cell, index) => (
+              <div className="battery-cell-tile" key={index}>
+                <span>C{index + 1}</span>
+                <strong>{formatVoltage(cell)}</strong>
+              </div>
+            ))}
+          </div>
+        </InfoPanel>
         <InfoPanel title="BMS readiness" icon={Cpu}>
           <MetricLine label="No battery" value={boolLabel(battery?.no_battery, "yes", "no")} />
           <MetricLine label="Discharge ready" value={boolLabel(battery?.discharge_ready, "yes", "no")} />
           <MetricLine label="Recovery pending" value={boolLabel(battery?.recovery_pending, "yes", "no")} />
           <MetricLine label="Last result" value={battery?.last_result ?? "--"} />
+        </InfoPanel>
+        <InfoPanel title="BMS MOS" icon={Cpu}>
+          <MetricLine label="CHG MOS" value={fetLabel(battery?.charge_fet_on)} />
+          <MetricLine label="DSG MOS" value={fetLabel(battery?.discharge_fet_on)} />
+          <MetricLine label="PCHG MOS" value={fetLabel(battery?.precharge_fet_on)} />
         </InfoPanel>
         <InfoPanel title="Issue detail" icon={AlertTriangle}>
           <p className="panel-note">{battery?.issue_detail ?? "No active battery issue reported by the v1 status snapshot."}</p>
@@ -1041,6 +1057,16 @@ function BatteryPage({ record }: { record: DeviceRecord }) {
       </div>
     </section>
   );
+}
+
+function normalizeCellVoltages(cells: Array<number | null> | null | undefined): Array<number | null> {
+  return [0, 1, 2, 3].map((index) => cells?.[index] ?? null);
+}
+
+function fetLabel(value: boolean | null | undefined): string {
+  if (value === true) return "on";
+  if (value === false) return "off";
+  return "--";
 }
 
 function ThermalPage({ record }: { record: DeviceRecord }) {

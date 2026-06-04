@@ -207,8 +207,22 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     json_field_opt_u16(buf, "pack_mv", status.battery_pack_mv, true);
     json_field_opt_i16(buf, "current_ma", status.battery_current_ma, true);
     json_field_opt_u16(buf, "soc_pct", status.battery_soc_pct, true);
+    json_field_opt_u16_array(buf, "cell_mv", status.battery_cell_mv, true);
     json_field_opt_bool(buf, "no_battery", status.battery_no_battery, true);
     json_field_opt_bool(buf, "discharge_ready", status.battery_discharge_ready, true);
+    json_field_opt_bool(buf, "charge_fet_on", status.battery_charge_fet_on, true);
+    json_field_opt_bool(
+        buf,
+        "discharge_fet_on",
+        status.battery_discharge_fet_on,
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "precharge_fet_on",
+        status.battery_precharge_fet_on,
+        true,
+    );
     json_field_opt_str(buf, "issue_detail", status.battery_issue_detail, true);
     let _ = write!(
         buf,
@@ -622,6 +636,29 @@ fn json_field_opt_u16<const N: usize>(
     json_field_opt_num(buf, key, value.map(|value| value as i64), trailing_comma);
 }
 
+fn json_field_opt_u16_array<const N: usize>(
+    buf: &mut String<N>,
+    key: &str,
+    value: [Option<u16>; 4],
+    trailing_comma: bool,
+) {
+    let _ = write!(buf, "\"{}\":[", key);
+    for (index, item) in value.iter().enumerate() {
+        if index != 0 {
+            let _ = buf.push(',');
+        }
+        if let Some(item) = item {
+            let _ = write!(buf, "{}", item);
+        } else {
+            let _ = buf.push_str("null");
+        }
+    }
+    let _ = buf.push(']');
+    if trailing_comma {
+        let _ = buf.push(',');
+    }
+}
+
 fn json_field_opt_u32<const N: usize>(
     buf: &mut String<N>,
     key: &str,
@@ -761,6 +798,10 @@ mod tests {
         let mut body = String::<2048>::new();
         let mut status = UpsStatusSnapshot::empty();
         status.mode = "backup";
+        status.battery_cell_mv = [Some(3812), Some(3817), Some(3809), Some(3822)];
+        status.battery_charge_fet_on = Some(false);
+        status.battery_discharge_fet_on = Some(true);
+        status.battery_precharge_fet_on = Some(false);
         status.network = NetworkUiSummary::from_wifi(WifiSnapshot {
             state: WifiConnectionState::Error,
             ipv4: None,
@@ -773,6 +814,10 @@ mod tests {
         });
         render_status_json(&mut body, status);
         assert!(body.as_str().contains("\"mode\":\"backup\""));
+        assert!(body.as_str().contains("\"cell_mv\":[3812,3817,3809,3822]"));
+        assert!(body.as_str().contains("\"charge_fet_on\":false"));
+        assert!(body.as_str().contains("\"discharge_fet_on\":true"));
+        assert!(body.as_str().contains("\"precharge_fet_on\":false"));
         assert!(body.as_str().contains("\"last_error\":\"link_lost\""));
     }
 

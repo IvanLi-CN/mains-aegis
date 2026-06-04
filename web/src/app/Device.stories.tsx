@@ -40,6 +40,21 @@ export const CriticalDashboard: Story = {
   },
 };
 
+export const BatteryDetail: Story = {
+  name: "Battery detail",
+  render: () => renderApp("/devices/mains-aegis-a1b2c3/battery"),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("Cell voltages")).toBeInTheDocument();
+    await expect(await canvas.findByText("C1")).toBeInTheDocument();
+    await expect(await canvas.findByText("3.81 V")).toBeInTheDocument();
+    await expect(await canvas.findByText("BMS MOS")).toBeInTheDocument();
+    await expect(await canvas.findByText("CHG MOS")).toBeInTheDocument();
+    await expect(await canvas.findByText("DSG MOS")).toBeInTheDocument();
+    await expect(await canvas.findByText("PCHG MOS")).toBeInTheDocument();
+  },
+};
+
 export const ApiDebug: Story = {
   name: "API debug",
   render: () => renderApp("/devices/mains-aegis-e4f5a6/api"),

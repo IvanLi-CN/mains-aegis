@@ -97,8 +97,12 @@ export type UpsStatus = {
     pack_mv: number | null;
     current_ma: number | null;
     soc_pct: number | null;
+    cell_mv?: Array<number | null>;
     no_battery: boolean;
     discharge_ready: boolean;
+    charge_fet_on?: boolean | null;
+    discharge_fet_on?: boolean | null;
+    precharge_fet_on?: boolean | null;
     issue_detail: string | null;
     recovery_pending: boolean;
     last_result: string | null;

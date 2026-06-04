@@ -64,7 +64,7 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 
 - 入口：`/devices/:device_id/battery`
 - 目的：集中展示电池包和 BMS 是否可放电、是否恢复中、是否存在保护或无电池状态。
-- 主要内容：SOC、pack voltage、current、`discharge_ready`、`no_battery`、`issue_detail`、`recovery_pending`、`last_result`。
+- 主要内容：SOC、pack voltage、current、四节 `cell_mv`、`discharge_ready`、`no_battery`、`charge_fet_on` / `discharge_fet_on` / `precharge_fet_on`、`issue_detail`、`recovery_pending`、`last_result`。
 - 接口对接：`GET /api/v1/status` 的 `battery`。
 - 视觉规则：正常态用低饱和绿色；保护、无电池、恢复等待用明确但不过饱和的 warning/error 标签。
 

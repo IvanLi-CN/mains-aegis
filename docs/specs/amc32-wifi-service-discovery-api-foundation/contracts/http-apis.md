@@ -403,8 +403,12 @@ Host: mains-aegis-a1b2c3.local
     "pack_mv": 15260,
     "current_ma": 180,
     "soc_pct": 67,
+    "cell_mv": [3812, 3817, 3809, 3822],
     "no_battery": false,
     "discharge_ready": true,
+    "charge_fet_on": true,
+    "discharge_fet_on": true,
+    "precharge_fet_on": false,
     "issue_detail": null,
     "recovery_pending": false,
     "last_result": null
