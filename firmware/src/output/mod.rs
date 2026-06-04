@@ -146,6 +146,7 @@ const CHARGE_POLICY_DC_DERATE_ENTER_HOLD: Duration = Duration::from_secs(1);
 const CHARGE_POLICY_DC_DERATE_EXIT_HOLD: Duration = Duration::from_secs(5);
 const CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10: u32 = 50;
 const CHARGE_POLICY_DC_INPUT_IINDPM_MA: u16 = 3_000;
+const CHARGE_POLICY_100MA_ITERM_MA: u16 = 40;
 const USB_PD_SYSTEM_LOAD_FLOOR_MW: u32 = 2_500;
 const CHARGER_INPUT_IBUS_MAX_MA: i16 = 5_000;
 const CHARGER_INPUT_VBUS_MAX_MV: u16 = 30_000;
@@ -9091,7 +9092,6 @@ where
         };
         let termination_ctrl =
             bq25792::read_u16(&mut self.i2c, bq25792::reg::TERMINATION_CONTROL).ok();
-        let en_term = (ctrl0 & bq25792::ctrl0::EN_TERM) != 0;
         let iterm_ma = termination_ctrl.map(bq25792::decode_termination_current_ma);
 
         // Only enforce ship-FET path when charging is policy-enabled.
@@ -9557,14 +9557,21 @@ where
         let mut applied_vindpm_mv: Option<u16> = None;
         let mut applied_iindpm_ma: Option<u16> = None;
         let mut applied_iterm_ma: Option<u16> = None;
-        let policy_term_target_ma =
-            (!force_allow_charge && !auto_force_charge && !activation_pending)
-                .then(|| {
-                    self.bms_cached_lock_diag
-                        .and_then(|diag| diag.current_at_eoc_ma)
-                        .map(bq25792::align_termination_current_ma)
-                })
-                .flatten();
+        let policy_low_current_charge = allow_charge
+            && !force_allow_charge
+            && !auto_force_charge
+            && !activation_pending
+            && policy_target_ichg_ma.is_some_and(|target_ma| target_ma <= 100);
+        let policy_term_target_ma = if force_allow_charge || auto_force_charge || activation_pending
+        {
+            None
+        } else if policy_low_current_charge {
+            Some(CHARGE_POLICY_100MA_ITERM_MA)
+        } else {
+            self.bms_cached_lock_diag
+                .and_then(|diag| diag.current_at_eoc_ma)
+                .map(bq25792::align_termination_current_ma)
+        };
 
         fn decode_voltage_mv(reg: u16) -> u16 {
             (reg & 0x07FF) * 10
@@ -9691,10 +9698,38 @@ where
 
             // Charge is enabled only when both `EN_CHG=1` and `CE=LOW`.
             let mut desired_ctrl0 = (ctrl0 | bq25792::ctrl0::EN_CHG) & !bq25792::ctrl0::EN_HIZ;
+            if policy_low_current_charge {
+                desired_ctrl0 &= !bq25792::ctrl0::EN_TERM;
+            } else {
+                desired_ctrl0 |= bq25792::ctrl0::EN_TERM;
+            }
             if force_allow_charge || auto_force_charge || activation_pending {
                 desired_ctrl0 &= !bq25792::ctrl0::EN_AUTO_IBATDIS;
             }
-            if desired_ctrl0 != ctrl0 {
+            if policy_low_current_charge
+                && bq25792::is_charge_termination_done(bq25792::status1::chg_stat(status1))
+            {
+                let restart_ctrl0 = desired_ctrl0 & !bq25792::ctrl0::EN_CHG;
+                match bq25792::write_u8(
+                    &mut self.i2c,
+                    bq25792::reg::CHARGER_CONTROL_0,
+                    restart_ctrl0,
+                ) {
+                    Ok(()) => {
+                        applied_ctrl0 = restart_ctrl0;
+                        spin_delay(Duration::from_millis(10));
+                    }
+                    Err(e) => {
+                        self.mark_charger_poll_failed(now);
+                        defmt::error!(
+                            "charger: bq25792 err stage=ctrl0_restart_disable err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
+                    }
+                }
+            }
+            if desired_ctrl0 != applied_ctrl0 {
                 match bq25792::write_u8(
                     &mut self.i2c,
                     bq25792::reg::CHARGER_CONTROL_0,
@@ -10046,7 +10081,7 @@ where
                 applied_iindpm_ma,
                 iterm_ma,
                 applied_iterm_ma,
-                en_term,
+                (applied_ctrl0 & bq25792::ctrl0::EN_TERM) != 0,
                 sfet_present_before,
                 sfet_present_after,
                 ship_mode_before,

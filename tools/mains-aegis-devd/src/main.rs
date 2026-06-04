@@ -973,22 +973,30 @@ async fn flash_device(
                 "selected artifact does not include an ELF file",
             )
         })?;
-    let status = Command::new(
+    let output = Command::new(
         env::var("MAINS_AEGIS_DEVD_ESPFLASH_BIN").unwrap_or_else(|_| "espflash".to_string()),
     )
     .arg("flash")
     .arg("--port")
     .arg(&port_path)
     .arg(&elf.path)
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .status()
+    .output()
     .await
     .map_err(|error| HttpError::retryable("espflash_launch_failed", error.to_string()))?;
-    if !status.success() {
+    let backend = json!({
+        "status": output.status.to_string(),
+        "stdout": String::from_utf8_lossy(&output.stdout),
+        "stderr": String::from_utf8_lossy(&output.stderr),
+    });
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(HttpError::retryable(
             "espflash_failed",
-            format!("espflash exited with {status}"),
+            format!(
+                "espflash exited with {}; stdout={}; stderr={}",
+                output.status, stdout, stderr
+            ),
         ));
     }
     emit(
@@ -996,10 +1004,10 @@ async fn flash_device(
         Some(id.clone()),
         "flash",
         "flash completed",
-        json!({"artifact_id": artifact.artifact_id}),
+        json!({"artifact_id": artifact.artifact_id, "backend": backend}),
     );
     Ok(Json(
-        json!({"ok": true, "artifact_id": artifact.artifact_id}),
+        json!({"ok": true, "artifact_id": artifact.artifact_id, "backend": backend}),
     ))
 }
 

@@ -47,7 +47,7 @@
 - `GET /api/v1/devices/{id}/identity`: 返回设备 firmware identity。
 - `GET /api/v1/devices/{id}/power-diag`: 通过 USB CDC `get_power_diag` 获取只读电源诊断快照，并缓存到设备 session。
 - `GET|POST /api/v1/devices/{id}/artifact`: 查询或选择 artifact manifest。
-- `POST /api/v1/devices/{id}/flash`: 校验 artifact hash 后执行烧录；无硬件验证使用 `dry_run=true`。
+- `POST /api/v1/devices/{id}/flash`: 校验 artifact hash 后执行烧录；无硬件验证使用 `dry_run=true`。真实烧录响应与 `flash completed` 事件必须同时回传 backend `status/stdout/stderr`，用于区分“artifact 选择正确但底层 flash backend 没有真正完成”和“backend 已成功写入硬件”。
 - `POST /api/v1/devices/{id}/reset`: 设备 reset 请求。
 - `POST /api/v1/devices/{id}/monitor/start|stop`: monitor 生命周期请求。
 - `GET /api/v1/devices/{id}/session`: 返回 bounded logs/trace 与 `log_decode`。
@@ -157,11 +157,13 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - 多 USB CDC 设备同时存在时，devd/Web 不自动选择；Web 显示候选列表，用户选择后才创建 Web lease 并占用设备。
 - Web 正常断开后 devd 立即释放 USB 占用；Web 异常断开后 devd 按租约 TTL 自动释放，默认目标不超过 9 秒。
 - Web USB 写入请求缺少有效 lease 时失败，不得因为 devd 里有历史 connected 设备而继续写硬件。
+- Given `POST /api/v1/devices/{id}/flash` 触发真实烧录，When backend 返回成功或失败，Then HTTP 响应与设备事件都必须包含 backend `status/stdout/stderr`，便于定位 `espflash` 是否真正完成。
 
 ## 实现状态
 
 - `tools/mains-aegis-devd`: v1 daemon/API/mock validation foundation，并提供 Web App localhost USB safe-control surface。
 - `tools/mains-aegis-devd`: 提供设备级 `power-diag` 只读诊断 API，转发固件 USB CDC `get_power_diag` 并在 session 中缓存结果。
+- `tools/mains-aegis-devd`: flash API 与 `flash completed` 事件已暴露 backend `status/stdout/stderr`，用于现场确认底层 `espflash` 执行结果。
 - `firmware/src/net_contract.rs`: `power-diag.charger` 已暴露 `vac2_adc_mv`，用于定位 BQ25792 AC2/DC IN 实际采样。
 - `tools/mains-aegis-devd`: 提供 host power localhost control surface；低功耗运行、suspend、shutdown 默认 dry-run，真实动作受启动参数保护。
 - `schemas/firmware-catalog.schema.json`: v1 catalog schema。
@@ -172,3 +174,4 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 ## 变更记录（Change log）
 
 - 2026-06-04: `power-diag` 增加 `charger.vac2_adc_mv`；真机验证确认 DC IN/VAC2 约 12.23V、USB-C VAC1 约 5.10V 时，策略可保持 `dcin + CHG100 + IINDPM=3000mA`，且 CUV recovery 不再被 BQ25792 `termination_done` 误分类为 `full_latched`。
+- 2026-06-04: `flash` API 与设备事件增加 backend `status/stdout/stderr` 透传，现场可直接确认 `espflash` 是否真正完成以及目标硬件 identity 是否已经切到新 artifact。
