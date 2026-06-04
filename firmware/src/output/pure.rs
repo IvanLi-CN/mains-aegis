@@ -28,7 +28,7 @@ const CHARGE_POLICY_START_RSOC_PCT: u16 = 80;
 const CHARGE_POLICY_START_CELL_MIN_MV: u16 = 3_700;
 const CHARGE_POLICY_TOPOFF_RSOC_PCT: u16 = 99;
 const CHARGE_POLICY_TOPOFF_CELL_MAX_MV: u16 = 4140;
-const CHARGE_POLICY_LOW_VOLTAGE_RECOVERY_EXIT_CELL_MIN_MV: u16 = 3_000;
+pub(super) const CHARGE_POLICY_LOW_VOLTAGE_RECOVERY_EXIT_CELL_MIN_MV: u16 = 3_000;
 const CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA: i32 = 3_000;
 const CHARGE_POLICY_DC_DERATE_EXIT_IBUS_MA: i32 = 2_700;
 const CHARGE_POLICY_DC_DERATE_ENTER_HOLD: Duration = Duration::from_secs(1);
@@ -553,6 +553,33 @@ pub(super) fn charge_policy_start_reason(
         (false, true) => Some(ChargeStartReason::CellLow),
         (false, false) => None,
     }
+}
+
+fn bq40_optional_bit(raw: Option<u32>, mask: u32) -> Option<bool> {
+    raw.map(|value| (value & mask) != 0)
+}
+
+pub(super) fn bms_recovery_charge_allowed_from_diag(
+    no_battery: Option<bool>,
+    op_status: Option<u32>,
+    safety_status: Option<u32>,
+    pf_status: Option<u32>,
+    charging_status: Option<u32>,
+    cell_min_mv: Option<u16>,
+) -> bool {
+    let low_voltage_evidence = bq40_optional_bit(safety_status, bq40z50::safety_status::CUV)
+        == Some(true)
+        || (safety_status.is_none()
+            && cell_min_mv
+                .is_some_and(|mv| mv < CHARGE_POLICY_LOW_VOLTAGE_RECOVERY_EXIT_CELL_MIN_MV));
+
+    no_battery == Some(false)
+        && bq40_op_bit(op_status, bq40z50::operation_status::PCHG) == Some(true)
+        && low_voltage_evidence
+        && bq40_optional_bit(safety_status, bq40z50::safety_status::CUVC) != Some(true)
+        && pf_status.unwrap_or(0) == 0
+        && bq40_optional_bit(charging_status, bq40z50::charging_status::IN) != Some(true)
+        && bq40_optional_bit(charging_status, bq40z50::charging_status::SU) != Some(true)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2211,6 +2238,53 @@ mod tests {
             bms_recovery_charge_allowed: false,
             bms_full: false,
             hv: false,
+        }
+    }
+
+    #[test]
+    fn bms_recovery_charge_allowed_accepts_pchg_low_cell_when_safety_status_missing() {
+        assert!(bms_recovery_charge_allowed_from_diag(
+            Some(false),
+            Some(bq40z50::operation_status::PCHG),
+            None,
+            Some(0),
+            Some(0),
+            Some(2_858),
+        ));
+    }
+
+    #[test]
+    fn bms_recovery_charge_allowed_rejects_missing_safety_status_without_low_cell() {
+        assert!(!bms_recovery_charge_allowed_from_diag(
+            Some(false),
+            Some(bq40z50::operation_status::PCHG),
+            None,
+            Some(0),
+            Some(0),
+            Some(CHARGE_POLICY_LOW_VOLTAGE_RECOVERY_EXIT_CELL_MIN_MV),
+        ));
+    }
+
+    #[test]
+    fn bms_recovery_charge_allowed_rejects_fault_or_charge_inhibit() {
+        for (pf_status, charging_status, safety_status) in [
+            (Some(1), Some(0), None),
+            (Some(0), Some(bq40z50::charging_status::IN), None),
+            (Some(0), Some(bq40z50::charging_status::SU), None),
+            (
+                Some(0),
+                Some(0),
+                Some(bq40z50::safety_status::CUV | bq40z50::safety_status::CUVC),
+            ),
+        ] {
+            assert!(!bms_recovery_charge_allowed_from_diag(
+                Some(false),
+                Some(bq40z50::operation_status::PCHG),
+                safety_status,
+                pf_status,
+                charging_status,
+                Some(2_858),
+            ));
         }
     }
 

@@ -9291,39 +9291,17 @@ where
             .and_then(|diag| diag.charging)
             .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::HV))
             .unwrap_or(false);
-        let bms_recovery_charge_allowed = self.ui_snapshot.bq40z50_no_battery == Some(false)
-            && self
-                .bms_cached_lock_diag
-                .and_then(|diag| diag.op_status)
-                .and_then(|op_status| {
-                    bq40_op_bit(Some(op_status), bq40z50::operation_status::PCHG)
-                })
-                == Some(true)
-            && self
-                .bms_cached_lock_diag
-                .and_then(|diag| diag.safety_status)
-                .and_then(|safety| bq40_mac_bit(Some(safety), bq40z50::safety_status::CUV))
-                == Some(true)
-            && self
-                .bms_cached_lock_diag
-                .and_then(|diag| diag.safety_status)
-                .and_then(|safety| bq40_mac_bit(Some(safety), bq40z50::safety_status::CUVC))
-                != Some(true)
-            && self
-                .bms_cached_lock_diag
-                .and_then(|diag| diag.pf_status)
-                .unwrap_or(0)
-                == 0
-            && self
-                .bms_cached_lock_diag
+        let bms_recovery_charge_allowed = bms_recovery_charge_allowed_from_diag(
+            self.ui_snapshot.bq40z50_no_battery,
+            self.bms_cached_lock_diag.and_then(|diag| diag.op_status),
+            self.bms_cached_lock_diag
+                .and_then(|diag| diag.safety_status),
+            self.bms_cached_lock_diag.and_then(|diag| diag.pf_status),
+            self.bms_cached_lock_diag
                 .and_then(|diag| diag.charging)
-                .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::IN))
-                != Some(true)
-            && self
-                .bms_cached_lock_diag
-                .and_then(|diag| diag.charging)
-                .and_then(|charging| bq40_mac_bit(charging.value, bq40z50::charging_status::SU))
-                != Some(true);
+                .and_then(|charging| charging.value),
+            self.bms_cell_min_mv,
+        );
         let charge_policy_telemetry = if activation_pending {
             None
         } else {
