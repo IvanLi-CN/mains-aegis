@@ -299,6 +299,35 @@ if errors:
 PY
 }
 
+poll_power_diag() {
+  local out="$1"
+  local result_out="$2"
+  local timeout_sec=45
+  local interval_sec=5
+  local elapsed=0
+  local attempt=0
+  local diag_json=""
+
+  while (( elapsed <= timeout_sec )); do
+    attempt=$((attempt + 1))
+    diag_json=$(curl_json GET "$devd_url/api/v1/devices/$target_device_id/power-diag")
+    printf '%s\n' "$diag_json" > "$report_root/power-diag-attempt-$attempt.json"
+    printf '%s\n' "$diag_json" > "$out"
+    if validate_power_diag "$diag_json" "$result_out"; then
+      echo "Validated power-diag after ${elapsed}s."
+      return 0
+    fi
+    if (( elapsed == timeout_sec )); then
+      break
+    fi
+    sleep "$interval_sec"
+    elapsed=$((elapsed + interval_sec))
+  done
+
+  echo "power-diag did not reach the expected HIL state within ${timeout_sec}s" >&2
+  validate_power_diag "$diag_json" "$result_out"
+}
+
 main_elf="$REPO_ROOT/firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware"
 main_artifact_dir="$report_root/main-artifact"
 
@@ -368,8 +397,6 @@ curl_json POST "$devd_url/api/v1/devices/$target_device_id/flash" '{"dry_run":fa
 sleep 8
 curl_json POST "$devd_url/api/v1/devices/$target_device_id/connect" '{}' \
   > "$report_root/devd-connect.json"
-diag_json=$(curl_json GET "$devd_url/api/v1/devices/$target_device_id/power-diag")
-printf '%s\n' "$diag_json" > "$report_root/power-diag.json"
-validate_power_diag "$diag_json" "$report_root/hil-result.json"
+poll_power_diag "$report_root/power-diag.json" "$report_root/hil-result.json"
 
 echo "HIL completed: $report_root/hil-result.json"
