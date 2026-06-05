@@ -4,24 +4,25 @@
 
 ## Inputs
 
-### `MCU_ID`（required）
+### `device_id`（required）
 
 - Type: string
-- Meaning: `mcu-agentd` 的目标 MCU 标识（用于执行 device ops）。
-- Example: `esp`
+- Meaning: released `mains-aegis-devd` 中已绑定的 Mains Aegis 设备标识。
+- Example: `serial-04f3bb3f5367`
 
-### 端口选择（human-only）
+### 设备绑定（owner-visible）
 
-- Meaning: 端口选择是人类责任；Agent 不枚举、不切换。
+- Meaning: 设备发现与绑定必须通过 released devd 的 owner-visible scan/list/bind 流程；Agent 不直接枚举或切换端口。
 - Rules:
-  - 用户负责手工完成端口选择（例如 `mcu-agentd selector set <MCU_ID> <PORT>`）
-  - Agent 禁止执行任何“枚举候选端口”的动作（例如 `mcu-agentd selector list`、列目录等）
-  - Agent 禁止执行任何“切换端口”的动作（例如 `mcu-agentd selector set`）
-  - Agent 不需要频繁读取当前端口（例如不需要在每次动作前跑 `mcu-agentd selector get`）
+  - released devd scan 只发现候选设备，不自动连接或切换
+  - Agent 禁止执行任何直接“枚举候选端口”的动作
+  - Agent 禁止执行任何“切换端口”的动作
+  - Agent 禁止使用 `mcu-agentd` 作为 Mains Aegis 设备操作路径
 
 ## Validation rules
 
-- 禁止端口枚举：拒绝执行 `mcu-agentd selector list <MCU_ID>` 以及任何端口枚举行为。
-- 禁止端口切换：拒绝执行 `mcu-agentd selector set <MCU_ID> <PORT>` 以及任何“换端口试试”的行为。
-- `mcu-agentd` 设备操作：除端口枚举/切换外，允许执行其他 `mcu-agentd` 命令（含 `flash` / `monitor` / `erase` / `reset` 等）。
-- 禁止直接使用 `espflash`（含 `espflash` / `cargo espflash` / `cargo-espflash`）；但不限制 `mcu-agentd` 的内部后端实现。
+- 禁止 `mcu-agentd` 设备路径：拒绝 Agent 发起的 Mains Aegis `mcu-agentd` 设备操作。
+- 禁止端口枚举：拒绝任何直接端口枚举行为。
+- 禁止端口切换：拒绝任何“换端口试试”的行为。
+- 禁止直接使用 `espflash`（含 `espflash` / `cargo espflash` / `cargo-espflash`）。
+- 允许 released `mains-aegis` / `mains-aegis-devd` 的 owner-visible scan/list/bind/connect 和只读状态查询；真实 flash/reset/monitor 需要明确已绑定设备与 owner authorization。
