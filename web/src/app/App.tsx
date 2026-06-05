@@ -492,6 +492,7 @@ function ConnectPage() {
   const [usbMessage, setUsbMessage] = useState<UiFeedback | null>(null);
   const [devdMessage, setDevdMessage] = useState<UiFeedback | null>(null);
   const [usbFirmwareOverridePending, setUsbFirmwareOverridePending] = useState(false);
+  const [devdFirmwareOverrideMessage, setDevdFirmwareOverrideMessage] = useState<UiFeedback | null>(null);
   const [devdFirmwareOverrideDeviceId, setDevdFirmwareOverrideDeviceId] = useState<string | null>(null);
   const [devdConnectingDeviceId, setDevdConnectingDeviceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -499,10 +500,15 @@ function ConnectPage() {
   const [devdBusy, setDevdBusy] = useState(false);
   const serialSupported = isWebSerialSupported();
 
-  const refreshDevdDiscovery = useCallback(async () => {
+  const refreshDevdDiscovery = useCallback(async (options: { clearMessage?: boolean } = {}) => {
     const devdBaseUrl = normalizeBaseUrl(devdTarget);
     const trimmedDevdBridgeToken = devdBridgeToken.trim();
     try {
+      if (options.clearMessage) {
+        setDevdMessage(null);
+        setDevdFirmwareOverrideMessage(null);
+        setDevdFirmwareOverrideDeviceId(null);
+      }
       saveBridgeAuthToken(devdBaseUrl, trimmedDevdBridgeToken);
       const authRequired = await bridgeAuthRequired(devdBaseUrl);
       setDevdBridgeAuthRequiredState(authRequired ? "required" : "not_required");
@@ -517,7 +523,7 @@ function ConnectPage() {
       setDevdDevices(scan.devices.filter((device) => device.transport !== "lan" || isMainsAegisLanDevice(device)));
       setDevdStatus("available");
       setDevdLastUpdated(new Date().toISOString());
-      setDevdMessage(null);
+      if (!options.clearMessage) setDevdMessage(null);
     } catch (error) {
       setDevdStatus("unavailable");
       setDevdDevices([]);
@@ -528,6 +534,9 @@ function ConnectPage() {
 
   useEffect(() => {
     setDevdBridgeToken(bridgeAuthToken(normalizeBaseUrl(devdTarget)) ?? "");
+    setDevdMessage(null);
+    setDevdFirmwareOverrideMessage(null);
+    setDevdFirmwareOverrideDeviceId(null);
   }, [devdTarget]);
 
   useEffect(() => {
@@ -604,6 +613,8 @@ function ConnectPage() {
     setDevdConnectingDeviceId(device.id);
     setDevdBusy(true);
     setDevdMessage(null);
+    setDevdFirmwareOverrideMessage(null);
+    setDevdFirmwareOverrideDeviceId(null);
     const result = await addDevdDevice({
       target: devdTarget,
       bridgeAuthToken: devdBridgeToken.trim(),
@@ -614,12 +625,16 @@ function ConnectPage() {
     setDevdConnectingDeviceId(null);
     if (result.ok) {
       setDevdFirmwareOverrideDeviceId(null);
+      setDevdFirmwareOverrideMessage(null);
       setDevdMessage(successFeedback(`devd connected ${result.record.target.alias}`));
       navigate(deviceHref(result.record.target.deviceId, "settings"));
       void refreshDevdDiscovery();
     } else {
-      setDevdFirmwareOverrideDeviceId(result.error?.code === "firmware_artifact_mismatch" ? device.id : null);
-      setDevdMessage(errorFeedback(result.error));
+      const feedback = errorFeedback(result.error);
+      const firmwareMismatch = result.error?.code === "firmware_artifact_mismatch";
+      setDevdFirmwareOverrideDeviceId(firmwareMismatch ? device.id : null);
+      setDevdFirmwareOverrideMessage(firmwareMismatch ? feedback : null);
+      setDevdMessage(feedback);
     }
   }
 
@@ -632,6 +647,7 @@ function ConnectPage() {
   }
 
   const connectableDevdDevices = devdDevices.filter((device) => isConnectableDevdDevice(device));
+  const visibleDevdMessage = devdFirmwareOverrideMessage ?? devdMessage;
   const devdSummary =
     devdStatus === "checking"
       ? "Scanning USB CDC and LAN inventory"
@@ -659,7 +675,7 @@ function ConnectPage() {
           </div>
           <div className="devd-discovery-status">
             <span className={`transport-badge ${devdStatus === "available" ? "devd" : devdStatus === "unavailable" ? "offline" : "adapter"}`}>{devdSummary}</span>
-            <button className="icon-button" type="button" aria-label="Refresh devd device list" title="Refresh devd device list" onClick={() => void refreshDevdDiscovery()} disabled={devdBusy}>
+            <button className="icon-button" type="button" aria-label="Refresh devd device list" title="Refresh devd device list" onClick={() => void refreshDevdDiscovery({ clearMessage: true })} disabled={devdBusy}>
               <RefreshCw size={16} />
             </button>
           </div>
@@ -673,12 +689,17 @@ function ConnectPage() {
                 {...credentiallessInputProps}
                 name="devd-auth-token"
                 value={devdBridgeToken}
-                onChange={(event) => setDevdBridgeToken(event.target.value)}
+                onChange={(event) => {
+                  setDevdBridgeToken(event.target.value);
+                  setDevdMessage(null);
+                  setDevdFirmwareOverrideMessage(null);
+                  setDevdFirmwareOverrideDeviceId(null);
+                }}
                 placeholder="Required because this devd bridge is protected"
                 autoCapitalize="none"
               />
             </label>
-            <button className="secondary-button" type="button" onClick={() => void refreshDevdDiscovery()}>
+            <button className="secondary-button" type="button" onClick={() => void refreshDevdDiscovery({ clearMessage: true })}>
               <RefreshCw size={16} /> Apply token
             </button>
           </div>
@@ -753,8 +774,8 @@ function ConnectPage() {
           <span>Last refresh: {devdLastUpdatedLabel}</span>
           <span>Events trigger refresh when the bridge supports `/api/v1/devices/events`; polling remains active.</span>
         </footer>
-        {devdMessage?.tone === "error" ? <ConnectionCallout id="devd-connect-message" message={devdMessage.message} /> : null}
-        {devdMessage?.tone === "success" ? <FeedbackMessage feedback={devdMessage} /> : null}
+        {visibleDevdMessage?.tone === "error" ? <ConnectionCallout id="devd-connect-message" message={visibleDevdMessage.message} /> : null}
+        {visibleDevdMessage?.tone === "success" ? <FeedbackMessage feedback={visibleDevdMessage} /> : null}
       </section>
 
       <div className="connect-grid secondary-connect-grid" data-evidence-target="usb-connect">
@@ -826,7 +847,7 @@ function ConnectPage() {
               />
             </label>
             <div className="form-actions with-callout">
-              <button className="secondary-button" type="button" onClick={() => void refreshDevdDiscovery()}>
+              <button className="secondary-button" type="button" onClick={() => void refreshDevdDiscovery({ clearMessage: true })}>
                 <RefreshCw size={16} /> Refresh discovery
               </button>
             </div>
