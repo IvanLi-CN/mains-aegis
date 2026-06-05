@@ -83,3 +83,27 @@ The browser resolves that reference through the GitHub Releases API and reads th
 Web Serial flashing only accepts `image` files with `flash_address`. The browser fetches those static assets, verifies `sha256`, and then writes the address/data pairs through the Web Serial ROM loader.
 
 `mains-aegis-devd` flashing reads firmware files from the daemon host filesystem. The Web UI therefore enables devd flashing only for bundled artifacts staged under `web/public/firmware/`; GitHub Release-only artifacts remain available to Web Serial when they include flash images.
+
+## Development auto-discovery
+
+During Vite development, the Web dev server serves a dynamic
+`/firmware/firmware-catalog.json` instead of only the static file under
+`web/public/firmware/`. The dev catalog is rebuilt on request from:
+
+- bundled manifests under `web/public/firmware/`;
+- generated manifests under `firmware/target/mains-aegis-artifacts/`;
+- firmware identities and verified selected artifacts currently observed by
+  `mains-aegis-devd`.
+
+Generated artifact files are included only when the referenced files still
+exist and their recorded `sha256` and `size` match. This prevents stale
+manifests in `firmware/target/mains-aegis-artifacts/` from falsely matching a
+newly overwritten `esp-firmware` file.
+
+When a dev-only catalog entry needs `mains-aegis-devd` to read files from the
+host filesystem, the dev server adds `devd_manifest_path`. The browser still
+receives `/firmware/<artifact_id>/<file>` URLs, while devd receives a local
+manifest with absolute file paths for dry-run, flash operations, and defmt
+decode. If the artifact files are unavailable, the dev server may still expose
+an observed fileless entry from the connected device identity so connection and
+telemetry are not blocked by firmware catalog mismatch.

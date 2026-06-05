@@ -94,6 +94,12 @@ describe("firmware catalog helpers", () => {
     expect(resolution.artifacts.find((entry) => entry.artifact.artifact_id === "shared")?.release_duplicate?.build_id).toBe("release-build");
   });
 
+  test("uses devd manifest paths exposed by the dev firmware catalog", () => {
+    const resolution = resolveFirmwareCatalogArtifacts([{ ...artifact, devd_manifest_path: "/tmp/mains-aegis/manifest.json" }], []);
+
+    expect(resolution.artifacts[0]?.manifest_path).toBe("/tmp/mains-aegis/manifest.json");
+  });
+
   test("resolves bundled and release artifact file URLs from their source", () => {
     expect(
       firmwareArtifactFileUrl(

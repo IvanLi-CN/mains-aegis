@@ -26,7 +26,7 @@ use std::{
     path::{Path as FsPath, PathBuf},
     process::Stdio,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc, Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -59,6 +59,8 @@ const LAN_SCAN_MAX_HOSTS: usize = 4_096;
 const DEVD_STATE_FILE_NAME: &str = "devices.json";
 #[cfg(not(test))]
 const DEVD_STATE_FILE_ENV: &str = "MAINS_AEGIS_DEVD_STATE_FILE";
+static STATE_PERSIST_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+const WEB_DEV_FIRMWARE_CACHE_DIR: &str = "tmp/web-dev-firmware";
 
 #[derive(Debug, Clone)]
 pub struct HttpBridgeConfig {
@@ -885,7 +887,8 @@ fn persist_devd_state(
     }
     let encoded = serde_json::to_vec_pretty(&snapshot)
         .map_err(|error| HttpError::retryable("state_persist_failed", error.to_string()))?;
-    let temp_path = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let temp_seq = STATE_PERSIST_TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let temp_path = path.with_extension(format!("json.tmp-{}-{temp_seq}", std::process::id()));
     fs::write(&temp_path, encoded).map_err(|error| {
         HttpError::retryable(
             "state_persist_failed",
@@ -4404,12 +4407,50 @@ fn resolve_embedded_firmware_path(input: &str) -> Result<PathBuf, HttpError> {
         .join("web/public/firmware")
         .join(firmware_rel);
     if !path.is_file() {
+        if let Some(dev_path) = resolve_web_dev_firmware_path(firmware_rel)? {
+            return Ok(dev_path);
+        }
         return Err(HttpError::not_found(
             "defmt_elf_not_found",
             format!("embedded firmware ELF not found: {trimmed}"),
         ));
     }
     Ok(path)
+}
+
+fn resolve_web_dev_firmware_path(firmware_rel: &str) -> Result<Option<PathBuf>, HttpError> {
+    let mut parts = firmware_rel.split('/');
+    let Some(artifact_id) = parts.next() else {
+        return Ok(None);
+    };
+    let Some(file_name) = parts.next_back() else {
+        return Ok(None);
+    };
+    if artifact_id.is_empty()
+        || file_name.is_empty()
+        || parts.any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Ok(None);
+    }
+
+    let manifest_path = env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(WEB_DEV_FIRMWARE_CACHE_DIR)
+        .join(format!("{artifact_id}.manifest.json"));
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+    let manifest = read_manifest(&manifest_path.to_string_lossy())?;
+    if manifest.artifact_id != artifact_id {
+        return Ok(None);
+    }
+    for file in manifest.files {
+        let path = PathBuf::from(&file.path);
+        if path.file_name().and_then(|name| name.to_str()) == Some(file_name) && path.is_file() {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
 fn decode_hex(input: &str) -> Result<Vec<u8>, HttpError> {
@@ -6186,6 +6227,46 @@ mod tests {
                 .and_then(|binding| binding.alias.as_deref()),
             Some("Mock bench")
         );
+    }
+
+    #[test]
+    fn persisted_state_allows_concurrent_writes() {
+        let temp = tempfile::tempdir().unwrap();
+        let persistence = DevdPersistence::enabled(temp.path().join("state.json"));
+
+        std::thread::scope(|scope| {
+            for index in 0..16 {
+                let persistence = persistence.clone();
+                scope.spawn(move || {
+                    let mut bindings = HashMap::new();
+                    bindings.insert(
+                        format!("device-{index}"),
+                        DeviceBinding {
+                            alias: Some(format!("Device {index}")),
+                            stable_id: format!("device-{index}"),
+                            port_path: Some(format!("/dev/cu.usbmodem{index}")),
+                            created_at: "now".into(),
+                        },
+                    );
+                    persist_devd_state(
+                        &persistence,
+                        PersistedDevdState {
+                            schema_version: 1,
+                            bindings,
+                            selected_artifacts: HashMap::new(),
+                            artifacts: HashMap::new(),
+                            scan_trace: VecDeque::new(),
+                            device_trace: HashMap::new(),
+                        },
+                    )
+                    .unwrap();
+                });
+            }
+        });
+
+        let loaded = load_devd_state(&persistence).unwrap();
+        assert_eq!(loaded.schema_version, 1);
+        assert_eq!(loaded.bindings.len(), 1);
     }
 
     #[test]

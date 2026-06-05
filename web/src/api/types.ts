@@ -238,6 +238,7 @@ export type FirmwareArtifact = {
     metadata_sha256: string | null;
   };
   files: FirmwareArtifactFile[];
+  devd_manifest_path?: string;
 };
 
 export type FirmwareCatalog = {
