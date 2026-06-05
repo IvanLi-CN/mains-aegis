@@ -616,11 +616,11 @@ function ConnectPage() {
       setDevdFirmwareOverrideDeviceId(null);
       setDevdMessage(successFeedback(`devd connected ${result.record.target.alias}`));
       navigate(deviceHref(result.record.target.deviceId, "settings"));
+      void refreshDevdDiscovery();
     } else {
       setDevdFirmwareOverrideDeviceId(result.error?.code === "firmware_artifact_mismatch" ? device.id : null);
       setDevdMessage(errorFeedback(result.error));
     }
-    void refreshDevdDiscovery();
   }
 
   function onMockUsbConnect() {
