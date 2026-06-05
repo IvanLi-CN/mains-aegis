@@ -142,6 +142,55 @@ impl NetworkUiSummary {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WifiSettingsSnapshot {
+    pub configured: bool,
+    pub ssid: Option<String<32>>,
+}
+
+impl WifiSettingsSnapshot {
+    pub fn unconfigured() -> Self {
+        Self {
+            configured: false,
+            ssid: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManualChargeSettingsSnapshot {
+    pub target: &'static str,
+    pub speed: &'static str,
+    pub timer_h: u8,
+}
+
+impl ManualChargeSettingsSnapshot {
+    pub const fn defaults() -> Self {
+        Self {
+            target: "full_100",
+            speed: "ma_500",
+            timer_h: 2,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceSettingsSnapshot {
+    pub wifi: WifiSettingsSnapshot,
+    pub log_level: &'static str,
+    pub manual_charge: ManualChargeSettingsSnapshot,
+}
+
+impl DeviceSettingsSnapshot {
+    pub fn defaults() -> Self {
+        Self {
+            wifi: WifiSettingsSnapshot::unconfigured(),
+            log_level: "info",
+            manual_charge: ManualChargeSettingsSnapshot::defaults(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UpsStatusSnapshot {
     pub mode: &'static str,
@@ -163,8 +212,19 @@ pub struct UpsStatusSnapshot {
     pub battery_pack_mv: Option<u16>,
     pub battery_current_ma: Option<i16>,
     pub battery_soc_pct: Option<u16>,
+    pub battery_cell_mv: [Option<u16>; 4],
+    pub battery_cell_delta_mv: Option<u16>,
+    pub battery_balance_enabled: Option<bool>,
+    pub battery_balance_cfg_match: Option<bool>,
+    pub battery_balance_active: Option<bool>,
+    pub battery_balance_mask: Option<u8>,
+    pub battery_balance_cell: Option<u8>,
+    pub battery_balance_min_start_delta_mv: Option<u8>,
     pub battery_no_battery: Option<bool>,
     pub battery_discharge_ready: Option<bool>,
+    pub battery_charge_fet_on: Option<bool>,
+    pub battery_discharge_fet_on: Option<bool>,
+    pub battery_precharge_fet_on: Option<bool>,
     pub battery_issue_detail: Option<&'static str>,
     pub battery_recovery_pending: bool,
     pub battery_last_result: Option<&'static str>,
@@ -498,8 +558,19 @@ impl UpsStatusSnapshot {
             battery_pack_mv: None,
             battery_current_ma: None,
             battery_soc_pct: None,
+            battery_cell_mv: [None, None, None, None],
+            battery_cell_delta_mv: None,
+            battery_balance_enabled: None,
+            battery_balance_cfg_match: None,
+            battery_balance_active: None,
+            battery_balance_mask: None,
+            battery_balance_cell: None,
+            battery_balance_min_start_delta_mv: None,
             battery_no_battery: None,
             battery_discharge_ready: None,
+            battery_charge_fet_on: None,
+            battery_discharge_fet_on: None,
+            battery_precharge_fet_on: None,
             battery_issue_detail: None,
             battery_recovery_pending: false,
             battery_last_result: None,

@@ -4,7 +4,10 @@ use heapless::String;
 
 use crate::{
     mdns_wire::DeviceIdentity,
-    net_types::{format_ipv4, PowerDiagSnapshot, UpsStatusSnapshot, WifiSnapshot, API_VERSION},
+    net_types::{
+        format_ipv4, DeviceSettingsSnapshot, PowerDiagSnapshot, UpsStatusSnapshot, WifiSnapshot,
+        API_VERSION,
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,6 +139,38 @@ pub fn render_network_json<const N: usize>(
     let _ = buf.push('}');
 }
 
+pub fn render_settings_json<const N: usize>(
+    buf: &mut String<N>,
+    settings: &DeviceSettingsSnapshot,
+) {
+    buf.clear();
+    let _ = buf.push('{');
+    let _ = buf.push_str("\"wifi\":{");
+    let _ = write!(
+        buf,
+        "\"configured\":{}",
+        if settings.wifi.configured {
+            "true"
+        } else {
+            "false"
+        }
+    );
+    if let Some(ssid) = settings.wifi.ssid.as_ref() {
+        let _ = buf.push_str(",\"ssid\":\"");
+        write_json_string_escaped(buf, ssid.as_str());
+        let _ = buf.push('"');
+    } else {
+        let _ = buf.push_str(",\"ssid\":null");
+    }
+    let _ = buf.push_str("},");
+    json_field_str(buf, "log_level", settings.log_level, true);
+    let _ = buf.push_str("\"manual_charge\":{");
+    json_field_str(buf, "target", settings.manual_charge.target, true);
+    json_field_str(buf, "speed", settings.manual_charge.speed, true);
+    let _ = write!(buf, "\"timer_h\":{}", settings.manual_charge.timer_h);
+    let _ = buf.push_str("}}");
+}
+
 pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {
     buf.clear();
     let _ = buf.push('{');
@@ -172,8 +207,39 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     json_field_opt_u16(buf, "pack_mv", status.battery_pack_mv, true);
     json_field_opt_i16(buf, "current_ma", status.battery_current_ma, true);
     json_field_opt_u16(buf, "soc_pct", status.battery_soc_pct, true);
+    json_field_opt_u16_array(buf, "cell_mv", status.battery_cell_mv, true);
+    json_field_opt_u16(buf, "cell_delta_mv", status.battery_cell_delta_mv, true);
+    json_field_opt_bool(buf, "balance_enabled", status.battery_balance_enabled, true);
+    json_field_opt_bool(
+        buf,
+        "balance_cfg_match",
+        status.battery_balance_cfg_match,
+        true,
+    );
+    json_field_opt_bool(buf, "balance_active", status.battery_balance_active, true);
+    json_field_opt_u8(buf, "balance_mask", status.battery_balance_mask, true);
+    json_field_opt_u8(buf, "balance_cell", status.battery_balance_cell, true);
+    json_field_opt_u8(
+        buf,
+        "balance_min_start_delta_mv",
+        status.battery_balance_min_start_delta_mv,
+        true,
+    );
     json_field_opt_bool(buf, "no_battery", status.battery_no_battery, true);
     json_field_opt_bool(buf, "discharge_ready", status.battery_discharge_ready, true);
+    json_field_opt_bool(buf, "charge_fet_on", status.battery_charge_fet_on, true);
+    json_field_opt_bool(
+        buf,
+        "discharge_fet_on",
+        status.battery_discharge_fet_on,
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "precharge_fet_on",
+        status.battery_precharge_fet_on,
+        true,
+    );
     json_field_opt_str(buf, "issue_detail", status.battery_issue_detail, true);
     let _ = write!(
         buf,
@@ -587,6 +653,29 @@ fn json_field_opt_u16<const N: usize>(
     json_field_opt_num(buf, key, value.map(|value| value as i64), trailing_comma);
 }
 
+fn json_field_opt_u16_array<const N: usize>(
+    buf: &mut String<N>,
+    key: &str,
+    value: [Option<u16>; 4],
+    trailing_comma: bool,
+) {
+    let _ = write!(buf, "\"{}\":[", key);
+    for (index, item) in value.iter().enumerate() {
+        if index != 0 {
+            let _ = buf.push(',');
+        }
+        if let Some(item) = item {
+            let _ = write!(buf, "{}", item);
+        } else {
+            let _ = buf.push_str("null");
+        }
+    }
+    let _ = buf.push(']');
+    if trailing_comma {
+        let _ = buf.push(',');
+    }
+}
+
 fn json_field_opt_u32<const N: usize>(
     buf: &mut String<N>,
     key: &str,
@@ -659,12 +748,15 @@ fn json_field_opt_ipv4<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        accepts_event_stream, render_identity_json, render_status_json, write_error_body,
-        write_sse_event, BuildInfo,
+        accepts_event_stream, render_identity_json, render_settings_json, render_status_json,
+        write_error_body, write_sse_event, BuildInfo,
     };
     use crate::{
         mdns_wire::derive_device_identity,
-        net_types::{NetworkUiSummary, UpsStatusSnapshot, WifiConnectionState, WifiSnapshot},
+        net_types::{
+            DeviceSettingsSnapshot, ManualChargeSettingsSnapshot, NetworkUiSummary,
+            UpsStatusSnapshot, WifiConnectionState, WifiSettingsSnapshot, WifiSnapshot,
+        },
     };
     use heapless::String;
 
@@ -723,6 +815,17 @@ mod tests {
         let mut body = String::<2048>::new();
         let mut status = UpsStatusSnapshot::empty();
         status.mode = "backup";
+        status.battery_cell_mv = [Some(3812), Some(3817), Some(3809), Some(3822)];
+        status.battery_cell_delta_mv = Some(13);
+        status.battery_balance_enabled = Some(true);
+        status.battery_balance_cfg_match = Some(true);
+        status.battery_balance_active = Some(true);
+        status.battery_balance_mask = Some(0b1010);
+        status.battery_balance_cell = None;
+        status.battery_balance_min_start_delta_mv = Some(3);
+        status.battery_charge_fet_on = Some(false);
+        status.battery_discharge_fet_on = Some(true);
+        status.battery_precharge_fet_on = Some(false);
         status.network = NetworkUiSummary::from_wifi(WifiSnapshot {
             state: WifiConnectionState::Error,
             ipv4: None,
@@ -735,6 +838,16 @@ mod tests {
         });
         render_status_json(&mut body, status);
         assert!(body.as_str().contains("\"mode\":\"backup\""));
+        assert!(body.as_str().contains("\"cell_mv\":[3812,3817,3809,3822]"));
+        assert!(body.as_str().contains("\"cell_delta_mv\":13"));
+        assert!(body.as_str().contains("\"balance_enabled\":true"));
+        assert!(body.as_str().contains("\"balance_cfg_match\":true"));
+        assert!(body.as_str().contains("\"balance_active\":true"));
+        assert!(body.as_str().contains("\"balance_mask\":10"));
+        assert!(body.as_str().contains("\"balance_min_start_delta_mv\":3"));
+        assert!(body.as_str().contains("\"charge_fet_on\":false"));
+        assert!(body.as_str().contains("\"discharge_fet_on\":true"));
+        assert!(body.as_str().contains("\"precharge_fet_on\":false"));
         assert!(body.as_str().contains("\"last_error\":\"link_lost\""));
     }
 
@@ -746,5 +859,32 @@ mod tests {
             frame.as_str(),
             "id: 7\nevent: status\ndata: {\"ok\":true}\n\n"
         );
+    }
+
+    #[test]
+    fn settings_json_redacts_psk_and_exposes_manual_charge() {
+        let mut body = String::<512>::new();
+        let mut ssid = String::<32>::new();
+        ssid.push_str("LabNet").unwrap();
+        render_settings_json(
+            &mut body,
+            &DeviceSettingsSnapshot {
+                wifi: WifiSettingsSnapshot {
+                    configured: true,
+                    ssid: Some(ssid),
+                },
+                log_level: "debug",
+                manual_charge: ManualChargeSettingsSnapshot {
+                    target: "rsoc_80",
+                    speed: "ma_500",
+                    timer_h: 2,
+                },
+            },
+        );
+        assert!(body.as_str().contains("\"configured\":true"));
+        assert!(body.as_str().contains("\"ssid\":\"LabNet\""));
+        assert!(body.as_str().contains("\"log_level\":\"debug\""));
+        assert!(body.as_str().contains("\"target\":\"rsoc_80\""));
+        assert!(!body.as_str().contains("psk"));
     }
 }

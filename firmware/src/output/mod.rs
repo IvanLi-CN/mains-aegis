@@ -4454,6 +4454,7 @@ where
         detail.balance_active = None;
         detail.balance_mask = None;
         detail.balance_cell = None;
+        detail.balance_min_start_delta_mv = None;
         detail.battery_energy_mwh = None;
         detail.battery_full_capacity_mwh = None;
         detail.charge_ready = None;
@@ -4524,6 +4525,8 @@ where
         detail.balance_active = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CB);
         detail.balance_mask = balance_mask;
         detail.balance_cell = detail_bms_single_balance_cell(balance_mask);
+        detail.balance_min_start_delta_mv =
+            balance_config.map(|config| config.min_start_balance_delta_mv);
         detail.battery_energy_mwh = detail_bms_energy_mwh(snapshot);
         detail.battery_full_capacity_mwh = detail_bms_full_capacity_mwh(snapshot);
         detail.charge_ready = charge_ready;
@@ -4917,6 +4920,10 @@ where
         self.request_manual_charge_action(ManualChargeUiAction::SetTimerLimit(
             web_serial_manual_charge_timer(prefs.timer_limit),
         ));
+    }
+
+    pub fn manual_charge_prefs_snapshot(&self) -> ManualChargePrefs {
+        self.manual_charge_prefs
     }
 
     pub fn write_web_serial_wifi_config(

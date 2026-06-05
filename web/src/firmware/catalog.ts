@@ -101,7 +101,7 @@ export function resolveFirmwareCatalogArtifacts(
       artifact,
       source: "bundled",
       catalog_url: BUNDLED_FIRMWARE_CATALOG_URL,
-      manifest_path: `web/public/firmware/${artifact.artifact_id}.manifest.json`,
+      manifest_path: artifact.devd_manifest_path ?? `web/public/firmware/${artifact.artifact_id}.manifest.json`,
     });
   }
 

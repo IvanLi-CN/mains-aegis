@@ -277,6 +277,34 @@ pub fn parse_frame(line: &str) -> Result<UsbCdcFrame, UsbCdcProtocolError> {
     }
 }
 
+pub fn parse_http_log_level_request(body: &str) -> Result<LogLevel, UsbCdcProtocolError> {
+    let level = json_string_field::<16>(body, "level")?.ok_or(UsbCdcProtocolError::MissingField)?;
+    parse_log_level(level.as_str())
+}
+
+pub fn parse_http_manual_charge_request(
+    body: &str,
+) -> Result<ManualChargePrefsCommand, UsbCdcProtocolError> {
+    parse_manual_charge_prefs(body)
+}
+
+pub fn parse_http_wifi_config_request(body: &str) -> Result<WifiConfigSecret, UsbCdcProtocolError> {
+    let ssid = json_string_field::<WIFI_SSID_MAX_LEN>(body, "ssid")?
+        .ok_or(UsbCdcProtocolError::MissingField)?;
+    let psk = json_string_field::<64>(body, "psk")?.ok_or(UsbCdcProtocolError::MissingField)?;
+    WifiConfigSecret::new(ssid.as_str(), psk.as_str())
+}
+
+pub fn parse_http_reset_request(body: &str) -> Result<(), UsbCdcProtocolError> {
+    let confirm =
+        json_string_field::<16>(body, "confirm")?.ok_or(UsbCdcProtocolError::MissingField)?;
+    if confirm.as_str() == "reset" {
+        Ok(())
+    } else {
+        Err(UsbCdcProtocolError::UnsafeOperation)
+    }
+}
+
 pub fn request_id_hint(line: &str) -> Option<String<32>> {
     parse_request_id(line).ok()
 }
@@ -296,7 +324,7 @@ pub fn render_hello_json<const N: usize>(
     let _ = buf.push_str(r#""protocol":""#);
     let _ = buf.push_str(PROTOCOL_NAME);
     let _ = buf.push_str(
-        r#"","framing":"jsonl","capabilities":{"status":true,"structured_logs":true,"safe_settings":true,"wifi_config":true,"psk_echo":false},"identity":"#,
+        r#"","framing":"jsonl","capabilities":{"status":true,"structured_logs":true,"settings":true,"wifi_config":true,"psk_echo":false},"identity":"#,
     );
     let _ = buf.push_str(identity_json);
     let _ = buf.push('}');
@@ -784,6 +812,15 @@ mod tests {
                     timer_limit: ManualChargeTimerLimit::H2,
                 })
             }
+        );
+    }
+
+    #[test]
+    fn reset_http_request_requires_explicit_confirmation() {
+        assert!(parse_http_reset_request(r#"{"confirm":"reset"}"#).is_ok());
+        assert_eq!(
+            parse_http_reset_request(r#"{"confirm":"reboot"}"#).unwrap_err(),
+            UsbCdcProtocolError::UnsafeOperation
         );
     }
 

@@ -6,6 +6,12 @@
 - Created: 2026-05-02
 - Last: 2026-06-04
 
+## 接管说明
+
+- 本规格记录的是 `mains-aegis-devd` v1 foundation。
+- 其中 `session`、`/api/v1/serial/session`、localhost settings 兼容面，以及 devd 如何接入设备本体 LAN 管理 API，已转由 [`#k4vzn`](../k4vzn-lan-management-convergence/SPEC.md) 重设计。
+- 本规格保留 devd 作为本机 USB owner、host power、artifact/flash/reset/monitor foundation 的历史基线。
+
 ## 背景 / 问题陈述
 
 `mcu-agentd` 曾承担烧录、reset 与 defmt monitor，但 Web App 的 USB CDC 业务通信也需要独占同一 USB Serial/JTAG CDC 口。多个进程同时抢串口会导致日志、配网、状态读取和烧录互相干扰。
@@ -16,14 +22,15 @@
 
 ### Goals
 
-- 新增 `tools/mains-aegis-devd`，作为 Mains Aegis 专用设备 daemon。
+- 新增 Mains Aegis 专用设备 daemon；当前 canonical host-tools crate 为 `tools/mains-aegis-host`（见 #7jqrq）。
 - `serve` 启动不接收设备端口；设备通过 API 扫描、列出、绑定、连接、断开和解绑。
-- HTTP API 覆盖 identity、session、events、artifact selection、reset、monitor start/stop、flash 与 USB CDC safe settings 写入。
+- 设备绑定、别名和已选择 artifact 属于用户配置态，必须持久化到 devd 状态文件；默认位置复用参考项目的 host-tools 模式：`directories::ProjectDirs::config_dir()` 下的 `devices.json`。daemon 重启后 `GET /api/v1/devices` 仍能返回已知绑定，后续 `scan` 会把当前可见端口重新附加到对应绑定。
+- HTTP API 覆盖 identity、connection、settings、trace、events、artifact selection、reset、monitor start/stop、flash 与设备 settings 写入；`session` 仅作为历史兼容语义由 #k4vzn 接管。
 - HTTP API 覆盖 host power 查询、低功耗运行 profile 切换、suspend、shutdown dry-run 与事件广播。
-- 吸收旧本地 USB HTTP bridge 的兼容面：`/api/v1/serial/session`、WiFi config、log level 和 manual charge endpoints 由 devd 直接提供。
+- 吸收旧本地 USB HTTP bridge 的兼容面：WiFi config、log level、manual charge endpoints 与 Web USB Console hydration 由 devd 直接提供；新的 owner-facing 查询面使用 `connection / settings / trace`。
 - Firmware Catalog 成为 Web Direct、devd、本地构建和 GitHub Release 的统一 artifact 合同。
 - 固件 identity 暴露 build/profile/features/protocol/defmt 信息，devd 用它与 artifact manifest 匹配；不匹配时日志解码必须标记 `unverified`。
-- Web 开发期由 Vite dev server 反代 `/api` 到 devd；生产期可由 devd 托管静态 Web。
+- Web 开发期由 Vite dev server 反代 `/api` 到 devd，proxy target 可由 env 指向当前显式启动的 bridge；生产期可由 devd 托管静态 Web。需要浏览器直接跨源访问 devd bridge 时，`--allow-dev-cors` 只允许 loopback HTTP development origins。Connect 页在 LAN 发现结果里只保留 `identity.firmware.protocol === "mains-aegis.cdc.v1"` 的候选。
 - 新增项目 skill，固化 devd 设备操作、安全边界和验证流程。
 
 ### Non-goals
@@ -40,21 +47,23 @@
 
 - `GET /api/v1/devices`: 返回当前已知设备与绑定。
 - `POST /api/v1/devices/scan`: 枚举本机 serial candidates，只发现不自动连接。
-- `POST /api/v1/devices/{id}/bind`: 为已知设备创建稳定绑定与别名。
+- `POST /api/v1/devices/{id}/bind`: 为已知设备创建稳定绑定与别名，并写入 devd 持久状态。
 - `POST /api/v1/devices/{id}/connect`: 连接设备并读取/缓存 identity。
 - `POST /api/v1/devices/{id}/disconnect`: 断开设备 session。
-- `DELETE /api/v1/devices/{id}/binding`: 移除绑定。
+- `DELETE /api/v1/devices/{id}/binding`: 移除绑定，并同步 devd 持久状态。
 - `GET /api/v1/devices/{id}/identity`: 返回设备 firmware identity。
 - `GET /api/v1/devices/{id}/power-diag`: 通过 USB CDC `get_power_diag` 获取只读电源诊断快照，并缓存到设备 session。
 - `GET|POST /api/v1/devices/{id}/artifact`: 查询或选择 artifact manifest。
 - `POST /api/v1/devices/{id}/flash`: 校验 artifact hash 后执行烧录；无硬件验证使用 `dry_run=true`。真实烧录响应与 `flash completed` 事件必须同时回传 backend `status/stdout/stderr`，用于区分“artifact 选择正确但底层 flash backend 没有真正完成”和“backend 已成功写入硬件”。
 - `POST /api/v1/devices/{id}/reset`: 设备 reset 请求。
 - `POST /api/v1/devices/{id}/monitor/start|stop`: monitor 生命周期请求。
-- `GET /api/v1/devices/{id}/session`: 返回 bounded logs/trace 与 `log_decode`。
+- `GET /api/v1/devices/{id}/connection`: 返回 transport、连接状态、绑定与 artifact 上下文。
+- `GET /api/v1/devices/{id}/settings`: 返回当前设备 settings 快照。
+- `GET /api/v1/devices/{id}/trace`: 返回 bounded logs/trace 与 `log_decode`。
 - `GET /api/v1/devices/{id}/events`: 设备事件 SSE。
-- `POST /api/v1/wifi-config` / `DELETE /api/v1/wifi-config`: 通过指定 `device_id` 的已连接 USB CDC 设备写入或清除 WiFi 配置，成功后返回固件 ack result；未指定 `device_id` 时仅允许单 USB 设备连接场景。
-- `POST /api/v1/settings/log-level`: 通过指定 `device_id` 的 USB CDC session 更新日志级别。
-- `POST /api/v1/settings/manual-charge`: 通过指定 `device_id` 的 USB CDC session 更新手动充电偏好。
+- `POST /api/v1/wifi-config` / `DELETE /api/v1/wifi-config`: 通过指定 `device_id` 的已连接设备写入或清除 WiFi 配置；未指定 `device_id` 时仅允许单设备连接场景。
+- `POST /api/v1/settings/log-level`: 通过指定 `device_id` 的连接设备更新日志级别。
+- `POST /api/v1/settings/manual-charge`: 通过指定 `device_id` 的连接设备更新手动充电偏好。
 
 `power-diag` 响应必须保持只读，不触发充电策略、BMS 恢复或输出状态变化。快照至少包含：
 
@@ -76,7 +85,7 @@ devd 的 host power 控制面用于 UPS 后备供电期间降低主机负载，�
 安全规则：
 
 - 所有 state-changing host power 请求默认 `dry_run=true`；未显式开启真实动作时，`dry_run=false` 必须返回 `host_power_real_action_denied`。
-- 真实动作只在 devd 启动时带 `--allow-host-power-actions` 或环境变量 `MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=1` 时允许。
+- 真实动作只在 devd 启动时带 `--allow-host-power-actions` 或环境变量 `MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=true` 时允许。
 - dry-run 响应必须包含 backend、action、target profile 或 delay、以及将执行的命令摘要，并且必须广播 `host_power` 事件。
 - shutdown `delay_sec` 按秒解释；真实关机请求必须立即下发给操作系统并以系统命令返回码作为 API 结果，不得由 devd 自行计时或自行决定何时关机。`delay_sec=0` 表示立即关机；`delay_sec>0` 表示使用系统级关机调度能力。
 - Linux 后端使用 `power-profiles-daemon` 的 `net.hadess.PowerProfiles` D-Bus `ActiveProfile` 作为低功耗运行入口：`power_saver` 映射为 `power-saver`，`balanced` 与 `performance` 映射到同名 profile；suspend 使用 logind D-Bus，shutdown 使用 `systemctl poweroff --no-block --when=...`，并仅在请求带 `force:true` 时附加 `--force`，确保命令一旦接收就由系统执行。
@@ -102,12 +111,15 @@ CI 必须覆盖 devd 真实命令触发路径，而不仅是 fake command 或 dr
 
 devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据。设备连接不能因为扫描、页面探活或存在历史连接记录而长期保留；只有当前 Web 页面持有有效租约时，devd 才能占用对应 USB CDC 设备。
 
+- `connection`、Web lease、monitor handle、logs 和 trace 是运行态，不写入持久状态；daemon 重启后这些状态必须安全回到 disconnected / no lease，避免伪造仍连接的硬件 session。
+- 持久状态只保存用户意图：设备绑定、别名、最近可见端口路径、已加载 artifact manifest 和每个设备选择的 artifact id。端口路径是最近观测值，`scan` 负责刷新或清空，不得触发自动连接。
+
 - Web 连接流程必须是 `scan -> owner selects device -> lease/connect -> heartbeat -> release/expiry`。
 - `scan` 可以列出多个 USB CDC candidates，但不得自动选择或自动连接任何 candidate。
 - 多个 native serial candidates 存在时，devd 必须把完整候选列表返回给 Web；Web 必须让用户明确选择要控制的设备。devd 和 Web 都不得基于 “已识别 / 已连接 / 第一个 / 最近使用” 自动替用户决定。
 - Web 创建租约时必须提交用户选择的 devd device id；devd 仅能连接该指定设备。目标不存在、不可连接、被其他有效租约占用或 identity 不可用时返回 API-compatible error envelope。
 - 租约创建成功后，devd 返回 `lease_id`、`device_id`、`identity.device_id`、`expires_at`、`heartbeat_interval_ms` 与 `lease_ttl_ms`。
-- safe settings、WiFi config、log level、manual charge、serial session、serial event stream 等 Web USB 控制请求必须携带有效 `lease_id` 或绑定到有效 lease；无有效租约时返回 `web_session_required` 或 `web_session_expired`，不得继续写入硬件。
+- settings、WiFi config、log level、manual charge、USB Console hydration、serial event stream 等 Web USB 控制请求必须携带有效 `lease_id` 或绑定到有效 lease；无有效租约时返回 `web_session_required` 或 `web_session_expired`，不得继续写入硬件。
 - 正常释放路径：Web 在显式 disconnect、移除设备、页面 `pagehide` / `beforeunload` 时应使用 keepalive request 或 `sendBeacon` 发送 release；devd 收到 release 后必须立即停止 monitor、关闭 native serial session，并把设备状态更新为 disconnected。
 - 异常释放路径：Web 断网、浏览器崩溃、系统休眠或网络抖动导致 release 未送达时，devd 通过租约 TTL 自动释放。默认目标为 `heartbeat_interval_ms=2000`、`lease_ttl_ms=8000`、cleanup tick 不超过 `1000ms`；因此无心跳后通常应在 8-9 秒内释放 USB 占用，不允许分钟级错误占用。
 - 网络抖动处理：单次 SSE 断开、短暂 heartbeat 失败或页面短暂不可见不得立即释放；只要 heartbeat 在 TTL 内恢复，devd 保持租约。超过 TTL 后释放，后续 Web 必须重新创建租约并重新读取 identity。
@@ -144,8 +156,9 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 
 ## 验收标准
 
-- `tools/mains-aegis-devd` 能编译并通过单元测试。
+- `tools/mains-aegis-host` 能编译并通过单元测试。
 - devd 可无端口启动，并通过 mock device 验证设备管理、artifact selection、dry-run flash 与 session API。
+- devd 重启后仍保留绑定、别名和 artifact selection；但不会恢复 connected/Web lease/monitor/log ring 等运行态。
 - host power API 支持 Linux/macOS 查询、dry-run、事件广播和真实动作默认拒绝；缺少平台后端或权限不足时返回可诊断错误。
 - `tools/firmware-artifact/build-catalog-entry.py` 能为 ELF 生成 manifest、catalog 和 `SHA256SUMS`。
 - 固件 identity JSON 包含 features/protocol/defmt 字段。
@@ -154,7 +167,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - Given BMS 处于 CUV 低电恢复且 `BQ25792 CHG_STAT=termination_done`，When 读取 `power-diag`，Then `policy.state` 必须保持 `recovering_low_voltage`、`policy.status=RECOV`、`policy.recovery_stage=bq40_pchg|bq25792_precharge`、`policy.full_latched=false`，不得把该快照误报为满充锁存。
 - Given charger poll 已完成，When 读取 `power-diag`，Then `charger.vbat_lowv_pct_x10=714`、`charger.iprechg_ma=120` 可见。
 - Given BQ40 DF 可读，When 读取 `power-diag`，Then `bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg` 可见，用于确认 `2900mV + CUV_RECOV_CHG=1` baseline。
-- Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 devd。
+- Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 env 指定或默认的 devd bridge。
 - 文档与 AGENTS guardrails 清晰说明 devd 是推荐入口，mcu-agentd 为 fallback。
 - 多 USB CDC 设备同时存在时，devd/Web 不自动选择；Web 显示候选列表，用户选择后才创建 Web lease 并占用设备。
 - Web 正常断开后 devd 立即释放 USB 占用；Web 异常断开后 devd 按租约 TTL 自动释放，默认目标不超过 9 秒。
@@ -164,11 +177,11 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 
 ## 实现状态
 
-- `tools/mains-aegis-devd`: v1 daemon/API/mock validation foundation，并提供 Web App localhost USB safe-control surface。
-- `tools/mains-aegis-devd`: 提供设备级 `power-diag` 只读诊断 API，转发固件 USB CDC `get_power_diag` 并在 session 中缓存结果。
-- `tools/mains-aegis-devd`: flash API 与 `flash completed` 事件已暴露 backend `status/stdout/stderr`，用于现场确认底层 `espflash` 执行结果。
+- `tools/mains-aegis-host`: v1 daemon/API/mock validation foundation，并提供 CLI、IPC 与显式 HTTP bridge。
+- `tools/mains-aegis-host`: 提供设备级 `power-diag` 只读诊断 API，转发固件 USB CDC `get_power_diag` 并在 session 中缓存结果。
+- `tools/mains-aegis-host`: flash API 与 `flash completed` 事件已暴露 backend `status/stdout/stderr`，用于现场确认底层 `espflash` 执行结果。
 - `firmware/src/net_contract.rs`: `power-diag.charger` 已暴露 `vac2_adc_mv`，用于定位 BQ25792 AC2/DC IN 实际采样。
-- `tools/mains-aegis-devd`: 提供 host power localhost control surface；低功耗运行、suspend、shutdown 默认 dry-run，真实动作受启动参数保护。
+- `tools/mains-aegis-host`: 提供 host power control surface；低功耗运行、suspend、shutdown 默认 dry-run，真实动作受启动参数保护。
 - `schemas/firmware-catalog.schema.json`: v1 catalog schema。
 - `tools/firmware-artifact/build-catalog-entry.py`: local manifest/catalog generator。
 - `web/src/api/*`: devd mode client contracts。
@@ -180,3 +193,4 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - 2026-06-04: `power-diag` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2900mV + CUV_RECOV_CHG=1` baseline。
 - 2026-06-04: `flash` API 与设备事件增加 backend `status/stdout/stderr` 透传，现场可直接确认 `espflash` 是否真正完成以及目标硬件 identity 是否已经切到新 artifact。
 - 2026-06-04: 新增低压恢复 HIL runner 与文档，固化 bq40 工具固件和主固件的双烧录验证路径。
+- 2026-06-05: `/api/v1/status` 的 `battery` snapshot 增加四节 `cell_mv`、`cell_delta_mv`、均衡状态字段与 `charge_fet_on` / `discharge_fet_on` / `precharge_fet_on`，Web 电池页可直接展示 per-cell voltage、delta、BAL 状态与三路 BMS MOS 状态，不再依赖 `power-diag` 详情端点。

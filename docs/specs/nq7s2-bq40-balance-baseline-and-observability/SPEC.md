@@ -135,6 +135,7 @@
 
 - 工具侧已把主板均衡基线加入 `asset-df-mainboard` 与 `live-df-mainboard`。
 - 主固件已补齐 `BalanceConfig` 与 `AFE Register[KK]` 观测，并把 Cells 页 `BAL STATE` 与 footer 语义对齐到本规格。
+- Web `/devices/:device_id/battery` 已复用同一套均衡语义，展示 cell delta、`balance_min_start_delta_mv`、`BAL OFF / IDLE / Cn / MULTI / ACTIVE / --` 与当前 `balance_mask` 命中的 cell。
 - Preview 工具已新增三组稳定 Cells 详情场景，用于冻结均衡 active / idle / config mismatch 画面。
 - 实板已完成一次 `live-df-mainboard` 写入，主固件 monitor 已确认 `balance_raw=Some(7)` 且 `balance_match=Some(true)`。
 

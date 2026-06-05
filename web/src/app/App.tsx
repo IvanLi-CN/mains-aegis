@@ -20,6 +20,7 @@ import {
   Menu,
   Minimize2,
   PlugZap,
+  Radio,
   RefreshCw,
   Search,
   Server,
@@ -32,10 +33,10 @@ import {
   Wifi,
   X,
 } from "lucide-react";
-import { FormEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
+import { FormEvent, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
 import type { LucideIcon } from "lucide-react";
-import { normalizeBaseUrl, scanDevdDevices, toErrorEnvelope } from "../api/client";
-import type { DeviceRecord, DevdDevice, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
+import { bridgeAuthRequired, bridgeAuthToken, normalizeBaseUrl, saveBridgeAuthToken, scanDevdDevices, subscribeDevdDeviceEvents, toErrorEnvelope } from "../api/client";
+import type { DeviceRecord, DeviceSettings, DevdDevice, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 import { SegmentedControl } from "../components/ui/segmented-control";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { useDeviceRegistry, type WifiProvisioningProgress } from "../device-registry/context";
@@ -73,7 +74,16 @@ const deviceSections = [
 ] as const;
 
 const appBasePath = normalizeBasePath(import.meta.env.BASE_URL);
+const defaultDevdTarget = (import.meta.env.VITE_DEFAULT_DEVD_URL ?? import.meta.env.VITE_DEVD_API_BASE ?? "same-origin").trim() || "same-origin";
 const docsHref = `${appBasePath}docs/`;
+const credentiallessInputProps = {
+  autoComplete: "off",
+  autoCorrect: "off",
+  spellCheck: false,
+  "data-1p-ignore": "true",
+  "data-lpignore": "true",
+  "data-form-type": "other",
+} as const;
 
 export function App({ initialPath }: AppProps = {}) {
   const registry = useDeviceRegistry();
@@ -416,21 +426,42 @@ function ConnectionBadges({ record }: { record: DeviceRecord }) {
   const lanConnected =
     transport === "http" &&
     (record.connectionState === "online" || record.network?.state === "connected" || record.status?.network.state === "connected");
-  const usbConnected = Boolean(record.serial?.connected);
+  const devdConnected = transport === "devd" && record.connectionState === "online" && !record.serial?.leaseId;
+  const usbConnected = Boolean(record.serial?.connected && !devdConnected);
   return (
     <span className="connection-badges">
       {lanConnected ? <span className="transport-badge http">WiFi</span> : null}
+      {devdConnected ? <span className="transport-badge devd">devd</span> : null}
       {usbConnected ? <span className="transport-badge serial">USB</span> : null}
-      {!lanConnected && !usbConnected ? <span className="transport-badge offline">Offline</span> : null}
+      {!lanConnected && !devdConnected && !usbConnected ? <span className="transport-badge offline">Offline</span> : null}
     </span>
   );
 }
 
-function devdDeviceLabel(device: DevdDevice): string {
-  const identity = device.identity?.device_id;
-  const port = device.port_path ?? device.display_name;
-  const state = device.connection === "connected" ? "connected" : "available";
-  return identity ? `${identity} - ${port} - ${state}` : `${port} - ${state}`;
+function devdDeviceEndpoint(device: DevdDevice): string {
+  if (device.transport === "lan") return device.lan_address ?? device.display_name;
+  return device.port_path ?? device.display_name;
+}
+
+function devdDeviceTransportLabel(device: DevdDevice): string {
+  if (device.transport === "lan") return "LAN";
+  if (device.transport === "mock") return "Mock";
+  return "USB CDC";
+}
+
+function devdDeviceName(device: DevdDevice): string {
+  return device.identity?.device_id ?? device.display_name;
+}
+
+function isConnectableDevdDevice(device: DevdDevice): boolean {
+  if (device.transport === "mock") return true;
+  if (device.transport === "native_serial") return Boolean(device.port_path);
+  if (device.transport !== "lan") return false;
+  return isMainsAegisLanDevice(device) && (device.lan_conflict_addresses?.length ?? 0) === 0;
+}
+
+function isMainsAegisLanDevice(device: DevdDevice): boolean {
+  return device.transport === "lan" && device.identity?.firmware.protocol === "mains-aegis.cdc.v1";
 }
 
 function ConnectPage() {
@@ -445,26 +476,101 @@ function ConnectPage() {
     refreshDevice,
     resetDemo,
   } = useDeviceRegistry();
+  const demoMode = isDemoSeed(new URLSearchParams(window.location.search).get("seed"));
   const [target, setTarget] = useState("");
   const [alias, setAlias] = useState("");
   const [location, setLocation] = useState("");
   const [usbAlias, setUsbAlias] = useState("");
   const [usbLocation, setUsbLocation] = useState("");
-  const [devdTarget, setDevdTarget] = useState("same-origin");
-  const [devdAlias, setDevdAlias] = useState("");
-  const [devdLocation, setDevdLocation] = useState("");
-  const [devdCandidates, setDevdCandidates] = useState<DevdDevice[]>([]);
-  const [selectedDevdDeviceId, setSelectedDevdDeviceId] = useState("");
+  const [devdTarget, setDevdTarget] = useState(demoMode ? "mock:devd" : defaultDevdTarget);
+  const [devdBridgeToken, setDevdBridgeToken] = useState("");
+  const [devdBridgeAuthRequiredState, setDevdBridgeAuthRequiredState] = useState<"unknown" | "required" | "not_required">("unknown");
+  const [devdDevices, setDevdDevices] = useState<DevdDevice[]>([]);
+  const [devdStatus, setDevdStatus] = useState<"checking" | "available" | "auth_required" | "unavailable">("checking");
+  const [devdLastUpdated, setDevdLastUpdated] = useState<string | null>(null);
   const [message, setMessage] = useState<UiFeedback | null>(null);
   const [usbMessage, setUsbMessage] = useState<UiFeedback | null>(null);
   const [devdMessage, setDevdMessage] = useState<UiFeedback | null>(null);
   const [usbFirmwareOverridePending, setUsbFirmwareOverridePending] = useState(false);
-  const [devdFirmwareOverridePending, setDevdFirmwareOverridePending] = useState(false);
+  const [devdFirmwareOverrideMessage, setDevdFirmwareOverrideMessage] = useState<UiFeedback | null>(null);
+  const [devdFirmwareOverrideDeviceId, setDevdFirmwareOverrideDeviceId] = useState<string | null>(null);
+  const [devdConnectingDeviceId, setDevdConnectingDeviceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [usbBusy, setUsbBusy] = useState(false);
   const [devdBusy, setDevdBusy] = useState(false);
   const serialSupported = isWebSerialSupported();
-  const demoMode = isDemoSeed(new URLSearchParams(window.location.search).get("seed"));
+
+  const refreshDevdDiscovery = useCallback(async (options: { clearMessage?: boolean } = {}) => {
+    const devdBaseUrl = normalizeBaseUrl(devdTarget);
+    const trimmedDevdBridgeToken = devdBridgeToken.trim();
+    try {
+      if (options.clearMessage) {
+        setDevdMessage(null);
+        setDevdFirmwareOverrideMessage(null);
+        setDevdFirmwareOverrideDeviceId(null);
+      }
+      saveBridgeAuthToken(devdBaseUrl, trimmedDevdBridgeToken);
+      const authRequired = await bridgeAuthRequired(devdBaseUrl);
+      setDevdBridgeAuthRequiredState(authRequired ? "required" : "not_required");
+      if (authRequired && !trimmedDevdBridgeToken) {
+        setDevdStatus("auth_required");
+        setDevdDevices([]);
+        setDevdMessage(errorFeedback({ code: "bridge_auth_token_required", message: "mains-aegis-devd is reachable but requires an auth token", retryable: false, details: null }));
+        return;
+      }
+      setDevdStatus("checking");
+      const scan = await scanDevdDevices(devdBaseUrl);
+      setDevdDevices(scan.devices.filter((device) => device.transport !== "lan" || isMainsAegisLanDevice(device)));
+      setDevdStatus("available");
+      setDevdLastUpdated(new Date().toISOString());
+      if (!options.clearMessage) setDevdMessage(null);
+    } catch (error) {
+      setDevdStatus("unavailable");
+      setDevdDevices([]);
+      setDevdLastUpdated(null);
+      setDevdMessage(errorFeedback(toErrorEnvelope(error)));
+    }
+  }, [devdBridgeToken, devdTarget]);
+
+  useEffect(() => {
+    setDevdBridgeToken(bridgeAuthToken(normalizeBaseUrl(devdTarget)) ?? "");
+    setDevdMessage(null);
+    setDevdFirmwareOverrideMessage(null);
+    setDevdFirmwareOverrideDeviceId(null);
+  }, [devdTarget]);
+
+  useEffect(() => {
+    let active = true;
+    const devdBaseUrl = normalizeBaseUrl(devdTarget);
+    setDevdBridgeAuthRequiredState("unknown");
+    void bridgeAuthRequired(devdBaseUrl).then((required) => {
+      if (!active) return;
+      setDevdBridgeAuthRequiredState(required ? "required" : "not_required");
+    });
+    return () => {
+      active = false;
+    };
+  }, [devdTarget]);
+
+  useEffect(() => {
+    void refreshDevdDiscovery();
+  }, [refreshDevdDiscovery]);
+
+  useEffect(() => {
+    if (devdStatus === "auth_required") return undefined;
+    const interval = window.setInterval(() => void refreshDevdDiscovery(), 10000);
+    return () => window.clearInterval(interval);
+  }, [devdStatus, refreshDevdDiscovery]);
+
+  useEffect(() => {
+    if (devdStatus !== "available") return undefined;
+    const devdBaseUrl = normalizeBaseUrl(devdTarget);
+    const stream = subscribeDevdDeviceEvents(devdBaseUrl, {
+      onEvent: () => void refreshDevdDiscovery(),
+      onError: () => undefined,
+    });
+    return () => stream.close();
+  }, [devdStatus, devdTarget, refreshDevdDiscovery]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -499,42 +605,36 @@ function ConnectPage() {
     }
   }
 
-  async function onDevdSubmit(event: FormEvent) {
-    event.preventDefault();
-    setDevdBusy(true);
-    setDevdMessage(null);
-    let devdDeviceId = selectedDevdDeviceId || undefined;
-    try {
-      const scan = await scanDevdDevices(normalizeBaseUrl(devdTarget));
-      const candidates = scan.devices.filter((device) => device.transport === "native_serial" && device.port_path);
-      setDevdCandidates(candidates);
-      if (!devdDeviceId && candidates.length === 1) {
-        devdDeviceId = candidates[0].id;
-      }
-      if (!devdDeviceId && candidates.length > 1) {
-        setDevdBusy(false);
-        setDevdMessage(errorFeedback({ code: "device_selection_required", message: "Multiple USB CDC devices are available. Select one device before connecting devd.", retryable: false, details: { devices: candidates } }));
-        return;
-      }
-    } catch (error) {
-      const envelope = toErrorEnvelope(error);
-      setDevdBusy(false);
-      setDevdMessage(errorFeedback(envelope));
+  async function onDevdConnect(device: DevdDevice, ignoreFirmwareMismatch = false) {
+    if (!isConnectableDevdDevice(device)) {
+      setDevdMessage(errorFeedback({ code: "device_not_connectable", message: "This devd device is not ready for Web connection yet", retryable: true, details: { device } }));
       return;
     }
-    const result = await addDevdDevice({ target: devdTarget, alias: devdAlias, location: devdLocation, devdDeviceId, ignoreFirmwareMismatch: devdFirmwareOverridePending });
+    setDevdConnectingDeviceId(device.id);
+    setDevdBusy(true);
+    setDevdMessage(null);
+    setDevdFirmwareOverrideMessage(null);
+    setDevdFirmwareOverrideDeviceId(null);
+    const result = await addDevdDevice({
+      target: devdTarget,
+      bridgeAuthToken: devdBridgeToken.trim(),
+      devdDeviceId: device.id,
+      ignoreFirmwareMismatch,
+    });
     setDevdBusy(false);
+    setDevdConnectingDeviceId(null);
     if (result.ok) {
-      setDevdFirmwareOverridePending(false);
-      setDevdAlias("");
-      setDevdLocation("");
-      setDevdCandidates([]);
-      setSelectedDevdDeviceId("");
+      setDevdFirmwareOverrideDeviceId(null);
+      setDevdFirmwareOverrideMessage(null);
       setDevdMessage(successFeedback(`devd connected ${result.record.target.alias}`));
       navigate(deviceHref(result.record.target.deviceId, "settings"));
+      void refreshDevdDiscovery();
     } else {
-      setDevdFirmwareOverridePending(result.error?.code === "firmware_artifact_mismatch");
-      setDevdMessage(errorFeedback(result.error));
+      const feedback = errorFeedback(result.error);
+      const firmwareMismatch = result.error?.code === "firmware_artifact_mismatch";
+      setDevdFirmwareOverrideDeviceId(firmwareMismatch ? device.id : null);
+      setDevdFirmwareOverrideMessage(firmwareMismatch ? feedback : null);
+      setDevdMessage(feedback);
     }
   }
 
@@ -546,19 +646,144 @@ function ConnectPage() {
     }
   }
 
+  const connectableDevdDevices = devdDevices.filter((device) => isConnectableDevdDevice(device));
+  const visibleDevdMessage = devdFirmwareOverrideMessage ?? devdMessage;
+  const devdSummary =
+    devdStatus === "checking"
+      ? "Scanning USB CDC and LAN inventory"
+      : devdStatus === "available"
+        ? `${connectableDevdDevices.length} connectable, ${devdDevices.length} discovered`
+        : devdStatus === "auth_required"
+          ? "Auth token required"
+          : "Not reachable";
+  const showLanFallback = devdStatus === "unavailable";
+  const devdLastUpdatedLabel = devdLastUpdated ? timeAgo(devdLastUpdated) : "not yet";
+
   return (
     <section className="page-flow connect-wide">
       <div className="section-heading">
         <h2>Connect devices</h2>
-        <p>USB CDC is the control path. LAN targets remain read-only status sources.</p>
+        <p>When mains-aegis-devd is reachable, USB CDC and LAN devices are discovered automatically.</p>
       </div>
 
-      <div className="connect-grid" data-evidence-target="usb-connect">
+      <section className="devd-discovery-panel" data-evidence-target="devd-discovery">
+        <header className="devd-discovery-header">
+          <div>
+            <span className="eyebrow">mains-aegis-devd</span>
+            <h3><Server size={19} /> Automatic device discovery</h3>
+            <p>{devdStatus === "unavailable" ? "Manual LAN entry is available below because devd cannot be reached." : "USB and LAN inventory refreshes automatically while this page is open."}</p>
+          </div>
+          <div className="devd-discovery-status">
+            <span className={`transport-badge ${devdStatus === "available" ? "devd" : devdStatus === "unavailable" ? "offline" : "adapter"}`}>{devdSummary}</span>
+            <button className="icon-button" type="button" aria-label="Refresh devd device list" title="Refresh devd device list" onClick={() => void refreshDevdDiscovery({ clearMessage: true })} disabled={devdBusy}>
+              <RefreshCw size={16} />
+            </button>
+          </div>
+        </header>
+
+        {devdBridgeAuthRequiredState === "required" || devdBridgeToken.trim() ? (
+          <div className="devd-auth-row">
+            <label>
+              devd auth token
+              <input
+                {...credentiallessInputProps}
+                name="devd-auth-token"
+                value={devdBridgeToken}
+                onChange={(event) => {
+                  setDevdBridgeToken(event.target.value);
+                  setDevdMessage(null);
+                  setDevdFirmwareOverrideMessage(null);
+                  setDevdFirmwareOverrideDeviceId(null);
+                }}
+                placeholder="Required because this devd bridge is protected"
+                autoCapitalize="none"
+              />
+            </label>
+            <button className="secondary-button" type="button" onClick={() => void refreshDevdDiscovery({ clearMessage: true })}>
+              <RefreshCw size={16} /> Apply token
+            </button>
+          </div>
+        ) : null}
+
+        <div className="devd-device-list" aria-live="polite">
+          {devdStatus === "checking" && devdDevices.length === 0 ? (
+            <div className="devd-empty-state">
+              <Loader2 size={18} className="spin-icon" />
+              <strong>Scanning local devd inventory</strong>
+              <span>Checking USB CDC bindings and LAN devices.</span>
+            </div>
+          ) : null}
+          {devdStatus === "available" && devdDevices.length === 0 ? (
+            <div className="devd-empty-state">
+              <Radio size={18} />
+              <strong>No devices discovered yet</strong>
+              <span>devd is reachable. Connect a USB CDC device or wait for LAN discovery.</span>
+            </div>
+          ) : null}
+          {devdDevices.map((device) => {
+            const identityDeviceId = device.identity?.device_id;
+            const existingRecord = identityDeviceId ? records.find((record) => record.target.deviceId === identityDeviceId) : null;
+            const connectable = isConnectableDevdDevice(device);
+            const buttonLabel = existingRecord ? "Open" : device.connection === "connected" ? "Attach" : "Connect";
+            const showOverride = devdFirmwareOverrideDeviceId === device.id;
+            const isConnectingDevice = devdConnectingDeviceId === device.id;
+            return (
+              <article className={`devd-device-card ${connectable ? "" : "is-muted"}`} key={device.id}>
+                <div className="devd-device-main">
+                  <span className={`transport-badge ${device.transport === "lan" ? "http" : device.transport === "mock" ? "adapter" : "serial"}`}>{devdDeviceTransportLabel(device)}</span>
+                  <div>
+                    <h4>{devdDeviceName(device)}</h4>
+                    <p>{devdDeviceEndpoint(device)}</p>
+                  </div>
+                </div>
+                <dl className="devd-device-meta">
+                  <div>
+                    <dt>Connection</dt>
+                    <dd>{device.connection}</dd>
+                  </div>
+                  <div>
+                    <dt>Firmware</dt>
+                    <dd>{device.identity?.firmware.build_id ?? "identity pending"}</dd>
+                  </div>
+                  <div>
+                    <dt>Logs</dt>
+                    <dd>{device.log_decode.status}</dd>
+                  </div>
+                </dl>
+                <div className="devd-device-actions">
+                  {existingRecord ? (
+                    <button className="primary-button small" type="button" onClick={() => navigate(deviceDefaultHref(existingRecord))}>
+                      {buttonLabel}
+                    </button>
+                  ) : (
+                    <button className="primary-button small" type="button" disabled={devdBusy || !connectable} onClick={() => void onDevdConnect(device)}>
+                      <ButtonLabel busy={isConnectingDevice} busyText="Connecting" text={buttonLabel} />
+                    </button>
+                  )}
+                  {showOverride ? (
+                    <button className="secondary-button danger-action" type="button" disabled={devdBusy} onClick={() => void onDevdConnect(device, true)}>
+                      Ignore warning
+                    </button>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+        <footer className="devd-discovery-footer">
+          <span>Last refresh: {devdLastUpdatedLabel}</span>
+          <span>Events trigger refresh when the bridge supports `/api/v1/devices/events`; polling remains active.</span>
+        </footer>
+        {visibleDevdMessage?.tone === "error" ? <ConnectionCallout id="devd-connect-message" message={visibleDevdMessage.message} /> : null}
+        {visibleDevdMessage?.tone === "success" ? <FeedbackMessage feedback={visibleDevdMessage} /> : null}
+      </section>
+
+      <div className="connect-grid secondary-connect-grid" data-evidence-target="usb-connect">
         <section className="connect-panel usb-panel">
           <header className="connect-panel-header">
             <div>
-              <h3><Usb size={18} /> USB CDC</h3>
-              <p>{serialSupported ? "Chromium Web Serial available" : "Web Serial unavailable in this browser"}</p>
+              <h3><Usb size={18} /> Web Serial</h3>
+              <p>{serialSupported ? "Browser-local fallback for USB CDC devices when devd is not available" : "Web Serial unavailable in this browser"}</p>
             </div>
             <span className={`transport-badge ${serialSupported ? "serial" : "offline"}`}>{serialSupported ? "ready" : "unsupported"}</span>
           </header>
@@ -579,7 +804,7 @@ function ConnectPage() {
                 onClick={() => void onUsbConnect()}
                 aria-describedby={usbMessage?.tone === "error" ? "usb-connect-message" : undefined}
               >
-                <ButtonLabel icon={Usb} busy={usbBusy} busyText="Connecting" text="Connect USB" />
+                <ButtonLabel icon={Usb} busy={usbBusy} busyText="Connecting" text="Connect Web Serial" />
               </button>
               {usbMessage?.tone === "error" ? <ConnectionCallout id="usb-connect-message" message={usbMessage.message} /> : null}
               {demoMode ? (
@@ -597,109 +822,88 @@ function ConnectPage() {
           </div>
         </section>
 
-        <section className="connect-panel devd-panel">
+        <section className="connect-panel devd-endpoint-panel">
           <header className="connect-panel-header">
             <div>
-              <h3><Server size={18} /> mains-aegis-devd</h3>
-              <p>Local daemon for USB control, logs, and firmware tools</p>
+              <h3><Settings size={18} /> Discovery source</h3>
+              <p>Same-origin is used by the bundled Web/devd bridge.</p>
             </div>
             <span className="transport-badge devd">devd</span>
           </header>
-          <form className="connect-form compact" onSubmit={onDevdSubmit}>
+          <div className="connect-form compact">
             <label>
               devd URL
               <input
-                name="devd-target"
+                {...credentiallessInputProps}
+                name="devd-endpoint"
                 value={devdTarget}
                 onChange={(event) => {
                   setDevdTarget(event.target.value);
-                  setDevdCandidates([]);
-                  setSelectedDevdDeviceId("");
                 }}
                 placeholder="same-origin"
+                inputMode="url"
+                autoCapitalize="none"
                 required
               />
             </label>
-            {devdCandidates.length > 1 ? (
-              <label>
-                USB device
-                <Select value={selectedDevdDeviceId} onValueChange={setSelectedDevdDeviceId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select USB device" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {devdCandidates.map((device) => (
-                        <SelectItem key={device.id} value={device.id}>
-                          {devdDeviceLabel(device)}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </label>
-            ) : null}
-            <label>
-              Alias
-              <input name="devd-alias" value={devdAlias} onChange={(event) => setDevdAlias(event.target.value)} placeholder="Lab bench devd" />
-            </label>
-            <label>
-              Location
-              <input name="devd-location" value={devdLocation} onChange={(event) => setDevdLocation(event.target.value)} placeholder="Bench 1" />
-            </label>
             <div className="form-actions with-callout">
-              <button className="primary-button" type="submit" disabled={devdBusy}>
-                <ButtonLabel icon={Server} busy={devdBusy} busyText="Connecting" text="Connect devd" />
+              <button className="secondary-button" type="button" onClick={() => void refreshDevdDiscovery({ clearMessage: true })}>
+                <RefreshCw size={16} /> Refresh discovery
               </button>
-              {devdFirmwareOverridePending ? (
-                <button className="secondary-button danger-action" type="submit" disabled={devdBusy}>
-                  Ignore warning and connect
-                </button>
-              ) : null}
-              {devdMessage?.tone === "error" ? <ConnectionCallout id="devd-connect-message" message={devdMessage.message} /> : null}
             </div>
-          </form>
-          {devdMessage?.tone === "success" ? <FeedbackMessage feedback={devdMessage} /> : null}
+          </div>
         </section>
 
-        <section className="connect-panel">
+        <section className={`connect-panel lan-fallback-panel ${showLanFallback ? "is-active" : ""}`}>
           <header className="connect-panel-header">
             <div>
-              <h3><Globe2 size={18} /> LAN status</h3>
-              <p>HTTP/SSE identity, network, and status probe</p>
+              <h3><Globe2 size={18} /> LAN device API</h3>
+              <p>{showLanFallback ? "Fallback for direct hardware HTTP/SSE when devd is unreachable" : "Hidden during devd-backed discovery"}</p>
             </div>
-            <span className="transport-badge http">read-only</span>
+            <span className={`transport-badge ${showLanFallback ? "http" : "offline"}`}>{showLanFallback ? "fallback" : "standby"}</span>
           </header>
-          <form className="connect-form compact" onSubmit={onSubmit}>
-            <label>
-              Target
-              <input
-                name="device-target"
-                value={target}
-                onChange={(event) => setTarget(event.target.value)}
-                placeholder="mains-aegis-a1b2c3.local or 192.168.31.42"
-                required
-              />
-            </label>
-            <label>
-              Alias
-              <input name="device-alias" value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="Lab rack A" />
-            </label>
-            <label>
-              Location
-              <input name="device-location" value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Bench 1" />
-            </label>
-            <div className="form-actions with-callout">
-              <button className="primary-button" type="submit" disabled={busy}>
-                <ButtonLabel busy={busy} busyText="Connecting" text="Add LAN" />
-              </button>
-              {message?.tone === "error" ? <ConnectionCallout id="lan-connect-message" message={message.message} /> : null}
-              {demoMode ? (
-                <button className="secondary-button" type="button" onClick={resetDemo}>Reset demo fleet</button>
-              ) : null}
+          {showLanFallback ? (
+            <>
+              <form className="connect-form compact" onSubmit={onSubmit} autoComplete="off">
+                <label>
+                  Target
+                  <input
+                    {...credentiallessInputProps}
+                    name="lan-device-endpoint"
+                    value={target}
+                    onChange={(event) => setTarget(event.target.value)}
+                    placeholder="mains-aegis-a1b2c3.local or 192.168.31.42"
+                    inputMode="url"
+                    autoCapitalize="none"
+                    required
+                  />
+                </label>
+                <label>
+                  Alias
+                  <input {...credentiallessInputProps} name="lan-device-alias" value={alias} onChange={(event) => setAlias(event.target.value)} placeholder="Lab rack A" />
+                </label>
+                <label>
+                  Location
+                  <input {...credentiallessInputProps} name="lan-device-location" value={location} onChange={(event) => setLocation(event.target.value)} placeholder="Bench 1" />
+                </label>
+                <div className="form-actions with-callout">
+                  <button className="primary-button" type="submit" disabled={busy}>
+                    <ButtonLabel busy={busy} busyText="Connecting" text="Add LAN" />
+                  </button>
+                  {message?.tone === "error" ? <ConnectionCallout id="lan-connect-message" message={message.message} /> : null}
+                  {demoMode ? (
+                    <button className="secondary-button" type="button" onClick={resetDemo}>Reset demo fleet</button>
+                  ) : null}
+                </div>
+              </form>
+              {message?.tone === "success" ? <FeedbackMessage feedback={message} /> : null}
+            </>
+          ) : (
+            <div className="lan-standby-note">
+              <Server size={16} />
+              <span>devd is handling LAN discovery. Manual entry stays disabled to avoid duplicate targets.</span>
             </div>
-          </form>
-          {message?.tone === "success" ? <FeedbackMessage feedback={message} /> : null}
+          )}
         </section>
       </div>
 
@@ -761,12 +965,16 @@ export function ConnectionCallout({ id, message }: { id: string; message: string
       ? "USB port is in use"
       : code === "firmware_artifact_mismatch"
         ? "Firmware mismatch"
+        : code === "devd_bridge_requires_devd_panel"
+          ? "Use the devd panel"
         : "Connection failed";
   const guidance =
     code === "serial_port_unavailable"
       ? "Disconnect the devd session or close the app using this CDC port, then retry."
       : code === "firmware_artifact_mismatch"
         ? "Select matching firmware, flash the current build, or explicitly ignore this warning to continue."
+      : code === "devd_bridge_requires_devd_panel"
+        ? "LAN status connects directly to hardware over the device HTTP API. Use the devd panel only for mains-aegis-devd bridge endpoints."
       : "Check the selected device and try again.";
 
   return (
@@ -943,6 +1151,8 @@ function PowerPage({ record }: { record: DeviceRecord }) {
 
 function BatteryPage({ record }: { record: DeviceRecord }) {
   const battery = record.status?.battery;
+  const cells = normalizeCellVoltages(battery?.cell_mv);
+  const cellModel = buildCellBalanceModel(cells, battery);
   return (
     <section className="page-flow">
       <DeviceStatusBand record={record} />
@@ -953,11 +1163,37 @@ function BatteryPage({ record }: { record: DeviceRecord }) {
           <MetricLine label="Pack voltage" value={formatVoltage(battery?.pack_mv)} />
           <MetricLine label="Current" value={formatCurrent(battery?.current_ma)} />
         </InfoPanel>
+        <InfoPanel title="Cell voltages" icon={Activity}>
+          <div className="battery-balance-summary">
+            <span className={`balance-delta balance-delta-${cellModel.severity}`}>
+              Delta {formatMillivolts(cellModel.deltaMv)}
+            </span>
+            <span>{cellModel.balanceLabel}</span>
+            <span>Start {formatMillivolts(cellModel.startDeltaMv)}</span>
+          </div>
+          <div className="battery-cell-grid" aria-label="BMS cell voltages">
+            {cellModel.cells.map((cell, index) => (
+              <div className={`battery-cell-tile battery-cell-${cell.severity}`} key={index}>
+                <span>
+                  C{index + 1}
+                  {cell.isBalancing ? <em>BAL</em> : null}
+                </span>
+                <strong>{formatVoltage(cell.value)}</strong>
+                <small>{formatCellOffset(cell.offsetMv)}</small>
+              </div>
+            ))}
+          </div>
+        </InfoPanel>
         <InfoPanel title="BMS readiness" icon={Cpu}>
           <MetricLine label="No battery" value={boolLabel(battery?.no_battery, "yes", "no")} />
           <MetricLine label="Discharge ready" value={boolLabel(battery?.discharge_ready, "yes", "no")} />
           <MetricLine label="Recovery pending" value={boolLabel(battery?.recovery_pending, "yes", "no")} />
           <MetricLine label="Last result" value={battery?.last_result ?? "--"} />
+        </InfoPanel>
+        <InfoPanel title="BMS MOS" icon={Cpu}>
+          <MetricLine label="CHG MOS" value={fetLabel(battery?.charge_fet_on)} />
+          <MetricLine label="DSG MOS" value={fetLabel(battery?.discharge_fet_on)} />
+          <MetricLine label="PCHG MOS" value={fetLabel(battery?.precharge_fet_on)} />
         </InfoPanel>
         <InfoPanel title="Issue detail" icon={AlertTriangle}>
           <p className="panel-note">{battery?.issue_detail ?? "No active battery issue reported by the v1 status snapshot."}</p>
@@ -965,6 +1201,85 @@ function BatteryPage({ record }: { record: DeviceRecord }) {
       </div>
     </section>
   );
+}
+
+function normalizeCellVoltages(cells: Array<number | null> | null | undefined): Array<number | null> {
+  return [0, 1, 2, 3].map((index) => cells?.[index] ?? null);
+}
+
+type CellBalanceModel = {
+  cells: Array<{ value: number | null; offsetMv: number | null; severity: CellDeltaSeverity; isBalancing: boolean }>;
+  deltaMv: number | null;
+  startDeltaMv: number | null;
+  severity: CellDeltaSeverity;
+  balanceLabel: string;
+};
+
+type CellDeltaSeverity = "unknown" | "ok" | "watch" | "warning" | "critical";
+
+function buildCellBalanceModel(cells: Array<number | null>, battery: UpsStatus["battery"] | undefined): CellBalanceModel {
+  const numericCells = cells.filter((cell): cell is number => typeof cell === "number");
+  const minCell = numericCells.length > 0 ? Math.min(...numericCells) : null;
+  const computedDelta = numericCells.length > 1 ? Math.max(...numericCells) - Math.min(...numericCells) : null;
+  const deltaMv = battery?.cell_delta_mv ?? computedDelta;
+  const startDeltaMv = battery?.balance_min_start_delta_mv ?? (battery?.balance_cfg_match === true ? 3 : null);
+  const balanceMask = battery?.balance_mask ?? null;
+  return {
+    cells: cells.map((value, index) => {
+      const offsetMv = value !== null && minCell !== null ? value - minCell : null;
+      return {
+        value,
+        offsetMv,
+        severity: cellDeltaSeverity(offsetMv, startDeltaMv),
+        isBalancing: isBalanceCellActive(balanceMask, index),
+      };
+    }),
+    deltaMv,
+    startDeltaMv,
+    severity: cellDeltaSeverity(deltaMv, startDeltaMv),
+    balanceLabel: balanceStateLabel(battery),
+  };
+}
+
+function cellDeltaSeverity(deltaMv: number | null, startDeltaMv: number | null): CellDeltaSeverity {
+  if (deltaMv === null) return "unknown";
+  const threshold = startDeltaMv ?? 3;
+  if (deltaMv <= threshold) return "ok";
+  if (deltaMv <= 25) return "watch";
+  if (deltaMv <= 200) return "warning";
+  return "critical";
+}
+
+function balanceStateLabel(battery: UpsStatus["battery"] | undefined): string {
+  if (!battery) return "BAL --";
+  if (battery.balance_enabled === false) return "BAL OFF";
+  if (battery.balance_enabled === true && battery.balance_active === false) return "BAL IDLE";
+  if (battery.balance_active === true) {
+    if (typeof battery.balance_cell === "number") return `BAL C${battery.balance_cell}`;
+    const mask = battery.balance_mask ?? 0;
+    if (mask !== 0 && (mask & (mask - 1)) !== 0) return "BAL MULTI";
+    return "BAL ACTIVE";
+  }
+  return "BAL --";
+}
+
+function isBalanceCellActive(mask: number | null, index: number): boolean {
+  return mask !== null && (mask & (1 << index)) !== 0;
+}
+
+function formatMillivolts(value: number | null | undefined): string {
+  return typeof value === "number" ? `${value} mV` : "--";
+}
+
+function formatCellOffset(value: number | null): string {
+  if (value === null) return "--";
+  return value === 0 ? "baseline" : `+${value} mV`;
+}
+
+function fetLabel(value: boolean | null | undefined): string {
+  if (value === true) return "on";
+  if (value === false) return "off";
+  return "--";
 }
 
 function ThermalPage({ record }: { record: DeviceRecord }) {
@@ -1022,17 +1337,21 @@ function DeviceInfoPage({ record }: { record: DeviceRecord }) {
 
 function SettingsPage({ record }: { record: DeviceRecord }) {
   const { sendWifiConfig, clearWifiConfig, setManualChargePrefs } = useDeviceRegistry();
-  const settings = record.serial?.safeSettings;
-  const [ssid, setSsid] = useState(settings?.wifi_ssid ?? "");
+  const settings = record.settings;
+  const [ssid, setSsid] = useState(settings?.wifi.ssid ?? "");
   const [psk, setPsk] = useState("");
-  const [manualPrefs, setManualPrefs] = useState<SafeSettingsState["manual_charge"]>(
-    settings?.manual_charge ?? { target: "full_100", speed: "ma_500", timer_h: 2 },
+  const [manualPrefs, setManualPrefs] = useState<DeviceSettings["manual_charge"]>(
+    settings?.manual_charge ?? ({ target: "full_100", speed: "ma_500", timer_h: 2 } as DeviceSettings["manual_charge"]),
   );
   const [message, setMessage] = useState<UiFeedback | null>(null);
   const [wifiMessage, setWifiMessage] = useState<UiFeedback | null>(null);
   const [wifiProgress, setWifiProgress] = useState<WifiProvisioningProgress | null>(null);
   const [busy, setBusy] = useState<"wifi-save" | "wifi-clear" | "manual" | null>(null);
   const usbReady = Boolean(record.serial?.connected);
+  const lanReady = (record.target.transport ?? "http") === "http" && Boolean(record.settings);
+  const devdReady = record.target.transport === "devd" && Boolean(record.settings);
+  const settingsReady = usbReady || lanReady || devdReady;
+  const transportLabel = lanReady && !usbReady ? "LAN" : "hardware";
   const wifiValidationMessage =
     !ssid.trim()
       ? "Save requires an SSID."
@@ -1048,7 +1367,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   useEffect(() => {
     if (!settings) return;
     setManualPrefs(settings.manual_charge);
-    if (settings.wifi_ssid) setSsid(settings.wifi_ssid);
+    if (settings.wifi.ssid) setSsid(settings.wifi.ssid);
   }, [settings]);
 
   useEffect(() => {
@@ -1095,16 +1414,16 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
     setMessage(result.ok ? successFeedback("Manual charge preferences updated") : errorFeedback(result.error));
   }
 
-  if (!usbReady) {
+  if (!settingsReady) {
     return (
       <section className="page-flow">
         <DeviceStatusBand record={record} />
         <section className="empty-state">
-          <Usb size={28} />
-          <h2>USB control path required</h2>
-          <p>Safe settings and WiFi provisioning require Web Serial or mains-aegis-devd.</p>
+          <SlidersHorizontal size={28} />
+          <h2>Settings unavailable</h2>
+          <p>Refresh this device or connect USB / mains-aegis-devd before changing settings.</p>
           <button className="primary-button" type="button" onClick={() => navigate("/connect")}>
-            Connect USB
+            Connect device
           </button>
         </section>
       </section>
@@ -1148,7 +1467,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
                 required
               />
             </label>
-            <div id="wifi-form-help" className="secret-note"><KeyRound size={15} /> PSK is written over USB and cleared from the form after submit.</div>
+            <div id="wifi-form-help" className="secret-note"><KeyRound size={15} /> PSK is written over {transportLabel} and cleared from the form after submit.</div>
             {wifiValidationMessage ? <p id="wifi-validation-help" className="field-help">{wifiValidationMessage}</p> : null}
             <div className="form-actions wifi-actions">
               <span className="wifi-save-anchor">
@@ -1182,7 +1501,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
         <section className="info-panel settings-panel">
           <header>
             <SlidersHorizontal size={18} />
-            <h2>Safe settings</h2>
+            <h2>Device settings</h2>
           </header>
           <form className="settings-form" onSubmit={onManualPrefsSubmit}>
             <SettingsSegmentedControl
@@ -1193,7 +1512,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
                 ["rsoc_80", "80%"],
                 ["full_100", "100%"],
               ]}
-              onChange={(target) => setManualPrefs((current) => ({ ...current, target: target as SafeSettingsState["manual_charge"]["target"] }))}
+              onChange={(target) => setManualPrefs((current) => ({ ...current, target: target as DeviceSettings["manual_charge"]["target"] }))}
             />
             <SettingsSegmentedControl
               label="Charge speed"
@@ -1203,7 +1522,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
                 ["ma_500", "500mA"],
                 ["ma_1000", "1A"],
               ]}
-              onChange={(speed) => setManualPrefs((current) => ({ ...current, speed: speed as SafeSettingsState["manual_charge"]["speed"] }))}
+              onChange={(speed) => setManualPrefs((current) => ({ ...current, speed: speed as DeviceSettings["manual_charge"]["speed"] }))}
             />
             <SettingsSegmentedControl
               label="Timer"
@@ -1257,15 +1576,10 @@ function ApiDebugPage({ record }: { record: DeviceRecord }) {
   const payload = {
     identity: record.identity,
     network: record.network,
+    settings: record.settings,
     status: record.status,
     error: record.error,
-    serial: record.serial
-      ? {
-          connected: record.serial.connected,
-          protocol: record.serial.protocol,
-          safeSettings: record.serial.safeSettings,
-        }
-      : null,
+    serial: record.serial ? { connected: record.serial.connected, protocol: record.serial.protocol } : null,
   };
   return (
     <section className="page-flow">
@@ -1289,6 +1603,7 @@ function ApiDebugPage({ record }: { record: DeviceRecord }) {
 function DeviceStatusBand({ record }: { record: DeviceRecord }) {
   const status = record.status;
   const severity = deviceSeverity(record);
+  const stream = streamPresentation(record);
   return (
     <div className="status-band status-band-color-warm">
       <div className="live-cell">
@@ -1304,8 +1619,11 @@ function DeviceStatusBand({ record }: { record: DeviceRecord }) {
         <strong className="live-value">{formatPercent(status?.battery.soc_pct)}</strong>
       </div>
       <div className="live-cell">
-        <span className="eyebrow">Stream</span>
-        <strong className="live-value">{record.streamState}</strong>
+        <span className="eyebrow">Data</span>
+        <strong className="live-value">{stream.label}</strong>
+        <span className={`live-detail tone-${stream.tone}`}>
+          {stream.detail}
+        </span>
       </div>
       <span className={`severity-badge live-state severity-${severity}`}>{severity}</span>
     </div>
@@ -1326,6 +1644,64 @@ function InfoPanel({ title, icon: Icon, children }: { title: string; icon: typeo
 
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+type StreamPresentation = {
+  label: string;
+  detail: string;
+  tone: "ok" | "info" | "warning" | "critical" | "offline";
+};
+
+function streamPresentation(record: DeviceRecord): StreamPresentation {
+  const freshness = record.lastUpdated ? `, updated ${timeAgo(record.lastUpdated)}` : "";
+
+  if (record.connectionState === "offline") {
+    return {
+      label: "Offline",
+      detail: record.error?.message ?? "No recent device data",
+      tone: "offline",
+    };
+  }
+
+  if (record.connectionState === "connecting") {
+    return {
+      label: "Connecting",
+      detail: "Waiting for the first device response",
+      tone: "info",
+    };
+  }
+
+  if (record.streamState === "error") {
+    return {
+      label: record.status ? "Live data" : "Connection error",
+      detail: record.status
+        ? `Transport reconnecting, polling fallback${freshness}`
+        : record.error?.message ?? `Stream error${freshness}`,
+      tone: record.status ? "warning" : "critical",
+    };
+  }
+
+  if (record.streamState === "polling") {
+    return {
+      label: record.status ? "Live data" : "Waiting",
+      detail: record.status ? `Polling fallback${freshness}` : `Polling for device data${freshness}`,
+      tone: record.status ? "info" : "warning",
+    };
+  }
+
+  if (record.streamState === "streaming" || record.streamState === "idle") {
+    return {
+      label: "Live",
+      detail: `${record.streamState}${freshness}`,
+      tone: "ok",
+    };
+  }
+
+  return {
+    label: "Unknown",
+    detail: `${record.streamState}${freshness}`,
+    tone: "info",
+  };
 }
 
 function Metric({ label, value, tone = "neutral" }: { label: string; value: number; tone?: "neutral" | "critical" | "warning" | "offline" | "ok" }) {

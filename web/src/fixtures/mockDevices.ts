@@ -1,4 +1,4 @@
-import type { DeviceRecord, DeviceTarget, Identity, NetworkSummary, SafeSettingsState, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
+import type { DeviceRecord, DeviceSettings, DeviceTarget, Identity, NetworkSummary, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 
 type MockDefinition = {
   target: DeviceTarget;
@@ -96,8 +96,19 @@ function status(
       pack_mv: soc === null ? null : 15260,
       current_ma: mode === "backup" ? -380 : 180,
       soc_pct: soc,
+      cell_mv: soc === null ? [null, null, null, null] : [3812, 3817, 3809, 3822],
+      cell_delta_mv: soc === null ? null : 13,
+      balance_enabled: soc !== null,
+      balance_cfg_match: true,
+      balance_active: soc !== null,
+      balance_mask: soc === null ? null : 0b1010,
+      balance_cell: null,
+      balance_min_start_delta_mv: 3,
       no_battery: false,
       discharge_ready: mode !== "fault",
+      charge_fet_on: mode !== "backup" && mode !== "fault",
+      discharge_fet_on: mode !== "fault",
+      precharge_fet_on: false,
       issue_detail: null,
       recovery_pending: false,
       last_result: null,
@@ -534,7 +545,7 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
       requestId: "web-settings-002",
       target: "settings",
       summary: "apply manual charge preference",
-      payload: "{\"type\":\"request\",\"request_id\":\"web-settings-002\",\"target\":\"settings.safe.update\",\"manual_charge\":{\"target\":\"rsoc_80\",\"speed\":\"ma_500\",\"timer\":\"h_2\"}}",
+      payload: "{\"type\":\"request\",\"request_id\":\"web-settings-002\",\"op\":\"set_manual_charge_prefs\",\"target\":\"rsoc_80\",\"speed\":\"ma_500\",\"timer_h\":2}",
     },
     {
       id: "mock-usb-trace-8",
@@ -545,7 +556,7 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
       requestId: "web-settings-002",
       target: "settings",
       summary: "manual charge preference accepted",
-      payload: "{\"type\":\"response\",\"request_id\":\"web-settings-002\",\"ok\":true,\"target\":\"settings.safe.update\"}",
+      payload: "{\"type\":\"response\",\"request_id\":\"web-settings-002\",\"ok\":true,\"result\":{\"manual_charge_prefs\":\"updated\"}}",
     },
     {
       id: "mock-usb-trace-9",
@@ -735,11 +746,11 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
             frameType: "request",
             requestId,
             target: "settings",
-            summary: `safe settings dry-run ${sample}`,
+            summary: `settings update request ${sample}`,
             payload: JSON.stringify({
               type: "request",
               request_id: requestId,
-              target: "settings.safe.update",
+              op: "set_log_level",
               display: { log_level: sample % 3 === 0 ? "trace" : "debug" },
             }),
           };
@@ -752,11 +763,11 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
             frameType: index % 24 === 7 ? "error" : "response",
             requestId,
             target: "settings",
-            summary: index % 24 === 7 ? `settings validation warning ${sample}` : `safe settings accepted ${sample}`,
+            summary: index % 24 === 7 ? `settings validation warning ${sample}` : `settings update accepted ${sample}`,
             payload: JSON.stringify(
               index % 24 === 7
                 ? { type: "error", request_id: requestId, code: "demo_validation", message: "demo warning sample" }
-                : { type: "response", request_id: requestId, ok: true, target: "settings.safe.update" },
+                : { type: "response", request_id: requestId, ok: true, result: { log_level: sample % 3 === 0 ? "trace" : "debug" } },
             ),
           };
       }
@@ -766,6 +777,7 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
     target,
     identity,
     network: identity.network,
+    settings: defaultMockDeviceSettings(),
     status: {
       ...base.status,
       network: {
@@ -784,7 +796,6 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
       protocol: "mains-aegis.cdc.v1",
       logs: serialLogs,
       trace: serialTrace,
-      safeSettings: defaultMockSafeSettings(),
     },
   };
 }
@@ -850,6 +861,7 @@ export function makeMockDevdRecord(options: { baseUrl?: string; bound?: boolean 
     target,
     identity,
     network,
+    settings: defaultMockDeviceSettings(),
     status: deviceStatus,
     connectionState: "online",
     streamState: "polling",
@@ -863,6 +875,7 @@ function recordFromDefinition(mock: MockDefinition): DeviceRecord {
     target: mock.target,
     identity: mock.identity,
     network: mock.network,
+    settings: null,
     status: mock.status,
     connectionState: mock.connectionState,
     streamState: mock.connectionState === "online" ? "streaming" : "polling",
@@ -871,10 +884,12 @@ function recordFromDefinition(mock: MockDefinition): DeviceRecord {
   };
 }
 
-function defaultMockSafeSettings(): SafeSettingsState {
+function defaultMockDeviceSettings(): DeviceSettings {
   return {
-    wifi_configured: false,
-    wifi_ssid: null,
+    wifi: {
+      configured: false,
+      ssid: null,
+    },
     log_level: "info",
     manual_charge: {
       target: "full_100",

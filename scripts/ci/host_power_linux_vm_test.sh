@@ -6,7 +6,9 @@ work_dir="${RUNNER_TEMP:-/tmp}/mains-aegis-host-power-linux-vm"
 image_url="${HOST_POWER_UBUNTU_IMAGE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img}"
 ssh_port="${HOST_POWER_LINUX_VM_SSH_PORT:-2222}"
 api_port="${HOST_POWER_LINUX_VM_API_PORT:-30080}"
-devd_bin="${repo_root}/tools/mains-aegis-devd/target/debug/mains-aegis-devd"
+devd_bin="${repo_root}/tools/mains-aegis-host/target/debug/mains-aegis-devd"
+bridge_token="host-power-ci-token"
+auth_header=(-H "authorization: Bearer ${bridge_token}")
 
 if [[ ! -x "${devd_bin}" ]]; then
   echo "Missing devd binary: ${devd_bin}" >&2
@@ -103,17 +105,20 @@ scp -q -i "${ssh_key}" -P "${ssh_port}" \
 
 "${ssh_base[@]}" 'sudo systemctl restart power-profiles-daemon || true'
 "${ssh_base[@]}" 'sudo install -m 0755 /home/ci/mains-aegis-devd /usr/local/bin/mains-aegis-devd'
-"${ssh_base[@]}" 'sudo env MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=1 nohup /usr/local/bin/mains-aegis-devd serve --bind 0.0.0.0:30080 > /tmp/mains-aegis-devd.log 2>&1 &'
+"${ssh_base[@]}" "printf '%s\n' '${bridge_token}' > /home/ci/mains-aegis-devd.token"
+"${ssh_base[@]}" 'rm -f /tmp/mains-aegis-devd-linux.sock'
+"${ssh_base[@]}" 'sudo env MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=true nohup /usr/local/bin/mains-aegis-devd bridge-http --ipc /tmp/mains-aegis-devd-linux.sock --bind 0.0.0.0:30080 --allow-lan-bridge --auth-token-file /home/ci/mains-aegis-devd.token > /tmp/mains-aegis-devd.log 2>&1 &'
 
 for _ in {1..60}; do
-  if curl -fsS "http://127.0.0.1:${api_port}/api/v1/host/power" >/dev/null 2>&1; then
+  if curl -fsS "${auth_header[@]}" "http://127.0.0.1:${api_port}/api/v1/host/power" >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
-curl -fsS "http://127.0.0.1:${api_port}/api/v1/host/power" >/dev/null
+curl -fsS "${auth_header[@]}" "http://127.0.0.1:${api_port}/api/v1/host/power" >/dev/null
 
 curl -fsS -X POST "http://127.0.0.1:${api_port}/api/v1/host/power/profile" \
+  "${auth_header[@]}" \
   -H 'content-type: application/json' \
   -d '{"profile":"power_saver","dry_run":false}' | jq -e '.ok == true and .dispatch != "not_dispatched"'
 
@@ -128,11 +133,13 @@ case "${profile}" in
 esac
 
 curl -fsS -X POST "http://127.0.0.1:${api_port}/api/v1/host/power/profile" \
+  "${auth_header[@]}" \
   -H 'content-type: application/json' \
   -d '{"profile":"balanced","dry_run":false}' | jq -e '.ok == true'
 
 set +e
 curl --max-time 10 -fsS -X POST "http://127.0.0.1:${api_port}/api/v1/host/power/shutdown" \
+  "${auth_header[@]}" \
   -H 'content-type: application/json' \
   -d '{"delay_sec":0,"dry_run":false,"confirm":"shutdown","force":true}'
 curl_status=$?

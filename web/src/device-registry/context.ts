@@ -1,11 +1,12 @@
 import { createContext, useContext } from "react";
-import type { DeviceRecord, SafeSettingsState, WifiApplyNetwork } from "../api/types";
+import type { DeviceRecord, DeviceSettings, WifiApplyNetwork } from "../api/types";
 import type { SerialPortLike } from "../serial/transport";
 
 export type AddDeviceInput = {
   target: string;
   alias?: string;
   location?: string;
+  bridgeAuthToken?: string;
   devdDeviceId?: string;
   ignoreFirmwareMismatch?: boolean;
 };
@@ -29,7 +30,7 @@ export type WifiProvisioningProgress = {
   network?: WifiApplyNetwork;
 };
 
-export type ManualChargePrefsInput = SafeSettingsState["manual_charge"];
+export type ManualChargePrefsInput = DeviceSettings["manual_charge"];
 
 export type DeviceRegistryContextValue = {
   records: DeviceRecord[];
@@ -41,7 +42,7 @@ export type DeviceRegistryContextValue = {
   disconnectUsbSerialDevice: (deviceId: string) => Promise<void>;
   sendWifiConfig: (deviceId: string, input: WifiConfigInput, onProgress?: (progress: WifiProvisioningProgress) => void) => Promise<CommandResult>;
   clearWifiConfig: (deviceId: string, onProgress?: (progress: WifiProvisioningProgress) => void) => Promise<CommandResult>;
-  setSerialLogLevel: (deviceId: string, level: SafeSettingsState["log_level"]) => Promise<CommandResult>;
+  setSerialLogLevel: (deviceId: string, level: DeviceSettings["log_level"]) => Promise<CommandResult>;
   setManualChargePrefs: (deviceId: string, prefs: ManualChargePrefsInput) => Promise<CommandResult>;
   removeDevice: (deviceId: string) => void;
   refreshDevice: (deviceId: string) => Promise<void>;

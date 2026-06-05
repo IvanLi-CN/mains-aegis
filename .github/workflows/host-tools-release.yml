@@ -1,0 +1,146 @@
+name: host-tools-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example host-tools-v0.1.0"
+        required: true
+  push:
+    tags:
+      - "host-tools-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            archive: tar
+          - os: macos-14
+            asset: macos-arm64
+            target: aarch64-apple-darwin
+            archive: tar
+          - os: windows-latest
+            asset: windows-x86_64
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Resolve release source ref
+        id: release_ref
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
+            echo "checkout_ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git ls-remote --exit-code --refs "https://github.com/${REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "checkout_ref=refs/tags/${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "checkout_ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release_ref.outputs.checkout_ref }}
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux host deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libudev-dev
+      - name: Build host tools
+        env:
+          MAINS_AEGIS_RELEASE_VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+        run: cargo build --manifest-path tools/mains-aegis-host/Cargo.toml --release --bins --target ${{ matrix.target }}
+      - name: Stage Unix archive
+        if: matrix.archive == 'tar'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          stage="mains-aegis-host-tools-${tag}-${{ matrix.asset }}"
+          mkdir -p "dist/${stage}/bin"
+          cp tools/mains-aegis-host/target/${{ matrix.target }}/release/mains-aegis "dist/${stage}/bin/"
+          cp tools/mains-aegis-host/target/${{ matrix.target }}/release/mains-aegis-devd "dist/${stage}/bin/"
+          cp tools/mains-aegis-host/packaging/install.sh "dist/${stage}/"
+          tar -C dist -czf "dist/${stage}.tar.gz" "${stage}"
+          (cd dist && shasum -a 256 "${stage}.tar.gz" > "${stage}.tar.gz.sha256")
+      - name: Stage Windows archive
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $stage = "mains-aegis-host-tools-$tag-${{ matrix.asset }}"
+          New-Item -ItemType Directory -Force -Path "dist/$stage/bin" | Out-Null
+          Copy-Item "tools/mains-aegis-host/target/${{ matrix.target }}/release/mains-aegis.exe" "dist/$stage/bin/"
+          Copy-Item "tools/mains-aegis-host/target/${{ matrix.target }}/release/mains-aegis-devd.exe" "dist/$stage/bin/"
+          Copy-Item "tools/mains-aegis-host/packaging/install.ps1" "dist/$stage/"
+          Compress-Archive -Path "dist/$stage" -DestinationPath "dist/$stage.zip"
+          (Get-FileHash "dist/$stage.zip" -Algorithm SHA256).Hash.ToLower() + "  $stage.zip" | Set-Content "dist/$stage.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: host-tools-${{ matrix.asset }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+
+  publish:
+    name: Publish host tools release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release tag state
+        id: release_ref
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git ls-remote --exit-code --refs "https://github.com/${REPOSITORY}.git" "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Build SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist
+          cat *.sha256 > SHA256SUMS
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes="Mains Aegis host tools: mains-aegis CLI and mains-aegis-devd daemon."
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" dist/* --clobber
+            gh release edit "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes "${notes}"
+          elif [[ "${{ steps.release_ref.outputs.tag_exists }}" == "true" ]]; then
+            gh release create "${RELEASE_TAG}" dist/* --title "${RELEASE_TAG}" --notes "${notes}"
+          else
+            gh release create "${RELEASE_TAG}" dist/* --target "${GITHUB_SHA}" --title "${RELEASE_TAG}" --notes "${notes}"
+          fi

@@ -39,7 +39,7 @@ export type SerialHelloFrame = {
   capabilities: {
     status: boolean;
     structured_logs: boolean;
-    safe_settings: boolean;
+    settings: boolean;
     wifi_config: boolean;
     psk_echo: false;
   };

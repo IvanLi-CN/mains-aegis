@@ -3,18 +3,20 @@ name: host-power-vm
 on:
   pull_request:
     paths:
-      - "tools/mains-aegis-devd/**"
+      - "tools/mains-aegis-host/**"
       - "scripts/ci/host_power_*"
       - ".github/workflows/host-power-vm.yml"
+      - "docs/specs/7jqrq-mains-aegis-cli-devd-alignment/**"
       - "docs/specs/p8k3d-mains-aegis-devd/**"
       - "docs/usb-cdc-web-serial-protocol.md"
       - "docs/web-management-ui.md"
   push:
     branches: ["main"]
     paths:
-      - "tools/mains-aegis-devd/**"
+      - "tools/mains-aegis-host/**"
       - "scripts/ci/host_power_*"
       - ".github/workflows/host-power-vm.yml"
+      - "docs/specs/7jqrq-mains-aegis-cli-devd-alignment/**"
       - "docs/specs/p8k3d-mains-aegis-devd/**"
       - "docs/usb-cdc-web-serial-protocol.md"
       - "docs/web-management-ui.md"
@@ -37,7 +39,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils jq pkg-config libudev-dev
       - name: Build devd for Linux guest
-        run: cargo build --manifest-path tools/mains-aegis-devd/Cargo.toml
+        run: cargo build --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd
       - name: Run real host power commands inside Linux VM
         run: bash scripts/ci/host_power_linux_vm_test.sh
 
@@ -50,6 +52,6 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
       - name: Build devd for macOS runner VM
-        run: cargo build --manifest-path tools/mains-aegis-devd/Cargo.toml
+        run: cargo build --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd
       - name: Run real host power commands on macOS runner VM
         run: bash scripts/ci/host_power_macos_runner_vm_test.sh

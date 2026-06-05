@@ -63,8 +63,19 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
         battery_pack_mv: snapshot.bq40z50_pack_mv,
         battery_current_ma: snapshot.bq40z50_current_ma,
         battery_soc_pct: snapshot.bq40z50_soc_pct,
+        battery_cell_mv: snapshot.dashboard_detail.cell_mv,
+        battery_cell_delta_mv: cell_delta_mv(snapshot.dashboard_detail.cell_mv),
+        battery_balance_enabled: snapshot.dashboard_detail.balance_enabled,
+        battery_balance_cfg_match: snapshot.dashboard_detail.balance_cfg_match,
+        battery_balance_active: snapshot.dashboard_detail.balance_active,
+        battery_balance_mask: snapshot.dashboard_detail.balance_mask,
+        battery_balance_cell: snapshot.dashboard_detail.balance_cell,
+        battery_balance_min_start_delta_mv: snapshot.dashboard_detail.balance_min_start_delta_mv,
         battery_no_battery: snapshot.bq40z50_no_battery,
         battery_discharge_ready: snapshot.bq40z50_discharge_ready,
+        battery_charge_fet_on: snapshot.dashboard_detail.charge_fet_on,
+        battery_discharge_fet_on: snapshot.dashboard_detail.discharge_fet_on,
+        battery_precharge_fet_on: snapshot.dashboard_detail.precharge_fet_on,
         battery_issue_detail: snapshot.bq40z50_issue_detail,
         battery_recovery_pending: snapshot.bq40z50_recovery_pending,
         battery_last_result: snapshot.bq40z50_last_result.map(bms_result_slug),
@@ -82,6 +93,16 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
         tmp_b_c: snapshot.tmp_b_c,
         network: current_network_summary(),
     }
+}
+
+fn cell_delta_mv(cells: [Option<u16>; 4]) -> Option<u16> {
+    let mut min_mv: Option<u16> = None;
+    let mut max_mv: Option<u16> = None;
+    for cell in cells.into_iter().flatten() {
+        min_mv = Some(min_mv.map_or(cell, |min| min.min(cell)));
+        max_mv = Some(max_mv.map_or(cell, |max| max.max(cell)));
+    }
+    Some(max_mv?.saturating_sub(min_mv?))
 }
 
 fn mode_slug(mode: UpsMode) -> &'static str {
