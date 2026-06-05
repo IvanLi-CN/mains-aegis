@@ -457,7 +457,11 @@ function isConnectableDevdDevice(device: DevdDevice): boolean {
   if (device.transport === "mock") return true;
   if (device.transport === "native_serial") return Boolean(device.port_path);
   if (device.transport !== "lan") return false;
-  return Boolean(device.identity) && (device.lan_conflict_addresses?.length ?? 0) === 0;
+  return isMainsAegisLanDevice(device) && (device.lan_conflict_addresses?.length ?? 0) === 0;
+}
+
+function isMainsAegisLanDevice(device: DevdDevice): boolean {
+  return device.transport === "lan" && device.identity?.firmware.protocol === "mains-aegis.cdc.v1";
 }
 
 function ConnectPage() {
@@ -510,7 +514,7 @@ function ConnectPage() {
       }
       setDevdStatus("checking");
       const scan = await scanDevdDevices(devdBaseUrl);
-      setDevdDevices(scan.devices);
+      setDevdDevices(scan.devices.filter((device) => device.transport !== "lan" || isMainsAegisLanDevice(device)));
       setDevdStatus("available");
       setDevdLastUpdated(new Date().toISOString());
       setDevdMessage(null);

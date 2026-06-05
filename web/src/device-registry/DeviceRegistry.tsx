@@ -1619,7 +1619,11 @@ function isDevdSerial(record: DeviceRecord): record is DeviceRecord & { serial: 
 function isManageableDevdDevice(device: DevdDevice): boolean {
   if (device.transport === "native_serial") return Boolean(device.port_path);
   if (device.transport !== "lan") return false;
-  return Boolean(device.identity) && (device.lan_conflict_addresses?.length ?? 0) === 0;
+  return isMainsAegisLanDevice(device) && (device.lan_conflict_addresses?.length ?? 0) === 0;
+}
+
+function isMainsAegisLanDevice(device: DevdDevice): boolean {
+  return device.transport === "lan" && device.identity?.firmware.protocol === "mains-aegis.cdc.v1";
 }
 
 function devdBaseUrlForRecord(record: DeviceRecord): string | null {

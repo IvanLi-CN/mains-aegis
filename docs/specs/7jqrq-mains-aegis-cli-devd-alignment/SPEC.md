@@ -76,6 +76,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - Web dev proxy 默认指向 `http://127.0.0.1:30080`，可通过 `MAINS_AEGIS_DEVD_URL`、`VITE_DEFAULT_DEVD_URL` 或 `VITE_DEVD_API_BASE` 指向显式启动的 `bridge-http`；该地址代表显式启动的 HTTP bridge，不是默认 daemon。需要 Web 与 CLI 共用状态时，CLI 连接同一个 `bridge-http --ipc <endpoint>`。
 - Connect 页的默认 devd 地址可通过 `VITE_DEFAULT_DEVD_URL` 或兼容的 `VITE_DEVD_API_BASE` 注入；demo 模式仍固定使用 `mock:devd`。
 - `bridge-http --allow-dev-cors` 只允许 loopback HTTP development origins（`localhost`、`127.0.0.1`、`[::1]`，任意端口），用于 Vite 租约端口或直接 dev bridge 调试；非 loopback bridge 仍必须走 token-gated LAN bridge 规则。
+- Connect 页在 devd 发现结果里只展示 `identity.firmware.protocol === "mains-aegis.cdc.v1"` 的 LAN 设备；其他 LAN 候选不应进入可连接列表。
 - Web API client 支持从 `localStorage["mains-aegis.bridgeAuthToken"]` 读取 bearer token，以便 devd bridge 显式授权场景使用；该 token 只能附加到明确的 devd/bridge API 与 devd EventSource 请求，不能发送给普通 LAN 设备探活或 LAN status SSE。Connect 页的 LAN 入口只接受硬件本体 HTTP/SSE 端点，不暴露 bridge token 表单，也不得把 `mains-aegis-devd bridge-http` 当作 LAN 设备添加。
 - Web Serial 与 devd HTTP bridge 仍按既有租约、心跳和 release 语义工作。
 - devd bridge 与 CLI 观察同一进程内状态；绑定、别名和 artifact selection 还会写入用户配置目录的 devd 状态文件，daemon 重启后恢复为 disconnected 的安全运行态并保留用户配置态。

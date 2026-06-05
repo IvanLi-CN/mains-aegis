@@ -30,7 +30,7 @@
 - 吸收旧本地 USB HTTP bridge 的兼容面：WiFi config、log level、manual charge endpoints 与 Web USB Console hydration 由 devd 直接提供；新的 owner-facing 查询面使用 `connection / settings / trace`。
 - Firmware Catalog 成为 Web Direct、devd、本地构建和 GitHub Release 的统一 artifact 合同。
 - 固件 identity 暴露 build/profile/features/protocol/defmt 信息，devd 用它与 artifact manifest 匹配；不匹配时日志解码必须标记 `unverified`。
-- Web 开发期由 Vite dev server 反代 `/api` 到 devd，proxy target 可由 env 指向当前显式启动的 bridge；生产期可由 devd 托管静态 Web。需要浏览器直接跨源访问 devd bridge 时，`--allow-dev-cors` 只允许 loopback HTTP development origins。
+- Web 开发期由 Vite dev server 反代 `/api` 到 devd，proxy target 可由 env 指向当前显式启动的 bridge；生产期可由 devd 托管静态 Web。需要浏览器直接跨源访问 devd bridge 时，`--allow-dev-cors` 只允许 loopback HTTP development origins。Connect 页在 LAN 发现结果里只保留 `identity.firmware.protocol === "mains-aegis.cdc.v1"` 的候选。
 - 新增项目 skill，固化 devd 设备操作、安全边界和验证流程。
 
 ### Non-goals
