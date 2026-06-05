@@ -45,6 +45,7 @@ export const BatteryDetail: Story = {
   render: () => renderApp("/devices/mains-aegis-a1b2c3/battery"),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    await expect(await canvas.findByText("Live")).toBeInTheDocument();
     await expect(await canvas.findByText("Cell voltages")).toBeInTheDocument();
     await expect(await canvas.findByText("Delta 13 mV")).toBeInTheDocument();
     await expect(await canvas.findByText("BAL MULTI")).toBeInTheDocument();
@@ -56,6 +57,17 @@ export const BatteryDetail: Story = {
     await expect(await canvas.findByText("CHG MOS")).toBeInTheDocument();
     await expect(await canvas.findByText("DSG MOS")).toBeInTheDocument();
     await expect(await canvas.findByText("PCHG MOS")).toBeInTheDocument();
+  },
+};
+
+export const StreamStateClarity: Story = {
+  name: "Stream state clarity",
+  render: () => renderApp("/devices/mains-aegis-f7a8b9/battery", "offline"),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("Offline")).toBeInTheDocument();
+    await expect(await canvas.findByText("device is offline")).toBeInTheDocument();
+    await expect(await canvas.findByText("BMS readiness")).toBeInTheDocument();
   },
 };
 

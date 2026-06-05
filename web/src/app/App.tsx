@@ -1603,6 +1603,7 @@ function ApiDebugPage({ record }: { record: DeviceRecord }) {
 function DeviceStatusBand({ record }: { record: DeviceRecord }) {
   const status = record.status;
   const severity = deviceSeverity(record);
+  const stream = streamPresentation(record);
   return (
     <div className="status-band status-band-color-warm">
       <div className="live-cell">
@@ -1618,8 +1619,11 @@ function DeviceStatusBand({ record }: { record: DeviceRecord }) {
         <strong className="live-value">{formatPercent(status?.battery.soc_pct)}</strong>
       </div>
       <div className="live-cell">
-        <span className="eyebrow">Stream</span>
-        <strong className="live-value">{record.streamState}</strong>
+        <span className="eyebrow">Data</span>
+        <strong className="live-value">{stream.label}</strong>
+        <span className={`live-detail tone-${stream.tone}`}>
+          {stream.detail}
+        </span>
       </div>
       <span className={`severity-badge live-state severity-${severity}`}>{severity}</span>
     </div>
@@ -1640,6 +1644,64 @@ function InfoPanel({ title, icon: Icon, children }: { title: string; icon: typeo
 
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+type StreamPresentation = {
+  label: string;
+  detail: string;
+  tone: "ok" | "info" | "warning" | "critical" | "offline";
+};
+
+function streamPresentation(record: DeviceRecord): StreamPresentation {
+  const freshness = record.lastUpdated ? `, updated ${timeAgo(record.lastUpdated)}` : "";
+
+  if (record.connectionState === "offline") {
+    return {
+      label: "Offline",
+      detail: record.error?.message ?? "No recent device data",
+      tone: "offline",
+    };
+  }
+
+  if (record.connectionState === "connecting") {
+    return {
+      label: "Connecting",
+      detail: "Waiting for the first device response",
+      tone: "info",
+    };
+  }
+
+  if (record.streamState === "error") {
+    return {
+      label: record.status ? "Live data" : "Connection error",
+      detail: record.status
+        ? `Transport reconnecting, polling fallback${freshness}`
+        : record.error?.message ?? `Stream error${freshness}`,
+      tone: record.status ? "warning" : "critical",
+    };
+  }
+
+  if (record.streamState === "polling") {
+    return {
+      label: record.status ? "Live data" : "Waiting",
+      detail: record.status ? `Polling fallback${freshness}` : `Polling for device data${freshness}`,
+      tone: record.status ? "info" : "warning",
+    };
+  }
+
+  if (record.streamState === "streaming" || record.streamState === "idle") {
+    return {
+      label: "Live",
+      detail: `${record.streamState}${freshness}`,
+      tone: "ok",
+    };
+  }
+
+  return {
+    label: "Unknown",
+    detail: `${record.streamState}${freshness}`,
+    tone: "info",
+  };
 }
 
 function Metric({ label, value, tone = "neutral" }: { label: string; value: number; tone?: "neutral" | "critical" | "warning" | "offline" | "ok" }) {

@@ -1384,7 +1384,7 @@ a {
 .status-band-color-warm .live-cell {
   display: grid;
   gap: 5px;
-  min-height: 74px;
+  min-height: 86px;
   padding: 16px 18px;
   background: color-mix(in oklch, var(--color-panel) calc(95% - var(--amount) * 8%), var(--color-status-band-cell));
 }
@@ -1401,6 +1401,24 @@ a {
   color: var(--color-ink);
   font-size: 22px;
   line-height: 1.05;
+}
+
+.status-band-color-warm .live-detail {
+  color: color-mix(in oklch, var(--color-muted) 78%, var(--color-ink));
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.status-band-color-warm .live-detail.tone-warning {
+  color: color-mix(in oklch, var(--color-warning) 72%, var(--color-ink));
+}
+
+.status-band-color-warm .live-detail.tone-critical {
+  color: color-mix(in oklch, var(--color-status-critical) 76%, var(--color-ink));
+}
+
+.status-band-color-warm .live-detail.tone-offline {
+  color: color-mix(in oklch, var(--color-offline) 74%, var(--color-ink));
 }
 
 .status-band-color-warm .live-state {
