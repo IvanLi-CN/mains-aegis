@@ -319,7 +319,24 @@ const BMS_DF_MIN_RSOC_FOR_BALANCING_MAINBOARD_PCT: u8 = 80;
     feature = "bms-rom-repair-asset-df-mainboard",
     feature = "bms-live-df-mainboard"
 ))]
-const BMS_DF_CUV_RECOVERY_MAINBOARD_MV: u16 = 2_900;
+const BMS_DF_CUV_RECOVERY_MAINBOARD_MV: u16 = 2_550;
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const BMS_DF_CUV_RECOVERY_MAINBOARD_LE: [u8; 2] = BMS_DF_CUV_RECOVERY_MAINBOARD_MV.to_le_bytes();
+#[cfg(any(
+    feature = "bms-rom-repair-asset-df-mainboard",
+    feature = "bms-live-df-mainboard"
+))]
+const _: () = {
+    assert!(BMS_DF_ADDR_PROTECTION_CONFIGURATION == 0x4937);
+    assert!(BMS_DF_PROTECTION_CONFIGURATION_MAINBOARD == 0x02);
+    assert!(BMS_DF_ADDR_CUV_RECOVERY == 0x493F);
+    assert!(BMS_DF_CUV_RECOVERY_MAINBOARD_MV == 2_550);
+    assert!(BMS_DF_CUV_RECOVERY_MAINBOARD_LE[0] == 0xF6);
+    assert!(BMS_DF_CUV_RECOVERY_MAINBOARD_LE[1] == 0x09);
+};
 #[cfg(any(
     feature = "bms-rom-repair-asset-df-mainboard",
     feature = "bms-live-df-mainboard"

@@ -22,7 +22,7 @@
 - 仅在 `DC5025` 独占输入且 `IBUS > 3.0A` 持续 `1s` 时，把 `ICHG` 降到 `100mA`；回落到 `<2.7A` 持续 `5s` 后恢复 `500mA`。
 - DC IN/VAC2 被 BQ25792 实际选中时，输入源判定必须优先使用 charger-side VBUS/VAC ADC 事实，而不是 USB PD attach 状态；DC 输入 profile 必须写入 `IINDPM=3000mA`。
 - BMS CUV 低电恢复允许在 `PCHG=true`、`PF=0`、`CUVC=false` 且 DC IN 或 USB-C 输入在线时进入受控 `100mA` 恢复；该恢复态显示为 `RECOV`，不同于 DC 过流降档 `CHG100`。所有 `100mA` 充电/恢复模式必须把 BQ25792 `ITERM` 写到低于目标电流的安全值（当前 `40mA`），否则 BQ 会立即进入 `termination_done` 而不持续充电。
-- 低压恢复采用两段式：`charge_ready=false` 且 BQ40 `PCHG` 可用时为 `policy.recovery_stage=bq40_pchg`；BQ40 在 `CUV Recovery=2900mV/cell` 且检测到充电后释放主路径，随后 `cell_min_mv < 3000` 时为 `policy.recovery_stage=bq25792_precharge`，继续限制 `ICHG=100mA`。只有 `cell_min_mv >= 3000` 后才恢复常规 `500mA`。
+- 低压恢复采用两段式：`charge_ready=false` 且 BQ40 `PCHG` 可用时为 `policy.recovery_stage=bq40_pchg`；BQ40 在 `CUV Recovery=2550mV/cell` 且检测到充电后释放主路径，随后 `cell_min_mv < 3000` 时为 `policy.recovery_stage=bq25792_precharge`，继续限制 `ICHG=100mA`。只有 `cell_min_mv >= 3000` 后才恢复常规 `500mA`。
 - BQ25792 必须显式写入并诊断 `REG08`: `VBAT_LOWV=71.4%`、`IPRECHG=120mA`。
 - `TPS55288` 总输出功率门控必须有回差：连续 `2` 个 poll `>5.0W` 才停充，进入 `LOAD` 后连续 `3` 个 poll `<4.5W` 才恢复。
 - 任一路输出已开启但聚合输出功率不可可信计算时，必须保守禁充，并在 notice/log 中明确标成 `blocked_output_power_unknown`。
@@ -35,7 +35,7 @@
 ### Non-goals
 
 - 不实现 `1A/2A` 快充、不调 USB-C/PD/PPS 协商。
-- 主固件不自动修改 `BQ40Z50` Data Flash、JEITA 曲线或 termination current 校准；`CUV Recovery=2900mV` 与 `CUV_RECOV_CHG=1` 只由显式维护工具/DF baseline 承接。针对重复 `OC/LOCK` 的顶充终止对齐例外由 `/Users/ivan/Projects/Ivan/mains-aegis/docs/specs/h6sae-bq40-lock-root-cause/SPEC.md` 单独承接。
+- 主固件不自动修改 `BQ40Z50` Data Flash、JEITA 曲线或 termination current 校准；`CUV Recovery=2550mV` 与 `CUV_RECOV_CHG=1` 只由显式维护工具/DF baseline 承接。针对重复 `OC/LOCK` 的顶充终止对齐例外由 `/Users/ivan/Projects/Ivan/mains-aegis/docs/specs/h6sae-bq40-lock-root-cause/SPEC.md` 单独承接。
 - 不改 `tps-test-fw` 的独立充电逻辑。
 
 ## 范围（Scope）
