@@ -489,6 +489,7 @@ function ConnectPage() {
   const [devdMessage, setDevdMessage] = useState<UiFeedback | null>(null);
   const [usbFirmwareOverridePending, setUsbFirmwareOverridePending] = useState(false);
   const [devdFirmwareOverrideDeviceId, setDevdFirmwareOverrideDeviceId] = useState<string | null>(null);
+  const [devdConnectingDeviceId, setDevdConnectingDeviceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [usbBusy, setUsbBusy] = useState(false);
   const [devdBusy, setDevdBusy] = useState(false);
@@ -596,6 +597,7 @@ function ConnectPage() {
       setDevdMessage(errorFeedback({ code: "device_not_connectable", message: "This devd device is not ready for Web connection yet", retryable: true, details: { device } }));
       return;
     }
+    setDevdConnectingDeviceId(device.id);
     setDevdBusy(true);
     setDevdMessage(null);
     const result = await addDevdDevice({
@@ -605,6 +607,7 @@ function ConnectPage() {
       ignoreFirmwareMismatch,
     });
     setDevdBusy(false);
+    setDevdConnectingDeviceId(null);
     if (result.ok) {
       setDevdFirmwareOverrideDeviceId(null);
       setDevdMessage(successFeedback(`devd connected ${result.record.target.alias}`));
@@ -698,6 +701,7 @@ function ConnectPage() {
             const connectable = isConnectableDevdDevice(device);
             const buttonLabel = existingRecord ? "Open" : device.connection === "connected" ? "Attach" : "Connect";
             const showOverride = devdFirmwareOverrideDeviceId === device.id;
+            const isConnectingDevice = devdConnectingDeviceId === device.id;
             return (
               <article className={`devd-device-card ${connectable ? "" : "is-muted"}`} key={device.id}>
                 <div className="devd-device-main">
@@ -728,7 +732,7 @@ function ConnectPage() {
                     </button>
                   ) : (
                     <button className="primary-button small" type="button" disabled={devdBusy || !connectable} onClick={() => void onDevdConnect(device)}>
-                      <ButtonLabel busy={devdBusy} busyText="Connecting" text={buttonLabel} />
+                      <ButtonLabel busy={isConnectingDevice} busyText="Connecting" text={buttonLabel} />
                     </button>
                   )}
                   {showOverride ? (
