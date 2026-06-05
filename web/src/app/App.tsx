@@ -74,6 +74,7 @@ const deviceSections = [
 ] as const;
 
 const appBasePath = normalizeBasePath(import.meta.env.BASE_URL);
+const defaultDevdTarget = (import.meta.env.VITE_DEFAULT_DEVD_URL ?? import.meta.env.VITE_DEVD_API_BASE ?? "same-origin").trim() || "same-origin";
 const docsHref = `${appBasePath}docs/`;
 const credentiallessInputProps = {
   autoComplete: "off",
@@ -477,7 +478,7 @@ function ConnectPage() {
   const [location, setLocation] = useState("");
   const [usbAlias, setUsbAlias] = useState("");
   const [usbLocation, setUsbLocation] = useState("");
-  const [devdTarget, setDevdTarget] = useState(demoMode ? "mock:devd" : "same-origin");
+  const [devdTarget, setDevdTarget] = useState(demoMode ? "mock:devd" : defaultDevdTarget);
   const [devdBridgeToken, setDevdBridgeToken] = useState("");
   const [devdBridgeAuthRequiredState, setDevdBridgeAuthRequiredState] = useState<"unknown" | "required" | "not_required">("unknown");
   const [devdDevices, setDevdDevices] = useState<DevdDevice[]>([]);

@@ -36,7 +36,10 @@ use tokio::{
     process::Command,
     sync::{broadcast, Mutex as AsyncMutex},
 };
-use tower_http::{cors::CorsLayer, services::ServeDir};
+use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
+    services::ServeDir,
+};
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:30080";
 pub const DEFAULT_IPC_FILE_NAME: &str = "devd.sock";
@@ -596,12 +599,9 @@ pub async fn serve_http_bridge(config: HttpBridgeConfig) -> anyhow::Result<()> {
     if config.allow_dev_cors {
         app = app.layer(
             CorsLayer::new()
-                .allow_origin([
-                    HeaderValue::from_static("http://127.0.0.1:5173"),
-                    HeaderValue::from_static("http://localhost:5173"),
-                    HeaderValue::from_static("http://127.0.0.1:30000"),
-                    HeaderValue::from_static("http://localhost:30000"),
-                ])
+                .allow_origin(AllowOrigin::predicate(|origin, _request_parts| {
+                    is_local_dev_cors_origin(origin)
+                }))
                 .allow_methods([Method::GET, Method::POST, Method::DELETE])
                 .allow_headers(tower_http::cors::Any),
         );
@@ -703,6 +703,19 @@ fn is_static_web_asset_request(method: &Method, uri: &Uri) -> bool {
 
 fn is_unauthenticated_bootstrap_request(method: &Method, uri: &Uri) -> bool {
     *method == Method::GET && uri.path() == "/api/v1/bootstrap"
+}
+
+fn is_local_dev_cors_origin(origin: &HeaderValue) -> bool {
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+
+    matches!(
+        origin,
+        "http://localhost" | "http://127.0.0.1" | "http://[::1]"
+    ) || origin.starts_with("http://localhost:")
+        || origin.starts_with("http://127.0.0.1:")
+        || origin.starts_with("http://[::1]:")
 }
 
 fn percent_decode_query_value(value: &str) -> Result<String, std::string::FromUtf8Error> {
@@ -6007,6 +6020,32 @@ mod tests {
             &Method::GET,
             &status_uri
         ));
+    }
+
+    #[test]
+    fn bridge_dev_cors_allows_loopback_dev_origins() {
+        assert!(is_local_dev_cors_origin(&HeaderValue::from_static(
+            "http://127.0.0.1:49480"
+        )));
+        assert!(is_local_dev_cors_origin(&HeaderValue::from_static(
+            "http://localhost:5173"
+        )));
+        assert!(is_local_dev_cors_origin(&HeaderValue::from_static(
+            "http://[::1]:5173"
+        )));
+    }
+
+    #[test]
+    fn bridge_dev_cors_rejects_non_loopback_origins() {
+        assert!(!is_local_dev_cors_origin(&HeaderValue::from_static(
+            "http://127.0.0.1.evil.test:49480"
+        )));
+        assert!(!is_local_dev_cors_origin(&HeaderValue::from_static(
+            "https://localhost:49480"
+        )));
+        assert!(!is_local_dev_cors_origin(&HeaderValue::from_static(
+            "http://192.168.31.10:49480"
+        )));
     }
 
     #[tokio::test]
