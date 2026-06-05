@@ -8,6 +8,7 @@
 - 非 loopback devd bridge 启动时要求 `--allow-lan-bridge` 与 `--auth-token-file`，API 请求使用 bearer token；`GET /api/v1/bootstrap` 保持免认证并报告真实 token requirement；浏览器 EventSource 使用 `bridge_token` query 参数授权。
 - Host-tools release workflow 产出三平台 archive、安装脚本和可直接校验 release assets 的 `SHA256SUMS`；手动 release 在 tag 已存在时按该 tag 重建资产、tag 不存在时从当前 dispatch commit 创建新 release tag；`MAINS_AEGIS_RELEASE_VERSION` 同时驱动构建产物与 `mains-aegis` / `mains-aegis-devd` 的 `--version` 输出。
 - Web client 支持从 localStorage 读取按 bridge URL 分桶的 bearer token，并且只在 devd/bridge API、devd probe/status 请求与 devd EventSource 请求上附加 token；普通 HTTP 目标不携带 bridge token。Connect UI 只为 protected devd bridge 提供 token 输入入口，LAN 入口固定为硬件直连。
+- Repo skill routing defaults Codex work inside this repository to `$mains-aegis-devd-flow` for development, validation, diagnostics, field investigation, and hardware read/session-read checks. `$mains-aegis-user-operations` remains the explicit end-user/released host-tools route.
 
 ## 验证
 
@@ -22,3 +23,4 @@
 - `mains-aegis --ipc /tmp/mains-aegis-host-smoke.sock devices list` verified CLI to IPC mock device list
 - `mains-aegis-devd bridge-http --ipc /tmp/mains-aegis-bridge-smoke.sock --bind 127.0.0.1:<leased-port> --allow-dev-cors` verified HTTP bridge and CLI IPC share one daemon state by binding `mock-devkit` over HTTP and reading the same binding over CLI IPC
 - Mock UI visual evidence captured at `/connect?seed=default`
+- Policy search verifies AGENTS, skills, and specs no longer make released host tools the default Codex route inside this repository.

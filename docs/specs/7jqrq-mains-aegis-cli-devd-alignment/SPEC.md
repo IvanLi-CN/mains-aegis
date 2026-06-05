@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-06-02
-- Last: 2026-06-03
+- Last: 2026-06-06
 
 ## 接管说明
 
@@ -25,7 +25,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - `mains-aegis` CLI 通过 IPC 调用 devd，覆盖设备、artifact、flash dry-run/reset/monitor、serial lease、settings 与 host power 命令族；历史 `device session` 命令面由 #k4vzn 替换为 `connection / settings / trace`。
 - devd HTTP bridge 只能在显式启用且配置 bearer token 时绑定非 loopback 地址。
 - 发布流程产出 Linux x86_64、macOS arm64、Windows x86_64 host-tools archive、安装脚本与 `SHA256SUMS`。
-- repo skills 拆分为用户操作层与开发层；用户操作层在缺少 release 安装工具时硬阻断，不回退源码构建。
+- repo skills 拆分为默认仓库开发/诊断层与显式用户操作层；Codex 在本仓内默认使用 `$mains-aegis-devd-flow`，用户操作层仅在主人明确要求 end-user/released host-tools 操作、安装验证或点名 `$mains-aegis-user-operations` 时触发。
 
 ### Non-goals
 
@@ -69,7 +69,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - Release archive 必须至少包含 `bin/mains-aegis`、`bin/mains-aegis-devd` 和对应平台安装脚本。
 - 发布资产必须包含 `SHA256SUMS`。
 - 手动触发 release 时，构建 checkout 必须跟随输入的 host-tools tag，避免按工作流触发 ref 构建错误提交；release build 必须把该 tag 注入 host-tools 二进制版本信息。
-- 用户操作 skill 只接受已安装 release 工具；缺少 release 工具时阻断并提示安装 release，不自动 `cargo run`。
+- 用户操作 skill 是显式 end-user/released-tool 路径，只接受已安装 release 工具；缺少 release 工具时阻断并提示安装 release，不自动 `cargo run`。本仓内 Codex 默认开发、验证、诊断与硬件 read/session-read 检查走 `$mains-aegis-devd-flow`。
 
 ### Web bridge
 
@@ -93,7 +93,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - `bun run --cwd web check` 通过。
 - CI 与 host-power VM workflow 使用 `tools/mains-aegis-host`。
 - Host-tools release workflow 覆盖 Linux x86_64、macOS arm64、Windows x86_64。
-- 文档、skills 与 AGENTS 不再把 `tools/mains-aegis-devd` 或 `serve --bind` 当作当前入口。
+- 文档、skills 与 AGENTS 不再把 `tools/mains-aegis-devd` 或 `serve --bind` 当作当前入口，并明确本仓 Codex 默认路由为 `$mains-aegis-devd-flow`；`$mains-aegis-user-operations` 仅作为显式 end-user/released-tool 路径。
 
 ## Visual Evidence
 
