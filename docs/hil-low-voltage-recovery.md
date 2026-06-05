@@ -69,7 +69,7 @@ The HIL runner writes reports under `tools/hil/reports/<timestamp>/`. A pass req
 - USB `power-diag` is readable from the main firmware.
 - `power-diag.charger.vbat_lowv_pct_x10 == 714`.
 - `power-diag.charger.iprechg_ma == 120`.
-- `power-diag.bms.cuv_recovery_mv == 2900`.
+- `power-diag.bms.cuv_recovery_mv == 2550`.
 - `power-diag.bms.cuv_recov_chg == true`.
 - `power-diag.policy.recovery_stage` is either `null`, `bq40_pchg`, or `bq25792_precharge`.
 

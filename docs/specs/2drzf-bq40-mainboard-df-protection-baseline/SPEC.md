@@ -22,7 +22,7 @@
 - 放电阈值只保留小幅抗抖余量，以 `19V` 输出目标与典型转换效率为依据，不再把 `OCD/SOCD` 维持在明显低于系统需求的 stock 值。
 - 主固件风扇与主动热保护统一改为使用 `max(TMP_A, TMP_B, BMS board, BMS battery, BMS TS1..TS4)`。
 - README / 模块文档 / 工具文档同步写清楚阈值、依据与使用口径。
-- 冻结 CUV recovery 行为：不降低 `CUV Threshold=2500mV/cell`，只把 `CUV Recovery` 调整为 `2900mV/cell`，并启用 `CUV_RECOV_CHG=1`，要求检测到充电后才允许 BQ40 释放 CUV。
+- 冻结 CUV recovery 行为：不降低 `CUV Threshold=2500mV/cell`，只把 `CUV Recovery` 调整为 `2550mV/cell`，并启用 `CUV_RECOV_CHG=1`，要求检测到充电后才允许 BQ40 释放 CUV。
 
 ### Non-goals
 
@@ -91,7 +91,7 @@
 | --- | --- | ---: | --- |
 | `Protection Configuration` | `0x4937` | `0x02` | `CUV_RECOV_CHG=1`，`PCHG_COMM=0` 保持独立 PCHG FET |
 | `CUV Threshold` | `0x493C` | `2500mV` | 保持默认硬保护 trip 点 |
-| `CUV Recovery` | `0x493F` | `2900mV` | 允许 BQ40 在充电已被检测到时提前释放主 CHG/DSG 路径 |
+| `CUV Recovery` | `0x493F` | `2550mV` | 允许 BQ40 在充电已被检测到时提前释放主 CHG/DSG 路径，缩短 `300Ω` PCHG 慢恢复窗口 |
 | `CUVC Recovery` | `0x4944` | `3000mV` | 保持默认二级恢复点 |
 
 主固件不得自动写入这些 Data Flash 字段；只允许 `asset-df-mainboard` 和 `live-df-mainboard` 等显式维护/修复入口写入。
@@ -100,7 +100,7 @@
 
 - `tools/bq40-comm-tool/firmware/src/output/mod.rs`
   - `asset-df-mainboard` 新增 `OCC/OCD/SOCC/SOCD` 与 `CUV Recovery / Protection Configuration` 覆写。
-  - app-mode live DF 基线写入入口 `live-df-mainboard` 通过 `./bin/run.sh apply-df ... --repair-profile live-df-mainboard` 写回 pack，包含 `CUV Recovery=2900mV` 与 `CUV_RECOV_CHG=1`。
+  - app-mode live DF 基线写入入口 `live-df-mainboard` 通过 `./bin/run.sh apply-df ... --repair-profile live-df-mainboard` 写回 pack，包含 `CUV Recovery=2550mV` 与 `CUV_RECOV_CHG=1`。
 - `firmware/src/fan.rs`
   - 风扇温控输入新增 BMS 聚合温度。
 - `firmware/src/output/mod.rs`
@@ -113,9 +113,9 @@
 ## 验收标准（Acceptance Criteria）
 
 - `asset-df-mainboard` 生成的 section1 覆写中，`OCC1/OCC2/OCD1/OCD2/OCD Recovery/SOCC/SOCD` 地址被明确写入仓库冻结值。
-- `asset-df-mainboard` 生成的 section1 覆写中，`Protection Configuration=0x02` 与 `CUV Recovery=2900mV` 地址被明确写入仓库冻结值。
+- `asset-df-mainboard` 生成的 section1 覆写中，`Protection Configuration=0x02` 与 `CUV Recovery=2550mV` 地址被明确写入仓库冻结值。
 - `live-df-mainboard` app-mode 写入路径必须把 `OCD Recovery Threshold/Delay` 一并写回 live pack，不允许只改 trip threshold 而保留 stock recovery 条件。
-- `live-df-mainboard` app-mode 写入路径必须把 `Protection Configuration=0x02` 与 `CUV Recovery=2900mV` 一并写回 live pack；主固件运行时不得自动写 DF。
+- `live-df-mainboard` app-mode 写入路径必须把 `Protection Configuration=0x02` 与 `CUV Recovery=2550mV` 一并写回 live pack；主固件运行时不得自动写 DF。
 - 主固件风扇策略在 `TMP` 缺失但 BMS 温度可用时，仍能继续闭环调速而不是直接退到 full-speed fail-safe。
 - 主动热保护使用与风扇相同的共享热控最高温；当 BMS 温度高于 `TMP` 时，日志中的 `max_temp_c_x16` 体现 BMS 侧热点。
 - `tmp-hw-protect-test` 构建下，风扇仍保持 `off` 且 `thermal_protection_enabled=false`，但共享热控温度的遥测/详情页仍可读。

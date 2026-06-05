@@ -166,7 +166,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - Given DC IN 与 USB-C 同时在线，When charger 实际 VBUS/VAC2 为约 12V 且 VAC1 为约 5V，Then `power-diag` 必须能同时呈现 `input.input_source=dcin`、`charger.vac2_adc_mv≈12V`、`charger.vac1_adc_mv≈5V`、`charger.iindpm_ma=3000`，即使 `charger.vbus_stat` 仍报告 USB SDP 类枚举值。
 - Given BMS 处于 CUV 低电恢复且 `BQ25792 CHG_STAT=termination_done`，When 读取 `power-diag`，Then `policy.state` 必须保持 `recovering_low_voltage`、`policy.status=RECOV`、`policy.recovery_stage=bq40_pchg|bq25792_precharge`、`policy.full_latched=false`，不得把该快照误报为满充锁存。
 - Given charger poll 已完成，When 读取 `power-diag`，Then `charger.vbat_lowv_pct_x10=714`、`charger.iprechg_ma=120` 可见。
-- Given BQ40 DF 可读，When 读取 `power-diag`，Then `bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg` 可见，用于确认 `2900mV + CUV_RECOV_CHG=1` baseline。
+- Given BQ40 DF 可读，When 读取 `power-diag`，Then `bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg` 可见，用于确认 `2550mV + CUV_RECOV_CHG=1` baseline。
 - Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 env 指定或默认的 devd bridge。
 - 文档与 AGENTS guardrails 清晰说明 `$mains-aegis-devd-flow` 是本仓 Codex 默认入口；显式 end-user/released-tool 操作才使用 `$mains-aegis-user-operations`。
 - 多 USB CDC 设备同时存在时，devd/Web 不自动选择；Web 显示候选列表，用户选择后才创建 Web lease 并占用设备。
@@ -190,7 +190,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 ## 变更记录（Change log）
 
 - 2026-06-04: `power-diag` 增加 `charger.vac2_adc_mv`；真机验证确认 DC IN/VAC2 约 12.23V、USB-C VAC1 约 5.10V 时，策略可保持 `dcin + RECOV/CHG100 + IINDPM=3000mA`，且 CUV/低压 recovery 不再被 BQ25792 `termination_done` 误分类为 `full_latched`。
-- 2026-06-04: `power-diag` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2900mV + CUV_RECOV_CHG=1` baseline。
+- 2026-06-04: `power-diag` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2550mV + CUV_RECOV_CHG=1` baseline。
 - 2026-06-04: `flash` API 与设备事件增加 backend `status/stdout/stderr` 透传，现场可直接确认 `espflash` 是否真正完成以及目标硬件 identity 是否已经切到新 artifact。
 - 2026-06-04: 新增低压恢复 HIL runner 与文档，固化 bq40 工具固件和主固件的双烧录验证路径。
 - 2026-06-05: `/api/v1/status` 的 `battery` snapshot 增加四节 `cell_mv`、`cell_delta_mv`、均衡状态字段与 `charge_fet_on` / `discharge_fet_on` / `precharge_fet_on`，Web 电池页可直接展示 per-cell voltage、delta、BAL 状态与三路 BMS MOS 状态，不再依赖 `power-diag` 详情端点。
