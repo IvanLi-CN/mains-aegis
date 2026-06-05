@@ -1,11 +1,13 @@
 ---
 name: mains-aegis-user-operations
-description: "Operate Mains Aegis devices from a user machine through released mains-aegis host tools."
+description: "Explicit end-user route for operating Mains Aegis devices through released mains-aegis host tools."
 ---
 
 # Mains Aegis user operations
 
-Use this skill for owner-facing hardware operations on a user machine.
+Use this skill only when the owner explicitly asks for end-user/released host-tools operation, installation validation, or this skill by name.
+
+For Codex work inside the `mains-aegis` repository, default to `$mains-aegis-devd-flow` for development, validation, diagnostics, field investigation, and hardware read/session-read checks.
 
 ## Required boundaries
 
