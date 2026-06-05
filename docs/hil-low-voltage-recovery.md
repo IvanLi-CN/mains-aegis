@@ -13,7 +13,7 @@ The main firmware must not write BQ40 Data Flash. BQ40 DF maintenance stays behi
 - Approved HIL serial port: `/dev/cu.usbmodem212301`.
 - Denied serial port: `/dev/cu.usbmodem212101`.
 - Agents must not directly invoke `espflash`, `cargo espflash`, or `cargo-espflash`.
-- Agents must not run `mcu-agentd selector list`, `mcu-agentd selector set`, enumerate `/dev/*`, or try alternate ports.
+- Agents must not use `mcu-agentd` as a Mains Aegis hardware operation path, enumerate `/dev/*`, or try alternate ports.
 - Real flash/reset/monitor operations require the known approved target and owner authorization.
 
 ## Runner
@@ -37,7 +37,7 @@ The runner refuses real HIL when either `firmware/.esp32-port` or `tools/bq40-co
 
 ## HIL Sequence
 
-1. Validate that both local mcu-agentd selector caches are bound to `/dev/cu.usbmodem212301`.
+1. Validate that the runner's explicit `--device-id` and `--port` match the approved target.
 2. Run:
 
    ```bash

@@ -36,7 +36,7 @@
 ### Non-goals
 
 - 第一版不实现浏览器端完整 ESP ROM 烧录；Web Direct flash 只保留 catalog/client 边界。
-- 不删除 `mcu-agentd.toml`；`mcu-agentd` 作为 legacy/fallback 保留。
+- 不在本规格中清理历史 `mcu-agentd.toml` 文件；`mcu-agentd` 不作为 Agent 的 Mains Aegis 设备操作路径。
 - 不优化多设备并发烧录；v1 使用 per-device 状态与安全串行模型。
 - 不在无硬件环境执行真机烧录、reset 或 monitor。
 - 不把 suspend/sleep 归类为低功耗运行；低功耗运行必须保持主机 awake，devd 和监听程序仍可继续工作。
@@ -168,7 +168,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - Given charger poll 已完成，When 读取 `power-diag`，Then `charger.vbat_lowv_pct_x10=714`、`charger.iprechg_ma=120` 可见。
 - Given BQ40 DF 可读，When 读取 `power-diag`，Then `bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg` 可见，用于确认 `2900mV + CUV_RECOV_CHG=1` baseline。
 - Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 env 指定或默认的 devd bridge。
-- 文档与 AGENTS guardrails 清晰说明 devd 是推荐入口，mcu-agentd 为 fallback。
+- 文档与 AGENTS guardrails 清晰说明 released devd 是 Agent 的 Mains Aegis 设备操作入口。
 - 多 USB CDC 设备同时存在时，devd/Web 不自动选择；Web 显示候选列表，用户选择后才创建 Web lease 并占用设备。
 - Web 正常断开后 devd 立即释放 USB 占用；Web 异常断开后 devd 按租约 TTL 自动释放，默认目标不超过 9 秒。
 - Web USB 写入请求缺少有效 lease 时失败，不得因为 devd 里有历史 connected 设备而继续写硬件。
