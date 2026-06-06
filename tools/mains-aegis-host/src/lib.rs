@@ -5304,21 +5304,10 @@ fn load_native_monitor_defmt_table(
         let Some(artifact) = guard.artifacts.get(artifact_id) else {
             return Ok(None);
         };
-        if artifact.name != "bq40-comm-tool" {
-            return Ok(None);
-        }
         artifact.clone()
     };
-    let Some(elf_path) = artifact
-        .files
-        .iter()
-        .find(|file| file.kind == "elf")
-        .map(|file| PathBuf::from(&file.path))
-    else {
-        return Err(HttpError::non_retryable(
-            "defmt_elf_missing",
-            "selected bq40-comm-tool artifact does not include an ELF file",
-        ));
+    let Some(elf_path) = native_monitor_defmt_elf_path(&artifact)? else {
+        return Ok(None);
     };
     let elf = fs::read(&elf_path).map_err(|error| {
         HttpError::retryable(
@@ -5331,7 +5320,10 @@ fn load_native_monitor_defmt_table(
         Ok(None) => {
             return Err(HttpError::non_retryable(
                 "defmt_table_missing",
-                "selected bq40-comm-tool artifact does not contain defmt metadata",
+                format!(
+                    "selected artifact {} does not contain defmt metadata",
+                    artifact.artifact_id
+                ),
             ))
         }
         Err(error) => {
@@ -5355,6 +5347,28 @@ fn load_native_monitor_defmt_table(
         ));
     }
     Ok(Some(table))
+}
+
+fn native_monitor_defmt_elf_path(
+    artifact: &FirmwareArtifact,
+) -> Result<Option<PathBuf>, HttpError> {
+    if !artifact.defmt.enabled {
+        return Ok(None);
+    }
+    artifact
+        .files
+        .iter()
+        .find(|file| file.kind == "elf")
+        .map(|file| Ok(Some(PathBuf::from(&file.path))))
+        .unwrap_or_else(|| {
+            Err(HttpError::non_retryable(
+                "defmt_elf_missing",
+                format!(
+                    "selected artifact {} has defmt enabled but does not include an ELF file",
+                    artifact.artifact_id
+                ),
+            ))
+        })
 }
 
 fn handle_native_monitor_command(
@@ -6973,6 +6987,66 @@ mod tests {
         assert_eq!(output, [b'{', 0x7b, 0x00]);
         assert!(cdc_line.is_empty());
         assert!(json_candidate.is_empty());
+    }
+
+    fn test_artifact_with_defmt(
+        name: &str,
+        defmt_enabled: bool,
+        files: Vec<ArtifactFile>,
+    ) -> FirmwareArtifact {
+        FirmwareArtifact {
+            artifact_id: format!("{name}-artifact"),
+            name: name.into(),
+            version: "0.1.0".into(),
+            git_sha: "git".into(),
+            build_id: "build".into(),
+            target_chip: "esp32s3".into(),
+            profile: "release".into(),
+            features: vec!["web_serial".into()],
+            protocol: "mains-aegis.cdc.v1".into(),
+            defmt: DefmtMetadata {
+                enabled: defmt_enabled,
+                encoding: "defmt-espflash".into(),
+                elf_sha256: None,
+                metadata_sha256: None,
+            },
+            files,
+        }
+    }
+
+    #[test]
+    fn native_monitor_defmt_uses_any_defmt_enabled_artifact() {
+        let artifact = test_artifact_with_defmt(
+            "mains-aegis",
+            true,
+            vec![ArtifactFile {
+                kind: "elf".into(),
+                path: "/tmp/mains-aegis.elf".into(),
+                sha256: "sha".into(),
+                size: 123,
+                flash_address: None,
+            }],
+        );
+
+        let path = native_monitor_defmt_elf_path(&artifact).unwrap().unwrap();
+
+        assert_eq!(path, PathBuf::from("/tmp/mains-aegis.elf"));
+    }
+
+    #[test]
+    fn native_monitor_defmt_skips_artifacts_without_defmt() {
+        let artifact = test_artifact_with_defmt("plain-tool", false, vec![]);
+
+        assert!(native_monitor_defmt_elf_path(&artifact).unwrap().is_none());
+    }
+
+    #[test]
+    fn native_monitor_defmt_enabled_artifact_requires_elf() {
+        let artifact = test_artifact_with_defmt("mains-aegis", true, vec![]);
+
+        let error = native_monitor_defmt_elf_path(&artifact).unwrap_err();
+
+        assert_eq!(error.0.code, "defmt_elf_missing");
     }
 
     #[test]
