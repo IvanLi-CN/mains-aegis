@@ -131,6 +131,19 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def fmt_ts(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def parse_ts(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def request_json(method: str, path: str, body: object | None = None) -> object:
     url = f"{devd_url}{path}"
     data = None if body is None else json.dumps(body).encode("utf-8")
@@ -157,14 +170,122 @@ def to_text(entry: dict[str, object]) -> str:
     return ""
 
 
+def entries_since(
+    snapshot: dict[str, object],
+    key: str,
+    total_key: str,
+    start_count: int,
+    start_ts: datetime,
+) -> list[object]:
+    entries = snapshot.get(key, [])
+    if not isinstance(entries, list):
+        return []
+    total = snapshot.get(total_key, len(entries))
+    try:
+        total_count = int(total or 0)
+    except (TypeError, ValueError):
+        total_count = len(entries)
+    offset = max(0, total_count - len(entries))
+    start_idx = max(0, start_count - offset)
+    sliced = entries[start_idx:]
+    if sliced or total_count > start_count:
+        return sliced
+    return [
+        entry
+        for entry in entries
+        if isinstance(entry, dict)
+        and (entry_ts := parse_ts(entry.get("timestamp"))) is not None
+        and entry_ts >= start_ts
+    ]
+
+
+def has_device_activity_since(
+    snapshot: dict[str, object],
+    trace_start_count: int,
+    log_start_count: int,
+    start_ts: datetime,
+) -> bool:
+    for entry in entries_since(snapshot, "trace", "trace_count", trace_start_count, start_ts):
+        if not isinstance(entry, dict):
+            continue
+        text = entry.get("text")
+        if isinstance(text, str) and text.strip() and text.strip() != "get_status":
+            return True
+    for entry in entries_since(snapshot, "logs", "log_count", log_start_count, start_ts):
+        if not isinstance(entry, dict):
+            continue
+        target = entry.get("target")
+        message = entry.get("message")
+        if target in (None, "monitor"):
+            continue
+        if isinstance(message, str) and message.strip():
+            return True
+    return False
+
+
 print(f"Using mains-aegis-devd at {devd_url}", file=sys.stderr)
 print(json.dumps(request_json("GET", "/health"), sort_keys=True), file=sys.stderr)
 
+session_started_at = datetime.now(timezone.utc)
 start = request_json("POST", f"/api/v1/devices/{device_id}/monitor/start", {})
+initial_trace_count = int(start.get("initial_trace_count", start.get("trace_count", 0)) or 0)
+initial_log_count = int(start.get("initial_log_count", start.get("log_count", 0)) or 0)
+session_trace_count = int(start.get("trace_count", initial_trace_count) or 0)
+session_log_count = int(start.get("log_count", initial_log_count) or 0)
 if reset_on_attach:
-    print(json.dumps(request_json("POST", f"/api/v1/devices/{device_id}/reset", {}), sort_keys=True), file=sys.stderr)
+    reset_snapshot = request_json("POST", f"/api/v1/devices/{device_id}/reset", {})
+    print(json.dumps(reset_snapshot, sort_keys=True), file=sys.stderr)
 
-time.sleep(duration_sec)
+probe_wait_sec = float(initial_stdout_timeout_sec if after_flash else duration_sec)
+probe_wait_sec = min(probe_wait_sec, float(duration_sec))
+fallback_reset_triggered = False
+fallback_reset_at: datetime | None = None
+if after_flash:
+    time.sleep(probe_wait_sec)
+    probe_snapshot = request_json(
+        "GET",
+        f"/api/v1/devices/{device_id}/trace?logs_limit=500&trace_limit=2000",
+    )
+    probe_trace = probe_snapshot.get("trace", [])
+    if not isinstance(probe_trace, list):
+        probe_trace = []
+    probe_logs = probe_snapshot.get("logs", [])
+    if not isinstance(probe_logs, list):
+        probe_logs = []
+    if not has_device_activity_since(
+        probe_snapshot,
+        session_trace_count,
+        session_log_count,
+        session_started_at,
+    ):
+        request_json("POST", f"/api/v1/devices/{device_id}/monitor/stop", {})
+        reset_snapshot = None
+        for _ in range(3):
+            try:
+                reset_snapshot = request_json("POST", f"/api/v1/devices/{device_id}/reset", {})
+                break
+            except SystemExit as exc:
+                if "502" not in str(exc):
+                    raise
+                time.sleep(2)
+        if reset_snapshot is None:
+            raise SystemExit(
+                f"POST /api/v1/devices/{device_id}/reset failed after fallback retries"
+            )
+        print(json.dumps(reset_snapshot, sort_keys=True), file=sys.stderr)
+        fallback_reset_triggered = True
+        fallback_reset_at = datetime.now(timezone.utc)
+        session_started_at = datetime.now(timezone.utc)
+        start = request_json("POST", f"/api/v1/devices/{device_id}/monitor/start", {})
+        initial_trace_count = int(start.get("initial_trace_count", start.get("trace_count", 0)) or 0)
+        initial_log_count = int(start.get("initial_log_count", start.get("log_count", 0)) or 0)
+        session_trace_count = int(start.get("trace_count", initial_trace_count) or 0)
+        session_log_count = int(start.get("log_count", initial_log_count) or 0)
+    remaining_sec = max(0.0, float(duration_sec) - probe_wait_sec)
+    if remaining_sec > 0:
+        time.sleep(remaining_sec)
+else:
+    time.sleep(duration_sec)
 
 trace_snapshot = request_json(
     "GET",
@@ -172,12 +293,9 @@ trace_snapshot = request_json(
 )
 request_json("POST", f"/api/v1/devices/{device_id}/monitor/stop", {})
 
-initial_trace_count = int(start.get("initial_trace_count", start.get("trace_count", 0)) or 0)
-initial_log_count = int(start.get("initial_log_count", start.get("log_count", 0)) or 0)
-
 entries: list[dict[str, object]] = [
     {
-        "ts": now(),
+        "ts": fmt_ts(session_started_at),
         "src": "meta",
         "event": "monitor_session_start",
         "after_flash": after_flash,
@@ -187,15 +305,33 @@ entries: list[dict[str, object]] = [
         "initial_stdout_timeout_sec": initial_stdout_timeout_sec,
     }
 ]
+if fallback_reset_triggered:
+    entries.append(
+        {
+            "ts": fmt_ts(fallback_reset_at or session_started_at),
+            "src": "meta",
+            "event": "post_flash_fallback_reset",
+            "reason": "no_trace_or_log_activity_during_quiet_window",
+            "quiet_window_sec": probe_wait_sec,
+        }
+    )
 
-trace_entries = trace_snapshot.get("trace", [])
-if not isinstance(trace_entries, list):
-    trace_entries = []
-log_entries = trace_snapshot.get("logs", [])
-if not isinstance(log_entries, list):
-    log_entries = []
+trace_entries = entries_since(
+    trace_snapshot,
+    "trace",
+    "trace_count",
+    session_trace_count,
+    session_started_at,
+)
+log_entries = entries_since(
+    trace_snapshot,
+    "logs",
+    "log_count",
+    session_log_count,
+    session_started_at,
+)
 
-for entry in trace_entries[initial_trace_count:]:
+for entry in trace_entries:
     if not isinstance(entry, dict):
         continue
     text = to_text(entry)
@@ -216,7 +352,7 @@ for entry in trace_entries[initial_trace_count:]:
         }
     )
 
-for entry in log_entries[initial_log_count:]:
+for entry in log_entries:
     if not isinstance(entry, dict):
         continue
     message = entry.get("message")

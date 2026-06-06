@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
+REPO_ROOT=$(cd "$SCRIPT_DIR/../../.." && pwd)
 TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 FIRMWARE_DIR="$TOOL_ROOT/firmware"
 ARTIFACT_DIR="$FIRMWARE_DIR/target/bq40-comm-tool-artifacts"

@@ -55,6 +55,7 @@ const LAN_DISCOVERY_PORT: u16 = 80;
 const LAN_SCAN_CONCURRENCY: usize = 32;
 const LAN_PROBE_TIMEOUT_MS: u64 = 800;
 const LAN_SCAN_MAX_HOSTS: usize = 4_096;
+const DEFAULT_ESPFLASH_TIMEOUT_SECS: u64 = 180;
 #[cfg(not(test))]
 const DEVD_STATE_FILE_NAME: &str = "devices.json";
 #[cfg(not(test))]
@@ -262,6 +263,13 @@ struct NativeMonitorHandle {
     command_tx: mpsc::Sender<NativeMonitorCommand>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeSerialLineStep {
+    Dtr(bool),
+    Rts(bool),
+    SleepMs(u64),
+}
+
 #[derive(Debug)]
 enum NativeMonitorCommand {
     SendFrame {
@@ -269,6 +277,16 @@ enum NativeMonitorCommand {
         request_id: String,
         response_tx: mpsc::Sender<Result<Value, HttpError>>,
     },
+    Reset {
+        response_tx: mpsc::Sender<Result<(), HttpError>>,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum NativeMonitorInput {
+    CdcLine(Vec<u8>),
+    DefmtBytes(Vec<u8>),
+    None,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2704,16 +2722,33 @@ async fn flash_device(
                 "selected artifact does not include an ELF file",
             )
         })?;
-    let output = Command::new(
+    let espflash_timeout = env::var("MAINS_AEGIS_DEVD_ESPFLASH_TIMEOUT_SEC")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_ESPFLASH_TIMEOUT_SECS);
+    let mut command = Command::new(
         env::var("MAINS_AEGIS_DEVD_ESPFLASH_BIN").unwrap_or_else(|_| "espflash".to_string()),
-    )
-    .arg("flash")
-    .arg("--port")
-    .arg(&port_path)
-    .arg(&elf.path)
-    .output()
-    .await
-    .map_err(|error| HttpError::retryable("espflash_launch_failed", error.to_string()))?;
+    );
+    command
+        .arg("flash")
+        .arg("--port")
+        .arg(&port_path)
+        .arg("--after")
+        .arg("watchdog-reset")
+        .arg(&elf.path)
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = tokio::time::timeout(Duration::from_secs(espflash_timeout), command.output())
+        .await
+        .map_err(|_| {
+            HttpError::retryable(
+                "espflash_timeout",
+                format!("espflash did not finish within {espflash_timeout}s"),
+            )
+        })?
+        .map_err(|error| HttpError::retryable("espflash_launch_failed", error.to_string()))?;
     let backend = json!({
         "status": output.status.to_string(),
         "stdout": String::from_utf8_lossy(&output.stdout),
@@ -2746,22 +2781,33 @@ async fn reset_device(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
-    let (transport, port_path) = {
+    let (transport, port_path, monitor_command_tx) = {
         let guard = state.inner.lock().expect("state lock");
         let device = guard
             .devices
             .get(&id)
             .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
-        (device.transport.clone(), device.port_path.clone())
+        (
+            device.transport.clone(),
+            device.port_path.clone(),
+            guard
+                .monitors
+                .get(&id)
+                .map(|monitor| monitor.command_tx.clone()),
+        )
     };
     if matches!(transport, DeviceTransport::NativeSerial) {
-        let port_path = port_path.ok_or_else(|| {
-            HttpError::retryable(
-                "device_port_missing",
-                "native serial device has no port path",
-            )
-        })?;
-        reset_native_serial_async(port_path).await?;
+        if let Some(command_tx) = monitor_command_tx {
+            send_monitor_reset_async(command_tx).await?;
+        } else {
+            let port_path = port_path.ok_or_else(|| {
+                HttpError::retryable(
+                    "device_port_missing",
+                    "native serial device has no port path",
+                )
+            })?;
+            reset_native_serial_async(port_path).await?;
+        }
     }
     {
         let mut guard = state.inner.lock().expect("state lock");
@@ -3076,6 +3122,8 @@ async fn device_trace(
         "identity": device.identity,
         "status": device.status,
         "power_diag": device.power_diag,
+        "log_count": device.logs.len(),
+        "trace_count": device.trace.len(),
         "logs": tail(&device.logs, query.logs_limit.unwrap_or(200).min(500)),
         "trace": tail(&device.trace, trace_limit),
         "transports": grouped_trace_by_transport(&device.trace, trace_limit),
@@ -3096,6 +3144,8 @@ async fn devd_compat_session(
         "identity": device.identity,
         "status": device.status,
         "power_diag": device.power_diag,
+        "log_count": device.logs.len(),
+        "trace_count": device.trace.len(),
         "logs": tail(&device.logs, query.logs_limit.unwrap_or(200).min(500)),
         "trace": tail(&device.trace, trace_limit),
         "transports": grouped_trace_by_transport(&device.trace, trace_limit),
@@ -3909,13 +3959,43 @@ async fn send_monitor_cdc_frame_async(
     .map_err(|error| HttpError::retryable("native_monitor_join_failed", error.to_string()))?
 }
 
-fn send_native_cdc_frame(
+async fn send_monitor_reset_async(
+    command_tx: mpsc::Sender<NativeMonitorCommand>,
+) -> Result<(), HttpError> {
+    tokio::task::spawn_blocking(move || {
+        let (response_tx, response_rx) = mpsc::channel();
+        command_tx
+            .send(NativeMonitorCommand::Reset { response_tx })
+            .map_err(|_| {
+                HttpError::retryable(
+                    "native_monitor_command_unavailable",
+                    "native monitor stopped before accepting the reset command",
+                )
+            })?;
+        response_rx
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => HttpError::retryable(
+                    "native_monitor_command_timeout",
+                    "timed out waiting for the native monitor to process the reset command",
+                ),
+                mpsc::RecvTimeoutError::Disconnected => HttpError::retryable(
+                    "native_monitor_command_disconnected",
+                    "native monitor stopped before returning the reset command response",
+                ),
+            })?
+    })
+    .await
+    .map_err(|error| HttpError::retryable("native_monitor_join_failed", error.to_string()))?
+}
+
+fn open_native_serial_port(
     port_path: &str,
-    frame: Value,
-    request_id: &str,
-) -> Result<Value, HttpError> {
+    timeout: Duration,
+    dtr_ready: bool,
+) -> Result<Box<dyn serialport::SerialPort>, HttpError> {
     let mut port = serialport::new(port_path, 115_200)
-        .timeout(Duration::from_millis(250))
+        .timeout(timeout)
         .open()
         .map_err(|error| {
             HttpError::retryable(
@@ -3923,6 +4003,90 @@ fn send_native_cdc_frame(
                 format!("failed to open {port_path}: {error}"),
             )
         })?;
+    port.write_data_terminal_ready(dtr_ready).map_err(|error| {
+        HttpError::retryable(
+            "native_serial_dtr_set_failed",
+            format!("failed to set DTR={dtr_ready} on {port_path}: {error}"),
+        )
+    })?;
+    port.write_request_to_send(false).map_err(|error| {
+        HttpError::retryable(
+            "native_serial_rts_release_failed",
+            format!("failed to release RTS on {port_path}: {error}"),
+        )
+    })?;
+    Ok(port)
+}
+
+fn native_serial_app_reset_steps() -> &'static [NativeSerialLineStep] {
+    &[
+        NativeSerialLineStep::Rts(false),
+        NativeSerialLineStep::Dtr(true),
+        NativeSerialLineStep::SleepMs(100),
+        NativeSerialLineStep::Rts(true),
+        NativeSerialLineStep::Dtr(true),
+        NativeSerialLineStep::Rts(true),
+        NativeSerialLineStep::SleepMs(100),
+        NativeSerialLineStep::Rts(false),
+        NativeSerialLineStep::Dtr(true),
+    ]
+}
+
+#[cfg(test)]
+fn native_serial_monitor_preserves_control_lines_on_open() -> bool {
+    true
+}
+
+fn open_native_monitor_serial_port(
+    port_path: &str,
+    timeout: Duration,
+) -> Result<Box<dyn serialport::SerialPort>, HttpError> {
+    serialport::new(port_path, 115_200)
+        .timeout(timeout)
+        .preserve_dtr_on_open()
+        .open()
+        .map_err(|error| {
+            HttpError::retryable(
+                "native_serial_open_failed",
+                format!("failed to open {port_path}: {error}"),
+            )
+        })
+}
+
+fn reset_native_serial_to_app_on_port(
+    port_path: &str,
+    port: &mut dyn serialport::SerialPort,
+) -> Result<(), HttpError> {
+    for step in native_serial_app_reset_steps() {
+        match step {
+            NativeSerialLineStep::Dtr(level) => {
+                port.write_data_terminal_ready(*level).map_err(|error| {
+                    HttpError::retryable(
+                        "native_serial_dtr_reset_failed",
+                        format!("failed to set DTR={level} on {port_path}: {error}"),
+                    )
+                })?;
+            }
+            NativeSerialLineStep::Rts(level) => {
+                port.write_request_to_send(*level).map_err(|error| {
+                    HttpError::retryable(
+                        "native_serial_rts_reset_failed",
+                        format!("failed to set RTS={level} on {port_path}: {error}"),
+                    )
+                })?;
+            }
+            NativeSerialLineStep::SleepMs(ms) => std::thread::sleep(Duration::from_millis(*ms)),
+        }
+    }
+    Ok(())
+}
+
+fn send_native_cdc_frame(
+    port_path: &str,
+    frame: Value,
+    request_id: &str,
+) -> Result<Value, HttpError> {
+    let mut port = open_native_serial_port(port_path, Duration::from_millis(250), true)?;
     send_cdc_frame_on_port(&mut *port, port_path, frame, request_id, |_| {})
 }
 
@@ -4864,24 +5028,12 @@ async fn read_device_identity_async(
 }
 
 async fn reset_native_serial_async(port_path: String) -> Result<(), HttpError> {
-    let status = Command::new(
-        env::var("MAINS_AEGIS_DEVD_ESPFLASH_BIN").unwrap_or_else(|_| "espflash".to_string()),
-    )
-    .arg("reset")
-    .arg("--port")
-    .arg(&port_path)
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .status()
+    tokio::task::spawn_blocking(move || {
+        let mut port = open_native_serial_port(&port_path, Duration::from_millis(250), false)?;
+        reset_native_serial_to_app_on_port(&port_path, &mut *port)
+    })
     .await
-    .map_err(|error| HttpError::retryable("espflash_reset_launch_failed", error.to_string()))?;
-    if !status.success() {
-        return Err(HttpError::retryable(
-            "espflash_reset_failed",
-            format!("espflash reset exited with {status}"),
-        ));
-    }
-    Ok(())
+    .map_err(|error| HttpError::retryable("native_reset_join_failed", error.to_string()))?
 }
 
 struct MonitorStartResult {
@@ -4950,6 +5102,53 @@ fn run_native_monitor(
     }
 }
 
+fn native_monitor_ingest_byte(
+    byte: u8,
+    cdc_line: &mut Vec<u8>,
+    json_candidate: &mut Vec<u8>,
+) -> NativeMonitorInput {
+    const JSON_FRAME_PREFIX: &[u8] = br#"{"type""#;
+
+    if !json_candidate.is_empty() {
+        json_candidate.push(byte);
+        if json_candidate.len() <= JSON_FRAME_PREFIX.len()
+            && json_candidate.as_slice() != &JSON_FRAME_PREFIX[..json_candidate.len()]
+        {
+            return NativeMonitorInput::DefmtBytes(std::mem::take(json_candidate));
+        }
+        if byte == 0 {
+            return NativeMonitorInput::DefmtBytes(std::mem::take(json_candidate));
+        }
+        if byte == b'\n' {
+            return NativeMonitorInput::CdcLine(std::mem::take(json_candidate));
+        }
+        if json_candidate.len() > 16 * 1024 {
+            return NativeMonitorInput::DefmtBytes(std::mem::take(json_candidate));
+        }
+        return NativeMonitorInput::None;
+    }
+
+    if !cdc_line.is_empty() {
+        cdc_line.push(byte);
+        if byte == b'\n' {
+            let line = std::mem::take(cdc_line);
+            return NativeMonitorInput::CdcLine(line);
+        }
+        if byte == 0 || cdc_line.len() > 16 * 1024 {
+            let bytes = std::mem::take(cdc_line);
+            return NativeMonitorInput::DefmtBytes(bytes);
+        }
+        return NativeMonitorInput::None;
+    }
+
+    if byte == b'{' {
+        json_candidate.push(byte);
+        return NativeMonitorInput::None;
+    }
+
+    NativeMonitorInput::DefmtBytes(vec![byte])
+}
+
 fn run_native_monitor_inner(
     state: &AppState,
     device_id: &str,
@@ -4957,17 +5156,13 @@ fn run_native_monitor_inner(
     stop: &AtomicBool,
     command_rx: mpsc::Receiver<NativeMonitorCommand>,
 ) -> Result<(), HttpError> {
-    let mut port = serialport::new(port_path, 115_200)
-        .timeout(Duration::from_millis(250))
-        .open()
-        .map_err(|error| {
-            HttpError::retryable(
-                "native_serial_open_failed",
-                format!("failed to open {port_path}: {error}"),
-            )
-        })?;
-    let mut next_status_at = std::time::Instant::now();
-    let mut line = Vec::new();
+    let defmt_table = load_native_monitor_defmt_table(state, device_id)?;
+    let mut defmt_decoder = defmt_table.as_ref().map(|table| table.new_stream_decoder());
+    let mut port = open_native_monitor_serial_port(port_path, Duration::from_millis(250))?;
+    let mut next_status_at = std::time::Instant::now() + Duration::from_secs(1);
+    let mut cdc_line = Vec::new();
+    let mut json_candidate = Vec::new();
+    let mut defmt_raw = Vec::new();
     let mut byte = [0u8; 1];
     while !stop.load(Ordering::SeqCst) {
         while let Ok(command) = command_rx.try_recv() {
@@ -4989,30 +5184,94 @@ fn run_native_monitor_inner(
         }
         match port.read(&mut byte) {
             Ok(0) => continue,
-            Ok(_) if byte[0] == b'\n' => {
-                if !line.is_empty() {
-                    if let Some((trace, log)) = parse_cdc_line_for_monitor(&line) {
-                        append_monitor_trace(state, device_id, trace, log);
-                    }
-                    line.clear();
-                }
-            }
             Ok(_) => {
-                if line.len() < 16 * 1024 {
-                    line.push(byte[0]);
-                } else {
-                    append_monitor_trace(
-                        state,
-                        device_id,
-                        raw_trace_entry(
-                            "rx",
-                            "ignored",
-                            "CDC line exceeded 16 KiB",
-                            "<line too large>",
-                        ),
-                        None,
-                    );
-                    line.clear();
+                match native_monitor_ingest_byte(byte[0], &mut cdc_line, &mut json_candidate) {
+                    NativeMonitorInput::CdcLine(line) => {
+                        if let Some((trace, log)) = parse_cdc_line_for_monitor(&line) {
+                            append_monitor_trace(state, device_id, trace, log);
+                        }
+                    }
+                    NativeMonitorInput::DefmtBytes(bytes) => {
+                        if let Some(decoder) = defmt_decoder.as_mut() {
+                            let reached_boundary = bytes.contains(&0);
+                            defmt_raw.extend_from_slice(&bytes);
+                            decoder.received(&bytes);
+                            if reached_boundary {
+                                let mut emitted = false;
+                                loop {
+                                    match decoder.decode() {
+                                        Ok(frame) => {
+                                            emitted = true;
+                                            let level = frame
+                                                .level()
+                                                .map(|level| format!("{level:?}").to_lowercase())
+                                                .unwrap_or_else(|| "info".to_string());
+                                            let formatter = Formatter::new(FormatterConfig {
+                                                format: FormatterFormat::Custom("{s}"),
+                                                is_timestamp_available: false,
+                                            });
+                                            let message =
+                                                formatter.format_frame(frame, None, None, None);
+                                            append_monitor_trace(
+                                                state,
+                                                device_id,
+                                                structured_trace_entry(
+                                                    "rx",
+                                                    "defmt",
+                                                    Some("defmt".to_string()),
+                                                    &message,
+                                                    hex_preview(&defmt_raw),
+                                                ),
+                                                Some(SerialLogEntry {
+                                                    id: next_id(),
+                                                    timestamp: now(),
+                                                    level,
+                                                    target: "defmt".to_string(),
+                                                    message,
+                                                }),
+                                            );
+                                        }
+                                        Err(defmt_decoder::DecodeError::UnexpectedEof) => break,
+                                        Err(error) => {
+                                            append_monitor_trace(
+                                                state,
+                                                device_id,
+                                                raw_trace_entry(
+                                                    "rx",
+                                                    "defmt",
+                                                    "defmt decode error",
+                                                    &format!(
+                                                        "{} ({} bytes)",
+                                                        error,
+                                                        defmt_raw.len()
+                                                    ),
+                                                ),
+                                                None,
+                                            );
+                                            break;
+                                        }
+                                    }
+                                }
+                                if emitted || !defmt_raw.is_empty() {
+                                    defmt_raw.clear();
+                                }
+                            } else if defmt_raw.len() > 16 * 1024 {
+                                append_monitor_trace(
+                                    state,
+                                    device_id,
+                                    raw_trace_entry(
+                                        "rx",
+                                        "defmt",
+                                        "defmt binary frame exceeded 16 KiB",
+                                        &hex_preview(&defmt_raw),
+                                    ),
+                                    None,
+                                );
+                                defmt_raw.clear();
+                            }
+                        }
+                    }
+                    NativeMonitorInput::None => {}
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
@@ -5027,6 +5286,75 @@ fn run_native_monitor_inner(
     let mut guard = state.inner.lock().expect("state lock");
     guard.monitors.remove(device_id);
     Ok(())
+}
+
+fn load_native_monitor_defmt_table(
+    state: &AppState,
+    device_id: &str,
+) -> Result<Option<Table>, HttpError> {
+    let artifact = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(device_id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        let Some(artifact_id) = device.selected_artifact_id.as_ref() else {
+            return Ok(None);
+        };
+        let Some(artifact) = guard.artifacts.get(artifact_id) else {
+            return Ok(None);
+        };
+        if artifact.name != "bq40-comm-tool" {
+            return Ok(None);
+        }
+        artifact.clone()
+    };
+    let Some(elf_path) = artifact
+        .files
+        .iter()
+        .find(|file| file.kind == "elf")
+        .map(|file| PathBuf::from(&file.path))
+    else {
+        return Err(HttpError::non_retryable(
+            "defmt_elf_missing",
+            "selected bq40-comm-tool artifact does not include an ELF file",
+        ));
+    };
+    let elf = fs::read(&elf_path).map_err(|error| {
+        HttpError::retryable(
+            "defmt_elf_read_failed",
+            format!("failed to read {}: {error}", elf_path.display()),
+        )
+    })?;
+    let table = match Table::parse(&elf) {
+        Ok(Some(table)) => table,
+        Ok(None) => {
+            return Err(HttpError::non_retryable(
+                "defmt_table_missing",
+                "selected bq40-comm-tool artifact does not contain defmt metadata",
+            ))
+        }
+        Err(error) => {
+            return Err(HttpError::non_retryable(
+                "defmt_table_parse_failed",
+                format!(
+                    "failed to parse defmt metadata for {}: {error}",
+                    elf_path.display()
+                ),
+            ))
+        }
+    };
+    if table.encoding() != defmt_decoder::Encoding::Rzcobs {
+        return Err(HttpError::non_retryable(
+            "defmt_encoding_unsupported",
+            format!(
+                "unsupported defmt encoding for {}: {:?}",
+                elf_path.display(),
+                table.encoding()
+            ),
+        ));
+    }
+    Ok(Some(table))
 }
 
 fn handle_native_monitor_command(
@@ -5047,6 +5375,10 @@ fn handle_native_monitor_command(
                     append_monitor_trace(state, device_id, trace, log);
                 }
             });
+            let _ = response_tx.send(result);
+        }
+        NativeMonitorCommand::Reset { response_tx } => {
+            let result = reset_native_serial_to_app_on_port(port_path, port);
             let _ = response_tx.send(result);
         }
     }
@@ -5122,22 +5454,14 @@ fn status_from_trace_payload(payload: &str) -> Option<Value> {
 
 fn reset_backend_name(transport: &DeviceTransport) -> &'static str {
     match transport {
-        DeviceTransport::NativeSerial => "espflash_reset",
+        DeviceTransport::NativeSerial => "native_serial_lines",
         DeviceTransport::Lan => "lan_http",
         DeviceTransport::Mock => "mock",
     }
 }
 
 fn read_native_identity(port_path: &str) -> Result<Value, HttpError> {
-    let mut port = serialport::new(port_path, 115_200)
-        .timeout(Duration::from_millis(250))
-        .open()
-        .map_err(|error| {
-            HttpError::retryable(
-                "native_serial_open_failed",
-                format!("failed to open {port_path}: {error}"),
-            )
-        })?;
+    let mut port = open_native_serial_port(port_path, Duration::from_millis(250), true)?;
     port.write_all(br#"{"type":"request","request_id":"devd-identity","op":"get_identity"}"#)
         .and_then(|_| port.write_all(b"\n"))
         .map_err(|error| {
@@ -6308,6 +6632,37 @@ mod tests {
     }
 
     #[test]
+    fn native_serial_app_reset_steps_keep_boot_released() {
+        assert_eq!(
+            native_serial_app_reset_steps(),
+            &[
+                NativeSerialLineStep::Rts(false),
+                NativeSerialLineStep::Dtr(true),
+                NativeSerialLineStep::SleepMs(100),
+                NativeSerialLineStep::Rts(true),
+                NativeSerialLineStep::Dtr(true),
+                NativeSerialLineStep::Rts(true),
+                NativeSerialLineStep::SleepMs(100),
+                NativeSerialLineStep::Rts(false),
+                NativeSerialLineStep::Dtr(true),
+            ]
+        );
+    }
+
+    #[test]
+    fn native_serial_monitor_preserves_control_lines_on_open() {
+        assert!(super::native_serial_monitor_preserves_control_lines_on_open());
+    }
+
+    #[test]
+    fn native_serial_reset_backend_is_in_process_line_control() {
+        assert_eq!(
+            reset_backend_name(&DeviceTransport::NativeSerial),
+            "native_serial_lines"
+        );
+    }
+
+    #[test]
     fn ipv4_cidr_expands_hosts_without_network_or_broadcast() {
         let hosts = ipv4_hosts_from_cidr("192.168.4.0/30").unwrap();
 
@@ -6550,6 +6905,74 @@ mod tests {
         assert_eq!(response["request_id"], "devd-identity");
         assert_eq!(monitor.kind, "frame");
         assert_eq!(monitor.frame_type.as_deref(), Some("response"));
+    }
+
+    #[test]
+    fn native_monitor_ingest_keeps_defmt_ascii_bytes_in_stream() {
+        let mut cdc_line = Vec::new();
+        let mut json_candidate = Vec::new();
+        let input = [0x31, 0x01, b'R', b'T', b'e', 0x0b, 0x86, 0x00];
+        let mut output = Vec::new();
+
+        for byte in input {
+            if let NativeMonitorInput::DefmtBytes(bytes) =
+                native_monitor_ingest_byte(byte, &mut cdc_line, &mut json_candidate)
+            {
+                output.extend(bytes);
+            }
+        }
+
+        assert_eq!(output, input);
+        assert!(cdc_line.is_empty());
+        assert!(json_candidate.is_empty());
+    }
+
+    #[test]
+    fn native_monitor_ingest_routes_json_lines_to_cdc_parser() {
+        let mut cdc_line = Vec::new();
+        let mut json_candidate = Vec::new();
+        let input = br#"{"type":"response","request_id":"devd-monitor-status","ok":true}"#
+            .iter()
+            .copied()
+            .chain(std::iter::once(b'\n'));
+        let mut cdc = Vec::new();
+        let mut defmt = Vec::new();
+
+        for byte in input {
+            match native_monitor_ingest_byte(byte, &mut cdc_line, &mut json_candidate) {
+                NativeMonitorInput::CdcLine(line) => cdc.push(line),
+                NativeMonitorInput::DefmtBytes(bytes) => defmt.extend(bytes),
+                NativeMonitorInput::None => {}
+            }
+        }
+
+        assert_eq!(cdc.len(), 1);
+        assert_eq!(
+            parse_matching_cdc_response(&cdc[0], "devd-monitor-status")
+                .unwrap()
+                .unwrap()["request_id"],
+            "devd-monitor-status"
+        );
+        assert!(defmt.is_empty());
+    }
+
+    #[test]
+    fn native_monitor_ingest_returns_false_json_prefix_to_defmt() {
+        let mut cdc_line = Vec::new();
+        let mut json_candidate = Vec::new();
+        let mut output = Vec::new();
+
+        for byte in [b'{', 0x7b, 0x00] {
+            if let NativeMonitorInput::DefmtBytes(bytes) =
+                native_monitor_ingest_byte(byte, &mut cdc_line, &mut json_candidate)
+            {
+                output.extend(bytes);
+            }
+        }
+
+        assert_eq!(output, [b'{', 0x7b, 0x00]);
+        assert!(cdc_line.is_empty());
+        assert!(json_candidate.is_empty());
     }
 
     #[test]

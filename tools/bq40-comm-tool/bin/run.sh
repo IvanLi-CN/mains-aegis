@@ -5,6 +5,8 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 source "$SCRIPT_DIR/common.sh"
 bq40_tool_acquire_flash_monitor_lock "$TOOL_ROOT"
+devd_url="${BQ40_TOOL_DEVD_URL:-http://127.0.0.1:30080}"
+target_device_id="${BQ40_TOOL_DEVICE_ID:-}"
 
 find_manifest() {
   local artifact_dir="$1"
@@ -416,12 +418,9 @@ else
     BQ40_TOOL_ARTIFACT_MANIFEST_PATH="$artifact_manifest_path" "$SCRIPT_DIR/flash.sh"
   fi
 
-  monitor_reset_on_attach="true"
+  monitor_reset_on_attach="false"
   initial_stdout_timeout_sec=""
   if [[ "$flash" == "true" ]]; then
-    # Preserve the flash->monitor lock handoff in this parent process, but still let monitor.sh
-    # try the captured boot stream before forcing a reset attach.
-    monitor_reset_on_attach="false"
     initial_stdout_timeout_sec="$POST_FLASH_BOOT_QUIET_SEC"
   fi
   monitor_args=(--duration-sec "$duration_sec" --after-flash "$flash" --reset-on-attach "$monitor_reset_on_attach")

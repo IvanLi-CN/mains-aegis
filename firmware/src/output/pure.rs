@@ -300,6 +300,17 @@ pub(super) const fn usb_pd_charge_gate_ready(
     !usb_pd_enabled || !usb_c_path_present || !usb_pd_controller_ready || usb_pd_charge_ready
 }
 
+pub(super) const fn usb_pd_charge_gate_path_present(
+    input_source: Option<DashboardInputSource>,
+    usb_c_path_present: bool,
+) -> bool {
+    usb_c_path_present
+        && matches!(
+            input_source,
+            Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
+        )
+}
+
 pub(super) fn usb_pd_runtime_unsafe_source_latched(
     previously_latched: bool,
     usb_c_path_present: bool,
@@ -569,12 +580,11 @@ pub(super) fn bms_recovery_charge_allowed_from_diag(
 ) -> bool {
     let low_voltage_evidence = bq40_optional_bit(safety_status, bq40z50::safety_status::CUV)
         == Some(true)
-        || (safety_status.is_none()
-            && cell_min_mv
-                .is_some_and(|mv| mv < CHARGE_POLICY_LOW_VOLTAGE_RECOVERY_EXIT_CELL_MIN_MV));
+        || cell_min_mv.is_some_and(|mv| mv < CHARGE_POLICY_LOW_VOLTAGE_RECOVERY_EXIT_CELL_MIN_MV);
 
     no_battery == Some(false)
         && bq40_op_bit(op_status, bq40z50::operation_status::PCHG) == Some(true)
+        && bq40_op_bit(op_status, bq40z50::operation_status::XCHG) != Some(true)
         && low_voltage_evidence
         && bq40_optional_bit(safety_status, bq40z50::safety_status::CUVC) != Some(true)
         && pf_status.unwrap_or(0) == 0
@@ -1996,6 +2006,27 @@ mod tests {
     }
 
     #[test]
+    fn usb_pd_charge_gate_path_ignores_dc_input_source() {
+        assert!(!usb_pd_charge_gate_path_present(
+            Some(DashboardInputSource::DcIn),
+            true
+        ));
+        assert!(usb_pd_charge_gate_path_present(
+            Some(DashboardInputSource::UsbC),
+            true
+        ));
+        assert!(usb_pd_charge_gate_path_present(
+            Some(DashboardInputSource::Auto),
+            true
+        ));
+        assert!(!usb_pd_charge_gate_path_present(None, true));
+        assert!(!usb_pd_charge_gate_path_present(
+            Some(DashboardInputSource::UsbC),
+            false
+        ));
+    }
+
+    #[test]
     fn usb_pd_runtime_unsafe_source_latch_uses_live_usbc_vac1_sample() {
         assert!(usb_pd_runtime_unsafe_source_latched(
             false,
@@ -2254,6 +2285,18 @@ mod tests {
     }
 
     #[test]
+    fn bms_recovery_charge_allowed_accepts_pchg_low_cell_after_cuv_clears() {
+        assert!(bms_recovery_charge_allowed_from_diag(
+            Some(false),
+            Some(bq40z50::operation_status::PCHG),
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(2_790),
+        ));
+    }
+
+    #[test]
     fn bms_recovery_charge_allowed_rejects_missing_safety_status_without_low_cell() {
         assert!(!bms_recovery_charge_allowed_from_diag(
             Some(false),
@@ -2267,19 +2310,41 @@ mod tests {
 
     #[test]
     fn bms_recovery_charge_allowed_rejects_fault_or_charge_inhibit() {
-        for (pf_status, charging_status, safety_status) in [
-            (Some(1), Some(0), None),
-            (Some(0), Some(bq40z50::charging_status::IN), None),
-            (Some(0), Some(bq40z50::charging_status::SU), None),
+        for (op_status, pf_status, charging_status, safety_status) in [
             (
+                Some(bq40z50::operation_status::PCHG),
+                Some(1),
+                Some(0),
+                None,
+            ),
+            (
+                Some(bq40z50::operation_status::PCHG),
+                Some(0),
+                Some(bq40z50::charging_status::IN),
+                None,
+            ),
+            (
+                Some(bq40z50::operation_status::PCHG),
+                Some(0),
+                Some(bq40z50::charging_status::SU),
+                None,
+            ),
+            (
+                Some(bq40z50::operation_status::PCHG),
                 Some(0),
                 Some(0),
                 Some(bq40z50::safety_status::CUV | bq40z50::safety_status::CUVC),
             ),
+            (
+                Some(bq40z50::operation_status::PCHG | bq40z50::operation_status::XCHG),
+                Some(0),
+                Some(0),
+                Some(0),
+            ),
         ] {
             assert!(!bms_recovery_charge_allowed_from_diag(
                 Some(false),
-                Some(bq40z50::operation_status::PCHG),
+                op_status,
                 safety_status,
                 pf_status,
                 charging_status,
