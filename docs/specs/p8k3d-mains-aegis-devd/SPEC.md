@@ -54,9 +54,9 @@
 - `GET /api/v1/devices/{id}/identity`: 返回设备 firmware identity。
 - `GET /api/v1/devices/{id}/power-diag`: 通过 USB CDC `get_power_diag` 获取只读电源诊断快照，并缓存到设备 session。
 - `GET|POST /api/v1/devices/{id}/artifact`: 查询或选择 artifact manifest。
-- `POST /api/v1/devices/{id}/flash`: 校验 artifact hash 后执行烧录；无硬件验证使用 `dry_run=true`。真实烧录响应与 `flash completed` 事件必须同时回传 backend `status/stdout/stderr`，用于区分“artifact 选择正确但底层 flash backend 没有真正完成”和“backend 已成功写入硬件”。
-- `POST /api/v1/devices/{id}/reset`: 设备 reset 请求。
-- `POST /api/v1/devices/{id}/monitor/start|stop`: monitor 生命周期请求。
+- `POST /api/v1/devices/{id}/flash`: 校验 artifact hash 后执行烧录；无硬件验证使用 `dry_run=true`。真实烧录响应与 `flash completed` 事件必须同时回传 backend `status/stdout/stderr`，用于区分“artifact 选择正确但底层 flash backend 没有真正完成”和“backend 已成功写入硬件”。真实 flash backend 必须有明确超时并在超时路径清理子进程，避免 HTTP 客户端断开后遗留卡住的底层烧录进程。
+- `POST /api/v1/devices/{id}/reset`: 设备 reset 请求；native serial 后端必须在已绑定端口上执行 in-process DTR/RTS app-boot 复位，保持 boot 释放线为实测 app-boot 电平，不再另起外部 reset 进程抢占同一串口。
+- `POST /api/v1/devices/{id}/monitor/start|stop`: monitor 生命周期请求；native serial monitor attach 不隐式复位，避免 USB 复位后继续持有重枚举前的串口 fd；需要复位时必须先通过 `/reset` 关闭式脉冲控制线，再重新 start monitor。
 - `GET /api/v1/devices/{id}/connection`: 返回 transport、连接状态、绑定与 artifact 上下文。
 - `GET /api/v1/devices/{id}/settings`: 返回当前设备 settings 快照。
 - `GET /api/v1/devices/{id}/trace`: 返回 bounded logs/trace 与 `log_decode`。
@@ -166,13 +166,16 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - Given DC IN 与 USB-C 同时在线，When charger 实际 VBUS/VAC2 为约 12V 且 VAC1 为约 5V，Then `power-diag` 必须能同时呈现 `input.input_source=dcin`、`charger.vac2_adc_mv≈12V`、`charger.vac1_adc_mv≈5V`、`charger.iindpm_ma=3000`，即使 `charger.vbus_stat` 仍报告 USB SDP 类枚举值。
 - Given BMS 处于 CUV 低电恢复且 `BQ25792 CHG_STAT=termination_done`，When 读取 `power-diag`，Then `policy.state` 必须保持 `recovering_low_voltage`、`policy.status=RECOV`、`policy.recovery_stage=bq40_pchg|bq25792_precharge`、`policy.full_latched=false`，不得把该快照误报为满充锁存。
 - Given charger poll 已完成，When 读取 `power-diag`，Then `charger.vbat_lowv_pct_x10=714`、`charger.iprechg_ma=120` 可见。
-- Given BQ40 DF 可读，When 读取 `power-diag`，Then `bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg` 可见，用于确认 `2900mV + CUV_RECOV_CHG=1` baseline。
+- Given BQ40 DF 可读，When 读取 `power-diag`，Then `bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg` 可见，用于确认 `2550mV + CUV_RECOV_CHG=0` baseline。
 - Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 env 指定或默认的 devd bridge。
 - 文档与 AGENTS guardrails 清晰说明 `$mains-aegis-devd-flow` 是本仓 Codex 默认入口；显式 end-user/released-tool 操作才使用 `$mains-aegis-user-operations`。
 - 多 USB CDC 设备同时存在时，devd/Web 不自动选择；Web 显示候选列表，用户选择后才创建 Web lease 并占用设备。
 - Web 正常断开后 devd 立即释放 USB 占用；Web 异常断开后 devd 按租约 TTL 自动释放，默认目标不超过 9 秒。
 - Web USB 写入请求缺少有效 lease 时失败，不得因为 devd 里有历史 connected 设备而继续写硬件。
 - Given `POST /api/v1/devices/{id}/flash` 触发真实烧录，When backend 返回成功或失败，Then HTTP 响应与设备事件都必须包含 backend `status/stdout/stderr`，便于定位 `espflash` 是否真正完成。
+- Given `POST /api/v1/devices/{id}/flash` 触发真实烧录，When backend 在超时窗口内没有返回，Then devd 必须返回可诊断的 retryable `espflash_timeout`，并确保 backend 子进程不会继续作为活动烧录流程悬挂。
+- Given `POST /api/v1/devices/{id}/flash` 触发 ESP32-S3 USB 烧录，When flash 写入完成，Then backend 优先使用 `watchdog-reset` after-operation，避免 DTR/RTS normal reset 在当前样机上被 strap 采样为 ROM download。
+- Given native serial `reset` 占用已绑定端口，When devd 需要让 ESP32-S3 运行 app，Then devd 必须用自身 serial handle 执行 boot-release、RTS pulse、boot-release 的 app-boot 控制线序列，不得通过额外进程重新打开端口；monitor/start 不得在已打开 monitor fd 上重复执行该复位序列。
 - 低压恢复 HIL 必须可通过 `tools/hil/low-voltage-recovery.sh` 完成“`tools/bq40-comm-tool` 临时固件 apply DF -> devd 烧回主固件 -> USB `power-diag` 验证”的双烧录流程；runner 必须拒绝非批准 device id / port，并在 real 模式下阻断任何指向 `/dev/cu.usbmodem212101` 的绑定。
 
 ## 实现状态
@@ -180,6 +183,9 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - `tools/mains-aegis-host`: v1 daemon/API/mock validation foundation，并提供 CLI、IPC 与显式 HTTP bridge。
 - `tools/mains-aegis-host`: 提供设备级 `power-diag` 只读诊断 API，转发固件 USB CDC `get_power_diag` 并在 session 中缓存结果。
 - `tools/mains-aegis-host`: flash API 与 `flash completed` 事件已暴露 backend `status/stdout/stderr`，用于现场确认底层 `espflash` 执行结果。
+- `tools/mains-aegis-host`: flash backend 有可配置超时，默认避免底层烧录进程在 HTTP 客户端超时或断开后无界悬挂。
+- `tools/mains-aegis-host`: flash backend 使用 `watchdog-reset` after-operation，避免当前 ESP32-S3 USB CDC 样机 post-flash 被 DTR/RTS line reset 拉进 ROM download。
+- `tools/mains-aegis-host`: native serial reset 使用 in-process DTR/RTS app-boot 复位，并保持 boot 释放线为实测 app-boot 电平；monitor attach 不隐式复位也不主动改写 DTR/RTS，且 monitor 已运行时 `/reset` 复用 monitor 线程持有的串口，避免外部 reset 进程和重枚举前 monitor fd 争抢同一串口。
 - `firmware/src/net_contract.rs`: `power-diag.charger` 已暴露 `vac2_adc_mv`，用于定位 BQ25792 AC2/DC IN 实际采样。
 - `tools/mains-aegis-host`: 提供 host power control surface；低功耗运行、suspend、shutdown 默认 dry-run，真实动作受启动参数保护。
 - `schemas/firmware-catalog.schema.json`: v1 catalog schema。
@@ -190,7 +196,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 ## 变更记录（Change log）
 
 - 2026-06-04: `power-diag` 增加 `charger.vac2_adc_mv`；真机验证确认 DC IN/VAC2 约 12.23V、USB-C VAC1 约 5.10V 时，策略可保持 `dcin + RECOV/CHG100 + IINDPM=3000mA`，且 CUV/低压 recovery 不再被 BQ25792 `termination_done` 误分类为 `full_latched`。
-- 2026-06-04: `power-diag` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2900mV + CUV_RECOV_CHG=1` baseline。
+- 2026-06-04: `power-diag` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2550mV + CUV_RECOV_CHG=0` baseline。
 - 2026-06-04: `flash` API 与设备事件增加 backend `status/stdout/stderr` 透传，现场可直接确认 `espflash` 是否真正完成以及目标硬件 identity 是否已经切到新 artifact。
 - 2026-06-04: 新增低压恢复 HIL runner 与文档，固化 bq40 工具固件和主固件的双烧录验证路径。
 - 2026-06-05: `/api/v1/status` 的 `battery` snapshot 增加四节 `cell_mv`、`cell_delta_mv`、均衡状态字段与 `charge_fet_on` / `discharge_fet_on` / `precharge_fet_on`，Web 电池页可直接展示 per-cell voltage、delta、BAL 状态与三路 BMS MOS 状态，不再依赖 `power-diag` 详情端点。

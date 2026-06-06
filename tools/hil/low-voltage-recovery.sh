@@ -220,7 +220,7 @@ ensure_devd() {
     exit 50
   fi
   echo "Starting mains-aegis-devd at $devd_url"
-  (cd "$REPO_ROOT" && cargo run --manifest-path tools/mains-aegis-devd/Cargo.toml -- serve --bind "$bind") \
+  (cd "$REPO_ROOT" && cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- bridge-http --bind "$bind") \
     >"$report_root/devd.log" 2>&1 &
   DEVD_PID=$!
   trap 'if [[ -n "${DEVD_PID:-}" ]]; then kill "$DEVD_PID" 2>/dev/null || true; fi' EXIT
@@ -236,9 +236,14 @@ ensure_devd() {
 
 validate_scan_target() {
   local scan_json="$1"
-  python_json "$scan_json" "$target_device_id" "$target_port" <<'PY'
+  local scan_file
+  scan_file=$(mktemp)
+  printf '%s\n' "$scan_json" > "$scan_file"
+  python3 - "$scan_file" "$target_device_id" "$target_port" <<'PY'
 import json, sys
-payload = json.loads(sys.argv[1])
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text())
 target_id = sys.argv[2]
 target_port = sys.argv[3]
 devices = payload.get("devices", [])
@@ -249,6 +254,7 @@ port = matches[0].get("port_path")
 if port != target_port:
     raise SystemExit(f"target device port mismatch: {port!r} != {target_port!r}")
 PY
+  rm -f "$scan_file"
 }
 
 find_manifest() {
@@ -280,10 +286,10 @@ if charger.get("vbat_lowv_pct_x10") != 714:
     errors.append(f"charger.vbat_lowv_pct_x10={charger.get('vbat_lowv_pct_x10')!r}, expected 714")
 if charger.get("iprechg_ma") != 120:
     errors.append(f"charger.iprechg_ma={charger.get('iprechg_ma')!r}, expected 120")
-if bms.get("cuv_recovery_mv") != 2900:
-    errors.append(f"bms.cuv_recovery_mv={bms.get('cuv_recovery_mv')!r}, expected 2900")
-if bms.get("cuv_recov_chg") is not True:
-    errors.append(f"bms.cuv_recov_chg={bms.get('cuv_recov_chg')!r}, expected true")
+if bms.get("cuv_recovery_mv") != 2550:
+    errors.append(f"bms.cuv_recovery_mv={bms.get('cuv_recovery_mv')!r}, expected 2550")
+if bms.get("cuv_recov_chg") is not False:
+    errors.append(f"bms.cuv_recov_chg={bms.get('cuv_recov_chg')!r}, expected false")
 stage = policy.get("recovery_stage")
 if stage not in (None, "bq40_pchg", "bq25792_precharge"):
     errors.append(f"policy.recovery_stage={stage!r}, expected null/bq40_pchg/bq25792_precharge")
@@ -335,6 +341,17 @@ if [[ "$mode" == "real" ]]; then
   require_exact_target
   validate_selector_cache "main firmware" "$REPO_ROOT/firmware/.esp32-port"
   validate_selector_cache "bq40-comm-tool" "$REPO_ROOT/tools/bq40-comm-tool/.esp32-port"
+  ensure_devd
+  scan_json=$(curl_json POST "$devd_url/api/v1/devices/scan" '{}')
+  printf '%s\n' "$scan_json" > "$report_root/devd-scan-pre-bq40.json"
+  validate_scan_target "$scan_json"
+  curl_json POST "$devd_url/api/v1/devices/$target_device_id/bind" '{"alias":"hil-low-voltage-recovery"}' \
+    > "$report_root/devd-bind-pre-bq40.json"
+  if connect_json=$(curl_json POST "$devd_url/api/v1/devices/$target_device_id/connect" '{}' 2>/dev/null); then
+    printf '%s\n' "$connect_json" > "$report_root/devd-connect-pre-bq40.json"
+  else
+    echo "Bound device is present but identity is unavailable; continuing from download mode." >&2
+  fi
   decision_summary "state-changing" "tools/bq40-comm-tool/bin/run.sh apply-df ... && devd flash ..." "allow" "G4/G5: known approved bound device; no direct espflash, no port enumeration/switching, devd scan is owner-visible" "Run two-flash HIL."
 else
   echo "Dry-run mode: no hardware flash, monitor, reset, scan, or USB request will be executed."
@@ -347,12 +364,15 @@ fi
 echo "Validated bq40-comm-tool runner."
 
 run_step "Apply BQ40 live DF baseline through temporary tool firmware" \
-  "$REPO_ROOT/tools/bq40-comm-tool/bin/run.sh" apply-df \
-  --mode canonical \
-  --duration-sec 120 \
-  --force-min-charge true \
-  --repair-profile live-df-mainboard \
-  --report-out "$report_root/bq40-apply-df"
+  env \
+    BQ40_TOOL_DEVD_URL="$devd_url" \
+    BQ40_TOOL_DEVICE_ID="$target_device_id" \
+    "$REPO_ROOT/tools/bq40-comm-tool/bin/run.sh" apply-df \
+    --mode canonical \
+    --duration-sec 120 \
+    --force-min-charge true \
+    --repair-profile live-df-mainboard \
+    --report-out "$report_root/bq40-apply-df"
 
 if [[ "$skip_main_build" != "true" ]]; then
   run_step "Build main firmware release" \
@@ -395,8 +415,11 @@ curl_json POST "$devd_url/api/v1/devices/$target_device_id/flash" '{"dry_run":fa
   > "$report_root/devd-main-flash.json"
 
 sleep 8
-curl_json POST "$devd_url/api/v1/devices/$target_device_id/connect" '{}' \
-  > "$report_root/devd-connect.json"
+if connect_json=$(curl_json POST "$devd_url/api/v1/devices/$target_device_id/connect" '{}' 2>/dev/null); then
+  printf '%s\n' "$connect_json" > "$report_root/devd-connect.json"
+else
+  echo "Bound device is present but identity is unavailable after main flash; continuing to power-diag poll." >&2
+fi
 poll_power_diag "$report_root/power-diag.json" "$report_root/hil-result.json"
 
 echo "HIL completed: $report_root/hil-result.json"

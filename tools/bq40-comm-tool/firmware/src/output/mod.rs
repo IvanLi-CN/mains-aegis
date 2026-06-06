@@ -254,7 +254,7 @@ const BMS_DF_MFG_STATUS_INIT_DEFAULT: u16 = 0x0378;
     feature = "bms-rom-repair-asset-df-mainboard",
     feature = "bms-live-df-mainboard"
 ))]
-const BMS_DF_FET_OPTIONS_DEFAULT: u8 = 0x18;
+const BMS_DF_FET_OPTIONS_DEFAULT: u8 = 0x19;
 #[cfg(any(
     feature = "bms-rom-repair-asset-df-mainboard",
     feature = "bms-live-df-mainboard"
@@ -289,7 +289,7 @@ const BMS_DF_AUTH_CONFIG_DEFAULT: u8 = 0x00;
     feature = "bms-rom-repair-asset-df-mainboard",
     feature = "bms-live-df-mainboard"
 ))]
-const BMS_DF_PROTECTION_CONFIGURATION_MAINBOARD: u8 = 0x02;
+const BMS_DF_PROTECTION_CONFIGURATION_MAINBOARD: u8 = 0x00;
 #[cfg(any(
     feature = "bms-rom-repair-asset-df-mainboard",
     feature = "bms-live-df-mainboard"
@@ -319,7 +319,7 @@ const BMS_DF_MIN_RSOC_FOR_BALANCING_MAINBOARD_PCT: u8 = 80;
     feature = "bms-rom-repair-asset-df-mainboard",
     feature = "bms-live-df-mainboard"
 ))]
-const BMS_DF_CUV_RECOVERY_MAINBOARD_MV: u16 = 2_900;
+const BMS_DF_CUV_RECOVERY_MAINBOARD_MV: u16 = 2_550;
 #[cfg(any(
     feature = "bms-rom-repair-asset-df-mainboard",
     feature = "bms-live-df-mainboard"
@@ -521,7 +521,12 @@ impl BmsDfLiveFieldTarget {
 }
 
 #[cfg(feature = "bms-live-df-mainboard")]
-const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 24] = [
+const BMS_DF_LIVE_MAINBOARD_TARGETS: [BmsDfLiveFieldTarget; 25] = [
+    BmsDfLiveFieldTarget::byte(
+        "fet_options",
+        BMS_DF_ADDR_FET_OPTIONS,
+        BMS_DF_FET_OPTIONS_DEFAULT,
+    ),
     BmsDfLiveFieldTarget::byte(
         "balancing_configuration",
         BMS_DF_ADDR_BALANCING_CONFIGURATION,

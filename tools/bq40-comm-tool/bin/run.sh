@@ -5,6 +5,21 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 source "$SCRIPT_DIR/common.sh"
 bq40_tool_acquire_flash_monitor_lock "$TOOL_ROOT"
+devd_url="${BQ40_TOOL_DEVD_URL:-http://127.0.0.1:30080}"
+target_device_id="${BQ40_TOOL_DEVICE_ID:-}"
+
+find_manifest() {
+  local artifact_dir="$1"
+  python3 - "$artifact_dir" <<'PY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+matches = sorted(root.glob("*.manifest.json"))
+if len(matches) != 1:
+    raise SystemExit(f"expected exactly one manifest in {root}, found {len(matches)}")
+print(matches[0])
+PY
+}
 
 subcommand="${1:-}"
 if [[ -z "$subcommand" ]]; then
@@ -397,16 +412,15 @@ else
 
   "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy" --force-min-charge "$force_min_charge" --probe-mode "$probe_mode" --rom-image "$rom_image" --repair-profile "$repair_profile"
 
+  artifact_manifest_path=$(find_manifest "$TOOL_ROOT/firmware/target/bq40-comm-tool-artifacts")
+
   if [[ "$flash" == "true" ]]; then
-    "$SCRIPT_DIR/flash.sh"
+    BQ40_TOOL_ARTIFACT_MANIFEST_PATH="$artifact_manifest_path" "$SCRIPT_DIR/flash.sh"
   fi
 
-  monitor_reset_on_attach="true"
+  monitor_reset_on_attach="false"
   initial_stdout_timeout_sec=""
   if [[ "$flash" == "true" ]]; then
-    # Preserve the flash->monitor lock handoff in this parent process, but still let monitor.sh
-    # try the captured boot stream before forcing a reset attach.
-    monitor_reset_on_attach="false"
     initial_stdout_timeout_sec="$POST_FLASH_BOOT_QUIET_SEC"
   fi
   monitor_args=(--duration-sec "$duration_sec" --after-flash "$flash" --reset-on-attach "$monitor_reset_on_attach")

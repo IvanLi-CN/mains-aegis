@@ -52,7 +52,7 @@
 1. **供电根因**：未建立最小充电电流唤醒路径时，BQ40 常见为持续 NACK。
 2. **协议根因**：仅按“读到了就算成功”会把陈旧/污染帧误判为有效通信。
 3. **并发根因**：共享 I2C 总线时其他周期读会干扰 BMS 采样稳定性。
-4. **工具根因**：`mcu-managerd` IPC/仲裁异常会导致 `mcu-agentd` 看起来“卡死无输出”。
+4. **工具根因**：devd bridge 或 device lease 状态异常会导致 flash/monitor 看起来“卡死无输出”。
 
 ## 4. 最终收敛方案（工具内）
 
@@ -77,9 +77,9 @@
 
 ### 4.4 工具链稳定性兜底
 
-- 若 `mcu-agentd` 无输出/假挂起：
-  1. `mcu-managerd status`
-  2. 异常时前台运行 `mcu-managerd run`
+- 若 devd flash/monitor 无输出/假挂起：
+  1. 确认 `BQ40_TOOL_DEVD_URL/DEVICE_ID` 已设置
+  2. `curl -fsS "$BQ40_TOOL_DEVD_URL/health"`
   3. 重跑 `./bin/run.sh diagnose ...`
 
 ### 4.5 主板 DF 修复口径
@@ -93,7 +93,7 @@
 - 这条路径的目标是把主板关键字段稳定写回项目基线：
   - `DA Configuration = 0x8127`
   - `Manufacturing Status Init = 0x0378`
-  - `FET Options = 0x18`
+  - `FET Options = 0x19` (`PCHG_COMM=1`, PRECHARGE uses CHG FET)
   - `Temperature Enable = 0x1E`
   - `Temperature Mode = 0x00`
   - `OCC1 = 4500mA / 6s`
@@ -103,8 +103,8 @@
   - `OCD2 = -15000mA / 3s`
   - `OCD Recovery = 100mA / 3s`
   - `SOCD = -16000mA / 5s`
-  - `Protection Configuration = 0x02` (`CUV_RECOV_CHG=1`, `PCHG_COMM=0`)
-  - `CUV Recovery = 2900mV`
+  - `Protection Configuration = 0x00` (`CUV_RECOV_CHG=0`)
+  - `CUV Recovery = 2550mV`
   - `Balancing Configuration = 0x07`（`CB=1 / CBM=1 / CBR=1 / CBS=0`）
   - `Min Start Balance Delta = 3mV`
   - `Relax Balance Interval = 18000s`
@@ -112,13 +112,13 @@
 - 如果器件在进入 ROM 前还能完整回应 MB44 的这三项校准字，工具会额外保留 live 的 `CELL_GAIN` / `PACK_GAIN` / `BAT_GAIN`；只要其中任何一项抓取失败，就整体回退到 asset 默认值，避免写入半套 live、半套默认的混合校准。
 - 这不等于“直接写 TI 默认 DF 字段”。TI 默认值会把器件带回 stock 配置，典型表现就是退回 `3S / cell4=0`。
 - 因此，当器件会掉回 TI stock DF，或 live DF capture 持续 `i2c_nack` 时，支持策略应直接切换到 `asset-df-mainboard`，而不是继续等待 live capture 成功。
-- `apply-df` 的收敛信号不是 ROM 事件，而是 monitor 日志里的 `bms_df_apply: ... stage=done fields=21`；对应 `summary.json` 里的 `live_df_apply.done` 也必须为 `true`。
+- `apply-df` 的收敛信号不是 ROM 事件，而是 monitor 日志里的 `bms_df_apply: ... stage=done fields=25`；对应 `summary.json` 里的 `live_df_apply.done` 也必须为 `true`。
 
 ## 5. 可执行排障 SOP（无逻辑分析仪版本）
 
 1. 先确认 managerd 正常：
    ```bash
-   mcu-managerd status
+   curl -fsS "${BQ40_TOOL_DEVD_URL:-http://127.0.0.1:30080}/health"
    ```
 2. 跑安全诊断（不写 ROM）：
    ```bash
@@ -233,7 +233,7 @@
 - `reports/20260311_114419/summary.json` 与 `reports/20260311_114513/summary.json`
   - post-recover canonical diagnose 与同日志离线 verify 结论一致：`rom_events.detected=true`、`samples_total=0`、`max_valid_streak=0`、`verdict.pass=false`。
 - 这组 2026-03-11 证据应按“**已进入 ROM、已完成镜像写入、但未确认退出 ROM**”归档，不能把它升级为 recover 成功。
-- 另外补一条现场操作经验：若在 Codex 桌面环境里出现 `managerd ipc failed: io: Connection refused (os error 61)`，而 `mcu-managerd start` 又无法保持 `running: true`，可先前台运行 `mcu-managerd run`，再执行 `mcu-agentd --non-interactive start` 后重试 live 流程。
+- 另外补一条现场操作经验：若在 Codex 桌面环境里出现 devd bridge 连接拒绝或健康检查失败，先确认 `BQ40_TOOL_DEVD_URL` 指向的 bridge 已启动且目标设备已在 devd 中绑定，再重试 live 流程。
 - 在补上 post-flash ROM-exit 重试后，同一路径的 `reports/20260311_120958/summary.json` 仍然 FAIL，但 monitor 已明确出现：`stage=probe_rom_post_flash_reexit_begin -> stage=rom_mode_exit_write_08 rsoc_after=0x0 -> stage=probe_rom_post_flash_reexit_ok`，说明这一次**不是**“一直卡在 ROM”。
 - 同一份 monitor 随后连续给出 `stage=rom_post_flash_resume_not_rom rsoc=0x0 temp_raw=0xbad`，并伴随 `stage=post_flash_mfg_status err=bad_len raw=block parsed=mac`；窗口结束时还能读到 `temp_c_x10=259`、`voltage_mv=50`、`cell1_mv=50`、`cell2/3/4=0`。这表明剩余阻断点已经转移到“FW 已起来，但没有形成可信运行态快照 / 看不到有效 cell stack”，而不是 ROM-exit 本身。
 - 现在 `summary.json` / `summary.md` 额外暴露三个位：`rom_events.fw_seen`、`rom_events.runtime_invalid`、`rom_events.runtime_status_unconfirmed`。当它们分别为 `true/true/true` 时，表示“工具已经确认离开 ROM，但 post-flash 运行态仍不可信，且 MAC 状态块无法可靠解析”；这比单纯 `flash_done=false` 更能准确定位阻断阶段。

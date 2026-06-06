@@ -9254,8 +9254,18 @@ where
             .then_some(vsys_adc_mv)
             .flatten()
             .filter(|mv| *mv >= 5_000);
+        let input_source = detail_input_source(
+            vbus_present,
+            ac1_present,
+            ac2_present,
+            self.usb_pd_state.attached,
+            raw_vbus_adc_mv,
+            raw_vac1_adc_mv,
+        );
         let usb_c_path_present =
             ac1_present || matches!(self.usb_pd_state.vbus_present, Some(true));
+        let usb_pd_charge_gate_path_present =
+            usb_pd_charge_gate_path_present(input_source, usb_c_path_present);
         let usb_pd_unsafe_latched = usb_pd_runtime_unsafe_source_latched(
             self.usb_pd_state.unsafe_source_latched,
             usb_c_path_present,
@@ -9264,7 +9274,7 @@ where
         let usb_pd_charge_gate_ready = usb_pd_charge_gate_ready(
             self.usb_pd_state.enabled,
             self.usb_pd_state.controller_ready,
-            usb_c_path_present,
+            usb_pd_charge_gate_path_present,
             self.usb_pd_state.charge_ready,
         );
         let ibat_adc_ma = adc_ready.then_some(raw_ibat_adc_ma).flatten();
@@ -9283,14 +9293,6 @@ where
             && self.bms_activation_phase == BmsActivationPhase::ProbeWithoutCharge;
         let activation_normal_hold_charge = false;
         let boot_diag_hold_charge = false;
-        let input_source = detail_input_source(
-            vbus_present,
-            ac1_present,
-            ac2_present,
-            self.usb_pd_state.attached,
-            raw_vbus_adc_mv,
-            raw_vac1_adc_mv,
-        );
         let output_power_w10 =
             charge_policy_output_power_w10(&self.ui_snapshot, self.output_state.active_outputs);
         let charge_policy_hv = self

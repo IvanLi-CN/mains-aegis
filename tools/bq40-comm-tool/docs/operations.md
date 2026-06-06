@@ -63,8 +63,9 @@ Mainboard policy:
   - `OCD2=-15000mA/3s`
   - `OCD recovery=100mA/3s`
   - `SOCD=-16000mA/5s`
-  - `Protection Configuration=0x02` (`CUV_RECOV_CHG=1`, `PCHG_COMM=0`)
-  - `CUV Recovery=2900mV`
+  - `FET Options=0x19` (`PCHG_COMM=1`, PRECHARGE uses CHG FET)
+  - `Protection Configuration=0x00` (`CUV_RECOV_CHG=0`)
+  - `CUV Recovery=2550mV`
   - `Balancing Configuration=0x07` (`CB=1 / CBM=1 / CBR=1 / CBS=0`)
   - `Min Start Balance Delta=3mV`
   - `Relax Balance Interval=18000s`
@@ -83,8 +84,9 @@ Policy:
 - `apply-df` is app-mode only; it rejects `--recover` and `--rom-image`
 - `--repair-profile live-df-mainboard` is mandatory for this subcommand
 - the tool writes the live current-protection + balance + charge-temperature baseline fields via MB44
-- the monitor log must contain `bms_df_apply: ... stage=done fields=21`
+- the monitor log must contain `bms_df_apply: ... stage=done fields=25`
 - `summary.json` records the live apply outcome under `live_df_apply`
+- a passing `apply-df` report requires `live_df_apply.done=true`, no live DF apply errors, and readback matching `FET Options=0x19`, `Protection Configuration=0x00`, plus `CUV Recovery=2550mV`
 
 Current fixed live baseline:
 - `OCC1=4500mA/6s`
@@ -94,8 +96,9 @@ Current fixed live baseline:
 - `OCD2=-15000mA/3s`
 - `OCD recovery=100mA/3s`
 - `SOCD=-16000mA/5s`
-- `Protection Configuration=0x02` (`CUV_RECOV_CHG=1`, `PCHG_COMM=0`)
-- `CUV Recovery=2900mV`
+- `FET Options=0x19` (`PCHG_COMM=1`, PRECHARGE uses CHG FET)
+- `Protection Configuration=0x00` (`CUV_RECOV_CHG=0`)
+- `CUV Recovery=2550mV`
 - `Balancing Configuration=0x07`
 - `Min Start Balance Delta=3mV`
 - `Relax Balance Interval=18000s`
@@ -133,17 +136,20 @@ Notes:
 
 ## 6) Troubleshooting
 
-- Symptom: `mcu-agentd` command hangs (no JSON output) or reports `managerd ipc failed`.
+- Symptom: `BQ40_TOOL_DEVICE_ID` or `BQ40_TOOL_ARTIFACT_MANIFEST_PATH` is missing.
 - Check:
 
 ```bash
-mcu-managerd status
+echo "$BQ40_TOOL_DEVD_URL"
+echo "$BQ40_TOOL_DEVICE_ID"
+ls -l /path/to/manifest.json
 ```
 
-- Recovery (session-local):
+- Symptom: devd bridge is unreachable or returns an error.
+- Check:
 
 ```bash
-mcu-managerd run
+curl -fsS "$BQ40_TOOL_DEVD_URL/health"
 ```
 
-Keep it running in one terminal, then execute tool commands in another terminal.
+Keep the devd bridge running in one terminal, then execute tool commands in another terminal.

@@ -12,9 +12,9 @@ This tool is isolated from the main firmware path and provides:
 ```bash
 cd /Users/ivan/Projects/Ivan/mains-aegis/tools/bq40-comm-tool
 
-# 1) Optional: bind board port selector for this tool only
-cp .esp32-port.example .esp32-port
-# edit .esp32-port
+# 1) For real HIL / devd-backed flashing, export the approved devd target
+export BQ40_TOOL_DEVD_URL=http://127.0.0.1:30080
+export BQ40_TOOL_DEVICE_ID=serial-04f3bb3f5367
 
 # 2) Run canonical diagnose with the proven wake profile (no ROM write)
 ./bin/run.sh diagnose --mode canonical --duration-sec 120 --force-min-charge true
@@ -64,16 +64,14 @@ Required `summary.json` fields:
 
 ## Common issues
 
-- `mcu-agentd ... config file not found`
-  - run commands from `tools/bq40-comm-tool` (this directory has its own `mcu-agentd.toml`)
-- `E_SELECTOR_MISSING`
-  - set `tools/bq40-comm-tool/.esp32-port` first (example file is provided)
+- `BQ40_TOOL_DEVICE_ID is required for devd flash/monitor`
+  - export `BQ40_TOOL_DEVICE_ID` before running live commands, or use the low-voltage HIL runner which injects it for you
+- `BQ40_TOOL_ARTIFACT_MANIFEST_PATH is required for devd flash`
+  - run `./bin/run.sh ...` end-to-end so `bin/build.sh` can generate the manifest, or export a valid manifest path when calling `flash.sh` directly
+- `mains-aegis-devd` health check fails
+  - ensure the bridge is up at `BQ40_TOOL_DEVD_URL` and that the selected device is already bound in devd
 - `monitor output did not advance`
-  - ensure board port is correctly selected in `.esp32-port`
-- `mcu-agentd ... managerd ipc failed` or command hangs without output
-  - check manager status: `mcu-managerd status`
-  - if not running, start foreground once for this session: `mcu-managerd run`
-  - then re-run `./bin/run.sh ...` (tool report parser works offline on existing logs too)
+  - confirm the approved device is connected through devd and that `./bin/run.sh` is using the same `BQ40_TOOL_DEVICE_ID`
 - `monitor file not found: ...`
   - for `verify`, make sure `--monitor-file` points to an existing `.mon.ndjson`
 - `duration-sec` floors (computed by `./bin/run.sh`; `diagnose` / `recover --recover never` require `>=30s` without wake and `>=42s` with `--force-min-charge true`; ROM-enabled `recover` also adds post-flash quiet + resume + transfer/gap budget and still defaults to the historical safe `155s` bench duration when `--duration-sec` is omitted)

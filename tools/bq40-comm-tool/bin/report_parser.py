@@ -42,6 +42,12 @@ LIVE_DF_APPLY_RE = re.compile(
     rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=(?P<stage>[a-zA-Z0-9_]+)"
     rf"(?: .*?(?:writes|fields)=(?P<count>\d+))?"
 )
+BMS_DF_CFG_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_cfg: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf".*?\bfet_options=0x(?P<fet_options>[0-9a-fA-F]+)\b"
+    rf".*?\bprot_cfg=0x(?P<prot_cfg>[0-9a-fA-F]+)\b"
+    rf".*?\bcuv_recovery=0x(?P<cuv_recovery>[0-9a-fA-F]+)\b"
+)
 ROM_DETECTED_RE = re.compile(
     r"stage=(?:rom_mode_detected(?:_after_enter|_post_flash)?|wake_window_rom_entered|wake_window_rom_signature)\b"
 )
@@ -95,6 +101,13 @@ def parse_entry_ts(entry: dict) -> Optional[float]:
         return None
 
 
+def dedupe_key(entry: dict, text: str) -> Optional[tuple[int, str]]:
+    entry_ts = parse_entry_ts(entry)
+    if entry_ts is None:
+        return None
+    return (round(entry_ts * 1000), text)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -143,11 +156,16 @@ def main() -> int:
     live_df_apply_applied = False
     live_df_apply_writes = 0
     live_df_apply_errors: Counter[str] = Counter()
+    live_df_readback_seen = False
+    live_df_readback_fet_options: Optional[int] = None
+    live_df_readback_prot_cfg: Optional[int] = None
+    live_df_readback_cuv_recovery: Optional[int] = None
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
     in_preexisting_segment = False
     parse_preexisting_segment = False
     allow_preexisting_parse = False
+    seen_entries: set[tuple[int, str]] = set()
     allowed_addrs = {0x0B} if args.mode == "canonical" else {0x0B, 0x16}
 
     run_config = {
@@ -210,6 +228,11 @@ def main() -> int:
                 text = entry.get("text", "")
                 if not isinstance(text, str):
                     continue
+                key = dedupe_key(entry, text)
+                if key is not None:
+                    if key in seen_entries:
+                        continue
+                    seen_entries.add(key)
 
                 if ADDR16_RE.search(text):
                     canonical_touched_0x16 = True
@@ -252,6 +275,17 @@ def main() -> int:
                         "reset_err",
                     }:
                         live_df_apply_errors[stage] += 1
+
+                bms_df_cfg_match = BMS_DF_CFG_RE.search(text)
+                if bms_df_cfg_match and int(bms_df_cfg_match.group("addr"), 16) in allowed_addrs:
+                    live_df_readback_seen = True
+                    live_df_readback_fet_options = int(
+                        bms_df_cfg_match.group("fet_options"), 16
+                    )
+                    live_df_readback_prot_cfg = int(bms_df_cfg_match.group("prot_cfg"), 16)
+                    live_df_readback_cuv_recovery = int(
+                        bms_df_cfg_match.group("cuv_recovery"), 16
+                    )
 
                 err_match = POLL_ERR_RE.search(text)
                 if err_match:
@@ -304,15 +338,32 @@ def main() -> int:
         print(f"failed to read monitor file: {exc}", file=sys.stderr)
         return 4
 
+    is_live_df_mainboard_apply = (
+        args.action == "apply-df" and args.repair_profile == "live-df-mainboard"
+    )
+    live_df_readback_matches = (
+        live_df_readback_seen
+        and live_df_readback_fet_options == 0x19
+        and live_df_readback_prot_cfg == 0x00
+        and live_df_readback_cuv_recovery == 0x09F6
+    )
+
     reasons: list[str] = []
-    if samples_total == 0:
+    if samples_total == 0 and not (is_live_df_mainboard_apply and live_df_readback_matches):
         reasons.append("no_bms_samples")
-    if max_streak < 10:
+    if max_streak < 10 and not is_live_df_mainboard_apply:
         reasons.append("max_valid_streak_lt_10")
     if args.mode == "canonical" and canonical_touched_0x16:
         reasons.append("canonical_mode_touched_0x16")
-    if args.action == "apply-df" and args.repair_profile == "live-df-mainboard" and not live_df_apply_done:
-        reasons.append("live_df_apply_not_done")
+    if is_live_df_mainboard_apply:
+        if not live_df_apply_done:
+            reasons.append("live_df_apply_not_done")
+        if live_df_apply_errors:
+            reasons.append("live_df_apply_errors")
+        if not live_df_readback_seen:
+            reasons.append("live_df_readback_missing")
+        elif not live_df_readback_matches:
+            reasons.append("live_df_readback_mismatch")
 
     verdict_pass = len(reasons) == 0
     verdict_reason = "ok" if verdict_pass else ";".join(reasons)
@@ -340,6 +391,13 @@ def main() -> int:
             "done": live_df_apply_done,
             "writes": live_df_apply_writes,
             "errors": dict(sorted(live_df_apply_errors.items())),
+            "readback": {
+                "seen": live_df_readback_seen,
+                "fet_options": live_df_readback_fet_options,
+                "prot_cfg": live_df_readback_prot_cfg,
+                "cuv_recovery": live_df_readback_cuv_recovery,
+                "matches_live_df_mainboard": live_df_readback_matches,
+            },
         },
         "verdict": {
             "pass": verdict_pass,
@@ -359,6 +417,11 @@ def main() -> int:
 
     def fmt_cfg_str(value: Optional[str]) -> str:
         return value if value is not None else "unknown"
+
+    def fmt_hex(value: Optional[int]) -> str:
+        if value is None:
+            return "unknown"
+        return f"0x{value:x}"
 
     md = [
         "# BQ40 Communication Summary",
@@ -407,6 +470,11 @@ def main() -> int:
             f"- applied: `{summary['live_df_apply']['applied']}`",
             f"- done: `{summary['live_df_apply']['done']}`",
             f"- writes: `{summary['live_df_apply']['writes']}`",
+            f"- readback_seen: `{summary['live_df_apply']['readback']['seen']}`",
+            f"- readback_fet_options: `{fmt_hex(summary['live_df_apply']['readback']['fet_options'])}`",
+            f"- readback_prot_cfg: `{fmt_hex(summary['live_df_apply']['readback']['prot_cfg'])}`",
+            f"- readback_cuv_recovery: `{fmt_hex(summary['live_df_apply']['readback']['cuv_recovery'])}`",
+            f"- readback_matches_live_df_mainboard: `{summary['live_df_apply']['readback']['matches_live_df_mainboard']}`",
         ]
     )
 
