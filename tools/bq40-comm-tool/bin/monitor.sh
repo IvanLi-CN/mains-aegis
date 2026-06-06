@@ -223,75 +223,89 @@ def has_device_activity_since(
     return False
 
 
+def stop_monitor_best_effort() -> None:
+    try:
+        request_json("POST", f"/api/v1/devices/{device_id}/monitor/stop", {})
+    except SystemExit as exc:
+        print(f"warning: failed to stop devd monitor: {exc}", file=sys.stderr)
+
+
 print(f"Using mains-aegis-devd at {devd_url}", file=sys.stderr)
 print(json.dumps(request_json("GET", "/health"), sort_keys=True), file=sys.stderr)
 
-session_started_at = datetime.now(timezone.utc)
-start = request_json("POST", f"/api/v1/devices/{device_id}/monitor/start", {})
-initial_trace_count = int(start.get("initial_trace_count", start.get("trace_count", 0)) or 0)
-initial_log_count = int(start.get("initial_log_count", start.get("log_count", 0)) or 0)
-session_trace_count = int(start.get("trace_count", initial_trace_count) or 0)
-session_log_count = int(start.get("log_count", initial_log_count) or 0)
-if reset_on_attach:
-    reset_snapshot = request_json("POST", f"/api/v1/devices/{device_id}/reset", {})
-    print(json.dumps(reset_snapshot, sort_keys=True), file=sys.stderr)
-
-probe_wait_sec = float(initial_stdout_timeout_sec if after_flash else duration_sec)
-probe_wait_sec = min(probe_wait_sec, float(duration_sec))
 fallback_reset_triggered = False
 fallback_reset_at: datetime | None = None
-if after_flash:
-    time.sleep(probe_wait_sec)
-    probe_snapshot = request_json(
+monitor_running = False
+try:
+    session_started_at = datetime.now(timezone.utc)
+    start = request_json("POST", f"/api/v1/devices/{device_id}/monitor/start", {})
+    monitor_running = True
+    initial_trace_count = int(start.get("initial_trace_count", start.get("trace_count", 0)) or 0)
+    initial_log_count = int(start.get("initial_log_count", start.get("log_count", 0)) or 0)
+    session_trace_count = int(start.get("trace_count", initial_trace_count) or 0)
+    session_log_count = int(start.get("log_count", initial_log_count) or 0)
+    if reset_on_attach:
+        reset_snapshot = request_json("POST", f"/api/v1/devices/{device_id}/reset", {})
+        print(json.dumps(reset_snapshot, sort_keys=True), file=sys.stderr)
+
+    probe_wait_sec = float(initial_stdout_timeout_sec if after_flash else duration_sec)
+    probe_wait_sec = min(probe_wait_sec, float(duration_sec))
+    if after_flash:
+        time.sleep(probe_wait_sec)
+        probe_snapshot = request_json(
+            "GET",
+            f"/api/v1/devices/{device_id}/trace?logs_limit=500&trace_limit=2000",
+        )
+        probe_trace = probe_snapshot.get("trace", [])
+        if not isinstance(probe_trace, list):
+            probe_trace = []
+        probe_logs = probe_snapshot.get("logs", [])
+        if not isinstance(probe_logs, list):
+            probe_logs = []
+        if not has_device_activity_since(
+            probe_snapshot,
+            session_trace_count,
+            session_log_count,
+            session_started_at,
+        ):
+            request_json("POST", f"/api/v1/devices/{device_id}/monitor/stop", {})
+            monitor_running = False
+            reset_snapshot = None
+            for _ in range(3):
+                try:
+                    reset_snapshot = request_json("POST", f"/api/v1/devices/{device_id}/reset", {})
+                    break
+                except SystemExit as exc:
+                    if "502" not in str(exc):
+                        raise
+                    time.sleep(2)
+            if reset_snapshot is None:
+                raise SystemExit(
+                    f"POST /api/v1/devices/{device_id}/reset failed after fallback retries"
+                )
+            print(json.dumps(reset_snapshot, sort_keys=True), file=sys.stderr)
+            fallback_reset_triggered = True
+            fallback_reset_at = datetime.now(timezone.utc)
+            session_started_at = datetime.now(timezone.utc)
+            start = request_json("POST", f"/api/v1/devices/{device_id}/monitor/start", {})
+            monitor_running = True
+            initial_trace_count = int(start.get("initial_trace_count", start.get("trace_count", 0)) or 0)
+            initial_log_count = int(start.get("initial_log_count", start.get("log_count", 0)) or 0)
+            session_trace_count = int(start.get("trace_count", initial_trace_count) or 0)
+            session_log_count = int(start.get("log_count", initial_log_count) or 0)
+        remaining_sec = max(0.0, float(duration_sec) - probe_wait_sec)
+        if remaining_sec > 0:
+            time.sleep(remaining_sec)
+    else:
+        time.sleep(duration_sec)
+
+    trace_snapshot = request_json(
         "GET",
         f"/api/v1/devices/{device_id}/trace?logs_limit=500&trace_limit=2000",
     )
-    probe_trace = probe_snapshot.get("trace", [])
-    if not isinstance(probe_trace, list):
-        probe_trace = []
-    probe_logs = probe_snapshot.get("logs", [])
-    if not isinstance(probe_logs, list):
-        probe_logs = []
-    if not has_device_activity_since(
-        probe_snapshot,
-        session_trace_count,
-        session_log_count,
-        session_started_at,
-    ):
-        request_json("POST", f"/api/v1/devices/{device_id}/monitor/stop", {})
-        reset_snapshot = None
-        for _ in range(3):
-            try:
-                reset_snapshot = request_json("POST", f"/api/v1/devices/{device_id}/reset", {})
-                break
-            except SystemExit as exc:
-                if "502" not in str(exc):
-                    raise
-                time.sleep(2)
-        if reset_snapshot is None:
-            raise SystemExit(
-                f"POST /api/v1/devices/{device_id}/reset failed after fallback retries"
-            )
-        print(json.dumps(reset_snapshot, sort_keys=True), file=sys.stderr)
-        fallback_reset_triggered = True
-        fallback_reset_at = datetime.now(timezone.utc)
-        session_started_at = datetime.now(timezone.utc)
-        start = request_json("POST", f"/api/v1/devices/{device_id}/monitor/start", {})
-        initial_trace_count = int(start.get("initial_trace_count", start.get("trace_count", 0)) or 0)
-        initial_log_count = int(start.get("initial_log_count", start.get("log_count", 0)) or 0)
-        session_trace_count = int(start.get("trace_count", initial_trace_count) or 0)
-        session_log_count = int(start.get("log_count", initial_log_count) or 0)
-    remaining_sec = max(0.0, float(duration_sec) - probe_wait_sec)
-    if remaining_sec > 0:
-        time.sleep(remaining_sec)
-else:
-    time.sleep(duration_sec)
-
-trace_snapshot = request_json(
-    "GET",
-    f"/api/v1/devices/{device_id}/trace?logs_limit=500&trace_limit=2000",
-)
-request_json("POST", f"/api/v1/devices/{device_id}/monitor/stop", {})
+finally:
+    if monitor_running:
+        stop_monitor_best_effort()
 
 entries: list[dict[str, object]] = [
     {
