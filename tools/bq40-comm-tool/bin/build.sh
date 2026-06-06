@@ -2,8 +2,10 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 FIRMWARE_DIR="$TOOL_ROOT/firmware"
+ARTIFACT_DIR="$FIRMWARE_DIR/target/bq40-comm-tool-artifacts"
 
 mode="canonical"
 recover="never"
@@ -141,6 +143,8 @@ case "$repair_profile" in
     ;;
 esac
 
+artifact_features=$(IFS=, ; echo "${features[*]}")
+
 if [[ "$recover" != "never" && "$mode" != "dual-diag" ]]; then
   echo "--recover $recover requires --mode dual-diag" >&2
   exit 6
@@ -157,3 +161,17 @@ fi
   echo "+ ${build_cmd[*]}"
   "${build_cmd[@]}"
 )
+
+rm -rf "$ARTIFACT_DIR"
+artifact_cmd=(
+  python3 "$REPO_ROOT/tools/firmware-artifact/build-catalog-entry.py"
+  --elf "$FIRMWARE_DIR/target/xtensa-esp32s3-none-elf/release/esp-firmware"
+  --out "$ARTIFACT_DIR"
+  --name "bq40-comm-tool"
+  --profile "release"
+  --features "$artifact_features"
+  --firmware-dir "$FIRMWARE_DIR"
+)
+
+echo "+ ${artifact_cmd[*]}"
+"${artifact_cmd[@]}"

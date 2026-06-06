@@ -335,6 +335,14 @@ if [[ "$mode" == "real" ]]; then
   require_exact_target
   validate_selector_cache "main firmware" "$REPO_ROOT/firmware/.esp32-port"
   validate_selector_cache "bq40-comm-tool" "$REPO_ROOT/tools/bq40-comm-tool/.esp32-port"
+  ensure_devd
+  scan_json=$(curl_json POST "$devd_url/api/v1/devices/scan" '{}')
+  printf '%s\n' "$scan_json" > "$report_root/devd-scan-pre-bq40.json"
+  validate_scan_target "$scan_json"
+  curl_json POST "$devd_url/api/v1/devices/$target_device_id/bind" '{"alias":"hil-low-voltage-recovery"}' \
+    > "$report_root/devd-bind-pre-bq40.json"
+  curl_json POST "$devd_url/api/v1/devices/$target_device_id/connect" '{}' \
+    > "$report_root/devd-connect-pre-bq40.json"
   decision_summary "state-changing" "tools/bq40-comm-tool/bin/run.sh apply-df ... && devd flash ..." "allow" "G4/G5: known approved bound device; no direct espflash, no port enumeration/switching, devd scan is owner-visible" "Run two-flash HIL."
 else
   echo "Dry-run mode: no hardware flash, monitor, reset, scan, or USB request will be executed."
@@ -347,12 +355,15 @@ fi
 echo "Validated bq40-comm-tool runner."
 
 run_step "Apply BQ40 live DF baseline through temporary tool firmware" \
-  "$REPO_ROOT/tools/bq40-comm-tool/bin/run.sh" apply-df \
-  --mode canonical \
-  --duration-sec 120 \
-  --force-min-charge true \
-  --repair-profile live-df-mainboard \
-  --report-out "$report_root/bq40-apply-df"
+  env \
+    BQ40_TOOL_DEVD_URL="$devd_url" \
+    BQ40_TOOL_DEVICE_ID="$target_device_id" \
+    "$REPO_ROOT/tools/bq40-comm-tool/bin/run.sh" apply-df \
+    --mode canonical \
+    --duration-sec 120 \
+    --force-min-charge true \
+    --repair-profile live-df-mainboard \
+    --report-out "$report_root/bq40-apply-df"
 
 if [[ "$skip_main_build" != "true" ]]; then
   run_step "Build main firmware release" \

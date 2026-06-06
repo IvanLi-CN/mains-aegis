@@ -133,17 +133,20 @@ Notes:
 
 ## 6) Troubleshooting
 
-- Symptom: `mcu-agentd` command hangs (no JSON output) or reports `managerd ipc failed`.
+- Symptom: `BQ40_TOOL_DEVICE_ID` or `BQ40_TOOL_ARTIFACT_MANIFEST_PATH` is missing.
 - Check:
 
 ```bash
-mcu-managerd status
+echo "$BQ40_TOOL_DEVD_URL"
+echo "$BQ40_TOOL_DEVICE_ID"
+ls -l /path/to/manifest.json
 ```
 
-- Recovery (session-local):
+- Symptom: devd bridge is unreachable or returns an error.
+- Check:
 
 ```bash
-mcu-managerd run
+curl -fsS "$BQ40_TOOL_DEVD_URL/health"
 ```
 
-Keep it running in one terminal, then execute tool commands in another terminal.
+Keep the devd bridge running in one terminal, then execute tool commands in another terminal.

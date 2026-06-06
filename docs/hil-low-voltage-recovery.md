@@ -48,6 +48,8 @@ The runner refuses real HIL when either `firmware/.esp32-port` or `tools/bq40-co
      --repair-profile live-df-mainboard
    ```
 
+   The runner exports the approved devd target for this step, so the temporary tool firmware is flashed through `mains-aegis-devd` as well.
+
 3. Build main firmware:
 
    ```bash
