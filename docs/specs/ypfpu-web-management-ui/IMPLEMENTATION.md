@@ -16,6 +16,7 @@
 - Firmware 抽屉在烧录运行中会拦截页面刷新/关闭，禁用抽屉关闭、确认框与重复烧录入口；Web Serial 烧录复用当前已连接的串口并在完成/失败路径尝试复位回应用态。
 - Settings 页对 LAN、USB CDC 或 devd 连接设备开放，提供 WiFi SSID/PSK 覆盖/清除、手动充电偏好、设备日志级别和 USB Console；USB Console 保留当前 Web Serial 或 devd transport 的 tx/rx frame、raw / ignored CDC 行和协议 payload，支持等级过滤、方向过滤、搜索高亮、虚拟滚动、全屏查看与 payload 折行开关，PSK 脱敏。
 - Web App 已移除独立 USB HTTP bridge 分支，devd 成为 localhost USB 控制面；同一 `identity.device_id` 的 LAN 与 USB 来源合并为一条设备记录，并在 Fleet / Connect 中显示 WiFi 与 USB 标记。
+- hosted/self-hosted devd Connect UI 只显示 devd discovery：USB 候选通过 devd lease/usb-http bridge 接入，LAN 候选在保存到 `DeviceRegistry` 时直接落为硬件 HTTP target，不再额外显示 Web Serial / 手动 LAN fallback 面板。
 - devd Web USB control lease 已落地：多候选设备必须由用户选择，Web 创建 lease 后 heartbeat 续租，断开/移除/页面卸载时释放，TTL 到期自动释放，settings 写入与 USB Console hydration 均要求有效 lease。
 - Web Serial 与 devd 连接路径在读取 USB identity 后都会匹配 firmware artifact catalog。未命中时返回 `firmware_artifact_mismatch` 气泡并阻断可写 session；devd 路径会释放刚创建的 lease，用户点击显式忽略按钮后才重新发起连接。
 - USB Console 保留 raw/ignored 串口记录本身，不再额外显示 `Decode issue` 或 `defmt decoder unavailable` 诊断标签；连接时的 firmware artifact 匹配门禁负责阻断不匹配固件。

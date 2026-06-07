@@ -79,8 +79,10 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 
 - Web dev proxy 默认指向 `http://127.0.0.1:30080`，可通过 `MAINS_AEGIS_DEVD_URL`、`VITE_DEFAULT_DEVD_URL` 或 `VITE_DEVD_API_BASE` 指向显式启动的 `serve-http --allow-dev-cors`；该地址代表显式启动的开发 HTTP service，不是默认 daemon。需要 Web 与 CLI 共用状态时，CLI 连接同一个 `serve-http --ipc <endpoint>`。
 - Hosted 模式固定使用 same-origin devd HTTP service；Connect 页在 hosted app 中不暴露 devd URL 或 token 输入。demo 模式仍固定使用 `mock:devd`。
+- Hosted Connect 只保留 devd discovery；不再渲染 Web Serial 或手动 LAN fallback 面板。独立浏览器 / Vite 开发场景继续保留这些 fallback 入口。
 - `serve-http --allow-dev-cors` 只允许 loopback HTTP development origins（`localhost`、`127.0.0.1`、`[::1]`，任意端口），用于 Vite 租约端口或直接 dev API 调试；非 loopback HTTP service 仍必须走 token-gated LAN bridge 规则。
 - Connect 页在 devd 发现结果里只展示 `identity.firmware.protocol === "mains-aegis.cdc.v1"` 的 LAN 设备；其他 LAN 候选不应进入可连接列表。
+- Hosted Connect 中，devd 发现出的 USB 设备必须通过 devd Web lease / usb-http bridge 接入；devd 发现出的 LAN 设备必须落为硬件本体 HTTP target，而不是持久化成 `devd transport` 记录。
 - Hosted Web client 从页面 meta 读取 app-session secret，并且只把该 secret 附加到 same-origin devd API 与 devd EventSource 请求；普通 LAN 设备探活与 LAN status SSE 不得携带该 secret。
 - Web Serial 与 devd HTTP service 仍按既有租约、心跳和 release 语义工作。
 - devd HTTP service 与 CLI 观察同一进程内状态；绑定、别名和 artifact selection 还会写入用户配置目录的 devd 状态文件，daemon 重启后恢复为 disconnected 的安全运行态并保留用户配置态。
@@ -116,12 +118,12 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 ![Hosted root fleet home](./assets/hosted-root-fleet-home.png)
 
 - source_type: storybook_canvas
-  story_id_or_title: `UPS Management/Connect / devd auto discovery`
+  story_id_or_title: `UPS Management/Connect / Hosted devd discovery`
   requested_viewport: `1365x900`
   viewport_strategy: `storybook-viewport`
   capture_scope: `browser-viewport`
   target_program: `mock-only`
-  scenario: hosted connect without devd endpoint form
-  evidence_note: 验证 Connect 页不再暴露 devd URL 或 token 输入，devd 发现面与 LAN fallback 语义保持分离。
+  scenario: hosted connect uses devd discovery only
+  evidence_note: 验证 hosted Connect 页不再暴露 devd URL 或 token 输入，也不再渲染 Web Serial / 手动 LAN fallback；LAN 候选只作为 direct HTTP target 出现。
 
 ![Connect devd auto discovery Storybook](./assets/connect-devd-auto-discovery-storybook.png)

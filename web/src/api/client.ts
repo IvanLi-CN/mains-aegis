@@ -198,7 +198,7 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
   const identity = devdIdentity ?? getMockIdentity("mock:usb");
   const network = identity.network;
   const status = getMockStatus(baseUrl === "mock:devd" ? "mock:lab-standby" : "mock:usb");
-  const device = {
+  const usbDevice = {
     id: baseUrl === "mock:devd" ? "mains-aegis-devd-service" : "mock-devd-esp32s3-1",
     display_name: baseUrl === "mock:devd" ? "Bound ESP32-S3" : "USB demo CDC",
     port_path: "/dev/tty.usbmodem-demo",
@@ -216,6 +216,28 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
       artifact_id: baseUrl === "mock:devd" ? "mains-aegis-esp32s3-release-web_serial-c805b6a" : null,
     },
   };
+  const lanDevice =
+    baseUrl === "mock:devd"
+      ? {
+          id: "mock-devd-lan-standby",
+          display_name: "LAN standby UPS",
+          port_path: null,
+          lan_address: "mock:lab-standby",
+          lan_conflict_addresses: [],
+          transport: "lan" as const,
+          binding: null,
+          connection: "connected" as const,
+          identity: getMockIdentity("mock:lab-standby"),
+          status: getMockStatus("mock:lab-standby"),
+          selected_artifact_id: null,
+          log_decode: {
+            status: "unverified",
+            reason: null,
+            artifact_id: null,
+          },
+        }
+      : null;
+  const devices = lanDevice ? [usbDevice, lanDevice] : [usbDevice];
 
   if (path === "/api/v1/ping" || path === "/health") return Promise.resolve({ ok: true } as T);
   if (path === "/api/v1/identity") return Promise.resolve(identity as T);
@@ -232,11 +254,11 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
       settings: defaultMockSettings(),
     } as T);
   }
-  if (path === "/api/v1/devices") return Promise.resolve({ devices: [device] } as T);
-  if (path === "/api/v1/devices/scan") return Promise.resolve({ devices: [device] } as T);
+  if (path === "/api/v1/devices") return Promise.resolve({ devices } as T);
+  if (path === "/api/v1/devices/scan") return Promise.resolve({ devices } as T);
   if (path.endsWith("/bind")) {
     return Promise.resolve({
-      ...device,
+      ...usbDevice,
       binding: { alias: "USB demo CDC", bound_at: "2026-04-28T00:00:00.000Z" },
       log_decode: { status: "unverified", reason: null, artifact_id: null },
     } as T);
@@ -254,8 +276,8 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
       dry_run: dryRun,
     } as T);
   }
-  if (path.endsWith("/disconnect")) return Promise.resolve({ ...device, connection: "disconnected" } as T);
-  if (path.endsWith("/connect")) return Promise.resolve({ ...device, connection: "connected" } as T);
+  if (path.endsWith("/disconnect")) return Promise.resolve({ ...usbDevice, connection: "disconnected" } as T);
+  if (path.endsWith("/connect")) return Promise.resolve({ ...usbDevice, connection: "connected" } as T);
   throw new MainsAegisApiError({
     code: "not_found",
     message: "mock devd endpoint not found",

@@ -2,13 +2,13 @@
 
 ## 状态
 
-- Status: 已完成（USB CDC safe-control follow-up, firmware flash addendum）
+- Status: 已完成（USB CDC safe-control follow-up, firmware flash addendum, hosted Connect semantics）
 - Created: 2026-04-28
-- Last: 2026-06-03
+- Last: 2026-06-07
 
 ## 接管说明
 
-- 本规格完成的是 Web 管理端 v1 基线，其中 LAN 仍按历史前提被视为只读状态源，Settings 只对 USB CDC / devd 控制路径开放。
+- 本规格完成的是 Web 管理端 v1 基线；当前 LAN 设置语义与 hosted Connect 收敛以 [`#k4vzn`](../k4vzn-lan-management-convergence/SPEC.md) 为准，本规格保留 UI foundation 与 USB / devd 会话约束的历史记录。
 - Web 无 devd 的 LAN 管理、LAN/USB logical device 收敛、`safeSettings` 废弃与新的 `connection / settings / trace` 信息架构，已转由 [`#k4vzn`](../k4vzn-lan-management-convergence/SPEC.md) 接管。
 - 本规格保留 Fleet、Connect、DeviceRegistry、USB CDC / Web Serial、firmware mismatch gate 等 v1 UI foundation 的历史记录。
 
@@ -16,7 +16,7 @@
 
 - `mains-aegis` 已具备设备侧只读 `v1` HTTP API、mDNS / DNS-SD 与 `/api/v1/status` SSE 底座，但缺少浏览器侧管理界面。
 - UPS 可能有多台硬件同时在线；单设备 Dashboard 不能作为唯一入口。
-- 管理界面必须优先支持多设备快速扫视；LAN HTTP/SSE 保持只读，USB CDC / Web Serial 作为首个受限写入通道，只允许安全设置与 WiFi 配网。
+- 管理界面必须优先支持多设备快速扫视；LAN 设备始终通过设备本体 HTTP API 连接，USB CDC / Web Serial 则承担本地可写 USB 会话，只允许安全设置与 WiFi 配网。
 
 ## 目标 / 非目标
 
@@ -54,7 +54,7 @@
 
 ### 设备管理
 
-- `/connect` 支持 USB CDC / Web Serial 连接入口、`mains-aegis-devd` 入口，并保留手动添加 `.local` hostname、IP 或完整 URL 的 LAN 入口。
+- `/connect` 在独立浏览器 / Vite 开发场景支持 USB CDC / Web Serial、`mains-aegis-devd` 与手动 LAN 入口；在 hosted/self-hosted devd UI 中只保留 devd discovery，USB 设备通过 devd 接入，LAN 设备则按 devd 提供的地址直连硬件 HTTP API。
 - USB 连接入口必须显示浏览器支持状态、连接/断开状态、用户取消授权、串口不可用或已占用等错误。
 - devd 入口在发现多个 USB CDC candidates 时必须显示候选设备选择器；用户明确选择某个 devd device id 后才可创建控制 session。Web 不得基于已连接、已识别、第一个或最近使用自动替用户选择硬件。
 - 真实 USB `SerialPort` 不写入 localStorage；刷新页面后需要重新授权。mock USB 设备可用于视觉证据与无硬件验证。
@@ -100,6 +100,7 @@
 - host tools 位于 `tools/mains-aegis-host/`，使用 Rust 实现，并产出 `mains-aegis` CLI 与 `mains-aegis-devd`。
 - devd 通过 scan/list/bind/connect 管理设备；真实写入要求已连接且 identity 可用的 USB CDC 设备。
 - Web App 的 devd 入口先执行 devd scan；没有候选时显示无设备，单候选时可直接提交，多个候选时必须渲染选择器并等待用户选择。多设备场景不得自动选择，也不得要求用户拔掉其它设备作为常规工作流。
+- hosted/self-hosted devd UI 不再重复渲染 Web Serial 与手动 LAN fallback 面板；devd discovery 中的 LAN 候选连接后必须落为 direct HTTP record，而不是 `devd transport` record。
 - Web devd 控制必须由 devd Web lease 支撑。Web 创建 lease 后按 devd 返回的 `heartbeat_interval_ms` 续租；所有 WiFi config、settings、USB Console hydration 与 event stream 请求必须携带有效 lease。
 - Web 正常断开、移除设备或页面关闭时必须尽量优雅释放 lease：优先普通 `DELETE`，页面卸载时使用 keepalive request 或 `sendBeacon`。释放成功后 UI 移除 USB connected 标记，但保留同一设备的 LAN/WiFi 记录。
 - 网络抖动时 UI 不应立即误报断开：SSE 断开或单次 heartbeat 失败先进入 reconnecting / degraded 状态；只要在 devd TTL 内续租恢复，USB 标记保持。devd 返回 `web_session_expired` 后，UI 才移除 USB connected 标记并提示重新连接。

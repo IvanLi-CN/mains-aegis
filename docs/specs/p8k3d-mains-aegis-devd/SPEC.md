@@ -4,7 +4,7 @@
 
 - Status: 已完成（v1 devd foundation）
 - Created: 2026-05-02
-- Last: 2026-06-06
+- Last: 2026-06-07
 
 ## 接管说明
 
@@ -30,7 +30,7 @@
 - 吸收旧本地 USB HTTP bridge 的兼容面：WiFi config、log level、manual charge endpoints 与 Web USB Console hydration 由 devd 直接提供；新的 owner-facing 查询面使用 `connection / settings / trace`。
 - Firmware Catalog 成为 Web Direct、devd、本地构建和 GitHub Release 的统一 artifact 合同。
 - 固件 identity 暴露 build/profile/features/protocol/defmt 信息，devd 用它与 artifact manifest 匹配；不匹配时日志解码必须标记 `unverified`。
-- Web 开发期由 Vite dev server 反代 `/api` 到显式启动的 `serve-http --allow-dev-cors`，proxy target 可由 env 指向当前开发实例；hosted 模式下由 devd 直接托管嵌入式 Web。需要浏览器直接跨源访问 devd API 时，`--allow-dev-cors` 只允许 loopback HTTP development origins。Connect 页在 LAN 发现结果里只保留 `identity.firmware.protocol === "mains-aegis.cdc.v1"` 的候选。
+- Web 开发期由 Vite dev server 反代 `/api` 到显式启动的 `serve-http --allow-dev-cors`，proxy target 可由 env 指向当前开发实例；hosted 模式下由 devd 直接托管嵌入式 Web。需要浏览器直接跨源访问 devd API 时，`--allow-dev-cors` 只允许 loopback HTTP development origins。Connect 页在 LAN 发现结果里只保留 `identity.firmware.protocol === "mains-aegis.cdc.v1"` 的候选；hosted Connect 中这些 LAN 候选只作为 direct hardware HTTP target 使用，不应伪装成 `devd transport`。
 - 新增项目 skill，固化 devd 设备操作、安全边界和验证流程；Codex 在本仓内默认使用 `$mains-aegis-devd-flow` 做开发、验证、诊断与硬件 read/session-read 检查，`$mains-aegis-user-operations` 仅用于显式 end-user/released-tool 场景。
 
 ### Non-goals
@@ -181,6 +181,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 ## 实现状态
 
 - `tools/mains-aegis-host`: v1 daemon/API/mock validation foundation，并提供 CLI、IPC 与显式 HTTP service。
+- `web/`: hosted Connect 只显示 devd discovery；devd 列出的 USB 设备通过 lease/usb-http bridge 进入 Web，LAN 设备则在 Web 中直接落为硬件 HTTP record。
 - `tools/mains-aegis-host`: 提供设备级 `power-diag` 只读诊断 API，转发固件 USB CDC `get_power_diag` 并在 session 中缓存结果。
 - `tools/mains-aegis-host`: flash API 与 `flash completed` 事件已暴露 backend `status/stdout/stderr`，用于现场确认底层 `espflash` 执行结果。
 - `tools/mains-aegis-host`: flash backend 有可配置超时，默认避免底层烧录进程在 HTTP 客户端超时或断开后无界悬挂。

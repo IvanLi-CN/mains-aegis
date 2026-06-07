@@ -41,6 +41,7 @@ function identity(deviceId: string, shortId: string, state: NetworkSummary["stat
       git_sha: "fea0b19",
       src_hash: shortId,
       git_dirty: "clean",
+      protocol: "mains-aegis.cdc.v1",
     },
     network,
     capabilities: {

@@ -548,26 +548,27 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       }
       if (selectedDevice.transport === "lan") {
         const identity = selectedDevice.identity ?? await getDevdDeviceIdentity(baseUrl, selectedDevice.id);
-        const firmwareMatch = await findFirmwareArtifactForIdentity(identity);
-        if (!firmwareMatch && !input.ignoreFirmwareMismatch) {
+        const lanBaseUrl = devdLanBaseUrl(selectedDevice, identity);
+        if (!lanBaseUrl) {
           return {
             ok: false,
-            error: firmwareMismatchError(identity),
+            error: {
+              code: "devd_lan_address_missing",
+              message: "This devd LAN device does not expose a direct hardware HTTP target yet",
+              retryable: true,
+              details: { device: selectedDevice },
+            },
           };
         }
-        const settings = await getDevdDeviceSettings(baseUrl, selectedDevice.id);
-        const traceSession = await getDevdDeviceTrace(baseUrl, selectedDevice.id, DEVD_SERIAL_SESSION_LIMITS);
+        const result = await probeDevice(lanBaseUrl);
         const target: DeviceTarget = {
-          deviceId: identity.device_id,
-          baseUrl,
-          alias: input.alias?.trim() || identity.hostname,
-          location: input.location?.trim() || "devd LAN",
+          deviceId: result.identity.device_id,
+          baseUrl: lanBaseUrl,
+          alias: input.alias?.trim() || result.identity.hostname,
+          location: input.location?.trim() || "LAN",
           addedAt: new Date().toISOString(),
-          bridgeAuth: bridgeAuth || undefined,
-          transport: "devd",
-          serialProtocol: traceSession.protocol,
         };
-        const record = recordFromDevdDeviceSnapshot(target, identity, traceSession.status ?? selectedDevice.status ?? null, settings, traceSession);
+        const record = recordFromProbe(target, result, "online", result.identity.capabilities.sse ? "idle" : "polling");
         setRecords((current) => upsertRecord(current, record));
         return { ok: true, record };
       }
@@ -1609,6 +1610,11 @@ function isManageableDevdDevice(device: DevdDevice): boolean {
 
 function isMainsAegisLanDevice(device: DevdDevice): boolean {
   return device.transport === "lan" && device.identity?.firmware.protocol === "mains-aegis.cdc.v1";
+}
+
+function devdLanBaseUrl(device: DevdDevice, identity: Identity | null): string | null {
+  const candidate = device.lan_address?.trim() || identity?.network.ipv4?.trim() || identity?.hostname_fqdn?.trim() || identity?.hostname?.trim() || "";
+  return candidate ? normalizeBaseUrl(candidate) : null;
 }
 
 function devdBaseUrlForRecord(record: DeviceRecord): string | null {

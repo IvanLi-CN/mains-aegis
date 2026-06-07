@@ -56,6 +56,7 @@ type Route = {
 type AppProps = {
   initialPath?: string;
   initialDevdTarget?: string;
+  forceHostedHttpServiceApp?: boolean;
 };
 
 export type UiFeedback = {
@@ -76,7 +77,6 @@ const deviceSections = [
 
 const appBasePath = normalizeBasePath(import.meta.env.BASE_URL);
 const envDevdTarget = (import.meta.env.VITE_DEFAULT_DEVD_URL ?? import.meta.env.VITE_DEVD_API_BASE ?? "same-origin").trim() || "same-origin";
-const defaultDevdTarget = isHostedHttpServiceApp() ? "same-origin" : envDevdTarget;
 const docsHref = `${appBasePath}docs/`;
 const credentiallessInputProps = {
   autoComplete: "off",
@@ -87,11 +87,12 @@ const credentiallessInputProps = {
   "data-form-type": "other",
 } as const;
 
-export function App({ initialPath, initialDevdTarget }: AppProps = {}) {
+export function App({ initialPath, initialDevdTarget, forceHostedHttpServiceApp }: AppProps = {}) {
   const registry = useDeviceRegistry();
   const route = useRoute(initialPath);
   const selected = route.deviceId ? (registry.records.find((record) => record.target.deviceId === route.deviceId) ?? null) : null;
   const [navOpen, setNavOpen] = useState(false);
+  const hostedHttpServiceApp = forceHostedHttpServiceApp ?? isHostedHttpServiceApp();
 
   useEffect(() => {
     setNavOpen(false);
@@ -144,7 +145,7 @@ export function App({ initialPath, initialDevdTarget }: AppProps = {}) {
 
       <main className={`main-surface ${route.section === "connect" ? "connect-adapt-command" : ""}`}>
         <TopBar records={registry.records} selected={selected} />
-        {renderRoute(route, registry.records, selected, initialDevdTarget)}
+        {renderRoute(route, registry.records, selected, initialDevdTarget, hostedHttpServiceApp)}
       </main>
     </div>
   );
@@ -155,8 +156,11 @@ function renderRoute(
   records: DeviceRecord[],
   selected: DeviceRecord | null,
   initialDevdTarget?: string,
+  hostedHttpServiceApp?: boolean,
 ) {
-  if (route.section === "connect") return <ConnectPage initialDevdTarget={initialDevdTarget} />;
+  if (route.section === "connect") {
+    return <ConnectPage initialDevdTarget={initialDevdTarget} hostedHttpServiceApp={hostedHttpServiceApp} />;
+  }
   if (!route.deviceId) return <FleetPage records={records} />;
   if (!selected) return <MissingDevice />;
 
@@ -471,7 +475,13 @@ function isMainsAegisLanDevice(device: DevdDevice): boolean {
   return device.transport === "lan" && device.identity?.firmware.protocol === "mains-aegis.cdc.v1";
 }
 
-function ConnectPage({ initialDevdTarget }: { initialDevdTarget?: string }) {
+function ConnectPage({
+  initialDevdTarget,
+  hostedHttpServiceApp = isHostedHttpServiceApp(),
+}: {
+  initialDevdTarget?: string;
+  hostedHttpServiceApp?: boolean;
+}) {
   const {
     records,
     addDevice,
@@ -489,7 +499,9 @@ function ConnectPage({ initialDevdTarget }: { initialDevdTarget?: string }) {
   const [location, setLocation] = useState("");
   const [usbAlias, setUsbAlias] = useState("");
   const [usbLocation, setUsbLocation] = useState("");
-  const [devdTarget] = useState(() => demoMode ? "mock:devd" : initialDevdTarget ?? defaultDevdTarget);
+  const [devdTarget] = useState(() =>
+    demoMode ? "mock:devd" : initialDevdTarget ?? (hostedHttpServiceApp ? "same-origin" : envDevdTarget),
+  );
   const [devdDevices, setDevdDevices] = useState<DevdDevice[]>([]);
   const [devdStatus, setDevdStatus] = useState<"checking" | "available" | "unavailable">("checking");
   const [devdLastUpdated, setDevdLastUpdated] = useState<string | null>(null);
@@ -504,6 +516,7 @@ function ConnectPage({ initialDevdTarget }: { initialDevdTarget?: string }) {
   const [usbBusy, setUsbBusy] = useState(false);
   const [devdBusy, setDevdBusy] = useState(false);
   const serialSupported = isWebSerialSupported();
+  const devdDiscoveryOnly = hostedHttpServiceApp;
 
   const refreshDevdDiscovery = useCallback(async (options: { clearMessage?: boolean } = {}) => {
     const devdBaseUrl = normalizeBaseUrl(devdTarget);
@@ -599,7 +612,7 @@ function ConnectPage({ initialDevdTarget }: { initialDevdTarget?: string }) {
     if (result.ok) {
       setDevdFirmwareOverrideDeviceId(null);
       setDevdFirmwareOverrideMessage(null);
-      setDevdMessage(successFeedback(`devd connected ${result.record.target.alias}`));
+      setDevdMessage(successFeedback(`${device.transport === "lan" ? "LAN" : "devd"} connected ${result.record.target.alias}`));
       navigate(deviceHref(result.record.target.deviceId, "settings"));
       void refreshDevdDiscovery();
     } else {
@@ -627,14 +640,19 @@ function ConnectPage({ initialDevdTarget }: { initialDevdTarget?: string }) {
       : devdStatus === "available"
         ? `${connectableDevdDevices.length} connectable, ${devdDevices.length} discovered`
         : "Not reachable";
-  const showLanFallback = devdStatus === "unavailable";
+  const showLanFallback = !devdDiscoveryOnly && devdStatus === "unavailable";
+  const showFallbackConnectPanels = !devdDiscoveryOnly;
   const devdLastUpdatedLabel = devdLastUpdated ? timeAgo(devdLastUpdated) : "not yet";
 
   return (
     <section className="page-flow connect-wide">
       <div className="section-heading">
         <h2>Connect devices</h2>
-        <p>When mains-aegis-devd is reachable, USB CDC and LAN devices are discovered automatically.</p>
+        <p>
+          {devdDiscoveryOnly
+            ? "This self-hosted devd UI only uses devices discovered by mains-aegis-devd: USB devices attach through devd, while LAN devices connect directly to the hardware HTTP API."
+            : "When mains-aegis-devd is reachable, USB CDC and LAN devices are discovered automatically."}
+        </p>
       </div>
 
       <section className="devd-discovery-panel" data-evidence-target="devd-discovery">
@@ -642,7 +660,15 @@ function ConnectPage({ initialDevdTarget }: { initialDevdTarget?: string }) {
           <div>
             <span className="eyebrow">mains-aegis-devd</span>
             <h3><Server size={19} /> Automatic device discovery</h3>
-            <p>{devdStatus === "unavailable" ? "Manual LAN entry is available below because devd cannot be reached." : "USB and LAN inventory refreshes automatically while this page is open."}</p>
+            <p>
+              {devdStatus === "unavailable"
+                ? devdDiscoveryOnly
+                  ? "This hosted UI depends on mains-aegis-devd discovery. Restart or reconnect devd to continue."
+                  : "Manual LAN entry is available below because devd cannot be reached."
+                : devdDiscoveryOnly
+                  ? "USB devices attach through devd. LAN devices are discovered by devd, then connected directly to the hardware HTTP API."
+                  : "USB and LAN inventory refreshes automatically while this page is open."}
+            </p>
           </div>
           <div className="devd-discovery-status">
             <span className={`transport-badge ${devdStatus === "available" ? "devd" : devdStatus === "unavailable" ? "offline" : "adapter"}`}>{devdSummary}</span>
@@ -671,7 +697,13 @@ function ConnectPage({ initialDevdTarget }: { initialDevdTarget?: string }) {
             const identityDeviceId = device.identity?.device_id;
             const existingRecord = identityDeviceId ? records.find((record) => record.target.deviceId === identityDeviceId) : null;
             const connectable = isConnectableDevdDevice(device);
-            const buttonLabel = existingRecord ? "Open" : device.connection === "connected" ? "Attach" : "Connect";
+            const buttonLabel = existingRecord
+              ? "Open"
+              : device.transport === "lan"
+                ? "Connect LAN"
+                : device.connection === "connected"
+                  ? "Attach USB"
+                  : "Connect USB";
             const showOverride = devdFirmwareOverrideDeviceId === device.id;
             const isConnectingDevice = devdConnectingDeviceId === device.id;
             return (
@@ -725,7 +757,8 @@ function ConnectPage({ initialDevdTarget }: { initialDevdTarget?: string }) {
         {visibleDevdMessage?.tone === "success" ? <FeedbackMessage feedback={visibleDevdMessage} /> : null}
       </section>
 
-      <div className="connect-grid secondary-connect-grid" data-evidence-target="usb-connect">
+      {showFallbackConnectPanels ? (
+        <div className="connect-grid secondary-connect-grid" data-evidence-target="usb-connect">
         <section className="connect-panel usb-panel">
           <header className="connect-panel-header">
             <div>
@@ -820,7 +853,8 @@ function ConnectPage({ initialDevdTarget }: { initialDevdTarget?: string }) {
             </div>
           )}
         </section>
-      </div>
+        </div>
+      ) : null}
 
       <div className="table-list">
         {records.map((record) => (

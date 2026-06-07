@@ -23,3 +23,8 @@
 - 明确 devd Web USB control lease：只有存在有效 Web lease 时 devd 才能占用设备；正常关闭立即释放，异常断开依靠短 TTL 自动释放，同时允许短暂网络抖动在 TTL 内恢复。
 - 明确 USB 连接前 firmware artifact 匹配门禁：defmt raw/ignored 日志可作为普通控制台记录保留，但 Web Serial 与 devd 建立可写 session 前必须识别固件 artifact 不匹配，并要求用户显式忽略警告后才继续。
 - 固件 workflow 现已真实发布 GitHub Release 资产：`firmware-catalog.json` 与同批 artifact 文件会在 `push` 到 `main` 时随 commit SHA release 一并发布，供 Web App 的 release catalog 读取。
+
+## 2026-06-07
+
+- hosted/self-hosted devd Connect UI 收敛为 discovery-only：不再重复渲染 Web Serial 与手动 LAN fallback 面板。
+- 明确 devd discovery 的连接语义：USB 候选通过 devd Web lease / usb-http bridge 接入；LAN 候选只借用 devd 发现地址，实际保存为直连硬件 HTTP target。

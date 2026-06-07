@@ -9,44 +9,59 @@ const STORAGE_KEY = "mains-aegis-web.devices.v1";
 const meta = {
   title: "UPS Management/Connect",
   component: App,
+  tags: ["autodocs"],
   parameters: {
     layout: "fullscreen",
+    docs: {
+      description: {
+        component:
+          "Connect states for standalone Web usage and the hosted mains-aegis-devd app. Hosted mode keeps only devd discovery, then attaches USB through devd or connects LAN devices directly to the hardware HTTP API.",
+      },
+    },
   },
 } satisfies Meta<typeof App>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-function renderApp(seed = "default", initialDevdTarget?: string) {
+function renderApp(seed = "default", options: { initialDevdTarget?: string; forceHostedHttpServiceApp?: boolean } = {}) {
   window.localStorage.removeItem(STORAGE_KEY);
   const params = new URLSearchParams(window.location.search);
   params.set("seed", seed);
   window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
   return (
     <DeviceRegistryProvider>
-      <App initialPath="/connect" initialDevdTarget={initialDevdTarget} />
+      <App
+        initialPath="/connect"
+        initialDevdTarget={options.initialDevdTarget}
+        forceHostedHttpServiceApp={options.forceHostedHttpServiceApp}
+      />
     </DeviceRegistryProvider>
   );
 }
 
-export const DevdAutoDiscovery: Story = {
-  name: "devd auto discovery",
-  render: () => renderApp("empty"),
+export const HostedDevdDiscovery: Story = {
+  name: "Hosted devd discovery",
+  render: () => renderApp("empty", { forceHostedHttpServiceApp: true }),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("heading", { name: "Connect devices" })).toBeInTheDocument();
     await expect(await canvas.findByRole("heading", { name: /Automatic device discovery/ })).toBeInTheDocument();
     await expect(await canvas.findByText("mains-aegis-devd-service")).toBeInTheDocument();
+    await expect(await canvas.findByText("mock:lab-standby")).toBeInTheDocument();
+    await expect(await canvas.findByRole("button", { name: "Connect LAN" })).toBeInTheDocument();
     await expect(await canvas.findByText("Mock")).toBeInTheDocument();
     await expect(canvas.queryByText("Discovery source")).not.toBeInTheDocument();
     await expect(canvas.queryByLabelText("devd URL")).not.toBeInTheDocument();
     await expect(canvas.queryByLabelText("Target")).not.toBeInTheDocument();
+    await expect(canvas.queryByRole("heading", { name: "Web Serial" })).not.toBeInTheDocument();
+    await expect(canvas.queryByRole("heading", { name: "LAN device API" })).not.toBeInTheDocument();
   },
 };
 
 export const ManualLanFallback: Story = {
   name: "Manual LAN fallback",
-  render: () => renderApp("empty", "mock:missing-devd"),
+  render: () => renderApp("empty", { initialDevdTarget: "mock:missing-devd" }),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("heading", { name: /Automatic device discovery/ })).toBeInTheDocument();
