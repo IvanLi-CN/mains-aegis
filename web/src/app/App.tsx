@@ -49,6 +49,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   bindDevdDevice,
   isHostedHttpServiceApp,
+  listDevdDevices,
   normalizeBaseUrl,
   scanDevdDevices,
   subscribeDevdDeviceEvents,
@@ -157,6 +158,7 @@ type SharedDevdDiscovery = {
   devdTarget: string | null;
   devdDevices: DevdDevice[];
   status: FleetDiscoveryStatus;
+  isRefreshing: boolean;
   lastUpdated: string | null;
   refresh: () => Promise<void>;
 };
@@ -337,7 +339,9 @@ function renderRoute(
       />
     );
   }
-  if (!route.deviceId) return <FleetPage entries={fleetEntries} />;
+  if (!route.deviceId && devdDiscovery) {
+    return <FleetPage entries={fleetEntries} discovery={devdDiscovery} />;
+  }
   if (!selected) return <MissingDevice />;
 
   switch (route.section) {
@@ -402,37 +406,91 @@ function useFleetDevdDiscovery(
   const [status, setStatus] = useState<FleetDiscoveryStatus>(
     devdTarget ? "checking" : "idle",
   );
+  const [isRefreshing, setIsRefreshing] = useState(Boolean(devdTarget));
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const hasDiscoverySnapshot = useRef(false);
+
+  const filterDevices = useCallback(
+    (devices: DevdDevice[]) =>
+      devices.filter(
+        (device) =>
+          device.transport !== "lan" || isMainsAegisLanDevice(device),
+      ),
+    [],
+  );
+
+  const applyDiscoverySnapshot = useCallback(
+    (
+      devdBaseUrl: string,
+      devices: DevdDevice[],
+      options: { allowEmpty?: boolean } = {},
+    ) => {
+      const filteredDevices = filterDevices(devices);
+      if (filteredDevices.length === 0 && options.allowEmpty === false) {
+        return false;
+      }
+      setDevdDevices(filteredDevices);
+      rememberDiscoveredChannels(devdBaseUrl, filteredDevices);
+      hasDiscoverySnapshot.current = true;
+      setStatus("available");
+      setLastUpdated(new Date().toISOString());
+      return true;
+    },
+    [filterDevices, rememberDiscoveredChannels],
+  );
 
   const refreshDiscovery = useCallback(async () => {
     if (!devdTarget) {
+      hasDiscoverySnapshot.current = false;
       setDevdDevices([]);
       setStatus("idle");
+      setIsRefreshing(false);
       setLastUpdated(null);
       return;
     }
     const devdBaseUrl = normalizeBaseUrl(devdTarget);
+    setIsRefreshing(true);
     try {
-      setStatus("checking");
       const scan = await scanDevdDevices(devdBaseUrl);
-      const filteredDevices = scan.devices.filter(
-        (device) =>
-          device.transport !== "lan" || isMainsAegisLanDevice(device),
-      );
-      setDevdDevices(filteredDevices);
-      rememberDiscoveredChannels(devdBaseUrl, filteredDevices);
-      setStatus("available");
-      setLastUpdated(new Date().toISOString());
+      applyDiscoverySnapshot(devdBaseUrl, scan.devices);
     } catch {
-      setDevdDevices([]);
-      setStatus("unavailable");
-      setLastUpdated(null);
+      setStatus(hasDiscoverySnapshot.current ? "available" : "unavailable");
+      if (!hasDiscoverySnapshot.current) {
+        setDevdDevices([]);
+        setLastUpdated(null);
+      }
+    } finally {
+      setIsRefreshing(false);
     }
-  }, [devdTarget, rememberDiscoveredChannels]);
+  }, [applyDiscoverySnapshot, devdTarget]);
 
   useEffect(() => {
-    void refreshDiscovery();
-  }, [refreshDiscovery]);
+    if (!devdTarget) {
+      void refreshDiscovery();
+      return;
+    }
+    let cancelled = false;
+    const devdBaseUrl = normalizeBaseUrl(devdTarget);
+    hasDiscoverySnapshot.current = false;
+    setStatus("checking");
+    setIsRefreshing(true);
+    void (async () => {
+      try {
+        const listed = await listDevdDevices(devdBaseUrl);
+        if (cancelled) return;
+        applyDiscoverySnapshot(devdBaseUrl, listed.devices, {
+          allowEmpty: false,
+        });
+      } catch {
+        if (cancelled) return;
+      }
+      if (cancelled) return;
+      await refreshDiscovery();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyDiscoverySnapshot, devdTarget, refreshDiscovery]);
 
   useEffect(() => {
     if (!devdTarget) return undefined;
@@ -454,6 +512,7 @@ function useFleetDevdDiscovery(
     devdTarget,
     devdDevices,
     status,
+    isRefreshing,
     lastUpdated,
     refresh: refreshDiscovery,
   };
@@ -613,9 +672,23 @@ function TopBar({
   );
 }
 
-function FleetPage({ entries }: { entries: FleetDeviceEntry[] }) {
+function FleetPage({
+  entries,
+  discovery,
+}: {
+  entries: FleetDeviceEntry[];
+  discovery: SharedDevdDiscovery;
+}) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Severity | "all">("all");
+  const initialLoading =
+    discovery.status === "checking" &&
+    discovery.isRefreshing &&
+    entries.length === 0;
+  const showRefreshingHint =
+    discovery.isRefreshing &&
+    entries.length > 0 &&
+    discovery.devdTarget !== null;
   const filtered = entries
     .filter((entry) => {
       const record = entry.record;
@@ -658,8 +731,17 @@ function FleetPage({ entries }: { entries: FleetDeviceEntry[] }) {
         />
       </div>
 
+      {showRefreshingHint ? (
+        <div className="fleet-loading-hint" role="status" aria-live="polite">
+          <Loader2 size={16} className="spin-icon" />
+          <span>Refreshing live devices from mains-aegis-devd</span>
+        </div>
+      ) : null}
+
       <div className="fleet-grid" data-evidence-target="fleet-grid">
-        {filtered.length > 0 ? (
+        {initialLoading ? (
+          <FleetLoadingState />
+        ) : filtered.length > 0 ? (
           filtered.map((entry) => (
             <DeviceCard key={entry.key} entry={entry} />
           ))
@@ -667,6 +749,19 @@ function FleetPage({ entries }: { entries: FleetDeviceEntry[] }) {
           <FleetEmptyState hasDevices={entries.length > 0} />
         )}
       </div>
+    </section>
+  );
+}
+
+function FleetLoadingState() {
+  return (
+    <section className="empty-state fleet-empty fleet-loading-state">
+      <Loader2 size={28} className="spin-icon" />
+      <h2>Loading UPS fleet</h2>
+      <p>
+        Loading saved devices and the latest mains-aegis-devd discovery before
+        the fleet view renders.
+      </p>
     </section>
   );
 }
