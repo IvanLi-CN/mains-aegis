@@ -42,6 +42,7 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 - 目的：维护浏览器当前关注的 UPS 清单；USB CDC 用于安全设置与配网，LAN 用于只读状态。
 - 主要内容：`mains-aegis-devd` 自动发现面、浏览器支持状态、串口授权/占用错误、LAN 新增连接目标、探活结果、设备身份摘要、网络状态、API 版本兼容提示、已保存设备列表。
 - 接口对接：USB CDC 使用 Web Serial JSONL frame；devd 默认通过 IPC 由 `mains-aegis` CLI 访问；Web 需要 HTTP 时显式启动 `mains-aegis-devd serve-http`，默认本地地址为 `http://127.0.0.1:30080`。默认 hosted 模式把嵌入式 Web App 与 `/api` 绑定到同一 same-origin HTTP 服务，并用进程内 app-session secret 保护 API；`--allow-dev-cors` 仅用于 loopback Vite 开发源的 API-only 模式。hosted / self-hosted devd UI 的 Connect 页只保留 devd discovery：USB 设备通过 devd 的 Web lease / usb-http bridge 接入，LAN 设备由 devd 列出后仍直连硬件本体 HTTP API；独立浏览器 / Vite 开发场景才保留 Web Serial 与手动 LAN fallback 面板。devd 会持久化绑定、别名和 artifact selection；连接、租约、monitor 与日志仍是运行态，daemon 重启后必须重新连接。LAN 入口只连接硬件本体的 HTTP/SSE 端点，不接受 devd HTTP service 作为 LAN 目标。
+- 交互语义：新发现但未纳管的 USB 候选显示 `Bind USB`，新发现的 LAN 候选显示 `Add WiFi`；只有已经落入浏览器设备清单的设备才显示 `Open` 和 `Use WiFi` / `Use USB` 这类切换动作。Connect 页不把 devd discovery 候选直接表述成通用 `Connect` 按钮。
 - 空状态：提示用户连接 USB CDC 或输入 `mains-aegis-<short_id>.local` / 局域网 IP。
 
 ### 3. 单设备总览 Dashboard
@@ -200,6 +201,7 @@ web/
 - GitHub Pages：根站点发布 Web App，文档站发布在同一 Pages artifact 的 `/docs/` 子路径；App 使用 History API path router，并通过 `PAGES_BASE` / `VITE_BASE` 支持仓库子路径和未来自定义域名根路径。
 - 全局导航：App Layout 侧栏固定提供 `Docs` 入口，打开 `${BASE_URL}docs/`，保持当前运维台页面与连接状态不被替换。
 - 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、LAN 探活、settings 读取、SSE 订阅与轮询兜底、当前 Web Serial USB CDC transport，以及 devd 本地 control transport；同一 `identity.device_id` 的 LAN 与 USB 来源合并为一条设备记录。devd 发现出的 LAN 设备会直接落为 HTTP target，USB 设备才保留 devd lease / serial 上下文。
+- Connect 发现动作使用项目既有小号主次按钮体系；未纳管设备使用 `Bind USB` / `Add WiFi`，已纳管设备使用 `Open` 与 `Use ...`，不引入独立的 split-button 控件族。
 - 验证命令：`bun run web:check`、`PAGES_BASE=/mains-aegis/ bun run web:build`、`DOCS_BASE=/mains-aegis/docs/ bun run --cwd docs-site build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cargo test --manifest-path tools/mains-aegis-host/Cargo.toml`、`cd firmware && cargo +esp check`。
 - 本地设备 daemon：开发 IPC-only CLI 验证使用 `cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve`；Vite 开发期 API 验证使用 `cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve-http --allow-dev-cors`；hosted 模式由 `serve-http` 直接托管嵌入式 Web 产物，不再接受 `--web-root`。
 - 纯前端 Demo：`bun run web:dev` 后访问正式路由，例如 `/`、`/?seed=empty`、`/?seed=large`、`/devices/mains-aegis-e4f5a6/battery?seed=default`。

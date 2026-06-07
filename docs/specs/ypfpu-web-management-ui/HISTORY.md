@@ -28,3 +28,4 @@
 
 - hosted/self-hosted devd Connect UI 收敛为 discovery-only：不再重复渲染 Web Serial 与手动 LAN fallback 面板。
 - 明确 devd discovery 的连接语义：USB 候选通过 devd Web lease / usb-http bridge 接入；LAN 候选只借用 devd 发现地址，实际保存为直连硬件 HTTP target。
+- 修正 Connect 页 owner-facing 动作文案：未纳管 discovery 候选改用 `Bind USB` / `Add WiFi`，已纳管设备才显示 `Open` 与 `Use ...`，避免把 discovery 阶段误写成“连接功能”。

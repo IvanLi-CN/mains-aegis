@@ -10,6 +10,7 @@
 - 非 loopback `serve-http` 启动时要求 `--allow-lan-bridge` 与 `--auth-token-file`，API 请求仍接受 bearer token；`GET /api/v1/bootstrap` 保持免认证并报告真实 token requirement；浏览器 EventSource 兼容 `service_token` 与 legacy `bridge_token` query 参数授权。
 - Host-tools release workflow 产出三平台 archive、安装脚本和可直接校验 release assets 的 `SHA256SUMS`；手动 release 在 tag 已存在时按该 tag 重建资产、tag 不存在时从当前 dispatch commit 创建新 release tag；`MAINS_AEGIS_RELEASE_VERSION` 同时驱动构建产物与 `mains-aegis` / `mains-aegis-devd` 的 `--version` 输出。
 - Hosted Web client 从 same-origin HTML meta 读取 app-session secret，并且只向 devd HTTP service API 与 devd EventSource 请求附加该 secret；普通 LAN 目标不携带 app-session。Connect UI 不再暴露 devd URL 或 token 输入入口；hosted/self-hosted 模式只显示 devd discovery，USB 通过 devd 接入，LAN 设备则以直连硬件 HTTP target 落盘。
+- Connect discovery 的 owner-facing 动作语义与 devd 持久绑定保持一致：新发现 USB 候选先执行 `Bind USB`，新发现 LAN 候选执行 `Add WiFi`；只有浏览器内已存在的设备记录才显示 `Open` 与 transport 切换动作。
 - Repo skill routing defaults Codex work inside this repository to `$mains-aegis-devd-flow` for development, validation, diagnostics, field investigation, and hardware read/session-read checks. `$mains-aegis-user-operations` remains the explicit end-user/released host-tools route.
 
 ## 验证

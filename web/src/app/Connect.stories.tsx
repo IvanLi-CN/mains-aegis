@@ -60,7 +60,7 @@ export const HostedDevdDiscovery: Story = {
     await expect(await canvas.findByRole("heading", { name: /Automatic device discovery/ })).toBeInTheDocument();
     await expect(await canvas.findByText("mains-aegis-devd-service")).toBeInTheDocument();
     await expect(await canvas.findByText("mock:lab-standby")).toBeInTheDocument();
-    await expect(await canvas.findByRole("button", { name: "Connect LAN" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("button", { name: "Add WiFi" })).toBeInTheDocument();
     await expect(await canvas.findByText("Mock")).toBeInTheDocument();
     await expect(canvas.queryByText("Discovery source")).not.toBeInTheDocument();
     await expect(canvas.queryByLabelText("devd URL")).not.toBeInTheDocument();
@@ -93,8 +93,8 @@ export const MergedMultiChannelDevice: Story = {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText("mains-aegis-a1b2c3")).toBeInTheDocument();
     await expect(canvas.getByText("USB connected / WiFi connected")).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: "Connect devd" })).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: "Connect WiFi" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Bind USB" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Add WiFi" })).toBeInTheDocument();
   },
 };
 
@@ -126,8 +126,8 @@ export const RememberedChannelSwitch: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("button", { name: "Open" })).toBeInTheDocument();
-    await expect(await canvas.findByRole("button", { name: "Use devd" })).toBeInTheDocument();
     await expect(await canvas.findByRole("button", { name: "Use WiFi" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("button", { name: "Use USB" })).toBeInTheDocument();
   },
 };
 
