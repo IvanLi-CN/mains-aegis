@@ -225,16 +225,16 @@
 
 ![Battery cell and MOS evidence](./assets/device-battery-cell-mos.png)
 
-- source_type: mock_ui
+- source_type: target_app_window
   demo_entry_or_title: `/connect`
-  requested_viewport: `1440x1000`
-  viewport_strategy: `devtools-emulate`
-  capture_scope: `browser-viewport`
-  target_program: `mock-only`
-  scenario: devd local USB control connect
-  evidence_note: 验证 `/connect` 同屏提供 USB CDC / Web Serial、mains-aegis-devd 本地控制面与 LAN 入口，旧本地桥接入口不再出现，并在已保存设备列表中显示同一设备的 WiFi / USB 连接标记。
+  requested_viewport: `browser-default`
+  viewport_strategy: `element-screenshot`
+  capture_scope: `element`
+  target_program: `mains-aegis-web Vite preview backed by live mains-aegis-devd records`
+  scenario: hosted add-device records flow
+  evidence_note: 验证 `/connect` 已收口为 `Add device` 页面，顶部说明聚焦“添加新设备 / 绑定新 USB / 添加 LAN endpoint”，同时展示实时 devd device records，不再使用旧 `Connect` 语义。
 
-![devd connect evidence](./assets/devd-connect-entry.png)
+![Hosted add-device records evidence](./assets/add-device-devd-records-hosted.png)
 
 - source_type: storybook_canvas
   story_id_or_title: `UPS Management/Connect/Firmware mismatch warning`
@@ -247,16 +247,27 @@
 
 ![Storybook firmware mismatch warning](./assets/storybook-firmware-mismatch-warning.png)
 
-- source_type: mock_ui
-  demo_entry_or_title: `/?seed=dual`
-  requested_viewport: `1440x1100`
-  viewport_strategy: `devtools-emulate`
-  capture_scope: `browser-viewport`
-  target_program: `mock-only`
-  scenario: merged LAN and USB device record
-  evidence_note: 验证同一 `identity.device_id` 同时通过 LAN/WiFi 与 USB 发现时 Fleet 仍只显示一张设备卡，并同时展示 `WiFi` 与 `USB` 连接标记。
+- source_type: target_app_window
+  demo_entry_or_title: `/`
+  requested_viewport: `browser-default`
+  viewport_strategy: `element-screenshot`
+  capture_scope: `element`
+  target_program: `mains-aegis-web Vite preview backed by live mains-aegis-devd records`
+  scenario: hosted fleet records overview
+  evidence_note: 验证 Fleet 首屏直接展示当前 devd records；未保存设备仍以 `devd record` 标记出现，卡片只保留单一 `Open` 入口，不再出现旧的 connect 分流按钮。
 
-![Merged WiFi and USB fleet evidence](./assets/devd-fleet-dual-connection.png)
+![Hosted fleet devd records evidence](./assets/fleet-devd-records-hosted.png)
+
+- source_type: target_app_window
+  demo_entry_or_title: `/devices/mains-aegis-198840`
+  requested_viewport: `browser-default`
+  viewport_strategy: `element-screenshot`
+  capture_scope: `element`
+  target_program: `mains-aegis-web Vite preview backed by live mains-aegis-devd records`
+  scenario: hosted temporary record hydration
+  evidence_note: 验证从 devd record 直接打开未添加设备详情页后，Overview 会完成只读 hydration，并把 `DATA` 状态翻到 `Live data`，页面不再停留在全 `--` 的空壳状态。
+
+![Hosted device overview live-data evidence](./assets/device-overview-live-data-hosted.png)
 
 - source_type: mock_ui
   demo_entry_or_title: `/devices/mains-aegis-usb-demo/settings`
