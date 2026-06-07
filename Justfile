@@ -25,9 +25,9 @@ web-dev: firmware-sync-web
 web-build:
     bun run web:build
 
-# Start the local devd HTTP bridge. Override with MAINS_AEGIS_DEVD_BIND=127.0.0.1:30080.
-devd-bridge:
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis-devd -- bridge-http --bind ${MAINS_AEGIS_DEVD_BIND:-127.0.0.1:30080} --allow-dev-cors
+# Start the local devd HTTP service in API-only development mode. Override with MAINS_AEGIS_DEVD_BIND=127.0.0.1:30080.
+devd-http:
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis-devd -- serve-http --bind ${MAINS_AEGIS_DEVD_BIND:-127.0.0.1:30080} --allow-dev-cors
 
 # Start the local devd IPC daemon.
 devd-serve:

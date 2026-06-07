@@ -4,6 +4,7 @@ import type { UpsStatus } from "./types";
 export type StatusStream = {
   close: () => void;
 };
+const APP_SESSION_QUERY_PARAM = "app_session";
 
 export function subscribeStatusStream(
   baseUrl: string,
@@ -20,7 +21,7 @@ export function subscribeStatusStream(
 
   const params = new URLSearchParams();
   const token = options.bridgeAuth ? bridgeAuthToken(baseUrl) : null;
-  if (token) params.set("bridge_token", token);
+  if (token) params.set(APP_SESSION_QUERY_PARAM, token);
   const query = params.toString();
   const eventSource = new EventSource(`${baseUrl}/api/v1/status${query ? `?${query}` : ""}`);
 

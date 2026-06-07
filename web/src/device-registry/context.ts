@@ -6,7 +6,6 @@ export type AddDeviceInput = {
   target: string;
   alias?: string;
   location?: string;
-  bridgeAuthToken?: string;
   devdDeviceId?: string;
   ignoreFirmwareMismatch?: boolean;
 };

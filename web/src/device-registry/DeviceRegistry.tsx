@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  bridgeAuthRequired,
   clearDeviceWifiConfig,
   bridgeAuthToken,
   clearDevdWifiConfig,
@@ -27,7 +26,6 @@ import {
   setDevdLogLevel,
   setDeviceManualChargePrefs,
   setDevdManualChargePrefs,
-  saveBridgeAuthToken,
   subscribeDevdSerialEvents,
   toErrorEnvelope,
   type DevdSerialEventStream,
@@ -129,8 +127,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
 
   const resolveBridgeAuthState = useCallback(async (target: Pick<DeviceTarget, "baseUrl" | "bridgeAuth">) => {
     if (target.bridgeAuth) return true;
-    if (!bridgeAuthToken(target.baseUrl)) return false;
-    return bridgeAuthRequired(target.baseUrl);
+    return bridgeAuthToken(target.baseUrl) !== null;
   }, []);
 
   const setSerialCommandError = useCallback(
@@ -271,8 +268,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     );
 
     const cachedBridgeAuth = bridgeAuthToken(target.baseUrl) !== null;
-      try {
-        if (target.transport === "devd") {
+    try {
+      if (target.transport === "devd") {
         const devdBaseUrl = existing.serial?.baseUrl ?? target.baseUrl;
         if (existing.serial?.leaseId) {
           await updateDevdSerialSnapshot(deviceId, devdBaseUrl);
@@ -495,12 +492,12 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
 
     try {
       const bootstrap = await getBridgeBootstrap(baseUrl);
-      if (bootstrap?.app?.mode === "http_bridge") {
+      if (bootstrap?.app?.mode === "http_service" || bootstrap?.app?.mode === "http_service_api_only") {
         return {
           ok: false,
           error: {
-            code: "devd_bridge_requires_devd_panel",
-            message: "This endpoint is a mains-aegis-devd bridge. Connect it from the devd panel, not LAN status.",
+            code: "devd_http_service_requires_devd_panel",
+            message: "This endpoint is a mains-aegis-devd HTTP service. Connect it from the devd panel, not LAN status.",
             retryable: false,
             details: null,
           },
@@ -527,19 +524,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     let pendingLeaseId: string | null = null;
 
     try {
-      if (input.bridgeAuthToken !== undefined) saveBridgeAuthToken(baseUrl, input.bridgeAuthToken);
-      const bridgeAuth = await bridgeAuthRequired(baseUrl);
-      if (bridgeAuth && !bridgeAuthToken(baseUrl)) {
-        return {
-          ok: false,
-          error: {
-            code: "bridge_auth_token_required",
-            message: "This bridge requires an auth token before probing",
-            retryable: false,
-            details: null,
-          },
-        };
-      }
+      const bridgeAuth = bridgeAuthToken(baseUrl) !== null;
       const scan = await scanDevdDevices(baseUrl);
       const manageableDevices = scan.devices.filter((device) => isManageableDevdDevice(device));
       const selectedDevice = input.devdDeviceId

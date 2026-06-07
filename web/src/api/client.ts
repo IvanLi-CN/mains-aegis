@@ -27,7 +27,11 @@ export class MainsAegisApiError extends Error {
 }
 
 export const isMockBaseUrl = (baseUrl: string) => baseUrl.startsWith("mock:");
-export const BRIDGE_AUTH_TOKEN_KEY = "mains-aegis.bridgeAuthToken";
+const APP_SESSION_HEADER = "x-mains-aegis-app-session";
+const APP_SESSION_QUERY_PARAM = "app_session";
+const HTTP_SERVICE_MODE_META = 'meta[name="mains-aegis-http-service-mode"]';
+const APP_SESSION_META = 'meta[name="mains-aegis-app-session"]';
+const RUNTIME_PLACEHOLDER_PREFIX = "__MAINS_AEGIS_";
 
 export type BridgeBootstrap = {
   token_required?: boolean;
@@ -97,27 +101,23 @@ async function requestWithBody<T>(
 
 function bridgeAuthHeaders(baseUrl: string): Record<string, string> {
   const token = bridgeAuthToken(baseUrl);
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return token ? { [APP_SESSION_HEADER]: token } : {};
 }
 
 export function bridgeAuthToken(baseUrl: string): string | null {
-  if (typeof window === "undefined" || isMockBaseUrl(baseUrl)) return null;
-  return window.localStorage.getItem(bridgeAuthStorageKey(baseUrl))?.trim() || null;
+  if (typeof window === "undefined" || isMockBaseUrl(baseUrl) || normalizeBaseUrl(baseUrl) !== "") return null;
+  const token = document.querySelector<HTMLMetaElement>(APP_SESSION_META)?.content?.trim() ?? "";
+  return token && !token.startsWith(RUNTIME_PLACEHOLDER_PREFIX) ? token : null;
 }
 
-export function saveBridgeAuthToken(baseUrl: string, token: string): void {
-  if (typeof window === "undefined" || isMockBaseUrl(baseUrl)) return;
-  const key = bridgeAuthStorageKey(baseUrl);
-  const value = token.trim();
-  if (value) {
-    window.localStorage.setItem(key, value);
-  } else {
-    window.localStorage.removeItem(key);
-  }
+export function httpServiceMode(): string | null {
+  if (typeof document === "undefined") return null;
+  const mode = document.querySelector<HTMLMetaElement>(HTTP_SERVICE_MODE_META)?.content?.trim() ?? "";
+  return mode && !mode.startsWith(RUNTIME_PLACEHOLDER_PREFIX) ? mode : null;
 }
 
-function bridgeAuthStorageKey(baseUrl: string): string {
-  return `${BRIDGE_AUTH_TOKEN_KEY}.${encodeURIComponent(baseUrl || "same-origin")}`;
+export function isHostedHttpServiceApp(): boolean {
+  return httpServiceMode() === "hosted" && bridgeAuthToken("") !== null;
 }
 
 export async function getBridgeBootstrap(baseUrl: string): Promise<BridgeBootstrap | null> {
@@ -130,8 +130,7 @@ export async function getBridgeBootstrap(baseUrl: string): Promise<BridgeBootstr
 }
 
 export async function bridgeAuthRequired(baseUrl: string): Promise<boolean> {
-  const bootstrap = await getBridgeBootstrap(baseUrl);
-  return bootstrap?.token_required === true;
+  return bridgeAuthToken(baseUrl) !== null || (await getBridgeBootstrap(baseUrl))?.token_required === true;
 }
 
 function parseJsonPayload<T>(text: string): T | ApiErrorEnvelope | null {
@@ -184,15 +183,15 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
     baseUrl === "mock:devd"
       ? {
           ...getMockIdentity("mock:lab-standby"),
-          device_id: "mains-aegis-devd-bridge",
-          hostname: "mains-aegis-devd-bridge",
-          hostname_fqdn: "mains-aegis-devd-bridge.local",
+          device_id: "mains-aegis-devd-service",
+          hostname: "mains-aegis-devd-service",
+          hostname_fqdn: "mains-aegis-devd-service.local",
           short_id: "devd01",
           network: {
             ...getMockIdentity("mock:lab-standby").network,
-            device_id: "mains-aegis-devd-bridge",
-            hostname: "mains-aegis-devd-bridge",
-            hostname_fqdn: "mains-aegis-devd-bridge.local",
+            device_id: "mains-aegis-devd-service",
+            hostname: "mains-aegis-devd-service",
+            hostname_fqdn: "mains-aegis-devd-service.local",
           },
         }
       : null;
@@ -200,7 +199,7 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
   const network = identity.network;
   const status = getMockStatus(baseUrl === "mock:devd" ? "mock:lab-standby" : "mock:usb");
   const device = {
-    id: baseUrl === "mock:devd" ? "mains-aegis-devd-bridge" : "mock-devd-esp32s3-1",
+    id: baseUrl === "mock:devd" ? "mains-aegis-devd-service" : "mock-devd-esp32s3-1",
     display_name: baseUrl === "mock:devd" ? "Bound ESP32-S3" : "USB demo CDC",
     port_path: "/dev/tty.usbmodem-demo",
     transport: "mock" as const,
@@ -372,7 +371,7 @@ export function subscribeDevdSerialEvents(
 ): DevdSerialEventStream {
   const params = new URLSearchParams({ lease_id: leaseId });
   const token = bridgeAuthToken(baseUrl);
-  if (token) params.set("bridge_token", token);
+  if (token) params.set(APP_SESSION_QUERY_PARAM, token);
   const eventSource = new EventSource(`${baseUrl}/api/v1/serial/events?${params.toString()}`);
   const handleEvent = (event: Event) => {
     callbacks.onEvent(JSON.parse((event as MessageEvent<string>).data) as DevdSerialEvent);
@@ -396,7 +395,7 @@ export function subscribeDevdDeviceEvents(
 
   const params = new URLSearchParams();
   const token = bridgeAuthToken(baseUrl);
-  if (token) params.set("bridge_token", token);
+  if (token) params.set(APP_SESSION_QUERY_PARAM, token);
   const query = params.toString();
   const eventSource = new EventSource(`${baseUrl}/api/v1/devices/events${query ? `?${query}` : ""}`);
   const handleEvent = (event: Event) => {

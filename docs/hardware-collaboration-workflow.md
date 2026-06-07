@@ -23,10 +23,10 @@ mains-aegis device <device-id> connect
 mains-aegis device <device-id> identity
 ```
 
-如果本轮需要 HTTP/Web 或 `power-diag`，从一开始使用 `bridge-http` 代替 `serve`；不要在 `serve` 仍占用默认 IPC endpoint 时再启动默认 `bridge-http`：
+如果本轮需要 HTTP/Web 或 `power-diag`，从一开始使用 `serve-http` 代替 `serve`；不要在 `serve` 仍占用默认 IPC endpoint 时再启动默认 `serve-http`：
 
 ```bash
-mains-aegis-devd bridge-http --allow-dev-cors
+mains-aegis-devd serve-http --allow-dev-cors
 mains-aegis devices scan
 mains-aegis device <device-id> bind --alias <name>
 mains-aegis device <device-id> connect
@@ -68,13 +68,13 @@ Agent 接管真机验证时按以下顺序执行：
    mains-aegis device <device-id> monitor stop
    ```
 
-5. 读取充电/电源状态使用 devd HTTP bridge 的只读 `power-diag` API：
+5. 读取充电/电源状态使用 devd HTTP service 的只读 `power-diag` API：
 
    ```bash
    curl http://127.0.0.1:30080/api/v1/devices/<device-id>/power-diag
    ```
 
-   如果当前只启动了 IPC-only `serve`，先停止该 daemon，再以 `bridge-http --allow-dev-cors` 重新启动同一 IPC endpoint；不要让两个进程同时绑定默认 IPC endpoint。
+   如果当前只启动了 IPC-only `serve`，先停止该 daemon，再以 `serve-http --allow-dev-cors` 重新启动同一 IPC endpoint；不要让两个进程同时绑定默认 IPC endpoint。
 
 6. 进入 Web Serial 验证前，断开 devd 设备连接或停止当前 devd bridge，释放 CDC 口：
 

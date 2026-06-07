@@ -2,7 +2,10 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::{header::ACCEPT, HeaderMap, HeaderValue, Method, StatusCode, Uri},
+    http::{
+        header::{ACCEPT, CONTENT_TYPE},
+        HeaderMap, HeaderValue, Method, StatusCode, Uri,
+    },
     middleware::{self, Next},
     response::{sse::Event, sse::Sse, IntoResponse, Response},
     routing::{delete, get, post},
@@ -15,6 +18,8 @@ use defmt_decoder::{
 };
 #[cfg(not(test))]
 use directories::ProjectDirs;
+use getrandom::fill as fill_random;
+use include_dir::{include_dir, Dir};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -36,10 +41,7 @@ use tokio::{
     process::Command,
     sync::{broadcast, Mutex as AsyncMutex},
 };
-use tower_http::{
-    cors::{AllowOrigin, CorsLayer},
-    services::ServeDir,
-};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:30080";
 pub const DEFAULT_IPC_FILE_NAME: &str = "devd.sock";
@@ -62,16 +64,23 @@ const DEVD_STATE_FILE_NAME: &str = "devices.json";
 const DEVD_STATE_FILE_ENV: &str = "MAINS_AEGIS_DEVD_STATE_FILE";
 static STATE_PERSIST_TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 const WEB_DEV_FIRMWARE_CACHE_DIR: &str = "tmp/web-dev-firmware";
+const APP_SESSION_HEADER: &str = "x-mains-aegis-app-session";
+const APP_SESSION_QUERY_PARAM: &str = "app_session";
+const SERVICE_TOKEN_QUERY_PARAM: &str = "service_token";
+const LEGACY_BRIDGE_TOKEN_QUERY_PARAM: &str = "bridge_token";
+const EMBEDDED_APP_SESSION_PLACEHOLDER: &str = "__MAINS_AEGIS_APP_SESSION__";
+const EMBEDDED_HTTP_SERVICE_MODE_PLACEHOLDER: &str = "__MAINS_AEGIS_HTTP_SERVICE_MODE__";
+static EMBEDDED_WEB_DIST: Dir<'static> = include_dir!("$MAINS_AEGIS_EMBEDDED_WEB_DIST");
 
 #[derive(Debug, Clone)]
-pub struct HttpBridgeConfig {
+pub struct HttpServiceConfig {
     pub ipc_endpoint: String,
     pub bind: SocketAddr,
-    pub web_root: Option<PathBuf>,
     pub allow_dev_cors: bool,
     pub allow_host_power_actions: bool,
     pub allow_lan_bridge: bool,
     pub auth_token: Option<String>,
+    pub open_browser: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -154,7 +163,21 @@ struct AppState {
     events: broadcast::Sender<DevdEvent>,
     allow_host_power_actions: bool,
     auth_token_required: bool,
+    http_service_mode: HttpServiceMode,
+    app_session_secret: Option<Arc<str>>,
     persistence: DevdPersistence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HttpServiceMode {
+    HostedApp,
+    ApiOnly,
+}
+
+#[derive(Debug, Clone)]
+struct HttpServiceAuth {
+    bearer_token: Option<Arc<str>>,
+    app_session_secret: Option<Arc<str>>,
 }
 
 #[derive(Clone)]
@@ -543,21 +566,44 @@ struct HostPowerShutdownRequest {
     force: Option<bool>,
 }
 
-pub async fn serve_http_bridge(config: HttpBridgeConfig) -> anyhow::Result<()> {
+pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()> {
     if !config.bind.ip().is_loopback()
         && (!config.allow_lan_bridge || config.auth_token.as_deref().unwrap_or("").is_empty())
     {
-        anyhow::bail!("non-loopback HTTP bridge requires --allow-lan-bridge and --auth-token-file");
+        anyhow::bail!(
+            "non-loopback HTTP service requires --allow-lan-bridge and --auth-token-file"
+        );
+    }
+    if config.allow_dev_cors && config.open_browser {
+        anyhow::bail!("--open-browser cannot be used together with --allow-dev-cors");
     }
     let auth_token_required = config
         .auth_token
         .as_ref()
         .is_some_and(|token| !token.is_empty());
-    let state = create_app_state_with_auth(config.allow_host_power_actions, auth_token_required);
+    let http_service_mode = if config.allow_dev_cors {
+        HttpServiceMode::ApiOnly
+    } else {
+        HttpServiceMode::HostedApp
+    };
+    let app_session_secret = match http_service_mode {
+        HttpServiceMode::HostedApp => Some(generate_app_session_secret()?),
+        HttpServiceMode::ApiOnly => None,
+    };
+    let state = create_app_state_with_auth(
+        config.allow_host_power_actions,
+        auth_token_required,
+        http_service_mode,
+        app_session_secret.clone(),
+    );
     let ipc_config = IpcConfig::new(config.ipc_endpoint.clone())
         .with_idle_timeout(None)
         .with_host_power_actions(config.allow_host_power_actions);
     let ipc_runtime = IpcRuntime::new(state.clone());
+    let auth = HttpServiceAuth {
+        bearer_token: config.auth_token.as_deref().map(Arc::<str>::from),
+        app_session_secret: app_session_secret.clone(),
+    };
 
     let mut app = Router::new()
         .route("/health", get(health))
@@ -608,12 +654,13 @@ pub async fn serve_http_bridge(config: HttpBridgeConfig) -> anyhow::Result<()> {
         .route("/api/v1/host/power/shutdown", post(host_power_shutdown))
         .route("/api/v1/host/power/events", get(host_power_events))
         .route("/api/v1/defmt/decode", post(defmt_decode))
+        .fallback(get(http_service_fallback).head(http_service_fallback))
         .with_state(state);
 
-    if let Some(token) = config.auth_token.as_ref().filter(|token| !token.is_empty()) {
+    if auth.bearer_token.is_some() || auth.app_session_secret.is_some() {
         app = app.layer(middleware::from_fn_with_state(
-            token.clone(),
-            require_bearer_token,
+            auth,
+            require_http_service_access,
         ));
     }
     if config.allow_dev_cors {
@@ -626,18 +673,23 @@ pub async fn serve_http_bridge(config: HttpBridgeConfig) -> anyhow::Result<()> {
                 .allow_headers(tower_http::cors::Any),
         );
     }
-    if let Some(web_root) = config.web_root {
-        app = app.fallback_service(ServeDir::new(web_root));
-    }
 
     let listener = tokio::net::TcpListener::bind(config.bind)
         .await
         .map_err(|error| anyhow::anyhow!("bind mains-aegis-devd: {error}"))?;
     tracing::info!("mains-aegis-devd listening on http://{}", config.bind);
     tracing::info!(
-        "mains-aegis-devd bridge IPC listening on {}",
+        "mains-aegis-devd HTTP service IPC listening on {}",
         config.ipc_endpoint
     );
+    if config.open_browser {
+        if let Err(error) = open_http_service_in_default_browser(config.bind) {
+            tracing::warn!(
+                "failed to open hosted app in the default browser: {error}. Visit {} manually.",
+                http_service_browser_url(config.bind)
+            );
+        }
+    }
     let http_server = axum::serve(listener, app);
     tokio::try_join!(
         serve_ipc_with_runtime(ipc_config, ipc_runtime),
@@ -650,8 +702,8 @@ pub async fn serve_http_bridge(config: HttpBridgeConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn require_bearer_token(
-    State(token): State<String>,
+async fn require_http_service_access(
+    State(auth): State<HttpServiceAuth>,
     request: axum::extract::Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
@@ -665,20 +717,47 @@ async fn require_bearer_token(
         return Ok(next.run(request).await);
     }
 
-    let expected = format!("Bearer {token}");
-    let header_authorized = request
-        .headers()
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|header| header.to_str().ok())
-        .is_some_and(|actual| actual == expected);
+    let header_authorized = auth
+        .bearer_token
+        .as_deref()
+        .is_some_and(|token| bearer_header_matches(request.headers(), token))
+        || auth
+            .app_session_secret
+            .as_deref()
+            .is_some_and(|secret| app_session_header_matches(request.headers(), secret));
     let event_stream_authorized =
         is_event_stream_query_auth_request(request.method(), request.uri(), request.headers())
-            && query_param(request.uri(), "bridge_token").is_some_and(|actual| actual == token);
+            && auth_query_matches(&auth, request.uri());
     if header_authorized || event_stream_authorized {
         Ok(next.run(request).await)
     } else {
         Err(StatusCode::UNAUTHORIZED)
     }
+}
+
+fn bearer_header_matches(headers: &HeaderMap, token: &str) -> bool {
+    let expected = format!("Bearer {token}");
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|header| header.to_str().ok())
+        .is_some_and(|actual| actual == expected)
+}
+
+fn app_session_header_matches(headers: &HeaderMap, secret: &str) -> bool {
+    headers
+        .get(APP_SESSION_HEADER)
+        .and_then(|header| header.to_str().ok())
+        .is_some_and(|actual| actual == secret)
+}
+
+fn auth_query_matches(auth: &HttpServiceAuth, uri: &Uri) -> bool {
+    auth.app_session_secret.as_deref().is_some_and(|secret| {
+        query_param(uri, APP_SESSION_QUERY_PARAM).is_some_and(|actual| actual == secret)
+    }) || auth.bearer_token.as_deref().is_some_and(|token| {
+        query_param(uri, SERVICE_TOKEN_QUERY_PARAM).is_some_and(|actual| actual == token)
+            || query_param(uri, LEGACY_BRIDGE_TOKEN_QUERY_PARAM)
+                .is_some_and(|actual| actual == token)
+    })
 }
 
 fn is_event_stream_query_auth_request(method: &Method, uri: &Uri, headers: &HeaderMap) -> bool {
@@ -738,6 +817,184 @@ fn is_local_dev_cors_origin(origin: &HeaderValue) -> bool {
         || origin.starts_with("http://[::1]:")
 }
 
+async fn http_service_fallback(
+    State(state): State<AppState>,
+    uri: Uri,
+    method: Method,
+) -> Response {
+    match state.http_service_mode {
+        HttpServiceMode::ApiOnly => api_only_root_response(&uri, &method),
+        HttpServiceMode::HostedApp => embedded_web_response(&state, &uri, &method),
+    }
+}
+
+fn api_only_root_response(uri: &Uri, method: &Method) -> Response {
+    if uri.path() != "/" {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let body = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>Mains Aegis HTTP service</title></head><body><main style=\"font-family: system-ui, sans-serif; max-width: 44rem; margin: 4rem auto; padding: 0 1.5rem; line-height: 1.6;\"><h1>Mains Aegis HTTP service</h1><p>This devd instance is running in API-only development mode.</p><p>Start the Vite dev server and open that URL instead of using this root page.</p></main></body></html>";
+    html_response(body.as_bytes(), method)
+}
+
+fn embedded_web_response(state: &AppState, uri: &Uri, method: &Method) -> Response {
+    let requested = normalized_embedded_path(uri.path());
+    let file = EMBEDDED_WEB_DIST.get_file(&requested).or_else(|| {
+        requested
+            .strip_suffix('/')
+            .and_then(|prefix| EMBEDDED_WEB_DIST.get_file(&format!("{prefix}/index.html")))
+    });
+
+    if let Some(file) = file {
+        return embedded_file_response(
+            file.path().to_string_lossy().as_ref(),
+            file.contents(),
+            state,
+            method,
+        );
+    }
+
+    if requested.contains('.') {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    match EMBEDDED_WEB_DIST.get_file("index.html") {
+        Some(file) => embedded_file_response("index.html", file.contents(), state, method),
+        None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+fn normalized_embedded_path(path: &str) -> String {
+    match path.trim_start_matches('/') {
+        "" => "index.html".to_string(),
+        value => value.to_string(),
+    }
+}
+
+fn embedded_file_response(
+    path: &str,
+    contents: &[u8],
+    state: &AppState,
+    method: &Method,
+) -> Response {
+    if path.ends_with(".html") {
+        let body = embedded_html_body(contents, state);
+        return response_with_content_type(body, "text/html; charset=utf-8", method);
+    }
+
+    response_with_content_type(contents.to_vec(), embedded_content_type(path), method)
+}
+
+fn embedded_html_body(contents: &[u8], state: &AppState) -> Vec<u8> {
+    let html = String::from_utf8_lossy(contents);
+    let mode = match state.http_service_mode {
+        HttpServiceMode::HostedApp => "hosted",
+        HttpServiceMode::ApiOnly => "api_only",
+    };
+    let injected = html
+        .replace(
+            EMBEDDED_APP_SESSION_PLACEHOLDER,
+            state.app_session_secret.as_deref().unwrap_or(""),
+        )
+        .replace(EMBEDDED_HTTP_SERVICE_MODE_PLACEHOLDER, mode);
+    injected.into_bytes()
+}
+
+fn embedded_content_type(path: &str) -> &'static str {
+    match FsPath::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+    {
+        "css" => "text/css; charset=utf-8",
+        "html" => "text/html; charset=utf-8",
+        "ico" => "image/x-icon",
+        "jpeg" | "jpg" => "image/jpeg",
+        "js" => "application/javascript; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "map" => "application/json; charset=utf-8",
+        "png" => "image/png",
+        "svg" => "image/svg+xml",
+        "txt" => "text/plain; charset=utf-8",
+        "webmanifest" => "application/manifest+json; charset=utf-8",
+        "webp" => "image/webp",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        _ => "application/octet-stream",
+    }
+}
+
+fn html_response(body: &[u8], method: &Method) -> Response {
+    response_with_content_type(body.to_vec(), "text/html; charset=utf-8", method)
+}
+
+fn response_with_content_type(body: Vec<u8>, content_type: &str, method: &Method) -> Response {
+    let body = if *method == Method::HEAD {
+        Vec::new()
+    } else {
+        body
+    };
+    let mut response = body.into_response();
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_str(content_type).expect("valid content type"),
+    );
+    response
+}
+
+fn generate_app_session_secret() -> anyhow::Result<Arc<str>> {
+    let mut bytes = [0u8; 32];
+    fill_random(&mut bytes)
+        .map_err(|error| anyhow::anyhow!("generate app session secret: {error}"))?;
+    Ok(hex_lower(&bytes).into())
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(char::from_digit((byte >> 4).into(), 16).expect("hex"));
+        output.push(char::from_digit((byte & 0x0f).into(), 16).expect("hex"));
+    }
+    output
+}
+
+fn http_service_browser_url(bind: SocketAddr) -> String {
+    format!("http://127.0.0.1:{}/", bind.port())
+}
+
+fn open_http_service_in_default_browser(bind: SocketAddr) -> anyhow::Result<()> {
+    let url = http_service_browser_url(bind);
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| anyhow::anyhow!("open {url}: {error}"))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| anyhow::anyhow!("start {url}: {error}"))?;
+        return Ok(());
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| anyhow::anyhow!("xdg-open {url}: {error}"))?;
+        return Ok(());
+    }
+}
+
 fn percent_decode_query_value(value: &str) -> Result<String, std::string::FromUtf8Error> {
     let mut decoded = Vec::with_capacity(value.len());
     let mut bytes = value.as_bytes().iter().copied();
@@ -772,16 +1029,25 @@ pub async fn serve_ipc(config: IpcConfig) -> anyhow::Result<()> {
 }
 
 fn create_app_state(allow_host_power_actions: bool) -> AppState {
-    create_app_state_with_auth(allow_host_power_actions, false)
+    create_app_state_with_auth(
+        allow_host_power_actions,
+        false,
+        HttpServiceMode::ApiOnly,
+        None,
+    )
 }
 
 fn create_app_state_with_auth(
     allow_host_power_actions: bool,
     auth_token_required: bool,
+    http_service_mode: HttpServiceMode,
+    app_session_secret: Option<Arc<str>>,
 ) -> AppState {
     create_app_state_with_auth_and_persistence(
         allow_host_power_actions,
         auth_token_required,
+        http_service_mode,
+        app_session_secret,
         default_devd_persistence(),
     )
 }
@@ -789,6 +1055,8 @@ fn create_app_state_with_auth(
 fn create_app_state_with_auth_and_persistence(
     allow_host_power_actions: bool,
     auth_token_required: bool,
+    http_service_mode: HttpServiceMode,
+    app_session_secret: Option<Arc<str>>,
     persistence: DevdPersistence,
 ) -> AppState {
     let (events, _) = broadcast::channel(256);
@@ -808,6 +1076,8 @@ fn create_app_state_with_auth_and_persistence(
         events,
         allow_host_power_actions,
         auth_token_required,
+        http_service_mode,
+        app_session_secret,
         persistence,
     };
     seed_mock_device(&state);
@@ -1362,13 +1632,17 @@ where
 }
 
 async fn bootstrap(State(state): State<AppState>) -> Json<Value> {
+    let mode = match state.http_service_mode {
+        HttpServiceMode::HostedApp => "http_service",
+        HttpServiceMode::ApiOnly => "http_service_api_only",
+    };
     Json(json!({
         "token_required": state.auth_token_required,
         "agent_base_url": "",
         "app": {
             "name": "mains-aegis-devd",
             "version": release_version(),
-            "mode": "http_bridge"
+            "mode": mode
         }
     }))
 }
@@ -6298,7 +6572,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bridge_event_token_query_decodes_urlsafe_tokens() {
+    fn service_event_token_query_decodes_urlsafe_tokens() {
         let uri: Uri = "/api/v1/serial/events?lease_id=abc&bridge_token=a%2Bb%3D%3D"
             .parse()
             .unwrap();
@@ -6306,14 +6580,14 @@ mod tests {
     }
 
     #[test]
-    fn bridge_event_token_query_is_path_limited_by_caller() {
+    fn service_event_token_query_is_path_limited_by_caller() {
         let uri: Uri = "/api/v1/serial/events?bridge_token=secret".parse().unwrap();
         assert_eq!(query_param(&uri, "bridge_token").as_deref(), Some("secret"));
         assert_eq!(query_param(&uri, "missing"), None);
     }
 
     #[test]
-    fn bridge_query_token_accepts_known_event_stream_routes() {
+    fn service_query_token_accepts_known_event_stream_routes() {
         let mut headers = HeaderMap::new();
         headers.insert(
             ACCEPT,
@@ -6343,7 +6617,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_query_token_accepts_event_stream_media_params() {
+    fn service_query_token_accepts_event_stream_media_params() {
         let mut headers = HeaderMap::new();
         headers.insert(
             ACCEPT,
@@ -6354,7 +6628,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_query_token_rejects_mutation_api_even_with_event_stream_accept() {
+    fn service_query_token_rejects_mutation_api_even_with_event_stream_accept() {
         let mut headers = HeaderMap::new();
         headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
         let uri: Uri = "/api/v1/host/power/shutdown?bridge_token=secret"
@@ -6369,7 +6643,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_auth_allows_static_web_assets_without_opening_api() {
+    fn http_service_auth_allows_static_web_assets_without_opening_api() {
         let root: Uri = "/".parse().unwrap();
         let asset: Uri = "/assets/app.js".parse().unwrap();
         let api: Uri = "/api/v1/status".parse().unwrap();
@@ -6383,7 +6657,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_auth_allows_bootstrap_probe_only() {
+    fn http_service_auth_allows_bootstrap_probe_only() {
         let bootstrap_uri: Uri = "/api/v1/bootstrap".parse().unwrap();
         let status_uri: Uri = "/api/v1/status".parse().unwrap();
 
@@ -6402,7 +6676,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_dev_cors_allows_loopback_dev_origins() {
+    fn http_service_dev_cors_allows_loopback_dev_origins() {
         assert!(is_local_dev_cors_origin(&HeaderValue::from_static(
             "http://127.0.0.1:49480"
         )));
@@ -6415,7 +6689,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_dev_cors_rejects_non_loopback_origins() {
+    fn http_service_dev_cors_rejects_non_loopback_origins() {
         assert!(!is_local_dev_cors_origin(&HeaderValue::from_static(
             "http://127.0.0.1.evil.test:49480"
         )));
@@ -6429,9 +6703,16 @@ mod tests {
 
     #[tokio::test]
     async fn bootstrap_reports_auth_requirement() {
-        let response = bootstrap(State(create_app_state_with_auth(false, true))).await;
+        let response = bootstrap(State(create_app_state_with_auth(
+            false,
+            true,
+            HttpServiceMode::HostedApp,
+            Some(Arc::<str>::from("secret")),
+        )))
+        .await;
 
         assert_eq!(response.0["token_required"], true);
+        assert_eq!(response.0["app"]["mode"], "http_service");
     }
 
     #[cfg(unix)]
@@ -6489,7 +6770,13 @@ mod tests {
     async fn device_binding_persists_across_daemon_state_recreation() {
         let temp = tempfile::tempdir().unwrap();
         let persistence = DevdPersistence::enabled(temp.path().join("state.json"));
-        let state = create_app_state_with_auth_and_persistence(false, false, persistence.clone());
+        let state = create_app_state_with_auth_and_persistence(
+            false,
+            false,
+            HttpServiceMode::ApiOnly,
+            None,
+            persistence.clone(),
+        );
         {
             let mut guard = state.inner.lock().expect("state lock");
             guard.devices.insert(
@@ -6525,8 +6812,13 @@ mod tests {
         .await
         .unwrap();
 
-        let restarted =
-            create_app_state_with_auth_and_persistence(false, false, persistence.clone());
+        let restarted = create_app_state_with_auth_and_persistence(
+            false,
+            false,
+            HttpServiceMode::ApiOnly,
+            None,
+            persistence.clone(),
+        );
         let guard = restarted.inner.lock().expect("state lock");
         let binding = guard.bindings.get("native-a").unwrap();
         assert_eq!(binding.alias.as_deref(), Some("Bench unit"));
@@ -6537,7 +6829,13 @@ mod tests {
     async fn persisted_state_does_not_restore_runtime_connection() {
         let temp = tempfile::tempdir().unwrap();
         let persistence = DevdPersistence::enabled(temp.path().join("state.json"));
-        let state = create_app_state_with_auth_and_persistence(false, false, persistence.clone());
+        let state = create_app_state_with_auth_and_persistence(
+            false,
+            false,
+            HttpServiceMode::ApiOnly,
+            None,
+            persistence.clone(),
+        );
         {
             let mut guard = state.inner.lock().expect("state lock");
             let binding = DeviceBinding {
@@ -6553,8 +6851,13 @@ mod tests {
             persist_devd_state(&persistence, persisted_snapshot(&guard)).unwrap();
         }
 
-        let restarted =
-            create_app_state_with_auth_and_persistence(false, false, persistence.clone());
+        let restarted = create_app_state_with_auth_and_persistence(
+            false,
+            false,
+            HttpServiceMode::ApiOnly,
+            None,
+            persistence.clone(),
+        );
         let guard = restarted.inner.lock().expect("state lock");
         let device = guard.devices.get("mock-devkit").unwrap();
         assert!(matches!(device.connection, ConnectionState::Disconnected));
@@ -7307,13 +7610,7 @@ mod tests {
     #[test]
     fn host_power_real_action_is_denied_by_default() {
         let (events, mut receiver) = broadcast::channel(1);
-        let state = AppState {
-            inner: Arc::new(Mutex::new(DevdState::default())),
-            events,
-            allow_host_power_actions: false,
-            auth_token_required: false,
-            persistence: DevdPersistence::disabled(),
-        };
+        let state = test_app_state(events);
         assert!(ensure_host_power_action_allowed(&state, true, "shutdown").is_ok());
         assert!(ensure_host_power_action_allowed(&state, false, "shutdown").is_err());
         let event = receiver.try_recv().unwrap();
@@ -7448,16 +7745,22 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn real_profile_action_is_denied_before_backend_query() {
-        let (events, mut receiver) = broadcast::channel(4);
-        let state = AppState {
+    fn test_app_state(events: broadcast::Sender<DevdEvent>) -> AppState {
+        AppState {
             inner: Arc::new(Mutex::new(DevdState::default())),
             events,
             allow_host_power_actions: false,
             auth_token_required: false,
+            http_service_mode: HttpServiceMode::ApiOnly,
+            app_session_secret: None,
             persistence: DevdPersistence::disabled(),
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn real_profile_action_is_denied_before_backend_query() {
+        let (events, mut receiver) = broadcast::channel(4);
+        let state = test_app_state(events);
 
         let error = host_power_profile(
             State(state),
@@ -7485,13 +7788,7 @@ mod tests {
     #[tokio::test]
     async fn unsupported_profile_is_rejected_before_backend_query() {
         let (events, _) = broadcast::channel(4);
-        let state = AppState {
-            inner: Arc::new(Mutex::new(DevdState::default())),
-            events,
-            allow_host_power_actions: false,
-            auth_token_required: false,
-            persistence: DevdPersistence::disabled(),
-        };
+        let state = test_app_state(events);
 
         let error = host_power_profile(
             State(state),
@@ -7509,13 +7806,7 @@ mod tests {
     #[tokio::test]
     async fn suspend_accepts_missing_body_as_default_dry_run() {
         let (events, mut receiver) = broadcast::channel(4);
-        let state = AppState {
-            inner: Arc::new(Mutex::new(DevdState::default())),
-            events,
-            allow_host_power_actions: false,
-            auth_token_required: false,
-            persistence: DevdPersistence::disabled(),
-        };
+        let state = test_app_state(events);
 
         let response = host_power_suspend(State(state), None).await.unwrap();
 
@@ -7532,13 +7823,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_accepts_missing_body_as_default_dry_run() {
         let (events, mut receiver) = broadcast::channel(4);
-        let state = AppState {
-            inner: Arc::new(Mutex::new(DevdState::default())),
-            events,
-            allow_host_power_actions: false,
-            auth_token_required: false,
-            persistence: DevdPersistence::disabled(),
-        };
+        let state = test_app_state(events);
 
         let response = host_power_shutdown(State(state), None).await.unwrap();
 
@@ -7557,13 +7842,7 @@ mod tests {
     #[tokio::test]
     async fn host_power_action_record_emits_event() {
         let (events, mut receiver) = broadcast::channel(4);
-        let state = AppState {
-            inner: Arc::new(Mutex::new(DevdState::default())),
-            events,
-            allow_host_power_actions: false,
-            auth_token_required: false,
-            persistence: DevdPersistence::disabled(),
-        };
+        let state = test_app_state(events);
         let payload = json!({
             "ok": true,
             "dry_run": true,

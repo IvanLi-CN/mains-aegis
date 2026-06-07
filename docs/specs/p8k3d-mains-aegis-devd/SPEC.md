@@ -30,7 +30,7 @@
 - 吸收旧本地 USB HTTP bridge 的兼容面：WiFi config、log level、manual charge endpoints 与 Web USB Console hydration 由 devd 直接提供；新的 owner-facing 查询面使用 `connection / settings / trace`。
 - Firmware Catalog 成为 Web Direct、devd、本地构建和 GitHub Release 的统一 artifact 合同。
 - 固件 identity 暴露 build/profile/features/protocol/defmt 信息，devd 用它与 artifact manifest 匹配；不匹配时日志解码必须标记 `unverified`。
-- Web 开发期由 Vite dev server 反代 `/api` 到 devd，proxy target 可由 env 指向当前显式启动的 bridge；生产期可由 devd 托管静态 Web。需要浏览器直接跨源访问 devd bridge 时，`--allow-dev-cors` 只允许 loopback HTTP development origins。Connect 页在 LAN 发现结果里只保留 `identity.firmware.protocol === "mains-aegis.cdc.v1"` 的候选。
+- Web 开发期由 Vite dev server 反代 `/api` 到显式启动的 `serve-http --allow-dev-cors`，proxy target 可由 env 指向当前开发实例；hosted 模式下由 devd 直接托管嵌入式 Web。需要浏览器直接跨源访问 devd API 时，`--allow-dev-cors` 只允许 loopback HTTP development origins。Connect 页在 LAN 发现结果里只保留 `identity.firmware.protocol === "mains-aegis.cdc.v1"` 的候选。
 - 新增项目 skill，固化 devd 设备操作、安全边界和验证流程；Codex 在本仓内默认使用 `$mains-aegis-devd-flow` 做开发、验证、诊断与硬件 read/session-read 检查，`$mains-aegis-user-operations` 仅用于显式 end-user/released-tool 场景。
 
 ### Non-goals
@@ -167,7 +167,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - Given BMS 处于 CUV 低电恢复且 `BQ25792 CHG_STAT=termination_done`，When 读取 `power-diag`，Then `policy.state` 必须保持 `recovering_low_voltage`、`policy.status=RECOV`、`policy.recovery_stage=bq40_pchg|bq25792_precharge`、`policy.full_latched=false`，不得把该快照误报为满充锁存。
 - Given charger poll 已完成，When 读取 `power-diag`，Then `charger.vbat_lowv_pct_x10=714`、`charger.iprechg_ma=120` 可见。
 - Given BQ40 DF 可读，When 读取 `power-diag`，Then `bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg` 可见，用于确认 `2550mV + CUV_RECOV_CHG=0` baseline。
-- Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 env 指定或默认的 devd bridge。
+- Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 env 指定或默认的 `serve-http --allow-dev-cors`。
 - 文档与 AGENTS guardrails 清晰说明 `$mains-aegis-devd-flow` 是本仓 Codex 默认入口；显式 end-user/released-tool 操作才使用 `$mains-aegis-user-operations`。
 - 多 USB CDC 设备同时存在时，devd/Web 不自动选择；Web 显示候选列表，用户选择后才创建 Web lease 并占用设备。
 - Web 正常断开后 devd 立即释放 USB 占用；Web 异常断开后 devd 按租约 TTL 自动释放，默认目标不超过 9 秒。
@@ -180,7 +180,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 
 ## 实现状态
 
-- `tools/mains-aegis-host`: v1 daemon/API/mock validation foundation，并提供 CLI、IPC 与显式 HTTP bridge。
+- `tools/mains-aegis-host`: v1 daemon/API/mock validation foundation，并提供 CLI、IPC 与显式 HTTP service。
 - `tools/mains-aegis-host`: 提供设备级 `power-diag` 只读诊断 API，转发固件 USB CDC `get_power_diag` 并在 session 中缓存结果。
 - `tools/mains-aegis-host`: flash API 与 `flash completed` 事件已暴露 backend `status/stdout/stderr`，用于现场确认底层 `espflash` 执行结果。
 - `tools/mains-aegis-host`: flash backend 有可配置超时，默认避免底层烧录进程在 HTTP 客户端超时或断开后无界悬挂。

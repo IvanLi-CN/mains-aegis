@@ -29,7 +29,7 @@
 - 对接设备侧现有只读接口：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status` 和 status SSE。
 - 提供 mock fixtures 和正式路由 seed 场景，使无实机环境也能稳定预览、交互测试与截图验证。
 - 在现有 `web/` 管理台上新增 USB CDC / Web Serial 数据源，复用 `Identity`、`NetworkSummary`、`UpsStatus` 状态模型。
-- 使用 `mains-aegis-devd` 作为本地 USB 控制 owner；CLI 通过 IPC 访问，Web/App 通过显式 `bridge-http` 使用同一 USB CDC 安全控制面。
+- 使用 `mains-aegis-devd` 作为本地 USB 控制 owner；CLI 通过 IPC 访问，Web/App 通过显式 `serve-http` 使用同一 USB CDC 安全控制面。
 - 通过 USB CDC structured JSONL 协议支持握手、状态读取、结构化日志、安全设置与 WiFi 配网。
 - 首版写入范围限制为 WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别；PSK 不在 API、日志或 UI 中回显。
 
@@ -106,7 +106,7 @@
 - Web 不得在本地 localStorage 中持久化 devd lease；刷新页面后必须重新创建 lease，不能复用过期 session。
 - 连接硬件、保存 WiFi、清除 WiFi 与 settings 失败必须以气泡 callout 展示；成功反馈可以保留为低噪音 inline status。
 - devd 连接在创建 Web lease 并读取 identity 后必须执行同样的 firmware artifact 匹配门禁；不匹配时释放刚创建的 lease，不得继续占用 USB，除非用户显式忽略警告并重新发起连接。
-- devd 对 Web/App 暴露显式 localhost HTTP bridge：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、`/api/v1/settings`、WiFi config、settings endpoints，以及 Web Console 兼容 hydration；CLI 使用 IPC。
+- devd 对 Web/App 暴露显式 localhost HTTP service：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、`/api/v1/settings`、WiFi config、settings endpoints，以及 Web Console 兼容 hydration；CLI 使用 IPC。
 - Trace 查询返回 bounded tail logs/trace，默认 `logs_limit=200`、`trace_limit=600`，上限分别为 `500` 和 `2000`。
 - 同一 `identity.device_id` 通过 LAN 与 USB 同时发现时，Web App 合并为一条 `DeviceRecord`，并显示 WiFi/LAN 与 USB 两个连接标记。
 
@@ -335,7 +335,7 @@
 ![Firmware flash mobile evidence](./assets/firmware-flash-mobile.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/devices/mains-aegis-devd-bridge/firmware?seed=usb`
+  demo_entry_or_title: `/devices/mains-aegis-devd-service/firmware?seed=usb`
   requested_viewport: `390x844`
   viewport_strategy: `devtools-emulate`
   capture_scope: `browser-viewport`

@@ -17,14 +17,14 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-function renderApp(seed = "default") {
+function renderApp(seed = "default", initialDevdTarget?: string) {
   window.localStorage.removeItem(STORAGE_KEY);
   const params = new URLSearchParams(window.location.search);
   params.set("seed", seed);
   window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
   return (
     <DeviceRegistryProvider>
-      <App initialPath="/connect" />
+      <App initialPath="/connect" initialDevdTarget={initialDevdTarget} />
     </DeviceRegistryProvider>
   );
 }
@@ -36,21 +36,20 @@ export const DevdAutoDiscovery: Story = {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("heading", { name: "Connect devices" })).toBeInTheDocument();
     await expect(await canvas.findByRole("heading", { name: /Automatic device discovery/ })).toBeInTheDocument();
-    await expect(await canvas.findByText("mains-aegis-devd-bridge")).toBeInTheDocument();
+    await expect(await canvas.findByText("mains-aegis-devd-service")).toBeInTheDocument();
     await expect(await canvas.findByText("Mock")).toBeInTheDocument();
+    await expect(canvas.queryByText("Discovery source")).not.toBeInTheDocument();
+    await expect(canvas.queryByLabelText("devd URL")).not.toBeInTheDocument();
     await expect(canvas.queryByLabelText("Target")).not.toBeInTheDocument();
   },
 };
 
 export const ManualLanFallback: Story = {
   name: "Manual LAN fallback",
-  render: () => renderApp("empty"),
+  render: () => renderApp("empty", "mock:missing-devd"),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("heading", { name: /Automatic device discovery/ })).toBeInTheDocument();
-    await userEvent.clear(canvas.getByLabelText("devd URL"));
-    await userEvent.type(canvas.getByLabelText("devd URL"), "mock:missing-devd");
-    await userEvent.click(canvas.getByRole("button", { name: /Refresh discovery/ }));
     await expect(await canvas.findByLabelText("Target")).toBeInTheDocument();
     await expect(canvas.queryByLabelText("Bridge token")).not.toBeInTheDocument();
     await expect(canvas.queryByLabelText("devd auth token")).not.toBeInTheDocument();

@@ -15,9 +15,9 @@ High-risk operations such as output enable/disable, fault clear, and charge star
 
 ## Mains Aegis Device Daemon
 
-`mains-aegis-devd` is the preferred local device owner. It manages device scan/list/bind/connect/disconnect/unbind, firmware artifact selection, flash/reset/monitor operations, host power coordination, and USB CDC safe-control. Its default `serve` mode is IPC-only; HTTP/Web access is exposed only through explicit `bridge-http`.
+`mains-aegis-devd` is the preferred local device owner. It manages device scan/list/bind/connect/disconnect/unbind, firmware artifact selection, flash/reset/monitor operations, host power coordination, and USB CDC safe-control. Its default `serve` mode is IPC-only; HTTP/Web access is exposed only through explicit `serve-http`.
 
-Development mode uses the Web dev server as the API reverse proxy: the browser talks to the Vite origin, and Vite proxies `/api` to the explicit `bridge-http` endpoint, default `http://127.0.0.1:30080`. Production mode may serve static Web assets directly from `bridge-http`.
+Development mode uses the Web dev server as the API reverse proxy: the browser talks to the Vite origin, and Vite proxies `/api` to the explicit `serve-http --allow-dev-cors` endpoint, default `http://127.0.0.1:30080`. Hosted mode serves embedded Web assets directly from `serve-http`; if `web/dist` is missing, host-tools builds fail fast and require `bun run build` in `web/`.
 
 devd persists user configuration state in `devices.json` under `directories::ProjectDirs::config_dir()`: device bindings, aliases, recently observed port paths, loaded artifact manifests, and selected artifact ids. Runtime ownership state is deliberately not persisted: connection status, Web leases, monitor handles, logs, and trace buffers reset on daemon restart so devd never reports stale USB connection state.
 

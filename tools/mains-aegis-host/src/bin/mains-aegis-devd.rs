@@ -3,7 +3,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
 use mains_aegis_host::{
-    default_ipc_endpoint, release_version, serve_http_bridge, serve_ipc, HttpBridgeConfig,
+    default_ipc_endpoint, release_version, serve_http_service, serve_ipc, HttpServiceConfig,
     IpcConfig, DEFAULT_BIND,
 };
 
@@ -30,17 +30,14 @@ enum Command {
         #[arg(long, env = "MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS")]
         allow_host_power_actions: bool,
     },
-    /// Expose the devd HTTP/Web bridge explicitly.
-    BridgeHttp {
-        /// IPC socket or named-pipe endpoint shared with the HTTP bridge.
+    /// Expose the devd HTTP service explicitly.
+    ServeHttp {
+        /// IPC socket or named-pipe endpoint shared with the HTTP service.
         #[arg(long, env = "MAINS_AEGIS_DEVD_IPC")]
         ipc: Option<String>,
         /// HTTP bind address.
         #[arg(long, default_value = DEFAULT_BIND, env = "MAINS_AEGIS_DEVD_BIND")]
         bind: SocketAddr,
-        /// Optional static Web root served by the bridge.
-        #[arg(long)]
-        web_root: Option<PathBuf>,
         /// Allow local development CORS origins.
         #[arg(long, env = "MAINS_AEGIS_DEVD_ALLOW_DEV_CORS")]
         allow_dev_cors: bool,
@@ -53,6 +50,9 @@ enum Command {
         /// File containing the bearer token required for LAN bridge mode.
         #[arg(long, env = "MAINS_AEGIS_DEVD_AUTH_TOKEN_FILE")]
         auth_token_file: Option<PathBuf>,
+        /// Open the hosted app in the default browser after the service starts.
+        #[arg(long, env = "MAINS_AEGIS_DEVD_OPEN_BROWSER")]
+        open_browser: bool,
     },
 }
 
@@ -83,14 +83,14 @@ async fn main() -> anyhow::Result<()> {
             )
             .await
         }
-        Command::BridgeHttp {
+        Command::ServeHttp {
             ipc,
             bind,
-            web_root,
             allow_dev_cors,
             allow_host_power_actions,
             allow_lan_bridge,
             auth_token_file,
+            open_browser,
         } => {
             let auth_token = auth_token_file
                 .map(|path| {
@@ -99,14 +99,14 @@ async fn main() -> anyhow::Result<()> {
                         .map(|token| token.trim().to_string())
                 })
                 .transpose()?;
-            serve_http_bridge(HttpBridgeConfig {
+            serve_http_service(HttpServiceConfig {
                 ipc_endpoint: ipc.unwrap_or_else(default_ipc_endpoint),
                 bind,
-                web_root,
                 allow_dev_cors,
                 allow_host_power_actions,
                 allow_lan_bridge,
                 auth_token,
+                open_browser,
             })
             .await
         }

@@ -220,7 +220,7 @@ ensure_devd() {
     exit 50
   fi
   echo "Starting mains-aegis-devd at $devd_url"
-  (cd "$REPO_ROOT" && cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- bridge-http --bind "$bind") \
+  (cd "$REPO_ROOT" && cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve-http --bind "$bind") \
     >"$report_root/devd.log" 2>&1 &
   DEVD_PID=$!
   trap 'if [[ -n "${DEVD_PID:-}" ]]; then kill "$DEVD_PID" 2>/dev/null || true; fi' EXIT
