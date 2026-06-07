@@ -55,6 +55,7 @@ import {
   type AddDeviceInput,
   type AddDeviceResult,
   type CommandResult,
+  type DeviceChannelTransport,
   type ManualChargePrefsInput,
   type WifiConfigInput,
   type WifiProvisioningProgress,
@@ -209,7 +210,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       );
       return;
     }
-    if (target.transport === "serial") {
+    const selectedTransport = existing ? resolvePreferredTransport(existing, serialSessions.current) : target.transport ?? "http";
+    if (selectedTransport === "serial") {
       const session = serialSessions.current.get(deviceId);
       if (!session) {
         setRecords((current) =>
@@ -269,22 +271,35 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
 
     const cachedBridgeAuth = bridgeAuthToken(target.baseUrl) !== null;
     try {
-      if (target.transport === "devd") {
-        const devdBaseUrl = existing.serial?.baseUrl ?? target.baseUrl;
+      if (selectedTransport === "devd") {
+        const devdBaseUrl = rememberedDevdChannel(existing)?.baseUrl ?? existing.serial?.baseUrl ?? target.baseUrl;
+        const devdDeviceId = rememberedDevdChannel(existing)?.devdDeviceId ?? target.deviceId;
         if (existing.serial?.leaseId) {
           await updateDevdSerialSnapshot(deviceId, devdBaseUrl);
           return;
         }
-        const identity = await getDevdDeviceIdentity(devdBaseUrl, target.deviceId);
-        const settings = await getDevdDeviceSettings(devdBaseUrl, target.deviceId);
-        const traceSession = await getDevdDeviceTrace(devdBaseUrl, target.deviceId, DEVD_SERIAL_SESSION_LIMITS);
-        const record = recordFromDevdDeviceSnapshot(target, identity, traceSession.status ?? null, settings, traceSession);
+        const devdTarget = {
+          ...target,
+          baseUrl: devdBaseUrl,
+          transport: "devd" as const,
+          preferredTransport: target.preferredTransport,
+        };
+        const identity = await getDevdDeviceIdentity(devdBaseUrl, devdDeviceId);
+        const settings = await getDevdDeviceSettings(devdBaseUrl, devdDeviceId);
+        const traceSession = await getDevdDeviceTrace(devdBaseUrl, devdDeviceId, DEVD_SERIAL_SESSION_LIMITS);
+        const record = recordFromDevdDeviceSnapshot(devdTarget, identity, traceSession.status ?? null, settings, traceSession);
         setRecords((current) => upsertRecord(current, record));
         return;
       }
-      const bridgeAuth = await resolveBridgeAuthState(target);
-      const nextTarget = bridgeAuth ? { ...target, bridgeAuth: true } : target;
-      const result = await probeDevice(target.baseUrl, undefined, bridgeAuth ? { bridgeAuth: true } : undefined);
+      const httpBaseUrl = rememberedHttpBaseUrl(existing) ?? target.baseUrl;
+      const httpTarget = httpBaseUrl === target.baseUrl ? target : {
+        ...target,
+        baseUrl: httpBaseUrl,
+        transport: "http" as const,
+      };
+      const bridgeAuth = await resolveBridgeAuthState(httpTarget);
+      const nextTarget = bridgeAuth ? { ...httpTarget, bridgeAuth: true } : httpTarget;
+      const result = await probeDevice(httpTarget.baseUrl, undefined, bridgeAuth ? { bridgeAuth: true } : undefined);
       setRecords((current) => {
         const previous = current.find((record) => record.target.deviceId === deviceId);
         if (!previous) return current;
@@ -316,7 +331,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   useEffect(() => {
     const interval = window.setInterval(() => {
       for (const record of records) {
-        if (record.target.transport !== "devd" && !streams.current.has(record.target.deviceId)) {
+        if (resolvePreferredTransport(record, serialSessions.current) !== "devd" && !streams.current.has(record.target.deviceId)) {
           void refreshDevice(record.target.deviceId);
         }
       }
@@ -366,19 +381,22 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
 
   useEffect(() => {
     for (const record of records) {
+      const selectedTransport = resolvePreferredTransport(record, serialSessions.current);
+      const httpBaseUrl = rememberedHttpBaseUrl(record);
       if (
-        record.target.transport === "serial" ||
-        record.target.transport === "devd" ||
+        selectedTransport === "serial" ||
+        selectedTransport === "devd" ||
         record.target.mock ||
         !record.identity?.capabilities.sse ||
         record.streamState !== "idle" ||
-        streams.current.has(record.target.deviceId)
+        streams.current.has(record.target.deviceId) ||
+        !httpBaseUrl
       ) {
         continue;
       }
 
       const bridgeAuth = record.target.bridgeAuth ? { bridgeAuth: true } : undefined;
-      const subscription = subscribeStatusStream(record.target.baseUrl, {
+      const subscription = subscribeStatusStream(httpBaseUrl, {
         onStatus: (status) => {
           setRecords((current) =>
             current.map((candidate) =>
@@ -414,7 +432,7 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
                 : candidate,
             ),
           );
-          void getStatus(record.target.baseUrl, undefined, bridgeAuth)
+          void getStatus(httpBaseUrl, undefined, bridgeAuth)
             .then((status) => {
               setRecords((current) =>
                 current.map((candidate) =>
@@ -510,6 +528,15 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         alias: input.alias?.trim() || result.identity.hostname,
         location: input.location?.trim() || "Unassigned",
         addedAt: new Date().toISOString(),
+        transport: "http",
+        preferredTransport: "http",
+        rememberedChannels: {
+          http: {
+            baseUrl,
+            seenAt: new Date().toISOString(),
+            source: "manual",
+          },
+        },
       };
       const record = recordFromProbe(target, result, "online", result.identity.capabilities.sse ? "idle" : "polling");
       setRecords((current) => upsertRecord(current, record));
@@ -567,6 +594,15 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
           alias: input.alias?.trim() || result.identity.hostname,
           location: input.location?.trim() || "LAN",
           addedAt: new Date().toISOString(),
+          transport: "http",
+          preferredTransport: "http",
+          rememberedChannels: {
+            http: {
+              baseUrl: lanBaseUrl,
+              seenAt: new Date().toISOString(),
+              source: "devd_discovery",
+            },
+          },
         };
         const record = recordFromProbe(target, result, "online", result.identity.capabilities.sse ? "idle" : "polling");
         setRecords((current) => upsertRecord(current, record));
@@ -591,6 +627,15 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         alias: input.alias?.trim() || result.identity.hostname,
         location: input.location?.trim() || "devd",
         addedAt: new Date().toISOString(),
+        preferredTransport: "devd",
+        rememberedChannels: {
+          devd: {
+            baseUrl,
+            devdDeviceId: selectedDevice.id,
+            seenAt: new Date().toISOString(),
+            transport: selectedDevice.transport === "mock" ? "mock" : "usb",
+          },
+        },
         bridgeAuth: bridgeAuth || undefined,
         transport: "devd",
         serialProtocol: session.protocol,
@@ -705,6 +750,12 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
           location: input.location?.trim() || "USB",
           addedAt: new Date().toISOString(),
           transport: "serial",
+          preferredTransport: "serial",
+          rememberedChannels: {
+            serial: {
+              seenAt: new Date().toISOString(),
+            },
+          },
           serialProtocol: hello.protocol,
         };
         serialSessions.current.set(identity.device_id, transport);
@@ -775,6 +826,102 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
     return { ok: true, record };
   }, []);
 
+  const rememberDiscoveredChannels = useCallback((devdBaseUrl: string, devices: DevdDevice[]) => {
+    const discoveryByDeviceId = new Map<string, Partial<NonNullable<DeviceTarget["rememberedChannels"]>>>();
+    for (const device of devices) {
+      const identityDeviceId = device.identity?.device_id;
+      if (!identityDeviceId) continue;
+      const current = discoveryByDeviceId.get(identityDeviceId) ?? {};
+      if (device.transport === "lan") {
+        const lanBaseUrl = devdLanBaseUrl(device, device.identity);
+        if (!lanBaseUrl) continue;
+        current.http = {
+          baseUrl: lanBaseUrl,
+          seenAt: new Date().toISOString(),
+          source: "devd_discovery",
+        };
+      } else {
+        current.devd = {
+          baseUrl: devdBaseUrl,
+          devdDeviceId: device.id,
+          seenAt: new Date().toISOString(),
+          transport: device.transport === "mock" ? "mock" : "usb",
+        };
+      }
+      discoveryByDeviceId.set(identityDeviceId, current);
+    }
+    if (discoveryByDeviceId.size === 0) return;
+    setRecords((current) =>
+      current.map((record) => {
+        const memory = discoveryByDeviceId.get(record.target.deviceId);
+        if (!memory) return record;
+        return {
+          ...record,
+          target: {
+            ...record.target,
+            rememberedChannels: mergeRememberedChannels(record.target.rememberedChannels, memory),
+          },
+        };
+      }),
+    );
+  }, []);
+
+  const connectKnownDeviceChannel = useCallback(async (
+    deviceId: string,
+    transport: DeviceChannelTransport,
+    options: Pick<AddDeviceInput, "ignoreFirmwareMismatch"> = {},
+  ): Promise<AddDeviceResult> => {
+    const record = records.find((candidate) => candidate.target.deviceId === deviceId);
+    if (!record) {
+      return {
+        ok: false,
+        error: {
+          code: "device_not_found",
+          message: "The selected device is no longer in the local registry",
+          retryable: false,
+          details: { deviceId },
+        },
+      };
+    }
+
+    if (transport === "http") {
+      const baseUrl = rememberedHttpBaseUrl(record);
+      if (!baseUrl) return unavailableChannelError("http");
+      return addDevice({
+        target: baseUrl,
+        alias: record.target.alias,
+        location: record.target.location,
+      });
+    }
+
+    if (transport === "devd") {
+      const devdChannel = rememberedDevdChannel(record);
+      if (!devdChannel?.baseUrl) return unavailableChannelError("devd");
+      let devdDeviceId = devdChannel.devdDeviceId ?? null;
+      if (!devdDeviceId) {
+        const scan = await scanDevdDevices(devdChannel.baseUrl);
+        const matches = scan.devices.filter(
+          (device) => isManageableDevdDevice(device) && device.identity?.device_id === record.target.deviceId,
+        );
+        if (matches.length !== 1) return unavailableChannelError("devd");
+        devdDeviceId = matches[0].id;
+      }
+      return addDevdDevice({
+        target: devdChannel.baseUrl,
+        devdDeviceId,
+        alias: record.target.alias,
+        location: record.target.location,
+        ignoreFirmwareMismatch: options.ignoreFirmwareMismatch,
+      });
+    }
+
+    return connectUsbSerialDevice({
+      alias: record.target.alias,
+      location: record.target.location,
+      ignoreFirmwareMismatch: options.ignoreFirmwareMismatch,
+    });
+  }, [addDevice, addDevdDevice, connectUsbSerialDevice, records]);
+
   const disconnectUsbSerialDevice = useCallback(async (deviceId: string) => {
     const session = serialSessions.current.get(deviceId);
     serialSessions.current.delete(deviceId);
@@ -818,13 +965,16 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       );
       return { ok: true };
     }
-    if (isDirectLanRecord(record)) {
+    const selectedTransport = resolvePreferredTransport(record, serialSessions.current);
+    if (selectedTransport === "http") {
+      const httpBaseUrl = rememberedHttpBaseUrl(record);
+      if (!httpBaseUrl) return unavailableCommandChannel("http");
       try {
         onProgress?.({ phase: "saving", message: "Writing WiFi credentials over LAN" });
-        await sendDeviceWifiConfig(record.target.baseUrl, input);
+        await sendDeviceWifiConfig(httpBaseUrl, input);
         onProgress?.({ phase: "connecting", message: `Connecting to ${input.ssid} and waiting for an IP address` });
-        const status = await waitForHttpWifiConnected(record.target.baseUrl, input.ssid, onProgress);
-        const settings = await getSettings(record.target.baseUrl);
+        const status = await waitForHttpWifiConnected(httpBaseUrl, input.ssid, onProgress);
+        const settings = await getSettings(httpBaseUrl);
         const message = wifiConnectedMessage(input.ssid, status.network);
         onProgress?.({ phase: status.network.ipv4 ? "connected" : "ip", message, network: status.network });
         setRecords((current) =>
@@ -841,8 +991,9 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         return { ok: false, error: envelope };
       }
     }
-    const devdBaseUrl = devdBaseUrlForRecord(record);
-    if (devdBaseUrl !== null) {
+    if (selectedTransport === "devd") {
+      const devdBaseUrl = devdBaseUrlForRecord(record);
+      if (devdBaseUrl === null) return unavailableCommandChannel("devd");
       try {
         const leaseId = devdLeaseIdForRecord(record);
         onProgress?.({ phase: "saving", message: "Writing WiFi credentials to hardware" });
@@ -871,7 +1022,6 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         return { ok: false, error: envelope };
       }
     }
-    if (!record.serial) return serialCommandUnavailable();
     const session = serialSessions.current.get(deviceId);
     if (!session) return serialCommandUnavailable();
     try {
@@ -913,12 +1063,15 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       );
       return { ok: true };
     }
-    if (isDirectLanRecord(record)) {
+    const selectedTransport = resolvePreferredTransport(record, serialSessions.current);
+    if (selectedTransport === "http") {
+      const httpBaseUrl = rememberedHttpBaseUrl(record);
+      if (!httpBaseUrl) return unavailableCommandChannel("http");
       try {
         onProgress?.({ phase: "clearing", message: "Clearing WiFi credentials over LAN" });
-        await clearDeviceWifiConfig(record.target.baseUrl);
-        const status = await waitForHttpWifiDisabled(record.target.baseUrl, onProgress);
-        const settings = await getSettings(record.target.baseUrl);
+        await clearDeviceWifiConfig(httpBaseUrl);
+        const status = await waitForHttpWifiDisabled(httpBaseUrl, onProgress);
+        const settings = await getSettings(httpBaseUrl);
         const message = wifiDisabledMessage(status.network);
         onProgress?.({ phase: "disabled", message, network: status.network });
         setRecords((current) =>
@@ -935,8 +1088,9 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         return { ok: false, error: envelope };
       }
     }
-    const devdBaseUrl = devdBaseUrlForRecord(record);
-    if (devdBaseUrl !== null) {
+    if (selectedTransport === "devd") {
+      const devdBaseUrl = devdBaseUrlForRecord(record);
+      if (devdBaseUrl === null) return unavailableCommandChannel("devd");
       try {
         const leaseId = devdLeaseIdForRecord(record);
         onProgress?.({ phase: "clearing", message: "Clearing WiFi credentials from hardware" });
@@ -961,7 +1115,6 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         return { ok: false, error: envelope };
       }
     }
-    if (!record.serial) return serialCommandUnavailable();
     const session = serialSessions.current.get(deviceId);
     if (!session) return serialCommandUnavailable();
     try {
@@ -988,10 +1141,13 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const setSerialLogLevel = useCallback(async (deviceId: string, level: DeviceSettings["log_level"]): Promise<CommandResult> => {
     const record = records.find((candidate) => candidate.target.deviceId === deviceId);
     if (!record) return serialCommandUnavailable();
-    if (isDirectLanRecord(record)) {
+    const selectedTransport = resolvePreferredTransport(record, serialSessions.current);
+    if (selectedTransport === "http") {
+      const httpBaseUrl = rememberedHttpBaseUrl(record);
+      if (!httpBaseUrl) return unavailableCommandChannel("http");
       try {
-        await setDeviceLogLevel(record.target.baseUrl, level);
-        const settings = await getSettings(record.target.baseUrl);
+        await setDeviceLogLevel(httpBaseUrl, level);
+        const settings = await getSettings(httpBaseUrl);
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
@@ -1006,8 +1162,9 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         return { ok: false, error: envelope };
       }
     }
-    const devdBaseUrl = devdBaseUrlForRecord(record);
-    if (devdBaseUrl !== null) {
+    if (selectedTransport === "devd") {
+      const devdBaseUrl = devdBaseUrlForRecord(record);
+      if (devdBaseUrl === null) return unavailableCommandChannel("devd");
       try {
         const leaseId = devdLeaseIdForRecord(record);
         await setDevdLogLevel(devdBaseUrl, record.target.deviceId, leaseId, level);
@@ -1030,7 +1187,6 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         return { ok: false, error: envelope };
       }
     } else if (!record.target.mock) {
-      if (!record.serial) return serialCommandUnavailable();
       const session = serialSessions.current.get(deviceId);
       if (!session) return serialCommandUnavailable();
       try {
@@ -1054,10 +1210,13 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
   const setManualChargePrefs = useCallback(async (deviceId: string, prefs: ManualChargePrefsInput): Promise<CommandResult> => {
     const record = records.find((candidate) => candidate.target.deviceId === deviceId);
     if (!record) return serialCommandUnavailable();
-    if (isDirectLanRecord(record)) {
+    const selectedTransport = resolvePreferredTransport(record, serialSessions.current);
+    if (selectedTransport === "http") {
+      const httpBaseUrl = rememberedHttpBaseUrl(record);
+      if (!httpBaseUrl) return unavailableCommandChannel("http");
       try {
-        await setDeviceManualChargePrefs(record.target.baseUrl, prefs);
-        const settings = await getSettings(record.target.baseUrl);
+        await setDeviceManualChargePrefs(httpBaseUrl, prefs);
+        const settings = await getSettings(httpBaseUrl);
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
@@ -1072,8 +1231,9 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         return { ok: false, error: envelope };
       }
     }
-    const devdBaseUrl = devdBaseUrlForRecord(record);
-    if (devdBaseUrl !== null) {
+    if (selectedTransport === "devd") {
+      const devdBaseUrl = devdBaseUrlForRecord(record);
+      if (devdBaseUrl === null) return unavailableCommandChannel("devd");
       try {
         const leaseId = devdLeaseIdForRecord(record);
         await setDevdManualChargePrefs(devdBaseUrl, record.target.deviceId, leaseId, prefs);
@@ -1096,7 +1256,6 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
         return { ok: false, error: envelope };
       }
     } else if (!record.target.mock) {
-      if (!record.serial) return serialCommandUnavailable();
       const session = serialSessions.current.get(deviceId);
       if (!session) return serialCommandUnavailable();
       try {
@@ -1308,6 +1467,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       addDevice,
       addDevdDevice,
       connectUsbSerialDevice,
+      connectKnownDeviceChannel,
+      rememberDiscoveredChannels,
       prepareWebSerialFlashPort,
       attachMockUsbSerialDevice,
       disconnectUsbSerialDevice,
@@ -1324,6 +1485,8 @@ export function DeviceRegistryProvider({ children }: { children: React.ReactNode
       addDevice,
       addDevdDevice,
       connectUsbSerialDevice,
+      connectKnownDeviceChannel,
+      rememberDiscoveredChannels,
       prepareWebSerialFlashPort,
       attachMockUsbSerialDevice,
       disconnectUsbSerialDevice,
@@ -1369,33 +1532,21 @@ function loadInitialRecords(seed: DemoSeed | null): DeviceRecord[] {
 
 function persistedTargetsForRecord(record: DeviceRecord): DeviceTarget[] {
   if (record.target.mock || record.target.transport === "serial") return [];
-  const targets = [record.target];
-  if (record.serial?.source === "devd" && record.serial.baseUrl && record.target.transport !== "devd") {
-    targets.push({
-      deviceId: record.target.deviceId,
-      baseUrl: record.serial.baseUrl,
-      alias: record.target.alias,
-      location: record.target.location || "devd",
-      addedAt: record.target.addedAt,
-      bridgeAuth: record.target.bridgeAuth,
-      transport: "devd",
-      serialProtocol: record.serial.protocol ?? record.target.serialProtocol,
-    });
-  }
-  return targets;
+  return [record.target];
 }
 
 function recordFromStoredTarget(target: DeviceTarget): DeviceRecord {
+  const nextTarget = hydrateRememberedChannels(target);
   return {
-    target,
+    target: nextTarget,
     identity: null,
     network: null,
     settings: null,
     status: null,
-    connectionState: target.transport === "serial" ? "offline" : "connecting",
-    streamState: target.transport === "serial" ? "error" : "idle",
+    connectionState: nextTarget.transport === "serial" ? "offline" : "connecting",
+    streamState: nextTarget.transport === "serial" ? "error" : "idle",
     error:
-      target.transport === "serial"
+      nextTarget.transport === "serial"
         ? {
             code: "serial_reconnect_required",
             message: "USB CDC devices require a fresh browser permission grant",
@@ -1405,15 +1556,15 @@ function recordFromStoredTarget(target: DeviceTarget): DeviceRecord {
         : null,
     lastUpdated: null,
     serial:
-      target.transport === "devd"
+      nextTarget.transport === "devd"
         ? {
-            connected: false,
-            source: "devd",
-            baseUrl: target.baseUrl,
-            protocol: target.serialProtocol ?? "mains-aegis.cdc.v1",
-            logs: [],
-            trace: [],
-          }
+          connected: false,
+          source: "devd",
+          baseUrl: nextTarget.baseUrl,
+          protocol: nextTarget.serialProtocol ?? "mains-aegis.cdc.v1",
+          logs: [],
+          trace: [],
+        }
         : undefined,
   };
 }
@@ -1514,6 +1665,15 @@ function mergeDevdSerial(record: DeviceRecord, baseUrl: string, session: DevdSer
     ...record,
     target: {
       ...record.target,
+      transport: "devd",
+      rememberedChannels: mergeRememberedChannels(record.target.rememberedChannels, {
+        devd: {
+          baseUrl,
+          devdDeviceId: record.target.rememberedChannels?.devd?.devdDeviceId,
+          seenAt: new Date().toISOString(),
+          transport: record.target.rememberedChannels?.devd?.transport ?? "usb",
+        },
+      }),
       serialProtocol: session.protocol,
     },
     connectionState: session.connected ? "online" : record.connectionState,
@@ -1551,6 +1711,11 @@ async function disconnectDevdSerialDevice(record: DeviceRecord): Promise<void> {
     await releaseDevdWebLease(baseUrl, record.serial.leaseId);
     return;
   }
+  const rememberedDeviceId = record.target.rememberedChannels?.devd?.devdDeviceId;
+  if (rememberedDeviceId) {
+    await disconnectDevdDevice(rememberedDeviceId, baseUrl);
+    return;
+  }
   const devices = await listDevdDevices(baseUrl);
   const devdDevice = devices.devices.find((device) => device.identity?.device_id === record.target.deviceId);
   if (!devdDevice) return;
@@ -1570,9 +1735,7 @@ function upsertRecord(records: DeviceRecord[], record: DeviceRecord): DeviceReco
 }
 
 function mergeDeviceRecord(existing: DeviceRecord, incoming: DeviceRecord): DeviceRecord {
-  const existingTransport = existing.target.transport ?? "http";
-  const incomingTransport = incoming.target.transport ?? "http";
-  const preferIncomingTarget = incomingTransport === "http" || existingTransport !== "http";
+  const preferIncomingTarget = incoming.connectionState === "online" || incoming.connectionState === "connecting";
   return {
     ...existing,
     ...incoming,
@@ -1581,9 +1744,13 @@ function mergeDeviceRecord(existing: DeviceRecord, incoming: DeviceRecord): Devi
           ...incoming.target,
           alias: incoming.target.alias || existing.target.alias,
           location: incoming.target.location || existing.target.location,
+          preferredTransport: incoming.target.preferredTransport ?? existing.target.preferredTransport,
+          rememberedChannels: mergeRememberedChannels(existing.target.rememberedChannels, incoming.target.rememberedChannels),
         }
       : {
           ...existing.target,
+          preferredTransport: incoming.target.preferredTransport ?? existing.target.preferredTransport,
+          rememberedChannels: mergeRememberedChannels(existing.target.rememberedChannels, incoming.target.rememberedChannels),
           serialProtocol: incoming.target.serialProtocol ?? existing.target.serialProtocol,
         },
     serial: incoming.serial ?? existing.serial,
@@ -1620,6 +1787,7 @@ function devdLanBaseUrl(device: DevdDevice, identity: Identity | null): string |
 function devdBaseUrlForRecord(record: DeviceRecord): string | null {
   if (record.serial?.source === "devd") return record.serial.baseUrl ?? "";
   if (record.target.transport === "devd") return record.target.baseUrl ?? "";
+  if (record.target.rememberedChannels?.devd?.baseUrl) return record.target.rememberedChannels.devd.baseUrl;
   return null;
 }
 
@@ -1629,6 +1797,109 @@ function devdLeaseIdForRecord(record: DeviceRecord): string | null {
 
 function isDirectLanRecord(record: DeviceRecord): boolean {
   return (record.target.transport ?? "http") === "http";
+}
+
+function rememberedHttpBaseUrl(record: DeviceRecord): string | null {
+  return record.target.rememberedChannels?.http?.baseUrl ?? ((record.target.transport ?? "http") === "http" ? record.target.baseUrl : null);
+}
+
+function rememberedDevdChannel(record: DeviceRecord): NonNullable<DeviceTarget["rememberedChannels"]>["devd"] | null {
+  if (record.target.rememberedChannels?.devd) return record.target.rememberedChannels.devd;
+  if (record.target.transport === "devd") {
+    return {
+      baseUrl: record.target.baseUrl,
+      seenAt: record.target.addedAt,
+    };
+  }
+  if (record.serial?.source === "devd" && record.serial.baseUrl) {
+    return {
+      baseUrl: record.serial.baseUrl,
+      seenAt: record.lastUpdated ?? record.target.addedAt,
+    };
+  }
+  return null;
+}
+
+function isTransportAvailable(record: DeviceRecord, transport: DeviceChannelTransport, sessions: Map<string, WebSerialTransport>): boolean {
+  if (transport === "http") return Boolean(rememberedHttpBaseUrl(record));
+  if (transport === "devd") return Boolean(devdBaseUrlForRecord(record));
+  return record.serial?.connected === true || sessions.has(record.target.deviceId);
+}
+
+function resolvePreferredTransport(record: DeviceRecord, sessions: Map<string, WebSerialTransport>): DeviceChannelTransport {
+  const preferred = record.target.preferredTransport;
+  if (preferred && isTransportAvailable(record, preferred, sessions)) return preferred;
+  if (isTransportAvailable(record, "devd", sessions)) return "devd";
+  if (isTransportAvailable(record, "http", sessions)) return "http";
+  return "serial";
+}
+
+function mergeRememberedChannels(
+  existing: DeviceTarget["rememberedChannels"],
+  incoming: DeviceTarget["rememberedChannels"] | Partial<NonNullable<DeviceTarget["rememberedChannels"]>> | undefined,
+): DeviceTarget["rememberedChannels"] {
+  if (!existing && !incoming) return undefined;
+  return {
+    http: incoming?.http ?? existing?.http,
+    devd: incoming?.devd ?? existing?.devd,
+    serial: incoming?.serial ?? existing?.serial,
+  };
+}
+
+function hydrateRememberedChannels(target: DeviceTarget): DeviceTarget {
+  const rememberedChannels = mergeRememberedChannels(target.rememberedChannels, target.transport === "devd"
+    ? {
+        devd: {
+          baseUrl: target.baseUrl,
+          seenAt: target.addedAt,
+        },
+      }
+    : target.transport === "http" || target.transport === undefined
+      ? {
+          http: {
+            baseUrl: target.baseUrl,
+            seenAt: target.addedAt,
+          },
+        }
+      : {
+          serial: {
+            seenAt: target.addedAt,
+          },
+        });
+  return {
+    ...target,
+    rememberedChannels,
+  };
+}
+
+function unavailableChannelError(transport: DeviceChannelTransport): AddDeviceResult {
+  return {
+    ok: false,
+    error: {
+      code: `${transport}_channel_unavailable`,
+      message: unavailableChannelMessage(transport),
+      retryable: true,
+      details: { transport },
+    },
+  };
+}
+
+function unavailableCommandChannel(transport: DeviceChannelTransport): CommandResult {
+  return {
+    ok: false,
+    error: {
+      code: `${transport}_channel_unavailable`,
+      message: unavailableChannelMessage(transport),
+      retryable: true,
+      details: { transport },
+    },
+  };
+}
+
+function unavailableChannelMessage(transport: DeviceChannelTransport): string {
+  if (transport === "devd") return "No remembered mains-aegis-devd USB channel is available for this device";
+  if (transport === "http") return "No remembered LAN HTTP channel is available for this device";
+  return "No remembered Web Serial channel is available for this device";
 }
 
 type DeviceSettingsPatch = {

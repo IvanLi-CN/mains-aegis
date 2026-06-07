@@ -566,6 +566,11 @@ a {
   font-size: 13px;
 }
 
+.secondary-button.small {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
 .secondary-button {
   display: inline-flex;
   align-items: center;
@@ -1356,6 +1361,17 @@ a {
 
 .table-row .transport-badge {
   display: inline-flex;
+}
+
+.table-row .row-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.channel-switch-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .status-band {

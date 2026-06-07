@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { DeviceRecord, DeviceSettings, WifiApplyNetwork } from "../api/types";
+import type { DeviceRecord, DeviceSettings, DeviceTarget, DevdDevice, WifiApplyNetwork } from "../api/types";
 import type { SerialPortLike } from "../serial/transport";
 
 export type AddDeviceInput = {
@@ -9,6 +9,8 @@ export type AddDeviceInput = {
   devdDeviceId?: string;
   ignoreFirmwareMismatch?: boolean;
 };
+
+export type DeviceChannelTransport = NonNullable<DeviceTarget["transport"]>;
 
 export type AddDeviceResult =
   | { ok: true; record: DeviceRecord }
@@ -36,6 +38,8 @@ export type DeviceRegistryContextValue = {
   addDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
   addDevdDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
   connectUsbSerialDevice: (input?: Pick<AddDeviceInput, "alias" | "location" | "ignoreFirmwareMismatch">) => Promise<AddDeviceResult>;
+  connectKnownDeviceChannel: (deviceId: string, transport: DeviceChannelTransport, options?: Pick<AddDeviceInput, "ignoreFirmwareMismatch">) => Promise<AddDeviceResult>;
+  rememberDiscoveredChannels: (devdBaseUrl: string, devices: DevdDevice[]) => void;
   prepareWebSerialFlashPort: (deviceId: string) => Promise<SerialPortLike | null>;
   attachMockUsbSerialDevice: () => AddDeviceResult;
   disconnectUsbSerialDevice: (deviceId: string) => Promise<void>;

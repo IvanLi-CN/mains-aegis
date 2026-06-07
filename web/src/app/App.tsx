@@ -39,7 +39,7 @@ import { isHostedHttpServiceApp, normalizeBaseUrl, scanDevdDevices, subscribeDev
 import type { DeviceRecord, DeviceSettings, DevdDevice, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
 import { SegmentedControl } from "../components/ui/segmented-control";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { useDeviceRegistry, type WifiProvisioningProgress } from "../device-registry/context";
+import { useDeviceRegistry, type DeviceChannelTransport, type WifiProvisioningProgress } from "../device-registry/context";
 import { isDemoSeed } from "../fixtures/mockDevices";
 import { isWebSerialSupported } from "../serial/transport";
 import { formatCurrent, formatPercent, formatTemp, formatVoltage, timeAgo } from "../utils/format";
@@ -62,6 +62,19 @@ type AppProps = {
 export type UiFeedback = {
   tone: "success" | "error";
   message: string;
+};
+
+type DiscoveredLogicalDevice = {
+  key: string;
+  deviceId: string | null;
+  displayName: string;
+  endpoint: string;
+  existingRecord: DeviceRecord | null;
+  channels: Partial<Record<Extract<DeviceChannelTransport, "http" | "devd">, DevdDevice>>;
+  availableTransports: Array<Extract<DeviceChannelTransport, "http" | "devd">>;
+  connectionLabel: string;
+  firmwareLabel: string;
+  logLabel: string;
 };
 
 const deviceSections = [
@@ -245,7 +258,8 @@ function deviceHref(deviceId: string, section: string) {
 }
 
 function deviceDefaultHref(record: DeviceRecord) {
-  return deviceHref(record.target.deviceId, record.target.transport === "serial" || record.target.transport === "devd" ? "firmware" : "overview");
+  const preferred = activeRecordTransport(record) ?? preferredRecordTransport(record);
+  return deviceHref(record.target.deviceId, preferred === "serial" || preferred === "devd" ? "firmware" : "overview");
 }
 
 function NavLink({ href, active, icon: Icon, label }: { href: string; active: boolean; icon: LucideIcon; label: string }) {
@@ -433,20 +447,121 @@ function DeviceCard({ record }: { record: DeviceRecord }) {
 }
 
 function ConnectionBadges({ record }: { record: DeviceRecord }) {
-  const transport = record.target.transport ?? "http";
-  const lanConnected =
-    transport === "http" &&
-    (record.connectionState === "online" || record.network?.state === "connected" || record.status?.network.state === "connected");
-  const devdConnected = transport === "devd" && record.connectionState === "online" && !record.serial?.leaseId;
-  const usbConnected = Boolean(record.serial?.connected && !devdConnected);
+  const active = activeRecordTransport(record);
+  const channels = availableRecordChannels(record);
   return (
     <span className="connection-badges">
-      {lanConnected ? <span className="transport-badge http">WiFi</span> : null}
-      {devdConnected ? <span className="transport-badge devd">devd</span> : null}
-      {usbConnected ? <span className="transport-badge serial">USB</span> : null}
-      {!lanConnected && !devdConnected && !usbConnected ? <span className="transport-badge offline">Offline</span> : null}
+      {channels.map((transport) => (
+        <span className={`transport-badge ${transportBadgeClass(transport)}`} key={transport}>
+          {transport === active ? channelBadgeLabel(transport) : channelBadgeLabel(transport)}
+        </span>
+      ))}
+      {active === null ? <span className="transport-badge offline">Offline</span> : null}
     </span>
   );
+}
+
+function activeRecordTransport(record: DeviceRecord): DeviceChannelTransport | null {
+  if (record.serial?.connected) return record.serial.source === "devd" ? "devd" : "serial";
+  if (record.target.transport === "devd" && record.connectionState === "online") return "devd";
+  if (
+    (record.target.transport ?? "http") === "http" &&
+    (record.connectionState === "online" || record.network?.state === "connected" || record.status?.network.state === "connected")
+  ) {
+    return "http";
+  }
+  if (record.target.transport === "serial" && record.connectionState === "online") return "serial";
+  return null;
+}
+
+function preferredRecordTransport(record: DeviceRecord): DeviceChannelTransport {
+  const preferred = record.target.preferredTransport;
+  if (preferred && hasRememberedChannel(record, preferred)) return preferred;
+  if (hasRememberedChannel(record, "devd")) return "devd";
+  if (hasRememberedChannel(record, "http")) return "http";
+  return "serial";
+}
+
+function availableRecordChannels(record: DeviceRecord): DeviceChannelTransport[] {
+  return sortTransportsByPreference(
+    (["devd", "http", "serial"] as DeviceChannelTransport[]).filter((transport) => hasRememberedChannel(record, transport)),
+    preferredRecordTransport(record),
+  );
+}
+
+function hasRememberedChannel(record: DeviceRecord, transport: DeviceChannelTransport): boolean {
+  if (transport === "http") return Boolean(record.target.rememberedChannels?.http || (record.target.transport ?? "http") === "http");
+  if (transport === "devd") return Boolean(record.target.rememberedChannels?.devd || record.target.transport === "devd" || record.serial?.source === "devd");
+  return Boolean(record.target.rememberedChannels?.serial || record.target.transport === "serial" || (record.serial && record.serial.source !== "devd"));
+}
+
+function rememberedHttpBaseUrl(record: DeviceRecord): string | null {
+  return record.target.rememberedChannels?.http?.baseUrl ?? ((record.target.transport ?? "http") === "http" ? record.target.baseUrl : null);
+}
+
+function rememberedDevdBaseUrl(record: DeviceRecord): string | null {
+  return record.target.rememberedChannels?.devd?.baseUrl ?? (record.serial?.source === "devd" ? record.serial.baseUrl ?? null : record.target.transport === "devd" ? record.target.baseUrl : null);
+}
+
+function sortTransportsByPreference<T extends DeviceChannelTransport>(transports: T[], preferred: DeviceChannelTransport): T[] {
+  const order: DeviceChannelTransport[] = [preferred, "devd", "http", "serial"];
+  return [...transports].sort((left, right) => order.indexOf(left) - order.indexOf(right));
+}
+
+function transportBadgeClass(transport: DeviceChannelTransport): "http" | "serial" | "devd" {
+  if (transport === "http") return "http";
+  if (transport === "devd") return "devd";
+  return "serial";
+}
+
+function channelBadgeLabel(transport: DeviceChannelTransport): string {
+  if (transport === "http") return "WiFi";
+  if (transport === "devd") return "devd";
+  return "USB";
+}
+
+function channelActionLabel(transport: DeviceChannelTransport): string {
+  if (transport === "http") return "WiFi";
+  if (transport === "devd") return "devd";
+  return "USB";
+}
+
+function buildDiscoveredLogicalDevices(devices: DevdDevice[], records: DeviceRecord[]): DiscoveredLogicalDevice[] {
+  const grouped = new Map<string, DiscoveredLogicalDevice>();
+  for (const device of devices) {
+    const deviceId = device.identity?.device_id ?? null;
+    const key = deviceId ?? `pending:${device.id}`;
+    const existing = grouped.get(key);
+    const transport = device.transport === "lan" ? "http" : "devd";
+    const nextChannels = { ...(existing?.channels ?? {}), [transport]: device } as DiscoveredLogicalDevice["channels"];
+    const primaryDevice = nextChannels.devd ?? nextChannels.http ?? device;
+    const existingRecord = deviceId ? records.find((record) => record.target.deviceId === deviceId) ?? existing?.existingRecord ?? null : null;
+    const availableTransports = sortTransportsByPreference(
+      (["devd", "http"] as const).filter((candidate) => nextChannels[candidate]),
+      existingRecord ? preferredRecordTransport(existingRecord) : nextChannels.devd ? "devd" : "http",
+    );
+    const endpoints = availableTransports
+      .map((candidate) => nextChannels[candidate])
+      .filter((candidate): candidate is DevdDevice => Boolean(candidate))
+      .map((candidate) => devdDeviceEndpoint(candidate));
+    grouped.set(key, {
+      key,
+      deviceId,
+      displayName: deviceId ?? primaryDevice.display_name,
+      endpoint: endpoints.join(" / "),
+      existingRecord,
+      channels: nextChannels,
+      availableTransports,
+      connectionLabel: availableTransports
+        .map((candidate) => `${channelBadgeLabel(candidate)} ${nextChannels[candidate]?.connection ?? "pending"}`)
+        .join(" / "),
+      firmwareLabel: primaryDevice.identity?.firmware.build_id ?? "identity pending",
+      logLabel: availableTransports
+        .map((candidate) => `${channelBadgeLabel(candidate)} ${nextChannels[candidate]?.log_decode.status ?? "pending"}`)
+        .join(" / "),
+    });
+  }
+  return Array.from(grouped.values());
 }
 
 function devdDeviceEndpoint(device: DevdDevice): string {
@@ -458,10 +573,6 @@ function devdDeviceTransportLabel(device: DevdDevice): string {
   if (device.transport === "lan") return "LAN";
   if (device.transport === "mock") return "Mock";
   return "USB CDC";
-}
-
-function devdDeviceName(device: DevdDevice): string {
-  return device.identity?.device_id ?? device.display_name;
 }
 
 function isConnectableDevdDevice(device: DevdDevice): boolean {
@@ -487,6 +598,8 @@ function ConnectPage({
     addDevice,
     addDevdDevice,
     connectUsbSerialDevice,
+    connectKnownDeviceChannel,
+    rememberDiscoveredChannels,
     attachMockUsbSerialDevice,
     disconnectUsbSerialDevice,
     removeDevice,
@@ -512,6 +625,8 @@ function ConnectPage({
   const [devdFirmwareOverrideMessage, setDevdFirmwareOverrideMessage] = useState<UiFeedback | null>(null);
   const [devdFirmwareOverrideDeviceId, setDevdFirmwareOverrideDeviceId] = useState<string | null>(null);
   const [devdConnectingDeviceId, setDevdConnectingDeviceId] = useState<string | null>(null);
+  const [savedDeviceMessage, setSavedDeviceMessage] = useState<UiFeedback | null>(null);
+  const [savedDeviceSwitchTarget, setSavedDeviceSwitchTarget] = useState<{ deviceId: string; transport: DeviceChannelTransport } | null>(null);
   const [busy, setBusy] = useState(false);
   const [usbBusy, setUsbBusy] = useState(false);
   const [devdBusy, setDevdBusy] = useState(false);
@@ -528,7 +643,9 @@ function ConnectPage({
       }
       setDevdStatus("checking");
       const scan = await scanDevdDevices(devdBaseUrl);
-      setDevdDevices(scan.devices.filter((device) => device.transport !== "lan" || isMainsAegisLanDevice(device)));
+      const filteredDevices = scan.devices.filter((device) => device.transport !== "lan" || isMainsAegisLanDevice(device));
+      setDevdDevices(filteredDevices);
+      rememberDiscoveredChannels(devdBaseUrl, filteredDevices);
       setDevdStatus("available");
       setDevdLastUpdated(new Date().toISOString());
       if (!options.clearMessage) setDevdMessage(null);
@@ -538,7 +655,7 @@ function ConnectPage({
       setDevdLastUpdated(null);
       setDevdMessage(errorFeedback(toErrorEnvelope(error)));
     }
-  }, [devdTarget]);
+  }, [devdTarget, rememberDiscoveredChannels]);
 
   useEffect(() => {
     void refreshDevdDiscovery();
@@ -597,22 +714,27 @@ function ConnectPage({
       setDevdMessage(errorFeedback({ code: "device_not_connectable", message: "This devd device is not ready for Web connection yet", retryable: true, details: { device } }));
       return;
     }
+    const transport: Extract<DeviceChannelTransport, "http" | "devd"> = device.transport === "lan" ? "http" : "devd";
+    const identityDeviceId = device.identity?.device_id;
+    const existingRecord = identityDeviceId ? records.find((record) => record.target.deviceId === identityDeviceId) ?? null : null;
     setDevdConnectingDeviceId(device.id);
     setDevdBusy(true);
     setDevdMessage(null);
     setDevdFirmwareOverrideMessage(null);
     setDevdFirmwareOverrideDeviceId(null);
-    const result = await addDevdDevice({
-      target: devdTarget,
-      devdDeviceId: device.id,
-      ignoreFirmwareMismatch,
-    });
+    const result = existingRecord
+      ? await connectKnownDeviceChannel(existingRecord.target.deviceId, transport, { ignoreFirmwareMismatch })
+      : await addDevdDevice({
+          target: devdTarget,
+          devdDeviceId: device.id,
+          ignoreFirmwareMismatch,
+        });
     setDevdBusy(false);
     setDevdConnectingDeviceId(null);
     if (result.ok) {
       setDevdFirmwareOverrideDeviceId(null);
       setDevdFirmwareOverrideMessage(null);
-      setDevdMessage(successFeedback(`${device.transport === "lan" ? "LAN" : "devd"} connected ${result.record.target.alias}`));
+      setDevdMessage(successFeedback(`${existingRecord ? "Switched" : "Connected"} ${result.record.target.alias} over ${channelBadgeLabel(transport)}`));
       navigate(deviceHref(result.record.target.deviceId, "settings"));
       void refreshDevdDiscovery();
     } else {
@@ -624,6 +746,20 @@ function ConnectPage({
     }
   }
 
+  async function onSavedDeviceChannelSwitch(record: DeviceRecord, transport: DeviceChannelTransport) {
+    setSavedDeviceSwitchTarget({ deviceId: record.target.deviceId, transport });
+    setSavedDeviceMessage(null);
+    const result = await connectKnownDeviceChannel(record.target.deviceId, transport);
+    setSavedDeviceSwitchTarget(null);
+    if (result.ok) {
+      setSavedDeviceMessage(successFeedback(`Switched ${result.record.target.alias} to ${channelBadgeLabel(transport)}`));
+      navigate(deviceDefaultHref(result.record));
+      if (transport === "devd" || transport === "http") void refreshDevdDiscovery();
+      return;
+    }
+    setSavedDeviceMessage(errorFeedback(result.error));
+  }
+
   function onMockUsbConnect() {
     const result = attachMockUsbSerialDevice();
     if (result.ok) {
@@ -632,13 +768,13 @@ function ConnectPage({
     }
   }
 
-  const connectableDevdDevices = devdDevices.filter((device) => isConnectableDevdDevice(device));
+  const discoveredLogicalDevices = useMemo(() => buildDiscoveredLogicalDevices(devdDevices, records), [devdDevices, records]);
   const visibleDevdMessage = devdFirmwareOverrideMessage ?? devdMessage;
   const devdSummary =
     devdStatus === "checking"
       ? "Scanning USB CDC and LAN inventory"
       : devdStatus === "available"
-        ? `${connectableDevdDevices.length} connectable, ${devdDevices.length} discovered`
+        ? `${discoveredLogicalDevices.length} devices across ${devdDevices.length} discovered channels`
         : "Not reachable";
   const showLanFallback = !devdDiscoveryOnly && devdStatus === "unavailable";
   const showFallbackConnectPanels = !devdDiscoveryOnly;
@@ -693,54 +829,66 @@ function ConnectPage({
               <span>devd is reachable. Connect a USB CDC device or wait for LAN discovery.</span>
             </div>
           ) : null}
-          {devdDevices.map((device) => {
-            const identityDeviceId = device.identity?.device_id;
-            const existingRecord = identityDeviceId ? records.find((record) => record.target.deviceId === identityDeviceId) : null;
-            const connectable = isConnectableDevdDevice(device);
-            const buttonLabel = existingRecord
-              ? "Open"
-              : device.transport === "lan"
-                ? "Connect LAN"
-                : device.connection === "connected"
-                  ? "Attach USB"
-                  : "Connect USB";
-            const showOverride = devdFirmwareOverrideDeviceId === device.id;
-            const isConnectingDevice = devdConnectingDeviceId === device.id;
+          {discoveredLogicalDevices.map((device) => {
+            const existingRecord = device.existingRecord;
+            const activeTransport = existingRecord ? activeRecordTransport(existingRecord) : null;
+            const defaultTransport = device.availableTransports[0];
+            const primaryChannel = device.channels[defaultTransport];
+            const showOverride = devdFirmwareOverrideDeviceId === primaryChannel?.id;
+            const isConnectingDevice = primaryChannel ? devdConnectingDeviceId === primaryChannel.id : false;
             return (
-              <article className={`devd-device-card ${connectable ? "" : "is-muted"}`} key={device.id}>
+              <article className={`devd-device-card ${primaryChannel && isConnectableDevdDevice(primaryChannel) ? "" : "is-muted"}`} key={device.key}>
                 <div className="devd-device-main">
-                  <span className={`transport-badge ${device.transport === "lan" ? "http" : device.transport === "mock" ? "adapter" : "serial"}`}>{devdDeviceTransportLabel(device)}</span>
+                  <span className={`transport-badge ${transportBadgeClass(defaultTransport)}`}>{channelBadgeLabel(defaultTransport)}</span>
                   <div>
-                    <h4>{devdDeviceName(device)}</h4>
-                    <p>{devdDeviceEndpoint(device)}</p>
+                    <h4>{device.displayName}</h4>
+                    <p>{device.endpoint}</p>
                   </div>
                 </div>
                 <dl className="devd-device-meta">
                   <div>
                     <dt>Connection</dt>
-                    <dd>{device.connection}</dd>
+                    <dd>{device.connectionLabel}</dd>
                   </div>
                   <div>
                     <dt>Firmware</dt>
-                    <dd>{device.identity?.firmware.build_id ?? "identity pending"}</dd>
+                    <dd>{device.firmwareLabel}</dd>
                   </div>
                   <div>
                     <dt>Logs</dt>
-                    <dd>{device.log_decode.status}</dd>
+                    <dd>{device.logLabel}</dd>
                   </div>
                 </dl>
                 <div className="devd-device-actions">
-                  {existingRecord ? (
+                  {existingRecord && primaryChannel ? (
                     <button className="primary-button small" type="button" onClick={() => navigate(deviceDefaultHref(existingRecord))}>
-                      {buttonLabel}
+                      Open
                     </button>
-                  ) : (
-                    <button className="primary-button small" type="button" disabled={devdBusy || !connectable} onClick={() => void onDevdConnect(device)}>
-                      <ButtonLabel busy={isConnectingDevice} busyText="Connecting" text={buttonLabel} />
+                  ) : primaryChannel ? (
+                    <button className="primary-button small" type="button" disabled={devdBusy || !isConnectableDevdDevice(primaryChannel)} onClick={() => void onDevdConnect(primaryChannel)}>
+                      <ButtonLabel busy={isConnectingDevice} busyText="Connecting" text={defaultTransport === "http" ? "Connect LAN" : "Connect devd"} />
                     </button>
-                  )}
+                  ) : null}
+                  {device.availableTransports
+                    .filter((transport) => transport !== defaultTransport)
+                    .map((transport) => {
+                      const channel = device.channels[transport];
+                      if (!channel) return null;
+                      const isCurrent = activeTransport === transport && existingRecord?.connectionState === "online";
+                      return (
+                        <button
+                          className="secondary-button small"
+                          key={transport}
+                          type="button"
+                          disabled={devdBusy || isCurrent || !isConnectableDevdDevice(channel)}
+                          onClick={() => void onDevdConnect(channel)}
+                        >
+                          {existingRecord ? `Use ${channelActionLabel(transport)}` : `Connect ${channelActionLabel(transport)}`}
+                        </button>
+                      );
+                    })}
                   {showOverride ? (
-                    <button className="secondary-button danger-action" type="button" disabled={devdBusy} onClick={() => void onDevdConnect(device, true)}>
+                    <button className="secondary-button danger-action" type="button" disabled={devdBusy || !primaryChannel} onClick={() => primaryChannel ? void onDevdConnect(primaryChannel, true) : undefined}>
                       Ignore warning
                     </button>
                   ) : null}
@@ -870,6 +1018,31 @@ function ConnectPage({
             </button>
             <div className="row-actions">
               <ConnectionBadges record={record} />
+              {availableRecordChannels(record).length > 1 ? (
+                <div className="channel-switch-actions">
+                  {availableRecordChannels(record).map((transport) => {
+                    const isActive = activeRecordTransport(record) === transport && record.connectionState === "online";
+                    const isBusy =
+                      savedDeviceSwitchTarget?.deviceId === record.target.deviceId &&
+                      savedDeviceSwitchTarget.transport === transport;
+                    return (
+                      <button
+                        className="secondary-button small"
+                        key={transport}
+                        type="button"
+                        disabled={isActive || isBusy}
+                        onClick={() => void onSavedDeviceChannelSwitch(record, transport)}
+                      >
+                        <ButtonLabel
+                          busy={isBusy}
+                          busyText="Switching"
+                          text={isActive ? `Using ${channelActionLabel(transport)}` : `Use ${channelActionLabel(transport)}`}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
               <button
                 className="icon-button"
                 type="button"
@@ -879,7 +1052,7 @@ function ConnectPage({
               >
                 <RefreshCw size={16} />
               </button>
-              {record.target.transport === "serial" && record.serial?.connected ? (
+              {record.serial?.connected && record.serial.source !== "devd" ? (
                 <button
                   className="icon-button"
                   type="button"
@@ -903,6 +1076,7 @@ function ConnectPage({
           </div>
         ))}
       </div>
+      {savedDeviceMessage ? <FeedbackMessage feedback={savedDeviceMessage} /> : null}
     </section>
   );
 }
@@ -1296,9 +1470,10 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   const [wifiMessage, setWifiMessage] = useState<UiFeedback | null>(null);
   const [wifiProgress, setWifiProgress] = useState<WifiProvisioningProgress | null>(null);
   const [busy, setBusy] = useState<"wifi-save" | "wifi-clear" | "manual" | null>(null);
-  const usbReady = Boolean(record.serial?.connected);
-  const lanReady = (record.target.transport ?? "http") === "http" && Boolean(record.settings);
-  const devdReady = record.target.transport === "devd" && Boolean(record.settings);
+  const activeTransport = activeRecordTransport(record);
+  const usbReady = activeTransport === "serial";
+  const lanReady = activeTransport === "http" && Boolean(record.settings);
+  const devdReady = activeTransport === "devd" && Boolean(record.settings);
   const settingsReady = usbReady || lanReady || devdReady;
   const transportLabel = lanReady && !usbReady ? "LAN" : "hardware";
   const wifiValidationMessage =
@@ -2259,11 +2434,19 @@ function connectionSummary(record: DeviceRecord): string {
 }
 
 function connectionEndpointLabel(record: DeviceRecord): string {
-  if (record.target.transport === "serial") {
+  const activeTransport = activeRecordTransport(record);
+  if (activeTransport === "serial") {
     return `${record.target.serialProtocol ?? record.serial?.protocol ?? "USB CDC"} · ${record.serial?.connected ? "connected" : "disconnected"}`;
   }
-  if (record.serial?.source === "devd") {
-    return `${record.serial.baseUrl ?? record.target.baseUrl} · devd USB ${record.serial.connected ? "connected" : "disconnected"}`;
+  if (activeTransport === "devd") {
+    return `${rememberedDevdBaseUrl(record) ?? record.target.baseUrl} · devd USB ${record.serial?.connected ? "connected" : "disconnected"}`;
+  }
+  if (activeTransport === "http") {
+    return rememberedHttpBaseUrl(record) ?? record.target.baseUrl;
+  }
+  const rememberedChannels = availableRecordChannels(record);
+  if (rememberedChannels.length > 0) {
+    return `Remembered ${rememberedChannels.map((transport) => channelBadgeLabel(transport)).join(" / ")}`;
   }
   return record.target.baseUrl;
 }

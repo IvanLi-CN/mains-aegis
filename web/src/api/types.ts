@@ -134,6 +134,23 @@ export type DeviceTarget = {
   location: string;
   addedAt: string;
   transport?: "http" | "serial" | "devd";
+  preferredTransport?: "http" | "serial" | "devd";
+  rememberedChannels?: {
+    http?: {
+      baseUrl: string;
+      seenAt: string;
+      source?: "manual" | "devd_discovery";
+    };
+    devd?: {
+      baseUrl: string;
+      devdDeviceId?: string | null;
+      seenAt: string;
+      transport?: "usb" | "lan" | "mock";
+    };
+    serial?: {
+      seenAt: string;
+    };
+  };
   serialProtocol?: string;
   bridgeAuth?: boolean;
   mock?: boolean;

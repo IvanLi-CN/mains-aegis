@@ -152,7 +152,7 @@ function describeHttpFailure(response: Response, path: string, responseText: str
 }
 
 function requestMock<T>(baseUrl: string, path: string): Promise<T> {
-  if (baseUrl === "mock:usb" || baseUrl === "mock:devd") {
+  if (baseUrl === "mock:usb" || baseUrl === "mock:devd" || baseUrl === "mock:devd-multi") {
     return requestMockDevd<T>(baseUrl, path);
   }
   if (path === "/api/v1/ping" || path === "/health") {
@@ -179,8 +179,10 @@ function requestMock<T>(baseUrl: string, path: string): Promise<T> {
 }
 
 function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
+  const hostedDiscoveryMock = baseUrl === "mock:devd" || baseUrl === "mock:devd-multi";
+  const multiChannelMock = baseUrl === "mock:devd-multi";
   const devdIdentity =
-    baseUrl === "mock:devd"
+    hostedDiscoveryMock
       ? {
           ...getMockIdentity("mock:lab-standby"),
           device_id: "mains-aegis-devd-service",
@@ -195,29 +197,29 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
           },
         }
       : null;
-  const identity = devdIdentity ?? getMockIdentity("mock:usb");
+  const identity = multiChannelMock ? getMockIdentity("mock:lab-standby") : devdIdentity ?? getMockIdentity("mock:usb");
   const network = identity.network;
-  const status = getMockStatus(baseUrl === "mock:devd" ? "mock:lab-standby" : "mock:usb");
+  const status = getMockStatus(hostedDiscoveryMock ? "mock:lab-standby" : "mock:usb");
   const usbDevice = {
-    id: baseUrl === "mock:devd" ? "mains-aegis-devd-service" : "mock-devd-esp32s3-1",
-    display_name: baseUrl === "mock:devd" ? "Bound ESP32-S3" : "USB demo CDC",
+    id: hostedDiscoveryMock ? (multiChannelMock ? "mock-devd-usb-standby" : "mains-aegis-devd-service") : "mock-devd-esp32s3-1",
+    display_name: hostedDiscoveryMock ? (multiChannelMock ? "USB standby UPS" : "Bound ESP32-S3") : "USB demo CDC",
     port_path: "/dev/tty.usbmodem-demo",
     transport: "mock" as const,
     binding:
-      baseUrl === "mock:devd"
+      hostedDiscoveryMock
         ? { alias: "USB demo CDC", bound_at: "2026-04-28T00:00:00.000Z" }
         : null,
     connection: "connected" as const,
     identity,
-    selected_artifact_id: baseUrl === "mock:devd" ? "mains-aegis-esp32s3-release-web_serial-c805b6a" : null,
+    selected_artifact_id: hostedDiscoveryMock ? "mains-aegis-esp32s3-release-web_serial-c805b6a" : null,
     log_decode: {
-      status: baseUrl === "mock:devd" ? "verified" : "unverified",
-      reason: baseUrl === "mock:devd" ? null : "Device is not bound yet.",
-      artifact_id: baseUrl === "mock:devd" ? "mains-aegis-esp32s3-release-web_serial-c805b6a" : null,
+      status: hostedDiscoveryMock ? "verified" : "unverified",
+      reason: hostedDiscoveryMock ? null : "Device is not bound yet.",
+      artifact_id: hostedDiscoveryMock ? "mains-aegis-esp32s3-release-web_serial-c805b6a" : null,
     },
   };
   const lanDevice =
-    baseUrl === "mock:devd"
+    hostedDiscoveryMock
       ? {
           id: "mock-devd-lan-standby",
           display_name: "LAN standby UPS",

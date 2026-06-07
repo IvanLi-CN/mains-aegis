@@ -3,6 +3,7 @@ import { expect, userEvent, within } from "storybook/test";
 import { DeviceRegistryProvider } from "../device-registry/DeviceRegistry";
 import { App, ButtonLabel, ConnectionCallout } from "./App";
 import { Usb } from "lucide-react";
+import type { DeviceTarget } from "../api/types";
 
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
 
@@ -24,10 +25,20 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-function renderApp(seed = "default", options: { initialDevdTarget?: string; forceHostedHttpServiceApp?: boolean } = {}) {
+function renderApp(
+  seed: string | null = "default",
+  options: { initialDevdTarget?: string; forceHostedHttpServiceApp?: boolean; storedTargets?: DeviceTarget[] } = {},
+) {
   window.localStorage.removeItem(STORAGE_KEY);
+  if (options.storedTargets) {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(options.storedTargets));
+  }
   const params = new URLSearchParams(window.location.search);
-  params.set("seed", seed);
+  if (seed) {
+    params.set("seed", seed);
+  } else {
+    params.delete("seed");
+  }
   window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
   return (
     <DeviceRegistryProvider>
@@ -72,6 +83,51 @@ export const ManualLanFallback: Story = {
     await userEvent.type(canvas.getByLabelText("Target"), "mock:backup");
     await userEvent.click(canvas.getByRole("button", { name: "Add LAN" }));
     await expect(await canvas.findByText(/^Connected /)).toBeInTheDocument();
+  },
+};
+
+export const MergedMultiChannelDevice: Story = {
+  name: "Merged multi-channel device",
+  render: () => renderApp(null, { forceHostedHttpServiceApp: true, initialDevdTarget: "mock:devd-multi" }),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("mains-aegis-a1b2c3")).toBeInTheDocument();
+    await expect(canvas.getByText("USB connected / WiFi connected")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Connect devd" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Connect WiFi" })).toBeInTheDocument();
+  },
+};
+
+export const RememberedChannelSwitch: Story = {
+  name: "Remembered channel switch",
+  render: () =>
+    renderApp(null, {
+      forceHostedHttpServiceApp: true,
+      initialDevdTarget: "mock:devd-multi",
+      storedTargets: [
+        {
+          deviceId: "mains-aegis-a1b2c3",
+          baseUrl: "mock:lab-standby",
+          alias: "Lab rack A",
+          location: "Bench 1",
+          addedAt: "2026-06-07T00:00:00.000Z",
+          transport: "http",
+          preferredTransport: "http",
+          rememberedChannels: {
+            http: {
+              baseUrl: "mock:lab-standby",
+              seenAt: "2026-06-07T00:00:00.000Z",
+              source: "devd_discovery",
+            },
+          },
+        },
+      ],
+    }),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByRole("button", { name: "Open" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("button", { name: "Use devd" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("button", { name: "Use WiFi" })).toBeInTheDocument();
   },
 };
 
