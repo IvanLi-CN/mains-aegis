@@ -84,7 +84,7 @@ export const Mobile: Story = {
 };
 
 export const LiveDevdDiscovery: Story = {
-  name: "Live devd discovery",
+  name: "Live devd records",
   render: () =>
     renderApp("/", null, {
       forceHostedHttpServiceApp: true,
@@ -98,7 +98,7 @@ export const LiveDevdDiscovery: Story = {
     await expect(
       await canvas.findByText("mains-aegis-a1b2c3"),
     ).toBeInTheDocument();
-    await expect(await canvas.findByText("Live discovery")).toBeInTheDocument();
+    await expect(await canvas.findByText("devd record")).toBeInTheDocument();
     await expect(
       await canvas.findByRole("button", { name: "Open in Connect" }),
     ).toBeInTheDocument();

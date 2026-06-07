@@ -742,7 +742,7 @@ function FleetEmptyState({ hasDevices }: { hasDevices: boolean }) {
       <p>
         {hasDevices
           ? "Adjust the search or status filter to bring devices back into view."
-          : "No device is saved in this browser, and nothing is currently grouped from mains-aegis-devd discovery. Open Connect to review live discovery or save a device."}
+          : "No device is saved in this browser, and mains-aegis-devd is not reporting any current device records. Open Connect to review devd records or save a device."}
       </p>
       <button
         className="primary-button"
@@ -776,7 +776,7 @@ function DeviceCard({ entry }: { entry: FleetDeviceEntry }) {
         </span>
         <SeverityBadge severity={severity} />
         <ConnectionBadges record={record} />
-        {!saved ? <span className="transport-badge devd">Live discovery</span> : null}
+        {!saved ? <span className="transport-badge devd">devd record</span> : null}
       </div>
 
       <div className="card-main card-main-icon-duo metric-duo-stack">
@@ -1126,7 +1126,7 @@ function buildFleetEntryRecord(
       existingRecord?.target.alias ??
       identity?.hostname ??
       discovered.displayName,
-    location: existingRecord?.target.location ?? "devd discovery",
+    location: existingRecord?.target.location ?? "devd records",
     addedAt: existingRecord?.target.addedAt ?? new Date().toISOString(),
     transport:
       existingRecord?.target.transport ??
@@ -1540,7 +1540,7 @@ function ConnectPage({
     devdStatus === "checking"
       ? "Loading device records"
       : devdStatus === "available"
-        ? `${discoveredLogicalDevices.length} devices across ${devdDevices.length} discovered channels`
+        ? `${discoveredLogicalDevices.length} devices across ${devdDevices.length} reported channels`
         : "Not reachable";
   const showLanFallback = !devdDiscoveryOnly && devdStatus === "unavailable";
   const showFallbackConnectPanels = !devdDiscoveryOnly;
@@ -1554,8 +1554,8 @@ function ConnectPage({
         <h2>Connect devices</h2>
         <p>
           {devdDiscoveryOnly
-            ? "This self-hosted devd UI only uses devices discovered by mains-aegis-devd: USB devices attach through devd, while LAN devices connect directly to the hardware HTTP API."
-            : "When mains-aegis-devd is reachable, USB CDC and LAN devices are discovered automatically."}
+            ? "This self-hosted devd UI reads current mains-aegis-devd device records: USB devices attach through devd, while LAN devices connect directly to the hardware HTTP API."
+            : "When mains-aegis-devd is reachable, current USB CDC and LAN device records appear here automatically."}
         </p>
       </div>
 
@@ -1567,16 +1567,16 @@ function ConnectPage({
           <div>
             <span className="eyebrow">mains-aegis-devd</span>
             <h3>
-              <Server size={19} /> Automatic device discovery
+              <Server size={19} /> mains-aegis-devd device records
             </h3>
             <p>
               {devdStatus === "unavailable"
                 ? devdDiscoveryOnly
-                  ? "This hosted UI depends on mains-aegis-devd discovery. Restart or reconnect devd to continue."
+                  ? "This hosted UI depends on mains-aegis-devd device records. Restart or reconnect devd to continue."
                   : "Manual LAN entry is available below because devd cannot be reached."
                 : devdDiscoveryOnly
-                  ? "USB devices attach through devd. LAN devices are discovered by devd, then connected directly to the hardware HTTP API."
-                  : "USB and LAN inventory refreshes automatically while this page is open."}
+                  ? "USB devices attach through devd. LAN devices are reported by devd, then connected directly to the hardware HTTP API."
+                  : "Current USB and LAN device records refresh automatically while this page is open."}
             </p>
           </div>
           <div className="devd-discovery-status">
@@ -1609,10 +1609,10 @@ function ConnectPage({
           {devdStatus === "available" && devdDevices.length === 0 ? (
             <div className="devd-empty-state">
               <Radio size={18} />
-              <strong>No devices discovered yet</strong>
+              <strong>No device records yet</strong>
               <span>
-                devd is reachable. Connect a USB CDC device or wait for LAN
-                discovery.
+                devd is reachable, but it is not reporting any USB or LAN
+                device records right now.
               </span>
             </div>
           ) : null}

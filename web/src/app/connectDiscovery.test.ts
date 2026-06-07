@@ -150,7 +150,7 @@ describe("buildDiscoveredLogicalDevices", () => {
 });
 
 describe("buildFleetEntries", () => {
-  test("keeps browser-saved devices when devd discovery is empty", () => {
+  test("keeps browser-saved devices when devd records are empty", () => {
     const entries = buildFleetEntries(
       [savedRecord("mains-aegis-a1b2c3")],
       [],
@@ -163,7 +163,7 @@ describe("buildFleetEntries", () => {
     expect(entries[0]?.record.target.alias).toBe("Lab rack A");
   });
 
-  test("surfaces devd discovery even when the browser has not saved the device", () => {
+  test("surfaces devd-backed device records even when the browser has not saved the device", () => {
     const entries = buildFleetEntries(
       [],
       [lanDevice("mains-aegis-a1b2c3")],
@@ -173,14 +173,14 @@ describe("buildFleetEntries", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.saved).toBe(false);
     expect(entries[0]?.record.target.deviceId).toBe("mains-aegis-a1b2c3");
-    expect(entries[0]?.record.target.location).toBe("devd discovery");
+    expect(entries[0]?.record.target.location).toBe("devd records");
     expect(entries[0]?.record.target.rememberedChannels?.http?.source).toBe(
       "devd_discovery",
     );
     expect(entries[0]?.record.connectionState).toBe("online");
   });
 
-  test("merges saved browser data with current devd discovery channels", () => {
+  test("merges saved browser data with current devd record channels", () => {
     const entries = buildFleetEntries(
       [savedRecord("mains-aegis-a1b2c3")],
       [usbPendingDevice("mains-aegis-a1b2c3"), lanDevice("mains-aegis-a1b2c3")],

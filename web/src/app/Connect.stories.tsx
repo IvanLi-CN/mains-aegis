@@ -16,7 +16,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "Connect states for standalone Web usage and the hosted mains-aegis-devd app. Hosted mode keeps only devd discovery, then attaches USB through devd or connects LAN devices directly to the hardware HTTP API.",
+          "Connect states for standalone Web usage and the hosted mains-aegis-devd app. Hosted mode reads current devd device records, then attaches USB through devd or connects LAN devices directly to the hardware HTTP API.",
       },
     },
   },
@@ -63,7 +63,7 @@ function renderApp(
 }
 
 export const HostedDevdDiscovery: Story = {
-  name: "Hosted devd discovery",
+  name: "Hosted devd records",
   render: () => renderApp("empty", { forceHostedHttpServiceApp: true }),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -72,7 +72,7 @@ export const HostedDevdDiscovery: Story = {
     ).toBeInTheDocument();
     await expect(
       await canvas.findByRole("heading", {
-        name: /Automatic device discovery/,
+        name: /mains-aegis-devd device records/,
       }),
     ).toBeInTheDocument();
     await expect(
@@ -106,7 +106,7 @@ export const ManualLanFallback: Story = {
     const canvas = within(canvasElement);
     await expect(
       await canvas.findByRole("heading", {
-        name: /Automatic device discovery/,
+        name: /mains-aegis-devd device records/,
       }),
     ).toBeInTheDocument();
     await expect(await canvas.findByLabelText("Target")).toBeInTheDocument();
