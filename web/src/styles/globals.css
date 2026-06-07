@@ -1374,6 +1374,46 @@ a {
   gap: 8px;
 }
 
+.connection-split-control {
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.connection-split-primary {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.connection-split-trigger {
+  width: 42px;
+  min-width: 42px;
+  justify-content: center;
+  gap: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 0 10px;
+}
+
+.connection-split-trigger > span {
+  display: none;
+}
+
+.connection-split-control.is-primary .connection-split-trigger {
+  border-color: color-mix(in oklch, var(--color-primary) 84%, black 10%);
+  box-shadow: inset 1px 0 0 color-mix(in oklch, var(--color-on-primary) 26%, transparent);
+  background: color-mix(in oklch, var(--color-primary) 88%, black 8%);
+  color: var(--color-on-primary);
+}
+
+.connection-split-control.is-primary .connection-split-trigger svg {
+  color: var(--color-on-primary);
+}
+
+.connection-split-control.is-secondary .connection-split-trigger {
+  border-left-color: var(--color-hairline);
+  background: var(--color-panel);
+}
+
 .status-band {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr)) auto;

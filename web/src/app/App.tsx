@@ -77,6 +77,12 @@ type DiscoveredLogicalDevice = {
   logLabel: string;
 };
 
+type SplitButtonOption<T extends string> = {
+  value: T;
+  label: string;
+  disabled?: boolean;
+};
+
 const deviceSections = [
   { id: "overview", label: "Overview", icon: Gauge },
   { id: "power", label: "Power", icon: PlugZap },
@@ -526,6 +532,14 @@ function channelActionLabel(transport: DeviceChannelTransport): string {
   return "USB";
 }
 
+function channelConnectText(transport: DeviceChannelTransport): string {
+  return `Connect ${channelActionLabel(transport)}`;
+}
+
+function channelUseText(transport: DeviceChannelTransport, active = false): string {
+  return `${active ? "Using" : "Use"} ${channelActionLabel(transport)}`;
+}
+
 function buildDiscoveredLogicalDevices(devices: DevdDevice[], records: DeviceRecord[]): DiscoveredLogicalDevice[] {
   const grouped = new Map<string, DiscoveredLogicalDevice>();
   for (const device of devices) {
@@ -836,6 +850,17 @@ function ConnectPage({
             const primaryChannel = device.channels[defaultTransport];
             const showOverride = devdFirmwareOverrideDeviceId === primaryChannel?.id;
             const isConnectingDevice = primaryChannel ? devdConnectingDeviceId === primaryChannel.id : false;
+            const alternateTransportOptions = device.availableTransports
+              .filter((transport) => transport !== defaultTransport)
+              .map((transport) => {
+                const channel = device.channels[transport];
+                const isCurrent = activeTransport === transport && existingRecord?.connectionState === "online";
+                return {
+                  value: transport,
+                  label: existingRecord ? channelUseText(transport, isCurrent) : channelConnectText(transport),
+                  disabled: !channel || !isConnectableDevdDevice(channel) || devdBusy || isCurrent,
+                };
+              });
             return (
               <article className={`devd-device-card ${primaryChannel && isConnectableDevdDevice(primaryChannel) ? "" : "is-muted"}`} key={device.key}>
                 <div className="devd-device-main">
@@ -865,28 +890,39 @@ function ConnectPage({
                       Open
                     </button>
                   ) : primaryChannel ? (
-                    <button className="primary-button small" type="button" disabled={devdBusy || !isConnectableDevdDevice(primaryChannel)} onClick={() => void onDevdConnect(primaryChannel)}>
-                      <ButtonLabel busy={isConnectingDevice} busyText="Connecting" text={defaultTransport === "http" ? "Connect LAN" : "Connect devd"} />
-                    </button>
+                    <SplitPillButton
+                      variant="primary"
+                      primaryText={channelConnectText(defaultTransport)}
+                      primaryBusy={isConnectingDevice}
+                      primaryBusyText="Connecting"
+                      primaryDisabled={devdBusy || !isConnectableDevdDevice(primaryChannel)}
+                      onPrimary={() => void onDevdConnect(primaryChannel)}
+                      dropdownLabel={`Other connection options for ${device.displayName}`}
+                      dropdownOptions={alternateTransportOptions}
+                      onSelect={(transport) => {
+                        const channel = device.channels[transport];
+                        if (!channel) return;
+                        void onDevdConnect(channel);
+                      }}
+                    />
                   ) : null}
-                  {device.availableTransports
-                    .filter((transport) => transport !== defaultTransport)
-                    .map((transport) => {
-                      const channel = device.channels[transport];
-                      if (!channel) return null;
-                      const isCurrent = activeTransport === transport && existingRecord?.connectionState === "online";
-                      return (
-                        <button
-                          className="secondary-button small"
-                          key={transport}
-                          type="button"
-                          disabled={devdBusy || isCurrent || !isConnectableDevdDevice(channel)}
-                          onClick={() => void onDevdConnect(channel)}
-                        >
-                          {existingRecord ? `Use ${channelActionLabel(transport)}` : `Connect ${channelActionLabel(transport)}`}
-                        </button>
-                      );
-                    })}
+                  {existingRecord && primaryChannel ? (
+                    <SplitPillButton
+                      variant="secondary"
+                      primaryText={channelUseText(defaultTransport, activeTransport === defaultTransport && existingRecord.connectionState === "online")}
+                      primaryBusy={isConnectingDevice}
+                      primaryBusyText="Switching"
+                      primaryDisabled={devdBusy || !isConnectableDevdDevice(primaryChannel) || (activeTransport === defaultTransport && existingRecord.connectionState === "online")}
+                      onPrimary={() => void onDevdConnect(primaryChannel)}
+                      dropdownLabel={`Other connection options for ${device.displayName}`}
+                      dropdownOptions={alternateTransportOptions}
+                      onSelect={(transport) => {
+                        const channel = device.channels[transport];
+                        if (!channel) return;
+                        void onDevdConnect(channel);
+                      }}
+                    />
+                  ) : null}
                   {showOverride ? (
                     <button className="secondary-button danger-action" type="button" disabled={devdBusy || !primaryChannel} onClick={() => primaryChannel ? void onDevdConnect(primaryChannel, true) : undefined}>
                       Ignore warning
@@ -1019,29 +1055,40 @@ function ConnectPage({
             <div className="row-actions">
               <ConnectionBadges record={record} />
               {availableRecordChannels(record).length > 1 ? (
-                <div className="channel-switch-actions">
-                  {availableRecordChannels(record).map((transport) => {
-                    const isActive = activeRecordTransport(record) === transport && record.connectionState === "online";
+                (() => {
+                  const channels = availableRecordChannels(record);
+                  const recommendedTransport = channels[0];
+                  const recommendedBusy =
+                    savedDeviceSwitchTarget?.deviceId === record.target.deviceId &&
+                    savedDeviceSwitchTarget.transport === recommendedTransport;
+                  const recommendedActive = activeRecordTransport(record) === recommendedTransport && record.connectionState === "online";
+                  const otherOptions = channels.slice(1).map((transport) => {
                     const isBusy =
                       savedDeviceSwitchTarget?.deviceId === record.target.deviceId &&
                       savedDeviceSwitchTarget.transport === transport;
-                    return (
-                      <button
-                        className="secondary-button small"
-                        key={transport}
-                        type="button"
-                        disabled={isActive || isBusy}
-                        onClick={() => void onSavedDeviceChannelSwitch(record, transport)}
-                      >
-                        <ButtonLabel
-                          busy={isBusy}
-                          busyText="Switching"
-                          text={isActive ? `Using ${channelActionLabel(transport)}` : `Use ${channelActionLabel(transport)}`}
-                        />
-                      </button>
-                    );
-                  })}
-                </div>
+                    const isActive = activeRecordTransport(record) === transport && record.connectionState === "online";
+                    return {
+                      value: transport,
+                      label: channelUseText(transport, isActive),
+                      disabled: isBusy || isActive,
+                    };
+                  });
+                  return (
+                    <div className="channel-switch-actions">
+                      <SplitPillButton
+                        variant="secondary"
+                        primaryText={channelUseText(recommendedTransport, recommendedActive)}
+                        primaryBusy={Boolean(recommendedBusy)}
+                        primaryBusyText="Switching"
+                        primaryDisabled={recommendedActive || Boolean(recommendedBusy)}
+                        onPrimary={() => void onSavedDeviceChannelSwitch(record, recommendedTransport)}
+                        dropdownLabel={`Other connection options for ${record.target.alias}`}
+                        dropdownOptions={otherOptions}
+                        onSelect={(transport) => void onSavedDeviceChannelSwitch(record, transport)}
+                      />
+                    </div>
+                  );
+                })()
               ) : null}
               <button
                 className="icon-button"
@@ -1187,6 +1234,70 @@ export function ButtonLabel({
       {LabelIcon ? <LabelIcon className={busy ? "spin-icon" : undefined} size={16} aria-hidden="true" /> : null}
       {busy ? busyText : text}
     </>
+  );
+}
+
+function SplitPillButton<T extends string>({
+  variant,
+  primaryText,
+  primaryBusy,
+  primaryBusyText,
+  primaryDisabled,
+  onPrimary,
+  dropdownLabel,
+  dropdownOptions,
+  onSelect,
+}: {
+  variant: "primary" | "secondary";
+  primaryText: string;
+  primaryBusy: boolean;
+  primaryBusyText: string;
+  primaryDisabled: boolean;
+  onPrimary: () => void;
+  dropdownLabel: string;
+  dropdownOptions: SplitButtonOption<T>[];
+  onSelect: (value: T) => void;
+}) {
+  const [menuValue, setMenuValue] = useState<T | undefined>(undefined);
+  const buttonClassName = `${variant === "primary" ? "primary-button" : "secondary-button"} small connection-split-primary`;
+
+  if (dropdownOptions.length === 0) {
+    return (
+      <button className={buttonClassName} type="button" disabled={primaryDisabled} onClick={onPrimary}>
+        <ButtonLabel busy={primaryBusy} busyText={primaryBusyText} text={primaryText} />
+      </button>
+    );
+  }
+
+  return (
+    <div className={`connection-split-control is-${variant}`}>
+      <button className={buttonClassName} type="button" disabled={primaryDisabled} onClick={onPrimary}>
+        <ButtonLabel busy={primaryBusy} busyText={primaryBusyText} text={primaryText} />
+      </button>
+      <Select
+        value={menuValue}
+        onValueChange={(nextValue) => {
+          const selected = dropdownOptions.find((option) => option.value === nextValue);
+          if (!selected || selected.disabled) return;
+          setMenuValue(nextValue as T);
+          onSelect(nextValue as T);
+          window.setTimeout(() => setMenuValue(undefined), 0);
+        }}
+      >
+        <SelectTrigger className="connection-split-trigger" aria-label={dropdownLabel}>
+          <SelectValue placeholder="" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
+            {dropdownOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value} disabled={option.disabled}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
