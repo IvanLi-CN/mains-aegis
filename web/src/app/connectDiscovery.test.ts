@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 import type { DeviceRecord, DevdDevice } from "../api/types";
-import { buildDiscoveredLogicalDevices, buildFleetEntries } from "./App";
+import {
+  buildDiscoveredLogicalDevices,
+  buildFleetEntries,
+  resolveSelectedRecord,
+} from "./App";
 
 function savedRecord(deviceId: string): DeviceRecord {
   return {
@@ -196,5 +200,24 @@ describe("buildFleetEntries", () => {
     expect(entries[0]?.record.target.rememberedChannels?.devd?.devdDeviceId).toBe(
       "usb-stable-a",
     );
+  });
+});
+
+describe("resolveSelectedRecord", () => {
+  test("falls back to fleet entries when the device is not saved in the local registry", () => {
+    const fleetEntries = buildFleetEntries(
+      [],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    );
+
+    const selected = resolveSelectedRecord(
+      "mains-aegis-a1b2c3",
+      [],
+      fleetEntries,
+    );
+
+    expect(selected?.target.deviceId).toBe("mains-aegis-a1b2c3");
+    expect(selected?.target.location).toBe("devd records");
   });
 });

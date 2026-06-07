@@ -79,7 +79,7 @@ export const Mobile: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("heading", { name: "UPS Fleet" })).toBeInTheDocument();
-    await expect((await canvas.findAllByRole("link", { name: "Details" })).length).toBeGreaterThan(0);
+    await expect((await canvas.findAllByRole("button", { name: "Open" })).length).toBeGreaterThan(0);
   },
 };
 
@@ -100,7 +100,7 @@ export const LiveDevdDiscovery: Story = {
     ).toBeInTheDocument();
     await expect(await canvas.findByText("devd record")).toBeInTheDocument();
     await expect(
-      await canvas.findByRole("button", { name: "Open in Connect" }),
+      await canvas.findByRole("button", { name: "Open" }),
     ).toBeInTheDocument();
   },
 };
@@ -129,7 +129,7 @@ export const SavedAndLiveMerged: Story = {
       await canvas.findByRole("heading", { name: "Lab rack A" }),
     ).toBeInTheDocument();
     await expect(
-      await canvas.findByRole("button", { name: "Details" }),
+      await canvas.findByRole("button", { name: "Open" }),
     ).toBeInTheDocument();
   },
 };

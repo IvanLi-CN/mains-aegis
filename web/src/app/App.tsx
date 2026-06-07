@@ -224,11 +224,11 @@ export function App({
     () => fleetEntries.map((entry) => entry.record),
     [fleetEntries],
   );
-  const selected = route.deviceId
-    ? (registry.records.find(
-        (record) => record.target.deviceId === route.deviceId,
-      ) ?? null)
-    : null;
+  const selected = resolveSelectedRecord(
+    route.deviceId,
+    registry.records,
+    fleetEntries,
+  );
   const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
@@ -251,7 +251,7 @@ export function App({
             <strong>Mains Aegis</strong>
             <span>
               {route.section === "connect"
-                ? "Connect"
+                ? "Add device"
                 : (selected?.target.alias ?? "Fleet")}
             </span>
           </div>
@@ -282,7 +282,7 @@ export function App({
               href="/connect"
               active={route.section === "connect"}
               icon={Wifi}
-              label="Connect"
+              label="Add device"
             />
             <ExternalNavLink href={docsHref} icon={BookOpen} label="Docs" />
           </nav>
@@ -545,6 +545,20 @@ function deviceDefaultHref(record: DeviceRecord) {
   );
 }
 
+export function resolveSelectedRecord(
+  deviceId: string | null,
+  records: DeviceRecord[],
+  fleetEntries: FleetDeviceEntry[],
+) {
+  if (!deviceId) return null;
+  return (
+    records.find((record) => record.target.deviceId === deviceId) ??
+    fleetEntries.find((entry) => entry.record.target.deviceId === deviceId)
+      ?.record ??
+    null
+  );
+}
+
 function NavLink({
   href,
   active,
@@ -742,14 +756,14 @@ function FleetEmptyState({ hasDevices }: { hasDevices: boolean }) {
       <p>
         {hasDevices
           ? "Adjust the search or status filter to bring devices back into view."
-          : "No device is saved in this browser, and mains-aegis-devd is not reporting any current device records. Open Connect to review devd records or save a device."}
+          : "No device is saved in this browser, and mains-aegis-devd is not reporting any current device records. Open the add-device page to review devd records or save a device."}
       </p>
       <button
         className="primary-button"
         type="button"
         onClick={() => navigate("/connect")}
       >
-        Connect devices
+        Add device
       </button>
     </section>
   );
@@ -815,14 +829,10 @@ function DeviceCard({ entry }: { entry: FleetDeviceEntry }) {
           <button
             className="primary-button small"
             type="button"
-            aria-label={
-              saved
-                ? `Open ${record.target.alias} details`
-                : `Open ${record.target.alias} in connect`
-            }
-            onClick={() => navigate(saved ? deviceHref(record.target.deviceId, "overview") : "/connect")}
+            aria-label={`Open ${record.target.alias}`}
+            onClick={() => navigate(deviceHref(record.target.deviceId, "overview"))}
           >
-            {saved ? "Details" : "Open in Connect"}
+            Open
           </button>
         </div>
       </div>
@@ -1551,11 +1561,11 @@ function ConnectPage({
   return (
     <section className="page-flow connect-wide">
       <div className="section-heading">
-        <h2>Connect devices</h2>
+        <h2>Add device</h2>
         <p>
           {devdDiscoveryOnly
-            ? "This self-hosted devd UI reads current mains-aegis-devd device records: USB devices attach through devd, while LAN devices connect directly to the hardware HTTP API."
-            : "When mains-aegis-devd is reachable, current USB CDC and LAN device records appear here automatically."}
+            ? "Use this page to add hardware from current mains-aegis-devd device records. USB devices attach through devd, while LAN devices connect directly to the hardware HTTP API."
+            : "Use this page to add a new device, bind a new USB port, or add a LAN endpoint. When mains-aegis-devd is reachable, current USB CDC and LAN device records appear here automatically."}
         </p>
       </div>
 
@@ -2882,7 +2892,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
             type="button"
             onClick={() => navigate("/connect")}
           >
-            Connect device
+            Add device
           </button>
         </section>
       </section>
@@ -4080,7 +4090,7 @@ function MissingDevice() {
     <section className="empty-state">
       <Server size={28} />
       <h2>Device not found</h2>
-      <p>The selected device is no longer in the local registry.</p>
+      <p>The selected device is no longer available in the fleet or local registry.</p>
       <button className="primary-button" onClick={() => navigate("/")}>
         Back to fleet
       </button>

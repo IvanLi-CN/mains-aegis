@@ -8,7 +8,7 @@ import type { DeviceTarget } from "../api/types";
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
 
 const meta = {
-  title: "UPS Management/Connect",
+  title: "UPS Management/Add device",
   component: App,
   tags: ["autodocs"],
   parameters: {
@@ -16,7 +16,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "Connect states for standalone Web usage and the hosted mains-aegis-devd app. Hosted mode reads current devd device records, then attaches USB through devd or connects LAN devices directly to the hardware HTTP API.",
+          "Add-device states for standalone Web usage and the hosted mains-aegis-devd app. Use this surface to add hardware, bind a new USB path, or add a LAN endpoint from current devd device records.",
       },
     },
   },
@@ -68,7 +68,7 @@ export const HostedDevdDiscovery: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByRole("heading", { name: "Connect devices" }),
+      await canvas.findByRole("heading", { name: "Add device" }),
     ).toBeInTheDocument();
     await expect(
       await canvas.findByRole("heading", {
