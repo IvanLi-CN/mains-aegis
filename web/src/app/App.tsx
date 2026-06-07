@@ -49,7 +49,6 @@ import type { LucideIcon } from "lucide-react";
 import {
   bindDevdDevice,
   isHostedHttpServiceApp,
-  listDevdDevices,
   normalizeBaseUrl,
   scanDevdDevices,
   subscribeDevdDeviceEvents,
@@ -420,21 +419,13 @@ function useFleetDevdDiscovery(
   );
 
   const applyDiscoverySnapshot = useCallback(
-    (
-      devdBaseUrl: string,
-      devices: DevdDevice[],
-      options: { allowEmpty?: boolean } = {},
-    ) => {
+    (devdBaseUrl: string, devices: DevdDevice[]) => {
       const filteredDevices = filterDevices(devices);
-      if (filteredDevices.length === 0 && options.allowEmpty === false) {
-        return false;
-      }
       setDevdDevices(filteredDevices);
       rememberDiscoveredChannels(devdBaseUrl, filteredDevices);
       hasDiscoverySnapshot.current = true;
       setStatus("available");
       setLastUpdated(new Date().toISOString());
-      return true;
     },
     [filterDevices, rememberDiscoveredChannels],
   );
@@ -465,32 +456,9 @@ function useFleetDevdDiscovery(
   }, [applyDiscoverySnapshot, devdTarget]);
 
   useEffect(() => {
-    if (!devdTarget) {
-      void refreshDiscovery();
-      return;
-    }
-    let cancelled = false;
-    const devdBaseUrl = normalizeBaseUrl(devdTarget);
     hasDiscoverySnapshot.current = false;
-    setStatus("checking");
-    setIsRefreshing(true);
-    void (async () => {
-      try {
-        const listed = await listDevdDevices(devdBaseUrl);
-        if (cancelled) return;
-        applyDiscoverySnapshot(devdBaseUrl, listed.devices, {
-          allowEmpty: false,
-        });
-      } catch {
-        if (cancelled) return;
-      }
-      if (cancelled) return;
-      await refreshDiscovery();
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [applyDiscoverySnapshot, devdTarget, refreshDiscovery]);
+    void refreshDiscovery();
+  }, [refreshDiscovery]);
 
   useEffect(() => {
     if (!devdTarget) return undefined;
