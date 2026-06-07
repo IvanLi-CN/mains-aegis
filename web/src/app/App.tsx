@@ -49,8 +49,8 @@ import type { LucideIcon } from "lucide-react";
 import {
   bindDevdDevice,
   isHostedHttpServiceApp,
+  listDevdDevices,
   normalizeBaseUrl,
-  scanDevdDevices,
   subscribeDevdDeviceEvents,
   toErrorEnvelope,
 } from "../api/client";
@@ -442,8 +442,8 @@ function useFleetDevdDiscovery(
     const devdBaseUrl = normalizeBaseUrl(devdTarget);
     setIsRefreshing(true);
     try {
-      const scan = await scanDevdDevices(devdBaseUrl);
-      applyDiscoverySnapshot(devdBaseUrl, scan.devices);
+      const devices = await listDevdDevices(devdBaseUrl);
+      applyDiscoverySnapshot(devdBaseUrl, devices.devices);
     } catch {
       setStatus(hasDiscoverySnapshot.current ? "available" : "unavailable");
       if (!hasDiscoverySnapshot.current) {
@@ -702,7 +702,7 @@ function FleetPage({
       {showRefreshingHint ? (
         <div className="fleet-loading-hint" role="status" aria-live="polite">
           <Loader2 size={16} className="spin-icon" />
-          <span>Refreshing live devices from mains-aegis-devd</span>
+          <span>Refreshing device records from mains-aegis-devd</span>
         </div>
       ) : null}
 
@@ -727,8 +727,8 @@ function FleetLoadingState() {
       <Loader2 size={28} className="spin-icon" />
       <h2>Loading UPS fleet</h2>
       <p>
-        Loading saved devices and the latest mains-aegis-devd discovery before
-        the fleet view renders.
+        Loading saved devices and current mains-aegis-devd device records
+        before the fleet view renders.
       </p>
     </section>
   );
@@ -1538,7 +1538,7 @@ function ConnectPage({
   const visibleDevdMessage = devdFirmwareOverrideMessage ?? devdMessage;
   const devdSummary =
     devdStatus === "checking"
-      ? "Scanning USB CDC and LAN inventory"
+      ? "Loading device records"
       : devdStatus === "available"
         ? `${discoveredLogicalDevices.length} devices across ${devdDevices.length} discovered channels`
         : "Not reachable";
@@ -1602,8 +1602,8 @@ function ConnectPage({
           {devdStatus === "checking" && devdDevices.length === 0 ? (
             <div className="devd-empty-state">
               <Loader2 size={18} className="spin-icon" />
-              <strong>Scanning local devd inventory</strong>
-              <span>Checking USB CDC bindings and LAN devices.</span>
+              <strong>Loading devd device records</strong>
+              <span>Reading current USB and LAN records from mains-aegis-devd.</span>
             </div>
           ) : null}
           {devdStatus === "available" && devdDevices.length === 0 ? (
