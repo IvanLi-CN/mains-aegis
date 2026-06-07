@@ -133,6 +133,7 @@ export type DeviceTarget = {
   alias: string;
   location: string;
   addedAt: string;
+  temporary?: boolean;
   transport?: "http" | "serial" | "devd";
   preferredTransport?: "http" | "serial" | "devd";
   rememberedChannels?: {

@@ -224,16 +224,44 @@ export function App({
     () => fleetEntries.map((entry) => entry.record),
     [fleetEntries],
   );
+  const registrySelected = route.deviceId
+    ? (registry.records.find(
+        (record) => record.target.deviceId === route.deviceId,
+      ) ?? null)
+    : null;
   const selected = resolveSelectedRecord(
     route.deviceId,
     registry.records,
     fleetEntries,
   );
   const [navOpen, setNavOpen] = useState(false);
+  const hydratedTemporaryDeviceIds = useRef(new Set<string>());
 
   useEffect(() => {
     setNavOpen(false);
   }, [route.path]);
+
+  useEffect(() => {
+    if (!route.deviceId || registrySelected) return;
+    const fleetRecord =
+      fleetEntries.find((entry) => entry.record.target.deviceId === route.deviceId)
+        ?.record ?? null;
+    if (!fleetRecord) return;
+    registry.stageDeviceRecord({
+      ...fleetRecord,
+      target: {
+        ...fleetRecord.target,
+        temporary: true,
+      },
+    });
+  }, [fleetEntries, registry, registrySelected, route.deviceId]);
+
+  useEffect(() => {
+    if (!route.deviceId || !registrySelected?.target.temporary) return;
+    if (hydratedTemporaryDeviceIds.current.has(route.deviceId)) return;
+    hydratedTemporaryDeviceIds.current.add(route.deviceId);
+    void registry.refreshDevice(route.deviceId);
+  }, [registry, registrySelected, route.deviceId]);
 
   return (
     <div className="app-shell">
@@ -1093,7 +1121,7 @@ export function buildFleetEntries(
     entries.set(record.target.deviceId, {
       key: record.target.deviceId,
       record,
-      saved: true,
+      saved: !record.target.temporary,
     });
   }
   if (!devdTarget) return Array.from(entries.values());
@@ -3236,7 +3264,7 @@ function streamPresentation(record: DeviceRecord): StreamPresentation {
     };
   }
 
-  if (record.connectionState === "connecting") {
+  if (record.connectionState === "connecting" && !record.status) {
     return {
       label: "Connecting",
       detail: "Waiting for the first device response",

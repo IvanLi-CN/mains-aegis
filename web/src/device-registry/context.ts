@@ -35,6 +35,7 @@ export type ManualChargePrefsInput = DeviceSettings["manual_charge"];
 
 export type DeviceRegistryContextValue = {
   records: DeviceRecord[];
+  stageDeviceRecord: (record: DeviceRecord) => void;
   addDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
   addDevdDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
   connectUsbSerialDevice: (input?: Pick<AddDeviceInput, "alias" | "location" | "ignoreFirmwareMismatch">) => Promise<AddDeviceResult>;

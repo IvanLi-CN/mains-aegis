@@ -201,6 +201,25 @@ describe("buildFleetEntries", () => {
       "usb-stable-a",
     );
   });
+
+  test("keeps staged fleet records unsaved when they are temporary", () => {
+    const temporaryRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      target: {
+        ...savedRecord("mains-aegis-a1b2c3").target,
+        temporary: true,
+      },
+    } satisfies DeviceRecord;
+
+    const entries = buildFleetEntries(
+      [temporaryRecord],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.saved).toBe(false);
+  });
 });
 
 describe("resolveSelectedRecord", () => {

@@ -1038,6 +1038,10 @@ export function DeviceRegistryProvider({
     return { ok: true, record };
   }, []);
 
+  const stageDeviceRecord = useCallback((record: DeviceRecord) => {
+    setRecords((current) => upsertRecord(current, record));
+  }, []);
+
   const rememberDiscoveredChannels = useCallback(
     (devdBaseUrl: string, devices: DevdDevice[]) => {
       const discoveryByDeviceId = new Map<
@@ -1948,6 +1952,7 @@ export function DeviceRegistryProvider({
   const value = useMemo(
     () => ({
       records,
+      stageDeviceRecord,
       addDevice,
       addDevdDevice,
       connectUsbSerialDevice,
@@ -1966,6 +1971,7 @@ export function DeviceRegistryProvider({
     }),
     [
       records,
+      stageDeviceRecord,
       addDevice,
       addDevdDevice,
       connectUsbSerialDevice,
@@ -2026,7 +2032,12 @@ function loadInitialRecords(seed: DemoSeed | null): DeviceRecord[] {
 }
 
 function persistedTargetsForRecord(record: DeviceRecord): DeviceTarget[] {
-  if (record.target.mock || record.target.transport === "serial") return [];
+  if (
+    record.target.mock ||
+    record.target.temporary ||
+    record.target.transport === "serial"
+  )
+    return [];
   return [record.target];
 }
 
