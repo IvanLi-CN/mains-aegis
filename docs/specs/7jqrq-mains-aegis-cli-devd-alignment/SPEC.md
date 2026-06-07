@@ -59,6 +59,8 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - CLI 全局支持 `--ipc <endpoint>`，默认 endpoint 与 devd 一致。
 - CLI 发起 newline JSON IPC 请求，不直接枚举串口、不直接切换端口、不直接调用 espflash。
 - CLI 的 flash 与 host power state-changing 命令默认发送 dry-run；真实动作必须显式传入 `--real`。
+- `mains-aegis device <id> bind` 在交互式 TTY 场景下，若 devd 返回可确认的 `companion_lan_candidate`，必须就地提示是否同时绑定 LAN companion；非交互场景不得弹提示、不得自动持久化，只返回候选详情与后续显式命令。
+- host-tools 必须提供显式的 companion-LAN 契约面：`POST /api/v1/devices/{id}/companion-lan`、`DELETE /api/v1/devices/{id}/companion-lan`、IPC `device.companion_lan.bind|clear`，以及 CLI `device <id> companion-lan bind|clear`。该契约面只负责“确认/清除 companion 绑定”，不得隐式代替 `bind`。
 - CLI v1 覆盖：
   - `health`
   - `devices list|scan`

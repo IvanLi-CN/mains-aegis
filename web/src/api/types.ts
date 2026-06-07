@@ -141,6 +141,7 @@ export type DeviceTarget = {
       baseUrl: string;
       seenAt: string;
       source?: "manual" | "devd_discovery";
+      mdnsHost?: string;
     };
     devd?: {
       baseUrl: string;
@@ -155,6 +156,23 @@ export type DeviceTarget = {
   serialProtocol?: string;
   bridgeAuth?: boolean;
   mock?: boolean;
+};
+
+export type LanCompanionCandidate = {
+  mdns_host: string;
+  ip: string;
+  port: number;
+  detected_at: string;
+  verified_at: string;
+  source: string;
+};
+
+export type LanCompanionBinding = {
+  mdns_host: string;
+  ip: string;
+  port: number;
+  confirmed_at: string;
+  last_verified_at: string;
 };
 
 export type ConnectionState = "online" | "connecting" | "offline" | "error";
@@ -283,7 +301,9 @@ export type DevdDevice = {
     port_path?: string | null;
     created_at: string;
     logical_device_id?: string | null;
+    lan_companion?: LanCompanionBinding | null;
   } | null;
+  companion_lan_candidate?: LanCompanionCandidate | null;
   connection: "disconnected" | "connected" | "busy" | "error";
   identity: Identity | null;
   status?: UpsStatus | null;

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  bindDevdCompanionLan,
   clearDeviceWifiConfig,
   bridgeAuthToken,
   clearDevdWifiConfig,
@@ -832,6 +833,89 @@ export function DeviceRegistryProvider({
           await releaseDevdWebLease(baseUrl, pendingLeaseId).catch(
             () => undefined,
           );
+        return { ok: false, error: toErrorEnvelope(error) };
+      }
+    },
+    [],
+  );
+
+  const confirmDevdCompanionLan = useCallback(
+    async (deviceId: string, devdBaseUrl: string): Promise<AddDeviceResult> => {
+      try {
+        const updated = await bindDevdCompanionLan(deviceId, {}, devdBaseUrl);
+        const companion = updated.binding?.lan_companion;
+        if (!companion) {
+          return {
+            ok: false,
+            error: {
+              code: "companion_lan_bind_failed",
+              message: "devd did not return a saved LAN companion binding",
+              retryable: true,
+              details: { deviceId },
+            },
+          };
+        }
+        const baseUrl = normalizeBaseUrl(`http://${companion.ip}:${companion.port}`);
+        const result = await probeDevice(baseUrl);
+        const logicalDeviceId =
+          updated.binding?.logical_device_id ?? result.identity.device_id;
+        const target: DeviceTarget = {
+          deviceId: logicalDeviceId,
+          baseUrl,
+          alias: result.identity.hostname,
+          location: "LAN",
+          addedAt: new Date().toISOString(),
+          transport: "http",
+          preferredTransport: "http",
+          rememberedChannels: {
+            http: {
+              baseUrl,
+              seenAt: new Date().toISOString(),
+              source: "devd_discovery",
+              mdnsHost: companion.mdns_host,
+            },
+            devd: {
+              baseUrl: devdBaseUrl,
+              devdDeviceId: updated.id,
+              seenAt: new Date().toISOString(),
+              transport: updated.transport === "mock" ? "mock" : "usb",
+            },
+          },
+        };
+        const record = recordFromProbe(
+          target,
+          result,
+          "online",
+          result.identity.capabilities.sse ? "idle" : "polling",
+        );
+        let mergedRecord = record;
+        setRecords((current) => {
+          const existing = current.find(
+            (candidate) => candidate.target.deviceId === logicalDeviceId,
+          );
+          const nextTarget: DeviceTarget = existing
+            ? {
+                ...target,
+                alias: existing.target.alias || target.alias,
+                location: existing.target.location || target.location,
+                addedAt: existing.target.addedAt || target.addedAt,
+              }
+            : target;
+          const nextRecord = recordFromProbe(
+            nextTarget,
+            result,
+            "online",
+            result.identity.capabilities.sse ? "idle" : "polling",
+          );
+          const merged = upsertRecord(current, nextRecord);
+          mergedRecord =
+            merged.find(
+              (candidate) => candidate.target.deviceId === logicalDeviceId,
+            ) ?? nextRecord;
+          return merged;
+        });
+        return { ok: true, record: mergedRecord };
+      } catch (error) {
         return { ok: false, error: toErrorEnvelope(error) };
       }
     },
@@ -1955,6 +2039,7 @@ export function DeviceRegistryProvider({
       stageDeviceRecord,
       addDevice,
       addDevdDevice,
+      confirmDevdCompanionLan,
       connectUsbSerialDevice,
       connectKnownDeviceChannel,
       rememberDiscoveredChannels,
@@ -1974,6 +2059,7 @@ export function DeviceRegistryProvider({
       stageDeviceRecord,
       addDevice,
       addDevdDevice,
+      confirmDevdCompanionLan,
       connectUsbSerialDevice,
       connectKnownDeviceChannel,
       rememberDiscoveredChannels,
@@ -2494,6 +2580,7 @@ function hydrateRememberedChannels(target: DeviceTarget): DeviceTarget {
             http: {
               baseUrl: target.baseUrl,
               seenAt: target.addedAt,
+              mdnsHost: target.rememberedChannels?.http?.mdnsHost,
             },
           }
         : {

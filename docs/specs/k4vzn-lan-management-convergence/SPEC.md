@@ -92,6 +92,9 @@
 - 扫描只打 `/api/v1/identity`；`/health`、`/ping` 不能作为设备命中判据。
 - 扫到的 LAN 目标以 `device_id` 聚合；若 mDNS 与子网扫描命中同一设备，则合并为同一 LAN transport，展示优先使用 mDNS 主机名，内部保留最近成功 IP。
 - 同一 `device_id` 的 USB / LAN transport 关联到同一 logical device；允许用户主动切换，程序根据命令能力给出切换建议或硬阻断。
+- USB `bind` 成功后，devd 允许做一次只读 companion-LAN 探测：先读 USB `identity`，必要时补 `status.network`；若设备报告已连 LAN，则分别验证 `http://<ipv4>:80/api/v1/identity` 与 `http://<hostname_fqdn>:80/api/v1/identity`。只有两条路径都返回与 USB 相同的 `device_id` 时，才生成运行态 `companion_lan_candidate`。
+- `companion_lan_candidate` 只作为待确认提示存在于运行态；它不得自动落盘，也不得在 Web/CLI 中自动升级为 active LAN transport。只有显式确认后，才允许把 `lan_companion { mdns_host, ip, port, confirmed_at, last_verified_at }` 持久化到同一 logical device 的绑定记录。
+- 若同一 `device_id` 在 companion-LAN 验证阶段命中多个 LAN 地址，沿用现有 `lan_identity_conflict` 语义：允许保留 USB 绑定，但阻断 companion-LAN 持久化。
 
 ### 3. 取代 `session` 的五类查询面
 

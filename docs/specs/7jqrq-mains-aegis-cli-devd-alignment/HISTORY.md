@@ -20,3 +20,4 @@
 - 决定 hosted/self-hosted `serve-http` Connect 页只保留 devd discovery；Web Serial 与手动 LAN fallback 只属于独立浏览器 / Vite 开发场景。
 - 决定 devd discovery 里的 transport 语义按“发现源”和“实际连接源”分离：USB 候选通过 devd Web lease / usb-http bridge 接入，LAN 候选则落为设备本体 HTTP target，而不是 `devd transport`。
 - 决定 Connect discovery 的 owner-facing 动作命名回到绑定模型：未纳管 USB 候选显示 `Bind USB`，未纳管 LAN 候选显示 `Add WiFi`，已纳管设备才显示 `Open` / `Use ...`。
+- 决定 USB `bind` 成功后若已可验证 companion LAN，CLI 交互式 TTY 直接询问是否同时保存 `mDNS + IP:Port`；非交互场景只输出建议命令，不自动持久化。

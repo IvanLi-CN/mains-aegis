@@ -839,6 +839,45 @@ a {
   gap: 8px;
 }
 
+.inline-companion-callout {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid color-mix(in oklch, var(--color-accent) 30%, var(--color-hairline));
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--color-panel) 92%, var(--color-accent-soft) 8%);
+  padding: 10px 12px;
+}
+
+.inline-companion-copy {
+  min-width: 0;
+}
+
+.inline-companion-copy .eyebrow {
+  display: inline-block;
+  margin-bottom: 4px;
+}
+
+.inline-companion-copy p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.inline-companion-copy code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.inline-companion-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .devd-bind-target-select {
   display: grid;
   gap: 4px;
@@ -3593,6 +3632,11 @@ a {
     justify-content: flex-start;
   }
 
+  .inline-companion-callout {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .devd-device-meta {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -4072,6 +4116,11 @@ a {
 
   .connect-adapt-command .devd-device-actions {
     justify-content: flex-start;
+  }
+
+  .connect-adapt-command .inline-companion-callout {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .connect-adapt-command .devd-discovery-footer {

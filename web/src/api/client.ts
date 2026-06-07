@@ -278,6 +278,17 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
         : null,
     connection: "connected" as const,
     identity: usbIdentity,
+    companion_lan_candidate:
+      hostedDiscoveryMock && !bindTargetMock
+        ? {
+            mdns_host: "mains-aegis-a1b2c3.local",
+            ip: "192.168.31.42",
+            port: 80,
+            detected_at: "2026-06-08T00:00:00.000Z",
+            verified_at: "2026-06-08T00:00:00.000Z",
+            source: "usb_bind_probe",
+          }
+        : null,
     selected_artifact_id: hostedDiscoveryMock
       ? "mains-aegis-esp32s3-release-web_serial-c805b6a"
       : null,
@@ -345,6 +356,30 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
         logical_device_id:
           multiChannelMock || bindTargetMock ? "mains-aegis-a1b2c3" : null,
       },
+      log_decode: { status: "unverified", reason: null, artifact_id: null },
+    } as T);
+  }
+  if (path.endsWith("/companion-lan")) {
+    return Promise.resolve({
+      ...usbDevice,
+      binding: {
+        alias: "USB demo CDC",
+        stable_id: usbDevice.id,
+        port_path: usbDevice.port_path,
+        created_at: "2026-04-28T00:00:00.000Z",
+        logical_device_id:
+          multiChannelMock || bindTargetMock ? "mains-aegis-a1b2c3" : null,
+        lan_companion: {
+          mdns_host: "mains-aegis-a1b2c3.local",
+          ip: "192.168.31.42",
+          port: 80,
+          confirmed_at: "2026-06-08T00:00:00.000Z",
+          last_verified_at: "2026-06-08T00:00:00.000Z",
+        },
+      },
+      companion_lan_candidate: null,
+      lan_address: "192.168.31.42",
+      lan_conflict_addresses: [],
       log_decode: { status: "unverified", reason: null, artifact_id: null },
     } as T);
   }
@@ -777,6 +812,26 @@ export const bindDevdDevice = (
       alias: input.alias,
       logical_device_id: input.logicalDeviceId,
     },
+    { bridgeAuth: true },
+  );
+export const bindDevdCompanionLan = (
+  deviceId: string,
+  input: { mdns_host?: string; ip?: string; port?: number } = {},
+  baseUrl = "",
+) =>
+  requestWithBody<DevdDevice>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/companion-lan`,
+    "POST",
+    input,
+    { bridgeAuth: true },
+  );
+export const clearDevdCompanionLan = (deviceId: string, baseUrl = "") =>
+  requestWithBody<DevdDevice>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/companion-lan`,
+    "DELETE",
+    undefined,
     { bridgeAuth: true },
   );
 export const connectDevdDevice = (deviceId: string, baseUrl = "") =>

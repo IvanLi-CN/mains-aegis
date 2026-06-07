@@ -57,6 +57,8 @@
 - `/connect` 在独立浏览器 / Vite 开发场景支持 USB CDC / Web Serial、`mains-aegis-devd` 与手动 LAN 入口；在 hosted/self-hosted devd UI 中只保留 devd discovery，USB 设备通过 devd 接入，LAN 设备则按 devd 提供的地址直连硬件 HTTP API。
 - USB 连接入口必须显示浏览器支持状态、连接/断开状态、用户取消授权、串口不可用或已占用等错误。
 - devd 入口在发现多个 USB CDC candidates 时必须显示候选设备选择器；用户明确选择某个 devd device id 后才可创建控制 session。Web 不得基于已连接、已识别、第一个或最近使用自动替用户选择硬件。
+- 若 USB `Bind USB` 成功后 devd 返回 `companion_lan_candidate`，Connect 必须在同一卡片内就地显示 inline `Bind LAN companion` 提示，展示 mDNS 与 `IP:Port`；在用户确认前，该候选不得自动变成 `Use WiFi` 按钮，也不得写入 localStorage。
+- companion-LAN 确认成功后，Web 本地记录必须同时保存 `rememberedChannels.http.baseUrl=http://<ip>:<port>` 与 `rememberedChannels.http.mdnsHost=<hostname_fqdn>`，并把 `preferredTransport` 切到 `http`；devd companion 仍保留在同一 logical device 的 remembered `devd` channel 中。
 - 真实 USB `SerialPort` 不写入 localStorage；刷新页面后需要重新授权。mock USB 设备可用于视觉证据与无硬件验证。
 - 添加时按 `ping -> identity -> network -> status` 探活；失败显示 API-compatible error envelope。
 - 浏览器侧保存 `DeviceRegistry` 到 `localStorage`，并提供 demo fleet reset。
@@ -235,6 +237,28 @@
   evidence_note: 验证 `/connect` 已收口为 `Add device` 页面，顶部说明聚焦“添加新设备 / 绑定新 USB / 添加 LAN endpoint”，同时展示实时 devd device records，不再使用旧 `Connect` 语义。
 
 ![Hosted add-device records evidence](./assets/add-device-devd-records-hosted.png)
+
+- source_type: storybook_canvas
+  story_id_or_title: `UPS Management/Add device/Pending LAN companion confirmation`
+  requested_viewport: `none`
+  viewport_strategy: `storybook-viewport`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: pending LAN companion inline confirmation
+  evidence_note: 验证 USB bind 成功后，未确认的 companion-LAN 只以内联提示形式出现，展示 mDNS 与 `IP:Port`，但不会提前变成 active WiFi channel。
+
+![Pending LAN companion confirmation evidence](./assets/connect-lan-companion-pending-storybook.png)
+
+- source_type: storybook_canvas
+  story_id_or_title: `UPS Management/Add device/Confirmed LAN companion remembered`
+  requested_viewport: `none`
+  viewport_strategy: `storybook-viewport`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: confirmed LAN companion dual-channel state
+  evidence_note: 验证确认后同一 logical device 同时保留 WiFi 与 devd channel，默认可切到 `Use WiFi`，且不再重复显示 pending companion 提示。
+
+![Confirmed LAN companion remembered evidence](./assets/connect-lan-companion-confirmed-storybook.png)
 
 - source_type: storybook_canvas
   story_id_or_title: `UPS Management/Connect/Firmware mismatch warning`

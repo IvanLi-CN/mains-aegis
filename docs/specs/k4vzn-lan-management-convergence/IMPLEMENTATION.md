@@ -5,6 +5,7 @@
 - 设备本体 API 是 LAN 管理真相源；Web 无 devd 路径与 devd 走 LAN 路径都必须消费同一组设备端点。
 - `session` / `safeSettings` 全局废弃；新的信息架构固定为 `connection / identity / status / settings / trace`。
 - `connection` 只属于 devd / Web / CLI 层，不属于设备本体 API。
+- USB `bind` 成功后，devd 会执行一次只读 companion-LAN 探测：先读取 USB `identity`，必要时补 `get_status.network`，再用 `device_id` 校验 mDNS 与 `IP:Port` 是否都命中同一硬件。
 - 当前不支持的设备本体 LAN 能力（如 LAN flash、LAN monitor/defmt）不纳入首版目标面。
 - LAN 日志能力以结构化 HTTP client trace 交付，不追求等价于 USB monitor/defmt。
 
@@ -62,6 +63,8 @@ Status:
 - devd `DeviceTransport` 已增加 `lan` record；`DeviceRecord` 暴露 `lan_address` 与 `lan_conflict_addresses`。
 - devd `devices.scan` 已按 `mDNS/DNS-SD -> CIDR/default routed /24` 发现 LAN 设备，只以 `GET /api/v1/identity` 作为命中判据，并返回 bounded `scan_trace`。
 - LAN identity probe 的 HTTP `tx/rx` 摘要会写入对应 device trace；同一 `identity.device_id` 的 LAN record 会并入已有 USB logical device，默认保持 USB 为 active transport。
+- `device.bind` 现在会返回只读 `companion_lan_candidate`；候选只存在于运行态，不写入状态文件。只有显式 `POST /api/v1/devices/{id}/companion-lan` 或 CLI `device <id> companion-lan bind` 才会把 `lan_companion { mdns_host, ip, port, confirmed_at, last_verified_at }` 写入绑定记录。
+- 当 `lan_conflict_addresses` 非空，或 mDNS / `IP:Port` 不能同时验证到同一 `device_id` 时，companion-LAN 持久化会被阻断；devd 继续保留 USB owner，不自动切换 active transport。
 - settings 写路径已按 target transport 分流：Web USB lease 继续走 USB CDC；无 lease 的 devd/CLI settings 目标可在 LAN-only 或 USB 不可用时走设备本体 LAN API，并在写成功后重新读取 `GET /api/v1/settings` 快照。
 - `device.connection` 已返回 USB/LAN/mock reachability、active/connected 状态、last_error 与 transport switch hint。
 - `device.trace` 继续保留兼容 tail，同时返回 `transports.usb` / `transports.lan` 分组；scan trace 与 device trace 已进入 bounded devd state persistence。

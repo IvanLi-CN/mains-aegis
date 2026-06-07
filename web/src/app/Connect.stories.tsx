@@ -223,6 +223,73 @@ export const PendingUsbBindTargetSelection: Story = {
   },
 };
 
+export const PendingLanCompanionConfirmation: Story = {
+  name: "Pending LAN companion confirmation",
+  render: () =>
+    renderApp(null, {
+      forceHostedHttpServiceApp: true,
+      initialDevdTarget: "mock:devd",
+    }),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByText("LAN companion detected"),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("button", { name: "Bind LAN companion" }),
+    ).toBeInTheDocument();
+  },
+};
+
+export const ConfirmedLanCompanionRemembered: Story = {
+  name: "Confirmed LAN companion remembered",
+  render: () =>
+    renderApp(null, {
+      forceHostedHttpServiceApp: true,
+      initialDevdTarget: "mock:devd-multi",
+      storedTargets: [
+        {
+          deviceId: "mains-aegis-a1b2c3",
+          baseUrl: "http://192.168.31.42:80",
+          alias: "Lab rack A",
+          location: "Bench 1",
+          addedAt: "2026-06-08T00:00:00.000Z",
+          transport: "http",
+          preferredTransport: "http",
+          rememberedChannels: {
+            http: {
+              baseUrl: "http://192.168.31.42:80",
+              seenAt: "2026-06-08T00:00:00.000Z",
+              source: "devd_discovery",
+              mdnsHost: "mains-aegis-a1b2c3.local",
+            },
+            devd: {
+              baseUrl: "mock:devd-multi",
+              devdDeviceId: "mock-devd-usb-1",
+              seenAt: "2026-06-08T00:00:00.000Z",
+              transport: "usb",
+            },
+          },
+        },
+      ],
+    }),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByText("USB connected / WiFi connected"),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("button", { name: "Use WiFi" }),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("button", { name: "Use USB" }),
+    ).toBeInTheDocument();
+    await expect(
+      canvas.queryByText("LAN companion detected"),
+    ).not.toBeInTheDocument();
+  },
+};
+
 export const FirmwareMismatchWarning: Story = {
   name: "Firmware mismatch warning",
   render: () => (

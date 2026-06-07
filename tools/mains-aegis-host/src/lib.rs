@@ -319,6 +319,7 @@ struct DeviceRecord {
     port_path: Option<String>,
     lan_address: Option<String>,
     lan_conflict_addresses: Vec<String>,
+    companion_lan_candidate: Option<CompanionLanCandidate>,
     transport: DeviceTransport,
     binding: Option<DeviceBinding>,
     connection: ConnectionState,
@@ -348,6 +349,27 @@ struct DeviceBinding {
     created_at: String,
     #[serde(default)]
     logical_device_id: Option<String>,
+    #[serde(default)]
+    lan_companion: Option<LanCompanionBinding>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LanCompanionBinding {
+    mdns_host: String,
+    ip: String,
+    port: u16,
+    confirmed_at: String,
+    last_verified_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CompanionLanCandidate {
+    mdns_host: String,
+    ip: String,
+    port: u16,
+    detected_at: String,
+    verified_at: String,
+    source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -469,6 +491,13 @@ struct ApiError {
 struct BindRequest {
     alias: Option<String>,
     logical_device_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompanionLanBindRequest {
+    mdns_host: Option<String>,
+    ip: Option<String>,
+    port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -627,6 +656,10 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         .route("/api/v1/devices/scan", post(scan_devices))
         .route("/api/v1/devices/scan/trace", get(scan_trace))
         .route("/api/v1/devices/{id}/bind", post(bind_device))
+        .route(
+            "/api/v1/devices/{id}/companion-lan",
+            post(bind_companion_lan).delete(clear_companion_lan),
+        )
         .route("/api/v1/devices/{id}/connect", post(connect_device))
         .route("/api/v1/devices/{id}/disconnect", post(disconnect_device))
         .route("/api/v1/devices/{id}/binding", delete(unbind_device))
@@ -1430,6 +1463,15 @@ async fn dispatch_ipc_request(
             let input: BindRequest = serde_json::from_value(params)?;
             json_result(bind_device(State(state.clone()), Path(id), Json(input)).await)
         }
+        "device.companion_lan.bind" => {
+            let id = require_param(&params, "device_id")?;
+            let input: CompanionLanBindRequest = serde_json::from_value(params)?;
+            json_result(bind_companion_lan(State(state.clone()), Path(id), Json(input)).await)
+        }
+        "device.companion_lan.clear" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(clear_companion_lan(State(state.clone()), Path(id)).await)
+        }
         "device.unbind" => {
             let id = require_param(&params, "device_id")?;
             json_result(unbind_device(State(state.clone()), Path(id)).await)
@@ -1703,6 +1745,7 @@ async fn scan_devices_inner(
                         port_path: Some(port_path.clone()),
                         lan_address: None,
                         lan_conflict_addresses: Vec::new(),
+                        companion_lan_candidate: None,
                         transport: DeviceTransport::NativeSerial,
                         binding,
                         connection: ConnectionState::Disconnected,
@@ -1906,6 +1949,128 @@ async fn discover_lan_devices(
         json!({"device_count": discoveries.len()}).to_string(),
     ));
     Ok((discoveries, scan_trace))
+}
+
+async fn detect_companion_lan_candidate(
+    state: &AppState,
+    device_id: &str,
+    port_path: String,
+    monitor_command_tx: Option<mpsc::Sender<NativeMonitorCommand>>,
+) -> Result<Option<CompanionLanCandidate>, HttpError> {
+    let identity =
+        read_device_identity_async(port_path.clone(), monitor_command_tx.clone()).await?;
+    let identity_device_id = identity
+        .get("device_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            HttpError::retryable(
+                "native_identity_missing",
+                "identity response did not include device_id",
+            )
+        })?
+        .to_string();
+    let hostname_fqdn = identity
+        .get("hostname_fqdn")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let network = match identity.get("network").cloned() {
+        Some(network) => Some(network),
+        None => read_device_status_network_async(port_path, monitor_command_tx)
+            .await
+            .ok(),
+    };
+    let ip = network
+        .as_ref()
+        .and_then(|network| network.get("ipv4"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let network_state = network
+        .as_ref()
+        .and_then(|network| network.get("state"))
+        .and_then(Value::as_str)
+        .unwrap_or("disabled");
+    if network_state != "connected" {
+        update_companion_candidate(state, device_id, None)?;
+        return Ok(None);
+    }
+    let Some(ip) = ip else {
+        update_companion_candidate(state, device_id, None)?;
+        return Ok(None);
+    };
+    let Some(mdns_host) = hostname_fqdn else {
+        update_companion_candidate(state, device_id, None)?;
+        return Ok(None);
+    };
+
+    let ip_identity = probe_identity_target(&ip).await?;
+    let mdns_identity = probe_identity_target(&mdns_host).await?;
+    if probe_identity_device_id(&ip_identity) != Some(identity_device_id.as_str())
+        || probe_identity_device_id(&mdns_identity) != Some(identity_device_id.as_str())
+    {
+        update_companion_candidate(state, device_id, None)?;
+        return Ok(None);
+    }
+
+    let candidate = CompanionLanCandidate {
+        mdns_host,
+        ip,
+        port: LAN_DISCOVERY_PORT,
+        detected_at: now(),
+        verified_at: now(),
+        source: "usb_bind_probe".to_string(),
+    };
+    update_companion_candidate(state, device_id, Some(candidate.clone()))?;
+    Ok(Some(candidate))
+}
+
+fn update_companion_candidate(
+    state: &AppState,
+    device_id: &str,
+    candidate: Option<CompanionLanCandidate>,
+) -> Result<(), HttpError> {
+    let snapshot = {
+        let mut guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get_mut(device_id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        device.companion_lan_candidate = candidate;
+        persisted_snapshot(&guard)
+    };
+    persist_devd_state(&state.persistence, snapshot)?;
+    Ok(())
+}
+
+async fn read_device_status_network_async(
+    port_path: String,
+    monitor_command_tx: Option<mpsc::Sender<NativeMonitorCommand>>,
+) -> Result<Value, HttpError> {
+    let request_id = format!("devd-bind-status-{}", Utc::now().timestamp_millis());
+    let frame = json!({"type": "request", "request_id": request_id, "op": "get_status"});
+    let response = if let Some(command_tx) = monitor_command_tx {
+        send_monitor_cdc_frame_async(command_tx, frame, request_id).await
+    } else {
+        send_native_cdc_frame_async(port_path, frame, request_id).await
+    }?;
+    Ok(response.get("result").cloned().unwrap_or(Value::Null))
+}
+
+async fn probe_identity_target(target: &str) -> Result<Value, HttpError> {
+    if let Ok(address) = target.parse::<Ipv4Addr>() {
+        let discovery = probe_lan_identity(address).await.ok_or_else(|| {
+            HttpError::retryable(
+                "lan_identity_probe_failed",
+                format!("failed to verify LAN identity for {target}"),
+            )
+        })?;
+        return Ok(discovery.identity);
+    }
+    let response = lan_http_json(target, "GET", "/api/v1/identity", None).await?;
+    Ok(response)
+}
+
+fn probe_identity_device_id(identity: &Value) -> Option<&str> {
+    identity.get("device_id").and_then(Value::as_str)
 }
 
 async fn probe_lan_candidates(candidates: Vec<Ipv4Addr>) -> Vec<LanDeviceDiscovery> {
@@ -2198,6 +2363,7 @@ fn merge_lan_discoveries(
                 port_path: None,
                 lan_address: None,
                 lan_conflict_addresses: Vec::new(),
+                companion_lan_candidate: None,
                 transport: DeviceTransport::Lan,
                 binding: state.bindings.get(&record_id).cloned(),
                 connection: ConnectionState::Disconnected,
@@ -2594,6 +2760,28 @@ async fn bind_device(
     Path(id): Path<String>,
     Json(input): Json<BindRequest>,
 ) -> Result<Json<DeviceRecord>, HttpError> {
+    let (port_path, monitor_command_tx) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (
+            device.port_path.clone(),
+            guard
+                .monitors
+                .get(&id)
+                .map(|monitor| monitor.command_tx.clone()),
+        )
+    };
+    let companion_candidate = if let Some(port_path) = port_path {
+        match detect_companion_lan_candidate(&state, &id, port_path, monitor_command_tx).await {
+            Ok(candidate) => candidate,
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
     let mut guard = state.inner.lock().expect("state lock");
     let device = guard
         .devices
@@ -2605,8 +2793,13 @@ async fn bind_device(
         port_path: device.port_path.clone(),
         created_at: now(),
         logical_device_id: input.logical_device_id,
+        lan_companion: device
+            .binding
+            .as_ref()
+            .and_then(|binding| binding.lan_companion.clone()),
     };
     device.binding = Some(binding.clone());
+    device.companion_lan_candidate = companion_candidate;
     let device = device.clone();
     guard.bindings.insert(id.clone(), binding);
     let snapshot = persisted_snapshot(&guard);
@@ -2617,6 +2810,139 @@ async fn bind_device(
         Some(id),
         "bind",
         "device binding updated",
+        json!({}),
+    );
+    Ok(Json(device))
+}
+
+async fn bind_companion_lan(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<CompanionLanBindRequest>,
+) -> Result<Json<DeviceRecord>, HttpError> {
+    let (port_path, monitor_command_tx, _pending_candidate) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        let candidate = device.companion_lan_candidate.clone().ok_or_else(|| {
+            HttpError::non_retryable(
+                "companion_lan_candidate_missing",
+                "no pending LAN companion candidate is available for this device",
+            )
+        })?;
+        (
+            device.port_path.clone().ok_or_else(|| {
+                HttpError::non_retryable(
+                    "device_port_missing",
+                    "USB port is not available; rebind the USB device before saving a LAN companion",
+                )
+            })?,
+            guard
+                .monitors
+                .get(&id)
+                .map(|monitor| monitor.command_tx.clone()),
+            candidate,
+        )
+    };
+    let refreshed_candidate =
+        detect_companion_lan_candidate(&state, &id, port_path, monitor_command_tx)
+            .await?
+            .ok_or_else(|| {
+                HttpError::non_retryable(
+                    "companion_lan_candidate_stale",
+                    "the pending LAN companion could not be re-verified; rescan before saving it",
+                )
+            })?;
+    let mut guard = state.inner.lock().expect("state lock");
+    let device = guard
+        .devices
+        .get_mut(&id)
+        .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+    if !device.lan_conflict_addresses.is_empty() {
+        return Err(HttpError::non_retryable(
+            "lan_identity_conflict",
+            "multiple LAN addresses reported the same device_id; clear the conflict before saving a LAN companion",
+        ));
+    }
+    if input
+        .mdns_host
+        .as_deref()
+        .is_some_and(|value| value != refreshed_candidate.mdns_host)
+        || input
+            .ip
+            .as_deref()
+            .is_some_and(|value| value != refreshed_candidate.ip)
+        || input
+            .port
+            .is_some_and(|value| value != refreshed_candidate.port)
+    {
+        return Err(HttpError::non_retryable(
+            "companion_lan_override_not_allowed",
+            "companion LAN confirmation only persists the verified pending candidate; rescan before using a different mDNS host or IP:Port",
+        ));
+    }
+    let mdns_host = refreshed_candidate.mdns_host;
+    let ip = refreshed_candidate.ip;
+    let port = refreshed_candidate.port;
+    let verified_at = now();
+    let binding = device.binding.as_mut().ok_or_else(|| {
+        HttpError::non_retryable(
+            "device_binding_missing",
+            "bind the USB device before saving a LAN companion",
+        )
+    })?;
+    binding.lan_companion = Some(LanCompanionBinding {
+        mdns_host,
+        ip,
+        port,
+        confirmed_at: verified_at.clone(),
+        last_verified_at: verified_at,
+    });
+    device.companion_lan_candidate = None;
+    let device = device.clone();
+    guard
+        .bindings
+        .insert(id.clone(), device.binding.clone().expect("binding exists"));
+    let snapshot = persisted_snapshot(&guard);
+    drop(guard);
+    persist_devd_state(&state.persistence, snapshot)?;
+    emit(
+        &state,
+        Some(id),
+        "companion_lan_bind",
+        "LAN companion binding saved",
+        json!({}),
+    );
+    Ok(Json(device))
+}
+
+async fn clear_companion_lan(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<DeviceRecord>, HttpError> {
+    let mut guard = state.inner.lock().expect("state lock");
+    let device = guard
+        .devices
+        .get_mut(&id)
+        .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+    if let Some(binding) = device.binding.as_mut() {
+        binding.lan_companion = None;
+    }
+    device.companion_lan_candidate = None;
+    let device = device.clone();
+    if let Some(binding) = device.binding.clone() {
+        guard.bindings.insert(id.clone(), binding);
+    }
+    let snapshot = persisted_snapshot(&guard);
+    drop(guard);
+    persist_devd_state(&state.persistence, snapshot)?;
+    emit(
+        &state,
+        Some(id),
+        "companion_lan_clear",
+        "LAN companion binding cleared",
         json!({}),
     );
     Ok(Json(device))
@@ -3401,6 +3727,8 @@ async fn device_connection(
         "lan_address": device.lan_address,
         "lan_conflict_addresses": device.lan_conflict_addresses,
         "binding": device.binding,
+        "companion_lan_candidate": device.companion_lan_candidate,
+        "lan_companion": device.binding.as_ref().and_then(|binding| binding.lan_companion.clone()),
         "identity_device_id": device.identity.as_ref().and_then(|identity| identity.get("device_id")).and_then(Value::as_str),
         "selected_artifact_id": device.selected_artifact_id,
         "available_transports": available_transports(device),
@@ -4962,6 +5290,7 @@ fn seed_mock_device(state: &AppState) {
         port_path: None,
         lan_address: None,
         lan_conflict_addresses: Vec::new(),
+        companion_lan_candidate: None,
         transport: DeviceTransport::Mock,
         binding,
         connection: ConnectionState::Disconnected,
@@ -6794,6 +7123,7 @@ mod tests {
             port_path: Some("/dev/cu.usbmodem1".into()),
             lan_address: None,
             lan_conflict_addresses: Vec::new(),
+            companion_lan_candidate: None,
             transport: DeviceTransport::NativeSerial,
             binding: Some(DeviceBinding {
                 alias: None,
@@ -6801,6 +7131,7 @@ mod tests {
                 port_path: Some("/dev/cu.usbmodem1".into()),
                 created_at: "now".into(),
                 logical_device_id: Some("mains-aegis-abc123".into()),
+                lan_companion: None,
             }),
             connection: ConnectionState::Disconnected,
             identity: None,
@@ -6837,6 +7168,7 @@ mod tests {
                     port_path: Some("/dev/cu.usbmodem1".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Disconnected,
@@ -6899,6 +7231,7 @@ mod tests {
                 port_path: None,
                 created_at: "now".into(),
                 logical_device_id: Some("mains-aegis-198840".into()),
+                lan_companion: None,
             };
             let device = guard.devices.get_mut("mock-devkit").unwrap();
             device.connection = ConnectionState::Connected;
@@ -6944,6 +7277,7 @@ mod tests {
                             port_path: Some(format!("/dev/cu.usbmodem{index}")),
                             created_at: "now".into(),
                             logical_device_id: Some(format!("logical-{index}")),
+                            lan_companion: None,
                         },
                     );
                     persist_devd_state(
@@ -7057,6 +7391,7 @@ mod tests {
                 port_path: Some("/dev/cu.usbmodem1".into()),
                 lan_address: None,
                 lan_conflict_addresses: Vec::new(),
+                companion_lan_candidate: None,
                 transport: DeviceTransport::NativeSerial,
                 binding: None,
                 connection: ConnectionState::Connected,
@@ -7113,6 +7448,7 @@ mod tests {
                 port_path: Some("/dev/cu.usbmodem1".into()),
                 lan_address: None,
                 lan_conflict_addresses: Vec::new(),
+                companion_lan_candidate: None,
                 transport: DeviceTransport::NativeSerial,
                 binding: Some(DeviceBinding {
                     alias: Some("Bench unit".into()),
@@ -7120,6 +7456,7 @@ mod tests {
                     port_path: Some("/dev/cu.usbmodem1".into()),
                     created_at: "now".into(),
                     logical_device_id: Some("mains-aegis-abc123".into()),
+                    lan_companion: None,
                 }),
                 connection: ConnectionState::Disconnected,
                 identity: None,
@@ -7166,6 +7503,7 @@ mod tests {
             port_path: Some("/dev/cu.usbmodem1".into()),
             lan_address: Some("192.168.4.25".into()),
             lan_conflict_addresses: Vec::new(),
+            companion_lan_candidate: None,
             transport: DeviceTransport::NativeSerial,
             binding: None,
             connection: ConnectionState::Connected,
@@ -7217,6 +7555,7 @@ mod tests {
                 port_path: Some("/dev/cu.usbmodem1".into()),
                 lan_address: Some("192.168.4.25".into()),
                 lan_conflict_addresses: Vec::new(),
+                companion_lan_candidate: None,
                 transport: DeviceTransport::NativeSerial,
                 binding: None,
                 connection: ConnectionState::Connected,
@@ -7473,6 +7812,7 @@ mod tests {
             port_path: None,
             lan_address: None,
             lan_conflict_addresses: Vec::new(),
+            companion_lan_candidate: None,
             transport: DeviceTransport::Mock,
             binding: None,
             connection: ConnectionState::Disconnected,
@@ -7517,6 +7857,7 @@ mod tests {
             port_path: None,
             lan_address: None,
             lan_conflict_addresses: Vec::new(),
+            companion_lan_candidate: None,
             transport: DeviceTransport::Mock,
             binding: None,
             connection: ConnectionState::Disconnected,
@@ -7561,6 +7902,7 @@ mod tests {
             port_path: None,
             lan_address: None,
             lan_conflict_addresses: Vec::new(),
+            companion_lan_candidate: None,
             transport: DeviceTransport::Mock,
             binding: None,
             connection: ConnectionState::Disconnected,
@@ -7605,6 +7947,7 @@ mod tests {
             port_path: None,
             lan_address: None,
             lan_conflict_addresses: Vec::new(),
+            companion_lan_candidate: None,
             transport: DeviceTransport::Mock,
             binding: None,
             connection: ConnectionState::Disconnected,
@@ -7649,6 +7992,7 @@ mod tests {
             port_path: Some("/dev/cu.usbmodem1".into()),
             lan_address: None,
             lan_conflict_addresses: Vec::new(),
+            companion_lan_candidate: None,
             transport: DeviceTransport::NativeSerial,
             binding: None,
             connection: ConnectionState::Disconnected,
@@ -7668,6 +8012,7 @@ mod tests {
             port_path: Some("/dev/cu.usbmodem1".into()),
             created_at: "now".into(),
             logical_device_id: None,
+            lan_companion: None,
         });
         assert_eq!(bound_flash_port(&device), Some("/dev/cu.usbmodem1".into()));
     }

@@ -58,6 +58,7 @@ import type {
   DeviceRecord,
   DeviceSettings,
   DevdDevice,
+  LanCompanionCandidate,
   SerialLogEntry,
   SerialTraceEntry,
   UpsStatus,
@@ -131,6 +132,7 @@ type DiscoveredLogicalDevice = {
   displayName: string;
   endpoint: string;
   existingRecord: DeviceRecord | null;
+  pendingCompanionCandidate: LanCompanionCandidate | null;
   channels: Partial<
     Record<Extract<DeviceChannelTransport, "http" | "devd">, DevdDevice>
   >;
@@ -1036,12 +1038,15 @@ function discoveryUsbChannel(device: DevdDevice): DevdDevice | null {
 }
 
 function discoveryHttpChannel(device: DevdDevice): DevdDevice | null {
-  if (!device.lan_address) return device.transport === "lan" ? device : null;
+  const confirmedCompanion = device.binding?.lan_companion;
+  if (!device.lan_address && !confirmedCompanion)
+    return device.transport === "lan" ? device : null;
   if (device.transport === "lan") return device;
   return {
     ...device,
     transport: "lan",
     port_path: null,
+    lan_address: device.lan_address ?? confirmedCompanion?.ip ?? null,
     connection:
       (device.lan_conflict_addresses?.length ?? 0) > 0 ? "error" : "connected",
   };
@@ -1090,6 +1095,8 @@ export function buildDiscoveredLogicalDevices(
         existingRecord?.target.alias ?? deviceId ?? primaryDevice.display_name,
       endpoint: endpoints.join(" / "),
       existingRecord,
+      pendingCompanionCandidate:
+        nextChannels.devd?.companion_lan_candidate ?? null,
       channels: nextChannels,
       availableTransports,
       connectionLabel: availableTransports
@@ -1299,6 +1306,7 @@ function ConnectPage({
     records,
     addDevice,
     addDevdDevice,
+    confirmDevdCompanionLan,
     connectUsbSerialDevice,
     connectKnownDeviceChannel,
     rememberDiscoveredChannels,
@@ -1343,6 +1351,8 @@ function ConnectPage({
   const [busy, setBusy] = useState(false);
   const [usbBusy, setUsbBusy] = useState(false);
   const [devdBusy, setDevdBusy] = useState(false);
+  const [companionConfirmingDeviceId, setCompanionConfirmingDeviceId] =
+    useState<string | null>(null);
   const [devdBindTargets, setDevdBindTargets] = useState<
     Record<string, string>
   >({});
@@ -1534,6 +1544,26 @@ function ConnectPage({
     }
   }
 
+  async function onConfirmCompanionLan(device: DevdDevice) {
+    setCompanionConfirmingDeviceId(device.id);
+    setDevdMessage(null);
+    const result = await confirmDevdCompanionLan(
+      device.id,
+      normalizeBaseUrl(devdTarget),
+    );
+    setCompanionConfirmingDeviceId(null);
+    if (result.ok) {
+      setDevdMessage(
+        successFeedback(
+          `Added LAN companion for ${result.record.target.alias}`,
+        ),
+      );
+      void refreshDevdDiscovery({ clearMessage: false });
+      return;
+    }
+    setDevdMessage(errorFeedback(result.error));
+  }
+
   async function onSavedDeviceChannelSwitch(
     record: DeviceRecord,
     transport: DeviceChannelTransport,
@@ -1663,6 +1693,11 @@ function ConnectPage({
             const primaryChannel = device.channels[defaultTransport];
             const showOverride =
               devdFirmwareOverrideDeviceId === primaryChannel?.id;
+            const pendingCompanion = device.pendingCompanionCandidate;
+            const showPendingCompanion =
+              primaryChannel?.transport !== "lan" &&
+              Boolean(pendingCompanion) &&
+              !primaryChannel?.binding?.lan_companion;
             const isConnectingDevice = primaryChannel
               ? devdConnectingDeviceId === primaryChannel.id
               : false;
@@ -1850,6 +1885,38 @@ function ConnectPage({
                     </button>
                   ) : null}
                 </div>
+                {showPendingCompanion && primaryChannel ? (
+                  <div className="inline-companion-callout">
+                    <div className="inline-companion-copy">
+                      <span className="eyebrow">LAN companion detected</span>
+                      <p>
+                        devd can use <code>{pendingCompanion?.mdns_host}</code>,
+                        and Web can use{" "}
+                        <code>
+                          http://{pendingCompanion?.ip}:{pendingCompanion?.port}
+                        </code>
+                        .
+                      </p>
+                    </div>
+                    <div className="inline-companion-actions">
+                      <button
+                        className="secondary-button small"
+                        type="button"
+                        disabled={
+                          devdBusy ||
+                          companionConfirmingDeviceId === primaryChannel.id
+                        }
+                        onClick={() => void onConfirmCompanionLan(primaryChannel)}
+                      >
+                        <ButtonLabel
+                          busy={companionConfirmingDeviceId === primaryChannel.id}
+                          busyText="Saving"
+                          text="Bind LAN companion"
+                        />
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </article>
             );
           })}

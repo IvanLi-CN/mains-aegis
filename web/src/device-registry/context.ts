@@ -38,6 +38,7 @@ export type DeviceRegistryContextValue = {
   stageDeviceRecord: (record: DeviceRecord) => void;
   addDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
   addDevdDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
+  confirmDevdCompanionLan: (deviceId: string, devdBaseUrl: string) => Promise<AddDeviceResult>;
   connectUsbSerialDevice: (input?: Pick<AddDeviceInput, "alias" | "location" | "ignoreFirmwareMismatch">) => Promise<AddDeviceResult>;
   connectKnownDeviceChannel: (deviceId: string, transport: DeviceChannelTransport, options?: Pick<AddDeviceInput, "ignoreFirmwareMismatch">) => Promise<AddDeviceResult>;
   rememberDiscoveredChannels: (devdBaseUrl: string, devices: DevdDevice[]) => void;
