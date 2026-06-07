@@ -276,7 +276,13 @@ export type DevdDevice = {
   lan_address?: string | null;
   lan_conflict_addresses?: string[];
   transport: "native_serial" | "lan" | "mock";
-  binding: unknown | null;
+  binding: {
+    alias?: string | null;
+    stable_id: string;
+    port_path?: string | null;
+    created_at: string;
+    logical_device_id?: string | null;
+  } | null;
   connection: "disconnected" | "connected" | "busy" | "error";
   identity: Identity | null;
   status?: UpsStatus | null;

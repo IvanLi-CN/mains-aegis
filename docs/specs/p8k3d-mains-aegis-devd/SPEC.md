@@ -47,7 +47,7 @@
 
 - `GET /api/v1/devices`: 返回当前已知设备与绑定。
 - `POST /api/v1/devices/scan`: 枚举本机 serial candidates，只发现不自动连接。
-- `POST /api/v1/devices/{id}/bind`: 为已知设备创建稳定绑定与别名，并写入 devd 持久状态。
+- `POST /api/v1/devices/{id}/bind`: 为已知设备创建稳定绑定与别名，并写入 devd 持久状态；当 USB identity 尚未可读但 owner 已知其对应的 logical device 时，请求可显式携带 `logical_device_id`，把该 stable USB id 绑定到已有 logical device。
 - `POST /api/v1/devices/{id}/connect`: 连接设备并读取/缓存 identity。
 - `POST /api/v1/devices/{id}/disconnect`: 断开设备 session。
 - `DELETE /api/v1/devices/{id}/binding`: 移除绑定，并同步 devd 持久状态。
@@ -128,7 +128,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 
 ### Multi-device selection contract
 
-- `POST /api/v1/devices/scan` 的响应必须保留每个 candidate 的 devd `id`、`display_name`、`port_path`、`connection`、`binding` 与可用的 `identity`。
+- `POST /api/v1/devices/scan` 的响应必须保留每个 candidate 的 devd `id`、`display_name`、`port_path`、`connection`、`binding` 与可用的 `identity`；当某个 USB candidate 已通过 `bind` 绑定到已有 logical device 时，`binding.logical_device_id` 必须原样返回，供 Web 在 identity pending 阶段仍可把该 USB candidate 归并回正确设备。
 - Web 只可在用户选择某个 candidate 后调用 lease/connect；候选数量为 0 时显示无设备，候选数量大于 1 时显示选择器，不得要求用户物理拔掉其它设备作为常规路径。
 - devd 兼容 root-level `/api/v1/identity`、`/api/v1/status`、`/api/v1/network` 只能在存在唯一有效 Web lease 或请求明确带 `device_id/lease_id` 时返回设备数据。否则返回 `device_selection_required`，避免多设备场景误读错误硬件。
 
@@ -201,3 +201,4 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - 2026-06-04: `flash` API 与设备事件增加 backend `status/stdout/stderr` 透传，现场可直接确认 `espflash` 是否真正完成以及目标硬件 identity 是否已经切到新 artifact。
 - 2026-06-04: 新增低压恢复 HIL runner 与文档，固化 bq40 工具固件和主固件的双烧录验证路径。
 - 2026-06-05: `/api/v1/status` 的 `battery` snapshot 增加四节 `cell_mv`、`cell_delta_mv`、均衡状态字段与 `charge_fet_on` / `discharge_fet_on` / `precharge_fet_on`，Web 电池页可直接展示 per-cell voltage、delta、BAL 状态与三路 BMS MOS 状态，不再依赖 `power-diag` 详情端点。
+- 2026-06-07: `devices/scan` 与 `devices` 响应中的 `binding.logical_device_id` 成为 Web 归并 USB identity-pending candidate 与 Fleet 混合视图的 canonical 键；旧绑定若缺失该字段，Connect 仍可继续显式补绑到已有 logical device。

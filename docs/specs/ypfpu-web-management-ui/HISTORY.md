@@ -29,3 +29,5 @@
 - hosted/self-hosted devd Connect UI 收敛为 discovery-only：不再重复渲染 Web Serial 与手动 LAN fallback 面板。
 - 明确 devd discovery 的连接语义：USB 候选通过 devd Web lease / usb-http bridge 接入；LAN 候选只借用 devd 发现地址，实际保存为直连硬件 HTTP target。
 - 修正 Connect 页 owner-facing 动作文案：未纳管 discovery 候选改用 `Bind USB` / `Add WiFi`，已纳管设备才显示 `Open` 与 `Use ...`，避免把 discovery 阶段误写成“连接功能”。
+- 修正 `Bind USB` 的真实绑定语义：当 USB 还未读出 identity 时，允许先把 stable USB id 绑定到已有 logical device，并在 discovery / remembered channels 中通过 `binding.logical_device_id` 归并回同一设备；绑定本身不再冒充“立即进入设备”。
+- Fleet 视图改为读取混合模型：浏览器本地记录与当前 devd discovery 必须按 logical device 合并展示；仅 live discovery 的设备允许出现在 Fleet 中，但默认回到 Connect 完成纳管，不再依赖“先保存、后可见”的旧前提。

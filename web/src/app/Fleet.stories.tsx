@@ -16,14 +16,40 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-function renderApp(initialPath: string, seed = "default") {
+function renderApp(
+  initialPath: string,
+  seed: string | null = "default",
+  options: {
+    initialDevdTarget?: string;
+    forceHostedHttpServiceApp?: boolean;
+    storedTargets?: unknown[];
+  } = {},
+) {
   window.localStorage.removeItem(STORAGE_KEY);
+  if (options.storedTargets) {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(options.storedTargets),
+    );
+  }
   const params = new URLSearchParams(window.location.search);
-  params.set("seed", seed);
-  window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
+  if (seed) {
+    params.set("seed", seed);
+  } else {
+    params.delete("seed");
+  }
+  window.history.replaceState(
+    null,
+    "",
+    `${window.location.pathname}?${params.toString()}${window.location.hash}`,
+  );
   return (
     <DeviceRegistryProvider>
-      <App initialPath={initialPath} />
+      <App
+        initialPath={initialPath}
+        initialDevdTarget={options.initialDevdTarget}
+        forceHostedHttpServiceApp={options.forceHostedHttpServiceApp}
+      />
     </DeviceRegistryProvider>
   );
 }
@@ -54,5 +80,56 @@ export const Mobile: Story = {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("heading", { name: "UPS Fleet" })).toBeInTheDocument();
     await expect((await canvas.findAllByRole("link", { name: "Details" })).length).toBeGreaterThan(0);
+  },
+};
+
+export const LiveDevdDiscovery: Story = {
+  name: "Live devd discovery",
+  render: () =>
+    renderApp("/", null, {
+      forceHostedHttpServiceApp: true,
+      initialDevdTarget: "mock:devd-multi",
+    }),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByRole("heading", { name: "UPS Fleet" }),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByText("mains-aegis-a1b2c3"),
+    ).toBeInTheDocument();
+    await expect(await canvas.findByText("Live discovery")).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("button", { name: "Open in Connect" }),
+    ).toBeInTheDocument();
+  },
+};
+
+export const SavedAndLiveMerged: Story = {
+  name: "Saved and live merged",
+  render: () =>
+    renderApp("/", null, {
+      forceHostedHttpServiceApp: true,
+      initialDevdTarget: "mock:devd-multi",
+      storedTargets: [
+        {
+          deviceId: "mains-aegis-a1b2c3",
+          baseUrl: "mock:lab-standby",
+          alias: "Lab rack A",
+          location: "Bench 1",
+          addedAt: "2026-06-07T00:00:00.000Z",
+          transport: "http",
+          preferredTransport: "http",
+        },
+      ],
+    }),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByRole("heading", { name: "Lab rack A" }),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("button", { name: "Details" }),
+    ).toBeInTheDocument();
   },
 };

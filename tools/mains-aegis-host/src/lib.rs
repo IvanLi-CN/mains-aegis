@@ -346,6 +346,8 @@ struct DeviceBinding {
     stable_id: String,
     port_path: Option<String>,
     created_at: String,
+    #[serde(default)]
+    logical_device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -466,6 +468,7 @@ struct ApiError {
 #[derive(Debug, Deserialize)]
 struct BindRequest {
     alias: Option<String>,
+    logical_device_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1729,9 +1732,9 @@ async fn scan_devices_inner(
             .devices
             .iter()
             .filter_map(|(id, device)| {
-                (matches!(device.transport, DeviceTransport::NativeSerial)
-                    && !seen_native_ids.contains(id))
-                .then(|| id.clone())
+                native_device_stable_id(device)
+                    .is_some_and(|stable_id| !seen_native_ids.contains(stable_id))
+                    .then(|| id.clone())
             })
             .collect::<Vec<_>>();
         for id in stale_ids {
@@ -2230,6 +2233,33 @@ fn merge_lan_discoveries(
     }
 }
 
+fn device_identity_device_id(device: &DeviceRecord) -> Option<&str> {
+    device
+        .identity
+        .as_ref()
+        .and_then(|identity| identity.get("device_id"))
+        .and_then(Value::as_str)
+}
+
+fn device_logical_device_id(device: &DeviceRecord) -> Option<&str> {
+    device
+        .binding
+        .as_ref()
+        .and_then(|binding| binding.logical_device_id.as_deref())
+        .or_else(|| device_identity_device_id(device))
+}
+
+fn native_device_stable_id(device: &DeviceRecord) -> Option<&str> {
+    if !matches!(device.transport, DeviceTransport::NativeSerial) {
+        return None;
+    }
+    device
+        .binding
+        .as_ref()
+        .map(|binding| binding.stable_id.as_str())
+        .or(Some(device.id.as_str()))
+}
+
 fn find_logical_device_id_for_identity(
     state: &DevdState,
     identity_device_id: &str,
@@ -2574,6 +2604,7 @@ async fn bind_device(
         stable_id: id.clone(),
         port_path: device.port_path.clone(),
         created_at: now(),
+        logical_device_id: input.logical_device_id,
     };
     device.binding = Some(binding.clone());
     let device = device.clone();
@@ -4140,13 +4171,7 @@ fn lease_expires_at_string(ttl_ms: u64) -> String {
 }
 
 fn device_matches_target(device: &DeviceRecord, target_device_id: &str) -> bool {
-    device.id == target_device_id
-        || device
-            .identity
-            .as_ref()
-            .and_then(|identity| identity.get("device_id"))
-            .and_then(Value::as_str)
-            == Some(target_device_id)
+    device.id == target_device_id || device_logical_device_id(device) == Some(target_device_id)
 }
 
 fn ensure_web_lease_for_target(
@@ -4179,12 +4204,7 @@ fn ensure_web_lease_for_target(
 
 fn device_matches_identity_id(device: &DeviceRecord, target_device_id: &str) -> bool {
     device.id == target_device_id
-        || device
-            .identity
-            .as_ref()
-            .and_then(|identity| identity.get("device_id"))
-            .and_then(Value::as_str)
-            .is_some_and(|device_id| device_id == target_device_id)
+        || device_logical_device_id(device).is_some_and(|device_id| device_id == target_device_id)
 }
 
 async fn send_native_cdc_frame_async(
@@ -6766,6 +6786,36 @@ mod tests {
         assert_eq!(stable_device_id(&left), stable_device_id(&right));
     }
 
+    #[test]
+    fn native_device_stable_id_prefers_binding_stable_id() {
+        let device = DeviceRecord {
+            id: "mains-aegis-abc123".into(),
+            display_name: "USB CDC".into(),
+            port_path: Some("/dev/cu.usbmodem1".into()),
+            lan_address: None,
+            lan_conflict_addresses: Vec::new(),
+            transport: DeviceTransport::NativeSerial,
+            binding: Some(DeviceBinding {
+                alias: None,
+                stable_id: "serial-a".into(),
+                port_path: Some("/dev/cu.usbmodem1".into()),
+                created_at: "now".into(),
+                logical_device_id: Some("mains-aegis-abc123".into()),
+            }),
+            connection: ConnectionState::Disconnected,
+            identity: None,
+            status: None,
+            power_diag: None,
+            selected_artifact_id: None,
+            log_decode: LogDecodeState::default(),
+            settings: default_settings(),
+            logs: VecDeque::new(),
+            trace: VecDeque::new(),
+        };
+
+        assert_eq!(native_device_stable_id(&device), Some("serial-a"));
+    }
+
     #[tokio::test]
     async fn device_binding_persists_across_daemon_state_recreation() {
         let temp = tempfile::tempdir().unwrap();
@@ -6807,6 +6857,7 @@ mod tests {
             Path("native-a".into()),
             Json(BindRequest {
                 alias: Some("Bench unit".into()),
+                logical_device_id: Some("mains-aegis-198840".into()),
             }),
         )
         .await
@@ -6823,6 +6874,10 @@ mod tests {
         let binding = guard.bindings.get("native-a").unwrap();
         assert_eq!(binding.alias.as_deref(), Some("Bench unit"));
         assert_eq!(binding.port_path.as_deref(), Some("/dev/cu.usbmodem1"));
+        assert_eq!(
+            binding.logical_device_id.as_deref(),
+            Some("mains-aegis-198840")
+        );
     }
 
     #[tokio::test]
@@ -6843,6 +6898,7 @@ mod tests {
                 stable_id: "mock-devkit".into(),
                 port_path: None,
                 created_at: "now".into(),
+                logical_device_id: Some("mains-aegis-198840".into()),
             };
             let device = guard.devices.get_mut("mock-devkit").unwrap();
             device.connection = ConnectionState::Connected;
@@ -6887,6 +6943,7 @@ mod tests {
                             stable_id: format!("device-{index}"),
                             port_path: Some(format!("/dev/cu.usbmodem{index}")),
                             created_at: "now".into(),
+                            logical_device_id: Some(format!("logical-{index}")),
                         },
                     );
                     persist_devd_state(
@@ -7041,6 +7098,62 @@ mod tests {
         );
         let device = state.devices.get("serial-a").unwrap();
         assert!(matches!(device.transport, DeviceTransport::NativeSerial));
+        assert_eq!(device.lan_address.as_deref(), Some("192.168.4.25"));
+        assert_eq!(available_transports(device), vec!["usb", "lan"]);
+    }
+
+    #[test]
+    fn lan_discovery_merges_into_bound_usb_logical_record_before_identity() {
+        let mut state = DevdState::default();
+        state.devices.insert(
+            "serial-a".into(),
+            DeviceRecord {
+                id: "serial-a".into(),
+                display_name: "USB CDC".into(),
+                port_path: Some("/dev/cu.usbmodem1".into()),
+                lan_address: None,
+                lan_conflict_addresses: Vec::new(),
+                transport: DeviceTransport::NativeSerial,
+                binding: Some(DeviceBinding {
+                    alias: Some("Bench unit".into()),
+                    stable_id: "serial-a".into(),
+                    port_path: Some("/dev/cu.usbmodem1".into()),
+                    created_at: "now".into(),
+                    logical_device_id: Some("mains-aegis-abc123".into()),
+                }),
+                connection: ConnectionState::Disconnected,
+                identity: None,
+                status: None,
+                power_diag: None,
+                selected_artifact_id: None,
+                log_decode: LogDecodeState::default(),
+                settings: default_settings(),
+                logs: VecDeque::new(),
+                trace: VecDeque::new(),
+            },
+        );
+        let discovery = LanDeviceDiscovery {
+            address: "192.168.4.25".into(),
+            identity: json!({"device_id": "mains-aegis-abc123", "hostname": "mains-aegis-abc123"}),
+            trace: vec![],
+        };
+        let mut discovered_ids = HashSet::new();
+        let mut lan_count = 0;
+
+        merge_lan_discoveries(
+            &mut state,
+            vec![discovery],
+            &mut discovered_ids,
+            &mut lan_count,
+        );
+
+        assert_eq!(lan_count, 1);
+        assert_eq!(
+            discovered_ids.get("serial-a"),
+            Some(&"serial-a".to_string())
+        );
+        assert!(!state.devices.contains_key("mains-aegis-abc123"));
+        let device = state.devices.get("serial-a").unwrap();
         assert_eq!(device.lan_address.as_deref(), Some("192.168.4.25"));
         assert_eq!(available_transports(device), vec!["usb", "lan"]);
     }
@@ -7554,6 +7667,7 @@ mod tests {
             stable_id: "d".into(),
             port_path: Some("/dev/cu.usbmodem1".into()),
             created_at: "now".into(),
+            logical_device_id: None,
         });
         assert_eq!(bound_flash_port(&device), Some("/dev/cu.usbmodem1".into()));
     }

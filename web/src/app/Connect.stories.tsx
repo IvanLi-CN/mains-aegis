@@ -27,11 +27,18 @@ type Story = StoryObj<typeof meta>;
 
 function renderApp(
   seed: string | null = "default",
-  options: { initialDevdTarget?: string; forceHostedHttpServiceApp?: boolean; storedTargets?: DeviceTarget[] } = {},
+  options: {
+    initialDevdTarget?: string;
+    forceHostedHttpServiceApp?: boolean;
+    storedTargets?: DeviceTarget[];
+  } = {},
 ) {
   window.localStorage.removeItem(STORAGE_KEY);
   if (options.storedTargets) {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(options.storedTargets));
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(options.storedTargets),
+    );
   }
   const params = new URLSearchParams(window.location.search);
   if (seed) {
@@ -39,7 +46,11 @@ function renderApp(
   } else {
     params.delete("seed");
   }
-  window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
+  window.history.replaceState(
+    null,
+    "",
+    `${window.location.pathname}?${params.toString()}${window.location.hash}`,
+  );
   return (
     <DeviceRegistryProvider>
       <App
@@ -56,17 +67,35 @@ export const HostedDevdDiscovery: Story = {
   render: () => renderApp("empty", { forceHostedHttpServiceApp: true }),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("heading", { name: "Connect devices" })).toBeInTheDocument();
-    await expect(await canvas.findByRole("heading", { name: /Automatic device discovery/ })).toBeInTheDocument();
-    await expect(await canvas.findByText("mains-aegis-devd-service")).toBeInTheDocument();
-    await expect(await canvas.findByText("mock:lab-standby")).toBeInTheDocument();
-    await expect(await canvas.findByRole("button", { name: "Add WiFi" })).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("heading", { name: "Connect devices" }),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("heading", {
+        name: /Automatic device discovery/,
+      }),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByText("mains-aegis-devd-service"),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByText("mock:lab-standby"),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("button", { name: "Add WiFi" }),
+    ).toBeInTheDocument();
     await expect(await canvas.findByText("Mock")).toBeInTheDocument();
-    await expect(canvas.queryByText("Discovery source")).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByText("Discovery source"),
+    ).not.toBeInTheDocument();
     await expect(canvas.queryByLabelText("devd URL")).not.toBeInTheDocument();
     await expect(canvas.queryByLabelText("Target")).not.toBeInTheDocument();
-    await expect(canvas.queryByRole("heading", { name: "Web Serial" })).not.toBeInTheDocument();
-    await expect(canvas.queryByRole("heading", { name: "LAN device API" })).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByRole("heading", { name: "Web Serial" }),
+    ).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByRole("heading", { name: "LAN device API" }),
+    ).not.toBeInTheDocument();
   },
 };
 
@@ -75,10 +104,18 @@ export const ManualLanFallback: Story = {
   render: () => renderApp("empty", { initialDevdTarget: "mock:missing-devd" }),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("heading", { name: /Automatic device discovery/ })).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("heading", {
+        name: /Automatic device discovery/,
+      }),
+    ).toBeInTheDocument();
     await expect(await canvas.findByLabelText("Target")).toBeInTheDocument();
-    await expect(canvas.queryByLabelText("Bridge token")).not.toBeInTheDocument();
-    await expect(canvas.queryByLabelText("devd auth token")).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByLabelText("Bridge token"),
+    ).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByLabelText("devd auth token"),
+    ).not.toBeInTheDocument();
     await userEvent.clear(canvas.getByLabelText("Target"));
     await userEvent.type(canvas.getByLabelText("Target"), "mock:backup");
     await userEvent.click(canvas.getByRole("button", { name: "Add LAN" }));
@@ -88,13 +125,25 @@ export const ManualLanFallback: Story = {
 
 export const MergedMultiChannelDevice: Story = {
   name: "Merged multi-channel device",
-  render: () => renderApp(null, { forceHostedHttpServiceApp: true, initialDevdTarget: "mock:devd-multi" }),
+  render: () =>
+    renderApp(null, {
+      forceHostedHttpServiceApp: true,
+      initialDevdTarget: "mock:devd-multi",
+    }),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("mains-aegis-a1b2c3")).toBeInTheDocument();
-    await expect(canvas.getByText("USB connected / WiFi connected")).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: "Bind USB" })).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: "Add WiFi" })).toBeInTheDocument();
+    await expect(
+      await canvas.findByText("mains-aegis-a1b2c3"),
+    ).toBeInTheDocument();
+    await expect(
+      canvas.getByText("USB connected / WiFi connected"),
+    ).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Bind USB" }),
+    ).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Add WiFi" }),
+    ).toBeInTheDocument();
   },
 };
 
@@ -125,9 +174,52 @@ export const RememberedChannelSwitch: Story = {
     }),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("button", { name: "Open" })).toBeInTheDocument();
-    await expect(await canvas.findByRole("button", { name: "Use WiFi" })).toBeInTheDocument();
-    await expect(await canvas.findByRole("button", { name: "Use USB" })).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("button", { name: "Open" }),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("button", { name: "Use WiFi" }),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("button", { name: "Use USB" }),
+    ).toBeInTheDocument();
+  },
+};
+
+export const PendingUsbBindTargetSelection: Story = {
+  name: "Pending USB bind target selection",
+  render: () =>
+    renderApp(null, {
+      forceHostedHttpServiceApp: true,
+      initialDevdTarget: "mock:devd-bind-target",
+      storedTargets: [
+        {
+          deviceId: "mains-aegis-a1b2c3",
+          baseUrl: "mock:lab-standby",
+          alias: "Lab rack A",
+          location: "Bench 1",
+          addedAt: "2026-06-07T00:00:00.000Z",
+          transport: "http",
+          preferredTransport: "http",
+          rememberedChannels: {
+            http: {
+              baseUrl: "mock:lab-standby",
+              seenAt: "2026-06-07T00:00:00.000Z",
+              source: "devd_discovery",
+            },
+          },
+        },
+      ],
+    }),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const bindButton = await canvas.findByRole("button", { name: "Bind USB" });
+    const bindTarget = await canvas.findByRole("combobox", {
+      name: /Bind USB target/i,
+    });
+    await expect(bindButton).toBeDisabled();
+    await userEvent.selectOptions(bindTarget, "mains-aegis-a1b2c3");
+    await expect(bindButton).toBeEnabled();
   },
 };
 
@@ -138,13 +230,18 @@ export const FirmwareMismatchWarning: Story = {
       <header className="storybook-feedback-header">
         <span className="eyebrow">USB connection gate</span>
         <h1>Firmware mismatch must stop writable USB setup</h1>
-        <p>Raw log decode issues may be ignored in the console, but a mismatched firmware artifact blocks connect until the user explicitly continues.</p>
+        <p>
+          Raw log decode issues may be ignored in the console, but a mismatched
+          firmware artifact blocks connect until the user explicitly continues.
+        </p>
       </header>
       <section className="connect-grid">
         <section className="connect-panel usb-panel">
           <header className="connect-panel-header">
             <div>
-              <h3><Usb size={18} /> Web Serial</h3>
+              <h3>
+                <Usb size={18} /> Web Serial
+              </h3>
               <p>Chromium Web Serial available for USB CDC devices</p>
             </div>
             <span className="transport-badge serial">ready</span>
@@ -160,7 +257,12 @@ export const FirmwareMismatchWarning: Story = {
             </label>
             <div className="form-actions with-callout">
               <button className="primary-button" type="button">
-                <ButtonLabel icon={Usb} busy={false} busyText="Connecting" text="Connect Web Serial" />
+                <ButtonLabel
+                  icon={Usb}
+                  busy={false}
+                  busyText="Connecting"
+                  text="Connect Web Serial"
+                />
               </button>
               <ConnectionCallout
                 id="story-firmware-mismatch"
@@ -178,7 +280,11 @@ export const FirmwareMismatchWarning: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText("Firmware mismatch")).toBeInTheDocument();
-    await expect(canvas.getByText("firmware_artifact_mismatch")).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: "Ignore warning and connect" })).toBeInTheDocument();
+    await expect(
+      canvas.getByText("firmware_artifact_mismatch"),
+    ).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Ignore warning and connect" }),
+    ).toBeInTheDocument();
   },
 };
