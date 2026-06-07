@@ -119,11 +119,11 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 
 - source_type: storybook_canvas
   story_id_or_title: `UPS Management/Connect / Hosted devd discovery`
-  requested_viewport: `1365x900`
+  requested_viewport: `1440x980`
   viewport_strategy: `storybook-viewport`
   capture_scope: `browser-viewport`
   target_program: `mock-only`
-  scenario: hosted connect uses devd discovery only
-  evidence_note: 验证 hosted Connect 页不再暴露 devd URL 或 token 输入，也不再渲染 Web Serial / 手动 LAN fallback；LAN 候选只作为 direct HTTP target 出现。
+  scenario: hosted connect desktop discovery-only layout
+  evidence_note: 验证桌面态 hosted Connect 页不再暴露 devd URL 或 token 输入，也不再渲染 Web Serial / 手动 LAN fallback；LAN 候选只作为 direct HTTP target 出现。
 
 ![Connect devd auto discovery Storybook](./assets/connect-devd-auto-discovery-storybook.png)
