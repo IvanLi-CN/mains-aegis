@@ -186,7 +186,8 @@ a {
   align-items: center;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--color-hairline) 78%, var(--color-primary));
+  border: 1px solid
+    color-mix(in oklch, var(--color-hairline) 78%, var(--color-primary));
   border-radius: 8px;
   background: color-mix(in oklch, var(--color-panel) 94%, var(--color-primary));
   gap: 8px;
@@ -199,7 +200,11 @@ a {
   width: 30px;
   height: 30px;
   border-radius: 999px;
-  background: color-mix(in oklch, var(--color-surface) 82%, var(--color-primary));
+  background: color-mix(
+    in oklch,
+    var(--color-surface) 82%,
+    var(--color-primary)
+  );
   color: var(--color-primary-strong);
 }
 
@@ -460,7 +465,11 @@ a {
 }
 
 .severity-badge.severity-source {
-  background: color-mix(in oklch, var(--color-primary-strong) 16%, var(--color-panel));
+  background: color-mix(
+    in oklch,
+    var(--color-primary-strong) 16%,
+    var(--color-panel)
+  );
   color: var(--color-primary-strong);
 }
 
@@ -566,6 +575,11 @@ a {
   font-size: 13px;
 }
 
+.secondary-button.small {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
 .secondary-button {
   display: inline-flex;
   align-items: center;
@@ -579,7 +593,11 @@ a {
 }
 
 .secondary-button.danger-action {
-  border-color: color-mix(in oklch, var(--color-warning) 56%, var(--color-hairline));
+  border-color: color-mix(
+    in oklch,
+    var(--color-warning) 56%,
+    var(--color-hairline)
+  );
   background: color-mix(in oklch, var(--color-warning) 11%, var(--color-panel));
   color: var(--color-severity-warning-text);
   font-weight: 650;
@@ -634,7 +652,10 @@ a {
 }
 
 .connect-wide .connect-form {
-  grid-template-columns: minmax(360px, 2.4fr) minmax(160px, 1fr) minmax(160px, 1fr) auto;
+  grid-template-columns: minmax(360px, 2.4fr) minmax(160px, 1fr) minmax(
+      160px,
+      1fr
+    ) auto;
 }
 
 .connect-grid {
@@ -646,7 +667,10 @@ a {
 }
 
 .secondary-connect-grid {
-  grid-template-columns: minmax(280px, 0.95fr) minmax(280px, 0.95fr) minmax(320px, 1.1fr);
+  grid-template-columns: minmax(280px, 0.95fr) minmax(280px, 0.95fr) minmax(
+      320px,
+      1.1fr
+    );
 }
 
 .connect-panel {
@@ -665,9 +689,14 @@ a {
   display: grid;
   gap: 16px;
   min-width: 0;
-  border: 1px solid color-mix(in oklch, var(--color-primary) 18%, var(--color-hairline));
+  border: 1px solid
+    color-mix(in oklch, var(--color-primary) 18%, var(--color-hairline));
   border-radius: var(--radius-card);
-  background: color-mix(in oklch, var(--color-panel) 92%, var(--color-primary) 2%);
+  background: color-mix(
+    in oklch,
+    var(--color-panel) 92%,
+    var(--color-primary) 2%
+  );
   padding: 18px;
 }
 
@@ -752,7 +781,11 @@ a {
 }
 
 .devd-device-card.is-muted {
-  background: color-mix(in oklch, var(--color-panel) 90%, var(--color-offline) 4%);
+  background: color-mix(
+    in oklch,
+    var(--color-panel) 90%,
+    var(--color-offline) 4%
+  );
 }
 
 .devd-device-main {
@@ -806,6 +839,23 @@ a {
   gap: 8px;
 }
 
+.devd-bind-target-select {
+  display: grid;
+  gap: 4px;
+  min-width: 220px;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.devd-bind-target-select > select {
+  min-height: 36px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 10px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  padding: 0 10px;
+}
+
 .devd-empty-state,
 .lan-standby-note {
   display: flex;
@@ -813,7 +863,11 @@ a {
   gap: 10px;
   border: 1px dashed var(--color-hairline);
   border-radius: var(--radius-card);
-  background: color-mix(in oklch, var(--color-panel) 88%, var(--color-muted) 4%);
+  background: color-mix(
+    in oklch,
+    var(--color-panel) 88%,
+    var(--color-muted) 4%
+  );
   padding: 14px;
   color: var(--color-muted);
 }
@@ -858,7 +912,11 @@ a {
 }
 
 .lan-fallback-panel:not(.is-active) {
-  background: color-mix(in oklch, var(--color-panel) 92%, var(--color-muted) 3%);
+  background: color-mix(
+    in oklch,
+    var(--color-panel) 92%,
+    var(--color-muted) 3%
+  );
 }
 
 .connect-panel-header {
@@ -952,7 +1010,8 @@ a {
   gap: 10px;
   width: min(340px, 42vw);
   transform: translateY(-50%);
-  border: 1px solid color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
+  border: 1px solid
+    color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
   border-radius: var(--radius-card);
   background: oklch(98.5% 0.018 78);
   color: var(--color-ink);
@@ -972,7 +1031,8 @@ a {
   gap: 10px;
   width: min(340px, 42vw);
   transform: translateY(-50%);
-  border: 1px solid color-mix(in oklch, var(--color-success) 38%, var(--color-hairline));
+  border: 1px solid
+    color-mix(in oklch, var(--color-success) 38%, var(--color-hairline));
   border-radius: var(--radius-card);
   background: oklch(98.5% 0.017 154);
   color: var(--color-ink);
@@ -983,16 +1043,28 @@ a {
 }
 
 .wifi-progress-callout.is-error {
-  border-color: color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
+  border-color: color-mix(
+    in oklch,
+    var(--color-warning) 42%,
+    var(--color-hairline)
+  );
   background: oklch(98.5% 0.018 78);
 }
 
 .wifi-progress-callout .connection-callout-anchor {
-  border-color: color-mix(in oklch, var(--color-success) 38%, var(--color-hairline));
+  border-color: color-mix(
+    in oklch,
+    var(--color-success) 38%,
+    var(--color-hairline)
+  );
 }
 
 .wifi-progress-callout.is-error .connection-callout-anchor {
-  border-color: color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
+  border-color: color-mix(
+    in oklch,
+    var(--color-warning) 42%,
+    var(--color-hairline)
+  );
 }
 
 .wifi-progress-callout svg {
@@ -1078,8 +1150,10 @@ a {
   width: 10px;
   height: 10px;
   transform: translateY(-50%) rotate(45deg);
-  border-bottom: 1px solid color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
-  border-left: 1px solid color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
+  border-bottom: 1px solid
+    color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
+  border-left: 1px solid
+    color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
   background: inherit;
 }
 
@@ -1099,12 +1173,18 @@ a {
 }
 
 .connect-form.compact .form-actions.with-callout > .danger-action,
-.connect-wide .connect-form.compact .form-actions.with-callout > .danger-action {
+.connect-wide
+  .connect-form.compact
+  .form-actions.with-callout
+  > .danger-action {
   order: 2;
 }
 
 .connect-form.compact .form-actions.with-callout > .connection-callout,
-.connect-wide .connect-form.compact .form-actions.with-callout > .connection-callout {
+.connect-wide
+  .connect-form.compact
+  .form-actions.with-callout
+  > .connection-callout {
   position: absolute;
   top: calc(100% + 10px);
   left: 0;
@@ -1113,8 +1193,15 @@ a {
   transform: none;
 }
 
-.connect-form.compact .form-actions.with-callout > .connection-callout .connection-callout-anchor,
-.connect-wide .connect-form.compact .form-actions.with-callout > .connection-callout .connection-callout-anchor {
+.connect-form.compact
+  .form-actions.with-callout
+  > .connection-callout
+  .connection-callout-anchor,
+.connect-wide
+  .connect-form.compact
+  .form-actions.with-callout
+  > .connection-callout
+  .connection-callout-anchor {
   top: -6px;
   left: 28px;
   display: block;
@@ -1358,6 +1445,17 @@ a {
   display: inline-flex;
 }
 
+.table-row .row-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.channel-switch-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .status-band {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
@@ -1371,12 +1469,24 @@ a {
 
 .status-band-color-warm {
   --amount: 0.45;
-  grid-template-columns: minmax(190px, 1.38fr) repeat(3, minmax(112px, 0.72fr)) auto;
+  grid-template-columns: minmax(190px, 1.38fr) repeat(
+      3,
+      minmax(112px, 0.72fr)
+    ) auto;
   align-items: stretch;
   gap: 1px;
   overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--color-status-band-accent) calc(var(--amount) * 55%), var(--color-hairline));
-  background: color-mix(in oklch, var(--color-status-band-accent) calc(var(--amount) * 18%), var(--color-surface));
+  border: 1px solid
+    color-mix(
+      in oklch,
+      var(--color-status-band-accent) calc(var(--amount) * 55%),
+      var(--color-hairline)
+    );
+  background: color-mix(
+    in oklch,
+    var(--color-status-band-accent) calc(var(--amount) * 18%),
+    var(--color-surface)
+  );
   color: var(--color-ink);
   padding: 0;
 }
@@ -1386,15 +1496,27 @@ a {
   gap: 5px;
   min-height: 86px;
   padding: 16px 18px;
-  background: color-mix(in oklch, var(--color-panel) calc(95% - var(--amount) * 8%), var(--color-status-band-cell));
+  background: color-mix(
+    in oklch,
+    var(--color-panel) calc(95% - var(--amount) * 8%),
+    var(--color-status-band-cell)
+  );
 }
 
 .status-band-color-warm .live-cell:first-child {
-  background: color-mix(in oklch, var(--color-surface) calc(92% - var(--amount) * 12%), var(--color-status-band-hero));
+  background: color-mix(
+    in oklch,
+    var(--color-surface) calc(92% - var(--amount) * 12%),
+    var(--color-status-band-hero)
+  );
 }
 
 .status-band-color-warm .eyebrow {
-  color: color-mix(in oklch, var(--color-muted) 76%, var(--color-status-band-muted));
+  color: color-mix(
+    in oklch,
+    var(--color-muted) 76%,
+    var(--color-status-band-muted)
+  );
 }
 
 .status-band-color-warm .live-value {
@@ -1414,7 +1536,11 @@ a {
 }
 
 .status-band-color-warm .live-detail.tone-critical {
-  color: color-mix(in oklch, var(--color-status-critical) 76%, var(--color-ink));
+  color: color-mix(
+    in oklch,
+    var(--color-status-critical) 76%,
+    var(--color-ink)
+  );
 }
 
 .status-band-color-warm .live-detail.tone-offline {
@@ -1426,8 +1552,17 @@ a {
   justify-self: end;
   margin: 0 16px;
   --live-state-color: var(--color-status-critical);
-  border: 1px solid color-mix(in oklch, var(--live-state-color) calc(38% + var(--amount) * 28%), var(--color-hairline));
-  background: color-mix(in oklch, var(--color-panel) calc(92% - var(--amount) * 14%), var(--live-state-color));
+  border: 1px solid
+    color-mix(
+      in oklch,
+      var(--live-state-color) calc(38% + var(--amount) * 28%),
+      var(--color-hairline)
+    );
+  background: color-mix(
+    in oklch,
+    var(--color-panel) calc(92% - var(--amount) * 14%),
+    var(--live-state-color)
+  );
   color: color-mix(in oklch, var(--live-state-color) 82%, var(--color-ink));
 }
 
@@ -1508,14 +1643,26 @@ a {
 }
 
 .battery-balance-summary .balance-delta-watch {
-  border-color: color-mix(in oklch, var(--color-warning) 42%, var(--color-hairline));
+  border-color: color-mix(
+    in oklch,
+    var(--color-warning) 42%,
+    var(--color-hairline)
+  );
   background: color-mix(in oklch, var(--color-warning) 11%, var(--color-panel));
 }
 
 .battery-balance-summary .balance-delta-warning,
 .battery-balance-summary .balance-delta-critical {
-  border-color: color-mix(in oklch, var(--color-critical) 46%, var(--color-hairline));
-  background: color-mix(in oklch, var(--color-critical) 10%, var(--color-panel));
+  border-color: color-mix(
+    in oklch,
+    var(--color-critical) 46%,
+    var(--color-hairline)
+  );
+  background: color-mix(
+    in oklch,
+    var(--color-critical) 10%,
+    var(--color-panel)
+  );
 }
 
 .battery-cell-grid {
@@ -1528,7 +1675,11 @@ a {
   min-width: 0;
   border: 1px solid var(--color-hairline);
   border-radius: 8px;
-  background: color-mix(in oklch, var(--color-panel) 86%, var(--color-selected));
+  background: color-mix(
+    in oklch,
+    var(--color-panel) 86%,
+    var(--color-selected)
+  );
   padding: 10px;
 }
 
@@ -1537,13 +1688,21 @@ a {
 }
 
 .battery-cell-watch {
-  border-color: color-mix(in oklch, var(--color-warning) 46%, var(--color-hairline));
+  border-color: color-mix(
+    in oklch,
+    var(--color-warning) 46%,
+    var(--color-hairline)
+  );
   background: color-mix(in oklch, var(--color-warning) 9%, var(--color-panel));
 }
 
 .battery-cell-warning,
 .battery-cell-critical {
-  border-color: color-mix(in oklch, var(--color-critical) 44%, var(--color-hairline));
+  border-color: color-mix(
+    in oklch,
+    var(--color-critical) 44%,
+    var(--color-hairline)
+  );
   background: color-mix(in oklch, var(--color-critical) 8%, var(--color-panel));
 }
 
@@ -1603,7 +1762,10 @@ a {
 
 .settings-layout {
   display: grid;
-  grid-template-columns: minmax(300px, 0.9fr) minmax(320px, 1fr) minmax(360px, 1.1fr);
+  grid-template-columns: minmax(300px, 0.9fr) minmax(320px, 1fr) minmax(
+      360px,
+      1.1fr
+    );
   gap: 14px;
   align-items: start;
 }
@@ -1767,7 +1929,8 @@ a {
   grid-template-columns: 74px 52px minmax(72px, 0.35fr) minmax(0, 1fr);
   gap: 10px;
   align-items: baseline;
-  border-bottom: 1px solid color-mix(in oklch, var(--color-code-text) 12%, transparent);
+  border-bottom: 1px solid
+    color-mix(in oklch, var(--color-code-text) 12%, transparent);
   padding: 8px 10px;
   color: var(--color-code-text);
   font-family: var(--font-mono);
@@ -1856,13 +2019,19 @@ a {
   background: transparent;
   color: var(--color-muted);
   padding: 0;
-  transition: color 140ms ease-out, background 140ms ease-out;
+  transition:
+    color 140ms ease-out,
+    background 140ms ease-out;
 }
 
 .trace-help-trigger:hover,
 .trace-help-trigger:focus-visible {
   color: var(--color-primary-strong);
-  background: color-mix(in oklch, var(--color-panel) 84%, var(--color-green) 16%);
+  background: color-mix(
+    in oklch,
+    var(--color-panel) 84%,
+    var(--color-green) 16%
+  );
 }
 
 .trace-help-popover {
@@ -1873,7 +2042,8 @@ a {
   display: grid;
   width: min(340px, calc(100vw - 48px));
   gap: 5px;
-  border: 1px solid color-mix(in oklch, var(--color-primary) 24%, var(--color-hairline));
+  border: 1px solid
+    color-mix(in oklch, var(--color-primary) 24%, var(--color-hairline));
   border-radius: var(--radius-card);
   background: var(--color-panel);
   box-shadow: var(--shadow-popover);
@@ -1884,7 +2054,9 @@ a {
   opacity: 0;
   pointer-events: none;
   transform: translateY(-2px);
-  transition: opacity 120ms ease-out, transform 120ms ease-out;
+  transition:
+    opacity 120ms ease-out,
+    transform 120ms ease-out;
 }
 
 .trace-help-popover strong {
@@ -1925,18 +2097,33 @@ a {
   min-height: var(--control-height);
   border: 1px solid var(--color-hairline);
   border-radius: var(--radius-pill);
-  background: color-mix(in oklch, var(--color-panel) 88%, var(--color-green) 12%);
+  background: color-mix(
+    in oklch,
+    var(--color-panel) 88%,
+    var(--color-green) 12%
+  );
   color: var(--color-primary-strong);
   padding: 0 14px;
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
-  transition: background 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out;
+  transition:
+    background 140ms ease-out,
+    border-color 140ms ease-out,
+    color 140ms ease-out;
 }
 
 .trace-live-button:hover {
-  border-color: color-mix(in oklch, var(--color-primary) 42%, var(--color-hairline));
-  background: color-mix(in oklch, var(--color-panel) 80%, var(--color-green) 20%);
+  border-color: color-mix(
+    in oklch,
+    var(--color-primary) 42%,
+    var(--color-hairline)
+  );
+  background: color-mix(
+    in oklch,
+    var(--color-panel) 80%,
+    var(--color-green) 20%
+  );
 }
 
 .trace-live-button.is-following {
@@ -2162,12 +2349,18 @@ a {
   font-size: 14px;
   font-weight: 600;
   line-height: 1;
-  transition: background-color 180ms ease-out, border-color 180ms ease-out, color 180ms ease-out, box-shadow 180ms ease-out;
+  transition:
+    background-color 180ms ease-out,
+    border-color 180ms ease-out,
+    color 180ms ease-out,
+    box-shadow 180ms ease-out;
 }
 
 .ui-button:focus-visible {
   outline: 0;
-  box-shadow: 0 0 0 2px var(--color-panel), 0 0 0 4px color-mix(in oklch, var(--color-primary) 42%, transparent);
+  box-shadow:
+    0 0 0 2px var(--color-panel),
+    0 0 0 4px color-mix(in oklch, var(--color-primary) 42%, transparent);
 }
 
 .ui-button-default {
@@ -2248,19 +2441,31 @@ a {
 }
 
 .ui-badge-info {
-  border-color: color-mix(in oklch, var(--color-blue) 22%, var(--color-hairline));
+  border-color: color-mix(
+    in oklch,
+    var(--color-blue) 22%,
+    var(--color-hairline)
+  );
   background: color-mix(in oklch, var(--color-blue) 14%, var(--color-panel));
   color: color-mix(in oklch, var(--color-blue) 78%, var(--color-ink));
 }
 
 .ui-badge-warning {
-  border-color: color-mix(in oklch, var(--color-warning) 24%, var(--color-hairline));
+  border-color: color-mix(
+    in oklch,
+    var(--color-warning) 24%,
+    var(--color-hairline)
+  );
   background: color-mix(in oklch, var(--color-warning) 15%, var(--color-panel));
   color: color-mix(in oklch, var(--color-warning) 78%, var(--color-ink));
 }
 
 .ui-badge-current {
-  border-color: color-mix(in oklch, var(--color-primary) 24%, var(--color-hairline));
+  border-color: color-mix(
+    in oklch,
+    var(--color-primary) 24%,
+    var(--color-hairline)
+  );
   background: color-mix(in oklch, var(--color-primary) 12%, var(--color-panel));
   color: var(--color-primary-strong);
 }
@@ -2341,12 +2546,17 @@ a {
   background: var(--color-panel);
   color: var(--color-primary);
   margin-top: 1px;
-  transition: background-color 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    box-shadow 150ms ease-out;
 }
 
 .ui-checkbox:focus-visible {
   outline: 0;
-  box-shadow: 0 0 0 2px var(--color-panel), 0 0 0 4px color-mix(in oklch, var(--color-primary) 42%, transparent);
+  box-shadow:
+    0 0 0 2px var(--color-panel),
+    0 0 0 4px color-mix(in oklch, var(--color-primary) 42%, transparent);
 }
 
 .ui-checkbox[data-state="checked"] {
@@ -2552,7 +2762,8 @@ a {
   column-gap: 8px;
   row-gap: 6px;
   align-items: baseline;
-  border-bottom: 1px solid color-mix(in oklch, var(--color-code-text) 12%, transparent);
+  border-bottom: 1px solid
+    color-mix(in oklch, var(--color-code-text) 12%, transparent);
   padding: 7px 10px 8px;
   color: var(--color-code-text);
   font-family: var(--font-mono);
@@ -2566,7 +2777,8 @@ a {
 
 .trace-compare-group {
   display: grid;
-  border-bottom: 1px solid color-mix(in oklch, var(--color-code-text) 12%, transparent);
+  border-bottom: 1px solid
+    color-mix(in oklch, var(--color-code-text) 12%, transparent);
 }
 
 .trace-compare-group:last-child {
@@ -2578,7 +2790,11 @@ a {
 }
 
 .trace-row-original {
-  background: color-mix(in oklch, var(--color-code-surface) 88%, var(--color-warning) 12%);
+  background: color-mix(
+    in oklch,
+    var(--color-code-surface) 88%,
+    var(--color-warning) 12%
+  );
 }
 
 .trace-row span,
@@ -2604,7 +2820,11 @@ a {
 }
 
 .trace-row.kind-ignored {
-  background: color-mix(in oklch, var(--color-code-surface) 90%, var(--color-warning) 10%);
+  background: color-mix(
+    in oklch,
+    var(--color-code-surface) 90%,
+    var(--color-warning) 10%
+  );
 }
 
 .trace-row p {
@@ -2637,7 +2857,8 @@ a {
   overflow: auto;
   max-height: 180px;
   margin: 0;
-  border-top: 1px solid color-mix(in oklch, var(--color-code-text) 10%, transparent);
+  border-top: 1px solid
+    color-mix(in oklch, var(--color-code-text) 10%, transparent);
   padding-top: 7px;
 }
 
@@ -2671,7 +2892,11 @@ a {
   min-width: 0;
   border: 1px solid color-mix(in oklch, var(--color-code-text) 12%, transparent);
   border-radius: 4px;
-  background: color-mix(in oklch, var(--color-code-surface) 86%, var(--color-green) 14%);
+  background: color-mix(
+    in oklch,
+    var(--color-code-surface) 86%,
+    var(--color-green) 14%
+  );
   padding: 4px 6px;
 }
 
@@ -2738,6 +2963,18 @@ a {
   grid-column: 1 / -1;
 }
 
+.fleet-loading-state {
+  justify-items: start;
+}
+
+.fleet-loading-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
 .firmware-page {
   display: grid;
   gap: 20px;
@@ -2799,11 +3036,18 @@ a {
 }
 
 .firmware-version-card {
-  transition: border-color 180ms ease-out, background-color 180ms ease-out, box-shadow 180ms ease-out;
+  transition:
+    border-color 180ms ease-out,
+    background-color 180ms ease-out,
+    box-shadow 180ms ease-out;
 }
 
 .firmware-version-card.is-current {
-  border-color: color-mix(in oklch, var(--color-primary) 28%, var(--color-hairline));
+  border-color: color-mix(
+    in oklch,
+    var(--color-primary) 28%,
+    var(--color-hairline)
+  );
   background: color-mix(in oklch, var(--color-panel) 88%, var(--color-primary));
 }
 
@@ -3685,7 +3929,6 @@ a {
     white-space: normal;
     overflow-wrap: anywhere;
   }
-
 }
 
 @media (max-width: 520px) {
@@ -3858,7 +4101,8 @@ a {
     z-index: 16;
     grid-template-columns: 1fr;
     gap: 8px;
-    border: 1px solid color-mix(in oklch, var(--color-primary) 42%, var(--color-hairline));
+    border: 1px solid
+      color-mix(in oklch, var(--color-primary) 42%, var(--color-hairline));
     border-radius: 12px;
     padding: 10px;
     background: var(--color-panel);

@@ -133,7 +133,25 @@ export type DeviceTarget = {
   alias: string;
   location: string;
   addedAt: string;
+  temporary?: boolean;
   transport?: "http" | "serial" | "devd";
+  preferredTransport?: "http" | "serial" | "devd";
+  rememberedChannels?: {
+    http?: {
+      baseUrl: string;
+      seenAt: string;
+      source?: "manual" | "devd_discovery";
+    };
+    devd?: {
+      baseUrl: string;
+      devdDeviceId?: string | null;
+      seenAt: string;
+      transport?: "usb" | "lan" | "mock";
+    };
+    serial?: {
+      seenAt: string;
+    };
+  };
   serialProtocol?: string;
   bridgeAuth?: boolean;
   mock?: boolean;
@@ -259,7 +277,13 @@ export type DevdDevice = {
   lan_address?: string | null;
   lan_conflict_addresses?: string[];
   transport: "native_serial" | "lan" | "mock";
-  binding: unknown | null;
+  binding: {
+    alias?: string | null;
+    stable_id: string;
+    port_path?: string | null;
+    created_at: string;
+    logical_device_id?: string | null;
+  } | null;
   connection: "disconnected" | "connected" | "busy" | "error";
   identity: Identity | null;
   status?: UpsStatus | null;

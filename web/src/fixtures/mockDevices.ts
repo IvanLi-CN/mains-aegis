@@ -41,6 +41,7 @@ function identity(deviceId: string, shortId: string, state: NetworkSummary["stat
       git_sha: "fea0b19",
       src_hash: shortId,
       git_dirty: "clean",
+      protocol: "mains-aegis.cdc.v1",
     },
     network,
     capabilities: {
@@ -804,9 +805,9 @@ export function makeMockDevdRecord(options: { baseUrl?: string; bound?: boolean 
   const baseUrl = options.baseUrl ?? "mock:devd";
   const bound = options.bound ?? true;
   const target: DeviceTarget = {
-    deviceId: bound ? "mains-aegis-devd-bridge" : "mains-aegis-devd-unbound",
+    deviceId: bound ? "mains-aegis-devd-service" : "mains-aegis-devd-unbound",
     baseUrl,
-    alias: bound ? "USB devd bridge" : "USB devd pending bind",
+    alias: bound ? "USB devd service" : "USB devd pending bind",
     location: "Bench USB",
     addedAt: now,
     transport: "devd",
@@ -815,8 +816,8 @@ export function makeMockDevdRecord(options: { baseUrl?: string; bound?: boolean 
   const identity = {
     ...mockDefinitions[0].identity,
       device_id: target.deviceId,
-      hostname: bound ? "mains-aegis-devd-bridge" : "mains-aegis-devd-unbound",
-      hostname_fqdn: `${bound ? "mains-aegis-devd-bridge" : "mains-aegis-devd-unbound"}.local`,
+      hostname: bound ? "mains-aegis-devd-service" : "mains-aegis-devd-unbound",
+      hostname_fqdn: `${bound ? "mains-aegis-devd-service" : "mains-aegis-devd-unbound"}.local`,
       short_id: bound ? "devd01" : "devd00",
       firmware: {
         ...mockDefinitions[0].identity.firmware,
@@ -838,8 +839,8 @@ export function makeMockDevdRecord(options: { baseUrl?: string; bound?: boolean 
   const network: NetworkSummary = {
     ...identity.network,
     device_id: target.deviceId,
-    hostname: bound ? "mains-aegis-devd-bridge" : "mains-aegis-devd-unbound",
-    hostname_fqdn: `${bound ? "mains-aegis-devd-bridge" : "mains-aegis-devd-unbound"}.local`,
+    hostname: bound ? "mains-aegis-devd-service" : "mains-aegis-devd-unbound",
+    hostname_fqdn: `${bound ? "mains-aegis-devd-service" : "mains-aegis-devd-unbound"}.local`,
     state: "connected",
     ipv4: "192.168.31.63",
     gateway: "192.168.31.1",

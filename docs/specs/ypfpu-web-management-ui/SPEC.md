@@ -2,13 +2,13 @@
 
 ## 状态
 
-- Status: 已完成（USB CDC safe-control follow-up, firmware flash addendum）
+- Status: 已完成（USB CDC safe-control follow-up, firmware flash addendum, hosted Connect semantics）
 - Created: 2026-04-28
-- Last: 2026-06-03
+- Last: 2026-06-07
 
 ## 接管说明
 
-- 本规格完成的是 Web 管理端 v1 基线，其中 LAN 仍按历史前提被视为只读状态源，Settings 只对 USB CDC / devd 控制路径开放。
+- 本规格完成的是 Web 管理端 v1 基线；当前 LAN 设置语义与 hosted Connect 收敛以 [`#k4vzn`](../k4vzn-lan-management-convergence/SPEC.md) 为准，本规格保留 UI foundation 与 USB / devd 会话约束的历史记录。
 - Web 无 devd 的 LAN 管理、LAN/USB logical device 收敛、`safeSettings` 废弃与新的 `connection / settings / trace` 信息架构，已转由 [`#k4vzn`](../k4vzn-lan-management-convergence/SPEC.md) 接管。
 - 本规格保留 Fleet、Connect、DeviceRegistry、USB CDC / Web Serial、firmware mismatch gate 等 v1 UI foundation 的历史记录。
 
@@ -16,7 +16,7 @@
 
 - `mains-aegis` 已具备设备侧只读 `v1` HTTP API、mDNS / DNS-SD 与 `/api/v1/status` SSE 底座，但缺少浏览器侧管理界面。
 - UPS 可能有多台硬件同时在线；单设备 Dashboard 不能作为唯一入口。
-- 管理界面必须优先支持多设备快速扫视；LAN HTTP/SSE 保持只读，USB CDC / Web Serial 作为首个受限写入通道，只允许安全设置与 WiFi 配网。
+- 管理界面必须优先支持多设备快速扫视；LAN 设备始终通过设备本体 HTTP API 连接，USB CDC / Web Serial 则承担本地可写 USB 会话，只允许安全设置与 WiFi 配网。
 
 ## 目标 / 非目标
 
@@ -29,7 +29,7 @@
 - 对接设备侧现有只读接口：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status` 和 status SSE。
 - 提供 mock fixtures 和正式路由 seed 场景，使无实机环境也能稳定预览、交互测试与截图验证。
 - 在现有 `web/` 管理台上新增 USB CDC / Web Serial 数据源，复用 `Identity`、`NetworkSummary`、`UpsStatus` 状态模型。
-- 使用 `mains-aegis-devd` 作为本地 USB 控制 owner；CLI 通过 IPC 访问，Web/App 通过显式 `bridge-http` 使用同一 USB CDC 安全控制面。
+- 使用 `mains-aegis-devd` 作为本地 USB 控制 owner；CLI 通过 IPC 访问，Web/App 通过显式 `serve-http` 使用同一 USB CDC 安全控制面。
 - 通过 USB CDC structured JSONL 协议支持握手、状态读取、结构化日志、安全设置与 WiFi 配网。
 - 首版写入范围限制为 WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别；PSK 不在 API、日志或 UI 中回显。
 
@@ -54,7 +54,7 @@
 
 ### 设备管理
 
-- `/connect` 支持 USB CDC / Web Serial 连接入口、`mains-aegis-devd` 入口，并保留手动添加 `.local` hostname、IP 或完整 URL 的 LAN 入口。
+- `/connect` 在独立浏览器 / Vite 开发场景支持 USB CDC / Web Serial、`mains-aegis-devd` 与手动 LAN 入口；在 hosted/self-hosted devd UI 中只保留 devd discovery，USB 设备通过 devd 接入，LAN 设备则按 devd 提供的地址直连硬件 HTTP API。
 - USB 连接入口必须显示浏览器支持状态、连接/断开状态、用户取消授权、串口不可用或已占用等错误。
 - devd 入口在发现多个 USB CDC candidates 时必须显示候选设备选择器；用户明确选择某个 devd device id 后才可创建控制 session。Web 不得基于已连接、已识别、第一个或最近使用自动替用户选择硬件。
 - 真实 USB `SerialPort` 不写入 localStorage；刷新页面后需要重新授权。mock USB 设备可用于视觉证据与无硬件验证。
@@ -100,13 +100,14 @@
 - host tools 位于 `tools/mains-aegis-host/`，使用 Rust 实现，并产出 `mains-aegis` CLI 与 `mains-aegis-devd`。
 - devd 通过 scan/list/bind/connect 管理设备；真实写入要求已连接且 identity 可用的 USB CDC 设备。
 - Web App 的 devd 入口先执行 devd scan；没有候选时显示无设备，单候选时可直接提交，多个候选时必须渲染选择器并等待用户选择。多设备场景不得自动选择，也不得要求用户拔掉其它设备作为常规工作流。
+- hosted/self-hosted devd UI 不再重复渲染 Web Serial 与手动 LAN fallback 面板；devd discovery 中的 LAN 候选连接后必须落为 direct HTTP record，而不是 `devd transport` record。
 - Web devd 控制必须由 devd Web lease 支撑。Web 创建 lease 后按 devd 返回的 `heartbeat_interval_ms` 续租；所有 WiFi config、settings、USB Console hydration 与 event stream 请求必须携带有效 lease。
 - Web 正常断开、移除设备或页面关闭时必须尽量优雅释放 lease：优先普通 `DELETE`，页面卸载时使用 keepalive request 或 `sendBeacon`。释放成功后 UI 移除 USB connected 标记，但保留同一设备的 LAN/WiFi 记录。
 - 网络抖动时 UI 不应立即误报断开：SSE 断开或单次 heartbeat 失败先进入 reconnecting / degraded 状态；只要在 devd TTL 内续租恢复，USB 标记保持。devd 返回 `web_session_expired` 后，UI 才移除 USB connected 标记并提示重新连接。
 - Web 不得在本地 localStorage 中持久化 devd lease；刷新页面后必须重新创建 lease，不能复用过期 session。
 - 连接硬件、保存 WiFi、清除 WiFi 与 settings 失败必须以气泡 callout 展示；成功反馈可以保留为低噪音 inline status。
 - devd 连接在创建 Web lease 并读取 identity 后必须执行同样的 firmware artifact 匹配门禁；不匹配时释放刚创建的 lease，不得继续占用 USB，除非用户显式忽略警告并重新发起连接。
-- devd 对 Web/App 暴露显式 localhost HTTP bridge：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、`/api/v1/settings`、WiFi config、settings endpoints，以及 Web Console 兼容 hydration；CLI 使用 IPC。
+- devd 对 Web/App 暴露显式 localhost HTTP service：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、`/api/v1/settings`、WiFi config、settings endpoints，以及 Web Console 兼容 hydration；CLI 使用 IPC。
 - Trace 查询返回 bounded tail logs/trace，默认 `logs_limit=200`、`trace_limit=600`，上限分别为 `500` 和 `2000`。
 - 同一 `identity.device_id` 通过 LAN 与 USB 同时发现时，Web App 合并为一条 `DeviceRecord`，并显示 WiFi/LAN 与 USB 两个连接标记。
 
@@ -224,16 +225,16 @@
 
 ![Battery cell and MOS evidence](./assets/device-battery-cell-mos.png)
 
-- source_type: mock_ui
+- source_type: target_app_window
   demo_entry_or_title: `/connect`
-  requested_viewport: `1440x1000`
-  viewport_strategy: `devtools-emulate`
-  capture_scope: `browser-viewport`
-  target_program: `mock-only`
-  scenario: devd local USB control connect
-  evidence_note: 验证 `/connect` 同屏提供 USB CDC / Web Serial、mains-aegis-devd 本地控制面与 LAN 入口，旧本地桥接入口不再出现，并在已保存设备列表中显示同一设备的 WiFi / USB 连接标记。
+  requested_viewport: `browser-default`
+  viewport_strategy: `element-screenshot`
+  capture_scope: `element`
+  target_program: `mains-aegis-web Vite preview backed by live mains-aegis-devd records`
+  scenario: hosted add-device records flow
+  evidence_note: 验证 `/connect` 已收口为 `Add device` 页面，顶部说明聚焦“添加新设备 / 绑定新 USB / 添加 LAN endpoint”，同时展示实时 devd device records，不再使用旧 `Connect` 语义。
 
-![devd connect evidence](./assets/devd-connect-entry.png)
+![Hosted add-device records evidence](./assets/add-device-devd-records-hosted.png)
 
 - source_type: storybook_canvas
   story_id_or_title: `UPS Management/Connect/Firmware mismatch warning`
@@ -246,16 +247,27 @@
 
 ![Storybook firmware mismatch warning](./assets/storybook-firmware-mismatch-warning.png)
 
-- source_type: mock_ui
-  demo_entry_or_title: `/?seed=dual`
-  requested_viewport: `1440x1100`
-  viewport_strategy: `devtools-emulate`
-  capture_scope: `browser-viewport`
-  target_program: `mock-only`
-  scenario: merged LAN and USB device record
-  evidence_note: 验证同一 `identity.device_id` 同时通过 LAN/WiFi 与 USB 发现时 Fleet 仍只显示一张设备卡，并同时展示 `WiFi` 与 `USB` 连接标记。
+- source_type: target_app_window
+  demo_entry_or_title: `/`
+  requested_viewport: `browser-default`
+  viewport_strategy: `element-screenshot`
+  capture_scope: `element`
+  target_program: `mains-aegis-web Vite preview backed by live mains-aegis-devd records`
+  scenario: hosted fleet records overview
+  evidence_note: 验证 Fleet 首屏直接展示当前 devd records；未保存设备仍以 `devd record` 标记出现，卡片只保留单一 `Open` 入口，不再出现旧的 connect 分流按钮。
 
-![Merged WiFi and USB fleet evidence](./assets/devd-fleet-dual-connection.png)
+![Hosted fleet devd records evidence](./assets/fleet-devd-records-hosted.png)
+
+- source_type: target_app_window
+  demo_entry_or_title: `/devices/mains-aegis-198840`
+  requested_viewport: `browser-default`
+  viewport_strategy: `element-screenshot`
+  capture_scope: `element`
+  target_program: `mains-aegis-web Vite preview backed by live mains-aegis-devd records`
+  scenario: hosted temporary record hydration
+  evidence_note: 验证从 devd record 直接打开未添加设备详情页后，Overview 会完成只读 hydration，并把 `DATA` 状态翻到 `Live data`，页面不再停留在全 `--` 的空壳状态。
+
+![Hosted device overview live-data evidence](./assets/device-overview-live-data-hosted.png)
 
 - source_type: mock_ui
   demo_entry_or_title: `/devices/mains-aegis-usb-demo/settings`
@@ -335,7 +347,7 @@
 ![Firmware flash mobile evidence](./assets/firmware-flash-mobile.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/devices/mains-aegis-devd-bridge/firmware?seed=usb`
+  demo_entry_or_title: `/devices/mains-aegis-devd-service/firmware?seed=usb`
   requested_viewport: `390x844`
   viewport_strategy: `devtools-emulate`
   capture_scope: `browser-viewport`
