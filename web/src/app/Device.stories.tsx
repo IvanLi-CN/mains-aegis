@@ -80,3 +80,50 @@ export const ApiDebug: Story = {
     await expect(await canvas.findByText(/battery_protection/)).toBeInTheDocument();
   },
 };
+
+export const PowerDetail: Story = {
+  name: "Power detail",
+  render: () => renderApp("/devices/mains-aegis-a1b2c3/power", "power-headroom"),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("Input")).toBeInTheDocument();
+    await expect(await canvas.findByText("Pressure")).toBeInTheDocument();
+    await expect(await canvas.findByText("Policy target")).toBeInTheDocument();
+    await expect(await canvas.findByText("Limit reason")).toBeInTheDocument();
+    await expect(await canvas.findByText("headroom")).toBeInTheDocument();
+    await expect(await canvas.findByText("500 mA")).toBeInTheDocument();
+  },
+};
+
+export const PowerWatch: Story = {
+  name: "Power watch",
+  render: () => renderApp("/devices/mains-aegis-a1b2c3/power", "power-watch"),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("watch")).toBeInTheDocument();
+    await expect(await canvas.findByText("vin_drop_watch")).toBeInTheDocument();
+    await expect(await canvas.findByText("300 mA")).toBeInTheDocument();
+  },
+};
+
+export const PowerLimited: Story = {
+  name: "Power limited",
+  render: () => renderApp("/devices/mains-aegis-a1b2c3/power", "power-limited"),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("limited")).toBeInTheDocument();
+    await expect(await canvas.findByText("pressure_vindpm")).toBeInTheDocument();
+    await expect(await canvas.findByText("100 mA")).toBeInTheDocument();
+  },
+};
+
+export const PowerCooldown: Story = {
+  name: "Power cooldown",
+  render: () => renderApp("/devices/mains-aegis-a1b2c3/power", "power-cooldown"),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("cooldown")).toBeInTheDocument();
+    await expect(await canvas.findByText("cooldown_retry_wait")).toBeInTheDocument();
+    await expect(await canvas.findByText("0 mA")).toBeInTheDocument();
+  },
+};

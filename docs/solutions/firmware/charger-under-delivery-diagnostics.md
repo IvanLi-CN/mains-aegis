@@ -44,6 +44,7 @@ In this project another concrete failure mode was a BQ25792 register byte-order 
 - Decode `REG03/REG06` readback from the same bytes the device stores, not from the software value returned by the setter. If readback shows byte-swapped values such as `0x6400` or `0x2c00`, fix the register transfer order before chasing external power limits.
 - Decode and log BQ25792 `REG08` alongside low-voltage recovery. The expected Mains Aegis baseline is `VBAT_LOWV=71.4%` and `IPRECHG=120mA`; `power-diag` reports this as `charger.vbat_lowv_pct_x10=714` and `charger.iprechg_ma=120`.
 - Classify input-DPM under-delivery distinctly, for example `reason=charge_under_target_input_dpm`.
+- When the input source is `dcin`, do not rely on charger-side `IBUS` alone as the overload truth source. Use the board main input telemetry (`UPS VIN / INA3221 CH3`) to derive pressure, then surface the resulting `pressure_state / pressure_reason / limit_reason / policy_target_ichg_ma` through status and trace so CLI/Web can explain why current was reduced or charge was paused.
 - Mirror the diagnostic and manual `START/STOP` events to the plain serial monitor when the field workflow does not decode defmt, and rate-limit sustained under-delivery output so live monitoring remains readable.
 
 ## Guardrails / Reuse Notes

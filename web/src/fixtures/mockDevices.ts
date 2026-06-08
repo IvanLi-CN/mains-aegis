@@ -8,9 +8,30 @@ type MockDefinition = {
   connectionState: DeviceRecord["connectionState"];
 };
 
-export type DemoSeed = "default" | "dual" | "empty" | "offline" | "large" | "usb";
+export type DemoSeed =
+  | "default"
+  | "dual"
+  | "empty"
+  | "offline"
+  | "large"
+  | "usb"
+  | "power-headroom"
+  | "power-watch"
+  | "power-limited"
+  | "power-cooldown";
 
-const demoSeedIds: DemoSeed[] = ["default", "dual", "empty", "offline", "large", "usb"];
+const demoSeedIds: DemoSeed[] = [
+  "default",
+  "dual",
+  "empty",
+  "offline",
+  "large",
+  "usb",
+  "power-headroom",
+  "power-watch",
+  "power-limited",
+  "power-cooldown",
+];
 const now = "2026-04-28T00:00:00.000Z";
 
 function identity(deviceId: string, shortId: string, state: NetworkSummary["state"], ipv4: string | null): Identity {
@@ -61,11 +82,17 @@ function status(
   return {
     mode,
     input: {
+      source: "dcin",
       mains_present: mode !== "backup",
       input_vbus_mv: mode === "backup" ? 0 : 19240,
       input_ibus_ma: mode === "backup" ? 0 : 1180,
       vin_vbus_mv: mode === "backup" ? 0 : 19240,
       vin_iin_ma: mode === "backup" ? 0 : 1180,
+      pressure_state: "headroom",
+      pressure_score_pct: 8,
+      pressure_reason: "none",
+      vin_baseline_mv: mode === "backup" ? 0 : 19400,
+      vin_drop_mv: mode === "backup" ? 0 : 120,
     },
     output: {
       requested: "both",
@@ -91,6 +118,10 @@ function status(
       ichg_ma: mode === "backup" ? 0 : 520,
       ibat_ma: mode === "backup" ? -260 : 510,
       vbat_present: true,
+      policy_target_ichg_ma: mode === "backup" ? 0 : 500,
+      limit_active: false,
+      limit_reason: "none",
+      detail_status: mode === "backup" ? "WAIT" : "CHG500",
     },
     battery: {
       state: soc !== null && soc < 25 ? "warning" : "ok",
@@ -127,6 +158,47 @@ function status(
     },
     ...overrides,
   };
+}
+
+function powerStatusVariant(
+  pressureState: NonNullable<UpsStatus["input"]["pressure_state"]>,
+  pressureScorePct: number,
+  pressureReason: NonNullable<UpsStatus["input"]["pressure_reason"]>,
+  detailStatus: NonNullable<UpsStatus["charger"]["detail_status"]>,
+  limitReason: NonNullable<UpsStatus["charger"]["limit_reason"]>,
+  policyTargetIchgMa: number,
+  chargerIchgMa: number,
+  vinVbusMv: number,
+  vinBaselineMv: number,
+): UpsStatus {
+  const vinDropMv = Math.max(0, vinBaselineMv - vinVbusMv);
+  const limitActive = limitReason !== "none";
+  return status("standby", 67, {
+    input: {
+      source: "dcin",
+      mains_present: true,
+      input_vbus_mv: vinVbusMv,
+      input_ibus_ma: pressureState === "limited" ? 3280 : pressureState === "cooldown" ? 3020 : 1260,
+      vin_vbus_mv: vinVbusMv,
+      vin_iin_ma: pressureState === "limited" ? 3280 : pressureState === "cooldown" ? 3020 : 1260,
+      pressure_state: pressureState,
+      pressure_score_pct: pressureScorePct,
+      pressure_reason: pressureReason,
+      vin_baseline_mv: vinBaselineMv,
+      vin_drop_mv: vinDropMv,
+    },
+    charger: {
+      state: policyTargetIchgMa > 0 ? "ok" : "idle",
+      allow_charge: pressureState !== "cooldown",
+      ichg_ma: chargerIchgMa,
+      ibat_ma: policyTargetIchgMa > 0 ? chargerIchgMa : 0,
+      vbat_present: true,
+      policy_target_ichg_ma: policyTargetIchgMa,
+      limit_active: limitActive,
+      limit_reason: limitReason,
+      detail_status: detailStatus,
+    },
+  });
 }
 
 export const mockDefinitions: MockDefinition[] = [
@@ -203,6 +275,59 @@ export const mockDefinitions: MockDefinition[] = [
       network: { state: "error", ipv4: null, last_error: "link_lost" },
     }),
     connectionState: "offline",
+  },
+];
+
+const powerMockDefinitions: MockDefinition[] = [
+  {
+    ...mockDefinitions[0],
+    target: { ...mockDefinitions[0].target, baseUrl: "mock:power-headroom" },
+    status: powerStatusVariant("headroom", 8, "none", "CHG500", "none", 500, 500, 19_420, 19_480),
+  },
+  {
+    ...mockDefinitions[0],
+    target: { ...mockDefinitions[0].target, baseUrl: "mock:power-watch" },
+    status: powerStatusVariant(
+      "watch",
+      36,
+      "vin_drop_watch",
+      "HOLD10",
+      "recovery_hold",
+      300,
+      300,
+      18_880,
+      19_480,
+    ),
+  },
+  {
+    ...mockDefinitions[0],
+    target: { ...mockDefinitions[0].target, baseUrl: "mock:power-limited" },
+    status: powerStatusVariant(
+      "limited",
+      84,
+      "vindpm",
+      "CHG100",
+      "pressure_vindpm",
+      100,
+      100,
+      18_620,
+      19_480,
+    ),
+  },
+  {
+    ...mockDefinitions[0],
+    target: { ...mockDefinitions[0].target, baseUrl: "mock:power-cooldown" },
+    status: powerStatusVariant(
+      "cooldown",
+      100,
+      "cooldown",
+      "WAIT30",
+      "cooldown_retry_wait",
+      0,
+      0,
+      18_480,
+      19_480,
+    ),
   },
 ];
 
@@ -301,6 +426,38 @@ export function makeMockRecords(seed: DemoSeed = "default"): DeviceRecord[] {
     ];
   }
   if (seed === "large") return largeMockDefinitions.map((definition) => recordFromDefinition(definition));
+  if (seed === "power-headroom") {
+    return [
+      recordFromDefinition(powerMockDefinitions[0]),
+      ...mockDefinitions
+        .slice(1)
+        .map((definition) => recordFromDefinition(definition)),
+    ];
+  }
+  if (seed === "power-watch") {
+    return [
+      recordFromDefinition(powerMockDefinitions[1]),
+      ...mockDefinitions
+        .slice(1)
+        .map((definition) => recordFromDefinition(definition)),
+    ];
+  }
+  if (seed === "power-limited") {
+    return [
+      recordFromDefinition(powerMockDefinitions[2]),
+      ...mockDefinitions
+        .slice(1)
+        .map((definition) => recordFromDefinition(definition)),
+    ];
+  }
+  if (seed === "power-cooldown") {
+    return [
+      recordFromDefinition(powerMockDefinitions[3]),
+      ...mockDefinitions
+        .slice(1)
+        .map((definition) => recordFromDefinition(definition)),
+    ];
+  }
   if (seed === "offline") {
     return mockDefinitions.map((definition) => ({
       ...recordFromDefinition(definition),
@@ -901,7 +1058,7 @@ function defaultMockDeviceSettings(): DeviceSettings {
 }
 
 function findMock(baseUrl: string): MockDefinition {
-  const match = [...mockDefinitions, ...largeMockDefinitions].find((definition) => definition.target.baseUrl === baseUrl);
+  const match = [...mockDefinitions, ...powerMockDefinitions, ...largeMockDefinitions].find((definition) => definition.target.baseUrl === baseUrl);
   if (!match) throw new Error(`unknown mock device: ${baseUrl}`);
   return match;
 }
