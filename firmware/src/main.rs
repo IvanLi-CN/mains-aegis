@@ -26,7 +26,7 @@ use embassy_futures::yield_now;
 use embassy_time::Timer;
 use embedded_hal_bus::i2c::RefCellDevice;
 use esp_backtrace as _;
-use esp_firmware::audio::{AudioCue, AudioManager, PLAYBACK_SAMPLE_RATE_HZ};
+use esp_firmware::audio::{AudioCue, AudioManager, AudioRoute, PLAYBACK_SAMPLE_RATE_HZ};
 use esp_firmware::usb_pd::UsbPdSinkManager;
 #[cfg(feature = "web_serial")]
 use esp_firmware::{
@@ -1656,6 +1656,16 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     front_panel::UiAction::ManualCharge(action) => {
                         power.request_manual_charge_action(action);
                     }
+                    front_panel::UiAction::BeeperPreview { prefs, target } => {
+                        audio_manager
+                            .set_action_volume_step(beeper_volume_step(prefs.action_volume));
+                        audio_manager
+                            .set_system_volume_step(beeper_volume_step(prefs.system_volume));
+                        audio_manager.trigger_volume_preview(match target {
+                            front_panel_scene::BeeperSettingTarget::Action => AudioRoute::Action,
+                            front_panel_scene::BeeperSettingTarget::System => AudioRoute::System,
+                        });
+                    }
                     front_panel::UiAction::ClearBmsActivationResult => {
                         power.clear_bms_activation_state();
                         front_panel.update_bms_activation_state(power.bms_activation_state());
@@ -1949,6 +1959,10 @@ const fn manual_charge_speed_api_value(
         front_panel_scene::ManualChargeSpeed::Ma500 => "ma_500",
         front_panel_scene::ManualChargeSpeed::Ma1000 => "ma_1000",
     }
+}
+
+const fn beeper_volume_step(level: front_panel_scene::BeeperVolumeLevel) -> u8 {
+    level.step()
 }
 
 #[cfg(feature = "web_serial")]

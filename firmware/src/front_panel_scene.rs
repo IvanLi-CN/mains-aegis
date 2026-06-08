@@ -368,6 +368,41 @@ impl DashboardHomeFocus {
             Self::BatteryFlow => "DISCHG",
         }
     }
+
+    pub const fn up(self) -> Self {
+        match self {
+            Self::Output | Self::Cells => self,
+            Self::Thermal => Self::Output,
+            Self::Charger => Self::Cells,
+            Self::BatteryFlow => Self::Charger,
+        }
+    }
+
+    pub const fn down(self) -> Self {
+        match self {
+            Self::Output => Self::Thermal,
+            Self::Thermal | Self::BatteryFlow => self,
+            Self::Cells => Self::Charger,
+            Self::Charger => Self::BatteryFlow,
+        }
+    }
+
+    pub const fn left(self) -> Self {
+        match self {
+            Self::Output | Self::Thermal => self,
+            Self::Cells => Self::Output,
+            Self::Charger | Self::BatteryFlow => Self::Thermal,
+        }
+    }
+
+    pub const fn right(self) -> Self {
+        match self {
+            Self::Output => Self::Cells,
+            Self::Thermal => Self::BatteryFlow,
+            Self::Cells | Self::BatteryFlow => self,
+            Self::Charger => Self::BatteryFlow,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -397,6 +432,20 @@ impl MenuItem {
         match self {
             Self::Dashboard => "DASHBOARD",
             Self::Beeper => "AUDIO",
+        }
+    }
+
+    pub const fn previous(self) -> Self {
+        match self {
+            Self::Dashboard => Self::Beeper,
+            Self::Beeper => Self::Dashboard,
+        }
+    }
+
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Dashboard => Self::Beeper,
+            Self::Beeper => Self::Dashboard,
         }
     }
 }
@@ -489,6 +538,38 @@ impl BeeperVolumeLevel {
             Self::L6 => "6",
         }
     }
+
+    pub const fn step(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::L1 => 1,
+            Self::L2 => 2,
+            Self::L3 => 3,
+            Self::L4 => 4,
+            Self::L5 => 5,
+            Self::L6 => 6,
+        }
+    }
+
+    pub const fn from_step(step: u8) -> Self {
+        match step {
+            0 => Self::Off,
+            1 => Self::L1,
+            2 => Self::L2,
+            3 => Self::L3,
+            4 => Self::L4,
+            5 => Self::L5,
+            _ => Self::L6,
+        }
+    }
+
+    pub const fn decrease(self) -> Self {
+        Self::from_step(self.step().saturating_sub(1))
+    }
+
+    pub const fn increase(self) -> Self {
+        Self::from_step(self.step().saturating_add(1))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -541,6 +622,34 @@ impl BeeperPrefs {
             BeeperSettingTarget::Action => self.action_volume,
             BeeperSettingTarget::System => self.system_volume,
         }
+    }
+
+    pub const fn selected_volume(self) -> BeeperVolumeLevel {
+        self.volume_for(self.selected_target)
+    }
+
+    pub const fn with_selected_target(self, target: BeeperSettingTarget) -> Self {
+        Self {
+            selected_target: target,
+            ..self
+        }
+    }
+
+    pub const fn with_volume(self, target: BeeperSettingTarget, level: BeeperVolumeLevel) -> Self {
+        match target {
+            BeeperSettingTarget::Action => Self {
+                action_volume: level,
+                ..self
+            },
+            BeeperSettingTarget::System => Self {
+                system_volume: level,
+                ..self
+            },
+        }
+    }
+
+    pub const fn with_selected_volume(self, level: BeeperVolumeLevel) -> Self {
+        self.with_volume(self.selected_target, level)
     }
 }
 
@@ -1816,6 +1925,17 @@ pub const fn dashboard_route_for_target(target: DashboardTouchTarget) -> Dashboa
         | DashboardTouchTarget::ManualTimer6h
         | DashboardTouchTarget::ManualStart
         | DashboardTouchTarget::ManualStop => DashboardRoute::ManualCharge,
+    }
+}
+
+#[allow(dead_code)]
+pub const fn dashboard_route_for_home_focus(focus: DashboardHomeFocus) -> DashboardRoute {
+    match focus {
+        DashboardHomeFocus::Output => DashboardRoute::Detail(DashboardDetailPage::Output),
+        DashboardHomeFocus::Thermal => DashboardRoute::Detail(DashboardDetailPage::Thermal),
+        DashboardHomeFocus::Cells => DashboardRoute::Detail(DashboardDetailPage::Cells),
+        DashboardHomeFocus::Charger => DashboardRoute::Detail(DashboardDetailPage::Charger),
+        DashboardHomeFocus::BatteryFlow => DashboardRoute::Detail(DashboardDetailPage::BatteryFlow),
     }
 }
 

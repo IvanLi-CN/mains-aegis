@@ -109,6 +109,12 @@
 - `one_shot`：`boot_startup`、市电恢复、充电开始/完成
 - `interval_loop(2000ms)`：市电丢失、高压力、低电（按市电有无拆分）
 - `continuous_loop`：保护、过压/过流、模块故障、电池保护
+- `Dashboard/Menu/AUDIO`：`ACTION` 与 `SYSTEM` 两组音量都走共享刻度 `0..6` 的独立 gain LUT；`LEFT/RIGHT` 调档时立即播放内部 preview tone，试听不复用业务/告警 cue 资产
+
+当前 route 语义：
+
+- `SYSTEM`：主固件运行时的状态/告警/错误 cue 默认都走这一路
+- `ACTION`：当前保留给用户主动触发的试听/交互提示音；本轮先落地前面板音量调节试听，未引入持久化
 
 `shutdown_mode_entered` 与 `io_over_power` 继续保留素材定义，但主固件本轮不触发，等待真实状态源后再接入。
 

@@ -165,6 +165,7 @@ bash scripts/run-host-unit-tests.sh
 - 运行时资产：`firmware/assets/audio/test-fw-cues/*.wav`
 - 调度语义：`Boot/Status=one_shot`、`Warning=interval_loop(2000ms)`、`Error=continuous_loop`
 - 优先级：`Error > Warning > Status > Boot`
+- `Dashboard -> Menu -> AUDIO`：可分别调 `ACTION / SYSTEM` 运行时增益；`LEFT/RIGHT` 调档时立即播放独立 preview tone，当前为 session-local，不持久化
 
 当前主固件会接入以下运行时 cue：
 

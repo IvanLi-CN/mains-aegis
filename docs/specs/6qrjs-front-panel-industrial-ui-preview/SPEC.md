@@ -303,6 +303,7 @@ None
 - 2026-06-07: 新增 dashboard/menu 纵向 stack、menu icon rail 与 beeper volume setting 的 preview gate 资产；在主人确认预览前不推进运行态导航与音量持久化实现。
 - 2026-06-08: 将 `AUDIO` 设置页升级为 `ACTION / SYSTEM` 双分组布局，冻结共享刻度、双轨道与分组高亮的预览口径。
 - 2026-06-08: 将 `AUDIO` 设置页静音档词形收敛为“共享刻度 `0`、右侧 value badge `OFF`”，避免上方刻度与右侧读数语义混淆。
+- 2026-06-08: 主人确认 `ACTION / SYSTEM` 双分组预览口径后，运行态导航与试听接线已转入 `#h43mk`；本规格继续只保留视觉基线。
 
 ## 参考（References）
 

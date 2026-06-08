@@ -31,11 +31,11 @@
 | g2kte | Dashboard live after self-check | 已完成 | `g2kte-dashboard-live-after-self-check/SPEC.md` | 2026-03-15 | 主固件改为“自检完成后自动进入 Dashboard”，并把 live Dashboard 的市电真相源统一到 `DC5025 VIN>=3V`；同时补齐 `PIN W` 的输入 ADC 样本净化与异常日志，避免 `~1000W` 误显 |
 | f3c2g | Dashboard detail drill-down | 已完成 | `f3c2g-dashboard-detail-drilldown/SPEC.md` | 2026-04-09 | 首页 5 区点击进入二级仪表盘；`Cells` 新增唯一 `BMS DETAIL` 子页，已补齐高级 BMS 状态 UI、预览图与 spec 视觉证据 |
 | 4t9wx | Install UI UX Pro Max skill（Codex） | 已完成 | `4t9wx-install-ui-ux-pro-max-skill/SPEC.md` | 2026-03-02 | 项目内安装并入库；修正 `.codex` 脚本路径与 pycache 忽略 |
-| 6qrjs | Front panel industrial UI preview（320x172） | 重新设计（#7n4qd） | `6qrjs-front-panel-industrial-ui-preview/SPEC.md` | 2026-06-08 | 视觉基线保留；dashboard/menu/audio preview gate 已升级为 `ACTION / SYSTEM` 双分组设置口径，自检页运行语义仍由 #7n4qd 承载 |
+| 6qrjs | Front panel industrial UI preview（320x172） | 重新设计（#7n4qd） | `6qrjs-front-panel-industrial-ui-preview/SPEC.md` | 2026-06-08 | 视觉基线保留；dashboard/menu/audio 的 `ACTION / SYSTEM` 预览口径已冻结，运行态试听接线转入 #h43mk，自检页运行语义仍由 #7n4qd 承载 |
 | 7n4qd | MCU self-check live panel (resident Variant C) | 重新设计（#g2kte） | `7n4qd-mcu-self-check-live-panel/SPEC.md` | 2026-03-15 | 开机自检实时化能力保留，但默认 steady-state 页面已由 #g2kte 改为真实 Dashboard |
 | 958aj | Standalone display diagnostic firmware | 重新设计（#uwt77） | `958aj-standalone-display-diag-firmware/SPEC.md` | 2026-03-05 | 已被 feature 驱动 `test-fw` 方案替代 |
 | uwt77 | Test firmware navigation + audio priority | 已完成 | `uwt77-test-fw-audio-navigation/SPEC.md` | 2026-03-05 | `test-fw` 已替换 display-diag；功能导航与音频优先级协调已验收 |
-| h43mk | Main firmware runtime audio cues | 已完成 | `h43mk-main-firmware-runtime-audio-cues/SPEC.md` | 2026-04-04 | 主固件已补齐 runtime DMA underrun burst 恢复与止损策略；idle 板卡的周期性滴声按 transport 级 `Late` 回归收敛 |
+| h43mk | Main firmware runtime audio cues | 已完成 | `h43mk-main-firmware-runtime-audio-cues/SPEC.md` | 2026-06-08 | 主固件已把 dashboard/audio 的 `ACTION / SYSTEM` 分组 gain 与独立 preview tone 接入运行时；runtime DMA underrun 收敛策略保持不变 |
 | hg3dw | Front panel visual language systematization | 已完成 | `hg3dw-front-panel-visual-language/SPEC.md` | 2026-03-02 | 建立 Token/组件契约/视觉回归清单，补充 bitmap 字体字高白名单与预览图 |
 | mecb8 | Status/warning/error speaker cues preview assets | 已完成 | `mecb8-audio-cues-preview/SPEC.md` | 2026-03-05 | 15 组提示音试听资产（score + mid + wav）与增强预览页 |
 | xy6cz | Front panel refresh pipeline | 部分完成（4/5） | `xy6cz-front-panel-refresh-pipeline/SPEC.md` | 2026-03-15 | PR #41 已创建；已完成 PSRAM 双缓冲、dirty-band framebuffer 与 SPI DMA 主路径，等待 review-loop / 40MHz 联调结论回填 |

@@ -361,34 +361,47 @@ fn map_audio_ui_state(
     front_panel_scene::AudioTestUiState {
         playing: status.playing,
         queued: status.queued,
-        current: status.current.map(|cue| match cue {
-            test_audio::AudioCue::BootStartup => front_panel_scene::AudioEventUi::BootStartup,
-            test_audio::AudioCue::MainsPresentDc => front_panel_scene::AudioEventUi::MainsPresentDc,
-            test_audio::AudioCue::ChargeStarted => front_panel_scene::AudioEventUi::ChargeStarted,
-            test_audio::AudioCue::ChargeCompleted => {
-                front_panel_scene::AudioEventUi::ChargeCompleted
-            }
-            test_audio::AudioCue::ShutdownModeEntered => {
-                front_panel_scene::AudioEventUi::ShutdownModeEntered
-            }
-            test_audio::AudioCue::MainsAbsentDc => front_panel_scene::AudioEventUi::MainsAbsentDc,
-            test_audio::AudioCue::HighStress => front_panel_scene::AudioEventUi::HighStress,
-            test_audio::AudioCue::BatteryLowNoMains => {
-                front_panel_scene::AudioEventUi::BatteryLowNoMains
-            }
-            test_audio::AudioCue::BatteryLowWithMains => {
-                front_panel_scene::AudioEventUi::BatteryLowWithMains
-            }
-            test_audio::AudioCue::ShutdownProtection => {
-                front_panel_scene::AudioEventUi::ShutdownProtection
-            }
-            test_audio::AudioCue::IoOverVoltage => front_panel_scene::AudioEventUi::IoOverVoltage,
-            test_audio::AudioCue::IoOverCurrent => front_panel_scene::AudioEventUi::IoOverCurrent,
-            test_audio::AudioCue::IoOverPower => front_panel_scene::AudioEventUi::IoOverPower,
-            test_audio::AudioCue::ModuleFault => front_panel_scene::AudioEventUi::ModuleFault,
-            test_audio::AudioCue::BatteryProtection => {
-                front_panel_scene::AudioEventUi::BatteryProtection
-            }
+        current: status.current.and_then(|cue| {
+            Some(match cue {
+                test_audio::AudioCue::BootStartup => front_panel_scene::AudioEventUi::BootStartup,
+                test_audio::AudioCue::MainsPresentDc => {
+                    front_panel_scene::AudioEventUi::MainsPresentDc
+                }
+                test_audio::AudioCue::ChargeStarted => {
+                    front_panel_scene::AudioEventUi::ChargeStarted
+                }
+                test_audio::AudioCue::ChargeCompleted => {
+                    front_panel_scene::AudioEventUi::ChargeCompleted
+                }
+                test_audio::AudioCue::ShutdownModeEntered => {
+                    front_panel_scene::AudioEventUi::ShutdownModeEntered
+                }
+                test_audio::AudioCue::MainsAbsentDc => {
+                    front_panel_scene::AudioEventUi::MainsAbsentDc
+                }
+                test_audio::AudioCue::HighStress => front_panel_scene::AudioEventUi::HighStress,
+                test_audio::AudioCue::BatteryLowNoMains => {
+                    front_panel_scene::AudioEventUi::BatteryLowNoMains
+                }
+                test_audio::AudioCue::BatteryLowWithMains => {
+                    front_panel_scene::AudioEventUi::BatteryLowWithMains
+                }
+                test_audio::AudioCue::ShutdownProtection => {
+                    front_panel_scene::AudioEventUi::ShutdownProtection
+                }
+                test_audio::AudioCue::IoOverVoltage => {
+                    front_panel_scene::AudioEventUi::IoOverVoltage
+                }
+                test_audio::AudioCue::IoOverCurrent => {
+                    front_panel_scene::AudioEventUi::IoOverCurrent
+                }
+                test_audio::AudioCue::IoOverPower => front_panel_scene::AudioEventUi::IoOverPower,
+                test_audio::AudioCue::ModuleFault => front_panel_scene::AudioEventUi::ModuleFault,
+                test_audio::AudioCue::BatteryProtection => {
+                    front_panel_scene::AudioEventUi::BatteryProtection
+                }
+                test_audio::AudioCue::VolumePreview => return None,
+            })
         }),
         selected_idx: harness.audio_selected_index() as u8,
         list_top: harness.audio_list_top() as u8,
@@ -421,6 +434,7 @@ fn audio_event_name(event: Option<test_audio::AudioCue>) -> &'static str {
         Some(test_audio::AudioCue::IoOverPower) => "io_over_power",
         Some(test_audio::AudioCue::ModuleFault) => "module_fault",
         Some(test_audio::AudioCue::BatteryProtection) => "battery_protection",
+        Some(test_audio::AudioCue::VolumePreview) => "volume_preview",
         None => "none",
     }
 }
