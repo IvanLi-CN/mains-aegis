@@ -597,6 +597,15 @@ impl Default for AudioManager {
 mod tests {
     use super::*;
 
+    fn decode_left_samples(buf: &[u8]) -> heapless::Vec<i16, 16> {
+        let mut samples = heapless::Vec::new();
+        for frame in buf.chunks_exact(4) {
+            let sample = i16::from_le_bytes([frame[0], frame[1]]);
+            samples.push(sample).expect("sample buffer must have room");
+        }
+        samples
+    }
+
     fn drain_current(manager: &mut AudioManager) {
         let mut buf = [0u8; 512];
         let mut attempts = 0usize;
@@ -695,6 +704,44 @@ mod tests {
         assert!(request.preview);
         assert_eq!(request.priority, AudioPriority::Preview);
         assert_eq!(playback_mode_for_cue(request.cue), CuePlaybackMode::OneShot);
+    }
+
+    #[test]
+    fn action_preview_uses_action_gain() {
+        let mut manager = AudioManager::new();
+        manager.set_action_volume_step(0);
+        manager.set_system_volume_step(6);
+        manager.trigger_volume_preview(AudioRoute::Action);
+
+        let status = manager.status();
+        assert_eq!(status.current, Some(AudioCue::VolumePreview));
+        assert_eq!(status.current_route, Some(AudioRoute::Action));
+        assert!(status.previewing);
+
+        let mut buf = [0u8; 32];
+        let filled = manager.fill(&mut buf);
+        assert_eq!(filled, buf.len());
+        let samples = decode_left_samples(&buf);
+        assert!(samples.iter().all(|sample| *sample == 0));
+    }
+
+    #[test]
+    fn system_preview_uses_system_gain() {
+        let mut manager = AudioManager::new();
+        manager.set_action_volume_step(0);
+        manager.set_system_volume_step(6);
+        manager.trigger_volume_preview(AudioRoute::System);
+
+        let status = manager.status();
+        assert_eq!(status.current, Some(AudioCue::VolumePreview));
+        assert_eq!(status.current_route, Some(AudioRoute::System));
+        assert!(status.previewing);
+
+        let mut buf = [0u8; 32];
+        let filled = manager.fill(&mut buf);
+        assert_eq!(filled, buf.len());
+        let samples = decode_left_samples(&buf);
+        assert!(samples.iter().any(|sample| *sample != 0));
     }
 }
 
