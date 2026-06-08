@@ -3964,17 +3964,13 @@ fn draw_beeper_settings_row<P: UiPainter>(
     };
     let focus_accent = beeper_target_focus_color(palette, target);
     let level_accent = beeper_volume_color(palette, level);
-    let row_border = if selected {
-        fade_color(focus_accent, level_accent)
-    } else {
-        palette.border
-    };
     let step = AUDIO_TRACK_W / 6;
     let active_idx = beeper_volume_index(level) as u16;
     let active_x = AUDIO_TRACK_X + active_idx * step;
     let row_center_y = row_y + (AUDIO_ROW_H / 2);
     let track_y = row_center_y - (AUDIO_TRACK_H / 2);
     let badge_y = row_center_y - (AUDIO_BADGE_H / 2);
+    let badge_fill = fade_color(palette.panel, palette.bg);
 
     draw_manual_action_button(
         painter,
@@ -3983,7 +3979,7 @@ fn draw_beeper_settings_row<P: UiPainter>(
         AUDIO_ROW_W,
         AUDIO_ROW_H,
         row_fill,
-        row_border,
+        row_fill,
     )?;
     fill(
         painter,
@@ -4063,8 +4059,8 @@ fn draw_beeper_settings_row<P: UiPainter>(
         badge_y,
         AUDIO_BADGE_W,
         AUDIO_BADGE_H,
-        fade_color(palette.panel, palette.bg),
-        row_border,
+        badge_fill,
+        badge_fill,
     )?;
     text_with_position(
         painter,
