@@ -165,7 +165,7 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 - `MANUAL` 遵循小屏触控约束：顶部单层 title/status 只读，主交互集中在底部唯一 action bar，避免重复返回入口分散注意力。
 - `MANUAL` 的 `TARGET / SPEED / TIMER` 采用轻量 segmented options，不再额外套 row card，避免 1.47 英寸小屏出现双层边框噪声。
 - `MENU` 采用 icon rail：选中项通过平移整条 rail 保持在中心，不使用“焦点框单独跳动”的桌面式列表行为。
-- `AUDIO` 页当前只允许 `ACTION` 与 `PROMPT` 两行；每行都固定使用 `OFF + 1..6` 七档词形，`OFF` 是静音态，不使用 `MUTE` 别名。
+- `AUDIO` 页当前只允许 `ACTION` 与 `PROMPT` 两行；每行都固定使用 `0 + 1..6` 七档词形，`0` 是静音态，不使用 `OFF` / `MUTE` 别名。
 
 ## 5. Naming and copywriting rules
 

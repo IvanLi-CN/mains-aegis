@@ -468,7 +468,7 @@ impl BeeperVolumeLevel {
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Off => "OFF",
+            Self::Off => "0",
             Self::L1 => "1",
             Self::L2 => "2",
             Self::L3 => "3",
