@@ -143,7 +143,7 @@
 - Required fields: `prefs.action_volume`, `prefs.system_volume`, `prefs.selected_target`。
 - Forbidden fields: 提示音素材列表、逐 cue 开关、运行中队列可视化。
 - Allowed states: `DashboardPrimaryPage::BeeperSettings`。
-- Token refs: `Type.Title`, `Type.Body`, `Type.Num`, `Color.State.Accent|Warning|Success`, `Color.Border.Default`。
+- Token refs: `Type.Title`, `Type.Body`, `Type.Num`, `Color.Border.Default`, `Color.Focus.Left|Right|Center`, `Color.State.Accent`。
 - Geometry anchor:
   - top bar: `x=0 y=0 w=320 h=18`
   - shared scale row: `x=102 y=50 w=146`

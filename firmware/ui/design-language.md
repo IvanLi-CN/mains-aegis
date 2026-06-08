@@ -166,6 +166,7 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 - `MANUAL` 的 `TARGET / SPEED / TIMER` 采用轻量 segmented options，不再额外套 row card，避免 1.47 英寸小屏出现双层边框噪声。
 - `MENU` 采用 icon rail：选中项通过平移整条 rail 保持在中心，不使用“焦点框单独跳动”的桌面式列表行为。
 - `AUDIO` 页当前只允许 `ACTION` 与 `SYSTEM` 两行；每行都固定使用 `0 + 1..6` 七档词形，`0` 是静音态，不使用 `OFF` / `MUTE` 别名。
+- `AUDIO` 页配色必须严格取自调色盘 token：`ACTION` 分组高亮使用 `Color.Focus.Right`，`SYSTEM` 分组高亮使用 `Color.Focus.Center`；音量刻度与 badge 采用 `0=Color.Border.Default`、`1-2=Color.Focus.Left`、`3-4=Color.State.Accent`、`5=Color.Focus.Center`、`6=Color.Focus.Right`。
 
 ## 5. Naming and copywriting rules
 
