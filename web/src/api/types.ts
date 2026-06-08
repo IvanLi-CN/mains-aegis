@@ -142,6 +142,7 @@ export type DeviceTarget = {
       seenAt: string;
       source?: "manual" | "devd_discovery";
       mdnsHost?: string;
+      fallbackBaseUrl?: string;
     };
     devd?: {
       baseUrl: string;

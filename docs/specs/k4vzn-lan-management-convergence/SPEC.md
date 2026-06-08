@@ -22,6 +22,7 @@
 - 以 `identity.device_id` 作为同一硬件的唯一主键，把 USB 与 LAN 收敛到同一 logical device 模型；默认首选 USB，但切换 transport 时必须显式提示。
 - 全局废弃 `session` / `safeSettings` 旧模型，重设计为 `connection / identity / status / settings / trace` 五类清晰能力面。
 - 为 Web 无 devd 与 devd/CLI 两条路径都补齐结构化 HTTP client trace，并给出持久化窗口、scan trace 和设备 trace 的统一模型。
+- 跨 `Web App` / `mains-aegis-devd` / `mains-aegis` CLI 的通信方案优先级矩阵由 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md) 统一定义；本规格只描述 LAN management convergence 本身，不再承载跨客户端默认 transport 规则。
 
 ### Non-goals
 

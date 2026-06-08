@@ -19,7 +19,7 @@
 - hosted/self-hosted devd Connect UI 只显示 devd discovery：USB 候选通过 devd lease/usb-http bridge 接入，LAN 候选在保存到 `DeviceRegistry` 时直接落为硬件 HTTP target，不再额外显示 Web Serial / 手动 LAN fallback 面板。
 - Connect discovery 行为语义已收敛到“先纳管、后进入”：新发现 USB 候选显示 `Bind USB`，新发现 LAN 候选显示 `Add WiFi`；只有已存在的浏览器设备记录才显示 `Open`、`Use WiFi`、`Use USB`，避免把 discovery 候选误表述为通用 `Connect`。
 - 当 USB candidate 还处于 `identity pending` 但 owner 已知其对应的 WiFi 设备时，Connect 页会先把该 stable USB id 绑定到已有 logical device，再把 discovery 行内的 USB/WiFi 渠道归并到同一设备卡片；绑定完成前不再把 `Bind USB` 误当成“立即进入设备”。
-- USB `Bind USB` 成功后，如果 devd 返回 `companion_lan_candidate`，Connect 会在同一 discovery card 内显示 inline `Bind LAN companion`；确认后浏览器记录同时保存 `mdnsHost` 和 `http://<ip>:<port>`，并把 `preferredTransport` 设为 `http`。
+- USB `Bind USB` 成功后，如果 devd 返回 `companion_lan_candidate`，Connect 会在同一 discovery card 内显示 inline `Bind LAN companion`；确认后浏览器记录会把 `http://<hostname_fqdn>` 作为默认 Web 直连地址，同时保留 `http://<ip>:<port>` 作为回退地址，并把 `preferredTransport` 设为 `http`。
 - 未确认的 companion-LAN candidate 不会自动进入 remembered WiFi channels，也不会立刻出现在 `Use WiFi` 切换动作里；只有已确认的 `binding.lan_companion` 或真实 LAN transport 才会成为可切换通道。
 - Fleet 入口改为消费“浏览器本地保存记录 + 当前 devd discovery”的混合视图：已保存设备继续保留 alias/location，本轮 discovery 负责补当前 WiFi/USB 渠道、在线态和 live-only 设备卡片；empty state 不再把“没保存记录”误报成“没有设备”。
 - devd Web USB control lease 已落地：多候选设备必须由用户选择，Web 创建 lease 后 heartbeat 续租，断开/移除/页面卸载时释放，TTL 到期自动释放，settings 写入与 USB Console hydration 均要求有效 lease。

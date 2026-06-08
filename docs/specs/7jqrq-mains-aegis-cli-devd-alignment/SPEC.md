@@ -89,6 +89,8 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - Web Serial 与 devd HTTP service 仍按既有租约、心跳和 release 语义工作。
 - devd HTTP service 与 CLI 观察同一进程内状态；绑定、别名和 artifact selection 还会写入用户配置目录的 devd 状态文件，daemon 重启后恢复为 disconnected 的安全运行态并保留用户配置态。
 
+- 跨 `Web App` / `mains-aegis-devd` / `mains-aegis` CLI 的通信方案优先级矩阵由 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md) 统一定义；本规格只记录 host-tools crate、IPC/HTTP 命令面与 release/install 对齐，不再重复定义跨客户端优先级表。
+
 ## 验收标准
 
 - `cargo check --manifest-path tools/mains-aegis-host/Cargo.toml --all-targets` 通过。

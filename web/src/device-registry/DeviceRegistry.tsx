@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   bindDevdCompanionLan,
   clearDeviceWifiConfig,
+  clearDevdCompanionLan,
   bridgeAuthToken,
   clearDevdWifiConfig,
   connectDevdDevice,
@@ -47,8 +48,10 @@ import type {
 } from "../api/types";
 import {
   isDemoSeed,
+  isStoredTargetPreset,
   makeMockRecord,
   makeMockRecords,
+  makeStoredTargetPreset,
   makeMockUsbSerialRecord,
   type DemoSeed,
 } from "../fixtures/mockDevices";
@@ -855,7 +858,10 @@ export function DeviceRegistryProvider({
             },
           };
         }
-        const baseUrl = normalizeBaseUrl(`http://${companion.ip}:${companion.port}`);
+        const fallbackBaseUrl = normalizeBaseUrl(
+          `http://${companion.ip}:${companion.port}`,
+        );
+        const baseUrl = normalizeBaseUrl(`http://${companion.mdns_host}`);
         const result = await probeDevice(baseUrl);
         const logicalDeviceId =
           updated.binding?.logical_device_id ?? result.identity.device_id;
@@ -873,6 +879,7 @@ export function DeviceRegistryProvider({
               seenAt: new Date().toISOString(),
               source: "devd_discovery",
               mdnsHost: companion.mdns_host,
+              fallbackBaseUrl,
             },
             devd: {
               baseUrl: devdBaseUrl,
@@ -920,6 +927,37 @@ export function DeviceRegistryProvider({
       }
     },
     [],
+  );
+
+  const dismissDevdCompanionLan = useCallback(
+    async (deviceId: string, devdBaseUrl: string): Promise<AddDeviceResult> => {
+      try {
+        const updated = await clearDevdCompanionLan(deviceId, devdBaseUrl);
+        const logicalDeviceId =
+          updated.binding?.logical_device_id ?? updated.identity?.device_id;
+        const existing =
+          logicalDeviceId === null
+            ? null
+            : records.find(
+                (record) => record.target.deviceId === logicalDeviceId,
+              ) ?? null;
+        if (existing) return { ok: true, record: existing };
+        return {
+          ok: true,
+          record: recordFromStoredTarget({
+            deviceId: logicalDeviceId ?? deviceId,
+            baseUrl: normalizeBaseUrl(devdBaseUrl),
+            alias: updated.display_name || "Saved device",
+            location: "USB",
+            addedAt: new Date().toISOString(),
+            transport: "devd",
+          }),
+        };
+      } catch (error) {
+        return { ok: false, error: toErrorEnvelope(error) };
+      }
+    },
+    [records],
   );
 
   const connectUsbSerialDevice = useCallback(
@@ -2040,6 +2078,7 @@ export function DeviceRegistryProvider({
       addDevice,
       addDevdDevice,
       confirmDevdCompanionLan,
+      dismissDevdCompanionLan,
       connectUsbSerialDevice,
       connectKnownDeviceChannel,
       rememberDiscoveredChannels,
@@ -2060,6 +2099,7 @@ export function DeviceRegistryProvider({
       addDevice,
       addDevdDevice,
       confirmDevdCompanionLan,
+      dismissDevdCompanionLan,
       connectUsbSerialDevice,
       connectKnownDeviceChannel,
       rememberDiscoveredChannels,
@@ -2089,6 +2129,15 @@ function getDemoSeed(): DemoSeed | null {
 }
 
 function loadInitialRecords(seed: DemoSeed | null): DeviceRecord[] {
+  const preset = new URLSearchParams(window.location.search).get(
+    "stored_target_preset",
+  );
+  if (isStoredTargetPreset(preset)) {
+    return makeStoredTargetPreset(preset).map((target) =>
+      recordFromStoredTarget(target),
+    );
+  }
+
   if (seed) return makeMockRecords(seed);
 
   const stored = localStorage.getItem(STORAGE_KEY);
@@ -2471,10 +2520,10 @@ function devdLanBaseUrl(
   identity: Identity | null,
 ): string | null {
   const candidate =
-    device.lan_address?.trim() ||
-    identity?.network.ipv4?.trim() ||
     identity?.hostname_fqdn?.trim() ||
     identity?.hostname?.trim() ||
+    device.lan_address?.trim() ||
+    identity?.network.ipv4?.trim() ||
     "";
   return candidate ? normalizeBaseUrl(candidate) : null;
 }
@@ -2559,9 +2608,32 @@ function mergeRememberedChannels(
 ): DeviceTarget["rememberedChannels"] {
   if (!existing && !incoming) return undefined;
   return {
-    http: incoming?.http ?? existing?.http,
+    http: mergeRememberedHttpChannel(existing?.http, incoming?.http),
     devd: incoming?.devd ?? existing?.devd,
     serial: incoming?.serial ?? existing?.serial,
+  };
+}
+
+function mergeRememberedHttpChannel(
+  existing:
+    | NonNullable<NonNullable<DeviceTarget["rememberedChannels"]>["http"]>
+    | undefined,
+  incoming:
+    | NonNullable<NonNullable<DeviceTarget["rememberedChannels"]>["http"]>
+    | undefined,
+) {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  const preserveConfirmedBaseUrl =
+    Boolean(existing.mdnsHost) && !incoming.mdnsHost;
+  return {
+    baseUrl: preserveConfirmedBaseUrl
+      ? existing.baseUrl
+      : (incoming.baseUrl ?? existing.baseUrl),
+    fallbackBaseUrl: incoming.fallbackBaseUrl ?? existing.fallbackBaseUrl,
+    seenAt: incoming.seenAt ?? existing.seenAt,
+    source: incoming.source ?? existing.source,
+    mdnsHost: incoming.mdnsHost ?? existing.mdnsHost,
   };
 }
 

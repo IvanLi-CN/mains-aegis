@@ -58,7 +58,8 @@
 - USB 连接入口必须显示浏览器支持状态、连接/断开状态、用户取消授权、串口不可用或已占用等错误。
 - devd 入口在发现多个 USB CDC candidates 时必须显示候选设备选择器；用户明确选择某个 devd device id 后才可创建控制 session。Web 不得基于已连接、已识别、第一个或最近使用自动替用户选择硬件。
 - 若 USB `Bind USB` 成功后 devd 返回 `companion_lan_candidate`，Connect 必须在同一卡片内就地显示 inline `Bind LAN companion` 提示，展示 mDNS 与 `IP:Port`；在用户确认前，该候选不得自动变成 `Use WiFi` 按钮，也不得写入 localStorage。
-- companion-LAN 确认成功后，Web 本地记录必须同时保存 `rememberedChannels.http.baseUrl=http://<ip>:<port>` 与 `rememberedChannels.http.mdnsHost=<hostname_fqdn>`，并把 `preferredTransport` 切到 `http`；devd companion 仍保留在同一 logical device 的 remembered `devd` channel 中。
+- companion-LAN 确认成功后，Web 本地记录必须同时保存可直连的 mDNS HTTP 地址与回退 `IP:Port`：`rememberedChannels.http.baseUrl=http://<hostname_fqdn>`、`rememberedChannels.http.mdnsHost=<hostname_fqdn>`、`rememberedChannels.http.fallbackBaseUrl=http://<ip>:<port>`，并把 `preferredTransport` 切到 `http`；devd companion 仍保留在同一 logical device 的 remembered `devd` channel 中。
+- Web 的默认直连优先级必须遵循 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md)：已确认 companion 后按 `hostname_fqdn > hostname > ip:port` 选择 HTTP base URL；未确认 companion 时不得把 pending candidate 自动提升为默认连接路径。
 - 真实 USB `SerialPort` 不写入 localStorage；刷新页面后需要重新授权。mock USB 设备可用于视觉证据与无硬件验证。
 - 添加时按 `ping -> identity -> network -> status` 探活；失败显示 API-compatible error envelope。
 - 浏览器侧保存 `DeviceRegistry` 到 `localStorage`，并提供 demo fleet reset。
@@ -238,27 +239,27 @@
 
 ![Hosted add-device records evidence](./assets/add-device-devd-records-hosted.png)
 
-- source_type: storybook_canvas
-  story_id_or_title: `UPS Management/Add device/Pending LAN companion confirmation`
-  requested_viewport: `none`
-  viewport_strategy: `storybook-viewport`
-  capture_scope: `browser-viewport`
+- source_type: mock_ui
+  demo_entry_or_title: `/connect?seed=empty&mock_hosted=1&mock_devd_target=mock:devd-bind-target&stored_target_preset=lan-companion-bind-target`
+  requested_viewport: `1440x1024`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `element`
   target_program: `mock-only`
-  scenario: pending LAN companion inline confirmation
-  evidence_note: 验证 USB bind 成功后，未确认的 companion-LAN 只以内联提示形式出现，展示 mDNS 与 `IP:Port`，但不会提前变成 active WiFi channel。
+  scenario: USB bind triggers LAN companion prompt
+  evidence_note: 验证用户先把 pending USB 绑定到已有 logical device，绑定成功后同一卡片立即出现 `LAN companion detected` / `Bind LAN companion` 提示，并保留 `Bound USB for ...` 成功反馈；连接方式切换收纳到 `Open` 自带的下拉里，不再平铺额外主按钮。
 
-![Pending LAN companion confirmation evidence](./assets/connect-lan-companion-pending-storybook.png)
+![USB bind triggers LAN companion prompt evidence](./assets/connect-lan-companion-after-usb-bind-mock-ui.png)
 
-- source_type: storybook_canvas
-  story_id_or_title: `UPS Management/Add device/Confirmed LAN companion remembered`
-  requested_viewport: `none`
-  viewport_strategy: `storybook-viewport`
-  capture_scope: `browser-viewport`
+- source_type: mock_ui
+  demo_entry_or_title: `/connect?mock_hosted=1&mock_devd_target=mock:devd-multi&stored_target_preset=lan-companion-confirmed`
+  requested_viewport: `1440x1024`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `element`
   target_program: `mock-only`
   scenario: confirmed LAN companion dual-channel state
-  evidence_note: 验证确认后同一 logical device 同时保留 WiFi 与 devd channel，默认可切到 `Use WiFi`，且不再重复显示 pending companion 提示。
+  evidence_note: 验证确认后同一 logical device 同时保留 WiFi 与 devd channel，默认偏好切到 WiFi，remembered state 可见 `Web direct http://<hostname_fqdn>`、`WiFi fallback http://<ip>:<port>` 与 `devd mDNS <hostname_fqdn>`，且不再重复显示 pending companion 提示。
 
-![Confirmed LAN companion remembered evidence](./assets/connect-lan-companion-confirmed-storybook.png)
+![Confirmed LAN companion remembered evidence](./assets/connect-lan-companion-confirmed-mock-ui.png)
 
 - source_type: storybook_canvas
   story_id_or_title: `UPS Management/Connect/Firmware mismatch warning`
