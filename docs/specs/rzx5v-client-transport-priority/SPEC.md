@@ -175,20 +175,36 @@ type RememberedChannels = {
    - 优先 1：`devd IPC`
    - 说明：CLI 不直接连硬件，所有 USB / LAN 选择都委托给 devd
 
-### LAN / 硬件 transport 优先级
+### Transport priority matrix
+
+在客户端入口已经确定之后，effective hardware transport / LAN endpoint 按下表自上而下选择。若存在显式用户选择或 `last_connected_at` 成功记录，则只要该方案仍满足本表要求的 `bound` / `verified` 条件，就可以优先命中对应行；否则继续向下回退。
+
+| Priority | Communication scheme | Web App | `mains-aegis-devd` | `mains-aegis` CLI |
+| --- | --- | --- | --- | --- |
+| 1 | Bound USB | 不适用于 direct browser path；hosted / self-hosted Web 只能通过 devd Web lease 使用 bound USB | 只要 USB 已绑定且可用，就是默认 active owner transport | CLI 入口始终是 `devd IPC`；当 devd 可用 bound USB 时，这也是 CLI 的默认硬件 transport |
+| 2 | Verified LAN name (`hostname_fqdn`; if unavailable, separately verified `hostname`) | confirmed companion 或显式 direct HTTP 时的默认 HTTP base URL | 显式走 LAN companion 时的首选 endpoint | CLI 通过 devd 走 LAN 时的首选 endpoint |
+| 3 | Verified `IP:Port` | direct HTTP fallback URL | LAN fallback endpoint | CLI 通过 devd 走 LAN 时的 fallback endpoint |
+
+### Matrix rules
+
+- LAN endpoint 只有在 `GET /api/v1/identity` 返回的 `device_id` 与目标 logical device 一致时，才算 `verified`。
+- `pending companion_lan_candidate` 不参与本矩阵；它只能作为 owner-facing 提示存在，直到用户显式确认。
+- 若 companion-LAN identity 校验进入 `lan_identity_conflict`，则第 2、3 行全部阻断，只允许保留 USB 路径。
+- `Web Serial` 仍是 `Web App` 的 owner-facing 入口方式，但它不属于 LAN endpoint 行；只有在独立浏览器 / Vite 路径且入口已选定 `serial` 时才使用。
+- 本矩阵取代任何旧表述中“Web 默认优先 `IP:Port` 而非已验证 FQDN/mDNS”的说法。
+
+### Per-client interpretation
 
 1. `Web App`
-   - 当上次成功 channel 是 `http`，或 `preferredTransport=http` 时：`http://<hostname_fqdn>` -> `http://<hostname>` -> `http://<ip>:<port>`
-   - 当上次成功 channel 是 `serial`，或 `preferredTransport=serial` 时：使用 `Web Serial`
+   - 当上次成功 channel 是 `http`，或 `preferredTransport=http` 时，HTTP base URL 顺序固定为：`http://<hostname_fqdn>` -> `http://<hostname>` -> `http://<ip>:<port>`。
+   - 当上次成功 channel 是 `serial`，或 `preferredTransport=serial` 时，使用 `Web Serial`。
 2. `mains-aegis-devd`
-   - 若上次成功 transport 是 `USB`，默认 owner path 仍为 `USB`
-   - 若上次成功 transport 是 `LAN`，则 LAN endpoint 顺序为：`http://<hostname_fqdn>` -> `http://<hostname>` -> `http://<ip>:<port>`
-   - 若不存在成功历史，默认 owner path：`USB`
-   - 显式切到 LAN 时：`http://<hostname_fqdn>` -> `http://<hostname>` -> `http://<ip>:<port>`
+   - 若上次成功 transport 是 `USB`，默认 owner path 仍为 `USB`。
+   - 若上次成功 transport 是 `LAN`，或用户显式切到 LAN，则 endpoint 顺序固定为：`http://<hostname_fqdn>` -> `http://<hostname>` -> `http://<ip>:<port>`。
+   - 若不存在成功历史，默认 owner path 是 `USB`。
 3. `mains-aegis` CLI
-   - 入口始终是 `devd IPC`
-   - 当 CLI 通过 devd 走 LAN 时，沿用 devd 的 LAN 顺序：`http://<hostname_fqdn>` -> `http://<hostname>` -> `http://<ip>:<port>`
-   - 当 CLI 通过 devd 走 USB 时，沿用 devd 的默认 owner path：`USB`
+   - 入口始终是 `devd IPC`，不是 direct HTTP 或 direct USB。
+   - 当 CLI 通过 devd 走 LAN 时，沿用 devd 的第 2、3 行规则；当 CLI 通过 devd 走 USB 时，沿用第 1 行 `USB-first` 规则。
 
 ### 硬规则
 

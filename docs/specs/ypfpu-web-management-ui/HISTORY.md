@@ -32,3 +32,7 @@
 - 修正 `Bind USB` 的真实绑定语义：当 USB 还未读出 identity 时，允许先把 stable USB id 绑定到已有 logical device，并在 discovery / remembered channels 中通过 `binding.logical_device_id` 归并回同一设备；绑定本身不再冒充“立即进入设备”。
 - Fleet 视图改为读取混合模型：浏览器本地记录与当前 devd discovery 必须按 logical device 合并展示；仅 live discovery 的设备允许出现在 Fleet 中，但默认回到 Connect 完成纳管，不再依赖“先保存、后可见”的旧前提。
 - 决定 USB 绑定后若 devd 返回 `companion_lan_candidate`，Web 必须在同一卡片内就地显示 `Bind LAN companion`，确认后才把 `mdnsHost + IP:Port` 写入本地记录；未确认 candidate 不能自动升级成 `Use WiFi`。
+
+## 2026-06-08
+
+- companion-LAN 的默认直连优先级改为统一引用 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md)；本规格只保留 Web 侧保存字段与交互约束，不再重复维护跨客户端矩阵。

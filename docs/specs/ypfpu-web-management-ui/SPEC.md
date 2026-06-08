@@ -59,7 +59,7 @@
 - devd 入口在发现多个 USB CDC candidates 时必须显示候选设备选择器；用户明确选择某个 devd device id 后才可创建控制 session。Web 不得基于已连接、已识别、第一个或最近使用自动替用户选择硬件。
 - 若 USB `Bind USB` 成功后 devd 返回 `companion_lan_candidate`，Connect 必须在同一卡片内就地显示 inline `Bind LAN companion` 提示，展示 mDNS 与 `IP:Port`；在用户确认前，该候选不得自动变成 `Use WiFi` 按钮，也不得写入 localStorage。
 - companion-LAN 确认成功后，Web 本地记录必须同时保存可直连的 mDNS HTTP 地址与回退 `IP:Port`：`rememberedChannels.http.baseUrl=http://<hostname_fqdn>`、`rememberedChannels.http.mdnsHost=<hostname_fqdn>`、`rememberedChannels.http.fallbackBaseUrl=http://<ip>:<port>`，并把 `preferredTransport` 切到 `http`；devd companion 仍保留在同一 logical device 的 remembered `devd` channel 中。
-- Web 的默认直连优先级必须遵循 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md)：已确认 companion 后按 `hostname_fqdn > hostname > ip:port` 选择 HTTP base URL；未确认 companion 时不得把 pending candidate 自动提升为默认连接路径。
+- Web 的默认直连选择统一遵循 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md)；本规格不再重复定义 `hostname_fqdn > hostname > ip:port` 矩阵，只要求未确认 companion 时不得把 pending candidate 自动提升为默认连接路径。
 - 真实 USB `SerialPort` 不写入 localStorage；刷新页面后需要重新授权。mock USB 设备可用于视觉证据与无硬件验证。
 - 添加时按 `ping -> identity -> network -> status` 探活；失败显示 API-compatible error envelope。
 - 浏览器侧保存 `DeviceRegistry` 到 `localStorage`，并提供 demo fleet reset。
