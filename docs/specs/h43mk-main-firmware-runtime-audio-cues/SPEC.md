@@ -167,7 +167,7 @@
 - 运行时资产继续复用 `firmware/assets/audio/test-fw-cues/*.wav`，不直接从 `docs/audio-cues-preview/**` 读取。
 - 当前 `esp-hal` I2S circular DMA 生命周期仍未提供无缝热恢复路径；本轮修复继续采用“保留现有 cue 状态 + transport 级 re-prime + 有界止损”策略，而不是重做整套音频框架。
 - 当前主固件没有真实 shutdown flow，且没有独立 over-power 状态源，因此对应 cue 必须保持 dormant。
-- 当前主固件仍是固定输出增益；`dashboard/menu/audio` 预览 gate 已归档到 `#6qrjs`，真正的 `ACTION / SYSTEM` 分组 `0 + 1..6` gain LUT / EEPROM prefs 变更必须等 owner 确认预览后再并入本规格。
+- 当前主固件仍是固定输出增益；`dashboard/menu/audio` 预览 gate 已归档到 `#6qrjs`，真正的 `ACTION / SYSTEM` 分组 gain LUT / EEPROM prefs 变更必须等 owner 确认预览后再并入本规格；当前预览口径是共享刻度 `0 + 1..6`、右侧 value badge `OFF / 1..6`。
 
 ## 变更记录（Change log）
 

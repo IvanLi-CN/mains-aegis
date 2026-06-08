@@ -466,9 +466,21 @@ impl BeeperVolumeLevel {
         Self::L6,
     ];
 
-    pub const fn label(self) -> &'static str {
+    pub const fn scale_label(self) -> &'static str {
         match self {
             Self::Off => "0",
+            Self::L1 => "1",
+            Self::L2 => "2",
+            Self::L3 => "3",
+            Self::L4 => "4",
+            Self::L5 => "5",
+            Self::L6 => "6",
+        }
+    }
+
+    pub const fn badge_label(self) -> &'static str {
+        match self {
+            Self::Off => "OFF",
             Self::L1 => "1",
             Self::L2 => "2",
             Self::L3 => "3",
@@ -3939,7 +3951,7 @@ fn draw_beeper_settings_scale<P: UiPainter>(
             painter,
             variant,
             FontRole::DetailBody,
-            level.label(),
+            level.scale_label(),
             Point::new(node_x as i32, AUDIO_SCALE_Y as i32),
             HorizontalAlignment::Center,
             palette.text_dim,
@@ -4066,7 +4078,7 @@ fn draw_beeper_settings_row<P: UiPainter>(
         painter,
         variant,
         FontRole::DetailTitle,
-        level.label(),
+        level.badge_label(),
         Point::new(
             (AUDIO_BADGE_X + (AUDIO_BADGE_W / 2)) as i32,
             row_center_y as i32,

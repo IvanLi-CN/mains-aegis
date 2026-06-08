@@ -86,7 +86,7 @@
   - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-audio-system-focus.png`
   - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-audio-system-off.png`
 - Pass criteria:
-  - `AUDIO` 页必须同时显示 `ACTION` 与 `SYSTEM` 两行；每行仅允许 `0 + 1..6` 七档，不出现额外列表、slider 或 `OFF` / `MUTE` 别名。
+  - `AUDIO` 页必须同时显示 `ACTION` 与 `SYSTEM` 两行；共享刻度仅允许 `0 + 1..6`，右侧 value badge 仅允许 `OFF / 1..6`，不出现额外列表、slider 或 `MUTE` 别名。
   - 共享刻度、两行轨道与右侧 value badge 在三档场景下保持几何稳定；切换编辑分组只能改变高亮，不得导致 relayout。
 
 ## 3. Self-check checks

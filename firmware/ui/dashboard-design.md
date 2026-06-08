@@ -37,7 +37,7 @@
 - 标题右侧 `WiFi` 图标是独立入口；视觉图标保持小尺寸，但命中范围按 `touch-targets.md` 中的放大热区执行。
 - `CHARGER DETAIL` 不是终点页：其左侧会话面板继续向下钻取到 `MANUAL`，用于手动充电偏好与运行时控制；该页采用小屏优先布局，顶部压缩为单层只读信息条、操作集中在底部唯一 action bar。
 - `Dashboard` 与 `MENU` 视为纵向双屏：`Dashboard` 在上、`MENU` 在下。切换动画是视口在 `320x344` 虚拟长画布中的上下滑动；`MENU -> AUDIO` 不建立额外空间连续性，采用直接切页。
-- `AUDIO` 设置页使用双行紧凑布局：`ACTION` 与 `SYSTEM` 共用一套 `0 + 1..6` 刻度，`UP/DOWN` 只切换编辑分组，`LEFT/RIGHT` 只调整当前分组级别。
+- `AUDIO` 设置页使用双行紧凑布局：`ACTION` 与 `SYSTEM` 共用一套 `0 + 1..6` 共享刻度，右侧 value badge 单独显示 `OFF / 1..6`；`UP/DOWN` 只切换编辑分组，`LEFT/RIGHT` 只调整当前分组级别。
 - 视觉样式（色板、字体分工、状态词形）以 [design-language.md](design-language.md) 为准，本页不再重复定义 Token 细节。
 
 详情页冻结口径见：[dashboard-detail-design.md](dashboard-detail-design.md)
