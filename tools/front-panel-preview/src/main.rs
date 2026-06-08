@@ -20,12 +20,14 @@ pub mod net_types;
 mod front_panel_scene;
 
 use front_panel_scene::{
-    demo_mode_from_focus, AudioTestUiState, BmsRecoveryUiAction, BmsResultKind,
-    DashboardChargerProtocol, DashboardDetailPage, DashboardDetailSnapshot, DashboardInputSource,
-    DashboardRoute, DisplayDiagnosticMeta, ManualChargeStopReason, SelfCheckCommState,
-    SelfCheckHardwareTarget, SelfCheckOverlay, SelfCheckUiSnapshot, TestFunctionUi,
-    TpsTestChargerSnapshot, TpsTestOutputSnapshot, TpsTestUiSnapshot, TpsTestVoutProfile, UiFocus,
-    UiModel, UiPainter, UiVariant, UpsMode, UI_H, UI_W,
+    demo_mode_from_focus, AudioTestUiState, BeeperPrefs, BeeperSettingTarget, BeeperVolumeLevel,
+    BmsRecoveryUiAction, BmsResultKind, DashboardChargerProtocol, DashboardDetailPage,
+    DashboardDetailSnapshot, DashboardHomeFocus, DashboardInputSource, DashboardMenuStyle,
+    DashboardPrimaryPage, DashboardRoute, DashboardShellState, DisplayDiagnosticMeta,
+    ManualChargeStopReason, MenuItem, SelfCheckCommState, SelfCheckHardwareTarget,
+    SelfCheckOverlay, SelfCheckUiSnapshot, TestFunctionUi, TpsTestChargerSnapshot,
+    TpsTestOutputSnapshot, TpsTestUiSnapshot, TpsTestVoutProfile, UiFocus, UiModel, UiPainter,
+    UiVariant, UpsMode, UI_H, UI_W,
 };
 use net_types::{WifiConnectionState, WifiErrorKind, WifiSnapshot};
 
@@ -161,6 +163,31 @@ fn dashboard_detail_fixture(
     }
 
     detail
+}
+
+fn dashboard_shell_fixture(
+    page: DashboardPrimaryPage,
+    home_focus: DashboardHomeFocus,
+    menu_selected: MenuItem,
+    menu_style: DashboardMenuStyle,
+    beeper_prefs: BeeperPrefs,
+    dashboard_menu_offset_y: i16,
+) -> (UpsMode, DashboardShellState, SelfCheckUiSnapshot) {
+    let mode = UpsMode::Standby;
+    let snapshot = dashboard_snapshot_for_mode(mode);
+    (
+        mode,
+        DashboardShellState {
+            page,
+            dashboard_route: DashboardRoute::Home,
+            home_focus,
+            menu_selected,
+            menu_style,
+            beeper_prefs,
+            dashboard_menu_offset_y,
+        },
+        snapshot,
+    )
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1032,6 +1059,19 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardRuntimeStandbyWifiConnectedMedium
         | ScenarioArg::DashboardRuntimeStandbyWifiConnected
         | ScenarioArg::DashboardRuntimeStandbyWifiError
+        | ScenarioArg::DashboardHomeFocusOutput
+        | ScenarioArg::DashboardHomeFocusBatteryFlow
+        | ScenarioArg::DashboardMenuDashboard
+        | ScenarioArg::DashboardMenuBeeper
+        | ScenarioArg::DashboardMenuConceptDenseBadge
+        | ScenarioArg::DashboardMenuConceptDockBar
+        | ScenarioArg::DashboardMenuConceptSplitRail
+        | ScenarioArg::DashboardMenuConceptSignalPlate
+        | ScenarioArg::DashboardAudioActionFocus
+        | ScenarioArg::DashboardAudioPromptFocus
+        | ScenarioArg::DashboardAudioPromptOff
+        | ScenarioArg::DashboardMenuTransitionMid
+        | ScenarioArg::DashboardMenuTransitionEnd
         | ScenarioArg::DashboardRuntimeAssist
         | ScenarioArg::DashboardRuntimeBackup
         | ScenarioArg::DashboardDetailCells
@@ -1100,6 +1140,19 @@ fn run() -> Result<(), String> {
         ScenarioArg::WifiIconGallery => ModeArg::Standby,
         ScenarioArg::DashboardRuntimeAssist => ModeArg::Supplement,
         ScenarioArg::DashboardRuntimeBackup => ModeArg::Backup,
+        ScenarioArg::DashboardHomeFocusOutput => ModeArg::Standby,
+        ScenarioArg::DashboardHomeFocusBatteryFlow => ModeArg::Standby,
+        ScenarioArg::DashboardMenuDashboard => ModeArg::Standby,
+        ScenarioArg::DashboardMenuBeeper => ModeArg::Standby,
+        ScenarioArg::DashboardMenuConceptDenseBadge => ModeArg::Standby,
+        ScenarioArg::DashboardMenuConceptDockBar => ModeArg::Standby,
+        ScenarioArg::DashboardMenuConceptSplitRail => ModeArg::Standby,
+        ScenarioArg::DashboardMenuConceptSignalPlate => ModeArg::Standby,
+        ScenarioArg::DashboardAudioActionFocus => ModeArg::Standby,
+        ScenarioArg::DashboardAudioPromptFocus => ModeArg::Standby,
+        ScenarioArg::DashboardAudioPromptOff => ModeArg::Standby,
+        ScenarioArg::DashboardMenuTransitionMid => ModeArg::Standby,
+        ScenarioArg::DashboardMenuTransitionEnd => ModeArg::Standby,
         ScenarioArg::DashboardDetailCells => ModeArg::Standby,
         ScenarioArg::DashboardDetailCellsBalanceActive => ModeArg::Standby,
         ScenarioArg::DashboardDetailCellsBalanceIdle => ModeArg::Standby,
@@ -1250,6 +1303,153 @@ fn run() -> Result<(), String> {
                 )
                 .map_err(|_| "touch overlay render failed unexpectedly".to_string())?;
             }
+        }
+        ScenarioArg::DashboardHomeFocusOutput
+        | ScenarioArg::DashboardHomeFocusBatteryFlow
+        | ScenarioArg::DashboardMenuDashboard
+        | ScenarioArg::DashboardMenuBeeper
+        | ScenarioArg::DashboardMenuConceptDenseBadge
+        | ScenarioArg::DashboardMenuConceptDockBar
+        | ScenarioArg::DashboardMenuConceptSplitRail
+        | ScenarioArg::DashboardMenuConceptSignalPlate
+        | ScenarioArg::DashboardAudioActionFocus
+        | ScenarioArg::DashboardAudioPromptFocus
+        | ScenarioArg::DashboardAudioPromptOff
+        | ScenarioArg::DashboardMenuTransitionMid
+        | ScenarioArg::DashboardMenuTransitionEnd => {
+            let (mode, shell, snapshot) = match args.scenario {
+                ScenarioArg::DashboardHomeFocusOutput => dashboard_shell_fixture(
+                    DashboardPrimaryPage::DashboardHome,
+                    DashboardHomeFocus::Output,
+                    MenuItem::Dashboard,
+                    DashboardMenuStyle::default_preview(),
+                    BeeperPrefs::defaults(),
+                    0,
+                ),
+                ScenarioArg::DashboardHomeFocusBatteryFlow => dashboard_shell_fixture(
+                    DashboardPrimaryPage::DashboardHome,
+                    DashboardHomeFocus::BatteryFlow,
+                    MenuItem::Dashboard,
+                    DashboardMenuStyle::default_preview(),
+                    BeeperPrefs::defaults(),
+                    0,
+                ),
+                ScenarioArg::DashboardMenuDashboard => dashboard_shell_fixture(
+                    DashboardPrimaryPage::Menu,
+                    DashboardHomeFocus::Output,
+                    MenuItem::Dashboard,
+                    DashboardMenuStyle::default_preview(),
+                    BeeperPrefs::defaults(),
+                    UI_H as i16,
+                ),
+                ScenarioArg::DashboardMenuBeeper => dashboard_shell_fixture(
+                    DashboardPrimaryPage::Menu,
+                    DashboardHomeFocus::Charger,
+                    MenuItem::Beeper,
+                    DashboardMenuStyle::default_preview(),
+                    BeeperPrefs::defaults(),
+                    UI_H as i16,
+                ),
+                ScenarioArg::DashboardMenuConceptDenseBadge => dashboard_shell_fixture(
+                    DashboardPrimaryPage::Menu,
+                    DashboardHomeFocus::Output,
+                    MenuItem::Dashboard,
+                    DashboardMenuStyle::DenseBadge,
+                    BeeperPrefs::defaults(),
+                    UI_H as i16,
+                ),
+                ScenarioArg::DashboardMenuConceptDockBar => dashboard_shell_fixture(
+                    DashboardPrimaryPage::Menu,
+                    DashboardHomeFocus::Output,
+                    MenuItem::Dashboard,
+                    DashboardMenuStyle::DockBar,
+                    BeeperPrefs::defaults(),
+                    UI_H as i16,
+                ),
+                ScenarioArg::DashboardMenuConceptSplitRail => dashboard_shell_fixture(
+                    DashboardPrimaryPage::Menu,
+                    DashboardHomeFocus::Output,
+                    MenuItem::Dashboard,
+                    DashboardMenuStyle::SplitRail,
+                    BeeperPrefs::defaults(),
+                    UI_H as i16,
+                ),
+                ScenarioArg::DashboardMenuConceptSignalPlate => dashboard_shell_fixture(
+                    DashboardPrimaryPage::Menu,
+                    DashboardHomeFocus::Output,
+                    MenuItem::Dashboard,
+                    DashboardMenuStyle::SignalPlate,
+                    BeeperPrefs::defaults(),
+                    UI_H as i16,
+                ),
+                ScenarioArg::DashboardAudioActionFocus => dashboard_shell_fixture(
+                    DashboardPrimaryPage::BeeperSettings,
+                    DashboardHomeFocus::Charger,
+                    MenuItem::Beeper,
+                    DashboardMenuStyle::default_preview(),
+                    BeeperPrefs::new(
+                        BeeperVolumeLevel::L2,
+                        BeeperVolumeLevel::L6,
+                        BeeperSettingTarget::Action,
+                    ),
+                    UI_H as i16,
+                ),
+                ScenarioArg::DashboardAudioPromptFocus => dashboard_shell_fixture(
+                    DashboardPrimaryPage::BeeperSettings,
+                    DashboardHomeFocus::Charger,
+                    MenuItem::Beeper,
+                    DashboardMenuStyle::default_preview(),
+                    BeeperPrefs::new(
+                        BeeperVolumeLevel::L2,
+                        BeeperVolumeLevel::L4,
+                        BeeperSettingTarget::Prompt,
+                    ),
+                    UI_H as i16,
+                ),
+                ScenarioArg::DashboardAudioPromptOff => dashboard_shell_fixture(
+                    DashboardPrimaryPage::BeeperSettings,
+                    DashboardHomeFocus::Charger,
+                    MenuItem::Beeper,
+                    DashboardMenuStyle::default_preview(),
+                    BeeperPrefs::new(
+                        BeeperVolumeLevel::L3,
+                        BeeperVolumeLevel::Off,
+                        BeeperSettingTarget::Prompt,
+                    ),
+                    UI_H as i16,
+                ),
+                ScenarioArg::DashboardMenuTransitionMid => dashboard_shell_fixture(
+                    DashboardPrimaryPage::Menu,
+                    DashboardHomeFocus::Charger,
+                    MenuItem::Beeper,
+                    DashboardMenuStyle::default_preview(),
+                    BeeperPrefs::defaults(),
+                    (UI_H / 2) as i16,
+                ),
+                ScenarioArg::DashboardMenuTransitionEnd => dashboard_shell_fixture(
+                    DashboardPrimaryPage::Menu,
+                    DashboardHomeFocus::Charger,
+                    MenuItem::Beeper,
+                    DashboardMenuStyle::default_preview(),
+                    BeeperPrefs::defaults(),
+                    UI_H as i16,
+                ),
+                _ => unreachable!(),
+            };
+            let dashboard_model = UiModel {
+                mode,
+                focus: UiFocus::Idle,
+                touch_irq: false,
+                frame_no: args.frame_no,
+            };
+            front_panel_scene::render_dashboard_shell(
+                &mut framebuffer,
+                &dashboard_model,
+                UiVariant::InstrumentB,
+                shell,
+                Some(&snapshot),
+            )
+            .map_err(|_| "render failed unexpectedly".to_string())?;
         }
         ScenarioArg::DashboardDetailCells
         | ScenarioArg::DashboardDetailCellsBalanceActive
@@ -1684,6 +1884,19 @@ enum ScenarioArg {
     WifiIconGallery,
     DashboardRuntimeAssist,
     DashboardRuntimeBackup,
+    DashboardHomeFocusOutput,
+    DashboardHomeFocusBatteryFlow,
+    DashboardMenuDashboard,
+    DashboardMenuBeeper,
+    DashboardMenuConceptDenseBadge,
+    DashboardMenuConceptDockBar,
+    DashboardMenuConceptSplitRail,
+    DashboardMenuConceptSignalPlate,
+    DashboardAudioActionFocus,
+    DashboardAudioPromptFocus,
+    DashboardAudioPromptOff,
+    DashboardMenuTransitionMid,
+    DashboardMenuTransitionEnd,
     DashboardDetailCells,
     DashboardDetailCellsBalanceActive,
     DashboardDetailCellsBalanceIdle,
@@ -1761,6 +1974,22 @@ impl ScenarioArg {
             "wifi-icon-gallery" => Ok(Self::WifiIconGallery),
             "dashboard-runtime-assist" => Ok(Self::DashboardRuntimeAssist),
             "dashboard-runtime-backup" => Ok(Self::DashboardRuntimeBackup),
+            "dashboard-home-focus-output" => Ok(Self::DashboardHomeFocusOutput),
+            "dashboard-home-focus-battery-flow" => Ok(Self::DashboardHomeFocusBatteryFlow),
+            "dashboard-menu-dashboard" => Ok(Self::DashboardMenuDashboard),
+            "dashboard-menu-beeper" => Ok(Self::DashboardMenuBeeper),
+            "dashboard-menu-concept-dense-badge" => Ok(Self::DashboardMenuConceptDenseBadge),
+            "dashboard-menu-concept-dock-bar" => Ok(Self::DashboardMenuConceptDockBar),
+            "dashboard-menu-concept-split-rail" => Ok(Self::DashboardMenuConceptSplitRail),
+            "dashboard-menu-concept-signal-plate" => Ok(Self::DashboardMenuConceptSignalPlate),
+            "dashboard-audio-action-focus" => Ok(Self::DashboardAudioActionFocus),
+            "dashboard-audio-prompt-focus" => Ok(Self::DashboardAudioPromptFocus),
+            "dashboard-audio-prompt-off" => Ok(Self::DashboardAudioPromptOff),
+            "dashboard-beeper-volume-off" => Ok(Self::DashboardAudioPromptOff),
+            "dashboard-beeper-volume-mid" => Ok(Self::DashboardAudioActionFocus),
+            "dashboard-beeper-volume-max" => Ok(Self::DashboardAudioPromptFocus),
+            "dashboard-menu-transition-mid" => Ok(Self::DashboardMenuTransitionMid),
+            "dashboard-menu-transition-end" => Ok(Self::DashboardMenuTransitionEnd),
             "dashboard-detail-cells" => Ok(Self::DashboardDetailCells),
             "dashboard-detail-cells-balance-active" => Ok(Self::DashboardDetailCellsBalanceActive),
             "dashboard-detail-cells-balance-idle" => Ok(Self::DashboardDetailCellsBalanceIdle),
@@ -1856,6 +2085,19 @@ impl ScenarioArg {
             ScenarioArg::WifiIconGallery => "wifi-icon-gallery",
             ScenarioArg::DashboardRuntimeAssist => "dashboard-runtime-assist",
             ScenarioArg::DashboardRuntimeBackup => "dashboard-runtime-backup",
+            ScenarioArg::DashboardHomeFocusOutput => "dashboard-home-focus-output",
+            ScenarioArg::DashboardHomeFocusBatteryFlow => "dashboard-home-focus-battery-flow",
+            ScenarioArg::DashboardMenuDashboard => "dashboard-menu-dashboard",
+            ScenarioArg::DashboardMenuBeeper => "dashboard-menu-beeper",
+            ScenarioArg::DashboardMenuConceptDenseBadge => "dashboard-menu-concept-dense-badge",
+            ScenarioArg::DashboardMenuConceptDockBar => "dashboard-menu-concept-dock-bar",
+            ScenarioArg::DashboardMenuConceptSplitRail => "dashboard-menu-concept-split-rail",
+            ScenarioArg::DashboardMenuConceptSignalPlate => "dashboard-menu-concept-signal-plate",
+            ScenarioArg::DashboardAudioActionFocus => "dashboard-audio-action-focus",
+            ScenarioArg::DashboardAudioPromptFocus => "dashboard-audio-prompt-focus",
+            ScenarioArg::DashboardAudioPromptOff => "dashboard-audio-prompt-off",
+            ScenarioArg::DashboardMenuTransitionMid => "dashboard-menu-transition-mid",
+            ScenarioArg::DashboardMenuTransitionEnd => "dashboard-menu-transition-end",
             ScenarioArg::DashboardDetailCells => "dashboard-detail-cells",
             ScenarioArg::DashboardDetailCellsBalanceActive => {
                 "dashboard-detail-cells-balance-active"

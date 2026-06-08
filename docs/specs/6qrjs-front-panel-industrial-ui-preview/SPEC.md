@@ -215,6 +215,16 @@ None
   - `assets/dashboard-b-standby-mode.png`
   - `assets/dashboard-b-supplement-mode.png`
   - `assets/dashboard-b-backup-mode.png`
+  - `assets/dashboard-home-focus-output.png`
+  - `assets/dashboard-home-focus-battery-flow.png`
+  - `assets/dashboard-menu-dashboard.png`
+  - `assets/dashboard-menu-beeper.png`
+  - `assets/dashboard-audio-action-focus.png`
+  - `assets/dashboard-audio-prompt-focus.png`
+  - `assets/dashboard-audio-prompt-off.png`
+  - `assets/dashboard-menu-transition-mid.png`
+  - `assets/dashboard-menu-transition-end.png`
+  - `assets/dashboard-menu-beeper-review-set.png`
   - `assets/self-check-c-standby-idle.png`
   - `assets/self-check-c-standby-right.png`
   - `assets/self-check-c-assist-up.png`
@@ -224,6 +234,33 @@ None
   - `assets/self-check-c-bq40-activating.png`
   - `assets/self-check-c-bq40-activation-succeeded.png`
   - `assets/self-check-c-bq40-activation-failed.png`
+
+## Visual Evidence
+
+### Dashboard / Menu / Audio preview gate
+
+![Dashboard/Menu/Audio review set](assets/dashboard-menu-beeper-review-set.png)
+
+### Dashboard home focus
+
+![Dashboard home focus output](assets/dashboard-home-focus-output.png)
+![Dashboard home focus battery flow](assets/dashboard-home-focus-battery-flow.png)
+
+### Menu
+
+![Dashboard menu dashboard](assets/dashboard-menu-dashboard.png)
+![Dashboard menu beeper](assets/dashboard-menu-beeper.png)
+
+### Audio settings
+
+![Audio action focus](assets/dashboard-audio-action-focus.png)
+![Audio prompt focus](assets/dashboard-audio-prompt-focus.png)
+![Audio prompt off](assets/dashboard-audio-prompt-off.png)
+
+### Dashboard to menu transition
+
+![Dashboard menu transition mid](assets/dashboard-menu-transition-mid.png)
+![Dashboard menu transition end](assets/dashboard-menu-transition-end.png)
 
 ## 资产晋升（Asset promotion）
 
@@ -263,6 +300,8 @@ None
 - 2026-02-27: 自检页升级为“全模块通信诊断表”（10 模块覆盖），并新增长按 CENTER 页面切换（Dashboard <-> Self-check）。
 - 2026-02-27: 自检页再优化为“双列大字号诊断卡”，提升小屏可读性并保留全模块覆盖。
 - 2026-03-01: 运行语义迁移到 `#7n4qd`（自检期间实时刷新 + 自检后常驻 + 禁用 CENTER 切页）；本规格保留为视觉基线。
+- 2026-06-07: 新增 dashboard/menu 纵向 stack、menu icon rail 与 beeper volume setting 的 preview gate 资产；在主人确认预览前不推进运行态导航与音量持久化实现。
+- 2026-06-08: 将 `AUDIO` 设置页升级为 `ACTION / PROMPT` 双分组布局，冻结共享刻度、双轨道与分组高亮的预览口径。
 
 ## 参考（References）
 

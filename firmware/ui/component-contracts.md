@@ -116,6 +116,42 @@
 - Token refs: `Type.Body`, `Type.Num`, `Color.Focus.Left|Right|Center`, `Color.Text.Secondary`。
 - Geometry anchor: segmented row `x=6 w=308 h=30`；label 区保留左侧 `~70px`，3 个 segment 各 `74x24`，间距 `4px`；不再绘制外层 row card，仅保留 label + segments。
 
+### DashboardMenuPage
+
+- Responsibility: Dashboard 一级菜单页，承载 icon rail、当前选中项 label 与返回提示。
+- Required fields: `items`, `selected_item`, `selected_label`。
+- Forbidden fields: Dashboard detail 数据块、手动充电参数编辑、运行时音频队列状态。
+- Allowed states: `DashboardPrimaryPage::Menu`，且仅允许从 `DashboardRoute::Home` 进入。
+- Token refs: `Type.Title`, `Type.Body`, `Color.Surface.Panel`, `Color.Border.Default`, `Color.State.Accent`。
+- Geometry anchor:
+  - top bar: `x=0 y=0 w=320 h=18`
+  - icon rail anchor: `center_x=160 y=46 item=52x52 gap=12`
+  - selected label bar: `x=34 y=134 w=252 h=24`
+
+### DashboardMenuItem
+
+- Responsibility: 菜单 icon tile 的选中/未选中视觉表达与 rail 居中布局。
+- Required fields: `item_id`, `icon`, `label`, `selected`。
+- Forbidden fields: 详情页级业务文案与滚动列表状态。
+- Allowed states: `MenuItem::Dashboard | MenuItem::Beeper`。
+- Token refs: `Type.DetailBody`, `Color.Border.Default`, `Color.State.Accent`, `Color.Focus.Right`。
+- Geometry anchor: tile `52x52`；选中项必须以 rail 平移方式保持 `center_x=160`，而不是单独放大或只移动 focus ring。
+
+### BeeperSettingsPage
+
+- Responsibility: 音频设置页，分别承载 `ACTION` 与 `PROMPT` 两组 `VOLUME` 七档选择，并显示当前编辑分组。
+- Required fields: `prefs.action_volume`, `prefs.prompt_volume`, `prefs.selected_target`。
+- Forbidden fields: 提示音素材列表、逐 cue 开关、运行中队列可视化。
+- Allowed states: `DashboardPrimaryPage::BeeperSettings`。
+- Token refs: `Type.Title`, `Type.Body`, `Type.Num`, `Color.State.Accent|Warning|Success`, `Color.Border.Default`。
+- Geometry anchor:
+  - top bar: `x=0 y=0 w=320 h=18`
+  - section title: `center_x=160 y=28`
+  - shared scale row: `x=102 y=50 w=146`
+  - `ACTION` row: `x=12 y=66 w=296 h=28`
+  - `PROMPT` row: `x=12 y=104 w=296 h=28`
+  - value badge: `x=260 w=36 h=20`
+
 ## 3. Self-check components
 
 ### DiagCard
