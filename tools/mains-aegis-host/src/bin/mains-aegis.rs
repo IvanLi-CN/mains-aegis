@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use mains_aegis_host::{default_ipc_endpoint, ipc_call, release_version};
 use serde_json::{json, Value};
+use tokio::time::{sleep, Duration};
 
 #[derive(Debug, Parser)]
 #[command(name = "mains-aegis")]
@@ -103,6 +104,10 @@ struct TraceArgs {
     trace_limit: Option<usize>,
     #[arg(long)]
     lease_id: Option<String>,
+    #[arg(long)]
+    follow: bool,
+    #[arg(long)]
+    kind: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -222,10 +227,70 @@ enum WifiCommand {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let endpoint = cli.ipc.unwrap_or_else(default_ipc_endpoint);
-    let (method, params) = command_to_ipc(cli.command);
-    let result = ipc_call(&endpoint, method, params).await?;
-    println!("{}", serde_json::to_string_pretty(&result)?);
+    match cli.command {
+        Command::Device {
+            device_id,
+            command: DeviceCommand::Trace(args),
+        } if args.follow => {
+            follow_device_trace(&endpoint, &device_id, args).await?;
+        }
+        command => {
+            let (method, params) = command_to_ipc(command);
+            let result = ipc_call(&endpoint, method, params).await?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+    }
     Ok(())
+}
+
+async fn follow_device_trace(
+    endpoint: &str,
+    device_id: &str,
+    args: TraceArgs,
+) -> anyhow::Result<()> {
+    let mut seen_ids = std::collections::BTreeSet::new();
+    loop {
+        let result = ipc_call(
+            endpoint,
+            "device.trace",
+            json!({
+                "device_id": device_id,
+                "logs_limit": args.logs_limit,
+                "trace_limit": args.trace_limit,
+                "lease_id": args.lease_id,
+            }),
+        )
+        .await?;
+        if let Some(trace) = result.get("trace").and_then(Value::as_array) {
+            for entry in trace {
+                let Some(id) = entry.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                if !seen_ids.insert(id.to_string()) {
+                    continue;
+                }
+                if !trace_entry_matches_kind(entry, args.kind.as_deref()) {
+                    continue;
+                }
+                println!("{}", serde_json::to_string(entry)?);
+            }
+        }
+        sleep(Duration::from_millis(1000)).await;
+    }
+}
+
+fn trace_entry_matches_kind(entry: &Value, kind: Option<&str>) -> bool {
+    match kind {
+        None => true,
+        Some("event") => {
+            entry.get("kind").and_then(Value::as_str) == Some("event")
+                && entry.get("target").and_then(Value::as_str) == Some("power")
+        }
+        Some(expected_kind) => entry
+            .get("kind")
+            .and_then(Value::as_str)
+            .is_some_and(|actual| actual == expected_kind),
+    }
 }
 
 fn command_to_ipc(command: Command) -> (&'static str, Value) {
@@ -314,6 +379,34 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
             MonitorCommand::Start => ("device.monitor.start", json!({ "device_id": device_id })),
             MonitorCommand::Stop => ("device.monitor.stop", json!({ "device_id": device_id })),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trace_entry_matches_kind;
+    use serde_json::json;
+
+    #[test]
+    fn event_kind_only_matches_power_target() {
+        let power_event = json!({
+            "kind": "event",
+            "target": "power",
+        });
+        let other_event = json!({
+            "kind": "event",
+            "target": "host_power",
+        });
+        let info_log = json!({
+            "kind": "log",
+            "target": "power",
+        });
+
+        assert!(trace_entry_matches_kind(&power_event, Some("event")));
+        assert!(!trace_entry_matches_kind(&other_event, Some("event")));
+        assert!(!trace_entry_matches_kind(&info_log, Some("event")));
+        assert!(trace_entry_matches_kind(&info_log, Some("log")));
+        assert!(trace_entry_matches_kind(&power_event, None));
     }
 }
 

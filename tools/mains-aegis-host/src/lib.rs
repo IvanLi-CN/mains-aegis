@@ -330,6 +330,7 @@ struct DeviceRecord {
     settings: DeviceSettingsState,
     logs: VecDeque<SerialLogEntry>,
     trace: VecDeque<SerialTraceEntry>,
+    last_power_event_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1714,6 +1715,7 @@ async fn scan_devices_inner(
                         settings: default_settings(),
                         logs: VecDeque::new(),
                         trace: persisted_trace,
+                        last_power_event_signature: None,
                     });
                 let preferred_path =
                     prefer_serial_port_path(entry.port_path.as_deref(), &port_path);
@@ -2209,6 +2211,7 @@ fn merge_lan_discoveries(
                 settings: default_settings(),
                 logs: VecDeque::new(),
                 trace: persisted_trace,
+                last_power_event_signature: None,
             });
         device.identity = Some(discovery.identity);
         device.lan_address = Some(discovery.address.clone());
@@ -4062,11 +4065,7 @@ async fn wait_for_wifi_state(
 }
 
 fn update_device_status_snapshot(state: &AppState, device_id: &str, status: Value) {
-    let mut guard = state.inner.lock().expect("state lock");
-    if let Some(device) = guard.devices.get_mut(device_id) {
-        device.status = Some(status.clone());
-    }
-    drop(guard);
+    let power_event = update_device_status_record(state, device_id, &status, false);
     emit(
         state,
         Some(device_id.to_string()),
@@ -4074,6 +4073,47 @@ fn update_device_status_snapshot(state: &AppState, device_id: &str, status: Valu
         "CDC status snapshot",
         json!({"status": status}),
     );
+    if let Some((trace, payload)) = power_event {
+        emit(
+            state,
+            Some(device_id.to_string()),
+            "serial_trace",
+            "power event",
+            json!({"trace": trace}),
+        );
+        emit(
+            state,
+            Some(device_id.to_string()),
+            "power_event",
+            "power event",
+            payload,
+        );
+    }
+}
+
+fn update_device_status_record(
+    state: &AppState,
+    device_id: &str,
+    status: &Value,
+    connection_is_live: bool,
+) -> Option<(SerialTraceEntry, Value)> {
+    let (power_event, snapshot) = {
+        let mut guard = state.inner.lock().expect("state lock");
+        let mut power_event = None;
+        if let Some(device) = guard.devices.get_mut(device_id) {
+            if connection_is_live {
+                device.connection = ConnectionState::Connected;
+            }
+            device.status = Some(status.clone());
+            power_event = maybe_record_power_event(device, status);
+            if let Some((trace, _)) = power_event.as_ref() {
+                push_bounded(&mut device.trace, trace.clone(), LOG_LIMIT);
+            }
+        }
+        (power_event, persisted_snapshot(&guard))
+    };
+    let _ = persist_devd_state(&state.persistence, snapshot);
+    power_event
 }
 
 fn update_device_power_diag_snapshot(state: &AppState, device_id: &str, power_diag: Value) {
@@ -4089,6 +4129,59 @@ fn update_device_power_diag_snapshot(state: &AppState, device_id: &str, power_di
         "CDC power diagnostic snapshot",
         json!({"power_diag": power_diag}),
     );
+}
+
+fn maybe_record_power_event(
+    device: &mut DeviceRecord,
+    status: &Value,
+) -> Option<(SerialTraceEntry, Value)> {
+    let input = status.get("input")?;
+    let charger = status.get("charger")?;
+    let pressure_state = input.get("pressure_state")?.as_str()?;
+    let pressure_reason = input
+        .get("pressure_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let pressure_score_pct = input
+        .get("pressure_score_pct")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let policy_target_ichg_ma = charger.get("policy_target_ichg_ma").and_then(Value::as_u64);
+    let limit_reason = charger
+        .get("limit_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let input_source = input
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let signature = format!(
+        "{input_source}:{pressure_state}:{pressure_reason}:{pressure_score_pct}:{:?}:{limit_reason}",
+        policy_target_ichg_ma
+    );
+    if device.last_power_event_signature.as_deref() == Some(signature.as_str()) {
+        return None;
+    }
+    device.last_power_event_signature = Some(signature);
+    let payload = json!({
+        "event": "power_state_changed",
+        "input_source": input_source,
+        "pressure_state": pressure_state,
+        "pressure_reason": pressure_reason,
+        "pressure_score_pct": pressure_score_pct,
+        "vin_vbus_mv": input.get("vin_vbus_mv").cloned().unwrap_or(Value::Null),
+        "vin_baseline_mv": input.get("vin_baseline_mv").cloned().unwrap_or(Value::Null),
+        "policy_target_ichg_ma": charger.get("policy_target_ichg_ma").cloned().unwrap_or(Value::Null),
+        "limit_reason": limit_reason,
+    });
+    let trace = structured_trace_entry(
+        "info",
+        "event",
+        Some("power".to_string()),
+        "power state changed",
+        payload.to_string(),
+    );
+    Some((trace, payload))
 }
 
 fn spawn_web_lease_reaper(state: AppState) {
@@ -4973,6 +5066,7 @@ fn seed_mock_device(state: &AppState) {
         settings: default_settings(),
         logs: VecDeque::new(),
         trace: persisted_trace,
+        last_power_event_signature: None,
     };
     apply_artifact_match(&mut device, selected_artifact.as_ref());
     guard.devices.insert(id, device);
@@ -5701,20 +5795,26 @@ fn append_monitor_trace(
     let trace_event = trace.clone();
     let log_event = log.clone();
     let status_event = status_from_trace_payload(&trace_event.payload);
-    let snapshot = {
+    let power_event = {
         let mut guard = state.inner.lock().expect("state lock");
+        let mut power_event = None;
         if let Some(device) = guard.devices.get_mut(device_id) {
             device.connection = ConnectionState::Connected;
             push_bounded(&mut device.trace, trace, LOG_LIMIT);
             if let Some(status) = status_event.clone() {
-                device.status = Some(status);
+                device.status = Some(status.clone());
+                power_event = maybe_record_power_event(device, &status);
+                if let Some((trace, _)) = power_event.as_ref() {
+                    push_bounded(&mut device.trace, trace.clone(), LOG_LIMIT);
+                }
             }
             if let Some(log) = log {
                 push_bounded(&mut device.logs, log, LOG_LIMIT);
             }
         }
-        persisted_snapshot(&guard)
+        (power_event, persisted_snapshot(&guard))
     };
+    let (power_event, snapshot) = power_event;
     let _ = persist_devd_state(&state.persistence, snapshot);
     emit(
         state,
@@ -5739,6 +5839,22 @@ fn append_monitor_trace(
             "serial_status",
             "CDC status snapshot",
             json!({"status": status}),
+        );
+    }
+    if let Some((trace, payload)) = power_event {
+        emit(
+            state,
+            Some(device_id.to_string()),
+            "serial_trace",
+            "power event",
+            json!({"trace": trace}),
+        );
+        emit(
+            state,
+            Some(device_id.to_string()),
+            "power_event",
+            "power event",
+            payload,
         );
     }
 }
@@ -6760,6 +6876,96 @@ mod tests {
         assert!(!path.exists());
     }
 
+    #[tokio::test]
+    async fn status_updates_emit_deduped_power_events() {
+        let state = create_app_state(false);
+        let device_id = "mock-devkit";
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "headroom",
+                "pressure_score_pct": 8,
+                "pressure_reason": "none",
+                "vin_vbus_mv": 19420,
+                "vin_baseline_mv": 19480,
+            },
+            "charger": {
+                "policy_target_ichg_ma": 500,
+                "limit_reason": "startup_ramp",
+            }
+        });
+
+        update_device_status_snapshot(&state, device_id, status.clone());
+        update_device_status_snapshot(&state, device_id, status);
+
+        let guard = state.inner.lock().expect("state lock");
+        let power_events = guard
+            .events
+            .iter()
+            .filter(|event| event.device_id.as_deref() == Some(device_id))
+            .filter(|event| event.kind == "power_event")
+            .count();
+        let power_traces = guard
+            .devices
+            .get(device_id)
+            .unwrap()
+            .trace
+            .iter()
+            .filter(|trace| trace.kind == "event" && trace.target.as_deref() == Some("power"))
+            .count();
+
+        assert_eq!(power_events, 1);
+        assert_eq!(power_traces, 1);
+    }
+
+    #[tokio::test]
+    async fn monitor_trace_status_frames_append_power_event() {
+        let state = create_app_state(false);
+        let device_id = "mock-devkit";
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "limited",
+                "pressure_score_pct": 84,
+                "pressure_reason": "vindpm",
+                "vin_vbus_mv": 18620,
+                "vin_baseline_mv": 19480,
+            },
+            "charger": {
+                "policy_target_ichg_ma": 100,
+                "limit_reason": "pressure_vindpm",
+            }
+        });
+        let payload = json!({
+            "type": "status",
+            "status": status,
+        })
+        .to_string();
+
+        append_monitor_trace(&state, device_id, trace_entry("rx", &payload), None);
+
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard.devices.get(device_id).unwrap();
+        let power_trace = device
+            .trace
+            .iter()
+            .find(|trace| trace.kind == "event" && trace.target.as_deref() == Some("power"))
+            .cloned()
+            .expect("power event trace");
+        let power_event = guard
+            .events
+            .iter()
+            .find(|event| {
+                event.device_id.as_deref() == Some(device_id) && event.kind == "power_event"
+            })
+            .cloned()
+            .expect("power event");
+
+        assert_eq!(power_event.payload["pressure_state"], "limited");
+        assert_eq!(power_event.payload["limit_reason"], "pressure_vindpm");
+        assert_eq!(power_trace.summary, "power state changed");
+    }
+
     #[test]
     fn stable_device_id_is_deterministic() {
         let port = serialport::SerialPortInfo {
@@ -6811,6 +7017,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
 
         assert_eq!(native_device_stable_id(&device), Some("serial-a"));
@@ -6848,6 +7055,7 @@ mod tests {
                     settings: default_settings(),
                     logs: VecDeque::new(),
                     trace: VecDeque::new(),
+                    last_power_event_signature: None,
                 },
             );
         }
@@ -7068,6 +7276,7 @@ mod tests {
                 settings: default_settings(),
                 logs: VecDeque::new(),
                 trace: VecDeque::new(),
+                last_power_event_signature: None,
             },
         );
         let discovery = LanDeviceDiscovery {
@@ -7130,6 +7339,7 @@ mod tests {
                 settings: default_settings(),
                 logs: VecDeque::new(),
                 trace: VecDeque::new(),
+                last_power_event_signature: None,
             },
         );
         let discovery = LanDeviceDiscovery {
@@ -7177,6 +7387,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
 
         let transports = connection_transports(&device);
@@ -7228,6 +7439,7 @@ mod tests {
                 settings: default_settings(),
                 logs: VecDeque::new(),
                 trace: device_trace,
+                last_power_event_signature: None,
             },
         );
 
@@ -7486,6 +7698,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
         let artifact = FirmwareArtifact {
             artifact_id: "a".into(),
@@ -7530,6 +7743,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
         let artifact = FirmwareArtifact {
             artifact_id: "a".into(),
@@ -7574,6 +7788,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
         let artifact = FirmwareArtifact {
             artifact_id: "a".into(),
@@ -7618,6 +7833,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
         let artifact = FirmwareArtifact {
             artifact_id: "a".into(),
@@ -7660,6 +7876,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
         assert_eq!(bound_flash_port(&device), None);
         device.binding = Some(DeviceBinding {
