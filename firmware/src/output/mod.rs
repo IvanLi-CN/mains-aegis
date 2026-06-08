@@ -3229,6 +3229,7 @@ pub struct PowerManager<'d, I2C> {
     charge_policy: ChargePolicyMemory,
     charge_policy_derate: ChargePolicyDerateTracker,
     charge_policy_output_load: ChargePolicyOutputLoadTracker,
+    dcin_input_pressure: DcinInputPressureTracker,
     manual_charge_prefs: ManualChargePrefs,
     manual_charge_prefs_offset: u16,
     manual_charge_storage_ready: bool,
@@ -3716,6 +3717,7 @@ where
             charge_policy: ChargePolicyMemory::default(),
             charge_policy_derate: ChargePolicyDerateTracker::default(),
             charge_policy_output_load: ChargePolicyOutputLoadTracker::default(),
+            dcin_input_pressure: DcinInputPressureTracker::default(),
             manual_charge_prefs,
             manual_charge_prefs_offset,
             manual_charge_storage_ready,
@@ -4173,11 +4175,26 @@ where
     fn refresh_power_diag_input_snapshot(&mut self) {
         let usb_pd = self.usb_pd_state;
         self.power_diag.input = PowerDiagInputSnapshot {
+            source: self
+                .ui_snapshot
+                .dashboard_detail
+                .input_source
+                .map(|source| dashboard_input_source_name(Some(source)))
+                .unwrap_or("unknown"),
             mains_present: self.ui_snapshot.vin_mains_present,
             input_vbus_mv: self.ui_snapshot.input_vbus_mv,
             input_ibus_ma: self.ui_snapshot.input_ibus_ma,
             vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
             vin_iin_ma: self.ui_snapshot.vin_iin_ma,
+            pressure_state: self
+                .ui_snapshot
+                .dashboard_detail
+                .input_pressure_state
+                .unwrap_or("inactive"),
+            pressure_score_pct: self.ui_snapshot.dashboard_detail.input_pressure_score_pct,
+            pressure_reason: self.ui_snapshot.dashboard_detail.input_pressure_reason,
+            vin_baseline_mv: self.ui_snapshot.dashboard_detail.input_vin_baseline_mv,
+            vin_drop_mv: self.ui_snapshot.dashboard_detail.input_vin_drop_mv,
             usb_pd_attached: usb_pd.attached,
             usb_pd_charge_ready: usb_pd.charge_ready,
             usb_pd_vbus_present: usb_pd.vbus_present,
@@ -9572,7 +9589,6 @@ where
                 .or_else(|| policy_state.map(ChargePolicyState::as_str))
                 .unwrap_or("charger_policy_pending")
         };
-
         let manual_stop_hold_blocks_charge = manual_charge_stop_hold_blocks_charge(
             self.manual_charge_runtime.stop_inhibit,
             activation_pending,
@@ -9686,6 +9702,34 @@ where
                 ManualChargeStopReason::SafetyBlocked
             ) {
                 self.manual_charge_runtime.last_stop_reason = ManualChargeStopReason::None;
+            }
+        }
+        let dcin_pressure = dcin_input_pressure_step(
+            &mut self.dcin_input_pressure,
+            charge_policy_now_ms,
+            DcinInputPressureInput {
+                input_source,
+                requested_target_ichg_ma: policy_target_ichg_ma,
+                allow_charge,
+                vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
+                vin_iin_ma: self.ui_snapshot.vin_iin_ma,
+                poorsrc,
+                vindpm,
+                iindpm,
+            },
+        );
+        let policy_detail_status_text = dcin_charge_detail_status_text(
+            policy_status_text,
+            dcin_pressure.limit_active,
+            dcin_pressure.allow_charge,
+            dcin_pressure.effective_target_ichg_ma,
+            dcin_pressure.limit_reason,
+        );
+        if matches!(input_source, Some(DashboardInputSource::DcIn)) {
+            allow_charge = dcin_pressure.allow_charge;
+            policy_target_ichg_ma = dcin_pressure.effective_target_ichg_ma;
+            if dcin_pressure.limit_active || !dcin_pressure.allow_charge {
+                policy_notice_text = dcin_pressure.limit_reason.as_str();
             }
         }
         let mut applied_ctrl0 = ctrl0;
@@ -10164,6 +10208,16 @@ where
                 .map(ChargePolicyOutputBlockReason::as_str),
             recovery_stage: policy_recovery_stage.map(ChargePolicyRecoveryStage::as_str),
             target_ichg_ma: policy_target_ichg_ma,
+            adaptive_cap_ichg_ma: dcin_pressure.adaptive_cap_ichg_ma,
+            effective_target_ichg_ma: dcin_pressure.effective_target_ichg_ma,
+            limit_active: dcin_pressure.limit_active,
+            limit_reason: Some(dcin_pressure.limit_reason.as_str()),
+            detail_status: Some(policy_detail_status_text),
+            pressure_state: dcin_pressure.pressure_state.as_str(),
+            pressure_reason: Some(dcin_pressure.pressure_reason.as_str()),
+            pressure_score_pct: Some(dcin_pressure.pressure_score_pct),
+            vin_baseline_mv: dcin_pressure.vin_baseline_mv,
+            vin_drop_mv: dcin_pressure.vin_drop_mv,
             output_power_w10,
             charge_latched: self.charge_policy.charge_latched,
             full_latched: self.charge_policy.full_latched,
@@ -10316,6 +10370,14 @@ where
         self.ui_snapshot.fusb302_vbus_present =
             usb_pd_vbus_present(self.usb_pd_state.vbus_present, ac1_present);
         self.ui_snapshot.dashboard_detail.input_source = input_source;
+        self.ui_snapshot.dashboard_detail.input_pressure_state =
+            Some(dcin_pressure.pressure_state.as_str());
+        self.ui_snapshot.dashboard_detail.input_pressure_score_pct =
+            Some(dcin_pressure.pressure_score_pct);
+        self.ui_snapshot.dashboard_detail.input_pressure_reason =
+            Some(dcin_pressure.pressure_reason.as_str());
+        self.ui_snapshot.dashboard_detail.input_vin_baseline_mv = dcin_pressure.vin_baseline_mv;
+        self.ui_snapshot.dashboard_detail.input_vin_drop_mv = dcin_pressure.vin_drop_mv;
         self.ui_snapshot.dashboard_detail.charger_protocol =
             charger_protocol_from_usb_pd(input_source, self.usb_pd_state);
         self.ui_snapshot.dashboard_detail.charger_active = Some(
@@ -10342,11 +10404,19 @@ where
             ts_warm,
             policy_status_text,
         ));
+        self.ui_snapshot.dashboard_detail.charger_detail_status = Some(policy_detail_status_text);
+        self.ui_snapshot
+            .dashboard_detail
+            .charger_policy_target_ichg_ma = policy_target_ichg_ma;
+        self.ui_snapshot.dashboard_detail.charger_limit_active = Some(dcin_pressure.limit_active);
+        self.ui_snapshot.dashboard_detail.charger_limit_reason =
+            Some(dcin_pressure.limit_reason.as_str());
         self.ui_snapshot.dashboard_detail.charger_notice = Some(charger_detail_notice_text(
             charger_fault,
             ts_warm,
             policy_notice_text,
         ));
+        self.refresh_power_diag_input_snapshot();
         self.update_manual_charge_ui_snapshot(now);
         self.recompute_ui_mode();
 

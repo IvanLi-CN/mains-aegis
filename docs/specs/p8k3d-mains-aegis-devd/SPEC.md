@@ -61,7 +61,9 @@
 - `GET /api/v1/devices/{id}/connection`: 返回 transport、连接状态、绑定与 artifact 上下文。
 - `GET /api/v1/devices/{id}/settings`: 返回当前设备 settings 快照。
 - `GET /api/v1/devices/{id}/trace`: 返回 bounded logs/trace 与 `log_decode`。
+- `GET /api/v1/devices/{id}/trace` 必须允许 owner 通过客户端 follow 轮询看到新增 `kind=event,target=power` 的 synthetic power event；event payload 至少包含 `event/input_source/pressure_state/pressure_reason/pressure_score_pct/vin_vbus_mv/vin_baseline_mv/policy_target_ichg_ma/limit_reason`。
 - `GET /api/v1/devices/{id}/events`: 设备事件 SSE。
+- 设备状态边沿变化时，devd 必须把 power-related 边沿变化收敛为 single-shot synthetic event，而不是每次 poll 刷新都广播重复事件。
 - `POST /api/v1/wifi-config` / `DELETE /api/v1/wifi-config`: 通过指定 `device_id` 的已连接设备写入或清除 WiFi 配置；未指定 `device_id` 时仅允许单设备连接场景。
 - `POST /api/v1/settings/log-level`: 通过指定 `device_id` 的连接设备更新日志级别。
 - `POST /api/v1/settings/manual-charge`: 通过指定 `device_id` 的连接设备更新手动充电偏好。

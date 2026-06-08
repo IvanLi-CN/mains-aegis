@@ -20,6 +20,7 @@
 - 使用 `BQ40Z50` 可信遥测决定是否开始充电：`RSOC < 80%` 或 `最低单体电压 < 3.70V`。
 - 充电一旦开始，保持到“满充”才停止；常规充电满充定义为 `BQ40 FC` 或 `BQ25792 termination_done` 任一成立。
 - 仅在 `DC5025` 独占输入且 `IBUS > 3.0A` 持续 `1s` 时，把 `ICHG` 降到 `100mA`；回落到 `<2.7A` 持续 `5s` 后恢复 `500mA`。
+- `DC IN` 独占输入时，新增 `UPS VIN / INA3221 CH3` 驱动的自适应限充闭环：从 `100mA` 起步，稳定 `3s` 后每次 `+100mA`，命中 `VINDPM/IINDPM/POORSRC` 或 `UPS VIN` 相对当前稳定基线连续两次下跌超过 `4%` 时先 `-200mA`；若已在 `100mA` 仍命中，则停充 `30s`，稳定 `10s` 后再重试。
 - DC IN/VAC2 被 BQ25792 实际选中时，输入源判定必须优先使用 charger-side VBUS/VAC ADC 事实，而不是 USB PD attach 状态；DC 输入 profile 必须写入 `IINDPM=3000mA`。
 - BMS CUV 低电恢复允许在 `PCHG=true`、`PF=0`、`CUVC=false` 且 DC IN 或 USB-C 输入在线时进入受控 `100mA` 恢复；该恢复态显示为 `RECOV`，不同于 DC 过流降档 `CHG100`。所有 `100mA` 充电/恢复模式必须把 BQ25792 `ITERM` 写到低于目标电流的安全值（当前 `40mA`），否则 BQ 会立即进入 `termination_done` 而不持续充电。
 - 低压恢复采用两段式：`charge_ready=false` 且 BQ40 `PCHG` 可用时为 `policy.recovery_stage=bq40_pchg`；BQ40 在 `CUV Recovery=2550mV/cell` 释放 CUV 后，只要 `cell_min_mv < 3000`、`PCHG=true`、`XCHG=false` 且无 Safety/PF/charging-inhibit，主固件仍保持 `RECOV/100mA`，随后 `charge_ready=true` 时转入 `policy.recovery_stage=bq25792_precharge`。只有 `cell_min_mv >= 3000` 后才恢复常规 `500mA`。
@@ -73,6 +74,7 @@
 - 日志应直接输出策略状态、启动原因、满充原因、目标 `ICHG`、输入源与 DC 降档计时器。
 - Dashboard charger detail 应显示短状态 token，同时在 notice 里保留精确状态名。
 - `TS_WARM` 时 Dashboard charger detail 应优先显示 `WARM`，即使充电策略本身仍处于 `CHG500/CHG100`。
+- `DC IN` 自适应限充的当前输入压力、限流值与限流原因必须作为 owner-facing 状态输出，不允许只存在于 defmt 或局部寄存器日志里。
 - Dashboard charger detail 与首页 charge 区域应优先显示 `BQ25792 IBAT_ADC` 实测电流；若 `IBAT_ADC` 暂时不可用，则回退到目标 `ICHG`。
 - 首页 `ChargeCard` 应直接从 runtime charger state 派生紧凑 token，而不是按 `UpsMode` 或 `allow_charge + current` 推导。
 - `IBUS/VBUS/VBAT/VSYS/IBAT` 的 BQ25792 ADC 遥测应保持真实量级，不得把 `~5.2V/102mA` 误解成 `~21.8V/26.1A` 一类 swapped 假值。
@@ -233,6 +235,22 @@ None。
 - `WARM`: `BQ25792 TS_WARM` 已进入预警温区，UI 提示并强制风扇高转，但不因此停充。
 
 ![Charger WARM](./assets/charger-warm.png)
+
+- `HEADROOM`: `DC IN` 输入充裕时，Input 面板显示 `headroom`，Charger 面板显示当前生效目标且无主动限流。
+
+![DC IN headroom pressure](./assets/power-pressure-headroom.png)
+
+- `WATCH`: `DC IN` 刚出现输入压力迹象时，Input 面板显示 `watch`，Charger 面板显示当前受限目标与恢复保持原因。
+
+![DC IN watch pressure](./assets/power-pressure-watch.png)
+
+- `LIMITED`: `VINDPM/IINDPM/POORSRC` 或 VIN 压降确认后，Input 面板显示 `limited`，Charger 面板显示生效限流电流与原因。
+
+![DC IN limited pressure](./assets/power-pressure-limited.png)
+
+- `COOLDOWN`: `100mA` 仍无法稳定输入时，Input 面板显示 `cooldown`，Charger 面板显示停充等待窗口与 `cooldown_retry_wait`。
+
+![DC IN cooldown pressure](./assets/power-pressure-cooldown.png)
 
 ## 资产晋升（Asset promotion）
 
