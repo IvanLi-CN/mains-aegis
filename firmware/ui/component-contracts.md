@@ -139,8 +139,8 @@
 
 ### BeeperSettingsPage
 
-- Responsibility: 音频设置页，分别承载 `ACTION` 与 `PROMPT` 两组 `VOLUME` 七档选择，并显示当前编辑分组。
-- Required fields: `prefs.action_volume`, `prefs.prompt_volume`, `prefs.selected_target`。
+- Responsibility: 音频设置页，分别承载 `ACTION` 与 `SYSTEM` 两组 `VOLUME` 七档选择，并显示当前编辑分组。
+- Required fields: `prefs.action_volume`, `prefs.system_volume`, `prefs.selected_target`。
 - Forbidden fields: 提示音素材列表、逐 cue 开关、运行中队列可视化。
 - Allowed states: `DashboardPrimaryPage::BeeperSettings`。
 - Token refs: `Type.Title`, `Type.Body`, `Type.Num`, `Color.State.Accent|Warning|Success`, `Color.Border.Default`。
@@ -148,7 +148,7 @@
   - top bar: `x=0 y=0 w=320 h=18`
   - shared scale row: `x=102 y=50 w=146`
   - `ACTION` row: `x=12 y=66 w=296 h=28`
-  - `PROMPT` row: `x=12 y=104 w=296 h=28`
+  - `SYSTEM` row: `x=12 y=104 w=296 h=28`
   - value badge: `x=260 w=36 h=20`
 
 ## 3. Self-check components

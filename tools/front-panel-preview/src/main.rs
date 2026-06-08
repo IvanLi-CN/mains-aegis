@@ -1068,8 +1068,8 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardMenuConceptSplitRail
         | ScenarioArg::DashboardMenuConceptSignalPlate
         | ScenarioArg::DashboardAudioActionFocus
-        | ScenarioArg::DashboardAudioPromptFocus
-        | ScenarioArg::DashboardAudioPromptOff
+        | ScenarioArg::DashboardAudioSystemFocus
+        | ScenarioArg::DashboardAudioSystemOff
         | ScenarioArg::DashboardMenuTransitionMid
         | ScenarioArg::DashboardMenuTransitionEnd
         | ScenarioArg::DashboardRuntimeAssist
@@ -1149,8 +1149,8 @@ fn run() -> Result<(), String> {
         ScenarioArg::DashboardMenuConceptSplitRail => ModeArg::Standby,
         ScenarioArg::DashboardMenuConceptSignalPlate => ModeArg::Standby,
         ScenarioArg::DashboardAudioActionFocus => ModeArg::Standby,
-        ScenarioArg::DashboardAudioPromptFocus => ModeArg::Standby,
-        ScenarioArg::DashboardAudioPromptOff => ModeArg::Standby,
+        ScenarioArg::DashboardAudioSystemFocus => ModeArg::Standby,
+        ScenarioArg::DashboardAudioSystemOff => ModeArg::Standby,
         ScenarioArg::DashboardMenuTransitionMid => ModeArg::Standby,
         ScenarioArg::DashboardMenuTransitionEnd => ModeArg::Standby,
         ScenarioArg::DashboardDetailCells => ModeArg::Standby,
@@ -1313,8 +1313,8 @@ fn run() -> Result<(), String> {
         | ScenarioArg::DashboardMenuConceptSplitRail
         | ScenarioArg::DashboardMenuConceptSignalPlate
         | ScenarioArg::DashboardAudioActionFocus
-        | ScenarioArg::DashboardAudioPromptFocus
-        | ScenarioArg::DashboardAudioPromptOff
+        | ScenarioArg::DashboardAudioSystemFocus
+        | ScenarioArg::DashboardAudioSystemOff
         | ScenarioArg::DashboardMenuTransitionMid
         | ScenarioArg::DashboardMenuTransitionEnd => {
             let (mode, shell, snapshot) = match args.scenario {
@@ -1394,7 +1394,7 @@ fn run() -> Result<(), String> {
                     ),
                     UI_H as i16,
                 ),
-                ScenarioArg::DashboardAudioPromptFocus => dashboard_shell_fixture(
+                ScenarioArg::DashboardAudioSystemFocus => dashboard_shell_fixture(
                     DashboardPrimaryPage::BeeperSettings,
                     DashboardHomeFocus::Charger,
                     MenuItem::Beeper,
@@ -1402,11 +1402,11 @@ fn run() -> Result<(), String> {
                     BeeperPrefs::new(
                         BeeperVolumeLevel::L2,
                         BeeperVolumeLevel::L4,
-                        BeeperSettingTarget::Prompt,
+                        BeeperSettingTarget::System,
                     ),
                     UI_H as i16,
                 ),
-                ScenarioArg::DashboardAudioPromptOff => dashboard_shell_fixture(
+                ScenarioArg::DashboardAudioSystemOff => dashboard_shell_fixture(
                     DashboardPrimaryPage::BeeperSettings,
                     DashboardHomeFocus::Charger,
                     MenuItem::Beeper,
@@ -1414,7 +1414,7 @@ fn run() -> Result<(), String> {
                     BeeperPrefs::new(
                         BeeperVolumeLevel::L3,
                         BeeperVolumeLevel::Off,
-                        BeeperSettingTarget::Prompt,
+                        BeeperSettingTarget::System,
                     ),
                     UI_H as i16,
                 ),
@@ -1893,8 +1893,8 @@ enum ScenarioArg {
     DashboardMenuConceptSplitRail,
     DashboardMenuConceptSignalPlate,
     DashboardAudioActionFocus,
-    DashboardAudioPromptFocus,
-    DashboardAudioPromptOff,
+    DashboardAudioSystemFocus,
+    DashboardAudioSystemOff,
     DashboardMenuTransitionMid,
     DashboardMenuTransitionEnd,
     DashboardDetailCells,
@@ -1983,11 +1983,11 @@ impl ScenarioArg {
             "dashboard-menu-concept-split-rail" => Ok(Self::DashboardMenuConceptSplitRail),
             "dashboard-menu-concept-signal-plate" => Ok(Self::DashboardMenuConceptSignalPlate),
             "dashboard-audio-action-focus" => Ok(Self::DashboardAudioActionFocus),
-            "dashboard-audio-prompt-focus" => Ok(Self::DashboardAudioPromptFocus),
-            "dashboard-audio-prompt-off" => Ok(Self::DashboardAudioPromptOff),
-            "dashboard-beeper-volume-off" => Ok(Self::DashboardAudioPromptOff),
+            "dashboard-audio-system-focus" => Ok(Self::DashboardAudioSystemFocus),
+            "dashboard-audio-system-off" => Ok(Self::DashboardAudioSystemOff),
+            "dashboard-beeper-volume-off" => Ok(Self::DashboardAudioSystemOff),
             "dashboard-beeper-volume-mid" => Ok(Self::DashboardAudioActionFocus),
-            "dashboard-beeper-volume-max" => Ok(Self::DashboardAudioPromptFocus),
+            "dashboard-beeper-volume-max" => Ok(Self::DashboardAudioSystemFocus),
             "dashboard-menu-transition-mid" => Ok(Self::DashboardMenuTransitionMid),
             "dashboard-menu-transition-end" => Ok(Self::DashboardMenuTransitionEnd),
             "dashboard-detail-cells" => Ok(Self::DashboardDetailCells),
@@ -2094,8 +2094,8 @@ impl ScenarioArg {
             ScenarioArg::DashboardMenuConceptSplitRail => "dashboard-menu-concept-split-rail",
             ScenarioArg::DashboardMenuConceptSignalPlate => "dashboard-menu-concept-signal-plate",
             ScenarioArg::DashboardAudioActionFocus => "dashboard-audio-action-focus",
-            ScenarioArg::DashboardAudioPromptFocus => "dashboard-audio-prompt-focus",
-            ScenarioArg::DashboardAudioPromptOff => "dashboard-audio-prompt-off",
+            ScenarioArg::DashboardAudioSystemFocus => "dashboard-audio-system-focus",
+            ScenarioArg::DashboardAudioSystemOff => "dashboard-audio-system-off",
             ScenarioArg::DashboardMenuTransitionMid => "dashboard-menu-transition-mid",
             ScenarioArg::DashboardMenuTransitionEnd => "dashboard-menu-transition-end",
             ScenarioArg::DashboardDetailCells => "dashboard-detail-cells",

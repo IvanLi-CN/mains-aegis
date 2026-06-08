@@ -482,16 +482,16 @@ impl BeeperVolumeLevel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BeeperSettingTarget {
     Action,
-    Prompt,
+    System,
 }
 
 impl BeeperSettingTarget {
-    pub const ALL: [Self; 2] = [Self::Action, Self::Prompt];
+    pub const ALL: [Self; 2] = [Self::Action, Self::System];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Action => "ACTION",
-            Self::Prompt => "PROMPT",
+            Self::System => "SYSTEM",
         }
     }
 }
@@ -499,7 +499,7 @@ impl BeeperSettingTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BeeperPrefs {
     pub action_volume: BeeperVolumeLevel,
-    pub prompt_volume: BeeperVolumeLevel,
+    pub system_volume: BeeperVolumeLevel,
     pub selected_target: BeeperSettingTarget,
 }
 
@@ -507,19 +507,19 @@ impl BeeperPrefs {
     pub const fn defaults() -> Self {
         Self {
             action_volume: BeeperVolumeLevel::L6,
-            prompt_volume: BeeperVolumeLevel::L6,
+            system_volume: BeeperVolumeLevel::L6,
             selected_target: BeeperSettingTarget::Action,
         }
     }
 
     pub const fn new(
         action_volume: BeeperVolumeLevel,
-        prompt_volume: BeeperVolumeLevel,
+        system_volume: BeeperVolumeLevel,
         selected_target: BeeperSettingTarget,
     ) -> Self {
         Self {
             action_volume,
-            prompt_volume,
+            system_volume,
             selected_target,
         }
     }
@@ -527,7 +527,7 @@ impl BeeperPrefs {
     pub const fn volume_for(self, target: BeeperSettingTarget) -> BeeperVolumeLevel {
         match target {
             BeeperSettingTarget::Action => self.action_volume,
-            BeeperSettingTarget::Prompt => self.prompt_volume,
+            BeeperSettingTarget::System => self.system_volume,
         }
     }
 }
@@ -1100,7 +1100,7 @@ const AUDIO_ROW_X: u16 = 12;
 const AUDIO_ROW_W: u16 = 296;
 const AUDIO_ROW_H: u16 = 28;
 const AUDIO_ACTION_ROW_Y: u16 = 66;
-const AUDIO_PROMPT_ROW_Y: u16 = 104;
+const AUDIO_SYSTEM_ROW_Y: u16 = 104;
 const AUDIO_TRACK_X: u16 = 102;
 const AUDIO_TRACK_W: u16 = 146;
 const AUDIO_TRACK_H: u16 = 18;
@@ -4134,14 +4134,14 @@ fn beeper_volume_index(level: BeeperVolumeLevel) -> usize {
 fn beeper_setting_row_y(target: BeeperSettingTarget) -> u16 {
     match target {
         BeeperSettingTarget::Action => AUDIO_ACTION_ROW_Y,
-        BeeperSettingTarget::Prompt => AUDIO_PROMPT_ROW_Y,
+        BeeperSettingTarget::System => AUDIO_SYSTEM_ROW_Y,
     }
 }
 
 fn beeper_target_focus_color(palette: Palette, target: BeeperSettingTarget) -> u16 {
     match target {
         BeeperSettingTarget::Action => palette.right,
-        BeeperSettingTarget::Prompt => palette.center,
+        BeeperSettingTarget::System => palette.center,
     }
 }
 

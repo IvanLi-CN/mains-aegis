@@ -78,8 +78,8 @@ def menu_beeper_review_images() -> tuple[ReviewImage, ...]:
         ReviewImage("Menu / Dashboard", base / "dashboard-menu-dashboard.png"),
         ReviewImage("Menu / Audio", base / "dashboard-menu-beeper.png"),
         ReviewImage("Audio / Action", base / "dashboard-audio-action-focus.png"),
-        ReviewImage("Audio / Prompt", base / "dashboard-audio-prompt-focus.png"),
-        ReviewImage("Audio / Prompt Off", base / "dashboard-audio-prompt-off.png"),
+        ReviewImage("Audio / System", base / "dashboard-audio-system-focus.png"),
+        ReviewImage("Audio / System Off", base / "dashboard-audio-system-off.png"),
         ReviewImage("Transition / Mid", base / "dashboard-menu-transition-mid.png"),
         ReviewImage("Transition / End", base / "dashboard-menu-transition-end.png"),
     )
@@ -168,8 +168,8 @@ def menu_beeper_storyboard_rows() -> tuple[StoryboardRow, ...]:
                 ),
                 StoryboardStep(
                     "Audio Settings",
-                    "Two controls exist: ACTION and PROMPT, each = OFF + 1..6.",
-                    base / "dashboard-audio-prompt-focus.png",
+                    "Two controls exist: ACTION and SYSTEM, each = 0 + 1..6.",
+                    base / "dashboard-audio-system-focus.png",
                 ),
                 StoryboardStep(
                     "Back Path",
