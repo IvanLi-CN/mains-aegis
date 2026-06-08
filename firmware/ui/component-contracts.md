@@ -146,7 +146,6 @@
 - Token refs: `Type.Title`, `Type.Body`, `Type.Num`, `Color.State.Accent|Warning|Success`, `Color.Border.Default`。
 - Geometry anchor:
   - top bar: `x=0 y=0 w=320 h=18`
-  - section title: `center_x=160 y=28`
   - shared scale row: `x=102 y=50 w=146`
   - `ACTION` row: `x=12 y=66 w=296 h=28`
   - `PROMPT` row: `x=12 y=104 w=296 h=28`

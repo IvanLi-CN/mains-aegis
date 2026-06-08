@@ -1095,7 +1095,6 @@ const DASHBOARD_MENU_FOOTER_ACCENT_W: u16 = 56;
 const DASHBOARD_MENU_FOOTER_BADGE_W: u16 = 140;
 const DASHBOARD_MENU_FOOTER_BADGE_H: u16 = 24;
 
-const AUDIO_TITLE_Y: u16 = 28;
 const AUDIO_SCALE_Y: u16 = 50;
 const AUDIO_ROW_X: u16 = 12;
 const AUDIO_ROW_W: u16 = 296;
@@ -1109,7 +1108,6 @@ const AUDIO_NODE_SIZE: u16 = 8;
 const AUDIO_BADGE_X: u16 = 260;
 const AUDIO_BADGE_W: u16 = 36;
 const AUDIO_BADGE_H: u16 = 20;
-const AUDIO_FOOTER_Y: u16 = 154;
 
 const DASHBOARD_DETAIL_BACK_X: u16 = 8;
 const DASHBOARD_DETAIL_BACK_Y: u16 = 2;
@@ -3915,15 +3913,6 @@ fn render_beeper_settings_page<P: UiPainter>(
         prefs.selected_target.label(),
         beeper_target_focus_color(palette, prefs.selected_target),
     )?;
-    text(
-        painter,
-        variant,
-        FontRole::DetailTitle,
-        "VOLUME",
-        Point::new((UI_W / 2) as i32, AUDIO_TITLE_Y as i32),
-        HorizontalAlignment::Center,
-        palette.text,
-    )?;
     draw_beeper_settings_scale(painter, variant, palette)?;
     for target in BeeperSettingTarget::ALL {
         draw_beeper_settings_row(
@@ -3935,15 +3924,7 @@ fn render_beeper_settings_page<P: UiPainter>(
             prefs.selected_target == target,
         )?;
     }
-    text(
-        painter,
-        variant,
-        FontRole::TextBody,
-        "UP/DOWN SELECT  LEFT/RIGHT ADJUST",
-        Point::new((UI_W / 2) as i32, AUDIO_FOOTER_Y as i32),
-        HorizontalAlignment::Center,
-        palette.text_dim,
-    )
+    Ok(())
 }
 
 fn draw_beeper_settings_scale<P: UiPainter>(
