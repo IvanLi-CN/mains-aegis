@@ -84,14 +84,17 @@ const DISPLAY_CTRL_BRIGHTNESS_ON_BACKLIGHT_ON: u8 = 0x24;
 const DISPLAY_CTRL_BRIGHTNESS_DIM_BACKLIGHT_ON: u8 = 0x2C;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
+const DASHBOARD_MENU_ANIMATION_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const CENTER_LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(800);
 const BOOT_SPLASH_HOLD: Duration = Duration::from_millis(900);
-const DASHBOARD_MENU_ANIMATION_STEPS: u8 = 2;
+const DASHBOARD_MENU_ANIMATION_STEPS: u8 = 10;
 const PANEL_INIT_SPI_FREQ_MHZ: u32 = 10;
 const PANEL_RUNTIME_SPI_FREQ_MHZ: u32 = if cfg!(feature = "display-spi-20mhz") {
     20
-} else {
+} else if cfg!(feature = "display-spi-40mhz") {
     40
+} else {
+    80
 };
 const DASHBOARD_MENU_DRAG_THRESHOLD_PX: i16 = 28;
 
@@ -1106,7 +1109,12 @@ where
         if now < self.next_frame_deadline {
             return None;
         }
-        self.next_frame_deadline += FRAME_INTERVAL;
+        let frame_interval = if self.dashboard_menu_animation.is_some() {
+            DASHBOARD_MENU_ANIMATION_FRAME_INTERVAL
+        } else {
+            FRAME_INTERVAL
+        };
+        self.next_frame_deadline = now + frame_interval;
 
         let mut ui_action = None;
         match self.read_inputs() {
@@ -1162,6 +1170,9 @@ where
                     return ui_action;
                 }
                 let inputs_changed = self.last_inputs != Some(snapshot);
+                if self.dashboard_menu_animation.is_some() {
+                    self.next_frame_deadline = now + DASHBOARD_MENU_ANIMATION_FRAME_INTERVAL;
+                }
                 let menu_animation_active = self.update_dashboard_menu_animation();
                 let should_render = self.needs_redraw
                     || menu_animation_active
