@@ -2917,12 +2917,7 @@ async fn bind_companion_lan(
         }
         (
             identity_device_id,
-            device.port_path.clone().ok_or_else(|| {
-                HttpError::non_retryable(
-                    "device_port_missing",
-                    "USB port is not available; rebind the USB device before saving a LAN companion",
-                )
-            })?,
+            device.port_path.clone(),
             guard
                 .monitors
                 .get(&id)
@@ -2932,6 +2927,12 @@ async fn bind_companion_lan(
     let refreshed_candidate = if let Some((mdns_host, ip, port)) = explicit_target {
         verify_explicit_companion_lan_candidate(&identity_device_id, &mdns_host, &ip, port).await?
     } else {
+        let port_path = port_path.ok_or_else(|| {
+            HttpError::non_retryable(
+                "device_port_missing",
+                "USB port is not available; rebind the USB device before saving a LAN companion",
+            )
+        })?;
         detect_companion_lan_candidate(&state, &id, port_path, monitor_command_tx)
             .await?
             .ok_or_else(|| {

@@ -1048,15 +1048,13 @@ function discoveryUsbChannel(device: DevdDevice): DevdDevice | null {
 }
 
 function discoveryHttpChannel(device: DevdDevice): DevdDevice | null {
-  const confirmedCompanion = device.binding?.lan_companion;
-  if (!device.lan_address && !confirmedCompanion)
-    return device.transport === "lan" ? device : null;
   if (device.transport === "lan") return device;
+  if (!device.lan_address) return null;
   return {
     ...device,
     transport: "lan",
     port_path: null,
-    lan_address: device.lan_address ?? confirmedCompanion?.ip ?? null,
+    lan_address: device.lan_address,
     connection:
       (device.lan_conflict_addresses?.length ?? 0) > 0 ? "error" : "connected",
   };
@@ -1175,8 +1173,9 @@ function buildFleetEntryRecord(
   const companionBaseUrl = companion
     ? normalizeBaseUrl(companion.mdns_host)
     : null;
-  const companionFallbackBaseUrl = companion
-    ? normalizeBaseUrl(`${companion.ip}:${companion.port}`)
+  const companionFallbackAddress = httpDevice?.lan_address ?? companion?.ip;
+  const companionFallbackBaseUrl = companionFallbackAddress && companion
+    ? normalizeBaseUrl(`${companionFallbackAddress}:${companion.port}`)
     : null;
   const httpBaseUrl =
     companionBaseUrl ?? devdLanBaseUrl(httpDevice, identity);
