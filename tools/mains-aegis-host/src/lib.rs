@@ -2023,6 +2023,44 @@ async fn detect_companion_lan_candidate(
     Ok(Some(candidate))
 }
 
+async fn verify_explicit_companion_lan_candidate(
+    identity_device_id: &str,
+    mdns_host: &str,
+    ip: &str,
+    port: u16,
+) -> Result<CompanionLanCandidate, HttpError> {
+    if mdns_host.trim().is_empty() || ip.trim().is_empty() {
+        return Err(HttpError::non_retryable(
+            "companion_lan_target_missing",
+            "mdns_host and ip are required for explicit LAN companion binding",
+        ));
+    }
+    if port != LAN_DISCOVERY_PORT {
+        return Err(HttpError::non_retryable(
+            "companion_lan_port_unsupported",
+            format!("LAN companion binding currently requires port {LAN_DISCOVERY_PORT}"),
+        ));
+    }
+    let ip_identity = probe_identity_target(ip).await?;
+    let mdns_identity = probe_identity_target(mdns_host).await?;
+    if probe_identity_device_id(&ip_identity) != Some(identity_device_id)
+        || probe_identity_device_id(&mdns_identity) != Some(identity_device_id)
+    {
+        return Err(HttpError::non_retryable(
+            "companion_lan_identity_mismatch",
+            "mDNS and IP:Port did not both verify as the bound USB device",
+        ));
+    }
+    Ok(CompanionLanCandidate {
+        mdns_host: mdns_host.to_string(),
+        ip: ip.to_string(),
+        port,
+        detected_at: now(),
+        verified_at: now(),
+        source: "explicit_bind_probe".to_string(),
+    })
+}
+
 fn update_companion_candidate(
     state: &AppState,
     device_id: &str,
@@ -2820,19 +2858,48 @@ async fn bind_companion_lan(
     Path(id): Path<String>,
     Json(input): Json<CompanionLanBindRequest>,
 ) -> Result<Json<DeviceRecord>, HttpError> {
-    let (port_path, monitor_command_tx, _pending_candidate) = {
+    let explicit_target = match (&input.mdns_host, &input.ip, input.port) {
+        (Some(mdns_host), Some(ip), Some(port)) => Some((mdns_host.clone(), ip.clone(), port)),
+        (None, None, None) => None,
+        _ => {
+            return Err(HttpError::non_retryable(
+                "companion_lan_target_incomplete",
+                "explicit LAN companion binding requires mdns_host, ip, and port together",
+            ));
+        }
+    };
+    let (identity_device_id, port_path, monitor_command_tx) = {
         let guard = state.inner.lock().expect("state lock");
         let device = guard
             .devices
             .get(&id)
             .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
-        let candidate = device.companion_lan_candidate.clone().ok_or_else(|| {
-            HttpError::non_retryable(
+        let identity_device_id = device
+            .binding
+            .as_ref()
+            .and_then(|binding| binding.logical_device_id.clone())
+            .or_else(|| {
+                device
+                    .identity
+                    .as_ref()
+                    .and_then(|identity| identity.get("device_id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .ok_or_else(|| {
+                HttpError::non_retryable(
+                    "device_identity_missing",
+                    "bind the USB device before saving a LAN companion",
+                )
+            })?;
+        if explicit_target.is_none() && device.companion_lan_candidate.is_none() {
+            return Err(HttpError::non_retryable(
                 "companion_lan_candidate_missing",
                 "no pending LAN companion candidate is available for this device",
-            )
-        })?;
+            ));
+        }
         (
+            identity_device_id,
             device.port_path.clone().ok_or_else(|| {
                 HttpError::non_retryable(
                     "device_port_missing",
@@ -2843,10 +2910,11 @@ async fn bind_companion_lan(
                 .monitors
                 .get(&id)
                 .map(|monitor| monitor.command_tx.clone()),
-            candidate,
         )
     };
-    let refreshed_candidate =
+    let refreshed_candidate = if let Some((mdns_host, ip, port)) = explicit_target {
+        verify_explicit_companion_lan_candidate(&identity_device_id, &mdns_host, &ip, port).await?
+    } else {
         detect_companion_lan_candidate(&state, &id, port_path, monitor_command_tx)
             .await?
             .ok_or_else(|| {
@@ -2854,7 +2922,8 @@ async fn bind_companion_lan(
                     "companion_lan_candidate_stale",
                     "the pending LAN companion could not be re-verified; rescan before saving it",
                 )
-            })?;
+            })?
+    };
     let mut guard = state.inner.lock().expect("state lock");
     let device = guard
         .devices
