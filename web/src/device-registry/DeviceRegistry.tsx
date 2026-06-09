@@ -1246,8 +1246,22 @@ export function DeviceRegistryProvider({
       if (transport === "http") {
         const baseUrl = rememberedHttpBaseUrl(record);
         if (!baseUrl) return unavailableChannelError("http");
-        return addDevice({
+        const result = await addDevice({
           target: baseUrl,
+          alias: record.target.alias,
+          location: record.target.location,
+        });
+        const fallbackBaseUrl =
+          record.target.rememberedChannels?.http?.fallbackBaseUrl;
+        if (
+          result.ok ||
+          !fallbackBaseUrl ||
+          normalizeBaseUrl(fallbackBaseUrl) === normalizeBaseUrl(baseUrl)
+        ) {
+          return result;
+        }
+        return addDevice({
+          target: fallbackBaseUrl,
           alias: record.target.alias,
           location: record.target.location,
         });
