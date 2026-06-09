@@ -86,7 +86,7 @@ const DISPLAY_CTRL_BRIGHTNESS_DIM_BACKLIGHT_ON: u8 = 0x2C;
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const CENTER_LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(800);
 const BOOT_SPLASH_HOLD: Duration = Duration::from_millis(900);
-const DASHBOARD_MENU_ANIMATION_DURATION: Duration = Duration::from_millis(250);
+const DASHBOARD_MENU_ANIMATION_STEPS: u8 = 10;
 const PANEL_INIT_SPI_FREQ_MHZ: u32 = 10;
 const PANEL_RUNTIME_SPI_FREQ_MHZ: u32 = if cfg!(feature = "display-spi-20mhz") {
     20
@@ -189,9 +189,9 @@ struct Cst816dDiagSnapshot {
 }
 
 struct DashboardMenuAnimation {
-    started_at: Instant,
     from_offset_y: i16,
     target_offset_y: i16,
+    step_index: u8,
 }
 
 pub enum BacklightControl {
@@ -947,9 +947,9 @@ where
         self.dashboard_page = page;
         if dashboard_page_transition_is_animated(previous, page) {
             self.dashboard_menu_animation = Some(DashboardMenuAnimation {
-                started_at: Instant::now(),
                 from_offset_y: self.dashboard_menu_offset_y,
                 target_offset_y,
+                step_index: 0,
             });
         } else {
             self.dashboard_menu_animation = None;
@@ -1075,21 +1075,22 @@ where
         self.needs_redraw = true;
     }
 
-    fn update_dashboard_menu_animation(&mut self, now: Instant) -> bool {
-        let Some(animation) = self.dashboard_menu_animation.as_ref() else {
+    fn update_dashboard_menu_animation(&mut self) -> bool {
+        let Some(animation) = self.dashboard_menu_animation.as_mut() else {
             return false;
         };
-        let started_at = animation.started_at;
+        animation.step_index = animation
+            .step_index
+            .saturating_add(1)
+            .min(DASHBOARD_MENU_ANIMATION_STEPS);
         let from_offset_y = animation.from_offset_y;
         let target_offset_y = animation.target_offset_y;
-        let duration_ms = DASHBOARD_MENU_ANIMATION_DURATION.as_millis() as i32;
-        let elapsed_ms = (now - started_at)
-            .as_millis()
-            .min(DASHBOARD_MENU_ANIMATION_DURATION.as_millis()) as i32;
+        let step_index = animation.step_index;
         let delta = i32::from(target_offset_y - from_offset_y);
-        let next_offset = i32::from(from_offset_y) + (delta * elapsed_ms / duration_ms.max(1));
+        let next_offset = i32::from(from_offset_y)
+            + (delta * i32::from(step_index) / i32::from(DASHBOARD_MENU_ANIMATION_STEPS.max(1)));
         self.dashboard_menu_offset_y = next_offset as i16;
-        if elapsed_ms >= duration_ms {
+        if step_index >= DASHBOARD_MENU_ANIMATION_STEPS {
             self.dashboard_menu_offset_y = target_offset_y;
             self.dashboard_menu_animation = None;
         }
@@ -1161,7 +1162,7 @@ where
                     return ui_action;
                 }
                 let inputs_changed = self.last_inputs != Some(snapshot);
-                let menu_animation_active = self.update_dashboard_menu_animation(now);
+                let menu_animation_active = self.update_dashboard_menu_animation();
                 let should_render = self.needs_redraw
                     || menu_animation_active
                     || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed)
