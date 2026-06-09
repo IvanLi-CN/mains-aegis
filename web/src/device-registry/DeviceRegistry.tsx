@@ -862,20 +862,20 @@ export function DeviceRegistryProvider({
           `http://${companion.ip}:${companion.port}`,
         );
         const mdnsBaseUrl = normalizeBaseUrl(`http://${companion.mdns_host}`);
-        let baseUrl = mdnsBaseUrl;
+        const preferredBaseUrl = mdnsBaseUrl;
         let result: ProbeResult;
         try {
-          result = await probeDevice(mdnsBaseUrl);
+          result = await probeDevice(preferredBaseUrl);
         } catch (error) {
-          if (!fallbackBaseUrl || fallbackBaseUrl === mdnsBaseUrl) throw error;
-          baseUrl = fallbackBaseUrl;
+          if (!fallbackBaseUrl || fallbackBaseUrl === preferredBaseUrl)
+            throw error;
           result = await probeDevice(fallbackBaseUrl);
         }
         const logicalDeviceId =
           updated.binding?.logical_device_id ?? result.identity.device_id;
         const target: DeviceTarget = {
           deviceId: logicalDeviceId,
-          baseUrl,
+          baseUrl: preferredBaseUrl,
           alias: result.identity.hostname,
           location: "LAN",
           addedAt: new Date().toISOString(),
@@ -883,7 +883,7 @@ export function DeviceRegistryProvider({
           preferredTransport: "http",
           rememberedChannels: {
             http: {
-              baseUrl,
+              baseUrl: preferredBaseUrl,
               seenAt: new Date().toISOString(),
               source: "devd_discovery",
               mdnsHost: companion.mdns_host,
