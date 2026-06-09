@@ -1815,15 +1815,11 @@ where
                     next_prefs = next_prefs.with_selected_target(BeeperSettingTarget::System);
                 } else if left_edge {
                     let level = next_prefs.selected_volume().decrease();
-                    if level != next_prefs.selected_volume() {
-                        preview_target = Some(next_prefs.selected_target);
-                    }
+                    preview_target = Some(next_prefs.selected_target);
                     next_prefs = next_prefs.with_selected_volume(level);
                 } else if right_edge {
                     let level = next_prefs.selected_volume().increase();
-                    if level != next_prefs.selected_volume() {
-                        preview_target = Some(next_prefs.selected_target);
-                    }
+                    preview_target = Some(next_prefs.selected_target);
                     next_prefs = next_prefs.with_selected_volume(level);
                 }
 
@@ -1851,10 +1847,25 @@ where
                     );
                 }
 
-                return preview_target.map(|target| UiAction::BeeperPreview {
-                    prefs: self.beeper_prefs,
-                    target,
-                });
+                if let Some(target) = preview_target {
+                    defmt::info!(
+                        "ui: beeper preview target={} action={} system={}",
+                        beeper_target_name(target),
+                        self.beeper_prefs.action_volume.badge_label(),
+                        self.beeper_prefs.system_volume.badge_label()
+                    );
+                    esp_println::println!(
+                        "ui: beeper preview target={} action={} system={}",
+                        beeper_target_name(target),
+                        self.beeper_prefs.action_volume.badge_label(),
+                        self.beeper_prefs.system_volume.badge_label()
+                    );
+                    return Some(UiAction::BeeperPreview {
+                        prefs: self.beeper_prefs,
+                        target,
+                    });
+                }
+                return None;
             }
             DashboardPrimaryPage::DashboardHome => {}
         }
