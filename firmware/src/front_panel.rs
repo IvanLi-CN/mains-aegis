@@ -85,6 +85,8 @@ const DISPLAY_CTRL_BRIGHTNESS_DIM_BACKLIGHT_ON: u8 = 0x2C;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const DASHBOARD_MENU_ANIMATION_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+const DASHBOARD_AMBIENT_ANIMATION_FRAME_INTERVAL: Duration = Duration::from_millis(250);
+const DASHBOARD_STATUS_REDRAW_INTERVAL: Duration = Duration::from_millis(1000);
 const CENTER_LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(800);
 const BOOT_SPLASH_HOLD: Duration = Duration::from_millis(900);
 const DASHBOARD_MENU_ANIMATION_STEPS: u8 = 10;
@@ -333,6 +335,9 @@ where
     dashboard_menu_selected: MenuItem,
     dashboard_menu_offset_y: i16,
     dashboard_menu_animation: Option<DashboardMenuAnimation>,
+    dashboard_status_dirty: bool,
+    next_dashboard_status_redraw_deadline: Instant,
+    next_dashboard_ambient_frame_deadline: Instant,
     beeper_prefs: BeeperPrefs,
     self_check_snapshot: SelfCheckUiSnapshot,
     bms_activation_state: BmsActivationState,
@@ -412,6 +417,9 @@ where
             dashboard_menu_selected: MenuItem::Dashboard,
             dashboard_menu_offset_y: 0,
             dashboard_menu_animation: None,
+            dashboard_status_dirty: false,
+            next_dashboard_status_redraw_deadline: Instant::now(),
+            next_dashboard_ambient_frame_deadline: Instant::now(),
             beeper_prefs: BeeperPrefs::defaults(),
             self_check_snapshot: SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby),
             bms_activation_state: BmsActivationState::Idle,
@@ -869,10 +877,11 @@ where
             );
             self.self_check_overlay = SelfCheckOverlay::None;
         }
-        self.needs_redraw = true;
         if self.ui_variant != SELF_CHECK_VARIANT {
+            self.dashboard_status_dirty = true;
             return;
         }
+        self.needs_redraw = true;
         if !self.display_accepts_scene_updates() {
             return;
         }
@@ -1046,6 +1055,11 @@ where
         self.dashboard_menu_selected = MenuItem::Dashboard;
         self.dashboard_menu_offset_y = 0;
         self.dashboard_menu_animation = None;
+        self.dashboard_status_dirty = false;
+        self.next_dashboard_status_redraw_deadline =
+            Instant::now() + DASHBOARD_STATUS_REDRAW_INTERVAL;
+        self.next_dashboard_ambient_frame_deadline =
+            Instant::now() + DASHBOARD_AMBIENT_ANIMATION_FRAME_INTERVAL;
         self.self_check_overlay = SelfCheckOverlay::None;
         self.needs_redraw = true;
         defmt::info!(
@@ -1177,20 +1191,37 @@ where
                     self.next_frame_deadline = now + DASHBOARD_MENU_ANIMATION_FRAME_INTERVAL;
                 }
                 let menu_animation_active = self.update_dashboard_menu_animation();
-                let should_render = self.needs_redraw
-                    || menu_animation_active
-                    || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed)
-                    || dashboard_uses_frame_animation(
+                let dashboard_status_redraw_due = self.ui_variant == DASHBOARD_VARIANT
+                    && self.dashboard_status_dirty
+                    && now >= self.next_dashboard_status_redraw_deadline;
+                let dashboard_ambient_frame_due = self.ui_variant == DASHBOARD_VARIANT
+                    && self.dashboard_page == DashboardPrimaryPage::DashboardHome
+                    && dashboard_uses_frame_animation(
                         self.ui_variant,
                         self.dashboard_route,
                         &self.self_check_snapshot,
-                    ) && self.dashboard_page == DashboardPrimaryPage::DashboardHome;
+                    )
+                    && now >= self.next_dashboard_ambient_frame_deadline;
+                let should_render = self.needs_redraw
+                    || menu_animation_active
+                    || dashboard_status_redraw_due
+                    || dashboard_ambient_frame_due
+                    || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed);
                 if should_render {
                     if let Err(e) = self.render_inputs(snapshot) {
                         defmt::error!("ui: update input state failed err={=?}", e);
                         self.needs_redraw = true;
                     } else {
                         self.needs_redraw = false;
+                        if self.ui_variant == DASHBOARD_VARIANT && self.dashboard_status_dirty {
+                            self.dashboard_status_dirty = false;
+                            self.next_dashboard_status_redraw_deadline =
+                                now + DASHBOARD_STATUS_REDRAW_INTERVAL;
+                        }
+                        if dashboard_ambient_frame_due {
+                            self.next_dashboard_ambient_frame_deadline =
+                                now + DASHBOARD_AMBIENT_ANIMATION_FRAME_INTERVAL;
+                        }
                     }
                 }
                 self.last_inputs = Some(snapshot);
