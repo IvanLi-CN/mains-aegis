@@ -858,10 +858,14 @@ export function DeviceRegistryProvider({
             },
           };
         }
-        const fallbackBaseUrl = normalizeBaseUrl(
-          `http://${companion.ip}:${companion.port}`,
-        );
-        const mdnsBaseUrl = normalizeBaseUrl(`http://${companion.mdns_host}`);
+        const companionIpBaseUrl = companion.ip.startsWith("mock:")
+          ? companion.ip
+          : `http://${companion.ip}:${companion.port}`;
+        const companionMdnsBaseUrl = companion.mdns_host.startsWith("mock:")
+          ? companion.mdns_host
+          : `http://${companion.mdns_host}`;
+        const fallbackBaseUrl = normalizeBaseUrl(companionIpBaseUrl);
+        const mdnsBaseUrl = normalizeBaseUrl(companionMdnsBaseUrl);
         const preferredBaseUrl = mdnsBaseUrl;
         let successfulBaseUrl = preferredBaseUrl;
         let result: ProbeResult;

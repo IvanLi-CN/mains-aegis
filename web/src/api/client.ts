@@ -407,6 +407,7 @@ function requestMockDevd<T>(
     } as T);
   }
   if (path.endsWith("/companion-lan") && method === "POST") {
+    const mockLanBaseUrl = bindTargetMock ? "mock:lab-standby" : null;
     return Promise.resolve({
       ...usbDevice,
       binding: {
@@ -417,15 +418,15 @@ function requestMockDevd<T>(
         logical_device_id:
           multiChannelMock || bindTargetMock ? "mains-aegis-a1b2c3" : null,
         lan_companion: {
-          mdns_host: "mains-aegis-a1b2c3.local",
-          ip: "192.168.31.42",
+          mdns_host: mockLanBaseUrl ?? "mains-aegis-a1b2c3.local",
+          ip: mockLanBaseUrl ?? "192.168.31.42",
           port: 80,
           confirmed_at: "2026-06-08T00:00:00.000Z",
           last_verified_at: "2026-06-08T00:00:00.000Z",
         },
       },
       companion_lan_candidate: null,
-      lan_address: "192.168.31.42",
+      lan_address: mockLanBaseUrl ?? "192.168.31.42",
       lan_conflict_addresses: [],
       log_decode: { status: "unverified", reason: null, artifact_id: null },
     } as T);

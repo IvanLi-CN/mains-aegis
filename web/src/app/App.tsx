@@ -1889,6 +1889,27 @@ function ConnectPage({
                           text={channelDiscoverActionText(defaultTransport)}
                         />
                       </button>
+                      {alternateTransportOptions.map((option) => {
+                        const nextTransport = option.value as Extract<
+                          DeviceChannelTransport,
+                          "http" | "devd"
+                        >;
+                        const channel = device.channels[nextTransport];
+                        if (!channel) return null;
+                        return (
+                          <button
+                            key={option.value}
+                            className="secondary-button small"
+                            type="button"
+                            disabled={option.disabled}
+                            onClick={() =>
+                              void onDiscoveredDeviceAction(channel)
+                            }
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
                     </>
                   ) : null}
                   {showOverride ? (
