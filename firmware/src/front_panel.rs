@@ -1529,10 +1529,10 @@ where
         let bits = input[0];
 
         // Front-panel buttons are externally pulled up and shorted to GND when pressed.
-        // On current board wiring, P0/P3 are swapped against silk-screen UP/DOWN labels.
+        // Current board wiring swaps both vertical and horizontal pairs against silk-screen labels.
         let up = (bits & (1 << 3)) == 0;
-        let left = (bits & (1 << 1)) == 0;
-        let right = (bits & (1 << 2)) == 0;
+        let left = (bits & (1 << 2)) == 0;
+        let right = (bits & (1 << 1)) == 0;
         let down = (bits & (1 << 0)) == 0;
 
         let center = self.btn_center.is_low();

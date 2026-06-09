@@ -265,17 +265,11 @@ impl AudioManager {
     pub fn trigger_volume_preview(&mut self, route: AudioRoute) {
         let request = preview_request(route);
         self.remove_queued_previews();
-        if self.current.is_some_and(|current| current.request.preview) {
-            self.current = Some(Self::start_playback(request));
-            return;
+        let interrupted = self.current.map(|current| current.request);
+        self.current = Some(Self::start_playback(request));
+        if let Some(interrupted) = interrupted {
+            self.requeue_preempted_loop(interrupted);
         }
-        if self
-            .current
-            .is_some_and(|current| current.request.priority > AudioPriority::Preview)
-        {
-            return;
-        }
-        self.request(request);
     }
 
     pub fn set_cue_active(&mut self, cue: AudioCue, active: bool, now: Instant) {
@@ -742,6 +736,21 @@ mod tests {
         assert_eq!(filled, buf.len());
         let samples = decode_left_samples(&buf);
         assert!(samples.iter().any(|sample| *sample != 0));
+    }
+
+    #[test]
+    fn volume_preview_preempts_warning_loop_for_immediate_feedback() {
+        let now = Instant::now();
+        let mut manager = AudioManager::new();
+        manager.set_cue_active(AudioCue::HighStress, true, now);
+        manager.tick(now);
+        assert_eq!(manager.status().current, Some(AudioCue::HighStress));
+
+        manager.trigger_volume_preview(AudioRoute::Action);
+        let status = manager.status();
+        assert_eq!(status.current, Some(AudioCue::VolumePreview));
+        assert_eq!(status.current_route, Some(AudioRoute::Action));
+        assert!(status.previewing);
     }
 }
 

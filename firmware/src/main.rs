@@ -1665,6 +1665,22 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                             front_panel_scene::BeeperSettingTarget::Action => AudioRoute::Action,
                             front_panel_scene::BeeperSettingTarget::System => AudioRoute::System,
                         });
+                        if audio_enabled {
+                            audio_manager.arm_transition_bridge();
+                            match reprime_runtime_audio_dma!(
+                                "audio: volume preview push failed; disabling runtime audio",
+                                "audio: volume preview available failed err={=?}; disabling runtime audio",
+                                "audio: volume preview restart failed err={=?}; disabling runtime audio"
+                            ) {
+                                RuntimeAudioReprimeResult::Ready { .. } => {
+                                    audio_recovery.clear();
+                                }
+                                RuntimeAudioReprimeResult::Late => {}
+                                RuntimeAudioReprimeResult::Fatal => {
+                                    disable_runtime_audio!();
+                                }
+                            }
+                        }
                     }
                     front_panel::UiAction::ClearBmsActivationResult => {
                         power.clear_bms_activation_state();
