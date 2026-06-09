@@ -6,8 +6,8 @@ use crate::front_panel_logic::{
     VerticalGestureDirection, DASHBOARD_VARIANT, SELF_CHECK_VARIANT,
 };
 use crate::front_panel_scene::{
-    self, AudioTestUiState, BeeperPrefs, BeeperSettingTarget, BmsActivationState,
-    BmsRecoveryUiAction, BmsResultKind, DashboardHomeFocus, DashboardMenuStyle,
+    self, AudioTestUiState, BeeperPrefs, BeeperSettingTarget, BeeperSettingsTouchTarget,
+    BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardHomeFocus, DashboardMenuStyle,
     DashboardMenuTouchTarget, DashboardPrimaryPage, DashboardRoute, DashboardShellState,
     DashboardTouchTarget, ManualChargeUiAction, MenuItem, SelfCheckCommState,
     SelfCheckHardwareTarget, SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot,
@@ -2146,6 +2146,9 @@ where
         if self.dashboard_page == DashboardPrimaryPage::Menu {
             return self.process_dashboard_menu_touch_action(x, y);
         }
+        if self.dashboard_page == DashboardPrimaryPage::BeeperSettings {
+            return self.process_beeper_settings_touch_action(x, y);
+        }
         if self.dashboard_page != DashboardPrimaryPage::DashboardHome {
             return None;
         }
@@ -2212,6 +2215,105 @@ where
                 x,
                 y
             );
+        }
+        None
+    }
+
+    fn process_beeper_settings_touch_action(&mut self, x: u16, y: u16) -> Option<UiAction> {
+        esp_println::println!(
+            "ui: touch edge page=audio selected={} x={} y={}",
+            beeper_target_name(self.beeper_prefs.selected_target),
+            x,
+            y
+        );
+
+        let Some(target) = front_panel_scene::beeper_settings_hit_test(x, y) else {
+            esp_println::println!(
+                "ui: touch target=none page=audio selected={} x={} y={}",
+                beeper_target_name(self.beeper_prefs.selected_target),
+                x,
+                y
+            );
+            return None;
+        };
+
+        let mut next_prefs = self.beeper_prefs;
+        let mut preview_target = None;
+        match target {
+            BeeperSettingsTouchTarget::Back => {
+                self.set_dashboard_page(DashboardPrimaryPage::Menu);
+                defmt::info!("ui: beeper touch target=back");
+                esp_println::println!("ui: beeper touch target=back");
+                return None;
+            }
+            BeeperSettingsTouchTarget::Target(target) => {
+                next_prefs = next_prefs.with_selected_target(target);
+            }
+            BeeperSettingsTouchTarget::Volume { target, level } => {
+                next_prefs = next_prefs
+                    .with_selected_target(target)
+                    .with_volume(target, level);
+                preview_target = Some(target);
+            }
+        }
+
+        let prefs_changed = next_prefs != self.beeper_prefs;
+        if prefs_changed {
+            let previous = self.beeper_prefs;
+            self.beeper_prefs = next_prefs;
+            self.needs_redraw = true;
+            defmt::info!(
+                "ui: beeper prefs action {}->{} system {}->{} selected {}->{}",
+                previous.action_volume.badge_label(),
+                next_prefs.action_volume.badge_label(),
+                previous.system_volume.badge_label(),
+                next_prefs.system_volume.badge_label(),
+                beeper_target_name(previous.selected_target),
+                beeper_target_name(next_prefs.selected_target)
+            );
+            esp_println::println!(
+                "ui: beeper prefs action {}->{} system {}->{} selected {}->{}",
+                previous.action_volume.badge_label(),
+                next_prefs.action_volume.badge_label(),
+                previous.system_volume.badge_label(),
+                next_prefs.system_volume.badge_label(),
+                beeper_target_name(previous.selected_target),
+                beeper_target_name(next_prefs.selected_target)
+            );
+        }
+
+        defmt::info!(
+            "ui: beeper touch target={}",
+            beeper_settings_touch_target_name(target)
+        );
+        esp_println::println!(
+            "ui: beeper touch target={} selected={}",
+            beeper_settings_touch_target_name(target),
+            beeper_target_name(self.beeper_prefs.selected_target)
+        );
+
+        if let Some(target) = preview_target {
+            defmt::info!(
+                "ui: beeper preview target={} action={} system={}",
+                beeper_target_name(target),
+                self.beeper_prefs.action_volume.badge_label(),
+                self.beeper_prefs.system_volume.badge_label()
+            );
+            esp_println::println!(
+                "ui: beeper preview target={} action={} system={}",
+                beeper_target_name(target),
+                self.beeper_prefs.action_volume.badge_label(),
+                self.beeper_prefs.system_volume.badge_label()
+            );
+            return Some(UiAction::BeeperPreview {
+                prefs: self.beeper_prefs,
+                target,
+            });
+        }
+        if prefs_changed {
+            return Some(UiAction::BeeperPrefsChanged {
+                prefs: self.beeper_prefs,
+            });
         }
         None
     }
@@ -2415,6 +2517,22 @@ fn menu_touch_target_name(target: DashboardMenuTouchTarget) -> &'static str {
         DashboardMenuTouchTarget::Next => "next",
         DashboardMenuTouchTarget::Dashboard => "dashboard",
         DashboardMenuTouchTarget::Beeper => "audio",
+    }
+}
+
+fn beeper_settings_touch_target_name(target: BeeperSettingsTouchTarget) -> &'static str {
+    match target {
+        BeeperSettingsTouchTarget::Back => "back",
+        BeeperSettingsTouchTarget::Target(BeeperSettingTarget::Action) => "target_action",
+        BeeperSettingsTouchTarget::Target(BeeperSettingTarget::System) => "target_system",
+        BeeperSettingsTouchTarget::Volume {
+            target: BeeperSettingTarget::Action,
+            ..
+        } => "volume_action",
+        BeeperSettingsTouchTarget::Volume {
+            target: BeeperSettingTarget::System,
+            ..
+        } => "volume_system",
     }
 }
 

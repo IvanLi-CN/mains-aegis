@@ -712,6 +712,16 @@ pub enum DashboardMenuTouchTarget {
     Beeper,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BeeperSettingsTouchTarget {
+    Back,
+    Target(BeeperSettingTarget),
+    Volume {
+        target: BeeperSettingTarget,
+        level: BeeperVolumeLevel,
+    },
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DashboardInputSource {
@@ -1996,6 +2006,46 @@ pub fn dashboard_menu_hit_test(
             Some(MenuItem::Beeper) => Some(DashboardMenuTouchTarget::Beeper),
             None => None,
         };
+    }
+
+    None
+}
+
+#[allow(dead_code)]
+pub fn beeper_settings_hit_test(x: u16, y: u16) -> Option<BeeperSettingsTouchTarget> {
+    if contains(x, y, 0, 0, UI_W, HEADER_H) {
+        return Some(BeeperSettingsTouchTarget::Back);
+    }
+
+    for target in BeeperSettingTarget::ALL {
+        let row_y = beeper_setting_row_y(target);
+        let row_center_y = row_y + (AUDIO_ROW_H / 2);
+        let track_y = row_center_y - (AUDIO_TRACK_H / 2);
+        if contains(
+            x,
+            y,
+            AUDIO_TRACK_X.saturating_sub(8),
+            track_y,
+            AUDIO_TRACK_W + 16,
+            AUDIO_TRACK_H,
+        ) {
+            let step = AUDIO_TRACK_W / 6;
+            let idx = if x <= AUDIO_TRACK_X {
+                0
+            } else if x >= AUDIO_TRACK_X + AUDIO_TRACK_W {
+                6
+            } else {
+                ((x - AUDIO_TRACK_X + (step / 2)) / step).min(6)
+            };
+            return Some(BeeperSettingsTouchTarget::Volume {
+                target,
+                level: BeeperVolumeLevel::from_step(idx as u8),
+            });
+        }
+
+        if contains(x, y, AUDIO_ROW_X, row_y, AUDIO_ROW_W, AUDIO_ROW_H) {
+            return Some(BeeperSettingsTouchTarget::Target(target));
+        }
     }
 
     None
@@ -14513,6 +14563,53 @@ mod tests {
         assert_eq!(
             dashboard_menu_hit_test(MenuItem::Beeper, 12, DASHBOARD_MENU_ICON_Y + 12),
             Some(DashboardMenuTouchTarget::Dashboard)
+        );
+    }
+
+    #[test]
+    fn beeper_settings_hit_test_maps_back_rows_and_volume_track() {
+        assert_eq!(
+            beeper_settings_hit_test(8, 8),
+            Some(BeeperSettingsTouchTarget::Back)
+        );
+        assert_eq!(
+            beeper_settings_hit_test(AUDIO_ROW_X + 16, AUDIO_ACTION_ROW_Y + 8),
+            Some(BeeperSettingsTouchTarget::Target(
+                BeeperSettingTarget::Action
+            ))
+        );
+        assert_eq!(
+            beeper_settings_hit_test(AUDIO_ROW_X + 16, AUDIO_SYSTEM_ROW_Y + 8),
+            Some(BeeperSettingsTouchTarget::Target(
+                BeeperSettingTarget::System
+            ))
+        );
+        assert_eq!(
+            beeper_settings_hit_test(AUDIO_TRACK_X, AUDIO_ACTION_ROW_Y + (AUDIO_ROW_H / 2)),
+            Some(BeeperSettingsTouchTarget::Volume {
+                target: BeeperSettingTarget::Action,
+                level: BeeperVolumeLevel::Off
+            })
+        );
+        assert_eq!(
+            beeper_settings_hit_test(
+                AUDIO_TRACK_X + (AUDIO_TRACK_W / 6) * 4,
+                AUDIO_ACTION_ROW_Y + (AUDIO_ROW_H / 2)
+            ),
+            Some(BeeperSettingsTouchTarget::Volume {
+                target: BeeperSettingTarget::Action,
+                level: BeeperVolumeLevel::L4
+            })
+        );
+        assert_eq!(
+            beeper_settings_hit_test(
+                AUDIO_TRACK_X + AUDIO_TRACK_W,
+                AUDIO_SYSTEM_ROW_Y + (AUDIO_ROW_H / 2)
+            ),
+            Some(BeeperSettingsTouchTarget::Volume {
+                target: BeeperSettingTarget::System,
+                level: BeeperVolumeLevel::L6
+            })
         );
     }
 
