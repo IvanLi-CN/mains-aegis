@@ -861,8 +861,16 @@ export function DeviceRegistryProvider({
         const fallbackBaseUrl = normalizeBaseUrl(
           `http://${companion.ip}:${companion.port}`,
         );
-        const baseUrl = normalizeBaseUrl(`http://${companion.mdns_host}`);
-        const result = await probeDevice(baseUrl);
+        const mdnsBaseUrl = normalizeBaseUrl(`http://${companion.mdns_host}`);
+        let baseUrl = mdnsBaseUrl;
+        let result: ProbeResult;
+        try {
+          result = await probeDevice(mdnsBaseUrl);
+        } catch (error) {
+          if (!fallbackBaseUrl || fallbackBaseUrl === mdnsBaseUrl) throw error;
+          baseUrl = fallbackBaseUrl;
+          result = await probeDevice(fallbackBaseUrl);
+        }
         const logicalDeviceId =
           updated.binding?.logical_device_id ?? result.identity.device_id;
         const target: DeviceTarget = {

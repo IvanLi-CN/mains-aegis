@@ -21,7 +21,6 @@ export type DemoSeed = "default" | "dual" | "empty" | "offline" | "large" | "usb
 export type StoredTargetPreset =
   | "lan-companion-confirmed"
   | "lan-companion-bind-target";
-export const CONFIRMED_COMPANION_HTTP_BASE_URL = "http://192.168.31.42:80";
 
 const demoSeedIds: DemoSeed[] = ["default", "dual", "empty", "offline", "large", "usb"];
 const now = "2026-04-28T00:00:00.000Z";
@@ -367,7 +366,7 @@ export function makeStoredTargetPreset(
     return [
       {
         deviceId: "mains-aegis-a1b2c3",
-        baseUrl: "http://mains-aegis-a1b2c3.local",
+        baseUrl: "mock:lab-standby",
         alias: "Lab rack A",
         location: "Bench 1",
         addedAt: "2026-06-08T00:00:00.000Z",
@@ -375,7 +374,7 @@ export function makeStoredTargetPreset(
         preferredTransport: "http",
         rememberedChannels: {
           http: {
-            baseUrl: "http://mains-aegis-a1b2c3.local",
+            baseUrl: "mock:lab-standby",
             seenAt: "2026-06-08T00:00:00.000Z",
             source: "devd_discovery",
             mdnsHost: "mains-aegis-a1b2c3.local",
@@ -983,6 +982,5 @@ function findMock(baseUrl: string): MockDefinition {
 }
 
 function resolveMockBaseUrl(baseUrl: string): string {
-  if (baseUrl === CONFIRMED_COMPANION_HTTP_BASE_URL) return "mock:lab-standby";
   return baseUrl;
 }

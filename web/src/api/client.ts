@@ -1,9 +1,4 @@
-import {
-  CONFIRMED_COMPANION_HTTP_BASE_URL,
-  getMockIdentity,
-  getMockNetwork,
-  getMockStatus,
-} from "../fixtures/mockDevices";
+import { getMockIdentity, getMockNetwork, getMockStatus } from "../fixtures/mockDevices";
 import type {
   ApiErrorEnvelope,
   DevdScanTraceEntry,
@@ -38,8 +33,7 @@ type MockBindTargetState = {
 
 const mockBindTargetStateByBaseUrl = new Map<string, MockBindTargetState>();
 
-export const isMockBaseUrl = (baseUrl: string) =>
-  baseUrl.startsWith("mock:") || baseUrl === CONFIRMED_COMPANION_HTTP_BASE_URL;
+export const isMockBaseUrl = (baseUrl: string) => baseUrl.startsWith("mock:");
 const APP_SESSION_HEADER = "x-mains-aegis-app-session";
 const APP_SESSION_QUERY_PARAM = "app_session";
 const HTTP_SERVICE_MODE_META = 'meta[name="mains-aegis-http-service-mode"]';
