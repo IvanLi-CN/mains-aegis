@@ -1,4 +1,13 @@
-import type { DeviceRecord, DeviceSettings, DeviceTarget, Identity, NetworkSummary, SerialLogEntry, SerialTraceEntry, UpsStatus } from "../api/types";
+import type {
+  DeviceRecord,
+  DeviceSettings,
+  DeviceTarget,
+  Identity,
+  NetworkSummary,
+  SerialLogEntry,
+  SerialTraceEntry,
+  UpsStatus,
+} from "../api/types";
 
 type MockDefinition = {
   target: DeviceTarget;
@@ -9,6 +18,9 @@ type MockDefinition = {
 };
 
 export type DemoSeed = "default" | "dual" | "empty" | "offline" | "large" | "usb";
+export type StoredTargetPreset =
+  | "lan-companion-confirmed"
+  | "lan-companion-bind-target";
 
 const demoSeedIds: DemoSeed[] = ["default", "dual", "empty", "offline", "large", "usb"];
 const now = "2026-04-28T00:00:00.000Z";
@@ -318,16 +330,79 @@ export function makeMockRecords(seed: DemoSeed = "default"): DeviceRecord[] {
   return mockDefinitions.map((definition) => recordFromDefinition(definition));
 }
 
+export function isStoredTargetPreset(
+  value: string | null | undefined,
+): value is StoredTargetPreset {
+  return (
+    value === "lan-companion-confirmed" ||
+    value === "lan-companion-bind-target"
+  );
+}
+
+export function makeStoredTargetPreset(
+  preset: StoredTargetPreset,
+): DeviceTarget[] {
+  if (preset === "lan-companion-bind-target") {
+    return [
+      {
+        deviceId: "mains-aegis-a1b2c3",
+        baseUrl: "mock:lab-standby",
+        alias: "Lab rack A",
+        location: "Bench 1",
+        addedAt: "2026-06-08T00:00:00.000Z",
+        transport: "http",
+        preferredTransport: "http",
+        rememberedChannels: {
+          http: {
+            baseUrl: "mock:lab-standby",
+            seenAt: "2026-06-08T00:00:00.000Z",
+            source: "devd_discovery",
+          },
+        },
+      },
+    ];
+  }
+  if (preset === "lan-companion-confirmed") {
+    return [
+      {
+        deviceId: "mains-aegis-a1b2c3",
+        baseUrl: "mock:lab-standby",
+        alias: "Lab rack A",
+        location: "Bench 1",
+        addedAt: "2026-06-08T00:00:00.000Z",
+        transport: "http",
+        preferredTransport: "http",
+        rememberedChannels: {
+          http: {
+            baseUrl: "mock:lab-standby",
+            seenAt: "2026-06-08T00:00:00.000Z",
+            source: "devd_discovery",
+            mdnsHost: "mains-aegis-a1b2c3.local",
+            fallbackBaseUrl: "http://192.168.31.42:80",
+          },
+          devd: {
+            baseUrl: "mock:devd-multi",
+            devdDeviceId: "mock-devd-usb-1",
+            seenAt: "2026-06-08T00:00:00.000Z",
+            transport: "usb",
+          },
+        },
+      },
+    ];
+  }
+  return [];
+}
+
 export function getMockIdentity(baseUrl: string): Identity {
-  return findMock(baseUrl).identity;
+  return findMock(resolveMockBaseUrl(baseUrl)).identity;
 }
 
 export function getMockNetwork(baseUrl: string): NetworkSummary {
-  return findMock(baseUrl).network;
+  return findMock(resolveMockBaseUrl(baseUrl)).network;
 }
 
 export function getMockStatus(baseUrl: string): UpsStatus {
-  return findMock(baseUrl).status;
+  return findMock(resolveMockBaseUrl(baseUrl)).status;
 }
 
 export function makeMockRecord(target: DeviceTarget): DeviceRecord {
@@ -904,4 +979,8 @@ function findMock(baseUrl: string): MockDefinition {
   const match = [...mockDefinitions, ...largeMockDefinitions].find((definition) => definition.target.baseUrl === baseUrl);
   if (!match) throw new Error(`unknown mock device: ${baseUrl}`);
   return match;
+}
+
+function resolveMockBaseUrl(baseUrl: string): string {
+  return baseUrl;
 }

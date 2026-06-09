@@ -19,6 +19,7 @@
 
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
+| rzx5v | Client transport priority matrix | 已完成 | `rzx5v-client-transport-priority/SPEC.md` | 2026-06-08 | 跨 Web / devd / CLI 的通信方案优先级已抽成独立 topic spec；冻结 Web confirmed companion 的 FQDN-first 与 devd/CLI 的 USB-first 规则 |
 | k4vzn | LAN management convergence | 已完成 | `k4vzn-lan-management-convergence/SPEC.md` | 2026-06-03 | 设备本体 settings 读写 API、devd LAN discovery/scan trace/LAN settings 写路径、USB 优先合并、trace+connection 查询面、Web direct LAN/devd LAN settings 与最终视觉证据已收口 |
 | 7jqrq | Mains Aegis CLI / devd alignment | 已完成 | `7jqrq-mains-aegis-cli-devd-alignment/SPEC.md` | 2026-06-03 | 主机工具对齐与 release/install 基线已完成；CLI `device session` 与新查询面迁移改由 #k4vzn 接管 |
 | p8k3d | Mains Aegis Device Daemon | 已完成 | `p8k3d-mains-aegis-devd/SPEC.md` | 2026-06-04 | devd v1 foundation 已完成；`power-diag` 诊断快照已覆盖 VAC2/DC IN 与 CUV recovery 策略状态；`session`/localhost settings 兼容面与 LAN transport 收敛改由 #k4vzn 接管 |

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  bindDevdCompanionLan,
   clearDeviceWifiConfig,
+  clearDevdCompanionLan,
   bridgeAuthToken,
   clearDevdWifiConfig,
   connectDevdDevice,
@@ -46,8 +48,10 @@ import type {
 } from "../api/types";
 import {
   isDemoSeed,
+  isStoredTargetPreset,
   makeMockRecord,
   makeMockRecords,
+  makeStoredTargetPreset,
   makeMockUsbSerialRecord,
   type DemoSeed,
 } from "../fixtures/mockDevices";
@@ -361,23 +365,28 @@ export function DeviceRegistryProvider({
           setRecords((current) => upsertRecord(current, record));
           return;
         }
-        const httpBaseUrl = rememberedHttpBaseUrl(existing) ?? target.baseUrl;
-        const httpTarget =
-          httpBaseUrl === target.baseUrl
-            ? target
-            : {
-                ...target,
-                baseUrl: httpBaseUrl,
-                transport: "http" as const,
-              };
-        const bridgeAuth = await resolveBridgeAuthState(httpTarget);
-        const nextTarget = bridgeAuth
-          ? { ...httpTarget, bridgeAuth: true }
-          : httpTarget;
-        const result = await probeDevice(
-          httpTarget.baseUrl,
-          undefined,
-          bridgeAuth ? { bridgeAuth: true } : undefined,
+        const { nextTarget, result } = await withRememberedHttpFallback(
+          existing,
+          async (httpBaseUrl) => {
+            const httpTarget =
+              httpBaseUrl === target.baseUrl
+                ? target
+                : {
+                    ...target,
+                    baseUrl: httpBaseUrl,
+                    transport: "http" as const,
+                  };
+            const bridgeAuth = await resolveBridgeAuthState(httpTarget);
+            const nextTarget = bridgeAuth
+              ? { ...httpTarget, bridgeAuth: true }
+              : httpTarget;
+            const result = await probeDevice(
+              httpTarget.baseUrl,
+              undefined,
+              bridgeAuth ? { bridgeAuth: true } : undefined,
+            );
+            return { nextTarget, result };
+          },
         );
         setRecords((current) => {
           const previous = current.find(
@@ -571,7 +580,9 @@ export function DeviceRegistryProvider({
                   : candidate,
               ),
             );
-            void getStatus(httpBaseUrl, undefined, bridgeAuth)
+            void withRememberedHttpFallback(record, (baseUrl) =>
+              getStatus(baseUrl, undefined, bridgeAuth),
+            )
               .then((status) => {
                 setRecords((current) =>
                   current.map((candidate) =>
@@ -836,6 +847,138 @@ export function DeviceRegistryProvider({
       }
     },
     [],
+  );
+
+  const confirmDevdCompanionLan = useCallback(
+    async (deviceId: string, devdBaseUrl: string): Promise<AddDeviceResult> => {
+      try {
+        const updated = await bindDevdCompanionLan(deviceId, {}, devdBaseUrl);
+        const companion = updated.binding?.lan_companion;
+        if (!companion) {
+          return {
+            ok: false,
+            error: {
+              code: "companion_lan_bind_failed",
+              message: "devd did not return a saved LAN companion binding",
+              retryable: true,
+              details: { deviceId },
+            },
+          };
+        }
+        const companionIpBaseUrl = companion.ip.startsWith("mock:")
+          ? companion.ip
+          : `http://${companion.ip}:${companion.port}`;
+        const companionMdnsBaseUrl = companion.mdns_host.startsWith("mock:")
+          ? companion.mdns_host
+          : `http://${companion.mdns_host}`;
+        const fallbackBaseUrl = normalizeBaseUrl(companionIpBaseUrl);
+        const mdnsBaseUrl = normalizeBaseUrl(companionMdnsBaseUrl);
+        const preferredBaseUrl = mdnsBaseUrl;
+        let successfulBaseUrl = preferredBaseUrl;
+        let result: ProbeResult;
+        try {
+          result = await probeDevice(preferredBaseUrl);
+        } catch (error) {
+          if (!fallbackBaseUrl || fallbackBaseUrl === preferredBaseUrl)
+            throw error;
+          successfulBaseUrl = fallbackBaseUrl;
+          result = await probeDevice(fallbackBaseUrl);
+        }
+        const logicalDeviceId =
+          updated.binding?.logical_device_id ?? result.identity.device_id;
+        const target: DeviceTarget = {
+          deviceId: logicalDeviceId,
+          baseUrl: successfulBaseUrl,
+          alias: result.identity.hostname,
+          location: "LAN",
+          addedAt: new Date().toISOString(),
+          transport: "http",
+          preferredTransport: "http",
+          rememberedChannels: {
+            http: {
+              baseUrl: preferredBaseUrl,
+              seenAt: new Date().toISOString(),
+              source: "devd_discovery",
+              mdnsHost: companion.mdns_host,
+              fallbackBaseUrl,
+            },
+            devd: {
+              baseUrl: devdBaseUrl,
+              devdDeviceId: updated.id,
+              seenAt: new Date().toISOString(),
+              transport: updated.transport === "mock" ? "mock" : "usb",
+            },
+          },
+        };
+        const record = recordFromProbe(
+          target,
+          result,
+          "online",
+          result.identity.capabilities.sse ? "idle" : "polling",
+        );
+        let mergedRecord = record;
+        setRecords((current) => {
+          const existing = current.find(
+            (candidate) => candidate.target.deviceId === logicalDeviceId,
+          );
+          const nextTarget: DeviceTarget = existing
+            ? {
+                ...target,
+                alias: existing.target.alias || target.alias,
+                location: existing.target.location || target.location,
+                addedAt: existing.target.addedAt || target.addedAt,
+              }
+            : target;
+          const nextRecord = recordFromProbe(
+            nextTarget,
+            result,
+            "online",
+            result.identity.capabilities.sse ? "idle" : "polling",
+          );
+          const merged = upsertRecord(current, nextRecord);
+          mergedRecord =
+            merged.find(
+              (candidate) => candidate.target.deviceId === logicalDeviceId,
+            ) ?? nextRecord;
+          return merged;
+        });
+        return { ok: true, record: mergedRecord };
+      } catch (error) {
+        return { ok: false, error: toErrorEnvelope(error) };
+      }
+    },
+    [],
+  );
+
+  const dismissDevdCompanionLan = useCallback(
+    async (deviceId: string, devdBaseUrl: string): Promise<AddDeviceResult> => {
+      try {
+        const updated = await clearDevdCompanionLan(deviceId, devdBaseUrl);
+        const logicalDeviceId =
+          updated.binding?.logical_device_id ?? updated.identity?.device_id;
+        const existing =
+          logicalDeviceId === null
+            ? null
+            : records.find(
+                (record) => record.target.deviceId === logicalDeviceId,
+              ) ?? null;
+        if (existing) return { ok: true, record: existing };
+        return {
+          ok: true,
+          record: recordFromStoredTarget({
+            deviceId: logicalDeviceId ?? deviceId,
+            baseUrl: normalizeBaseUrl(devdBaseUrl),
+            alias: updated.display_name || "Saved device",
+            location: "USB",
+            addedAt: new Date().toISOString(),
+            transport: "devd",
+          }),
+        };
+      } catch (error) {
+        return { ok: false, error: toErrorEnvelope(error) };
+      }
+    },
+    [records],
   );
 
   const connectUsbSerialDevice = useCallback(
@@ -1114,13 +1257,19 @@ export function DeviceRegistryProvider({
       }
 
       if (transport === "http") {
-        const baseUrl = rememberedHttpBaseUrl(record);
-        if (!baseUrl) return unavailableChannelError("http");
-        return addDevice({
-          target: baseUrl,
-          alias: record.target.alias,
-          location: record.target.location,
-        });
+        const baseUrls = rememberedHttpBaseUrls(record);
+        if (baseUrls.length === 0) return unavailableChannelError("http");
+        let lastResult: AddDeviceResult | null = null;
+        for (const baseUrl of baseUrls) {
+          const result = await addDevice({
+            target: baseUrl,
+            alias: record.target.alias,
+            location: record.target.location,
+          });
+          if (result.ok) return result;
+          lastResult = result;
+        }
+        return lastResult ?? unavailableChannelError("http");
       }
 
       if (transport === "devd") {
@@ -1228,24 +1377,28 @@ export function DeviceRegistryProvider({
         serialSessions.current,
       );
       if (selectedTransport === "http") {
-        const httpBaseUrl = rememberedHttpBaseUrl(record);
-        if (!httpBaseUrl) return unavailableCommandChannel("http");
         try {
           onProgress?.({
             phase: "saving",
             message: "Writing WiFi credentials over LAN",
           });
-          await sendDeviceWifiConfig(httpBaseUrl, input);
-          onProgress?.({
-            phase: "connecting",
-            message: `Connecting to ${input.ssid} and waiting for an IP address`,
-          });
-          const status = await waitForHttpWifiConnected(
-            httpBaseUrl,
-            input.ssid,
-            onProgress,
+          const { status, settings } = await withRememberedHttpFallback(
+            record,
+            async (httpBaseUrl) => {
+              await sendDeviceWifiConfig(httpBaseUrl, input);
+              onProgress?.({
+                phase: "connecting",
+                message: `Connecting to ${input.ssid} and waiting for an IP address`,
+              });
+              const status = await waitForHttpWifiConnected(
+                httpBaseUrl,
+                input.ssid,
+                onProgress,
+              );
+              const settings = await getSettings(httpBaseUrl);
+              return { status, settings };
+            },
           );
-          const settings = await getSettings(httpBaseUrl);
           const message = wifiConnectedMessage(input.ssid, status.network);
           onProgress?.({
             phase: status.network.ipv4 ? "connected" : "ip",
@@ -1407,16 +1560,23 @@ export function DeviceRegistryProvider({
         serialSessions.current,
       );
       if (selectedTransport === "http") {
-        const httpBaseUrl = rememberedHttpBaseUrl(record);
-        if (!httpBaseUrl) return unavailableCommandChannel("http");
         try {
           onProgress?.({
             phase: "clearing",
             message: "Clearing WiFi credentials over LAN",
           });
-          await clearDeviceWifiConfig(httpBaseUrl);
-          const status = await waitForHttpWifiDisabled(httpBaseUrl, onProgress);
-          const settings = await getSettings(httpBaseUrl);
+          const { status, settings } = await withRememberedHttpFallback(
+            record,
+            async (httpBaseUrl) => {
+              await clearDeviceWifiConfig(httpBaseUrl);
+              const status = await waitForHttpWifiDisabled(
+                httpBaseUrl,
+                onProgress,
+              );
+              const settings = await getSettings(httpBaseUrl);
+              return { status, settings };
+            },
+          );
           const message = wifiDisabledMessage(status.network);
           onProgress?.({ phase: "disabled", message, network: status.network });
           setRecords((current) =>
@@ -1531,11 +1691,14 @@ export function DeviceRegistryProvider({
         serialSessions.current,
       );
       if (selectedTransport === "http") {
-        const httpBaseUrl = rememberedHttpBaseUrl(record);
-        if (!httpBaseUrl) return unavailableCommandChannel("http");
         try {
-          await setDeviceLogLevel(httpBaseUrl, level);
-          const settings = await getSettings(httpBaseUrl);
+          const settings = await withRememberedHttpFallback(
+            record,
+            async (httpBaseUrl) => {
+              await setDeviceLogLevel(httpBaseUrl, level);
+              return getSettings(httpBaseUrl);
+            },
+          );
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1634,11 +1797,14 @@ export function DeviceRegistryProvider({
         serialSessions.current,
       );
       if (selectedTransport === "http") {
-        const httpBaseUrl = rememberedHttpBaseUrl(record);
-        if (!httpBaseUrl) return unavailableCommandChannel("http");
         try {
-          await setDeviceManualChargePrefs(httpBaseUrl, prefs);
-          const settings = await getSettings(httpBaseUrl);
+          const settings = await withRememberedHttpFallback(
+            record,
+            async (httpBaseUrl) => {
+              await setDeviceManualChargePrefs(httpBaseUrl, prefs);
+              return getSettings(httpBaseUrl);
+            },
+          );
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1955,6 +2121,8 @@ export function DeviceRegistryProvider({
       stageDeviceRecord,
       addDevice,
       addDevdDevice,
+      confirmDevdCompanionLan,
+      dismissDevdCompanionLan,
       connectUsbSerialDevice,
       connectKnownDeviceChannel,
       rememberDiscoveredChannels,
@@ -1974,6 +2142,8 @@ export function DeviceRegistryProvider({
       stageDeviceRecord,
       addDevice,
       addDevdDevice,
+      confirmDevdCompanionLan,
+      dismissDevdCompanionLan,
       connectUsbSerialDevice,
       connectKnownDeviceChannel,
       rememberDiscoveredChannels,
@@ -2003,6 +2173,15 @@ function getDemoSeed(): DemoSeed | null {
 }
 
 function loadInitialRecords(seed: DemoSeed | null): DeviceRecord[] {
+  const preset = new URLSearchParams(window.location.search).get(
+    "stored_target_preset",
+  );
+  if (isStoredTargetPreset(preset)) {
+    return makeStoredTargetPreset(preset).map((target) =>
+      recordFromStoredTarget(target),
+    );
+  }
+
   if (seed) return makeMockRecords(seed);
 
   const stored = localStorage.getItem(STORAGE_KEY);
@@ -2412,12 +2591,41 @@ function isDirectLanRecord(record: DeviceRecord): boolean {
 }
 
 function rememberedHttpBaseUrl(record: DeviceRecord): string | null {
-  return (
-    record.target.rememberedChannels?.http?.baseUrl ??
-    ((record.target.transport ?? "http") === "http"
+  return rememberedHttpBaseUrls(record)[0] ?? null;
+}
+
+function rememberedHttpBaseUrls(record: DeviceRecord): string[] {
+  const candidates = [
+    record.target.rememberedChannels?.http?.baseUrl,
+    record.target.rememberedChannels?.http?.fallbackBaseUrl,
+    (record.target.transport ?? "http") === "http"
       ? record.target.baseUrl
-      : null)
-  );
+      : null,
+  ];
+  const normalized: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const baseUrl = normalizeBaseUrl(candidate);
+    if (!baseUrl || normalized.includes(baseUrl)) continue;
+    normalized.push(baseUrl);
+  }
+  return normalized;
+}
+
+async function withRememberedHttpFallback<T>(
+  record: DeviceRecord,
+  operation: (baseUrl: string) => Promise<T>,
+): Promise<T> {
+  const baseUrls = rememberedHttpBaseUrls(record);
+  let lastError: unknown = null;
+  for (const baseUrl of baseUrls) {
+    try {
+      return await operation(baseUrl);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error("No remembered HTTP channel is available");
 }
 
 function rememberedDevdChannel(
@@ -2473,9 +2681,32 @@ function mergeRememberedChannels(
 ): DeviceTarget["rememberedChannels"] {
   if (!existing && !incoming) return undefined;
   return {
-    http: incoming?.http ?? existing?.http,
+    http: mergeRememberedHttpChannel(existing?.http, incoming?.http),
     devd: incoming?.devd ?? existing?.devd,
     serial: incoming?.serial ?? existing?.serial,
+  };
+}
+
+function mergeRememberedHttpChannel(
+  existing:
+    | NonNullable<NonNullable<DeviceTarget["rememberedChannels"]>["http"]>
+    | undefined,
+  incoming:
+    | NonNullable<NonNullable<DeviceTarget["rememberedChannels"]>["http"]>
+    | undefined,
+) {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  const preserveConfirmedBaseUrl =
+    Boolean(existing.mdnsHost) && !incoming.mdnsHost;
+  return {
+    baseUrl: preserveConfirmedBaseUrl
+      ? existing.baseUrl
+      : (incoming.baseUrl ?? existing.baseUrl),
+    fallbackBaseUrl: incoming.fallbackBaseUrl ?? existing.fallbackBaseUrl,
+    seenAt: incoming.seenAt ?? existing.seenAt,
+    source: incoming.source ?? existing.source,
+    mdnsHost: incoming.mdnsHost ?? existing.mdnsHost,
   };
 }
 
@@ -2494,6 +2725,7 @@ function hydrateRememberedChannels(target: DeviceTarget): DeviceTarget {
             http: {
               baseUrl: target.baseUrl,
               seenAt: target.addedAt,
+              mdnsHost: target.rememberedChannels?.http?.mdnsHost,
             },
           }
         : {

@@ -59,6 +59,8 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - CLI 全局支持 `--ipc <endpoint>`，默认 endpoint 与 devd 一致。
 - CLI 发起 newline JSON IPC 请求，不直接枚举串口、不直接切换端口、不直接调用 espflash。
 - CLI 的 flash 与 host power state-changing 命令默认发送 dry-run；真实动作必须显式传入 `--real`。
+- `mains-aegis device <id> bind` 在交互式 TTY 场景下，若 devd 返回可确认的 `companion_lan_candidate`，必须就地提示是否同时绑定 LAN companion；非交互场景不得弹提示、不得自动持久化，只返回候选详情与后续显式命令。
+- host-tools 必须提供显式的 companion-LAN 契约面：`POST /api/v1/devices/{id}/companion-lan`、`DELETE /api/v1/devices/{id}/companion-lan`、IPC `device.companion_lan.bind|clear`，以及 CLI `device <id> companion-lan bind|clear`。该契约面只负责“确认/清除 companion 绑定”，不得隐式代替 `bind`。
 - CLI v1 覆盖：
   - `health`
   - `devices list|scan`
@@ -86,6 +88,8 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - Hosted Web client 从页面 meta 读取 app-session secret，并且只把该 secret 附加到 same-origin devd API 与 devd EventSource 请求；普通 LAN 设备探活与 LAN status SSE 不得携带该 secret。
 - Web Serial 与 devd HTTP service 仍按既有租约、心跳和 release 语义工作。
 - devd HTTP service 与 CLI 观察同一进程内状态；绑定、别名和 artifact selection 还会写入用户配置目录的 devd 状态文件，daemon 重启后恢复为 disconnected 的安全运行态并保留用户配置态。
+
+- 跨 `Web App` / `mains-aegis-devd` / `mains-aegis` CLI 的通信方案优先级矩阵由 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md) 统一定义；本规格只记录 host-tools crate、IPC/HTTP 命令面与 release/install 对齐，不再重复定义跨客户端优先级表。
 
 ## 验收标准
 

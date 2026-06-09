@@ -1,8 +1,4 @@
-import {
-  getMockIdentity,
-  getMockNetwork,
-  getMockStatus,
-} from "../fixtures/mockDevices";
+import { getMockIdentity, getMockNetwork, getMockStatus } from "../fixtures/mockDevices";
 import type {
   ApiErrorEnvelope,
   DevdScanTraceEntry,
@@ -29,6 +25,13 @@ export class MainsAegisApiError extends Error {
     this.envelope = envelope;
   }
 }
+
+type MockBindTargetState = {
+  boundLogicalDeviceId: string | null;
+  dismissedCompanion: boolean;
+};
+
+const mockBindTargetStateByBaseUrl = new Map<string, MockBindTargetState>();
 
 export const isMockBaseUrl = (baseUrl: string) => baseUrl.startsWith("mock:");
 const APP_SESSION_HEADER = "x-mains-aegis-app-session";
@@ -76,7 +79,7 @@ async function requestWithBody<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   if (isMockBaseUrl(baseUrl)) {
-    return requestMock<T>(baseUrl, path);
+    return requestMock<T>(baseUrl, path, method);
   }
 
   const response = await fetch(`${baseUrl}${path}`, {
@@ -184,13 +187,18 @@ function describeHttpFailure(
   return body ? `${statusText}: ${body.slice(0, 160)}` : statusText;
 }
 
-function requestMock<T>(baseUrl: string, path: string): Promise<T> {
+function requestMock<T>(
+  baseUrl: string,
+  path: string,
+  method: "GET" | "POST" | "DELETE" = "GET",
+): Promise<T> {
   if (
     baseUrl === "mock:usb" ||
     baseUrl === "mock:devd" ||
-    baseUrl === "mock:devd-multi"
+    baseUrl === "mock:devd-multi" ||
+    baseUrl === "mock:devd-bind-target"
   ) {
-    return requestMockDevd<T>(baseUrl, path);
+    return requestMockDevd<T>(baseUrl, path, method);
   }
   if (path === "/api/v1/ping" || path === "/health") {
     return Promise.resolve({ ok: true } as T);
@@ -215,8 +223,21 @@ function requestMock<T>(baseUrl: string, path: string): Promise<T> {
   });
 }
 
-function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
+function requestMockDevd<T>(
+  baseUrl: string,
+  path: string,
+  method: "GET" | "POST" | "DELETE" = "GET",
+): Promise<T> {
   const bindTargetMock = baseUrl === "mock:devd-bind-target";
+  const bindTargetState = bindTargetMock
+    ? (mockBindTargetStateByBaseUrl.get(baseUrl) ?? {
+        boundLogicalDeviceId: null,
+        dismissedCompanion: false,
+      })
+    : null;
+  if (bindTargetMock && bindTargetState) {
+    mockBindTargetStateByBaseUrl.set(baseUrl, bindTargetState);
+  }
   const hostedDiscoveryMock =
     baseUrl === "mock:devd" || baseUrl === "mock:devd-multi" || bindTargetMock;
   const multiChannelMock = baseUrl === "mock:devd-multi";
@@ -243,7 +264,9 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
     hostedDiscoveryMock ? "mock:lab-standby" : "mock:usb",
   );
   const usbIdentity = bindTargetMock
-    ? null
+    ? bindTargetState?.boundLogicalDeviceId
+      ? getMockIdentity("mock:lab-standby")
+      : null
     : multiChannelMock
       ? getMockIdentity("mock:lab-standby")
       : (devdIdentity ?? getMockIdentity("mock:usb"));
@@ -263,9 +286,17 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
           : "Bound ESP32-S3"
       : "USB demo CDC",
     port_path: "/dev/tty.usbmodem-demo",
-    transport: "mock" as const,
+    transport: bindTargetMock ? ("native_serial" as const) : ("mock" as const),
     binding:
-      hostedDiscoveryMock && !bindTargetMock
+      bindTargetMock && bindTargetState?.boundLogicalDeviceId
+        ? {
+            alias: "USB demo CDC",
+            stable_id: "mock-devd-usb-pending",
+            port_path: "/dev/tty.usbmodem-demo",
+            created_at: "2026-04-28T00:00:00.000Z",
+            logical_device_id: bindTargetState.boundLogicalDeviceId,
+          }
+        : hostedDiscoveryMock && !bindTargetMock
         ? {
             alias: "USB demo CDC",
             stable_id: multiChannelMock
@@ -278,6 +309,28 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
         : null,
     connection: "connected" as const,
     identity: usbIdentity,
+    companion_lan_candidate:
+      bindTargetMock &&
+      bindTargetState?.boundLogicalDeviceId &&
+      !bindTargetState.dismissedCompanion
+        ? {
+            mdns_host: "mains-aegis-a1b2c3.local",
+            ip: "192.168.31.42",
+            port: 80,
+            detected_at: "2026-06-08T00:00:00.000Z",
+            verified_at: "2026-06-08T00:00:00.000Z",
+            source: "usb_bind_probe",
+          }
+        : hostedDiscoveryMock && !bindTargetMock
+        ? {
+            mdns_host: "mains-aegis-a1b2c3.local",
+            ip: "192.168.31.42",
+            port: 80,
+            detected_at: "2026-06-08T00:00:00.000Z",
+            verified_at: "2026-06-08T00:00:00.000Z",
+            source: "usb_bind_probe",
+          }
+        : null,
     selected_artifact_id: hostedDiscoveryMock
       ? "mains-aegis-esp32s3-release-web_serial-c805b6a"
       : null,
@@ -335,6 +388,11 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
   if (path === "/api/v1/devices") return Promise.resolve({ devices } as T);
   if (path === "/api/v1/devices/scan") return Promise.resolve({ devices } as T);
   if (path.endsWith("/bind")) {
+    if (bindTargetMock && bindTargetState) {
+      bindTargetState.boundLogicalDeviceId = "mains-aegis-a1b2c3";
+      bindTargetState.dismissedCompanion = false;
+      mockBindTargetStateByBaseUrl.set(baseUrl, bindTargetState);
+    }
     return Promise.resolve({
       ...usbDevice,
       binding: {
@@ -345,6 +403,52 @@ function requestMockDevd<T>(baseUrl: string, path: string): Promise<T> {
         logical_device_id:
           multiChannelMock || bindTargetMock ? "mains-aegis-a1b2c3" : null,
       },
+      log_decode: { status: "unverified", reason: null, artifact_id: null },
+    } as T);
+  }
+  if (path.endsWith("/companion-lan") && method === "POST") {
+    const mockLanBaseUrl = bindTargetMock ? "mock:lab-standby" : null;
+    return Promise.resolve({
+      ...usbDevice,
+      binding: {
+        alias: "USB demo CDC",
+        stable_id: usbDevice.id,
+        port_path: usbDevice.port_path,
+        created_at: "2026-04-28T00:00:00.000Z",
+        logical_device_id:
+          multiChannelMock || bindTargetMock ? "mains-aegis-a1b2c3" : null,
+        lan_companion: {
+          mdns_host: mockLanBaseUrl ?? "mains-aegis-a1b2c3.local",
+          ip: mockLanBaseUrl ?? "192.168.31.42",
+          port: 80,
+          confirmed_at: "2026-06-08T00:00:00.000Z",
+          last_verified_at: "2026-06-08T00:00:00.000Z",
+        },
+      },
+      companion_lan_candidate: null,
+      lan_address: mockLanBaseUrl ?? "192.168.31.42",
+      lan_conflict_addresses: [],
+      log_decode: { status: "unverified", reason: null, artifact_id: null },
+    } as T);
+  }
+  if (path.endsWith("/companion-lan") && method === "DELETE") {
+    if (bindTargetMock && bindTargetState) {
+      bindTargetState.dismissedCompanion = true;
+      mockBindTargetStateByBaseUrl.set(baseUrl, bindTargetState);
+    }
+    return Promise.resolve({
+      ...usbDevice,
+      binding: {
+        alias: "USB demo CDC",
+        stable_id: usbDevice.id,
+        port_path: usbDevice.port_path,
+        created_at: "2026-04-28T00:00:00.000Z",
+        logical_device_id:
+          multiChannelMock || bindTargetMock ? "mains-aegis-a1b2c3" : null,
+      },
+      companion_lan_candidate: null,
+      lan_address: null,
+      lan_conflict_addresses: [],
       log_decode: { status: "unverified", reason: null, artifact_id: null },
     } as T);
   }
@@ -777,6 +881,26 @@ export const bindDevdDevice = (
       alias: input.alias,
       logical_device_id: input.logicalDeviceId,
     },
+    { bridgeAuth: true },
+  );
+export const bindDevdCompanionLan = (
+  deviceId: string,
+  input: { mdns_host?: string; ip?: string; port?: number } = {},
+  baseUrl = "",
+) =>
+  requestWithBody<DevdDevice>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/companion-lan`,
+    "POST",
+    input,
+    { bridgeAuth: true },
+  );
+export const clearDevdCompanionLan = (deviceId: string, baseUrl = "") =>
+  requestWithBody<DevdDevice>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/companion-lan`,
+    "DELETE",
+    undefined,
     { bridgeAuth: true },
   );
 export const connectDevdDevice = (deviceId: string, baseUrl = "") =>

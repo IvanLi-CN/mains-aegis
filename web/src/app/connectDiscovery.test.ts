@@ -62,6 +62,27 @@ function usbPendingDevice(logicalDeviceId: string): DevdDevice {
   };
 }
 
+function usbConfirmedCompanionDevice(
+  logicalDeviceId: string,
+  lanAddress: string | null = null,
+): DevdDevice {
+  const device = usbPendingDevice(logicalDeviceId);
+  return {
+    ...device,
+    lan_address: lanAddress,
+    binding: {
+      ...device.binding!,
+      lan_companion: {
+        mdns_host: "mains-aegis-a1b2c3.local",
+        ip: "192.168.31.42",
+        port: 80,
+        confirmed_at: "2026-06-07T00:00:00.000Z",
+        last_verified_at: "2026-06-07T00:00:00.000Z",
+      },
+    },
+  };
+}
+
 function lanDevice(deviceId: string): DevdDevice {
   return {
     id: deviceId,
@@ -151,6 +172,18 @@ describe("buildDiscoveredLogicalDevices", () => {
     expect(logicalDevices[0]?.channels.http?.lan_address).toBe("192.168.31.42");
     expect(logicalDevices[0]?.availableTransports).toEqual(["http", "devd"]);
   });
+
+  test("does not fabricate a live WiFi channel from a saved companion alone", () => {
+    const logicalDevices = buildDiscoveredLogicalDevices(
+      [usbConfirmedCompanionDevice("mains-aegis-a1b2c3")],
+      [savedRecord("mains-aegis-a1b2c3")],
+    );
+
+    expect(logicalDevices).toHaveLength(1);
+    expect(logicalDevices[0]?.channels.devd?.id).toBe("usb-stable-a");
+    expect(logicalDevices[0]?.channels.http).toBeUndefined();
+    expect(logicalDevices[0]?.availableTransports).toEqual(["devd"]);
+  });
 });
 
 describe("buildFleetEntries", () => {
@@ -200,6 +233,22 @@ describe("buildFleetEntries", () => {
     expect(entries[0]?.record.target.rememberedChannels?.devd?.devdDeviceId).toBe(
       "usb-stable-a",
     );
+  });
+
+  test("refreshes confirmed companion fallback IP from current LAN discovery", () => {
+    const entries = buildFleetEntries(
+      [savedRecord("mains-aegis-a1b2c3")],
+      [usbConfirmedCompanionDevice("mains-aegis-a1b2c3", "192.168.31.99")],
+      "same-origin",
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.record.target.rememberedChannels?.http?.baseUrl).toBe(
+      "http://mains-aegis-a1b2c3.local",
+    );
+    expect(
+      entries[0]?.record.target.rememberedChannels?.http?.fallbackBaseUrl,
+    ).toBe("http://192.168.31.99:80");
   });
 
   test("keeps staged fleet records unsaved when they are temporary", () => {

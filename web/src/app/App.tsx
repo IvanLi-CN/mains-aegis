@@ -19,6 +19,7 @@ import {
   Maximize2,
   Menu,
   Minimize2,
+  ChevronDown,
   PlugZap,
   Radio,
   RefreshCw,
@@ -58,6 +59,7 @@ import type {
   DeviceRecord,
   DeviceSettings,
   DevdDevice,
+  LanCompanionCandidate,
   SerialLogEntry,
   SerialTraceEntry,
   UpsStatus,
@@ -131,6 +133,7 @@ type DiscoveredLogicalDevice = {
   displayName: string;
   endpoint: string;
   existingRecord: DeviceRecord | null;
+  pendingCompanionCandidate: LanCompanionCandidate | null;
   channels: Partial<
     Record<Extract<DeviceChannelTransport, "http" | "devd">, DevdDevice>
   >;
@@ -197,13 +200,18 @@ export function App({
 }: AppProps = {}) {
   const registry = useDeviceRegistry();
   const route = useRoute(initialPath);
-  const demoMode = isDemoSeed(
-    new URLSearchParams(window.location.search).get("seed"),
-  );
+  const searchParams = new URLSearchParams(window.location.search);
+  const demoMode = isDemoSeed(searchParams.get("seed"));
+  const queryDevdTarget = searchParams.get("mock_devd_target")?.trim() || "";
+  const queryHostedHttpServiceApp = searchParams.get("mock_hosted") === "1";
+  const queryBindLogicalDeviceId =
+    searchParams.get("mock_bind_logical_device_id")?.trim() || "";
+  const resolvedInitialDevdTarget = initialDevdTarget ?? queryDevdTarget;
   const hostedHttpServiceApp =
-    forceHostedHttpServiceApp ?? isHostedHttpServiceApp();
+    forceHostedHttpServiceApp ??
+    (queryHostedHttpServiceApp || isHostedHttpServiceApp());
   const devdTarget = resolveDevdTarget(
-    initialDevdTarget,
+    resolvedInitialDevdTarget,
     hostedHttpServiceApp,
     demoMode,
   );
@@ -340,7 +348,7 @@ export function App({
           route,
           fleetEntries,
           selected,
-          initialDevdTarget,
+          resolvedInitialDevdTarget || undefined,
           hostedHttpServiceApp,
           devdDiscovery,
         )}
@@ -1021,6 +1029,10 @@ function channelUseText(
   return `${active ? "Using" : "Use"} ${channelActionLabel(transport)}`;
 }
 
+function channelOpenText(transport: DeviceChannelTransport): string {
+  return `Open with ${channelActionLabel(transport)}`;
+}
+
 function devdLogicalDeviceId(device: DevdDevice): string | null {
   return (
     device.binding?.logical_device_id ?? device.identity?.device_id ?? null
@@ -1036,12 +1048,13 @@ function discoveryUsbChannel(device: DevdDevice): DevdDevice | null {
 }
 
 function discoveryHttpChannel(device: DevdDevice): DevdDevice | null {
-  if (!device.lan_address) return device.transport === "lan" ? device : null;
   if (device.transport === "lan") return device;
+  if (!device.lan_address) return null;
   return {
     ...device,
     transport: "lan",
     port_path: null,
+    lan_address: device.lan_address,
     connection:
       (device.lan_conflict_addresses?.length ?? 0) > 0 ? "error" : "connected",
   };
@@ -1090,6 +1103,8 @@ export function buildDiscoveredLogicalDevices(
         existingRecord?.target.alias ?? deviceId ?? primaryDevice.display_name,
       endpoint: endpoints.join(" / "),
       existingRecord,
+      pendingCompanionCandidate:
+        nextChannels.devd?.companion_lan_candidate ?? null,
       channels: nextChannels,
       availableTransports,
       connectionLabel: availableTransports
@@ -1154,12 +1169,19 @@ function buildFleetEntryRecord(
     devdDevice?.identity ??
     existingRecord?.identity ??
     null;
+  const companion = httpDevice?.binding?.lan_companion ?? null;
+  const companionBaseUrl = companion
+    ? normalizeBaseUrl(companion.mdns_host)
+    : null;
+  const companionFallbackAddress = httpDevice?.lan_address ?? companion?.ip;
+  const companionFallbackBaseUrl = companionFallbackAddress && companion
+    ? normalizeBaseUrl(`${companionFallbackAddress}:${companion.port}`)
+    : null;
+  const httpBaseUrl =
+    companionBaseUrl ?? devdLanBaseUrl(httpDevice, identity);
   const target = {
     deviceId,
-    baseUrl:
-      devdLanBaseUrl(httpDevice, identity) ??
-      existingRecord?.target.baseUrl ??
-      devdBaseUrl,
+    baseUrl: httpBaseUrl ?? existingRecord?.target.baseUrl ?? devdBaseUrl,
     alias:
       existingRecord?.target.alias ??
       identity?.hostname ??
@@ -1178,12 +1200,19 @@ function buildFleetEntryRecord(
         ? {
             http: {
               baseUrl:
-                devdLanBaseUrl(httpDevice, identity) ??
+                httpBaseUrl ??
                 existingRecord?.target.rememberedChannels?.http?.baseUrl ??
                 existingRecord?.target.baseUrl ??
                 "",
               seenAt: new Date().toISOString(),
               source: "devd_discovery" as const,
+              mdnsHost:
+                companion?.mdns_host ??
+                existingRecord?.target.rememberedChannels?.http?.mdnsHost,
+              fallbackBaseUrl:
+                companionFallbackBaseUrl ??
+                existingRecord?.target.rememberedChannels?.http
+                  ?.fallbackBaseUrl,
             },
           }
         : {}),
@@ -1299,6 +1328,8 @@ function ConnectPage({
     records,
     addDevice,
     addDevdDevice,
+    confirmDevdCompanionLan,
+    dismissDevdCompanionLan,
     connectUsbSerialDevice,
     connectKnownDeviceChannel,
     rememberDiscoveredChannels,
@@ -1311,6 +1342,10 @@ function ConnectPage({
   const demoMode = isDemoSeed(
     new URLSearchParams(window.location.search).get("seed"),
   );
+  const queryBindLogicalDeviceId =
+    new URLSearchParams(window.location.search)
+      .get("mock_bind_logical_device_id")
+      ?.trim() || "";
   const [target, setTarget] = useState("");
   const [alias, setAlias] = useState("");
   const [location, setLocation] = useState("");
@@ -1318,7 +1353,7 @@ function ConnectPage({
   const [usbLocation, setUsbLocation] = useState("");
   const [fallbackDevdTarget] = useState(() =>
     demoMode
-      ? "mock:devd"
+      ? (initialDevdTarget ?? "mock:devd")
       : (initialDevdTarget ??
         (hostedHttpServiceApp ? "same-origin" : envDevdTarget)),
   );
@@ -1343,9 +1378,19 @@ function ConnectPage({
   const [busy, setBusy] = useState(false);
   const [usbBusy, setUsbBusy] = useState(false);
   const [devdBusy, setDevdBusy] = useState(false);
-  const [devdBindTargets, setDevdBindTargets] = useState<
-    Record<string, string>
-  >({});
+  const [companionConfirmingDeviceId, setCompanionConfirmingDeviceId] =
+    useState<string | null>(null);
+  const [companionDismissingDeviceId, setCompanionDismissingDeviceId] =
+    useState<string | null>(null);
+  const [devdBindTargets, setDevdBindTargets] = useState<Record<string, string>>(
+    () => {
+      const initialTargets: Record<string, string> = {};
+      if (queryBindLogicalDeviceId) {
+        initialTargets["mock-devd-usb-pending"] = queryBindLogicalDeviceId;
+      }
+      return initialTargets;
+    },
+  );
   const serialSupported = isWebSerialSupported();
   const devdDiscoveryOnly = hostedHttpServiceApp;
   const devdTarget = sharedDevdDiscovery?.devdTarget ?? fallbackDevdTarget;
@@ -1534,6 +1579,44 @@ function ConnectPage({
     }
   }
 
+  async function onConfirmCompanionLan(device: DevdDevice) {
+    setCompanionConfirmingDeviceId(device.id);
+    setDevdMessage(null);
+    const result = await confirmDevdCompanionLan(
+      device.id,
+      normalizeBaseUrl(devdTarget),
+    );
+    setCompanionConfirmingDeviceId(null);
+    if (result.ok) {
+      setDevdMessage(
+        successFeedback(
+          `Added LAN companion for ${result.record.target.alias}`,
+        ),
+      );
+      void refreshDevdDiscovery({ clearMessage: false });
+      return;
+    }
+    setDevdMessage(errorFeedback(result.error));
+  }
+
+  async function onDismissCompanionLan(device: DevdDevice) {
+    setCompanionDismissingDeviceId(device.id);
+    setDevdMessage(null);
+    const result = await dismissDevdCompanionLan(
+      device.id,
+      normalizeBaseUrl(devdTarget),
+    );
+    setCompanionDismissingDeviceId(null);
+    if (result.ok) {
+      setDevdMessage(
+        successFeedback(`Ignored LAN companion prompt for ${device.display_name}`),
+      );
+      void refreshDevdDiscovery({ clearMessage: false });
+      return;
+    }
+    setDevdMessage(errorFeedback(result.error));
+  }
+
   async function onSavedDeviceChannelSwitch(
     record: DeviceRecord,
     transport: DeviceChannelTransport,
@@ -1663,6 +1746,12 @@ function ConnectPage({
             const primaryChannel = device.channels[defaultTransport];
             const showOverride =
               devdFirmwareOverrideDeviceId === primaryChannel?.id;
+            const pendingCompanion = device.pendingCompanionCandidate;
+            const devdChannel = device.channels.devd ?? null;
+            const showPendingCompanion =
+              Boolean(devdChannel) &&
+              Boolean(pendingCompanion) &&
+              !devdChannel?.binding?.lan_companion;
             const isConnectingDevice = primaryChannel
               ? devdConnectingDeviceId === primaryChannel.id
               : false;
@@ -1675,6 +1764,7 @@ function ConnectPage({
             const selectedBindTargetId =
               primaryChannel && needsBindTargetSelection
                 ? (devdBindTargets[primaryChannel.id] ??
+                  queryBindLogicalDeviceId ??
                   (bindTargetOptions.length === 1
                     ? (bindTargetOptions[0]?.deviceId ?? "")
                     : ""))
@@ -1698,6 +1788,25 @@ function ConnectPage({
                     isCurrent,
                 };
               });
+            const openTransportOptions = [
+              {
+                value: defaultTransport as Extract<
+                  DeviceChannelTransport,
+                  "http" | "devd"
+                >,
+                label: channelOpenText(defaultTransport),
+                disabled:
+                  !primaryChannel ||
+                  !isConnectableDevdDevice(primaryChannel) ||
+                  devdBusy,
+              },
+              ...alternateTransportOptions.map((option) => ({
+                ...option,
+                label: channelOpenText(
+                  option.value as Extract<DeviceChannelTransport, "http" | "devd">,
+                ),
+              })),
+            ];
             return (
               <article
                 className={`devd-device-card ${primaryChannel && isConnectableDevdDevice(primaryChannel) ? "" : "is-muted"}`}
@@ -1730,38 +1839,18 @@ function ConnectPage({
                 </dl>
                 <div className="devd-device-actions">
                   {existingRecord && primaryChannel ? (
-                    <>
-                      <button
-                        className="primary-button small"
-                        type="button"
-                        onClick={() =>
-                          navigate(deviceDefaultHref(existingRecord))
-                        }
-                      >
-                        Open
-                      </button>
-                      {alternateTransportOptions.map((option) => {
-                        const nextTransport = option.value as Extract<
-                          DeviceChannelTransport,
-                          "http" | "devd"
-                        >;
-                        const channel = device.channels[nextTransport];
-                        if (!channel) return null;
-                        return (
-                          <button
-                            key={option.value}
-                            className="secondary-button small"
-                            type="button"
-                            disabled={option.disabled}
-                            onClick={() =>
-                              void onDiscoveredDeviceAction(channel)
-                            }
-                          >
-                            {option.label}
-                          </button>
-                        );
-                      })}
-                    </>
+                    <DeviceOpenAction
+                      navigateTo={() =>
+                        navigate(deviceDefaultHref(existingRecord))
+                      }
+                      menuLabel={`Choose connection for ${device.displayName}`}
+                      options={openTransportOptions}
+                      onSelect={(transport) => {
+                        const channel = device.channels[transport];
+                        if (!channel) return;
+                        void onDiscoveredDeviceAction(channel);
+                      }}
+                    />
                   ) : primaryChannel ? (
                     <>
                       {needsBindTargetSelection ? (
@@ -1850,6 +1939,70 @@ function ConnectPage({
                     </button>
                   ) : null}
                 </div>
+                {showPendingCompanion && devdChannel ? (
+                  <div className="inline-companion-callout">
+                    <div className="inline-companion-signal" aria-hidden="true">
+                      <Globe2 size={18} />
+                    </div>
+                    <div className="inline-companion-copy">
+                      <div className="inline-companion-row">
+                        <CompanionHelpBubble
+                          mdnsHost={pendingCompanion?.mdns_host}
+                          ip={pendingCompanion?.ip}
+                          port={pendingCompanion?.port}
+                        />
+                        <span className="inline-companion-target">
+                          <span className="inline-companion-target-label">
+                            devd
+                          </span>
+                          <code>{pendingCompanion?.mdns_host}</code>
+                        </span>
+                        <span className="inline-companion-target">
+                          <span className="inline-companion-target-label">
+                            Web
+                          </span>
+                          <code>
+                            http://{pendingCompanion?.ip}:{pendingCompanion?.port}
+                          </code>
+                        </span>
+                      </div>
+                    </div>
+                    <div className="inline-companion-actions">
+                      <button
+                        className="secondary-button small"
+                        type="button"
+                        disabled={
+                          devdBusy ||
+                          companionDismissingDeviceId === devdChannel.id ||
+                          companionConfirmingDeviceId === devdChannel.id
+                        }
+                        onClick={() => void onDismissCompanionLan(devdChannel)}
+                      >
+                        <ButtonLabel
+                          busy={companionDismissingDeviceId === devdChannel.id}
+                          busyText="Ignoring"
+                          text="Not now"
+                        />
+                      </button>
+                      <button
+                        className="primary-button small"
+                        type="button"
+                        disabled={
+                          devdBusy ||
+                          companionConfirmingDeviceId === devdChannel.id ||
+                          companionDismissingDeviceId === devdChannel.id
+                        }
+                        onClick={() => void onConfirmCompanionLan(devdChannel)}
+                      >
+                        <ButtonLabel
+                          busy={companionConfirmingDeviceId === devdChannel.id}
+                          busyText="Saving"
+                          text="Bind LAN now"
+                        />
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </article>
             );
           })}
@@ -2082,6 +2235,11 @@ function ConnectPage({
             >
               <strong>{record.target.alias}</strong>
               <span>{connectionEndpointLabel(record)}</span>
+              {companionChannelSummary(record) ? (
+                <span className="table-row-detail">
+                  {companionChannelSummary(record)}
+                </span>
+              ) : null}
             </button>
             <div className="row-actions">
               <ConnectionBadges record={record} />
@@ -2238,6 +2396,82 @@ export function ConnectionCallout({
         {code ? <code>{code}</code> : null}
       </span>
     </aside>
+  );
+}
+
+function DeviceOpenAction({
+  navigateTo,
+  menuLabel,
+  options,
+  onSelect,
+}: {
+  navigateTo: () => void;
+  menuLabel: string;
+  options: Array<{
+    value: Extract<DeviceChannelTransport, "http" | "devd">;
+    label: string;
+    disabled: boolean;
+  }>;
+  onSelect: (transport: Extract<DeviceChannelTransport, "http" | "devd">) => void;
+}) {
+  const availableOptions = options.filter((option) => !option.disabled);
+  return (
+    <div className="split-action">
+      <button className="primary-button small" type="button" onClick={navigateTo}>
+        Open
+      </button>
+      {availableOptions.length > 0 ? (
+        <details className="split-action-menu">
+          <summary
+            className="primary-button small split-action-trigger"
+            aria-label={menuLabel}
+            title={menuLabel}
+          >
+            <ChevronDown size={14} />
+          </summary>
+          <div className="split-action-popover" role="menu">
+            {availableOptions.map((option) => (
+              <button
+                key={option.value}
+                className="split-action-item"
+                type="button"
+                role="menuitem"
+                onClick={() => onSelect(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function CompanionHelpBubble({
+}: {
+  mdnsHost?: string | null;
+  ip?: string | null;
+  port?: number | null;
+}) {
+  return (
+    <span className="inline-companion-title-help">
+      <button
+        type="button"
+        className="inline-companion-title-trigger"
+        aria-label="Why is LAN binding suggested?"
+      >
+        Also bind LAN?
+      </button>
+      <span className="inline-companion-title-popover" aria-hidden="true">
+        <strong>Why this is suggested</strong>
+        <span>
+          USB is already bound, and this device also answered on LAN with the
+          same identity.
+        </span>
+        <span>You can add LAN now, or ignore this and keep using USB only.</span>
+      </span>
+    </span>
   );
 }
 
@@ -4206,6 +4440,26 @@ function connectionEndpointLabel(record: DeviceRecord): string {
     return `Remembered ${rememberedChannels.map((transport) => channelBadgeLabel(transport)).join(" / ")}`;
   }
   return record.target.baseUrl;
+}
+
+function companionChannelSummary(record: DeviceRecord): string | null {
+  const httpChannel = record.target.rememberedChannels?.http;
+  const devdChannel = record.target.rememberedChannels?.devd;
+  if (!httpChannel && !devdChannel) return null;
+  const segments: string[] = [];
+  segments.push(
+    `Preferred ${channelBadgeLabel(preferredRecordTransport(record))}`,
+  );
+  if (httpChannel?.baseUrl) {
+    segments.push(`Web direct ${httpChannel.baseUrl}`);
+  }
+  if (httpChannel?.fallbackBaseUrl) {
+    segments.push(`WiFi fallback ${httpChannel.fallbackBaseUrl}`);
+  }
+  if (httpChannel?.mdnsHost) {
+    segments.push(`devd mDNS ${httpChannel.mdnsHost}`);
+  }
+  return segments.join(" · ");
 }
 
 function splitErrorMessage(message: string): [string | null, string] {

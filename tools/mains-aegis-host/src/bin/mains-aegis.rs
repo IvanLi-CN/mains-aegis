@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use mains_aegis_host::{default_ipc_endpoint, ipc_call, release_version};
 use serde_json::{json, Value};
+use std::io::{self, IsTerminal, Write};
 
 #[derive(Debug, Parser)]
 #[command(name = "mains-aegis")]
@@ -69,6 +70,10 @@ enum DeviceCommand {
         #[arg(long)]
         alias: Option<String>,
     },
+    CompanionLan {
+        #[command(subcommand)]
+        command: CompanionLanCommand,
+    },
     Unbind,
     Connect,
     Disconnect,
@@ -120,6 +125,19 @@ enum ArtifactCommand {
 enum MonitorCommand {
     Start,
     Stop,
+}
+
+#[derive(Debug, Subcommand)]
+enum CompanionLanCommand {
+    Bind {
+        #[arg(long)]
+        mdns_host: Option<String>,
+        #[arg(long)]
+        ip: Option<String>,
+        #[arg(long)]
+        port: Option<u16>,
+    },
+    Clear,
 }
 
 #[derive(Debug, Subcommand)]
@@ -222,8 +240,28 @@ enum WifiCommand {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let endpoint = cli.ipc.unwrap_or_else(default_ipc_endpoint);
+    let interactive_bind = match &cli.command {
+        Command::Device {
+            device_id,
+            command: DeviceCommand::Bind { alias },
+        } => Some((device_id.clone(), alias.clone())),
+        _ => None,
+    };
     let (method, params) = command_to_ipc(cli.command);
-    let result = ipc_call(&endpoint, method, params).await?;
+    let mut result = ipc_call(&endpoint, method, params).await?;
+    if let Some((device_id, _alias)) = interactive_bind {
+        if io::stdin().is_terminal()
+            && io::stdout().is_terminal()
+            && maybe_confirm_companion_lan(&endpoint, &device_id, &result).await?
+        {
+            result = ipc_call(
+                &endpoint,
+                "device.connection",
+                json!({ "device_id": device_id }),
+            )
+            .await?;
+        }
+    }
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
 }
@@ -272,6 +310,25 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
             "device.bind",
             json!({ "device_id": device_id, "alias": alias }),
         ),
+        DeviceCommand::CompanionLan { command } => match command {
+            CompanionLanCommand::Bind {
+                mdns_host,
+                ip,
+                port,
+            } => (
+                "device.companion_lan.bind",
+                json!({
+                    "device_id": device_id,
+                    "mdns_host": mdns_host,
+                    "ip": ip,
+                    "port": port,
+                }),
+            ),
+            CompanionLanCommand::Clear => (
+                "device.companion_lan.clear",
+                json!({ "device_id": device_id }),
+            ),
+        },
         DeviceCommand::Unbind => ("device.unbind", json!({ "device_id": device_id })),
         DeviceCommand::Connect => ("device.connect", json!({ "device_id": device_id })),
         DeviceCommand::Disconnect => ("device.disconnect", json!({ "device_id": device_id })),
@@ -315,6 +372,52 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
             MonitorCommand::Stop => ("device.monitor.stop", json!({ "device_id": device_id })),
         },
     }
+}
+
+async fn maybe_confirm_companion_lan(
+    endpoint: &str,
+    device_id: &str,
+    bind_result: &Value,
+) -> anyhow::Result<bool> {
+    let Some(candidate) = bind_result.get("companion_lan_candidate") else {
+        return Ok(false);
+    };
+    let mdns_host = candidate
+        .get("mdns_host")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let ip = candidate.get("ip").and_then(Value::as_str).unwrap_or("");
+    let port = candidate.get("port").and_then(Value::as_u64).unwrap_or(80);
+    if mdns_host.is_empty() || ip.is_empty() {
+        return Ok(false);
+    }
+    eprintln!(
+        "Detected reachable LAN companion for {device_id}: devd can use {mdns_host}, Web can use http://{ip}:{port}."
+    );
+    eprint!("Bind this LAN companion now? [y/N]: ");
+    io::stderr().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        eprintln!(
+            "Skipped LAN companion persistence. Later command: mains-aegis device {device_id} companion-lan bind --mdns-host {mdns_host} --ip {ip} --port {port}"
+        );
+        return Ok(false);
+    }
+    let result = ipc_call(
+        endpoint,
+        "device.companion_lan.bind",
+        json!({
+            "device_id": device_id,
+            "mdns_host": mdns_host,
+            "ip": ip,
+            "port": port,
+        }),
+    )
+    .await?;
+    let serialized = serde_json::to_string_pretty(&result)?;
+    eprintln!("{serialized}");
+    Ok(true)
 }
 
 fn host_power_to_ipc(command: HostPowerCommand) -> (&'static str, Value) {

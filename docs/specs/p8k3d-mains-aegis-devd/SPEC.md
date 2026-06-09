@@ -28,6 +28,7 @@
 - HTTP API 覆盖 identity、connection、settings、trace、events、artifact selection、reset、monitor start/stop、flash 与设备 settings 写入；`session` 仅作为历史兼容语义由 #k4vzn 接管。
 - HTTP API 覆盖 host power 查询、低功耗运行 profile 切换、suspend、shutdown dry-run 与事件广播。
 - 吸收旧本地 USB HTTP bridge 的兼容面：WiFi config、log level、manual charge endpoints 与 Web USB Console hydration 由 devd 直接提供；新的 owner-facing 查询面使用 `connection / settings / trace`。
+- 跨 `Web App` / `mains-aegis-devd` / `mains-aegis` CLI 的通信方案优先级矩阵由 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md) 统一定义；本规格不再重复定义跨客户端默认 transport 规则。
 - Firmware Catalog 成为 Web Direct、devd、本地构建和 GitHub Release 的统一 artifact 合同。
 - 固件 identity 暴露 build/profile/features/protocol/defmt 信息，devd 用它与 artifact manifest 匹配；不匹配时日志解码必须标记 `unverified`。
 - Web 开发期由 Vite dev server 反代 `/api` 到显式启动的 `serve-http --allow-dev-cors`，proxy target 可由 env 指向当前开发实例；hosted 模式下由 devd 直接托管嵌入式 Web。需要浏览器直接跨源访问 devd API 时，`--allow-dev-cors` 只允许 loopback HTTP development origins。Connect 页在 LAN 发现结果里只保留 `identity.firmware.protocol === "mains-aegis.cdc.v1"` 的候选；hosted Connect 中这些 LAN 候选只作为 direct hardware HTTP target 使用，不应伪装成 `devd transport`。
