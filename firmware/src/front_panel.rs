@@ -86,6 +86,7 @@ const DISPLAY_CTRL_BRIGHTNESS_DIM_BACKLIGHT_ON: u8 = 0x2C;
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const CENTER_LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(800);
 const BOOT_SPLASH_HOLD: Duration = Duration::from_millis(900);
+const DASHBOARD_MENU_ANIMATION_DURATION: Duration = Duration::from_millis(250);
 const PANEL_INIT_SPI_FREQ_MHZ: u32 = 10;
 const PANEL_RUNTIME_SPI_FREQ_MHZ: u32 = if cfg!(feature = "display-spi-20mhz") {
     20
@@ -185,6 +186,12 @@ struct Cst816dDiagSnapshot {
     raw_x: u16,
     raw_y: u16,
     mapped_point: Option<(u16, u16)>,
+}
+
+struct DashboardMenuAnimation {
+    started_at: Instant,
+    from_offset_y: i16,
+    target_offset_y: i16,
 }
 
 pub enum BacklightControl {
@@ -322,6 +329,7 @@ where
     dashboard_home_focus: DashboardHomeFocus,
     dashboard_menu_selected: MenuItem,
     dashboard_menu_offset_y: i16,
+    dashboard_menu_animation: Option<DashboardMenuAnimation>,
     beeper_prefs: BeeperPrefs,
     self_check_snapshot: SelfCheckUiSnapshot,
     bms_activation_state: BmsActivationState,
@@ -400,6 +408,7 @@ where
             dashboard_home_focus: DashboardHomeFocus::Output,
             dashboard_menu_selected: MenuItem::Dashboard,
             dashboard_menu_offset_y: 0,
+            dashboard_menu_animation: None,
             beeper_prefs: BeeperPrefs::defaults(),
             self_check_snapshot: SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby),
             bms_activation_state: BmsActivationState::Idle,
@@ -934,13 +943,18 @@ where
             return;
         }
         let previous = self.dashboard_page;
+        let target_offset_y = dashboard_menu_target_offset_y(page);
         self.dashboard_page = page;
-        self.dashboard_menu_offset_y = match page {
-            DashboardPrimaryPage::DashboardHome => 0,
-            DashboardPrimaryPage::Menu | DashboardPrimaryPage::BeeperSettings => {
-                front_panel_scene::UI_H as i16
-            }
-        };
+        if dashboard_page_transition_is_animated(previous, page) {
+            self.dashboard_menu_animation = Some(DashboardMenuAnimation {
+                started_at: Instant::now(),
+                from_offset_y: self.dashboard_menu_offset_y,
+                target_offset_y,
+            });
+        } else {
+            self.dashboard_menu_animation = None;
+            self.dashboard_menu_offset_y = target_offset_y;
+        }
         self.needs_redraw = true;
         defmt::info!(
             "ui: dashboard page old={} new={}",
@@ -1025,6 +1039,7 @@ where
         self.dashboard_home_focus = DashboardHomeFocus::Output;
         self.dashboard_menu_selected = MenuItem::Dashboard;
         self.dashboard_menu_offset_y = 0;
+        self.dashboard_menu_animation = None;
         self.self_check_overlay = SelfCheckOverlay::None;
         self.needs_redraw = true;
         defmt::info!(
@@ -1058,6 +1073,27 @@ where
         }
         self.beeper_prefs = prefs;
         self.needs_redraw = true;
+    }
+
+    fn update_dashboard_menu_animation(&mut self, now: Instant) -> bool {
+        let Some(animation) = self.dashboard_menu_animation.as_ref() else {
+            return false;
+        };
+        let started_at = animation.started_at;
+        let from_offset_y = animation.from_offset_y;
+        let target_offset_y = animation.target_offset_y;
+        let duration_ms = DASHBOARD_MENU_ANIMATION_DURATION.as_millis() as i32;
+        let elapsed_ms = (now - started_at)
+            .as_millis()
+            .min(DASHBOARD_MENU_ANIMATION_DURATION.as_millis()) as i32;
+        let delta = i32::from(target_offset_y - from_offset_y);
+        let next_offset = i32::from(from_offset_y) + (delta * elapsed_ms / duration_ms.max(1));
+        self.dashboard_menu_offset_y = next_offset as i16;
+        if elapsed_ms >= duration_ms {
+            self.dashboard_menu_offset_y = target_offset_y;
+            self.dashboard_menu_animation = None;
+        }
+        true
     }
 
     pub fn tick(&mut self) -> Option<UiAction> {
@@ -1125,7 +1161,9 @@ where
                     return ui_action;
                 }
                 let inputs_changed = self.last_inputs != Some(snapshot);
+                let menu_animation_active = self.update_dashboard_menu_animation(now);
                 let should_render = self.needs_redraw
+                    || menu_animation_active
                     || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed)
                     || dashboard_uses_frame_animation(
                         self.ui_variant,
@@ -2221,6 +2259,31 @@ fn dashboard_page_name(page: DashboardPrimaryPage) -> &'static str {
         DashboardPrimaryPage::Menu => "menu",
         DashboardPrimaryPage::BeeperSettings => "audio",
     }
+}
+
+fn dashboard_menu_target_offset_y(page: DashboardPrimaryPage) -> i16 {
+    match page {
+        DashboardPrimaryPage::DashboardHome => 0,
+        DashboardPrimaryPage::Menu | DashboardPrimaryPage::BeeperSettings => {
+            front_panel_scene::UI_H as i16
+        }
+    }
+}
+
+fn dashboard_page_transition_is_animated(
+    from: DashboardPrimaryPage,
+    to: DashboardPrimaryPage,
+) -> bool {
+    matches!(
+        (from, to),
+        (
+            DashboardPrimaryPage::DashboardHome,
+            DashboardPrimaryPage::Menu
+        ) | (
+            DashboardPrimaryPage::Menu,
+            DashboardPrimaryPage::DashboardHome
+        )
+    )
 }
 
 fn vertical_gesture_direction_name(direction: VerticalGestureDirection) -> &'static str {
