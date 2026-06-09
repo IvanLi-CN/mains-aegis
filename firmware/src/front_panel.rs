@@ -100,6 +100,9 @@ pub enum UiAction {
         prefs: BeeperPrefs,
         target: BeeperSettingTarget,
     },
+    BeeperPrefsChanged {
+        prefs: BeeperPrefs,
+    },
     ClearBmsActivationResult,
 }
 
@@ -392,7 +395,7 @@ where
             touch_irq_stuck_hint_logged: false,
             frame_no: 0,
             display_power_epoch: Instant::now(),
-            display_power: DisplayPowerController::new(DisplayPowerPolicy::test_default(), 0),
+            display_power: DisplayPowerController::new(DisplayPowerPolicy::release_default(), 0),
             attention_hold: false,
         }
     }
@@ -1009,7 +1012,6 @@ where
         self.dashboard_home_focus = DashboardHomeFocus::Output;
         self.dashboard_menu_selected = MenuItem::Dashboard;
         self.dashboard_menu_offset_y = 0;
-        self.beeper_prefs = BeeperPrefs::defaults();
         self.self_check_overlay = SelfCheckOverlay::None;
         self.needs_redraw = true;
         defmt::info!(
@@ -1035,6 +1037,14 @@ where
             self.last_inputs = Some(current_inputs);
             self.needs_redraw = false;
         }
+    }
+
+    pub fn set_beeper_prefs(&mut self, prefs: BeeperPrefs) {
+        if self.beeper_prefs == prefs {
+            return;
+        }
+        self.beeper_prefs = prefs;
+        self.needs_redraw = true;
     }
 
     pub fn tick(&mut self) -> Option<UiAction> {
@@ -1846,7 +1856,8 @@ where
                     next_prefs = next_prefs.with_selected_volume(level);
                 }
 
-                if next_prefs != self.beeper_prefs {
+                let prefs_changed = next_prefs != self.beeper_prefs;
+                if prefs_changed {
                     let previous = self.beeper_prefs;
                     self.beeper_prefs = next_prefs;
                     self.needs_redraw = true;
@@ -1886,6 +1897,11 @@ where
                     return Some(UiAction::BeeperPreview {
                         prefs: self.beeper_prefs,
                         target,
+                    });
+                }
+                if prefs_changed {
+                    return Some(UiAction::BeeperPrefsChanged {
+                        prefs: self.beeper_prefs,
                     });
                 }
                 return None;

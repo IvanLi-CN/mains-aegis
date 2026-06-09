@@ -146,14 +146,9 @@
 
 ## EEPROM 布局
 
-设备：`I2C1 @ 0x50`
+全局 EEPROM map 由 `docs/specs/6xb4z-eeprom-storage-layout/SPEC.md` 维护。本规格只定义手动充电偏好的持久化语义与 `ManualChargePrefsRecordV1` 字段。
 
-| Offset | Size | Record | 说明 |
-| --- | --- | --- | --- |
-| `0x0000` | `32B` | `StorageSuperblockV1` | `magic="AEG1"`、`schema_version=1`、CRC |
-| `0x0020` | `32B` | `StorageRecordTableV1` | `ManualChargePrefsV1` 的 record id / version / offset / size |
-| `0x0040` | `32B` | `ManualChargePrefsRecordV1` | `target / speed / timer_limit` 与 CRC |
-| `0x0060+` | reserved | future records | 保留给后续 EEPROM 配置 |
+当前手动充电偏好由 `StorageRecordTableV1` 指向 `0x0040` 的 `32B` record。其它 EEPROM slot 的占用与扩展规则以 #6xb4z 为准。
 
 `ManualChargePrefsRecordV1` 编码：
 

@@ -114,7 +114,7 @@
 当前 route 语义：
 
 - `SYSTEM`：主固件运行时的状态/告警/错误 cue 默认都走这一路
-- `ACTION`：当前保留给用户主动触发的试听/交互提示音；本轮先落地前面板音量调节试听，未引入持久化
+- `ACTION`：当前保留给用户主动触发的试听/交互提示音；前面板音量调节试听使用内部 preview tone，ACTION/SYSTEM 音量偏好持久化在 EEPROM beeper prefs record 中
 
 `shutdown_mode_entered` 与 `io_over_power` 继续保留素材定义，但主固件本轮不触发，等待真实状态源后再接入。
 

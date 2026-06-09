@@ -171,7 +171,7 @@
 - 运行时资产继续复用 `firmware/assets/audio/test-fw-cues/*.wav`，不直接从 `docs/audio-cues-preview/**` 读取。
 - 当前 `esp-hal` I2S circular DMA 生命周期仍未提供无缝热恢复路径；本轮修复继续采用“保留现有 cue 状态 + transport 级 re-prime + 有界止损”策略，而不是重做整套音频框架。
 - 当前主固件没有真实 shutdown flow，且没有独立 over-power 状态源，因此对应 cue 必须保持 dormant。
-- `ACTION / SYSTEM` 音量当前仍是 session-local 运行时状态：默认 `L6/L6`，调整后立即作用于试听与对应 route，但尚未写入 EEPROM/持久化配置。
+- `ACTION / SYSTEM` 音量默认 `L4/L4`，调整后立即作用于试听与对应 route，并通过 #6xb4z 定义的 EEPROM beeper prefs record 持久化。
 - 在当前环境里，`cd firmware && cargo +esp build --release --bin test-fw --features test-fw-audio-playback` 仍会命中既有 `esp_rtos_*` 链接缺口；本轮对 `test-fw` 的共享音频编译验证改用 `--no-default-features` 路径完成。
 
 ## 变更记录（Change log）

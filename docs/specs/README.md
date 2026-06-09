@@ -52,3 +52,4 @@
 | h6sae | BQ40 `LOCK` root cause + closure | 部分完成（3/6） | `h6sae-bq40-lock-root-cause/SPEC.md` | 2026-04-13 | 已命中 `termination` 分流并提交 `ITERM` 对齐修复；下一步需要 `<90%` 解锁后的 live 闭环复验 |
 | amc32 | WiFi / service discovery / read-only API foundation | 部分完成（4/5） | `amc32-wifi-service-discovery-api-foundation/SPEC.md` | 2026-06-03 | `net_http` 与 `web_serial` 已成为默认主固件能力；“LAN 只读 API” 假设由 #k4vzn 继续演进 |
 | d8p4q | Front panel auto sleep | active | `d8p4q-front-panel-auto-sleep/SPEC.md` | 2026-04-27 | 测试版 `30s / 35s / 40s` 自动低亮、关背光、GC9307 sleep；硬件确认后恢复正式默认 `180s / 240s / 245s` |
+| 6xb4z | EEPROM storage layout | active | `6xb4z-eeprom-storage-layout/SPEC.md` | 2026-06-09 | 全局 EEPROM map、record 编码、CRC、默认回退与扩展规则的长期规范 |

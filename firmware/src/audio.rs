@@ -48,11 +48,11 @@ const RESAMPLE_STEP_Q16: u32 =
 const QUEUE_CAPACITY: usize = 16;
 const MAX_GAIN_Q8: u16 = 256;
 const GAIN_Q8_LUT: [u16; 7] = [0, 32, 64, 91, 128, 181, MAX_GAIN_Q8];
+const DEFAULT_VOLUME_STEP: u8 = 4;
 const PREVIEW_HALF_PERIOD_SAMPLES: u32 = PLAYBACK_SAMPLE_RATE_HZ / 1_500;
-const PREVIEW_PULSE_SAMPLES: u32 = (PLAYBACK_SAMPLE_RATE_HZ * 80) / 1_000;
-const PREVIEW_GAP_SAMPLES: u32 = (PLAYBACK_SAMPLE_RATE_HZ * 24) / 1_000;
+const PREVIEW_PULSE_SAMPLES: u32 = (PLAYBACK_SAMPLE_RATE_HZ * 110) / 1_000;
 const PREVIEW_EDGE_RAMP_SAMPLES: u32 = (PLAYBACK_SAMPLE_RATE_HZ * 6) / 1_000;
-const PREVIEW_TOTAL_SAMPLES: u32 = (PREVIEW_PULSE_SAMPLES * 2) + PREVIEW_GAP_SAMPLES;
+const PREVIEW_TOTAL_SAMPLES: u32 = PREVIEW_PULSE_SAMPLES;
 const PREVIEW_PEAK_AMPLITUDE: i16 = 10_500;
 
 const WAV_BOOT_STARTUP: &[u8] = include_bytes!("../assets/audio/test-fw-cues/boot_startup.wav");
@@ -224,8 +224,8 @@ impl AudioManager {
             last_output_sample: 0,
             bridge_from_sample: 0,
             bridge_samples_remaining: 0,
-            action_gain_q8: MAX_GAIN_Q8,
-            system_gain_q8: MAX_GAIN_Q8,
+            action_gain_q8: gain_q8_for_step(DEFAULT_VOLUME_STEP),
+            system_gain_q8: gain_q8_for_step(DEFAULT_VOLUME_STEP),
         }
     }
 
@@ -766,6 +766,24 @@ mod tests {
             .chunks_exact(4)
             .any(|frame| { i16::from_le_bytes([frame[0], frame[1]]) != 0 }));
     }
+
+    #[test]
+    fn volume_preview_is_single_contiguous_pulse() {
+        let mut active = ActivePlayback {
+            request: preview_request(AudioRoute::Action),
+            pcm: &[],
+            source_pos_q16: 0,
+            fade_in_samples_remaining: 0,
+        };
+
+        let mut samples = [0i16; PREVIEW_TOTAL_SAMPLES as usize];
+        for sample in samples.iter_mut() {
+            *sample = next_preview_sample(&mut active).expect("preview should still be active");
+        }
+        assert_eq!(next_preview_sample(&mut active), None);
+        assert_eq!(PREVIEW_TOTAL_SAMPLES, PREVIEW_PULSE_SAMPLES);
+        assert!(samples.iter().all(|sample| *sample != 0));
+    }
 }
 
 pub const fn default_request(cue: AudioCue) -> AudioRequest {
@@ -924,25 +942,14 @@ fn next_preview_sample(active: &mut ActivePlayback) -> Option<i16> {
     }
     active.source_pos_q16 = active.source_pos_q16.saturating_add(1);
 
-    let pulse_offset = if sample_index < PREVIEW_PULSE_SAMPLES {
-        Some(sample_index)
-    } else if sample_index >= PREVIEW_PULSE_SAMPLES + PREVIEW_GAP_SAMPLES {
-        Some(sample_index - PREVIEW_PULSE_SAMPLES - PREVIEW_GAP_SAMPLES)
-    } else {
-        None
-    };
-    let Some(pulse_offset) = pulse_offset else {
-        return Some(0);
-    };
-
     let edge_ramp = PREVIEW_EDGE_RAMP_SAMPLES.max(1);
-    let attack = pulse_offset.saturating_add(1).min(edge_ramp);
+    let attack = sample_index.saturating_add(1).min(edge_ramp);
     let release = PREVIEW_PULSE_SAMPLES
-        .saturating_sub(pulse_offset)
+        .saturating_sub(sample_index)
         .min(edge_ramp);
     let envelope = attack.min(release);
     let amplitude = (i32::from(PREVIEW_PEAK_AMPLITUDE) * envelope as i32) / edge_ramp as i32;
-    let polarity = if (pulse_offset / PREVIEW_HALF_PERIOD_SAMPLES.max(1)) % 2 == 0 {
+    let polarity = if (sample_index / PREVIEW_HALF_PERIOD_SAMPLES.max(1)) % 2 == 0 {
         1
     } else {
         -1

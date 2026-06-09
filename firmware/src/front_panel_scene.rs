@@ -599,8 +599,8 @@ pub struct BeeperPrefs {
 impl BeeperPrefs {
     pub const fn defaults() -> Self {
         Self {
-            action_volume: BeeperVolumeLevel::L6,
-            system_volume: BeeperVolumeLevel::L6,
+            action_volume: BeeperVolumeLevel::L4,
+            system_volume: BeeperVolumeLevel::L4,
             selected_target: BeeperSettingTarget::Action,
         }
     }
@@ -1496,6 +1496,10 @@ pub fn self_check_tps_b_summary_name(snapshot: &SelfCheckUiSnapshot) -> &'static
 }
 
 pub fn self_check_can_enter_dashboard(snapshot: &SelfCheckUiSnapshot) -> bool {
+    self_check_dashboard_block_reason(snapshot).is_none()
+}
+
+pub fn self_check_dashboard_block_reason(snapshot: &SelfCheckUiSnapshot) -> Option<&'static str> {
     fn state_ok(state: SelfCheckCommState) -> bool {
         matches!(
             state,
@@ -1503,30 +1507,68 @@ pub fn self_check_can_enter_dashboard(snapshot: &SelfCheckUiSnapshot) -> bool {
         )
     }
 
-    let bms_clear = snapshot.bq40z50 == SelfCheckCommState::Ok
-        && snapshot.bq40z50_no_battery != Some(true)
-        && snapshot.bq40z50_discharge_ready != Some(false)
-        && !snapshot.bq40z50_recovery_pending;
-    let out_a_clear = !outputs_include(snapshot, OutputSelector::OutA)
-        || (state_ok(snapshot.tps_a)
-            && !output_hold_for(snapshot, OutputSelector::OutA)
-            && active_outputs_include(snapshot, OutputSelector::OutA));
-    let out_b_clear = !outputs_include(snapshot, OutputSelector::OutB)
-        || (state_ok(snapshot.tps_b)
-            && !output_hold_for(snapshot, OutputSelector::OutB)
-            && active_outputs_include(snapshot, OutputSelector::OutB));
+    if !state_ok(snapshot.gc9307) {
+        return Some("gc9307");
+    }
+    if !state_ok(snapshot.tca6408a) {
+        return Some("tca6408a");
+    }
+    if !state_ok(snapshot.fusb302) {
+        return Some("fusb302");
+    }
+    if !state_ok(snapshot.ina3221) {
+        return Some("ina3221");
+    }
+    if !state_ok(snapshot.bq25792) {
+        return Some("bq25792");
+    }
+    if !bq40_dashboard_clear(snapshot) {
+        return Some("bq40z50");
+    }
+    if snapshot.output_gate_reason != OutputGateReason::None {
+        return Some(snapshot.output_gate_reason.as_str());
+    }
+    if outputs_include(snapshot, OutputSelector::OutA)
+        && (!state_ok(snapshot.tps_a)
+            || output_hold_for(snapshot, OutputSelector::OutA)
+            || !active_outputs_include(snapshot, OutputSelector::OutA))
+    {
+        return Some("out_a");
+    }
+    if outputs_include(snapshot, OutputSelector::OutB)
+        && (!state_ok(snapshot.tps_b)
+            || output_hold_for(snapshot, OutputSelector::OutB)
+            || !active_outputs_include(snapshot, OutputSelector::OutB))
+    {
+        return Some("out_b");
+    }
+    if !state_ok(snapshot.tmp_a) {
+        return Some("tmp_a");
+    }
+    if !state_ok(snapshot.tmp_b) {
+        return Some("tmp_b");
+    }
+    None
+}
 
-    state_ok(snapshot.gc9307)
-        && state_ok(snapshot.tca6408a)
-        && state_ok(snapshot.fusb302)
-        && state_ok(snapshot.ina3221)
-        && state_ok(snapshot.bq25792)
-        && bms_clear
-        && snapshot.output_gate_reason == OutputGateReason::None
-        && out_a_clear
-        && out_b_clear
-        && state_ok(snapshot.tmp_a)
-        && state_ok(snapshot.tmp_b)
+fn bq40_dashboard_clear(snapshot: &SelfCheckUiSnapshot) -> bool {
+    if snapshot.bq40z50_no_battery == Some(true)
+        || snapshot.bq40z50_discharge_ready == Some(false)
+        || snapshot.bq40z50_recovery_pending
+    {
+        return false;
+    }
+
+    match snapshot.bq40z50 {
+        SelfCheckCommState::Ok => true,
+        SelfCheckCommState::Warn => matches!(
+            snapshot.bq40z50_issue_detail,
+            Some("xchg_blocked" | "chg_fet_off")
+        ),
+        SelfCheckCommState::Pending
+        | SelfCheckCommState::Err
+        | SelfCheckCommState::NotAvailable => false,
+    }
 }
 
 #[allow(dead_code)]
@@ -13734,6 +13776,15 @@ mod tests {
     }
 
     #[test]
+    fn beeper_defaults_start_at_level_four() {
+        let prefs = BeeperPrefs::defaults();
+
+        assert_eq!(prefs.action_volume, BeeperVolumeLevel::L4);
+        assert_eq!(prefs.system_volume, BeeperVolumeLevel::L4);
+        assert_eq!(prefs.selected_target, BeeperSettingTarget::Action);
+    }
+
+    #[test]
     fn live_dashboard_keeps_missing_metrics_as_na_inputs() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.fusb302_vbus_present = Some(true);
@@ -13983,6 +14034,50 @@ mod tests {
 
         snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
         snapshot.active_outputs = EnabledOutputs::None;
+        assert!(!self_check_can_enter_dashboard(&snapshot));
+    }
+
+    #[test]
+    fn self_check_can_enter_dashboard_when_only_bms_charge_path_is_blocked() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.gc9307 = SelfCheckCommState::Ok;
+        snapshot.tca6408a = SelfCheckCommState::Ok;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.ina3221 = SelfCheckCommState::Ok;
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_no_battery = Some(false);
+        snapshot.bq40z50_discharge_ready = Some(true);
+        snapshot.bq40z50_issue_detail = Some("xchg_blocked");
+        snapshot.requested_outputs = EnabledOutputs::Both;
+        snapshot.active_outputs = EnabledOutputs::Both;
+        snapshot.tps_a = SelfCheckCommState::Ok;
+        snapshot.tps_b = SelfCheckCommState::Ok;
+        snapshot.tmp_a = SelfCheckCommState::Ok;
+        snapshot.tmp_b = SelfCheckCommState::Ok;
+
+        assert!(self_check_can_enter_dashboard(&snapshot));
+    }
+
+    #[test]
+    fn self_check_still_blocks_dashboard_when_bms_discharge_path_is_blocked() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.gc9307 = SelfCheckCommState::Ok;
+        snapshot.tca6408a = SelfCheckCommState::Ok;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.ina3221 = SelfCheckCommState::Ok;
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_no_battery = Some(false);
+        snapshot.bq40z50_discharge_ready = Some(false);
+        snapshot.bq40z50_issue_detail = Some("xdsg_blocked");
+        snapshot.requested_outputs = EnabledOutputs::Both;
+        snapshot.active_outputs = EnabledOutputs::Both;
+        snapshot.tps_a = SelfCheckCommState::Ok;
+        snapshot.tps_b = SelfCheckCommState::Ok;
+        snapshot.tmp_a = SelfCheckCommState::Ok;
+        snapshot.tmp_b = SelfCheckCommState::Ok;
+
         assert!(!self_check_can_enter_dashboard(&snapshot));
     }
 
