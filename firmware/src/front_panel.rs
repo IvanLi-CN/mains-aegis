@@ -870,6 +870,9 @@ where
             self.self_check_overlay = SelfCheckOverlay::None;
         }
         self.needs_redraw = true;
+        if self.ui_variant != SELF_CHECK_VARIANT {
+            return;
+        }
         if !self.display_accepts_scene_updates() {
             return;
         }
