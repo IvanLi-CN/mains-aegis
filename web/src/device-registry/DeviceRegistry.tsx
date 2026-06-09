@@ -885,7 +885,7 @@ export function DeviceRegistryProvider({
           preferredTransport: "http",
           rememberedChannels: {
             http: {
-              baseUrl: successfulBaseUrl,
+              baseUrl: preferredBaseUrl,
               seenAt: new Date().toISOString(),
               source: "devd_discovery",
               mdnsHost: companion.mdns_host,
