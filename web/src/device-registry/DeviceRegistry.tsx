@@ -2548,10 +2548,10 @@ function devdLanBaseUrl(
   identity: Identity | null,
 ): string | null {
   const candidate =
-    identity?.hostname_fqdn?.trim() ||
-    identity?.hostname?.trim() ||
     device.lan_address?.trim() ||
     identity?.network.ipv4?.trim() ||
+    identity?.hostname_fqdn?.trim() ||
+    identity?.hostname?.trim() ||
     "";
   return candidate ? normalizeBaseUrl(candidate) : null;
 }
