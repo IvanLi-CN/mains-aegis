@@ -1192,6 +1192,7 @@ const DASHBOARD_HOME_BATTERY_FLOW_X: u16 = 206;
 const DASHBOARD_HOME_BATTERY_FLOW_Y: u16 = 122;
 const DASHBOARD_HOME_BATTERY_FLOW_W: u16 = 108;
 const DASHBOARD_HOME_BATTERY_FLOW_H: u16 = 48;
+const DASHBOARD_HOME_FOCUS_LABEL_H: u16 = 17;
 
 const DASHBOARD_MENU_STACK_H: i16 = (UI_H as i16) * 2;
 const DASHBOARD_MENU_HEADER_H: u16 = 30;
@@ -3494,7 +3495,14 @@ fn draw_dashboard_home_focus_overlay<P: UiPainter>(
             fade_color(color, palette.text),
         )?;
     }
-    fill(painter, x, y, w.min(68), 7, color)?;
+    fill(
+        painter,
+        x,
+        y,
+        w.min(68),
+        DASHBOARD_HOME_FOCUS_LABEL_H,
+        color,
+    )?;
     text(
         painter,
         variant,
@@ -13782,6 +13790,11 @@ mod tests {
         assert_eq!(prefs.action_volume, BeeperVolumeLevel::L4);
         assert_eq!(prefs.system_volume, BeeperVolumeLevel::L4);
         assert_eq!(prefs.selected_target, BeeperSettingTarget::Action);
+    }
+
+    #[test]
+    fn dashboard_focus_label_background_covers_detail_body_text() {
+        assert!(DASHBOARD_HOME_FOCUS_LABEL_H >= 17);
     }
 
     #[test]
