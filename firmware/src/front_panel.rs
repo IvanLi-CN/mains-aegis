@@ -1781,6 +1781,29 @@ where
         let right_edge = snapshot.right && !prev.right;
         let center_edge = snapshot.center && !prev.center;
 
+        if up_edge || down_edge || left_edge || right_edge || center_edge {
+            defmt::info!(
+                "ui: dashboard key page={} route={} left={} right={} up={} down={} center={}",
+                dashboard_page_name(self.dashboard_page),
+                dashboard_route_name(self.dashboard_route),
+                left_edge,
+                right_edge,
+                up_edge,
+                down_edge,
+                center_edge
+            );
+            esp_println::println!(
+                "ui: dashboard key page={} route={} left={} right={} up={} down={} center={}",
+                dashboard_page_name(self.dashboard_page),
+                dashboard_route_name(self.dashboard_route),
+                left_edge,
+                right_edge,
+                up_edge,
+                down_edge,
+                center_edge
+            );
+        }
+
         match self.dashboard_page {
             DashboardPrimaryPage::Menu => {
                 if up_edge {
