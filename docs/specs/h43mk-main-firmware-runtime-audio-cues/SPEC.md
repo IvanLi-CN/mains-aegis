@@ -126,6 +126,7 @@
 - 运行期若 DMA refill 持续报错，主固件会关闭音频调度并清空队列，避免 cue 在无消费者时永久卡住。
 - 共享播放核心已落到 `firmware/src/audio.rs`，统一 15 组 cue、优先级、WAV 解析/重采样、DMA `fill()` 与播放状态接口。
 - `Dashboard/Menu/AUDIO` 运行态已接上前面板导航状态机；`UP/DOWN` 切换 `ACTION/SYSTEM` 分组，`LEFT/RIGHT` 调整当前分组音量，并向主循环抛出独立的 beeper preview action。
+- `Menu` 页触摸命中与按键导航语义一致：左右箭头切换当前菜单项，`DASHBOARD` 图标返回 Dashboard，`AUDIO` 图标进入音量设置，占位图标不触发业务动作。
 - `AudioManager` 现在按 `ACTION / SYSTEM` route 持有独立 gain LUT（共享刻度 `0..6`）；用户调节音量时立即播放内部 `volume_preview` 双脉冲试听音，不再借用 `charge_started` 等业务/告警 cue。
 - Warning cue 的 loop state 只在状态边沿变化时重置，steady-state 轮询期间继续保持 `interval_loop(2000ms)` 节流。
 - Active loop cue 被更高优先级 cue 抢占后会回灌待播队列，避免 warning/error loop 在抢占场景下丢失“首次恢复播放”机会。

@@ -8,10 +8,10 @@ use crate::front_panel_logic::{
 use crate::front_panel_scene::{
     self, AudioTestUiState, BeeperPrefs, BeeperSettingTarget, BmsActivationState,
     BmsRecoveryUiAction, BmsResultKind, DashboardHomeFocus, DashboardMenuStyle,
-    DashboardPrimaryPage, DashboardRoute, DashboardShellState, DashboardTouchTarget,
-    ManualChargeUiAction, MenuItem, SelfCheckCommState, SelfCheckHardwareTarget, SelfCheckOverlay,
-    SelfCheckTouchTarget, SelfCheckUiSnapshot, TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel,
-    UiPainter, UiVariant, UpsMode,
+    DashboardMenuTouchTarget, DashboardPrimaryPage, DashboardRoute, DashboardShellState,
+    DashboardTouchTarget, ManualChargeUiAction, MenuItem, SelfCheckCommState,
+    SelfCheckHardwareTarget, SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot,
+    TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant, UpsMode,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -2133,10 +2133,6 @@ where
     }
 
     fn process_dashboard_touch_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
-        if self.dashboard_page != DashboardPrimaryPage::DashboardHome {
-            return None;
-        }
-
         let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
         if !snapshot.touch || prev.touch {
             return None;
@@ -2146,6 +2142,13 @@ where
             Some(point) => point,
             None => return None,
         };
+
+        if self.dashboard_page == DashboardPrimaryPage::Menu {
+            return self.process_dashboard_menu_touch_action(x, y);
+        }
+        if self.dashboard_page != DashboardPrimaryPage::DashboardHome {
+            return None;
+        }
 
         esp_println::println!(
             "ui: touch edge page=dashboard route={} x={} y={}",
@@ -2210,6 +2213,56 @@ where
                 y
             );
         }
+        None
+    }
+
+    fn process_dashboard_menu_touch_action(&mut self, x: u16, y: u16) -> Option<UiAction> {
+        if self.dashboard_menu_animation.is_some() {
+            return None;
+        }
+
+        esp_println::println!(
+            "ui: touch edge page=menu selected={} x={} y={}",
+            menu_item_name(self.dashboard_menu_selected),
+            x,
+            y
+        );
+
+        let Some(target) =
+            front_panel_scene::dashboard_menu_hit_test(self.dashboard_menu_selected, x, y)
+        else {
+            esp_println::println!(
+                "ui: touch target=none page=menu selected={} x={} y={}",
+                menu_item_name(self.dashboard_menu_selected),
+                x,
+                y
+            );
+            return None;
+        };
+
+        match target {
+            DashboardMenuTouchTarget::Previous => {
+                self.set_dashboard_menu_selected(self.dashboard_menu_selected.previous());
+            }
+            DashboardMenuTouchTarget::Next => {
+                self.set_dashboard_menu_selected(self.dashboard_menu_selected.next());
+            }
+            DashboardMenuTouchTarget::Dashboard => {
+                self.set_dashboard_menu_selected(MenuItem::Dashboard);
+                self.set_dashboard_page(DashboardPrimaryPage::DashboardHome);
+            }
+            DashboardMenuTouchTarget::Beeper => {
+                self.set_dashboard_menu_selected(MenuItem::Beeper);
+                self.set_dashboard_page(DashboardPrimaryPage::BeeperSettings);
+            }
+        }
+
+        defmt::info!("ui: menu touch target={}", menu_touch_target_name(target));
+        esp_println::println!(
+            "ui: menu touch target={} selected={}",
+            menu_touch_target_name(target),
+            menu_item_name(self.dashboard_menu_selected)
+        );
         None
     }
 
@@ -2353,6 +2406,15 @@ fn menu_item_name(item: MenuItem) -> &'static str {
     match item {
         MenuItem::Dashboard => "dashboard",
         MenuItem::Beeper => "audio",
+    }
+}
+
+fn menu_touch_target_name(target: DashboardMenuTouchTarget) -> &'static str {
+    match target {
+        DashboardMenuTouchTarget::Previous => "previous",
+        DashboardMenuTouchTarget::Next => "next",
+        DashboardMenuTouchTarget::Dashboard => "dashboard",
+        DashboardMenuTouchTarget::Beeper => "audio",
     }
 }
 

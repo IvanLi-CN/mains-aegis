@@ -704,6 +704,14 @@ pub enum DashboardTouchTarget {
     ManualStop,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardMenuTouchTarget {
+    Previous,
+    Next,
+    Dashboard,
+    Beeper,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DashboardInputSource {
@@ -1935,6 +1943,62 @@ pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<Dashb
             }
         }
     }
+}
+
+#[allow(dead_code)]
+pub fn dashboard_menu_hit_test(
+    selected: MenuItem,
+    x: u16,
+    y: u16,
+) -> Option<DashboardMenuTouchTarget> {
+    if contains(
+        x,
+        y,
+        DASHBOARD_MENU_NAV_HINT_LEFT_X,
+        DASHBOARD_MENU_NAV_HINT_Y,
+        DASHBOARD_MENU_NAV_HINT_BOX_W,
+        DASHBOARD_MENU_NAV_HINT_BOX_H,
+    ) {
+        return Some(DashboardMenuTouchTarget::Previous);
+    }
+    if contains(
+        x,
+        y,
+        DASHBOARD_MENU_NAV_HINT_RIGHT_X,
+        DASHBOARD_MENU_NAV_HINT_Y,
+        DASHBOARD_MENU_NAV_HINT_BOX_W,
+        DASHBOARD_MENU_NAV_HINT_BOX_H,
+    ) {
+        return Some(DashboardMenuTouchTarget::Next);
+    }
+
+    let rail_origin_x = dashboard_menu_rail_origin_x(selected);
+    let step: i16 = (DASHBOARD_MENU_ICON_W + DASHBOARD_MENU_ICON_GAP) as i16;
+    let icon_y = DASHBOARD_MENU_ICON_Y + 4;
+    for item in MenuRailItem::ALL {
+        let icon_x = rail_origin_x + (item.index() as i16 * step);
+        if icon_x < 0 || icon_x + DASHBOARD_MENU_ICON_W as i16 > UI_W as i16 {
+            continue;
+        }
+        if !contains(
+            x,
+            y,
+            icon_x as u16,
+            icon_y,
+            DASHBOARD_MENU_ICON_W,
+            DASHBOARD_MENU_ICON_H,
+        ) {
+            continue;
+        }
+
+        return match menu_item_for_rail_item(item) {
+            Some(MenuItem::Dashboard) => Some(DashboardMenuTouchTarget::Dashboard),
+            Some(MenuItem::Beeper) => Some(DashboardMenuTouchTarget::Beeper),
+            None => None,
+        };
+    }
+
+    None
 }
 
 #[allow(dead_code)]
@@ -4272,6 +4336,22 @@ fn selected_menu_rail_item(selected: MenuItem) -> MenuRailItem {
         MenuItem::Dashboard => MenuRailItem::Dashboard,
         MenuItem::Beeper => MenuRailItem::Audio,
     }
+}
+
+fn menu_item_for_rail_item(item: MenuRailItem) -> Option<MenuItem> {
+    match item {
+        MenuRailItem::Dashboard => Some(MenuItem::Dashboard),
+        MenuRailItem::Audio => Some(MenuItem::Beeper),
+        MenuRailItem::Add | MenuRailItem::Settings | MenuRailItem::Stats => None,
+    }
+}
+
+fn dashboard_menu_rail_origin_x(selected: MenuItem) -> i16 {
+    let selected_rail = selected_menu_rail_item(selected);
+    let step: i16 = (DASHBOARD_MENU_ICON_W + DASHBOARD_MENU_ICON_GAP) as i16;
+    DASHBOARD_MENU_ICON_CENTER_X
+        - (DASHBOARD_MENU_ICON_W as i16 / 2)
+        - (selected_rail.index() as i16 * step)
 }
 
 fn menu_rail_item_color(palette: Palette, item: MenuRailItem) -> u16 {
@@ -14385,6 +14465,54 @@ mod tests {
         assert_eq!(
             dashboard_hit_test(DashboardRoute::Home, 250, 140),
             Some(DashboardTouchTarget::HomeBatteryFlow)
+        );
+    }
+
+    #[test]
+    fn dashboard_menu_hit_test_maps_icons_and_nav_arrows() {
+        assert_eq!(
+            dashboard_menu_hit_test(
+                MenuItem::Dashboard,
+                DASHBOARD_MENU_NAV_HINT_LEFT_X + 2,
+                DASHBOARD_MENU_NAV_HINT_Y + 2
+            ),
+            Some(DashboardMenuTouchTarget::Previous)
+        );
+        assert_eq!(
+            dashboard_menu_hit_test(
+                MenuItem::Dashboard,
+                DASHBOARD_MENU_NAV_HINT_RIGHT_X + 2,
+                DASHBOARD_MENU_NAV_HINT_Y + 2
+            ),
+            Some(DashboardMenuTouchTarget::Next)
+        );
+        assert_eq!(
+            dashboard_menu_hit_test(
+                MenuItem::Dashboard,
+                DASHBOARD_MENU_ICON_CENTER_X as u16,
+                DASHBOARD_MENU_ICON_Y + 12
+            ),
+            Some(DashboardMenuTouchTarget::Dashboard)
+        );
+        assert_eq!(
+            dashboard_menu_hit_test(
+                MenuItem::Dashboard,
+                DASHBOARD_MENU_ICON_CENTER_X as u16 + (DASHBOARD_MENU_ICON_W * 2),
+                DASHBOARD_MENU_ICON_Y + 12
+            ),
+            Some(DashboardMenuTouchTarget::Beeper)
+        );
+        assert_eq!(
+            dashboard_menu_hit_test(
+                MenuItem::Dashboard,
+                DASHBOARD_MENU_ICON_CENTER_X as u16 + DASHBOARD_MENU_ICON_W,
+                DASHBOARD_MENU_ICON_Y + 12
+            ),
+            None
+        );
+        assert_eq!(
+            dashboard_menu_hit_test(MenuItem::Beeper, 12, DASHBOARD_MENU_ICON_Y + 12),
+            Some(DashboardMenuTouchTarget::Dashboard)
         );
     }
 
