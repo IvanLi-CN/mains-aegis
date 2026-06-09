@@ -1,7 +1,8 @@
 use core::convert::Infallible;
 
 use crate::front_panel_logic::{
-    dashboard_enter_requires_variant_switch, dashboard_uses_frame_animation, DASHBOARD_VARIANT,
+    cst816d_gesture_is_vertical, dashboard_enter_requires_variant_switch,
+    dashboard_page_for_vertical_menu_gesture, dashboard_uses_frame_animation, DASHBOARD_VARIANT,
     SELF_CHECK_VARIANT,
 };
 use crate::front_panel_scene::{
@@ -91,6 +92,7 @@ const PANEL_RUNTIME_SPI_FREQ_MHZ: u32 = if cfg!(feature = "display-spi-20mhz") {
 } else {
     40
 };
+const DASHBOARD_MENU_DRAG_THRESHOLD_PX: i16 = 28;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiAction {
@@ -134,6 +136,7 @@ struct InputSnapshot {
     center: bool,
     touch: bool,
     touch_point: Option<(u16, u16)>,
+    touch_gesture_raw: u8,
 }
 
 impl InputSnapshot {
@@ -146,8 +149,15 @@ impl InputSnapshot {
             center: false,
             touch: false,
             touch_point: None,
+            touch_gesture_raw: 0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TouchSample {
+    gesture_raw: u8,
+    point: Option<(u16, u16)>,
 }
 
 const fn input_snapshot_has_activity(snapshot: InputSnapshot) -> bool {
@@ -157,6 +167,7 @@ const fn input_snapshot_has_activity(snapshot: InputSnapshot) -> bool {
         || snapshot.right
         || snapshot.center
         || snapshot.touch
+        || snapshot.touch_gesture_raw != 0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -315,6 +326,7 @@ where
     self_check_snapshot: SelfCheckUiSnapshot,
     bms_activation_state: BmsActivationState,
     self_check_overlay: SelfCheckOverlay,
+    dashboard_touch_gesture_consumed: bool,
     touch_irq_stuck_hint_logged: bool,
     frame_no: u32,
     display_power_epoch: Instant,
@@ -392,6 +404,7 @@ where
             self_check_snapshot: SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby),
             bms_activation_state: BmsActivationState::Idle,
             self_check_overlay: SelfCheckOverlay::None,
+            dashboard_touch_gesture_consumed: false,
             touch_irq_stuck_hint_logged: false,
             frame_no: 0,
             display_power_epoch: Instant::now(),
@@ -1101,6 +1114,9 @@ where
                 } else {
                     ui_action = self.process_dashboard_button_action(snapshot);
                     if ui_action.is_none() {
+                        ui_action = self.process_dashboard_gesture_action(snapshot);
+                    }
+                    if ui_action.is_none() {
                         ui_action = self.process_dashboard_touch_action(snapshot);
                     }
                 }
@@ -1547,10 +1563,11 @@ where
 
         let center = self.btn_center.is_low();
         let touch_irq_active = self.ctp_irq.is_low();
-        let touch_point = self.read_touch_point();
+        let touch_sample = self.read_touch_sample();
+        let touch_point = touch_sample.point;
         let touch = touch_point.is_some();
 
-        if touch_irq_active && touch_point.is_none() {
+        if touch_irq_active && touch_point.is_none() && touch_sample.gesture_raw == 0 {
             if !self.touch_irq_stuck_hint_logged {
                 defmt::warn!(
                     "ui: ctp_irq active without coordinates; ignore irq-only touch to avoid stuck edge"
@@ -1572,27 +1589,38 @@ where
             center,
             touch,
             touch_point,
+            touch_gesture_raw: touch_sample.gesture_raw,
         })
     }
 
-    fn read_touch_point(&mut self) -> Option<(u16, u16)> {
+    fn read_touch_sample(&mut self) -> TouchSample {
         let mut buf = [0u8; CST816D_TOUCH_REG_LEN];
         if self
             .i2c
             .write_read(CST816D_ADDR, &[CST816D_REG_GESTURE], &mut buf)
             .is_err()
         {
-            return None;
+            return TouchSample {
+                gesture_raw: 0,
+                point: None,
+            };
         }
 
+        let gesture_raw = buf[0];
         let finger_count = buf[1] & 0x0f;
         if finger_count == 0 {
-            return None;
+            return TouchSample {
+                gesture_raw,
+                point: None,
+            };
         }
 
         let x_raw = (((buf[2] & 0x0f) as u16) << 8) | buf[3] as u16;
         let y_raw = (((buf[4] & 0x0f) as u16) << 8) | buf[5] as u16;
-        Self::map_touch_to_ui(x_raw, y_raw)
+        TouchSample {
+            gesture_raw,
+            point: Self::map_touch_to_ui(x_raw, y_raw),
+        }
     }
 
     fn map_touch_to_ui(x_raw: u16, y_raw: u16) -> Option<(u16, u16)> {
@@ -1948,6 +1976,60 @@ where
             }
         }
 
+        None
+    }
+
+    fn process_dashboard_gesture_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
+        let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        if !snapshot.touch {
+            self.dashboard_touch_gesture_consumed = false;
+        }
+
+        let raw_gesture_edge = snapshot.touch_gesture_raw != 0
+            && snapshot.touch_gesture_raw != prev.touch_gesture_raw
+            && cst816d_gesture_is_vertical(snapshot.touch_gesture_raw);
+        let drag_delta = if !self.dashboard_touch_gesture_consumed && snapshot.touch && prev.touch {
+            match (prev.touch_point, snapshot.touch_point) {
+                (Some((_, prev_y)), Some((_, y))) => {
+                    let dy = y as i16 - prev_y as i16;
+                    if dy.unsigned_abs() >= DASHBOARD_MENU_DRAG_THRESHOLD_PX as u16 {
+                        Some(dy)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        if !raw_gesture_edge && drag_delta.is_none() {
+            return None;
+        }
+        if drag_delta.is_some() {
+            self.dashboard_touch_gesture_consumed = true;
+        }
+
+        let Some(next_page) = dashboard_page_for_vertical_menu_gesture(self.dashboard_page) else {
+            return None;
+        };
+        let previous_page = self.dashboard_page;
+        self.set_dashboard_page(next_page);
+        defmt::info!(
+            "ui: dashboard menu gesture page={} new={} raw=0x{=u8:02x} drag_dy={=i16}",
+            dashboard_page_name(previous_page),
+            dashboard_page_name(next_page),
+            snapshot.touch_gesture_raw,
+            drag_delta.unwrap_or(0)
+        );
+        esp_println::println!(
+            "ui: dashboard menu gesture page={} new={} raw=0x{:02x} drag_dy={}",
+            dashboard_page_name(previous_page),
+            dashboard_page_name(next_page),
+            snapshot.touch_gesture_raw,
+            drag_delta.unwrap_or(0)
+        );
         None
     }
 

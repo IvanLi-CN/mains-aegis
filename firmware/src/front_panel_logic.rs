@@ -1,4 +1,6 @@
-use crate::front_panel_scene::{self, DashboardRoute, SelfCheckUiSnapshot, UiVariant};
+use crate::front_panel_scene::{
+    self, DashboardPrimaryPage, DashboardRoute, SelfCheckUiSnapshot, UiVariant,
+};
 
 pub const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
 pub const DASHBOARD_VARIANT: UiVariant = UiVariant::InstrumentB;
@@ -14,6 +16,20 @@ pub fn dashboard_uses_frame_animation(
 
 pub fn dashboard_enter_requires_variant_switch(variant: UiVariant) -> bool {
     variant != DASHBOARD_VARIANT
+}
+
+pub const fn cst816d_gesture_is_vertical(raw: u8) -> bool {
+    matches!(raw, 0x01 | 0x02)
+}
+
+pub const fn dashboard_page_for_vertical_menu_gesture(
+    page: DashboardPrimaryPage,
+) -> Option<DashboardPrimaryPage> {
+    match page {
+        DashboardPrimaryPage::DashboardHome => Some(DashboardPrimaryPage::Menu),
+        DashboardPrimaryPage::Menu => Some(DashboardPrimaryPage::DashboardHome),
+        DashboardPrimaryPage::BeeperSettings => None,
+    }
 }
 
 #[cfg(test)]
@@ -80,5 +96,30 @@ mod tests {
     fn enter_dashboard_only_transitions_from_self_check_variant() {
         assert!(dashboard_enter_requires_variant_switch(SELF_CHECK_VARIANT));
         assert!(!dashboard_enter_requires_variant_switch(DASHBOARD_VARIANT));
+    }
+
+    #[test]
+    fn cst816d_vertical_gestures_are_menu_gestures() {
+        assert!(cst816d_gesture_is_vertical(0x01));
+        assert!(cst816d_gesture_is_vertical(0x02));
+        assert!(!cst816d_gesture_is_vertical(0x00));
+        assert!(!cst816d_gesture_is_vertical(0x03));
+        assert!(!cst816d_gesture_is_vertical(0x04));
+    }
+
+    #[test]
+    fn vertical_menu_gesture_toggles_dashboard_menu_page() {
+        assert_eq!(
+            dashboard_page_for_vertical_menu_gesture(DashboardPrimaryPage::DashboardHome),
+            Some(DashboardPrimaryPage::Menu)
+        );
+        assert_eq!(
+            dashboard_page_for_vertical_menu_gesture(DashboardPrimaryPage::Menu),
+            Some(DashboardPrimaryPage::DashboardHome)
+        );
+        assert_eq!(
+            dashboard_page_for_vertical_menu_gesture(DashboardPrimaryPage::BeeperSettings),
+            None
+        );
     }
 }
