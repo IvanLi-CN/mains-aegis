@@ -1171,12 +1171,18 @@ function buildFleetEntryRecord(
     devdDevice?.identity ??
     existingRecord?.identity ??
     null;
+  const companion = httpDevice?.binding?.lan_companion ?? null;
+  const companionBaseUrl = companion
+    ? normalizeBaseUrl(companion.mdns_host)
+    : null;
+  const companionFallbackBaseUrl = companion
+    ? normalizeBaseUrl(`${companion.ip}:${companion.port}`)
+    : null;
+  const httpBaseUrl =
+    companionBaseUrl ?? devdLanBaseUrl(httpDevice, identity);
   const target = {
     deviceId,
-    baseUrl:
-      devdLanBaseUrl(httpDevice, identity) ??
-      existingRecord?.target.baseUrl ??
-      devdBaseUrl,
+    baseUrl: httpBaseUrl ?? existingRecord?.target.baseUrl ?? devdBaseUrl,
     alias:
       existingRecord?.target.alias ??
       identity?.hostname ??
@@ -1195,12 +1201,19 @@ function buildFleetEntryRecord(
         ? {
             http: {
               baseUrl:
-                devdLanBaseUrl(httpDevice, identity) ??
+                httpBaseUrl ??
                 existingRecord?.target.rememberedChannels?.http?.baseUrl ??
                 existingRecord?.target.baseUrl ??
                 "",
               seenAt: new Date().toISOString(),
               source: "devd_discovery" as const,
+              mdnsHost:
+                companion?.mdns_host ??
+                existingRecord?.target.rememberedChannels?.http?.mdnsHost,
+              fallbackBaseUrl:
+                companionFallbackBaseUrl ??
+                existingRecord?.target.rememberedChannels?.http
+                  ?.fallbackBaseUrl,
             },
           }
         : {}),

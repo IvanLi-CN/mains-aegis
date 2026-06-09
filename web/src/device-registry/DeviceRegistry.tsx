@@ -365,23 +365,28 @@ export function DeviceRegistryProvider({
           setRecords((current) => upsertRecord(current, record));
           return;
         }
-        const httpBaseUrl = rememberedHttpBaseUrl(existing) ?? target.baseUrl;
-        const httpTarget =
-          httpBaseUrl === target.baseUrl
-            ? target
-            : {
-                ...target,
-                baseUrl: httpBaseUrl,
-                transport: "http" as const,
-              };
-        const bridgeAuth = await resolveBridgeAuthState(httpTarget);
-        const nextTarget = bridgeAuth
-          ? { ...httpTarget, bridgeAuth: true }
-          : httpTarget;
-        const result = await probeDevice(
-          httpTarget.baseUrl,
-          undefined,
-          bridgeAuth ? { bridgeAuth: true } : undefined,
+        const { nextTarget, result } = await withRememberedHttpFallback(
+          existing,
+          async (httpBaseUrl) => {
+            const httpTarget =
+              httpBaseUrl === target.baseUrl
+                ? target
+                : {
+                    ...target,
+                    baseUrl: httpBaseUrl,
+                    transport: "http" as const,
+                  };
+            const bridgeAuth = await resolveBridgeAuthState(httpTarget);
+            const nextTarget = bridgeAuth
+              ? { ...httpTarget, bridgeAuth: true }
+              : httpTarget;
+            const result = await probeDevice(
+              httpTarget.baseUrl,
+              undefined,
+              bridgeAuth ? { bridgeAuth: true } : undefined,
+            );
+            return { nextTarget, result };
+          },
         );
         setRecords((current) => {
           const previous = current.find(
@@ -575,7 +580,9 @@ export function DeviceRegistryProvider({
                   : candidate,
               ),
             );
-            void getStatus(httpBaseUrl, undefined, bridgeAuth)
+            void withRememberedHttpFallback(record, (baseUrl) =>
+              getStatus(baseUrl, undefined, bridgeAuth),
+            )
               .then((status) => {
                 setRecords((current) =>
                   current.map((candidate) =>
@@ -1250,27 +1257,19 @@ export function DeviceRegistryProvider({
       }
 
       if (transport === "http") {
-        const baseUrl = rememberedHttpBaseUrl(record);
-        if (!baseUrl) return unavailableChannelError("http");
-        const result = await addDevice({
-          target: baseUrl,
-          alias: record.target.alias,
-          location: record.target.location,
-        });
-        const fallbackBaseUrl =
-          record.target.rememberedChannels?.http?.fallbackBaseUrl;
-        if (
-          result.ok ||
-          !fallbackBaseUrl ||
-          normalizeBaseUrl(fallbackBaseUrl) === normalizeBaseUrl(baseUrl)
-        ) {
-          return result;
+        const baseUrls = rememberedHttpBaseUrls(record);
+        if (baseUrls.length === 0) return unavailableChannelError("http");
+        let lastResult: AddDeviceResult | null = null;
+        for (const baseUrl of baseUrls) {
+          const result = await addDevice({
+            target: baseUrl,
+            alias: record.target.alias,
+            location: record.target.location,
+          });
+          if (result.ok) return result;
+          lastResult = result;
         }
-        return addDevice({
-          target: fallbackBaseUrl,
-          alias: record.target.alias,
-          location: record.target.location,
-        });
+        return lastResult ?? unavailableChannelError("http");
       }
 
       if (transport === "devd") {
@@ -1378,24 +1377,28 @@ export function DeviceRegistryProvider({
         serialSessions.current,
       );
       if (selectedTransport === "http") {
-        const httpBaseUrl = rememberedHttpBaseUrl(record);
-        if (!httpBaseUrl) return unavailableCommandChannel("http");
         try {
           onProgress?.({
             phase: "saving",
             message: "Writing WiFi credentials over LAN",
           });
-          await sendDeviceWifiConfig(httpBaseUrl, input);
-          onProgress?.({
-            phase: "connecting",
-            message: `Connecting to ${input.ssid} and waiting for an IP address`,
-          });
-          const status = await waitForHttpWifiConnected(
-            httpBaseUrl,
-            input.ssid,
-            onProgress,
+          const { status, settings } = await withRememberedHttpFallback(
+            record,
+            async (httpBaseUrl) => {
+              await sendDeviceWifiConfig(httpBaseUrl, input);
+              onProgress?.({
+                phase: "connecting",
+                message: `Connecting to ${input.ssid} and waiting for an IP address`,
+              });
+              const status = await waitForHttpWifiConnected(
+                httpBaseUrl,
+                input.ssid,
+                onProgress,
+              );
+              const settings = await getSettings(httpBaseUrl);
+              return { status, settings };
+            },
           );
-          const settings = await getSettings(httpBaseUrl);
           const message = wifiConnectedMessage(input.ssid, status.network);
           onProgress?.({
             phase: status.network.ipv4 ? "connected" : "ip",
@@ -1557,16 +1560,23 @@ export function DeviceRegistryProvider({
         serialSessions.current,
       );
       if (selectedTransport === "http") {
-        const httpBaseUrl = rememberedHttpBaseUrl(record);
-        if (!httpBaseUrl) return unavailableCommandChannel("http");
         try {
           onProgress?.({
             phase: "clearing",
             message: "Clearing WiFi credentials over LAN",
           });
-          await clearDeviceWifiConfig(httpBaseUrl);
-          const status = await waitForHttpWifiDisabled(httpBaseUrl, onProgress);
-          const settings = await getSettings(httpBaseUrl);
+          const { status, settings } = await withRememberedHttpFallback(
+            record,
+            async (httpBaseUrl) => {
+              await clearDeviceWifiConfig(httpBaseUrl);
+              const status = await waitForHttpWifiDisabled(
+                httpBaseUrl,
+                onProgress,
+              );
+              const settings = await getSettings(httpBaseUrl);
+              return { status, settings };
+            },
+          );
           const message = wifiDisabledMessage(status.network);
           onProgress?.({ phase: "disabled", message, network: status.network });
           setRecords((current) =>
@@ -1681,11 +1691,14 @@ export function DeviceRegistryProvider({
         serialSessions.current,
       );
       if (selectedTransport === "http") {
-        const httpBaseUrl = rememberedHttpBaseUrl(record);
-        if (!httpBaseUrl) return unavailableCommandChannel("http");
         try {
-          await setDeviceLogLevel(httpBaseUrl, level);
-          const settings = await getSettings(httpBaseUrl);
+          const settings = await withRememberedHttpFallback(
+            record,
+            async (httpBaseUrl) => {
+              await setDeviceLogLevel(httpBaseUrl, level);
+              return getSettings(httpBaseUrl);
+            },
+          );
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1784,11 +1797,14 @@ export function DeviceRegistryProvider({
         serialSessions.current,
       );
       if (selectedTransport === "http") {
-        const httpBaseUrl = rememberedHttpBaseUrl(record);
-        if (!httpBaseUrl) return unavailableCommandChannel("http");
         try {
-          await setDeviceManualChargePrefs(httpBaseUrl, prefs);
-          const settings = await getSettings(httpBaseUrl);
+          const settings = await withRememberedHttpFallback(
+            record,
+            async (httpBaseUrl) => {
+              await setDeviceManualChargePrefs(httpBaseUrl, prefs);
+              return getSettings(httpBaseUrl);
+            },
+          );
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2575,12 +2591,41 @@ function isDirectLanRecord(record: DeviceRecord): boolean {
 }
 
 function rememberedHttpBaseUrl(record: DeviceRecord): string | null {
-  return (
-    record.target.rememberedChannels?.http?.baseUrl ??
-    ((record.target.transport ?? "http") === "http"
+  return rememberedHttpBaseUrls(record)[0] ?? null;
+}
+
+function rememberedHttpBaseUrls(record: DeviceRecord): string[] {
+  const candidates = [
+    record.target.rememberedChannels?.http?.baseUrl,
+    record.target.rememberedChannels?.http?.fallbackBaseUrl,
+    (record.target.transport ?? "http") === "http"
       ? record.target.baseUrl
-      : null)
-  );
+      : null,
+  ];
+  const normalized: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const baseUrl = normalizeBaseUrl(candidate);
+    if (!baseUrl || normalized.includes(baseUrl)) continue;
+    normalized.push(baseUrl);
+  }
+  return normalized;
+}
+
+async function withRememberedHttpFallback<T>(
+  record: DeviceRecord,
+  operation: (baseUrl: string) => Promise<T>,
+): Promise<T> {
+  const baseUrls = rememberedHttpBaseUrls(record);
+  let lastError: unknown = null;
+  for (const baseUrl of baseUrls) {
+    try {
+      return await operation(baseUrl);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error("No remembered HTTP channel is available");
 }
 
 function rememberedDevdChannel(

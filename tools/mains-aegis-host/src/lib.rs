@@ -2833,16 +2833,25 @@ async fn bind_device(
         .devices
         .get_mut(&id)
         .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+    let previous_lan_companion = device.binding.as_ref().and_then(|binding| {
+        let rebinding_to_different_logical_device =
+            input
+                .logical_device_id
+                .as_ref()
+                .is_some_and(|logical_device_id| {
+                    binding.logical_device_id.as_ref() != Some(logical_device_id)
+                });
+        (!rebinding_to_different_logical_device)
+            .then(|| binding.lan_companion.clone())
+            .flatten()
+    });
     let binding = DeviceBinding {
         alias: input.alias,
         stable_id: id.clone(),
         port_path: device.port_path.clone(),
         created_at: now(),
         logical_device_id: input.logical_device_id,
-        lan_companion: device
-            .binding
-            .as_ref()
-            .and_then(|binding| binding.lan_companion.clone()),
+        lan_companion: previous_lan_companion,
     };
     device.binding = Some(binding.clone());
     device.companion_lan_candidate = companion_candidate;
