@@ -1062,7 +1062,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     macro_rules! reprime_runtime_audio_dma {
         ($push_failed_msg:literal, $available_failed_msg:literal, $restart_failed_msg:literal) => {{
             audio_transfer = None;
-            tx_buffer.fill(0);
+            let primed = audio_manager.fill(&mut tx_buffer[..]);
+            if primed < tx_buffer.len() {
+                tx_buffer[primed..].fill(0);
+            }
             if let Some(i2s_tx) = i2s_tx.as_mut() {
                 match i2s_tx.write_dma_circular(&tx_buffer) {
                     Ok(mut transfer) => match transfer.available() {

@@ -752,6 +752,20 @@ mod tests {
         assert_eq!(status.current_route, Some(AudioRoute::Action));
         assert!(status.previewing);
     }
+
+    #[test]
+    fn volume_preview_is_audible_near_start_of_large_prefill() {
+        let mut manager = AudioManager::new();
+        manager.set_action_volume_step(6);
+        manager.trigger_volume_preview(AudioRoute::Action);
+
+        let mut buf = [0u8; 4096];
+        let filled = manager.fill(&mut buf);
+        assert_eq!(filled, buf.len());
+        assert!(buf[..512]
+            .chunks_exact(4)
+            .any(|frame| { i16::from_le_bytes([frame[0], frame[1]]) != 0 }));
+    }
 }
 
 pub const fn default_request(cue: AudioCue) -> AudioRequest {
