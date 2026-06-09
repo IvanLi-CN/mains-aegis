@@ -86,7 +86,7 @@ const DISPLAY_CTRL_BRIGHTNESS_DIM_BACKLIGHT_ON: u8 = 0x2C;
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
 const CENTER_LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(800);
 const BOOT_SPLASH_HOLD: Duration = Duration::from_millis(900);
-const DASHBOARD_MENU_ANIMATION_STEPS: u8 = 10;
+const DASHBOARD_MENU_ANIMATION_STEPS: u8 = 2;
 const PANEL_INIT_SPI_FREQ_MHZ: u32 = 10;
 const PANEL_RUNTIME_SPI_FREQ_MHZ: u32 = if cfg!(feature = "display-spi-20mhz") {
     20
