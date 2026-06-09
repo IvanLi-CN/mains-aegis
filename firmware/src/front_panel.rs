@@ -1,9 +1,9 @@
 use core::convert::Infallible;
 
 use crate::front_panel_logic::{
-    cst816d_gesture_is_vertical, dashboard_enter_requires_variant_switch,
-    dashboard_page_for_vertical_menu_gesture, dashboard_uses_frame_animation, DASHBOARD_VARIANT,
-    SELF_CHECK_VARIANT,
+    cst816d_vertical_gesture_direction, dashboard_enter_requires_variant_switch,
+    dashboard_page_for_vertical_menu_gesture, dashboard_uses_frame_animation,
+    VerticalGestureDirection, DASHBOARD_VARIANT, SELF_CHECK_VARIANT,
 };
 use crate::front_panel_scene::{
     self, AudioTestUiState, BeeperPrefs, BeeperSettingTarget, BmsActivationState,
@@ -1985,9 +1985,13 @@ where
             self.dashboard_touch_gesture_consumed = false;
         }
 
-        let raw_gesture_edge = snapshot.touch_gesture_raw != 0
+        let raw_gesture_direction = if snapshot.touch_gesture_raw != 0
             && snapshot.touch_gesture_raw != prev.touch_gesture_raw
-            && cst816d_gesture_is_vertical(snapshot.touch_gesture_raw);
+        {
+            cst816d_vertical_gesture_direction(snapshot.touch_gesture_raw)
+        } else {
+            None
+        };
         let drag_delta = if !self.dashboard_touch_gesture_consumed && snapshot.touch && prev.touch {
             match (prev.touch_point, snapshot.touch_point) {
                 (Some((_, prev_y)), Some((_, y))) => {
@@ -2004,29 +2008,40 @@ where
             None
         };
 
-        if !raw_gesture_edge && drag_delta.is_none() {
+        let drag_gesture_direction = drag_delta.map(|dy| {
+            if dy < 0 {
+                VerticalGestureDirection::Up
+            } else {
+                VerticalGestureDirection::Down
+            }
+        });
+        let Some(gesture_direction) = drag_gesture_direction.or(raw_gesture_direction) else {
             return None;
-        }
+        };
         if drag_delta.is_some() {
             self.dashboard_touch_gesture_consumed = true;
         }
 
-        let Some(next_page) = dashboard_page_for_vertical_menu_gesture(self.dashboard_page) else {
+        let Some(next_page) =
+            dashboard_page_for_vertical_menu_gesture(self.dashboard_page, gesture_direction)
+        else {
             return None;
         };
         let previous_page = self.dashboard_page;
         self.set_dashboard_page(next_page);
         defmt::info!(
-            "ui: dashboard menu gesture page={} new={} raw=0x{=u8:02x} drag_dy={=i16}",
+            "ui: dashboard menu gesture page={} new={} direction={} raw=0x{=u8:02x} drag_dy={=i16}",
             dashboard_page_name(previous_page),
             dashboard_page_name(next_page),
+            vertical_gesture_direction_name(gesture_direction),
             snapshot.touch_gesture_raw,
             drag_delta.unwrap_or(0)
         );
         esp_println::println!(
-            "ui: dashboard menu gesture page={} new={} raw=0x{:02x} drag_dy={}",
+            "ui: dashboard menu gesture page={} new={} direction={} raw=0x{:02x} drag_dy={}",
             dashboard_page_name(previous_page),
             dashboard_page_name(next_page),
+            vertical_gesture_direction_name(gesture_direction),
             snapshot.touch_gesture_raw,
             drag_delta.unwrap_or(0)
         );
@@ -2205,6 +2220,13 @@ fn dashboard_page_name(page: DashboardPrimaryPage) -> &'static str {
         DashboardPrimaryPage::DashboardHome => "dashboard_home",
         DashboardPrimaryPage::Menu => "menu",
         DashboardPrimaryPage::BeeperSettings => "audio",
+    }
+}
+
+fn vertical_gesture_direction_name(direction: VerticalGestureDirection) -> &'static str {
+    match direction {
+        VerticalGestureDirection::Up => "up",
+        VerticalGestureDirection::Down => "down",
     }
 }
 
