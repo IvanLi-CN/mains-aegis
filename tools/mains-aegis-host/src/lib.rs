@@ -2090,7 +2090,15 @@ async fn read_device_status_network_async(
     } else {
         send_native_cdc_frame_async(port_path, frame, request_id).await
     }?;
-    Ok(response.get("result").cloned().unwrap_or(Value::Null))
+    Ok(network_from_status_response(&response))
+}
+
+fn network_from_status_response(response: &Value) -> Value {
+    let result = response.get("result").unwrap_or(response);
+    result
+        .get("network")
+        .cloned()
+        .unwrap_or_else(|| result.clone())
 }
 
 async fn probe_identity_target(target: &str) -> Result<Value, HttpError> {
@@ -7672,6 +7680,40 @@ mod tests {
 
         assert_eq!(grouped["usb"].as_array().unwrap().len(), 1);
         assert_eq!(grouped["lan"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn extracts_network_from_nested_status_response() {
+        let response = json!({
+            "result": {
+                "network": {
+                    "state": "connected",
+                    "ipv4": "192.168.31.42",
+                    "last_error": null
+                }
+            }
+        });
+
+        let network = network_from_status_response(&response);
+
+        assert_eq!(network["state"], "connected");
+        assert_eq!(network["ipv4"], "192.168.31.42");
+    }
+
+    #[test]
+    fn preserves_direct_network_status_response() {
+        let response = json!({
+            "result": {
+                "state": "connected",
+                "ipv4": "192.168.31.42",
+                "last_error": null
+            }
+        });
+
+        let network = network_from_status_response(&response);
+
+        assert_eq!(network["state"], "connected");
+        assert_eq!(network["ipv4"], "192.168.31.42");
     }
 
     #[test]
