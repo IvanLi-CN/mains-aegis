@@ -2013,7 +2013,14 @@ pub fn dashboard_menu_hit_test(
 
 #[allow(dead_code)]
 pub fn beeper_settings_hit_test(x: u16, y: u16) -> Option<BeeperSettingsTouchTarget> {
-    if contains(x, y, 0, 0, UI_W, HEADER_H) {
+    if contains(
+        x,
+        y,
+        DASHBOARD_DETAIL_BACK_HIT_X,
+        DASHBOARD_DETAIL_BACK_HIT_Y,
+        DASHBOARD_DETAIL_BACK_HIT_W,
+        DASHBOARD_DETAIL_BACK_HIT_H,
+    ) {
         return Some(BeeperSettingsTouchTarget::Back);
     }
 
@@ -4199,13 +4206,10 @@ fn render_beeper_settings_page<P: UiPainter>(
     prefs: BeeperPrefs,
     _menu_selected: MenuItem,
 ) -> Result<(), P::Error> {
-    draw_top_bar_with_status(
+    draw_beeper_settings_top_bar(
         painter,
         variant,
         palette,
-        UiFocus::Idle,
-        "AUDIO",
-        "",
         prefs.selected_target.label(),
         beeper_target_focus_color(palette, prefs.selected_target),
     )?;
@@ -4221,6 +4225,56 @@ fn render_beeper_settings_page<P: UiPainter>(
         )?;
     }
     Ok(())
+}
+
+fn draw_beeper_settings_top_bar<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    status_tag: &'static str,
+    status_color: u16,
+) -> Result<(), P::Error> {
+    fill(painter, 0, 0, UI_W, HEADER_H, palette.panel)?;
+    draw_panel(
+        painter,
+        DASHBOARD_DETAIL_BACK_X,
+        DASHBOARD_DETAIL_BACK_Y,
+        DASHBOARD_DETAIL_BACK_W,
+        DASHBOARD_DETAIL_BACK_H,
+        palette,
+        false,
+        palette.accent,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "BACK",
+        Point::new(
+            (DASHBOARD_DETAIL_BACK_X + DASHBOARD_DETAIL_BACK_W / 2) as i32,
+            4,
+        ),
+        HorizontalAlignment::Center,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        "AUDIO",
+        Point::new(DETAIL_TITLE_X, 2),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        status_tag,
+        Point::new(DETAIL_STATUS_X, 2),
+        HorizontalAlignment::Right,
+        status_color,
+    )
 }
 
 fn draw_beeper_settings_scale<P: UiPainter>(
@@ -14572,6 +14626,7 @@ mod tests {
             beeper_settings_hit_test(8, 8),
             Some(BeeperSettingsTouchTarget::Back)
         );
+        assert_eq!(beeper_settings_hit_test(UI_W / 2, 8), None);
         assert_eq!(
             beeper_settings_hit_test(AUDIO_ROW_X + 16, AUDIO_ACTION_ROW_Y + 8),
             Some(BeeperSettingsTouchTarget::Target(
