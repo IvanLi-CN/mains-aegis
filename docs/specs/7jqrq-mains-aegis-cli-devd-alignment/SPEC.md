@@ -22,7 +22,8 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 
 - 新增 `tools/mains-aegis-host`，统一产出 `mains-aegis` 与 `mains-aegis-devd` 两个二进制。
 - `mains-aegis-devd serve` 改为 IPC-only；HTTP/Web 暴露只能通过显式 `mains-aegis-devd serve-http` 开启。
-- `mains-aegis` CLI 通过 IPC 调用 devd，覆盖设备、artifact、flash dry-run/reset/monitor、serial lease、settings 与 host power 命令族；历史 `device session` 命令面由 #k4vzn 替换为 `connection / settings / trace`。
+- `mains-aegis` CLI 只能通过系统原生 IPC 调用 devd；Unix 使用 Unix domain socket，Windows 使用 named pipe。CLI 不得使用 HTTP、TCP、localhost URL 或 `serve-http` 作为 devd 通信路径。
+- `mains-aegis` CLI 覆盖设备、artifact、flash dry-run/reset/monitor、serial lease、settings 与 host power 命令族；历史 `device session` 命令面由 #k4vzn 替换为 `connection / settings / trace`。
 - devd HTTP service 只能在显式启用且配置 bearer token 时绑定非 loopback 地址。
 - 发布流程产出 Linux x86_64、macOS arm64、Windows x86_64 host-tools archive、安装脚本与 `SHA256SUMS`。
 - repo skills 拆分为默认仓库开发/诊断层与显式用户操作层；Codex 在本仓内默认使用 `$mains-aegis-devd-flow`，用户操作层仅在主人明确要求 end-user/released host-tools 操作、安装验证或点名 `$mains-aegis-user-operations` 时触发。
@@ -57,7 +58,9 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 ### CLI commands
 
 - CLI 全局支持 `--ipc <endpoint>`，默认 endpoint 与 devd 一致。
-- CLI 发起 newline JSON IPC 请求，不直接枚举串口、不直接切换端口、不直接调用 espflash。
+- `--ipc <endpoint>` 只接受系统原生 IPC endpoint：Unix socket path 或 Windows named pipe name。它不得接受 `http://`、`https://`、`tcp://`、`localhost:<port>`、`127.0.0.1:<port>` 或其它 TCP/URL 形式。
+- CLI 发起 newline JSON native IPC 请求，不直接枚举串口、不直接切换端口、不直接调用 espflash。
+- CLI 不得为了执行设备、artifact、flash/reset/monitor、settings 或 host power 命令而启动、依赖或要求 `mains-aegis-devd serve-http`。
 - CLI 的 flash 与 host power state-changing 命令默认发送 dry-run；真实动作必须显式传入 `--real`。
 - `mains-aegis device <id> bind` 在交互式 TTY 场景下，若 devd 返回可确认的 `companion_lan_candidate`，必须就地提示是否同时绑定 LAN companion；非交互场景不得弹提示、不得自动持久化，只返回候选详情与后续显式命令。
 - host-tools 必须提供显式的 companion-LAN 契约面：`POST /api/v1/devices/{id}/companion-lan`、`DELETE /api/v1/devices/{id}/companion-lan`、IPC `device.companion_lan.bind|clear`，以及 CLI `device <id> companion-lan bind|clear`。该契约面只负责“确认/清除 companion 绑定”，不得隐式代替 `bind`。
@@ -79,7 +82,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 
 ### Web HTTP service
 
-- Web dev proxy 默认指向 `http://127.0.0.1:30080`，可通过 `MAINS_AEGIS_DEVD_URL`、`VITE_DEFAULT_DEVD_URL` 或 `VITE_DEVD_API_BASE` 指向显式启动的 `serve-http --allow-dev-cors`；该地址代表显式启动的开发 HTTP service，不是默认 daemon。需要 Web 与 CLI 共用状态时，CLI 连接同一个 `serve-http --ipc <endpoint>`。
+- Web dev proxy 默认指向 `http://127.0.0.1:30080`，可通过 `MAINS_AEGIS_DEVD_URL`、`VITE_DEFAULT_DEVD_URL` 或 `VITE_DEVD_API_BASE` 指向显式启动的 `serve-http --allow-dev-cors`；该地址代表显式启动的开发 HTTP service，不是默认 daemon。CLI 与 devd 的通信仍只能通过系统原生 IPC endpoint，不能连接 Web proxy、HTTP service URL 或任何 TCP 地址。
 - Hosted 模式固定使用 same-origin devd HTTP service；Connect 页在 hosted app 中不暴露 devd URL 或 token 输入。demo 模式仍固定使用 `mock:devd`。
 - Hosted Connect 只保留 devd discovery；不再渲染 Web Serial 或手动 LAN fallback 面板。独立浏览器 / Vite 开发场景继续保留这些 fallback 入口。
 - `serve-http --allow-dev-cors` 只允许 loopback HTTP development origins（`localhost`、`127.0.0.1`、`[::1]`，任意端口），用于 Vite 租约端口或直接 dev API 调试；非 loopback HTTP service 仍必须走 token-gated LAN bridge 规则。
@@ -87,7 +90,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - Hosted Connect 中，devd 发现出的 USB 设备必须通过 devd Web lease / usb-http bridge 接入；devd 发现出的 LAN 设备必须落为硬件本体 HTTP target，而不是持久化成 `devd transport` 记录。
 - Hosted Web client 从页面 meta 读取 app-session secret，并且只把该 secret 附加到 same-origin devd API 与 devd EventSource 请求；普通 LAN 设备探活与 LAN status SSE 不得携带该 secret。
 - Web Serial 与 devd HTTP service 仍按既有租约、心跳和 release 语义工作。
-- devd HTTP service 与 CLI 观察同一进程内状态；绑定、别名和 artifact selection 还会写入用户配置目录的 devd 状态文件，daemon 重启后恢复为 disconnected 的安全运行态并保留用户配置态。
+- 绑定、别名和 artifact selection 写入用户配置目录的 devd 状态文件，daemon 重启后恢复为 disconnected 的安全运行态并保留用户配置态。CLI 只能通过系统原生 IPC 观察和修改这些 devd 状态。
 
 - 跨 `Web App` / `mains-aegis-devd` / `mains-aegis` CLI 的通信方案优先级矩阵由 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md) 统一定义；本规格只记录 host-tools crate、IPC/HTTP 命令面与 release/install 对齐，不再重复定义跨客户端优先级表。
 
@@ -99,6 +102,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - `mains-aegis-devd serve-http --bind 0.0.0.0:30080` 在缺少 token 文件时失败。
 - `mains-aegis-devd serve-http --allow-dev-cors --open-browser` 参数冲突并失败。
 - `mains-aegis` CLI 能通过 IPC 调用 mock devd 的 health/list/devices 命令。
+- `mains-aegis --ipc http://127.0.0.1:30080 health`、`mains-aegis --ipc tcp://127.0.0.1:30080 health` 与裸 `host:port` 形式必须失败，且不得发起 TCP 连接。
 - `mains-aegis device <id> bind` 创建的绑定在 devd 重启后仍可由 `devices list` 看到；`connect` 和 Web lease 不跨重启恢复。
 - `mains-aegis device <id> flash` 和 `mains-aegis host power ...` 默认 dry-run，真实动作必须显式 `--real`。
 - `bun run --cwd web check` 通过。

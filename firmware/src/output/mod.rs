@@ -3,10 +3,11 @@ mod pure;
 pub mod tps55288;
 
 use crate::front_panel_scene::{
-    is_bq40_activation_needed, BmsActivationState, BmsRecoveryUiAction, BmsResultKind,
-    DashboardInputSource, ManualChargePrefs, ManualChargeRuntimeState, ManualChargeSpeed,
-    ManualChargeStopReason, ManualChargeTarget, ManualChargeTimerLimit, ManualChargeUiAction,
-    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+    is_bq40_activation_needed, BeeperPrefs, BeeperSettingTarget, BeeperVolumeLevel,
+    BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardInputSource,
+    ManualChargePrefs, ManualChargeRuntimeState, ManualChargeSpeed, ManualChargeStopReason,
+    ManualChargeTarget, ManualChargeTimerLimit, ManualChargeUiAction, SelfCheckCommState,
+    SelfCheckUiSnapshot, UpsMode,
 };
 use crate::irq::IrqSnapshot;
 use crate::net_bridge;
@@ -179,6 +180,9 @@ const EEPROM_PD_BREADCRUMB_SLOT_COUNT: usize = 8;
 const EEPROM_PD_BREADCRUMB_MAGIC: [u8; 4] = *b"PDBG";
 const EEPROM_PD_BREADCRUMB_VERSION: u8 = 1;
 const EEPROM_WIFI_CONFIG_OFFSET: u16 = 0x0160;
+const EEPROM_BEEPER_PREFS_OFFSET: u16 = 0x01e0;
+const EEPROM_BEEPER_PREFS_MAGIC: [u8; 4] = *b"BEEP";
+const EEPROM_BEEPER_PREFS_RECORD_VERSION: u8 = 1;
 const EEPROM_WRITE_POLL_ATTEMPTS: usize = 32;
 const EEPROM_WRITE_POLL_GAP: Duration = Duration::from_millis(1);
 
@@ -305,6 +309,43 @@ impl ManualChargePrefsRecordV1 {
                 target: manual_charge_target_decode(bytes[1])?,
                 speed: manual_charge_speed_decode(bytes[2])?,
                 timer_limit: manual_charge_timer_decode(bytes[3])?,
+            },
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct BeeperPrefsRecordV1 {
+    prefs: BeeperPrefs,
+}
+
+impl BeeperPrefsRecordV1 {
+    fn encode(self) -> [u8; EEPROM_BLOCK_LEN] {
+        let mut bytes = [0u8; EEPROM_BLOCK_LEN];
+        bytes[0..4].copy_from_slice(&EEPROM_BEEPER_PREFS_MAGIC);
+        bytes[4] = EEPROM_BEEPER_PREFS_RECORD_VERSION;
+        bytes[5] = self.prefs.action_volume.step();
+        bytes[6] = self.prefs.system_volume.step();
+        bytes[7] = beeper_target_encode(self.prefs.selected_target);
+        bytes[31] = storage_crc8(&bytes[..31]);
+        bytes
+    }
+
+    fn decode(bytes: [u8; EEPROM_BLOCK_LEN]) -> Option<Self> {
+        if bytes[0..4] != EEPROM_BEEPER_PREFS_MAGIC {
+            return None;
+        }
+        if bytes[4] != EEPROM_BEEPER_PREFS_RECORD_VERSION {
+            return None;
+        }
+        if bytes[31] != storage_crc8(&bytes[..31]) {
+            return None;
+        }
+        Some(Self {
+            prefs: BeeperPrefs {
+                action_volume: beeper_volume_decode(bytes[5])?,
+                system_volume: beeper_volume_decode(bytes[6])?,
+                selected_target: beeper_target_decode(bytes[7])?,
             },
         })
     }
@@ -644,6 +685,34 @@ const fn manual_charge_timer_decode(raw: u8) -> Option<ManualChargeTimerLimit> {
     }
 }
 
+const fn beeper_volume_decode(raw: u8) -> Option<BeeperVolumeLevel> {
+    match raw {
+        0 => Some(BeeperVolumeLevel::Off),
+        1 => Some(BeeperVolumeLevel::L1),
+        2 => Some(BeeperVolumeLevel::L2),
+        3 => Some(BeeperVolumeLevel::L3),
+        4 => Some(BeeperVolumeLevel::L4),
+        5 => Some(BeeperVolumeLevel::L5),
+        6 => Some(BeeperVolumeLevel::L6),
+        _ => None,
+    }
+}
+
+const fn beeper_target_encode(target: BeeperSettingTarget) -> u8 {
+    match target {
+        BeeperSettingTarget::Action => 0,
+        BeeperSettingTarget::System => 1,
+    }
+}
+
+const fn beeper_target_decode(raw: u8) -> Option<BeeperSettingTarget> {
+    match raw {
+        0 => Some(BeeperSettingTarget::Action),
+        1 => Some(BeeperSettingTarget::System),
+        _ => None,
+    }
+}
+
 const fn web_serial_manual_charge_target(
     target: esp_firmware::usb_cdc_protocol::ManualChargeTarget,
 ) -> ManualChargeTarget {
@@ -802,6 +871,20 @@ where
     write_eeprom_block(i2c, offset, ManualChargePrefsRecordV1 { prefs }.encode())
 }
 
+fn write_beeper_prefs_record<I2C>(
+    i2c: &mut I2C,
+    prefs: BeeperPrefs,
+) -> Result<(), esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    write_eeprom_block(
+        i2c,
+        EEPROM_BEEPER_PREFS_OFFSET,
+        BeeperPrefsRecordV1 { prefs }.encode(),
+    )
+}
+
 fn write_wifi_config_record<I2C>(
     i2c: &mut I2C,
     record: [u8; esp_firmware::usb_cdc_protocol::WIFI_CONFIG_RECORD_LEN],
@@ -937,6 +1020,35 @@ where
                 false,
                 false,
             )
+        }
+    }
+}
+
+fn load_or_init_beeper_prefs<I2C>(i2c: &mut I2C) -> (BeeperPrefs, bool)
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    match read_eeprom_block(i2c, EEPROM_BEEPER_PREFS_OFFSET).map(BeeperPrefsRecordV1::decode) {
+        Ok(Some(record)) => (record.prefs, true),
+        Ok(None) => {
+            let prefs = BeeperPrefs::defaults();
+            let storage_ready = if let Err(err) = write_beeper_prefs_record(i2c, prefs) {
+                defmt::warn!(
+                    "eeprom: init beeper prefs failed err={}",
+                    i2c_error_kind(err)
+                );
+                false
+            } else {
+                true
+            };
+            (prefs, storage_ready)
+        }
+        Err(err) => {
+            defmt::warn!(
+                "eeprom: read beeper prefs failed err={}",
+                i2c_error_kind(err)
+            );
+            (BeeperPrefs::defaults(), false)
         }
     }
 }
@@ -3121,6 +3233,8 @@ pub struct PowerManager<'d, I2C> {
     manual_charge_prefs_offset: u16,
     manual_charge_storage_ready: bool,
     manual_charge_storage_incompatible: bool,
+    beeper_prefs: BeeperPrefs,
+    beeper_storage_ready: bool,
     manual_charge_runtime: ManualChargeRuntime,
     bms_charge_ready: Option<bool>,
     bms_full: Option<bool>,
@@ -3497,6 +3611,7 @@ where
             manual_charge_storage_ready,
             manual_charge_storage_incompatible,
         ) = load_or_init_manual_charge_prefs(&mut i2c);
+        let (beeper_prefs, beeper_storage_ready) = load_or_init_beeper_prefs(&mut i2c);
         let pd_breadcrumb_next_seq = load_latest_pd_breadcrumb_record(&mut i2c)
             .ok()
             .flatten()
@@ -3605,6 +3720,8 @@ where
             manual_charge_prefs_offset,
             manual_charge_storage_ready,
             manual_charge_storage_incompatible,
+            beeper_prefs,
+            beeper_storage_ready,
             manual_charge_runtime: ManualChargeRuntime::new(),
             bms_charge_ready: initial_bms_charge_ready,
             bms_full: None,
@@ -4926,6 +5043,18 @@ where
         self.manual_charge_prefs
     }
 
+    pub fn beeper_prefs_snapshot(&self) -> BeeperPrefs {
+        self.beeper_prefs
+    }
+
+    pub fn set_beeper_prefs(&mut self, prefs: BeeperPrefs) {
+        if self.beeper_prefs == prefs {
+            return;
+        }
+        self.beeper_prefs = prefs;
+        self.persist_beeper_prefs();
+    }
+
     pub fn write_web_serial_wifi_config(
         &mut self,
         config: Option<&esp_firmware::usb_cdc_protocol::WifiConfigSecret>,
@@ -4991,6 +5120,24 @@ where
 
     fn manual_charge_target_label(&self) -> &'static str {
         self.manual_charge_prefs.target.label()
+    }
+
+    fn persist_beeper_prefs(&mut self) {
+        if let Err(err) = write_beeper_prefs_record(&mut self.i2c, self.beeper_prefs) {
+            self.beeper_storage_ready = false;
+            defmt::warn!(
+                "eeprom: write beeper prefs failed err={}",
+                i2c_error_kind(err)
+            );
+        } else {
+            self.beeper_storage_ready = true;
+            defmt::info!(
+                "eeprom: beeper prefs saved action={} system={} selected={}",
+                self.beeper_prefs.action_volume.badge_label(),
+                self.beeper_prefs.system_volume.badge_label(),
+                self.beeper_prefs.selected_target.label()
+            );
+        }
     }
 
     fn maybe_log_charger_limit_mismatch(

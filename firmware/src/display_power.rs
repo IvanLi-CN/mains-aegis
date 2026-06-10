@@ -38,6 +38,14 @@ impl DisplayPowerPolicy {
             sleep_after_ms: FRONT_PANEL_SLEEP_AFTER_MS,
         }
     }
+
+    pub const fn release_default() -> Self {
+        Self {
+            dim_after_ms: FRONT_PANEL_RELEASE_DIM_AFTER_MS,
+            backlight_off_after_ms: FRONT_PANEL_RELEASE_BACKLIGHT_OFF_AFTER_MS,
+            sleep_after_ms: FRONT_PANEL_RELEASE_SLEEP_AFTER_MS,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +118,18 @@ mod tests {
 
     fn controller() -> DisplayPowerController {
         DisplayPowerController::new(DisplayPowerPolicy::test_default(), 0)
+    }
+
+    #[test]
+    fn release_default_uses_longer_idle_timing() {
+        let policy = DisplayPowerPolicy::release_default();
+
+        assert_eq!(policy.dim_after_ms, FRONT_PANEL_RELEASE_DIM_AFTER_MS);
+        assert_eq!(
+            policy.backlight_off_after_ms,
+            FRONT_PANEL_RELEASE_BACKLIGHT_OFF_AFTER_MS
+        );
+        assert_eq!(policy.sleep_after_ms, FRONT_PANEL_RELEASE_SLEEP_AFTER_MS);
     }
 
     #[test]

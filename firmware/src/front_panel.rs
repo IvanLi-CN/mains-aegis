@@ -1,14 +1,17 @@
 use core::convert::Infallible;
 
 use crate::front_panel_logic::{
-    dashboard_enter_requires_variant_switch, dashboard_uses_frame_animation, DASHBOARD_VARIANT,
-    SELF_CHECK_VARIANT,
+    cst816d_vertical_gesture_direction, dashboard_enter_requires_variant_switch,
+    dashboard_page_for_vertical_menu_gesture, dashboard_uses_frame_animation,
+    VerticalGestureDirection, DASHBOARD_VARIANT, SELF_CHECK_VARIANT,
 };
 use crate::front_panel_scene::{
-    self, AudioTestUiState, BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardRoute,
-    DashboardTouchTarget, ManualChargeUiAction, SelfCheckCommState, SelfCheckHardwareTarget,
-    SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot, TestFunctionUi, TpsTestUiSnapshot,
-    UiFocus, UiModel, UiPainter, UiVariant, UpsMode,
+    self, AudioTestUiState, BeeperPrefs, BeeperSettingTarget, BeeperSettingsTouchTarget,
+    BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardHomeFocus, DashboardMenuStyle,
+    DashboardMenuTouchTarget, DashboardPrimaryPage, DashboardRoute, DashboardShellState,
+    DashboardTouchTarget, ManualChargeUiAction, MenuItem, SelfCheckCommState,
+    SelfCheckHardwareTarget, SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot,
+    TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant, UpsMode,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -81,19 +84,33 @@ const DISPLAY_CTRL_BRIGHTNESS_ON_BACKLIGHT_ON: u8 = 0x24;
 const DISPLAY_CTRL_BRIGHTNESS_DIM_BACKLIGHT_ON: u8 = 0x2C;
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(50);
+const DASHBOARD_MENU_ANIMATION_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+const DASHBOARD_AMBIENT_ANIMATION_FRAME_INTERVAL: Duration = Duration::from_millis(250);
+const DASHBOARD_STATUS_REDRAW_INTERVAL: Duration = Duration::from_millis(1000);
 const CENTER_LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(800);
 const BOOT_SPLASH_HOLD: Duration = Duration::from_millis(900);
+const DASHBOARD_MENU_ANIMATION_STEPS: u8 = 10;
 const PANEL_INIT_SPI_FREQ_MHZ: u32 = 10;
 const PANEL_RUNTIME_SPI_FREQ_MHZ: u32 = if cfg!(feature = "display-spi-20mhz") {
     20
-} else {
+} else if cfg!(feature = "display-spi-40mhz") {
     40
+} else {
+    80
 };
+const DASHBOARD_MENU_DRAG_THRESHOLD_PX: i16 = 28;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiAction {
     RequestBmsRecovery(BmsRecoveryUiAction),
     ManualCharge(ManualChargeUiAction),
+    BeeperPreview {
+        prefs: BeeperPrefs,
+        target: BeeperSettingTarget,
+    },
+    BeeperPrefsChanged {
+        prefs: BeeperPrefs,
+    },
     ClearBmsActivationResult,
 }
 
@@ -125,6 +142,7 @@ struct InputSnapshot {
     center: bool,
     touch: bool,
     touch_point: Option<(u16, u16)>,
+    touch_gesture_raw: u8,
 }
 
 impl InputSnapshot {
@@ -137,8 +155,15 @@ impl InputSnapshot {
             center: false,
             touch: false,
             touch_point: None,
+            touch_gesture_raw: 0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TouchSample {
+    gesture_raw: u8,
+    point: Option<(u16, u16)>,
 }
 
 const fn input_snapshot_has_activity(snapshot: InputSnapshot) -> bool {
@@ -148,6 +173,7 @@ const fn input_snapshot_has_activity(snapshot: InputSnapshot) -> bool {
         || snapshot.right
         || snapshot.center
         || snapshot.touch
+        || snapshot.touch_gesture_raw != 0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,6 +191,12 @@ struct Cst816dDiagSnapshot {
     raw_x: u16,
     raw_y: u16,
     mapped_point: Option<(u16, u16)>,
+}
+
+struct DashboardMenuAnimation {
+    from_offset_y: i16,
+    target_offset_y: i16,
+    step_index: u8,
 }
 
 pub enum BacklightControl {
@@ -297,10 +329,20 @@ where
     last_test_touch_point: Option<(u16, u16)>,
     needs_redraw: bool,
     ui_variant: UiVariant,
+    dashboard_page: DashboardPrimaryPage,
     dashboard_route: DashboardRoute,
+    dashboard_home_focus: DashboardHomeFocus,
+    dashboard_menu_selected: MenuItem,
+    dashboard_menu_offset_y: i16,
+    dashboard_menu_animation: Option<DashboardMenuAnimation>,
+    dashboard_status_dirty: bool,
+    next_dashboard_status_redraw_deadline: Instant,
+    next_dashboard_ambient_frame_deadline: Instant,
+    beeper_prefs: BeeperPrefs,
     self_check_snapshot: SelfCheckUiSnapshot,
     bms_activation_state: BmsActivationState,
     self_check_overlay: SelfCheckOverlay,
+    dashboard_touch_gesture_consumed: bool,
     touch_irq_stuck_hint_logged: bool,
     frame_no: u32,
     display_power_epoch: Instant,
@@ -369,14 +411,24 @@ where
             last_test_touch_point: None,
             needs_redraw: false,
             ui_variant: SELF_CHECK_VARIANT,
+            dashboard_page: DashboardPrimaryPage::DashboardHome,
             dashboard_route: DashboardRoute::Home,
+            dashboard_home_focus: DashboardHomeFocus::Output,
+            dashboard_menu_selected: MenuItem::Dashboard,
+            dashboard_menu_offset_y: 0,
+            dashboard_menu_animation: None,
+            dashboard_status_dirty: false,
+            next_dashboard_status_redraw_deadline: Instant::now(),
+            next_dashboard_ambient_frame_deadline: Instant::now(),
+            beeper_prefs: BeeperPrefs::defaults(),
             self_check_snapshot: SelfCheckUiSnapshot::pending(front_panel_scene::UpsMode::Standby),
             bms_activation_state: BmsActivationState::Idle,
             self_check_overlay: SelfCheckOverlay::None,
+            dashboard_touch_gesture_consumed: false,
             touch_irq_stuck_hint_logged: false,
             frame_no: 0,
             display_power_epoch: Instant::now(),
-            display_power: DisplayPowerController::new(DisplayPowerPolicy::test_default(), 0),
+            display_power: DisplayPowerController::new(DisplayPowerPolicy::release_default(), 0),
             attention_hold: false,
         }
     }
@@ -825,6 +877,10 @@ where
             );
             self.self_check_overlay = SelfCheckOverlay::None;
         }
+        if self.ui_variant != SELF_CHECK_VARIANT {
+            self.dashboard_status_dirty = true;
+            return;
+        }
         self.needs_redraw = true;
         if !self.display_accepts_scene_updates() {
             return;
@@ -885,6 +941,107 @@ where
         self.needs_redraw = self.ui_variant == SELF_CHECK_VARIANT;
     }
 
+    fn dashboard_shell_state(&self) -> DashboardShellState {
+        DashboardShellState {
+            page: self.dashboard_page,
+            dashboard_route: self.dashboard_route,
+            home_focus: self.dashboard_home_focus,
+            menu_selected: self.dashboard_menu_selected,
+            menu_style: DashboardMenuStyle::default_preview(),
+            beeper_prefs: self.beeper_prefs,
+            dashboard_menu_offset_y: self.dashboard_menu_offset_y,
+        }
+    }
+
+    fn set_dashboard_page(&mut self, page: DashboardPrimaryPage) {
+        if self.dashboard_page == page {
+            return;
+        }
+        let previous = self.dashboard_page;
+        let target_offset_y = dashboard_menu_target_offset_y(page);
+        self.dashboard_page = page;
+        if dashboard_page_transition_is_animated(previous, page) {
+            self.dashboard_menu_animation = Some(DashboardMenuAnimation {
+                from_offset_y: self.dashboard_menu_offset_y,
+                target_offset_y,
+                step_index: 0,
+            });
+        } else {
+            self.dashboard_menu_animation = None;
+            self.dashboard_menu_offset_y = target_offset_y;
+        }
+        self.needs_redraw = true;
+        defmt::info!(
+            "ui: dashboard page old={} new={}",
+            dashboard_page_name(previous),
+            dashboard_page_name(page)
+        );
+        esp_println::println!(
+            "ui: dashboard page old={} new={}",
+            dashboard_page_name(previous),
+            dashboard_page_name(page)
+        );
+    }
+
+    fn set_dashboard_route(&mut self, route: DashboardRoute, source: &'static str) {
+        if self.dashboard_route == route {
+            return;
+        }
+        let previous = self.dashboard_route;
+        self.dashboard_route = route;
+        self.needs_redraw = true;
+        defmt::info!(
+            "ui: dashboard route old={} new={} source={}",
+            dashboard_route_name(previous),
+            dashboard_route_name(route),
+            source
+        );
+        esp_println::println!(
+            "ui: dashboard route old={} new={} source={}",
+            dashboard_route_name(previous),
+            dashboard_route_name(route),
+            source
+        );
+    }
+
+    fn set_dashboard_home_focus(&mut self, focus: DashboardHomeFocus) {
+        if self.dashboard_home_focus == focus {
+            return;
+        }
+        let previous = self.dashboard_home_focus;
+        self.dashboard_home_focus = focus;
+        self.needs_redraw = true;
+        defmt::info!(
+            "ui: dashboard focus old={} new={}",
+            dashboard_home_focus_name(previous),
+            dashboard_home_focus_name(focus)
+        );
+        esp_println::println!(
+            "ui: dashboard focus old={} new={}",
+            dashboard_home_focus_name(previous),
+            dashboard_home_focus_name(focus)
+        );
+    }
+
+    fn set_dashboard_menu_selected(&mut self, item: MenuItem) {
+        if self.dashboard_menu_selected == item {
+            return;
+        }
+        let previous = self.dashboard_menu_selected;
+        self.dashboard_menu_selected = item;
+        self.needs_redraw = true;
+        defmt::info!(
+            "ui: menu item old={} new={}",
+            menu_item_name(previous),
+            menu_item_name(item)
+        );
+        esp_println::println!(
+            "ui: menu item old={} new={}",
+            menu_item_name(previous),
+            menu_item_name(item)
+        );
+    }
+
     pub fn enter_dashboard(&mut self) {
         if !dashboard_enter_requires_variant_switch(self.ui_variant) {
             return;
@@ -892,7 +1049,17 @@ where
 
         let previous_variant = self.ui_variant;
         self.ui_variant = DASHBOARD_VARIANT;
+        self.dashboard_page = DashboardPrimaryPage::DashboardHome;
         self.dashboard_route = DashboardRoute::Home;
+        self.dashboard_home_focus = DashboardHomeFocus::Output;
+        self.dashboard_menu_selected = MenuItem::Dashboard;
+        self.dashboard_menu_offset_y = 0;
+        self.dashboard_menu_animation = None;
+        self.dashboard_status_dirty = false;
+        self.next_dashboard_status_redraw_deadline =
+            Instant::now() + DASHBOARD_STATUS_REDRAW_INTERVAL;
+        self.next_dashboard_ambient_frame_deadline =
+            Instant::now() + DASHBOARD_AMBIENT_ANIMATION_FRAME_INTERVAL;
         self.self_check_overlay = SelfCheckOverlay::None;
         self.needs_redraw = true;
         defmt::info!(
@@ -920,6 +1087,36 @@ where
         }
     }
 
+    pub fn set_beeper_prefs(&mut self, prefs: BeeperPrefs) {
+        if self.beeper_prefs == prefs {
+            return;
+        }
+        self.beeper_prefs = prefs;
+        self.needs_redraw = true;
+    }
+
+    fn update_dashboard_menu_animation(&mut self) -> bool {
+        let Some(animation) = self.dashboard_menu_animation.as_mut() else {
+            return false;
+        };
+        animation.step_index = animation
+            .step_index
+            .saturating_add(1)
+            .min(DASHBOARD_MENU_ANIMATION_STEPS);
+        let from_offset_y = animation.from_offset_y;
+        let target_offset_y = animation.target_offset_y;
+        let step_index = animation.step_index;
+        let delta = i32::from(target_offset_y - from_offset_y);
+        let next_offset = i32::from(from_offset_y)
+            + (delta * i32::from(step_index) / i32::from(DASHBOARD_MENU_ANIMATION_STEPS.max(1)));
+        self.dashboard_menu_offset_y = next_offset as i16;
+        if step_index >= DASHBOARD_MENU_ANIMATION_STEPS {
+            self.dashboard_menu_offset_y = target_offset_y;
+            self.dashboard_menu_animation = None;
+        }
+        true
+    }
+
     pub fn tick(&mut self) -> Option<UiAction> {
         if self.state != InitState::Ready {
             return None;
@@ -929,7 +1126,12 @@ where
         if now < self.next_frame_deadline {
             return None;
         }
-        self.next_frame_deadline += FRAME_INTERVAL;
+        let frame_interval = if self.dashboard_menu_animation.is_some() {
+            DASHBOARD_MENU_ANIMATION_FRAME_INTERVAL
+        } else {
+            FRAME_INTERVAL
+        };
+        self.next_frame_deadline = now + frame_interval;
 
         let mut ui_action = None;
         match self.read_inputs() {
@@ -974,6 +1176,9 @@ where
                 } else {
                     ui_action = self.process_dashboard_button_action(snapshot);
                     if ui_action.is_none() {
+                        ui_action = self.process_dashboard_gesture_action(snapshot);
+                    }
+                    if ui_action.is_none() {
                         ui_action = self.process_dashboard_touch_action(snapshot);
                     }
                 }
@@ -982,19 +1187,41 @@ where
                     return ui_action;
                 }
                 let inputs_changed = self.last_inputs != Some(snapshot);
-                let should_render = self.needs_redraw
-                    || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed)
-                    || dashboard_uses_frame_animation(
+                if self.dashboard_menu_animation.is_some() {
+                    self.next_frame_deadline = now + DASHBOARD_MENU_ANIMATION_FRAME_INTERVAL;
+                }
+                let menu_animation_active = self.update_dashboard_menu_animation();
+                let dashboard_status_redraw_due = self.ui_variant == DASHBOARD_VARIANT
+                    && self.dashboard_status_dirty
+                    && now >= self.next_dashboard_status_redraw_deadline;
+                let dashboard_ambient_frame_due = self.ui_variant == DASHBOARD_VARIANT
+                    && self.dashboard_page == DashboardPrimaryPage::DashboardHome
+                    && dashboard_uses_frame_animation(
                         self.ui_variant,
                         self.dashboard_route,
                         &self.self_check_snapshot,
-                    );
+                    )
+                    && now >= self.next_dashboard_ambient_frame_deadline;
+                let should_render = self.needs_redraw
+                    || menu_animation_active
+                    || dashboard_status_redraw_due
+                    || dashboard_ambient_frame_due
+                    || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed);
                 if should_render {
                     if let Err(e) = self.render_inputs(snapshot) {
                         defmt::error!("ui: update input state failed err={=?}", e);
                         self.needs_redraw = true;
                     } else {
                         self.needs_redraw = false;
+                        if self.ui_variant == DASHBOARD_VARIANT && self.dashboard_status_dirty {
+                            self.dashboard_status_dirty = false;
+                            self.next_dashboard_status_redraw_deadline =
+                                now + DASHBOARD_STATUS_REDRAW_INTERVAL;
+                        }
+                        if dashboard_ambient_frame_due {
+                            self.next_dashboard_ambient_frame_deadline =
+                                now + DASHBOARD_AMBIENT_ANIMATION_FRAME_INTERVAL;
+                        }
                     }
                 }
                 self.last_inputs = Some(snapshot);
@@ -1412,18 +1639,19 @@ where
         let bits = input[0];
 
         // Front-panel buttons are externally pulled up and shorted to GND when pressed.
-        // On current board wiring, P0/P3 are swapped against silk-screen UP/DOWN labels.
+        // Current board wiring swaps both vertical and horizontal pairs against silk-screen labels.
         let up = (bits & (1 << 3)) == 0;
-        let left = (bits & (1 << 1)) == 0;
-        let right = (bits & (1 << 2)) == 0;
+        let left = (bits & (1 << 2)) == 0;
+        let right = (bits & (1 << 1)) == 0;
         let down = (bits & (1 << 0)) == 0;
 
         let center = self.btn_center.is_low();
         let touch_irq_active = self.ctp_irq.is_low();
-        let touch_point = self.read_touch_point();
+        let touch_sample = self.read_touch_sample();
+        let touch_point = touch_sample.point;
         let touch = touch_point.is_some();
 
-        if touch_irq_active && touch_point.is_none() {
+        if touch_irq_active && touch_point.is_none() && touch_sample.gesture_raw == 0 {
             if !self.touch_irq_stuck_hint_logged {
                 defmt::warn!(
                     "ui: ctp_irq active without coordinates; ignore irq-only touch to avoid stuck edge"
@@ -1445,27 +1673,38 @@ where
             center,
             touch,
             touch_point,
+            touch_gesture_raw: touch_sample.gesture_raw,
         })
     }
 
-    fn read_touch_point(&mut self) -> Option<(u16, u16)> {
+    fn read_touch_sample(&mut self) -> TouchSample {
         let mut buf = [0u8; CST816D_TOUCH_REG_LEN];
         if self
             .i2c
             .write_read(CST816D_ADDR, &[CST816D_REG_GESTURE], &mut buf)
             .is_err()
         {
-            return None;
+            return TouchSample {
+                gesture_raw: 0,
+                point: None,
+            };
         }
 
+        let gesture_raw = buf[0];
         let finger_count = buf[1] & 0x0f;
         if finger_count == 0 {
-            return None;
+            return TouchSample {
+                gesture_raw,
+                point: None,
+            };
         }
 
         let x_raw = (((buf[2] & 0x0f) as u16) << 8) | buf[3] as u16;
         let y_raw = (((buf[4] & 0x0f) as u16) << 8) | buf[5] as u16;
-        Self::map_touch_to_ui(x_raw, y_raw)
+        TouchSample {
+            gesture_raw,
+            point: Self::map_touch_to_ui(x_raw, y_raw),
+        }
     }
 
     fn map_touch_to_ui(x_raw: u16, y_raw: u16) -> Option<(u16, u16)> {
@@ -1658,8 +1897,153 @@ where
 
     fn process_dashboard_button_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
         let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        let up_edge = snapshot.up && !prev.up;
+        let down_edge = snapshot.down && !prev.down;
         let left_edge = snapshot.left && !prev.left;
+        let right_edge = snapshot.right && !prev.right;
         let center_edge = snapshot.center && !prev.center;
+
+        if up_edge || down_edge || left_edge || right_edge || center_edge {
+            defmt::info!(
+                "ui: dashboard key page={} route={} left={} right={} up={} down={} center={}",
+                dashboard_page_name(self.dashboard_page),
+                dashboard_route_name(self.dashboard_route),
+                left_edge,
+                right_edge,
+                up_edge,
+                down_edge,
+                center_edge
+            );
+            esp_println::println!(
+                "ui: dashboard key page={} route={} left={} right={} up={} down={} center={}",
+                dashboard_page_name(self.dashboard_page),
+                dashboard_route_name(self.dashboard_route),
+                left_edge,
+                right_edge,
+                up_edge,
+                down_edge,
+                center_edge
+            );
+        }
+
+        match self.dashboard_page {
+            DashboardPrimaryPage::Menu => {
+                if up_edge {
+                    self.set_dashboard_page(DashboardPrimaryPage::DashboardHome);
+                } else if left_edge {
+                    self.set_dashboard_menu_selected(self.dashboard_menu_selected.previous());
+                } else if right_edge {
+                    self.set_dashboard_menu_selected(self.dashboard_menu_selected.next());
+                } else if center_edge {
+                    match self.dashboard_menu_selected {
+                        MenuItem::Dashboard => {
+                            self.set_dashboard_page(DashboardPrimaryPage::DashboardHome);
+                        }
+                        MenuItem::Beeper => {
+                            self.set_dashboard_page(DashboardPrimaryPage::BeeperSettings);
+                        }
+                    }
+                }
+                return None;
+            }
+            DashboardPrimaryPage::BeeperSettings => {
+                if center_edge {
+                    self.set_dashboard_page(DashboardPrimaryPage::Menu);
+                    return None;
+                }
+
+                let mut next_prefs = self.beeper_prefs;
+                let mut preview_target = None;
+                if up_edge {
+                    next_prefs = next_prefs.with_selected_target(BeeperSettingTarget::Action);
+                } else if down_edge {
+                    next_prefs = next_prefs.with_selected_target(BeeperSettingTarget::System);
+                } else if left_edge {
+                    let level = next_prefs.selected_volume().decrease();
+                    preview_target = Some(next_prefs.selected_target);
+                    next_prefs = next_prefs.with_selected_volume(level);
+                } else if right_edge {
+                    let level = next_prefs.selected_volume().increase();
+                    preview_target = Some(next_prefs.selected_target);
+                    next_prefs = next_prefs.with_selected_volume(level);
+                }
+
+                let prefs_changed = next_prefs != self.beeper_prefs;
+                if prefs_changed {
+                    let previous = self.beeper_prefs;
+                    self.beeper_prefs = next_prefs;
+                    self.needs_redraw = true;
+                    defmt::info!(
+                        "ui: beeper prefs action {}->{} system {}->{} selected {}->{}",
+                        previous.action_volume.badge_label(),
+                        next_prefs.action_volume.badge_label(),
+                        previous.system_volume.badge_label(),
+                        next_prefs.system_volume.badge_label(),
+                        beeper_target_name(previous.selected_target),
+                        beeper_target_name(next_prefs.selected_target)
+                    );
+                    esp_println::println!(
+                        "ui: beeper prefs action {}->{} system {}->{} selected {}->{}",
+                        previous.action_volume.badge_label(),
+                        next_prefs.action_volume.badge_label(),
+                        previous.system_volume.badge_label(),
+                        next_prefs.system_volume.badge_label(),
+                        beeper_target_name(previous.selected_target),
+                        beeper_target_name(next_prefs.selected_target)
+                    );
+                }
+
+                if let Some(target) = preview_target {
+                    defmt::info!(
+                        "ui: beeper preview target={} action={} system={}",
+                        beeper_target_name(target),
+                        self.beeper_prefs.action_volume.badge_label(),
+                        self.beeper_prefs.system_volume.badge_label()
+                    );
+                    esp_println::println!(
+                        "ui: beeper preview target={} action={} system={}",
+                        beeper_target_name(target),
+                        self.beeper_prefs.action_volume.badge_label(),
+                        self.beeper_prefs.system_volume.badge_label()
+                    );
+                    return Some(UiAction::BeeperPreview {
+                        prefs: self.beeper_prefs,
+                        target,
+                    });
+                }
+                if prefs_changed {
+                    return Some(UiAction::BeeperPrefsChanged {
+                        prefs: self.beeper_prefs,
+                    });
+                }
+                return None;
+            }
+            DashboardPrimaryPage::DashboardHome => {}
+        }
+
+        if self.dashboard_route == DashboardRoute::Home {
+            if up_edge {
+                self.set_dashboard_home_focus(self.dashboard_home_focus.up());
+            } else if left_edge {
+                self.set_dashboard_home_focus(self.dashboard_home_focus.left());
+            } else if right_edge {
+                self.set_dashboard_home_focus(self.dashboard_home_focus.right());
+            } else if down_edge {
+                let next_focus = self.dashboard_home_focus.down();
+                if next_focus != self.dashboard_home_focus {
+                    self.set_dashboard_home_focus(next_focus);
+                } else {
+                    self.set_dashboard_page(DashboardPrimaryPage::Menu);
+                }
+            } else if center_edge {
+                self.set_dashboard_route(
+                    front_panel_scene::dashboard_route_for_home_focus(self.dashboard_home_focus),
+                    "key",
+                );
+            }
+            return None;
+        }
+
         if left_edge || center_edge {
             let next_route = match self.dashboard_route {
                 DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::BmsDetail) => Some(
@@ -1672,26 +2056,97 @@ where
                 DashboardRoute::Home => None,
             };
             if let Some(next_route) = next_route {
-                let previous = self.dashboard_route;
-                self.dashboard_route = next_route;
-                self.needs_redraw = true;
-                defmt::info!(
-                    "ui: dashboard route old={} new={}",
-                    dashboard_route_name(previous),
-                    dashboard_route_name(self.dashboard_route)
-                );
-                esp_println::println!(
-                    "ui: dashboard route old={} new={} source=key",
-                    dashboard_route_name(previous),
-                    dashboard_route_name(self.dashboard_route)
-                );
+                self.set_dashboard_route(next_route, "key");
             }
         }
+
+        None
+    }
+
+    fn process_dashboard_gesture_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
+        let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        if !snapshot.touch {
+            self.dashboard_touch_gesture_consumed = false;
+        }
+
+        let raw_gesture_direction = if snapshot.touch_gesture_raw != 0
+            && snapshot.touch_gesture_raw != prev.touch_gesture_raw
+        {
+            cst816d_vertical_gesture_direction(snapshot.touch_gesture_raw)
+        } else {
+            None
+        };
+        let drag_delta = if !self.dashboard_touch_gesture_consumed && snapshot.touch && prev.touch {
+            match (prev.touch_point, snapshot.touch_point) {
+                (Some((_, prev_y)), Some((_, y))) => {
+                    let dy = y as i16 - prev_y as i16;
+                    if dy.unsigned_abs() >= DASHBOARD_MENU_DRAG_THRESHOLD_PX as u16 {
+                        Some(dy)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        let drag_gesture_direction = drag_delta.map(|dy| {
+            if dy < 0 {
+                VerticalGestureDirection::Up
+            } else {
+                VerticalGestureDirection::Down
+            }
+        });
+        let Some(gesture_direction) = drag_gesture_direction.or(raw_gesture_direction) else {
+            return None;
+        };
+        if drag_delta.is_some() {
+            self.dashboard_touch_gesture_consumed = true;
+        }
+
+        let Some(next_page) =
+            dashboard_page_for_vertical_menu_gesture(self.dashboard_page, gesture_direction)
+        else {
+            return None;
+        };
+        let previous_page = self.dashboard_page;
+        self.set_dashboard_page(next_page);
+        defmt::info!(
+            "ui: dashboard menu gesture page={} new={} direction={} raw=0x{=u8:02x} drag_dy={=i16}",
+            dashboard_page_name(previous_page),
+            dashboard_page_name(next_page),
+            vertical_gesture_direction_name(gesture_direction),
+            snapshot.touch_gesture_raw,
+            drag_delta.unwrap_or(0)
+        );
+        esp_println::println!(
+            "ui: dashboard menu gesture page={} new={} direction={} raw=0x{:02x} drag_dy={}",
+            dashboard_page_name(previous_page),
+            dashboard_page_name(next_page),
+            vertical_gesture_direction_name(gesture_direction),
+            snapshot.touch_gesture_raw,
+            drag_delta.unwrap_or(0)
+        );
         None
     }
 
     fn process_dashboard_touch_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
         let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        if self.dashboard_page == DashboardPrimaryPage::BeeperSettings {
+            if !snapshot.touch {
+                return None;
+            }
+            let (x, y) = snapshot.touch_point?;
+            let touch_edge = !prev.touch;
+            let touch_moved = prev.touch && prev.touch_point != snapshot.touch_point;
+            if !touch_edge && !touch_moved {
+                return None;
+            }
+            return self.process_beeper_settings_touch_action(x, y, touch_edge);
+        }
+
         if !snapshot.touch || prev.touch {
             return None;
         }
@@ -1700,6 +2155,13 @@ where
             Some(point) => point,
             None => return None,
         };
+
+        if self.dashboard_page == DashboardPrimaryPage::Menu {
+            return self.process_dashboard_menu_touch_action(x, y);
+        }
+        if self.dashboard_page != DashboardPrimaryPage::DashboardHome {
+            return None;
+        }
 
         esp_println::println!(
             "ui: touch edge page=dashboard route={} x={} y={}",
@@ -1718,19 +2180,16 @@ where
             };
             let next_route = front_panel_scene::dashboard_route_for_target(resolved_target);
             if next_route != self.dashboard_route {
-                let previous = self.dashboard_route;
-                self.dashboard_route = next_route;
-                self.needs_redraw = true;
+                if let Some(focus) = dashboard_home_focus_for_touch_target(resolved_target) {
+                    self.set_dashboard_home_focus(focus);
+                }
+                self.set_dashboard_route(next_route, "touch");
                 defmt::info!(
-                    "ui: dashboard route old={} new={} target={}",
-                    dashboard_route_name(previous),
-                    dashboard_route_name(self.dashboard_route),
+                    "ui: dashboard touch target={}",
                     dashboard_touch_target_name(resolved_target)
                 );
                 esp_println::println!(
-                    "ui: dashboard route old={} new={} target={} source=touch",
-                    dashboard_route_name(previous),
-                    dashboard_route_name(self.dashboard_route),
+                    "ui: dashboard touch target={} source=touch",
                     dashboard_touch_target_name(resolved_target)
                 );
             } else {
@@ -1770,10 +2229,169 @@ where
         None
     }
 
+    fn process_beeper_settings_touch_action(
+        &mut self,
+        x: u16,
+        y: u16,
+        touch_edge: bool,
+    ) -> Option<UiAction> {
+        esp_println::println!(
+            "ui: touch {} page=audio selected={} x={} y={}",
+            if touch_edge { "edge" } else { "drag" },
+            beeper_target_name(self.beeper_prefs.selected_target),
+            x,
+            y
+        );
+
+        let Some(target) = front_panel_scene::beeper_settings_hit_test(x, y) else {
+            esp_println::println!(
+                "ui: touch target=none page=audio selected={} x={} y={}",
+                beeper_target_name(self.beeper_prefs.selected_target),
+                x,
+                y
+            );
+            return None;
+        };
+
+        let mut next_prefs = self.beeper_prefs;
+        let mut preview_target = None;
+        match target {
+            BeeperSettingsTouchTarget::Back => {
+                if touch_edge {
+                    self.set_dashboard_page(DashboardPrimaryPage::Menu);
+                    defmt::info!("ui: beeper touch target=back");
+                    esp_println::println!("ui: beeper touch target=back");
+                }
+                return None;
+            }
+            BeeperSettingsTouchTarget::Target(target) => {
+                next_prefs = next_prefs.with_selected_target(target);
+            }
+            BeeperSettingsTouchTarget::Volume { target, level } => {
+                next_prefs = next_prefs
+                    .with_selected_target(target)
+                    .with_volume(target, level);
+                if touch_edge || next_prefs != self.beeper_prefs {
+                    preview_target = Some(target);
+                }
+            }
+        }
+
+        let prefs_changed = next_prefs != self.beeper_prefs;
+        if prefs_changed {
+            let previous = self.beeper_prefs;
+            self.beeper_prefs = next_prefs;
+            self.needs_redraw = true;
+            defmt::info!(
+                "ui: beeper prefs action {}->{} system {}->{} selected {}->{}",
+                previous.action_volume.badge_label(),
+                next_prefs.action_volume.badge_label(),
+                previous.system_volume.badge_label(),
+                next_prefs.system_volume.badge_label(),
+                beeper_target_name(previous.selected_target),
+                beeper_target_name(next_prefs.selected_target)
+            );
+            esp_println::println!(
+                "ui: beeper prefs action {}->{} system {}->{} selected {}->{}",
+                previous.action_volume.badge_label(),
+                next_prefs.action_volume.badge_label(),
+                previous.system_volume.badge_label(),
+                next_prefs.system_volume.badge_label(),
+                beeper_target_name(previous.selected_target),
+                beeper_target_name(next_prefs.selected_target)
+            );
+        }
+
+        defmt::info!(
+            "ui: beeper touch target={}",
+            beeper_settings_touch_target_name(target)
+        );
+        esp_println::println!(
+            "ui: beeper touch target={} selected={}",
+            beeper_settings_touch_target_name(target),
+            beeper_target_name(self.beeper_prefs.selected_target)
+        );
+
+        if let Some(target) = preview_target {
+            defmt::info!(
+                "ui: beeper preview target={} action={} system={}",
+                beeper_target_name(target),
+                self.beeper_prefs.action_volume.badge_label(),
+                self.beeper_prefs.system_volume.badge_label()
+            );
+            esp_println::println!(
+                "ui: beeper preview target={} action={} system={}",
+                beeper_target_name(target),
+                self.beeper_prefs.action_volume.badge_label(),
+                self.beeper_prefs.system_volume.badge_label()
+            );
+            return Some(UiAction::BeeperPreview {
+                prefs: self.beeper_prefs,
+                target,
+            });
+        }
+        if prefs_changed {
+            return Some(UiAction::BeeperPrefsChanged {
+                prefs: self.beeper_prefs,
+            });
+        }
+        None
+    }
+
+    fn process_dashboard_menu_touch_action(&mut self, x: u16, y: u16) -> Option<UiAction> {
+        if self.dashboard_menu_animation.is_some() {
+            return None;
+        }
+
+        esp_println::println!(
+            "ui: touch edge page=menu selected={} x={} y={}",
+            menu_item_name(self.dashboard_menu_selected),
+            x,
+            y
+        );
+
+        let Some(target) =
+            front_panel_scene::dashboard_menu_hit_test(self.dashboard_menu_selected, x, y)
+        else {
+            esp_println::println!(
+                "ui: touch target=none page=menu selected={} x={} y={}",
+                menu_item_name(self.dashboard_menu_selected),
+                x,
+                y
+            );
+            return None;
+        };
+
+        match target {
+            DashboardMenuTouchTarget::Previous => {
+                self.set_dashboard_menu_selected(self.dashboard_menu_selected.previous());
+            }
+            DashboardMenuTouchTarget::Next => {
+                self.set_dashboard_menu_selected(self.dashboard_menu_selected.next());
+            }
+            DashboardMenuTouchTarget::Dashboard => {
+                self.set_dashboard_menu_selected(MenuItem::Dashboard);
+                self.set_dashboard_page(DashboardPrimaryPage::DashboardHome);
+            }
+            DashboardMenuTouchTarget::Beeper => {
+                self.set_dashboard_menu_selected(MenuItem::Beeper);
+                self.set_dashboard_page(DashboardPrimaryPage::BeeperSettings);
+            }
+        }
+
+        defmt::info!("ui: menu touch target={}", menu_touch_target_name(target));
+        esp_println::println!(
+            "ui: menu touch target={} selected={}",
+            menu_touch_target_name(target),
+            menu_item_name(self.dashboard_menu_selected)
+        );
+        None
+    }
+
     fn snapshot_to_model(&self, _snapshot: InputSnapshot) -> UiModel {
         UiModel {
             mode: self.self_check_snapshot.mode,
-            // Runtime pages are data-driven; keys only serve self-check actions.
+            // Runtime pages remain data-driven, but D-pad focus/menu state is tracked separately.
             focus: UiFocus::Idle,
             touch_irq: false,
             frame_no: self.frame_no,
@@ -1804,18 +2422,29 @@ where
     fn render_inputs(&mut self, snapshot: InputSnapshot) -> Result<(), esp_hal::spi::Error> {
         let model = self.snapshot_to_model(snapshot);
         let variant = self.ui_variant;
+        let dashboard_shell = self.dashboard_shell_state();
         let dashboard_route = self.dashboard_route;
         let self_check_snapshot = self.self_check_snapshot;
         let self_check_overlay = self.self_check_overlay;
         self.render_scene(|painter| {
-            front_panel_scene::render_frame_with_dashboard_route_overlay(
-                painter,
-                &model,
-                variant,
-                dashboard_route,
-                Some(&self_check_snapshot),
-                self_check_overlay,
-            )
+            if variant == DASHBOARD_VARIANT {
+                front_panel_scene::render_dashboard_shell(
+                    painter,
+                    &model,
+                    variant,
+                    dashboard_shell,
+                    Some(&self_check_snapshot),
+                )
+            } else {
+                front_panel_scene::render_frame_with_dashboard_route_overlay(
+                    painter,
+                    &model,
+                    variant,
+                    dashboard_route,
+                    Some(&self_check_snapshot),
+                    self_check_overlay,
+                )
+            }
         })
     }
 }
@@ -1842,6 +2471,108 @@ fn dashboard_route_name(route: DashboardRoute) -> &'static str {
         DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Thermal) => "detail_thermal",
         DashboardRoute::Detail(front_panel_scene::DashboardDetailPage::Wifi) => "detail_wifi",
         DashboardRoute::ManualCharge => "manual_charge",
+    }
+}
+
+fn dashboard_page_name(page: DashboardPrimaryPage) -> &'static str {
+    match page {
+        DashboardPrimaryPage::DashboardHome => "dashboard_home",
+        DashboardPrimaryPage::Menu => "menu",
+        DashboardPrimaryPage::BeeperSettings => "audio",
+    }
+}
+
+fn dashboard_menu_target_offset_y(page: DashboardPrimaryPage) -> i16 {
+    match page {
+        DashboardPrimaryPage::DashboardHome => 0,
+        DashboardPrimaryPage::Menu | DashboardPrimaryPage::BeeperSettings => {
+            front_panel_scene::UI_H as i16
+        }
+    }
+}
+
+fn dashboard_page_transition_is_animated(
+    from: DashboardPrimaryPage,
+    to: DashboardPrimaryPage,
+) -> bool {
+    matches!(
+        (from, to),
+        (
+            DashboardPrimaryPage::DashboardHome,
+            DashboardPrimaryPage::Menu
+        ) | (
+            DashboardPrimaryPage::Menu,
+            DashboardPrimaryPage::DashboardHome
+        )
+    )
+}
+
+fn vertical_gesture_direction_name(direction: VerticalGestureDirection) -> &'static str {
+    match direction {
+        VerticalGestureDirection::Up => "up",
+        VerticalGestureDirection::Down => "down",
+    }
+}
+
+fn dashboard_home_focus_name(focus: DashboardHomeFocus) -> &'static str {
+    match focus {
+        DashboardHomeFocus::Output => "output",
+        DashboardHomeFocus::Thermal => "thermal",
+        DashboardHomeFocus::Cells => "cells",
+        DashboardHomeFocus::Charger => "charger",
+        DashboardHomeFocus::BatteryFlow => "battery_flow",
+    }
+}
+
+fn menu_item_name(item: MenuItem) -> &'static str {
+    match item {
+        MenuItem::Dashboard => "dashboard",
+        MenuItem::Beeper => "audio",
+    }
+}
+
+fn menu_touch_target_name(target: DashboardMenuTouchTarget) -> &'static str {
+    match target {
+        DashboardMenuTouchTarget::Previous => "previous",
+        DashboardMenuTouchTarget::Next => "next",
+        DashboardMenuTouchTarget::Dashboard => "dashboard",
+        DashboardMenuTouchTarget::Beeper => "audio",
+    }
+}
+
+fn beeper_settings_touch_target_name(target: BeeperSettingsTouchTarget) -> &'static str {
+    match target {
+        BeeperSettingsTouchTarget::Back => "back",
+        BeeperSettingsTouchTarget::Target(BeeperSettingTarget::Action) => "target_action",
+        BeeperSettingsTouchTarget::Target(BeeperSettingTarget::System) => "target_system",
+        BeeperSettingsTouchTarget::Volume {
+            target: BeeperSettingTarget::Action,
+            ..
+        } => "volume_action",
+        BeeperSettingsTouchTarget::Volume {
+            target: BeeperSettingTarget::System,
+            ..
+        } => "volume_system",
+    }
+}
+
+fn beeper_target_name(target: BeeperSettingTarget) -> &'static str {
+    match target {
+        BeeperSettingTarget::Action => "action",
+        BeeperSettingTarget::System => "system",
+    }
+}
+
+fn dashboard_home_focus_for_touch_target(
+    target: DashboardTouchTarget,
+) -> Option<DashboardHomeFocus> {
+    match target {
+        DashboardTouchTarget::HomeOutput => Some(DashboardHomeFocus::Output),
+        DashboardTouchTarget::HomeThermal => Some(DashboardHomeFocus::Thermal),
+        DashboardTouchTarget::HomeCells => Some(DashboardHomeFocus::Cells),
+        DashboardTouchTarget::HomeCharger => Some(DashboardHomeFocus::Charger),
+        DashboardTouchTarget::HomeBatteryFlow => Some(DashboardHomeFocus::BatteryFlow),
+        _ => None,
     }
 }
 

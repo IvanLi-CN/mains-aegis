@@ -110,6 +110,44 @@ impl IpcConfig {
     }
 }
 
+pub fn validate_native_ipc_endpoint(endpoint: &str) -> anyhow::Result<()> {
+    if native_ipc_endpoint_rejection(endpoint).is_some() {
+        anyhow::bail!(
+            "IPC endpoint must be a native IPC endpoint, not an HTTP/TCP address: {endpoint}"
+        );
+    }
+    Ok(())
+}
+
+fn native_ipc_endpoint_rejection(endpoint: &str) -> Option<&'static str> {
+    let trimmed = endpoint.trim();
+    if trimmed.is_empty() {
+        return Some("empty");
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.contains("://") {
+        return Some("url");
+    }
+    if lower.starts_with("localhost:")
+        || lower.starts_with("127.0.0.1:")
+        || lower.starts_with("[::1]:")
+        || looks_like_bare_host_port(trimmed)
+    {
+        return Some("tcp");
+    }
+    None
+}
+
+fn looks_like_bare_host_port(endpoint: &str) -> bool {
+    if endpoint.contains('/') || endpoint.contains('\\') {
+        return false;
+    }
+    let Some((host, port)) = endpoint.rsplit_once(':') else {
+        return false;
+    };
+    !host.is_empty() && !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IpcRequest {
     pub id: String,
@@ -1060,6 +1098,7 @@ fn query_hex_value(byte: u8) -> Option<u8> {
 }
 
 pub async fn serve_ipc(config: IpcConfig) -> anyhow::Result<()> {
+    validate_native_ipc_endpoint(&config.endpoint)?;
     let runtime = IpcRuntime::new(create_app_state(config.allow_host_power_actions));
     serve_ipc_with_runtime(config, runtime).await
 }
@@ -1626,6 +1665,7 @@ fn require_param(params: &Value, key: &str) -> anyhow::Result<String> {
 }
 
 pub async fn ipc_call(endpoint: &str, method: &str, params: Value) -> anyhow::Result<Value> {
+    validate_native_ipc_endpoint(endpoint)?;
     let request = IpcRequest {
         id: next_id(),
         method: method.to_string(),
@@ -7135,6 +7175,38 @@ mod tests {
         assert!(!is_local_dev_cors_origin(&HeaderValue::from_static(
             "http://192.168.31.10:49480"
         )));
+    }
+
+    #[test]
+    fn ipc_endpoint_rejects_http_tcp_forms() {
+        for endpoint in [
+            "http://127.0.0.1:30080",
+            "https://localhost:30080",
+            "tcp://127.0.0.1:30080",
+            "localhost:30080",
+            "127.0.0.1:30080",
+            "[::1]:30080",
+            "mains-aegis.local:30080",
+        ] {
+            assert!(
+                validate_native_ipc_endpoint(endpoint).is_err(),
+                "{endpoint} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn ipc_endpoint_accepts_native_forms() {
+        for endpoint in [
+            "/tmp/mains-aegis/devd.sock",
+            "relative-devd.sock",
+            r"\\.\pipe\mains-aegis-devd",
+        ] {
+            assert!(
+                validate_native_ipc_endpoint(endpoint).is_ok(),
+                "{endpoint} should be accepted"
+            );
+        }
     }
 
     #[tokio::test]

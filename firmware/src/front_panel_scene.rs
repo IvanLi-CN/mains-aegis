@@ -342,6 +342,343 @@ pub enum DashboardRoute {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardHomeFocus {
+    Output,
+    Thermal,
+    Cells,
+    Charger,
+    BatteryFlow,
+}
+
+impl DashboardHomeFocus {
+    pub const ALL: [Self; 5] = [
+        Self::Output,
+        Self::Thermal,
+        Self::Cells,
+        Self::Charger,
+        Self::BatteryFlow,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Output => "OUTPUT",
+            Self::Thermal => "THERMAL",
+            Self::Cells => "BATTERY",
+            Self::Charger => "CHARGE",
+            Self::BatteryFlow => "DISCHG",
+        }
+    }
+
+    pub const fn up(self) -> Self {
+        match self {
+            Self::Output | Self::Cells => self,
+            Self::Thermal => Self::Output,
+            Self::Charger => Self::Cells,
+            Self::BatteryFlow => Self::Charger,
+        }
+    }
+
+    pub const fn down(self) -> Self {
+        match self {
+            Self::Output => Self::Thermal,
+            Self::Thermal | Self::BatteryFlow => self,
+            Self::Cells => Self::Charger,
+            Self::Charger => Self::BatteryFlow,
+        }
+    }
+
+    pub const fn left(self) -> Self {
+        match self {
+            Self::Output | Self::Thermal => self,
+            Self::Cells => Self::Output,
+            Self::Charger | Self::BatteryFlow => Self::Thermal,
+        }
+    }
+
+    pub const fn right(self) -> Self {
+        match self {
+            Self::Output => Self::Cells,
+            Self::Thermal => Self::BatteryFlow,
+            Self::Cells | Self::BatteryFlow => self,
+            Self::Charger => Self::BatteryFlow,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardPrimaryPage {
+    DashboardHome,
+    Menu,
+    BeeperSettings,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuItem {
+    Dashboard,
+    Beeper,
+}
+
+impl MenuItem {
+    pub const ALL: [Self; 2] = [Self::Dashboard, Self::Beeper];
+
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Dashboard => 0,
+            Self::Beeper => 1,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Dashboard => "DASHBOARD",
+            Self::Beeper => "AUDIO",
+        }
+    }
+
+    pub const fn previous(self) -> Self {
+        match self {
+            Self::Dashboard => Self::Beeper,
+            Self::Beeper => Self::Dashboard,
+        }
+    }
+
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Dashboard => Self::Beeper,
+            Self::Beeper => Self::Dashboard,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardMenuStyle {
+    DenseBadge,
+    DockBar,
+    SplitRail,
+    SignalPlate,
+}
+
+impl DashboardMenuStyle {
+    pub const fn default_preview() -> Self {
+        Self::DenseBadge
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuRailItem {
+    Dashboard,
+    Add,
+    Audio,
+    Settings,
+    Stats,
+}
+
+impl MenuRailItem {
+    const ALL: [Self; 5] = [
+        Self::Dashboard,
+        Self::Add,
+        Self::Audio,
+        Self::Settings,
+        Self::Stats,
+    ];
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Dashboard => 0,
+            Self::Add => 1,
+            Self::Audio => 2,
+            Self::Settings => 3,
+            Self::Stats => 4,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BeeperVolumeLevel {
+    Off,
+    L1,
+    L2,
+    L3,
+    L4,
+    L5,
+    L6,
+}
+
+impl BeeperVolumeLevel {
+    pub const ALL: [Self; 7] = [
+        Self::Off,
+        Self::L1,
+        Self::L2,
+        Self::L3,
+        Self::L4,
+        Self::L5,
+        Self::L6,
+    ];
+
+    pub const fn scale_label(self) -> &'static str {
+        match self {
+            Self::Off => "0",
+            Self::L1 => "1",
+            Self::L2 => "2",
+            Self::L3 => "3",
+            Self::L4 => "4",
+            Self::L5 => "5",
+            Self::L6 => "6",
+        }
+    }
+
+    pub const fn badge_label(self) -> &'static str {
+        match self {
+            Self::Off => "OFF",
+            Self::L1 => "1",
+            Self::L2 => "2",
+            Self::L3 => "3",
+            Self::L4 => "4",
+            Self::L5 => "5",
+            Self::L6 => "6",
+        }
+    }
+
+    pub const fn step(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::L1 => 1,
+            Self::L2 => 2,
+            Self::L3 => 3,
+            Self::L4 => 4,
+            Self::L5 => 5,
+            Self::L6 => 6,
+        }
+    }
+
+    pub const fn from_step(step: u8) -> Self {
+        match step {
+            0 => Self::Off,
+            1 => Self::L1,
+            2 => Self::L2,
+            3 => Self::L3,
+            4 => Self::L4,
+            5 => Self::L5,
+            _ => Self::L6,
+        }
+    }
+
+    pub const fn decrease(self) -> Self {
+        Self::from_step(self.step().saturating_sub(1))
+    }
+
+    pub const fn increase(self) -> Self {
+        Self::from_step(self.step().saturating_add(1))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BeeperSettingTarget {
+    Action,
+    System,
+}
+
+impl BeeperSettingTarget {
+    pub const ALL: [Self; 2] = [Self::Action, Self::System];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Action => "ACTION",
+            Self::System => "SYSTEM",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BeeperPrefs {
+    pub action_volume: BeeperVolumeLevel,
+    pub system_volume: BeeperVolumeLevel,
+    pub selected_target: BeeperSettingTarget,
+}
+
+impl BeeperPrefs {
+    pub const fn defaults() -> Self {
+        Self {
+            action_volume: BeeperVolumeLevel::L4,
+            system_volume: BeeperVolumeLevel::L4,
+            selected_target: BeeperSettingTarget::Action,
+        }
+    }
+
+    pub const fn new(
+        action_volume: BeeperVolumeLevel,
+        system_volume: BeeperVolumeLevel,
+        selected_target: BeeperSettingTarget,
+    ) -> Self {
+        Self {
+            action_volume,
+            system_volume,
+            selected_target,
+        }
+    }
+
+    pub const fn volume_for(self, target: BeeperSettingTarget) -> BeeperVolumeLevel {
+        match target {
+            BeeperSettingTarget::Action => self.action_volume,
+            BeeperSettingTarget::System => self.system_volume,
+        }
+    }
+
+    pub const fn selected_volume(self) -> BeeperVolumeLevel {
+        self.volume_for(self.selected_target)
+    }
+
+    pub const fn with_selected_target(self, target: BeeperSettingTarget) -> Self {
+        Self {
+            selected_target: target,
+            ..self
+        }
+    }
+
+    pub const fn with_volume(self, target: BeeperSettingTarget, level: BeeperVolumeLevel) -> Self {
+        match target {
+            BeeperSettingTarget::Action => Self {
+                action_volume: level,
+                ..self
+            },
+            BeeperSettingTarget::System => Self {
+                system_volume: level,
+                ..self
+            },
+        }
+    }
+
+    pub const fn with_selected_volume(self, level: BeeperVolumeLevel) -> Self {
+        self.with_volume(self.selected_target, level)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DashboardShellState {
+    pub page: DashboardPrimaryPage,
+    pub dashboard_route: DashboardRoute,
+    pub home_focus: DashboardHomeFocus,
+    pub menu_selected: MenuItem,
+    pub menu_style: DashboardMenuStyle,
+    pub beeper_prefs: BeeperPrefs,
+    pub dashboard_menu_offset_y: i16,
+}
+
+impl DashboardShellState {
+    pub const fn defaults() -> Self {
+        Self {
+            page: DashboardPrimaryPage::DashboardHome,
+            dashboard_route: DashboardRoute::Home,
+            home_focus: DashboardHomeFocus::Output,
+            menu_selected: MenuItem::Dashboard,
+            menu_style: DashboardMenuStyle::default_preview(),
+            beeper_prefs: BeeperPrefs::defaults(),
+            dashboard_menu_offset_y: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DashboardTouchTarget {
     HomeWifi,
     HomeOutput,
@@ -365,6 +702,24 @@ pub enum DashboardTouchTarget {
     ManualTimer6h,
     ManualStart,
     ManualStop,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardMenuTouchTarget {
+    Previous,
+    Next,
+    Dashboard,
+    Beeper,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BeeperSettingsTouchTarget {
+    Back,
+    Target(BeeperSettingTarget),
+    Volume {
+        target: BeeperSettingTarget,
+        level: BeeperVolumeLevel,
+    },
 }
 
 #[allow(dead_code)]
@@ -855,6 +1210,52 @@ const DASHBOARD_HOME_BATTERY_FLOW_X: u16 = 206;
 const DASHBOARD_HOME_BATTERY_FLOW_Y: u16 = 122;
 const DASHBOARD_HOME_BATTERY_FLOW_W: u16 = 108;
 const DASHBOARD_HOME_BATTERY_FLOW_H: u16 = 48;
+const DASHBOARD_HOME_FOCUS_LABEL_H: u16 = 17;
+
+const DASHBOARD_MENU_STACK_H: i16 = (UI_H as i16) * 2;
+const DASHBOARD_MENU_HEADER_H: u16 = 30;
+const DASHBOARD_MENU_HEADER_CENTER_Y: u16 = DASHBOARD_MENU_HEADER_H / 2;
+const DASHBOARD_MENU_ICON_CENTER_X: i16 = (UI_W as i16) / 2;
+const DASHBOARD_MENU_ICON_Y: u16 = 46;
+const DASHBOARD_MENU_ICON_W: u16 = 52;
+const DASHBOARD_MENU_ICON_H: u16 = 52;
+const DASHBOARD_MENU_ICON_GAP: u16 = 12;
+const DASHBOARD_MENU_GLYPH_INSET: u16 = 5;
+const DASHBOARD_MENU_FOOTER_Y: u16 = 124;
+const DASHBOARD_MENU_FOOTER_H: u16 = UI_H - DASHBOARD_MENU_FOOTER_Y;
+const DASHBOARD_MENU_NAV_HINT_BOX_W: u16 = 36;
+const DASHBOARD_MENU_NAV_HINT_BOX_H: u16 = 20;
+const DASHBOARD_MENU_FOOTER_CENTER_Y: u16 = DASHBOARD_MENU_FOOTER_Y + (DASHBOARD_MENU_FOOTER_H / 2);
+const DASHBOARD_MENU_NAV_HINT_Y: u16 =
+    DASHBOARD_MENU_FOOTER_CENTER_Y - (DASHBOARD_MENU_NAV_HINT_BOX_H / 2);
+const DASHBOARD_MENU_NAV_HINT_LEFT_X: u16 = 24;
+const DASHBOARD_MENU_NAV_HINT_RIGHT_X: u16 =
+    UI_W - DASHBOARD_MENU_NAV_HINT_LEFT_X - DASHBOARD_MENU_NAV_HINT_BOX_W;
+const DASHBOARD_MENU_FOOTER_ACCENT_W: u16 = 56;
+const DASHBOARD_MENU_FOOTER_BADGE_W: u16 = 140;
+const DASHBOARD_MENU_FOOTER_BADGE_H: u16 = 24;
+
+const AUDIO_SCALE_Y: u16 = 50;
+const AUDIO_ROW_X: u16 = 12;
+const AUDIO_ROW_W: u16 = 296;
+const AUDIO_ROW_H: u16 = 28;
+const AUDIO_ACTION_ROW_Y: u16 = 66;
+const AUDIO_SYSTEM_ROW_Y: u16 = 104;
+const AUDIO_TRACK_X: u16 = 102;
+const AUDIO_TRACK_W: u16 = 146;
+const AUDIO_TRACK_H: u16 = 18;
+const AUDIO_VOLUME_TOUCH_X: u16 = 76;
+const AUDIO_VOLUME_TOUCH_W: u16 = 196;
+const AUDIO_VOLUME_TOUCH_Y_INSET: u16 = 6;
+const AUDIO_VOLUME_TOUCH_H: u16 = 40;
+const AUDIO_ROW_TOUCH_X: u16 = 6;
+const AUDIO_ROW_TOUCH_W: u16 = 308;
+const AUDIO_ROW_TOUCH_Y_INSET: u16 = 4;
+const AUDIO_ROW_TOUCH_H: u16 = 36;
+const AUDIO_NODE_SIZE: u16 = 8;
+const AUDIO_BADGE_X: u16 = 260;
+const AUDIO_BADGE_W: u16 = 36;
+const AUDIO_BADGE_H: u16 = 20;
 
 const DASHBOARD_DETAIL_BACK_X: u16 = 8;
 const DASHBOARD_DETAIL_BACK_Y: u16 = 2;
@@ -1122,6 +1523,10 @@ pub fn self_check_tps_b_summary_name(snapshot: &SelfCheckUiSnapshot) -> &'static
 }
 
 pub fn self_check_can_enter_dashboard(snapshot: &SelfCheckUiSnapshot) -> bool {
+    self_check_dashboard_block_reason(snapshot).is_none()
+}
+
+pub fn self_check_dashboard_block_reason(snapshot: &SelfCheckUiSnapshot) -> Option<&'static str> {
     fn state_ok(state: SelfCheckCommState) -> bool {
         matches!(
             state,
@@ -1129,30 +1534,68 @@ pub fn self_check_can_enter_dashboard(snapshot: &SelfCheckUiSnapshot) -> bool {
         )
     }
 
-    let bms_clear = snapshot.bq40z50 == SelfCheckCommState::Ok
-        && snapshot.bq40z50_no_battery != Some(true)
-        && snapshot.bq40z50_discharge_ready != Some(false)
-        && !snapshot.bq40z50_recovery_pending;
-    let out_a_clear = !outputs_include(snapshot, OutputSelector::OutA)
-        || (state_ok(snapshot.tps_a)
-            && !output_hold_for(snapshot, OutputSelector::OutA)
-            && active_outputs_include(snapshot, OutputSelector::OutA));
-    let out_b_clear = !outputs_include(snapshot, OutputSelector::OutB)
-        || (state_ok(snapshot.tps_b)
-            && !output_hold_for(snapshot, OutputSelector::OutB)
-            && active_outputs_include(snapshot, OutputSelector::OutB));
+    if !state_ok(snapshot.gc9307) {
+        return Some("gc9307");
+    }
+    if !state_ok(snapshot.tca6408a) {
+        return Some("tca6408a");
+    }
+    if !state_ok(snapshot.fusb302) {
+        return Some("fusb302");
+    }
+    if !state_ok(snapshot.ina3221) {
+        return Some("ina3221");
+    }
+    if !state_ok(snapshot.bq25792) {
+        return Some("bq25792");
+    }
+    if !bq40_dashboard_clear(snapshot) {
+        return Some("bq40z50");
+    }
+    if snapshot.output_gate_reason != OutputGateReason::None {
+        return Some(snapshot.output_gate_reason.as_str());
+    }
+    if outputs_include(snapshot, OutputSelector::OutA)
+        && (!state_ok(snapshot.tps_a)
+            || output_hold_for(snapshot, OutputSelector::OutA)
+            || !active_outputs_include(snapshot, OutputSelector::OutA))
+    {
+        return Some("out_a");
+    }
+    if outputs_include(snapshot, OutputSelector::OutB)
+        && (!state_ok(snapshot.tps_b)
+            || output_hold_for(snapshot, OutputSelector::OutB)
+            || !active_outputs_include(snapshot, OutputSelector::OutB))
+    {
+        return Some("out_b");
+    }
+    if !state_ok(snapshot.tmp_a) {
+        return Some("tmp_a");
+    }
+    if !state_ok(snapshot.tmp_b) {
+        return Some("tmp_b");
+    }
+    None
+}
 
-    state_ok(snapshot.gc9307)
-        && state_ok(snapshot.tca6408a)
-        && state_ok(snapshot.fusb302)
-        && state_ok(snapshot.ina3221)
-        && state_ok(snapshot.bq25792)
-        && bms_clear
-        && snapshot.output_gate_reason == OutputGateReason::None
-        && out_a_clear
-        && out_b_clear
-        && state_ok(snapshot.tmp_a)
-        && state_ok(snapshot.tmp_b)
+fn bq40_dashboard_clear(snapshot: &SelfCheckUiSnapshot) -> bool {
+    if snapshot.bq40z50_no_battery == Some(true)
+        || snapshot.bq40z50_discharge_ready == Some(false)
+        || snapshot.bq40z50_recovery_pending
+    {
+        return false;
+    }
+
+    match snapshot.bq40z50 {
+        SelfCheckCommState::Ok => true,
+        SelfCheckCommState::Warn => matches!(
+            snapshot.bq40z50_issue_detail,
+            Some("xchg_blocked" | "chg_fet_off")
+        ),
+        SelfCheckCommState::Pending
+        | SelfCheckCommState::Err
+        | SelfCheckCommState::NotAvailable => false,
+    }
 }
 
 #[allow(dead_code)]
@@ -1521,6 +1964,106 @@ pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<Dashb
 }
 
 #[allow(dead_code)]
+pub fn dashboard_menu_hit_test(
+    selected: MenuItem,
+    x: u16,
+    y: u16,
+) -> Option<DashboardMenuTouchTarget> {
+    if contains(
+        x,
+        y,
+        DASHBOARD_MENU_NAV_HINT_LEFT_X,
+        DASHBOARD_MENU_NAV_HINT_Y,
+        DASHBOARD_MENU_NAV_HINT_BOX_W,
+        DASHBOARD_MENU_NAV_HINT_BOX_H,
+    ) {
+        return Some(DashboardMenuTouchTarget::Previous);
+    }
+    if contains(
+        x,
+        y,
+        DASHBOARD_MENU_NAV_HINT_RIGHT_X,
+        DASHBOARD_MENU_NAV_HINT_Y,
+        DASHBOARD_MENU_NAV_HINT_BOX_W,
+        DASHBOARD_MENU_NAV_HINT_BOX_H,
+    ) {
+        return Some(DashboardMenuTouchTarget::Next);
+    }
+
+    let rail_origin_x = dashboard_menu_rail_origin_x(selected);
+    let step: i16 = (DASHBOARD_MENU_ICON_W + DASHBOARD_MENU_ICON_GAP) as i16;
+    let icon_y = DASHBOARD_MENU_ICON_Y + 4;
+    for item in MenuRailItem::ALL {
+        let icon_x = rail_origin_x + (item.index() as i16 * step);
+        if icon_x < 0 || icon_x + DASHBOARD_MENU_ICON_W as i16 > UI_W as i16 {
+            continue;
+        }
+        if !contains(
+            x,
+            y,
+            icon_x as u16,
+            icon_y,
+            DASHBOARD_MENU_ICON_W,
+            DASHBOARD_MENU_ICON_H,
+        ) {
+            continue;
+        }
+
+        return match menu_item_for_rail_item(item) {
+            Some(MenuItem::Dashboard) => Some(DashboardMenuTouchTarget::Dashboard),
+            Some(MenuItem::Beeper) => Some(DashboardMenuTouchTarget::Beeper),
+            None => None,
+        };
+    }
+
+    None
+}
+
+#[allow(dead_code)]
+pub fn beeper_settings_hit_test(x: u16, y: u16) -> Option<BeeperSettingsTouchTarget> {
+    if contains(
+        x,
+        y,
+        DASHBOARD_DETAIL_BACK_HIT_X,
+        DASHBOARD_DETAIL_BACK_HIT_Y,
+        DASHBOARD_DETAIL_BACK_HIT_W,
+        DASHBOARD_DETAIL_BACK_HIT_H,
+    ) {
+        return Some(BeeperSettingsTouchTarget::Back);
+    }
+
+    for target in BeeperSettingTarget::ALL {
+        let row_y = beeper_setting_row_y(target);
+        if contains(
+            x,
+            y,
+            AUDIO_VOLUME_TOUCH_X,
+            audio_volume_touch_y(row_y),
+            AUDIO_VOLUME_TOUCH_W,
+            AUDIO_VOLUME_TOUCH_H,
+        ) {
+            return Some(BeeperSettingsTouchTarget::Volume {
+                target,
+                level: beeper_volume_level_for_x(x),
+            });
+        }
+
+        if contains(
+            x,
+            y,
+            AUDIO_ROW_TOUCH_X,
+            audio_row_touch_y(row_y),
+            AUDIO_ROW_TOUCH_W,
+            AUDIO_ROW_TOUCH_H,
+        ) {
+            return Some(BeeperSettingsTouchTarget::Target(target));
+        }
+    }
+
+    None
+}
+
+#[allow(dead_code)]
 pub const fn dashboard_route_for_target(target: DashboardTouchTarget) -> DashboardRoute {
     match target {
         DashboardTouchTarget::HomeWifi => DashboardRoute::Detail(DashboardDetailPage::Wifi),
@@ -1551,6 +2094,17 @@ pub const fn dashboard_route_for_target(target: DashboardTouchTarget) -> Dashboa
         | DashboardTouchTarget::ManualTimer6h
         | DashboardTouchTarget::ManualStart
         | DashboardTouchTarget::ManualStop => DashboardRoute::ManualCharge,
+    }
+}
+
+#[allow(dead_code)]
+pub const fn dashboard_route_for_home_focus(focus: DashboardHomeFocus) -> DashboardRoute {
+    match focus {
+        DashboardHomeFocus::Output => DashboardRoute::Detail(DashboardDetailPage::Output),
+        DashboardHomeFocus::Thermal => DashboardRoute::Detail(DashboardDetailPage::Thermal),
+        DashboardHomeFocus::Cells => DashboardRoute::Detail(DashboardDetailPage::Cells),
+        DashboardHomeFocus::Charger => DashboardRoute::Detail(DashboardDetailPage::Charger),
+        DashboardHomeFocus::BatteryFlow => DashboardRoute::Detail(DashboardDetailPage::BatteryFlow),
     }
 }
 
@@ -2845,6 +3399,70 @@ pub fn render_frame_with_dashboard_route_overlay<P: UiPainter>(
 }
 
 #[allow(dead_code)]
+pub fn render_dashboard_shell<P: UiPainter>(
+    painter: &mut P,
+    model: &UiModel,
+    variant: UiVariant,
+    shell: DashboardShellState,
+    self_check: Option<&SelfCheckUiSnapshot>,
+) -> Result<(), P::Error> {
+    if variant != UiVariant::InstrumentB {
+        return render_frame_with_dashboard_route_overlay(
+            painter,
+            model,
+            variant,
+            shell.dashboard_route,
+            self_check,
+            SelfCheckOverlay::None,
+        );
+    }
+
+    let palette = palette_for(variant);
+    let data = DashboardData::from_model(model);
+    fill(painter, 0, 0, UI_W, UI_H, palette.bg)?;
+    draw_background_grid(painter, palette)?;
+    if shell.page == DashboardPrimaryPage::BeeperSettings {
+        return render_beeper_settings_page(
+            painter,
+            variant,
+            palette,
+            shell.beeper_prefs,
+            shell.menu_selected,
+        );
+    }
+
+    let offset = i32::from(shell.dashboard_menu_offset_y)
+        .clamp(0, i32::from(DASHBOARD_MENU_STACK_H - (UI_H as i16))) as i16;
+    {
+        let mut translated = TranslatedPainter::new(painter, 0, -offset);
+        render_variant_b(
+            &mut translated,
+            variant,
+            palette,
+            data,
+            shell.dashboard_route,
+            self_check,
+        )?;
+        if shell.dashboard_route == DashboardRoute::Home {
+            draw_dashboard_home_focus_overlay(&mut translated, variant, palette, shell.home_focus)?;
+        }
+    }
+    {
+        let mut translated = TranslatedPainter::new(painter, 0, (UI_H as i16) - offset);
+        render_dashboard_menu_page(
+            &mut translated,
+            variant,
+            palette,
+            shell.menu_selected,
+            shell.home_focus,
+            shell.menu_style,
+        )?;
+    }
+
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub fn render_dashboard_touch_regions_overlay<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
@@ -2937,6 +3555,1067 @@ pub fn render_dashboard_touch_regions_overlay<P: UiPainter>(
     }
 
     Ok(())
+}
+
+#[allow(dead_code)]
+pub fn render_beeper_settings_touch_regions_overlay<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+
+    draw_dashboard_touch_region_overlay(
+        painter,
+        variant,
+        palette,
+        AUDIO_VOLUME_TOUCH_X,
+        audio_volume_touch_y(AUDIO_ACTION_ROW_Y),
+        AUDIO_VOLUME_TOUCH_W,
+        AUDIO_VOLUME_TOUCH_H,
+        "A",
+        palette.right,
+        AUDIO_VOLUME_TOUCH_X + AUDIO_VOLUME_TOUCH_W - 12,
+        audio_volume_touch_y(AUDIO_ACTION_ROW_Y) + 2,
+    )?;
+    draw_dashboard_touch_region_overlay(
+        painter,
+        variant,
+        palette,
+        AUDIO_VOLUME_TOUCH_X,
+        audio_volume_touch_y(AUDIO_SYSTEM_ROW_Y),
+        AUDIO_VOLUME_TOUCH_W,
+        AUDIO_VOLUME_TOUCH_H,
+        "S",
+        palette.center,
+        AUDIO_VOLUME_TOUCH_X + AUDIO_VOLUME_TOUCH_W - 12,
+        audio_volume_touch_y(AUDIO_SYSTEM_ROW_Y) + 2,
+    )
+}
+
+fn dashboard_home_focus_bounds(focus: DashboardHomeFocus) -> (u16, u16, u16, u16) {
+    match focus {
+        DashboardHomeFocus::Output => (
+            DASHBOARD_HOME_OUTPUT_X,
+            DASHBOARD_HOME_OUTPUT_Y,
+            DASHBOARD_HOME_OUTPUT_W,
+            DASHBOARD_HOME_OUTPUT_H,
+        ),
+        DashboardHomeFocus::Thermal => (
+            DASHBOARD_HOME_THERMAL_X,
+            DASHBOARD_HOME_THERMAL_Y,
+            DASHBOARD_HOME_THERMAL_W,
+            DASHBOARD_HOME_THERMAL_H,
+        ),
+        DashboardHomeFocus::Cells => (
+            DASHBOARD_HOME_CELLS_X,
+            DASHBOARD_HOME_CELLS_Y,
+            DASHBOARD_HOME_CELLS_W,
+            DASHBOARD_HOME_CELLS_H,
+        ),
+        DashboardHomeFocus::Charger => (
+            DASHBOARD_HOME_CHARGER_X,
+            DASHBOARD_HOME_CHARGER_Y,
+            DASHBOARD_HOME_CHARGER_W,
+            DASHBOARD_HOME_CHARGER_H,
+        ),
+        DashboardHomeFocus::BatteryFlow => (
+            DASHBOARD_HOME_BATTERY_FLOW_X,
+            DASHBOARD_HOME_BATTERY_FLOW_Y,
+            DASHBOARD_HOME_BATTERY_FLOW_W,
+            DASHBOARD_HOME_BATTERY_FLOW_H,
+        ),
+    }
+}
+
+fn dashboard_home_focus_color(palette: Palette, focus: DashboardHomeFocus) -> u16 {
+    match focus {
+        DashboardHomeFocus::Output => palette.up,
+        DashboardHomeFocus::Thermal => palette.center,
+        DashboardHomeFocus::Cells => palette.left,
+        DashboardHomeFocus::Charger => palette.right,
+        DashboardHomeFocus::BatteryFlow => palette.down,
+    }
+}
+
+fn draw_dashboard_home_focus_overlay<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    focus: DashboardHomeFocus,
+) -> Result<(), P::Error> {
+    let (x, y, w, h) = dashboard_home_focus_bounds(focus);
+    let color = dashboard_home_focus_color(palette, focus);
+    draw_outline(painter, x, y, w, h, color)?;
+    if w > 4 && h > 4 {
+        draw_outline(
+            painter,
+            x + 2,
+            y + 2,
+            w - 4,
+            h - 4,
+            fade_color(color, palette.text),
+        )?;
+    }
+    fill(
+        painter,
+        x,
+        y,
+        w.min(68),
+        DASHBOARD_HOME_FOCUS_LABEL_H,
+        color,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        focus.label(),
+        Point::new((x + 4) as i32, (y + 1) as i32),
+        HorizontalAlignment::Left,
+        palette.bg,
+    )
+}
+
+fn render_dashboard_menu_page<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    selected: MenuItem,
+    home_focus: DashboardHomeFocus,
+    style: DashboardMenuStyle,
+) -> Result<(), P::Error> {
+    let selected_color = menu_item_color(palette, selected, home_focus);
+    let selected_rail = selected_menu_rail_item(selected);
+    text_with_position(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        "MENU",
+        Point::new(8, DASHBOARD_MENU_HEADER_CENTER_Y as i32),
+        VerticalPosition::Center,
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    let rule_y = DASHBOARD_MENU_HEADER_H;
+    fill(
+        painter,
+        8,
+        rule_y,
+        UI_W - 16,
+        1,
+        fade_color(palette.border, palette.panel),
+    )?;
+    fill(painter, 142, rule_y, 36, 2, selected_color)?;
+
+    let step: i16 = (DASHBOARD_MENU_ICON_W + DASHBOARD_MENU_ICON_GAP) as i16;
+    let rail_origin_x = DASHBOARD_MENU_ICON_CENTER_X
+        - (DASHBOARD_MENU_ICON_W as i16 / 2)
+        - (selected_rail.index() as i16 * step);
+
+    for item in MenuRailItem::ALL {
+        let x = rail_origin_x + (item.index() as i16 * step);
+        let y = (DASHBOARD_MENU_ICON_Y + 4) as i16;
+        if x + DASHBOARD_MENU_ICON_W as i16 <= 0 || x >= UI_W as i16 {
+            continue;
+        }
+
+        let item_selected = item == selected_rail;
+        let accent = menu_rail_item_color(palette, item);
+        draw_menu_icon_tile(
+            painter,
+            palette,
+            item,
+            x.max(0) as u16,
+            y.max(0) as u16,
+            item_selected,
+            accent,
+            style,
+        )?;
+    }
+
+    draw_dashboard_menu_footer(
+        painter,
+        variant,
+        palette,
+        selected,
+        selected_rail,
+        selected_color,
+        style,
+    )
+}
+
+fn draw_dashboard_menu_footer<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    selected: MenuItem,
+    selected_rail: MenuRailItem,
+    selected_color: u16,
+    style: DashboardMenuStyle,
+) -> Result<(), P::Error> {
+    match style {
+        DashboardMenuStyle::DenseBadge => {
+            draw_menu_footer_dense_badge(painter, variant, palette, selected, selected_color)
+        }
+        DashboardMenuStyle::DockBar => {
+            draw_menu_footer_dock_bar(painter, variant, palette, selected, selected_color)
+        }
+        DashboardMenuStyle::SplitRail => {
+            draw_menu_footer_split_rail(painter, variant, palette, selected, selected_color)
+        }
+        DashboardMenuStyle::SignalPlate => {
+            draw_menu_footer_signal_plate(painter, variant, palette, selected, selected_color)
+        }
+    }?;
+    draw_menu_footer_nav_hints(painter, palette, selected_rail, selected_color)
+}
+
+fn draw_menu_footer_dense_badge<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    selected: MenuItem,
+    selected_color: u16,
+) -> Result<(), P::Error> {
+    let footer_bg = fade_color(palette.panel_alt, palette.bg);
+    let footer_rule = fade_color(palette.border, palette.panel);
+
+    fill(
+        painter,
+        0,
+        DASHBOARD_MENU_FOOTER_Y,
+        UI_W,
+        DASHBOARD_MENU_FOOTER_H,
+        footer_bg,
+    )?;
+    fill(
+        painter,
+        8,
+        DASHBOARD_MENU_FOOTER_Y,
+        UI_W - 16,
+        1,
+        footer_rule,
+    )?;
+    text_with_position(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        selected.label(),
+        Point::new((UI_W / 2) as i32, DASHBOARD_MENU_FOOTER_CENTER_Y as i32),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        selected_color,
+    )
+}
+
+fn draw_menu_footer_dock_bar<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    selected: MenuItem,
+    selected_color: u16,
+) -> Result<(), P::Error> {
+    let footer_bg = fade_color(palette.panel_alt, palette.bg);
+    let footer_rule = fade_color(palette.border, palette.panel);
+
+    fill(
+        painter,
+        0,
+        DASHBOARD_MENU_FOOTER_Y,
+        UI_W,
+        DASHBOARD_MENU_FOOTER_H,
+        footer_bg,
+    )?;
+    fill(
+        painter,
+        8,
+        DASHBOARD_MENU_FOOTER_Y,
+        UI_W - 16,
+        1,
+        footer_rule,
+    )?;
+    text_with_position(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        selected.label(),
+        Point::new((UI_W / 2) as i32, DASHBOARD_MENU_FOOTER_CENTER_Y as i32),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        selected_color,
+    )
+}
+
+fn draw_menu_footer_split_rail<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    selected: MenuItem,
+    selected_color: u16,
+) -> Result<(), P::Error> {
+    let footer_bg = fade_color(palette.panel_alt, palette.bg);
+    let footer_rule = fade_color(palette.border, palette.panel);
+
+    fill(
+        painter,
+        0,
+        DASHBOARD_MENU_FOOTER_Y,
+        UI_W,
+        DASHBOARD_MENU_FOOTER_H,
+        footer_bg,
+    )?;
+    fill(
+        painter,
+        8,
+        DASHBOARD_MENU_FOOTER_Y,
+        UI_W - 16,
+        1,
+        footer_rule,
+    )?;
+    text_with_position(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        selected.label(),
+        Point::new((UI_W / 2) as i32, DASHBOARD_MENU_FOOTER_CENTER_Y as i32),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        selected_color,
+    )
+}
+
+fn draw_menu_footer_signal_plate<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    selected: MenuItem,
+    selected_color: u16,
+) -> Result<(), P::Error> {
+    let footer_bg = fade_color(palette.panel_alt, palette.bg);
+    let footer_rule = fade_color(palette.border, palette.panel);
+
+    fill(
+        painter,
+        0,
+        DASHBOARD_MENU_FOOTER_Y,
+        UI_W,
+        DASHBOARD_MENU_FOOTER_H,
+        footer_bg,
+    )?;
+    fill(
+        painter,
+        8,
+        DASHBOARD_MENU_FOOTER_Y,
+        UI_W - 16,
+        1,
+        footer_rule,
+    )?;
+    text_with_position(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        selected.label(),
+        Point::new((UI_W / 2) as i32, DASHBOARD_MENU_FOOTER_CENTER_Y as i32),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        selected_color,
+    )
+}
+
+fn draw_menu_footer_nav_hints<P: UiPainter>(
+    painter: &mut P,
+    palette: Palette,
+    selected_rail: MenuRailItem,
+    selected_color: u16,
+) -> Result<(), P::Error> {
+    let active_left = selected_rail.index() > 0;
+    let active_right = selected_rail.index() + 1 < MenuRailItem::ALL.len();
+
+    draw_menu_footer_nav_hint(
+        painter,
+        DASHBOARD_MENU_NAV_HINT_LEFT_X,
+        DASHBOARD_MENU_NAV_HINT_Y,
+        false,
+        if active_left {
+            selected_color
+        } else {
+            fade_color(palette.border, palette.text_dim)
+        },
+        fade_color(palette.panel, palette.bg),
+    )?;
+    draw_menu_footer_nav_hint(
+        painter,
+        DASHBOARD_MENU_NAV_HINT_RIGHT_X,
+        DASHBOARD_MENU_NAV_HINT_Y,
+        true,
+        if active_right {
+            selected_color
+        } else {
+            fade_color(palette.border, palette.text_dim)
+        },
+        fade_color(palette.panel, palette.bg),
+    )
+}
+
+fn draw_menu_footer_nav_hint<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    right: bool,
+    accent: u16,
+    _panel_fill: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks_centered(
+        painter,
+        x,
+        y,
+        DASHBOARD_MENU_NAV_HINT_BOX_W,
+        DASHBOARD_MENU_NAV_HINT_BOX_H,
+        if right {
+            MENU_ICON_CHEVRON_RIGHT_26
+        } else {
+            MENU_ICON_CHEVRON_LEFT_26
+        },
+        accent,
+    )
+}
+
+fn menu_tile_fill_color(
+    style: DashboardMenuStyle,
+    palette: Palette,
+    accent: u16,
+    selected: bool,
+) -> u16 {
+    if !selected {
+        return fade_color(palette.panel, palette.bg);
+    }
+    match style {
+        DashboardMenuStyle::DenseBadge => {
+            fade_color(accent, fade_color(palette.panel_alt, palette.bg))
+        }
+        DashboardMenuStyle::DockBar => fade_color(accent, palette.panel),
+        DashboardMenuStyle::SplitRail => fade_color(accent, fade_color(palette.panel, palette.bg)),
+        DashboardMenuStyle::SignalPlate => {
+            fade_color(accent, fade_color(palette.panel_alt, palette.bg))
+        }
+    }
+}
+
+fn menu_tile_border_color(
+    style: DashboardMenuStyle,
+    palette: Palette,
+    accent: u16,
+    selected: bool,
+) -> u16 {
+    if !selected {
+        return fade_color(palette.border, palette.text_dim);
+    }
+    match style {
+        DashboardMenuStyle::DenseBadge
+        | DashboardMenuStyle::DockBar
+        | DashboardMenuStyle::SplitRail
+        | DashboardMenuStyle::SignalPlate => accent,
+    }
+}
+
+fn draw_menu_tile_style_decoration<P: UiPainter>(
+    painter: &mut P,
+    _palette: Palette,
+    x: u16,
+    y: u16,
+    selected: bool,
+    accent: u16,
+    _border: u16,
+    style: DashboardMenuStyle,
+) -> Result<(), P::Error> {
+    if !selected {
+        return Ok(());
+    }
+
+    match style {
+        DashboardMenuStyle::DenseBadge | DashboardMenuStyle::SplitRail => Ok(()),
+        DashboardMenuStyle::DockBar | DashboardMenuStyle::SignalPlate => fill(
+            painter,
+            x + 12,
+            y + 7,
+            DASHBOARD_MENU_ICON_W - 24,
+            2,
+            accent,
+        ),
+    }
+}
+
+fn draw_menu_icon_tile<P: UiPainter>(
+    painter: &mut P,
+    palette: Palette,
+    item: MenuRailItem,
+    x: u16,
+    y: u16,
+    selected: bool,
+    accent: u16,
+    style: DashboardMenuStyle,
+) -> Result<(), P::Error> {
+    let fill_color = menu_tile_fill_color(style, palette, accent, selected);
+    let border = menu_tile_border_color(style, palette, accent, selected);
+    fill(
+        painter,
+        x,
+        y,
+        DASHBOARD_MENU_ICON_W,
+        DASHBOARD_MENU_ICON_H,
+        border,
+    )?;
+    if DASHBOARD_MENU_ICON_W > 2 && DASHBOARD_MENU_ICON_H > 2 {
+        fill(
+            painter,
+            x + 1,
+            y + 1,
+            DASHBOARD_MENU_ICON_W - 2,
+            DASHBOARD_MENU_ICON_H - 2,
+            fill_color,
+        )?;
+    }
+    draw_outline(
+        painter,
+        x + 3,
+        y + 3,
+        DASHBOARD_MENU_ICON_W - 6,
+        DASHBOARD_MENU_ICON_H - 6,
+        fade_color(border, palette.bg),
+    )?;
+    match item {
+        MenuRailItem::Dashboard => draw_dashboard_menu_dashboard_icon(
+            painter,
+            x,
+            y,
+            accent,
+            if selected {
+                palette.text
+            } else {
+                palette.text_dim
+            },
+            fill_color,
+        ),
+        MenuRailItem::Add => draw_dashboard_menu_add_icon(
+            painter,
+            x,
+            y,
+            accent,
+            if selected {
+                palette.text
+            } else {
+                palette.text_dim
+            },
+        ),
+        MenuRailItem::Audio => draw_dashboard_menu_audio_icon(
+            painter,
+            x,
+            y,
+            accent,
+            if selected {
+                palette.text
+            } else {
+                palette.text_dim
+            },
+            fill_color,
+        ),
+        MenuRailItem::Settings => draw_dashboard_menu_settings_icon(
+            painter,
+            x,
+            y,
+            accent,
+            if selected {
+                palette.text
+            } else {
+                palette.text_dim
+            },
+            fill_color,
+        ),
+        MenuRailItem::Stats => draw_dashboard_menu_stats_icon(
+            painter,
+            x,
+            y,
+            accent,
+            if selected {
+                palette.text
+            } else {
+                palette.text_dim
+            },
+        ),
+    }?;
+    draw_menu_tile_style_decoration(painter, palette, x, y, selected, accent, border, style)?;
+    Ok(())
+}
+
+fn draw_dashboard_menu_dashboard_icon<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    accent: u16,
+    _fg: u16,
+    _bg: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks_centered(
+        painter,
+        x + DASHBOARD_MENU_GLYPH_INSET,
+        y + DASHBOARD_MENU_GLYPH_INSET,
+        DASHBOARD_MENU_ICON_W - (DASHBOARD_MENU_GLYPH_INSET * 2),
+        DASHBOARD_MENU_ICON_H - (DASHBOARD_MENU_GLYPH_INSET * 2),
+        MENU_ICON_SPEED_28,
+        accent,
+    )
+}
+
+fn draw_dashboard_menu_add_icon<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    accent: u16,
+    _fg: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks_centered(
+        painter,
+        x + DASHBOARD_MENU_GLYPH_INSET,
+        y + DASHBOARD_MENU_GLYPH_INSET,
+        DASHBOARD_MENU_ICON_W - (DASHBOARD_MENU_GLYPH_INSET * 2),
+        DASHBOARD_MENU_ICON_H - (DASHBOARD_MENU_GLYPH_INSET * 2),
+        MENU_ICON_ADD_28,
+        accent,
+    )
+}
+
+fn draw_dashboard_menu_audio_icon<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    accent: u16,
+    _fg: u16,
+    _bg: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks_centered(
+        painter,
+        x + DASHBOARD_MENU_GLYPH_INSET,
+        y + DASHBOARD_MENU_GLYPH_INSET,
+        DASHBOARD_MENU_ICON_W - (DASHBOARD_MENU_GLYPH_INSET * 2),
+        DASHBOARD_MENU_ICON_H - (DASHBOARD_MENU_GLYPH_INSET * 2),
+        MENU_ICON_VOLUME_UP_28,
+        accent,
+    )
+}
+
+fn draw_dashboard_menu_settings_icon<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    accent: u16,
+    _fg: u16,
+    _bg: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks_centered(
+        painter,
+        x + DASHBOARD_MENU_GLYPH_INSET,
+        y + DASHBOARD_MENU_GLYPH_INSET,
+        DASHBOARD_MENU_ICON_W - (DASHBOARD_MENU_GLYPH_INSET * 2),
+        DASHBOARD_MENU_ICON_H - (DASHBOARD_MENU_GLYPH_INSET * 2),
+        MENU_ICON_SETTINGS_28,
+        accent,
+    )
+}
+
+fn draw_dashboard_menu_stats_icon<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    accent: u16,
+    _fg: u16,
+) -> Result<(), P::Error> {
+    draw_icon_blocks_centered(
+        painter,
+        x + DASHBOARD_MENU_GLYPH_INSET,
+        y + DASHBOARD_MENU_GLYPH_INSET,
+        DASHBOARD_MENU_ICON_W - (DASHBOARD_MENU_GLYPH_INSET * 2),
+        DASHBOARD_MENU_ICON_H - (DASHBOARD_MENU_GLYPH_INSET * 2),
+        MENU_ICON_BAR_CHART_28,
+        accent,
+    )
+}
+
+fn render_beeper_settings_page<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    prefs: BeeperPrefs,
+    _menu_selected: MenuItem,
+) -> Result<(), P::Error> {
+    draw_beeper_settings_top_bar(
+        painter,
+        variant,
+        palette,
+        prefs.selected_target.label(),
+        beeper_target_focus_color(palette, prefs.selected_target),
+    )?;
+    draw_beeper_settings_scale(painter, variant, palette)?;
+    for target in BeeperSettingTarget::ALL {
+        draw_beeper_settings_row(
+            painter,
+            variant,
+            palette,
+            target,
+            prefs.volume_for(target),
+            prefs.selected_target == target,
+        )?;
+    }
+    Ok(())
+}
+
+fn draw_beeper_settings_top_bar<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    status_tag: &'static str,
+    status_color: u16,
+) -> Result<(), P::Error> {
+    fill(painter, 0, 0, UI_W, HEADER_H, palette.panel)?;
+    draw_panel(
+        painter,
+        DASHBOARD_DETAIL_BACK_X,
+        DASHBOARD_DETAIL_BACK_Y,
+        DASHBOARD_DETAIL_BACK_W,
+        DASHBOARD_DETAIL_BACK_H,
+        palette,
+        false,
+        palette.accent,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "BACK",
+        Point::new(
+            (DASHBOARD_DETAIL_BACK_X + DASHBOARD_DETAIL_BACK_W / 2) as i32,
+            4,
+        ),
+        HorizontalAlignment::Center,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        "AUDIO",
+        Point::new(DETAIL_TITLE_X, 2),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::DetailBody,
+        status_tag,
+        Point::new(DETAIL_STATUS_X, 2),
+        HorizontalAlignment::Right,
+        status_color,
+    )
+}
+
+fn draw_beeper_settings_scale<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+) -> Result<(), P::Error> {
+    let step = AUDIO_TRACK_W / 6;
+    for (idx, level) in BeeperVolumeLevel::ALL.iter().enumerate() {
+        let node_x = AUDIO_TRACK_X + idx as u16 * step;
+        text(
+            painter,
+            variant,
+            FontRole::DetailBody,
+            level.scale_label(),
+            Point::new(node_x as i32, AUDIO_SCALE_Y as i32),
+            HorizontalAlignment::Center,
+            palette.text_dim,
+        )?;
+    }
+    Ok(())
+}
+
+fn draw_beeper_settings_row<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    target: BeeperSettingTarget,
+    level: BeeperVolumeLevel,
+    selected: bool,
+) -> Result<(), P::Error> {
+    let row_y = beeper_setting_row_y(target);
+    let row_fill = if selected {
+        fade_color(palette.panel_alt, palette.bg)
+    } else {
+        fade_color(palette.panel, palette.bg)
+    };
+    let focus_accent = beeper_target_focus_color(palette, target);
+    let level_accent = beeper_volume_color(palette, level);
+    let step = AUDIO_TRACK_W / 6;
+    let active_idx = beeper_volume_index(level) as u16;
+    let active_x = AUDIO_TRACK_X + active_idx * step;
+    let row_center_y = row_y + (AUDIO_ROW_H / 2);
+    let track_y = row_center_y - (AUDIO_TRACK_H / 2);
+    let badge_y = row_center_y - (AUDIO_BADGE_H / 2);
+    let badge_fill = fade_color(palette.panel, palette.bg);
+
+    draw_manual_action_button(
+        painter,
+        AUDIO_ROW_X,
+        row_y,
+        AUDIO_ROW_W,
+        AUDIO_ROW_H,
+        row_fill,
+        row_fill,
+    )?;
+    fill(
+        painter,
+        AUDIO_ROW_X + 6,
+        row_y + 5,
+        3,
+        AUDIO_ROW_H - 10,
+        if selected {
+            focus_accent
+        } else {
+            palette.border
+        },
+    )?;
+    text_with_position(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        target.label(),
+        Point::new((AUDIO_ROW_X + 16) as i32, row_center_y as i32),
+        VerticalPosition::Center,
+        HorizontalAlignment::Left,
+        if selected {
+            palette.text
+        } else {
+            palette.text_dim
+        },
+    )?;
+
+    fill(
+        painter,
+        AUDIO_TRACK_X,
+        track_y + (AUDIO_TRACK_H / 2) - 1,
+        AUDIO_TRACK_W,
+        2,
+        fade_color(palette.border, palette.text_dim),
+    )?;
+    fill(
+        painter,
+        AUDIO_TRACK_X,
+        track_y + (AUDIO_TRACK_H / 2) - 1,
+        active_x.saturating_sub(AUDIO_TRACK_X) + 1,
+        2,
+        level_accent,
+    )?;
+
+    for idx in 0..BeeperVolumeLevel::ALL.len() {
+        let node_x = AUDIO_TRACK_X + idx as u16 * step;
+        let active = idx as u16 == active_idx;
+        let node_size = if active {
+            AUDIO_NODE_SIZE + 4
+        } else {
+            AUDIO_NODE_SIZE
+        };
+        let node_half = node_size / 2;
+        draw_manual_action_button(
+            painter,
+            node_x.saturating_sub(node_half),
+            row_center_y - node_half,
+            node_size,
+            node_size,
+            if active {
+                fade_color(level_accent, palette.panel_alt)
+            } else {
+                fade_color(palette.panel, palette.bg)
+            },
+            if active {
+                level_accent
+            } else {
+                fade_color(palette.border, palette.text_dim)
+            },
+        )?;
+    }
+
+    draw_manual_action_button(
+        painter,
+        AUDIO_BADGE_X,
+        badge_y,
+        AUDIO_BADGE_W,
+        AUDIO_BADGE_H,
+        badge_fill,
+        badge_fill,
+    )?;
+    text_with_position(
+        painter,
+        variant,
+        FontRole::DetailTitle,
+        level.badge_label(),
+        Point::new(
+            (AUDIO_BADGE_X + (AUDIO_BADGE_W / 2)) as i32,
+            row_center_y as i32,
+        ),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        if level == BeeperVolumeLevel::Off {
+            if selected {
+                palette.text
+            } else {
+                palette.text_dim
+            }
+        } else {
+            level_accent
+        },
+    )
+}
+
+fn selected_menu_rail_item(selected: MenuItem) -> MenuRailItem {
+    match selected {
+        MenuItem::Dashboard => MenuRailItem::Dashboard,
+        MenuItem::Beeper => MenuRailItem::Audio,
+    }
+}
+
+fn menu_item_for_rail_item(item: MenuRailItem) -> Option<MenuItem> {
+    match item {
+        MenuRailItem::Dashboard => Some(MenuItem::Dashboard),
+        MenuRailItem::Audio => Some(MenuItem::Beeper),
+        MenuRailItem::Add | MenuRailItem::Settings | MenuRailItem::Stats => None,
+    }
+}
+
+fn dashboard_menu_rail_origin_x(selected: MenuItem) -> i16 {
+    let selected_rail = selected_menu_rail_item(selected);
+    let step: i16 = (DASHBOARD_MENU_ICON_W + DASHBOARD_MENU_ICON_GAP) as i16;
+    DASHBOARD_MENU_ICON_CENTER_X
+        - (DASHBOARD_MENU_ICON_W as i16 / 2)
+        - (selected_rail.index() as i16 * step)
+}
+
+fn menu_rail_item_color(palette: Palette, item: MenuRailItem) -> u16 {
+    match item {
+        MenuRailItem::Dashboard => palette.left,
+        MenuRailItem::Audio => palette.right,
+        MenuRailItem::Add | MenuRailItem::Settings | MenuRailItem::Stats => palette.text_dim,
+    }
+}
+
+fn menu_item_color(palette: Palette, item: MenuItem, _home_focus: DashboardHomeFocus) -> u16 {
+    match item {
+        MenuItem::Dashboard => palette.left,
+        MenuItem::Beeper => palette.right,
+    }
+}
+
+fn menu_footer_underline_w(selected: MenuItem) -> u16 {
+    match selected {
+        MenuItem::Dashboard => 72,
+        MenuItem::Beeper => 44,
+    }
+}
+
+fn beeper_volume_color(palette: Palette, level: BeeperVolumeLevel) -> u16 {
+    match level {
+        BeeperVolumeLevel::Off => palette.border,
+        BeeperVolumeLevel::L1 | BeeperVolumeLevel::L2 => palette.left,
+        BeeperVolumeLevel::L3 | BeeperVolumeLevel::L4 => palette.accent,
+        BeeperVolumeLevel::L5 => palette.center,
+        BeeperVolumeLevel::L6 => palette.right,
+    }
+}
+
+fn beeper_volume_index(level: BeeperVolumeLevel) -> usize {
+    BeeperVolumeLevel::ALL
+        .iter()
+        .position(|candidate| *candidate == level)
+        .unwrap_or(0)
+}
+
+fn beeper_volume_level_for_x(x: u16) -> BeeperVolumeLevel {
+    let step = AUDIO_TRACK_W / 6;
+    let idx = if x <= AUDIO_TRACK_X {
+        0
+    } else if x >= AUDIO_TRACK_X + AUDIO_TRACK_W {
+        6
+    } else {
+        ((x - AUDIO_TRACK_X + (step / 2)) / step).min(6)
+    };
+    BeeperVolumeLevel::from_step(idx as u8)
+}
+
+fn beeper_setting_row_y(target: BeeperSettingTarget) -> u16 {
+    match target {
+        BeeperSettingTarget::Action => AUDIO_ACTION_ROW_Y,
+        BeeperSettingTarget::System => AUDIO_SYSTEM_ROW_Y,
+    }
+}
+
+const fn audio_volume_touch_y(row_y: u16) -> u16 {
+    row_y.saturating_sub(AUDIO_VOLUME_TOUCH_Y_INSET)
+}
+
+const fn audio_row_touch_y(row_y: u16) -> u16 {
+    row_y.saturating_sub(AUDIO_ROW_TOUCH_Y_INSET)
+}
+
+fn beeper_target_focus_color(palette: Palette, target: BeeperSettingTarget) -> u16 {
+    match target {
+        BeeperSettingTarget::Action => palette.right,
+        BeeperSettingTarget::System => palette.center,
+    }
+}
+
+struct TranslatedPainter<'a, P> {
+    painter: &'a mut P,
+    dx: i16,
+    dy: i16,
+}
+
+impl<'a, P> TranslatedPainter<'a, P> {
+    fn new(painter: &'a mut P, dx: i16, dy: i16) -> Self {
+        Self { painter, dx, dy }
+    }
+}
+
+impl<P: UiPainter> UiPainter for TranslatedPainter<'_, P> {
+    type Error = P::Error;
+
+    fn fill_rect(
+        &mut self,
+        x: u16,
+        y: u16,
+        w: u16,
+        h: u16,
+        rgb565: u16,
+    ) -> Result<(), Self::Error> {
+        let x0 = i32::from(x) + i32::from(self.dx);
+        let y0 = i32::from(y) + i32::from(self.dy);
+        let x1 = x0 + i32::from(w);
+        let y1 = y0 + i32::from(h);
+
+        let clip_x0 = x0.max(0);
+        let clip_y0 = y0.max(0);
+        let clip_x1 = x1.min(i32::from(UI_W));
+        let clip_y1 = y1.min(i32::from(UI_H));
+
+        if clip_x0 >= clip_x1 || clip_y0 >= clip_y1 {
+            return Ok(());
+        }
+
+        self.painter.fill_rect(
+            clip_x0 as u16,
+            clip_y0 as u16,
+            (clip_x1 - clip_x0) as u16,
+            (clip_y1 - clip_y0) as u16,
+            rgb565,
+        )
+    }
 }
 
 #[allow(dead_code)]
@@ -9520,6 +11199,217 @@ fn draw_bms_progress_dialog<P: UiPainter>(
 // Icon source: Google Material Symbols Rounded
 // - wifi_wght700_24px.svg
 // - wifi_off_wght700_24px.svg
+// Icon source: Iconify / material-symbols:speed
+// Extracted from official SVG via rsvg-convert at 28x28, alpha threshold >= 32.
+const MENU_ICON_SPEED_28: &[(u8, u8, u8, u8)] = &[
+    (12, 4, 4, 1),
+    (9, 5, 10, 1),
+    (7, 6, 14, 1),
+    (6, 7, 16, 1),
+    (5, 8, 18, 1),
+    (4, 9, 20, 1),
+    (4, 10, 15, 1),
+    (20, 10, 4, 1),
+    (3, 11, 15, 1),
+    (20, 11, 5, 1),
+    (3, 12, 13, 1),
+    (19, 12, 6, 1),
+    (2, 13, 13, 1),
+    (18, 13, 8, 1),
+    (2, 14, 11, 1),
+    (18, 14, 8, 1),
+    (2, 15, 10, 1),
+    (17, 15, 9, 1),
+    (2, 16, 10, 1),
+    (16, 16, 10, 1),
+    (2, 17, 10, 1),
+    (16, 17, 10, 1),
+    (2, 18, 24, 2),
+    (3, 20, 22, 2),
+    (4, 22, 20, 1),
+    (5, 23, 18, 1),
+];
+
+// Icon source: Iconify / material-symbols:add
+// Extracted from official SVG via rsvg-convert at 28x28, alpha threshold >= 32.
+const MENU_ICON_ADD_28: &[(u8, u8, u8, u8)] = &[
+    (13, 5, 2, 1),
+    (12, 6, 4, 6),
+    (6, 12, 16, 1),
+    (5, 13, 18, 2),
+    (6, 15, 16, 1),
+    (12, 16, 4, 6),
+    (13, 22, 2, 1),
+];
+
+// Icon source: Iconify / material-symbols:volume-up
+// Extracted from official SVG via rsvg-convert at 28x28, alpha threshold >= 32.
+const MENU_ICON_VOLUME_UP_28: &[(u8, u8, u8, u8)] = &[
+    (16, 4, 3, 1),
+    (13, 5, 1, 1),
+    (16, 5, 5, 1),
+    (12, 6, 2, 1),
+    (16, 6, 6, 1),
+    (11, 7, 3, 1),
+    (18, 7, 5, 1),
+    (10, 8, 4, 1),
+    (20, 8, 3, 1),
+    (9, 9, 5, 1),
+    (16, 9, 1, 1),
+    (20, 9, 4, 1),
+    (3, 10, 11, 1),
+    (16, 10, 2, 1),
+    (21, 10, 3, 1),
+    (3, 11, 11, 1),
+    (16, 11, 3, 1),
+    (21, 11, 4, 1),
+    (3, 12, 11, 1),
+    (16, 12, 3, 1),
+    (22, 12, 3, 1),
+    (3, 13, 11, 1),
+    (16, 13, 4, 1),
+    (22, 13, 3, 1),
+    (3, 14, 11, 1),
+    (16, 14, 4, 1),
+    (22, 14, 3, 1),
+    (3, 15, 11, 1),
+    (16, 15, 3, 1),
+    (22, 15, 3, 1),
+    (3, 16, 11, 1),
+    (16, 16, 3, 1),
+    (21, 16, 4, 1),
+    (3, 17, 11, 1),
+    (16, 17, 2, 1),
+    (21, 17, 3, 1),
+    (9, 18, 5, 1),
+    (16, 18, 1, 1),
+    (20, 18, 4, 1),
+    (10, 19, 4, 1),
+    (20, 19, 3, 1),
+    (11, 20, 3, 1),
+    (18, 20, 5, 1),
+    (12, 21, 2, 1),
+    (16, 21, 6, 1),
+    (13, 22, 1, 1),
+    (16, 22, 5, 1),
+    (16, 23, 3, 1),
+];
+
+// Icon source: Iconify / material-symbols:settings
+// Extracted from official SVG via rsvg-convert at 28x28, alpha threshold >= 32.
+const MENU_ICON_SETTINGS_28: &[(u8, u8, u8, u8)] = &[
+    (10, 2, 8, 3),
+    (5, 5, 2, 1),
+    (10, 5, 8, 1),
+    (21, 5, 2, 1),
+    (4, 6, 20, 2),
+    (3, 8, 22, 2),
+    (2, 10, 11, 1),
+    (15, 10, 11, 1),
+    (2, 11, 9, 1),
+    (17, 11, 9, 1),
+    (4, 12, 7, 1),
+    (17, 12, 7, 1),
+    (5, 13, 5, 1),
+    (18, 13, 5, 1),
+    (5, 14, 5, 1),
+    (18, 14, 5, 1),
+    (4, 15, 7, 1),
+    (17, 15, 7, 1),
+    (2, 16, 9, 1),
+    (17, 16, 9, 1),
+    (2, 17, 11, 1),
+    (15, 17, 11, 1),
+    (3, 18, 22, 2),
+    (4, 20, 20, 2),
+    (5, 22, 2, 1),
+    (10, 22, 8, 1),
+    (21, 22, 2, 1),
+    (10, 23, 8, 3),
+];
+
+// Icon source: Iconify / material-symbols:bar-chart
+// Extracted from official SVG via rsvg-convert at 28x28, alpha threshold >= 32.
+const MENU_ICON_BAR_CHART_28: &[(u8, u8, u8, u8)] = &[
+    (12, 4, 4, 1),
+    (11, 5, 6, 5),
+    (4, 10, 6, 1),
+    (11, 10, 6, 1),
+    (4, 11, 6, 1),
+    (11, 11, 6, 1),
+    (4, 12, 6, 1),
+    (11, 12, 6, 1),
+    (4, 13, 6, 1),
+    (11, 13, 6, 1),
+    (4, 14, 6, 1),
+    (11, 14, 6, 1),
+    (4, 15, 6, 1),
+    (11, 15, 6, 1),
+    (18, 15, 6, 1),
+    (4, 16, 6, 1),
+    (11, 16, 6, 1),
+    (18, 16, 6, 1),
+    (4, 17, 6, 1),
+    (11, 17, 6, 1),
+    (18, 17, 6, 1),
+    (4, 18, 6, 1),
+    (11, 18, 6, 1),
+    (18, 18, 6, 1),
+    (4, 19, 6, 1),
+    (11, 19, 6, 1),
+    (18, 19, 6, 1),
+    (4, 20, 6, 1),
+    (11, 20, 6, 1),
+    (18, 20, 6, 1),
+    (4, 21, 6, 1),
+    (11, 21, 6, 1),
+    (18, 21, 6, 1),
+    (4, 22, 6, 1),
+    (11, 22, 6, 1),
+    (18, 22, 6, 1),
+    (5, 23, 4, 1),
+    (12, 23, 4, 1),
+    (19, 23, 4, 1),
+];
+
+// Icon source: Iconify / material-symbols:chevron-left
+// Extracted from official SVG via rsvg-convert at 26x26, alpha threshold >= 16.
+const MENU_ICON_CHEVRON_LEFT_26: &[(u8, u8, u8, u8)] = &[
+    (15, 6, 1, 1),
+    (14, 7, 3, 1),
+    (13, 8, 4, 1),
+    (12, 9, 4, 1),
+    (11, 10, 4, 1),
+    (10, 11, 4, 1),
+    (9, 12, 4, 1),
+    (9, 13, 4, 1),
+    (10, 14, 4, 1),
+    (11, 15, 4, 1),
+    (12, 16, 4, 1),
+    (13, 17, 4, 1),
+    (14, 18, 3, 1),
+    (15, 19, 1, 1),
+];
+
+// Icon source: Iconify / material-symbols:chevron-right
+// Extracted from official SVG via rsvg-convert at 26x26, alpha threshold >= 16.
+const MENU_ICON_CHEVRON_RIGHT_26: &[(u8, u8, u8, u8)] = &[
+    (10, 6, 1, 1),
+    (9, 7, 3, 1),
+    (9, 8, 4, 1),
+    (10, 9, 4, 1),
+    (11, 10, 4, 1),
+    (12, 11, 4, 1),
+    (13, 12, 4, 1),
+    (13, 13, 4, 1),
+    (12, 14, 4, 1),
+    (11, 15, 4, 1),
+    (10, 16, 4, 1),
+    (9, 17, 4, 1),
+    (9, 18, 3, 1),
+    (10, 19, 1, 1),
+];
+
 const WIFI_SYMBOL_ROUNDED_14: &[(u8, u8, u8, u8)] = &[
     (3, 1, 8, 1),
     (2, 2, 10, 1),
@@ -12138,6 +14028,20 @@ mod tests {
     }
 
     #[test]
+    fn beeper_defaults_start_at_level_four() {
+        let prefs = BeeperPrefs::defaults();
+
+        assert_eq!(prefs.action_volume, BeeperVolumeLevel::L4);
+        assert_eq!(prefs.system_volume, BeeperVolumeLevel::L4);
+        assert_eq!(prefs.selected_target, BeeperSettingTarget::Action);
+    }
+
+    #[test]
+    fn dashboard_focus_label_background_covers_detail_body_text() {
+        assert!(DASHBOARD_HOME_FOCUS_LABEL_H >= 17);
+    }
+
+    #[test]
     fn live_dashboard_keeps_missing_metrics_as_na_inputs() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.fusb302_vbus_present = Some(true);
@@ -12387,6 +14291,50 @@ mod tests {
 
         snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
         snapshot.active_outputs = EnabledOutputs::None;
+        assert!(!self_check_can_enter_dashboard(&snapshot));
+    }
+
+    #[test]
+    fn self_check_can_enter_dashboard_when_only_bms_charge_path_is_blocked() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.gc9307 = SelfCheckCommState::Ok;
+        snapshot.tca6408a = SelfCheckCommState::Ok;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.ina3221 = SelfCheckCommState::Ok;
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_no_battery = Some(false);
+        snapshot.bq40z50_discharge_ready = Some(true);
+        snapshot.bq40z50_issue_detail = Some("xchg_blocked");
+        snapshot.requested_outputs = EnabledOutputs::Both;
+        snapshot.active_outputs = EnabledOutputs::Both;
+        snapshot.tps_a = SelfCheckCommState::Ok;
+        snapshot.tps_b = SelfCheckCommState::Ok;
+        snapshot.tmp_a = SelfCheckCommState::Ok;
+        snapshot.tmp_b = SelfCheckCommState::Ok;
+
+        assert!(self_check_can_enter_dashboard(&snapshot));
+    }
+
+    #[test]
+    fn self_check_still_blocks_dashboard_when_bms_discharge_path_is_blocked() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.gc9307 = SelfCheckCommState::Ok;
+        snapshot.tca6408a = SelfCheckCommState::Ok;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.ina3221 = SelfCheckCommState::Ok;
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_no_battery = Some(false);
+        snapshot.bq40z50_discharge_ready = Some(false);
+        snapshot.bq40z50_issue_detail = Some("xdsg_blocked");
+        snapshot.requested_outputs = EnabledOutputs::Both;
+        snapshot.active_outputs = EnabledOutputs::Both;
+        snapshot.tps_a = SelfCheckCommState::Ok;
+        snapshot.tps_b = SelfCheckCommState::Ok;
+        snapshot.tmp_a = SelfCheckCommState::Ok;
+        snapshot.tmp_b = SelfCheckCommState::Ok;
+
         assert!(!self_check_can_enter_dashboard(&snapshot));
     }
 
@@ -12681,6 +14629,122 @@ mod tests {
         assert_eq!(
             dashboard_hit_test(DashboardRoute::Home, 250, 140),
             Some(DashboardTouchTarget::HomeBatteryFlow)
+        );
+    }
+
+    #[test]
+    fn dashboard_menu_hit_test_maps_icons_and_nav_arrows() {
+        assert_eq!(
+            dashboard_menu_hit_test(
+                MenuItem::Dashboard,
+                DASHBOARD_MENU_NAV_HINT_LEFT_X + 2,
+                DASHBOARD_MENU_NAV_HINT_Y + 2
+            ),
+            Some(DashboardMenuTouchTarget::Previous)
+        );
+        assert_eq!(
+            dashboard_menu_hit_test(
+                MenuItem::Dashboard,
+                DASHBOARD_MENU_NAV_HINT_RIGHT_X + 2,
+                DASHBOARD_MENU_NAV_HINT_Y + 2
+            ),
+            Some(DashboardMenuTouchTarget::Next)
+        );
+        assert_eq!(
+            dashboard_menu_hit_test(
+                MenuItem::Dashboard,
+                DASHBOARD_MENU_ICON_CENTER_X as u16,
+                DASHBOARD_MENU_ICON_Y + 12
+            ),
+            Some(DashboardMenuTouchTarget::Dashboard)
+        );
+        assert_eq!(
+            dashboard_menu_hit_test(
+                MenuItem::Dashboard,
+                DASHBOARD_MENU_ICON_CENTER_X as u16 + (DASHBOARD_MENU_ICON_W * 2),
+                DASHBOARD_MENU_ICON_Y + 12
+            ),
+            Some(DashboardMenuTouchTarget::Beeper)
+        );
+        assert_eq!(
+            dashboard_menu_hit_test(
+                MenuItem::Dashboard,
+                DASHBOARD_MENU_ICON_CENTER_X as u16 + DASHBOARD_MENU_ICON_W,
+                DASHBOARD_MENU_ICON_Y + 12
+            ),
+            None
+        );
+        assert_eq!(
+            dashboard_menu_hit_test(MenuItem::Beeper, 12, DASHBOARD_MENU_ICON_Y + 12),
+            Some(DashboardMenuTouchTarget::Dashboard)
+        );
+    }
+
+    #[test]
+    fn beeper_settings_hit_test_maps_back_rows_and_volume_track() {
+        assert_eq!(
+            beeper_settings_hit_test(8, 8),
+            Some(BeeperSettingsTouchTarget::Back)
+        );
+        assert_eq!(beeper_settings_hit_test(UI_W / 2, 8), None);
+        assert_eq!(
+            beeper_settings_hit_test(AUDIO_ROW_X + 16, AUDIO_ACTION_ROW_Y + 8),
+            Some(BeeperSettingsTouchTarget::Target(
+                BeeperSettingTarget::Action
+            ))
+        );
+        assert_eq!(
+            beeper_settings_hit_test(AUDIO_ROW_X + 16, AUDIO_SYSTEM_ROW_Y + 8),
+            Some(BeeperSettingsTouchTarget::Target(
+                BeeperSettingTarget::System
+            ))
+        );
+        assert_eq!(
+            beeper_settings_hit_test(
+                AUDIO_TRACK_X - 20,
+                AUDIO_ACTION_ROW_Y.saturating_sub(AUDIO_VOLUME_TOUCH_Y_INSET)
+            ),
+            Some(BeeperSettingsTouchTarget::Volume {
+                target: BeeperSettingTarget::Action,
+                level: BeeperVolumeLevel::Off
+            })
+        );
+        assert_eq!(
+            beeper_settings_hit_test(AUDIO_TRACK_X, AUDIO_ACTION_ROW_Y + (AUDIO_ROW_H / 2)),
+            Some(BeeperSettingsTouchTarget::Volume {
+                target: BeeperSettingTarget::Action,
+                level: BeeperVolumeLevel::Off
+            })
+        );
+        assert_eq!(
+            beeper_settings_hit_test(
+                AUDIO_TRACK_X + (AUDIO_TRACK_W / 6) * 4,
+                AUDIO_ACTION_ROW_Y + (AUDIO_ROW_H / 2)
+            ),
+            Some(BeeperSettingsTouchTarget::Volume {
+                target: BeeperSettingTarget::Action,
+                level: BeeperVolumeLevel::L4
+            })
+        );
+        assert_eq!(
+            beeper_settings_hit_test(
+                AUDIO_TRACK_X + AUDIO_TRACK_W,
+                AUDIO_SYSTEM_ROW_Y + (AUDIO_ROW_H / 2)
+            ),
+            Some(BeeperSettingsTouchTarget::Volume {
+                target: BeeperSettingTarget::System,
+                level: BeeperVolumeLevel::L6
+            })
+        );
+        assert_eq!(
+            beeper_settings_hit_test(
+                AUDIO_TRACK_X + AUDIO_TRACK_W + 20,
+                AUDIO_SYSTEM_ROW_Y + AUDIO_ROW_H + AUDIO_VOLUME_TOUCH_Y_INSET - 1
+            ),
+            Some(BeeperSettingsTouchTarget::Volume {
+                target: BeeperSettingTarget::System,
+                level: BeeperVolumeLevel::L6
+            })
         );
     }
 

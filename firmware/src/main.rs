@@ -26,7 +26,7 @@ use embassy_futures::yield_now;
 use embassy_time::Timer;
 use embedded_hal_bus::i2c::RefCellDevice;
 use esp_backtrace as _;
-use esp_firmware::audio::{AudioCue, AudioManager, PLAYBACK_SAMPLE_RATE_HZ};
+use esp_firmware::audio::{AudioCue, AudioManager, AudioRoute, PLAYBACK_SAMPLE_RATE_HZ};
 use esp_firmware::usb_pd::UsbPdSinkManager;
 #[cfg(feature = "web_serial")]
 use esp_firmware::{
@@ -1007,6 +1007,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let (_, _, tx_buffer, tx_descriptors) =
         esp_hal::dma_circular_buffers!(0, AUDIO_DMA_BUFFER_BYTES);
     let mut audio_manager = AudioManager::new();
+    let mut audio_disabled_reason: Option<&'static str> = None;
     let mut i2s_tx = match I2s::new(
         i2s0,
         dma_channel,
@@ -1027,6 +1028,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 "audio: disable runtime audio because i2s init failed err={=?}",
                 err
             );
+            audio_disabled_reason = Some("i2s_init_failed");
             None
         }
     };
@@ -1038,12 +1040,29 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     "audio: disable runtime audio because dma init failed err={=?}",
                     err
                 );
+                audio_disabled_reason = Some("dma_init_failed");
                 None
             }
         },
         None => None,
     };
     let mut audio_enabled = audio_transfer.is_some();
+    if audio_enabled {
+        defmt::info!(
+            "audio: runtime enabled sample_rate_hz={} bclk_gpio=4 ws_gpio=5 dout_gpio=6",
+            PLAYBACK_SAMPLE_RATE_HZ
+        );
+        esp_println::println!(
+            "audio: runtime enabled sample_rate_hz={} bclk_gpio=4 ws_gpio=5 dout_gpio=6",
+            PLAYBACK_SAMPLE_RATE_HZ
+        );
+    } else {
+        if audio_disabled_reason.is_none() {
+            audio_disabled_reason = Some("init_unavailable");
+        }
+        defmt::warn!("audio: runtime disabled before boot cue");
+        esp_println::println!("audio: runtime disabled before boot cue");
+    }
     let mut audio_recovery = RuntimeAudioRecoveryState::new();
     let mut usb_pd = UsbPdSinkManager::new(RefCellDevice::new(&i2c2_bus));
     log_boot_stage("usb_pd_init_begin");
@@ -1051,8 +1070,9 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     log_usb_pd_port_state("init_done", initial_pd_state);
 
     macro_rules! disable_runtime_audio {
-        () => {{
+        ($reason:expr) => {{
             audio_enabled = false;
+            audio_disabled_reason = Some($reason);
             audio_transfer = None;
             audio_manager.stop();
             audio_recovery.clear();
@@ -1062,7 +1082,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     macro_rules! reprime_runtime_audio_dma {
         ($push_failed_msg:literal, $available_failed_msg:literal, $restart_failed_msg:literal) => {{
             audio_transfer = None;
-            tx_buffer.fill(0);
+            let primed = audio_manager.fill(&mut tx_buffer[..]);
+            if primed < tx_buffer.len() {
+                tx_buffer[primed..].fill(0);
+            }
             if let Some(i2s_tx) = i2s_tx.as_mut() {
                 match i2s_tx.write_dma_circular(&tx_buffer) {
                     Ok(mut transfer) => match transfer.available() {
@@ -1148,7 +1171,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                         }
                         RuntimeAudioReprimeResult::Late => {}
                         RuntimeAudioReprimeResult::Fatal => {
-                            disable_runtime_audio!();
+                            disable_runtime_audio!("transition_flush_reprime_failed");
                         }
                     }
                     continue;
@@ -1170,6 +1193,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                     .is_err()
                                 {
                                     defmt::warn!("audio: dma push failed; disabling runtime audio");
+                                    audio_disabled_reason = Some("runtime_dma_push_failed");
                                     disable_audio = true;
                                 } else {
                                     log_runtime_audio_recovered!(budget);
@@ -1202,6 +1226,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                         RuntimeAudioReprimeResult::Ready { .. } => {}
                                         RuntimeAudioReprimeResult::Late => {}
                                         RuntimeAudioReprimeResult::Fatal => {
+                                            audio_disabled_reason =
+                                                Some("runtime_dma_reprime_failed");
                                             disable_audio = true;
                                         }
                                     }
@@ -1215,6 +1241,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                         snapshot.consecutive_late,
                                         snapshot.recovery_attempts
                                     );
+                                    audio_disabled_reason = Some("runtime_dma_late");
                                     disable_audio = true;
                                     underrun_disable_logged = true;
                                 }
@@ -1225,10 +1252,12 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 "audio: dma available failed err={=?}; disabling runtime audio",
                                 err
                             );
+                            audio_disabled_reason = Some("runtime_dma_available_failed");
                             disable_audio = true;
                         }
                     }
                 } else {
+                    audio_disabled_reason = Some("runtime_dma_missing_transfer");
                     disable_audio = true;
                 }
                 if disable_audio {
@@ -1245,19 +1274,33 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                             );
                         }
                     }
-                    disable_runtime_audio!();
+                    disable_runtime_audio!(
+                        audio_disabled_reason.unwrap_or("runtime_dma_disabled")
+                    );
                 }
             }
         }};
     }
 
     if audio_enabled {
+        defmt::info!("audio: trigger boot cue");
+        esp_println::println!("audio: trigger boot cue");
         audio_manager.trigger(AudioCue::BootStartup);
         let mut disable_audio = false;
         if let Some(audio_transfer) = audio_transfer.as_mut() {
             match audio_transfer.available() {
                 Ok(available) if available >= 4 => {
                     let budget = audio_refill_budget(available, AUDIO_BOOT_WATERMARK_BYTES);
+                    defmt::info!(
+                        "audio: boot prefill available={} budget={}",
+                        available,
+                        budget
+                    );
+                    esp_println::println!(
+                        "audio: boot prefill available={} budget={}",
+                        available,
+                        budget
+                    );
                     if budget >= 4
                         && audio_transfer
                             .push_with(|buf| {
@@ -1269,19 +1312,41 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                         defmt::warn!(
                             "audio: dma push failed during boot prefill; disabling runtime audio"
                         );
+                        audio_disabled_reason = Some("boot_prefill_push_failed");
                         disable_audio = true;
                     }
                 }
-                Ok(_) => {}
+                Ok(available) => {
+                    defmt::info!("audio: boot prefill skipped available={}", available);
+                    esp_println::println!("audio: boot prefill skipped available={}", available);
+                }
+                Err(DmaError::Late) => {
+                    match reprime_runtime_audio_dma!(
+                        "audio: boot prefill recovery push failed; disabling runtime audio",
+                        "audio: boot prefill recovery available failed err={=?}; disabling runtime audio",
+                        "audio: boot prefill recovery restart failed err={=?}; disabling runtime audio"
+                    ) {
+                        RuntimeAudioReprimeResult::Ready { .. } => {
+                            audio_recovery.clear();
+                        }
+                        RuntimeAudioReprimeResult::Late => {}
+                        RuntimeAudioReprimeResult::Fatal => {
+                            audio_disabled_reason = Some("boot_prefill_reprime_failed");
+                            disable_audio = true;
+                        }
+                    }
+                }
                 Err(err) => {
                     defmt::warn!(
                         "audio: dma available failed during boot prefill err={=?}; disabling runtime audio",
                         err
                     );
+                    audio_disabled_reason = Some("boot_prefill_available_failed");
                     disable_audio = true;
                 }
             }
         } else {
+            audio_disabled_reason = Some("boot_prefill_missing_transfer");
             disable_audio = true;
         }
         if disable_audio {
@@ -1292,6 +1357,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     }
 
     log_boot_stage("boot_self_test_begin");
+    let mut self_test_audio_late_logged = false;
     let self_test = output::boot_self_test_with_report(
         &mut i2c,
         DEFAULT_ENABLED_OUTPUTS,
@@ -1328,19 +1394,30 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 defmt::warn!(
                                     "audio: dma push failed during self-test; disabling runtime audio"
                                 );
+                                audio_disabled_reason = Some("self_test_push_failed");
                                 disable_audio = true;
                             }
                         }
                         Ok(_) => {}
+                        Err(DmaError::Late) => {
+                            if !self_test_audio_late_logged {
+                                defmt::warn!(
+                                    "audio: dma late during self-test; deferring runtime recovery"
+                                );
+                                self_test_audio_late_logged = true;
+                            }
+                        }
                         Err(err) => {
                             defmt::warn!(
                                 "audio: dma available failed during self-test err={=?}; disabling runtime audio",
                                 err
                             );
+                            audio_disabled_reason = Some("self_test_available_failed");
                             disable_audio = true;
                         }
                     }
                 } else {
+                    audio_disabled_reason = Some("self_test_missing_transfer");
                     disable_audio = true;
                 }
                 if disable_audio {
@@ -1425,6 +1502,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         chg_ilim_hiz_brk,
         cfg,
     );
+    let beeper_prefs = power.beeper_prefs_snapshot();
+    front_panel.set_beeper_prefs(beeper_prefs);
+    audio_manager.set_action_volume_step(beeper_volume_step(beeper_prefs.action_volume));
+    audio_manager.set_system_volume_step(beeper_volume_step(beeper_prefs.system_volume));
     defmt::info!(
         "power: requested_outputs={} active_outputs={} recoverable_outputs={} gate_reason={} target_vout_mv={=u16} target_ilimit_ma={=u16}",
         cfg.requested_outputs.describe(),
@@ -1467,10 +1548,16 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     net_bridge::publish_status_snapshot(initial_snapshot);
     front_panel.update_self_check_snapshot(initial_snapshot);
     front_panel.update_bms_activation_state(power.bms_activation_state());
+    let mut last_dashboard_block_reason = None;
     if front_panel_scene::self_check_can_enter_dashboard(&initial_snapshot) {
         front_panel.enter_dashboard();
     } else {
-        defmt::warn!("ui: stay on self-check reason=boot_self_check_not_clear");
+        last_dashboard_block_reason =
+            front_panel_scene::self_check_dashboard_block_reason(&initial_snapshot);
+        defmt::warn!(
+            "ui: stay on self-check reason={}",
+            last_dashboard_block_reason.unwrap_or("boot_self_check_not_clear")
+        );
     }
     let mut applied_fan = None;
     let mut fan_pwm_degraded = false;
@@ -1508,12 +1595,41 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let pd_started_at = Instant::now();
     let mut last_irq_log_at: Option<Instant> = None;
     let mut last_fan_tach_log_at: Option<Instant> = None;
+    let mut last_audio_diag_at: Option<Instant> = None;
     #[cfg(feature = "web_serial")]
     let mut web_serial_log_state = UsbCdcLogState::new();
     log_boot_stage("main_loop_enter");
 
     loop {
         defmt::info!("esp: heartbeat");
+        if last_audio_diag_at.is_none_or(|last| last.elapsed() >= Duration::from_secs(10)) {
+            last_audio_diag_at = Some(Instant::now());
+            let audio_status = audio_manager.status();
+            defmt::info!(
+                "audio: status enabled={=bool} reason={} playing={=bool} current={=?} route={=?} preview={=bool} queued={} dropped={} preempted={}",
+                audio_enabled,
+                audio_disabled_reason.unwrap_or("none"),
+                audio_status.playing,
+                audio_status.current,
+                audio_status.current_route,
+                audio_status.previewing,
+                audio_status.queued,
+                audio_status.dropped,
+                audio_status.preempted
+            );
+            esp_println::println!(
+                "audio: status enabled={} reason={} playing={} current={:?} route={:?} preview={} queued={} dropped={} preempted={}",
+                audio_enabled,
+                audio_disabled_reason.unwrap_or("none"),
+                audio_status.playing,
+                audio_status.current,
+                audio_status.current_route,
+                audio_status.previewing,
+                audio_status.queued,
+                audio_status.dropped,
+                audio_status.preempted
+            );
+        }
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(2_000) {
             let mut irq_events = irq_tracker.take_delta();
@@ -1656,6 +1772,36 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     front_panel::UiAction::ManualCharge(action) => {
                         power.request_manual_charge_action(action);
                     }
+                    front_panel::UiAction::BeeperPrefsChanged { prefs } => {
+                        power.set_beeper_prefs(prefs);
+                    }
+                    front_panel::UiAction::BeeperPreview { prefs, target } => {
+                        power.set_beeper_prefs(prefs);
+                        audio_manager
+                            .set_action_volume_step(beeper_volume_step(prefs.action_volume));
+                        audio_manager
+                            .set_system_volume_step(beeper_volume_step(prefs.system_volume));
+                        audio_manager.trigger_volume_preview(match target {
+                            front_panel_scene::BeeperSettingTarget::Action => AudioRoute::Action,
+                            front_panel_scene::BeeperSettingTarget::System => AudioRoute::System,
+                        });
+                        if audio_enabled {
+                            audio_manager.arm_transition_bridge();
+                            match reprime_runtime_audio_dma!(
+                                "audio: volume preview push failed; disabling runtime audio",
+                                "audio: volume preview available failed err={=?}; disabling runtime audio",
+                                "audio: volume preview restart failed err={=?}; disabling runtime audio"
+                            ) {
+                                RuntimeAudioReprimeResult::Ready { .. } => {
+                                    audio_recovery.clear();
+                                }
+                                RuntimeAudioReprimeResult::Late => {}
+                                RuntimeAudioReprimeResult::Fatal => {
+                                    disable_runtime_audio!("volume_preview_reprime_failed");
+                                }
+                            }
+                        }
+                    }
                     front_panel::UiAction::ClearBmsActivationResult => {
                         power.clear_bms_activation_state();
                         front_panel.update_bms_activation_state(power.bms_activation_state());
@@ -1663,6 +1809,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 }
             }
             if front_panel_scene::self_check_can_enter_dashboard(&ui_snapshot) {
+                last_dashboard_block_reason = None;
                 if matches!(
                     power.bms_activation_state(),
                     front_panel_scene::BmsActivationState::Result(
@@ -1673,6 +1820,19 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     front_panel.update_bms_activation_state(power.bms_activation_state());
                 }
                 front_panel.enter_dashboard();
+            } else {
+                let reason = front_panel_scene::self_check_dashboard_block_reason(&ui_snapshot);
+                if reason != last_dashboard_block_reason {
+                    last_dashboard_block_reason = reason;
+                    defmt::warn!(
+                        "ui: stay on self-check reason={}",
+                        reason.unwrap_or("self_check_not_clear")
+                    );
+                    esp_println::println!(
+                        "ui: stay on self-check reason={}",
+                        reason.unwrap_or("self_check_not_clear")
+                    );
+                }
             }
             service_runtime_audio!(power);
             if irq_events.any()
@@ -1949,6 +2109,10 @@ const fn manual_charge_speed_api_value(
         front_panel_scene::ManualChargeSpeed::Ma500 => "ma_500",
         front_panel_scene::ManualChargeSpeed::Ma1000 => "ma_1000",
     }
+}
+
+const fn beeper_volume_step(level: front_panel_scene::BeeperVolumeLevel) -> u8 {
+    level.step()
 }
 
 #[cfg(feature = "web_serial")]

@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-03-12
-- Last: 2026-04-05
+- Last: 2026-06-08
 
 ## 背景 / 问题陈述
 
@@ -125,6 +125,9 @@
 - 主固件的 I2S / DMA 音频初始化已改为 best-effort；初始化失败时只记录告警并静默降级，不阻断自检与主循环启动。
 - 运行期若 DMA refill 持续报错，主固件会关闭音频调度并清空队列，避免 cue 在无消费者时永久卡住。
 - 共享播放核心已落到 `firmware/src/audio.rs`，统一 15 组 cue、优先级、WAV 解析/重采样、DMA `fill()` 与播放状态接口。
+- `Dashboard/Menu/AUDIO` 运行态已接上前面板导航状态机；`UP/DOWN` 切换 `ACTION/SYSTEM` 分组，`LEFT/RIGHT` 调整当前分组音量，并向主循环抛出独立的 beeper preview action。AUDIO 页通过左上 `BACK` 按钮返回 Menu，触摸 `ACTION/SYSTEM` 行切换分组，触摸音量滑条手指热区会按最近档位吸附；按下可就近设置，拖拽可连续切换档位，且只在档位变化或首次按下时触发 beeper preview。
+- `Menu` 页触摸命中与按键导航语义一致：左右箭头切换当前菜单项，`DASHBOARD` 图标返回 Dashboard，`AUDIO` 图标进入音量设置，占位图标不触发业务动作。
+- `AudioManager` 现在按 `ACTION / SYSTEM` route 持有独立 gain LUT（共享刻度 `0..6`）；用户调节音量时立即播放内部 `volume_preview` 双脉冲试听音，不再借用 `charge_started` 等业务/告警 cue。
 - Warning cue 的 loop state 只在状态边沿变化时重置，steady-state 轮询期间继续保持 `interval_loop(2000ms)` 节流。
 - Active loop cue 被更高优先级 cue 抢占后会回灌待播队列，避免 warning/error loop 在抢占场景下丢失“首次恢复播放”机会。
 - `test-fw` 已改为复用共享音频模块，保留人工点播、抢占和同级 FIFO 验证能力。
@@ -157,9 +160,11 @@
 
 ## 验证记录
 
-- 构建通过：
-  - `cargo build --release --bin test-fw --features test-fw-audio-playback`
-  - `cargo build --release --bin esp-firmware`
+- 已通过：
+  - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml audio`
+  - `cargo build --manifest-path tools/front-panel-preview/Cargo.toml`
+  - `cd firmware && cargo +esp build --release --bin esp-firmware`
+  - `cd firmware && cargo +esp build --release --bin test-fw --no-default-features --features test-fw-audio-playback`
 
 ## 风险 / 假设
 
@@ -167,6 +172,14 @@
 - 运行时资产继续复用 `firmware/assets/audio/test-fw-cues/*.wav`，不直接从 `docs/audio-cues-preview/**` 读取。
 - 当前 `esp-hal` I2S circular DMA 生命周期仍未提供无缝热恢复路径；本轮修复继续采用“保留现有 cue 状态 + transport 级 re-prime + 有界止损”策略，而不是重做整套音频框架。
 - 当前主固件没有真实 shutdown flow，且没有独立 over-power 状态源，因此对应 cue 必须保持 dormant。
+- `ACTION / SYSTEM` 音量默认 `L4/L4`，调整后立即作用于试听与对应 route，并通过 #6xb4z 定义的 EEPROM beeper prefs record 持久化。
+- 在当前环境里，`cd firmware && cargo +esp build --release --bin test-fw --features test-fw-audio-playback` 仍会命中既有 `esp_rtos_*` 链接缺口；本轮对 `test-fw` 的共享音频编译验证改用 `--no-default-features` 路径完成。
+
+## Visual Evidence
+
+![AUDIO settings touch controls](./assets/audio-settings-touch.png)
+
+![AUDIO settings touch zones](./assets/audio-settings-touch-zones.png)
 
 ## 变更记录（Change log）
 
@@ -196,3 +209,4 @@
 - 2026-03-15: hotfix，`VIN` 瞬时采样缺失时保留最近一次已知市电状态，避免 INA CH3 单次读失败伪造 `mains_absent_dc` / `battery_low_no_mains`；连续缺失则退回 charger `input_present` 兜底。
 - 2026-04-04: hotfix，针对 idle 主板周期性“滴”声回归，把运行期 `DmaError::Late` 从每轮噪声日志改为 burst 级 `detected / recovered / disabled` 状态机；首次 `Late` 立即 re-prime transport，恢复成功后清 burst，5 秒窗口内连续 3 次 recovery attempt 仍失败则静默降级，避免在无业务 cue 边沿时由 DMA underrun 继续制造杂音。
 - 2026-04-05: hotfix，`BQ25792 TS_WARM` 从 `high_stress` 播报条件中移除，避免温区预警在正常充电 warm 档位下每 2 秒重复提示；`TS_WARM` 改由界面状态与风扇全速 override 承载。
+- 2026-06-08: 将 `Dashboard/Menu/AUDIO` 运行态正式接入 `AudioManager`，新增 `ACTION / SYSTEM` 分组 gain LUT 与独立 `volume_preview` 试听音；主固件 release 构建、host-side audio tests 与 `front-panel-preview` 已通过，`test-fw` 默认特性构建仍保留既有 `esp_rtos_*` 链接缺口。

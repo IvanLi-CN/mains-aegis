@@ -50,6 +50,45 @@
 - Pass criteria:
   - `BatteryCard` 保持 `SOC + Tmax + battery_state`，不替换为输出侧指标。
 
+### VR-D-05 Dashboard focus overlay
+
+- Assets:
+  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-home-focus-output.png`
+  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-home-focus-battery-flow.png`
+- Pass criteria:
+  - `DashboardHomeFocus` 仅高亮 5 张首页卡片之一，不得把 `WiFi` 图标并入焦点环。
+  - 选中态使用局部 focus tint + ring，不改动原有卡片指标与首页布局。
+
+## 2A. Menu / Audio checks
+
+### VR-M-01 Menu rail centering
+
+- Assets:
+  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-menu-dashboard.png`
+  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-menu-beeper.png`
+- Pass criteria:
+  - 选中 icon 始终停在屏幕水平中心，未选中项通过 rail 平移进入/离开视窗。
+  - 底部只显示当前选中项 label，不额外重复非选中项文案。
+
+### VR-M-02 Dashboard to menu stack motion
+
+- Assets:
+  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-menu-transition-mid.png`
+  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-menu-transition-end.png`
+- Pass criteria:
+  - 中间帧能同时看到 dashboard 底部与 menu 顶部，体现纵向连续滑动。
+  - 完成帧中 menu 占满视口，dashboard 不再残留可见边框噪声。
+
+### VR-M-03 Audio settings split controls
+
+- Assets:
+  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-audio-action-focus.png`
+  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-audio-system-focus.png`
+  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-audio-system-off.png`
+- Pass criteria:
+  - `AUDIO` 页必须同时显示 `ACTION` 与 `SYSTEM` 两行；共享刻度仅允许 `0 + 1..6`，右侧 value badge 仅允许 `OFF / 1..6`，不出现额外列表、slider 或 `MUTE` 别名。
+  - 共享刻度、两行轨道与右侧 value badge 在三档场景下保持几何稳定；切换编辑分组只能改变高亮，不得导致 relayout。
+
 ## 3. Self-check checks
 
 ### VR-S-01 Card matrix integrity

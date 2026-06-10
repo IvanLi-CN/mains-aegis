@@ -1,4 +1,6 @@
-use crate::front_panel_scene::{self, DashboardRoute, SelfCheckUiSnapshot, UiVariant};
+use crate::front_panel_scene::{
+    self, DashboardPrimaryPage, DashboardRoute, SelfCheckUiSnapshot, UiVariant,
+};
 
 pub const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
 pub const DASHBOARD_VARIANT: UiVariant = UiVariant::InstrumentB;
@@ -14,6 +16,35 @@ pub fn dashboard_uses_frame_animation(
 
 pub fn dashboard_enter_requires_variant_switch(variant: UiVariant) -> bool {
     variant != DASHBOARD_VARIANT
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VerticalGestureDirection {
+    Up,
+    Down,
+}
+
+pub const fn cst816d_vertical_gesture_direction(raw: u8) -> Option<VerticalGestureDirection> {
+    match raw {
+        0x01 => Some(VerticalGestureDirection::Up),
+        0x02 => Some(VerticalGestureDirection::Down),
+        _ => None,
+    }
+}
+
+pub const fn dashboard_page_for_vertical_menu_gesture(
+    page: DashboardPrimaryPage,
+    direction: VerticalGestureDirection,
+) -> Option<DashboardPrimaryPage> {
+    match (page, direction) {
+        (DashboardPrimaryPage::DashboardHome, VerticalGestureDirection::Up) => {
+            Some(DashboardPrimaryPage::Menu)
+        }
+        (DashboardPrimaryPage::Menu, VerticalGestureDirection::Down) => {
+            Some(DashboardPrimaryPage::DashboardHome)
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -80,5 +111,59 @@ mod tests {
     fn enter_dashboard_only_transitions_from_self_check_variant() {
         assert!(dashboard_enter_requires_variant_switch(SELF_CHECK_VARIANT));
         assert!(!dashboard_enter_requires_variant_switch(DASHBOARD_VARIANT));
+    }
+
+    #[test]
+    fn cst816d_vertical_gestures_have_direction() {
+        assert_eq!(
+            cst816d_vertical_gesture_direction(0x01),
+            Some(VerticalGestureDirection::Up)
+        );
+        assert_eq!(
+            cst816d_vertical_gesture_direction(0x02),
+            Some(VerticalGestureDirection::Down)
+        );
+        assert_eq!(cst816d_vertical_gesture_direction(0x00), None);
+        assert_eq!(cst816d_vertical_gesture_direction(0x03), None);
+        assert_eq!(cst816d_vertical_gesture_direction(0x04), None);
+    }
+
+    #[test]
+    fn vertical_menu_gesture_uses_directional_dashboard_pages() {
+        assert_eq!(
+            dashboard_page_for_vertical_menu_gesture(
+                DashboardPrimaryPage::DashboardHome,
+                VerticalGestureDirection::Up
+            ),
+            Some(DashboardPrimaryPage::Menu)
+        );
+        assert_eq!(
+            dashboard_page_for_vertical_menu_gesture(
+                DashboardPrimaryPage::DashboardHome,
+                VerticalGestureDirection::Down
+            ),
+            None
+        );
+        assert_eq!(
+            dashboard_page_for_vertical_menu_gesture(
+                DashboardPrimaryPage::Menu,
+                VerticalGestureDirection::Down
+            ),
+            Some(DashboardPrimaryPage::DashboardHome)
+        );
+        assert_eq!(
+            dashboard_page_for_vertical_menu_gesture(
+                DashboardPrimaryPage::Menu,
+                VerticalGestureDirection::Up
+            ),
+            None
+        );
+        assert_eq!(
+            dashboard_page_for_vertical_menu_gesture(
+                DashboardPrimaryPage::BeeperSettings,
+                VerticalGestureDirection::Up
+            ),
+            None
+        );
     }
 }

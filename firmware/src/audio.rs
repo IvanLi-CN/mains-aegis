@@ -17,6 +17,7 @@ pub enum AudioCue {
     IoOverPower,
     ModuleFault,
     BatteryProtection,
+    VolumePreview,
 }
 
 pub const AUDIO_CUE_COUNT: usize = 15;
@@ -45,6 +46,14 @@ const TRANSITION_RAMP_SAMPLES: u16 = (PLAYBACK_SAMPLE_RATE_HZ / 200) as u16; // 
 const RESAMPLE_STEP_Q16: u32 =
     ((SOURCE_SAMPLE_RATE_HZ as u64 * 65_536u64) / PLAYBACK_SAMPLE_RATE_HZ as u64) as u32;
 const QUEUE_CAPACITY: usize = 16;
+const MAX_GAIN_Q8: u16 = 256;
+const GAIN_Q8_LUT: [u16; 7] = [0, 32, 64, 91, 128, 181, MAX_GAIN_Q8];
+const DEFAULT_VOLUME_STEP: u8 = 4;
+const PREVIEW_HALF_PERIOD_SAMPLES: u32 = PLAYBACK_SAMPLE_RATE_HZ / 1_500;
+const PREVIEW_PULSE_SAMPLES: u32 = (PLAYBACK_SAMPLE_RATE_HZ * 110) / 1_000;
+const PREVIEW_EDGE_RAMP_SAMPLES: u32 = (PLAYBACK_SAMPLE_RATE_HZ * 6) / 1_000;
+const PREVIEW_TOTAL_SAMPLES: u32 = PREVIEW_PULSE_SAMPLES;
+const PREVIEW_PEAK_AMPLITUDE: i16 = 10_500;
 
 const WAV_BOOT_STARTUP: &[u8] = include_bytes!("../assets/audio/test-fw-cues/boot_startup.wav");
 const WAV_MAINS_PRESENT_DC: &[u8] =
@@ -111,16 +120,24 @@ impl AudioCue {
             Self::IoOverPower => 12,
             Self::ModuleFault => 13,
             Self::BatteryProtection => 14,
+            Self::VolumePreview => panic!("preview cue does not have a runtime loop index"),
         }
     }
+}
+
+#[derive(defmt::Format, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioRoute {
+    Action,
+    System,
 }
 
 #[derive(defmt::Format, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AudioPriority {
     Boot = 0,
     Status = 1,
-    Warning = 2,
-    Error = 3,
+    Preview = 2,
+    Warning = 3,
+    Error = 4,
 }
 
 #[derive(defmt::Format, Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,12 +151,16 @@ pub enum CuePlaybackMode {
 pub struct AudioRequest {
     pub cue: AudioCue,
     pub priority: AudioPriority,
+    pub route: AudioRoute,
+    pub preview: bool,
 }
 
 #[derive(defmt::Format, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AudioStatus {
     pub playing: bool,
     pub current: Option<AudioCue>,
+    pub current_route: Option<AudioRoute>,
+    pub previewing: bool,
     pub queued: u8,
     pub dropped: u32,
     pub preempted: u32,
@@ -186,6 +207,8 @@ pub struct AudioManager {
     last_output_sample: i16,
     bridge_from_sample: i16,
     bridge_samples_remaining: u16,
+    action_gain_q8: u16,
+    system_gain_q8: u16,
 }
 
 impl AudioManager {
@@ -201,6 +224,8 @@ impl AudioManager {
             last_output_sample: 0,
             bridge_from_sample: 0,
             bridge_samples_remaining: 0,
+            action_gain_q8: gain_q8_for_step(DEFAULT_VOLUME_STEP),
+            system_gain_q8: gain_q8_for_step(DEFAULT_VOLUME_STEP),
         }
     }
 
@@ -227,6 +252,24 @@ impl AudioManager {
 
     pub fn trigger(&mut self, cue: AudioCue) {
         self.request_cue(cue);
+    }
+
+    pub fn set_action_volume_step(&mut self, step: u8) {
+        self.action_gain_q8 = gain_q8_for_step(step);
+    }
+
+    pub fn set_system_volume_step(&mut self, step: u8) {
+        self.system_gain_q8 = gain_q8_for_step(step);
+    }
+
+    pub fn trigger_volume_preview(&mut self, route: AudioRoute) {
+        let request = preview_request(route);
+        self.remove_queued_previews();
+        let interrupted = self.current.map(|current| current.request);
+        self.current = Some(Self::start_playback(request));
+        if let Some(interrupted) = interrupted {
+            self.requeue_preempted_loop(interrupted);
+        }
     }
 
     pub fn set_cue_active(&mut self, cue: AudioCue, active: bool, now: Instant) {
@@ -303,6 +346,8 @@ impl AudioManager {
         AudioStatus {
             playing: self.current.is_some(),
             current: self.current.map(|v| v.request.cue),
+            current_route: self.current.map(|v| v.request.route),
+            previewing: self.current.is_some_and(|v| v.request.preview),
             queued: self.queue_len as u8,
             dropped: self.dropped,
             preempted: self.preempted,
@@ -353,6 +398,10 @@ impl AudioManager {
                 self.current = None;
                 continue;
             };
+            let sample = self.scale_sample(
+                sample,
+                self.current.expect("playback must exist").request.route,
+            );
             self.last_output_sample = sample;
             let [lo, hi] = sample.to_le_bytes();
             buf[out] = lo;
@@ -389,9 +438,11 @@ impl AudioManager {
 
     fn start_playback(request: AudioRequest) -> ActivePlayback {
         defmt::info!(
-            "audio: start_playback cue={=?} priority={=?}",
+            "audio: start_playback cue={=?} priority={=?} route={=?} preview={=bool}",
             request.cue,
-            request.priority
+            request.priority,
+            request.route,
+            request.preview
         );
         ActivePlayback {
             request,
@@ -482,6 +533,9 @@ impl AudioManager {
     }
 
     fn requeue_preempted_loop(&mut self, request: AudioRequest) {
+        if request.preview {
+            return;
+        }
         if matches!(playback_mode_for_cue(request.cue), CuePlaybackMode::OneShot) {
             return;
         }
@@ -495,6 +549,36 @@ impl AudioManager {
             self.dropped = self.dropped.saturating_add(1);
         }
     }
+
+    fn scale_sample(&self, sample: i16, route: AudioRoute) -> i16 {
+        let gain_q8 = match route {
+            AudioRoute::Action => self.action_gain_q8,
+            AudioRoute::System => self.system_gain_q8,
+        };
+        let scaled = (i32::from(sample) * i32::from(gain_q8)) / i32::from(MAX_GAIN_Q8);
+        scaled.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16
+    }
+
+    fn remove_queued_previews(&mut self) {
+        if self.queue_len == 0 {
+            return;
+        }
+        let mut next = [None; QUEUE_CAPACITY];
+        let mut kept_len = 0usize;
+        let mut idx = 0usize;
+        while idx < self.queue_len {
+            let slot = (self.queue_head + idx) % QUEUE_CAPACITY;
+            let request = self.queue[slot].take();
+            if !request.is_some_and(|value| value.preview) {
+                next[kept_len] = request;
+                kept_len += 1;
+            }
+            idx += 1;
+        }
+        self.queue = next;
+        self.queue_head = 0;
+        self.queue_len = kept_len;
+    }
 }
 
 impl Default for AudioManager {
@@ -506,6 +590,15 @@ impl Default for AudioManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn decode_left_samples(buf: &[u8]) -> heapless::Vec<i16, 16> {
+        let mut samples = heapless::Vec::new();
+        for frame in buf.chunks_exact(4) {
+            let sample = i16::from_le_bytes([frame[0], frame[1]]);
+            samples.push(sample).expect("sample buffer must have room");
+        }
+        samples
+    }
 
     fn drain_current(manager: &mut AudioManager) {
         let mut buf = [0u8; 512];
@@ -596,12 +689,118 @@ mod tests {
         let expected = i16::from_le_bytes([active.pcm[base], active.pcm[base + 1]]);
         assert_eq!(sample, expected);
     }
+
+    #[test]
+    fn volume_preview_uses_dedicated_internal_cue() {
+        let request = preview_request(AudioRoute::Action);
+
+        assert_eq!(request.cue, AudioCue::VolumePreview);
+        assert!(request.preview);
+        assert_eq!(request.priority, AudioPriority::Preview);
+        assert_eq!(playback_mode_for_cue(request.cue), CuePlaybackMode::OneShot);
+    }
+
+    #[test]
+    fn action_preview_uses_action_gain() {
+        let mut manager = AudioManager::new();
+        manager.set_action_volume_step(0);
+        manager.set_system_volume_step(6);
+        manager.trigger_volume_preview(AudioRoute::Action);
+
+        let status = manager.status();
+        assert_eq!(status.current, Some(AudioCue::VolumePreview));
+        assert_eq!(status.current_route, Some(AudioRoute::Action));
+        assert!(status.previewing);
+
+        let mut buf = [0u8; 32];
+        let filled = manager.fill(&mut buf);
+        assert_eq!(filled, buf.len());
+        let samples = decode_left_samples(&buf);
+        assert!(samples.iter().all(|sample| *sample == 0));
+    }
+
+    #[test]
+    fn system_preview_uses_system_gain() {
+        let mut manager = AudioManager::new();
+        manager.set_action_volume_step(0);
+        manager.set_system_volume_step(6);
+        manager.trigger_volume_preview(AudioRoute::System);
+
+        let status = manager.status();
+        assert_eq!(status.current, Some(AudioCue::VolumePreview));
+        assert_eq!(status.current_route, Some(AudioRoute::System));
+        assert!(status.previewing);
+
+        let mut buf = [0u8; 32];
+        let filled = manager.fill(&mut buf);
+        assert_eq!(filled, buf.len());
+        let samples = decode_left_samples(&buf);
+        assert!(samples.iter().any(|sample| *sample != 0));
+    }
+
+    #[test]
+    fn volume_preview_preempts_warning_loop_for_immediate_feedback() {
+        let now = Instant::now();
+        let mut manager = AudioManager::new();
+        manager.set_cue_active(AudioCue::HighStress, true, now);
+        manager.tick(now);
+        assert_eq!(manager.status().current, Some(AudioCue::HighStress));
+
+        manager.trigger_volume_preview(AudioRoute::Action);
+        let status = manager.status();
+        assert_eq!(status.current, Some(AudioCue::VolumePreview));
+        assert_eq!(status.current_route, Some(AudioRoute::Action));
+        assert!(status.previewing);
+    }
+
+    #[test]
+    fn volume_preview_is_audible_near_start_of_large_prefill() {
+        let mut manager = AudioManager::new();
+        manager.set_action_volume_step(6);
+        manager.trigger_volume_preview(AudioRoute::Action);
+
+        let mut buf = [0u8; 4096];
+        let filled = manager.fill(&mut buf);
+        assert_eq!(filled, buf.len());
+        assert!(buf[..512]
+            .chunks_exact(4)
+            .any(|frame| { i16::from_le_bytes([frame[0], frame[1]]) != 0 }));
+    }
+
+    #[test]
+    fn volume_preview_is_single_contiguous_pulse() {
+        let mut active = ActivePlayback {
+            request: preview_request(AudioRoute::Action),
+            pcm: &[],
+            source_pos_q16: 0,
+            fade_in_samples_remaining: 0,
+        };
+
+        let mut samples = [0i16; PREVIEW_TOTAL_SAMPLES as usize];
+        for sample in samples.iter_mut() {
+            *sample = next_preview_sample(&mut active).expect("preview should still be active");
+        }
+        assert_eq!(next_preview_sample(&mut active), None);
+        assert_eq!(PREVIEW_TOTAL_SAMPLES, PREVIEW_PULSE_SAMPLES);
+        assert!(samples.iter().all(|sample| *sample != 0));
+    }
 }
 
 pub const fn default_request(cue: AudioCue) -> AudioRequest {
     AudioRequest {
         cue,
         priority: priority_for_cue(cue),
+        route: route_for_cue(cue),
+        preview: false,
+    }
+}
+
+pub const fn preview_request(route: AudioRoute) -> AudioRequest {
+    AudioRequest {
+        cue: AudioCue::VolumePreview,
+        priority: AudioPriority::Preview,
+        route,
+        preview: true,
     }
 }
 
@@ -622,6 +821,26 @@ pub const fn priority_for_cue(cue: AudioCue) -> AudioPriority {
         | AudioCue::IoOverPower
         | AudioCue::ModuleFault
         | AudioCue::BatteryProtection => AudioPriority::Error,
+        AudioCue::VolumePreview => AudioPriority::Preview,
+    }
+}
+
+pub const fn route_for_cue(cue: AudioCue) -> AudioRoute {
+    match cue {
+        AudioCue::VolumePreview => AudioRoute::Action,
+        _ => AudioRoute::System,
+    }
+}
+
+pub const fn gain_q8_for_step(step: u8) -> u16 {
+    match step {
+        0 => GAIN_Q8_LUT[0],
+        1 => GAIN_Q8_LUT[1],
+        2 => GAIN_Q8_LUT[2],
+        3 => GAIN_Q8_LUT[3],
+        4 => GAIN_Q8_LUT[4],
+        5 => GAIN_Q8_LUT[5],
+        _ => GAIN_Q8_LUT[6],
     }
 }
 
@@ -644,6 +863,7 @@ pub const fn playback_mode_for_cue(cue: AudioCue) -> CuePlaybackMode {
         | AudioCue::IoOverPower
         | AudioCue::ModuleFault
         | AudioCue::BatteryProtection => CuePlaybackMode::ContinuousLoop,
+        AudioCue::VolumePreview => CuePlaybackMode::OneShot,
     }
 }
 
@@ -664,11 +884,24 @@ fn pcm_for_cue(cue: AudioCue) -> &'static [u8] {
         AudioCue::IoOverPower => WAV_IO_OVER_POWER,
         AudioCue::ModuleFault => WAV_MODULE_FAULT,
         AudioCue::BatteryProtection => WAV_BATTERY_PROTECTION,
+        AudioCue::VolumePreview => return &[],
     };
     parse_wav_pcm16le_mono(wav)
 }
 
 fn next_mono_sample(active: &mut ActivePlayback) -> Option<i16> {
+    if active.request.preview {
+        let mut sample = next_preview_sample(active)?;
+        if active.fade_in_samples_remaining > 0 {
+            let total = i32::from(TRANSITION_RAMP_SAMPLES.max(1));
+            let progressed = total - i32::from(active.fade_in_samples_remaining) + 1;
+            let scaled = (i32::from(sample) * progressed) / total;
+            active.fade_in_samples_remaining -= 1;
+            sample = scaled as i16;
+        }
+        return Some(sample);
+    }
+
     let sample_count = active.pcm.len() / 2;
     if sample_count == 0 {
         return None;
@@ -700,6 +933,28 @@ fn next_mono_sample(active: &mut ActivePlayback) -> Option<i16> {
         sample = scaled as i16;
     }
     Some(sample)
+}
+
+fn next_preview_sample(active: &mut ActivePlayback) -> Option<i16> {
+    let sample_index = active.source_pos_q16;
+    if sample_index >= PREVIEW_TOTAL_SAMPLES {
+        return None;
+    }
+    active.source_pos_q16 = active.source_pos_q16.saturating_add(1);
+
+    let edge_ramp = PREVIEW_EDGE_RAMP_SAMPLES.max(1);
+    let attack = sample_index.saturating_add(1).min(edge_ramp);
+    let release = PREVIEW_PULSE_SAMPLES
+        .saturating_sub(sample_index)
+        .min(edge_ramp);
+    let envelope = attack.min(release);
+    let amplitude = (i32::from(PREVIEW_PEAK_AMPLITUDE) * envelope as i32) / edge_ramp as i32;
+    let polarity = if (sample_index / PREVIEW_HALF_PERIOD_SAMPLES.max(1)) % 2 == 0 {
+        1
+    } else {
+        -1
+    };
+    Some((amplitude * polarity) as i16)
 }
 
 fn parse_wav_pcm16le_mono(bytes: &'static [u8]) -> &'static [u8] {
