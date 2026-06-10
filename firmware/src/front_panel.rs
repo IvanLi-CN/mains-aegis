@@ -2134,6 +2134,19 @@ where
 
     fn process_dashboard_touch_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
         let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
+        if self.dashboard_page == DashboardPrimaryPage::BeeperSettings {
+            if !snapshot.touch {
+                return None;
+            }
+            let (x, y) = snapshot.touch_point?;
+            let touch_edge = !prev.touch;
+            let touch_moved = prev.touch && prev.touch_point != snapshot.touch_point;
+            if !touch_edge && !touch_moved {
+                return None;
+            }
+            return self.process_beeper_settings_touch_action(x, y, touch_edge);
+        }
+
         if !snapshot.touch || prev.touch {
             return None;
         }
@@ -2145,9 +2158,6 @@ where
 
         if self.dashboard_page == DashboardPrimaryPage::Menu {
             return self.process_dashboard_menu_touch_action(x, y);
-        }
-        if self.dashboard_page == DashboardPrimaryPage::BeeperSettings {
-            return self.process_beeper_settings_touch_action(x, y);
         }
         if self.dashboard_page != DashboardPrimaryPage::DashboardHome {
             return None;
@@ -2219,9 +2229,15 @@ where
         None
     }
 
-    fn process_beeper_settings_touch_action(&mut self, x: u16, y: u16) -> Option<UiAction> {
+    fn process_beeper_settings_touch_action(
+        &mut self,
+        x: u16,
+        y: u16,
+        touch_edge: bool,
+    ) -> Option<UiAction> {
         esp_println::println!(
-            "ui: touch edge page=audio selected={} x={} y={}",
+            "ui: touch {} page=audio selected={} x={} y={}",
+            if touch_edge { "edge" } else { "drag" },
             beeper_target_name(self.beeper_prefs.selected_target),
             x,
             y
@@ -2241,9 +2257,11 @@ where
         let mut preview_target = None;
         match target {
             BeeperSettingsTouchTarget::Back => {
-                self.set_dashboard_page(DashboardPrimaryPage::Menu);
-                defmt::info!("ui: beeper touch target=back");
-                esp_println::println!("ui: beeper touch target=back");
+                if touch_edge {
+                    self.set_dashboard_page(DashboardPrimaryPage::Menu);
+                    defmt::info!("ui: beeper touch target=back");
+                    esp_println::println!("ui: beeper touch target=back");
+                }
                 return None;
             }
             BeeperSettingsTouchTarget::Target(target) => {
@@ -2253,7 +2271,9 @@ where
                 next_prefs = next_prefs
                     .with_selected_target(target)
                     .with_volume(target, level);
-                preview_target = Some(target);
+                if touch_edge || next_prefs != self.beeper_prefs {
+                    preview_target = Some(target);
+                }
             }
         }
 

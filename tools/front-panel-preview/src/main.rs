@@ -1070,6 +1070,7 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardAudioActionFocus
         | ScenarioArg::DashboardAudioSystemFocus
         | ScenarioArg::DashboardAudioSystemOff
+        | ScenarioArg::DashboardAudioTouchZones
         | ScenarioArg::DashboardMenuTransitionMid
         | ScenarioArg::DashboardMenuTransitionEnd
         | ScenarioArg::DashboardRuntimeAssist
@@ -1151,6 +1152,7 @@ fn run() -> Result<(), String> {
         ScenarioArg::DashboardAudioActionFocus => ModeArg::Standby,
         ScenarioArg::DashboardAudioSystemFocus => ModeArg::Standby,
         ScenarioArg::DashboardAudioSystemOff => ModeArg::Standby,
+        ScenarioArg::DashboardAudioTouchZones => ModeArg::Standby,
         ScenarioArg::DashboardMenuTransitionMid => ModeArg::Standby,
         ScenarioArg::DashboardMenuTransitionEnd => ModeArg::Standby,
         ScenarioArg::DashboardDetailCells => ModeArg::Standby,
@@ -1315,6 +1317,7 @@ fn run() -> Result<(), String> {
         | ScenarioArg::DashboardAudioActionFocus
         | ScenarioArg::DashboardAudioSystemFocus
         | ScenarioArg::DashboardAudioSystemOff
+        | ScenarioArg::DashboardAudioTouchZones
         | ScenarioArg::DashboardMenuTransitionMid
         | ScenarioArg::DashboardMenuTransitionEnd => {
             let (mode, shell, snapshot) = match args.scenario {
@@ -1418,6 +1421,18 @@ fn run() -> Result<(), String> {
                     ),
                     UI_H as i16,
                 ),
+                ScenarioArg::DashboardAudioTouchZones => dashboard_shell_fixture(
+                    DashboardPrimaryPage::BeeperSettings,
+                    DashboardHomeFocus::Charger,
+                    MenuItem::Beeper,
+                    DashboardMenuStyle::default_preview(),
+                    BeeperPrefs::new(
+                        BeeperVolumeLevel::L2,
+                        BeeperVolumeLevel::L4,
+                        BeeperSettingTarget::Action,
+                    ),
+                    UI_H as i16,
+                ),
                 ScenarioArg::DashboardMenuTransitionMid => dashboard_shell_fixture(
                     DashboardPrimaryPage::Menu,
                     DashboardHomeFocus::Charger,
@@ -1450,6 +1465,13 @@ fn run() -> Result<(), String> {
                 Some(&snapshot),
             )
             .map_err(|_| "render failed unexpectedly".to_string())?;
+            if matches!(args.scenario, ScenarioArg::DashboardAudioTouchZones) {
+                front_panel_scene::render_beeper_settings_touch_regions_overlay(
+                    &mut framebuffer,
+                    UiVariant::InstrumentB,
+                )
+                .map_err(|_| "touch overlay render failed unexpectedly".to_string())?;
+            }
         }
         ScenarioArg::DashboardDetailCells
         | ScenarioArg::DashboardDetailCellsBalanceActive
@@ -1895,6 +1917,7 @@ enum ScenarioArg {
     DashboardAudioActionFocus,
     DashboardAudioSystemFocus,
     DashboardAudioSystemOff,
+    DashboardAudioTouchZones,
     DashboardMenuTransitionMid,
     DashboardMenuTransitionEnd,
     DashboardDetailCells,
@@ -1985,6 +2008,7 @@ impl ScenarioArg {
             "dashboard-audio-action-focus" => Ok(Self::DashboardAudioActionFocus),
             "dashboard-audio-system-focus" => Ok(Self::DashboardAudioSystemFocus),
             "dashboard-audio-system-off" => Ok(Self::DashboardAudioSystemOff),
+            "dashboard-audio-touch-zones" => Ok(Self::DashboardAudioTouchZones),
             "dashboard-beeper-volume-off" => Ok(Self::DashboardAudioSystemOff),
             "dashboard-beeper-volume-mid" => Ok(Self::DashboardAudioActionFocus),
             "dashboard-beeper-volume-max" => Ok(Self::DashboardAudioSystemFocus),
@@ -2096,6 +2120,7 @@ impl ScenarioArg {
             ScenarioArg::DashboardAudioActionFocus => "dashboard-audio-action-focus",
             ScenarioArg::DashboardAudioSystemFocus => "dashboard-audio-system-focus",
             ScenarioArg::DashboardAudioSystemOff => "dashboard-audio-system-off",
+            ScenarioArg::DashboardAudioTouchZones => "dashboard-audio-touch-zones",
             ScenarioArg::DashboardMenuTransitionMid => "dashboard-menu-transition-mid",
             ScenarioArg::DashboardMenuTransitionEnd => "dashboard-menu-transition-end",
             ScenarioArg::DashboardDetailCells => "dashboard-detail-cells",

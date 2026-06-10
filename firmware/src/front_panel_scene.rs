@@ -1244,6 +1244,14 @@ const AUDIO_SYSTEM_ROW_Y: u16 = 104;
 const AUDIO_TRACK_X: u16 = 102;
 const AUDIO_TRACK_W: u16 = 146;
 const AUDIO_TRACK_H: u16 = 18;
+const AUDIO_VOLUME_TOUCH_X: u16 = 76;
+const AUDIO_VOLUME_TOUCH_W: u16 = 196;
+const AUDIO_VOLUME_TOUCH_Y_INSET: u16 = 6;
+const AUDIO_VOLUME_TOUCH_H: u16 = 40;
+const AUDIO_ROW_TOUCH_X: u16 = 6;
+const AUDIO_ROW_TOUCH_W: u16 = 308;
+const AUDIO_ROW_TOUCH_Y_INSET: u16 = 4;
+const AUDIO_ROW_TOUCH_H: u16 = 36;
 const AUDIO_NODE_SIZE: u16 = 8;
 const AUDIO_BADGE_X: u16 = 260;
 const AUDIO_BADGE_W: u16 = 36;
@@ -2026,31 +2034,28 @@ pub fn beeper_settings_hit_test(x: u16, y: u16) -> Option<BeeperSettingsTouchTar
 
     for target in BeeperSettingTarget::ALL {
         let row_y = beeper_setting_row_y(target);
-        let row_center_y = row_y + (AUDIO_ROW_H / 2);
-        let track_y = row_center_y - (AUDIO_TRACK_H / 2);
         if contains(
             x,
             y,
-            AUDIO_TRACK_X.saturating_sub(8),
-            track_y,
-            AUDIO_TRACK_W + 16,
-            AUDIO_TRACK_H,
+            AUDIO_VOLUME_TOUCH_X,
+            audio_volume_touch_y(row_y),
+            AUDIO_VOLUME_TOUCH_W,
+            AUDIO_VOLUME_TOUCH_H,
         ) {
-            let step = AUDIO_TRACK_W / 6;
-            let idx = if x <= AUDIO_TRACK_X {
-                0
-            } else if x >= AUDIO_TRACK_X + AUDIO_TRACK_W {
-                6
-            } else {
-                ((x - AUDIO_TRACK_X + (step / 2)) / step).min(6)
-            };
             return Some(BeeperSettingsTouchTarget::Volume {
                 target,
-                level: BeeperVolumeLevel::from_step(idx as u8),
+                level: beeper_volume_level_for_x(x),
             });
         }
 
-        if contains(x, y, AUDIO_ROW_X, row_y, AUDIO_ROW_W, AUDIO_ROW_H) {
+        if contains(
+            x,
+            y,
+            AUDIO_ROW_TOUCH_X,
+            audio_row_touch_y(row_y),
+            AUDIO_ROW_TOUCH_W,
+            AUDIO_ROW_TOUCH_H,
+        ) {
             return Some(BeeperSettingsTouchTarget::Target(target));
         }
     }
@@ -3552,6 +3557,41 @@ pub fn render_dashboard_touch_regions_overlay<P: UiPainter>(
     Ok(())
 }
 
+#[allow(dead_code)]
+pub fn render_beeper_settings_touch_regions_overlay<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+
+    draw_dashboard_touch_region_overlay(
+        painter,
+        variant,
+        palette,
+        AUDIO_VOLUME_TOUCH_X,
+        audio_volume_touch_y(AUDIO_ACTION_ROW_Y),
+        AUDIO_VOLUME_TOUCH_W,
+        AUDIO_VOLUME_TOUCH_H,
+        "A",
+        palette.right,
+        AUDIO_VOLUME_TOUCH_X + AUDIO_VOLUME_TOUCH_W - 12,
+        audio_volume_touch_y(AUDIO_ACTION_ROW_Y) + 2,
+    )?;
+    draw_dashboard_touch_region_overlay(
+        painter,
+        variant,
+        palette,
+        AUDIO_VOLUME_TOUCH_X,
+        audio_volume_touch_y(AUDIO_SYSTEM_ROW_Y),
+        AUDIO_VOLUME_TOUCH_W,
+        AUDIO_VOLUME_TOUCH_H,
+        "S",
+        palette.center,
+        AUDIO_VOLUME_TOUCH_X + AUDIO_VOLUME_TOUCH_W - 12,
+        audio_volume_touch_y(AUDIO_SYSTEM_ROW_Y) + 2,
+    )
+}
+
 fn dashboard_home_focus_bounds(focus: DashboardHomeFocus) -> (u16, u16, u16, u16) {
     match focus {
         DashboardHomeFocus::Output => (
@@ -4497,11 +4537,31 @@ fn beeper_volume_index(level: BeeperVolumeLevel) -> usize {
         .unwrap_or(0)
 }
 
+fn beeper_volume_level_for_x(x: u16) -> BeeperVolumeLevel {
+    let step = AUDIO_TRACK_W / 6;
+    let idx = if x <= AUDIO_TRACK_X {
+        0
+    } else if x >= AUDIO_TRACK_X + AUDIO_TRACK_W {
+        6
+    } else {
+        ((x - AUDIO_TRACK_X + (step / 2)) / step).min(6)
+    };
+    BeeperVolumeLevel::from_step(idx as u8)
+}
+
 fn beeper_setting_row_y(target: BeeperSettingTarget) -> u16 {
     match target {
         BeeperSettingTarget::Action => AUDIO_ACTION_ROW_Y,
         BeeperSettingTarget::System => AUDIO_SYSTEM_ROW_Y,
     }
+}
+
+const fn audio_volume_touch_y(row_y: u16) -> u16 {
+    row_y.saturating_sub(AUDIO_VOLUME_TOUCH_Y_INSET)
+}
+
+const fn audio_row_touch_y(row_y: u16) -> u16 {
+    row_y.saturating_sub(AUDIO_ROW_TOUCH_Y_INSET)
 }
 
 fn beeper_target_focus_color(palette: Palette, target: BeeperSettingTarget) -> u16 {
@@ -14640,6 +14700,16 @@ mod tests {
             ))
         );
         assert_eq!(
+            beeper_settings_hit_test(
+                AUDIO_TRACK_X - 20,
+                AUDIO_ACTION_ROW_Y.saturating_sub(AUDIO_VOLUME_TOUCH_Y_INSET)
+            ),
+            Some(BeeperSettingsTouchTarget::Volume {
+                target: BeeperSettingTarget::Action,
+                level: BeeperVolumeLevel::Off
+            })
+        );
+        assert_eq!(
             beeper_settings_hit_test(AUDIO_TRACK_X, AUDIO_ACTION_ROW_Y + (AUDIO_ROW_H / 2)),
             Some(BeeperSettingsTouchTarget::Volume {
                 target: BeeperSettingTarget::Action,
@@ -14660,6 +14730,16 @@ mod tests {
             beeper_settings_hit_test(
                 AUDIO_TRACK_X + AUDIO_TRACK_W,
                 AUDIO_SYSTEM_ROW_Y + (AUDIO_ROW_H / 2)
+            ),
+            Some(BeeperSettingsTouchTarget::Volume {
+                target: BeeperSettingTarget::System,
+                level: BeeperVolumeLevel::L6
+            })
+        );
+        assert_eq!(
+            beeper_settings_hit_test(
+                AUDIO_TRACK_X + AUDIO_TRACK_W + 20,
+                AUDIO_SYSTEM_ROW_Y + AUDIO_ROW_H + AUDIO_VOLUME_TOUCH_Y_INSET - 1
             ),
             Some(BeeperSettingsTouchTarget::Volume {
                 target: BeeperSettingTarget::System,
