@@ -160,7 +160,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 ## 验收标准
 
 - `tools/mains-aegis-host` 能编译并通过单元测试。
-- devd 可无端口启动，并通过 mock device 验证设备管理、artifact selection、dry-run flash 与 session API。
+- devd 可无端口启动；无硬件验证通过 dry-run API 与单元测试中的 synthetic in-memory device state 覆盖设备管理、artifact selection、dry-run flash 与 session API。
 - devd 重启后仍保留绑定、别名和 artifact selection；但不会恢复 connected/Web lease/monitor/log ring 等运行态。
 - host power API 支持 Linux/macOS 查询、dry-run、事件广播和真实动作默认拒绝；缺少平台后端或权限不足时返回可诊断错误。
 - `tools/firmware-artifact/build-catalog-entry.py` 能为 ELF 生成 manifest、catalog 和 `SHA256SUMS`。

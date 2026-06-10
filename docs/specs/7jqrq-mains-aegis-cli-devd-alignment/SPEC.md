@@ -82,8 +82,8 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 
 ### Web HTTP service
 
-- Web dev proxy 默认指向 `http://127.0.0.1:30080`，可通过 `MAINS_AEGIS_DEVD_URL`、`VITE_DEFAULT_DEVD_URL` 或 `VITE_DEVD_API_BASE` 指向显式启动的 `serve-http --allow-dev-cors`；该地址代表显式启动的开发 HTTP service，不是默认 daemon。CLI 与 devd 的通信仍只能通过系统原生 IPC endpoint，不能连接 Web proxy、HTTP service URL 或任何 TCP 地址。
-- Hosted 模式固定使用 same-origin devd HTTP service；Connect 页在 hosted app 中不暴露 devd URL 或 token 输入。demo 模式仍固定使用 `mock:devd`。
+- Web dev proxy 默认指向 `http://127.0.0.1:30080`，可通过 `MAINS_AEGIS_DEVD_URL`、`VITE_DEFAULT_DEVD_URL` 或 `VITE_DEVD_API_BASE` 指向显式启动的 `serve-http --allow-dev-cors`；该地址代表显式启动的开发 HTTP service，不是默认 daemon。需要 Web 与 CLI 共用状态时，CLI 连接同一个 `serve-http --ipc <endpoint>`；CLI 与 devd 的通信仍只能通过系统原生 IPC endpoint，不能连接 Web proxy、HTTP service URL 或任何 TCP 地址。
+- Hosted 模式固定使用 same-origin devd HTTP service；Connect 页在 hosted app 中不暴露 devd URL 或 token 输入。demo 模式仍固定使用前端内置 mock fixtures，不依赖 devd runtime device。
 - Hosted Connect 只保留 devd discovery；不再渲染 Web Serial 或手动 LAN fallback 面板。独立浏览器 / Vite 开发场景继续保留这些 fallback 入口。
 - `serve-http --allow-dev-cors` 只允许 loopback HTTP development origins（`localhost`、`127.0.0.1`、`[::1]`，任意端口），用于 Vite 租约端口或直接 dev API 调试；非 loopback HTTP service 仍必须走 token-gated LAN bridge 规则。
 - Connect 页在 devd 发现结果里只展示 `identity.firmware.protocol === "mains-aegis.cdc.v1"` 的 LAN 设备；其他 LAN 候选不应进入可连接列表。
@@ -101,7 +101,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - `mains-aegis-devd serve --help` 中不出现 `--bind`。
 - `mains-aegis-devd serve-http --bind 0.0.0.0:30080` 在缺少 token 文件时失败。
 - `mains-aegis-devd serve-http --allow-dev-cors --open-browser` 参数冲突并失败。
-- `mains-aegis` CLI 能通过 IPC 调用 mock devd 的 health/list/devices 命令。
+- `mains-aegis` CLI 能通过 IPC 调用 devd 的 health/list/devices 命令；当 daemon 尚未发现任何设备时返回空设备列表而不是 synthetic mock 设备。
 - `mains-aegis --ipc http://127.0.0.1:30080 health`、`mains-aegis --ipc tcp://127.0.0.1:30080 health` 与裸 `host:port` 形式必须失败，且不得发起 TCP 连接。
 - `mains-aegis device <id> bind` 创建的绑定在 devd 重启后仍可由 `devices list` 看到；`connect` 和 Web lease 不跨重启恢复。
 - `mains-aegis device <id> flash` 和 `mains-aegis host power ...` 默认 dry-run，真实动作必须显式 `--real`。

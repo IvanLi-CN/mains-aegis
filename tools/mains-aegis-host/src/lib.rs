@@ -1136,10 +1136,12 @@ fn create_app_state_with_auth_and_persistence(
     persistence: DevdPersistence,
 ) -> AppState {
     let (events, _) = broadcast::channel(256);
-    let persisted = load_devd_state(&persistence).unwrap_or_else(|error| {
-        tracing::warn!("failed to load mains-aegis-devd state: {error}");
-        PersistedDevdState::default()
-    });
+    let persisted = load_devd_state(&persistence)
+        .map(sanitize_persisted_devd_state)
+        .unwrap_or_else(|error| {
+            tracing::warn!("failed to load mains-aegis-devd state: {error}");
+            PersistedDevdState::default()
+        });
     let state = AppState {
         inner: Arc::new(Mutex::new(DevdState {
             bindings: persisted.bindings,
@@ -1156,7 +1158,6 @@ fn create_app_state_with_auth_and_persistence(
         app_session_secret,
         persistence,
     };
-    seed_mock_device(&state);
     spawn_web_lease_reaper(state.clone());
     state
 }
@@ -1196,6 +1197,15 @@ fn load_devd_state(persistence: &DevdPersistence) -> anyhow::Result<PersistedDev
         .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
     serde_json::from_str(&text)
         .map_err(|error| anyhow::anyhow!("parse {}: {error}", path.display()))
+}
+
+fn sanitize_persisted_devd_state(mut persisted: PersistedDevdState) -> PersistedDevdState {
+    // Older devd builds persisted a synthetic test device into runtime state.
+    // Strip those records on load so production/dev instances only expose real devices.
+    persisted.bindings.remove("mock-devkit");
+    persisted.selected_artifacts.remove("mock-devkit");
+    persisted.device_trace.remove("mock-devkit");
+    persisted
 }
 
 fn persisted_snapshot(state: &DevdState) -> PersistedDevdState {
@@ -5491,6 +5501,7 @@ fn hex_value(byte: u8) -> Result<u8, HttpError> {
     }
 }
 
+#[cfg(test)]
 fn seed_mock_device(state: &AppState) {
     let mut guard = state.inner.lock().expect("state lock");
     let id = "mock-devkit".to_string();
@@ -7367,6 +7378,7 @@ mod tests {
     #[tokio::test]
     async fn status_updates_emit_deduped_power_events() {
         let state = create_app_state(false);
+        seed_mock_device(&state);
         let device_id = "mock-devkit";
         let status = json!({
             "input": {
@@ -7409,6 +7421,7 @@ mod tests {
     #[tokio::test]
     async fn monitor_trace_status_frames_append_power_event() {
         let state = create_app_state(false);
+        seed_mock_device(&state);
         let device_id = "mock-devkit";
         let status = json!({
             "input": {
@@ -7580,7 +7593,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persisted_state_does_not_restore_runtime_connection() {
+    async fn persisted_state_strips_legacy_mock_device_records() {
         let temp = tempfile::tempdir().unwrap();
         let persistence = DevdPersistence::enabled(temp.path().join("state.json"));
         let state = create_app_state_with_auth_and_persistence(
@@ -7590,6 +7603,7 @@ mod tests {
             None,
             persistence.clone(),
         );
+        seed_mock_device(&state);
         {
             let mut guard = state.inner.lock().expect("state lock");
             let binding = DeviceBinding {
@@ -7615,15 +7629,8 @@ mod tests {
             persistence.clone(),
         );
         let guard = restarted.inner.lock().expect("state lock");
-        let device = guard.devices.get("mock-devkit").unwrap();
-        assert!(matches!(device.connection, ConnectionState::Disconnected));
-        assert_eq!(
-            device
-                .binding
-                .as_ref()
-                .and_then(|binding| binding.alias.as_deref()),
-            Some("Mock bench")
-        );
+        assert!(!guard.bindings.contains_key("mock-devkit"));
+        assert!(!guard.devices.contains_key("mock-devkit"));
     }
 
     #[test]

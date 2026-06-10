@@ -37,7 +37,7 @@ Use `$mains-aegis-user-operations` instead only when the owner explicitly asks f
 6. State-changing device lifecycle:
    - `bind/unbind`, `settings`, `artifact select`, `reset`, `flash`, and real host power actions require explicit owner authorization.
 7. Validation without hardware:
-   - Use mock device and `flash dry_run=true`.
+   - Use `flash dry_run=true` plus unit tests with synthetic in-memory device state.
    - Verify `log_decode.status` is `verified` for matching manifests and `unverified` for mismatches.
 
 ## Documentation requirements
