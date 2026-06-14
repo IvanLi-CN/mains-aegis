@@ -2857,7 +2857,8 @@ mod tests {
         );
 
         assert_eq!(cooldown.pressure_state, DcinInputPressureState::Cooldown);
-        assert_eq!(cooldown.pressure_reason, DcinInputPressureReason::Cooldown);
+        assert_eq!(cooldown.pressure_reason, DcinInputPressureReason::Poorsrc);
+        assert_eq!(cooldown.trigger_reason, DcinInputPressureReason::Poorsrc);
         assert_eq!(cooldown.effective_target_ichg_ma, None);
         assert!(!cooldown.allow_charge);
         assert_eq!(
@@ -2868,6 +2869,8 @@ mod tests {
         let waiting =
             dcin_input_pressure_step(&mut tracker, 20_000, dcin_input(Some(500), Some(19_200)));
         assert_eq!(waiting.pressure_state, DcinInputPressureState::Cooldown);
+        assert_eq!(waiting.pressure_reason, DcinInputPressureReason::Poorsrc);
+        assert_eq!(waiting.trigger_reason, DcinInputPressureReason::Poorsrc);
         assert_eq!(waiting.effective_target_ichg_ma, None);
         assert!(!waiting.allow_charge);
     }
