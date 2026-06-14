@@ -289,3 +289,22 @@ describe("resolveSelectedRecord", () => {
     expect(selected?.target.location).toBe("devd records");
   });
 });
+
+describe("direct device route discovery", () => {
+  test("keeps unresolved route empty until discovery has produced fleet entries", () => {
+    const selected = resolveSelectedRecord("mains-aegis-a1b2c3", [], []);
+    expect(selected).toBeNull();
+
+    const fleetEntries = buildFleetEntries(
+      [],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    );
+    const hydrated = resolveSelectedRecord(
+      "mains-aegis-a1b2c3",
+      [],
+      fleetEntries,
+    );
+    expect(hydrated?.target.deviceId).toBe("mains-aegis-a1b2c3");
+  });
+});

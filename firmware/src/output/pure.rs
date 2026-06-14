@@ -45,6 +45,7 @@ const DCIN_ADAPTIVE_RECOVERY_HOLD_MS: u64 = 10_000;
 const DCIN_ADAPTIVE_COOLDOWN_MS: u64 = 30_000;
 const DCIN_ADAPTIVE_VIN_DROP_PCT: u16 = 4;
 const DCIN_ADAPTIVE_VIN_DROP_STREAK_LIMIT: u8 = 2;
+pub(super) const DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA: i32 = 100;
 const FAN_RPM_SAMPLE_WINDOW_MS: u64 = 1_200;
 const FAN_RPM_MAX_SAMPLE_WINDOW_MS: u64 = 2_000;
 const FAN_RPM_MIN_SAMPLE_REVS: u32 = 2;
@@ -259,6 +260,17 @@ pub(super) fn usb_pd_restore_vindpm_mv(measured_input_voltage_mv: Option<u16>) -
         Some(voltage_mv) => voltage_mv.saturating_sub(700).clamp(3_600, 22_000),
         None => 3_600,
     }
+}
+
+pub(super) fn dcin_target_vindpm_mv(
+    measured_dcin_voltage_mv: Option<u16>,
+    vin_baseline_mv: Option<u16>,
+) -> u16 {
+    let source_mv = measured_dcin_voltage_mv
+        .or(vin_baseline_mv)
+        .unwrap_or(12_000);
+    let scaled = (u32::from(source_mv) * 96) / 100;
+    scaled.clamp(3_600, 22_000) as u16
 }
 
 pub(super) fn usb_pd_measured_input_voltage_mv(
@@ -779,6 +791,7 @@ pub(super) enum DcinInputPressureReason {
     None,
     VinDropWatch,
     VinDrop,
+    TpsOutputCurrent,
     Vindpm,
     Iindpm,
     Poorsrc,
@@ -791,6 +804,7 @@ impl DcinInputPressureReason {
             Self::None => "none",
             Self::VinDropWatch => "vin_drop_watch",
             Self::VinDrop => "vin_drop",
+            Self::TpsOutputCurrent => "tps_output_current",
             Self::Vindpm => "vindpm",
             Self::Iindpm => "iindpm",
             Self::Poorsrc => "poorsrc",
@@ -811,6 +825,7 @@ pub(super) enum DcinChargeLimitReason {
     StartupRamp,
     RecoveryHold,
     PressureVinDrop,
+    PressureTpsOutputCurrent,
     PressureVindpm,
     PressureIindpm,
     PressurePoorsrc,
@@ -824,6 +839,7 @@ impl DcinChargeLimitReason {
             Self::StartupRamp => "startup_ramp",
             Self::RecoveryHold => "recovery_hold",
             Self::PressureVinDrop => "pressure_vin_drop",
+            Self::PressureTpsOutputCurrent => "pressure_tps_output_current",
             Self::PressureVindpm => "pressure_vindpm",
             Self::PressureIindpm => "pressure_iindpm",
             Self::PressurePoorsrc => "pressure_poorsrc",
@@ -842,6 +858,7 @@ impl Default for DcinChargeLimitReason {
 pub(super) struct DcinInputPressureTracker {
     pub(super) state: DcinInputPressureState,
     pub(super) reason: DcinInputPressureReason,
+    pub(super) trigger_reason: DcinInputPressureReason,
     pub(super) limit_reason: DcinChargeLimitReason,
     pub(super) adaptive_cap_ichg_ma: Option<u16>,
     pub(super) vin_baseline_mv: Option<u16>,
@@ -866,6 +883,7 @@ pub(super) struct DcinInputPressureInput {
     pub(super) allow_charge: bool,
     pub(super) vin_vbus_mv: Option<u16>,
     pub(super) vin_iin_ma: Option<i32>,
+    pub(super) tps_total_iout_ma: Option<i32>,
     pub(super) poorsrc: bool,
     pub(super) vindpm: bool,
     pub(super) iindpm: bool,
@@ -875,9 +893,12 @@ pub(super) struct DcinInputPressureInput {
 pub(super) struct DcinInputPressureDecision {
     pub(super) pressure_state: DcinInputPressureState,
     pub(super) pressure_reason: DcinInputPressureReason,
+    pub(super) trigger_reason: DcinInputPressureReason,
     pub(super) pressure_score_pct: u8,
     pub(super) vin_baseline_mv: Option<u16>,
     pub(super) vin_drop_mv: Option<u16>,
+    pub(super) tps_total_iout_ma: Option<i32>,
+    pub(super) tps_limit_threshold_ma: Option<i32>,
     pub(super) adaptive_cap_ichg_ma: Option<u16>,
     pub(super) effective_target_ichg_ma: Option<u16>,
     pub(super) allow_charge: bool,
@@ -890,9 +911,12 @@ impl DcinInputPressureDecision {
         Self {
             pressure_state: DcinInputPressureState::Inactive,
             pressure_reason: DcinInputPressureReason::None,
+            trigger_reason: DcinInputPressureReason::None,
             pressure_score_pct: 0,
             vin_baseline_mv: None,
             vin_drop_mv: None,
+            tps_total_iout_ma: None,
+            tps_limit_threshold_ma: None,
             adaptive_cap_ichg_ma: None,
             effective_target_ichg_ma: if allow_charge {
                 requested_target_ichg_ma
@@ -986,15 +1010,17 @@ pub(super) fn dcin_input_pressure_step(
     if let Some(cooldown_until_ms) = tracker.cooldown_until_ms {
         if now_ms < cooldown_until_ms {
             tracker.state = DcinInputPressureState::Cooldown;
-            tracker.reason = DcinInputPressureReason::Cooldown;
             tracker.limit_reason = DcinChargeLimitReason::CooldownRetryWait;
             tracker.pressure_score_pct = 100;
             return DcinInputPressureDecision {
                 pressure_state: tracker.state,
                 pressure_reason: tracker.reason,
+                trigger_reason: tracker.trigger_reason,
                 pressure_score_pct: tracker.pressure_score_pct,
                 vin_baseline_mv: tracker.vin_baseline_mv,
                 vin_drop_mv: tracker.vin_drop_mv,
+                tps_total_iout_ma: input.tps_total_iout_ma,
+                tps_limit_threshold_ma: Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
                 adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
                 effective_target_ichg_ma: None,
                 allow_charge: false,
@@ -1006,7 +1032,12 @@ pub(super) fn dcin_input_pressure_step(
         tracker.last_pressure_at_ms = Some(now_ms);
     }
 
-    let mut hard_reason = if input.poorsrc {
+    let mut hard_reason = if input
+        .tps_total_iout_ma
+        .is_some_and(|total_iout_ma| total_iout_ma > DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA)
+    {
+        Some(DcinInputPressureReason::TpsOutputCurrent)
+    } else if input.poorsrc {
         Some(DcinInputPressureReason::Poorsrc)
     } else if input.vindpm {
         Some(DcinInputPressureReason::Vindpm)
@@ -1043,10 +1074,14 @@ pub(super) fn dcin_input_pressure_step(
 
     if let Some(reason) = hard_reason {
         tracker.reason = reason;
+        tracker.trigger_reason = reason;
         tracker.last_pressure_at_ms = Some(now_ms);
         tracker.last_ramp_at_ms = Some(now_ms);
         tracker.limit_reason = match reason {
             DcinInputPressureReason::VinDrop => DcinChargeLimitReason::PressureVinDrop,
+            DcinInputPressureReason::TpsOutputCurrent => {
+                DcinChargeLimitReason::PressureTpsOutputCurrent
+            }
             DcinInputPressureReason::Vindpm => DcinChargeLimitReason::PressureVindpm,
             DcinInputPressureReason::Iindpm => DcinChargeLimitReason::PressureIindpm,
             DcinInputPressureReason::Poorsrc => DcinChargeLimitReason::PressurePoorsrc,
@@ -1071,15 +1106,17 @@ pub(super) fn dcin_input_pressure_step(
                 tracker.adaptive_cap_ichg_ma = None;
                 tracker.cooldown_until_ms = Some(now_ms.saturating_add(DCIN_ADAPTIVE_COOLDOWN_MS));
                 tracker.state = DcinInputPressureState::Cooldown;
-                tracker.reason = DcinInputPressureReason::Cooldown;
                 tracker.limit_reason = DcinChargeLimitReason::CooldownRetryWait;
                 tracker.pressure_score_pct = 100;
                 return DcinInputPressureDecision {
                     pressure_state: tracker.state,
                     pressure_reason: tracker.reason,
+                    trigger_reason: tracker.trigger_reason,
                     pressure_score_pct: tracker.pressure_score_pct,
                     vin_baseline_mv: tracker.vin_baseline_mv,
                     vin_drop_mv: tracker.vin_drop_mv,
+                    tps_total_iout_ma: input.tps_total_iout_ma,
+                    tps_limit_threshold_ma: Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
                     adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
                     effective_target_ichg_ma: None,
                     allow_charge: false,
@@ -1107,6 +1144,7 @@ pub(super) fn dcin_input_pressure_step(
     } else {
         tracker.state = DcinInputPressureState::Headroom;
         tracker.reason = DcinInputPressureReason::None;
+        tracker.trigger_reason = DcinInputPressureReason::None;
     }
 
     if input.requested_target_ichg_ma.is_none() || !input.allow_charge {
@@ -1119,9 +1157,12 @@ pub(super) fn dcin_input_pressure_step(
         return DcinInputPressureDecision {
             pressure_state: tracker.state,
             pressure_reason: tracker.reason,
+            trigger_reason: tracker.trigger_reason,
             pressure_score_pct: tracker.pressure_score_pct,
             vin_baseline_mv: tracker.vin_baseline_mv,
             vin_drop_mv: tracker.vin_drop_mv,
+            tps_total_iout_ma: input.tps_total_iout_ma,
+            tps_limit_threshold_ma: Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
             adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
             effective_target_ichg_ma: None,
             allow_charge: input.allow_charge,
@@ -1188,9 +1229,12 @@ pub(super) fn dcin_input_pressure_step(
     DcinInputPressureDecision {
         pressure_state: tracker.state,
         pressure_reason: tracker.reason,
+        trigger_reason: tracker.trigger_reason,
         pressure_score_pct: tracker.pressure_score_pct,
         vin_baseline_mv: tracker.vin_baseline_mv,
         vin_drop_mv: tracker.vin_drop_mv,
+        tps_total_iout_ma: input.tps_total_iout_ma,
+        tps_limit_threshold_ma: Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
         adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
         effective_target_ichg_ma,
         allow_charge: true,
@@ -2742,6 +2786,7 @@ mod tests {
             allow_charge: true,
             vin_vbus_mv,
             vin_iin_ma: Some(1_200),
+            tps_total_iout_ma: Some(0),
             poorsrc: false,
             vindpm: false,
             iindpm: false,
@@ -2855,6 +2900,76 @@ mod tests {
         assert_eq!(recovered.pressure_state, DcinInputPressureState::Headroom);
         assert_eq!(recovered.effective_target_ichg_ma, Some(200));
         assert!(recovered.limit_active);
+    }
+
+    #[test]
+    fn dcin_pressure_tps_output_current_stops_charge_and_reports_reason() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let stopped = dcin_input_pressure_step(
+            &mut tracker,
+            0,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                ..dcin_input(Some(500), Some(19_400))
+            },
+        );
+
+        assert_eq!(stopped.pressure_state, DcinInputPressureState::Cooldown);
+        assert_eq!(
+            stopped.pressure_reason,
+            DcinInputPressureReason::TpsOutputCurrent
+        );
+        assert_eq!(
+            stopped.trigger_reason,
+            DcinInputPressureReason::TpsOutputCurrent
+        );
+        assert_eq!(stopped.effective_target_ichg_ma, None);
+        assert!(!stopped.allow_charge);
+        assert_eq!(
+            stopped.limit_reason,
+            DcinChargeLimitReason::CooldownRetryWait
+        );
+        assert_eq!(stopped.tps_total_iout_ma, Some(128));
+        assert_eq!(
+            stopped.tps_limit_threshold_ma,
+            Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA)
+        );
+    }
+
+    #[test]
+    fn dcin_pressure_prefers_tps_output_reason_over_vin_drop() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let _ = dcin_input_pressure_step(&mut tracker, 0, dcin_input(Some(500), Some(19_400)));
+        let pressure = dcin_input_pressure_step(
+            &mut tracker,
+            3_100,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                ..dcin_input(Some(500), Some(18_200))
+            },
+        );
+
+        assert_eq!(
+            pressure.pressure_reason,
+            DcinInputPressureReason::TpsOutputCurrent
+        );
+        assert_eq!(
+            pressure.trigger_reason,
+            DcinInputPressureReason::TpsOutputCurrent
+        );
+        assert_eq!(
+            pressure.limit_reason,
+            DcinChargeLimitReason::CooldownRetryWait
+        );
+        assert_eq!(pressure.tps_total_iout_ma, Some(128));
+    }
+
+    #[test]
+    fn dcin_target_vindpm_tracks_96pct_of_input_voltage() {
+        assert_eq!(dcin_target_vindpm_mv(Some(12_000), None), 11_520);
+        assert_eq!(dcin_target_vindpm_mv(None, Some(19_400)), 18_624);
     }
 
     #[test]

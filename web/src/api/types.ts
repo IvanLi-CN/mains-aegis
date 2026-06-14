@@ -77,6 +77,8 @@ export type UpsStatus = {
     input_ibus_ma: number | null;
     vin_vbus_mv: number | null;
     vin_iin_ma: number | null;
+    tps_total_iout_ma?: number | null;
+    tps_limit_threshold_ma?: number | null;
     pressure_state?: "inactive" | "headroom" | "watch" | "limited" | "cooldown" | string;
     pressure_score_pct?: number | null;
     pressure_reason?: string | null;
@@ -100,6 +102,8 @@ export type UpsStatus = {
     policy_target_ichg_ma?: number | null;
     limit_active?: boolean | null;
     limit_reason?: string | null;
+    limit_detail?: string | null;
+    limit_threshold_ma?: number | null;
     detail_status?: string | null;
   };
   battery: {

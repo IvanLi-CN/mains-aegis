@@ -146,7 +146,7 @@ const CHARGE_POLICY_DC_DERATE_EXIT_IBUS_MA: i32 = 2_700;
 const CHARGE_POLICY_DC_DERATE_ENTER_HOLD: Duration = Duration::from_secs(1);
 const CHARGE_POLICY_DC_DERATE_EXIT_HOLD: Duration = Duration::from_secs(5);
 const CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10: u32 = 50;
-const CHARGE_POLICY_DC_INPUT_IINDPM_MA: u16 = 3_000;
+const CHARGE_POLICY_DC_INPUT_IINDPM_MA: u16 = 1_000;
 const CHARGE_POLICY_100MA_ITERM_MA: u16 = 40;
 const CHARGE_POLICY_PRECHARGE_IPRECHG_MA: u16 = 120;
 const USB_PD_SYSTEM_LOAD_FLOOR_MW: u32 = 2_500;
@@ -4186,6 +4186,11 @@ where
             input_ibus_ma: self.ui_snapshot.input_ibus_ma,
             vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
             vin_iin_ma: self.ui_snapshot.vin_iin_ma,
+            tps_total_iout_ma: self.ui_snapshot.dashboard_detail.input_tps_total_iout_ma,
+            tps_limit_threshold_ma: self
+                .ui_snapshot
+                .dashboard_detail
+                .input_tps_limit_threshold_ma,
             pressure_state: self
                 .ui_snapshot
                 .dashboard_detail
@@ -9704,6 +9709,17 @@ where
                 self.manual_charge_runtime.last_stop_reason = ManualChargeStopReason::None;
             }
         }
+        let tps_total_iout_ma = match (
+            self.ui_snapshot.tps_a_iout_ma,
+            self.ui_snapshot.tps_b_iout_ma,
+        ) {
+            (None, None) => None,
+            (out_a_iout_ma, out_b_iout_ma) => Some(
+                out_a_iout_ma
+                    .unwrap_or_default()
+                    .saturating_add(out_b_iout_ma.unwrap_or_default()),
+            ),
+        };
         let dcin_pressure = dcin_input_pressure_step(
             &mut self.dcin_input_pressure,
             charge_policy_now_ms,
@@ -9713,6 +9729,7 @@ where
                 allow_charge,
                 vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
                 vin_iin_ma: self.ui_snapshot.vin_iin_ma,
+                tps_total_iout_ma,
                 poorsrc,
                 vindpm,
                 iindpm,
@@ -9988,7 +10005,7 @@ where
         let dc_input_selected = matches!(input_source, Some(DashboardInputSource::DcIn));
         if dc_input_selected && !force_allow_charge && !auto_force_charge && !activation_pending {
             let target_vindpm_mv =
-                usb_pd_restore_vindpm_mv(input_sample.ui_vbus_mv.or(raw_vbus_adc_mv));
+                dcin_target_vindpm_mv(self.ui_snapshot.vin_vbus_mv, dcin_pressure.vin_baseline_mv);
             match bq25792::set_input_voltage_limit_mv(&mut self.i2c, target_vindpm_mv) {
                 Ok(v) => applied_vindpm_mv = Some(bq25792::decode_input_voltage_limit_mv(v)),
                 Err(e) => {
@@ -10212,12 +10229,26 @@ where
             effective_target_ichg_ma: dcin_pressure.effective_target_ichg_ma,
             limit_active: dcin_pressure.limit_active,
             limit_reason: Some(dcin_pressure.limit_reason.as_str()),
+            limit_detail: Some(match dcin_pressure.limit_reason {
+                DcinChargeLimitReason::PressureTpsOutputCurrent => "tps_output_current_over_limit",
+                DcinChargeLimitReason::CooldownRetryWait
+                    if matches!(
+                        dcin_pressure.trigger_reason,
+                        DcinInputPressureReason::TpsOutputCurrent
+                    ) =>
+                {
+                    "tps_output_current_cooldown"
+                }
+                _ => "none",
+            }),
             detail_status: Some(policy_detail_status_text),
             pressure_state: dcin_pressure.pressure_state.as_str(),
-            pressure_reason: Some(dcin_pressure.pressure_reason.as_str()),
+            pressure_reason: Some(dcin_pressure.trigger_reason.as_str()),
             pressure_score_pct: Some(dcin_pressure.pressure_score_pct),
             vin_baseline_mv: dcin_pressure.vin_baseline_mv,
             vin_drop_mv: dcin_pressure.vin_drop_mv,
+            tps_total_iout_ma: dcin_pressure.tps_total_iout_ma,
+            tps_limit_threshold_ma: dcin_pressure.tps_limit_threshold_ma,
             output_power_w10,
             charge_latched: self.charge_policy.charge_latched,
             full_latched: self.charge_policy.full_latched,
@@ -10375,9 +10406,13 @@ where
         self.ui_snapshot.dashboard_detail.input_pressure_score_pct =
             Some(dcin_pressure.pressure_score_pct);
         self.ui_snapshot.dashboard_detail.input_pressure_reason =
-            Some(dcin_pressure.pressure_reason.as_str());
+            Some(dcin_pressure.trigger_reason.as_str());
         self.ui_snapshot.dashboard_detail.input_vin_baseline_mv = dcin_pressure.vin_baseline_mv;
         self.ui_snapshot.dashboard_detail.input_vin_drop_mv = dcin_pressure.vin_drop_mv;
+        self.ui_snapshot.dashboard_detail.input_tps_total_iout_ma = dcin_pressure.tps_total_iout_ma;
+        self.ui_snapshot
+            .dashboard_detail
+            .input_tps_limit_threshold_ma = dcin_pressure.tps_limit_threshold_ma;
         self.ui_snapshot.dashboard_detail.charger_protocol =
             charger_protocol_from_usb_pd(input_source, self.usb_pd_state);
         self.ui_snapshot.dashboard_detail.charger_active = Some(
@@ -10411,6 +10446,21 @@ where
         self.ui_snapshot.dashboard_detail.charger_limit_active = Some(dcin_pressure.limit_active);
         self.ui_snapshot.dashboard_detail.charger_limit_reason =
             Some(dcin_pressure.limit_reason.as_str());
+        self.ui_snapshot.dashboard_detail.charger_limit_detail =
+            Some(match dcin_pressure.limit_reason {
+                DcinChargeLimitReason::PressureTpsOutputCurrent => "tps_output_current_over_limit",
+                DcinChargeLimitReason::CooldownRetryWait
+                    if matches!(
+                        dcin_pressure.trigger_reason,
+                        DcinInputPressureReason::TpsOutputCurrent
+                    ) =>
+                {
+                    "tps_output_current_cooldown"
+                }
+                _ => "none",
+            });
+        self.ui_snapshot.dashboard_detail.charger_limit_threshold_ma =
+            dcin_pressure.tps_limit_threshold_ma;
         self.ui_snapshot.dashboard_detail.charger_notice = Some(charger_detail_notice_text(
             charger_fault,
             ts_warm,

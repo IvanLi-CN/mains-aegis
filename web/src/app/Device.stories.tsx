@@ -92,6 +92,7 @@ export const PowerDetail: Story = {
     await expect(await canvas.findByText("Limit reason")).toBeInTheDocument();
     await expect(await canvas.findByText("headroom")).toBeInTheDocument();
     await expect(await canvas.findByText("500 mA")).toBeInTheDocument();
+    await expect(await canvas.findByText("42 mA / 100 mA")).toBeInTheDocument();
   },
 };
 
@@ -112,7 +113,10 @@ export const PowerLimited: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText("limited")).toBeInTheDocument();
-    await expect(await canvas.findByText("pressure_vindpm")).toBeInTheDocument();
+    await expect(await canvas.findByText("TPS output current")).toBeInTheDocument();
+    await expect(
+      await canvas.findByText("Stopped: TPS output current 128 mA > 100 mA"),
+    ).toBeInTheDocument();
     await expect(await canvas.findByText("100 mA")).toBeInTheDocument();
   },
 };
@@ -123,7 +127,10 @@ export const PowerCooldown: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText("cooldown")).toBeInTheDocument();
-    await expect(await canvas.findByText("cooldown_retry_wait")).toBeInTheDocument();
+    await expect(await canvas.findByText("Cooldown retry wait")).toBeInTheDocument();
+    await expect(
+      await canvas.findByText("Stopped: TPS output current 116 mA > 100 mA"),
+    ).toBeInTheDocument();
     await expect(await canvas.findByText("0 mA")).toBeInTheDocument();
   },
 };

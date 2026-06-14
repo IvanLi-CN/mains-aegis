@@ -100,6 +100,8 @@ function status(
       input_ibus_ma: mode === "backup" ? 0 : 1180,
       vin_vbus_mv: mode === "backup" ? 0 : 19240,
       vin_iin_ma: mode === "backup" ? 0 : 1180,
+      tps_total_iout_ma: mode === "backup" ? 0 : 42,
+      tps_limit_threshold_ma: 100,
       pressure_state: "headroom",
       pressure_score_pct: 8,
       pressure_reason: "none",
@@ -133,6 +135,8 @@ function status(
       policy_target_ichg_ma: mode === "backup" ? 0 : 500,
       limit_active: false,
       limit_reason: "none",
+      limit_detail: "none",
+      limit_threshold_ma: 100,
       detail_status: mode === "backup" ? "WAIT" : "CHG500",
     },
     battery: {
@@ -182,6 +186,7 @@ function powerStatusVariant(
   chargerIchgMa: number,
   vinVbusMv: number,
   vinBaselineMv: number,
+  tpsTotalIoutMa: number,
 ): UpsStatus {
   const vinDropMv = Math.max(0, vinBaselineMv - vinVbusMv);
   const limitActive = limitReason !== "none";
@@ -193,6 +198,8 @@ function powerStatusVariant(
       input_ibus_ma: pressureState === "limited" ? 3280 : pressureState === "cooldown" ? 3020 : 1260,
       vin_vbus_mv: vinVbusMv,
       vin_iin_ma: pressureState === "limited" ? 3280 : pressureState === "cooldown" ? 3020 : 1260,
+      tps_total_iout_ma: tpsTotalIoutMa,
+      tps_limit_threshold_ma: 100,
       pressure_state: pressureState,
       pressure_score_pct: pressureScorePct,
       pressure_reason: pressureReason,
@@ -208,6 +215,13 @@ function powerStatusVariant(
       policy_target_ichg_ma: policyTargetIchgMa,
       limit_active: limitActive,
       limit_reason: limitReason,
+      limit_detail:
+        limitReason === "pressure_tps_output_current"
+          ? "tps_output_current_over_limit"
+          : limitReason === "cooldown_retry_wait" && pressureReason === "tps_output_current"
+            ? "tps_output_current_cooldown"
+            : "none",
+      limit_threshold_ma: 100,
       detail_status: detailStatus,
     },
   });
@@ -294,7 +308,7 @@ const powerMockDefinitions: MockDefinition[] = [
   {
     ...mockDefinitions[0],
     target: { ...mockDefinitions[0].target, baseUrl: "mock:power-headroom" },
-    status: powerStatusVariant("headroom", 8, "none", "CHG500", "none", 500, 500, 19_420, 19_480),
+    status: powerStatusVariant("headroom", 8, "none", "CHG500", "none", 500, 500, 19_420, 19_480, 42),
   },
   {
     ...mockDefinitions[0],
@@ -309,6 +323,7 @@ const powerMockDefinitions: MockDefinition[] = [
       300,
       18_880,
       19_480,
+      68,
     ),
   },
   {
@@ -317,13 +332,14 @@ const powerMockDefinitions: MockDefinition[] = [
     status: powerStatusVariant(
       "limited",
       84,
-      "vindpm",
-      "CHG100",
-      "pressure_vindpm",
-      100,
-      100,
-      18_620,
+      "tps_output_current",
+      "WAIT",
+      "pressure_tps_output_current",
+      0,
+      0,
+      19_160,
       19_480,
+      128,
     ),
   },
   {
@@ -332,13 +348,14 @@ const powerMockDefinitions: MockDefinition[] = [
     status: powerStatusVariant(
       "cooldown",
       100,
-      "cooldown",
+      "tps_output_current",
       "WAIT30",
       "cooldown_retry_wait",
       0,
       0,
       18_480,
       19_480,
+      116,
     ),
   },
 ];
@@ -878,6 +895,30 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
       target: null,
       summary: "raw CDC line",
       payload: "[DEBUG] heap_free=183224 loop_ms=4 serial_rx=ok",
+    },
+    {
+      id: "mock-usb-trace-17",
+      timestamp: serialTimestamp(88),
+      direction: "info",
+      kind: "event",
+      frameType: null,
+      requestId: null,
+      target: "power",
+      summary: "power state changed",
+      payload: JSON.stringify({
+        event: "power_state_changed",
+        input_source: "dcin",
+        pressure_state: "limited",
+        pressure_reason: "tps_output_current",
+        pressure_score_pct: 84,
+        vin_vbus_mv: 19160,
+        vin_baseline_mv: 19480,
+        tps_total_iout_ma: 128,
+        tps_limit_threshold_ma: 100,
+        policy_target_ichg_ma: 0,
+        limit_reason: "pressure_tps_output_current",
+        limit_detail: "tps_output_current_over_limit",
+      }),
     },
   ];
   serialTrace.push(

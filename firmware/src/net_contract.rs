@@ -182,6 +182,13 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     json_field_opt_i32(buf, "input_ibus_ma", status.input_ibus_ma, true);
     json_field_opt_u16(buf, "vin_vbus_mv", status.vin_vbus_mv, true);
     json_field_opt_i32(buf, "vin_iin_ma", status.vin_iin_ma, true);
+    json_field_opt_i32(buf, "tps_total_iout_ma", status.tps_total_iout_ma, true);
+    json_field_opt_i32(
+        buf,
+        "tps_limit_threshold_ma",
+        status.tps_limit_threshold_ma,
+        true,
+    );
     json_field_str(buf, "pressure_state", status.input_pressure_state, true);
     json_field_opt_u8(
         buf,
@@ -221,6 +228,13 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     );
     json_field_opt_bool(buf, "limit_active", status.charger_limit_active, true);
     json_field_opt_str(buf, "limit_reason", status.charger_limit_reason, true);
+    json_field_opt_str(buf, "limit_detail", status.charger_limit_detail, true);
+    json_field_opt_i32(
+        buf,
+        "limit_threshold_ma",
+        status.charger_limit_threshold_ma,
+        true,
+    );
     json_field_opt_str(buf, "detail_status", status.charger_detail_status, false);
     let _ = buf.push_str("},\"battery\":{");
     json_field_str(buf, "state", status.battery_state, true);
@@ -300,6 +314,13 @@ pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDi
     json_field_opt_i32(buf, "input_ibus_ma", diag.input.input_ibus_ma, true);
     json_field_opt_u16(buf, "vin_vbus_mv", diag.input.vin_vbus_mv, true);
     json_field_opt_i32(buf, "vin_iin_ma", diag.input.vin_iin_ma, true);
+    json_field_opt_i32(buf, "tps_total_iout_ma", diag.input.tps_total_iout_ma, true);
+    json_field_opt_i32(
+        buf,
+        "tps_limit_threshold_ma",
+        diag.input.tps_limit_threshold_ma,
+        true,
+    );
     json_field_str(buf, "pressure_state", diag.input.pressure_state, true);
     json_field_opt_u8(
         buf,
@@ -451,6 +472,7 @@ pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDi
     );
     json_field_bool(buf, "limit_active", diag.policy.limit_active, true);
     json_field_opt_str(buf, "limit_reason", diag.policy.limit_reason, true);
+    json_field_opt_str(buf, "limit_detail", diag.policy.limit_detail, true);
     json_field_opt_str(buf, "detail_status", diag.policy.detail_status, true);
     json_field_str(buf, "pressure_state", diag.policy.pressure_state, true);
     json_field_opt_str(buf, "pressure_reason", diag.policy.pressure_reason, true);
@@ -462,6 +484,18 @@ pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDi
     );
     json_field_opt_u16(buf, "vin_baseline_mv", diag.policy.vin_baseline_mv, true);
     json_field_opt_u16(buf, "vin_drop_mv", diag.policy.vin_drop_mv, true);
+    json_field_opt_i32(
+        buf,
+        "tps_total_iout_ma",
+        diag.policy.tps_total_iout_ma,
+        true,
+    );
+    json_field_opt_i32(
+        buf,
+        "tps_limit_threshold_ma",
+        diag.policy.tps_limit_threshold_ma,
+        true,
+    );
     json_field_opt_u32(buf, "output_power_w10", diag.policy.output_power_w10, true);
     json_field_bool(buf, "charge_latched", diag.policy.charge_latched, true);
     json_field_bool(buf, "full_latched", diag.policy.full_latched, true);
@@ -875,11 +909,14 @@ mod tests {
         status.input_pressure_state = "limited";
         status.input_pressure_score_pct = Some(88);
         status.input_pressure_reason = Some("vindpm");
+        status.tps_total_iout_ma = Some(128);
+        status.tps_limit_threshold_ma = Some(100);
         status.input_vin_baseline_mv = Some(19_400);
         status.input_vin_drop_mv = Some(920);
         status.charger_policy_target_ichg_ma = Some(300);
         status.charger_limit_active = Some(true);
         status.charger_limit_reason = Some("pressure_vindpm");
+        status.charger_limit_threshold_ma = Some(100);
         status.charger_detail_status = Some("LIMIT");
         status.battery_cell_mv = [Some(3812), Some(3817), Some(3809), Some(3822)];
         status.battery_cell_delta_mv = Some(13);
@@ -908,6 +945,8 @@ mod tests {
         assert!(body.as_str().contains("\"pressure_state\":\"limited\""));
         assert!(body.as_str().contains("\"pressure_score_pct\":88"));
         assert!(body.as_str().contains("\"pressure_reason\":\"vindpm\""));
+        assert!(body.as_str().contains("\"tps_total_iout_ma\":128"));
+        assert!(body.as_str().contains("\"tps_limit_threshold_ma\":100"));
         assert!(body.as_str().contains("\"vin_baseline_mv\":19400"));
         assert!(body.as_str().contains("\"vin_drop_mv\":920"));
         assert!(body.as_str().contains("\"policy_target_ichg_ma\":300"));
@@ -915,6 +954,7 @@ mod tests {
         assert!(body
             .as_str()
             .contains("\"limit_reason\":\"pressure_vindpm\""));
+        assert!(body.as_str().contains("\"limit_threshold_ma\":100"));
         assert!(body.as_str().contains("\"detail_status\":\"LIMIT\""));
         assert!(body.as_str().contains("\"cell_mv\":[3812,3817,3809,3822]"));
         assert!(body.as_str().contains("\"cell_delta_mv\":13"));

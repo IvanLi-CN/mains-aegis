@@ -59,6 +59,8 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
         mains_present: snapshot.vin_mains_present,
         vin_vbus_mv: snapshot.vin_vbus_mv,
         vin_iin_ma: snapshot.vin_iin_ma,
+        tps_total_iout_ma: snapshot.dashboard_detail.input_tps_total_iout_ma,
+        tps_limit_threshold_ma: snapshot.dashboard_detail.input_tps_limit_threshold_ma,
         input_pressure_state: snapshot
             .dashboard_detail
             .input_pressure_state
@@ -75,6 +77,8 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
         charger_policy_target_ichg_ma: snapshot.dashboard_detail.charger_policy_target_ichg_ma,
         charger_limit_active: snapshot.dashboard_detail.charger_limit_active,
         charger_limit_reason: snapshot.dashboard_detail.charger_limit_reason,
+        charger_limit_detail: snapshot.dashboard_detail.charger_limit_detail,
+        charger_limit_threshold_ma: snapshot.dashboard_detail.charger_limit_threshold_ma,
         charger_detail_status: snapshot.dashboard_detail.charger_detail_status,
         battery_state: comm_state_slug(snapshot.bq40z50),
         battery_pack_mv: snapshot.bq40z50_pack_mv,

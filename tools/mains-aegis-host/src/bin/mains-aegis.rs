@@ -286,7 +286,22 @@ async fn follow_device_trace(
     device_id: &str,
     args: TraceArgs,
 ) -> anyhow::Result<()> {
-    let mut seen_ids = std::collections::BTreeSet::new();
+    let initial = ipc_call(
+        endpoint,
+        "device.trace",
+        json!({
+            "device_id": device_id,
+            "logs_limit": args.logs_limit,
+            "trace_limit": args.trace_limit,
+            "lease_id": args.lease_id,
+        }),
+    )
+    .await?;
+    let mut seen_ids = initial
+        .get("trace")
+        .and_then(Value::as_array)
+        .map(|trace| seed_seen_ids(trace))
+        .unwrap_or_default();
     loop {
         let result = ipc_call(
             endpoint,
@@ -300,21 +315,40 @@ async fn follow_device_trace(
         )
         .await?;
         if let Some(trace) = result.get("trace").and_then(Value::as_array) {
-            for entry in trace {
-                let Some(id) = entry.get("id").and_then(Value::as_str) else {
-                    continue;
-                };
-                if !seen_ids.insert(id.to_string()) {
-                    continue;
-                }
-                if !trace_entry_matches_kind(entry, args.kind.as_deref()) {
-                    continue;
-                }
-                println!("{}", serde_json::to_string(entry)?);
+            for entry in collect_new_matching_entries(trace, &mut seen_ids, args.kind.as_deref()) {
+                println!("{}", serde_json::to_string(&entry)?);
             }
         }
         sleep(Duration::from_millis(1000)).await;
     }
+}
+
+fn seed_seen_ids(trace: &[Value]) -> std::collections::BTreeSet<String> {
+    trace
+        .iter()
+        .filter_map(|entry| entry.get("id").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn collect_new_matching_entries(
+    trace: &[Value],
+    seen_ids: &mut std::collections::BTreeSet<String>,
+    kind: Option<&str>,
+) -> Vec<Value> {
+    trace
+        .iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(Value::as_str)?;
+            if !seen_ids.insert(id.to_string()) {
+                return None;
+            }
+            if !trace_entry_matches_kind(entry, kind) {
+                return None;
+            }
+            Some(entry.clone())
+        })
+        .collect()
 }
 
 fn trace_entry_matches_kind(entry: &Value, kind: Option<&str>) -> bool {
@@ -487,7 +521,7 @@ async fn maybe_confirm_companion_lan(
 
 #[cfg(test)]
 mod tests {
-    use super::trace_entry_matches_kind;
+    use super::{collect_new_matching_entries, seed_seen_ids, trace_entry_matches_kind};
     use serde_json::json;
 
     #[test]
@@ -510,6 +544,42 @@ mod tests {
         assert!(!trace_entry_matches_kind(&info_log, Some("event")));
         assert!(trace_entry_matches_kind(&info_log, Some("log")));
         assert!(trace_entry_matches_kind(&power_event, None));
+    }
+
+    #[test]
+    fn seed_seen_ids_marks_existing_tail_as_seen() {
+        let trace = vec![
+            json!({"id": "old-1", "kind": "event", "target": "power"}),
+            json!({"id": "old-2", "kind": "log", "target": "power"}),
+        ];
+
+        let seen = seed_seen_ids(&trace);
+
+        assert!(seen.contains("old-1"));
+        assert!(seen.contains("old-2"));
+    }
+
+    #[test]
+    fn collect_new_matching_entries_ignores_old_tail_and_filters_by_kind() {
+        let initial = vec![
+            json!({"id": "old-1", "kind": "event", "target": "power"}),
+            json!({"id": "old-2", "kind": "log", "target": "power"}),
+        ];
+        let next = vec![
+            json!({"id": "old-1", "kind": "event", "target": "power"}),
+            json!({"id": "new-1", "kind": "event", "target": "power"}),
+            json!({"id": "new-2", "kind": "event", "target": "host_power"}),
+            json!({"id": "new-3", "kind": "log", "target": "power"}),
+        ];
+
+        let mut seen = seed_seen_ids(&initial);
+        let new_entries = collect_new_matching_entries(&next, &mut seen, Some("event"));
+
+        assert_eq!(new_entries.len(), 1);
+        assert_eq!(new_entries[0]["id"], "new-1");
+        assert!(seen.contains("new-1"));
+        assert!(seen.contains("new-2"));
+        assert!(seen.contains("new-3"));
     }
 }
 

@@ -61,7 +61,7 @@
 - `GET /api/v1/devices/{id}/connection`: 返回 transport、连接状态、绑定与 artifact 上下文。
 - `GET /api/v1/devices/{id}/settings`: 返回当前设备 settings 快照。
 - `GET /api/v1/devices/{id}/trace`: 返回 bounded logs/trace 与 `log_decode`。
-- `GET /api/v1/devices/{id}/trace` 必须允许 owner 通过客户端 follow 轮询看到新增 `kind=event,target=power` 的 synthetic power event；event payload 至少包含 `event/input_source/pressure_state/pressure_reason/pressure_score_pct/vin_vbus_mv/vin_baseline_mv/policy_target_ichg_ma/limit_reason`。
+- `GET /api/v1/devices/{id}/trace` 必须允许 owner 通过客户端 follow 轮询看到新增 `kind=event,target=power` 的 synthetic power event；event payload 至少包含 `event/input_source/pressure_state/pressure_reason/pressure_score_pct/vin_vbus_mv/vin_baseline_mv/policy_target_ichg_ma/limit_reason/tps_total_iout_ma/tps_limit_threshold_ma`。
 - `GET /api/v1/devices/{id}/events`: 设备事件 SSE。
 - 设备状态边沿变化时，devd 必须把 power-related 边沿变化收敛为 single-shot synthetic event，而不是每次 poll 刷新都广播重复事件。
 - `POST /api/v1/wifi-config` / `DELETE /api/v1/wifi-config`: 通过指定 `device_id` 的已连接设备写入或清除 WiFi 配置；未指定 `device_id` 时仅允许单设备连接场景。
@@ -166,7 +166,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - `tools/firmware-artifact/build-catalog-entry.py` 能为 ELF 生成 manifest、catalog 和 `SHA256SUMS`。
 - 固件 identity JSON 包含 features/protocol/defmt 字段。
 - 固件 USB CDC 支持 `get_power_diag`，devd `GET /api/v1/devices/{id}/power-diag` 能返回并缓存结构化 `input/charger/policy/bms` 诊断快照。
-- Given DC IN 与 USB-C 同时在线，When charger 实际 VBUS/VAC2 为约 12V 且 VAC1 为约 5V，Then `power-diag` 必须能同时呈现 `input.input_source=dcin`、`charger.vac2_adc_mv≈12V`、`charger.vac1_adc_mv≈5V`、`charger.iindpm_ma=3000`，即使 `charger.vbus_stat` 仍报告 USB SDP 类枚举值。
+- Given DC IN 与 USB-C 同时在线，When charger 实际 VBUS/VAC2 为约 12V 且 VAC1 为约 5V，Then `power-diag` 必须能同时呈现 `input.input_source=dcin`、`charger.vac2_adc_mv≈12V`、`charger.vac1_adc_mv≈5V`、`charger.iindpm_ma=1000`，即使 `charger.vbus_stat` 仍报告 USB SDP 类枚举值。
 - Given BMS 处于 CUV 低电恢复且 `BQ25792 CHG_STAT=termination_done`，When 读取 `power-diag`，Then `policy.state` 必须保持 `recovering_low_voltage`、`policy.status=RECOV`、`policy.recovery_stage=bq40_pchg|bq25792_precharge`、`policy.full_latched=false`，不得把该快照误报为满充锁存。
 - Given charger poll 已完成，When 读取 `power-diag`，Then `charger.vbat_lowv_pct_x10=714`、`charger.iprechg_ma=120` 可见。
 - Given BQ40 DF 可读，When 读取 `power-diag`，Then `bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg` 可见，用于确认 `2550mV + CUV_RECOV_CHG=0` baseline。
@@ -199,7 +199,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 
 ## 变更记录（Change log）
 
-- 2026-06-04: `power-diag` 增加 `charger.vac2_adc_mv`；真机验证确认 DC IN/VAC2 约 12.23V、USB-C VAC1 约 5.10V 时，策略可保持 `dcin + RECOV/CHG100 + IINDPM=3000mA`，且 CUV/低压 recovery 不再被 BQ25792 `termination_done` 误分类为 `full_latched`。
+- 2026-06-14: `power event`、`status` 与 `power-diag` 统一补充 `tps_total_iout_ma` / `tps_limit_threshold_ma`，用于解释 `pressure_tps_output_current`；DC IN profile 的 `iindpm_ma` 基线更新为 `1000mA`。
 - 2026-06-04: `power-diag` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2550mV + CUV_RECOV_CHG=0` baseline。
 - 2026-06-04: `flash` API 与设备事件增加 backend `status/stdout/stderr` 透传，现场可直接确认 `espflash` 是否真正完成以及目标硬件 identity 是否已经切到新 artifact。
 - 2026-06-04: 新增低压恢复 HIL runner 与文档，固化 bq40 工具固件和主固件的双烧录验证路径。
