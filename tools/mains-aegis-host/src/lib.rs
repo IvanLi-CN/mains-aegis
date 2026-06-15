@@ -4742,9 +4742,15 @@ fn derive_power_diag_from_status(status: &Value, source: &str) -> Value {
         .cloned()
         .unwrap_or(Value::Null);
     let derived_effective_target_ichg = charger
-        .get("policy_target_ichg_ma")
+        .get("ichg_ma")
         .cloned()
         .filter(|value| !value.is_null())
+        .or_else(|| {
+            charger
+                .get("policy_target_ichg_ma")
+                .cloned()
+                .filter(|value| !value.is_null())
+        })
         .unwrap_or(Value::Null);
     let derived_adaptive_cap_ichg = if limit_active {
         derived_effective_target_ichg.clone()
@@ -8610,13 +8616,13 @@ mod tests {
         let diag = derive_power_diag_from_status(&status, "lan_derived");
 
         assert_eq!(diag["policy"]["target_ichg_ma"], 500);
-        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], 500);
-        assert_eq!(diag["policy"]["effective_target_ichg_ma"], 500);
+        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], 100);
+        assert_eq!(diag["policy"]["effective_target_ichg_ma"], 100);
         assert_eq!(diag["policy"]["pressure_score_pct"], 81);
     }
 
     #[test]
-    fn derives_power_diag_from_status_uses_policy_target_for_effective_target() {
+    fn derives_power_diag_from_status_uses_applied_current_for_effective_target() {
         let status = json!({
             "input": {
                 "source": "dcin",
@@ -8644,8 +8650,8 @@ mod tests {
         let diag = derive_power_diag_from_status(&status, "lan_derived");
 
         assert_eq!(diag["policy"]["target_ichg_ma"], 500);
-        assert_eq!(diag["policy"]["effective_target_ichg_ma"], 500);
-        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], 500);
+        assert_eq!(diag["policy"]["effective_target_ichg_ma"], 100);
+        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], 100);
     }
 
     #[test]
