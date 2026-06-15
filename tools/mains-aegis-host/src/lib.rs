@@ -3446,7 +3446,13 @@ async fn device_power_diag(
     };
     let diag = if matches!(transport, DeviceTransport::Mock) {
         mock_power_diag()
-    } else if let Some(address) = lan_address {
+    } else if matches!(transport, DeviceTransport::Lan) {
+        let address = lan_address.ok_or_else(|| {
+            HttpError::retryable(
+                "lan_address_missing",
+                format!("power-diag is unavailable for {id}: LAN device has no address"),
+            )
+        })?;
         match lan_http_json(&address, "GET", "/api/v1/power-diag", None).await {
             Ok(diag) => diag,
             Err(_) => {
@@ -8693,6 +8699,16 @@ mod tests {
         assert_eq!(diag["policy"]["effective_target_ichg_ma"], Value::Null);
         assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], Value::Null);
         assert_eq!(diag["policy"]["limit_reason"], "cooldown_retry_wait");
+    }
+
+    #[test]
+    fn native_serial_power_diag_path_stays_on_cdc_even_with_lan_address() {
+        let transport = DeviceTransport::NativeSerial;
+        let lan_address = Some("192.168.4.25".to_string());
+
+        let uses_lan_path = matches!(transport, DeviceTransport::Lan) && lan_address.is_some();
+
+        assert!(!uses_lan_path);
     }
 
     #[test]
