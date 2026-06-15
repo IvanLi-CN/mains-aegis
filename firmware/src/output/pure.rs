@@ -1007,6 +1007,30 @@ pub(super) fn dcin_input_pressure_step(
         }
     }
 
+    if input.requested_target_ichg_ma.is_none() || !input.allow_charge {
+        if input.requested_target_ichg_ma.is_none() {
+            tracker.adaptive_cap_ichg_ma = None;
+            tracker.last_ramp_at_ms = None;
+        }
+        tracker.pressure_score_pct =
+            dcin_pressure_score_pct(tracker.state, tracker.vin_drop_mv, tracker.vin_baseline_mv);
+        return DcinInputPressureDecision {
+            pressure_state: tracker.state,
+            pressure_reason: tracker.reason,
+            trigger_reason: tracker.trigger_reason,
+            pressure_score_pct: tracker.pressure_score_pct,
+            vin_baseline_mv: tracker.vin_baseline_mv,
+            vin_drop_mv: tracker.vin_drop_mv,
+            tps_total_iout_ma: input.tps_total_iout_ma,
+            tps_limit_threshold_ma: Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
+            adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
+            effective_target_ichg_ma: None,
+            allow_charge: input.allow_charge,
+            limit_active: false,
+            limit_reason: DcinChargeLimitReason::None,
+        };
+    }
+
     if let Some(cooldown_until_ms) = tracker.cooldown_until_ms {
         if now_ms < cooldown_until_ms {
             tracker.state = DcinInputPressureState::Cooldown;
@@ -1167,30 +1191,6 @@ pub(super) fn dcin_input_pressure_step(
         tracker.state = DcinInputPressureState::Headroom;
         tracker.reason = DcinInputPressureReason::None;
         tracker.trigger_reason = DcinInputPressureReason::None;
-    }
-
-    if input.requested_target_ichg_ma.is_none() || !input.allow_charge {
-        if input.requested_target_ichg_ma.is_none() {
-            tracker.adaptive_cap_ichg_ma = None;
-            tracker.last_ramp_at_ms = None;
-        }
-        tracker.pressure_score_pct =
-            dcin_pressure_score_pct(tracker.state, tracker.vin_drop_mv, tracker.vin_baseline_mv);
-        return DcinInputPressureDecision {
-            pressure_state: tracker.state,
-            pressure_reason: tracker.reason,
-            trigger_reason: tracker.trigger_reason,
-            pressure_score_pct: tracker.pressure_score_pct,
-            vin_baseline_mv: tracker.vin_baseline_mv,
-            vin_drop_mv: tracker.vin_drop_mv,
-            tps_total_iout_ma: input.tps_total_iout_ma,
-            tps_limit_threshold_ma: Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
-            adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
-            effective_target_ichg_ma: None,
-            allow_charge: input.allow_charge,
-            limit_active: false,
-            limit_reason: DcinChargeLimitReason::None,
-        };
     }
 
     let requested_target_ichg_ma = input.requested_target_ichg_ma.unwrap_or_default();
@@ -2959,6 +2959,35 @@ mod tests {
         assert_eq!(
             stopped.tps_limit_threshold_ma,
             Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA)
+        );
+    }
+
+    #[test]
+    fn dcin_pressure_does_not_seed_cooldown_before_charge_request() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let idle_load = dcin_input_pressure_step(
+            &mut tracker,
+            0,
+            DcinInputPressureInput {
+                requested_target_ichg_ma: None,
+                tps_total_iout_ma: Some(128),
+                ..dcin_input(None, Some(19_400))
+            },
+        );
+
+        assert_ne!(idle_load.pressure_state, DcinInputPressureState::Cooldown);
+        assert_eq!(idle_load.effective_target_ichg_ma, None);
+        assert!(idle_load.allow_charge);
+        assert_eq!(idle_load.limit_reason, DcinChargeLimitReason::None);
+
+        let first_charge =
+            dcin_input_pressure_step(&mut tracker, 100, dcin_input(Some(500), Some(19_400)));
+        assert_eq!(first_charge.effective_target_ichg_ma, Some(100));
+        assert!(first_charge.allow_charge);
+        assert_eq!(
+            first_charge.limit_reason,
+            DcinChargeLimitReason::StartupRamp
         );
     }
 
