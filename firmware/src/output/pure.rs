@@ -868,6 +868,7 @@ pub(super) struct DcinInputPressureTracker {
     pub(super) last_pressure_at_ms: Option<u64>,
     pub(super) last_ramp_at_ms: Option<u64>,
     pub(super) cooldown_until_ms: Option<u64>,
+    pub(super) last_tps_total_iout_sample_seq: Option<u32>,
 }
 
 impl DcinInputPressureTracker {
@@ -884,6 +885,8 @@ pub(super) struct DcinInputPressureInput {
     pub(super) vin_vbus_mv: Option<u16>,
     pub(super) vin_iin_ma: Option<i32>,
     pub(super) tps_total_iout_ma: Option<i32>,
+    pub(super) tps_total_iout_fresh: bool,
+    pub(super) tps_total_iout_sample_seq: Option<u32>,
     pub(super) poorsrc: bool,
     pub(super) vindpm: bool,
     pub(super) iindpm: bool,
@@ -1056,9 +1059,14 @@ pub(super) fn dcin_input_pressure_step(
         tracker.last_pressure_at_ms = Some(now_ms);
     }
 
-    let mut hard_reason = if input
-        .tps_total_iout_ma
-        .is_some_and(|total_iout_ma| total_iout_ma > DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA)
+    let tps_sample_consumable = input.tps_total_iout_fresh
+        && input
+            .tps_total_iout_sample_seq
+            .is_some_and(|sample_seq| tracker.last_tps_total_iout_sample_seq != Some(sample_seq));
+    let mut hard_reason = if tps_sample_consumable
+        && input
+            .tps_total_iout_ma
+            .is_some_and(|total_iout_ma| total_iout_ma > DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA)
     {
         Some(DcinInputPressureReason::TpsOutputCurrent)
     } else if input.poorsrc {
@@ -1097,6 +1105,9 @@ pub(super) fn dcin_input_pressure_step(
     }
 
     if let Some(reason) = hard_reason {
+        if matches!(reason, DcinInputPressureReason::TpsOutputCurrent) {
+            tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+        }
         tracker.reason = reason;
         tracker.trigger_reason = reason;
         tracker.last_pressure_at_ms = Some(now_ms);
@@ -2809,6 +2820,8 @@ mod tests {
             vin_vbus_mv,
             vin_iin_ma: Some(1_200),
             tps_total_iout_ma: Some(0),
+            tps_total_iout_fresh: true,
+            tps_total_iout_sample_seq: Some(1),
             poorsrc: false,
             vindpm: false,
             iindpm: false,
@@ -2936,6 +2949,8 @@ mod tests {
             0,
             DcinInputPressureInput {
                 tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
                 ..dcin_input(Some(500), Some(19_400))
             },
         );
@@ -2972,6 +2987,8 @@ mod tests {
             DcinInputPressureInput {
                 requested_target_ichg_ma: None,
                 tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
                 ..dcin_input(None, Some(19_400))
             },
         );
@@ -3001,6 +3018,8 @@ mod tests {
             3_100,
             DcinInputPressureInput {
                 tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
                 ..dcin_input(Some(500), Some(18_200))
             },
         );
@@ -3035,6 +3054,8 @@ mod tests {
             3_100,
             DcinInputPressureInput {
                 tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
                 ..dcin_input(Some(500), Some(19_350))
             },
         );
@@ -3050,6 +3071,78 @@ mod tests {
             stopped.limit_reason,
             DcinChargeLimitReason::CooldownRetryWait
         );
+    }
+
+    #[test]
+    fn dcin_pressure_ignores_stale_tps_output_current_samples() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let stale = dcin_input_pressure_step(
+            &mut tracker,
+            0,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: false,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(19_400))
+            },
+        );
+
+        assert_eq!(stale.pressure_state, DcinInputPressureState::Headroom);
+        assert_eq!(stale.pressure_reason, DcinInputPressureReason::None);
+        assert_eq!(stale.effective_target_ichg_ma, Some(100));
+        assert!(stale.allow_charge);
+        assert_eq!(stale.limit_reason, DcinChargeLimitReason::StartupRamp);
+    }
+
+    #[test]
+    fn dcin_pressure_consumes_each_tps_sample_only_once() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let stopped = dcin_input_pressure_step(
+            &mut tracker,
+            0,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(19_400))
+            },
+        );
+        assert_eq!(stopped.pressure_state, DcinInputPressureState::Cooldown);
+
+        let recovered =
+            dcin_input_pressure_step(&mut tracker, 40_100, dcin_input(Some(500), Some(19_420)));
+        assert_eq!(recovered.pressure_state, DcinInputPressureState::Watch);
+        assert_eq!(recovered.effective_target_ichg_ma, Some(100));
+
+        let reused = dcin_input_pressure_step(
+            &mut tracker,
+            43_200,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(19_420))
+            },
+        );
+        assert_eq!(reused.pressure_state, DcinInputPressureState::Watch);
+        assert_eq!(reused.effective_target_ichg_ma, Some(100));
+        assert!(reused.allow_charge);
+
+        let resumed = dcin_input_pressure_step(
+            &mut tracker,
+            53_200,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(19_430))
+            },
+        );
+        assert_eq!(resumed.pressure_state, DcinInputPressureState::Headroom);
+        assert_eq!(resumed.effective_target_ichg_ma, Some(200));
+        assert!(resumed.allow_charge);
     }
 
     #[test]

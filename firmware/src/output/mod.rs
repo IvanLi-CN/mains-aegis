@@ -3194,6 +3194,7 @@ pub struct PowerManager<'d, I2C> {
     tps_a_next_retry_at: Option<Instant>,
     tps_b_ready: bool,
     tps_b_next_retry_at: Option<Instant>,
+    tps_telemetry_sample_seq: u32,
 
     bms_addr: Option<u8>,
     bms_runtime_seen: bool,
@@ -3682,6 +3683,7 @@ where
             tps_a_next_retry_at: if out_a_allowed { Some(now) } else { None },
             tps_b_ready: false,
             tps_b_next_retry_at: if out_b_allowed { Some(now) } else { None },
+            tps_telemetry_sample_seq: 0,
 
             bms_addr,
             bms_runtime_seen,
@@ -9162,10 +9164,30 @@ where
             (None, Some(b)) => Some(b),
             (None, None) => None,
         };
+        if self.ui_snapshot.ina_total_ma.is_some() {
+            self.tps_telemetry_sample_seq = self.tps_telemetry_sample_seq.wrapping_add(1);
+        }
 
         self.refresh_vin_telemetry(now);
         self.recompute_ui_mode();
         true
+    }
+
+    fn tps_total_iout_sample(&self) -> (Option<i32>, bool, Option<u32>) {
+        let total_iout_ma = match (
+            self.ui_snapshot.tps_a_iout_ma,
+            self.ui_snapshot.tps_b_iout_ma,
+        ) {
+            (None, None) => None,
+            (out_a_iout_ma, out_b_iout_ma) => Some(
+                out_a_iout_ma
+                    .unwrap_or_default()
+                    .saturating_add(out_b_iout_ma.unwrap_or_default()),
+            ),
+        };
+        let fresh = total_iout_ma.is_some();
+        let sample_seq = fresh.then_some(self.tps_telemetry_sample_seq);
+        (total_iout_ma, fresh, sample_seq)
     }
 
     fn maybe_poll_charger(&mut self, irq: &IrqSnapshot) {
@@ -9709,17 +9731,8 @@ where
                 self.manual_charge_runtime.last_stop_reason = ManualChargeStopReason::None;
             }
         }
-        let tps_total_iout_ma = match (
-            self.ui_snapshot.tps_a_iout_ma,
-            self.ui_snapshot.tps_b_iout_ma,
-        ) {
-            (None, None) => None,
-            (out_a_iout_ma, out_b_iout_ma) => Some(
-                out_a_iout_ma
-                    .unwrap_or_default()
-                    .saturating_add(out_b_iout_ma.unwrap_or_default()),
-            ),
-        };
+        let (tps_total_iout_ma, tps_total_iout_fresh, tps_total_iout_sample_seq) =
+            self.tps_total_iout_sample();
         let dcin_pressure = dcin_input_pressure_step(
             &mut self.dcin_input_pressure,
             charge_policy_now_ms,
@@ -9730,6 +9743,8 @@ where
                 vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
                 vin_iin_ma: self.ui_snapshot.vin_iin_ma,
                 tps_total_iout_ma,
+                tps_total_iout_fresh,
+                tps_total_iout_sample_seq,
                 poorsrc,
                 vindpm,
                 iindpm,
