@@ -9735,6 +9735,8 @@ where
                 iindpm,
             },
         );
+        let requested_policy_target_ichg_ma = policy_target_ichg_ma;
+        let mut effective_policy_target_ichg_ma = policy_target_ichg_ma;
         let policy_detail_status_text = dcin_charge_detail_status_text(
             policy_status_text,
             dcin_pressure.limit_active,
@@ -9744,7 +9746,7 @@ where
         );
         if matches!(input_source, Some(DashboardInputSource::DcIn)) {
             allow_charge = dcin_pressure.allow_charge;
-            policy_target_ichg_ma = dcin_pressure.effective_target_ichg_ma;
+            effective_policy_target_ichg_ma = dcin_pressure.effective_target_ichg_ma;
             if dcin_pressure.limit_active || !dcin_pressure.allow_charge {
                 policy_notice_text = dcin_pressure.limit_reason.as_str();
             }
@@ -9761,7 +9763,7 @@ where
             && !force_allow_charge
             && !auto_force_charge
             && !activation_pending
-            && policy_target_ichg_ma.is_some_and(|target_ma| target_ma <= 100);
+            && effective_policy_target_ichg_ma.is_some_and(|target_ma| target_ma <= 100);
         let policy_term_target_ma = if force_allow_charge || auto_force_charge || activation_pending
         {
             None
@@ -9967,7 +9969,7 @@ where
             }
 
             if !force_allow_charge && !auto_force_charge && !activation_pending {
-                if let Some(target_ichg_ma) = policy_target_ichg_ma {
+                if let Some(target_ichg_ma) = effective_policy_target_ichg_ma {
                     match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, CHARGE_POLICY_VREG_MV)
                     {
                         Ok(v) => applied_vreg_mv = Some(decode_voltage_mv(v)),
@@ -10187,7 +10189,7 @@ where
             vac1_adc_mv: raw_vac1_adc_mv,
             vac2_adc_mv: raw_vac2_adc_mv,
             vreg_mv: applied_vreg_mv,
-            ichg_ma: applied_ichg_ma.or(policy_target_ichg_ma),
+            ichg_ma: applied_ichg_ma.or(effective_policy_target_ichg_ma),
             vindpm_mv: applied_vindpm_mv,
             iindpm_ma: applied_iindpm_ma,
             vbat_lowv_pct_x10: applied_vbat_lowv_pct_x10,
@@ -10224,7 +10226,7 @@ where
             output_block_reason: policy_output_block_reason
                 .map(ChargePolicyOutputBlockReason::as_str),
             recovery_stage: policy_recovery_stage.map(ChargePolicyRecoveryStage::as_str),
-            target_ichg_ma: policy_target_ichg_ma,
+            target_ichg_ma: requested_policy_target_ichg_ma,
             adaptive_cap_ichg_ma: dcin_pressure.adaptive_cap_ichg_ma,
             effective_target_ichg_ma: dcin_pressure.effective_target_ichg_ma,
             limit_active: dcin_pressure.limit_active,
@@ -10261,7 +10263,7 @@ where
         self.maybe_log_charger_limit_mismatch(
             now,
             allow_charge,
-            policy_target_ichg_ma,
+            effective_policy_target_ichg_ma,
             applied_ichg_ma,
             applied_iindpm_ma,
             raw_ibus_adc_ma,
@@ -10290,7 +10292,7 @@ where
                 policy_start_reason.map(ChargeStartReason::as_str),
                 policy_full_reason.map(ChargeFullReason::as_str),
                 policy_output_block_reason.map(ChargePolicyOutputBlockReason::as_str),
-                policy_target_ichg_ma,
+                requested_policy_target_ichg_ma,
                 policy_term_target_ma,
                 output_power_w10,
                 self.charge_policy.charge_latched,
@@ -10442,7 +10444,7 @@ where
         self.ui_snapshot.dashboard_detail.charger_detail_status = Some(policy_detail_status_text);
         self.ui_snapshot
             .dashboard_detail
-            .charger_policy_target_ichg_ma = policy_target_ichg_ma;
+            .charger_policy_target_ichg_ma = requested_policy_target_ichg_ma;
         self.ui_snapshot.dashboard_detail.charger_limit_active = Some(dcin_pressure.limit_active);
         self.ui_snapshot.dashboard_detail.charger_limit_reason =
             Some(dcin_pressure.limit_reason.as_str());
