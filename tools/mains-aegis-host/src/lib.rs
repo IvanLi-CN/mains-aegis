@@ -4798,7 +4798,10 @@ fn derive_power_diag_from_status(status: &Value, source: &str) -> Value {
             "treg": Value::Bool(false),
             "dpdm": Value::Bool(false),
             "wd": Value::Bool(false),
-            "poorsrc": Value::Bool(matches!(input.get("pressure_reason").and_then(Value::as_str), Some("poor_source"))),
+            "poorsrc": Value::Bool(matches!(
+                input.get("pressure_reason").and_then(Value::as_str),
+                Some("poorsrc" | "poor_source")
+            )),
             "vindpm": Value::Bool(matches!(input.get("pressure_reason").and_then(Value::as_str), Some("vindpm" | "vin_drop"))),
             "iindpm": Value::Bool(matches!(input.get("pressure_reason").and_then(Value::as_str), Some("iindpm"))),
             "ts_cold": Value::Bool(false),
@@ -4901,6 +4904,7 @@ fn maybe_record_power_event(
         .get("tps_limit_threshold_ma")
         .and_then(Value::as_i64)
         .or_else(|| charger.get("limit_threshold_ma").and_then(Value::as_i64));
+    let tps_total_iout_ma = input.get("tps_total_iout_ma").and_then(Value::as_i64);
     let policy_target_ichg_ma = charger.get("policy_target_ichg_ma").and_then(Value::as_u64);
     let limit_reason = charger
         .get("limit_reason")
@@ -4911,8 +4915,8 @@ fn maybe_record_power_event(
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     let signature = format!(
-        "{input_source}:{pressure_state}:{pressure_reason}:{limit_reason}:{:?}:{:?}",
-        policy_target_ichg_ma, tps_limit_threshold_ma
+        "{input_source}:{pressure_state}:{pressure_reason}:{limit_reason}:{:?}:{:?}:{:?}",
+        policy_target_ichg_ma, tps_limit_threshold_ma, tps_total_iout_ma
     );
     if device.last_power_event_signature.as_deref() == Some(signature.as_str()) {
         return None;
@@ -7719,7 +7723,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_updates_ignore_tps_jitter_within_same_power_state() {
+    async fn status_updates_emit_power_events_when_tps_measurement_changes() {
         let state = create_app_state(false);
         seed_mock_device(&state);
         let device_id = "mock-devkit";
@@ -7779,8 +7783,8 @@ mod tests {
             .filter(|trace| trace.kind == "event" && trace.target.as_deref() == Some("power"))
             .count();
 
-        assert_eq!(power_events, 1);
-        assert_eq!(power_traces, 1);
+        assert_eq!(power_events, 2);
+        assert_eq!(power_traces, 2);
     }
 
     #[tokio::test]
@@ -8459,12 +8463,43 @@ mod tests {
         assert_eq!(diag["input"]["pressure_reason"], "tps_output_current");
         assert_eq!(diag["input"]["tps_total_iout_ma"], 288);
         assert_eq!(diag["charger"]["allow_charge"], false);
+        assert_eq!(diag["charger"]["poorsrc"], false);
         assert_eq!(diag["policy"]["limit_reason"], "cooldown_retry_wait");
         assert_eq!(
             diag["policy"]["limit_detail"],
             "tps_output_current_cooldown"
         );
         assert_eq!(diag["policy"]["tps_limit_threshold_ma"], 100);
+    }
+
+    #[test]
+    fn derives_power_diag_from_status_maps_poorsrc_reason() {
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_reason": "poorsrc",
+                "pressure_state": "limited",
+                "pressure_score_pct": 92,
+                "tps_total_iout_ma": 101,
+                "tps_limit_threshold_ma": 100
+            },
+            "charger": {
+                "allow_charge": false,
+                "limit_reason": "pressure_poorsrc",
+                "detail_status": "LIMIT"
+            },
+            "battery": {
+                "state": "ok"
+            }
+        });
+
+        let diag = derive_power_diag_from_status(&status, "lan_derived");
+
+        assert_eq!(diag["source"], "lan_derived");
+        assert_eq!(diag["input"]["pressure_reason"], "poorsrc");
+        assert_eq!(diag["charger"]["poorsrc"], true);
+        assert_eq!(diag["charger"]["vindpm"], false);
+        assert_eq!(diag["charger"]["iindpm"], false);
     }
 
     #[test]
