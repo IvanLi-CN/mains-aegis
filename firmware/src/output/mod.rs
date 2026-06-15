@@ -146,7 +146,7 @@ const CHARGE_POLICY_DC_DERATE_EXIT_IBUS_MA: i32 = 2_700;
 const CHARGE_POLICY_DC_DERATE_ENTER_HOLD: Duration = Duration::from_secs(1);
 const CHARGE_POLICY_DC_DERATE_EXIT_HOLD: Duration = Duration::from_secs(5);
 const CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10: u32 = 50;
-const CHARGE_POLICY_DC_INPUT_IINDPM_MA: u16 = 3_000;
+const CHARGE_POLICY_DC_INPUT_IINDPM_MA: u16 = 1_000;
 const CHARGE_POLICY_100MA_ITERM_MA: u16 = 40;
 const CHARGE_POLICY_PRECHARGE_IPRECHG_MA: u16 = 120;
 const USB_PD_SYSTEM_LOAD_FLOOR_MW: u32 = 2_500;
@@ -3194,6 +3194,7 @@ pub struct PowerManager<'d, I2C> {
     tps_a_next_retry_at: Option<Instant>,
     tps_b_ready: bool,
     tps_b_next_retry_at: Option<Instant>,
+    tps_telemetry_sample_seq: u32,
 
     bms_addr: Option<u8>,
     bms_runtime_seen: bool,
@@ -3229,6 +3230,7 @@ pub struct PowerManager<'d, I2C> {
     charge_policy: ChargePolicyMemory,
     charge_policy_derate: ChargePolicyDerateTracker,
     charge_policy_output_load: ChargePolicyOutputLoadTracker,
+    dcin_input_pressure: DcinInputPressureTracker,
     manual_charge_prefs: ManualChargePrefs,
     manual_charge_prefs_offset: u16,
     manual_charge_storage_ready: bool,
@@ -3681,6 +3683,7 @@ where
             tps_a_next_retry_at: if out_a_allowed { Some(now) } else { None },
             tps_b_ready: false,
             tps_b_next_retry_at: if out_b_allowed { Some(now) } else { None },
+            tps_telemetry_sample_seq: 0,
 
             bms_addr,
             bms_runtime_seen,
@@ -3716,6 +3719,7 @@ where
             charge_policy: ChargePolicyMemory::default(),
             charge_policy_derate: ChargePolicyDerateTracker::default(),
             charge_policy_output_load: ChargePolicyOutputLoadTracker::default(),
+            dcin_input_pressure: DcinInputPressureTracker::default(),
             manual_charge_prefs,
             manual_charge_prefs_offset,
             manual_charge_storage_ready,
@@ -4173,11 +4177,31 @@ where
     fn refresh_power_diag_input_snapshot(&mut self) {
         let usb_pd = self.usb_pd_state;
         self.power_diag.input = PowerDiagInputSnapshot {
+            source: self
+                .ui_snapshot
+                .dashboard_detail
+                .input_source
+                .map(|source| dashboard_input_source_name(Some(source)))
+                .unwrap_or("unknown"),
             mains_present: self.ui_snapshot.vin_mains_present,
             input_vbus_mv: self.ui_snapshot.input_vbus_mv,
             input_ibus_ma: self.ui_snapshot.input_ibus_ma,
             vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
             vin_iin_ma: self.ui_snapshot.vin_iin_ma,
+            tps_total_iout_ma: self.ui_snapshot.dashboard_detail.input_tps_total_iout_ma,
+            tps_limit_threshold_ma: self
+                .ui_snapshot
+                .dashboard_detail
+                .input_tps_limit_threshold_ma,
+            pressure_state: self
+                .ui_snapshot
+                .dashboard_detail
+                .input_pressure_state
+                .unwrap_or("inactive"),
+            pressure_score_pct: self.ui_snapshot.dashboard_detail.input_pressure_score_pct,
+            pressure_reason: self.ui_snapshot.dashboard_detail.input_pressure_reason,
+            vin_baseline_mv: self.ui_snapshot.dashboard_detail.input_vin_baseline_mv,
+            vin_drop_mv: self.ui_snapshot.dashboard_detail.input_vin_drop_mv,
             usb_pd_attached: usb_pd.attached,
             usb_pd_charge_ready: usb_pd.charge_ready,
             usb_pd_vbus_present: usb_pd.vbus_present,
@@ -9118,6 +9142,7 @@ where
             self.ui_snapshot.tmp_b_c_x16 = capture.temp_c_x16;
             self.ui_snapshot.tmp_b_c = capture.temp_c_x16.map(|v| v / 16);
         } else {
+            self.ui_snapshot.tps_b_iout_ma = None;
             self.refresh_tmp112_snapshot(OutputChannel::OutB);
         }
         if !self
@@ -9125,25 +9150,36 @@ where
             .requested_outputs
             .is_enabled(OutputChannel::OutA)
         {
+            self.ui_snapshot.tps_a_iout_ma = None;
             self.refresh_tmp112_snapshot(OutputChannel::OutA);
         }
         self.next_fan_temp_refresh_at = now + self.cfg.telemetry_period;
 
         self.refresh_tps_audio_state();
 
-        self.ui_snapshot.ina_total_ma = match (
+        self.ui_snapshot.ina_total_ma = requested_tps_total_iout_ma(
+            self.output_state.requested_outputs,
             self.ui_snapshot.tps_a_iout_ma,
             self.ui_snapshot.tps_b_iout_ma,
-        ) {
-            (Some(a), Some(b)) => Some(a + b),
-            (Some(a), None) => Some(a),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
-        };
+        );
+        if self.ui_snapshot.ina_total_ma.is_some() {
+            self.tps_telemetry_sample_seq = self.tps_telemetry_sample_seq.wrapping_add(1);
+        }
 
         self.refresh_vin_telemetry(now);
         self.recompute_ui_mode();
         true
+    }
+
+    fn tps_total_iout_sample(&self) -> (Option<i32>, bool, Option<u32>) {
+        let total_iout_ma = requested_tps_total_iout_ma(
+            self.output_state.requested_outputs,
+            self.ui_snapshot.tps_a_iout_ma,
+            self.ui_snapshot.tps_b_iout_ma,
+        );
+        let fresh = total_iout_ma.is_some();
+        let sample_seq = fresh.then_some(self.tps_telemetry_sample_seq);
+        (total_iout_ma, fresh, sample_seq)
     }
 
     fn maybe_poll_charger(&mut self, irq: &IrqSnapshot) {
@@ -9572,7 +9608,6 @@ where
                 .or_else(|| policy_state.map(ChargePolicyState::as_str))
                 .unwrap_or("charger_policy_pending")
         };
-
         let manual_stop_hold_blocks_charge = manual_charge_stop_hold_blocks_charge(
             self.manual_charge_runtime.stop_inhibit,
             activation_pending,
@@ -9688,6 +9723,41 @@ where
                 self.manual_charge_runtime.last_stop_reason = ManualChargeStopReason::None;
             }
         }
+        let (tps_total_iout_ma, tps_total_iout_fresh, tps_total_iout_sample_seq) =
+            self.tps_total_iout_sample();
+        let dcin_pressure = dcin_input_pressure_step(
+            &mut self.dcin_input_pressure,
+            charge_policy_now_ms,
+            DcinInputPressureInput {
+                input_source,
+                requested_target_ichg_ma: policy_target_ichg_ma,
+                allow_charge,
+                vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
+                vin_iin_ma: self.ui_snapshot.vin_iin_ma,
+                tps_total_iout_ma,
+                tps_total_iout_fresh,
+                tps_total_iout_sample_seq,
+                poorsrc,
+                vindpm,
+                iindpm,
+            },
+        );
+        let requested_policy_target_ichg_ma = policy_target_ichg_ma;
+        let mut effective_policy_target_ichg_ma = policy_target_ichg_ma;
+        let policy_detail_status_text = dcin_charge_detail_status_text(
+            policy_status_text,
+            dcin_pressure.limit_active,
+            dcin_pressure.allow_charge,
+            dcin_pressure.effective_target_ichg_ma,
+            dcin_pressure.limit_reason,
+        );
+        if matches!(input_source, Some(DashboardInputSource::DcIn)) {
+            allow_charge = dcin_pressure.allow_charge;
+            effective_policy_target_ichg_ma = dcin_pressure.effective_target_ichg_ma;
+            if dcin_pressure.limit_active || !dcin_pressure.allow_charge {
+                policy_notice_text = dcin_pressure.limit_reason.as_str();
+            }
+        }
         let mut applied_ctrl0 = ctrl0;
         let mut applied_vreg_mv: Option<u16> = None;
         let mut applied_ichg_ma: Option<u16> = None;
@@ -9700,7 +9770,7 @@ where
             && !force_allow_charge
             && !auto_force_charge
             && !activation_pending
-            && policy_target_ichg_ma.is_some_and(|target_ma| target_ma <= 100);
+            && effective_policy_target_ichg_ma.is_some_and(|target_ma| target_ma <= 100);
         let policy_term_target_ma = if force_allow_charge || auto_force_charge || activation_pending
         {
             None
@@ -9906,7 +9976,7 @@ where
             }
 
             if !force_allow_charge && !auto_force_charge && !activation_pending {
-                if let Some(target_ichg_ma) = policy_target_ichg_ma {
+                if let Some(target_ichg_ma) = effective_policy_target_ichg_ma {
                     match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, CHARGE_POLICY_VREG_MV)
                     {
                         Ok(v) => applied_vreg_mv = Some(decode_voltage_mv(v)),
@@ -9944,7 +10014,7 @@ where
         let dc_input_selected = matches!(input_source, Some(DashboardInputSource::DcIn));
         if dc_input_selected && !force_allow_charge && !auto_force_charge && !activation_pending {
             let target_vindpm_mv =
-                usb_pd_restore_vindpm_mv(input_sample.ui_vbus_mv.or(raw_vbus_adc_mv));
+                dcin_target_vindpm_mv(self.ui_snapshot.vin_vbus_mv, dcin_pressure.vin_baseline_mv);
             match bq25792::set_input_voltage_limit_mv(&mut self.i2c, target_vindpm_mv) {
                 Ok(v) => applied_vindpm_mv = Some(bq25792::decode_input_voltage_limit_mv(v)),
                 Err(e) => {
@@ -10126,7 +10196,7 @@ where
             vac1_adc_mv: raw_vac1_adc_mv,
             vac2_adc_mv: raw_vac2_adc_mv,
             vreg_mv: applied_vreg_mv,
-            ichg_ma: applied_ichg_ma.or(policy_target_ichg_ma),
+            ichg_ma: applied_ichg_ma.or(effective_policy_target_ichg_ma),
             vindpm_mv: applied_vindpm_mv,
             iindpm_ma: applied_iindpm_ma,
             vbat_lowv_pct_x10: applied_vbat_lowv_pct_x10,
@@ -10163,7 +10233,31 @@ where
             output_block_reason: policy_output_block_reason
                 .map(ChargePolicyOutputBlockReason::as_str),
             recovery_stage: policy_recovery_stage.map(ChargePolicyRecoveryStage::as_str),
-            target_ichg_ma: policy_target_ichg_ma,
+            target_ichg_ma: requested_policy_target_ichg_ma,
+            adaptive_cap_ichg_ma: dcin_pressure.adaptive_cap_ichg_ma,
+            effective_target_ichg_ma: dcin_pressure.effective_target_ichg_ma,
+            limit_active: dcin_pressure.limit_active,
+            limit_reason: Some(dcin_pressure.limit_reason.as_str()),
+            limit_detail: Some(match dcin_pressure.limit_reason {
+                DcinChargeLimitReason::PressureTpsOutputCurrent => "tps_output_current_over_limit",
+                DcinChargeLimitReason::CooldownRetryWait
+                    if matches!(
+                        dcin_pressure.trigger_reason,
+                        DcinInputPressureReason::TpsOutputCurrent
+                    ) =>
+                {
+                    "tps_output_current_cooldown"
+                }
+                _ => "none",
+            }),
+            detail_status: Some(policy_detail_status_text),
+            pressure_state: dcin_pressure.pressure_state.as_str(),
+            pressure_reason: Some(dcin_pressure.trigger_reason.as_str()),
+            pressure_score_pct: Some(dcin_pressure.pressure_score_pct),
+            vin_baseline_mv: dcin_pressure.vin_baseline_mv,
+            vin_drop_mv: dcin_pressure.vin_drop_mv,
+            tps_total_iout_ma: dcin_pressure.tps_total_iout_ma,
+            tps_limit_threshold_ma: dcin_pressure.tps_limit_threshold_ma,
             output_power_w10,
             charge_latched: self.charge_policy.charge_latched,
             full_latched: self.charge_policy.full_latched,
@@ -10176,7 +10270,7 @@ where
         self.maybe_log_charger_limit_mismatch(
             now,
             allow_charge,
-            policy_target_ichg_ma,
+            effective_policy_target_ichg_ma,
             applied_ichg_ma,
             applied_iindpm_ma,
             raw_ibus_adc_ma,
@@ -10205,7 +10299,7 @@ where
                 policy_start_reason.map(ChargeStartReason::as_str),
                 policy_full_reason.map(ChargeFullReason::as_str),
                 policy_output_block_reason.map(ChargePolicyOutputBlockReason::as_str),
-                policy_target_ichg_ma,
+                requested_policy_target_ichg_ma,
                 policy_term_target_ma,
                 output_power_w10,
                 self.charge_policy.charge_latched,
@@ -10316,6 +10410,18 @@ where
         self.ui_snapshot.fusb302_vbus_present =
             usb_pd_vbus_present(self.usb_pd_state.vbus_present, ac1_present);
         self.ui_snapshot.dashboard_detail.input_source = input_source;
+        self.ui_snapshot.dashboard_detail.input_pressure_state =
+            Some(dcin_pressure.pressure_state.as_str());
+        self.ui_snapshot.dashboard_detail.input_pressure_score_pct =
+            Some(dcin_pressure.pressure_score_pct);
+        self.ui_snapshot.dashboard_detail.input_pressure_reason =
+            Some(dcin_pressure.trigger_reason.as_str());
+        self.ui_snapshot.dashboard_detail.input_vin_baseline_mv = dcin_pressure.vin_baseline_mv;
+        self.ui_snapshot.dashboard_detail.input_vin_drop_mv = dcin_pressure.vin_drop_mv;
+        self.ui_snapshot.dashboard_detail.input_tps_total_iout_ma = dcin_pressure.tps_total_iout_ma;
+        self.ui_snapshot
+            .dashboard_detail
+            .input_tps_limit_threshold_ma = dcin_pressure.tps_limit_threshold_ma;
         self.ui_snapshot.dashboard_detail.charger_protocol =
             charger_protocol_from_usb_pd(input_source, self.usb_pd_state);
         self.ui_snapshot.dashboard_detail.charger_active = Some(
@@ -10342,11 +10448,34 @@ where
             ts_warm,
             policy_status_text,
         ));
+        self.ui_snapshot.dashboard_detail.charger_detail_status = Some(policy_detail_status_text);
+        self.ui_snapshot
+            .dashboard_detail
+            .charger_policy_target_ichg_ma = requested_policy_target_ichg_ma;
+        self.ui_snapshot.dashboard_detail.charger_limit_active = Some(dcin_pressure.limit_active);
+        self.ui_snapshot.dashboard_detail.charger_limit_reason =
+            Some(dcin_pressure.limit_reason.as_str());
+        self.ui_snapshot.dashboard_detail.charger_limit_detail =
+            Some(match dcin_pressure.limit_reason {
+                DcinChargeLimitReason::PressureTpsOutputCurrent => "tps_output_current_over_limit",
+                DcinChargeLimitReason::CooldownRetryWait
+                    if matches!(
+                        dcin_pressure.trigger_reason,
+                        DcinInputPressureReason::TpsOutputCurrent
+                    ) =>
+                {
+                    "tps_output_current_cooldown"
+                }
+                _ => "none",
+            });
+        self.ui_snapshot.dashboard_detail.charger_limit_threshold_ma =
+            dcin_pressure.tps_limit_threshold_ma;
         self.ui_snapshot.dashboard_detail.charger_notice = Some(charger_detail_notice_text(
             charger_fault,
             ts_warm,
             policy_notice_text,
         ));
+        self.refresh_power_diag_input_snapshot();
         self.update_manual_charge_ui_snapshot(now);
         self.recompute_ui_mode();
 

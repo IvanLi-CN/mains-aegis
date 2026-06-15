@@ -22,7 +22,7 @@
 | rzx5v | Client transport priority matrix | 已完成 | `rzx5v-client-transport-priority/SPEC.md` | 2026-06-08 | 跨 Web / devd / CLI 的通信方案优先级已抽成独立 topic spec；冻结 Web confirmed companion 的 FQDN-first 与 devd/CLI 的 USB-first 规则 |
 | k4vzn | LAN management convergence | 已完成 | `k4vzn-lan-management-convergence/SPEC.md` | 2026-06-03 | 设备本体 settings 读写 API、devd LAN discovery/scan trace/LAN settings 写路径、USB 优先合并、trace+connection 查询面、Web direct LAN/devd LAN settings 与最终视觉证据已收口 |
 | 7jqrq | Mains Aegis CLI / devd alignment | 已完成 | `7jqrq-mains-aegis-cli-devd-alignment/SPEC.md` | 2026-06-03 | 主机工具对齐与 release/install 基线已完成；CLI `device session` 与新查询面迁移改由 #k4vzn 接管 |
-| p8k3d | Mains Aegis Device Daemon | 已完成 | `p8k3d-mains-aegis-devd/SPEC.md` | 2026-06-04 | devd v1 foundation 已完成；`power-diag` 诊断快照已覆盖 VAC2/DC IN 与 CUV recovery 策略状态；`session`/localhost settings 兼容面与 LAN transport 收敛改由 #k4vzn 接管 |
+| p8k3d | Mains Aegis Device Daemon | 已完成 | `p8k3d-mains-aegis-devd/SPEC.md` | 2026-06-14 | devd v1 foundation 已完成；`power-diag`、synthetic power event 与 CLI trace follow 已补齐 `TPS output current` 停充根因、`lan_derived` 兼容面与 DC IN `1000mA/96%` 输入限值观测 |
 | ypfpu | Web management UI | 部分完成（5/5） | `ypfpu-web-management-ui/SPEC.md` | 2026-06-03 | Web 管理端 v1 基线已完成；LAN 管理、settings 与 LAN/USB 收敛改由 #k4vzn 接管 |
 | hn29u | USB-C PD/PPS sink v1 | 已完成 | `hn29u-usb-c-pd-sink-pps/SPEC.md` | 2026-04-23 | hotplug PPS 恢复已稳定闭环：reset 基线约 `1.67s` 回到 `PPS`，主人实测真实热插拔也已恢复到秒级协商成功 |
 | nq7s2 | BQ40 balance baseline + observability | 已完成 | `nq7s2-bq40-balance-baseline-and-observability/SPEC.md` | 2026-04-07 | PR #59 已完成实现/文档/预览收口；实板已确认 DF 对齐，active balancing 触发待后续在完整 charge/relax 条件下复核 |
@@ -44,7 +44,7 @@
 | cqd8u | Regulated output module docs + runtime gate state machine | 已完成 | `cqd8u-regulated-output-module/SPEC.md` | 2026-03-16 | 已建立 `docs/modules/`、收敛稳压输出 SoT，并落地显式恢复状态机与本地验证 |
 | frsr9 | Regulated output active derating + shutdown | 已完成 | `frsr9-regulated-output-active-protection/SPEC.md` | 2026-03-16 | 已落地温度/电流双门限主动降额、低压主动停机与显式恢复前置条件 |
 | 2uqhm | TPS/BQ power test firmware | 已完成 | `2uqhm-tps-bq-power-test-firmware/SPEC.md` | 2026-03-21 | 已实现独立 `tps-test-fw`、固定 profile 电源运行时、专用 `TPS TEST` 屏显与三组 `cargo +esp check` 验证 |
-| eu2b8 | BQ25792 500mA charge policy + DC derate | 已完成 | `eu2b8-bq25792-charge-policy/SPEC.md` | 2026-06-04 | 主线 charger state machine 已作为 SoT；已补齐 DC IN/VAC2 优先判定、DC `IINDPM=3000mA` profile、CUV recovery `100mA` 预充，以及 `termination_done` 不打断 CUV recovery 的例外 |
+| eu2b8 | BQ25792 500mA charge policy + DC derate | 已完成 | `eu2b8-bq25792-charge-policy/SPEC.md` | 2026-06-14 | 主线 charger state machine 已作为 SoT；DC IN 停充真相源已切到 `TPS output current > 100mA`，并补齐 `IINDPM=1000mA`、`VINDPM=输入电压*96%`、Web/CLI 可观测性与 HIL 视觉证据 |
 | 2drzf | BQ40 mainboard DF protection baseline | 已完成 | `2drzf-bq40-mainboard-df-protection-baseline/SPEC.md` | 2026-04-03 | 冻结 `asset-df-mainboard` 的 `OCC/OCD/SOCC/SOCD` 主板基线，并把 `TMP + BMS` 最高温收敛为共享热控真相源 |
 | mturr | Front panel display-chain long-press diagnostics | 已完成 | `mturr-front-panel-display-chain-diagnostics/SPEC.md` | 2026-04-04 | 已完成主固件实现、本地构建、真机 flash/monitor 与 `CENTER` 长按 defmt 取证 |
 | zp4cg | Manual charge dashboard page + EEPROM prefs | 已完成 | `zp4cg-manual-charge-dashboard/SPEC.md` | 2026-04-07 | 已完成 `MANUAL` 三级页面、小屏触控布局、运行时手动接管/停止抑制、仅保存 prefs 的 EEPROM schema v1，以及预览/真机验证闭环 |

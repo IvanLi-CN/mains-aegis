@@ -4,7 +4,7 @@ use esp_firmware::net_types::WifiSnapshot;
 use esp_firmware::output_state::{EnabledOutputs, OutputSelector};
 
 use crate::front_panel_scene::SelfCheckUiSnapshot;
-use crate::front_panel_scene::{BmsResultKind, SelfCheckCommState, UpsMode};
+use crate::front_panel_scene::{BmsResultKind, DashboardInputSource, SelfCheckCommState, UpsMode};
 
 pub fn current_network_summary() -> NetworkUiSummary {
     #[cfg(feature = "net_http")]
@@ -49,16 +49,37 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
         active_outputs: outputs_slug(snapshot.active_outputs),
         recoverable_outputs: outputs_slug(snapshot.recoverable_outputs),
         output_gate_reason: snapshot.output_gate_reason.as_str(),
+        input_source: snapshot
+            .dashboard_detail
+            .input_source
+            .map(input_source_slug)
+            .unwrap_or("unknown"),
         input_vbus_mv: snapshot.input_vbus_mv,
         input_ibus_ma: snapshot.input_ibus_ma,
         mains_present: snapshot.vin_mains_present,
         vin_vbus_mv: snapshot.vin_vbus_mv,
         vin_iin_ma: snapshot.vin_iin_ma,
+        tps_total_iout_ma: snapshot.dashboard_detail.input_tps_total_iout_ma,
+        tps_limit_threshold_ma: snapshot.dashboard_detail.input_tps_limit_threshold_ma,
+        input_pressure_state: snapshot
+            .dashboard_detail
+            .input_pressure_state
+            .unwrap_or("inactive"),
+        input_pressure_score_pct: snapshot.dashboard_detail.input_pressure_score_pct,
+        input_pressure_reason: snapshot.dashboard_detail.input_pressure_reason,
+        input_vin_baseline_mv: snapshot.dashboard_detail.input_vin_baseline_mv,
+        input_vin_drop_mv: snapshot.dashboard_detail.input_vin_drop_mv,
         charger_state: comm_state_slug(snapshot.bq25792),
         charger_allow_charge: snapshot.bq25792_allow_charge,
         charger_ichg_ma: snapshot.bq25792_ichg_ma,
         charger_ibat_ma: snapshot.bq25792_ibat_ma,
         charger_vbat_present: snapshot.bq25792_vbat_present,
+        charger_policy_target_ichg_ma: snapshot.dashboard_detail.charger_policy_target_ichg_ma,
+        charger_limit_active: snapshot.dashboard_detail.charger_limit_active,
+        charger_limit_reason: snapshot.dashboard_detail.charger_limit_reason,
+        charger_limit_detail: snapshot.dashboard_detail.charger_limit_detail,
+        charger_limit_threshold_ma: snapshot.dashboard_detail.charger_limit_threshold_ma,
+        charger_detail_status: snapshot.dashboard_detail.charger_detail_status,
         battery_state: comm_state_slug(snapshot.bq40z50),
         battery_pack_mv: snapshot.bq40z50_pack_mv,
         battery_current_ma: snapshot.bq40z50_current_ma,
@@ -111,6 +132,14 @@ fn mode_slug(mode: UpsMode) -> &'static str {
         UpsMode::Standby => "standby",
         UpsMode::Supplement => "supplement",
         UpsMode::Backup => "backup",
+    }
+}
+
+fn input_source_slug(source: DashboardInputSource) -> &'static str {
+    match source {
+        DashboardInputSource::DcIn => "dcin",
+        DashboardInputSource::UsbC => "usbc",
+        DashboardInputSource::Auto => "auto",
     }
 }
 

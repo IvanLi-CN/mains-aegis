@@ -37,6 +37,15 @@ const CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10: u32 = 50;
 const CHARGE_POLICY_OUTPUT_POWER_RESUME_W10: u32 = 45;
 const CHARGE_POLICY_OUTPUT_BLOCK_ENTER_POLLS: u8 = 2;
 const CHARGE_POLICY_OUTPUT_BLOCK_EXIT_POLLS: u8 = 3;
+pub(super) const DCIN_ADAPTIVE_START_ICHG_MA: u16 = 100;
+const DCIN_ADAPTIVE_STEP_UP_ICHG_MA: u16 = 100;
+const DCIN_ADAPTIVE_STEP_DOWN_ICHG_MA: u16 = 200;
+const DCIN_ADAPTIVE_RAMP_HOLD_MS: u64 = 3_000;
+const DCIN_ADAPTIVE_RECOVERY_HOLD_MS: u64 = 10_000;
+const DCIN_ADAPTIVE_COOLDOWN_MS: u64 = 30_000;
+const DCIN_ADAPTIVE_VIN_DROP_PCT: u16 = 4;
+const DCIN_ADAPTIVE_VIN_DROP_STREAK_LIMIT: u8 = 2;
+pub(super) const DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA: i32 = 100;
 const FAN_RPM_SAMPLE_WINDOW_MS: u64 = 1_200;
 const FAN_RPM_MAX_SAMPLE_WINDOW_MS: u64 = 2_000;
 const FAN_RPM_MIN_SAMPLE_REVS: u32 = 2;
@@ -253,6 +262,17 @@ pub(super) fn usb_pd_restore_vindpm_mv(measured_input_voltage_mv: Option<u16>) -
     }
 }
 
+pub(super) fn dcin_target_vindpm_mv(
+    measured_dcin_voltage_mv: Option<u16>,
+    vin_baseline_mv: Option<u16>,
+) -> u16 {
+    let source_mv = measured_dcin_voltage_mv
+        .or(vin_baseline_mv)
+        .unwrap_or(12_000);
+    let scaled = (u32::from(source_mv) * 96) / 100;
+    scaled.clamp(3_600, 22_000) as u16
+}
+
 pub(super) fn usb_pd_measured_input_voltage_mv(
     usb_c_vbus_present: Option<bool>,
     vac1_adc_mv: Option<u16>,
@@ -260,6 +280,27 @@ pub(super) fn usb_pd_measured_input_voltage_mv(
     matches!(usb_c_vbus_present, Some(true))
         .then_some(vac1_adc_mv)
         .flatten()
+}
+
+pub(super) fn requested_tps_total_iout_ma(
+    requested_outputs: EnabledOutputs,
+    out_a_iout_ma: Option<i32>,
+    out_b_iout_ma: Option<i32>,
+) -> Option<i32> {
+    let out_a_iout_ma = requested_outputs
+        .is_enabled(OutputChannel::OutA)
+        .then_some(out_a_iout_ma)
+        .flatten();
+    let out_b_iout_ma = requested_outputs
+        .is_enabled(OutputChannel::OutB)
+        .then_some(out_b_iout_ma)
+        .flatten();
+    match (out_a_iout_ma, out_b_iout_ma) {
+        (None, None) => None,
+        (Some(a), Some(b)) => Some(a.saturating_add(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+    }
 }
 
 pub(super) fn usb_pd_vbus_present(
@@ -736,6 +777,550 @@ impl ChargePolicyDerateTracker {
                 self.recover_since_ms = None;
             }
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DcinInputPressureState {
+    Inactive,
+    Headroom,
+    Watch,
+    Limited,
+    Cooldown,
+}
+
+impl DcinInputPressureState {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inactive => "inactive",
+            Self::Headroom => "headroom",
+            Self::Watch => "watch",
+            Self::Limited => "limited",
+            Self::Cooldown => "cooldown",
+        }
+    }
+}
+
+impl Default for DcinInputPressureState {
+    fn default() -> Self {
+        Self::Inactive
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DcinInputPressureReason {
+    None,
+    VinDropWatch,
+    VinDrop,
+    TpsOutputCurrent,
+    Vindpm,
+    Iindpm,
+    Poorsrc,
+    Cooldown,
+}
+
+impl DcinInputPressureReason {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::VinDropWatch => "vin_drop_watch",
+            Self::VinDrop => "vin_drop",
+            Self::TpsOutputCurrent => "tps_output_current",
+            Self::Vindpm => "vindpm",
+            Self::Iindpm => "iindpm",
+            Self::Poorsrc => "poorsrc",
+            Self::Cooldown => "cooldown",
+        }
+    }
+}
+
+impl Default for DcinInputPressureReason {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DcinChargeLimitReason {
+    None,
+    StartupRamp,
+    RecoveryHold,
+    PressureVinDrop,
+    PressureTpsOutputCurrent,
+    PressureVindpm,
+    PressureIindpm,
+    PressurePoorsrc,
+    CooldownRetryWait,
+}
+
+impl DcinChargeLimitReason {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::StartupRamp => "startup_ramp",
+            Self::RecoveryHold => "recovery_hold",
+            Self::PressureVinDrop => "pressure_vin_drop",
+            Self::PressureTpsOutputCurrent => "pressure_tps_output_current",
+            Self::PressureVindpm => "pressure_vindpm",
+            Self::PressureIindpm => "pressure_iindpm",
+            Self::PressurePoorsrc => "pressure_poorsrc",
+            Self::CooldownRetryWait => "cooldown_retry_wait",
+        }
+    }
+}
+
+impl Default for DcinChargeLimitReason {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct DcinInputPressureTracker {
+    pub(super) state: DcinInputPressureState,
+    pub(super) reason: DcinInputPressureReason,
+    pub(super) trigger_reason: DcinInputPressureReason,
+    pub(super) limit_reason: DcinChargeLimitReason,
+    pub(super) adaptive_cap_ichg_ma: Option<u16>,
+    pub(super) vin_baseline_mv: Option<u16>,
+    pub(super) vin_drop_mv: Option<u16>,
+    pub(super) pressure_score_pct: u8,
+    pub(super) vin_drop_streak: u8,
+    pub(super) last_pressure_at_ms: Option<u64>,
+    pub(super) last_ramp_at_ms: Option<u64>,
+    pub(super) cooldown_until_ms: Option<u64>,
+    pub(super) last_tps_total_iout_sample_seq: Option<u32>,
+    pub(super) last_tps_total_iout_over_limit: Option<bool>,
+}
+
+impl DcinInputPressureTracker {
+    pub(super) fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DcinInputPressureInput {
+    pub(super) input_source: Option<DashboardInputSource>,
+    pub(super) requested_target_ichg_ma: Option<u16>,
+    pub(super) allow_charge: bool,
+    pub(super) vin_vbus_mv: Option<u16>,
+    pub(super) vin_iin_ma: Option<i32>,
+    pub(super) tps_total_iout_ma: Option<i32>,
+    pub(super) tps_total_iout_fresh: bool,
+    pub(super) tps_total_iout_sample_seq: Option<u32>,
+    pub(super) poorsrc: bool,
+    pub(super) vindpm: bool,
+    pub(super) iindpm: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct DcinInputPressureDecision {
+    pub(super) pressure_state: DcinInputPressureState,
+    pub(super) pressure_reason: DcinInputPressureReason,
+    pub(super) trigger_reason: DcinInputPressureReason,
+    pub(super) pressure_score_pct: u8,
+    pub(super) vin_baseline_mv: Option<u16>,
+    pub(super) vin_drop_mv: Option<u16>,
+    pub(super) tps_total_iout_ma: Option<i32>,
+    pub(super) tps_limit_threshold_ma: Option<i32>,
+    pub(super) adaptive_cap_ichg_ma: Option<u16>,
+    pub(super) effective_target_ichg_ma: Option<u16>,
+    pub(super) allow_charge: bool,
+    pub(super) limit_active: bool,
+    pub(super) limit_reason: DcinChargeLimitReason,
+}
+
+impl DcinInputPressureDecision {
+    pub(super) fn inactive(requested_target_ichg_ma: Option<u16>, allow_charge: bool) -> Self {
+        Self {
+            pressure_state: DcinInputPressureState::Inactive,
+            pressure_reason: DcinInputPressureReason::None,
+            trigger_reason: DcinInputPressureReason::None,
+            pressure_score_pct: 0,
+            vin_baseline_mv: None,
+            vin_drop_mv: None,
+            tps_total_iout_ma: None,
+            tps_limit_threshold_ma: None,
+            adaptive_cap_ichg_ma: None,
+            effective_target_ichg_ma: if allow_charge {
+                requested_target_ichg_ma
+            } else {
+                None
+            },
+            allow_charge,
+            limit_active: false,
+            limit_reason: DcinChargeLimitReason::None,
+        }
+    }
+}
+
+fn dcin_vin_drop_threshold_mv(vin_baseline_mv: u16) -> u16 {
+    let threshold = u32::from(vin_baseline_mv) * u32::from(DCIN_ADAPTIVE_VIN_DROP_PCT) / 100;
+    threshold.max(1) as u16
+}
+
+fn dcin_pressure_score_pct(
+    state: DcinInputPressureState,
+    drop_mv: Option<u16>,
+    vin_baseline_mv: Option<u16>,
+) -> u8 {
+    match state {
+        DcinInputPressureState::Inactive => 0,
+        DcinInputPressureState::Headroom => 0,
+        DcinInputPressureState::Cooldown => 100,
+        DcinInputPressureState::Watch | DcinInputPressureState::Limited => {
+            let Some(vin_baseline_mv) = vin_baseline_mv else {
+                return if matches!(state, DcinInputPressureState::Limited) {
+                    90
+                } else {
+                    45
+                };
+            };
+            let drop_mv = u32::from(drop_mv.unwrap_or_default());
+            let threshold_mv = u32::from(dcin_vin_drop_threshold_mv(vin_baseline_mv));
+            let normalized = if threshold_mv == 0 {
+                0
+            } else {
+                ((drop_mv * 100) / threshold_mv).min(100) as u8
+            };
+            if matches!(state, DcinInputPressureState::Limited) {
+                normalized.max(80)
+            } else {
+                normalized.max(35).min(70)
+            }
+        }
+    }
+}
+
+pub(super) fn dcin_charge_detail_status_text(
+    base_status_text: &'static str,
+    limit_active: bool,
+    allow_charge: bool,
+    effective_target_ichg_ma: Option<u16>,
+    limit_reason: DcinChargeLimitReason,
+) -> &'static str {
+    if !allow_charge && matches!(limit_reason, DcinChargeLimitReason::CooldownRetryWait) {
+        "WAIT"
+    } else if limit_active {
+        match effective_target_ichg_ma {
+            Some(target_ichg_ma) if target_ichg_ma <= DCIN_ADAPTIVE_START_ICHG_MA => "CHG100",
+            Some(_) => "LIMIT",
+            None => "WAIT",
+        }
+    } else {
+        base_status_text
+    }
+}
+
+pub(super) fn dcin_input_pressure_step(
+    tracker: &mut DcinInputPressureTracker,
+    now_ms: u64,
+    input: DcinInputPressureInput,
+) -> DcinInputPressureDecision {
+    if !matches!(input.input_source, Some(DashboardInputSource::DcIn)) {
+        tracker.reset();
+        return DcinInputPressureDecision::inactive(
+            input.requested_target_ichg_ma,
+            input.allow_charge,
+        );
+    }
+
+    if let Some(vin_vbus_mv) = input.vin_vbus_mv {
+        if tracker.vin_baseline_mv.is_none() || input.requested_target_ichg_ma.is_none() {
+            tracker.vin_baseline_mv = Some(vin_vbus_mv);
+        }
+    }
+
+    if input.requested_target_ichg_ma.is_none() || !input.allow_charge {
+        if input.requested_target_ichg_ma.is_none() {
+            tracker.adaptive_cap_ichg_ma = None;
+            tracker.last_ramp_at_ms = None;
+        }
+        tracker.pressure_score_pct =
+            dcin_pressure_score_pct(tracker.state, tracker.vin_drop_mv, tracker.vin_baseline_mv);
+        return DcinInputPressureDecision {
+            pressure_state: tracker.state,
+            pressure_reason: tracker.reason,
+            trigger_reason: tracker.trigger_reason,
+            pressure_score_pct: tracker.pressure_score_pct,
+            vin_baseline_mv: tracker.vin_baseline_mv,
+            vin_drop_mv: tracker.vin_drop_mv,
+            tps_total_iout_ma: input.tps_total_iout_ma,
+            tps_limit_threshold_ma: Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
+            adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
+            effective_target_ichg_ma: None,
+            allow_charge: input.allow_charge,
+            limit_active: false,
+            limit_reason: DcinChargeLimitReason::None,
+        };
+    }
+
+    let tps_sample_is_new = input.tps_total_iout_fresh
+        && input
+            .tps_total_iout_sample_seq
+            .is_some_and(|sample_seq| tracker.last_tps_total_iout_sample_seq != Some(sample_seq));
+    if tps_sample_is_new {
+        tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+        tracker.last_tps_total_iout_over_limit = Some(
+            input
+                .tps_total_iout_ma
+                .is_some_and(|total_iout_ma| total_iout_ma > DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
+        );
+    }
+
+    if let Some(cooldown_until_ms) = tracker.cooldown_until_ms {
+        if now_ms < cooldown_until_ms {
+            tracker.state = DcinInputPressureState::Cooldown;
+            tracker.limit_reason = DcinChargeLimitReason::CooldownRetryWait;
+            tracker.pressure_score_pct = 100;
+            return DcinInputPressureDecision {
+                pressure_state: tracker.state,
+                pressure_reason: tracker.reason,
+                trigger_reason: tracker.trigger_reason,
+                pressure_score_pct: tracker.pressure_score_pct,
+                vin_baseline_mv: tracker.vin_baseline_mv,
+                vin_drop_mv: tracker.vin_drop_mv,
+                tps_total_iout_ma: input.tps_total_iout_ma,
+                tps_limit_threshold_ma: Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
+                adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
+                effective_target_ichg_ma: None,
+                allow_charge: false,
+                limit_active: input.requested_target_ichg_ma.is_some(),
+                limit_reason: tracker.limit_reason,
+            };
+        }
+        if tracker.last_tps_total_iout_over_limit == Some(true) {
+            tracker.state = DcinInputPressureState::Cooldown;
+            tracker.limit_reason = DcinChargeLimitReason::CooldownRetryWait;
+            tracker.pressure_score_pct = 100;
+            return DcinInputPressureDecision {
+                pressure_state: tracker.state,
+                pressure_reason: tracker.reason,
+                trigger_reason: tracker.trigger_reason,
+                pressure_score_pct: tracker.pressure_score_pct,
+                vin_baseline_mv: tracker.vin_baseline_mv,
+                vin_drop_mv: tracker.vin_drop_mv,
+                tps_total_iout_ma: input.tps_total_iout_ma,
+                tps_limit_threshold_ma: Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
+                adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
+                effective_target_ichg_ma: None,
+                allow_charge: false,
+                limit_active: input.requested_target_ichg_ma.is_some(),
+                limit_reason: tracker.limit_reason,
+            };
+        }
+        tracker.cooldown_until_ms = None;
+        tracker.last_pressure_at_ms = Some(now_ms);
+    }
+
+    let mut hard_reason = if tps_sample_is_new
+        && input
+            .tps_total_iout_ma
+            .is_some_and(|total_iout_ma| total_iout_ma > DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA)
+    {
+        Some(DcinInputPressureReason::TpsOutputCurrent)
+    } else if input.poorsrc {
+        Some(DcinInputPressureReason::Poorsrc)
+    } else if input.vindpm {
+        Some(DcinInputPressureReason::Vindpm)
+    } else if input.iindpm {
+        Some(DcinInputPressureReason::Iindpm)
+    } else {
+        None
+    };
+
+    if hard_reason.is_none() {
+        if let (Some(vin_baseline_mv), Some(vin_vbus_mv)) =
+            (tracker.vin_baseline_mv, input.vin_vbus_mv)
+        {
+            let vin_drop_mv = vin_baseline_mv.saturating_sub(vin_vbus_mv);
+            let threshold_mv = dcin_vin_drop_threshold_mv(vin_baseline_mv);
+            if vin_drop_mv > threshold_mv {
+                tracker.vin_drop_streak = tracker.vin_drop_streak.saturating_add(1);
+                tracker.vin_drop_mv = Some(vin_drop_mv);
+                if tracker.vin_drop_streak >= DCIN_ADAPTIVE_VIN_DROP_STREAK_LIMIT {
+                    hard_reason = Some(DcinInputPressureReason::VinDrop);
+                }
+            } else {
+                tracker.vin_drop_streak = 0;
+                tracker.vin_drop_mv = Some(vin_drop_mv);
+                tracker.vin_baseline_mv = Some(vin_vbus_mv);
+            }
+        } else {
+            tracker.vin_drop_streak = 0;
+            tracker.vin_drop_mv = None;
+        }
+    } else {
+        tracker.vin_drop_streak = 0;
+    }
+
+    if let Some(reason) = hard_reason {
+        tracker.reason = reason;
+        tracker.trigger_reason = reason;
+        tracker.last_pressure_at_ms = Some(now_ms);
+        tracker.last_ramp_at_ms = Some(now_ms);
+        tracker.limit_reason = match reason {
+            DcinInputPressureReason::VinDrop => DcinChargeLimitReason::PressureVinDrop,
+            DcinInputPressureReason::TpsOutputCurrent => {
+                DcinChargeLimitReason::PressureTpsOutputCurrent
+            }
+            DcinInputPressureReason::Vindpm => DcinChargeLimitReason::PressureVindpm,
+            DcinInputPressureReason::Iindpm => DcinChargeLimitReason::PressureIindpm,
+            DcinInputPressureReason::Poorsrc => DcinChargeLimitReason::PressurePoorsrc,
+            DcinInputPressureReason::Cooldown => DcinChargeLimitReason::CooldownRetryWait,
+            DcinInputPressureReason::None | DcinInputPressureReason::VinDropWatch => {
+                DcinChargeLimitReason::RecoveryHold
+            }
+        };
+        if matches!(reason, DcinInputPressureReason::TpsOutputCurrent) {
+            tracker.adaptive_cap_ichg_ma = None;
+            tracker.cooldown_until_ms = Some(now_ms.saturating_add(DCIN_ADAPTIVE_COOLDOWN_MS));
+            tracker.state = DcinInputPressureState::Cooldown;
+            tracker.limit_reason = DcinChargeLimitReason::CooldownRetryWait;
+            tracker.pressure_score_pct = 100;
+            return DcinInputPressureDecision {
+                pressure_state: tracker.state,
+                pressure_reason: tracker.reason,
+                trigger_reason: tracker.trigger_reason,
+                pressure_score_pct: tracker.pressure_score_pct,
+                vin_baseline_mv: tracker.vin_baseline_mv,
+                vin_drop_mv: tracker.vin_drop_mv,
+                tps_total_iout_ma: input.tps_total_iout_ma,
+                tps_limit_threshold_ma: Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
+                adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
+                effective_target_ichg_ma: None,
+                allow_charge: false,
+                limit_active: input.requested_target_ichg_ma.is_some(),
+                limit_reason: tracker.limit_reason,
+            };
+        }
+        match tracker
+            .adaptive_cap_ichg_ma
+            .unwrap_or(DCIN_ADAPTIVE_START_ICHG_MA)
+        {
+            cap_ichg_ma if cap_ichg_ma > DCIN_ADAPTIVE_START_ICHG_MA => {
+                tracker.adaptive_cap_ichg_ma = Some(
+                    cap_ichg_ma
+                        .saturating_sub(DCIN_ADAPTIVE_STEP_DOWN_ICHG_MA)
+                        .max(DCIN_ADAPTIVE_START_ICHG_MA),
+                );
+                tracker.state = DcinInputPressureState::Limited;
+            }
+            _ => {
+                tracker.adaptive_cap_ichg_ma = None;
+                tracker.cooldown_until_ms = Some(now_ms.saturating_add(DCIN_ADAPTIVE_COOLDOWN_MS));
+                tracker.state = DcinInputPressureState::Cooldown;
+                tracker.limit_reason = DcinChargeLimitReason::CooldownRetryWait;
+                tracker.pressure_score_pct = 100;
+                return DcinInputPressureDecision {
+                    pressure_state: tracker.state,
+                    pressure_reason: tracker.reason,
+                    trigger_reason: tracker.trigger_reason,
+                    pressure_score_pct: tracker.pressure_score_pct,
+                    vin_baseline_mv: tracker.vin_baseline_mv,
+                    vin_drop_mv: tracker.vin_drop_mv,
+                    tps_total_iout_ma: input.tps_total_iout_ma,
+                    tps_limit_threshold_ma: Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
+                    adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
+                    effective_target_ichg_ma: None,
+                    allow_charge: false,
+                    limit_active: input.requested_target_ichg_ma.is_some(),
+                    limit_reason: tracker.limit_reason,
+                };
+            }
+        }
+    } else if tracker.vin_drop_streak > 0 {
+        tracker.state = DcinInputPressureState::Watch;
+        tracker.reason = DcinInputPressureReason::VinDropWatch;
+    } else if tracker
+        .last_pressure_at_ms
+        .is_some_and(|last_pressure_at_ms| {
+            now_ms.saturating_sub(last_pressure_at_ms) < DCIN_ADAPTIVE_RECOVERY_HOLD_MS
+        })
+    {
+        tracker.state = DcinInputPressureState::Watch;
+        if matches!(
+            tracker.reason,
+            DcinInputPressureReason::None | DcinInputPressureReason::Cooldown
+        ) {
+            tracker.reason = DcinInputPressureReason::VinDropWatch;
+        }
+    } else {
+        tracker.state = DcinInputPressureState::Headroom;
+        tracker.reason = DcinInputPressureReason::None;
+        tracker.trigger_reason = DcinInputPressureReason::None;
+    }
+
+    let requested_target_ichg_ma = input.requested_target_ichg_ma.unwrap_or_default();
+    let cap_was_unset = tracker.adaptive_cap_ichg_ma.is_none();
+    let cap_ichg_ma = tracker
+        .adaptive_cap_ichg_ma
+        .get_or_insert(requested_target_ichg_ma.min(DCIN_ADAPTIVE_START_ICHG_MA));
+    if cap_was_unset {
+        tracker.last_ramp_at_ms = Some(now_ms);
+    }
+    if *cap_ichg_ma > requested_target_ichg_ma {
+        *cap_ichg_ma = requested_target_ichg_ma;
+    }
+
+    let recovery_clear = tracker
+        .last_pressure_at_ms
+        .map_or(true, |last_pressure_at_ms| {
+            now_ms.saturating_sub(last_pressure_at_ms) >= DCIN_ADAPTIVE_RECOVERY_HOLD_MS
+        });
+    let ramp_due = tracker.last_ramp_at_ms.map_or(true, |last_ramp_at_ms| {
+        now_ms.saturating_sub(last_ramp_at_ms) >= DCIN_ADAPTIVE_RAMP_HOLD_MS
+    });
+    if !cap_was_unset
+        && recovery_clear
+        && ramp_due
+        && *cap_ichg_ma < requested_target_ichg_ma
+        && matches!(
+            tracker.state,
+            DcinInputPressureState::Headroom | DcinInputPressureState::Watch
+        )
+    {
+        *cap_ichg_ma = cap_ichg_ma
+            .saturating_add(DCIN_ADAPTIVE_STEP_UP_ICHG_MA)
+            .min(requested_target_ichg_ma);
+        tracker.last_ramp_at_ms = Some(now_ms);
+    }
+
+    let effective_target_ichg_ma = Some(requested_target_ichg_ma.min(*cap_ichg_ma));
+    let limit_active = effective_target_ichg_ma != Some(requested_target_ichg_ma);
+    if !limit_active && matches!(tracker.state, DcinInputPressureState::Limited) {
+        tracker.state = DcinInputPressureState::Headroom;
+        tracker.reason = DcinInputPressureReason::None;
+    }
+    tracker.limit_reason = if matches!(tracker.state, DcinInputPressureState::Limited) {
+        tracker.limit_reason
+    } else if !recovery_clear && limit_active {
+        DcinChargeLimitReason::RecoveryHold
+    } else if limit_active {
+        DcinChargeLimitReason::StartupRamp
+    } else {
+        DcinChargeLimitReason::None
+    };
+    tracker.pressure_score_pct =
+        dcin_pressure_score_pct(tracker.state, tracker.vin_drop_mv, tracker.vin_baseline_mv);
+
+    let _ = input.vin_iin_ma;
+
+    DcinInputPressureDecision {
+        pressure_state: tracker.state,
+        pressure_reason: tracker.reason,
+        trigger_reason: tracker.trigger_reason,
+        pressure_score_pct: tracker.pressure_score_pct,
+        vin_baseline_mv: tracker.vin_baseline_mv,
+        vin_drop_mv: tracker.vin_drop_mv,
+        tps_total_iout_ma: input.tps_total_iout_ma,
+        tps_limit_threshold_ma: Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA),
+        adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
+        effective_target_ichg_ma,
+        allow_charge: true,
+        limit_active,
+        limit_reason: tracker.limit_reason,
     }
 }
 
@@ -1965,6 +2550,34 @@ mod tests {
     }
 
     #[test]
+    fn requested_tps_total_iout_ignores_unrequested_channels() {
+        assert_eq!(
+            requested_tps_total_iout_ma(EnabledOutputs::Both, Some(80), Some(60)),
+            Some(140)
+        );
+        assert_eq!(
+            requested_tps_total_iout_ma(
+                EnabledOutputs::Only(OutputChannel::OutA),
+                Some(80),
+                Some(60)
+            ),
+            Some(80)
+        );
+        assert_eq!(
+            requested_tps_total_iout_ma(
+                EnabledOutputs::Only(OutputChannel::OutB),
+                Some(80),
+                Some(60)
+            ),
+            Some(60)
+        );
+        assert_eq!(
+            requested_tps_total_iout_ma(EnabledOutputs::None, Some(80), Some(60)),
+            None
+        );
+    }
+
+    #[test]
     fn usb_pd_vbus_present_stays_scoped_to_usbc_path() {
         assert_eq!(usb_pd_vbus_present(None, false), Some(false));
         assert_eq!(usb_pd_vbus_present(None, true), Some(true));
@@ -2270,6 +2883,404 @@ mod tests {
             bms_full: false,
             hv: false,
         }
+    }
+
+    fn dcin_input(
+        requested_target_ichg_ma: Option<u16>,
+        vin_vbus_mv: Option<u16>,
+    ) -> DcinInputPressureInput {
+        DcinInputPressureInput {
+            input_source: Some(DashboardInputSource::DcIn),
+            requested_target_ichg_ma,
+            allow_charge: true,
+            vin_vbus_mv,
+            vin_iin_ma: Some(1_200),
+            tps_total_iout_ma: Some(0),
+            tps_total_iout_fresh: true,
+            tps_total_iout_sample_seq: Some(1),
+            poorsrc: false,
+            vindpm: false,
+            iindpm: false,
+        }
+    }
+
+    #[test]
+    fn dcin_pressure_starts_at_100ma_and_ramps_after_holds() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let initial =
+            dcin_input_pressure_step(&mut tracker, 0, dcin_input(Some(500), Some(19_400)));
+        assert_eq!(initial.effective_target_ichg_ma, Some(100));
+        assert!(initial.limit_active);
+        assert_eq!(initial.limit_reason, DcinChargeLimitReason::StartupRamp);
+        assert_eq!(initial.pressure_state, DcinInputPressureState::Headroom);
+
+        let early =
+            dcin_input_pressure_step(&mut tracker, 2_999, dcin_input(Some(500), Some(19_400)));
+        assert_eq!(early.effective_target_ichg_ma, Some(100));
+
+        let ramped =
+            dcin_input_pressure_step(&mut tracker, 3_000, dcin_input(Some(500), Some(19_400)));
+        assert_eq!(ramped.effective_target_ichg_ma, Some(200));
+        assert!(ramped.limit_active);
+    }
+
+    #[test]
+    fn dcin_pressure_vindpm_reduces_cap_and_enters_recovery_hold() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let _ = dcin_input_pressure_step(&mut tracker, 0, dcin_input(Some(500), Some(19_400)));
+        let _ = dcin_input_pressure_step(&mut tracker, 3_000, dcin_input(Some(500), Some(19_400)));
+        let pressure = dcin_input_pressure_step(
+            &mut tracker,
+            3_100,
+            DcinInputPressureInput {
+                vindpm: true,
+                ..dcin_input(Some(500), Some(18_600))
+            },
+        );
+
+        assert_eq!(pressure.pressure_state, DcinInputPressureState::Limited);
+        assert_eq!(pressure.pressure_reason, DcinInputPressureReason::Vindpm);
+        assert_eq!(pressure.effective_target_ichg_ma, Some(100));
+        assert!(pressure.limit_active);
+        assert_eq!(pressure.limit_reason, DcinChargeLimitReason::PressureVindpm);
+
+        let held =
+            dcin_input_pressure_step(&mut tracker, 8_000, dcin_input(Some(500), Some(19_350)));
+        assert_eq!(held.pressure_state, DcinInputPressureState::Watch);
+        assert_eq!(held.limit_reason, DcinChargeLimitReason::RecoveryHold);
+        assert_eq!(held.effective_target_ichg_ma, Some(100));
+    }
+
+    #[test]
+    fn dcin_pressure_enters_cooldown_when_100ma_still_overstresses_input() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let _ = dcin_input_pressure_step(&mut tracker, 0, dcin_input(Some(500), Some(19_400)));
+        let cooldown = dcin_input_pressure_step(
+            &mut tracker,
+            100,
+            DcinInputPressureInput {
+                poorsrc: true,
+                ..dcin_input(Some(500), Some(18_400))
+            },
+        );
+
+        assert_eq!(cooldown.pressure_state, DcinInputPressureState::Cooldown);
+        assert_eq!(cooldown.pressure_reason, DcinInputPressureReason::Poorsrc);
+        assert_eq!(cooldown.trigger_reason, DcinInputPressureReason::Poorsrc);
+        assert_eq!(cooldown.effective_target_ichg_ma, None);
+        assert!(!cooldown.allow_charge);
+        assert_eq!(
+            cooldown.limit_reason,
+            DcinChargeLimitReason::CooldownRetryWait
+        );
+
+        let waiting =
+            dcin_input_pressure_step(&mut tracker, 20_000, dcin_input(Some(500), Some(19_200)));
+        assert_eq!(waiting.pressure_state, DcinInputPressureState::Cooldown);
+        assert_eq!(waiting.pressure_reason, DcinInputPressureReason::Poorsrc);
+        assert_eq!(waiting.trigger_reason, DcinInputPressureReason::Poorsrc);
+        assert_eq!(waiting.effective_target_ichg_ma, None);
+        assert!(!waiting.allow_charge);
+    }
+
+    #[test]
+    fn dcin_pressure_recovers_after_cooldown_and_resume_hold() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let _ = dcin_input_pressure_step(&mut tracker, 0, dcin_input(Some(500), Some(19_400)));
+        let _ = dcin_input_pressure_step(
+            &mut tracker,
+            100,
+            DcinInputPressureInput {
+                iindpm: true,
+                ..dcin_input(Some(500), Some(18_500))
+            },
+        );
+
+        let post_cooldown =
+            dcin_input_pressure_step(&mut tracker, 30_100, dcin_input(Some(500), Some(19_420)));
+        assert_eq!(post_cooldown.pressure_state, DcinInputPressureState::Watch);
+        assert_eq!(post_cooldown.effective_target_ichg_ma, Some(100));
+        assert_eq!(
+            post_cooldown.limit_reason,
+            DcinChargeLimitReason::RecoveryHold
+        );
+
+        let recovered =
+            dcin_input_pressure_step(&mut tracker, 40_100, dcin_input(Some(500), Some(19_430)));
+        assert_eq!(recovered.pressure_state, DcinInputPressureState::Headroom);
+        assert_eq!(recovered.effective_target_ichg_ma, Some(200));
+        assert!(recovered.limit_active);
+    }
+
+    #[test]
+    fn dcin_pressure_tps_output_current_stops_charge_and_reports_reason() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let stopped = dcin_input_pressure_step(
+            &mut tracker,
+            0,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(19_400))
+            },
+        );
+
+        assert_eq!(stopped.pressure_state, DcinInputPressureState::Cooldown);
+        assert_eq!(
+            stopped.pressure_reason,
+            DcinInputPressureReason::TpsOutputCurrent
+        );
+        assert_eq!(
+            stopped.trigger_reason,
+            DcinInputPressureReason::TpsOutputCurrent
+        );
+        assert_eq!(stopped.effective_target_ichg_ma, None);
+        assert!(!stopped.allow_charge);
+        assert_eq!(
+            stopped.limit_reason,
+            DcinChargeLimitReason::CooldownRetryWait
+        );
+        assert_eq!(stopped.tps_total_iout_ma, Some(128));
+        assert_eq!(
+            stopped.tps_limit_threshold_ma,
+            Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA)
+        );
+    }
+
+    #[test]
+    fn dcin_pressure_does_not_seed_cooldown_before_charge_request() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let idle_load = dcin_input_pressure_step(
+            &mut tracker,
+            0,
+            DcinInputPressureInput {
+                requested_target_ichg_ma: None,
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(None, Some(19_400))
+            },
+        );
+
+        assert_ne!(idle_load.pressure_state, DcinInputPressureState::Cooldown);
+        assert_eq!(idle_load.effective_target_ichg_ma, None);
+        assert!(idle_load.allow_charge);
+        assert_eq!(idle_load.limit_reason, DcinChargeLimitReason::None);
+
+        let first_charge =
+            dcin_input_pressure_step(&mut tracker, 100, dcin_input(Some(500), Some(19_400)));
+        assert_eq!(first_charge.effective_target_ichg_ma, Some(100));
+        assert!(first_charge.allow_charge);
+        assert_eq!(
+            first_charge.limit_reason,
+            DcinChargeLimitReason::StartupRamp
+        );
+    }
+
+    #[test]
+    fn dcin_pressure_prefers_tps_output_reason_over_vin_drop() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let _ = dcin_input_pressure_step(&mut tracker, 0, dcin_input(Some(500), Some(19_400)));
+        let pressure = dcin_input_pressure_step(
+            &mut tracker,
+            3_100,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(18_200))
+            },
+        );
+
+        assert_eq!(
+            pressure.pressure_reason,
+            DcinInputPressureReason::TpsOutputCurrent
+        );
+        assert_eq!(
+            pressure.trigger_reason,
+            DcinInputPressureReason::TpsOutputCurrent
+        );
+        assert_eq!(
+            pressure.limit_reason,
+            DcinChargeLimitReason::CooldownRetryWait
+        );
+        assert_eq!(pressure.tps_total_iout_ma, Some(128));
+    }
+
+    #[test]
+    fn dcin_pressure_tps_output_current_stops_immediately_after_ramp() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let _ = dcin_input_pressure_step(&mut tracker, 0, dcin_input(Some(500), Some(19_400)));
+        let ramped =
+            dcin_input_pressure_step(&mut tracker, 3_000, dcin_input(Some(500), Some(19_400)));
+        assert_eq!(ramped.effective_target_ichg_ma, Some(200));
+        assert!(ramped.allow_charge);
+
+        let stopped = dcin_input_pressure_step(
+            &mut tracker,
+            3_100,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(19_350))
+            },
+        );
+
+        assert_eq!(stopped.pressure_state, DcinInputPressureState::Cooldown);
+        assert_eq!(
+            stopped.pressure_reason,
+            DcinInputPressureReason::TpsOutputCurrent
+        );
+        assert_eq!(stopped.effective_target_ichg_ma, None);
+        assert!(!stopped.allow_charge);
+        assert_eq!(
+            stopped.limit_reason,
+            DcinChargeLimitReason::CooldownRetryWait
+        );
+    }
+
+    #[test]
+    fn dcin_pressure_ignores_stale_tps_output_current_samples() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let stale = dcin_input_pressure_step(
+            &mut tracker,
+            0,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: false,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(19_400))
+            },
+        );
+
+        assert_eq!(stale.pressure_state, DcinInputPressureState::Headroom);
+        assert_eq!(stale.pressure_reason, DcinInputPressureReason::None);
+        assert_eq!(stale.effective_target_ichg_ma, Some(100));
+        assert!(stale.allow_charge);
+        assert_eq!(stale.limit_reason, DcinChargeLimitReason::StartupRamp);
+    }
+
+    #[test]
+    fn dcin_pressure_consumes_each_tps_sample_only_once() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let stopped = dcin_input_pressure_step(
+            &mut tracker,
+            0,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(19_400))
+            },
+        );
+        assert_eq!(stopped.pressure_state, DcinInputPressureState::Cooldown);
+
+        let recovered = dcin_input_pressure_step(
+            &mut tracker,
+            40_100,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: false,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(19_420))
+            },
+        );
+        assert_eq!(recovered.pressure_state, DcinInputPressureState::Cooldown);
+        assert_eq!(recovered.effective_target_ichg_ma, None);
+        assert!(!recovered.allow_charge);
+
+        let reused = dcin_input_pressure_step(
+            &mut tracker,
+            43_200,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(19_420))
+            },
+        );
+        assert_eq!(reused.pressure_state, DcinInputPressureState::Cooldown);
+        assert_eq!(reused.effective_target_ichg_ma, None);
+        assert!(!reused.allow_charge);
+
+        let resumed = dcin_input_pressure_step(
+            &mut tracker,
+            53_200,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(80),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(3),
+                ..dcin_input(Some(500), Some(19_430))
+            },
+        );
+        assert_eq!(resumed.pressure_state, DcinInputPressureState::Watch);
+        assert_eq!(resumed.effective_target_ichg_ma, Some(100));
+        assert!(resumed.allow_charge);
+    }
+
+    #[test]
+    fn dcin_pressure_requires_fresh_safe_tps_sample_to_exit_cooldown() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let _ = dcin_input_pressure_step(
+            &mut tracker,
+            0,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(19_400))
+            },
+        );
+
+        let still_blocked = dcin_input_pressure_step(
+            &mut tracker,
+            30_100,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(128),
+                tps_total_iout_fresh: false,
+                tps_total_iout_sample_seq: Some(2),
+                ..dcin_input(Some(500), Some(19_420))
+            },
+        );
+        assert_eq!(
+            still_blocked.pressure_state,
+            DcinInputPressureState::Cooldown
+        );
+        assert_eq!(still_blocked.effective_target_ichg_ma, None);
+        assert!(!still_blocked.allow_charge);
+
+        let fresh_safe = dcin_input_pressure_step(
+            &mut tracker,
+            30_200,
+            DcinInputPressureInput {
+                tps_total_iout_ma: Some(80),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(3),
+                ..dcin_input(Some(500), Some(19_420))
+            },
+        );
+        assert_eq!(fresh_safe.pressure_state, DcinInputPressureState::Watch);
+        assert_eq!(fresh_safe.effective_target_ichg_ma, Some(100));
+        assert!(fresh_safe.allow_charge);
+    }
+
+    #[test]
+    fn dcin_target_vindpm_tracks_96pct_of_input_voltage() {
+        assert_eq!(dcin_target_vindpm_mv(Some(12_000), None), 11_520);
+        assert_eq!(dcin_target_vindpm_mv(None, Some(19_400)), 18_624);
     }
 
     #[test]

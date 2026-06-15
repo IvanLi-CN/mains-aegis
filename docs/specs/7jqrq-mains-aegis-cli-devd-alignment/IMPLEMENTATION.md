@@ -25,7 +25,7 @@
 - `mains-aegis-devd serve-http --bind 0.0.0.0:30080` verified non-loopback denial without token
 - `mains-aegis-devd serve-http --auth-token-file <file>` verified unauthenticated `/api/v1/bootstrap` returns `token_required=true`, unauthenticated `/api/v1/status` returns `401`, and bearer-authenticated host power status succeeds
 - `mains-aegis --ipc /tmp/mains-aegis-host-smoke.sock health` verified CLI to IPC health
-- `mains-aegis --ipc /tmp/mains-aegis-host-smoke.sock devices list` verified CLI to IPC mock device list
-- `mains-aegis-devd serve-http --ipc /tmp/mains-aegis-http-service-smoke.sock --bind 127.0.0.1:<leased-port> --allow-dev-cors` verified HTTP service and CLI IPC share one daemon state by binding `mock-devkit` over HTTP and reading the same binding over CLI IPC
+- `mains-aegis --ipc /tmp/mains-aegis-host-smoke.sock devices list` verified CLI to IPC device listing, including the empty-daemon case without synthetic runtime devices
+- `mains-aegis-devd serve-http --ipc /tmp/mains-aegis-http-service-smoke.sock --bind 127.0.0.1:<leased-port> --allow-dev-cors` verified HTTP service and CLI IPC share one daemon state without requiring a synthetic runtime mock device
 - Mock UI visual evidence captured at `/connect?seed=default`
 - Policy search verifies AGENTS, skills, and specs no longer make released host tools the default Codex route inside this repository.

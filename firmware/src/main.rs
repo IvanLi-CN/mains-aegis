@@ -40,7 +40,9 @@ use esp_firmware::{
         parse_frame, render_error_json, render_hello_json, render_log_json,
         render_protocol_error_json, render_response_json, render_status_frame_json,
         render_wifi_config_ack_json, request_id_hint, LogLevel, UsbCdcFrame, UsbCdcLineBuffer,
-        UsbCdcRequest, WifiConfigCommand,
+        UsbCdcRequest, WifiConfigCommand, WEB_SERIAL_POWER_DIAG_BODY_CAP,
+        WEB_SERIAL_POWER_DIAG_FRAME_CAP, WEB_SERIAL_RESPONSE_BODY_CAP,
+        WEB_SERIAL_RESPONSE_FRAME_CAP,
     },
 };
 use esp_hal::clock::CpuClock;
@@ -1925,12 +1927,12 @@ fn handle_web_serial_frame<'d, I2C>(
 ) where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let mut body = heapless::String::<4096>::new();
-    let mut frame = heapless::String::<4608>::new();
     let status = net_bridge::build_status_snapshot(ui_snapshot);
 
     match parse_frame(line) {
         Ok(UsbCdcFrame::Hello { request_id }) => {
+            let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+            let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
             log_state.reset();
             render_identity_json_with_write_controls(
                 &mut body,
@@ -1955,6 +1957,8 @@ fn handle_web_serial_frame<'d, I2C>(
         }
         Ok(UsbCdcFrame::Request { request_id, op }) => match op {
             UsbCdcRequest::GetIdentity => {
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
                 render_identity_json_with_write_controls(
                     &mut body,
                     identity,
@@ -1966,6 +1970,8 @@ fn handle_web_serial_frame<'d, I2C>(
                 write_web_serial_line(serial, frame.as_str());
             }
             UsbCdcRequest::GetStatus => {
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
                 render_status_json(&mut body, status);
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
@@ -1974,11 +1980,15 @@ fn handle_web_serial_frame<'d, I2C>(
                 log_state.emit_status_logs(serial, status);
             }
             UsbCdcRequest::GetPowerDiag => {
+                let mut body = heapless::String::<WEB_SERIAL_POWER_DIAG_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_POWER_DIAG_FRAME_CAP>::new();
                 render_power_diag_json(&mut body, power.power_diag_snapshot());
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
             }
             UsbCdcRequest::SetLogLevel(level) => {
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
                 log_state.set_level(level);
                 #[cfg(feature = "net_http")]
                 esp_firmware::net::set_device_log_level(level.as_str());
@@ -1993,6 +2003,8 @@ fn handle_web_serial_frame<'d, I2C>(
                 );
             }
             UsbCdcRequest::SetManualChargePrefs(prefs) => {
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
                 power.set_web_serial_manual_charge_prefs(prefs);
                 #[cfg(feature = "net_http")]
                 {
@@ -2019,6 +2031,7 @@ fn handle_web_serial_frame<'d, I2C>(
             command,
         }) => match command {
             WifiConfigCommand::Set(secret) => {
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
                 let ssid = secret.ssid.clone();
                 match power.write_web_serial_wifi_config(Some(&secret)) {
                     Ok(()) => {
@@ -2050,32 +2063,36 @@ fn handle_web_serial_frame<'d, I2C>(
                     }
                 }
             }
-            WifiConfigCommand::Clear => match power.write_web_serial_wifi_config(None) {
-                Ok(()) => {
-                    #[cfg(feature = "net_http")]
-                    esp_firmware::net::set_usb_wifi_config(None);
-                    render_wifi_config_ack_json(&mut frame, request_id.as_str(), false, None);
-                    write_web_serial_line(serial, frame.as_str());
-                    log_state.emit(
-                        serial,
-                        LogLevel::Info,
-                        "wifi_config",
-                        "WiFi credentials cleared from EEPROM",
-                    );
+            WifiConfigCommand::Clear => {
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                match power.write_web_serial_wifi_config(None) {
+                    Ok(()) => {
+                        #[cfg(feature = "net_http")]
+                        esp_firmware::net::set_usb_wifi_config(None);
+                        render_wifi_config_ack_json(&mut frame, request_id.as_str(), false, None);
+                        write_web_serial_line(serial, frame.as_str());
+                        log_state.emit(
+                            serial,
+                            LogLevel::Info,
+                            "wifi_config",
+                            "WiFi credentials cleared from EEPROM",
+                        );
+                    }
+                    Err(_) => {
+                        render_error_json(
+                            &mut frame,
+                            Some(request_id.as_str()),
+                            "wifi_config_clear_failed",
+                            "failed to clear WiFi credentials",
+                            true,
+                        );
+                        write_web_serial_line(serial, frame.as_str());
+                    }
                 }
-                Err(_) => {
-                    render_error_json(
-                        &mut frame,
-                        Some(request_id.as_str()),
-                        "wifi_config_clear_failed",
-                        "failed to clear WiFi credentials",
-                        true,
-                    );
-                    write_web_serial_line(serial, frame.as_str());
-                }
-            },
+            }
         },
         Err(err) => {
+            let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
             let request_id = request_id_hint(line);
             render_protocol_error_json(&mut frame, request_id.as_ref().map(|id| id.as_str()), err);
             write_web_serial_line(serial, frame.as_str());

@@ -71,11 +71,19 @@ export type ChannelState = {
 export type UpsStatus = {
   mode: "standby" | "assist" | "backup" | "off" | "fault" | string;
   input: {
+    source?: "dcin" | "usbc" | "auto" | "unknown" | string;
     mains_present: boolean;
     input_vbus_mv: number | null;
     input_ibus_ma: number | null;
     vin_vbus_mv: number | null;
     vin_iin_ma: number | null;
+    tps_total_iout_ma?: number | null;
+    tps_limit_threshold_ma?: number | null;
+    pressure_state?: "inactive" | "headroom" | "watch" | "limited" | "cooldown" | string;
+    pressure_score_pct?: number | null;
+    pressure_reason?: string | null;
+    vin_baseline_mv?: number | null;
+    vin_drop_mv?: number | null;
   };
   output: {
     requested: "none" | "out_a" | "out_b" | "both" | string;
@@ -91,6 +99,12 @@ export type UpsStatus = {
     ichg_ma: number | null;
     ibat_ma: number | null;
     vbat_present: boolean;
+    policy_target_ichg_ma?: number | null;
+    limit_active?: boolean | null;
+    limit_reason?: string | null;
+    limit_detail?: string | null;
+    limit_threshold_ma?: number | null;
+    detail_status?: string | null;
   };
   battery: {
     state: "ok" | "warning" | "fault" | "missing" | string;

@@ -58,6 +58,8 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 - 入口：`/devices/:device_id/power`
 - 目的：拆解输入、充电、输出之间的能量路径，便于调试 UPS 行为。
 - 主要内容：市电输入、`input_vbus_mv` / `input_ibus_ma`、输出请求与实际激活通道、`gate_reason`、OUT A/B 电压电流、recoverable 状态。
+- 输入面板必须直接展示 `source / pressure_state / pressure_score_pct / pressure_reason / tps_total_iout_ma / tps_limit_threshold_ma / vin_baseline_mv / vin_drop_mv`，让 owner 能判断当前 `DC IN` 压力，尤其是 `TPS output current > 100mA` 的停充场景。
+- 充电面板必须直接展示 `policy_target_ichg_ma / limit_active / limit_reason / limit_threshold_ma / detail_status`，并在 `pressure_tps_output_current` 时用 owner-facing 文案显示 `Stopped: TPS output current <actual>mA > 100mA`。
 - 接口对接：`GET /api/v1/status` 的 `input`、`output`、`charger`。
 - 交互：按 `Input`、`Charger`、`Output A`、`Output B` 分段，所有写操作按钮首版不出现。
 
@@ -102,6 +104,7 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 - 入口：`/devices/:device_id/api`
 - 目的：为开发和 bench 调试提供最小 API 可视化，验证 JSON 和 SSE 是否工作。
 - 主要内容：endpoint 列表、最近一次响应、SSE 连接状态、USB CDC protocol 状态、host power dry-run 状态、错误 envelope 展示、structured log 与 USB Console。
+- USB Console / trace 视图必须把 `kind=event,target=power` 作为可读 power event 显示，而不是只显示原始 JSON blob；当 `pressure_reason=tps_output_current` 时，必须直接显示 `TPS actual / threshold`。
 - 接口对接：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status`、status SSE、`/api/v1/host/power`、`/api/v1/host/power/events`。
 - 限制：只读请求，不提供任意 URL fetch，避免浏览器端变成不受控代理。
 

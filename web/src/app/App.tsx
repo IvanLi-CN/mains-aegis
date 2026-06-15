@@ -377,6 +377,14 @@ function renderRoute(
   if (!route.deviceId && devdDiscovery) {
     return <FleetPage entries={fleetEntries} discovery={devdDiscovery} />;
   }
+  if (
+    route.deviceId &&
+    !selected &&
+    devdDiscovery &&
+    (devdDiscovery.status === "checking" || devdDiscovery.isRefreshing)
+  ) {
+    return <FleetLoadingState />;
+  }
   if (!selected) return <MissingDevice />;
 
   switch (route.section) {
@@ -2652,11 +2660,42 @@ function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
 
 function PowerPage({ record }: { record: DeviceRecord }) {
   const status = record.status;
+  const pressureScore = Math.max(0, Math.min(100, status?.input.pressure_score_pct ?? 0));
+  const pressureState = status?.input.pressure_state ?? "--";
+  const limitReason = status?.charger.limit_reason ?? "none";
+  const pressureSeverity = pressureSeverityForState(status?.input.pressure_state);
+  const tpsTotalIoutMa = status?.input.tps_total_iout_ma ?? null;
+  const tpsLimitThresholdMa =
+    status?.input.tps_limit_threshold_ma ?? status?.charger.limit_threshold_ma ?? null;
+  const pressureReasonLabel = powerReasonLabel(status?.input.pressure_reason);
+  const limitReasonLabel = powerReasonLabel(limitReason);
+  const stopSummary = powerStopSummary(
+    status?.input.pressure_reason,
+    tpsTotalIoutMa,
+    tpsLimitThresholdMa,
+  );
   return (
     <section className="page-flow">
       <DeviceStatusBand record={record} />
       <div className="detail-grid three">
         <InfoPanel title="Input" icon={PlugZap}>
+          <div className="power-pressure-summary">
+            <span className={`severity-badge severity-${pressureSeverity}`}>
+              {pressureState}
+            </span>
+            <strong>{pressureScore}%</strong>
+            <span>{pressureReasonLabel}</span>
+          </div>
+          <div
+            className="power-pressure-bar"
+            aria-label={`Input pressure ${pressureScore}%`}
+          >
+            <span
+              className={`power-pressure-fill power-pressure-fill-${pressureSeverity}`}
+              style={{ width: `${pressureScore}%` }}
+            />
+          </div>
+          <MetricLine label="Source" value={status?.input.source ?? "--"} />
           <MetricLine
             label="Mains present"
             value={boolLabel(status?.input.mains_present, "yes", "no")}
@@ -2669,9 +2708,44 @@ function PowerPage({ record }: { record: DeviceRecord }) {
             label="VIN IIN"
             value={formatCurrent(status?.input.vin_iin_ma)}
           />
+          <MetricLine
+            label="Pressure"
+            value={`${pressureState} / ${pressureScore}%`}
+          />
+          <MetricLine
+            label="Reason"
+            value={pressureReasonLabel}
+          />
+          <MetricLine
+            label="TPS output"
+            value={powerThresholdSummary(tpsTotalIoutMa, tpsLimitThresholdMa)}
+          />
+          <MetricLine
+            label="VIN baseline"
+            value={formatVoltage(status?.input.vin_baseline_mv)}
+          />
+          <MetricLine
+            label="VIN drop"
+            value={formatVoltage(status?.input.vin_drop_mv)}
+          />
         </InfoPanel>
         <InfoPanel title="Charger" icon={BatteryCharging}>
           <MetricLine label="State" value={status?.charger.state ?? "--"} />
+          <div className="power-limit-summary">
+            <span className={`severity-badge severity-${pressureSeverity}`}>
+              {status?.charger.limit_active ? "limited" : "tracking"}
+            </span>
+            <strong>{formatCurrent(status?.charger.policy_target_ichg_ma)}</strong>
+            <span>{limitReasonLabel}</span>
+          </div>
+          <MetricLine
+            label="Stop cause"
+            value={stopSummary}
+          />
+          <MetricLine
+            label="Detail"
+            value={status?.charger.detail_status ?? "--"}
+          />
           <MetricLine
             label="Allow charge"
             value={boolLabel(status?.charger.allow_charge, "yes", "no")}
@@ -2679,6 +2753,22 @@ function PowerPage({ record }: { record: DeviceRecord }) {
           <MetricLine
             label="ICHG"
             value={formatCurrent(status?.charger.ichg_ma)}
+          />
+          <MetricLine
+            label="Policy target"
+            value={formatCurrent(status?.charger.policy_target_ichg_ma)}
+          />
+          <MetricLine
+            label="Limit"
+            value={boolLabel(status?.charger.limit_active, "yes", "no")}
+          />
+          <MetricLine
+            label="Limit reason"
+            value={limitReasonLabel}
+          />
+          <MetricLine
+            label="Limit threshold"
+            value={formatCurrent(status?.charger.limit_threshold_ma)}
           />
           <MetricLine
             label="IBAT"
@@ -3728,6 +3818,7 @@ function parseTraceMessage(message: string): ParsedTraceMessage {
 }
 
 function traceSummaryLabel(entry: SerialTraceEntry): string {
+  if (entry.kind === "event" && entry.target === "power") return "power event";
   if (entry.kind !== "frame" && entry.frameType === "defmt")
     return parseTraceMessage(entry.summary).lead;
   return entry.summary;
@@ -3742,6 +3833,39 @@ function TraceMessage({
   query: string;
   mode: "summary" | "raw";
 }) {
+  if (mode !== "raw" && entry.kind === "event" && entry.target === "power") {
+    const payload = safeParseTracePayload(entry.payload);
+    const actualMa = asNullableNumber(payload?.tps_total_iout_ma);
+    const thresholdMa = asNullableNumber(payload?.tps_limit_threshold_ma);
+    return (
+      <div className="trace-message-readable">
+        <p className="trace-message-lead">
+          <HighlightText
+            value={powerEventSummary(payload)}
+            query={query}
+          />
+        </p>
+        <dl className="trace-field-list">
+          <div className="trace-field">
+            <dt>source</dt>
+            <dd>{String(payload?.input_source ?? "--")}</dd>
+          </div>
+          <div className="trace-field">
+            <dt>score</dt>
+            <dd>{String(payload?.pressure_score_pct ?? "--")}</dd>
+          </div>
+          <div className="trace-field">
+            <dt>target</dt>
+            <dd>{String(payload?.policy_target_ichg_ma ?? "--")}</dd>
+          </div>
+          <div className="trace-field">
+            <dt>tps</dt>
+            <dd>{powerThresholdSummary(actualMa, thresholdMa)}</dd>
+          </div>
+        </dl>
+      </div>
+    );
+  }
   if (mode === "raw" || entry.kind === "frame" || entry.frameType !== "defmt") {
     return (
       <HighlightText
@@ -3775,6 +3899,14 @@ function TraceMessage({
       ) : null}
     </div>
   );
+}
+
+function safeParseTracePayload(payload: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(payload) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 function HighlightText({ value, query }: { value: string; query: string }) {
@@ -4345,6 +4477,111 @@ function SeverityBadge({ severity }: { severity: Severity }) {
   return (
     <span className={`severity-badge severity-${severity}`}>{severity}</span>
   );
+}
+
+function pressureSeverityForState(
+  state: string | null | undefined,
+): Severity {
+  switch (state) {
+    case "limited":
+    case "cooldown":
+      return "critical";
+    case "watch":
+      return "warning";
+    case "headroom":
+      return "ok";
+    default:
+      return "info";
+  }
+}
+
+function powerReasonLabel(reason: string | null | undefined): string {
+  switch (reason) {
+    case "tps_output_current":
+      return "TPS output current";
+    case "pressure_tps_output_current":
+      return "TPS output current limit";
+    case "cooldown_retry_wait":
+      return "Cooldown retry wait";
+    case "recovery_hold":
+      return "Recovery hold";
+    case "startup_ramp":
+      return "Startup ramp";
+    case "pressure_vindpm":
+      return "VINDPM";
+    case "pressure_iindpm":
+      return "IINDPM";
+    case "pressure_poorsrc":
+      return "Poor source";
+    case "vin_drop_watch":
+      return "VIN drop watch";
+    case "vin_drop":
+      return "VIN drop";
+    case "none":
+    case null:
+    case undefined:
+      return "none";
+    default:
+      return reason;
+  }
+}
+
+function powerThresholdSummary(
+  actualMa: number | null | undefined,
+  thresholdMa: number | null | undefined,
+): string {
+  if (typeof actualMa === "number" && typeof thresholdMa === "number") {
+    return `${actualMa} mA / ${thresholdMa} mA`;
+  }
+  if (typeof actualMa === "number") return `${actualMa} mA`;
+  if (typeof thresholdMa === "number") return `-- / ${thresholdMa} mA`;
+  return "--";
+}
+
+function powerStopSummary(
+  reason: string | null | undefined,
+  actualMa: number | null | undefined,
+  thresholdMa: number | null | undefined,
+): string {
+  if (reason === "tps_output_current" && typeof actualMa === "number" && typeof thresholdMa === "number") {
+    return `Stopped: TPS output current ${actualMa} mA > ${thresholdMa} mA`;
+  }
+  if (
+    reason === "tps_output_current" ||
+    reason === "pressure_tps_output_current" ||
+    reason === "cooldown"
+  ) {
+    const summary = powerThresholdSummary(actualMa, thresholdMa);
+    return summary === "--"
+      ? "Stopped: TPS output current over limit"
+      : `Stopped: TPS output current ${summary.replace(" / ", " > ")}`;
+  }
+  return powerReasonLabel(reason);
+}
+
+function asNullableNumber(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function powerEventSummary(payload: Record<string, unknown> | null): string {
+  const pressureState = String(payload?.pressure_state ?? "unknown");
+  const limitReason = powerReasonLabel(
+    typeof payload?.limit_reason === "string" ? payload.limit_reason : null,
+  );
+  const pressureReason = powerReasonLabel(
+    typeof payload?.pressure_reason === "string" ? payload.pressure_reason : null,
+  );
+  const actualMa = asNullableNumber(payload?.tps_total_iout_ma);
+  const thresholdMa = asNullableNumber(payload?.tps_limit_threshold_ma);
+  if (
+    typeof payload?.pressure_reason === "string" &&
+    payload.pressure_reason === "tps_output_current" &&
+    typeof actualMa === "number" &&
+    typeof thresholdMa === "number"
+  ) {
+    return `Stopped: TPS output current ${actualMa} mA > ${thresholdMa} mA (${pressureState}, ${limitReason})`;
+  }
+  return `pressure ${pressureState} / reason ${pressureReason} / limit ${limitReason}`;
 }
 
 function MissingDevice() {

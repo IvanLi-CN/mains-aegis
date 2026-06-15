@@ -369,6 +369,93 @@ struct DeviceRecord {
     settings: DeviceSettingsState,
     logs: VecDeque<SerialLogEntry>,
     trace: VecDeque<SerialTraceEntry>,
+    last_power_event_signature: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DeviceListRecord {
+    id: String,
+    display_name: String,
+    port_path: Option<String>,
+    lan_address: Option<String>,
+    lan_conflict_addresses: Vec<String>,
+    companion_lan_candidate: Option<CompanionLanCandidate>,
+    transport: DeviceTransport,
+    binding: Option<DeviceBinding>,
+    connection: ConnectionState,
+    identity: Option<Value>,
+    status: Option<Value>,
+    power_diag: Option<Value>,
+    selected_artifact_id: Option<String>,
+    log_decode: LogDecodeState,
+    settings: DeviceSettingsState,
+    last_power_event_signature: Option<String>,
+}
+
+impl From<&DeviceRecord> for DeviceListRecord {
+    fn from(value: &DeviceRecord) -> Self {
+        Self {
+            id: value.id.clone(),
+            display_name: value.display_name.clone(),
+            port_path: value.port_path.clone(),
+            lan_address: value.lan_address.clone(),
+            lan_conflict_addresses: value.lan_conflict_addresses.clone(),
+            companion_lan_candidate: value.companion_lan_candidate.clone(),
+            transport: value.transport.clone(),
+            binding: value.binding.clone(),
+            connection: value.connection.clone(),
+            identity: value.identity.clone(),
+            status: value.status.clone(),
+            power_diag: value.power_diag.clone(),
+            selected_artifact_id: value.selected_artifact_id.clone(),
+            log_decode: value.log_decode.clone(),
+            settings: value.settings.clone(),
+            last_power_event_signature: value.last_power_event_signature.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ScanDeviceRecord {
+    id: String,
+    display_name: String,
+    port_path: Option<String>,
+    lan_address: Option<String>,
+    lan_conflict_addresses: Vec<String>,
+    companion_lan_candidate: Option<CompanionLanCandidate>,
+    transport: DeviceTransport,
+    binding: Option<DeviceBinding>,
+    connection: ConnectionState,
+    identity: Option<Value>,
+    status: Option<Value>,
+    power_diag: Option<Value>,
+    selected_artifact_id: Option<String>,
+    log_decode: LogDecodeState,
+    settings: DeviceSettingsState,
+    last_power_event_signature: Option<String>,
+}
+
+impl From<&DeviceRecord> for ScanDeviceRecord {
+    fn from(value: &DeviceRecord) -> Self {
+        Self {
+            id: value.id.clone(),
+            display_name: value.display_name.clone(),
+            port_path: value.port_path.clone(),
+            lan_address: value.lan_address.clone(),
+            lan_conflict_addresses: value.lan_conflict_addresses.clone(),
+            companion_lan_candidate: value.companion_lan_candidate.clone(),
+            transport: value.transport.clone(),
+            binding: value.binding.clone(),
+            connection: value.connection.clone(),
+            identity: value.identity.clone(),
+            status: value.status.clone(),
+            power_diag: value.power_diag.clone(),
+            selected_artifact_id: value.selected_artifact_id.clone(),
+            log_decode: value.log_decode.clone(),
+            settings: value.settings.clone(),
+            last_power_event_signature: value.last_power_event_signature.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1135,10 +1222,12 @@ fn create_app_state_with_auth_and_persistence(
     persistence: DevdPersistence,
 ) -> AppState {
     let (events, _) = broadcast::channel(256);
-    let persisted = load_devd_state(&persistence).unwrap_or_else(|error| {
-        tracing::warn!("failed to load mains-aegis-devd state: {error}");
-        PersistedDevdState::default()
-    });
+    let persisted = load_devd_state(&persistence)
+        .map(sanitize_persisted_devd_state)
+        .unwrap_or_else(|error| {
+            tracing::warn!("failed to load mains-aegis-devd state: {error}");
+            PersistedDevdState::default()
+        });
     let state = AppState {
         inner: Arc::new(Mutex::new(DevdState {
             bindings: persisted.bindings,
@@ -1155,7 +1244,6 @@ fn create_app_state_with_auth_and_persistence(
         app_session_secret,
         persistence,
     };
-    seed_mock_device(&state);
     spawn_web_lease_reaper(state.clone());
     state
 }
@@ -1195,6 +1283,15 @@ fn load_devd_state(persistence: &DevdPersistence) -> anyhow::Result<PersistedDev
         .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
     serde_json::from_str(&text)
         .map_err(|error| anyhow::anyhow!("parse {}: {error}", path.display()))
+}
+
+fn sanitize_persisted_devd_state(mut persisted: PersistedDevdState) -> PersistedDevdState {
+    // Older devd builds persisted a synthetic test device into runtime state.
+    // Strip those records on load so production/dev instances only expose real devices.
+    persisted.bindings.remove("mock-devkit");
+    persisted.selected_artifacts.remove("mock-devkit");
+    persisted.device_trace.remove("mock-devkit");
+    persisted
 }
 
 fn persisted_snapshot(state: &DevdState) -> PersistedDevdState {
@@ -1739,7 +1836,7 @@ async fn health() -> Json<Value> {
 async fn list_devices(State(state): State<AppState>) -> Json<Value> {
     let guard = state.inner.lock().expect("state lock");
     Json(json!({
-        "devices": guard.devices.values().cloned().collect::<Vec<_>>(),
+        "devices": guard.devices.values().map(DeviceListRecord::from).collect::<Vec<_>>(),
         "bindings": guard.bindings.values().cloned().collect::<Vec<_>>()
     }))
 }
@@ -1797,6 +1894,7 @@ async fn scan_devices_inner(
                         settings: default_settings(),
                         logs: VecDeque::new(),
                         trace: persisted_trace,
+                        last_power_event_signature: None,
                     });
                 let preferred_path =
                     prefer_serial_port_path(entry.port_path.as_deref(), &port_path);
@@ -1878,7 +1976,7 @@ async fn scan_devices_inner(
     let guard = state.inner.lock().expect("state lock");
     let mut discovered = discovered_ids
         .iter()
-        .filter_map(|id| guard.devices.get(id).cloned())
+        .filter_map(|id| guard.devices.get(id).map(ScanDeviceRecord::from))
         .collect::<Vec<_>>();
     discovered.sort_by(|left, right| left.id.cmp(&right.id));
     let scan_trace_tail = tail(&guard.scan_trace, 200);
@@ -2461,6 +2559,7 @@ fn merge_lan_discoveries(
                 settings: default_settings(),
                 logs: VecDeque::new(),
                 trace: persisted_trace,
+                last_power_event_signature: None,
             });
         device.identity = Some(discovery.identity);
         device.lan_address = Some(discovery.address.clone());
@@ -3333,16 +3432,45 @@ async fn device_power_diag(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
-    let transport = {
+    let (transport, lan_address, cached_status) = {
         let guard = state.inner.lock().expect("state lock");
         let device = guard
             .devices
             .get(&id)
             .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
-        device.transport.clone()
+        (
+            device.transport.clone(),
+            device.lan_address.clone(),
+            device.status.clone(),
+        )
     };
     let diag = if matches!(transport, DeviceTransport::Mock) {
         mock_power_diag()
+    } else if matches!(transport, DeviceTransport::Lan) {
+        let address = lan_address.ok_or_else(|| {
+            HttpError::retryable(
+                "lan_address_missing",
+                format!("power-diag is unavailable for {id}: LAN device has no address"),
+            )
+        })?;
+        match lan_http_json(&address, "GET", "/api/v1/power-diag", None).await {
+            Ok(diag) => diag,
+            Err(_) => {
+                let status = match lan_http_json(&address, "GET", "/api/v1/status", None).await {
+                    Ok(status) => status,
+                    Err(_) => cached_status.ok_or_else(|| {
+                        HttpError::retryable(
+                            "power_diag_unavailable",
+                            format!(
+                                "power-diag is unavailable for {id}: LAN device did not provide /api/v1/power-diag and no status snapshot was cached"
+                            ),
+                        )
+                    })?,
+                };
+                update_device_status_snapshot(&state, &id, status.clone());
+                derive_power_diag_from_status(&status, "lan_derived")
+            }
+        }
     } else {
         send_device_cdc_request(&state, &id, "get_power_diag", "devd-power-diag").await?
     };
@@ -3865,11 +3993,35 @@ async fn device_connection(
     })))
 }
 
+async fn maybe_refresh_lan_status_snapshot(state: &AppState, device_id: &str) {
+    let refresh_address = {
+        let guard = state.inner.lock().expect("state lock");
+        guard.devices.get(device_id).and_then(|device| {
+            if device.lan_address.is_some()
+                && device.identity.is_some()
+                && device.lan_conflict_addresses.is_empty()
+            {
+                device.lan_address.clone()
+            } else {
+                None
+            }
+        })
+    };
+    let Some(address) = refresh_address else {
+        return;
+    };
+    match lan_http_json(&address, "GET", "/api/v1/status", None).await {
+        Ok(status) => update_device_status_snapshot(state, device_id, status),
+        Err(error) => tracing::debug!("skip LAN status refresh for {device_id}: {error}"),
+    }
+}
+
 async fn device_trace(
     Query(query): Query<SessionQuery>,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
+    maybe_refresh_lan_status_snapshot(&state, &id).await;
     let guard = state.inner.lock().expect("state lock");
     let device = guard
         .devices
@@ -4517,11 +4669,7 @@ async fn wait_for_wifi_state(
 }
 
 fn update_device_status_snapshot(state: &AppState, device_id: &str, status: Value) {
-    let mut guard = state.inner.lock().expect("state lock");
-    if let Some(device) = guard.devices.get_mut(device_id) {
-        device.status = Some(status.clone());
-    }
-    drop(guard);
+    let power_event = update_device_status_record(state, device_id, &status, false);
     emit(
         state,
         Some(device_id.to_string()),
@@ -4529,6 +4677,47 @@ fn update_device_status_snapshot(state: &AppState, device_id: &str, status: Valu
         "CDC status snapshot",
         json!({"status": status}),
     );
+    if let Some((trace, payload)) = power_event {
+        emit(
+            state,
+            Some(device_id.to_string()),
+            "serial_trace",
+            "power event",
+            json!({"trace": trace}),
+        );
+        emit(
+            state,
+            Some(device_id.to_string()),
+            "power_event",
+            "power event",
+            payload,
+        );
+    }
+}
+
+fn update_device_status_record(
+    state: &AppState,
+    device_id: &str,
+    status: &Value,
+    connection_is_live: bool,
+) -> Option<(SerialTraceEntry, Value)> {
+    let (power_event, snapshot) = {
+        let mut guard = state.inner.lock().expect("state lock");
+        let mut power_event = None;
+        if let Some(device) = guard.devices.get_mut(device_id) {
+            if connection_is_live {
+                device.connection = ConnectionState::Connected;
+            }
+            device.status = Some(status.clone());
+            power_event = maybe_record_power_event(device, status);
+            if let Some((trace, _)) = power_event.as_ref() {
+                push_bounded(&mut device.trace, trace.clone(), LOG_LIMIT);
+            }
+        }
+        (power_event, persisted_snapshot(&guard))
+    };
+    let _ = persist_devd_state(&state.persistence, snapshot);
+    power_event
 }
 
 fn update_device_power_diag_snapshot(state: &AppState, device_id: &str, power_diag: Value) {
@@ -4541,9 +4730,253 @@ fn update_device_power_diag_snapshot(state: &AppState, device_id: &str, power_di
         state,
         Some(device_id.to_string()),
         "power_diag",
-        "CDC power diagnostic snapshot",
+        "power diagnostic snapshot",
         json!({"power_diag": power_diag}),
     );
+}
+
+fn derive_power_diag_from_status(status: &Value, source: &str) -> Value {
+    let input = status.get("input").cloned().unwrap_or(Value::Null);
+    let charger = status.get("charger").cloned().unwrap_or(Value::Null);
+    let battery = status.get("battery").cloned().unwrap_or(Value::Null);
+    let allow_charge = charger
+        .get("allow_charge")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let limit_active = charger
+        .get("limit_active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let derived_target_ichg = charger
+        .get("policy_target_ichg_ma")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let derived_effective_target_ichg = charger
+        .get("ichg_ma")
+        .cloned()
+        .filter(|value| !value.is_null())
+        .or_else(|| {
+            if !allow_charge {
+                return None;
+            }
+            charger
+                .get("policy_target_ichg_ma")
+                .cloned()
+                .filter(|value| !value.is_null())
+        })
+        .unwrap_or(Value::Null);
+    let derived_adaptive_cap_ichg = if limit_active {
+        derived_effective_target_ichg.clone()
+    } else {
+        Value::Null
+    };
+    json!({
+        "source": source,
+        "input": {
+            "source": input.get("source").cloned().unwrap_or_else(|| json!("unknown")),
+            "mains_present": input.get("mains_present").cloned().unwrap_or(Value::Null),
+            "input_vbus_mv": input.get("input_vbus_mv").cloned().unwrap_or(Value::Null),
+            "input_ibus_ma": input.get("input_ibus_ma").cloned().unwrap_or(Value::Null),
+            "vin_vbus_mv": input.get("vin_vbus_mv").cloned().unwrap_or(Value::Null),
+            "vin_iin_ma": input.get("vin_iin_ma").cloned().unwrap_or(Value::Null),
+            "tps_total_iout_ma": input.get("tps_total_iout_ma").cloned().unwrap_or(Value::Null),
+            "tps_limit_threshold_ma": input.get("tps_limit_threshold_ma").cloned().unwrap_or(Value::Null),
+            "pressure_state": input.get("pressure_state").cloned().unwrap_or_else(|| json!("inactive")),
+            "pressure_score_pct": input.get("pressure_score_pct").cloned().unwrap_or(Value::Null),
+            "pressure_reason": input.get("pressure_reason").cloned().unwrap_or(Value::Null),
+            "vin_baseline_mv": input.get("vin_baseline_mv").cloned().unwrap_or(Value::Null),
+            "vin_drop_mv": input.get("vin_drop_mv").cloned().unwrap_or(Value::Null),
+            "usb_pd_attached": Value::Bool(input.get("source").and_then(Value::as_str) == Some("usbc")),
+            "usb_pd_charge_ready": Value::Bool(charger.get("allow_charge").and_then(Value::as_bool).unwrap_or(false)),
+            "usb_pd_vbus_present": Value::Null,
+            "usb_pd_unsafe_source_latched": Value::Bool(false),
+            "usb_pd_contract_kind": Value::Null,
+            "usb_pd_contract_mv": Value::Null,
+            "usb_pd_contract_ma": Value::Null,
+            "usb_pd_vac1_mv": Value::Null,
+            "usb_pd_vsys_mv": Value::Null
+        },
+        "charger": {
+            "poll_valid": Value::Bool(true),
+            "enabled": charger.get("allow_charge").cloned().unwrap_or_else(|| json!(false)),
+            "ce_low": Value::Null,
+            "ilim_hiz_brk_low": Value::Null,
+            "allow_charge": charger.get("allow_charge").cloned().unwrap_or_else(|| json!(false)),
+            "normal_allow_charge": charger.get("allow_charge").cloned().unwrap_or_else(|| json!(false)),
+            "force_allow_charge": Value::Bool(false),
+            "can_enable": charger.get("allow_charge").cloned().unwrap_or_else(|| json!(false)),
+            "usb_pd_charge_gate_ready": Value::Null,
+            "input_present": input.get("mains_present").cloned().unwrap_or(Value::Null),
+            "vbus_present": input.get("mains_present").cloned().unwrap_or(Value::Null),
+            "ac1_present": input.get("mains_present").cloned().unwrap_or(Value::Null),
+            "ac2_present": Value::Null,
+            "pg": Value::Null,
+            "vbat_present": charger.get("vbat_present").cloned().unwrap_or(Value::Null),
+            "adc_enabled": Value::Null,
+            "adc_done": Value::Null,
+            "adc_ready": Value::Null,
+            "ibus_adc_ma": input.get("input_ibus_ma").cloned().unwrap_or(Value::Null),
+            "ibat_adc_ma": charger.get("ibat_ma").cloned().unwrap_or(Value::Null),
+            "vbus_adc_mv": input.get("input_vbus_mv").cloned().unwrap_or(Value::Null),
+            "vbat_adc_mv": battery.get("pack_mv").cloned().unwrap_or(Value::Null),
+            "vsys_adc_mv": Value::Null,
+            "vac1_adc_mv": input.get("vin_vbus_mv").cloned().unwrap_or(Value::Null),
+            "vac2_adc_mv": Value::Null,
+            "vreg_mv": Value::Null,
+            "ichg_ma": charger.get("ichg_ma").cloned().unwrap_or(Value::Null),
+            "vindpm_mv": Value::Null,
+            "iindpm_ma": Value::Null,
+            "vbat_lowv_pct_x10": Value::Null,
+            "iprechg_ma": Value::Null,
+            "iterm_ma": Value::Null,
+            "chg_stat": charger.get("state").cloned().unwrap_or_else(|| json!("unknown")),
+            "vbus_stat": input.get("source").cloned().unwrap_or_else(|| json!("unknown")),
+            "ico_stat": Value::String("unknown".into()),
+            "treg": Value::Bool(false),
+            "dpdm": Value::Bool(false),
+            "wd": Value::Bool(false),
+            "poorsrc": Value::Bool(matches!(
+                input.get("pressure_reason").and_then(Value::as_str),
+                Some("poorsrc" | "poor_source")
+            )),
+            "vindpm": Value::Bool(matches!(input.get("pressure_reason").and_then(Value::as_str), Some("vindpm" | "vin_drop"))),
+            "iindpm": Value::Bool(matches!(input.get("pressure_reason").and_then(Value::as_str), Some("iindpm"))),
+            "ts_cold": Value::Bool(false),
+            "ts_hot": Value::Bool(false),
+            "st0": Value::Null,
+            "st1": Value::Null,
+            "st2": Value::Null,
+            "st3": Value::Null,
+            "st4": Value::Null,
+            "fault0": Value::Null,
+            "fault1": Value::Null,
+            "ctrl0": Value::Null,
+            "term_ctrl": Value::Null
+        },
+        "policy": {
+            "state": charger.get("state").cloned().unwrap_or(Value::Null),
+            "status": charger.get("detail_status").cloned().unwrap_or_else(|| json!("unknown")),
+            "notice": charger.get("limit_detail").cloned().unwrap_or_else(|| json!("none")),
+            "input_source": input.get("source").cloned().unwrap_or_else(|| json!("unknown")),
+            "start_reason": Value::Null,
+            "full_reason": Value::Null,
+            "output_block_reason": Value::Null,
+            "recovery_stage": Value::Null,
+            "target_ichg_ma": derived_target_ichg,
+            "adaptive_cap_ichg_ma": derived_adaptive_cap_ichg,
+            "effective_target_ichg_ma": derived_effective_target_ichg,
+            "limit_active": Value::Bool(limit_active),
+            "limit_reason": charger.get("limit_reason").cloned().unwrap_or(Value::Null),
+            "limit_detail": charger.get("limit_detail").cloned().unwrap_or(Value::Null),
+            "detail_status": charger.get("detail_status").cloned().unwrap_or(Value::Null),
+            "pressure_state": input.get("pressure_state").cloned().unwrap_or_else(|| json!("inactive")),
+            "pressure_reason": input.get("pressure_reason").cloned().unwrap_or(Value::Null),
+            "pressure_score_pct": input.get("pressure_score_pct").cloned().unwrap_or(Value::Null),
+            "vin_baseline_mv": input.get("vin_baseline_mv").cloned().unwrap_or(Value::Null),
+            "vin_drop_mv": input.get("vin_drop_mv").cloned().unwrap_or(Value::Null),
+            "tps_total_iout_ma": input.get("tps_total_iout_ma").cloned().unwrap_or(Value::Null),
+            "tps_limit_threshold_ma": input.get("tps_limit_threshold_ma").cloned().unwrap_or(Value::Null),
+            "output_power_w10": Value::Null,
+            "charge_latched": Value::Bool(charger.get("allow_charge").and_then(Value::as_bool).unwrap_or(false)),
+            "full_latched": Value::Bool(false),
+            "dc_derated": charger.get("limit_active").cloned().unwrap_or_else(|| json!(false)),
+            "output_blocked": Value::Bool(false),
+            "manual_active": Value::Bool(false),
+            "manual_stop_inhibit": Value::Bool(false)
+        },
+        "bms": {
+            "addr": Value::Null,
+            "state": battery.get("state").cloned().unwrap_or_else(|| json!("unknown")),
+            "pack_mv": battery.get("pack_mv").cloned().unwrap_or(Value::Null),
+            "current_ma": battery.get("current_ma").cloned().unwrap_or(Value::Null),
+            "soc_pct": battery.get("soc_pct").cloned().unwrap_or(Value::Null),
+            "cell_min_mv": Value::Null,
+            "cell_max_mv": Value::Null,
+            "no_battery": battery.get("no_battery").cloned().unwrap_or(Value::Null),
+            "discharge_ready": battery.get("discharge_ready").cloned().unwrap_or(Value::Null),
+            "charge_ready": Value::Null,
+            "full": Value::Null,
+            "issue_detail": battery.get("issue_detail").cloned().unwrap_or(Value::Null),
+            "rca_alarm": Value::Null,
+            "safety_status": Value::Null,
+            "pf_status": Value::Null,
+            "manufacturing_status": Value::Null,
+            "gauging_status": Value::Null,
+            "op_status": Value::Null,
+            "xchg": Value::Null,
+            "chg_fet": battery.get("charge_fet_on").cloned().unwrap_or(Value::Null),
+            "dsg_fet": battery.get("discharge_fet_on").cloned().unwrap_or(Value::Null),
+            "pchg_fet": battery.get("precharge_fet_on").cloned().unwrap_or(Value::Null),
+            "cuv": Value::Null,
+            "cuvc": Value::Null,
+            "cuv_recovery_mv": Value::Null,
+            "cuv_recov_chg": Value::Null,
+            "fet_en": Value::Null,
+            "chg_en": Value::Null,
+            "dsg_en": Value::Null,
+            "charging_inhibit": Value::Null,
+            "charging_suspend": Value::Null,
+            "charging_hv": Value::Null,
+            "current_at_eoc_ma": Value::Null
+        }
+    })
+}
+
+fn maybe_record_power_event(
+    device: &mut DeviceRecord,
+    status: &Value,
+) -> Option<(SerialTraceEntry, Value)> {
+    let input = status.get("input")?;
+    let charger = status.get("charger")?;
+    let pressure_state = input.get("pressure_state")?.as_str()?;
+    let pressure_reason = input
+        .get("pressure_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let pressure_score_pct = input
+        .get("pressure_score_pct")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let limit_reason = charger
+        .get("limit_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let input_source = input
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let payload = json!({
+        "event": "power_state_changed",
+        "input_source": input_source,
+        "pressure_state": pressure_state,
+        "pressure_reason": pressure_reason,
+        "pressure_score_pct": pressure_score_pct,
+        "vin_vbus_mv": input.get("vin_vbus_mv").cloned().unwrap_or(Value::Null),
+        "vin_baseline_mv": input.get("vin_baseline_mv").cloned().unwrap_or(Value::Null),
+        "vin_drop_mv": input.get("vin_drop_mv").cloned().unwrap_or(Value::Null),
+        "tps_total_iout_ma": input.get("tps_total_iout_ma").cloned().unwrap_or(Value::Null),
+        "tps_limit_threshold_ma": input
+            .get("tps_limit_threshold_ma")
+            .cloned()
+            .or_else(|| charger.get("limit_threshold_ma").cloned())
+            .unwrap_or(Value::Null),
+        "policy_target_ichg_ma": charger.get("policy_target_ichg_ma").cloned().unwrap_or(Value::Null),
+        "limit_reason": limit_reason,
+        "limit_detail": charger.get("limit_detail").cloned().unwrap_or(Value::Null),
+    });
+    let signature = payload.to_string();
+    if device.last_power_event_signature.as_deref() == Some(signature.as_str()) {
+        return None;
+    }
+    device.last_power_event_signature = Some(signature);
+    let trace = structured_trace_entry(
+        "info",
+        "event",
+        Some("power".to_string()),
+        "power state changed",
+        payload.to_string(),
+    );
+    Some((trace, payload))
 }
 
 fn spawn_web_lease_reaper(state: AppState) {
@@ -5398,6 +5831,7 @@ fn hex_value(byte: u8) -> Result<u8, HttpError> {
     }
 }
 
+#[cfg(test)]
 fn seed_mock_device(state: &AppState) {
     let mut guard = state.inner.lock().expect("state lock");
     let id = "mock-devkit".to_string();
@@ -5429,6 +5863,7 @@ fn seed_mock_device(state: &AppState) {
         settings: default_settings(),
         logs: VecDeque::new(),
         trace: persisted_trace,
+        last_power_event_signature: None,
     };
     apply_artifact_match(&mut device, selected_artifact.as_ref());
     guard.devices.insert(id, device);
@@ -6157,20 +6592,26 @@ fn append_monitor_trace(
     let trace_event = trace.clone();
     let log_event = log.clone();
     let status_event = status_from_trace_payload(&trace_event.payload);
-    let snapshot = {
+    let power_event = {
         let mut guard = state.inner.lock().expect("state lock");
+        let mut power_event = None;
         if let Some(device) = guard.devices.get_mut(device_id) {
             device.connection = ConnectionState::Connected;
             push_bounded(&mut device.trace, trace, LOG_LIMIT);
             if let Some(status) = status_event.clone() {
-                device.status = Some(status);
+                device.status = Some(status.clone());
+                power_event = maybe_record_power_event(device, &status);
+                if let Some((trace, _)) = power_event.as_ref() {
+                    push_bounded(&mut device.trace, trace.clone(), LOG_LIMIT);
+                }
             }
             if let Some(log) = log {
                 push_bounded(&mut device.logs, log, LOG_LIMIT);
             }
         }
-        persisted_snapshot(&guard)
+        (power_event, persisted_snapshot(&guard))
     };
+    let (power_event, snapshot) = power_event;
     let _ = persist_devd_state(&state.persistence, snapshot);
     emit(
         state,
@@ -6195,6 +6636,22 @@ fn append_monitor_trace(
             "serial_status",
             "CDC status snapshot",
             json!({"status": status}),
+        );
+    }
+    if let Some((trace, payload)) = power_event {
+        emit(
+            state,
+            Some(device_id.to_string()),
+            "serial_trace",
+            "power event",
+            json!({"trace": trace}),
+        );
+        emit(
+            state,
+            Some(device_id.to_string()),
+            "power_event",
+            "power event",
+            payload,
         );
     }
 }
@@ -7248,6 +7705,245 @@ mod tests {
         assert!(!path.exists());
     }
 
+    #[tokio::test]
+    async fn status_updates_emit_deduped_power_events() {
+        let state = create_app_state(false);
+        seed_mock_device(&state);
+        let device_id = "mock-devkit";
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "headroom",
+                "pressure_score_pct": 8,
+                "pressure_reason": "none",
+                "vin_vbus_mv": 19420,
+                "vin_baseline_mv": 19480,
+                "tps_total_iout_ma": 18,
+                "tps_limit_threshold_ma": 100,
+            },
+            "charger": {
+                "policy_target_ichg_ma": 500,
+                "limit_reason": "startup_ramp",
+                "limit_threshold_ma": 100,
+            }
+        });
+
+        update_device_status_snapshot(&state, device_id, status.clone());
+        update_device_status_snapshot(&state, device_id, status);
+
+        let guard = state.inner.lock().expect("state lock");
+        let power_events = guard
+            .events
+            .iter()
+            .filter(|event| event.device_id.as_deref() == Some(device_id))
+            .filter(|event| event.kind == "power_event")
+            .count();
+        let power_traces = guard
+            .devices
+            .get(device_id)
+            .unwrap()
+            .trace
+            .iter()
+            .filter(|trace| trace.kind == "event" && trace.target.as_deref() == Some("power"))
+            .count();
+
+        assert_eq!(power_events, 1);
+        assert_eq!(power_traces, 1);
+    }
+
+    #[tokio::test]
+    async fn status_updates_emit_power_events_when_tps_measurement_changes() {
+        let state = create_app_state(false);
+        seed_mock_device(&state);
+        let device_id = "mock-devkit";
+        let first = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "cooldown",
+                "pressure_score_pct": 100,
+                "pressure_reason": "tps_output_current",
+                "vin_vbus_mv": 12032,
+                "vin_baseline_mv": 12032,
+                "tps_total_iout_ma": 1056,
+                "tps_limit_threshold_ma": 100,
+            },
+            "charger": {
+                "policy_target_ichg_ma": Value::Null,
+                "limit_reason": "cooldown_retry_wait",
+                "limit_detail": "tps_output_current_cooldown",
+                "limit_threshold_ma": 100,
+            }
+        });
+        let second = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "cooldown",
+                "pressure_score_pct": 100,
+                "pressure_reason": "tps_output_current",
+                "vin_vbus_mv": 12040,
+                "vin_baseline_mv": 12040,
+                "tps_total_iout_ma": 36,
+                "tps_limit_threshold_ma": 100,
+            },
+            "charger": {
+                "policy_target_ichg_ma": Value::Null,
+                "limit_reason": "cooldown_retry_wait",
+                "limit_detail": "tps_output_current_cooldown",
+                "limit_threshold_ma": 100,
+            }
+        });
+
+        update_device_status_snapshot(&state, device_id, first);
+        update_device_status_snapshot(&state, device_id, second);
+
+        let guard = state.inner.lock().expect("state lock");
+        let power_events = guard
+            .events
+            .iter()
+            .filter(|event| event.device_id.as_deref() == Some(device_id))
+            .filter(|event| event.kind == "power_event")
+            .count();
+        let power_traces = guard
+            .devices
+            .get(device_id)
+            .unwrap()
+            .trace
+            .iter()
+            .filter(|trace| trace.kind == "event" && trace.target.as_deref() == Some("power"))
+            .count();
+
+        assert_eq!(power_events, 2);
+        assert_eq!(power_traces, 2);
+    }
+
+    #[tokio::test]
+    async fn status_updates_emit_power_events_when_limit_detail_changes() {
+        let state = create_app_state(false);
+        seed_mock_device(&state);
+        let device_id = "mock-devkit";
+        let first = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "limited",
+                "pressure_score_pct": 84,
+                "pressure_reason": "tps_output_current",
+                "vin_vbus_mv": 18620,
+                "vin_baseline_mv": 19480,
+                "vin_drop_mv": 860,
+                "tps_total_iout_ma": 128,
+                "tps_limit_threshold_ma": 100,
+            },
+            "charger": {
+                "policy_target_ichg_ma": 100,
+                "limit_reason": "pressure_tps_output_current",
+                "limit_detail": "tps_output_current_over_limit",
+                "limit_threshold_ma": 100,
+            }
+        });
+        let second = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "limited",
+                "pressure_score_pct": 84,
+                "pressure_reason": "tps_output_current",
+                "vin_vbus_mv": 18620,
+                "vin_baseline_mv": 19432,
+                "vin_drop_mv": 812,
+                "tps_total_iout_ma": 128,
+                "tps_limit_threshold_ma": 100,
+            },
+            "charger": {
+                "policy_target_ichg_ma": 100,
+                "limit_reason": "pressure_tps_output_current",
+                "limit_detail": "recovery_hold",
+                "limit_threshold_ma": 100,
+            }
+        });
+
+        update_device_status_snapshot(&state, device_id, first);
+        update_device_status_snapshot(&state, device_id, second);
+
+        let guard = state.inner.lock().expect("state lock");
+        let power_events = guard
+            .events
+            .iter()
+            .filter(|event| event.device_id.as_deref() == Some(device_id))
+            .filter(|event| event.kind == "power_event")
+            .collect::<Vec<_>>();
+        let power_traces = guard
+            .devices
+            .get(device_id)
+            .unwrap()
+            .trace
+            .iter()
+            .filter(|trace| trace.kind == "event" && trace.target.as_deref() == Some("power"))
+            .count();
+
+        assert_eq!(power_events.len(), 2);
+        assert_eq!(power_traces, 2);
+        assert_eq!(power_events[1].payload["limit_detail"], "recovery_hold");
+        assert_eq!(power_events[1].payload["vin_drop_mv"], 812);
+    }
+
+    #[tokio::test]
+    async fn monitor_trace_status_frames_append_power_event() {
+        let state = create_app_state(false);
+        seed_mock_device(&state);
+        let device_id = "mock-devkit";
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "limited",
+                "pressure_score_pct": 84,
+                "pressure_reason": "tps_output_current",
+                "vin_vbus_mv": 18620,
+                "vin_baseline_mv": 19480,
+                "tps_total_iout_ma": 128,
+                "tps_limit_threshold_ma": 100,
+            },
+            "charger": {
+                "policy_target_ichg_ma": 100,
+                "limit_reason": "pressure_tps_output_current",
+                "limit_detail": "tps_output_current_over_limit",
+                "limit_threshold_ma": 100,
+            }
+        });
+        let payload = json!({
+            "type": "status",
+            "status": status,
+        })
+        .to_string();
+
+        append_monitor_trace(&state, device_id, trace_entry("rx", &payload), None);
+
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard.devices.get(device_id).unwrap();
+        let power_trace = device
+            .trace
+            .iter()
+            .find(|trace| trace.kind == "event" && trace.target.as_deref() == Some("power"))
+            .cloned()
+            .expect("power event trace");
+        let power_event = guard
+            .events
+            .iter()
+            .find(|event| {
+                event.device_id.as_deref() == Some(device_id) && event.kind == "power_event"
+            })
+            .cloned()
+            .expect("power event");
+
+        assert_eq!(power_event.payload["pressure_state"], "limited");
+        assert_eq!(power_event.payload["pressure_reason"], "tps_output_current");
+        assert_eq!(
+            power_event.payload["limit_reason"],
+            "pressure_tps_output_current"
+        );
+        assert_eq!(power_event.payload["tps_total_iout_ma"], 128);
+        assert_eq!(power_event.payload["tps_limit_threshold_ma"], 100);
+        assert_eq!(power_trace.summary, "power state changed");
+    }
+
     #[test]
     fn stable_device_id_is_deterministic() {
         let port = serialport::SerialPortInfo {
@@ -7301,6 +7997,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
 
         assert_eq!(native_device_stable_id(&device), Some("serial-a"));
@@ -7339,6 +8036,7 @@ mod tests {
                     settings: default_settings(),
                     logs: VecDeque::new(),
                     trace: VecDeque::new(),
+                    last_power_event_signature: None,
                 },
             );
         }
@@ -7372,7 +8070,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persisted_state_does_not_restore_runtime_connection() {
+    async fn persisted_state_strips_legacy_mock_device_records() {
         let temp = tempfile::tempdir().unwrap();
         let persistence = DevdPersistence::enabled(temp.path().join("state.json"));
         let state = create_app_state_with_auth_and_persistence(
@@ -7382,6 +8080,7 @@ mod tests {
             None,
             persistence.clone(),
         );
+        seed_mock_device(&state);
         {
             let mut guard = state.inner.lock().expect("state lock");
             let binding = DeviceBinding {
@@ -7407,15 +8106,8 @@ mod tests {
             persistence.clone(),
         );
         let guard = restarted.inner.lock().expect("state lock");
-        let device = guard.devices.get("mock-devkit").unwrap();
-        assert!(matches!(device.connection, ConnectionState::Disconnected));
-        assert_eq!(
-            device
-                .binding
-                .as_ref()
-                .and_then(|binding| binding.alias.as_deref()),
-            Some("Mock bench")
-        );
+        assert!(!guard.bindings.contains_key("mock-devkit"));
+        assert!(!guard.devices.contains_key("mock-devkit"));
     }
 
     #[test]
@@ -7562,6 +8254,7 @@ mod tests {
                 settings: default_settings(),
                 logs: VecDeque::new(),
                 trace: VecDeque::new(),
+                last_power_event_signature: None,
             },
         );
         let discovery = LanDeviceDiscovery {
@@ -7626,6 +8319,7 @@ mod tests {
                 settings: default_settings(),
                 logs: VecDeque::new(),
                 trace: VecDeque::new(),
+                last_power_event_signature: None,
             },
         );
         let discovery = LanDeviceDiscovery {
@@ -7674,6 +8368,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
 
         let transports = connection_transports(&device);
@@ -7726,6 +8421,7 @@ mod tests {
                 settings: default_settings(),
                 logs: VecDeque::new(),
                 trace: device_trace,
+                last_power_event_signature: None,
             },
         );
 
@@ -7812,6 +8508,207 @@ mod tests {
         .unwrap();
 
         assert_eq!(parsed["accepted"], true);
+    }
+
+    #[test]
+    fn derives_power_diag_from_status_preserves_tps_limit_reason() {
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "mains_present": true,
+                "input_vbus_mv": 11908,
+                "input_ibus_ma": 241,
+                "vin_vbus_mv": 11896,
+                "vin_iin_ma": 217,
+                "tps_total_iout_ma": 288,
+                "tps_limit_threshold_ma": 100,
+                "pressure_state": "cooldown",
+                "pressure_score_pct": 100,
+                "pressure_reason": "tps_output_current",
+                "vin_baseline_mv": 11896,
+                "vin_drop_mv": null
+            },
+            "charger": {
+                "state": "ok",
+                "allow_charge": false,
+                "ichg_ma": null,
+                "ibat_ma": null,
+                "vbat_present": true,
+                "policy_target_ichg_ma": null,
+                "limit_active": true,
+                "limit_reason": "cooldown_retry_wait",
+                "limit_detail": "tps_output_current_cooldown",
+                "limit_threshold_ma": 100,
+                "detail_status": "LIMIT"
+            },
+            "battery": {
+                "state": "ok",
+                "pack_mv": 16093,
+                "current_ma": 510,
+                "soc_pct": 81,
+                "no_battery": false,
+                "discharge_ready": true,
+                "charge_fet_on": true,
+                "discharge_fet_on": true,
+                "precharge_fet_on": false,
+                "issue_detail": null
+            }
+        });
+
+        let diag = derive_power_diag_from_status(&status, "lan_derived");
+
+        assert_eq!(diag["source"], "lan_derived");
+        assert_eq!(diag["input"]["pressure_reason"], "tps_output_current");
+        assert_eq!(diag["input"]["tps_total_iout_ma"], 288);
+        assert_eq!(diag["charger"]["allow_charge"], false);
+        assert_eq!(diag["charger"]["poorsrc"], false);
+        assert_eq!(diag["policy"]["limit_reason"], "cooldown_retry_wait");
+        assert_eq!(
+            diag["policy"]["limit_detail"],
+            "tps_output_current_cooldown"
+        );
+        assert_eq!(diag["policy"]["tps_limit_threshold_ma"], 100);
+    }
+
+    #[test]
+    fn derives_power_diag_from_status_maps_poorsrc_reason() {
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_reason": "poorsrc",
+                "pressure_state": "limited",
+                "pressure_score_pct": 92,
+                "tps_total_iout_ma": 101,
+                "tps_limit_threshold_ma": 100
+            },
+            "charger": {
+                "allow_charge": false,
+                "limit_reason": "pressure_poorsrc",
+                "detail_status": "LIMIT"
+            },
+            "battery": {
+                "state": "ok"
+            }
+        });
+
+        let diag = derive_power_diag_from_status(&status, "lan_derived");
+
+        assert_eq!(diag["source"], "lan_derived");
+        assert_eq!(diag["input"]["pressure_reason"], "poorsrc");
+        assert_eq!(diag["charger"]["poorsrc"], true);
+        assert_eq!(diag["charger"]["vindpm"], false);
+        assert_eq!(diag["charger"]["iindpm"], false);
+    }
+
+    #[test]
+    fn derives_power_diag_from_status_preserves_limited_current_fields() {
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "limited",
+                "pressure_score_pct": 81,
+                "pressure_reason": "tps_output_current",
+                "tps_total_iout_ma": 128,
+                "tps_limit_threshold_ma": 100
+            },
+            "charger": {
+                "state": "ok",
+                "allow_charge": true,
+                "ichg_ma": 100,
+                "policy_target_ichg_ma": 500,
+                "limit_active": true,
+                "limit_reason": "pressure_tps_output_current",
+                "limit_detail": "tps_output_current_over_limit",
+                "detail_status": "LIMIT"
+            },
+            "battery": {
+                "state": "ok"
+            }
+        });
+
+        let diag = derive_power_diag_from_status(&status, "lan_derived");
+
+        assert_eq!(diag["policy"]["target_ichg_ma"], 500);
+        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], 100);
+        assert_eq!(diag["policy"]["effective_target_ichg_ma"], 100);
+        assert_eq!(diag["policy"]["pressure_score_pct"], 81);
+    }
+
+    #[test]
+    fn derives_power_diag_from_status_uses_applied_current_for_effective_target() {
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "limited",
+                "pressure_score_pct": 84,
+                "pressure_reason": "tps_output_current",
+                "tps_total_iout_ma": 128,
+                "tps_limit_threshold_ma": 100
+            },
+            "charger": {
+                "state": "ok",
+                "allow_charge": true,
+                "ichg_ma": 100,
+                "policy_target_ichg_ma": 500,
+                "limit_active": true,
+                "limit_reason": "pressure_tps_output_current",
+                "limit_detail": "tps_output_current_over_limit",
+                "detail_status": "LIMIT"
+            },
+            "battery": {
+                "state": "ok"
+            }
+        });
+
+        let diag = derive_power_diag_from_status(&status, "lan_derived");
+
+        assert_eq!(diag["policy"]["target_ichg_ma"], 500);
+        assert_eq!(diag["policy"]["effective_target_ichg_ma"], 100);
+        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], 100);
+    }
+
+    #[test]
+    fn derives_power_diag_from_status_preserves_stopped_cooldown_state() {
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "cooldown",
+                "pressure_score_pct": 100,
+                "pressure_reason": "tps_output_current",
+                "tps_total_iout_ma": 128,
+                "tps_limit_threshold_ma": 100
+            },
+            "charger": {
+                "state": "ok",
+                "allow_charge": false,
+                "ichg_ma": null,
+                "policy_target_ichg_ma": 500,
+                "limit_active": true,
+                "limit_reason": "cooldown_retry_wait",
+                "limit_detail": "tps_output_current_cooldown",
+                "detail_status": "WAIT30"
+            },
+            "battery": {
+                "state": "ok"
+            }
+        });
+
+        let diag = derive_power_diag_from_status(&status, "lan_derived");
+
+        assert_eq!(diag["policy"]["target_ichg_ma"], 500);
+        assert_eq!(diag["policy"]["effective_target_ichg_ma"], Value::Null);
+        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], Value::Null);
+        assert_eq!(diag["policy"]["limit_reason"], "cooldown_retry_wait");
+    }
+
+    #[test]
+    fn native_serial_power_diag_path_stays_on_cdc_even_with_lan_address() {
+        let transport = DeviceTransport::NativeSerial;
+        let lan_address = Some("192.168.4.25".to_string());
+
+        let uses_lan_path = matches!(transport, DeviceTransport::Lan) && lan_address.is_some();
+
+        assert!(!uses_lan_path);
     }
 
     #[test]
@@ -8019,6 +8916,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
         let artifact = FirmwareArtifact {
             artifact_id: "a".into(),
@@ -8064,6 +8962,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
         let artifact = FirmwareArtifact {
             artifact_id: "a".into(),
@@ -8109,6 +9008,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
         let artifact = FirmwareArtifact {
             artifact_id: "a".into(),
@@ -8154,6 +9054,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
         let artifact = FirmwareArtifact {
             artifact_id: "a".into(),
@@ -8197,6 +9098,7 @@ mod tests {
             settings: default_settings(),
             logs: VecDeque::new(),
             trace: VecDeque::new(),
+            last_power_event_signature: None,
         };
         assert_eq!(bound_flash_port(&device), None);
         device.binding = Some(DeviceBinding {

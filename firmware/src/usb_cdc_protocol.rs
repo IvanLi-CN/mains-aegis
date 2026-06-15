@@ -8,6 +8,10 @@ pub const PROTOCOL_NAME: &str = "mains-aegis.cdc.v1";
 pub const WIFI_CONFIG_RECORD_LEN: usize = 128;
 pub const WIFI_SSID_MAX_LEN: usize = 32;
 pub const WIFI_PSK_MAX_LEN: usize = 63;
+pub const WEB_SERIAL_RESPONSE_BODY_CAP: usize = 4096;
+pub const WEB_SERIAL_RESPONSE_FRAME_CAP: usize = 4608;
+pub const WEB_SERIAL_POWER_DIAG_BODY_CAP: usize = 6144;
+pub const WEB_SERIAL_POWER_DIAG_FRAME_CAP: usize = 6656;
 
 const WIFI_CONFIG_MAGIC: [u8; 4] = *b"MAWF";
 const WIFI_CONFIG_VERSION: u8 = 1;
@@ -695,6 +699,11 @@ const fn storage_crc8(bytes: &[u8]) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net_contract::render_power_diag_json;
+    use crate::net_types::{
+        PowerDiagBmsSnapshot, PowerDiagChargerSnapshot, PowerDiagInputSnapshot,
+        PowerDiagPolicySnapshot, PowerDiagSnapshot,
+    };
 
     #[test]
     fn log_level_filter_allows_equal_and_more_severe_entries() {
@@ -784,6 +793,173 @@ mod tests {
                 op: UsbCdcRequest::GetPowerDiag,
             }
         );
+    }
+
+    #[test]
+    fn power_diag_response_supports_expanded_payload() {
+        let diag = PowerDiagSnapshot {
+            input: PowerDiagInputSnapshot {
+                source: "dcin",
+                mains_present: Some(true),
+                input_vbus_mv: Some(12_340),
+                input_ibus_ma: Some(1_234),
+                vin_vbus_mv: Some(12_180),
+                vin_iin_ma: Some(980),
+                tps_total_iout_ma: Some(128),
+                tps_limit_threshold_ma: Some(100),
+                pressure_state: "limited",
+                pressure_score_pct: Some(92),
+                pressure_reason: Some("tps_output_current"),
+                vin_baseline_mv: Some(12_300),
+                vin_drop_mv: Some(120),
+                usb_pd_attached: false,
+                usb_pd_charge_ready: false,
+                usb_pd_vbus_present: Some(true),
+                usb_pd_unsafe_source_latched: false,
+                usb_pd_contract_kind: Some("fixed"),
+                usb_pd_contract_mv: Some(12_000),
+                usb_pd_contract_ma: Some(1_000),
+                usb_pd_vac1_mv: Some(12_340),
+                usb_pd_vsys_mv: Some(12_210),
+            },
+            charger: PowerDiagChargerSnapshot {
+                poll_valid: true,
+                enabled: true,
+                ce_low: false,
+                ilim_hiz_brk_low: false,
+                allow_charge: true,
+                normal_allow_charge: true,
+                force_allow_charge: false,
+                can_enable: true,
+                usb_pd_charge_gate_ready: true,
+                input_present: true,
+                vbus_present: true,
+                ac1_present: true,
+                ac2_present: false,
+                pg: true,
+                vbat_present: true,
+                adc_enabled: true,
+                adc_done: true,
+                adc_ready: true,
+                ibus_adc_ma: Some(980),
+                ibat_adc_ma: Some(120),
+                vbus_adc_mv: Some(12_180),
+                vbat_adc_mv: Some(12_010),
+                vsys_adc_mv: Some(12_040),
+                vac1_adc_mv: Some(12_340),
+                vac2_adc_mv: None,
+                vreg_mv: Some(12_600),
+                ichg_ma: Some(100),
+                vindpm_mv: Some(11_700),
+                iindpm_ma: Some(1_000),
+                vbat_lowv_pct_x10: Some(320),
+                iprechg_ma: Some(100),
+                iterm_ma: Some(150),
+                chg_stat: "charge",
+                vbus_stat: "pg",
+                ico_stat: "ok",
+                treg: false,
+                dpdm: false,
+                wd: false,
+                poorsrc: false,
+                vindpm: false,
+                iindpm: false,
+                ts_cold: false,
+                ts_hot: false,
+                st0: Some(0),
+                st1: Some(1),
+                st2: Some(2),
+                st3: Some(3),
+                st4: Some(4),
+                fault0: Some(0),
+                fault1: Some(0),
+                ctrl0: Some(0),
+                term_ctrl: Some(0x1234),
+            },
+            policy: PowerDiagPolicySnapshot {
+                state: Some("charging"),
+                status: "charging",
+                notice: "active",
+                input_source: "dcin",
+                start_reason: Some("manual_charge"),
+                full_reason: Some("battery_full"),
+                output_block_reason: Some("none"),
+                recovery_stage: Some("hold"),
+                target_ichg_ma: Some(500),
+                adaptive_cap_ichg_ma: Some(100),
+                effective_target_ichg_ma: Some(100),
+                limit_active: true,
+                limit_reason: Some("pressure_tps_output_current"),
+                limit_detail: Some("tps_output_current_over_limit"),
+                detail_status: Some("COOLDOWN"),
+                pressure_state: "limited",
+                pressure_reason: Some("tps_output_current"),
+                pressure_score_pct: Some(92),
+                vin_baseline_mv: Some(12_300),
+                vin_drop_mv: Some(120),
+                tps_total_iout_ma: Some(128),
+                tps_limit_threshold_ma: Some(100),
+                output_power_w10: Some(1_560),
+                charge_latched: false,
+                full_latched: false,
+                dc_derated: true,
+                output_blocked: false,
+                manual_active: true,
+                manual_stop_inhibit: false,
+            },
+            bms: PowerDiagBmsSnapshot {
+                addr: Some(11),
+                state: "ready",
+                pack_mv: Some(12_000),
+                current_ma: Some(-120),
+                soc_pct: Some(87),
+                cell_min_mv: Some(3_980),
+                cell_max_mv: Some(4_005),
+                no_battery: Some(false),
+                discharge_ready: Some(true),
+                charge_ready: Some(true),
+                full: Some(false),
+                issue_detail: Some("none"),
+                rca_alarm: Some(false),
+                safety_status: Some(0),
+                pf_status: Some(0),
+                manufacturing_status: Some(0),
+                gauging_status: Some(0),
+                op_status: Some(0),
+                xchg: Some(true),
+                chg_fet: Some(true),
+                dsg_fet: Some(true),
+                pchg_fet: Some(false),
+                cuv: Some(false),
+                cuvc: Some(false),
+                cuv_recovery_mv: Some(3_000),
+                cuv_recov_chg: Some(true),
+                fet_en: Some(true),
+                chg_en: Some(true),
+                dsg_en: Some(true),
+                charging_inhibit: Some(false),
+                charging_suspend: Some(false),
+                charging_hv: Some(false),
+                current_at_eoc_ma: Some(150),
+            },
+        };
+
+        let mut body = String::<WEB_SERIAL_POWER_DIAG_BODY_CAP>::new();
+        render_power_diag_json(&mut body, diag);
+        assert!(body
+            .as_str()
+            .contains("\"pressure_reason\":\"tps_output_current\""));
+        assert!(body.as_str().contains("\"tps_total_iout_ma\":128"));
+        assert!(body.len() < WEB_SERIAL_POWER_DIAG_BODY_CAP);
+
+        let mut frame = String::<WEB_SERIAL_POWER_DIAG_FRAME_CAP>::new();
+        render_response_json(&mut frame, "req-diag", body.as_str());
+        assert!(frame.as_str().contains("\"type\":\"response\""));
+        assert!(frame.as_str().contains("\"request_id\":\"req-diag\""));
+        assert!(frame
+            .as_str()
+            .contains("\"pressure_reason\":\"tps_output_current\""));
+        assert!(frame.len() < WEB_SERIAL_POWER_DIAG_FRAME_CAP);
     }
 
     #[test]

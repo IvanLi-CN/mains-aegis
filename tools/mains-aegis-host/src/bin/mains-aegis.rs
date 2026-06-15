@@ -2,6 +2,7 @@ use clap::{Args, Parser, Subcommand};
 use mains_aegis_host::{default_ipc_endpoint, ipc_call, release_version};
 use serde_json::{json, Value};
 use std::io::{self, IsTerminal, Write};
+use tokio::time::{sleep, Duration};
 
 #[derive(Debug, Parser)]
 #[command(name = "mains-aegis")]
@@ -108,6 +109,10 @@ struct TraceArgs {
     trace_limit: Option<usize>,
     #[arg(long)]
     lease_id: Option<String>,
+    #[arg(long)]
+    follow: bool,
+    #[arg(long)]
+    kind: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -240,30 +245,124 @@ enum WifiCommand {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let endpoint = cli.ipc.unwrap_or_else(default_ipc_endpoint);
-    let interactive_bind = match &cli.command {
+    match cli.command {
         Command::Device {
             device_id,
-            command: DeviceCommand::Bind { alias },
-        } => Some((device_id.clone(), alias.clone())),
-        _ => None,
-    };
-    let (method, params) = command_to_ipc(cli.command);
-    let mut result = ipc_call(&endpoint, method, params).await?;
-    if let Some((device_id, _alias)) = interactive_bind {
-        if io::stdin().is_terminal()
-            && io::stdout().is_terminal()
-            && maybe_confirm_companion_lan(&endpoint, &device_id, &result).await?
-        {
-            result = ipc_call(
-                &endpoint,
-                "device.connection",
-                json!({ "device_id": device_id }),
-            )
-            .await?;
+            command: DeviceCommand::Trace(args),
+        } if args.follow => {
+            follow_device_trace(&endpoint, &device_id, args).await?;
+        }
+        command => {
+            let interactive_bind = match &command {
+                Command::Device {
+                    device_id,
+                    command: DeviceCommand::Bind { alias },
+                } => Some((device_id.clone(), alias.clone())),
+                _ => None,
+            };
+            let (method, params) = command_to_ipc(command);
+            let mut result = ipc_call(&endpoint, method, params).await?;
+            if let Some((device_id, _alias)) = interactive_bind {
+                if io::stdin().is_terminal()
+                    && io::stdout().is_terminal()
+                    && maybe_confirm_companion_lan(&endpoint, &device_id, &result).await?
+                {
+                    result = ipc_call(
+                        &endpoint,
+                        "device.connection",
+                        json!({ "device_id": device_id }),
+                    )
+                    .await?;
+                }
+            }
+            println!("{}", serde_json::to_string_pretty(&result)?);
         }
     }
-    println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
+}
+
+async fn follow_device_trace(
+    endpoint: &str,
+    device_id: &str,
+    args: TraceArgs,
+) -> anyhow::Result<()> {
+    let initial = ipc_call(
+        endpoint,
+        "device.trace",
+        json!({
+            "device_id": device_id,
+            "logs_limit": args.logs_limit,
+            "trace_limit": args.trace_limit,
+            "lease_id": args.lease_id,
+        }),
+    )
+    .await?;
+    let mut seen_ids = initial
+        .get("trace")
+        .and_then(Value::as_array)
+        .map(|trace| seed_seen_ids(trace))
+        .unwrap_or_default();
+    loop {
+        let result = ipc_call(
+            endpoint,
+            "device.trace",
+            json!({
+                "device_id": device_id,
+                "logs_limit": args.logs_limit,
+                "trace_limit": args.trace_limit,
+                "lease_id": args.lease_id,
+            }),
+        )
+        .await?;
+        if let Some(trace) = result.get("trace").and_then(Value::as_array) {
+            for entry in collect_new_matching_entries(trace, &mut seen_ids, args.kind.as_deref()) {
+                println!("{}", serde_json::to_string(&entry)?);
+            }
+        }
+        sleep(Duration::from_millis(1000)).await;
+    }
+}
+
+fn seed_seen_ids(trace: &[Value]) -> std::collections::BTreeSet<String> {
+    trace
+        .iter()
+        .filter_map(|entry| entry.get("id").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn collect_new_matching_entries(
+    trace: &[Value],
+    seen_ids: &mut std::collections::BTreeSet<String>,
+    kind: Option<&str>,
+) -> Vec<Value> {
+    trace
+        .iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(Value::as_str)?;
+            if !seen_ids.insert(id.to_string()) {
+                return None;
+            }
+            if !trace_entry_matches_kind(entry, kind) {
+                return None;
+            }
+            Some(entry.clone())
+        })
+        .collect()
+}
+
+fn trace_entry_matches_kind(entry: &Value, kind: Option<&str>) -> bool {
+    match kind {
+        None => true,
+        Some("event") => {
+            entry.get("kind").and_then(Value::as_str) == Some("event")
+                && entry.get("target").and_then(Value::as_str) == Some("power")
+        }
+        Some(expected_kind) => entry
+            .get("kind")
+            .and_then(Value::as_str)
+            .is_some_and(|actual| actual == expected_kind),
+    }
 }
 
 fn command_to_ipc(command: Command) -> (&'static str, Value) {
@@ -418,6 +517,70 @@ async fn maybe_confirm_companion_lan(
     let serialized = serde_json::to_string_pretty(&result)?;
     eprintln!("{serialized}");
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{collect_new_matching_entries, seed_seen_ids, trace_entry_matches_kind};
+    use serde_json::json;
+
+    #[test]
+    fn event_kind_only_matches_power_target() {
+        let power_event = json!({
+            "kind": "event",
+            "target": "power",
+        });
+        let other_event = json!({
+            "kind": "event",
+            "target": "host_power",
+        });
+        let info_log = json!({
+            "kind": "log",
+            "target": "power",
+        });
+
+        assert!(trace_entry_matches_kind(&power_event, Some("event")));
+        assert!(!trace_entry_matches_kind(&other_event, Some("event")));
+        assert!(!trace_entry_matches_kind(&info_log, Some("event")));
+        assert!(trace_entry_matches_kind(&info_log, Some("log")));
+        assert!(trace_entry_matches_kind(&power_event, None));
+    }
+
+    #[test]
+    fn seed_seen_ids_marks_existing_tail_as_seen() {
+        let trace = vec![
+            json!({"id": "old-1", "kind": "event", "target": "power"}),
+            json!({"id": "old-2", "kind": "log", "target": "power"}),
+        ];
+
+        let seen = seed_seen_ids(&trace);
+
+        assert!(seen.contains("old-1"));
+        assert!(seen.contains("old-2"));
+    }
+
+    #[test]
+    fn collect_new_matching_entries_ignores_old_tail_and_filters_by_kind() {
+        let initial = vec![
+            json!({"id": "old-1", "kind": "event", "target": "power"}),
+            json!({"id": "old-2", "kind": "log", "target": "power"}),
+        ];
+        let next = vec![
+            json!({"id": "old-1", "kind": "event", "target": "power"}),
+            json!({"id": "new-1", "kind": "event", "target": "power"}),
+            json!({"id": "new-2", "kind": "event", "target": "host_power"}),
+            json!({"id": "new-3", "kind": "log", "target": "power"}),
+        ];
+
+        let mut seen = seed_seen_ids(&initial);
+        let new_entries = collect_new_matching_entries(&next, &mut seen, Some("event"));
+
+        assert_eq!(new_entries.len(), 1);
+        assert_eq!(new_entries[0]["id"], "new-1");
+        assert!(seen.contains("new-1"));
+        assert!(seen.contains("new-2"));
+        assert!(seen.contains("new-3"));
+    }
 }
 
 fn host_power_to_ipc(command: HostPowerCommand) -> (&'static str, Value) {

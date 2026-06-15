@@ -17,12 +17,33 @@ type MockDefinition = {
   connectionState: DeviceRecord["connectionState"];
 };
 
-export type DemoSeed = "default" | "dual" | "empty" | "offline" | "large" | "usb";
+export type DemoSeed =
+  | "default"
+  | "dual"
+  | "empty"
+  | "offline"
+  | "large"
+  | "usb"
+  | "power-headroom"
+  | "power-watch"
+  | "power-limited"
+  | "power-cooldown";
 export type StoredTargetPreset =
   | "lan-companion-confirmed"
   | "lan-companion-bind-target";
 
-const demoSeedIds: DemoSeed[] = ["default", "dual", "empty", "offline", "large", "usb"];
+const demoSeedIds: DemoSeed[] = [
+  "default",
+  "dual",
+  "empty",
+  "offline",
+  "large",
+  "usb",
+  "power-headroom",
+  "power-watch",
+  "power-limited",
+  "power-cooldown",
+];
 const now = "2026-04-28T00:00:00.000Z";
 
 function identity(deviceId: string, shortId: string, state: NetworkSummary["state"], ipv4: string | null): Identity {
@@ -73,11 +94,19 @@ function status(
   return {
     mode,
     input: {
+      source: "dcin",
       mains_present: mode !== "backup",
       input_vbus_mv: mode === "backup" ? 0 : 19240,
       input_ibus_ma: mode === "backup" ? 0 : 1180,
       vin_vbus_mv: mode === "backup" ? 0 : 19240,
       vin_iin_ma: mode === "backup" ? 0 : 1180,
+      tps_total_iout_ma: mode === "backup" ? 0 : 42,
+      tps_limit_threshold_ma: 100,
+      pressure_state: "headroom",
+      pressure_score_pct: 8,
+      pressure_reason: "none",
+      vin_baseline_mv: mode === "backup" ? 0 : 19400,
+      vin_drop_mv: mode === "backup" ? 0 : 120,
     },
     output: {
       requested: "both",
@@ -103,6 +132,12 @@ function status(
       ichg_ma: mode === "backup" ? 0 : 520,
       ibat_ma: mode === "backup" ? -260 : 510,
       vbat_present: true,
+      policy_target_ichg_ma: mode === "backup" ? 0 : 500,
+      limit_active: false,
+      limit_reason: "none",
+      limit_detail: "none",
+      limit_threshold_ma: 100,
+      detail_status: mode === "backup" ? "WAIT" : "CHG500",
     },
     battery: {
       state: soc !== null && soc < 25 ? "warning" : "ok",
@@ -139,6 +174,57 @@ function status(
     },
     ...overrides,
   };
+}
+
+function powerStatusVariant(
+  pressureState: NonNullable<UpsStatus["input"]["pressure_state"]>,
+  pressureScorePct: number,
+  pressureReason: NonNullable<UpsStatus["input"]["pressure_reason"]>,
+  detailStatus: NonNullable<UpsStatus["charger"]["detail_status"]>,
+  limitReason: NonNullable<UpsStatus["charger"]["limit_reason"]>,
+  policyTargetIchgMa: number,
+  chargerIchgMa: number,
+  vinVbusMv: number,
+  vinBaselineMv: number,
+  tpsTotalIoutMa: number,
+): UpsStatus {
+  const vinDropMv = Math.max(0, vinBaselineMv - vinVbusMv);
+  const limitActive = limitReason !== "none";
+  return status("standby", 67, {
+    input: {
+      source: "dcin",
+      mains_present: true,
+      input_vbus_mv: vinVbusMv,
+      input_ibus_ma: pressureState === "limited" ? 3280 : pressureState === "cooldown" ? 3020 : 1260,
+      vin_vbus_mv: vinVbusMv,
+      vin_iin_ma: pressureState === "limited" ? 3280 : pressureState === "cooldown" ? 3020 : 1260,
+      tps_total_iout_ma: tpsTotalIoutMa,
+      tps_limit_threshold_ma: 100,
+      pressure_state: pressureState,
+      pressure_score_pct: pressureScorePct,
+      pressure_reason: pressureReason,
+      vin_baseline_mv: vinBaselineMv,
+      vin_drop_mv: vinDropMv,
+    },
+    charger: {
+      state: policyTargetIchgMa > 0 ? "ok" : "idle",
+      allow_charge: pressureState !== "cooldown",
+      ichg_ma: chargerIchgMa,
+      ibat_ma: policyTargetIchgMa > 0 ? chargerIchgMa : 0,
+      vbat_present: true,
+      policy_target_ichg_ma: policyTargetIchgMa,
+      limit_active: limitActive,
+      limit_reason: limitReason,
+      limit_detail:
+        limitReason === "pressure_tps_output_current"
+          ? "tps_output_current_over_limit"
+          : limitReason === "cooldown_retry_wait" && pressureReason === "tps_output_current"
+            ? "tps_output_current_cooldown"
+            : "none",
+      limit_threshold_ma: 100,
+      detail_status: detailStatus,
+    },
+  });
 }
 
 export const mockDefinitions: MockDefinition[] = [
@@ -215,6 +301,62 @@ export const mockDefinitions: MockDefinition[] = [
       network: { state: "error", ipv4: null, last_error: "link_lost" },
     }),
     connectionState: "offline",
+  },
+];
+
+const powerMockDefinitions: MockDefinition[] = [
+  {
+    ...mockDefinitions[0],
+    target: { ...mockDefinitions[0].target, baseUrl: "mock:power-headroom" },
+    status: powerStatusVariant("headroom", 8, "none", "CHG500", "none", 500, 500, 19_420, 19_480, 42),
+  },
+  {
+    ...mockDefinitions[0],
+    target: { ...mockDefinitions[0].target, baseUrl: "mock:power-watch" },
+    status: powerStatusVariant(
+      "watch",
+      36,
+      "vin_drop_watch",
+      "HOLD10",
+      "recovery_hold",
+      300,
+      300,
+      18_880,
+      19_480,
+      68,
+    ),
+  },
+  {
+    ...mockDefinitions[0],
+    target: { ...mockDefinitions[0].target, baseUrl: "mock:power-limited" },
+    status: powerStatusVariant(
+      "limited",
+      84,
+      "tps_output_current",
+      "WAIT",
+      "pressure_tps_output_current",
+      0,
+      0,
+      19_160,
+      19_480,
+      128,
+    ),
+  },
+  {
+    ...mockDefinitions[0],
+    target: { ...mockDefinitions[0].target, baseUrl: "mock:power-cooldown" },
+    status: powerStatusVariant(
+      "cooldown",
+      100,
+      "tps_output_current",
+      "WAIT30",
+      "cooldown_retry_wait",
+      0,
+      0,
+      18_480,
+      19_480,
+      116,
+    ),
   },
 ];
 
@@ -313,6 +455,38 @@ export function makeMockRecords(seed: DemoSeed = "default"): DeviceRecord[] {
     ];
   }
   if (seed === "large") return largeMockDefinitions.map((definition) => recordFromDefinition(definition));
+  if (seed === "power-headroom") {
+    return [
+      recordFromDefinition(powerMockDefinitions[0]),
+      ...mockDefinitions
+        .slice(1)
+        .map((definition) => recordFromDefinition(definition)),
+    ];
+  }
+  if (seed === "power-watch") {
+    return [
+      recordFromDefinition(powerMockDefinitions[1]),
+      ...mockDefinitions
+        .slice(1)
+        .map((definition) => recordFromDefinition(definition)),
+    ];
+  }
+  if (seed === "power-limited") {
+    return [
+      recordFromDefinition(powerMockDefinitions[2]),
+      ...mockDefinitions
+        .slice(1)
+        .map((definition) => recordFromDefinition(definition)),
+    ];
+  }
+  if (seed === "power-cooldown") {
+    return [
+      recordFromDefinition(powerMockDefinitions[3]),
+      ...mockDefinitions
+        .slice(1)
+        .map((definition) => recordFromDefinition(definition)),
+    ];
+  }
   if (seed === "offline") {
     return mockDefinitions.map((definition) => ({
       ...recordFromDefinition(definition),
@@ -722,6 +896,30 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
       summary: "raw CDC line",
       payload: "[DEBUG] heap_free=183224 loop_ms=4 serial_rx=ok",
     },
+    {
+      id: "mock-usb-trace-17",
+      timestamp: serialTimestamp(88),
+      direction: "info",
+      kind: "event",
+      frameType: null,
+      requestId: null,
+      target: "power",
+      summary: "power state changed",
+      payload: JSON.stringify({
+        event: "power_state_changed",
+        input_source: "dcin",
+        pressure_state: "limited",
+        pressure_reason: "tps_output_current",
+        pressure_score_pct: 84,
+        vin_vbus_mv: 19160,
+        vin_baseline_mv: 19480,
+        tps_total_iout_ma: 128,
+        tps_limit_threshold_ma: 100,
+        policy_target_ichg_ma: 0,
+        limit_reason: "pressure_tps_output_current",
+        limit_detail: "tps_output_current_over_limit",
+      }),
+    },
   ];
   serialTrace.push(
     ...Array.from({ length: 120 }, (_, index): SerialTraceEntry => {
@@ -976,7 +1174,7 @@ function defaultMockDeviceSettings(): DeviceSettings {
 }
 
 function findMock(baseUrl: string): MockDefinition {
-  const match = [...mockDefinitions, ...largeMockDefinitions].find((definition) => definition.target.baseUrl === baseUrl);
+  const match = [...mockDefinitions, ...powerMockDefinitions, ...largeMockDefinitions].find((definition) => definition.target.baseUrl === baseUrl);
   if (!match) throw new Error(`unknown mock device: ${baseUrl}`);
   return match;
 }
