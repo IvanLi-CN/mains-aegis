@@ -282,6 +282,27 @@ pub(super) fn usb_pd_measured_input_voltage_mv(
         .flatten()
 }
 
+pub(super) fn requested_tps_total_iout_ma(
+    requested_outputs: EnabledOutputs,
+    out_a_iout_ma: Option<i32>,
+    out_b_iout_ma: Option<i32>,
+) -> Option<i32> {
+    let out_a_iout_ma = requested_outputs
+        .is_enabled(OutputChannel::OutA)
+        .then_some(out_a_iout_ma)
+        .flatten();
+    let out_b_iout_ma = requested_outputs
+        .is_enabled(OutputChannel::OutB)
+        .then_some(out_b_iout_ma)
+        .flatten();
+    match (out_a_iout_ma, out_b_iout_ma) {
+        (None, None) => None,
+        (Some(a), Some(b)) => Some(a.saturating_add(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+    }
+}
+
 pub(super) fn usb_pd_vbus_present(
     pd_vbus_present: Option<bool>,
     usb_c_input_present: bool,
@@ -2526,6 +2547,34 @@ mod tests {
             None
         );
         assert_eq!(usb_pd_measured_input_voltage_mv(None, Some(24_000)), None);
+    }
+
+    #[test]
+    fn requested_tps_total_iout_ignores_unrequested_channels() {
+        assert_eq!(
+            requested_tps_total_iout_ma(EnabledOutputs::Both, Some(80), Some(60)),
+            Some(140)
+        );
+        assert_eq!(
+            requested_tps_total_iout_ma(
+                EnabledOutputs::Only(OutputChannel::OutA),
+                Some(80),
+                Some(60)
+            ),
+            Some(80)
+        );
+        assert_eq!(
+            requested_tps_total_iout_ma(
+                EnabledOutputs::Only(OutputChannel::OutB),
+                Some(80),
+                Some(60)
+            ),
+            Some(60)
+        );
+        assert_eq!(
+            requested_tps_total_iout_ma(EnabledOutputs::None, Some(80), Some(60)),
+            None
+        );
     }
 
     #[test]
