@@ -4924,12 +4924,6 @@ fn maybe_record_power_event(
         .get("pressure_score_pct")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let tps_limit_threshold_ma = input
-        .get("tps_limit_threshold_ma")
-        .and_then(Value::as_i64)
-        .or_else(|| charger.get("limit_threshold_ma").and_then(Value::as_i64));
-    let tps_total_iout_ma = input.get("tps_total_iout_ma").and_then(Value::as_i64);
-    let policy_target_ichg_ma = charger.get("policy_target_ichg_ma").and_then(Value::as_u64);
     let limit_reason = charger
         .get("limit_reason")
         .and_then(Value::as_str)
@@ -4938,14 +4932,6 @@ fn maybe_record_power_event(
         .get("source")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
-    let signature = format!(
-        "{input_source}:{pressure_state}:{pressure_reason}:{limit_reason}:{:?}:{:?}:{:?}",
-        policy_target_ichg_ma, tps_limit_threshold_ma, tps_total_iout_ma
-    );
-    if device.last_power_event_signature.as_deref() == Some(signature.as_str()) {
-        return None;
-    }
-    device.last_power_event_signature = Some(signature);
     let payload = json!({
         "event": "power_state_changed",
         "input_source": input_source,
@@ -4954,6 +4940,7 @@ fn maybe_record_power_event(
         "pressure_score_pct": pressure_score_pct,
         "vin_vbus_mv": input.get("vin_vbus_mv").cloned().unwrap_or(Value::Null),
         "vin_baseline_mv": input.get("vin_baseline_mv").cloned().unwrap_or(Value::Null),
+        "vin_drop_mv": input.get("vin_drop_mv").cloned().unwrap_or(Value::Null),
         "tps_total_iout_ma": input.get("tps_total_iout_ma").cloned().unwrap_or(Value::Null),
         "tps_limit_threshold_ma": input
             .get("tps_limit_threshold_ma")
@@ -4964,6 +4951,11 @@ fn maybe_record_power_event(
         "limit_reason": limit_reason,
         "limit_detail": charger.get("limit_detail").cloned().unwrap_or(Value::Null),
     });
+    let signature = payload.to_string();
+    if device.last_power_event_signature.as_deref() == Some(signature.as_str()) {
+        return None;
+    }
+    device.last_power_event_signature = Some(signature);
     let trace = structured_trace_entry(
         "info",
         "event",
@@ -7809,6 +7801,75 @@ mod tests {
 
         assert_eq!(power_events, 2);
         assert_eq!(power_traces, 2);
+    }
+
+    #[tokio::test]
+    async fn status_updates_emit_power_events_when_limit_detail_changes() {
+        let state = create_app_state(false);
+        seed_mock_device(&state);
+        let device_id = "mock-devkit";
+        let first = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "limited",
+                "pressure_score_pct": 84,
+                "pressure_reason": "tps_output_current",
+                "vin_vbus_mv": 18620,
+                "vin_baseline_mv": 19480,
+                "vin_drop_mv": 860,
+                "tps_total_iout_ma": 128,
+                "tps_limit_threshold_ma": 100,
+            },
+            "charger": {
+                "policy_target_ichg_ma": 100,
+                "limit_reason": "pressure_tps_output_current",
+                "limit_detail": "tps_output_current_over_limit",
+                "limit_threshold_ma": 100,
+            }
+        });
+        let second = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "limited",
+                "pressure_score_pct": 84,
+                "pressure_reason": "tps_output_current",
+                "vin_vbus_mv": 18620,
+                "vin_baseline_mv": 19432,
+                "vin_drop_mv": 812,
+                "tps_total_iout_ma": 128,
+                "tps_limit_threshold_ma": 100,
+            },
+            "charger": {
+                "policy_target_ichg_ma": 100,
+                "limit_reason": "pressure_tps_output_current",
+                "limit_detail": "recovery_hold",
+                "limit_threshold_ma": 100,
+            }
+        });
+
+        update_device_status_snapshot(&state, device_id, first);
+        update_device_status_snapshot(&state, device_id, second);
+
+        let guard = state.inner.lock().expect("state lock");
+        let power_events = guard
+            .events
+            .iter()
+            .filter(|event| event.device_id.as_deref() == Some(device_id))
+            .filter(|event| event.kind == "power_event")
+            .collect::<Vec<_>>();
+        let power_traces = guard
+            .devices
+            .get(device_id)
+            .unwrap()
+            .trace
+            .iter()
+            .filter(|trace| trace.kind == "event" && trace.target.as_deref() == Some("power"))
+            .count();
+
+        assert_eq!(power_events.len(), 2);
+        assert_eq!(power_traces, 2);
+        assert_eq!(power_events[1].payload["limit_detail"], "recovery_hold");
+        assert_eq!(power_events[1].payload["vin_drop_mv"], 812);
     }
 
     #[tokio::test]
