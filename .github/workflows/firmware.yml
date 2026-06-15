@@ -22,12 +22,12 @@ jobs:
     name: Firmware quality (ESP32-S3)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
       - name: Paths filter (skip if no firmware changes)
         id: changes
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           filters: |
             firmware:
@@ -92,7 +92,7 @@ jobs:
 
       - name: Upload firmware artifacts
         if: steps.changes.outputs.firmware == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mains-aegis-firmware-catalog
           path: |

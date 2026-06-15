@@ -51,7 +51,7 @@ jobs:
           else
             echo "checkout_ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ steps.release_ref.outputs.checkout_ref }}
       - name: Setup Bun
@@ -96,7 +96,7 @@ jobs:
           Copy-Item "tools/mains-aegis-host/packaging/install.ps1" "dist/$stage/"
           Compress-Archive -Path "dist/$stage" -DestinationPath "dist/$stage.zip"
           (Get-FileHash "dist/$stage.zip" -Algorithm SHA256).Hash.ToLower() + "  $stage.zip" | Set-Content "dist/$stage.zip.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: host-tools-${{ matrix.asset }}
           path: |
@@ -126,7 +126,7 @@ jobs:
           else
             echo "tag_exists=false" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

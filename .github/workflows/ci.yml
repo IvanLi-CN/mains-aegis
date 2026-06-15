@@ -18,7 +18,7 @@ jobs:
     name: Rust fmt check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
       - name: Install Rust (stable + rustfmt)
@@ -34,7 +34,7 @@ jobs:
     name: Host pure-logic tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
       - name: Install Rust stable
@@ -46,7 +46,7 @@ jobs:
     name: Host tools check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
       - name: Install Rust stable
