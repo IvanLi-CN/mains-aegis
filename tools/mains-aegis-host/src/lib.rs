@@ -4733,6 +4733,30 @@ fn derive_power_diag_from_status(status: &Value, source: &str) -> Value {
     let input = status.get("input").cloned().unwrap_or(Value::Null);
     let charger = status.get("charger").cloned().unwrap_or(Value::Null);
     let battery = status.get("battery").cloned().unwrap_or(Value::Null);
+    let limit_active = charger
+        .get("limit_active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let derived_target_ichg = charger
+        .get("policy_target_ichg_ma")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let derived_effective_target_ichg = charger
+        .get("ichg_ma")
+        .cloned()
+        .filter(|value| !value.is_null())
+        .or_else(|| {
+            charger
+                .get("policy_target_ichg_ma")
+                .cloned()
+                .filter(|value| !value.is_null())
+        })
+        .unwrap_or(Value::Null);
+    let derived_adaptive_cap_ichg = if limit_active {
+        derived_effective_target_ichg.clone()
+    } else {
+        Value::Null
+    };
     json!({
         "source": source,
         "input": {
@@ -4825,10 +4849,10 @@ fn derive_power_diag_from_status(status: &Value, source: &str) -> Value {
             "full_reason": Value::Null,
             "output_block_reason": Value::Null,
             "recovery_stage": Value::Null,
-            "target_ichg_ma": charger.get("policy_target_ichg_ma").cloned().unwrap_or(Value::Null),
-            "adaptive_cap_ichg_ma": charger.get("policy_target_ichg_ma").cloned().unwrap_or(Value::Null),
-            "effective_target_ichg_ma": charger.get("policy_target_ichg_ma").cloned().unwrap_or(Value::Null),
-            "limit_active": charger.get("limit_active").cloned().unwrap_or_else(|| json!(false)),
+            "target_ichg_ma": derived_target_ichg,
+            "adaptive_cap_ichg_ma": derived_adaptive_cap_ichg,
+            "effective_target_ichg_ma": derived_effective_target_ichg,
+            "limit_active": Value::Bool(limit_active),
             "limit_reason": charger.get("limit_reason").cloned().unwrap_or(Value::Null),
             "limit_detail": charger.get("limit_detail").cloned().unwrap_or(Value::Null),
             "detail_status": charger.get("detail_status").cloned().unwrap_or(Value::Null),
@@ -8500,6 +8524,40 @@ mod tests {
         assert_eq!(diag["charger"]["poorsrc"], true);
         assert_eq!(diag["charger"]["vindpm"], false);
         assert_eq!(diag["charger"]["iindpm"], false);
+    }
+
+    #[test]
+    fn derives_power_diag_from_status_preserves_limited_current_fields() {
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "limited",
+                "pressure_score_pct": 81,
+                "pressure_reason": "tps_output_current",
+                "tps_total_iout_ma": 128,
+                "tps_limit_threshold_ma": 100
+            },
+            "charger": {
+                "state": "ok",
+                "allow_charge": true,
+                "ichg_ma": 100,
+                "policy_target_ichg_ma": 500,
+                "limit_active": true,
+                "limit_reason": "pressure_tps_output_current",
+                "limit_detail": "tps_output_current_over_limit",
+                "detail_status": "LIMIT"
+            },
+            "battery": {
+                "state": "ok"
+            }
+        });
+
+        let diag = derive_power_diag_from_status(&status, "lan_derived");
+
+        assert_eq!(diag["policy"]["target_ichg_ma"], 500);
+        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], 100);
+        assert_eq!(diag["policy"]["effective_target_ichg_ma"], 100);
+        assert_eq!(diag["policy"]["pressure_score_pct"], 81);
     }
 
     #[test]
