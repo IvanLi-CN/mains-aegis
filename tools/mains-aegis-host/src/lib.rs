@@ -4742,15 +4742,9 @@ fn derive_power_diag_from_status(status: &Value, source: &str) -> Value {
         .cloned()
         .unwrap_or(Value::Null);
     let derived_effective_target_ichg = charger
-        .get("ichg_ma")
+        .get("policy_target_ichg_ma")
         .cloned()
         .filter(|value| !value.is_null())
-        .or_else(|| {
-            charger
-                .get("policy_target_ichg_ma")
-                .cloned()
-                .filter(|value| !value.is_null())
-        })
         .unwrap_or(Value::Null);
     let derived_adaptive_cap_ichg = if limit_active {
         derived_effective_target_ichg.clone()
@@ -8616,9 +8610,42 @@ mod tests {
         let diag = derive_power_diag_from_status(&status, "lan_derived");
 
         assert_eq!(diag["policy"]["target_ichg_ma"], 500);
-        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], 100);
-        assert_eq!(diag["policy"]["effective_target_ichg_ma"], 100);
+        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], 500);
+        assert_eq!(diag["policy"]["effective_target_ichg_ma"], 500);
         assert_eq!(diag["policy"]["pressure_score_pct"], 81);
+    }
+
+    #[test]
+    fn derives_power_diag_from_status_uses_policy_target_for_effective_target() {
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "pressure_state": "limited",
+                "pressure_score_pct": 84,
+                "pressure_reason": "tps_output_current",
+                "tps_total_iout_ma": 128,
+                "tps_limit_threshold_ma": 100
+            },
+            "charger": {
+                "state": "ok",
+                "allow_charge": true,
+                "ichg_ma": 100,
+                "policy_target_ichg_ma": 500,
+                "limit_active": true,
+                "limit_reason": "pressure_tps_output_current",
+                "limit_detail": "tps_output_current_over_limit",
+                "detail_status": "LIMIT"
+            },
+            "battery": {
+                "state": "ok"
+            }
+        });
+
+        let diag = derive_power_diag_from_status(&status, "lan_derived");
+
+        assert_eq!(diag["policy"]["target_ichg_ma"], 500);
+        assert_eq!(diag["policy"]["effective_target_ichg_ma"], 500);
+        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], 500);
     }
 
     #[test]
