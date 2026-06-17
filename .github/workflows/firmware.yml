@@ -36,6 +36,7 @@ jobs:
               - "tps55288"
               - "ina3221-async"
               - "tools/firmware-artifact/**"
+              - "web/public/firmware/**"
               - ".github/workflows/firmware.yml"
       - name: Skip (no firmware changes)
         if: steps.changes.outputs.firmware != 'true'
