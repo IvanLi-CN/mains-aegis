@@ -387,6 +387,28 @@ pub mod output {
         assert_eq!(runtime_charge_override(UpsMode::Off), None);
     }
 
+    #[test]
+    fn runtime_mode_tracker_resets_assist_streak_after_confirmed_input_loss() {
+        let mut tracker = RuntimeModeTracker::new(UpsMode::Standby);
+
+        assert_eq!(
+            tracker.update(Some(true), Some(120), true, Some(1)),
+            UpsMode::Standby
+        );
+        assert_eq!(
+            tracker.update(Some(false), None, false, None),
+            UpsMode::Backup
+        );
+        assert_eq!(
+            tracker.update(Some(true), Some(120), true, Some(2)),
+            UpsMode::Standby
+        );
+        assert_eq!(
+            tracker.update(Some(true), Some(120), true, Some(3)),
+            UpsMode::Supplement
+        );
+    }
+
     fn record_vin_sample_failure(vin_mains_present: &mut Option<bool>, missing_streak: &mut u8) {
         *missing_streak = missing_streak.saturating_add(1);
         if *missing_streak >= VIN_MAINS_LATCH_FAILURE_LIMIT {

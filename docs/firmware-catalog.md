@@ -64,6 +64,9 @@ flash payload is missing. CI validates the committed bundled fallback with
 `tools/firmware-artifact/validate-web-bundle.py`, which checks manifest/catalog
 consistency, staged file hashes/sizes, `SHA256SUMS`, and the required Web
 Serial image presence without rebuilding a new current-HEAD artifact identity.
+The firmware workflow then stages a separate generated bundle in a temporary
+directory and validates that output independently, so CI covers both the
+committed fallback tree and the PR's newly built artifact set.
 
 If a bundled artifact and a GitHub Release artifact share the same `artifact_id`,
 the Web App keeps the bundled copy and treats the release copy as a duplicate.
