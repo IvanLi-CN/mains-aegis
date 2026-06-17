@@ -21,6 +21,7 @@
 - 交付 4 个视觉变体（A/B/C/D）与 7 个交互状态帧（idle/up/down/left/right/center/touch）。
 - 默认固化 Variant B 作为 Dashboard 主界面；Variant C 收敛为“高级设置/自检页”风格。
 - 在 Dashboard 中明确 UPS 四工作模式（`BYPASS / STANDBY / ASSIST / BACKUP`）与充电策略约束。
+- Dashboard 模式切换的运行态语义引用 `docs/specs/xjpvj-runtime-mode-switching/SPEC.md`，本规格只保留视觉与文案冻结。
 - Variant C 自检页固定展示“全部可通信模块 + 通信状态 + 关键参数”。
 - 建立 `docs/specs` 主规格目录并与实现保持同步。
 
@@ -77,11 +78,9 @@
 - 周期轮询输入，状态变化时重绘界面并更新 focus/highlight。
 - 长按 `CENTER` 约 `800ms` 在两页间切换：`Variant B Dashboard <-> Variant C Self-check`。
 - 主机工具根据 `--variant`、`--mode` 与 `--focus` 调用同一 renderer，输出 raw framebuffer 与 PNG。
-- Dashboard 冻结语义（项目工作模式口径）：
-  - `BYPASS`（关闭）: 输入直通输出（bypass），不提供 UPS 功能。
-  - `STANDBY`（待机）: 输入存在，TPS 无实际输出电流。
-  - `ASSIST`（补充）: 输入存在，TPS 有实际输出电流。
-  - `BACKUP`（后备）: 输入不存在，输出由电池侧供能。
+- Dashboard 冻结语义（视觉层）：
+  - 模式标签固定显示 `BYPASS / STANDBY / ASSIST / BACKUP`。
+  - 自动运行态切换规则、`ASSIST/BACKUP` 的进入条件、以及与 charger `LOAD/NOAC` 的联动以 `docs/specs/xjpvj-runtime-mode-switching/SPEC.md` 为准。
   - 右侧三卡固定语义：`BATTERY`（SOC + 最高电池温度 + 电池状态）、`CHARGE`（仅电池充电电流与状态）、`DISCHG`（电池放电电流与状态）。
 
 ### Self-check 视觉冻结（Variant C）

@@ -166,7 +166,7 @@ pub mod output {
         #[default]
         Unknown,
         Vin,
-        ChargerFallback,
+        AggregateInputPresent,
     }
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -321,7 +321,7 @@ pub mod output {
         if let Some(present) = charger_present {
             return StableMainsState {
                 present: Some(present),
-                source: AudioMainsSource::ChargerFallback,
+                source: AudioMainsSource::AggregateInputPresent,
             };
         }
         StableMainsState::default()
@@ -340,6 +340,51 @@ pub mod output {
         charger_present: Option<bool>,
     ) -> bool {
         charger_present == Some(true) || mains_present == Some(true)
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct RuntimeChargeOverride {
+        allow_charge: bool,
+        policy_status_text: &'static str,
+        policy_notice_text: &'static str,
+    }
+
+    const fn runtime_charge_override(mode: UpsMode) -> Option<RuntimeChargeOverride> {
+        match mode {
+            UpsMode::Supplement => Some(RuntimeChargeOverride {
+                allow_charge: false,
+                policy_status_text: "LOAD",
+                policy_notice_text: "runtime_assist_no_charge",
+            }),
+            UpsMode::Backup => Some(RuntimeChargeOverride {
+                allow_charge: false,
+                policy_status_text: "NOAC",
+                policy_notice_text: "runtime_backup_no_charge",
+            }),
+            UpsMode::Standby | UpsMode::Off => None,
+        }
+    }
+
+    #[test]
+    fn runtime_charge_override_blocks_charging_in_assist_and_backup_only() {
+        assert_eq!(
+            runtime_charge_override(UpsMode::Supplement),
+            Some(RuntimeChargeOverride {
+                allow_charge: false,
+                policy_status_text: "LOAD",
+                policy_notice_text: "runtime_assist_no_charge",
+            })
+        );
+        assert_eq!(
+            runtime_charge_override(UpsMode::Backup),
+            Some(RuntimeChargeOverride {
+                allow_charge: false,
+                policy_status_text: "NOAC",
+                policy_notice_text: "runtime_backup_no_charge",
+            })
+        );
+        assert_eq!(runtime_charge_override(UpsMode::Standby), None);
+        assert_eq!(runtime_charge_override(UpsMode::Off), None);
     }
 
     fn record_vin_sample_failure(vin_mains_present: &mut Option<bool>, missing_streak: &mut u8) {
@@ -366,25 +411,85 @@ pub mod output {
         }
     }
 
-    fn ups_mode_from_mains(mains_present: Option<bool>, has_output: bool) -> UpsMode {
-        match mains_present {
-            Some(true) => {
-                if has_output {
-                    UpsMode::Supplement
-                } else {
-                    UpsMode::Standby
-                }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct RuntimeModeTracker {
+        mains_mode: UpsMode,
+        assist_enter_streak: u8,
+        standby_enter_streak: u8,
+        last_tps_total_iout_sample_seq: Option<u32>,
+    }
+
+    impl RuntimeModeTracker {
+        const ASSIST_ENTER_MA: i32 = 100;
+        const STANDBY_EXIT_MA: i32 = 50;
+        const REQUIRED_SAMPLES: u8 = 2;
+
+        const fn new(initial_mode: UpsMode) -> Self {
+            let mains_mode = match initial_mode {
+                UpsMode::Backup => UpsMode::Backup,
+                _ => UpsMode::Standby,
+            };
+            Self {
+                mains_mode,
+                assist_enter_streak: 0,
+                standby_enter_streak: 0,
+                last_tps_total_iout_sample_seq: None,
             }
-            Some(false) => {
-                let _ = has_output;
-                UpsMode::Backup
-            }
-            None => {
-                if has_output {
+        }
+
+        fn update(
+            &mut self,
+            mains_present: Option<bool>,
+            tps_total_iout_ma: Option<i32>,
+            tps_total_iout_fresh: bool,
+            tps_total_iout_sample_seq: Option<u32>,
+        ) -> UpsMode {
+            match mains_present {
+                Some(false) => {
+                    self.mains_mode = UpsMode::Backup;
+                    self.assist_enter_streak = 0;
+                    self.standby_enter_streak = 0;
+                    if tps_total_iout_fresh {
+                        self.last_tps_total_iout_sample_seq = tps_total_iout_sample_seq;
+                    }
                     UpsMode::Backup
-                } else {
-                    UpsMode::Standby
                 }
+                Some(true) => {
+                    let sample_is_new = tps_total_iout_fresh
+                        && tps_total_iout_sample_seq.is_some()
+                        && tps_total_iout_sample_seq != self.last_tps_total_iout_sample_seq;
+                    if sample_is_new {
+                        self.last_tps_total_iout_sample_seq = tps_total_iout_sample_seq;
+                        match tps_total_iout_ma {
+                            Some(total_iout_ma) if total_iout_ma >= Self::ASSIST_ENTER_MA => {
+                                self.assist_enter_streak =
+                                    self.assist_enter_streak.saturating_add(1);
+                                self.standby_enter_streak = 0;
+                                if self.assist_enter_streak >= Self::REQUIRED_SAMPLES {
+                                    self.mains_mode = UpsMode::Supplement;
+                                }
+                            }
+                            Some(total_iout_ma) if total_iout_ma <= Self::STANDBY_EXIT_MA => {
+                                self.standby_enter_streak =
+                                    self.standby_enter_streak.saturating_add(1);
+                                self.assist_enter_streak = 0;
+                                if self.standby_enter_streak >= Self::REQUIRED_SAMPLES {
+                                    self.mains_mode = UpsMode::Standby;
+                                }
+                            }
+                            Some(_) => {
+                                self.assist_enter_streak = 0;
+                                self.standby_enter_streak = 0;
+                            }
+                            None => {}
+                        }
+                    }
+                    if matches!(self.mains_mode, UpsMode::Backup) {
+                        self.mains_mode = UpsMode::Standby;
+                    }
+                    self.mains_mode
+                }
+                None => self.mains_mode,
             }
         }
     }

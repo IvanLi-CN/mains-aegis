@@ -19,6 +19,7 @@
 - 将主固件切换为常驻运行时音效服务，不再在启动阶段播放 demo playlist。
 - 抽出共享音频核心，让主固件与 `test-fw` 复用同一套 cue、优先级、WAV 解析/重采样与 DMA 填充逻辑。
 - 按当前可可靠判定的运行时状态接入 cue：开机、市电、充电、电池低电、高压力、保护、过压/过流、模块故障、电池保护。
+- 运行态 `STANDBY / ASSIST / BACKUP` 切换规则引用 `docs/specs/xjpvj-runtime-mode-switching/SPEC.md`；本规格继续拥有 cue 映射与音频优先级。
 - 保留 `test-fw` 作为音频回归入口，继续支持人工点播与优先级/FIFO 验证。
 
 ### Non-goals
@@ -64,7 +65,7 @@
 ## 运行时 cue 映射冻结
 
 - `boot_startup`：上电进入自检后立即请求一次，可与自检并行，且允许被更高优先级 cue 抢占。
-- `mains_present_dc` / `mains_absent_dc`：以 `DC5025 VIN>=3V` 的运行时采样作为真相源，在“已知状态之间”变化时触发；charger 通信从 unknown 恢复到 known 时保持静默；仅当 `VIN <-> charger fallback` 的来源切换未伴随 `mains_present` 真假翻转时保持静默，若真假确实变化则仍应触发边沿。
+- `mains_present_dc` / `mains_absent_dc`：以 `DC5025 VIN>=3V` 的运行时采样作为真相源，在“已知状态之间”变化时触发；聚合输入存在信号只作为 VIN 连续缺样后的降级兜底。若只是 `VIN <-> fallback` 的来源切换且 `mains_present` 未翻转，则保持静默；若真假确实变化则仍应触发边沿。
 - `charge_started` / `charge_completed`：charger 状态在“已知相位之间”进入“充电中 / 完成”时触发；首次建链或通信恢复后的 unknown -> known 不补播 one-shot。
 - `battery_low_no_mains` / `battery_low_with_mains`：BMS `RCA` 低电告警按市电有无拆分。
 - `high_stress`：`TS_COOL` / `TREG` 或 TMP112 到达 `TLOW` 但尚未触发停机时触发；`TS_WARM` 仅驱动 UI/散热，不再播放 warning cue。

@@ -19,6 +19,7 @@ This folder stores project documentation and offline-renderable datasheets.
 - USB CDC / Web Serial protocol: `docs/usb-cdc-web-serial-protocol.md`
 - Mains Aegis device daemon, host power control, and firmware catalog: `docs/specs/p8k3d-mains-aegis-devd/SPEC.md`, `docs/firmware-catalog.md`
 - Low-voltage recovery HIL: `docs/hil-low-voltage-recovery.md`
+- Runtime-mode switching HIL: `docs/hil-runtime-mode-switching.md`
 - Agent hardware collaboration workflow: `docs/hardware-collaboration-workflow.md`
 - Power monitoring & protection (INA3221 + UPS VIN/TPS outputs): `docs/power-monitoring-design.md`
 - I2C/SMBus address map: `docs/i2c-address-map.md`

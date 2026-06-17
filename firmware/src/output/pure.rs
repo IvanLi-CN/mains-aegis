@@ -13,10 +13,9 @@ use super::channel::OutputChannel;
 use super::{
     discharge_authorization_input_ready, mains_present_edge, mains_present_from_vin,
     mark_vin_telemetry_unavailable, normalize_charger_input_power_sample,
-    record_vin_sample_failure, stable_mains_present, stable_mains_state, ups_mode_from_mains,
-    AudioBatteryLowState, AudioChargePhase, AudioMainsSource, Bq40z50Snapshot,
-    ChargerInputPowerSample, ChargerInputSampleIssue, OutputRuntimeState, StableMainsState,
-    CHARGER_INPUT_POWER_ANOMALY_W10,
+    record_vin_sample_failure, stable_mains_present, stable_mains_state, AudioBatteryLowState,
+    AudioChargePhase, AudioMainsSource, Bq40z50Snapshot, ChargerInputPowerSample,
+    ChargerInputSampleIssue, OutputRuntimeState, StableMainsState, CHARGER_INPUT_POWER_ANOMALY_W10,
 };
 
 const BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED: bool = false;
@@ -319,6 +318,29 @@ pub(super) const fn usb_pd_charging_enabled(
         runtime_allow_charge
     } else {
         charger_enabled && charger_allowed
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RuntimeChargeOverride {
+    pub(super) allow_charge: bool,
+    pub(super) policy_status_text: &'static str,
+    pub(super) policy_notice_text: &'static str,
+}
+
+pub(super) const fn runtime_charge_override(mode: UpsMode) -> Option<RuntimeChargeOverride> {
+    match mode {
+        UpsMode::Supplement => Some(RuntimeChargeOverride {
+            allow_charge: false,
+            policy_status_text: "LOAD",
+            policy_notice_text: "runtime_assist_no_charge",
+        }),
+        UpsMode::Backup => Some(RuntimeChargeOverride {
+            allow_charge: false,
+            policy_status_text: "NOAC",
+            policy_notice_text: "runtime_backup_no_charge",
+        }),
+        UpsMode::Standby | UpsMode::Off => None,
     }
 }
 
@@ -2593,6 +2615,28 @@ mod tests {
     }
 
     #[test]
+    fn runtime_charge_override_blocks_charging_in_assist_and_backup_only() {
+        assert_eq!(
+            runtime_charge_override(UpsMode::Supplement),
+            Some(RuntimeChargeOverride {
+                allow_charge: false,
+                policy_status_text: "LOAD",
+                policy_notice_text: "runtime_assist_no_charge",
+            })
+        );
+        assert_eq!(
+            runtime_charge_override(UpsMode::Backup),
+            Some(RuntimeChargeOverride {
+                allow_charge: false,
+                policy_status_text: "NOAC",
+                policy_notice_text: "runtime_backup_no_charge",
+            })
+        );
+        assert_eq!(runtime_charge_override(UpsMode::Standby), None);
+        assert_eq!(runtime_charge_override(UpsMode::Off), None);
+    }
+
+    #[test]
     fn usb_pd_demand_charging_enabled_respects_bms_charge_path() {
         assert!(!usb_pd_demand_charging_enabled(
             Some(true),
@@ -4615,12 +4659,12 @@ mod tests {
     }
 
     #[test]
-    fn stable_mains_state_tracks_when_audio_is_using_charger_fallback() {
+    fn stable_mains_state_tracks_when_audio_is_using_aggregate_input_fallback() {
         assert_eq!(
             stable_mains_state(None, None, Some(false)),
             StableMainsState {
                 present: Some(false),
-                source: AudioMainsSource::ChargerFallback,
+                source: AudioMainsSource::AggregateInputPresent,
             }
         );
         assert_eq!(
@@ -4663,11 +4707,11 @@ mod tests {
         };
         let charger_false = StableMainsState {
             present: Some(false),
-            source: AudioMainsSource::ChargerFallback,
+            source: AudioMainsSource::AggregateInputPresent,
         };
         let charger_true = StableMainsState {
             present: Some(true),
-            source: AudioMainsSource::ChargerFallback,
+            source: AudioMainsSource::AggregateInputPresent,
         };
 
         assert_eq!(mains_present_edge(vin_true, vin_false), Some(false));
@@ -4682,7 +4726,7 @@ mod tests {
                 },
                 StableMainsState {
                     present: Some(true),
-                    source: AudioMainsSource::ChargerFallback,
+                    source: AudioMainsSource::AggregateInputPresent,
                 }
             ),
             None
@@ -4754,11 +4798,63 @@ mod tests {
     }
 
     #[test]
-    fn ups_mode_from_mains_prefers_vin_truth_source() {
-        assert_eq!(ups_mode_from_mains(Some(true), false), UpsMode::Standby);
-        assert_eq!(ups_mode_from_mains(Some(true), true), UpsMode::Supplement);
-        assert_eq!(ups_mode_from_mains(Some(false), true), UpsMode::Backup);
-        assert_eq!(ups_mode_from_mains(None, false), UpsMode::Standby);
-        assert_eq!(ups_mode_from_mains(None, true), UpsMode::Backup);
+    fn runtime_mode_tracker_requires_two_fresh_samples_and_holds_unknown_mains() {
+        let mut tracker = super::super::RuntimeModeTracker::new(UpsMode::Standby);
+
+        assert_eq!(
+            tracker.update(Some(true), Some(120), true, Some(1)),
+            UpsMode::Standby
+        );
+        assert_eq!(
+            tracker.update(Some(true), Some(120), true, Some(2)),
+            UpsMode::Supplement
+        );
+        assert_eq!(
+            tracker.update(None, Some(0), false, Some(2)),
+            UpsMode::Supplement
+        );
+        assert_eq!(
+            tracker.update(Some(true), Some(40), true, Some(3)),
+            UpsMode::Supplement
+        );
+        assert_eq!(
+            tracker.update(Some(true), Some(40), true, Some(4)),
+            UpsMode::Standby
+        );
+        assert_eq!(
+            tracker.update(Some(false), Some(0), true, Some(5)),
+            UpsMode::Backup
+        );
+        assert_eq!(
+            tracker.update(None, Some(0), false, Some(5)),
+            UpsMode::Backup
+        );
+        assert_eq!(
+            tracker.update(Some(true), Some(0), true, Some(6)),
+            UpsMode::Standby
+        );
+        assert_eq!(
+            tracker.update(Some(true), Some(0), true, Some(7)),
+            UpsMode::Standby
+        );
+    }
+
+    #[test]
+    fn runtime_mode_tracker_only_enters_backup_on_confirmed_no_input() {
+        let mut tracker = super::super::RuntimeModeTracker::new(UpsMode::Standby);
+
+        assert_eq!(
+            tracker.update(Some(true), Some(120), true, Some(1)),
+            UpsMode::Standby
+        );
+        assert_eq!(
+            tracker.update(Some(true), Some(120), true, Some(2)),
+            UpsMode::Supplement
+        );
+        assert_eq!(tracker.update(None, None, false, None), UpsMode::Supplement);
+        assert_eq!(
+            tracker.update(Some(false), None, false, None),
+            UpsMode::Backup
+        );
     }
 }

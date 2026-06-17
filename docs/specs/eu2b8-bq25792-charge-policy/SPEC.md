@@ -27,6 +27,7 @@
 - BQ25792 必须显式写入并诊断 `REG08`: `VBAT_LOWV=71.4%`、`IPRECHG=120mA`。
 - `TPS55288` 总输出功率门控必须有回差：连续 `2` 个 poll `>5.0W` 才停充，进入 `LOAD` 后连续 `3` 个 poll `<4.5W` 才恢复。
 - 任一路输出已开启但聚合输出功率不可可信计算时，必须保守禁充，并在 notice/log 中明确标成 `blocked_output_power_unknown`。
+- `ASSIST / BACKUP` 的 non-charging mode 边界由 `docs/specs/xjpvj-runtime-mode-switching/SPEC.md` 接管：进入 `ASSIST` 时 owner-facing token 收敛到 `LOAD`，进入 `BACKUP` 时收敛到 `NOAC`；本规格只继续拥有 `STANDBY` 内部的 charger policy 细节。
 - 扩充运行时日志与前面板 detail 状态，让 `WAIT / CHG500 / CHG100 / RECOV / FULL / LOCK / NOAC / TEMP / LOAD / WARM` 等状态可直接观察，并优先显示实际 `IBAT_ADC`。
 - 首页 `ChargeCard` 必须与 runtime charger state 同源；首页显示紧凑 token `CHG / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC`，detail 保留完整 runtime token。
 - 当 `BQ25792 TS_WARM=true` 且未进入 `TS_HOT/TREG/fault` 时，charger detail 必须显示 `WARM`，并明确说明这是 charger TS warm。
@@ -77,6 +78,7 @@
 - `DC IN` 自适应限充的当前输入压力、限流值与限流原因必须作为 owner-facing 状态输出，不允许只存在于 defmt 或局部寄存器日志里。
 - Dashboard charger detail 与首页 charge 区域应优先显示 `BQ25792 IBAT_ADC` 实测电流；若 `IBAT_ADC` 暂时不可用，则回退到目标 `ICHG`。
 - 首页 `ChargeCard` 应直接从 runtime charger state 派生紧凑 token，而不是按 `UpsMode` 或 `allow_charge + current` 推导。
+- `LOAD / NOAC` 是否生效首先服从运行态 mode coupling；`CHG100 / CHG500 / CHG1A / RECOV / FULL / WARM / TEMP / WAIT` 等内部细节只在 `STANDBY` 上下文内由本规格定义。
 - `IBUS/VBUS/VBAT/VSYS/IBAT` 的 BQ25792 ADC 遥测应保持真实量级，不得把 `~5.2V/102mA` 误解成 `~21.8V/26.1A` 一类 swapped 假值。
 - 当目标 `ICHG` 已写入但实测 `IBAT/BMS current` 长时间明显低于目标，日志应输出 `charger: delivery_diag`，明确区分目标值、实测值、PD 合约、电流限制寄存器与 `IINDPM/VINDPM` 限流状态。
 

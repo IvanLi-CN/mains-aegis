@@ -2200,9 +2200,9 @@ fn bq40_recovery_action_for_snapshot(
             stable_mains_present(
                 snapshot.vin_mains_present,
                 snapshot.vin_vbus_mv,
-                snapshot.fusb302_vbus_present,
+                snapshot.aggregate_input_present,
             ),
-            snapshot.fusb302_vbus_present,
+            snapshot.aggregate_input_present,
         )
         && charger_allowed
         && snapshot.bq25792 != SelfCheckCommState::Err
@@ -2243,7 +2243,7 @@ pub enum AudioMainsSource {
     #[default]
     Unknown,
     Vin,
-    ChargerFallback,
+    AggregateInputPresent,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2272,7 +2272,7 @@ fn stable_mains_state(
     if let Some(present) = charger_present {
         return StableMainsState {
             present: Some(present),
-            source: AudioMainsSource::ChargerFallback,
+            source: AudioMainsSource::AggregateInputPresent,
         };
     }
     StableMainsState::default()
@@ -2286,26 +2286,91 @@ fn mains_present_edge(prev: StableMainsState, next: StableMainsState) -> Option<
     }
 }
 
-fn ups_mode_from_mains(mains_present: Option<bool>, has_output: bool) -> UpsMode {
-    match mains_present {
-        Some(true) => {
-            if has_output {
-                UpsMode::Supplement
-            } else {
-                UpsMode::Standby
-            }
+fn aggregated_input_present(snapshot: &SelfCheckUiSnapshot) -> Option<bool> {
+    stable_mains_present(
+        snapshot.vin_mains_present,
+        snapshot.vin_vbus_mv,
+        snapshot.aggregate_input_present,
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RuntimeModeTracker {
+    mains_mode: UpsMode,
+    assist_enter_streak: u8,
+    standby_enter_streak: u8,
+    last_tps_total_iout_sample_seq: Option<u32>,
+}
+
+impl RuntimeModeTracker {
+    const ASSIST_ENTER_MA: i32 = 100;
+    const STANDBY_EXIT_MA: i32 = 50;
+    const REQUIRED_SAMPLES: u8 = 2;
+
+    const fn new(initial_mode: UpsMode) -> Self {
+        let mains_mode = match initial_mode {
+            UpsMode::Backup => UpsMode::Backup,
+            _ => UpsMode::Standby,
+        };
+        Self {
+            mains_mode,
+            assist_enter_streak: 0,
+            standby_enter_streak: 0,
+            last_tps_total_iout_sample_seq: None,
         }
-        Some(false) => {
-            let _ = has_output;
-            UpsMode::Backup
-        }
-        None => {
-            // Unknown VBUS is treated conservatively: avoid assuming mains-present.
-            if has_output {
+    }
+
+    fn update(
+        &mut self,
+        mains_present: Option<bool>,
+        tps_total_iout_ma: Option<i32>,
+        tps_total_iout_fresh: bool,
+        tps_total_iout_sample_seq: Option<u32>,
+    ) -> UpsMode {
+        match mains_present {
+            Some(false) => {
+                self.mains_mode = UpsMode::Backup;
+                self.assist_enter_streak = 0;
+                self.standby_enter_streak = 0;
+                if tps_total_iout_fresh {
+                    self.last_tps_total_iout_sample_seq = tps_total_iout_sample_seq;
+                }
                 UpsMode::Backup
-            } else {
-                UpsMode::Standby
             }
+            Some(true) => {
+                let sample_is_new = tps_total_iout_fresh
+                    && tps_total_iout_sample_seq.is_some()
+                    && tps_total_iout_sample_seq != self.last_tps_total_iout_sample_seq;
+                if sample_is_new {
+                    self.last_tps_total_iout_sample_seq = tps_total_iout_sample_seq;
+                    match tps_total_iout_ma {
+                        Some(total_iout_ma) if total_iout_ma >= Self::ASSIST_ENTER_MA => {
+                            self.assist_enter_streak = self.assist_enter_streak.saturating_add(1);
+                            self.standby_enter_streak = 0;
+                            if self.assist_enter_streak >= Self::REQUIRED_SAMPLES {
+                                self.mains_mode = UpsMode::Supplement;
+                            }
+                        }
+                        Some(total_iout_ma) if total_iout_ma <= Self::STANDBY_EXIT_MA => {
+                            self.standby_enter_streak = self.standby_enter_streak.saturating_add(1);
+                            self.assist_enter_streak = 0;
+                            if self.standby_enter_streak >= Self::REQUIRED_SAMPLES {
+                                self.mains_mode = UpsMode::Standby;
+                            }
+                        }
+                        Some(_) => {
+                            self.assist_enter_streak = 0;
+                            self.standby_enter_streak = 0;
+                        }
+                        None => {}
+                    }
+                }
+                if matches!(self.mains_mode, UpsMode::Backup) {
+                    self.mains_mode = UpsMode::Standby;
+                }
+                self.mains_mode
+            }
+            None => self.mains_mode,
         }
     }
 }
@@ -2828,11 +2893,12 @@ where
     ui.input_vbus_mv = charger_vbus_adc_mv;
     ui.input_ibus_ma = charger_ibus_adc_ma;
     if let Some(status0) = charger_status0 {
-        let vbus_present = (status0 & bq25792::status0::VBUS_PRESENT_STAT) != 0
-            || (status0 & bq25792::status0::AC1_PRESENT_STAT) != 0
-            || (status0 & bq25792::status0::AC2_PRESENT_STAT) != 0
-            || (status0 & bq25792::status0::PG_STAT) != 0;
-        ui.fusb302_vbus_present = Some(vbus_present);
+        ui.aggregate_input_present = Some(
+            (status0 & bq25792::status0::VBUS_PRESENT_STAT) != 0
+                || (status0 & bq25792::status0::AC1_PRESENT_STAT) != 0
+                || (status0 & bq25792::status0::AC2_PRESENT_STAT) != 0
+                || (status0 & bq25792::status0::PG_STAT) != 0,
+        );
     }
     let charger_probe_ok = charger_enabled;
     reporter(SelfCheckStage::Charger, ui);
@@ -3118,14 +3184,14 @@ where
 
     let enabled_outputs = enabled_outputs_from_flags(out_a_allowed, out_b_allowed);
 
-    ui.mode = ups_mode_from_mains(
-        stable_mains_present(
-            ui.vin_mains_present,
-            ui.vin_vbus_mv,
-            ui.fusb302_vbus_present,
-        ),
-        out_a_allowed || out_b_allowed,
-    );
+    ui.mode = match stable_mains_present(
+        ui.vin_mains_present,
+        ui.vin_vbus_mv,
+        ui.aggregate_input_present,
+    ) {
+        Some(false) => UpsMode::Backup,
+        _ => UpsMode::Standby,
+    };
 
     defmt::info!(
         "self_test: done requested_outputs={} active_outputs={} recoverable_outputs={} gate_reason={} charger_enabled={=bool} bms_present={=bool}",
@@ -3195,6 +3261,7 @@ pub struct PowerManager<'d, I2C> {
     tps_b_ready: bool,
     tps_b_next_retry_at: Option<Instant>,
     tps_telemetry_sample_seq: u32,
+    runtime_mode: RuntimeModeTracker,
 
     bms_addr: Option<u8>,
     bms_runtime_seen: bool,
@@ -3684,6 +3751,7 @@ where
             tps_b_ready: false,
             tps_b_next_retry_at: if out_b_allowed { Some(now) } else { None },
             tps_telemetry_sample_seq: 0,
+            runtime_mode: RuntimeModeTracker::new(initial_ui_snapshot.mode),
 
             bms_addr,
             bms_runtime_seen,
@@ -3897,7 +3965,7 @@ where
                     .is_enabled(OutputChannel::OutB),
             );
         }
-        self.charger_audio.input_present = self.ui_snapshot.fusb302_vbus_present;
+        self.charger_audio.input_present = self.ui_snapshot.aggregate_input_present;
         self.charger_audio.phase = self.cfg.initial_audio_charge_phase;
         self.charger_audio.module_fault =
             matches!(self.ui_snapshot.bq25792, SelfCheckCommState::Err);
@@ -4152,7 +4220,7 @@ where
             Some("USB-C INPUT UNSAFE")
         } else if snapshot.bq25792 == SelfCheckCommState::Ok
             && snapshot.bq25792_allow_charge == Some(false)
-            && snapshot.fusb302_vbus_present == Some(true)
+            && aggregated_input_present(&snapshot) == Some(true)
         {
             Some("INPUT READY - BATTERY PATH BLOCKED")
         } else if detail.charger_notice.is_some() {
@@ -4183,7 +4251,7 @@ where
                 .input_source
                 .map(|source| dashboard_input_source_name(Some(source)))
                 .unwrap_or("unknown"),
-            mains_present: self.ui_snapshot.vin_mains_present,
+            mains_present: aggregated_input_present(&self.ui_snapshot),
             input_vbus_mv: self.ui_snapshot.input_vbus_mv,
             input_ibus_ma: self.ui_snapshot.input_ibus_ma,
             vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
@@ -4908,7 +4976,7 @@ where
             && self.ui_snapshot.bq40z50_discharge_ready == Some(false)
             && discharge_authorization_input_ready(
                 self.current_mains_present(),
-                self.ui_snapshot.fusb302_vbus_present,
+                self.ui_snapshot.aggregate_input_present,
             )
             && self.charger_allowed
             && self.ui_snapshot.bq25792 != SelfCheckCommState::Err
@@ -4926,7 +4994,7 @@ where
                 self.ui_snapshot.bq40z50_no_battery,
                 self.ui_snapshot.bq40z50_rca_alarm,
                 self_check_comm_state_name(self.ui_snapshot.bq25792),
-                self.ui_snapshot.fusb302_vbus_present,
+                self.ui_snapshot.aggregate_input_present,
                 self.current_mains_present(),
                 self.therm_kill.is_low()
             );
@@ -4938,7 +5006,7 @@ where
             self.output_state.requested_outputs.describe(),
             self.ui_snapshot.bq40z50_discharge_ready,
             self_check_comm_state_name(self.ui_snapshot.bq25792),
-            self.ui_snapshot.fusb302_vbus_present,
+            self.ui_snapshot.aggregate_input_present,
             self.current_mains_present(),
             auto_request
         );
@@ -5378,7 +5446,7 @@ where
             self_check_comm_state_name(self.ui_snapshot.bq25792),
             self.charger_allowed,
             self.ui_snapshot.bq25792_vbat_present,
-            self.ui_snapshot.fusb302_vbus_present,
+            self.ui_snapshot.aggregate_input_present,
             bms_result_option_name(self.ui_snapshot.bq40z50_last_result),
             allow_diag_warn
         );
@@ -7376,7 +7444,7 @@ where
             return;
         }
 
-        if self.ui_snapshot.fusb302_vbus_present != Some(true) {
+        if self.ui_snapshot.aggregate_input_present != Some(true) {
             self.bms_activation_auto_attempted = true;
             self.bms_activation_auto_force_charge_until = None;
             self.bms_activation_auto_force_charge_programmed = false;
@@ -7395,7 +7463,7 @@ where
                 "bms: activation auto_skip reason=no_input_power bq40_state={} charger_state={} input_present={=?}",
                 self_check_comm_state_name(self.ui_snapshot.bq40z50),
                 self_check_comm_state_name(self.ui_snapshot.bq25792),
-                self.ui_snapshot.fusb302_vbus_present
+                self.ui_snapshot.aggregate_input_present
             );
             return;
         }
@@ -7417,7 +7485,7 @@ where
                 self_check_comm_state_name(self.ui_snapshot.bq40z50),
                 self_check_comm_state_name(self.ui_snapshot.bq25792),
                 self.charger_allowed,
-                self.ui_snapshot.fusb302_vbus_present,
+                self.ui_snapshot.aggregate_input_present,
                 self.ui_snapshot.bq25792_vbat_present
             );
             return;
@@ -7431,7 +7499,7 @@ where
             self_check_comm_state_name(self.ui_snapshot.bq40z50),
             self_check_comm_state_name(self.ui_snapshot.bq25792),
             self.charger_allowed,
-            self.ui_snapshot.fusb302_vbus_present,
+            self.ui_snapshot.aggregate_input_present,
             self.ui_snapshot.bq25792_vbat_present
         );
         self.request_bms_activation_with_diag_override(true, true);
@@ -7450,14 +7518,14 @@ where
             self.output_state.requested_outputs.describe(),
             self.output_state.gate_reason.as_str(),
             self.ui_snapshot.bq40z50_discharge_ready,
-            self.ui_snapshot.fusb302_vbus_present
+            self.ui_snapshot.aggregate_input_present
         );
         esp_println::println!(
             "bms: discharge_authorization auto_request reason=safe_boot_recovery requested_outputs={} gate_reason={} dsg_ready={:?} input_present={:?}",
             self.output_state.requested_outputs.describe(),
             self.output_state.gate_reason.as_str(),
             self.ui_snapshot.bq40z50_discharge_ready,
-            self.ui_snapshot.fusb302_vbus_present
+            self.ui_snapshot.aggregate_input_present
         );
         self.request_bms_discharge_authorization(true);
     }
@@ -7980,7 +8048,7 @@ where
                 self_check_comm_state_name(self.ui_snapshot.bq25792),
                 self.ui_snapshot.bq25792_allow_charge,
                 self.ui_snapshot.bq25792_vbat_present,
-                self.ui_snapshot.fusb302_vbus_present,
+                self.ui_snapshot.aggregate_input_present,
                 restore_chg_enabled
             ),
             _ => defmt::warn!(
@@ -7995,7 +8063,7 @@ where
                 self_check_comm_state_name(self.ui_snapshot.bq25792),
                 self.ui_snapshot.bq25792_allow_charge,
                 self.ui_snapshot.bq25792_vbat_present,
-                self.ui_snapshot.fusb302_vbus_present,
+                self.ui_snapshot.aggregate_input_present,
                 restore_chg_enabled
             ),
         }
@@ -8107,7 +8175,7 @@ where
         stable_mains_present(
             self.ui_snapshot.vin_mains_present,
             self.ui_snapshot.vin_vbus_mv,
-            self.ui_snapshot.fusb302_vbus_present,
+            self.ui_snapshot.aggregate_input_present,
         )
     }
 
@@ -8368,15 +8436,18 @@ where
     }
 
     fn recompute_ui_mode(&mut self) {
-        let has_output = self.ui_snapshot.tps_a_enabled == Some(true)
-            || self.ui_snapshot.tps_b_enabled == Some(true);
-        self.ui_snapshot.mode = ups_mode_from_mains(
-            stable_mains_present(
-                self.ui_snapshot.vin_mains_present,
-                self.ui_snapshot.vin_vbus_mv,
-                self.ui_snapshot.fusb302_vbus_present,
-            ),
-            has_output,
+        let mains_present = stable_mains_present(
+            self.ui_snapshot.vin_mains_present,
+            self.ui_snapshot.vin_vbus_mv,
+            self.ui_snapshot.aggregate_input_present,
+        );
+        let (tps_total_iout_ma, tps_total_iout_fresh, tps_total_iout_sample_seq) =
+            self.tps_total_iout_sample();
+        self.ui_snapshot.mode = self.runtime_mode.update(
+            mains_present,
+            tps_total_iout_ma,
+            tps_total_iout_fresh,
+            tps_total_iout_sample_seq,
         );
     }
 
@@ -8385,7 +8456,7 @@ where
         let mains_state = stable_mains_state(
             self.ui_snapshot.vin_mains_present,
             self.ui_snapshot.vin_vbus_mv,
-            self.ui_snapshot.fusb302_vbus_present,
+            self.ui_snapshot.aggregate_input_present,
         );
         let mains_present = mains_state.present;
         let tmp_a_hot = self
@@ -9608,6 +9679,7 @@ where
                 .or_else(|| policy_state.map(ChargePolicyState::as_str))
                 .unwrap_or("charger_policy_pending")
         };
+        let runtime_charge_override = runtime_charge_override(self.ui_snapshot.mode);
         let manual_stop_hold_blocks_charge = manual_charge_stop_hold_blocks_charge(
             self.manual_charge_runtime.stop_inhibit,
             activation_pending,
@@ -9725,6 +9797,7 @@ where
         }
         let (tps_total_iout_ma, tps_total_iout_fresh, tps_total_iout_sample_seq) =
             self.tps_total_iout_sample();
+        let tps_limit_threshold_ma = Some(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA);
         let dcin_pressure = dcin_input_pressure_step(
             &mut self.dcin_input_pressure,
             charge_policy_now_ms,
@@ -9744,7 +9817,7 @@ where
         );
         let requested_policy_target_ichg_ma = policy_target_ichg_ma;
         let mut effective_policy_target_ichg_ma = policy_target_ichg_ma;
-        let policy_detail_status_text = dcin_charge_detail_status_text(
+        let mut policy_detail_status_text = dcin_charge_detail_status_text(
             policy_status_text,
             dcin_pressure.limit_active,
             dcin_pressure.allow_charge,
@@ -9757,6 +9830,14 @@ where
             if dcin_pressure.limit_active || !dcin_pressure.allow_charge {
                 policy_notice_text = dcin_pressure.limit_reason.as_str();
             }
+        }
+        if let Some(runtime_charge_override) = runtime_charge_override {
+            allow_charge = runtime_charge_override.allow_charge;
+            policy_target_ichg_ma = None;
+            effective_policy_target_ichg_ma = None;
+            policy_status_text = runtime_charge_override.policy_status_text;
+            policy_notice_text = runtime_charge_override.policy_notice_text;
+            policy_detail_status_text = runtime_charge_override.policy_status_text;
         }
         let mut applied_ctrl0 = ctrl0;
         let mut applied_vreg_mv: Option<u16> = None;
@@ -10409,6 +10490,7 @@ where
         };
         self.ui_snapshot.fusb302_vbus_present =
             usb_pd_vbus_present(self.usb_pd_state.vbus_present, ac1_present);
+        self.ui_snapshot.aggregate_input_present = Some(input_present);
         self.ui_snapshot.dashboard_detail.input_source = input_source;
         self.ui_snapshot.dashboard_detail.input_pressure_state =
             Some(dcin_pressure.pressure_state.as_str());
@@ -10418,10 +10500,10 @@ where
             Some(dcin_pressure.trigger_reason.as_str());
         self.ui_snapshot.dashboard_detail.input_vin_baseline_mv = dcin_pressure.vin_baseline_mv;
         self.ui_snapshot.dashboard_detail.input_vin_drop_mv = dcin_pressure.vin_drop_mv;
-        self.ui_snapshot.dashboard_detail.input_tps_total_iout_ma = dcin_pressure.tps_total_iout_ma;
+        self.ui_snapshot.dashboard_detail.input_tps_total_iout_ma = tps_total_iout_ma;
         self.ui_snapshot
             .dashboard_detail
-            .input_tps_limit_threshold_ma = dcin_pressure.tps_limit_threshold_ma;
+            .input_tps_limit_threshold_ma = tps_limit_threshold_ma;
         self.ui_snapshot.dashboard_detail.charger_protocol =
             charger_protocol_from_usb_pd(input_source, self.usb_pd_state);
         self.ui_snapshot.dashboard_detail.charger_active = Some(
@@ -10558,6 +10640,7 @@ where
         self.ui_snapshot.bq25792_vsys_mv = None;
         self.usb_pd_vsys_mv = None;
         self.ui_snapshot.fusb302_vbus_present = None;
+        self.ui_snapshot.aggregate_input_present = None;
         self.ui_snapshot.input_vbus_mv = None;
         self.ui_snapshot.input_ibus_ma = None;
         self.clear_charger_detail_snapshot();

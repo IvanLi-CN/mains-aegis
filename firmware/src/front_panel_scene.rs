@@ -24,6 +24,7 @@ fn mains_present_from_vin(vin_vbus_mv: Option<u16>) -> Option<bool> {
 fn snapshot_mains_present_value(snapshot: &SelfCheckUiSnapshot) -> Option<bool> {
     mains_present_from_vin(snapshot.vin_vbus_mv)
         .or(snapshot.vin_mains_present)
+        .or(snapshot.aggregate_input_present)
         .or(snapshot.fusb302_vbus_present)
 }
 
@@ -923,6 +924,7 @@ pub struct SelfCheckUiSnapshot {
     pub tca6408a: SelfCheckCommState,
     pub fusb302: SelfCheckCommState,
     pub fusb302_vbus_present: Option<bool>,
+    pub aggregate_input_present: Option<bool>,
     pub input_vbus_mv: Option<u16>,
     pub input_ibus_ma: Option<i32>,
     pub vin_mains_present: Option<bool>,
@@ -976,6 +978,7 @@ impl SelfCheckUiSnapshot {
             tca6408a: SelfCheckCommState::Pending,
             fusb302: SelfCheckCommState::Pending,
             fusb302_vbus_present: None,
+            aggregate_input_present: None,
             input_vbus_mv: None,
             input_ibus_ma: None,
             vin_mains_present: None,
