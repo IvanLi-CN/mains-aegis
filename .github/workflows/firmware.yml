@@ -36,6 +36,7 @@ jobs:
               - "tps55288"
               - "ina3221-async"
               - "tools/firmware-artifact/**"
+              - "web/public/firmware/**"
               - ".github/workflows/firmware.yml"
       - name: Skip (no firmware changes)
         if: steps.changes.outputs.firmware != 'true'
@@ -85,10 +86,21 @@ jobs:
             --out firmware/target/mains-aegis-artifacts \
             --features net_http,web_serial \
             --profile release
+
+      - name: Validate committed bundled firmware assets
+        if: steps.changes.outputs.firmware == 'true'
+        run: |
+          python3 tools/firmware-artifact/validate-web-bundle.py --bundle-root web/public/firmware
+
+      - name: Build generated bundled firmware assets
+        if: steps.changes.outputs.firmware == 'true'
+        run: |
           python3 tools/firmware-artifact/embed-web-assets.py \
             --catalog firmware/target/mains-aegis-artifacts/firmware-catalog.json \
-            --out web/public/firmware \
+            --out /tmp/mains-aegis-web-public-firmware \
             --clean
+          python3 tools/firmware-artifact/validate-web-bundle.py \
+            --bundle-root /tmp/mains-aegis-web-public-firmware
 
       - name: Upload firmware artifacts
         if: steps.changes.outputs.firmware == 'true'
@@ -97,7 +109,7 @@ jobs:
           name: mains-aegis-firmware-catalog
           path: |
             firmware/target/mains-aegis-artifacts/*
-            web/public/firmware/*
+            /tmp/mains-aegis-web-public-firmware/*
 
       - name: Publish GitHub Release firmware catalog
         if: steps.changes.outputs.firmware == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'

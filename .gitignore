@@ -4,6 +4,7 @@
 # Local secrets / build-time environment
 .env
 firmware/.env
+.loadlynx
 
 # MinerU / local conversion artifacts
 downloads/

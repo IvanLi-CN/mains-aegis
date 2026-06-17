@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { FirmwareArtifact, Identity } from "../api/types";
 import {
   firmwareArtifactFileUrl,
+  firmwareArtifactHasWebFlashImages,
   firmwareArtifactMatchesIdentity,
   firmwareArtifactImageFiles,
   resolveFirmwareCatalogArtifacts,
@@ -77,6 +78,13 @@ describe("firmware catalog helpers", () => {
     expect(firmwareArtifactImageFiles(artifact)).toEqual([
       { kind: "image", path: "artifact/merged.bin", sha256: "1".repeat(64), size: 32, flash_address: 0 },
     ]);
+    expect(firmwareArtifactHasWebFlashImages(artifact)).toBe(true);
+    expect(
+      firmwareArtifactHasWebFlashImages({
+        ...artifact,
+        files: [{ kind: "elf", path: "artifact/esp-firmware", sha256: "0".repeat(64), size: 16 }],
+      }),
+    ).toBe(false);
   });
 
   test("keeps bundled artifacts and overrides duplicate release artifacts", () => {

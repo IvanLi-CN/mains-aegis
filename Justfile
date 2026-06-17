@@ -4,6 +4,7 @@ set shell := ["bash", "-uc"]
 host_manifest := "tools/mains-aegis-host/Cargo.toml"
 artifact_out := "firmware/target/mains-aegis-artifacts"
 firmware_elf := "firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware"
+firmware_image := "firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware.bin"
 
 # List available development commands.
 default:
@@ -65,20 +66,24 @@ firmware-host-test:
 firmware-check:
     cd firmware && cargo +esp check
 
-# Build ESP firmware release ELF.
+# Build ESP firmware release ELF for the default Web/devd feature set.
 firmware-build:
-    cd firmware && cargo +esp build --release
+    cd firmware && cargo +esp build --release --bin esp-firmware --features net_http,web_serial
 
-# Generate a devd/Web firmware artifact manifest for the current release ELF.
-firmware-artifact:
-    python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --out {{ artifact_out }} --firmware-dir firmware
+# Build the Web Serial flash image from the current release ELF.
+firmware-web-image: firmware-build
+    python3 -m esptool --chip esp32s3 elf2image --flash-mode dio --flash-freq 80m --flash-size 4MB --output {{ firmware_image }} {{ firmware_elf }}
+
+# Generate a devd/Web firmware artifact manifest for the current release ELF and Web Serial image.
+firmware-artifact: firmware-web-image
+    python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release
 
 # Copy the generated firmware catalog into the Web public assets.
 firmware-embed-web:
     bun run firmware:embed-web
 
 # Build firmware and generate a matching firmware artifact manifest.
-firmware-release: firmware-build firmware-artifact firmware-embed-web
+firmware-release: firmware-artifact firmware-embed-web
 
 # Select an artifact manifest for a bound devd device.
 artifact-select device manifest:
@@ -90,8 +95,8 @@ flash-dry-run device:
 
 # Build, select, and dry-run flash for an already-bound devd device.
 flash-current-dry-run device:
-    just firmware-build
-    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --out {{ artifact_out }} --firmware-dir firmware)
+    just firmware-web-image
+    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release)
     bun run firmware:embed-web
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} artifact select --manifest-path "$manifest"
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --dry-run
@@ -99,8 +104,8 @@ flash-current-dry-run device:
 # Build, select, dry-run, and real-flash an already-bound devd device. Requires confirm=flash.
 flash-current-real device confirm:
     [[ "{{ confirm }}" == "flash" ]] || { echo "Refusing real flash: pass confirm=flash"; exit 2; }
-    just firmware-build
-    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --out {{ artifact_out }} --firmware-dir firmware)
+    just firmware-web-image
+    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release)
     bun run firmware:embed-web
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} artifact select --manifest-path "$manifest"
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --dry-run

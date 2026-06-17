@@ -56,7 +56,11 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
             .unwrap_or("unknown"),
         input_vbus_mv: snapshot.input_vbus_mv,
         input_ibus_ma: snapshot.input_ibus_ma,
-        mains_present: snapshot.vin_mains_present,
+        mains_present: snapshot
+            .vin_vbus_mv
+            .map(|mv| mv >= 3_000)
+            .or(snapshot.vin_mains_present)
+            .or(snapshot.aggregate_input_present),
         vin_vbus_mv: snapshot.vin_vbus_mv,
         vin_iin_ma: snapshot.vin_iin_ma,
         tps_total_iout_ma: snapshot.dashboard_detail.input_tps_total_iout_ma,
@@ -175,7 +179,10 @@ fn bms_result_slug(kind: BmsResultKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::outputs_slug;
+    use super::{build_status_snapshot, outputs_slug};
+    use crate::front_panel_scene::{
+        DashboardDetailSnapshot, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+    };
     use esp_firmware::output_state::{EnabledOutputs, OutputSelector};
 
     #[test]
@@ -189,5 +196,30 @@ mod tests {
             outputs_slug(EnabledOutputs::Only(OutputSelector::OutB)),
             "out_b"
         );
+    }
+
+    #[test]
+    fn status_snapshot_preserves_raw_tps_total_iout_when_runtime_charge_is_blocked() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Supplement);
+        snapshot.requested_outputs = EnabledOutputs::Both;
+        snapshot.active_outputs = EnabledOutputs::Both;
+        snapshot.recoverable_outputs = EnabledOutputs::Both;
+        snapshot.vin_vbus_mv = Some(12_032);
+        snapshot.vin_iin_ma = Some(28);
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq25792_allow_charge = Some(false);
+        snapshot.dashboard_detail = DashboardDetailSnapshot {
+            input_tps_total_iout_ma: Some(136),
+            input_tps_limit_threshold_ma: Some(100),
+            charger_detail_status: Some("LOAD"),
+            ..DashboardDetailSnapshot::pending()
+        };
+
+        let status = build_status_snapshot(snapshot);
+        assert_eq!(status.mode, "supplement");
+        assert_eq!(status.tps_total_iout_ma, Some(136));
+        assert_eq!(status.tps_limit_threshold_ma, Some(100));
+        assert_eq!(status.charger_allow_charge, Some(false));
+        assert_eq!(status.charger_detail_status, Some("LOAD"));
     }
 }

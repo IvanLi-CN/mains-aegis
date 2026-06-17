@@ -72,6 +72,19 @@ def copy_artifact_files(source_root: Path, public_root: Path, artifact: dict[str
         (item["sha256"] for item in staged_files if item.get("kind") == "defmt_metadata"),
         staged["defmt"].get("metadata_sha256"),
     )
+
+    features = staged.get("features")
+    requires_web_serial_image = isinstance(features, list) and "web_serial" in features
+    has_web_serial_image = any(
+        item.get("kind") == "image"
+        and isinstance(item.get("flash_address"), int)
+        and item["flash_address"] >= 0
+        for item in staged_files
+    )
+    if requires_web_serial_image and not has_web_serial_image:
+        raise SystemExit(
+            f"{artifact_id}: bundled web_serial artifact must include at least one image file with flash_address",
+        )
     return staged
 
 
