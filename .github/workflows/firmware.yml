@@ -90,6 +90,11 @@ jobs:
             --out web/public/firmware \
             --clean
 
+      - name: Verify bundled firmware assets are in sync
+        if: steps.changes.outputs.firmware == 'true'
+        run: |
+          git diff --exit-code -- web/public/firmware
+
       - name: Upload firmware artifacts
         if: steps.changes.outputs.firmware == 'true'
         uses: actions/upload-artifact@v7

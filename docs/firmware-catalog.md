@@ -24,10 +24,17 @@ Each catalog has `schema_version=1` and an `artifacts` array. Each artifact desc
 
 ```bash
 cd firmware
-cargo build --release --bin esp-firmware
+cargo build --release --bin esp-firmware --features net_http,web_serial
 cd ..
+python3 -m esptool --chip esp32s3 elf2image \
+  --flash-mode dio \
+  --flash-freq 80m \
+  --flash-size 4MB \
+  --output firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware.bin \
+  firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware
 python3 tools/firmware-artifact/build-catalog-entry.py \
   --elf firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware \
+  --image 0x10000:firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware.bin \
   --out firmware/target/mains-aegis-artifacts \
   --features net_http,web_serial \
   --profile release
@@ -38,6 +45,7 @@ The generator writes:
 - `<artifact_id>.manifest.json`
 - `firmware-catalog.json`
 - `SHA256SUMS`
+- any referenced firmware files, including the browser-flashable `image` payload when `web_serial` is enabled
 
 To embed one or more local builds into the Web app static assets:
 
@@ -49,7 +57,10 @@ This stages `web/public/firmware/firmware-catalog.json`, per-artifact
 manifests, `SHA256SUMS`, and artifact files under
 `web/public/firmware/<artifact_id>/`. The browser and `mains-aegis-devd`
 static hosting then consume the same bundled fallback catalog during local
-development and production preview.
+development and production preview. Bundled artifacts that advertise the
+`web_serial` feature must include at least one `image` file with
+`flash_address`; `bun run firmware:embed-web` now fails fast if that browser
+flash payload is missing.
 
 If a bundled artifact and a GitHub Release artifact share the same `artifact_id`,
 the Web App keeps the bundled copy and treats the release copy as a duplicate.

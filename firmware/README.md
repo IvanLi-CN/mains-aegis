@@ -663,6 +663,7 @@ Web 开发期由 `web/vite.config.ts` 把 `/api` 反代到 `http://127.0.0.1:300
 ```bash
 python3 tools/firmware-artifact/build-catalog-entry.py \
   --elf firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware \
+  --image 0x10000:firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware.bin \
   --out firmware/target/mains-aegis-artifacts \
   --features net_http,web_serial \
   --profile release
