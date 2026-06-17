@@ -595,6 +595,8 @@ struct DeviceSettingsState {
     wifi_ssid: Option<String>,
     log_level: String,
     manual_charge: ManualChargePrefs,
+    advanced_power: AdvancedPowerSettings,
+    advanced_power_capabilities: AdvancedPowerCapabilities,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -602,6 +604,51 @@ struct ManualChargePrefs {
     target: String,
     speed: String,
     timer_h: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdvancedPowerSettings {
+    standby_drop_mv: u16,
+    assist_low_drop_mv: u16,
+    rated_enter_delta_ma: i16,
+    rated_exit_delta_ma: i16,
+    vin_drop_threshold_pct: u8,
+    required_samples: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdvancedPowerFieldU16Capability {
+    default: u16,
+    min: u16,
+    max: u16,
+    step: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdvancedPowerFieldI16Capability {
+    default: i16,
+    min: i16,
+    max: i16,
+    step: i16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdvancedPowerFieldU8Capability {
+    default: u8,
+    min: u8,
+    max: u8,
+    step: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdvancedPowerCapabilities {
+    rated_vout_mv: u16,
+    standby_drop_mv: AdvancedPowerFieldU16Capability,
+    assist_low_drop_mv: AdvancedPowerFieldU16Capability,
+    rated_enter_delta_ma: AdvancedPowerFieldI16Capability,
+    rated_exit_delta_ma: AdvancedPowerFieldI16Capability,
+    vin_drop_threshold_pct: AdvancedPowerFieldU8Capability,
+    required_samples: AdvancedPowerFieldU8Capability,
 }
 
 #[derive(Debug, Serialize)]
@@ -684,6 +731,18 @@ struct ManualChargeRequest {
     target: String,
     speed: String,
     timer_h: u8,
+    device_id: Option<String>,
+    lease_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdvancedPowerRequest {
+    standby_drop_mv: u16,
+    assist_low_drop_mv: u16,
+    rated_enter_delta_ma: i16,
+    rated_exit_delta_ma: i16,
+    vin_drop_threshold_pct: u8,
+    required_samples: u8,
     device_id: Option<String>,
     lease_id: Option<String>,
 }
@@ -776,6 +835,11 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         )
         .route("/api/v1/settings/log-level", post(set_log_level))
         .route("/api/v1/settings/manual-charge", post(set_manual_charge))
+        .route("/api/v1/settings/advanced-power", post(set_advanced_power))
+        .route(
+            "/api/v1/settings/advanced-power/reset",
+            post(reset_advanced_power),
+        )
         .route("/api/v1/devices", get(list_devices))
         .route("/api/v1/devices/events", get(devices_events))
         .route("/api/v1/devices/scan", post(scan_devices))
@@ -1738,6 +1802,23 @@ async fn dispatch_ipc_request(
             let input: ManualChargeRequest = serde_json::from_value(params)?;
             json_result(set_manual_charge(State(state.clone()), Json(input)).await)
         }
+        "settings.advanced_power.set" => {
+            let input: AdvancedPowerRequest = serde_json::from_value(params)?;
+            json_result(set_advanced_power(State(state.clone()), Json(input)).await)
+        }
+        "settings.advanced_power.reset" => {
+            let query = SettingsTargetQuery {
+                device_id: params
+                    .get("device_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                lease_id: params
+                    .get("lease_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            };
+            json_result(reset_advanced_power(State(state.clone()), Query(query)).await)
+        }
         _ => anyhow::bail!("unsupported IPC method: {method}"),
     }
 }
@@ -2444,6 +2525,7 @@ fn parse_lan_http_json_response(
 }
 
 fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpError> {
+    let defaults = default_settings();
     let wifi = value.get("wifi").ok_or_else(|| {
         HttpError::retryable(
             "settings_snapshot_invalid",
@@ -2456,6 +2538,8 @@ fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpErr
             "settings snapshot is missing manual_charge",
         )
     })?;
+    let advanced_power = value.get("advanced_power");
+    let advanced_power_capabilities = value.get("advanced_power_capabilities");
     Ok(DeviceSettingsState {
         wifi_configured: wifi.get("configured").and_then(Value::as_bool),
         wifi_ssid: wifi.get("ssid").and_then(Value::as_str).map(str::to_string),
@@ -2481,6 +2565,41 @@ fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpErr
                 .and_then(|value| u8::try_from(value).ok())
                 .unwrap_or(2),
         },
+        advanced_power: AdvancedPowerSettings {
+            standby_drop_mv: advanced_power
+                .and_then(|snapshot| snapshot.get("standby_drop_mv"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.standby_drop_mv),
+            assist_low_drop_mv: advanced_power
+                .and_then(|snapshot| snapshot.get("assist_low_drop_mv"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.assist_low_drop_mv),
+            rated_enter_delta_ma: advanced_power
+                .and_then(|snapshot| snapshot.get("rated_enter_delta_ma"))
+                .and_then(Value::as_i64)
+                .and_then(|value| i16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.rated_enter_delta_ma),
+            rated_exit_delta_ma: advanced_power
+                .and_then(|snapshot| snapshot.get("rated_exit_delta_ma"))
+                .and_then(Value::as_i64)
+                .and_then(|value| i16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.rated_exit_delta_ma),
+            vin_drop_threshold_pct: advanced_power
+                .and_then(|snapshot| snapshot.get("vin_drop_threshold_pct"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.vin_drop_threshold_pct),
+            required_samples: advanced_power
+                .and_then(|snapshot| snapshot.get("required_samples"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.required_samples),
+        },
+        advanced_power_capabilities: advanced_power_capabilities
+            .and_then(|snapshot| serde_json::from_value(snapshot.clone()).ok())
+            .unwrap_or(defaults.advanced_power_capabilities),
     })
 }
 
@@ -3852,6 +3971,85 @@ async fn set_manual_charge(
     Ok(Json(response))
 }
 
+async fn set_advanced_power(
+    State(state): State<AppState>,
+    Json(input): Json<AdvancedPowerRequest>,
+) -> Result<Json<Value>, HttpError> {
+    let target = resolve_settings_control_target(
+        &state,
+        input.device_id.as_deref(),
+        input.lease_id.as_deref(),
+    )?;
+    let advanced_power = AdvancedPowerSettings {
+        standby_drop_mv: input.standby_drop_mv,
+        assist_low_drop_mv: input.assist_low_drop_mv,
+        rated_enter_delta_ma: input.rated_enter_delta_ma,
+        rated_exit_delta_ma: input.rated_exit_delta_ma,
+        vin_drop_threshold_pct: input.vin_drop_threshold_pct,
+        required_samples: input.required_samples,
+    };
+    let response = send_settings_command(
+        &state,
+        &target,
+        LanSettingsRequest {
+            method: "POST",
+            path: "/api/v1/settings/advanced-power",
+            body: Some(json!({
+                "standby_drop_mv": input.standby_drop_mv,
+                "assist_low_drop_mv": input.assist_low_drop_mv,
+                "rated_enter_delta_ma": input.rated_enter_delta_ma,
+                "rated_exit_delta_ma": input.rated_exit_delta_ma,
+                "vin_drop_threshold_pct": input.vin_drop_threshold_pct,
+                "required_samples": input.required_samples
+            })),
+        },
+        json!({
+            "type": "request",
+            "op": "set_advanced_power",
+            "standby_drop_mv": input.standby_drop_mv,
+            "assist_low_drop_mv": input.assist_low_drop_mv,
+            "rated_enter_delta_ma": input.rated_enter_delta_ma,
+            "rated_exit_delta_ma": input.rated_exit_delta_ma,
+            "vin_drop_threshold_pct": input.vin_drop_threshold_pct,
+            "required_samples": input.required_samples
+        }),
+        |settings| settings.advanced_power = advanced_power,
+        "advanced_power",
+        "Advanced power settings updated through mains-aegis-devd",
+    )
+    .await?;
+    Ok(Json(response))
+}
+
+async fn reset_advanced_power(
+    State(state): State<AppState>,
+    Query(query): Query<SettingsTargetQuery>,
+) -> Result<Json<Value>, HttpError> {
+    let target = resolve_settings_control_target(
+        &state,
+        query.device_id.as_deref(),
+        query.lease_id.as_deref(),
+    )?;
+    let response = send_settings_command(
+        &state,
+        &target,
+        LanSettingsRequest {
+            method: "POST",
+            path: "/api/v1/settings/advanced-power/reset",
+            body: Some(json!({})),
+        },
+        json!({
+            "type": "request",
+            "op": "reset_advanced_power"
+        }),
+        |settings| settings.advanced_power = default_settings().advanced_power,
+        "advanced_power",
+        "Advanced power settings reset through mains-aegis-devd",
+    )
+    .await?;
+    Ok(Json(response))
+}
+
 async fn monitor_start(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -3937,6 +4135,8 @@ async fn device_settings(
         },
         "log_level": device.settings.log_level,
         "manual_charge": device.settings.manual_charge,
+        "advanced_power": device.settings.advanced_power,
+        "advanced_power_capabilities": device.settings.advanced_power_capabilities,
     })))
 }
 
@@ -3957,6 +4157,8 @@ fn settings_snapshot(settings: &DeviceSettingsState) -> Value {
         },
         "log_level": settings.log_level.clone(),
         "manual_charge": settings.manual_charge.clone(),
+        "advanced_power": settings.advanced_power.clone(),
+        "advanced_power_capabilities": settings.advanced_power_capabilities.clone(),
     })
 }
 
@@ -7426,6 +7628,53 @@ fn default_settings() -> DeviceSettingsState {
             speed: "ma_500".to_string(),
             timer_h: 2,
         },
+        advanced_power: AdvancedPowerSettings {
+            standby_drop_mv: 1200,
+            assist_low_drop_mv: 600,
+            rated_enter_delta_ma: 0,
+            rated_exit_delta_ma: 0,
+            vin_drop_threshold_pct: 4,
+            required_samples: 2,
+        },
+        advanced_power_capabilities: AdvancedPowerCapabilities {
+            rated_vout_mv: 12000,
+            standby_drop_mv: AdvancedPowerFieldU16Capability {
+                default: 1200,
+                min: 0,
+                max: 3000,
+                step: 20,
+            },
+            assist_low_drop_mv: AdvancedPowerFieldU16Capability {
+                default: 600,
+                min: 0,
+                max: 3000,
+                step: 20,
+            },
+            rated_enter_delta_ma: AdvancedPowerFieldI16Capability {
+                default: 0,
+                min: -100,
+                max: 1000,
+                step: 50,
+            },
+            rated_exit_delta_ma: AdvancedPowerFieldI16Capability {
+                default: 0,
+                min: -50,
+                max: 1000,
+                step: 50,
+            },
+            vin_drop_threshold_pct: AdvancedPowerFieldU8Capability {
+                default: 4,
+                min: 1,
+                max: 12,
+                step: 1,
+            },
+            required_samples: AdvancedPowerFieldU8Capability {
+                default: 2,
+                min: 1,
+                max: 5,
+                step: 1,
+            },
+        },
     }
 }
 
@@ -8724,7 +8973,24 @@ mod tests {
         let snapshot = json!({
             "wifi": {"configured": true, "ssid": "lab"},
             "log_level": "debug",
-            "manual_charge": {"target": "rsoc_80", "speed": "ma_1000", "timer_h": 6}
+            "manual_charge": {"target": "rsoc_80", "speed": "ma_1000", "timer_h": 6},
+            "advanced_power": {
+                "standby_drop_mv": 1400,
+                "assist_low_drop_mv": 800,
+                "rated_enter_delta_ma": 100,
+                "rated_exit_delta_ma": 50,
+                "vin_drop_threshold_pct": 5,
+                "required_samples": 3
+            },
+            "advanced_power_capabilities": {
+                "rated_vout_mv": 19000,
+                "standby_drop_mv": {"default": 1200, "min": 0, "max": 3000, "step": 20},
+                "assist_low_drop_mv": {"default": 600, "min": 0, "max": 3000, "step": 20},
+                "rated_enter_delta_ma": {"default": 0, "min": -100, "max": 1000, "step": 50},
+                "rated_exit_delta_ma": {"default": 0, "min": -50, "max": 1000, "step": 50},
+                "vin_drop_threshold_pct": {"default": 4, "min": 1, "max": 12, "step": 1},
+                "required_samples": {"default": 2, "min": 1, "max": 5, "step": 1}
+            }
         });
 
         let settings = settings_state_from_api(&snapshot).unwrap();
@@ -8735,6 +9001,32 @@ mod tests {
         assert_eq!(settings.manual_charge.target, "rsoc_80");
         assert_eq!(settings.manual_charge.speed, "ma_1000");
         assert_eq!(settings.manual_charge.timer_h, 6);
+        assert_eq!(settings.advanced_power.standby_drop_mv, 1400);
+        assert_eq!(settings.advanced_power.assist_low_drop_mv, 800);
+        assert_eq!(settings.advanced_power.rated_enter_delta_ma, 100);
+        assert_eq!(settings.advanced_power.rated_exit_delta_ma, 50);
+        assert_eq!(settings.advanced_power.vin_drop_threshold_pct, 5);
+        assert_eq!(settings.advanced_power.required_samples, 3);
+        assert_eq!(settings.advanced_power_capabilities.rated_vout_mv, 19000);
+    }
+
+    #[test]
+    fn settings_snapshot_defaults_advanced_power_when_old_firmware_omits_new_fields() {
+        let snapshot = json!({
+            "wifi": {"configured": false, "ssid": null},
+            "log_level": "info",
+            "manual_charge": {"target": "full_100", "speed": "ma_500", "timer_h": 2}
+        });
+
+        let settings = settings_state_from_api(&snapshot).unwrap();
+
+        assert_eq!(settings.advanced_power.standby_drop_mv, 1200);
+        assert_eq!(settings.advanced_power.assist_low_drop_mv, 600);
+        assert_eq!(settings.advanced_power.rated_enter_delta_ma, 0);
+        assert_eq!(settings.advanced_power.rated_exit_delta_ma, 0);
+        assert_eq!(settings.advanced_power.vin_drop_threshold_pct, 4);
+        assert_eq!(settings.advanced_power.required_samples, 2);
+        assert_eq!(settings.advanced_power_capabilities.rated_vout_mv, 12000);
     }
 
     #[test]

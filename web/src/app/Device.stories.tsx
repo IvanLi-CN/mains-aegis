@@ -134,3 +134,23 @@ export const PowerCooldown: Story = {
     await expect(await canvas.findByText("0 mA")).toBeInTheDocument();
   },
 };
+
+export const SettingsAdvancedPower: Story = {
+  name: "Settings advanced power",
+  render: () => renderApp("/devices/mains-aegis-a1b2c3/settings"),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByRole("heading", { name: "Advanced Power" }),
+    ).toBeInTheDocument();
+    await expect(await canvas.findByText("Rated baseline: 12000 mV.")).toBeInTheDocument();
+    await expect(await canvas.findByDisplayValue("1200")).toBeInTheDocument();
+    await expect(await canvas.findByDisplayValue("600")).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("button", { name: "Apply advanced power" }),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("button", { name: "Reset to device default" }),
+    ).toBeInTheDocument();
+  },
+};

@@ -1,4 +1,11 @@
-import type { DefmtDecodeResult, Identity, SerialTraceEntry, UpsStatus } from "../api/types";
+import type {
+  AdvancedPowerSettings,
+  DefmtDecodeResult,
+  DeviceSettings,
+  Identity,
+  SerialTraceEntry,
+  UpsStatus,
+} from "../api/types";
 
 type SerialPortRequestOptions = {
   filters?: Array<{ usbVendorId?: number; usbProductId?: number }>;
@@ -198,12 +205,25 @@ export class WebSerialTransport {
     return result as UpsStatus;
   }
 
+  async requestSettings(): Promise<DeviceSettings> {
+    const result = await this.request("get_settings");
+    return result as DeviceSettings;
+  }
+
   async setLogLevel(level: string): Promise<unknown> {
     return this.request("set_log_level", { level });
   }
 
   async setManualChargePrefs(payload: { target: string; speed: string; timer_h: number }): Promise<unknown> {
     return this.request("set_manual_charge_prefs", payload);
+  }
+
+  async setAdvancedPower(payload: AdvancedPowerSettings): Promise<unknown> {
+    return this.request("set_advanced_power", payload);
+  }
+
+  async resetAdvancedPower(): Promise<unknown> {
+    return this.request("reset_advanced_power");
   }
 
   async setWifiConfig(ssid: string, psk: string): Promise<unknown> {

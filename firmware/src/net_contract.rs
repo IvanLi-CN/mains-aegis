@@ -168,6 +168,47 @@ pub fn render_settings_json<const N: usize>(
     json_field_str(buf, "target", settings.manual_charge.target, true);
     json_field_str(buf, "speed", settings.manual_charge.speed, true);
     let _ = write!(buf, "\"timer_h\":{}", settings.manual_charge.timer_h);
+    let _ = buf.push_str("},\"advanced_power\":{");
+    let _ = write!(
+        buf,
+        "\"standby_drop_mv\":{},\"assist_low_drop_mv\":{},\"rated_enter_delta_ma\":{},\"rated_exit_delta_ma\":{},\"vin_drop_threshold_pct\":{},\"required_samples\":{}",
+        settings.advanced_power.standby_drop_mv,
+        settings.advanced_power.assist_low_drop_mv,
+        settings.advanced_power.rated_enter_delta_ma,
+        settings.advanced_power.rated_exit_delta_ma,
+        settings.advanced_power.vin_drop_threshold_pct,
+        settings.advanced_power.required_samples,
+    );
+    let _ = buf.push_str("},\"advanced_power_capabilities\":{");
+    let _ = write!(
+        buf,
+        "\"rated_vout_mv\":{},\"standby_drop_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_low_drop_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"rated_enter_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"rated_exit_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"vin_drop_threshold_pct\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"required_samples\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}}",
+        settings.advanced_power_capabilities.rated_vout_mv,
+        settings.advanced_power_capabilities.standby_drop_mv.default,
+        settings.advanced_power_capabilities.standby_drop_mv.min,
+        settings.advanced_power_capabilities.standby_drop_mv.max,
+        settings.advanced_power_capabilities.standby_drop_mv.step,
+        settings.advanced_power_capabilities.assist_low_drop_mv.default,
+        settings.advanced_power_capabilities.assist_low_drop_mv.min,
+        settings.advanced_power_capabilities.assist_low_drop_mv.max,
+        settings.advanced_power_capabilities.assist_low_drop_mv.step,
+        settings.advanced_power_capabilities.rated_enter_delta_ma.default,
+        settings.advanced_power_capabilities.rated_enter_delta_ma.min,
+        settings.advanced_power_capabilities.rated_enter_delta_ma.max,
+        settings.advanced_power_capabilities.rated_enter_delta_ma.step,
+        settings.advanced_power_capabilities.rated_exit_delta_ma.default,
+        settings.advanced_power_capabilities.rated_exit_delta_ma.min,
+        settings.advanced_power_capabilities.rated_exit_delta_ma.max,
+        settings.advanced_power_capabilities.rated_exit_delta_ma.step,
+        settings.advanced_power_capabilities.vin_drop_threshold_pct.default,
+        settings.advanced_power_capabilities.vin_drop_threshold_pct.min,
+        settings.advanced_power_capabilities.vin_drop_threshold_pct.max,
+        settings.advanced_power_capabilities.vin_drop_threshold_pct.step,
+        settings.advanced_power_capabilities.required_samples.default,
+        settings.advanced_power_capabilities.required_samples.min,
+        settings.advanced_power_capabilities.required_samples.max,
+        settings.advanced_power_capabilities.required_samples.step,
+    );
     let _ = buf.push_str("}}");
 }
 
@@ -1022,12 +1063,17 @@ mod tests {
                     speed: "ma_500",
                     timer_h: 2,
                 },
+                advanced_power: crate::net_types::AdvancedPowerSettingsSnapshot::defaults(),
+                advanced_power_capabilities:
+                    crate::net_types::AdvancedPowerCapabilitiesSnapshot::for_rated_vout(12_000),
             },
         );
         assert!(body.as_str().contains("\"configured\":true"));
         assert!(body.as_str().contains("\"ssid\":\"LabNet\""));
         assert!(body.as_str().contains("\"log_level\":\"debug\""));
         assert!(body.as_str().contains("\"target\":\"rsoc_80\""));
+        assert!(body.as_str().contains("\"advanced_power\":{"));
+        assert!(body.as_str().contains("\"advanced_power_capabilities\":{"));
         assert!(!body.as_str().contains("psk"));
     }
 }

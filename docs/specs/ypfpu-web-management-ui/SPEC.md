@@ -73,7 +73,7 @@
 - `/devices/:device_id/thermal` 展示 TMP A/B 与保护上下文。
 - `/devices/:device_id/device` 展示 identity、network、firmware。
 - `/devices/:device_id/firmware` 展示 firmware artifact 选择、来源去重、Web Serial 直烧与 devd 代理烧录。
-- `/devices/:device_id/settings` 对 LAN、USB CDC 或 devd 连接设备开放，提供 WiFi 配网、手动充电偏好与日志级别设置。
+- `/devices/:device_id/settings` 对 LAN、USB CDC 或 devd 连接设备开放，提供 WiFi 配网、手动充电偏好、日志级别与 Advanced Power 高级设置。
 - `/devices/:device_id/api` 展示固定只读 endpoints 与当前 JSON snapshot。
 
 ### USB CDC / Web Serial 协议
@@ -84,7 +84,7 @@
 - `hello` 返回协议名 `mains-aegis.cdc.v1`、capabilities、identity；USB identity 的 `capabilities.write_controls=true`。
 - Web Serial 与 devd 在建立可写 USB session 前必须用 `identity.firmware.build_id`、`build_profile` 与 `features` 匹配可用 firmware artifact catalog；不匹配时必须阻断连接并显示 `firmware_artifact_mismatch` 气泡警告。用户只有点击显式的 “Ignore warning and connect” 后，才允许继续建立会话。
 - USB Console 可以保留 raw/ignored 串口记录用于调试，但不得为缺少 defmt decoder 额外发明显著诊断标签；连接前的固件 artifact 匹配门禁才负责拦截不匹配固件。
-- `request` 支持 `get_identity`、`get_status`、`set_log_level`、`set_manual_charge_prefs`。
+- `request` 支持 `get_identity`、`get_status`、`get_settings`、`set_log_level`、`set_manual_charge_prefs`、`set_advanced_power`、`reset_advanced_power`。
 - `wifi_config` 支持 `op=set` 与 `op=clear`；`set` 接收 `ssid` 与 `psk`，固件仅回传 SSID 与 ack，不回传 PSK；`clear` 必须清空 EEPROM WiFi slot 并让固件运行时 WiFi 立即进入 `disabled`。
 - WiFi 保存/清除在固件 ack 与后续 `status.network` 反馈完成前，Settings UI 必须保持对应按钮 loading/spinning，不能提前显示成功。
 - `log` frame 是结构化开发日志入口，字段至少包含 `level`、`target`、`message`。
@@ -216,6 +216,17 @@
   evidence_note: 验证单设备 critical 状态、battery fault、BMS readiness 和 issue detail 的视觉层级。
 
 ![Critical device frontend demo evidence](./assets/device-critical-demo.png)
+
+- source_type: mock_ui
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/settings?seed=default`
+  requested_viewport: `1680x2600`
+  viewport_strategy: `headless-browser`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: advanced power settings editor
+  evidence_note: 验证 Settings 页展示与设备 capabilities 同构的六项 Advanced Power 编辑器，显示 `rated_vout_mv` 基线、偏移量语义、范围/步进/默认值，以及 Apply/Reset 动作。
+
+![Advanced Power settings evidence](./images/advanced-power-settings-storybook.png)
 
 - source_type: mock_ui
   demo_entry_or_title: `/devices/mains-aegis-a1b2c3/battery?seed=default`

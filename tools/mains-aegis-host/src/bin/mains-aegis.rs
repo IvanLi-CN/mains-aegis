@@ -220,6 +220,24 @@ enum SettingsCommand {
         #[arg(long)]
         lease_id: Option<String>,
     },
+    AdvancedPower {
+        standby_drop_mv: u16,
+        assist_low_drop_mv: u16,
+        rated_enter_delta_ma: i16,
+        rated_exit_delta_ma: i16,
+        vin_drop_threshold_pct: u8,
+        required_samples: u8,
+        #[arg(long)]
+        device_id: Option<String>,
+        #[arg(long)]
+        lease_id: Option<String>,
+    },
+    AdvancedPowerReset {
+        #[arg(long)]
+        device_id: Option<String>,
+        #[arg(long)]
+        lease_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -663,6 +681,38 @@ fn settings_to_ipc(command: SettingsCommand) -> (&'static str, Value) {
                 "target": target,
                 "speed": speed,
                 "timer_h": timer_h,
+                "device_id": device_id,
+                "lease_id": lease_id,
+            }),
+        ),
+        SettingsCommand::AdvancedPower {
+            standby_drop_mv,
+            assist_low_drop_mv,
+            rated_enter_delta_ma,
+            rated_exit_delta_ma,
+            vin_drop_threshold_pct,
+            required_samples,
+            device_id,
+            lease_id,
+        } => (
+            "settings.advanced_power.set",
+            json!({
+                "standby_drop_mv": standby_drop_mv,
+                "assist_low_drop_mv": assist_low_drop_mv,
+                "rated_enter_delta_ma": rated_enter_delta_ma,
+                "rated_exit_delta_ma": rated_exit_delta_ma,
+                "vin_drop_threshold_pct": vin_drop_threshold_pct,
+                "required_samples": required_samples,
+                "device_id": device_id,
+                "lease_id": lease_id,
+            }),
+        ),
+        SettingsCommand::AdvancedPowerReset {
+            device_id,
+            lease_id,
+        } => (
+            "settings.advanced_power.reset",
+            json!({
                 "device_id": device_id,
                 "lease_id": lease_id,
             }),

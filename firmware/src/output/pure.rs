@@ -42,7 +42,6 @@ const DCIN_ADAPTIVE_STEP_DOWN_ICHG_MA: u16 = 200;
 const DCIN_ADAPTIVE_RAMP_HOLD_MS: u64 = 3_000;
 const DCIN_ADAPTIVE_RECOVERY_HOLD_MS: u64 = 10_000;
 const DCIN_ADAPTIVE_COOLDOWN_MS: u64 = 30_000;
-const DCIN_ADAPTIVE_VIN_DROP_PCT: u16 = 4;
 const DCIN_ADAPTIVE_VIN_DROP_STREAK_LIMIT: u8 = 2;
 pub(super) const DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA: i32 = 100;
 pub(super) const ASSIST_RATED_VIN_DROP_RECOVER_DIVISOR: u16 = 2;
@@ -1026,6 +1025,7 @@ pub(super) struct AssistPowerStageInput {
     pub(super) tps_total_iout_sample_seq: Option<u32>,
     pub(super) rated_enter_iout_ma: i32,
     pub(super) rated_exit_iout_ma: i32,
+    pub(super) vin_drop_threshold_pct: u16,
     pub(super) required_samples: u8,
 }
 
@@ -1109,7 +1109,9 @@ pub(super) fn assist_power_stage_step(
         tracker.stage = AssistPowerStage::AssistLow;
     }
 
-    let vin_drop_threshold_mv = input.vin_baseline_mv.map(dcin_vin_drop_threshold_mv);
+    let vin_drop_threshold_mv = input
+        .vin_baseline_mv
+        .map(|baseline_mv| dcin_vin_drop_threshold_mv(baseline_mv, input.vin_drop_threshold_pct));
     let vin_drop_recover_mv =
         vin_drop_threshold_mv.map(|threshold| threshold / ASSIST_RATED_VIN_DROP_RECOVER_DIVISOR);
     let promote_ready = matches!(
@@ -1163,8 +1165,8 @@ pub(super) fn assist_power_stage_step(
     tracker.stage
 }
 
-fn dcin_vin_drop_threshold_mv(vin_baseline_mv: u16) -> u16 {
-    let threshold = u32::from(vin_baseline_mv) * u32::from(DCIN_ADAPTIVE_VIN_DROP_PCT) / 100;
+fn dcin_vin_drop_threshold_mv(vin_baseline_mv: u16, vin_drop_threshold_pct: u16) -> u16 {
+    let threshold = u32::from(vin_baseline_mv) * u32::from(vin_drop_threshold_pct) / 100;
     threshold.max(1) as u16
 }
 
@@ -1172,6 +1174,7 @@ fn dcin_pressure_score_pct(
     state: DcinInputPressureState,
     drop_mv: Option<u16>,
     vin_baseline_mv: Option<u16>,
+    vin_drop_threshold_pct: u16,
 ) -> u8 {
     match state {
         DcinInputPressureState::Inactive => 0,
@@ -1186,7 +1189,10 @@ fn dcin_pressure_score_pct(
                 };
             };
             let drop_mv = u32::from(drop_mv.unwrap_or_default());
-            let threshold_mv = u32::from(dcin_vin_drop_threshold_mv(vin_baseline_mv));
+            let threshold_mv = u32::from(dcin_vin_drop_threshold_mv(
+                vin_baseline_mv,
+                vin_drop_threshold_pct,
+            ));
             let normalized = if threshold_mv == 0 {
                 0
             } else {
@@ -1225,6 +1231,7 @@ pub(super) fn dcin_input_pressure_step(
     tracker: &mut DcinInputPressureTracker,
     now_ms: u64,
     input: DcinInputPressureInput,
+    vin_drop_threshold_pct: u16,
 ) -> DcinInputPressureDecision {
     if !matches!(input.input_source, Some(DashboardInputSource::DcIn)) {
         tracker.reset();
@@ -1245,8 +1252,12 @@ pub(super) fn dcin_input_pressure_step(
             tracker.adaptive_cap_ichg_ma = None;
             tracker.last_ramp_at_ms = None;
         }
-        tracker.pressure_score_pct =
-            dcin_pressure_score_pct(tracker.state, tracker.vin_drop_mv, tracker.vin_baseline_mv);
+        tracker.pressure_score_pct = dcin_pressure_score_pct(
+            tracker.state,
+            tracker.vin_drop_mv,
+            tracker.vin_baseline_mv,
+            vin_drop_threshold_pct,
+        );
         return DcinInputPressureDecision {
             pressure_state: tracker.state,
             pressure_reason: tracker.reason,
@@ -1343,7 +1354,7 @@ pub(super) fn dcin_input_pressure_step(
             (tracker.vin_baseline_mv, input.vin_vbus_mv)
         {
             let vin_drop_mv = vin_baseline_mv.saturating_sub(vin_vbus_mv);
-            let threshold_mv = dcin_vin_drop_threshold_mv(vin_baseline_mv);
+            let threshold_mv = dcin_vin_drop_threshold_mv(vin_baseline_mv, vin_drop_threshold_pct);
             if vin_drop_mv > threshold_mv {
                 tracker.vin_drop_streak = tracker.vin_drop_streak.saturating_add(1);
                 tracker.vin_drop_mv = Some(vin_drop_mv);
@@ -1510,8 +1521,12 @@ pub(super) fn dcin_input_pressure_step(
     } else {
         DcinChargeLimitReason::None
     };
-    tracker.pressure_score_pct =
-        dcin_pressure_score_pct(tracker.state, tracker.vin_drop_mv, tracker.vin_baseline_mv);
+    tracker.pressure_score_pct = dcin_pressure_score_pct(
+        tracker.state,
+        tracker.vin_drop_mv,
+        tracker.vin_baseline_mv,
+        vin_drop_threshold_pct,
+    );
 
     let _ = input.vin_iin_ma;
 
@@ -2362,6 +2377,16 @@ impl defmt::Format for TelemetryBool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_VIN_DROP_THRESHOLD_PCT: u16 = 4;
+
+    fn dcin_input_pressure_step(
+        tracker: &mut DcinInputPressureTracker,
+        now_ms: u64,
+        input: DcinInputPressureInput,
+    ) -> DcinInputPressureDecision {
+        super::dcin_input_pressure_step(tracker, now_ms, input, TEST_VIN_DROP_THRESHOLD_PCT)
+    }
 
     #[test]
     fn normalize_input_sample_accepts_stable_positive_input() {
@@ -4988,39 +5013,39 @@ mod tests {
         let mut tracker = super::super::RuntimeModeTracker::new(UpsMode::Standby);
 
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(1)),
+            tracker.update(Some(true), Some(120), true, Some(1), 100, 50, 2),
             UpsMode::Standby
         );
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(2)),
+            tracker.update(Some(true), Some(120), true, Some(2), 100, 50, 2),
             UpsMode::Supplement
         );
         assert_eq!(
-            tracker.update(None, Some(0), false, Some(2)),
+            tracker.update(None, Some(0), false, Some(2), 100, 50, 2),
             UpsMode::Supplement
         );
         assert_eq!(
-            tracker.update(Some(true), Some(40), true, Some(3)),
+            tracker.update(Some(true), Some(40), true, Some(3), 100, 50, 2),
             UpsMode::Supplement
         );
         assert_eq!(
-            tracker.update(Some(true), Some(40), true, Some(4)),
+            tracker.update(Some(true), Some(40), true, Some(4), 100, 50, 2),
             UpsMode::Standby
         );
         assert_eq!(
-            tracker.update(Some(false), Some(0), true, Some(5)),
+            tracker.update(Some(false), Some(0), true, Some(5), 100, 50, 2),
             UpsMode::Backup
         );
         assert_eq!(
-            tracker.update(None, Some(0), false, Some(5)),
+            tracker.update(None, Some(0), false, Some(5), 100, 50, 2),
             UpsMode::Backup
         );
         assert_eq!(
-            tracker.update(Some(true), Some(0), true, Some(6)),
+            tracker.update(Some(true), Some(0), true, Some(6), 100, 50, 2),
             UpsMode::Standby
         );
         assert_eq!(
-            tracker.update(Some(true), Some(0), true, Some(7)),
+            tracker.update(Some(true), Some(0), true, Some(7), 100, 50, 2),
             UpsMode::Standby
         );
     }
@@ -5030,16 +5055,19 @@ mod tests {
         let mut tracker = super::super::RuntimeModeTracker::new(UpsMode::Standby);
 
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(1)),
+            tracker.update(Some(true), Some(120), true, Some(1), 100, 50, 2),
             UpsMode::Standby
         );
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(2)),
+            tracker.update(Some(true), Some(120), true, Some(2), 100, 50, 2),
             UpsMode::Supplement
         );
-        assert_eq!(tracker.update(None, None, false, None), UpsMode::Supplement);
         assert_eq!(
-            tracker.update(Some(false), None, false, None),
+            tracker.update(None, None, false, None, 100, 50, 2),
+            UpsMode::Supplement
+        );
+        assert_eq!(
+            tracker.update(Some(false), None, false, None, 100, 50, 2),
             UpsMode::Backup
         );
     }
@@ -5062,6 +5090,7 @@ mod tests {
             tps_total_iout_sample_seq: Some(sample_seq),
             rated_enter_iout_ma: 100,
             rated_exit_iout_ma: 50,
+            vin_drop_threshold_pct: TEST_VIN_DROP_THRESHOLD_PCT,
             required_samples: 2,
         }
     }
@@ -5187,6 +5216,7 @@ mod tests {
                     tps_total_iout_sample_seq: Some(5),
                     rated_enter_iout_ma: 100,
                     rated_exit_iout_ma: 50,
+                    vin_drop_threshold_pct: TEST_VIN_DROP_THRESHOLD_PCT,
                     required_samples: 2,
                 }
             ),

@@ -67,6 +67,8 @@
 - `POST /api/v1/wifi-config` / `DELETE /api/v1/wifi-config`: 通过指定 `device_id` 的已连接设备写入或清除 WiFi 配置；未指定 `device_id` 时仅允许单设备连接场景。
 - `POST /api/v1/settings/log-level`: 通过指定 `device_id` 的连接设备更新日志级别。
 - `POST /api/v1/settings/manual-charge`: 通过指定 `device_id` 的连接设备更新手动充电偏好。
+- `POST /api/v1/settings/advanced-power`: 通过指定 `device_id` 的连接设备整块替换 Advanced Power 六项高级设置。
+- `POST /api/v1/settings/advanced-power/reset`: 通过指定 `device_id` 的连接设备把 Advanced Power 恢复为设备默认值。
 
 `power-diag` 响应必须保持只读，不触发充电策略、BMS 恢复或输出状态变化。快照至少包含：
 

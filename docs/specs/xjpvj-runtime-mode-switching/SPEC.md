@@ -42,7 +42,7 @@
 ### Out of scope
 
 - 手动 charge、BMS 激活、USB PD 恢复、DC input adaptive derate 的完整行为定义。
-- 面向用户的新设置项或持久化配置。
+- 脱离 `settings.advanced_power` 契约之外的额外 owner-facing mode/control surface。
 - 运行态声音素材或前面板视觉风格变更。
 
 ## 接管说明

@@ -1149,7 +1149,7 @@ function recordFromDefinition(mock: MockDefinition): DeviceRecord {
     target: mock.target,
     identity: mock.identity,
     network: mock.network,
-    settings: null,
+    settings: defaultMockDeviceSettings(),
     status: mock.status,
     connectionState: mock.connectionState,
     streamState: mock.connectionState === "online" ? "streaming" : "polling",
@@ -1169,6 +1169,23 @@ function defaultMockDeviceSettings(): DeviceSettings {
       target: "full_100",
       speed: "ma_500",
       timer_h: 2,
+    },
+    advanced_power: {
+      standby_drop_mv: 1200,
+      assist_low_drop_mv: 600,
+      rated_enter_delta_ma: 0,
+      rated_exit_delta_ma: 0,
+      vin_drop_threshold_pct: 4,
+      required_samples: 2,
+    },
+    advanced_power_capabilities: {
+      rated_vout_mv: 12000,
+      standby_drop_mv: { default: 1200, min: 0, max: 3000, step: 20 },
+      assist_low_drop_mv: { default: 600, min: 0, max: 3000, step: 20 },
+      rated_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+      rated_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+      vin_drop_threshold_pct: { default: 4, min: 1, max: 12, step: 1 },
+      required_samples: { default: 2, min: 1, max: 5, step: 1 },
     },
   };
 }

@@ -392,19 +392,19 @@ pub mod output {
         let mut tracker = RuntimeModeTracker::new(UpsMode::Standby);
 
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(1)),
+            tracker.update(Some(true), Some(120), true, Some(1), 100, 50, 2),
             UpsMode::Standby
         );
         assert_eq!(
-            tracker.update(Some(false), None, false, None),
+            tracker.update(Some(false), None, false, None, 100, 50, 2),
             UpsMode::Backup
         );
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(2)),
+            tracker.update(Some(true), Some(120), true, Some(2), 100, 50, 2),
             UpsMode::Standby
         );
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(3)),
+            tracker.update(Some(true), Some(120), true, Some(3), 100, 50, 2),
             UpsMode::Supplement
         );
     }
@@ -442,10 +442,6 @@ pub mod output {
     }
 
     impl RuntimeModeTracker {
-        const ASSIST_ENTER_MA: i32 = 100;
-        const STANDBY_EXIT_MA: i32 = 50;
-        const REQUIRED_SAMPLES: u8 = 2;
-
         const fn new(initial_mode: UpsMode) -> Self {
             let mains_mode = match initial_mode {
                 UpsMode::Backup => UpsMode::Backup,
@@ -465,6 +461,9 @@ pub mod output {
             tps_total_iout_ma: Option<i32>,
             tps_total_iout_fresh: bool,
             tps_total_iout_sample_seq: Option<u32>,
+            assist_enter_ma: i32,
+            standby_exit_ma: i32,
+            required_samples: u8,
         ) -> UpsMode {
             match mains_present {
                 Some(false) => {
@@ -483,19 +482,19 @@ pub mod output {
                     if sample_is_new {
                         self.last_tps_total_iout_sample_seq = tps_total_iout_sample_seq;
                         match tps_total_iout_ma {
-                            Some(total_iout_ma) if total_iout_ma >= Self::ASSIST_ENTER_MA => {
+                            Some(total_iout_ma) if total_iout_ma >= assist_enter_ma => {
                                 self.assist_enter_streak =
                                     self.assist_enter_streak.saturating_add(1);
                                 self.standby_enter_streak = 0;
-                                if self.assist_enter_streak >= Self::REQUIRED_SAMPLES {
+                                if self.assist_enter_streak >= required_samples {
                                     self.mains_mode = UpsMode::Supplement;
                                 }
                             }
-                            Some(total_iout_ma) if total_iout_ma <= Self::STANDBY_EXIT_MA => {
+                            Some(total_iout_ma) if total_iout_ma <= standby_exit_ma => {
                                 self.standby_enter_streak =
                                     self.standby_enter_streak.saturating_add(1);
                                 self.assist_enter_streak = 0;
-                                if self.standby_enter_streak >= Self::REQUIRED_SAMPLES {
+                                if self.standby_enter_streak >= required_samples {
                                     self.mains_mode = UpsMode::Standby;
                                 }
                             }

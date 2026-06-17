@@ -2,7 +2,13 @@ use core::fmt::Write as _;
 
 use heapless::{String, Vec};
 
-use crate::net_contract::write_json_string_escaped;
+use crate::{
+    net_contract::write_json_string_escaped,
+    net_types::{
+        validate_advanced_power_settings, AdvancedPowerSettingsSnapshot,
+        AdvancedPowerValidationError,
+    },
+};
 
 pub const PROTOCOL_NAME: &str = "mains-aegis.cdc.v1";
 pub const WIFI_CONFIG_RECORD_LEN: usize = 128;
@@ -39,9 +45,12 @@ pub enum UsbCdcFrame {
 pub enum UsbCdcRequest {
     GetIdentity,
     GetStatus,
+    GetSettings,
     GetPowerDiag,
     SetLogLevel(LogLevel),
     SetManualChargePrefs(ManualChargePrefsCommand),
+    SetAdvancedPower(AdvancedPowerSettingsSnapshot),
+    ResetAdvancedPower,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,6 +157,7 @@ pub enum UsbCdcProtocolError {
     UnsafeOperation,
     InvalidLogLevel,
     InvalidManualChargePrefs,
+    InvalidAdvancedPowerSettings,
     InvalidWifiSsid,
     InvalidWifiPsk,
     FrameTooLarge,
@@ -164,6 +174,7 @@ impl UsbCdcProtocolError {
             Self::UnsafeOperation => "unsafe_operation",
             Self::InvalidLogLevel => "invalid_log_level",
             Self::InvalidManualChargePrefs => "invalid_manual_charge_prefs",
+            Self::InvalidAdvancedPowerSettings => "invalid_advanced_power_settings",
             Self::InvalidWifiSsid => "invalid_wifi_ssid",
             Self::InvalidWifiPsk => "invalid_wifi_psk",
             Self::FrameTooLarge => "frame_too_large",
@@ -180,6 +191,9 @@ impl UsbCdcProtocolError {
             Self::UnsafeOperation => "requested operation is outside the safe USB control surface",
             Self::InvalidLogLevel => "log level must be error, warn, info, debug, or trace",
             Self::InvalidManualChargePrefs => "manual charge prefs are outside the safe set",
+            Self::InvalidAdvancedPowerSettings => {
+                "advanced power settings are outside the supported range or ordering"
+            }
             Self::InvalidWifiSsid => "WiFi SSID must be 1..32 non-control bytes",
             Self::InvalidWifiPsk => "WiFi PSK must be 8..63 non-control bytes",
             Self::FrameTooLarge => "CDC frame exceeds line buffer capacity",
@@ -290,6 +304,12 @@ pub fn parse_http_manual_charge_request(
     body: &str,
 ) -> Result<ManualChargePrefsCommand, UsbCdcProtocolError> {
     parse_manual_charge_prefs(body)
+}
+
+pub fn parse_http_advanced_power_request(
+    body: &str,
+) -> Result<AdvancedPowerSettingsSnapshot, UsbCdcProtocolError> {
+    parse_advanced_power_settings(body)
 }
 
 pub fn parse_http_wifi_config_request(body: &str) -> Result<WifiConfigSecret, UsbCdcProtocolError> {
@@ -493,6 +513,7 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
     match op {
         "get_identity" => Ok(UsbCdcRequest::GetIdentity),
         "get_status" => Ok(UsbCdcRequest::GetStatus),
+        "get_settings" => Ok(UsbCdcRequest::GetSettings),
         "get_power_diag" => Ok(UsbCdcRequest::GetPowerDiag),
         "set_log_level" => {
             let level =
@@ -502,6 +523,10 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
         "set_manual_charge_prefs" => Ok(UsbCdcRequest::SetManualChargePrefs(
             parse_manual_charge_prefs(line)?,
         )),
+        "set_advanced_power" => Ok(UsbCdcRequest::SetAdvancedPower(
+            parse_advanced_power_settings(line)?,
+        )),
+        "reset_advanced_power" => Ok(UsbCdcRequest::ResetAdvancedPower),
         "output_enable" | "output_disable" | "clear_fault" | "start_charge" | "stop_charge" => {
             Err(UsbCdcProtocolError::UnsafeOperation)
         }
@@ -551,6 +576,33 @@ fn parse_manual_charge_prefs(line: &str) -> Result<ManualChargePrefsCommand, Usb
         speed,
         timer_limit,
     })
+}
+
+fn parse_advanced_power_settings(
+    line: &str,
+) -> Result<AdvancedPowerSettingsSnapshot, UsbCdcProtocolError> {
+    let settings = AdvancedPowerSettingsSnapshot {
+        standby_drop_mv: json_u16_field(line, "standby_drop_mv")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        assist_low_drop_mv: json_u16_field(line, "assist_low_drop_mv")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        rated_enter_delta_ma: json_i16_field(line, "rated_enter_delta_ma")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        rated_exit_delta_ma: json_i16_field(line, "rated_exit_delta_ma")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        vin_drop_threshold_pct: json_u8_field(line, "vin_drop_threshold_pct")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        required_samples: json_u8_field(line, "required_samples")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+    };
+    validate_advanced_power_settings(settings).map_err(advanced_power_validation_protocol_error)?;
+    Ok(settings)
+}
+
+fn advanced_power_validation_protocol_error(
+    _err: AdvancedPowerValidationError,
+) -> UsbCdcProtocolError {
+    UsbCdcProtocolError::InvalidAdvancedPowerSettings
 }
 
 fn validate_wifi_ssid(ssid: &str) -> Result<(), UsbCdcProtocolError> {
@@ -652,6 +704,46 @@ fn json_u8_field(line: &str, key: &str) -> Result<Option<u8>, UsbCdcProtocolErro
     }
     line[start..idx]
         .parse::<u8>()
+        .map(Some)
+        .map_err(|_| UsbCdcProtocolError::InvalidJson)
+}
+
+fn json_u16_field(line: &str, key: &str) -> Result<Option<u16>, UsbCdcProtocolError> {
+    let Some(mut idx) = json_value_offset(line, key) else {
+        return Ok(None);
+    };
+    let bytes = line.as_bytes();
+    let start = idx;
+    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+        idx += 1;
+    }
+    if idx == start {
+        return Err(UsbCdcProtocolError::InvalidJson);
+    }
+    line[start..idx]
+        .parse::<u16>()
+        .map(Some)
+        .map_err(|_| UsbCdcProtocolError::InvalidJson)
+}
+
+fn json_i16_field(line: &str, key: &str) -> Result<Option<i16>, UsbCdcProtocolError> {
+    let Some(mut idx) = json_value_offset(line, key) else {
+        return Ok(None);
+    };
+    let bytes = line.as_bytes();
+    let start = idx;
+    if bytes.get(idx) == Some(&b'-') {
+        idx += 1;
+    }
+    let digits_start = idx;
+    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+        idx += 1;
+    }
+    if idx == digits_start {
+        return Err(UsbCdcProtocolError::InvalidJson);
+    }
+    line[start..idx]
+        .parse::<i16>()
         .map(Some)
         .map_err(|_| UsbCdcProtocolError::InvalidJson)
 }

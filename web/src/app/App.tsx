@@ -56,6 +56,7 @@ import {
   toErrorEnvelope,
 } from "../api/client";
 import type {
+  AdvancedPowerSettings,
   DeviceRecord,
   DeviceSettings,
   DevdDevice,
@@ -3103,7 +3104,13 @@ function DeviceInfoPage({ record }: { record: DeviceRecord }) {
 }
 
 function SettingsPage({ record }: { record: DeviceRecord }) {
-  const { sendWifiConfig, clearWifiConfig, setManualChargePrefs } =
+  const {
+    sendWifiConfig,
+    clearWifiConfig,
+    setManualChargePrefs,
+    setAdvancedPower,
+    resetAdvancedPower,
+  } =
     useDeviceRegistry();
   const settings = record.settings;
   const [ssid, setSsid] = useState(settings?.wifi.ssid ?? "");
@@ -3118,12 +3125,15 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
         timer_h: 2,
       } as DeviceSettings["manual_charge"]),
   );
+  const [advancedPower, setAdvancedPowerDraft] = useState<AdvancedPowerSettings>(
+    settings?.advanced_power ?? defaultAdvancedPowerSettings(),
+  );
   const [message, setMessage] = useState<UiFeedback | null>(null);
   const [wifiMessage, setWifiMessage] = useState<UiFeedback | null>(null);
   const [wifiProgress, setWifiProgress] =
     useState<WifiProvisioningProgress | null>(null);
   const [busy, setBusy] = useState<
-    "wifi-save" | "wifi-clear" | "manual" | null
+    "wifi-save" | "wifi-clear" | "manual" | "advanced-power" | "advanced-power-reset" | null
   >(null);
   const activeTransport = activeRecordTransport(record);
   const usbReady = activeTransport === "serial";
@@ -3147,6 +3157,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   useEffect(() => {
     if (!settings) return;
     setManualPrefs(settings.manual_charge);
+    setAdvancedPowerDraft(settings.advanced_power);
     if (settings.wifi.ssid) setSsid(settings.wifi.ssid);
   }, [settings]);
 
@@ -3228,6 +3239,31 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
     );
   }
 
+  async function onAdvancedPowerSubmit(event: FormEvent) {
+    event.preventDefault();
+    setBusy("advanced-power");
+    setMessage(null);
+    const result = await setAdvancedPower(record.target.deviceId, advancedPower);
+    setBusy(null);
+    setMessage(
+      result.ok
+        ? successFeedback("Advanced power settings updated")
+        : errorFeedback(result.error),
+    );
+  }
+
+  async function onAdvancedPowerReset() {
+    setBusy("advanced-power-reset");
+    setMessage(null);
+    const result = await resetAdvancedPower(record.target.deviceId);
+    setBusy(null);
+    setMessage(
+      result.ok
+        ? successFeedback("Advanced power settings reset")
+        : errorFeedback(result.error),
+    );
+  }
+
   if (!settingsReady) {
     return (
       <section className="page-flow">
@@ -3254,7 +3290,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   return (
     <section className="page-flow" data-evidence-target="wifi-settings">
       <DeviceStatusBand record={record} />
-      <div className="settings-layout settings-layout-balanced">
+      <div className="settings-layout settings-layout-advanced">
         <section className="info-panel settings-panel">
           <header>
             <Wifi size={18} />
@@ -3407,6 +3443,129 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
             </button>
           </form>
         </section>
+
+        <section className="info-panel settings-panel advanced-power-panel">
+          <header>
+            <AlertTriangle size={18} />
+            <h2>Advanced Power</h2>
+          </header>
+          <form className="settings-form" onSubmit={onAdvancedPowerSubmit}>
+            <div className="settings-copy">
+              <p className="field-help">
+                Adjust staged assist/takeover behavior with relative offsets only.
+                The device reports the active rated output baseline and all valid ranges.
+              </p>
+              <div className="secret-note">
+                <CircleHelp size={15} />
+                Rated baseline: {settings?.advanced_power_capabilities.rated_vout_mv ?? 0} mV. Values are stored as offset deltas, so 12V and 19V devices stay portable.
+              </div>
+            </div>
+            <AdvancedPowerField
+              label="Standby drop"
+              hint="How far below rated output the standby hot-standby target stays. Larger drop means less normal sharing."
+              suffix="mV"
+              value={advancedPower.standby_drop_mv}
+              capability={settings?.advanced_power_capabilities.standby_drop_mv}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  standby_drop_mv: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Assist low drop"
+              hint="Low assist target before rated takeover. Must stay at or below standby drop."
+              suffix="mV"
+              value={advancedPower.assist_low_drop_mv}
+              capability={settings?.advanced_power_capabilities.assist_low_drop_mv}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  assist_low_drop_mv: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Rated enter delta"
+              hint="Current delta added to the rated takeover enter threshold."
+              suffix="mA"
+              value={advancedPower.rated_enter_delta_ma}
+              capability={settings?.advanced_power_capabilities.rated_enter_delta_ma}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  rated_enter_delta_ma: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Rated exit delta"
+              hint="Current delta added to the rated takeover exit threshold."
+              suffix="mA"
+              value={advancedPower.rated_exit_delta_ma}
+              capability={settings?.advanced_power_capabilities.rated_exit_delta_ma}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  rated_exit_delta_ma: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="VIN drop threshold"
+              hint="Percent drop from the observed VIN baseline required before rated takeover can assert."
+              suffix="%"
+              value={advancedPower.vin_drop_threshold_pct}
+              capability={settings?.advanced_power_capabilities.vin_drop_threshold_pct}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  vin_drop_threshold_pct: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Required samples"
+              hint="How many fresh samples must agree before entering rated takeover."
+              suffix="samples"
+              value={advancedPower.required_samples}
+              capability={settings?.advanced_power_capabilities.required_samples}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  required_samples: value,
+                }))
+              }
+            />
+            <div className="form-actions advanced-power-actions">
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={busy !== null}
+              >
+                <ButtonLabel
+                  busy={busy === "advanced-power"}
+                  busyText="Applying"
+                  text="Apply advanced power"
+                />
+              </button>
+              <button
+                className="secondary-button danger-action"
+                type="button"
+                disabled={busy !== null}
+                onClick={() => void onAdvancedPowerReset()}
+              >
+                <ButtonLabel
+                  icon={RefreshCw}
+                  busy={busy === "advanced-power-reset"}
+                  busyText="Resetting"
+                  text="Reset to device default"
+                />
+              </button>
+            </div>
+          </form>
+        </section>
       </div>
       <UsbDeveloperConsole
         logs={record.serial?.logs ?? []}
@@ -3425,6 +3584,64 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function defaultAdvancedPowerSettings(): AdvancedPowerSettings {
+  return {
+    standby_drop_mv: 1200,
+    assist_low_drop_mv: 600,
+    rated_enter_delta_ma: 0,
+    rated_exit_delta_ma: 0,
+    vin_drop_threshold_pct: 4,
+    required_samples: 2,
+  };
+}
+
+function AdvancedPowerField({
+  label,
+  hint,
+  suffix,
+  value,
+  capability,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  suffix: string;
+  value: number;
+  capability:
+    | {
+        default: number;
+        min: number;
+        max: number;
+        step: number;
+      }
+    | undefined;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="advanced-power-field">
+      <span className="advanced-power-header">
+        <strong>{label}</strong>
+        <span>{suffix}</span>
+      </span>
+      <input
+        type="number"
+        inputMode="numeric"
+        value={value}
+        min={capability?.min}
+        max={capability?.max}
+        step={capability?.step}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+      <span className="field-help">{hint}</span>
+      <span className="advanced-power-meta">
+        Default {capability?.default ?? value} {suffix} · Range{" "}
+        {capability?.min ?? value}..{capability?.max ?? value} · Step{" "}
+        {capability?.step ?? 1}
+      </span>
+    </label>
   );
 }
 
