@@ -60,7 +60,10 @@ static hosting then consume the same bundled fallback catalog during local
 development and production preview. Bundled artifacts that advertise the
 `web_serial` feature must include at least one `image` file with
 `flash_address`; `bun run firmware:embed-web` now fails fast if that browser
-flash payload is missing.
+flash payload is missing. CI validates the committed bundled fallback with
+`tools/firmware-artifact/validate-web-bundle.py`, which checks manifest/catalog
+consistency, staged file hashes/sizes, `SHA256SUMS`, and the required Web
+Serial image presence without rebuilding a new current-HEAD artifact identity.
 
 If a bundled artifact and a GitHub Release artifact share the same `artifact_id`,
 the Web App keeps the bundled copy and treats the release copy as a duplicate.

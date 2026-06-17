@@ -90,10 +90,10 @@ jobs:
             --out web/public/firmware \
             --clean
 
-      - name: Verify bundled firmware assets are in sync
+      - name: Validate committed bundled firmware assets
         if: steps.changes.outputs.firmware == 'true'
         run: |
-          git diff --exit-code -- web/public/firmware
+          python3 tools/firmware-artifact/validate-web-bundle.py --bundle-root web/public/firmware
 
       - name: Upload firmware artifacts
         if: steps.changes.outputs.firmware == 'true'
