@@ -3772,10 +3772,7 @@ where
             tps_b_next_retry_at: if out_b_allowed { Some(now) } else { None },
             tps_telemetry_sample_seq: 0,
             runtime_mode: RuntimeModeTracker::new(initial_ui_snapshot.mode),
-            assist_power_stage: AssistPowerStageTracker {
-                stage: initial_assist_stage,
-                ..AssistPowerStageTracker::default()
-            },
+            assist_power_stage: AssistPowerStageTracker::with_stage(initial_assist_stage),
             applied_assist_target_vout_mv: initial_assist_target_vout_mv,
 
             bms_addr,

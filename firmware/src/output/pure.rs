@@ -1030,6 +1030,12 @@ pub(super) struct AssistPowerStageInput {
 }
 
 impl AssistPowerStageTracker {
+    pub(super) fn with_stage(stage: AssistPowerStage) -> Self {
+        let mut tracker = Self::default();
+        tracker.stage = stage;
+        tracker
+    }
+
     pub(super) fn reset_for_online(&mut self) {
         self.promote_streak = 0;
         self.recover_streak = 0;
