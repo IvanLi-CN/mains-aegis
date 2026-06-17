@@ -4786,6 +4786,8 @@ fn derive_power_diag_from_status(status: &Value, source: &str) -> Value {
             "pressure_reason": input.get("pressure_reason").cloned().unwrap_or(Value::Null),
             "vin_baseline_mv": input.get("vin_baseline_mv").cloned().unwrap_or(Value::Null),
             "vin_drop_mv": input.get("vin_drop_mv").cloned().unwrap_or(Value::Null),
+            "assist_power_stage": input.get("assist_power_stage").cloned().unwrap_or(Value::Null),
+            "assist_target_vout_mv": input.get("assist_target_vout_mv").cloned().unwrap_or(Value::Null),
             "usb_pd_attached": Value::Bool(input.get("source").and_then(Value::as_str) == Some("usbc")),
             "usb_pd_charge_ready": Value::Bool(charger.get("allow_charge").and_then(Value::as_bool).unwrap_or(false)),
             "usb_pd_vbus_present": Value::Null,
@@ -4954,6 +4956,8 @@ fn maybe_record_power_event(
         "vin_vbus_mv": input.get("vin_vbus_mv").cloned().unwrap_or(Value::Null),
         "vin_baseline_mv": input.get("vin_baseline_mv").cloned().unwrap_or(Value::Null),
         "vin_drop_mv": input.get("vin_drop_mv").cloned().unwrap_or(Value::Null),
+        "assist_power_stage": input.get("assist_power_stage").cloned().unwrap_or(Value::Null),
+        "assist_target_vout_mv": input.get("assist_target_vout_mv").cloned().unwrap_or(Value::Null),
         "tps_total_iout_ma": input.get("tps_total_iout_ma").cloned().unwrap_or(Value::Null),
         "tps_limit_threshold_ma": input
             .get("tps_limit_threshold_ma")
@@ -8520,6 +8524,8 @@ mod tests {
                 "input_ibus_ma": 241,
                 "vin_vbus_mv": 11896,
                 "vin_iin_ma": 217,
+                "assist_power_stage": "assist_rated",
+                "assist_target_vout_mv": 12000,
                 "tps_total_iout_ma": 288,
                 "tps_limit_threshold_ma": 100,
                 "pressure_state": "cooldown",
@@ -8559,6 +8565,8 @@ mod tests {
 
         assert_eq!(diag["source"], "lan_derived");
         assert_eq!(diag["input"]["pressure_reason"], "tps_output_current");
+        assert_eq!(diag["input"]["assist_power_stage"], "assist_rated");
+        assert_eq!(diag["input"]["assist_target_vout_mv"], 12000);
         assert_eq!(diag["input"]["tps_total_iout_ma"], 288);
         assert_eq!(diag["charger"]["allow_charge"], false);
         assert_eq!(diag["charger"]["poorsrc"], false);

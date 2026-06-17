@@ -74,6 +74,8 @@ const DEFAULT_VOUT_MV: u16 = if cfg!(feature = "main-vout-19v") {
 } else {
     12_000
 };
+const DEFAULT_STANDBY_VOUT_MV: u16 = DEFAULT_VOUT_MV.saturating_sub(1_200);
+const DEFAULT_ASSIST_LOW_VOUT_MV: u16 = DEFAULT_VOUT_MV.saturating_sub(600);
 const DEFAULT_ILIMIT_MA: u16 = 3_500;
 const TELEMETRY_PERIOD: Duration = Duration::from_millis(500);
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
@@ -1441,6 +1443,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         recoverable_outputs: self_test.recoverable_outputs,
         output_gate_reason: self_test.output_gate_reason,
         vout_mv: DEFAULT_VOUT_MV,
+        standby_vout_mv: DEFAULT_STANDBY_VOUT_MV,
+        assist_low_vout_mv: DEFAULT_ASSIST_LOW_VOUT_MV,
         ilimit_ma: DEFAULT_ILIMIT_MA,
         telemetry_period: TELEMETRY_PERIOD,
         retry_backoff: RETRY_BACKOFF,

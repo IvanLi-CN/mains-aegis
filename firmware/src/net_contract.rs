@@ -198,7 +198,14 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     );
     json_field_opt_str(buf, "pressure_reason", status.input_pressure_reason, true);
     json_field_opt_u16(buf, "vin_baseline_mv", status.input_vin_baseline_mv, true);
-    json_field_opt_u16(buf, "vin_drop_mv", status.input_vin_drop_mv, false);
+    json_field_opt_u16(buf, "vin_drop_mv", status.input_vin_drop_mv, true);
+    json_field_opt_str(buf, "assist_power_stage", status.assist_power_stage, true);
+    json_field_opt_u16(
+        buf,
+        "assist_target_vout_mv",
+        status.assist_target_vout_mv,
+        false,
+    );
     let _ = buf.push_str("},\"output\":{");
     json_field_str(buf, "requested", status.requested_outputs, true);
     json_field_str(buf, "active", status.active_outputs, true);
@@ -331,6 +338,18 @@ pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDi
     json_field_opt_str(buf, "pressure_reason", diag.input.pressure_reason, true);
     json_field_opt_u16(buf, "vin_baseline_mv", diag.input.vin_baseline_mv, true);
     json_field_opt_u16(buf, "vin_drop_mv", diag.input.vin_drop_mv, true);
+    json_field_opt_str(
+        buf,
+        "assist_power_stage",
+        diag.input.assist_power_stage,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "assist_target_vout_mv",
+        diag.input.assist_target_vout_mv,
+        true,
+    );
     json_field_bool(buf, "usb_pd_attached", diag.input.usb_pd_attached, true);
     json_field_bool(
         buf,
@@ -913,6 +932,8 @@ mod tests {
         status.tps_limit_threshold_ma = Some(100);
         status.input_vin_baseline_mv = Some(19_400);
         status.input_vin_drop_mv = Some(920);
+        status.assist_power_stage = Some("assist_rated");
+        status.assist_target_vout_mv = Some(12_000);
         status.charger_policy_target_ichg_ma = Some(300);
         status.charger_limit_active = Some(true);
         status.charger_limit_reason = Some("pressure_vindpm");
@@ -949,6 +970,10 @@ mod tests {
         assert!(body.as_str().contains("\"tps_limit_threshold_ma\":100"));
         assert!(body.as_str().contains("\"vin_baseline_mv\":19400"));
         assert!(body.as_str().contains("\"vin_drop_mv\":920"));
+        assert!(body
+            .as_str()
+            .contains("\"assist_power_stage\":\"assist_rated\""));
+        assert!(body.as_str().contains("\"assist_target_vout_mv\":12000"));
         assert!(body.as_str().contains("\"policy_target_ichg_ma\":300"));
         assert!(body.as_str().contains("\"limit_active\":true"));
         assert!(body

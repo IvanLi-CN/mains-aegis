@@ -8,21 +8,39 @@
   - `2` 个连续 fresh 样本锁存
   - `mains_present=None` 时保持上一确认模式
 - `status` / `power-diag` / Dashboard charger token 与 `ASSIST / BACKUP` 的 non-charging 联动同步收敛。
+- 当前固件已把 `ASSIST` 扩展为内部 staged takeover：
+  - `standby` 使用低于额定输出的热备目标电压
+  - `assist_low` 使用较高但仍非额定的低补能目标电压
+  - `assist_rated` 与 `backup` 使用额定输出目标电压
+  - owner-facing `mode` 仍只暴露 `standby / supplement / backup`
 
 ## 本轮落地项
 
 - 新建 runtime-mode topic spec，并把旧 spec 的模式定义改为引用此 spec。
 - 移除 `tps_a_enabled || tps_b_enabled` 作为 `ASSIST` 判据。
 - 移除 `None + output=true => BACKUP` 逻辑。
+- 在 `firmware/src/output/pure.rs` 新增 staged assist pure tracker，使用：
+  - `vin_baseline_mv / vin_drop_mv`
+  - `TPS total output current`
+  - `2` 个连续 fresh 样本
+  作为 `assist_low <-> assist_rated` 的唯一主判据。
+- 在 `firmware/src/output/mod.rs` 复用现有 runtime-mode tracker 与 `dcin_input_pressure_step()` 路径，把目标电压切换接入 TPS 运行时重配。
+- 在 `status` / `power-diag` / host LAN fallback 中新增：
+  - `assist_power_stage`
+  - `assist_target_vout_mv`
 - 补齐 host-unit-tests / firmware tests，覆盖：
   - `STANDBY <-> ASSIST` 滞回
   - VIN 瞬时缺样保持
   - fallback false 才进入 `BACKUP`
   - `ASSIST / BACKUP` 禁充 token
+  - `assist_low` 不误升额
+  - `VIN drop + TPS iout` 双判据才进入 `assist_rated`
+  - 输入恢复后带回差地从 `assist_rated` 降回 `assist_low`
 
 ## 验证状态
 
-- `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml -q` 已通过，覆盖 runtime-mode 锁存、缺样保持、`BACKUP` 进入门槛与 `ASSIST / BACKUP` 禁充联动。
+- `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml` 已通过，覆盖 runtime-mode 锁存、缺样保持、`BACKUP` 进入门槛、`ASSIST / BACKUP` 禁充联动，以及 staged assist 的升额/降额回差。
+- `cargo check --manifest-path firmware/Cargo.toml` 在当前工作机默认 stable Rust 下被 `xtensa-lx` 的 nightly-only 特性阻断；这不是本轮变更引入的源码错误，但意味着仍需在项目既定 ESP 工具链下做一次固件侧编译确认。
 - 2026-06-17 的最终 owner-facing HIL canonical run 已收敛到 `IsolaPurr 13.0V / 3.0A + LoadLynx 1A/2A/3A/3200mA + UPS OUT`。
 - 这个 `13.0V` 台架设置是当前固件缺少 “TPS standby 电压 / backup 额定电压” 双档目标时的 bench compensation：
   - 它不是产品语义

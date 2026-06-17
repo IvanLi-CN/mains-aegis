@@ -73,6 +73,8 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
         input_pressure_reason: snapshot.dashboard_detail.input_pressure_reason,
         input_vin_baseline_mv: snapshot.dashboard_detail.input_vin_baseline_mv,
         input_vin_drop_mv: snapshot.dashboard_detail.input_vin_drop_mv,
+        assist_power_stage: snapshot.dashboard_detail.assist_power_stage,
+        assist_target_vout_mv: snapshot.dashboard_detail.assist_target_vout_mv,
         charger_state: comm_state_slug(snapshot.bq25792),
         charger_allow_charge: snapshot.bq25792_allow_charge,
         charger_ichg_ma: snapshot.bq25792_ichg_ma,

@@ -19,8 +19,11 @@ This page defines the owner-facing hardware-in-the-loop path for verifying the `
 ## Goals
 
 - Verify the runtime-mode transition loop `STANDBY -> ASSIST -> BACKUP -> STANDBY`.
+- Verify that `ASSIST` now has two internal owner-invisible stages:
+  - `assist_low` for low supplement / direct-input priority
+  - `assist_rated` for sustained online takeover
 - Verify `ASSIST` and `BACKUP` both force non-charging behavior.
-- Verify that a raised DC input source can keep the UPS in `STANDBY` until direct-input headroom is actually exhausted.
+- Verify that the current-board software policy stays direct-input-first under unknown line drop, then promotes to online takeover only after sustained `VIN` sag plus rising TPS output current.
 - Capture owner-facing evidence from UPS `status` and `power-diag`; use `trace(kind=event,target=power)` only as a secondary channel when it emits fresh stage-local events.
 
 ## Required Tooling
@@ -51,10 +54,9 @@ loadlynx-devd --help
 - IsolaPurr `856a141cdbd4` provides the UPS `DCIN` bench source through the `2 mm banana` output and the `DC5025` cable.
 - LoadLynx `loadlynx-d68638` is connected to UPS `OUT` and provides the stimulus through `CC` mode.
 - For the current firmware, IsolaPurr should stay in manual `13.0V / 3.0A` mode with `usb-c-path disconnected`.
-- `13.0V` is a HIL compensation, not a product-semantic TPS target:
-  - the current firmware still drives TPS55288 with one fixed `12.0V` target across `STANDBY / ASSIST / BACKUP`
-  - the project has not yet implemented the future “lower TPS standby voltage, rated backup voltage” split
-  - using `13.0V` keeps `VIN` clearly above the fixed TPS setpoint and avoids a misleading “DCIN and TPS are tied at the same nominal voltage” bench condition during non-`BACKUP` validation
+- `13.0V` remains a bench convenience, not a product-semantic requirement:
+  - the product contract is now software-staged TPS target selection
+  - the bench source is still allowed to sit above the standby/assist-low target to make direct-input priority easier to observe
 - With manual `13.0V / 3.0A`, the bench source can provide about `39W`, so a clean HIL run should keep the UPS in `STANDBY` through roughly `3A` output load and only enter `ASSIST` slightly above that after conversion loss and board overhead are counted.
 - `USB-C port power` on IsolaPurr `port_c` is the approved automatic cutoff path for the shared bench output rail.
 - On the observed bench state, raw device HTTP:
@@ -165,6 +167,16 @@ curl -fsS http://127.0.0.1:30080/api/v1/devices/serial-04f3bb3f5367/power-diag
 curl -fsS http://192.168.31.232/api/v1/status
 ```
 
+Owner-facing acceptance should inspect these added fields first:
+
+- `status.input.assist_power_stage`
+- `status.input.assist_target_vout_mv`
+- `power-diag.input.assist_power_stage`
+- `power-diag.input.assist_target_vout_mv`
+- `power-diag.input.vin_baseline_mv`
+- `power-diag.input.vin_drop_mv`
+- `power-diag.input.tps_total_iout_ma`
+
 - Load baseline / stimulus:
 
 ```bash
@@ -257,6 +269,34 @@ curl -fsS -X POST 'http://192.168.31.122/api/v1/ports/port_c/power?enabled=1'
   - `tps_total_iout_ma` crosses the `100mA` enter threshold
   - UPS transitions to `mode=supplement`
   - charger token changes to `LOAD`
+  - `assist_power_stage` should first be observable as `assist_low`, then move to `assist_rated` only after `vin_drop_mv` and `tps_total_iout_ma` both stay elevated across the fresh-sample hold window
+
+### 5A. `ASSIST(low)` observation gate
+
+- At the first clean `supplement` entry while mains is still online:
+  - `mode=supplement`
+  - `assist_power_stage=assist_low`
+  - `assist_target_vout_mv` should be below rated output target
+  - `BACKUP` must not be reported
+- This stage proves direct-input priority is still being respected even though TPS has started participating.
+
+### 5B. `ASSIST(rated)` online takeover gate
+
+- Stay at the overload point until the software hold window is satisfied.
+- Acceptance meaning:
+  - `mode` stays `supplement`
+  - `assist_power_stage=assist_rated`
+  - `assist_target_vout_mv` rises to the rated output target
+  - `vin_drop_mv` is persistently elevated relative to `vin_baseline_mv`
+  - `tps_total_iout_ma` remains above the assist threshold
+
+### 5C. Recovery from `ASSIST(rated)` to `ASSIST(low)` / `STANDBY`
+
+- Reduce load while keeping mains online.
+- Acceptance meaning:
+  - `assist_power_stage` falls from `assist_rated` to `assist_low` only after the recovery hold window
+  - once TPS output current falls back through the runtime hysteresis, `mode` returns to `standby`
+  - no rapid `assist_low <-> assist_rated` chatter is acceptable
 
 ### 6. `BACKUP` entry at `3200mA`
 

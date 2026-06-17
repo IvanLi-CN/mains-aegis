@@ -812,6 +812,8 @@ mod tests {
                 pressure_reason: Some("tps_output_current"),
                 vin_baseline_mv: Some(12_300),
                 vin_drop_mv: Some(120),
+                assist_power_stage: Some("assist_rated"),
+                assist_target_vout_mv: Some(12_000),
                 usb_pd_attached: false,
                 usb_pd_charge_ready: false,
                 usb_pd_vbus_present: Some(true),

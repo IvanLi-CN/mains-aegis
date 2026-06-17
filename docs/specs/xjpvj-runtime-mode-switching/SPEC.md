@@ -68,15 +68,20 @@
   - 不属于自动运行态切换集合。
 - `STANDBY`
   - 输入确认在线。
+  - TPS 目标保持在“近乎零补能”的热备档位，不应持续明显分担负载。
   - TPS 总输出电流尚未达到 `ASSIST` 进入门槛，或已回落到 `STANDBY` 退出门槛以下并完成锁存。
   - 允许 charger policy 在自身条件满足时继续充电。
 - `ASSIST`
   - 输入确认在线。
   - TPS 总输出电流达到 `ASSIST` 进入门槛并完成锁存。
+  - owner-facing 仍只暴露一个 `ASSIST / supplement` 模式名，但内部允许两阶段：
+    - `assist_low`: 先保持低补能档位，确认 TPS 已参与供能但仍优先让墙电直通。
+    - `assist_rated`: 当 `VIN` 相对基线持续下陷且 `TPS total output current` 持续升高时，TPS 升到额定输出接管档位。
   - 固定为 non-charging mode。
 - `BACKUP`
   - 输入确认离线。
   - 输出由电池侧供能。
+  - TPS 目标保持额定输出档位。
   - 固定为 non-charging mode。
 
 ## 自动运行态切换规则
@@ -111,6 +116,17 @@
 - 若 `tps_total_iout_ma` 样本缺失、不 fresh、或 sample_seq 未前进：
   - 保持上一确认的 `STANDBY / ASSIST` 子态
   - 不得因为 enable flag、零值默认值或单次缺样而切换
+- `ASSIST` staged takeover:
+  - 仅在 `input_source=dcin` 且输入仍确认在线时适用。
+  - `assist_low -> assist_rated` 的主判据固定为：
+    - `vin_drop_mv` 相对 `vin_baseline_mv` 持续超过当前基线自适应阈值；并且
+    - `tps_total_iout_ma >= 100mA`
+    - 连续 `2` 个 fresh 样本同时满足
+  - `assist_rated -> assist_low` 退出必须满足回差：
+    - `vin_drop_mv` 回落到升额阈值的一半以内；并且
+    - `tps_total_iout_ma <= 50mA`
+    - 连续 `2` 个 fresh 样本同时满足
+  - `tps_total_iout_ma` 单独升高但 `VIN` 未持续下陷，不得升到 `assist_rated`。
 
 ### 4. `BACKUP` 进入 / 退出
 
@@ -146,11 +162,15 @@
   - `mode`
   - `input.mains_present`
   - `input.vin_vbus_mv`
+  - `input.assist_power_stage`
+  - `input.assist_target_vout_mv`
   - `input.tps_total_iout_ma`
   - `charger.allow_charge`
   - `charger.detail_status`
 - `power-diag` 至少暴露：
   - 输入在线/离线结果
+  - `assist_power_stage`
+  - `assist_target_vout_mv`
   - `tps_total_iout_ma`
   - charger allow/token 结果
 - `trace(kind=event,target=power)` 应能让 owner 看到：
@@ -161,6 +181,9 @@
 
 - Given `VIN >= 3V` 且 `tps_total_iout_ma <= 50mA` 连续 `2` 个 fresh 样本，When 自动模式判定更新，Then 结果为 `STANDBY`。
 - Given `VIN >= 3V` 且 `tps_total_iout_ma >= 100mA` 连续 `2` 个 fresh 样本，When 自动模式判定更新，Then 结果为 `ASSIST`。
+- Given `mode=assist` 且 `vin_drop_mv` 未持续超过基线自适应阈值，When `tps_total_iout_ma` 单独升高，Then 内部阶段保持 `assist_low`，不得直接升到额定接管档。
+- Given `mode=assist`、`vin_drop_mv` 持续超过基线自适应阈值且 `tps_total_iout_ma >= 100mA` 连续 `2` 个 fresh 样本，When 自动模式判定更新，Then 内部阶段升到 `assist_rated`，但 owner-facing `mode` 仍为 `supplement`。
+- Given 已处于 `assist_rated`，When `vin_drop_mv` 回落到退出回差内且 `tps_total_iout_ma <= 50mA` 连续 `2` 个 fresh 样本，Then 内部阶段降回 `assist_low`，不抖动。
 - Given 已处于 `ASSIST`，When `TPS total output current` 在 `50..100mA` 之间抖动或缺少 fresh 样本，Then 模式保持 `ASSIST`。
 - Given 已处于 `STANDBY`，When `TPS total output current` 在 `50..100mA` 之间抖动或缺少 fresh 样本，Then 模式保持 `STANDBY`。
 - Given 输入状态未知，When `TPS` 仍在输出，Then 模式保持上一确认态，不得仅因输出活跃直接进入 `BACKUP`。

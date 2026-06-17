@@ -2375,6 +2375,12 @@ impl RuntimeModeTracker {
     }
 }
 
+#[derive(Clone, Copy)]
+struct AssistRuntimeSnapshot {
+    stage: AssistPowerStage,
+    target_vout_mv: u16,
+}
+
 pub fn log_i2c2_presence<I2C>(i2c: &mut I2C) -> PanelProbeResult
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
@@ -3262,6 +3268,8 @@ pub struct PowerManager<'d, I2C> {
     tps_b_next_retry_at: Option<Instant>,
     tps_telemetry_sample_seq: u32,
     runtime_mode: RuntimeModeTracker,
+    assist_power_stage: AssistPowerStageTracker,
+    applied_assist_target_vout_mv: u16,
 
     bms_addr: Option<u8>,
     bms_runtime_seen: bool,
@@ -3430,6 +3438,8 @@ pub struct Config {
     pub recoverable_outputs: EnabledOutputs,
     pub output_gate_reason: OutputGateReason,
     pub vout_mv: u16,
+    pub standby_vout_mv: u16,
+    pub assist_low_vout_mv: u16,
     pub ilimit_ma: u16,
     pub telemetry_period: Duration,
     pub retry_backoff: Duration,
@@ -3707,6 +3717,16 @@ where
             seed_bms_charge_ready_from_self_check(&cfg.self_check_snapshot);
         let bms_auto_recovery_enabled =
             boot_diag_auto_recovery_enabled(cfg.bms_boot_diag_auto_validate);
+        let initial_assist_stage = AssistPowerStage::from_runtime_mode(initial_ui_snapshot.mode);
+        let initial_assist_target_vout_mv = match initial_assist_stage {
+            AssistPowerStage::Standby => cfg.standby_vout_mv,
+            AssistPowerStage::AssistLow => cfg.assist_low_vout_mv,
+            AssistPowerStage::AssistRated | AssistPowerStage::Backup => cfg.vout_mv,
+        };
+        initial_ui_snapshot.dashboard_detail.assist_power_stage =
+            Some(initial_assist_stage.as_str());
+        initial_ui_snapshot.dashboard_detail.assist_target_vout_mv =
+            Some(initial_assist_target_vout_mv);
         let bms_runtime_seen = bms_addr.is_some()
             || output_state.gate_reason == OutputGateReason::BmsNotReady
             || (cfg.charger_probe_ok
@@ -3752,6 +3772,11 @@ where
             tps_b_next_retry_at: if out_b_allowed { Some(now) } else { None },
             tps_telemetry_sample_seq: 0,
             runtime_mode: RuntimeModeTracker::new(initial_ui_snapshot.mode),
+            assist_power_stage: AssistPowerStageTracker {
+                stage: initial_assist_stage,
+                ..AssistPowerStageTracker::default()
+            },
+            applied_assist_target_vout_mv: initial_assist_target_vout_mv,
 
             bms_addr,
             bms_runtime_seen,
@@ -4232,6 +4257,8 @@ where
             self.therm_kill.is_low(),
             self.cfg.tmp_hw_protect_test_mode,
         ));
+        detail.assist_power_stage = Some(self.assist_runtime_snapshot().stage.as_str());
+        detail.assist_target_vout_mv = Some(self.assist_runtime_snapshot().target_vout_mv);
         detail.wifi = net_bridge::current_wifi_snapshot();
 
         snapshot.dashboard_detail = detail;
@@ -4270,6 +4297,8 @@ where
             pressure_reason: self.ui_snapshot.dashboard_detail.input_pressure_reason,
             vin_baseline_mv: self.ui_snapshot.dashboard_detail.input_vin_baseline_mv,
             vin_drop_mv: self.ui_snapshot.dashboard_detail.input_vin_drop_mv,
+            assist_power_stage: self.ui_snapshot.dashboard_detail.assist_power_stage,
+            assist_target_vout_mv: self.ui_snapshot.dashboard_detail.assist_target_vout_mv,
             usb_pd_attached: usb_pd.attached,
             usb_pd_charge_ready: usb_pd.charge_ready,
             usb_pd_vbus_present: usb_pd.vbus_present,
@@ -8126,15 +8155,15 @@ where
         status_sample: Option<u8>,
         rate_limit: bool,
     ) -> bool {
+        let target_vout_mv = self.active_output_target_vout_mv();
         let anomaly = output_not_rising_anomaly(
-            self.cfg.vout_mv,
+            target_vout_mv,
             vbus_mv,
             current_ma,
             output_enabled,
             fault_active,
         );
         let now = Instant::now();
-        let target_vout_mv = self.cfg.vout_mv;
         let pack_mv = self.ui_snapshot.bq40z50_pack_mv;
         let next_log_at = self.output_path_diag_next_log_at_mut(ch);
         if !anomaly {
@@ -8177,6 +8206,65 @@ where
             self.ui_snapshot.vin_vbus_mv,
             self.ui_snapshot.aggregate_input_present,
         )
+    }
+
+    fn assist_runtime_snapshot(&self) -> AssistRuntimeSnapshot {
+        let stage = self.assist_power_stage.stage;
+        let target_vout_mv = match stage {
+            AssistPowerStage::Standby => self.cfg.standby_vout_mv,
+            AssistPowerStage::AssistLow => self.cfg.assist_low_vout_mv,
+            AssistPowerStage::AssistRated | AssistPowerStage::Backup => self.cfg.vout_mv,
+        };
+        AssistRuntimeSnapshot {
+            stage,
+            target_vout_mv,
+        }
+    }
+
+    fn active_output_target_vout_mv(&self) -> u16 {
+        self.assist_runtime_snapshot().target_vout_mv
+    }
+
+    fn update_assist_power_stage_from_inputs(
+        &mut self,
+        mains_present: Option<bool>,
+        tps_total_iout_ma: Option<i32>,
+        tps_total_iout_fresh: bool,
+        tps_total_iout_sample_seq: Option<u32>,
+    ) -> bool {
+        let next_stage = assist_power_stage_step(
+            &mut self.assist_power_stage,
+            AssistPowerStageInput {
+                mains_present,
+                runtime_mode: self.ui_snapshot.mode,
+                input_source: self.ui_snapshot.dashboard_detail.input_source,
+                vin_baseline_mv: self.ui_snapshot.dashboard_detail.input_vin_baseline_mv,
+                vin_drop_mv: self.ui_snapshot.dashboard_detail.input_vin_drop_mv,
+                tps_total_iout_ma,
+                tps_total_iout_fresh,
+                tps_total_iout_sample_seq,
+                rated_enter_iout_ma: RuntimeModeTracker::ASSIST_ENTER_MA,
+                rated_exit_iout_ma: RuntimeModeTracker::STANDBY_EXIT_MA,
+                required_samples: RuntimeModeTracker::REQUIRED_SAMPLES,
+            },
+        );
+        let next_target_vout_mv = match next_stage {
+            AssistPowerStage::Standby => self.cfg.standby_vout_mv,
+            AssistPowerStage::AssistLow => self.cfg.assist_low_vout_mv,
+            AssistPowerStage::AssistRated | AssistPowerStage::Backup => self.cfg.vout_mv,
+        };
+        let changed = next_target_vout_mv != self.applied_assist_target_vout_mv;
+        self.applied_assist_target_vout_mv = next_target_vout_mv;
+        self.ui_snapshot.dashboard_detail.assist_power_stage = Some(next_stage.as_str());
+        self.ui_snapshot.dashboard_detail.assist_target_vout_mv = Some(next_target_vout_mv);
+        changed
+    }
+
+    fn sync_runtime_output_target_if_needed(&mut self) {
+        if self.output_state.active_outputs == EnabledOutputs::None {
+            return;
+        }
+        self.try_configure_requested_tps();
     }
 
     fn current_output_ilimit_ma(&self) -> u16 {
@@ -8449,6 +8537,15 @@ where
             tps_total_iout_fresh,
             tps_total_iout_sample_seq,
         );
+        let target_changed = self.update_assist_power_stage_from_inputs(
+            mains_present,
+            tps_total_iout_ma,
+            tps_total_iout_fresh,
+            tps_total_iout_sample_seq,
+        );
+        if target_changed {
+            self.sync_runtime_output_target_if_needed();
+        }
     }
 
     fn refresh_audio_signals(&mut self) {
@@ -8749,8 +8846,9 @@ where
         let enabled = self.output_state.active_outputs.is_enabled(ch);
         let addr = ch.addr();
         let ilimit_ma = self.current_output_ilimit_ma();
+        let target_vout_mv = self.active_output_target_vout_mv();
 
-        match tps55288::configure_one(&mut self.i2c, ch, enabled, self.cfg.vout_mv, ilimit_ma) {
+        match tps55288::configure_one(&mut self.i2c, ch, enabled, target_vout_mv, ilimit_ma) {
             Ok(()) => {
                 if enabled {
                     self.clear_tps_fault_latch(ch);
@@ -8815,11 +8913,12 @@ where
 
     fn try_configure_tps_pair(&mut self) {
         let ilimit_ma = self.current_output_ilimit_ma();
+        let target_vout_mv = self.active_output_target_vout_mv();
 
         let prepare_a = tps55288::prepare_enabled_output(
             &mut self.i2c,
             OutputChannel::OutA,
-            self.cfg.vout_mv,
+            target_vout_mv,
             ilimit_ma,
         );
         if let Err((stage, e)) = prepare_a {
@@ -8831,7 +8930,7 @@ where
         let prepare_b = tps55288::prepare_enabled_output(
             &mut self.i2c,
             OutputChannel::OutB,
-            self.cfg.vout_mv,
+            target_vout_mv,
             ilimit_ma,
         );
         if let Err((stage, e)) = prepare_b {
@@ -10500,6 +10599,10 @@ where
             Some(dcin_pressure.trigger_reason.as_str());
         self.ui_snapshot.dashboard_detail.input_vin_baseline_mv = dcin_pressure.vin_baseline_mv;
         self.ui_snapshot.dashboard_detail.input_vin_drop_mv = dcin_pressure.vin_drop_mv;
+        self.ui_snapshot.dashboard_detail.assist_power_stage =
+            Some(self.assist_runtime_snapshot().stage.as_str());
+        self.ui_snapshot.dashboard_detail.assist_target_vout_mv =
+            Some(self.assist_runtime_snapshot().target_vout_mv);
         self.ui_snapshot.dashboard_detail.input_tps_total_iout_ma = tps_total_iout_ma;
         self.ui_snapshot
             .dashboard_detail

@@ -29,19 +29,25 @@ For this project the accepted bench rig is:
 - LoadLynx `loadlynx-d68638` on UPS `OUT`
 - UPS LAN `status` plus devd `power-diag` on approved binding `serial-04f3bb3f5367`
 
-## Why `13.0V / 3.0A` is the right HIL compensation right now
+## Why the current HIL still keeps `13.0V / 3.0A`
 
-The current firmware still drives TPS55288 with one fixed `12.0V` target in all runtime modes. It does not yet implement the future split between “lower TPS standby voltage” and “rated backup voltage”.
+The current firmware now stages TPS target voltage internally:
 
-Because of that, a lower bench source such as `12.0V` or `12.5V` can blur the intended non-`BACKUP` condition:
+- `standby` uses a near-zero-assist hot-standby target
+- `assist_low` uses a higher low-supplement target
+- `assist_rated` and `backup` use rated output target
+
+Even with that software contract in place, the bench still benefits from a source setting that stays comfortably above the standby / assist-low targets.
+
+A lower bench source such as `12.0V` or `12.5V` can still blur the intended non-`BACKUP` condition:
 
 - `VIN` is too close to the fixed TPS target
-- the UPS can appear to enter `ASSIST` too early
+- the UPS can appear to enter `assist_rated` too early
 - the rig stops proving whether direct input can independently cover the load
 
 Using IsolaPurr in manual `13.0V / 3.0A` mode with `usb-c-path disconnected` gives the current firmware a cleaner test condition:
 
-- `VIN` stays clearly above the fixed `12.0V` TPS target in `STANDBY`
+- `VIN` stays clearly above the standby / assist-low TPS targets in `STANDBY`
 - the source power budget is about `39W`
 - a `12V` output load near `3A` should still remain direct-input dominated, with `ASSIST` expected only slightly above that after conversion loss and board overhead are counted
 
@@ -50,7 +56,19 @@ The accepted run matched that expectation:
 - `1A`, `2A`, and `3A` all stayed in `STANDBY`
 - the first clean `ASSIST` transition appeared at `3200mA`
 
-This is a bench compensation, not a product contract.
+This is still a bench convenience, not a product contract.
+
+## What to look at now
+
+For owner-facing staged-assist validation, check these first:
+
+- `status.input.assist_power_stage`
+- `status.input.assist_target_vout_mv`
+- `power-diag.input.assist_power_stage`
+- `power-diag.input.assist_target_vout_mv`
+- `power-diag.input.vin_baseline_mv`
+- `power-diag.input.vin_drop_mv`
+- `power-diag.input.tps_total_iout_ma`
 
 ## Acceptance must come from the UPS, not from the bench tools alone
 
@@ -130,6 +148,11 @@ This is the first clean assist stage:
 - `tps_total_iout_ma` crosses the `100mA` enter threshold
 - charger token changes to `LOAD`
 
+With the staged-assist firmware contract, this overload point should now be interpreted in two phases:
+
+- first `assist_low` while direct input is still given priority
+- then `assist_rated` once `VIN` sag and TPS output current both stay elevated for the configured hold window
+
 ### `BACKUP @ 3200mA`
 
 - Trigger: raw device HTTP `POST /api/v1/ports/port_c/power?enabled=0`
@@ -161,7 +184,7 @@ This is the first clean assist stage:
 
 ## What this run did not prove
 
-- It did not prove the future product contract for TPS dual target voltages, because that feature is not implemented yet.
+- It did not prove zero-sag seamless takeover; this solution is intentionally “current board first” and only promises direct-input priority plus software-staged online takeover.
 - It did not prove the separate charger-pressure/cooldown branch inside `eu2b8`, because all accepted stages still showed `pressure_reason=none`.
 - It did not produce fresh stage-local power trace events for the new `13.0V` sequence. The USB trace surface remained stale, so this run is `trace-degraded`.
 

@@ -45,6 +45,7 @@ const DCIN_ADAPTIVE_COOLDOWN_MS: u64 = 30_000;
 const DCIN_ADAPTIVE_VIN_DROP_PCT: u16 = 4;
 const DCIN_ADAPTIVE_VIN_DROP_STREAK_LIMIT: u8 = 2;
 pub(super) const DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA: i32 = 100;
+pub(super) const ASSIST_RATED_VIN_DROP_RECOVER_DIVISOR: u16 = 2;
 const FAN_RPM_SAMPLE_WINDOW_MS: u64 = 1_200;
 const FAN_RPM_MAX_SAMPLE_WINDOW_MS: u64 = 2_000;
 const FAN_RPM_MIN_SAMPLE_REVS: u32 = 2;
@@ -975,6 +976,185 @@ impl DcinInputPressureDecision {
             limit_reason: DcinChargeLimitReason::None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum AssistPowerStage {
+    #[default]
+    Standby,
+    AssistLow,
+    AssistRated,
+    Backup,
+}
+
+impl AssistPowerStage {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Standby => "standby",
+            Self::AssistLow => "assist_low",
+            Self::AssistRated => "assist_rated",
+            Self::Backup => "backup",
+        }
+    }
+
+    pub(super) const fn from_runtime_mode(mode: UpsMode) -> Self {
+        match mode {
+            UpsMode::Standby | UpsMode::Off => Self::Standby,
+            UpsMode::Supplement => Self::AssistLow,
+            UpsMode::Backup => Self::Backup,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct AssistPowerStageTracker {
+    pub(super) stage: AssistPowerStage,
+    promote_streak: u8,
+    recover_streak: u8,
+    last_tps_total_iout_sample_seq: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct AssistPowerStageInput {
+    pub(super) mains_present: Option<bool>,
+    pub(super) runtime_mode: UpsMode,
+    pub(super) input_source: Option<DashboardInputSource>,
+    pub(super) vin_baseline_mv: Option<u16>,
+    pub(super) vin_drop_mv: Option<u16>,
+    pub(super) tps_total_iout_ma: Option<i32>,
+    pub(super) tps_total_iout_fresh: bool,
+    pub(super) tps_total_iout_sample_seq: Option<u32>,
+    pub(super) rated_enter_iout_ma: i32,
+    pub(super) rated_exit_iout_ma: i32,
+    pub(super) required_samples: u8,
+}
+
+impl AssistPowerStageTracker {
+    pub(super) fn reset_for_online(&mut self) {
+        self.promote_streak = 0;
+        self.recover_streak = 0;
+    }
+}
+
+pub(super) fn assist_power_stage_step(
+    tracker: &mut AssistPowerStageTracker,
+    input: AssistPowerStageInput,
+) -> AssistPowerStage {
+    match input.mains_present {
+        Some(false) => {
+            tracker.stage = AssistPowerStage::Backup;
+            tracker.reset_for_online();
+            if input.tps_total_iout_fresh {
+                tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+            }
+            return tracker.stage;
+        }
+        Some(true) => {}
+        None => return tracker.stage,
+    }
+
+    if tracker.stage == AssistPowerStage::Backup {
+        tracker.stage = AssistPowerStage::Standby;
+        tracker.reset_for_online();
+    }
+
+    match input.runtime_mode {
+        UpsMode::Standby | UpsMode::Off => {
+            tracker.stage = AssistPowerStage::Standby;
+            tracker.reset_for_online();
+            if input.tps_total_iout_fresh {
+                tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+            }
+            return tracker.stage;
+        }
+        UpsMode::Backup => {
+            tracker.stage = AssistPowerStage::Backup;
+            tracker.reset_for_online();
+            if input.tps_total_iout_fresh {
+                tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+            }
+            return tracker.stage;
+        }
+        UpsMode::Supplement => {}
+    }
+
+    if !matches!(input.input_source, Some(DashboardInputSource::DcIn)) {
+        tracker.stage = AssistPowerStage::AssistLow;
+        tracker.reset_for_online();
+        if input.tps_total_iout_fresh {
+            tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+        }
+        return tracker.stage;
+    }
+
+    let sample_is_new = input.tps_total_iout_fresh
+        && input
+            .tps_total_iout_sample_seq
+            .is_some_and(|sample_seq| tracker.last_tps_total_iout_sample_seq != Some(sample_seq));
+    if !sample_is_new {
+        if tracker.stage == AssistPowerStage::Standby {
+            tracker.stage = AssistPowerStage::AssistLow;
+        }
+        return tracker.stage;
+    }
+    tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+
+    if tracker.stage == AssistPowerStage::Standby {
+        tracker.stage = AssistPowerStage::AssistLow;
+    }
+
+    let vin_drop_threshold_mv = input.vin_baseline_mv.map(dcin_vin_drop_threshold_mv);
+    let vin_drop_recover_mv =
+        vin_drop_threshold_mv.map(|threshold| threshold / ASSIST_RATED_VIN_DROP_RECOVER_DIVISOR);
+    let promote_ready = matches!(
+        (
+            input.vin_drop_mv,
+            vin_drop_threshold_mv,
+            input.tps_total_iout_ma
+        ),
+        (Some(vin_drop_mv), Some(threshold_mv), Some(tps_total_iout_ma))
+            if vin_drop_mv > threshold_mv && tps_total_iout_ma >= input.rated_enter_iout_ma
+    );
+    let recover_ready = matches!(
+        (
+            input.vin_drop_mv,
+            vin_drop_recover_mv,
+            input.tps_total_iout_ma
+        ),
+        (Some(vin_drop_mv), Some(recover_mv), Some(tps_total_iout_ma))
+            if vin_drop_mv <= recover_mv && tps_total_iout_ma <= input.rated_exit_iout_ma
+    );
+
+    match tracker.stage {
+        AssistPowerStage::AssistRated => {
+            if recover_ready {
+                tracker.recover_streak = tracker.recover_streak.saturating_add(1);
+                tracker.promote_streak = 0;
+                if tracker.recover_streak >= input.required_samples {
+                    tracker.stage = AssistPowerStage::AssistLow;
+                    tracker.reset_for_online();
+                }
+            } else {
+                tracker.recover_streak = 0;
+            }
+        }
+        AssistPowerStage::Standby | AssistPowerStage::AssistLow => {
+            if promote_ready {
+                tracker.promote_streak = tracker.promote_streak.saturating_add(1);
+                tracker.recover_streak = 0;
+                if tracker.promote_streak >= input.required_samples {
+                    tracker.stage = AssistPowerStage::AssistRated;
+                    tracker.reset_for_online();
+                }
+            } else {
+                tracker.promote_streak = 0;
+                tracker.recover_streak = 0;
+            }
+        }
+        AssistPowerStage::Backup => {}
+    }
+
+    tracker.stage
 }
 
 fn dcin_vin_drop_threshold_mv(vin_baseline_mv: u16) -> u16 {
@@ -4855,6 +5035,156 @@ mod tests {
         assert_eq!(
             tracker.update(Some(false), None, false, None),
             UpsMode::Backup
+        );
+    }
+
+    fn assist_stage_input(
+        runtime_mode: UpsMode,
+        vin_baseline_mv: Option<u16>,
+        vin_drop_mv: Option<u16>,
+        tps_total_iout_ma: Option<i32>,
+        sample_seq: u32,
+    ) -> AssistPowerStageInput {
+        AssistPowerStageInput {
+            mains_present: Some(true),
+            runtime_mode,
+            input_source: Some(DashboardInputSource::DcIn),
+            vin_baseline_mv,
+            vin_drop_mv,
+            tps_total_iout_ma,
+            tps_total_iout_fresh: true,
+            tps_total_iout_sample_seq: Some(sample_seq),
+            rated_enter_iout_ma: 100,
+            rated_exit_iout_ma: 50,
+            required_samples: 2,
+        }
+    }
+
+    #[test]
+    fn assist_stage_stays_standby_until_runtime_mode_enters_assist() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(UpsMode::Standby, Some(12_000), Some(600), Some(160), 1)
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(tracker.stage, AssistPowerStage::Standby);
+    }
+
+    #[test]
+    fn assist_stage_requires_vin_drop_and_tps_current_to_promote_to_rated() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(UpsMode::Supplement, Some(12_000), Some(200), Some(160), 1)
+            ),
+            AssistPowerStage::AssistLow
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(UpsMode::Supplement, Some(12_000), Some(200), Some(160), 2)
+            ),
+            AssistPowerStage::AssistLow
+        );
+        assert_eq!(tracker.stage, AssistPowerStage::AssistLow);
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(UpsMode::Supplement, Some(12_000), Some(520), Some(160), 3)
+            ),
+            AssistPowerStage::AssistLow
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(UpsMode::Supplement, Some(12_000), Some(520), Some(160), 4)
+            ),
+            AssistPowerStage::AssistRated
+        );
+        assert_eq!(tracker.stage, AssistPowerStage::AssistRated);
+    }
+
+    #[test]
+    fn assist_stage_does_not_promote_on_tps_current_alone() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(UpsMode::Supplement, Some(12_000), Some(120), Some(180), 1)
+            ),
+            AssistPowerStage::AssistLow
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(UpsMode::Supplement, Some(12_000), Some(120), Some(180), 2)
+            ),
+            AssistPowerStage::AssistLow
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(UpsMode::Supplement, Some(12_000), Some(120), Some(180), 3)
+            ),
+            AssistPowerStage::AssistLow
+        );
+    }
+
+    #[test]
+    fn assist_stage_recovers_from_rated_to_low_and_backup_remains_distinct() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        let _ = assist_power_stage_step(
+            &mut tracker,
+            assist_stage_input(UpsMode::Supplement, Some(12_000), Some(520), Some(160), 1),
+        );
+        let _ = assist_power_stage_step(
+            &mut tracker,
+            assist_stage_input(UpsMode::Supplement, Some(12_000), Some(520), Some(160), 2),
+        );
+        assert_eq!(tracker.stage, AssistPowerStage::AssistRated);
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(UpsMode::Supplement, Some(12_000), Some(200), Some(40), 3)
+            ),
+            AssistPowerStage::AssistRated
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(UpsMode::Supplement, Some(12_000), Some(200), Some(40), 4)
+            ),
+            AssistPowerStage::AssistLow
+        );
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                AssistPowerStageInput {
+                    mains_present: Some(false),
+                    runtime_mode: UpsMode::Backup,
+                    input_source: Some(DashboardInputSource::DcIn),
+                    vin_baseline_mv: Some(12_000),
+                    vin_drop_mv: None,
+                    tps_total_iout_ma: Some(0),
+                    tps_total_iout_fresh: true,
+                    tps_total_iout_sample_seq: Some(5),
+                    rated_enter_iout_ma: 100,
+                    rated_exit_iout_ma: 50,
+                    required_samples: 2,
+                }
+            ),
+            AssistPowerStage::Backup
         );
     }
 }
