@@ -2055,7 +2055,7 @@ fn handle_web_serial_frame<'d, I2C>(
                 let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
                 let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
                 {
-                    let settings = web_serial_settings_snapshot(&power, log_state.level());
+                    let settings = web_serial_settings_snapshot(power, log_state.level());
                     esp_firmware::net_contract::render_settings_json(&mut body, &settings);
                 }
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
@@ -2546,7 +2546,7 @@ impl UsbCdcLogState {
 
 #[cfg(feature = "web_serial")]
 fn web_serial_settings_snapshot<I2C>(
-    power: &output::PowerManager<'_, I2C>,
+    power: &mut output::PowerManager<'_, I2C>,
     log_level: LogLevel,
 ) -> esp_firmware::net_types::DeviceSettingsSnapshot
 where

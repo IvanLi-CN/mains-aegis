@@ -16,9 +16,9 @@ use esp_firmware::bq40z50;
 use esp_firmware::fan;
 use esp_firmware::ina3221;
 use esp_firmware::net_types::{
-    AdvancedPowerExpandedSnapshot, AdvancedPowerSettingsSnapshot, AdvancedPowerValidationError,
-    PowerDiagBmsSnapshot, PowerDiagChargerSnapshot, PowerDiagInputSnapshot,
-    PowerDiagPolicySnapshot, PowerDiagSnapshot,
+    validate_advanced_power_settings, AdvancedPowerExpandedSnapshot, AdvancedPowerSettingsSnapshot,
+    AdvancedPowerValidationError, PowerDiagBmsSnapshot, PowerDiagChargerSnapshot,
+    PowerDiagInputSnapshot, PowerDiagPolicySnapshot, PowerDiagSnapshot,
 };
 use esp_firmware::output_protection;
 use esp_firmware::output_retry::{self, TpsConfigRetryDecision};
