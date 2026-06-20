@@ -683,9 +683,19 @@ export function DeviceRegistryProvider({
           };
         }
         const result = await probeDevice(baseUrl);
+        const rememberedHttpBaseUrl =
+          normalizeBaseUrl(
+            input.rememberedHttpBaseUrl?.trim() || result.identity.hostname_fqdn,
+          ) || baseUrl;
+        const rememberedHttpFallbackBaseUrl =
+          normalizeBaseUrl(
+            input.rememberedHttpFallbackBaseUrl?.trim() ||
+              result.network.ipv4?.trim() ||
+              baseUrl,
+          ) || undefined;
         const target: DeviceTarget = {
           deviceId: result.identity.device_id,
-          baseUrl,
+          baseUrl: rememberedHttpBaseUrl,
           alias: input.alias?.trim() || result.identity.hostname,
           location: input.location?.trim() || "Unassigned",
           addedAt: new Date().toISOString(),
@@ -693,9 +703,16 @@ export function DeviceRegistryProvider({
           preferredTransport: "http",
           rememberedChannels: {
             http: {
-              baseUrl,
+              baseUrl: rememberedHttpBaseUrl,
               seenAt: new Date().toISOString(),
               source: "manual",
+              mdnsHost:
+                input.rememberedHttpMdnsHost?.trim() ||
+                result.identity.hostname_fqdn,
+              fallbackBaseUrl:
+                rememberedHttpFallbackBaseUrl !== rememberedHttpBaseUrl
+                  ? rememberedHttpFallbackBaseUrl
+                  : undefined,
             },
           },
         };

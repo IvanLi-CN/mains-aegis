@@ -18,6 +18,9 @@
 - Web App 已移除独立 USB HTTP bridge 分支，devd 成为 localhost USB 控制面；同一 `identity.device_id` 的 LAN 与 USB 来源合并为一条设备记录，并在 Fleet / Connect 中显示 WiFi 与 USB 标记。
 - hosted/self-hosted devd Connect UI 只显示 devd discovery：USB 候选通过 devd lease/usb-http bridge 接入，LAN 候选在保存到 `DeviceRegistry` 时直接落为硬件 HTTP target，不再额外显示 Web Serial / 手动 LAN fallback 面板。
 - Connect discovery 行为语义已收敛到“先纳管、后进入”：新发现 USB 候选显示 `Bind USB`，新发现 LAN 候选显示 `Add WiFi`；只有已存在的浏览器设备记录才显示 `Open`、`Use WiFi`、`Use USB`，避免把 discovery 候选误表述为通用 `Connect`。
+- GitHub Pages/public-static 构建现在显式写入运行模式标记，不再默认把 `VITE_DEFAULT_DEVD_URL` 视为 same-origin devd，也不再依赖 `/api/v1/devices` 失败来反推出 LAN fallback。Pages Connect 直接把 browser-direct LAN 入口作为主路径，只在 hosted devd 或显式 devd URL 时显示 devd discovery。
+- Pages/browser-direct LAN 入口新增 Chrome 142+ + secure context 能力闸门、统一手动目标合同，以及手动 IPv4 CIDR 扫描。扫描只做浏览器侧 `GET /api/v1/identity` 发现，固定并发 `8`、单地址超时 `800ms`，候选先保留为 session-local 卡片，只有显式 `Add WiFi` / `Open` 后才写入 `DeviceRegistry`。
+- 手动目标和扫描候选在成功持久化时都会优先保存 `hostname_fqdn` 直连地址，同时把当前 IPv4 地址保留为 `rememberedChannels.http.fallbackBaseUrl`，与现有 `hostname_fqdn > hostname > ip:port` 记忆通道优先级保持一致。
 - 当 USB candidate 还处于 `identity pending` 但 owner 已知其对应的 WiFi 设备时，Connect 页会先把该 stable USB id 绑定到已有 logical device，再把 discovery 行内的 USB/WiFi 渠道归并到同一设备卡片；绑定完成前不再把 `Bind USB` 误当成“立即进入设备”。
 - USB `Bind USB` 成功后，如果 devd 返回 `companion_lan_candidate`，Connect 会在同一 discovery card 内显示 inline `Bind LAN companion`；确认后浏览器记录会把 `http://<hostname_fqdn>` 作为默认 Web 直连地址，同时保留 `http://<ip>:<port>` 作为回退地址，并把 `preferredTransport` 设为 `http`。
 - 未确认的 companion-LAN candidate 不会自动进入 remembered WiFi channels，也不会立刻出现在 `Use WiFi` 切换动作里；只有已确认的 `binding.lan_companion` 或真实 LAN transport 才会成为可切换通道。
@@ -39,6 +42,7 @@
 - `cd firmware && cargo +esp check`: 已通过。
 - `cd firmware && cargo +esp check --no-default-features`: 已通过。
 - Storybook：已使用最新 `storybook` / `@storybook/react-vite` 10.3.6 建立 `UPS Management/Settings/WiFi Provisioning Feedback` 状态矩阵，覆盖连接失败、保存失败、清除失败、保存中、清除中与成功反馈；`UPS Management/Connect/Firmware mismatch warning` 覆盖连接前 firmware artifact 不匹配与显式忽略入口。
+- Storybook：`UPS Management/Add device` 已补齐 Pages direct LAN 支持态、非支持浏览器降级态、手动目标成功态与 CIDR 扫描命中态。
 - 本地预览：已通过端口租约启动 Vite mock-data 前端。
 - 浏览器验证：已确认 Fleet、Connect 和单设备 Dashboard 可渲染，控制台无 warn/error。
 - 浏览器验证：真实 devd 驱动的 `/connect` 已确认显示 `Bind USB` 发现动作，不再暴露旧的 `Connect devd` 样式与语义。

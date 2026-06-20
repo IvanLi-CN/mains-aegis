@@ -1180,5 +1180,12 @@ function findMock(baseUrl: string): MockDefinition {
 }
 
 function resolveMockBaseUrl(baseUrl: string): string {
+  const normalized = baseUrl.trim().toLowerCase();
+  if (normalized === "http://mains-aegis-a1b2c3.local") return "mock:lab-standby";
+  if (normalized === "http://192.168.31.42") return "mock:lab-standby";
+  if (normalized === "http://192.168.31.42:80") return "mock:lab-standby";
+  if (normalized === "http://mains-aegis-c7d8e9.local") return "mock:backup";
+  if (normalized === "http://192.168.31.44") return "mock:backup";
+  if (normalized === "http://192.168.31.44:80") return "mock:backup";
   return baseUrl;
 }

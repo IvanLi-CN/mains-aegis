@@ -87,6 +87,7 @@ Status:
 - Web direct LAN records now read `GET /api/v1/settings` and write the device API endpoints for WiFi config, log level, and manual charge preferences; each successful write refreshes the full settings snapshot.
 - Web devd records can use USB lease-backed control or devd-discovered LAN transport; LAN-only devd writes omit `lease_id` and refresh `/api/v1/devices/{id}/settings` after success.
 - Connect no longer labels LAN as read-only and lists devd USB/LAN candidates without auto-selecting among multiple devices.
+- GitHub Pages/public-static Connect now runs as an explicit browser-direct LAN surface: no default same-origin devd discovery, no implicit `/api/v1/devices` polling, Chrome 142+ + secure context gating, and manual IPv4 CIDR discovery that only persists devices after explicit user confirmation.
 - Settings no longer requires USB when a LAN/devd settings snapshot is present.
 - Status: complete for M4.
 

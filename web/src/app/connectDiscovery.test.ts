@@ -4,6 +4,9 @@ import type { DeviceRecord, DevdDevice } from "../api/types";
 import {
   buildDiscoveredLogicalDevices,
   buildFleetEntries,
+  detectBrowserLanCapability,
+  expandIpv4Cidr,
+  resolveConnectRuntimeMode,
   resolveSelectedRecord,
 } from "./App";
 
@@ -306,5 +309,79 @@ describe("direct device route discovery", () => {
       fleetEntries,
     );
     expect(hydrated?.target.deviceId).toBe("mains-aegis-a1b2c3");
+  });
+});
+
+describe("public static connect runtime", () => {
+  test("treats a Pages build without devd as public static", () => {
+    expect(
+      resolveConnectRuntimeMode({
+        hostedHttpServiceApp: false,
+        devdTarget: null,
+        publicStaticBuild: true,
+      }),
+    ).toBe("public_static");
+  });
+
+  test("keeps explicit devd discovery semantics when a Pages build has a devd target", () => {
+    expect(
+      resolveConnectRuntimeMode({
+        hostedHttpServiceApp: false,
+        devdTarget: "http://127.0.0.1:30080",
+        publicStaticBuild: true,
+      }),
+    ).toBe("standalone_with_devd");
+  });
+});
+
+describe("browser direct LAN capability", () => {
+  test("requires secure context and Chrome 142+", () => {
+    expect(
+      detectBrowserLanCapability({
+        isSecureContext: true,
+        userAgent:
+          "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+      }).supported,
+    ).toBe(true);
+
+    expect(
+      detectBrowserLanCapability({
+        isSecureContext: false,
+        userAgent:
+          "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+      }).reason,
+    ).toContain("Secure context");
+
+    expect(
+      detectBrowserLanCapability({
+        isSecureContext: true,
+        userAgent:
+          "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+      }).reason,
+    ).toContain("Chrome 142+");
+  });
+});
+
+describe("CIDR scan contract", () => {
+  test("expands host addresses inside the allowed range", () => {
+    const expanded = expandIpv4Cidr("192.168.31.40/29");
+    expect(expanded.normalized).toBe("192.168.31.40/29");
+    expect(expanded.hosts).toEqual([
+      "192.168.31.41",
+      "192.168.31.42",
+      "192.168.31.43",
+      "192.168.31.44",
+      "192.168.31.45",
+      "192.168.31.46",
+    ]);
+  });
+
+  test("rejects CIDR ranges outside the 2..256 host contract", () => {
+    expect(() => expandIpv4Cidr("192.168.31.0/31")).toThrow(
+      "CIDR scan must expand to between 2 and 256 hosts.",
+    );
+    expect(() => expandIpv4Cidr("192.168.31.0/23")).toThrow(
+      "CIDR scan must expand to between 2 and 256 hosts.",
+    );
   });
 });

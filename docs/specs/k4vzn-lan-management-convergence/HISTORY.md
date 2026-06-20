@@ -17,3 +17,4 @@
 - Web devd 入口同时接受 USB CDC 与无冲突 LAN transport 候选；LAN transport 不创建 Web USB lease，settings 写入通过 devd 的设备级 LAN client 路径完成。
 - `/api/v1/serial/session` 仅作为 Web USB Console 兼容快照保留；用户可见与新实现查询面固定为 `connection / identity / status / settings / trace`。
 - USB CDC hello capability 命名改为 `settings`，不再继续传播 `safe_settings` 旧命名。
+- GitHub Pages/public-static 路径明确冻结为 browser-direct LAN：扫描只在用户点击后执行，发现结果只保留在当前 session，且不满足 `Chrome 142+` + secure context 时不再尝试直连动作。

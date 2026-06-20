@@ -54,7 +54,7 @@
 
 ### 设备管理
 
-- `/connect` 在独立浏览器 / Vite 开发场景支持 USB CDC / Web Serial、`mains-aegis-devd` 与手动 LAN 入口；在 hosted/self-hosted devd UI 中只保留 devd discovery，USB 设备通过 devd 接入，LAN 设备则按 devd 提供的地址直连硬件 HTTP API。
+- `/connect` 在 hosted/self-hosted devd UI 中只保留 devd discovery，USB 设备通过 devd 接入，LAN 设备则按 devd 提供的地址直连硬件 HTTP API。GitHub Pages/public-static 构建明确收口为 browser-direct LAN 入口：默认显示手动 LAN 目标和手动 IPv4 CIDR 扫描，不再隐式假设 same-origin devd。
 - USB 连接入口必须显示浏览器支持状态、连接/断开状态、用户取消授权、串口不可用或已占用等错误。
 - devd 入口在发现多个 USB CDC candidates 时必须显示候选设备选择器；用户明确选择某个 devd device id 后才可创建控制 session。Web 不得基于已连接、已识别、第一个或最近使用自动替用户选择硬件。
 - 若 USB `Bind USB` 成功后 devd 返回 `companion_lan_candidate`，Connect 必须在同一卡片内就地显示 inline `Bind LAN companion` 提示，展示 mDNS 与 `IP:Port`；在用户确认前，该候选不得自动变成 `Use WiFi` 按钮，也不得写入 localStorage。
@@ -62,6 +62,10 @@
 - Web 的默认直连选择统一遵循 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md)；本规格不再重复定义 `hostname_fqdn > hostname > ip:port` 矩阵，只要求未确认 companion 时不得把 pending candidate 自动提升为默认连接路径。
 - 真实 USB `SerialPort` 不写入 localStorage；刷新页面后需要重新授权。mock USB 设备可用于视觉证据与无硬件验证。
 - 添加时按 `ping -> identity -> network -> status` 探活；失败显示 API-compatible error envelope。
+- GitHub Pages/public-static 构建中的手动 LAN 目标合同固定为：接受 `hostname` / `FQDN` / `IPv4` / `IPv4:port`，兼容完整 `http://...` URL；输入缺省时自动补成 `http://`。若探活命中的是 devd HTTP service，而不是设备本体 API，则必须拒绝并把用户导向 devd discovery 面板。
+- GitHub Pages/public-static 构建中的 browser-direct LAN 只正式支持 `Chrome 142+` 且 secure context；不满足条件时，Connect 必须保留只读说明与迁移指引，并禁用手动连接和 CIDR 扫描按钮。
+- GitHub Pages/public-static 构建中的手动 IPv4 CIDR 扫描只在用户点击后执行，发现阶段只请求 `GET /api/v1/identity`，固定并发 `8`、单地址超时 `800ms`，且只接受展开后 `2..256` 个 host 的 IPv4 CIDR。扫描命中先作为 session-local 候选显示，不得自动写入 localStorage。
+- CIDR 扫描候选必须按 `identity.device_id` 与现有 saved record 合并；只有用户显式点击 `Add WiFi` 或 `Open` 后，才运行完整 `probeDevice` 并刷新/持久化对应 `DeviceRegistry` 记录。
 - 浏览器侧保存 `DeviceRegistry` 到 `localStorage`，并提供 demo fleet reset。
 
 ### 单设备详情
@@ -139,6 +143,7 @@
 - `bun run web:build` 通过。
 - Fleet mock 页至少显示 6 台设备，覆盖 standby、assist、backup、warning、critical、offline。
 - `/connect` 能显示已保存设备，支持添加设备与探活错误显示。
+- GitHub Pages/public-static 构建默认不轮询 same-origin `/api/v1/devices`；无 hosted metadata、无显式 devd URL 时必须直接显示 browser-direct LAN 入口。
 - `/connect` 能连接 USB CDC 设备、附加 mock USB 设备、断开 USB session，并展示 Web Serial 不支持或串口不可用错误。
 - `/connect` 在 devd 报告多个 USB candidates 时显示候选列表，用户选择后才占用设备；未选择时不得连接。
 - `/connect` 通过 Web Serial 或 devd 连接 USB 设备时必须先校验 firmware artifact 是否匹配；不匹配时显示 `Firmware mismatch` 气泡并要求用户显式忽略警告后才可继续。
@@ -148,6 +153,7 @@
 - 正式路由能通过 `seed` 参数打开可复现 mock 场景，并保持与正式产品一致的导航和页面结构。
 - 单设备详情页可从 Fleet 卡片进入，并展示 power、battery、thermal、device、api 子页。
 - 浏览器视觉验证覆盖 desktop Fleet、mobile Fleet、empty Fleet、large Fleet、单设备 Dashboard、USB Connect、USB structured logs 和 WiFi settings。
+- Storybook 或等价稳定预览必须覆盖：Pages direct LAN 支持态、非支持浏览器降级态、手动目标成功态、CIDR 扫描命中态。
 
 ## 文档更新
 
@@ -403,6 +409,39 @@
   evidence_note: 验证 Web Serial mock 烧录完成后解除页面刷新/关闭拦截，恢复抽屉关闭能力，并保留成功状态与完整阶段日志。
 
 ![Firmware mock flash completion unlock evidence](./assets/firmware-mock-flash-done-unlocked.png)
+
+- source_type: ui_demo
+  demo_entry_or_title: `/connect?seed=empty&mock_browser_capability=supported`
+  requested_viewport: `1440x1080`
+  viewport_strategy: `ui-demo-source`
+  capture_scope: `element`
+  target_program: `mock-only`
+  scenario: Pages direct LAN supported
+  evidence_note: 验证 GitHub Pages/public-static 构建默认直接展示 browser-direct LAN 入口与 CIDR scan，不再依赖 same-origin devd 发现。
+
+![Pages direct LAN supported evidence](./assets/pages-direct-lan-supported.png)
+
+- source_type: ui_demo
+  demo_entry_or_title: `/connect?seed=empty&mock_browser_capability=unsupported`
+  requested_viewport: `1440x1080`
+  viewport_strategy: `ui-demo-source`
+  capture_scope: `element`
+  target_program: `mock-only`
+  scenario: Pages unsupported browser downgrade
+  evidence_note: 验证 public-static 构建在非支持浏览器或非 secure context 下显示明确迁移指引，并禁用 Add LAN / Scan LAN 操作。
+
+![Pages direct LAN unsupported evidence](./assets/pages-direct-lan-unsupported.png)
+
+- source_type: ui_demo
+  demo_entry_or_title: `/connect?seed=empty&mock_browser_capability=supported`
+  requested_viewport: `1440x1080`
+  viewport_strategy: `ui-demo-source`
+  capture_scope: `element`
+  target_program: `mock-only`
+  scenario: Pages CIDR scan candidates
+  evidence_note: 验证手动 IPv4 CIDR 扫描只在用户点击后执行，命中结果先显示 session-local 候选，再由用户显式决定 `Add WiFi` 或 `Open`。
+
+![Pages direct LAN CIDR evidence](./assets/pages-direct-lan-cidr.png)
 
 ## 实现里程碑
 
