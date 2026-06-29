@@ -1030,7 +1030,7 @@ export const flashDevdDevice = (
     { bridgeAuth: true },
   );
 
-function defaultMockSettings(): DeviceSettings {
+function defaultMockSettings(ratedVoutMv = 12_000): DeviceSettings {
   return {
     wifi: {
       configured: false,
@@ -1056,7 +1056,7 @@ function defaultMockSettings(): DeviceSettings {
       required_samples: 2,
     },
     advanced_power_capabilities: {
-      rated_vout_mv: 12000,
+      rated_vout_mv: ratedVoutMv,
       standby_drop_mv: { default: 1200, min: 0, max: 3000, step: 20 },
       assist_low_drop_mv: { default: 600, min: 0, max: 3000, step: 20 },
       assist_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
@@ -1072,9 +1072,13 @@ function defaultMockSettings(): DeviceSettings {
   };
 }
 
+function mockRatedVoutMv(baseUrl: string): number {
+  return getMockIdentity(baseUrl).hardware_capabilities?.rated_vout_mv ?? 12_000;
+}
+
 function mockSettingsForBaseUrl(baseUrl: string): DeviceSettings {
   if (!mockSettingsByBaseUrl.has(baseUrl)) {
-    mockSettingsByBaseUrl.set(baseUrl, defaultMockSettings());
+    mockSettingsByBaseUrl.set(baseUrl, defaultMockSettings(mockRatedVoutMv(baseUrl)));
   }
   return mockSettingsByBaseUrl.get(baseUrl)!;
 }
@@ -1136,10 +1140,9 @@ function updateMockAdvancedPower(baseUrl: string, body: unknown) {
 
 function resetMockAdvancedPower(baseUrl: string) {
   const current = mockSettingsForBaseUrl(baseUrl);
-  const defaults = defaultMockSettings();
+  const defaults = defaultMockSettings(current.advanced_power_capabilities.rated_vout_mv);
   mockSettingsByBaseUrl.set(baseUrl, {
     ...current,
     advanced_power: defaults.advanced_power,
-    advanced_power_capabilities: defaults.advanced_power_capabilities,
   });
 }
