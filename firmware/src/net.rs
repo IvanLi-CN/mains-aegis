@@ -32,8 +32,9 @@ use crate::{
         write_sse_event, BuildInfo,
     },
     net_logic::{
-        build_http_response_head, build_sse_response_head, origin_reflection_allowed,
-        resolve_net_env_config, select_active_dns,
+        build_http_response_head, build_sse_response_head, lan_advanced_power_apply_timeout_ms,
+        origin_reflection_allowed, resolve_net_env_config, select_active_dns,
+        LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS,
     },
     net_types::{
         AdvancedPowerCapabilitiesSnapshot, AdvancedPowerSettingsSnapshot, DeviceSettingsSnapshot,
@@ -62,6 +63,10 @@ const STATUS_PUSH_INTERVAL: Duration = Duration::from_millis(500);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const RSSI_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const WIFI_CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const LAN_ADVANCED_POWER_APPLY_TIMEOUT: Duration =
+    Duration::from_millis(lan_advanced_power_apply_timeout_ms());
+const LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL: Duration =
+    Duration::from_millis(LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS);
 
 static STATUS_SSE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static RADIO_CONTROLLER: StaticCell<RadioController<'static>> = StaticCell::new();
@@ -918,7 +923,7 @@ async fn handle_http_write(
     }
 
     if await_command_result {
-        let mut attempts = 0u8;
+        let deadline = embassy_time::Instant::now() + LAN_ADVANCED_POWER_APPLY_TIMEOUT;
         loop {
             if let Some(result) = take_lan_command_result() {
                 match result {
@@ -948,8 +953,7 @@ async fn handle_http_write(
                     }
                 }
             }
-            attempts = attempts.saturating_add(1);
-            if attempts >= 12 {
+            if embassy_time::Instant::now() >= deadline {
                 write_error_body(
                     &mut body,
                     "advanced_power_apply_timeout",
@@ -960,7 +964,7 @@ async fn handle_http_write(
                 write_http_response(socket, "504 Gateway Timeout", body.as_str(), origin).await?;
                 return Ok(());
             }
-            Timer::after(Duration::from_millis(25)).await;
+            Timer::after(LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL).await;
         }
     }
 

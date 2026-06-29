@@ -5,6 +5,9 @@ use heapless::String;
 use crate::net_types::WifiErrorKind;
 
 pub const RESPONSE_HEAD_CAP: usize = 512;
+pub const LAN_COMMAND_SERVICE_WORST_CASE_MS: u64 = 2_000;
+pub const LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS: u64 = 25;
+pub const LAN_ADVANCED_POWER_APPLY_SAFETY_MARGIN_MS: u64 = 500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParsedStaticIpv4Config {
@@ -154,11 +157,17 @@ pub fn netmask_to_prefix(mask: [u8; 4]) -> Option<u8> {
     }
 }
 
+pub const fn lan_advanced_power_apply_timeout_ms() -> u64 {
+    LAN_COMMAND_SERVICE_WORST_CASE_MS + LAN_ADVANCED_POWER_APPLY_SAFETY_MARGIN_MS
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        build_http_response_head, build_sse_response_head, origin_reflection_allowed, parse_ipv4,
-        resolve_net_env_config, select_active_dns,
+        build_http_response_head, build_sse_response_head, lan_advanced_power_apply_timeout_ms,
+        origin_reflection_allowed, parse_ipv4, resolve_net_env_config, select_active_dns,
+        LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS, LAN_ADVANCED_POWER_APPLY_SAFETY_MARGIN_MS,
+        LAN_COMMAND_SERVICE_WORST_CASE_MS,
     };
     use crate::net_types::WifiErrorKind;
 
@@ -209,5 +218,22 @@ mod tests {
     fn parse_ipv4_rejects_partial_addresses() {
         assert_eq!(parse_ipv4("192.168.31"), None);
         assert_eq!(parse_ipv4("192.168.31.15"), Some([192, 168, 31, 15]));
+    }
+
+    #[test]
+    fn advanced_power_apply_timeout_covers_worst_case_lan_service_window() {
+        assert_eq!(
+            lan_advanced_power_apply_timeout_ms(),
+            LAN_COMMAND_SERVICE_WORST_CASE_MS + LAN_ADVANCED_POWER_APPLY_SAFETY_MARGIN_MS
+        );
+        assert!(
+            lan_advanced_power_apply_timeout_ms() > LAN_COMMAND_SERVICE_WORST_CASE_MS,
+            "advanced-power write timeout must exceed the main-loop service cadence"
+        );
+        assert_eq!(
+            lan_advanced_power_apply_timeout_ms() % LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS,
+            0,
+            "timeout should stay aligned to the HTTP poll interval"
+        );
     }
 }
