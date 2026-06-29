@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { DeviceRecord } from "../api/types";
-import { deviceSettingsAvailable } from "./App";
+import {
+  deviceSettingsAvailable,
+  resolveOwnerFacingDevdTarget,
+  resolveStartupDevdTarget,
+} from "./App";
 
 function makeRecord(overrides: Partial<DeviceRecord>): DeviceRecord {
   return {
@@ -113,5 +117,40 @@ describe("deviceSettingsAvailable", () => {
         }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("resolveOwnerFacingDevdTarget", () => {
+  test("accepts explicit devd target values", () => {
+    expect(resolveOwnerFacingDevdTarget(" ipc://devd.sock ", false)).toBe(
+      "ipc://devd.sock",
+    );
+  });
+
+  test("allows legacy mock target values in demo mode", () => {
+    expect(resolveOwnerFacingDevdTarget("mock:devd", true)).toBe("mock:devd");
+  });
+
+  test("rejects mock target values outside demo mode", () => {
+    expect(resolveOwnerFacingDevdTarget("mock:devd", false)).toBeUndefined();
+  });
+});
+
+describe("resolveStartupDevdTarget", () => {
+  test("prefers devd_target over legacy mock_devd_target", () => {
+    const params = new URLSearchParams({
+      devd_target: "ipc://preferred.sock",
+      mock_devd_target: "ipc://legacy.sock",
+    });
+    expect(resolveStartupDevdTarget(params, false)).toBe(
+      "ipc://preferred.sock",
+    );
+  });
+
+  test("falls back to legacy mock_devd_target when devd_target is absent", () => {
+    const params = new URLSearchParams({
+      mock_devd_target: "ipc://legacy.sock",
+    });
+    expect(resolveStartupDevdTarget(params, false)).toBe("ipc://legacy.sock");
   });
 });

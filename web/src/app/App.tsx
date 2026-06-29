@@ -209,10 +209,7 @@ export function App({
   const route = useRoute(initialPath);
   const searchParams = new URLSearchParams(window.location.search);
   const demoMode = isDemoSeed(searchParams.get("seed"));
-  const queryDevdTarget = resolveOwnerFacingDevdTarget(
-    searchParams.get("devd_target"),
-    demoMode,
-  );
+  const queryDevdTarget = resolveStartupDevdTarget(searchParams, demoMode);
   const queryHostedHttpServiceApp =
     demoMode && searchParams.get("mock_hosted") === "1";
   const queryBindLogicalDeviceId = demoMode
@@ -456,6 +453,22 @@ function resolveDevdTarget(
   ).trim();
   if (!candidate) return null;
   return candidate;
+}
+
+function ownerFacingDevdTargetParam(
+  searchParams: URLSearchParams,
+): string | null {
+  return searchParams.get("devd_target") ?? searchParams.get("mock_devd_target");
+}
+
+export function resolveStartupDevdTarget(
+  searchParams: URLSearchParams,
+  demoMode: boolean,
+): string | undefined {
+  return resolveOwnerFacingDevdTarget(
+    ownerFacingDevdTargetParam(searchParams),
+    demoMode,
+  );
 }
 
 export function resolveOwnerFacingDevdTarget(
