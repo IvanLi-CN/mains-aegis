@@ -83,6 +83,10 @@ function identity(deviceId: string, shortId: string, state: NetworkSummary["stat
       dns_sd: true,
       write_controls: false,
     },
+    hardware_capabilities: {
+      output_profile: "19v",
+      rated_vout_mv: 19000,
+    },
   };
 }
 
@@ -1173,6 +1177,11 @@ function defaultMockDeviceSettings(): DeviceSettings {
     advanced_power: {
       standby_drop_mv: 1200,
       assist_low_drop_mv: 600,
+      assist_enter_delta_ma: 0,
+      assist_exit_delta_ma: 0,
+      assist_required_samples: 2,
+      assist_ramp_step_mv: 100,
+      assist_ramp_interval_ms: 200,
       rated_enter_delta_ma: 0,
       rated_exit_delta_ma: 0,
       vin_drop_threshold_pct: 4,
@@ -1182,6 +1191,11 @@ function defaultMockDeviceSettings(): DeviceSettings {
       rated_vout_mv: 12000,
       standby_drop_mv: { default: 1200, min: 0, max: 3000, step: 20 },
       assist_low_drop_mv: { default: 600, min: 0, max: 3000, step: 20 },
+      assist_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+      assist_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+      assist_required_samples: { default: 2, min: 1, max: 5, step: 1 },
+      assist_ramp_step_mv: { default: 100, min: 20, max: 1000, step: 20 },
+      assist_ramp_interval_ms: { default: 200, min: 100, max: 3000, step: 100 },
       rated_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
       rated_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
       vin_drop_threshold_pct: { default: 4, min: 1, max: 12, step: 1 },

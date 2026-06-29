@@ -332,17 +332,17 @@ export function DeviceRegistryProvider({
 
       const cachedBridgeAuth = bridgeAuthToken(target.baseUrl) !== null;
       try {
-        if (selectedTransport === "devd") {
-          const devdBaseUrl =
-            rememberedDevdChannel(existing)?.baseUrl ??
-            existing.serial?.baseUrl ??
-            target.baseUrl;
-          const devdDeviceId =
-            rememberedDevdChannel(existing)?.devdDeviceId ?? target.deviceId;
-          if (existing.serial?.leaseId) {
-            await updateDevdSerialSnapshot(deviceId, devdBaseUrl);
-            return;
-          }
+      if (selectedTransport === "devd") {
+        const devdBaseUrl =
+          rememberedDevdChannel(existing)?.baseUrl ??
+          existing.serial?.baseUrl ??
+          target.baseUrl;
+        const devdDeviceId =
+          rememberedDevdChannel(existing)?.devdDeviceId ?? target.deviceId;
+        if (existing.serial?.leaseId) {
+          await updateDevdSerialSnapshot(deviceId, devdBaseUrl);
+          return;
+        }
           const devdTarget = {
             ...target,
             baseUrl: devdBaseUrl,
@@ -1430,6 +1430,7 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
           onProgress?.({
@@ -1442,13 +1443,13 @@ export function DeviceRegistryProvider({
           });
           const applyResult = await sendDevdWifiConfig(
             devdBaseUrl,
-            record.target.deviceId,
+            devdDeviceId,
             leaseId,
             input,
           );
           const settings = leaseId
             ? null
-            : await getDevdDeviceSettings(devdBaseUrl, record.target.deviceId);
+            : await getDevdDeviceSettings(devdBaseUrl, devdDeviceId);
           if (leaseId)
             await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
           const message = wifiConnectedMessage(input.ssid, applyResult.network);
@@ -1604,6 +1605,7 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
           onProgress?.({
@@ -1612,12 +1614,12 @@ export function DeviceRegistryProvider({
           });
           const applyResult = await clearDevdWifiConfig(
             devdBaseUrl,
-            record.target.deviceId,
+            devdDeviceId,
             leaseId,
           );
           const settings = leaseId
             ? null
-            : await getDevdDeviceSettings(devdBaseUrl, record.target.deviceId);
+            : await getDevdDeviceSettings(devdBaseUrl, devdDeviceId);
           if (leaseId)
             await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
           const message = wifiDisabledMessage(applyResult.network);
@@ -1729,11 +1731,12 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
           await setDevdLogLevel(
             devdBaseUrl,
-            record.target.deviceId,
+            devdDeviceId,
             leaseId,
             level,
           );
@@ -1742,7 +1745,7 @@ export function DeviceRegistryProvider({
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
-              record.target.deviceId,
+              devdDeviceId,
             );
             setRecords((current) =>
               current.map((candidate) =>
@@ -1835,11 +1838,12 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
           await setDevdManualChargePrefs(
             devdBaseUrl,
-            record.target.deviceId,
+            devdDeviceId,
             leaseId,
             prefs,
           );
@@ -1848,7 +1852,7 @@ export function DeviceRegistryProvider({
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
-              record.target.deviceId,
+              devdDeviceId,
             );
             setRecords((current) =>
               current.map((candidate) =>
@@ -1941,11 +1945,12 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
           await setDevdAdvancedPower(
             devdBaseUrl,
-            record.target.deviceId,
+            devdDeviceId,
             leaseId,
             advancedPower,
           );
@@ -1955,7 +1960,7 @@ export function DeviceRegistryProvider({
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
-              record.target.deviceId,
+              devdDeviceId,
             );
             setRecords((current) =>
               current.map((candidate) =>
@@ -2059,11 +2064,12 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
           await resetDevdAdvancedPower(
             devdBaseUrl,
-            record.target.deviceId,
+            devdDeviceId,
             leaseId,
           );
           if (leaseId) {
@@ -2072,7 +2078,7 @@ export function DeviceRegistryProvider({
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
-              record.target.deviceId,
+              devdDeviceId,
             );
             setRecords((current) =>
               current.map((candidate) =>
@@ -2834,6 +2840,10 @@ function devdBaseUrlForRecord(record: DeviceRecord): string | null {
   return null;
 }
 
+function devdDeviceIdForRecord(record: DeviceRecord): string | null {
+  return record.target.rememberedChannels?.devd?.devdDeviceId ?? null;
+}
+
 function devdLeaseIdForRecord(record: DeviceRecord): string | null {
   return record.serial?.source === "devd"
     ? (record.serial.leaseId ?? null)
@@ -3054,6 +3064,11 @@ function defaultDeviceSettings(): DeviceSettings {
     advanced_power: {
       standby_drop_mv: 1200,
       assist_low_drop_mv: 600,
+      assist_enter_delta_ma: 0,
+      assist_exit_delta_ma: 0,
+      assist_required_samples: 2,
+      assist_ramp_step_mv: 100,
+      assist_ramp_interval_ms: 200,
       rated_enter_delta_ma: 0,
       rated_exit_delta_ma: 0,
       vin_drop_threshold_pct: 4,
@@ -3063,6 +3078,11 @@ function defaultDeviceSettings(): DeviceSettings {
       rated_vout_mv: 12000,
       standby_drop_mv: { default: 1200, min: 0, max: 3000, step: 20 },
       assist_low_drop_mv: { default: 600, min: 0, max: 3000, step: 20 },
+      assist_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+      assist_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+      assist_required_samples: { default: 2, min: 1, max: 5, step: 1 },
+      assist_ramp_step_mv: { default: 100, min: 20, max: 1000, step: 20 },
+      assist_ramp_interval_ms: { default: 200, min: 100, max: 3000, step: 100 },
       rated_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
       rated_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
       vin_drop_threshold_pct: { default: 4, min: 1, max: 12, step: 1 },

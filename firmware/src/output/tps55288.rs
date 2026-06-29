@@ -154,6 +154,29 @@ where
     Ok(())
 }
 
+pub fn set_vout_only<I2C>(
+    i2c: &mut I2C,
+    ch: OutputChannel,
+    target_vout_mv: u16,
+) -> Result<
+    (),
+    (
+        ConfigureStage,
+        ::tps55288::Error<esp_hal::i2c::master::Error>,
+    ),
+>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let addr = ch.addr();
+    let mut tps = ::tps55288::Tps55288::with_address(&mut *i2c, addr);
+    // Runtime target trims must only touch the VOUT reference registers and must not
+    // disturb MODE/OE/ILIM or re-run the bring-up sequence.
+    tps.set_vout_mv(target_vout_mv)
+        .map_err(|e| (ConfigureStage::Vout, e))?;
+    Ok(())
+}
+
 pub fn configure_one<I2C>(
     i2c: &mut I2C,
     ch: OutputChannel,

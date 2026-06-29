@@ -32,8 +32,8 @@ use esp_firmware::usb_pd::UsbPdSinkManager;
 use esp_firmware::{
     mdns_wire::{derive_device_identity, DeviceIdentity},
     net_contract::{
-        render_identity_json_with_write_controls, render_power_diag_json, render_status_json,
-        BuildInfo,
+        render_compact_status_json, render_identity_json_with_write_controls,
+        render_power_diag_json, render_status_json, BuildInfo,
     },
     net_types::{UpsStatusSnapshot, WifiConnectionState, WifiErrorKind},
     usb_cdc_protocol::{
@@ -114,6 +114,8 @@ const USB_PD_FIXED_15V_ENABLED: bool = !cfg!(feature = "no-pd-sink-15v");
 const USB_PD_FIXED_20V_ENABLED: bool = !cfg!(feature = "no-pd-sink-20v");
 const USB_PD_PPS_ENABLED: bool = !cfg!(feature = "no-pps");
 const USB_PD_NEGOTIATION_FOCUS_SLICE: Duration = Duration::from_millis(25);
+const WEB_SERIAL_SERVICE_INTERVAL: Duration = Duration::from_millis(100);
+const WEB_SERIAL_STATUS_PUSH_INTERVAL: Duration = Duration::from_millis(250);
 
 // External SYNC for TPS55288 DITH/SYNC pins (SYNCA=0°, SYNCB=180°).
 // RFSW on board is 43kΩ (U17/U18 pin 8), so nominal fSW ≈ 20MHz / 43kΩ ≈ 465kHz.
@@ -1607,6 +1609,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let mut last_audio_diag_at: Option<Instant> = None;
     #[cfg(feature = "web_serial")]
     let mut web_serial_log_state = UsbCdcLogState::new();
+    #[cfg(feature = "web_serial")]
+    let mut last_web_serial_service_at: Option<Instant> = None;
+    #[cfg(feature = "web_serial")]
+    let mut last_web_serial_status_push_at: Option<Instant> = None;
     log_boot_stage("main_loop_enter");
 
     loop {
@@ -1641,6 +1647,29 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         }
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(2_000) {
+            #[cfg(feature = "web_serial")]
+            {
+                let web_serial_snapshot = power.ui_snapshot();
+                service_web_serial_if_due(
+                    &mut web_serial,
+                    &mut web_serial_lines,
+                    &web_serial_identity,
+                    &mut power,
+                    web_serial_snapshot,
+                    &mut web_serial_log_state,
+                    &mut last_web_serial_service_at,
+                    false,
+                );
+            }
+            #[cfg(feature = "web_serial")]
+            {
+                let web_serial_snapshot = power.ui_snapshot();
+                push_web_serial_status_if_due(
+                    &mut web_serial,
+                    web_serial_snapshot,
+                    &mut last_web_serial_status_push_at,
+                );
+            }
             let mut irq_events = irq_tracker.take_delta();
             let mut pd_state = usb_pd.tick(
                 power.usb_pd_demand(),
@@ -1677,11 +1706,48 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                         pd_started_at.elapsed().as_millis() as u32,
                     );
                     power.update_usb_pd_state(pd_state);
+                    #[cfg(feature = "web_serial")]
+                    {
+                        let web_serial_snapshot = power.ui_snapshot();
+                        service_web_serial_if_due(
+                            &mut web_serial,
+                            &mut web_serial_lines,
+                            &web_serial_identity,
+                            &mut power,
+                            web_serial_snapshot,
+                            &mut web_serial_log_state,
+                            &mut last_web_serial_service_at,
+                            false,
+                        );
+                    }
+                    #[cfg(feature = "web_serial")]
+                    {
+                        let web_serial_snapshot = power.ui_snapshot();
+                        push_web_serial_status_if_due(
+                            &mut web_serial,
+                            web_serial_snapshot,
+                            &mut last_web_serial_status_push_at,
+                        );
+                    }
                     service_runtime_audio!(power);
                 }
             }
 
             let fan_telemetry_due = power.tick(&irq_events);
+            #[cfg(feature = "web_serial")]
+            {
+                let web_serial_snapshot = power.ui_snapshot();
+                service_web_serial_if_due(
+                    &mut web_serial,
+                    &mut web_serial_lines,
+                    &web_serial_identity,
+                    &mut power,
+                    web_serial_snapshot,
+                    &mut web_serial_log_state,
+                    &mut last_web_serial_service_at,
+                    false,
+                );
+            }
             if fan_pwm_ready {
                 applied_fan_state = apply_fan_command(
                     &mut fan_en,
@@ -1700,6 +1766,23 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             let now = Instant::now();
             let ui_snapshot = power.ui_snapshot();
             net_bridge::publish_status_snapshot(ui_snapshot);
+            #[cfg(feature = "web_serial")]
+            service_web_serial_if_due(
+                &mut web_serial,
+                &mut web_serial_lines,
+                &web_serial_identity,
+                &mut power,
+                ui_snapshot,
+                &mut web_serial_log_state,
+                &mut last_web_serial_service_at,
+                true,
+            );
+            #[cfg(feature = "web_serial")]
+            push_web_serial_status_if_due(
+                &mut web_serial,
+                ui_snapshot,
+                &mut last_web_serial_status_push_at,
+            );
             #[cfg(feature = "net_http")]
             {
                 while let Some(command) = esp_firmware::net::take_pending_lan_command() {
@@ -1825,15 +1908,6 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 );
                 sync_advanced_power_net_settings(&power);
             }
-            #[cfg(feature = "web_serial")]
-            service_web_serial(
-                &mut web_serial,
-                &mut web_serial_lines,
-                &web_serial_identity,
-                &mut power,
-                ui_snapshot,
-                &mut web_serial_log_state,
-            );
             front_panel.update_self_check_snapshot(ui_snapshot);
             front_panel.update_bms_activation_state(power.bms_activation_state());
             front_panel.set_attention_hold(front_panel_attention_hold(power.audio_signals()));
@@ -1945,6 +2019,31 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
 }
 
 #[cfg(feature = "web_serial")]
+fn service_web_serial_if_due<'d, I2C>(
+    serial: &mut UsbSerialJtag<'static, Blocking>,
+    lines: &mut UsbCdcLineBuffer<1024>,
+    identity: &DeviceIdentity,
+    power: &mut output::PowerManager<'d, I2C>,
+    ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
+    log_state: &mut UsbCdcLogState,
+    last_service_at: &mut Option<Instant>,
+    force: bool,
+) where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let now = Instant::now();
+    if !force
+        && last_service_at
+            .map(|last| now < last + WEB_SERIAL_SERVICE_INTERVAL)
+            .unwrap_or(false)
+    {
+        return;
+    }
+    *last_service_at = Some(now);
+    service_web_serial(serial, lines, identity, power, ui_snapshot, log_state);
+}
+
+#[cfg(feature = "web_serial")]
 fn service_web_serial<'d, I2C>(
     serial: &mut UsbSerialJtag<'static, Blocking>,
     lines: &mut UsbCdcLineBuffer<1024>,
@@ -1986,6 +2085,29 @@ fn service_web_serial<'d, I2C>(
             }
         }
     }
+}
+
+#[cfg(feature = "web_serial")]
+fn push_web_serial_status_if_due(
+    serial: &mut UsbSerialJtag<'static, Blocking>,
+    ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
+    last_status_push_at: &mut Option<Instant>,
+) {
+    let now = Instant::now();
+    if last_status_push_at
+        .map(|last| now < last + WEB_SERIAL_STATUS_PUSH_INTERVAL)
+        .unwrap_or(false)
+    {
+        return;
+    }
+    *last_status_push_at = Some(now);
+
+    let status = net_bridge::build_status_snapshot(ui_snapshot);
+    let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+    let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+    render_compact_status_json(&mut body, status);
+    render_status_frame_json(&mut frame, body.as_str());
+    write_web_serial_line(serial, frame.as_str());
 }
 
 #[cfg(feature = "web_serial")]
@@ -2044,12 +2166,20 @@ fn handle_web_serial_frame<'d, I2C>(
             UsbCdcRequest::GetStatus => {
                 let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
                 let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
-                render_status_json(&mut body, status);
+                if request_id.as_str().starts_with("devd-monitor-status")
+                    || request_id.as_str().starts_with("devd-status")
+                {
+                    render_compact_status_json(&mut body, status);
+                } else {
+                    render_status_json(&mut body, status);
+                }
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
-                render_status_frame_json(&mut frame, body.as_str());
-                write_web_serial_line(serial, frame.as_str());
-                log_state.emit_status_logs(serial, status);
+                if !request_id.as_str().starts_with("devd-") {
+                    render_status_frame_json(&mut frame, body.as_str());
+                    write_web_serial_line(serial, frame.as_str());
+                    log_state.emit_status_logs(serial, status);
+                }
             }
             UsbCdcRequest::GetSettings => {
                 let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();

@@ -22,6 +22,8 @@ pub mod reg {
     pub const CHARGER_CONTROL_0: u8 = 0x0F;
     pub const CHARGER_CONTROL_1: u8 = 0x10;
     pub const CHARGER_CONTROL_2: u8 = 0x11;
+    pub const CHARGER_CONTROL_3: u8 = 0x12;
+    pub const CHARGER_CONTROL_4: u8 = 0x13;
     pub const CHARGER_CONTROL_5: u8 = 0x14;
 
     pub const CHARGER_STATUS_0: u8 = 0x1B;
@@ -66,6 +68,24 @@ pub mod ctrl2 {
     /// `REG11.Charger_Control_2.SDRV_CTRL[1:0]` lives at bits 2:1.
     pub const SDRV_CTRL_SHIFT: u8 = 1;
     pub const SDRV_CTRL_MASK: u8 = 0b11 << SDRV_CTRL_SHIFT;
+}
+
+pub mod ctrl3 {
+    /// `REG12.DIS_ACDRV` (bit 7).
+    pub const DIS_ACDRV: u8 = 1 << 7;
+    /// `REG12.EN_OTG` (bit 6).
+    pub const EN_OTG: u8 = 1 << 6;
+}
+
+pub mod ctrl4 {
+    /// `REG13.EN_ACDRV2` (bit 7).
+    pub const EN_ACDRV2: u8 = 1 << 7;
+    /// `REG13.EN_ACDRV1` (bit 6).
+    pub const EN_ACDRV1: u8 = 1 << 6;
+    /// `REG13.FORCE_VINDPM_DET` (bit 1).
+    pub const FORCE_VINDPM_DET: u8 = 1 << 1;
+    /// `REG13.EN_IBUS_OCP` (bit 0).
+    pub const EN_IBUS_OCP: u8 = 1 << 0;
 }
 
 pub mod ctrl5 {
@@ -463,6 +483,32 @@ where
     Ok(ctrl1_after)
 }
 
+pub fn ensure_host_mode_watchdog_serviced<I2C>(i2c: &mut I2C) -> Result<WatchdogState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl1_before = read_u8(i2c, reg::CHARGER_CONTROL_1)?;
+    let watchdog_before = ctrl1_before & ctrl1::WATCHDOG_MASK;
+    if watchdog_before == 0 {
+        return Ok(WatchdogState {
+            ctrl1_before,
+            ctrl1_after: ctrl1_before,
+            watchdog_before,
+            watchdog_after: watchdog_before,
+        });
+    }
+
+    let ctrl1_after = ctrl1_before | ctrl1::WD_RST;
+    write_u8(i2c, reg::CHARGER_CONTROL_1, ctrl1_after)?;
+
+    Ok(WatchdogState {
+        ctrl1_before,
+        ctrl1_after,
+        watchdog_before,
+        watchdog_after: watchdog_before,
+    })
+}
+
 pub fn ensure_watchdog_disabled<I2C>(i2c: &mut I2C) -> Result<WatchdogState, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -643,6 +689,106 @@ where
     Ok(ManagedCurrentLimitState {
         ctrl5_before,
         ctrl5_after,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcdrvPath {
+    Disabled,
+    Ac1,
+    Ac2,
+    InvalidBoth,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestedAcdrvPath {
+    Disabled,
+    Ac1,
+    Ac2,
+}
+
+pub const fn decode_acdrv_path(ctrl3: u8, ctrl4: u8) -> AcdrvPath {
+    if (ctrl3 & ctrl3::DIS_ACDRV) != 0 {
+        return AcdrvPath::Disabled;
+    }
+
+    let ac1 = (ctrl4 & ctrl4::EN_ACDRV1) != 0;
+    let ac2 = (ctrl4 & ctrl4::EN_ACDRV2) != 0;
+    match (ac1, ac2) {
+        (false, false) => AcdrvPath::Disabled,
+        (true, false) => AcdrvPath::Ac1,
+        (false, true) => AcdrvPath::Ac2,
+        (true, true) => AcdrvPath::InvalidBoth,
+    }
+}
+
+pub const fn acdrv_path_name(path: AcdrvPath) -> &'static str {
+    match path {
+        AcdrvPath::Disabled => "disabled",
+        AcdrvPath::Ac1 => "ac1",
+        AcdrvPath::Ac2 => "ac2",
+        AcdrvPath::InvalidBoth => "invalid_both",
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct AcdrvControlState {
+    pub ctrl3_before: u8,
+    pub ctrl3_after: u8,
+    pub ctrl4_before: u8,
+    pub ctrl4_after: u8,
+    pub path_before: AcdrvPath,
+    pub path_after: AcdrvPath,
+}
+
+pub fn set_acdrv_path<I2C>(
+    i2c: &mut I2C,
+    requested: RequestedAcdrvPath,
+) -> Result<AcdrvControlState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ctrl3_before = read_u8(i2c, reg::CHARGER_CONTROL_3)?;
+    let ctrl4_before = read_u8(i2c, reg::CHARGER_CONTROL_4)?;
+    let path_before = decode_acdrv_path(ctrl3_before, ctrl4_before);
+
+    let mut ctrl3_after = ctrl3_before & !ctrl3::DIS_ACDRV;
+    let mut ctrl4_after = ctrl4_before & !(ctrl4::EN_ACDRV1 | ctrl4::EN_ACDRV2);
+    match requested {
+        RequestedAcdrvPath::Disabled => {
+            ctrl3_after |= ctrl3::DIS_ACDRV;
+        }
+        RequestedAcdrvPath::Ac1 => {
+            ctrl4_after |= ctrl4::EN_ACDRV1;
+        }
+        RequestedAcdrvPath::Ac2 => {
+            ctrl4_after |= ctrl4::EN_ACDRV2;
+        }
+    }
+
+    if matches!(requested, RequestedAcdrvPath::Disabled) {
+        if ctrl3_after != ctrl3_before {
+            write_u8(i2c, reg::CHARGER_CONTROL_3, ctrl3_after)?;
+        }
+        if ctrl4_after != ctrl4_before {
+            write_u8(i2c, reg::CHARGER_CONTROL_4, ctrl4_after)?;
+        }
+    } else {
+        if ctrl4_after != ctrl4_before {
+            write_u8(i2c, reg::CHARGER_CONTROL_4, ctrl4_after)?;
+        }
+        if ctrl3_after != ctrl3_before {
+            write_u8(i2c, reg::CHARGER_CONTROL_3, ctrl3_after)?;
+        }
+    }
+
+    Ok(AcdrvControlState {
+        ctrl3_before,
+        ctrl3_after,
+        ctrl4_before,
+        ctrl4_after,
+        path_before,
+        path_after: decode_acdrv_path(ctrl3_after, ctrl4_after),
     })
 }
 
@@ -846,6 +992,145 @@ mod tests {
         assert_ne!(output & ctrl5::SFET_PRESENT, 0);
         assert_ne!(output & ctrl5::EN_INDPM, 0);
         assert_eq!(output & ctrl5::EN_EXTILIM, 0);
+    }
+
+    #[test]
+    fn ensure_host_mode_watchdog_serviced_noops_when_watchdog_already_disabled() {
+        let mut i2c = RegisterMapI2c::new(&[(reg::CHARGER_CONTROL_1, 0x00)]);
+
+        let state = ensure_host_mode_watchdog_serviced(&mut i2c).unwrap();
+
+        assert_eq!(state.watchdog_before, 0x00);
+        assert_eq!(state.ctrl1_before, 0x00);
+        assert_eq!(state.ctrl1_after, 0x00);
+        assert!(i2c.writes.iter().all(|write| write.first().copied()
+            != Some(reg::CHARGER_CONTROL_1)
+            || write.len() == 1));
+    }
+
+    #[test]
+    fn ensure_host_mode_watchdog_serviced_kicks_enabled_watchdog() {
+        let mut i2c = RegisterMapI2c::new(&[(reg::CHARGER_CONTROL_1, 0x05)]);
+
+        let state = ensure_host_mode_watchdog_serviced(&mut i2c).unwrap();
+
+        assert_eq!(state.watchdog_before, 0x05);
+        assert_eq!(state.ctrl1_before, 0x05);
+        assert_eq!(state.ctrl1_after, 0x0d);
+        assert_eq!(
+            i2c.writes.last().unwrap().as_slice(),
+            &[reg::CHARGER_CONTROL_1, 0x0d]
+        );
+    }
+
+    struct RegisterMapI2c {
+        regs: std::collections::BTreeMap<u8, u8>,
+        writes: Vec<Vec<u8>>,
+    }
+
+    impl RegisterMapI2c {
+        fn new(regs: &[(u8, u8)]) -> Self {
+            Self {
+                regs: regs.iter().copied().collect(),
+                writes: Vec::new(),
+            }
+        }
+    }
+
+    impl embedded_hal::i2c::ErrorType for RegisterMapI2c {
+        type Error = Infallible;
+    }
+
+    impl embedded_hal::i2c::I2c for RegisterMapI2c {
+        fn transaction(
+            &mut self,
+            _address: u8,
+            operations: &mut [embedded_hal::i2c::Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            let mut last_reg: Option<u8> = None;
+            for operation in operations {
+                match operation {
+                    embedded_hal::i2c::Operation::Read(buffer) => {
+                        let reg: u8 = last_reg.unwrap_or_default();
+                        for (idx, byte) in buffer.iter_mut().enumerate() {
+                            *byte = *self
+                                .regs
+                                .get(&(reg.saturating_add(idx as u8)))
+                                .unwrap_or(&0);
+                        }
+                    }
+                    embedded_hal::i2c::Operation::Write(bytes) => {
+                        self.writes.push(bytes.to_vec());
+                        if let Some((&reg, payload)) = bytes.split_first() {
+                            last_reg = Some(reg);
+                            for (idx, value) in payload.iter().copied().enumerate() {
+                                self.regs.insert(reg.saturating_add(idx as u8), value);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn decode_acdrv_path_prefers_disable_bit() {
+        assert_eq!(
+            decode_acdrv_path(ctrl3::DIS_ACDRV, ctrl4::EN_ACDRV2),
+            AcdrvPath::Disabled
+        );
+        assert_eq!(decode_acdrv_path(0, ctrl4::EN_ACDRV1), AcdrvPath::Ac1);
+        assert_eq!(decode_acdrv_path(0, ctrl4::EN_ACDRV2), AcdrvPath::Ac2);
+        assert_eq!(
+            decode_acdrv_path(0, ctrl4::EN_ACDRV1 | ctrl4::EN_ACDRV2),
+            AcdrvPath::InvalidBoth
+        );
+    }
+
+    #[test]
+    fn set_acdrv_path_switches_from_ac1_to_ac2() {
+        let mut i2c = RegisterMapI2c::new(&[
+            (reg::CHARGER_CONTROL_3, 0),
+            (
+                reg::CHARGER_CONTROL_4,
+                ctrl4::EN_ACDRV1 | ctrl4::EN_IBUS_OCP,
+            ),
+        ]);
+
+        let state = set_acdrv_path(&mut i2c, RequestedAcdrvPath::Ac2).unwrap();
+
+        assert_eq!(state.path_before, AcdrvPath::Ac1);
+        assert_eq!(state.path_after, AcdrvPath::Ac2);
+        assert_eq!(state.ctrl3_after & ctrl3::DIS_ACDRV, 0);
+        assert_eq!(
+            state.ctrl4_after & (ctrl4::EN_ACDRV1 | ctrl4::EN_ACDRV2),
+            ctrl4::EN_ACDRV2
+        );
+        assert_eq!(
+            i2c.writes.last().unwrap().as_slice(),
+            &[
+                reg::CHARGER_CONTROL_4,
+                ctrl4::EN_ACDRV2 | ctrl4::EN_IBUS_OCP
+            ]
+        );
+    }
+
+    #[test]
+    fn set_acdrv_path_can_force_disable() {
+        let mut i2c = RegisterMapI2c::new(&[
+            (reg::CHARGER_CONTROL_3, 0),
+            (
+                reg::CHARGER_CONTROL_4,
+                ctrl4::EN_ACDRV2 | ctrl4::EN_IBUS_OCP,
+            ),
+        ]);
+
+        let state = set_acdrv_path(&mut i2c, RequestedAcdrvPath::Disabled).unwrap();
+
+        assert_eq!(state.path_before, AcdrvPath::Ac2);
+        assert_eq!(state.path_after, AcdrvPath::Disabled);
+        assert_ne!(state.ctrl3_after & ctrl3::DIS_ACDRV, 0);
     }
 }
 

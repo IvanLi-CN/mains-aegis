@@ -53,7 +53,9 @@
 - `POST /api/v1/devices/{id}/disconnect`: 断开设备 session。
 - `DELETE /api/v1/devices/{id}/binding`: 移除绑定，并同步 devd 持久状态。
 - `GET /api/v1/devices/{id}/identity`: 返回设备 firmware identity。
+- `GET /api/v1/devices/{id}/status`: 返回设备 owner-facing status。该接口同时通过 IPC `device.status` 暴露给 `mains-aegis device <id> status`；CLI 必须支持单次读和 `--watch` 连续 JSONL 采样，正式 Power Validation 的 UPS 状态采集不得因为 HTTP 或 IPC 原始方法更方便而绕过 CLI 能力缺口。
 - `GET /api/v1/devices/{id}/power-diag`: 通过 USB CDC `get_power_diag` 获取只读电源诊断快照，并缓存到设备 session。
+- `GET /api/v1/devices/{id}/power-diag` 同时通过 IPC `device.power_diag` 暴露给 `mains-aegis device <id> power-diag`；CLI 必须提供与 `status` 同构的 `--fresh`、`--cache-only`、`--include-meta`、`--watch`、`--interval-ms` 与 `--samples` 参数。
 - `GET|POST /api/v1/devices/{id}/artifact`: 查询或选择 artifact manifest。
 - `POST /api/v1/devices/{id}/flash`: 校验 artifact hash 后执行烧录；无硬件验证使用 `dry_run=true`。真实烧录响应与 `flash completed` 事件必须同时回传 backend `status/stdout/stderr`，用于区分“artifact 选择正确但底层 flash backend 没有真正完成”和“backend 已成功写入硬件”。真实 flash backend 必须有明确超时并在超时路径清理子进程，避免 HTTP 客户端断开后遗留卡住的底层烧录进程。
 - `POST /api/v1/devices/{id}/reset`: 设备 reset 请求；native serial 后端必须在已绑定端口上执行 in-process DTR/RTS app-boot 复位，保持 boot 释放线为实测 app-boot 电平，不再另起外部 reset 进程抢占同一串口。
@@ -67,7 +69,7 @@
 - `POST /api/v1/wifi-config` / `DELETE /api/v1/wifi-config`: 通过指定 `device_id` 的已连接设备写入或清除 WiFi 配置；未指定 `device_id` 时仅允许单设备连接场景。
 - `POST /api/v1/settings/log-level`: 通过指定 `device_id` 的连接设备更新日志级别。
 - `POST /api/v1/settings/manual-charge`: 通过指定 `device_id` 的连接设备更新手动充电偏好。
-- `POST /api/v1/settings/advanced-power`: 通过指定 `device_id` 的连接设备整块替换 Advanced Power 六项高级设置。
+- `POST /api/v1/settings/advanced-power`: 通过指定 `device_id` 的连接设备整块替换 Advanced Power 高级设置。当前设备侧合同固定为 11 个数字字段，并继续只保存相对偏移量或无量纲值。
 - `POST /api/v1/settings/advanced-power/reset`: 通过指定 `device_id` 的连接设备把 Advanced Power 恢复为设备默认值。
 
 `power-diag` 响应必须保持只读，不触发充电策略、BMS 恢复或输出状态变化。快照至少包含：
@@ -157,6 +159,9 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
   - `features`
   - `protocol`
   - `defmt`
+- HTTP identity 与 USB CDC `hello/get_identity` 还必须包含只读 `hardware_capabilities`：
+  - `output_profile`
+  - `rated_vout_mv`
 - devd 匹配规则：只有 `build_id`、build profile 与 feature set 都和 selected artifact 精确匹配才可标记 `log_decode.status=verified`；`git_sha` 只能作为 provenance 展示，不能单独证明 defmt artifact 匹配。
 
 ## 验收标准

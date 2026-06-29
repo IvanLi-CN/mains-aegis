@@ -1,0 +1,165 @@
+{
+  "created_at": "2026-06-28T15:49:27.736688+00:00",
+  "load_protection": {
+    "load_max_i_ma_total": 4000,
+    "load_max_p_mw": 80000,
+    "load_min_v_mv": 3000
+  },
+  "profiles": [
+    {
+      "output_profile": "12v",
+      "rated_vout_mv": 12000,
+      "source_current_limit_ma": 3000,
+      "source_voltage_mv": 12000
+    },
+    {
+      "output_profile": "19v",
+      "rated_vout_mv": 19000,
+      "source_current_limit_ma": 3000,
+      "source_voltage_mv": 19000
+    }
+  ],
+  "reports": [
+    {
+      "advanced_power": {
+        "assist_enter_delta_ma": 0,
+        "assist_exit_delta_ma": 0,
+        "assist_low_drop_mv": 600,
+        "assist_ramp_interval_ms": 200,
+        "assist_ramp_step_mv": 100,
+        "assist_required_samples": 2,
+        "rated_enter_delta_ma": 0,
+        "rated_exit_delta_ma": 0,
+        "required_samples": 2,
+        "standby_drop_mv": 1200,
+        "vin_drop_threshold_pct": 4
+      },
+      "effective_sample_rate_hz": 4.903,
+      "failed_acceptance_checks": [],
+      "failures": [],
+      "include_backup": true,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "load_min_v_mv": 3000,
+      "max_sample_gap_s": 0.281,
+      "output_profile": "12v",
+      "report_dir": "12v-assist_path-3900ma",
+      "run_validity": "valid_for_signoff",
+      "scene_complete": true,
+      "scene_type": "assist_path",
+      "signoff_valid": true,
+      "source_current_limit_ma": 3000,
+      "source_voltage_mv": 12000,
+      "target_ma": 3900
+    },
+    {
+      "advanced_power": {
+        "assist_enter_delta_ma": 0,
+        "assist_exit_delta_ma": 0,
+        "assist_low_drop_mv": 600,
+        "assist_ramp_interval_ms": 200,
+        "assist_ramp_step_mv": 100,
+        "assist_required_samples": 2,
+        "rated_enter_delta_ma": 0,
+        "rated_exit_delta_ma": 0,
+        "required_samples": 2,
+        "standby_drop_mv": 1200,
+        "vin_drop_threshold_pct": 4
+      },
+      "effective_sample_rate_hz": 4.926,
+      "failed_acceptance_checks": [],
+      "failures": [],
+      "include_backup": true,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "load_min_v_mv": 3000,
+      "max_sample_gap_s": 0.231,
+      "output_profile": "12v",
+      "report_dir": "12v-backup_only-1000ma",
+      "run_validity": "valid_for_signoff",
+      "scene_complete": true,
+      "scene_type": "backup_only",
+      "signoff_valid": true,
+      "source_current_limit_ma": 3000,
+      "source_voltage_mv": 12000,
+      "target_ma": 1000
+    },
+    {
+      "advanced_power": {
+        "assist_enter_delta_ma": 0,
+        "assist_exit_delta_ma": 0,
+        "assist_low_drop_mv": 600,
+        "assist_ramp_interval_ms": 200,
+        "assist_ramp_step_mv": 100,
+        "assist_required_samples": 2,
+        "rated_enter_delta_ma": 0,
+        "rated_exit_delta_ma": 0,
+        "required_samples": 2,
+        "standby_drop_mv": 1200,
+        "vin_drop_threshold_pct": 4
+      },
+      "effective_sample_rate_hz": 4.945,
+      "failed_acceptance_checks": [],
+      "failures": [],
+      "include_backup": true,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "load_min_v_mv": 3000,
+      "max_sample_gap_s": 0.215,
+      "output_profile": "19v",
+      "report_dir": "19v-assist_path-3900ma",
+      "run_validity": "valid_for_signoff",
+      "scene_complete": true,
+      "scene_type": "assist_path",
+      "signoff_valid": true,
+      "source_current_limit_ma": 3000,
+      "source_voltage_mv": 19000,
+      "target_ma": 3900
+    },
+    {
+      "advanced_power": {
+        "assist_enter_delta_ma": 0,
+        "assist_exit_delta_ma": 0,
+        "assist_low_drop_mv": 600,
+        "assist_ramp_interval_ms": 200,
+        "assist_ramp_step_mv": 100,
+        "assist_required_samples": 2,
+        "rated_enter_delta_ma": 0,
+        "rated_exit_delta_ma": 0,
+        "required_samples": 2,
+        "standby_drop_mv": 1200,
+        "vin_drop_threshold_pct": 4
+      },
+      "effective_sample_rate_hz": 4.939,
+      "failed_acceptance_checks": [],
+      "failures": [],
+      "include_backup": true,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "load_min_v_mv": 3000,
+      "max_sample_gap_s": 0.24,
+      "output_profile": "19v",
+      "report_dir": "19v-backup_only-1000ma",
+      "run_validity": "valid_for_signoff",
+      "scene_complete": true,
+      "scene_type": "backup_only",
+      "signoff_valid": true,
+      "source_current_limit_ma": 3000,
+      "source_voltage_mv": 19000,
+      "target_ma": 1000
+    }
+  ],
+  "suite_id": "power-validation-rust-four-scenes-url-r7",
+  "thresholds": {
+    "engineering_sample_rate_hz": 3.0,
+    "max_sample_gap_s": 0.5,
+    "minimum_sample_rate_hz": 2.0,
+    "sample_interval_ms": 200,
+    "ups_watch_freshness_ms": 750
+  },
+  "transport": {
+    "electronic_load": "Loadlynx:cli+ipc+usb",
+    "power_source": "Isolapurr:cli+url",
+    "ups": "mains-aegis CLI + native IPC + USB"
+  }
+}

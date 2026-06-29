@@ -214,6 +214,11 @@ Host: mains-aegis-a1b2c3.local
   "advanced_power": {
     "standby_drop_mv": 1200,
     "assist_low_drop_mv": 600,
+    "assist_enter_delta_ma": 0,
+    "assist_exit_delta_ma": 0,
+    "assist_required_samples": 2,
+    "assist_ramp_step_mv": 100,
+    "assist_ramp_interval_ms": 200,
     "rated_enter_delta_ma": 0,
     "rated_exit_delta_ma": 0,
     "vin_drop_threshold_pct": 4,
@@ -223,6 +228,11 @@ Host: mains-aegis-a1b2c3.local
     "rated_vout_mv": 12000,
     "standby_drop_mv": { "default": 1200, "min": 0, "max": 3000, "step": 20 },
     "assist_low_drop_mv": { "default": 600, "min": 0, "max": 3000, "step": 20 },
+    "assist_enter_delta_ma": { "default": 0, "min": -100, "max": 1000, "step": 50 },
+    "assist_exit_delta_ma": { "default": 0, "min": -50, "max": 1000, "step": 50 },
+    "assist_required_samples": { "default": 2, "min": 1, "max": 5, "step": 1 },
+    "assist_ramp_step_mv": { "default": 100, "min": 20, "max": 1000, "step": 20 },
+    "assist_ramp_interval_ms": { "default": 200, "min": 100, "max": 3000, "step": 100 },
     "rated_enter_delta_ma": { "default": 0, "min": -100, "max": 1000, "step": 50 },
     "rated_exit_delta_ma": { "default": 0, "min": -50, "max": 1000, "step": 50 },
     "vin_drop_threshold_pct": { "default": 4, "min": 1, "max": 12, "step": 1 },
@@ -350,6 +360,11 @@ Host: mains-aegis-a1b2c3.local
 {
   "standby_drop_mv": 1200,
   "assist_low_drop_mv": 600,
+  "assist_enter_delta_ma": 0,
+  "assist_exit_delta_ma": 0,
+  "assist_required_samples": 2,
+  "assist_ramp_step_mv": 100,
+  "assist_ramp_interval_ms": 200,
   "rated_enter_delta_ma": 0,
   "rated_exit_delta_ma": 0,
   "vin_drop_threshold_pct": 4,
@@ -359,7 +374,11 @@ Host: mains-aegis-a1b2c3.local
 
 - 所有字段都按整块替换语义写入。
 - `standby_drop_mv`、`assist_low_drop_mv` 为相对 `rated_vout_mv` 的 `mV drop`。
+- `assist_enter_delta_ma`、`assist_exit_delta_ma` 为相对 `assist_low` 默认门槛的 `mA delta`。
+- `assist_required_samples` 为 `assist_low` 进入/退出锁存窗口。
+- `assist_ramp_step_mv`、`assist_ramp_interval_ms` 只服务 `standby -> assist_low` 的限速爬升。
 - `rated_enter_delta_ma`、`rated_exit_delta_ma` 为相对设备默认门槛的 `mA delta`。
+- 不暴露任何 owner-facing 可写绝对 `VIN` 门槛；`assist_low` 入口绝对 `VIN` 比较只存在于运行时内部。
 
 ### 响应（Response）
 
@@ -372,6 +391,10 @@ Host: mains-aegis-a1b2c3.local
 ### 错误（Errors）
 
 - `400/invalid_advanced_power_settings`: 步进、范围或跨字段关系不合法（retryable: no）
+  - 至少包括：
+    - `standby_drop_mv >= assist_low_drop_mv >= 0`
+    - 展开后 `assist_exit_threshold_ma <= assist_enter_threshold_ma`
+    - 展开后 `rated_exit_threshold_ma <= rated_enter_threshold_ma`
 - `409/busy`: 已有未消费 LAN management command（retryable: yes）
 
 ## Advanced Power Reset（POST `/api/v1/settings/advanced-power/reset`）

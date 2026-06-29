@@ -51,12 +51,14 @@
 ### MUST
 
 - 设备本体 API 继续保留 `GET /api/v1/identity`、`GET /api/v1/network`、`GET /api/v1/status`，并继续以 `GET /api/v1/status` + `Accept: text/event-stream` 作为唯一状态 SSE 入口。
+- 设备本体 `GET /api/v1/identity` 与 USB CDC `hello/get_identity` 必须显式公开只读 `hardware_capabilities`，当前至少包含 `output_profile` 与 `rated_vout_mv`，供 host/Web/HIL 在外部输入上电前识别真实硬件档位。
 - 设备本体必须新增 `GET /api/v1/settings`，一次返回完整设置快照；当前至少包含 `wifi`、`log_level`、`manual_charge`、`advanced_power` 与 `advanced_power_capabilities`。
 - 设备本体写接口继续按主题分开：`POST|DELETE /api/v1/wifi-config`、`POST /api/v1/settings/log-level`、`POST /api/v1/settings/manual-charge`、`POST /api/v1/settings/advanced-power`、`POST /api/v1/settings/advanced-power/reset`、`POST /api/v1/reset`。
 - 客户端写成功后必须重新读取完整 `settings` 快照；不得依赖局部返回拼接设置状态。
 - Web 无 devd 模式必须支持手填 IPv4 CIDR 的子网扫描，并记住最近范围；扫描只探测 `http://<ip>:80/api/v1/identity`。
 - devd LAN 发现顺序固定为 `mDNS/DNS-SD -> 子网扫描`；Web 无 devd 模式只走子网扫描。
 - 所有扫描结果必须经 `/api/v1/identity` 二次确认；只有满足 `role=ups` / `device_id` / `api_version` 契约的目标才能进入设备列表。
+- 凡是会驱动外部 `DCIN` 上电的自动化流程，在恢复外部输入前都必须先在断电状态读取 `identity.hardware_capabilities` 与 `settings.advanced_power_capabilities.rated_vout_mv`，确认真实硬件档位与目标测试/控制流程一致。
 - 同一 `device_id` 出现在多个 IP 上时，必须标记冲突并阻断自动接入。
 - logical device 以 `device_id` 为主键；USB 与 LAN transport 必须关联到同一设备记录。默认首选 USB；从已连接 transport 切到另一种 transport 时必须显式提示。
 - CLI `--transport` 为可选偏好参数；不传时默认 `usb`。显式选 `usb` 但 USB 不可用时直接失败并提示，不自动降级到 LAN。

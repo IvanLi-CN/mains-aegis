@@ -1698,8 +1698,8 @@ a {
 
 .status-band-color-warm {
   --amount: 0.45;
-  grid-template-columns: minmax(190px, 1.38fr) repeat(
-      3,
+  grid-template-columns: minmax(190px, 1.3fr) repeat(
+      4,
       minmax(112px, 0.72fr)
     ) auto;
   align-items: stretch;
@@ -2196,6 +2196,27 @@ a {
   gap: 8px;
   color: var(--color-muted);
   font-size: 12px;
+}
+
+.capability-note {
+  align-items: flex-start;
+}
+
+.capability-note > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.capability-note strong {
+  color: var(--color-ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.capability-note span {
+  overflow-wrap: anywhere;
+  line-height: 1.4;
 }
 
 .control-row {

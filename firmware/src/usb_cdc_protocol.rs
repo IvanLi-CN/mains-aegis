@@ -586,6 +586,16 @@ fn parse_advanced_power_settings(
             .ok_or(UsbCdcProtocolError::MissingField)?,
         assist_low_drop_mv: json_u16_field(line, "assist_low_drop_mv")?
             .ok_or(UsbCdcProtocolError::MissingField)?,
+        assist_enter_delta_ma: json_i16_field(line, "assist_enter_delta_ma")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        assist_exit_delta_ma: json_i16_field(line, "assist_exit_delta_ma")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        assist_required_samples: json_u8_field(line, "assist_required_samples")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        assist_ramp_step_mv: json_u16_field(line, "assist_ramp_step_mv")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        assist_ramp_interval_ms: json_u16_field(line, "assist_ramp_interval_ms")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
         rated_enter_delta_ma: json_i16_field(line, "rated_enter_delta_ma")?
             .ok_or(UsbCdcProtocolError::MissingField)?,
         rated_exit_delta_ma: json_i16_field(line, "rated_exit_delta_ma")?
@@ -968,6 +978,9 @@ mod tests {
                 fault0: Some(0),
                 fault1: Some(0),
                 ctrl0: Some(0),
+                ctrl3: Some(0x18),
+                ctrl4: Some(0x19),
+                acdrv_path: "ac1",
                 term_ctrl: Some(0x1234),
             },
             policy: PowerDiagPolicySnapshot {

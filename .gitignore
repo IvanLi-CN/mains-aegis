@@ -14,6 +14,7 @@ downloads/
 
 # Firmware build / runtime artifacts
 firmware/target/
+.esp32-port
 firmware/.esp32-port
 firmware/.mcu-agentd/
 firmware/display-test/.mcu-agentd/
@@ -22,6 +23,7 @@ tools/front-panel-preview/target/
 tools/mains-aegis-devd/target/
 tools/mains-aegis-host/target/
 tools/hil/reports/
+tools/hil/__pycache__/
 /.codex/skills/ui-ux-pro-max/scripts/__pycache__/
 
 # JS tooling (bun)

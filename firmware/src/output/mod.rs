@@ -186,7 +186,7 @@ const EEPROM_ADVANCED_POWER_OFFSET: u16 = 0x0200;
 const EEPROM_BEEPER_PREFS_MAGIC: [u8; 4] = *b"BEEP";
 const EEPROM_BEEPER_PREFS_RECORD_VERSION: u8 = 1;
 const EEPROM_ADVANCED_POWER_MAGIC: [u8; 4] = *b"ADVP";
-const EEPROM_ADVANCED_POWER_RECORD_VERSION: u8 = 1;
+const EEPROM_ADVANCED_POWER_RECORD_VERSION: u8 = 2;
 const EEPROM_WRITE_POLL_ATTEMPTS: usize = 32;
 const EEPROM_WRITE_POLL_GAP: Duration = Duration::from_millis(1);
 
@@ -380,14 +380,23 @@ impl AdvancedPowerRecordV1 {
         bytes[4] = EEPROM_ADVANCED_POWER_RECORD_VERSION;
         let standby_drop = self.settings.standby_drop_mv.to_le_bytes();
         let assist_low_drop = self.settings.assist_low_drop_mv.to_le_bytes();
+        let assist_enter_delta = self.settings.assist_enter_delta_ma.to_le_bytes();
+        let assist_exit_delta = self.settings.assist_exit_delta_ma.to_le_bytes();
         let rated_enter_delta = self.settings.rated_enter_delta_ma.to_le_bytes();
         let rated_exit_delta = self.settings.rated_exit_delta_ma.to_le_bytes();
+        let assist_ramp_step = self.settings.assist_ramp_step_mv.to_le_bytes();
+        let assist_ramp_interval = self.settings.assist_ramp_interval_ms.to_le_bytes();
         bytes[5..7].copy_from_slice(&standby_drop);
         bytes[7..9].copy_from_slice(&assist_low_drop);
-        bytes[9..11].copy_from_slice(&rated_enter_delta);
-        bytes[11..13].copy_from_slice(&rated_exit_delta);
-        bytes[13] = self.settings.vin_drop_threshold_pct;
-        bytes[14] = self.settings.required_samples;
+        bytes[9..11].copy_from_slice(&assist_enter_delta);
+        bytes[11..13].copy_from_slice(&assist_exit_delta);
+        bytes[13] = self.settings.assist_required_samples;
+        bytes[14..16].copy_from_slice(&assist_ramp_step);
+        bytes[16..18].copy_from_slice(&assist_ramp_interval);
+        bytes[18..20].copy_from_slice(&rated_enter_delta);
+        bytes[20..22].copy_from_slice(&rated_exit_delta);
+        bytes[22] = self.settings.vin_drop_threshold_pct;
+        bytes[23] = self.settings.required_samples;
         bytes[31] = storage_crc8(&bytes[..31]);
         bytes
     }
@@ -396,19 +405,33 @@ impl AdvancedPowerRecordV1 {
         if bytes[0..4] != EEPROM_ADVANCED_POWER_MAGIC {
             return None;
         }
-        if bytes[4] != EEPROM_ADVANCED_POWER_RECORD_VERSION {
-            return None;
-        }
         if bytes[31] != storage_crc8(&bytes[..31]) {
             return None;
         }
-        let settings = AdvancedPowerSettingsSnapshot {
-            standby_drop_mv: u16::from_le_bytes([bytes[5], bytes[6]]),
-            assist_low_drop_mv: u16::from_le_bytes([bytes[7], bytes[8]]),
-            rated_enter_delta_ma: i16::from_le_bytes([bytes[9], bytes[10]]),
-            rated_exit_delta_ma: i16::from_le_bytes([bytes[11], bytes[12]]),
-            vin_drop_threshold_pct: bytes[13],
-            required_samples: bytes[14],
+        let settings = match bytes[4] {
+            1 => AdvancedPowerSettingsSnapshot {
+                standby_drop_mv: u16::from_le_bytes([bytes[5], bytes[6]]),
+                assist_low_drop_mv: u16::from_le_bytes([bytes[7], bytes[8]]),
+                rated_enter_delta_ma: i16::from_le_bytes([bytes[9], bytes[10]]),
+                rated_exit_delta_ma: i16::from_le_bytes([bytes[11], bytes[12]]),
+                vin_drop_threshold_pct: bytes[13],
+                required_samples: bytes[14],
+                ..AdvancedPowerSettingsSnapshot::defaults()
+            },
+            EEPROM_ADVANCED_POWER_RECORD_VERSION => AdvancedPowerSettingsSnapshot {
+                standby_drop_mv: u16::from_le_bytes([bytes[5], bytes[6]]),
+                assist_low_drop_mv: u16::from_le_bytes([bytes[7], bytes[8]]),
+                assist_enter_delta_ma: i16::from_le_bytes([bytes[9], bytes[10]]),
+                assist_exit_delta_ma: i16::from_le_bytes([bytes[11], bytes[12]]),
+                assist_required_samples: bytes[13],
+                assist_ramp_step_mv: u16::from_le_bytes([bytes[14], bytes[15]]),
+                assist_ramp_interval_ms: u16::from_le_bytes([bytes[16], bytes[17]]),
+                rated_enter_delta_ma: i16::from_le_bytes([bytes[18], bytes[19]]),
+                rated_exit_delta_ma: i16::from_le_bytes([bytes[20], bytes[21]]),
+                vin_drop_threshold_pct: bytes[22],
+                required_samples: bytes[23],
+            },
+            _ => return None,
         };
         validate_advanced_power_settings(settings).ok()?;
         Some(Self { settings })
@@ -1849,6 +1872,44 @@ where
         )
         .ok()
         .flatten(),
+        cuv_recovery_mv: bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CUV_RECOVERY)
+            .ok()
+            .flatten(),
+        protection_configuration: bq40z50::read_data_flash_u8(
+            i2c,
+            addr,
+            bq40z50::data_flash::PROTECTION_CONFIGURATION,
+        )
+        .ok()
+        .flatten(),
+    }
+}
+
+fn read_bq40_lock_diag_snapshot_runtime<I2C>(i2c: &mut I2C, addr: u8) -> Bq40LockDiagSnapshot
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    Bq40LockDiagSnapshot {
+        charging: bq40z50::read_charging_status_trace(i2c, addr).ok(),
+        safety_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::SAFETY_STATUS)
+            .ok()
+            .flatten(),
+        pf_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::PF_STATUS)
+            .ok()
+            .flatten(),
+        manufacturing_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::MANUFACTURING_STATUS)
+            .ok()
+            .flatten(),
+        gauging_status: None,
+        op_status: None,
+        update_status: None,
+        current_at_eoc_ma: None,
+        no_valid_charge_term: None,
+        last_valid_charge_term: None,
+        no_of_qmax_updates: None,
+        no_of_ra_updates: None,
+        cuv_recovery_mv: None,
+        protection_configuration: None,
     }
 }
 
@@ -2217,6 +2278,11 @@ impl TpsFaultLatch {
         self.config_failure_latched
     }
 
+    fn clear_config_failure(&mut self) {
+        self.config_failure_latched = false;
+        self.config_retry_failures = 0;
+    }
+
     fn clear(&mut self) {
         *self = Self::default();
     }
@@ -2380,11 +2446,15 @@ fn mark_vin_telemetry_unavailable(
     vin_mains_present: &mut Option<bool>,
     missing_streak: &mut u8,
 ) {
-    *vin_vbus_mv = None;
-    *vin_iin_ma = None;
     if telemetry_include_vin_ch3 {
         record_vin_sample_failure(vin_mains_present, missing_streak);
+        if *missing_streak >= VIN_MAINS_LATCH_FAILURE_LIMIT {
+            *vin_vbus_mv = None;
+            *vin_iin_ma = None;
+        }
     } else {
+        *vin_vbus_mv = None;
+        *vin_iin_ma = None;
         *vin_mains_present = None;
         *missing_streak = 0;
     }
@@ -2449,9 +2519,6 @@ fn aggregated_input_present(snapshot: &SelfCheckUiSnapshot) -> Option<bool> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RuntimeModeTracker {
     mains_mode: UpsMode,
-    assist_enter_streak: u8,
-    standby_enter_streak: u8,
-    last_tps_total_iout_sample_seq: Option<u32>,
 }
 
 impl RuntimeModeTracker {
@@ -2460,62 +2527,16 @@ impl RuntimeModeTracker {
             UpsMode::Backup => UpsMode::Backup,
             _ => UpsMode::Standby,
         };
-        Self {
-            mains_mode,
-            assist_enter_streak: 0,
-            standby_enter_streak: 0,
-            last_tps_total_iout_sample_seq: None,
-        }
+        Self { mains_mode }
     }
 
-    fn update(
-        &mut self,
-        mains_present: Option<bool>,
-        tps_total_iout_ma: Option<i32>,
-        tps_total_iout_fresh: bool,
-        tps_total_iout_sample_seq: Option<u32>,
-        assist_enter_ma: i32,
-        standby_exit_ma: i32,
-        required_samples: u8,
-    ) -> UpsMode {
+    fn update(&mut self, mains_present: Option<bool>) -> UpsMode {
         match mains_present {
             Some(false) => {
                 self.mains_mode = UpsMode::Backup;
-                self.assist_enter_streak = 0;
-                self.standby_enter_streak = 0;
-                if tps_total_iout_fresh {
-                    self.last_tps_total_iout_sample_seq = tps_total_iout_sample_seq;
-                }
                 UpsMode::Backup
             }
             Some(true) => {
-                let sample_is_new = tps_total_iout_fresh
-                    && tps_total_iout_sample_seq.is_some()
-                    && tps_total_iout_sample_seq != self.last_tps_total_iout_sample_seq;
-                if sample_is_new {
-                    self.last_tps_total_iout_sample_seq = tps_total_iout_sample_seq;
-                    match tps_total_iout_ma {
-                        Some(total_iout_ma) if total_iout_ma >= assist_enter_ma => {
-                            self.assist_enter_streak = self.assist_enter_streak.saturating_add(1);
-                            self.standby_enter_streak = 0;
-                            if self.assist_enter_streak >= required_samples {
-                                self.mains_mode = UpsMode::Supplement;
-                            }
-                        }
-                        Some(total_iout_ma) if total_iout_ma <= standby_exit_ma => {
-                            self.standby_enter_streak = self.standby_enter_streak.saturating_add(1);
-                            self.assist_enter_streak = 0;
-                            if self.standby_enter_streak >= required_samples {
-                                self.mains_mode = UpsMode::Standby;
-                            }
-                        }
-                        Some(_) => {
-                            self.assist_enter_streak = 0;
-                            self.standby_enter_streak = 0;
-                        }
-                        None => {}
-                    }
-                }
                 if matches!(self.mains_mode, UpsMode::Backup) {
                     self.mains_mode = UpsMode::Standby;
                 }
@@ -2530,6 +2551,26 @@ impl RuntimeModeTracker {
 struct AssistRuntimeSnapshot {
     stage: AssistPowerStage,
     target_vout_mv: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AssistTargetRamp {
+    current_vout_mv: u16,
+    last_step_at_ms: Option<u64>,
+}
+
+impl AssistTargetRamp {
+    const fn new(initial_vout_mv: u16) -> Self {
+        Self {
+            current_vout_mv: initial_vout_mv,
+            last_step_at_ms: None,
+        }
+    }
+
+    fn reset(&mut self, vout_mv: u16) {
+        self.current_vout_mv = vout_mv;
+        self.last_step_at_ms = None;
+    }
 }
 
 pub fn log_i2c2_presence<I2C>(i2c: &mut I2C) -> PanelProbeResult
@@ -3420,6 +3461,7 @@ pub struct PowerManager<'d, I2C> {
     tps_telemetry_sample_seq: u32,
     runtime_mode: RuntimeModeTracker,
     assist_power_stage: AssistPowerStageTracker,
+    assist_target_ramp: AssistTargetRamp,
     applied_assist_target_vout_mv: u16,
 
     bms_addr: Option<u8>,
@@ -3888,7 +3930,10 @@ where
             seed_bms_charge_ready_from_self_check(&cfg.self_check_snapshot);
         let bms_auto_recovery_enabled =
             boot_diag_auto_recovery_enabled(cfg.bms_boot_diag_auto_validate);
-        let initial_assist_stage = AssistPowerStage::from_runtime_mode(initial_ui_snapshot.mode);
+        let initial_assist_stage = match initial_ui_snapshot.mode {
+            UpsMode::Backup => AssistPowerStage::Backup,
+            _ => AssistPowerStage::Standby,
+        };
         let initial_assist_target_vout_mv = match initial_assist_stage {
             AssistPowerStage::Standby => cfg.standby_vout_mv,
             AssistPowerStage::AssistLow => cfg.assist_low_vout_mv,
@@ -3944,6 +3989,7 @@ where
             tps_telemetry_sample_seq: 0,
             runtime_mode: RuntimeModeTracker::new(initial_ui_snapshot.mode),
             assist_power_stage: AssistPowerStageTracker::with_stage(initial_assist_stage),
+            assist_target_ramp: AssistTargetRamp::new(initial_assist_target_vout_mv),
             applied_assist_target_vout_mv: initial_assist_target_vout_mv,
 
             bms_addr,
@@ -5254,8 +5300,10 @@ where
         self.advanced_power_expanded = expanded;
         self.cfg.standby_vout_mv = expanded.standby_vout_mv;
         self.cfg.assist_low_vout_mv = expanded.assist_low_vout_mv;
+        // recompute_ui_mode() already re-evaluates the current assist stage and applies a
+        // runtime REF-only VOUT trim when the effective target changes.
+        // Avoid issuing a redundant second runtime write from here.
         self.recompute_ui_mode();
-        self.sync_runtime_output_target_if_needed();
         Ok(())
     }
 
@@ -5453,9 +5501,14 @@ where
     ) -> Result<(), esp_hal::i2c::master::Error> {
         if self.advanced_power_storage_incompatible {
             defmt::warn!(
-                "eeprom: skip advanced_power save reason=schema_mismatch standby_drop_mv={=u16} assist_low_drop_mv={=u16} rated_enter_delta_ma={=i16} rated_exit_delta_ma={=i16} vin_drop_threshold_pct={=u8} required_samples={=u8}",
+                "eeprom: skip advanced_power save reason=schema_mismatch standby_drop_mv={=u16} assist_low_drop_mv={=u16} assist_enter_delta_ma={=i16} assist_exit_delta_ma={=i16} assist_required_samples={=u8} assist_ramp_step_mv={=u16} assist_ramp_interval_ms={=u16} rated_enter_delta_ma={=i16} rated_exit_delta_ma={=i16} vin_drop_threshold_pct={=u8} required_samples={=u8}",
                 settings.standby_drop_mv,
                 settings.assist_low_drop_mv,
+                settings.assist_enter_delta_ma,
+                settings.assist_exit_delta_ma,
+                settings.assist_required_samples,
+                settings.assist_ramp_step_mv,
+                settings.assist_ramp_interval_ms,
                 settings.rated_enter_delta_ma,
                 settings.rated_exit_delta_ma,
                 settings.vin_drop_threshold_pct,
@@ -5469,9 +5522,14 @@ where
         }
         self.advanced_power_storage_ready = true;
         defmt::info!(
-            "eeprom: advanced_power saved standby_drop_mv={=u16} assist_low_drop_mv={=u16} rated_enter_delta_ma={=i16} rated_exit_delta_ma={=i16} vin_drop_threshold_pct={=u8} required_samples={=u8}",
+            "eeprom: advanced_power saved standby_drop_mv={=u16} assist_low_drop_mv={=u16} assist_enter_delta_ma={=i16} assist_exit_delta_ma={=i16} assist_required_samples={=u8} assist_ramp_step_mv={=u16} assist_ramp_interval_ms={=u16} rated_enter_delta_ma={=i16} rated_exit_delta_ma={=i16} vin_drop_threshold_pct={=u8} required_samples={=u8}",
             settings.standby_drop_mv,
             settings.assist_low_drop_mv,
+            settings.assist_enter_delta_ma,
+            settings.assist_exit_delta_ma,
+            settings.assist_required_samples,
+            settings.assist_ramp_step_mv,
+            settings.assist_ramp_interval_ms,
             settings.rated_enter_delta_ma,
             settings.rated_exit_delta_ma,
             settings.vin_drop_threshold_pct,
@@ -8370,8 +8428,31 @@ where
         if now < self.bms_next_block_detail_log_at {
             return;
         }
-        log_bq40_block_detail(&mut self.i2c, addr, "runtime_blocked", op_status);
+        self.log_bq40_block_detail_runtime_cached(addr, primary_reason, op_status);
         self.bms_next_block_detail_log_at = now + BMS_BLOCK_DETAIL_LOG_PERIOD;
+    }
+
+    fn log_bq40_block_detail_runtime_cached(
+        &self,
+        addr: u8,
+        primary_reason: &'static str,
+        op_status: Option<u32>,
+    ) {
+        let diag = self.bms_cached_lock_diag;
+        defmt::info!(
+            "bms_diag_runtime_blocked: addr=0x{=u8:x} reason={} op_status={=?} xchg={=?} xdsg={=?} chg_fet={=?} dsg_fet={=?} cached_safety_status={=?} cached_pf_status={=?} cached_manufacturing_status={=?} cached_charging_raw={=?}",
+            addr,
+            primary_reason,
+            op_status,
+            bq40_op_bit(op_status, bq40z50::operation_status::XCHG),
+            bq40_op_bit(op_status, bq40z50::operation_status::XDSG),
+            bq40_op_bit(op_status, bq40z50::operation_status::CHG),
+            bq40_op_bit(op_status, bq40z50::operation_status::DSG),
+            diag.and_then(|diag| diag.safety_status),
+            diag.and_then(|diag| diag.pf_status),
+            diag.and_then(|diag| diag.manufacturing_status),
+            diag.and_then(|diag| diag.charging.and_then(|charging| charging.value)),
+        );
     }
 
     fn output_path_diag_next_log_at_mut(&mut self, ch: OutputChannel) -> &mut Instant {
@@ -8448,8 +8529,9 @@ where
     fn assist_runtime_snapshot(&self) -> AssistRuntimeSnapshot {
         let stage = self.assist_power_stage.stage;
         let target_vout_mv = match stage {
-            AssistPowerStage::Standby => self.cfg.standby_vout_mv,
-            AssistPowerStage::AssistLow => self.cfg.assist_low_vout_mv,
+            AssistPowerStage::Standby | AssistPowerStage::AssistLow => {
+                self.assist_target_ramp.current_vout_mv
+            }
             AssistPowerStage::AssistRated | AssistPowerStage::Backup => self.cfg.vout_mv,
         };
         AssistRuntimeSnapshot {
@@ -8465,31 +8547,86 @@ where
     fn update_assist_power_stage_from_inputs(
         &mut self,
         mains_present: Option<bool>,
+        dcin_assist_allowed: bool,
         tps_total_iout_ma: Option<i32>,
         tps_total_iout_fresh: bool,
         tps_total_iout_sample_seq: Option<u32>,
     ) -> bool {
+        let prev_stage = self.assist_power_stage.stage;
         let next_stage = assist_power_stage_step(
             &mut self.assist_power_stage,
             AssistPowerStageInput {
                 mains_present,
-                runtime_mode: self.ui_snapshot.mode,
                 input_source: self.ui_snapshot.dashboard_detail.input_source,
+                dcin_assist_allowed,
+                rated_vout_mv: self.advanced_power_expanded.rated_vout_mv,
+                standby_target_vout_mv: self.cfg.standby_vout_mv,
+                current_assist_target_vout_mv: self.assist_target_ramp.current_vout_mv,
+                assist_low_target_vout_mv: self.cfg.assist_low_vout_mv,
                 vin_baseline_mv: self.ui_snapshot.dashboard_detail.input_vin_baseline_mv,
                 vin_drop_mv: self.ui_snapshot.dashboard_detail.input_vin_drop_mv,
+                vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
+                vin_iin_ma: self.ui_snapshot.vin_iin_ma,
                 tps_total_iout_ma,
                 tps_total_iout_fresh,
                 tps_total_iout_sample_seq,
+                assist_enter_iout_ma: self.advanced_power_expanded.assist_enter_iout_ma,
+                assist_exit_iout_ma: self.advanced_power_expanded.assist_exit_iout_ma,
+                assist_required_samples: self.advanced_power_expanded.assist_required_samples,
                 rated_enter_iout_ma: self.advanced_power_expanded.rated_enter_iout_ma,
                 rated_exit_iout_ma: self.advanced_power_expanded.rated_exit_iout_ma,
                 vin_drop_threshold_pct: self.advanced_power_expanded.vin_drop_threshold_pct,
                 required_samples: self.advanced_power_expanded.required_samples,
             },
         );
+
+        let now_ms = self.fan_now_ms();
+        if next_stage != prev_stage {
+            match next_stage {
+                AssistPowerStage::Standby => {
+                    self.assist_target_ramp.reset(self.cfg.standby_vout_mv)
+                }
+                AssistPowerStage::AssistLow => {
+                    if prev_stage != AssistPowerStage::AssistLow {
+                        self.assist_target_ramp.reset(self.cfg.standby_vout_mv);
+                    }
+                }
+                AssistPowerStage::AssistRated | AssistPowerStage::Backup => {
+                    self.assist_target_ramp.reset(self.cfg.vout_mv)
+                }
+            }
+        }
+
         let next_target_vout_mv = match next_stage {
-            AssistPowerStage::Standby => self.cfg.standby_vout_mv,
-            AssistPowerStage::AssistLow => self.cfg.assist_low_vout_mv,
-            AssistPowerStage::AssistRated | AssistPowerStage::Backup => self.cfg.vout_mv,
+            AssistPowerStage::Standby => {
+                self.assist_target_ramp.reset(self.cfg.standby_vout_mv);
+                self.assist_target_ramp.current_vout_mv
+            }
+            AssistPowerStage::AssistLow => {
+                let target_vout_mv = self.cfg.assist_low_vout_mv;
+                let can_step = self
+                    .assist_target_ramp
+                    .last_step_at_ms
+                    .map(|last| {
+                        now_ms.saturating_sub(last)
+                            >= u64::from(self.advanced_power_expanded.assist_ramp_interval_ms)
+                    })
+                    .unwrap_or(true);
+                if can_step {
+                    let next = self
+                        .assist_target_ramp
+                        .current_vout_mv
+                        .saturating_add(self.advanced_power_expanded.assist_ramp_step_mv)
+                        .min(target_vout_mv);
+                    self.assist_target_ramp.current_vout_mv = next;
+                    self.assist_target_ramp.last_step_at_ms = Some(now_ms);
+                }
+                self.assist_target_ramp.current_vout_mv.min(target_vout_mv)
+            }
+            AssistPowerStage::AssistRated | AssistPowerStage::Backup => {
+                self.assist_target_ramp.reset(self.cfg.vout_mv);
+                self.assist_target_ramp.current_vout_mv
+            }
         };
         let changed = next_target_vout_mv != self.applied_assist_target_vout_mv;
         self.applied_assist_target_vout_mv = next_target_vout_mv;
@@ -8502,7 +8639,17 @@ where
         if self.output_state.active_outputs == EnabledOutputs::None {
             return;
         }
-        self.try_configure_requested_tps();
+        // Runtime assist target changes are only allowed to trim TPS VOUT in place.
+        // Re-running full configure here would drop OE and reapply unrelated registers.
+        // Do not recurse back into recompute_ui_mode(): the caller already decided the
+        // current stage/target and this path must remain a pure REF-only hardware update.
+        let target_vout_mv = self.active_output_target_vout_mv();
+        for ch in [OutputChannel::OutA, OutputChannel::OutB] {
+            if !self.output_state.active_outputs.is_enabled(ch) {
+                continue;
+            }
+            self.try_apply_runtime_vout_update(ch, target_vout_mv);
+        }
     }
 
     fn current_output_ilimit_ma(&self) -> u16 {
@@ -8769,21 +8916,19 @@ where
         );
         let (tps_total_iout_ma, tps_total_iout_fresh, tps_total_iout_sample_seq) =
             self.tps_total_iout_sample();
-        self.ui_snapshot.mode = self.runtime_mode.update(
-            mains_present,
-            tps_total_iout_ma,
-            tps_total_iout_fresh,
-            tps_total_iout_sample_seq,
-            self.advanced_power_expanded.rated_enter_iout_ma,
-            self.advanced_power_expanded.rated_exit_iout_ma,
-            self.advanced_power_expanded.required_samples,
-        );
+        let online_mode = self.runtime_mode.update(mains_present);
         let target_changed = self.update_assist_power_stage_from_inputs(
             mains_present,
+            mains_present == Some(true) && self.ui_snapshot.dcin_present == Some(true),
             tps_total_iout_ma,
             tps_total_iout_fresh,
             tps_total_iout_sample_seq,
         );
+        self.ui_snapshot.mode = match self.assist_power_stage.stage {
+            AssistPowerStage::Backup => UpsMode::Backup,
+            AssistPowerStage::AssistLow | AssistPowerStage::AssistRated => UpsMode::Supplement,
+            AssistPowerStage::Standby => online_mode,
+        };
         if target_changed {
             self.sync_runtime_output_target_if_needed();
         }
@@ -9080,6 +9225,87 @@ where
             EnabledOutputs::Both => self.try_configure_tps_pair(),
             EnabledOutputs::Only(ch) => self.try_configure_tps(ch),
             EnabledOutputs::None => {}
+        }
+    }
+
+    fn try_apply_runtime_vout_update(&mut self, ch: OutputChannel, target_vout_mv: u16) {
+        match tps55288::set_vout_only(&mut self.i2c, ch, target_vout_mv) {
+            Ok(()) => {
+                self.tps_fault_latch_mut(ch).clear_config_failure();
+                self.mark_tps_ok(ch);
+                match ch {
+                    OutputChannel::OutA => {
+                        self.ui_snapshot.tps_a = SelfCheckCommState::Ok;
+                        self.ui_snapshot.tps_a_enabled = Some(
+                            self.output_state
+                                .active_outputs
+                                .is_enabled(OutputChannel::OutA),
+                        );
+                    }
+                    OutputChannel::OutB => {
+                        self.ui_snapshot.tps_b = SelfCheckCommState::Ok;
+                        self.ui_snapshot.tps_b_enabled = Some(
+                            self.output_state
+                                .active_outputs
+                                .is_enabled(OutputChannel::OutB),
+                        );
+                    }
+                }
+                defmt::debug!(
+                    "power: runtime_vout_update_ok ch={} target_vout_mv={=u16}",
+                    ch.name(),
+                    target_vout_mv
+                );
+            }
+            Err((stage, e)) => {
+                let kind = tps_error_kind(e);
+                let consecutive_failures = self
+                    .tps_fault_latch_mut(ch)
+                    .record_config_failure(stage.as_str(), kind);
+                let decision = output_retry::tps_config_retry_decision(
+                    kind,
+                    consecutive_failures,
+                    TPS_CONFIG_MAX_RETRY_ATTEMPTS,
+                );
+                if matches!(decision, TpsConfigRetryDecision::Latch) {
+                    self.tps_fault_latch_mut(ch).latch_config_failure();
+                }
+                let next_retry = matches!(decision, TpsConfigRetryDecision::Retry)
+                    .then_some(Instant::now() + self.cfg.retry_backoff);
+                self.mark_tps_failed(ch, next_retry);
+                match ch {
+                    OutputChannel::OutA => {
+                        self.ui_snapshot.tps_a = SelfCheckCommState::Err;
+                        self.ui_snapshot.tps_a_enabled = Some(
+                            self.output_state
+                                .active_outputs
+                                .is_enabled(OutputChannel::OutA),
+                        );
+                    }
+                    OutputChannel::OutB => {
+                        self.ui_snapshot.tps_b = SelfCheckCommState::Err;
+                        self.ui_snapshot.tps_b_enabled = Some(
+                            self.output_state
+                                .active_outputs
+                                .is_enabled(OutputChannel::OutB),
+                        );
+                    }
+                }
+                log_tps_config_retry_decision(
+                    ch,
+                    ch.addr(),
+                    stage.as_str(),
+                    kind,
+                    consecutive_failures,
+                    decision,
+                    self.cfg.retry_backoff,
+                );
+                if kind == "i2c_nack" && ch == OutputChannel::OutB {
+                    defmt::warn!(
+                        "power: tps addr=0x75 nack_hint=maybe_address_changed; power-cycle TPS rails to restore preset address"
+                    );
+                }
+            }
         }
     }
 
@@ -9855,6 +10081,7 @@ where
             self.usb_pd_state.attached,
             raw_vbus_adc_mv,
             raw_vac1_adc_mv,
+            raw_vac2_adc_mv,
         );
         let usb_c_path_present =
             ac1_present || matches!(self.usb_pd_state.vbus_present, Some(true));
@@ -9871,6 +10098,51 @@ where
             usb_pd_charge_gate_path_present,
             self.usb_pd_state.charge_ready,
         );
+        let requested_acdrv_path = match input_source {
+            Some(DashboardInputSource::DcIn) if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
+            Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
+                if ac1_present || vbus_present =>
+            {
+                bq25792::RequestedAcdrvPath::Ac1
+            }
+            _ if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
+            _ if ac1_present || vbus_present => bq25792::RequestedAcdrvPath::Ac1,
+            _ => bq25792::RequestedAcdrvPath::Disabled,
+        };
+        let acdrv_state = match bq25792::set_acdrv_path(&mut self.i2c, requested_acdrv_path) {
+            Ok(state) => state,
+            Err(e) => {
+                self.mark_charger_poll_failed(now);
+                defmt::error!(
+                    "charger: bq25792 err stage=acdrv_path_write err={}",
+                    i2c_error_kind(e)
+                );
+                return;
+            }
+        };
+        if acdrv_state.path_after != acdrv_state.path_before {
+            defmt::info!(
+                "charger: acdrv_path_switch before={} after={} ctrl3_before=0x{=u8:x} ctrl3_after=0x{=u8:x} ctrl4_before=0x{=u8:x} ctrl4_after=0x{=u8:x}",
+                bq25792::acdrv_path_name(acdrv_state.path_before),
+                bq25792::acdrv_path_name(acdrv_state.path_after),
+                acdrv_state.ctrl3_before,
+                acdrv_state.ctrl3_after,
+                acdrv_state.ctrl4_before,
+                acdrv_state.ctrl4_after,
+            );
+        }
+        if acdrv_state.path_after == bq25792::AcdrvPath::Ac2
+            && acdrv_state.path_before != bq25792::AcdrvPath::Ac2
+        {
+            if self
+                .dcin_input_pressure
+                .should_preserve_for_ac2_restore(self.ui_snapshot.mode)
+            {
+                self.dcin_input_pressure.reset_for_online_restore();
+            } else {
+                self.dcin_input_pressure.reset();
+            }
+        }
         let ibat_adc_ma = adc_ready.then_some(raw_ibat_adc_ma).flatten();
         self.maybe_log_charger_input_power_anomaly(
             now,
@@ -10143,10 +10415,12 @@ where
             charge_policy_now_ms,
             DcinInputPressureInput {
                 input_source,
+                dcin_present: ac2_present,
                 requested_target_ichg_ma: policy_target_ichg_ma,
                 allow_charge,
                 vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
                 vin_iin_ma: self.ui_snapshot.vin_iin_ma,
+                input_vbus_mv: self.ui_snapshot.input_vbus_mv,
                 tps_total_iout_ma,
                 tps_total_iout_fresh,
                 tps_total_iout_sample_seq,
@@ -10267,6 +10541,26 @@ where
                     self.mark_charger_poll_failed(now);
                     defmt::error!(
                         "charger: bq25792 err stage=current_limit_path err={}",
+                        i2c_error_kind(e)
+                    );
+                    return;
+                }
+            }
+
+            match bq25792::ensure_host_mode_watchdog_serviced(&mut self.i2c) {
+                Ok(state) => {
+                    if state.watchdog_before != 0 {
+                        defmt::info!(
+                            "charger: watchdog stage=host_mode_service before=0x{=u8:x} after=0x{=u8:x}",
+                            state.watchdog_before,
+                            state.ctrl1_after & bq25792::ctrl1::WATCHDOG_MASK
+                        );
+                    }
+                }
+                Err(e) => {
+                    self.mark_charger_poll_failed(now);
+                    defmt::error!(
+                        "charger: bq25792 err stage=watchdog_service err={}",
                         i2c_error_kind(e)
                     );
                     return;
@@ -10643,6 +10937,9 @@ where
             fault0: Some(fault0),
             fault1: Some(fault1),
             ctrl0: Some(applied_ctrl0),
+            ctrl3: Some(acdrv_state.ctrl3_after),
+            ctrl4: Some(acdrv_state.ctrl4_after),
+            acdrv_path: bq25792::acdrv_path_name(acdrv_state.path_after),
             term_ctrl: termination_ctrl,
         };
         self.power_diag.policy = PowerDiagPolicySnapshot {
@@ -10831,6 +11128,7 @@ where
         };
         self.ui_snapshot.fusb302_vbus_present =
             usb_pd_vbus_present(self.usb_pd_state.vbus_present, ac1_present);
+        self.ui_snapshot.dcin_present = Some(ac2_present);
         self.ui_snapshot.aggregate_input_present = Some(input_present);
         self.ui_snapshot.dashboard_detail.input_source = input_source;
         self.ui_snapshot.dashboard_detail.input_pressure_state =
@@ -10985,6 +11283,7 @@ where
         self.ui_snapshot.bq25792_vsys_mv = None;
         self.usb_pd_vsys_mv = None;
         self.ui_snapshot.fusb302_vbus_present = None;
+        self.ui_snapshot.dcin_present = None;
         self.ui_snapshot.aggregate_input_present = None;
         self.ui_snapshot.input_vbus_mv = None;
         self.ui_snapshot.input_ibus_ma = None;
@@ -11292,17 +11591,8 @@ where
         let charging_status = lock_diag
             .and_then(|diag| diag.charging)
             .and_then(|charging| charging.value);
-        let cuv_recovery_mv =
-            bq40z50::read_data_flash_u16(&mut self.i2c, addr, bq40z50::data_flash::CUV_RECOVERY)
-                .ok()
-                .flatten();
-        let protection_configuration = bq40z50::read_data_flash_u8(
-            &mut self.i2c,
-            addr,
-            bq40z50::data_flash::PROTECTION_CONFIGURATION,
-        )
-        .ok()
-        .flatten();
+        let cuv_recovery_mv = lock_diag.and_then(|diag| diag.cuv_recovery_mv);
+        let protection_configuration = lock_diag.and_then(|diag| diag.protection_configuration);
         let (charge_ready, _) = bq40_decode_charge_path(op_status);
         let (discharge_ready, _) = bq40_decode_discharge_path(op_status);
 
@@ -11459,44 +11749,49 @@ where
             .ok()
             .flatten();
         let mut da_status2 = self.bms_cached_da_status2;
-        if now >= self.bms_next_da_status2_refresh_at {
+        let mut bms_detail_refreshed = false;
+        if !bms_detail_refreshed && now >= self.bms_next_da_status2_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             if let Ok(snapshot) = bq40z50::read_da_status2(&mut self.i2c, addr) {
                 da_status2 = snapshot;
                 self.bms_cached_da_status2 = snapshot;
             }
             self.bms_next_da_status2_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
+            bms_detail_refreshed = true;
         }
         let mut filter_capacity = self.bms_cached_filter_capacity;
-        if now >= self.bms_next_filter_capacity_refresh_at {
+        if !bms_detail_refreshed && now >= self.bms_next_filter_capacity_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             if let Ok(snapshot) = bq40z50::read_filter_capacity(&mut self.i2c, addr) {
                 filter_capacity = snapshot;
                 self.bms_cached_filter_capacity = snapshot;
             }
             self.bms_next_filter_capacity_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
+            bms_detail_refreshed = true;
         }
         let mut balance_config = self.bms_cached_balance_config;
-        if now >= self.bms_next_balance_config_refresh_at {
+        if !bms_detail_refreshed && now >= self.bms_next_balance_config_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             if let Ok(snapshot) = bq40z50::read_balance_config(&mut self.i2c, addr) {
                 balance_config = snapshot;
                 self.bms_cached_balance_config = snapshot;
             }
             self.bms_next_balance_config_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
+            bms_detail_refreshed = true;
         }
         let mut gauging_status = self.bms_cached_gauging_status;
-        if now >= self.bms_next_gauging_status_refresh_at {
+        if !bms_detail_refreshed && now >= self.bms_next_gauging_status_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             if let Ok(snapshot) = bq40z50::read_gauging_status(&mut self.i2c, addr) {
                 gauging_status = snapshot;
                 self.bms_cached_gauging_status = snapshot;
             }
             self.bms_next_gauging_status_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
+            bms_detail_refreshed = true;
         }
-        if now >= self.bms_next_lock_diag_refresh_at {
+        if !bms_detail_refreshed && now >= self.bms_next_lock_diag_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
-            let snapshot = read_bq40_lock_diag_snapshot(&mut self.i2c, addr);
+            let snapshot = read_bq40_lock_diag_snapshot_runtime(&mut self.i2c, addr);
             self.bms_cached_lock_diag = Some(snapshot);
             self.bms_next_lock_diag_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
             log_bq40_lock_diag_snapshot(addr, "runtime_periodic", &snapshot);
@@ -11741,6 +12036,8 @@ struct Bq40LockDiagSnapshot {
     last_valid_charge_term: Option<u16>,
     no_of_qmax_updates: Option<u16>,
     no_of_ra_updates: Option<u16>,
+    cuv_recovery_mv: Option<u16>,
+    protection_configuration: Option<u8>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

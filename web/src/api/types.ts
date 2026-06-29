@@ -59,6 +59,10 @@ export type Identity = {
     dns_sd: boolean;
     write_controls: boolean;
   };
+  hardware_capabilities?: {
+    output_profile: "12v" | "19v" | string;
+    rated_vout_mv: number;
+  };
 };
 
 export type ChannelState = {
@@ -233,6 +237,11 @@ export type DeviceSettings = {
   advanced_power: {
     standby_drop_mv: number;
     assist_low_drop_mv: number;
+    assist_enter_delta_ma: number;
+    assist_exit_delta_ma: number;
+    assist_required_samples: number;
+    assist_ramp_step_mv: number;
+    assist_ramp_interval_ms: number;
     rated_enter_delta_ma: number;
     rated_exit_delta_ma: number;
     vin_drop_threshold_pct: number;
@@ -247,6 +256,36 @@ export type DeviceSettings = {
       step: number;
     };
     assist_low_drop_mv: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    assist_enter_delta_ma: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    assist_exit_delta_ma: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    assist_required_samples: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    assist_ramp_step_mv: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    assist_ramp_interval_ms: {
       default: number;
       min: number;
       max: number;

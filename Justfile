@@ -38,6 +38,15 @@ devd-serve:
 cli *args:
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- {{ args }}
 
+# Run the Power Path Validation CLI, for example:
+# just power-validation run --dry-run --load-cli /path/to/loadlynx
+power-validation *args:
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- power-validation {{ args }}
+
+# Generate a dry-run Power Path Validation suite plan without touching hardware.
+power-validation-plan *args:
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- power-validation run --dry-run {{ args }}
+
 # List currently known devd devices.
 devices-list:
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- devices list
@@ -70,8 +79,17 @@ firmware-check:
 firmware-build:
     cd firmware && cargo +esp build --release --bin esp-firmware --features net_http,web_serial
 
+# Build ESP firmware for Power Path Validation telemetry.
+firmware-build-hil:
+    # Keep USB CDC reserved for IPC frames; warnings can starve validation sampling.
+    cd firmware && DEFMT_LOG=error cargo +esp build --release --bin esp-firmware --features net_http,web_serial
+
 # Build the Web Serial flash image from the current release ELF.
 firmware-web-image: firmware-build
+    python3 -m esptool --chip esp32s3 elf2image --flash-mode dio --flash-freq 80m --flash-size 4MB --output {{ firmware_image }} {{ firmware_elf }}
+
+# Build the Web Serial flash image for Power Path Validation telemetry.
+firmware-web-image-hil: firmware-build-hil
     python3 -m esptool --chip esp32s3 elf2image --flash-mode dio --flash-freq 80m --flash-size 4MB --output {{ firmware_image }} {{ firmware_elf }}
 
 # Generate a devd/Web firmware artifact manifest for the current release ELF and Web Serial image.

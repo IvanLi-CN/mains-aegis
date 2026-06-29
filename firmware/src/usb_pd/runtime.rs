@@ -204,7 +204,7 @@ where
             && self.state.contract.is_none()
             && (self.in_no_contract_hard_reset_sent() || self.in_no_contract_hard_reset_wait())
         {
-            warn!(
+            info!(
                 "usb_pd: ignore retry fail during no-contract hard reset recovery waiting_send={=bool} waiting_caps={=bool}",
                 self.in_no_contract_hard_reset_sent(),
                 self.in_no_contract_hard_reset_wait()

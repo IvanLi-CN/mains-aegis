@@ -8,8 +8,15 @@ const STORAGE_KEY = "mains-aegis-web.devices.v1";
 const meta = {
   title: "UPS Management/Device",
   component: App,
+  tags: ["autodocs"],
   parameters: {
     layout: "fullscreen",
+    docs: {
+      description: {
+        component:
+          "Device-level fallback stories for the UPS console. These stories cover the owner-facing hardware, battery, power, and API surfaces when a dedicated ui_demo route is not used.",
+      },
+    },
   },
 } satisfies Meta<typeof App>;
 
@@ -143,7 +150,12 @@ export const SettingsAdvancedPower: Story = {
     await expect(
       await canvas.findByRole("heading", { name: "Advanced Power" }),
     ).toBeInTheDocument();
-    await expect(await canvas.findByText("Rated baseline: 12000 mV.")).toBeInTheDocument();
+    await expect(await canvas.findByText("19V profile")).toBeInTheDocument();
+    await expect(
+      await canvas.findByText(
+        /output_profile=19v · rated_vout_mv=19000/i,
+      ),
+    ).toBeInTheDocument();
     await expect(await canvas.findByDisplayValue("1200")).toBeInTheDocument();
     await expect(await canvas.findByDisplayValue("600")).toBeInTheDocument();
     await expect(
@@ -151,6 +163,24 @@ export const SettingsAdvancedPower: Story = {
     ).toBeInTheDocument();
     await expect(
       await canvas.findByRole("button", { name: "Reset to device default" }),
+    ).toBeInTheDocument();
+  },
+};
+
+export const DeviceHardwareCapabilities: Story = {
+  name: "Device hardware capabilities",
+  render: () => renderApp("/devices/mains-aegis-a1b2c3/device"),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByRole("heading", { name: "Hardware capabilities" }),
+    ).toBeInTheDocument();
+    await expect(await canvas.findByText("output_profile")).toBeInTheDocument();
+    await expect(await canvas.findByText("19v")).toBeInTheDocument();
+    await expect(await canvas.findByText("rated_vout_mv")).toBeInTheDocument();
+    await expect(await canvas.findByText("19000 mV")).toBeInTheDocument();
+    await expect(
+      await canvas.findByText("Hardware identity"),
     ).toBeInTheDocument();
   },
 };

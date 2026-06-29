@@ -58,7 +58,7 @@ const HTTP_WORKER_COUNT: usize = 3;
 const HTTP_RESPONSE_BODY_CAP: usize = 3072;
 const SSE_FRAME_CAP: usize = 3328;
 const REQUEST_BUF_CAP: usize = 1024;
-const STATUS_PUSH_INTERVAL: Duration = Duration::from_secs(2);
+const STATUS_PUSH_INTERVAL: Duration = Duration::from_millis(500);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const RSSI_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const WIFI_CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -1073,6 +1073,11 @@ fn set_wifi_snapshot(snapshot: WifiSnapshot) {
 
 fn current_status_snapshot() -> UpsStatusSnapshot {
     critical_section::with(|cs| *UPS_STATUS.borrow_ref(cs))
+}
+
+#[cfg(test)]
+pub(crate) const fn status_push_interval_millis_for_test() -> u64 {
+    STATUS_PUSH_INTERVAL.as_millis()
 }
 
 fn note_wifi_error(mac: [u8; 6], dns: Option<[u8; 4]>, is_static: bool, error: WifiErrorKind) {

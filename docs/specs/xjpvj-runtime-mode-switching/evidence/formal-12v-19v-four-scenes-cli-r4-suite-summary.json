@@ -1,0 +1,2885 @@
+{
+  "suite_id": "formal-12v-19v-four-scenes-cli-r4",
+  "generated_at": "2026-06-28T11:07:48.486599+00:00",
+  "transport": {
+    "ups": "CLI + native IPC + USB",
+    "loadlynx": "CLI + native IPC + USB",
+    "isolapurr": "CLI + default IPC"
+  },
+  "load_protection": {
+    "min_v_mv": 3000,
+    "max_i_ma_total": 4000,
+    "max_p_mw": 80000
+  },
+  "profiles": {
+    "12v": {
+      "source_voltage_mv": 12000,
+      "source_current_limit_ma": 3000,
+      "rated_vout_mv": 12000
+    },
+    "19v": {
+      "source_voltage_mv": 19000,
+      "source_current_limit_ma": 3000,
+      "rated_vout_mv": 19000
+    }
+  },
+  "profile_switches": [
+    {
+      "target_profile": "12v",
+      "manifest_path": "firmware/target/mains-aegis-artifacts/formal-12v/mains-aegis-esp32s3-release-net_http-web_serial-main-vout-12v-2cf497f0-dirty-08da8cfc41a8232e.manifest.json",
+      "actions": [
+        {
+          "load_disable_before_profile_switch": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/koha-loadlynx-monitor-telemetry-fix/tools/loadlynx-devd/target/debug/loadlynx",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/loadlynx-devd-hil.sock",
+              "control",
+              "set",
+              "--device",
+              "loadlynx-d68638",
+              "--disable",
+              "--json"
+            ],
+            "result": {
+              "active_preset_id": 1,
+              "output_enabled": false,
+              "preset": {
+                "max_i_ma_total": 10000,
+                "max_p_mw": 200000,
+                "min_v_mv": 0,
+                "mode": "cc",
+                "preset_id": 1,
+                "target_i_ma": 1000,
+                "target_p_mw": 0,
+                "target_v_mv": 0
+              },
+              "uv_latched": false
+            }
+          }
+        },
+        {
+          "isolapurr_off_before_profile_switch": {
+            "cmd": [
+              "isolapurr",
+              "--json",
+              "power",
+              "output",
+              "auto",
+              "--device-id",
+              "856a141cdbd4"
+            ],
+            "result": {
+              "capability": {
+                "pd": {
+                  "fixed_voltages_mv": [
+                    9000,
+                    12000,
+                    15000,
+                    20000
+                  ],
+                  "pps": true
+                },
+                "power_watts": 100,
+                "profile": "full",
+                "protocols": {
+                  "afc": true,
+                  "bc12": true,
+                  "fcp": true,
+                  "pd": true,
+                  "pe20": true,
+                  "qc20": true,
+                  "qc30": true,
+                  "scp": true,
+                  "sfcp": true
+                }
+              },
+              "hardware": "sw2303",
+              "light_load_mode": "pfm",
+              "lock": null,
+              "manual": {
+                "current_limit_ma": 3000,
+                "path_policy": "auto",
+                "usb_c_path_mode": "disconnect",
+                "voltage_mv": 19000
+              },
+              "persisted": true,
+              "tps_mode": "auto_follow"
+            },
+            "verified": {
+              "ok": true,
+              "expected_enabled": false,
+              "live_voltage_mv": null,
+              "port_c": {
+                "capabilities": {
+                  "data_replug": true,
+                  "power_set": true
+                },
+                "label": "USB-C",
+                "portId": "port_c",
+                "state": {
+                  "busy": false,
+                  "data_connected": true,
+                  "power_enabled": true,
+                  "replugging": false
+                },
+                "telemetry": {
+                  "current_ma": null,
+                  "power_mw": null,
+                  "sample_uptime_ms": 38183638,
+                  "status": "not_inserted",
+                  "voltage_mv": null
+                },
+                "telemetry_raw": {
+                  "current_ma": null,
+                  "power_mw": null,
+                  "sample_uptime_ms": 38183638,
+                  "status": "not_inserted",
+                  "voltage_mv": null
+                }
+              },
+              "ports": {
+                "cmd": [
+                  "isolapurr",
+                  "--json",
+                  "ports",
+                  "--device-id",
+                  "856a141cdbd4"
+                ],
+                "result": {
+                  "hub": {
+                    "isolated_downstream_connected": true,
+                    "isolated_usb_fault": false,
+                    "isolated_usb_ready": true,
+                    "upstream_connected": true,
+                    "usb_c_downstream_persisted": true,
+                    "usb_c_downstream_route": "mcu"
+                  },
+                  "ports": [
+                    {
+                      "capabilities": {
+                        "data_replug": true,
+                        "power_set": true
+                      },
+                      "label": "USB-A",
+                      "portId": "port_a",
+                      "state": {
+                        "busy": false,
+                        "data_connected": true,
+                        "power_enabled": true,
+                        "replugging": false
+                      },
+                      "telemetry": {
+                        "current_ma": 0,
+                        "power_mw": 2,
+                        "sample_uptime_ms": 38183638,
+                        "status": "ok",
+                        "voltage_mv": 5006
+                      },
+                      "telemetry_raw": null
+                    },
+                    {
+                      "capabilities": {
+                        "data_replug": true,
+                        "power_set": true
+                      },
+                      "label": "USB-C",
+                      "portId": "port_c",
+                      "state": {
+                        "busy": false,
+                        "data_connected": true,
+                        "power_enabled": true,
+                        "replugging": false
+                      },
+                      "telemetry": {
+                        "current_ma": null,
+                        "power_mw": null,
+                        "sample_uptime_ms": 38183638,
+                        "status": "not_inserted",
+                        "voltage_mv": null
+                      },
+                      "telemetry_raw": {
+                        "current_ma": null,
+                        "power_mw": null,
+                        "sample_uptime_ms": 38183638,
+                        "status": "not_inserted",
+                        "voltage_mv": null
+                      }
+                    }
+                  ]
+                }
+              },
+              "power": {
+                "cmd": [
+                  "isolapurr",
+                  "--json",
+                  "power",
+                  "show",
+                  "--device-id",
+                  "856a141cdbd4"
+                ],
+                "result": {
+                  "config": {
+                    "capability": {
+                      "current": {
+                        "fcp_afc_sfcp_limit_ma": 3250,
+                        "pd_pps_5a": false,
+                        "pps3_limit_ma": 5000,
+                        "scp_limit_ma": 5000,
+                        "type_c_broadcast_ma": 500
+                      },
+                      "pd": {
+                        "fixed_voltages_mv": [
+                          9000,
+                          12000,
+                          15000,
+                          20000
+                        ],
+                        "pps": true
+                      },
+                      "power_watts": 100,
+                      "profile": "full",
+                      "protocols": {
+                        "afc": true,
+                        "bc12": true,
+                        "fcp": true,
+                        "pd": true,
+                        "pe20": true,
+                        "qc20": true,
+                        "qc30": true,
+                        "scp": true,
+                        "sfcp": true
+                      }
+                    },
+                    "hardware": "sw2303",
+                    "light_load_mode": "pfm",
+                    "lock": null,
+                    "manual": {
+                      "current_limit_ma": 3000,
+                      "path_policy": "auto",
+                      "usb_c_path_mode": "disconnect",
+                      "voltage_mv": 19000
+                    },
+                    "persisted": true,
+                    "tps_mode": "auto_follow"
+                  },
+                  "diagnostics": {
+                    "display": {
+                      "badge": {
+                        "kind": "off",
+                        "label": "OFF"
+                      },
+                      "measurements_visible": false,
+                      "mode": {
+                        "kind": "off",
+                        "label": "OFF"
+                      }
+                    },
+                    "idle_bias": {
+                      "correction_enabled": false,
+                      "current_applied_offset_ma": null,
+                      "dataset": {
+                        "max_voltage_mv": 21000,
+                        "min_voltage_mv": 3000,
+                        "offsets_ma": null,
+                        "point_count": 37,
+                        "status": "missing",
+                        "step_mv": 500
+                      },
+                      "run": {
+                        "completed_points": 0,
+                        "error": null,
+                        "point_count": 37,
+                        "state": "idle",
+                        "target_voltage_mv": null
+                      }
+                    },
+                    "runtime_recovery_count": 0,
+                    "sample_uptime_ms": 38184086,
+                    "sw2303_error_latched": false,
+                    "sw2303_i2c_allowed": true,
+                    "sw2303_last_valid_request": {
+                      "ma": 3250,
+                      "mv": 5000
+                    },
+                    "sw2303_profile_applied": false,
+                    "sw2303_readback_config": {
+                      "available": false,
+                      "current": {
+                        "fcp_afc_sfcp_limit_ma": null,
+                        "pd_pps_5a": null,
+                        "pps3_limit_ma": null,
+                        "scp_limit_ma": null,
+                        "type_c_broadcast_ma": null
+                      },
+                      "matches_config": false,
+                      "pd": {
+                        "fixed_voltages_mv": [],
+                        "pps": null
+                      },
+                      "power_watts": null,
+                      "protocols": {
+                        "afc": null,
+                        "bc12": null,
+                        "fcp": null,
+                        "pd": null,
+                        "pe20": null,
+                        "qc20": null,
+                        "qc30": null,
+                        "scp": null,
+                        "sfcp": null
+                      }
+                    },
+                    "sw2303_request": {
+                      "ma": 3250,
+                      "mv": 5000
+                    },
+                    "sw2303_stable_reads": 2,
+                    "sw2303_vbus_mv": 0,
+                    "tps_error_latched": false,
+                    "tps_iout_limit_readback": {
+                      "enabled": true,
+                      "ma": 3200
+                    },
+                    "tps_setpoint": {
+                      "ilim_ma": 3200,
+                      "iout_limit_ma": 3200,
+                      "mv": 5000,
+                      "output_enabled": true
+                    },
+                    "usb_c_actual": {
+                      "current_ma": null,
+                      "power_mw": null,
+                      "sample_uptime_ms": 38183638,
+                      "status": "not_inserted",
+                      "voltage_mv": null
+                    },
+                    "usb_c_power_enabled": true
+                  },
+                  "ports": {
+                    "ports": [
+                      {
+                        "label": "USB-A",
+                        "portId": "port_a",
+                        "telemetry": {
+                          "current_ma": 0,
+                          "power_mw": 2,
+                          "sample_uptime_ms": 38183638,
+                          "status": "ok",
+                          "voltage_mv": 5006
+                        },
+                        "telemetry_raw": null
+                      },
+                      {
+                        "label": "USB-C",
+                        "portId": "port_c",
+                        "telemetry": {
+                          "current_ma": null,
+                          "power_mw": null,
+                          "sample_uptime_ms": 38183638,
+                          "status": "not_inserted",
+                          "voltage_mv": null
+                        },
+                        "telemetry_raw": {
+                          "current_ma": null,
+                          "power_mw": null,
+                          "sample_uptime_ms": 38183638,
+                          "status": "not_inserted",
+                          "voltage_mv": null
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "ups_monitor_restart_profile_switch": {
+            "ok": true,
+            "actions": [
+              {
+                "stop": {
+                  "cmd": [
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "--ipc",
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "device",
+                    "serial-04f3bb3f5367",
+                    "monitor",
+                    "stop"
+                  ],
+                  "result": {
+                    "ok": true
+                  }
+                }
+              },
+              {
+                "start": {
+                  "cmd": [
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "--ipc",
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "device",
+                    "serial-04f3bb3f5367",
+                    "monitor",
+                    "start"
+                  ],
+                  "result": {
+                    "already_running": false,
+                    "initial_log_count": 0,
+                    "initial_trace_count": 0,
+                    "log_count": 2000,
+                    "log_decode": {
+                      "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-main-vout-19v-2cf497f0-dirty-08da8cfc41a8232e",
+                      "reason": null,
+                      "status": "verified"
+                    },
+                    "ok": true,
+                    "trace_count": 2000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "ups_status_cache_profile_switch": {
+            "ok": true,
+            "sample": {
+              "battery": {
+                "balance_active": false,
+                "balance_cell": null,
+                "balance_cfg_match": true,
+                "balance_enabled": true,
+                "balance_mask": 0,
+                "balance_min_start_delta_mv": 3,
+                "cell_delta_mv": 21,
+                "cell_mv": [
+                  3696,
+                  3697,
+                  3676,
+                  3685
+                ],
+                "charge_fet_on": true,
+                "current_ma": 0,
+                "discharge_fet_on": true,
+                "discharge_ready": true,
+                "issue_detail": null,
+                "no_battery": false,
+                "pack_mv": 14754,
+                "precharge_fet_on": false,
+                "recovery_pending": false,
+                "soc_pct": 49,
+                "state": "ok"
+              },
+              "charger": {
+                "allow_charge": false,
+                "detail_status": "WAIT",
+                "ibat_ma": 0,
+                "ichg_ma": null,
+                "limit_active": false,
+                "limit_detail": "none",
+                "limit_reason": "none",
+                "limit_threshold_ma": 100,
+                "policy_target_ichg_ma": 500,
+                "state": "ok",
+                "vbat_present": true
+              },
+              "input": {
+                "assist_power_stage": "standby",
+                "assist_target_vout_mv": 17800,
+                "input_ibus_ma": 200,
+                "input_vbus_mv": 5103,
+                "mains_present": true,
+                "pressure_reason": "none",
+                "pressure_score_pct": 0,
+                "pressure_state": "inactive",
+                "source": "usbc",
+                "tps_limit_threshold_ma": 100,
+                "tps_total_iout_ma": 60,
+                "vin_baseline_mv": 18992,
+                "vin_drop_mv": 13952,
+                "vin_iin_ma": 11,
+                "vin_vbus_mv": 5040
+              },
+              "mode": "standby",
+              "network": {
+                "ipv4": "192.168.31.232",
+                "last_error": null,
+                "state": "connected"
+              },
+              "output": {
+                "active": "both",
+                "gate_reason": "none",
+                "out_a": {
+                  "enabled": true,
+                  "iout_ma": 28,
+                  "state": "ok",
+                  "vbus_mv": 17848
+                },
+                "out_b": {
+                  "enabled": true,
+                  "iout_ma": 32,
+                  "state": "ok",
+                  "vbus_mv": 17856
+                },
+                "recoverable": "both",
+                "requested": "both"
+              },
+              "thermal": {
+                "tmp_a_c": 38,
+                "tmp_a_state": "ok",
+                "tmp_b_c": 39,
+                "tmp_b_state": "ok"
+              }
+            },
+            "fresh": {
+              "cmd": [
+                "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                "--ipc",
+                "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                "device",
+                "serial-04f3bb3f5367",
+                "status",
+                "--fresh",
+                "--include-meta"
+              ],
+              "result": {
+                "meta": {
+                  "cache_age_ms": 0,
+                  "cache_fresh": true,
+                  "cache_freshness_budget_ms": 750,
+                  "kind": "status",
+                  "monitor_running": true,
+                  "sample_fresh": true,
+                  "transport": "usb"
+                },
+                "sample": {
+                  "battery": {
+                    "balance_active": false,
+                    "balance_cell": null,
+                    "balance_cfg_match": true,
+                    "balance_enabled": true,
+                    "balance_mask": 0,
+                    "balance_min_start_delta_mv": 3,
+                    "cell_delta_mv": 21,
+                    "cell_mv": [
+                      3696,
+                      3697,
+                      3676,
+                      3685
+                    ],
+                    "charge_fet_on": true,
+                    "current_ma": 0,
+                    "discharge_fet_on": true,
+                    "discharge_ready": true,
+                    "issue_detail": null,
+                    "no_battery": false,
+                    "pack_mv": 14754,
+                    "precharge_fet_on": false,
+                    "recovery_pending": false,
+                    "soc_pct": 49,
+                    "state": "ok"
+                  },
+                  "charger": {
+                    "allow_charge": false,
+                    "detail_status": "WAIT",
+                    "ibat_ma": 0,
+                    "ichg_ma": null,
+                    "limit_active": false,
+                    "limit_detail": "none",
+                    "limit_reason": "none",
+                    "limit_threshold_ma": 100,
+                    "policy_target_ichg_ma": 500,
+                    "state": "ok",
+                    "vbat_present": true
+                  },
+                  "input": {
+                    "assist_power_stage": "standby",
+                    "assist_target_vout_mv": 17800,
+                    "input_ibus_ma": 200,
+                    "input_vbus_mv": 5103,
+                    "mains_present": true,
+                    "pressure_reason": "none",
+                    "pressure_score_pct": 0,
+                    "pressure_state": "inactive",
+                    "source": "usbc",
+                    "tps_limit_threshold_ma": 100,
+                    "tps_total_iout_ma": 60,
+                    "vin_baseline_mv": 18992,
+                    "vin_drop_mv": 13952,
+                    "vin_iin_ma": 11,
+                    "vin_vbus_mv": 5040
+                  },
+                  "mode": "standby",
+                  "network": {
+                    "ipv4": "192.168.31.232",
+                    "last_error": null,
+                    "state": "connected"
+                  },
+                  "output": {
+                    "active": "both",
+                    "gate_reason": "none",
+                    "out_a": {
+                      "enabled": true,
+                      "iout_ma": 28,
+                      "state": "ok",
+                      "vbus_mv": 17848
+                    },
+                    "out_b": {
+                      "enabled": true,
+                      "iout_ma": 32,
+                      "state": "ok",
+                      "vbus_mv": 17856
+                    },
+                    "recoverable": "both",
+                    "requested": "both"
+                  },
+                  "thermal": {
+                    "tmp_a_c": 38,
+                    "tmp_a_state": "ok",
+                    "tmp_b_c": 39,
+                    "tmp_b_state": "ok"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "ups_profile_switch_source_cut_gate": {
+            "ok": true,
+            "name": "ups_profile_switch_source_cut",
+            "sample": {
+              "battery": {
+                "charge_fet_on": true,
+                "current_ma": 0,
+                "discharge_fet_on": true,
+                "discharge_ready": true,
+                "pack_mv": 14754,
+                "soc_pct": 49,
+                "state": "ok"
+              },
+              "charger": {
+                "allow_charge": false,
+                "ibat_ma": 0,
+                "ichg_ma": null,
+                "limit_active": false,
+                "limit_detail": "none",
+                "limit_reason": "none",
+                "limit_threshold_ma": 100,
+                "policy_target_ichg_ma": 500,
+                "state": "ok",
+                "vbat_present": true
+              },
+              "input": {
+                "assist_power_stage": "standby",
+                "assist_target_vout_mv": 17800,
+                "input_ibus_ma": 200,
+                "input_vbus_mv": 5103,
+                "mains_present": true,
+                "pressure_reason": "none",
+                "pressure_score_pct": 0,
+                "pressure_state": "inactive",
+                "source": "usbc",
+                "tps_limit_threshold_ma": 100,
+                "tps_total_iout_ma": 60,
+                "vin_baseline_mv": 18992,
+                "vin_drop_mv": 13952,
+                "vin_iin_ma": 11,
+                "vin_vbus_mv": 5040
+              },
+              "mode": "standby",
+              "output": {
+                "active": "both",
+                "gate_reason": "none",
+                "out_a": {
+                  "enabled": true,
+                  "iout_ma": 28,
+                  "state": "ok",
+                  "vbus_mv": 17848
+                },
+                "out_b": {
+                  "enabled": true,
+                  "iout_ma": 32,
+                  "state": "ok",
+                  "vbus_mv": 17856
+                },
+                "requested": "both"
+              }
+            },
+            "verdict": {
+              "ok": true,
+              "failures": [],
+              "status": {
+                "battery": {
+                  "charge_fet_on": true,
+                  "current_ma": 0,
+                  "discharge_fet_on": true,
+                  "discharge_ready": true,
+                  "pack_mv": 14754,
+                  "soc_pct": 49,
+                  "state": "ok"
+                },
+                "charger": {
+                  "allow_charge": false,
+                  "ibat_ma": 0,
+                  "ichg_ma": null,
+                  "limit_active": false,
+                  "limit_detail": "none",
+                  "limit_reason": "none",
+                  "limit_threshold_ma": 100,
+                  "policy_target_ichg_ma": 500,
+                  "state": "ok",
+                  "vbat_present": true
+                },
+                "input": {
+                  "assist_power_stage": "standby",
+                  "assist_target_vout_mv": 17800,
+                  "input_ibus_ma": 200,
+                  "input_vbus_mv": 5103,
+                  "mains_present": true,
+                  "pressure_reason": "none",
+                  "pressure_score_pct": 0,
+                  "pressure_state": "inactive",
+                  "source": "usbc",
+                  "tps_limit_threshold_ma": 100,
+                  "tps_total_iout_ma": 60,
+                  "vin_baseline_mv": 18992,
+                  "vin_drop_mv": 13952,
+                  "vin_iin_ma": 11,
+                  "vin_vbus_mv": 5040
+                },
+                "mode": "standby",
+                "output": {
+                  "active": "both",
+                  "gate_reason": "none",
+                  "out_a": {
+                    "enabled": true,
+                    "iout_ma": 28,
+                    "state": "ok",
+                    "vbus_mv": 17848
+                  },
+                  "out_b": {
+                    "enabled": true,
+                    "iout_ma": 32,
+                    "state": "ok",
+                    "vbus_mv": 17856
+                  },
+                  "requested": "both"
+                }
+              }
+            }
+          }
+        },
+        {
+          "ups_identity_before_profile_switch": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "identity"
+            ],
+            "result": {
+              "api_version": "v1",
+              "capabilities": {
+                "dns_sd": true,
+                "mdns": true,
+                "sse": true,
+                "write_controls": true
+              },
+              "device_id": "mains-aegis-198840",
+              "firmware": {
+                "build_id": "2cf497f0-dirty-08da8cfc41a8232e",
+                "build_profile": "release",
+                "defmt": {
+                  "enabled": true,
+                  "encoding": "defmt-espflash",
+                  "table_hash": null
+                },
+                "features": [
+                  "net_http",
+                  "web_serial",
+                  "main-vout-19v"
+                ],
+                "git_dirty": "dirty",
+                "git_sha": "2cf497f0",
+                "package_version": "0.1.0",
+                "protocol": "mains-aegis.cdc.v1",
+                "src_hash": "08da8cfc41a8232e"
+              },
+              "hardware_capabilities": {
+                "output_profile": "19v",
+                "rated_vout_mv": 19000
+              },
+              "hostname": "mains-aegis-198840",
+              "hostname_fqdn": "mains-aegis-198840.local",
+              "network": {
+                "dns": "192.168.31.1",
+                "gateway": "192.168.31.1",
+                "ipv4": "192.168.31.232",
+                "is_static": false,
+                "last_error": null,
+                "rssi_dbm": -34,
+                "state": "connected"
+              },
+              "role": "ups",
+              "short_id": "198840"
+            }
+          }
+        },
+        {
+          "ups_settings_before_profile_switch": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "settings"
+            ],
+            "result": {
+              "advanced_power": {
+                "assist_enter_delta_ma": 0,
+                "assist_exit_delta_ma": 0,
+                "assist_low_drop_mv": 600,
+                "assist_ramp_interval_ms": 200,
+                "assist_ramp_step_mv": 100,
+                "assist_required_samples": 2,
+                "rated_enter_delta_ma": 0,
+                "rated_exit_delta_ma": 0,
+                "required_samples": 2,
+                "standby_drop_mv": 1200,
+                "vin_drop_threshold_pct": 4
+              },
+              "advanced_power_capabilities": {
+                "assist_enter_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -100,
+                  "step": 50
+                },
+                "assist_exit_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -50,
+                  "step": 50
+                },
+                "assist_low_drop_mv": {
+                  "default": 600,
+                  "max": 3000,
+                  "min": 0,
+                  "step": 20
+                },
+                "assist_ramp_interval_ms": {
+                  "default": 200,
+                  "max": 3000,
+                  "min": 100,
+                  "step": 100
+                },
+                "assist_ramp_step_mv": {
+                  "default": 100,
+                  "max": 1000,
+                  "min": 20,
+                  "step": 20
+                },
+                "assist_required_samples": {
+                  "default": 2,
+                  "max": 5,
+                  "min": 1,
+                  "step": 1
+                },
+                "rated_enter_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -100,
+                  "step": 50
+                },
+                "rated_exit_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -50,
+                  "step": 50
+                },
+                "rated_vout_mv": 19000,
+                "required_samples": {
+                  "default": 2,
+                  "max": 5,
+                  "min": 1,
+                  "step": 1
+                },
+                "standby_drop_mv": {
+                  "default": 1200,
+                  "max": 3000,
+                  "min": 0,
+                  "step": 20
+                },
+                "vin_drop_threshold_pct": {
+                  "default": 4,
+                  "max": 12,
+                  "min": 1,
+                  "step": 1
+                }
+              },
+              "log_level": "info",
+              "manual_charge": {
+                "speed": "ma_500",
+                "target": "full_100",
+                "timer_h": 6
+              },
+              "wifi": {
+                "configured": true,
+                "ssid": "Ivan"
+              }
+            }
+          }
+        },
+        {
+          "current_profile_before_switch": {
+            "profile": "19v",
+            "target": "12v"
+          }
+        },
+        {
+          "artifact_select": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "artifact",
+              "select",
+              "--manifest-path",
+              "firmware/target/mains-aegis-artifacts/formal-12v/mains-aegis-esp32s3-release-net_http-web_serial-main-vout-12v-2cf497f0-dirty-08da8cfc41a8232e.manifest.json"
+            ],
+            "result": {
+              "artifact": {
+                "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-main-vout-12v-2cf497f0-dirty-08da8cfc41a8232e",
+                "build_id": "2cf497f0-dirty-08da8cfc41a8232e",
+                "defmt": {
+                  "elf_sha256": "150ae735be5b0f62a242675c478e880929d11b5dc8017e2cbcb8f978f43f40f2",
+                  "enabled": true,
+                  "encoding": "defmt-espflash",
+                  "metadata_sha256": null
+                },
+                "features": [
+                  "net_http",
+                  "web_serial",
+                  "main-vout-12v"
+                ],
+                "files": [
+                  {
+                    "flash_address": null,
+                    "kind": "elf",
+                    "path": "firmware/target/mains-aegis-artifacts/formal-12v/esp-firmware-12v.elf",
+                    "sha256": "150ae735be5b0f62a242675c478e880929d11b5dc8017e2cbcb8f978f43f40f2",
+                    "size": 4769812
+                  },
+                  {
+                    "flash_address": 65536,
+                    "kind": "image",
+                    "path": "firmware/target/mains-aegis-artifacts/formal-12v/esp-firmware-12v.bin",
+                    "sha256": "51953c4a0734fa878b2a9ca5adadae788bf06b1ae025c81d8ab6bb34b5031cc8",
+                    "size": 2639200
+                  }
+                ],
+                "git_sha": "2cf497f0",
+                "name": "mains-aegis",
+                "profile": "release",
+                "protocol": "mains-aegis.cdc.v1",
+                "target_chip": "esp32s3",
+                "version": "0.1.0"
+              },
+              "log_decode": {
+                "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-main-vout-12v-2cf497f0-dirty-08da8cfc41a8232e",
+                "reason": "device firmware identity does not match selected artifact",
+                "status": "unverified"
+              }
+            }
+          }
+        },
+        {
+          "flash_dry_run": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "flash",
+              "--dry-run"
+            ],
+            "result": {
+              "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-main-vout-12v-2cf497f0-dirty-08da8cfc41a8232e",
+              "dry_run": true,
+              "ok": true
+            }
+          }
+        },
+        {
+          "flash_real": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "flash",
+              "--real"
+            ],
+            "result": {
+              "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-main-vout-12v-2cf497f0-dirty-08da8cfc41a8232e",
+              "backend": {
+                "status": "exit status: 0",
+                "stderr": "[2026-06-28T11:01:27Z WARN ] Monitor options were provided, but `--monitor/-M` flag isn't set. These options will be ignored.\n",
+                "stdout": "Chip type:         esp32s3 (revision v0.2)\nCrystal frequency: 40 MHz\nFlash size:        4MB\nFeatures:          WiFi, BLE, Embedded Flash\nMAC address:       50:78:7d:19:88:40\nApp/part. size:    2,638,416/4,128,768 bytes, 63.90%\n"
+              },
+              "ok": true
+            }
+          }
+        },
+        {
+          "ups_monitor_restart_after_flash": {
+            "ok": true,
+            "actions": [
+              {
+                "stop": {
+                  "cmd": [
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "--ipc",
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "device",
+                    "serial-04f3bb3f5367",
+                    "monitor",
+                    "stop"
+                  ],
+                  "result": {
+                    "ok": true
+                  }
+                }
+              },
+              {
+                "start": {
+                  "cmd": [
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "--ipc",
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "device",
+                    "serial-04f3bb3f5367",
+                    "monitor",
+                    "start"
+                  ],
+                  "result": {
+                    "already_running": false,
+                    "initial_log_count": 0,
+                    "initial_trace_count": 0,
+                    "log_count": 2000,
+                    "log_decode": {
+                      "artifact_id": null,
+                      "reason": "no artifact selected",
+                      "status": "unverified"
+                    },
+                    "ok": true,
+                    "trace_count": 2000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "ups_status_cache_after_flash": {
+            "ok": true,
+            "sample": {
+              "battery": {
+                "balance_active": false,
+                "balance_cell": null,
+                "balance_cfg_match": null,
+                "balance_enabled": null,
+                "balance_mask": 0,
+                "balance_min_start_delta_mv": null,
+                "cell_delta_mv": 21,
+                "cell_mv": [
+                  3696,
+                  3697,
+                  3676,
+                  3685
+                ],
+                "charge_fet_on": true,
+                "current_ma": 0,
+                "discharge_fet_on": true,
+                "discharge_ready": true,
+                "issue_detail": null,
+                "no_battery": false,
+                "pack_mv": 14754,
+                "precharge_fet_on": false,
+                "recovery_pending": false,
+                "soc_pct": 49,
+                "state": "ok"
+              },
+              "charger": {
+                "allow_charge": false,
+                "detail_status": "NOAC",
+                "ibat_ma": 0,
+                "ichg_ma": null,
+                "limit_active": false,
+                "limit_detail": "none",
+                "limit_reason": "none",
+                "limit_threshold_ma": 100,
+                "policy_target_ichg_ma": 500,
+                "state": "ok",
+                "vbat_present": true
+              },
+              "input": {
+                "assist_power_stage": "standby",
+                "assist_target_vout_mv": 10800,
+                "input_ibus_ma": 125,
+                "input_vbus_mv": 5108,
+                "mains_present": true,
+                "pressure_reason": "none",
+                "pressure_score_pct": 0,
+                "pressure_state": "inactive",
+                "source": "usbc",
+                "tps_limit_threshold_ma": 100,
+                "tps_total_iout_ma": null,
+                "vin_baseline_mv": 0,
+                "vin_drop_mv": 0,
+                "vin_iin_ma": 11,
+                "vin_vbus_mv": 5048
+              },
+              "mode": "standby",
+              "network": {
+                "ipv4": null,
+                "last_error": null,
+                "state": "connecting"
+              },
+              "output": {
+                "active": "both",
+                "gate_reason": "none",
+                "out_a": {
+                  "enabled": true,
+                  "iout_ma": 20,
+                  "state": "ok",
+                  "vbus_mv": 12408
+                },
+                "out_b": {
+                  "enabled": true,
+                  "iout_ma": 20,
+                  "state": "ok",
+                  "vbus_mv": 12400
+                },
+                "recoverable": "both",
+                "requested": "both"
+              },
+              "thermal": {
+                "tmp_a_c": 37,
+                "tmp_a_state": "ok",
+                "tmp_b_c": 39,
+                "tmp_b_state": "ok"
+              }
+            },
+            "fresh": {
+              "cmd": [
+                "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                "--ipc",
+                "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                "device",
+                "serial-04f3bb3f5367",
+                "status",
+                "--fresh",
+                "--include-meta"
+              ],
+              "result": {
+                "meta": {
+                  "cache_age_ms": 0,
+                  "cache_fresh": true,
+                  "cache_freshness_budget_ms": 750,
+                  "kind": "status",
+                  "monitor_running": true,
+                  "sample_fresh": true,
+                  "transport": "usb"
+                },
+                "sample": {
+                  "battery": {
+                    "balance_active": false,
+                    "balance_cell": null,
+                    "balance_cfg_match": null,
+                    "balance_enabled": null,
+                    "balance_mask": 0,
+                    "balance_min_start_delta_mv": null,
+                    "cell_delta_mv": 21,
+                    "cell_mv": [
+                      3696,
+                      3697,
+                      3676,
+                      3685
+                    ],
+                    "charge_fet_on": true,
+                    "current_ma": 0,
+                    "discharge_fet_on": true,
+                    "discharge_ready": true,
+                    "issue_detail": null,
+                    "no_battery": false,
+                    "pack_mv": 14754,
+                    "precharge_fet_on": false,
+                    "recovery_pending": false,
+                    "soc_pct": 49,
+                    "state": "ok"
+                  },
+                  "charger": {
+                    "allow_charge": false,
+                    "detail_status": "NOAC",
+                    "ibat_ma": 0,
+                    "ichg_ma": null,
+                    "limit_active": false,
+                    "limit_detail": "none",
+                    "limit_reason": "none",
+                    "limit_threshold_ma": 100,
+                    "policy_target_ichg_ma": 500,
+                    "state": "ok",
+                    "vbat_present": true
+                  },
+                  "input": {
+                    "assist_power_stage": "standby",
+                    "assist_target_vout_mv": 10800,
+                    "input_ibus_ma": 125,
+                    "input_vbus_mv": 5108,
+                    "mains_present": true,
+                    "pressure_reason": "none",
+                    "pressure_score_pct": 0,
+                    "pressure_state": "inactive",
+                    "source": "usbc",
+                    "tps_limit_threshold_ma": 100,
+                    "tps_total_iout_ma": null,
+                    "vin_baseline_mv": 0,
+                    "vin_drop_mv": 0,
+                    "vin_iin_ma": 11,
+                    "vin_vbus_mv": 5048
+                  },
+                  "mode": "standby",
+                  "network": {
+                    "ipv4": null,
+                    "last_error": null,
+                    "state": "connecting"
+                  },
+                  "output": {
+                    "active": "both",
+                    "gate_reason": "none",
+                    "out_a": {
+                      "enabled": true,
+                      "iout_ma": 20,
+                      "state": "ok",
+                      "vbus_mv": 12408
+                    },
+                    "out_b": {
+                      "enabled": true,
+                      "iout_ma": 20,
+                      "state": "ok",
+                      "vbus_mv": 12400
+                    },
+                    "recoverable": "both",
+                    "requested": "both"
+                  },
+                  "thermal": {
+                    "tmp_a_c": 37,
+                    "tmp_a_state": "ok",
+                    "tmp_b_c": 39,
+                    "tmp_b_state": "ok"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "ups_identity_after_profile_switch": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "identity"
+            ],
+            "result": {
+              "api_version": "v1",
+              "capabilities": {
+                "dns_sd": true,
+                "mdns": true,
+                "sse": true,
+                "write_controls": true
+              },
+              "device_id": "mains-aegis-198840",
+              "firmware": {
+                "build_id": "2cf497f0-dirty-08da8cfc41a8232e",
+                "build_profile": "release",
+                "defmt": {
+                  "enabled": true,
+                  "encoding": "defmt-espflash",
+                  "table_hash": null
+                },
+                "features": [
+                  "net_http",
+                  "web_serial",
+                  "main-vout-12v"
+                ],
+                "git_dirty": "dirty",
+                "git_sha": "2cf497f0",
+                "package_version": "0.1.0",
+                "protocol": "mains-aegis.cdc.v1",
+                "src_hash": "08da8cfc41a8232e"
+              },
+              "hardware_capabilities": {
+                "output_profile": "12v",
+                "rated_vout_mv": 12000
+              },
+              "hostname": "mains-aegis-198840",
+              "hostname_fqdn": "mains-aegis-198840.local",
+              "network": {
+                "dns": null,
+                "gateway": null,
+                "ipv4": null,
+                "is_static": false,
+                "last_error": null,
+                "rssi_dbm": null,
+                "state": "connecting"
+              },
+              "role": "ups",
+              "short_id": "198840"
+            }
+          }
+        },
+        {
+          "ups_settings_after_profile_switch": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "settings"
+            ],
+            "result": {
+              "advanced_power": {
+                "assist_enter_delta_ma": 0,
+                "assist_exit_delta_ma": 0,
+                "assist_low_drop_mv": 600,
+                "assist_ramp_interval_ms": 200,
+                "assist_ramp_step_mv": 100,
+                "assist_required_samples": 2,
+                "rated_enter_delta_ma": 0,
+                "rated_exit_delta_ma": 0,
+                "required_samples": 2,
+                "standby_drop_mv": 1200,
+                "vin_drop_threshold_pct": 4
+              },
+              "advanced_power_capabilities": {
+                "assist_enter_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -100,
+                  "step": 50
+                },
+                "assist_exit_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -50,
+                  "step": 50
+                },
+                "assist_low_drop_mv": {
+                  "default": 600,
+                  "max": 3000,
+                  "min": 0,
+                  "step": 20
+                },
+                "assist_ramp_interval_ms": {
+                  "default": 200,
+                  "max": 3000,
+                  "min": 100,
+                  "step": 100
+                },
+                "assist_ramp_step_mv": {
+                  "default": 100,
+                  "max": 1000,
+                  "min": 20,
+                  "step": 20
+                },
+                "assist_required_samples": {
+                  "default": 2,
+                  "max": 5,
+                  "min": 1,
+                  "step": 1
+                },
+                "rated_enter_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -100,
+                  "step": 50
+                },
+                "rated_exit_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -50,
+                  "step": 50
+                },
+                "rated_vout_mv": 12000,
+                "required_samples": {
+                  "default": 2,
+                  "max": 5,
+                  "min": 1,
+                  "step": 1
+                },
+                "standby_drop_mv": {
+                  "default": 1200,
+                  "max": 3000,
+                  "min": 0,
+                  "step": 20
+                },
+                "vin_drop_threshold_pct": {
+                  "default": 4,
+                  "max": 12,
+                  "min": 1,
+                  "step": 1
+                }
+              },
+              "log_level": "info",
+              "manual_charge": {
+                "speed": "ma_500",
+                "target": "full_100",
+                "timer_h": 6
+              },
+              "wifi": {
+                "configured": true,
+                "ssid": "Ivan"
+              }
+            }
+          }
+        },
+        {
+          "ups_profile_gate_after_switch": {
+            "ok": true,
+            "failures": [],
+            "identity_caps": {
+              "output_profile": "12v",
+              "rated_vout_mv": 12000
+            },
+            "settings_caps": {
+              "assist_enter_delta_ma": {
+                "default": 0,
+                "max": 1000,
+                "min": -100,
+                "step": 50
+              },
+              "assist_exit_delta_ma": {
+                "default": 0,
+                "max": 1000,
+                "min": -50,
+                "step": 50
+              },
+              "assist_low_drop_mv": {
+                "default": 600,
+                "max": 3000,
+                "min": 0,
+                "step": 20
+              },
+              "assist_ramp_interval_ms": {
+                "default": 200,
+                "max": 3000,
+                "min": 100,
+                "step": 100
+              },
+              "assist_ramp_step_mv": {
+                "default": 100,
+                "max": 1000,
+                "min": 20,
+                "step": 20
+              },
+              "assist_required_samples": {
+                "default": 2,
+                "max": 5,
+                "min": 1,
+                "step": 1
+              },
+              "rated_enter_delta_ma": {
+                "default": 0,
+                "max": 1000,
+                "min": -100,
+                "step": 50
+              },
+              "rated_exit_delta_ma": {
+                "default": 0,
+                "max": 1000,
+                "min": -50,
+                "step": 50
+              },
+              "rated_vout_mv": 12000,
+              "required_samples": {
+                "default": 2,
+                "max": 5,
+                "min": 1,
+                "step": 1
+              },
+              "standby_drop_mv": {
+                "default": 1200,
+                "max": 3000,
+                "min": 0,
+                "step": 20
+              },
+              "vin_drop_threshold_pct": {
+                "default": 4,
+                "max": 12,
+                "min": 1,
+                "step": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "target_profile": "19v",
+      "manifest_path": "firmware/target/mains-aegis-artifacts/formal-19v/mains-aegis-esp32s3-release-net_http-web_serial-main-vout-19v-2cf497f0-dirty-08da8cfc41a8232e.manifest.json",
+      "actions": [
+        {
+          "load_disable_before_profile_switch": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/koha-loadlynx-monitor-telemetry-fix/tools/loadlynx-devd/target/debug/loadlynx",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/loadlynx-devd-hil.sock",
+              "control",
+              "set",
+              "--device",
+              "loadlynx-d68638",
+              "--disable",
+              "--json"
+            ],
+            "result": {
+              "active_preset_id": 1,
+              "output_enabled": false,
+              "preset": {
+                "max_i_ma_total": 10000,
+                "max_p_mw": 200000,
+                "min_v_mv": 0,
+                "mode": "cc",
+                "preset_id": 1,
+                "target_i_ma": 1000,
+                "target_p_mw": 0,
+                "target_v_mv": 0
+              },
+              "uv_latched": false
+            }
+          }
+        },
+        {
+          "isolapurr_off_before_profile_switch": {
+            "cmd": [
+              "isolapurr",
+              "--json",
+              "power",
+              "output",
+              "auto",
+              "--device-id",
+              "856a141cdbd4"
+            ],
+            "result": {
+              "capability": {
+                "pd": {
+                  "fixed_voltages_mv": [
+                    9000,
+                    12000,
+                    15000,
+                    20000
+                  ],
+                  "pps": true
+                },
+                "power_watts": 100,
+                "profile": "full",
+                "protocols": {
+                  "afc": true,
+                  "bc12": true,
+                  "fcp": true,
+                  "pd": true,
+                  "pe20": true,
+                  "qc20": true,
+                  "qc30": true,
+                  "scp": true,
+                  "sfcp": true
+                }
+              },
+              "hardware": "sw2303",
+              "light_load_mode": "pfm",
+              "lock": null,
+              "manual": {
+                "current_limit_ma": 3000,
+                "path_policy": "auto",
+                "usb_c_path_mode": "force",
+                "voltage_mv": 12000
+              },
+              "persisted": true,
+              "tps_mode": "auto_follow"
+            },
+            "verified": {
+              "ok": true,
+              "expected_enabled": false,
+              "live_voltage_mv": null,
+              "port_c": {
+                "capabilities": {
+                  "data_replug": true,
+                  "power_set": true
+                },
+                "label": "USB-C",
+                "portId": "port_c",
+                "state": {
+                  "busy": false,
+                  "data_connected": true,
+                  "power_enabled": true,
+                  "replugging": false
+                },
+                "telemetry": {
+                  "current_ma": null,
+                  "power_mw": null,
+                  "sample_uptime_ms": 38362439,
+                  "status": "not_inserted",
+                  "voltage_mv": null
+                },
+                "telemetry_raw": {
+                  "current_ma": null,
+                  "power_mw": null,
+                  "sample_uptime_ms": 38362439,
+                  "status": "not_inserted",
+                  "voltage_mv": null
+                }
+              },
+              "ports": {
+                "cmd": [
+                  "isolapurr",
+                  "--json",
+                  "ports",
+                  "--device-id",
+                  "856a141cdbd4"
+                ],
+                "result": {
+                  "hub": {
+                    "isolated_downstream_connected": true,
+                    "isolated_usb_fault": false,
+                    "isolated_usb_ready": true,
+                    "upstream_connected": true,
+                    "usb_c_downstream_persisted": true,
+                    "usb_c_downstream_route": "mcu"
+                  },
+                  "ports": [
+                    {
+                      "capabilities": {
+                        "data_replug": true,
+                        "power_set": true
+                      },
+                      "label": "USB-A",
+                      "portId": "port_a",
+                      "state": {
+                        "busy": false,
+                        "data_connected": true,
+                        "power_enabled": true,
+                        "replugging": false
+                      },
+                      "telemetry": {
+                        "current_ma": 0,
+                        "power_mw": 2,
+                        "sample_uptime_ms": 38362439,
+                        "status": "ok",
+                        "voltage_mv": 5008
+                      },
+                      "telemetry_raw": null
+                    },
+                    {
+                      "capabilities": {
+                        "data_replug": true,
+                        "power_set": true
+                      },
+                      "label": "USB-C",
+                      "portId": "port_c",
+                      "state": {
+                        "busy": false,
+                        "data_connected": true,
+                        "power_enabled": true,
+                        "replugging": false
+                      },
+                      "telemetry": {
+                        "current_ma": null,
+                        "power_mw": null,
+                        "sample_uptime_ms": 38362439,
+                        "status": "not_inserted",
+                        "voltage_mv": null
+                      },
+                      "telemetry_raw": {
+                        "current_ma": null,
+                        "power_mw": null,
+                        "sample_uptime_ms": 38362439,
+                        "status": "not_inserted",
+                        "voltage_mv": null
+                      }
+                    }
+                  ]
+                }
+              },
+              "power": {
+                "cmd": [
+                  "isolapurr",
+                  "--json",
+                  "power",
+                  "show",
+                  "--device-id",
+                  "856a141cdbd4"
+                ],
+                "result": {
+                  "config": {
+                    "capability": {
+                      "current": {
+                        "fcp_afc_sfcp_limit_ma": 3250,
+                        "pd_pps_5a": false,
+                        "pps3_limit_ma": 5000,
+                        "scp_limit_ma": 5000,
+                        "type_c_broadcast_ma": 500
+                      },
+                      "pd": {
+                        "fixed_voltages_mv": [
+                          9000,
+                          12000,
+                          15000,
+                          20000
+                        ],
+                        "pps": true
+                      },
+                      "power_watts": 100,
+                      "profile": "full",
+                      "protocols": {
+                        "afc": true,
+                        "bc12": true,
+                        "fcp": true,
+                        "pd": true,
+                        "pe20": true,
+                        "qc20": true,
+                        "qc30": true,
+                        "scp": true,
+                        "sfcp": true
+                      }
+                    },
+                    "hardware": "sw2303",
+                    "light_load_mode": "pfm",
+                    "lock": null,
+                    "manual": {
+                      "current_limit_ma": 3000,
+                      "path_policy": "auto",
+                      "usb_c_path_mode": "force",
+                      "voltage_mv": 12000
+                    },
+                    "persisted": true,
+                    "tps_mode": "auto_follow"
+                  },
+                  "diagnostics": {
+                    "display": {
+                      "badge": {
+                        "kind": "off",
+                        "label": "OFF"
+                      },
+                      "measurements_visible": false,
+                      "mode": {
+                        "kind": "off",
+                        "label": "OFF"
+                      }
+                    },
+                    "idle_bias": {
+                      "correction_enabled": false,
+                      "current_applied_offset_ma": null,
+                      "dataset": {
+                        "max_voltage_mv": 21000,
+                        "min_voltage_mv": 3000,
+                        "offsets_ma": null,
+                        "point_count": 37,
+                        "status": "missing",
+                        "step_mv": 500
+                      },
+                      "run": {
+                        "completed_points": 0,
+                        "error": null,
+                        "point_count": 37,
+                        "state": "idle",
+                        "target_voltage_mv": null
+                      }
+                    },
+                    "runtime_recovery_count": 0,
+                    "sample_uptime_ms": 38362754,
+                    "sw2303_error_latched": false,
+                    "sw2303_i2c_allowed": true,
+                    "sw2303_last_valid_request": {
+                      "ma": 3250,
+                      "mv": 5000
+                    },
+                    "sw2303_profile_applied": false,
+                    "sw2303_readback_config": {
+                      "available": false,
+                      "current": {
+                        "fcp_afc_sfcp_limit_ma": null,
+                        "pd_pps_5a": null,
+                        "pps3_limit_ma": null,
+                        "scp_limit_ma": null,
+                        "type_c_broadcast_ma": null
+                      },
+                      "matches_config": false,
+                      "pd": {
+                        "fixed_voltages_mv": [],
+                        "pps": null
+                      },
+                      "power_watts": null,
+                      "protocols": {
+                        "afc": null,
+                        "bc12": null,
+                        "fcp": null,
+                        "pd": null,
+                        "pe20": null,
+                        "qc20": null,
+                        "qc30": null,
+                        "scp": null,
+                        "sfcp": null
+                      }
+                    },
+                    "sw2303_request": {
+                      "ma": 3250,
+                      "mv": 5000
+                    },
+                    "sw2303_stable_reads": 6,
+                    "sw2303_vbus_mv": 0,
+                    "tps_error_latched": false,
+                    "tps_iout_limit_readback": {
+                      "enabled": true,
+                      "ma": 3200
+                    },
+                    "tps_setpoint": {
+                      "ilim_ma": 3200,
+                      "iout_limit_ma": 3200,
+                      "mv": 5000,
+                      "output_enabled": true
+                    },
+                    "usb_c_actual": {
+                      "current_ma": null,
+                      "power_mw": null,
+                      "sample_uptime_ms": 38362439,
+                      "status": "not_inserted",
+                      "voltage_mv": null
+                    },
+                    "usb_c_power_enabled": true
+                  },
+                  "ports": {
+                    "ports": [
+                      {
+                        "label": "USB-A",
+                        "portId": "port_a",
+                        "telemetry": {
+                          "current_ma": 0,
+                          "power_mw": 2,
+                          "sample_uptime_ms": 38362439,
+                          "status": "ok",
+                          "voltage_mv": 5008
+                        },
+                        "telemetry_raw": null
+                      },
+                      {
+                        "label": "USB-C",
+                        "portId": "port_c",
+                        "telemetry": {
+                          "current_ma": null,
+                          "power_mw": null,
+                          "sample_uptime_ms": 38362439,
+                          "status": "not_inserted",
+                          "voltage_mv": null
+                        },
+                        "telemetry_raw": {
+                          "current_ma": null,
+                          "power_mw": null,
+                          "sample_uptime_ms": 38362439,
+                          "status": "not_inserted",
+                          "voltage_mv": null
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "ups_monitor_restart_profile_switch": {
+            "ok": true,
+            "actions": [
+              {
+                "stop": {
+                  "cmd": [
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "--ipc",
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "device",
+                    "serial-04f3bb3f5367",
+                    "monitor",
+                    "stop"
+                  ],
+                  "result": {
+                    "ok": true
+                  }
+                }
+              },
+              {
+                "start": {
+                  "cmd": [
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "--ipc",
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "device",
+                    "serial-04f3bb3f5367",
+                    "monitor",
+                    "start"
+                  ],
+                  "result": {
+                    "already_running": false,
+                    "initial_log_count": 0,
+                    "initial_trace_count": 0,
+                    "log_count": 2000,
+                    "log_decode": {
+                      "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-main-vout-12v-2cf497f0-dirty-08da8cfc41a8232e",
+                      "reason": null,
+                      "status": "verified"
+                    },
+                    "ok": true,
+                    "trace_count": 2000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "ups_status_cache_profile_switch": {
+            "ok": false,
+            "name": "ups_status_cache",
+            "sample": {},
+            "verdict": {
+              "ok": false,
+              "sample": {}
+            }
+          }
+        },
+        {
+          "ups_profile_switch_source_cut_gate": {
+            "ok": true,
+            "name": "ups_profile_switch_source_cut",
+            "sample": {},
+            "verdict": {
+              "ok": true,
+              "failures": [],
+              "status": {}
+            }
+          }
+        },
+        {
+          "ups_identity_before_profile_switch": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "identity"
+            ],
+            "result": {
+              "api_version": "v1",
+              "capabilities": {
+                "dns_sd": true,
+                "mdns": true,
+                "sse": true,
+                "write_controls": true
+              },
+              "device_id": "mains-aegis-198840",
+              "firmware": {
+                "build_id": "2cf497f0-dirty-08da8cfc41a8232e",
+                "build_profile": "release",
+                "defmt": {
+                  "enabled": true,
+                  "encoding": "defmt-espflash",
+                  "table_hash": null
+                },
+                "features": [
+                  "net_http",
+                  "web_serial",
+                  "main-vout-12v"
+                ],
+                "git_dirty": "dirty",
+                "git_sha": "2cf497f0",
+                "package_version": "0.1.0",
+                "protocol": "mains-aegis.cdc.v1",
+                "src_hash": "08da8cfc41a8232e"
+              },
+              "hardware_capabilities": {
+                "output_profile": "12v",
+                "rated_vout_mv": 12000
+              },
+              "hostname": "mains-aegis-198840",
+              "hostname_fqdn": "mains-aegis-198840.local",
+              "network": {
+                "dns": "192.168.31.1",
+                "gateway": "192.168.31.1",
+                "ipv4": "192.168.31.232",
+                "is_static": false,
+                "last_error": null,
+                "rssi_dbm": -35,
+                "state": "connected"
+              },
+              "role": "ups",
+              "short_id": "198840"
+            }
+          }
+        },
+        {
+          "ups_settings_before_profile_switch": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "settings"
+            ],
+            "result": {
+              "advanced_power": {
+                "assist_enter_delta_ma": 0,
+                "assist_exit_delta_ma": 0,
+                "assist_low_drop_mv": 600,
+                "assist_ramp_interval_ms": 200,
+                "assist_ramp_step_mv": 100,
+                "assist_required_samples": 2,
+                "rated_enter_delta_ma": 0,
+                "rated_exit_delta_ma": 0,
+                "required_samples": 2,
+                "standby_drop_mv": 1200,
+                "vin_drop_threshold_pct": 4
+              },
+              "advanced_power_capabilities": {
+                "assist_enter_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -100,
+                  "step": 50
+                },
+                "assist_exit_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -50,
+                  "step": 50
+                },
+                "assist_low_drop_mv": {
+                  "default": 600,
+                  "max": 3000,
+                  "min": 0,
+                  "step": 20
+                },
+                "assist_ramp_interval_ms": {
+                  "default": 200,
+                  "max": 3000,
+                  "min": 100,
+                  "step": 100
+                },
+                "assist_ramp_step_mv": {
+                  "default": 100,
+                  "max": 1000,
+                  "min": 20,
+                  "step": 20
+                },
+                "assist_required_samples": {
+                  "default": 2,
+                  "max": 5,
+                  "min": 1,
+                  "step": 1
+                },
+                "rated_enter_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -100,
+                  "step": 50
+                },
+                "rated_exit_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -50,
+                  "step": 50
+                },
+                "rated_vout_mv": 12000,
+                "required_samples": {
+                  "default": 2,
+                  "max": 5,
+                  "min": 1,
+                  "step": 1
+                },
+                "standby_drop_mv": {
+                  "default": 1200,
+                  "max": 3000,
+                  "min": 0,
+                  "step": 20
+                },
+                "vin_drop_threshold_pct": {
+                  "default": 4,
+                  "max": 12,
+                  "min": 1,
+                  "step": 1
+                }
+              },
+              "log_level": "info",
+              "manual_charge": {
+                "speed": "ma_500",
+                "target": "full_100",
+                "timer_h": 6
+              },
+              "wifi": {
+                "configured": true,
+                "ssid": "Ivan"
+              }
+            }
+          }
+        },
+        {
+          "current_profile_before_switch": {
+            "profile": "12v",
+            "target": "19v"
+          }
+        },
+        {
+          "artifact_select": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "artifact",
+              "select",
+              "--manifest-path",
+              "firmware/target/mains-aegis-artifacts/formal-19v/mains-aegis-esp32s3-release-net_http-web_serial-main-vout-19v-2cf497f0-dirty-08da8cfc41a8232e.manifest.json"
+            ],
+            "result": {
+              "artifact": {
+                "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-main-vout-19v-2cf497f0-dirty-08da8cfc41a8232e",
+                "build_id": "2cf497f0-dirty-08da8cfc41a8232e",
+                "defmt": {
+                  "elf_sha256": "e6c15d190d3096ce0ba3544c0576d6c6687863a273ea0f2df39fef7d50bc3e0a",
+                  "enabled": true,
+                  "encoding": "defmt-espflash",
+                  "metadata_sha256": null
+                },
+                "features": [
+                  "net_http",
+                  "web_serial",
+                  "main-vout-19v"
+                ],
+                "files": [
+                  {
+                    "flash_address": null,
+                    "kind": "elf",
+                    "path": "firmware/target/mains-aegis-artifacts/formal-19v/esp-firmware-19v.elf",
+                    "sha256": "e6c15d190d3096ce0ba3544c0576d6c6687863a273ea0f2df39fef7d50bc3e0a",
+                    "size": 4769464
+                  },
+                  {
+                    "flash_address": 65536,
+                    "kind": "image",
+                    "path": "firmware/target/mains-aegis-artifacts/formal-19v/esp-firmware-19v.bin",
+                    "sha256": "a9614b92a9083f46cc2de4250ea379ed18f303f1251520bf626fb8d6ac3b935b",
+                    "size": 2639200
+                  }
+                ],
+                "git_sha": "2cf497f0",
+                "name": "mains-aegis",
+                "profile": "release",
+                "protocol": "mains-aegis.cdc.v1",
+                "target_chip": "esp32s3",
+                "version": "0.1.0"
+              },
+              "log_decode": {
+                "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-main-vout-19v-2cf497f0-dirty-08da8cfc41a8232e",
+                "reason": "device firmware identity does not match selected artifact",
+                "status": "unverified"
+              }
+            }
+          }
+        },
+        {
+          "flash_dry_run": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "flash",
+              "--dry-run"
+            ],
+            "result": {
+              "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-main-vout-19v-2cf497f0-dirty-08da8cfc41a8232e",
+              "dry_run": true,
+              "ok": true
+            }
+          }
+        },
+        {
+          "flash_real": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "flash",
+              "--real"
+            ],
+            "result": {
+              "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-main-vout-19v-2cf497f0-dirty-08da8cfc41a8232e",
+              "backend": {
+                "status": "exit status: 0",
+                "stderr": "[2026-06-28T11:04:55Z WARN ] Monitor options were provided, but `--monitor/-M` flag isn't set. These options will be ignored.\n",
+                "stdout": "Chip type:         esp32s3 (revision v0.2)\nCrystal frequency: 40 MHz\nFlash size:        4MB\nFeatures:          WiFi, BLE, Embedded Flash\nMAC address:       50:78:7d:19:88:40\nApp/part. size:    2,638,416/4,128,768 bytes, 63.90%\n"
+              },
+              "ok": true
+            }
+          }
+        },
+        {
+          "ups_monitor_restart_after_flash": {
+            "ok": true,
+            "actions": [
+              {
+                "stop": {
+                  "cmd": [
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "--ipc",
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "device",
+                    "serial-04f3bb3f5367",
+                    "monitor",
+                    "stop"
+                  ],
+                  "result": {
+                    "ok": true
+                  }
+                }
+              },
+              {
+                "start": {
+                  "cmd": [
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "--ipc",
+                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "device",
+                    "serial-04f3bb3f5367",
+                    "monitor",
+                    "start"
+                  ],
+                  "result": {
+                    "already_running": false,
+                    "initial_log_count": 0,
+                    "initial_trace_count": 0,
+                    "log_count": 2000,
+                    "log_decode": {
+                      "artifact_id": null,
+                      "reason": "no artifact selected",
+                      "status": "unverified"
+                    },
+                    "ok": true,
+                    "trace_count": 2000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "ups_status_cache_after_flash": {
+            "ok": true,
+            "sample": {
+              "battery": {
+                "balance_active": false,
+                "balance_cell": null,
+                "balance_cfg_match": null,
+                "balance_enabled": null,
+                "balance_mask": 0,
+                "balance_min_start_delta_mv": null,
+                "cell_delta_mv": 20,
+                "cell_mv": [
+                  3688,
+                  3689,
+                  3669,
+                  3677
+                ],
+                "charge_fet_on": true,
+                "current_ma": 0,
+                "discharge_fet_on": true,
+                "discharge_ready": true,
+                "issue_detail": null,
+                "no_battery": false,
+                "pack_mv": 14724,
+                "precharge_fet_on": false,
+                "recovery_pending": false,
+                "soc_pct": 48,
+                "state": "ok"
+              },
+              "charger": {
+                "allow_charge": false,
+                "detail_status": "NOAC",
+                "ibat_ma": 0,
+                "ichg_ma": null,
+                "limit_active": false,
+                "limit_detail": "none",
+                "limit_reason": "none",
+                "limit_threshold_ma": 100,
+                "policy_target_ichg_ma": 500,
+                "state": "ok",
+                "vbat_present": true
+              },
+              "input": {
+                "assist_power_stage": "standby",
+                "assist_target_vout_mv": 17800,
+                "input_ibus_ma": 191,
+                "input_vbus_mv": 5106,
+                "mains_present": true,
+                "pressure_reason": "none",
+                "pressure_score_pct": 0,
+                "pressure_state": "inactive",
+                "source": "usbc",
+                "tps_limit_threshold_ma": 100,
+                "tps_total_iout_ma": null,
+                "vin_baseline_mv": 0,
+                "vin_drop_mv": 0,
+                "vin_iin_ma": 11,
+                "vin_vbus_mv": 5040
+              },
+              "mode": "standby",
+              "network": {
+                "ipv4": null,
+                "last_error": null,
+                "state": "connecting"
+              },
+              "output": {
+                "active": "both",
+                "gate_reason": "none",
+                "out_a": {
+                  "enabled": true,
+                  "iout_ma": 28,
+                  "state": "ok",
+                  "vbus_mv": 19048
+                },
+                "out_b": {
+                  "enabled": true,
+                  "iout_ma": 32,
+                  "state": "ok",
+                  "vbus_mv": 19056
+                },
+                "recoverable": "both",
+                "requested": "both"
+              },
+              "thermal": {
+                "tmp_a_c": 38,
+                "tmp_a_state": "ok",
+                "tmp_b_c": 39,
+                "tmp_b_state": "ok"
+              }
+            },
+            "fresh": {
+              "cmd": [
+                "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                "--ipc",
+                "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                "device",
+                "serial-04f3bb3f5367",
+                "status",
+                "--fresh",
+                "--include-meta"
+              ],
+              "result": {
+                "meta": {
+                  "cache_age_ms": 0,
+                  "cache_fresh": true,
+                  "cache_freshness_budget_ms": 750,
+                  "kind": "status",
+                  "monitor_running": true,
+                  "sample_fresh": true,
+                  "transport": "usb"
+                },
+                "sample": {
+                  "battery": {
+                    "balance_active": false,
+                    "balance_cell": null,
+                    "balance_cfg_match": null,
+                    "balance_enabled": null,
+                    "balance_mask": 0,
+                    "balance_min_start_delta_mv": null,
+                    "cell_delta_mv": 20,
+                    "cell_mv": [
+                      3688,
+                      3689,
+                      3669,
+                      3677
+                    ],
+                    "charge_fet_on": true,
+                    "current_ma": 0,
+                    "discharge_fet_on": true,
+                    "discharge_ready": true,
+                    "issue_detail": null,
+                    "no_battery": false,
+                    "pack_mv": 14724,
+                    "precharge_fet_on": false,
+                    "recovery_pending": false,
+                    "soc_pct": 48,
+                    "state": "ok"
+                  },
+                  "charger": {
+                    "allow_charge": false,
+                    "detail_status": "NOAC",
+                    "ibat_ma": 0,
+                    "ichg_ma": null,
+                    "limit_active": false,
+                    "limit_detail": "none",
+                    "limit_reason": "none",
+                    "limit_threshold_ma": 100,
+                    "policy_target_ichg_ma": 500,
+                    "state": "ok",
+                    "vbat_present": true
+                  },
+                  "input": {
+                    "assist_power_stage": "standby",
+                    "assist_target_vout_mv": 17800,
+                    "input_ibus_ma": 191,
+                    "input_vbus_mv": 5106,
+                    "mains_present": true,
+                    "pressure_reason": "none",
+                    "pressure_score_pct": 0,
+                    "pressure_state": "inactive",
+                    "source": "usbc",
+                    "tps_limit_threshold_ma": 100,
+                    "tps_total_iout_ma": null,
+                    "vin_baseline_mv": 0,
+                    "vin_drop_mv": 0,
+                    "vin_iin_ma": 11,
+                    "vin_vbus_mv": 5040
+                  },
+                  "mode": "standby",
+                  "network": {
+                    "ipv4": null,
+                    "last_error": null,
+                    "state": "connecting"
+                  },
+                  "output": {
+                    "active": "both",
+                    "gate_reason": "none",
+                    "out_a": {
+                      "enabled": true,
+                      "iout_ma": 28,
+                      "state": "ok",
+                      "vbus_mv": 19048
+                    },
+                    "out_b": {
+                      "enabled": true,
+                      "iout_ma": 32,
+                      "state": "ok",
+                      "vbus_mv": 19056
+                    },
+                    "recoverable": "both",
+                    "requested": "both"
+                  },
+                  "thermal": {
+                    "tmp_a_c": 38,
+                    "tmp_a_state": "ok",
+                    "tmp_b_c": 39,
+                    "tmp_b_state": "ok"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "ups_identity_after_profile_switch": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "identity"
+            ],
+            "result": {
+              "api_version": "v1",
+              "capabilities": {
+                "dns_sd": true,
+                "mdns": true,
+                "sse": true,
+                "write_controls": true
+              },
+              "device_id": "mains-aegis-198840",
+              "firmware": {
+                "build_id": "2cf497f0-dirty-08da8cfc41a8232e",
+                "build_profile": "release",
+                "defmt": {
+                  "enabled": true,
+                  "encoding": "defmt-espflash",
+                  "table_hash": null
+                },
+                "features": [
+                  "net_http",
+                  "web_serial",
+                  "main-vout-19v"
+                ],
+                "git_dirty": "dirty",
+                "git_sha": "2cf497f0",
+                "package_version": "0.1.0",
+                "protocol": "mains-aegis.cdc.v1",
+                "src_hash": "08da8cfc41a8232e"
+              },
+              "hardware_capabilities": {
+                "output_profile": "19v",
+                "rated_vout_mv": 19000
+              },
+              "hostname": "mains-aegis-198840",
+              "hostname_fqdn": "mains-aegis-198840.local",
+              "network": {
+                "dns": null,
+                "gateway": null,
+                "ipv4": null,
+                "is_static": false,
+                "last_error": null,
+                "rssi_dbm": null,
+                "state": "connecting"
+              },
+              "role": "ups",
+              "short_id": "198840"
+            }
+          }
+        },
+        {
+          "ups_settings_after_profile_switch": {
+            "cmd": [
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "--ipc",
+              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "device",
+              "serial-04f3bb3f5367",
+              "settings"
+            ],
+            "result": {
+              "advanced_power": {
+                "assist_enter_delta_ma": 0,
+                "assist_exit_delta_ma": 0,
+                "assist_low_drop_mv": 600,
+                "assist_ramp_interval_ms": 200,
+                "assist_ramp_step_mv": 100,
+                "assist_required_samples": 2,
+                "rated_enter_delta_ma": 0,
+                "rated_exit_delta_ma": 0,
+                "required_samples": 2,
+                "standby_drop_mv": 1200,
+                "vin_drop_threshold_pct": 4
+              },
+              "advanced_power_capabilities": {
+                "assist_enter_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -100,
+                  "step": 50
+                },
+                "assist_exit_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -50,
+                  "step": 50
+                },
+                "assist_low_drop_mv": {
+                  "default": 600,
+                  "max": 3000,
+                  "min": 0,
+                  "step": 20
+                },
+                "assist_ramp_interval_ms": {
+                  "default": 200,
+                  "max": 3000,
+                  "min": 100,
+                  "step": 100
+                },
+                "assist_ramp_step_mv": {
+                  "default": 100,
+                  "max": 1000,
+                  "min": 20,
+                  "step": 20
+                },
+                "assist_required_samples": {
+                  "default": 2,
+                  "max": 5,
+                  "min": 1,
+                  "step": 1
+                },
+                "rated_enter_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -100,
+                  "step": 50
+                },
+                "rated_exit_delta_ma": {
+                  "default": 0,
+                  "max": 1000,
+                  "min": -50,
+                  "step": 50
+                },
+                "rated_vout_mv": 19000,
+                "required_samples": {
+                  "default": 2,
+                  "max": 5,
+                  "min": 1,
+                  "step": 1
+                },
+                "standby_drop_mv": {
+                  "default": 1200,
+                  "max": 3000,
+                  "min": 0,
+                  "step": 20
+                },
+                "vin_drop_threshold_pct": {
+                  "default": 4,
+                  "max": 12,
+                  "min": 1,
+                  "step": 1
+                }
+              },
+              "log_level": "info",
+              "manual_charge": {
+                "speed": "ma_500",
+                "target": "full_100",
+                "timer_h": 6
+              },
+              "wifi": {
+                "configured": true,
+                "ssid": "Ivan"
+              }
+            }
+          }
+        },
+        {
+          "ups_profile_gate_after_switch": {
+            "ok": true,
+            "failures": [],
+            "identity_caps": {
+              "output_profile": "19v",
+              "rated_vout_mv": 19000
+            },
+            "settings_caps": {
+              "assist_enter_delta_ma": {
+                "default": 0,
+                "max": 1000,
+                "min": -100,
+                "step": 50
+              },
+              "assist_exit_delta_ma": {
+                "default": 0,
+                "max": 1000,
+                "min": -50,
+                "step": 50
+              },
+              "assist_low_drop_mv": {
+                "default": 600,
+                "max": 3000,
+                "min": 0,
+                "step": 20
+              },
+              "assist_ramp_interval_ms": {
+                "default": 200,
+                "max": 3000,
+                "min": 100,
+                "step": 100
+              },
+              "assist_ramp_step_mv": {
+                "default": 100,
+                "max": 1000,
+                "min": 20,
+                "step": 20
+              },
+              "assist_required_samples": {
+                "default": 2,
+                "max": 5,
+                "min": 1,
+                "step": 1
+              },
+              "rated_enter_delta_ma": {
+                "default": 0,
+                "max": 1000,
+                "min": -100,
+                "step": 50
+              },
+              "rated_exit_delta_ma": {
+                "default": 0,
+                "max": 1000,
+                "min": -50,
+                "step": 50
+              },
+              "rated_vout_mv": 19000,
+              "required_samples": {
+                "default": 2,
+                "max": 5,
+                "min": 1,
+                "step": 1
+              },
+              "standby_drop_mv": {
+                "default": 1200,
+                "max": 3000,
+                "min": 0,
+                "step": 20
+              },
+              "vin_drop_threshold_pct": {
+                "default": 4,
+                "max": 12,
+                "min": 1,
+                "step": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "reports": [
+    {
+      "output_profile": "12v",
+      "scene_type": "assist_path",
+      "target_ma": 3900,
+      "include_backup": true,
+      "load_min_v_mv": 3000,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "source_voltage_mv": 12000,
+      "source_current_limit_ma": 3000,
+      "report_dir": "12v-assist_path-3900ma",
+      "scene_complete": true,
+      "run_validity": "valid_for_signoff",
+      "signoff_valid": true,
+      "failures": [],
+      "failed_acceptance_checks": [],
+      "effective_sample_rate_hz": 4.944,
+      "max_sample_gap_s": 0.37,
+      "advanced_power": {
+        "assist_enter_delta_ma": 0,
+        "assist_exit_delta_ma": 0,
+        "assist_low_drop_mv": 600,
+        "assist_ramp_interval_ms": 200,
+        "assist_ramp_step_mv": 100,
+        "assist_required_samples": 2,
+        "rated_enter_delta_ma": 0,
+        "rated_exit_delta_ma": 0,
+        "required_samples": 2,
+        "standby_drop_mv": 1200,
+        "vin_drop_threshold_pct": 4
+      }
+    },
+    {
+      "output_profile": "12v",
+      "scene_type": "backup_only",
+      "target_ma": 1000,
+      "include_backup": true,
+      "load_min_v_mv": 3000,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "source_voltage_mv": 12000,
+      "source_current_limit_ma": 3000,
+      "report_dir": "12v-backup_only-1000ma",
+      "scene_complete": true,
+      "run_validity": "valid_for_signoff",
+      "signoff_valid": true,
+      "failures": [],
+      "failed_acceptance_checks": [],
+      "effective_sample_rate_hz": 4.907,
+      "max_sample_gap_s": 0.379,
+      "advanced_power": {
+        "assist_enter_delta_ma": 0,
+        "assist_exit_delta_ma": 0,
+        "assist_low_drop_mv": 600,
+        "assist_ramp_interval_ms": 200,
+        "assist_ramp_step_mv": 100,
+        "assist_required_samples": 2,
+        "rated_enter_delta_ma": 0,
+        "rated_exit_delta_ma": 0,
+        "required_samples": 2,
+        "standby_drop_mv": 1200,
+        "vin_drop_threshold_pct": 4
+      }
+    },
+    {
+      "output_profile": "19v",
+      "scene_type": "assist_path",
+      "target_ma": 3900,
+      "include_backup": true,
+      "load_min_v_mv": 3000,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "source_voltage_mv": 19000,
+      "source_current_limit_ma": 3000,
+      "report_dir": "19v-assist_path-3900ma",
+      "scene_complete": true,
+      "run_validity": "valid_for_signoff",
+      "signoff_valid": true,
+      "failures": [],
+      "failed_acceptance_checks": [],
+      "effective_sample_rate_hz": 4.963,
+      "max_sample_gap_s": 0.213,
+      "advanced_power": {
+        "assist_enter_delta_ma": 0,
+        "assist_exit_delta_ma": 0,
+        "assist_low_drop_mv": 600,
+        "assist_ramp_interval_ms": 200,
+        "assist_ramp_step_mv": 100,
+        "assist_required_samples": 2,
+        "rated_enter_delta_ma": 0,
+        "rated_exit_delta_ma": 0,
+        "required_samples": 2,
+        "standby_drop_mv": 1200,
+        "vin_drop_threshold_pct": 4
+      }
+    },
+    {
+      "output_profile": "19v",
+      "scene_type": "backup_only",
+      "target_ma": 1000,
+      "include_backup": true,
+      "load_min_v_mv": 3000,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "source_voltage_mv": 19000,
+      "source_current_limit_ma": 3000,
+      "report_dir": "19v-backup_only-1000ma",
+      "scene_complete": true,
+      "run_validity": "valid_for_signoff",
+      "signoff_valid": true,
+      "failures": [],
+      "failed_acceptance_checks": [],
+      "effective_sample_rate_hz": 4.962,
+      "max_sample_gap_s": 0.214,
+      "advanced_power": {
+        "assist_enter_delta_ma": 0,
+        "assist_exit_delta_ma": 0,
+        "assist_low_drop_mv": 600,
+        "assist_ramp_interval_ms": 200,
+        "assist_ramp_step_mv": 100,
+        "assist_required_samples": 2,
+        "rated_enter_delta_ma": 0,
+        "rated_exit_delta_ma": 0,
+        "required_samples": 2,
+        "standby_drop_mv": 1200,
+        "vin_drop_threshold_pct": 4
+      }
+    }
+  ]
+}
