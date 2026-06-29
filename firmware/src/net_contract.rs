@@ -1246,7 +1246,7 @@ mod tests {
 
     #[test]
     fn settings_json_redacts_psk_and_exposes_manual_charge() {
-        let mut body = String::<512>::new();
+        let mut body = String::<3072>::new();
         let mut ssid = String::<32>::new();
         ssid.push_str("LabNet").unwrap();
         render_settings_json(
@@ -1267,6 +1267,8 @@ mod tests {
                     crate::net_types::AdvancedPowerCapabilitiesSnapshot::for_rated_vout(12_000),
             },
         );
+        let value: serde_json::Value = serde_json::from_str(body.as_str())
+            .expect("settings JSON should fit the production buffer and remain valid JSON");
         assert!(body.as_str().contains("\"configured\":true"));
         assert!(body.as_str().contains("\"ssid\":\"LabNet\""));
         assert!(body.as_str().contains("\"log_level\":\"debug\""));
@@ -1274,5 +1276,9 @@ mod tests {
         assert!(body.as_str().contains("\"advanced_power\":{"));
         assert!(body.as_str().contains("\"advanced_power_capabilities\":{"));
         assert!(!body.as_str().contains("psk"));
+        assert_eq!(value["wifi"]["ssid"], "LabNet");
+        assert_eq!(value["manual_charge"]["target"], "rsoc_80");
+        assert!(value.get("advanced_power").is_some());
+        assert!(value.get("advanced_power_capabilities").is_some());
     }
 }
