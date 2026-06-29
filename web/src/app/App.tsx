@@ -169,7 +169,7 @@ type SharedDevdDiscovery = {
 type UpsHardwareCapability = {
   outputProfile: string | null;
   ratedVoutMv: number | null;
-  source: "identity" | "settings" | "unknown";
+  source: "identity" | "firmware" | "settings" | "unknown";
 };
 
 const deviceSections = [
@@ -4989,6 +4989,16 @@ export function resolveUpsHardwareCapability(
       source: "identity",
     };
   }
+  const firmwareOutputProfile = firmwareOutputProfileFallback(
+    record.identity?.firmware.features,
+  );
+  if (firmwareOutputProfile) {
+    return {
+      outputProfile: firmwareOutputProfile,
+      ratedVoutMv: ratedVoutFromOutputProfile(firmwareOutputProfile),
+      source: "firmware",
+    };
+  }
   const settingsRatedVout = record.settings?.advanced_power_capabilities?.rated_vout_mv;
   if (typeof settingsRatedVout === "number") {
     return {
@@ -5028,6 +5038,24 @@ function inferOutputProfileFromRatedVout(
   return `${normalizedVolts}v`;
 }
 
+function firmwareOutputProfileFallback(
+  features: readonly string[] | null | undefined,
+): string | null {
+  if (!Array.isArray(features)) return null;
+  if (features.includes("main-vout-19v")) return "19v";
+  if (features.includes("main-vout-12v")) return "12v";
+  return null;
+}
+
+function ratedVoutFromOutputProfile(
+  outputProfile: string | null | undefined,
+): number | null {
+  const normalized = normalizeOutputProfile(outputProfile);
+  if (normalized === "19v") return 19_000;
+  if (normalized === "12v") return 12_000;
+  return null;
+}
+
 function hardwareOutputProfileLabel(
   outputProfile: string | null | undefined,
 ): string {
@@ -5061,6 +5089,7 @@ function hardwareCapabilityMetricDetail(
     `rated_vout_mv=${capability.ratedVoutMv ?? "--"}`,
   ];
   if (capability.source === "settings") segments.push("settings fallback");
+  if (capability.source === "firmware") segments.push("firmware fallback");
   return segments.join(" · ");
 }
 
@@ -5070,6 +5099,8 @@ function hardwareCapabilityDetail(
   const suffix =
     capability.source === "settings"
       ? "This is a settings fallback until hardware identity reports the capability fields."
+      : capability.source === "firmware"
+        ? "This is inferred from the active firmware output profile until hardware identity reports the capability fields."
       : capability.source === "unknown"
         ? "Hardware capability fields are still pending."
         : "Advanced-power offsets below stay relative to this rated output.";
@@ -5080,7 +5111,7 @@ function hardwareCapabilityOutputProfileLabel(
   capability: UpsHardwareCapability,
 ): string {
   if (!capability.outputProfile) return "--";
-  return capability.source === "settings"
+  return capability.source === "settings" || capability.source === "firmware"
     ? `${capability.outputProfile} (inferred)`
     : capability.outputProfile;
 }
@@ -5089,6 +5120,7 @@ function hardwareCapabilitySourceLabel(
   source: UpsHardwareCapability["source"],
 ): string {
   if (source === "identity") return "Hardware identity";
+  if (source === "firmware") return "Firmware output profile fallback";
   if (source === "settings") return "Advanced-power settings fallback";
   return "Not reported";
 }
