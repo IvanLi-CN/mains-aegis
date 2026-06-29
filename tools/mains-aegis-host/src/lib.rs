@@ -8055,8 +8055,11 @@ fn line_contains_monitor_status_response(line: &[u8], current_request_id: Option
         };
         frame.get("type").and_then(Value::as_str) == Some("response")
             && frame.get("ok").and_then(Value::as_bool).unwrap_or(false)
-            && (current_request_id.is_some_and(|current| request_id == current)
-                || is_monitor_status_request_id(request_id))
+            && if let Some(current) = current_request_id {
+                request_id == current
+            } else {
+                is_monitor_status_request_id(request_id)
+            }
     })
 }
 
@@ -8915,7 +8918,7 @@ mod tests {
             br#"{"type":"response","ok":true,"request_id":"devd-status-current","result":{}}"#;
         let pushed_status = br#"{"type":"status","status":{"mode":"standby"}}"#;
 
-        assert!(line_contains_monitor_status_response(
+        assert!(!line_contains_monitor_status_response(
             old_response,
             Some("devd-status-current")
         ));

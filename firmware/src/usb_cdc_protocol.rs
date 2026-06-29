@@ -712,6 +712,7 @@ fn json_u8_field(line: &str, key: &str) -> Result<Option<u8>, UsbCdcProtocolErro
     if idx == start {
         return Err(UsbCdcProtocolError::InvalidJson);
     }
+    validate_json_number_terminator(bytes, idx)?;
     line[start..idx]
         .parse::<u8>()
         .map(Some)
@@ -730,6 +731,7 @@ fn json_u16_field(line: &str, key: &str) -> Result<Option<u16>, UsbCdcProtocolEr
     if idx == start {
         return Err(UsbCdcProtocolError::InvalidJson);
     }
+    validate_json_number_terminator(bytes, idx)?;
     line[start..idx]
         .parse::<u16>()
         .map(Some)
@@ -752,10 +754,22 @@ fn json_i16_field(line: &str, key: &str) -> Result<Option<i16>, UsbCdcProtocolEr
     if idx == digits_start {
         return Err(UsbCdcProtocolError::InvalidJson);
     }
+    validate_json_number_terminator(bytes, idx)?;
     line[start..idx]
         .parse::<i16>()
         .map(Some)
         .map_err(|_| UsbCdcProtocolError::InvalidJson)
+}
+
+fn validate_json_number_terminator(bytes: &[u8], idx: usize) -> Result<(), UsbCdcProtocolError> {
+    let mut cursor = idx;
+    while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+        cursor += 1;
+    }
+    match bytes.get(cursor) {
+        None | Some(b',') | Some(b'}') | Some(b']') => Ok(()),
+        _ => Err(UsbCdcProtocolError::InvalidJson),
+    }
 }
 
 fn json_value_offset(line: &str, key: &str) -> Option<usize> {
@@ -895,6 +909,24 @@ mod tests {
                 op: UsbCdcRequest::GetPowerDiag,
             }
         );
+    }
+
+    #[test]
+    fn rejects_malformed_advanced_power_numbers_with_trailing_fraction() {
+        let err = parse_http_advanced_power_request(
+            r#"{"standby_drop_mv":1200,"assist_low_drop_mv":600,"assist_enter_delta_ma":0,"assist_exit_delta_ma":0,"assist_required_samples":2.9,"assist_ramp_step_mv":100,"assist_ramp_interval_ms":200,"rated_enter_delta_ma":0,"rated_exit_delta_ma":0,"vin_drop_threshold_pct":4,"required_samples":2}"#,
+        )
+        .unwrap_err();
+        assert_eq!(err, UsbCdcProtocolError::InvalidJson);
+    }
+
+    #[test]
+    fn rejects_malformed_advanced_power_numbers_with_trailing_garbage() {
+        let err = parse_http_advanced_power_request(
+            r#"{"standby_drop_mv":1200abc,"assist_low_drop_mv":600,"assist_enter_delta_ma":0,"assist_exit_delta_ma":0,"assist_required_samples":2,"assist_ramp_step_mv":100,"assist_ramp_interval_ms":200,"rated_enter_delta_ma":0,"rated_exit_delta_ma":0,"vin_drop_threshold_pct":4,"required_samples":2}"#,
+        )
+        .unwrap_err();
+        assert_eq!(err, UsbCdcProtocolError::InvalidJson);
     }
 
     #[test]
