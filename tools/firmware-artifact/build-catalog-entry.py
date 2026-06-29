@@ -72,7 +72,8 @@ def stage_artifact_file(kind: str, value: str, out: Path, flash_address: int | N
     source = Path(value).resolve()
     dest = out / source.name
     source_hash = sha256(source)
-    shutil.copyfile(source, dest)
+    if source != dest.resolve():
+        shutil.copyfile(source, dest)
     entry = {
         "kind": kind,
         "path": dest.relative_to(out).as_posix(),
