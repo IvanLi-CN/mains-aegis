@@ -233,7 +233,9 @@ impl SceneKind {
     }
 
     fn include_backup(self) -> bool {
-        true
+        match self {
+            Self::AssistPath | Self::BackupOnly => true,
+        }
     }
 }
 
@@ -1731,80 +1733,82 @@ async fn run_scene_inner(
         args.hold_s,
     )
     .await;
-    run_cmd_json_with_sampling(
-        power_disable_command(&args.bench)?,
-        "power_cut_for_backup",
-        &mut actions,
-        args,
-        &collectors,
-        &mut samples,
-        start,
-        started_unix_ms,
-        "transition_backup",
-        scene.target_ma(),
-    )
-    .await?;
-    ensure_source_disconnected_with_sampling(
-        args,
-        context,
-        &mut actions,
-        &collectors,
-        &mut samples,
-        start,
-        started_unix_ms,
-        "backup_cut",
-        "transition_backup",
-        scene.target_ma(),
-    )
-    .await?;
-    collect_for(
-        args,
-        &collectors,
-        &mut samples,
-        start,
-        started_unix_ms,
-        "backup",
-        scene.target_ma(),
-        args.backup_s,
-    )
-    .await;
-    run_cmd_json_with_sampling(
-        power_enable_command(&args.bench, profile)?,
-        "power_restore",
-        &mut actions,
-        args,
-        &collectors,
-        &mut samples,
-        start,
-        started_unix_ms,
-        "transition_restore",
-        scene.target_ma(),
-    )
-    .await?;
-    run_cmd_json_with_sampling(
-        power_port_enable_command(&args.bench, profile)?,
-        "power_port_enable_restore",
-        &mut actions,
-        args,
-        &collectors,
-        &mut samples,
-        start,
-        started_unix_ms,
-        "transition_restore",
-        scene.target_ma(),
-    )
-    .await?;
-    collect_for(
-        args,
-        &collectors,
-        &mut samples,
-        start,
-        started_unix_ms,
-        "restore",
-        scene.target_ma(),
-        args.restore_s,
-    )
-    .await;
+    if scene.include_backup() {
+        run_cmd_json_with_sampling(
+            power_disable_command(&args.bench)?,
+            "power_cut_for_backup",
+            &mut actions,
+            args,
+            &collectors,
+            &mut samples,
+            start,
+            started_unix_ms,
+            "transition_backup",
+            scene.target_ma(),
+        )
+        .await?;
+        ensure_source_disconnected_with_sampling(
+            args,
+            context,
+            &mut actions,
+            &collectors,
+            &mut samples,
+            start,
+            started_unix_ms,
+            "backup_cut",
+            "transition_backup",
+            scene.target_ma(),
+        )
+        .await?;
+        collect_for(
+            args,
+            &collectors,
+            &mut samples,
+            start,
+            started_unix_ms,
+            "backup",
+            scene.target_ma(),
+            args.backup_s,
+        )
+        .await;
+        run_cmd_json_with_sampling(
+            power_enable_command(&args.bench, profile)?,
+            "power_restore",
+            &mut actions,
+            args,
+            &collectors,
+            &mut samples,
+            start,
+            started_unix_ms,
+            "transition_restore",
+            scene.target_ma(),
+        )
+        .await?;
+        run_cmd_json_with_sampling(
+            power_port_enable_command(&args.bench, profile)?,
+            "power_port_enable_restore",
+            &mut actions,
+            args,
+            &collectors,
+            &mut samples,
+            start,
+            started_unix_ms,
+            "transition_restore",
+            scene.target_ma(),
+        )
+        .await?;
+        collect_for(
+            args,
+            &collectors,
+            &mut samples,
+            start,
+            started_unix_ms,
+            "restore",
+            scene.target_ma(),
+            args.restore_s,
+        )
+        .await;
+    }
     run_cmd_json_with_sampling(
         load_disable_command(&args.bench)?,
         "load_disable_after_scene",
@@ -2029,7 +2033,8 @@ fn source_disconnect_state(power: &Value, status: &Value) -> SourceDisconnectSta
         .pointer("/sample/input/vin_vbus_mv")
         .or_else(|| status.pointer("/input/vin_vbus_mv"))
         .and_then(Value::as_i64);
-    let ups_still_live = input_source.as_deref() == Some("dcin")
+    let ups_still_live = mains_present != Some(false)
+        || input_source.as_deref() == Some("dcin")
         || input_vbus_mv.is_some_and(source_voltage_is_live_dcin)
         || vin_vbus_mv.is_some_and(source_voltage_is_live_dcin);
     SourceDisconnectState {
@@ -3800,6 +3805,35 @@ mod tests {
             .contains(&"--real".to_string()));
         assert_eq!(plan.reports[1].scene_type, "backup_only");
         assert_eq!(plan.reports[1].target_ma, 1000);
+        assert_eq!(plan.reports[1].include_backup, true);
+    }
+
+    #[test]
+    fn backup_only_scene_contract_still_requires_backup_transition() {
+        assert!(SceneKind::AssistPath.include_backup());
+        assert!(SceneKind::BackupOnly.include_backup());
+    }
+
+    #[test]
+    fn source_disconnect_gate_requires_explicit_mains_present_false() {
+        let power = json!({});
+        let status = json!({
+            "input": {
+                "mains_present": true,
+                "source": "battery"
+            }
+        });
+        let state = source_disconnect_state(&power, &status);
+        assert!(state.ups_still_live);
+
+        let disconnected_status = json!({
+            "input": {
+                "mains_present": false,
+                "source": "battery"
+            }
+        });
+        let disconnected = source_disconnect_state(&power, &disconnected_status);
+        assert!(!disconnected.ups_still_live);
     }
 
     #[test]
