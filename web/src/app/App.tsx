@@ -969,6 +969,14 @@ function activeRecordTransport(
   return null;
 }
 
+export function deviceSettingsAvailable(record: DeviceRecord): boolean {
+  const activeTransport = activeRecordTransport(record);
+  if (activeTransport === "serial") return Boolean(record.settings);
+  if (activeTransport === "http") return Boolean(record.settings);
+  if (activeTransport === "devd") return Boolean(record.settings);
+  return false;
+}
+
 function preferredRecordTransport(
   record: DeviceRecord,
 ): DeviceChannelTransport {
@@ -3195,11 +3203,9 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   >(null);
   const activeTransport = activeRecordTransport(record);
   const hardwareCapability = resolveUpsHardwareCapability(record);
-  const usbReady = activeTransport === "serial";
-  const lanReady = activeTransport === "http" && Boolean(record.settings);
-  const devdReady = activeTransport === "devd" && Boolean(record.settings);
-  const settingsReady = usbReady || lanReady || devdReady;
-  const transportLabel = lanReady && !usbReady ? "LAN" : "hardware";
+  const settingsReady = deviceSettingsAvailable(record);
+  const transportLabel =
+    activeTransport === "http" ? "LAN" : activeTransport === "devd" ? "devd" : "hardware";
   const wifiValidationMessage = !ssid.trim()
     ? "Save requires an SSID."
     : psk.length < 8
@@ -3331,8 +3337,9 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
           <SlidersHorizontal size={28} />
           <h2>Settings unavailable</h2>
           <p>
-            Refresh this device or connect USB / mains-aegis-devd before
-            changing settings.
+            This connected device does not expose the settings contract yet.
+            Refresh it after upgrading firmware or use a settings-capable
+            transport before changing settings.
           </p>
           <button
             className="primary-button"

@@ -2559,7 +2559,7 @@ function normalizeStoredTarget(
 
 function recordFromSerialProbe(
   target: DeviceTarget,
-  result: ProbeResult,
+  result: Omit<ProbeResult, "settings"> & { settings: DeviceSettings | null },
   protocol: string,
   logs: SerialLogEntry[] = [],
   trace: SerialTraceEntry[] = [],
@@ -3094,15 +3094,15 @@ function defaultDeviceSettings(): DeviceSettings {
 export async function loadUsbProbeSettings(
   hello: Pick<SerialHelloFrame, "capabilities">,
   transport: Pick<WebSerialTransport, "requestSettings">,
-): Promise<DeviceSettings> {
+): Promise<DeviceSettings | null> {
   if (hello.capabilities?.settings !== true) {
-    return defaultDeviceSettings();
+    return null;
   }
   try {
     return await transport.requestSettings();
   } catch (error) {
     if (errorFromSerialFailure(error).code === "unsupported_operation") {
-      return defaultDeviceSettings();
+      return null;
     }
     throw error;
   }
