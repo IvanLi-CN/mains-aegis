@@ -32,16 +32,19 @@ use crate::{
         write_sse_event, BuildInfo,
     },
     net_logic::{
-        build_http_response_head, build_sse_response_head, origin_reflection_allowed,
-        resolve_net_env_config, select_active_dns,
+        build_http_response_head, build_sse_response_head, lan_advanced_power_apply_timeout_ms,
+        origin_reflection_allowed, resolve_net_env_config, select_active_dns,
+        LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS,
     },
     net_types::{
-        DeviceSettingsSnapshot, ManualChargeSettingsSnapshot, NetworkUiSummary, UpsStatusSnapshot,
-        WifiConnectionState, WifiErrorKind, WifiSettingsSnapshot, WifiSnapshot,
+        AdvancedPowerCapabilitiesSnapshot, AdvancedPowerSettingsSnapshot, DeviceSettingsSnapshot,
+        ManualChargeSettingsSnapshot, NetworkUiSummary, UpsStatusSnapshot, WifiConnectionState,
+        WifiErrorKind, WifiSettingsSnapshot, WifiSnapshot,
     },
     usb_cdc_protocol::{
-        parse_http_log_level_request, parse_http_manual_charge_request, parse_http_reset_request,
-        parse_http_wifi_config_request, LogLevel, ManualChargePrefsCommand, WifiConfigSecret,
+        parse_http_advanced_power_request, parse_http_log_level_request,
+        parse_http_manual_charge_request, parse_http_reset_request, parse_http_wifi_config_request,
+        LogLevel, ManualChargePrefsCommand, WifiConfigSecret,
     },
 };
 
@@ -56,10 +59,14 @@ const HTTP_WORKER_COUNT: usize = 3;
 const HTTP_RESPONSE_BODY_CAP: usize = 3072;
 const SSE_FRAME_CAP: usize = 3328;
 const REQUEST_BUF_CAP: usize = 1024;
-const STATUS_PUSH_INTERVAL: Duration = Duration::from_secs(2);
+const STATUS_PUSH_INTERVAL: Duration = Duration::from_millis(500);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const RSSI_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const WIFI_CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const LAN_ADVANCED_POWER_APPLY_TIMEOUT: Duration =
+    Duration::from_millis(lan_advanced_power_apply_timeout_ms());
+const LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL: Duration =
+    Duration::from_millis(LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS);
 
 static STATUS_SSE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static RADIO_CONTROLLER: StaticCell<RadioController<'static>> = StaticCell::new();
@@ -73,6 +80,8 @@ static USB_WIFI_CONFIG: Mutex<RefCell<Option<WifiConfigSecret>>> = Mutex::new(Re
 static DEVICE_SETTINGS: Mutex<RefCell<Option<DeviceSettingsSnapshot>>> =
     Mutex::new(RefCell::new(None));
 static PENDING_LAN_COMMAND: Mutex<RefCell<Option<LanManagementCommand>>> =
+    Mutex::new(RefCell::new(None));
+static LAN_COMMAND_RESULT: Mutex<RefCell<Option<LanCommandResult>>> =
     Mutex::new(RefCell::new(None));
 static WIFI_CONFIG_GENERATION: AtomicU32 = AtomicU32::new(0);
 
@@ -92,7 +101,19 @@ pub enum LanManagementCommand {
     ClearWifi,
     SetLogLevel(LogLevel),
     SetManualCharge(ManualChargePrefsCommand),
+    SetAdvancedPower(AdvancedPowerSettingsSnapshot),
+    ResetAdvancedPower,
     Reset,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LanCommandResult {
+    Ok,
+    AdvancedPowerValidation {
+        code: &'static str,
+        message: &'static str,
+    },
+    AdvancedPowerStorageFailed,
 }
 
 pub fn publish_ups_status(snapshot: UpsStatusSnapshot) {
@@ -126,12 +147,23 @@ pub fn take_pending_lan_command() -> Option<LanManagementCommand> {
     critical_section::with(|cs| PENDING_LAN_COMMAND.borrow_ref_mut(cs).take())
 }
 
+pub fn set_lan_command_result(result: LanCommandResult) {
+    critical_section::with(|cs| {
+        *LAN_COMMAND_RESULT.borrow_ref_mut(cs) = Some(result);
+    });
+}
+
+fn take_lan_command_result() -> Option<LanCommandResult> {
+    critical_section::with(|cs| LAN_COMMAND_RESULT.borrow_ref_mut(cs).take())
+}
+
 fn queue_lan_command(command: LanManagementCommand) -> Result<(), ()> {
     critical_section::with(|cs| {
         let mut pending = PENDING_LAN_COMMAND.borrow_ref_mut(cs);
         if pending.is_some() {
             Err(())
         } else {
+            *LAN_COMMAND_RESULT.borrow_ref_mut(cs) = None;
             *pending = Some(command);
             Ok(())
         }
@@ -199,6 +231,20 @@ pub fn set_manual_charge_settings(target: &'static str, speed: &'static str, tim
             speed,
             timer_h,
         };
+        *DEVICE_SETTINGS.borrow_ref_mut(cs) = Some(settings);
+    });
+}
+
+pub fn set_advanced_power_settings(
+    advanced_power: AdvancedPowerSettingsSnapshot,
+    capabilities: AdvancedPowerCapabilitiesSnapshot,
+) {
+    critical_section::with(|cs| {
+        let mut settings = DEVICE_SETTINGS.borrow_ref(cs).clone().unwrap_or_else(|| {
+            DeviceSettingsSnapshot::defaults_for_rated_vout(capabilities.rated_vout_mv)
+        });
+        settings.advanced_power = advanced_power;
+        settings.advanced_power_capabilities = capabilities;
         *DEVICE_SETTINGS.borrow_ref_mut(cs) = Some(settings);
     });
 }
@@ -801,6 +847,7 @@ async fn handle_http_write(
     origin: Option<&str>,
 ) -> Result<(), embassy_net::tcp::Error> {
     let mut body = String::<HTTP_RESPONSE_BODY_CAP>::new();
+    let mut await_command_result = false;
     let queued = match (method, path) {
         ("POST", "/api/v1/wifi-config") => match parse_http_wifi_config_request(request_body) {
             Ok(secret) => queue_lan_command(LanManagementCommand::SetWifi(secret)),
@@ -831,6 +878,23 @@ async fn handle_http_write(
                 }
             }
         }
+        ("POST", "/api/v1/settings/advanced-power") => {
+            match parse_http_advanced_power_request(request_body) {
+                Ok(settings) => {
+                    await_command_result = true;
+                    queue_lan_command(LanManagementCommand::SetAdvancedPower(settings))
+                }
+                Err(err) => {
+                    write_error_body(&mut body, err.code(), err.message(), false, None);
+                    write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+                    return Ok(());
+                }
+            }
+        }
+        ("POST", "/api/v1/settings/advanced-power/reset") => {
+            await_command_result = true;
+            queue_lan_command(LanManagementCommand::ResetAdvancedPower)
+        }
         ("POST", "/api/v1/reset") => match parse_http_reset_request(request_body) {
             Ok(()) => queue_lan_command(LanManagementCommand::Reset),
             Err(err) => {
@@ -856,6 +920,52 @@ async fn handle_http_write(
         );
         write_http_response(socket, "409 Conflict", body.as_str(), origin).await?;
         return Ok(());
+    }
+
+    if await_command_result {
+        let deadline = embassy_time::Instant::now() + LAN_ADVANCED_POWER_APPLY_TIMEOUT;
+        loop {
+            if let Some(result) = take_lan_command_result() {
+                match result {
+                    LanCommandResult::Ok => break,
+                    LanCommandResult::AdvancedPowerValidation { code, message } => {
+                        write_error_body(&mut body, code, message, false, None);
+                        write_http_response(socket, "400 Bad Request", body.as_str(), origin)
+                            .await?;
+                        return Ok(());
+                    }
+                    LanCommandResult::AdvancedPowerStorageFailed => {
+                        write_error_body(
+                            &mut body,
+                            "advanced_power_write_failed",
+                            "failed to persist advanced power settings",
+                            true,
+                            None,
+                        );
+                        write_http_response(
+                            socket,
+                            "503 Service Unavailable",
+                            body.as_str(),
+                            origin,
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                }
+            }
+            if embassy_time::Instant::now() >= deadline {
+                write_error_body(
+                    &mut body,
+                    "advanced_power_apply_timeout",
+                    "advanced power settings did not apply before timeout",
+                    true,
+                    None,
+                );
+                write_http_response(socket, "504 Gateway Timeout", body.as_str(), origin).await?;
+                return Ok(());
+            }
+            Timer::after(LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL).await;
+        }
     }
 
     body.clear();
@@ -967,6 +1077,11 @@ fn set_wifi_snapshot(snapshot: WifiSnapshot) {
 
 fn current_status_snapshot() -> UpsStatusSnapshot {
     critical_section::with(|cs| *UPS_STATUS.borrow_ref(cs))
+}
+
+#[cfg(test)]
+pub(crate) const fn status_push_interval_millis_for_test() -> u64 {
+    STATUS_PUSH_INTERVAL.as_millis()
 }
 
 fn note_wifi_error(mac: [u8; 6], dns: Option<[u8; 4]>, is_static: bool, error: WifiErrorKind) {

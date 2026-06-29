@@ -1,0 +1,6 @@
+interface:
+  display_name: "Power Path Validation"
+  short_description: "Run and extend UPS power-path validation scenes"
+  default_prompt: "Use $power-validation to run or extend Mains Aegis Power Path Validation safely."
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mains Aegis Power Path Validation - power-validation-rust-four-scenes-url-r7</title>
+  <style>
+    body { margin: 0; padding: 28px; background: #f6f1e8; color: #24211c; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    h1 { margin: 0 0 10px; font-size: 28px; }
+    .subtitle { margin: 0 0 24px; color: #655d50; }
+    .grid { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(560px, 1fr)); }
+    .card { border: 2px solid #c9b99e; border-radius: 18px; padding: 18px; background: #fffaf0; box-shadow: 0 18px 50px rgba(74, 54, 30, .12); }
+    .card.valid { border-color: #78ad73; }
+    .card.invalid { border-color: #cf6b59; }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+    h2 { margin: 0; font-size: 20px; }
+    span { border-radius: 999px; padding: 5px 10px; background: #ece3d4; }
+    dl { display: grid; grid-template-columns: 130px 1fr; gap: 6px 14px; margin: 16px 0; }
+    dt { color: #776d5f; }
+    dd { margin: 0; overflow-wrap: anywhere; }
+    iframe { width: 100%; min-height: 620px; border: 1px solid #d8cbb8; border-radius: 14px; background: white; }
+  </style>
+</head>
+<body>
+  <h1>Mains Aegis Power Path Validation</h1>
+  <p class="subtitle">Suite power-validation-rust-four-scenes-url-r7. Formal evidence uses the selected CLI adapter transports; UPS and LoadLynx use native IPC + USB on the approved bench, while the power-source adapter may use its stable CLI transport. The historical directory name may still contain <code>hil</code>.</p>
+  <main class="grid">
+<section class="card valid">
+  <header>
+    <h2>12v / assist_path</h2>
+    <span>valid_for_signoff</span>
+  </header>
+  <dl>
+    <dt>report</dt><dd><a href="12v-assist_path-3900ma/results.json">12v-assist_path-3900ma</a></dd>
+    <dt>sample rate</dt><dd>4.903 Hz</dd>
+    <dt>max gap</dt><dd>0.281 s</dd>
+    <dt>failures</dt><dd>[]</dd>
+  </dl>
+  <iframe src="12v-assist_path-3900ma/voltage-chart.html" loading="lazy"></iframe>
+</section>
+<section class="card valid">
+  <header>
+    <h2>12v / backup_only</h2>
+    <span>valid_for_signoff</span>
+  </header>
+  <dl>
+    <dt>report</dt><dd><a href="12v-backup_only-1000ma/results.json">12v-backup_only-1000ma</a></dd>
+    <dt>sample rate</dt><dd>4.926 Hz</dd>
+    <dt>max gap</dt><dd>0.231 s</dd>
+    <dt>failures</dt><dd>[]</dd>
+  </dl>
+  <iframe src="12v-backup_only-1000ma/voltage-chart.html" loading="lazy"></iframe>
+</section>
+<section class="card valid">
+  <header>
+    <h2>19v / assist_path</h2>
+    <span>valid_for_signoff</span>
+  </header>
+  <dl>
+    <dt>report</dt><dd><a href="19v-assist_path-3900ma/results.json">19v-assist_path-3900ma</a></dd>
+    <dt>sample rate</dt><dd>4.945 Hz</dd>
+    <dt>max gap</dt><dd>0.215 s</dd>
+    <dt>failures</dt><dd>[]</dd>
+  </dl>
+  <iframe src="19v-assist_path-3900ma/voltage-chart.html" loading="lazy"></iframe>
+</section>
+<section class="card valid">
+  <header>
+    <h2>19v / backup_only</h2>
+    <span>valid_for_signoff</span>
+  </header>
+  <dl>
+    <dt>report</dt><dd><a href="19v-backup_only-1000ma/results.json">19v-backup_only-1000ma</a></dd>
+    <dt>sample rate</dt><dd>4.939 Hz</dd>
+    <dt>max gap</dt><dd>0.24 s</dd>
+    <dt>failures</dt><dd>[]</dd>
+  </dl>
+  <iframe src="19v-backup_only-1000ma/voltage-chart.html" loading="lazy"></iframe>
+</section>
+
+  </main>
+</body>
+</html>

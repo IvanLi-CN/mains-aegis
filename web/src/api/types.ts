@@ -59,6 +59,10 @@ export type Identity = {
     dns_sd: boolean;
     write_controls: boolean;
   };
+  hardware_capabilities?: {
+    output_profile: "12v" | "19v" | string;
+    rated_vout_mv: number;
+  };
 };
 
 export type ChannelState = {
@@ -230,7 +234,92 @@ export type DeviceSettings = {
     speed: "ma_100" | "ma_500" | "ma_1000" | string;
     timer_h: 1 | 2 | 6 | number;
   };
+  advanced_power: {
+    standby_drop_mv: number;
+    assist_low_drop_mv: number;
+    assist_enter_delta_ma: number;
+    assist_exit_delta_ma: number;
+    assist_required_samples: number;
+    assist_ramp_step_mv: number;
+    assist_ramp_interval_ms: number;
+    rated_enter_delta_ma: number;
+    rated_exit_delta_ma: number;
+    vin_drop_threshold_pct: number;
+    required_samples: number;
+  };
+  advanced_power_capabilities: {
+    rated_vout_mv: number;
+    standby_drop_mv: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    assist_low_drop_mv: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    assist_enter_delta_ma: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    assist_exit_delta_ma: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    assist_required_samples: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    assist_ramp_step_mv: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    assist_ramp_interval_ms: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    rated_enter_delta_ma: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    rated_exit_delta_ma: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    vin_drop_threshold_pct: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+    required_samples: {
+      default: number;
+      min: number;
+      max: number;
+      step: number;
+    };
+  };
 };
+
+export type AdvancedPowerSettings = DeviceSettings["advanced_power"];
+export type AdvancedPowerCapabilities = DeviceSettings["advanced_power_capabilities"];
 
 export type DeviceRecord = {
   target: DeviceTarget;

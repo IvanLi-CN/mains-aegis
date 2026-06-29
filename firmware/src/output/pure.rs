@@ -42,9 +42,17 @@ const DCIN_ADAPTIVE_STEP_DOWN_ICHG_MA: u16 = 200;
 const DCIN_ADAPTIVE_RAMP_HOLD_MS: u64 = 3_000;
 const DCIN_ADAPTIVE_RECOVERY_HOLD_MS: u64 = 10_000;
 const DCIN_ADAPTIVE_COOLDOWN_MS: u64 = 30_000;
-const DCIN_ADAPTIVE_VIN_DROP_PCT: u16 = 4;
+const DCIN_BASELINE_RESTORE_HOLD_MS: u64 = 20_000;
 const DCIN_ADAPTIVE_VIN_DROP_STREAK_LIMIT: u8 = 2;
 pub(super) const DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA: i32 = 100;
+pub(super) const ASSIST_RATED_VIN_DROP_RECOVER_DIVISOR: u16 = 2;
+// Require DCIN current to be effectively at the 3A class source ceiling before
+// allowing assist_low online takeover on 12V input.
+const ASSIST_LOW_DCIN_ENTER_IIN_THRESHOLD_MA: i32 =
+    CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA as i32 - 50;
+pub(super) const ASSIST_LOW_STANDBY_ENTER_MARGIN_MV: u16 = 40;
+pub(super) const ASSIST_LOW_STANDBY_EXIT_MARGIN_MV: u16 = 200;
+const ASSIST_RATED_LOW_TARGET_ENTER_MARGIN_MV: u16 = 60;
 const FAN_RPM_SAMPLE_WINDOW_MS: u64 = 1_200;
 const FAN_RPM_MAX_SAMPLE_WINDOW_MS: u64 = 2_000;
 const FAN_RPM_MIN_SAMPLE_REVS: u32 = 2;
@@ -71,14 +79,20 @@ pub(super) fn detail_input_source(
     usb_pd_attached: bool,
     vbus_adc_mv: Option<u16>,
     vac1_adc_mv: Option<u16>,
+    vac2_adc_mv: Option<u16>,
 ) -> Option<DashboardInputSource> {
     let dc_selected = ac2_present
-        && vbus_adc_mv.is_some_and(|vbus_mv| {
+        && (vac2_adc_mv.is_some_and(|vac2_mv| {
+            vac2_mv >= 7_000
+                && vac1_adc_mv
+                    .map(|vac1_mv| vac2_mv > vac1_mv.saturating_add(1_000))
+                    .unwrap_or(true)
+        }) || vbus_adc_mv.is_some_and(|vbus_mv| {
             vbus_mv >= 7_000
                 && vac1_adc_mv
                     .map(|vac1_mv| vbus_mv > vac1_mv.saturating_add(1_000))
                     .unwrap_or(true)
-        });
+        }));
 
     if dc_selected || (ac2_present && !ac1_present && !usb_pd_attached) {
         Some(DashboardInputSource::DcIn)
@@ -913,21 +927,48 @@ pub(super) struct DcinInputPressureTracker {
     pub(super) cooldown_until_ms: Option<u64>,
     pub(super) last_tps_total_iout_sample_seq: Option<u32>,
     pub(super) last_tps_total_iout_over_limit: Option<bool>,
+    pub(super) dcin_absent_since_ms: Option<u64>,
 }
 
 impl DcinInputPressureTracker {
     pub(super) fn reset(&mut self) {
         *self = Self::default();
     }
+
+    pub(super) fn has_recent_dcin_loss_for_restore(&self) -> bool {
+        self.dcin_absent_since_ms.is_some()
+    }
+
+    pub(super) fn should_preserve_for_ac2_restore(&self, runtime_mode: UpsMode) -> bool {
+        self.has_recent_dcin_loss_for_restore() || matches!(runtime_mode, UpsMode::Backup)
+    }
+
+    pub(super) fn reset_for_online_restore(&mut self) {
+        self.state = DcinInputPressureState::Inactive;
+        self.reason = DcinInputPressureReason::None;
+        self.trigger_reason = DcinInputPressureReason::None;
+        self.limit_reason = DcinChargeLimitReason::None;
+        self.adaptive_cap_ichg_ma = None;
+        self.pressure_score_pct = 0;
+        self.vin_drop_streak = 0;
+        self.last_pressure_at_ms = None;
+        self.last_ramp_at_ms = None;
+        self.cooldown_until_ms = None;
+        self.last_tps_total_iout_sample_seq = None;
+        self.last_tps_total_iout_over_limit = None;
+        self.dcin_absent_since_ms = None;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct DcinInputPressureInput {
     pub(super) input_source: Option<DashboardInputSource>,
+    pub(super) dcin_present: bool,
     pub(super) requested_target_ichg_ma: Option<u16>,
     pub(super) allow_charge: bool,
     pub(super) vin_vbus_mv: Option<u16>,
     pub(super) vin_iin_ma: Option<i32>,
+    pub(super) input_vbus_mv: Option<u16>,
     pub(super) tps_total_iout_ma: Option<i32>,
     pub(super) tps_total_iout_fresh: bool,
     pub(super) tps_total_iout_sample_seq: Option<u32>,
@@ -975,10 +1016,266 @@ impl DcinInputPressureDecision {
             limit_reason: DcinChargeLimitReason::None,
         }
     }
+
+    pub(super) fn inactive_with_tracker(
+        requested_target_ichg_ma: Option<u16>,
+        allow_charge: bool,
+        tracker: &DcinInputPressureTracker,
+    ) -> Self {
+        Self {
+            pressure_state: DcinInputPressureState::Inactive,
+            pressure_reason: DcinInputPressureReason::None,
+            trigger_reason: DcinInputPressureReason::None,
+            pressure_score_pct: 0,
+            vin_baseline_mv: tracker.vin_baseline_mv,
+            vin_drop_mv: tracker.vin_drop_mv,
+            tps_total_iout_ma: None,
+            tps_limit_threshold_ma: None,
+            adaptive_cap_ichg_ma: tracker.adaptive_cap_ichg_ma,
+            effective_target_ichg_ma: if allow_charge {
+                requested_target_ichg_ma
+            } else {
+                None
+            },
+            allow_charge,
+            limit_active: false,
+            limit_reason: DcinChargeLimitReason::None,
+        }
+    }
 }
 
-fn dcin_vin_drop_threshold_mv(vin_baseline_mv: u16) -> u16 {
-    let threshold = u32::from(vin_baseline_mv) * u32::from(DCIN_ADAPTIVE_VIN_DROP_PCT) / 100;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum AssistPowerStage {
+    #[default]
+    Standby,
+    AssistLow,
+    AssistRated,
+    Backup,
+}
+
+impl AssistPowerStage {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Standby => "standby",
+            Self::AssistLow => "assist_low",
+            Self::AssistRated => "assist_rated",
+            Self::Backup => "backup",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct AssistPowerStageTracker {
+    pub(super) stage: AssistPowerStage,
+    assist_enter_streak: u8,
+    assist_exit_streak: u8,
+    promote_streak: u8,
+    recover_streak: u8,
+    last_tps_total_iout_sample_seq: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct AssistPowerStageInput {
+    pub(super) mains_present: Option<bool>,
+    pub(super) input_source: Option<DashboardInputSource>,
+    pub(super) dcin_assist_allowed: bool,
+    pub(super) rated_vout_mv: u16,
+    pub(super) standby_target_vout_mv: u16,
+    pub(super) current_assist_target_vout_mv: u16,
+    pub(super) assist_low_target_vout_mv: u16,
+    pub(super) vin_baseline_mv: Option<u16>,
+    pub(super) vin_drop_mv: Option<u16>,
+    pub(super) vin_vbus_mv: Option<u16>,
+    pub(super) vin_iin_ma: Option<i32>,
+    pub(super) tps_total_iout_ma: Option<i32>,
+    pub(super) tps_total_iout_fresh: bool,
+    pub(super) tps_total_iout_sample_seq: Option<u32>,
+    pub(super) assist_enter_iout_ma: i32,
+    pub(super) assist_exit_iout_ma: i32,
+    pub(super) assist_required_samples: u8,
+    pub(super) rated_enter_iout_ma: i32,
+    pub(super) rated_exit_iout_ma: i32,
+    pub(super) vin_drop_threshold_pct: u16,
+    pub(super) required_samples: u8,
+}
+
+impl AssistPowerStageTracker {
+    pub(super) fn with_stage(stage: AssistPowerStage) -> Self {
+        let mut tracker = Self::default();
+        tracker.stage = stage;
+        tracker
+    }
+
+    pub(super) fn reset_for_online(&mut self) {
+        self.assist_enter_streak = 0;
+        self.assist_exit_streak = 0;
+        self.promote_streak = 0;
+        self.recover_streak = 0;
+    }
+}
+
+pub(super) fn assist_power_stage_step(
+    tracker: &mut AssistPowerStageTracker,
+    input: AssistPowerStageInput,
+) -> AssistPowerStage {
+    match input.mains_present {
+        Some(false) => {
+            tracker.stage = AssistPowerStage::Backup;
+            tracker.reset_for_online();
+            if input.tps_total_iout_fresh {
+                tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+            }
+            return tracker.stage;
+        }
+        Some(true) => {}
+        None => return tracker.stage,
+    }
+
+    if tracker.stage == AssistPowerStage::Backup {
+        tracker.stage = AssistPowerStage::Standby;
+        tracker.reset_for_online();
+    }
+
+    if !input.dcin_assist_allowed {
+        tracker.stage = AssistPowerStage::Standby;
+        tracker.reset_for_online();
+        if input.tps_total_iout_fresh {
+            tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+        }
+        return tracker.stage;
+    }
+
+    let sample_is_new = input.tps_total_iout_fresh
+        && input
+            .tps_total_iout_sample_seq
+            .is_some_and(|sample_seq| tracker.last_tps_total_iout_sample_seq != Some(sample_seq));
+    if !sample_is_new {
+        return tracker.stage;
+    }
+    tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+
+    let assist_low_vin_enter_mv = input
+        .standby_target_vout_mv
+        .saturating_add(ASSIST_LOW_STANDBY_ENTER_MARGIN_MV);
+    let assist_low_vin_exit_mv = input
+        .standby_target_vout_mv
+        .saturating_add(ASSIST_LOW_STANDBY_EXIT_MARGIN_MV);
+
+    let assist_low_meaningful_tps_iout_ma = input
+        .assist_enter_iout_ma
+        .max(DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA * 2);
+    let assist_source_stressed = matches!(
+        (input.vin_vbus_mv, input.vin_iin_ma),
+        (Some(vin_vbus_mv), Some(vin_iin_ma))
+            if vin_vbus_mv <= assist_low_vin_enter_mv
+                || vin_iin_ma >= ASSIST_LOW_DCIN_ENTER_IIN_THRESHOLD_MA
+    );
+    let assist_gate_ready = matches!(input.tps_total_iout_ma, Some(tps_total_iout_ma)
+        if assist_source_stressed
+            && tps_total_iout_ma >= assist_low_meaningful_tps_iout_ma);
+    let assist_gate_recovered = matches!(
+        (input.vin_vbus_mv, input.tps_total_iout_ma),
+        (Some(vin_vbus_mv), Some(tps_total_iout_ma))
+            if vin_vbus_mv >= assist_low_vin_exit_mv
+                && tps_total_iout_ma <= input.assist_exit_iout_ma
+    );
+
+    let vin_drop_threshold_mv = input
+        .vin_baseline_mv
+        .map(|baseline_mv| dcin_vin_drop_threshold_mv(baseline_mv, input.vin_drop_threshold_pct));
+    let vin_drop_recover_mv =
+        vin_drop_threshold_mv.map(|threshold| threshold / ASSIST_RATED_VIN_DROP_RECOVER_DIVISOR);
+    let assist_low_ramp_ready =
+        input.current_assist_target_vout_mv >= input.assist_low_target_vout_mv;
+    let assist_low_takeover_pinned = matches!(
+        input.vin_vbus_mv,
+        Some(vin_vbus_mv)
+            if vin_vbus_mv
+                <= input
+                    .assist_low_target_vout_mv
+                    .saturating_add(ASSIST_RATED_LOW_TARGET_ENTER_MARGIN_MV)
+    );
+    let promote_ready = matches!(
+        (
+            input.vin_drop_mv,
+            vin_drop_threshold_mv,
+            input.tps_total_iout_ma
+        ),
+        (Some(vin_drop_mv), Some(threshold_mv), Some(tps_total_iout_ma))
+            if vin_drop_mv > threshold_mv && tps_total_iout_ma >= input.rated_enter_iout_ma
+    ) && assist_low_ramp_ready
+        && assist_low_takeover_pinned;
+    let recover_ready = matches!(
+        (
+            input.vin_drop_mv,
+            vin_drop_recover_mv,
+            input.tps_total_iout_ma
+        ),
+        (Some(vin_drop_mv), Some(recover_mv), Some(tps_total_iout_ma))
+            if vin_drop_mv <= recover_mv && tps_total_iout_ma <= input.rated_exit_iout_ma
+    );
+
+    match tracker.stage {
+        AssistPowerStage::Standby => {
+            if assist_gate_ready {
+                tracker.assist_enter_streak = tracker.assist_enter_streak.saturating_add(1);
+                tracker.assist_exit_streak = 0;
+                if tracker.assist_enter_streak >= input.assist_required_samples {
+                    tracker.stage = AssistPowerStage::AssistLow;
+                    tracker.assist_enter_streak = 0;
+                }
+            } else {
+                tracker.assist_enter_streak = 0;
+                tracker.assist_exit_streak = 0;
+                tracker.promote_streak = 0;
+                tracker.recover_streak = 0;
+            }
+        }
+        AssistPowerStage::AssistLow => {
+            if assist_gate_recovered {
+                tracker.assist_exit_streak = tracker.assist_exit_streak.saturating_add(1);
+                tracker.assist_enter_streak = 0;
+                tracker.promote_streak = 0;
+                tracker.recover_streak = 0;
+                if tracker.assist_exit_streak >= input.assist_required_samples {
+                    tracker.stage = AssistPowerStage::Standby;
+                    tracker.reset_for_online();
+                }
+            } else {
+                tracker.assist_exit_streak = 0;
+                if promote_ready {
+                    tracker.promote_streak = tracker.promote_streak.saturating_add(1);
+                    tracker.recover_streak = 0;
+                    if tracker.promote_streak >= input.required_samples {
+                        tracker.stage = AssistPowerStage::AssistRated;
+                        tracker.promote_streak = 0;
+                    }
+                } else {
+                    tracker.promote_streak = 0;
+                    tracker.recover_streak = 0;
+                }
+            }
+        }
+        AssistPowerStage::AssistRated => {
+            if recover_ready {
+                tracker.recover_streak = tracker.recover_streak.saturating_add(1);
+                tracker.promote_streak = 0;
+                if tracker.recover_streak >= input.required_samples {
+                    tracker.stage = AssistPowerStage::AssistLow;
+                    tracker.reset_for_online();
+                }
+            } else {
+                tracker.recover_streak = 0;
+            }
+        }
+        AssistPowerStage::Backup => {}
+    }
+
+    tracker.stage
+}
+
+fn dcin_vin_drop_threshold_mv(vin_baseline_mv: u16, vin_drop_threshold_pct: u16) -> u16 {
+    let threshold = u32::from(vin_baseline_mv) * u32::from(vin_drop_threshold_pct) / 100;
     threshold.max(1) as u16
 }
 
@@ -986,6 +1283,7 @@ fn dcin_pressure_score_pct(
     state: DcinInputPressureState,
     drop_mv: Option<u16>,
     vin_baseline_mv: Option<u16>,
+    vin_drop_threshold_pct: u16,
 ) -> u8 {
     match state {
         DcinInputPressureState::Inactive => 0,
@@ -1000,7 +1298,10 @@ fn dcin_pressure_score_pct(
                 };
             };
             let drop_mv = u32::from(drop_mv.unwrap_or_default());
-            let threshold_mv = u32::from(dcin_vin_drop_threshold_mv(vin_baseline_mv));
+            let threshold_mv = u32::from(dcin_vin_drop_threshold_mv(
+                vin_baseline_mv,
+                vin_drop_threshold_pct,
+            ));
             let normalized = if threshold_mv == 0 {
                 0
             } else {
@@ -1035,23 +1336,92 @@ pub(super) fn dcin_charge_detail_status_text(
     }
 }
 
+fn dcin_vindpm_is_actionable(
+    input: DcinInputPressureInput,
+    vin_baseline_mv: Option<u16>,
+    vin_drop_threshold_pct: u16,
+) -> bool {
+    if !input.vindpm {
+        return false;
+    }
+
+    if input.poorsrc || input.iindpm {
+        return true;
+    }
+
+    if input
+        .tps_total_iout_ma
+        .is_some_and(|total_iout_ma| total_iout_ma > DCIN_TPS_OUTPUT_STOP_THRESHOLD_MA)
+    {
+        return true;
+    }
+
+    if input
+        .vin_iin_ma
+        .is_some_and(|vin_iin_ma| vin_iin_ma >= CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA)
+    {
+        return true;
+    }
+
+    if let (Some(vin_baseline_mv), Some(vin_vbus_mv)) = (vin_baseline_mv, input.vin_vbus_mv) {
+        let vin_drop_mv = vin_baseline_mv.saturating_sub(vin_vbus_mv);
+        let threshold_mv = dcin_vin_drop_threshold_mv(vin_baseline_mv, vin_drop_threshold_pct);
+        if vin_drop_mv > threshold_mv {
+            return true;
+        }
+    }
+
+    // In the real dual-input coexistence case the charger-side VBUS can stay near 5V
+    // while VAC2/DCIN is the actual 12V source. Treat bare VINDPM in that shape as
+    // observational noise for DCIN pressure, not as a hard stop.
+    if input
+        .input_vbus_mv
+        .is_some_and(|input_vbus_mv| input_vbus_mv < 7_000)
+        && input
+            .vin_vbus_mv
+            .is_some_and(|vin_vbus_mv| vin_vbus_mv >= 7_000)
+    {
+        return false;
+    }
+
+    true
+}
+
 pub(super) fn dcin_input_pressure_step(
     tracker: &mut DcinInputPressureTracker,
     now_ms: u64,
     input: DcinInputPressureInput,
+    vin_drop_threshold_pct: u16,
 ) -> DcinInputPressureDecision {
-    if !matches!(input.input_source, Some(DashboardInputSource::DcIn)) {
-        tracker.reset();
-        return DcinInputPressureDecision::inactive(
+    if !input.dcin_present {
+        tracker.dcin_absent_since_ms.get_or_insert(now_ms);
+        if tracker.dcin_absent_since_ms.is_some_and(|absent_since_ms| {
+            now_ms.saturating_sub(absent_since_ms) >= DCIN_BASELINE_RESTORE_HOLD_MS
+        }) {
+            tracker.reset();
+        }
+        return DcinInputPressureDecision::inactive_with_tracker(
             input.requested_target_ichg_ma,
             input.allow_charge,
+            tracker,
         );
     }
 
+    tracker.dcin_absent_since_ms = None;
+
     if let Some(vin_vbus_mv) = input.vin_vbus_mv {
-        if tracker.vin_baseline_mv.is_none() || input.requested_target_ichg_ma.is_none() {
-            tracker.vin_baseline_mv = Some(vin_vbus_mv);
+        match tracker.vin_baseline_mv {
+            None => tracker.vin_baseline_mv = Some(vin_vbus_mv),
+            Some(vin_baseline_mv) if vin_vbus_mv >= vin_baseline_mv => {
+                tracker.vin_baseline_mv = Some(vin_vbus_mv);
+            }
+            Some(_) => {}
         }
+        tracker.vin_drop_mv = tracker
+            .vin_baseline_mv
+            .map(|vin_baseline_mv| vin_baseline_mv.saturating_sub(vin_vbus_mv));
+    } else {
+        tracker.vin_drop_mv = None;
     }
 
     if input.requested_target_ichg_ma.is_none() || !input.allow_charge {
@@ -1059,12 +1429,16 @@ pub(super) fn dcin_input_pressure_step(
             tracker.adaptive_cap_ichg_ma = None;
             tracker.last_ramp_at_ms = None;
         }
-        tracker.pressure_score_pct =
-            dcin_pressure_score_pct(tracker.state, tracker.vin_drop_mv, tracker.vin_baseline_mv);
+        tracker.pressure_score_pct = dcin_pressure_score_pct(
+            DcinInputPressureState::Inactive,
+            tracker.vin_drop_mv,
+            tracker.vin_baseline_mv,
+            vin_drop_threshold_pct,
+        );
         return DcinInputPressureDecision {
-            pressure_state: tracker.state,
-            pressure_reason: tracker.reason,
-            trigger_reason: tracker.trigger_reason,
+            pressure_state: DcinInputPressureState::Inactive,
+            pressure_reason: DcinInputPressureReason::None,
+            trigger_reason: DcinInputPressureReason::None,
             pressure_score_pct: tracker.pressure_score_pct,
             vin_baseline_mv: tracker.vin_baseline_mv,
             vin_drop_mv: tracker.vin_drop_mv,
@@ -1136,6 +1510,8 @@ pub(super) fn dcin_input_pressure_step(
         tracker.last_pressure_at_ms = Some(now_ms);
     }
 
+    let vindpm_actionable =
+        dcin_vindpm_is_actionable(input, tracker.vin_baseline_mv, vin_drop_threshold_pct);
     let mut hard_reason = if tps_sample_is_new
         && input
             .tps_total_iout_ma
@@ -1144,7 +1520,7 @@ pub(super) fn dcin_input_pressure_step(
         Some(DcinInputPressureReason::TpsOutputCurrent)
     } else if input.poorsrc {
         Some(DcinInputPressureReason::Poorsrc)
-    } else if input.vindpm {
+    } else if vindpm_actionable {
         Some(DcinInputPressureReason::Vindpm)
     } else if input.iindpm {
         Some(DcinInputPressureReason::Iindpm)
@@ -1157,7 +1533,7 @@ pub(super) fn dcin_input_pressure_step(
             (tracker.vin_baseline_mv, input.vin_vbus_mv)
         {
             let vin_drop_mv = vin_baseline_mv.saturating_sub(vin_vbus_mv);
-            let threshold_mv = dcin_vin_drop_threshold_mv(vin_baseline_mv);
+            let threshold_mv = dcin_vin_drop_threshold_mv(vin_baseline_mv, vin_drop_threshold_pct);
             if vin_drop_mv > threshold_mv {
                 tracker.vin_drop_streak = tracker.vin_drop_streak.saturating_add(1);
                 tracker.vin_drop_mv = Some(vin_drop_mv);
@@ -1324,8 +1700,12 @@ pub(super) fn dcin_input_pressure_step(
     } else {
         DcinChargeLimitReason::None
     };
-    tracker.pressure_score_pct =
-        dcin_pressure_score_pct(tracker.state, tracker.vin_drop_mv, tracker.vin_baseline_mv);
+    tracker.pressure_score_pct = dcin_pressure_score_pct(
+        tracker.state,
+        tracker.vin_drop_mv,
+        tracker.vin_baseline_mv,
+        vin_drop_threshold_pct,
+    );
 
     let _ = input.vin_iin_ma;
 
@@ -2177,6 +2557,16 @@ impl defmt::Format for TelemetryBool {
 mod tests {
     use super::*;
 
+    const TEST_VIN_DROP_THRESHOLD_PCT: u16 = 4;
+
+    fn dcin_input_pressure_step(
+        tracker: &mut DcinInputPressureTracker,
+        now_ms: u64,
+        input: DcinInputPressureInput,
+    ) -> DcinInputPressureDecision {
+        super::dcin_input_pressure_step(tracker, now_ms, input, TEST_VIN_DROP_THRESHOLD_PCT)
+    }
+
     #[test]
     fn normalize_input_sample_accepts_stable_positive_input() {
         let sample = normalize_charger_input_power_sample(true, true, Some(20_000), Some(1_500));
@@ -2228,19 +2618,27 @@ mod tests {
     #[test]
     fn detail_input_source_prefers_explicit_usb_and_dc_routes() {
         assert_eq!(
-            detail_input_source(true, true, false, false, Some(5_000), Some(5_000)),
+            detail_input_source(true, true, false, false, Some(5_000), Some(5_000), None),
             Some(DashboardInputSource::UsbC)
         );
         assert_eq!(
-            detail_input_source(true, false, true, false, Some(12_000), None),
+            detail_input_source(true, false, true, false, Some(12_000), None, Some(12_000)),
             Some(DashboardInputSource::DcIn)
         );
         assert_eq!(
-            detail_input_source(true, true, true, false, Some(5_000), Some(5_000)),
+            detail_input_source(
+                true,
+                true,
+                true,
+                false,
+                Some(5_000),
+                Some(5_000),
+                Some(5_000)
+            ),
             Some(DashboardInputSource::Auto)
         );
         assert_eq!(
-            detail_input_source(false, false, false, false, None, None),
+            detail_input_source(false, false, false, false, None, None, None),
             None
         );
     }
@@ -2248,7 +2646,7 @@ mod tests {
     #[test]
     fn detail_input_source_keeps_usbc_route_while_pd_session_is_attached() {
         assert_eq!(
-            detail_input_source(false, false, false, true, None, None),
+            detail_input_source(false, false, false, true, None, None, None),
             Some(DashboardInputSource::UsbC)
         );
     }
@@ -2256,7 +2654,31 @@ mod tests {
     #[test]
     fn detail_input_source_prefers_dc_when_bq_vbus_tracks_ac2_not_usb_vac1() {
         assert_eq!(
-            detail_input_source(true, true, true, true, Some(12_240), Some(5_100)),
+            detail_input_source(
+                true,
+                true,
+                true,
+                true,
+                Some(12_240),
+                Some(5_100),
+                Some(12_250),
+            ),
+            Some(DashboardInputSource::DcIn)
+        );
+    }
+
+    #[test]
+    fn detail_input_source_prefers_dc_when_vac2_is_12v_and_usb_vbus_stays_at_5v() {
+        assert_eq!(
+            detail_input_source(
+                true,
+                true,
+                true,
+                true,
+                Some(5_108),
+                Some(5_099),
+                Some(12_107),
+            ),
             Some(DashboardInputSource::DcIn)
         );
     }
@@ -2935,10 +3357,12 @@ mod tests {
     ) -> DcinInputPressureInput {
         DcinInputPressureInput {
             input_source: Some(DashboardInputSource::DcIn),
+            dcin_present: true,
             requested_target_ichg_ma,
             allow_charge: true,
             vin_vbus_mv,
             vin_iin_ma: Some(1_200),
+            input_vbus_mv: Some(12_000),
             tps_total_iout_ma: Some(0),
             tps_total_iout_fresh: true,
             tps_total_iout_sample_seq: Some(1),
@@ -2967,6 +3391,264 @@ mod tests {
             dcin_input_pressure_step(&mut tracker, 3_000, dcin_input(Some(500), Some(19_400)));
         assert_eq!(ramped.effective_target_ichg_ma, Some(200));
         assert!(ramped.limit_active);
+    }
+
+    #[test]
+    fn dcin_pressure_runs_when_dcin_present_even_if_input_source_is_usb() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let initial = dcin_input_pressure_step(
+            &mut tracker,
+            0,
+            DcinInputPressureInput {
+                input_source: Some(DashboardInputSource::UsbC),
+                ..dcin_input(Some(500), Some(19_400))
+            },
+        );
+        assert_eq!(initial.effective_target_ichg_ma, Some(100));
+        assert_eq!(initial.pressure_state, DcinInputPressureState::Headroom);
+
+        let pressure = dcin_input_pressure_step(
+            &mut tracker,
+            3_100,
+            DcinInputPressureInput {
+                input_source: Some(DashboardInputSource::Auto),
+                vindpm: true,
+                ..dcin_input(Some(500), Some(18_600))
+            },
+        );
+        assert_eq!(pressure.pressure_state, DcinInputPressureState::Cooldown);
+        assert_eq!(pressure.pressure_reason, DcinInputPressureReason::Vindpm);
+        assert_eq!(pressure.trigger_reason, DcinInputPressureReason::Vindpm);
+        assert_eq!(
+            pressure.limit_reason,
+            DcinChargeLimitReason::CooldownRetryWait
+        );
+        assert_eq!(pressure.vin_baseline_mv, Some(19_400));
+    }
+
+    #[test]
+    fn dcin_pressure_ignores_bare_vindpm_when_only_usb_vbus_is_low_and_dcin_is_idle() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let _ = dcin_input_pressure_step(&mut tracker, 0, dcin_input(Some(500), Some(12_040)));
+        let pressure = dcin_input_pressure_step(
+            &mut tracker,
+            100,
+            DcinInputPressureInput {
+                input_source: Some(DashboardInputSource::DcIn),
+                vin_vbus_mv: Some(12_032),
+                vin_iin_ma: Some(28),
+                input_vbus_mv: Some(5_109),
+                tps_total_iout_ma: Some(36),
+                vindpm: true,
+                ..dcin_input(Some(500), Some(12_032))
+            },
+        );
+
+        assert_ne!(pressure.pressure_reason, DcinInputPressureReason::Vindpm);
+        assert_ne!(
+            pressure.limit_reason,
+            DcinChargeLimitReason::CooldownRetryWait
+        );
+        assert!(pressure.allow_charge);
+    }
+
+    #[test]
+    fn dcin_pressure_keeps_higher_baseline_when_charge_policy_is_idle() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let seeded = dcin_input_pressure_step(&mut tracker, 0, dcin_input(Some(500), Some(12_000)));
+        assert_eq!(seeded.vin_baseline_mv, Some(12_000));
+        assert_eq!(seeded.vin_drop_mv, Some(0));
+
+        let idle = dcin_input_pressure_step(
+            &mut tracker,
+            100,
+            DcinInputPressureInput {
+                requested_target_ichg_ma: None,
+                allow_charge: false,
+                ..dcin_input(None, Some(11_200))
+            },
+        );
+        assert_eq!(idle.pressure_state, DcinInputPressureState::Inactive);
+        assert_eq!(idle.vin_baseline_mv, Some(12_000));
+        assert_eq!(idle.vin_drop_mv, Some(800));
+    }
+
+    #[test]
+    fn dcin_pressure_preserves_recent_baseline_across_short_dcin_loss_for_restore() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let seeded = dcin_input_pressure_step(&mut tracker, 0, dcin_input(Some(500), Some(12_000)));
+        assert_eq!(seeded.vin_baseline_mv, Some(12_000));
+        assert_eq!(seeded.vin_drop_mv, Some(0));
+
+        let lost = dcin_input_pressure_step(
+            &mut tracker,
+            5_000,
+            DcinInputPressureInput {
+                dcin_present: false,
+                requested_target_ichg_ma: None,
+                allow_charge: false,
+                vin_vbus_mv: Some(0),
+                vin_iin_ma: Some(0),
+                input_vbus_mv: Some(5_100),
+                tps_total_iout_ma: Some(0),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
+                poorsrc: false,
+                vindpm: false,
+                iindpm: false,
+                input_source: Some(DashboardInputSource::DcIn),
+            },
+        );
+        assert_eq!(lost.pressure_state, DcinInputPressureState::Inactive);
+        assert_eq!(lost.vin_baseline_mv, Some(12_000));
+        assert_eq!(lost.vin_drop_mv, Some(0));
+
+        let restored = dcin_input_pressure_step(
+            &mut tracker,
+            8_000,
+            DcinInputPressureInput {
+                requested_target_ichg_ma: None,
+                allow_charge: false,
+                ..dcin_input(None, Some(10_900))
+            },
+        );
+        assert_eq!(restored.pressure_state, DcinInputPressureState::Inactive);
+        assert_eq!(restored.vin_baseline_mv, Some(12_000));
+        assert_eq!(restored.vin_drop_mv, Some(1_100));
+    }
+
+    #[test]
+    fn dcin_pressure_clears_stale_baseline_after_long_dcin_loss() {
+        let mut tracker = DcinInputPressureTracker::default();
+
+        let seeded = dcin_input_pressure_step(&mut tracker, 0, dcin_input(Some(500), Some(12_000)));
+        assert_eq!(seeded.vin_baseline_mv, Some(12_000));
+
+        let first_absent = dcin_input_pressure_step(
+            &mut tracker,
+            1_000,
+            DcinInputPressureInput {
+                dcin_present: false,
+                requested_target_ichg_ma: None,
+                allow_charge: false,
+                vin_vbus_mv: Some(0),
+                vin_iin_ma: Some(0),
+                input_vbus_mv: Some(5_100),
+                tps_total_iout_ma: Some(0),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(2),
+                poorsrc: false,
+                vindpm: false,
+                iindpm: false,
+                input_source: Some(DashboardInputSource::DcIn),
+            },
+        );
+        assert_eq!(first_absent.vin_baseline_mv, Some(12_000));
+
+        let dropped = dcin_input_pressure_step(
+            &mut tracker,
+            1_000 + DCIN_BASELINE_RESTORE_HOLD_MS + 1,
+            DcinInputPressureInput {
+                dcin_present: false,
+                requested_target_ichg_ma: None,
+                allow_charge: false,
+                vin_vbus_mv: Some(0),
+                vin_iin_ma: Some(0),
+                input_vbus_mv: Some(5_100),
+                tps_total_iout_ma: Some(0),
+                tps_total_iout_fresh: true,
+                tps_total_iout_sample_seq: Some(3),
+                poorsrc: false,
+                vindpm: false,
+                iindpm: false,
+                input_source: Some(DashboardInputSource::DcIn),
+            },
+        );
+        assert_eq!(dropped.pressure_state, DcinInputPressureState::Inactive);
+        assert_eq!(dropped.vin_baseline_mv, None);
+        assert_eq!(dropped.vin_drop_mv, None);
+
+        let reappeared = dcin_input_pressure_step(
+            &mut tracker,
+            1_000 + DCIN_BASELINE_RESTORE_HOLD_MS + 2,
+            dcin_input(Some(500), Some(10_900)),
+        );
+        assert_eq!(reappeared.vin_baseline_mv, Some(10_900));
+        assert_eq!(reappeared.vin_drop_mv, Some(0));
+    }
+
+    #[test]
+    fn dcin_pressure_online_restore_reset_preserves_baseline_and_drop() {
+        let mut tracker = DcinInputPressureTracker {
+            state: DcinInputPressureState::Cooldown,
+            reason: DcinInputPressureReason::TpsOutputCurrent,
+            trigger_reason: DcinInputPressureReason::TpsOutputCurrent,
+            limit_reason: DcinChargeLimitReason::CooldownRetryWait,
+            adaptive_cap_ichg_ma: None,
+            vin_baseline_mv: Some(12_016),
+            vin_drop_mv: Some(1_128),
+            pressure_score_pct: 100,
+            vin_drop_streak: 2,
+            last_pressure_at_ms: Some(10_000),
+            last_ramp_at_ms: Some(10_000),
+            cooldown_until_ms: Some(40_000),
+            last_tps_total_iout_sample_seq: Some(12),
+            last_tps_total_iout_over_limit: Some(true),
+            dcin_absent_since_ms: Some(9_000),
+        };
+
+        tracker.reset_for_online_restore();
+
+        assert_eq!(tracker.state, DcinInputPressureState::Inactive);
+        assert_eq!(tracker.reason, DcinInputPressureReason::None);
+        assert_eq!(tracker.trigger_reason, DcinInputPressureReason::None);
+        assert_eq!(tracker.limit_reason, DcinChargeLimitReason::None);
+        assert_eq!(tracker.adaptive_cap_ichg_ma, None);
+        assert_eq!(tracker.vin_baseline_mv, Some(12_016));
+        assert_eq!(tracker.vin_drop_mv, Some(1_128));
+        assert_eq!(tracker.pressure_score_pct, 0);
+        assert_eq!(tracker.vin_drop_streak, 0);
+        assert_eq!(tracker.last_pressure_at_ms, None);
+        assert_eq!(tracker.last_ramp_at_ms, None);
+        assert_eq!(tracker.cooldown_until_ms, None);
+        assert_eq!(tracker.last_tps_total_iout_sample_seq, None);
+        assert_eq!(tracker.last_tps_total_iout_over_limit, None);
+        assert_eq!(tracker.dcin_absent_since_ms, None);
+    }
+
+    #[test]
+    fn dcin_pressure_restore_detection_requires_recent_dcin_loss() {
+        let tracker = DcinInputPressureTracker {
+            dcin_absent_since_ms: Some(9_000),
+            ..DcinInputPressureTracker::default()
+        };
+        assert!(tracker.has_recent_dcin_loss_for_restore());
+
+        let tracker = DcinInputPressureTracker::default();
+        assert!(!tracker.has_recent_dcin_loss_for_restore());
+    }
+
+    #[test]
+    fn dcin_pressure_ac2_restore_preserves_baseline_after_backup_even_without_absent_flag() {
+        let tracker = DcinInputPressureTracker::default();
+        assert!(tracker.should_preserve_for_ac2_restore(UpsMode::Backup));
+        assert!(!tracker.should_preserve_for_ac2_restore(UpsMode::Standby));
+        assert!(!tracker.should_preserve_for_ac2_restore(UpsMode::Supplement));
+    }
+
+    #[test]
+    fn dcin_pressure_ac2_restore_preserves_baseline_when_recent_loss_was_recorded() {
+        let tracker = DcinInputPressureTracker {
+            dcin_absent_since_ms: Some(9_000),
+            ..DcinInputPressureTracker::default()
+        };
+        assert!(tracker.should_preserve_for_ac2_restore(UpsMode::Standby));
+        assert!(tracker.should_preserve_for_ac2_restore(UpsMode::Supplement));
+        assert!(tracker.should_preserve_for_ac2_restore(UpsMode::Backup));
     }
 
     #[test]
@@ -4761,8 +5443,8 @@ mod tests {
             &mut mains_present,
             &mut missing_streak,
         );
-        assert_eq!(vin_vbus_mv, None);
-        assert_eq!(vin_iin_ma, None);
+        assert_eq!(vin_vbus_mv, Some(19_200));
+        assert_eq!(vin_iin_ma, Some(850));
         assert_eq!(mains_present, Some(true));
         assert_eq!(missing_streak, 1);
 
@@ -4773,6 +5455,8 @@ mod tests {
             &mut mains_present,
             &mut missing_streak,
         );
+        assert_eq!(vin_vbus_mv, None);
+        assert_eq!(vin_iin_ma, None);
         assert_eq!(mains_present, None);
         assert_eq!(missing_streak, VIN_MAINS_LATCH_FAILURE_LIMIT);
     }
@@ -4802,39 +5486,39 @@ mod tests {
         let mut tracker = super::super::RuntimeModeTracker::new(UpsMode::Standby);
 
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(1)),
+            tracker.update(Some(true), Some(120), true, Some(1), 100, 50, 2),
             UpsMode::Standby
         );
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(2)),
+            tracker.update(Some(true), Some(120), true, Some(2), 100, 50, 2),
             UpsMode::Supplement
         );
         assert_eq!(
-            tracker.update(None, Some(0), false, Some(2)),
+            tracker.update(None, Some(0), false, Some(2), 100, 50, 2),
             UpsMode::Supplement
         );
         assert_eq!(
-            tracker.update(Some(true), Some(40), true, Some(3)),
+            tracker.update(Some(true), Some(40), true, Some(3), 100, 50, 2),
             UpsMode::Supplement
         );
         assert_eq!(
-            tracker.update(Some(true), Some(40), true, Some(4)),
+            tracker.update(Some(true), Some(40), true, Some(4), 100, 50, 2),
             UpsMode::Standby
         );
         assert_eq!(
-            tracker.update(Some(false), Some(0), true, Some(5)),
+            tracker.update(Some(false), Some(0), true, Some(5), 100, 50, 2),
             UpsMode::Backup
         );
         assert_eq!(
-            tracker.update(None, Some(0), false, Some(5)),
+            tracker.update(None, Some(0), false, Some(5), 100, 50, 2),
             UpsMode::Backup
         );
         assert_eq!(
-            tracker.update(Some(true), Some(0), true, Some(6)),
+            tracker.update(Some(true), Some(0), true, Some(6), 100, 50, 2),
             UpsMode::Standby
         );
         assert_eq!(
-            tracker.update(Some(true), Some(0), true, Some(7)),
+            tracker.update(Some(true), Some(0), true, Some(7), 100, 50, 2),
             UpsMode::Standby
         );
     }
@@ -4844,17 +5528,899 @@ mod tests {
         let mut tracker = super::super::RuntimeModeTracker::new(UpsMode::Standby);
 
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(1)),
+            tracker.update(Some(true), Some(120), true, Some(1), 100, 50, 2),
             UpsMode::Standby
         );
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(2)),
+            tracker.update(Some(true), Some(120), true, Some(2), 100, 50, 2),
             UpsMode::Supplement
         );
-        assert_eq!(tracker.update(None, None, false, None), UpsMode::Supplement);
         assert_eq!(
-            tracker.update(Some(false), None, false, None),
+            tracker.update(None, None, false, None, 100, 50, 2),
+            UpsMode::Supplement
+        );
+        assert_eq!(
+            tracker.update(Some(false), None, false, None, 100, 50, 2),
             UpsMode::Backup
+        );
+    }
+
+    fn assist_stage_input(
+        vin_vbus_mv: Option<u16>,
+        vin_baseline_mv: Option<u16>,
+        vin_drop_mv: Option<u16>,
+        vin_iin_ma: Option<i32>,
+        tps_total_iout_ma: Option<i32>,
+        sample_seq: u32,
+    ) -> AssistPowerStageInput {
+        AssistPowerStageInput {
+            mains_present: Some(true),
+            input_source: Some(DashboardInputSource::DcIn),
+            dcin_assist_allowed: true,
+            rated_vout_mv: 12_000,
+            standby_target_vout_mv: 10_800,
+            current_assist_target_vout_mv: 11_400,
+            assist_low_target_vout_mv: 11_400,
+            vin_baseline_mv,
+            vin_drop_mv,
+            vin_vbus_mv,
+            vin_iin_ma,
+            tps_total_iout_ma,
+            tps_total_iout_fresh: true,
+            tps_total_iout_sample_seq: Some(sample_seq),
+            assist_enter_iout_ma: 100,
+            assist_exit_iout_ma: 50,
+            assist_required_samples: 2,
+            rated_enter_iout_ma: 100,
+            rated_exit_iout_ma: 50,
+            vin_drop_threshold_pct: TEST_VIN_DROP_THRESHOLD_PCT,
+            required_samples: 2,
+        }
+    }
+
+    #[test]
+    fn assist_stage_requires_low_vin_and_tps_current_to_enter_low() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_900),
+                    Some(12_000),
+                    Some(600),
+                    Some(2_980),
+                    Some(160),
+                    1
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_888),
+                    Some(12_000),
+                    Some(600),
+                    Some(2_980),
+                    Some(80),
+                    2
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(600),
+                    Some(2_980),
+                    Some(220),
+                    3
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(600),
+                    Some(2_980),
+                    Some(220),
+                    4
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+    }
+
+    #[test]
+    fn assist_stage_keeps_12v_3a_neighbor_in_standby_until_tps_current_reaches_enter_threshold() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_888),
+                    Some(12_040),
+                    Some(1_152),
+                    Some(2_450),
+                    Some(80),
+                    1
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_888),
+                    Some(12_040),
+                    Some(1_152),
+                    Some(2_450),
+                    Some(80),
+                    2
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(tracker.stage, AssistPowerStage::Standby);
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_888),
+                    Some(12_040),
+                    Some(1_200),
+                    Some(2_450),
+                    Some(1_040),
+                    3
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_888),
+                    Some(12_040),
+                    Some(1_200),
+                    Some(2_450),
+                    Some(1_040),
+                    4
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+    }
+
+    #[test]
+    fn assist_stage_requires_dcin_input_current_near_limit_before_entering_low() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_900),
+                    Some(12_000),
+                    Some(1_160),
+                    Some(2_700),
+                    Some(1_040),
+                    1
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_900),
+                    Some(12_000),
+                    Some(1_160),
+                    Some(2_700),
+                    Some(1_040),
+                    2
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_900),
+                    Some(12_000),
+                    Some(1_160),
+                    Some(2_960),
+                    Some(1_040),
+                    3
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_900),
+                    Some(12_000),
+                    Some(1_160),
+                    Some(2_960),
+                    Some(1_040),
+                    4
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+    }
+
+    #[test]
+    fn assist_stage_enters_low_once_dcin_is_near_limit_and_tps_iout_is_meaningful() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_896),
+                    Some(12_040),
+                    Some(1_144),
+                    Some(3_051),
+                    Some(148),
+                    1
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_896),
+                    Some(12_040),
+                    Some(1_144),
+                    Some(3_051),
+                    Some(148),
+                    2
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_896),
+                    Some(12_040),
+                    Some(1_144),
+                    Some(3_051),
+                    Some(276),
+                    3
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_896),
+                    Some(12_040),
+                    Some(1_144),
+                    Some(3_051),
+                    Some(276),
+                    4
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+    }
+
+    #[test]
+    fn assist_stage_requires_dcin_assist_allowed_for_low_stage() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        let mut input = assist_stage_input(
+            Some(11_050),
+            Some(12_000),
+            Some(600),
+            Some(2_980),
+            Some(180),
+            1,
+        );
+        input.input_source = Some(DashboardInputSource::UsbC);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::Standby
+        );
+
+        let mut input = assist_stage_input(
+            Some(10_800),
+            Some(12_000),
+            Some(600),
+            Some(2_980),
+            Some(180),
+            2,
+        );
+        input.dcin_assist_allowed = false;
+        input.input_source = Some(DashboardInputSource::UsbC);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(tracker.stage, AssistPowerStage::Standby);
+
+        let mut input = assist_stage_input(
+            Some(10_800),
+            Some(12_000),
+            Some(600),
+            Some(2_980),
+            Some(220),
+            3,
+        );
+        input.input_source = Some(DashboardInputSource::UsbC);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::Standby
+        );
+
+        let mut input = assist_stage_input(
+            Some(10_800),
+            Some(12_000),
+            Some(600),
+            Some(2_980),
+            Some(220),
+            4,
+        );
+        input.input_source = Some(DashboardInputSource::UsbC);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::AssistLow
+        );
+
+        let mut input = assist_stage_input(
+            Some(10_800),
+            Some(12_000),
+            Some(600),
+            Some(2_980),
+            Some(220),
+            5,
+        );
+        input.input_source = Some(DashboardInputSource::UsbC);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::AssistLow
+        );
+    }
+
+    #[test]
+    fn assist_stage_requires_vin_drop_and_tps_current_to_promote_to_rated() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(200),
+                    Some(2_980),
+                    Some(220),
+                    1
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(200),
+                    Some(2_980),
+                    Some(220),
+                    2
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+        assert_eq!(tracker.stage, AssistPowerStage::AssistLow);
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_050),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_980),
+                    Some(160),
+                    3
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_000),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_980),
+                    Some(160),
+                    4
+                )
+            ),
+            AssistPowerStage::AssistRated
+        );
+        assert_eq!(tracker.stage, AssistPowerStage::AssistRated);
+    }
+
+    #[test]
+    fn assist_stage_does_not_promote_when_vin_has_not_collapsed_to_low_target_yet() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_980),
+                    Some(220),
+                    1
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_980),
+                    Some(220),
+                    2
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_520),
+                    Some(12_000),
+                    Some(520),
+                    Some(1_600),
+                    Some(1_200),
+                    3
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_520),
+                    Some(12_000),
+                    Some(520),
+                    Some(1_600),
+                    Some(1_200),
+                    4
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+    }
+
+    #[test]
+    fn assist_stage_promotes_once_vin_drop_and_tps_current_hold_with_low_target_pinned() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_980),
+                    Some(220),
+                    1
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_980),
+                    Some(220),
+                    2
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_448),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_600),
+                    Some(1_200),
+                    3
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_456),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_580),
+                    Some(1_200),
+                    4
+                )
+            ),
+            AssistPowerStage::AssistRated
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_456),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_580),
+                    Some(1_200),
+                    5
+                )
+            ),
+            AssistPowerStage::AssistRated
+        );
+    }
+
+    #[test]
+    fn assist_stage_does_not_promote_on_tps_current_alone() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(120),
+                    Some(2_980),
+                    Some(220),
+                    1
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(120),
+                    Some(2_980),
+                    Some(220),
+                    2
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_100),
+                    Some(12_000),
+                    Some(120),
+                    Some(2_980),
+                    Some(180),
+                    3
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+    }
+
+    #[test]
+    fn assist_stage_does_not_promote_before_low_ramp_reaches_target() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_980),
+                    Some(220),
+                    1
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_980),
+                    Some(220),
+                    2
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+
+        let mut input = assist_stage_input(
+            Some(11_000),
+            Some(12_000),
+            Some(520),
+            Some(2_980),
+            Some(220),
+            3,
+        );
+        input.current_assist_target_vout_mv = 11_000;
+        input.assist_low_target_vout_mv = 11_400;
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::AssistLow
+        );
+
+        let mut input = assist_stage_input(
+            Some(10_980),
+            Some(12_000),
+            Some(520),
+            Some(2_980),
+            Some(220),
+            4,
+        );
+        input.current_assist_target_vout_mv = 11_100;
+        input.assist_low_target_vout_mv = 11_400;
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::AssistLow
+        );
+    }
+
+    #[test]
+    fn assist_stage_can_promote_even_if_vin_is_not_below_assist_low_target() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_980),
+                    Some(220),
+                    1
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(10_840),
+                    Some(12_000),
+                    Some(520),
+                    Some(2_980),
+                    Some(220),
+                    2
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_432),
+                    Some(12_048),
+                    Some(616),
+                    Some(2_980),
+                    Some(1_260),
+                    3
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_432),
+                    Some(12_048),
+                    Some(616),
+                    Some(2_980),
+                    Some(1_272),
+                    4
+                )
+            ),
+            AssistPowerStage::AssistRated
+        );
+    }
+
+    #[test]
+    fn assist_stage_recovers_from_rated_to_low_and_backup_remains_distinct() {
+        let mut tracker = AssistPowerStageTracker::default();
+
+        let _ = assist_power_stage_step(
+            &mut tracker,
+            assist_stage_input(
+                Some(10_840),
+                Some(12_000),
+                Some(520),
+                Some(2_980),
+                Some(220),
+                1,
+            ),
+        );
+        let _ = assist_power_stage_step(
+            &mut tracker,
+            assist_stage_input(
+                Some(10_840),
+                Some(12_000),
+                Some(520),
+                Some(2_980),
+                Some(220),
+                2,
+            ),
+        );
+        let _ = assist_power_stage_step(
+            &mut tracker,
+            assist_stage_input(
+                Some(10_840),
+                Some(12_000),
+                Some(520),
+                Some(2_980),
+                Some(220),
+                3,
+            ),
+        );
+        let _ = assist_power_stage_step(
+            &mut tracker,
+            assist_stage_input(
+                Some(10_840),
+                Some(12_000),
+                Some(520),
+                Some(2_980),
+                Some(220),
+                4,
+            ),
+        );
+        assert_eq!(tracker.stage, AssistPowerStage::AssistRated);
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_400),
+                    Some(12_000),
+                    Some(200),
+                    Some(2_980),
+                    Some(40),
+                    5
+                )
+            ),
+            AssistPowerStage::AssistRated
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_700),
+                    Some(12_000),
+                    Some(200),
+                    Some(2_980),
+                    Some(40),
+                    6
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_700),
+                    Some(12_000),
+                    Some(80),
+                    Some(2_980),
+                    Some(40),
+                    7
+                )
+            ),
+            AssistPowerStage::AssistLow
+        );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                assist_stage_input(
+                    Some(11_700),
+                    Some(12_000),
+                    Some(80),
+                    Some(2_980),
+                    Some(40),
+                    8
+                )
+            ),
+            AssistPowerStage::Standby
+        );
+
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                AssistPowerStageInput {
+                    mains_present: Some(false),
+                    input_source: Some(DashboardInputSource::DcIn),
+                    dcin_assist_allowed: true,
+                    rated_vout_mv: 12_000,
+                    standby_target_vout_mv: 10_800,
+                    current_assist_target_vout_mv: 11_400,
+                    assist_low_target_vout_mv: 11_400,
+                    vin_baseline_mv: Some(12_000),
+                    vin_drop_mv: None,
+                    vin_vbus_mv: Some(0),
+                    vin_iin_ma: Some(0),
+                    tps_total_iout_ma: Some(0),
+                    tps_total_iout_fresh: true,
+                    tps_total_iout_sample_seq: Some(5),
+                    assist_enter_iout_ma: 100,
+                    assist_exit_iout_ma: 50,
+                    assist_required_samples: 2,
+                    rated_enter_iout_ma: 100,
+                    rated_exit_iout_ma: 50,
+                    vin_drop_threshold_pct: TEST_VIN_DROP_THRESHOLD_PCT,
+                    required_samples: 2,
+                }
+            ),
+            AssistPowerStage::Backup
         );
     }
 }

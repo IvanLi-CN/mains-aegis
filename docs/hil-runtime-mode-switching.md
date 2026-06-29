@@ -1,313 +1,521 @@
-# Runtime-Mode Switching HIL
+# Runtime-Mode Power Path Validation
 
-This page defines the owner-facing hardware-in-the-loop path for verifying the `#xjpvj` UPS runtime-mode contract with an IsolaPurr bench source and a LoadLynx electronic load.
+This page is the current truth source for `#xjpvj` runtime-mode Power Path Validation on the approved `12V / 3A` and `19V / 3A` benches.
 
-## Safety Scope
+**Power Path Validation** / **电源路径验证** is the owner-facing name. `HIL`
+only remains in some historical file and directory names.
 
-- UPS observation target:
-  - LAN device id: `mains-aegis-198840`
-  - Approved serial binding: `serial-04f3bb3f5367`
-- Bench source:
-  - IsolaPurr device id: `856a141cdbd4`
-  - Bench wiring: `2 mm banana -> DC5025 -> UPS DCIN`
-- Electronic load:
-  - LoadLynx device id: `loadlynx-d68638`
-- Agents must not directly invoke `espflash`, `cargo espflash`, or `cargo-espflash`.
-- Agents must not use `mcu-agentd` for Mains Aegis hardware operations, enumerate `/dev/*`, or try alternate serial ports.
-- This flow allows read/session-read operations plus owner-authorized bench-source and electronic-load state changes that are required to exercise `STANDBY / ASSIST / BACKUP`.
+It serves three purposes:
 
-## Goals
+- the active operator test contract
+- the current sign-off evidence summary
+- the reusable runner/tooling guardrails for future reruns
 
-- Verify the runtime-mode transition loop `STANDBY -> ASSIST -> BACKUP -> STANDBY`.
-- Verify `ASSIST` and `BACKUP` both force non-charging behavior.
-- Verify that a raised DC input source can keep the UPS in `STANDBY` until direct-input headroom is actually exhausted.
-- Capture owner-facing evidence from UPS `status` and `power-diag`; use `trace(kind=event,target=power)` only as a secondary channel when it emits fresh stage-local events.
+## Current Goal
 
-## Required Tooling
+Under `12V / 3A` and `19V / 3A` input, validate the current runtime-mode implementation against these product goals:
 
-- UPS host tools from the current repository:
+- direct-through-first while the wall source still has real headroom
+- `assist_low` only when online under-delivery evidence exists
+- `assist_rated` only when sustained online under-delivery is proven after `assist_low`
+- `backup` only when input is actually cut
+- quantified output-voltage behavior across hold, cut, restore, and unload
+
+## Bench Contract
+
+Accepted bench topology:
+
+- IsolaPurr `856a141cdbd4` as the controllable DC input source
+- `2 mm banana -> DC5025 -> UPS DCIN`
+- LoadLynx `loadlynx-d68638` on UPS `OUT`
+- UPS owner-facing evidence from:
+  - `mains-aegis` CLI `status` over devd IPC / UPS USB CDC
+  - `mains-aegis` CLI `power-diag` over devd IPC / UPS USB CDC
+- IsolaPurr source control/telemetry from the stable IsolaPurr CLI transport
+  selected for the bench; LAN HTTP via `--isolapurr-url` is acceptable for the
+  source because the UPS and LoadLynx transport restrictions do not apply to
+  IsolaPurr
+
+Accepted active input baselines:
+
+- `12V / 3A`
+- `19V / 3A`
+
+## Formal Power Path Validation Suite
+
+Current formal suite truth is fixed to four scenes:
+
+- `12V assist_path`
+- `12V backup_only`
+- `19V assist_path`
+- `19V backup_only`
+
+Scene contracts:
+
+- `assist_path`
+  - source manual output at the profile voltage with `3000mA` current limit
+  - CC load `3900mA`
+  - expected path: `standby -> assist_low -> backup -> assist_low -> standby`
+- `backup_only`
+  - source manual output at the profile voltage with `3000mA` current limit
+  - CC load `1000mA`
+  - expected path: `standby -> backup -> standby`
+
+Load protection is fixed for all suite scenes:
+
+- `UVP=3000mV`
+- `OCP=4000mA`
+- `OPP=80000mW`
+
+Hard power-off gate for any `12V <-> 19V` artifact switch:
+
+1. disable the LoadLynx output
+2. prove the chosen IsolaPurr target is reachable before the first `port_c`
+   write of this switch / flash path
+3. cut IsolaPurr `port_c`
+4. confirm the UPS is no longer fed by the external source
+   - required UPS-side cut truth:
+     - `input.vin_vbus_mv <= 2999`
+     - `input.mains_present == false`
+     - `mode=backup` or `input.assist_power_stage=backup`
+   - `input.input_vbus_mv` or steady USB `5V` presence is not a failure here
+   - do not treat IsolaPurr ack by itself as sufficient proof
+5. only then select/flash the next artifact
+6. after boot, keep `port_c` off, verify USB + IPC capability truth, then
+   restore the new source voltage before the next scene
+   - `DCIN` must remain unpowered until UPS `output_profile` and
+     `rated_vout_mv` are confirmed for that scene
+   - this same order also applies to non-flash profile changes; “not flashing”
+     is not a reason to skip the load-off and source-cut steps
+
+This gate is mandatory for both:
+
+- artifact select + flash
+- any other firmware switch that changes the output-voltage profile
+
+## Capability Gate Before DCIN Power
+
+Before any formal Power Path Validation scene is allowed to energize `DCIN`, the runner must prove the UPS hardware profile first.
+
+Mandatory sequence:
+
+1. disable LoadLynx output
+2. prove the chosen IsolaPurr target is reachable before the first `port_c`
+   write of the scene
+3. force IsolaPurr `port_c` off
+4. prove the UPS has actually detached from external `DCIN`
+   - required UPS-side cut truth:
+     - `input.vin_vbus_mv <= 2999`
+     - `input.mains_present == false`
+     - `mode=backup` or `input.assist_power_stage=backup`
+5. read UPS `identity`
+6. read UPS `settings`
+7. verify the actual hardware capability matches the intended scene profile
+8. only then program the IsolaPurr source voltage/current limit
+9. read back the programmed IsolaPurr source configuration while `port_c` is still off
+10. only then re-enable `port_c`
+
+This is a per-scene gate, not only a per-profile-switch gate:
+
+- every formal scene must execute this sequence again before entering `pre`
+- the runner must not inherit capability or source-configuration trust from the
+  previous scene, even if the previous scene used the same `12V` or `19V`
+  profile
+
+Required capability truth:
+
+- `identity.hardware_capabilities.output_profile`
+- `identity.hardware_capabilities.rated_vout_mv`
+- `settings.advanced_power_capabilities.rated_vout_mv`
+
+UPS capability confirmation is USB + IPC combined truth:
+
+- USB identity is the required source for `output_profile`
+- USB identity and CLI/devd IPC settings together must agree on `rated_vout_mv`
+- `DCIN` must not have source power before that `output_profile` /
+  `rated_vout_mv` agreement is confirmed
+- until that agreement is proven, the runner must not energize `DCIN`
+
+Each observation surface has one formal job:
+
+- CLI/devd IPC `status`
+  - prove the source cut really changed live UPS runtime truth
+  - confirm `input.vin_vbus_mv`, `input.mains_present`, `mode`, and
+    `input.assist_power_stage`
+- USB `identity`
+  - prove the attached UPS hardware capability currently reports the intended
+    `output_profile`
+  - provide one side of the `rated_vout_mv` agreement
+- CLI/devd IPC `settings`
+  - prove the owner-facing live settings surface reports the same
+    `rated_vout_mv`
+
+None of those surfaces can substitute for the others:
+
+- do not use cached devd device listings as a replacement for CLI/devd IPC
+  `status`
+- do not use settings alone to infer `output_profile`
+- do not use USB `5V` presence or `input.input_vbus_mv` to waive the external
+  `DCIN` cut proof
+
+The runner must reject the scene before `port_c` is re-enabled if any of the following is true:
+
+- the UPS-side cut truth is not satisfied after `port_c` is forced off
+- the chosen IsolaPurr source target is unreachable before any `port_c` write
+- the identity capability block is missing
+- the settings capability block is missing
+- the actual UPS profile is `19V` but the scene is `12V`
+- the actual UPS profile is `12V` but the scene is `19V`
+- the requested source voltage does not match the validated UPS rated output profile
+- the source configuration readback does not match the requested voltage/current limit
+- `port_c` becomes enabled before the source configuration gate completes
+
+When source reachability fails, the runner must:
+
+- keep `port_c` untouched
+- return an explicit gate-failure report
+- avoid crashing inside the safe-prepare step
+- record the IsolaPurr CLI source-status probe result and the requested source
+  configuration
+
+This is a hard safety gate, not an operator hint.
+
+## Run Validity Contract
+
+One Power Path Validation run is considered effective only when:
+
+- `summary.all.acceptance.run_validity == valid_for_signoff`
+
+Anything else is:
+
+- `invalid_diagnostic_only`
+
+Minimum acceptance for one complete run:
+
+- full expected scene structure exists
+  - non-backup scene: `pre -> hold -> post`
+  - backup scene: `pre -> hold -> backup -> restore -> post`
+- full-scene sampling quality passes
+  - `effective_sample_rate_hz >= 2.0`
+  - `max_sample_gap_s <= 0.5`
+- required voltage series are present
+  - source output voltage
+  - UPS `DCIN` voltage
+  - UPS INA `VOUT`
+  - load actual voltage
+- if the scene includes a source cut / backup section
+  - formal UPS truth must come from direct UPS `status`, not from a cached devd
+    devices listing projection
+  - once `port_c_enabled=false`, the UPS evidence must show a real cut response
+    through at least one of:
+    - `mains_present=false`
+    - `mode=backup`
+    - `assist_power_stage=backup`
+  - UPS `DCIN` voltage must also move with the cut
+- `failed_acceptance_checks` is empty
+
+Any one failure above vetoes the whole run.
+
+Realtime freshness fields remain required diagnostics:
+
+- `load_status_max_age_s`
+- `source_status_max_age_s`
+- `ups_status_max_age_s`
+- `power_diag_max_age_s`
+
+They are still recorded and reviewed, but they no longer independently veto an
+otherwise complete formal run once continuous sampling and source-cut semantics
+already pass.
+
+## Required Evidence Surfaces
+
+Each effective scene must retain synchronized evidence from:
+
+- IsolaPurr source telemetry
+- UPS CLI/devd IPC `status`
+- UPS CLI/devd IPC `power-diag`
+- LoadLynx USB telemetry
+
+The scene is not acceptable if any of the four surfaces goes stale or absent beyond the run-validity contract.
+The scene is also not acceptable if the source is cut but the UPS-side runtime
+truth remains logically frozen.
+
+## Current Sign-Off Evidence
+
+Current accepted formal sign-off suite:
+
+- suite summary:
+  - `tools/hil/reports/formal-12v-19v-four-scenes-current-20260629T024800Z/suite-summary.json`
+- suite overview:
+  - `tools/hil/reports/formal-12v-19v-four-scenes-current-20260629T024800Z/suite-overview.html`
+- Rust-composed suite summary:
+  - `tools/hil/reports/composed-current-four-scenes/suite-summary.json`
+- Rust-composed suite overview:
+  - `tools/hil/reports/composed-current-four-scenes/suite-overview.html`
+
+Current status of that suite under the updated contract:
+
+- all four scenes are acceptable as formal sign-off evidence
+- each scene has `run_validity=valid_for_signoff`
+- each scene has `signoff_valid=true`
+- the raw scene directories can be recombined by
+  `mains-aegis power-validation compose`
+- the composed suite preserves links to the raw scene directories and is accepted
+  by the same Rust sign-off verifier used by `power-validation report`
+- `12V assist_path`
+  - report directory: `12v-assist_path-3900ma`
+  - load target: `3900mA`
+  - effective sample rate: `5.103Hz`
+  - max sample gap: `0.227s`
+- `12V backup_only`
+  - report directory: `12v-backup_only-1000ma`
+  - load target: `1000mA`
+  - effective sample rate: `5.110Hz`
+  - max sample gap: `0.224s`
+- `19V assist_path`
+  - report directory: `19v-assist_path-3900ma`
+  - load target: `3900mA`
+  - effective sample rate: `5.057Hz`
+  - max sample gap: `0.268s`
+- `19V backup_only`
+  - report directory: `19v-backup_only-1000ma`
+  - load target: `1000mA`
+  - effective sample rate: `5.093Hz`
+  - max sample gap: `0.250s`
+
+Current `advanced_power` snapshot used by the accepted sign-off report:
+
+- `standby_drop_mv=1200`
+- `assist_low_drop_mv=600`
+- `assist_enter_delta_ma=0`
+- `assist_exit_delta_ma=0`
+- `assist_required_samples=2`
+- `assist_ramp_step_mv=100`
+- `assist_ramp_interval_ms=200`
+- `rated_enter_delta_ma=0`
+- `rated_exit_delta_ma=0`
+- `vin_drop_threshold_pct=4`
+- `required_samples=2`
+
+Current dual-voltage suite execution status:
+
+- current suite orchestrator is the Rust host command:
+  - `mains-aegis power-validation run`
+  - `just power-validation run`
+- current suite verifier is the Rust host command:
+  - `mains-aegis power-validation report --write-overview <suite-dir>`
+  - it must verify suite summary, every scene `results.json`, raw
+    `timeseries.jsonl` row counts, required voltage-series presence, sampling
+    thresholds, and chart existence before an overview is considered valid
+- current suite composer is the Rust host command:
+  - `mains-aegis power-validation compose --suite-id <id> --output-dir <dir> <scene-dir>...`
+  - it is used when raw scene result directories already exist and need a new
+    combined summary/overview
+  - it does not copy, edit, or synthesize raw samples
+- current adapter protocol reference is the Rust host command:
+  - `mains-aegis power-validation adapter-protocol`
+- Python files under `tools/hil/` are migration references, chart helpers, or
+  focused diagnostics, not the owner-facing suite entry
+- four-scene execution is gated by the live safety checks above
+- current accepted historical suite id:
+  - `formal-12v-19v-four-scenes-cli-r4`
+- current accepted raw scene suite id:
+  - `formal-12v-19v-four-scenes-current-20260629T024800Z`
+  - `tools/hil/reports/formal-12v-19v-four-scenes-current-20260629T024800Z/suite-summary.json`
+  - `tools/hil/reports/formal-12v-19v-four-scenes-current-20260629T024800Z/suite-overview.html`
+  - accepted by `mains-aegis power-validation report --write-overview`
+  - all four scenes are `valid_for_signoff`
+  - transport is UPS `cli+ipc+usb`, LoadLynx `cli+ipc+usb`, IsolaPurr
+    `cli+ipc+usb`
+- current accepted Rust-composed suite id:
+  - `composed-current-four-scenes`
+  - `tools/hil/reports/composed-current-four-scenes/suite-summary.json`
+  - `tools/hil/reports/composed-current-four-scenes/suite-overview.html`
+  - generated by `mains-aegis power-validation compose` from the current raw
+    scene directories
+- historical accepted Rust suite retained for comparison:
+  - `power-validation-rust-four-scenes-url-r7`
+  - transport is UPS `cli+ipc+usb`, LoadLynx `cli+ipc+usb`, IsolaPurr
+    `cli+url`
+- IsolaPurr source telemetry should use the stable CLI transport selected for
+  the bench; if USB/devd returns `device did not respond to IsolaPurr info`,
+  use the explicit IsolaPurr URL transport instead of treating that USB path as
+  mandatory
+
+Historical single-scene report retained for comparison:
+
+- `tools/hil/reports/20260624T150204Z-formal-12v-3900-corrected-rerun-r16-lanmonitor/results.json`
+
+## Current Behavioral Truth
+
+What the current accepted sign-off suite proves:
+
+- the current tooling can maintain continuous source / UPS / load sampling density
+  across `12V` and `19V`
+- the current suite overview was regenerated from the verified suite summary and
+  corresponds to four `valid_for_signoff` reports with matching raw
+  `timeseries.jsonl`
+- the runner enforces UPS capability confirmation before `DCIN` is energized
+- the runner can safely switch between `12V` and `19V` artifacts only after
+  load disable, source cut, UPS-side cut proof, fresh identity/settings reads,
+  and source readback
+
+What the current sign-off suite does not prove:
+
+- it does not by itself freeze all future `advanced_power` defaults forever
+- it does not remove the need for future reruns if bench topology or host-tool versions change
+
+## Current Tooling Lessons
+
+### 1. Formal truth comes from the report, not only from the chart
+
+The HTML chart is evidence presentation. Acceptance truth comes from:
+
+- `results.json`
+- `summary.json`
+- raw `timeseries.jsonl`
+
+If chart continuity and report continuity disagree, trust the report and raw scene data first, then fix the renderer.
+
+### 1.5. Formal UPS status must not come from devd devices listing cache
+
+For formal scene capture:
+
+- UPS runtime truth must come from direct UPS `status`
+- UPS diagnostics truth must come from direct devd `power-diag`
+- `devd /api/v1/devices` listing data may be useful for discovery or seeding, but
+  it is not acceptable as the primary runtime truth surface for cut/restore semantics
+
+### 2. LoadLynx freshness must stay on one live ownership path
+
+Current passing formal evidence depends on avoiding self-conflict between:
+
+- the live LoadLynx status poller
+- fallback direct status verification commands
+
+The runner must reuse the active live lease/status path instead of opening a second competing read path against the same USB device.
+
+The formal LoadLynx telemetry path is now `status-stream` over the same selected
+USB/devd transport. Supplying `--load-ipc` does not mean "use slow IPC polling";
+it means "run `status-stream` through this IPC endpoint". Fallback polling is
+diagnostic unless it separately proves the same sampling contract.
+
+Formal sampling thresholds are fixed:
+
+- target cadence: about `3Hz`
+- minimum accepted cadence: `>=2Hz`
+- maximum accepted gap: `<=0.5s`
+
+Before any combined formal scene starts, the operator or runner must prove all
+required live telemetry paths meet that contract:
+
+- UPS direct `status --watch`
+- UPS direct `power-diag --watch`
+- LoadLynx USB `status-stream`
+- IsolaPurr source telemetry
+
+If one path fails, the run is not valid for sign-off even if the chart can be
+drawn.
+
+Current Rust readiness command:
 
 ```bash
-cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis -- devices scan
-cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve-http --allow-dev-cors
+mains-aegis --ipc .tmp/mains-aegis-devd-power-validation.sock \
+  power-validation check \
+  --isolapurr-cli /tmp/isolapurr-host-target/aarch64-apple-darwin/debug/isolapurr \
+  --isolapurr-url http://192.168.31.122 \
+  --load-cli /Users/ivan/.codex/worktrees/koha-loadlynx-monitor-telemetry-fix/tools/loadlynx-devd/target/debug/loadlynx \
+  --load-ipc .tmp/loadlynx-devd-power-validation.sock \
+  --samples 12
 ```
 
-- Released IsolaPurr tools:
+Current observed result:
 
-```bash
-isolapurr --help
-isolapurr-devd --help
-```
+- UPS `status`: `5.027Hz`, max gap `0.201s`, pass
+- UPS `power-diag`: `4.998Hz`, max gap `0.202s`, pass
+- LoadLynx: `5.0Hz`, max gap `0.213s`, pass
+- IsolaPurr USB/devd: fail, `device did not respond to IsolaPurr info`
+- IsolaPurr URL transport: allowed and should be used for the next run
 
-- Released LoadLynx tools:
+Current USB/devd IPC proof:
 
-```bash
-loadlynx --help
-loadlynx-devd --help
-```
+- UPS `status --watch --interval-ms 250 --watch-freshness-ms 750 --samples 40`:
+  `4.0Hz`, max gap `272ms`, no missed or stale rows
+- UPS `power-diag --watch --interval-ms 250 --watch-freshness-ms 750 --samples 40`:
+  `4.0Hz`, max gap `283ms`, no missed or stale rows
+- LoadLynx `status-stream --interval-ms 250 --count 40`: about `3.99Hz`, max
+  gap `280ms`
 
-## Bench Topology
+The host must keep status-derived `power_diag` timestamps synchronized with the
+status timestamp. A fresh derived diagnostic with a stale `power_diag_updated_at`
+is a host bug, not a device telemetry failure.
 
-- IsolaPurr `856a141cdbd4` provides the UPS `DCIN` bench source through the `2 mm banana` output and the `DC5025` cable.
-- LoadLynx `loadlynx-d68638` is connected to UPS `OUT` and provides the stimulus through `CC` mode.
-- For the current firmware, IsolaPurr should stay in manual `13.0V / 3.0A` mode with `usb-c-path disconnected`.
-- `13.0V` is a HIL compensation, not a product-semantic TPS target:
-  - the current firmware still drives TPS55288 with one fixed `12.0V` target across `STANDBY / ASSIST / BACKUP`
-  - the project has not yet implemented the future “lower TPS standby voltage, rated backup voltage” split
-  - using `13.0V` keeps `VIN` clearly above the fixed TPS setpoint and avoids a misleading “DCIN and TPS are tied at the same nominal voltage” bench condition during non-`BACKUP` validation
-- With manual `13.0V / 3.0A`, the bench source can provide about `39W`, so a clean HIL run should keep the UPS in `STANDBY` through roughly `3A` output load and only enter `ASSIST` slightly above that after conversion loss and board overhead are counted.
-- `USB-C port power` on IsolaPurr `port_c` is the approved automatic cutoff path for the shared bench output rail.
-- On the observed bench state, raw device HTTP:
+### 3. Source-cut rows must be evaluated by cut-state truth
 
-```bash
-curl -fsS -X POST 'http://192.168.31.122/api/v1/ports/port_c/power?enabled=0'
-curl -fsS -X POST 'http://192.168.31.122/api/v1/ports/port_c/power?enabled=1'
-```
+When IsolaPurr input is intentionally cut:
 
-  cuts and restores the banana/DC5025 rail.
-- The released `isolapurr ports --url ... power --enabled false|true` path returned `HTTP 400` against this DUT, so the accepted run used the raw device HTTP `enabled=0|1` workaround.
+- the runner must use `power output auto` for source cut
+- `status=not_inserted`
+- `voltage/current = null`
 
-## Observed Run Notes
+are valid cut-state facts, not missing telemetry.
 
-- The accepted `13.0V` run on `2026-06-17` captured seven stage-local snapshots:
-  - `STANDBY baseline`
-  - `1A target`
-  - `2A target`
-  - `3A target`
-  - `3200mA target`
-  - `BACKUP @ 3200mA`
-  - restored `STANDBY`
-- Owner-facing evidence in this run comes from:
-  - UPS LAN `status`
-  - `mains-aegis-devd serve-http` `GET /api/v1/devices/serial-04f3bb3f5367/power-diag`
-- The UPS bare LAN surface still does not expose a standalone `/api/v1/power-diag` endpoint.
-- In this run, the bound USB `trace(kind=event,target=power)` surface did not produce fresh stage-local power events for the new `13.0V` sequence. Treat trace as degraded evidence for this run and do not use it as the primary acceptance signal.
+`power config set --usb-c-path disconnected` is not a source-cut action for the
+bench output. It only changes the USB-C path and cannot prove that the banana
+jack / TPS high-voltage output is off. Formal source-cut truth comes from UPS
+runtime evidence: `source=dcin` must clear or the high-voltage VIN reading must
+fall out of the active profile voltage range. USB-C 5V management power must
+not be treated as a failed DCIN cut.
 
-## Preparation Sequence
+### 4. Runtime-mode reruns must quantify output voltage explicitly
 
-1. Verify tooling:
+For current-board runtime-mode work, every accepted rerun must preserve:
 
-   ```bash
-   isolapurr --help
-   isolapurr-devd --help
-   loadlynx --help
-   loadlynx-devd --help
-   cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis -- devices scan
-   ```
+- source output voltage
+- UPS `DCIN`
+- UPS INA `VOUT`
+- load actual voltage
 
-2. Verify device identity:
+This is mandatory because runtime-mode conclusions are not acceptable without output-voltage behavior.
 
-   ```bash
-   isolapurr discover --json
-   loadlynx devices --json
-   cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis -- devices scan
-   cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis -- device serial-04f3bb3f5367 connect
-   ```
+### 5. Dual-voltage suite reports must carry profile-specific metadata
 
-3. Start the UPS observation service:
+Every formal suite scene now has to record:
 
-   ```bash
-   cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve-http --allow-dev-cors
-   ```
+- `output_profile=12v|19v`
+- `scene_type=assist_path|backup_only`
+- `source_voltage_mv`
+- `source_current_limit_ma`
+- `load_min_v_mv`
+- `load_max_i_ma_total`
+- `load_max_p_mw`
+- selected artifact identity before the scene
 
-   Do not keep a separate default `serve` process alive on the same IPC endpoint while using `serve-http`.
+The suite verifier must check source-voltage windows by profile:
 
-4. Prepare IsolaPurr:
+- `12V`: `11000..12500mV`
+- `19V`: `18000..19500mV`
 
-   ```bash
-   isolapurr power show --url http://192.168.31.122 --json
-   isolapurr power output manual \
-     --url http://192.168.31.122 \
-     --voltage-mv 13000 \
-     --current-limit-ma 3000 \
-     --usb-c-path disconnected
-   curl -fsS http://192.168.31.122/api/v1/ports
-   ```
+## Operator Checklist
 
-5. Prepare LoadLynx:
+Before treating any future rerun as valid, confirm in this order:
 
-   ```bash
-   loadlynx control set --url http://192.168.31.216 --disable
-   loadlynx status --url http://192.168.31.216 --json
-   loadlynx control get --url http://192.168.31.216 --json
-   ```
+1. `mains-aegis power-validation report --write-overview <suite-dir>` passes
+2. each scene has `run_validity == valid_for_signoff`
+3. expected phases complete
+4. sample rate and gap thresholds pass
+5. all required voltage series are present
+6. `timeseries.jsonl` row counts match `results.json.samples`
+7. `failed_acceptance_checks` is empty
+8. freshness diagnostics are recorded and reviewed, even though they are no longer standalone veto gates
 
-6. Confirm the bench wiring is already in place:
-   - IsolaPurr is already configured for `13.0V / 3.0A`.
-   - `2 mm banana -> DC5025 -> UPS DCIN` is already connected.
-   - Continue only after the current bench state is verified from telemetry.
+If any one item fails, the rerun is diagnostic-only.
 
-## Evidence Commands
+## References
 
-- UPS connection:
-
-```bash
-cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis -- \
-  device serial-04f3bb3f5367 connection
-```
-
-- UPS power trace:
-
-```bash
-cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis -- \
-  device serial-04f3bb3f5367 trace --kind event --trace-limit 20
-```
-
-- UPS `power-diag` snapshot:
-
-```bash
-curl -fsS http://127.0.0.1:30080/api/v1/devices/serial-04f3bb3f5367/power-diag
-```
-
-- UPS LAN `status` snapshot:
-
-```bash
-curl -fsS http://192.168.31.232/api/v1/status
-```
-
-- Load baseline / stimulus:
-
-```bash
-loadlynx status --url http://192.168.31.216 --json
-loadlynx cc <target_i_ma> --url http://192.168.31.216 --max-i-ma-total 5500 --max-p-mw 200000
-loadlynx control set --url http://192.168.31.216 --enable
-loadlynx control set --url http://192.168.31.216 --disable
-```
-
-- IsolaPurr source toggling:
-
-```bash
-curl -fsS -X POST 'http://192.168.31.122/api/v1/ports/port_c/power?enabled=0'
-curl -fsS -X POST 'http://192.168.31.122/api/v1/ports/port_c/power?enabled=1'
-```
-
-## Execution Sequence
-
-### 1. `STANDBY` baseline
-
-- Keep LoadLynx disabled.
-- Accepted baseline environment:
-  - IsolaPurr: manual `13.0V / 3.0A`, `port_c=13026mV / 4mA`
-  - LoadLynx: disabled, `v_local_mv=13050`, `calc_p_mw=91`
-  - UPS input: `input_vbus_mv=5088`, `input_ibus_ma=209`, `vin_vbus_mv=13024`, `vin_iin_ma=28`, `tps_total_iout_ma=40`
-  - UPS output: `out_a=12064mV/16mA`, `out_b=12072mV/20mA`
-  - Battery: `pack_mv=16234`, `current_ma=0`, `soc_pct=93`
-  - Charger: `detail_status=WAIT`, `allow_charge=false`
-
-### 2. `1A` direct-input check
-
-- Set LoadLynx to `CC 1000mA` and enable output.
-- Accepted `1A` environment:
-  - IsolaPurr: `port_c=12971mV / 1003mA`
-  - LoadLynx: `output_enabled=true`, `target_i_ma=1000`, `i_local_ma=1002`, `calc_p_mw=12774`
-  - UPS input: `input_vbus_mv=5089`, `input_ibus_ma=208`, `vin_vbus_mv=12720`, `vin_iin_ma=1051`, `tps_total_iout_ma=40`
-  - UPS output: `out_a=12064mV/16mA`, `out_b=12072mV/20mA`
-  - Battery: `pack_mv=16234`, `current_ma=0`
-  - Charger: `detail_status=WAIT`
-- Acceptance meaning:
-  - direct input is still carrying the load
-  - TPS output current stays near baseline
-  - battery current stays at `0`
-  - UPS remains `mode=standby`
-
-### 3. `2A` direct-input check
-
-- Step LoadLynx to `CC 2000mA`.
-- Accepted `2A` environment:
-  - IsolaPurr: `port_c=12970mV / 2002mA`
-  - LoadLynx: `output_enabled=true`, `target_i_ma=2000`, `i_local_ma=1000`, `i_remote_ma=988`, `calc_p_mw=24512`
-  - UPS input: `input_vbus_mv=5087`, `input_ibus_ma=208`, `vin_vbus_mv=12472`, `vin_iin_ma=2068`, `tps_total_iout_ma=36`
-  - UPS output: `out_a=12064mV/16mA`, `out_b=12072mV/20mA`
-  - Battery: `pack_mv=16234`, `current_ma=0`
-  - Charger: `detail_status=WAIT`
-- Acceptance meaning:
-  - `2A` still stays in `STANDBY`
-  - battery assist has not started
-  - this stage invalidates the earlier too-early `2A -> ASSIST` conclusion from the lower-voltage bench setup
-
-### 4. `3A` source-ceiling check
-
-- Step LoadLynx to `CC 3000mA`.
-- Accepted `3A` environment:
-  - IsolaPurr: `port_c=12841mV / 2978mA`
-  - LoadLynx: `output_enabled=true`, `target_i_ma=3000`, `i_local_ma=1499`, `i_remote_ma=1487`, `calc_p_mw=35473`
-  - UPS input: `input_vbus_mv=5088`, `input_ibus_ma=210`, `vin_vbus_mv=12088`, `vin_iin_ma=3062`, `tps_total_iout_ma=68`
-  - UPS output: `out_a=12064mV/16mA`, `out_b=12064mV/52mA`
-  - Battery: `pack_mv=16231`, `current_ma=-22`
-  - Charger: `detail_status=WAIT`
-- Acceptance meaning:
-  - the source is near its `3A` ceiling
-  - UPS still stays in `STANDBY`
-  - `tps_total_iout_ma=68` remains below the `100mA` `ASSIST` threshold
-  - the tiny negative battery current is not enough to count as `ASSIST`
-
-### 5. `3200mA` `ASSIST` entry
-
-- Step LoadLynx to `CC 3200mA`.
-- Accepted `3200mA` environment:
-  - IsolaPurr: `port_c=12836mV / 2978mA`
-  - LoadLynx: `output_enabled=true`, `target_i_ma=3200`, `i_local_ma=1600`, `i_remote_ma=1587`, `calc_p_mw=37826`
-  - UPS input: `input_vbus_mv=5086`, `input_ibus_ma=214`, `vin_vbus_mv=12096`, `vin_iin_ma=3062`, `tps_total_iout_ma=272`
-  - UPS output: `out_a=12064mV/16mA`, `out_b=12072mV/256mA`
-  - Battery: `pack_mv=16208`, `current_ma=-173`
-  - Charger: `detail_status=LOAD`, `allow_charge=false`
-- Acceptance meaning:
-  - IsolaPurr current has already plateaued near `3A`
-  - the extra output demand is now being covered by battery/TPS
-  - `tps_total_iout_ma` crosses the `100mA` enter threshold
-  - UPS transitions to `mode=supplement`
-  - charger token changes to `LOAD`
-
-### 6. `BACKUP` entry at `3200mA`
-
-- Keep LoadLynx at `3200mA`.
-- Cut input with:
-
-  ```bash
-  curl -fsS -X POST 'http://192.168.31.122/api/v1/ports/port_c/power?enabled=0'
-  ```
-
-- Accepted `BACKUP` environment:
-  - IsolaPurr: `port_c_enabled=false`, no valid `port_c` or `usb_c` voltage/current telemetry
-  - LoadLynx: still enabled, `target_i_ma=3200`, `i_local_ma=1600`, `i_remote_ma=1587`, `calc_p_mw=37523`
-  - UPS input: `input.source=usbc`, `mains_present=false`, `input_vbus_mv=5076`, `input_ibus_ma=255`, `vin_vbus_mv=2096`, `vin_iin_ma=5`, `tps_total_iout_ma=3300`
-  - UPS output: `out_a=12000mV/1660mA`, `out_b=12000mV/1640mA`
-  - Battery: `pack_mv=15882`, `current_ma=-2462`, `soc_pct=93`
-  - Charger: `detail_status=NOAC`, `allow_charge=false`
-- Acceptance meaning:
-  - UPS loses confirmed input and enters `mode=backup`
-  - output power is now carried by battery/TPS
-  - charger token changes to `NOAC`
-
-### 7. Restore `STANDBY`
-
-- Re-enable the source:
-
-  ```bash
-  curl -fsS -X POST 'http://192.168.31.122/api/v1/ports/port_c/power?enabled=1'
-  ```
-
-- Disable LoadLynx and wait for UPS `mains_present=true`.
-- Accepted restored environment:
-  - IsolaPurr: `port_c=13024mV / 3mA`, `port_c_enabled=true`
-  - LoadLynx: disabled, `v_local_mv=13038`, `calc_p_mw=91`
-  - UPS input: `input_vbus_mv=5089`, `input_ibus_ma=206`, `vin_vbus_mv=13024`, `vin_iin_ma=28`, `tps_total_iout_ma=36`
-  - Battery: `pack_mv=16203`, `current_ma=0`
-  - Charger: `detail_status=WAIT`
-  - UPS mode: `standby`
-
-## Through Conditions
-
-- `13.0V` baseline must show `vin_vbus_mv` above TPS output voltage in `STANDBY`.
-- `1A`, `2A`, and `3A` must remain acceptable only if UPS still reports `STANDBY`, `battery.current_ma` stays near `0`, and `tps_total_iout_ma` stays below the `100mA` `ASSIST` threshold.
-- `3200mA` must show `ASSIST`, negative battery current, `tps_total_iout_ma > 100mA`, and charger `LOAD`.
-- `BACKUP` must show `mains_present=false`, charger `NOAC`, and `tps_total_iout_ma` carried by battery/TPS.
-- This run validates runtime-mode coupling, not the separate charger-pressure branch:
-  - all accepted stages still showed `pressure_reason=none`
-  - `LOAD` came from runtime-mode coupling, not from the `eu2b8` pressure/cooldown path
-- If fresh `trace(kind=event,target=power)` events are unavailable, record the run as degraded-on-trace and rely on `status + power-diag` only.
-
-## Raw Evidence
-
-- `/tmp/mains-aegis-hil-20260617-175412-13000-final`
-- `/tmp/mains-aegis-hil-20260617-180711-13000-backup-tail-v3`
+- `docs/specs/xjpvj-runtime-mode-switching/SPEC.md`
+- `docs/specs/xjpvj-runtime-mode-switching/IMPLEMENTATION.md`
+- `docs/solutions/firmware/runtime-mode-hil-with-isolapurr-loadlynx.md`
+- `tools/hil/README.md`
+- `tools/hil/advanced_power_12v_runner.py`
+- `tools/hil/render_voltage_chart_html.py`

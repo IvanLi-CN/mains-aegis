@@ -32,8 +32,8 @@ use esp_firmware::usb_pd::UsbPdSinkManager;
 use esp_firmware::{
     mdns_wire::{derive_device_identity, DeviceIdentity},
     net_contract::{
-        render_identity_json_with_write_controls, render_power_diag_json, render_status_json,
-        BuildInfo,
+        render_compact_status_json, render_identity_json_with_write_controls,
+        render_power_diag_json, render_status_json, BuildInfo,
     },
     net_types::{UpsStatusSnapshot, WifiConnectionState, WifiErrorKind},
     usb_cdc_protocol::{
@@ -65,6 +65,8 @@ use esp_hal::timer::{systimer::SystemTimer, timg::TimerGroup};
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::Blocking;
 use esp_println as _;
+#[cfg(feature = "web_serial")]
+use heapless::String as HeaplessString;
 use runtime_audio_recovery::{RuntimeAudioRecoveryDecision, RuntimeAudioRecoveryState};
 
 // Bring-up default profile.
@@ -74,6 +76,8 @@ const DEFAULT_VOUT_MV: u16 = if cfg!(feature = "main-vout-19v") {
 } else {
     12_000
 };
+const DEFAULT_STANDBY_VOUT_MV: u16 = DEFAULT_VOUT_MV.saturating_sub(1_200);
+const DEFAULT_ASSIST_LOW_VOUT_MV: u16 = DEFAULT_VOUT_MV.saturating_sub(600);
 const DEFAULT_ILIMIT_MA: u16 = 3_500;
 const TELEMETRY_PERIOD: Duration = Duration::from_millis(500);
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
@@ -110,6 +114,8 @@ const USB_PD_FIXED_15V_ENABLED: bool = !cfg!(feature = "no-pd-sink-15v");
 const USB_PD_FIXED_20V_ENABLED: bool = !cfg!(feature = "no-pd-sink-20v");
 const USB_PD_PPS_ENABLED: bool = !cfg!(feature = "no-pps");
 const USB_PD_NEGOTIATION_FOCUS_SLICE: Duration = Duration::from_millis(25);
+const WEB_SERIAL_SERVICE_INTERVAL: Duration = Duration::from_millis(100);
+const WEB_SERIAL_STATUS_PUSH_INTERVAL: Duration = Duration::from_millis(250);
 
 // External SYNC for TPS55288 DITH/SYNC pins (SYNCA=0°, SYNCB=180°).
 // RFSW on board is 43kΩ (U17/U18 pin 8), so nominal fSW ≈ 20MHz / 43kΩ ≈ 465kHz.
@@ -1441,6 +1447,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         recoverable_outputs: self_test.recoverable_outputs,
         output_gate_reason: self_test.output_gate_reason,
         vout_mv: DEFAULT_VOUT_MV,
+        standby_vout_mv: DEFAULT_STANDBY_VOUT_MV,
+        assist_low_vout_mv: DEFAULT_ASSIST_LOW_VOUT_MV,
         ilimit_ma: DEFAULT_ILIMIT_MA,
         telemetry_period: TELEMETRY_PERIOD,
         retry_backoff: RETRY_BACKOFF,
@@ -1542,6 +1550,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             manual_charge_speed_api_value(prefs.speed),
             prefs.timer_limit.hours(),
         );
+        sync_advanced_power_net_settings(&power);
         esp_firmware::net::set_device_log_level("info");
         esp_firmware::net::spawn_wifi_and_http(&main_entry, peripherals.WIFI, usb_wifi_config);
         yield_now().await;
@@ -1600,6 +1609,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let mut last_audio_diag_at: Option<Instant> = None;
     #[cfg(feature = "web_serial")]
     let mut web_serial_log_state = UsbCdcLogState::new();
+    #[cfg(feature = "web_serial")]
+    let mut last_web_serial_service_at: Option<Instant> = None;
+    #[cfg(feature = "web_serial")]
+    let mut last_web_serial_status_push_at: Option<Instant> = None;
     log_boot_stage("main_loop_enter");
 
     loop {
@@ -1634,6 +1647,29 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         }
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(2_000) {
+            #[cfg(feature = "web_serial")]
+            {
+                let web_serial_snapshot = power.ui_snapshot();
+                service_web_serial_if_due(
+                    &mut web_serial,
+                    &mut web_serial_lines,
+                    &web_serial_identity,
+                    &mut power,
+                    web_serial_snapshot,
+                    &mut web_serial_log_state,
+                    &mut last_web_serial_service_at,
+                    false,
+                );
+            }
+            #[cfg(feature = "web_serial")]
+            {
+                let web_serial_snapshot = power.ui_snapshot();
+                push_web_serial_status_if_due(
+                    &mut web_serial,
+                    web_serial_snapshot,
+                    &mut last_web_serial_status_push_at,
+                );
+            }
             let mut irq_events = irq_tracker.take_delta();
             let mut pd_state = usb_pd.tick(
                 power.usb_pd_demand(),
@@ -1670,11 +1706,48 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                         pd_started_at.elapsed().as_millis() as u32,
                     );
                     power.update_usb_pd_state(pd_state);
+                    #[cfg(feature = "web_serial")]
+                    {
+                        let web_serial_snapshot = power.ui_snapshot();
+                        service_web_serial_if_due(
+                            &mut web_serial,
+                            &mut web_serial_lines,
+                            &web_serial_identity,
+                            &mut power,
+                            web_serial_snapshot,
+                            &mut web_serial_log_state,
+                            &mut last_web_serial_service_at,
+                            false,
+                        );
+                    }
+                    #[cfg(feature = "web_serial")]
+                    {
+                        let web_serial_snapshot = power.ui_snapshot();
+                        push_web_serial_status_if_due(
+                            &mut web_serial,
+                            web_serial_snapshot,
+                            &mut last_web_serial_status_push_at,
+                        );
+                    }
                     service_runtime_audio!(power);
                 }
             }
 
             let fan_telemetry_due = power.tick(&irq_events);
+            #[cfg(feature = "web_serial")]
+            {
+                let web_serial_snapshot = power.ui_snapshot();
+                service_web_serial_if_due(
+                    &mut web_serial,
+                    &mut web_serial_lines,
+                    &web_serial_identity,
+                    &mut power,
+                    web_serial_snapshot,
+                    &mut web_serial_log_state,
+                    &mut last_web_serial_service_at,
+                    false,
+                );
+            }
             if fan_pwm_ready {
                 applied_fan_state = apply_fan_command(
                     &mut fan_en,
@@ -1693,6 +1766,23 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             let now = Instant::now();
             let ui_snapshot = power.ui_snapshot();
             net_bridge::publish_status_snapshot(ui_snapshot);
+            #[cfg(feature = "web_serial")]
+            service_web_serial_if_due(
+                &mut web_serial,
+                &mut web_serial_lines,
+                &web_serial_identity,
+                &mut power,
+                ui_snapshot,
+                &mut web_serial_log_state,
+                &mut last_web_serial_service_at,
+                true,
+            );
+            #[cfg(feature = "web_serial")]
+            push_web_serial_status_if_due(
+                &mut web_serial,
+                ui_snapshot,
+                &mut last_web_serial_status_push_at,
+            );
             #[cfg(feature = "net_http")]
             {
                 while let Some(command) = esp_firmware::net::take_pending_lan_command() {
@@ -1739,6 +1829,70 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                             );
                             defmt::info!("net: LAN manual charge preferences updated");
                         }
+                        esp_firmware::net::LanManagementCommand::SetAdvancedPower(settings) => {
+                            match power.apply_advanced_power_settings(settings) {
+                                Ok(()) => {
+                                    sync_advanced_power_net_settings(&power);
+                                    esp_firmware::net::set_lan_command_result(
+                                        esp_firmware::net::LanCommandResult::Ok,
+                                    );
+                                    defmt::info!("net: LAN advanced power settings updated");
+                                }
+                                Err(output::AdvancedPowerApplyError::Validation(err)) => {
+                                    esp_firmware::net::set_lan_command_result(
+                                        esp_firmware::net::LanCommandResult::AdvancedPowerValidation {
+                                            code: err.code(),
+                                            message: err.message(),
+                                        },
+                                    );
+                                    defmt::warn!(
+                                        "net: LAN advanced power update failed err={=?}",
+                                        err
+                                    );
+                                }
+                                Err(output::AdvancedPowerApplyError::Storage(err)) => {
+                                    esp_firmware::net::set_lan_command_result(
+                                        esp_firmware::net::LanCommandResult::AdvancedPowerStorageFailed,
+                                    );
+                                    defmt::warn!(
+                                        "net: LAN advanced power update failed err={=?}",
+                                        err
+                                    );
+                                }
+                            }
+                        }
+                        esp_firmware::net::LanManagementCommand::ResetAdvancedPower => {
+                            match power.reset_advanced_power_settings() {
+                                Ok(()) => {
+                                    sync_advanced_power_net_settings(&power);
+                                    esp_firmware::net::set_lan_command_result(
+                                        esp_firmware::net::LanCommandResult::Ok,
+                                    );
+                                    defmt::info!("net: LAN advanced power settings reset");
+                                }
+                                Err(output::AdvancedPowerApplyError::Validation(err)) => {
+                                    esp_firmware::net::set_lan_command_result(
+                                        esp_firmware::net::LanCommandResult::AdvancedPowerValidation {
+                                            code: err.code(),
+                                            message: err.message(),
+                                        },
+                                    );
+                                    defmt::warn!(
+                                        "net: LAN advanced power reset failed err={=?}",
+                                        err
+                                    );
+                                }
+                                Err(output::AdvancedPowerApplyError::Storage(err)) => {
+                                    esp_firmware::net::set_lan_command_result(
+                                        esp_firmware::net::LanCommandResult::AdvancedPowerStorageFailed,
+                                    );
+                                    defmt::warn!(
+                                        "net: LAN advanced power reset failed err={=?}",
+                                        err
+                                    );
+                                }
+                            }
+                        }
                         esp_firmware::net::LanManagementCommand::Reset => {
                             defmt::warn!("net: LAN reset requested");
                             Timer::after(embassy_time::Duration::from_millis(100)).await;
@@ -1752,16 +1906,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     manual_charge_speed_api_value(prefs.speed),
                     prefs.timer_limit.hours(),
                 );
+                sync_advanced_power_net_settings(&power);
             }
-            #[cfg(feature = "web_serial")]
-            service_web_serial(
-                &mut web_serial,
-                &mut web_serial_lines,
-                &web_serial_identity,
-                &mut power,
-                ui_snapshot,
-                &mut web_serial_log_state,
-            );
             front_panel.update_self_check_snapshot(ui_snapshot);
             front_panel.update_bms_activation_state(power.bms_activation_state());
             front_panel.set_attention_hold(front_panel_attention_hold(power.audio_signals()));
@@ -1873,6 +2019,31 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
 }
 
 #[cfg(feature = "web_serial")]
+fn service_web_serial_if_due<'d, I2C>(
+    serial: &mut UsbSerialJtag<'static, Blocking>,
+    lines: &mut UsbCdcLineBuffer<1024>,
+    identity: &DeviceIdentity,
+    power: &mut output::PowerManager<'d, I2C>,
+    ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
+    log_state: &mut UsbCdcLogState,
+    last_service_at: &mut Option<Instant>,
+    force: bool,
+) where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let now = Instant::now();
+    if !force
+        && last_service_at
+            .map(|last| now < last + WEB_SERIAL_SERVICE_INTERVAL)
+            .unwrap_or(false)
+    {
+        return;
+    }
+    *last_service_at = Some(now);
+    service_web_serial(serial, lines, identity, power, ui_snapshot, log_state);
+}
+
+#[cfg(feature = "web_serial")]
 fn service_web_serial<'d, I2C>(
     serial: &mut UsbSerialJtag<'static, Blocking>,
     lines: &mut UsbCdcLineBuffer<1024>,
@@ -1914,6 +2085,29 @@ fn service_web_serial<'d, I2C>(
             }
         }
     }
+}
+
+#[cfg(feature = "web_serial")]
+fn push_web_serial_status_if_due(
+    serial: &mut UsbSerialJtag<'static, Blocking>,
+    ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
+    last_status_push_at: &mut Option<Instant>,
+) {
+    let now = Instant::now();
+    if last_status_push_at
+        .map(|last| now < last + WEB_SERIAL_STATUS_PUSH_INTERVAL)
+        .unwrap_or(false)
+    {
+        return;
+    }
+    *last_status_push_at = Some(now);
+
+    let status = net_bridge::build_status_snapshot(ui_snapshot);
+    let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+    let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+    render_compact_status_json(&mut body, status);
+    render_status_frame_json(&mut frame, body.as_str());
+    write_web_serial_line(serial, frame.as_str());
 }
 
 #[cfg(feature = "web_serial")]
@@ -1972,12 +2166,30 @@ fn handle_web_serial_frame<'d, I2C>(
             UsbCdcRequest::GetStatus => {
                 let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
                 let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
-                render_status_json(&mut body, status);
+                if request_id.as_str().starts_with("devd-monitor-status")
+                    || request_id.as_str().starts_with("devd-status")
+                {
+                    render_compact_status_json(&mut body, status);
+                } else {
+                    render_status_json(&mut body, status);
+                }
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
-                render_status_frame_json(&mut frame, body.as_str());
+                if !request_id.as_str().starts_with("devd-") {
+                    render_status_frame_json(&mut frame, body.as_str());
+                    write_web_serial_line(serial, frame.as_str());
+                    log_state.emit_status_logs(serial, status);
+                }
+            }
+            UsbCdcRequest::GetSettings => {
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                {
+                    let settings = web_serial_settings_snapshot(power, log_state.level());
+                    esp_firmware::net_contract::render_settings_json(&mut body, &settings);
+                }
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
-                log_state.emit_status_logs(serial, status);
             }
             UsbCdcRequest::GetPowerDiag => {
                 let mut body = heapless::String::<WEB_SERIAL_POWER_DIAG_BODY_CAP>::new();
@@ -2024,6 +2236,84 @@ fn handle_web_serial_frame<'d, I2C>(
                     "manual_charge",
                     "safe manual charge preferences updated over USB",
                 );
+            }
+            UsbCdcRequest::SetAdvancedPower(settings) => {
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                match power.apply_advanced_power_settings(settings) {
+                    Ok(()) => {
+                        #[cfg(feature = "net_http")]
+                        sync_advanced_power_net_settings(&power);
+                        let _ = body.push_str(r#"{"advanced_power":"updated"}"#);
+                        render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                        write_web_serial_line(serial, frame.as_str());
+                        log_state.emit(
+                            serial,
+                            LogLevel::Info,
+                            "advanced_power",
+                            "advanced power settings updated over USB",
+                        );
+                    }
+                    Err(output::AdvancedPowerApplyError::Validation(err)) => {
+                        render_error_json(
+                            &mut frame,
+                            Some(request_id.as_str()),
+                            err.code(),
+                            err.message(),
+                            false,
+                        );
+                        write_web_serial_line(serial, frame.as_str());
+                    }
+                    Err(output::AdvancedPowerApplyError::Storage(_)) => {
+                        render_error_json(
+                            &mut frame,
+                            Some(request_id.as_str()),
+                            "advanced_power_write_failed",
+                            "failed to persist advanced power settings",
+                            true,
+                        );
+                        write_web_serial_line(serial, frame.as_str());
+                    }
+                }
+            }
+            UsbCdcRequest::ResetAdvancedPower => {
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                match power.reset_advanced_power_settings() {
+                    Ok(()) => {
+                        #[cfg(feature = "net_http")]
+                        sync_advanced_power_net_settings(&power);
+                        let _ = body.push_str(r#"{"advanced_power":"reset"}"#);
+                        render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                        write_web_serial_line(serial, frame.as_str());
+                        log_state.emit(
+                            serial,
+                            LogLevel::Info,
+                            "advanced_power",
+                            "advanced power settings reset over USB",
+                        );
+                    }
+                    Err(output::AdvancedPowerApplyError::Validation(err)) => {
+                        render_error_json(
+                            &mut frame,
+                            Some(request_id.as_str()),
+                            err.code(),
+                            err.message(),
+                            false,
+                        );
+                        write_web_serial_line(serial, frame.as_str());
+                    }
+                    Err(output::AdvancedPowerApplyError::Storage(_)) => {
+                        render_error_json(
+                            &mut frame,
+                            Some(request_id.as_str()),
+                            "advanced_power_reset_failed",
+                            "failed to reset advanced power settings",
+                            true,
+                        );
+                        write_web_serial_line(serial, frame.as_str());
+                    }
+                }
             }
         },
         Ok(UsbCdcFrame::WifiConfig {
@@ -2128,6 +2418,16 @@ const fn manual_charge_speed_api_value(
     }
 }
 
+#[cfg(feature = "net_http")]
+fn sync_advanced_power_net_settings<I2C>(power: &output::PowerManager<'_, I2C>)
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let settings = power.advanced_power_settings_snapshot();
+    let capabilities = power.advanced_power_capabilities_snapshot();
+    esp_firmware::net::set_advanced_power_settings(settings, capabilities);
+}
+
 const fn beeper_volume_step(level: front_panel_scene::BeeperVolumeLevel) -> u8 {
     level.step()
 }
@@ -2190,6 +2490,10 @@ impl UsbCdcLogState {
 
     fn set_level(&mut self, level: LogLevel) {
         self.level = level;
+    }
+
+    fn level(&self) -> LogLevel {
+        self.level
     }
 
     fn emit_status_logs(
@@ -2368,6 +2672,38 @@ impl UsbCdcLogState {
         render_log_json(&mut frame, level, target, message);
         write_web_serial_line(serial, frame.as_str());
     }
+}
+
+#[cfg(feature = "web_serial")]
+fn web_serial_settings_snapshot<I2C>(
+    power: &mut output::PowerManager<'_, I2C>,
+    log_level: LogLevel,
+) -> esp_firmware::net_types::DeviceSettingsSnapshot
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let rated_vout_mv = power.advanced_power_capabilities_snapshot().rated_vout_mv;
+    let mut settings =
+        esp_firmware::net_types::DeviceSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv);
+    let wifi = power.read_web_serial_wifi_config().ok().flatten();
+    settings.wifi = esp_firmware::net_types::WifiSettingsSnapshot {
+        configured: wifi.is_some(),
+        ssid: wifi.map(|secret| {
+            let mut ssid = HeaplessString::<32>::new();
+            let _ = ssid.push_str(secret.ssid.as_str());
+            ssid
+        }),
+    };
+    let prefs = power.manual_charge_prefs_snapshot();
+    settings.log_level = log_level.as_str();
+    settings.manual_charge = esp_firmware::net_types::ManualChargeSettingsSnapshot {
+        target: manual_charge_target_api_value(prefs.target),
+        speed: manual_charge_speed_api_value(prefs.speed),
+        timer_h: prefs.timer_limit.hours(),
+    };
+    settings.advanced_power = power.advanced_power_settings_snapshot();
+    settings.advanced_power_capabilities = power.advanced_power_capabilities_snapshot();
+    settings
 }
 
 #[cfg(feature = "web_serial")]

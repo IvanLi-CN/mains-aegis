@@ -31,7 +31,7 @@
 - 在现有 `web/` 管理台上新增 USB CDC / Web Serial 数据源，复用 `Identity`、`NetworkSummary`、`UpsStatus` 状态模型。
 - 使用 `mains-aegis-devd` 作为本地 USB 控制 owner；CLI 通过 IPC 访问，Web/App 通过显式 `serve-http` 使用同一 USB CDC 安全控制面。
 - 通过 USB CDC structured JSONL 协议支持握手、状态读取、结构化日志、安全设置与 WiFi 配网。
-- 首版写入范围限制为 WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别；PSK 不在 API、日志或 UI 中回显。
+- 当前写入范围限制为 WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别与 Advanced Power 高级设置；PSK 不在 API、日志或 UI 中回显。
 
 ### Non-goals
 
@@ -73,7 +73,7 @@
 - `/devices/:device_id/thermal` 展示 TMP A/B 与保护上下文。
 - `/devices/:device_id/device` 展示 identity、network、firmware。
 - `/devices/:device_id/firmware` 展示 firmware artifact 选择、来源去重、Web Serial 直烧与 devd 代理烧录。
-- `/devices/:device_id/settings` 对 LAN、USB CDC 或 devd 连接设备开放，提供 WiFi 配网、手动充电偏好与日志级别设置。
+- `/devices/:device_id/settings` 对 LAN、USB CDC 或 devd 连接设备开放，提供 WiFi 配网、手动充电偏好、日志级别与 Advanced Power 高级设置。
 - `/devices/:device_id/api` 展示固定只读 endpoints 与当前 JSON snapshot。
 
 ### USB CDC / Web Serial 协议
@@ -84,7 +84,7 @@
 - `hello` 返回协议名 `mains-aegis.cdc.v1`、capabilities、identity；USB identity 的 `capabilities.write_controls=true`。
 - Web Serial 与 devd 在建立可写 USB session 前必须用 `identity.firmware.build_id`、`build_profile` 与 `features` 匹配可用 firmware artifact catalog；不匹配时必须阻断连接并显示 `firmware_artifact_mismatch` 气泡警告。用户只有点击显式的 “Ignore warning and connect” 后，才允许继续建立会话。
 - USB Console 可以保留 raw/ignored 串口记录用于调试，但不得为缺少 defmt decoder 额外发明显著诊断标签；连接前的固件 artifact 匹配门禁才负责拦截不匹配固件。
-- `request` 支持 `get_identity`、`get_status`、`set_log_level`、`set_manual_charge_prefs`。
+- `request` 支持 `get_identity`、`get_status`、`get_settings`、`set_log_level`、`set_manual_charge_prefs`、`set_advanced_power`、`reset_advanced_power`；`set_advanced_power` 必须与设备 capabilities 同构，整块提交全部 11 个数字字段。
 - `wifi_config` 支持 `op=set` 与 `op=clear`；`set` 接收 `ssid` 与 `psk`，固件仅回传 SSID 与 ack，不回传 PSK；`clear` 必须清空 EEPROM WiFi slot 并让固件运行时 WiFi 立即进入 `disabled`。
 - WiFi 保存/清除在固件 ack 与后续 `status.network` 反馈完成前，Settings UI 必须保持对应按钮 loading/spinning，不能提前显示成功。
 - `log` frame 是结构化开发日志入口，字段至少包含 `level`、`target`、`message`。
@@ -118,6 +118,7 @@
 
 - Demo 站点与正式站点使用同一套前端、同一套路由、同一套导航和交互，只把设备接口替换为 `mock:` 数据源。
 - 支持 `seed=default|empty|offline|large` 查询参数，用于一键复现默认 fleet、空数据、全离线和大数量设备场景。
+- `mock_hosted=1`、`mock_devd_target=...`、`stored_target_preset=...` 只用于 mock UI 复现 devd / companion 状态；这些 query 参数必须标记为 mock-only，不得出现在 owner-facing 真机操作文档、真实 handoff URL 或实机验收步骤中。
 - 典型演示脚本：
   - 普通路径：`/` -> `/devices/mains-aegis-c7d8e9` -> `/devices/mains-aegis-c7d8e9/api`
   - 异常路径：`/devices/mains-aegis-e4f5a6/battery?seed=default`
@@ -218,6 +219,17 @@
 ![Critical device frontend demo evidence](./assets/device-critical-demo.png)
 
 - source_type: mock_ui
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/settings?seed=default`
+  requested_viewport: `1680x2600`
+  viewport_strategy: `headless-browser`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: advanced power settings editor
+  evidence_note: 验证 Settings 页展示与设备 capabilities 同构的 Advanced Power 编辑器，显示 `rated_vout_mv` 基线、11 个偏移/阈值/时间窗字段的语义、范围/步进/默认值，以及 Apply/Reset 动作。
+
+![Advanced Power settings evidence](./images/advanced-power-settings-storybook.png)
+
+- source_type: mock_ui
   demo_entry_or_title: `/devices/mains-aegis-a1b2c3/battery?seed=default`
   requested_viewport: `1800x980`
   viewport_strategy: `headless-browser`
@@ -246,7 +258,7 @@
   capture_scope: `element`
   target_program: `mock-only`
   scenario: USB bind triggers LAN companion prompt
-  evidence_note: 验证用户先把 pending USB 绑定到已有 logical device，绑定成功后同一卡片立即出现 `LAN companion detected` / `Bind LAN companion` 提示，并保留 `Bound USB for ...` 成功反馈；连接方式切换收纳到 `Open` 自带的下拉里，不再平铺额外主按钮。
+  evidence_note: 验证用户先把 pending USB 绑定到已有 logical device，绑定成功后同一卡片立即出现 `LAN companion detected` / `Bind LAN companion` 提示，并保留 `Bound USB for ...` 成功反馈；连接方式切换收纳到 `Open` 自带的下拉里，不再平铺额外主按钮。这里的 `mock_devd_target` 仅用于 mock-only 视觉复现，不代表真机 URL 或真实 devd handoff 参数。
 
 ![USB bind triggers LAN companion prompt evidence](./assets/connect-lan-companion-after-usb-bind-mock-ui.png)
 
@@ -257,7 +269,7 @@
   capture_scope: `element`
   target_program: `mock-only`
   scenario: confirmed LAN companion dual-channel state
-  evidence_note: 验证确认后同一 logical device 同时保留 WiFi 与 devd channel，默认偏好切到 WiFi，remembered state 可见 `Web direct http://<hostname_fqdn>`、`WiFi fallback http://<ip>:<port>` 与 `devd mDNS <hostname_fqdn>`，且不再重复显示 pending companion 提示。
+  evidence_note: 验证确认后同一 logical device 同时保留 WiFi 与 devd channel，默认偏好切到 WiFi，remembered state 可见 `Web direct http://<hostname_fqdn>`、`WiFi fallback http://<ip>:<port>` 与 `devd mDNS <hostname_fqdn>`，且不再重复显示 pending companion 提示。这里的 `mock_devd_target` 同样是 mock-only 状态种子，不是 owner-facing 实机表述。
 
 ![Confirmed LAN companion remembered evidence](./assets/connect-lan-companion-confirmed-mock-ui.png)
 

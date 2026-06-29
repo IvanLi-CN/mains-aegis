@@ -58,6 +58,15 @@ const LAN_SCAN_CONCURRENCY: usize = 32;
 const LAN_PROBE_TIMEOUT_MS: u64 = 800;
 const LAN_SCAN_MAX_HOSTS: usize = 4_096;
 const DEFAULT_ESPFLASH_TIMEOUT_SECS: u64 = 180;
+const NATIVE_SERIAL_BLOCKING_TIMEOUT_SECS: u64 = 12;
+const NATIVE_CDC_RESPONSE_TIMEOUT_SECS: u64 = 8;
+const NATIVE_MONITOR_STATUS_INTERVAL_MS: u64 = 500;
+const NATIVE_MONITOR_STATUS_RESPONSE_TIMEOUT_MS: u64 = 750;
+const NATIVE_MONITOR_COMMAND_TIMEOUT_MS: u64 = 750;
+const NATIVE_MONITOR_STOP_WAIT_MS: u64 = 1_000;
+const NATIVE_MONITOR_DECODE_DEFMT: bool = false;
+const NATIVE_MONITOR_POLL_STATUS: bool = true;
+const MONITOR_CACHE_FRESHNESS_MS: u64 = 750;
 #[cfg(not(test))]
 const DEVD_STATE_FILE_NAME: &str = "devices.json";
 #[cfg(not(test))]
@@ -254,7 +263,7 @@ struct DevdState {
     selected_artifacts: HashMap<String, String>,
     artifacts: HashMap<String, FirmwareArtifact>,
     events: VecDeque<DevdEvent>,
-    monitors: HashMap<String, NativeMonitorHandle>,
+    monitors: HashMap<String, MonitorHandle>,
     web_leases: HashMap<String, WebUsbLease>,
     host_power: HostPowerState,
     scan_trace: VecDeque<SerialTraceEntry>,
@@ -319,9 +328,10 @@ struct WebUsbLease {
 }
 
 #[derive(Debug)]
-struct NativeMonitorHandle {
+struct MonitorHandle {
     stop: Arc<AtomicBool>,
-    command_tx: mpsc::Sender<NativeMonitorCommand>,
+    done: Arc<AtomicBool>,
+    command_tx: Option<mpsc::Sender<NativeMonitorCommand>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -364,6 +374,10 @@ struct DeviceRecord {
     identity: Option<Value>,
     status: Option<Value>,
     power_diag: Option<Value>,
+    #[serde(skip)]
+    status_updated_at: Option<Instant>,
+    #[serde(skip)]
+    power_diag_updated_at: Option<Instant>,
     selected_artifact_id: Option<String>,
     log_decode: LogDecodeState,
     settings: DeviceSettingsState,
@@ -595,6 +609,8 @@ struct DeviceSettingsState {
     wifi_ssid: Option<String>,
     log_level: String,
     manual_charge: ManualChargePrefs,
+    advanced_power: AdvancedPowerSettings,
+    advanced_power_capabilities: AdvancedPowerCapabilities,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -602,6 +618,61 @@ struct ManualChargePrefs {
     target: String,
     speed: String,
     timer_h: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdvancedPowerSettings {
+    standby_drop_mv: u16,
+    assist_low_drop_mv: u16,
+    assist_enter_delta_ma: i16,
+    assist_exit_delta_ma: i16,
+    assist_required_samples: u8,
+    assist_ramp_step_mv: u16,
+    assist_ramp_interval_ms: u16,
+    rated_enter_delta_ma: i16,
+    rated_exit_delta_ma: i16,
+    vin_drop_threshold_pct: u8,
+    required_samples: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdvancedPowerFieldU16Capability {
+    default: u16,
+    min: u16,
+    max: u16,
+    step: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdvancedPowerFieldI16Capability {
+    default: i16,
+    min: i16,
+    max: i16,
+    step: i16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdvancedPowerFieldU8Capability {
+    default: u8,
+    min: u8,
+    max: u8,
+    step: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AdvancedPowerCapabilities {
+    rated_vout_mv: u16,
+    standby_drop_mv: AdvancedPowerFieldU16Capability,
+    assist_low_drop_mv: AdvancedPowerFieldU16Capability,
+    assist_enter_delta_ma: AdvancedPowerFieldI16Capability,
+    assist_exit_delta_ma: AdvancedPowerFieldI16Capability,
+    assist_required_samples: AdvancedPowerFieldU8Capability,
+    assist_ramp_step_mv: AdvancedPowerFieldU16Capability,
+    assist_ramp_interval_ms: AdvancedPowerFieldU16Capability,
+    rated_enter_delta_ma: AdvancedPowerFieldI16Capability,
+    rated_exit_delta_ma: AdvancedPowerFieldI16Capability,
+    vin_drop_threshold_pct: AdvancedPowerFieldU8Capability,
+    required_samples: AdvancedPowerFieldU8Capability,
 }
 
 #[derive(Debug, Serialize)]
@@ -689,6 +760,23 @@ struct ManualChargeRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct AdvancedPowerRequest {
+    standby_drop_mv: u16,
+    assist_low_drop_mv: u16,
+    assist_enter_delta_ma: i16,
+    assist_exit_delta_ma: i16,
+    assist_required_samples: u8,
+    assist_ramp_step_mv: u16,
+    assist_ramp_interval_ms: u16,
+    rated_enter_delta_ma: i16,
+    rated_exit_delta_ma: i16,
+    vin_drop_threshold_pct: u8,
+    required_samples: u8,
+    device_id: Option<String>,
+    lease_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct SettingsTargetQuery {
     device_id: Option<String>,
     lease_id: Option<String>,
@@ -702,6 +790,15 @@ struct WebLeaseCreateRequest {
 #[derive(Debug, Deserialize)]
 struct WebLeaseQuery {
     lease_id: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DeviceReadQuery {
+    fresh: Option<bool>,
+    cache_only: Option<bool>,
+    allow_stale_cache: Option<bool>,
+    include_meta: Option<bool>,
+    watch_freshness_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -776,6 +873,11 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         )
         .route("/api/v1/settings/log-level", post(set_log_level))
         .route("/api/v1/settings/manual-charge", post(set_manual_charge))
+        .route("/api/v1/settings/advanced-power", post(set_advanced_power))
+        .route(
+            "/api/v1/settings/advanced-power/reset",
+            post(reset_advanced_power),
+        )
         .route("/api/v1/devices", get(list_devices))
         .route("/api/v1/devices/events", get(devices_events))
         .route("/api/v1/devices/scan", post(scan_devices))
@@ -789,6 +891,7 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         .route("/api/v1/devices/{id}/disconnect", post(disconnect_device))
         .route("/api/v1/devices/{id}/binding", delete(unbind_device))
         .route("/api/v1/devices/{id}/identity", get(device_identity))
+        .route("/api/v1/devices/{id}/status", get(device_status))
         .route("/api/v1/devices/{id}/power-diag", get(device_power_diag))
         .route("/api/v1/devices/{id}/connection", get(device_connection))
         .route(
@@ -1616,6 +1719,16 @@ async fn dispatch_ipc_request(
             let id = require_param(&params, "device_id")?;
             json_result(device_identity(State(state.clone()), Path(id)).await)
         }
+        "device.status" => {
+            let id = require_param(&params, "device_id")?;
+            let query = serde_json::from_value(params).unwrap_or_default();
+            json_result(device_status(Query(query), State(state.clone()), Path(id)).await)
+        }
+        "device.power_diag" => {
+            let id = require_param(&params, "device_id")?;
+            let query = serde_json::from_value(params).unwrap_or_default();
+            json_result(device_power_diag(Query(query), State(state.clone()), Path(id)).await)
+        }
         "device.settings" => {
             let id = require_param(&params, "device_id")?;
             json_result(device_settings(State(state.clone()), Path(id)).await)
@@ -1738,6 +1851,23 @@ async fn dispatch_ipc_request(
             let input: ManualChargeRequest = serde_json::from_value(params)?;
             json_result(set_manual_charge(State(state.clone()), Json(input)).await)
         }
+        "settings.advanced_power.set" => {
+            let input: AdvancedPowerRequest = serde_json::from_value(params)?;
+            json_result(set_advanced_power(State(state.clone()), Json(input)).await)
+        }
+        "settings.advanced_power.reset" => {
+            let query = SettingsTargetQuery {
+                device_id: params
+                    .get("device_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                lease_id: params
+                    .get("lease_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            };
+            json_result(reset_advanced_power(State(state.clone()), Query(query)).await)
+        }
         _ => anyhow::bail!("unsupported IPC method: {method}"),
     }
 }
@@ -1841,6 +1971,56 @@ async fn list_devices(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
+fn ensure_bound_device_record(state: &AppState, id: &str) -> Result<(), HttpError> {
+    let mut guard = state.inner.lock().expect("state lock");
+    if guard.devices.contains_key(id) {
+        return Ok(());
+    }
+    let binding = guard
+        .bindings
+        .get(id)
+        .cloned()
+        .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+    let port_path = binding.port_path.clone().ok_or_else(|| {
+        HttpError::retryable(
+            "device_port_missing",
+            "bound native serial device has no port path",
+        )
+    })?;
+    let selected_artifact_id = guard.selected_artifacts.get(id).cloned();
+    let persisted_trace = guard
+        .persisted_device_trace
+        .get(id)
+        .cloned()
+        .unwrap_or_default();
+    guard.devices.insert(
+        id.to_string(),
+        DeviceRecord {
+            id: id.to_string(),
+            display_name: port_path.clone(),
+            port_path: Some(port_path),
+            lan_address: None,
+            lan_conflict_addresses: Vec::new(),
+            companion_lan_candidate: None,
+            transport: DeviceTransport::NativeSerial,
+            binding: Some(binding),
+            connection: ConnectionState::Disconnected,
+            identity: None,
+            status: None,
+            power_diag: None,
+            status_updated_at: None,
+            power_diag_updated_at: None,
+            selected_artifact_id,
+            log_decode: LogDecodeState::default(),
+            settings: default_settings(),
+            logs: VecDeque::new(),
+            trace: persisted_trace,
+            last_power_event_signature: None,
+        },
+    );
+    Ok(())
+}
+
 async fn scan_devices(
     State(state): State<AppState>,
     Query(query): Query<ScanDevicesQuery>,
@@ -1889,6 +2069,8 @@ async fn scan_devices_inner(
                         identity: None,
                         status: None,
                         power_diag: None,
+                        status_updated_at: None,
+                        power_diag_updated_at: None,
                         selected_artifact_id,
                         log_decode: LogDecodeState::default(),
                         settings: default_settings(),
@@ -2095,8 +2277,13 @@ async fn detect_companion_lan_candidate(
     port_path: String,
     monitor_command_tx: Option<mpsc::Sender<NativeMonitorCommand>>,
 ) -> Result<Option<CompanionLanCandidate>, HttpError> {
-    let identity =
-        read_device_identity_async(port_path.clone(), monitor_command_tx.clone()).await?;
+    let identity = read_device_identity_async(
+        state,
+        device_id,
+        port_path.clone(),
+        monitor_command_tx.clone(),
+    )
+    .await?;
     let identity_device_id = identity
         .get("device_id")
         .and_then(Value::as_str)
@@ -2113,7 +2300,7 @@ async fn detect_companion_lan_candidate(
         .map(str::to_string);
     let network = match identity.get("network").cloned() {
         Some(network) => Some(network),
-        None => read_device_status_network_async(port_path, monitor_command_tx)
+        None => read_device_status_network_async(state, device_id, port_path, monitor_command_tx)
             .await
             .ok(),
     };
@@ -2218,16 +2405,22 @@ fn update_companion_candidate(
 }
 
 async fn read_device_status_network_async(
+    state: &AppState,
+    device_id: &str,
     port_path: String,
     monitor_command_tx: Option<mpsc::Sender<NativeMonitorCommand>>,
 ) -> Result<Value, HttpError> {
     let request_id = format!("devd-bind-status-{}", Utc::now().timestamp_millis());
     let frame = json!({"type": "request", "request_id": request_id, "op": "get_status"});
-    let response = if let Some(command_tx) = monitor_command_tx {
-        send_monitor_cdc_frame_async(command_tx, frame, request_id).await
-    } else {
-        send_native_cdc_frame_async(port_path, frame, request_id).await
-    }?;
+    let response = send_native_cdc_frame_with_monitor_fallback(
+        state,
+        device_id,
+        port_path,
+        monitor_command_tx,
+        frame,
+        request_id,
+    )
+    .await?;
     Ok(network_from_status_response(&response))
 }
 
@@ -2444,6 +2637,7 @@ fn parse_lan_http_json_response(
 }
 
 fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpError> {
+    let defaults = default_settings();
     let wifi = value.get("wifi").ok_or_else(|| {
         HttpError::retryable(
             "settings_snapshot_invalid",
@@ -2456,6 +2650,8 @@ fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpErr
             "settings snapshot is missing manual_charge",
         )
     })?;
+    let advanced_power = value.get("advanced_power");
+    let advanced_power_capabilities = value.get("advanced_power_capabilities");
     Ok(DeviceSettingsState {
         wifi_configured: wifi.get("configured").and_then(Value::as_bool),
         wifi_ssid: wifi.get("ssid").and_then(Value::as_str).map(str::to_string),
@@ -2481,6 +2677,66 @@ fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpErr
                 .and_then(|value| u8::try_from(value).ok())
                 .unwrap_or(2),
         },
+        advanced_power: AdvancedPowerSettings {
+            standby_drop_mv: advanced_power
+                .and_then(|snapshot| snapshot.get("standby_drop_mv"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.standby_drop_mv),
+            assist_low_drop_mv: advanced_power
+                .and_then(|snapshot| snapshot.get("assist_low_drop_mv"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.assist_low_drop_mv),
+            assist_enter_delta_ma: advanced_power
+                .and_then(|snapshot| snapshot.get("assist_enter_delta_ma"))
+                .and_then(Value::as_i64)
+                .and_then(|value| i16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.assist_enter_delta_ma),
+            assist_exit_delta_ma: advanced_power
+                .and_then(|snapshot| snapshot.get("assist_exit_delta_ma"))
+                .and_then(Value::as_i64)
+                .and_then(|value| i16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.assist_exit_delta_ma),
+            assist_required_samples: advanced_power
+                .and_then(|snapshot| snapshot.get("assist_required_samples"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.assist_required_samples),
+            assist_ramp_step_mv: advanced_power
+                .and_then(|snapshot| snapshot.get("assist_ramp_step_mv"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.assist_ramp_step_mv),
+            assist_ramp_interval_ms: advanced_power
+                .and_then(|snapshot| snapshot.get("assist_ramp_interval_ms"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.assist_ramp_interval_ms),
+            rated_enter_delta_ma: advanced_power
+                .and_then(|snapshot| snapshot.get("rated_enter_delta_ma"))
+                .and_then(Value::as_i64)
+                .and_then(|value| i16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.rated_enter_delta_ma),
+            rated_exit_delta_ma: advanced_power
+                .and_then(|snapshot| snapshot.get("rated_exit_delta_ma"))
+                .and_then(Value::as_i64)
+                .and_then(|value| i16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.rated_exit_delta_ma),
+            vin_drop_threshold_pct: advanced_power
+                .and_then(|snapshot| snapshot.get("vin_drop_threshold_pct"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.vin_drop_threshold_pct),
+            required_samples: advanced_power
+                .and_then(|snapshot| snapshot.get("required_samples"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.required_samples),
+        },
+        advanced_power_capabilities: advanced_power_capabilities
+            .and_then(|snapshot| serde_json::from_value(snapshot.clone()).ok())
+            .unwrap_or(defaults.advanced_power_capabilities),
     })
 }
 
@@ -2554,6 +2810,8 @@ fn merge_lan_discoveries(
                 identity: None,
                 status: None,
                 power_diag: None,
+                status_updated_at: None,
+                power_diag_updated_at: None,
                 selected_artifact_id,
                 log_decode: LogDecodeState::default(),
                 settings: default_settings(),
@@ -2956,7 +3214,7 @@ async fn bind_device(
             guard
                 .monitors
                 .get(&id)
-                .map(|monitor| monitor.command_tx.clone()),
+                .and_then(|monitor| monitor.command_tx.clone()),
         )
     };
     let companion_candidate = if let Some(port_path) = port_path {
@@ -3060,7 +3318,7 @@ async fn bind_companion_lan(
             guard
                 .monitors
                 .get(&id)
-                .map(|monitor| monitor.command_tx.clone()),
+                .and_then(|monitor| monitor.command_tx.clone()),
         )
     };
     let refreshed_candidate = if let Some((mdns_host, ip, port)) = explicit_target {
@@ -3182,6 +3440,7 @@ async fn connect_device(
 }
 
 async fn connect_device_inner(state: &AppState, id: String) -> Result<DeviceRecord, HttpError> {
+    ensure_bound_device_record(state, &id)?;
     let (transport, native_port_path) = {
         let guard = state.inner.lock().expect("state lock");
         let device = guard
@@ -3190,7 +3449,7 @@ async fn connect_device_inner(state: &AppState, id: String) -> Result<DeviceReco
             .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
         (device.transport.clone(), device.port_path.clone())
     };
-    let native_identity = if matches!(transport, DeviceTransport::NativeSerial) {
+    let (native_identity, native_settings) = if matches!(transport, DeviceTransport::NativeSerial) {
         let port_path = native_port_path.ok_or_else(|| {
             HttpError::retryable(
                 "device_port_missing",
@@ -3202,11 +3461,32 @@ async fn connect_device_inner(state: &AppState, id: String) -> Result<DeviceReco
             guard
                 .monitors
                 .get(&id)
-                .map(|monitor| monitor.command_tx.clone())
+                .and_then(|monitor| monitor.command_tx.clone())
         };
-        Some(read_device_identity_async(port_path, monitor_command_tx).await?)
+        match read_device_identity_async(state, &id, port_path.clone(), monitor_command_tx.clone())
+            .await
+        {
+            Ok(identity) => {
+                let settings =
+                    read_device_settings_async(state, &id, port_path.clone(), monitor_command_tx)
+                        .await
+                        .ok();
+                (Some(identity), settings)
+            }
+            Err(error) => {
+                mark_device_connect_error(
+                    state,
+                    &id,
+                    format!(
+                        "device connect failed on {}: {}",
+                        port_path, error.0.message
+                    ),
+                );
+                return Err(error);
+            }
+        }
     } else {
-        None
+        (None, None)
     };
     let mut guard = state.inner.lock().expect("state lock");
     let selected_artifact = guard
@@ -3225,6 +3505,9 @@ async fn connect_device_inner(state: &AppState, id: String) -> Result<DeviceReco
         }
         if let Some(identity) = native_identity {
             device.identity = Some(identity);
+        }
+        if let Some(settings) = native_settings {
+            device.settings = settings;
         }
         apply_artifact_match(device, selected_artifact.as_ref());
         device
@@ -3262,13 +3545,7 @@ async fn disconnect_device(
 }
 
 async fn disconnect_device_inner(state: &AppState, id: &str) -> Result<DeviceRecord, HttpError> {
-    let stop = {
-        let mut guard = state.inner.lock().expect("state lock");
-        guard.monitors.remove(id)
-    };
-    if let Some(stop) = stop {
-        stop.stop.store(true, Ordering::SeqCst);
-    }
+    stop_native_monitor(state, id, Duration::from_secs(2)).await?;
     let mut guard = state.inner.lock().expect("state lock");
     let device = guard
         .devices
@@ -3413,14 +3690,37 @@ async fn device_identity(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
-    let guard = state.inner.lock().expect("state lock");
-    let device = guard
-        .devices
-        .get(&id)
-        .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
-    match device.identity.clone() {
+    let (transport, cached_identity, port_path, monitor_command_tx) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (
+            device.transport.clone(),
+            device.identity.clone(),
+            device.port_path.clone(),
+            guard
+                .monitors
+                .get(&id)
+                .and_then(|monitor| monitor.command_tx.clone()),
+        )
+    };
+    if matches!(transport, DeviceTransport::NativeSerial) {
+        let port_path = port_path.ok_or_else(|| {
+            HttpError::retryable(
+                "device_port_missing",
+                "native serial device has no port path",
+            )
+        })?;
+        let identity =
+            read_device_identity_async(&state, &id, port_path, monitor_command_tx).await?;
+        cache_device_identity(&state, &id, identity.clone());
+        return Ok(Json(identity));
+    }
+    match cached_identity {
         Some(identity) => Ok(Json(identity)),
-        None if matches!(device.transport, DeviceTransport::Mock) => Ok(Json(mock_identity(&id))),
+        None if matches!(transport, DeviceTransport::Mock) => Ok(Json(mock_identity(&id))),
         None => Err(HttpError::retryable(
             "identity_unavailable",
             "device identity is unavailable until the device is connected",
@@ -3428,11 +3728,20 @@ async fn device_identity(
     }
 }
 
-async fn device_power_diag(
+async fn device_status(
+    Query(query): Query<DeviceReadQuery>,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
-    let (transport, lan_address, cached_status) = {
+    ensure_bound_device_record(&state, &id)?;
+    let force_fresh = query.fresh.unwrap_or(false);
+    let cache_only = query.cache_only.unwrap_or(false);
+    let allow_stale_cache = query.allow_stale_cache.unwrap_or(false);
+    let include_meta = query.include_meta.unwrap_or(false);
+    let freshness_budget_ms = query
+        .watch_freshness_ms
+        .unwrap_or(MONITOR_CACHE_FRESHNESS_MS);
+    let (transport, lan_address, cached_status, status_updated_at, monitor_running) = {
         let guard = state.inner.lock().expect("state lock");
         let device = guard
             .devices
@@ -3442,8 +3751,292 @@ async fn device_power_diag(
             device.transport.clone(),
             device.lan_address.clone(),
             device.status.clone(),
+            device.status_updated_at,
+            guard.monitors.contains_key(&id),
         )
     };
+    if !force_fresh {
+        if monitor_running || matches!(transport, DeviceTransport::Lan) {
+            let cache_is_fresh = status_updated_at.is_some_and(|updated_at| {
+                updated_at.elapsed() <= Duration::from_millis(freshness_budget_ms)
+            });
+            if let Some(status) = cached_status.clone() {
+                if cache_is_fresh || allow_stale_cache {
+                    return Ok(Json(device_read_payload(
+                        status,
+                        include_meta,
+                        "status",
+                        status_updated_at,
+                        monitor_running,
+                        &transport,
+                        Some(freshness_budget_ms),
+                    )));
+                }
+            }
+        }
+        if monitor_running && matches!(transport, DeviceTransport::NativeSerial) {
+            if let Some((status, updated_at)) = wait_for_native_monitor_status_snapshot(
+                &state,
+                &id,
+                status_updated_at,
+                freshness_budget_ms,
+            )
+            .await
+            {
+                return Ok(Json(device_read_payload(
+                    status,
+                    include_meta,
+                    "status",
+                    Some(updated_at),
+                    monitor_running,
+                    &transport,
+                    Some(freshness_budget_ms),
+                )));
+            }
+            if allow_stale_cache {
+                if let Some(status) = cached_status.clone() {
+                    return Ok(Json(device_read_payload(
+                        status,
+                        include_meta,
+                        "status",
+                        status_updated_at,
+                        monitor_running,
+                        &transport,
+                        Some(freshness_budget_ms),
+                    )));
+                }
+            }
+            return Err(HttpError::retryable(
+                "device_status_cache_unavailable",
+                format!(
+                    "status cache is unavailable or stale for {id}; wait for monitor cache or use --fresh"
+                ),
+            ));
+        }
+        if cache_only {
+            return Err(HttpError::retryable(
+                "device_status_cache_unavailable",
+                format!(
+                    "status cache is unavailable or stale for {id}; start device monitor or use --fresh"
+                ),
+            ));
+        }
+    }
+    let status = if matches!(transport, DeviceTransport::Mock) {
+        cached_status.unwrap_or_else(|| {
+            json!({
+                "mode": "standby",
+                "input": {
+                    "mains_present": false,
+                    "input_vbus_mv": null,
+                    "input_ibus_ma": null,
+                    "vin_vbus_mv": null,
+                    "vin_iin_ma": null
+                },
+                "output": {
+                    "requested": "none",
+                    "active": "none",
+                    "recoverable": "none",
+                    "gate_reason": "none",
+                    "out_a": {"state": "unknown", "enabled": false, "vbus_mv": null, "iout_ma": null},
+                    "out_b": {"state": "unknown", "enabled": false, "vbus_mv": null, "iout_ma": null}
+                },
+                "charger": {
+                    "state": "unknown",
+                    "allow_charge": false,
+                    "ichg_ma": null,
+                    "ibat_ma": null,
+                    "vbat_present": false
+                },
+                "battery": {
+                    "state": "unknown",
+                    "pack_mv": null,
+                    "current_ma": null,
+                    "soc_pct": null,
+                    "no_battery": false,
+                    "discharge_ready": false,
+                    "issue_detail": null,
+                    "recovery_pending": false,
+                    "last_result": null
+                },
+                "thermal": {
+                    "tmp_a_state": "unknown",
+                    "tmp_a_c": null,
+                    "tmp_b_state": "unknown",
+                    "tmp_b_c": null
+                },
+                "network": {
+                    "state": "idle",
+                    "ipv4": null,
+                    "last_error": null
+                }
+            })
+        })
+    } else if matches!(transport, DeviceTransport::Lan) {
+        let address = lan_address.ok_or_else(|| {
+            HttpError::retryable(
+                "lan_address_missing",
+                format!("status is unavailable for {id}: LAN device has no address"),
+            )
+        })?;
+        lan_http_json(&address, "GET", "/api/v1/status", None).await?
+    } else {
+        match send_device_cdc_request(&state, &id, "get_status", "devd-status").await {
+            Ok(status) => status,
+            Err(error) if error.0.code == "native_cdc_timeout" && lan_address.is_some() => {
+                let address = lan_address.expect("guarded by is_some");
+                lan_http_json(&address, "GET", "/api/v1/status", None)
+                    .await
+                    .or_else(|_| cached_status.ok_or(error))?
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    update_device_status_snapshot(&state, &id, status.clone());
+    Ok(Json(device_read_payload(
+        status,
+        include_meta,
+        "status",
+        Some(Instant::now()),
+        monitor_running,
+        &transport,
+        Some(freshness_budget_ms),
+    )))
+}
+
+async fn device_power_diag(
+    Query(query): Query<DeviceReadQuery>,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    ensure_bound_device_record(&state, &id)?;
+    let force_fresh = query.fresh.unwrap_or(false);
+    let cache_only = query.cache_only.unwrap_or(false);
+    let allow_stale_cache = query.allow_stale_cache.unwrap_or(false);
+    let include_meta = query.include_meta.unwrap_or(false);
+    let freshness_budget_ms = query
+        .watch_freshness_ms
+        .unwrap_or(MONITOR_CACHE_FRESHNESS_MS);
+    let (
+        transport,
+        lan_address,
+        cached_status,
+        status_updated_at,
+        cached_power_diag,
+        power_diag_updated_at,
+        monitor_running,
+    ) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (
+            device.transport.clone(),
+            device.lan_address.clone(),
+            device.status.clone(),
+            device.status_updated_at,
+            device.power_diag.clone(),
+            device.power_diag_updated_at,
+            guard.monitors.contains_key(&id),
+        )
+    };
+    if !force_fresh {
+        let cache_is_fresh = power_diag_updated_at.is_some_and(|updated_at| {
+            updated_at.elapsed() <= Duration::from_millis(freshness_budget_ms)
+        });
+        let status_is_fresh = status_updated_at.is_some_and(|updated_at| {
+            updated_at.elapsed() <= Duration::from_millis(freshness_budget_ms)
+        });
+        if let Some(status) = cached_status.clone() {
+            if status_is_fresh || allow_stale_cache {
+                let diag = derive_power_diag_from_status(&status, "status_cache_derived");
+                return Ok(Json(device_read_payload(
+                    diag,
+                    include_meta,
+                    "power_diag",
+                    status_updated_at,
+                    monitor_running,
+                    &transport,
+                    Some(freshness_budget_ms),
+                )));
+            }
+        }
+        if let Some(diag) = cached_power_diag.clone() {
+            if cache_is_fresh || allow_stale_cache {
+                return Ok(Json(device_read_payload(
+                    diag,
+                    include_meta,
+                    "power_diag",
+                    power_diag_updated_at,
+                    monitor_running,
+                    &transport,
+                    Some(freshness_budget_ms),
+                )));
+            }
+        }
+        if monitor_running && matches!(transport, DeviceTransport::NativeSerial) {
+            if let Some((status, updated_at)) = wait_for_native_monitor_status_snapshot(
+                &state,
+                &id,
+                status_updated_at,
+                freshness_budget_ms,
+            )
+            .await
+            {
+                let diag = derive_power_diag_from_status(&status, "status_cache_derived");
+                update_device_power_diag_snapshot(&state, &id, diag.clone());
+                return Ok(Json(device_read_payload(
+                    diag,
+                    include_meta,
+                    "power_diag",
+                    Some(updated_at),
+                    monitor_running,
+                    &transport,
+                    Some(freshness_budget_ms),
+                )));
+            }
+            if allow_stale_cache {
+                if let Some(diag) = cached_power_diag.clone() {
+                    return Ok(Json(device_read_payload(
+                        diag,
+                        include_meta,
+                        "power_diag",
+                        power_diag_updated_at,
+                        monitor_running,
+                        &transport,
+                        Some(freshness_budget_ms),
+                    )));
+                }
+                if let Some(status) = cached_status.clone() {
+                    let diag = derive_power_diag_from_status(&status, "status_cache_derived");
+                    return Ok(Json(device_read_payload(
+                        diag,
+                        include_meta,
+                        "power_diag",
+                        status_updated_at,
+                        monitor_running,
+                        &transport,
+                        Some(freshness_budget_ms),
+                    )));
+                }
+            }
+            return Err(HttpError::retryable(
+                "device_power_diag_cache_unavailable",
+                format!(
+                    "power-diag cache is unavailable or stale for {id}; wait for monitor cache or use --fresh"
+                ),
+            ));
+        }
+        if cache_only {
+            return Err(HttpError::retryable(
+                "device_power_diag_cache_unavailable",
+                format!(
+                    "power-diag cache is unavailable or stale for {id}; start device monitor or use --fresh"
+                ),
+            ));
+        }
+    }
     let diag = if matches!(transport, DeviceTransport::Mock) {
         mock_power_diag()
     } else if matches!(transport, DeviceTransport::Lan) {
@@ -3472,10 +4065,106 @@ async fn device_power_diag(
             }
         }
     } else {
-        send_device_cdc_request(&state, &id, "get_power_diag", "devd-power-diag").await?
+        let (op, request_prefix) = device_power_diag_request();
+        match send_device_cdc_request(&state, &id, op, request_prefix).await {
+            Ok(diag) => {
+                update_device_power_diag_snapshot(&state, &id, diag.clone());
+                diag
+            }
+            Err(error) if error.0.code == "native_cdc_timeout" && lan_address.is_some() => {
+                let address = lan_address.expect("guarded by is_some");
+                match lan_http_json(&address, "GET", "/api/v1/power-diag", None).await {
+                    Ok(diag) => diag,
+                    Err(_) => {
+                        let status =
+                            match lan_http_json(&address, "GET", "/api/v1/status", None).await {
+                                Ok(status) => status,
+                                Err(_) => cached_status.ok_or(error)?,
+                            };
+                        update_device_status_snapshot(&state, &id, status.clone());
+                        derive_power_diag_from_status(&status, "lan_derived")
+                    }
+                }
+            }
+            Err(error) => return Err(error),
+        }
     };
     update_device_power_diag_snapshot(&state, &id, diag.clone());
-    Ok(Json(diag))
+    Ok(Json(device_read_payload(
+        diag,
+        include_meta,
+        "power_diag",
+        Some(Instant::now()),
+        monitor_running,
+        &transport,
+        Some(freshness_budget_ms),
+    )))
+}
+
+fn device_power_diag_request() -> (&'static str, &'static str) {
+    ("get_power_diag", "devd-power-diag")
+}
+
+fn device_read_payload(
+    sample: Value,
+    include_meta: bool,
+    kind: &str,
+    updated_at: Option<Instant>,
+    monitor_running: bool,
+    transport: &DeviceTransport,
+    watch_freshness_ms: Option<u64>,
+) -> Value {
+    if !include_meta {
+        return sample;
+    }
+    let cache_age_ms = updated_at.map(|updated_at| updated_at.elapsed().as_millis() as u64);
+    let cache_fresh = cache_age_ms
+        .map(|age_ms| age_ms <= watch_freshness_ms.unwrap_or(MONITOR_CACHE_FRESHNESS_MS))
+        .unwrap_or(false);
+    json!({
+        "sample": sample,
+        "meta": {
+            "kind": kind,
+            "transport": transport_name(transport),
+            "monitor_running": monitor_running,
+            "cache_age_ms": cache_age_ms,
+            "cache_fresh": cache_fresh,
+            "sample_fresh": cache_fresh,
+            "cache_freshness_budget_ms": watch_freshness_ms.unwrap_or(MONITOR_CACHE_FRESHNESS_MS),
+        }
+    })
+}
+
+async fn wait_for_native_monitor_status_snapshot(
+    state: &AppState,
+    device_id: &str,
+    previous_updated_at: Option<Instant>,
+    freshness_budget_ms: u64,
+) -> Option<(Value, Instant)> {
+    let deadline = Instant::now() + Duration::from_millis(freshness_budget_ms);
+    loop {
+        let snapshot = {
+            let guard = state.inner.lock().expect("state lock");
+            guard.devices.get(device_id).and_then(|device| {
+                device.status.as_ref().and_then(|status| {
+                    device.status_updated_at.and_then(|updated_at| {
+                        if previous_updated_at.is_none_or(|previous| updated_at > previous) {
+                            Some((status.clone(), updated_at))
+                        } else {
+                            None
+                        }
+                    })
+                })
+            })
+        };
+        if snapshot.is_some() {
+            return snapshot;
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 async fn select_artifact(
@@ -3592,6 +4281,7 @@ async fn flash_device(
             json!({"ok": true, "dry_run": true, "artifact_id": artifact.artifact_id}),
         ));
     }
+    stop_native_monitor(&state, &id, Duration::from_secs(3)).await?;
     let port_path = port_path.ok_or_else(|| {
         HttpError::non_retryable(
             "device_port_unbound",
@@ -3658,6 +4348,7 @@ async fn flash_device(
         "flash completed",
         json!({"artifact_id": artifact.artifact_id, "backend": backend}),
     );
+    invalidate_device_runtime_after_firmware_change(&state, &id);
     Ok(Json(
         json!({"ok": true, "artifact_id": artifact.artifact_id, "backend": backend}),
     ))
@@ -3679,7 +4370,7 @@ async fn reset_device(
             guard
                 .monitors
                 .get(&id)
-                .map(|monitor| monitor.command_tx.clone()),
+                .and_then(|monitor| monitor.command_tx.clone()),
         )
     };
     if matches!(transport, DeviceTransport::NativeSerial) {
@@ -3852,26 +4543,139 @@ async fn set_manual_charge(
     Ok(Json(response))
 }
 
+async fn set_advanced_power(
+    State(state): State<AppState>,
+    Json(input): Json<AdvancedPowerRequest>,
+) -> Result<Json<Value>, HttpError> {
+    let target = resolve_settings_control_target(
+        &state,
+        input.device_id.as_deref(),
+        input.lease_id.as_deref(),
+    )?;
+    let advanced_power = AdvancedPowerSettings {
+        standby_drop_mv: input.standby_drop_mv,
+        assist_low_drop_mv: input.assist_low_drop_mv,
+        assist_enter_delta_ma: input.assist_enter_delta_ma,
+        assist_exit_delta_ma: input.assist_exit_delta_ma,
+        assist_required_samples: input.assist_required_samples,
+        assist_ramp_step_mv: input.assist_ramp_step_mv,
+        assist_ramp_interval_ms: input.assist_ramp_interval_ms,
+        rated_enter_delta_ma: input.rated_enter_delta_ma,
+        rated_exit_delta_ma: input.rated_exit_delta_ma,
+        vin_drop_threshold_pct: input.vin_drop_threshold_pct,
+        required_samples: input.required_samples,
+    };
+    let response = send_settings_command(
+        &state,
+        &target,
+        LanSettingsRequest {
+            method: "POST",
+            path: "/api/v1/settings/advanced-power",
+            body: Some(json!({
+                "standby_drop_mv": input.standby_drop_mv,
+                "assist_low_drop_mv": input.assist_low_drop_mv,
+                "assist_enter_delta_ma": input.assist_enter_delta_ma,
+                "assist_exit_delta_ma": input.assist_exit_delta_ma,
+                "assist_required_samples": input.assist_required_samples,
+                "assist_ramp_step_mv": input.assist_ramp_step_mv,
+                "assist_ramp_interval_ms": input.assist_ramp_interval_ms,
+                "rated_enter_delta_ma": input.rated_enter_delta_ma,
+                "rated_exit_delta_ma": input.rated_exit_delta_ma,
+                "vin_drop_threshold_pct": input.vin_drop_threshold_pct,
+                "required_samples": input.required_samples
+            })),
+        },
+        json!({
+            "type": "request",
+            "op": "set_advanced_power",
+            "standby_drop_mv": input.standby_drop_mv,
+            "assist_low_drop_mv": input.assist_low_drop_mv,
+            "assist_enter_delta_ma": input.assist_enter_delta_ma,
+            "assist_exit_delta_ma": input.assist_exit_delta_ma,
+            "assist_required_samples": input.assist_required_samples,
+            "assist_ramp_step_mv": input.assist_ramp_step_mv,
+            "assist_ramp_interval_ms": input.assist_ramp_interval_ms,
+            "rated_enter_delta_ma": input.rated_enter_delta_ma,
+            "rated_exit_delta_ma": input.rated_exit_delta_ma,
+            "vin_drop_threshold_pct": input.vin_drop_threshold_pct,
+            "required_samples": input.required_samples
+        }),
+        |settings| settings.advanced_power = advanced_power,
+        "advanced_power",
+        "Advanced power settings updated through mains-aegis-devd",
+    )
+    .await?;
+    Ok(Json(response))
+}
+
+async fn reset_advanced_power(
+    State(state): State<AppState>,
+    Query(query): Query<SettingsTargetQuery>,
+) -> Result<Json<Value>, HttpError> {
+    let target = resolve_settings_control_target(
+        &state,
+        query.device_id.as_deref(),
+        query.lease_id.as_deref(),
+    )?;
+    let response = send_settings_command(
+        &state,
+        &target,
+        LanSettingsRequest {
+            method: "POST",
+            path: "/api/v1/settings/advanced-power/reset",
+            body: Some(json!({})),
+        },
+        json!({
+            "type": "request",
+            "op": "reset_advanced_power"
+        }),
+        |settings| settings.advanced_power = default_settings().advanced_power,
+        "advanced_power",
+        "Advanced power settings reset through mains-aegis-devd",
+    )
+    .await?;
+    Ok(Json(response))
+}
+
 async fn monitor_start(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
-    let (transport, port_path) = {
+    ensure_bound_device_record(&state, &id)?;
+    let (transport, port_path, lan_address) = {
         let guard = state.inner.lock().expect("state lock");
         let device = guard
             .devices
             .get(&id)
             .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
-        (device.transport.clone(), device.port_path.clone())
+        (
+            device.transport.clone(),
+            device.port_path.clone(),
+            device.lan_address.clone(),
+        )
     };
     let sample = if matches!(transport, DeviceTransport::NativeSerial) {
-        let port_path = port_path.ok_or_else(|| {
-            HttpError::retryable(
-                "device_port_missing",
-                "native serial device has no port path",
-            )
-        })?;
-        start_native_monitor(&state, id.clone(), port_path)?
+        if let Some(sample) = running_native_monitor_snapshot(&state, &id)? {
+            sample
+        } else {
+            let port_path = port_path.ok_or_else(|| {
+                HttpError::retryable(
+                    "device_port_missing",
+                    "native serial device has no port path",
+                )
+            })?;
+            let port = open_native_monitor_serial_async(port_path.clone()).await?;
+            start_native_monitor(&state, id.clone(), port_path, port)?
+        }
+    } else if matches!(transport, DeviceTransport::Lan) {
+        if let Some(sample) = running_native_monitor_snapshot(&state, &id)? {
+            sample
+        } else {
+            let address = lan_address.ok_or_else(|| {
+                HttpError::retryable("lan_address_missing", "LAN device has no address")
+            })?;
+            start_lan_monitor(&state, id.clone(), address)?
+        }
     } else {
         MonitorStartResult {
             trace_count: 0,
@@ -3908,36 +4712,76 @@ async fn monitor_stop(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
-    let stop = {
-        let mut guard = state.inner.lock().expect("state lock");
-        guard.monitors.remove(&id)
-    };
-    if let Some(stop) = stop {
-        stop.stop.store(true, Ordering::SeqCst);
-    } else {
-        ensure_device(&state, &id)?;
-    }
+    stop_native_monitor(&state, &id, Duration::from_secs(2)).await?;
     emit(&state, Some(id), "monitor", "monitor stopped", json!({}));
     Ok(Json(json!({"ok": true})))
+}
+
+async fn stop_native_monitor(
+    state: &AppState,
+    id: &str,
+    timeout: Duration,
+) -> Result<(), HttpError> {
+    let monitor = {
+        let mut guard = state.inner.lock().expect("state lock");
+        guard.monitors.remove(id)
+    };
+    let Some(monitor) = monitor else {
+        ensure_device(state, id)?;
+        return Ok(());
+    };
+    monitor.stop.store(true, Ordering::SeqCst);
+    let deadline = Instant::now() + timeout;
+    while !monitor.done.load(Ordering::SeqCst) {
+        if Instant::now() >= deadline {
+            return Err(HttpError::retryable(
+                "native_monitor_stop_timeout",
+                format!(
+                    "monitor for {id} did not stop within {}ms",
+                    timeout.as_millis()
+                ),
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    Ok(())
 }
 
 async fn device_settings(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
-    let guard = state.inner.lock().expect("state lock");
-    let device = guard
-        .devices
-        .get(&id)
-        .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
-    Ok(Json(json!({
-        "wifi": {
-            "configured": device.settings.wifi_configured.unwrap_or(false),
-            "ssid": device.settings.wifi_ssid,
-        },
-        "log_level": device.settings.log_level,
-        "manual_charge": device.settings.manual_charge,
-    })))
+    let (transport, port_path, monitor_command_tx, settings) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (
+            device.transport.clone(),
+            device.port_path.clone(),
+            guard
+                .monitors
+                .get(&id)
+                .and_then(|monitor| monitor.command_tx.clone()),
+            device.settings.clone(),
+        )
+    };
+    let settings = if matches!(transport, DeviceTransport::NativeSerial) {
+        let port_path = port_path.ok_or_else(|| {
+            HttpError::retryable(
+                "device_port_missing",
+                "native serial device has no port path",
+            )
+        })?;
+        let settings =
+            read_device_settings_async(&state, &id, port_path, monitor_command_tx).await?;
+        cache_device_settings(&state, &id, settings.clone());
+        settings
+    } else {
+        settings
+    };
+    Ok(Json(settings_snapshot(&settings)))
 }
 
 async fn devd_compat_settings(
@@ -3957,13 +4801,70 @@ fn settings_snapshot(settings: &DeviceSettingsState) -> Value {
         },
         "log_level": settings.log_level.clone(),
         "manual_charge": settings.manual_charge.clone(),
+        "advanced_power": settings.advanced_power.clone(),
+        "advanced_power_capabilities": settings.advanced_power_capabilities.clone(),
     })
+}
+
+fn cache_device_identity(state: &AppState, device_id: &str, identity: Value) {
+    let snapshot = {
+        let mut guard = state.inner.lock().expect("state lock");
+        let selected_artifact = guard
+            .devices
+            .get(device_id)
+            .and_then(|device| device.selected_artifact_id.clone())
+            .and_then(|artifact_id| guard.artifacts.get(&artifact_id).cloned());
+        if let Some(device) = guard.devices.get_mut(device_id) {
+            device.identity = Some(identity);
+            device.connection = ConnectionState::Connected;
+            apply_artifact_match(device, selected_artifact.as_ref());
+        }
+        persisted_snapshot(&guard)
+    };
+    let _ = persist_devd_state(&state.persistence, snapshot);
+}
+
+fn cache_device_settings(state: &AppState, device_id: &str, settings: DeviceSettingsState) {
+    let snapshot = {
+        let mut guard = state.inner.lock().expect("state lock");
+        if let Some(device) = guard.devices.get_mut(device_id) {
+            device.settings = settings;
+            device.connection = ConnectionState::Connected;
+        }
+        persisted_snapshot(&guard)
+    };
+    let _ = persist_devd_state(&state.persistence, snapshot);
+}
+
+fn invalidate_device_runtime_after_firmware_change(state: &AppState, device_id: &str) {
+    let snapshot = {
+        let mut guard = state.inner.lock().expect("state lock");
+        if let Some(device) = guard.devices.get_mut(device_id) {
+            device.connection = ConnectionState::Disconnected;
+            device.identity = None;
+            device.status = None;
+            device.status_updated_at = None;
+            device.power_diag = None;
+            device.power_diag_updated_at = None;
+            device.settings = default_settings();
+            apply_artifact_match(device, None);
+            push_log(
+                device,
+                "info",
+                "flash",
+                "device runtime cache invalidated after firmware change",
+            );
+        }
+        persisted_snapshot(&guard)
+    };
+    let _ = persist_devd_state(&state.persistence, snapshot);
 }
 
 async fn device_connection(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
+    ensure_bound_device_record(&state, &id)?;
     let guard = state.inner.lock().expect("state lock");
     let device = guard
         .devices
@@ -4228,13 +5129,27 @@ async fn send_device_cdc_request(
             guard
                 .monitors
                 .get(device_id)
-                .map(|monitor| monitor.command_tx.clone()),
+                .and_then(|monitor| monitor.command_tx.clone()),
         )
     };
     let request_id = format!("{request_prefix}-{}", Utc::now().timestamp_millis());
     let frame = json!({"type": "request", "request_id": request_id, "op": op});
     let response = if let Some(command_tx) = monitor_command_tx {
-        send_monitor_cdc_frame_async(command_tx, frame.clone(), request_id.clone()).await?
+        match send_monitor_cdc_frame_async(command_tx, frame.clone(), request_id.clone()).await {
+            Ok(response) => response,
+            Err(error) if is_native_monitor_command_error(&error) => {
+                let monitor = stop_native_monitor_after_command_failure(state, device_id, &error);
+                wait_for_native_monitor_stop(&monitor);
+                let port_path = port_path.ok_or_else(|| {
+                    HttpError::retryable(
+                        "device_port_missing",
+                        "native serial device has no port path",
+                    )
+                })?;
+                send_native_cdc_frame_async(port_path, frame.clone(), request_id.clone()).await?
+            }
+            Err(error) => return Err(error),
+        }
     } else {
         let port_path = port_path.ok_or_else(|| {
             HttpError::retryable(
@@ -4255,6 +5170,70 @@ async fn send_device_cdc_request(
             "cdc_response_missing_result",
             format!("CDC {op} response did not include result"),
         )
+    })
+}
+
+fn is_native_monitor_command_error(error: &HttpError) -> bool {
+    matches!(
+        error.0.code.as_str(),
+        "native_monitor_command_timeout"
+            | "native_monitor_command_disconnected"
+            | "native_monitor_command_unavailable"
+    )
+}
+
+fn stop_native_monitor_after_command_failure(
+    state: &AppState,
+    device_id: &str,
+    error: &HttpError,
+) -> Option<MonitorHandle> {
+    let removed = {
+        let mut guard = state.inner.lock().expect("state lock");
+        let removed = guard.monitors.remove(device_id);
+        if let Some(device) = guard.devices.get_mut(device_id) {
+            push_log(
+                device,
+                "warn",
+                "monitor",
+                format!(
+                    "native monitor disabled after CDC command failure: {}",
+                    error.0.code
+                )
+                .as_str(),
+            );
+        }
+        removed
+    };
+    if let Some(handle) = removed {
+        handle.stop.store(true, Ordering::SeqCst);
+        Some(handle)
+    } else {
+        None
+    }
+}
+
+fn wait_for_native_monitor_stop(monitor: &Option<MonitorHandle>) {
+    let Some(handle) = monitor else {
+        return;
+    };
+    let deadline = Instant::now() + Duration::from_millis(NATIVE_MONITOR_STOP_WAIT_MS);
+    while !handle.done.load(Ordering::SeqCst) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn native_monitor_status_request_due(
+    status_request_in_flight: bool,
+    now: Instant,
+    next_status_at: Instant,
+) -> bool {
+    !status_request_in_flight && now >= next_status_at
+}
+
+fn native_monitor_status_request_timed_out(sent_at: Option<Instant>, now: Instant) -> bool {
+    sent_at.is_some_and(|sent_at| {
+        now.duration_since(sent_at)
+            >= Duration::from_millis(NATIVE_MONITOR_STATUS_RESPONSE_TIMEOUT_MS)
     })
 }
 
@@ -4304,7 +5283,7 @@ fn resolve_settings_control_target(
             monitor_command_tx: guard
                 .monitors
                 .get(&device.id)
-                .map(|monitor| monitor.command_tx.clone()),
+                .and_then(|monitor| monitor.command_tx.clone()),
         });
     }
 
@@ -4332,7 +5311,7 @@ fn resolve_settings_control_target(
                     monitor_command_tx: guard
                         .monitors
                         .get(&device.id)
-                        .map(|monitor| monitor.command_tx.clone()),
+                        .and_then(|monitor| monitor.command_tx.clone()),
                 }))
             }
             DeviceTransport::Lan
@@ -4708,7 +5687,12 @@ fn update_device_status_record(
             if connection_is_live {
                 device.connection = ConnectionState::Connected;
             }
+            let updated_at = Instant::now();
             device.status = Some(status.clone());
+            device.status_updated_at = Some(updated_at);
+            let derived_power_diag = derive_power_diag_from_status(status, "monitor_status");
+            device.power_diag = Some(derived_power_diag.clone());
+            device.power_diag_updated_at = Some(updated_at);
             power_event = maybe_record_power_event(device, status);
             if let Some((trace, _)) = power_event.as_ref() {
                 push_bounded(&mut device.trace, trace.clone(), LOG_LIMIT);
@@ -4724,6 +5708,7 @@ fn update_device_power_diag_snapshot(state: &AppState, device_id: &str, power_di
     let mut guard = state.inner.lock().expect("state lock");
     if let Some(device) = guard.devices.get_mut(device_id) {
         device.power_diag = Some(power_diag.clone());
+        device.power_diag_updated_at = Some(Instant::now());
     }
     drop(guard);
     emit(
@@ -4786,6 +5771,8 @@ fn derive_power_diag_from_status(status: &Value, source: &str) -> Value {
             "pressure_reason": input.get("pressure_reason").cloned().unwrap_or(Value::Null),
             "vin_baseline_mv": input.get("vin_baseline_mv").cloned().unwrap_or(Value::Null),
             "vin_drop_mv": input.get("vin_drop_mv").cloned().unwrap_or(Value::Null),
+            "assist_power_stage": input.get("assist_power_stage").cloned().unwrap_or(Value::Null),
+            "assist_target_vout_mv": input.get("assist_target_vout_mv").cloned().unwrap_or(Value::Null),
             "usb_pd_attached": Value::Bool(input.get("source").and_then(Value::as_str) == Some("usbc")),
             "usb_pd_charge_ready": Value::Bool(charger.get("allow_charge").and_then(Value::as_bool).unwrap_or(false)),
             "usb_pd_vbus_present": Value::Null,
@@ -4954,6 +5941,8 @@ fn maybe_record_power_event(
         "vin_vbus_mv": input.get("vin_vbus_mv").cloned().unwrap_or(Value::Null),
         "vin_baseline_mv": input.get("vin_baseline_mv").cloned().unwrap_or(Value::Null),
         "vin_drop_mv": input.get("vin_drop_mv").cloned().unwrap_or(Value::Null),
+        "assist_power_stage": input.get("assist_power_stage").cloned().unwrap_or(Value::Null),
+        "assist_target_vout_mv": input.get("assist_target_vout_mv").cloned().unwrap_or(Value::Null),
         "tps_total_iout_ma": input.get("tps_total_iout_ma").cloned().unwrap_or(Value::Null),
         "tps_limit_threshold_ma": input
             .get("tps_limit_threshold_ma")
@@ -5100,9 +6089,50 @@ async fn send_native_cdc_frame_async(
     frame: Value,
     request_id: String,
 ) -> Result<Value, HttpError> {
-    tokio::task::spawn_blocking(move || send_native_cdc_frame(&port_path, frame, &request_id))
-        .await
-        .map_err(|error| HttpError::retryable("native_cdc_join_failed", error.to_string()))?
+    let port_path_for_task = port_path.clone();
+    tokio::time::timeout(
+        Duration::from_secs(NATIVE_SERIAL_BLOCKING_TIMEOUT_SECS),
+        tokio::task::spawn_blocking(move || {
+            send_native_cdc_frame(&port_path_for_task, frame, &request_id)
+        }),
+    )
+    .await
+    .map_err(|_| {
+        HttpError::retryable(
+            "native_cdc_open_timeout",
+            format!(
+                "timed out opening or processing native CDC request on {}",
+                port_path
+            ),
+        )
+    })?
+    .map_err(|error| HttpError::retryable("native_cdc_join_failed", error.to_string()))?
+}
+
+async fn send_native_cdc_frame_with_monitor_fallback(
+    state: &AppState,
+    device_id: &str,
+    port_path: String,
+    monitor_command_tx: Option<mpsc::Sender<NativeMonitorCommand>>,
+    frame: Value,
+    request_id: String,
+) -> Result<Value, HttpError> {
+    match monitor_command_tx {
+        Some(command_tx) => {
+            match send_monitor_cdc_frame_async(command_tx, frame.clone(), request_id.clone()).await
+            {
+                Ok(response) => Ok(response),
+                Err(error) if is_native_monitor_command_error(&error) => {
+                    let monitor =
+                        stop_native_monitor_after_command_failure(state, device_id, &error);
+                    wait_for_native_monitor_stop(&monitor);
+                    send_native_cdc_frame_async(port_path, frame, request_id).await
+                }
+                Err(error) => Err(error),
+            }
+        }
+        None => send_native_cdc_frame_async(port_path, frame, request_id).await,
+    }
 }
 
 async fn send_monitor_cdc_frame_async(
@@ -5125,7 +6155,7 @@ async fn send_monitor_cdc_frame_async(
                 )
             })?;
         response_rx
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(Duration::from_millis(NATIVE_MONITOR_COMMAND_TIMEOUT_MS))
             .map_err(|error| match error {
                 mpsc::RecvTimeoutError::Timeout => HttpError::retryable(
                     "native_monitor_command_timeout",
@@ -5214,25 +6244,11 @@ fn native_serial_app_reset_steps() -> &'static [NativeSerialLineStep] {
     ]
 }
 
-#[cfg(test)]
-fn native_serial_monitor_preserves_control_lines_on_open() -> bool {
-    true
-}
-
 fn open_native_monitor_serial_port(
     port_path: &str,
     timeout: Duration,
 ) -> Result<Box<dyn serialport::SerialPort>, HttpError> {
-    serialport::new(port_path, 115_200)
-        .timeout(timeout)
-        .preserve_dtr_on_open()
-        .open()
-        .map_err(|error| {
-            HttpError::retryable(
-                "native_serial_open_failed",
-                format!("failed to open {port_path}: {error}"),
-            )
-        })
+    open_native_serial_port(port_path, timeout, true)
 }
 
 fn reset_native_serial_to_app_on_port(
@@ -5277,6 +6293,27 @@ fn send_cdc_frame_on_port<F>(
     port_path: &str,
     frame: Value,
     request_id: &str,
+    handle_unmatched_line: F,
+) -> Result<Value, HttpError>
+where
+    F: FnMut(&[u8]),
+{
+    send_cdc_frame_on_port_with_timeout(
+        port,
+        port_path,
+        frame,
+        request_id,
+        Duration::from_secs(NATIVE_CDC_RESPONSE_TIMEOUT_SECS),
+        handle_unmatched_line,
+    )
+}
+
+fn send_cdc_frame_on_port_with_timeout<F>(
+    port: &mut dyn serialport::SerialPort,
+    port_path: &str,
+    frame: Value,
+    request_id: &str,
+    response_timeout: Duration,
     mut handle_unmatched_line: F,
 ) -> Result<Value, HttpError>
 where
@@ -5293,24 +6330,25 @@ where
             )
         })?;
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(8);
-    let mut line = Vec::new();
+    let deadline = std::time::Instant::now() + response_timeout;
+    let mut cdc_line = Vec::new();
+    let mut json_candidate = Vec::new();
     let mut byte = [0u8; 1];
     while std::time::Instant::now() < deadline {
         match port.read(&mut byte) {
             Ok(0) => continue,
-            Ok(_) if byte[0] == b'\n' => {
-                if let Some(frame) = parse_matching_cdc_response(&line, request_id)? {
-                    return Ok(frame);
-                }
-                handle_unmatched_line(&line);
-                line.clear();
-            }
             Ok(_) => {
-                if line.len() < 16 * 1024 {
-                    line.push(byte[0]);
-                } else {
-                    line.clear();
+                match native_monitor_ingest_byte(byte[0], &mut cdc_line, &mut json_candidate) {
+                    NativeMonitorInput::CdcLine(line) => {
+                        if let Some(frame) = parse_matching_cdc_response(&line, request_id)? {
+                            return Ok(frame);
+                        }
+                        handle_unmatched_line(&line);
+                    }
+                    NativeMonitorInput::DefmtBytes(bytes) => {
+                        handle_unmatched_line(&bytes);
+                    }
+                    NativeMonitorInput::None => {}
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
@@ -5857,7 +6895,9 @@ fn seed_mock_device(state: &AppState) {
         connection: ConnectionState::Disconnected,
         identity: Some(mock_identity(&id)),
         status: None,
+        status_updated_at: None,
         power_diag: None,
+        power_diag_updated_at: None,
         selected_artifact_id,
         log_decode: LogDecodeState::default(),
         settings: default_settings(),
@@ -5870,12 +6910,7 @@ fn seed_mock_device(state: &AppState) {
 }
 
 fn ensure_device(state: &AppState, id: &str) -> Result<(), HttpError> {
-    let guard = state.inner.lock().expect("state lock");
-    guard
-        .devices
-        .get(id)
-        .map(|_| ())
-        .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))
+    ensure_bound_device_record(state, id)
 }
 
 fn read_manifest(path: &str) -> Result<FirmwareArtifact, HttpError> {
@@ -6062,7 +7097,8 @@ fn mock_identity(id: &str) -> Value {
             "last_error": null,
             "rssi_dbm": null
         },
-        "capabilities": {"sse": true, "mdns": true, "dns_sd": true, "write_controls": true, "devd": true}
+        "capabilities": {"sse": true, "mdns": true, "dns_sd": true, "write_controls": true, "devd": true},
+        "hardware_capabilities": {"output_profile": "12v", "rated_vout_mv": 12000}
     })
 }
 
@@ -6188,37 +7224,93 @@ fn mock_power_diag() -> Value {
     })
 }
 
-async fn read_native_identity_async(port_path: String) -> Result<Value, HttpError> {
-    tokio::task::spawn_blocking(move || read_native_identity(&port_path))
-        .await
-        .map_err(|error| HttpError::retryable("native_identity_join_failed", error.to_string()))?
-}
-
 async fn read_device_identity_async(
+    state: &AppState,
+    device_id: &str,
     port_path: String,
     monitor_command_tx: Option<mpsc::Sender<NativeMonitorCommand>>,
 ) -> Result<Value, HttpError> {
-    if let Some(command_tx) = monitor_command_tx {
-        let request_id = "devd-identity".to_string();
-        let frame = json!({"type": "request", "request_id": request_id, "op": "get_identity"});
-        let response = send_monitor_cdc_frame_async(command_tx, frame, request_id).await?;
-        return response.get("result").cloned().ok_or_else(|| {
-            HttpError::retryable(
-                "native_identity_missing",
-                "identity response did not include result",
-            )
-        });
-    }
-    read_native_identity_async(port_path).await
+    let request_id = format!("devd-identity-{}", Utc::now().timestamp_millis());
+    let frame = json!({"type": "request", "request_id": request_id, "op": "get_identity"});
+    let response = send_native_cdc_frame_with_monitor_fallback(
+        state,
+        device_id,
+        port_path,
+        monitor_command_tx,
+        frame,
+        request_id,
+    )
+    .await?;
+    response.get("result").cloned().ok_or_else(|| {
+        HttpError::retryable(
+            "native_identity_missing",
+            "identity response did not include result",
+        )
+    })
+}
+
+async fn read_device_settings_async(
+    state: &AppState,
+    device_id: &str,
+    port_path: String,
+    monitor_command_tx: Option<mpsc::Sender<NativeMonitorCommand>>,
+) -> Result<DeviceSettingsState, HttpError> {
+    let request_id = format!("devd-settings-{}", Utc::now().timestamp_millis());
+    let frame = json!({"type": "request", "request_id": request_id, "op": "get_settings"});
+    let response = send_native_cdc_frame_with_monitor_fallback(
+        state,
+        device_id,
+        port_path,
+        monitor_command_tx,
+        frame,
+        request_id,
+    )
+    .await?;
+    let result = response.get("result").cloned().ok_or_else(|| {
+        HttpError::retryable(
+            "native_settings_missing",
+            "settings response did not include result",
+        )
+    })?;
+    settings_state_from_api(&result)
 }
 
 async fn reset_native_serial_async(port_path: String) -> Result<(), HttpError> {
-    tokio::task::spawn_blocking(move || {
-        let mut port = open_native_serial_port(&port_path, Duration::from_millis(250), false)?;
-        reset_native_serial_to_app_on_port(&port_path, &mut *port)
-    })
+    let port_path_for_task = port_path.clone();
+    tokio::time::timeout(
+        Duration::from_secs(NATIVE_SERIAL_BLOCKING_TIMEOUT_SECS),
+        tokio::task::spawn_blocking(move || {
+            let mut port =
+                open_native_serial_port(&port_path_for_task, Duration::from_millis(250), false)?;
+            reset_native_serial_to_app_on_port(&port_path_for_task, &mut *port)
+        }),
+    )
     .await
+    .map_err(|_| {
+        HttpError::retryable(
+            "native_reset_open_timeout",
+            format!("timed out opening native serial reset path on {port_path}"),
+        )
+    })?
     .map_err(|error| HttpError::retryable("native_reset_join_failed", error.to_string()))?
+}
+
+fn mark_device_connect_error(state: &AppState, device_id: &str, message: String) {
+    let device_id_string = device_id.to_string();
+    {
+        let mut guard = state.inner.lock().expect("state lock");
+        if let Some(device) = guard.devices.get_mut(device_id) {
+            device.connection = ConnectionState::Error;
+            push_log(device, "error", "connect", &message);
+        }
+    }
+    emit(
+        state,
+        Some(device_id_string),
+        "connect",
+        "device connect failed",
+        json!({"error": message}),
+    );
 }
 
 struct MonitorStartResult {
@@ -6227,12 +7319,53 @@ struct MonitorStartResult {
     already_running: bool,
 }
 
+fn running_native_monitor_snapshot(
+    state: &AppState,
+    device_id: &str,
+) -> Result<Option<MonitorStartResult>, HttpError> {
+    let guard = state.inner.lock().expect("state lock");
+    if !guard.monitors.contains_key(device_id) {
+        return Ok(None);
+    }
+    let device = guard
+        .devices
+        .get(device_id)
+        .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+    Ok(Some(MonitorStartResult {
+        trace_count: device.trace.len(),
+        log_count: device.logs.len(),
+        already_running: true,
+    }))
+}
+
+async fn open_native_monitor_serial_async(
+    port_path: String,
+) -> Result<Box<dyn serialport::SerialPort>, HttpError> {
+    let port_path_for_task = port_path.clone();
+    tokio::time::timeout(
+        Duration::from_secs(NATIVE_SERIAL_BLOCKING_TIMEOUT_SECS),
+        tokio::task::spawn_blocking(move || {
+            open_native_monitor_serial_port(&port_path_for_task, Duration::from_millis(250))
+        }),
+    )
+    .await
+    .map_err(|_| {
+        HttpError::retryable(
+            "native_monitor_open_timeout",
+            format!("timed out opening native monitor path on {port_path}"),
+        )
+    })?
+    .map_err(|error| HttpError::retryable("native_monitor_join_failed", error.to_string()))?
+}
+
 fn start_native_monitor(
     state: &AppState,
     device_id: String,
     port_path: String,
+    port: Box<dyn serialport::SerialPort>,
 ) -> Result<MonitorStartResult, HttpError> {
     let stop = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
     let (command_tx, command_rx) = mpsc::channel();
     {
         let mut guard = state.inner.lock().expect("state lock");
@@ -6249,14 +7382,17 @@ fn start_native_monitor(
         }
         guard.monitors.insert(
             device_id.clone(),
-            NativeMonitorHandle {
+            MonitorHandle {
                 stop: stop.clone(),
-                command_tx,
+                done: done.clone(),
+                command_tx: Some(command_tx),
             },
         );
     }
     let state = state.clone();
-    std::thread::spawn(move || run_native_monitor(state, device_id, port_path, stop, command_rx));
+    std::thread::spawn(move || {
+        run_native_monitor(state, device_id, port_path, stop, done, command_rx, port)
+    });
     Ok(MonitorStartResult {
         trace_count: 0,
         log_count: 0,
@@ -6264,14 +7400,104 @@ fn start_native_monitor(
     })
 }
 
+fn start_lan_monitor(
+    state: &AppState,
+    device_id: String,
+    address: String,
+) -> Result<MonitorStartResult, HttpError> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
+    {
+        let mut guard = state.inner.lock().expect("state lock");
+        if guard.monitors.contains_key(&device_id) {
+            let device = guard
+                .devices
+                .get(&device_id)
+                .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+            return Ok(MonitorStartResult {
+                trace_count: device.trace.len(),
+                log_count: device.logs.len(),
+                already_running: true,
+            });
+        }
+        guard.monitors.insert(
+            device_id.clone(),
+            MonitorHandle {
+                stop: stop.clone(),
+                done: done.clone(),
+                command_tx: None,
+            },
+        );
+    }
+    let state = state.clone();
+    std::thread::spawn(move || run_lan_monitor(state, device_id, address, stop, done));
+    Ok(MonitorStartResult {
+        trace_count: 0,
+        log_count: 0,
+        already_running: false,
+    })
+}
+
+fn run_lan_monitor(
+    state: AppState,
+    device_id: String,
+    address: String,
+    stop: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build();
+    let Ok(runtime) = runtime else {
+        let mut guard = state.inner.lock().expect("state lock");
+        guard.monitors.remove(&device_id);
+        if let Some(device) = guard.devices.get_mut(&device_id) {
+            push_log(
+                device,
+                "error",
+                "monitor",
+                "LAN monitor runtime init failed",
+            );
+        }
+        done.store(true, Ordering::SeqCst);
+        return;
+    };
+    while !stop.load(Ordering::SeqCst) {
+        let result = runtime
+            .block_on(async { lan_http_json(&address, "GET", "/api/v1/status", None).await });
+        match result {
+            Ok(status) => {
+                update_device_status_snapshot(&state, &device_id, status);
+            }
+            Err(error) => {
+                tracing::debug!("skip LAN monitor refresh for {device_id}: {error}");
+            }
+        }
+        let mut slept_ms = 0_u64;
+        while !stop.load(Ordering::SeqCst) && slept_ms < NATIVE_MONITOR_STATUS_INTERVAL_MS {
+            std::thread::sleep(Duration::from_millis(25));
+            slept_ms += 25;
+        }
+    }
+    let mut guard = state.inner.lock().expect("state lock");
+    guard.monitors.remove(&device_id);
+    if let Some(device) = guard.devices.get_mut(&device_id) {
+        push_log(device, "info", "monitor", "LAN monitor stopped");
+    }
+    done.store(true, Ordering::SeqCst);
+}
+
 fn run_native_monitor(
     state: AppState,
     device_id: String,
     port_path: String,
     stop: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
     command_rx: mpsc::Receiver<NativeMonitorCommand>,
+    port: Box<dyn serialport::SerialPort>,
 ) {
-    if let Err(error) = run_native_monitor_inner(&state, &device_id, &port_path, &stop, command_rx)
+    if let Err(error) =
+        run_native_monitor_inner(&state, &device_id, &port_path, &stop, command_rx, port)
     {
         let mut guard = state.inner.lock().expect("state lock");
         guard.monitors.remove(&device_id);
@@ -6285,6 +7511,7 @@ fn run_native_monitor(
             device.connection = ConnectionState::Error;
         }
     }
+    done.store(true, Ordering::SeqCst);
 }
 
 fn native_monitor_ingest_byte(
@@ -6292,15 +7519,8 @@ fn native_monitor_ingest_byte(
     cdc_line: &mut Vec<u8>,
     json_candidate: &mut Vec<u8>,
 ) -> NativeMonitorInput {
-    const JSON_FRAME_PREFIX: &[u8] = br#"{"type""#;
-
     if !json_candidate.is_empty() {
         json_candidate.push(byte);
-        if json_candidate.len() <= JSON_FRAME_PREFIX.len()
-            && json_candidate.as_slice() != &JSON_FRAME_PREFIX[..json_candidate.len()]
-        {
-            return NativeMonitorInput::DefmtBytes(std::mem::take(json_candidate));
-        }
         if byte == 0 {
             return NativeMonitorInput::DefmtBytes(std::mem::take(json_candidate));
         }
@@ -6340,22 +7560,76 @@ fn run_native_monitor_inner(
     port_path: &str,
     stop: &AtomicBool,
     command_rx: mpsc::Receiver<NativeMonitorCommand>,
+    mut port: Box<dyn serialport::SerialPort>,
 ) -> Result<(), HttpError> {
-    let defmt_table = load_native_monitor_defmt_table(state, device_id)?;
+    let defmt_table = NATIVE_MONITOR_DECODE_DEFMT
+        .then(|| load_native_monitor_defmt_table(state, device_id))
+        .transpose()?
+        .flatten();
     let mut defmt_decoder = defmt_table.as_ref().map(|table| table.new_stream_decoder());
-    let mut port = open_native_monitor_serial_port(port_path, Duration::from_millis(250))?;
-    let mut next_status_at = std::time::Instant::now() + Duration::from_secs(1);
+    let mut next_status_at = if NATIVE_MONITOR_POLL_STATUS {
+        std::time::Instant::now() + Duration::from_millis(NATIVE_MONITOR_STATUS_INTERVAL_MS)
+    } else {
+        std::time::Instant::now() + Duration::from_secs(24 * 60 * 60)
+    };
+    let mut last_status_timeout_trace_at: Option<Instant> = None;
+    let mut status_request_in_flight = false;
+    let mut status_request_sent_at: Option<Instant> = None;
+    let mut status_request_id: Option<String> = None;
     let mut cdc_line = Vec::new();
     let mut json_candidate = Vec::new();
     let mut defmt_raw = Vec::new();
     let mut byte = [0u8; 1];
+    let hello_request_id = format!("devd-monitor-hello-{}", Utc::now().timestamp_millis());
+    let hello_frame = format!(r#"{{"type":"hello","request_id":"{hello_request_id}"}}"#);
+    port.write_all(hello_frame.as_bytes())
+        .and_then(|_| port.write_all(b"\n"))
+        .map_err(|error| {
+            HttpError::retryable(
+                "native_monitor_write_failed",
+                format!("failed to start monitor session on {port_path}: {error}"),
+            )
+        })?;
+    append_monitor_trace(state, device_id, trace_entry("tx", &hello_frame), None);
     while !stop.load(Ordering::SeqCst) {
         while let Ok(command) = command_rx.try_recv() {
             handle_native_monitor_command(state, device_id, port_path, &mut *port, command);
         }
-        if std::time::Instant::now() >= next_status_at {
+        if NATIVE_MONITOR_POLL_STATUS
+            && status_request_in_flight
+            && native_monitor_status_request_timed_out(status_request_sent_at, Instant::now())
+            && last_status_timeout_trace_at.is_none_or(|last_trace| {
+                last_trace.elapsed()
+                    >= Duration::from_millis(NATIVE_MONITOR_STATUS_RESPONSE_TIMEOUT_MS)
+            })
+        {
+            append_monitor_trace(
+                state,
+                device_id,
+                raw_trace_entry(
+                    "info",
+                    "devd-monitor",
+                    "monitor status request timed out; scheduling retry",
+                    "devd-monitor-status",
+                ),
+                None,
+            );
+            last_status_timeout_trace_at = Some(Instant::now());
+            status_request_in_flight = false;
+            status_request_sent_at = None;
+            status_request_id = None;
+            next_status_at = std::time::Instant::now();
+        }
+        if NATIVE_MONITOR_POLL_STATUS
+            && native_monitor_status_request_due(
+                status_request_in_flight,
+                std::time::Instant::now(),
+                next_status_at,
+            )
+        {
+            let request_id = format!("devd-status-{}", Utc::now().timestamp_millis());
             let request =
-                r#"{"type":"request","request_id":"devd-monitor-status","op":"get_status"}"#;
+                format!(r#"{{"type":"request","request_id":"{request_id}","op":"get_status"}}"#);
             port.write_all(request.as_bytes())
                 .and_then(|_| port.write_all(b"\n"))
                 .map_err(|error| {
@@ -6364,19 +7638,35 @@ fn run_native_monitor_inner(
                         format!("failed to request monitor sample from {port_path}: {error}"),
                     )
                 })?;
-            append_monitor_trace(state, device_id, trace_entry("tx", request), None);
-            next_status_at = std::time::Instant::now() + Duration::from_secs(2);
+            append_monitor_trace(state, device_id, trace_entry("tx", &request), None);
+            status_request_in_flight = true;
+            status_request_sent_at = Some(Instant::now());
+            status_request_id = Some(request_id);
+            next_status_at = std::time::Instant::now()
+                + Duration::from_millis(NATIVE_MONITOR_STATUS_INTERVAL_MS);
         }
         match port.read(&mut byte) {
             Ok(0) => continue,
             Ok(_) => {
                 match native_monitor_ingest_byte(byte[0], &mut cdc_line, &mut json_candidate) {
                     NativeMonitorInput::CdcLine(line) => {
+                        if line_contains_monitor_status_response(
+                            &line,
+                            status_request_id.as_deref(),
+                        ) {
+                            last_status_timeout_trace_at = None;
+                            status_request_in_flight = false;
+                            status_request_sent_at = None;
+                            status_request_id = None;
+                        }
                         if let Some((trace, log)) = parse_cdc_line_for_monitor(&line) {
                             append_monitor_trace(state, device_id, trace, log);
                         }
                     }
                     NativeMonitorInput::DefmtBytes(bytes) => {
+                        if !NATIVE_MONITOR_DECODE_DEFMT {
+                            continue;
+                        }
                         if let Some(decoder) = defmt_decoder.as_mut() {
                             let reached_boundary = bytes.contains(&0);
                             defmt_raw.extend_from_slice(&bytes);
@@ -6569,11 +7859,18 @@ fn handle_native_monitor_command(
             request_id,
             response_tx,
         } => {
-            let result = send_cdc_frame_on_port(port, port_path, frame, &request_id, |line| {
-                if let Some((trace, log)) = parse_cdc_line_for_monitor(line) {
-                    append_monitor_trace(state, device_id, trace, log);
-                }
-            });
+            let result = send_cdc_frame_on_port_with_timeout(
+                port,
+                port_path,
+                frame,
+                &request_id,
+                Duration::from_millis(NATIVE_MONITOR_COMMAND_TIMEOUT_MS),
+                |line| {
+                    if let Some((trace, log)) = parse_cdc_line_for_monitor(line) {
+                        append_monitor_trace(state, device_id, trace, log);
+                    }
+                },
+            );
             let _ = response_tx.send(result);
         }
         NativeMonitorCommand::Reset { response_tx } => {
@@ -6596,10 +7893,17 @@ fn append_monitor_trace(
         let mut guard = state.inner.lock().expect("state lock");
         let mut power_event = None;
         if let Some(device) = guard.devices.get_mut(device_id) {
-            device.connection = ConnectionState::Connected;
+            if device.identity.is_some() {
+                device.connection = ConnectionState::Connected;
+            }
             push_bounded(&mut device.trace, trace, LOG_LIMIT);
             if let Some(status) = status_event.clone() {
+                let updated_at = Instant::now();
                 device.status = Some(status.clone());
+                device.status_updated_at = Some(updated_at);
+                let derived_power_diag = derive_power_diag_from_status(&status, "monitor_status");
+                device.power_diag = Some(derived_power_diag);
+                device.power_diag_updated_at = Some(updated_at);
                 power_event = maybe_record_power_event(device, &status);
                 if let Some((trace, _)) = power_event.as_ref() {
                     push_bounded(&mut device.trace, trace.clone(), LOG_LIMIT);
@@ -6609,10 +7913,8 @@ fn append_monitor_trace(
                 push_bounded(&mut device.logs, log, LOG_LIMIT);
             }
         }
-        (power_event, persisted_snapshot(&guard))
+        power_event
     };
-    let (power_event, snapshot) = power_event;
-    let _ = persist_devd_state(&state.persistence, snapshot);
     emit(
         state,
         Some(device_id.to_string()),
@@ -6665,7 +7967,7 @@ fn status_from_trace_payload(payload: &str) -> Option<Value> {
                 && frame
                     .get("request_id")
                     .and_then(Value::as_str)
-                    .is_some_and(|request_id| request_id == "devd-monitor-status") =>
+                    .is_some_and(is_monitor_status_request_id) =>
         {
             frame.get("result").cloned()
         }
@@ -6679,66 +7981,6 @@ fn reset_backend_name(transport: &DeviceTransport) -> &'static str {
         DeviceTransport::Lan => "lan_http",
         DeviceTransport::Mock => "mock",
     }
-}
-
-fn read_native_identity(port_path: &str) -> Result<Value, HttpError> {
-    let mut port = open_native_serial_port(port_path, Duration::from_millis(250), true)?;
-    port.write_all(br#"{"type":"request","request_id":"devd-identity","op":"get_identity"}"#)
-        .and_then(|_| port.write_all(b"\n"))
-        .map_err(|error| {
-            HttpError::retryable(
-                "native_identity_write_failed",
-                format!("failed to request identity from {port_path}: {error}"),
-            )
-        })?;
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(8);
-    let mut line = Vec::new();
-    let mut byte = [0u8; 1];
-    while std::time::Instant::now() < deadline {
-        match port.read(&mut byte) {
-            Ok(0) => continue,
-            Ok(_) if byte[0] == b'\n' => {
-                if let Some(identity) = parse_identity_line(&line)? {
-                    return Ok(identity);
-                }
-                line.clear();
-            }
-            Ok(_) => {
-                if line.len() < 16 * 1024 {
-                    line.push(byte[0]);
-                } else {
-                    line.clear();
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => continue,
-            Err(error) => {
-                return Err(HttpError::retryable(
-                    "native_identity_read_failed",
-                    format!("failed to read identity from {port_path}: {error}"),
-                ))
-            }
-        }
-    }
-    Err(HttpError::retryable(
-        "native_identity_timeout",
-        format!("timed out waiting for identity from {port_path}"),
-    ))
-}
-
-fn parse_identity_line(line: &[u8]) -> Result<Option<Value>, HttpError> {
-    for frame in json_frames_from_cdc_line(line) {
-        match frame.get("type").and_then(Value::as_str) {
-            Some("response")
-                if frame.get("request_id").and_then(Value::as_str) == Some("devd-identity") =>
-            {
-                return Ok(frame.get("result").cloned());
-            }
-            Some("hello") => return Ok(frame.get("identity").cloned()),
-            _ => {}
-        }
-    }
-    Ok(None)
 }
 
 fn parse_cdc_line_for_monitor(line: &[u8]) -> Option<(SerialTraceEntry, Option<SerialLogEntry>)> {
@@ -6801,6 +8043,43 @@ fn parse_cdc_line_for_monitor(line: &[u8]) -> Option<(SerialTraceEntry, Option<S
                 .to_string(),
         });
     Some((trace, log))
+}
+
+fn line_contains_monitor_status_response(line: &[u8], current_request_id: Option<&str>) -> bool {
+    json_frames_from_cdc_line(line).into_iter().any(|frame| {
+        if matches!(frame.get("type").and_then(Value::as_str), Some("status")) {
+            return true;
+        }
+        let Some(request_id) = frame.get("request_id").and_then(Value::as_str) else {
+            return false;
+        };
+        frame.get("type").and_then(Value::as_str) == Some("response")
+            && frame.get("ok").and_then(Value::as_bool).unwrap_or(false)
+            && if let Some(current) = current_request_id {
+                request_id == current
+            } else {
+                is_monitor_status_request_id(request_id)
+            }
+    })
+}
+
+#[cfg(test)]
+fn line_contains_monitor_status_frame(line: &[u8]) -> bool {
+    json_frames_from_cdc_line(line).into_iter().any(|frame| {
+        matches!(frame.get("type").and_then(Value::as_str), Some("status"))
+            || (frame.get("type").and_then(Value::as_str) == Some("response")
+                && frame.get("ok").and_then(Value::as_bool).unwrap_or(false)
+                && frame
+                    .get("request_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_monitor_status_request_id))
+    })
+}
+
+fn is_monitor_status_request_id(request_id: &str) -> bool {
+    request_id == "devd-monitor-status"
+        || request_id.starts_with("devd-monitor-status-")
+        || request_id.starts_with("devd-status-")
 }
 
 fn json_frames_from_cdc_line(line: &[u8]) -> Vec<Value> {
@@ -7422,6 +8701,88 @@ fn default_settings() -> DeviceSettingsState {
             speed: "ma_500".to_string(),
             timer_h: 2,
         },
+        advanced_power: AdvancedPowerSettings {
+            standby_drop_mv: 1200,
+            assist_low_drop_mv: 600,
+            assist_enter_delta_ma: 0,
+            assist_exit_delta_ma: 0,
+            assist_required_samples: 2,
+            assist_ramp_step_mv: 100,
+            assist_ramp_interval_ms: 200,
+            rated_enter_delta_ma: 0,
+            rated_exit_delta_ma: 0,
+            vin_drop_threshold_pct: 4,
+            required_samples: 2,
+        },
+        advanced_power_capabilities: AdvancedPowerCapabilities {
+            rated_vout_mv: 12000,
+            standby_drop_mv: AdvancedPowerFieldU16Capability {
+                default: 1200,
+                min: 0,
+                max: 3000,
+                step: 20,
+            },
+            assist_low_drop_mv: AdvancedPowerFieldU16Capability {
+                default: 600,
+                min: 0,
+                max: 3000,
+                step: 20,
+            },
+            assist_enter_delta_ma: AdvancedPowerFieldI16Capability {
+                default: 0,
+                min: -100,
+                max: 1000,
+                step: 50,
+            },
+            assist_exit_delta_ma: AdvancedPowerFieldI16Capability {
+                default: 0,
+                min: -50,
+                max: 1000,
+                step: 50,
+            },
+            assist_required_samples: AdvancedPowerFieldU8Capability {
+                default: 2,
+                min: 1,
+                max: 5,
+                step: 1,
+            },
+            assist_ramp_step_mv: AdvancedPowerFieldU16Capability {
+                default: 100,
+                min: 20,
+                max: 1000,
+                step: 20,
+            },
+            assist_ramp_interval_ms: AdvancedPowerFieldU16Capability {
+                default: 200,
+                min: 100,
+                max: 3000,
+                step: 100,
+            },
+            rated_enter_delta_ma: AdvancedPowerFieldI16Capability {
+                default: 0,
+                min: -100,
+                max: 1000,
+                step: 50,
+            },
+            rated_exit_delta_ma: AdvancedPowerFieldI16Capability {
+                default: 0,
+                min: -50,
+                max: 1000,
+                step: 50,
+            },
+            vin_drop_threshold_pct: AdvancedPowerFieldU8Capability {
+                default: 4,
+                min: 1,
+                max: 12,
+                step: 1,
+            },
+            required_samples: AdvancedPowerFieldU8Capability {
+                default: 2,
+                min: 1,
+                max: 5,
+                step: 1,
+            },
+        },
     }
 }
 
@@ -7547,6 +8908,27 @@ mod tests {
             &device_uri,
             &headers
         ));
+    }
+
+    #[test]
+    fn monitor_status_response_completion_requires_current_request_id() {
+        let old_response =
+            br#"{"type":"response","ok":true,"request_id":"devd-status-old","result":{}}"#;
+        let current_response =
+            br#"{"type":"response","ok":true,"request_id":"devd-status-current","result":{}}"#;
+        let pushed_status = br#"{"type":"status","status":{"mode":"standby"}}"#;
+
+        assert!(!line_contains_monitor_status_response(
+            old_response,
+            Some("devd-status-current")
+        ));
+        assert!(line_contains_monitor_status_response(
+            current_response,
+            Some("devd-status-current")
+        ));
+        assert!(line_contains_monitor_status_response(old_response, None));
+        assert!(line_contains_monitor_status_frame(old_response));
+        assert!(line_contains_monitor_status_frame(pushed_status));
     }
 
     #[test]
@@ -7886,6 +9268,446 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn monitor_start_returns_already_running_without_reopening_serial_port() {
+        let state = create_app_state(false);
+        let device_id = "serial-04f3bb3f5367".to_string();
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.devices.insert(
+                device_id.clone(),
+                DeviceRecord {
+                    id: device_id.clone(),
+                    display_name: "USB CDC".into(),
+                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Connected,
+                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    status: None,
+                    status_updated_at: None,
+                    power_diag: None,
+                    power_diag_updated_at: None,
+                    selected_artifact_id: None,
+                    log_decode: LogDecodeState::default(),
+                    settings: default_settings(),
+                    logs: VecDeque::from([SerialLogEntry {
+                        id: "log-1".into(),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        level: "info".into(),
+                        target: "monitor".into(),
+                        message: "already active".into(),
+                    }]),
+                    trace: VecDeque::from([SerialTraceEntry {
+                        id: "trace-1".into(),
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        direction: "rx".into(),
+                        kind: "event".into(),
+                        frame_type: None,
+                        request_id: None,
+                        target: Some("power".into()),
+                        summary: "standby".into(),
+                        payload: "{\"mode\":\"standby\"}".into(),
+                    }]),
+                    last_power_event_signature: None,
+                },
+            );
+            let (command_tx, _command_rx) = mpsc::channel();
+            guard.monitors.insert(
+                device_id.clone(),
+                MonitorHandle {
+                    stop: Arc::new(AtomicBool::new(false)),
+                    done: Arc::new(AtomicBool::new(false)),
+                    command_tx: Some(command_tx),
+                },
+            );
+        }
+
+        let response = monitor_start(State(state), Path(device_id)).await.unwrap();
+        assert_eq!(response.0["ok"], true);
+        assert_eq!(response.0["already_running"], true);
+        assert_eq!(response.0["initial_trace_count"], 1);
+        assert_eq!(response.0["initial_log_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn monitor_command_failure_removes_and_stops_monitor() {
+        let state = create_app_state(false);
+        let device_id = "serial-04f3bb3f5367".to_string();
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(true));
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.devices.insert(
+                device_id.clone(),
+                DeviceRecord {
+                    id: device_id.clone(),
+                    display_name: "USB CDC".into(),
+                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Connected,
+                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    status: None,
+                    status_updated_at: None,
+                    power_diag: None,
+                    power_diag_updated_at: None,
+                    selected_artifact_id: None,
+                    log_decode: LogDecodeState::default(),
+                    settings: default_settings(),
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                    last_power_event_signature: None,
+                },
+            );
+            let (command_tx, _command_rx) = mpsc::channel();
+            guard.monitors.insert(
+                device_id.clone(),
+                MonitorHandle {
+                    stop: stop.clone(),
+                    done: done.clone(),
+                    command_tx: Some(command_tx),
+                },
+            );
+        }
+
+        let error = HttpError::retryable(
+            "native_monitor_command_timeout",
+            "timed out waiting for monitor",
+        );
+        let removed = stop_native_monitor_after_command_failure(&state, &device_id, &error);
+        wait_for_native_monitor_stop(&removed);
+
+        assert!(removed.is_some());
+        assert!(stop.load(Ordering::SeqCst));
+        let guard = state.inner.lock().expect("state lock");
+        assert!(!guard.monitors.contains_key(&device_id));
+        assert_eq!(guard.devices[&device_id].logs.len(), 1);
+        assert_eq!(guard.devices[&device_id].logs[0].level, "warn");
+        assert!(guard.devices[&device_id].logs[0]
+            .message
+            .contains("native_monitor_command_timeout"));
+    }
+
+    #[tokio::test]
+    async fn device_status_does_not_return_stale_monitor_cache() {
+        let state = create_app_state(false);
+        let device_id = "serial-04f3bb3f5367".to_string();
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.devices.insert(
+                device_id.clone(),
+                DeviceRecord {
+                    id: device_id.clone(),
+                    display_name: "USB CDC".into(),
+                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Connected,
+                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    status: Some(json!({"mode":"standby"})),
+                    status_updated_at: Some(Instant::now() - Duration::from_secs(5)),
+                    power_diag: None,
+                    power_diag_updated_at: None,
+                    selected_artifact_id: None,
+                    log_decode: LogDecodeState::default(),
+                    settings: default_settings(),
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                    last_power_event_signature: None,
+                },
+            );
+            let (command_tx, _command_rx) = mpsc::channel();
+            guard.monitors.insert(
+                device_id.clone(),
+                MonitorHandle {
+                    stop: Arc::new(AtomicBool::new(false)),
+                    done: Arc::new(AtomicBool::new(false)),
+                    command_tx: Some(command_tx),
+                },
+            );
+        }
+
+        let error = device_status(
+            Query(DeviceReadQuery {
+                include_meta: Some(true),
+                ..DeviceReadQuery::default()
+            }),
+            State(state.clone()),
+            Path(device_id.clone()),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(
+                error.0.code.as_str(),
+                "device_status_cache_unavailable" | "native_serial_open_failed"
+            ),
+            "unexpected error code: {}",
+            error.0.code
+        );
+    }
+
+    #[tokio::test]
+    async fn device_status_watch_can_return_stale_monitor_cache_with_meta() {
+        let state = create_app_state(false);
+        let device_id = "serial-04f3bb3f5367".to_string();
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.devices.insert(
+                device_id.clone(),
+                DeviceRecord {
+                    id: device_id.clone(),
+                    display_name: "USB CDC".into(),
+                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Connected,
+                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    status: Some(json!({"mode":"standby"})),
+                    status_updated_at: Some(Instant::now() - Duration::from_secs(5)),
+                    power_diag: None,
+                    power_diag_updated_at: None,
+                    selected_artifact_id: None,
+                    log_decode: LogDecodeState::default(),
+                    settings: default_settings(),
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                    last_power_event_signature: None,
+                },
+            );
+            let (command_tx, _command_rx) = mpsc::channel();
+            guard.monitors.insert(
+                device_id.clone(),
+                MonitorHandle {
+                    stop: Arc::new(AtomicBool::new(false)),
+                    done: Arc::new(AtomicBool::new(false)),
+                    command_tx: Some(command_tx),
+                },
+            );
+        }
+
+        let response = device_status(
+            Query(DeviceReadQuery {
+                fresh: Some(false),
+                cache_only: Some(true),
+                allow_stale_cache: Some(true),
+                include_meta: Some(true),
+                watch_freshness_ms: Some(600),
+            }),
+            State(state.clone()),
+            Path(device_id.clone()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.0["sample"]["mode"], "standby");
+        assert_eq!(response.0["meta"]["cache_fresh"], false);
+        assert_eq!(response.0["meta"]["cache_freshness_budget_ms"], 600);
+        assert!(response.0["meta"]["cache_age_ms"].as_u64().unwrap() >= 5_000);
+    }
+
+    #[tokio::test]
+    async fn bound_native_device_record_materializes_without_scan() {
+        let state = create_app_state(false);
+        let device_id = "serial-04f3bb3f5367".to_string();
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.bindings.insert(
+                device_id.clone(),
+                DeviceBinding {
+                    alias: Some("hil".into()),
+                    stable_id: device_id.clone(),
+                    port_path: Some("/dev/cu.usbmodem-bound".into()),
+                    created_at: "now".into(),
+                    logical_device_id: None,
+                    lan_companion: None,
+                },
+            );
+        }
+
+        ensure_bound_device_record(&state, &device_id).unwrap();
+
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard.devices.get(&device_id).unwrap();
+        assert_eq!(device.port_path.as_deref(), Some("/dev/cu.usbmodem-bound"));
+        assert!(matches!(device.transport, DeviceTransport::NativeSerial));
+        assert_eq!(device.binding.as_ref().unwrap().stable_id, device_id);
+    }
+
+    #[tokio::test]
+    async fn device_status_and_power_diag_prefer_monitor_cache_when_monitor_is_running() {
+        let state = create_app_state(false);
+        let device_id = "serial-04f3bb3f5367".to_string();
+        let new_status = json!({
+            "input": {
+                "source": "dcin",
+                "mains_present": true,
+                "vin_vbus_mv": 12010,
+                "vin_iin_ma": 980
+            },
+            "charger": {
+                "allow_charge": true,
+                "limit_reason": "none",
+                "policy_target_ichg_ma": 1400
+            }
+        });
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.devices.insert(
+                device_id.clone(),
+                DeviceRecord {
+                    id: device_id.clone(),
+                    display_name: "USB CDC".into(),
+                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Connected,
+                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    status: Some(json!({"mode":"standby"})),
+                    status_updated_at: Some(Instant::now() - Duration::from_secs(5)),
+                    power_diag: None,
+                    power_diag_updated_at: None,
+                    selected_artifact_id: None,
+                    log_decode: LogDecodeState::default(),
+                    settings: default_settings(),
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                    last_power_event_signature: None,
+                },
+            );
+            let (command_tx, _command_rx) = mpsc::channel();
+            guard.monitors.insert(
+                device_id.clone(),
+                MonitorHandle {
+                    stop: Arc::new(AtomicBool::new(false)),
+                    done: Arc::new(AtomicBool::new(false)),
+                    command_tx: Some(command_tx),
+                },
+            );
+        }
+        update_device_status_snapshot(&state, &device_id, new_status.clone());
+
+        let status_response = device_status(
+            Query(DeviceReadQuery::default()),
+            State(state.clone()),
+            Path(device_id.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status_response.0["input"]["vin_vbus_mv"], 12010);
+
+        let diag_response = device_power_diag(
+            Query(DeviceReadQuery {
+                include_meta: Some(true),
+                ..DeviceReadQuery::default()
+            }),
+            State(state.clone()),
+            Path(device_id.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(diag_response.0["sample"]["source"], "status_cache_derived");
+        assert_eq!(diag_response.0["sample"]["input"]["vin_vbus_mv"], 12010);
+        assert_eq!(diag_response.0["meta"]["cache_fresh"], true);
+        assert_eq!(diag_response.0["meta"]["sample_fresh"], true);
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard.devices.get(&device_id).unwrap();
+        assert!(device.power_diag_updated_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn device_power_diag_derives_from_fresh_status_cache() {
+        let state = create_app_state(false);
+        let device_id = "serial-04f3bb3f5367".to_string();
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "mains_present": true,
+                "assist_power_stage": "standby",
+                "assist_target_vout_mv": 10800,
+                "vin_vbus_mv": 11980,
+                "vin_iin_ma": 1420,
+                "vin_baseline_mv": 12020,
+                "vin_drop_mv": 40,
+                "tps_total_iout_ma": 12
+            },
+            "charger": {
+                "allow_charge": true,
+                "limit_reason": "none"
+            }
+        });
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.devices.insert(
+                device_id.clone(),
+                DeviceRecord {
+                    id: device_id.clone(),
+                    display_name: "USB CDC".into(),
+                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Connected,
+                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    status: Some(status),
+                    status_updated_at: Some(Instant::now()),
+                    power_diag: None,
+                    power_diag_updated_at: None,
+                    selected_artifact_id: None,
+                    log_decode: LogDecodeState::default(),
+                    settings: default_settings(),
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                    last_power_event_signature: None,
+                },
+            );
+        }
+
+        let response = device_power_diag(
+            Query(DeviceReadQuery {
+                include_meta: Some(true),
+                watch_freshness_ms: Some(333),
+                ..DeviceReadQuery::default()
+            }),
+            State(state),
+            Path(device_id),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.0["sample"]["source"], "status_cache_derived");
+        assert_eq!(response.0["sample"]["input"]["vin_vbus_mv"], 11980);
+        assert_eq!(response.0["sample"]["input"]["tps_total_iout_ma"], 12);
+        assert_eq!(response.0["meta"]["cache_fresh"], true);
+        assert_eq!(response.0["meta"]["sample_fresh"], true);
+    }
+
+    #[test]
+    fn device_power_diag_request_uses_power_diag_op() {
+        assert_eq!(
+            device_power_diag_request(),
+            ("get_power_diag", "devd-power-diag")
+        );
+    }
+
+    #[tokio::test]
     async fn monitor_trace_status_frames_append_power_event() {
         let state = create_app_state(false);
         seed_mock_device(&state);
@@ -7944,6 +9766,91 @@ mod tests {
         assert_eq!(power_trace.summary, "power state changed");
     }
 
+    #[tokio::test]
+    async fn monitor_trace_updates_runtime_without_persisting_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_file = temp.path().join("state.json");
+        let state = create_app_state_with_auth_and_persistence(
+            false,
+            false,
+            HttpServiceMode::ApiOnly,
+            None,
+            DevdPersistence::enabled(state_file.clone()),
+        );
+        seed_mock_device(&state);
+        let payload = json!({
+            "type": "status",
+            "status": {
+                "mode": "standby",
+                "input": {
+                    "vin_vbus_mv": 11980,
+                    "tps_total_iout_ma": 12
+                }
+            }
+        })
+        .to_string();
+
+        append_monitor_trace(&state, "mock-devkit", trace_entry("rx", &payload), None);
+
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard.devices.get("mock-devkit").unwrap();
+        assert_eq!(device.status.as_ref().unwrap()["mode"], "standby");
+        drop(guard);
+        assert!(
+            !state_file.exists(),
+            "monitor telemetry is high-rate runtime state and must not force synchronous persistence"
+        );
+    }
+
+    #[tokio::test]
+    async fn monitor_trace_does_not_mark_identityless_device_connected() {
+        let state = create_app_state(false);
+        let device_id = "serial-04f3bb3f5367";
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.devices.insert(
+                device_id.to_string(),
+                DeviceRecord {
+                    id: device_id.to_string(),
+                    display_name: "USB CDC".into(),
+                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Error,
+                    identity: None,
+                    status: None,
+                    power_diag: None,
+                    status_updated_at: None,
+                    power_diag_updated_at: None,
+                    selected_artifact_id: None,
+                    log_decode: LogDecodeState::default(),
+                    settings: default_settings(),
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                    last_power_event_signature: None,
+                },
+            );
+        }
+
+        append_monitor_trace(
+            &state,
+            device_id,
+            trace_entry(
+                "rx",
+                r#"{"type":"response","ok":true,"request_id":"devd-monitor-status","result":{"mode":"backup"}}"#,
+            ),
+            None,
+        );
+
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard.devices.get(device_id).unwrap();
+        assert!(matches!(device.connection, ConnectionState::Error));
+        assert_eq!(device.status.as_ref().unwrap()["mode"], "backup");
+    }
+
     #[test]
     fn stable_device_id_is_deterministic() {
         let port = serialport::SerialPortInfo {
@@ -7991,7 +9898,9 @@ mod tests {
             connection: ConnectionState::Disconnected,
             identity: None,
             status: None,
+            status_updated_at: None,
             power_diag: None,
+            power_diag_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -8030,7 +9939,9 @@ mod tests {
                     connection: ConnectionState::Disconnected,
                     identity: None,
                     status: None,
+                    status_updated_at: None,
                     power_diag: None,
+                    power_diag_updated_at: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
                     settings: default_settings(),
@@ -8209,8 +10120,40 @@ mod tests {
     }
 
     #[test]
-    fn native_serial_monitor_preserves_control_lines_on_open() {
-        assert!(super::native_serial_monitor_preserves_control_lines_on_open());
+    fn native_serial_monitor_uses_app_ready_line_control_on_open() {
+        assert_eq!(
+            native_serial_app_reset_steps().last(),
+            Some(&NativeSerialLineStep::Dtr(true))
+        );
+    }
+
+    #[test]
+    fn native_monitor_status_request_runs_on_fixed_cadence() {
+        let next_status_at = Instant::now();
+
+        assert!(native_monitor_status_request_due(
+            false,
+            next_status_at,
+            next_status_at
+        ));
+        assert!(!native_monitor_status_request_due(
+            true,
+            next_status_at + Duration::from_millis(NATIVE_MONITOR_STATUS_INTERVAL_MS),
+            next_status_at
+        ));
+        assert!(!native_monitor_status_request_due(
+            false,
+            next_status_at,
+            next_status_at + Duration::from_millis(1)
+        ));
+    }
+
+    #[test]
+    fn native_monitor_status_request_timeout_allows_retry_after_in_flight_clear() {
+        let now = Instant::now();
+        let sent_at = now - Duration::from_millis(NATIVE_MONITOR_STATUS_RESPONSE_TIMEOUT_MS);
+        assert!(native_monitor_status_request_timed_out(Some(sent_at), now));
+        assert!(native_monitor_status_request_due(false, now, now));
     }
 
     #[test]
@@ -8248,7 +10191,9 @@ mod tests {
                 connection: ConnectionState::Connected,
                 identity: Some(json!({"device_id": "mains-aegis-abc123"})),
                 status: None,
+                status_updated_at: None,
                 power_diag: None,
+                power_diag_updated_at: None,
                 selected_artifact_id: None,
                 log_decode: LogDecodeState::default(),
                 settings: default_settings(),
@@ -8313,7 +10258,9 @@ mod tests {
                 connection: ConnectionState::Disconnected,
                 identity: None,
                 status: None,
+                status_updated_at: None,
                 power_diag: None,
+                power_diag_updated_at: None,
                 selected_artifact_id: None,
                 log_decode: LogDecodeState::default(),
                 settings: default_settings(),
@@ -8362,7 +10309,9 @@ mod tests {
             connection: ConnectionState::Connected,
             identity: Some(json!({"device_id": "mains-aegis-abc123"})),
             status: None,
+            status_updated_at: None,
             power_diag: None,
+            power_diag_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -8415,7 +10364,9 @@ mod tests {
                 connection: ConnectionState::Connected,
                 identity: Some(json!({"device_id": "mains-aegis-abc123"})),
                 status: None,
+                status_updated_at: None,
                 power_diag: None,
+                power_diag_updated_at: None,
                 selected_artifact_id: None,
                 log_decode: LogDecodeState::default(),
                 settings: default_settings(),
@@ -8511,6 +10462,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_lan_http_non_success_status() {
+        let response = b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\r\n{\"error\":{\"code\":\"not_found\"}}";
+
+        let error =
+            parse_lan_http_json_response(response, "GET", "/api/v1/power-diag", "192.168.4.25")
+                .unwrap_err();
+
+        assert_eq!(error.0.code, "lan_http_status_failed");
+        assert!(
+            error.0.message.contains("HTTP 404"),
+            "unexpected message: {}",
+            error.0.message
+        );
+    }
+
+    #[test]
     fn derives_power_diag_from_status_preserves_tps_limit_reason() {
         let status = json!({
             "input": {
@@ -8520,6 +10487,8 @@ mod tests {
                 "input_ibus_ma": 241,
                 "vin_vbus_mv": 11896,
                 "vin_iin_ma": 217,
+                "assist_power_stage": "assist_rated",
+                "assist_target_vout_mv": 12000,
                 "tps_total_iout_ma": 288,
                 "tps_limit_threshold_ma": 100,
                 "pressure_state": "cooldown",
@@ -8559,6 +10528,8 @@ mod tests {
 
         assert_eq!(diag["source"], "lan_derived");
         assert_eq!(diag["input"]["pressure_reason"], "tps_output_current");
+        assert_eq!(diag["input"]["assist_power_stage"], "assist_rated");
+        assert_eq!(diag["input"]["assist_target_vout_mv"], 12000);
         assert_eq!(diag["input"]["tps_total_iout_ma"], 288);
         assert_eq!(diag["charger"]["allow_charge"], false);
         assert_eq!(diag["charger"]["poorsrc"], false);
@@ -8702,13 +10673,61 @@ mod tests {
     }
 
     #[test]
-    fn native_serial_power_diag_path_stays_on_cdc_even_with_lan_address() {
-        let transport = DeviceTransport::NativeSerial;
-        let lan_address = Some("192.168.4.25".to_string());
+    fn derives_power_diag_from_status_can_backfill_native_serial_snapshot() {
+        let status = json!({
+            "input": {
+                "source": "dcin",
+                "mains_present": true,
+                "pressure_state": "inactive",
+                "pressure_score_pct": 0,
+                "pressure_reason": "none",
+                "vin_vbus_mv": 12016,
+                "vin_iin_ma": 102,
+                "vin_baseline_mv": 12016,
+                "vin_drop_mv": 0,
+                "assist_power_stage": "standby",
+                "assist_target_vout_mv": 10800,
+                "tps_total_iout_ma": 36,
+                "tps_limit_threshold_ma": 100
+            },
+            "charger": {
+                "state": "ok",
+                "allow_charge": false,
+                "ichg_ma": null,
+                "ibat_ma": 0,
+                "vbat_present": true,
+                "policy_target_ichg_ma": null,
+                "limit_active": false,
+                "limit_reason": "none",
+                "limit_detail": "none",
+                "limit_threshold_ma": 100,
+                "detail_status": "WAIT"
+            },
+            "battery": {
+                "state": "ok",
+                "pack_mv": 15167,
+                "current_ma": 0,
+                "soc_pct": 81,
+                "no_battery": false,
+                "discharge_ready": true,
+                "charge_fet_on": true,
+                "discharge_fet_on": true,
+                "precharge_fet_on": false,
+                "issue_detail": null
+            }
+        });
 
-        let uses_lan_path = matches!(transport, DeviceTransport::Lan) && lan_address.is_some();
+        let diag = derive_power_diag_from_status(&status, "lan_derived");
 
-        assert!(!uses_lan_path);
+        assert_eq!(diag["source"], "lan_derived");
+        assert_eq!(diag["input"]["vin_vbus_mv"], 12016);
+        assert_eq!(diag["input"]["vin_iin_ma"], 102);
+        assert_eq!(diag["input"]["vin_baseline_mv"], 12016);
+        assert_eq!(diag["input"]["vin_drop_mv"], 0);
+        assert_eq!(diag["input"]["assist_power_stage"], "standby");
+        assert_eq!(diag["input"]["assist_target_vout_mv"], 10800);
+        assert_eq!(diag["input"]["tps_total_iout_ma"], 36);
+        assert_eq!(diag["policy"]["limit_reason"], "none");
     }
 
     #[test]
@@ -8716,7 +10735,34 @@ mod tests {
         let snapshot = json!({
             "wifi": {"configured": true, "ssid": "lab"},
             "log_level": "debug",
-            "manual_charge": {"target": "rsoc_80", "speed": "ma_1000", "timer_h": 6}
+            "manual_charge": {"target": "rsoc_80", "speed": "ma_1000", "timer_h": 6},
+            "advanced_power": {
+                "standby_drop_mv": 1400,
+                "assist_low_drop_mv": 800,
+                "assist_enter_delta_ma": 50,
+                "assist_exit_delta_ma": 0,
+                "assist_required_samples": 3,
+                "assist_ramp_step_mv": 120,
+                "assist_ramp_interval_ms": 300,
+                "rated_enter_delta_ma": 100,
+                "rated_exit_delta_ma": 50,
+                "vin_drop_threshold_pct": 5,
+                "required_samples": 3
+            },
+            "advanced_power_capabilities": {
+                "rated_vout_mv": 19000,
+                "standby_drop_mv": {"default": 1200, "min": 0, "max": 3000, "step": 20},
+                "assist_low_drop_mv": {"default": 600, "min": 0, "max": 3000, "step": 20},
+                "assist_enter_delta_ma": {"default": 0, "min": -100, "max": 1000, "step": 50},
+                "assist_exit_delta_ma": {"default": 0, "min": -50, "max": 1000, "step": 50},
+                "assist_required_samples": {"default": 2, "min": 1, "max": 5, "step": 1},
+                "assist_ramp_step_mv": {"default": 100, "min": 20, "max": 1000, "step": 20},
+                "assist_ramp_interval_ms": {"default": 200, "min": 100, "max": 3000, "step": 100},
+                "rated_enter_delta_ma": {"default": 0, "min": -100, "max": 1000, "step": 50},
+                "rated_exit_delta_ma": {"default": 0, "min": -50, "max": 1000, "step": 50},
+                "vin_drop_threshold_pct": {"default": 4, "min": 1, "max": 12, "step": 1},
+                "required_samples": {"default": 2, "min": 1, "max": 5, "step": 1}
+            }
         });
 
         let settings = settings_state_from_api(&snapshot).unwrap();
@@ -8727,6 +10773,42 @@ mod tests {
         assert_eq!(settings.manual_charge.target, "rsoc_80");
         assert_eq!(settings.manual_charge.speed, "ma_1000");
         assert_eq!(settings.manual_charge.timer_h, 6);
+        assert_eq!(settings.advanced_power.standby_drop_mv, 1400);
+        assert_eq!(settings.advanced_power.assist_low_drop_mv, 800);
+        assert_eq!(settings.advanced_power.assist_enter_delta_ma, 50);
+        assert_eq!(settings.advanced_power.assist_exit_delta_ma, 0);
+        assert_eq!(settings.advanced_power.assist_required_samples, 3);
+        assert_eq!(settings.advanced_power.assist_ramp_step_mv, 120);
+        assert_eq!(settings.advanced_power.assist_ramp_interval_ms, 300);
+        assert_eq!(settings.advanced_power.rated_enter_delta_ma, 100);
+        assert_eq!(settings.advanced_power.rated_exit_delta_ma, 50);
+        assert_eq!(settings.advanced_power.vin_drop_threshold_pct, 5);
+        assert_eq!(settings.advanced_power.required_samples, 3);
+        assert_eq!(settings.advanced_power_capabilities.rated_vout_mv, 19_000);
+    }
+
+    #[test]
+    fn settings_snapshot_defaults_advanced_power_when_old_firmware_omits_new_fields() {
+        let snapshot = json!({
+            "wifi": {"configured": false, "ssid": null},
+            "log_level": "info",
+            "manual_charge": {"target": "full_100", "speed": "ma_500", "timer_h": 2}
+        });
+
+        let settings = settings_state_from_api(&snapshot).unwrap();
+
+        assert_eq!(settings.advanced_power.standby_drop_mv, 1200);
+        assert_eq!(settings.advanced_power.assist_low_drop_mv, 600);
+        assert_eq!(settings.advanced_power.assist_enter_delta_ma, 0);
+        assert_eq!(settings.advanced_power.assist_exit_delta_ma, 0);
+        assert_eq!(settings.advanced_power.assist_required_samples, 2);
+        assert_eq!(settings.advanced_power.assist_ramp_step_mv, 100);
+        assert_eq!(settings.advanced_power.assist_ramp_interval_ms, 200);
+        assert_eq!(settings.advanced_power.rated_enter_delta_ma, 0);
+        assert_eq!(settings.advanced_power.rated_exit_delta_ma, 0);
+        assert_eq!(settings.advanced_power.vin_drop_threshold_pct, 4);
+        assert_eq!(settings.advanced_power.required_samples, 2);
+        assert_eq!(settings.advanced_power_capabilities.rated_vout_mv, 12_000);
     }
 
     #[test]
@@ -8754,16 +10836,28 @@ mod tests {
         );
         line.extend_from_slice(&[0x07, 0xea, 0x01]);
 
-        let identity = parse_identity_line(&line).unwrap().unwrap();
         let response = parse_matching_cdc_response(&line, "devd-identity")
             .unwrap()
             .unwrap();
         let monitor = parse_cdc_line_for_monitor(&line).unwrap().0;
 
-        assert_eq!(identity["device_id"], "mains-aegis-test");
+        assert_eq!(response["result"]["device_id"], "mains-aegis-test");
         assert_eq!(response["request_id"], "devd-identity");
         assert_eq!(monitor.kind, "frame");
         assert_eq!(monitor.frame_type.as_deref(), Some("response"));
+    }
+
+    #[test]
+    fn cdc_response_matching_rejects_stale_identity_request_id() {
+        let line =
+            br#"{"type":"response","request_id":"devd-identity","ok":true,"result":{"hardware_capabilities":{"output_profile":"19v","rated_vout_mv":19000}}}"#;
+
+        assert!(parse_matching_cdc_response(line, "devd-identity-123")
+            .unwrap()
+            .is_none());
+        assert!(parse_matching_cdc_response(line, "devd-identity")
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -8790,7 +10884,8 @@ mod tests {
     fn native_monitor_ingest_routes_json_lines_to_cdc_parser() {
         let mut cdc_line = Vec::new();
         let mut json_candidate = Vec::new();
-        let input = br#"{"type":"response","request_id":"devd-monitor-status","ok":true}"#
+        let input =
+            br#"{"ok":true,"request_id":"devd-monitor-status","result":{"mode":"standby"},"type":"response"}"#
             .iter()
             .copied()
             .chain(std::iter::once(b'\n'));
@@ -8910,7 +11005,9 @@ mod tests {
                 json!({"firmware": {"build_id": "b1", "git_sha": "g1", "build_profile": "release", "features": ["web_serial"]}}),
             ),
             status: None,
+            status_updated_at: None,
             power_diag: None,
+            power_diag_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -8956,7 +11053,9 @@ mod tests {
                 json!({"firmware": {"build_id": "debug-build", "git_sha": "same", "build_profile": "release", "features": ["web_serial"]}}),
             ),
             status: None,
+            status_updated_at: None,
             power_diag: None,
+            power_diag_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -9002,7 +11101,9 @@ mod tests {
                 json!({"firmware": {"build_id": "same-build", "build_profile": "release", "features": ["net_http"]}}),
             ),
             status: None,
+            status_updated_at: None,
             power_diag: None,
+            power_diag_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -9048,7 +11149,9 @@ mod tests {
                 json!({"firmware": {"build_id": "same-build", "build_profile": "debug", "features": ["web_serial"]}}),
             ),
             status: None,
+            status_updated_at: None,
             power_diag: None,
+            power_diag_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -9092,7 +11195,9 @@ mod tests {
             connection: ConnectionState::Disconnected,
             identity: None,
             status: None,
+            status_updated_at: None,
             power_diag: None,
+            power_diag_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -9110,6 +11215,68 @@ mod tests {
             lan_companion: None,
         });
         assert_eq!(bound_flash_port(&device), Some("/dev/cu.usbmodem1".into()));
+    }
+
+    #[tokio::test]
+    async fn firmware_change_invalidates_stale_capability_cache() {
+        let state = create_app_state(false);
+        let device_id = "serial-04f3bb3f5367".to_string();
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            let mut settings = default_settings();
+            settings.advanced_power_capabilities.rated_vout_mv = 19_000;
+            guard.devices.insert(
+                device_id.clone(),
+                DeviceRecord {
+                    id: device_id.clone(),
+                    display_name: "USB CDC".into(),
+                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Connected,
+                    identity: Some(json!({
+                        "device_id": "mains-aegis-198840",
+                        "hardware_capabilities": {
+                            "output_profile": "19v",
+                            "rated_vout_mv": 19000
+                        }
+                    })),
+                    status: Some(json!({"mode": "standby"})),
+                    status_updated_at: Some(Instant::now()),
+                    power_diag: Some(json!({"input": {"vin_vbus_mv": 19000}})),
+                    power_diag_updated_at: Some(Instant::now()),
+                    selected_artifact_id: Some("main-vout-12v".into()),
+                    log_decode: LogDecodeState {
+                        status: "verified".into(),
+                        reason: None,
+                        artifact_id: Some("main-vout-19v".into()),
+                    },
+                    settings,
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                    last_power_event_signature: None,
+                },
+            );
+        }
+
+        invalidate_device_runtime_after_firmware_change(&state, &device_id);
+
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard.devices.get(&device_id).unwrap();
+        assert!(matches!(device.connection, ConnectionState::Disconnected));
+        assert!(device.identity.is_none());
+        assert!(device.status.is_none());
+        assert!(device.status_updated_at.is_none());
+        assert!(device.power_diag.is_none());
+        assert!(device.power_diag_updated_at.is_none());
+        assert_eq!(
+            device.settings.advanced_power_capabilities.rated_vout_mv,
+            12_000
+        );
+        assert_eq!(device.log_decode.status, "unverified");
     }
 
     #[test]

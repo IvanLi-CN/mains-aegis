@@ -67,10 +67,12 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - CLI v1 覆盖：
   - `health`
   - `devices list|scan`
-  - `device <id> bind|unbind|connect|disconnect|identity|session|artifact|get|artifact select|flash|reset|monitor start|monitor stop`
+  - `device <id> bind|unbind|connect|disconnect|identity|status|power-diag|settings|trace|artifact get|artifact select|flash|reset|monitor start|monitor stop`
   - `serial lease create|heartbeat|release`
   - `settings wifi set|clear`、`settings log-level`、`settings manual-charge`
   - `host power status|profile|suspend|shutdown`
+- `mains-aegis device <id> status` 与 `mains-aegis device <id> power-diag` 是 UPS 只读观测的正式 CLI 面，必须通过 IPC 调用 devd，不得要求操作者直接拼 JSON-RPC 或依赖 `serve-http`。
+- 两个只读命令都支持 `--fresh`、`--cache-only`、`--include-meta`、`--watch`、`--interval-ms` 与 `--samples`。`--fresh` 与 `--cache-only` 互斥；单次读取默认允许 devd 按自身策略使用 fresh 或 cache；`--watch` 优先读取 monitor cache，若 cache 已不新鲜则回退到 fresh 读，避免把 stale cache 当作新样本。需要逐样本强制 CDC fresh 读时，操作者必须显式传入 `--fresh`。
 
 ### Release and install
 

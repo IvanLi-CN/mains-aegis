@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>formal-12v-19v-four-scenes-cli-r4</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f9;
+      --panel: #ffffff;
+      --text: #15202b;
+      --muted: #5b6672;
+      --line: #d6dde6;
+      --ok: #dff6e7;
+      --bad: #fde5e5;
+      --accent: #0d6efd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px;
+      font: 16px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--text);
+      background: linear-gradient(180deg, #eef3f8 0%, #f8fafc 100%);
+    }
+    .page {
+      max-width: 1700px;
+      margin: 0 auto;
+      display: grid;
+      gap: 20px;
+    }
+    .hero, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 20px;
+      box-shadow: 0 10px 35px rgba(21, 32, 43, 0.06);
+    }
+    .hero h1 { margin: 0 0 8px; font-size: 28px; }
+    .hero p { margin: 0; color: var(--muted); }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .meta .item {
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 14px;
+    }
+    .cards {
+      display: grid;
+      gap: 20px;
+      grid-template-columns: repeat(auto-fit, minmax(760px, 1fr));
+    }
+    .card.valid { border-color: #b9e5c8; }
+    .card.invalid { border-color: #efb7b7; }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .card h2 { margin: 0 0 4px; font-size: 22px; }
+    .card p { margin: 0; color: var(--muted); }
+    .pill {
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: #eef4ff;
+      color: var(--accent);
+      border: 1px solid #cfe0ff;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .meta-item {
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      display: grid;
+      gap: 4px;
+    }
+    .meta-item strong {
+      font-size: 12px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .meta-text {
+      margin-top: 10px !important;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--text) !important;
+    }
+    iframe {
+      width: 100%;
+      height: 980px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      margin-top: 14px;
+      background: white;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <h1>formal-12v-19v-four-scenes-cli-r4</h1>
+      <p>Formal dual-voltage HIL suite overview. Four required scenes, one page, same sampling and protection contract.</p>
+      <div class="meta">
+        <div class="item">reports=4</div>
+        <div class="item">signoff_valid_reports=4</div>
+        <div class="item">load_uvp=3000mV</div>
+        <div class="item">load_ocp=4000mA</div>
+        <div class="item">load_opp=80000mW</div>
+        <div class="item">usb_port=n/a</div>
+        <div class="item">ups_status_url=n/a</div>
+        <div class="item">isolapurr_url=n/a</div>
+
+            <div class="item">
+              <strong>12v</strong><br>
+              source=12000mV /
+              3000mA<br>
+              guard=None..NonemV<br>
+              features=(none)
+            </div>
+
+
+            <div class="item">
+              <strong>19v</strong><br>
+              source=19000mV /
+              3000mA<br>
+              guard=None..NonemV<br>
+              features=(none)
+            </div>
+
+      </div>
+    </section>
+    <div class="cards">
+
+    <section class="card valid">
+      <div class="card-header">
+        <div>
+          <h2>12v / assist_path</h2>
+          <p>source=12000mV / 3000mA | load=3900mA</p>
+        </div>
+        <span class="pill">valid_for_signoff</span>
+      </div>
+      <div class="meta-grid">
+        <div class="meta-item"><strong>Run validity</strong><span>valid_for_signoff</span></div>
+        <div class="meta-item"><strong>Scene complete</strong><span>True</span></div>
+        <div class="meta-item"><strong>Sample rate</strong><span>4.944Hz</span></div>
+        <div class="meta-item"><strong>Max gap</strong><span>0.37s</span></div>
+      </div>
+      <p class="meta-text"><strong>Completeness failures:</strong> none</p>
+      <p class="meta-text"><strong>Acceptance failures:</strong> none</p>
+      <p class="meta-text"><strong>Advanced power:</strong> assist_enter_delta_ma=0, assist_exit_delta_ma=0, assist_low_drop_mv=600, assist_ramp_interval_ms=200, assist_ramp_step_mv=100, assist_required_samples=2, rated_enter_delta_ma=0, rated_exit_delta_ma=0, required_samples=2, standby_drop_mv=1200, vin_drop_threshold_pct=4</p>
+      <p class="meta-text"><strong>Report dir:</strong> /Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/hil/reports/formal-12v-19v-four-scenes-cli-r4/12v-assist_path-3900ma</p>
+      <iframe src="12v-assist_path-3900ma/voltage-chart.html" loading="lazy"></iframe>
+    </section>
+
+
+    <section class="card valid">
+      <div class="card-header">
+        <div>
+          <h2>12v / backup_only</h2>
+          <p>source=12000mV / 3000mA | load=1000mA</p>
+        </div>
+        <span class="pill">valid_for_signoff</span>
+      </div>
+      <div class="meta-grid">
+        <div class="meta-item"><strong>Run validity</strong><span>valid_for_signoff</span></div>
+        <div class="meta-item"><strong>Scene complete</strong><span>True</span></div>
+        <div class="meta-item"><strong>Sample rate</strong><span>4.907Hz</span></div>
+        <div class="meta-item"><strong>Max gap</strong><span>0.379s</span></div>
+      </div>
+      <p class="meta-text"><strong>Completeness failures:</strong> none</p>
+      <p class="meta-text"><strong>Acceptance failures:</strong> none</p>
+      <p class="meta-text"><strong>Advanced power:</strong> assist_enter_delta_ma=0, assist_exit_delta_ma=0, assist_low_drop_mv=600, assist_ramp_interval_ms=200, assist_ramp_step_mv=100, assist_required_samples=2, rated_enter_delta_ma=0, rated_exit_delta_ma=0, required_samples=2, standby_drop_mv=1200, vin_drop_threshold_pct=4</p>
+      <p class="meta-text"><strong>Report dir:</strong> /Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/hil/reports/formal-12v-19v-four-scenes-cli-r4/12v-backup_only-1000ma</p>
+      <iframe src="12v-backup_only-1000ma/voltage-chart.html" loading="lazy"></iframe>
+    </section>
+
+
+    <section class="card valid">
+      <div class="card-header">
+        <div>
+          <h2>19v / assist_path</h2>
+          <p>source=19000mV / 3000mA | load=3900mA</p>
+        </div>
+        <span class="pill">valid_for_signoff</span>
+      </div>
+      <div class="meta-grid">
+        <div class="meta-item"><strong>Run validity</strong><span>valid_for_signoff</span></div>
+        <div class="meta-item"><strong>Scene complete</strong><span>True</span></div>
+        <div class="meta-item"><strong>Sample rate</strong><span>4.963Hz</span></div>
+        <div class="meta-item"><strong>Max gap</strong><span>0.213s</span></div>
+      </div>
+      <p class="meta-text"><strong>Completeness failures:</strong> none</p>
+      <p class="meta-text"><strong>Acceptance failures:</strong> none</p>
+      <p class="meta-text"><strong>Advanced power:</strong> assist_enter_delta_ma=0, assist_exit_delta_ma=0, assist_low_drop_mv=600, assist_ramp_interval_ms=200, assist_ramp_step_mv=100, assist_required_samples=2, rated_enter_delta_ma=0, rated_exit_delta_ma=0, required_samples=2, standby_drop_mv=1200, vin_drop_threshold_pct=4</p>
+      <p class="meta-text"><strong>Report dir:</strong> /Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/hil/reports/formal-12v-19v-four-scenes-cli-r4/19v-assist_path-3900ma</p>
+      <iframe src="19v-assist_path-3900ma/voltage-chart.html" loading="lazy"></iframe>
+    </section>
+
+
+    <section class="card valid">
+      <div class="card-header">
+        <div>
+          <h2>19v / backup_only</h2>
+          <p>source=19000mV / 3000mA | load=1000mA</p>
+        </div>
+        <span class="pill">valid_for_signoff</span>
+      </div>
+      <div class="meta-grid">
+        <div class="meta-item"><strong>Run validity</strong><span>valid_for_signoff</span></div>
+        <div class="meta-item"><strong>Scene complete</strong><span>True</span></div>
+        <div class="meta-item"><strong>Sample rate</strong><span>4.962Hz</span></div>
+        <div class="meta-item"><strong>Max gap</strong><span>0.214s</span></div>
+      </div>
+      <p class="meta-text"><strong>Completeness failures:</strong> none</p>
+      <p class="meta-text"><strong>Acceptance failures:</strong> none</p>
+      <p class="meta-text"><strong>Advanced power:</strong> assist_enter_delta_ma=0, assist_exit_delta_ma=0, assist_low_drop_mv=600, assist_ramp_interval_ms=200, assist_ramp_step_mv=100, assist_required_samples=2, rated_enter_delta_ma=0, rated_exit_delta_ma=0, required_samples=2, standby_drop_mv=1200, vin_drop_threshold_pct=4</p>
+      <p class="meta-text"><strong>Report dir:</strong> /Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/hil/reports/formal-12v-19v-four-scenes-cli-r4/19v-backup_only-1000ma</p>
+      <iframe src="19v-backup_only-1000ma/voltage-chart.html" loading="lazy"></iframe>
+    </section>
+
+    </div>
+  </div>
+</body>
+</html>

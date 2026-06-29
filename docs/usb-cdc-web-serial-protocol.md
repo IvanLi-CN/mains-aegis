@@ -53,6 +53,8 @@ devd local management endpoints:
 - `DELETE /api/v1/wifi-config`
 - `POST /api/v1/settings/log-level`
 - `POST /api/v1/settings/manual-charge`
+- `POST /api/v1/settings/advanced-power`
+- `POST /api/v1/settings/advanced-power/reset`
 - `GET /api/v1/host/power`
 - `POST /api/v1/host/power/profile`
 - `POST /api/v1/host/power/suspend`
@@ -112,15 +114,21 @@ Supported `op` values:
 
 - `get_identity`
 - `get_status`
+- `get_settings`
 - `set_log_level`
 - `set_manual_charge_prefs`
+- `set_advanced_power`
+- `reset_advanced_power`
 
 Examples:
 
 ```json
 {"type":"request","request_id":"web-2","op":"get_status"}
+{"type":"request","request_id":"web-2b","op":"get_settings"}
 {"type":"request","request_id":"web-3","op":"set_log_level","level":"debug"}
 {"type":"request","request_id":"web-4","op":"set_manual_charge_prefs","target":"rsoc_80","speed":"ma_500","timer_h":2}
+{"type":"request","request_id":"web-4b","op":"set_advanced_power","standby_drop_mv":1200,"assist_low_drop_mv":600,"assist_enter_delta_ma":0,"assist_exit_delta_ma":0,"assist_required_samples":2,"assist_ramp_step_mv":100,"assist_ramp_interval_ms":200,"rated_enter_delta_ma":0,"rated_exit_delta_ma":0,"vin_drop_threshold_pct":4,"required_samples":2}
+{"type":"request","request_id":"web-4c","op":"reset_advanced_power"}
 ```
 
 ### `wifi_config`

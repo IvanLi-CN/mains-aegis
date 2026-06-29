@@ -96,6 +96,232 @@ pub mod usb_cdc_protocol;
 #[path = "../../build_support/wifi_env.rs"]
 pub mod wifi_env;
 
+#[cfg(test)]
+pub mod output_tps55288 {
+    use core::convert::Infallible;
+    use std::collections::BTreeMap;
+    use std::vec::Vec;
+
+    use embedded_hal::i2c::{ErrorType, I2c, Operation};
+    use tps55288::registers::addr;
+    use tps55288::Tps55288;
+
+    #[derive(Default)]
+    struct RecordingI2c {
+        regs: BTreeMap<u8, u8>,
+        writes: Vec<Vec<u8>>,
+        reads: Vec<u8>,
+    }
+
+    impl RecordingI2c {
+        fn with_regs(regs: &[(u8, u8)]) -> Self {
+            Self {
+                regs: regs.iter().copied().collect(),
+                writes: Vec::new(),
+                reads: Vec::new(),
+            }
+        }
+    }
+
+    impl ErrorType for RecordingI2c {
+        type Error = Infallible;
+    }
+
+    impl I2c for RecordingI2c {
+        fn transaction(
+            &mut self,
+            _address: u8,
+            operations: &mut [Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            let mut last_reg = None;
+            for operation in operations {
+                match operation {
+                    Operation::Read(buffer) => {
+                        let reg = last_reg.unwrap_or_default();
+                        self.reads.push(reg);
+                        for (idx, byte) in buffer.iter_mut().enumerate() {
+                            *byte = *self.regs.get(&reg.saturating_add(idx as u8)).unwrap_or(&0);
+                        }
+                    }
+                    Operation::Write(bytes) => {
+                        self.writes.push(bytes.to_vec());
+                        if let Some((&reg, payload)) = bytes.split_first() {
+                            last_reg = Some(reg);
+                            for (idx, value) in payload.iter().copied().enumerate() {
+                                self.regs.insert(reg.saturating_add(idx as u8), value);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn apply_runtime_target_trim(i2c: &mut RecordingI2c, target_vout_mv: u16) {
+        // Mirrors firmware runtime behavior in output::tps55288::set_vout_only():
+        // update only the VOUT reference, without re-running bring-up.
+        let mut tps = Tps55288::with_address(i2c, 0x74);
+        tps.set_vout_mv(target_vout_mv).unwrap();
+    }
+
+    fn apply_full_configure(i2c: &mut RecordingI2c, target_vout_mv: u16, ilimit_ma: u16) {
+        let mut tps = Tps55288::with_address(i2c, 0x74);
+        tps.disable_output().unwrap();
+        tps.init().unwrap();
+        tps.set_vout_mv(target_vout_mv).unwrap();
+        tps.set_ilim_ma(ilimit_ma, true).unwrap();
+        tps.enable_output().unwrap();
+    }
+
+    #[test]
+    fn runtime_vout_update_writes_ref_only_without_mode_or_init_sequence() {
+        let mut i2c = RecordingI2c::with_regs(&[
+            (0x00, 0x00),
+            (0x01, 0x00),
+            (0x02, 0x80),
+            (0x03, 0x00),
+            (0x04, 0x03),
+            (0x05, 0xe0),
+            (0x06, 0x8d),
+        ]);
+
+        apply_runtime_target_trim(&mut i2c, 10_800);
+
+        assert!(
+            i2c.reads.is_empty(),
+            "runtime update must not read MODE/OE first"
+        );
+        assert_eq!(
+            i2c.writes.len(),
+            1,
+            "runtime update must be a single REF burst"
+        );
+        assert_eq!(
+            i2c.writes[0][0],
+            addr::REF0,
+            "runtime update must start at REF0"
+        );
+        assert_eq!(
+            i2c.writes[0].len(),
+            3,
+            "runtime update must write REF0/REF1 only"
+        );
+        assert_eq!(
+            i2c.regs.get(&0x06).copied(),
+            Some(0x8d),
+            "MODE/OE must stay untouched"
+        );
+        assert_eq!(
+            i2c.regs.get(&0x02).copied(),
+            Some(0x80),
+            "ILIM must stay untouched"
+        );
+        assert_eq!(
+            i2c.regs.get(&0x03).copied(),
+            Some(0x00),
+            "slew config must stay untouched"
+        );
+        assert_eq!(
+            i2c.regs.get(&0x04).copied(),
+            Some(0x03),
+            "feedback config must stay untouched"
+        );
+        assert_eq!(
+            i2c.regs.get(&0x05).copied(),
+            Some(0xe0),
+            "cable-comp config must stay untouched"
+        );
+    }
+
+    #[test]
+    fn runtime_vout_trim_down_and_restore_only_touches_ref_registers() {
+        let mut i2c = RecordingI2c::with_regs(&[
+            (0x00, 0x00),
+            (0x01, 0x00),
+            (0x02, 0x80),
+            (0x03, 0x00),
+            (0x04, 0x03),
+            (0x05, 0xe0),
+            (0x06, 0x8d),
+        ]);
+
+        apply_runtime_target_trim(&mut i2c, 10_780);
+        apply_runtime_target_trim(&mut i2c, 10_800);
+
+        assert!(
+            i2c.reads.is_empty(),
+            "runtime trims must not read MODE/OE first"
+        );
+        assert_eq!(i2c.writes.len(), 2, "each trim must be a single REF burst");
+        for write in &i2c.writes {
+            assert_eq!(write[0], addr::REF0, "runtime trim must start at REF0");
+            assert_eq!(write.len(), 3, "runtime trim must write REF0/REF1 only");
+        }
+        assert_eq!(
+            i2c.regs.get(&0x06).copied(),
+            Some(0x8d),
+            "MODE/OE must stay untouched"
+        );
+        assert_eq!(
+            i2c.regs.get(&0x02).copied(),
+            Some(0x80),
+            "ILIM must stay untouched"
+        );
+        assert_eq!(
+            i2c.regs.get(&0x03).copied(),
+            Some(0x00),
+            "slew config must stay untouched"
+        );
+        assert_eq!(
+            i2c.regs.get(&0x04).copied(),
+            Some(0x03),
+            "feedback config must stay untouched"
+        );
+        assert_eq!(
+            i2c.regs.get(&0x05).copied(),
+            Some(0xe0),
+            "cable-comp config must stay untouched"
+        );
+    }
+
+    #[test]
+    fn full_configure_reads_and_writes_mode_ilim_and_ref_unlike_runtime_trim() {
+        let mut i2c = RecordingI2c::with_regs(&[
+            (0x00, 0x00),
+            (0x01, 0x00),
+            (0x02, 0x80),
+            (0x03, 0x00),
+            (0x04, 0x03),
+            (0x05, 0xe0),
+            (0x06, 0x8d),
+        ]);
+
+        apply_full_configure(&mut i2c, 12_000, 3_500);
+
+        assert!(
+            !i2c.reads.is_empty(),
+            "full configure must read MODE/OE and therefore differs from runtime trim"
+        );
+        assert!(
+            i2c.writes.len() > 1,
+            "full configure must touch more than the REF registers"
+        );
+        assert!(
+            i2c.writes.iter().any(|write| write[0] == addr::IOUT_LIMIT),
+            "full configure must program ILIM"
+        );
+        assert!(
+            i2c.writes.iter().any(|write| write[0] == addr::MODE),
+            "full configure must touch MODE/OE"
+        );
+        assert!(
+            i2c.writes.iter().any(|write| write[0] == addr::REF0),
+            "full configure still writes REF registers as part of bring-up"
+        );
+    }
+}
+
 pub mod usb_pd;
 
 pub mod output {
@@ -392,19 +618,19 @@ pub mod output {
         let mut tracker = RuntimeModeTracker::new(UpsMode::Standby);
 
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(1)),
+            tracker.update(Some(true), Some(120), true, Some(1), 100, 50, 2),
             UpsMode::Standby
         );
         assert_eq!(
-            tracker.update(Some(false), None, false, None),
+            tracker.update(Some(false), None, false, None, 100, 50, 2),
             UpsMode::Backup
         );
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(2)),
+            tracker.update(Some(true), Some(120), true, Some(2), 100, 50, 2),
             UpsMode::Standby
         );
         assert_eq!(
-            tracker.update(Some(true), Some(120), true, Some(3)),
+            tracker.update(Some(true), Some(120), true, Some(3), 100, 50, 2),
             UpsMode::Supplement
         );
     }
@@ -423,11 +649,15 @@ pub mod output {
         vin_mains_present: &mut Option<bool>,
         missing_streak: &mut u8,
     ) {
-        *vin_vbus_mv = None;
-        *vin_iin_ma = None;
         if telemetry_include_vin_ch3 {
             record_vin_sample_failure(vin_mains_present, missing_streak);
+            if *missing_streak >= VIN_MAINS_LATCH_FAILURE_LIMIT {
+                *vin_vbus_mv = None;
+                *vin_iin_ma = None;
+            }
         } else {
+            *vin_vbus_mv = None;
+            *vin_iin_ma = None;
             *vin_mains_present = None;
             *missing_streak = 0;
         }
@@ -442,10 +672,6 @@ pub mod output {
     }
 
     impl RuntimeModeTracker {
-        const ASSIST_ENTER_MA: i32 = 100;
-        const STANDBY_EXIT_MA: i32 = 50;
-        const REQUIRED_SAMPLES: u8 = 2;
-
         const fn new(initial_mode: UpsMode) -> Self {
             let mains_mode = match initial_mode {
                 UpsMode::Backup => UpsMode::Backup,
@@ -465,6 +691,9 @@ pub mod output {
             tps_total_iout_ma: Option<i32>,
             tps_total_iout_fresh: bool,
             tps_total_iout_sample_seq: Option<u32>,
+            assist_enter_ma: i32,
+            standby_exit_ma: i32,
+            required_samples: u8,
         ) -> UpsMode {
             match mains_present {
                 Some(false) => {
@@ -483,19 +712,19 @@ pub mod output {
                     if sample_is_new {
                         self.last_tps_total_iout_sample_seq = tps_total_iout_sample_seq;
                         match tps_total_iout_ma {
-                            Some(total_iout_ma) if total_iout_ma >= Self::ASSIST_ENTER_MA => {
+                            Some(total_iout_ma) if total_iout_ma >= assist_enter_ma => {
                                 self.assist_enter_streak =
                                     self.assist_enter_streak.saturating_add(1);
                                 self.standby_enter_streak = 0;
-                                if self.assist_enter_streak >= Self::REQUIRED_SAMPLES {
+                                if self.assist_enter_streak >= required_samples {
                                     self.mains_mode = UpsMode::Supplement;
                                 }
                             }
-                            Some(total_iout_ma) if total_iout_ma <= Self::STANDBY_EXIT_MA => {
+                            Some(total_iout_ma) if total_iout_ma <= standby_exit_ma => {
                                 self.standby_enter_streak =
                                     self.standby_enter_streak.saturating_add(1);
                                 self.assist_enter_streak = 0;
-                                if self.standby_enter_streak >= Self::REQUIRED_SAMPLES {
+                                if self.standby_enter_streak >= required_samples {
                                     self.mains_mode = UpsMode::Standby;
                                 }
                             }

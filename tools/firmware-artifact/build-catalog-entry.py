@@ -71,12 +71,13 @@ def firmware_source_hash(firmware_dir: Path) -> str:
 def stage_artifact_file(kind: str, value: str, out: Path, flash_address: int | None = None) -> dict[str, object]:
     source = Path(value).resolve()
     dest = out / source.name
-    if source != dest:
+    source_hash = sha256(source)
+    if source != dest.resolve():
         shutil.copyfile(source, dest)
     entry = {
         "kind": kind,
         "path": dest.relative_to(out).as_posix(),
-        "sha256": sha256(dest),
+        "sha256": source_hash,
         "size": dest.stat().st_size,
     }
     if flash_address is not None:

@@ -4,6 +4,11 @@ use serde_json::{json, Value};
 use std::io::{self, IsTerminal, Write};
 use tokio::time::{sleep, Duration};
 
+mod mains_aegis;
+use mains_aegis::power_validation::{PowerValidationArgs, PowerValidationCommand};
+
+const DEFAULT_WATCH_FRESHNESS_MS: u64 = 750;
+
 #[derive(Debug, Parser)]
 #[command(name = "mains-aegis")]
 #[command(version = release_version())]
@@ -39,6 +44,10 @@ enum Command {
     Settings {
         #[command(subcommand)]
         command: SettingsCommand,
+    },
+    PowerValidation {
+        #[command(subcommand)]
+        command: PowerValidationCommand,
     },
 }
 
@@ -80,6 +89,8 @@ enum DeviceCommand {
     Disconnect,
     Connection,
     Identity,
+    Status(DeviceReadArgs),
+    PowerDiag(DeviceReadArgs),
     Settings,
     Trace(TraceArgs),
     Artifact {
@@ -113,6 +124,34 @@ struct TraceArgs {
     follow: bool,
     #[arg(long)]
     kind: Option<String>,
+}
+
+#[derive(Debug, Args, Clone)]
+struct DeviceReadArgs {
+    /// Bypass the devd monitor cache and request a fresh device read.
+    #[arg(long, conflicts_with = "cache_only")]
+    fresh: bool,
+    /// Return only the current devd monitor cache instead of issuing a CDC request.
+    #[arg(long)]
+    cache_only: bool,
+    /// Include cache age and monitor metadata with the returned sample.
+    #[arg(long)]
+    include_meta: bool,
+    /// Continuously emit newline-delimited JSON samples.
+    #[arg(long)]
+    watch: bool,
+    /// Watch interval in milliseconds.
+    #[arg(long, default_value_t = 333)]
+    interval_ms: u64,
+    /// Override the cache freshness budget used for watch mode.
+    #[arg(long)]
+    watch_freshness_ms: Option<u64>,
+    /// Allow watch mode to emit stale cache samples instead of failing freshness.
+    #[arg(long)]
+    allow_stale_cache: bool,
+    /// Stop after this many watch samples. Omit to run until interrupted.
+    #[arg(long)]
+    samples: Option<u64>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -220,6 +259,29 @@ enum SettingsCommand {
         #[arg(long)]
         lease_id: Option<String>,
     },
+    AdvancedPower {
+        standby_drop_mv: u16,
+        assist_low_drop_mv: u16,
+        assist_enter_delta_ma: i16,
+        assist_exit_delta_ma: i16,
+        assist_required_samples: u8,
+        assist_ramp_step_mv: u16,
+        assist_ramp_interval_ms: u16,
+        rated_enter_delta_ma: i16,
+        rated_exit_delta_ma: i16,
+        vin_drop_threshold_pct: u8,
+        required_samples: u8,
+        #[arg(long)]
+        device_id: Option<String>,
+        #[arg(long)]
+        lease_id: Option<String>,
+    },
+    AdvancedPowerReset {
+        #[arg(long)]
+        device_id: Option<String>,
+        #[arg(long)]
+        lease_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -246,11 +308,34 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let endpoint = cli.ipc.unwrap_or_else(default_ipc_endpoint);
     match cli.command {
+        Command::PowerValidation { command } => {
+            mains_aegis::power_validation::run(command, PowerValidationArgs { ups_ipc: endpoint })
+                .await?;
+        }
         Command::Device {
             device_id,
             command: DeviceCommand::Trace(args),
         } if args.follow => {
             follow_device_trace(&endpoint, &device_id, args).await?;
+        }
+        Command::Device {
+            device_id,
+            command: DeviceCommand::Status(args),
+        } if args.watch => {
+            watch_device_read(&endpoint, &device_id, "status", "device.status", args).await?;
+        }
+        Command::Device {
+            device_id,
+            command: DeviceCommand::PowerDiag(args),
+        } if args.watch => {
+            watch_device_read(
+                &endpoint,
+                &device_id,
+                "power_diag",
+                "device.power_diag",
+                args,
+            )
+            .await?;
         }
         command => {
             let interactive_bind = match &command {
@@ -279,6 +364,90 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+async fn watch_device_read(
+    endpoint: &str,
+    device_id: &str,
+    kind: &str,
+    method: &'static str,
+    args: DeviceReadArgs,
+) -> anyhow::Result<()> {
+    let mut index = 0_u64;
+    let started = std::time::Instant::now();
+    let interval = Duration::from_millis(args.interval_ms);
+    let watch_freshness_ms = args
+        .watch_freshness_ms
+        .unwrap_or(DEFAULT_WATCH_FRESHNESS_MS);
+    let mut next_sample_at = tokio::time::Instant::now();
+    loop {
+        tokio::time::sleep_until(next_sample_at).await;
+        next_sample_at += interval;
+        let sampled_at_ms = started.elapsed().as_millis() as u64;
+        let result = match ipc_call(
+            endpoint,
+            method,
+            device_read_ipc_params(device_id, &args, true, true),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(error) if is_watch_retryable_cache_error(&error) => {
+                let sample_received_at_ms = started.elapsed().as_millis() as u64;
+                println!(
+                    "{}",
+                    serde_json::to_string(&json!({
+                        "sample_index": index,
+                        "sample_seq": index,
+                        "sampled_at_ms": sampled_at_ms,
+                        "sample_received_at_ms": sample_received_at_ms,
+                        "kind": kind,
+                        "device_id": device_id,
+                        "fresh": args.fresh,
+                        "cache_only": !args.fresh || args.cache_only,
+                        "watch_freshness_ms": watch_freshness_ms,
+                        "miss": true,
+                        "error": error.to_string(),
+                    }))?
+                );
+                io::stdout().flush()?;
+                index += 1;
+                if args.samples.is_some_and(|limit| index >= limit) {
+                    break;
+                }
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let sample_received_at_ms = started.elapsed().as_millis() as u64;
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "sample_index": index,
+                "sample_seq": index,
+                "sampled_at_ms": sampled_at_ms,
+                "sample_received_at_ms": sample_received_at_ms,
+                "kind": kind,
+                "device_id": device_id,
+                "fresh": args.fresh,
+                "cache_only": !args.fresh || args.cache_only,
+                "watch_freshness_ms": watch_freshness_ms,
+                "result": result,
+            }))?
+        );
+        io::stdout().flush()?;
+        index += 1;
+        if args.samples.is_some_and(|limit| index >= limit) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn is_watch_retryable_cache_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("device_status_cache_unavailable")
+        || message.contains("device_power_diag_cache_unavailable")
 }
 
 async fn follow_device_trace(
@@ -400,6 +569,7 @@ fn command_to_ipc(command: Command) -> (&'static str, Value) {
             HostCommand::Power { command } => host_power_to_ipc(command),
         },
         Command::Settings { command } => settings_to_ipc(command),
+        Command::PowerValidation { .. } => unreachable!("handled before IPC dispatch"),
     }
 }
 
@@ -433,6 +603,14 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
         DeviceCommand::Disconnect => ("device.disconnect", json!({ "device_id": device_id })),
         DeviceCommand::Connection => ("device.connection", json!({ "device_id": device_id })),
         DeviceCommand::Identity => ("device.identity", json!({ "device_id": device_id })),
+        DeviceCommand::Status(args) => (
+            "device.status",
+            device_read_ipc_params(&device_id, &args, args.include_meta, false),
+        ),
+        DeviceCommand::PowerDiag(args) => (
+            "device.power_diag",
+            device_read_ipc_params(&device_id, &args, args.include_meta, false),
+        ),
         DeviceCommand::Settings => ("device.settings", json!({ "device_id": device_id })),
         DeviceCommand::Trace(args) => (
             "device.trace",
@@ -471,6 +649,31 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
             MonitorCommand::Stop => ("device.monitor.stop", json!({ "device_id": device_id })),
         },
     }
+}
+
+fn device_read_ipc_params(
+    device_id: &str,
+    args: &DeviceReadArgs,
+    include_meta: bool,
+    watch: bool,
+) -> Value {
+    let mut params = json!({
+        "device_id": device_id,
+        "fresh": args.fresh,
+        // Telemetry reads default to the devd monitor cache over IPC. A direct
+        // CDC read must be explicit because it competes with the monitor owner.
+        "cache_only": !args.fresh || args.cache_only,
+        // Watch mode is a telemetry stream: emit the last cache snapshot on
+        // schedule and mark freshness in meta instead of blocking the timeline.
+        "allow_stale_cache": args.allow_stale_cache || watch || (!watch && args.cache_only),
+        "include_meta": include_meta,
+    });
+    if watch {
+        params["watch_freshness_ms"] = json!(args
+            .watch_freshness_ms
+            .unwrap_or(DEFAULT_WATCH_FRESHNESS_MS));
+    }
+    params
 }
 
 async fn maybe_confirm_companion_lan(
@@ -521,7 +724,10 @@ async fn maybe_confirm_companion_lan(
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_new_matching_entries, seed_seen_ids, trace_entry_matches_kind};
+    use super::{
+        collect_new_matching_entries, device_read_ipc_params, seed_seen_ids,
+        trace_entry_matches_kind, DeviceReadArgs,
+    };
     use serde_json::json;
 
     #[test]
@@ -580,6 +786,121 @@ mod tests {
         assert!(seen.contains("new-1"));
         assert!(seen.contains("new-2"));
         assert!(seen.contains("new-3"));
+    }
+
+    #[test]
+    fn device_read_single_read_defaults_to_monitor_cache_only() {
+        let args = DeviceReadArgs {
+            fresh: false,
+            cache_only: false,
+            include_meta: false,
+            watch: false,
+            interval_ms: 250,
+            watch_freshness_ms: None,
+            allow_stale_cache: false,
+            samples: None,
+        };
+
+        assert_eq!(
+            device_read_ipc_params("serial-1", &args, false, false),
+            json!({
+                "device_id": "serial-1",
+                "fresh": false,
+                "cache_only": true,
+                "allow_stale_cache": false,
+                "include_meta": false,
+            })
+        );
+    }
+
+    #[test]
+    fn device_read_watch_defaults_to_monitor_cache_only() {
+        let args = DeviceReadArgs {
+            fresh: false,
+            cache_only: false,
+            include_meta: false,
+            watch: true,
+            interval_ms: 250,
+            watch_freshness_ms: None,
+            allow_stale_cache: false,
+            samples: Some(4),
+        };
+
+        assert_eq!(
+            device_read_ipc_params("serial-1", &args, true, true),
+            json!({
+                "device_id": "serial-1",
+                "fresh": false,
+                "cache_only": true,
+                "allow_stale_cache": true,
+                "include_meta": true,
+                "watch_freshness_ms": 750,
+            })
+        );
+    }
+
+    #[test]
+    fn device_read_watch_default_interval_keeps_monitor_cache_tolerant() {
+        let args = DeviceReadArgs {
+            fresh: false,
+            cache_only: false,
+            include_meta: false,
+            watch: true,
+            interval_ms: 333,
+            watch_freshness_ms: None,
+            allow_stale_cache: false,
+            samples: Some(4),
+        };
+
+        assert_eq!(
+            device_read_ipc_params("serial-1", &args, true, true)["watch_freshness_ms"],
+            json!(750)
+        );
+    }
+
+    #[test]
+    fn device_read_watch_always_allows_stale_cache_for_continuous_timeline() {
+        let args = DeviceReadArgs {
+            fresh: false,
+            cache_only: false,
+            include_meta: false,
+            watch: true,
+            interval_ms: 333,
+            watch_freshness_ms: None,
+            allow_stale_cache: true,
+            samples: Some(4),
+        };
+
+        assert_eq!(
+            device_read_ipc_params("serial-1", &args, true, true)["allow_stale_cache"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn device_read_watch_fresh_explicitly_bypasses_monitor_cache() {
+        let args = DeviceReadArgs {
+            fresh: true,
+            cache_only: false,
+            include_meta: false,
+            watch: true,
+            interval_ms: 250,
+            watch_freshness_ms: Some(600),
+            allow_stale_cache: false,
+            samples: Some(4),
+        };
+
+        assert_eq!(
+            device_read_ipc_params("serial-1", &args, true, true),
+            json!({
+                "device_id": "serial-1",
+                "fresh": true,
+                "cache_only": false,
+                "allow_stale_cache": true,
+                "include_meta": true,
+                "watch_freshness_ms": 600,
+            })
+        );
     }
 }
 
@@ -663,6 +984,48 @@ fn settings_to_ipc(command: SettingsCommand) -> (&'static str, Value) {
                 "target": target,
                 "speed": speed,
                 "timer_h": timer_h,
+                "device_id": device_id,
+                "lease_id": lease_id,
+            }),
+        ),
+        SettingsCommand::AdvancedPower {
+            standby_drop_mv,
+            assist_low_drop_mv,
+            assist_enter_delta_ma,
+            assist_exit_delta_ma,
+            assist_required_samples,
+            assist_ramp_step_mv,
+            assist_ramp_interval_ms,
+            rated_enter_delta_ma,
+            rated_exit_delta_ma,
+            vin_drop_threshold_pct,
+            required_samples,
+            device_id,
+            lease_id,
+        } => (
+            "settings.advanced_power.set",
+            json!({
+                "standby_drop_mv": standby_drop_mv,
+                "assist_low_drop_mv": assist_low_drop_mv,
+                "assist_enter_delta_ma": assist_enter_delta_ma,
+                "assist_exit_delta_ma": assist_exit_delta_ma,
+                "assist_required_samples": assist_required_samples,
+                "assist_ramp_step_mv": assist_ramp_step_mv,
+                "assist_ramp_interval_ms": assist_ramp_interval_ms,
+                "rated_enter_delta_ma": rated_enter_delta_ma,
+                "rated_exit_delta_ma": rated_exit_delta_ma,
+                "vin_drop_threshold_pct": vin_drop_threshold_pct,
+                "required_samples": required_samples,
+                "device_id": device_id,
+                "lease_id": lease_id,
+            }),
+        ),
+        SettingsCommand::AdvancedPowerReset {
+            device_id,
+            lease_id,
+        } => (
+            "settings.advanced_power.reset",
+            json!({
                 "device_id": device_id,
                 "lease_id": lease_id,
             }),

@@ -21,11 +21,15 @@ import {
   normalizeBaseUrl,
   probeDevice,
   releaseDevdWebLease,
+  resetDeviceAdvancedPower,
+  resetDevdAdvancedPower,
   scanDevdDevices,
   sendDeviceWifiConfig,
   sendDevdWifiConfig,
+  setDeviceAdvancedPower,
   setDeviceLogLevel,
   setDevdLogLevel,
+  setDevdAdvancedPower,
   setDeviceManualChargePrefs,
   setDevdManualChargePrefs,
   subscribeDevdSerialEvents,
@@ -35,6 +39,7 @@ import {
 } from "../api/client";
 import { subscribeStatusStream, type StatusStream } from "../api/statusStream";
 import type {
+  AdvancedPowerSettings,
   DevdDevice,
   DevdWebLease,
   DeviceRecord,
@@ -64,6 +69,7 @@ import {
 import {
   errorFromSerialFailure,
   isWebSerialSupported,
+  type SerialHelloFrame,
   type SerialFrame,
   type SerialLogFrame,
   type SerialPortLike,
@@ -75,6 +81,7 @@ import {
   DeviceRegistryContext,
   type AddDeviceInput,
   type AddDeviceResult,
+  type AdvancedPowerInput,
   type CommandResult,
   type DeviceChannelTransport,
   type ManualChargePrefsInput,
@@ -325,17 +332,17 @@ export function DeviceRegistryProvider({
 
       const cachedBridgeAuth = bridgeAuthToken(target.baseUrl) !== null;
       try {
-        if (selectedTransport === "devd") {
-          const devdBaseUrl =
-            rememberedDevdChannel(existing)?.baseUrl ??
-            existing.serial?.baseUrl ??
-            target.baseUrl;
-          const devdDeviceId =
-            rememberedDevdChannel(existing)?.devdDeviceId ?? target.deviceId;
-          if (existing.serial?.leaseId) {
-            await updateDevdSerialSnapshot(deviceId, devdBaseUrl);
-            return;
-          }
+      if (selectedTransport === "devd") {
+        const devdBaseUrl =
+          rememberedDevdChannel(existing)?.baseUrl ??
+          existing.serial?.baseUrl ??
+          target.baseUrl;
+        const devdDeviceId =
+          rememberedDevdChannel(existing)?.devdDeviceId ?? target.deviceId;
+        if (existing.serial?.leaseId) {
+          await updateDevdSerialSnapshot(deviceId, devdBaseUrl);
+          return;
+        }
           const devdTarget = {
             ...target,
             baseUrl: devdBaseUrl,
@@ -1075,6 +1082,7 @@ export function DeviceRegistryProvider({
         transportRef = transport;
         const hello = await transport.hello();
         const status = await transport.requestStatus();
+        const settings = await loadUsbProbeSettings(hello, transport);
         const identity = hello.identity;
         const firmwareMatch = await findFirmwareArtifactForIdentity(identity);
         if (!firmwareMatch && !input.ignoreFirmwareMismatch) {
@@ -1124,7 +1132,7 @@ export function DeviceRegistryProvider({
             identity,
             network: identity.network,
             status,
-            settings: defaultDeviceSettings(),
+            settings,
           },
           hello.protocol,
           [
@@ -1422,6 +1430,7 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
           onProgress?.({
@@ -1434,13 +1443,13 @@ export function DeviceRegistryProvider({
           });
           const applyResult = await sendDevdWifiConfig(
             devdBaseUrl,
-            record.target.deviceId,
+            devdDeviceId,
             leaseId,
             input,
           );
           const settings = leaseId
             ? null
-            : await getDevdDeviceSettings(devdBaseUrl, record.target.deviceId);
+            : await getDevdDeviceSettings(devdBaseUrl, devdDeviceId);
           if (leaseId)
             await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
           const message = wifiConnectedMessage(input.ssid, applyResult.network);
@@ -1596,6 +1605,7 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
           onProgress?.({
@@ -1604,12 +1614,12 @@ export function DeviceRegistryProvider({
           });
           const applyResult = await clearDevdWifiConfig(
             devdBaseUrl,
-            record.target.deviceId,
+            devdDeviceId,
             leaseId,
           );
           const settings = leaseId
             ? null
-            : await getDevdDeviceSettings(devdBaseUrl, record.target.deviceId);
+            : await getDevdDeviceSettings(devdBaseUrl, devdDeviceId);
           if (leaseId)
             await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
           const message = wifiDisabledMessage(applyResult.network);
@@ -1721,11 +1731,12 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
           await setDevdLogLevel(
             devdBaseUrl,
-            record.target.deviceId,
+            devdDeviceId,
             leaseId,
             level,
           );
@@ -1734,7 +1745,7 @@ export function DeviceRegistryProvider({
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
-              record.target.deviceId,
+              devdDeviceId,
             );
             setRecords((current) =>
               current.map((candidate) =>
@@ -1827,11 +1838,12 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
           await setDevdManualChargePrefs(
             devdBaseUrl,
-            record.target.deviceId,
+            devdDeviceId,
             leaseId,
             prefs,
           );
@@ -1840,7 +1852,7 @@ export function DeviceRegistryProvider({
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
-              record.target.deviceId,
+              devdDeviceId,
             );
             setRecords((current) =>
               current.map((candidate) =>
@@ -1880,6 +1892,250 @@ export function DeviceRegistryProvider({
                 { manual_charge: prefs },
                 "manual_charge",
                 "Manual charge preferences updated",
+              )
+            : candidate,
+        ),
+      );
+      return { ok: true };
+    },
+    [records, setSerialCommandError],
+  );
+
+  const setAdvancedPower = useCallback(
+    async (
+      deviceId: string,
+      advancedPower: AdvancedPowerInput,
+    ): Promise<CommandResult> => {
+      const record = records.find(
+        (candidate) => candidate.target.deviceId === deviceId,
+      );
+      if (!record) return serialCommandUnavailable();
+      const selectedTransport = resolvePreferredTransport(
+        record,
+        serialSessions.current,
+      );
+      if (selectedTransport === "http") {
+        try {
+          const settings = await withRememberedHttpFallback(
+            record,
+            async (httpBaseUrl) => {
+              await setDeviceAdvancedPower(httpBaseUrl, advancedPower);
+              return getSettings(httpBaseUrl);
+            },
+          );
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === deviceId
+                ? mergeLanDeviceSnapshot(
+                    candidate,
+                    undefined,
+                    settings,
+                    "Advanced power settings updated",
+                  )
+                : candidate,
+            ),
+          );
+          return { ok: true };
+        } catch (error) {
+          const envelope = toErrorEnvelope(error);
+          setSerialCommandError(deviceId, envelope);
+          return { ok: false, error: envelope };
+        }
+      }
+      if (selectedTransport === "devd") {
+        const devdBaseUrl = devdBaseUrlForRecord(record);
+        if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
+        try {
+          const leaseId = devdLeaseIdForRecord(record);
+          await setDevdAdvancedPower(
+            devdBaseUrl,
+            devdDeviceId,
+            leaseId,
+            advancedPower,
+          );
+          if (leaseId) {
+            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+            return { ok: true };
+          } else {
+            const settings = await getDevdDeviceSettings(
+              devdBaseUrl,
+              devdDeviceId,
+            );
+            setRecords((current) =>
+              current.map((candidate) =>
+                candidate.target.deviceId === deviceId
+                  ? mergeLanDeviceSnapshot(
+                      candidate,
+                      undefined,
+                      settings,
+                      "Advanced power settings updated",
+                    )
+                  : candidate,
+              ),
+            );
+            return { ok: true };
+          }
+        } catch (error) {
+          const envelope = toErrorEnvelope(error);
+          setSerialCommandError(deviceId, envelope);
+          return { ok: false, error: envelope };
+        }
+      } else if (!record.target.mock) {
+        const session = serialSessions.current.get(deviceId);
+        if (!session) return serialCommandUnavailable();
+        try {
+          await session.setAdvancedPower(advancedPower);
+          const settings = await session.requestSettings();
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === deviceId
+                ? updateSerialSettings(
+                    candidate,
+                    { advanced_power: settings.advanced_power, advanced_power_capabilities: settings.advanced_power_capabilities },
+                    "usb_cdc",
+                    "Advanced power settings updated",
+                  )
+                : candidate,
+            ),
+          );
+          return { ok: true };
+        } catch (error) {
+          const envelope = errorFromSerialFailure(error);
+          setSerialCommandError(deviceId, envelope);
+          return { ok: false, error: envelope };
+        }
+      }
+      setRecords((current) =>
+        current.map((candidate) =>
+          candidate.target.deviceId === deviceId
+            ? updateSerialSettings(
+                candidate,
+                { advanced_power: advancedPower },
+                "mock",
+                "Advanced power settings updated",
+              )
+            : candidate,
+        ),
+      );
+      return { ok: true };
+    },
+    [records, setSerialCommandError],
+  );
+
+  const resetAdvancedPower = useCallback(
+    async (deviceId: string): Promise<CommandResult> => {
+      const record = records.find(
+        (candidate) => candidate.target.deviceId === deviceId,
+      );
+      if (!record) return serialCommandUnavailable();
+      const selectedTransport = resolvePreferredTransport(
+        record,
+        serialSessions.current,
+      );
+      if (selectedTransport === "http") {
+        try {
+          const settings = await withRememberedHttpFallback(
+            record,
+            async (httpBaseUrl) => {
+              await resetDeviceAdvancedPower(httpBaseUrl);
+              return getSettings(httpBaseUrl);
+            },
+          );
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === deviceId
+                ? mergeLanDeviceSnapshot(
+                    candidate,
+                    undefined,
+                    settings,
+                    "Advanced power settings reset",
+                  )
+                : candidate,
+            ),
+          );
+          return { ok: true };
+        } catch (error) {
+          const envelope = toErrorEnvelope(error);
+          setSerialCommandError(deviceId, envelope);
+          return { ok: false, error: envelope };
+        }
+      }
+      if (selectedTransport === "devd") {
+        const devdBaseUrl = devdBaseUrlForRecord(record);
+        if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
+        try {
+          const leaseId = devdLeaseIdForRecord(record);
+          await resetDevdAdvancedPower(
+            devdBaseUrl,
+            devdDeviceId,
+            leaseId,
+          );
+          if (leaseId) {
+            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+            return { ok: true };
+          } else {
+            const settings = await getDevdDeviceSettings(
+              devdBaseUrl,
+              devdDeviceId,
+            );
+            setRecords((current) =>
+              current.map((candidate) =>
+                candidate.target.deviceId === deviceId
+                  ? mergeLanDeviceSnapshot(
+                      candidate,
+                      undefined,
+                      settings,
+                      "Advanced power settings reset",
+                    )
+                  : candidate,
+              ),
+            );
+            return { ok: true };
+          }
+        } catch (error) {
+          const envelope = toErrorEnvelope(error);
+          setSerialCommandError(deviceId, envelope);
+          return { ok: false, error: envelope };
+        }
+      } else if (!record.target.mock) {
+        const session = serialSessions.current.get(deviceId);
+        if (!session) return serialCommandUnavailable();
+        try {
+          await session.resetAdvancedPower();
+          const settings = await session.requestSettings();
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === deviceId
+                ? updateSerialSettings(
+                    candidate,
+                    { advanced_power: settings.advanced_power, advanced_power_capabilities: settings.advanced_power_capabilities },
+                    "usb_cdc",
+                    "Advanced power settings reset",
+                  )
+                : candidate,
+            ),
+          );
+          return { ok: true };
+        } catch (error) {
+          const envelope = errorFromSerialFailure(error);
+          setSerialCommandError(deviceId, envelope);
+          return { ok: false, error: envelope };
+        }
+      }
+      setRecords((current) =>
+        current.map((candidate) =>
+          candidate.target.deviceId === deviceId
+            ? updateSerialSettings(
+                candidate,
+                {
+                  advanced_power: defaultDeviceSettings().advanced_power,
+                  advanced_power_capabilities:
+                    defaultDeviceSettings().advanced_power_capabilities,
+                },
+                "mock",
+                "Advanced power settings reset",
               )
             : candidate,
         ),
@@ -2133,6 +2389,8 @@ export function DeviceRegistryProvider({
       clearWifiConfig,
       setSerialLogLevel,
       setManualChargePrefs,
+      setAdvancedPower,
+      resetAdvancedPower,
       removeDevice,
       refreshDevice,
       resetDemo,
@@ -2154,6 +2412,8 @@ export function DeviceRegistryProvider({
       clearWifiConfig,
       setSerialLogLevel,
       setManualChargePrefs,
+      setAdvancedPower,
+      resetAdvancedPower,
       removeDevice,
       refreshDevice,
       resetDemo,
@@ -2299,7 +2559,7 @@ function normalizeStoredTarget(
 
 function recordFromSerialProbe(
   target: DeviceTarget,
-  result: ProbeResult,
+  result: Omit<ProbeResult, "settings"> & { settings: DeviceSettings | null },
   protocol: string,
   logs: SerialLogEntry[] = [],
   trace: SerialTraceEntry[] = [],
@@ -2580,6 +2840,10 @@ function devdBaseUrlForRecord(record: DeviceRecord): string | null {
   return null;
 }
 
+function devdDeviceIdForRecord(record: DeviceRecord): string | null {
+  return record.target.rememberedChannels?.devd?.devdDeviceId ?? null;
+}
+
 function devdLeaseIdForRecord(record: DeviceRecord): string | null {
   return record.serial?.source === "devd"
     ? (record.serial.leaseId ?? null)
@@ -2781,6 +3045,8 @@ type DeviceSettingsPatch = {
   wifi_ssid?: string | null;
   log_level?: DeviceSettings["log_level"];
   manual_charge?: DeviceSettings["manual_charge"];
+  advanced_power?: DeviceSettings["advanced_power"];
+  advanced_power_capabilities?: DeviceSettings["advanced_power_capabilities"];
 };
 
 function defaultDeviceSettings(): DeviceSettings {
@@ -2795,7 +3061,51 @@ function defaultDeviceSettings(): DeviceSettings {
       speed: "ma_500",
       timer_h: 2,
     },
+    advanced_power: {
+      standby_drop_mv: 1200,
+      assist_low_drop_mv: 600,
+      assist_enter_delta_ma: 0,
+      assist_exit_delta_ma: 0,
+      assist_required_samples: 2,
+      assist_ramp_step_mv: 100,
+      assist_ramp_interval_ms: 200,
+      rated_enter_delta_ma: 0,
+      rated_exit_delta_ma: 0,
+      vin_drop_threshold_pct: 4,
+      required_samples: 2,
+    },
+    advanced_power_capabilities: {
+      rated_vout_mv: 12000,
+      standby_drop_mv: { default: 1200, min: 0, max: 3000, step: 20 },
+      assist_low_drop_mv: { default: 600, min: 0, max: 3000, step: 20 },
+      assist_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+      assist_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+      assist_required_samples: { default: 2, min: 1, max: 5, step: 1 },
+      assist_ramp_step_mv: { default: 100, min: 20, max: 1000, step: 20 },
+      assist_ramp_interval_ms: { default: 200, min: 100, max: 3000, step: 100 },
+      rated_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+      rated_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+      vin_drop_threshold_pct: { default: 4, min: 1, max: 12, step: 1 },
+      required_samples: { default: 2, min: 1, max: 5, step: 1 },
+    },
   };
+}
+
+export async function loadUsbProbeSettings(
+  hello: Pick<SerialHelloFrame, "capabilities">,
+  transport: Pick<WebSerialTransport, "requestSettings">,
+): Promise<DeviceSettings | null> {
+  if (hello.capabilities?.settings !== true) {
+    return null;
+  }
+  try {
+    return await transport.requestSettings();
+  } catch (error) {
+    if (errorFromSerialFailure(error).code === "unsupported_operation") {
+      return null;
+    }
+    throw error;
+  }
 }
 
 function serialLogFromFrame(frame: SerialLogFrame): SerialLogEntry {
@@ -2935,6 +3245,9 @@ function mergeDeviceSettings(
     },
     log_level: patch.log_level ?? current.log_level,
     manual_charge: patch.manual_charge ?? current.manual_charge,
+    advanced_power: patch.advanced_power ?? current.advanced_power,
+    advanced_power_capabilities:
+      patch.advanced_power_capabilities ?? current.advanced_power_capabilities,
   };
 }
 
