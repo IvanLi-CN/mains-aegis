@@ -8,6 +8,8 @@ pub const RESPONSE_HEAD_CAP: usize = 512;
 pub const LAN_COMMAND_SERVICE_WORST_CASE_MS: u64 = 2_000;
 pub const LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS: u64 = 25;
 pub const LAN_ADVANCED_POWER_APPLY_SAFETY_MARGIN_MS: u64 = 500;
+const HTTP_ALLOW_METHODS: &str = "GET, POST, DELETE, OPTIONS";
+const SSE_ALLOW_METHODS: &str = "GET, OPTIONS";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParsedStaticIpv4Config {
@@ -97,10 +99,11 @@ pub fn build_http_response_head(
     let mut head = String::<RESPONSE_HEAD_CAP>::new();
     write!(
         head,
-        "HTTP/1.1 {}\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: {}\r\n{}Access-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Allow-Headers: Accept, Content-Type\r\nAccess-Control-Allow-Private-Network: true\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        "HTTP/1.1 {}\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: {}\r\n{}Access-Control-Allow-Methods: {}\r\nAccess-Control-Allow-Headers: Accept, Content-Type\r\nAccess-Control-Allow-Private-Network: true\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
         status,
         allow_origin,
         vary,
+        HTTP_ALLOW_METHODS,
         body_len,
     )
     .ok()?;
@@ -117,9 +120,10 @@ pub fn build_sse_response_head(origin: Option<&str>) -> Option<String<RESPONSE_H
     let mut head = String::<RESPONSE_HEAD_CAP>::new();
     write!(
         head,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: {}\r\n{}Access-Control-Allow-Methods: GET, OPTIONS\r\nAccess-Control-Allow-Headers: Accept, Content-Type\r\nAccess-Control-Allow-Private-Network: true\r\nConnection: keep-alive\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: {}\r\n{}Access-Control-Allow-Methods: {}\r\nAccess-Control-Allow-Headers: Accept, Content-Type\r\nAccess-Control-Allow-Private-Network: true\r\nConnection: keep-alive\r\n\r\n",
         allow_origin,
         vary,
+        SSE_ALLOW_METHODS,
     )
     .ok()?;
     Some(head)
@@ -212,6 +216,19 @@ mod tests {
         assert!(!origin_reflection_allowed(long_origin.as_str()));
         assert!(build_http_response_head("200 OK", 32, Some(long_origin.as_str())).is_none());
         assert!(build_sse_response_head(Some(long_origin.as_str())).is_none());
+    }
+
+    #[test]
+    fn json_http_head_advertises_write_methods_for_cors_preflight() {
+        let head =
+            build_http_response_head("200 OK", 32, Some("https://example.com")).expect("head");
+        assert!(head.contains("Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n"));
+    }
+
+    #[test]
+    fn sse_head_keeps_read_only_method_advertisement() {
+        let head = build_sse_response_head(Some("https://example.com")).expect("head");
+        assert!(head.contains("Access-Control-Allow-Methods: GET, OPTIONS\r\n"));
     }
 
     #[test]
