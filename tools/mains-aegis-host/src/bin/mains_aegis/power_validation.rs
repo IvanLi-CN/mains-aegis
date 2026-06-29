@@ -2014,6 +2014,8 @@ struct SourceDisconnectState {
     ups_still_live: bool,
 }
 
+const UPS_INPUT_CUT_MAX_VIN_MV: i64 = 2_999;
+
 fn source_disconnect_state(power: &Value, status: &Value) -> SourceDisconnectState {
     let source_mv = source_live_voltage_mv(power);
     let mains_present = status
@@ -2033,10 +2035,18 @@ fn source_disconnect_state(power: &Value, status: &Value) -> SourceDisconnectSta
         .pointer("/sample/input/vin_vbus_mv")
         .or_else(|| status.pointer("/input/vin_vbus_mv"))
         .and_then(Value::as_i64);
-    let ups_still_live = mains_present != Some(false)
-        || input_source.as_deref() == Some("dcin")
-        || input_vbus_mv.is_some_and(source_voltage_is_live_dcin)
-        || vin_vbus_mv.is_some_and(source_voltage_is_live_dcin);
+    let mode = status
+        .pointer("/sample/mode")
+        .or_else(|| status.pointer("/mode"))
+        .and_then(Value::as_str);
+    let assist_power_stage = status
+        .pointer("/sample/input/assist_power_stage")
+        .or_else(|| status.pointer("/input/assist_power_stage"))
+        .and_then(Value::as_str);
+    let backup_truth = mode == Some("backup") || assist_power_stage == Some("backup");
+    let dcin_cut_truth = mains_present == Some(false)
+        && vin_vbus_mv.is_some_and(|mv| mv <= UPS_INPUT_CUT_MAX_VIN_MV);
+    let ups_still_live = !(dcin_cut_truth && backup_truth);
     SourceDisconnectState {
         source_mv,
         mains_present,
@@ -2045,10 +2055,6 @@ fn source_disconnect_state(power: &Value, status: &Value) -> SourceDisconnectSta
         vin_vbus_mv,
         ups_still_live,
     }
-}
-
-fn source_voltage_is_live_dcin(mv: i64) -> bool {
-    mv >= 8_000
 }
 
 fn ups_status_fresh_command(args: &BenchArgs, context: &PowerValidationArgs) -> Vec<String> {
@@ -3820,8 +3826,11 @@ mod tests {
         let status = json!({
             "input": {
                 "mains_present": true,
-                "source": "battery"
-            }
+                "source": "battery",
+                "vin_vbus_mv": 0,
+                "assist_power_stage": "backup"
+            },
+            "mode": "backup"
         });
         let state = source_disconnect_state(&power, &status);
         assert!(state.ups_still_live);
@@ -3829,11 +3838,45 @@ mod tests {
         let disconnected_status = json!({
             "input": {
                 "mains_present": false,
-                "source": "battery"
+                "source": "battery",
+                "vin_vbus_mv": 2999,
+                "assist_power_stage": "backup"
             }
         });
         let disconnected = source_disconnect_state(&power, &disconnected_status);
         assert!(!disconnected.ups_still_live);
+    }
+
+    #[test]
+    fn source_disconnect_gate_treats_sub_8v_residual_dcin_as_live_without_backup_truth() {
+        let power = json!({});
+        let partial_feed_status = json!({
+            "input": {
+                "mains_present": false,
+                "source": "battery",
+                "vin_vbus_mv": 5100,
+                "assist_power_stage": "assist_low"
+            },
+            "mode": "supplement"
+        });
+        let state = source_disconnect_state(&power, &partial_feed_status);
+        assert!(state.ups_still_live);
+    }
+
+    #[test]
+    fn source_disconnect_gate_requires_backup_truth_even_when_vin_is_low() {
+        let power = json!({});
+        let low_vin_without_backup = json!({
+            "input": {
+                "mains_present": false,
+                "source": "battery",
+                "vin_vbus_mv": 2500,
+                "assist_power_stage": "assist_low"
+            },
+            "mode": "standby"
+        });
+        let state = source_disconnect_state(&power, &low_vin_without_backup);
+        assert!(state.ups_still_live);
     }
 
     #[test]
