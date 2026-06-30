@@ -7,6 +7,7 @@ import {
   buildFleetEntries,
   detectBrowserLanCapability,
   expandIpv4Cidr,
+  isLanIdentityCandidate,
   resolveConnectRuntimeMode,
   resolveOwnerFacingDevdTarget,
   resolveSelectedRecord,
@@ -674,6 +675,84 @@ describe("CIDR scan contract", () => {
     expect(() => expandIpv4Cidr("192.168.31.0/23")).toThrow(
       "CIDR scan must expand to between 2 and 256 hosts.",
     );
+  });
+
+  test("only accepts identities that satisfy the device contract", () => {
+    expect(
+      isLanIdentityCandidate({
+        device_id: "mains-aegis-a1b2c3",
+        hostname: "mains-aegis-a1b2c3",
+        hostname_fqdn: "mains-aegis-a1b2c3.local",
+        short_id: "a1b2c3",
+        role: "ups",
+        api_version: "v1",
+        firmware: {
+          package_version: "0.1.0",
+          build_profile: "release",
+          build_id: "build",
+          git_sha: "abc123",
+          src_hash: "src",
+          git_dirty: "false",
+          protocol: "mains-aegis.cdc.v1",
+        },
+        network: {
+          device_id: "mains-aegis-a1b2c3",
+          hostname: "mains-aegis-a1b2c3",
+          hostname_fqdn: "mains-aegis-a1b2c3.local",
+          state: "connected",
+          ipv4: "192.168.31.42",
+          gateway: null,
+          dns: null,
+          is_static: false,
+          last_error: null,
+          rssi_dbm: null,
+        },
+        capabilities: {
+          sse: true,
+          mdns: true,
+          dns_sd: true,
+          write_controls: true,
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      isLanIdentityCandidate({
+        device_id: "",
+        hostname: "stale-service",
+        hostname_fqdn: "stale-service.local",
+        short_id: "stale",
+        role: "service",
+        api_version: "v2",
+        firmware: {
+          package_version: "0.1.0",
+          build_profile: "release",
+          build_id: "build",
+          git_sha: "abc123",
+          src_hash: "src",
+          git_dirty: "false",
+          protocol: "mains-aegis.cdc.v1",
+        },
+        network: {
+          device_id: "",
+          hostname: "stale-service",
+          hostname_fqdn: "stale-service.local",
+          state: "connected",
+          ipv4: "192.168.31.99",
+          gateway: null,
+          dns: null,
+          is_static: false,
+          last_error: null,
+          rssi_dbm: null,
+        },
+        capabilities: {
+          sse: true,
+          mdns: false,
+          dns_sd: false,
+          write_controls: false,
+        },
+      }),
+    ).toBe(false);
   });
 
   test("keeps the scan summary in a reserved inline status slot", () => {

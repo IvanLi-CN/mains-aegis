@@ -676,6 +676,14 @@ export function resolveManualHttpRememberedChannel(
   return { rememberedHttpBaseUrl: normalizedTarget };
 }
 
+export function isLanIdentityCandidate(identity: Identity): boolean {
+  return (
+    identity.role === "ups" &&
+    identity.api_version === "v1" &&
+    identity.device_id.trim().length > 0
+  );
+}
+
 function useFleetDevdDiscovery(
   devdTarget: string | null,
   rememberDiscoveredChannels: (
@@ -1815,6 +1823,9 @@ function ConnectPage({
           const identity = await getIdentity(fallbackBaseUrl, undefined, {
             timeoutMs,
           });
+          if (!isLanIdentityCandidate(identity)) {
+            continue;
+          }
           const mdnsHost =
             identity.hostname_fqdn?.trim() || identity.hostname?.trim() || null;
           const mdnsBaseUrl = mdnsHost
