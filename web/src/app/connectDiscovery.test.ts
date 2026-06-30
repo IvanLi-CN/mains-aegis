@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import type { DeviceRecord, DevdDevice } from "../api/types";
 import {
@@ -8,7 +9,8 @@ import {
   expandIpv4Cidr,
   resolveConnectRuntimeMode,
   resolveSelectedRecord,
-} from "./App";
+  ScanActionRow,
+  } from "./App";
 
 function savedRecord(deviceId: string): DeviceRecord {
   return {
@@ -382,6 +384,39 @@ describe("CIDR scan contract", () => {
     );
     expect(() => expandIpv4Cidr("192.168.31.0/23")).toThrow(
       "CIDR scan must expand to between 2 and 256 hosts.",
+    );
+  });
+
+  test("keeps the scan summary in a reserved inline status slot", () => {
+    const idleMarkup = renderToStaticMarkup(
+      ScanActionRow({
+        busy: false,
+        buttonText: "Scan LAN",
+        busyText: "Scanning",
+        successFeedback: null,
+        errorMessage: null,
+      }),
+    );
+    expect(idleMarkup).toContain('data-slot="scan-inline-status"');
+    expect(idleMarkup).toContain('aria-live="polite"');
+
+    const successMarkup = renderToStaticMarkup(
+      ScanActionRow({
+        busy: false,
+        buttonText: "Scan LAN",
+        busyText: "Scanning",
+        successFeedback: {
+          tone: "success",
+          message: "Found 2 devices in 192.168.31.40/29",
+        },
+        errorMessage: null,
+      }),
+    );
+
+    expect(successMarkup).toContain('data-slot="scan-inline-status"');
+    expect(successMarkup).toContain("Found 2 devices in 192.168.31.40/29");
+    expect(successMarkup.indexOf("Scan LAN")).toBeLessThan(
+      successMarkup.indexOf("Found 2 devices in 192.168.31.40/29"),
     );
   });
 });

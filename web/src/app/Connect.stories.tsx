@@ -173,11 +173,28 @@ export const PagesCidrScanCandidates: Story = {
     }),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    const cidrInput = await canvas.findByLabelText("IPv4 CIDR");
+    const cidrField = cidrInput.closest("label");
+    expect(cidrField).not.toBeNull();
+    if (cidrField) {
+      expect(window.getComputedStyle(cidrField).gridColumnStart).toBe("1");
+      expect(window.getComputedStyle(cidrField).gridColumnEnd).toBe("-1");
+    }
     await userEvent.type(canvas.getByLabelText("IPv4 CIDR"), "192.168.31.40/29");
     await userEvent.click(canvas.getByRole("button", { name: "Scan LAN" }));
-    await expect(await canvas.findByText(/Found 2 devices in 192.168.31.40\/29/)).toBeInTheDocument();
+    const status = await canvas.findByText(/Found 2 devices in 192.168.31.40\/29/);
+    await expect(status).toBeInTheDocument();
+    expect(status.closest('[data-slot="scan-inline-status"]')).not.toBeNull();
     await expect(await canvas.findByText("mains-aegis-a1b2c3.local")).toBeInTheDocument();
     await expect(await canvas.findByText("mains-aegis-c7d8e9.local")).toBeInTheDocument();
+    await expect(await canvas.findAllByRole("button", { name: "Add WiFi" })).toHaveLength(2);
+    await expect(
+      await canvas.findAllByText("Select Add WiFi to save this LAN device."),
+    ).toHaveLength(2);
+    await expect(canvas.queryByText("Hostname")).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByText(/Only manual IPv4 CIDR ranges that expand to 2-256 hosts are allowed\./),
+    ).not.toBeInTheDocument();
   },
 };
 

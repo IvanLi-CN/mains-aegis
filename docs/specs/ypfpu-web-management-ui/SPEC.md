@@ -438,10 +438,10 @@
   viewport_strategy: `ui-demo-source`
   capture_scope: `element`
   target_program: `mock-only`
-  scenario: Pages CIDR scan candidates
-  evidence_note: 验证手动 IPv4 CIDR 扫描只在用户点击后执行，命中结果先显示 session-local 候选，再由用户显式决定 `Add WiFi` 或 `Open`。
+  scenario: Pages CIDR scan candidate actions
+  evidence_note: 验证手动 IPv4 CIDR 扫描命中后，候选卡片以局部元素级证据清晰展示 URL、保存提示和显式 `Add WiFi` 操作，不再被整页布局或 Storybook chrome 干扰。
 
-![Pages direct LAN CIDR evidence](./assets/pages-direct-lan-cidr.png)
+![Pages direct LAN CIDR action evidence](./assets/pages-direct-lan-cidr-actions.png)
 
 ## 实现里程碑
 

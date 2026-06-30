@@ -175,7 +175,7 @@ type ScanCandidate = {
   key: string;
   deviceId: string;
   alias: string;
-  endpoint: string;
+  endpoints: string[];
   baseUrl: string;
   mdnsBaseUrl: string;
   mdnsHost: string | null;
@@ -1736,9 +1736,10 @@ function ConnectPage({
             key: identity.device_id,
             deviceId: identity.device_id,
             alias: existingRecord?.target.alias ?? identity.hostname,
-            endpoint: [mdnsBaseUrl, fallbackBaseUrl]
-              .filter((value, index, array) => Boolean(value) && array.indexOf(value) === index)
-              .join(" / "),
+            endpoints: [mdnsBaseUrl, fallbackBaseUrl].filter(
+              (value, index, array): value is string =>
+                Boolean(value) && array.indexOf(value) === index,
+            ),
             baseUrl: mdnsBaseUrl,
             mdnsBaseUrl,
             mdnsHost,
@@ -2614,7 +2615,7 @@ function ConnectPage({
                 <span className="transport-badge adapter">manual</span>
               </header>
               <form className="connect-form compact" onSubmit={onScanSubmit}>
-                <label>
+                <label className="connect-field-full">
                   IPv4 CIDR
                   <input
                     {...credentiallessInputProps}
@@ -2626,34 +2627,24 @@ function ConnectPage({
                     required
                   />
                 </label>
-                <p className="field-help">
-                  Only manual IPv4 CIDR ranges that expand to 2-256 hosts are allowed.
-                </p>
-                <div className="form-actions with-callout">
-                  <button
-                    className="primary-button"
-                    type="submit"
-                    disabled={
-                      scanState.status === "scanning" ||
-                      !browserLanCapability.supported
-                    }
-                  >
-                    <ButtonLabel
-                      busy={scanState.status === "scanning"}
-                      busyText="Scanning"
-                      text="Scan LAN"
-                    />
-                  </button>
-                  {scanState.message?.tone === "error" ? (
-                    <ConnectionCallout
-                      id="scan-connect-message"
-                      message={scanState.message.message}
-                    />
-                  ) : null}
-                </div>
-                {scanState.message?.tone === "success" ? (
-                  <FeedbackMessage feedback={scanState.message} />
-                ) : null}
+                <ScanActionRow
+                  busy={
+                    scanState.status === "scanning" ||
+                    !browserLanCapability.supported
+                  }
+                  buttonText="Scan LAN"
+                  busyText="Scanning"
+                  successFeedback={
+                    scanState.message?.tone === "success"
+                      ? scanState.message
+                      : null
+                  }
+                  errorMessage={
+                    scanState.message?.tone === "error"
+                      ? scanState.message.message
+                      : null
+                  }
+                />
               </form>
               <div className="devd-device-list" aria-live="polite">
                 {scanState.status === "done" &&
@@ -2666,40 +2657,59 @@ function ConnectPage({
                   </div>
                 ) : null}
                 {scanState.candidates.map((candidate) => (
-                  <article className="devd-device-card" key={candidate.key}>
+                  <article
+                    className="devd-device-card scan-candidate-card"
+                    key={candidate.key}
+                  >
                     <div className="devd-device-main">
                       <span className="transport-badge http">LAN</span>
                       <div>
                         <h4>{candidate.alias}</h4>
-                        <p>{candidate.endpoint}</p>
+                        <div className="devd-device-endpoints">
+                          {candidate.endpoints.map((endpoint) => (
+                            <p key={endpoint} title={endpoint}>
+                              {endpoint}
+                            </p>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                    <dl className="devd-device-meta">
+                    <dl className="devd-device-meta scan-candidate-meta">
                       <div>
                         <dt>Device ID</dt>
                         <dd>{candidate.deviceId}</dd>
-                      </div>
-                      <div>
-                        <dt>Hostname</dt>
-                        <dd>{candidate.identity.hostname_fqdn}</dd>
                       </div>
                       <div>
                         <dt>Status</dt>
                         <dd>{candidate.existingRecord ? "saved" : "new"}</dd>
                       </div>
                     </dl>
-                    <div className="devd-device-actions">
-                      {candidate.existingRecord ? (
-                        <>
-                          <button
-                            className="primary-button small"
-                            type="button"
-                            onClick={() =>
-                              navigate(deviceDefaultHref(candidate.existingRecord!))
-                            }
-                          >
-                            Open
-                          </button>
+                    <div className="scan-candidate-footer">
+                      <p className="scan-candidate-hint">
+                        Select Add WiFi to save this LAN device.
+                      </p>
+                      <div className="devd-device-actions scan-candidate-actions">
+                        {candidate.existingRecord ? (
+                          <>
+                            <button
+                              className="primary-button small"
+                              type="button"
+                              onClick={() =>
+                                navigate(deviceDefaultHref(candidate.existingRecord!))
+                              }
+                            >
+                              Open
+                            </button>
+                            <button
+                              className="secondary-button small"
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void onScanCandidateAdd(candidate)}
+                            >
+                              Add WiFi
+                            </button>
+                          </>
+                        ) : (
                           <button
                             className="secondary-button small"
                             type="button"
@@ -2708,17 +2718,8 @@ function ConnectPage({
                           >
                             Add WiFi
                           </button>
-                        </>
-                      ) : (
-                        <button
-                          className="secondary-button small"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void onScanCandidateAdd(candidate)}
-                        >
-                          Add WiFi
-                        </button>
-                      )}
+                        )}
+                      </div>
                     </div>
                   </article>
                 ))}
@@ -3057,6 +3058,41 @@ export function FeedbackMessage({ feedback }: { feedback: UiFeedback }) {
     >
       {feedback.message}
     </p>
+  );
+}
+
+export function ScanActionRow({
+  busy,
+  buttonText,
+  busyText,
+  successFeedback,
+  errorMessage,
+}: {
+  busy: boolean;
+  buttonText: string;
+  busyText: string;
+  successFeedback: UiFeedback | null;
+  errorMessage: string | null;
+}) {
+  return (
+    <>
+      <div className="form-actions with-callout scan-inline-actions">
+        <button className="primary-button" type="submit" disabled={busy}>
+          <ButtonLabel busy={busy} busyText={busyText} text={buttonText} />
+        </button>
+        <span
+          className="scan-inline-status"
+          data-slot="scan-inline-status"
+          role="status"
+          aria-live="polite"
+        >
+          {successFeedback?.message ?? ""}
+        </span>
+        {errorMessage ? (
+          <ConnectionCallout id="scan-connect-message" message={errorMessage} />
+        ) : null}
+      </div>
+    </>
   );
 }
 
