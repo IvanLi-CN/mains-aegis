@@ -364,6 +364,9 @@ Important operator rules:
     - `input.mains_present == false`
     - `mode=backup` or `input.assist_power_stage=backup`
   - USB `5V` presence may still be real and must not veto this cut proof
+- USB-C host power / communication may remain attached during `12V <-> 19V`
+  firmware switching because it does not participate in the UPS direct-output
+  path; only external `DCIN` high-voltage input is part of this gate
 - the runner must keep `port_c` off until the UPS hardware capability has been
   read and validated for the intended profile
 - USB + IPC capability truth means:

@@ -220,7 +220,7 @@
 - Given `BACKUP` 已锁存，When 查看 `status/power-diag`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
 - Given 当前 topic 进入 `12V` Power Path Validation sign-off，When 判定任何边界、在线接管、切断或恢复结论，Then 必须同时满足 `docs/hil-runtime-mode-switching.md` 中定义的三设备实时数据、输出电压波动与 scene-complete gate。
 - Given 当前 topic 进入 formal dual-voltage suite，When 执行 `12V assist_path / 12V backup_only / 19V assist_path / 19V backup_only` 四场景，Then source profile、load target 与保护栏必须固定为 `12V|19V @ 3000mA`、`3900mA|1000mA`、`UVP=3000mV/OCP=4000mA/OPP=80000mW`，不得按口头约定漂移。
-- Given 需要在 formal suite 中从 `12V` 切到 `19V` 或从 `19V` 切回 `12V`，When 做 artifact select / flash，Then 必须先 disable load、cut IsolaPurr `port_c`、确认 UPS 已脱离外部输入，再进行切换或烧录。
+- Given 需要在 formal suite 中从 `12V` 切到 `19V` 或从 `19V` 切回 `12V`，When 做 artifact select / flash，Then 必须先 disable load、cut IsolaPurr `port_c`、确认 UPS 已脱离外部 `DCIN` 高压输入，再进行切换或烧录；并行 USB-C 供电/通信允许保留，不构成切换阻断。
 - Given formal dual-voltage suite 运行完成，When 交付 owner-facing Power Path Validation 证据，Then 必须同时保留四个独立 scene report、suite summary、suite verification 和一个包含四张交互图表的 overview HTML。
 - Given 任一正式 Power Path Validation scene 的任一采样点缺失了 `Power Source / UPS / Load` 任一设备的要求字段，When 评估该 scene，Then 该 scene 只能作为诊断证据，不能作为验收通过、默认值冻结或逻辑定论的证明。
 

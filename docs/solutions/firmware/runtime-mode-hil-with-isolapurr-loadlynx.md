@@ -322,6 +322,8 @@ Reusable rule:
     - `input.mains_present == false`
     - `mode=backup` or `input.assist_power_stage=backup`
   - do not use USB `5V` presence or `input.input_vbus_mv` as the DCIN cut veto
+- USB-C host power / communication may remain attached during firmware profile
+  switching; the safety gate only covers external `DCIN` high-voltage input
 - read UPS `identity` over USB/devd IPC
 - read UPS `settings` over USB/devd IPC
 - verify `identity.hardware_capabilities.output_profile`

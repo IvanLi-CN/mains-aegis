@@ -101,6 +101,9 @@
   - IsolaPurr 高压输出关闭使用 `power output auto`
   - `power config set --usb-c-path disconnected` 只断 USB-C path，不能证明香蕉口/TPS 高压输出已断
   - 断电确认必须以 UPS 侧 `source=dcin` / 高压 VIN 是否消失为准，USB-C 5V 管理链路不能被误判为 DCIN 未断
+- 固件切换安全门槛进一步澄清：
+  - `12V <-> 19V` artifact select / flash 只要求 `DCIN` 外部高压输入已切断
+  - USB-C 到主机的供电/通信允许保留，不参与 UPS 直供输出路径，也不构成切换阻断
 - 修正 scene 内采样完整性：
   - source-cut 门禁在 active scene 内使用 collector truth 判定
   - 禁止在 `transition_backup` 内同步执行长阻塞 status/power read 导致 `timeseries` 出现假 gap
