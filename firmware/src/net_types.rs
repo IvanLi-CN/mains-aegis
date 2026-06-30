@@ -142,6 +142,31 @@ impl NetworkUiSummary {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrontPanelRuntimeSnapshot {
+    pub init_state: &'static str,
+    pub display_power_mode: &'static str,
+    pub ui_variant: &'static str,
+    pub frame_no: u32,
+    pub ready: bool,
+    pub needs_redraw: bool,
+    pub attention_hold: bool,
+}
+
+impl FrontPanelRuntimeSnapshot {
+    pub const fn unavailable() -> Self {
+        Self {
+            init_state: "unknown",
+            display_power_mode: "unknown",
+            ui_variant: "unknown",
+            frame_no: 0,
+            ready: false,
+            needs_redraw: false,
+            attention_hold: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WifiSettingsSnapshot {
     pub configured: bool,
@@ -719,6 +744,7 @@ pub struct UpsStatusSnapshot {
     pub tmp_a_c: Option<i16>,
     pub tmp_b_state: &'static str,
     pub tmp_b_c: Option<i16>,
+    pub front_panel: FrontPanelRuntimeSnapshot,
     pub network: NetworkUiSummary,
 }
 
@@ -1133,6 +1159,7 @@ impl UpsStatusSnapshot {
             tmp_a_c: None,
             tmp_b_state: "pending",
             tmp_b_c: None,
+            front_panel: FrontPanelRuntimeSnapshot::unavailable(),
             network: NetworkUiSummary::disabled(),
         }
     }

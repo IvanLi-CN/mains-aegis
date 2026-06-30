@@ -147,6 +147,37 @@ Current proof after syncing status-derived `power_diag` timestamps:
 - LoadLynx `status-stream --interval-ms 250 --count 40`: `40/40` rows,
   about `3.99Hz`, max gap `280ms`
 
+UPS front-panel liveness added one more transport lesson:
+
+- the accepted host-side `3Hz` target does not require firmware-side unsolicited
+  Web Serial status push
+- request-driven `service_web_serial_if_due()` is sufficient for USB host reads
+  when devd monitor/cache is healthy
+- an always-on compact status push path in the firmware main loop can starve or
+  materially perturb front-panel rendering even when the USB transport itself is
+  otherwise healthy
+
+Current proof after removing unsolicited status push while keeping request
+service enabled:
+
+- USB `status --watch --interval-ms 333 --samples 12 --include-meta` with
+  monitor running: `12/12` rows, `0` misses, `3.003Hz`, all
+  `meta.sample_fresh=true`
+- USB `status --fresh --watch --interval-ms 333 --samples 8 --include-meta`:
+  `8/8` rows, `3.177Hz`, all `meta.sample_fresh=true`
+- front-panel runtime remained `ready=true`; when the panel was in
+  `display_power_mode=sleeping`, `frame_no` remained flat by design and must not
+  be misclassified as a frozen render loop
+
+Reusable rule:
+
+- do not add firmware-side unsolicited telemetry push just to improve host poll
+  cadence unless it is explicitly subscription-gated and proven not to interfere
+  with front-panel liveness
+- the default Mains Aegis truth path for continuous UPS status collection is:
+  devd monitor/cache stream over IPC, with direct CDC fresh reads used only when
+  explicitly requested
+
 ### 4. Treat chart HTML as presentation, not as the acceptance source
 
 The HTML chart is useful, but it is not the primary acceptance source.

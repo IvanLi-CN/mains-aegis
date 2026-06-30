@@ -38,8 +38,8 @@ use crate::{
     },
     net_types::{
         AdvancedPowerCapabilitiesSnapshot, AdvancedPowerSettingsSnapshot, DeviceSettingsSnapshot,
-        ManualChargeSettingsSnapshot, NetworkUiSummary, UpsStatusSnapshot, WifiConnectionState,
-        WifiErrorKind, WifiSettingsSnapshot, WifiSnapshot,
+        FrontPanelRuntimeSnapshot, ManualChargeSettingsSnapshot, NetworkUiSummary,
+        UpsStatusSnapshot, WifiConnectionState, WifiErrorKind, WifiSettingsSnapshot, WifiSnapshot,
     },
     usb_cdc_protocol::{
         parse_http_advanced_power_request, parse_http_log_level_request,
@@ -75,6 +75,8 @@ static WIFI_STATE: Mutex<RefCell<WifiSnapshot>> =
     Mutex::new(RefCell::new(WifiSnapshot::disabled()));
 static UPS_STATUS: Mutex<RefCell<UpsStatusSnapshot>> =
     Mutex::new(RefCell::new(UpsStatusSnapshot::empty()));
+static FRONT_PANEL_RUNTIME: Mutex<RefCell<FrontPanelRuntimeSnapshot>> =
+    Mutex::new(RefCell::new(FrontPanelRuntimeSnapshot::unavailable()));
 static DEVICE_IDENTITY: Mutex<RefCell<Option<DeviceIdentity>>> = Mutex::new(RefCell::new(None));
 static USB_WIFI_CONFIG: Mutex<RefCell<Option<WifiConfigSecret>>> = Mutex::new(RefCell::new(None));
 static DEVICE_SETTINGS: Mutex<RefCell<Option<DeviceSettingsSnapshot>>> =
@@ -1077,6 +1079,16 @@ fn set_wifi_snapshot(snapshot: WifiSnapshot) {
 
 fn current_status_snapshot() -> UpsStatusSnapshot {
     critical_section::with(|cs| *UPS_STATUS.borrow_ref(cs))
+}
+
+pub fn set_front_panel_runtime(snapshot: FrontPanelRuntimeSnapshot) {
+    critical_section::with(|cs| {
+        *FRONT_PANEL_RUNTIME.borrow_ref_mut(cs) = snapshot;
+    });
+}
+
+pub fn current_front_panel_runtime() -> FrontPanelRuntimeSnapshot {
+    critical_section::with(|cs| *FRONT_PANEL_RUNTIME.borrow_ref(cs))
 }
 
 #[cfg(test)]

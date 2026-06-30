@@ -109,4 +109,13 @@
   - 禁止在 `transition_backup` 内同步执行长阻塞 status/power read 导致 `timeseries` 出现假 gap
 - 修正 UPS 采样链路：
   - runtime BQ40 block detail 改为轻量 cached log，避免周期性阻塞 USB status/power-diag feed
-  - 修复后 UPS `status` 与 `power-diag` probe 达到 `3.003Hz`，max gap 约 `0.41s`，无 stale 样本
+- 修复后 UPS `status` 与 `power-diag` probe 达到 `3.003Hz`，max gap 约 `0.41s`，无 stale 样本
+- 前面板冻结回归进一步收敛：
+  - `service_web_serial_if_due()` 保留时，屏幕可继续正常运行
+  - 固件主循环中的 unsolicited compact status push 已移除
+  - 当前 USB 实测：
+    - `status --watch --interval-ms 333 --samples 12 --include-meta`: `3.003Hz`，`12/12 sample_fresh=true`
+    - `status --fresh --watch --interval-ms 333 --samples 8 --include-meta`: `3.177Hz`，`8/8 sample_fresh=true`
+  - 当前 host truth 需区分：
+    - `display_power_mode=sleeping` 时 `front_panel.frame_no` 可保持不变，这是 panel sleep 语义
+    - `ready=false`、`init_state!=ready` 或 awake 态下长期无 frame advance 才可视为真实冻结嫌疑
