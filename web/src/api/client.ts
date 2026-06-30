@@ -98,7 +98,7 @@ async function requestWithBody<T>(
       ? normalizeBaseUrl(baseUrl)
       : null;
   if (demoMockBaseUrl) {
-    return requestMock<T>(demoMockBaseUrl, path, method);
+    return requestMock<T>(demoMockBaseUrl, path, method, body);
   }
 
   const response = await fetch(`${baseUrl}${path}`, {
