@@ -108,6 +108,8 @@ Mandatory sequence:
      - `input.vin_vbus_mv <= 2999`
      - `input.mains_present == false`
      - `mode=backup` or `input.assist_power_stage=backup`
+   - USB-C host power / communication may remain attached and must not be
+     treated as a blocker for `12V <-> 19V` firmware switching
 5. read UPS `identity`
 6. read UPS `settings`
 7. verify the actual hardware capability matches the intended scene profile
