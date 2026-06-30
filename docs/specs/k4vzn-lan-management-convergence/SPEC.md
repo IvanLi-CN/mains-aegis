@@ -51,13 +51,15 @@
 ### MUST
 
 - 设备本体 API 继续保留 `GET /api/v1/identity`、`GET /api/v1/network`、`GET /api/v1/status`，并继续以 `GET /api/v1/status` + `Accept: text/event-stream` 作为唯一状态 SSE 入口。
-- 设备本体必须新增 `GET /api/v1/settings`，一次返回完整设置快照；首版至少包含 `wifi`、`log_level`、`manual_charge`。
-- 设备本体写接口继续按主题分开：`POST|DELETE /api/v1/wifi-config`、`POST /api/v1/settings/log-level`、`POST /api/v1/settings/manual-charge`、`POST /api/v1/reset`。
+- 设备本体 `GET /api/v1/identity` 与 USB CDC `hello/get_identity` 必须显式公开只读 `hardware_capabilities`，当前至少包含 `output_profile` 与 `rated_vout_mv`，供 host/Web/HIL 在外部输入上电前识别真实硬件档位。
+- 设备本体必须新增 `GET /api/v1/settings`，一次返回完整设置快照；当前至少包含 `wifi`、`log_level`、`manual_charge`、`advanced_power` 与 `advanced_power_capabilities`。
+- 设备本体写接口继续按主题分开：`POST|DELETE /api/v1/wifi-config`、`POST /api/v1/settings/log-level`、`POST /api/v1/settings/manual-charge`、`POST /api/v1/settings/advanced-power`、`POST /api/v1/settings/advanced-power/reset`、`POST /api/v1/reset`。
 - 客户端写成功后必须重新读取完整 `settings` 快照；不得依赖局部返回拼接设置状态。
 - Web 无 devd 模式必须支持手填 IPv4 CIDR 的子网扫描；GitHub Pages/public-static 路径只在用户点击后执行，扫描只探测 `http://<ip>:80/api/v1/identity`，结果先以 session-local 候选呈现。
 - GitHub Pages/public-static 的 browser-direct LAN 能力正式支持矩阵固定为 `Chrome 142+` 且 secure context；不满足条件时只允许显示迁移说明，不执行直连或扫描动作。
 - devd LAN 发现顺序固定为 `mDNS/DNS-SD -> 子网扫描`；Web 无 devd 模式只走子网扫描。
 - 所有扫描结果必须经 `/api/v1/identity` 二次确认；只有满足 `role=ups` / `device_id` / `api_version` 契约的目标才能进入设备列表。
+- 凡是会驱动外部 `DCIN` 上电的自动化流程，在恢复外部输入前都必须先在断电状态读取 `identity.hardware_capabilities` 与 `settings.advanced_power_capabilities.rated_vout_mv`，确认真实硬件档位与目标测试/控制流程一致。
 - 同一 `device_id` 出现在多个 IP 上时，必须标记冲突并阻断自动接入。
 - logical device 以 `device_id` 为主键；USB 与 LAN transport 必须关联到同一设备记录。默认首选 USB；从已连接 transport 切到另一种 transport 时必须显式提示。
 - CLI `--transport` 为可选偏好参数；不传时默认 `usb`。显式选 `usb` 但 USB 不可用时直接失败并提示，不自动降级到 LAN。
@@ -81,6 +83,8 @@
   - `DELETE /api/v1/wifi-config`
   - `POST /api/v1/settings/log-level`
   - `POST /api/v1/settings/manual-charge`
+  - `POST /api/v1/settings/advanced-power`
+  - `POST /api/v1/settings/advanced-power/reset`
   - `POST /api/v1/reset`
 - 当前设备本体 API 不新增：
   - LAN `flash`
@@ -129,12 +133,14 @@
 | `POST|DELETE /api/v1/wifi-config` | http | external | Modify | existing contract updated in follow-up | firmware | Web, devd LAN client, CLI via devd | 从 USB/localhost 专属提升为设备本体 API |
 | `POST /api/v1/settings/log-level` | http | external | Modify | same as above | firmware | Web, devd LAN client, CLI via devd | 同上 |
 | `POST /api/v1/settings/manual-charge` | http | external | Modify | same as above | firmware | Web, devd LAN client, CLI via devd | 同上 |
+| `POST /api/v1/settings/advanced-power` | http | external | Modify | same as above | firmware | Web, devd LAN client, CLI via devd | 高级 staged assist/takeover 偏移量整块写入 |
+| `POST /api/v1/settings/advanced-power/reset` | http | external | New | same as above | firmware | Web, devd LAN client, CLI via devd | 恢复设备默认 advanced power 参数 |
 | `POST /api/v1/reset` | http | external | New/reshape | follow-up | firmware | Web, devd LAN client, CLI via devd | 当前已由 devd 提供，本次要求设备本体具备 |
 | `trace` query surface | cli/http/internal | external/internal | New | this spec | devd/web | owner-facing diagnostics | 取代 `session` 历史命令面 |
 
 ## 验收标准（Acceptance Criteria）
 
-- 设备本体 `GET /api/v1/settings` 能返回完整设置快照，且不包含 PSK。
+- 设备本体 `GET /api/v1/settings` 能返回完整设置快照，且不包含 PSK，并包含 `advanced_power` 与 `advanced_power_capabilities`。
 - Web 无 devd 模式可通过手填 CIDR 子网扫描找到设备，并在 `device_id` 层聚合已保存 LAN 记录；public-static / GitHub Pages 路径默认不再隐式退回 same-origin devd 发现语义。
 - devd 可通过 mDNS/DNS-SD 或子网扫描发现同一设备的 LAN transport，并把其关联到已有 USB logical device。
 - CLI 用户命令面不再暴露 `device session`；新的用户查询面只保留 `connection / identity / status / settings / trace`。

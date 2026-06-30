@@ -6,7 +6,7 @@
 
 ## 背景 / 问题陈述
 
-主固件已经把多类用户偏好与诊断信息写入板载 I2C EEPROM，包括手动充电偏好、USB-PD breadcrumb、WiFi 凭据和前面板蜂鸣器音量偏好。此前 EEPROM 布局只在功能 spec 中局部记录，容易在新增记录时出现地址冲突、schema 语义不一致或旧文档误导实现。
+主固件已经把多类用户偏好与诊断信息写入板载 I2C EEPROM，包括手动充电偏好、USB-PD breadcrumb、WiFi 凭据、前面板蜂鸣器音量偏好，以及 Advanced Power staged assist/takeover 偏移配置。此前 EEPROM 布局只在功能 spec 中局部记录，容易在新增记录时出现地址冲突、schema 语义不一致或旧文档误导实现。
 
 本规格作为 EEPROM 存储布局的长期真相源。任何固件 EEPROM 地址、record 编码、CRC、schema 或持久化边界变更，都必须先对齐本规格。
 
@@ -48,7 +48,8 @@ All single-block records must be aligned to `32B` offsets. Multi-block records m
 | `0x0060..0x015f` | `8 * 32B` | `PdBreadcrumbRecordV1` ring | `magic="PDBG"`, version, seq, compact state fields, CRC8 | USB-PD recovery breadcrumbs across reset/log loss |
 | `0x0160..0x01df` | `128B` | WiFi config record | USB CDC protocol WiFi config record | Plaintext SSID/PSK secret record for Web Serial / LAN bootstrap |
 | `0x01e0..0x01ff` | `32B` | `BeeperPrefsRecordV1` | `magic="BEEP"`, version, action/system/selected bytes, CRC8 | Front panel ACTION/SYSTEM beeper volume preferences |
-| `0x0200..0x1fff` | remaining | reserved | none | Future EEPROM records |
+| `0x0200..0x021f` | `32B` | `AdvancedPowerRecordV2` | `magic="ADVP"`, version, staged-assist offsets, CRC8 | Advanced Power staged assist/takeover persistent offsets |
+| `0x0220..0x1fff` | remaining | reserved | none | Future EEPROM records |
 
 ## Record Contracts
 
@@ -132,6 +133,42 @@ All single-block records must be aligned to `32B` offsets. Multi-block records m
   - selected target: `Action`
 - Firmware must write this record only when `BeeperPrefs` changes, not on every preview at unchanged bounds.
 
+### AdvancedPowerRecordV2
+
+- Offset: `0x0200`
+- Size: `32B`
+- Fields:
+  - bytes `0..4`: ASCII magic `ADVP`
+  - byte `4`: record version, currently `2`
+  - bytes `5..7`: `standby_drop_mv` little-endian `u16`
+  - bytes `7..9`: `assist_low_drop_mv` little-endian `u16`
+  - bytes `9..11`: `assist_enter_delta_ma` little-endian `i16`
+  - bytes `11..13`: `assist_exit_delta_ma` little-endian `i16`
+  - byte `13`: `assist_required_samples`
+  - bytes `14..16`: `assist_ramp_step_mv` little-endian `u16`
+  - bytes `16..18`: `assist_ramp_interval_ms` little-endian `u16`
+  - bytes `18..20`: `rated_enter_delta_ma` little-endian `i16`
+  - bytes `20..22`: `rated_exit_delta_ma` little-endian `i16`
+  - byte `22`: `vin_drop_threshold_pct`
+  - byte `23`: `required_samples`
+  - byte `31`: CRC8 over bytes `0..31`
+- Defaults on missing/invalid/incompatible data:
+  - `standby_drop_mv = 1200`
+  - `assist_low_drop_mv = 600`
+  - `assist_enter_delta_ma = 0`
+  - `assist_exit_delta_ma = 0`
+  - `assist_required_samples = 2`
+  - `assist_ramp_step_mv = 100`
+  - `assist_ramp_interval_ms = 200`
+  - `rated_enter_delta_ma = 0`
+  - `rated_exit_delta_ma = 0`
+  - `vin_drop_threshold_pct = 4`
+  - `required_samples = 2`
+- Backward compatibility:
+  - 固件必须继续读取旧 `AdvancedPowerRecordV1`。
+  - 当 EEPROM 中只有 `V1` record 时，新字段按 `V2` 默认值补齐，不影响旧六项设置。
+- Stored values are owner-facing relative offsets and thresholds only. Absolute rated output is not persisted here; expansion to runtime absolute targets must use the active device variant rated output at boot/runtime.
+
 ## Extension Rules
 
 - New EEPROM records must reserve a non-overlapping aligned range in this spec before firmware writes are added.
@@ -149,7 +186,9 @@ All single-block records must be aligned to `32B` offsets. Multi-block records m
 - Given a new EEPROM record is introduced, Then its byte range does not overlap any range in the canonical layout table.
 - Given EEPROM contains missing or invalid manual charge prefs, Then firmware uses `Full100 / 500mA / 2h`.
 - Given EEPROM contains missing or invalid beeper prefs, Then firmware uses `L4 / L4 / Action`.
+- Given EEPROM contains missing or invalid advanced power prefs, Then firmware uses `1200 / 600 / 0 / 0 / 2 / 100 / 200 / 0 / 0 / 4 / 2`.
 - Given a user changes beeper ACTION or SYSTEM volume, Then firmware persists `BeeperPrefsRecordV1` and reads it back after reset/flash without returning to maximum volume.
+- Given a user changes Advanced Power settings, Then firmware persists `AdvancedPowerRecordV2`, applies the new settings immediately, and reads them back after reset/flash without converting them to absolute rated values.
 - Given WiFi config is cleared, Then firmware wipes the WiFi config record and runtime WiFi returns to disabled.
 
 ## References

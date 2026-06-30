@@ -1,5 +1,12 @@
 import { createContext, useContext } from "react";
-import type { DeviceRecord, DeviceSettings, DeviceTarget, DevdDevice, WifiApplyNetwork } from "../api/types";
+import type {
+  AdvancedPowerSettings,
+  DeviceRecord,
+  DeviceSettings,
+  DeviceTarget,
+  DevdDevice,
+  WifiApplyNetwork,
+} from "../api/types";
 import type { SerialPortLike } from "../serial/transport";
 
 export type AddDeviceInput = {
@@ -35,6 +42,7 @@ export type WifiProvisioningProgress = {
 };
 
 export type ManualChargePrefsInput = DeviceSettings["manual_charge"];
+export type AdvancedPowerInput = AdvancedPowerSettings;
 
 export type DeviceRegistryContextValue = {
   records: DeviceRecord[];
@@ -53,6 +61,8 @@ export type DeviceRegistryContextValue = {
   clearWifiConfig: (deviceId: string, onProgress?: (progress: WifiProvisioningProgress) => void) => Promise<CommandResult>;
   setSerialLogLevel: (deviceId: string, level: DeviceSettings["log_level"]) => Promise<CommandResult>;
   setManualChargePrefs: (deviceId: string, prefs: ManualChargePrefsInput) => Promise<CommandResult>;
+  setAdvancedPower: (deviceId: string, advancedPower: AdvancedPowerInput) => Promise<CommandResult>;
+  resetAdvancedPower: (deviceId: string) => Promise<CommandResult>;
   removeDevice: (deviceId: string) => void;
   refreshDevice: (deviceId: string) => Promise<void>;
   resetDemo: () => void;

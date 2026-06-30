@@ -1774,8 +1774,8 @@ a {
 
 .status-band-color-warm {
   --amount: 0.45;
-  grid-template-columns: minmax(190px, 1.38fr) repeat(
-      3,
+  grid-template-columns: minmax(190px, 1.3fr) repeat(
+      4,
       minmax(112px, 0.72fr)
     ) auto;
   align-items: stretch;
@@ -2142,6 +2142,12 @@ a {
   align-items: stretch;
 }
 
+.settings-layout-advanced {
+  grid-template-columns: minmax(280px, 0.8fr) minmax(300px, 0.9fr) minmax(360px, 1.15fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
 .settings-layout-balanced .settings-panel {
   min-height: 257px;
   grid-template-rows: auto minmax(0, 1fr);
@@ -2222,9 +2228,18 @@ a {
   gap: 12px;
 }
 
+.advanced-power-panel {
+  align-content: start;
+}
+
 .settings-form {
   display: grid;
   gap: 12px;
+}
+
+.settings-copy {
+  display: grid;
+  gap: 8px;
 }
 
 .settings-form label {
@@ -2244,6 +2259,7 @@ a {
   outline: 0;
   background: transparent;
   color: var(--color-ink);
+  font-size: 14px;
 }
 
 .settings-form label:focus-within {
@@ -2256,6 +2272,27 @@ a {
   gap: 8px;
   color: var(--color-muted);
   font-size: 12px;
+}
+
+.capability-note {
+  align-items: flex-start;
+}
+
+.capability-note > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.capability-note strong {
+  color: var(--color-ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.capability-note span {
+  overflow-wrap: anywhere;
+  line-height: 1.4;
 }
 
 .control-row {
@@ -2277,6 +2314,41 @@ a {
   min-height: var(--control-height);
   padding: 6px 10px;
   font-size: 12px;
+}
+
+.advanced-power-field {
+  display: grid;
+  gap: 6px;
+}
+
+.advanced-power-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--color-ink);
+}
+
+.advanced-power-header strong {
+  font-size: 13px;
+}
+
+.advanced-power-header span:last-child {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.advanced-power-meta {
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.advanced-power-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
 }
 
 .log-panel {

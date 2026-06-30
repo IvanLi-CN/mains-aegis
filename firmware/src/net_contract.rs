@@ -75,6 +75,7 @@ pub fn render_identity_json_with_write_controls<const N: usize>(
     build: BuildInfo,
     write_controls: bool,
 ) {
+    let (output_profile, rated_vout_mv) = hardware_output_profile_for_features(build.features);
     buf.clear();
     let _ = buf.push('{');
     json_field_str(buf, "device_id", identity.device_id.as_str(), true);
@@ -101,6 +102,12 @@ pub fn render_identity_json_with_write_controls<const N: usize>(
         ",\"capabilities\":{\"sse\":true,\"mdns\":true,\"dns_sd\":true,\"write_controls\":",
     );
     let _ = buf.push_str(if write_controls { "true" } else { "false" });
+    let _ = buf.push_str("},\"hardware_capabilities\":{");
+    let _ = write!(
+        buf,
+        "\"output_profile\":\"{}\",\"rated_vout_mv\":{}",
+        output_profile, rated_vout_mv
+    );
     let _ = buf.push_str("}}");
 }
 
@@ -120,6 +127,21 @@ fn json_array_from_csv<const N: usize>(buf: &mut String<N>, key: &str, csv: &str
     if comma {
         let _ = buf.push(',');
     }
+}
+
+fn hardware_output_profile_for_features(features_csv: &str) -> (&'static str, u16) {
+    if csv_has_feature(features_csv, "main-vout-19v") {
+        ("19v", 19_000)
+    } else {
+        ("12v", 12_000)
+    }
+}
+
+fn csv_has_feature(features_csv: &str, expected: &str) -> bool {
+    features_csv
+        .split(',')
+        .map(str::trim)
+        .any(|feature| feature == expected)
 }
 
 pub fn render_network_json<const N: usize>(
@@ -168,6 +190,72 @@ pub fn render_settings_json<const N: usize>(
     json_field_str(buf, "target", settings.manual_charge.target, true);
     json_field_str(buf, "speed", settings.manual_charge.speed, true);
     let _ = write!(buf, "\"timer_h\":{}", settings.manual_charge.timer_h);
+    let _ = buf.push_str("},\"advanced_power\":{");
+    let _ = write!(
+        buf,
+        "\"standby_drop_mv\":{},\"assist_low_drop_mv\":{},\"assist_enter_delta_ma\":{},\"assist_exit_delta_ma\":{},\"assist_required_samples\":{},\"assist_ramp_step_mv\":{},\"assist_ramp_interval_ms\":{},\"rated_enter_delta_ma\":{},\"rated_exit_delta_ma\":{},\"vin_drop_threshold_pct\":{},\"required_samples\":{}",
+        settings.advanced_power.standby_drop_mv,
+        settings.advanced_power.assist_low_drop_mv,
+        settings.advanced_power.assist_enter_delta_ma,
+        settings.advanced_power.assist_exit_delta_ma,
+        settings.advanced_power.assist_required_samples,
+        settings.advanced_power.assist_ramp_step_mv,
+        settings.advanced_power.assist_ramp_interval_ms,
+        settings.advanced_power.rated_enter_delta_ma,
+        settings.advanced_power.rated_exit_delta_ma,
+        settings.advanced_power.vin_drop_threshold_pct,
+        settings.advanced_power.required_samples,
+    );
+    let _ = buf.push_str("},\"advanced_power_capabilities\":{");
+    let _ = write!(
+        buf,
+        "\"rated_vout_mv\":{},\"standby_drop_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_low_drop_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_enter_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_exit_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_required_samples\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_ramp_step_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_ramp_interval_ms\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"rated_enter_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"rated_exit_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"vin_drop_threshold_pct\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"required_samples\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}}",
+        settings.advanced_power_capabilities.rated_vout_mv,
+        settings.advanced_power_capabilities.standby_drop_mv.default,
+        settings.advanced_power_capabilities.standby_drop_mv.min,
+        settings.advanced_power_capabilities.standby_drop_mv.max,
+        settings.advanced_power_capabilities.standby_drop_mv.step,
+        settings.advanced_power_capabilities.assist_low_drop_mv.default,
+        settings.advanced_power_capabilities.assist_low_drop_mv.min,
+        settings.advanced_power_capabilities.assist_low_drop_mv.max,
+        settings.advanced_power_capabilities.assist_low_drop_mv.step,
+        settings.advanced_power_capabilities.assist_enter_delta_ma.default,
+        settings.advanced_power_capabilities.assist_enter_delta_ma.min,
+        settings.advanced_power_capabilities.assist_enter_delta_ma.max,
+        settings.advanced_power_capabilities.assist_enter_delta_ma.step,
+        settings.advanced_power_capabilities.assist_exit_delta_ma.default,
+        settings.advanced_power_capabilities.assist_exit_delta_ma.min,
+        settings.advanced_power_capabilities.assist_exit_delta_ma.max,
+        settings.advanced_power_capabilities.assist_exit_delta_ma.step,
+        settings.advanced_power_capabilities.assist_required_samples.default,
+        settings.advanced_power_capabilities.assist_required_samples.min,
+        settings.advanced_power_capabilities.assist_required_samples.max,
+        settings.advanced_power_capabilities.assist_required_samples.step,
+        settings.advanced_power_capabilities.assist_ramp_step_mv.default,
+        settings.advanced_power_capabilities.assist_ramp_step_mv.min,
+        settings.advanced_power_capabilities.assist_ramp_step_mv.max,
+        settings.advanced_power_capabilities.assist_ramp_step_mv.step,
+        settings.advanced_power_capabilities.assist_ramp_interval_ms.default,
+        settings.advanced_power_capabilities.assist_ramp_interval_ms.min,
+        settings.advanced_power_capabilities.assist_ramp_interval_ms.max,
+        settings.advanced_power_capabilities.assist_ramp_interval_ms.step,
+        settings.advanced_power_capabilities.rated_enter_delta_ma.default,
+        settings.advanced_power_capabilities.rated_enter_delta_ma.min,
+        settings.advanced_power_capabilities.rated_enter_delta_ma.max,
+        settings.advanced_power_capabilities.rated_enter_delta_ma.step,
+        settings.advanced_power_capabilities.rated_exit_delta_ma.default,
+        settings.advanced_power_capabilities.rated_exit_delta_ma.min,
+        settings.advanced_power_capabilities.rated_exit_delta_ma.max,
+        settings.advanced_power_capabilities.rated_exit_delta_ma.step,
+        settings.advanced_power_capabilities.vin_drop_threshold_pct.default,
+        settings.advanced_power_capabilities.vin_drop_threshold_pct.min,
+        settings.advanced_power_capabilities.vin_drop_threshold_pct.max,
+        settings.advanced_power_capabilities.vin_drop_threshold_pct.step,
+        settings.advanced_power_capabilities.required_samples.default,
+        settings.advanced_power_capabilities.required_samples.min,
+        settings.advanced_power_capabilities.required_samples.max,
+        settings.advanced_power_capabilities.required_samples.step,
+    );
     let _ = buf.push_str("}}");
 }
 
@@ -198,7 +286,14 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     );
     json_field_opt_str(buf, "pressure_reason", status.input_pressure_reason, true);
     json_field_opt_u16(buf, "vin_baseline_mv", status.input_vin_baseline_mv, true);
-    json_field_opt_u16(buf, "vin_drop_mv", status.input_vin_drop_mv, false);
+    json_field_opt_u16(buf, "vin_drop_mv", status.input_vin_drop_mv, true);
+    json_field_opt_str(buf, "assist_power_stage", status.assist_power_stage, true);
+    json_field_opt_u16(
+        buf,
+        "assist_target_vout_mv",
+        status.assist_target_vout_mv,
+        false,
+    );
     let _ = buf.push_str("},\"output\":{");
     json_field_str(buf, "requested", status.requested_outputs, true);
     json_field_str(buf, "active", status.active_outputs, true);
@@ -294,6 +389,24 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     json_field_opt_i16(buf, "tmp_a_c", status.tmp_a_c, true);
     json_field_str(buf, "tmp_b_state", status.tmp_b_state, true);
     json_field_opt_i16(buf, "tmp_b_c", status.tmp_b_c, false);
+    let _ = buf.push_str("},\"front_panel\":{");
+    json_field_str(buf, "init_state", status.front_panel.init_state, true);
+    json_field_str(
+        buf,
+        "display_power_mode",
+        status.front_panel.display_power_mode,
+        true,
+    );
+    json_field_str(buf, "ui_variant", status.front_panel.ui_variant, true);
+    json_field_u32(buf, "frame_no", status.front_panel.frame_no, true);
+    json_field_bool(buf, "ready", status.front_panel.ready, true);
+    json_field_bool(buf, "needs_redraw", status.front_panel.needs_redraw, true);
+    json_field_bool(
+        buf,
+        "attention_hold",
+        status.front_panel.attention_hold,
+        false,
+    );
     let _ = buf.push_str("},\"network\":");
     write_network_summary_object(
         buf,
@@ -302,6 +415,110 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
         status.network.last_error.map(|err| err.as_str()),
     );
     let _ = buf.push('}');
+}
+
+pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {
+    buf.clear();
+    let _ = buf.push('{');
+    json_field_str(buf, "mode", status.mode, true);
+    let _ = buf.push_str("\"input\":{");
+    json_field_str(buf, "source", status.input_source, true);
+    json_field_opt_bool(buf, "mains_present", status.mains_present, true);
+    json_field_opt_u16(buf, "input_vbus_mv", status.input_vbus_mv, true);
+    json_field_opt_i32(buf, "input_ibus_ma", status.input_ibus_ma, true);
+    json_field_opt_u16(buf, "vin_vbus_mv", status.vin_vbus_mv, true);
+    json_field_opt_i32(buf, "vin_iin_ma", status.vin_iin_ma, true);
+    json_field_opt_i32(buf, "tps_total_iout_ma", status.tps_total_iout_ma, true);
+    json_field_opt_i32(
+        buf,
+        "tps_limit_threshold_ma",
+        status.tps_limit_threshold_ma,
+        true,
+    );
+    json_field_str(buf, "pressure_state", status.input_pressure_state, true);
+    json_field_opt_u8(
+        buf,
+        "pressure_score_pct",
+        status.input_pressure_score_pct,
+        true,
+    );
+    json_field_opt_str(buf, "pressure_reason", status.input_pressure_reason, true);
+    json_field_opt_u16(buf, "vin_baseline_mv", status.input_vin_baseline_mv, true);
+    json_field_opt_u16(buf, "vin_drop_mv", status.input_vin_drop_mv, true);
+    json_field_opt_str(buf, "assist_power_stage", status.assist_power_stage, true);
+    json_field_opt_u16(
+        buf,
+        "assist_target_vout_mv",
+        status.assist_target_vout_mv,
+        false,
+    );
+    let _ = buf.push_str("},\"output\":{");
+    json_field_str(buf, "requested", status.requested_outputs, true);
+    json_field_str(buf, "active", status.active_outputs, true);
+    json_field_str(buf, "gate_reason", status.output_gate_reason, true);
+    let _ = buf.push_str("\"out_a\":{");
+    json_field_str(buf, "state", status.out_a_state, true);
+    json_field_opt_bool(buf, "enabled", status.out_a_enabled, true);
+    json_field_opt_u16(buf, "vbus_mv", status.out_a_vbus_mv, true);
+    json_field_opt_i32(buf, "iout_ma", status.out_a_iout_ma, false);
+    let _ = buf.push_str("},\"out_b\":{");
+    json_field_str(buf, "state", status.out_b_state, true);
+    json_field_opt_bool(buf, "enabled", status.out_b_enabled, true);
+    json_field_opt_u16(buf, "vbus_mv", status.out_b_vbus_mv, true);
+    json_field_opt_i32(buf, "iout_ma", status.out_b_iout_ma, false);
+    let _ = buf.push_str("}},\"charger\":{");
+    json_field_str(buf, "state", status.charger_state, true);
+    json_field_opt_bool(buf, "allow_charge", status.charger_allow_charge, true);
+    json_field_opt_u16(buf, "ichg_ma", status.charger_ichg_ma, true);
+    json_field_opt_i16(buf, "ibat_ma", status.charger_ibat_ma, true);
+    json_field_opt_bool(buf, "vbat_present", status.charger_vbat_present, true);
+    json_field_opt_u16(
+        buf,
+        "policy_target_ichg_ma",
+        status.charger_policy_target_ichg_ma,
+        true,
+    );
+    json_field_opt_bool(buf, "limit_active", status.charger_limit_active, true);
+    json_field_opt_str(buf, "limit_reason", status.charger_limit_reason, true);
+    json_field_opt_str(buf, "limit_detail", status.charger_limit_detail, true);
+    json_field_opt_i32(
+        buf,
+        "limit_threshold_ma",
+        status.charger_limit_threshold_ma,
+        false,
+    );
+    let _ = buf.push_str("},\"battery\":{");
+    json_field_str(buf, "state", status.battery_state, true);
+    json_field_opt_u16(buf, "pack_mv", status.battery_pack_mv, true);
+    json_field_opt_i16(buf, "current_ma", status.battery_current_ma, true);
+    json_field_opt_u16(buf, "soc_pct", status.battery_soc_pct, true);
+    json_field_opt_bool(buf, "discharge_ready", status.battery_discharge_ready, true);
+    json_field_opt_bool(buf, "charge_fet_on", status.battery_charge_fet_on, true);
+    json_field_opt_bool(
+        buf,
+        "discharge_fet_on",
+        status.battery_discharge_fet_on,
+        false,
+    );
+    let _ = buf.push_str("},\"front_panel\":{");
+    json_field_str(buf, "init_state", status.front_panel.init_state, true);
+    json_field_str(
+        buf,
+        "display_power_mode",
+        status.front_panel.display_power_mode,
+        true,
+    );
+    json_field_str(buf, "ui_variant", status.front_panel.ui_variant, true);
+    json_field_u32(buf, "frame_no", status.front_panel.frame_no, true);
+    json_field_bool(buf, "ready", status.front_panel.ready, true);
+    json_field_bool(buf, "needs_redraw", status.front_panel.needs_redraw, true);
+    json_field_bool(
+        buf,
+        "attention_hold",
+        status.front_panel.attention_hold,
+        false,
+    );
+    let _ = buf.push_str("}}");
 }
 
 pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDiagSnapshot) {
@@ -331,6 +548,18 @@ pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDi
     json_field_opt_str(buf, "pressure_reason", diag.input.pressure_reason, true);
     json_field_opt_u16(buf, "vin_baseline_mv", diag.input.vin_baseline_mv, true);
     json_field_opt_u16(buf, "vin_drop_mv", diag.input.vin_drop_mv, true);
+    json_field_opt_str(
+        buf,
+        "assist_power_stage",
+        diag.input.assist_power_stage,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "assist_target_vout_mv",
+        diag.input.assist_target_vout_mv,
+        true,
+    );
     json_field_bool(buf, "usb_pd_attached", diag.input.usb_pd_attached, true);
     json_field_bool(
         buf,
@@ -442,6 +671,9 @@ pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDi
     json_field_opt_u8(buf, "fault0", diag.charger.fault0, true);
     json_field_opt_u8(buf, "fault1", diag.charger.fault1, true);
     json_field_opt_u8(buf, "ctrl0", diag.charger.ctrl0, true);
+    json_field_opt_u8(buf, "ctrl3", diag.charger.ctrl3, true);
+    json_field_opt_u8(buf, "ctrl4", diag.charger.ctrl4, true);
+    json_field_str(buf, "acdrv_path", diag.charger.acdrv_path, true);
     json_field_opt_u16(buf, "term_ctrl", diag.charger.term_ctrl, false);
     let _ = buf.push_str("},\"policy\":{");
     json_field_opt_str(buf, "state", diag.policy.state, true);
@@ -725,6 +957,15 @@ fn json_field_bool<const N: usize>(
     }
 }
 
+fn json_field_u32<const N: usize>(
+    buf: &mut String<N>,
+    key: &str,
+    value: u32,
+    trailing_comma: bool,
+) {
+    json_field_opt_num(buf, key, Some(value as i64), trailing_comma);
+}
+
 fn json_field_opt_u8<const N: usize>(
     buf: &mut String<N>,
     key: &str,
@@ -838,8 +1079,8 @@ fn json_field_opt_ipv4<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        accepts_event_stream, render_identity_json, render_settings_json, render_status_json,
-        write_error_body, write_sse_event, BuildInfo,
+        accepts_event_stream, render_compact_status_json, render_identity_json,
+        render_settings_json, render_status_json, write_error_body, write_sse_event, BuildInfo,
     };
     use crate::{
         mdns_wire::derive_device_identity,
@@ -849,6 +1090,7 @@ mod tests {
         },
     };
     use heapless::String;
+    use serde_json::Value;
 
     #[test]
     fn event_stream_accept_parser_is_case_insensitive() {
@@ -898,6 +1140,19 @@ mod tests {
             .contains("\"device_id\":\"mains-aegis-123456\""));
         assert!(body.as_str().contains("\"dns_sd\":true"));
         assert!(body.as_str().contains("\"ipv4\":\"192.168.31.15\""));
+        assert!(body.as_str().contains(
+            "\"hardware_capabilities\":{\"output_profile\":\"12v\",\"rated_vout_mv\":12000}"
+        ));
+        let parsed =
+            serde_json::from_str::<Value>(body.as_str()).expect("identity JSON should be valid");
+        assert_eq!(
+            parsed["hardware_capabilities"]["output_profile"].as_str(),
+            Some("12v")
+        );
+        assert_eq!(
+            parsed["hardware_capabilities"]["rated_vout_mv"].as_u64(),
+            Some(12_000)
+        );
     }
 
     #[test]
@@ -913,6 +1168,8 @@ mod tests {
         status.tps_limit_threshold_ma = Some(100);
         status.input_vin_baseline_mv = Some(19_400);
         status.input_vin_drop_mv = Some(920);
+        status.assist_power_stage = Some("assist_rated");
+        status.assist_target_vout_mv = Some(12_000);
         status.charger_policy_target_ichg_ma = Some(300);
         status.charger_limit_active = Some(true);
         status.charger_limit_reason = Some("pressure_vindpm");
@@ -949,6 +1206,10 @@ mod tests {
         assert!(body.as_str().contains("\"tps_limit_threshold_ma\":100"));
         assert!(body.as_str().contains("\"vin_baseline_mv\":19400"));
         assert!(body.as_str().contains("\"vin_drop_mv\":920"));
+        assert!(body
+            .as_str()
+            .contains("\"assist_power_stage\":\"assist_rated\""));
+        assert!(body.as_str().contains("\"assist_target_vout_mv\":12000"));
         assert!(body.as_str().contains("\"policy_target_ichg_ma\":300"));
         assert!(body.as_str().contains("\"limit_active\":true"));
         assert!(body
@@ -970,6 +1231,55 @@ mod tests {
     }
 
     #[test]
+    fn compact_status_json_keeps_hil_observation_fields() {
+        let mut body = String::<1536>::new();
+        let mut status = UpsStatusSnapshot::empty();
+        status.mode = "supplement";
+        status.input_source = "dcin";
+        status.mains_present = Some(true);
+        status.vin_vbus_mv = Some(11_920);
+        status.vin_iin_ma = Some(2_900);
+        status.tps_total_iout_ma = Some(840);
+        status.input_vin_baseline_mv = Some(12_020);
+        status.input_vin_drop_mv = Some(100);
+        status.assist_power_stage = Some("assist_low");
+        status.assist_target_vout_mv = Some(11_400);
+        status.out_a_vbus_mv = Some(11_380);
+        status.out_b_vbus_mv = Some(11_390);
+        status.charger_allow_charge = Some(true);
+        status.charger_limit_reason = Some("none");
+        status.battery_current_ma = Some(-720);
+        status.battery_cell_mv = [Some(3812), Some(3817), Some(3809), Some(3822)];
+        status.network = NetworkUiSummary::from_wifi(WifiSnapshot {
+            state: WifiConnectionState::Error,
+            ipv4: None,
+            gateway: None,
+            dns: None,
+            is_static: false,
+            last_error: crate::net_types::WifiErrorKind::LinkLost.into(),
+            rssi_dbm: None,
+            mac: None,
+        });
+
+        render_compact_status_json(&mut body, status);
+
+        assert!(body.as_str().contains("\"mode\":\"supplement\""));
+        assert!(body.as_str().contains("\"vin_vbus_mv\":11920"));
+        assert!(body.as_str().contains("\"vin_iin_ma\":2900"));
+        assert!(body.as_str().contains("\"tps_total_iout_ma\":840"));
+        assert!(body.as_str().contains("\"vin_baseline_mv\":12020"));
+        assert!(body.as_str().contains("\"vin_drop_mv\":100"));
+        assert!(body
+            .as_str()
+            .contains("\"assist_power_stage\":\"assist_low\""));
+        assert!(body.as_str().contains("\"assist_target_vout_mv\":11400"));
+        assert!(body.as_str().contains("\"vbus_mv\":11380"));
+        assert!(body.as_str().contains("\"current_ma\":-720"));
+        assert!(!body.as_str().contains("\"cell_mv\""));
+        assert!(!body.as_str().contains("\"network\""));
+    }
+
+    #[test]
     fn sse_frame_contains_event_and_data_lines() {
         let mut frame = String::<256>::new();
         write_sse_event(&mut frame, "status", r#"{"ok":true}"#, Some(7));
@@ -981,7 +1291,7 @@ mod tests {
 
     #[test]
     fn settings_json_redacts_psk_and_exposes_manual_charge() {
-        let mut body = String::<512>::new();
+        let mut body = String::<3072>::new();
         let mut ssid = String::<32>::new();
         ssid.push_str("LabNet").unwrap();
         render_settings_json(
@@ -997,12 +1307,23 @@ mod tests {
                     speed: "ma_500",
                     timer_h: 2,
                 },
+                advanced_power: crate::net_types::AdvancedPowerSettingsSnapshot::defaults(),
+                advanced_power_capabilities:
+                    crate::net_types::AdvancedPowerCapabilitiesSnapshot::for_rated_vout(12_000),
             },
         );
+        let value: serde_json::Value = serde_json::from_str(body.as_str())
+            .expect("settings JSON should fit the production buffer and remain valid JSON");
         assert!(body.as_str().contains("\"configured\":true"));
         assert!(body.as_str().contains("\"ssid\":\"LabNet\""));
         assert!(body.as_str().contains("\"log_level\":\"debug\""));
         assert!(body.as_str().contains("\"target\":\"rsoc_80\""));
+        assert!(body.as_str().contains("\"advanced_power\":{"));
+        assert!(body.as_str().contains("\"advanced_power_capabilities\":{"));
         assert!(!body.as_str().contains("psk"));
+        assert_eq!(value["wifi"]["ssid"], "LabNet");
+        assert_eq!(value["manual_charge"]["target"], "rsoc_80");
+        assert!(value.get("advanced_power").is_some());
+        assert!(value.get("advanced_power_capabilities").is_some());
     }
 }

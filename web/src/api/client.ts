@@ -1,5 +1,6 @@
 import { getMockIdentity, getMockNetwork, getMockStatus } from "../fixtures/mockDevices";
 import type {
+  AdvancedPowerSettings,
   AppRuntimeMode,
   ApiErrorEnvelope,
   DevdScanTraceEntry,
@@ -33,6 +34,7 @@ type MockBindTargetState = {
 };
 
 const mockBindTargetStateByBaseUrl = new Map<string, MockBindTargetState>();
+const mockSettingsByBaseUrl = new Map<string, DeviceSettings>();
 
 export const isMockBaseUrl = (baseUrl: string) => baseUrl.startsWith("mock:");
 const APP_SESSION_HEADER = "x-mains-aegis-app-session";
@@ -88,7 +90,7 @@ async function requestWithBody<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   if (isMockBaseUrl(baseUrl)) {
-    return requestMock<T>(baseUrl, path, method);
+    return requestMock<T>(baseUrl, path, method, body);
   }
 
   const demoMockBaseUrl =
@@ -244,6 +246,7 @@ function requestMock<T>(
   baseUrl: string,
   path: string,
   method: "GET" | "POST" | "DELETE" = "GET",
+  body?: unknown,
 ): Promise<T> {
   if (
     baseUrl === "mock:usb" ||
@@ -251,7 +254,7 @@ function requestMock<T>(
     baseUrl === "mock:devd-multi" ||
     baseUrl === "mock:devd-bind-target"
   ) {
-    return requestMockDevd<T>(baseUrl, path, method);
+    return requestMockDevd<T>(baseUrl, path, method, body);
   }
   if (path === "/api/v1/ping" || path === "/health") {
     return Promise.resolve({ ok: true } as T);
@@ -266,7 +269,15 @@ function requestMock<T>(
     return Promise.resolve(getMockStatus(baseUrl) as T);
   }
   if (path === "/api/v1/settings") {
-    return Promise.resolve(defaultMockSettings() as T);
+    return Promise.resolve(mockSettingsForBaseUrl(baseUrl) as T);
+  }
+  if (path === "/api/v1/settings/advanced-power" && method === "POST") {
+    updateMockAdvancedPower(baseUrl, body);
+    return Promise.resolve({ advanced_power: "updated" } as T);
+  }
+  if (path === "/api/v1/settings/advanced-power/reset" && method === "POST") {
+    resetMockAdvancedPower(baseUrl);
+    return Promise.resolve({ advanced_power: "reset" } as T);
   }
   throw new MainsAegisApiError({
     code: "not_found",
@@ -289,6 +300,7 @@ function requestMockDevd<T>(
   baseUrl: string,
   path: string,
   method: "GET" | "POST" | "DELETE" = "GET",
+  body?: unknown,
 ): Promise<T> {
   const bindTargetMock = baseUrl === "mock:devd-bind-target";
   const bindTargetState = bindTargetMock
@@ -436,7 +448,10 @@ function requestMockDevd<T>(
   if (path === "/api/v1/network") return Promise.resolve(network as T);
   if (path === "/api/v1/status") return Promise.resolve(status as T);
   if (path === "/api/v1/settings")
-    return Promise.resolve(defaultMockSettings() as T);
+    return Promise.resolve(mockSettingsForBaseUrl(baseUrl) as T);
+  if (path.match(/^\/api\/v1\/devices\/[^/]+\/settings$/)) {
+    return Promise.resolve(mockSettingsForBaseUrl(baseUrl) as T);
+  }
   if (path === "/api/v1/serial/session") {
     return Promise.resolve({
       connected: true,
@@ -444,8 +459,29 @@ function requestMockDevd<T>(
       status,
       logs: [],
       trace: [],
-      settings: defaultMockSettings(),
+      settings: mockSettingsForBaseUrl(baseUrl),
     } as T);
+  }
+  if (path.match(/^\/api\/v1\/devices\/[^/]+\/trace(\?.*)?$/)) {
+    return Promise.resolve({
+      connected: true,
+      protocol: "mains-aegis.cdc.v1",
+      status,
+      logs: [],
+      trace: [],
+      settings: mockSettingsForBaseUrl(baseUrl),
+    } as T);
+  }
+  if (path === "/api/v1/settings/advanced-power" && method === "POST") {
+    updateMockAdvancedPower(baseUrl, body);
+    return Promise.resolve({ advanced_power: "updated" } as T);
+  }
+  if (
+    path.startsWith("/api/v1/settings/advanced-power/reset") &&
+    method === "POST"
+  ) {
+    resetMockAdvancedPower(baseUrl);
+    return Promise.resolve({ advanced_power: "reset" } as T);
   }
   if (path === "/api/v1/devices") return Promise.resolve({ devices } as T);
   if (path === "/api/v1/devices/scan") return Promise.resolve({ devices } as T);
@@ -792,6 +828,23 @@ export const setDeviceManualChargePrefs = (
     "POST",
     prefs,
   );
+export const setDeviceAdvancedPower = (
+  baseUrl: string,
+  advancedPower: AdvancedPowerSettings,
+) =>
+  requestWithBody<unknown>(
+    baseUrl,
+    "/api/v1/settings/advanced-power",
+    "POST",
+    advancedPower,
+  );
+export const resetDeviceAdvancedPower = (baseUrl: string) =>
+  requestWithBody<unknown>(
+    baseUrl,
+    "/api/v1/settings/advanced-power/reset",
+    "POST",
+    {},
+  );
 export const sendDevdWifiConfig = (
   baseUrl: string,
   deviceId: string,
@@ -841,6 +894,35 @@ export const setDevdManualChargePrefs = (
     "/api/v1/settings/manual-charge",
     "POST",
     { ...prefs, device_id: deviceId, lease_id: leaseId ?? undefined },
+    { bridgeAuth: true },
+  );
+export const setDevdAdvancedPower = (
+  baseUrl: string,
+  deviceId: string,
+  leaseId: string | null,
+  advancedPower: AdvancedPowerSettings,
+) =>
+  requestWithBody<unknown>(
+    baseUrl,
+    "/api/v1/settings/advanced-power",
+    "POST",
+    {
+      ...advancedPower,
+      device_id: deviceId,
+      lease_id: leaseId ?? undefined,
+    },
+    { bridgeAuth: true },
+  );
+export const resetDevdAdvancedPower = (
+  baseUrl: string,
+  deviceId: string,
+  leaseId: string | null,
+) =>
+  requestWithBody<unknown>(
+    baseUrl,
+    `/api/v1/settings/advanced-power/reset?${settingsTargetQuery(deviceId, leaseId)}`,
+    "POST",
+    undefined,
     { bridgeAuth: true },
   );
 
@@ -1010,7 +1092,7 @@ export const flashDevdDevice = (
     { bridgeAuth: true },
   );
 
-function defaultMockSettings(): DeviceSettings {
+function defaultMockSettings(ratedVoutMv = 12_000): DeviceSettings {
   return {
     wifi: {
       configured: false,
@@ -1022,5 +1104,107 @@ function defaultMockSettings(): DeviceSettings {
       speed: "ma_500",
       timer_h: 2,
     },
+    advanced_power: {
+      standby_drop_mv: 1200,
+      assist_low_drop_mv: 600,
+      assist_enter_delta_ma: 0,
+      assist_exit_delta_ma: 0,
+      assist_required_samples: 2,
+      assist_ramp_step_mv: 100,
+      assist_ramp_interval_ms: 200,
+      rated_enter_delta_ma: 0,
+      rated_exit_delta_ma: 0,
+      vin_drop_threshold_pct: 4,
+      required_samples: 2,
+    },
+    advanced_power_capabilities: {
+      rated_vout_mv: ratedVoutMv,
+      standby_drop_mv: { default: 1200, min: 0, max: 3000, step: 20 },
+      assist_low_drop_mv: { default: 600, min: 0, max: 3000, step: 20 },
+      assist_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+      assist_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+      assist_required_samples: { default: 2, min: 1, max: 5, step: 1 },
+      assist_ramp_step_mv: { default: 100, min: 20, max: 1000, step: 20 },
+      assist_ramp_interval_ms: { default: 200, min: 100, max: 3000, step: 100 },
+      rated_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+      rated_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+      vin_drop_threshold_pct: { default: 4, min: 1, max: 12, step: 1 },
+      required_samples: { default: 2, min: 1, max: 5, step: 1 },
+    },
   };
+}
+
+function mockRatedVoutMv(baseUrl: string): number {
+  return getMockIdentity(baseUrl).hardware_capabilities?.rated_vout_mv ?? 12_000;
+}
+
+function mockSettingsForBaseUrl(baseUrl: string): DeviceSettings {
+  if (!mockSettingsByBaseUrl.has(baseUrl)) {
+    mockSettingsByBaseUrl.set(baseUrl, defaultMockSettings(mockRatedVoutMv(baseUrl)));
+  }
+  return mockSettingsByBaseUrl.get(baseUrl)!;
+}
+
+function updateMockAdvancedPower(baseUrl: string, body: unknown) {
+  if (!body || typeof body !== "object") return;
+  const current = mockSettingsForBaseUrl(baseUrl);
+  const next = body as Partial<AdvancedPowerSettings>;
+  mockSettingsByBaseUrl.set(baseUrl, {
+    ...current,
+    advanced_power: {
+      standby_drop_mv:
+        typeof next.standby_drop_mv === "number"
+          ? next.standby_drop_mv
+          : current.advanced_power.standby_drop_mv,
+      assist_low_drop_mv:
+        typeof next.assist_low_drop_mv === "number"
+          ? next.assist_low_drop_mv
+          : current.advanced_power.assist_low_drop_mv,
+      assist_enter_delta_ma:
+        typeof next.assist_enter_delta_ma === "number"
+          ? next.assist_enter_delta_ma
+          : current.advanced_power.assist_enter_delta_ma,
+      assist_exit_delta_ma:
+        typeof next.assist_exit_delta_ma === "number"
+          ? next.assist_exit_delta_ma
+          : current.advanced_power.assist_exit_delta_ma,
+      assist_required_samples:
+        typeof next.assist_required_samples === "number"
+          ? next.assist_required_samples
+          : current.advanced_power.assist_required_samples,
+      assist_ramp_step_mv:
+        typeof next.assist_ramp_step_mv === "number"
+          ? next.assist_ramp_step_mv
+          : current.advanced_power.assist_ramp_step_mv,
+      assist_ramp_interval_ms:
+        typeof next.assist_ramp_interval_ms === "number"
+          ? next.assist_ramp_interval_ms
+          : current.advanced_power.assist_ramp_interval_ms,
+      rated_enter_delta_ma:
+        typeof next.rated_enter_delta_ma === "number"
+          ? next.rated_enter_delta_ma
+          : current.advanced_power.rated_enter_delta_ma,
+      rated_exit_delta_ma:
+        typeof next.rated_exit_delta_ma === "number"
+          ? next.rated_exit_delta_ma
+          : current.advanced_power.rated_exit_delta_ma,
+      vin_drop_threshold_pct:
+        typeof next.vin_drop_threshold_pct === "number"
+          ? next.vin_drop_threshold_pct
+          : current.advanced_power.vin_drop_threshold_pct,
+      required_samples:
+        typeof next.required_samples === "number"
+          ? next.required_samples
+          : current.advanced_power.required_samples,
+    },
+  });
+}
+
+function resetMockAdvancedPower(baseUrl: string) {
+  const current = mockSettingsForBaseUrl(baseUrl);
+  const defaults = defaultMockSettings(current.advanced_power_capabilities.rated_vout_mv);
+  mockSettingsByBaseUrl.set(baseUrl, {
+    ...current,
+    advanced_power: defaults.advanced_power,
+  });
 }

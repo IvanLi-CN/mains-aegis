@@ -18,6 +18,18 @@ pub fn current_network_summary() -> NetworkUiSummary {
     }
 }
 
+fn current_front_panel_runtime_summary() -> esp_firmware::net_types::FrontPanelRuntimeSnapshot {
+    #[cfg(feature = "net_http")]
+    {
+        return esp_firmware::net::current_front_panel_runtime();
+    }
+
+    #[cfg(not(feature = "net_http"))]
+    {
+        esp_firmware::net_types::FrontPanelRuntimeSnapshot::unavailable()
+    }
+}
+
 pub fn current_wifi_snapshot() -> WifiSnapshot {
     #[cfg(feature = "net_http")]
     {
@@ -73,6 +85,8 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
         input_pressure_reason: snapshot.dashboard_detail.input_pressure_reason,
         input_vin_baseline_mv: snapshot.dashboard_detail.input_vin_baseline_mv,
         input_vin_drop_mv: snapshot.dashboard_detail.input_vin_drop_mv,
+        assist_power_stage: snapshot.dashboard_detail.assist_power_stage,
+        assist_target_vout_mv: snapshot.dashboard_detail.assist_target_vout_mv,
         charger_state: comm_state_slug(snapshot.bq25792),
         charger_allow_charge: snapshot.bq25792_allow_charge,
         charger_ichg_ma: snapshot.bq25792_ichg_ma,
@@ -116,6 +130,7 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
         tmp_a_c: snapshot.tmp_a_c,
         tmp_b_state: comm_state_slug(snapshot.tmp_b),
         tmp_b_c: snapshot.tmp_b_c,
+        front_panel: current_front_panel_runtime_summary(),
         network: current_network_summary(),
     }
 }

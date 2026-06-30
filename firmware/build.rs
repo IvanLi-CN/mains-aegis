@@ -77,10 +77,11 @@ fn main() {
     println!("cargo:rustc-env=FW_SRC_HASH={}", src_hash_hex);
     let git_dirty = git_dirty_state(&manifest_dir);
     println!("cargo:rustc-env=FW_GIT_DIRTY={}", git_dirty);
-    println!(
-        "cargo:rustc-env=FW_FEATURES={}",
-        enabled_features().join(",")
-    );
+    let build_features = enabled_features();
+    for (env_key, _) in FEATURE_ENV_CANDIDATES {
+        println!("cargo:rerun-if-env-changed={}", env_key);
+    }
+    println!("cargo:rustc-env=FW_FEATURES={}", build_features.join(","));
     println!(
         "cargo:rustc-env=FW_BUILD_ID={}-{}-{}",
         git_sha, git_dirty, src_hash_hex
@@ -112,60 +113,61 @@ fn main() {
 }
 
 fn enabled_features() -> Vec<&'static str> {
-    let candidates = [
-        ("CARGO_FEATURE_NET_HTTP", "net_http"),
-        ("CARGO_FEATURE_WEB_SERIAL", "web_serial"),
-        ("CARGO_FEATURE_MAIN_VOUT_12V", "main-vout-12v"),
-        ("CARGO_FEATURE_MAIN_VOUT_19V", "main-vout-19v"),
-        ("CARGO_FEATURE_FORCE_MIN_CHARGE", "force-min-charge"),
-        ("CARGO_FEATURE_BMS_DUAL_PROBE_DIAG", "bms-dual-probe-diag"),
-        ("CARGO_FEATURE_TMP_HW_PROTECT_TEST", "tmp-hw-protect-test"),
-        ("CARGO_FEATURE_TEST_FW", "test-fw"),
-        ("CARGO_FEATURE_TPS_TEST_FW", "tps-test-fw"),
-        ("CARGO_FEATURE_TPS_TEST_OUT_A", "tps-test-out-a"),
-        ("CARGO_FEATURE_TPS_TEST_OUT_B", "tps-test-out-b"),
-        ("CARGO_FEATURE_TPS_TEST_OUT_BOTH", "tps-test-out-both"),
-        ("CARGO_FEATURE_TPS_TEST_FPWM", "tps-test-fpwm"),
-        ("CARGO_FEATURE_TPS_TEST_PFM", "tps-test-pfm"),
-        ("CARGO_FEATURE_TPS_TEST_VOUT_5V", "tps-test-vout-5v"),
-        ("CARGO_FEATURE_TPS_TEST_VOUT_12V", "tps-test-vout-12v"),
-        ("CARGO_FEATURE_TPS_TEST_VOUT_15V", "tps-test-vout-15v"),
-        ("CARGO_FEATURE_TPS_TEST_VOUT_19V", "tps-test-vout-19v"),
-        ("CARGO_FEATURE_TPS_TEST_ILIM_1P5A", "tps-test-ilim-1p5a"),
-        ("CARGO_FEATURE_TPS_TEST_ILIM_3P5A", "tps-test-ilim-3p5a"),
-        ("CARGO_FEATURE_TPS_TEST_CHARGE_OFF", "tps-test-charge-off"),
-        ("CARGO_FEATURE_TPS_TEST_CHARGE_MIN", "tps-test-charge-min"),
-        ("CARGO_FEATURE_TPS_TEST_CHARGE_1A", "tps-test-charge-1a"),
-        (
-            "CARGO_FEATURE_TEST_FW_SCREEN_STATIC",
-            "test-fw-screen-static",
-        ),
-        (
-            "CARGO_FEATURE_TEST_FW_AUDIO_PLAYBACK",
-            "test-fw-audio-playback",
-        ),
-        (
-            "CARGO_FEATURE_TEST_FW_DEFAULT_SCREEN_STATIC",
-            "test-fw-default-screen-static",
-        ),
-        (
-            "CARGO_FEATURE_TEST_FW_DEFAULT_AUDIO_PLAYBACK",
-            "test-fw-default-audio-playback",
-        ),
-        ("CARGO_FEATURE_DISPLAY_SPI_20MHZ", "display-spi-20mhz"),
-        ("CARGO_FEATURE_DISPLAY_SPI_40MHZ", "display-spi-40mhz"),
-        ("CARGO_FEATURE_NO_PD_SINK_5V", "no-pd-sink-5v"),
-        ("CARGO_FEATURE_NO_PD_SINK_9V", "no-pd-sink-9v"),
-        ("CARGO_FEATURE_NO_PD_SINK_12V", "no-pd-sink-12v"),
-        ("CARGO_FEATURE_NO_PD_SINK_15V", "no-pd-sink-15v"),
-        ("CARGO_FEATURE_NO_PD_SINK_20V", "no-pd-sink-20v"),
-        ("CARGO_FEATURE_NO_PPS", "no-pps"),
-    ];
-    candidates
+    FEATURE_ENV_CANDIDATES
         .iter()
         .filter_map(|(env_key, feature)| std::env::var_os(env_key).map(|_| *feature))
         .collect()
 }
+
+const FEATURE_ENV_CANDIDATES: &[(&str, &str)] = &[
+    ("CARGO_FEATURE_NET_HTTP", "net_http"),
+    ("CARGO_FEATURE_WEB_SERIAL", "web_serial"),
+    ("CARGO_FEATURE_MAIN_VOUT_12V", "main-vout-12v"),
+    ("CARGO_FEATURE_MAIN_VOUT_19V", "main-vout-19v"),
+    ("CARGO_FEATURE_FORCE_MIN_CHARGE", "force-min-charge"),
+    ("CARGO_FEATURE_BMS_DUAL_PROBE_DIAG", "bms-dual-probe-diag"),
+    ("CARGO_FEATURE_TMP_HW_PROTECT_TEST", "tmp-hw-protect-test"),
+    ("CARGO_FEATURE_TEST_FW", "test-fw"),
+    ("CARGO_FEATURE_TPS_TEST_FW", "tps-test-fw"),
+    ("CARGO_FEATURE_TPS_TEST_OUT_A", "tps-test-out-a"),
+    ("CARGO_FEATURE_TPS_TEST_OUT_B", "tps-test-out-b"),
+    ("CARGO_FEATURE_TPS_TEST_OUT_BOTH", "tps-test-out-both"),
+    ("CARGO_FEATURE_TPS_TEST_FPWM", "tps-test-fpwm"),
+    ("CARGO_FEATURE_TPS_TEST_PFM", "tps-test-pfm"),
+    ("CARGO_FEATURE_TPS_TEST_VOUT_5V", "tps-test-vout-5v"),
+    ("CARGO_FEATURE_TPS_TEST_VOUT_12V", "tps-test-vout-12v"),
+    ("CARGO_FEATURE_TPS_TEST_VOUT_15V", "tps-test-vout-15v"),
+    ("CARGO_FEATURE_TPS_TEST_VOUT_19V", "tps-test-vout-19v"),
+    ("CARGO_FEATURE_TPS_TEST_ILIM_1P5A", "tps-test-ilim-1p5a"),
+    ("CARGO_FEATURE_TPS_TEST_ILIM_3P5A", "tps-test-ilim-3p5a"),
+    ("CARGO_FEATURE_TPS_TEST_CHARGE_OFF", "tps-test-charge-off"),
+    ("CARGO_FEATURE_TPS_TEST_CHARGE_MIN", "tps-test-charge-min"),
+    ("CARGO_FEATURE_TPS_TEST_CHARGE_1A", "tps-test-charge-1a"),
+    (
+        "CARGO_FEATURE_TEST_FW_SCREEN_STATIC",
+        "test-fw-screen-static",
+    ),
+    (
+        "CARGO_FEATURE_TEST_FW_AUDIO_PLAYBACK",
+        "test-fw-audio-playback",
+    ),
+    (
+        "CARGO_FEATURE_TEST_FW_DEFAULT_SCREEN_STATIC",
+        "test-fw-default-screen-static",
+    ),
+    (
+        "CARGO_FEATURE_TEST_FW_DEFAULT_AUDIO_PLAYBACK",
+        "test-fw-default-audio-playback",
+    ),
+    ("CARGO_FEATURE_DISPLAY_SPI_20MHZ", "display-spi-20mhz"),
+    ("CARGO_FEATURE_DISPLAY_SPI_40MHZ", "display-spi-40mhz"),
+    ("CARGO_FEATURE_NO_PD_SINK_5V", "no-pd-sink-5v"),
+    ("CARGO_FEATURE_NO_PD_SINK_9V", "no-pd-sink-9v"),
+    ("CARGO_FEATURE_NO_PD_SINK_12V", "no-pd-sink-12v"),
+    ("CARGO_FEATURE_NO_PD_SINK_15V", "no-pd-sink-15v"),
+    ("CARGO_FEATURE_NO_PD_SINK_20V", "no-pd-sink-20v"),
+    ("CARGO_FEATURE_NO_PPS", "no-pps"),
+];
 
 fn emit_rerun_if_exists(path: &Path) {
     if path.exists() {

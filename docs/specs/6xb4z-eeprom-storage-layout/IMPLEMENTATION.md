@@ -9,7 +9,9 @@
   - `PdBreadcrumbRecordV1` ring at `0x0060..0x015f`
   - WiFi config record at `0x0160..0x01df`
   - `BeeperPrefsRecordV1` at `0x01e0`
+  - `AdvancedPowerRecordV1` at `0x0200`
 - Beeper preferences default to `L4 / L4 / Action` and persist only when preferences change.
+- Advanced Power defaults to `1200 / 600 / 0 / 0 / 4 / 2`, persists only relative offsets/thresholds, and expands against the active device rated output at runtime.
 
 ## Known Gaps
 
@@ -22,6 +24,7 @@
 - `cargo +stable fmt --manifest-path firmware/Cargo.toml`
 - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml beeper`
 - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml audio`
+- `cargo +stable test --target $(rustc +stable -vV | sed -n 's/^host: //p') --manifest-path firmware/host-unit-tests/Cargo.toml`
 - `cargo +esp build --release --bin esp-firmware`
 
 ## HIL Evidence Expectations

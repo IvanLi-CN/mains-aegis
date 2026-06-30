@@ -8,9 +8,11 @@ import {
   detectBrowserLanCapability,
   expandIpv4Cidr,
   resolveConnectRuntimeMode,
+  resolveOwnerFacingDevdTarget,
   resolveSelectedRecord,
+  resolveUpsHardwareCapability,
   ScanActionRow,
-  } from "./App";
+} from "./App";
 
 function savedRecord(deviceId: string): DeviceRecord {
   return {
@@ -240,6 +242,23 @@ describe("buildFleetEntries", () => {
     );
   });
 
+  test("keeps same-origin devd-backed saved entries online without any mock query target", () => {
+    const entries = buildFleetEntries(
+      [savedRecord("mains-aegis-a1b2c3")],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.record.connectionState).toBe("online");
+    expect(entries[0]?.record.target.transport).toBe("http");
+    expect(entries[0]?.record.target.baseUrl).toBe("http://192.168.31.42");
+    expect(entries[0]?.record.target.rememberedChannels?.http?.baseUrl).toBe(
+      "http://192.168.31.42",
+    );
+    expect(entries[0]?.record.target.rememberedChannels?.devd).toBeUndefined();
+  });
+
   test("refreshes confirmed companion fallback IP from current LAN discovery", () => {
     const entries = buildFleetEntries(
       [savedRecord("mains-aegis-a1b2c3")],
@@ -292,6 +311,276 @@ describe("resolveSelectedRecord", () => {
 
     expect(selected?.target.deviceId).toBe("mains-aegis-a1b2c3");
     expect(selected?.target.location).toBe("devd records");
+  });
+
+  test("prefers a hydrated fleet record over a temporary registry shell without status", () => {
+    const registryShell: DeviceRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      target: {
+        ...savedRecord("mains-aegis-a1b2c3").target,
+        temporary: true,
+      },
+      status: null,
+    };
+    const fleetRecord: DeviceRecord = {
+      ...registryShell,
+      status: {
+        mode: "backup",
+        input: {
+          source: "usbc",
+          mains_present: false,
+          input_vbus_mv: 5100,
+          input_ibus_ma: 10,
+          vin_vbus_mv: 1600,
+          vin_iin_ma: 5,
+          tps_total_iout_ma: 40,
+          tps_limit_threshold_ma: 100,
+          pressure_state: "inactive",
+          pressure_score_pct: 0,
+          pressure_reason: "none",
+          vin_baseline_mv: null,
+          vin_drop_mv: null,
+          assist_power_stage: "backup",
+          assist_target_vout_mv: 12000,
+        },
+        output: {
+          requested: "both",
+          active: "both",
+          recoverable: "both",
+          gate_reason: "none",
+          out_a: { state: "ok", enabled: true, vbus_mv: 12064, iout_ma: 20 },
+          out_b: { state: "ok", enabled: true, vbus_mv: 12072, iout_ma: 20 },
+        },
+        charger: {
+          state: "ok",
+          allow_charge: false,
+          ichg_ma: null,
+          ibat_ma: 0,
+          vbat_present: true,
+          policy_target_ichg_ma: null,
+          limit_active: false,
+          limit_reason: "none",
+          limit_detail: "none",
+          limit_threshold_ma: null,
+          detail_status: "NOAC",
+        },
+        battery: {
+          state: "ok",
+          pack_mv: 15669,
+          current_ma: -38,
+          soc_pct: 89,
+          cell_mv: [3924, 3925, 3905, 3914],
+          cell_delta_mv: 20,
+          balance_enabled: true,
+          balance_cfg_match: true,
+          balance_active: false,
+          balance_mask: 0,
+          balance_cell: null,
+          balance_min_start_delta_mv: 3,
+          no_battery: false,
+          discharge_ready: true,
+          charge_fet_on: true,
+          discharge_fet_on: true,
+          precharge_fet_on: false,
+          issue_detail: null,
+          recovery_pending: false,
+        },
+        thermal: {
+          tmp_a_state: "ok",
+          tmp_a_c: 37,
+          tmp_b_state: "ok",
+          tmp_b_c: 38,
+        },
+        network: {
+          state: "connected",
+          ipv4: "192.168.31.42",
+          last_error: null,
+        },
+      },
+    };
+    const fleetEntries = [
+      { key: "mains-aegis-a1b2c3", record: fleetRecord, saved: false },
+    ];
+
+    const selected = resolveSelectedRecord(
+      "mains-aegis-a1b2c3",
+      [registryShell],
+      fleetEntries,
+    );
+
+    expect(selected).toBe(fleetRecord);
+  });
+});
+
+describe("resolveOwnerFacingDevdTarget", () => {
+  test("ignores mock query targets outside demo mode", () => {
+    expect(resolveOwnerFacingDevdTarget("mock:devd", false)).toBeUndefined();
+    expect(resolveOwnerFacingDevdTarget("same-origin", false)).toBe(
+      "same-origin",
+    );
+  });
+
+  test("keeps mock query targets in demo mode", () => {
+    expect(resolveOwnerFacingDevdTarget("mock:devd", true)).toBe("mock:devd");
+  });
+});
+
+describe("resolveUpsHardwareCapability", () => {
+  test("prefers hardware identity capabilities over settings fallback", () => {
+    const capability = resolveUpsHardwareCapability({
+      identity: {
+        ...lanDevice("mains-aegis-a1b2c3").identity!,
+        hardware_capabilities: {
+          output_profile: "19v",
+          rated_vout_mv: 19000,
+        },
+      },
+      settings: {
+        wifi: { configured: false, ssid: null },
+        log_level: "info",
+        manual_charge: {
+          target: "full_100",
+          speed: "ma_500",
+          timer_h: 2,
+        },
+        advanced_power: {
+          standby_drop_mv: 1200,
+          assist_low_drop_mv: 600,
+          assist_enter_delta_ma: 0,
+          assist_exit_delta_ma: 0,
+          assist_required_samples: 2,
+          assist_ramp_step_mv: 100,
+          assist_ramp_interval_ms: 200,
+          rated_enter_delta_ma: 0,
+          rated_exit_delta_ma: 0,
+          vin_drop_threshold_pct: 4,
+          required_samples: 2,
+        },
+        advanced_power_capabilities: {
+          rated_vout_mv: 12000,
+          standby_drop_mv: { default: 1200, min: 0, max: 3000, step: 20 },
+          assist_low_drop_mv: { default: 600, min: 0, max: 3000, step: 20 },
+          assist_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+          assist_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+          assist_required_samples: { default: 2, min: 1, max: 5, step: 1 },
+          assist_ramp_step_mv: { default: 100, min: 20, max: 1000, step: 20 },
+          assist_ramp_interval_ms: { default: 200, min: 100, max: 3000, step: 100 },
+          rated_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+          rated_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+          vin_drop_threshold_pct: { default: 4, min: 1, max: 12, step: 1 },
+          required_samples: { default: 2, min: 1, max: 5, step: 1 },
+        },
+      },
+    });
+
+    expect(capability).toEqual({
+      outputProfile: "19v",
+      ratedVoutMv: 19000,
+      source: "identity",
+    });
+  });
+
+  test("falls back to the advanced-power baseline when identity is missing", () => {
+    const capability = resolveUpsHardwareCapability({
+      identity: null,
+      settings: {
+        wifi: { configured: false, ssid: null },
+        log_level: "info",
+        manual_charge: {
+          target: "full_100",
+          speed: "ma_500",
+          timer_h: 2,
+        },
+        advanced_power: {
+          standby_drop_mv: 1200,
+          assist_low_drop_mv: 600,
+          assist_enter_delta_ma: 0,
+          assist_exit_delta_ma: 0,
+          assist_required_samples: 2,
+          assist_ramp_step_mv: 100,
+          assist_ramp_interval_ms: 200,
+          rated_enter_delta_ma: 0,
+          rated_exit_delta_ma: 0,
+          vin_drop_threshold_pct: 4,
+          required_samples: 2,
+        },
+        advanced_power_capabilities: {
+          rated_vout_mv: 12000,
+          standby_drop_mv: { default: 1200, min: 0, max: 3000, step: 20 },
+          assist_low_drop_mv: { default: 600, min: 0, max: 3000, step: 20 },
+          assist_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+          assist_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+          assist_required_samples: { default: 2, min: 1, max: 5, step: 1 },
+          assist_ramp_step_mv: { default: 100, min: 20, max: 1000, step: 20 },
+          assist_ramp_interval_ms: { default: 200, min: 100, max: 3000, step: 100 },
+          rated_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+          rated_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+          vin_drop_threshold_pct: { default: 4, min: 1, max: 12, step: 1 },
+          required_samples: { default: 2, min: 1, max: 5, step: 1 },
+        },
+      },
+    });
+
+    expect(capability).toEqual({
+      outputProfile: "12v",
+      ratedVoutMv: 12000,
+      source: "settings",
+    });
+  });
+
+  test("prefers active firmware output profile over settings fallback when capability fields are missing", () => {
+    const capability = resolveUpsHardwareCapability({
+      identity: {
+        ...lanDevice("mains-aegis-a1b2c3").identity!,
+        hardware_capabilities: undefined,
+        firmware: {
+          ...lanDevice("mains-aegis-a1b2c3").identity!.firmware,
+          features: ["net_http", "web_serial", "main-vout-19v"],
+        },
+      },
+      settings: {
+        wifi: { configured: false, ssid: null },
+        log_level: "info",
+        manual_charge: {
+          target: "full_100",
+          speed: "ma_500",
+          timer_h: 2,
+        },
+        advanced_power: {
+          standby_drop_mv: 1200,
+          assist_low_drop_mv: 600,
+          assist_enter_delta_ma: 0,
+          assist_exit_delta_ma: 0,
+          assist_required_samples: 2,
+          assist_ramp_step_mv: 100,
+          assist_ramp_interval_ms: 200,
+          rated_enter_delta_ma: 0,
+          rated_exit_delta_ma: 0,
+          vin_drop_threshold_pct: 4,
+          required_samples: 2,
+        },
+        advanced_power_capabilities: {
+          rated_vout_mv: 12000,
+          standby_drop_mv: { default: 1200, min: 0, max: 3000, step: 20 },
+          assist_low_drop_mv: { default: 600, min: 0, max: 3000, step: 20 },
+          assist_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+          assist_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+          assist_required_samples: { default: 2, min: 1, max: 5, step: 1 },
+          assist_ramp_step_mv: { default: 100, min: 20, max: 1000, step: 20 },
+          assist_ramp_interval_ms: { default: 200, min: 100, max: 3000, step: 100 },
+          rated_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
+          rated_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
+          vin_drop_threshold_pct: { default: 4, min: 1, max: 12, step: 1 },
+          required_samples: { default: 2, min: 1, max: 5, step: 1 },
+        },
+      },
+    });
+
+    expect(capability).toEqual({
+      outputProfile: "19v",
+      ratedVoutMv: 19000,
+      source: "firmware",
+    });
   });
 });
 

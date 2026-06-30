@@ -142,6 +142,31 @@ impl NetworkUiSummary {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrontPanelRuntimeSnapshot {
+    pub init_state: &'static str,
+    pub display_power_mode: &'static str,
+    pub ui_variant: &'static str,
+    pub frame_no: u32,
+    pub ready: bool,
+    pub needs_redraw: bool,
+    pub attention_hold: bool,
+}
+
+impl FrontPanelRuntimeSnapshot {
+    pub const fn unavailable() -> Self {
+        Self {
+            init_state: "unknown",
+            display_power_mode: "unknown",
+            ui_variant: "unknown",
+            frame_no: 0,
+            ready: false,
+            needs_redraw: false,
+            attention_hold: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WifiSettingsSnapshot {
     pub configured: bool,
@@ -174,19 +199,482 @@ impl ManualChargeSettingsSnapshot {
     }
 }
 
+pub const ADVANCED_POWER_ASSIST_ENTER_BASE_MA: i16 = 100;
+pub const ADVANCED_POWER_ASSIST_EXIT_BASE_MA: i16 = 50;
+pub const ADVANCED_POWER_RATED_ENTER_BASE_MA: i16 = 100;
+pub const ADVANCED_POWER_RATED_EXIT_BASE_MA: i16 = 50;
+pub const ADVANCED_POWER_DEFAULT_STANDBY_DROP_MV: u16 = 1_200;
+pub const ADVANCED_POWER_DEFAULT_ASSIST_LOW_DROP_MV: u16 = 600;
+pub const ADVANCED_POWER_DEFAULT_ASSIST_ENTER_DELTA_MA: i16 = 0;
+pub const ADVANCED_POWER_DEFAULT_ASSIST_EXIT_DELTA_MA: i16 = 0;
+pub const ADVANCED_POWER_DEFAULT_ASSIST_REQUIRED_SAMPLES: u8 = 2;
+pub const ADVANCED_POWER_DEFAULT_ASSIST_RAMP_STEP_MV: u16 = 100;
+pub const ADVANCED_POWER_DEFAULT_ASSIST_RAMP_INTERVAL_MS: u16 = 200;
+pub const ADVANCED_POWER_DEFAULT_RATED_ENTER_DELTA_MA: i16 = 0;
+pub const ADVANCED_POWER_DEFAULT_RATED_EXIT_DELTA_MA: i16 = 0;
+pub const ADVANCED_POWER_DEFAULT_VIN_DROP_THRESHOLD_PCT: u8 = 4;
+pub const ADVANCED_POWER_DEFAULT_REQUIRED_SAMPLES: u8 = 2;
+pub const ADVANCED_POWER_STANDBY_DROP_MIN_MV: u16 = 0;
+pub const ADVANCED_POWER_STANDBY_DROP_MAX_MV: u16 = 3_000;
+pub const ADVANCED_POWER_STANDBY_DROP_STEP_MV: u16 = 20;
+pub const ADVANCED_POWER_ASSIST_LOW_DROP_MIN_MV: u16 = 0;
+pub const ADVANCED_POWER_ASSIST_LOW_DROP_MAX_MV: u16 = 3_000;
+pub const ADVANCED_POWER_ASSIST_LOW_DROP_STEP_MV: u16 = 20;
+pub const ADVANCED_POWER_ASSIST_ENTER_DELTA_MIN_MA: i16 = -100;
+pub const ADVANCED_POWER_ASSIST_ENTER_DELTA_MAX_MA: i16 = 1_000;
+pub const ADVANCED_POWER_ASSIST_ENTER_DELTA_STEP_MA: i16 = 50;
+pub const ADVANCED_POWER_ASSIST_EXIT_DELTA_MIN_MA: i16 = -50;
+pub const ADVANCED_POWER_ASSIST_EXIT_DELTA_MAX_MA: i16 = 1_000;
+pub const ADVANCED_POWER_ASSIST_EXIT_DELTA_STEP_MA: i16 = 50;
+pub const ADVANCED_POWER_ASSIST_REQUIRED_SAMPLES_MIN: u8 = 1;
+pub const ADVANCED_POWER_ASSIST_REQUIRED_SAMPLES_MAX: u8 = 5;
+pub const ADVANCED_POWER_ASSIST_REQUIRED_SAMPLES_STEP: u8 = 1;
+pub const ADVANCED_POWER_ASSIST_RAMP_STEP_MIN_MV: u16 = 20;
+pub const ADVANCED_POWER_ASSIST_RAMP_STEP_MAX_MV: u16 = 1_000;
+pub const ADVANCED_POWER_ASSIST_RAMP_STEP_STEP_MV: u16 = 20;
+pub const ADVANCED_POWER_ASSIST_RAMP_INTERVAL_MIN_MS: u16 = 100;
+pub const ADVANCED_POWER_ASSIST_RAMP_INTERVAL_MAX_MS: u16 = 3_000;
+pub const ADVANCED_POWER_ASSIST_RAMP_INTERVAL_STEP_MS: u16 = 100;
+pub const ADVANCED_POWER_RATED_ENTER_DELTA_MIN_MA: i16 = -100;
+pub const ADVANCED_POWER_RATED_ENTER_DELTA_MAX_MA: i16 = 1_000;
+pub const ADVANCED_POWER_RATED_ENTER_DELTA_STEP_MA: i16 = 50;
+pub const ADVANCED_POWER_RATED_EXIT_DELTA_MIN_MA: i16 = -50;
+pub const ADVANCED_POWER_RATED_EXIT_DELTA_MAX_MA: i16 = 1_000;
+pub const ADVANCED_POWER_RATED_EXIT_DELTA_STEP_MA: i16 = 50;
+pub const ADVANCED_POWER_VIN_DROP_THRESHOLD_MIN_PCT: u8 = 1;
+pub const ADVANCED_POWER_VIN_DROP_THRESHOLD_MAX_PCT: u8 = 12;
+pub const ADVANCED_POWER_VIN_DROP_THRESHOLD_STEP_PCT: u8 = 1;
+pub const ADVANCED_POWER_REQUIRED_SAMPLES_MIN: u8 = 1;
+pub const ADVANCED_POWER_REQUIRED_SAMPLES_MAX: u8 = 5;
+pub const ADVANCED_POWER_REQUIRED_SAMPLES_STEP: u8 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdvancedPowerSettingsSnapshot {
+    pub standby_drop_mv: u16,
+    pub assist_low_drop_mv: u16,
+    pub assist_enter_delta_ma: i16,
+    pub assist_exit_delta_ma: i16,
+    pub assist_required_samples: u8,
+    pub assist_ramp_step_mv: u16,
+    pub assist_ramp_interval_ms: u16,
+    pub rated_enter_delta_ma: i16,
+    pub rated_exit_delta_ma: i16,
+    pub vin_drop_threshold_pct: u8,
+    pub required_samples: u8,
+}
+
+impl AdvancedPowerSettingsSnapshot {
+    pub const fn defaults() -> Self {
+        Self {
+            standby_drop_mv: ADVANCED_POWER_DEFAULT_STANDBY_DROP_MV,
+            assist_low_drop_mv: ADVANCED_POWER_DEFAULT_ASSIST_LOW_DROP_MV,
+            assist_enter_delta_ma: ADVANCED_POWER_DEFAULT_ASSIST_ENTER_DELTA_MA,
+            assist_exit_delta_ma: ADVANCED_POWER_DEFAULT_ASSIST_EXIT_DELTA_MA,
+            assist_required_samples: ADVANCED_POWER_DEFAULT_ASSIST_REQUIRED_SAMPLES,
+            assist_ramp_step_mv: ADVANCED_POWER_DEFAULT_ASSIST_RAMP_STEP_MV,
+            assist_ramp_interval_ms: ADVANCED_POWER_DEFAULT_ASSIST_RAMP_INTERVAL_MS,
+            rated_enter_delta_ma: ADVANCED_POWER_DEFAULT_RATED_ENTER_DELTA_MA,
+            rated_exit_delta_ma: ADVANCED_POWER_DEFAULT_RATED_EXIT_DELTA_MA,
+            vin_drop_threshold_pct: ADVANCED_POWER_DEFAULT_VIN_DROP_THRESHOLD_PCT,
+            required_samples: ADVANCED_POWER_DEFAULT_REQUIRED_SAMPLES,
+        }
+    }
+
+    pub fn expand(
+        self,
+        rated_vout_mv: u16,
+    ) -> Result<AdvancedPowerExpandedSnapshot, AdvancedPowerValidationError> {
+        validate_advanced_power_settings(self)?;
+        Ok(AdvancedPowerExpandedSnapshot {
+            rated_vout_mv,
+            standby_vout_mv: rated_vout_mv.saturating_sub(self.standby_drop_mv),
+            assist_low_vout_mv: rated_vout_mv.saturating_sub(self.assist_low_drop_mv),
+            assist_enter_iout_ma: i32::from(ADVANCED_POWER_ASSIST_ENTER_BASE_MA)
+                + i32::from(self.assist_enter_delta_ma),
+            assist_exit_iout_ma: i32::from(ADVANCED_POWER_ASSIST_EXIT_BASE_MA)
+                + i32::from(self.assist_exit_delta_ma),
+            assist_required_samples: self.assist_required_samples,
+            assist_ramp_step_mv: self.assist_ramp_step_mv,
+            assist_ramp_interval_ms: self.assist_ramp_interval_ms,
+            rated_enter_iout_ma: i32::from(ADVANCED_POWER_RATED_ENTER_BASE_MA)
+                + i32::from(self.rated_enter_delta_ma),
+            rated_exit_iout_ma: i32::from(ADVANCED_POWER_RATED_EXIT_BASE_MA)
+                + i32::from(self.rated_exit_delta_ma),
+            vin_drop_threshold_pct: u16::from(self.vin_drop_threshold_pct),
+            required_samples: self.required_samples,
+        })
+    }
+
+    pub const fn capabilities_for_rated_vout(
+        rated_vout_mv: u16,
+    ) -> AdvancedPowerCapabilitiesSnapshot {
+        AdvancedPowerCapabilitiesSnapshot::for_rated_vout(rated_vout_mv)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdvancedPowerExpandedSnapshot {
+    pub rated_vout_mv: u16,
+    pub standby_vout_mv: u16,
+    pub assist_low_vout_mv: u16,
+    pub assist_enter_iout_ma: i32,
+    pub assist_exit_iout_ma: i32,
+    pub assist_required_samples: u8,
+    pub assist_ramp_step_mv: u16,
+    pub assist_ramp_interval_ms: u16,
+    pub rated_enter_iout_ma: i32,
+    pub rated_exit_iout_ma: i32,
+    pub vin_drop_threshold_pct: u16,
+    pub required_samples: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdvancedPowerU16CapabilitySnapshot {
+    pub default: u16,
+    pub min: u16,
+    pub max: u16,
+    pub step: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdvancedPowerI16CapabilitySnapshot {
+    pub default: i16,
+    pub min: i16,
+    pub max: i16,
+    pub step: i16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdvancedPowerU8CapabilitySnapshot {
+    pub default: u8,
+    pub min: u8,
+    pub max: u8,
+    pub step: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdvancedPowerCapabilitiesSnapshot {
+    pub rated_vout_mv: u16,
+    pub standby_drop_mv: AdvancedPowerU16CapabilitySnapshot,
+    pub assist_low_drop_mv: AdvancedPowerU16CapabilitySnapshot,
+    pub assist_enter_delta_ma: AdvancedPowerI16CapabilitySnapshot,
+    pub assist_exit_delta_ma: AdvancedPowerI16CapabilitySnapshot,
+    pub assist_required_samples: AdvancedPowerU8CapabilitySnapshot,
+    pub assist_ramp_step_mv: AdvancedPowerU16CapabilitySnapshot,
+    pub assist_ramp_interval_ms: AdvancedPowerU16CapabilitySnapshot,
+    pub rated_enter_delta_ma: AdvancedPowerI16CapabilitySnapshot,
+    pub rated_exit_delta_ma: AdvancedPowerI16CapabilitySnapshot,
+    pub vin_drop_threshold_pct: AdvancedPowerU8CapabilitySnapshot,
+    pub required_samples: AdvancedPowerU8CapabilitySnapshot,
+}
+
+impl AdvancedPowerCapabilitiesSnapshot {
+    pub const fn for_rated_vout(rated_vout_mv: u16) -> Self {
+        Self {
+            rated_vout_mv,
+            standby_drop_mv: AdvancedPowerU16CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_STANDBY_DROP_MV,
+                min: ADVANCED_POWER_STANDBY_DROP_MIN_MV,
+                max: ADVANCED_POWER_STANDBY_DROP_MAX_MV,
+                step: ADVANCED_POWER_STANDBY_DROP_STEP_MV,
+            },
+            assist_low_drop_mv: AdvancedPowerU16CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_ASSIST_LOW_DROP_MV,
+                min: ADVANCED_POWER_ASSIST_LOW_DROP_MIN_MV,
+                max: ADVANCED_POWER_ASSIST_LOW_DROP_MAX_MV,
+                step: ADVANCED_POWER_ASSIST_LOW_DROP_STEP_MV,
+            },
+            assist_enter_delta_ma: AdvancedPowerI16CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_ASSIST_ENTER_DELTA_MA,
+                min: ADVANCED_POWER_ASSIST_ENTER_DELTA_MIN_MA,
+                max: ADVANCED_POWER_ASSIST_ENTER_DELTA_MAX_MA,
+                step: ADVANCED_POWER_ASSIST_ENTER_DELTA_STEP_MA,
+            },
+            assist_exit_delta_ma: AdvancedPowerI16CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_ASSIST_EXIT_DELTA_MA,
+                min: ADVANCED_POWER_ASSIST_EXIT_DELTA_MIN_MA,
+                max: ADVANCED_POWER_ASSIST_EXIT_DELTA_MAX_MA,
+                step: ADVANCED_POWER_ASSIST_EXIT_DELTA_STEP_MA,
+            },
+            assist_required_samples: AdvancedPowerU8CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_ASSIST_REQUIRED_SAMPLES,
+                min: ADVANCED_POWER_ASSIST_REQUIRED_SAMPLES_MIN,
+                max: ADVANCED_POWER_ASSIST_REQUIRED_SAMPLES_MAX,
+                step: ADVANCED_POWER_ASSIST_REQUIRED_SAMPLES_STEP,
+            },
+            assist_ramp_step_mv: AdvancedPowerU16CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_ASSIST_RAMP_STEP_MV,
+                min: ADVANCED_POWER_ASSIST_RAMP_STEP_MIN_MV,
+                max: ADVANCED_POWER_ASSIST_RAMP_STEP_MAX_MV,
+                step: ADVANCED_POWER_ASSIST_RAMP_STEP_STEP_MV,
+            },
+            assist_ramp_interval_ms: AdvancedPowerU16CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_ASSIST_RAMP_INTERVAL_MS,
+                min: ADVANCED_POWER_ASSIST_RAMP_INTERVAL_MIN_MS,
+                max: ADVANCED_POWER_ASSIST_RAMP_INTERVAL_MAX_MS,
+                step: ADVANCED_POWER_ASSIST_RAMP_INTERVAL_STEP_MS,
+            },
+            rated_enter_delta_ma: AdvancedPowerI16CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_RATED_ENTER_DELTA_MA,
+                min: ADVANCED_POWER_RATED_ENTER_DELTA_MIN_MA,
+                max: ADVANCED_POWER_RATED_ENTER_DELTA_MAX_MA,
+                step: ADVANCED_POWER_RATED_ENTER_DELTA_STEP_MA,
+            },
+            rated_exit_delta_ma: AdvancedPowerI16CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_RATED_EXIT_DELTA_MA,
+                min: ADVANCED_POWER_RATED_EXIT_DELTA_MIN_MA,
+                max: ADVANCED_POWER_RATED_EXIT_DELTA_MAX_MA,
+                step: ADVANCED_POWER_RATED_EXIT_DELTA_STEP_MA,
+            },
+            vin_drop_threshold_pct: AdvancedPowerU8CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_VIN_DROP_THRESHOLD_PCT,
+                min: ADVANCED_POWER_VIN_DROP_THRESHOLD_MIN_PCT,
+                max: ADVANCED_POWER_VIN_DROP_THRESHOLD_MAX_PCT,
+                step: ADVANCED_POWER_VIN_DROP_THRESHOLD_STEP_PCT,
+            },
+            required_samples: AdvancedPowerU8CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_REQUIRED_SAMPLES,
+                min: ADVANCED_POWER_REQUIRED_SAMPLES_MIN,
+                max: ADVANCED_POWER_REQUIRED_SAMPLES_MAX,
+                step: ADVANCED_POWER_REQUIRED_SAMPLES_STEP,
+            },
+        }
+    }
+}
+
+#[derive(defmt::Format, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdvancedPowerValidationError {
+    StandbyDropOutOfRange,
+    AssistLowDropOutOfRange,
+    AssistEnterDeltaOutOfRange,
+    AssistExitDeltaOutOfRange,
+    AssistRequiredSamplesOutOfRange,
+    AssistRampStepOutOfRange,
+    AssistRampIntervalOutOfRange,
+    RatedEnterDeltaOutOfRange,
+    RatedExitDeltaOutOfRange,
+    VinDropThresholdPctOutOfRange,
+    RequiredSamplesOutOfRange,
+    VoltageOrderInvalid,
+    AssistCurrentOrderInvalid,
+    CurrentOrderInvalid,
+}
+
+impl AdvancedPowerValidationError {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::StandbyDropOutOfRange => "advanced_power_standby_drop_out_of_range",
+            Self::AssistLowDropOutOfRange => "advanced_power_assist_low_drop_out_of_range",
+            Self::AssistEnterDeltaOutOfRange => "advanced_power_assist_enter_delta_out_of_range",
+            Self::AssistExitDeltaOutOfRange => "advanced_power_assist_exit_delta_out_of_range",
+            Self::AssistRequiredSamplesOutOfRange => {
+                "advanced_power_assist_required_samples_out_of_range"
+            }
+            Self::AssistRampStepOutOfRange => "advanced_power_assist_ramp_step_out_of_range",
+            Self::AssistRampIntervalOutOfRange => {
+                "advanced_power_assist_ramp_interval_out_of_range"
+            }
+            Self::RatedEnterDeltaOutOfRange => "advanced_power_rated_enter_delta_out_of_range",
+            Self::RatedExitDeltaOutOfRange => "advanced_power_rated_exit_delta_out_of_range",
+            Self::VinDropThresholdPctOutOfRange => {
+                "advanced_power_vin_drop_threshold_pct_out_of_range"
+            }
+            Self::RequiredSamplesOutOfRange => "advanced_power_required_samples_out_of_range",
+            Self::VoltageOrderInvalid => "advanced_power_voltage_order_invalid",
+            Self::AssistCurrentOrderInvalid => "advanced_power_assist_current_order_invalid",
+            Self::CurrentOrderInvalid => "advanced_power_current_order_invalid",
+        }
+    }
+
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::StandbyDropOutOfRange => {
+                "standby_drop_mv must be within 0..3000 mV in 20 mV steps"
+            }
+            Self::AssistLowDropOutOfRange => {
+                "assist_low_drop_mv must be within 0..3000 mV in 20 mV steps"
+            }
+            Self::AssistEnterDeltaOutOfRange => {
+                "assist_enter_delta_ma must be within -100..1000 mA in 50 mA steps"
+            }
+            Self::AssistExitDeltaOutOfRange => {
+                "assist_exit_delta_ma must be within -50..1000 mA in 50 mA steps"
+            }
+            Self::AssistRequiredSamplesOutOfRange => {
+                "assist_required_samples must be within 1..5 in step 1"
+            }
+            Self::AssistRampStepOutOfRange => {
+                "assist_ramp_step_mv must be within 20..1000 mV in 20 mV steps"
+            }
+            Self::AssistRampIntervalOutOfRange => {
+                "assist_ramp_interval_ms must be within 100..3000 ms in 100 ms steps"
+            }
+            Self::RatedEnterDeltaOutOfRange => {
+                "rated_enter_delta_ma must be within -100..1000 mA in 50 mA steps"
+            }
+            Self::RatedExitDeltaOutOfRange => {
+                "rated_exit_delta_ma must be within -50..1000 mA in 50 mA steps"
+            }
+            Self::VinDropThresholdPctOutOfRange => {
+                "vin_drop_threshold_pct must be within 1..12 in 1% steps"
+            }
+            Self::RequiredSamplesOutOfRange => "required_samples must be within 1..5 in step 1",
+            Self::VoltageOrderInvalid => {
+                "standby_drop_mv must be greater than or equal to assist_low_drop_mv"
+            }
+            Self::AssistCurrentOrderInvalid => {
+                "expanded assist_exit_threshold_ma must not exceed assist_enter_threshold_ma"
+            }
+            Self::CurrentOrderInvalid => {
+                "expanded rated_exit_threshold_ma must not exceed rated_enter_threshold_ma"
+            }
+        }
+    }
+}
+
+pub fn validate_advanced_power_settings(
+    settings: AdvancedPowerSettingsSnapshot,
+) -> Result<(), AdvancedPowerValidationError> {
+    if !value_in_u16_range(
+        settings.standby_drop_mv,
+        ADVANCED_POWER_STANDBY_DROP_MIN_MV,
+        ADVANCED_POWER_STANDBY_DROP_MAX_MV,
+        ADVANCED_POWER_STANDBY_DROP_STEP_MV,
+    ) {
+        return Err(AdvancedPowerValidationError::StandbyDropOutOfRange);
+    }
+    if !value_in_u16_range(
+        settings.assist_low_drop_mv,
+        ADVANCED_POWER_ASSIST_LOW_DROP_MIN_MV,
+        ADVANCED_POWER_ASSIST_LOW_DROP_MAX_MV,
+        ADVANCED_POWER_ASSIST_LOW_DROP_STEP_MV,
+    ) {
+        return Err(AdvancedPowerValidationError::AssistLowDropOutOfRange);
+    }
+    if !value_in_i16_range(
+        settings.assist_enter_delta_ma,
+        ADVANCED_POWER_ASSIST_ENTER_DELTA_MIN_MA,
+        ADVANCED_POWER_ASSIST_ENTER_DELTA_MAX_MA,
+        ADVANCED_POWER_ASSIST_ENTER_DELTA_STEP_MA,
+    ) {
+        return Err(AdvancedPowerValidationError::AssistEnterDeltaOutOfRange);
+    }
+    if !value_in_i16_range(
+        settings.assist_exit_delta_ma,
+        ADVANCED_POWER_ASSIST_EXIT_DELTA_MIN_MA,
+        ADVANCED_POWER_ASSIST_EXIT_DELTA_MAX_MA,
+        ADVANCED_POWER_ASSIST_EXIT_DELTA_STEP_MA,
+    ) {
+        return Err(AdvancedPowerValidationError::AssistExitDeltaOutOfRange);
+    }
+    if !value_in_u8_range(
+        settings.assist_required_samples,
+        ADVANCED_POWER_ASSIST_REQUIRED_SAMPLES_MIN,
+        ADVANCED_POWER_ASSIST_REQUIRED_SAMPLES_MAX,
+        ADVANCED_POWER_ASSIST_REQUIRED_SAMPLES_STEP,
+    ) {
+        return Err(AdvancedPowerValidationError::AssistRequiredSamplesOutOfRange);
+    }
+    if !value_in_u16_range(
+        settings.assist_ramp_step_mv,
+        ADVANCED_POWER_ASSIST_RAMP_STEP_MIN_MV,
+        ADVANCED_POWER_ASSIST_RAMP_STEP_MAX_MV,
+        ADVANCED_POWER_ASSIST_RAMP_STEP_STEP_MV,
+    ) {
+        return Err(AdvancedPowerValidationError::AssistRampStepOutOfRange);
+    }
+    if !value_in_u16_range(
+        settings.assist_ramp_interval_ms,
+        ADVANCED_POWER_ASSIST_RAMP_INTERVAL_MIN_MS,
+        ADVANCED_POWER_ASSIST_RAMP_INTERVAL_MAX_MS,
+        ADVANCED_POWER_ASSIST_RAMP_INTERVAL_STEP_MS,
+    ) {
+        return Err(AdvancedPowerValidationError::AssistRampIntervalOutOfRange);
+    }
+    if !value_in_i16_range(
+        settings.rated_enter_delta_ma,
+        ADVANCED_POWER_RATED_ENTER_DELTA_MIN_MA,
+        ADVANCED_POWER_RATED_ENTER_DELTA_MAX_MA,
+        ADVANCED_POWER_RATED_ENTER_DELTA_STEP_MA,
+    ) {
+        return Err(AdvancedPowerValidationError::RatedEnterDeltaOutOfRange);
+    }
+    if !value_in_i16_range(
+        settings.rated_exit_delta_ma,
+        ADVANCED_POWER_RATED_EXIT_DELTA_MIN_MA,
+        ADVANCED_POWER_RATED_EXIT_DELTA_MAX_MA,
+        ADVANCED_POWER_RATED_EXIT_DELTA_STEP_MA,
+    ) {
+        return Err(AdvancedPowerValidationError::RatedExitDeltaOutOfRange);
+    }
+    if !value_in_u8_range(
+        settings.vin_drop_threshold_pct,
+        ADVANCED_POWER_VIN_DROP_THRESHOLD_MIN_PCT,
+        ADVANCED_POWER_VIN_DROP_THRESHOLD_MAX_PCT,
+        ADVANCED_POWER_VIN_DROP_THRESHOLD_STEP_PCT,
+    ) {
+        return Err(AdvancedPowerValidationError::VinDropThresholdPctOutOfRange);
+    }
+    if !value_in_u8_range(
+        settings.required_samples,
+        ADVANCED_POWER_REQUIRED_SAMPLES_MIN,
+        ADVANCED_POWER_REQUIRED_SAMPLES_MAX,
+        ADVANCED_POWER_REQUIRED_SAMPLES_STEP,
+    ) {
+        return Err(AdvancedPowerValidationError::RequiredSamplesOutOfRange);
+    }
+    if settings.standby_drop_mv < settings.assist_low_drop_mv {
+        return Err(AdvancedPowerValidationError::VoltageOrderInvalid);
+    }
+    if (i32::from(ADVANCED_POWER_ASSIST_EXIT_BASE_MA) + i32::from(settings.assist_exit_delta_ma))
+        > (i32::from(ADVANCED_POWER_ASSIST_ENTER_BASE_MA)
+            + i32::from(settings.assist_enter_delta_ma))
+    {
+        return Err(AdvancedPowerValidationError::AssistCurrentOrderInvalid);
+    }
+    if (i32::from(ADVANCED_POWER_RATED_EXIT_BASE_MA) + i32::from(settings.rated_exit_delta_ma))
+        > (i32::from(ADVANCED_POWER_RATED_ENTER_BASE_MA) + i32::from(settings.rated_enter_delta_ma))
+    {
+        return Err(AdvancedPowerValidationError::CurrentOrderInvalid);
+    }
+    Ok(())
+}
+
+const fn value_in_u16_range(value: u16, min: u16, max: u16, step: u16) -> bool {
+    value >= min && value <= max && value.wrapping_sub(min) % step == 0
+}
+
+const fn value_in_u8_range(value: u8, min: u8, max: u8, step: u8) -> bool {
+    value >= min && value <= max && value.wrapping_sub(min) % step == 0
+}
+
+fn value_in_i16_range(value: i16, min: i16, max: i16, step: i16) -> bool {
+    value >= min && value <= max && i32::from(value - min).rem_euclid(i32::from(step)) == 0
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceSettingsSnapshot {
     pub wifi: WifiSettingsSnapshot,
     pub log_level: &'static str,
     pub manual_charge: ManualChargeSettingsSnapshot,
+    pub advanced_power: AdvancedPowerSettingsSnapshot,
+    pub advanced_power_capabilities: AdvancedPowerCapabilitiesSnapshot,
 }
 
 impl DeviceSettingsSnapshot {
     pub fn defaults() -> Self {
+        Self::defaults_for_rated_vout(12_000)
+    }
+
+    pub fn defaults_for_rated_vout(rated_vout_mv: u16) -> Self {
         Self {
             wifi: WifiSettingsSnapshot::unconfigured(),
             log_level: "info",
             manual_charge: ManualChargeSettingsSnapshot::defaults(),
+            advanced_power: AdvancedPowerSettingsSnapshot::defaults(),
+            advanced_power_capabilities: AdvancedPowerCapabilitiesSnapshot::for_rated_vout(
+                rated_vout_mv,
+            ),
         }
     }
 }
@@ -211,6 +699,8 @@ pub struct UpsStatusSnapshot {
     pub input_pressure_reason: Option<&'static str>,
     pub input_vin_baseline_mv: Option<u16>,
     pub input_vin_drop_mv: Option<u16>,
+    pub assist_power_stage: Option<&'static str>,
+    pub assist_target_vout_mv: Option<u16>,
     pub charger_state: &'static str,
     pub charger_allow_charge: Option<bool>,
     pub charger_ichg_ma: Option<u16>,
@@ -254,6 +744,7 @@ pub struct UpsStatusSnapshot {
     pub tmp_a_c: Option<i16>,
     pub tmp_b_state: &'static str,
     pub tmp_b_c: Option<i16>,
+    pub front_panel: FrontPanelRuntimeSnapshot,
     pub network: NetworkUiSummary,
 }
 
@@ -291,6 +782,8 @@ pub struct PowerDiagInputSnapshot {
     pub pressure_reason: Option<&'static str>,
     pub vin_baseline_mv: Option<u16>,
     pub vin_drop_mv: Option<u16>,
+    pub assist_power_stage: Option<&'static str>,
+    pub assist_target_vout_mv: Option<u16>,
     pub usb_pd_attached: bool,
     pub usb_pd_charge_ready: bool,
     pub usb_pd_vbus_present: Option<bool>,
@@ -318,6 +811,8 @@ impl PowerDiagInputSnapshot {
             pressure_reason: None,
             vin_baseline_mv: None,
             vin_drop_mv: None,
+            assist_power_stage: None,
+            assist_target_vout_mv: None,
             usb_pd_attached: false,
             usb_pd_charge_ready: false,
             usb_pd_vbus_present: None,
@@ -384,6 +879,9 @@ pub struct PowerDiagChargerSnapshot {
     pub fault0: Option<u8>,
     pub fault1: Option<u8>,
     pub ctrl0: Option<u8>,
+    pub ctrl3: Option<u8>,
+    pub ctrl4: Option<u8>,
+    pub acdrv_path: &'static str,
     pub term_ctrl: Option<u16>,
 }
 
@@ -441,6 +939,9 @@ impl PowerDiagChargerSnapshot {
             fault0: None,
             fault1: None,
             ctrl0: None,
+            ctrl3: None,
+            ctrl4: None,
+            acdrv_path: "unknown",
             term_ctrl: None,
         }
     }
@@ -613,6 +1114,8 @@ impl UpsStatusSnapshot {
             input_pressure_reason: None,
             input_vin_baseline_mv: None,
             input_vin_drop_mv: None,
+            assist_power_stage: None,
+            assist_target_vout_mv: None,
             charger_state: "pending",
             charger_allow_charge: None,
             charger_ichg_ma: None,
@@ -656,6 +1159,7 @@ impl UpsStatusSnapshot {
             tmp_a_c: None,
             tmp_b_state: "pending",
             tmp_b_c: None,
+            front_panel: FrontPanelRuntimeSnapshot::unavailable(),
             network: NetworkUiSummary::disabled(),
         }
     }
@@ -667,7 +1171,11 @@ pub fn format_ipv4(buf: &mut String<16>, ipv4: [u8; 4]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{NetworkUiSummary, WifiConnectionState, WifiErrorKind, WifiSnapshot};
+    use super::{
+        validate_advanced_power_settings, AdvancedPowerSettingsSnapshot,
+        AdvancedPowerValidationError, DeviceSettingsSnapshot, NetworkUiSummary,
+        WifiConnectionState, WifiErrorKind, WifiSnapshot,
+    };
 
     #[test]
     fn connected_ui_summary_prefers_ip_text() {
@@ -687,5 +1195,69 @@ mod tests {
             ..WifiSnapshot::disabled()
         });
         assert_eq!(summary.subtitle().as_str(), "WIFI RETRY DHCP WAIT");
+    }
+
+    #[test]
+    fn advanced_power_defaults_expand_against_rated_vout() {
+        let expanded = AdvancedPowerSettingsSnapshot::defaults()
+            .expand(19_000)
+            .unwrap();
+        assert_eq!(expanded.rated_vout_mv, 19_000);
+        assert_eq!(expanded.standby_vout_mv, 17_800);
+        assert_eq!(expanded.assist_low_vout_mv, 18_400);
+        assert_eq!(expanded.assist_enter_iout_ma, 100);
+        assert_eq!(expanded.assist_exit_iout_ma, 50);
+        assert_eq!(expanded.assist_required_samples, 2);
+        assert_eq!(expanded.assist_ramp_step_mv, 100);
+        assert_eq!(expanded.assist_ramp_interval_ms, 200);
+        assert_eq!(expanded.rated_enter_iout_ma, 100);
+        assert_eq!(expanded.rated_exit_iout_ma, 50);
+        assert_eq!(expanded.vin_drop_threshold_pct, 4);
+        assert_eq!(expanded.required_samples, 2);
+    }
+
+    #[test]
+    fn advanced_power_rejects_voltage_order_inversion() {
+        let err = validate_advanced_power_settings(AdvancedPowerSettingsSnapshot {
+            standby_drop_mv: 580,
+            assist_low_drop_mv: 600,
+            ..AdvancedPowerSettingsSnapshot::defaults()
+        })
+        .unwrap_err();
+        assert_eq!(err, AdvancedPowerValidationError::VoltageOrderInvalid);
+        assert_eq!(err.code(), "advanced_power_voltage_order_invalid");
+    }
+
+    #[test]
+    fn advanced_power_rejects_invalid_current_order() {
+        let err = validate_advanced_power_settings(AdvancedPowerSettingsSnapshot {
+            rated_enter_delta_ma: -100,
+            rated_exit_delta_ma: 100,
+            ..AdvancedPowerSettingsSnapshot::defaults()
+        })
+        .unwrap_err();
+        assert_eq!(err, AdvancedPowerValidationError::CurrentOrderInvalid);
+        assert_eq!(
+            err.message(),
+            "expanded rated_exit_threshold_ma must not exceed rated_enter_threshold_ma"
+        );
+    }
+
+    #[test]
+    fn advanced_power_rejects_invalid_assist_current_order() {
+        let err = validate_advanced_power_settings(AdvancedPowerSettingsSnapshot {
+            assist_enter_delta_ma: -100,
+            assist_exit_delta_ma: 100,
+            ..AdvancedPowerSettingsSnapshot::defaults()
+        })
+        .unwrap_err();
+        assert_eq!(err, AdvancedPowerValidationError::AssistCurrentOrderInvalid);
+    }
+
+    #[test]
+    fn settings_defaults_can_follow_variant_rated_vout() {
+        let settings = DeviceSettingsSnapshot::defaults_for_rated_vout(19_000);
+        assert_eq!(settings.advanced_power_capabilities.rated_vout_mv, 19_000);
+        assert_eq!(settings.advanced_power.standby_drop_mv, 1_200);
     }
 }

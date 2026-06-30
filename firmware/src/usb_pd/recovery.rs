@@ -308,7 +308,7 @@ where
                 return;
             }
 
-            warn!(
+            info!(
                 "usb_pd: hard reset send settle elapsed without irq waited_ms={=u32}",
                 sent_waited_ms
             );
@@ -325,7 +325,7 @@ where
                 return;
             }
 
-            warn!(
+            info!(
                 "usb_pd: hard reset recovery timed out waiting for source caps waited_ms={=u32}",
                 hard_reset_waited_ms
             );

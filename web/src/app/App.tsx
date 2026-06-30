@@ -58,6 +58,7 @@ import {
   toErrorEnvelope,
 } from "../api/client";
 import type {
+  AdvancedPowerSettings,
   DeviceRecord,
   DeviceSettings,
   DevdDevice,
@@ -200,6 +201,12 @@ type SharedDevdDiscovery = {
   refresh: () => Promise<void>;
 };
 
+type UpsHardwareCapability = {
+  outputProfile: string | null;
+  ratedVoutMv: number | null;
+  source: "identity" | "firmware" | "settings" | "unknown";
+};
+
 const deviceSections = [
   { id: "overview", label: "Overview", icon: Gauge },
   { id: "power", label: "Power", icon: PlugZap },
@@ -238,10 +245,12 @@ export function App({
   const route = useRoute(initialPath);
   const searchParams = new URLSearchParams(window.location.search);
   const demoMode = isDemoSeed(searchParams.get("seed"));
-  const queryDevdTarget = searchParams.get("mock_devd_target")?.trim() || "";
-  const queryHostedHttpServiceApp = searchParams.get("mock_hosted") === "1";
-  const queryBindLogicalDeviceId =
-    searchParams.get("mock_bind_logical_device_id")?.trim() || "";
+  const queryDevdTarget = resolveStartupDevdTarget(searchParams, demoMode);
+  const queryHostedHttpServiceApp =
+    demoMode && searchParams.get("mock_hosted") === "1";
+  const queryBindLogicalDeviceId = demoMode
+    ? (searchParams.get("mock_bind_logical_device_id")?.trim() || "")
+    : "";
   const resolvedInitialDevdTarget = initialDevdTarget ?? queryDevdTarget;
   const hostedHttpServiceApp =
     forceHostedHttpServiceApp ??
@@ -306,6 +315,14 @@ export function App({
     hydratedTemporaryDeviceIds.current.add(route.deviceId);
     void registry.refreshDevice(route.deviceId);
   }, [registry, registrySelected, route.deviceId]);
+
+  useEffect(() => {
+    if (!route.deviceId || !selected) return;
+    if (selected.status && selected.connectionState !== "connecting") return;
+    if (hydratedTemporaryDeviceIds.current.has(`prime:${route.deviceId}`)) return;
+    hydratedTemporaryDeviceIds.current.add(`prime:${route.deviceId}`);
+    void registry.refreshDevice(route.deviceId);
+  }, [registry, route.deviceId, selected]);
 
   return (
     <div className="app-shell">
@@ -485,6 +502,32 @@ function resolveDevdTarget(
   return candidate;
 }
 
+function ownerFacingDevdTargetParam(
+  searchParams: URLSearchParams,
+): string | null {
+  return searchParams.get("devd_target") ?? searchParams.get("mock_devd_target");
+}
+
+export function resolveStartupDevdTarget(
+  searchParams: URLSearchParams,
+  demoMode: boolean,
+): string | undefined {
+  return resolveOwnerFacingDevdTarget(
+    ownerFacingDevdTargetParam(searchParams),
+    demoMode,
+  );
+}
+
+export function resolveOwnerFacingDevdTarget(
+  value: string | null | undefined,
+  demoMode: boolean,
+): string | undefined {
+  const candidate = value?.trim();
+  if (!candidate) return undefined;
+  if (!demoMode && candidate.startsWith("mock:")) return undefined;
+  return candidate;
+}
+
 export function resolveConnectRuntimeMode(options: {
   hostedHttpServiceApp: boolean;
   devdTarget: string | null;
@@ -525,7 +568,9 @@ export function detectBrowserLanCapability(
   }
   const ua = options.userAgent ?? navigator.userAgent;
   const chromeMatch = ua.match(/Chrom(?:e|ium)\/(\d+)/);
-  const chromeVersion = chromeMatch ? Number.parseInt(chromeMatch[1] ?? "", 10) : null;
+  const chromeVersion = chromeMatch
+    ? Number.parseInt(chromeMatch[1] ?? "", 10)
+    : null;
   if (!chromeVersion) {
     return {
       supported: false,
@@ -555,8 +600,9 @@ function parseIpv4Address(input: string): number | null {
         octet > 255 ||
         `${octet}` !== parts[index],
     )
-  )
+  ) {
     return null;
+  }
   return (
     ((octets[0] ?? 0) << 24) >>> 0 |
     ((octets[1] ?? 0) << 16) |
@@ -594,7 +640,11 @@ export function expandIpv4Cidr(input: string): {
   const mask = prefix === 0 ? 0 : (0xffffffff << hostBits) >>> 0;
   const network = ip & mask;
   const hosts: string[] = [];
-  for (let current = network + 1; current < network + blockSize - 1; current += 1) {
+  for (
+    let current = network + 1;
+    current < network + blockSize - 1;
+    current += 1
+  ) {
     hosts.push(ipv4NumberToString(current >>> 0));
   }
   return {
@@ -760,12 +810,21 @@ export function resolveSelectedRecord(
   fleetEntries: FleetDeviceEntry[],
 ) {
   if (!deviceId) return null;
-  return (
-    records.find((record) => record.target.deviceId === deviceId) ??
+  const registryRecord =
+    records.find((record) => record.target.deviceId === deviceId) ?? null;
+  const fleetRecord =
     fleetEntries.find((entry) => entry.record.target.deviceId === deviceId)
-      ?.record ??
-    null
-  );
+      ?.record ?? null;
+  if (!registryRecord) return fleetRecord;
+  if (!fleetRecord) return registryRecord;
+  if (
+    registryRecord.target.temporary &&
+    !registryRecord.status &&
+    fleetRecord.status
+  ) {
+    return fleetRecord;
+  }
+  return registryRecord;
 }
 
 function NavLink({
@@ -1025,6 +1084,7 @@ function DeviceCard({ entry }: { entry: FleetDeviceEntry }) {
 
       <dl className="summary-list">
         <StatusPair label="Load" value={loadSummary(record)} />
+        <StatusPair label="Profile" value={hardwareCapabilitySummary(record)} />
         <StatusPair label="Battery" value={batterySummary(record)} />
         <StatusPair label="Attention" value={attentionSummary(record)} />
         <StatusPair label="Connection" value={connectionSummary(record)} />
@@ -1092,6 +1152,14 @@ function activeRecordTransport(
   )
     return "serial";
   return null;
+}
+
+export function deviceSettingsAvailable(record: DeviceRecord): boolean {
+  const activeTransport = activeRecordTransport(record);
+  if (activeTransport === "serial") return Boolean(record.settings);
+  if (activeTransport === "http") return Boolean(record.settings);
+  if (activeTransport === "devd") return Boolean(record.settings);
+  return false;
 }
 
 function preferredRecordTransport(
@@ -3596,6 +3664,7 @@ function ThermalPage({ record }: { record: DeviceRecord }) {
 function DeviceInfoPage({ record }: { record: DeviceRecord }) {
   const identity = record.identity;
   const network = record.network;
+  const hardwareCapability = resolveUpsHardwareCapability(record);
   return (
     <section className="page-flow">
       <DeviceStatusBand record={record} />
@@ -3633,13 +3702,37 @@ function DeviceInfoPage({ record }: { record: DeviceRecord }) {
           />
           <MetricLine label="Git" value={identity?.firmware.git_sha ?? "--"} />
         </InfoPanel>
+        <InfoPanel title="Hardware capabilities" icon={PlugZap}>
+          <MetricLine
+            label="output_profile"
+            value={hardwareCapabilityOutputProfileLabel(hardwareCapability)}
+          />
+          <MetricLine
+            label="rated_vout_mv"
+            value={ratedVoutMillivoltLabel(hardwareCapability.ratedVoutMv)}
+          />
+          <MetricLine
+            label="Rated output"
+            value={formatVoltage(hardwareCapability.ratedVoutMv)}
+          />
+          <MetricLine
+            label="Source"
+            value={hardwareCapabilitySourceLabel(hardwareCapability.source)}
+          />
+        </InfoPanel>
       </div>
     </section>
   );
 }
 
 function SettingsPage({ record }: { record: DeviceRecord }) {
-  const { sendWifiConfig, clearWifiConfig, setManualChargePrefs } =
+  const {
+    sendWifiConfig,
+    clearWifiConfig,
+    setManualChargePrefs,
+    setAdvancedPower,
+    resetAdvancedPower,
+  } =
     useDeviceRegistry();
   const settings = record.settings;
   const [ssid, setSsid] = useState(settings?.wifi.ssid ?? "");
@@ -3654,19 +3747,21 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
         timer_h: 2,
       } as DeviceSettings["manual_charge"]),
   );
+  const [advancedPower, setAdvancedPowerDraft] = useState<AdvancedPowerSettings>(
+    settings?.advanced_power ?? defaultAdvancedPowerSettings(),
+  );
   const [message, setMessage] = useState<UiFeedback | null>(null);
   const [wifiMessage, setWifiMessage] = useState<UiFeedback | null>(null);
   const [wifiProgress, setWifiProgress] =
     useState<WifiProvisioningProgress | null>(null);
   const [busy, setBusy] = useState<
-    "wifi-save" | "wifi-clear" | "manual" | null
+    "wifi-save" | "wifi-clear" | "manual" | "advanced-power" | "advanced-power-reset" | null
   >(null);
   const activeTransport = activeRecordTransport(record);
-  const usbReady = activeTransport === "serial";
-  const lanReady = activeTransport === "http" && Boolean(record.settings);
-  const devdReady = activeTransport === "devd" && Boolean(record.settings);
-  const settingsReady = usbReady || lanReady || devdReady;
-  const transportLabel = lanReady && !usbReady ? "LAN" : "hardware";
+  const hardwareCapability = resolveUpsHardwareCapability(record);
+  const settingsReady = deviceSettingsAvailable(record);
+  const transportLabel =
+    activeTransport === "http" ? "LAN" : activeTransport === "devd" ? "devd" : "hardware";
   const wifiValidationMessage = !ssid.trim()
     ? "Save requires an SSID."
     : psk.length < 8
@@ -3683,6 +3778,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   useEffect(() => {
     if (!settings) return;
     setManualPrefs(settings.manual_charge);
+    setAdvancedPowerDraft(settings.advanced_power);
     if (settings.wifi.ssid) setSsid(settings.wifi.ssid);
   }, [settings]);
 
@@ -3764,6 +3860,31 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
     );
   }
 
+  async function onAdvancedPowerSubmit(event: FormEvent) {
+    event.preventDefault();
+    setBusy("advanced-power");
+    setMessage(null);
+    const result = await setAdvancedPower(record.target.deviceId, advancedPower);
+    setBusy(null);
+    setMessage(
+      result.ok
+        ? successFeedback("Advanced power settings updated")
+        : errorFeedback(result.error),
+    );
+  }
+
+  async function onAdvancedPowerReset() {
+    setBusy("advanced-power-reset");
+    setMessage(null);
+    const result = await resetAdvancedPower(record.target.deviceId);
+    setBusy(null);
+    setMessage(
+      result.ok
+        ? successFeedback("Advanced power settings reset")
+        : errorFeedback(result.error),
+    );
+  }
+
   if (!settingsReady) {
     return (
       <section className="page-flow">
@@ -3772,8 +3893,9 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
           <SlidersHorizontal size={28} />
           <h2>Settings unavailable</h2>
           <p>
-            Refresh this device or connect USB / mains-aegis-devd before
-            changing settings.
+            This connected device does not expose the settings contract yet.
+            Refresh it after upgrading firmware or use a settings-capable
+            transport before changing settings.
           </p>
           <button
             className="primary-button"
@@ -3790,7 +3912,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   return (
     <section className="page-flow" data-evidence-target="wifi-settings">
       <DeviceStatusBand record={record} />
-      <div className="settings-layout settings-layout-balanced">
+      <div className="settings-layout settings-layout-advanced">
         <section className="info-panel settings-panel">
           <header>
             <Wifi size={18} />
@@ -3943,6 +4065,210 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
             </button>
           </form>
         </section>
+
+        <section className="info-panel settings-panel advanced-power-panel">
+          <header>
+            <AlertTriangle size={18} />
+            <h2>Advanced Power</h2>
+          </header>
+          <form className="settings-form" onSubmit={onAdvancedPowerSubmit}>
+            <div className="settings-copy">
+              <p className="field-help">
+                Adjust staged assist/takeover behavior with relative offsets only.
+                The controls below stay relative to the rated hardware output, so
+                12V and 19V UPS units do not get mixed up.
+              </p>
+              <div className="secret-note capability-note">
+                <CircleHelp size={15} />
+                <div>
+                  <strong>{hardwareCapabilityHeadline(hardwareCapability)}</strong>
+                  <span>{hardwareCapabilityDetail(hardwareCapability)}</span>
+                </div>
+              </div>
+              {hardwareCapability.source === "settings" ? (
+                <p className="field-help">
+                  Hardware identity did not report capability fields yet, so this
+                  profile is inferred from the current advanced-power schema.
+                </p>
+              ) : null}
+              {hardwareCapability.source === "unknown" ? (
+                <p className="field-help">
+                  Hardware capability fields are not available yet. Refresh the
+                  device before making 12V/19V-sensitive changes.
+                </p>
+              ) : null}
+            </div>
+            <AdvancedPowerField
+              label="Standby drop"
+              hint="How far below rated output the standby hot-standby target stays. Larger drop means less normal sharing."
+              suffix="mV"
+              value={advancedPower.standby_drop_mv}
+              capability={settings?.advanced_power_capabilities.standby_drop_mv}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  standby_drop_mv: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Assist low drop"
+              hint="Low assist target before rated takeover. Must stay at or below standby drop."
+              suffix="mV"
+              value={advancedPower.assist_low_drop_mv}
+              capability={settings?.advanced_power_capabilities.assist_low_drop_mv}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  assist_low_drop_mv: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Assist enter delta"
+              hint="How much extra TPS current must appear before low assist is allowed to start. Larger values delay assist_low."
+              suffix="mA"
+              value={advancedPower.assist_enter_delta_ma}
+              capability={settings?.advanced_power_capabilities.assist_enter_delta_ma}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  assist_enter_delta_ma: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Assist exit delta"
+              hint="How low TPS current must fall before low assist can return to standby. Lower values make standby return stricter."
+              suffix="mA"
+              value={advancedPower.assist_exit_delta_ma}
+              capability={settings?.advanced_power_capabilities.assist_exit_delta_ma}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  assist_exit_delta_ma: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Assist samples"
+              hint="How many fresh samples must agree before low assist enters or exits."
+              suffix="samples"
+              value={advancedPower.assist_required_samples}
+              capability={settings?.advanced_power_capabilities.assist_required_samples}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  assist_required_samples: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Assist ramp step"
+              hint="How much the TPS target rises on each low-assist ramp step."
+              suffix="mV"
+              value={advancedPower.assist_ramp_step_mv}
+              capability={settings?.advanced_power_capabilities.assist_ramp_step_mv}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  assist_ramp_step_mv: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Assist ramp interval"
+              hint="Time between low-assist ramp steps. Larger values make handoff gentler but slower."
+              suffix="ms"
+              value={advancedPower.assist_ramp_interval_ms}
+              capability={settings?.advanced_power_capabilities.assist_ramp_interval_ms}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  assist_ramp_interval_ms: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Rated enter delta"
+              hint="Current delta added to the rated takeover enter threshold."
+              suffix="mA"
+              value={advancedPower.rated_enter_delta_ma}
+              capability={settings?.advanced_power_capabilities.rated_enter_delta_ma}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  rated_enter_delta_ma: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Rated exit delta"
+              hint="Current delta added to the rated takeover exit threshold."
+              suffix="mA"
+              value={advancedPower.rated_exit_delta_ma}
+              capability={settings?.advanced_power_capabilities.rated_exit_delta_ma}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  rated_exit_delta_ma: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="VIN drop threshold"
+              hint="Percent drop from the observed VIN baseline required before rated takeover can assert."
+              suffix="%"
+              value={advancedPower.vin_drop_threshold_pct}
+              capability={settings?.advanced_power_capabilities.vin_drop_threshold_pct}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  vin_drop_threshold_pct: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Required samples"
+              hint="How many fresh samples must agree before entering rated takeover."
+              suffix="samples"
+              value={advancedPower.required_samples}
+              capability={settings?.advanced_power_capabilities.required_samples}
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  required_samples: value,
+                }))
+              }
+            />
+            <div className="form-actions advanced-power-actions">
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={busy !== null}
+              >
+                <ButtonLabel
+                  busy={busy === "advanced-power"}
+                  busyText="Applying"
+                  text="Apply advanced power"
+                />
+              </button>
+              <button
+                className="secondary-button danger-action"
+                type="button"
+                disabled={busy !== null}
+                onClick={() => void onAdvancedPowerReset()}
+              >
+                <ButtonLabel
+                  icon={RefreshCw}
+                  busy={busy === "advanced-power-reset"}
+                  busyText="Resetting"
+                  text="Reset to device default"
+                />
+              </button>
+            </div>
+          </form>
+        </section>
       </div>
       <UsbDeveloperConsole
         logs={record.serial?.logs ?? []}
@@ -3961,6 +4287,69 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
         </div>
       ) : null}
     </section>
+  );
+}
+
+function defaultAdvancedPowerSettings(): AdvancedPowerSettings {
+  return {
+    standby_drop_mv: 1200,
+    assist_low_drop_mv: 600,
+    assist_enter_delta_ma: 0,
+    assist_exit_delta_ma: 0,
+    assist_required_samples: 2,
+    assist_ramp_step_mv: 100,
+    assist_ramp_interval_ms: 200,
+    rated_enter_delta_ma: 0,
+    rated_exit_delta_ma: 0,
+    vin_drop_threshold_pct: 4,
+    required_samples: 2,
+  };
+}
+
+function AdvancedPowerField({
+  label,
+  hint,
+  suffix,
+  value,
+  capability,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  suffix: string;
+  value: number;
+  capability:
+    | {
+        default: number;
+        min: number;
+        max: number;
+        step: number;
+      }
+    | undefined;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="advanced-power-field">
+      <span className="advanced-power-header">
+        <strong>{label}</strong>
+        <span>{suffix}</span>
+      </span>
+      <input
+        type="number"
+        inputMode="numeric"
+        value={value}
+        min={capability?.min}
+        max={capability?.max}
+        step={capability?.step}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+      <span className="field-help">{hint}</span>
+      <span className="advanced-power-meta">
+        Default {capability?.default ?? value} {suffix} · Range{" "}
+        {capability?.min ?? value}..{capability?.max ?? value} · Step{" "}
+        {capability?.step ?? 1}
+      </span>
+    </label>
   );
 }
 
@@ -4051,6 +4440,7 @@ function DeviceStatusBand({ record }: { record: DeviceRecord }) {
   const status = record.status;
   const severity = deviceSeverity(record);
   const stream = streamPresentation(record);
+  const hardwareCapability = resolveUpsHardwareCapability(record);
   return (
     <div className="status-band status-band-color-warm">
       <div className="live-cell">
@@ -4066,6 +4456,15 @@ function DeviceStatusBand({ record }: { record: DeviceRecord }) {
         <strong className="live-value">
           {formatPercent(status?.battery.soc_pct)}
         </strong>
+      </div>
+      <div className="live-cell">
+        <span className="eyebrow">Hardware</span>
+        <strong className="live-value">
+          {hardwareCapabilityHeadline(hardwareCapability)}
+        </strong>
+        <span className="live-detail">
+          {hardwareCapabilityMetricDetail(hardwareCapability)}
+        </span>
       </div>
       <div className="live-cell">
         <span className="eyebrow">Data</span>
@@ -5131,6 +5530,166 @@ function MissingDevice() {
       </button>
     </section>
   );
+}
+
+export function resolveUpsHardwareCapability(
+  record: Pick<DeviceRecord, "identity" | "settings">,
+): UpsHardwareCapability {
+  const identityCapability = record.identity?.hardware_capabilities;
+  if (identityCapability && typeof identityCapability.rated_vout_mv === "number") {
+    return {
+      outputProfile:
+        normalizeOutputProfile(identityCapability.output_profile) ??
+        inferOutputProfileFromRatedVout(identityCapability.rated_vout_mv),
+      ratedVoutMv: identityCapability.rated_vout_mv,
+      source: "identity",
+    };
+  }
+  const firmwareOutputProfile = firmwareOutputProfileFallback(
+    record.identity?.firmware.features,
+  );
+  if (firmwareOutputProfile) {
+    return {
+      outputProfile: firmwareOutputProfile,
+      ratedVoutMv: ratedVoutFromOutputProfile(firmwareOutputProfile),
+      source: "firmware",
+    };
+  }
+  const settingsRatedVout = record.settings?.advanced_power_capabilities?.rated_vout_mv;
+  if (typeof settingsRatedVout === "number") {
+    return {
+      outputProfile: inferOutputProfileFromRatedVout(settingsRatedVout),
+      ratedVoutMv: settingsRatedVout,
+      source: "settings",
+    };
+  }
+  return {
+    outputProfile: null,
+    ratedVoutMv: null,
+    source: "unknown",
+  };
+}
+
+function normalizeOutputProfile(
+  outputProfile: string | null | undefined,
+): string | null {
+  const value = outputProfile?.trim().toLowerCase();
+  return value ? value : null;
+}
+
+function inferOutputProfileFromRatedVout(
+  ratedVoutMv: number | null | undefined,
+): string | null {
+  if (
+    typeof ratedVoutMv !== "number" ||
+    !Number.isFinite(ratedVoutMv) ||
+    ratedVoutMv <= 0
+  ) {
+    return null;
+  }
+  const volts = ratedVoutMv / 1000;
+  const normalizedVolts = Number.isInteger(volts)
+    ? String(volts)
+    : volts.toFixed(1).replace(/\.0$/, "");
+  return `${normalizedVolts}v`;
+}
+
+function firmwareOutputProfileFallback(
+  features: readonly string[] | null | undefined,
+): string | null {
+  if (!Array.isArray(features)) return null;
+  if (features.includes("main-vout-19v")) return "19v";
+  if (features.includes("main-vout-12v")) return "12v";
+  return null;
+}
+
+function ratedVoutFromOutputProfile(
+  outputProfile: string | null | undefined,
+): number | null {
+  const normalized = normalizeOutputProfile(outputProfile);
+  if (normalized === "19v") return 19_000;
+  if (normalized === "12v") return 12_000;
+  return null;
+}
+
+function hardwareOutputProfileLabel(
+  outputProfile: string | null | undefined,
+): string {
+  const normalized = normalizeOutputProfile(outputProfile);
+  if (!normalized) return "--";
+  if (normalized.endsWith("v")) {
+    return `${normalized.slice(0, -1).toUpperCase()}V`;
+  }
+  return normalized.toUpperCase();
+}
+
+function ratedVoutMillivoltLabel(value: number | null | undefined): string {
+  return typeof value === "number" ? `${value} mV` : "--";
+}
+
+function hardwareCapabilityHeadline(
+  capability: UpsHardwareCapability,
+): string {
+  if (capability.outputProfile)
+    return `${hardwareOutputProfileLabel(capability.outputProfile)} profile`;
+  if (capability.ratedVoutMv !== null)
+    return `${formatVoltage(capability.ratedVoutMv)} rated`;
+  return "Capability pending";
+}
+
+function hardwareCapabilityMetricDetail(
+  capability: UpsHardwareCapability,
+): string {
+  const segments = [
+    `output_profile=${capability.outputProfile ?? "--"}`,
+    `rated_vout_mv=${capability.ratedVoutMv ?? "--"}`,
+  ];
+  if (capability.source === "settings") segments.push("settings fallback");
+  if (capability.source === "firmware") segments.push("firmware fallback");
+  return segments.join(" · ");
+}
+
+function hardwareCapabilityDetail(
+  capability: UpsHardwareCapability,
+): string {
+  const suffix =
+    capability.source === "settings"
+      ? "This is a settings fallback until hardware identity reports the capability fields."
+      : capability.source === "firmware"
+        ? "This is inferred from the active firmware output profile until hardware identity reports the capability fields."
+      : capability.source === "unknown"
+        ? "Hardware capability fields are still pending."
+        : "Advanced-power offsets below stay relative to this rated output.";
+  return `${hardwareCapabilityMetricDetail(capability)}. ${suffix}`;
+}
+
+function hardwareCapabilityOutputProfileLabel(
+  capability: UpsHardwareCapability,
+): string {
+  if (!capability.outputProfile) return "--";
+  return capability.source === "settings" || capability.source === "firmware"
+    ? `${capability.outputProfile} (inferred)`
+    : capability.outputProfile;
+}
+
+function hardwareCapabilitySourceLabel(
+  source: UpsHardwareCapability["source"],
+): string {
+  if (source === "identity") return "Hardware identity";
+  if (source === "firmware") return "Firmware output profile fallback";
+  if (source === "settings") return "Advanced-power settings fallback";
+  return "Not reported";
+}
+
+function hardwareCapabilitySummary(record: DeviceRecord): string {
+  const capability = resolveUpsHardwareCapability(record);
+  if (capability.outputProfile && capability.ratedVoutMv !== null) {
+    return `${hardwareOutputProfileLabel(capability.outputProfile)} / ${ratedVoutMillivoltLabel(capability.ratedVoutMv)}`;
+  }
+  if (capability.ratedVoutMv !== null) {
+    return ratedVoutMillivoltLabel(capability.ratedVoutMv);
+  }
+  return "Pending";
 }
 
 function powerSourceLabel(record: DeviceRecord): string {
