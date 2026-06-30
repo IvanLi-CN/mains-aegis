@@ -680,6 +680,7 @@ describe("CIDR scan contract", () => {
     const idleMarkup = renderToStaticMarkup(
       ScanActionRow({
         busy: false,
+        disabled: false,
         buttonText: "Scan LAN",
         busyText: "Scanning",
         successFeedback: null,
@@ -692,6 +693,7 @@ describe("CIDR scan contract", () => {
     const successMarkup = renderToStaticMarkup(
       ScanActionRow({
         busy: false,
+        disabled: false,
         buttonText: "Scan LAN",
         busyText: "Scanning",
         successFeedback: {
@@ -707,5 +709,22 @@ describe("CIDR scan contract", () => {
     expect(successMarkup.indexOf("Scan LAN")).toBeLessThan(
       successMarkup.indexOf("Found 2 devices in 192.168.31.40/29"),
     );
+  });
+
+  test("keeps unsupported scan buttons disabled without showing a busy label", () => {
+    const disabledMarkup = renderToStaticMarkup(
+      ScanActionRow({
+        busy: false,
+        disabled: true,
+        buttonText: "Scan LAN",
+        busyText: "Scanning",
+        successFeedback: null,
+        errorMessage: null,
+      }),
+    );
+
+    expect(disabledMarkup).toContain("Scan LAN");
+    expect(disabledMarkup).not.toContain("Scanning");
+    expect(disabledMarkup).toContain("disabled");
   });
 });

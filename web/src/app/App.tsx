@@ -79,6 +79,7 @@ import {
 } from "../components/ui/select";
 import {
   useDeviceRegistry,
+  type AddDeviceInput,
   type DeviceChannelTransport,
   type WifiProvisioningProgress,
 } from "../device-registry/context";
@@ -651,6 +652,28 @@ export function expandIpv4Cidr(input: string): {
     hosts,
     normalized: `${ipv4NumberToString(network >>> 0)}/${prefix}`,
   };
+}
+
+function isIpv4Host(value: string): boolean {
+  const [host] = value.trim().split(":", 2);
+  return parseIpv4Address(host ?? "") !== null;
+}
+
+export function resolveManualHttpRememberedChannel(
+  target: string,
+): Partial<
+  Pick<
+  AddDeviceInput,
+  "rememberedHttpBaseUrl" | "rememberedHttpFallbackBaseUrl"
+  >
+> {
+  const normalizedTarget = normalizeBaseUrl(target);
+  if (!normalizedTarget) return {};
+  const host = normalizedTarget.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  if (isIpv4Host(host)) {
+    return { rememberedHttpFallbackBaseUrl: normalizedTarget };
+  }
+  return { rememberedHttpBaseUrl: normalizedTarget };
 }
 
 function useFleetDevdDiscovery(
@@ -1721,11 +1744,12 @@ function ConnectPage({
     }
     setBusy(true);
     setMessage(null);
+    const rememberedHttpChannel = resolveManualHttpRememberedChannel(target);
     const result = await addDevice({
       target,
       alias,
       location,
-      rememberedHttpBaseUrl: target,
+      ...rememberedHttpChannel,
     });
     setBusy(false);
     if (result.ok) {
@@ -2696,7 +2720,8 @@ function ConnectPage({
                   />
                 </label>
                 <ScanActionRow
-                  busy={
+                  busy={scanState.status === "scanning"}
+                  disabled={
                     scanState.status === "scanning" ||
                     !browserLanCapability.supported
                   }
@@ -3131,12 +3156,14 @@ export function FeedbackMessage({ feedback }: { feedback: UiFeedback }) {
 
 export function ScanActionRow({
   busy,
+  disabled,
   buttonText,
   busyText,
   successFeedback,
   errorMessage,
 }: {
   busy: boolean;
+  disabled: boolean;
   buttonText: string;
   busyText: string;
   successFeedback: UiFeedback | null;
@@ -3145,7 +3172,7 @@ export function ScanActionRow({
   return (
     <>
       <div className="form-actions with-callout scan-inline-actions">
-        <button className="primary-button" type="submit" disabled={busy}>
+        <button className="primary-button" type="submit" disabled={disabled}>
           <ButtonLabel busy={busy} busyText={busyText} text={buttonText} />
         </button>
         <span
