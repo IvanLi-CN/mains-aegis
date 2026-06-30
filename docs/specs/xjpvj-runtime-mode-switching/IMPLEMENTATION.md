@@ -116,10 +116,15 @@
 
 - `docs/specs/xjpvj-runtime-mode-switching/evidence/formal-12v-19v-four-scenes-current-20260629T024800Z-suite-summary.json`
 - `docs/specs/xjpvj-runtime-mode-switching/evidence/formal-12v-19v-four-scenes-current-20260629T024800Z-suite-overview.html`
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/formal-12v-19v-four-scenes-current-20260629T024800Z-suite-overview.mhtml`
 - `docs/specs/xjpvj-runtime-mode-switching/evidence/formal-12v-19v-four-scenes-cli-r4-suite-summary.json`
 - `docs/specs/xjpvj-runtime-mode-switching/evidence/formal-12v-19v-four-scenes-cli-r4-suite-overview.html`
 - `docs/specs/xjpvj-runtime-mode-switching/evidence/power-validation-rust-four-scenes-url-r7-suite-summary.json`
 - `docs/specs/xjpvj-runtime-mode-switching/evidence/power-validation-rust-four-scenes-url-r7-suite-overview.html`
+
+其中 `.mhtml` 是从已验证浏览器页面导出的完整页面快照，保留四个
+`voltage-chart.html?embed=1` 内嵌图表；旁边的 `.html` 只保留 suite overview
+结构，若未同时保留 scene 子目录，单独打开会缺少图表 iframe 资源。
 
 当前 accepted metrics：
 
