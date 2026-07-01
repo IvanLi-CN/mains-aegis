@@ -14,8 +14,7 @@ Content-ID: <frame-C8864DEF6EB1D405EBDEE48C61A340E3@mhtml.blink>
 Content-Transfer-Encoding: quoted-printable
 Content-Location: http://127.0.0.1:52300/suite-overview.html
 
-<!DOCTYPE html><html lang=3D"en" data-immersive-translate-page-theme=3D"lig=
-ht"><head><meta http-equiv=3D"Content-Type" content=3D"text/html; charset=
+<!DOCTYPE html><html lang=3D"en"><head><meta http-equiv=3D"Content-Type" content=3D"text/html; charset=
 =3DUTF-8"><link rel=3D"stylesheet" type=3D"text/css" href=3D"cid:css-e30907=
 8e-ba37-4350-88b1-89415063b166@mhtml.blink" />
  =20
@@ -97,62 +96,7 @@ ading=3D"lazy"></iframe>
   </main>
 
 
-</body><div id=3D"codex-agent-overlay-root" data-codex-agent-overlay-root=
-=3D"true"><template shadowmode=3D"closed"><div><div class=3D"codex-agent-ov=
-erlay" aria-hidden=3D"true"><div aria-hidden=3D"true" style=3D"inset: 0px; =
-overflow: hidden; pointer-events: none; position: absolute; z-index: 20;"><=
-div data-testid=3D"browser-agent-cursor" style=3D"height: 24px; left: 0px; =
-position: absolute; top: 0px; transform-origin: 12px 12px; will-change: tra=
-nsform; width: 24px; transform: translate3d(900px, 626px, 0px) rotate(316de=
-g) scale(0.4, 0.4); opacity: 0; filter: blur(5px);"><div style=3D"transform=
-: translate3d(12px, -2.5px, 0px);"><img alt=3D"" data-browser-agent-cursor-=
-asset=3D"" data-testid=3D"browser-agent-cursor-asset" draggable=3D"false" h=
-eight=3D"24" src=3D"chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/ima=
-ges/cursor-chat.png" width=3D"23" style=3D"display: block; transform: rotat=
-e(44deg) scale(1); transform-origin: 0px 0px; filter: drop-shadow(rgba(51, =
-156, 255, 0.9) 0px 0px 6px) drop-shadow(rgba(51, 156, 255, 0.48) 0px 0px 15=
-px);"></div></div></div></div></div></template></div><div id=3D"immersive-t=
-ranslate-browser-popup" style=3D"all: initial"><template shadowmode=3D"open=
-"><div id=3D"mount" style=3D"display: block;"></div></template></div></html>
-------MultipartBoundary--BO96zSZT2XYzC92RhdWUgqAVg5FEQC0SLTevjcLWUg----
-Content-Type: image/png
-Content-Transfer-Encoding: base64
-Content-Location: chrome-extension://hehggadaopoacecdllhhajmbjkdcmajg/images/cursor-chat.png
-
-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
-3TljZhaAsAAAAABJRU5ErkJggg==
-
+</body></html>
 ------MultipartBoundary--BO96zSZT2XYzC92RhdWUgqAVg5FEQC0SLTevjcLWUg----
 Content-Type: text/css
 Content-Transfer-Encoding: quoted-printable
@@ -214,8 +158,7 @@ Content-ID: <frame-892C5049DCF11DAE9610B8EFD1C736A6@mhtml.blink>
 Content-Transfer-Encoding: quoted-printable
 Content-Location: http://127.0.0.1:52300/12v-assist_path-3900ma/voltage-chart.html?embed=1
 
-<!DOCTYPE html><html lang=3D"en" data-immersive-translate-page-theme=3D"lig=
-ht"><head><meta http-equiv=3D"Content-Type" content=3D"text/html; charset=
+<!DOCTYPE html><html lang=3D"en"><head><meta http-equiv=3D"Content-Type" content=3D"text/html; charset=
 =3DUTF-8"><link rel=3D"stylesheet" type=3D"text/css" href=3D"cid:css-0cadf1=
 a9-2f94-4823-bcc7-c8dc178e2ff7@mhtml.blink" /><link rel=3D"stylesheet" type=
 =3D"text/css" href=3D"cid:css-c3738dae-441f-44dd-af40-e3a87c47cc20@mhtml.bl=
@@ -2862,8 +2805,7 @@ Content-ID: <frame-45E4B7115267F3313AA9F725EA4DAC1F@mhtml.blink>
 Content-Transfer-Encoding: quoted-printable
 Content-Location: http://127.0.0.1:52300/12v-backup_only-1000ma/voltage-chart.html?embed=1
 
-<!DOCTYPE html><html lang=3D"en" data-immersive-translate-page-theme=3D"lig=
-ht"><head><meta http-equiv=3D"Content-Type" content=3D"text/html; charset=
+<!DOCTYPE html><html lang=3D"en"><head><meta http-equiv=3D"Content-Type" content=3D"text/html; charset=
 =3DUTF-8"><link rel=3D"stylesheet" type=3D"text/css" href=3D"cid:css-d40467=
 5e-16e6-45db-a6bc-10a3f77ec680@mhtml.blink" /><link rel=3D"stylesheet" type=
 =3D"text/css" href=3D"cid:css-7129fed6-5282-4561-a542-d7df7d60906e@mhtml.bl=
@@ -5482,8 +5424,7 @@ Content-ID: <frame-083D74DFBFE572ACA70A29704C75C618@mhtml.blink>
 Content-Transfer-Encoding: quoted-printable
 Content-Location: http://127.0.0.1:52300/19v-assist_path-3900ma/voltage-chart.html?embed=1
 
-<!DOCTYPE html><html lang=3D"en" data-immersive-translate-page-theme=3D"lig=
-ht"><head><meta http-equiv=3D"Content-Type" content=3D"text/html; charset=
+<!DOCTYPE html><html lang=3D"en"><head><meta http-equiv=3D"Content-Type" content=3D"text/html; charset=
 =3DUTF-8"><link rel=3D"stylesheet" type=3D"text/css" href=3D"cid:css-45a241=
 bc-878c-4465-8a13-5c65f9881ff1@mhtml.blink" /><link rel=3D"stylesheet" type=
 =3D"text/css" href=3D"cid:css-403f50cb-e536-455c-b8ef-f32c9323850e@mhtml.bl=
@@ -8030,8 +7971,7 @@ Content-ID: <frame-CCBD87E5FD2AB93B058E15DD82B0EEE8@mhtml.blink>
 Content-Transfer-Encoding: quoted-printable
 Content-Location: http://127.0.0.1:52300/19v-backup_only-1000ma/voltage-chart.html?embed=1
 
-<!DOCTYPE html><html lang=3D"en" data-immersive-translate-page-theme=3D"lig=
-ht"><head><meta http-equiv=3D"Content-Type" content=3D"text/html; charset=
+<!DOCTYPE html><html lang=3D"en"><head><meta http-equiv=3D"Content-Type" content=3D"text/html; charset=
 =3DUTF-8"><link rel=3D"stylesheet" type=3D"text/css" href=3D"cid:css-035772=
 d2-937e-4da9-badf-532dab798d58@mhtml.blink" /><link rel=3D"stylesheet" type=
 =3D"text/css" href=3D"cid:css-301279cf-3821-422b-b3c5-495f03595403@mhtml.bl=
