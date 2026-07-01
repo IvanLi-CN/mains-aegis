@@ -3,6 +3,7 @@ import type { DeviceRecord } from "../api/types";
 import {
   deviceSettingsAvailable,
   resolveManualHttpRememberedChannel,
+  resolveDevdTarget,
   resolveOwnerFacingDevdTarget,
   resolveStartupDevdTarget,
 } from "./App";
@@ -153,6 +154,12 @@ describe("resolveStartupDevdTarget", () => {
       mock_devd_target: "ipc://legacy.sock",
     });
     expect(resolveStartupDevdTarget(params, false)).toBe("ipc://legacy.sock");
+  });
+});
+
+describe("resolveDevdTarget", () => {
+  test("keeps seeded demos mock-only without an explicit devd target", () => {
+    expect(resolveDevdTarget(undefined, false, true)).toBeNull();
   });
 });
 

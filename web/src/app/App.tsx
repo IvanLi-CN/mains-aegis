@@ -221,12 +221,10 @@ const deviceSections = [
 
 const appBasePath = normalizeBasePath(import.meta.env.BASE_URL);
 const envRuntimeMode = (import.meta.env.VITE_APP_RUNTIME_MODE ?? "").trim();
-const envDevdTarget =
-  (
-    import.meta.env.VITE_DEFAULT_DEVD_URL ??
-    import.meta.env.VITE_DEVD_API_BASE ??
-    "same-origin"
-  ).trim() || "same-origin";
+const rawEnvDevdTarget = (
+  import.meta.env.VITE_DEFAULT_DEVD_URL ?? import.meta.env.VITE_DEVD_API_BASE ?? ""
+).trim();
+const envDevdTarget = rawEnvDevdTarget || "same-origin";
 const docsHref = `${appBasePath}docs/`;
 const credentiallessInputProps = {
   autoComplete: "off",
@@ -478,21 +476,17 @@ function useRoute(initialPath?: string): Route {
   return parseRoute(path);
 }
 
-function resolveDevdTarget(
+export function resolveDevdTarget(
   initialDevdTarget: string | undefined,
   hostedHttpServiceApp: boolean,
   demoMode: boolean,
 ): string | null {
-  if (
-    demoMode &&
-    !hostedHttpServiceApp &&
-    !initialDevdTarget &&
-    !envDevdTarget
-  )
+  if (demoMode && !hostedHttpServiceApp && !initialDevdTarget && !rawEnvDevdTarget)
     return null;
   if (
     (isPublicStaticApp() || envRuntimeMode === "public_static") &&
-    !initialDevdTarget
+    !initialDevdTarget &&
+    !rawEnvDevdTarget
   )
     return null;
   const candidate = (
