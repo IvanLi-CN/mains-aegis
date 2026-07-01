@@ -954,6 +954,10 @@ where
         defmt::info!("ui: display attention_hold={=bool}", hold);
     }
 
+    pub fn is_showing_self_check(&self) -> bool {
+        self.ui_variant == SELF_CHECK_VARIANT
+    }
+
     fn display_power_now_ms(&self) -> u64 {
         self.display_power_epoch.elapsed().as_millis() as u64
     }

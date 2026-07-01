@@ -1599,7 +1599,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         );
         audio_manager.tick(Instant::now());
     }
-    front_panel.set_attention_hold(front_panel_attention_hold(power.audio_signals()));
+    front_panel.set_attention_hold(front_panel_attention_hold(
+        power.audio_signals(),
+        !front_panel_scene::self_check_can_enter_dashboard(&initial_snapshot),
+    ));
 
     let mut irq_tracker = irq::IrqTracker::new();
     let pd_started_at = Instant::now();
@@ -1883,7 +1886,12 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             );
             front_panel.update_self_check_snapshot(ui_snapshot);
             front_panel.update_bms_activation_state(power.bms_activation_state());
-            front_panel.set_attention_hold(front_panel_attention_hold(power.audio_signals()));
+            let self_check_blocked = front_panel.is_showing_self_check()
+                && !front_panel_scene::self_check_can_enter_dashboard(&ui_snapshot);
+            front_panel.set_attention_hold(front_panel_attention_hold(
+                power.audio_signals(),
+                self_check_blocked,
+            ));
             if let Some(action) = front_panel.tick() {
                 match action {
                     front_panel::UiAction::RequestBmsRecovery(action) => {
@@ -2744,8 +2752,12 @@ fn sync_runtime_audio(
     audio_manager.set_cue_active(AudioCue::BatteryProtection, signals.battery_protection, now);
 }
 
-fn front_panel_attention_hold(signals: output::AudioSignalSnapshot) -> bool {
-    signals.thermal_stress
+fn front_panel_attention_hold(
+    signals: output::AudioSignalSnapshot,
+    self_check_blocked: bool,
+) -> bool {
+    self_check_blocked
+        || signals.thermal_stress
         || matches!(
             signals.battery_low,
             output::AudioBatteryLowState::NoMains | output::AudioBatteryLowState::WithMains
