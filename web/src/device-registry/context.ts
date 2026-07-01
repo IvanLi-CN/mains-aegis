@@ -15,6 +15,9 @@ export type AddDeviceInput = {
   location?: string;
   devdDeviceId?: string;
   ignoreFirmwareMismatch?: boolean;
+  rememberedHttpBaseUrl?: string;
+  rememberedHttpMdnsHost?: string;
+  rememberedHttpFallbackBaseUrl?: string;
 };
 
 export type DeviceChannelTransport = NonNullable<DeviceTarget["transport"]>;

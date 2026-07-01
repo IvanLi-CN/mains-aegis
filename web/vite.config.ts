@@ -8,6 +8,7 @@ import { defineConfig, type Plugin } from "vite";
 
 const devdUrl = process.env.MAINS_AEGIS_DEVD_URL ?? process.env.VITE_DEFAULT_DEVD_URL ?? process.env.VITE_DEVD_API_BASE ?? "http://127.0.0.1:30080";
 const appBase = normalizeBase(process.env.PAGES_BASE ?? process.env.VITE_BASE);
+const appRuntimeMode = process.env.VITE_APP_RUNTIME_MODE ?? (process.env.PAGES_BASE ? "public_static" : "unknown");
 const webRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(webRoot, "..");
 const publicFirmwareRoot = resolve(webRoot, "public/firmware");
@@ -405,6 +406,9 @@ function sendJson(res: { statusCode: number; setHeader: (name: string, value: st
 export default defineConfig({
   base: appBase,
   plugins: [devFirmwarePlugin(), react()],
+  define: {
+    "import.meta.env.VITE_APP_RUNTIME_MODE": JSON.stringify(appRuntimeMode),
+  },
   server: {
     proxy: {
       "/api": {

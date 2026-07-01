@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { loadUsbProbeSettings } from "./DeviceRegistry";
+import {
+  loadUsbProbeSettings,
+  resolveManualHttpChannelPersistence,
+} from "./DeviceRegistry";
 
 describe("loadUsbProbeSettings", () => {
   test("skips get_settings for hello frames that do not advertise settings support", async () => {
@@ -53,5 +56,37 @@ describe("loadUsbProbeSettings", () => {
     );
 
     expect(settings).toBeNull();
+  });
+});
+
+describe("resolveManualHttpChannelPersistence", () => {
+  test("keeps a successfully probed IPv4 target as the saved base URL", () => {
+    expect(
+      resolveManualHttpChannelPersistence({
+        baseUrl: "http://192.168.31.42",
+        identityHostnameFqdn: "mains-aegis-a1b2c3.local",
+        networkIpv4: "192.168.31.42",
+      }),
+    ).toEqual({
+      savedBaseUrl: "http://192.168.31.42",
+      rememberedHttpBaseUrl: "http://mains-aegis-a1b2c3.local",
+      rememberedHttpMdnsHost: "mains-aegis-a1b2c3.local",
+      rememberedHttpFallbackBaseUrl: "http://192.168.31.42",
+    });
+  });
+
+  test("keeps a hostname target as both saved and remembered primary URL", () => {
+    expect(
+      resolveManualHttpChannelPersistence({
+        baseUrl: "http://mains-aegis-a1b2c3.local",
+        identityHostnameFqdn: "mains-aegis-a1b2c3.local",
+        networkIpv4: "192.168.31.42",
+      }),
+    ).toEqual({
+      savedBaseUrl: "http://mains-aegis-a1b2c3.local",
+      rememberedHttpBaseUrl: "http://mains-aegis-a1b2c3.local",
+      rememberedHttpMdnsHost: "mains-aegis-a1b2c3.local",
+      rememberedHttpFallbackBaseUrl: "http://192.168.31.42",
+    });
   });
 });

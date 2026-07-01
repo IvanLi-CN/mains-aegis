@@ -31,6 +31,8 @@ function renderApp(
     initialDevdTarget?: string;
     forceHostedHttpServiceApp?: boolean;
     storedTargets?: DeviceTarget[];
+    runtimeMode?: "public_static" | "hosted" | "unknown";
+    extraQuery?: Record<string, string>;
   } = {},
 ) {
   window.localStorage.removeItem(STORAGE_KEY);
@@ -46,10 +48,17 @@ function renderApp(
   } else {
     params.delete("seed");
   }
+  for (const [key, value] of Object.entries(options.extraQuery ?? {})) {
+    params.set(key, value);
+  }
   window.history.replaceState(
     null,
     "",
     `${window.location.pathname}?${params.toString()}${window.location.hash}`,
+  );
+  setMeta(
+    "mains-aegis-app-runtime-mode",
+    options.runtimeMode ?? "unknown",
   );
   return (
     <DeviceRegistryProvider>
@@ -60,6 +69,16 @@ function renderApp(
       />
     </DeviceRegistryProvider>
   );
+}
+
+function setMeta(name: string, content: string) {
+  let node = document.head.querySelector<HTMLMetaElement>(`meta[name="${name}"]`);
+  if (!node) {
+    node = document.createElement("meta");
+    node.name = name;
+    document.head.appendChild(node);
+  }
+  node.content = content;
 }
 
 export const HostedDevdDiscovery: Story = {
@@ -99,27 +118,83 @@ export const HostedDevdDiscovery: Story = {
   },
 };
 
-export const ManualLanFallback: Story = {
-  name: "Manual LAN fallback",
-  render: () => renderApp("empty", { initialDevdTarget: "mock:missing-devd" }),
+export const PagesDirectLanSupported: Story = {
+  name: "Pages direct LAN supported",
+  render: () =>
+    renderApp("empty", {
+      runtimeMode: "public_static",
+      extraQuery: {
+        stored_target_preset: "lan-companion-confirmed",
+        mock_browser_capability: "supported",
+      },
+    }),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByRole("heading", {
-        name: /mains-aegis-devd device records/,
-      }),
+      await canvas.findByRole("heading", { name: "LAN device API" }),
     ).toBeInTheDocument();
+    await expect(await canvas.findByRole("heading", { name: "CIDR scan" })).toBeInTheDocument();
     await expect(await canvas.findByLabelText("Target")).toBeInTheDocument();
-    await expect(
-      canvas.queryByLabelText("Bridge token"),
-    ).not.toBeInTheDocument();
-    await expect(
-      canvas.queryByLabelText("devd auth token"),
-    ).not.toBeInTheDocument();
     await userEvent.clear(canvas.getByLabelText("Target"));
-    await userEvent.type(canvas.getByLabelText("Target"), "mock:backup");
+    await userEvent.type(
+      canvas.getByLabelText("Target"),
+      "mains-aegis-c7d8e9.local",
+    );
     await userEvent.click(canvas.getByRole("button", { name: "Add LAN" }));
     await expect(await canvas.findByText(/^Connected /)).toBeInTheDocument();
+  },
+};
+
+export const PagesDirectLanUnsupported: Story = {
+  name: "Pages direct LAN unsupported browser",
+  render: () =>
+    renderApp("empty", {
+      runtimeMode: "public_static",
+      extraQuery: {
+        mock_browser_capability: "unsupported",
+      },
+    }),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText(/Use Chrome or local devd UI/)).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Add LAN" })).toBeDisabled();
+    await expect(canvas.getByRole("button", { name: "Scan LAN" })).toBeDisabled();
+  },
+};
+
+export const PagesCidrScanCandidates: Story = {
+  name: "Pages CIDR scan candidates",
+  render: () =>
+    renderApp("empty", {
+      runtimeMode: "public_static",
+      extraQuery: {
+        mock_browser_capability: "supported",
+      },
+    }),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const cidrInput = await canvas.findByLabelText("IPv4 CIDR");
+    const cidrField = cidrInput.closest("label");
+    expect(cidrField).not.toBeNull();
+    if (cidrField) {
+      expect(window.getComputedStyle(cidrField).gridColumnStart).toBe("1");
+      expect(window.getComputedStyle(cidrField).gridColumnEnd).toBe("-1");
+    }
+    await userEvent.type(canvas.getByLabelText("IPv4 CIDR"), "192.168.31.40/29");
+    await userEvent.click(canvas.getByRole("button", { name: "Scan LAN" }));
+    const status = await canvas.findByText(/Found 2 devices in 192.168.31.40\/29/);
+    await expect(status).toBeInTheDocument();
+    expect(status.closest('[data-slot="scan-inline-status"]')).not.toBeNull();
+    await expect(await canvas.findByText("mains-aegis-a1b2c3.local")).toBeInTheDocument();
+    await expect(await canvas.findByText("mains-aegis-c7d8e9.local")).toBeInTheDocument();
+    await expect(await canvas.findAllByRole("button", { name: "Add WiFi" })).toHaveLength(2);
+    await expect(
+      await canvas.findAllByText("Select Add WiFi to save this LAN device."),
+    ).toHaveLength(2);
+    await expect(canvas.queryByText("Hostname")).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByText(/Only manual IPv4 CIDR ranges that expand to 2-256 hosts are allowed\./),
+    ).not.toBeInTheDocument();
   },
 };
 

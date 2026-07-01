@@ -1,6 +1,7 @@
 import { getMockIdentity, getMockNetwork, getMockStatus } from "../fixtures/mockDevices";
 import type {
   AdvancedPowerSettings,
+  AppRuntimeMode,
   ApiErrorEnvelope,
   DevdScanTraceEntry,
   DevdDevice,
@@ -39,6 +40,7 @@ export const isMockBaseUrl = (baseUrl: string) => baseUrl.startsWith("mock:");
 const APP_SESSION_HEADER = "x-mains-aegis-app-session";
 const APP_SESSION_QUERY_PARAM = "app_session";
 const HTTP_SERVICE_MODE_META = 'meta[name="mains-aegis-http-service-mode"]';
+const APP_RUNTIME_MODE_META = 'meta[name="mains-aegis-app-runtime-mode"]';
 const APP_SESSION_META = 'meta[name="mains-aegis-app-session"]';
 const RUNTIME_PLACEHOLDER_PREFIX = "__MAINS_AEGIS_";
 
@@ -61,8 +63,15 @@ export function normalizeBaseUrl(input: string): string {
   return `http://${value.replace(/\/+$/, "")}`;
 }
 
+function demoSeedEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  const seed = new URLSearchParams(window.location.search).get("seed")?.trim();
+  return Boolean(seed);
+}
+
 type RequestOptions = {
   bridgeAuth?: boolean;
+  timeoutMs?: number;
 };
 
 async function requestJson<T>(
@@ -84,7 +93,16 @@ async function requestWithBody<T>(
     return requestMock<T>(baseUrl, path, method, body);
   }
 
+  const demoMockBaseUrl =
+    demoSeedEnabled() && canResolveDemoHttpMock(baseUrl)
+      ? normalizeBaseUrl(baseUrl)
+      : null;
+  if (demoMockBaseUrl) {
+    return requestMock<T>(demoMockBaseUrl, path, method, body);
+  }
+
   const response = await fetch(`${baseUrl}${path}`, {
+    signal: requestSignal(options.timeoutMs),
     method,
     headers: {
       Accept: "application/json",
@@ -117,6 +135,16 @@ async function requestWithBody<T>(
   return payload as T;
 }
 
+function requestSignal(timeoutMs?: number): AbortSignal | undefined {
+  if (!timeoutMs || timeoutMs <= 0 || typeof AbortSignal === "undefined") {
+    return undefined;
+  }
+  if (typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(timeoutMs);
+  }
+  return undefined;
+}
+
 function bridgeAuthHeaders(baseUrl: string): Record<string, string> {
   const token = bridgeAuthToken(baseUrl);
   return token ? { [APP_SESSION_HEADER]: token } : {};
@@ -145,8 +173,33 @@ export function httpServiceMode(): string | null {
   return mode && !mode.startsWith(RUNTIME_PLACEHOLDER_PREFIX) ? mode : null;
 }
 
+export function appRuntimeMode(): AppRuntimeMode {
+  if (typeof document === "undefined") return "unknown";
+  const runtimeMode =
+    document
+      .querySelector<HTMLMetaElement>(APP_RUNTIME_MODE_META)
+      ?.content?.trim() ?? "";
+  if (runtimeMode && !runtimeMode.startsWith(RUNTIME_PLACEHOLDER_PREFIX)) {
+    if (
+      runtimeMode === "hosted" ||
+      runtimeMode === "http_service_api_only" ||
+      runtimeMode === "public_static"
+    ) {
+      return runtimeMode;
+    }
+  }
+  if (httpServiceMode() === "hosted" && bridgeAuthToken("") !== null)
+    return "hosted";
+  if (httpServiceMode() === "api-only") return "http_service_api_only";
+  return "unknown";
+}
+
 export function isHostedHttpServiceApp(): boolean {
   return httpServiceMode() === "hosted" && bridgeAuthToken("") !== null;
+}
+
+export function isPublicStaticApp(): boolean {
+  return appRuntimeMode() === "public_static";
 }
 
 export async function getBridgeBootstrap(
@@ -232,6 +285,15 @@ function requestMock<T>(
     retryable: false,
     details: { path },
   });
+}
+
+function canResolveDemoHttpMock(baseUrl: string): boolean {
+  try {
+    getMockIdentity(baseUrl);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function requestMockDevd<T>(

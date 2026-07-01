@@ -36,3 +36,9 @@
 ## 2026-06-08
 
 - companion-LAN 的默认直连优先级改为统一引用 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md)；本规格只保留 Web 侧保存字段与交互约束，不再重复维护跨客户端矩阵。
+
+## 2026-06-20
+
+- GitHub Pages/public-static 构建正式收口为 browser-direct LAN 入口，不再隐式假设 same-origin devd，也不再依赖 `/api/v1/devices` 失败来反推出手动 LAN fallback。
+- `/connect` 在 public-static 构建下默认显示手动 LAN 目标与 IPv4 CIDR 扫描；devd discovery 只在 hosted devd 或显式 devd URL 时出现。
+- 冻结 Pages 浏览器能力门槛为 `Chrome 142+` + secure context，并补齐手动目标合同（hostname/FQDN/IPv4/IPv4:port/http://...）与 session-local CIDR 扫描候选语义。

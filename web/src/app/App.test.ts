@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { DeviceRecord } from "../api/types";
 import {
   deviceSettingsAvailable,
+  resolveManualHttpRememberedChannel,
+  resolveDevdTarget,
   resolveOwnerFacingDevdTarget,
   resolveStartupDevdTarget,
 } from "./App";
@@ -152,5 +154,30 @@ describe("resolveStartupDevdTarget", () => {
       mock_devd_target: "ipc://legacy.sock",
     });
     expect(resolveStartupDevdTarget(params, false)).toBe("ipc://legacy.sock");
+  });
+});
+
+describe("resolveDevdTarget", () => {
+  test("keeps seeded demos mock-only without an explicit devd target", () => {
+    expect(resolveDevdTarget(undefined, false, true)).toBeNull();
+  });
+});
+
+describe("resolveManualHttpRememberedChannel", () => {
+  test("keeps verified hostnames as the primary remembered URL", () => {
+    expect(
+      resolveManualHttpRememberedChannel("mains-aegis-a1b2c3.local"),
+    ).toEqual({
+      rememberedHttpBaseUrl: "http://mains-aegis-a1b2c3.local",
+    });
+  });
+
+  test("stores manual IPv4 targets as fallback URLs", () => {
+    expect(resolveManualHttpRememberedChannel("192.168.31.42")).toEqual({
+      rememberedHttpFallbackBaseUrl: "http://192.168.31.42",
+    });
+    expect(resolveManualHttpRememberedChannel("192.168.31.42:8080")).toEqual({
+      rememberedHttpFallbackBaseUrl: "http://192.168.31.42:8080",
+    });
   });
 });

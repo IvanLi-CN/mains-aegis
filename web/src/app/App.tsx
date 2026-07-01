@@ -49,7 +49,9 @@ import {
 import type { LucideIcon } from "lucide-react";
 import {
   bindDevdDevice,
+  getIdentity,
   isHostedHttpServiceApp,
+  isPublicStaticApp,
   listDevdDevices,
   normalizeBaseUrl,
   subscribeDevdDeviceEvents,
@@ -60,6 +62,7 @@ import type {
   DeviceRecord,
   DeviceSettings,
   DevdDevice,
+  Identity,
   LanCompanionCandidate,
   SerialLogEntry,
   SerialTraceEntry,
@@ -76,6 +79,7 @@ import {
 } from "../components/ui/select";
 import {
   useDeviceRegistry,
+  type AddDeviceInput,
   type DeviceChannelTransport,
   type WifiProvisioningProgress,
 } from "../device-registry/context";
@@ -157,6 +161,38 @@ type FleetDeviceEntry = {
 
 type FleetDiscoveryStatus = "idle" | "checking" | "available" | "unavailable";
 
+type ConnectRuntimeMode =
+  | "hosted_devd"
+  | "public_static"
+  | "standalone_with_devd"
+  | "standalone_no_devd";
+
+type BrowserLanCapability = {
+  supported: boolean;
+  reason: string | null;
+  chromeVersion: number | null;
+};
+
+type ScanCandidate = {
+  key: string;
+  deviceId: string;
+  alias: string;
+  endpoints: string[];
+  baseUrl: string;
+  mdnsBaseUrl: string;
+  mdnsHost: string | null;
+  fallbackBaseUrl: string | null;
+  identity: Identity;
+  existingRecord: DeviceRecord | null;
+};
+
+type ScanState = {
+  status: "idle" | "scanning" | "done";
+  cidr: string;
+  message: UiFeedback | null;
+  candidates: ScanCandidate[];
+};
+
 type SharedDevdDiscovery = {
   devdTarget: string | null;
   devdDevices: DevdDevice[];
@@ -184,12 +220,11 @@ const deviceSections = [
 ] as const;
 
 const appBasePath = normalizeBasePath(import.meta.env.BASE_URL);
-const envDevdTarget =
-  (
-    import.meta.env.VITE_DEFAULT_DEVD_URL ??
-    import.meta.env.VITE_DEVD_API_BASE ??
-    "same-origin"
-  ).trim() || "same-origin";
+const envRuntimeMode = (import.meta.env.VITE_APP_RUNTIME_MODE ?? "").trim();
+const rawEnvDevdTarget = (
+  import.meta.env.VITE_DEFAULT_DEVD_URL ?? import.meta.env.VITE_DEVD_API_BASE ?? ""
+).trim();
+const envDevdTarget = rawEnvDevdTarget || "same-origin";
 const docsHref = `${appBasePath}docs/`;
 const credentiallessInputProps = {
   autoComplete: "off",
@@ -441,12 +476,19 @@ function useRoute(initialPath?: string): Route {
   return parseRoute(path);
 }
 
-function resolveDevdTarget(
+export function resolveDevdTarget(
   initialDevdTarget: string | undefined,
   hostedHttpServiceApp: boolean,
   demoMode: boolean,
 ): string | null {
-  if (demoMode && !hostedHttpServiceApp && !initialDevdTarget) return null;
+  if (demoMode && !hostedHttpServiceApp && !initialDevdTarget && !rawEnvDevdTarget)
+    return null;
+  if (
+    (isPublicStaticApp() || envRuntimeMode === "public_static") &&
+    !initialDevdTarget &&
+    !rawEnvDevdTarget
+  )
+    return null;
   const candidate = (
     initialDevdTarget ??
     (hostedHttpServiceApp ? "same-origin" : envDevdTarget)
@@ -479,6 +521,161 @@ export function resolveOwnerFacingDevdTarget(
   if (!candidate) return undefined;
   if (!demoMode && candidate.startsWith("mock:")) return undefined;
   return candidate;
+}
+
+export function resolveConnectRuntimeMode(options: {
+  hostedHttpServiceApp: boolean;
+  devdTarget: string | null;
+  publicStaticBuild?: boolean;
+}): ConnectRuntimeMode {
+  if (options.hostedHttpServiceApp) return "hosted_devd";
+  const publicStaticBuild =
+    options.publicStaticBuild ??
+    (isPublicStaticApp() || envRuntimeMode === "public_static");
+  if (publicStaticBuild) {
+    return options.devdTarget ? "standalone_with_devd" : "public_static";
+  }
+  return options.devdTarget ? "standalone_with_devd" : "standalone_no_devd";
+}
+
+export function detectBrowserLanCapability(
+  options: {
+    isSecureContext?: boolean;
+    userAgent?: string;
+  } = {},
+): BrowserLanCapability {
+  if (typeof navigator === "undefined" && options.userAgent === undefined) {
+    return {
+      supported: false,
+      reason: "Browser capability checks are unavailable in this environment.",
+      chromeVersion: null,
+    };
+  }
+  const secureContext =
+    options.isSecureContext ??
+    (typeof window !== "undefined" ? window.isSecureContext : false);
+  if (!secureContext) {
+    return {
+      supported: false,
+      reason: "Secure context is required for browser-direct LAN access.",
+      chromeVersion: null,
+    };
+  }
+  const ua = options.userAgent ?? navigator.userAgent;
+  const chromeMatch = ua.match(/Chrom(?:e|ium)\/(\d+)/);
+  const chromeVersion = chromeMatch
+    ? Number.parseInt(chromeMatch[1] ?? "", 10)
+    : null;
+  if (!chromeVersion) {
+    return {
+      supported: false,
+      reason: "Use Chrome 142+ for GitHub Pages LAN access.",
+      chromeVersion: null,
+    };
+  }
+  if (chromeVersion < 142) {
+    return {
+      supported: false,
+      reason: `Chrome 142+ is required; detected Chrome ${chromeVersion}.`,
+      chromeVersion,
+    };
+  }
+  return { supported: true, reason: null, chromeVersion };
+}
+
+function parseIpv4Address(input: string): number | null {
+  const parts = input.trim().split(".");
+  if (parts.length !== 4) return null;
+  const octets = parts.map((part) => Number.parseInt(part, 10));
+  if (
+    octets.some(
+      (octet, index) =>
+        Number.isNaN(octet) ||
+        octet < 0 ||
+        octet > 255 ||
+        `${octet}` !== parts[index],
+    )
+  ) {
+    return null;
+  }
+  return (
+    ((octets[0] ?? 0) << 24) >>> 0 |
+    ((octets[1] ?? 0) << 16) |
+    ((octets[2] ?? 0) << 8) |
+    (octets[3] ?? 0)
+  ) >>> 0;
+}
+
+function ipv4NumberToString(value: number): string {
+  return [
+    (value >>> 24) & 255,
+    (value >>> 16) & 255,
+    (value >>> 8) & 255,
+    value & 255,
+  ].join(".");
+}
+
+export function expandIpv4Cidr(input: string): {
+  hosts: string[];
+  normalized: string;
+} {
+  const raw = input.trim();
+  const [ipText, prefixText] = raw.split("/", 2);
+  const ip = parseIpv4Address(ipText ?? "");
+  const prefix = Number.parseInt(prefixText ?? "", 10);
+  if (ip === null || Number.isNaN(prefix) || prefix < 0 || prefix > 32) {
+    throw new Error("Use a valid IPv4 CIDR.");
+  }
+  const hostBits = 32 - prefix;
+  const blockSize = 2 ** hostBits;
+  const hostCount = blockSize - 2;
+  if (hostCount < 2 || hostCount > 256) {
+    throw new Error("CIDR scan must expand to between 2 and 256 hosts.");
+  }
+  const mask = prefix === 0 ? 0 : (0xffffffff << hostBits) >>> 0;
+  const network = ip & mask;
+  const hosts: string[] = [];
+  for (
+    let current = network + 1;
+    current < network + blockSize - 1;
+    current += 1
+  ) {
+    hosts.push(ipv4NumberToString(current >>> 0));
+  }
+  return {
+    hosts,
+    normalized: `${ipv4NumberToString(network >>> 0)}/${prefix}`,
+  };
+}
+
+function isIpv4Host(value: string): boolean {
+  const [host] = value.trim().split(":", 2);
+  return parseIpv4Address(host ?? "") !== null;
+}
+
+export function resolveManualHttpRememberedChannel(
+  target: string,
+): Partial<
+  Pick<
+  AddDeviceInput,
+  "rememberedHttpBaseUrl" | "rememberedHttpFallbackBaseUrl"
+  >
+> {
+  const normalizedTarget = normalizeBaseUrl(target);
+  if (!normalizedTarget) return {};
+  const host = normalizedTarget.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  if (isIpv4Host(host)) {
+    return { rememberedHttpFallbackBaseUrl: normalizedTarget };
+  }
+  return { rememberedHttpBaseUrl: normalizedTarget };
+}
+
+export function isLanIdentityCandidate(identity: Identity): boolean {
+  return (
+    identity.role === "ups" &&
+    identity.api_version === "v1" &&
+    identity.device_id.trim().length > 0
+  );
 }
 
 function useFleetDevdDiscovery(
@@ -1415,9 +1612,14 @@ function ConnectPage({
     new URLSearchParams(window.location.search)
       .get("mock_bind_logical_device_id")
       ?.trim() || "";
+  const queryMockBrowserCapability =
+    new URLSearchParams(window.location.search)
+      .get("mock_browser_capability")
+      ?.trim() || "";
   const [target, setTarget] = useState("");
   const [alias, setAlias] = useState("");
   const [location, setLocation] = useState("");
+  const [cidr, setCidr] = useState("");
   const [usbAlias, setUsbAlias] = useState("");
   const [usbLocation, setUsbLocation] = useState("");
   const [fallbackDevdTarget] = useState(() =>
@@ -1460,12 +1662,42 @@ function ConnectPage({
       return initialTargets;
     },
   );
+  const [scanState, setScanState] = useState<ScanState>({
+    status: "idle",
+    cidr: "",
+    message: null,
+    candidates: [],
+  });
   const serialSupported = isWebSerialSupported();
   const devdDiscoveryOnly = hostedHttpServiceApp;
   const devdTarget = sharedDevdDiscovery?.devdTarget ?? fallbackDevdTarget;
   const devdDevices = sharedDevdDiscovery?.devdDevices ?? [];
   const devdStatus = sharedDevdDiscovery?.status ?? "checking";
   const devdLastUpdated = sharedDevdDiscovery?.lastUpdated ?? null;
+  const runtimeMode = resolveConnectRuntimeMode({
+    hostedHttpServiceApp,
+    devdTarget,
+  });
+  const browserLanCapability = useMemo(() => {
+    if (demoMode && queryMockBrowserCapability === "supported") {
+      return detectBrowserLanCapability({
+        isSecureContext: true,
+        userAgent:
+          "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+      });
+    }
+    if (demoMode && queryMockBrowserCapability === "unsupported") {
+      return detectBrowserLanCapability({
+        isSecureContext: false,
+        userAgent:
+          "Mozilla/5.0 AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+      });
+    }
+    return detectBrowserLanCapability();
+  }, [demoMode, queryMockBrowserCapability]);
+  const publicStaticBuild =
+    isPublicStaticApp() || envRuntimeMode === "public_static";
+  const showLanScanPanel = publicStaticBuild;
   const bindTargetOptions = useMemo<BindTargetOption[]>(
     () =>
       [...records]
@@ -1499,9 +1731,28 @@ function ConnectPage({
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
+    if (publicStaticBuild && !browserLanCapability.supported) {
+      setMessage(
+        errorFeedback({
+          code: "browser_lan_capability_required",
+          message:
+            browserLanCapability.reason ??
+            "Use Chrome 142+ in a secure context for LAN access.",
+          retryable: false,
+          details: { runtimeMode },
+        }),
+      );
+      return;
+    }
     setBusy(true);
     setMessage(null);
-    const result = await addDevice({ target, alias, location });
+    const rememberedHttpChannel = resolveManualHttpRememberedChannel(target);
+    const result = await addDevice({
+      target,
+      alias,
+      location,
+      ...rememberedHttpChannel,
+    });
     setBusy(false);
     if (result.ok) {
       setTarget("");
@@ -1511,6 +1762,138 @@ function ConnectPage({
     } else {
       setMessage(errorFeedback(result.error));
     }
+  }
+
+  async function onScanSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!browserLanCapability.supported) {
+      setScanState((current) => ({
+        ...current,
+        message: errorFeedback({
+          code: "browser_lan_capability_required",
+          message:
+            browserLanCapability.reason ??
+            "Use Chrome 142+ in a secure context for LAN access.",
+          retryable: false,
+          details: { runtimeMode },
+        }),
+      }));
+      return;
+    }
+    let expanded;
+    try {
+      expanded = expandIpv4Cidr(cidr);
+    } catch (error) {
+      setScanState((current) => ({
+        ...current,
+        message: errorFeedback({
+          code: "invalid_cidr",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Use a valid IPv4 CIDR that expands to 2-256 hosts.",
+          retryable: false,
+          details: { cidr },
+        }),
+      }));
+      return;
+    }
+    setScanState({
+      status: "scanning",
+      cidr: expanded.normalized,
+      message: null,
+      candidates: [],
+    });
+    const limit = 8;
+    const timeoutMs = 800;
+    const hosts = [...expanded.hosts];
+    const candidates = new Map<string, ScanCandidate>();
+    const worker = async () => {
+      while (hosts.length > 0) {
+        const nextHost = hosts.shift();
+        if (!nextHost) return;
+        const fallbackBaseUrl = normalizeBaseUrl(nextHost);
+        try {
+          const identity = await getIdentity(fallbackBaseUrl, undefined, {
+            timeoutMs,
+          });
+          if (!isLanIdentityCandidate(identity)) {
+            continue;
+          }
+          const mdnsHost =
+            identity.hostname_fqdn?.trim() || identity.hostname?.trim() || null;
+          const mdnsBaseUrl = mdnsHost
+            ? normalizeBaseUrl(mdnsHost)
+            : fallbackBaseUrl;
+          const existingRecord =
+            records.find(
+              (record) => record.target.deviceId === identity.device_id,
+            ) ?? null;
+          candidates.set(identity.device_id, {
+            key: identity.device_id,
+            deviceId: identity.device_id,
+            alias: existingRecord?.target.alias ?? identity.hostname,
+            endpoints: [mdnsBaseUrl, fallbackBaseUrl].filter(
+              (value, index, array): value is string =>
+                Boolean(value) && array.indexOf(value) === index,
+            ),
+            baseUrl: mdnsBaseUrl,
+            mdnsBaseUrl,
+            mdnsHost,
+            fallbackBaseUrl:
+              fallbackBaseUrl !== mdnsBaseUrl ? fallbackBaseUrl : null,
+            identity,
+            existingRecord,
+          });
+        } catch {
+          continue;
+        }
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(limit, expanded.hosts.length) }, () =>
+        worker(),
+      ),
+    );
+    const nextCandidates = Array.from(candidates.values()).sort((left, right) =>
+      left.alias.localeCompare(right.alias),
+    );
+    setScanState({
+      status: "done",
+      cidr: expanded.normalized,
+      message:
+        nextCandidates.length > 0
+          ? successFeedback(
+              `Found ${nextCandidates.length} device${nextCandidates.length === 1 ? "" : "s"} in ${expanded.normalized}`,
+            )
+          : errorFeedback({
+              code: "scan_empty",
+              message: `No Mains Aegis device answered in ${expanded.normalized}.`,
+              retryable: true,
+              details: { cidr: expanded.normalized },
+            }),
+      candidates: nextCandidates,
+    });
+  }
+
+  async function onScanCandidateAdd(candidate: ScanCandidate) {
+    setBusy(true);
+    setMessage(null);
+    const result = await addDevice({
+      target: candidate.fallbackBaseUrl ?? candidate.baseUrl,
+      alias: candidate.existingRecord?.target.alias ?? candidate.alias,
+      location: candidate.existingRecord?.target.location ?? location,
+      rememberedHttpBaseUrl: candidate.mdnsBaseUrl,
+      rememberedHttpMdnsHost: candidate.mdnsHost ?? undefined,
+      rememberedHttpFallbackBaseUrl: candidate.fallbackBaseUrl ?? undefined,
+    });
+    setBusy(false);
+    if (result.ok) {
+      setMessage(successFeedback(`Connected ${result.record.target.alias}`));
+      navigate(deviceHref(result.record.target.deviceId, "settings"));
+      return;
+    }
+    setMessage(errorFeedback(result.error));
   }
 
   async function onUsbConnect(ignoreFirmwareMismatch = false) {
@@ -1732,7 +2115,11 @@ function ConnectPage({
       : devdStatus === "available"
         ? `${discoveredLogicalDevices.length} devices across ${devdDevices.length} reported channels`
         : "Not reachable";
-  const showLanFallback = !devdDiscoveryOnly && devdStatus === "unavailable";
+  const showLanFallback =
+    !devdDiscoveryOnly &&
+    (runtimeMode === "standalone_no_devd" ||
+      runtimeMode === "public_static" ||
+      devdStatus === "unavailable");
   const showFallbackConnectPanels = !devdDiscoveryOnly;
   const devdLastUpdatedLabel = devdLastUpdated
     ? timeAgo(devdLastUpdated)
@@ -1745,10 +2132,12 @@ function ConnectPage({
         <p>
           {devdDiscoveryOnly
             ? "Use this page to add hardware from current mains-aegis-devd device records. USB devices attach through devd, while LAN devices connect directly to the hardware HTTP API."
-            : "Use this page to add a new device, bind a new USB port, or add a LAN endpoint. When mains-aegis-devd is reachable, current USB CDC and LAN device records appear here automatically."}
+            : runtimeMode === "public_static"
+              ? "This GitHub Pages build connects to LAN devices directly from the browser. Use Chrome 142+ for manual targets or CIDR scans; hosted devd discovery is not assumed here."
+              : "Use this page to add a new device, bind a new USB port, or add a LAN endpoint. When mains-aegis-devd is reachable, current USB CDC and LAN device records appear here automatically."}
         </p>
       </div>
-
+      {devdTarget ? (
       <section
         className="devd-discovery-panel"
         data-evidence-target="devd-discovery"
@@ -1760,13 +2149,15 @@ function ConnectPage({
               <Server size={19} /> mains-aegis-devd device records
             </h3>
             <p>
-              {devdStatus === "unavailable"
+          {devdStatus === "unavailable"
                 ? devdDiscoveryOnly
                   ? "This hosted UI depends on mains-aegis-devd device records. Restart or reconnect devd to continue."
                   : "Manual LAN entry is available below because devd cannot be reached."
                 : devdDiscoveryOnly
                   ? "USB devices attach through devd. LAN devices are reported by devd, then connected directly to the hardware HTTP API."
-                  : "Current USB and LAN device records refresh automatically while this page is open."}
+                  : publicStaticBuild
+                    ? "This public static build can also point at an explicit devd URL, but LAN direct entry remains available below as the primary browser path."
+                    : "Current USB and LAN device records refresh automatically while this page is open."}
             </p>
           </div>
           <div className="devd-discovery-status">
@@ -2093,6 +2484,7 @@ function ConnectPage({
           <FeedbackMessage feedback={visibleDevdMessage} />
         ) : null}
       </section>
+      ) : null}
 
       {showFallbackConnectPanels ? (
         <div
@@ -2197,7 +2589,9 @@ function ConnectPage({
                 </h3>
                 <p>
                   {showLanFallback
-                    ? "Fallback for direct hardware HTTP/SSE when devd is unreachable"
+                    ? publicStaticBuild
+                      ? "Primary browser-direct LAN path for the public static build"
+                      : "Fallback for direct hardware HTTP/SSE when devd is unreachable"
                     : "Hidden during devd-backed discovery"}
                 </p>
               </div>
@@ -2227,6 +2621,11 @@ function ConnectPage({
                       required
                     />
                   </label>
+                  {publicStaticBuild ? (
+                    <p className="field-help">
+                      Chrome 142+ only. Enter hostname, FQDN, IPv4, or IPv4:port. The app will prefer verified hostnames and keep the IP as fallback.
+                    </p>
+                  ) : null}
                   <label>
                     Alias
                     <input
@@ -2251,7 +2650,10 @@ function ConnectPage({
                     <button
                       className="primary-button"
                       type="submit"
-                      disabled={busy}
+                      disabled={
+                        busy ||
+                        (publicStaticBuild && !browserLanCapability.supported)
+                      }
                     >
                       <ButtonLabel
                         busy={busy}
@@ -2279,6 +2681,12 @@ function ConnectPage({
                 {message?.tone === "success" ? (
                   <FeedbackMessage feedback={message} />
                 ) : null}
+                {!browserLanCapability.supported && publicStaticBuild ? (
+                  <ConnectionCallout
+                    id="lan-capability-message"
+                    message={`browser_lan_capability_required: ${browserLanCapability.reason ?? "Use Chrome 142+ in a secure context for LAN access."}`}
+                  />
+                ) : null}
               </>
             ) : (
               <div className="lan-standby-note">
@@ -2290,6 +2698,132 @@ function ConnectPage({
               </div>
             )}
           </section>
+          {showLanScanPanel ? (
+            <section className="connect-panel lan-scan-panel">
+              <header className="connect-panel-header">
+                <div>
+                  <h3>
+                    <Search size={18} /> CIDR scan
+                  </h3>
+                  <p>
+                    Manually scan one IPv4 subnet from this browser. Results stay local to this session until you explicitly add a device.
+                  </p>
+                </div>
+                <span className="transport-badge adapter">manual</span>
+              </header>
+              <form className="connect-form compact" onSubmit={onScanSubmit}>
+                <label className="connect-field-full">
+                  IPv4 CIDR
+                  <input
+                    {...credentiallessInputProps}
+                    name="lan-cidr-scan"
+                    value={cidr}
+                    onChange={(event) => setCidr(event.target.value)}
+                    placeholder="192.168.31.0/24"
+                    autoCapitalize="none"
+                    required
+                  />
+                </label>
+                <ScanActionRow
+                  busy={scanState.status === "scanning"}
+                  disabled={
+                    scanState.status === "scanning" ||
+                    !browserLanCapability.supported
+                  }
+                  buttonText="Scan LAN"
+                  busyText="Scanning"
+                  successFeedback={
+                    scanState.message?.tone === "success"
+                      ? scanState.message
+                      : null
+                  }
+                  errorMessage={
+                    scanState.message?.tone === "error"
+                      ? scanState.message.message
+                      : null
+                  }
+                />
+              </form>
+              <div className="devd-device-list" aria-live="polite">
+                {scanState.status === "done" &&
+                scanState.candidates.length === 0 &&
+                scanState.message?.tone !== "error" ? (
+                  <div className="devd-empty-state">
+                    <Radio size={18} />
+                    <strong>No LAN candidates</strong>
+                    <span>Try a different subnet or use a direct target.</span>
+                  </div>
+                ) : null}
+                {scanState.candidates.map((candidate) => (
+                  <article
+                    className="devd-device-card scan-candidate-card"
+                    key={candidate.key}
+                  >
+                    <div className="devd-device-main">
+                      <span className="transport-badge http">LAN</span>
+                      <div>
+                        <h4>{candidate.alias}</h4>
+                        <div className="devd-device-endpoints">
+                          {candidate.endpoints.map((endpoint) => (
+                            <p key={endpoint} title={endpoint}>
+                              {endpoint}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <dl className="devd-device-meta scan-candidate-meta">
+                      <div>
+                        <dt>Device ID</dt>
+                        <dd>{candidate.deviceId}</dd>
+                      </div>
+                      <div>
+                        <dt>Status</dt>
+                        <dd>{candidate.existingRecord ? "saved" : "new"}</dd>
+                      </div>
+                    </dl>
+                    <div className="scan-candidate-footer">
+                      <p className="scan-candidate-hint">
+                        Select Add WiFi to save this LAN device.
+                      </p>
+                      <div className="devd-device-actions scan-candidate-actions">
+                        {candidate.existingRecord ? (
+                          <>
+                            <button
+                              className="primary-button small"
+                              type="button"
+                              onClick={() =>
+                                navigate(deviceDefaultHref(candidate.existingRecord!))
+                              }
+                            >
+                              Open
+                            </button>
+                            <button
+                              className="secondary-button small"
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void onScanCandidateAdd(candidate)}
+                            >
+                              Add WiFi
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            className="secondary-button small"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void onScanCandidateAdd(candidate)}
+                          >
+                            Add WiFi
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
         </div>
       ) : null}
 
@@ -2439,6 +2973,8 @@ export function ConnectionCallout({
         ? "Firmware mismatch"
         : code === "devd_http_service_requires_devd_panel"
           ? "Use the devd panel"
+          : code === "browser_lan_capability_required"
+            ? "Use Chrome or local devd UI"
           : "Connection failed";
   const guidance =
     code === "serial_port_unavailable"
@@ -2447,6 +2983,8 @@ export function ConnectionCallout({
         ? "Select matching firmware, flash the current build, or explicitly ignore this warning to continue."
         : code === "devd_http_service_requires_devd_panel"
           ? "LAN status connects directly to hardware over the device HTTP API. Use the devd panel only for mains-aegis-devd HTTP service endpoints."
+          : code === "browser_lan_capability_required"
+            ? "GitHub Pages browser-direct LAN access is only supported on Chrome 142+ in a secure context. Otherwise use the hosted or local devd UI."
           : "Check the selected device and try again.";
 
   return (
@@ -2618,6 +3156,43 @@ export function FeedbackMessage({ feedback }: { feedback: UiFeedback }) {
     >
       {feedback.message}
     </p>
+  );
+}
+
+export function ScanActionRow({
+  busy,
+  disabled,
+  buttonText,
+  busyText,
+  successFeedback,
+  errorMessage,
+}: {
+  busy: boolean;
+  disabled: boolean;
+  buttonText: string;
+  busyText: string;
+  successFeedback: UiFeedback | null;
+  errorMessage: string | null;
+}) {
+  return (
+    <>
+      <div className="form-actions with-callout scan-inline-actions">
+        <button className="primary-button" type="submit" disabled={disabled}>
+          <ButtonLabel busy={busy} busyText={busyText} text={buttonText} />
+        </button>
+        <span
+          className="scan-inline-status"
+          data-slot="scan-inline-status"
+          role="status"
+          aria-live="polite"
+        >
+          {successFeedback?.message ?? ""}
+        </span>
+        {errorMessage ? (
+          <ConnectionCallout id="scan-connect-message" message={errorMessage} />
+        ) : null}
+      </div>
+    </>
   );
 }
 

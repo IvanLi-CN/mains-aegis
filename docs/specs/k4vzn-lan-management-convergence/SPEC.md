@@ -29,7 +29,7 @@
 - 当前不为设备本体新增 LAN `flash` 或 LAN `monitor/defmt` API。只要设备本体尚未真实支持，这些能力就不纳入 LAN 目标面。
 - 当前不为 LAN 写接口补鉴权。首版仍基于“可信局域网”假设工作，但必须在规格与 UI 中把该风险写明，不把它误表述成安全边界。
 - 不把 `connection`、当前 transport 选择、Web lease 或 devd owner 状态塞回设备本体 API。
-- 不要求浏览器自动推断 CIDR；Web 端子网扫描范围继续由用户手填并持久记忆。
+- 不要求浏览器自动推断 CIDR；Web 端子网扫描范围继续由用户手填，但 public-static / GitHub Pages 路径的扫描结果只保留在当前页面状态，不做跨刷新持久化。
 
 ## 范围（Scope）
 
@@ -55,7 +55,8 @@
 - 设备本体必须新增 `GET /api/v1/settings`，一次返回完整设置快照；当前至少包含 `wifi`、`log_level`、`manual_charge`、`advanced_power` 与 `advanced_power_capabilities`。
 - 设备本体写接口继续按主题分开：`POST|DELETE /api/v1/wifi-config`、`POST /api/v1/settings/log-level`、`POST /api/v1/settings/manual-charge`、`POST /api/v1/settings/advanced-power`、`POST /api/v1/settings/advanced-power/reset`、`POST /api/v1/reset`。
 - 客户端写成功后必须重新读取完整 `settings` 快照；不得依赖局部返回拼接设置状态。
-- Web 无 devd 模式必须支持手填 IPv4 CIDR 的子网扫描，并记住最近范围；扫描只探测 `http://<ip>:80/api/v1/identity`。
+- Web 无 devd 模式必须支持手填 IPv4 CIDR 的子网扫描；GitHub Pages/public-static 路径只在用户点击后执行，扫描只探测 `http://<ip>:80/api/v1/identity`，结果先以 session-local 候选呈现。
+- GitHub Pages/public-static 的 browser-direct LAN 能力正式支持矩阵固定为 `Chrome 142+` 且 secure context；不满足条件时只允许显示迁移说明，不执行直连或扫描动作。
 - devd LAN 发现顺序固定为 `mDNS/DNS-SD -> 子网扫描`；Web 无 devd 模式只走子网扫描。
 - 所有扫描结果必须经 `/api/v1/identity` 二次确认；只有满足 `role=ups` / `device_id` / `api_version` 契约的目标才能进入设备列表。
 - 凡是会驱动外部 `DCIN` 上电的自动化流程，在恢复外部输入前都必须先在断电状态读取 `identity.hardware_capabilities` 与 `settings.advanced_power_capabilities.rated_vout_mv`，确认真实硬件档位与目标测试/控制流程一致。
@@ -92,9 +93,10 @@
 
 ### 2. discovery 与 logical device
 
-- Web 无 devd 场景：用户手填 IPv4 CIDR；前端记住范围；扫描默认参数统一为并发 `32`、单 IP 超时 `800ms`、整轮可取消。
+- Web 无 devd 场景：用户手填 IPv4 CIDR；GitHub Pages/public-static 路径的扫描默认参数统一为并发 `8`、单 IP 超时 `800ms`、整轮按当前页面生命周期执行。CIDR 只接受展开后 `2..256` hosts 的 IPv4 范围，超出范围直接前端校验失败。
 - devd 场景：先做 mDNS/DNS-SD，再做相同参数的子网扫描补充。
 - 扫描只打 `/api/v1/identity`；`/health`、`/ping` 不能作为设备命中判据。
+- public-static / GitHub Pages 路径中的扫描命中项不得自动落入浏览器持久化设备清单；只有显式 `Add WiFi` / `Open` 后，才允许执行完整 `probeDevice` 并刷新/持久化记录。
 - 扫到的 LAN 目标以 `device_id` 聚合；若 mDNS 与子网扫描命中同一设备，则合并为同一 LAN transport，展示优先使用 mDNS 主机名，内部保留最近成功 IP。
 - 同一 `device_id` 的 USB / LAN transport 关联到同一 logical device；允许用户主动切换，程序根据命令能力给出切换建议或硬阻断。
 - USB `bind` 成功后，devd 允许做一次只读 companion-LAN 探测：先读 USB `identity`，必要时补 `status.network`；若设备报告已连 LAN，则分别验证 `http://<ipv4>:80/api/v1/identity` 与 `http://<hostname_fqdn>:80/api/v1/identity`。只有两条路径都返回与 USB 相同的 `device_id` 时，才生成运行态 `companion_lan_candidate`。
@@ -139,7 +141,7 @@
 ## 验收标准（Acceptance Criteria）
 
 - 设备本体 `GET /api/v1/settings` 能返回完整设置快照，且不包含 PSK，并包含 `advanced_power` 与 `advanced_power_capabilities`。
-- Web 无 devd 模式可通过手填 CIDR 子网扫描找到设备，并在 `device_id` 层聚合已保存 LAN 记录。
+- Web 无 devd 模式可通过手填 CIDR 子网扫描找到设备，并在 `device_id` 层聚合已保存 LAN 记录；public-static / GitHub Pages 路径默认不再隐式退回 same-origin devd 发现语义。
 - devd 可通过 mDNS/DNS-SD 或子网扫描发现同一设备的 LAN transport，并把其关联到已有 USB logical device。
 - CLI 用户命令面不再暴露 `device session`；新的用户查询面只保留 `connection / identity / status / settings / trace`。
 - `session` / `safeSettings` 不再作为新的真相模型出现在 Web、devd、CLI 设计里。

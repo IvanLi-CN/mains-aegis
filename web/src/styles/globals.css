@@ -780,6 +780,12 @@ a {
   padding: 12px;
 }
 
+.scan-candidate-card {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+}
+
 .devd-device-card.is-muted {
   background: color-mix(
     in oklch,
@@ -802,12 +808,20 @@ a {
   font-size: 15px;
 }
 
+.devd-device-endpoints {
+  display: grid;
+  gap: 2px;
+  margin-top: 3px;
+}
+
 .devd-device-main p {
-  margin: 3px 0 0;
+  margin: 0;
   color: var(--color-muted);
   font-family: var(--font-mono);
   font-size: 12px;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .devd-device-meta {
@@ -815,6 +829,10 @@ a {
   grid-template-columns: 0.75fr 1.55fr 0.7fr;
   gap: 10px;
   margin: 0;
+}
+
+.scan-candidate-meta {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .devd-device-meta div {
@@ -837,6 +855,27 @@ a {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.scan-candidate-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-hairline);
+}
+
+.scan-candidate-hint {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.scan-candidate-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
 }
 
 .split-action {
@@ -1184,6 +1223,10 @@ a {
   font-size: 12px;
 }
 
+.connect-form .connect-field-full {
+  grid-column: 1 / -1;
+}
+
 .form-actions {
   position: relative;
   grid-column: 1 / -1;
@@ -1193,6 +1236,34 @@ a {
 .form-actions.with-callout {
   align-items: center;
   flex-wrap: wrap;
+}
+
+.scan-inline-actions {
+  display: grid;
+  grid-template-columns: auto minmax(280px, 1fr);
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 10px;
+}
+
+.scan-inline-actions > button {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.scan-inline-status {
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 24px;
+  color: var(--color-ok);
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.scan-inline-actions > .connection-callout {
+  grid-column: 1 / -1;
+  grid-row: 2;
 }
 
 .wifi-actions {
@@ -1428,6 +1499,11 @@ a {
   left: 28px;
   display: block;
   transform: rotate(135deg);
+}
+
+.connect-form.compact .scan-inline-actions,
+.connect-wide .connect-form.compact .scan-inline-actions {
+  grid-template-columns: auto minmax(220px, 1fr);
 }
 
 .form-message {
@@ -3951,6 +4027,10 @@ a {
     align-items: stretch;
   }
 
+  .scan-candidate-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .devd-device-actions {
     justify-content: flex-start;
   }
@@ -3962,6 +4042,14 @@ a {
 
   .devd-device-meta {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .scan-candidate-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .scan-candidate-footer {
+    align-items: flex-start;
   }
 
   .developer-console > .developer-console-header {

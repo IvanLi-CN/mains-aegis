@@ -97,6 +97,38 @@ const DEVD_SERIAL_SESSION_LIMITS = {
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
 const LEGACY_DEVD_TRANSPORT = "ad" + "apter";
 
+export function resolveManualHttpChannelPersistence(input: {
+  baseUrl: string;
+  rememberedHttpBaseUrl?: string;
+  rememberedHttpMdnsHost?: string;
+  rememberedHttpFallbackBaseUrl?: string;
+  identityHostnameFqdn?: string | null;
+  networkIpv4?: string | null;
+}) {
+  const savedBaseUrl = normalizeBaseUrl(input.baseUrl);
+  const rememberedHttpBaseUrl =
+    normalizeBaseUrl(
+      input.rememberedHttpBaseUrl?.trim() || input.identityHostnameFqdn || "",
+    ) || savedBaseUrl;
+  const rememberedHttpFallbackBaseUrl =
+    normalizeBaseUrl(
+      input.rememberedHttpFallbackBaseUrl?.trim() ||
+        input.networkIpv4?.trim() ||
+        savedBaseUrl,
+    ) || undefined;
+
+  return {
+    savedBaseUrl,
+    rememberedHttpBaseUrl,
+    rememberedHttpMdnsHost:
+      input.rememberedHttpMdnsHost?.trim() || input.identityHostnameFqdn || "",
+    rememberedHttpFallbackBaseUrl:
+      rememberedHttpFallbackBaseUrl !== rememberedHttpBaseUrl
+        ? rememberedHttpFallbackBaseUrl
+        : undefined,
+  };
+}
+
 export function DeviceRegistryProvider({
   children,
 }: {
@@ -690,9 +722,17 @@ export function DeviceRegistryProvider({
           };
         }
         const result = await probeDevice(baseUrl);
+        const persistedHttpChannel = resolveManualHttpChannelPersistence({
+          baseUrl,
+          rememberedHttpBaseUrl: input.rememberedHttpBaseUrl,
+          rememberedHttpMdnsHost: input.rememberedHttpMdnsHost,
+          rememberedHttpFallbackBaseUrl: input.rememberedHttpFallbackBaseUrl,
+          identityHostnameFqdn: result.identity.hostname_fqdn,
+          networkIpv4: result.network.ipv4,
+        });
         const target: DeviceTarget = {
           deviceId: result.identity.device_id,
-          baseUrl,
+          baseUrl: persistedHttpChannel.savedBaseUrl,
           alias: input.alias?.trim() || result.identity.hostname,
           location: input.location?.trim() || "Unassigned",
           addedAt: new Date().toISOString(),
@@ -700,9 +740,12 @@ export function DeviceRegistryProvider({
           preferredTransport: "http",
           rememberedChannels: {
             http: {
-              baseUrl,
+              baseUrl: persistedHttpChannel.rememberedHttpBaseUrl,
               seenAt: new Date().toISOString(),
               source: "manual",
+              mdnsHost: persistedHttpChannel.rememberedHttpMdnsHost,
+              fallbackBaseUrl:
+                persistedHttpChannel.rememberedHttpFallbackBaseUrl,
             },
           },
         };

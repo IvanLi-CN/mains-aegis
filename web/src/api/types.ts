@@ -440,3 +440,9 @@ export type DevdWebLease = {
   lease_ttl_ms: number;
   device: DevdDevice;
 };
+
+export type AppRuntimeMode =
+  | "hosted"
+  | "http_service_api_only"
+  | "public_static"
+  | "unknown";

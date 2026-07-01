@@ -40,8 +40,8 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 
 - 入口：`/connect`
 - 目的：维护浏览器当前关注的 UPS 清单；USB CDC 用于本地安全会话，LAN 用于设备本体 HTTP API 的状态与当前已支持设置写入。
-- 主要内容：`mains-aegis-devd` 自动发现面、浏览器支持状态、串口授权/占用错误、LAN 新增连接目标、探活结果、设备身份摘要、网络状态、API 版本兼容提示、已保存设备列表。
-- 接口对接：USB CDC 使用 Web Serial JSONL frame；devd 默认通过 IPC 由 `mains-aegis` CLI 访问；Web 需要 HTTP 时显式启动 `mains-aegis-devd serve-http`，默认本地地址为 `http://127.0.0.1:30080`。默认 hosted 模式把嵌入式 Web App 与 `/api` 绑定到同一 same-origin HTTP 服务，并用进程内 app-session secret 保护 API；`--allow-dev-cors` 仅用于 loopback Vite 开发源的 API-only 模式。hosted / self-hosted devd UI 的 Connect 页只保留 devd discovery：USB 设备通过 devd 的 Web lease / usb-http bridge 接入，LAN 设备由 devd 列出后仍直连硬件本体 HTTP API；独立浏览器 / Vite 开发场景才保留 Web Serial 与手动 LAN fallback 面板。devd 会持久化绑定、别名和 artifact selection；连接、租约、monitor 与日志仍是运行态，daemon 重启后必须重新连接。LAN 入口只连接硬件本体的 HTTP/SSE 端点，不接受 devd HTTP service 作为 LAN 目标。
+- 主要内容：`mains-aegis-devd` 自动发现面、浏览器支持状态、串口授权/占用错误、LAN 新增连接目标、手动 IPv4 CIDR 扫描、探活结果、设备身份摘要、网络状态、API 版本兼容提示、已保存设备列表。
+- 接口对接：USB CDC 使用 Web Serial JSONL frame；devd 默认通过 IPC 由 `mains-aegis` CLI 访问；Web 需要 HTTP 时显式启动 `mains-aegis-devd serve-http`，默认本地地址为 `http://127.0.0.1:30080`。默认 hosted 模式把嵌入式 Web App 与 `/api` 绑定到同一 same-origin HTTP 服务，并用进程内 app-session secret 保护 API；`--allow-dev-cors` 仅用于 loopback Vite 开发源的 API-only 模式。hosted / self-hosted devd UI 的 Connect 页只保留 devd discovery：USB 设备通过 devd 的 Web lease / usb-http bridge 接入，LAN 设备由 devd 列出后仍直连硬件本体 HTTP API；独立浏览器 / Vite 开发场景才保留 Web Serial 与手动 LAN fallback 面板。GitHub Pages/public-static 构建明确收口为 `public-static browser-direct LAN`：默认不假设 same-origin devd，不轮询 `/api/v1/devices`，而是把手动 LAN 目标与手动 CIDR 扫描作为主入口；只有 hosted devd 或显式配置的 devd URL 才显示 devd discovery 语义。Pages 直连能力只正式支持 `Chrome 142+` 且 secure context；其他浏览器只显示迁移指引并禁用连接/扫描动作。devd 会持久化绑定、别名和 artifact selection；连接、租约、monitor 与日志仍是运行态，daemon 重启后必须重新连接。LAN 入口只连接硬件本体的 HTTP/SSE 端点，不接受 devd HTTP service 作为 LAN 目标。
 - owner-facing 真机表述必须明确区分 real 与 mock：`mock:` 数据源、`mock_hosted=1`、`mock_devd_target=...`、`stored_target_preset=...` 只属于纯前端 demo / 视觉证据，不得写成真机连接步骤，也不得作为 owner-facing 实机 handoff URL。
 - 交互语义：新发现但未纳管的 USB 候选显示 `Bind USB`，新发现的 LAN 候选显示 `Add WiFi`；只有已经落入浏览器设备清单的设备才显示 `Open` 和 `Use WiFi` / `Use USB` 这类切换动作。Connect 页不把 devd discovery 候选直接表述成通用 `Connect` 按钮。
 - 空状态：提示用户连接 USB CDC 或输入 `mains-aegis-<short_id>.local` / 局域网 IP。
@@ -202,7 +202,7 @@ web/
 - 应用目录：`web/`
 - 技术栈：Vite + React + TypeScript + Bun。
 - 默认数据：内置 6 台 mock UPS，覆盖 standby、assist、backup、warning、critical、offline。
-- GitHub Pages：根站点发布 Web App，文档站发布在同一 Pages artifact 的 `/docs/` 子路径；App 使用 History API path router，并通过 `PAGES_BASE` / `VITE_BASE` 支持仓库子路径和未来自定义域名根路径。
+- GitHub Pages：根站点发布 Web App，文档站发布在同一 Pages artifact 的 `/docs/` 子路径；App 使用 History API path router，并通过 `PAGES_BASE` / `VITE_BASE` 支持仓库子路径和未来自定义域名根路径。Pages 构建会显式写入 `public_static` 运行模式标记，Connect 页默认展示 browser-direct LAN 入口，并只在用户点击后执行 IPv4 CIDR 扫描；扫描结果只保留在当前页面状态，只有显式 `Add WiFi` / `Open` 后才会落入浏览器持久化设备列表。
 - 全局导航：App Layout 侧栏固定提供 `Docs` 入口，打开 `${BASE_URL}docs/`，保持当前运维台页面与连接状态不被替换。
 - 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、LAN 探活、settings 读取、SSE 订阅与轮询兜底、当前 Web Serial USB CDC transport，以及 devd 本地 control transport；同一 `identity.device_id` 的 LAN 与 USB 来源合并为一条设备记录。devd 发现出的 LAN 设备会直接落为 HTTP target，USB 设备才保留 devd lease / serial 上下文。
 - Connect 发现动作使用项目既有小号主次按钮体系；未纳管设备使用 `Bind USB` / `Add WiFi`，已纳管设备使用 `Open` 与 `Use ...`，不引入独立的 split-button 控件族。
