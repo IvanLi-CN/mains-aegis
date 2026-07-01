@@ -11,9 +11,10 @@
 - `<title>`：短标题 slug（kebab-case）
 - 主文档：`docs/specs/<id>-<title>/SPEC.md`
 
-## 状态（Status）说明
+## Index 状态（Status）说明
 
-仅允许使用：`active`、`superseded(#<id>)`、`archived`。
+Index 表格的 `Status` 仅允许使用：`active`、`superseded(#<id>)`、`archived`。
+各 `SPEC.md` 文件头仍兼容旧状态词，用于保留历史实现进度与迁移上下文。
 
 ## Index（固定表格）
 
