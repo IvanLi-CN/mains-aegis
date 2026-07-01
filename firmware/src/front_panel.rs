@@ -21,6 +21,7 @@ use esp_firmware::display_pipeline::{
 use esp_firmware::display_power::{
     DisplayPowerCommand, DisplayPowerController, DisplayPowerMode, DisplayPowerPolicy,
 };
+use esp_firmware::net_types::FrontPanelRuntimeSnapshot;
 use esp_hal::dma::{DmaChannelFor, DmaRxBuf, DmaTxBuf};
 use esp_hal::gpio::{DriveMode, Flex, Input, OutputConfig, Pull};
 use esp_hal::peripherals::PSRAM;
@@ -90,6 +91,8 @@ const DASHBOARD_STATUS_REDRAW_INTERVAL: Duration = Duration::from_millis(1000);
 const CENTER_LONG_PRESS_THRESHOLD: Duration = Duration::from_millis(800);
 const BOOT_SPLASH_HOLD: Duration = Duration::from_millis(900);
 const DASHBOARD_MENU_ANIMATION_STEPS: u8 = 10;
+const DISPLAY_REINIT_RETRY_INTERVAL: Duration = Duration::from_millis(1500);
+const UI_LIVENESS_LOG_INTERVAL: Duration = Duration::from_millis(1000);
 const PANEL_INIT_SPI_FREQ_MHZ: u32 = 10;
 const PANEL_RUNTIME_SPI_FREQ_MHZ: u32 = if cfg!(feature = "display-spi-20mhz") {
     20
@@ -134,6 +137,31 @@ pub enum InitState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UiLifecycleEvent {
+    BootInit,
+    AutoRetry,
+    CenterLongPressRestore,
+    SelfCheckSnapshot,
+    EnterDashboard,
+    WakeRedraw,
+    RuntimeTick,
+}
+
+impl UiLifecycleEvent {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::BootInit => "boot_init",
+            Self::AutoRetry => "auto_retry",
+            Self::CenterLongPressRestore => "center_long_press_restore",
+            Self::SelfCheckSnapshot => "self_check_snapshot",
+            Self::EnterDashboard => "enter_dashboard",
+            Self::WakeRedraw => "wake_redraw",
+            Self::RuntimeTick => "runtime_tick",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InputSnapshot {
     up: bool,
     down: bool,
@@ -157,6 +185,41 @@ impl InputSnapshot {
             touch_point: None,
             touch_gesture_raw: 0,
         }
+    }
+}
+
+impl InputSnapshot {
+    fn log_summary(self, reason: &'static str) {
+        let (touch_x, touch_y) = self.touch_point.unwrap_or((0, 0));
+        let touch_present = self.touch_point.is_some();
+        defmt::info!(
+            "ui: input_state reason={} up={=bool} down={=bool} left={=bool} right={=bool} center={=bool} touch={=bool} touch_present={=bool} touch_x={=u16} touch_y={=u16} gesture=0x{=u8:02x}",
+            reason,
+            self.up,
+            self.down,
+            self.left,
+            self.right,
+            self.center,
+            self.touch,
+            touch_present,
+            touch_x,
+            touch_y,
+            self.touch_gesture_raw
+        );
+        esp_println::println!(
+            "ui: input_state reason={} up={} down={} left={} right={} center={} touch={} touch_present={} touch_x={} touch_y={} gesture=0x{:02x}",
+            reason,
+            self.up,
+            self.down,
+            self.left,
+            self.right,
+            self.center,
+            self.touch,
+            touch_present,
+            touch_x,
+            touch_y,
+            self.touch_gesture_raw
+        );
     }
 }
 
@@ -322,8 +385,11 @@ where
     tca_output: u8,
 
     state: InitState,
+    next_reinit_retry_at: Instant,
+    next_liveness_log_at: Instant,
     next_frame_deadline: Instant,
     last_inputs: Option<InputSnapshot>,
+    last_logged_input_snapshot: Option<InputSnapshot>,
     center_press_started_at: Option<Instant>,
     center_long_press_fired: bool,
     last_test_touch_point: Option<(u16, u16)>,
@@ -354,6 +420,25 @@ impl<I2C> FrontPanel<I2C>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
+    fn runtime_snapshot(&self) -> FrontPanelRuntimeSnapshot {
+        FrontPanelRuntimeSnapshot {
+            init_state: init_state_name(self.state),
+            display_power_mode: display_power_mode_name(self.display_power.mode()),
+            ui_variant: variant_name(self.ui_variant),
+            frame_no: self.frame_no,
+            ready: self.state == InitState::Ready,
+            needs_redraw: self.needs_redraw,
+            attention_hold: self.attention_hold,
+        }
+    }
+
+    fn publish_runtime_snapshot(&self) {
+        #[cfg(feature = "net_http")]
+        {
+            esp_firmware::net::set_front_panel_runtime(self.runtime_snapshot());
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         i2c: I2C,
@@ -404,8 +489,11 @@ where
             dirty_rows: DirtyRows::new(),
             tca_output: 0,
             state: InitState::Disabled,
+            next_reinit_retry_at: Instant::now(),
+            next_liveness_log_at: Instant::now(),
             next_frame_deadline: Instant::now(),
             last_inputs: None,
+            last_logged_input_snapshot: None,
             center_press_started_at: None,
             center_long_press_fired: false,
             last_test_touch_point: None,
@@ -454,7 +542,7 @@ where
             }
         };
 
-        if let Err(e) = self.render_inputs(snapshot) {
+        if let Err(e) = self.render_with_log(snapshot, UiLifecycleEvent::BootInit) {
             defmt::error!("ui: render input state failed err={=?}", e);
         }
 
@@ -540,8 +628,10 @@ where
         }
         self.set_backlight(true);
         self.state = InitState::Ready;
+        self.next_reinit_retry_at = Instant::now() + DISPLAY_REINIT_RETRY_INTERVAL;
         self.display_power.reset(self.display_power_now_ms());
         self.next_frame_deadline = Instant::now();
+        self.publish_runtime_snapshot();
         Ok(())
     }
 
@@ -566,6 +656,78 @@ where
         let _ = self.tca_set_tp_reset_released(false);
         self.set_backlight(false);
         self.state = InitState::Disabled;
+        self.next_reinit_retry_at = Instant::now() + DISPLAY_REINIT_RETRY_INTERVAL;
+        self.publish_runtime_snapshot();
+        self.log_ui_state("fail_safe_enter");
+    }
+
+    fn log_ui_state(&self, reason: &'static str) {
+        self.publish_runtime_snapshot();
+        defmt::info!(
+            "ui: loop_state reason={} state={} frame_no={=u32} variant={} display_power={} needs_redraw={=bool} attention_hold={=bool}",
+            reason,
+            init_state_name(self.state),
+            self.frame_no,
+            variant_name(self.ui_variant),
+            display_power_mode_name(self.display_power.mode()),
+            self.needs_redraw,
+            self.attention_hold
+        );
+        esp_println::println!(
+            "ui: loop_state reason={} state={} frame_no={} variant={} display_power={} needs_redraw={} attention_hold={}",
+            reason,
+            init_state_name(self.state),
+            self.frame_no,
+            variant_name(self.ui_variant),
+            display_power_mode_name(self.display_power.mode()),
+            self.needs_redraw,
+            self.attention_hold
+        );
+    }
+
+    fn maybe_log_ui_liveness(&mut self, now: Instant, reason: &'static str) {
+        if now < self.next_liveness_log_at {
+            return;
+        }
+        self.next_liveness_log_at = now + UI_LIVENESS_LOG_INTERVAL;
+        self.log_ui_state(reason);
+    }
+
+    fn render_with_log(
+        &mut self,
+        snapshot: InputSnapshot,
+        event: UiLifecycleEvent,
+    ) -> Result<(), esp_hal::spi::Error> {
+        let result = self.render_inputs(snapshot);
+        match &result {
+            Ok(()) => {
+                defmt::info!(
+                    "ui: render result=ok event={} frame_no={=u32}",
+                    event.label(),
+                    self.frame_no
+                );
+                esp_println::println!(
+                    "ui: render result=ok event={} frame_no={}",
+                    event.label(),
+                    self.frame_no
+                );
+            }
+            Err(e) => {
+                defmt::error!(
+                    "ui: render result=err event={} frame_no={=u32} err={=?}",
+                    event.label(),
+                    self.frame_no,
+                    e
+                );
+                esp_println::println!(
+                    "ui: render result=err event={} frame_no={} err={:?}",
+                    event.label(),
+                    self.frame_no,
+                    e
+                );
+            }
+        }
+        result
     }
 
     fn maybe_trigger_center_long_press(&mut self, snapshot: InputSnapshot) -> bool {
@@ -601,7 +763,7 @@ where
         }
 
         defmt::info!("ui: display_reinit trigger=center_long_press stage=redraw_restore");
-        if let Err(e) = self.render_inputs(snapshot) {
+        if let Err(e) = self.render_with_log(snapshot, UiLifecycleEvent::CenterLongPressRestore) {
             defmt::error!(
                 "ui: display_reinit trigger=center_long_press stage=redraw_restore result=err err={=?}",
                 e
@@ -886,7 +1048,7 @@ where
             return;
         }
         let current_inputs = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
-        if let Err(e) = self.render_inputs(current_inputs) {
+        if let Err(e) = self.render_with_log(current_inputs, UiLifecycleEvent::SelfCheckSnapshot) {
             defmt::error!("ui: render self-check snapshot failed err={=?}", e);
         } else {
             self.last_inputs = Some(current_inputs);
@@ -1078,7 +1240,7 @@ where
         }
 
         let current_inputs = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
-        if let Err(e) = self.render_inputs(current_inputs) {
+        if let Err(e) = self.render_with_log(current_inputs, UiLifecycleEvent::EnterDashboard) {
             defmt::error!("ui: render dashboard failed err={=?}", e);
             self.needs_redraw = true;
         } else {
@@ -1118,11 +1280,39 @@ where
     }
 
     pub fn tick(&mut self) -> Option<UiAction> {
+        let now = Instant::now();
+        self.maybe_log_ui_liveness(now, "tick_entry");
         if self.state != InitState::Ready {
+            if now >= self.next_reinit_retry_at {
+                defmt::warn!("ui: display_reinit auto_retry");
+                self.next_reinit_retry_at = now + DISPLAY_REINIT_RETRY_INTERVAL;
+                if self.reinitialize_display_path("auto_retry").is_ok() {
+                    let snapshot = match self.read_inputs() {
+                        Ok(snapshot) => {
+                            self.last_inputs = Some(snapshot);
+                            snapshot
+                        }
+                        Err(e) => {
+                            defmt::error!(
+                                "ui: read input state failed after auto_retry err={}",
+                                i2c_error_kind(e)
+                            );
+                            let idle = InputSnapshot::idle();
+                            self.last_inputs = Some(idle);
+                            idle
+                        }
+                    };
+                    if let Err(e) = self.render_with_log(snapshot, UiLifecycleEvent::AutoRetry) {
+                        defmt::error!("ui: render after auto_retry failed err={=?}", e);
+                        self.needs_redraw = true;
+                    } else {
+                        self.needs_redraw = false;
+                    }
+                }
+            }
             return None;
         }
 
-        let now = Instant::now();
         if now < self.next_frame_deadline {
             return None;
         }
@@ -1152,7 +1342,8 @@ where
                     && previous_power_mode != DisplayPowerMode::Awake
                 {
                     if self.display_accepts_scene_updates() {
-                        if let Err(e) = self.render_inputs(snapshot) {
+                        if let Err(e) = self.render_with_log(snapshot, UiLifecycleEvent::WakeRedraw)
+                        {
                             defmt::error!("ui: wake redraw failed err={=?}", e);
                             self.needs_redraw = true;
                         } else {
@@ -1208,11 +1399,12 @@ where
                     || dashboard_ambient_frame_due
                     || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed);
                 if should_render {
-                    if let Err(e) = self.render_inputs(snapshot) {
+                    if let Err(e) = self.render_with_log(snapshot, UiLifecycleEvent::RuntimeTick) {
                         defmt::error!("ui: update input state failed err={=?}", e);
                         self.needs_redraw = true;
                     } else {
                         self.needs_redraw = false;
+                        self.publish_runtime_snapshot();
                         if self.ui_variant == DASHBOARD_VARIANT && self.dashboard_status_dirty {
                             self.dashboard_status_dirty = false;
                             self.next_dashboard_status_redraw_deadline =
@@ -1665,7 +1857,7 @@ where
             self.touch_irq_stuck_hint_logged = false;
         }
 
-        Ok(InputSnapshot {
+        let snapshot = InputSnapshot {
             up,
             down,
             left,
@@ -1674,7 +1866,12 @@ where
             touch,
             touch_point,
             touch_gesture_raw: touch_sample.gesture_raw,
-        })
+        };
+        if self.last_logged_input_snapshot != Some(snapshot) {
+            snapshot.log_summary("changed");
+            self.last_logged_input_snapshot = Some(snapshot);
+        }
+        Ok(snapshot)
     }
 
     fn read_touch_sample(&mut self) -> TouchSample {
@@ -2819,6 +3016,22 @@ fn bms_activation_state_name(state: BmsActivationState) -> &'static str {
             BmsResultKind::Abnormal => "result_abnormal",
             BmsResultKind::NotDetected => "result_not_detected",
         },
+    }
+}
+
+fn init_state_name(state: InitState) -> &'static str {
+    match state {
+        InitState::Disabled => "disabled",
+        InitState::Ready => "ready",
+    }
+}
+
+fn display_power_mode_name(mode: DisplayPowerMode) -> &'static str {
+    match mode {
+        DisplayPowerMode::Awake => "awake",
+        DisplayPowerMode::Dimmed => "dimmed",
+        DisplayPowerMode::Sleeping => "sleeping",
+        DisplayPowerMode::BacklightOff => "backlight_off",
     }
 }
 

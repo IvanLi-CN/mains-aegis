@@ -18,6 +18,18 @@ pub fn current_network_summary() -> NetworkUiSummary {
     }
 }
 
+fn current_front_panel_runtime_summary() -> esp_firmware::net_types::FrontPanelRuntimeSnapshot {
+    #[cfg(feature = "net_http")]
+    {
+        return esp_firmware::net::current_front_panel_runtime();
+    }
+
+    #[cfg(not(feature = "net_http"))]
+    {
+        esp_firmware::net_types::FrontPanelRuntimeSnapshot::unavailable()
+    }
+}
+
 pub fn current_wifi_snapshot() -> WifiSnapshot {
     #[cfg(feature = "net_http")]
     {
@@ -118,6 +130,7 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
         tmp_a_c: snapshot.tmp_a_c,
         tmp_b_state: comm_state_slug(snapshot.tmp_b),
         tmp_b_c: snapshot.tmp_b_c,
+        front_panel: current_front_panel_runtime_summary(),
         network: current_network_summary(),
     }
 }

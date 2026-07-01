@@ -389,6 +389,24 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     json_field_opt_i16(buf, "tmp_a_c", status.tmp_a_c, true);
     json_field_str(buf, "tmp_b_state", status.tmp_b_state, true);
     json_field_opt_i16(buf, "tmp_b_c", status.tmp_b_c, false);
+    let _ = buf.push_str("},\"front_panel\":{");
+    json_field_str(buf, "init_state", status.front_panel.init_state, true);
+    json_field_str(
+        buf,
+        "display_power_mode",
+        status.front_panel.display_power_mode,
+        true,
+    );
+    json_field_str(buf, "ui_variant", status.front_panel.ui_variant, true);
+    json_field_u32(buf, "frame_no", status.front_panel.frame_no, true);
+    json_field_bool(buf, "ready", status.front_panel.ready, true);
+    json_field_bool(buf, "needs_redraw", status.front_panel.needs_redraw, true);
+    json_field_bool(
+        buf,
+        "attention_hold",
+        status.front_panel.attention_hold,
+        false,
+    );
     let _ = buf.push_str("},\"network\":");
     write_network_summary_object(
         buf,
@@ -480,6 +498,24 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
         buf,
         "discharge_fet_on",
         status.battery_discharge_fet_on,
+        false,
+    );
+    let _ = buf.push_str("},\"front_panel\":{");
+    json_field_str(buf, "init_state", status.front_panel.init_state, true);
+    json_field_str(
+        buf,
+        "display_power_mode",
+        status.front_panel.display_power_mode,
+        true,
+    );
+    json_field_str(buf, "ui_variant", status.front_panel.ui_variant, true);
+    json_field_u32(buf, "frame_no", status.front_panel.frame_no, true);
+    json_field_bool(buf, "ready", status.front_panel.ready, true);
+    json_field_bool(buf, "needs_redraw", status.front_panel.needs_redraw, true);
+    json_field_bool(
+        buf,
+        "attention_hold",
+        status.front_panel.attention_hold,
         false,
     );
     let _ = buf.push_str("}}");
@@ -919,6 +955,15 @@ fn json_field_bool<const N: usize>(
     if trailing_comma {
         let _ = buf.push(',');
     }
+}
+
+fn json_field_u32<const N: usize>(
+    buf: &mut String<N>,
+    key: &str,
+    value: u32,
+    trailing_comma: bool,
+) {
+    json_field_opt_num(buf, key, Some(value as i64), trailing_comma);
 }
 
 fn json_field_opt_u8<const N: usize>(
