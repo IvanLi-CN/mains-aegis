@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>B. Warm Tap 交互操作音预览</title>
+    <style>
+      :root {
+        --bg: #f7f9fb;
+        --panel: #ffffff;
+        --ink: #17202a;
+        --muted: #5c6977;
+        --line: #d9e1ea;
+        --accent: #0b6f78;
+        --accent-soft: #e6f5f6;
+        --usb: #8a4f0f;
+        --touch: #236b42;
+        --danger: #a73545;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Noto Sans SC", "Source Han Sans SC", "PingFang SC", system-ui, sans-serif;
+        color: var(--ink);
+        background: linear-gradient(180deg, #eef5f8 0, var(--bg) 280px);
+      }
+      main {
+        width: min(1120px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0 42px;
+        display: grid;
+        gap: 16px;
+      }
+      header {
+        display: grid;
+        gap: 8px;
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(1.45rem, 3vw, 2.15rem);
+        line-height: 1.15;
+        letter-spacing: 0;
+      }
+      p { margin: 0; color: var(--muted); line-height: 1.55; }
+      .toolbar, .set {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: 0 10px 24px rgba(31, 45, 61, 0.08);
+      }
+      .toolbar {
+        padding: 12px;
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+      }
+      .volume {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+      .volume input { width: min(340px, 48vw); }
+      .value {
+        min-width: 3.2em;
+        color: var(--accent);
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+      }
+      button, a {
+        min-height: 36px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 7px 11px;
+        color: var(--ink);
+        background: #fff;
+        font: inherit;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      button:hover, a:hover { filter: brightness(0.98); }
+      button:active { transform: translateY(1px); }
+      .stop-all {
+        color: #fff;
+        background: var(--danger);
+        border-color: transparent;
+      }
+      .sets {
+        display: grid;
+        gap: 14px;
+      }
+      .set {
+        padding: 14px;
+        display: grid;
+        gap: 14px;
+      }
+      .set-head {
+        display: grid;
+        gap: 7px;
+      }
+      .set-head h2 {
+        margin: 0;
+        font-size: 1.18rem;
+        letter-spacing: 0;
+      }
+      .recommendation {
+        color: var(--accent);
+        font-weight: 650;
+      }
+      .tones {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      }
+      .tone {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        display: grid;
+        gap: 10px;
+        background: #fff;
+      }
+      .tone.playing {
+        outline: 3px solid rgba(11, 111, 120, 0.15);
+        border-color: var(--accent);
+      }
+      .tone-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .tone-title h3 {
+        margin: 0;
+        font-size: 1rem;
+      }
+      .badge {
+        border-radius: 999px;
+        padding: 4px 8px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .badge.touch { color: var(--touch); background: #eaf5ee; }
+      .badge.usb { color: var(--usb); background: #fff0dd; }
+      .meta {
+        color: var(--muted);
+        font-size: 0.9rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .play { background: var(--accent-soft); border-color: #b9dde1; }
+      .download { color: var(--accent); }
+      @media (max-width: 660px) {
+        main { width: min(100vw - 20px, 1120px); padding-top: 18px; }
+        .toolbar { grid-template-columns: 1fr; }
+        .volume { display: grid; }
+        .volume input { width: 100%; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>B. Warm Tap 交互操作音预览</h1>
+        <p>已选定的 touch/button 共用操作音与明显不同的 USB-C 插入音。预览 WAV 为 8kHz / mono / PCM16LE，固件资产同步生成为 44.1kHz / mono / PCM16LE。</p>
+      </header>
+
+      <section class="toolbar" aria-label="试听控制">
+        <label class="volume">
+          <span>预览音量</span>
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="0.75" />
+          <span id="volume-value" class="value">0.75</span>
+        </label>
+        <button id="stop-all" class="stop-all">停止全部</button>
+      </section>
+
+      <section id="sets" class="sets"></section>
+    </main>
+
+    <script type="application/json" id="manifest-data">{
+  "title": "Selected interaction feedback tones",
+  "selected_set_id": "set_b_warm_tap",
+  "sample_rate_hz": 8000,
+  "firmware_sample_rate_hz": 44100,
+  "format": "WAV PCM16LE mono",
+  "sets": [
+    {
+      "id": "set_b_warm_tap",
+      "title": "B. Warm Tap",
+      "character": "Softer rounded touch with a warmer mid tone. USB-C is a confident low-to-high connect chime.",
+      "recommendation": "Best if the enclosure/speaker makes high tones too sharp.",
+      "touch": {
+        "id": "set_b_touch",
+        "title": "Touch / Button",
+        "intent": "valid touch, valid key",
+        "waveform": "sine",
+        "volume": 0.3,
+        "duration_ms": 62,
+        "wav": "./audio/set_b_touch.wav",
+        "mid": "./audio/set_b_touch.mid"
+      },
+      "usb_c": {
+        "id": "set_b_usb_c_insert",
+        "title": "USB-C Insert",
+        "intent": "USB-C inserted",
+        "waveform": "sine",
+        "volume": 0.46,
+        "duration_ms": 254,
+        "wav": "./audio/set_b_usb_c_insert.wav",
+        "mid": "./audio/set_b_usb_c_insert.mid"
+      }
+    }
+  ]
+}</script>
+    <script>
+      const manifest = JSON.parse(document.getElementById("manifest-data").textContent);
+      const setsEl = document.getElementById("sets");
+      const volumeEl = document.getElementById("volume");
+      const volumeValueEl = document.getElementById("volume-value");
+      const stopAllEl = document.getElementById("stop-all");
+      const players = new Map();
+
+      function stopAll() {
+        for (const audio of players.values()) {
+          audio.pause();
+          audio.currentTime = 0;
+        }
+        document.querySelectorAll(".tone.playing").forEach((el) => el.classList.remove("playing"));
+      }
+
+      function playerFor(tone) {
+        if (!players.has(tone.id)) {
+          const audio = new Audio(tone.wav);
+          audio.preload = "auto";
+          audio.volume = Number(volumeEl.value);
+          audio.addEventListener("ended", () => {
+            document.querySelector(`[data-tone-id="${tone.id}"]`)?.classList.remove("playing");
+          });
+          players.set(tone.id, audio);
+        }
+        return players.get(tone.id);
+      }
+
+      function renderTone(tone) {
+        const isUsb = tone.intent.includes("USB-C");
+        const article = document.createElement("article");
+        article.className = "tone";
+        article.dataset.toneId = tone.id;
+        article.innerHTML = `
+          <div class="tone-title">
+            <h3>${tone.title}</h3>
+            <span class="badge ${isUsb ? "usb" : "touch"}">${isUsb ? "USB-C" : "touch/key"}</span>
+          </div>
+          <p>${tone.intent}</p>
+          <div class="meta">${tone.waveform} · ${tone.duration_ms} ms · volume ${tone.volume}</div>
+          <div class="actions">
+            <button class="play" type="button">播放</button>
+            <button class="stop" type="button">停止</button>
+            <a class="download" href="${tone.wav}" target="_blank" rel="noreferrer">WAV</a>
+            <a class="download" href="${tone.mid}" target="_blank" rel="noreferrer">MIDI</a>
+          </div>
+        `;
+        article.querySelector(".play").addEventListener("click", async () => {
+          stopAll();
+          const audio = playerFor(tone);
+          audio.volume = Number(volumeEl.value);
+          article.classList.add("playing");
+          await audio.play();
+        });
+        article.querySelector(".stop").addEventListener("click", () => {
+          const audio = playerFor(tone);
+          audio.pause();
+          audio.currentTime = 0;
+          article.classList.remove("playing");
+        });
+        return article;
+      }
+
+      for (const set of manifest.sets) {
+        const section = document.createElement("article");
+        section.className = "set";
+        const head = document.createElement("div");
+        head.className = "set-head";
+        head.innerHTML = `
+          <h2>${set.title}</h2>
+          <p>${set.character}</p>
+          <p class="recommendation">${set.recommendation}</p>
+        `;
+        const tones = document.createElement("div");
+        tones.className = "tones";
+        tones.append(renderTone(set.touch), renderTone(set.usb_c));
+        section.append(head, tones);
+        setsEl.append(section);
+      }
+
+      volumeEl.addEventListener("input", () => {
+        const value = Number(volumeEl.value);
+        volumeValueEl.textContent = value.toFixed(2);
+        for (const audio of players.values()) audio.volume = value;
+      });
+      stopAllEl.addEventListener("click", stopAll);
+    </script>
+  </body>
+</html>

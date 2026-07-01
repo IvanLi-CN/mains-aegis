@@ -37,7 +37,7 @@ Index 表格的 `Status` 仅允许使用：`active`、`superseded(#<id>)`、`arc
 | 7n4qd | MCU self-check live panel (resident Variant C) | superseded(#g2kte) | `7n4qd-mcu-self-check-live-panel/SPEC.md` | 2026-03-15 | 开机自检实时化能力保留，但默认 steady-state 页面已由 #g2kte 改为真实 Dashboard |
 | 958aj | Standalone display diagnostic firmware | superseded(#uwt77) | `958aj-standalone-display-diag-firmware/SPEC.md` | 2026-03-05 | 已被 feature 驱动 `test-fw` 方案替代 |
 | uwt77 | Test firmware navigation + audio priority | archived | `uwt77-test-fw-audio-navigation/SPEC.md` | 2026-03-05 | `test-fw` 已替换 display-diag；功能导航与音频优先级协调已验收 |
-| h43mk | Main firmware runtime audio cues | archived | `h43mk-main-firmware-runtime-audio-cues/SPEC.md` | 2026-06-08 | 主固件已把 dashboard/audio 的 `ACTION / SYSTEM` 分组 gain 与独立 preview tone 接入运行时；runtime DMA underrun 收敛策略保持不变 |
+| h43mk | Main firmware runtime audio cues | archived | `h43mk-main-firmware-runtime-audio-cues/SPEC.md` | 2026-07-01 | 主固件已接入 B. Warm Tap 有效触摸/按键与 USB-C 插入 `ACTION` route 操作音；既有 15 组 `SYSTEM` cue 语义与 runtime DMA underrun 收敛策略保持不变 |
 | hg3dw | Front panel visual language systematization | archived | `hg3dw-front-panel-visual-language/SPEC.md` | 2026-03-02 | 建立 Token/组件契约/视觉回归清单，补充 bitmap 字体字高白名单与预览图 |
 | mecb8 | Status/warning/error speaker cues preview assets | archived | `mecb8-audio-cues-preview/SPEC.md` | 2026-03-05 | 15 组提示音试听资产（score + mid + wav）与增强预览页 |
 | xy6cz | Front panel refresh pipeline | active | `xy6cz-front-panel-refresh-pipeline/SPEC.md` | 2026-03-15 | PR #41 已创建；已完成 PSRAM 双缓冲、dirty-band framebuffer 与 SPI DMA 主路径，等待 review-loop / 40MHz 联调结论回填 |

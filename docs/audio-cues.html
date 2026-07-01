@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>音效对照与预览</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f9fb;
+        --panel: #fff;
+        --ink: #17202a;
+        --muted: #5c6977;
+        --line: #d9e1ea;
+        --accent: #0b6f78;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Noto Sans SC", "PingFang SC", system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+      }
+      main {
+        width: min(1180px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0 44px;
+      }
+      h1, h2 { letter-spacing: 0; }
+      h1 { margin: 0 0 8px; font-size: 2rem; }
+      h2 { margin: 28px 0 10px; font-size: 1.35rem; }
+      p, li { color: var(--muted); line-height: 1.55; }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      th, td {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: middle;
+      }
+      th { color: var(--accent); background: #e6f5f6; }
+      tr:last-child td { border-bottom: 0; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      audio { width: min(280px, 100%); height: 36px; }
+      .note {
+        border-left: 4px solid var(--accent);
+        background: #fff;
+        padding: 10px 12px;
+        border-radius: 4px;
+      }
+      @media (max-width: 760px) {
+        table, thead, tbody, tr, th, td { display: block; }
+        thead { display: none; }
+        tr { border-bottom: 1px solid var(--line); }
+        td { border-bottom: 0; }
+        td::before {
+          content: attr(data-label);
+          display: block;
+          color: var(--accent);
+          font-weight: 700;
+          margin-bottom: 4px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>音效对照与预览</h1>
+      <p>集中预览本次确认的 2 个交互操作音，以及既有 15 个状态 / 告警 / 错误音。</p>
+
+      <h2>交互操作音</h2>
+      <p class="note">本轮选定 <strong>B. Warm Tap</strong>。有效触摸 / 有效按键只在实际 UI 或业务动作发生时发声；USB-C 插入只在 attach 上升沿发声。</p>
+      <table>
+        <thead><tr><th>ID</th><th>用途</th><th>路由</th><th>预览</th></tr></thead>
+        <tbody>
+          <tr><td data-label="ID"><code>interaction_touch</code></td><td data-label="用途">有效触摸 / 有效按键</td><td data-label="路由"><code>ACTION</code></td><td data-label="预览"><audio controls src="./audio-cues-preview/interaction-feedback/audio/set_b_touch.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>usb_c_insert</code></td><td data-label="用途">USB-C 插入</td><td data-label="路由"><code>ACTION</code></td><td data-label="预览"><audio controls src="./audio-cues-preview/interaction-feedback/audio/set_b_usb_c_insert.wav"></audio></td></tr>
+        </tbody>
+      </table>
+
+      <h2>状态 / 告警 / 错误音</h2>
+      <p>既有 <code>speaker_chime_v1</code> 运行时提示音保持原语义：状态音单次播放，告警音按 2000ms 间隔循环，错误音连续循环。</p>
+      <table>
+        <thead><tr><th>ID</th><th>分类</th><th>触发语义</th><th>预览</th></tr></thead>
+        <tbody>
+          <tr><td data-label="ID"><code>boot_startup</code></td><td data-label="分类">status</td><td data-label="触发语义">系统上电启动成功后触发</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/boot_startup.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>mains_present_dc</code></td><td data-label="分类">status</td><td data-label="触发语义">检测到 DC 桶输入恢复时触发</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/mains_present_dc.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>charge_started</code></td><td data-label="分类">status</td><td data-label="触发语义">充电状态从未充电切换为充电中时触发</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/charge_started.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>charge_completed</code></td><td data-label="分类">status</td><td data-label="触发语义">充电状态进入完成态时触发</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/charge_completed.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>shutdown_mode_entered</code></td><td data-label="分类">status</td><td data-label="触发语义">系统进入关闭模式流程时触发；当前主固件保持 dormant</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/shutdown_mode_entered.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>mains_absent_dc</code></td><td data-label="分类">warning</td><td data-label="触发语义">DC 桶输入丢失时触发间隔循环</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/mains_absent_dc.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>high_stress</code></td><td data-label="分类">warning</td><td data-label="触发语义">任一模块温度 / 负载不佳但未触发保护时触发间隔循环</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/high_stress.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>battery_low_no_mains</code></td><td data-label="分类">warning</td><td data-label="触发语义">电池低电且市电不存在时触发间隔循环</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/battery_low_no_mains.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>battery_low_with_mains</code></td><td data-label="分类">warning</td><td data-label="触发语义">电池低电且检测到市电时触发间隔循环</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/battery_low_with_mains.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>shutdown_protection</code></td><td data-label="分类">error</td><td data-label="触发语义">任一模块触发保护动作导致停机时连续循环</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/shutdown_protection.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>io_over_voltage</code></td><td data-label="分类">error</td><td data-label="触发语义">输入或输出检测到过压时连续循环</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/io_over_voltage.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>io_over_current</code></td><td data-label="分类">error</td><td data-label="触发语义">输入或输出检测到过流时连续循环</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/io_over_current.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>io_over_power</code></td><td data-label="分类">error</td><td data-label="触发语义">输入或输出检测到过功率时连续循环；当前主固件保持 dormant</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/io_over_power.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>module_fault</code></td><td data-label="分类">error</td><td data-label="触发语义">部分硬件通信失败期间连续循环</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/module_fault.wav"></audio></td></tr>
+          <tr><td data-label="ID"><code>battery_protection</code></td><td data-label="分类">error</td><td data-label="触发语义">BMS 触发保护时连续循环</td><td data-label="预览"><audio controls src="./audio-cues-preview/audio/battery_protection.wav"></audio></td></tr>
+        </tbody>
+      </table>
+    </main>
+  </body>
+</html>

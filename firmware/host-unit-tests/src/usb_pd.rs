@@ -57,6 +57,13 @@ pub struct UsbPdPowerDemand {
     pub charging_enabled: bool,
 }
 
+pub const fn attach_insert_feedback_edge(
+    previous: UsbPdPortState,
+    current: UsbPdPortState,
+) -> bool {
+    current.attached && !previous.attached
+}
+
 impl UsbPdPowerDemand {
     pub fn required_power_mw(self) -> u32 {
         let charge_power_mw = if self.charging_enabled {
@@ -71,3 +78,52 @@ impl UsbPdPowerDemand {
 
 #[path = "../../src/usb_pd/sink_policy.rs"]
 pub mod sink_policy;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attach_insert_feedback_only_fires_on_attach_rising_edge() {
+        let detached = UsbPdPortState {
+            attached: false,
+            ..UsbPdPortState::default()
+        };
+        let attached_no_contract = UsbPdPortState {
+            attached: true,
+            vbus_present: Some(true),
+            ..UsbPdPortState::default()
+        };
+        let attached_with_contract = UsbPdPortState {
+            attached: true,
+            contract: Some(ActiveContract {
+                kind: ContractKind::Pps,
+                object_position: 3,
+                voltage_mv: 9_000,
+                current_ma: 2_000,
+                source_max_current_ma: 3_000,
+                input_current_limit_ma: Some(2_000),
+                vindpm_mv: Some(8_800),
+            }),
+            ..attached_no_contract
+        };
+
+        assert!(attach_insert_feedback_edge(detached, attached_no_contract));
+        assert!(!attach_insert_feedback_edge(
+            attached_no_contract,
+            attached_with_contract
+        ));
+        assert!(!attach_insert_feedback_edge(
+            attached_with_contract,
+            attached_with_contract
+        ));
+        assert!(!attach_insert_feedback_edge(
+            attached_with_contract,
+            detached
+        ));
+        assert!(attach_insert_feedback_edge(
+            detached,
+            attached_with_contract
+        ));
+    }
+}

@@ -2091,3 +2091,47 @@ fn retry_fail_is_deferred_when_rx_activity_is_present() {
 
     assert!(retry_fail_should_defer_for_rx(snapshot));
 }
+
+#[test]
+fn attach_insert_feedback_only_fires_on_attach_rising_edge() {
+    let detached = UsbPdPortState {
+        attached: false,
+        ..UsbPdPortState::default()
+    };
+    let attached_no_contract = UsbPdPortState {
+        attached: true,
+        vbus_present: Some(true),
+        ..UsbPdPortState::default()
+    };
+    let attached_with_contract = UsbPdPortState {
+        attached: true,
+        contract: Some(ActiveContract {
+            kind: ContractKind::Pps,
+            object_position: 3,
+            voltage_mv: 9_000,
+            current_ma: 2_000,
+            source_max_current_ma: 3_000,
+            input_current_limit_ma: Some(2_000),
+            vindpm_mv: Some(8_800),
+        }),
+        ..attached_no_contract
+    };
+
+    assert!(attach_insert_feedback_edge(detached, attached_no_contract));
+    assert!(!attach_insert_feedback_edge(
+        attached_no_contract,
+        attached_with_contract
+    ));
+    assert!(!attach_insert_feedback_edge(
+        attached_with_contract,
+        attached_with_contract
+    ));
+    assert!(!attach_insert_feedback_edge(
+        attached_with_contract,
+        detached
+    ));
+    assert!(attach_insert_feedback_edge(
+        detached,
+        attached_with_contract
+    ));
+}

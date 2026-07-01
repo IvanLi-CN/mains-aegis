@@ -92,6 +92,13 @@ pub struct UsbPdPowerDemand {
     pub charging_enabled: bool,
 }
 
+pub const fn attach_insert_feedback_edge(
+    previous: UsbPdPortState,
+    current: UsbPdPortState,
+) -> bool {
+    current.attached && !previous.attached
+}
+
 impl UsbPdPowerDemand {
     pub fn required_power_mw(self) -> u32 {
         let charge_power_mw = if self.charging_enabled {

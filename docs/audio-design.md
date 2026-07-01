@@ -123,11 +123,21 @@
 为了快速评审提示音语义与听感，本仓库继续保留独立的“本地试听资产”目录；它是试听/定义源，不由主固件直接读取：
 
 - 试听资产入口：`./audio-cues-preview/README.md`
+- 音效对照页：`./audio-cues.md` / `./audio-cues.html`
 - 清单契约：`./audio-cues-preview/cues.manifest.json`
 - 本地预览页：`./audio-cues-preview/preview.html`
 - 固件打包副本：`../firmware/assets/audio/test-fw-cues/*.wav`
 
 > 说明：`docs/audio-cues-preview/**` 用于“音效定义与试听”，`firmware/assets/audio/test-fw-cues/*.wav` 是当前主固件与 `test-fw` 共用的运行时资产副本。
+
+### 4.5 交互操作音
+
+前面板交互操作音使用 `ACTION` route，与系统状态/告警/错误音的 `SYSTEM` route 分开调节音量。
+
+- 有效触摸 / 有效按键：使用 `B. Warm Tap` 的 `set_b_touch.wav`，固件资产为 `firmware/assets/audio/interaction-cues/interaction_touch.wav`。
+- USB-C 插入：使用同一套候选中的 `set_b_usb_c_insert.wav`，固件资产为 `firmware/assets/audio/interaction-cues/usb_c_insert.wav`。
+- 有效操作定义：输入被成功识别，且触发页面、路由、选择、偏好、弹层状态变化，或产生业务 `UiAction`；空白触摸、未定义 target、重复按键且状态未变化不发声。
+- USB-C 插入定义：USB-PD attach 从未连接切换为已连接时发声；PD 协商刷新、contract 更新或保持态不重复发声。
 
 ---
 
