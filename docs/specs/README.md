@@ -24,7 +24,7 @@ Index 表格的 `Status` 仅允许使用：`active`、`superseded(#<id>)`、`arc
 | rzx5v | Client transport priority matrix | archived | `rzx5v-client-transport-priority/SPEC.md` | 2026-06-08 | 跨 Web / devd / CLI 的通信方案优先级已抽成独立 topic spec；冻结 Web confirmed companion 的 FQDN-first 与 devd/CLI 的 USB-first 规则 |
 | k4vzn | LAN management convergence | archived | `k4vzn-lan-management-convergence/SPEC.md` | 2026-06-03 | 设备本体 settings 读写 API、devd LAN discovery/scan trace/LAN settings 写路径、USB 优先合并、trace+connection 查询面、Web direct LAN/devd LAN settings 与最终视觉证据已收口 |
 | 7jqrq | Mains Aegis CLI / devd alignment | archived | `7jqrq-mains-aegis-cli-devd-alignment/SPEC.md` | 2026-06-03 | 主机工具对齐与 release/install 基线已完成；CLI `device session` 与新查询面迁移改由 #k4vzn 接管 |
-| p8k3d | Mains Aegis Device Daemon | archived | `p8k3d-mains-aegis-devd/SPEC.md` | 2026-06-14 | devd v1 foundation 已完成；`power-diag`、synthetic power event 与 CLI trace follow 已补齐 `TPS output current` 停充根因、`lan_derived` 兼容面与 DC IN `1000mA/96%` 输入限值观测 |
+| p8k3d | Mains Aegis Device Daemon | archived | `p8k3d-mains-aegis-devd/SPEC.md` | 2026-06-14 | devd v1 foundation 已完成；`diag-snapshot`、synthetic power event 与 CLI trace follow 已补齐 `TPS output current` 停充根因、`lan_derived` 兼容面与 DC IN `1000mA/96%` 输入限值观测 |
 | ypfpu | Web management UI | active | `ypfpu-web-management-ui/SPEC.md` | 2026-06-03 | Web 管理端 v1 基线已完成；LAN 管理、settings 与 LAN/USB 收敛改由 #k4vzn 接管 |
 | hn29u | USB-C PD/PPS sink v1 | archived | `hn29u-usb-c-pd-sink-pps/SPEC.md` | 2026-04-23 | hotplug PPS 恢复已稳定闭环：reset 基线约 `1.67s` 回到 `PPS`，主人实测真实热插拔也已恢复到秒级协商成功 |
 | nq7s2 | BQ40 balance baseline + observability | archived | `nq7s2-bq40-balance-baseline-and-observability/SPEC.md` | 2026-04-07 | PR #59 已完成实现/文档/预览收口；实板已确认 DF 对齐，active balancing 触发待后续在完整 charge/relax 条件下复核 |

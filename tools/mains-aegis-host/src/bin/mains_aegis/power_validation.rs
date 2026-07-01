@@ -460,7 +460,7 @@ async fn run_check(args: CheckArgs, context: PowerValidationArgs) -> anyhow::Res
                 Ok(probe) => json!(probe),
                 Err(error) => json!({"ok": false, "error": error.to_string()}),
             },
-            "power_diag": {
+            "diag_snapshot": {
                 "ok": ups_ok,
                 "source": "status_derived",
             },
@@ -2537,7 +2537,7 @@ fn collect_scene_sample(
     let status = unwrap_cli_result(status_frame);
     let diag = unwrap_cli_result(
         collectors
-            .get("ups_power_diag")
+            .get("ups_diag_snapshot")
             .and_then(|c| c.latest_before(unix_ms)),
     );
     let load = unwrap_cli_result(

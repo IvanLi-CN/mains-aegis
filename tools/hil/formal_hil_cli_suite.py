@@ -339,8 +339,8 @@ def read_ups_status_cache(args: argparse.Namespace, *, dry_run: bool) -> dict[st
     return {"cmd": cmd, "result": run_json(cmd, env=ups_env(args))}
 
 
-def read_ups_power_diag_cache(args: argparse.Namespace, *, dry_run: bool) -> dict[str, Any]:
-    cmd = ups_cmd(args, "power-diag", "--cache-only", "--allow-stale-cache", "--include-meta")
+def read_ups_diag_snapshot_cache(args: argparse.Namespace, *, dry_run: bool) -> dict[str, Any]:
+    cmd = ups_cmd(args, "diag-snapshot", "--cache-only", "--allow-stale-cache", "--include-meta")
     if dry_run:
         return {"cmd": cmd, "dry_run": True}
     return {"cmd": cmd, "result": run_json(cmd, env=ups_env(args))}
@@ -691,8 +691,16 @@ def unwrap_ups_sample(row: dict[str, Any] | None) -> dict[str, Any]:
     return {}
 
 
-def unwrap_power_diag(row: dict[str, Any] | None) -> dict[str, Any]:
-    return unwrap_ups_sample(row)
+def unwrap_diag_snapshot(row: dict[str, Any] | None) -> dict[str, Any]:
+    sample = unwrap_ups_sample(row)
+    packages = sample.get("packages")
+    if isinstance(packages, dict):
+        derived = packages.get("derived.power")
+        if isinstance(derived, dict):
+            payload = derived.get("payload")
+            if isinstance(payload, dict):
+                return payload
+    return sample
 
 
 def unwrap_load(row: dict[str, Any] | None) -> dict[str, Any]:
@@ -713,7 +721,7 @@ def collect_sample(args: argparse.Namespace, start: float, phase: str, target_ma
     now = time.time()
     unix_ms = int(now * 1000)
     status = unwrap_ups_sample(collectors["ups_status"].latest_before(unix_ms))
-    power_diag = unwrap_power_diag(collectors["ups_power_diag"].latest_before(unix_ms))
+    diag_snapshot = unwrap_diag_snapshot(collectors["ups_diag_snapshot"].latest_before(unix_ms))
     load = unwrap_load(collectors["load"].latest_before(unix_ms))
     ports = unwrap_isolapurr(collectors["isolapurr"].latest_before(unix_ms))
     port_c = port_c_from_ports(ports)
@@ -721,7 +729,7 @@ def collect_sample(args: argparse.Namespace, start: float, phase: str, target_ma
     output = dict(status.get("output") or {})
     out_a = dict(output.get("out_a") or {})
     out_b = dict(output.get("out_b") or {})
-    diag_input = dict(power_diag.get("input") or {})
+    diag_input = dict(diag_snapshot.get("input") or {})
     load_status = dict(load.get("status") or {})
     load_control = dict(load.get("control") or {})
     telemetry = dict(port_c.get("telemetry") or {})
@@ -857,11 +865,11 @@ def start_collectors(args: argparse.Namespace) -> dict[str, Any]:
             ),
             ROOT.parent.parent,
         ),
-        "ups_power_diag": JsonlCollector(
-            "ups_power_diag",
+        "ups_diag_snapshot": JsonlCollector(
+            "ups_diag_snapshot",
             ups_cmd(
                 args,
-                "power-diag",
+                "diag-snapshot",
                 "--watch",
                 "--interval-ms",
                 str(int(args.sample_interval_s * 1000)),

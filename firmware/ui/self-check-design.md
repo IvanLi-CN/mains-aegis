@@ -31,7 +31,7 @@
 | `FUSB302` | `PEND/OK/WARN/ERR/N/A` | `VBUS ON/OFF/UNKNOWN` |
 | `INA3221` | `PEND/OK/WARN/ERR/N/A` | `ISUM x.xxA` |
 | `BQ25792` | `PEND/RUN/LOCK/WARN/ERR/N/A` | `ICHG x.xxA` 或 `CHG DISABLED` |
-| `BQ40Z50` | `PEND/OK/WARN/ERR/N/A` | `SOC xx%` / `ABNORMAL` / `RCA ALARM` / `NOT DETECTED` |
+| `BQ40Z50` | `PEND/OK/WARN/ERR/N/A` | `SOC xx%` / `ABNORMAL` / `RCA ALARM` / `EMSHUT ACTIVE` / `NOT DETECTED` |
 | `TPS55288-A` | `PEND/RUN/IDLE/WARN/ERR/N/A` | `IOUT x.xxA` |
 | `TPS55288-B` | `PEND/RUN/IDLE/WARN/ERR/N/A` | `IOUT x.xxA` |
 | `TMP112-A` | `PEND/OK/WARN/ERR/N/A` | `TMAX xxC` |
@@ -43,6 +43,7 @@
 - 自检阶段按模块探测进度实时更新状态：`PEND -> OK/WARN/ERR/N/A`。
 - 自检完成后保持 `SELF CHECK` 页面并持续刷新真实运行数据。
 - `BQ40Z50` 卡片语义固定为：`OK`=普通访问可信正常态，`WARN`=设备存在但非正常态，`ERR`=普通访问未识别。
+- `BQ40Z50` 的放电阻断原因优先级固定为：`OperationStatus()[EMSHUT]` 先显示 `EMSHUT ACTIVE`，再考虑普通 `XDSG BLOCKED` / `DSG FET OFF`。`EMSHUT ACTIVE` 使用同一个 `Recover` 确认入口，但恢复链路会主动执行 BQ40 communication-exit 触发。
 - `TPS55288-A/B` 卡片语义固定为：当 `BMS` 尚未允许放电或仍无法确认 `VBAT` 网络具备合理电压时，`TPS` 的 `I2C NACK/not_present` 归类为 `WARN`，并使用橙黄色系显示 `WAIT BMS` / `VBAT UNK`；只有在上游供电前提已满足后仍探测失败，才显示 `ERR`。
 - 本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard。
 - 视觉样式（状态颜色、字体层级、交互高亮）以 [design-language.md](design-language.md) 为准，本页保留布局与语义冻结。
@@ -56,6 +57,8 @@
 ![Self-check Variant C - BMS missing with TPS warning](assets/self-check-c-bms-missing-tps-warn.png)
 ![Self-check Variant C - BQ40 offline idle](assets/self-check-c-bq40-offline-idle.png)
 ![Self-check Variant C - BQ40 offline activation dialog](assets/self-check-c-bq40-offline-activate-dialog.png)
+![Self-check Variant C - BQ40 EMSHUT idle](assets/self-check-c-bq40-emshut-blocked.png)
+![Self-check Variant C - BQ40 EMSHUT recovery dialog](assets/self-check-c-bq40-emshut-dialog.png)
 ![Self-check Variant C - BQ40 activating](assets/self-check-c-bq40-activating.png)
 ![Self-check Variant C - BQ40 result success](assets/self-check-c-bq40-result-success.png)
 ![Self-check Variant C - BQ40 result no battery](assets/self-check-c-bq40-result-no-battery.png)

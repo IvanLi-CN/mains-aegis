@@ -90,7 +90,7 @@ enum DeviceCommand {
     Connection,
     Identity,
     Status(DeviceReadArgs),
-    PowerDiag(DeviceReadArgs),
+    DiagSnapshot(DiagSnapshotArgs),
     Settings,
     Trace(TraceArgs),
     Artifact {
@@ -152,6 +152,15 @@ struct DeviceReadArgs {
     /// Stop after this many watch samples. Omit to run until interrupted.
     #[arg(long)]
     samples: Option<u64>,
+}
+
+#[derive(Debug, Args, Clone)]
+struct DiagSnapshotArgs {
+    #[command(flatten)]
+    read: DeviceReadArgs,
+    /// Diagnostic package id to include. Repeat for multiple packages.
+    #[arg(long = "package")]
+    packages: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -322,18 +331,19 @@ async fn main() -> anyhow::Result<()> {
             device_id,
             command: DeviceCommand::Status(args),
         } if args.watch => {
-            watch_device_read(&endpoint, &device_id, "status", "device.status", args).await?;
+            watch_device_read(&endpoint, &device_id, "status", "device.status", args, None).await?;
         }
         Command::Device {
             device_id,
-            command: DeviceCommand::PowerDiag(args),
-        } if args.watch => {
+            command: DeviceCommand::DiagSnapshot(args),
+        } if args.read.watch => {
             watch_device_read(
                 &endpoint,
                 &device_id,
-                "power_diag",
-                "device.power_diag",
-                args,
+                "diag_snapshot",
+                "device.diag_snapshot",
+                args.read,
+                Some(args.packages),
             )
             .await?;
         }
@@ -372,6 +382,7 @@ async fn watch_device_read(
     kind: &str,
     method: &'static str,
     args: DeviceReadArgs,
+    packages: Option<Vec<String>>,
 ) -> anyhow::Result<()> {
     let mut index = 0_u64;
     let started = std::time::Instant::now();
@@ -387,7 +398,7 @@ async fn watch_device_read(
         let result = match ipc_call(
             endpoint,
             method,
-            device_read_ipc_params(device_id, &args, true, true),
+            device_read_ipc_params(device_id, &args, true, true, packages.clone()),
         )
         .await
         {
@@ -447,7 +458,7 @@ async fn watch_device_read(
 fn is_watch_retryable_cache_error(error: &anyhow::Error) -> bool {
     let message = error.to_string();
     message.contains("device_status_cache_unavailable")
-        || message.contains("device_power_diag_cache_unavailable")
+        || message.contains("device_diag_snapshot_cache_unavailable")
 }
 
 async fn follow_device_trace(
@@ -605,11 +616,17 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
         DeviceCommand::Identity => ("device.identity", json!({ "device_id": device_id })),
         DeviceCommand::Status(args) => (
             "device.status",
-            device_read_ipc_params(&device_id, &args, args.include_meta, false),
+            device_read_ipc_params(&device_id, &args, args.include_meta, false, None),
         ),
-        DeviceCommand::PowerDiag(args) => (
-            "device.power_diag",
-            device_read_ipc_params(&device_id, &args, args.include_meta, false),
+        DeviceCommand::DiagSnapshot(args) => (
+            "device.diag_snapshot",
+            device_read_ipc_params(
+                &device_id,
+                &args.read,
+                args.read.include_meta,
+                false,
+                Some(args.packages),
+            ),
         ),
         DeviceCommand::Settings => ("device.settings", json!({ "device_id": device_id })),
         DeviceCommand::Trace(args) => (
@@ -656,6 +673,7 @@ fn device_read_ipc_params(
     args: &DeviceReadArgs,
     include_meta: bool,
     watch: bool,
+    packages: Option<Vec<String>>,
 ) -> Value {
     let mut params = json!({
         "device_id": device_id,
@@ -672,6 +690,11 @@ fn device_read_ipc_params(
         params["watch_freshness_ms"] = json!(args
             .watch_freshness_ms
             .unwrap_or(DEFAULT_WATCH_FRESHNESS_MS));
+    }
+    if let Some(packages) = packages {
+        if !packages.is_empty() {
+            params["packages"] = json!(packages);
+        }
     }
     params
 }
@@ -802,7 +825,7 @@ mod tests {
         };
 
         assert_eq!(
-            device_read_ipc_params("serial-1", &args, false, false),
+            device_read_ipc_params("serial-1", &args, false, false, None),
             json!({
                 "device_id": "serial-1",
                 "fresh": false,
@@ -827,7 +850,7 @@ mod tests {
         };
 
         assert_eq!(
-            device_read_ipc_params("serial-1", &args, true, true),
+            device_read_ipc_params("serial-1", &args, true, true, None),
             json!({
                 "device_id": "serial-1",
                 "fresh": false,
@@ -853,7 +876,7 @@ mod tests {
         };
 
         assert_eq!(
-            device_read_ipc_params("serial-1", &args, true, true)["watch_freshness_ms"],
+            device_read_ipc_params("serial-1", &args, true, true, None)["watch_freshness_ms"],
             json!(750)
         );
     }
@@ -872,7 +895,7 @@ mod tests {
         };
 
         assert_eq!(
-            device_read_ipc_params("serial-1", &args, true, true)["allow_stale_cache"],
+            device_read_ipc_params("serial-1", &args, true, true, None)["allow_stale_cache"],
             json!(true)
         );
     }
@@ -891,7 +914,7 @@ mod tests {
         };
 
         assert_eq!(
-            device_read_ipc_params("serial-1", &args, true, true),
+            device_read_ipc_params("serial-1", &args, true, true, None),
             json!({
                 "device_id": "serial-1",
                 "fresh": true,

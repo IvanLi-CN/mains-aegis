@@ -3,7 +3,7 @@
 This page defines the controlled hardware-in-the-loop path for the low-voltage recovery feature. The flow intentionally uses two ESP32-S3 firmware flashes:
 
 1. Temporary `tools/bq40-comm-tool` firmware applies the BQ40Z50 live Data Flash baseline.
-2. Main firmware is flashed back and verified through USB CDC `power-diag`.
+2. Main firmware is flashed back and verified through USB CDC `diag-snapshot`.
 
 The main firmware must not write BQ40 Data Flash. BQ40 DF maintenance stays behind the explicit `bq40-comm-tool` `live-df-mainboard` entrypoint.
 
@@ -60,7 +60,7 @@ The runner refuses real HIL when either `firmware/.esp32-port` or `tools/bq40-co
 4. Generate a Firmware Catalog manifest for the built main firmware.
 5. Start or reuse `mains-aegis-devd`.
 6. Run devd scan, bind only `serial-04f3bb3f5367`, select the generated manifest, and flash the main firmware through devd.
-7. Reconnect through devd and read `GET /api/v1/devices/{id}/power-diag`.
+7. Reconnect through devd and read `GET /api/v1/devices/{id}/diag-snapshot?package=bq25792.regs&package=bq40.manufacturing&package=derived.power`.
 
 ## Pass Criteria
 
@@ -68,11 +68,11 @@ The HIL runner writes reports under `tools/hil/reports/<timestamp>/`. A pass req
 
 - BQ40 DF apply report completed through `live-df-mainboard`.
 - Main firmware flash response includes backend success from devd.
-- USB `power-diag` is readable from the main firmware.
-- `power-diag.charger.vbat_lowv_pct_x10 == 714`.
-- `power-diag.charger.iprechg_ma == 120`.
-- `power-diag.bms.cuv_recovery_mv == 2550`.
-- `power-diag.bms.cuv_recov_chg == false`.
-- `power-diag.policy.recovery_stage` is either `null`, `bq40_pchg`, or `bq25792_precharge`.
+- USB `diag-snapshot` is readable from the main firmware.
+- `diag-snapshot.packages["derived.power"].payload.charger.vbat_lowv_pct_x10 == 714`.
+- `diag-snapshot.packages["derived.power"].payload.charger.iprechg_ma == 120`.
+- `diag-snapshot.packages["derived.power"].payload.bms.cuv_recovery_mv == 2550`.
+- `diag-snapshot.packages["derived.power"].payload.bms.cuv_recov_chg == false`.
+- `diag-snapshot.packages["derived.power"].payload.policy.recovery_stage` is either `null`, `bq40_pchg`, or `bq25792_precharge`.
 
-When the physical pack is actually in the low-voltage recovery window, run with `--require-recovery-state true`. That additionally requires `power-diag.policy.status == RECOV` and a non-null recovery stage.
+When the physical pack is actually in the low-voltage recovery window, run with `--require-recovery-state true`. That additionally requires `diag-snapshot.packages["derived.power"].payload.policy.status == RECOV` and a non-null recovery stage.

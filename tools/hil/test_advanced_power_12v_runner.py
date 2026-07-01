@@ -1127,7 +1127,7 @@ class LoadTransportNormalizationTests(unittest.TestCase):
             ups_device_id="serial-04f3bb3f5367",
             ups_status_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/settings",
-            devd_power_diag_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/diag-snapshot",
             devd_monitor_start_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/monitor/start",
             devd_device_trace_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
@@ -1138,8 +1138,8 @@ class LoadTransportNormalizationTests(unittest.TestCase):
             "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/status",
         )
         self.assertEqual(
-            normalized["devd_power_diag_url"],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            normalized["devd_diag_snapshot_url"],
+            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
         )
         self.assertEqual(
             normalized["devd_monitor_start_url"],
@@ -2908,7 +2908,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = load_runner_module()
 
-    def test_power_diag_snapshot_ready_accepts_fresh_seeded_payload_despite_transient_error(self) -> None:
+    def test_diag_snapshot_snapshot_ready_accepts_fresh_seeded_payload_despite_transient_error(self) -> None:
         runner = self.runner
         snapshot = {
             "payload": {
@@ -2922,9 +2922,39 @@ class UpsPollerReadinessTests(unittest.TestCase):
             "age_s": 0.1,
             "error": "TimeoutError('timed out')",
         }
-        self.assertTrue(runner.power_diag_snapshot_ready(snapshot))
+        self.assertTrue(runner.diag_snapshot_snapshot_ready(snapshot))
 
-    def test_power_diag_snapshot_ready_rejects_status_derived_payload(self) -> None:
+    def test_diag_snapshot_snapshot_ready_accepts_packaged_payload(self) -> None:
+        runner = self.runner
+        snapshot = {
+            "payload": {
+                "packages": {
+                    "derived.power": {
+                        "ok": True,
+                        "source": "power_cache",
+                        "duration_ms": 0,
+                        "payload": {
+                            "input": {
+                                "assist_power_stage": "standby",
+                                "vin_vbus_mv": 11888,
+                                "vin_iin_ma": 794,
+                            }
+                        },
+                    }
+                },
+                "errors": {},
+            },
+            "generation": 1,
+            "age_s": 0.1,
+            "error": None,
+        }
+        self.assertTrue(runner.diag_snapshot_snapshot_ready(snapshot))
+        self.assertEqual(
+            runner.unwrap_diag_snapshot_payload(snapshot["payload"])["input"]["vin_vbus_mv"],
+            11888,
+        )
+
+    def test_diag_snapshot_snapshot_ready_rejects_status_derived_payload(self) -> None:
         runner = self.runner
         snapshot = {
             "payload": {
@@ -2939,9 +2969,9 @@ class UpsPollerReadinessTests(unittest.TestCase):
             "age_s": 0.1,
             "error": None,
         }
-        self.assertFalse(runner.power_diag_snapshot_ready(snapshot))
+        self.assertFalse(runner.diag_snapshot_snapshot_ready(snapshot))
 
-    def test_build_preflight_uses_seeded_power_diag_when_live_fetch_times_out(self) -> None:
+    def test_build_preflight_uses_seeded_diag_snapshot_when_live_fetch_times_out(self) -> None:
         runner = self.runner
         args = types.SimpleNamespace(
             isolapurr_url="http://192.168.31.122",
@@ -2952,7 +2982,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
             output_profile="12v",
             source_voltage_mv=12000,
             ups_status_url="http://192.168.31.232/api/v1/status",
-            devd_power_diag_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
         )
         settings_payload = {
             "advanced_power": {"standby_drop_mv": 1200},
@@ -2965,7 +2995,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 "assist_power_stage": "standby",
             },
         }
-        seeded_power_diag = {
+        seeded_diag_snapshot = {
             "input": {
                 "assist_power_stage": "standby",
                 "vin_vbus_mv": 11888,
@@ -3024,7 +3054,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 autospec=True,
                 side_effect=[
                     RuntimeError("ups timeout"),
-                    RuntimeError("power-diag timeout"),
+                    RuntimeError("diag-snapshot timeout"),
                 ],
             ),
         ):
@@ -3035,14 +3065,14 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 known_load_disabled=True,
                 known_load_target_i_ma=3900,
                 seeded_ups_status=seeded_ups_status,
-                seeded_power_diag=seeded_power_diag,
+                seeded_diag_snapshot=seeded_diag_snapshot,
             )
 
         self.assertTrue(preflight["scene_valid"])
         self.assertEqual(preflight["ups"]["source"], "seeded_refresh_devd_devices")
-        self.assertEqual(preflight["power_diag"]["source"], "seeded_refresh_devd_devices")
+        self.assertEqual(preflight["diag_snapshot"]["source"], "seeded_refresh_devd_devices")
 
-    def test_build_preflight_uses_trace_power_diag_when_direct_power_diag_times_out(self) -> None:
+    def test_build_preflight_uses_trace_diag_snapshot_when_direct_diag_snapshot_times_out(self) -> None:
         runner = self.runner
         args = types.SimpleNamespace(
             isolapurr_url="http://192.168.31.122",
@@ -3053,7 +3083,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
             output_profile="12v",
             source_voltage_mv=12000,
             ups_status_url="http://192.168.31.232/api/v1/status",
-            devd_power_diag_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
             devd_device_trace_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/trace?trace_limit=1",
         )
         settings_payload = {
@@ -3096,7 +3126,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                     "assist_power_stage": "standby",
                 },
             },
-            "power_diag": {
+            "diag_snapshot": {
                 "input": {
                     "assist_power_stage": "standby",
                     "vin_vbus_mv": 11888,
@@ -3135,7 +3165,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 autospec=True,
                 side_effect=[
                     seeded_ups_status,
-                    RuntimeError("power-diag timeout"),
+                    RuntimeError("diag-snapshot timeout"),
                     trace_payload,
                 ],
             ),
@@ -3147,12 +3177,12 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 known_load_disabled=True,
                 known_load_target_i_ma=3900,
                 seeded_ups_status=seeded_ups_status,
-                seeded_power_diag=None,
+                seeded_diag_snapshot=None,
             )
 
         self.assertTrue(preflight["scene_valid"])
-        self.assertEqual(preflight["power_diag"]["source"], "devd_trace")
-        self.assertEqual(preflight["power_diag"]["vin_vbus_mv"], 11888)
+        self.assertEqual(preflight["diag_snapshot"]["source"], "devd_trace")
+        self.assertEqual(preflight["diag_snapshot"]["vin_vbus_mv"], 11888)
 
     def test_build_preflight_prefers_live_poller_probe_when_load_devd_socket_is_present(self) -> None:
         runner = self.runner
@@ -3165,7 +3195,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
             output_profile="12v",
             source_voltage_mv=12000,
             ups_status_url="http://192.168.31.232/api/v1/status",
-            devd_power_diag_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
         )
         settings_payload = {
             "advanced_power": {"standby_drop_mv": 1200},
@@ -3178,7 +3208,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 "assist_power_stage": "standby",
             },
         }
-        seeded_power_diag = {
+        seeded_diag_snapshot = {
             "input": {
                 "assist_power_stage": "standby",
                 "vin_vbus_mv": 11888,
@@ -3237,7 +3267,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 autospec=True,
                 side_effect=[
                     RuntimeError("ups timeout"),
-                    RuntimeError("power-diag timeout"),
+                    RuntimeError("diag-snapshot timeout"),
                 ],
             ),
             mock.patch.object(
@@ -3260,7 +3290,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 known_load_target_i_ma=3900,
                 load_telemetry_probe={"verdict": {"formal_capable": False}},
                 seeded_ups_status=seeded_ups_status,
-                seeded_power_diag=seeded_power_diag,
+                seeded_diag_snapshot=seeded_diag_snapshot,
             )
 
         self.assertTrue(preflight["scene_valid"])
@@ -3279,7 +3309,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
             output_profile="12v",
             source_voltage_mv=12000,
             ups_status_url="http://192.168.31.232/api/v1/status",
-            devd_power_diag_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
             devd_device_trace_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/trace?trace_limit=1",
             load_ipc="",
         )
@@ -3294,7 +3324,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 "assist_power_stage": "standby",
             },
         }
-        seeded_power_diag = {
+        seeded_diag_snapshot = {
             "input": {
                 "assist_power_stage": "standby",
                 "vin_vbus_mv": 11888,
@@ -3360,10 +3390,10 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 autospec=True,
                 side_effect=[
                     seeded_ups_status,
-                    RuntimeError("power-diag timeout"),
+                    RuntimeError("diag-snapshot timeout"),
                     {
                         "status": seeded_ups_status,
-                        "power_diag": seeded_power_diag,
+                        "diag_snapshot": seeded_diag_snapshot,
                     },
                 ],
             ),
@@ -3387,7 +3417,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 known_load_target_i_ma=None,
                 load_telemetry_probe=load_probe,
                 seeded_ups_status=seeded_ups_status,
-                seeded_power_diag=seeded_power_diag,
+                seeded_diag_snapshot=seeded_diag_snapshot,
             )
 
         self.assertFalse(preflight["scene_valid"])
@@ -3407,7 +3437,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
             output_profile="12v",
             source_voltage_mv=12000,
             ups_status_url="http://192.168.31.232/api/v1/status",
-            devd_power_diag_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
         )
         settings_payload = {
             "advanced_power": {"standby_drop_mv": 1200},
@@ -3420,7 +3450,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 "assist_power_stage": "standby",
             },
         }
-        seeded_power_diag = {
+        seeded_diag_snapshot = {
             "input": {
                 "assist_power_stage": "standby",
                 "vin_vbus_mv": 11888,
@@ -3479,7 +3509,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 autospec=True,
                 side_effect=[
                     RuntimeError("ups timeout"),
-                    RuntimeError("power-diag timeout"),
+                    RuntimeError("diag-snapshot timeout"),
                 ],
             ),
             mock.patch.object(
@@ -3501,7 +3531,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 known_load_disabled=True,
                 known_load_target_i_ma=3900,
                 seeded_ups_status=seeded_ups_status,
-                seeded_power_diag=seeded_power_diag,
+                seeded_diag_snapshot=seeded_diag_snapshot,
             )
 
         self.assertFalse(preflight["scene_valid"])
@@ -3521,7 +3551,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 output_profile="12v",
                 source_voltage_mv=12000,
                 ups_status_url="http://192.168.31.232/api/v1/status",
-                devd_power_diag_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/power-diag",
+                devd_diag_snapshot_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
             )
             Path(args.load_ipc).touch()
             settings_payload = {
@@ -3535,7 +3565,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                     "assist_power_stage": "standby",
                 },
             }
-            seeded_power_diag = {
+            seeded_diag_snapshot = {
                 "input": {
                     "assist_power_stage": "standby",
                     "vin_vbus_mv": 11888,
@@ -3588,7 +3618,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                     autospec=True,
                     side_effect=[
                         RuntimeError("ups timeout"),
-                        RuntimeError("power-diag timeout"),
+                        RuntimeError("diag-snapshot timeout"),
                     ],
                 ),
             ):
@@ -3605,7 +3635,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                         }
                     },
                     seeded_ups_status=seeded_ups_status,
-                    seeded_power_diag=seeded_power_diag,
+                    seeded_diag_snapshot=seeded_diag_snapshot,
                 )
 
         self.assertFalse(preflight["scene_valid"])
@@ -3628,7 +3658,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                 output_profile="12v",
                 source_voltage_mv=12000,
                 ups_status_url="http://192.168.31.232/api/v1/status",
-                devd_power_diag_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/power-diag",
+                devd_diag_snapshot_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
             )
             Path(args.load_ipc).touch()
             settings_payload = {
@@ -3642,7 +3672,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                     "assist_power_stage": "standby",
                 },
             }
-            seeded_power_diag = {
+            seeded_diag_snapshot = {
                 "input": {
                     "assist_power_stage": "standby",
                     "vin_vbus_mv": 11888,
@@ -3695,7 +3725,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                     autospec=True,
                     side_effect=[
                         RuntimeError("ups timeout"),
-                        RuntimeError("power-diag timeout"),
+                        RuntimeError("diag-snapshot timeout"),
                     ],
                 ),
                 mock.patch.object(
@@ -3723,7 +3753,7 @@ class UpsPollerReadinessTests(unittest.TestCase):
                         }
                     },
                     seeded_ups_status=seeded_ups_status,
-                    seeded_power_diag=seeded_power_diag,
+                    seeded_diag_snapshot=seeded_diag_snapshot,
                 )
 
         self.assertTrue(preflight["scene_valid"])
@@ -3997,7 +4027,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
             load_device="loadlynx-d68638",
             ups_status_url="http://ups/status",
             ups_settings_url="http://ups/settings",
-            devd_power_diag_url="http://devd/power-diag",
+            devd_diag_snapshot_url="http://devd/diag-snapshot",
             isolapurr_url="http://isolapurr",
             status_timeout_sec=0.5,
             pre_seconds=0.0,
@@ -4052,7 +4082,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
                 actions=[],
                 load_status_poller=FakePoller({"status": {"enable": False}, "control": {"output_enabled": False}}),
                 ups_status_poller=FakePoller({"mode": "standby", "input": {"assist_power_stage": "standby"}}),
-                power_diag_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
+                diag_snapshot_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
                 settings_snapshot=settings_snapshot,
                 isolapurr_poller=FakePoller({"ports": {"ports": []}}),
                 expected_phases=["pre", "hold", "post"],
@@ -4121,7 +4151,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
             load_device="loadlynx-d68638",
             ups_status_url="http://ups/status",
             ups_settings_url="http://ups/settings",
-            devd_power_diag_url="http://devd/power-diag",
+            devd_diag_snapshot_url="http://devd/diag-snapshot",
             isolapurr_url="http://isolapurr",
             status_timeout_sec=0.5,
             pre_seconds=0.0,
@@ -4211,7 +4241,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
                 actions=[],
                 load_status_poller=fake_load_poller,
                 ups_status_poller=FakePoller({"mode": "standby", "input": {"assist_power_stage": "standby"}}),
-                power_diag_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
+                diag_snapshot_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
                 settings_snapshot=settings_snapshot,
                 isolapurr_poller=FakePoller({"ports": {"ports": []}}),
                 expected_phases=["pre", "hold", "backup", "restore", "post"],
@@ -4280,7 +4310,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
             load_device="loadlynx-d68638",
             ups_status_url="http://ups/status",
             ups_settings_url="http://ups/settings",
-            devd_power_diag_url="http://devd/power-diag",
+            devd_diag_snapshot_url="http://devd/diag-snapshot",
             isolapurr_url="http://isolapurr",
             status_timeout_sec=0.5,
             pre_seconds=0.0,
@@ -4346,7 +4376,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
                 actions=[],
                 load_status_poller=FakeLoadPoller(),
                 ups_status_poller=FakePoller({"mode": "standby", "input": {"assist_power_stage": "standby"}}),
-                power_diag_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
+                diag_snapshot_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
                 settings_snapshot=settings_snapshot,
                 isolapurr_poller=FakePoller({"ports": {"ports": []}}),
                 expected_phases=["pre", "hold", "post"],
@@ -4406,7 +4436,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
             target_ma=3900,
             ups_status_url="http://ups/status",
             ups_settings_url="http://ups/settings",
-            devd_power_diag_url="http://devd/power-diag",
+            devd_diag_snapshot_url="http://devd/diag-snapshot",
             isolapurr_url="http://isolapurr",
             status_timeout_sec=0.5,
             pre_seconds=0.0,
@@ -4458,7 +4488,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
                 actions=[],
                 load_status_poller=load_poller,
                 ups_status_poller=FakePoller({"mode": "standby", "input": {"assist_power_stage": "standby"}}),
-                power_diag_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
+                diag_snapshot_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
                 settings_snapshot=settings_snapshot,
                 isolapurr_poller=FakePoller({"ports": {"ports": []}}),
                 expected_phases=["pre", "hold", "post"],
@@ -4517,7 +4547,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
             target_ma=3900,
             ups_status_url="http://ups/status",
             ups_settings_url="http://ups/settings",
-            devd_power_diag_url="http://devd/power-diag",
+            devd_diag_snapshot_url="http://devd/diag-snapshot",
             isolapurr_url="http://isolapurr",
             status_timeout_sec=0.5,
             pre_seconds=0.0,
@@ -4579,7 +4609,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
                 actions=[],
                 load_status_poller=load_poller,
                 ups_status_poller=FakePoller({"mode": "standby", "input": {"assist_power_stage": "standby"}}),
-                power_diag_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
+                diag_snapshot_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
                 settings_snapshot=settings_snapshot,
                 isolapurr_poller=FakePoller({"ports": {"ports": []}}),
                 expected_phases=["pre", "hold", "post"],
@@ -4644,7 +4674,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
             target_ma=3900,
             ups_status_url="http://ups/status",
             ups_settings_url="http://ups/settings",
-            devd_power_diag_url="http://devd/power-diag",
+            devd_diag_snapshot_url="http://devd/diag-snapshot",
             isolapurr_url="http://isolapurr",
             status_timeout_sec=0.5,
             pre_seconds=0.0,
@@ -4707,7 +4737,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
                 actions=[],
                 load_status_poller=load_poller,
                 ups_status_poller=FakePoller({"mode": "standby", "input": {"assist_power_stage": "standby"}}),
-                power_diag_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
+                diag_snapshot_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
                 settings_snapshot=settings_snapshot,
                 isolapurr_poller=FakePoller({"ports": {"ports": []}}),
                 expected_phases=["pre", "hold", "post"],
@@ -4769,7 +4799,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
             target_ma=3900,
             ups_status_url="http://ups/status",
             ups_settings_url="http://ups/settings",
-            devd_power_diag_url="http://devd/power-diag",
+            devd_diag_snapshot_url="http://devd/diag-snapshot",
             isolapurr_url="http://isolapurr",
             status_timeout_sec=0.5,
             pre_seconds=0.0,
@@ -4830,7 +4860,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
                 actions=[],
                 load_status_poller=load_poller,
                 ups_status_poller=FakePoller({"mode": "standby", "input": {"assist_power_stage": "standby"}}),
-                power_diag_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
+                diag_snapshot_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
                 settings_snapshot=settings_snapshot,
                 isolapurr_poller=FakePoller({"ports": {"ports": []}}),
                 expected_phases=["pre", "hold", "post"],
@@ -4889,7 +4919,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
             target_ma=3900,
             ups_status_url="http://ups/status",
             ups_settings_url="http://ups/settings",
-            devd_power_diag_url="http://devd/power-diag",
+            devd_diag_snapshot_url="http://devd/diag-snapshot",
             isolapurr_url="http://isolapurr",
             status_timeout_sec=0.01,
             pre_seconds=0.0,
@@ -4943,7 +4973,7 @@ class ContinuousSceneSettingsSnapshotTests(unittest.TestCase):
                     actions=[],
                     load_status_poller=load_poller,
                     ups_status_poller=FakePoller({"mode": "standby", "input": {"assist_power_stage": "standby"}}),
-                    power_diag_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
+                    diag_snapshot_poller=FakePoller({"input": {"assist_power_stage": "standby"}}),
                     settings_snapshot=settings_snapshot,
                     isolapurr_poller=FakePoller({"ports": {"ports": []}}),
                     expected_phases=["pre", "hold", "post"],
@@ -5080,7 +5110,7 @@ class TracePollerPreferenceTests(unittest.TestCase):
             load_device="loadlynx-d68638",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/serial/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/serial/settings",
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/serial/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/serial/diag-snapshot",
             isolapurr_url="http://192.168.31.122",
             status_timeout_sec=1.0,
             load_status_snapshot={
@@ -5117,7 +5147,7 @@ class TracePollerPreferenceTests(unittest.TestCase):
                 "generation": 1,
                 "age_s": 0.02,
             },
-            power_diag_snapshot={
+            diag_snapshot_snapshot={
                 "payload": {
                     "sample": {
                         "input": {
@@ -5155,20 +5185,20 @@ class TracePollerPreferenceTests(unittest.TestCase):
         )
 
         self.assertEqual(sample["sample_age_s"]["ups_status"], 1.6)
-        self.assertEqual(sample["sample_age_s"]["power_diag"], 1.7)
+        self.assertEqual(sample["sample_age_s"]["diag_snapshot"], 1.7)
         self.assertFalse(sample["cache_fresh"]["ups_status"])
-        self.assertFalse(sample["cache_fresh"]["power_diag"])
+        self.assertFalse(sample["cache_fresh"]["diag_snapshot"])
         self.assertEqual(sample["mode"], "standby")
         self.assertEqual(sample["diag_vin_vbus_mv"], 11980)
 
-    def test_trace_fetch_populates_both_ups_and_power_diag_surfaces(self) -> None:
+    def test_trace_fetch_populates_both_ups_and_diag_snapshot_surfaces(self) -> None:
         runner = self.runner
         trace_payload = {
             "status": {
                 "mode": "standby",
                 "input": {"mains_present": True, "assist_power_stage": "standby"},
             },
-            "power_diag": {
+            "diag_snapshot": {
                 "input": {
                     "assist_power_stage": "standby",
                     "vin_vbus_mv": 11888,
@@ -5186,11 +5216,11 @@ class TracePollerPreferenceTests(unittest.TestCase):
         self.assertTrue(runner.trace_snapshot_ready(snapshot))
         self.assertEqual(runner.status_from_trace_snapshot(snapshot)["mode"], "standby")
         self.assertEqual(
-            runner.power_diag_from_trace_snapshot(snapshot)["input"]["vin_vbus_mv"],
+            runner.diag_snapshot_from_trace_snapshot(snapshot)["input"]["vin_vbus_mv"],
             11888,
         )
 
-    def test_trace_power_diag_with_status_fallback_derives_from_trace_status_when_power_diag_missing(self) -> None:
+    def test_trace_diag_snapshot_with_status_fallback_derives_from_trace_status_when_diag_snapshot_missing(self) -> None:
         runner = self.runner
         trace_payload = {
             "status": {
@@ -5208,7 +5238,7 @@ class TracePollerPreferenceTests(unittest.TestCase):
                 "battery": {"state": "ok", "pack_mv": 15700, "current_ma": 0, "soc_pct": 90},
             }
         }
-        derived = runner.trace_power_diag_with_status_fallback(trace_payload)
+        derived = runner.trace_diag_snapshot_with_status_fallback(trace_payload)
         self.assertEqual(derived["source"], "trace_status_derived")
         self.assertEqual(derived["input"]["vin_vbus_mv"], 11890)
         self.assertEqual(derived["input"]["assist_power_stage"], "standby")
@@ -5218,7 +5248,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = load_runner_module()
 
-    def test_derive_power_diag_from_status_projects_runtime_fields(self) -> None:
+    def test_derive_diag_snapshot_from_status_projects_runtime_fields(self) -> None:
         runner = self.runner
         status_payload = {
             "mode": "assist",
@@ -5257,7 +5287,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
                 "soc_pct": 64,
             },
         }
-        derived = runner.derive_power_diag_from_status(
+        derived = runner.derive_diag_snapshot_from_status(
             status_payload,
             source="ups_status_derived",
         )
@@ -5267,7 +5297,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
         self.assertEqual(derived["bms"]["current_ma"], -910)
         self.assertEqual(derived["source"], "ups_status_derived")
 
-    def test_capture_three_device_sample_derives_power_diag_from_status_when_direct_diag_missing(self) -> None:
+    def test_capture_three_device_sample_derives_diag_snapshot_from_status_when_direct_diag_missing(self) -> None:
         runner = self.runner
         direct_ups_status = {
             "mode": "assist",
@@ -5294,7 +5324,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
             load_device="loadlynx-d68638",
             ups_status_url="http://unused/status",
             ups_settings_url="http://unused/settings",
-            devd_power_diag_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
             isolapurr_url="http://isolapurr",
             status_timeout_sec=0.5,
             load_status_snapshot={
@@ -5316,7 +5346,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
                 "elapsed_ms": 4,
                 "error": None,
             },
-            power_diag_snapshot={
+            diag_snapshot_snapshot={
                 "payload": {},
                 "generation": 2,
                 "age_s": 9.5,
@@ -5356,7 +5386,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
         self.assertEqual(sample["diag_stage"], "assist_low")
         self.assertEqual(sample["diag_vin_vbus_mv"], 11852)
         self.assertEqual(sample["diag_tps_total_iout_ma"], 655)
-        self.assertEqual(sample["raw"]["power_diag"]["source"], "ups_status_derived")
+        self.assertEqual(sample["raw"]["diag_snapshot"]["source"], "ups_status_derived")
 
     def test_capture_three_device_sample_ignores_devd_devices_listing_projection(self) -> None:
         runner = self.runner
@@ -5382,7 +5412,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
                         "battery": {"current_ma": 500},
                         "charger": {"allow_charge": True, "detail_status": "CHG500"},
                     },
-                    "power_diag": {
+                    "diag_snapshot": {
                         "input": {
                             "assist_power_stage": "standby",
                             "assist_target_vout_mv": 10800,
@@ -5413,16 +5443,26 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
             "battery": {"current_ma": -1800},
             "charger": {"allow_charge": False, "detail_status": "NO_INPUT"},
         }
-        direct_power_diag = {
-            "input": {
-                "assist_power_stage": "backup",
-                "assist_target_vout_mv": 12000,
-                "vin_vbus_mv": 2072,
-                "vin_iin_ma": 0,
-                "vin_baseline_mv": 11888,
-                "vin_drop_mv": 9800,
-                "tps_total_iout_ma": 1350,
-            }
+        direct_diag_snapshot = {
+            "packages": {
+                "derived.power": {
+                    "ok": True,
+                    "source": "fresh_i2c",
+                    "duration_ms": 3,
+                    "payload": {
+                        "input": {
+                            "assist_power_stage": "backup",
+                            "assist_target_vout_mv": 12000,
+                            "vin_vbus_mv": 2072,
+                            "vin_iin_ma": 0,
+                            "vin_baseline_mv": 11888,
+                            "vin_drop_mv": 9800,
+                            "tps_total_iout_ma": 1350,
+                        }
+                    },
+                }
+            },
+            "errors": {},
         }
         sample = runner.capture_three_device_sample(
             phase="hold",
@@ -5430,7 +5470,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
             load_device="loadlynx-d68638",
             ups_status_url="http://unused/status",
             ups_settings_url="http://unused/settings",
-            devd_power_diag_url=f"http://127.0.0.1:26670/api/v1/devices/{device_id}/power-diag",
+            devd_diag_snapshot_url=f"http://127.0.0.1:26670/api/v1/devices/{device_id}/diag-snapshot",
             isolapurr_url="http://isolapurr",
             status_timeout_sec=0.5,
             load_status_snapshot={
@@ -5452,8 +5492,8 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
                 "elapsed_ms": 5,
                 "error": None,
             },
-            power_diag_snapshot={
-                "payload": direct_power_diag,
+            diag_snapshot_snapshot={
+                "payload": direct_diag_snapshot,
                 "generation": 1,
                 "age_s": 0.01,
                 "elapsed_ms": 5,
@@ -5512,7 +5552,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
             "battery": {"current_ma": 500},
             "charger": {"allow_charge": True, "detail_status": "CHG500"},
         }
-        direct_power_diag = {
+        direct_diag_snapshot = {
             "input": {
                 "assist_power_stage": "standby",
                 "assist_target_vout_mv": 10800,
@@ -5529,7 +5569,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
             load_device="loadlynx-d68638",
             ups_status_url="http://unused/status",
             ups_settings_url="http://unused/settings",
-            devd_power_diag_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:26670/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
             isolapurr_url="http://isolapurr",
             status_timeout_sec=0.5,
             load_status_snapshot={
@@ -5551,8 +5591,8 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
                 "elapsed_ms": 5,
                 "error": None,
             },
-            power_diag_snapshot={
-                "payload": direct_power_diag,
+            diag_snapshot_snapshot={
+                "payload": direct_diag_snapshot,
                 "generation": 1,
                 "age_s": 0.01,
                 "elapsed_ms": 5,
@@ -5604,7 +5644,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
                             "assist_power_stage": "standby",
                         },
                     },
-                    "power_diag": {
+                    "diag_snapshot": {
                         "input": {
                             "assist_power_stage": "standby",
                             "vin_vbus_mv": 11888,
@@ -5648,7 +5688,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
         with mock.patch.object(runner.time, "sleep", autospec=True):
             ready = runner.wait_for_scene_pollers_ready(
                 ups_status_poller=FakePoller(),
-                power_diag_poller=FakePoller(),
+                diag_snapshot_poller=FakePoller(),
                 isolapurr_poller=FakeIsolapurrPoller(),
                 sample_interval_seconds=0.25,
                 timeout_sec=0.5,
@@ -5656,7 +5696,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
             )
         self.assertTrue(ready["ready"])
 
-    def test_wait_for_scene_pollers_ready_rejects_stale_power_diag_even_when_status_is_fresh(self) -> None:
+    def test_wait_for_scene_pollers_ready_rejects_stale_diag_snapshot_even_when_status_is_fresh(self) -> None:
         runner = self.runner
 
         class FreshUpsPoller:
@@ -5683,7 +5723,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
                     "error": None,
                 }
 
-        class StalePowerDiagPoller:
+        class StaleDiagSnapshotPoller:
             def snapshot(self, now_monotonic: float) -> dict[str, object]:
                 return {
                     "payload": {},
@@ -5717,7 +5757,7 @@ class DevdDevicesSnapshotPreferenceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "scene_pollers_not_ready"):
                 runner.wait_for_scene_pollers_ready(
                     ups_status_poller=FreshUpsPoller(),
-                    power_diag_poller=StalePowerDiagPoller(),
+                    diag_snapshot_poller=StaleDiagSnapshotPoller(),
                     isolapurr_poller=FakeIsolapurrPoller(),
                     sample_interval_seconds=0.25,
                     timeout_sec=0.5,
@@ -5762,7 +5802,7 @@ class FormalAcceptanceSemanticsTests(unittest.TestCase):
                 "isolapurr_port_c_ma": 300,
                 "raw": {
                     "ups_status": {"input": {"mains_present": True}},
-                    "power_diag": {"input": {"vin_drop_mv": 0}},
+                    "diag_snapshot": {"input": {"vin_drop_mv": 0}},
                     "isolapurr_power": {"ports": {"ports": []}},
                     "load_control": {},
                     "load_status": {},
@@ -5772,7 +5812,7 @@ class FormalAcceptanceSemanticsTests(unittest.TestCase):
                 "load_status_sample_age_s": 0.1,
                 "fetch_age_s": {
                     "ups_status": 0.1,
-                    "power_diag": 0.1,
+                    "diag_snapshot": 0.1,
                     "isolapurr_power": 0.1,
                 },
             },
@@ -5806,7 +5846,7 @@ class FormalAcceptanceSemanticsTests(unittest.TestCase):
                 "isolapurr_port_c_ma": None,
                 "raw": {
                     "ups_status": {"input": {"mains_present": True}},
-                    "power_diag": {"input": {"vin_drop_mv": 0}},
+                    "diag_snapshot": {"input": {"vin_drop_mv": 0}},
                     "isolapurr_power": {
                         "ports": {
                             "ports": [
@@ -5825,7 +5865,7 @@ class FormalAcceptanceSemanticsTests(unittest.TestCase):
                 "load_status_sample_age_s": 0.1,
                 "fetch_age_s": {
                     "ups_status": 0.1,
-                    "power_diag": 0.1,
+                    "diag_snapshot": 0.1,
                     "isolapurr_power": 0.1,
                 },
             },
@@ -5859,7 +5899,7 @@ class FormalAcceptanceSemanticsTests(unittest.TestCase):
                 "isolapurr_port_c_ma": 200,
                 "raw": {
                     "ups_status": {"input": {"mains_present": True}},
-                    "power_diag": {"input": {"vin_drop_mv": 0}},
+                    "diag_snapshot": {"input": {"vin_drop_mv": 0}},
                     "isolapurr_power": {"ports": {"ports": []}},
                     "load_control": {},
                     "load_status": {},
@@ -5869,7 +5909,7 @@ class FormalAcceptanceSemanticsTests(unittest.TestCase):
                 "load_status_sample_age_s": 0.1,
                 "fetch_age_s": {
                     "ups_status": 0.1,
-                    "power_diag": 0.1,
+                    "diag_snapshot": 0.1,
                     "isolapurr_power": 0.1,
                 },
             },
@@ -5951,7 +5991,7 @@ class FormalAcceptanceSemanticsTests(unittest.TestCase):
                 "isolapurr_port_c_ma": isolapurr_port_c_ma,
                 "raw": {
                     "ups_status": {"input": {"mains_present": mains_present}},
-                    "power_diag": {"input": {"vin_drop_mv": diag_vin_drop_mv}},
+                    "diag_snapshot": {"input": {"vin_drop_mv": diag_vin_drop_mv}},
                     "isolapurr_power": {
                         "ports": {
                             "ports": (
@@ -5969,7 +6009,7 @@ class FormalAcceptanceSemanticsTests(unittest.TestCase):
                 "load_status_sample_age_s": 1.0,
                 "fetch_age_s": {
                     "ups_status": 1.5,
-                    "power_diag": 1.4,
+                    "diag_snapshot": 1.4,
                     "isolapurr_power": 0.1,
                 },
             }
@@ -6130,10 +6170,10 @@ class FormalAcceptanceSemanticsTests(unittest.TestCase):
         self.assertEqual(acceptance["run_validity"], "invalid_diagnostic_only")
         self.assertFalse(completeness["load_freshness_visible"])
         self.assertFalse(completeness["ups_status_fresh"])
-        self.assertFalse(completeness["power_diag_fresh"])
+        self.assertFalse(completeness["diag_snapshot_fresh"])
         self.assertIn("load_status_stale", acceptance["failed_acceptance_checks"])
         self.assertIn("ups_status_stale", acceptance["failed_acceptance_checks"])
-        self.assertIn("power_diag_stale", acceptance["failed_acceptance_checks"])
+        self.assertIn("diag_snapshot_stale", acceptance["failed_acceptance_checks"])
 
 
 class HardwareCapabilityGateTests(unittest.TestCase):
@@ -6263,7 +6303,7 @@ class HardwareCapabilityGateTests(unittest.TestCase):
                 load_status_ready_timeout_sec=20.0,
                 ups_status_url="http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/status",
                 ups_settings_url="http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/settings",
-                devd_power_diag_url="http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/power-diag",
+                devd_diag_snapshot_url="http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/diag-snapshot",
                 devd_monitor_start_url="http://127.0.0.1:20640/api/v1/devices/serial-04f3bb3f5367/monitor/start",
                 devd_device_trace_url="http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
                 devd_scan_url="http://127.0.0.1:35830/api/v1/devices/scan",
@@ -6390,7 +6430,7 @@ class HardwareCapabilityGateTests(unittest.TestCase):
                 load_status_ready_timeout_sec=20.0,
                 ups_status_url="http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/status",
                 ups_settings_url="http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/settings",
-                devd_power_diag_url="http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/power-diag",
+                devd_diag_snapshot_url="http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/diag-snapshot",
                 devd_monitor_start_url="http://127.0.0.1:20640/api/v1/devices/serial-04f3bb3f5367/monitor/start",
                 devd_device_trace_url="http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
                 devd_scan_url="http://127.0.0.1:35830/api/v1/devices/scan",
@@ -6851,7 +6891,7 @@ class SourceConfigurationGateTests(unittest.TestCase):
             load_status_ready_timeout_sec=20.0,
             ups_status_url="http://127.0.0.1:20640/api/v1/devices/serial-04f3bb3f5367/status",
             ups_settings_url="http://127.0.0.1:20640/api/v1/devices/serial-04f3bb3f5367/settings",
-            devd_power_diag_url="http://127.0.0.1:20640/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:20640/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
             devd_monitor_start_url="http://127.0.0.1:20640/api/v1/devices/serial-04f3bb3f5367/monitor/start",
             devd_device_trace_url="http://127.0.0.1:20640/api/v1/devices/serial-04f3bb3f5367/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:20640/api/v1/devices/scan",
@@ -6924,7 +6964,7 @@ class SourceConfigurationGateTests(unittest.TestCase):
             load_status_ready_timeout_sec=20.0,
             ups_status_url="http://192.168.31.232/api/v1/status",
             ups_settings_url="http://192.168.31.232/api/v1/settings",
-            devd_power_diag_url="http://127.0.0.1:51170/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:51170/api/v1/devices/mains-aegis-198840/diag-snapshot",
             devd_monitor_start_url="http://127.0.0.1:51170/api/v1/devices/serial-04f3bb3f5367/monitor/start",
             devd_device_trace_url="http://127.0.0.1:51170/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:51170/api/v1/devices/scan",
@@ -6974,7 +7014,7 @@ class SourceConfigurationGateTests(unittest.TestCase):
                             "rated_vout_mv": 12000,
                         }
                     },
-                    "power_diag": {
+                    "diag_snapshot": {
                         "input": {
                             "source": "usbc",
                         }
@@ -7123,7 +7163,7 @@ class SourceConfigurationGateTests(unittest.TestCase):
             load_status_ready_timeout_sec=20.0,
             ups_status_url="http://192.168.31.232/api/v1/status",
             ups_settings_url="http://192.168.31.232/api/v1/settings",
-            devd_power_diag_url="http://127.0.0.1:51170/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:51170/api/v1/devices/mains-aegis-198840/diag-snapshot",
             devd_monitor_start_url="http://127.0.0.1:51170/api/v1/devices/serial-04f3bb3f5367/monitor/start",
             devd_device_trace_url="http://127.0.0.1:51170/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:51170/api/v1/devices/scan",
@@ -7163,7 +7203,7 @@ class SourceConfigurationGateTests(unittest.TestCase):
                     "connection": "disconnected",
                     "identity": None,
                     "settings": None,
-                    "power_diag": {
+                    "diag_snapshot": {
                         "input": {
                             "source": "usbc",
                         }

@@ -27,13 +27,13 @@ Usage:
 Options:
   --devd-url URL                 mains-aegis-devd URL (default: $devd_url)
   --report-root DIR              HIL report root (default: tools/hil/reports/<timestamp>)
-  --require-recovery-state true  require power-diag policy.status=RECOV
+  --require-recovery-state true  require diag-snapshot policy.status=RECOV
   --skip-main-build true         reuse an existing release main firmware ELF
 
 This runner performs the controlled two-flash HIL flow:
   1. flash bq40-comm-tool firmware and apply live-df-mainboard
   2. flash main firmware through mains-aegis-devd
-  3. verify USB power-diag exposes the recovery baseline
+  3. verify USB diag-snapshot exposes the recovery baseline
 USAGE
 }
 
@@ -270,12 +270,17 @@ print(matches[0])
 PY
 }
 
-validate_power_diag() {
+validate_diag_snapshot() {
   local diag_json="$1"
   local out="$2"
   python_json "$diag_json" "$require_recovery_state" "$out" <<'PY'
 import json, sys
 diag = json.loads(sys.argv[1])
+packages = diag.get("packages", {})
+if isinstance(packages, dict):
+    derived = packages.get("derived.power", {})
+    if isinstance(derived, dict) and isinstance(derived.get("payload"), dict):
+        diag = derived["payload"]
 require_recovery = sys.argv[2] == "true"
 out = sys.argv[3]
 charger = diag.get("charger", {})
@@ -305,7 +310,7 @@ if errors:
 PY
 }
 
-poll_power_diag() {
+poll_diag_snapshot() {
   local out="$1"
   local result_out="$2"
   local timeout_sec=45
@@ -316,11 +321,11 @@ poll_power_diag() {
 
   while (( elapsed <= timeout_sec )); do
     attempt=$((attempt + 1))
-    diag_json=$(curl_json GET "$devd_url/api/v1/devices/$target_device_id/power-diag")
-    printf '%s\n' "$diag_json" > "$report_root/power-diag-attempt-$attempt.json"
+    diag_json=$(curl_json GET "$devd_url/api/v1/devices/$target_device_id/diag-snapshot?package=bq25792.regs&package=bq40.manufacturing&package=derived.power")
+    printf '%s\n' "$diag_json" > "$report_root/diag-snapshot-attempt-$attempt.json"
     printf '%s\n' "$diag_json" > "$out"
-    if validate_power_diag "$diag_json" "$result_out"; then
-      echo "Validated power-diag after ${elapsed}s."
+    if validate_diag_snapshot "$diag_json" "$result_out"; then
+      echo "Validated diag-snapshot after ${elapsed}s."
       return 0
     fi
     if (( elapsed == timeout_sec )); then
@@ -330,8 +335,8 @@ poll_power_diag() {
     elapsed=$((elapsed + interval_sec))
   done
 
-  echo "power-diag did not reach the expected HIL state within ${timeout_sec}s" >&2
-  validate_power_diag "$diag_json" "$result_out"
+  echo "diag-snapshot did not reach the expected HIL state within ${timeout_sec}s" >&2
+  validate_diag_snapshot "$diag_json" "$result_out"
 }
 
 main_elf="$REPO_ROOT/firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware"
@@ -396,7 +401,7 @@ run_step "Generate main firmware catalog manifest" \
   --features net_http,web_serial
 
 if [[ "$mode" != "real" ]]; then
-  echo "Dry-run completed. Real HIL would now start devd, scan the approved device, flash main firmware, and validate power-diag."
+  echo "Dry-run completed. Real HIL would now start devd, scan the approved device, flash main firmware, and validate diag-snapshot."
   exit 0
 fi
 
@@ -418,8 +423,8 @@ sleep 8
 if connect_json=$(curl_json POST "$devd_url/api/v1/devices/$target_device_id/connect" '{}' 2>/dev/null); then
   printf '%s\n' "$connect_json" > "$report_root/devd-connect.json"
 else
-  echo "Bound device is present but identity is unavailable after main flash; continuing to power-diag poll." >&2
+  echo "Bound device is present but identity is unavailable after main flash; continuing to diag-snapshot poll." >&2
 fi
-poll_power_diag "$report_root/power-diag.json" "$report_root/hil-result.json"
+poll_diag_snapshot "$report_root/diag-snapshot.json" "$report_root/hil-result.json"
 
 echo "HIL completed: $report_root/hil-result.json"

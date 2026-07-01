@@ -55,8 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ups-settings-url", default=suite.DEFAULT_UPS_SETTINGS_URL)
     parser.add_argument("--devd-scan-url", default=suite.DEFAULT_UPS_SCAN_URL)
     parser.add_argument(
-        "--devd-power-diag-url",
-        default=suite.DEFAULT_UPS_POWER_DIAG_URL,
+        "--devd-diag-snapshot-url",
+        default=suite.DEFAULT_UPS_DIAG_SNAPSHOT_URL,
     )
     parser.add_argument(
         "--devd-device-trace-url",
@@ -172,7 +172,7 @@ def read_ups_cli_observation_surfaces(
     device_id = resolve_observe_device_id(args) or args.ups_device_id
     surfaces = {
         "status": ["status"],
-        "power_diag": ["power-diag"],
+        "diag_snapshot": ["diag-snapshot"],
     }
     result: dict[str, Any] = {
         "ok": True,
@@ -340,14 +340,14 @@ def rate_gate_failures(
 def evaluate_telemetry_gate(
     *,
     ups_status_probe: Any,
-    ups_power_diag_probe: Any,
+    ups_diag_snapshot_probe: Any,
     source_probe: Any,
     load_probe: Any,
 ) -> dict[str, Any]:
     failures: list[str] = []
     for name, payload in (
         ("ups_status", ups_status_probe),
-        ("ups_power_diag", ups_power_diag_probe),
+        ("ups_diag_snapshot", ups_diag_snapshot_probe),
         ("source", source_probe),
         ("load", load_probe),
     ):
@@ -364,7 +364,7 @@ def evaluate_telemetry_gate(
         },
         "probes": {
             "ups_status": ups_status_probe,
-            "ups_power_diag": ups_power_diag_probe,
+            "ups_diag_snapshot": ups_diag_snapshot_probe,
             "source": source_probe,
             "load": load_probe,
         },
@@ -559,8 +559,8 @@ def run_telemetry_gate(args: argparse.Namespace, *, dry_run: bool) -> dict[str, 
         args.ups_status_url,
         devd_cache_query,
     )
-    ups_power_diag_url = append_query_params(
-        args.devd_power_diag_url,
+    ups_diag_snapshot_url = append_query_params(
+        args.devd_diag_snapshot_url,
         devd_cache_query,
     )
     source_ports_url = f"{args.isolapurr_url.rstrip('/')}/api/v1/ports"
@@ -574,9 +574,9 @@ def run_telemetry_gate(args: argparse.Namespace, *, dry_run: bool) -> dict[str, 
         devd_meta_required=True,
         dry_run=dry_run,
     )
-    ups_power_diag_probe = probe_http_json_rate(
-        name="ups_power_diag",
-        url=ups_power_diag_url,
+    ups_diag_snapshot_probe = probe_http_json_rate(
+        name="ups_diag_snapshot",
+        url=ups_diag_snapshot_url,
         samples=samples,
         interval_sec=interval_sec,
         timeout_sec=timeout_sec,
@@ -597,7 +597,7 @@ def run_telemetry_gate(args: argparse.Namespace, *, dry_run: bool) -> dict[str, 
     load_probe = probe_load_rate(args, dry_run=dry_run)
     return evaluate_telemetry_gate(
         ups_status_probe=ups_status_probe,
-        ups_power_diag_probe=ups_power_diag_probe,
+        ups_diag_snapshot_probe=ups_diag_snapshot_probe,
         source_probe=source_probe,
         load_probe=load_probe,
     )
@@ -628,7 +628,7 @@ def main() -> int:
     observe_urls = normalized_observe_urls(args)
     args.ups_status_url = observe_urls["ups_status_url"]
     args.ups_settings_url = observe_urls["ups_settings_url"]
-    args.devd_power_diag_url = observe_urls["devd_power_diag_url"]
+    args.devd_diag_snapshot_url = observe_urls["devd_diag_snapshot_url"]
     actions: list[dict[str, Any]] = []
     safe_prepare_failures: list[str] = []
     devd_bootstrap_gate = runner.ensure_valid_mains_aegis_devd_http_base(

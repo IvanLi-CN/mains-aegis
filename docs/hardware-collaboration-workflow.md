@@ -23,7 +23,7 @@ mains-aegis device <device-id> connect
 mains-aegis device <device-id> identity
 ```
 
-如果本轮需要 HTTP/Web 或 `power-diag`，从一开始使用 `serve-http` 代替 `serve`；不要在 `serve` 仍占用默认 IPC endpoint 时再启动默认 `serve-http`：
+如果本轮需要 HTTP/Web 或 `diag-snapshot`，从一开始使用 `serve-http` 代替 `serve`；不要在 `serve` 仍占用默认 IPC endpoint 时再启动默认 `serve-http`：
 
 ```bash
 mains-aegis-devd serve-http --allow-dev-cors
@@ -68,10 +68,10 @@ Agent 接管真机验证时按以下顺序执行：
    mains-aegis device <device-id> monitor stop
    ```
 
-5. 读取充电/电源状态使用 devd HTTP service 的只读 `power-diag` API：
+5. 读取充电/电源状态使用 devd HTTP service 的只读 `diag-snapshot` API：
 
    ```bash
-   curl http://127.0.0.1:30080/api/v1/devices/<device-id>/power-diag
+   curl http://127.0.0.1:30080/api/v1/devices/<device-id>/diag-snapshot
    ```
 
    如果当前只启动了 IPC-only `serve`，先停止该 daemon，再以 `serve-http --allow-dev-cors` 重新启动同一 IPC endpoint；不要让两个进程同时绑定默认 IPC endpoint。

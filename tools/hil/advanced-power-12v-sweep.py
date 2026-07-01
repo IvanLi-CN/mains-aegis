@@ -109,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--devd-target-id",
         default=DEFAULT_DEVD_TARGET_ID,
-        help=f"Connected devd device id used for power-diag/trace/reset paths (default: {DEFAULT_DEVD_TARGET_ID})",
+        help=f"Connected devd device id used for diag-snapshot/trace/reset paths (default: {DEFAULT_DEVD_TARGET_ID})",
     )
     parser.add_argument(
         "--isolapurr-url",
@@ -701,12 +701,26 @@ def get_settings(ups_status_url: str) -> Any:
     return http_json(f"{ups_base_url(ups_status_url)}/settings")
 
 
-def get_power_diag(devd_url: str, devd_target_ids: list[str]) -> Any:
+def get_diag_snapshot(devd_url: str, devd_target_ids: list[str]) -> Any:
     return devd_device_json(
         devd_url,
-        "/power-diag",
+        "/diag-snapshot",
         target_ids=devd_target_ids,
     )
+
+
+def dict_or_empty(payload: Any) -> dict[str, Any]:
+    return payload if isinstance(payload, dict) else {}
+
+
+def unwrap_diag_snapshot_payload(payload: Any) -> dict[str, Any]:
+    data = dict_or_empty(payload)
+    packages = dict_or_empty(data.get("packages"))
+    derived = dict_or_empty(packages.get("derived.power"))
+    derived_payload = dict_or_empty(derived.get("payload"))
+    if derived_payload:
+        return derived_payload
+    return data
 
 
 def get_trace(devd_url: str, devd_target_ids: list[str]) -> Any:
@@ -744,7 +758,7 @@ def collect_point(
         "hold_seconds": context.hold_seconds,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "status": http_json(ups_status_url),
-        "power_diag": get_power_diag(devd_url, devd_target_ids),
+        "diag_snapshot": get_diag_snapshot(devd_url, devd_target_ids),
         "isolapurr_power": isolapurr_power_show(isolapurr_url),
         "load_control": get_load_control_best_effort(
             args,
@@ -765,7 +779,7 @@ def collect_point(
 
 def summarize_point(point: dict[str, Any]) -> dict[str, Any]:
     status = point["status"]
-    diag = point["power_diag"]
+    diag = unwrap_diag_snapshot_payload(point["diag_snapshot"])
     input_status = status["input"]
     battery = status["battery"]
     charger = status["charger"]

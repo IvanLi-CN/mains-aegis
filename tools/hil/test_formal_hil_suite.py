@@ -213,7 +213,7 @@ class FormalHilSuiteTests(unittest.TestCase):
                 ],
             }
             html = self.overview.render_html(summary_path, output_path, payload)
-            self.assertIn('src="runs/scene-a/voltage-chart.html"', html)
+            self.assertIn('src="runs/scene-a/voltage-chart.html?embed=1"', html)
 
     def test_resolve_manifest_from_bundle_matches_profile_feature_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -326,7 +326,7 @@ class FormalHilSuiteTests(unittest.TestCase):
     def test_observe_device_id_prefers_device_id_derived_from_observe_urls(self) -> None:
         args = SimpleNamespace(
             ups_observe_device_id=None,
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
             ups_device_id="serial-04f3bb3f5367",
@@ -357,7 +357,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             isolapurr_device_id="856a141cdbd4",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
             devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
@@ -400,8 +400,8 @@ class FormalHilSuiteTests(unittest.TestCase):
             "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/settings",
         )
         self.assertEqual(
-            cmd[cmd.index("--devd-power-diag-url") + 1],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            cmd[cmd.index("--devd-diag-snapshot-url") + 1],
+            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
         )
         self.assertEqual(
             cmd[cmd.index("--devd-device-trace-url") + 1],
@@ -429,7 +429,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             isolapurr_device_id="856a141cdbd4",
             ups_status_url="http://192.168.31.232/api/v1/status",
             ups_settings_url="http://192.168.31.232/api/v1/settings",
-            devd_power_diag_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/diag-snapshot",
             devd_device_trace_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
@@ -451,8 +451,8 @@ class FormalHilSuiteTests(unittest.TestCase):
         )
         cmd = self.suite.build_runner_cmd(args, profile_key="12v", scene_key="assist_path")
         self.assertEqual(
-            cmd[cmd.index("--devd-power-diag-url") + 1],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            cmd[cmd.index("--devd-diag-snapshot-url") + 1],
+            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
         )
         self.assertEqual(
             cmd[cmd.index("--devd-device-trace-url") + 1],
@@ -480,7 +480,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             isolapurr_device_id="856a141cdbd4",
             ups_status_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/settings",
-            devd_power_diag_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/diag-snapshot",
             devd_device_trace_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
@@ -531,7 +531,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             isolapurr_device_id="856a141cdbd4",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
             devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
@@ -575,7 +575,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             isolapurr_device_id="856a141cdbd4",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
             devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
@@ -619,7 +619,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             isolapurr_device_id="856a141cdbd4",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
             devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
@@ -663,7 +663,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             isolapurr_device_id="856a141cdbd4",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
             devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
@@ -990,8 +990,8 @@ class FormalHilSuiteTests(unittest.TestCase):
                 "http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/status",
                 "--ups-settings-url",
                 "http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/settings",
-                "--devd-power-diag-url",
-                "http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/power-diag",
+                "--devd-diag-snapshot-url",
+                "http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/diag-snapshot",
                 "--output-profiles",
                 "12v",
                 "--scenes",
@@ -1088,7 +1088,7 @@ class FormalHilSuiteTests(unittest.TestCase):
                                         "rated_vout_mv": 19000,
                                     }
                                 },
-                                "power_diag": {},
+                                "diag_snapshot": {},
                             }
                         ]
                     },
@@ -1179,7 +1179,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
             ups_device_id="serial-04f3bb3f5367",
             mains_aegis_cli="mains-aegis",
             mains_aegis_ipc=None,
@@ -1188,7 +1188,7 @@ class FormalHilSuiteTests(unittest.TestCase):
         observe_urls = {
             "ups_status_url": args.ups_status_url,
             "ups_settings_url": args.ups_settings_url,
-            "devd_power_diag_url": args.devd_power_diag_url,
+            "devd_diag_snapshot_url": args.devd_diag_snapshot_url,
             "devd_device_trace_url": "http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
         }
         with (
@@ -1224,7 +1224,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
             ups_device_id="serial-04f3bb3f5367",
             mains_aegis_cli="mains-aegis",
             mains_aegis_ipc=None,
@@ -1233,7 +1233,7 @@ class FormalHilSuiteTests(unittest.TestCase):
         observe_urls = {
             "ups_status_url": args.ups_status_url,
             "ups_settings_url": args.ups_settings_url,
-            "devd_power_diag_url": args.devd_power_diag_url,
+            "devd_diag_snapshot_url": args.devd_diag_snapshot_url,
             "devd_device_trace_url": "http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
         }
         with (
@@ -1294,7 +1294,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
             ups_device_id="serial-04f3bb3f5367",
             mains_aegis_cli="mains-aegis",
             mains_aegis_ipc=None,
@@ -1303,7 +1303,7 @@ class FormalHilSuiteTests(unittest.TestCase):
         observe_urls = {
             "ups_status_url": args.ups_status_url,
             "ups_settings_url": args.ups_settings_url,
-            "devd_power_diag_url": args.devd_power_diag_url,
+            "devd_diag_snapshot_url": args.devd_diag_snapshot_url,
             "devd_device_trace_url": "http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
         }
         scan_payload = {

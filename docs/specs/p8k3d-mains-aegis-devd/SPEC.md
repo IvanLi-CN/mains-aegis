@@ -54,8 +54,8 @@
 - `DELETE /api/v1/devices/{id}/binding`: 移除绑定，并同步 devd 持久状态。
 - `GET /api/v1/devices/{id}/identity`: 返回设备 firmware identity。
 - `GET /api/v1/devices/{id}/status`: 返回设备 owner-facing status。该接口同时通过 IPC `device.status` 暴露给 `mains-aegis device <id> status`；CLI 必须支持单次读和 `--watch` 连续 JSONL 采样，正式 Power Validation 的 UPS 状态采集不得因为 HTTP 或 IPC 原始方法更方便而绕过 CLI 能力缺口。
-- `GET /api/v1/devices/{id}/power-diag`: 通过 USB CDC `get_power_diag` 获取只读电源诊断快照，并缓存到设备 session。
-- `GET /api/v1/devices/{id}/power-diag` 同时通过 IPC `device.power_diag` 暴露给 `mains-aegis device <id> power-diag`；CLI 必须提供与 `status` 同构的 `--fresh`、`--cache-only`、`--include-meta`、`--watch`、`--interval-ms` 与 `--samples` 参数。
+- `GET /api/v1/devices/{id}/diag-snapshot?package=<id>`: 通过 USB CDC `get_diag_snapshot` 获取只读 package 化诊断快照，并缓存到设备 session；重复 `package=` 选择多个 package，空 package 默认读取轻量 `core`。
+- `GET /api/v1/devices/{id}/diag-snapshot` 同时通过 IPC `device.diag_snapshot` 暴露给 `mains-aegis device <id> diag-snapshot --package <id>`；CLI 必须提供与 `status` 同构的 `--fresh`、`--cache-only`、`--include-meta`、`--watch`、`--interval-ms` 与 `--samples` 参数。
 - `GET|POST /api/v1/devices/{id}/artifact`: 查询或选择 artifact manifest。
 - `POST /api/v1/devices/{id}/flash`: 校验 artifact hash 后执行烧录；无硬件验证使用 `dry_run=true`。真实烧录响应与 `flash completed` 事件必须同时回传 backend `status/stdout/stderr`，用于区分“artifact 选择正确但底层 flash backend 没有真正完成”和“backend 已成功写入硬件”。真实 flash backend 必须有明确超时并在超时路径清理子进程，避免 HTTP 客户端断开后遗留卡住的底层烧录进程。
 - `POST /api/v1/devices/{id}/reset`: 设备 reset 请求；native serial 后端必须在已绑定端口上执行 in-process DTR/RTS app-boot 复位，保持 boot 释放线为实测 app-boot 电平，不再另起外部 reset 进程抢占同一串口。
@@ -72,12 +72,15 @@
 - `POST /api/v1/settings/advanced-power`: 通过指定 `device_id` 的连接设备整块替换 Advanced Power 高级设置。当前设备侧合同固定为 11 个数字字段，并继续只保存相对偏移量或无量纲值。
 - `POST /api/v1/settings/advanced-power/reset`: 通过指定 `device_id` 的连接设备把 Advanced Power 恢复为设备默认值。
 
-`power-diag` 响应必须保持只读，不触发充电策略、BMS 恢复或输出状态变化。快照至少包含：
+`diag-snapshot` 响应必须保持只读，不触发充电策略、BMS 恢复或输出状态变化。响应顶层固定为 `packages` 与 `errors`；单个 package 失败只写入 `errors`，不得阻断其它 package。首版 package id 为 `mcu.runtime`、`bq40.core`、`bq40.manufacturing`、`bq25792.regs`、`tps55288.out_a`、`tps55288.out_b`、`ina3221.regs`、`tmp112.out_a`、`tmp112.out_b`、`fusb302.regs`、`usbpd.policy`、`front_panel.io`、`derived.power`；跨设备派生值只放入 `derived.*` 或 `usbpd.policy`。
+
+`derived.power` 承载原电源派生诊断 payload，至少包含：
 
 - `input`: DC IN/VIN、charger-side input ADC、USB-C attach/VBUS/contract/unsafe-source latch。
 - `charger`: BQ25792 enable/control pin state、charge/input policy gates、status/fault raw bytes、decoded `CHG_STAT/VBUS_STAT/ICO_STAT` 与 ADC values；必须同时暴露 `vac1_adc_mv` 与 `vac2_adc_mv`，用于区分 USB-C VAC1 与 DC IN/VAC2 实际输入路径；还必须暴露 `vbat_lowv_pct_x10` 与 `iprechg_ma`，确认低压恢复的 `REG08` 已写为 `71.4% / 120mA`。
 - `policy`: `allow_charge=false` 或 `vbat_present=false` 相关的 policy state/status/notice、input source、target charge current、output-load and manual-charge blockers；低压恢复时必须暴露 `recovery_stage=bq40_pchg|bq25792_precharge`。
 - `bms`: BQ40Z50 pack/current/RSOC/cell range、RCA、charge/discharge readiness、raw safety/PF/manufacturing/gauging/operation status、XCHG/CHG/DSG/PCHG/FET enable/CUV/CUVC/charging inhibit flags；必须暴露 `cuv_recovery_mv` 与 `cuv_recov_chg`，确认维护 DF baseline 是否已应用。
+- `bq40.manufacturing`: 必须 fresh 同步读取 `ManufacturingStatus()`、`FET_EN/CHG_EN/DSG_EN/PF_EN`、`SafetyStatus()`、`PFStatus()`、`ChargingStatus()`、`GaugingStatus()`、`OperationStatus()` raw payload 与解码字段，不能依赖周期缓存。`OperationStatus()` 作为 H4/block command 读取时，该 package 必须暴露 `op_status_raw_len` 与前 4 个 `op_status_raw_bytes`，并显式解码 `emshut`、`pres`、`xdsg`，避免把 `EMSHUT` 误判成普通 `XDSG`。当 BQ40 DF 可读时，还必须暴露 `da_configuration`、`power_config`、`emshut_en`、`emshut_pexit_dis`、`emshut_exit_comm` 与 `emshut_exit_vpack`，用于判断 SHUTDN#/EMSHUT 退出路径是否允许按键、PACK 电压或 SMBus 通信恢复。
 
 ### Host power control
 
@@ -172,11 +175,13 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - host power API 支持 Linux/macOS 查询、dry-run、事件广播和真实动作默认拒绝；缺少平台后端或权限不足时返回可诊断错误。
 - `tools/firmware-artifact/build-catalog-entry.py` 能为 ELF 生成 manifest、catalog 和 `SHA256SUMS`。
 - 固件 identity JSON 包含 features/protocol/defmt 字段。
-- 固件 USB CDC 支持 `get_power_diag`，devd `GET /api/v1/devices/{id}/power-diag` 能返回并缓存结构化 `input/charger/policy/bms` 诊断快照。
-- Given DC IN 与 USB-C 同时在线，When charger 实际 VBUS/VAC2 为约 12V 且 VAC1 为约 5V，Then `power-diag` 必须能同时呈现 `input.input_source=dcin`、`charger.vac2_adc_mv≈12V`、`charger.vac1_adc_mv≈5V`、`charger.iindpm_ma=1000`，即使 `charger.vbus_stat` 仍报告 USB SDP 类枚举值。
-- Given BMS 处于 CUV 低电恢复且 `BQ25792 CHG_STAT=termination_done`，When 读取 `power-diag`，Then `policy.state` 必须保持 `recovering_low_voltage`、`policy.status=RECOV`、`policy.recovery_stage=bq40_pchg|bq25792_precharge`、`policy.full_latched=false`，不得把该快照误报为满充锁存。
-- Given charger poll 已完成，When 读取 `power-diag`，Then `charger.vbat_lowv_pct_x10=714`、`charger.iprechg_ma=120` 可见。
-- Given BQ40 DF 可读，When 读取 `power-diag`，Then `bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg` 可见，用于确认 `2550mV + CUV_RECOV_CHG=0` baseline。
+- 固件 USB CDC 支持 `get_diag_snapshot`，devd `GET /api/v1/devices/{id}/diag-snapshot` 能返回并缓存结构化 `packages/errors` 诊断快照。
+- Given DC IN 与 USB-C 同时在线，When charger 实际 VBUS/VAC2 为约 12V 且 VAC1 为约 5V，Then `diag-snapshot` 必须能同时呈现 `input.input_source=dcin`、`charger.vac2_adc_mv≈12V`、`charger.vac1_adc_mv≈5V`、`charger.iindpm_ma=1000`，即使 `charger.vbus_stat` 仍报告 USB SDP 类枚举值。
+- Given BMS 处于 CUV 低电恢复且 `BQ25792 CHG_STAT=termination_done`，When 读取 `diag-snapshot`，Then `policy.state` 必须保持 `recovering_low_voltage`、`policy.status=RECOV`、`policy.recovery_stage=bq40_pchg|bq25792_precharge`、`policy.full_latched=false`，不得把该快照误报为满充锁存。
+- Given charger poll 已完成，When 读取 `diag-snapshot`，Then `charger.vbat_lowv_pct_x10=714`、`charger.iprechg_ma=120` 可见。
+- Given BQ40 DF 可读，When 读取 `diag-snapshot`，Then `bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg` 可见，用于确认 `2550mV + CUV_RECOV_CHG=0` baseline。
+- Given BQ40 处于 `EMSHUT` 或刚退出 `EMSHUT`，When 读取 `diag-snapshot`，Then `bms.op_status_raw_len`、`bms.op_status_raw_bytes`、`bms.emshut`、`bms.pres`、`bms.xdsg` 与 `bms.dsg_fet` 可见，用于直接核对 H4 raw payload 与解码结果。
+- Given BQ40 DF 可读，When 读取 `diag-snapshot`，Then `bms.da_configuration`、`bms.power_config`、`bms.emshut_en`、`bms.emshut_pexit_dis`、`bms.emshut_exit_comm` 与 `bms.emshut_exit_vpack` 可见，用于确认 `SHUTDN#` / communication-exit / PACK-voltage-exit 是否被配置允许。
 - Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 env 指定或默认的 `serve-http --allow-dev-cors`。
 - 文档与 AGENTS guardrails 清晰说明 `$mains-aegis-devd-flow` 是本仓 Codex 默认入口；显式 end-user/released-tool 操作才使用 `$mains-aegis-user-operations`。
 - 多 USB CDC 设备同时存在时，devd/Web 不自动选择；Web 显示候选列表，用户选择后才创建 Web lease 并占用设备。
@@ -186,29 +191,31 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - Given `POST /api/v1/devices/{id}/flash` 触发真实烧录，When backend 在超时窗口内没有返回，Then devd 必须返回可诊断的 retryable `espflash_timeout`，并确保 backend 子进程不会继续作为活动烧录流程悬挂。
 - Given `POST /api/v1/devices/{id}/flash` 触发 ESP32-S3 USB 烧录，When flash 写入完成，Then backend 优先使用 `watchdog-reset` after-operation，避免 DTR/RTS normal reset 在当前样机上被 strap 采样为 ROM download。
 - Given native serial `reset` 占用已绑定端口，When devd 需要让 ESP32-S3 运行 app，Then devd 必须用自身 serial handle 执行 boot-release、RTS pulse、boot-release 的 app-boot 控制线序列，不得通过额外进程重新打开端口；monitor/start 不得在已打开 monitor fd 上重复执行该复位序列。
-- 低压恢复 HIL 必须可通过 `tools/hil/low-voltage-recovery.sh` 完成“`tools/bq40-comm-tool` 临时固件 apply DF -> devd 烧回主固件 -> USB `power-diag` 验证”的双烧录流程；runner 必须拒绝非批准 device id / port，并在 real 模式下阻断任何指向 `/dev/cu.usbmodem212101` 的绑定。
+- 低压恢复 HIL 必须可通过 `tools/hil/low-voltage-recovery.sh` 完成“`tools/bq40-comm-tool` 临时固件 apply DF -> devd 烧回主固件 -> USB `diag-snapshot` 验证”的双烧录流程；runner 必须拒绝非批准 device id / port，并在 real 模式下阻断任何指向 `/dev/cu.usbmodem212101` 的绑定。
 
 ## 实现状态
 
 - `tools/mains-aegis-host`: v1 daemon/API/mock validation foundation，并提供 CLI、IPC 与显式 HTTP service。
 - `web/`: hosted Connect 只显示 devd discovery；devd 列出的 USB 设备通过 lease/usb-http bridge 进入 Web，LAN 设备则在 Web 中直接落为硬件 HTTP record。
-- `tools/mains-aegis-host`: 提供设备级 `power-diag` 只读诊断 API，转发固件 USB CDC `get_power_diag` 并在 session 中缓存结果。
+- `tools/mains-aegis-host`: 提供设备级 `diag-snapshot` 只读诊断 API，转发固件 USB CDC `get_diag_snapshot` 并在 session 中缓存结果。
 - `tools/mains-aegis-host`: flash API 与 `flash completed` 事件已暴露 backend `status/stdout/stderr`，用于现场确认底层 `espflash` 执行结果。
 - `tools/mains-aegis-host`: flash backend 有可配置超时，默认避免底层烧录进程在 HTTP 客户端超时或断开后无界悬挂。
 - `tools/mains-aegis-host`: flash backend 使用 `watchdog-reset` after-operation，避免当前 ESP32-S3 USB CDC 样机 post-flash 被 DTR/RTS line reset 拉进 ROM download。
 - `tools/mains-aegis-host`: native serial reset 使用 in-process DTR/RTS app-boot 复位，并保持 boot 释放线为实测 app-boot 电平；monitor attach 不隐式复位也不主动改写 DTR/RTS，且 monitor 已运行时 `/reset` 复用 monitor 线程持有的串口，避免外部 reset 进程和重枚举前 monitor fd 争抢同一串口。
-- `firmware/src/net_contract.rs`: `power-diag.charger` 已暴露 `vac2_adc_mv`，用于定位 BQ25792 AC2/DC IN 实际采样。
+- `firmware/src/net_contract.rs`: `diag-snapshot.charger` 已暴露 `vac2_adc_mv`，用于定位 BQ25792 AC2/DC IN 实际采样。
 - `tools/mains-aegis-host`: 提供 host power control surface；低功耗运行、suspend、shutdown 默认 dry-run，真实动作受启动参数保护。
 - `schemas/firmware-catalog.schema.json`: v1 catalog schema。
 - `tools/firmware-artifact/build-catalog-entry.py`: local manifest/catalog generator。
 - `web/src/api/*`: devd mode client contracts。
 - `firmware/src/net_contract.rs`: firmware identity/status/power diagnostic JSON contract。
+- `firmware/src/net_contract.rs`: `diag-snapshot.bms` 已暴露 `op_status_raw_len`、`op_status_raw_bytes`、`emshut`、`pres`、`xdsg` 与 EMSHUT 退出配置字段，供 host 直接核对 BQ40 `OperationStatus()` raw payload 与恢复门禁。
 
 ## 变更记录（Change log）
 
-- 2026-06-14: `power event`、`status` 与 `power-diag` 统一补充 `tps_total_iout_ma` / `tps_limit_threshold_ma`，用于解释 `pressure_tps_output_current`；DC IN profile 的 `iindpm_ma` 基线更新为 `1000mA`。
-- 2026-06-04: `power-diag` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2550mV + CUV_RECOV_CHG=0` baseline。
+- 2026-06-14: `power event`、`status` 与 `diag-snapshot` 统一补充 `tps_total_iout_ma` / `tps_limit_threshold_ma`，用于解释 `pressure_tps_output_current`；DC IN profile 的 `iindpm_ma` 基线更新为 `1000mA`。
+- 2026-06-04: `diag-snapshot` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2550mV + CUV_RECOV_CHG=0` baseline。
 - 2026-06-04: `flash` API 与设备事件增加 backend `status/stdout/stderr` 透传，现场可直接确认 `espflash` 是否真正完成以及目标硬件 identity 是否已经切到新 artifact。
 - 2026-06-04: 新增低压恢复 HIL runner 与文档，固化 bq40 工具固件和主固件的双烧录验证路径。
-- 2026-06-05: `/api/v1/status` 的 `battery` snapshot 增加四节 `cell_mv`、`cell_delta_mv`、均衡状态字段与 `charge_fet_on` / `discharge_fet_on` / `precharge_fet_on`，Web 电池页可直接展示 per-cell voltage、delta、BAL 状态与三路 BMS MOS 状态，不再依赖 `power-diag` 详情端点。
+- 2026-06-05: `/api/v1/status` 的 `battery` snapshot 增加四节 `cell_mv`、`cell_delta_mv`、均衡状态字段与 `charge_fet_on` / `discharge_fet_on` / `precharge_fet_on`，Web 电池页可直接展示 per-cell voltage、delta、BAL 状态与三路 BMS MOS 状态，不再依赖 `diag-snapshot` 详情端点。
 - 2026-06-07: `devices/scan` 与 `devices` 响应中的 `binding.logical_device_id` 成为 Web 归并 USB identity-pending candidate 与 Fleet 混合视图的 canonical 键；旧绑定若缺失该字段，Connect 仍可继续显式补绑到已有 logical device。
+- 2026-07-01: `diag-snapshot.bms` 增加 `OperationStatus()` raw payload、`emshut` / `pres` 解码与 EMSHUT 退出配置字段，现场可区分 `EMSHUT` 与普通 `XDSG` 阻断并确认恢复路径配置。

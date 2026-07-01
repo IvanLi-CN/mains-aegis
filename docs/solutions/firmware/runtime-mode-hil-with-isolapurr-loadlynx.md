@@ -30,7 +30,7 @@ The current accepted bench is:
 - IsolaPurr as the controllable DC input source
 - LoadLynx as the controllable electronic load
 - UPS CLI/devd IPC `status`
-- UPS CLI/devd IPC `power-diag`
+- UPS CLI/devd IPC `diag-snapshot`
 
 Current active formal source baselines are:
 
@@ -82,7 +82,7 @@ Formal runtime-mode conclusions must retain synchronized evidence from:
 
 - IsolaPurr source telemetry
 - UPS CLI/devd IPC `status`
-- UPS CLI/devd IPC `power-diag`
+- UPS CLI/devd IPC `diag-snapshot`
 - LoadLynx USB telemetry
 
 For current-board runtime-mode work, those four surfaces are the real truth surface. Any scene missing one of them is diagnostic-only.
@@ -114,35 +114,35 @@ Reusable sampling rule:
 
 - design for `3Hz` telemetry on every required live device path
 - reject formal sign-off below `2Hz` or above `0.5s` maximum sample gap
-- prove UPS CLI/devd IPC `status`, UPS CLI/devd IPC `power-diag`, LoadLynx USB
+- prove UPS CLI/devd IPC `status`, UPS CLI/devd IPC `diag-snapshot`, LoadLynx USB
   telemetry, and IsolaPurr source telemetry independently before a combined
   scene is trusted
 
 UPS CDC freshness has one additional implementation lesson: the USB transport
-was not the limiting factor when `status` / `power-diag` appeared to stall.
+was not the limiting factor when `status` / `diag-snapshot` appeared to stall.
 The host path first had to avoid synchronous persistence on every monitor trace,
 then the firmware had to stop doing large BMS diagnostic reads in one runtime
 tick. Runtime BMS detail refreshes are now split so a single poll refreshes at
-most one detail group, and `power-diag` uses cached BMS detail fields instead of
+most one detail group, and `diag-snapshot` uses cached BMS detail fields instead of
 doing extra DataFlash reads on the hot path. The host cache also must update
-`power_diag_updated_at` whenever monitor/status-derived `power_diag` is written;
-otherwise `power-diag --watch` can incorrectly label a fresh derived diagnostic
+`diag_snapshot_updated_at` whenever monitor/status-derived `diag_snapshot` is written;
+otherwise `diag-snapshot --watch` can incorrectly label a fresh derived diagnostic
 sample as stale.
 
 Current proof after that fix:
 
 - UPS `status --watch --interval-ms 250 --watch-freshness-ms 750 --include-meta`:
   `96/96` rows, `0` misses, `4.0Hz`, max cache age `356ms`
-- UPS `power-diag --watch --interval-ms 250 --watch-freshness-ms 750 --include-meta`:
+- UPS `diag-snapshot --watch --interval-ms 250 --watch-freshness-ms 750 --include-meta`:
   `96/96` rows, `0` misses, `4.0Hz`, max cache age `421ms`
 - LoadLynx `status-stream --interval-ms 250 --count 40`: about `3.99Hz`, max
   gap `274ms`
 
-Current proof after syncing status-derived `power_diag` timestamps:
+Current proof after syncing status-derived `diag_snapshot` timestamps:
 
 - UPS `status --watch --interval-ms 250 --watch-freshness-ms 750 --samples 40`:
   `40/40` rows, `0` misses, `4.0Hz`, max output gap `272ms`, `0` stale rows
-- UPS `power-diag --watch --interval-ms 250 --watch-freshness-ms 750 --samples 40`:
+- UPS `diag-snapshot --watch --interval-ms 250 --watch-freshness-ms 750 --samples 40`:
   `40/40` rows, `0` misses, `4.0Hz`, max output gap `283ms`, `0` stale rows
 - LoadLynx `status-stream --interval-ms 250 --count 40`: `40/40` rows,
   about `3.99Hz`, max gap `280ms`
@@ -480,7 +480,7 @@ Current incident fix that made the four-scene suite safe to run:
 - CDC/native serial `device_identity` and `device_settings` must use fresh
   request/response reads, not stale capability cache entries, after a profile
   switch or flash
-- successful devd-backed flash must invalidate identity/settings/status/power-diag
+- successful devd-backed flash must invalidate identity/settings/status/diag-snapshot
   runtime caches
 - firmware build metadata must rerun when `CARGO_FEATURE_*` changes so identity
   features match the actual compiled output profile
@@ -495,7 +495,7 @@ Current incident fix that made the four-scene suite safe to run:
   produce artificial `timeseries` gaps even though the hardware telemetry
   streams are healthy
 - runtime BQ40 block-detail diagnostics must stay lightweight in the firmware
-  runtime path; heavy BQ40 block reads can starve USB `status` / `power-diag`
+  runtime path; heavy BQ40 block reads can starve USB `status` / `diag-snapshot`
   delivery and make a good bench look like a sampling failure
 
 Current USB/IPC suite result:

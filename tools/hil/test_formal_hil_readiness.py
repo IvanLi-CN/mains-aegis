@@ -43,7 +43,7 @@ class FormalHilReadinessTests(unittest.TestCase):
                 ups_status_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/status",
                 ups_settings_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/settings",
                 devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
-                devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/power-diag",
+                devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
                 devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/trace?trace_limit=1",
                 artifact_manifest_12v=None,
                 artifact_manifest_19v=None,
@@ -105,7 +105,7 @@ class FormalHilReadinessTests(unittest.TestCase):
                 ups_status_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/status",
                 ups_settings_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/settings",
                 devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
-                devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/power-diag",
+                devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
                 devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/trace?trace_limit=1",
                 artifact_manifest_12v="/tmp/12v.manifest.json",
                 artifact_manifest_19v="/tmp/19v.manifest.json",
@@ -318,7 +318,7 @@ class FormalHilReadinessTests(unittest.TestCase):
                 "max_sample_gap_s": 0.333,
                 "fresh": True,
             },
-            ups_power_diag_probe={
+            ups_diag_snapshot_probe={
                 "effective_sample_rate_hz": 1.2,
                 "max_sample_gap_s": 0.8,
                 "fresh": True,
@@ -336,8 +336,8 @@ class FormalHilReadinessTests(unittest.TestCase):
         )
 
         self.assertFalse(result["ok"])
-        self.assertIn("ups_power_diag_sample_rate_below_2hz", result["failures"])
-        self.assertIn("ups_power_diag_sample_gap_above_0_5s", result["failures"])
+        self.assertIn("ups_diag_snapshot_sample_rate_below_2hz", result["failures"])
+        self.assertIn("ups_diag_snapshot_sample_gap_above_0_5s", result["failures"])
         self.assertIn("load_stale_samples", result["failures"])
 
     def test_evaluate_telemetry_gate_accepts_all_fresh_formal_rates(self) -> None:
@@ -348,7 +348,7 @@ class FormalHilReadinessTests(unittest.TestCase):
         }
         result = self.readiness.evaluate_telemetry_gate(
             ups_status_probe=fresh_probe,
-            ups_power_diag_probe=fresh_probe,
+            ups_diag_snapshot_probe=fresh_probe,
             source_probe=fresh_probe,
             load_probe=fresh_probe,
         )
@@ -359,7 +359,7 @@ class FormalHilReadinessTests(unittest.TestCase):
     def test_run_telemetry_gate_uses_transient_retry_only_for_ups_probes(self) -> None:
         args = self.readiness.argparse.Namespace(
             ups_status_url="http://127.0.0.1:41490/api/v1/devices/serial-04f3bb3f5367/status",
-            devd_power_diag_url="http://127.0.0.1:41490/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:41490/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
             isolapurr_url="http://192.168.31.122",
             status_timeout_sec=5.0,
             telemetry_probe_samples=3,
@@ -393,15 +393,15 @@ class FormalHilReadinessTests(unittest.TestCase):
             [call["retries"] for call in calls],
             [1, 1, 0],
         )
-        self.assertEqual([call["name"] for call in calls], ["ups_status", "ups_power_diag", "source"])
+        self.assertEqual([call["name"] for call in calls], ["ups_status", "ups_diag_snapshot", "source"])
 
-    def test_read_ups_cli_observation_surfaces_uses_status_and_power_diag_cli(self) -> None:
+    def test_read_ups_cli_observation_surfaces_uses_status_and_diag_snapshot_cli(self) -> None:
         args = self.readiness.argparse.Namespace(
             mains_aegis_cli="/tmp/mains-aegis",
             mains_aegis_ipc="/tmp/mains-aegis.sock",
             ups_device_id="serial-04f3bb3f5367",
             ups_observe_device_id=None,
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/settings",
         )
@@ -434,26 +434,26 @@ class FormalHilReadinessTests(unittest.TestCase):
                     "/tmp/mains-aegis.sock",
                     "device",
                     "serial-04f3bb3f5367",
-                    "power-diag",
+                    "diag-snapshot",
                     "--include-meta",
                     "--cache-only",
                 ],
             ],
         )
 
-    def test_read_ups_cli_observation_surfaces_fails_on_missing_power_diag_cli(self) -> None:
+    def test_read_ups_cli_observation_surfaces_fails_on_missing_diag_snapshot_cli(self) -> None:
         args = self.readiness.argparse.Namespace(
             mains_aegis_cli="/tmp/mains-aegis",
             mains_aegis_ipc=None,
             ups_device_id="serial-04f3bb3f5367",
             ups_observe_device_id=None,
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/settings",
         )
 
         def fake_run_json(cmd: list[str]):
-            if "power-diag" in cmd:
+            if "diag-snapshot" in cmd:
                 raise RuntimeError("missing subcommand")
             return {"meta": {"cache_fresh": True}}
 
@@ -461,7 +461,7 @@ class FormalHilReadinessTests(unittest.TestCase):
             result = self.readiness.read_ups_cli_observation_surfaces(args, dry_run=False)
 
         self.assertFalse(result["ok"])
-        self.assertIn("power_diag_cli_unavailable", result["failures"])
+        self.assertIn("diag_snapshot_cli_unavailable", result["failures"])
 
     def test_write_summary_persists_json_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -527,7 +527,7 @@ class FormalHilReadinessTests(unittest.TestCase):
     def test_resolve_observe_device_id_prefers_observe_url_device_id(self) -> None:
         args = self.readiness.argparse.Namespace(
             ups_observe_device_id=None,
-            devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
             ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
             ups_device_id="serial-04f3bb3f5367",
@@ -542,7 +542,7 @@ class FormalHilReadinessTests(unittest.TestCase):
             ups_device_id="serial-04f3bb3f5367",
             ups_status_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/status",
             ups_settings_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/settings",
-            devd_power_diag_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/power-diag",
+            devd_diag_snapshot_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/diag-snapshot",
             devd_device_trace_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
         )
@@ -556,8 +556,8 @@ class FormalHilReadinessTests(unittest.TestCase):
             "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/settings",
         )
         self.assertEqual(
-            normalized["devd_power_diag_url"],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/power-diag",
+            normalized["devd_diag_snapshot_url"],
+            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
         )
 
     def test_main_records_source_reachability_gate(self) -> None:
@@ -586,7 +586,7 @@ class FormalHilReadinessTests(unittest.TestCase):
                 status_timeout_sec=20.0,
                 skip_safe_prepare=True,
                 dry_run=True,
-                devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+                devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
                 devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
                 ups_observe_device_id=None,
             )
@@ -687,7 +687,7 @@ class FormalHilReadinessTests(unittest.TestCase):
                 status_timeout_sec=20.0,
                 skip_safe_prepare=True,
                 dry_run=False,
-                devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+                devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
                 devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
                 ups_observe_device_id=None,
             )
@@ -807,7 +807,7 @@ class FormalHilReadinessTests(unittest.TestCase):
                 status_timeout_sec=20.0,
                 skip_safe_prepare=True,
                 dry_run=False,
-                devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+                devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
                 devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
                 ups_observe_device_id=None,
             )
@@ -908,7 +908,7 @@ class FormalHilReadinessTests(unittest.TestCase):
                 status_timeout_sec=20.0,
                 skip_safe_prepare=False,
                 dry_run=False,
-                devd_power_diag_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/power-diag",
+                devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
                 devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
                 ups_observe_device_id=None,
             )
@@ -996,7 +996,7 @@ class FormalHilReadinessTests(unittest.TestCase):
                 status_timeout_sec=20.0,
                 skip_safe_prepare=True,
                 dry_run=False,
-                devd_power_diag_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/power-diag",
+                devd_diag_snapshot_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/diag-snapshot",
                 devd_device_trace_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
                 ups_observe_device_id=None,
             )

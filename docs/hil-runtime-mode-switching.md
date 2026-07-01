@@ -30,7 +30,7 @@ Accepted bench topology:
 - LoadLynx `loadlynx-d68638` on UPS `OUT`
 - UPS owner-facing evidence from:
   - `mains-aegis` CLI `status` over devd IPC / UPS USB CDC
-  - `mains-aegis` CLI `power-diag` over devd IPC / UPS USB CDC
+  - `mains-aegis` CLI `diag-snapshot` over devd IPC / UPS USB CDC
 - IsolaPurr source control/telemetry from the stable IsolaPurr CLI transport
   selected for the bench; LAN HTTP via `--isolapurr-url` is acceptable for the
   source because the UPS and LoadLynx transport restrictions do not apply to
@@ -223,7 +223,7 @@ Realtime freshness fields remain required diagnostics:
 - `load_status_max_age_s`
 - `source_status_max_age_s`
 - `ups_status_max_age_s`
-- `power_diag_max_age_s`
+- `diag_snapshot_max_age_s`
 
 They are still recorded and reviewed, but they no longer independently veto an
 otherwise complete formal run once continuous sampling and source-cut semantics
@@ -235,7 +235,7 @@ Each effective scene must retain synchronized evidence from:
 
 - IsolaPurr source telemetry
 - UPS CLI/devd IPC `status`
-- UPS CLI/devd IPC `power-diag`
+- UPS CLI/devd IPC `diag-snapshot`
 - LoadLynx USB telemetry
 
 The scene is not acceptable if any of the four surfaces goes stale or absent beyond the run-validity contract.
@@ -384,7 +384,7 @@ If chart continuity and report continuity disagree, trust the report and raw sce
 For formal scene capture:
 
 - UPS runtime truth must come from direct UPS `status`
-- UPS diagnostics truth must come from direct devd `power-diag`
+- UPS diagnostics truth must come from direct devd `diag-snapshot`
 - `devd /api/v1/devices` listing data may be useful for discovery or seeding, but
   it is not acceptable as the primary runtime truth surface for cut/restore semantics
 
@@ -412,7 +412,7 @@ Before any combined formal scene starts, the operator or runner must prove all
 required live telemetry paths meet that contract:
 
 - UPS direct `status --watch`
-- UPS direct `power-diag --watch`
+- UPS direct `diag-snapshot --watch`
 - LoadLynx USB `status-stream`
 - IsolaPurr source telemetry
 
@@ -434,7 +434,7 @@ mains-aegis --ipc .tmp/mains-aegis-devd-power-validation.sock \
 Current observed result:
 
 - UPS `status`: `5.027Hz`, max gap `0.201s`, pass
-- UPS `power-diag`: `4.998Hz`, max gap `0.202s`, pass
+- UPS `diag-snapshot`: `4.998Hz`, max gap `0.202s`, pass
 - LoadLynx: `5.0Hz`, max gap `0.213s`, pass
 - IsolaPurr USB/devd: fail, `device did not respond to IsolaPurr info`
 - IsolaPurr URL transport: allowed and should be used for the next run
@@ -443,13 +443,13 @@ Current USB/devd IPC proof:
 
 - UPS `status --watch --interval-ms 250 --watch-freshness-ms 750 --samples 40`:
   `4.0Hz`, max gap `272ms`, no missed or stale rows
-- UPS `power-diag --watch --interval-ms 250 --watch-freshness-ms 750 --samples 40`:
+- UPS `diag-snapshot --watch --interval-ms 250 --watch-freshness-ms 750 --samples 40`:
   `4.0Hz`, max gap `283ms`, no missed or stale rows
 - LoadLynx `status-stream --interval-ms 250 --count 40`: about `3.99Hz`, max
   gap `280ms`
 
-The host must keep status-derived `power_diag` timestamps synchronized with the
-status timestamp. A fresh derived diagnostic with a stale `power_diag_updated_at`
+The host must keep status-derived `diag_snapshot` timestamps synchronized with the
+status timestamp. A fresh derived diagnostic with a stale `diag_snapshot_updated_at`
 is a host bug, not a device telemetry failure.
 
 ### 3. Source-cut rows must be evaluated by cut-state truth

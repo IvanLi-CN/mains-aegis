@@ -13,7 +13,7 @@
 
 - 决定本仓 Codex 默认路由为 `$mains-aegis-devd-flow`，覆盖开发、验证、诊断、现场排查和硬件 read/session-read 检查。
 - 决定 `$mains-aegis-user-operations` 只作为显式 end-user/released host-tools 路径，保留缺少 release 工具时硬阻断的语义。
-- 决定 read/session-read 默认无需额外授权：scan/list、connect/disconnect、identity/status/power-diag、monitor start/stop/log reading；持久绑定变更、settings 写入、reset、flash 和真实 host power action 仍需明确授权。
+- 决定 read/session-read 默认无需额外授权：scan/list、connect/disconnect、identity/status/diag-snapshot、monitor start/stop/log reading；持久绑定变更、settings 写入、reset、flash 和真实 host power action 仍需明确授权。
 
 ## 2026-06-07
 

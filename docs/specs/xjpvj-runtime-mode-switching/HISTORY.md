@@ -46,7 +46,7 @@
 - formal Power Path Validation 真相源再收敛一轮：
   - source-cut / backup 语义不再允许读取 `devd /api/v1/devices` cached listing
     作为 UPS runtime truth
-  - formal runner 现在强制使用 direct UPS `status` + direct devd `power-diag`
+  - formal runner 现在强制使用 direct UPS `status` + direct devd `diag-snapshot`
 - formal acceptance 新增 source-cut 语义 gate：
   - `port_c_enabled=false` 后，UPS 侧必须观察到真实 cut 响应
   - `vin_vbus_mv` 也必须随 cut 变化
@@ -108,8 +108,8 @@
   - source-cut 门禁在 active scene 内使用 collector truth 判定
   - 禁止在 `transition_backup` 内同步执行长阻塞 status/power read 导致 `timeseries` 出现假 gap
 - 修正 UPS 采样链路：
-  - runtime BQ40 block detail 改为轻量 cached log，避免周期性阻塞 USB status/power-diag feed
-- 修复后 UPS `status` 与 `power-diag` probe 达到 `3.003Hz`，max gap 约 `0.41s`，无 stale 样本
+  - runtime BQ40 block detail 改为轻量 cached log，避免周期性阻塞 USB status/diag-snapshot feed
+- 修复后 UPS `status` 与 `diag-snapshot` probe 达到 `3.003Hz`，max gap 约 `0.41s`，无 stale 样本
 - 前面板冻结回归进一步收敛：
   - `service_web_serial_if_due()` 保留时，屏幕可继续正常运行
   - 固件主循环中的 unsolicited compact status push 已移除

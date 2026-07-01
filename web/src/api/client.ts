@@ -729,7 +729,7 @@ export function subscribeDevdDeviceEvents(
     "artifact",
     "flash",
     "reset",
-    "power_diag",
+    "diag_snapshot",
   ]) {
     eventSource.addEventListener(kind, handleEvent);
   }

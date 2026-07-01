@@ -146,7 +146,7 @@ Freshness diagnostics are still recorded in `results.json`:
 - `load_status_max_age_s`
 - `source_status_max_age_s`
 - `ups_status_max_age_s`
-- `power_diag_max_age_s`
+- `diag_snapshot_max_age_s`
 
 They remain mandatory observability fields for debugging, but they are no longer
 independent veto conditions when the scene already preserves continuous complete
@@ -177,7 +177,7 @@ For local Web verification and owner-facing browser handoff only:
 Minimum formal Power Path Validation surfaces:
 
 - UPS `mains-aegis device <id> status`
-- UPS `mains-aegis device <id> power-diag`
+- UPS `mains-aegis device <id> diag-snapshot`
 - UPS `mains-aegis device <id> settings`
 - IsolaPurr source telemetry
 - LoadLynx USB CLI control
@@ -192,7 +192,7 @@ Before a combined scene can be treated as formal evidence, prove these three
 paths independently on the same bench:
 
 - UPS `status --watch --interval-ms 200 --watch-freshness-ms 750`
-- UPS `power-diag --watch --interval-ms 200 --watch-freshness-ms 750`
+- UPS `diag-snapshot --watch --interval-ms 200 --watch-freshness-ms 750`
 - LoadLynx `status-stream` through the USB/devd path that the scene will use,
   using the explicitly selected development CLI binary
 - IsolaPurr CLI source telemetry at the same `3Hz` cadence, using whichever
@@ -207,17 +207,17 @@ The readiness checker records the same gate in its summary JSON under
 probes are fresh and pass the rate/gap floor:
 
 - `ups_status`
-- `ups_power_diag`
+- `ups_diag_snapshot`
 - `source`
 - `load`
 
 A single passing device path is not enough to start combined Power Path Validation. For example,
 a LoadLynx path that reports `effective_sample_rate_hz >= 3` and
 `max_sample_gap_s <= 0.5` is still only a LoadLynx pass when UPS `status`,
-UPS `power-diag`, or IsolaPurr source telemetry are stale, unreachable, or
+UPS `diag-snapshot`, or IsolaPurr source telemetry are stale, unreachable, or
 below the floor.
 
-The UPS status and power-diagnostic surfaces must be available through the
+The UPS status and diag-snapshot surfaces must be available through the
 `mains-aegis` CLI over devd IPC/USB. Do not replace missing CLI capability with
 ad-hoc IPC JSON-RPC calls in formal validation scripts; fix the CLI contract first.
 Do not use the local HTTP bridge or UPS LAN HTTP for formal UPS telemetry
@@ -225,7 +225,7 @@ evidence.
 
 ```bash
 mains-aegis device serial-04f3bb3f5367 status --watch --interval-ms 200
-mains-aegis device serial-04f3bb3f5367 power-diag --watch --interval-ms 200
+mains-aegis device serial-04f3bb3f5367 diag-snapshot --watch --interval-ms 200
 ```
 
 `--watch` reads the devd monitor cache by default and does not issue extra CDC
@@ -237,17 +237,17 @@ continuous and fresh:
 
 - `status --watch --interval-ms 250 --watch-freshness-ms 750 --include-meta`
   should show `0` misses, output gaps below `0.5s`, and `cache_age_ms <= 750`
-- `power-diag --watch --interval-ms 250 --watch-freshness-ms 750 --include-meta`
+- `diag-snapshot --watch --interval-ms 250 --watch-freshness-ms 750 --include-meta`
   must meet the same rule
 - stale cache rows may be emitted to preserve a diagnostic timeline, but stale
   rows do not satisfy the formal freshness gate
 
 The current fixed UPS proof after the BMS detail refresh split and
-status-derived `power_diag` timestamp sync is:
+status-derived `diag_snapshot` timestamp sync is:
 
 - `status`: `40/40` rows, `0` misses, `4.0Hz`, max output gap `272ms`,
   `0` stale rows
-- `power-diag`: `40/40` rows, `0` misses, `4.0Hz`, max output gap `283ms`,
+- `diag-snapshot`: `40/40` rows, `0` misses, `4.0Hz`, max output gap `283ms`,
   `0` stale rows
 - LoadLynx `status-stream`: `40/40` rows, about `3.99Hz`, max gap `280ms`
 

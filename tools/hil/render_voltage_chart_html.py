@@ -65,7 +65,7 @@ def load_report_status(timeseries_path: Path) -> dict:
             "load_status_max_age_s": completeness.get("load_status_max_age_s"),
             "source_status_max_age_s": completeness.get("source_status_max_age_s"),
             "ups_status_max_age_s": completeness.get("ups_status_max_age_s"),
-            "power_diag_max_age_s": completeness.get("power_diag_max_age_s"),
+            "diag_snapshot_max_age_s": completeness.get("diag_snapshot_max_age_s"),
         }
     if summary_path.exists():
         payload = json.loads(summary_path.read_text())
@@ -85,7 +85,7 @@ def load_report_status(timeseries_path: Path) -> dict:
             "load_status_max_age_s": completeness.get("load_status_max_age_s"),
             "source_status_max_age_s": completeness.get("source_status_max_age_s"),
             "ups_status_max_age_s": completeness.get("ups_status_max_age_s"),
-            "power_diag_max_age_s": completeness.get("power_diag_max_age_s"),
+            "diag_snapshot_max_age_s": completeness.get("diag_snapshot_max_age_s"),
         }
     return {
         "source": None,
@@ -100,7 +100,7 @@ def load_report_status(timeseries_path: Path) -> dict:
         "load_status_max_age_s": None,
         "source_status_max_age_s": None,
         "ups_status_max_age_s": None,
-        "power_diag_max_age_s": None,
+        "diag_snapshot_max_age_s": None,
     }
 
 
@@ -273,7 +273,7 @@ def render_html(
     load_max_age = report_status.get("load_status_max_age_s")
     source_max_age = report_status.get("source_status_max_age_s")
     ups_max_age = report_status.get("ups_status_max_age_s")
-    diag_max_age = report_status.get("power_diag_max_age_s")
+    diag_max_age = report_status.get("diag_snapshot_max_age_s")
     ups_vout_complete = all(row.get("ups_vout") is not None for row in rows)
     ups_vout_required_ok = report_required_voltage_series.get("ups_output_voltage")
     if ups_vout_required_ok is None:

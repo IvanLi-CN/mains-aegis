@@ -16,7 +16,7 @@ DEFAULT_LOAD_DEVICE = "loadlynx-d68638"
 DEFAULT_LOAD_USB_PORT = "/dev/cu.usbmodem212101"
 DEFAULT_LOAD_CLI = "/Users/ivan/.codex/worktrees/a31f/loadlynx-host-src/tools/loadlynx-devd/target/debug/loadlynx"
 DEFAULT_UPS_STATUS_URL = "http://192.168.31.232/api/v1/status"
-DEFAULT_DEVD_POWER_DIAG_URL = "http://127.0.0.1:30088/api/v1/devices/serial-04f3bb3f5367/power-diag"
+DEFAULT_DEVD_DIAG_SNAPSHOT_URL = "http://127.0.0.1:30088/api/v1/devices/serial-04f3bb3f5367/diag-snapshot"
 DEFAULT_ISOLAPURR_URL = "http://192.168.31.122"
 DEFAULT_LOADS = "3000,3025,3050,3900"
 DEFAULT_HOLD_SECONDS = 8.0
@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--load-usb-port", default=DEFAULT_LOAD_USB_PORT)
     parser.add_argument("--load-cli", default=DEFAULT_LOAD_CLI)
     parser.add_argument("--ups-status-url", default=DEFAULT_UPS_STATUS_URL)
-    parser.add_argument("--devd-power-diag-url", default=DEFAULT_DEVD_POWER_DIAG_URL)
+    parser.add_argument("--devd-diag-snapshot-url", default=DEFAULT_DEVD_DIAG_SNAPSHOT_URL)
     parser.add_argument("--isolapurr-url", default=DEFAULT_ISOLAPURR_URL)
     parser.add_argument("--hold-seconds", type=float, default=DEFAULT_HOLD_SECONDS)
     parser.add_argument("--baseline-seconds", type=float, default=DEFAULT_BASELINE_SECONDS)
@@ -334,7 +334,7 @@ def capture_point(
     hold_seconds: float,
     load_device: str,
     ups_status_url: str,
-    devd_power_diag_url: str,
+    devd_diag_snapshot_url: str,
     isolapurr_url: str,
     status_timeout_sec: float,
 ) -> dict[str, Any]:
@@ -345,7 +345,7 @@ def capture_point(
         "hold_seconds": hold_seconds,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "ups_status": http_json(ups_status_url),
-        "power_diag": http_json(devd_power_diag_url),
+        "diag_snapshot": http_json(devd_diag_snapshot_url),
         "isolapurr_power": json.loads(
             run(
                 ["isolapurr", "power", "show", "--url", isolapurr_url, "--json"],
@@ -362,7 +362,7 @@ def capture_point(
 
 def summarize_point(point: dict[str, Any]) -> dict[str, Any]:
     status = point["ups_status"]
-    diag = point["power_diag"]
+    diag = unwrap_diag_snapshot_payload(point["diag_snapshot"])
     load_status = point.get("load_status") or {}
     port_c = None
     for port in point["isolapurr_power"].get("ports", {}).get("ports", []):
@@ -406,6 +406,20 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def dict_or_empty(payload: Any) -> dict[str, Any]:
+    return payload if isinstance(payload, dict) else {}
+
+
+def unwrap_diag_snapshot_payload(payload: Any) -> dict[str, Any]:
+    data = dict_or_empty(payload)
+    packages = dict_or_empty(data.get("packages"))
+    derived = dict_or_empty(packages.get("derived.power"))
+    derived_payload = dict_or_empty(derived.get("payload"))
+    if derived_payload:
+        return derived_payload
+    return data
+
+
 def main() -> int:
     args = parse_args()
     loads = parse_loads(args.loads_ma)
@@ -422,7 +436,7 @@ def main() -> int:
         "load_usb_port": args.load_usb_port,
         "load_cli": args.load_cli,
         "ups_status_url": args.ups_status_url,
-        "devd_power_diag_url": args.devd_power_diag_url,
+        "devd_diag_snapshot_url": args.devd_diag_snapshot_url,
         "isolapurr_url": args.isolapurr_url,
         "hold_seconds": args.hold_seconds,
         "baseline_seconds": args.baseline_seconds,
@@ -470,7 +484,7 @@ def main() -> int:
                 hold_seconds=0.0,
                 load_device=args.load_device,
                 ups_status_url=args.ups_status_url,
-                devd_power_diag_url=args.devd_power_diag_url,
+                devd_diag_snapshot_url=args.devd_diag_snapshot_url,
                 isolapurr_url=args.isolapurr_url,
                 status_timeout_sec=args.status_timeout_sec,
             )
@@ -501,7 +515,7 @@ def main() -> int:
                     hold_seconds=args.hold_seconds,
                     load_device=args.load_device,
                     ups_status_url=args.ups_status_url,
-                    devd_power_diag_url=args.devd_power_diag_url,
+                    devd_diag_snapshot_url=args.devd_diag_snapshot_url,
                     isolapurr_url=args.isolapurr_url,
                     status_timeout_sec=args.status_timeout_sec,
                 )
@@ -528,7 +542,7 @@ def main() -> int:
                     hold_seconds=0.0,
                     load_device=args.load_device,
                     ups_status_url=args.ups_status_url,
-                    devd_power_diag_url=args.devd_power_diag_url,
+                    devd_diag_snapshot_url=args.devd_diag_snapshot_url,
                     isolapurr_url=args.isolapurr_url,
                     status_timeout_sec=args.status_timeout_sec,
                 )

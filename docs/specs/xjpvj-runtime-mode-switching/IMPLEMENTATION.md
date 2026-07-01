@@ -60,7 +60,7 @@
 - owner-facing 保存语义仍然是相对值或无量纲值
 - EEPROM 使用 `AdvancedPowerRecordV2`
 - 继续兼容旧 `V1` 记录的默认值补齐读取
-- `status / power-diag` 已暴露：
+- `status / diag-snapshot` 已暴露：
   - `assist_power_stage`
   - `assist_target_vout_mv`
 
@@ -200,7 +200,7 @@
 - UPS identity / settings 必须在 profile 切换和 flash 后 fresh 读取：
   - CDC/native serial `device_identity` 必须发起新的 `get_identity`
   - CDC/native serial `device_settings` 必须发起新的 `get_settings`
-  - flash 成功后必须清掉 stale identity/settings/status/power-diag runtime cache
+  - flash 成功后必须清掉 stale identity/settings/status/diag-snapshot runtime cache
 - 固件 artifact 的 feature metadata 必须跟实际 feature set 同步：
   - `firmware/build.rs` 必须对 `CARGO_FEATURE_*` 变化声明
     `cargo:rerun-if-env-changed`
