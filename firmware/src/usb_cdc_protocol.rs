@@ -1149,6 +1149,7 @@ mod tests {
                 pf_status: Some(0),
                 manufacturing_status: Some(0),
                 gauging_status: Some(0),
+                charging_status: Some(0),
                 op_status: Some(0),
                 op_status_raw_len: Some(4),
                 op_status_raw_bytes: Some([0x83, 0x49, 0x00, 0x00]),

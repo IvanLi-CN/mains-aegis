@@ -987,6 +987,7 @@ fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowe
     json_field_opt_u32(buf, "pf_status", bms.pf_status, true);
     json_field_opt_u32(buf, "manufacturing_status", bms.manufacturing_status, true);
     json_field_opt_u32(buf, "gauging_status", bms.gauging_status, true);
+    json_field_opt_u32(buf, "charging_status", bms.charging_status, true);
     json_field_opt_u32(buf, "op_status", bms.op_status, true);
     json_field_opt_u8(buf, "op_status_raw_len", bms.op_status_raw_len, true);
     json_field_opt_u8_array(

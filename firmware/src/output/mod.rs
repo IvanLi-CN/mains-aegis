@@ -1856,15 +1856,9 @@ where
 {
     Bq40LockDiagSnapshot {
         charging: bq40z50::read_charging_status_trace(i2c, addr).ok(),
-        safety_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::SAFETY_STATUS)
-            .ok()
-            .flatten(),
-        pf_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::PF_STATUS)
-            .ok()
-            .flatten(),
-        manufacturing_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::MANUFACTURING_STATUS)
-            .ok()
-            .flatten(),
+        safety_status: bq40z50::read_safety_status(i2c, addr).ok().flatten(),
+        pf_status: bq40z50::read_pf_status(i2c, addr).ok().flatten(),
+        manufacturing_status: bq40z50::read_manufacturing_status(i2c, addr).ok().flatten(),
         gauging_status: bq40z50::read_gauging_status(i2c, addr).ok().flatten(),
         op_status: bq40z50::read_operation_status(i2c, addr).ok().flatten(),
         update_status: bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::UPDATE_STATUS)
@@ -1934,15 +1928,9 @@ where
 {
     Bq40LockDiagSnapshot {
         charging: bq40z50::read_charging_status_trace(i2c, addr).ok(),
-        safety_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::SAFETY_STATUS)
-            .ok()
-            .flatten(),
-        pf_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::PF_STATUS)
-            .ok()
-            .flatten(),
-        manufacturing_status: bq40z50::read_mac_u32(i2c, addr, bq40z50::mac::MANUFACTURING_STATUS)
-            .ok()
-            .flatten(),
+        safety_status: bq40z50::read_safety_status(i2c, addr).ok().flatten(),
+        pf_status: bq40z50::read_pf_status(i2c, addr).ok().flatten(),
+        manufacturing_status: bq40z50::read_manufacturing_status(i2c, addr).ok().flatten(),
         gauging_status: None,
         op_status: None,
         update_status: None,
@@ -4581,6 +4569,7 @@ where
         self.diag_snapshot.bms.pf_status = lock_diag.pf_status;
         self.diag_snapshot.bms.manufacturing_status = lock_diag.manufacturing_status;
         self.diag_snapshot.bms.gauging_status = lock_diag.gauging_status;
+        self.diag_snapshot.bms.charging_status = charging_status;
         self.diag_snapshot.bms.op_status = op_status;
         self.diag_snapshot.bms.op_status_raw_len = op_status_raw_len;
         self.diag_snapshot.bms.op_status_raw_bytes = op_status_raw_bytes;
@@ -11839,6 +11828,7 @@ where
             pf_status,
             manufacturing_status,
             gauging_status,
+            charging_status,
             op_status,
             op_status_raw_len: s.op_status_raw_len,
             op_status_raw_bytes: s.op_status_raw_bytes,

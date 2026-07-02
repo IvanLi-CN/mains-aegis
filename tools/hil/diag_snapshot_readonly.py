@@ -109,20 +109,39 @@ def validate_response(response: dict[str, Any], packages: list[str]) -> list[str
             failures.append(str(exc))
             continue
         if package == "bq40.manufacturing":
-            for field in (
+            required_number_fields = (
                 "manufacturing_status",
-                "fet_en",
-                "chg_en",
-                "dsg_en",
                 "safety_status",
                 "pf_status",
                 "charging_status",
                 "gauging_status",
                 "op_status_raw_len",
-                "op_status_raw_bytes",
-            ):
+            )
+            required_bool_fields = (
+                "fet_en",
+                "chg_en",
+                "dsg_en",
+            )
+            for field in required_number_fields:
                 if field not in payload:
                     failures.append(f"{package}.{field} missing")
+                elif not isinstance(payload.get(field), int):
+                    failures.append(f"{package}.{field} must be a number")
+            for field in required_bool_fields:
+                if field not in payload:
+                    failures.append(f"{package}.{field} missing")
+                elif not isinstance(payload.get(field), bool):
+                    failures.append(f"{package}.{field} must be a boolean")
+            raw_bytes = payload.get("op_status_raw_bytes")
+            raw_len = payload.get("op_status_raw_len")
+            if "op_status_raw_bytes" not in payload:
+                failures.append(f"{package}.op_status_raw_bytes missing")
+            elif not isinstance(raw_bytes, list) or len(raw_bytes) != 4:
+                failures.append(f"{package}.op_status_raw_bytes must contain 4 bytes")
+            elif any(not isinstance(byte, int) or byte < 0 or byte > 255 for byte in raw_bytes):
+                failures.append(f"{package}.op_status_raw_bytes must contain byte values")
+            if isinstance(raw_len, int) and isinstance(raw_bytes, list) and raw_len != len(raw_bytes):
+                failures.append(f"{package}.op_status_raw_len must match raw byte count")
         elif package == "bq25792.regs":
             if not payload:
                 failures.append(f"{package} payload is empty")

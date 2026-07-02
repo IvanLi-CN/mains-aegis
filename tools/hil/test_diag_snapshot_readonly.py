@@ -103,6 +103,61 @@ class DiagSnapshotReadonlyTests(unittest.TestCase):
         self.assertIn("bq40.manufacturing.op_status_raw_bytes missing", failures)
         self.assertIn("bq40.manufacturing.safety_status missing", failures)
 
+    def test_validate_rejects_null_bq40_raw_fields(self) -> None:
+        response = {
+            "sample": {
+                "packages": {
+                    "bq40.manufacturing": {
+                        "payload": {
+                            "manufacturing_status": None,
+                            "fet_en": None,
+                            "chg_en": True,
+                            "dsg_en": True,
+                            "safety_status": 0,
+                            "pf_status": 0,
+                            "charging_status": None,
+                            "gauging_status": 0,
+                            "op_status_raw_len": 4,
+                            "op_status_raw_bytes": [1, 2, 3, 4],
+                        }
+                    }
+                }
+            }
+        }
+
+        failures = self.mod.validate_response(response, ["bq40.manufacturing"])
+
+        self.assertIn("bq40.manufacturing.manufacturing_status must be a number", failures)
+        self.assertIn("bq40.manufacturing.fet_en must be a boolean", failures)
+        self.assertIn("bq40.manufacturing.charging_status must be a number", failures)
+
+    def test_validate_rejects_bad_bq40_op_status_raw_bytes(self) -> None:
+        response = {
+            "sample": {
+                "packages": {
+                    "bq40.manufacturing": {
+                        "payload": {
+                            "manufacturing_status": 0,
+                            "fet_en": True,
+                            "chg_en": True,
+                            "dsg_en": True,
+                            "safety_status": 0,
+                            "pf_status": 0,
+                            "charging_status": 0,
+                            "gauging_status": 0,
+                            "op_status_raw_len": 2,
+                            "op_status_raw_bytes": [1, 2, 300],
+                        }
+                    }
+                }
+            }
+        }
+
+        failures = self.mod.validate_response(response, ["bq40.manufacturing"])
+
+        self.assertIn("bq40.manufacturing.op_status_raw_bytes must contain 4 bytes", failures)
+        self.assertIn("bq40.manufacturing.op_status_raw_len must match raw byte count", failures)
+
     def test_run_writes_failure_without_state_changing_urls(self) -> None:
         args = argparse.Namespace(
             devd_url="http://127.0.0.1:38140",
