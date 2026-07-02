@@ -8,6 +8,7 @@ on:
       - "bun.lock"
       - "web/**"
       - "docs-site/**"
+      - "tools/pages/**"
       - ".github/workflows/docs-pages.yml"
   push:
     branches: [main]
@@ -16,6 +17,7 @@ on:
       - "bun.lock"
       - "web/**"
       - "docs-site/**"
+      - "tools/pages/**"
       - ".github/workflows/docs-pages.yml"
   workflow_dispatch:
 
@@ -48,6 +50,10 @@ jobs:
           repo="${GITHUB_REPOSITORY##*/}"
           normalize_base() {
             local raw="${1:-/}"
+            if [[ "${raw}" == "." || "${raw}" == "./" ]]; then
+              printf './'
+              return
+            fi
             if [[ -z "${raw}" || "${raw}" == "/" ]]; then
               printf '/'
               return
@@ -58,13 +64,17 @@ jobs:
           }
           if [[ -n "${PAGES_BASE_OVERRIDE}" ]]; then
             pages_base="$(normalize_base "${PAGES_BASE_OVERRIDE}")"
-          elif [[ "${repo}" == "${owner}.github.io" ]]; then
-            pages_base="/"
           else
-            pages_base="/${repo}/"
+            pages_base="./"
+          fi
+          if [[ "${pages_base}" == "./" ]]; then
+            docs_base="/docs/"
+          else
+            docs_base="${pages_base}docs/"
           fi
           echo "PAGES_BASE=${pages_base}" >> "$GITHUB_ENV"
-          echo "DOCS_BASE=${pages_base}docs/" >> "$GITHUB_ENV"
+          echo "DOCS_BASE=${docs_base}" >> "$GITHUB_ENV"
+          echo "PAGES_REPO=${repo}" >> "$GITHUB_ENV"
 
       - name: Install web dependencies
         run: bun install --frozen-lockfile
@@ -77,7 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           PAGES_BASE="${PAGES_BASE}" bun run web:build
-          cp web/dist/index.html web/dist/404.html
+          node tools/pages/write-spa-fallback.mjs web/dist/404.html "${PAGES_REPO}" "${PAGES_BASE}"
 
       - name: Build docs site
         shell: bash
@@ -93,6 +103,7 @@ jobs:
           rm -rf web/dist/docs
           mkdir -p web/dist/docs
           cp -R docs-site/doc_build/. web/dist/docs/
+          node tools/pages/relativize-docs-html.mjs web/dist/docs "${DOCS_BASE}"
 
       - name: Smoke check build output
         shell: bash
@@ -101,7 +112,7 @@ jobs:
           test -f web/dist/index.html
           test -f web/dist/404.html
           test -d web/dist/assets
-          cmp -s web/dist/index.html web/dist/404.html
+          grep -q 'spa_path' web/dist/404.html
           test -f docs-site/doc_build/index.html
           test -f docs-site/doc_build/404.html
           test -d docs-site/doc_build/static
@@ -112,6 +123,20 @@ jobs:
           test -d web/dist/docs/static
           test -f web/dist/docs/design/system-overview.html
           test -f web/dist/docs/manual/basic-use-and-troubleshooting.html
+          grep -q 'src="./assets/' web/dist/index.html
+          grep -q 'href="./assets/' web/dist/index.html
+          grep -q 'src="./static/' web/dist/docs/index.html
+          grep -q 'href="./static/' web/dist/docs/index.html
+          grep -q 'src="../static/' web/dist/docs/design/system-overview.html
+          grep -q 'href="../static/' web/dist/docs/design/system-overview.html
+          ! grep -q '="/mains-aegis/' web/dist/index.html
+          ! grep -q '="/mains-aegis/' web/dist/docs/index.html
+          ! grep -q '="/static/' web/dist/docs/index.html
+          ! grep -q '="/static/' web/dist/docs/design/system-overview.html
+          ! grep -q '="/brand/' web/dist/docs/index.html
+          ! grep -q '="/index.html' web/dist/docs/index.html
+          ! grep -q '="/docs/' web/dist/docs/index.html
+          ! grep -q '="/docs/' web/dist/docs/design/system-overview.html
 
       - name: Upload build artifact (PR only)
         if: ${{ github.event_name == 'pull_request' }}

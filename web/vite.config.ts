@@ -18,6 +18,7 @@ const devFirmwareCacheRoot = resolve(repoRoot, "tmp/web-dev-firmware");
 
 function normalizeBase(base: string | undefined): string {
   const raw = (base ?? "/").trim();
+  if (raw === "." || raw === "./") return "./";
   if (!raw || raw === "/") return "/";
   const withLeading = raw.startsWith("/") ? raw : `/${raw}`;
   return withLeading.endsWith("/") ? withLeading : `${withLeading}/`;
