@@ -155,7 +155,8 @@ export function DeviceRegistryProvider({
 
   useEffect(() => {
     const syncSeedFromUrl = () => {
-      const nextSeed = getDemoSeed(initialDemoSeed);
+      const querySeed = getDemoSeed(initialDemoSeed);
+      const nextSeed = querySeed && seedRef.current ? seedRef.current : querySeed;
       if (seedRef.current === nextSeed) return;
       seedRef.current = nextSeed;
       setActiveDemoSeed(nextSeed);
