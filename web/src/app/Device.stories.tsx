@@ -172,6 +172,14 @@ export const SettingsAdvancedPower: Story = {
     );
     const manualPrefsForm = applyPrefsButton.closest("form");
     expect(manualPrefsForm).not.toBeNull();
+    const manualPreferenceControls = Array.from(
+      manualPrefsForm?.querySelectorAll(".ui-segmented-control.is-compact") ??
+        [],
+    );
+    expect(manualPreferenceControls).toHaveLength(3);
+    for (const control of manualPreferenceControls) {
+      expect(control.getBoundingClientRect().height).toBeLessThanOrEqual(38);
+    }
     const manualPreferenceRows = Array.from(
       manualPrefsForm?.querySelectorAll(".control-row") ?? [],
     );

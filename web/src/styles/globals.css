@@ -2316,6 +2316,26 @@ a {
   font-size: 12px;
 }
 
+@media (pointer: fine) and (hover: hover) {
+  .ui-segmented-control.is-compact {
+    padding: 2px;
+  }
+
+  .ui-segmented-control.is-compact button {
+    min-width: 36px;
+    min-height: 32px;
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+}
+
+@media (pointer: coarse) {
+  .ui-segmented-control.is-compact button {
+    min-height: var(--control-height-touch);
+    padding: 7px 12px;
+  }
+}
+
 .advanced-power-field {
   display: grid;
   gap: 6px;
