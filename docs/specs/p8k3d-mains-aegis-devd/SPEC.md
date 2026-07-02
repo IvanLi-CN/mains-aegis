@@ -191,7 +191,8 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - Given `POST /api/v1/devices/{id}/flash` 触发真实烧录，When backend 在超时窗口内没有返回，Then devd 必须返回可诊断的 retryable `espflash_timeout`，并确保 backend 子进程不会继续作为活动烧录流程悬挂。
 - Given `POST /api/v1/devices/{id}/flash` 触发 ESP32-S3 USB 烧录，When flash 写入完成，Then backend 优先使用 `watchdog-reset` after-operation，避免 DTR/RTS normal reset 在当前样机上被 strap 采样为 ROM download。
 - Given native serial `reset` 占用已绑定端口，When devd 需要让 ESP32-S3 运行 app，Then devd 必须用自身 serial handle 执行 boot-release、RTS pulse、boot-release 的 app-boot 控制线序列，不得通过额外进程重新打开端口；monitor/start 不得在已打开 monitor fd 上重复执行该复位序列。
-- 低压恢复 HIL 必须可通过 `tools/hil/low-voltage-recovery.sh` 完成“`tools/bq40-comm-tool` 临时固件 apply DF -> devd 烧回主固件 -> USB `diag-snapshot` 验证”的双烧录流程；runner 必须拒绝缺少本次显式 `--device-id` / `--port` 的 real 运行，校验 devd scan 与 selector cache 完全匹配显式 target，并且不得内置固定 device id / port allowlist 或 denylist。
+- 低压恢复维护流程必须可通过 `tools/recovery/low-voltage-recovery.sh` 完成“`tools/bq40-comm-tool` 临时固件 apply DF -> devd 烧回主固件 -> USB `diag-snapshot` 验证”的双烧录流程；runner 必须拒绝缺少本次显式 `--device-id` / `--port` 的 real 运行，校验 devd scan 与 selector cache 完全匹配显式 target，并且不得内置固定 device id / port allowlist 或 denylist。
+- `diag-snapshot` HIL 测试必须走 `tools/hil/diag_snapshot_readonly.py`，只允许读取 `GET /api/v1/devices/{id}/diag-snapshot` 并验证 package shape，不得执行 bind、flash、reset、monitor、settings write 或 BQ40 Data Flash 操作。
 
 ## 实现状态
 
@@ -215,7 +216,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - 2026-06-14: `power event`、`status` 与 `diag-snapshot` 统一补充 `tps_total_iout_ma` / `tps_limit_threshold_ma`，用于解释 `pressure_tps_output_current`；DC IN profile 的 `iindpm_ma` 基线更新为 `1000mA`。
 - 2026-06-04: `diag-snapshot` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2550mV + CUV_RECOV_CHG=0` baseline。
 - 2026-06-04: `flash` API 与设备事件增加 backend `status/stdout/stderr` 透传，现场可直接确认 `espflash` 是否真正完成以及目标硬件 identity 是否已经切到新 artifact。
-- 2026-06-04: 新增低压恢复 HIL runner 与文档，固化 bq40 工具固件和主固件的双烧录验证路径。
+- 2026-06-04: 新增低压恢复维护 runner 与文档，固化 bq40 工具固件和主固件的双烧录验证路径。
 - 2026-06-05: `/api/v1/status` 的 `battery` snapshot 增加四节 `cell_mv`、`cell_delta_mv`、均衡状态字段与 `charge_fet_on` / `discharge_fet_on` / `precharge_fet_on`，Web 电池页可直接展示 per-cell voltage、delta、BAL 状态与三路 BMS MOS 状态，不再依赖 `diag-snapshot` 详情端点。
 - 2026-06-07: `devices/scan` 与 `devices` 响应中的 `binding.logical_device_id` 成为 Web 归并 USB identity-pending candidate 与 Fleet 混合视图的 canonical 键；旧绑定若缺失该字段，Connect 仍可继续显式补绑到已有 logical device。
 - 2026-07-01: `diag-snapshot.bms` 增加 `OperationStatus()` raw payload、`emshut` / `pres` 解码与 EMSHUT 退出配置字段，现场可区分 `EMSHUT` 与普通 `XDSG` 阻断并确认恢复路径配置。

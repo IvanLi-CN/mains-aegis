@@ -35,13 +35,11 @@ Use precise names when recording validation evidence:
 - **HIL dry-runs** exercise command construction, report wiring, and safety
   gates without changing hardware state. They are useful for runner validation,
   but they are not real HIL evidence.
-- **Real low-voltage recovery HIL** is
-  `tools/hil/low-voltage-recovery.sh --real ...`. It flashes the BQ40 tool
-  firmware, applies the BQ40 DF baseline, flashes main firmware back through
-  devd, and verifies `diag-snapshot` on the selected device.
 - **Real formal power-path HIL** is a power-path validation run against the
-  explicit UPS, source, and load targets. It is separate from the low-voltage
-  recovery runner and from the HIL unit tests.
+  explicit UPS, source, and load targets. It is separate from HIL unit tests.
+- **Read-only diag-snapshot HIL** is `diag_snapshot_readonly.py`. It only reads
+  `GET /api/v1/devices/{id}/diag-snapshot` and validates package shape. It must
+  not bind, flash, reset, monitor, write settings, or apply BQ40 Data Flash.
 
 Do not shorten "HIL unit tests passed" to "HIL passed". A sign-off statement
 must say which level ran and, for real HIL, which runner produced the report.
@@ -116,6 +114,11 @@ requests.
   - renders the static PNG output-voltage chart from one `timeseries.jsonl`
 - `verify_formal_suite.py`
   - verifies a suite summary against its referenced report directories
+- `diag_snapshot_readonly.py`
+  - read-only HIL gate for `diag-snapshot`
+  - validates package response shape for explicitly requested packages
+  - performs no flash, reset, monitor, settings write, BQ40 DF write, source
+    control, or load control
 - `formal_hil_suite.py`
   - legacy HTTP-oriented suite orchestrator
   - not accepted as the current formal CLI-only sign-off path

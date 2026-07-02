@@ -1,6 +1,6 @@
-# Low-Voltage Recovery HIL
+# Low-Voltage Recovery Maintenance
 
-This page defines the controlled hardware-in-the-loop path for the low-voltage recovery feature. The flow intentionally uses two ESP32-S3 firmware flashes:
+This page defines the controlled maintenance path for the low-voltage recovery baseline. The flow intentionally uses two ESP32-S3 firmware flashes:
 
 1. Temporary `tools/bq40-comm-tool` firmware applies the BQ40Z50 live Data Flash baseline.
 2. Main firmware is flashed back and verified through USB CDC `diag-snapshot`.
@@ -9,7 +9,7 @@ The main firmware must not write BQ40 Data Flash. BQ40 DF maintenance stays behi
 
 ## Safety Scope
 
-- Real HIL has no baked-in device id, serial-port allowlist, or serial-port denylist.
+- Real recovery maintenance has no baked-in device id, serial-port allowlist, or serial-port denylist.
 - The owner must provide the current devd device id and serial port in the same invocation with `--device-id` and `--port`.
 - The runner validates that devd scan results and selector caches match the explicit target exactly before any real flash step.
 - Agents must not directly invoke `espflash`, `cargo espflash`, or `cargo-espflash`.
@@ -21,25 +21,24 @@ The main firmware must not write BQ40 Data Flash. BQ40 DF maintenance stays behi
 The project runner is:
 
 ```bash
-tools/hil/low-voltage-recovery.sh --dry-run
+tools/recovery/low-voltage-recovery.sh --dry-run
 ```
 
-Real HIL requires the current target to be stated explicitly:
+Real recovery maintenance requires the current target to be stated explicitly:
 
 ```bash
-tools/hil/low-voltage-recovery.sh \
+tools/recovery/low-voltage-recovery.sh \
   --real \
   --device-id <devd-device-id> \
   --port <serial-port>
 ```
 
-The runner refuses real HIL when either `firmware/.esp32-port` or `tools/bq40-comm-tool/.esp32-port` points at another port. This prevents the temporary tool firmware and the final main firmware from being flashed to different devices.
+The runner refuses real execution when either `firmware/.esp32-port` or `tools/bq40-comm-tool/.esp32-port` points at another port. This prevents the temporary tool firmware and the final main firmware from being flashed to different devices.
 
 `tools.hil.test_*` unit tests and `--dry-run` invocations validate the runner's
-software behavior and safety gates only. They must be reported as HIL tooling
-tests or dry-runs, not as completed real low-voltage recovery HIL.
+software behavior and safety gates only. They must not be reported as HIL.
 
-## HIL Sequence
+## Sequence
 
 1. Validate that the runner received explicit `--device-id` and `--port`, then confirm devd scan results and selector caches match that target exactly.
 2. Run:
@@ -68,7 +67,7 @@ tests or dry-runs, not as completed real low-voltage recovery HIL.
 
 ## Pass Criteria
 
-The HIL runner writes reports under `tools/hil/reports/<timestamp>/`. A pass requires:
+The runner writes reports under `tools/recovery/reports/<timestamp>/`. A pass requires:
 
 - BQ40 DF apply report completed through `live-df-mainboard`.
 - Main firmware flash response includes backend success from devd.

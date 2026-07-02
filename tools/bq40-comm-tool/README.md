@@ -12,7 +12,7 @@ This tool is isolated from the main firmware path and provides:
 ```bash
 cd /Users/ivan/Projects/Ivan/mains-aegis/tools/bq40-comm-tool
 
-# 1) For real HIL / devd-backed flashing, export the explicit devd target
+# 1) For devd-backed live maintenance, export the explicit devd target
 export BQ40_TOOL_DEVD_URL=http://127.0.0.1:30080
 export BQ40_TOOL_DEVICE_ID=<devd-device-id>
 
@@ -65,7 +65,7 @@ Required `summary.json` fields:
 ## Common issues
 
 - `BQ40_TOOL_DEVICE_ID is required for devd flash/monitor`
-  - export `BQ40_TOOL_DEVICE_ID` before running live commands, or use the low-voltage HIL runner which injects it for you
+  - export `BQ40_TOOL_DEVICE_ID` before running live commands, or use the low-voltage recovery maintenance runner which injects it for you
 - `BQ40_TOOL_ARTIFACT_MANIFEST_PATH is required for devd flash`
   - run `./bin/run.sh ...` end-to-end so `bin/build.sh` can generate the manifest, or export a valid manifest path when calling `flash.sh` directly
 - `mains-aegis-devd` health check fails

@@ -47,6 +47,11 @@ power-validation *args:
 power-validation-plan *args:
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- power-validation run --dry-run {{ args }}
 
+# Run the read-only diag-snapshot HIL gate. Example:
+# just hil-diag-snapshot --devd-url http://127.0.0.1:30080 --device-id <device>
+hil-diag-snapshot *args:
+    python3 tools/hil/diag_snapshot_readonly.py {{ args }}
+
 # List currently known devd devices.
 devices-list:
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- devices list

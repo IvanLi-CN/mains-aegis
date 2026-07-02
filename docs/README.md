@@ -18,7 +18,7 @@ This folder stores project documentation and offline-renderable datasheets.
 - Web management UI plan: `docs/web-management-ui.md`
 - USB CDC / Web Serial protocol: `docs/usb-cdc-web-serial-protocol.md`
 - Mains Aegis device daemon, host power control, and firmware catalog: `docs/specs/p8k3d-mains-aegis-devd/SPEC.md`, `docs/firmware-catalog.md`
-- Low-voltage recovery validation: `docs/hil-low-voltage-recovery.md`
+- Low-voltage recovery maintenance: `docs/recovery/low-voltage-recovery.md`
 - Runtime-mode Power Path Validation: `docs/hil-runtime-mode-switching.md`
   - active truth source for `12V / 3A` runtime-mode scene design, three-device data capture, output-voltage fluctuation acceptance, and current candidate evidence
 - Power Path Validation runbook: `tools/hil/README.md`

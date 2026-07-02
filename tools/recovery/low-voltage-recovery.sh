@@ -22,11 +22,11 @@ Usage:
 
 Options:
   --devd-url URL                 mains-aegis-devd URL (default: $devd_url)
-  --report-root DIR              HIL report root (default: tools/hil/reports/<timestamp>)
+  --report-root DIR              Recovery report root (default: tools/recovery/reports/<timestamp>)
   --require-recovery-state true  require diag-snapshot policy.status=RECOV
   --skip-main-build true         reuse an existing release main firmware ELF
 
-This runner performs the controlled two-flash HIL flow:
+This runner performs the controlled two-flash recovery maintenance flow:
   1. flash bq40-comm-tool firmware and apply live-df-mainboard
   2. flash main firmware through mains-aegis-devd
   3. verify USB diag-snapshot exposes the recovery baseline
@@ -115,7 +115,7 @@ esac
 
 timestamp=$(date -u +"%Y%m%dT%H%M%SZ")
 if [[ -z "$report_root" ]]; then
-  report_root="$REPO_ROOT/tools/hil/reports/$timestamp"
+  report_root="$REPO_ROOT/tools/recovery/reports/$timestamp"
 fi
 mkdir -p "$report_root"
 
@@ -151,7 +151,7 @@ read_selector_port() {
 
 require_explicit_target() {
   if [[ "$target_device_id_arg_set" != "true" || -z "$target_device_id" || "$target_port_arg_set" != "true" || -z "$target_port" ]]; then
-    decision_summary "state-changing" "$0 --real" "deny" "G5: real HIL requires explicit device id and port for this invocation" "Pass --device-id <devd-device-id> --port <serial-port>."
+    decision_summary "state-changing" "$0 --real" "deny" "G5: recovery maintenance requires explicit device id and port for this invocation" "Pass --device-id <devd-device-id> --port <serial-port>."
     exit 31
   fi
 }
@@ -162,7 +162,7 @@ validate_selector_cache() {
   local selected=""
   selected=$(read_selector_port "$path" || true)
   if [[ -z "$selected" ]]; then
-    decision_summary "read-only" "read $path" "deny" "G5: no known bound port for $label" "Bind the explicit target before real HIL."
+    decision_summary "read-only" "read $path" "deny" "G5: no known bound port for $label" "Bind the explicit target before recovery maintenance."
     exit 40
   fi
   if [[ "$selected" != "$target_port" ]]; then
@@ -191,23 +191,8 @@ ensure_devd() {
     echo "Using existing mains-aegis-devd at $devd_url"
     return 0
   fi
-  local bind="${devd_url#http://}"
-  if [[ "$bind" == "$devd_url" || "$bind" == */* ]]; then
-    echo "Cannot auto-start devd for URL: $devd_url" >&2
-    exit 50
-  fi
-  echo "Starting mains-aegis-devd at $devd_url"
-  (cd "$REPO_ROOT" && cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve-http --bind "$bind") \
-    >"$report_root/devd.log" 2>&1 &
-  DEVD_PID=$!
-  trap 'if [[ -n "${DEVD_PID:-}" ]]; then kill "$DEVD_PID" 2>/dev/null || true; fi' EXIT
-  for _ in $(seq 1 40); do
-    if curl -fsS "$devd_url/health" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.25
-  done
-  echo "mains-aegis-devd did not become healthy; see $report_root/devd.log" >&2
+  echo "mains-aegis-devd is not healthy at $devd_url" >&2
+  echo "Start it with: just devd-http" >&2
   exit 51
 }
 
@@ -312,7 +297,7 @@ poll_diag_snapshot() {
     elapsed=$((elapsed + interval_sec))
   done
 
-  echo "diag-snapshot did not reach the expected HIL state within ${timeout_sec}s" >&2
+  echo "diag-snapshot did not reach the expected recovery state within ${timeout_sec}s" >&2
   validate_diag_snapshot "$diag_json" "$result_out"
 }
 
@@ -327,14 +312,14 @@ if [[ "$mode" == "real" ]]; then
   scan_json=$(curl_json POST "$devd_url/api/v1/devices/scan" '{}')
   printf '%s\n' "$scan_json" > "$report_root/devd-scan-pre-bq40.json"
   validate_scan_target "$scan_json"
-  curl_json POST "$devd_url/api/v1/devices/$target_device_id/bind" '{"alias":"hil-low-voltage-recovery"}' \
+  curl_json POST "$devd_url/api/v1/devices/$target_device_id/bind" '{"alias":"low-voltage-recovery"}' \
     > "$report_root/devd-bind-pre-bq40.json"
   if connect_json=$(curl_json POST "$devd_url/api/v1/devices/$target_device_id/connect" '{}' 2>/dev/null); then
     printf '%s\n' "$connect_json" > "$report_root/devd-connect-pre-bq40.json"
   else
     echo "Bound device is present but identity is unavailable; continuing from download mode." >&2
   fi
-  decision_summary "state-changing" "tools/bq40-comm-tool/bin/run.sh apply-df ... && devd flash ..." "allow" "G4/G5: explicit owner-supplied device id and port; devd scan confirmed the same port; no direct espflash and no port switching" "Run two-flash HIL."
+  decision_summary "state-changing" "tools/bq40-comm-tool/bin/run.sh apply-df ... && devd flash ..." "allow" "G4/G5: explicit owner-supplied device id and port; devd scan confirmed the same port; no direct espflash and no port switching" "Run two-flash recovery maintenance."
 else
   echo "Dry-run mode: no hardware flash, monitor, reset, scan, or USB request will be executed."
 fi
@@ -366,7 +351,7 @@ if [[ "$mode" == "real" && ! -f "$main_elf" ]]; then
   exit 61
 fi
 if [[ "$mode" != "real" && ! -f "$main_elf" ]]; then
-  echo "Dry-run note: main firmware ELF is not present yet; real HIL will build it unless --skip-main-build true is used."
+  echo "Dry-run note: main firmware ELF is not present yet; real recovery maintenance will build it unless --skip-main-build true is used."
 else
   echo "Validated main firmware ELF path: $main_elf"
 fi
@@ -378,7 +363,7 @@ run_step "Generate main firmware catalog manifest" \
   --features net_http,web_serial
 
 if [[ "$mode" != "real" ]]; then
-  echo "Dry-run completed. Real HIL would now require an explicit device id and port, start devd, scan that target, flash main firmware, and validate diag-snapshot."
+  echo "Dry-run completed. Real recovery maintenance would now require an explicit device id and port, start devd, scan that target, flash main firmware, and validate diag-snapshot."
   exit 0
 fi
 
@@ -389,7 +374,7 @@ scan_json=$(curl_json POST "$devd_url/api/v1/devices/scan" '{}')
 printf '%s\n' "$scan_json" > "$report_root/devd-scan.json"
 validate_scan_target "$scan_json"
 
-curl_json POST "$devd_url/api/v1/devices/$target_device_id/bind" '{"alias":"hil-low-voltage-recovery"}' \
+curl_json POST "$devd_url/api/v1/devices/$target_device_id/bind" '{"alias":"low-voltage-recovery"}' \
   > "$report_root/devd-bind.json"
 curl_json POST "$devd_url/api/v1/devices/$target_device_id/artifact" "{\"manifest_path\":\"$manifest_path\"}" \
   > "$report_root/devd-artifact.json"
@@ -402,6 +387,6 @@ if connect_json=$(curl_json POST "$devd_url/api/v1/devices/$target_device_id/con
 else
   echo "Bound device is present but identity is unavailable after main flash; continuing to diag-snapshot poll." >&2
 fi
-poll_diag_snapshot "$report_root/diag-snapshot.json" "$report_root/hil-result.json"
+poll_diag_snapshot "$report_root/diag-snapshot.json" "$report_root/recovery-result.json"
 
-echo "HIL completed: $report_root/hil-result.json"
+echo "Recovery maintenance completed: $report_root/recovery-result.json"
