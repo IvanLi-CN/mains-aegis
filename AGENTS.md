@@ -37,13 +37,20 @@ Gates (G0–G5) for the `Rationale` field:
 
 ## Build, Test, and Development Commands
 
-There is no build system or test runner yet. Useful local commands:
+Use the repository `Justfile` as the default development entrypoint. Run `just --list` before spelling out raw commands; firmware builds and flash flows must use `just` recipes so Cargo reads `firmware/.cargo/config.toml` and devd remains the only flash path.
 
 - Search content: `rg "BQ40Z50" docs`
 - Preview docs via a local server: `python -m http.server -d docs 8000`
-- Start IPC daemon for development: `cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve`
-- Start local HTTP bridge for development: `cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- bridge-http --allow-dev-cors`
-- Generate firmware catalog entry: `python3 tools/firmware-artifact/build-catalog-entry.py --elf <firmware-elf> --out firmware/target/mains-aegis-artifacts`
+- Start IPC daemon for development: `just devd-serve`
+- Start local HTTP bridge for development: `just devd-http`
+- Host tests: `just host-test`
+- Firmware host-side tests: `just firmware-host-test`
+- Firmware ESP check: `just firmware-check`
+- Firmware release ELF: `just firmware-build`
+- Firmware image and catalog for devd/Web: `just firmware-release`
+- Build/select/dry-run flash for a bound device: `just flash-current-dry-run <device>`
+- Real flash for a bound device requires explicit owner authorization: `just flash-current-real <device> flash`
+- Standard local validation set: `just check`
 - Review changes before PR: `git status` / `git diff`
 
 ## Coding Style & Naming Conventions

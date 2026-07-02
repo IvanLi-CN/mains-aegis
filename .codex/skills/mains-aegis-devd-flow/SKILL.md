@@ -13,27 +13,31 @@ Use `$mains-aegis-user-operations` instead only when the owner explicitly asks f
 
 - This is the default in-repo Codex route. Source-built `tools/mains-aegis-host` devd/CLI may be used for development, validation, diagnostics, field investigation, and hardware read/session-read checks.
 - Prefer released `mains-aegis` / `mains-aegis-devd` only for explicit end-user/released host-tools workflows.
+- Use repository `Justfile` recipes for source-built development, validation, firmware artifact generation, and devd-backed flash flows. Run `just --list` first when unsure; do not bypass `just firmware-*` with raw Cargo/esptool commands unless updating the recipes themselves.
 - Do not directly run `espflash`, `cargo espflash`, or `cargo-espflash` from the agent shell. The devd flash backend may invoke `espflash` internally after an explicit HTTP/API request or test dry-run.
 - Do not auto-connect because of scan results, page probes, history, or the first/last seen device. Do not auto-switch or try alternate serial ports. Scanning may list candidates; binding and connecting remain user-visible operations.
-- Read/session-read operations are allowed by default under this skill: scan/list, connect/disconnect, identity/status/power-diag, and monitor start/stop/log reading.
+- Read/session-read operations are allowed by default under this skill: scan/list, connect/disconnect, identity/status/diag-snapshot, and monitor start/stop/log reading.
 - Persistent binding changes, settings writes, reset, flash, and real host power actions require explicit owner authorization. Use mock/dry-run validation otherwise.
 - defmt logs are `verified` only when device firmware identity matches the selected artifact manifest by exact `build_id`, build profile, and feature set.
 
 ## Standard development flow
 
 1. Generate or select a Firmware Catalog manifest.
-   - Local builds use `tools/firmware-artifact/build-catalog-entry.py`.
+   - Local builds use `just firmware-release`.
+   - Release ELF-only validation uses `just firmware-build`.
+   - Flash dry-runs use `just flash-current-dry-run <device>`.
+   - Real flash uses `just flash-current-real <device> flash` only after explicit owner authorization.
    - GitHub Releases and Web bundled fallback must use the same schema.
 2. Start devd IPC for development:
-   - `cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve`
+   - `just devd-serve`
 3. Start the explicit local HTTP bridge only when Web/API validation needs HTTP:
-   - `cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- bridge-http --allow-dev-cors`
+   - `just devd-http`
    - Add `--web-root web/dist` only for production/static handoff.
    - Point CLI commands at the same `--ipc` endpoint when Web and CLI must observe the same bridge state.
 4. Develop Web UI through Vite.
    - The Web dev server proxies `/api` to the explicit `bridge-http` endpoint, default `http://127.0.0.1:30080`.
 5. Read/session-read device lifecycle:
-   - `scan/list -> connect selected or bound device -> identity/status/power-diag -> monitor logs -> disconnect`.
+   - `scan/list -> connect selected or bound device -> identity/status/diag-snapshot -> monitor logs -> disconnect`.
 6. State-changing device lifecycle:
    - `bind/unbind`, `settings`, `artifact select`, `reset`, `flash`, and real host power actions require explicit owner authorization.
 7. Validation without hardware:

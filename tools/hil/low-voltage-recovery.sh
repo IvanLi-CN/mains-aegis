@@ -4,10 +4,6 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
-TARGET_DEVICE_ID_DEFAULT="serial-04f3bb3f5367"
-TARGET_PORT_DEFAULT="/dev/cu.usbmodem212301"
-DENIED_PORT="/dev/cu.usbmodem212101"
-
 mode="dry-run"
 target_device_id=""
 target_port=""
@@ -22,7 +18,7 @@ usage() {
   cat <<USAGE
 Usage:
   $(basename "$0") [--dry-run]
-  $(basename "$0") --real --device-id serial-04f3bb3f5367 --port /dev/cu.usbmodem212301 [options]
+  $(basename "$0") --real --device-id <devd-device-id> --port <serial-port> [options]
 
 Options:
   --devd-url URL                 mains-aegis-devd URL (default: $devd_url)
@@ -123,9 +119,6 @@ if [[ -z "$report_root" ]]; then
 fi
 mkdir -p "$report_root"
 
-target_device_id="${target_device_id:-$TARGET_DEVICE_ID_DEFAULT}"
-target_port="${target_port:-$TARGET_PORT_DEFAULT}"
-
 decision_summary() {
   local op_type="$1"
   local command="$2"
@@ -156,22 +149,10 @@ read_selector_port() {
   awk 'NF && $0 !~ /^[[:space:]]*#/ && $0 !~ /^mac=/ { print; exit }' "$path"
 }
 
-require_exact_target() {
-  if [[ "$target_device_id_arg_set" != "true" || "$target_port_arg_set" != "true" ]]; then
-    decision_summary "state-changing" "$0 --real" "deny" "G5: real HIL requires explicit device id and port" "Pass --device-id $TARGET_DEVICE_ID_DEFAULT --port $TARGET_PORT_DEFAULT."
+require_explicit_target() {
+  if [[ "$target_device_id_arg_set" != "true" || -z "$target_device_id" || "$target_port_arg_set" != "true" || -z "$target_port" ]]; then
+    decision_summary "state-changing" "$0 --real" "deny" "G5: real HIL requires explicit device id and port for this invocation" "Pass --device-id <devd-device-id> --port <serial-port>."
     exit 31
-  fi
-  if [[ "$target_device_id" != "$TARGET_DEVICE_ID_DEFAULT" ]]; then
-    decision_summary "state-changing" "$0 --real" "deny" "G5: target device id is not the approved HIL device" "Use $TARGET_DEVICE_ID_DEFAULT or stop."
-    exit 32
-  fi
-  if [[ "$target_port" != "$TARGET_PORT_DEFAULT" ]]; then
-    decision_summary "state-changing" "$0 --real" "deny" "G5: target port is not the approved HIL port" "Use $TARGET_PORT_DEFAULT or stop."
-    exit 33
-  fi
-  if [[ "$target_port" == "$DENIED_PORT" ]]; then
-    decision_summary "state-changing" "$0 --real" "deny" "G3: denied port must never be used or tried" "Stop and rebind to the approved target."
-    exit 34
   fi
 }
 
@@ -181,15 +162,11 @@ validate_selector_cache() {
   local selected=""
   selected=$(read_selector_port "$path" || true)
   if [[ -z "$selected" ]]; then
-    decision_summary "read-only" "read $path" "deny" "G5: no known bound port for $label" "Bind the approved target before real HIL."
+    decision_summary "read-only" "read $path" "deny" "G5: no known bound port for $label" "Bind the explicit target before real HIL."
     exit 40
   fi
-  if [[ "$selected" == "$DENIED_PORT" ]]; then
-    decision_summary "read-only" "read $path" "deny" "G3: $label is bound to denied port $DENIED_PORT" "Do not flash; rebind to $TARGET_PORT_DEFAULT."
-    exit 41
-  fi
   if [[ "$selected" != "$target_port" ]]; then
-    decision_summary "read-only" "read $path" "deny" "G5: $label binding $selected does not match approved target $target_port" "Do not flash; fix the binding explicitly."
+    decision_summary "read-only" "read $path" "deny" "G5: $label binding $selected does not match explicit target $target_port" "Do not flash; fix the binding explicitly."
     exit 42
   fi
 }
@@ -343,7 +320,7 @@ main_elf="$REPO_ROOT/firmware/target/xtensa-esp32s3-none-elf/release/esp-firmwar
 main_artifact_dir="$report_root/main-artifact"
 
 if [[ "$mode" == "real" ]]; then
-  require_exact_target
+  require_explicit_target
   validate_selector_cache "main firmware" "$REPO_ROOT/firmware/.esp32-port"
   validate_selector_cache "bq40-comm-tool" "$REPO_ROOT/tools/bq40-comm-tool/.esp32-port"
   ensure_devd
@@ -357,7 +334,7 @@ if [[ "$mode" == "real" ]]; then
   else
     echo "Bound device is present but identity is unavailable; continuing from download mode." >&2
   fi
-  decision_summary "state-changing" "tools/bq40-comm-tool/bin/run.sh apply-df ... && devd flash ..." "allow" "G4/G5: known approved bound device; no direct espflash, no port enumeration/switching, devd scan is owner-visible" "Run two-flash HIL."
+  decision_summary "state-changing" "tools/bq40-comm-tool/bin/run.sh apply-df ... && devd flash ..." "allow" "G4/G5: explicit owner-supplied device id and port; devd scan confirmed the same port; no direct espflash and no port switching" "Run two-flash HIL."
 else
   echo "Dry-run mode: no hardware flash, monitor, reset, scan, or USB request will be executed."
 fi
@@ -381,7 +358,7 @@ run_step "Apply BQ40 live DF baseline through temporary tool firmware" \
 
 if [[ "$skip_main_build" != "true" ]]; then
   run_step "Build main firmware release" \
-    bash -lc "cd '$REPO_ROOT/firmware' && cargo build --release --bin esp-firmware --features net_http,web_serial"
+    bash -lc "cd '$REPO_ROOT' && just firmware-build"
 fi
 
 if [[ "$mode" == "real" && ! -f "$main_elf" ]]; then
@@ -401,7 +378,7 @@ run_step "Generate main firmware catalog manifest" \
   --features net_http,web_serial
 
 if [[ "$mode" != "real" ]]; then
-  echo "Dry-run completed. Real HIL would now start devd, scan the approved device, flash main firmware, and validate diag-snapshot."
+  echo "Dry-run completed. Real HIL would now require an explicit device id and port, start devd, scan that target, flash main firmware, and validate diag-snapshot."
   exit 0
 fi
 

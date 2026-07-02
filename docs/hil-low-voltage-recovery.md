@@ -9,12 +9,12 @@ The main firmware must not write BQ40 Data Flash. BQ40 DF maintenance stays behi
 
 ## Safety Scope
 
-- Approved HIL device id: `serial-04f3bb3f5367`.
-- Approved HIL serial port: `/dev/cu.usbmodem212301`.
-- Denied serial port: `/dev/cu.usbmodem212101`.
+- Real HIL has no baked-in device id, serial-port allowlist, or serial-port denylist.
+- The owner must provide the current devd device id and serial port in the same invocation with `--device-id` and `--port`.
+- The runner validates that devd scan results and selector caches match the explicit target exactly before any real flash step.
 - Agents must not directly invoke `espflash`, `cargo espflash`, or `cargo-espflash`.
 - Agents must not use `mcu-agentd` as a Mains Aegis hardware operation path, enumerate `/dev/*`, or try alternate ports.
-- Real flash/reset/monitor operations require the known approved target and owner authorization.
+- Real flash/reset/monitor operations require an explicit owner-supplied target and owner authorization.
 
 ## Runner
 
@@ -24,20 +24,20 @@ The project runner is:
 tools/hil/low-voltage-recovery.sh --dry-run
 ```
 
-Real HIL requires the approved target to be stated explicitly:
+Real HIL requires the current target to be stated explicitly:
 
 ```bash
 tools/hil/low-voltage-recovery.sh \
   --real \
-  --device-id serial-04f3bb3f5367 \
-  --port /dev/cu.usbmodem212301
+  --device-id <devd-device-id> \
+  --port <serial-port>
 ```
 
 The runner refuses real HIL when either `firmware/.esp32-port` or `tools/bq40-comm-tool/.esp32-port` points at another port. This prevents the temporary tool firmware and the final main firmware from being flashed to different devices.
 
 ## HIL Sequence
 
-1. Validate that the runner's explicit `--device-id` and `--port` match the approved target.
+1. Validate that the runner received explicit `--device-id` and `--port`, then confirm devd scan results and selector caches match that target exactly.
 2. Run:
 
    ```bash
@@ -48,18 +48,18 @@ The runner refuses real HIL when either `firmware/.esp32-port` or `tools/bq40-co
      --repair-profile live-df-mainboard
    ```
 
-   The runner exports the approved devd target for this step, so the temporary tool firmware is flashed through `mains-aegis-devd` as well.
+   The runner exports the explicit devd target for this step, so the temporary tool firmware is flashed through `mains-aegis-devd` as well.
 
 3. Build main firmware:
 
    ```bash
-   cd firmware
-   cargo build --release --bin esp-firmware --features net_http,web_serial
+   just firmware-build
    ```
 
-4. Generate a Firmware Catalog manifest for the built main firmware.
+4. Generate a Firmware Catalog manifest for the built main firmware. The
+   runner uses the same artifact generation path as `just firmware-release`.
 5. Start or reuse `mains-aegis-devd`.
-6. Run devd scan, bind only `serial-04f3bb3f5367`, select the generated manifest, and flash the main firmware through devd.
+6. Run devd scan, bind only the explicit `--device-id`, select the generated manifest, and flash the main firmware through devd.
 7. Reconnect through devd and read `GET /api/v1/devices/{id}/diag-snapshot?package=bq25792.regs&package=bq40.manufacturing&package=derived.power`.
 
 ## Pass Criteria

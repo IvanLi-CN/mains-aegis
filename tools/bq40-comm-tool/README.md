@@ -12,9 +12,9 @@ This tool is isolated from the main firmware path and provides:
 ```bash
 cd /Users/ivan/Projects/Ivan/mains-aegis/tools/bq40-comm-tool
 
-# 1) For real HIL / devd-backed flashing, export the approved devd target
+# 1) For real HIL / devd-backed flashing, export the explicit devd target
 export BQ40_TOOL_DEVD_URL=http://127.0.0.1:30080
-export BQ40_TOOL_DEVICE_ID=serial-04f3bb3f5367
+export BQ40_TOOL_DEVICE_ID=<devd-device-id>
 
 # 2) Run canonical diagnose with the proven wake profile (no ROM write)
 ./bin/run.sh diagnose --mode canonical --duration-sec 120 --force-min-charge true
@@ -71,7 +71,7 @@ Required `summary.json` fields:
 - `mains-aegis-devd` health check fails
   - ensure the bridge is up at `BQ40_TOOL_DEVD_URL` and that the selected device is already bound in devd
 - `monitor output did not advance`
-  - confirm the approved device is connected through devd and that `./bin/run.sh` is using the same `BQ40_TOOL_DEVICE_ID`
+  - confirm the explicit device is connected through devd and that `./bin/run.sh` is using the same `BQ40_TOOL_DEVICE_ID`
 - `monitor file not found: ...`
   - for `verify`, make sure `--monitor-file` points to an existing `.mon.ndjson`
 - `duration-sec` floors (computed by `./bin/run.sh`; `diagnose` / `recover --recover never` require `>=30s` without wake and `>=42s` with `--force-min-charge true`; ROM-enabled `recover` also adds post-flash quiet + resume + transfer/gap budget and still defaults to the historical safe `155s` bench duration when `--duration-sec` is omitted)
