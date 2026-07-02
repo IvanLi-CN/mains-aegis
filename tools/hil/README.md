@@ -24,6 +24,28 @@ Active source profiles:
 - `12V / 3A`
 - `19V / 3A`
 
+## Validation Levels
+
+Use precise names when recording validation evidence:
+
+- **HIL unit tests** are Python/Rust tests for the HIL tooling itself, such as
+  `python3 -m unittest tools.hil.test_formal_hil_readiness ...`. They use mocks,
+  fixtures, temporary files, and synthetic reports. They do not operate hardware
+  and do not prove a real bench run.
+- **HIL dry-runs** exercise command construction, report wiring, and safety
+  gates without changing hardware state. They are useful for runner validation,
+  but they are not real HIL evidence.
+- **Real low-voltage recovery HIL** is
+  `tools/hil/low-voltage-recovery.sh --real ...`. It flashes the BQ40 tool
+  firmware, applies the BQ40 DF baseline, flashes main firmware back through
+  devd, and verifies `diag-snapshot` on the selected device.
+- **Real formal power-path HIL** is a power-path validation run against the
+  explicit UPS, source, and load targets. It is separate from the low-voltage
+  recovery runner and from the HIL unit tests.
+
+Do not shorten "HIL unit tests passed" to "HIL passed". A sign-off statement
+must say which level ran and, for real HIL, which runner produced the report.
+
 ## Owner-Facing Entry
 
 The owner-facing validation entry is now the Rust host command:

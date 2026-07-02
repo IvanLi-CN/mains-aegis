@@ -35,6 +35,10 @@ tools/hil/low-voltage-recovery.sh \
 
 The runner refuses real HIL when either `firmware/.esp32-port` or `tools/bq40-comm-tool/.esp32-port` points at another port. This prevents the temporary tool firmware and the final main firmware from being flashed to different devices.
 
+`tools.hil.test_*` unit tests and `--dry-run` invocations validate the runner's
+software behavior and safety gates only. They must be reported as HIL tooling
+tests or dry-runs, not as completed real low-voltage recovery HIL.
+
 ## HIL Sequence
 
 1. Validate that the runner received explicit `--device-id` and `--port`, then confirm devd scan results and selector caches match that target exactly.
