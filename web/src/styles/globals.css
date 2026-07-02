@@ -2145,7 +2145,7 @@ a {
 .settings-layout-advanced {
   grid-template-columns: minmax(280px, 0.8fr) minmax(300px, 0.9fr) minmax(360px, 1.15fr);
   gap: 16px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .settings-layout-balanced .settings-panel {
@@ -2314,6 +2314,26 @@ a {
   min-height: var(--control-height);
   padding: 6px 10px;
   font-size: 12px;
+}
+
+@media (pointer: fine) and (hover: hover) {
+  .ui-segmented-control.is-compact {
+    padding: 2px;
+  }
+
+  .ui-segmented-control.is-compact button {
+    min-width: 36px;
+    min-height: 32px;
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+}
+
+@media (pointer: coarse) {
+  .ui-segmented-control.is-compact button {
+    min-height: var(--control-height-touch);
+    padding: 7px 12px;
+  }
 }
 
 .advanced-power-field {
