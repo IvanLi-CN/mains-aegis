@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
 import { DeviceRegistryProvider } from "../device-registry/DeviceRegistry";
 import { App } from "./App";
+import type { DemoSeed } from "../fixtures/mockDevices";
 
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
 
@@ -18,7 +19,7 @@ type Story = StoryObj<typeof meta>;
 
 function renderApp(
   initialPath: string,
-  seed: string | null = "default",
+  seed: DemoSeed | null = "default",
   options: {
     initialDevdTarget?: string;
     forceHostedHttpServiceApp?: boolean;
@@ -34,9 +35,9 @@ function renderApp(
   }
   const params = new URLSearchParams(window.location.search);
   if (seed) {
-    params.set("seed", seed);
+    params.set("demo", "true");
   } else {
-    params.delete("seed");
+    params.delete("demo");
   }
   window.history.replaceState(
     null,
@@ -44,7 +45,7 @@ function renderApp(
     `${window.location.pathname}?${params.toString()}${window.location.hash}`,
   );
   return (
-    <DeviceRegistryProvider>
+    <DeviceRegistryProvider initialDemoSeed={seed ?? undefined}>
       <App
         initialPath={initialPath}
         initialDevdTarget={options.initialDevdTarget}
@@ -80,6 +81,32 @@ export const Mobile: Story = {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("heading", { name: "UPS Fleet" })).toBeInTheDocument();
     await expect((await canvas.findAllByRole("button", { name: "Open" })).length).toBeGreaterThan(0);
+  },
+};
+
+export const DemoControl: Story = {
+  name: "Demo control panel",
+  render: () => renderApp("/"),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByRole("button", { name: "Open demo control panel" }),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Open demo control panel" }),
+    );
+    await expect(await canvas.findByText("Demo Control")).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Move demo control panel" }),
+    ).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("combobox", { name: "Scenario" }));
+    await userEvent.click(await within(document.body).findByRole("option", { name: "Empty fleet" }));
+    await expect(await canvas.findByText("Empty fleet")).toBeInTheDocument();
+    await expect(canvas.queryByText("Protection active")).not.toBeInTheDocument();
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Close demo control panel" }),
+    );
+    await expect(canvas.queryByText("Demo Control")).not.toBeInTheDocument();
   },
 };
 

@@ -8,6 +8,7 @@ import type {
   WifiApplyNetwork,
 } from "../api/types";
 import type { SerialPortLike } from "../serial/transport";
+import type { DemoSeed } from "../fixtures/mockDevices";
 
 export type AddDeviceInput = {
   target: string;
@@ -46,6 +47,7 @@ export type AdvancedPowerInput = AdvancedPowerSettings;
 
 export type DeviceRegistryContextValue = {
   records: DeviceRecord[];
+  demoSeed: DemoSeed | null;
   stageDeviceRecord: (record: DeviceRecord) => void;
   addDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
   addDevdDevice: (input: AddDeviceInput) => Promise<AddDeviceResult>;
@@ -65,6 +67,7 @@ export type DeviceRegistryContextValue = {
   resetAdvancedPower: (deviceId: string) => Promise<CommandResult>;
   removeDevice: (deviceId: string) => void;
   refreshDevice: (deviceId: string) => Promise<void>;
+  setDemoSeed: (seed: DemoSeed) => void;
   resetDemo: () => void;
 };
 

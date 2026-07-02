@@ -4,6 +4,7 @@ import { DeviceRegistryProvider } from "../device-registry/DeviceRegistry";
 import { App, ButtonLabel, ConnectionCallout } from "./App";
 import { Usb } from "lucide-react";
 import type { DeviceTarget } from "../api/types";
+import type { DemoSeed } from "../fixtures/mockDevices";
 
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
 
@@ -26,7 +27,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 function renderApp(
-  seed: string | null = "default",
+  seed: DemoSeed | null = "default",
   options: {
     initialDevdTarget?: string;
     forceHostedHttpServiceApp?: boolean;
@@ -44,9 +45,9 @@ function renderApp(
   }
   const params = new URLSearchParams(window.location.search);
   if (seed) {
-    params.set("seed", seed);
+    params.set("demo", "true");
   } else {
-    params.delete("seed");
+    params.delete("demo");
   }
   for (const [key, value] of Object.entries(options.extraQuery ?? {})) {
     params.set(key, value);
@@ -61,7 +62,7 @@ function renderApp(
     options.runtimeMode ?? "unknown",
   );
   return (
-    <DeviceRegistryProvider>
+    <DeviceRegistryProvider initialDemoSeed={seed ?? undefined}>
       <App
         initialPath="/connect"
         initialDevdTarget={options.initialDevdTarget}

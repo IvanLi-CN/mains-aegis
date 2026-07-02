@@ -32,7 +32,7 @@ export type StoredTargetPreset =
   | "lan-companion-confirmed"
   | "lan-companion-bind-target";
 
-const demoSeedIds: DemoSeed[] = [
+export const demoSeedIds: DemoSeed[] = [
   "default",
   "dual",
   "empty",

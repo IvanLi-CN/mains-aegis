@@ -60,6 +60,7 @@ import {
   makeMockUsbSerialRecord,
   type DemoSeed,
 } from "../fixtures/mockDevices";
+import { DEFAULT_DEMO_SEED, demoQuerySeed } from "../demo/query";
 import {
   findBundledFirmwareArtifact,
   findFirmwareArtifactForIdentity,
@@ -131,11 +132,13 @@ export function resolveManualHttpChannelPersistence(input: {
 
 export function DeviceRegistryProvider({
   children,
+  initialDemoSeed,
 }: {
   children: React.ReactNode;
+  initialDemoSeed?: DemoSeed;
 }) {
-  const seedRef = useRef<DemoSeed | null>(getDemoSeed());
-  const [demoSeed, setDemoSeed] = useState<DemoSeed | null>(seedRef.current);
+  const seedRef = useRef<DemoSeed | null>(getDemoSeed(initialDemoSeed));
+  const [demoSeed, setActiveDemoSeed] = useState<DemoSeed | null>(seedRef.current);
   const [records, setRecords] = useState<DeviceRecord[]>(() =>
     loadInitialRecords(seedRef.current),
   );
@@ -152,10 +155,11 @@ export function DeviceRegistryProvider({
 
   useEffect(() => {
     const syncSeedFromUrl = () => {
-      const nextSeed = getDemoSeed();
+      const querySeed = getDemoSeed(initialDemoSeed);
+      const nextSeed = querySeed && seedRef.current ? seedRef.current : querySeed;
       if (seedRef.current === nextSeed) return;
       seedRef.current = nextSeed;
-      setDemoSeed(nextSeed);
+      setActiveDemoSeed(nextSeed);
       for (const stream of streams.current.values()) stream.close();
       streams.current.clear();
       for (const stream of devdStreams.current.values()) stream.close();
@@ -175,7 +179,7 @@ export function DeviceRegistryProvider({
 
     window.addEventListener("popstate", syncSeedFromUrl);
     return () => window.removeEventListener("popstate", syncSeedFromUrl);
-  }, []);
+  }, [initialDemoSeed]);
 
   const setRecordError = useCallback(
     (deviceId: string, error: DeviceRecord["error"]) => {
@@ -2400,7 +2404,8 @@ export function DeviceRegistryProvider({
     [records],
   );
 
-  const resetDemo = useCallback(() => {
+  const setDemoSeed = useCallback((seed: DemoSeed) => {
+    if (!seedRef.current) return;
     for (const stream of streams.current.values()) stream.close();
     streams.current.clear();
     for (const stream of devdStreams.current.values()) stream.close();
@@ -2411,12 +2416,32 @@ export function DeviceRegistryProvider({
     for (const record of records) releaseDevdLeaseForRecord(record, true);
     for (const session of serialSessions.current.values()) void session.close();
     serialSessions.current.clear();
-    setRecords(makeMockRecords("default"));
-  }, []);
+    seedRef.current = seed;
+    setActiveDemoSeed(seed);
+    setRecords(makeMockRecords(seed));
+  }, [records]);
+
+  const resetDemo = useCallback(() => {
+    if (!seedRef.current) return;
+    for (const stream of streams.current.values()) stream.close();
+    streams.current.clear();
+    for (const stream of devdStreams.current.values()) stream.close();
+    devdStreams.current.clear();
+    for (const heartbeat of devdLeaseHeartbeats.current.values())
+      window.clearInterval(heartbeat);
+    devdLeaseHeartbeats.current.clear();
+    for (const record of records) releaseDevdLeaseForRecord(record, true);
+    for (const session of serialSessions.current.values()) void session.close();
+    serialSessions.current.clear();
+    seedRef.current = DEFAULT_DEMO_SEED;
+    setActiveDemoSeed(DEFAULT_DEMO_SEED);
+    setRecords(makeMockRecords(DEFAULT_DEMO_SEED));
+  }, [records]);
 
   const value = useMemo(
     () => ({
       records,
+      demoSeed,
       stageDeviceRecord,
       addDevice,
       addDevdDevice,
@@ -2436,10 +2461,12 @@ export function DeviceRegistryProvider({
       resetAdvancedPower,
       removeDevice,
       refreshDevice,
+      setDemoSeed,
       resetDemo,
     }),
     [
       records,
+      demoSeed,
       stageDeviceRecord,
       addDevice,
       addDevdDevice,
@@ -2459,6 +2486,7 @@ export function DeviceRegistryProvider({
       resetAdvancedPower,
       removeDevice,
       refreshDevice,
+      setDemoSeed,
       resetDemo,
     ],
   );
@@ -2470,9 +2498,10 @@ export function DeviceRegistryProvider({
   );
 }
 
-function getDemoSeed(): DemoSeed | null {
-  const seed = new URLSearchParams(window.location.search).get("seed");
-  return isDemoSeed(seed) ? seed : null;
+function getDemoSeed(initialDemoSeed?: DemoSeed): DemoSeed | null {
+  const querySeed = demoQuerySeed();
+  if (!querySeed) return null;
+  return isDemoSeed(initialDemoSeed) ? initialDemoSeed : querySeed;
 }
 
 function loadInitialRecords(seed: DemoSeed | null): DeviceRecord[] {

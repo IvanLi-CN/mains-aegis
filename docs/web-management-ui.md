@@ -208,4 +208,4 @@ web/
 - Connect 发现动作使用项目既有小号主次按钮体系；未纳管设备使用 `Bind USB` / `Add WiFi`，已纳管设备使用 `Open` 与 `Use ...`，不引入独立的 split-button 控件族。
 - 验证命令：`bun run web:check`、`PAGES_BASE=/mains-aegis/ bun run web:build`、`DOCS_BASE=/mains-aegis/docs/ bun run --cwd docs-site build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cargo test --manifest-path tools/mains-aegis-host/Cargo.toml`、`cd firmware && cargo +esp check`。
 - 本地设备 daemon：开发 IPC-only CLI 验证使用 `just devd-serve`；Vite 开发期 API 验证使用 `just devd-http`；hosted 模式由 `serve-http` 直接托管嵌入式 Web 产物，不再接受 `--web-root`。
-- 纯前端 Demo：`bun run web:dev` 后访问正式路由，例如 `/`、`/?seed=empty`、`/?seed=large`、`/devices/mains-aegis-e4f5a6/battery?seed=default`。
+- 纯前端 Demo：`bun run web:dev` 后访问正式路由并加 `?demo=true`，例如 `/?demo=true`、`/connect?demo=true`、`/devices/mains-aegis-e4f5a6/battery?demo=true`。Demo 场景切换在左上角 Demo Logo 打开的悬浮控制面板内完成，不再通过 `seed=` URL 参数暴露。

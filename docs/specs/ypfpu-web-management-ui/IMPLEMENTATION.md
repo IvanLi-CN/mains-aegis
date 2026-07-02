@@ -30,7 +30,7 @@
 - USB Console 保留 raw/ignored 串口记录本身，不再额外显示 `Decode issue` 或 `defmt decoder unavailable` 诊断标签；连接时的 firmware artifact 匹配门禁负责阻断不匹配固件。
 - Settings 和 Connect 失败反馈统一为气泡 callout；WiFi 保存、WiFi 清除和 manual charge 写入在固件/devd 返回前显示 spinner 并禁用并发写入。
 - Fleet 卡片使用用户可理解的摘要字段，技术细节保留到单设备详情与 API 调试页。
-- Demo 复用正式前端路由，通过 `seed` 参数切换 mock 数据场景，覆盖默认 fleet、空数据、全离线、大数量、Critical Battery、Backup、API Debug 等路径。
+- Demo 复用正式前端路由，通过 `demo=true` 进入 mock-only 运行态；场景切换由左上角 Demo Logo 打开的悬浮控制面板完成，覆盖默认 fleet、空数据、全离线、大数量、USB、Critical Battery、Backup、API Debug 等路径，不再通过 public `seed=` URL 深链暴露。
 
 ## 验证状态
 
