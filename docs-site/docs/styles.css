@@ -136,3 +136,104 @@ h3[id="61-tps55288-输出准入矩阵"] + p + table code {
     border-radius: 8px 0 0 8px;
   }
 }
+
+.audio-cue-table-wrap {
+  width: 100%;
+  margin: 18px 0 30px;
+  overflow-x: auto;
+  border: 1px solid oklch(86% 0.018 220deg);
+  border-radius: 8px;
+  background: oklch(99% 0.004 220deg);
+}
+
+.dark .audio-cue-table-wrap {
+  border-color: oklch(34% 0.024 220deg);
+  background: oklch(20% 0.014 220deg);
+}
+
+.audio-cue-table {
+  width: 100%;
+  min-width: 920px;
+  margin: 0;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.audio-cue-table th,
+.audio-cue-table td {
+  padding: 12px 14px;
+  border: 0;
+  border-bottom: 1px solid oklch(90% 0.012 220deg);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.dark .audio-cue-table th,
+.dark .audio-cue-table td {
+  border-bottom-color: oklch(30% 0.018 220deg);
+}
+
+.audio-cue-table th {
+  background: oklch(94% 0.018 210deg);
+  color: oklch(34% 0.08 210deg);
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.dark .audio-cue-table th {
+  background: oklch(27% 0.025 210deg);
+  color: oklch(84% 0.05 210deg);
+}
+
+.audio-cue-table tbody tr:nth-child(even) td {
+  background: oklch(97.5% 0.006 220deg);
+}
+
+.dark .audio-cue-table tbody tr:nth-child(even) td {
+  background: oklch(22% 0.016 220deg);
+}
+
+.audio-cue-table td:first-child {
+  min-width: 190px;
+}
+
+.audio-cue-table td:last-child {
+  width: 104px;
+  text-align: center;
+}
+
+.audio-cue-play-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  min-height: 36px;
+  border: 1px solid oklch(58% 0.12 210deg);
+  border-radius: 8px;
+  background: oklch(98% 0.02 205deg);
+  color: oklch(34% 0.11 210deg);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 720;
+  letter-spacing: 0;
+}
+
+.audio-cue-play-button:hover {
+  background: oklch(94% 0.035 205deg);
+}
+
+.audio-cue-play-button:focus-visible {
+  outline: 3px solid oklch(72% 0.12 210deg / 0.5);
+  outline-offset: 2px;
+}
+
+.dark .audio-cue-play-button {
+  border-color: oklch(62% 0.11 210deg);
+  background: oklch(28% 0.035 210deg);
+  color: oklch(90% 0.035 210deg);
+}
+
+.dark .audio-cue-play-button:hover {
+  background: oklch(33% 0.04 210deg);
+}

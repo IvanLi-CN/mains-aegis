@@ -123,9 +123,9 @@
 为了快速评审提示音语义与听感，本仓库继续保留独立的“本地试听资产”目录；它是试听/定义源，不由主固件直接读取：
 
 - 试听资产入口：`./audio-cues-preview/README.md`
-- 音效对照页：`./audio-cues.md` / `./audio-cues.html`
+- 音效对照页：`../docs-site/docs/design/audio-cues.mdx`
+- 清单对照源：`./audio-cues.md`
 - 清单契约：`./audio-cues-preview/cues.manifest.json`
-- 本地预览页：`./audio-cues-preview/preview.html`
 - 固件打包副本：`../firmware/assets/audio/test-fw-cues/*.wav`
 
 > 说明：`docs/audio-cues-preview/**` 用于“音效定义与试听”，`firmware/assets/audio/test-fw-cues/*.wav` 是当前主固件与 `test-fw` 共用的运行时资产副本。
