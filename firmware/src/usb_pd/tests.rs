@@ -2135,3 +2135,25 @@ fn attach_insert_feedback_only_fires_on_attach_rising_edge() {
         attached_with_contract
     ));
 }
+
+#[test]
+fn usb_c_insert_feedback_tracker_requires_stable_detach_before_rearming() {
+    let detached = UsbPdPortState {
+        attached: false,
+        ..UsbPdPortState::default()
+    };
+    let attached = UsbPdPortState {
+        attached: true,
+        vbus_present: Some(true),
+        ..UsbPdPortState::default()
+    };
+
+    let mut tracker = UsbCInsertFeedbackTracker::new(detached);
+    assert!(tracker.update(attached, 10));
+    assert!(!tracker.update(attached, 20));
+    assert!(!tracker.update(detached, 30));
+    assert!(!tracker.update(attached, 40));
+    assert!(!tracker.update(detached, 1_000));
+    assert!(tracker.update(attached, 1_000 + USB_C_INSERT_FEEDBACK_REARM_DETACHED_MS));
+    assert!(!tracker.update(attached, 1_600));
+}

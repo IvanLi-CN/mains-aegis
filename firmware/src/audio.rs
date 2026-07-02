@@ -237,6 +237,11 @@ impl AudioManager {
     }
 
     pub fn request(&mut self, request: AudioRequest) {
+        if should_suppress_duplicate_request(request.cue) && self.has_queued_or_current(request.cue)
+        {
+            return;
+        }
+
         if let Some(current) = self.current {
             if request.priority > current.request.priority {
                 let preempted = current.request;
@@ -834,6 +839,21 @@ mod tests {
         let samples = decode_left_samples(&buf);
         assert!(samples.iter().all(|sample| *sample == 0));
     }
+
+    #[test]
+    fn usb_c_insert_feedback_ignores_duplicate_while_active() {
+        let mut manager = AudioManager::new();
+        manager.trigger_usb_c_insert();
+        assert_eq!(manager.status().current, Some(AudioCue::UsbCInsert));
+
+        manager.trigger_usb_c_insert();
+        manager.trigger_usb_c_insert();
+
+        let status = manager.status();
+        assert_eq!(status.current, Some(AudioCue::UsbCInsert));
+        assert_eq!(status.queued, 0);
+        assert_eq!(status.dropped, 0);
+    }
 }
 
 pub const fn default_request(cue: AudioCue) -> AudioRequest {
@@ -921,6 +941,10 @@ pub const fn playback_mode_for_cue(cue: AudioCue) -> CuePlaybackMode {
             CuePlaybackMode::OneShot
         }
     }
+}
+
+const fn should_suppress_duplicate_request(cue: AudioCue) -> bool {
+    matches!(cue, AudioCue::UsbCInsert)
 }
 
 fn pcm_for_cue(cue: AudioCue) -> &'static [u8] {

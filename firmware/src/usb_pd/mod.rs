@@ -99,6 +99,44 @@ pub const fn attach_insert_feedback_edge(
     current.attached && !previous.attached
 }
 
+pub const USB_C_INSERT_FEEDBACK_REARM_DETACHED_MS: u32 = 500;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UsbCInsertFeedbackTracker {
+    armed: bool,
+    detached_since_ms: Option<u32>,
+}
+
+impl UsbCInsertFeedbackTracker {
+    pub const fn new(initial: UsbPdPortState) -> Self {
+        Self {
+            armed: !initial.attached,
+            detached_since_ms: None,
+        }
+    }
+
+    pub fn update(&mut self, current: UsbPdPortState, now_ms: u32) -> bool {
+        if current.attached {
+            if self.detached_since_ms.is_some_and(|since| {
+                now_ms.wrapping_sub(since) >= USB_C_INSERT_FEEDBACK_REARM_DETACHED_MS
+            }) {
+                self.armed = true;
+            }
+            self.detached_since_ms = None;
+            if self.armed {
+                self.armed = false;
+                return true;
+            }
+            return false;
+        }
+
+        if self.detached_since_ms.is_none() {
+            self.detached_since_ms = Some(now_ms);
+        }
+        false
+    }
+}
+
 impl UsbPdPowerDemand {
     pub fn required_power_mw(self) -> u32 {
         let charge_power_mw = if self.charging_enabled {

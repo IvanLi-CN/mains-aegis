@@ -1633,7 +1633,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let mut last_irq_log_at: Option<Instant> = None;
     let mut last_fan_tach_log_at: Option<Instant> = None;
     let mut last_audio_diag_at: Option<Instant> = None;
-    let mut last_usb_pd_state_for_feedback = initial_pd_state;
+    let mut usb_c_insert_feedback_tracker =
+        esp_firmware::usb_pd::UsbCInsertFeedbackTracker::new(initial_pd_state);
     #[cfg(feature = "web_serial")]
     let mut web_serial_log_state = UsbCdcLogState::new();
     #[cfg(feature = "web_serial")]
@@ -1687,17 +1688,15 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 );
             }
             let mut irq_events = irq_tracker.take_delta();
+            let usb_pd_now_ms = pd_started_at.elapsed().as_millis() as u32;
             let mut pd_state = usb_pd.tick(
                 power.usb_pd_demand(),
                 irq_events.i2c2_int != 0,
-                pd_started_at.elapsed().as_millis() as u32,
+                usb_pd_now_ms,
             );
             power.update_usb_pd_state(pd_state);
-            let mut usb_c_insert_feedback = esp_firmware::usb_pd::attach_insert_feedback_edge(
-                last_usb_pd_state_for_feedback,
-                pd_state,
-            );
-            last_usb_pd_state_for_feedback = pd_state;
+            let mut usb_c_insert_feedback =
+                usb_c_insert_feedback_tracker.update(pd_state, usb_pd_now_ms);
 
             if pd_state.attached && pd_state.contract.is_none() {
                 let focus_start = Instant::now();
@@ -1721,19 +1720,16 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     irq_events.therm_kill_n =
                         irq_events.therm_kill_n.wrapping_add(extra_irq.therm_kill_n);
 
+                    let usb_pd_now_ms = pd_started_at.elapsed().as_millis() as u32;
                     pd_state = usb_pd.tick(
                         power.usb_pd_demand(),
                         extra_irq.i2c2_int != 0,
-                        pd_started_at.elapsed().as_millis() as u32,
+                        usb_pd_now_ms,
                     );
                     power.update_usb_pd_state(pd_state);
-                    if esp_firmware::usb_pd::attach_insert_feedback_edge(
-                        last_usb_pd_state_for_feedback,
-                        pd_state,
-                    ) {
+                    if usb_c_insert_feedback_tracker.update(pd_state, usb_pd_now_ms) {
                         usb_c_insert_feedback = true;
                     }
-                    last_usb_pd_state_for_feedback = pd_state;
                     #[cfg(feature = "web_serial")]
                     {
                         let web_serial_snapshot = power.ui_snapshot();
