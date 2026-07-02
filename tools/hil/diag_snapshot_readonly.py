@@ -165,6 +165,7 @@ def run(args: argparse.Namespace) -> int:
             response = fetch_json(url, args.timeout_sec)
             failures = validate_response(response, packages)
             if not failures:
+                last_error = None
                 break
         except Exception as exc:  # noqa: BLE001 - report transport and schema failures uniformly.
             last_error = str(exc)

@@ -216,6 +216,47 @@ class DiagSnapshotReadonlyTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertIn('"ok": true', out.read_text(encoding="utf-8"))
 
+    def test_run_clears_transient_error_after_retry_success(self) -> None:
+        response = {
+            "sample": {
+                "packages": {
+                    "derived.power": {
+                        "payload": {
+                            "charger": {},
+                            "bms": {},
+                            "policy": {},
+                        }
+                    }
+                }
+            }
+        }
+        args = argparse.Namespace(
+            devd_url="http://127.0.0.1:38140",
+            device_id="fixture-ups-device",
+            packages=["derived.power"],
+            timeout_sec=1,
+            retries=2,
+            out=None,
+        )
+        attempts = 0
+
+        def fake_fetch(_url: str, _timeout: float):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise TimeoutError("temporary timeout")
+            return response
+
+        self.mod.fetch_json = fake_fetch
+
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            rc = self.mod.run(args)
+
+        self.assertEqual(rc, 0)
+        self.assertIn('"ok": true', output.getvalue())
+        self.assertIn('"error": null', output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
