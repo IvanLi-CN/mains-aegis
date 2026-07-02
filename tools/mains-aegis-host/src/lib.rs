@@ -9504,7 +9504,7 @@ mod tests {
     #[tokio::test]
     async fn monitor_start_returns_already_running_without_reopening_serial_port() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         {
             let mut guard = state.inner.lock().expect("state lock");
             guard.devices.insert(
@@ -9512,14 +9512,14 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Connected,
-                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
                     status: None,
                     status_updated_at: None,
                     diag_snapshot: None,
@@ -9569,7 +9569,7 @@ mod tests {
     #[tokio::test]
     async fn monitor_command_failure_removes_and_stops_monitor() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         let stop = Arc::new(AtomicBool::new(false));
         let done = Arc::new(AtomicBool::new(true));
         {
@@ -9579,14 +9579,14 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Connected,
-                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
                     status: None,
                     status_updated_at: None,
                     diag_snapshot: None,
@@ -9631,7 +9631,7 @@ mod tests {
     #[tokio::test]
     async fn device_status_does_not_return_stale_monitor_cache() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         {
             let mut guard = state.inner.lock().expect("state lock");
             guard.devices.insert(
@@ -9639,14 +9639,14 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Connected,
-                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
                     status: Some(json!({"mode":"standby"})),
                     status_updated_at: Some(Instant::now() - Duration::from_secs(5)),
                     diag_snapshot: None,
@@ -9693,7 +9693,7 @@ mod tests {
     #[tokio::test]
     async fn device_status_watch_can_return_stale_monitor_cache_with_meta() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         {
             let mut guard = state.inner.lock().expect("state lock");
             guard.devices.insert(
@@ -9701,14 +9701,14 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Connected,
-                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
                     status: Some(json!({"mode":"standby"})),
                     status_updated_at: Some(Instant::now() - Duration::from_secs(5)),
                     diag_snapshot: None,
@@ -9755,7 +9755,7 @@ mod tests {
     #[tokio::test]
     async fn bound_native_device_record_materializes_without_scan() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         {
             let mut guard = state.inner.lock().expect("state lock");
             guard.bindings.insert(
@@ -9763,7 +9763,7 @@ mod tests {
                 DeviceBinding {
                     alias: Some("hil".into()),
                     stable_id: device_id.clone(),
-                    port_path: Some("/dev/cu.usbmodem-bound".into()),
+                    port_path: Some("/tmp/fixture-usb-bound".into()),
                     created_at: "now".into(),
                     logical_device_id: None,
                     lan_companion: None,
@@ -9775,7 +9775,7 @@ mod tests {
 
         let guard = state.inner.lock().expect("state lock");
         let device = guard.devices.get(&device_id).unwrap();
-        assert_eq!(device.port_path.as_deref(), Some("/dev/cu.usbmodem-bound"));
+        assert_eq!(device.port_path.as_deref(), Some("/tmp/fixture-usb-bound"));
         assert!(matches!(device.transport, DeviceTransport::NativeSerial));
         assert_eq!(device.binding.as_ref().unwrap().stable_id, device_id);
     }
@@ -9783,7 +9783,7 @@ mod tests {
     #[tokio::test]
     async fn device_status_and_diag_snapshot_prefer_monitor_cache_when_monitor_is_running() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         let new_status = json!({
             "input": {
                 "source": "dcin",
@@ -9804,14 +9804,14 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Connected,
-                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
                     status: Some(json!({"mode":"standby"})),
                     status_updated_at: Some(Instant::now() - Duration::from_secs(5)),
                     diag_snapshot: None,
@@ -9875,7 +9875,7 @@ mod tests {
     #[tokio::test]
     async fn device_diag_snapshot_derives_from_fresh_status_cache() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         let status = json!({
             "input": {
                 "source": "dcin",
@@ -9900,14 +9900,14 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Connected,
-                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
                     status: Some(status),
                     status_updated_at: Some(Instant::now()),
                     diag_snapshot: None,
@@ -10088,7 +10088,7 @@ mod tests {
                 DeviceRecord {
                     id: device_id.into(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
@@ -10228,7 +10228,7 @@ mod tests {
     #[tokio::test]
     async fn monitor_trace_does_not_mark_identityless_device_connected() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367";
+        let device_id = "fixture-ups-device";
         {
             let mut guard = state.inner.lock().expect("state lock");
             guard.devices.insert(
@@ -10236,7 +10236,7 @@ mod tests {
                 DeviceRecord {
                     id: device_id.to_string(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
@@ -10277,7 +10277,7 @@ mod tests {
     #[test]
     fn stable_device_id_is_deterministic() {
         let port = serialport::SerialPortInfo {
-            port_name: "/dev/cu.usbmodem1".into(),
+            port_name: "/tmp/fixture-usb-a".into(),
             port_type: serialport::SerialPortType::Unknown,
         };
         assert_eq!(stable_device_id(&port), stable_device_id(&port));
@@ -10285,18 +10285,18 @@ mod tests {
 
     #[test]
     fn stable_device_id_distinguishes_no_serial_usb_ports() {
-        let mut left = usb_port("/dev/cu.usbmodem1", None);
-        let right = usb_port("/dev/cu.usbmodem2", None);
+        let mut left = usb_port("/tmp/fixture-usb-a", None);
+        let right = usb_port("/tmp/fixture-usb-b", None);
         assert_ne!(stable_device_id(&left), stable_device_id(&right));
 
-        left.port_name = "/dev/cu.usbmodem2".into();
+        left.port_name = "/tmp/fixture-usb-b".into();
         assert_eq!(stable_device_id(&left), stable_device_id(&right));
     }
 
     #[test]
     fn stable_device_id_uses_usb_serial_over_port_path() {
-        let left = usb_port("/dev/cu.usbmodem1", Some("board-a"));
-        let right = usb_port("/dev/cu.usbmodem2", Some("board-a"));
+        let left = usb_port("/tmp/fixture-usb-a", Some("board-a"));
+        let right = usb_port("/tmp/fixture-usb-b", Some("board-a"));
         assert_eq!(stable_device_id(&left), stable_device_id(&right));
     }
 
@@ -10305,7 +10305,7 @@ mod tests {
         let device = DeviceRecord {
             id: "mains-aegis-abc123".into(),
             display_name: "USB CDC".into(),
-            port_path: Some("/dev/cu.usbmodem1".into()),
+            port_path: Some("/tmp/fixture-usb-a".into()),
             lan_address: None,
             lan_conflict_addresses: Vec::new(),
             companion_lan_candidate: None,
@@ -10313,7 +10313,7 @@ mod tests {
             binding: Some(DeviceBinding {
                 alias: None,
                 stable_id: "serial-a".into(),
-                port_path: Some("/dev/cu.usbmodem1".into()),
+                port_path: Some("/tmp/fixture-usb-a".into()),
                 created_at: "now".into(),
                 logical_device_id: Some("mains-aegis-abc123".into()),
                 lan_companion: None,
@@ -10353,7 +10353,7 @@ mod tests {
                 DeviceRecord {
                     id: "native-a".into(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem1".into()),
+                    port_path: Some("/tmp/fixture-usb-a".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
@@ -10380,7 +10380,7 @@ mod tests {
             Path("native-a".into()),
             Json(BindRequest {
                 alias: Some("Bench unit".into()),
-                logical_device_id: Some("mains-aegis-198840".into()),
+                logical_device_id: Some("fixture-mains-aegis".into()),
             }),
         )
         .await
@@ -10396,10 +10396,10 @@ mod tests {
         let guard = restarted.inner.lock().expect("state lock");
         let binding = guard.bindings.get("native-a").unwrap();
         assert_eq!(binding.alias.as_deref(), Some("Bench unit"));
-        assert_eq!(binding.port_path.as_deref(), Some("/dev/cu.usbmodem1"));
+        assert_eq!(binding.port_path.as_deref(), Some("/tmp/fixture-usb-a"));
         assert_eq!(
             binding.logical_device_id.as_deref(),
-            Some("mains-aegis-198840")
+            Some("fixture-mains-aegis")
         );
     }
 
@@ -10422,7 +10422,7 @@ mod tests {
                 stable_id: "mock-devkit".into(),
                 port_path: None,
                 created_at: "now".into(),
-                logical_device_id: Some("mains-aegis-198840".into()),
+                logical_device_id: Some("fixture-mains-aegis".into()),
                 lan_companion: None,
             };
             let device = guard.devices.get_mut("mock-devkit").unwrap();
@@ -10459,7 +10459,7 @@ mod tests {
                         DeviceBinding {
                             alias: Some(format!("Device {index}")),
                             stable_id: format!("device-{index}"),
-                            port_path: Some(format!("/dev/cu.usbmodem{index}")),
+                            port_path: Some(format!("/tmp/fixture-usb-{index}")),
                             created_at: "now".into(),
                             logical_device_id: Some(format!("logical-{index}")),
                             lan_companion: None,
@@ -10487,27 +10487,33 @@ mod tests {
     }
 
     #[test]
-    fn prefer_serial_port_path_uses_cu_on_macos() {
+    fn prefer_serial_port_path_uses_higher_scored_path() {
         assert_eq!(
-            prefer_serial_port_path(Some("/dev/tty.usbmodem1"), "/dev/cu.usbmodem1"),
-            "/dev/cu.usbmodem1"
+            prefer_serial_port_path(Some("/mock/tty.fixture-a"), "/mock/cu.fixture-a"),
+            "/mock/cu.fixture-a"
         );
         assert_eq!(
-            prefer_serial_port_path(Some("/dev/cu.usbmodem1"), "/dev/tty.usbmodem1"),
-            "/dev/cu.usbmodem1"
+            prefer_serial_port_path(Some("/mock/cu.fixture-a"), "/mock/tty.fixture-a"),
+            "/mock/cu.fixture-a"
         );
     }
 
     #[test]
     fn native_usb_serial_candidate_filters_virtual_ports() {
         assert!(is_native_usb_serial_candidate(&usb_port(
-            "/dev/cu.usbmodem1",
+            "/tmp/fixture-usb-a",
             Some("board-a")
         )));
         assert!(is_native_usb_serial_candidate(
             &serialport::SerialPortInfo {
-                port_name: "/dev/cu.usbmodem212101".into(),
-                port_type: serialport::SerialPortType::Unknown,
+                port_name: "/tmp/fixture-load-usb-port".into(),
+                port_type: serialport::SerialPortType::UsbPort(serialport::UsbPortInfo {
+                    vid: 0x303a,
+                    pid: 0x1001,
+                    serial_number: Some("fixture".into()),
+                    manufacturer: None,
+                    product: None,
+                }),
             }
         ));
         assert!(!is_native_usb_serial_candidate(
@@ -10605,7 +10611,7 @@ mod tests {
             DeviceRecord {
                 id: "serial-a".into(),
                 display_name: "USB CDC".into(),
-                port_path: Some("/dev/cu.usbmodem1".into()),
+                port_path: Some("/tmp/fixture-usb-a".into()),
                 lan_address: None,
                 lan_conflict_addresses: Vec::new(),
                 companion_lan_candidate: None,
@@ -10665,7 +10671,7 @@ mod tests {
             DeviceRecord {
                 id: "serial-a".into(),
                 display_name: "USB CDC".into(),
-                port_path: Some("/dev/cu.usbmodem1".into()),
+                port_path: Some("/tmp/fixture-usb-a".into()),
                 lan_address: None,
                 lan_conflict_addresses: Vec::new(),
                 companion_lan_candidate: None,
@@ -10673,7 +10679,7 @@ mod tests {
                 binding: Some(DeviceBinding {
                     alias: Some("Bench unit".into()),
                     stable_id: "serial-a".into(),
-                    port_path: Some("/dev/cu.usbmodem1".into()),
+                    port_path: Some("/tmp/fixture-usb-a".into()),
                     created_at: "now".into(),
                     logical_device_id: Some("mains-aegis-abc123".into()),
                     lan_companion: None,
@@ -10723,7 +10729,7 @@ mod tests {
         let device = DeviceRecord {
             id: "serial-a".into(),
             display_name: "USB CDC".into(),
-            port_path: Some("/dev/cu.usbmodem1".into()),
+            port_path: Some("/tmp/fixture-usb-a".into()),
             lan_address: Some("192.168.4.25".into()),
             lan_conflict_addresses: Vec::new(),
             companion_lan_candidate: None,
@@ -10778,7 +10784,7 @@ mod tests {
             DeviceRecord {
                 id: "serial-a".into(),
                 display_name: "USB CDC".into(),
-                port_path: Some("/dev/cu.usbmodem1".into()),
+                port_path: Some("/tmp/fixture-usb-a".into()),
                 lan_address: Some("192.168.4.25".into()),
                 lan_conflict_addresses: Vec::new(),
                 companion_lan_candidate: None,
@@ -11681,7 +11687,7 @@ mod tests {
         let mut device = DeviceRecord {
             id: "d".into(),
             display_name: "d".into(),
-            port_path: Some("/dev/cu.usbmodem1".into()),
+            port_path: Some("/tmp/fixture-usb-a".into()),
             lan_address: None,
             lan_conflict_addresses: Vec::new(),
             companion_lan_candidate: None,
@@ -11704,18 +11710,18 @@ mod tests {
         device.binding = Some(DeviceBinding {
             alias: None,
             stable_id: "d".into(),
-            port_path: Some("/dev/cu.usbmodem1".into()),
+            port_path: Some("/tmp/fixture-usb-a".into()),
             created_at: "now".into(),
             logical_device_id: None,
             lan_companion: None,
         });
-        assert_eq!(bound_flash_port(&device), Some("/dev/cu.usbmodem1".into()));
+        assert_eq!(bound_flash_port(&device), Some("/tmp/fixture-usb-a".into()));
     }
 
     #[tokio::test]
     async fn firmware_change_invalidates_stale_capability_cache() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         {
             let mut guard = state.inner.lock().expect("state lock");
             let mut settings = default_settings();
@@ -11725,7 +11731,7 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
@@ -11733,7 +11739,7 @@ mod tests {
                     binding: None,
                     connection: ConnectionState::Connected,
                     identity: Some(json!({
-                        "device_id": "mains-aegis-198840",
+                        "device_id": "fixture-mains-aegis",
                         "hardware_capabilities": {
                             "output_profile": "19v",
                             "rated_vout_mv": 19000

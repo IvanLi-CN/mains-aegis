@@ -138,7 +138,7 @@ type RememberedChannels = {
     },
     "devd": {
       "baseUrl": "http://127.0.0.1:30080",
-      "devdDeviceId": "serial-04f3bb3f5367",
+      "devdDeviceId": "fixture-ups-device",
       "transport": "usb",
       "seenAt": "2026-06-08T10:18:00Z",
       "last_connected_at": "2026-06-08T10:19:11Z",

@@ -297,14 +297,14 @@ function requestMockDevd<T>(
           ? "USB standby UPS"
           : "Bound ESP32-S3"
       : "USB demo CDC",
-    port_path: "/dev/tty.usbmodem-demo",
+    port_path: "/tmp/fixture-usb-demo",
     transport: bindTargetMock ? ("native_serial" as const) : ("mock" as const),
     binding:
       bindTargetMock && bindTargetState?.boundLogicalDeviceId
         ? {
             alias: "USB demo CDC",
             stable_id: "mock-devd-usb-pending",
-            port_path: "/dev/tty.usbmodem-demo",
+            port_path: "/tmp/fixture-usb-demo",
             created_at: "2026-04-28T00:00:00.000Z",
             logical_device_id: bindTargetState.boundLogicalDeviceId,
           }
@@ -314,7 +314,7 @@ function requestMockDevd<T>(
             stable_id: multiChannelMock
               ? "mock-devd-usb-standby"
               : "mains-aegis-devd-service",
-            port_path: "/dev/tty.usbmodem-demo",
+            port_path: "/tmp/fixture-usb-demo",
             created_at: "2026-04-28T00:00:00.000Z",
             logical_device_id: multiChannelMock ? "mains-aegis-a1b2c3" : null,
           }

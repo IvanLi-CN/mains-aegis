@@ -12,12 +12,10 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_LOAD_DEVICE = "loadlynx-d68638"
-DEFAULT_LOAD_USB_PORT = "/dev/cu.usbmodem212101"
-DEFAULT_LOAD_CLI = "/Users/ivan/.codex/worktrees/a31f/loadlynx-host-src/tools/loadlynx-devd/target/debug/loadlynx"
-DEFAULT_UPS_STATUS_URL = "http://192.168.31.232/api/v1/status"
-DEFAULT_DEVD_DIAG_SNAPSHOT_URL = "http://127.0.0.1:30088/api/v1/devices/serial-04f3bb3f5367/diag-snapshot"
-DEFAULT_ISOLAPURR_URL = "http://192.168.31.122"
+DEFAULT_LOAD_CLI = "loadlynx"
+DEFAULT_UPS_STATUS_URL = os.environ.get("MAINS_AEGIS_UPS_STATUS_URL")
+DEFAULT_DEVD_DIAG_SNAPSHOT_URL = os.environ.get("MAINS_AEGIS_DEVD_DIAG_SNAPSHOT_URL")
+DEFAULT_ISOLAPURR_URL = os.environ.get("MAINS_AEGIS_ISOLAPURR_URL")
 DEFAULT_LOADS = "3000,3025,3050,3900"
 DEFAULT_HOLD_SECONDS = 8.0
 DEFAULT_BASELINE_SECONDS = 2.5
@@ -34,8 +32,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--profile-name", required=True)
     parser.add_argument("--loads-ma", default=DEFAULT_LOADS)
-    parser.add_argument("--load-device", default=DEFAULT_LOAD_DEVICE)
-    parser.add_argument("--load-usb-port", default=DEFAULT_LOAD_USB_PORT)
+    parser.add_argument("--load-device", default=os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID"))
+    parser.add_argument("--load-usb-port", default=os.environ.get("MAINS_AEGIS_LOAD_USB_PORT"))
     parser.add_argument("--load-cli", default=DEFAULT_LOAD_CLI)
     parser.add_argument("--ups-status-url", default=DEFAULT_UPS_STATUS_URL)
     parser.add_argument("--devd-diag-snapshot-url", default=DEFAULT_DEVD_DIAG_SNAPSHOT_URL)
@@ -48,7 +46,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-i-ma-total", type=int, default=DEFAULT_MAX_I_MA_TOTAL)
     parser.add_argument("--max-p-mw", type=int, default=DEFAULT_MAX_P_MW)
     parser.add_argument("--report-root", default="tools/hil/reports")
-    return parser.parse_args()
+    args = parser.parse_args()
+    for name, option in (
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("load_usb_port", "--load-usb-port or MAINS_AEGIS_LOAD_USB_PORT"),
+        ("ups_status_url", "--ups-status-url or MAINS_AEGIS_UPS_STATUS_URL"),
+        ("devd_diag_snapshot_url", "--devd-diag-snapshot-url or MAINS_AEGIS_DEVD_DIAG_SNAPSHOT_URL"),
+        ("isolapurr_url", "--isolapurr-url or MAINS_AEGIS_ISOLAPURR_URL"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"capture requires {option}; no hardware target is built in")
+    return args
 
 
 def parse_loads(csv: str) -> list[int]:

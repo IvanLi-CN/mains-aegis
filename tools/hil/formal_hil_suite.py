@@ -30,12 +30,12 @@ DEFAULT_CHART = ROOT / "render_voltage_chart_html.py"
 DEFAULT_REPORT_ROOT = ROOT / "reports"
 DEFAULT_FIRMWARE_BUNDLE_ROOT = ROOT.parent.parent / "web/public/firmware"
 
-DEFAULT_UPS_DEVICE_ID = "serial-04f3bb3f5367"
-DEFAULT_LOAD_DEVICE = "loadlynx-d68638"
-DEFAULT_LOAD_USB_PORT = "/dev/cu.usbmodem212101"
+DEFAULT_UPS_DEVICE_ID = os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID")
+DEFAULT_LOAD_DEVICE = os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID")
+DEFAULT_LOAD_USB_PORT = os.environ.get("MAINS_AEGIS_LOAD_USB_PORT")
 DEFAULT_LOAD_CLI = str(Path.home() / ".local" / "bin" / "loadlynx")
 DEFAULT_LOAD_IPC = ""
-DEFAULT_LOAD_DEVD_SOCKET = "/tmp/loadlynx-koha-formal.sock"
+DEFAULT_LOAD_DEVD_SOCKET = os.environ.get("LOADLYNX_DEVD_SOCKET", "")
 DEFAULT_LOAD_DEVD_BASE_URL = ""
 DEFAULT_LOAD_BRIDGE_URL = "http://127.0.0.1:30180"
 DEFAULT_LOAD_BRIDGE_DEVICE = ""
@@ -43,8 +43,8 @@ DEFAULT_MAINS_AEGIS_CLI = str(
     ROOT.parent / "mains-aegis-host" / "target" / "debug" / "mains-aegis"
 )
 DEFAULT_ISOLAPURR_CLI = "isolapurr"
-DEFAULT_ISOLAPURR_URL = "http://192.168.31.122"
-DEFAULT_ISOLAPURR_DEVICE_ID = "856a141cdbd4"
+DEFAULT_ISOLAPURR_URL = "http://127.0.0.1:30182"
+DEFAULT_ISOLAPURR_DEVICE_ID = os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID")
 DEFAULT_UPS_OBSERVE_DEVICE_ID = (
     os.environ.get("MAINS_AEGIS_OBSERVE_DEVICE_ID") or DEFAULT_UPS_DEVICE_ID
 )
@@ -134,8 +134,8 @@ def parse_args() -> argparse.Namespace:
         choices=("assist_path", "backup_only"),
         default=["assist_path", "backup_only"],
     )
-    parser.add_argument("--load-device", default=DEFAULT_LOAD_DEVICE)
-    parser.add_argument("--load-usb-port", default=DEFAULT_LOAD_USB_PORT)
+    parser.add_argument("--load-device", default=os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID"))
+    parser.add_argument("--load-usb-port", default=os.environ.get("MAINS_AEGIS_LOAD_USB_PORT"))
     parser.add_argument("--load-cli", default=DEFAULT_LOAD_CLI)
     parser.add_argument("--load-ipc", default=DEFAULT_LOAD_IPC)
     parser.add_argument("--load-devd-socket", default=DEFAULT_LOAD_DEVD_SOCKET)
@@ -147,10 +147,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-p-mw", type=int, default=80000)
     parser.add_argument("--isolapurr-cli", default=DEFAULT_ISOLAPURR_CLI)
     parser.add_argument("--isolapurr-url", default=DEFAULT_ISOLAPURR_URL)
-    parser.add_argument("--isolapurr-device-id", default=DEFAULT_ISOLAPURR_DEVICE_ID)
+    parser.add_argument("--isolapurr-device-id", default=os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID"))
     parser.add_argument("--mains-aegis-cli", default=DEFAULT_MAINS_AEGIS_CLI)
     parser.add_argument("--mains-aegis-ipc", default=None)
-    parser.add_argument("--ups-device-id", default=DEFAULT_UPS_DEVICE_ID)
+    parser.add_argument("--ups-device-id", default=os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID"))
     parser.add_argument("--ups-status-url", default=DEFAULT_UPS_STATUS_URL)
     parser.add_argument("--ups-settings-url", default=DEFAULT_UPS_SETTINGS_URL)
     parser.add_argument("--devd-diag-snapshot-url", default=DEFAULT_UPS_DIAG_SNAPSHOT_URL)
@@ -178,7 +178,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-flash", action="store_true")
     parser.add_argument("--skip-verify", action="store_true")
     parser.add_argument("--skip-overview", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    for name, option in (
+        ("ups_device_id", "--ups-device-id or MAINS_AEGIS_UPS_DEVICE_ID"),
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("load_usb_port", "--load-usb-port or MAINS_AEGIS_LOAD_USB_PORT"),
+        ("isolapurr_device_id", "--isolapurr-device-id or MAINS_AEGIS_POWER_DEVICE_ID"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"formal HIL requires {option}; no hardware device id or port is built in")
+    return args
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:

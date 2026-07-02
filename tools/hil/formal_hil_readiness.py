@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import time
 import urllib.parse
 from pathlib import Path
@@ -35,22 +36,22 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--report-root", default=str(DEFAULT_REPORT_ROOT))
-    parser.add_argument("--load-device", default=suite.DEFAULT_LOAD_DEVICE)
+    parser.add_argument("--load-device", default=os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID"))
     parser.add_argument("--load-cli", default=suite.DEFAULT_LOAD_CLI)
     parser.add_argument("--load-bridge-url", default="")
     parser.add_argument("--load-ipc", default=suite.DEFAULT_LOAD_IPC)
     parser.add_argument("--load-devd-base-url", default=suite.DEFAULT_LOAD_DEVD_BASE_URL)
     parser.add_argument("--load-devd-socket", default=suite.DEFAULT_LOAD_DEVD_SOCKET)
-    parser.add_argument("--load-usb-device-id", default=runner.DEFAULT_LOAD_USB_DEVICE_ID)
+    parser.add_argument("--load-usb-device-id", default=os.environ.get("MAINS_AEGIS_LOAD_USB_DEVICE_ID"))
     parser.add_argument("--isolapurr-cli", default=suite.DEFAULT_ISOLAPURR_CLI)
     parser.add_argument("--isolapurr-url", default=suite.DEFAULT_ISOLAPURR_URL)
-    parser.add_argument("--isolapurr-device-id", default=suite.DEFAULT_ISOLAPURR_DEVICE_ID)
+    parser.add_argument("--isolapurr-device-id", default=os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID"))
     parser.add_argument(
         "--mains-aegis-cli",
         default=str(ROOT.parent / "mains-aegis-host" / "target" / "debug" / "mains-aegis"),
     )
     parser.add_argument("--mains-aegis-ipc", default=None)
-    parser.add_argument("--ups-device-id", default=suite.DEFAULT_UPS_DEVICE_ID)
+    parser.add_argument("--ups-device-id", default=os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID"))
     parser.add_argument("--ups-status-url", default=suite.DEFAULT_UPS_STATUS_URL)
     parser.add_argument("--ups-settings-url", default=suite.DEFAULT_UPS_SETTINGS_URL)
     parser.add_argument("--devd-scan-url", default=suite.DEFAULT_UPS_SCAN_URL)
@@ -78,7 +79,16 @@ def parse_args() -> argparse.Namespace:
         help="Do not actively disable the load or cut IsolaPurr source power before readback checks.",
     )
     parser.add_argument("--dry-run", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    for name, option in (
+        ("ups_device_id", "--ups-device-id or MAINS_AEGIS_UPS_DEVICE_ID"),
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("load_usb_device_id", "--load-usb-device-id or MAINS_AEGIS_LOAD_USB_DEVICE_ID"),
+        ("isolapurr_device_id", "--isolapurr-device-id or MAINS_AEGIS_POWER_DEVICE_ID"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"formal HIL readiness requires {option}; no hardware device id is built in")
+    return args
 
 
 def load_status_payload(args: argparse.Namespace, *, load_cli: str, load_device: str, dry_run: bool) -> Any:

@@ -56,13 +56,13 @@ firmware/
 mac=<MAC>   # optional
 ```
 
-- `<PORT>`：串口设备节点（例如 macOS 下的 `/dev/cu.usbmodem...`）。
+- `<PORT>`：串口设备节点（例如 macOS 下的 `<serial-port>`）。
 - `mac=<MAC>`：可选的设备绑定信息（形如 `mac=50:78:7d:...`）。首次 `monitor` 时可能会提示绑定，确认后写入该行。
 
 ### Examples（示例）
 
 ```text
-/dev/cu.usbmodem412201
+/tmp/fixture-firmware-usb-port
 mac=50:78:7d:19:88:40
 ```
 

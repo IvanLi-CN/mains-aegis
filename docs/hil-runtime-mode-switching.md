@@ -25,9 +25,9 @@ Under `12V / 3A` and `19V / 3A` input, validate the current runtime-mode impleme
 
 Accepted bench topology:
 
-- IsolaPurr `856a141cdbd4` as the controllable DC input source
+- IsolaPurr `fixture-source-device` as the controllable DC input source
 - `2 mm banana -> DC5025 -> UPS DCIN`
-- LoadLynx `loadlynx-d68638` on UPS `OUT`
+- LoadLynx `fixture-load-device` on UPS `OUT`
 - UPS owner-facing evidence from:
   - `mains-aegis` CLI `status` over devd IPC / UPS USB CDC
   - `mains-aegis` CLI `diag-snapshot` over devd IPC / UPS USB CDC
@@ -424,9 +424,9 @@ Current Rust readiness command:
 ```bash
 mains-aegis --ipc .tmp/mains-aegis-devd-power-validation.sock \
   power-validation check \
-  --isolapurr-cli /tmp/isolapurr-host-target/aarch64-apple-darwin/debug/isolapurr \
-  --isolapurr-url http://192.168.31.122 \
-  --load-cli /Users/ivan/.codex/worktrees/koha-loadlynx-monitor-telemetry-fix/tools/loadlynx-devd/target/debug/loadlynx \
+  --isolapurr-cli "$ISOLAPURR_CLI" \
+  --isolapurr-url "$ISOLAPURR_URL" \
+  --load-cli "$LOADLYNX_CLI" \
   --load-ipc .tmp/loadlynx-devd-power-validation.sock \
   --samples 12
 ```

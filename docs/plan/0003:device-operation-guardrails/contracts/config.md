@@ -8,7 +8,7 @@
 
 - Type: string
 - Meaning: released `mains-aegis-devd` 中已绑定的 Mains Aegis 设备标识。
-- Example: `serial-04f3bb3f5367`
+- Example: `fixture-ups-device`
 
 ### 设备绑定（owner-visible）
 

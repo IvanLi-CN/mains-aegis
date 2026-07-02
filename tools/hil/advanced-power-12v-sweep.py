@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -14,15 +15,15 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_LOAD_DEVICE = "loadlynx-d68638"
-DEFAULT_LOAD_USB_PORT = "/dev/cu.usbmodem212101"
-DEFAULT_LOAD_CLI = "/Users/ivan/.codex/worktrees/a31f/loadlynx-host-src/tools/loadlynx-devd/target/debug/loadlynx"
-DEFAULT_UPS_STATUS_URL = "http://192.168.31.232/api/v1/status"
+DEFAULT_LOAD_DEVICE = os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID")
+DEFAULT_LOAD_USB_PORT = os.environ.get("MAINS_AEGIS_LOAD_USB_PORT")
+DEFAULT_LOAD_CLI = "loadlynx"
+DEFAULT_UPS_STATUS_URL = os.environ.get("MAINS_AEGIS_UPS_STATUS_URL")
 DEFAULT_DEVD_URL = "http://127.0.0.1:30080"
-DEFAULT_DEVICE_ID = "mains-aegis-198840"
-DEFAULT_DEVICE_SERIAL = "serial-04f3bb3f5367"
-DEFAULT_DEVD_TARGET_ID = "mains-aegis-198840"
-DEFAULT_ISOLAPURR_BASE_URL = "http://192.168.31.122"
+DEFAULT_DEVICE_ID = os.environ.get("MAINS_AEGIS_DEVICE_ID")
+DEFAULT_DEVICE_SERIAL = os.environ.get("MAINS_AEGIS_DEVICE_SERIAL")
+DEFAULT_DEVD_TARGET_ID = os.environ.get("MAINS_AEGIS_DEVD_TARGET_ID")
+DEFAULT_ISOLAPURR_BASE_URL = os.environ.get("MAINS_AEGIS_ISOLAPURR_URL")
 DEFAULT_LOADS = "1000,2000,2900,2950,2975,3000,3050,3100,3200,3300"
 DEFAULT_NEIGHBOR_LOADS = "2925,2950,2975,3000,3025,3050"
 DEFAULT_STANDBY_DROP_MV = 1200
@@ -74,12 +75,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--load-device",
         default=DEFAULT_LOAD_DEVICE,
-        help=f"LoadLynx saved device id for released CLI USB control (default: {DEFAULT_LOAD_DEVICE})",
+        help="LoadLynx saved device id for released CLI USB control.",
     )
     parser.add_argument(
         "--load-usb-port",
         default=DEFAULT_LOAD_USB_PORT,
-        help=f"Approved USB port for released LoadLynx CLI (default: {DEFAULT_LOAD_USB_PORT})",
+        help="LoadLynx USB port expected for this run.",
     )
     parser.add_argument(
         "--load-cli",
@@ -89,7 +90,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ups-status-url",
         default=DEFAULT_UPS_STATUS_URL,
-        help=f"UPS status URL (default: {DEFAULT_UPS_STATUS_URL})",
+        help="UPS status URL for this run.",
     )
     parser.add_argument(
         "--devd-url",
@@ -99,22 +100,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device-id",
         default=DEFAULT_DEVICE_ID,
-        help=f"Target device id for settings writes (default: {DEFAULT_DEVICE_ID})",
+        help="Target device id for settings writes.",
     )
     parser.add_argument(
         "--device-serial",
         default=DEFAULT_DEVICE_SERIAL,
-        help=f"Approved serial binding for reference/audit trails (default: {DEFAULT_DEVICE_SERIAL})",
+        help="Serial binding recorded for reference/audit trails.",
     )
     parser.add_argument(
         "--devd-target-id",
         default=DEFAULT_DEVD_TARGET_ID,
-        help=f"Connected devd device id used for diag-snapshot/trace/reset paths (default: {DEFAULT_DEVD_TARGET_ID})",
+        help="Connected devd device id used for diag-snapshot/trace/reset paths.",
     )
     parser.add_argument(
         "--isolapurr-url",
         default=DEFAULT_ISOLAPURR_BASE_URL,
-        help=f"IsolaPurr HTTP base URL for 12V source control (default: {DEFAULT_ISOLAPURR_BASE_URL})",
+        help="IsolaPurr HTTP base URL for 12V source control.",
     )
     parser.add_argument(
         "--profile-name",
@@ -291,7 +292,19 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_REQUIRED_SAMPLES,
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    for name, option in (
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("load_usb_port", "--load-usb-port or MAINS_AEGIS_LOAD_USB_PORT"),
+        ("ups_status_url", "--ups-status-url or MAINS_AEGIS_UPS_STATUS_URL"),
+        ("device_id", "--device-id or MAINS_AEGIS_DEVICE_ID"),
+        ("device_serial", "--device-serial or MAINS_AEGIS_DEVICE_SERIAL"),
+        ("devd_target_id", "--devd-target-id or MAINS_AEGIS_DEVD_TARGET_ID"),
+        ("isolapurr_url", "--isolapurr-url or MAINS_AEGIS_ISOLAPURR_URL"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"advanced power sweep requires {option}; no hardware target is built in")
+    return args
 
 
 def parse_loads(csv: str) -> list[int]:

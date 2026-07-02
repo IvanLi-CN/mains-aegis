@@ -104,7 +104,7 @@
 
 ### 验证证据
 
-- 2026-04-04 使用 `mcu-agentd --non-interactive flash esp` 将 `th/front-panel-display-chain-diagnostics` / `aeead36` 烧录到已绑定设备 `/dev/cu.usbmodem412101`。
+- 2026-04-04 使用 `mcu-agentd --non-interactive flash esp` 将 `th/front-panel-display-chain-diagnostics` / `aeead36` 烧录到已绑定设备 `/tmp/fixture-display-usb-port`。
 - 监视日志写入 `/.mcu-agentd/monitor/esp/20260403_193616.mon.ndjson`；启动阶段可见 `ui: display_reinit trigger=boot_init stage=tca_reset|tca_init|release_lines|gc9307_init`。
 - 在 Dashboard Home 实机长按 `CENTER` 后，日志出现且仅出现一次 `ui: display_diag trigger=center_long_press page=B route=home overlay=none bms_state=idle center=true touch=false`。
 - 同一次长按后，日志按顺序出现 `ui: display_reinit trigger=center_long_press stage=tca_reset|tca_init|release_lines|gc9307_init|redraw_restore|ok`，且未出现 `result=err`。

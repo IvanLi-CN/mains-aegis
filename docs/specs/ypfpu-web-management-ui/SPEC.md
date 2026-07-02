@@ -296,7 +296,7 @@
 ![Hosted fleet devd records evidence](./assets/fleet-devd-records-hosted.png)
 
 - source_type: target_app_window
-  demo_entry_or_title: `/devices/mains-aegis-198840`
+  demo_entry_or_title: `/devices/fixture-mains-aegis`
   requested_viewport: `browser-default`
   viewport_strategy: `element-screenshot`
   capture_scope: `element`

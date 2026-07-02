@@ -14,13 +14,10 @@ historical findings and debugging context.
 
 ## Scope
 
-Current approved bench bindings:
-
-- UPS hostname: `mains-aegis-198840`
-- UPS devd binding: `serial-04f3bb3f5367`
-- IsolaPurr source: `856a141cdbd4`
-- LoadLynx saved device: `loadlynx-d68638`
-- LoadLynx USB path: `/dev/cu.usbmodem212101`
+Hardware bindings are never built into the repository. Provide the current bench
+targets explicitly with CLI flags or environment variables such as
+`MAINS_AEGIS_UPS_DEVICE_ID`, `MAINS_AEGIS_POWER_DEVICE_ID`,
+`MAINS_AEGIS_LOAD_DEVICE_ID`, and `MAINS_AEGIS_LOAD_USB_PORT`.
 
 Active source profiles:
 
@@ -161,7 +158,7 @@ Power Path Validation uses fixed stable control paths per device:
 - UPS: `mains-aegis --ipc <socket> device <id> ...`
 - LoadLynx: the fixed development `loadlynx` CLI with `--ipc <socket>`
 - IsolaPurr: `isolapurr` CLI over the currently stable source path
-  - preferred on this bench: `--url http://192.168.31.122`
+  - preferred on this bench: `--url http://127.0.0.1:30182`
   - devd IPC / USB is allowed only when it is proven responsive
 
 Do not hard-code stale localhost ports from older runs.
@@ -224,8 +221,8 @@ Do not use the local HTTP bridge or UPS LAN HTTP for formal UPS telemetry
 evidence.
 
 ```bash
-mains-aegis device serial-04f3bb3f5367 status --watch --interval-ms 200
-mains-aegis device serial-04f3bb3f5367 diag-snapshot --watch --interval-ms 200
+mains-aegis device fixture-ups-device status --watch --interval-ms 200
+mains-aegis device fixture-ups-device diag-snapshot --watch --interval-ms 200
 ```
 
 `--watch` reads the devd monitor cache by default and does not issue extra CDC
@@ -260,8 +257,8 @@ Run the probe before a new formal scene whenever the host path changed:
 
 ```bash
 python3 tools/hil/probe_loadlynx_released_telemetry.py \
-  --load-device loadlynx-d68638 \
-  --load-usb-device-id digital-2bdfc170893f \
+  --load-device fixture-load-device \
+  --load-usb-device-id fixture-load-usb-device \
   --load-cli "$LOADLYNX_CLI" \
   --load-devd-base-url "$LOADLYNX_DEVD_BASE_URL" \
   --load-devd-socket "$LOADLYNX_DEVD_SOCKET"
@@ -274,7 +271,7 @@ The accepted LoadLynx CLI contract for formal scenes is:
 
 ```bash
 "$LOADLYNX_CLI" --ipc "$LOADLYNX_DEVD_SOCKET" status-stream \
-  --device loadlynx-d68638 \
+  --device fixture-load-device \
   --interval-ms 200
 ```
 
@@ -308,7 +305,7 @@ The suite-level contract is fixed to four scenes:
 The formal runner is the Rust `power-validation` command:
 
 ```bash
-LOADLYNX_CLI=/Users/ivan/.codex/worktrees/koha-loadlynx-monitor-telemetry-fix/tools/loadlynx-devd/target/debug/loadlynx \
+LOADLYNX_CLI="$LOADLYNX_CLI" \
 ISOLAPURR_IPC=.tmp/isolapurr-devd-power-validation.sock \
 just power-validation run \
   --profile 12v --profile 19v \
@@ -316,13 +313,13 @@ just power-validation run \
   --artifact-manifest-12v web/public/firmware/<12v>.manifest.json \
   --artifact-manifest-19v web/public/firmware/<19v>.manifest.json \
   --allow-profile-flash \
-  --ups-device serial-04f3bb3f5367 \
+  --ups-device "$MAINS_AEGIS_UPS_DEVICE_ID" \
   --load-cli "$LOADLYNX_CLI" \
   --load-ipc .tmp/loadlynx-devd-power-validation.sock \
-  --load-device loadlynx-d68638 \
+  --load-device "$MAINS_AEGIS_LOAD_DEVICE_ID" \
   --isolapurr-cli isolapurr \
-  --isolapurr-url http://192.168.31.122 \
-  --power-device 856a141cdbd4 \
+  --isolapurr-url http://127.0.0.1:30182 \
+  --power-device "$MAINS_AEGIS_POWER_DEVICE_ID" \
   --report-root tools/hil/reports
 ```
 

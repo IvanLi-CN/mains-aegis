@@ -21,6 +21,19 @@ def load_module(filename: str, module_name: str):
     return module
 
 
+def explicit_fixture_target_args() -> list[str]:
+    return [
+        "--ups-device-id",
+        "fixture-ups-device",
+        "--load-device",
+        "fixture-load-device",
+        "--load-usb-port",
+        "/tmp/fixture-load-usb-port",
+        "--isolapurr-device-id",
+        "fixture-source-device",
+    ]
+
+
 class FormalHilSuiteTests(unittest.TestCase):
     def setUp(self) -> None:
         self.suite = load_module("formal_hil_suite.py", "formal_hil_suite")
@@ -247,13 +260,13 @@ class FormalHilSuiteTests(unittest.TestCase):
         args = SimpleNamespace(
             mains_aegis_cli="mains-aegis",
             mains_aegis_ipc="/tmp/mains-aegis-test.sock",
-            ups_device_id="serial-04f3bb3f5367",
+            ups_device_id="fixture-ups-device",
         )
         transient = subprocess.CalledProcessError(
             1,
-            ["mains-aegis", "device", "serial-04f3bb3f5367", "connect"],
+            ["mains-aegis", "device", "fixture-ups-device", "connect"],
             output="",
-            stderr="failed to open /dev/cu.usbmodem212201: No such file or directory",
+            stderr="failed to open /tmp/fixture-ups-usb-port: No such file or directory",
         )
         with mock.patch.object(
             self.suite,
@@ -310,30 +323,30 @@ class FormalHilSuiteTests(unittest.TestCase):
         payload = {
             "devices": [
                 {
-                    "id": "serial-04f3bb3f5367",
+                    "id": "fixture-ups-device",
                     "identity": {
-                        "device_id": "mains-aegis-198840",
+                        "device_id": "fixture-mains-aegis",
                     },
                 }
             ]
         }
         result = self.suite.devd_device_entry_from_listing(
             payload,
-            device_id="mains-aegis-198840",
+            device_id="fixture-mains-aegis",
         )
-        self.assertEqual(result["id"], "serial-04f3bb3f5367")
+        self.assertEqual(result["id"], "fixture-ups-device")
 
     def test_observe_device_id_prefers_device_id_derived_from_observe_urls(self) -> None:
         args = SimpleNamespace(
             ups_observe_device_id=None,
-            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
-            ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
-            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            ups_device_id="serial-04f3bb3f5367",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/diag-snapshot",
+            ups_status_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/status",
+            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/settings",
+            ups_device_id="fixture-ups-device",
         )
         self.assertEqual(
             self.suite.observe_device_id_from_args(args),
-            "mains-aegis-198840",
+            "fixture-mains-aegis",
         )
 
     def test_build_runner_cmd_uses_observe_device_id_for_monitor_url_and_control_id_for_cli(self) -> None:
@@ -341,24 +354,24 @@ class FormalHilSuiteTests(unittest.TestCase):
             runner="runner.py",
             output_profiles=["12v"],
             scenes=["assist_path"],
-            load_device="loadlynx-d68638",
-            load_usb_port="/dev/cu.usbmodem212101",
+            load_device="fixture-load-device",
+            load_usb_port="/tmp/fixture-load-usb-port",
             load_cli="/Users/ivan/.local/bin/loadlynx",
             load_bridge_url="http://127.0.0.1:30180",
             load_bridge_device="",
             load_devd_socket="/tmp/loadlynx.sock",
             mains_aegis_cli="mains-aegis",
-            ups_device_id="serial-04f3bb3f5367",
+            ups_device_id="fixture-ups-device",
             load_min_v_mv=3000,
             max_i_ma_total=4000,
             max_p_mw=80000,
             isolapurr_cli="isolapurr",
-            isolapurr_url="http://192.168.31.122",
-            isolapurr_device_id="856a141cdbd4",
-            ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
-            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
-            devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
+            isolapurr_url="http://127.0.0.1:30182",
+            isolapurr_device_id="fixture-source-device",
+            ups_status_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/status",
+            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/settings",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/diag-snapshot",
+            devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
             hold_seconds=18.0,
@@ -379,9 +392,9 @@ class FormalHilSuiteTests(unittest.TestCase):
         )
         cmd = self.suite.build_runner_cmd(args, profile_key="12v", scene_key="assist_path")
         self.assertIn("--ups-device-id", cmd)
-        self.assertEqual(cmd[cmd.index("--ups-device-id") + 1], "serial-04f3bb3f5367")
+        self.assertEqual(cmd[cmd.index("--ups-device-id") + 1], "fixture-ups-device")
         self.assertIn("--isolapurr-device-id", cmd)
-        self.assertEqual(cmd[cmd.index("--isolapurr-device-id") + 1], "856a141cdbd4")
+        self.assertEqual(cmd[cmd.index("--isolapurr-device-id") + 1], "fixture-source-device")
         self.assertIn("--load-bridge-url", cmd)
         self.assertEqual(cmd[cmd.index("--load-bridge-url") + 1], "")
         self.assertIn("--load-devd-socket", cmd)
@@ -389,23 +402,23 @@ class FormalHilSuiteTests(unittest.TestCase):
         self.assertIn("--devd-monitor-start-url", cmd)
         self.assertEqual(
             cmd[cmd.index("--devd-monitor-start-url") + 1],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/monitor/start",
+            "http://127.0.0.1:38140/api/v1/devices/fixture-ups-device/monitor/start",
         )
         self.assertEqual(
             cmd[cmd.index("--ups-status-url") + 1],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/status",
+            "http://127.0.0.1:38140/api/v1/devices/fixture-ups-device/status",
         )
         self.assertEqual(
             cmd[cmd.index("--ups-settings-url") + 1],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/settings",
+            "http://127.0.0.1:38140/api/v1/devices/fixture-ups-device/settings",
         )
         self.assertEqual(
             cmd[cmd.index("--devd-diag-snapshot-url") + 1],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
+            "http://127.0.0.1:38140/api/v1/devices/fixture-ups-device/diag-snapshot",
         )
         self.assertEqual(
             cmd[cmd.index("--devd-device-trace-url") + 1],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/trace?trace_limit=1",
+            "http://127.0.0.1:38140/api/v1/devices/fixture-ups-device/trace?trace_limit=1",
         )
 
     def test_build_runner_cmd_rewrites_devd_observe_urls_to_scan_base(self) -> None:
@@ -413,24 +426,24 @@ class FormalHilSuiteTests(unittest.TestCase):
             runner="runner.py",
             output_profiles=["12v"],
             scenes=["assist_path"],
-            load_device="loadlynx-d68638",
-            load_usb_port="/dev/cu.usbmodem212101",
+            load_device="fixture-load-device",
+            load_usb_port="/tmp/fixture-load-usb-port",
             load_cli="/Users/ivan/.local/bin/loadlynx",
             load_bridge_url="",
             load_bridge_device="",
             load_devd_socket="/tmp/loadlynx.sock",
             mains_aegis_cli="mains-aegis",
-            ups_device_id="serial-04f3bb3f5367",
+            ups_device_id="fixture-ups-device",
             load_min_v_mv=3000,
             max_i_ma_total=4000,
             max_p_mw=80000,
             isolapurr_cli="isolapurr",
-            isolapurr_url="http://192.168.31.122",
-            isolapurr_device_id="856a141cdbd4",
-            ups_status_url="http://192.168.31.232/api/v1/status",
-            ups_settings_url="http://192.168.31.232/api/v1/settings",
-            devd_diag_snapshot_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/diag-snapshot",
-            devd_device_trace_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
+            isolapurr_url="http://127.0.0.1:30182",
+            isolapurr_device_id="fixture-source-device",
+            ups_status_url="http://127.0.0.1:30081/api/v1/status",
+            ups_settings_url="http://127.0.0.1:30081/api/v1/settings",
+            devd_diag_snapshot_url="http://127.0.0.1:30080/api/v1/devices/fixture-mains-aegis/diag-snapshot",
+            devd_device_trace_url="http://127.0.0.1:30080/api/v1/devices/fixture-mains-aegis/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
             hold_seconds=18.0,
@@ -452,11 +465,11 @@ class FormalHilSuiteTests(unittest.TestCase):
         cmd = self.suite.build_runner_cmd(args, profile_key="12v", scene_key="assist_path")
         self.assertEqual(
             cmd[cmd.index("--devd-diag-snapshot-url") + 1],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/diag-snapshot",
+            "http://127.0.0.1:38140/api/v1/devices/fixture-ups-device/diag-snapshot",
         )
         self.assertEqual(
             cmd[cmd.index("--devd-device-trace-url") + 1],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/trace?trace_limit=1",
+            "http://127.0.0.1:38140/api/v1/devices/fixture-ups-device/trace?trace_limit=1",
         )
 
     def test_build_runner_cmd_rewrites_ups_status_and_settings_urls_to_scan_base(self) -> None:
@@ -464,24 +477,24 @@ class FormalHilSuiteTests(unittest.TestCase):
             runner="runner.py",
             output_profiles=["12v"],
             scenes=["assist_path"],
-            load_device="loadlynx-d68638",
-            load_usb_port="/dev/cu.usbmodem212101",
+            load_device="fixture-load-device",
+            load_usb_port="/tmp/fixture-load-usb-port",
             load_cli="/Users/ivan/.local/bin/loadlynx",
             load_bridge_url="",
             load_bridge_device="",
             load_devd_socket="/tmp/loadlynx.sock",
             mains_aegis_cli="mains-aegis",
-            ups_device_id="serial-04f3bb3f5367",
+            ups_device_id="fixture-ups-device",
             load_min_v_mv=3000,
             max_i_ma_total=4000,
             max_p_mw=80000,
             isolapurr_cli="isolapurr",
-            isolapurr_url="http://192.168.31.122",
-            isolapurr_device_id="856a141cdbd4",
-            ups_status_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/status",
-            ups_settings_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/settings",
-            devd_diag_snapshot_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/diag-snapshot",
-            devd_device_trace_url="http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
+            isolapurr_url="http://127.0.0.1:30182",
+            isolapurr_device_id="fixture-source-device",
+            ups_status_url="http://127.0.0.1:30080/api/v1/devices/fixture-mains-aegis/status",
+            ups_settings_url="http://127.0.0.1:30080/api/v1/devices/fixture-mains-aegis/settings",
+            devd_diag_snapshot_url="http://127.0.0.1:30080/api/v1/devices/fixture-mains-aegis/diag-snapshot",
+            devd_device_trace_url="http://127.0.0.1:30080/api/v1/devices/fixture-mains-aegis/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
             hold_seconds=18.0,
@@ -503,11 +516,11 @@ class FormalHilSuiteTests(unittest.TestCase):
         cmd = self.suite.build_runner_cmd(args, profile_key="12v", scene_key="assist_path")
         self.assertEqual(
             cmd[cmd.index("--ups-status-url") + 1],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/status",
+            "http://127.0.0.1:38140/api/v1/devices/fixture-ups-device/status",
         )
         self.assertEqual(
             cmd[cmd.index("--ups-settings-url") + 1],
-            "http://127.0.0.1:38140/api/v1/devices/serial-04f3bb3f5367/settings",
+            "http://127.0.0.1:38140/api/v1/devices/fixture-ups-device/settings",
         )
 
     def test_build_runner_cmd_keeps_bridge_when_no_load_devd_transport_is_configured(self) -> None:
@@ -515,24 +528,24 @@ class FormalHilSuiteTests(unittest.TestCase):
             runner="runner.py",
             output_profiles=["12v"],
             scenes=["assist_path"],
-            load_device="loadlynx-d68638",
-            load_usb_port="/dev/cu.usbmodem212101",
+            load_device="fixture-load-device",
+            load_usb_port="/tmp/fixture-load-usb-port",
             load_cli="/Users/ivan/.local/bin/loadlynx",
             load_bridge_url="http://127.0.0.1:30180",
             load_bridge_device="",
             load_devd_socket="",
             mains_aegis_cli="mains-aegis",
-            ups_device_id="serial-04f3bb3f5367",
+            ups_device_id="fixture-ups-device",
             load_min_v_mv=3000,
             max_i_ma_total=4000,
             max_p_mw=80000,
             isolapurr_cli="isolapurr",
-            isolapurr_url="http://192.168.31.122",
-            isolapurr_device_id="856a141cdbd4",
-            ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
-            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
-            devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
+            isolapurr_url="http://127.0.0.1:30182",
+            isolapurr_device_id="fixture-source-device",
+            ups_status_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/status",
+            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/settings",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/diag-snapshot",
+            devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
             hold_seconds=18.0,
@@ -559,24 +572,24 @@ class FormalHilSuiteTests(unittest.TestCase):
             runner="runner.py",
             output_profiles=["12v"],
             scenes=["assist_path"],
-            load_device="loadlynx-d68638",
-            load_usb_port="/dev/cu.usbmodem212101",
+            load_device="fixture-load-device",
+            load_usb_port="/tmp/fixture-load-usb-port",
             load_cli="/Users/ivan/.local/bin/loadlynx",
             load_bridge_url="http://127.0.0.1:30180",
             load_bridge_device="",
             load_devd_socket="",
             mains_aegis_cli="mains-aegis",
-            ups_device_id="serial-04f3bb3f5367",
+            ups_device_id="fixture-ups-device",
             load_min_v_mv=3000,
             max_i_ma_total=4000,
             max_p_mw=80000,
             isolapurr_cli="isolapurr",
-            isolapurr_url="http://192.168.31.122",
-            isolapurr_device_id="856a141cdbd4",
-            ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
-            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
-            devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
+            isolapurr_url="http://127.0.0.1:30182",
+            isolapurr_device_id="fixture-source-device",
+            ups_status_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/status",
+            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/settings",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/diag-snapshot",
+            devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
             hold_seconds=18.0,
@@ -603,24 +616,24 @@ class FormalHilSuiteTests(unittest.TestCase):
             runner="runner.py",
             output_profiles=["12v"],
             scenes=["assist_path"],
-            load_device="loadlynx-d68638",
-            load_usb_port="/dev/cu.usbmodem212101",
+            load_device="fixture-load-device",
+            load_usb_port="/tmp/fixture-load-usb-port",
             load_cli="/Users/ivan/.local/bin/loadlynx",
             load_bridge_url="http://127.0.0.1:30180",
             load_bridge_device="",
             load_devd_socket="",
             mains_aegis_cli="mains-aegis",
-            ups_device_id="serial-04f3bb3f5367",
+            ups_device_id="fixture-ups-device",
             load_min_v_mv=3000,
             max_i_ma_total=4000,
             max_p_mw=80000,
             isolapurr_cli="isolapurr",
-            isolapurr_url="http://192.168.31.122",
-            isolapurr_device_id="856a141cdbd4",
-            ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
-            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
-            devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
+            isolapurr_url="http://127.0.0.1:30182",
+            isolapurr_device_id="fixture-source-device",
+            ups_status_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/status",
+            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/settings",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/diag-snapshot",
+            devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
             hold_seconds=18.0,
@@ -647,24 +660,24 @@ class FormalHilSuiteTests(unittest.TestCase):
             runner="runner.py",
             output_profiles=["12v"],
             scenes=["assist_path"],
-            load_device="loadlynx-d68638",
-            load_usb_port="/dev/cu.usbmodem212101",
+            load_device="fixture-load-device",
+            load_usb_port="/tmp/fixture-load-usb-port",
             load_cli="/Users/ivan/.local/bin/loadlynx",
             load_bridge_url="",
             load_bridge_device="",
             load_devd_socket="/tmp/loadlynx.sock",
             mains_aegis_cli="mains-aegis",
-            ups_device_id="serial-04f3bb3f5367",
+            ups_device_id="fixture-ups-device",
             load_min_v_mv=3000,
             max_i_ma_total=4000,
             max_p_mw=80000,
             isolapurr_cli="isolapurr",
-            isolapurr_url="http://192.168.31.122",
-            isolapurr_device_id="856a141cdbd4",
-            ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
-            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
-            devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
+            isolapurr_url="http://127.0.0.1:30182",
+            isolapurr_device_id="fixture-source-device",
+            ups_status_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/status",
+            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/settings",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/diag-snapshot",
+            devd_device_trace_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/trace?trace_limit=1",
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
             pre_seconds=12.0,
             hold_seconds=18.0,
@@ -973,9 +986,9 @@ class FormalHilSuiteTests(unittest.TestCase):
                 "--firmware-bundle-root",
                 str(bundle_root),
                 "--load-device",
-                "loadlynx-d68638",
+                "fixture-load-device",
                 "--load-usb-port",
-                "/dev/cu.usbmodem212101",
+                "/tmp/fixture-load-usb-port",
                 "--load-cli",
                 "/Users/ivan/.local/bin/loadlynx",
                 "--load-devd-socket",
@@ -983,20 +996,22 @@ class FormalHilSuiteTests(unittest.TestCase):
                 "--mains-aegis-ipc",
                 "/tmp/mains-aegis-test.sock",
                 "--isolapurr-url",
-                "http://192.168.31.122",
+                "http://127.0.0.1:30182",
                 "--ups-device-id",
-                "serial-04f3bb3f5367",
+                "fixture-ups-device",
                 "--ups-status-url",
-                "http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/status",
+                "http://127.0.0.1:35830/api/v1/devices/fixture-mains-aegis/status",
                 "--ups-settings-url",
-                "http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/settings",
+                "http://127.0.0.1:35830/api/v1/devices/fixture-mains-aegis/settings",
                 "--devd-diag-snapshot-url",
-                "http://127.0.0.1:35830/api/v1/devices/mains-aegis-198840/diag-snapshot",
+                "http://127.0.0.1:35830/api/v1/devices/fixture-mains-aegis/diag-snapshot",
                 "--output-profiles",
                 "12v",
                 "--scenes",
                 "assist_path",
                 "--skip-flash",
+                "--isolapurr-device-id",
+                "fixture-source-device",
             ]
 
             with mock.patch.object(self.suite.sys, "argv", argv), \
@@ -1074,10 +1089,10 @@ class FormalHilSuiteTests(unittest.TestCase):
                     return_value={
                         "devices": [
                             {
-                                "id": "serial-04f3bb3f5367",
+                                "id": "fixture-ups-device",
                                 "connection": "connected",
                                 "identity": {
-                                    "device_id": "mains-aegis-198840",
+                                    "device_id": "fixture-mains-aegis",
                                     "hardware_capabilities": {
                                         "output_profile": "19v",
                                         "rated_vout_mv": 19000,
@@ -1138,6 +1153,7 @@ class FormalHilSuiteTests(unittest.TestCase):
                 "--scenes",
                 "assist_path",
                 "--skip-flash",
+                *explicit_fixture_target_args(),
             ]
 
             with mock.patch.object(self.suite.sys, "argv", argv), \
@@ -1170,17 +1186,17 @@ class FormalHilSuiteTests(unittest.TestCase):
     def test_prepare_scene_source_and_capability_gate_stops_before_source_cut_when_reachability_fails(self) -> None:
         args = self.suite.argparse.Namespace(
             load_cli="/Users/ivan/.local/bin/loadlynx",
-            load_device="loadlynx-d68638",
+            load_device="fixture-load-device",
             isolapurr_cli="isolapurr",
-            isolapurr_url="http://192.168.31.122",
-            isolapurr_device_id="856a141cdbd4",
+            isolapurr_url="http://127.0.0.1:30182",
+            isolapurr_device_id="fixture-source-device",
             status_timeout_sec=20.0,
             dry_run=False,
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
-            ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
-            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
-            ups_device_id="serial-04f3bb3f5367",
+            ups_status_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/status",
+            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/settings",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/diag-snapshot",
+            ups_device_id="fixture-ups-device",
             mains_aegis_cli="mains-aegis",
             mains_aegis_ipc=None,
             ups_observe_device_id=None,
@@ -1189,7 +1205,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             "ups_status_url": args.ups_status_url,
             "ups_settings_url": args.ups_settings_url,
             "devd_diag_snapshot_url": args.devd_diag_snapshot_url,
-            "devd_device_trace_url": "http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
+            "devd_device_trace_url": "http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/trace?trace_limit=1",
         }
         with (
             mock.patch.object(
@@ -1215,17 +1231,17 @@ class FormalHilSuiteTests(unittest.TestCase):
     def test_prepare_scene_source_and_capability_gate_keeps_source_disabled_for_runner_owned_enable(self) -> None:
         args = self.suite.argparse.Namespace(
             load_cli="/Users/ivan/.local/bin/loadlynx",
-            load_device="loadlynx-d68638",
+            load_device="fixture-load-device",
             isolapurr_cli="isolapurr",
-            isolapurr_url="http://192.168.31.122",
-            isolapurr_device_id="856a141cdbd4",
+            isolapurr_url="http://127.0.0.1:30182",
+            isolapurr_device_id="fixture-source-device",
             status_timeout_sec=20.0,
             dry_run=False,
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
-            ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
-            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
-            ups_device_id="serial-04f3bb3f5367",
+            ups_status_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/status",
+            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/settings",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/diag-snapshot",
+            ups_device_id="fixture-ups-device",
             mains_aegis_cli="mains-aegis",
             mains_aegis_ipc=None,
             ups_observe_device_id=None,
@@ -1234,7 +1250,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             "ups_status_url": args.ups_status_url,
             "ups_settings_url": args.ups_settings_url,
             "devd_diag_snapshot_url": args.devd_diag_snapshot_url,
-            "devd_device_trace_url": "http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
+            "devd_device_trace_url": "http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/trace?trace_limit=1",
         }
         with (
             mock.patch.object(
@@ -1249,7 +1265,7 @@ class FormalHilSuiteTests(unittest.TestCase):
             mock.patch.object(self.suite, "refresh_control_devices", autospec=True, return_value={"ok": True}),
             mock.patch.object(self.suite, "http_post_json", autospec=True, return_value={"devices": []}),
             mock.patch.object(self.suite, "connect_device_with_retry", autospec=True, return_value={"ok": True}),
-            mock.patch.object(self.suite, "read_device_identity", autospec=True, return_value={"result": {"hardware_capabilities": {"output_profile": "12v", "rated_vout_mv": 12000}, "network": {"ipv4": "192.168.31.232"}}}),
+            mock.patch.object(self.suite, "read_device_identity", autospec=True, return_value={"result": {"hardware_capabilities": {"output_profile": "12v", "rated_vout_mv": 12000}, "network": {"ipv4": "127.0.0.1:30081"}}}),
             mock.patch.object(self.suite, "read_device_settings", autospec=True, return_value={"result": {"advanced_power_capabilities": {"rated_vout_mv": 12000}}}),
             mock.patch.object(self.suite, "http_get_json", autospec=True, side_effect=[
                 {"hardware_capabilities": {"output_profile": "12v", "rated_vout_mv": 12000}},
@@ -1285,17 +1301,17 @@ class FormalHilSuiteTests(unittest.TestCase):
     def test_prepare_scene_source_and_capability_gate_re_reads_usb_truth_even_when_scan_has_connected_caps(self) -> None:
         args = self.suite.argparse.Namespace(
             load_cli="/Users/ivan/.local/bin/loadlynx",
-            load_device="loadlynx-d68638",
+            load_device="fixture-load-device",
             isolapurr_cli="isolapurr",
-            isolapurr_url="http://192.168.31.122",
-            isolapurr_device_id="856a141cdbd4",
+            isolapurr_url="http://127.0.0.1:30182",
+            isolapurr_device_id="fixture-source-device",
             status_timeout_sec=20.0,
             dry_run=False,
             devd_scan_url="http://127.0.0.1:38140/api/v1/devices/scan",
-            ups_status_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/status",
-            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/settings",
-            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/diag-snapshot",
-            ups_device_id="serial-04f3bb3f5367",
+            ups_status_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/status",
+            ups_settings_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/settings",
+            devd_diag_snapshot_url="http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/diag-snapshot",
+            ups_device_id="fixture-ups-device",
             mains_aegis_cli="mains-aegis",
             mains_aegis_ipc=None,
             ups_observe_device_id=None,
@@ -1304,15 +1320,15 @@ class FormalHilSuiteTests(unittest.TestCase):
             "ups_status_url": args.ups_status_url,
             "ups_settings_url": args.ups_settings_url,
             "devd_diag_snapshot_url": args.devd_diag_snapshot_url,
-            "devd_device_trace_url": "http://127.0.0.1:38140/api/v1/devices/mains-aegis-198840/trace?trace_limit=1",
+            "devd_device_trace_url": "http://127.0.0.1:38140/api/v1/devices/fixture-mains-aegis/trace?trace_limit=1",
         }
         scan_payload = {
             "devices": [
                 {
-                    "id": "serial-04f3bb3f5367",
+                    "id": "fixture-ups-device",
                     "connection": "connected",
                     "identity": {
-                        "device_id": "mains-aegis-198840",
+                        "device_id": "fixture-mains-aegis",
                         "hardware_capabilities": {
                             "output_profile": "12v",
                             "rated_vout_mv": 12000,
@@ -1343,7 +1359,7 @@ class FormalHilSuiteTests(unittest.TestCase):
                 self.suite,
                 "read_device_identity",
                 autospec=True,
-                return_value={"result": {"hardware_capabilities": {"output_profile": "12v", "rated_vout_mv": 12000}, "network": {"ipv4": "192.168.31.232"}}},
+                return_value={"result": {"hardware_capabilities": {"output_profile": "12v", "rated_vout_mv": 12000}, "network": {"ipv4": "127.0.0.1:30081"}}},
             ) as read_identity_mock,
             mock.patch.object(
                 self.suite,
@@ -1399,15 +1415,15 @@ class FormalHilSuiteTests(unittest.TestCase):
         ):
             result = self.suite.probe_isolapurr_source_reachability(
                 isolapurr_cli="isolapurr",
-                isolapurr_url="http://192.168.31.122",
+                isolapurr_url="http://127.0.0.1:30182",
                 timeout_sec=5.0,
                 dry_run=False,
-                expected_device_id="856a141cdbd4",
+                expected_device_id="fixture-source-device",
             )
 
         self.assertFalse(result["ok"])
         self.assertIn("cli_status_device_id_mismatch", result["failures"])
-        self.assertEqual(result["expected_device_id"], "856a141cdbd4")
+        self.assertEqual(result["expected_device_id"], "fixture-source-device")
 
     def test_probe_isolapurr_source_reachability_rejects_missing_port_c(self) -> None:
         with (
@@ -1421,15 +1437,15 @@ class FormalHilSuiteTests(unittest.TestCase):
                 self.suite,
                 "run_json",
                 autospec=True,
-                return_value={"device": {"device_id": "856a141cdbd4"}},
+                return_value={"device": {"device_id": "fixture-source-device"}},
             ),
         ):
             result = self.suite.probe_isolapurr_source_reachability(
                 isolapurr_cli="isolapurr",
-                isolapurr_url="http://192.168.31.122",
+                isolapurr_url="http://127.0.0.1:30182",
                 timeout_sec=5.0,
                 dry_run=False,
-                expected_device_id="856a141cdbd4",
+                expected_device_id="fixture-source-device",
             )
 
         self.assertFalse(result["ok"])
@@ -1468,6 +1484,7 @@ class FormalHilSuiteTests(unittest.TestCase):
                 "--scenes",
                 "backup_only",
                 "--skip-flash",
+                *explicit_fixture_target_args(),
             ]
 
             with mock.patch.object(self.suite.sys, "argv", argv), \
@@ -1503,7 +1520,7 @@ class FormalHilSuiteTests(unittest.TestCase):
                     autospec=True,
                     return_value={
                         "result": {
-                            "network": {"ipv4": "192.168.31.232"},
+                            "network": {"ipv4": "127.0.0.1:30081"},
                             "hardware_capabilities": {
                                 "output_profile": "12v",
                                 "rated_vout_mv": 12000,
@@ -1530,10 +1547,10 @@ class FormalHilSuiteTests(unittest.TestCase):
                     return_value={
                         "devices": [
                             {
-                                "id": "serial-04f3bb3f5367",
+                                "id": "fixture-ups-device",
                                 "connection": "connected",
                                 "identity": {
-                                    "network": {"ipv4": "192.168.31.232"},
+                                    "network": {"ipv4": "127.0.0.1:30081"},
                                     "hardware_capabilities": {
                                         "output_profile": "12v",
                                         "rated_vout_mv": 12000,
@@ -1598,6 +1615,7 @@ class FormalHilSuiteTests(unittest.TestCase):
                 "--dry-run",
                 "--skip-verify",
                 "--skip-overview",
+                *explicit_fixture_target_args(),
             ]
 
             with mock.patch.object(self.suite.sys, "argv", argv):

@@ -31,13 +31,13 @@
         {
           "load_disable_before_profile_switch": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/koha-loadlynx-monitor-telemetry-fix/tools/loadlynx-devd/target/debug/loadlynx",
+              "<LOADLYNX_CLI>",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/loadlynx-devd-hil.sock",
+              "<REPO_ROOT>/<LOADLYNX_IPC>",
               "control",
               "set",
               "--device",
-              "loadlynx-d68638",
+              "fixture-load-device",
               "--disable",
               "--json"
             ],
@@ -67,7 +67,7 @@
               "output",
               "auto",
               "--device-id",
-              "856a141cdbd4"
+              "fixture-source-device"
             ],
             "result": {
               "capability": {
@@ -144,7 +144,7 @@
                   "--json",
                   "ports",
                   "--device-id",
-                  "856a141cdbd4"
+                  "fixture-source-device"
                 ],
                 "result": {
                   "hub": {
@@ -216,7 +216,7 @@
                   "power",
                   "show",
                   "--device-id",
-                  "856a141cdbd4"
+                  "fixture-source-device"
                 ],
                 "result": {
                   "config": {
@@ -402,11 +402,11 @@
               {
                 "stop": {
                   "cmd": [
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
                     "--ipc",
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
                     "device",
-                    "serial-04f3bb3f5367",
+                    "fixture-ups-device",
                     "monitor",
                     "stop"
                   ],
@@ -418,11 +418,11 @@
               {
                 "start": {
                   "cmd": [
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
                     "--ipc",
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
                     "device",
-                    "serial-04f3bb3f5367",
+                    "fixture-ups-device",
                     "monitor",
                     "start"
                   ],
@@ -506,7 +506,7 @@
               },
               "mode": "standby",
               "network": {
-                "ipv4": "192.168.31.232",
+                "ipv4": "127.0.0.1:30081",
                 "last_error": null,
                 "state": "connected"
               },
@@ -537,11 +537,11 @@
             },
             "fresh": {
               "cmd": [
-                "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
                 "--ipc",
-                "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
                 "device",
-                "serial-04f3bb3f5367",
+                "fixture-ups-device",
                 "status",
                 "--fresh",
                 "--include-meta"
@@ -615,7 +615,7 @@
                   },
                   "mode": "standby",
                   "network": {
-                    "ipv4": "192.168.31.232",
+                    "ipv4": "127.0.0.1:30081",
                     "last_error": null,
                     "state": "connected"
                   },
@@ -777,11 +777,11 @@
         {
           "ups_identity_before_profile_switch": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "identity"
             ],
             "result": {
@@ -792,7 +792,7 @@
                 "sse": true,
                 "write_controls": true
               },
-              "device_id": "mains-aegis-198840",
+              "device_id": "fixture-mains-aegis",
               "firmware": {
                 "build_id": "2cf497f0-dirty-08da8cfc41a8232e",
                 "build_profile": "release",
@@ -816,12 +816,12 @@
                 "output_profile": "19v",
                 "rated_vout_mv": 19000
               },
-              "hostname": "mains-aegis-198840",
-              "hostname_fqdn": "mains-aegis-198840.local",
+              "hostname": "fixture-mains-aegis",
+              "hostname_fqdn": "fixture-mains-aegis.local",
               "network": {
                 "dns": "192.168.31.1",
                 "gateway": "192.168.31.1",
-                "ipv4": "192.168.31.232",
+                "ipv4": "127.0.0.1:30081",
                 "is_static": false,
                 "last_error": null,
                 "rssi_dbm": -34,
@@ -835,11 +835,11 @@
         {
           "ups_settings_before_profile_switch": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "settings"
             ],
             "result": {
@@ -947,11 +947,11 @@
         {
           "artifact_select": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "artifact",
               "select",
               "--manifest-path",
@@ -1006,11 +1006,11 @@
         {
           "flash_dry_run": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "flash",
               "--dry-run"
             ],
@@ -1024,11 +1024,11 @@
         {
           "flash_real": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "flash",
               "--real"
             ],
@@ -1050,11 +1050,11 @@
               {
                 "stop": {
                   "cmd": [
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
                     "--ipc",
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
                     "device",
-                    "serial-04f3bb3f5367",
+                    "fixture-ups-device",
                     "monitor",
                     "stop"
                   ],
@@ -1066,11 +1066,11 @@
               {
                 "start": {
                   "cmd": [
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
                     "--ipc",
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
                     "device",
-                    "serial-04f3bb3f5367",
+                    "fixture-ups-device",
                     "monitor",
                     "start"
                   ],
@@ -1185,11 +1185,11 @@
             },
             "fresh": {
               "cmd": [
-                "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
                 "--ipc",
-                "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
                 "device",
-                "serial-04f3bb3f5367",
+                "fixture-ups-device",
                 "status",
                 "--fresh",
                 "--include-meta"
@@ -1299,11 +1299,11 @@
         {
           "ups_identity_after_profile_switch": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "identity"
             ],
             "result": {
@@ -1314,7 +1314,7 @@
                 "sse": true,
                 "write_controls": true
               },
-              "device_id": "mains-aegis-198840",
+              "device_id": "fixture-mains-aegis",
               "firmware": {
                 "build_id": "2cf497f0-dirty-08da8cfc41a8232e",
                 "build_profile": "release",
@@ -1338,8 +1338,8 @@
                 "output_profile": "12v",
                 "rated_vout_mv": 12000
               },
-              "hostname": "mains-aegis-198840",
-              "hostname_fqdn": "mains-aegis-198840.local",
+              "hostname": "fixture-mains-aegis",
+              "hostname_fqdn": "fixture-mains-aegis.local",
               "network": {
                 "dns": null,
                 "gateway": null,
@@ -1357,11 +1357,11 @@
         {
           "ups_settings_after_profile_switch": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "settings"
             ],
             "result": {
@@ -1548,13 +1548,13 @@
         {
           "load_disable_before_profile_switch": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/koha-loadlynx-monitor-telemetry-fix/tools/loadlynx-devd/target/debug/loadlynx",
+              "<LOADLYNX_CLI>",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/loadlynx-devd-hil.sock",
+              "<REPO_ROOT>/<LOADLYNX_IPC>",
               "control",
               "set",
               "--device",
-              "loadlynx-d68638",
+              "fixture-load-device",
               "--disable",
               "--json"
             ],
@@ -1584,7 +1584,7 @@
               "output",
               "auto",
               "--device-id",
-              "856a141cdbd4"
+              "fixture-source-device"
             ],
             "result": {
               "capability": {
@@ -1661,7 +1661,7 @@
                   "--json",
                   "ports",
                   "--device-id",
-                  "856a141cdbd4"
+                  "fixture-source-device"
                 ],
                 "result": {
                   "hub": {
@@ -1733,7 +1733,7 @@
                   "power",
                   "show",
                   "--device-id",
-                  "856a141cdbd4"
+                  "fixture-source-device"
                 ],
                 "result": {
                   "config": {
@@ -1919,11 +1919,11 @@
               {
                 "stop": {
                   "cmd": [
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
                     "--ipc",
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
                     "device",
-                    "serial-04f3bb3f5367",
+                    "fixture-ups-device",
                     "monitor",
                     "stop"
                   ],
@@ -1935,11 +1935,11 @@
               {
                 "start": {
                   "cmd": [
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
                     "--ipc",
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
                     "device",
-                    "serial-04f3bb3f5367",
+                    "fixture-ups-device",
                     "monitor",
                     "start"
                   ],
@@ -1987,11 +1987,11 @@
         {
           "ups_identity_before_profile_switch": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "identity"
             ],
             "result": {
@@ -2002,7 +2002,7 @@
                 "sse": true,
                 "write_controls": true
               },
-              "device_id": "mains-aegis-198840",
+              "device_id": "fixture-mains-aegis",
               "firmware": {
                 "build_id": "2cf497f0-dirty-08da8cfc41a8232e",
                 "build_profile": "release",
@@ -2026,12 +2026,12 @@
                 "output_profile": "12v",
                 "rated_vout_mv": 12000
               },
-              "hostname": "mains-aegis-198840",
-              "hostname_fqdn": "mains-aegis-198840.local",
+              "hostname": "fixture-mains-aegis",
+              "hostname_fqdn": "fixture-mains-aegis.local",
               "network": {
                 "dns": "192.168.31.1",
                 "gateway": "192.168.31.1",
-                "ipv4": "192.168.31.232",
+                "ipv4": "127.0.0.1:30081",
                 "is_static": false,
                 "last_error": null,
                 "rssi_dbm": -35,
@@ -2045,11 +2045,11 @@
         {
           "ups_settings_before_profile_switch": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "settings"
             ],
             "result": {
@@ -2157,11 +2157,11 @@
         {
           "artifact_select": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "artifact",
               "select",
               "--manifest-path",
@@ -2216,11 +2216,11 @@
         {
           "flash_dry_run": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "flash",
               "--dry-run"
             ],
@@ -2234,11 +2234,11 @@
         {
           "flash_real": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "flash",
               "--real"
             ],
@@ -2260,11 +2260,11 @@
               {
                 "stop": {
                   "cmd": [
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
                     "--ipc",
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
                     "device",
-                    "serial-04f3bb3f5367",
+                    "fixture-ups-device",
                     "monitor",
                     "stop"
                   ],
@@ -2276,11 +2276,11 @@
               {
                 "start": {
                   "cmd": [
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                    "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
                     "--ipc",
-                    "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                    "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
                     "device",
-                    "serial-04f3bb3f5367",
+                    "fixture-ups-device",
                     "monitor",
                     "start"
                   ],
@@ -2395,11 +2395,11 @@
             },
             "fresh": {
               "cmd": [
-                "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+                "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
                 "--ipc",
-                "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+                "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
                 "device",
-                "serial-04f3bb3f5367",
+                "fixture-ups-device",
                 "status",
                 "--fresh",
                 "--include-meta"
@@ -2509,11 +2509,11 @@
         {
           "ups_identity_after_profile_switch": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "identity"
             ],
             "result": {
@@ -2524,7 +2524,7 @@
                 "sse": true,
                 "write_controls": true
               },
-              "device_id": "mains-aegis-198840",
+              "device_id": "fixture-mains-aegis",
               "firmware": {
                 "build_id": "2cf497f0-dirty-08da8cfc41a8232e",
                 "build_profile": "release",
@@ -2548,8 +2548,8 @@
                 "output_profile": "19v",
                 "rated_vout_mv": 19000
               },
-              "hostname": "mains-aegis-198840",
-              "hostname_fqdn": "mains-aegis-198840.local",
+              "hostname": "fixture-mains-aegis",
+              "hostname_fqdn": "fixture-mains-aegis.local",
               "network": {
                 "dns": null,
                 "gateway": null,
@@ -2567,11 +2567,11 @@
         {
           "ups_settings_after_profile_switch": {
             "cmd": [
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+              "<REPO_ROOT>/tools/mains-aegis-host/target/debug/mains-aegis",
               "--ipc",
-              "/Users/ivan/.codex/worktrees/a31f/mains-aegis/.tmp/mains-aegis-devd-hil.sock",
+              "<REPO_ROOT>/<MAINS_AEGIS_IPC>",
               "device",
-              "serial-04f3bb3f5367",
+              "fixture-ups-device",
               "settings"
             ],
             "result": {

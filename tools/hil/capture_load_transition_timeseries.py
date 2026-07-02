@@ -16,17 +16,13 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_LOAD_DEVICE = "loadlynx-d68638"
 DEFAULT_LOAD_BRIDGE_DEVICE = ""
-DEFAULT_LOAD_USB_PORT = "/dev/cu.usbmodem212101"
 DEFAULT_LOAD_IPC = ""
 DEFAULT_LOAD_BRIDGE_URL = ""
-DEFAULT_UPS_STATUS_URL = "http://192.168.31.232/api/v1/status"
-DEFAULT_DEVD_DIAG_SNAPSHOT_URL = (
-    "http://127.0.0.1:30088/api/v1/devices/serial-04f3bb3f5367/diag-snapshot"
-)
-DEFAULT_UPS_SETTINGS_URL = "http://192.168.31.232/api/v1/settings"
-DEFAULT_ISOLAPURR_URL = "http://192.168.31.122"
+DEFAULT_UPS_STATUS_URL = os.environ.get("MAINS_AEGIS_UPS_STATUS_URL")
+DEFAULT_DEVD_DIAG_SNAPSHOT_URL = os.environ.get("MAINS_AEGIS_DEVD_DIAG_SNAPSHOT_URL")
+DEFAULT_UPS_SETTINGS_URL = os.environ.get("MAINS_AEGIS_UPS_SETTINGS_URL")
+DEFAULT_ISOLAPURR_URL = os.environ.get("MAINS_AEGIS_ISOLAPURR_URL")
 DEFAULT_PRE_SECONDS = 12.0
 DEFAULT_HOLD_SECONDS = 18.0
 DEFAULT_POST_SECONDS = 12.0
@@ -492,9 +488,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--profile-name", required=True)
     parser.add_argument("--target-ma", type=int, required=True)
-    parser.add_argument("--load-device", default=DEFAULT_LOAD_DEVICE)
+    parser.add_argument("--load-device", default=os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID"))
     parser.add_argument("--load-bridge-device", default=DEFAULT_LOAD_BRIDGE_DEVICE)
-    parser.add_argument("--load-usb-port", default=DEFAULT_LOAD_USB_PORT)
+    parser.add_argument("--load-usb-port", default=os.environ.get("MAINS_AEGIS_LOAD_USB_PORT"))
     parser.add_argument("--load-ipc", default=DEFAULT_LOAD_IPC)
     parser.add_argument("--load-bridge-url", default=DEFAULT_LOAD_BRIDGE_URL)
     parser.add_argument("--ups-status-url", default=DEFAULT_UPS_STATUS_URL)
@@ -551,7 +547,18 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_BASELINE_SOURCE_CURRENT_LIMIT_MA,
     )
     parser.add_argument("--report-root", default="tools/hil/reports")
-    return parser.parse_args()
+    args = parser.parse_args()
+    for name, option in (
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("load_usb_port", "--load-usb-port or MAINS_AEGIS_LOAD_USB_PORT"),
+        ("ups_status_url", "--ups-status-url or MAINS_AEGIS_UPS_STATUS_URL"),
+        ("ups_settings_url", "--ups-settings-url or MAINS_AEGIS_UPS_SETTINGS_URL"),
+        ("devd_diag_snapshot_url", "--devd-diag-snapshot-url or MAINS_AEGIS_DEVD_DIAG_SNAPSHOT_URL"),
+        ("isolapurr_url", "--isolapurr-url or MAINS_AEGIS_ISOLAPURR_URL"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"capture requires {option}; no hardware target is built in")
+    return args
 
 
 def run(cmd: list[str], *, timeout_sec: float | None = None) -> subprocess.CompletedProcess[str]:

@@ -20,14 +20,14 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_LOAD_DEVICE = "loadlynx-d68638"
-DEFAULT_LOAD_USB_DEVICE_ID = "digital-2bdfc170893f"
-DEFAULT_LOAD_USB_PORT = "/dev/cu.usbmodem212101"
-DEFAULT_UPS_USB_DEVICE_ID = "serial-04f3bb3f5367"
+DEFAULT_LOAD_DEVICE = os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID")
+DEFAULT_LOAD_USB_DEVICE_ID = os.environ.get("MAINS_AEGIS_LOAD_USB_DEVICE_ID")
+DEFAULT_LOAD_USB_PORT = os.environ.get("MAINS_AEGIS_LOAD_USB_PORT")
+DEFAULT_UPS_USB_DEVICE_ID = os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID")
 DEFAULT_LOAD_BRIDGE_DEVICE = ""
 DEFAULT_LOAD_IPC = ""
 DEFAULT_LOAD_DEVD_BASE_URL = "http://127.0.0.1:20641"
-DEFAULT_LOAD_DEVD_SOCKET = "/var/folders/nl/qbk0flf9607bv21rd_7d042c0000gn/T/loadlynx-devd.sock"
+DEFAULT_LOAD_DEVD_SOCKET = os.environ.get("LOADLYNX_DEVD_SOCKET", "")
 DEFAULT_LOAD_CLI = str(Path.home() / ".local" / "bin" / "loadlynx")
 DEFAULT_LOAD_BRIDGE_URL = "http://127.0.0.1:30180"
 DEFAULT_UPS_OBSERVE_DEVICE_ID = (
@@ -65,8 +65,8 @@ DEFAULT_DEVD_SCAN_URL = f"{default_mains_aegis_devd_base_url().rstrip('/')}/api/
 DEFAULT_MAINS_AEGIS_CLI = str(
     Path(__file__).resolve().parent.parent / "mains-aegis-host" / "target" / "debug" / "mains-aegis"
 )
-DEFAULT_ISOLAPURR_URL = "http://192.168.31.122"
-DEFAULT_ISOLAPURR_DEVICE_ID = "856a141cdbd4"
+DEFAULT_ISOLAPURR_URL = "http://127.0.0.1:30182"
+DEFAULT_ISOLAPURR_DEVICE_ID = os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID")
 DEFAULT_ISOLAPURR_CLI = "isolapurr"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 45.0
 DEFAULT_STATUS_TIMEOUT_SECONDS = 20.0
@@ -957,9 +957,9 @@ def parse_args() -> argparse.Namespace:
         help="Formal scene contract label recorded in report metadata.",
     )
     parser.add_argument("--target-ma", type=int, required=True)
-    parser.add_argument("--load-device", default=DEFAULT_LOAD_DEVICE)
-    parser.add_argument("--load-usb-device-id", default=DEFAULT_LOAD_USB_DEVICE_ID)
-    parser.add_argument("--load-usb-port", default=DEFAULT_LOAD_USB_PORT)
+    parser.add_argument("--load-device", default=os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID"))
+    parser.add_argument("--load-usb-device-id", default=os.environ.get("MAINS_AEGIS_LOAD_USB_DEVICE_ID"))
+    parser.add_argument("--load-usb-port", default=os.environ.get("MAINS_AEGIS_LOAD_USB_PORT"))
     parser.add_argument("--load-cli", default=DEFAULT_LOAD_CLI)
     parser.add_argument("--load-ipc", default=DEFAULT_LOAD_IPC)
     parser.add_argument("--load-bridge-device", default=DEFAULT_LOAD_BRIDGE_DEVICE)
@@ -968,7 +968,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--load-devd-socket", default=DEFAULT_LOAD_DEVD_SOCKET)
     parser.add_argument("--mains-aegis-cli", default=DEFAULT_MAINS_AEGIS_CLI)
     parser.add_argument("--mains-aegis-ipc", default=None)
-    parser.add_argument("--ups-device-id", default=DEFAULT_UPS_USB_DEVICE_ID)
+    parser.add_argument("--ups-device-id", default=os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID"))
     parser.add_argument("--ups-status-url", default=DEFAULT_UPS_STATUS_URL)
     parser.add_argument("--ups-settings-url", default=DEFAULT_UPS_SETTINGS_URL)
     parser.add_argument("--devd-diag-snapshot-url", default=DEFAULT_DEVD_DIAG_SNAPSHOT_URL)
@@ -977,7 +977,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--devd-scan-url", default=DEFAULT_DEVD_SCAN_URL)
     parser.add_argument("--isolapurr-cli", default=DEFAULT_ISOLAPURR_CLI)
     parser.add_argument("--isolapurr-url", default=DEFAULT_ISOLAPURR_URL)
-    parser.add_argument("--isolapurr-device-id", default=DEFAULT_ISOLAPURR_DEVICE_ID)
+    parser.add_argument("--isolapurr-device-id", default=os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID"))
     parser.add_argument("--source-voltage-mv", type=int, default=DEFAULT_SOURCE_VOLTAGE_MV)
     parser.add_argument(
         "--source-current-limit-ma",
@@ -1028,6 +1028,15 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    for name, option in (
+        ("ups_device_id", "--ups-device-id or MAINS_AEGIS_UPS_DEVICE_ID"),
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("load_usb_device_id", "--load-usb-device-id or MAINS_AEGIS_LOAD_USB_DEVICE_ID"),
+        ("load_usb_port", "--load-usb-port or MAINS_AEGIS_LOAD_USB_PORT"),
+        ("isolapurr_device_id", "--isolapurr-device-id or MAINS_AEGIS_POWER_DEVICE_ID"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"advanced power HIL requires {option}; no hardware device id or port is built in")
     if args.sample_interval_seconds <= 0:
         parser.error("--sample-interval-seconds must be > 0")
     if args.sample_interval_seconds > FORMAL_MAX_CONFIGURED_SAMPLE_INTERVAL_SECONDS:

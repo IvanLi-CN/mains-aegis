@@ -99,12 +99,12 @@
 
 ## 验证记录
 
-- `cargo build --manifest-path /Users/ivan/.codex/worktrees/a8e4/mains-aegis/tools/front-panel-preview/Cargo.toml`
-- `cargo test --manifest-path /Users/ivan/.codex/worktrees/a8e4/mains-aegis/firmware/Cargo.toml front_panel_scene --lib`
-- `cargo build --release --manifest-path /Users/ivan/.codex/worktrees/a8e4/mains-aegis/firmware/Cargo.toml`
-- `cargo run --manifest-path /Users/ivan/.codex/worktrees/a8e4/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-runtime-standby --out-dir <ABS_PATH>`
-- `cargo run --manifest-path /Users/ivan/.codex/worktrees/a8e4/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-runtime-assist --out-dir <ABS_PATH>`
-- `cargo run --manifest-path /Users/ivan/.codex/worktrees/a8e4/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-runtime-backup --out-dir <ABS_PATH>`
+- `cargo build --manifest-path <REPO_ROOT>/tools/front-panel-preview/Cargo.toml`
+- `cargo test --manifest-path <REPO_ROOT>/firmware/Cargo.toml front_panel_scene --lib`
+- `cargo build --release --manifest-path <REPO_ROOT>/firmware/Cargo.toml`
+- `cargo run --manifest-path <REPO_ROOT>/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-runtime-standby --out-dir <ABS_PATH>`
+- `cargo run --manifest-path <REPO_ROOT>/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-runtime-assist --out-dir <ABS_PATH>`
+- `cargo run --manifest-path <REPO_ROOT>/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-runtime-backup --out-dir <ABS_PATH>`
 - 上板验证：设备当前 `PIN W` 已恢复正常显示。
 
 ## 关联规格

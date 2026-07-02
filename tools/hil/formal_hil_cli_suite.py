@@ -18,12 +18,12 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_REPORT_ROOT = ROOT / "reports"
 DEFAULT_UPS_CLI = str(ROOT.parent / "mains-aegis-host" / "target" / "debug" / "mains-aegis")
 DEFAULT_UPS_IPC = str(ROOT.parent.parent / ".tmp" / "mains-aegis-devd-hil.sock")
-DEFAULT_UPS_DEVICE_ID = "serial-04f3bb3f5367"
+DEFAULT_UPS_DEVICE_ID = os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID")
 DEFAULT_LOAD_CLI = os.environ.get("LOADLYNX_CLI")
 DEFAULT_LOAD_IPC = str(ROOT.parent.parent / ".tmp" / "loadlynx-devd-hil.sock")
-DEFAULT_LOAD_DEVICE = "loadlynx-d68638"
+DEFAULT_LOAD_DEVICE = os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID")
 DEFAULT_ISOLAPURR_CLI = "isolapurr"
-DEFAULT_ISOLAPURR_DEVICE_ID = "856a141cdbd4"
+DEFAULT_ISOLAPURR_DEVICE_ID = os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID")
 MIN_SAMPLE_RATE_HZ = 3.0
 MAX_SAMPLE_GAP_S = 0.5
 UPS_WATCH_FRESHNESS_MS = 750
@@ -48,14 +48,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scenes", nargs="+", choices=sorted(SCENES), default=["assist_path", "backup_only"])
     parser.add_argument("--ups-cli", default=DEFAULT_UPS_CLI)
     parser.add_argument("--ups-ipc", default=DEFAULT_UPS_IPC)
-    parser.add_argument("--ups-device-id", default=DEFAULT_UPS_DEVICE_ID)
+    parser.add_argument("--ups-device-id", default=os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID"))
     parser.add_argument("--artifact-manifest-12v", default=None)
     parser.add_argument("--artifact-manifest-19v", default=None)
     parser.add_argument("--load-cli", default=DEFAULT_LOAD_CLI)
     parser.add_argument("--load-ipc", default=DEFAULT_LOAD_IPC)
-    parser.add_argument("--load-device", default=DEFAULT_LOAD_DEVICE)
+    parser.add_argument("--load-device", default=os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID"))
     parser.add_argument("--isolapurr-cli", default=DEFAULT_ISOLAPURR_CLI)
-    parser.add_argument("--isolapurr-device-id", default=DEFAULT_ISOLAPURR_DEVICE_ID)
+    parser.add_argument("--isolapurr-device-id", default=os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID"))
     parser.add_argument("--sample-interval-s", type=float, default=0.2)
     parser.add_argument("--pre-s", type=float, default=8.0)
     parser.add_argument("--hold-s", type=float, default=16.0)
@@ -71,6 +71,13 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not args.load_cli:
         parser.error("formal HIL requires --load-cli or LOADLYNX_CLI; do not rely on a released PATH default")
+    for name, option in (
+        ("ups_device_id", "--ups-device-id or MAINS_AEGIS_UPS_DEVICE_ID"),
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("isolapurr_device_id", "--isolapurr-device-id or MAINS_AEGIS_POWER_DEVICE_ID"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"formal HIL requires {option}; no hardware device id is built in")
     return args
 
 

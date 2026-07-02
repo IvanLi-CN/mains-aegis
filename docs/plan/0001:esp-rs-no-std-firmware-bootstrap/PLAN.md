@@ -140,7 +140,7 @@
   - Board: mains-aegis mainboard（rev unknown）
   - Connection:
     - Front panel `USB1` → host
-    - Port: `/dev/cu.usbmodem412201`
+    - Port: `/tmp/fixture-firmware-usb-port`
     - Selector cache: `firmware/.esp32-port`（首次 `monitor` 可能提示绑定 MAC；确认后写入 `mac=<MAC>` 行）
     - MAC: `50:78:7d:19:88:40`
 

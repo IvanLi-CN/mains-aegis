@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import select
 import subprocess
 import threading
@@ -14,11 +15,8 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_LOAD_DEVICE = "loadlynx-d68638"
-DEFAULT_LOAD_USB_DEVICE_ID = "digital-2bdfc170893f"
-DEFAULT_LOAD_USB_PORT = "/dev/cu.usbmodem212101"
 DEFAULT_LOAD_DEVD_BASE_URL = "http://127.0.0.1:20641"
-DEFAULT_LOAD_DEVD_SOCKET = "/var/folders/nl/qbk0flf9607bv21rd_7d042c0000gn/T/loadlynx-devd.sock"
+DEFAULT_LOAD_DEVD_SOCKET = os.environ.get("LOADLYNX_DEVD_SOCKET", "")
 DEFAULT_LOAD_CLI = str(Path.home() / ".local" / "bin" / "loadlynx")
 DEFAULT_LOAD_BRIDGE_DEVICE = ""
 DEFAULT_LOAD_BRIDGE_URL = "http://127.0.0.1:30180"
@@ -61,9 +59,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Probe released LoadLynx host telemetry capability against the formal HIL sampling gate."
     )
-    parser.add_argument("--load-device", default=DEFAULT_LOAD_DEVICE)
-    parser.add_argument("--load-usb-device-id", default=DEFAULT_LOAD_USB_DEVICE_ID)
-    parser.add_argument("--load-usb-port", default=DEFAULT_LOAD_USB_PORT)
+    parser.add_argument("--load-device", default=os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID"))
+    parser.add_argument("--load-usb-device-id", default=os.environ.get("MAINS_AEGIS_LOAD_USB_DEVICE_ID"))
+    parser.add_argument("--load-usb-port", default=os.environ.get("MAINS_AEGIS_LOAD_USB_PORT"))
     parser.add_argument("--load-ipc", default="")
     parser.add_argument("--load-devd-base-url", default=DEFAULT_LOAD_DEVD_BASE_URL)
     parser.add_argument("--load-devd-socket", default=DEFAULT_LOAD_DEVD_SOCKET)
@@ -74,7 +72,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--http-timeout-sec", type=float, default=10.0)
     parser.add_argument("--http-samples", type=int, default=3)
     parser.add_argument("--http-sleep-sec", type=float, default=0.25)
-    return parser.parse_args()
+    args = parser.parse_args()
+    for name, option in (
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("load_usb_device_id", "--load-usb-device-id or MAINS_AEGIS_LOAD_USB_DEVICE_ID"),
+        ("load_usb_port", "--load-usb-port or MAINS_AEGIS_LOAD_USB_PORT"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"probe requires {option}; no hardware target is built in")
+    return args
 
 
 def load_devd_transport_configured(args: argparse.Namespace) -> bool:
