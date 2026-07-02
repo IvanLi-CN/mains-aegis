@@ -96,7 +96,11 @@ export const DemoControl: Story = {
       canvas.getByRole("button", { name: "Open demo control panel" }),
     );
     await expect(await canvas.findByText("Demo Control")).toBeInTheDocument();
-    await userEvent.selectOptions(canvas.getByLabelText("Scenario"), "empty");
+    await expect(
+      canvas.getByRole("button", { name: "Move demo control panel" }),
+    ).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("combobox", { name: "Scenario" }));
+    await userEvent.click(await within(document.body).findByRole("option", { name: "Empty fleet" }));
     await expect(await canvas.findByText("Empty fleet")).toBeInTheDocument();
     await expect(canvas.queryByText("Protection active")).not.toBeInTheDocument();
     await userEvent.click(

@@ -72,6 +72,7 @@ import type {
   UpsStatus,
 } from "../api/types";
 import { SegmentedControl } from "../components/ui/segmented-control";
+import { Button } from "../components/ui/button";
 import {
   Select,
   SelectContent,
@@ -977,45 +978,57 @@ function DemoControlPanel({
           style={panelStyle}
           aria-label="Demo control panel"
         >
-          <header
-            className="demo-control-header"
-            onPointerDown={startDrag}
-            onPointerMove={drag}
-            onPointerUp={stopDrag}
-            onPointerCancel={stopDrag}
-          >
-            <GripHorizontal size={16} aria-hidden="true" />
+          <header className="demo-control-header">
+            <button
+              className="demo-control-drag-handle"
+              type="button"
+              aria-label="Move demo control panel"
+              onPointerDown={startDrag}
+              onPointerMove={drag}
+              onPointerUp={stopDrag}
+              onPointerCancel={stopDrag}
+            >
+              <GripHorizontal size={16} aria-hidden="true" />
+            </button>
             <div>
               <strong>Demo Control</strong>
               <span>{demoSeedLabels[seed]}</span>
             </div>
-            <button
-              className="icon-button compact"
+            <Button
+              className="demo-control-close"
+              variant="ghost"
+              size="icon"
               type="button"
               aria-label="Close demo control panel"
               onClick={() => setOpen(false)}
             >
               <X size={15} />
-            </button>
+            </Button>
           </header>
-          <label className="demo-control-field" htmlFor={scenarioId}>
-            Scenario
-            <select
-              id={scenarioId}
+          <div className="demo-control-field">
+            <span id={scenarioId}>Scenario</span>
+            <Select
               value={seed}
-              onChange={(event) => onSeedChange(event.target.value as DemoSeed)}
+              onValueChange={(value) => onSeedChange(value as DemoSeed)}
             >
-              {demoSeedIds.map((value) => (
-                <option key={value} value={value}>
-                  {demoSeedLabels[value]}
-                </option>
-              ))}
-            </select>
-          </label>
+              <SelectTrigger aria-labelledby={scenarioId}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {demoSeedIds.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {demoSeedLabels[value]}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </div>
           <div className="demo-control-actions">
-            <button className="secondary-button" type="button" onClick={onReset}>
+            <Button variant="secondary" size="sm" type="button" onClick={onReset}>
               Reset default
-            </button>
+            </Button>
           </div>
         </section>
       ) : null}

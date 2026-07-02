@@ -107,17 +107,40 @@ a {
 
 .demo-control-header {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   margin: -4px -4px 10px;
   border-radius: var(--radius-card);
   padding: 4px;
+}
+
+.demo-control-drag-handle {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  place-items: center;
+  border: 1px solid var(--color-hairline);
+  border-radius: 7px;
+  background: var(--color-surface);
+  color: var(--color-muted);
   cursor: grab;
+  touch-action: none;
   user-select: none;
 }
 
-.demo-control-header:active {
+.demo-control-drag-handle:hover {
+  border-color: color-mix(in oklch, var(--color-primary) 28%, var(--color-hairline));
+  color: var(--color-primary-strong);
+}
+
+.demo-control-drag-handle:focus-visible {
+  outline: 0;
+  box-shadow: var(--shadow-focus);
+}
+
+.demo-control-drag-handle:active {
   cursor: grabbing;
 }
 
@@ -137,7 +160,8 @@ a {
   font-size: 11px;
 }
 
-.icon-button.compact {
+.icon-button.compact,
+.demo-control-close {
   width: 30px;
   height: 30px;
   min-height: 30px;
@@ -150,13 +174,9 @@ a {
   font-size: 12px;
 }
 
-.demo-control-field select {
-  min-height: var(--control-height);
-  border: 1px solid var(--color-hairline);
+.demo-control-field .ui-select-trigger {
   border-radius: var(--radius-card);
-  background: var(--color-surface);
-  color: var(--color-ink);
-  padding: 0 10px;
+  font-size: 13px;
 }
 
 .demo-control-actions {
