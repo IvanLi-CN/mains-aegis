@@ -22,25 +22,24 @@ Each catalog has `schema_version=1` and an `artifacts` array. Each artifact desc
 
 ## Local build flow
 
+Use the repository `Justfile` as the canonical local entrypoint. It enters the
+`firmware/` directory before building so Cargo reads
+`firmware/.cargo/config.toml` and targets `xtensa-esp32s3-none-elf`.
+
+Build only the release ELF:
+
 ```bash
-cd firmware
-cargo build --release --bin esp-firmware --features net_http,web_serial
-cd ..
-python3 -m esptool --chip esp32s3 elf2image \
-  --flash-mode dio \
-  --flash-freq 80m \
-  --flash-size 4MB \
-  --output firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware.bin \
-  firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware
-python3 tools/firmware-artifact/build-catalog-entry.py \
-  --elf firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware \
-  --image 0x10000:firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware.bin \
-  --out firmware/target/mains-aegis-artifacts \
-  --features net_http,web_serial \
-  --profile release
+just firmware-build
 ```
 
-The generator writes:
+Build the release ELF, Web Serial image, Firmware Catalog, and Web bundled
+fallback:
+
+```bash
+just firmware-release
+```
+
+The release flow writes:
 
 - `<artifact_id>.manifest.json`
 - `firmware-catalog.json`

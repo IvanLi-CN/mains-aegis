@@ -13,7 +13,7 @@ The owner-facing name is **Power Path Validation** / **电源路径验证**. The
 
 - Use `mains-aegis power-validation ...` or `just power-validation ...`; do not use legacy Python validation runners as owner-facing commands.
 - UPS communication is fixed: `mains-aegis` CLI -> native devd IPC -> UPS USB CDC.
-- LoadLynx communication is fixed for the approved bench: `loadlynx` CLI -> native devd IPC -> LoadLynx USB.
+- LoadLynx communication is fixed for each explicitly selected bench: `loadlynx` CLI -> native devd IPC -> LoadLynx USB.
 - IsolaPurr communication is selected for stability. It may use CLI + devd IPC + USB or CLI + `--url` LAN HTTP; do not generalize UPS/LoadLynx transport restrictions to IsolaPurr.
 - The power source and electronic load are replaceable adapters. Built-ins are `isolapurr` and `loadlynx`; third-party devices must use the external adapter protocol.
 - Do not energize `DCIN` until UPS capability truth confirms the intended `output_profile` and `rated_vout_mv`.

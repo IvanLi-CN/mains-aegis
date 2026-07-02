@@ -25,14 +25,14 @@ class FormalHilCliSuiteTests(unittest.TestCase):
         return argparse.Namespace(
             ups_cli="mains-aegis",
             ups_ipc="/tmp/mains-aegis.sock",
-            ups_device_id="serial-04f3bb3f5367",
+            ups_device_id="fixture-ups-device",
             artifact_manifest_12v="/tmp/12v.manifest.json",
             artifact_manifest_19v="/tmp/19v.manifest.json",
             load_cli="loadlynx",
             load_ipc="/tmp/loadlynx.sock",
-            load_device="loadlynx-d68638",
+            load_device="fixture-load-device",
             isolapurr_cli="isolapurr",
-            isolapurr_device_id="856a141cdbd4",
+            isolapurr_device_id="fixture-source-device",
             load_min_v_mv=3000,
             load_max_i_ma_total=4000,
             load_max_p_mw=80000,
@@ -84,7 +84,7 @@ class FormalHilCliSuiteTests(unittest.TestCase):
                 "config",
                 "set",
                 "--device-id",
-                "856a141cdbd4",
+                "fixture-source-device",
                 "--tps-mode",
                 "manual",
                 "--voltage-mv",
@@ -134,7 +134,7 @@ class FormalHilCliSuiteTests(unittest.TestCase):
                 "output",
                 "auto",
                 "--device-id",
-                "856a141cdbd4",
+                "fixture-source-device",
             ],
         )
 
@@ -165,7 +165,7 @@ class FormalHilCliSuiteTests(unittest.TestCase):
                 "control",
                 "set",
                 "--device",
-                "loadlynx-d68638",
+                "fixture-load-device",
                 "--disable",
                 "--json",
             ],
@@ -220,8 +220,8 @@ class FormalHilCliSuiteTests(unittest.TestCase):
 
         identity, settings = self.suite.read_ups_identity_settings(args, dry_run=True)
 
-        self.assertEqual(identity["cmd"], ["mains-aegis", "--ipc", "/tmp/mains-aegis.sock", "device", "serial-04f3bb3f5367", "identity"])
-        self.assertEqual(settings["cmd"], ["mains-aegis", "--ipc", "/tmp/mains-aegis.sock", "device", "serial-04f3bb3f5367", "settings"])
+        self.assertEqual(identity["cmd"], ["mains-aegis", "--ipc", "/tmp/mains-aegis.sock", "device", "fixture-ups-device", "identity"])
+        self.assertEqual(settings["cmd"], ["mains-aegis", "--ipc", "/tmp/mains-aegis.sock", "device", "fixture-ups-device", "settings"])
 
     def test_artifact_select_and_flash_use_devd_cli(self) -> None:
         args = self.args()
@@ -237,15 +237,15 @@ class FormalHilCliSuiteTests(unittest.TestCase):
                 "--ipc",
                 "/tmp/mains-aegis.sock",
                 "device",
-                "serial-04f3bb3f5367",
+                "fixture-ups-device",
                 "artifact",
                 "select",
                 "--manifest-path",
                 "/tmp/19v.manifest.json",
             ],
         )
-        self.assertEqual(dry_flash["cmd"], ["mains-aegis", "--ipc", "/tmp/mains-aegis.sock", "device", "serial-04f3bb3f5367", "flash", "--dry-run"])
-        self.assertEqual(real_flash["cmd"], ["mains-aegis", "--ipc", "/tmp/mains-aegis.sock", "device", "serial-04f3bb3f5367", "flash", "--real"])
+        self.assertEqual(dry_flash["cmd"], ["mains-aegis", "--ipc", "/tmp/mains-aegis.sock", "device", "fixture-ups-device", "flash", "--dry-run"])
+        self.assertEqual(real_flash["cmd"], ["mains-aegis", "--ipc", "/tmp/mains-aegis.sock", "device", "fixture-ups-device", "flash", "--real"])
 
     def test_usb_5v_input_does_not_fail_dcin_cut_gate(self) -> None:
         verdict = self.suite.validate_ups_input_cut(

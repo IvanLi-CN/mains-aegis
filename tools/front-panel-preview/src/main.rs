@@ -910,6 +910,37 @@ fn bq40_snapshot_for_scenario(
             snapshot.tps_a_iout_ma = None;
             SelfCheckOverlay::None
         }
+        ScenarioArg::Bq40EmshutBlocked => {
+            snapshot.bq40z50 = SelfCheckCommState::Warn;
+            snapshot.bq40z50_pack_mv = Some(16_270);
+            snapshot.bq40z50_current_ma = Some(0);
+            snapshot.bq40z50_soc_pct = Some(99);
+            snapshot.bq40z50_rca_alarm = Some(false);
+            snapshot.bq40z50_no_battery = Some(false);
+            snapshot.bq40z50_discharge_ready = Some(false);
+            snapshot.bq40z50_issue_detail = Some("emshut_active");
+            snapshot.bq40z50_recovery_action = Some(BmsRecoveryUiAction::DischargeAuthorization);
+            snapshot.requested_outputs = esp_firmware::output_state::EnabledOutputs::Both;
+            snapshot.active_outputs = esp_firmware::output_state::EnabledOutputs::None;
+            snapshot.recoverable_outputs = esp_firmware::output_state::EnabledOutputs::Both;
+            snapshot.output_gate_reason = esp_firmware::output_state::OutputGateReason::BmsNotReady;
+            snapshot.bq25792_allow_charge = Some(true);
+            snapshot.bq25792_vbat_present = Some(false);
+            snapshot.tps_a = SelfCheckCommState::Warn;
+            snapshot.tps_a_enabled = Some(false);
+            snapshot.out_a_vbus_mv = None;
+            snapshot.tps_a_iout_ma = None;
+            snapshot.tps_b = SelfCheckCommState::Warn;
+            snapshot.tps_b_enabled = Some(false);
+            snapshot.out_b_vbus_mv = None;
+            snapshot.tps_b_iout_ma = None;
+            SelfCheckOverlay::None
+        }
+        ScenarioArg::Bq40EmshutDialog => {
+            let (blocked, _) = bq40_snapshot_for_scenario(mode, ScenarioArg::Bq40EmshutBlocked);
+            snapshot = blocked;
+            SelfCheckOverlay::BmsDischargeAuthorizeConfirm
+        }
         ScenarioArg::Bq40DischargeDialog => {
             let (_, overlay) = bq40_snapshot_for_scenario(mode, ScenarioArg::Bq40DischargeBlocked);
             let mut blocked = base_bq40_snapshot(mode);
@@ -1677,6 +1708,8 @@ fn run() -> Result<(), String> {
         | ScenarioArg::SelfCheckBmsMissingTpsWarn
         | ScenarioArg::Bq40OfflineDialog
         | ScenarioArg::Bq40DischargeBlocked
+        | ScenarioArg::Bq40EmshutBlocked
+        | ScenarioArg::Bq40EmshutDialog
         | ScenarioArg::Bq40DischargeDialog
         | ScenarioArg::Bq40DischargeRecovering
         | ScenarioArg::Bq40Activating
@@ -1956,6 +1989,8 @@ enum ScenarioArg {
     Bq40Offline,
     Bq40OfflineDialog,
     Bq40DischargeBlocked,
+    Bq40EmshutBlocked,
+    Bq40EmshutDialog,
     Bq40DischargeDialog,
     Bq40DischargeRecovering,
     Bq40Activating,
@@ -2062,6 +2097,8 @@ impl ScenarioArg {
             "bq40-offline" => Ok(Self::Bq40Offline),
             "bq40-offline-dialog" => Ok(Self::Bq40OfflineDialog),
             "bq40-discharge-blocked" => Ok(Self::Bq40DischargeBlocked),
+            "bq40-emshut-blocked" => Ok(Self::Bq40EmshutBlocked),
+            "bq40-emshut-dialog" => Ok(Self::Bq40EmshutDialog),
             "bq40-discharge-dialog" => Ok(Self::Bq40DischargeDialog),
             "bq40-discharge-recovering" => Ok(Self::Bq40DischargeRecovering),
             "bq40-activating" => Ok(Self::Bq40Activating),
@@ -2177,6 +2214,8 @@ impl ScenarioArg {
             ScenarioArg::Bq40Offline => "bq40-offline",
             ScenarioArg::Bq40OfflineDialog => "bq40-offline-dialog",
             ScenarioArg::Bq40DischargeBlocked => "bq40-discharge-blocked",
+            ScenarioArg::Bq40EmshutBlocked => "bq40-emshut-blocked",
+            ScenarioArg::Bq40EmshutDialog => "bq40-emshut-dialog",
             ScenarioArg::Bq40DischargeDialog => "bq40-discharge-dialog",
             ScenarioArg::Bq40DischargeRecovering => "bq40-discharge-recovering",
             ScenarioArg::Bq40Activating => "bq40-activating",

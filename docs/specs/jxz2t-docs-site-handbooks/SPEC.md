@@ -226,10 +226,10 @@ None
 ## 参考（References）
 
 - `octo-rill` `docs-site/` 组织方式与 `docs-pages.yml`
-- `/Users/ivan/.codex/worktrees/7f07/mains-aegis/docs/hardware-selection.md`
-- `/Users/ivan/.codex/worktrees/7f07/mains-aegis/docs/bms-design.md`
-- `/Users/ivan/.codex/worktrees/7f07/mains-aegis/docs/charger-design.md`
-- `/Users/ivan/.codex/worktrees/7f07/mains-aegis/docs/ups-output-design.md`
-- `/Users/ivan/.codex/worktrees/7f07/mains-aegis/docs/pcbs/front-panel/README.md`
-- `/Users/ivan/.codex/worktrees/7f07/mains-aegis/docs/pcbs/mainboard/README.md`
-- `/Users/ivan/.codex/worktrees/7f07/mains-aegis/firmware/README.md`
+- `<REPO_ROOT>/docs/hardware-selection.md`
+- `<REPO_ROOT>/docs/bms-design.md`
+- `<REPO_ROOT>/docs/charger-design.md`
+- `<REPO_ROOT>/docs/ups-output-design.md`
+- `<REPO_ROOT>/docs/pcbs/front-panel/README.md`
+- `<REPO_ROOT>/docs/pcbs/mainboard/README.md`
+- `<REPO_ROOT>/firmware/README.md`

@@ -18,12 +18,12 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_REPORT_ROOT = ROOT / "reports"
 DEFAULT_UPS_CLI = str(ROOT.parent / "mains-aegis-host" / "target" / "debug" / "mains-aegis")
 DEFAULT_UPS_IPC = str(ROOT.parent.parent / ".tmp" / "mains-aegis-devd-hil.sock")
-DEFAULT_UPS_DEVICE_ID = "serial-04f3bb3f5367"
+DEFAULT_UPS_DEVICE_ID = os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID")
 DEFAULT_LOAD_CLI = os.environ.get("LOADLYNX_CLI")
 DEFAULT_LOAD_IPC = str(ROOT.parent.parent / ".tmp" / "loadlynx-devd-hil.sock")
-DEFAULT_LOAD_DEVICE = "loadlynx-d68638"
+DEFAULT_LOAD_DEVICE = os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID")
 DEFAULT_ISOLAPURR_CLI = "isolapurr"
-DEFAULT_ISOLAPURR_DEVICE_ID = "856a141cdbd4"
+DEFAULT_ISOLAPURR_DEVICE_ID = os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID")
 MIN_SAMPLE_RATE_HZ = 3.0
 MAX_SAMPLE_GAP_S = 0.5
 UPS_WATCH_FRESHNESS_MS = 750
@@ -48,14 +48,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scenes", nargs="+", choices=sorted(SCENES), default=["assist_path", "backup_only"])
     parser.add_argument("--ups-cli", default=DEFAULT_UPS_CLI)
     parser.add_argument("--ups-ipc", default=DEFAULT_UPS_IPC)
-    parser.add_argument("--ups-device-id", default=DEFAULT_UPS_DEVICE_ID)
+    parser.add_argument("--ups-device-id", default=os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID"))
     parser.add_argument("--artifact-manifest-12v", default=None)
     parser.add_argument("--artifact-manifest-19v", default=None)
     parser.add_argument("--load-cli", default=DEFAULT_LOAD_CLI)
     parser.add_argument("--load-ipc", default=DEFAULT_LOAD_IPC)
-    parser.add_argument("--load-device", default=DEFAULT_LOAD_DEVICE)
+    parser.add_argument("--load-device", default=os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID"))
     parser.add_argument("--isolapurr-cli", default=DEFAULT_ISOLAPURR_CLI)
-    parser.add_argument("--isolapurr-device-id", default=DEFAULT_ISOLAPURR_DEVICE_ID)
+    parser.add_argument("--isolapurr-device-id", default=os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID"))
     parser.add_argument("--sample-interval-s", type=float, default=0.2)
     parser.add_argument("--pre-s", type=float, default=8.0)
     parser.add_argument("--hold-s", type=float, default=16.0)
@@ -71,6 +71,13 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not args.load_cli:
         parser.error("formal HIL requires --load-cli or LOADLYNX_CLI; do not rely on a released PATH default")
+    for name, option in (
+        ("ups_device_id", "--ups-device-id or MAINS_AEGIS_UPS_DEVICE_ID"),
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("isolapurr_device_id", "--isolapurr-device-id or MAINS_AEGIS_POWER_DEVICE_ID"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"formal HIL requires {option}; no hardware device id is built in")
     return args
 
 
@@ -339,8 +346,8 @@ def read_ups_status_cache(args: argparse.Namespace, *, dry_run: bool) -> dict[st
     return {"cmd": cmd, "result": run_json(cmd, env=ups_env(args))}
 
 
-def read_ups_power_diag_cache(args: argparse.Namespace, *, dry_run: bool) -> dict[str, Any]:
-    cmd = ups_cmd(args, "power-diag", "--cache-only", "--allow-stale-cache", "--include-meta")
+def read_ups_diag_snapshot_cache(args: argparse.Namespace, *, dry_run: bool) -> dict[str, Any]:
+    cmd = ups_cmd(args, "diag-snapshot", "--cache-only", "--allow-stale-cache", "--include-meta")
     if dry_run:
         return {"cmd": cmd, "dry_run": True}
     return {"cmd": cmd, "result": run_json(cmd, env=ups_env(args))}
@@ -691,8 +698,16 @@ def unwrap_ups_sample(row: dict[str, Any] | None) -> dict[str, Any]:
     return {}
 
 
-def unwrap_power_diag(row: dict[str, Any] | None) -> dict[str, Any]:
-    return unwrap_ups_sample(row)
+def unwrap_diag_snapshot(row: dict[str, Any] | None) -> dict[str, Any]:
+    sample = unwrap_ups_sample(row)
+    packages = sample.get("packages")
+    if isinstance(packages, dict):
+        derived = packages.get("derived.power")
+        if isinstance(derived, dict):
+            payload = derived.get("payload")
+            if isinstance(payload, dict):
+                return payload
+    return sample
 
 
 def unwrap_load(row: dict[str, Any] | None) -> dict[str, Any]:
@@ -713,7 +728,7 @@ def collect_sample(args: argparse.Namespace, start: float, phase: str, target_ma
     now = time.time()
     unix_ms = int(now * 1000)
     status = unwrap_ups_sample(collectors["ups_status"].latest_before(unix_ms))
-    power_diag = unwrap_power_diag(collectors["ups_power_diag"].latest_before(unix_ms))
+    diag_snapshot = unwrap_diag_snapshot(collectors["ups_diag_snapshot"].latest_before(unix_ms))
     load = unwrap_load(collectors["load"].latest_before(unix_ms))
     ports = unwrap_isolapurr(collectors["isolapurr"].latest_before(unix_ms))
     port_c = port_c_from_ports(ports)
@@ -721,7 +736,7 @@ def collect_sample(args: argparse.Namespace, start: float, phase: str, target_ma
     output = dict(status.get("output") or {})
     out_a = dict(output.get("out_a") or {})
     out_b = dict(output.get("out_b") or {})
-    diag_input = dict(power_diag.get("input") or {})
+    diag_input = dict(diag_snapshot.get("input") or {})
     load_status = dict(load.get("status") or {})
     load_control = dict(load.get("control") or {})
     telemetry = dict(port_c.get("telemetry") or {})
@@ -857,11 +872,11 @@ def start_collectors(args: argparse.Namespace) -> dict[str, Any]:
             ),
             ROOT.parent.parent,
         ),
-        "ups_power_diag": JsonlCollector(
-            "ups_power_diag",
+        "ups_diag_snapshot": JsonlCollector(
+            "ups_diag_snapshot",
             ups_cmd(
                 args,
-                "power-diag",
+                "diag-snapshot",
                 "--watch",
                 "--interval-ms",
                 str(int(args.sample_interval_s * 1000)),

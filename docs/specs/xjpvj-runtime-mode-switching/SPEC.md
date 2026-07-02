@@ -10,7 +10,7 @@
 
 - 运行态 `STANDBY / ASSIST / BACKUP` 切换语义此前散落在 Dashboard、自检、音效与 charger policy 多份规格中，且代码仍保留了“TPS enable 即有输出”“`mains_present=None` 且输出开启即 `BACKUP`”等过时判据。
 - 现有主线实现已把 `DC5025 VIN >= 3V` 建立为 UI/音效的市电真相源，但 `ASSIST` 与 `BACKUP` 的进入条件、缺样保持策略、以及与 charger `LOAD/NOAC` token 的关系仍缺少统一 topic-level contract。
-- 若继续让模式判定、charger token 和 owner-facing `status/power-diag/trace` 各自演进，运行态会再次出现 UI、音效、主机工具与实际固件行为不一致的问题。
+- 若继续让模式判定、charger token 和 owner-facing `status/diag-snapshot/trace` 各自演进，运行态会再次出现 UI、音效、主机工具与实际固件行为不一致的问题。
 
 ## 目标 / 非目标
 
@@ -39,7 +39,7 @@
 - `VIN` 主真相源、VIN 缺样保持、fallback 输入存在信号的命名与优先级。
 - `assist_low / assist_rated / backup` 内部阶段判定、owner-facing mode 映射、以及 fresh-sample 约束。
 - `ASSIST / BACKUP` 与 charger allow/token 的硬联动。
-- owner-facing `status / power-diag / trace` 需要暴露的最小字段。
+- owner-facing `status / diag-snapshot / trace` 需要暴露的最小字段。
 
 ### Out of scope
 
@@ -187,7 +187,7 @@
   - `input.tps_total_iout_ma`
   - `charger.allow_charge`
   - `charger.detail_status`
-- `power-diag` 至少暴露：
+- `diag-snapshot` 至少暴露：
   - 输入在线/离线结果
   - `assist_power_stage`
   - `assist_target_vout_mv`
@@ -195,7 +195,7 @@
   - `vin_baseline_mv`
   - `vin_drop_mv`
   - charger allow/token 结果
-- 当输入仍在线但 charger policy 处于 `WAIT / LOAD / NOAC` 等非主动充电路径时，`power-diag` 里的 `vin_baseline_mv / vin_drop_mv` 仍必须保持可解释，不得仅因 idle/no-charge 路径而被整体清空。
+- 当输入仍在线但 charger policy 处于 `WAIT / LOAD / NOAC` 等非主动充电路径时，`diag-snapshot` 里的 `vin_baseline_mv / vin_drop_mv` 仍必须保持可解释，不得仅因 idle/no-charge 路径而被整体清空。
 - `trace(kind=event,target=power)` 应能让 owner 看到：
   - 输入真相源变化
   - `TPS total output current` 停充或恢复相关根因
@@ -216,8 +216,8 @@
 - Given 输入状态未知，When `TPS` 仍在输出，Then 模式保持上一确认态，不得仅因输出活跃直接进入 `BACKUP`。
 - Given `VIN < 3V`，When 自动模式判定更新，Then 结果为 `BACKUP`。
 - Given `VIN` 连续缺样超过窗口且 `aggregate input-present=false`，When 自动模式判定更新，Then 结果为 `BACKUP`。
-- Given `ASSIST` 已锁存，When 查看 `status/power-diag`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD`。
-- Given `BACKUP` 已锁存，When 查看 `status/power-diag`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
+- Given `ASSIST` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD`。
+- Given `BACKUP` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
 - Given 当前 topic 进入 `12V` Power Path Validation sign-off，When 判定任何边界、在线接管、切断或恢复结论，Then 必须同时满足 `docs/hil-runtime-mode-switching.md` 中定义的三设备实时数据、输出电压波动与 scene-complete gate。
 - Given 当前 topic 进入 formal dual-voltage suite，When 执行 `12V assist_path / 12V backup_only / 19V assist_path / 19V backup_only` 四场景，Then source profile、load target 与保护栏必须固定为 `12V|19V @ 3000mA`、`3900mA|1000mA`、`UVP=3000mV/OCP=4000mA/OPP=80000mW`，不得按口头约定漂移。
 - Given 需要在 formal suite 中从 `12V` 切到 `19V` 或从 `19V` 切回 `12V`，When 做 artifact select / flash，Then 必须先 disable load、cut IsolaPurr `port_c`、确认 UPS 已脱离外部 `DCIN` 高压输入，再进行切换或烧录；并行 USB-C 供电/通信允许保留，不构成切换阻断。

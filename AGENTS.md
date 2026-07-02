@@ -15,7 +15,7 @@ To avoid operating the wrong device in multi-device / multi-port environments, t
 - No port enumeration: never enumerate `/dev/*` or other serial-device paths to discover candidate ports.
 - No port switching: never switch ports “to try”.
 - Required workflow: use the Mains Aegis devd path. In the default in-repo route, source-built `tools/mains-aegis-host` devd/CLI may be used for development, validation, diagnostics, and read/session-read checks. In the explicit end-user route, require released `mains-aegis` / `mains-aegis-devd` host tools on `PATH`.
-- `mains-aegis-devd` may scan/list serial candidates for owner-visible binding, but must not auto-switch or try alternate ports. Read/session-read operations are allowed by default in `$mains-aegis-devd-flow`: scan/list, connect/disconnect, identity/status/power-diag, and monitor start/stop/log reading. Persistent binding changes, settings writes, reset, flash, and real host power actions require explicit owner authorization; mock/dry-run validation is allowed. `mains-aegis-devd serve` is IPC-only; HTTP/Web access requires explicit `mains-aegis-devd bridge-http`.
+- `mains-aegis-devd` may scan/list serial candidates for owner-visible binding, but must not auto-switch or try alternate ports. Read/session-read operations are allowed by default in `$mains-aegis-devd-flow`: scan/list, connect/disconnect, identity/status/diag-snapshot, and monitor start/stop/log reading. Persistent binding changes, settings writes, reset, flash, and real host power actions require explicit owner authorization; mock/dry-run validation is allowed. `mains-aegis-devd serve` is IPC-only; HTTP/Web access requires explicit `mains-aegis-devd bridge-http`.
 - `mains-aegis-devd` flash may invoke its internal `espflash` backend; Agents must not invoke `espflash` directly from the shell.
 - Decision summary required: for every device-related operation (including denials), output a minimal, copy-pastable decision summary: `Operation type` (`read-only` / `state-changing` / `write`), `Command`, `Decision` (`allow|deny`), `Rationale` (which gate G0–G5), and `Next step`.
 
@@ -26,7 +26,7 @@ Gates (G0–G5) for the `Rationale` field:
 - G2 (no port enumeration): deny any port enumeration.
 - G3 (no port switching): deny any port switching.
 - G4 (no automatic port switching): deny any attempt to “try another port”.
-- G5 (devd required): default in-repo Codex work uses `$mains-aegis-devd-flow`; allow devd-backed read/session-read operations without extra authorization, including scan/list, connect/disconnect, identity/status/power-diag, and monitor start/stop/log reading. Persistent binding changes, settings writes, reset, flash, and real host power actions require explicit bound-device context and owner authorization. Explicit end-user/released-tool requests use `$mains-aegis-user-operations`.
+- G5 (devd required): default in-repo Codex work uses `$mains-aegis-devd-flow`; allow devd-backed read/session-read operations without extra authorization, including scan/list, connect/disconnect, identity/status/diag-snapshot, and monitor start/stop/log reading. Persistent binding changes, settings writes, reset, flash, and real host power actions require explicit bound-device context and owner authorization. Explicit end-user/released-tool requests use `$mains-aegis-user-operations`.
 
 ## Project Structure & Module Organization
 
@@ -37,13 +37,20 @@ Gates (G0–G5) for the `Rationale` field:
 
 ## Build, Test, and Development Commands
 
-There is no build system or test runner yet. Useful local commands:
+Use the repository `Justfile` as the default development entrypoint. Run `just --list` before spelling out raw commands; firmware builds and flash flows must use `just` recipes so Cargo reads `firmware/.cargo/config.toml` and devd remains the only flash path.
 
 - Search content: `rg "BQ40Z50" docs`
 - Preview docs via a local server: `python -m http.server -d docs 8000`
-- Start IPC daemon for development: `cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve`
-- Start local HTTP bridge for development: `cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- bridge-http --allow-dev-cors`
-- Generate firmware catalog entry: `python3 tools/firmware-artifact/build-catalog-entry.py --elf <firmware-elf> --out firmware/target/mains-aegis-artifacts`
+- Start IPC daemon for development: `just devd-serve`
+- Start local HTTP bridge for development: `just devd-http`
+- Host tests: `just host-test`
+- Firmware host-side tests: `just firmware-host-test`
+- Firmware ESP check: `just firmware-check`
+- Firmware release ELF: `just firmware-build`
+- Firmware image and catalog for devd/Web: `just firmware-release`
+- Build/select/dry-run flash for a bound device: `just flash-current-dry-run <device>`
+- Real flash for a bound device requires explicit owner authorization: `just flash-current-real <device> flash`
+- Standard local validation set: `just check`
 - Review changes before PR: `git status` / `git diff`
 
 ## Coding Style & Naming Conventions

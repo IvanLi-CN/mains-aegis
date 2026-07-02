@@ -27,9 +27,9 @@ use crate::{
     mdns::{self, MdnsRuntimeConfig},
     mdns_wire::{derive_device_identity, DeviceIdentity},
     net_contract::{
-        accepts_event_stream, is_api_v1_path, render_identity_json, render_network_json,
-        render_ping_json, render_settings_json, render_status_json, write_error_body,
-        write_sse_event, BuildInfo,
+        accepts_event_stream, is_api_v1_path, render_diag_snapshot_json, render_identity_json,
+        render_network_json, render_ping_json, render_settings_json, render_status_json,
+        write_error_body, write_sse_event, BuildInfo,
     },
     net_logic::{
         build_http_response_head, build_sse_response_head, lan_advanced_power_apply_timeout_ms,
@@ -37,9 +37,10 @@ use crate::{
         LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS,
     },
     net_types::{
-        AdvancedPowerCapabilitiesSnapshot, AdvancedPowerSettingsSnapshot, DeviceSettingsSnapshot,
-        FrontPanelRuntimeSnapshot, ManualChargeSettingsSnapshot, NetworkUiSummary,
-        UpsStatusSnapshot, WifiConnectionState, WifiErrorKind, WifiSettingsSnapshot, WifiSnapshot,
+        AdvancedPowerCapabilitiesSnapshot, AdvancedPowerSettingsSnapshot, DerivedPowerSnapshot,
+        DeviceSettingsSnapshot, FrontPanelRuntimeSnapshot, ManualChargeSettingsSnapshot,
+        NetworkUiSummary, UpsStatusSnapshot, WifiConnectionState, WifiErrorKind,
+        WifiSettingsSnapshot, WifiSnapshot,
     },
     usb_cdc_protocol::{
         parse_http_advanced_power_request, parse_http_log_level_request,
@@ -57,6 +58,7 @@ const WIFI_DNS: Option<&str> = option_env!("MAINS_AEGIS_WIFI_DNS");
 const HTTP_PORT: u16 = 80;
 const HTTP_WORKER_COUNT: usize = 3;
 const HTTP_RESPONSE_BODY_CAP: usize = 3072;
+const HTTP_DIAG_SNAPSHOT_BODY_CAP: usize = 8192;
 const SSE_FRAME_CAP: usize = 3328;
 const REQUEST_BUF_CAP: usize = 1024;
 const STATUS_PUSH_INTERVAL: Duration = Duration::from_millis(500);
@@ -75,6 +77,8 @@ static WIFI_STATE: Mutex<RefCell<WifiSnapshot>> =
     Mutex::new(RefCell::new(WifiSnapshot::disabled()));
 static UPS_STATUS: Mutex<RefCell<UpsStatusSnapshot>> =
     Mutex::new(RefCell::new(UpsStatusSnapshot::empty()));
+static DIAG_SNAPSHOT: Mutex<RefCell<DerivedPowerSnapshot>> =
+    Mutex::new(RefCell::new(DerivedPowerSnapshot::empty()));
 static FRONT_PANEL_RUNTIME: Mutex<RefCell<FrontPanelRuntimeSnapshot>> =
     Mutex::new(RefCell::new(FrontPanelRuntimeSnapshot::unavailable()));
 static DEVICE_IDENTITY: Mutex<RefCell<Option<DeviceIdentity>>> = Mutex::new(RefCell::new(None));
@@ -121,6 +125,12 @@ pub enum LanCommandResult {
 pub fn publish_ups_status(snapshot: UpsStatusSnapshot) {
     critical_section::with(|cs| {
         *UPS_STATUS.borrow_ref_mut(cs) = snapshot;
+    });
+}
+
+pub fn publish_diag_snapshot(snapshot: DerivedPowerSnapshot) {
+    critical_section::with(|cs| {
+        *DIAG_SNAPSHOT.borrow_ref_mut(cs) = snapshot;
     });
 }
 
@@ -697,7 +707,8 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
 
     let origin = origin.as_ref().map(|value| value.as_str());
     let method = method_buf.as_str();
-    let path = path_buf.as_str();
+    let request_target = path_buf.as_str();
+    let (path, query) = split_request_target(request_target);
 
     if let Some(value) = origin {
         if !origin_reflection_allowed(value) {
@@ -831,6 +842,53 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
         "/api/v1/status" => {
             render_status_json(&mut body, current_status_snapshot());
             write_http_response(socket, "200 OK", body.as_str(), origin).await?;
+        }
+        "/api/v1/diag-snapshot" => {
+            let mut diag_body = String::<HTTP_DIAG_SNAPSHOT_BODY_CAP>::new();
+            let packages = parse_diag_snapshot_query_packages(query);
+            if diag_snapshot_query_requires_native_refresh(packages.as_slice()) {
+                let mut error_body = String::<HTTP_RESPONSE_BODY_CAP>::new();
+                write_error_body(
+                    &mut error_body,
+                    "diag_snapshot_native_package_unavailable",
+                    "requested diag-snapshot package requires the native USB CDC diagnostic path",
+                    true,
+                    None,
+                );
+                write_http_response(
+                    socket,
+                    "503 Service Unavailable",
+                    error_body.as_str(),
+                    origin,
+                )
+                .await?;
+                return Ok(());
+            }
+            render_diag_snapshot_json(
+                &mut diag_body,
+                packages.as_slice(),
+                current_status_snapshot(),
+                current_diag_snapshot(),
+            );
+            if !diag_snapshot_json_complete(diag_body.as_str()) {
+                let mut error_body = String::<HTTP_RESPONSE_BODY_CAP>::new();
+                write_error_body(
+                    &mut error_body,
+                    "diag_snapshot_too_large",
+                    "diag-snapshot response exceeded firmware HTTP buffer",
+                    true,
+                    None,
+                );
+                write_http_response(
+                    socket,
+                    "500 Internal Server Error",
+                    error_body.as_str(),
+                    origin,
+                )
+                .await?;
+                return Ok(());
+            }
+            write_http_response(socket, "200 OK", diag_body.as_str(), origin).await?;
         }
         _ => {
             write_error_body(&mut body, "not_found", "not found", false, None);
@@ -1081,6 +1139,45 @@ fn current_status_snapshot() -> UpsStatusSnapshot {
     critical_section::with(|cs| *UPS_STATUS.borrow_ref(cs))
 }
 
+fn current_diag_snapshot() -> DerivedPowerSnapshot {
+    critical_section::with(|cs| *DIAG_SNAPSHOT.borrow_ref(cs))
+}
+
+fn split_request_target(target: &str) -> (&str, Option<&str>) {
+    match target.split_once('?') {
+        Some((path, query)) => (path, Some(query)),
+        None => (target, None),
+    }
+}
+
+fn parse_diag_snapshot_query_packages(query: Option<&str>) -> Vec<String<32>, 8> {
+    let mut packages = Vec::<String<32>, 8>::new();
+    let Some(query) = query else {
+        return packages;
+    };
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key != "package" || value.is_empty() {
+            continue;
+        }
+        let mut package = String::<32>::new();
+        if package.push_str(value).is_ok() {
+            let _ = packages.push(package);
+        }
+    }
+    packages
+}
+
+fn diag_snapshot_json_complete(body: &str) -> bool {
+    body.starts_with(r#"{"packages":{"#) && body.contains(r#","errors":{"#) && body.ends_with("}}")
+}
+
+fn diag_snapshot_query_requires_native_refresh(packages: &[String<32>]) -> bool {
+    packages
+        .iter()
+        .any(|package| package.as_str() == "bq40.manufacturing")
+}
+
 pub fn set_front_panel_runtime(snapshot: FrontPanelRuntimeSnapshot) {
     critical_section::with(|cs| {
         *FRONT_PANEL_RUNTIME.borrow_ref_mut(cs) = snapshot;
@@ -1094,6 +1191,60 @@ pub fn current_front_panel_runtime() -> FrontPanelRuntimeSnapshot {
 #[cfg(test)]
 pub(crate) const fn status_push_interval_millis_for_test() -> u64 {
     STATUS_PUSH_INTERVAL.as_millis()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        diag_snapshot_json_complete, diag_snapshot_query_requires_native_refresh,
+        parse_diag_snapshot_query_packages, split_request_target,
+    };
+
+    #[test]
+    fn splits_request_target_query() {
+        assert_eq!(
+            split_request_target("/api/v1/diag-snapshot?package=bq40.core"),
+            ("/api/v1/diag-snapshot", Some("package=bq40.core"))
+        );
+        assert_eq!(
+            split_request_target("/api/v1/status"),
+            ("/api/v1/status", None)
+        );
+    }
+
+    #[test]
+    fn parses_repeated_diag_snapshot_package_query() {
+        let packages = parse_diag_snapshot_query_packages(Some(
+            "include_meta=true&package=bq40.manufacturing&package=bq25792.regs",
+        ));
+        assert_eq!(packages.len(), 2);
+        assert_eq!(packages[0].as_str(), "bq40.manufacturing");
+        assert_eq!(packages[1].as_str(), "bq25792.regs");
+    }
+
+    #[test]
+    fn diag_snapshot_json_complete_rejects_truncated_payload() {
+        assert!(diag_snapshot_json_complete(
+            r#"{"packages":{},"errors":{}}"#
+        ));
+        assert!(!diag_snapshot_json_complete(r#"{"packages":{},"errors":{"#));
+        assert!(!diag_snapshot_json_complete(r#"{"packages":{}"#));
+    }
+
+    #[test]
+    fn native_refresh_packages_are_not_served_from_lan_cache() {
+        let packages = parse_diag_snapshot_query_packages(Some(
+            "package=bq40.manufacturing&package=derived.power",
+        ));
+        assert!(diag_snapshot_query_requires_native_refresh(
+            packages.as_slice()
+        ));
+
+        let packages = parse_diag_snapshot_query_packages(Some("package=derived.power"));
+        assert!(!diag_snapshot_query_requires_native_refresh(
+            packages.as_slice()
+        ));
+    }
 }
 
 fn note_wifi_error(mac: [u8; 6], dns: Option<[u8; 4]>, is_static: bool, error: WifiErrorKind) {

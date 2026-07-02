@@ -5,10 +5,12 @@ use heapless::String;
 use crate::{
     mdns_wire::DeviceIdentity,
     net_types::{
-        format_ipv4, DeviceSettingsSnapshot, PowerDiagSnapshot, UpsStatusSnapshot, WifiSnapshot,
-        API_VERSION,
+        format_ipv4, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerSnapshot,
+        DeviceSettingsSnapshot, UpsStatusSnapshot, WifiSnapshot, API_VERSION,
     },
 };
+
+const DIAG_SNAPSHOT_DERIVED_POWER_BODY_CAP: usize = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BuildInfo {
@@ -521,7 +523,7 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
     let _ = buf.push_str("}}");
 }
 
-pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDiagSnapshot) {
+pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: DerivedPowerSnapshot) {
     buf.clear();
     let _ = buf.push('{');
     let _ = buf.push_str("\"input\":{");
@@ -764,7 +766,20 @@ pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDi
     );
     json_field_opt_u32(buf, "gauging_status", diag.bms.gauging_status, true);
     json_field_opt_u32(buf, "op_status", diag.bms.op_status, true);
+    json_field_opt_u8(buf, "op_status_raw_len", diag.bms.op_status_raw_len, true);
+    json_field_opt_u8_array(
+        buf,
+        "op_status_raw_bytes",
+        diag.bms
+            .op_status_raw_bytes
+            .as_ref()
+            .map(|bytes| &bytes[..]),
+        true,
+    );
+    json_field_opt_bool(buf, "emshut", diag.bms.emshut, true);
+    json_field_opt_bool(buf, "pres", diag.bms.pres, true);
     json_field_opt_bool(buf, "xchg", diag.bms.xchg, true);
+    json_field_opt_bool(buf, "xdsg", diag.bms.xdsg, true);
     json_field_opt_bool(buf, "chg_fet", diag.bms.chg_fet, true);
     json_field_opt_bool(buf, "dsg_fet", diag.bms.dsg_fet, true);
     json_field_opt_bool(buf, "pchg_fet", diag.bms.pchg_fet, true);
@@ -778,8 +793,353 @@ pub fn render_power_diag_json<const N: usize>(buf: &mut String<N>, diag: PowerDi
     json_field_opt_bool(buf, "charging_inhibit", diag.bms.charging_inhibit, true);
     json_field_opt_bool(buf, "charging_suspend", diag.bms.charging_suspend, true);
     json_field_opt_bool(buf, "charging_hv", diag.bms.charging_hv, true);
-    json_field_opt_u16(buf, "current_at_eoc_ma", diag.bms.current_at_eoc_ma, false);
+    json_field_opt_u16(buf, "current_at_eoc_ma", diag.bms.current_at_eoc_ma, true);
+    json_field_opt_u16(buf, "da_configuration", diag.bms.da_configuration, true);
+    json_field_opt_u16(buf, "power_config", diag.bms.power_config, true);
+    json_field_opt_bool(buf, "emshut_en", diag.bms.emshut_en, true);
+    json_field_opt_bool(buf, "emshut_pexit_dis", diag.bms.emshut_pexit_dis, true);
+    json_field_opt_bool(buf, "emshut_exit_comm", diag.bms.emshut_exit_comm, true);
+    json_field_opt_bool(buf, "emshut_exit_vpack", diag.bms.emshut_exit_vpack, false);
     let _ = buf.push_str("}}");
+}
+
+pub fn render_diag_snapshot_json<'a, const N: usize>(
+    buf: &mut String<N>,
+    requested_packages: &'a [String<32>],
+    status: UpsStatusSnapshot,
+    diag: DerivedPowerSnapshot,
+) {
+    buf.clear();
+    let _ = buf.push_str("{\"packages\":{");
+    let mut emitted = DiagEmitState::<'a>::default();
+    if requested_packages.is_empty() {
+        render_diag_snapshot_package(buf, &mut emitted, "mcu.runtime", status, diag);
+        render_diag_snapshot_package(buf, &mut emitted, "derived.power", status, diag);
+    } else {
+        for package in requested_packages {
+            match package.as_str() {
+                "core" => {
+                    render_diag_snapshot_package(buf, &mut emitted, "mcu.runtime", status, diag);
+                    render_diag_snapshot_package(buf, &mut emitted, "derived.power", status, diag);
+                }
+                id => render_diag_snapshot_package(buf, &mut emitted, id, status, diag),
+            }
+        }
+    }
+    let _ = buf.push_str("},\"errors\":{");
+    let mut first_error = true;
+    for error in emitted.errors.iter() {
+        if !first_error {
+            let _ = buf.push(',');
+        }
+        first_error = false;
+        let _ = buf.push('"');
+        write_json_string_escaped(buf, error);
+        let _ = buf.push_str(
+            "\":{\"code\":\"unsupported_package\",\"message\":\"diagnostic package is not supported\"}",
+        );
+    }
+    let _ = buf.push_str("}}");
+}
+
+#[derive(Default)]
+struct DiagEmitState<'a> {
+    packages: heapless::Vec<&'a str, 16>,
+    errors: heapless::Vec<&'a str, 8>,
+}
+
+fn render_diag_snapshot_package<'a, const N: usize>(
+    buf: &mut String<N>,
+    emitted: &mut DiagEmitState<'a>,
+    id: &'a str,
+    status: UpsStatusSnapshot,
+    diag: DerivedPowerSnapshot,
+) {
+    if emitted.packages.iter().any(|seen| *seen == id) {
+        return;
+    }
+    match id {
+        "mcu.runtime" => {
+            render_diag_package_header(buf, emitted, id, "runtime_cache", 0);
+            render_diag_mcu_runtime_payload(buf, status);
+            let _ = buf.push('}');
+        }
+        "bq40.core" => {
+            render_diag_package_header(buf, emitted, id, "power_cache", 0);
+            render_diag_bms_payload(buf, diag.bms);
+            let _ = buf.push('}');
+        }
+        "bq40.manufacturing" => {
+            render_diag_package_header(buf, emitted, id, "fresh_i2c", 0);
+            render_diag_bms_payload(buf, diag.bms);
+            let _ = buf.push('}');
+        }
+        "bq25792.regs" => {
+            render_diag_package_header(buf, emitted, id, "power_cache", 0);
+            render_diag_charger_payload(buf, diag.charger);
+            let _ = buf.push('}');
+        }
+        "tps55288.out_a" => {
+            render_diag_package_header(buf, emitted, id, "status_cache", 0);
+            render_diag_output_payload(
+                buf,
+                status.out_a_state,
+                status.out_a_enabled,
+                status.out_a_vbus_mv,
+                status.out_a_iout_ma,
+            );
+            let _ = buf.push('}');
+        }
+        "tps55288.out_b" => {
+            render_diag_package_header(buf, emitted, id, "status_cache", 0);
+            render_diag_output_payload(
+                buf,
+                status.out_b_state,
+                status.out_b_enabled,
+                status.out_b_vbus_mv,
+                status.out_b_iout_ma,
+            );
+            let _ = buf.push('}');
+        }
+        "ina3221.regs" => {
+            render_diag_package_header(buf, emitted, id, "status_cache", 0);
+            render_diag_ina_payload(buf, status);
+            let _ = buf.push('}');
+        }
+        "tmp112.out_a" => {
+            render_diag_package_header(buf, emitted, id, "status_cache", 0);
+            render_diag_tmp_payload(buf, status.tmp_a_state, status.tmp_a_c);
+            let _ = buf.push('}');
+        }
+        "tmp112.out_b" => {
+            render_diag_package_header(buf, emitted, id, "status_cache", 0);
+            render_diag_tmp_payload(buf, status.tmp_b_state, status.tmp_b_c);
+            let _ = buf.push('}');
+        }
+        "fusb302.regs" => {
+            render_diag_package_header(buf, emitted, id, "power_cache", 0);
+            render_diag_fusb_payload(buf, diag);
+            let _ = buf.push('}');
+        }
+        "usbpd.policy" => {
+            render_diag_package_header(buf, emitted, id, "power_cache", 0);
+            render_diag_usbpd_policy_payload(buf, diag);
+            let _ = buf.push('}');
+        }
+        "front_panel.io" => {
+            render_diag_package_header(buf, emitted, id, "status_cache", 0);
+            render_diag_front_panel_payload(buf, status);
+            let _ = buf.push('}');
+        }
+        "derived.power" => {
+            render_diag_package_header(buf, emitted, id, "power_cache", 0);
+            let mut nested = String::<DIAG_SNAPSHOT_DERIVED_POWER_BODY_CAP>::new();
+            render_derived_power_json(&mut nested, diag);
+            let _ = buf.push_str(nested.as_str());
+            let _ = buf.push('}');
+        }
+        _ => {
+            let _ = emitted.errors.push(id);
+        }
+    }
+}
+
+fn render_diag_package_header<'a, const N: usize>(
+    buf: &mut String<N>,
+    emitted: &mut DiagEmitState<'a>,
+    id: &'a str,
+    source: &str,
+    duration_ms: u16,
+) {
+    if !emitted.packages.is_empty() {
+        let _ = buf.push(',');
+    }
+    let _ = emitted.packages.push(id);
+    let _ = buf.push('"');
+    write_json_string_escaped(buf, id);
+    let _ = buf.push_str("\":{\"ok\":true,\"source\":\"");
+    write_json_string_escaped(buf, source);
+    let _ = write!(buf, "\",\"duration_ms\":{},\"payload\":", duration_ms);
+}
+
+fn render_diag_mcu_runtime_payload<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {
+    let _ = buf.push('{');
+    json_field_str(buf, "mode", status.mode, true);
+    json_field_str(buf, "requested_outputs", status.requested_outputs, true);
+    json_field_str(buf, "active_outputs", status.active_outputs, true);
+    json_field_str(buf, "recoverable_outputs", status.recoverable_outputs, true);
+    json_field_str(buf, "output_gate_reason", status.output_gate_reason, true);
+    json_field_str(buf, "input_source", status.input_source, false);
+    let _ = buf.push('}');
+}
+
+fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowerBmsSnapshot) {
+    let _ = buf.push('{');
+    json_field_opt_u8(buf, "addr", bms.addr, true);
+    json_field_str(buf, "state", bms.state, true);
+    json_field_opt_u16(buf, "pack_mv", bms.pack_mv, true);
+    json_field_opt_i16(buf, "current_ma", bms.current_ma, true);
+    json_field_opt_u16(buf, "soc_pct", bms.soc_pct, true);
+    json_field_opt_bool(buf, "discharge_ready", bms.discharge_ready, true);
+    json_field_opt_bool(buf, "charge_ready", bms.charge_ready, true);
+    json_field_opt_str(buf, "issue_detail", bms.issue_detail, true);
+    json_field_opt_u32(buf, "safety_status", bms.safety_status, true);
+    json_field_opt_u32(buf, "pf_status", bms.pf_status, true);
+    json_field_opt_u32(buf, "manufacturing_status", bms.manufacturing_status, true);
+    json_field_opt_u32(buf, "gauging_status", bms.gauging_status, true);
+    json_field_opt_u32(buf, "charging_status", bms.charging_status, true);
+    json_field_opt_u32(buf, "op_status", bms.op_status, true);
+    json_field_opt_u8(buf, "op_status_raw_len", bms.op_status_raw_len, true);
+    json_field_opt_u8_array(
+        buf,
+        "op_status_raw_bytes",
+        bms.op_status_raw_bytes.as_ref().map(|bytes| &bytes[..]),
+        true,
+    );
+    json_field_opt_bool(buf, "emshut", bms.emshut, true);
+    json_field_opt_bool(buf, "pres", bms.pres, true);
+    json_field_opt_bool(buf, "xchg", bms.xchg, true);
+    json_field_opt_bool(buf, "xdsg", bms.xdsg, true);
+    json_field_opt_bool(buf, "chg_fet", bms.chg_fet, true);
+    json_field_opt_bool(buf, "dsg_fet", bms.dsg_fet, true);
+    json_field_opt_bool(buf, "pchg_fet", bms.pchg_fet, true);
+    json_field_opt_bool(buf, "cuv", bms.cuv, true);
+    json_field_opt_bool(buf, "cuvc", bms.cuvc, true);
+    json_field_opt_bool(buf, "fet_en", bms.fet_en, true);
+    json_field_opt_bool(buf, "chg_en", bms.chg_en, true);
+    json_field_opt_bool(buf, "dsg_en", bms.dsg_en, true);
+    json_field_opt_bool(buf, "charging_inhibit", bms.charging_inhibit, true);
+    json_field_opt_bool(buf, "charging_suspend", bms.charging_suspend, true);
+    json_field_opt_bool(buf, "charging_hv", bms.charging_hv, true);
+    json_field_opt_u16(buf, "current_at_eoc_ma", bms.current_at_eoc_ma, true);
+    json_field_opt_u16(buf, "da_configuration", bms.da_configuration, true);
+    json_field_opt_u16(buf, "power_config", bms.power_config, true);
+    json_field_opt_bool(buf, "emshut_en", bms.emshut_en, true);
+    json_field_opt_bool(buf, "emshut_pexit_dis", bms.emshut_pexit_dis, true);
+    json_field_opt_bool(buf, "emshut_exit_comm", bms.emshut_exit_comm, true);
+    json_field_opt_bool(buf, "emshut_exit_vpack", bms.emshut_exit_vpack, false);
+    let _ = buf.push('}');
+}
+
+fn render_diag_charger_payload<const N: usize>(
+    buf: &mut String<N>,
+    charger: DerivedPowerChargerSnapshot,
+) {
+    let _ = buf.push('{');
+    json_field_bool(buf, "poll_valid", charger.poll_valid, true);
+    json_field_bool(buf, "enabled", charger.enabled, true);
+    json_field_bool(buf, "allow_charge", charger.allow_charge, true);
+    json_field_bool(buf, "input_present", charger.input_present, true);
+    json_field_bool(buf, "vbat_present", charger.vbat_present, true);
+    json_field_opt_i16(buf, "ibus_adc_ma", charger.ibus_adc_ma, true);
+    json_field_opt_i16(buf, "ibat_adc_ma", charger.ibat_adc_ma, true);
+    json_field_opt_u16(buf, "vbus_adc_mv", charger.vbus_adc_mv, true);
+    json_field_opt_u16(buf, "vbat_adc_mv", charger.vbat_adc_mv, true);
+    json_field_opt_u16(buf, "vsys_adc_mv", charger.vsys_adc_mv, true);
+    json_field_opt_u16(buf, "vac1_adc_mv", charger.vac1_adc_mv, true);
+    json_field_opt_u16(buf, "vac2_adc_mv", charger.vac2_adc_mv, true);
+    json_field_opt_u16(buf, "vreg_mv", charger.vreg_mv, true);
+    json_field_opt_u16(buf, "ichg_ma", charger.ichg_ma, true);
+    json_field_opt_u16(buf, "vindpm_mv", charger.vindpm_mv, true);
+    json_field_opt_u16(buf, "iindpm_ma", charger.iindpm_ma, true);
+    json_field_opt_u8(buf, "st0", charger.st0, true);
+    json_field_opt_u8(buf, "st1", charger.st1, true);
+    json_field_opt_u8(buf, "st2", charger.st2, true);
+    json_field_opt_u8(buf, "st3", charger.st3, true);
+    json_field_opt_u8(buf, "st4", charger.st4, true);
+    json_field_opt_u8(buf, "fault0", charger.fault0, true);
+    json_field_opt_u8(buf, "fault1", charger.fault1, true);
+    json_field_opt_u8(buf, "ctrl0", charger.ctrl0, true);
+    json_field_opt_u8(buf, "ctrl3", charger.ctrl3, true);
+    json_field_opt_u8(buf, "ctrl4", charger.ctrl4, true);
+    json_field_str(buf, "acdrv_path", charger.acdrv_path, true);
+    json_field_opt_u16(buf, "term_ctrl", charger.term_ctrl, false);
+    let _ = buf.push('}');
+}
+
+fn render_diag_output_payload<const N: usize>(
+    buf: &mut String<N>,
+    state: &str,
+    enabled: Option<bool>,
+    vbus_mv: Option<u16>,
+    iout_ma: Option<i32>,
+) {
+    let _ = buf.push('{');
+    json_field_str(buf, "state", state, true);
+    json_field_opt_bool(buf, "enabled", enabled, true);
+    json_field_opt_u16(buf, "vbus_mv", vbus_mv, true);
+    json_field_opt_i32(buf, "iout_ma", iout_ma, false);
+    let _ = buf.push('}');
+}
+
+fn render_diag_ina_payload<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {
+    let _ = buf.push('{');
+    json_field_opt_u16(buf, "input_vbus_mv", status.input_vbus_mv, true);
+    json_field_opt_i32(buf, "input_ibus_ma", status.input_ibus_ma, true);
+    json_field_opt_u16(buf, "vin_vbus_mv", status.vin_vbus_mv, true);
+    json_field_opt_i32(buf, "vin_iin_ma", status.vin_iin_ma, true);
+    json_field_opt_i32(buf, "tps_total_iout_ma", status.tps_total_iout_ma, false);
+    let _ = buf.push('}');
+}
+
+fn render_diag_tmp_payload<const N: usize>(
+    buf: &mut String<N>,
+    state: &str,
+    temp_c_x16: Option<i16>,
+) {
+    let _ = buf.push('{');
+    json_field_str(buf, "state", state, true);
+    json_field_opt_i16(buf, "temp_c_x16", temp_c_x16, false);
+    let _ = buf.push('}');
+}
+
+fn render_diag_fusb_payload<const N: usize>(buf: &mut String<N>, diag: DerivedPowerSnapshot) {
+    let _ = buf.push('{');
+    json_field_bool(buf, "attached", diag.input.usb_pd_attached, true);
+    json_field_opt_bool(buf, "vbus_present", diag.input.usb_pd_vbus_present, true);
+    json_field_opt_u16(buf, "vac1_mv", diag.input.usb_pd_vac1_mv, false);
+    let _ = buf.push('}');
+}
+
+fn render_diag_usbpd_policy_payload<const N: usize>(
+    buf: &mut String<N>,
+    diag: DerivedPowerSnapshot,
+) {
+    let _ = buf.push('{');
+    json_field_bool(buf, "attached", diag.input.usb_pd_attached, true);
+    json_field_bool(buf, "charge_ready", diag.input.usb_pd_charge_ready, true);
+    json_field_bool(
+        buf,
+        "unsafe_source_latched",
+        diag.input.usb_pd_unsafe_source_latched,
+        true,
+    );
+    json_field_opt_str(buf, "contract_kind", diag.input.usb_pd_contract_kind, true);
+    json_field_opt_u16(buf, "contract_mv", diag.input.usb_pd_contract_mv, true);
+    json_field_opt_u16(buf, "contract_ma", diag.input.usb_pd_contract_ma, false);
+    let _ = buf.push('}');
+}
+
+fn render_diag_front_panel_payload<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {
+    let _ = buf.push('{');
+    json_field_str(buf, "init_state", status.front_panel.init_state, true);
+    json_field_str(
+        buf,
+        "display_power_mode",
+        status.front_panel.display_power_mode,
+        true,
+    );
+    json_field_str(buf, "ui_variant", status.front_panel.ui_variant, true);
+    json_field_u32(buf, "frame_no", status.front_panel.frame_no, true);
+    json_field_bool(buf, "ready", status.front_panel.ready, true);
+    json_field_bool(buf, "needs_redraw", status.front_panel.needs_redraw, true);
+    json_field_bool(
+        buf,
+        "attention_hold",
+        status.front_panel.attention_hold,
+        false,
+    );
+    let _ = buf.push('}');
 }
 
 pub fn write_sse_event<const N: usize>(
@@ -1002,6 +1362,30 @@ fn json_field_opt_u16_array<const N: usize>(
         }
     }
     let _ = buf.push(']');
+    if trailing_comma {
+        let _ = buf.push(',');
+    }
+}
+
+fn json_field_opt_u8_array<const N: usize>(
+    buf: &mut String<N>,
+    key: &str,
+    value: Option<&[u8]>,
+    trailing_comma: bool,
+) {
+    let _ = write!(buf, "\"{}\":", key);
+    if let Some(values) = value {
+        let _ = buf.push('[');
+        for (index, item) in values.iter().enumerate() {
+            if index != 0 {
+                let _ = buf.push(',');
+            }
+            let _ = write!(buf, "{}", item);
+        }
+        let _ = buf.push(']');
+    } else {
+        let _ = buf.push_str("null");
+    }
     if trailing_comma {
         let _ = buf.push(',');
     }

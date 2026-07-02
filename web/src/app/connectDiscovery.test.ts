@@ -47,15 +47,15 @@ function savedRecord(deviceId: string): DeviceRecord {
 function usbPendingDevice(logicalDeviceId: string): DevdDevice {
   return {
     id: "usb-stable-a",
-    display_name: "/dev/cu.usbmodem1",
-    port_path: "/dev/cu.usbmodem1",
+    display_name: "/tmp/fixture-usb-a",
+    port_path: "/tmp/fixture-usb-a",
     lan_address: null,
     lan_conflict_addresses: [],
     transport: "native_serial",
     binding: {
       alias: "Bench USB",
       stable_id: "usb-stable-a",
-      port_path: "/dev/cu.usbmodem1",
+      port_path: "/tmp/fixture-usb-a",
       created_at: "2026-06-07T00:00:00.000Z",
       logical_device_id: logicalDeviceId,
     },

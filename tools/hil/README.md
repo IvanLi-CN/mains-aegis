@@ -14,18 +14,35 @@ historical findings and debugging context.
 
 ## Scope
 
-Current approved bench bindings:
-
-- UPS hostname: `mains-aegis-198840`
-- UPS devd binding: `serial-04f3bb3f5367`
-- IsolaPurr source: `856a141cdbd4`
-- LoadLynx saved device: `loadlynx-d68638`
-- LoadLynx USB path: `/dev/cu.usbmodem212101`
+Hardware bindings are never built into the repository. Provide the current bench
+targets explicitly with CLI flags or environment variables such as
+`MAINS_AEGIS_UPS_DEVICE_ID`, `MAINS_AEGIS_POWER_DEVICE_ID`,
+`MAINS_AEGIS_LOAD_DEVICE_ID`, and `MAINS_AEGIS_LOAD_USB_PORT`.
 
 Active source profiles:
 
 - `12V / 3A`
 - `19V / 3A`
+
+## Validation Levels
+
+Use precise names when recording validation evidence:
+
+- **HIL unit tests** are Python/Rust tests for the HIL tooling itself, such as
+  `python3 -m unittest tools.hil.test_formal_hil_readiness ...`. They use mocks,
+  fixtures, temporary files, and synthetic reports. They do not operate hardware
+  and do not prove a real bench run.
+- **HIL dry-runs** exercise command construction, report wiring, and safety
+  gates without changing hardware state. They are useful for runner validation,
+  but they are not real HIL evidence.
+- **Real formal power-path HIL** is a power-path validation run against the
+  explicit UPS, source, and load targets. It is separate from HIL unit tests.
+- **Read-only diag-snapshot HIL** is `diag_snapshot_readonly.py`. It only reads
+  `GET /api/v1/devices/{id}/diag-snapshot` and validates package shape. It must
+  not bind, flash, reset, monitor, write settings, or apply BQ40 Data Flash.
+
+Do not shorten "HIL unit tests passed" to "HIL passed". A sign-off statement
+must say which level ran and, for real HIL, which runner produced the report.
 
 ## Owner-Facing Entry
 
@@ -97,6 +114,11 @@ requests.
   - renders the static PNG output-voltage chart from one `timeseries.jsonl`
 - `verify_formal_suite.py`
   - verifies a suite summary against its referenced report directories
+- `diag_snapshot_readonly.py`
+  - read-only HIL gate for `diag-snapshot`
+  - validates package response shape for explicitly requested packages
+  - performs no flash, reset, monitor, settings write, BQ40 DF write, source
+    control, or load control
 - `formal_hil_suite.py`
   - legacy HTTP-oriented suite orchestrator
   - not accepted as the current formal CLI-only sign-off path
@@ -146,7 +168,7 @@ Freshness diagnostics are still recorded in `results.json`:
 - `load_status_max_age_s`
 - `source_status_max_age_s`
 - `ups_status_max_age_s`
-- `power_diag_max_age_s`
+- `diag_snapshot_max_age_s`
 
 They remain mandatory observability fields for debugging, but they are no longer
 independent veto conditions when the scene already preserves continuous complete
@@ -161,7 +183,7 @@ Power Path Validation uses fixed stable control paths per device:
 - UPS: `mains-aegis --ipc <socket> device <id> ...`
 - LoadLynx: the fixed development `loadlynx` CLI with `--ipc <socket>`
 - IsolaPurr: `isolapurr` CLI over the currently stable source path
-  - preferred on this bench: `--url http://192.168.31.122`
+  - preferred on this bench: `--url http://127.0.0.1:30182`
   - devd IPC / USB is allowed only when it is proven responsive
 
 Do not hard-code stale localhost ports from older runs.
@@ -177,7 +199,7 @@ For local Web verification and owner-facing browser handoff only:
 Minimum formal Power Path Validation surfaces:
 
 - UPS `mains-aegis device <id> status`
-- UPS `mains-aegis device <id> power-diag`
+- UPS `mains-aegis device <id> diag-snapshot`
 - UPS `mains-aegis device <id> settings`
 - IsolaPurr source telemetry
 - LoadLynx USB CLI control
@@ -192,7 +214,7 @@ Before a combined scene can be treated as formal evidence, prove these three
 paths independently on the same bench:
 
 - UPS `status --watch --interval-ms 200 --watch-freshness-ms 750`
-- UPS `power-diag --watch --interval-ms 200 --watch-freshness-ms 750`
+- UPS `diag-snapshot --watch --interval-ms 200 --watch-freshness-ms 750`
 - LoadLynx `status-stream` through the USB/devd path that the scene will use,
   using the explicitly selected development CLI binary
 - IsolaPurr CLI source telemetry at the same `3Hz` cadence, using whichever
@@ -207,25 +229,25 @@ The readiness checker records the same gate in its summary JSON under
 probes are fresh and pass the rate/gap floor:
 
 - `ups_status`
-- `ups_power_diag`
+- `ups_diag_snapshot`
 - `source`
 - `load`
 
 A single passing device path is not enough to start combined Power Path Validation. For example,
 a LoadLynx path that reports `effective_sample_rate_hz >= 3` and
 `max_sample_gap_s <= 0.5` is still only a LoadLynx pass when UPS `status`,
-UPS `power-diag`, or IsolaPurr source telemetry are stale, unreachable, or
+UPS `diag-snapshot`, or IsolaPurr source telemetry are stale, unreachable, or
 below the floor.
 
-The UPS status and power-diagnostic surfaces must be available through the
+The UPS status and diag-snapshot surfaces must be available through the
 `mains-aegis` CLI over devd IPC/USB. Do not replace missing CLI capability with
 ad-hoc IPC JSON-RPC calls in formal validation scripts; fix the CLI contract first.
 Do not use the local HTTP bridge or UPS LAN HTTP for formal UPS telemetry
 evidence.
 
 ```bash
-mains-aegis device serial-04f3bb3f5367 status --watch --interval-ms 200
-mains-aegis device serial-04f3bb3f5367 power-diag --watch --interval-ms 200
+mains-aegis device fixture-ups-device status --watch --interval-ms 200
+mains-aegis device fixture-ups-device diag-snapshot --watch --interval-ms 200
 ```
 
 `--watch` reads the devd monitor cache by default and does not issue extra CDC
@@ -237,17 +259,17 @@ continuous and fresh:
 
 - `status --watch --interval-ms 250 --watch-freshness-ms 750 --include-meta`
   should show `0` misses, output gaps below `0.5s`, and `cache_age_ms <= 750`
-- `power-diag --watch --interval-ms 250 --watch-freshness-ms 750 --include-meta`
+- `diag-snapshot --watch --interval-ms 250 --watch-freshness-ms 750 --include-meta`
   must meet the same rule
 - stale cache rows may be emitted to preserve a diagnostic timeline, but stale
   rows do not satisfy the formal freshness gate
 
 The current fixed UPS proof after the BMS detail refresh split and
-status-derived `power_diag` timestamp sync is:
+status-derived `diag_snapshot` timestamp sync is:
 
 - `status`: `40/40` rows, `0` misses, `4.0Hz`, max output gap `272ms`,
   `0` stale rows
-- `power-diag`: `40/40` rows, `0` misses, `4.0Hz`, max output gap `283ms`,
+- `diag-snapshot`: `40/40` rows, `0` misses, `4.0Hz`, max output gap `283ms`,
   `0` stale rows
 - LoadLynx `status-stream`: `40/40` rows, about `3.99Hz`, max gap `280ms`
 
@@ -260,8 +282,8 @@ Run the probe before a new formal scene whenever the host path changed:
 
 ```bash
 python3 tools/hil/probe_loadlynx_released_telemetry.py \
-  --load-device loadlynx-d68638 \
-  --load-usb-device-id digital-2bdfc170893f \
+  --load-device fixture-load-device \
+  --load-usb-device-id fixture-load-usb-device \
   --load-cli "$LOADLYNX_CLI" \
   --load-devd-base-url "$LOADLYNX_DEVD_BASE_URL" \
   --load-devd-socket "$LOADLYNX_DEVD_SOCKET"
@@ -274,7 +296,7 @@ The accepted LoadLynx CLI contract for formal scenes is:
 
 ```bash
 "$LOADLYNX_CLI" --ipc "$LOADLYNX_DEVD_SOCKET" status-stream \
-  --device loadlynx-d68638 \
+  --device fixture-load-device \
   --interval-ms 200
 ```
 
@@ -308,7 +330,7 @@ The suite-level contract is fixed to four scenes:
 The formal runner is the Rust `power-validation` command:
 
 ```bash
-LOADLYNX_CLI=/Users/ivan/.codex/worktrees/koha-loadlynx-monitor-telemetry-fix/tools/loadlynx-devd/target/debug/loadlynx \
+LOADLYNX_CLI="$LOADLYNX_CLI" \
 ISOLAPURR_IPC=.tmp/isolapurr-devd-power-validation.sock \
 just power-validation run \
   --profile 12v --profile 19v \
@@ -316,13 +338,13 @@ just power-validation run \
   --artifact-manifest-12v web/public/firmware/<12v>.manifest.json \
   --artifact-manifest-19v web/public/firmware/<19v>.manifest.json \
   --allow-profile-flash \
-  --ups-device serial-04f3bb3f5367 \
+  --ups-device "$MAINS_AEGIS_UPS_DEVICE_ID" \
   --load-cli "$LOADLYNX_CLI" \
   --load-ipc .tmp/loadlynx-devd-power-validation.sock \
-  --load-device loadlynx-d68638 \
+  --load-device "$MAINS_AEGIS_LOAD_DEVICE_ID" \
   --isolapurr-cli isolapurr \
-  --isolapurr-url http://192.168.31.122 \
-  --power-device 856a141cdbd4 \
+  --isolapurr-url http://127.0.0.1:30182 \
+  --power-device "$MAINS_AEGIS_POWER_DEVICE_ID" \
   --report-root tools/hil/reports
 ```
 

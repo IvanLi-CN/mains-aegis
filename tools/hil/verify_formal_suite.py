@@ -162,7 +162,7 @@ def main() -> int:
         for key in (
             "source_status_max_age_s",
             "ups_status_max_age_s",
-            "power_diag_max_age_s",
+            "diag_snapshot_max_age_s",
         ):
             age = completeness.get(key)
             if isinstance(age, (int, float)) and age > 0.5:
@@ -220,7 +220,7 @@ def main() -> int:
             report_failures.append("source_online_mv_min_mismatch")
         if entry.get("source_online_mv_max") is not None and entry.get("source_online_mv_max") != source_online_max:
             report_failures.append("source_online_mv_max_mismatch")
-        for surface in ("ups_status", "power_diag", "isolapurr_power", "load_control", "load_status"):
+        for surface in ("ups_status", "diag_snapshot", "isolapurr_power", "load_control", "load_status"):
             if surface in completeness and completeness.get(surface) is not True:
                 report_failures.append(f"surface_missing:{surface}")
 

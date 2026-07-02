@@ -21,7 +21,7 @@
 - 把 `BQ40Z50` 卡片收敛为三层状态：`OK`、`WARN`、`ERR`。
 - `WARN` 固定表示“设备存在但非正常态”，不再把 `RCA` 作为独立卡片状态词；`RCA ALARM` 仅作为副文案显示。
 - 默认自检只做普通 SMBus/SBS 访问探测；普通访问未识别到设备时显示 `ERR`，并允许尝试激活。
-- 点击 `BQ40Z50` 卡片时，必须先展示问题导向的恢复弹窗：至少区分 `NOT DETECTED` 与 `DISCHARGE BLOCKED/XDSG BLOCKED` 两类可恢复问题。
+- 点击 `BQ40Z50` 卡片时，必须先展示问题导向的恢复弹窗：至少区分 `NOT DETECTED`、`DISCHARGE BLOCKED/XDSG BLOCKED` 与 `EMSHUT ACTIVE` 可恢复问题。
 - 对 `NOT DETECTED` 使用 `Activate` 动作；对 `BQ40` 放电路径被挡住的可恢复问题使用 `Recover` 动作；其它不可恢复问题仅保留状态展示，不在前面板扩展 ROM/DF 写入类操作。
 - 激活结果词汇固定保留 5 类：`SUCCESS`、`NO BATTERY`、`ROM MODE`、`ABNORMAL`、`NOT DETECTED`。
 - `NO BATTERY` 只能由 BQ40 自身可读证据触发，禁止由 `BQ25792`、`FUSB302` 或其它器件状态推断。
@@ -84,6 +84,8 @@
 - Given 普通访问未识别到设备，When 查看 `BQ40Z50` 卡片，Then 状态显示 `ERR`，副文案显示 `NOT DETECTED`。
 - Given `BQ40Z50` 卡片为 `ERR`，When 点击或按键触发恢复入口，Then 先进入 `NOT DETECTED` 问题弹窗，确认按钮文案为 `Activate`。
 - Given `BQ40Z50` 处于 `WARN + discharge blocked` 且输出因 `BmsNotReady` 被挡住，When 点击或按键触发恢复入口，Then 先进入 `DISCHARGE BLOCKED/XDSG BLOCKED` 问题弹窗，确认按钮文案为 `Recover`。
+- Given `OperationStatus()[EMSHUT]=1` 且输出因 `BmsNotReady` 被挡住，When 自检页展示 `BQ40Z50`，Then 问题键必须显示 `EMSHUT ACTIVE`，不得被 `XDSG BLOCKED` 掩盖。
+- Given `OperationStatus()[EMSHUT]=1` 且输入电源、charger 与输出请求满足放电授权恢复门禁，When 点击或按键触发恢复入口，Then 先进入 `EMSHUT ACTIVE` 问题弹窗，确认按钮文案为 `Recover`。
 - Given `BQ40Z50` 处于可恢复问题态但主人尚未点击确认，When `SELF CHECK` 页面持续停留，Then 固件不得自行进入 `progress/result` overlay，也不得自动启动任何 `BQ40` 恢复尝试。
 - Given 任一失败结果弹窗已关闭，When 再次点击 `BQ40Z50` 卡片，Then 直接显示最近一次失败结果弹窗，不重复进入确认流程。
 - Given 最近一次结果为 `NOT DETECTED`，When 结果弹窗关闭后回到自检页，Then `BQ40Z50` 卡片仍保持 `ERR`。
@@ -156,6 +158,14 @@
 21. 激活态的 min-charge 覆盖只允许存在于 `WaitChargeOff` 之后的手动激活内部阶段；仅自动验证入口允许把 boot prewarm 连续保持到 `ProbeWithoutCharge` 的首轮观测。除此之外，主固件的常规 charger 策略不能变成“只要有输入就一直保持最小充电”。
 22. BQ40 诊断事务结束后仍需保留短暂的 SMBus quiet window；该 quiet window 固定为 `40 ms`，并且主循环必须像工具一样在该窗口内直接跳过后续 I2C 工作，避免 charger/BQ40 事务在窗口边界交错。该 quiet window 是附加保护，不能拿它替代激活阶段本身的 charger cadence 约束。
 23. 该 wake probe / follow-up 逻辑只允许存在于激活流程里；默认自检和常规轮询仍保持现有普通访问行为，不得复用 activation 专用的 priming、consistent-reader 或多轮 keepalive 读法。
+
+### 4.5. 放电授权恢复：EMSHUT communication-exit
+
+1. 常规 BQ40 解码必须优先识别 `OperationStatus()[EMSHUT]`；当 `EMSHUT=1` 时，`issue_detail` 必须为 `emshut_active`，不得因为同时存在 `XDSG=1` 而降级成 `xdsg_blocked`。
+2. `emshut_active` 属于放电路径被挡住的可恢复问题；在输出请求存在、gate reason 为 `BmsNotReady`、输入电源与 charger 门禁满足且无低电芯/无电池/RCA 阻断时，恢复动作仍使用 `DischargeAuthorization`。
+3. 放电授权恢复的 `ProbeWithoutCharge` 阶段不得只被动等待常规轮询；在前 `6 s` 内必须按短周期执行有效 BQ40 SBS 通信触发，覆盖 TRM 记录的 communication-exit 路径。
+4. 该短周期仅限放电授权恢复，常规离线激活仍保持历史 `12 s / 2 s` no-charge observe cadence，避免重新扩大 fragile wake probe 对总线的扰动。
+5. 恢复成功后，`OperationStatus()[EMSHUT]=0`、`DSG=1`、`XDSG=0` 时，`discharge_ready=true`；若 BQ40 仅剩 `XCHG=1`，自检不得继续阻断 Dashboard 的放电路径。
 
 ### 5. 自动恢复禁用：正式固件必须等待显式确认
 
@@ -238,12 +248,14 @@
 - [x] M2: 补齐问题详情/恢复弹窗 renderer 与预览场景
 - [x] M3: 激活运行态改为 BQ40-only 分类，完全不可访问时固定落 `NOT DETECTED`
 - [x] M4: 文档与规格资产同步完成
+- [x] M4.5: 放电授权恢复显式处理 `EMSHUT` 并执行 communication-exit 触发
 - [ ] M5: 构建、预览验证与快车道 PR 收敛完成
 
 ## 方案概述（Approach, high-level）
 
 - 用显式结果枚举替代布尔成功/失败 overlay，避免文案与交互逻辑继续分叉。
 - 普通访问仅负责区分“正常 / 异常 / 未识别”；点击卡片时再根据当前问题选择 `Activate / Recover / 失败结果回显`。
+- `EMSHUT` 是比 `XDSG` 更具体的放电阻断原因；UI 先显示 `EMSHUT ACTIVE`，恢复链路则复用放电授权路径并主动发送有效 SBS 通信触发退出。
 - 最近一次失败结果作为只读 UI 状态保存在运行态快照中；成功恢复则直接回到实时自检页，并把“是否自动进入 Dashboard”交给自检清零逻辑统一处理。
 
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）

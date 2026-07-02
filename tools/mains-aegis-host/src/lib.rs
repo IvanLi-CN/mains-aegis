@@ -1,7 +1,7 @@
 #![recursion_limit = "256"]
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, RawQuery, State},
     http::{
         header::{ACCEPT, CONTENT_TYPE},
         HeaderMap, HeaderValue, Method, StatusCode, Uri,
@@ -373,11 +373,11 @@ struct DeviceRecord {
     connection: ConnectionState,
     identity: Option<Value>,
     status: Option<Value>,
-    power_diag: Option<Value>,
+    diag_snapshot: Option<Value>,
     #[serde(skip)]
     status_updated_at: Option<Instant>,
     #[serde(skip)]
-    power_diag_updated_at: Option<Instant>,
+    diag_snapshot_updated_at: Option<Instant>,
     selected_artifact_id: Option<String>,
     log_decode: LogDecodeState,
     settings: DeviceSettingsState,
@@ -399,7 +399,7 @@ struct DeviceListRecord {
     connection: ConnectionState,
     identity: Option<Value>,
     status: Option<Value>,
-    power_diag: Option<Value>,
+    diag_snapshot: Option<Value>,
     selected_artifact_id: Option<String>,
     log_decode: LogDecodeState,
     settings: DeviceSettingsState,
@@ -420,7 +420,7 @@ impl From<&DeviceRecord> for DeviceListRecord {
             connection: value.connection.clone(),
             identity: value.identity.clone(),
             status: value.status.clone(),
-            power_diag: value.power_diag.clone(),
+            diag_snapshot: value.diag_snapshot.clone(),
             selected_artifact_id: value.selected_artifact_id.clone(),
             log_decode: value.log_decode.clone(),
             settings: value.settings.clone(),
@@ -442,7 +442,7 @@ struct ScanDeviceRecord {
     connection: ConnectionState,
     identity: Option<Value>,
     status: Option<Value>,
-    power_diag: Option<Value>,
+    diag_snapshot: Option<Value>,
     selected_artifact_id: Option<String>,
     log_decode: LogDecodeState,
     settings: DeviceSettingsState,
@@ -463,7 +463,7 @@ impl From<&DeviceRecord> for ScanDeviceRecord {
             connection: value.connection.clone(),
             identity: value.identity.clone(),
             status: value.status.clone(),
-            power_diag: value.power_diag.clone(),
+            diag_snapshot: value.diag_snapshot.clone(),
             selected_artifact_id: value.selected_artifact_id.clone(),
             log_decode: value.log_decode.clone(),
             settings: value.settings.clone(),
@@ -801,6 +801,14 @@ struct DeviceReadQuery {
     watch_freshness_ms: Option<u64>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct DeviceDiagSnapshotParams {
+    #[serde(flatten)]
+    read: DeviceReadQuery,
+    #[serde(default, alias = "package")]
+    packages: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct HostPowerProfileRequest {
     profile: String,
@@ -892,7 +900,10 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         .route("/api/v1/devices/{id}/binding", delete(unbind_device))
         .route("/api/v1/devices/{id}/identity", get(device_identity))
         .route("/api/v1/devices/{id}/status", get(device_status))
-        .route("/api/v1/devices/{id}/power-diag", get(device_power_diag))
+        .route(
+            "/api/v1/devices/{id}/diag-snapshot",
+            get(device_diag_snapshot),
+        )
         .route("/api/v1/devices/{id}/connection", get(device_connection))
         .route(
             "/api/v1/devices/{id}/artifact",
@@ -1724,10 +1735,13 @@ async fn dispatch_ipc_request(
             let query = serde_json::from_value(params).unwrap_or_default();
             json_result(device_status(Query(query), State(state.clone()), Path(id)).await)
         }
-        "device.power_diag" => {
+        "device.diag_snapshot" => {
             let id = require_param(&params, "device_id")?;
-            let query = serde_json::from_value(params).unwrap_or_default();
-            json_result(device_power_diag(Query(query), State(state.clone()), Path(id)).await)
+            let params: DeviceDiagSnapshotParams =
+                serde_json::from_value(params).unwrap_or_default();
+            json_result(
+                device_diag_snapshot_inner(params.read, state.clone(), id, params.packages).await,
+            )
         }
         "device.settings" => {
             let id = require_param(&params, "device_id")?;
@@ -2007,9 +2021,9 @@ fn ensure_bound_device_record(state: &AppState, id: &str) -> Result<(), HttpErro
             connection: ConnectionState::Disconnected,
             identity: None,
             status: None,
-            power_diag: None,
+            diag_snapshot: None,
             status_updated_at: None,
-            power_diag_updated_at: None,
+            diag_snapshot_updated_at: None,
             selected_artifact_id,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -2068,9 +2082,9 @@ async fn scan_devices_inner(
                         connection: ConnectionState::Disconnected,
                         identity: None,
                         status: None,
-                        power_diag: None,
+                        diag_snapshot: None,
                         status_updated_at: None,
-                        power_diag_updated_at: None,
+                        diag_snapshot_updated_at: None,
                         selected_artifact_id,
                         log_decode: LogDecodeState::default(),
                         settings: default_settings(),
@@ -2809,9 +2823,9 @@ fn merge_lan_discoveries(
                 connection: ConnectionState::Disconnected,
                 identity: None,
                 status: None,
-                power_diag: None,
+                diag_snapshot: None,
                 status_updated_at: None,
-                power_diag_updated_at: None,
+                diag_snapshot_updated_at: None,
                 selected_artifact_id,
                 log_decode: LogDecodeState::default(),
                 settings: default_settings(),
@@ -3904,10 +3918,21 @@ async fn device_status(
     )))
 }
 
-async fn device_power_diag(
+async fn device_diag_snapshot(
     Query(query): Query<DeviceReadQuery>,
+    RawQuery(raw_query): RawQuery,
     State(state): State<AppState>,
     Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    let packages = diag_snapshot_packages_from_raw_query(raw_query.as_deref());
+    device_diag_snapshot_inner(query, state, id, packages).await
+}
+
+async fn device_diag_snapshot_inner(
+    query: DeviceReadQuery,
+    state: AppState,
+    id: String,
+    packages: Vec<String>,
 ) -> Result<Json<Value>, HttpError> {
     ensure_bound_device_record(&state, &id)?;
     let force_fresh = query.fresh.unwrap_or(false);
@@ -3922,8 +3947,8 @@ async fn device_power_diag(
         lan_address,
         cached_status,
         status_updated_at,
-        cached_power_diag,
-        power_diag_updated_at,
+        cached_diag_snapshot,
+        diag_snapshot_updated_at,
         monitor_running,
     ) = {
         let guard = state.inner.lock().expect("state lock");
@@ -3936,25 +3961,49 @@ async fn device_power_diag(
             device.lan_address.clone(),
             device.status.clone(),
             device.status_updated_at,
-            device.power_diag.clone(),
-            device.power_diag_updated_at,
+            device.diag_snapshot.clone(),
+            device.diag_snapshot_updated_at,
             guard.monitors.contains_key(&id),
         )
     };
+    let cache_can_satisfy_request = diag_snapshot_cache_can_satisfy_packages(&packages);
+    let cache_is_fresh = diag_snapshot_updated_at.is_some_and(|updated_at| {
+        updated_at.elapsed() <= Duration::from_millis(freshness_budget_ms)
+    });
     if !force_fresh {
-        let cache_is_fresh = power_diag_updated_at.is_some_and(|updated_at| {
-            updated_at.elapsed() <= Duration::from_millis(freshness_budget_ms)
-        });
         let status_is_fresh = status_updated_at.is_some_and(|updated_at| {
             updated_at.elapsed() <= Duration::from_millis(freshness_budget_ms)
         });
-        if let Some(status) = cached_status.clone() {
-            if status_is_fresh || allow_stale_cache {
-                let diag = derive_power_diag_from_status(&status, "status_cache_derived");
+        if let Some(diag) = cached_diag_snapshot.clone() {
+            if (cache_is_fresh || allow_stale_cache)
+                && diag_snapshot_value_satisfies_packages(&diag, &packages)
+            {
                 return Ok(Json(device_read_payload(
                     diag,
                     include_meta,
-                    "power_diag",
+                    "diag_snapshot",
+                    diag_snapshot_updated_at,
+                    monitor_running,
+                    &transport,
+                    Some(freshness_budget_ms),
+                )));
+            }
+        }
+        if !cache_can_satisfy_request {
+            if cache_only {
+                return Err(diag_snapshot_cache_unavailable(&id));
+            }
+        } else if let Some(status) = cached_status.clone() {
+            if status_is_fresh || allow_stale_cache {
+                let diag = derive_diag_snapshot_from_status_for_packages(
+                    &status,
+                    "status_cache_derived",
+                    &packages,
+                );
+                return Ok(Json(device_read_payload(
+                    diag,
+                    include_meta,
+                    "diag_snapshot",
                     status_updated_at,
                     monitor_running,
                     &transport,
@@ -3962,20 +4011,10 @@ async fn device_power_diag(
                 )));
             }
         }
-        if let Some(diag) = cached_power_diag.clone() {
-            if cache_is_fresh || allow_stale_cache {
-                return Ok(Json(device_read_payload(
-                    diag,
-                    include_meta,
-                    "power_diag",
-                    power_diag_updated_at,
-                    monitor_running,
-                    &transport,
-                    Some(freshness_budget_ms),
-                )));
-            }
-        }
-        if monitor_running && matches!(transport, DeviceTransport::NativeSerial) {
+        if cache_can_satisfy_request
+            && monitor_running
+            && matches!(transport, DeviceTransport::NativeSerial)
+        {
             if let Some((status, updated_at)) = wait_for_native_monitor_status_snapshot(
                 &state,
                 &id,
@@ -3984,12 +4023,16 @@ async fn device_power_diag(
             )
             .await
             {
-                let diag = derive_power_diag_from_status(&status, "status_cache_derived");
-                update_device_power_diag_snapshot(&state, &id, diag.clone());
+                let diag = derive_diag_snapshot_from_status_for_packages(
+                    &status,
+                    "status_cache_derived",
+                    &packages,
+                );
+                update_device_diag_snapshot(&state, &id, diag.clone());
                 return Ok(Json(device_read_payload(
                     diag,
                     include_meta,
-                    "power_diag",
+                    "diag_snapshot",
                     Some(updated_at),
                     monitor_running,
                     &transport,
@@ -3997,23 +4040,29 @@ async fn device_power_diag(
                 )));
             }
             if allow_stale_cache {
-                if let Some(diag) = cached_power_diag.clone() {
-                    return Ok(Json(device_read_payload(
-                        diag,
-                        include_meta,
-                        "power_diag",
-                        power_diag_updated_at,
-                        monitor_running,
-                        &transport,
-                        Some(freshness_budget_ms),
-                    )));
+                if let Some(diag) = cached_diag_snapshot.clone() {
+                    if diag_snapshot_value_satisfies_packages(&diag, &packages) {
+                        return Ok(Json(device_read_payload(
+                            diag,
+                            include_meta,
+                            "diag_snapshot",
+                            diag_snapshot_updated_at,
+                            monitor_running,
+                            &transport,
+                            Some(freshness_budget_ms),
+                        )));
+                    }
                 }
                 if let Some(status) = cached_status.clone() {
-                    let diag = derive_power_diag_from_status(&status, "status_cache_derived");
+                    let diag = derive_diag_snapshot_from_status_for_packages(
+                        &status,
+                        "status_cache_derived",
+                        &packages,
+                    );
                     return Ok(Json(device_read_payload(
                         diag,
                         include_meta,
-                        "power_diag",
+                        "diag_snapshot",
                         status_updated_at,
                         monitor_running,
                         &transport,
@@ -4022,58 +4071,61 @@ async fn device_power_diag(
                 }
             }
             return Err(HttpError::retryable(
-                "device_power_diag_cache_unavailable",
+                "device_diag_snapshot_cache_unavailable",
                 format!(
-                    "power-diag cache is unavailable or stale for {id}; wait for monitor cache or use --fresh"
+                    "diag-snapshot cache is unavailable or stale for {id}; wait for monitor cache or use --fresh"
                 ),
             ));
         }
         if cache_only {
-            return Err(HttpError::retryable(
-                "device_power_diag_cache_unavailable",
-                format!(
-                    "power-diag cache is unavailable or stale for {id}; start device monitor or use --fresh"
-                ),
-            ));
+            return Err(diag_snapshot_cache_unavailable(&id));
         }
     }
     let diag = if matches!(transport, DeviceTransport::Mock) {
-        mock_power_diag()
+        mock_diag_snapshot()
     } else if matches!(transport, DeviceTransport::Lan) {
         let address = lan_address.ok_or_else(|| {
             HttpError::retryable(
                 "lan_address_missing",
-                format!("power-diag is unavailable for {id}: LAN device has no address"),
+                format!("diag-snapshot is unavailable for {id}: LAN device has no address"),
             )
         })?;
-        match lan_http_json(&address, "GET", "/api/v1/power-diag", None).await {
+        let path = diag_snapshot_lan_path(&packages);
+        match lan_http_json(&address, "GET", path.as_str(), None).await {
             Ok(diag) => diag,
             Err(_) => {
                 let status = match lan_http_json(&address, "GET", "/api/v1/status", None).await {
                     Ok(status) => status,
                     Err(_) => cached_status.ok_or_else(|| {
                         HttpError::retryable(
-                            "power_diag_unavailable",
+                            "diag_snapshot_unavailable",
                             format!(
-                                "power-diag is unavailable for {id}: LAN device did not provide /api/v1/power-diag and no status snapshot was cached"
+                                "diag-snapshot is unavailable for {id}: LAN device did not provide /api/v1/diag-snapshot and no status snapshot was cached"
                             ),
                         )
                     })?,
                 };
+                ensure_diag_snapshot_status_fallback_allowed(&packages)?;
                 update_device_status_snapshot(&state, &id, status.clone());
-                derive_power_diag_from_status(&status, "lan_derived")
+                derive_diag_snapshot_from_status_for_packages(&status, "lan_derived", &packages)
             }
         }
     } else {
-        let (op, request_prefix) = device_power_diag_request();
-        match send_device_cdc_request(&state, &id, op, request_prefix).await {
+        let (op, request_prefix) = device_diag_snapshot_request();
+        let frame = json!({
+            "type": "request",
+            "op": op,
+            "packages": &packages,
+        });
+        match send_device_cdc_request_frame(&state, &id, frame, request_prefix).await {
             Ok(diag) => {
-                update_device_power_diag_snapshot(&state, &id, diag.clone());
+                update_device_diag_snapshot(&state, &id, diag.clone());
                 diag
             }
             Err(error) if error.0.code == "native_cdc_timeout" && lan_address.is_some() => {
                 let address = lan_address.expect("guarded by is_some");
-                match lan_http_json(&address, "GET", "/api/v1/power-diag", None).await {
+                let path = diag_snapshot_lan_path(&packages);
+                match lan_http_json(&address, "GET", path.as_str(), None).await {
                     Ok(diag) => diag,
                     Err(_) => {
                         let status =
@@ -4081,19 +4133,24 @@ async fn device_power_diag(
                                 Ok(status) => status,
                                 Err(_) => cached_status.ok_or(error)?,
                             };
+                        ensure_diag_snapshot_status_fallback_allowed(&packages)?;
                         update_device_status_snapshot(&state, &id, status.clone());
-                        derive_power_diag_from_status(&status, "lan_derived")
+                        derive_diag_snapshot_from_status_for_packages(
+                            &status,
+                            "lan_derived",
+                            &packages,
+                        )
                     }
                 }
             }
             Err(error) => return Err(error),
         }
     };
-    update_device_power_diag_snapshot(&state, &id, diag.clone());
+    update_device_diag_snapshot(&state, &id, diag.clone());
     Ok(Json(device_read_payload(
         diag,
         include_meta,
-        "power_diag",
+        "diag_snapshot",
         Some(Instant::now()),
         monitor_running,
         &transport,
@@ -4101,8 +4158,98 @@ async fn device_power_diag(
     )))
 }
 
-fn device_power_diag_request() -> (&'static str, &'static str) {
-    ("get_power_diag", "devd-power-diag")
+fn device_diag_snapshot_request() -> (&'static str, &'static str) {
+    ("get_diag_snapshot", "devd-diag-snapshot")
+}
+
+fn diag_snapshot_cache_unavailable(id: &str) -> HttpError {
+    HttpError::retryable(
+        "device_diag_snapshot_cache_unavailable",
+        format!(
+            "diag-snapshot cache is unavailable or stale for {id}; use --fresh for a live read"
+        ),
+    )
+}
+
+fn diag_snapshot_cache_can_satisfy_packages(packages: &[String]) -> bool {
+    packages.is_empty()
+        || packages
+            .iter()
+            .all(|package| matches!(package.as_str(), "core" | "derived.power"))
+}
+
+fn ensure_diag_snapshot_status_fallback_allowed(packages: &[String]) -> Result<(), HttpError> {
+    if diag_snapshot_cache_can_satisfy_packages(packages) {
+        return Ok(());
+    }
+    Err(HttpError::retryable(
+        "diag_snapshot_package_unavailable",
+        "requested diag-snapshot packages require native device support and cannot be derived from status",
+    ))
+}
+
+fn diag_snapshot_value_satisfies_packages(diag: &Value, packages: &[String]) -> bool {
+    let Some(package_map) = diag.get("packages").and_then(Value::as_object) else {
+        return false;
+    };
+    if packages.is_empty() {
+        return package_map.contains_key("mcu.runtime")
+            && package_map.contains_key("derived.power");
+    }
+    packages.iter().all(|package| {
+        if package == "core" {
+            package_map.contains_key("mcu.runtime") && package_map.contains_key("derived.power")
+        } else {
+            package_map.contains_key(package)
+        }
+    })
+}
+
+fn diag_snapshot_lan_path(packages: &[String]) -> String {
+    if packages.is_empty() {
+        return "/api/v1/diag-snapshot".to_string();
+    }
+    let mut path = String::from("/api/v1/diag-snapshot?");
+    for (idx, package) in packages.iter().enumerate() {
+        if idx > 0 {
+            path.push('&');
+        }
+        path.push_str("package=");
+        append_query_encoded(&mut path, package);
+    }
+    path
+}
+
+fn diag_snapshot_packages_from_raw_query(raw_query: Option<&str>) -> Vec<String> {
+    let Some(raw_query) = raw_query else {
+        return Vec::new();
+    };
+    raw_query
+        .split('&')
+        .filter_map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let key = percent_decode_query_value(key).ok()?;
+            if key != "package" && key != "packages" {
+                return None;
+            }
+            percent_decode_query_value(value)
+                .ok()
+                .filter(|value| !value.is_empty())
+        })
+        .collect()
+}
+
+fn append_query_encoded(out: &mut String, value: &str) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_') {
+            out.push(byte as char);
+        } else {
+            out.push('%');
+            out.push(HEX[(byte >> 4) as usize] as char);
+            out.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
 }
 
 fn device_read_payload(
@@ -4844,8 +4991,8 @@ fn invalidate_device_runtime_after_firmware_change(state: &AppState, device_id: 
             device.identity = None;
             device.status = None;
             device.status_updated_at = None;
-            device.power_diag = None;
-            device.power_diag_updated_at = None;
+            device.diag_snapshot = None;
+            device.diag_snapshot_updated_at = None;
             device.settings = default_settings();
             apply_artifact_match(device, None);
             push_log(
@@ -4934,7 +5081,7 @@ async fn device_trace(
         "protocol": "mains-aegis.cdc.v1",
         "identity": device.identity,
         "status": device.status,
-        "power_diag": device.power_diag,
+        "diag_snapshot": device.diag_snapshot,
         "log_count": device.logs.len(),
         "trace_count": device.trace.len(),
         "logs": tail(&device.logs, query.logs_limit.unwrap_or(200).min(500)),
@@ -4956,7 +5103,7 @@ async fn devd_compat_session(
         "protocol": "mains-aegis.cdc.v1",
         "identity": device.identity,
         "status": device.status,
-        "power_diag": device.power_diag,
+        "diag_snapshot": device.diag_snapshot,
         "log_count": device.logs.len(),
         "trace_count": device.trace.len(),
         "logs": tail(&device.logs, query.logs_limit.unwrap_or(200).min(500)),
@@ -5112,6 +5259,21 @@ async fn send_device_cdc_request(
     op: &str,
     request_prefix: &str,
 ) -> Result<Value, HttpError> {
+    send_device_cdc_request_frame(
+        state,
+        device_id,
+        json!({"type": "request", "op": op}),
+        request_prefix,
+    )
+    .await
+}
+
+async fn send_device_cdc_request_frame(
+    state: &AppState,
+    device_id: &str,
+    mut frame: Value,
+    request_prefix: &str,
+) -> Result<Value, HttpError> {
     let (port_path, monitor_command_tx) = {
         let guard = state.inner.lock().expect("state lock");
         let device = guard
@@ -5133,7 +5295,7 @@ async fn send_device_cdc_request(
         )
     };
     let request_id = format!("{request_prefix}-{}", Utc::now().timestamp_millis());
-    let frame = json!({"type": "request", "request_id": request_id, "op": op});
+    frame["request_id"] = json!(request_id);
     let response = if let Some(command_tx) = monitor_command_tx {
         match send_monitor_cdc_frame_async(command_tx, frame.clone(), request_id.clone()).await {
             Ok(response) => response,
@@ -5166,6 +5328,7 @@ async fn send_device_cdc_request(
         return Err(error_from_cdc_response(&response));
     }
     response.get("result").cloned().ok_or_else(|| {
+        let op = frame.get("op").and_then(Value::as_str).unwrap_or("request");
         HttpError::retryable(
             "cdc_response_missing_result",
             format!("CDC {op} response did not include result"),
@@ -5690,9 +5853,9 @@ fn update_device_status_record(
             let updated_at = Instant::now();
             device.status = Some(status.clone());
             device.status_updated_at = Some(updated_at);
-            let derived_power_diag = derive_power_diag_from_status(status, "monitor_status");
-            device.power_diag = Some(derived_power_diag.clone());
-            device.power_diag_updated_at = Some(updated_at);
+            let derived_diag_snapshot = derive_diag_snapshot_from_status(status, "monitor_status");
+            device.diag_snapshot = Some(derived_diag_snapshot.clone());
+            device.diag_snapshot_updated_at = Some(updated_at);
             power_event = maybe_record_power_event(device, status);
             if let Some((trace, _)) = power_event.as_ref() {
                 push_bounded(&mut device.trace, trace.clone(), LOG_LIMIT);
@@ -5704,23 +5867,69 @@ fn update_device_status_record(
     power_event
 }
 
-fn update_device_power_diag_snapshot(state: &AppState, device_id: &str, power_diag: Value) {
+fn update_device_diag_snapshot(state: &AppState, device_id: &str, diag_snapshot: Value) {
     let mut guard = state.inner.lock().expect("state lock");
     if let Some(device) = guard.devices.get_mut(device_id) {
-        device.power_diag = Some(power_diag.clone());
-        device.power_diag_updated_at = Some(Instant::now());
+        device.diag_snapshot = Some(diag_snapshot.clone());
+        device.diag_snapshot_updated_at = Some(Instant::now());
     }
     drop(guard);
     emit(
         state,
         Some(device_id.to_string()),
-        "power_diag",
-        "power diagnostic snapshot",
-        json!({"power_diag": power_diag}),
+        "diag_snapshot",
+        "diagnostic snapshot",
+        json!({"diag_snapshot": diag_snapshot}),
     );
 }
 
-fn derive_power_diag_from_status(status: &Value, source: &str) -> Value {
+fn derive_diag_snapshot_from_status_for_packages(
+    status: &Value,
+    source: &str,
+    packages: &[String],
+) -> Value {
+    let derived = derive_diag_snapshot_from_status(status, source);
+    if packages.len() == 1
+        && packages
+            .first()
+            .is_some_and(|package| package == "derived.power")
+    {
+        return derived;
+    }
+    let derived_power = derived
+        .get("packages")
+        .and_then(|packages| packages.get("derived.power"))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "ok": false,
+                "source": source,
+                "duration_ms": 0,
+                "payload": {}
+            })
+        });
+    json!({
+        "packages": {
+            "mcu.runtime": {
+                "ok": true,
+                "source": "status_cache",
+                "duration_ms": 0,
+                "payload": {
+                    "mode": status.get("mode").cloned().unwrap_or(Value::Null),
+                    "requested_outputs": status.pointer("/output/requested").cloned().unwrap_or(Value::Null),
+                    "active_outputs": status.pointer("/output/active").cloned().unwrap_or(Value::Null),
+                    "recoverable_outputs": status.pointer("/output/recoverable").cloned().unwrap_or(Value::Null),
+                    "output_gate_reason": status.pointer("/output/gate_reason").cloned().unwrap_or(Value::Null),
+                    "input_source": status.pointer("/input/source").cloned().unwrap_or(Value::Null)
+                }
+            },
+            "derived.power": derived_power
+        },
+        "errors": {}
+    })
+}
+
+fn derive_diag_snapshot_from_status(status: &Value, source: &str) -> Value {
     let input = status.get("input").cloned().unwrap_or(Value::Null);
     let charger = status.get("charger").cloned().unwrap_or(Value::Null);
     let battery = status.get("battery").cloned().unwrap_or(Value::Null);
@@ -5755,7 +5964,7 @@ fn derive_power_diag_from_status(status: &Value, source: &str) -> Value {
     } else {
         Value::Null
     };
-    json!({
+    let derived_power = json!({
         "source": source,
         "input": {
             "source": input.get("source").cloned().unwrap_or_else(|| json!("unknown")),
@@ -5906,6 +6115,17 @@ fn derive_power_diag_from_status(status: &Value, source: &str) -> Value {
             "charging_hv": Value::Null,
             "current_at_eoc_ma": Value::Null
         }
+    });
+    json!({
+        "packages": {
+            "derived.power": {
+                "ok": true,
+                "source": source,
+                "duration_ms": 0,
+                "payload": derived_power
+            }
+        },
+        "errors": {}
     })
 }
 
@@ -6498,7 +6718,7 @@ async fn devices_events(
         while let Ok(event) = receiver.recv().await {
             if matches!(
                 event.kind.as_str(),
-                "scan" | "bind" | "unbind" | "connect" | "disconnect" | "artifact" | "flash" | "reset" | "power_diag"
+                "scan" | "bind" | "unbind" | "connect" | "disconnect" | "artifact" | "flash" | "reset" | "diag_snapshot"
             ) {
                 yield Ok(Event::default().event(event.kind.clone()).id(event.id.clone()).json_data(event).expect("serialize event"));
             }
@@ -6896,8 +7116,8 @@ fn seed_mock_device(state: &AppState) {
         identity: Some(mock_identity(&id)),
         status: None,
         status_updated_at: None,
-        power_diag: None,
-        power_diag_updated_at: None,
+        diag_snapshot: None,
+        diag_snapshot_updated_at: None,
         selected_artifact_id,
         log_decode: LogDecodeState::default(),
         settings: default_settings(),
@@ -7102,8 +7322,14 @@ fn mock_identity(id: &str) -> Value {
     })
 }
 
-fn mock_power_diag() -> Value {
+fn mock_diag_snapshot() -> Value {
     json!({
+        "packages": {
+            "derived.power": {
+                "ok": true,
+                "source": "mock",
+                "duration_ms": 0,
+                "payload": {
         "input": {
             "mains_present": null,
             "input_vbus_mv": null,
@@ -7220,7 +7446,10 @@ fn mock_power_diag() -> Value {
             "charging_suspend": null,
             "charging_hv": null,
             "current_at_eoc_ma": null
-        }
+        }}
+            }
+        },
+        "errors": {}
     })
 }
 
@@ -7901,9 +8130,10 @@ fn append_monitor_trace(
                 let updated_at = Instant::now();
                 device.status = Some(status.clone());
                 device.status_updated_at = Some(updated_at);
-                let derived_power_diag = derive_power_diag_from_status(&status, "monitor_status");
-                device.power_diag = Some(derived_power_diag);
-                device.power_diag_updated_at = Some(updated_at);
+                let derived_diag_snapshot =
+                    derive_diag_snapshot_from_status(&status, "monitor_status");
+                device.diag_snapshot = Some(derived_diag_snapshot);
+                device.diag_snapshot_updated_at = Some(updated_at);
                 power_event = maybe_record_power_event(device, &status);
                 if let Some((trace, _)) = power_event.as_ref() {
                     push_bounded(&mut device.trace, trace.clone(), LOG_LIMIT);
@@ -8865,6 +9095,10 @@ impl IntoResponse for HttpError {
 mod tests {
     use super::*;
 
+    fn derived_power_payload(diag: &Value) -> &Value {
+        &diag["packages"]["derived.power"]["payload"]
+    }
+
     #[test]
     fn service_event_token_query_decodes_urlsafe_tokens() {
         let uri: Uri = "/api/v1/serial/events?lease_id=abc&bridge_token=a%2Bb%3D%3D"
@@ -9270,7 +9504,7 @@ mod tests {
     #[tokio::test]
     async fn monitor_start_returns_already_running_without_reopening_serial_port() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         {
             let mut guard = state.inner.lock().expect("state lock");
             guard.devices.insert(
@@ -9278,18 +9512,18 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Connected,
-                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
                     status: None,
                     status_updated_at: None,
-                    power_diag: None,
-                    power_diag_updated_at: None,
+                    diag_snapshot: None,
+                    diag_snapshot_updated_at: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
                     settings: default_settings(),
@@ -9335,7 +9569,7 @@ mod tests {
     #[tokio::test]
     async fn monitor_command_failure_removes_and_stops_monitor() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         let stop = Arc::new(AtomicBool::new(false));
         let done = Arc::new(AtomicBool::new(true));
         {
@@ -9345,18 +9579,18 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Connected,
-                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
                     status: None,
                     status_updated_at: None,
-                    power_diag: None,
-                    power_diag_updated_at: None,
+                    diag_snapshot: None,
+                    diag_snapshot_updated_at: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
                     settings: default_settings(),
@@ -9397,7 +9631,7 @@ mod tests {
     #[tokio::test]
     async fn device_status_does_not_return_stale_monitor_cache() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         {
             let mut guard = state.inner.lock().expect("state lock");
             guard.devices.insert(
@@ -9405,18 +9639,18 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Connected,
-                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
                     status: Some(json!({"mode":"standby"})),
                     status_updated_at: Some(Instant::now() - Duration::from_secs(5)),
-                    power_diag: None,
-                    power_diag_updated_at: None,
+                    diag_snapshot: None,
+                    diag_snapshot_updated_at: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
                     settings: default_settings(),
@@ -9459,7 +9693,7 @@ mod tests {
     #[tokio::test]
     async fn device_status_watch_can_return_stale_monitor_cache_with_meta() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         {
             let mut guard = state.inner.lock().expect("state lock");
             guard.devices.insert(
@@ -9467,18 +9701,18 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Connected,
-                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
                     status: Some(json!({"mode":"standby"})),
                     status_updated_at: Some(Instant::now() - Duration::from_secs(5)),
-                    power_diag: None,
-                    power_diag_updated_at: None,
+                    diag_snapshot: None,
+                    diag_snapshot_updated_at: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
                     settings: default_settings(),
@@ -9521,7 +9755,7 @@ mod tests {
     #[tokio::test]
     async fn bound_native_device_record_materializes_without_scan() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         {
             let mut guard = state.inner.lock().expect("state lock");
             guard.bindings.insert(
@@ -9529,7 +9763,7 @@ mod tests {
                 DeviceBinding {
                     alias: Some("hil".into()),
                     stable_id: device_id.clone(),
-                    port_path: Some("/dev/cu.usbmodem-bound".into()),
+                    port_path: Some("/tmp/fixture-usb-bound".into()),
                     created_at: "now".into(),
                     logical_device_id: None,
                     lan_companion: None,
@@ -9541,15 +9775,15 @@ mod tests {
 
         let guard = state.inner.lock().expect("state lock");
         let device = guard.devices.get(&device_id).unwrap();
-        assert_eq!(device.port_path.as_deref(), Some("/dev/cu.usbmodem-bound"));
+        assert_eq!(device.port_path.as_deref(), Some("/tmp/fixture-usb-bound"));
         assert!(matches!(device.transport, DeviceTransport::NativeSerial));
         assert_eq!(device.binding.as_ref().unwrap().stable_id, device_id);
     }
 
     #[tokio::test]
-    async fn device_status_and_power_diag_prefer_monitor_cache_when_monitor_is_running() {
+    async fn device_status_and_diag_snapshot_prefer_monitor_cache_when_monitor_is_running() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         let new_status = json!({
             "input": {
                 "source": "dcin",
@@ -9570,18 +9804,18 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Connected,
-                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
                     status: Some(json!({"mode":"standby"})),
                     status_updated_at: Some(Instant::now() - Duration::from_secs(5)),
-                    power_diag: None,
-                    power_diag_updated_at: None,
+                    diag_snapshot: None,
+                    diag_snapshot_updated_at: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
                     settings: default_settings(),
@@ -9611,29 +9845,37 @@ mod tests {
         .unwrap();
         assert_eq!(status_response.0["input"]["vin_vbus_mv"], 12010);
 
-        let diag_response = device_power_diag(
-            Query(DeviceReadQuery {
+        let diag_response = device_diag_snapshot_inner(
+            DeviceReadQuery {
                 include_meta: Some(true),
                 ..DeviceReadQuery::default()
-            }),
-            State(state.clone()),
-            Path(device_id.clone()),
+            },
+            state.clone(),
+            device_id.clone(),
+            vec!["derived.power".to_string()],
         )
         .await
         .unwrap();
-        assert_eq!(diag_response.0["sample"]["source"], "status_cache_derived");
-        assert_eq!(diag_response.0["sample"]["input"]["vin_vbus_mv"], 12010);
+        assert_eq!(
+            diag_response.0["sample"]["packages"]["derived.power"]["payload"]["source"],
+            "monitor_status"
+        );
+        assert_eq!(
+            diag_response.0["sample"]["packages"]["derived.power"]["payload"]["input"]
+                ["vin_vbus_mv"],
+            12010
+        );
         assert_eq!(diag_response.0["meta"]["cache_fresh"], true);
         assert_eq!(diag_response.0["meta"]["sample_fresh"], true);
         let guard = state.inner.lock().expect("state lock");
         let device = guard.devices.get(&device_id).unwrap();
-        assert!(device.power_diag_updated_at.is_some());
+        assert!(device.diag_snapshot_updated_at.is_some());
     }
 
     #[tokio::test]
-    async fn device_power_diag_derives_from_fresh_status_cache() {
+    async fn device_diag_snapshot_derives_from_fresh_status_cache() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         let status = json!({
             "input": {
                 "source": "dcin",
@@ -9658,18 +9900,18 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
                     transport: DeviceTransport::NativeSerial,
                     binding: None,
                     connection: ConnectionState::Connected,
-                    identity: Some(json!({"device_id": "mains-aegis-198840"})),
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
                     status: Some(status),
                     status_updated_at: Some(Instant::now()),
-                    power_diag: None,
-                    power_diag_updated_at: None,
+                    diag_snapshot: None,
+                    diag_snapshot_updated_at: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
                     settings: default_settings(),
@@ -9680,31 +9922,212 @@ mod tests {
             );
         }
 
-        let response = device_power_diag(
-            Query(DeviceReadQuery {
+        let response = device_diag_snapshot_inner(
+            DeviceReadQuery {
                 include_meta: Some(true),
                 watch_freshness_ms: Some(333),
                 ..DeviceReadQuery::default()
-            }),
-            State(state),
-            Path(device_id),
+            },
+            state,
+            device_id,
+            vec!["derived.power".to_string()],
         )
         .await
         .unwrap();
 
-        assert_eq!(response.0["sample"]["source"], "status_cache_derived");
-        assert_eq!(response.0["sample"]["input"]["vin_vbus_mv"], 11980);
-        assert_eq!(response.0["sample"]["input"]["tps_total_iout_ma"], 12);
+        assert_eq!(
+            response.0["sample"]["packages"]["derived.power"]["payload"]["source"],
+            "status_cache_derived"
+        );
+        assert_eq!(
+            response.0["sample"]["packages"]["derived.power"]["payload"]["input"]["vin_vbus_mv"],
+            11980
+        );
+        assert_eq!(
+            response.0["sample"]["packages"]["derived.power"]["payload"]["input"]
+                ["tps_total_iout_ma"],
+            12
+        );
         assert_eq!(response.0["meta"]["cache_fresh"], true);
         assert_eq!(response.0["meta"]["sample_fresh"], true);
     }
 
     #[test]
-    fn device_power_diag_request_uses_power_diag_op() {
+    fn derives_core_diag_snapshot_from_status_cache() {
+        let status = json!({
+            "mode": "standby",
+            "input": {
+                "source": "dcin",
+                "mains_present": true,
+                "vin_vbus_mv": 11980
+            },
+            "output": {
+                "requested": "a",
+                "active": "none",
+                "recoverable": "a",
+                "gate_reason": "bms_discharge_block"
+            },
+            "charger": {
+                "allow_charge": true
+            }
+        });
+        let diag =
+            derive_diag_snapshot_from_status_for_packages(&status, "status_cache_derived", &[]);
+
         assert_eq!(
-            device_power_diag_request(),
-            ("get_power_diag", "devd-power-diag")
+            diag["packages"]["mcu.runtime"]["payload"]["mode"],
+            "standby"
         );
+        assert_eq!(
+            diag["packages"]["mcu.runtime"]["payload"]["output_gate_reason"],
+            "bms_discharge_block"
+        );
+        assert_eq!(
+            diag["packages"]["derived.power"]["payload"]["source"],
+            "status_cache_derived"
+        );
+    }
+
+    #[test]
+    fn device_diag_snapshot_request_uses_diag_snapshot_op() {
+        assert_eq!(
+            device_diag_snapshot_request(),
+            ("get_diag_snapshot", "devd-diag-snapshot")
+        );
+    }
+
+    #[test]
+    fn diag_snapshot_cache_only_satisfies_derived_packages() {
+        assert!(diag_snapshot_cache_can_satisfy_packages(&[]));
+        assert!(diag_snapshot_cache_can_satisfy_packages(&[
+            "core".to_string()
+        ]));
+        assert!(diag_snapshot_cache_can_satisfy_packages(&[
+            "derived.power".to_string()
+        ]));
+        assert!(!diag_snapshot_cache_can_satisfy_packages(&[
+            "bq40.manufacturing".to_string()
+        ]));
+        assert!(!diag_snapshot_cache_can_satisfy_packages(&[
+            "derived.power".to_string(),
+            "bq25792.regs".to_string()
+        ]));
+    }
+
+    #[test]
+    fn diag_snapshot_status_fallback_rejects_native_packages() {
+        assert!(ensure_diag_snapshot_status_fallback_allowed(&[]).is_ok());
+        assert!(ensure_diag_snapshot_status_fallback_allowed(&["core".to_string()]).is_ok());
+        assert!(
+            ensure_diag_snapshot_status_fallback_allowed(&["derived.power".to_string()]).is_ok()
+        );
+
+        let error = ensure_diag_snapshot_status_fallback_allowed(&[
+            "bq40.manufacturing".to_string(),
+            "derived.power".to_string(),
+        ])
+        .unwrap_err();
+
+        assert_eq!(error.0.code, "diag_snapshot_package_unavailable");
+    }
+
+    #[test]
+    fn diag_snapshot_cached_value_must_contain_requested_packages() {
+        let derived_only = json!({
+            "packages": {
+                "derived.power": {"ok": true, "payload": {}}
+            },
+            "errors": {}
+        });
+        let core = json!({
+            "packages": {
+                "mcu.runtime": {"ok": true, "payload": {}},
+                "derived.power": {"ok": true, "payload": {}}
+            },
+            "errors": {}
+        });
+
+        assert!(diag_snapshot_value_satisfies_packages(
+            &derived_only,
+            &["derived.power".to_string()]
+        ));
+        assert!(!diag_snapshot_value_satisfies_packages(
+            &derived_only,
+            &["bq40.manufacturing".to_string()]
+        ));
+        assert!(!diag_snapshot_value_satisfies_packages(&derived_only, &[]));
+        assert!(diag_snapshot_value_satisfies_packages(&core, &[]));
+        assert!(diag_snapshot_value_satisfies_packages(
+            &core,
+            &["core".to_string()]
+        ));
+    }
+
+    #[test]
+    fn diag_snapshot_query_parses_repeated_package_keys() {
+        assert_eq!(
+            diag_snapshot_packages_from_raw_query(Some(
+                "fresh=true&package=bq25792.regs&package=bq40.manufacturing&packages=derived.power"
+            )),
+            vec![
+                "bq25792.regs".to_string(),
+                "bq40.manufacturing".to_string(),
+                "derived.power".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_only_diag_snapshot_rejects_uncached_native_packages() {
+        let state = create_app_state(false);
+        let device_id = "serial-native";
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.devices.insert(
+                device_id.into(),
+                DeviceRecord {
+                    id: device_id.into(),
+                    display_name: "USB CDC".into(),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Connected,
+                    identity: None,
+                    status: None,
+                    diag_snapshot: Some(json!({
+                        "packages": {
+                            "derived.power": {"ok": true, "payload": {}}
+                        },
+                        "errors": {}
+                    })),
+                    status_updated_at: None,
+                    diag_snapshot_updated_at: Some(Instant::now()),
+                    selected_artifact_id: None,
+                    log_decode: LogDecodeState::default(),
+                    settings: default_settings(),
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                    last_power_event_signature: None,
+                },
+            );
+        }
+
+        let error = device_diag_snapshot_inner(
+            DeviceReadQuery {
+                cache_only: Some(true),
+                ..DeviceReadQuery::default()
+            },
+            state,
+            device_id.into(),
+            vec!["bq40.manufacturing".into()],
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.0.code, "device_diag_snapshot_cache_unavailable");
     }
 
     #[tokio::test]
@@ -9805,7 +10228,7 @@ mod tests {
     #[tokio::test]
     async fn monitor_trace_does_not_mark_identityless_device_connected() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367";
+        let device_id = "fixture-ups-device";
         {
             let mut guard = state.inner.lock().expect("state lock");
             guard.devices.insert(
@@ -9813,7 +10236,7 @@ mod tests {
                 DeviceRecord {
                     id: device_id.to_string(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
@@ -9822,9 +10245,9 @@ mod tests {
                     connection: ConnectionState::Error,
                     identity: None,
                     status: None,
-                    power_diag: None,
+                    diag_snapshot: None,
                     status_updated_at: None,
-                    power_diag_updated_at: None,
+                    diag_snapshot_updated_at: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
                     settings: default_settings(),
@@ -9854,7 +10277,7 @@ mod tests {
     #[test]
     fn stable_device_id_is_deterministic() {
         let port = serialport::SerialPortInfo {
-            port_name: "/dev/cu.usbmodem1".into(),
+            port_name: "/tmp/fixture-usb-a".into(),
             port_type: serialport::SerialPortType::Unknown,
         };
         assert_eq!(stable_device_id(&port), stable_device_id(&port));
@@ -9862,18 +10285,18 @@ mod tests {
 
     #[test]
     fn stable_device_id_distinguishes_no_serial_usb_ports() {
-        let mut left = usb_port("/dev/cu.usbmodem1", None);
-        let right = usb_port("/dev/cu.usbmodem2", None);
+        let mut left = usb_port("/tmp/fixture-usb-a", None);
+        let right = usb_port("/tmp/fixture-usb-b", None);
         assert_ne!(stable_device_id(&left), stable_device_id(&right));
 
-        left.port_name = "/dev/cu.usbmodem2".into();
+        left.port_name = "/tmp/fixture-usb-b".into();
         assert_eq!(stable_device_id(&left), stable_device_id(&right));
     }
 
     #[test]
     fn stable_device_id_uses_usb_serial_over_port_path() {
-        let left = usb_port("/dev/cu.usbmodem1", Some("board-a"));
-        let right = usb_port("/dev/cu.usbmodem2", Some("board-a"));
+        let left = usb_port("/tmp/fixture-usb-a", Some("board-a"));
+        let right = usb_port("/tmp/fixture-usb-b", Some("board-a"));
         assert_eq!(stable_device_id(&left), stable_device_id(&right));
     }
 
@@ -9882,7 +10305,7 @@ mod tests {
         let device = DeviceRecord {
             id: "mains-aegis-abc123".into(),
             display_name: "USB CDC".into(),
-            port_path: Some("/dev/cu.usbmodem1".into()),
+            port_path: Some("/tmp/fixture-usb-a".into()),
             lan_address: None,
             lan_conflict_addresses: Vec::new(),
             companion_lan_candidate: None,
@@ -9890,7 +10313,7 @@ mod tests {
             binding: Some(DeviceBinding {
                 alias: None,
                 stable_id: "serial-a".into(),
-                port_path: Some("/dev/cu.usbmodem1".into()),
+                port_path: Some("/tmp/fixture-usb-a".into()),
                 created_at: "now".into(),
                 logical_device_id: Some("mains-aegis-abc123".into()),
                 lan_companion: None,
@@ -9899,8 +10322,8 @@ mod tests {
             identity: None,
             status: None,
             status_updated_at: None,
-            power_diag: None,
-            power_diag_updated_at: None,
+            diag_snapshot: None,
+            diag_snapshot_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -9930,7 +10353,7 @@ mod tests {
                 DeviceRecord {
                     id: "native-a".into(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem1".into()),
+                    port_path: Some("/tmp/fixture-usb-a".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
@@ -9940,8 +10363,8 @@ mod tests {
                     identity: None,
                     status: None,
                     status_updated_at: None,
-                    power_diag: None,
-                    power_diag_updated_at: None,
+                    diag_snapshot: None,
+                    diag_snapshot_updated_at: None,
                     selected_artifact_id: None,
                     log_decode: LogDecodeState::default(),
                     settings: default_settings(),
@@ -9957,7 +10380,7 @@ mod tests {
             Path("native-a".into()),
             Json(BindRequest {
                 alias: Some("Bench unit".into()),
-                logical_device_id: Some("mains-aegis-198840".into()),
+                logical_device_id: Some("fixture-mains-aegis".into()),
             }),
         )
         .await
@@ -9973,10 +10396,10 @@ mod tests {
         let guard = restarted.inner.lock().expect("state lock");
         let binding = guard.bindings.get("native-a").unwrap();
         assert_eq!(binding.alias.as_deref(), Some("Bench unit"));
-        assert_eq!(binding.port_path.as_deref(), Some("/dev/cu.usbmodem1"));
+        assert_eq!(binding.port_path.as_deref(), Some("/tmp/fixture-usb-a"));
         assert_eq!(
             binding.logical_device_id.as_deref(),
-            Some("mains-aegis-198840")
+            Some("fixture-mains-aegis")
         );
     }
 
@@ -9999,7 +10422,7 @@ mod tests {
                 stable_id: "mock-devkit".into(),
                 port_path: None,
                 created_at: "now".into(),
-                logical_device_id: Some("mains-aegis-198840".into()),
+                logical_device_id: Some("fixture-mains-aegis".into()),
                 lan_companion: None,
             };
             let device = guard.devices.get_mut("mock-devkit").unwrap();
@@ -10036,7 +10459,7 @@ mod tests {
                         DeviceBinding {
                             alias: Some(format!("Device {index}")),
                             stable_id: format!("device-{index}"),
-                            port_path: Some(format!("/dev/cu.usbmodem{index}")),
+                            port_path: Some(format!("/tmp/fixture-usb-{index}")),
                             created_at: "now".into(),
                             logical_device_id: Some(format!("logical-{index}")),
                             lan_companion: None,
@@ -10064,27 +10487,33 @@ mod tests {
     }
 
     #[test]
-    fn prefer_serial_port_path_uses_cu_on_macos() {
+    fn prefer_serial_port_path_uses_higher_scored_path() {
         assert_eq!(
-            prefer_serial_port_path(Some("/dev/tty.usbmodem1"), "/dev/cu.usbmodem1"),
-            "/dev/cu.usbmodem1"
+            prefer_serial_port_path(Some("/mock/tty.fixture-a"), "/mock/cu.fixture-a"),
+            "/mock/cu.fixture-a"
         );
         assert_eq!(
-            prefer_serial_port_path(Some("/dev/cu.usbmodem1"), "/dev/tty.usbmodem1"),
-            "/dev/cu.usbmodem1"
+            prefer_serial_port_path(Some("/mock/cu.fixture-a"), "/mock/tty.fixture-a"),
+            "/mock/cu.fixture-a"
         );
     }
 
     #[test]
     fn native_usb_serial_candidate_filters_virtual_ports() {
         assert!(is_native_usb_serial_candidate(&usb_port(
-            "/dev/cu.usbmodem1",
+            "/tmp/fixture-usb-a",
             Some("board-a")
         )));
         assert!(is_native_usb_serial_candidate(
             &serialport::SerialPortInfo {
-                port_name: "/dev/cu.usbmodem212101".into(),
-                port_type: serialport::SerialPortType::Unknown,
+                port_name: "/tmp/fixture-load-usb-port".into(),
+                port_type: serialport::SerialPortType::UsbPort(serialport::UsbPortInfo {
+                    vid: 0x303a,
+                    pid: 0x1001,
+                    serial_number: Some("fixture".into()),
+                    manufacturer: None,
+                    product: None,
+                }),
             }
         ));
         assert!(!is_native_usb_serial_candidate(
@@ -10182,7 +10611,7 @@ mod tests {
             DeviceRecord {
                 id: "serial-a".into(),
                 display_name: "USB CDC".into(),
-                port_path: Some("/dev/cu.usbmodem1".into()),
+                port_path: Some("/tmp/fixture-usb-a".into()),
                 lan_address: None,
                 lan_conflict_addresses: Vec::new(),
                 companion_lan_candidate: None,
@@ -10192,8 +10621,8 @@ mod tests {
                 identity: Some(json!({"device_id": "mains-aegis-abc123"})),
                 status: None,
                 status_updated_at: None,
-                power_diag: None,
-                power_diag_updated_at: None,
+                diag_snapshot: None,
+                diag_snapshot_updated_at: None,
                 selected_artifact_id: None,
                 log_decode: LogDecodeState::default(),
                 settings: default_settings(),
@@ -10242,7 +10671,7 @@ mod tests {
             DeviceRecord {
                 id: "serial-a".into(),
                 display_name: "USB CDC".into(),
-                port_path: Some("/dev/cu.usbmodem1".into()),
+                port_path: Some("/tmp/fixture-usb-a".into()),
                 lan_address: None,
                 lan_conflict_addresses: Vec::new(),
                 companion_lan_candidate: None,
@@ -10250,7 +10679,7 @@ mod tests {
                 binding: Some(DeviceBinding {
                     alias: Some("Bench unit".into()),
                     stable_id: "serial-a".into(),
-                    port_path: Some("/dev/cu.usbmodem1".into()),
+                    port_path: Some("/tmp/fixture-usb-a".into()),
                     created_at: "now".into(),
                     logical_device_id: Some("mains-aegis-abc123".into()),
                     lan_companion: None,
@@ -10259,8 +10688,8 @@ mod tests {
                 identity: None,
                 status: None,
                 status_updated_at: None,
-                power_diag: None,
-                power_diag_updated_at: None,
+                diag_snapshot: None,
+                diag_snapshot_updated_at: None,
                 selected_artifact_id: None,
                 log_decode: LogDecodeState::default(),
                 settings: default_settings(),
@@ -10300,7 +10729,7 @@ mod tests {
         let device = DeviceRecord {
             id: "serial-a".into(),
             display_name: "USB CDC".into(),
-            port_path: Some("/dev/cu.usbmodem1".into()),
+            port_path: Some("/tmp/fixture-usb-a".into()),
             lan_address: Some("192.168.4.25".into()),
             lan_conflict_addresses: Vec::new(),
             companion_lan_candidate: None,
@@ -10310,8 +10739,8 @@ mod tests {
             identity: Some(json!({"device_id": "mains-aegis-abc123"})),
             status: None,
             status_updated_at: None,
-            power_diag: None,
-            power_diag_updated_at: None,
+            diag_snapshot: None,
+            diag_snapshot_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -10355,7 +10784,7 @@ mod tests {
             DeviceRecord {
                 id: "serial-a".into(),
                 display_name: "USB CDC".into(),
-                port_path: Some("/dev/cu.usbmodem1".into()),
+                port_path: Some("/tmp/fixture-usb-a".into()),
                 lan_address: Some("192.168.4.25".into()),
                 lan_conflict_addresses: Vec::new(),
                 companion_lan_candidate: None,
@@ -10365,8 +10794,8 @@ mod tests {
                 identity: Some(json!({"device_id": "mains-aegis-abc123"})),
                 status: None,
                 status_updated_at: None,
-                power_diag: None,
-                power_diag_updated_at: None,
+                diag_snapshot: None,
+                diag_snapshot_updated_at: None,
                 selected_artifact_id: None,
                 log_decode: LogDecodeState::default(),
                 settings: default_settings(),
@@ -10466,7 +10895,7 @@ mod tests {
         let response = b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\r\n{\"error\":{\"code\":\"not_found\"}}";
 
         let error =
-            parse_lan_http_json_response(response, "GET", "/api/v1/power-diag", "192.168.4.25")
+            parse_lan_http_json_response(response, "GET", "/api/v1/diag-snapshot", "192.168.4.25")
                 .unwrap_err();
 
         assert_eq!(error.0.code, "lan_http_status_failed");
@@ -10478,7 +10907,7 @@ mod tests {
     }
 
     #[test]
-    fn derives_power_diag_from_status_preserves_tps_limit_reason() {
+    fn derives_diag_snapshot_from_status_preserves_tps_limit_reason() {
         let status = json!({
             "input": {
                 "source": "dcin",
@@ -10524,25 +10953,46 @@ mod tests {
             }
         });
 
-        let diag = derive_power_diag_from_status(&status, "lan_derived");
+        let diag = derive_diag_snapshot_from_status(&status, "lan_derived");
 
-        assert_eq!(diag["source"], "lan_derived");
-        assert_eq!(diag["input"]["pressure_reason"], "tps_output_current");
-        assert_eq!(diag["input"]["assist_power_stage"], "assist_rated");
-        assert_eq!(diag["input"]["assist_target_vout_mv"], 12000);
-        assert_eq!(diag["input"]["tps_total_iout_ma"], 288);
-        assert_eq!(diag["charger"]["allow_charge"], false);
-        assert_eq!(diag["charger"]["poorsrc"], false);
-        assert_eq!(diag["policy"]["limit_reason"], "cooldown_retry_wait");
+        assert_eq!(derived_power_payload(&diag)["source"], "lan_derived");
         assert_eq!(
-            diag["policy"]["limit_detail"],
+            derived_power_payload(&diag)["input"]["pressure_reason"],
+            "tps_output_current"
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["input"]["assist_power_stage"],
+            "assist_rated"
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["input"]["assist_target_vout_mv"],
+            12000
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["input"]["tps_total_iout_ma"],
+            288
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["charger"]["allow_charge"],
+            false
+        );
+        assert_eq!(derived_power_payload(&diag)["charger"]["poorsrc"], false);
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["limit_reason"],
+            "cooldown_retry_wait"
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["limit_detail"],
             "tps_output_current_cooldown"
         );
-        assert_eq!(diag["policy"]["tps_limit_threshold_ma"], 100);
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["tps_limit_threshold_ma"],
+            100
+        );
     }
 
     #[test]
-    fn derives_power_diag_from_status_maps_poorsrc_reason() {
+    fn derives_diag_snapshot_from_status_maps_poorsrc_reason() {
         let status = json!({
             "input": {
                 "source": "dcin",
@@ -10562,17 +11012,20 @@ mod tests {
             }
         });
 
-        let diag = derive_power_diag_from_status(&status, "lan_derived");
+        let diag = derive_diag_snapshot_from_status(&status, "lan_derived");
 
-        assert_eq!(diag["source"], "lan_derived");
-        assert_eq!(diag["input"]["pressure_reason"], "poorsrc");
-        assert_eq!(diag["charger"]["poorsrc"], true);
-        assert_eq!(diag["charger"]["vindpm"], false);
-        assert_eq!(diag["charger"]["iindpm"], false);
+        assert_eq!(derived_power_payload(&diag)["source"], "lan_derived");
+        assert_eq!(
+            derived_power_payload(&diag)["input"]["pressure_reason"],
+            "poorsrc"
+        );
+        assert_eq!(derived_power_payload(&diag)["charger"]["poorsrc"], true);
+        assert_eq!(derived_power_payload(&diag)["charger"]["vindpm"], false);
+        assert_eq!(derived_power_payload(&diag)["charger"]["iindpm"], false);
     }
 
     #[test]
-    fn derives_power_diag_from_status_preserves_limited_current_fields() {
+    fn derives_diag_snapshot_from_status_preserves_limited_current_fields() {
         let status = json!({
             "input": {
                 "source": "dcin",
@@ -10597,16 +11050,28 @@ mod tests {
             }
         });
 
-        let diag = derive_power_diag_from_status(&status, "lan_derived");
+        let diag = derive_diag_snapshot_from_status(&status, "lan_derived");
 
-        assert_eq!(diag["policy"]["target_ichg_ma"], 500);
-        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], 100);
-        assert_eq!(diag["policy"]["effective_target_ichg_ma"], 100);
-        assert_eq!(diag["policy"]["pressure_score_pct"], 81);
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["target_ichg_ma"],
+            500
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["adaptive_cap_ichg_ma"],
+            100
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["effective_target_ichg_ma"],
+            100
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["pressure_score_pct"],
+            81
+        );
     }
 
     #[test]
-    fn derives_power_diag_from_status_uses_applied_current_for_effective_target() {
+    fn derives_diag_snapshot_from_status_uses_applied_current_for_effective_target() {
         let status = json!({
             "input": {
                 "source": "dcin",
@@ -10631,15 +11096,24 @@ mod tests {
             }
         });
 
-        let diag = derive_power_diag_from_status(&status, "lan_derived");
+        let diag = derive_diag_snapshot_from_status(&status, "lan_derived");
 
-        assert_eq!(diag["policy"]["target_ichg_ma"], 500);
-        assert_eq!(diag["policy"]["effective_target_ichg_ma"], 100);
-        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], 100);
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["target_ichg_ma"],
+            500
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["effective_target_ichg_ma"],
+            100
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["adaptive_cap_ichg_ma"],
+            100
+        );
     }
 
     #[test]
-    fn derives_power_diag_from_status_preserves_stopped_cooldown_state() {
+    fn derives_diag_snapshot_from_status_preserves_stopped_cooldown_state() {
         let status = json!({
             "input": {
                 "source": "dcin",
@@ -10664,16 +11138,28 @@ mod tests {
             }
         });
 
-        let diag = derive_power_diag_from_status(&status, "lan_derived");
+        let diag = derive_diag_snapshot_from_status(&status, "lan_derived");
 
-        assert_eq!(diag["policy"]["target_ichg_ma"], 500);
-        assert_eq!(diag["policy"]["effective_target_ichg_ma"], Value::Null);
-        assert_eq!(diag["policy"]["adaptive_cap_ichg_ma"], Value::Null);
-        assert_eq!(diag["policy"]["limit_reason"], "cooldown_retry_wait");
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["target_ichg_ma"],
+            500
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["effective_target_ichg_ma"],
+            Value::Null
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["adaptive_cap_ichg_ma"],
+            Value::Null
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["limit_reason"],
+            "cooldown_retry_wait"
+        );
     }
 
     #[test]
-    fn derives_power_diag_from_status_can_backfill_native_serial_snapshot() {
+    fn derives_diag_snapshot_from_status_can_backfill_native_serial_snapshot() {
         let status = json!({
             "input": {
                 "source": "dcin",
@@ -10717,17 +11203,32 @@ mod tests {
             }
         });
 
-        let diag = derive_power_diag_from_status(&status, "lan_derived");
+        let diag = derive_diag_snapshot_from_status(&status, "lan_derived");
 
-        assert_eq!(diag["source"], "lan_derived");
-        assert_eq!(diag["input"]["vin_vbus_mv"], 12016);
-        assert_eq!(diag["input"]["vin_iin_ma"], 102);
-        assert_eq!(diag["input"]["vin_baseline_mv"], 12016);
-        assert_eq!(diag["input"]["vin_drop_mv"], 0);
-        assert_eq!(diag["input"]["assist_power_stage"], "standby");
-        assert_eq!(diag["input"]["assist_target_vout_mv"], 10800);
-        assert_eq!(diag["input"]["tps_total_iout_ma"], 36);
-        assert_eq!(diag["policy"]["limit_reason"], "none");
+        assert_eq!(derived_power_payload(&diag)["source"], "lan_derived");
+        assert_eq!(derived_power_payload(&diag)["input"]["vin_vbus_mv"], 12016);
+        assert_eq!(derived_power_payload(&diag)["input"]["vin_iin_ma"], 102);
+        assert_eq!(
+            derived_power_payload(&diag)["input"]["vin_baseline_mv"],
+            12016
+        );
+        assert_eq!(derived_power_payload(&diag)["input"]["vin_drop_mv"], 0);
+        assert_eq!(
+            derived_power_payload(&diag)["input"]["assist_power_stage"],
+            "standby"
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["input"]["assist_target_vout_mv"],
+            10800
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["input"]["tps_total_iout_ma"],
+            36
+        );
+        assert_eq!(
+            derived_power_payload(&diag)["policy"]["limit_reason"],
+            "none"
+        );
     }
 
     #[test]
@@ -11006,8 +11507,8 @@ mod tests {
             ),
             status: None,
             status_updated_at: None,
-            power_diag: None,
-            power_diag_updated_at: None,
+            diag_snapshot: None,
+            diag_snapshot_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -11054,8 +11555,8 @@ mod tests {
             ),
             status: None,
             status_updated_at: None,
-            power_diag: None,
-            power_diag_updated_at: None,
+            diag_snapshot: None,
+            diag_snapshot_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -11102,8 +11603,8 @@ mod tests {
             ),
             status: None,
             status_updated_at: None,
-            power_diag: None,
-            power_diag_updated_at: None,
+            diag_snapshot: None,
+            diag_snapshot_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -11150,8 +11651,8 @@ mod tests {
             ),
             status: None,
             status_updated_at: None,
-            power_diag: None,
-            power_diag_updated_at: None,
+            diag_snapshot: None,
+            diag_snapshot_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -11186,7 +11687,7 @@ mod tests {
         let mut device = DeviceRecord {
             id: "d".into(),
             display_name: "d".into(),
-            port_path: Some("/dev/cu.usbmodem1".into()),
+            port_path: Some("/tmp/fixture-usb-a".into()),
             lan_address: None,
             lan_conflict_addresses: Vec::new(),
             companion_lan_candidate: None,
@@ -11196,8 +11697,8 @@ mod tests {
             identity: None,
             status: None,
             status_updated_at: None,
-            power_diag: None,
-            power_diag_updated_at: None,
+            diag_snapshot: None,
+            diag_snapshot_updated_at: None,
             selected_artifact_id: None,
             log_decode: LogDecodeState::default(),
             settings: default_settings(),
@@ -11209,18 +11710,18 @@ mod tests {
         device.binding = Some(DeviceBinding {
             alias: None,
             stable_id: "d".into(),
-            port_path: Some("/dev/cu.usbmodem1".into()),
+            port_path: Some("/tmp/fixture-usb-a".into()),
             created_at: "now".into(),
             logical_device_id: None,
             lan_companion: None,
         });
-        assert_eq!(bound_flash_port(&device), Some("/dev/cu.usbmodem1".into()));
+        assert_eq!(bound_flash_port(&device), Some("/tmp/fixture-usb-a".into()));
     }
 
     #[tokio::test]
     async fn firmware_change_invalidates_stale_capability_cache() {
         let state = create_app_state(false);
-        let device_id = "serial-04f3bb3f5367".to_string();
+        let device_id = "fixture-ups-device".to_string();
         {
             let mut guard = state.inner.lock().expect("state lock");
             let mut settings = default_settings();
@@ -11230,7 +11731,7 @@ mod tests {
                 DeviceRecord {
                     id: device_id.clone(),
                     display_name: "USB CDC".into(),
-                    port_path: Some("/dev/cu.usbmodem-test".into()),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
                     lan_address: None,
                     lan_conflict_addresses: Vec::new(),
                     companion_lan_candidate: None,
@@ -11238,7 +11739,7 @@ mod tests {
                     binding: None,
                     connection: ConnectionState::Connected,
                     identity: Some(json!({
-                        "device_id": "mains-aegis-198840",
+                        "device_id": "fixture-mains-aegis",
                         "hardware_capabilities": {
                             "output_profile": "19v",
                             "rated_vout_mv": 19000
@@ -11246,8 +11747,8 @@ mod tests {
                     })),
                     status: Some(json!({"mode": "standby"})),
                     status_updated_at: Some(Instant::now()),
-                    power_diag: Some(json!({"input": {"vin_vbus_mv": 19000}})),
-                    power_diag_updated_at: Some(Instant::now()),
+                    diag_snapshot: Some(json!({"input": {"vin_vbus_mv": 19000}})),
+                    diag_snapshot_updated_at: Some(Instant::now()),
                     selected_artifact_id: Some("main-vout-12v".into()),
                     log_decode: LogDecodeState {
                         status: "verified".into(),
@@ -11270,8 +11771,8 @@ mod tests {
         assert!(device.identity.is_none());
         assert!(device.status.is_none());
         assert!(device.status_updated_at.is_none());
-        assert!(device.power_diag.is_none());
-        assert!(device.power_diag_updated_at.is_none());
+        assert!(device.diag_snapshot.is_none());
+        assert!(device.diag_snapshot_updated_at.is_none());
         assert_eq!(
             device.settings.advanced_power_capabilities.rated_vout_mv,
             12_000

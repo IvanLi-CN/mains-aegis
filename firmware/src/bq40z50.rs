@@ -33,9 +33,12 @@ pub mod cmd {
     pub const FULL_CHARGE_CAPACITY: u8 = 0x10;
     pub const BATTERY_STATUS: u8 = 0x16;
     pub const MANUFACTURER_DATA: u8 = 0x23;
+    pub const SAFETY_STATUS: u8 = 0x51;
+    pub const PF_STATUS: u8 = 0x53;
     pub const OPERATION_STATUS: u8 = 0x54;
     pub const CHARGING_STATUS: u8 = 0x55;
     pub const GAUGING_STATUS: u8 = 0x56;
+    pub const MANUFACTURING_STATUS: u8 = 0x57;
     pub const AFE_REGISTER: u8 = 0x58;
 
     pub const CELL_VOLTAGE_4: u8 = 0x3C;
@@ -741,6 +744,13 @@ fn decode_h3_or_h4_status_word(raw: &BlockReadRaw) -> Option<u32> {
     }
 }
 
+fn decode_h2_h3_or_h4_status_word(raw: &BlockReadRaw) -> Option<u32> {
+    match raw.payload_len {
+        2 => Some(u16::from_le_bytes([raw.payload[0], raw.payload[1]]) as u32),
+        _ => decode_h3_or_h4_status_word(raw),
+    }
+}
+
 /// Read the 24-bit/32-bit ChargingStatus() block response.
 ///
 /// TRM marks 0x55 as a block command and the returned status word only defines
@@ -768,6 +778,34 @@ where
     Ok(ChargingStatusTrace { block, value })
 }
 
+fn read_status_block_u32<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    sbscmd: u8,
+) -> Result<Option<u32>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let Some(raw) = read_block_raw(i2c, addr, sbscmd)? else {
+        return Ok(None);
+    };
+    Ok(decode_h3_or_h4_status_word(&raw))
+}
+
+pub fn read_safety_status<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<u32>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    read_status_block_u32(i2c, addr, cmd::SAFETY_STATUS)
+}
+
+pub fn read_pf_status<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<u32>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    read_status_block_u32(i2c, addr, cmd::PF_STATUS)
+}
+
 /// Read the 24-bit/32-bit GaugingStatus() block response.
 ///
 /// TRM marks 0x56 as a block command and the returned status word only defines
@@ -781,6 +819,16 @@ where
         return Ok(None);
     };
     Ok(decode_h3_or_h4_status_word(&raw))
+}
+
+pub fn read_manufacturing_status<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<u32>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let Some(raw) = read_block_raw(i2c, addr, cmd::MANUFACTURING_STATUS)? else {
+        return Ok(None);
+    };
+    Ok(decode_h2_h3_or_h4_status_word(&raw))
 }
 
 pub fn read_mac_u32<I2C>(i2c: &mut I2C, addr: u8, mac_cmd: u16) -> Result<Option<u32>, I2C::Error>
@@ -1237,6 +1285,29 @@ mod tests {
         assert!(value & gauging_status::VOK != 0);
         assert!(value & gauging_status::REST != 0);
         assert!(value & gauging_status::BAL_EN != 0);
+    }
+
+    #[test]
+    fn read_manufacturing_status_decodes_h2_block_payloads() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let payload = [0x16, 0x00];
+        let mut plain_frame = vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 1];
+        plain_frame[0] = 2;
+        plain_frame[1..3].copy_from_slice(&payload);
+
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd::MANUFACTURING_STATUS]),
+            Step::Read(addr, vec![0u8; MAX_BLOCK_PAYLOAD_LEN + 2]),
+            Step::Write(addr, vec![cmd::MANUFACTURING_STATUS]),
+            Step::Read(addr, plain_frame),
+        ]);
+
+        let value = read_manufacturing_status(&mut i2c, addr).unwrap().unwrap();
+
+        assert_eq!(value, 0x0016);
+        assert_ne!(value & manufacturing_status::FET_EN, 0);
+        assert_ne!(value & manufacturing_status::CHG_EN, 0);
+        assert_ne!(value & manufacturing_status::DSG_EN, 0);
     }
 
     #[test]

@@ -9,8 +9,8 @@ import urllib.request
 from typing import Any
 
 
-DEFAULT_UPS_STATUS_URL = "http://192.168.31.232/api/v1/status"
-DEFAULT_ISOLAPURR_URL = "http://192.168.31.122"
+DEFAULT_UPS_STATUS_URL = None
+DEFAULT_ISOLAPURR_URL = None
 PORTS_PATH = "/api/v1/ports"
 PORT_C_POWER_PATH = "/api/v1/ports/port_c/power"
 
@@ -25,7 +25,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--backup-settle-seconds", type=float, default=2.0)
     parser.add_argument("--restore-settle-seconds", type=float, default=2.0)
     parser.add_argument("--json", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not (args.ups_status_url or "").strip():
+        parser.error("--ups-status-url is required; no UPS URL is built in")
+    if not (args.isolapurr_url or "").strip():
+        parser.error("--isolapurr-url is required; no source URL is built in")
+    return args
 
 
 def http_json(url: str, *, method: str = "GET") -> Any:

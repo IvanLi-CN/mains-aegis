@@ -1,0 +1,36 @@
+{
+  "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-cfc945db-clean-ec945580d8a1dcd3",
+  "build_id": "cfc945db-clean-ec945580d8a1dcd3",
+  "defmt": {
+    "elf_sha256": "f16e25c74367d74bb637738af3d6932d8d0608f9e65d1352dc8f38e72d4ad7a3",
+    "enabled": true,
+    "encoding": "defmt-espflash",
+    "metadata_sha256": null
+  },
+  "features": [
+    "net_http",
+    "web_serial"
+  ],
+  "files": [
+    {
+      "kind": "elf",
+      "path": "mains-aegis-esp32s3-release-net_http-web_serial-cfc945db-clean-ec945580d8a1dcd3/esp-firmware",
+      "sha256": "f16e25c74367d74bb637738af3d6932d8d0608f9e65d1352dc8f38e72d4ad7a3",
+      "size": 4951600
+    },
+    {
+      "flash_address": 65536,
+      "kind": "image",
+      "path": "mains-aegis-esp32s3-release-net_http-web_serial-cfc945db-clean-ec945580d8a1dcd3/esp-firmware.bin",
+      "sha256": "df1e2c958a9a41659be18bd9a554f6412a04591b722272e5e29841c787531110",
+      "size": 2810336
+    }
+  ],
+  "git_dirty": "clean",
+  "git_sha": "cfc945db",
+  "name": "mains-aegis",
+  "profile": "release",
+  "protocol": "mains-aegis.cdc.v1",
+  "target_chip": "esp32s3",
+  "version": "0.1.0"
+}

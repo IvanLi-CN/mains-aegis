@@ -47,6 +47,11 @@ power-validation *args:
 power-validation-plan *args:
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- power-validation run --dry-run {{ args }}
 
+# Run the read-only diag-snapshot HIL gate. Example:
+# just hil-diag-snapshot --devd-url http://127.0.0.1:30080 --device-id <device>
+hil-diag-snapshot *args:
+    python3 tools/hil/diag_snapshot_readonly.py {{ args }}
+
 # List currently known devd devices.
 devices-list:
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- devices list
@@ -114,19 +119,19 @@ flash-dry-run device:
 # Build, select, and dry-run flash for an already-bound devd device.
 flash-current-dry-run device:
     just firmware-web-image
-    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release)
-    bun run firmware:embed-web
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} artifact select --manifest-path "$manifest"
+    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release) && \
+    bun run firmware:embed-web && \
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} artifact select --manifest-path "$manifest" && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --dry-run
 
 # Build, select, dry-run, and real-flash an already-bound devd device. Requires confirm=flash.
 flash-current-real device confirm:
     [[ "{{ confirm }}" == "flash" ]] || { echo "Refusing real flash: pass confirm=flash"; exit 2; }
     just firmware-web-image
-    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release)
-    bun run firmware:embed-web
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} artifact select --manifest-path "$manifest"
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --dry-run
+    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release) && \
+    bun run firmware:embed-web && \
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} artifact select --manifest-path "$manifest" && \
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --dry-run && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --real
 
 # Run the standard local validation set.

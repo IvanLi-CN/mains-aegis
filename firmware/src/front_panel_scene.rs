@@ -11003,6 +11003,8 @@ fn tps_issue_dialog_copy(
 
 fn bq40_issue_card_key(snapshot: &SelfCheckUiSnapshot) -> &'static str {
     match snapshot.bq40z50_issue_detail {
+        Some("emshut_active") => "EMSHUT ACTIVE",
+        Some("physical_vbat_absent") => "VBAT ABSENT",
         Some("xdsg_blocked") => "XDSG BLOCKED",
         Some("dsg_fet_off") => "DSG FET OFF",
         Some("xchg_blocked") => "CHG BLOCKED",
@@ -11027,6 +11029,8 @@ fn bq40_issue_headline(
     match action {
         BmsRecoveryUiAction::Activation => "NOT DETECTED",
         BmsRecoveryUiAction::DischargeAuthorization => match snapshot.bq40z50_issue_detail {
+            Some("emshut_active") => "EMSHUT ACTIVE",
+            Some("physical_vbat_absent") => "VBAT ABSENT",
             Some("xdsg_blocked") => "XDSG BLOCKED",
             Some("dsg_fet_off") => "DSG FET OFF",
             Some("remaining_capacity_alarm") => "RCA ALARM",
@@ -11038,6 +11042,8 @@ fn bq40_issue_headline(
 
 fn bq40_issue_detail_body(snapshot: &SelfCheckUiSnapshot) -> &'static str {
     match snapshot.bq40z50_issue_detail {
+        Some("emshut_active") => "Gauge is in emergency shutdown.",
+        Some("physical_vbat_absent") => "Pack is not powering VBAT.",
         Some("xdsg_blocked") => "BQ40 keeps discharge path off.",
         Some("dsg_fet_off") => "Discharge FET is still off.",
         Some("xchg_blocked") => "Charge path is still blocked.",
@@ -14349,6 +14355,30 @@ mod tests {
         snapshot.tmp_b = SelfCheckCommState::Ok;
 
         assert!(self_check_can_enter_dashboard(&snapshot));
+    }
+
+    #[test]
+    fn self_check_blocks_dashboard_when_bms_ready_but_vbat_absent() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+        snapshot.gc9307 = SelfCheckCommState::Ok;
+        snapshot.tca6408a = SelfCheckCommState::Ok;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.ina3221 = SelfCheckCommState::Ok;
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq25792_vbat_present = Some(false);
+        snapshot.bq40z50 = SelfCheckCommState::Warn;
+        snapshot.bq40z50_no_battery = Some(false);
+        snapshot.bq40z50_discharge_ready = Some(false);
+        snapshot.bq40z50_issue_detail = Some("physical_vbat_absent");
+        snapshot.requested_outputs = EnabledOutputs::Both;
+        snapshot.active_outputs = EnabledOutputs::None;
+        snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
+        snapshot.tps_a = SelfCheckCommState::Ok;
+        snapshot.tps_b = SelfCheckCommState::Ok;
+        snapshot.tmp_a = SelfCheckCommState::Ok;
+        snapshot.tmp_b = SelfCheckCommState::Ok;
+
+        assert!(!self_check_can_enter_dashboard(&snapshot));
     }
 
     #[test]

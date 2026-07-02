@@ -30,12 +30,12 @@ DEFAULT_CHART = ROOT / "render_voltage_chart_html.py"
 DEFAULT_REPORT_ROOT = ROOT / "reports"
 DEFAULT_FIRMWARE_BUNDLE_ROOT = ROOT.parent.parent / "web/public/firmware"
 
-DEFAULT_UPS_DEVICE_ID = "serial-04f3bb3f5367"
-DEFAULT_LOAD_DEVICE = "loadlynx-d68638"
-DEFAULT_LOAD_USB_PORT = "/dev/cu.usbmodem212101"
+DEFAULT_UPS_DEVICE_ID = os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID")
+DEFAULT_LOAD_DEVICE = os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID")
+DEFAULT_LOAD_USB_PORT = os.environ.get("MAINS_AEGIS_LOAD_USB_PORT")
 DEFAULT_LOAD_CLI = str(Path.home() / ".local" / "bin" / "loadlynx")
 DEFAULT_LOAD_IPC = ""
-DEFAULT_LOAD_DEVD_SOCKET = "/tmp/loadlynx-koha-formal.sock"
+DEFAULT_LOAD_DEVD_SOCKET = os.environ.get("LOADLYNX_DEVD_SOCKET", "")
 DEFAULT_LOAD_DEVD_BASE_URL = ""
 DEFAULT_LOAD_BRIDGE_URL = "http://127.0.0.1:30180"
 DEFAULT_LOAD_BRIDGE_DEVICE = ""
@@ -43,8 +43,8 @@ DEFAULT_MAINS_AEGIS_CLI = str(
     ROOT.parent / "mains-aegis-host" / "target" / "debug" / "mains-aegis"
 )
 DEFAULT_ISOLAPURR_CLI = "isolapurr"
-DEFAULT_ISOLAPURR_URL = "http://192.168.31.122"
-DEFAULT_ISOLAPURR_DEVICE_ID = "856a141cdbd4"
+DEFAULT_ISOLAPURR_URL = "http://127.0.0.1:30182"
+DEFAULT_ISOLAPURR_DEVICE_ID = os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID")
 DEFAULT_UPS_OBSERVE_DEVICE_ID = (
     os.environ.get("MAINS_AEGIS_OBSERVE_DEVICE_ID") or DEFAULT_UPS_DEVICE_ID
 )
@@ -67,8 +67,8 @@ def default_ups_settings_url(device_id: str = DEFAULT_UPS_OBSERVE_DEVICE_ID) -> 
     return f"{default_mains_aegis_devd_base_url().rstrip('/')}/api/v1/devices/{device_id}/settings"
 
 
-def default_ups_power_diag_url(device_id: str = DEFAULT_UPS_OBSERVE_DEVICE_ID) -> str:
-    return f"{default_mains_aegis_devd_base_url().rstrip('/')}/api/v1/devices/{device_id}/power-diag"
+def default_ups_diag_snapshot_url(device_id: str = DEFAULT_UPS_OBSERVE_DEVICE_ID) -> str:
+    return f"{default_mains_aegis_devd_base_url().rstrip('/')}/api/v1/devices/{device_id}/diag-snapshot"
 
 
 def default_ups_trace_url(device_id: str = DEFAULT_UPS_OBSERVE_DEVICE_ID) -> str:
@@ -81,7 +81,7 @@ def default_ups_scan_url() -> str:
 
 DEFAULT_UPS_STATUS_URL = default_ups_status_url()
 DEFAULT_UPS_SETTINGS_URL = default_ups_settings_url()
-DEFAULT_UPS_POWER_DIAG_URL = default_ups_power_diag_url()
+DEFAULT_UPS_DIAG_SNAPSHOT_URL = default_ups_diag_snapshot_url()
 DEFAULT_UPS_TRACE_URL = default_ups_trace_url()
 DEFAULT_UPS_SCAN_URL = default_ups_scan_url()
 UPS_INPUT_CUT_MAX_VIN_MV = 2999
@@ -134,8 +134,8 @@ def parse_args() -> argparse.Namespace:
         choices=("assist_path", "backup_only"),
         default=["assist_path", "backup_only"],
     )
-    parser.add_argument("--load-device", default=DEFAULT_LOAD_DEVICE)
-    parser.add_argument("--load-usb-port", default=DEFAULT_LOAD_USB_PORT)
+    parser.add_argument("--load-device", default=os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID"))
+    parser.add_argument("--load-usb-port", default=os.environ.get("MAINS_AEGIS_LOAD_USB_PORT"))
     parser.add_argument("--load-cli", default=DEFAULT_LOAD_CLI)
     parser.add_argument("--load-ipc", default=DEFAULT_LOAD_IPC)
     parser.add_argument("--load-devd-socket", default=DEFAULT_LOAD_DEVD_SOCKET)
@@ -147,13 +147,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-p-mw", type=int, default=80000)
     parser.add_argument("--isolapurr-cli", default=DEFAULT_ISOLAPURR_CLI)
     parser.add_argument("--isolapurr-url", default=DEFAULT_ISOLAPURR_URL)
-    parser.add_argument("--isolapurr-device-id", default=DEFAULT_ISOLAPURR_DEVICE_ID)
+    parser.add_argument("--isolapurr-device-id", default=os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID"))
     parser.add_argument("--mains-aegis-cli", default=DEFAULT_MAINS_AEGIS_CLI)
     parser.add_argument("--mains-aegis-ipc", default=None)
-    parser.add_argument("--ups-device-id", default=DEFAULT_UPS_DEVICE_ID)
+    parser.add_argument("--ups-device-id", default=os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID"))
     parser.add_argument("--ups-status-url", default=DEFAULT_UPS_STATUS_URL)
     parser.add_argument("--ups-settings-url", default=DEFAULT_UPS_SETTINGS_URL)
-    parser.add_argument("--devd-power-diag-url", default=DEFAULT_UPS_POWER_DIAG_URL)
+    parser.add_argument("--devd-diag-snapshot-url", default=DEFAULT_UPS_DIAG_SNAPSHOT_URL)
     parser.add_argument("--devd-device-trace-url", default=DEFAULT_UPS_TRACE_URL)
     parser.add_argument("--devd-scan-url", default=DEFAULT_UPS_SCAN_URL)
     parser.add_argument("--artifact-manifest-12v", default=None)
@@ -178,7 +178,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-flash", action="store_true")
     parser.add_argument("--skip-verify", action="store_true")
     parser.add_argument("--skip-overview", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    for name, option in (
+        ("ups_device_id", "--ups-device-id or MAINS_AEGIS_UPS_DEVICE_ID"),
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("load_usb_port", "--load-usb-port or MAINS_AEGIS_LOAD_USB_PORT"),
+        ("isolapurr_device_id", "--isolapurr-device-id or MAINS_AEGIS_POWER_DEVICE_ID"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"formal HIL requires {option}; no hardware device id or port is built in")
+    return args
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -328,7 +337,7 @@ def observe_device_id_from_args(args: argparse.Namespace) -> str | None:
     if isinstance(explicit, str) and explicit.strip():
         return explicit.strip()
     for candidate in (
-        getattr(args, "devd_power_diag_url", None),
+        getattr(args, "devd_diag_snapshot_url", None),
         getattr(args, "ups_status_url", None),
         getattr(args, "ups_settings_url", None),
     ):
@@ -871,8 +880,8 @@ def normalized_observe_urls(args: argparse.Namespace) -> dict[str, str]:
             rewrite_devd_endpoint_base(args.ups_settings_url, base_url=devd_base_url),
             device_id=normalized_device_id,
         ),
-        "devd_power_diag_url": normalize_devd_device_endpoint(
-            rewrite_devd_endpoint_base(args.devd_power_diag_url, base_url=devd_base_url),
+        "devd_diag_snapshot_url": normalize_devd_device_endpoint(
+            rewrite_devd_endpoint_base(args.devd_diag_snapshot_url, base_url=devd_base_url),
             device_id=normalized_device_id,
         ),
         "devd_device_trace_url": normalize_devd_device_endpoint(
@@ -1259,10 +1268,10 @@ def build_runner_cmd(
         observe_urls["ups_status_url"],
         "--ups-settings-url",
         observe_urls["ups_settings_url"],
-        "--devd-power-diag-url",
-        observe_urls["devd_power_diag_url"],
+        "--devd-diag-snapshot-url",
+        observe_urls["devd_diag_snapshot_url"],
         "--devd-monitor-start-url",
-        derive_monitor_start_url(observe_urls["devd_power_diag_url"], observe_device_id),
+        derive_monitor_start_url(observe_urls["devd_diag_snapshot_url"], observe_device_id),
         "--devd-device-trace-url",
         observe_urls["devd_device_trace_url"],
         "--devd-scan-url",
@@ -1564,13 +1573,13 @@ def run_formal_scene(
     }
 
 
-def derive_monitor_start_url(devd_power_diag_url: str, ups_device_id: str) -> str:
-    parsed = urllib.parse.urlparse(devd_power_diag_url)
+def derive_monitor_start_url(devd_diag_snapshot_url: str, ups_device_id: str) -> str:
+    parsed = urllib.parse.urlparse(devd_diag_snapshot_url)
     path_parts = [part for part in parsed.path.split("/") if part]
     try:
         devices_idx = path_parts.index("devices")
     except ValueError:
-        return devd_power_diag_url
+        return devd_diag_snapshot_url
     base_parts = path_parts[: devices_idx + 2]
     if len(base_parts) < devices_idx + 2:
         base_parts.append(urllib.parse.quote(ups_device_id, safe=""))
@@ -1949,10 +1958,10 @@ def main() -> int:
             "ups_observe_device_id": observe_device_id,
             "ups_status_url": args.ups_status_url,
             "ups_settings_url": args.ups_settings_url,
-            "devd_power_diag_url": args.devd_power_diag_url,
+            "devd_diag_snapshot_url": args.devd_diag_snapshot_url,
             "normalized_ups_status_url": observe_urls["ups_status_url"],
             "normalized_ups_settings_url": observe_urls["ups_settings_url"],
-            "normalized_devd_power_diag_url": observe_urls["devd_power_diag_url"],
+            "normalized_devd_diag_snapshot_url": observe_urls["devd_diag_snapshot_url"],
             "isolapurr_url": args.isolapurr_url,
         },
         "load_protection": {

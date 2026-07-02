@@ -16,8 +16,9 @@ pub const WIFI_SSID_MAX_LEN: usize = 32;
 pub const WIFI_PSK_MAX_LEN: usize = 63;
 pub const WEB_SERIAL_RESPONSE_BODY_CAP: usize = 4096;
 pub const WEB_SERIAL_RESPONSE_FRAME_CAP: usize = 4608;
-pub const WEB_SERIAL_POWER_DIAG_BODY_CAP: usize = 6144;
-pub const WEB_SERIAL_POWER_DIAG_FRAME_CAP: usize = 6656;
+pub const WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP: usize = 8192;
+pub const WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP: usize = 8704;
+pub const DIAG_SNAPSHOT_MAX_PACKAGES: usize = 8;
 
 const WIFI_CONFIG_MAGIC: [u8; 4] = *b"MAWF";
 const WIFI_CONFIG_VERSION: u8 = 1;
@@ -46,11 +47,24 @@ pub enum UsbCdcRequest {
     GetIdentity,
     GetStatus,
     GetSettings,
-    GetPowerDiag,
+    GetDiagSnapshot(DiagSnapshotRequest),
     SetLogLevel(LogLevel),
     SetManualChargePrefs(ManualChargePrefsCommand),
     SetAdvancedPower(AdvancedPowerSettingsSnapshot),
     ResetAdvancedPower,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiagSnapshotRequest {
+    pub packages: Vec<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>,
+}
+
+impl DiagSnapshotRequest {
+    pub const fn empty() -> Self {
+        Self {
+            packages: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -514,7 +528,9 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
         "get_identity" => Ok(UsbCdcRequest::GetIdentity),
         "get_status" => Ok(UsbCdcRequest::GetStatus),
         "get_settings" => Ok(UsbCdcRequest::GetSettings),
-        "get_power_diag" => Ok(UsbCdcRequest::GetPowerDiag),
+        "get_diag_snapshot" => Ok(UsbCdcRequest::GetDiagSnapshot(parse_diag_snapshot_request(
+            line,
+        )?)),
         "set_log_level" => {
             let level =
                 json_string_field::<16>(line, "level")?.ok_or(UsbCdcProtocolError::MissingField)?;
@@ -531,6 +547,67 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
             Err(UsbCdcProtocolError::UnsafeOperation)
         }
         _ => Err(UsbCdcProtocolError::UnsupportedOperation),
+    }
+}
+
+fn parse_diag_snapshot_request(line: &str) -> Result<DiagSnapshotRequest, UsbCdcProtocolError> {
+    let Some(value_offset) = json_value_offset(line, "packages") else {
+        return Ok(DiagSnapshotRequest::empty());
+    };
+    let bytes = line.as_bytes();
+    if bytes.get(value_offset) != Some(&b'[') {
+        return Err(UsbCdcProtocolError::InvalidJson);
+    }
+    let mut idx = value_offset + 1;
+    let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+    loop {
+        while idx < bytes.len() && matches!(bytes[idx], b' ' | b'\n' | b'\r' | b'\t') {
+            idx += 1;
+        }
+        if idx >= bytes.len() {
+            return Err(UsbCdcProtocolError::InvalidJson);
+        }
+        if bytes[idx] == b']' {
+            return Ok(DiagSnapshotRequest { packages });
+        }
+        if bytes[idx] != b'"' {
+            return Err(UsbCdcProtocolError::InvalidJson);
+        }
+        idx += 1;
+        let start = idx;
+        while idx < bytes.len() && bytes[idx] != b'"' {
+            if bytes[idx] == b'\\' || bytes[idx] < 0x20 {
+                return Err(UsbCdcProtocolError::InvalidJson);
+            }
+            idx += 1;
+        }
+        if idx >= bytes.len() {
+            return Err(UsbCdcProtocolError::InvalidJson);
+        }
+        let text = core::str::from_utf8(&bytes[start..idx])
+            .map_err(|_| UsbCdcProtocolError::InvalidJson)?;
+        let mut package = String::<32>::new();
+        package
+            .push_str(text)
+            .map_err(|_| UsbCdcProtocolError::InvalidJson)?;
+        packages
+            .push(package)
+            .map_err(|_| UsbCdcProtocolError::FrameTooLarge)?;
+        idx += 1;
+        while idx < bytes.len() && matches!(bytes[idx], b' ' | b'\n' | b'\r' | b'\t') {
+            idx += 1;
+        }
+        match bytes.get(idx) {
+            Some(b',') => idx += 1,
+            Some(b']') => {
+                idx += 1;
+                while idx < bytes.len() && matches!(bytes[idx], b' ' | b'\n' | b'\r' | b'\t') {
+                    idx += 1;
+                }
+                return Ok(DiagSnapshotRequest { packages });
+            }
+            _ => return Err(UsbCdcProtocolError::InvalidJson),
+        }
     }
 }
 
@@ -815,10 +892,10 @@ const fn storage_crc8(bytes: &[u8]) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net_contract::render_power_diag_json;
+    use crate::net_contract::render_diag_snapshot_json;
     use crate::net_types::{
-        PowerDiagBmsSnapshot, PowerDiagChargerSnapshot, PowerDiagInputSnapshot,
-        PowerDiagPolicySnapshot, PowerDiagSnapshot,
+        DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerInputSnapshot,
+        DerivedPowerPolicySnapshot, DerivedPowerSnapshot, UpsStatusSnapshot,
     };
 
     #[test]
@@ -898,15 +975,23 @@ mod tests {
     }
 
     #[test]
-    fn parses_power_diag_request_over_usb_cdc() {
-        let frame =
-            parse_frame(r#"{"type":"request","request_id":"req-diag","op":"get_power_diag"}"#)
-                .unwrap();
+    fn parses_diag_snapshot_request_over_usb_cdc() {
+        let frame = parse_frame(
+            r#"{"type":"request","request_id":"req-diag","op":"get_diag_snapshot","packages":["bq40.manufacturing","bq25792.regs"]}"#,
+        )
+        .unwrap();
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("bq40.manufacturing").unwrap())
+            .unwrap();
+        packages
+            .push(String::try_from("bq25792.regs").unwrap())
+            .unwrap();
         assert_eq!(
             frame,
             UsbCdcFrame::Request {
                 request_id: String::try_from("req-diag").unwrap(),
-                op: UsbCdcRequest::GetPowerDiag,
+                op: UsbCdcRequest::GetDiagSnapshot(DiagSnapshotRequest { packages }),
             }
         );
     }
@@ -930,9 +1015,9 @@ mod tests {
     }
 
     #[test]
-    fn power_diag_response_supports_expanded_payload() {
-        let diag = PowerDiagSnapshot {
-            input: PowerDiagInputSnapshot {
+    fn diag_snapshot_response_supports_expanded_payload() {
+        let diag = DerivedPowerSnapshot {
+            input: DerivedPowerInputSnapshot {
                 source: "dcin",
                 mains_present: Some(true),
                 input_vbus_mv: Some(12_340),
@@ -958,7 +1043,7 @@ mod tests {
                 usb_pd_vac1_mv: Some(12_340),
                 usb_pd_vsys_mv: Some(12_210),
             },
-            charger: PowerDiagChargerSnapshot {
+            charger: DerivedPowerChargerSnapshot {
                 poll_valid: true,
                 enabled: true,
                 ce_low: false,
@@ -1015,7 +1100,7 @@ mod tests {
                 acdrv_path: "ac1",
                 term_ctrl: Some(0x1234),
             },
-            policy: PowerDiagPolicySnapshot {
+            policy: DerivedPowerPolicySnapshot {
                 state: Some("charging"),
                 status: "charging",
                 notice: "active",
@@ -1046,7 +1131,7 @@ mod tests {
                 manual_active: true,
                 manual_stop_inhibit: false,
             },
-            bms: PowerDiagBmsSnapshot {
+            bms: DerivedPowerBmsSnapshot {
                 addr: Some(11),
                 state: "ready",
                 pack_mv: Some(12_000),
@@ -1064,8 +1149,14 @@ mod tests {
                 pf_status: Some(0),
                 manufacturing_status: Some(0),
                 gauging_status: Some(0),
+                charging_status: Some(0),
                 op_status: Some(0),
+                op_status_raw_len: Some(4),
+                op_status_raw_bytes: Some([0x83, 0x49, 0x00, 0x00]),
+                emshut: Some(false),
+                pres: Some(true),
                 xchg: Some(true),
+                xdsg: Some(false),
                 chg_fet: Some(true),
                 dsg_fet: Some(true),
                 pchg_fet: Some(false),
@@ -1080,25 +1171,53 @@ mod tests {
                 charging_suspend: Some(false),
                 charging_hv: Some(false),
                 current_at_eoc_ma: Some(150),
+                da_configuration: Some(0x0024),
+                power_config: Some(0x000c),
+                emshut_en: Some(true),
+                emshut_pexit_dis: Some(false),
+                emshut_exit_comm: Some(true),
+                emshut_exit_vpack: Some(true),
             },
         };
 
-        let mut body = String::<WEB_SERIAL_POWER_DIAG_BODY_CAP>::new();
-        render_power_diag_json(&mut body, diag);
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("bq40.manufacturing").unwrap())
+            .unwrap();
+        packages
+            .push(String::try_from("derived.power").unwrap())
+            .unwrap();
+
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+        assert!(body.as_str().contains("\"packages\":{"));
+        assert!(body.as_str().contains("\"bq40.manufacturing\""));
         assert!(body
             .as_str()
             .contains("\"pressure_reason\":\"tps_output_current\""));
         assert!(body.as_str().contains("\"tps_total_iout_ma\":128"));
-        assert!(body.len() < WEB_SERIAL_POWER_DIAG_BODY_CAP);
+        assert!(body.as_str().contains("\"op_status_raw_len\":4"));
+        assert!(body
+            .as_str()
+            .contains("\"op_status_raw_bytes\":[131,73,0,0]"));
+        assert!(body.as_str().contains("\"emshut_exit_vpack\":true"));
+        assert!(body.as_str().contains("\"derived.power\""));
+        assert!(body.as_str().ends_with("}}"));
+        assert!(body.len() < WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP);
 
-        let mut frame = String::<WEB_SERIAL_POWER_DIAG_FRAME_CAP>::new();
+        let mut frame = String::<WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP>::new();
         render_response_json(&mut frame, "req-diag", body.as_str());
         assert!(frame.as_str().contains("\"type\":\"response\""));
         assert!(frame.as_str().contains("\"request_id\":\"req-diag\""));
         assert!(frame
             .as_str()
             .contains("\"pressure_reason\":\"tps_output_current\""));
-        assert!(frame.len() < WEB_SERIAL_POWER_DIAG_FRAME_CAP);
+        assert!(frame.len() < WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP);
     }
 
     #[test]

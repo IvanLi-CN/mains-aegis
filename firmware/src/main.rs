@@ -32,16 +32,16 @@ use esp_firmware::usb_pd::UsbPdSinkManager;
 use esp_firmware::{
     mdns_wire::{derive_device_identity, DeviceIdentity},
     net_contract::{
-        render_compact_status_json, render_identity_json_with_write_controls,
-        render_power_diag_json, render_status_json, BuildInfo,
+        render_compact_status_json, render_diag_snapshot_json,
+        render_identity_json_with_write_controls, render_status_json, BuildInfo,
     },
     net_types::{UpsStatusSnapshot, WifiConnectionState, WifiErrorKind},
     usb_cdc_protocol::{
         parse_frame, render_error_json, render_hello_json, render_log_json,
         render_protocol_error_json, render_response_json, render_status_frame_json,
         render_wifi_config_ack_json, request_id_hint, LogLevel, UsbCdcFrame, UsbCdcLineBuffer,
-        UsbCdcRequest, WifiConfigCommand, WEB_SERIAL_POWER_DIAG_BODY_CAP,
-        WEB_SERIAL_POWER_DIAG_FRAME_CAP, WEB_SERIAL_RESPONSE_BODY_CAP,
+        UsbCdcRequest, WifiConfigCommand, WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP,
+        WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP, WEB_SERIAL_RESPONSE_BODY_CAP,
         WEB_SERIAL_RESPONSE_FRAME_CAP,
     },
 };
@@ -1556,6 +1556,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     }
     let initial_snapshot = power.ui_snapshot();
     net_bridge::publish_status_snapshot(initial_snapshot);
+    #[cfg(feature = "net_http")]
+    esp_firmware::net::publish_diag_snapshot(power.derived_power_snapshot());
     front_panel.update_self_check_snapshot(initial_snapshot);
     front_panel.update_bms_activation_state(power.bms_activation_state());
     let mut last_dashboard_block_reason = None;
@@ -1748,6 +1750,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             let now = Instant::now();
             let ui_snapshot = power.ui_snapshot();
             net_bridge::publish_status_snapshot(ui_snapshot);
+            #[cfg(feature = "net_http")]
+            esp_firmware::net::publish_diag_snapshot(power.derived_power_snapshot());
             #[cfg(feature = "net_http")]
             {
                 while let Some(command) = esp_firmware::net::take_pending_lan_command() {
@@ -2149,10 +2153,27 @@ fn handle_web_serial_frame<'d, I2C>(
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
             }
-            UsbCdcRequest::GetPowerDiag => {
-                let mut body = heapless::String::<WEB_SERIAL_POWER_DIAG_BODY_CAP>::new();
-                let mut frame = heapless::String::<WEB_SERIAL_POWER_DIAG_FRAME_CAP>::new();
-                render_power_diag_json(&mut body, power.power_diag_snapshot());
+            UsbCdcRequest::GetDiagSnapshot(request) => {
+                let mut body = heapless::String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP>::new();
+                power.refresh_diag_snapshot_packages(request.packages.as_slice());
+                render_diag_snapshot_json(
+                    &mut body,
+                    request.packages.as_slice(),
+                    status,
+                    power.derived_power_snapshot(),
+                );
+                if !diag_snapshot_response_complete(body.as_str()) {
+                    render_error_json(
+                        &mut frame,
+                        Some(request_id.as_str()),
+                        "diag_snapshot_too_large",
+                        "diag-snapshot response exceeded USB CDC response capacity",
+                        true,
+                    );
+                    write_web_serial_line(serial, frame.as_str());
+                    return;
+                }
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
             }
@@ -2346,6 +2367,11 @@ fn handle_web_serial_frame<'d, I2C>(
             write_web_serial_line(serial, frame.as_str());
         }
     }
+}
+
+#[cfg(feature = "web_serial")]
+fn diag_snapshot_response_complete(body: &str) -> bool {
+    body.starts_with("{\"packages\":{") && body.ends_with("}}")
 }
 
 #[cfg(feature = "web_serial")]

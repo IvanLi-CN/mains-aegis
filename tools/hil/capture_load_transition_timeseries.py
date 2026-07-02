@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import subprocess
 import sys
 import threading
@@ -16,17 +17,13 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_LOAD_DEVICE = "loadlynx-d68638"
 DEFAULT_LOAD_BRIDGE_DEVICE = ""
-DEFAULT_LOAD_USB_PORT = "/dev/cu.usbmodem212101"
 DEFAULT_LOAD_IPC = ""
 DEFAULT_LOAD_BRIDGE_URL = ""
-DEFAULT_UPS_STATUS_URL = "http://192.168.31.232/api/v1/status"
-DEFAULT_DEVD_POWER_DIAG_URL = (
-    "http://127.0.0.1:30088/api/v1/devices/serial-04f3bb3f5367/power-diag"
-)
-DEFAULT_UPS_SETTINGS_URL = "http://192.168.31.232/api/v1/settings"
-DEFAULT_ISOLAPURR_URL = "http://192.168.31.122"
+DEFAULT_UPS_STATUS_URL = os.environ.get("MAINS_AEGIS_UPS_STATUS_URL")
+DEFAULT_DEVD_DIAG_SNAPSHOT_URL = os.environ.get("MAINS_AEGIS_DEVD_DIAG_SNAPSHOT_URL")
+DEFAULT_UPS_SETTINGS_URL = os.environ.get("MAINS_AEGIS_UPS_SETTINGS_URL")
+DEFAULT_ISOLAPURR_URL = os.environ.get("MAINS_AEGIS_ISOLAPURR_URL")
 DEFAULT_PRE_SECONDS = 12.0
 DEFAULT_HOLD_SECONDS = 18.0
 DEFAULT_POST_SECONDS = 12.0
@@ -107,7 +104,7 @@ class ContinuousSampler:
         jsonl_path: Path,
         started_at: float,
         ups_status_url: str,
-        devd_power_diag_url: str,
+        devd_diag_snapshot_url: str,
         isolapurr_url: str,
         status_timeout_sec: float,
         load_status_poller: "LoadStatusPoller",
@@ -117,7 +114,7 @@ class ContinuousSampler:
         self._jsonl_path = jsonl_path
         self._started_at = started_at
         self._ups_status_url = ups_status_url
-        self._devd_power_diag_url = devd_power_diag_url
+        self._devd_diag_snapshot_url = devd_diag_snapshot_url
         self._isolapurr_url = isolapurr_url
         self._status_timeout_sec = status_timeout_sec
         self._load_status_poller = load_status_poller
@@ -192,7 +189,7 @@ class ContinuousSampler:
                     tag=tag,
                     captured_at_utc=datetime.now(timezone.utc).isoformat(),
                     ups_status_url=self._ups_status_url,
-                    devd_power_diag_url=self._devd_power_diag_url,
+                    devd_diag_snapshot_url=self._devd_diag_snapshot_url,
                     isolapurr_url=self._isolapurr_url,
                     status_timeout_sec=self._status_timeout_sec,
                     load_status_snapshot=load_status_snapshot,
@@ -492,14 +489,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--profile-name", required=True)
     parser.add_argument("--target-ma", type=int, required=True)
-    parser.add_argument("--load-device", default=DEFAULT_LOAD_DEVICE)
+    parser.add_argument("--load-device", default=os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID"))
     parser.add_argument("--load-bridge-device", default=DEFAULT_LOAD_BRIDGE_DEVICE)
-    parser.add_argument("--load-usb-port", default=DEFAULT_LOAD_USB_PORT)
+    parser.add_argument("--load-usb-port", default=os.environ.get("MAINS_AEGIS_LOAD_USB_PORT"))
     parser.add_argument("--load-ipc", default=DEFAULT_LOAD_IPC)
     parser.add_argument("--load-bridge-url", default=DEFAULT_LOAD_BRIDGE_URL)
     parser.add_argument("--ups-status-url", default=DEFAULT_UPS_STATUS_URL)
     parser.add_argument("--ups-settings-url", default=DEFAULT_UPS_SETTINGS_URL)
-    parser.add_argument("--devd-power-diag-url", default=DEFAULT_DEVD_POWER_DIAG_URL)
+    parser.add_argument("--devd-diag-snapshot-url", default=DEFAULT_DEVD_DIAG_SNAPSHOT_URL)
     parser.add_argument("--isolapurr-url", default=DEFAULT_ISOLAPURR_URL)
     parser.add_argument("--pre-seconds", type=float, default=DEFAULT_PRE_SECONDS)
     parser.add_argument("--hold-seconds", type=float, default=DEFAULT_HOLD_SECONDS)
@@ -551,7 +548,18 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_BASELINE_SOURCE_CURRENT_LIMIT_MA,
     )
     parser.add_argument("--report-root", default="tools/hil/reports")
-    return parser.parse_args()
+    args = parser.parse_args()
+    for name, option in (
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("load_usb_port", "--load-usb-port or MAINS_AEGIS_LOAD_USB_PORT"),
+        ("ups_status_url", "--ups-status-url or MAINS_AEGIS_UPS_STATUS_URL"),
+        ("ups_settings_url", "--ups-settings-url or MAINS_AEGIS_UPS_SETTINGS_URL"),
+        ("devd_diag_snapshot_url", "--devd-diag-snapshot-url or MAINS_AEGIS_DEVD_DIAG_SNAPSHOT_URL"),
+        ("isolapurr_url", "--isolapurr-url or MAINS_AEGIS_ISOLAPURR_URL"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"capture requires {option}; no hardware target is built in")
+    return args
 
 
 def run(cmd: list[str], *, timeout_sec: float | None = None) -> subprocess.CompletedProcess[str]:
@@ -850,7 +858,7 @@ def http_json_with_retries(
     raise RuntimeError(f"http fetch failed after retries: url={url!r} error={last_exc!r}")
 
 
-def derive_power_diag_from_status(status: Any, *, source: str = "lan_derived") -> dict[str, Any]:
+def derive_diag_snapshot_from_status(status: Any, *, source: str = "lan_derived") -> dict[str, Any]:
     status_dict = dict_or_empty(status)
     input_section = dict_or_empty(status_dict.get("input"))
     charger_section = dict_or_empty(status_dict.get("charger"))
@@ -884,22 +892,22 @@ def derive_power_diag_from_status(status: Any, *, source: str = "lan_derived") -
     }
 
 
-def fetch_power_diag_with_fallback(
+def fetch_diag_snapshot_with_fallback(
     *,
-    devd_power_diag_url: str,
+    devd_diag_snapshot_url: str,
     ups_status: dict[str, Any],
     timeout_sec: float,
 ) -> dict[str, Any]:
     try:
-        power_diag = http_json_with_retries(
-            devd_power_diag_url,
+        diag_snapshot = http_json_with_retries(
+            devd_diag_snapshot_url,
             timeout_sec=timeout_sec,
         )
-        if isinstance(power_diag, dict):
-            power_diag.setdefault("source", "devd")
-        return dict_or_empty(power_diag)
+        if isinstance(diag_snapshot, dict):
+            diag_snapshot.setdefault("source", "devd")
+        return dict_or_empty(diag_snapshot)
     except Exception as exc:  # noqa: BLE001
-        derived = derive_power_diag_from_status(ups_status)
+        derived = derive_diag_snapshot_from_status(ups_status)
         derived["fallback_error"] = repr(exc)
         return derived
 
@@ -969,6 +977,16 @@ def append_jsonl(path: Path, payload: Any) -> None:
 
 def dict_or_empty(payload: Any) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
+
+
+def unwrap_diag_snapshot_payload(payload: Any) -> dict[str, Any]:
+    data = dict_or_empty(payload)
+    packages = dict_or_empty(data.get("packages"))
+    derived = dict_or_empty(packages.get("derived.power"))
+    derived_payload = dict_or_empty(derived.get("payload"))
+    if derived_payload:
+        return derived_payload
+    return data
 
 
 def first_numeric(*values: Any) -> int | float | None:
@@ -1780,13 +1798,13 @@ def sample_point(
     tag: str,
     captured_at_utc: str,
     ups_status_url: str,
-    devd_power_diag_url: str,
+    devd_diag_snapshot_url: str,
     isolapurr_url: str,
     status_timeout_sec: float,
     load_status_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
     ups_status: dict[str, Any] = {}
-    power_diag: dict[str, Any] = {}
+    diag_snapshot: dict[str, Any] = {}
     ups_input: dict[str, Any] = {}
     diag_input: dict[str, Any] = {}
     for attempt in range(3):
@@ -1794,13 +1812,15 @@ def sample_point(
             ups_status_url,
             timeout_sec=min(status_timeout_sec, 5.0),
         ))
-        power_diag = dict_or_empty(fetch_power_diag_with_fallback(
-            devd_power_diag_url=devd_power_diag_url,
-            ups_status=ups_status,
-            timeout_sec=min(status_timeout_sec, 5.0),
-        ))
+        diag_snapshot = unwrap_diag_snapshot_payload(
+            fetch_diag_snapshot_with_fallback(
+                devd_diag_snapshot_url=devd_diag_snapshot_url,
+                ups_status=ups_status,
+                timeout_sec=min(status_timeout_sec, 5.0),
+            )
+        )
         ups_input = dict_or_empty(ups_status.get("input"))
-        diag_input = dict_or_empty(power_diag.get("input"))
+        diag_input = dict_or_empty(diag_snapshot.get("input"))
         if (
             isinstance(
                 first_numeric(ups_input.get("vin_vbus_mv"), diag_input.get("vin_vbus_mv")),
@@ -1945,7 +1965,7 @@ def sample_point(
         "diag_vin_baseline_mv": diag_input.get("vin_baseline_mv"),
         "diag_vin_drop_mv": diag_input.get("vin_drop_mv"),
         "diag_tps_total_iout_ma": diag_input.get("tps_total_iout_ma"),
-        "diag_source": power_diag.get("source"),
+        "diag_source": diag_snapshot.get("source"),
         "out_a_vbus_mv": out_a.get("vbus_mv"),
         "out_a_iout_ma": out_a.get("iout_ma"),
         "out_b_vbus_mv": out_b.get("vbus_mv"),
@@ -1974,7 +1994,7 @@ def sample_point(
         "load_poll_idle": load_status_snapshot.get("poller_idle"),
         "raw": {
             "ups_status": ups_status,
-            "power_diag": power_diag,
+            "diag_snapshot": diag_snapshot,
             "isolapurr_ports": isolapurr_ports,
             "isolapurr_power_show": isolapurr_power_show,
             "load_status": load_status,
@@ -1990,7 +2010,7 @@ def capture_window(
     interval_seconds: float,
     started_at: float,
     ups_status_url: str,
-    devd_power_diag_url: str,
+    devd_diag_snapshot_url: str,
     isolapurr_url: str,
     status_timeout_sec: float,
     load_status_poller: LoadStatusPoller,
@@ -2019,7 +2039,7 @@ def capture_window(
             tag=tag,
             captured_at_utc=datetime.now(timezone.utc).isoformat(),
             ups_status_url=ups_status_url,
-            devd_power_diag_url=devd_power_diag_url,
+            devd_diag_snapshot_url=devd_diag_snapshot_url,
             isolapurr_url=isolapurr_url,
             status_timeout_sec=status_timeout_sec,
             load_status_snapshot=current_snapshot,
@@ -2202,8 +2222,8 @@ def evaluate_group_completeness(
         isinstance((sample.get("raw") or {}).get("ups_status"), dict)
         for sample in group_samples
     )
-    power_diag_present = all(
-        isinstance((sample.get("raw") or {}).get("power_diag"), dict)
+    diag_snapshot_present = all(
+        isinstance((sample.get("raw") or {}).get("diag_snapshot"), dict)
         for sample in group_samples
     )
     isolapurr_present = all(
@@ -2249,8 +2269,8 @@ def evaluate_group_completeness(
     freshness_ok = freshness_visible
     if not ups_status_present:
         failures.append("missing_ups_status")
-    if not power_diag_present:
-        failures.append("missing_power_diag")
+    if not diag_snapshot_present:
+        failures.append("missing_diag_snapshot")
     if not isolapurr_present:
         failures.append("missing_isolapurr")
     if not load_status_present:
@@ -2396,7 +2416,7 @@ def evaluate_group_completeness(
         "scene_complete": not failures,
         "failures": failures,
         "ups_status_present": ups_status_present,
-        "power_diag_present": power_diag_present,
+        "diag_snapshot_present": diag_snapshot_present,
         "isolapurr_present": isolapurr_present,
         "load_status_present": load_status_present,
         "tag": tag,
@@ -2679,14 +2699,12 @@ def build_preflight(
         args.ups_status_url,
         timeout_sec=min(args.status_timeout_sec, 5.0),
     )
-    power_diag = http_json_with_retries(
-        args.ups_status_url,
-        timeout_sec=min(args.status_timeout_sec, 5.0),
-    )
-    power_diag = fetch_power_diag_with_fallback(
-        devd_power_diag_url=args.devd_power_diag_url,
-        ups_status=dict_or_empty(ups_status),
-        timeout_sec=min(args.status_timeout_sec, 5.0),
+    diag_snapshot = unwrap_diag_snapshot_payload(
+        fetch_diag_snapshot_with_fallback(
+            devd_diag_snapshot_url=args.devd_diag_snapshot_url,
+            ups_status=dict_or_empty(ups_status),
+            timeout_sec=min(args.status_timeout_sec, 5.0),
+        )
     )
     effective_enabled = load_output_enabled(normalize_verified_load_payload(load_status))
     effective_target_i_ma = load_target_i_ma(normalize_verified_load_payload(load_status))
@@ -2694,7 +2712,7 @@ def build_preflight(
         effective_enabled, effective_target_i_ma = select_effective_load_state(load_control, load_status)
     ups_input = dict_or_empty(ups_status.get("input")) if isinstance(ups_status, dict) else {}
     ups_charger = dict_or_empty(ups_status.get("charger")) if isinstance(ups_status, dict) else {}
-    diag_input = dict_or_empty(power_diag.get("input"))
+    diag_input = dict_or_empty(diag_snapshot.get("input"))
     vin_recovered_candidates = (
         ("status_vin_vbus_mv", ups_input.get("vin_vbus_mv")),
         ("diag_vin_vbus_mv", diag_input.get("vin_vbus_mv")),
@@ -2720,8 +2738,8 @@ def build_preflight(
         gate_failures.append("isolapurr_port_c_not_enabled")
     if not isinstance(ups_status, dict):
         gate_failures.append("ups_status_unavailable")
-    if not isinstance(power_diag, dict):
-        gate_failures.append("power_diag_unavailable")
+    if not isinstance(diag_snapshot, dict):
+        gate_failures.append("diag_snapshot_unavailable")
     if not isinstance(settings_payload, dict):
         gate_failures.append("ups_settings_unavailable")
     if effective_enabled is not False and not known_load_disabled:
@@ -2770,8 +2788,8 @@ def build_preflight(
             "allow_charge": charger_allow_charge,
             "detail_status": charger_detail_status,
         },
-        "power_diag": {
-            "source": dict_or_empty(power_diag).get("source"),
+        "diag_snapshot": {
+            "source": dict_or_empty(diag_snapshot).get("source"),
         },
         "load": {
             "output_enabled": effective_enabled,
@@ -2799,7 +2817,7 @@ def main() -> int:
         "load_ipc": args.load_ipc,
         "ups_status_url": args.ups_status_url,
         "ups_settings_url": args.ups_settings_url,
-        "devd_power_diag_url": args.devd_power_diag_url,
+        "devd_diag_snapshot_url": args.devd_diag_snapshot_url,
         "isolapurr_url": args.isolapurr_url,
         "pre_seconds": args.pre_seconds,
         "hold_seconds": args.hold_seconds,
@@ -2888,7 +2906,7 @@ def main() -> int:
             jsonl_path=jsonl_path,
             started_at=started_at,
             ups_status_url=args.ups_status_url,
-            devd_power_diag_url=args.devd_power_diag_url,
+            devd_diag_snapshot_url=args.devd_diag_snapshot_url,
             isolapurr_url=args.isolapurr_url,
             status_timeout_sec=args.status_timeout_sec,
             load_status_poller=load_status_poller,

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 
-DEFAULT_UPS_BASE_URL = "http://192.168.31.232"
+DEFAULT_UPS_BASE_URL = None
 DEFAULT_TIMEOUT_SECONDS = 8.0
 DEFAULT_STATUS_POLL_SECONDS = 0.5
 DEFAULT_STATUS_DEADLINE_SECONDS = 10.0
@@ -202,7 +202,10 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_STANDBY_DROP_STEP_MV,
         help="positive step applied to standby_drop_mv during the live check",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not (args.ups_base_url or "").strip():
+        parser.error("--ups-base-url is required; no UPS URL is built in")
+    return args
 
 
 def main() -> int:

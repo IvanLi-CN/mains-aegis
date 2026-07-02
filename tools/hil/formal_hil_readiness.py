@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import time
 import urllib.parse
 from pathlib import Path
@@ -35,28 +36,28 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--report-root", default=str(DEFAULT_REPORT_ROOT))
-    parser.add_argument("--load-device", default=suite.DEFAULT_LOAD_DEVICE)
+    parser.add_argument("--load-device", default=os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID"))
     parser.add_argument("--load-cli", default=suite.DEFAULT_LOAD_CLI)
     parser.add_argument("--load-bridge-url", default="")
     parser.add_argument("--load-ipc", default=suite.DEFAULT_LOAD_IPC)
     parser.add_argument("--load-devd-base-url", default=suite.DEFAULT_LOAD_DEVD_BASE_URL)
     parser.add_argument("--load-devd-socket", default=suite.DEFAULT_LOAD_DEVD_SOCKET)
-    parser.add_argument("--load-usb-device-id", default=runner.DEFAULT_LOAD_USB_DEVICE_ID)
+    parser.add_argument("--load-usb-device-id", default=os.environ.get("MAINS_AEGIS_LOAD_USB_DEVICE_ID"))
     parser.add_argument("--isolapurr-cli", default=suite.DEFAULT_ISOLAPURR_CLI)
     parser.add_argument("--isolapurr-url", default=suite.DEFAULT_ISOLAPURR_URL)
-    parser.add_argument("--isolapurr-device-id", default=suite.DEFAULT_ISOLAPURR_DEVICE_ID)
+    parser.add_argument("--isolapurr-device-id", default=os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID"))
     parser.add_argument(
         "--mains-aegis-cli",
         default=str(ROOT.parent / "mains-aegis-host" / "target" / "debug" / "mains-aegis"),
     )
     parser.add_argument("--mains-aegis-ipc", default=None)
-    parser.add_argument("--ups-device-id", default=suite.DEFAULT_UPS_DEVICE_ID)
+    parser.add_argument("--ups-device-id", default=os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID"))
     parser.add_argument("--ups-status-url", default=suite.DEFAULT_UPS_STATUS_URL)
     parser.add_argument("--ups-settings-url", default=suite.DEFAULT_UPS_SETTINGS_URL)
     parser.add_argument("--devd-scan-url", default=suite.DEFAULT_UPS_SCAN_URL)
     parser.add_argument(
-        "--devd-power-diag-url",
-        default=suite.DEFAULT_UPS_POWER_DIAG_URL,
+        "--devd-diag-snapshot-url",
+        default=suite.DEFAULT_UPS_DIAG_SNAPSHOT_URL,
     )
     parser.add_argument(
         "--devd-device-trace-url",
@@ -78,7 +79,16 @@ def parse_args() -> argparse.Namespace:
         help="Do not actively disable the load or cut IsolaPurr source power before readback checks.",
     )
     parser.add_argument("--dry-run", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    for name, option in (
+        ("ups_device_id", "--ups-device-id or MAINS_AEGIS_UPS_DEVICE_ID"),
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("load_usb_device_id", "--load-usb-device-id or MAINS_AEGIS_LOAD_USB_DEVICE_ID"),
+        ("isolapurr_device_id", "--isolapurr-device-id or MAINS_AEGIS_POWER_DEVICE_ID"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"formal HIL readiness requires {option}; no hardware device id is built in")
+    return args
 
 
 def load_status_payload(args: argparse.Namespace, *, load_cli: str, load_device: str, dry_run: bool) -> Any:
@@ -172,7 +182,7 @@ def read_ups_cli_observation_surfaces(
     device_id = resolve_observe_device_id(args) or args.ups_device_id
     surfaces = {
         "status": ["status"],
-        "power_diag": ["power-diag"],
+        "diag_snapshot": ["diag-snapshot"],
     }
     result: dict[str, Any] = {
         "ok": True,
@@ -340,14 +350,14 @@ def rate_gate_failures(
 def evaluate_telemetry_gate(
     *,
     ups_status_probe: Any,
-    ups_power_diag_probe: Any,
+    ups_diag_snapshot_probe: Any,
     source_probe: Any,
     load_probe: Any,
 ) -> dict[str, Any]:
     failures: list[str] = []
     for name, payload in (
         ("ups_status", ups_status_probe),
-        ("ups_power_diag", ups_power_diag_probe),
+        ("ups_diag_snapshot", ups_diag_snapshot_probe),
         ("source", source_probe),
         ("load", load_probe),
     ):
@@ -364,7 +374,7 @@ def evaluate_telemetry_gate(
         },
         "probes": {
             "ups_status": ups_status_probe,
-            "ups_power_diag": ups_power_diag_probe,
+            "ups_diag_snapshot": ups_diag_snapshot_probe,
             "source": source_probe,
             "load": load_probe,
         },
@@ -559,8 +569,8 @@ def run_telemetry_gate(args: argparse.Namespace, *, dry_run: bool) -> dict[str, 
         args.ups_status_url,
         devd_cache_query,
     )
-    ups_power_diag_url = append_query_params(
-        args.devd_power_diag_url,
+    ups_diag_snapshot_url = append_query_params(
+        args.devd_diag_snapshot_url,
         devd_cache_query,
     )
     source_ports_url = f"{args.isolapurr_url.rstrip('/')}/api/v1/ports"
@@ -574,9 +584,9 @@ def run_telemetry_gate(args: argparse.Namespace, *, dry_run: bool) -> dict[str, 
         devd_meta_required=True,
         dry_run=dry_run,
     )
-    ups_power_diag_probe = probe_http_json_rate(
-        name="ups_power_diag",
-        url=ups_power_diag_url,
+    ups_diag_snapshot_probe = probe_http_json_rate(
+        name="ups_diag_snapshot",
+        url=ups_diag_snapshot_url,
         samples=samples,
         interval_sec=interval_sec,
         timeout_sec=timeout_sec,
@@ -597,7 +607,7 @@ def run_telemetry_gate(args: argparse.Namespace, *, dry_run: bool) -> dict[str, 
     load_probe = probe_load_rate(args, dry_run=dry_run)
     return evaluate_telemetry_gate(
         ups_status_probe=ups_status_probe,
-        ups_power_diag_probe=ups_power_diag_probe,
+        ups_diag_snapshot_probe=ups_diag_snapshot_probe,
         source_probe=source_probe,
         load_probe=load_probe,
     )
@@ -628,7 +638,7 @@ def main() -> int:
     observe_urls = normalized_observe_urls(args)
     args.ups_status_url = observe_urls["ups_status_url"]
     args.ups_settings_url = observe_urls["ups_settings_url"]
-    args.devd_power_diag_url = observe_urls["devd_power_diag_url"]
+    args.devd_diag_snapshot_url = observe_urls["devd_diag_snapshot_url"]
     actions: list[dict[str, Any]] = []
     safe_prepare_failures: list[str] = []
     devd_bootstrap_gate = runner.ensure_valid_mains_aegis_devd_http_base(

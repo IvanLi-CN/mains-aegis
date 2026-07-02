@@ -15,7 +15,7 @@
 - 已通过：`cargo +esp check --release --manifest-path firmware/Cargo.toml --bin esp-firmware --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
 - 已通过：`cargo +esp build --manifest-path firmware/Cargo.toml --bin esp-firmware --release --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc --features net_http,web_serial`
 - 已通过：`cargo test --manifest-path tools/mains-aegis-host/Cargo.toml --lib`
-- 已通过：烧录到 `/dev/cu.usbmodem212201` 后，硬件自检后的屏幕显示由主人确认恢复正常。
+- 已通过：烧录到 `/tmp/fixture-ups-usb-port` 后，硬件自检后的屏幕显示由主人确认恢复正常。
 
 ## 后续恢复点
 

@@ -1,5 +1,5 @@
 # Example selector cache for bq40-comm-tool
 # Copy to .esp32-port and adjust PORT/MAC to your board.
 
-port=/dev/cu.usbmodemXXXX
+port=<serial-port>
 mac=AA:BB:CC:DD:EE:FF

@@ -14,6 +14,7 @@ ALLOWED = {
     "front_panel_logic.rs",
     "front_panel_scene.rs",
     "mdns_wire.rs",
+    "net.rs",
     "net_bridge.rs",
     "net_contract.rs",
     "net_logic.rs",

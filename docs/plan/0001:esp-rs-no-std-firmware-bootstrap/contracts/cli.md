@@ -21,7 +21,7 @@ cd ..
 mcu-agentd selector list esp
 
 # Select one explicitly (writes firmware/.esp32-port)
-PORT=/dev/cu.usbmodemXXXX mcu-agentd selector set esp "$PORT"
+PORT=<serial-port> mcu-agentd selector set esp "$PORT"
 
 # Flash + monitor (recommended for bring-up)
 mcu-agentd flash esp

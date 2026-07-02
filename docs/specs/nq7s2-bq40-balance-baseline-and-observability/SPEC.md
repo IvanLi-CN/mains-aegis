@@ -141,11 +141,11 @@
 
 ## 验证记录
 
-- `cargo test --manifest-path /Users/ivan/.codex/worktrees/8824/mains-aegis/tools/front-panel-preview/Cargo.toml`
-- `cargo test --manifest-path /Users/ivan/.codex/worktrees/8824/mains-aegis/firmware/host-unit-tests/Cargo.toml`
-- `cargo run --manifest-path /Users/ivan/.codex/worktrees/8824/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells-balance-active --out-dir /Users/ivan/.codex/worktrees/8824/mains-aegis/docs/specs/nq7s2-bq40-balance-baseline-and-observability/assets/render`
-- `cargo run --manifest-path /Users/ivan/.codex/worktrees/8824/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells-balance-idle --out-dir /Users/ivan/.codex/worktrees/8824/mains-aegis/docs/specs/nq7s2-bq40-balance-baseline-and-observability/assets/render`
-- `cargo run --manifest-path /Users/ivan/.codex/worktrees/8824/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells-balance-config-mismatch --out-dir /Users/ivan/.codex/worktrees/8824/mains-aegis/docs/specs/nq7s2-bq40-balance-baseline-and-observability/assets/render`
+- `cargo test --manifest-path <REPO_ROOT>/tools/front-panel-preview/Cargo.toml`
+- `cargo test --manifest-path <REPO_ROOT>/firmware/host-unit-tests/Cargo.toml`
+- `cargo run --manifest-path <REPO_ROOT>/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells-balance-active --out-dir <REPO_ROOT>/docs/specs/nq7s2-bq40-balance-baseline-and-observability/assets/render`
+- `cargo run --manifest-path <REPO_ROOT>/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells-balance-idle --out-dir <REPO_ROOT>/docs/specs/nq7s2-bq40-balance-baseline-and-observability/assets/render`
+- `cargo run --manifest-path <REPO_ROOT>/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells-balance-config-mismatch --out-dir <REPO_ROOT>/docs/specs/nq7s2-bq40-balance-baseline-and-observability/assets/render`
 - `./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile live-df-mainboard`（tool report: `tools/bq40-comm-tool/reports/20260407_121248/summary.json`）
 - `mcu-agentd --non-interactive monitor esp --reset`（主固件 monitor: `.mcu-agentd/monitor/esp/20260407_041848.mon.ndjson`）
 - `./bin/run.sh diagnose --mode canonical --duration-sec 60 --force-min-charge true`（观测 `REST / Update Status / CBStatus`：`tools/bq40-comm-tool/.mcu-agentd/monitor/esp/20260407_065018.mon.ndjson`）

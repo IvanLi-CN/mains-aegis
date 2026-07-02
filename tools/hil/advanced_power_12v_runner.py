@@ -20,14 +20,14 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_LOAD_DEVICE = "loadlynx-d68638"
-DEFAULT_LOAD_USB_DEVICE_ID = "digital-2bdfc170893f"
-DEFAULT_LOAD_USB_PORT = "/dev/cu.usbmodem212101"
-DEFAULT_UPS_USB_DEVICE_ID = "serial-04f3bb3f5367"
+DEFAULT_LOAD_DEVICE = os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID")
+DEFAULT_LOAD_USB_DEVICE_ID = os.environ.get("MAINS_AEGIS_LOAD_USB_DEVICE_ID")
+DEFAULT_LOAD_USB_PORT = os.environ.get("MAINS_AEGIS_LOAD_USB_PORT")
+DEFAULT_UPS_USB_DEVICE_ID = os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID")
 DEFAULT_LOAD_BRIDGE_DEVICE = ""
 DEFAULT_LOAD_IPC = ""
 DEFAULT_LOAD_DEVD_BASE_URL = "http://127.0.0.1:20641"
-DEFAULT_LOAD_DEVD_SOCKET = "/var/folders/nl/qbk0flf9607bv21rd_7d042c0000gn/T/loadlynx-devd.sock"
+DEFAULT_LOAD_DEVD_SOCKET = os.environ.get("LOADLYNX_DEVD_SOCKET", "")
 DEFAULT_LOAD_CLI = str(Path.home() / ".local" / "bin" / "loadlynx")
 DEFAULT_LOAD_BRIDGE_URL = "http://127.0.0.1:30180"
 DEFAULT_UPS_OBSERVE_DEVICE_ID = (
@@ -51,8 +51,8 @@ DEFAULT_UPS_STATUS_URL = (
 DEFAULT_UPS_SETTINGS_URL = (
     f"{default_mains_aegis_devd_base_url().rstrip('/')}/api/v1/devices/{DEFAULT_UPS_OBSERVE_DEVICE_ID}/settings"
 )
-DEFAULT_DEVD_POWER_DIAG_URL = (
-    f"{default_mains_aegis_devd_base_url().rstrip('/')}/api/v1/devices/{DEFAULT_UPS_OBSERVE_DEVICE_ID}/power-diag"
+DEFAULT_DEVD_DIAG_SNAPSHOT_URL = (
+    f"{default_mains_aegis_devd_base_url().rstrip('/')}/api/v1/devices/{DEFAULT_UPS_OBSERVE_DEVICE_ID}/diag-snapshot"
     "?include_meta=true&watch_freshness_ms=333"
 )
 DEFAULT_DEVD_MONITOR_START_URL = (
@@ -65,8 +65,8 @@ DEFAULT_DEVD_SCAN_URL = f"{default_mains_aegis_devd_base_url().rstrip('/')}/api/
 DEFAULT_MAINS_AEGIS_CLI = str(
     Path(__file__).resolve().parent.parent / "mains-aegis-host" / "target" / "debug" / "mains-aegis"
 )
-DEFAULT_ISOLAPURR_URL = "http://192.168.31.122"
-DEFAULT_ISOLAPURR_DEVICE_ID = "856a141cdbd4"
+DEFAULT_ISOLAPURR_URL = "http://127.0.0.1:30182"
+DEFAULT_ISOLAPURR_DEVICE_ID = os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID")
 DEFAULT_ISOLAPURR_CLI = "isolapurr"
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 45.0
 DEFAULT_STATUS_TIMEOUT_SECONDS = 20.0
@@ -886,7 +886,7 @@ class SseStatusPoller:
                 self._stop_event.wait(0.2)
 
 
-class DerivedPowerDiagPoller:
+class DerivedDiagSnapshotPoller:
     def __init__(self, source_poller: Any) -> None:
         self._source_poller = source_poller
         self._last_generation: int | None = None
@@ -915,7 +915,7 @@ class DerivedPowerDiagPoller:
         source_generation = source.get("generation")
         if isinstance(source_generation, int) and source_generation != self._last_generation:
             self._last_generation = source_generation
-            self._latest_payload = derive_power_diag_from_status(
+            self._latest_payload = derive_diag_snapshot_from_status(
                 source.get("payload"),
                 source="direct_lan_status_derived",
             )
@@ -957,9 +957,9 @@ def parse_args() -> argparse.Namespace:
         help="Formal scene contract label recorded in report metadata.",
     )
     parser.add_argument("--target-ma", type=int, required=True)
-    parser.add_argument("--load-device", default=DEFAULT_LOAD_DEVICE)
-    parser.add_argument("--load-usb-device-id", default=DEFAULT_LOAD_USB_DEVICE_ID)
-    parser.add_argument("--load-usb-port", default=DEFAULT_LOAD_USB_PORT)
+    parser.add_argument("--load-device", default=os.environ.get("MAINS_AEGIS_LOAD_DEVICE_ID"))
+    parser.add_argument("--load-usb-device-id", default=os.environ.get("MAINS_AEGIS_LOAD_USB_DEVICE_ID"))
+    parser.add_argument("--load-usb-port", default=os.environ.get("MAINS_AEGIS_LOAD_USB_PORT"))
     parser.add_argument("--load-cli", default=DEFAULT_LOAD_CLI)
     parser.add_argument("--load-ipc", default=DEFAULT_LOAD_IPC)
     parser.add_argument("--load-bridge-device", default=DEFAULT_LOAD_BRIDGE_DEVICE)
@@ -968,16 +968,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--load-devd-socket", default=DEFAULT_LOAD_DEVD_SOCKET)
     parser.add_argument("--mains-aegis-cli", default=DEFAULT_MAINS_AEGIS_CLI)
     parser.add_argument("--mains-aegis-ipc", default=None)
-    parser.add_argument("--ups-device-id", default=DEFAULT_UPS_USB_DEVICE_ID)
+    parser.add_argument("--ups-device-id", default=os.environ.get("MAINS_AEGIS_UPS_DEVICE_ID"))
     parser.add_argument("--ups-status-url", default=DEFAULT_UPS_STATUS_URL)
     parser.add_argument("--ups-settings-url", default=DEFAULT_UPS_SETTINGS_URL)
-    parser.add_argument("--devd-power-diag-url", default=DEFAULT_DEVD_POWER_DIAG_URL)
+    parser.add_argument("--devd-diag-snapshot-url", default=DEFAULT_DEVD_DIAG_SNAPSHOT_URL)
     parser.add_argument("--devd-monitor-start-url", default=DEFAULT_DEVD_MONITOR_START_URL)
     parser.add_argument("--devd-device-trace-url", default=DEFAULT_DEVD_DEVICE_TRACE_URL)
     parser.add_argument("--devd-scan-url", default=DEFAULT_DEVD_SCAN_URL)
     parser.add_argument("--isolapurr-cli", default=DEFAULT_ISOLAPURR_CLI)
     parser.add_argument("--isolapurr-url", default=DEFAULT_ISOLAPURR_URL)
-    parser.add_argument("--isolapurr-device-id", default=DEFAULT_ISOLAPURR_DEVICE_ID)
+    parser.add_argument("--isolapurr-device-id", default=os.environ.get("MAINS_AEGIS_POWER_DEVICE_ID"))
     parser.add_argument("--source-voltage-mv", type=int, default=DEFAULT_SOURCE_VOLTAGE_MV)
     parser.add_argument(
         "--source-current-limit-ma",
@@ -1028,6 +1028,15 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    for name, option in (
+        ("ups_device_id", "--ups-device-id or MAINS_AEGIS_UPS_DEVICE_ID"),
+        ("load_device", "--load-device or MAINS_AEGIS_LOAD_DEVICE_ID"),
+        ("load_usb_device_id", "--load-usb-device-id or MAINS_AEGIS_LOAD_USB_DEVICE_ID"),
+        ("load_usb_port", "--load-usb-port or MAINS_AEGIS_LOAD_USB_PORT"),
+        ("isolapurr_device_id", "--isolapurr-device-id or MAINS_AEGIS_POWER_DEVICE_ID"),
+    ):
+        if not (getattr(args, name, None) or "").strip():
+            parser.error(f"advanced power HIL requires {option}; no hardware device id or port is built in")
     if args.sample_interval_seconds <= 0:
         parser.error("--sample-interval-seconds must be > 0")
     if args.sample_interval_seconds > FORMAL_MAX_CONFIGURED_SAMPLE_INTERVAL_SECONDS:
@@ -1061,7 +1070,7 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     observe_urls = normalized_observe_urls(args)
     args.ups_status_url = observe_urls["ups_status_url"]
     args.ups_settings_url = observe_urls["ups_settings_url"]
-    args.devd_power_diag_url = observe_urls["devd_power_diag_url"]
+    args.devd_diag_snapshot_url = observe_urls["devd_diag_snapshot_url"]
     args.devd_monitor_start_url = observe_urls["devd_monitor_start_url"]
     args.devd_device_trace_url = observe_urls["devd_device_trace_url"]
     if args.scene_type == "backup_only" and args.include_backup is not True:
@@ -1814,8 +1823,8 @@ def normalized_observe_urls(args: argparse.Namespace) -> dict[str, str]:
             rewrite_devd_endpoint_base(args.ups_settings_url, base_url=devd_base_url),
             device_id=normalized_device_id,
         ),
-        "devd_power_diag_url": normalize_devd_device_endpoint(
-            rewrite_devd_endpoint_base(args.devd_power_diag_url, base_url=devd_base_url),
+        "devd_diag_snapshot_url": normalize_devd_device_endpoint(
+            rewrite_devd_endpoint_base(args.devd_diag_snapshot_url, base_url=devd_base_url),
             device_id=normalized_device_id,
         ),
         "devd_monitor_start_url": normalize_devd_device_endpoint(
@@ -2107,13 +2116,23 @@ def looks_like_ups_status_payload(payload: Any) -> bool:
     )
 
 
-def looks_like_power_diag_payload(payload: Any) -> bool:
-    data = dict_or_empty(payload)
+def looks_like_diag_snapshot_payload(payload: Any) -> bool:
+    data = unwrap_diag_snapshot_payload(payload)
     input_root = data.get("input")
     return isinstance(input_root, dict) and "devices" not in data and "mode" not in data
 
 
-def derive_power_diag_from_status(
+def unwrap_diag_snapshot_payload(payload: Any) -> dict[str, Any]:
+    data = dict_or_empty(payload)
+    packages = dict_or_empty(data.get("packages"))
+    derived = dict_or_empty(packages.get("derived.power"))
+    derived_payload = dict_or_empty(derived.get("payload"))
+    if derived_payload:
+        return derived_payload
+    return data
+
+
+def derive_diag_snapshot_from_status(
     status_payload: Any,
     *,
     source: str = "status_derived",
@@ -2163,38 +2182,38 @@ def derive_power_diag_from_status(
         },
         "source": source,
     }
-    return derived if looks_like_power_diag_payload(derived) else {}
+    return derived if looks_like_diag_snapshot_payload(derived) else {}
 
 
-def trace_power_diag_with_status_fallback(trace_payload: Any) -> dict[str, Any]:
+def trace_diag_snapshot_with_status_fallback(trace_payload: Any) -> dict[str, Any]:
     trace_snapshot = {"payload": trace_payload}
-    power_diag = power_diag_from_trace_snapshot(trace_snapshot)
-    if looks_like_power_diag_payload(power_diag):
-        return power_diag
-    return derive_power_diag_from_status(
+    diag_snapshot = diag_snapshot_from_trace_snapshot(trace_snapshot)
+    if looks_like_diag_snapshot_payload(diag_snapshot):
+        return diag_snapshot
+    return derive_diag_snapshot_from_status(
         status_from_trace_snapshot(trace_snapshot),
         source="trace_status_derived",
     )
 
 
-def fetch_power_diag_with_trace_fallback(
+def fetch_diag_snapshot_with_trace_fallback(
     args: argparse.Namespace,
     *,
     timeout_sec: float,
-    seeded_power_diag: Any | None = None,
+    seeded_diag_snapshot: Any | None = None,
 ) -> tuple[Any, str | None, str | None]:
-    power_diag_error: str | None = None
+    diag_snapshot_error: str | None = None
     try:
         return (
             http_json_with_retries(
-                args.devd_power_diag_url,
+                args.devd_diag_snapshot_url,
                 timeout_sec=timeout_sec,
             ),
             "direct_http",
             None,
         )
     except Exception as exc:  # noqa: BLE001
-        power_diag_error = repr(exc)
+        diag_snapshot_error = repr(exc)
     trace_url = (getattr(args, "devd_device_trace_url", "") or "").strip()
     if trace_url:
         try:
@@ -2202,14 +2221,14 @@ def fetch_power_diag_with_trace_fallback(
                 trace_url,
                 timeout_sec=timeout_sec,
             )
-            derived_power_diag = trace_power_diag_with_status_fallback(trace_payload)
-            if looks_like_power_diag_payload(derived_power_diag):
-                return derived_power_diag, "devd_trace", None
+            derived_diag_snapshot = trace_diag_snapshot_with_status_fallback(trace_payload)
+            if looks_like_diag_snapshot_payload(derived_diag_snapshot):
+                return derived_diag_snapshot, "devd_trace", None
         except Exception as exc:  # noqa: BLE001
-            power_diag_error = f"{power_diag_error}; trace={exc!r}" if power_diag_error else repr(exc)
-    if isinstance(seeded_power_diag, dict):
-        return seeded_power_diag, "seeded_refresh_devd_devices", power_diag_error
-    return None, None, power_diag_error
+            diag_snapshot_error = f"{diag_snapshot_error}; trace={exc!r}" if diag_snapshot_error else repr(exc)
+    if isinstance(seeded_diag_snapshot, dict):
+        return seeded_diag_snapshot, "seeded_refresh_devd_devices", diag_snapshot_error
+    return None, None, diag_snapshot_error
 
 
 def lan_address_from_devd_listing_snapshot(
@@ -3628,9 +3647,9 @@ def ups_snapshot_ready(snapshot: dict[str, Any]) -> bool:
     )
 
 
-def power_diag_snapshot_ready(snapshot: dict[str, Any]) -> bool:
+def diag_snapshot_snapshot_ready(snapshot: dict[str, Any]) -> bool:
     raw_payload = snapshot.get("payload")
-    payload = dict_or_empty(devd_read_sample(raw_payload))
+    payload = unwrap_diag_snapshot_payload(devd_read_sample(raw_payload))
     input_payload = dict_or_empty(payload.get("input"))
     root_source = payload.get("source")
     is_derived = isinstance(root_source, str) and root_source.endswith("_derived")
@@ -3652,8 +3671,8 @@ def trace_snapshot_ready(snapshot: dict[str, Any]) -> bool:
     payload = dict_or_empty(snapshot.get("payload"))
     status_payload = dict_or_empty(payload.get("status"))
     status_input = dict_or_empty(status_payload.get("input"))
-    power_diag_payload = dict_or_empty(payload.get("power_diag"))
-    power_diag_input = dict_or_empty(power_diag_payload.get("input"))
+    diag_snapshot_payload = unwrap_diag_snapshot_payload(payload.get("diag_snapshot"))
+    diag_snapshot_input = dict_or_empty(diag_snapshot_payload.get("input"))
     return (
         isinstance(snapshot.get("generation"), int)
         and snapshot.get("generation", 0) >= 1
@@ -3661,9 +3680,9 @@ def trace_snapshot_ready(snapshot: dict[str, Any]) -> bool:
         and float(snapshot.get("age_s")) <= FORMAL_MAX_REALTIME_SAMPLE_AGE_SECONDS
         and isinstance(status_payload.get("mode"), str)
         and isinstance(status_input.get("mains_present"), bool)
-        and isinstance(power_diag_input.get("assist_power_stage"), str)
-        and isinstance(power_diag_input.get("vin_vbus_mv"), (int, float))
-        and isinstance(power_diag_input.get("vin_iin_ma"), (int, float))
+        and isinstance(diag_snapshot_input.get("assist_power_stage"), str)
+        and isinstance(diag_snapshot_input.get("vin_vbus_mv"), (int, float))
+        and isinstance(diag_snapshot_input.get("vin_iin_ma"), (int, float))
     )
 
 
@@ -3698,7 +3717,7 @@ def isolapurr_snapshot_ready(snapshot: dict[str, Any]) -> bool:
 def wait_for_scene_pollers_ready(
     *,
     ups_status_poller: JsonPoller,
-    power_diag_poller: JsonPoller,
+    diag_snapshot_poller: JsonPoller,
     isolapurr_poller: JsonPoller,
     sample_interval_seconds: float,
     timeout_sec: float,
@@ -3714,33 +3733,33 @@ def wait_for_scene_pollers_ready(
         now = time.monotonic()
         snapshots = {
             "ups_status": ups_status_poller.snapshot(now),
-            "power_diag": power_diag_poller.snapshot(now),
+            "diag_snapshot": diag_snapshot_poller.snapshot(now),
             "isolapurr": isolapurr_poller.snapshot(now),
         }
         last_snapshots = snapshots
         ups_ready_snapshot = snapshots["ups_status"]
-        power_diag_ready_snapshot = snapshots["power_diag"]
+        diag_snapshot_ready_snapshot = snapshots["diag_snapshot"]
         trace_snapshot = None
         if trace_snapshot_ready(snapshots["ups_status"]):
             trace_snapshot = snapshots["ups_status"]
-        elif trace_snapshot_ready(snapshots["power_diag"]):
-            trace_snapshot = snapshots["power_diag"]
+        elif trace_snapshot_ready(snapshots["diag_snapshot"]):
+            trace_snapshot = snapshots["diag_snapshot"]
         if trace_snapshot is not None:
             ups_ready_snapshot = {
                 **snapshots["ups_status"],
                 "payload": status_from_trace_snapshot(trace_snapshot),
             }
-            power_diag_ready_snapshot = {
-                **snapshots["power_diag"],
-                "payload": power_diag_from_trace_snapshot(trace_snapshot),
+            diag_snapshot_ready_snapshot = {
+                **snapshots["diag_snapshot"],
+                "payload": diag_snapshot_from_trace_snapshot(trace_snapshot),
             }
         else:
             listing_status_payload = ups_status_from_devd_listing_snapshot(
                 snapshots["ups_status"],
                 device_id=ups_device_id,
             )
-            listing_power_diag_payload = power_diag_from_devd_listing_snapshot(
-                snapshots["power_diag"],
+            listing_diag_snapshot_payload = diag_snapshot_from_devd_listing_snapshot(
+                snapshots["diag_snapshot"],
                 device_id=ups_device_id,
             )
             if listing_status_payload:
@@ -3748,14 +3767,14 @@ def wait_for_scene_pollers_ready(
                     **snapshots["ups_status"],
                     "payload": listing_status_payload,
                 }
-            if listing_power_diag_payload:
-                power_diag_ready_snapshot = {
-                    **snapshots["power_diag"],
-                    "payload": listing_power_diag_payload,
+            if listing_diag_snapshot_payload:
+                diag_snapshot_ready_snapshot = {
+                    **snapshots["diag_snapshot"],
+                    "payload": listing_diag_snapshot_payload,
                 }
         readiness = {
             "ups_status": ups_snapshot_ready(ups_ready_snapshot),
-            "power_diag": power_diag_snapshot_ready(power_diag_ready_snapshot),
+            "diag_snapshot": diag_snapshot_snapshot_ready(diag_snapshot_ready_snapshot),
             "isolapurr": isolapurr_snapshot_ready(snapshots["isolapurr"]),
         }
         if all(readiness.values()):
@@ -4661,9 +4680,9 @@ def status_from_trace_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     return dict_or_empty(payload.get("status"))
 
 
-def power_diag_from_trace_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+def diag_snapshot_from_trace_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     payload = dict_or_empty(devd_read_sample(snapshot.get("payload")))
-    return dict_or_empty(payload.get("power_diag"))
+    return unwrap_diag_snapshot_payload(payload.get("diag_snapshot"))
 
 
 def ups_status_from_devd_listing_snapshot(
@@ -4675,14 +4694,14 @@ def ups_status_from_devd_listing_snapshot(
     return dict_or_empty(devd_device_entry_from_listing(payload, device_id=device_id).get("status"))
 
 
-def power_diag_from_devd_listing_snapshot(
+def diag_snapshot_from_devd_listing_snapshot(
     snapshot: dict[str, Any],
     *,
     device_id: str | None,
 ) -> dict[str, Any]:
     payload = dict_or_empty(devd_read_sample(snapshot.get("payload")))
-    return dict_or_empty(
-        devd_device_entry_from_listing(payload, device_id=device_id).get("power_diag")
+    return unwrap_diag_snapshot_payload(
+        devd_device_entry_from_listing(payload, device_id=device_id).get("diag_snapshot")
     )
 
 
@@ -4748,19 +4767,19 @@ def capture_three_device_sample(
     load_device: str,
     ups_status_url: str,
     ups_settings_url: str,
-    devd_power_diag_url: str,
+    devd_diag_snapshot_url: str,
     isolapurr_url: str,
     status_timeout_sec: float,
     load_status_snapshot: dict[str, Any],
     ups_status_snapshot: dict[str, Any],
-    power_diag_snapshot: dict[str, Any],
+    diag_snapshot_snapshot: dict[str, Any],
     settings_snapshot: dict[str, Any],
     isolapurr_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
-    _ = (ups_status_url, ups_settings_url, devd_power_diag_url, isolapurr_url, status_timeout_sec)
-    ups_device_id = devd_device_id_from_endpoint(devd_power_diag_url)
+    _ = (ups_status_url, ups_settings_url, devd_diag_snapshot_url, isolapurr_url, status_timeout_sec)
+    ups_device_id = devd_device_id_from_endpoint(devd_diag_snapshot_url)
     raw_ups_status_payload = ups_status_snapshot.get("payload")
-    raw_power_diag_payload = power_diag_snapshot.get("payload")
+    raw_diag_snapshot_payload = diag_snapshot_snapshot.get("payload")
     raw_settings_payload = settings_snapshot.get("payload")
     raw_isolapurr_payload = isolapurr_snapshot.get("payload")
     direct_ups_status = dict_or_empty(devd_read_sample(raw_ups_status_payload))
@@ -4770,7 +4789,7 @@ def capture_three_device_sample(
     if not trace_status:
         trace_status = status_from_trace_snapshot(ups_status_snapshot)
     if not trace_status:
-        trace_status = status_from_trace_snapshot(power_diag_snapshot)
+        trace_status = status_from_trace_snapshot(diag_snapshot_snapshot)
     if not trace_status:
         trace_status = ups_status_from_devd_listing_snapshot(
             ups_status_snapshot,
@@ -4778,35 +4797,35 @@ def capture_three_device_sample(
         )
     if not trace_status:
         trace_status = ups_status_from_devd_listing_snapshot(
-            power_diag_snapshot,
+            diag_snapshot_snapshot,
             device_id=ups_device_id,
         )
-    direct_power_diag = dict_or_empty(devd_read_sample(raw_power_diag_payload))
-    if not looks_like_power_diag_payload(direct_power_diag):
-        direct_power_diag = {}
-    trace_power_diag = direct_power_diag
-    if not trace_power_diag:
-        trace_power_diag = power_diag_from_trace_snapshot(power_diag_snapshot)
-    if not trace_power_diag:
-        trace_power_diag = power_diag_from_trace_snapshot(ups_status_snapshot)
-    if not trace_power_diag:
-        trace_power_diag = power_diag_from_devd_listing_snapshot(
-            power_diag_snapshot,
+    direct_diag_snapshot = unwrap_diag_snapshot_payload(devd_read_sample(raw_diag_snapshot_payload))
+    if not looks_like_diag_snapshot_payload(direct_diag_snapshot):
+        direct_diag_snapshot = {}
+    trace_diag_snapshot = direct_diag_snapshot
+    if not trace_diag_snapshot:
+        trace_diag_snapshot = diag_snapshot_from_trace_snapshot(diag_snapshot_snapshot)
+    if not trace_diag_snapshot:
+        trace_diag_snapshot = diag_snapshot_from_trace_snapshot(ups_status_snapshot)
+    if not trace_diag_snapshot:
+        trace_diag_snapshot = diag_snapshot_from_devd_listing_snapshot(
+            diag_snapshot_snapshot,
             device_id=ups_device_id,
         )
-    if not trace_power_diag:
-        trace_power_diag = power_diag_from_devd_listing_snapshot(
+    if not trace_diag_snapshot:
+        trace_diag_snapshot = diag_snapshot_from_devd_listing_snapshot(
             ups_status_snapshot,
             device_id=ups_device_id,
         )
-    if not trace_power_diag:
-        trace_power_diag = derive_power_diag_from_status(
+    if not trace_diag_snapshot:
+        trace_diag_snapshot = derive_diag_snapshot_from_status(
             trace_status or dict_or_empty(ups_status_snapshot.get("payload")),
             source="ups_status_derived",
         )
     fetch_elapsed_ms = {
         "ups_status": ups_status_snapshot.get("elapsed_ms"),
-        "power_diag": power_diag_snapshot.get("elapsed_ms"),
+        "diag_snapshot": diag_snapshot_snapshot.get("elapsed_ms"),
         "settings": settings_snapshot.get("elapsed_ms"),
         "isolapurr_power": isolapurr_snapshot.get("elapsed_ms"),
     }
@@ -4814,7 +4833,7 @@ def capture_three_device_sample(
         key: value
         for key, value in {
             "ups_status": ups_status_snapshot.get("error"),
-            "power_diag": power_diag_snapshot.get("error"),
+            "diag_snapshot": diag_snapshot_snapshot.get("error"),
             "settings": settings_snapshot.get("error"),
             "isolapurr_power": isolapurr_snapshot.get("error"),
         }.items()
@@ -4830,7 +4849,7 @@ def capture_three_device_sample(
     )
     fetch_age_s = {
         "ups_status": ups_status_snapshot.get("age_s"),
-        "power_diag": power_diag_snapshot.get("age_s"),
+        "diag_snapshot": diag_snapshot_snapshot.get("age_s"),
         "settings": settings_snapshot.get("age_s"),
         "isolapurr_power": isolapurr_snapshot.get("age_s"),
     }
@@ -4839,9 +4858,9 @@ def capture_three_device_sample(
             payload=raw_ups_status_payload,
             fetch_age_s=ups_status_snapshot.get("age_s"),
         ),
-        "power_diag": devd_snapshot_sample_age_s(
-            payload=raw_power_diag_payload,
-            fetch_age_s=power_diag_snapshot.get("age_s"),
+        "diag_snapshot": devd_snapshot_sample_age_s(
+            payload=raw_diag_snapshot_payload,
+            fetch_age_s=diag_snapshot_snapshot.get("age_s"),
         ),
         "settings": devd_snapshot_sample_age_s(
             payload=raw_settings_payload,
@@ -4854,12 +4873,12 @@ def capture_three_device_sample(
     }
     cache_fresh = {
         "ups_status": devd_read_meta(raw_ups_status_payload).get("cache_fresh"),
-        "power_diag": devd_read_meta(raw_power_diag_payload).get("cache_fresh"),
+        "diag_snapshot": devd_read_meta(raw_diag_snapshot_payload).get("cache_fresh"),
         "settings": devd_read_meta(raw_settings_payload).get("cache_fresh"),
         "isolapurr_power": devd_read_meta(raw_isolapurr_payload).get("cache_fresh"),
     }
     ups_status = trace_status or dict_or_empty(devd_read_sample(raw_ups_status_payload))
-    power_diag = trace_power_diag or dict_or_empty(devd_read_sample(raw_power_diag_payload))
+    diag_snapshot = trace_diag_snapshot or dict_or_empty(devd_read_sample(raw_diag_snapshot_payload))
     settings = dict_or_empty(devd_read_sample(raw_settings_payload))
     isolapurr_power = dict_or_empty(devd_read_sample(raw_isolapurr_payload))
     load_status = normalize_load_status_payload(load_status_snapshot.get("status"))
@@ -4875,7 +4894,7 @@ def capture_three_device_sample(
     ups_input = dict_or_empty(ups_status.get("input"))
     ups_battery = dict_or_empty(ups_status.get("battery"))
     ups_charger = dict_or_empty(ups_status.get("charger"))
-    diag_input = dict_or_empty(power_diag.get("input"))
+    diag_input = dict_or_empty(diag_snapshot.get("input"))
     vin_vbus_mv = ups_input.get("vin_vbus_mv")
     if not isinstance(vin_vbus_mv, (int, float)):
         vin_vbus_mv = diag_input.get("vin_vbus_mv")
@@ -4890,13 +4909,13 @@ def capture_three_device_sample(
         input_ibus_ma = diag_input.get("input_ibus_ma")
     mode = ups_status.get("mode")
     if not isinstance(mode, str):
-        mode = power_diag.get("input", {}).get("assist_power_stage")
+        mode = diag_snapshot.get("input", {}).get("assist_power_stage")
     stage = ups_input.get("assist_power_stage")
     if not isinstance(stage, str):
-        stage = power_diag.get("input", {}).get("assist_power_stage")
+        stage = diag_snapshot.get("input", {}).get("assist_power_stage")
     assist_target_vout_mv = ups_input.get("assist_target_vout_mv")
     if not isinstance(assist_target_vout_mv, (int, float)):
-        assist_target_vout_mv = power_diag.get("input", {}).get("assist_target_vout_mv")
+        assist_target_vout_mv = diag_snapshot.get("input", {}).get("assist_target_vout_mv")
     mains_present = ups_input.get("mains_present")
     if not isinstance(mains_present, bool):
         mains_present = diag_input.get("mains_present")
@@ -4920,13 +4939,13 @@ def capture_three_device_sample(
         "battery_current_ma": ups_battery.get("current_ma"),
         "charger_allow_charge": ups_charger.get("allow_charge"),
         "charger_detail_status": ups_charger.get("detail_status"),
-        "diag_stage": power_diag.get("input", {}).get("assist_power_stage"),
-        "diag_assist_target_vout_mv": power_diag.get("input", {}).get("assist_target_vout_mv"),
-        "diag_vin_vbus_mv": power_diag.get("input", {}).get("vin_vbus_mv"),
-        "diag_vin_iin_ma": power_diag.get("input", {}).get("vin_iin_ma"),
-        "diag_vin_baseline_mv": power_diag.get("input", {}).get("vin_baseline_mv"),
-        "diag_vin_drop_mv": power_diag.get("input", {}).get("vin_drop_mv"),
-        "diag_tps_total_iout_ma": power_diag.get("input", {}).get("tps_total_iout_ma"),
+        "diag_stage": diag_snapshot.get("input", {}).get("assist_power_stage"),
+        "diag_assist_target_vout_mv": diag_snapshot.get("input", {}).get("assist_target_vout_mv"),
+        "diag_vin_vbus_mv": diag_snapshot.get("input", {}).get("vin_vbus_mv"),
+        "diag_vin_iin_ma": diag_snapshot.get("input", {}).get("vin_iin_ma"),
+        "diag_vin_baseline_mv": diag_snapshot.get("input", {}).get("vin_baseline_mv"),
+        "diag_vin_drop_mv": diag_snapshot.get("input", {}).get("vin_drop_mv"),
+        "diag_tps_total_iout_ma": diag_snapshot.get("input", {}).get("tps_total_iout_ma"),
         "out_a_vbus_mv": out_a.get("vbus_mv"),
         "out_a_iout_ma": out_a.get("iout_ma"),
         "out_b_vbus_mv": out_b.get("vbus_mv"),
@@ -4957,7 +4976,7 @@ def capture_three_device_sample(
         "fetch_errors": fetch_errors or None,
         "raw": {
             "ups_status": ups_status,
-            "power_diag": power_diag,
+            "diag_snapshot": diag_snapshot,
             "settings": settings,
             "isolapurr_power": isolapurr_power,
             "load_control": load_control,
@@ -4976,7 +4995,7 @@ def capture_phase_series(
     load_device: str,
     ups_status_url: str,
     ups_settings_url: str,
-    devd_power_diag_url: str,
+    devd_diag_snapshot_url: str,
     isolapurr_url: str,
     status_timeout_sec: float,
     load_status_poller: LoadStatusPoller,
@@ -5012,7 +5031,7 @@ def capture_phase_series(
             load_device=load_device,
             ups_status_url=ups_status_url,
             ups_settings_url=ups_settings_url,
-            devd_power_diag_url=devd_power_diag_url,
+            devd_diag_snapshot_url=devd_diag_snapshot_url,
             isolapurr_url=isolapurr_url,
             status_timeout_sec=status_timeout_sec,
             load_status_snapshot=current_snapshot,
@@ -5127,7 +5146,7 @@ def execute_continuous_scene(
     actions: list[dict[str, Any]],
     load_status_poller: LoadStatusPoller,
     ups_status_poller: JsonPoller,
-    power_diag_poller: JsonPoller,
+    diag_snapshot_poller: JsonPoller,
     settings_snapshot: dict[str, Any],
     isolapurr_poller: JsonPoller,
     expected_phases: list[str],
@@ -5169,12 +5188,12 @@ def execute_continuous_scene(
             load_device=args.load_device,
             ups_status_url=args.ups_status_url,
             ups_settings_url=args.ups_settings_url,
-            devd_power_diag_url=args.devd_power_diag_url,
+            devd_diag_snapshot_url=args.devd_diag_snapshot_url,
             isolapurr_url=args.isolapurr_url,
             status_timeout_sec=args.status_timeout_sec,
             load_status_snapshot=load_status_poller.snapshot(now_monotonic),
             ups_status_snapshot=ups_status_poller.snapshot(now_monotonic),
-            power_diag_snapshot=power_diag_poller.snapshot(now_monotonic),
+            diag_snapshot_snapshot=diag_snapshot_poller.snapshot(now_monotonic),
             settings_snapshot=settings_snapshot,
             isolapurr_snapshot=isolapurr_poller.snapshot(now_monotonic),
         )
@@ -5188,9 +5207,9 @@ def execute_continuous_scene(
 
     def capture_fresh_ups_sample_at(now_monotonic: float, phase_name: str) -> None:
         nonlocal next_sample_at
-        ups_device_id = devd_device_id_from_endpoint(args.devd_power_diag_url)
+        ups_device_id = devd_device_id_from_endpoint(args.devd_diag_snapshot_url)
         ups_snapshot = ups_status_poller.snapshot(now_monotonic)
-        diag_snapshot = power_diag_poller.snapshot(now_monotonic)
+        diag_snapshot = diag_snapshot_poller.snapshot(now_monotonic)
         lan_address = None
         for snapshot in (ups_snapshot, diag_snapshot):
             lan_address = lan_address_from_devd_listing_snapshot(
@@ -5216,7 +5235,7 @@ def execute_continuous_scene(
             load_device=args.load_device,
             ups_status_url=args.ups_status_url,
             ups_settings_url=args.ups_settings_url,
-            devd_power_diag_url=args.devd_power_diag_url,
+            devd_diag_snapshot_url=args.devd_diag_snapshot_url,
             isolapurr_url=args.isolapurr_url,
             status_timeout_sec=args.status_timeout_sec,
             load_status_snapshot=load_status_poller.snapshot(now_monotonic),
@@ -5224,7 +5243,7 @@ def execute_continuous_scene(
                 **ups_snapshot,
                 "payload": fresh_status or ups_snapshot.get("payload"),
             },
-            power_diag_snapshot=diag_snapshot,
+            diag_snapshot_snapshot=diag_snapshot,
             settings_snapshot=settings_snapshot,
             isolapurr_snapshot=isolapurr_poller.snapshot(now_monotonic),
         )
@@ -5726,15 +5745,15 @@ def evaluate_group_completeness(group_samples: list[dict[str, Any]]) -> dict[str
     failures: list[str] = []
     surfaces = {
         "ups_status": all(isinstance((sample.get("raw") or {}).get("ups_status"), dict) for sample in group_samples),
-        "power_diag": all(isinstance((sample.get("raw") or {}).get("power_diag"), dict) for sample in group_samples),
+        "diag_snapshot": all(isinstance((sample.get("raw") or {}).get("diag_snapshot"), dict) for sample in group_samples),
         "isolapurr_power": all(isinstance((sample.get("raw") or {}).get("isolapurr_power"), dict) for sample in group_samples),
         "load_control": all(isinstance((sample.get("raw") or {}).get("load_control"), dict) for sample in group_samples),
         "load_status": all(isinstance((sample.get("raw") or {}).get("load_status"), dict) for sample in group_samples),
     }
     if not surfaces["ups_status"]:
         failures.append("missing_ups_status")
-    if not surfaces["power_diag"]:
-        failures.append("missing_power_diag")
+    if not surfaces["diag_snapshot"]:
+        failures.append("missing_diag_snapshot")
     if not surfaces["isolapurr_power"]:
         failures.append("missing_isolapurr_power")
     if not surfaces["load_control"]:
@@ -5885,7 +5904,7 @@ def evaluate_group_completeness(group_samples: list[dict[str, Any]]) -> dict[str
         if not ok:
             failures.append(failure)
     if online_source_samples and not any(
-        "vin_drop_mv" in dict_or_empty(dict_or_empty((sample.get("raw") or {}).get("power_diag")).get("input"))
+        "vin_drop_mv" in dict_or_empty(dict_or_empty((sample.get("raw") or {}).get("diag_snapshot")).get("input"))
         for sample in online_source_samples
     ):
         failures.append("missing_diag_vin_drop_series")
@@ -5938,18 +5957,18 @@ def evaluate_group_completeness(group_samples: list[dict[str, Any]]) -> dict[str
             (int, float),
         )
     ]
-    power_diag_ages = [
+    diag_snapshot_ages = [
         float(
             dict_or_empty(sample.get("sample_age_s")).get(
-                "power_diag",
-                dict_or_empty(sample.get("fetch_age_s")).get("power_diag"),
+                "diag_snapshot",
+                dict_or_empty(sample.get("fetch_age_s")).get("diag_snapshot"),
             )
         )
         for sample in group_samples
         if isinstance(
             dict_or_empty(sample.get("sample_age_s")).get(
-                "power_diag",
-                dict_or_empty(sample.get("fetch_age_s")).get("power_diag"),
+                "diag_snapshot",
+                dict_or_empty(sample.get("fetch_age_s")).get("diag_snapshot"),
             ),
             (int, float),
         )
@@ -5958,8 +5977,8 @@ def evaluate_group_completeness(group_samples: list[dict[str, Any]]) -> dict[str
     ups_status_fresh = bool(ups_status_ages) and all(
         age <= FORMAL_MAX_REALTIME_SAMPLE_AGE_SECONDS for age in ups_status_ages
     )
-    power_diag_fresh = bool(power_diag_ages) and all(
-        age <= FORMAL_MAX_REALTIME_SAMPLE_AGE_SECONDS for age in power_diag_ages
+    diag_snapshot_fresh = bool(diag_snapshot_ages) and all(
+        age <= FORMAL_MAX_REALTIME_SAMPLE_AGE_SECONDS for age in diag_snapshot_ages
     )
     sampling_metrics = build_formal_sampling_metrics(group_samples)
     failures.extend(sampling_metrics.get("sampling_failures") or [])
@@ -5974,8 +5993,8 @@ def evaluate_group_completeness(group_samples: list[dict[str, Any]]) -> dict[str
         "source_status_max_age_s": max(source_ages, default=None),
         "ups_status_fresh": ups_status_fresh,
         "ups_status_max_age_s": max(ups_status_ages, default=None),
-        "power_diag_fresh": power_diag_fresh,
-        "power_diag_max_age_s": max(power_diag_ages, default=None),
+        "diag_snapshot_fresh": diag_snapshot_fresh,
+        "diag_snapshot_max_age_s": max(diag_snapshot_ages, default=None),
         **sampling_metrics,
         **surfaces,
     }
@@ -5990,7 +6009,7 @@ def build_preflight(
     known_load_target_i_ma: int | None = None,
     load_telemetry_probe: dict[str, Any] | None = None,
     seeded_ups_status: Any | None = None,
-    seeded_power_diag: Any | None = None,
+    seeded_diag_snapshot: Any | None = None,
 ) -> dict[str, Any]:
     isolapurr_ports = fetch_isolapurr_ports(
         args.isolapurr_url,
@@ -6017,10 +6036,10 @@ def build_preflight(
         ups_status_error = repr(exc)
         ups_status = seeded_ups_status
         ups_status_source = "seeded_refresh_devd_devices" if isinstance(ups_status, dict) else None
-    power_diag, power_diag_source, power_diag_error = fetch_power_diag_with_trace_fallback(
+    diag_snapshot, diag_snapshot_source, diag_snapshot_error = fetch_diag_snapshot_with_trace_fallback(
         args,
         timeout_sec=min(args.status_timeout_sec, 5.0),
-        seeded_power_diag=seeded_power_diag,
+        seeded_diag_snapshot=seeded_diag_snapshot,
     )
     effective_enabled = load_output_enabled(normalize_verified_load_payload(load_status))
     effective_target_i_ma = load_target_i_ma(normalize_verified_load_payload(load_status))
@@ -6044,8 +6063,8 @@ def build_preflight(
         gate_failures.append("isolapurr_port_c_not_enabled")
     if not isinstance(ups_status, dict):
         gate_failures.append("ups_status_unavailable")
-    if not isinstance(power_diag, dict):
-        gate_failures.append("power_diag_unavailable")
+    if not isinstance(diag_snapshot, dict):
+        gate_failures.append("diag_snapshot_unavailable")
     if not isinstance(identity_payload, dict):
         gate_failures.append("ups_identity_unavailable")
     if not isinstance(settings_payload, dict):
@@ -6100,24 +6119,24 @@ def build_preflight(
             "hardware_capabilities": extract_identity_hardware_capabilities(identity_payload),
         },
         "hardware_validation": hardware_validation,
-        "power_diag": {
+        "diag_snapshot": {
             "assist_power_stage": (
-                (power_diag.get("input") or {}).get("assist_power_stage")
-                if isinstance(power_diag, dict)
+                (diag_snapshot.get("input") or {}).get("assist_power_stage")
+                if isinstance(diag_snapshot, dict)
                 else None
             ),
             "vin_vbus_mv": (
-                (power_diag.get("input") or {}).get("vin_vbus_mv")
-                if isinstance(power_diag, dict)
+                (diag_snapshot.get("input") or {}).get("vin_vbus_mv")
+                if isinstance(diag_snapshot, dict)
                 else None
             ),
             "vin_iin_ma": (
-                (power_diag.get("input") or {}).get("vin_iin_ma")
-                if isinstance(power_diag, dict)
+                (diag_snapshot.get("input") or {}).get("vin_iin_ma")
+                if isinstance(diag_snapshot, dict)
                 else None
             ),
-            "source": power_diag_source,
-            "fetch_error": power_diag_error,
+            "source": diag_snapshot_source,
+            "fetch_error": diag_snapshot_error,
         },
         "load": {
             "output_enabled": effective_enabled,
@@ -6316,12 +6335,12 @@ def summarize_samples(samples: list[dict[str, Any]], *, expected_phases: list[st
             "source_status_max_age_s": aggregate_max_number("source_status_max_age_s"),
             "ups_status_fresh": aggregate_all_bool("ups_status_fresh"),
             "ups_status_max_age_s": aggregate_max_number("ups_status_max_age_s"),
-            "power_diag_fresh": aggregate_all_bool("power_diag_fresh"),
-            "power_diag_max_age_s": aggregate_max_number("power_diag_max_age_s"),
+            "diag_snapshot_fresh": aggregate_all_bool("diag_snapshot_fresh"),
+            "diag_snapshot_max_age_s": aggregate_max_number("diag_snapshot_max_age_s"),
             "effective_sample_rate_hz": aggregate_min_number("effective_sample_rate_hz"),
             "max_sample_gap_s": aggregate_max_number("max_sample_gap_s"),
             "ups_status": aggregate_all_bool("ups_status"),
-            "power_diag": aggregate_all_bool("power_diag"),
+            "diag_snapshot": aggregate_all_bool("diag_snapshot"),
             "isolapurr_power": aggregate_all_bool("isolapurr_power"),
             "load_control": aggregate_all_bool("load_control"),
             "load_status": aggregate_all_bool("load_status"),
@@ -6349,7 +6368,7 @@ def build_signoff_acceptance(overall: dict[str, Any]) -> dict[str, Any]:
     failures = list(completeness.get("failures") or [])
     surface_keys = (
         "ups_status",
-        "power_diag",
+        "diag_snapshot",
         "isolapurr_power",
         "load_control",
         "load_status",
@@ -6384,11 +6403,11 @@ def build_signoff_acceptance(overall: dict[str, Any]) -> dict[str, Any]:
     load_status_fresh = bool(completeness.get("load_freshness_visible"))
     source_status_fresh = bool(completeness.get("source_status_fresh"))
     ups_status_fresh = bool(completeness.get("ups_status_fresh"))
-    power_diag_fresh = bool(completeness.get("power_diag_fresh"))
+    diag_snapshot_fresh = bool(completeness.get("diag_snapshot_fresh"))
     load_status_max_age_s = completeness.get("load_status_max_age_s")
     source_status_max_age_s = completeness.get("source_status_max_age_s")
     ups_status_max_age_s = completeness.get("ups_status_max_age_s")
-    power_diag_max_age_s = completeness.get("power_diag_max_age_s")
+    diag_snapshot_max_age_s = completeness.get("diag_snapshot_max_age_s")
     failed_acceptance_checks: list[str] = []
     if not bool(completeness.get("scene_complete")):
         failed_acceptance_checks.append("scene_incomplete")
@@ -6416,8 +6435,8 @@ def build_signoff_acceptance(overall: dict[str, Any]) -> dict[str, Any]:
         failed_acceptance_checks.append("source_status_stale")
     if not ups_status_fresh:
         failed_acceptance_checks.append("ups_status_stale")
-    if not power_diag_fresh:
-        failed_acceptance_checks.append("power_diag_stale")
+    if not diag_snapshot_fresh:
+        failed_acceptance_checks.append("diag_snapshot_stale")
     source_cut_required = bool(completeness.get("source_cut_required"))
     source_cut_state_observed = completeness.get("source_cut_state_observed")
     source_cut_vin_changed = completeness.get("source_cut_vin_changed")
@@ -6436,7 +6455,7 @@ def build_signoff_acceptance(overall: dict[str, Any]) -> dict[str, Any]:
         and load_status_fresh
         and source_status_fresh
         and ups_status_fresh
-        and power_diag_fresh
+        and diag_snapshot_fresh
         and (not source_cut_required or bool(source_cut_observed))
     )
     run_validity = "valid_for_signoff" if signoff_valid else "invalid_diagnostic_only"
@@ -6462,8 +6481,8 @@ def build_signoff_acceptance(overall: dict[str, Any]) -> dict[str, Any]:
         "source_status_max_age_s": source_status_max_age_s,
         "ups_status_fresh": ups_status_fresh,
         "ups_status_max_age_s": ups_status_max_age_s,
-        "power_diag_fresh": power_diag_fresh,
-        "power_diag_max_age_s": power_diag_max_age_s,
+        "diag_snapshot_fresh": diag_snapshot_fresh,
+        "diag_snapshot_max_age_s": diag_snapshot_max_age_s,
         "source_cut_required": source_cut_required,
         "source_cut_state_observed": source_cut_state_observed,
         "source_cut_vin_changed": source_cut_vin_changed,
@@ -6509,7 +6528,7 @@ def build_console_summary(
         "load_status_max_age_s": acceptance.get("load_status_max_age_s"),
         "source_status_max_age_s": acceptance.get("source_status_max_age_s"),
         "ups_status_max_age_s": acceptance.get("ups_status_max_age_s"),
-        "power_diag_max_age_s": acceptance.get("power_diag_max_age_s"),
+        "diag_snapshot_max_age_s": acceptance.get("diag_snapshot_max_age_s"),
         "required_voltage_series": required_voltage_series,
         "phase_modes": {
             phase: info.get("mode_set")
@@ -6580,7 +6599,7 @@ def main() -> int:
         "load_status_ready_timeout_sec": args.load_status_ready_timeout_sec,
         "ups_status_url": args.ups_status_url,
         "ups_settings_url": args.ups_settings_url,
-        "devd_power_diag_url": args.devd_power_diag_url,
+        "devd_diag_snapshot_url": args.devd_diag_snapshot_url,
         "devd_monitor_start_url": args.devd_monitor_start_url,
         "devd_device_trace_url": args.devd_device_trace_url,
         "isolapurr_url": args.isolapurr_url,
@@ -6610,7 +6629,7 @@ def main() -> int:
     samples: list[dict[str, Any]] = []
     load_status_poller: LoadStatusPoller | None = None
     ups_status_poller: Any | None = None
-    power_diag_poller: Any | None = None
+    diag_snapshot_poller: Any | None = None
     settings_poller: JsonPoller | None = None
     isolapurr_poller: JsonPoller | None = None
     settings_snapshot: dict[str, Any] | None = None
@@ -6657,7 +6676,7 @@ def main() -> int:
             )
         seeded_devd_device = devd_device_entry_from_scan(
             refresh_devd_devices,
-            device_id=devd_device_id_from_endpoint(args.devd_power_diag_url),
+            device_id=devd_device_id_from_endpoint(args.devd_diag_snapshot_url),
         )
         direct_lan_status_url = maybe_promote_ups_status_url_to_direct_lan(
             args.ups_status_url,
@@ -6784,7 +6803,7 @@ def main() -> int:
             "advanced_power_capabilities": settings_payload.get("advanced_power_capabilities"),
         }
         seeded_ups_status = dict_or_empty(seeded_devd_device.get("status"))
-        seeded_power_diag = dict_or_empty(seeded_devd_device.get("power_diag"))
+        seeded_diag_snapshot = dict_or_empty(seeded_devd_device.get("diag_snapshot"))
         if direct_lan_status_url != args.ups_status_url:
             metadata["ups_status_url"] = direct_lan_status_url
             actions.append(
@@ -6820,7 +6839,7 @@ def main() -> int:
             known_load_target_i_ma=disable_verified.get("effective_target_i_ma"),
             load_telemetry_probe=load_telemetry_probe,
             seeded_ups_status=seeded_ups_status,
-            seeded_power_diag=seeded_power_diag,
+            seeded_diag_snapshot=seeded_diag_snapshot,
         )
         write_json(run_dir / "preflight.json", preflight)
         if not preflight.get("scene_valid"):
@@ -6843,7 +6862,7 @@ def main() -> int:
         )
         load_status_poller.replace_status(initial_load_status)
         load_status_poller.start()
-        ups_device_id = devd_device_id_from_endpoint(args.devd_power_diag_url)
+        ups_device_id = devd_device_id_from_endpoint(args.devd_diag_snapshot_url)
         ups_status_poller = SseStatusPoller(
             name="ups-status",
             url=metadata["ups_status_url"],
@@ -6851,18 +6870,18 @@ def main() -> int:
         )
         if seeded_ups_status and metadata["ups_status_url"] == args.ups_status_url:
             ups_status_poller.prime(seeded_ups_status)
-        power_diag_poller = JsonPoller(
-            name="ups-power-diag",
+        diag_snapshot_poller = JsonPoller(
+            name="ups-diag-snapshot",
             fetch_fn=lambda: http_json_with_retries(
-                metadata["devd_power_diag_url"],
+                metadata["devd_diag_snapshot_url"],
                 timeout_sec=min(args.status_timeout_sec, 5.0),
                 retries=1,
                 retry_delay_sec=0.05,
             ),
             poll_interval_sec=min(0.15, max(0.05, args.sample_interval_seconds / 2.0)),
         )
-        if seeded_power_diag:
-            power_diag_poller.prime(seeded_power_diag)
+        if seeded_diag_snapshot:
+            diag_snapshot_poller.prime(seeded_diag_snapshot)
         isolapurr_poller = JsonPoller(
             name="isolapurr",
             fetch_fn=lambda: fetch_isolapurr_ports(
@@ -6873,7 +6892,7 @@ def main() -> int:
             poll_interval_sec=min(0.2, args.sample_interval_seconds),
         )
         started_pollers: list[JsonPoller] = []
-        for poller in (ups_status_poller, power_diag_poller, isolapurr_poller):
+        for poller in (ups_status_poller, diag_snapshot_poller, isolapurr_poller):
             if poller is None or poller in started_pollers:
                 continue
             poller.start()
@@ -6887,7 +6906,7 @@ def main() -> int:
         actions.append({"load_status_ready": load_status_ready})
         scene_pollers_ready = wait_for_scene_pollers_ready(
             ups_status_poller=ups_status_poller,
-            power_diag_poller=power_diag_poller,
+            diag_snapshot_poller=diag_snapshot_poller,
             isolapurr_poller=isolapurr_poller,
             sample_interval_seconds=args.sample_interval_seconds,
             timeout_sec=max(args.load_status_ready_timeout_sec, 10.0),
@@ -6903,7 +6922,7 @@ def main() -> int:
                 actions=actions,
                 load_status_poller=load_status_poller,
                 ups_status_poller=ups_status_poller,
-                power_diag_poller=power_diag_poller,
+                diag_snapshot_poller=diag_snapshot_poller,
                 settings_snapshot=settings_snapshot or {},
                 isolapurr_poller=isolapurr_poller,
                 expected_phases=expected_phases,
@@ -6957,7 +6976,7 @@ def main() -> int:
         stopped_pollers: list[JsonPoller] = []
         for poller in (
             ups_status_poller,
-            power_diag_poller,
+            diag_snapshot_poller,
             isolapurr_poller,
         ):
             if poller is None or poller in stopped_pollers:

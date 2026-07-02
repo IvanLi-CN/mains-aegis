@@ -749,26 +749,26 @@ pub struct UpsStatusSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PowerDiagSnapshot {
-    pub input: PowerDiagInputSnapshot,
-    pub charger: PowerDiagChargerSnapshot,
-    pub policy: PowerDiagPolicySnapshot,
-    pub bms: PowerDiagBmsSnapshot,
+pub struct DerivedPowerSnapshot {
+    pub input: DerivedPowerInputSnapshot,
+    pub charger: DerivedPowerChargerSnapshot,
+    pub policy: DerivedPowerPolicySnapshot,
+    pub bms: DerivedPowerBmsSnapshot,
 }
 
-impl PowerDiagSnapshot {
+impl DerivedPowerSnapshot {
     pub const fn empty() -> Self {
         Self {
-            input: PowerDiagInputSnapshot::empty(),
-            charger: PowerDiagChargerSnapshot::empty(),
-            policy: PowerDiagPolicySnapshot::empty(),
-            bms: PowerDiagBmsSnapshot::empty(),
+            input: DerivedPowerInputSnapshot::empty(),
+            charger: DerivedPowerChargerSnapshot::empty(),
+            policy: DerivedPowerPolicySnapshot::empty(),
+            bms: DerivedPowerBmsSnapshot::empty(),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PowerDiagInputSnapshot {
+pub struct DerivedPowerInputSnapshot {
     pub source: &'static str,
     pub mains_present: Option<bool>,
     pub input_vbus_mv: Option<u16>,
@@ -795,7 +795,7 @@ pub struct PowerDiagInputSnapshot {
     pub usb_pd_vsys_mv: Option<u16>,
 }
 
-impl PowerDiagInputSnapshot {
+impl DerivedPowerInputSnapshot {
     pub const fn empty() -> Self {
         Self {
             source: "unknown",
@@ -827,7 +827,7 @@ impl PowerDiagInputSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PowerDiagChargerSnapshot {
+pub struct DerivedPowerChargerSnapshot {
     pub poll_valid: bool,
     pub enabled: bool,
     pub ce_low: bool,
@@ -885,7 +885,7 @@ pub struct PowerDiagChargerSnapshot {
     pub term_ctrl: Option<u16>,
 }
 
-impl PowerDiagChargerSnapshot {
+impl DerivedPowerChargerSnapshot {
     pub const fn empty() -> Self {
         Self {
             poll_valid: false,
@@ -948,7 +948,7 @@ impl PowerDiagChargerSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PowerDiagPolicySnapshot {
+pub struct DerivedPowerPolicySnapshot {
     pub state: Option<&'static str>,
     pub status: &'static str,
     pub notice: &'static str,
@@ -980,7 +980,7 @@ pub struct PowerDiagPolicySnapshot {
     pub manual_stop_inhibit: bool,
 }
 
-impl PowerDiagPolicySnapshot {
+impl DerivedPowerPolicySnapshot {
     pub const fn empty() -> Self {
         Self {
             state: None,
@@ -1017,7 +1017,7 @@ impl PowerDiagPolicySnapshot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PowerDiagBmsSnapshot {
+pub struct DerivedPowerBmsSnapshot {
     pub addr: Option<u8>,
     pub state: &'static str,
     pub pack_mv: Option<u16>,
@@ -1035,8 +1035,14 @@ pub struct PowerDiagBmsSnapshot {
     pub pf_status: Option<u32>,
     pub manufacturing_status: Option<u32>,
     pub gauging_status: Option<u32>,
+    pub charging_status: Option<u32>,
     pub op_status: Option<u32>,
+    pub op_status_raw_len: Option<u8>,
+    pub op_status_raw_bytes: Option<[u8; 4]>,
+    pub emshut: Option<bool>,
+    pub pres: Option<bool>,
     pub xchg: Option<bool>,
+    pub xdsg: Option<bool>,
     pub chg_fet: Option<bool>,
     pub dsg_fet: Option<bool>,
     pub pchg_fet: Option<bool>,
@@ -1051,9 +1057,15 @@ pub struct PowerDiagBmsSnapshot {
     pub charging_suspend: Option<bool>,
     pub charging_hv: Option<bool>,
     pub current_at_eoc_ma: Option<u16>,
+    pub da_configuration: Option<u16>,
+    pub power_config: Option<u16>,
+    pub emshut_en: Option<bool>,
+    pub emshut_pexit_dis: Option<bool>,
+    pub emshut_exit_comm: Option<bool>,
+    pub emshut_exit_vpack: Option<bool>,
 }
 
-impl PowerDiagBmsSnapshot {
+impl DerivedPowerBmsSnapshot {
     pub const fn empty() -> Self {
         Self {
             addr: None,
@@ -1073,8 +1085,14 @@ impl PowerDiagBmsSnapshot {
             pf_status: None,
             manufacturing_status: None,
             gauging_status: None,
+            charging_status: None,
             op_status: None,
+            op_status_raw_len: None,
+            op_status_raw_bytes: None,
+            emshut: None,
+            pres: None,
             xchg: None,
+            xdsg: None,
             chg_fet: None,
             dsg_fet: None,
             pchg_fet: None,
@@ -1089,6 +1107,12 @@ impl PowerDiagBmsSnapshot {
             charging_suspend: None,
             charging_hv: None,
             current_at_eoc_ma: None,
+            da_configuration: None,
+            power_config: None,
+            emshut_en: None,
+            emshut_pexit_dis: None,
+            emshut_exit_comm: None,
+            emshut_exit_vpack: None,
         }
     }
 }

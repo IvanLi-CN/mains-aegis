@@ -14,9 +14,6 @@ use tokio::process::{Child, Command};
 use tokio::time::{sleep, timeout, Duration, Instant};
 
 const DEFAULT_REPORT_ROOT: &str = "tools/hil/reports";
-const DEFAULT_UPS_DEVICE_ID: &str = "serial-04f3bb3f5367";
-const DEFAULT_LOAD_DEVICE_ID: &str = "loadlynx-d68638";
-const DEFAULT_POWER_DEVICE_ID: &str = "856a141cdbd4";
 const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 200;
 const DEFAULT_WATCH_FRESHNESS_MS: u64 = 750;
 const MIN_FORMAL_SAMPLE_RATE_HZ: f64 = 2.0;
@@ -129,7 +126,7 @@ pub struct ComposeArgs {
 #[derive(Debug, Args, Clone)]
 pub struct BenchArgs {
     /// UPS saved devd device id.
-    #[arg(long, default_value = DEFAULT_UPS_DEVICE_ID)]
+    #[arg(long, env = "MAINS_AEGIS_UPS_DEVICE_ID")]
     ups_device: String,
     /// UPS CLI path. Defaults to this executable.
     #[arg(long)]
@@ -141,7 +138,7 @@ pub struct BenchArgs {
     #[arg(long)]
     power_adapter_cmd: Option<PathBuf>,
     /// Power source saved device id for the built-in IsolaPurr adapter.
-    #[arg(long, default_value = DEFAULT_POWER_DEVICE_ID)]
+    #[arg(long, env = "MAINS_AEGIS_POWER_DEVICE_ID")]
     power_device: String,
     /// Electronic load adapter.
     #[arg(long, value_enum, default_value_t = LoadAdapterKind::Loadlynx)]
@@ -150,7 +147,7 @@ pub struct BenchArgs {
     #[arg(long)]
     load_adapter_cmd: Option<PathBuf>,
     /// Electronic load saved device id for the built-in LoadLynx adapter.
-    #[arg(long, default_value = DEFAULT_LOAD_DEVICE_ID)]
+    #[arg(long, env = "MAINS_AEGIS_LOAD_DEVICE_ID")]
     load_device: String,
     /// LoadLynx CLI path for the built-in adapter.
     #[arg(long, env = "LOADLYNX_CLI")]
@@ -460,7 +457,7 @@ async fn run_check(args: CheckArgs, context: PowerValidationArgs) -> anyhow::Res
                 Ok(probe) => json!(probe),
                 Err(error) => json!({"ok": false, "error": error.to_string()}),
             },
-            "power_diag": {
+            "diag_snapshot": {
                 "ok": ups_ok,
                 "source": "status_derived",
             },
@@ -2537,7 +2534,7 @@ fn collect_scene_sample(
     let status = unwrap_cli_result(status_frame);
     let diag = unwrap_cli_result(
         collectors
-            .get("ups_power_diag")
+            .get("ups_diag_snapshot")
             .and_then(|c| c.latest_before(unix_ms)),
     );
     let load = unwrap_cli_result(
@@ -3124,7 +3121,7 @@ fn write_suite_overview(path: &Path, suite: &Value) -> anyhow::Result<()> {
 </head>
 <body>
   <h1>Mains Aegis Power Path Validation</h1>
-  <p class="subtitle">Suite {suite_id}. Formal evidence uses the selected CLI adapter transports; UPS and LoadLynx use native IPC + USB on the approved bench, while the power-source adapter may use its stable CLI transport. The historical directory name may still contain <code>hil</code>.</p>
+  <p class="subtitle">Suite {suite_id}. Formal evidence uses the selected CLI adapter transports; UPS and LoadLynx use native IPC + USB for the explicitly selected bench, while the power-source adapter may use its stable CLI transport. The historical directory name may still contain <code>hil</code>.</p>
   <main class="grid">
 {cards}
   </main>
@@ -3617,10 +3614,10 @@ mod tests {
     fn isolapurr_commands_can_use_explicit_url_transport() {
         let mut bench = bench(Some("loadlynx"));
         bench.isolapurr_ipc = None;
-        bench.isolapurr_url = Some("http://192.168.31.122".to_string());
+        bench.isolapurr_url = Some("http://127.0.0.1:30182".to_string());
         let cmd = power_capabilities_command(&bench).unwrap();
         assert!(cmd.contains(&"--url".to_string()));
-        assert!(cmd.contains(&"http://192.168.31.122".to_string()));
+        assert!(cmd.contains(&"http://127.0.0.1:30182".to_string()));
         assert!(!cmd.contains(&"--ipc".to_string()));
         assert!(!cmd.contains(&"--device-id".to_string()));
         assert_eq!(
@@ -3631,7 +3628,7 @@ mod tests {
                 "power",
                 "show",
                 "--url",
-                "http://192.168.31.122",
+                "http://127.0.0.1:30182",
             ]
         );
 
@@ -3673,7 +3670,7 @@ mod tests {
                 "--json",
                 "ports",
                 "--url",
-                "http://192.168.31.122",
+                "http://127.0.0.1:30182",
             ]
         );
     }

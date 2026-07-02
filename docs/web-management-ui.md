@@ -207,5 +207,5 @@ web/
 - 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、LAN 探活、settings 读取、SSE 订阅与轮询兜底、当前 Web Serial USB CDC transport，以及 devd 本地 control transport；同一 `identity.device_id` 的 LAN 与 USB 来源合并为一条设备记录。devd 发现出的 LAN 设备会直接落为 HTTP target，USB 设备才保留 devd lease / serial 上下文。
 - Connect 发现动作使用项目既有小号主次按钮体系；未纳管设备使用 `Bind USB` / `Add WiFi`，已纳管设备使用 `Open` 与 `Use ...`，不引入独立的 split-button 控件族。
 - 验证命令：`bun run web:check`、`PAGES_BASE=/mains-aegis/ bun run web:build`、`DOCS_BASE=/mains-aegis/docs/ bun run --cwd docs-site build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cargo test --manifest-path tools/mains-aegis-host/Cargo.toml`、`cd firmware && cargo +esp check`。
-- 本地设备 daemon：开发 IPC-only CLI 验证使用 `cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve`；Vite 开发期 API 验证使用 `cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve-http --allow-dev-cors`；hosted 模式由 `serve-http` 直接托管嵌入式 Web 产物，不再接受 `--web-root`。
+- 本地设备 daemon：开发 IPC-only CLI 验证使用 `just devd-serve`；Vite 开发期 API 验证使用 `just devd-http`；hosted 模式由 `serve-http` 直接托管嵌入式 Web 产物，不再接受 `--web-root`。
 - 纯前端 Demo：`bun run web:dev` 后访问正式路由，例如 `/`、`/?seed=empty`、`/?seed=large`、`/devices/mains-aegis-e4f5a6/battery?seed=default`。

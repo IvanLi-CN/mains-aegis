@@ -772,7 +772,7 @@ cd ..
 mcu-agentd selector list esp
 
 # (Human-only) Select one explicitly (writes firmware/.esp32-port)
-PORT=/dev/cu.usbmodemXXXX mcu-agentd selector set esp "$PORT"
+PORT=<serial-port> mcu-agentd selector set esp "$PORT"
 
 # (Agent-allowed: read-only; optional) Inspect selected target port
 mcu-agentd selector get esp
@@ -810,7 +810,7 @@ DEFMT_LOG=info cargo espflash flash --release --monitor --baud 115200 --log-form
 - `rustup toolchain list` 里没有 `esp`：重新执行 `espup install`，并确认已 `source ~/export-esp.sh`。
 - Linux 下串口权限不足：确保当前用户对 `/dev/ttyACM*` / `/dev/ttyUSB*` 有访问权限（常见做法是加入 `dialout` 组后重新登录）。
 - `defmt` 看不到 `info/debug`：确认使用 `DEFMT_LOG=info`（或更详细）并且监视器使用 `--log-format defmt`。
-- 监视器输出停在 `boot:0x0 (DOWNLOAD(USB/UART0))` / `waiting for download`：通常表示设备被置于下载模式，或当前串口不是应用日志通道。请检查启动拉脚/复位方式，并重新选择正确的串口设备节点（同一设备在 macOS 下常同时出现 `/dev/cu.usbmodem...` 与 `/dev/tty.usbmodem...`）。
+- 监视器输出停在 `boot:0x0 (DOWNLOAD(USB/UART0))` / `waiting for download`：通常表示设备被置于下载模式，或当前串口不是应用日志通道。请检查启动拉脚/复位方式，并重新选择正确的串口设备节点（同一设备在 macOS 下常同时出现 `<serial-port>` 与 `<serial-port>`）。
 - `telemetry ... vbus_mv` 明显偏高（例如比万用表高 `0.5–1V`）：优先按“测点/参考地”排查，而不是先改固件换算。建议顺序：
   - 用同一个地参考：请用 `U22(INA3221)` 的 `CHGND`（pin3/EP）作为万用表地，复测你认为的 `VOUT` 测点。
   - 直接在芯片脚边测：测 `U22 IN-1(pin11)`/`IN-2(pin14)` 对 `CHGND`，应该与日志 `vbus_reg/vbus_mv` 一致。
