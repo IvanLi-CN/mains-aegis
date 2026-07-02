@@ -46,12 +46,12 @@ describe("mock advanced power reset", () => {
     expect(after.advanced_power_capabilities.rated_vout_mv).toBe(19000);
   });
 
-  test("preserves POST bodies for seeded demo HTTP mock targets", async () => {
+  test("preserves POST bodies for demo HTTP mock targets", async () => {
     const originalWindow = globalThis.window;
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: {
-        location: new URL("http://localhost/?seed=empty"),
+        location: new URL("http://localhost/?demo=true"),
       },
     });
     const baseUrl = "http://mains-aegis-a1b2c3.local";

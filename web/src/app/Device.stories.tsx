@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
 import { DeviceRegistryProvider } from "../device-registry/DeviceRegistry";
 import { App } from "./App";
+import type { DemoSeed } from "../fixtures/mockDevices";
 
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
 
@@ -23,13 +24,13 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-function renderApp(initialPath: string, seed = "default") {
+function renderApp(initialPath: string, seed: DemoSeed = "default") {
   window.localStorage.removeItem(STORAGE_KEY);
   const params = new URLSearchParams(window.location.search);
-  params.set("seed", seed);
+  params.set("demo", "true");
   window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}${window.location.hash}`);
   return (
-    <DeviceRegistryProvider>
+    <DeviceRegistryProvider initialDemoSeed={seed}>
       <App initialPath={initialPath} />
     </DeviceRegistryProvider>
   );

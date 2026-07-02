@@ -12,6 +12,7 @@ import {
   Cpu,
   FileDown,
   Gauge,
+  GripHorizontal,
   Globe2,
   KeyRound,
   LayoutGrid,
@@ -43,6 +44,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
+  type PointerEvent,
   type ReactNode,
   type SVGProps,
 } from "react";
@@ -83,7 +86,8 @@ import {
   type DeviceChannelTransport,
   type WifiProvisioningProgress,
 } from "../device-registry/context";
-import { isDemoSeed } from "../fixtures/mockDevices";
+import { isDemoQueryEnabled } from "../demo/query";
+import { demoSeedIds, type DemoSeed } from "../fixtures/mockDevices";
 import { isWebSerialSupported } from "../serial/transport";
 import {
   formatCurrent,
@@ -193,6 +197,19 @@ type ScanState = {
   candidates: ScanCandidate[];
 };
 
+const demoSeedLabels: Record<DemoSeed, string> = {
+  default: "Default fleet",
+  dual: "Dual transport",
+  empty: "Empty fleet",
+  offline: "Offline device",
+  large: "Large fleet",
+  usb: "USB session",
+  "power-headroom": "Power headroom",
+  "power-watch": "Power watch",
+  "power-limited": "Power limited",
+  "power-cooldown": "Power cooldown",
+};
+
 type SharedDevdDiscovery = {
   devdTarget: string | null;
   devdDevices: DevdDevice[];
@@ -246,7 +263,7 @@ export function App({
   const registry = useDeviceRegistry();
   const route = useRoute(initialPath);
   const searchParams = new URLSearchParams(window.location.search);
-  const demoMode = isDemoSeed(searchParams.get("seed"));
+  const demoMode = registry.demoSeed !== null || isDemoQueryEnabled();
   const queryDevdTarget = resolveStartupDevdTarget(searchParams, demoMode);
   const queryHostedHttpServiceApp =
     demoMode && searchParams.get("mock_hosted") === "1";
@@ -354,11 +371,19 @@ export function App({
           onClick={() => setNavOpen(false)}
         />
         <div className="sidebar-panel">
-          <div className="brand">
-            <span className="brand-mark">MA</span>
+          <div className={`brand ${demoMode ? "is-demo" : ""}`}>
+            {demoMode ? (
+              <DemoControlPanel
+                seed={registry.demoSeed ?? "default"}
+                onSeedChange={registry.setDemoSeed}
+                onReset={registry.resetDemo}
+              />
+            ) : (
+              <span className="brand-mark">MA</span>
+            )}
             <div>
               <strong>Mains Aegis</strong>
-              <span>UPS fleet console</span>
+              <span>{demoMode ? "Demo fleet console" : "UPS fleet console"}</span>
             </div>
           </div>
 
@@ -785,8 +810,9 @@ function parseRoute(path: string): Route {
 
 function navigate(path: string) {
   const next = new URL(withBasePath(path), window.location.origin);
-  const currentSeed = new URLSearchParams(window.location.search).get("seed");
-  if (!next.search && currentSeed) next.searchParams.set("seed", currentSeed);
+  const currentSearch = new URLSearchParams(window.location.search);
+  if (!next.search && currentSearch.get("demo") === "true")
+    next.searchParams.set("demo", "true");
   window.history.pushState(
     null,
     "",
@@ -889,6 +915,112 @@ export function resolveSelectedRecord(
     return fleetRecord;
   }
   return registryRecord;
+}
+
+function DemoControlPanel({
+  seed,
+  onSeedChange,
+  onReset,
+}: {
+  seed: DemoSeed;
+  onSeedChange: (seed: DemoSeed) => void;
+  onReset: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ x: 276, y: 76 });
+  const dragOffset = useRef<{ x: number; y: number } | null>(null);
+  const scenarioId = useId();
+  const panelStyle: CSSProperties = {
+    left: position.x,
+    top: position.y,
+  };
+
+  const startDrag = (event: PointerEvent<HTMLElement>) => {
+    dragOffset.current = {
+      x: event.clientX - position.x,
+      y: event.clientY - position.y,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const drag = (event: PointerEvent<HTMLElement>) => {
+    const offset = dragOffset.current;
+    if (!offset) return;
+    const maxX = Math.max(16, window.innerWidth - 336);
+    const maxY = Math.max(16, window.innerHeight - 260);
+    setPosition({
+      x: Math.min(Math.max(16, event.clientX - offset.x), maxX),
+      y: Math.min(Math.max(16, event.clientY - offset.y), maxY),
+    });
+  };
+
+  const stopDrag = (event: PointerEvent<HTMLElement>) => {
+    dragOffset.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  return (
+    <div className="demo-brand-control">
+      <button
+        className="brand-mark demo-logo"
+        type="button"
+        aria-expanded={open}
+        aria-label="Open demo control panel"
+        onClick={() => setOpen((current) => !current)}
+      >
+        DEMO
+      </button>
+      {open ? (
+        <section
+          className="demo-control-panel"
+          style={panelStyle}
+          aria-label="Demo control panel"
+        >
+          <header
+            className="demo-control-header"
+            onPointerDown={startDrag}
+            onPointerMove={drag}
+            onPointerUp={stopDrag}
+            onPointerCancel={stopDrag}
+          >
+            <GripHorizontal size={16} aria-hidden="true" />
+            <div>
+              <strong>Demo Control</strong>
+              <span>{demoSeedLabels[seed]}</span>
+            </div>
+            <button
+              className="icon-button compact"
+              type="button"
+              aria-label="Close demo control panel"
+              onClick={() => setOpen(false)}
+            >
+              <X size={15} />
+            </button>
+          </header>
+          <label className="demo-control-field" htmlFor={scenarioId}>
+            Scenario
+            <select
+              id={scenarioId}
+              value={seed}
+              onChange={(event) => onSeedChange(event.target.value as DemoSeed)}
+            >
+              {demoSeedIds.map((value) => (
+                <option key={value} value={value}>
+                  {demoSeedLabels[value]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="demo-control-actions">
+            <button className="secondary-button" type="button" onClick={onReset}>
+              Reset default
+            </button>
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
 }
 
 function NavLink({
@@ -1631,6 +1763,7 @@ function ConnectPage({
 }) {
   const {
     records,
+    demoSeed,
     addDevice,
     addDevdDevice,
     confirmDevdCompanionLan,
@@ -1644,9 +1777,7 @@ function ConnectPage({
     refreshDevice,
     resetDemo,
   } = useDeviceRegistry();
-  const demoMode = isDemoSeed(
-    new URLSearchParams(window.location.search).get("seed"),
-  );
+  const demoMode = demoSeed !== null;
   const queryBindLogicalDeviceId =
     new URLSearchParams(window.location.search)
       .get("mock_bind_logical_device_id")

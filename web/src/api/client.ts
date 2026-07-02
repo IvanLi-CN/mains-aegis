@@ -1,4 +1,5 @@
 import { getMockIdentity, getMockNetwork, getMockStatus } from "../fixtures/mockDevices";
+import { isDemoQueryEnabled } from "../demo/query";
 import type {
   AdvancedPowerSettings,
   AppRuntimeMode,
@@ -65,8 +66,7 @@ export function normalizeBaseUrl(input: string): string {
 
 function demoSeedEnabled(): boolean {
   if (typeof window === "undefined") return false;
-  const seed = new URLSearchParams(window.location.search).get("seed")?.trim();
-  return Boolean(seed);
+  return isDemoQueryEnabled();
 }
 
 type RequestOptions = {

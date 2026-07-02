@@ -121,13 +121,13 @@
 ### 纯前端 Demo
 
 - Demo 站点与正式站点使用同一套前端、同一套路由、同一套导航和交互，只把设备接口替换为 `mock:` 数据源。
-- 支持 `seed=default|empty|offline|large` 查询参数，用于一键复现默认 fleet、空数据、全离线和大数量设备场景。
+- 支持 `demo=true` 查询参数进入纯前端 Demo；Demo 左上角品牌标记必须切换为可点击 Demo Logo，打开悬浮控制面板后可在面板内切换默认 fleet、空数据、全离线、大数量、USB 等 mock 场景。
 - `mock_hosted=1`、`mock_devd_target=...`、`stored_target_preset=...` 只用于 mock UI 复现 devd / companion 状态；这些 query 参数必须标记为 mock-only，不得出现在 owner-facing 真机操作文档、真实 handoff URL 或实机验收步骤中。
 - 典型演示脚本：
   - 普通路径：`/` -> `/devices/mains-aegis-c7d8e9` -> `/devices/mains-aegis-c7d8e9/api`
-  - 异常路径：`/devices/mains-aegis-e4f5a6/battery?seed=default`
-  - 空数据路径：`/?seed=empty` -> `/connect?seed=empty`
-  - 大数量路径：`/?seed=large`
+  - 异常路径：`/devices/mains-aegis-e4f5a6/battery?demo=true`，在 Demo 控制面板选择默认场景
+  - 空数据路径：`/?demo=true` -> 在 Demo 控制面板选择 `Empty fleet` -> `/connect?demo=true`
+  - 大数量路径：`/?demo=true`，在 Demo 控制面板选择 `Large fleet`
 
 ## 接口与数据流
 
@@ -151,7 +151,7 @@
 - Web devd session 正常断开后 devd 立即释放 USB 占用；异常断开后按 devd lease TTL 自动释放，UI 在 TTL 内抖动恢复时不误删设备。
 - USB 设备连接后能在 `/devices/:device_id/settings` 写入 WiFi SSID/PSK、清除 WiFi、调整日志级别和手动充电偏好；PSK 提交后清空且不回显。
 - `/devices/:device_id/api` 或 settings 页面能显示 USB structured logs。
-- 正式路由能通过 `seed` 参数打开可复现 mock 场景，并保持与正式产品一致的导航和页面结构。
+- 正式路由能通过 `demo=true` 打开可复现 mock-only Demo，并通过页面内 Demo 控制面板切换 mock 场景，同时保持与正式产品一致的导航和页面结构。
 - 单设备详情页可从 Fleet 卡片进入，并展示 power、battery、thermal、device、api 子页。
 - 浏览器视觉验证覆盖 desktop Fleet、mobile Fleet、empty Fleet、large Fleet、单设备 Dashboard、USB Connect、USB structured logs 和 WiFi settings。
 - Storybook 或等价稳定预览必须覆盖：Pages direct LAN 支持态、非支持浏览器降级态、手动目标成功态、CIDR 扫描命中态。
@@ -192,7 +192,7 @@
 ![Fleet mobile frontend demo evidence](./assets/fleet-mobile-demo.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/?seed=empty`
+  demo_entry_or_title: `/?demo=true`
   requested_viewport: `390x844`
   viewport_strategy: `devtools-emulate`
   capture_scope: `browser-viewport`
@@ -203,7 +203,7 @@
 ![Empty fleet mobile evidence](./assets/fleet-empty-mobile.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/?seed=large`
+  demo_entry_or_title: `/?demo=true`
   requested_viewport: `1440x1000`
   viewport_strategy: `devtools-emulate`
   capture_scope: `browser-viewport`
@@ -214,7 +214,7 @@
 ![Large fleet desktop evidence](./assets/fleet-large-desktop.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/devices/mains-aegis-e4f5a6/battery?seed=default`
+  demo_entry_or_title: `/devices/mains-aegis-e4f5a6/battery?demo=true`
   requested_viewport: `1280x900`
   viewport_strategy: `devtools-emulate`
   capture_scope: `browser-viewport`
@@ -225,7 +225,7 @@
 ![Critical device frontend demo evidence](./assets/device-critical-demo.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/settings?seed=default`
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/settings?demo=true`
   requested_viewport: `1680x2600`
   viewport_strategy: `headless-browser`
   capture_scope: `browser-viewport`
@@ -236,7 +236,7 @@
 ![Advanced Power settings evidence](./images/advanced-power-settings-storybook.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/battery?seed=default`
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/battery?demo=true`
   requested_viewport: `1800x980`
   viewport_strategy: `headless-browser`
   capture_scope: `browser-viewport`
@@ -258,7 +258,7 @@
 ![Hosted add-device records evidence](./assets/add-device-devd-records-hosted.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/connect?seed=empty&mock_hosted=1&mock_devd_target=mock:devd-bind-target&stored_target_preset=lan-companion-bind-target`
+  demo_entry_or_title: `/connect?demo=true&mock_hosted=1&mock_devd_target=mock:devd-bind-target&stored_target_preset=lan-companion-bind-target`
   requested_viewport: `1440x1024`
   viewport_strategy: `devtools-emulate`
   capture_scope: `element`
@@ -335,7 +335,7 @@
 ![Storybook WiFi feedback state gallery](./assets/wifi-feedback-gallery-canvas.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/devices/mains-aegis-usb-demo/settings?seed=usb`
+  demo_entry_or_title: `/devices/mains-aegis-usb-demo/settings?demo=true`
   requested_viewport: `1440x1000`
   viewport_strategy: `devtools-emulate`
   capture_scope: `browser-viewport`
@@ -346,7 +346,7 @@
 ![USB Console desktop evidence](./assets/usb-console-settings-desktop.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/devices/mains-aegis-usb-demo/settings?seed=usb`
+  demo_entry_or_title: `/devices/mains-aegis-usb-demo/settings?demo=true`
   requested_viewport: `390x844`
   viewport_strategy: `devtools-emulate`
   capture_scope: `browser-viewport`
@@ -368,7 +368,7 @@
 ![USB structured logs evidence](./assets/usb-logs-api-desktop.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/devices/mains-aegis-e4f5a6/firmware?seed=default`
+  demo_entry_or_title: `/devices/mains-aegis-e4f5a6/firmware?demo=true`
   requested_viewport: `1440x1000`
   viewport_strategy: `devtools-emulate`
   capture_scope: `browser-viewport`
@@ -379,7 +379,7 @@
 ![Firmware flash desktop evidence](./assets/firmware-flash-desktop.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/devices/mains-aegis-e4f5a6/firmware?seed=default`
+  demo_entry_or_title: `/devices/mains-aegis-e4f5a6/firmware?demo=true`
   requested_viewport: `390x844`
   viewport_strategy: `devtools-emulate`
   capture_scope: `browser-viewport`
@@ -390,7 +390,7 @@
 ![Firmware flash mobile evidence](./assets/firmware-flash-mobile.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/devices/mains-aegis-devd-service/firmware?seed=usb`
+  demo_entry_or_title: `/devices/mains-aegis-devd-service/firmware?demo=true`
   requested_viewport: `390x844`
   viewport_strategy: `devtools-emulate`
   capture_scope: `browser-viewport`
@@ -401,7 +401,7 @@
 ![Firmware devd bound mobile evidence](./assets/firmware-devd-bound-mobile.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/firmware?seed=usb`
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/firmware?demo=true`
   requested_viewport: `1440x1000`
   viewport_strategy: `chrome-devtools-protocol`
   capture_scope: `browser-viewport`
@@ -412,7 +412,7 @@
 ![Firmware mock flash running lock evidence](./assets/firmware-mock-flash-running-locked.png)
 
 - source_type: mock_ui
-  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/firmware?seed=usb`
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/firmware?demo=true`
   requested_viewport: `1440x1000`
   viewport_strategy: `chrome-devtools-protocol`
   capture_scope: `browser-viewport`
@@ -423,7 +423,7 @@
 ![Firmware mock flash completion unlock evidence](./assets/firmware-mock-flash-done-unlocked.png)
 
 - source_type: ui_demo
-  demo_entry_or_title: `/connect?seed=empty&mock_browser_capability=supported`
+  demo_entry_or_title: `/connect?demo=true&mock_browser_capability=supported`
   requested_viewport: `1440x1080`
   viewport_strategy: `ui-demo-source`
   capture_scope: `element`
@@ -434,7 +434,7 @@
 ![Pages direct LAN supported evidence](./assets/pages-direct-lan-supported.png)
 
 - source_type: ui_demo
-  demo_entry_or_title: `/connect?seed=empty&mock_browser_capability=unsupported`
+  demo_entry_or_title: `/connect?demo=true&mock_browser_capability=unsupported`
   requested_viewport: `1440x1080`
   viewport_strategy: `ui-demo-source`
   capture_scope: `element`
@@ -445,7 +445,7 @@
 ![Pages direct LAN unsupported evidence](./assets/pages-direct-lan-unsupported.png)
 
 - source_type: ui_demo
-  demo_entry_or_title: `/connect?seed=empty&mock_browser_capability=supported`
+  demo_entry_or_title: `/connect?demo=true&mock_browser_capability=supported`
   requested_viewport: `1440x1080`
   viewport_strategy: `ui-demo-source`
   capture_scope: `element`

@@ -91,7 +91,7 @@ describe("normalizeBasePath", () => {
   test("derives a project path for relative base deployments", () => {
     expect(normalizeBasePath("./", "/mains-aegis")).toBe("/");
     expect(normalizeBasePath("./", "/mains-aegis/")).toBe("/mains-aegis/");
-    expect(normalizeBasePath("./", "/mains-aegis/?seed=demo")).toBe(
+    expect(normalizeBasePath("./", "/mains-aegis/?demo=true")).toBe(
       "/mains-aegis/",
     );
     expect(normalizeBasePath("./", "/mains-aegis/index.html")).toBe(
@@ -367,7 +367,7 @@ describe("restoreSpaFallbackLocation", () => {
     withMockWindow(
       {
         location: new URL(
-          "https://mains-aegis.example/?spa_path=/devices/demo&spa_search=seed%3Ddemo%26devd_target%3Dsame-origin&spa_hash=power",
+          "https://mains-aegis.example/?spa_path=/devices/demo&spa_search=demo%3Dtrue%26devd_target%3Dsame-origin&spa_hash=power",
         ),
         history: {
           state: null,
@@ -380,14 +380,14 @@ describe("restoreSpaFallbackLocation", () => {
         restoreSpaFallbackLocation(
           new URLSearchParams({
             spa_path: "/devices/demo",
-            spa_search: "seed=demo&devd_target=same-origin",
+            spa_search: "demo=true&devd_target=same-origin",
             spa_hash: "power",
           }),
         ),
     );
 
     expect(replacedUrl).toBe(
-      "https://mains-aegis.example/devices/demo?seed=demo&devd_target=same-origin#power",
+      "https://mains-aegis.example/devices/demo?demo=true&devd_target=same-origin#power",
     );
   });
 
@@ -421,7 +421,7 @@ describe("restoreSpaFallbackLocation", () => {
     withMockWindow(
       {
         location: new URL(
-          "https://mains-aegis.example/?spa_path=/devices/demo&spa_search=seed%3Ddemo",
+          "https://mains-aegis.example/?spa_path=/devices/demo&spa_search=demo%3Dtrue",
         ),
         history: {
           state: null,
@@ -434,12 +434,12 @@ describe("restoreSpaFallbackLocation", () => {
         restoreSpaFallbackLocation(
           new URLSearchParams({
             spa_path: "/devices/demo",
-            spa_search: "seed=demo",
+            spa_search: "demo=true",
           }),
         ),
     );
 
-    expect(replacedUrl).toBe("https://mains-aegis.example/devices/demo?seed=demo");
+    expect(replacedUrl).toBe("https://mains-aegis.example/devices/demo?demo=true");
   });
 
   test("restores deep-link path when no search or hash was forwarded", () => {
@@ -465,7 +465,7 @@ describe("restoreSpaFallbackLocation", () => {
     withMockWindow(
       {
         location: new URL(
-          "https://mains-aegis.example/?seed=demo&spa_path=/docs/design/system-overview&spa_hash=power",
+          "https://mains-aegis.example/?demo=true&spa_path=/docs/design/system-overview&spa_hash=power",
         ),
         history: {
           state: null,
@@ -484,7 +484,7 @@ describe("restoreSpaFallbackLocation", () => {
     );
 
     expect(replacedUrl).toBe(
-      "https://mains-aegis.example/docs/design/system-overview?seed=demo#power",
+      "https://mains-aegis.example/docs/design/system-overview?demo=true#power",
     );
   });
 });
@@ -629,7 +629,7 @@ describe("resolveStartupDevdTarget", () => {
 });
 
 describe("resolveDevdTarget", () => {
-  test("keeps seeded demos mock-only without an explicit devd target", () => {
+  test("keeps demo mode mock-only without an explicit devd target", () => {
     expect(resolveDevdTarget(undefined, false, true)).toBeNull();
   });
 });
