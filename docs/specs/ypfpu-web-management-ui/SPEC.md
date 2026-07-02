@@ -455,6 +455,17 @@
 
 ![Pages direct LAN CIDR action evidence](./assets/pages-direct-lan-cidr-actions.png)
 
+- source_type: storybook_canvas
+  story_id_or_title: `UPS Management/Device/Settings advanced power`
+  requested_viewport: `1280x720`
+  viewport_strategy: `storybook-viewport`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: pointer-fine compact settings selectors
+  evidence_note: 验证非触摸屏 fine pointer / hover 环境下，Settings 页中间 `Device settings` 的三个 compact 单选器保持桌面密度；实测单选器高度为 `38px`、内部按钮高度为 `32px`，同时右侧 Advanced Power 列不再把中间列拉伸成大号控件。
+
+![Settings pointer-fine compact selectors evidence](./assets/settings-pointer-fine-compact-selectors.png)
+
 ## 实现里程碑
 
 - [x] M1: 安装 Cohere `DESIGN.md` 并建立 Web 管理端规划。
