@@ -164,6 +164,21 @@ export const SettingsAdvancedPower: Story = {
     await expect(
       await canvas.findByRole("button", { name: "Reset to device default" }),
     ).toBeInTheDocument();
+    const applyPrefsButton = await canvas.findByRole("button", {
+      name: "Apply prefs",
+    });
+    expect(applyPrefsButton.getBoundingClientRect().height).toBeLessThanOrEqual(
+      80,
+    );
+    const manualPrefsForm = applyPrefsButton.closest("form");
+    expect(manualPrefsForm).not.toBeNull();
+    const manualPreferenceRows = Array.from(
+      manualPrefsForm?.querySelectorAll(".control-row") ?? [],
+    );
+    expect(manualPreferenceRows).toHaveLength(3);
+    for (const row of manualPreferenceRows) {
+      expect(row.getBoundingClientRect().height).toBeLessThanOrEqual(120);
+    }
   },
 };
 
