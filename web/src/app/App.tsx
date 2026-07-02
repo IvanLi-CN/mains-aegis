@@ -219,7 +219,10 @@ const deviceSections = [
   { id: "api", label: "API", icon: Cable },
 ] as const;
 
-const appBasePath = normalizeBasePath(import.meta.env.BASE_URL);
+const appBasePath = normalizeBasePath(
+  import.meta.env.BASE_URL,
+  runtimePathname(),
+);
 const envRuntimeMode = (import.meta.env.VITE_APP_RUNTIME_MODE ?? "").trim();
 const rawEnvDevdTarget = (
   import.meta.env.VITE_DEFAULT_DEVD_URL ?? import.meta.env.VITE_DEVD_API_BASE ?? ""
@@ -792,10 +795,46 @@ function navigate(path: string) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-function normalizeBasePath(base: string): string {
-  if (!base || base === "/") return "/";
-  const withLeading = base.startsWith("/") ? base : `/${base}`;
+export function normalizeBasePath(
+  base: string | undefined,
+  runtimePathname = "/",
+): string {
+  const raw = (base ?? "").trim();
+  if (!raw || raw === "/") return "/";
+  if (raw === "." || raw === "./")
+    return normalizeRuntimeBasePath(runtimePathname);
+  if (!raw.startsWith("/") && /^[a-z][a-z0-9+.-]*:/i.test(raw)) return "/";
+  if (raw.startsWith("./") || raw.startsWith("../"))
+    return normalizeRuntimeBasePath(runtimePathname);
+  const withLeading = raw.startsWith("/") ? raw : `/${raw}`;
   return withLeading.endsWith("/") ? withLeading : `${withLeading}/`;
+}
+
+function normalizeRuntimeBasePath(pathname: string): string {
+  const pathnameOnly = pathname.split("?", 1)[0]?.split("#", 1)[0] || "/";
+  const withLeading = pathnameOnly.startsWith("/") ? pathnameOnly : `/${pathnameOnly}`;
+  const rawSegments = withLeading.split("/").filter(Boolean);
+  const lastSegment = rawSegments.at(-1);
+  const hasIndexLikeEntry = lastSegment
+    ? ["index.html", "404.html"].includes(lastSegment)
+    : false;
+  const segments = hasIndexLikeEntry ? rawSegments.slice(0, -1) : rawSegments;
+  if (segments.length === 0) return "/";
+  const routeIndex = segments.findIndex((segment) =>
+    ["connect", "devices", "docs"].includes(segment),
+  );
+  if (routeIndex === 0) return "/";
+  if (routeIndex > 0) return `/${segments.slice(0, routeIndex).join("/")}/`;
+  if (hasIndexLikeEntry) return `/${segments.join("/")}/`;
+  if (withLeading.endsWith("/")) return `/${segments.join("/")}/`;
+  if (segments.length === 2) return `/${segments.join("/")}/`;
+  if (segments.length === 1)
+    return withLeading.endsWith("/") ? `/${segments[0]}/` : "/";
+  return "/";
+}
+
+function runtimePathname(): string {
+  return typeof window === "undefined" ? "/" : window.location.pathname;
 }
 
 function stripBasePath(path: string): string {

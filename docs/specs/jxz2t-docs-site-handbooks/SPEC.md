@@ -53,9 +53,10 @@
 ### MUST
 
 - 站点必须以 `docs-site/` 独立工作区存在，并能通过 `bun run dev/build/preview` 工作。
-- Rspress 配置必须支持 `DOCS_BASE`，以适配 GitHub Pages 的仓库子路径部署。
-- Web App Vite 构建必须支持 `PAGES_BASE` / `VITE_BASE`，以适配 GitHub Pages 仓库子路径部署和未来自定义域名根路径部署。
-- Web App 必须保持 History API path router；`/mains-aegis/devices/...` 与自定义域名下 `/devices/...` 的直接访问都必须能通过 Pages SPA fallback 回到 App。
+- Rspress 配置必须支持 `DOCS_BASE`，以适配 GitHub Pages 的文档子路径部署。
+- Web App Vite 构建必须支持 `PAGES_BASE` / `VITE_BASE`；GitHub Pages workflow 默认必须使用相对 `PAGES_BASE=./`，避免自定义域名根路径和仓库子路径之间的静态资源路径不匹配。
+- GitHub Pages artifact 中的 Web App 根页面、SPA fallback 与 `/docs/` 文档站 HTML 必须使用相对静态资源和站内链接，不得生成 `/mains-aegis/...`、`/docs/...` 这类依赖域名根路径的引用。
+- Web App 必须保持 History API path router；`/mains-aegis/devices/...` 与自定义域名下 `/devices/...` 的直接访问都必须能通过 Pages SPA fallback 回到 App。Pages fallback 必须先回到 artifact 根入口再恢复路由，避免相对 asset 在深链路径下解析错误。
 - Web App 全局 App Layout 必须提供文档入口，指向 `${BASE_URL}docs/`，并以新标签打开，避免替换当前运维台状态。
 - 站点公开路由必须包含：`/`、`/handbook/`、`/design/`、`/design/system-overview`、`/design/power-and-bms`、`/design/front-panel-and-firmware`、`/manual/`、`/manual/prepare-and-scope`、`/manual/pcb-and-wiring-checks`、`/manual/firmware-flash-and-self-test`、`/manual/basic-use-and-troubleshooting`。
 - 首页必须清楚说明：项目是开源硬件、没有成品、目标受众是 DIY 复刻者与半开发者。
@@ -85,8 +86,8 @@
 
 ### Edge cases / errors
 
-- 若站点部署在仓库子路径而不是根路径，静态资源与导航链接仍必须正确。
-- 若 Web App 通过 GitHub Pages 404 fallback 处理深链，`404.html` 必须等同 App `index.html`，让 path router 在浏览器端恢复正确页面。
+- 若站点部署在自定义域名根路径或仓库子路径，静态资源与导航链接仍必须正确；发布产物应优先依赖相对路径，而不是重新构建不同的绝对 base。
+- 若 Web App 通过 GitHub Pages 404 fallback 处理深链，`404.html` 必须是轻量 bootstrap：记录原始路径到查询参数，跳回 artifact 根入口，由 App runtime 恢复路由；不得直接在深链路径下加载相对 JS/CSS。
 - 若仓库中某些设计决策仍是“候选”或“待定”，手册必须保留该状态，而不是擅自写成“已定”。
 - 若没有完整 BOM / Gerber 打包事实源，手册必须明确说明这一边界，并把读者导向现有 `docs/pcbs/**` 与设计文档，而不是编造缺失内容。
 
@@ -97,8 +98,10 @@
 | 接口（Name） | 类型（Kind） | 范围（Scope） | 变更（Change） | 契约文档（Contract Doc） | 负责人（Owner） | 使用方（Consumers） | 备注（Notes） |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `docs-site/package.json` scripts | internal | internal | New | None | docs-site | 本地开发 / CI | `dev/build/preview` |
-| `DOCS_BASE` | internal | internal | Changed | None | docs-site | GitHub Pages workflow | 文档站基址，默认 `${PAGES_BASE}docs/` |
-| `PAGES_BASE` / `VITE_BASE` | internal | internal | New | None | web | Vite / GitHub Pages workflow | Web App 基址，默认仓库页 `/${repo}/`，自定义域名可设为 `/` |
+| `DOCS_BASE` | internal | internal | Changed | None | docs-site | GitHub Pages workflow | Rspress 构建基址；默认 `/docs/`，发布后由 Pages workflow 将 HTML 重写为相对链接 |
+| `PAGES_BASE` / `VITE_BASE` | internal | internal | New | None | web | Vite / GitHub Pages workflow | Web App 基址；Pages workflow 默认 `./`，仍允许显式覆盖为 `/` 或 `/<path>/` |
+| `tools/pages/relativize-docs-html.mjs` | internal | internal | New | None | repo | GitHub Pages workflow | 将复制到 `web/dist/docs/` 的 Rspress HTML 从 `/docs/` 重写为逐文件相对链接，并把 docs JS runtime public path 改为基于脚本位置计算 |
+| `tools/pages/write-spa-fallback.mjs` | internal | internal | New | None | repo | GitHub Pages workflow | 生成相对路径部署可用的 `404.html` bootstrap，将深链带回 artifact 根入口 |
 | `DOCS_PORT` | internal | internal | New | None | docs-site | 本地预览 | 通过端口租约注入 |
 | `.github/workflows/docs-pages.yml` | internal | internal | Changed | None | repo | PR / main | 构建 Web App 根站点与 `/docs/` 文档子站，PR 构建，main 部署 |
 
@@ -109,9 +112,10 @@ None
 ## 验收标准（Acceptance Criteria）
 
 - Given 已安装 `docs-site` 依赖，When 执行 `bun run --cwd docs-site build`，Then 构建成功并生成 `docs-site/doc_build`。
-- Given `PAGES_BASE=/${repo}/`，When 执行 `bun run web:build`，Then Web App 构建成功，静态资源路径带仓库子路径，且 `web/dist/404.html` 可作为 SPA fallback。
-- Given `DOCS_BASE=/${repo}/docs/`，When 预览构建产物，Then 文档首页、项目手册、系统设计、样机复刻与 Bring-up、404 页面都能在 `/docs/` 下正常加载，静态资源路径不丢失。
+- Given `PAGES_BASE=./`，When 执行 `bun run web:build` 并生成 Pages fallback，Then Web App 构建成功，`web/dist/index.html` 的 JS/CSS/favicon 引用均为相对路径，`web/dist/404.html` 只负责把深链转发到根入口并携带 `spa_path`。
+- Given `DOCS_BASE=/docs/` 且 Pages workflow 已复制并重写文档站 HTML/runtime，When 预览 `web/dist` artifact，Then `/docs/` 首页、项目手册、系统设计、样机复刻与 Bring-up、404 页面都能正常加载，静态资源、动态 chunk 和站内链接均不依赖域名根路径。
 - Given GitHub Pages workflow 构建产物，When 检查 artifact，Then `web/dist/index.html` 是根站点，`web/dist/docs/index.html` 是文档站入口。
+- Given GitHub Pages workflow 构建产物，When 检查 HTML，Then `web/dist/index.html` 不包含 `="/mains-aegis/`，`web/dist/docs/**/*.html` 不包含 `="/docs/` 或 `="/mains-aegis/`。
 - Given 只修改 `docs-site/docs/**` 内容页，When GitHub Actions 触发，Then 新增的 Docs Pages workflow 会运行，而现有 firmware / host / dependency review workflow 不会被误触发。
 - Given 修改 `docs-site/package.json` 或 `docs-site/bun.lock`，When GitHub Actions 触发，Then `dependency-review` 仍会运行以覆盖 docs 站依赖变更。
 - Given 打开首页，When 首次阅读，Then 能明确理解“开源硬件 / 无成品 / DIY 复刻者与半开发者”的项目定位。
@@ -133,8 +137,9 @@ None
 - Build: `bun install --cwd docs-site --frozen-lockfile`
 - Build: `bun run --cwd docs-site build`
 - Build: `bun run web:check`
-- Build: `PAGES_BASE=/<repo>/ bun run web:build`
-- Preview smoke: `DOCS_BASE=/<repo>/docs/ bun run --cwd docs-site preview`
+- Build: `PAGES_BASE=./ bun run web:build`
+- Build: `DOCS_BASE=/docs/ bun run --cwd docs-site build`
+- Artifact smoke: copy `docs-site/doc_build` to `web/dist/docs/`, run `node tools/pages/relativize-docs-html.mjs web/dist/docs /docs/`, generate `404.html` with `tools/pages/write-spa-fallback.mjs`, then assert root/docs HTML use relative paths, docs JS runtime no longer hardcodes `/docs/`, and fallback carries `spa_path`.
 - Browser validation: Web App 根页面、App 内深链、文档入口、项目手册首页截图。
 
 ### UI / Storybook (if applicable)
@@ -204,7 +209,7 @@ None
 
 - 复用 `octo-rill` 的独立 `docs-site/` 模式，把公开文档站与仓库事实源分层：站点负责对外入口，仓库原文负责深度事实。
 - 页面内容以“重写手册 + 深链原始专题文档”的方式组织，避免把现有资料树直接暴露给首次阅读者。
-- GitHub Pages 构建采用 Vite `web/dist` 作为 Pages artifact 根，并把 Rspress `doc_build` 复制到 `web/dist/docs/`；`PAGES_BASE` 控制 Web App 基址，`DOCS_BASE=${PAGES_BASE}docs/` 控制文档站基址。
+- GitHub Pages 构建采用 Vite `web/dist` 作为 Pages artifact 根，并把 Rspress `doc_build` 复制到 `web/dist/docs/`。默认 Web App 使用 Vite 相对 base `./`；Rspress 以 `/docs/` 构建后，由 `tools/pages/relativize-docs-html.mjs` 将 `web/dist/docs/**/*.html` 中的 `/docs/` 链接重写为逐文件相对路径，并把 docs JS runtime public path 改成基于当前脚本位置计算，让同一 artifact 可在自定义域名根路径和仓库子路径下复用。
 - 视觉证据以本地预览截图为准，统一写回当前规格。
 
 ## PR
@@ -222,6 +227,7 @@ None
 
 - 2026-04-08: 新建规格，冻结项目手册站的范围、路由与验收口径。
 - 2026-05-05: Pages 根站点调整为 Web App，项目手册站迁移到 `/docs/` 子路径，并记录 App path router 与 SPA fallback 要求。
+- 2026-07-02: Pages artifact 默认改为相对路径发布；Web App 使用 `PAGES_BASE=./`，文档站 HTML 在复制到 `web/dist/docs/` 后重写为相对链接，避免自定义域名根路径白屏。
 
 ## 参考（References）
 
