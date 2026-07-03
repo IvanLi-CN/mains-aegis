@@ -52,6 +52,7 @@ pub enum UsbCdcRequest {
     SetManualChargePrefs(ManualChargePrefsCommand),
     SetAdvancedPower(AdvancedPowerSettingsSnapshot),
     ResetAdvancedPower,
+    RecoverBmsDischargeAuthorization,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -279,7 +280,7 @@ pub fn parse_frame(line: &str) -> Result<UsbCdcFrame, UsbCdcProtocolError> {
         "request" => {
             let request_id = parse_request_id(line)?;
             let op =
-                json_string_field::<32>(line, "op")?.ok_or(UsbCdcProtocolError::MissingField)?;
+                json_string_field::<48>(line, "op")?.ok_or(UsbCdcProtocolError::MissingField)?;
             Ok(UsbCdcFrame::Request {
                 request_id,
                 op: parse_request_op(line, op.as_str())?,
@@ -543,6 +544,9 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
             parse_advanced_power_settings(line)?,
         )),
         "reset_advanced_power" => Ok(UsbCdcRequest::ResetAdvancedPower),
+        "recover_bms_discharge_authorization" => {
+            Ok(UsbCdcRequest::RecoverBmsDischargeAuthorization)
+        }
         "output_enable" | "output_disable" | "clear_fault" | "start_charge" | "stop_charge" => {
             Err(UsbCdcProtocolError::UnsafeOperation)
         }
@@ -1245,6 +1249,21 @@ mod tests {
                     speed: ManualChargeSpeed::Ma500,
                     timer_limit: ManualChargeTimerLimit::H2,
                 })
+            }
+        );
+    }
+
+    #[test]
+    fn parses_bms_discharge_authorization_recovery_request() {
+        let frame = parse_frame(
+            r#"{"type":"request","request_id":"req-recover","op":"recover_bms_discharge_authorization"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            frame,
+            UsbCdcFrame::Request {
+                request_id: String::try_from("req-recover").unwrap(),
+                op: UsbCdcRequest::RecoverBmsDischargeAuthorization
             }
         );
     }

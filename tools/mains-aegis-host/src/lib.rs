@@ -911,6 +911,10 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         )
         .route("/api/v1/devices/{id}/settings", get(device_settings))
         .route("/api/v1/devices/{id}/trace", get(device_trace))
+        .route(
+            "/api/v1/devices/{id}/recovery/bms-discharge-authorization",
+            post(recover_bms_discharge_authorization),
+        )
         .route("/api/v1/devices/{id}/flash", post(flash_device))
         .route("/api/v1/devices/{id}/reset", post(reset_device))
         .route("/api/v1/devices/{id}/monitor/start", post(monitor_start))
@@ -1766,6 +1770,10 @@ async fn dispatch_ipc_request(
                     .map(str::to_string),
             };
             json_result(device_trace(Query(query), State(state.clone()), Path(id)).await)
+        }
+        "device.recovery.bms_discharge_authorization" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(recover_bms_discharge_authorization(State(state.clone()), Path(id)).await)
         }
         "device.connect" => {
             let id = require_param(&params, "device_id")?;
@@ -4550,6 +4558,102 @@ async fn reset_device(
     Ok(Json(
         json!({"ok": true, "backend": reset_backend_name(&transport)}),
     ))
+}
+
+async fn recover_bms_discharge_authorization(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    let (transport, lan_address) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (device.transport.clone(), device.lan_address.clone())
+    };
+
+    let response = if matches!(transport, DeviceTransport::Mock) {
+        json!({
+            "ok": true,
+            "accepted": false,
+            "recovered": false,
+            "result": "rejected",
+            "reason": "mock_transport",
+            "status_before": {
+                "requested_outputs": "none",
+                "active_outputs": "none",
+                "recoverable_outputs": "none",
+                "output_gate_reason": "none",
+                "discharge_ready": null
+            },
+            "status_after": {
+                "requested_outputs": "none",
+                "active_outputs": "none",
+                "recoverable_outputs": "none",
+                "output_gate_reason": "none",
+                "discharge_ready": null
+            }
+        })
+    } else if matches!(transport, DeviceTransport::Lan) {
+        let address = lan_address.ok_or_else(|| {
+            HttpError::retryable(
+                "lan_address_missing",
+                "BMS recovery is unavailable for LAN device without an address",
+            )
+        })?;
+        lan_http_json(
+            &address,
+            "POST",
+            "/api/v1/recovery/bms-discharge-authorization",
+            Some(&json!({})),
+        )
+        .await?
+    } else {
+        let frame = json!({
+            "type": "request",
+            "op": "recover_bms_discharge_authorization",
+        });
+        match send_device_cdc_request_frame(&state, &id, frame, "devd-recover-bms-dsg").await {
+            Ok(response) => response,
+            Err(error) if error.0.code == "native_cdc_timeout" && lan_address.is_some() => {
+                let address = lan_address.expect("guarded by is_some");
+                lan_http_json(
+                    &address,
+                    "POST",
+                    "/api/v1/recovery/bms-discharge-authorization",
+                    Some(&json!({})),
+                )
+                .await?
+            }
+            Err(error) => return Err(error),
+        }
+    };
+
+    if let Ok(Json(status)) = device_status(
+        Query(DeviceReadQuery {
+            fresh: Some(true),
+            cache_only: Some(false),
+            allow_stale_cache: Some(true),
+            include_meta: Some(false),
+            watch_freshness_ms: None,
+        }),
+        State(state.clone()),
+        Path(id.clone()),
+    )
+    .await
+    {
+        update_device_status_snapshot(&state, &id, status);
+    }
+
+    emit(
+        &state,
+        Some(id),
+        "recovery",
+        "BMS discharge authorization recovery requested",
+        response.clone(),
+    );
+    Ok(Json(response))
 }
 
 async fn set_wifi_config(

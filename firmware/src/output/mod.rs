@@ -11,6 +11,7 @@ use crate::front_panel_scene::{
 };
 use crate::irq::IrqSnapshot;
 use crate::net_bridge;
+use core::fmt::Write as _;
 use esp_firmware::bq25792;
 use esp_firmware::bq40z50;
 use esp_firmware::fan;
@@ -28,6 +29,7 @@ use esp_firmware::usb_pd;
 use esp_hal::gpio::{Flex, Input};
 use esp_hal::ram;
 use esp_hal::time::{Duration, Instant};
+use heapless::String;
 
 pub use self::channel::OutputChannel;
 pub use self::pure::{AppliedFanState, EnabledOutputs};
@@ -3687,6 +3689,59 @@ impl BmsRecoveryRequestKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BmsRecoveryStatusSnapshot {
+    pub requested_outputs: &'static str,
+    pub active_outputs: &'static str,
+    pub recoverable_outputs: &'static str,
+    pub output_gate_reason: &'static str,
+    pub discharge_ready: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BmsDischargeAuthorizationRecoveryResult {
+    pub ok: bool,
+    pub accepted: bool,
+    pub recovered: bool,
+    pub result: &'static str,
+    pub reason: &'static str,
+    pub status_before: BmsRecoveryStatusSnapshot,
+    pub status_after: BmsRecoveryStatusSnapshot,
+}
+
+pub fn render_bms_discharge_authorization_recovery_json<const N: usize>(
+    out: &mut String<N>,
+    result: BmsDischargeAuthorizationRecoveryResult,
+) {
+    let _ = write!(
+        out,
+        r#"{{"ok":{},"accepted":{},"recovered":{},"result":"{}","reason":"{}","status_before":{{"requested_outputs":"{}","active_outputs":"{}","recoverable_outputs":"{}","output_gate_reason":"{}","discharge_ready":{}}},"status_after":{{"requested_outputs":"{}","active_outputs":"{}","recoverable_outputs":"{}","output_gate_reason":"{}","discharge_ready":{}}}}}"#,
+        result.ok,
+        result.accepted,
+        result.recovered,
+        result.result,
+        result.reason,
+        result.status_before.requested_outputs,
+        result.status_before.active_outputs,
+        result.status_before.recoverable_outputs,
+        result.status_before.output_gate_reason,
+        json_option_bool(result.status_before.discharge_ready),
+        result.status_after.requested_outputs,
+        result.status_after.active_outputs,
+        result.status_after.recoverable_outputs,
+        result.status_after.output_gate_reason,
+        json_option_bool(result.status_after.discharge_ready),
+    );
+}
+
+fn json_option_bool(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "null",
+    }
+}
+
 fn bms_activation_phase_name(phase: BmsActivationPhase) -> &'static str {
     match phase {
         BmsActivationPhase::ProbeWithoutCharge => "probe_without_charge",
@@ -5399,6 +5454,161 @@ where
             && self.charger_allowed
             && self.ui_snapshot.bq25792 != SelfCheckCommState::Err
             && !self.therm_kill.is_low()
+    }
+
+    fn bms_recovery_status_snapshot(&self) -> BmsRecoveryStatusSnapshot {
+        BmsRecoveryStatusSnapshot {
+            requested_outputs: self.output_state.requested_outputs.describe(),
+            active_outputs: self.output_state.active_outputs.describe(),
+            recoverable_outputs: self.output_state.recoverable_outputs.describe(),
+            output_gate_reason: self.output_state.gate_reason.as_str(),
+            discharge_ready: self.ui_snapshot.bq40z50_discharge_ready,
+        }
+    }
+
+    fn bms_discharge_authorization_reject_reason(&self) -> &'static str {
+        if self.output_state.requested_outputs == EnabledOutputs::None {
+            "no_requested_outputs"
+        } else if self.output_state.gate_reason != OutputGateReason::BmsNotReady {
+            "output_gate_not_bms_not_ready"
+        } else if self.bms_addr.is_none() {
+            "bms_not_detected"
+        } else if self.ui_snapshot.bq40z50 == SelfCheckCommState::Err {
+            "bms_error"
+        } else if self.ui_snapshot.bq40z50_no_battery == Some(true) {
+            "no_battery"
+        } else if self.ui_snapshot.bq40z50_rca_alarm == Some(true) {
+            "rca_alarm"
+        } else if self.ui_snapshot.bq40z50_issue_detail == Some("cell_undervoltage")
+            || bq40_lock_diag_low_voltage_blocked(self.bms_cached_lock_diag)
+        {
+            "cell_undervoltage"
+        } else if self.ui_snapshot.bq40z50_discharge_ready != Some(false) {
+            "discharge_not_blocked"
+        } else if !discharge_authorization_input_ready(
+            self.current_mains_present(),
+            self.ui_snapshot.aggregate_input_present,
+        ) {
+            "input_power_not_ready"
+        } else if !self.charger_allowed {
+            "charger_not_allowed"
+        } else if self.ui_snapshot.bq25792 == SelfCheckCommState::Err {
+            "charger_error"
+        } else if self.therm_kill.is_low() {
+            "therm_kill_asserted"
+        } else {
+            "not_allowed"
+        }
+    }
+
+    pub fn recover_bms_discharge_authorization(
+        &mut self,
+        source: &'static str,
+    ) -> BmsDischargeAuthorizationRecoveryResult {
+        let status_before = self.bms_recovery_status_snapshot();
+
+        if self.ui_snapshot.bq40z50_discharge_ready == Some(true) {
+            let status_after = self.bms_recovery_status_snapshot();
+            defmt::info!(
+                "bms: discharge_authorization api source={} result=already_ready requested_outputs={} active_outputs={} recoverable_outputs={} gate_reason={} dsg_ready={=?}",
+                source,
+                status_after.requested_outputs,
+                status_after.active_outputs,
+                status_after.recoverable_outputs,
+                status_after.output_gate_reason,
+                status_after.discharge_ready
+            );
+            return BmsDischargeAuthorizationRecoveryResult {
+                ok: true,
+                accepted: false,
+                recovered: true,
+                result: "already_ready",
+                reason: "discharge_ready",
+                status_before,
+                status_after,
+            };
+        }
+
+        if self.bms_activation_state == BmsActivationState::Pending {
+            let status_after = self.bms_recovery_status_snapshot();
+            defmt::info!(
+                "bms: discharge_authorization api source={} result=rejected reason=recovery_pending requested_outputs={} active_outputs={} recoverable_outputs={} gate_reason={} dsg_ready={=?}",
+                source,
+                status_after.requested_outputs,
+                status_after.active_outputs,
+                status_after.recoverable_outputs,
+                status_after.output_gate_reason,
+                status_after.discharge_ready
+            );
+            return BmsDischargeAuthorizationRecoveryResult {
+                ok: true,
+                accepted: false,
+                recovered: false,
+                result: "rejected",
+                reason: "recovery_pending",
+                status_before,
+                status_after,
+            };
+        }
+
+        if !self.can_request_bms_discharge_authorization() {
+            let reason = self.bms_discharge_authorization_reject_reason();
+            let status_after = self.bms_recovery_status_snapshot();
+            defmt::info!(
+                "bms: discharge_authorization api source={} result=rejected reason={} requested_outputs={} active_outputs={} recoverable_outputs={} gate_reason={} dsg_ready={=?}",
+                source,
+                reason,
+                status_after.requested_outputs,
+                status_after.active_outputs,
+                status_after.recoverable_outputs,
+                status_after.output_gate_reason,
+                status_after.discharge_ready
+            );
+            return BmsDischargeAuthorizationRecoveryResult {
+                ok: true,
+                accepted: false,
+                recovered: false,
+                result: "rejected",
+                reason,
+                status_before,
+                status_after,
+            };
+        }
+
+        self.request_bms_discharge_authorization(false);
+        let status_after = self.bms_recovery_status_snapshot();
+        let accepted = self.bms_activation_state == BmsActivationState::Pending;
+        let recovered = status_after.discharge_ready == Some(true)
+            && status_after.output_gate_reason == OutputGateReason::None.as_str();
+        let result = if recovered { "success" } else { "failed" };
+        let reason = if recovered {
+            "recovered"
+        } else if accepted {
+            "recovery_started_not_ready"
+        } else {
+            "recovery_not_started"
+        };
+        defmt::info!(
+            "bms: discharge_authorization api source={} result={} reason={} accepted={=bool} requested_outputs={} active_outputs={} recoverable_outputs={} gate_reason={} dsg_ready={=?}",
+            source,
+            result,
+            reason,
+            accepted,
+            status_after.requested_outputs,
+            status_after.active_outputs,
+            status_after.recoverable_outputs,
+            status_after.output_gate_reason,
+            status_after.discharge_ready
+        );
+        BmsDischargeAuthorizationRecoveryResult {
+            ok: true,
+            accepted,
+            recovered,
+            result,
+            reason,
+            status_before,
+            status_after,
+        }
     }
 
     fn request_bms_discharge_authorization(&mut self, auto_request: bool) {

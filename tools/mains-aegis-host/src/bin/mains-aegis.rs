@@ -97,6 +97,10 @@ enum DeviceCommand {
         #[command(subcommand)]
         command: ArtifactCommand,
     },
+    Recovery {
+        #[command(subcommand)]
+        command: RecoveryCommand,
+    },
     Flash {
         #[arg(long)]
         artifact_id: Option<String>,
@@ -178,6 +182,11 @@ enum ArtifactCommand {
 enum MonitorCommand {
     Start,
     Stop,
+}
+
+#[derive(Debug, Subcommand)]
+enum RecoveryCommand {
+    BmsDischargeAuthorization,
 }
 
 #[derive(Debug, Subcommand)]
@@ -652,6 +661,12 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
                 }),
             ),
         },
+        DeviceCommand::Recovery { command } => match command {
+            RecoveryCommand::BmsDischargeAuthorization => (
+                "device.recovery.bms_discharge_authorization",
+                json!({ "device_id": device_id }),
+            ),
+        },
         DeviceCommand::Flash {
             artifact_id,
             dry_run,
@@ -748,8 +763,8 @@ async fn maybe_confirm_companion_lan(
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_new_matching_entries, device_read_ipc_params, seed_seen_ids,
-        trace_entry_matches_kind, DeviceReadArgs,
+        collect_new_matching_entries, device_read_ipc_params, device_to_ipc, seed_seen_ids,
+        trace_entry_matches_kind, DeviceCommand, DeviceReadArgs, RecoveryCommand,
     };
     use serde_json::json;
 
@@ -834,6 +849,19 @@ mod tests {
                 "include_meta": false,
             })
         );
+    }
+
+    #[test]
+    fn device_recovery_command_maps_to_bms_discharge_authorization_ipc() {
+        let (method, params) = device_to_ipc(
+            "serial-1".to_string(),
+            DeviceCommand::Recovery {
+                command: RecoveryCommand::BmsDischargeAuthorization,
+            },
+        );
+
+        assert_eq!(method, "device.recovery.bms_discharge_authorization");
+        assert_eq!(params, json!({ "device_id": "serial-1" }));
     }
 
     #[test]

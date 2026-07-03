@@ -13,6 +13,7 @@
 - Hosted Web client 从 same-origin HTML meta 读取 app-session secret，并且只向 devd HTTP service API 与 devd EventSource 请求附加该 secret；普通 LAN 目标不携带 app-session。Connect UI 不再暴露 devd URL 或 token 输入入口；hosted/self-hosted 模式只显示 devd discovery，USB 通过 devd 接入，LAN 设备则以直连硬件 HTTP target 落盘。
 - Connect discovery 的 owner-facing 动作语义与 devd 持久绑定保持一致：新发现 USB 候选先执行 `Bind USB`，新发现 LAN 候选执行 `Add WiFi`；只有浏览器内已存在的设备记录才显示 `Open` 与 transport 切换动作。
 - host-tools 新增 `/api/v1/devices/{id}/companion-lan` 与对应 IPC/CLI `device <id> companion-lan bind|clear`，把“自动发现”和“持久绑定”分成两步；devd 持久保存 mDNS + 最近成功 `IP:Port`，但默认仍保持 USB-first owner 语义。
+- host-tools 新增受限恢复调用面：HTTP `POST /api/v1/devices/{id}/recovery/bms-discharge-authorization`、IPC `device.recovery.bms_discharge_authorization` 与 CLI `device <id> recovery bms-discharge-authorization`。native serial 只发送固件 CDC 恢复请求，LAN 设备只转发设备本体 HTTP 恢复入口，devd/CLI 不直接打开 TPS 输出。
 - Repo skill routing defaults Codex work inside this repository to `$mains-aegis-devd-flow` for development, validation, diagnostics, field investigation, and hardware read/session-read checks. `$mains-aegis-user-operations` remains the explicit end-user/released host-tools route.
 
 ## 验证
@@ -20,6 +21,7 @@
 - `cargo check --manifest-path tools/mains-aegis-host/Cargo.toml`
 - `cargo check --manifest-path tools/mains-aegis-host/Cargo.toml --all-targets`
 - `cargo test --manifest-path tools/mains-aegis-host/Cargo.toml`
+- `just host-test`
 - `bun run --cwd web check`
 - `mains-aegis-devd serve --help` verified IPC-only help without `--bind`
 - `mains-aegis-devd serve-http --bind 0.0.0.0:30080` verified non-loopback denial without token

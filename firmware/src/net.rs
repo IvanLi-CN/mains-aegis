@@ -109,6 +109,7 @@ pub enum LanManagementCommand {
     SetManualCharge(ManualChargePrefsCommand),
     SetAdvancedPower(AdvancedPowerSettingsSnapshot),
     ResetAdvancedPower,
+    RecoverBmsDischargeAuthorization,
     Reset,
 }
 
@@ -120,6 +121,23 @@ pub enum LanCommandResult {
         message: &'static str,
     },
     AdvancedPowerStorageFailed,
+    BmsDischargeAuthorizationRecovery {
+        ok: bool,
+        accepted: bool,
+        recovered: bool,
+        result: &'static str,
+        reason: &'static str,
+        before_requested_outputs: &'static str,
+        before_active_outputs: &'static str,
+        before_recoverable_outputs: &'static str,
+        before_output_gate_reason: &'static str,
+        before_discharge_ready: Option<bool>,
+        after_requested_outputs: &'static str,
+        after_active_outputs: &'static str,
+        after_recoverable_outputs: &'static str,
+        after_output_gate_reason: &'static str,
+        after_discharge_ready: Option<bool>,
+    },
 }
 
 pub fn publish_ups_status(snapshot: UpsStatusSnapshot) {
@@ -955,6 +973,10 @@ async fn handle_http_write(
             await_command_result = true;
             queue_lan_command(LanManagementCommand::ResetAdvancedPower)
         }
+        ("POST", "/api/v1/recovery/bms-discharge-authorization") => {
+            await_command_result = true;
+            queue_lan_command(LanManagementCommand::RecoverBmsDischargeAuthorization)
+        }
         ("POST", "/api/v1/reset") => match parse_http_reset_request(request_body) {
             Ok(()) => queue_lan_command(LanManagementCommand::Reset),
             Err(err) => {
@@ -1011,6 +1033,44 @@ async fn handle_http_write(
                         .await?;
                         return Ok(());
                     }
+                    LanCommandResult::BmsDischargeAuthorizationRecovery {
+                        ok,
+                        accepted,
+                        recovered,
+                        result,
+                        reason,
+                        before_requested_outputs,
+                        before_active_outputs,
+                        before_recoverable_outputs,
+                        before_output_gate_reason,
+                        before_discharge_ready,
+                        after_requested_outputs,
+                        after_active_outputs,
+                        after_recoverable_outputs,
+                        after_output_gate_reason,
+                        after_discharge_ready,
+                    } => {
+                        write_bms_discharge_authorization_recovery_body(
+                            &mut body,
+                            ok,
+                            accepted,
+                            recovered,
+                            result,
+                            reason,
+                            before_requested_outputs,
+                            before_active_outputs,
+                            before_recoverable_outputs,
+                            before_output_gate_reason,
+                            before_discharge_ready,
+                            after_requested_outputs,
+                            after_active_outputs,
+                            after_recoverable_outputs,
+                            after_output_gate_reason,
+                            after_discharge_ready,
+                        );
+                        write_http_response(socket, "200 OK", body.as_str(), origin).await?;
+                        return Ok(());
+                    }
                 }
             }
             if embassy_time::Instant::now() >= deadline {
@@ -1032,6 +1092,55 @@ async fn handle_http_write(
     let _ = body.push_str(r#"{"accepted":true}"#);
     write_http_response(socket, "202 Accepted", body.as_str(), origin).await?;
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_bms_discharge_authorization_recovery_body(
+    body: &mut String<HTTP_RESPONSE_BODY_CAP>,
+    ok: bool,
+    accepted: bool,
+    recovered: bool,
+    result: &'static str,
+    reason: &'static str,
+    before_requested_outputs: &'static str,
+    before_active_outputs: &'static str,
+    before_recoverable_outputs: &'static str,
+    before_output_gate_reason: &'static str,
+    before_discharge_ready: Option<bool>,
+    after_requested_outputs: &'static str,
+    after_active_outputs: &'static str,
+    after_recoverable_outputs: &'static str,
+    after_output_gate_reason: &'static str,
+    after_discharge_ready: Option<bool>,
+) {
+    use core::fmt::Write as _;
+    let _ = write!(
+        body,
+        r#"{{"ok":{},"accepted":{},"recovered":{},"result":"{}","reason":"{}","status_before":{{"requested_outputs":"{}","active_outputs":"{}","recoverable_outputs":"{}","output_gate_reason":"{}","discharge_ready":{}}},"status_after":{{"requested_outputs":"{}","active_outputs":"{}","recoverable_outputs":"{}","output_gate_reason":"{}","discharge_ready":{}}}}}"#,
+        ok,
+        accepted,
+        recovered,
+        result,
+        reason,
+        before_requested_outputs,
+        before_active_outputs,
+        before_recoverable_outputs,
+        before_output_gate_reason,
+        json_option_bool(before_discharge_ready),
+        after_requested_outputs,
+        after_active_outputs,
+        after_recoverable_outputs,
+        after_output_gate_reason,
+        json_option_bool(after_discharge_ready),
+    );
+}
+
+fn json_option_bool(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "null",
+    }
 }
 
 async fn handle_status_sse(
