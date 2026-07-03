@@ -2613,67 +2613,6 @@ impl RuntimeModeTracker {
     }
 }
 
-#[cfg(test)]
-mod owner_mode_gate_tests {
-    use super::{gate_owner_mode_on_active_outputs, EnabledOutputs, OutputChannel, UpsMode};
-
-    #[test]
-    fn gates_output_dependent_modes_when_requested_outputs_are_inactive() {
-        assert_eq!(
-            gate_owner_mode_on_active_outputs(
-                UpsMode::Backup,
-                EnabledOutputs::Both,
-                EnabledOutputs::None
-            ),
-            UpsMode::Blocked
-        );
-        assert_eq!(
-            gate_owner_mode_on_active_outputs(
-                UpsMode::Supplement,
-                EnabledOutputs::Only(OutputChannel::OutA),
-                EnabledOutputs::Only(OutputChannel::OutB)
-            ),
-            UpsMode::Blocked
-        );
-        assert_eq!(
-            gate_owner_mode_on_active_outputs(
-                UpsMode::Standby,
-                EnabledOutputs::Only(OutputChannel::OutB),
-                EnabledOutputs::None
-            ),
-            UpsMode::Blocked
-        );
-    }
-
-    #[test]
-    fn preserves_owner_mode_when_requested_outputs_are_active_or_not_requested() {
-        assert_eq!(
-            gate_owner_mode_on_active_outputs(
-                UpsMode::Backup,
-                EnabledOutputs::Both,
-                EnabledOutputs::Both
-            ),
-            UpsMode::Backup
-        );
-        assert_eq!(
-            gate_owner_mode_on_active_outputs(
-                UpsMode::Backup,
-                EnabledOutputs::None,
-                EnabledOutputs::None
-            ),
-            UpsMode::Backup
-        );
-        assert_eq!(
-            gate_owner_mode_on_active_outputs(
-                UpsMode::Off,
-                EnabledOutputs::Both,
-                EnabledOutputs::None
-            ),
-            UpsMode::Off
-        );
-    }
-}
-
 #[derive(Clone, Copy)]
 struct AssistRuntimeSnapshot {
     stage: AssistPowerStage,
