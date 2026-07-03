@@ -119,6 +119,7 @@ fn dashboard_detail_fixture(
         UpsMode::Standby => "CHG500",
         UpsMode::Supplement => "LOAD",
         UpsMode::Backup => "NOAC",
+        UpsMode::Blocked => "LOCK",
         UpsMode::Off => "WAIT",
     });
     detail.charger_status = detail.charger_home_status;
@@ -149,6 +150,7 @@ fn dashboard_detail_fixture(
         UpsMode::Standby => "charging_500ma",
         UpsMode::Supplement => "blocked_output_over_limit",
         UpsMode::Backup => "blocked_no_input",
+        UpsMode::Blocked => "runtime_blocked_no_charge",
         UpsMode::Off => "idle_wait_threshold",
     });
     detail.thermal_notice = Some("FAN RPM MOCKED - SENSOR WIRING NEXT");
@@ -362,6 +364,33 @@ fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
             snapshot.bq40z50_pack_mv = Some(14_820);
             snapshot.bq40z50_current_ma = Some(-1880);
             snapshot.bq40z50_soc_pct = Some(53);
+        }
+        UpsMode::Blocked => {
+            snapshot.requested_outputs = output_state::EnabledOutputs::Both;
+            snapshot.active_outputs = output_state::EnabledOutputs::None;
+            snapshot.recoverable_outputs = output_state::EnabledOutputs::Both;
+            snapshot.fusb302_vbus_present = Some(true);
+            snapshot.input_vbus_mv = Some(5_060);
+            snapshot.input_ibus_ma = Some(96);
+            snapshot.aggregate_input_present = Some(true);
+            snapshot.vin_vbus_mv = None;
+            snapshot.vin_iin_ma = None;
+            snapshot.bq25792_allow_charge = Some(false);
+            snapshot.bq25792_ichg_ma = None;
+            snapshot.bq25792_ibat_ma = Some(0);
+            snapshot.tps_a_enabled = Some(false);
+            snapshot.out_a_vbus_mv = None;
+            snapshot.tps_a_iout_ma = None;
+            snapshot.tps_b_enabled = Some(false);
+            snapshot.out_b_vbus_mv = None;
+            snapshot.tps_b_iout_ma = None;
+            snapshot.ina_total_ma = None;
+            snapshot.bq40z50_pack_mv = Some(16_245);
+            snapshot.bq40z50_current_ma = Some(0);
+            snapshot.bq40z50_soc_pct = Some(97);
+            snapshot.dashboard_detail.charger_status = Some("LOCK");
+            snapshot.dashboard_detail.charger_home_status = Some("LOCK");
+            snapshot.dashboard_detail.charger_notice = Some("runtime_blocked_no_charge");
         }
     }
 
@@ -1881,6 +1910,7 @@ enum ModeArg {
     Standby,
     Supplement,
     Backup,
+    Blocked,
 }
 
 impl ModeArg {
@@ -1890,8 +1920,9 @@ impl ModeArg {
             "standby" | "stby" => Ok(Self::Standby),
             "supplement" | "supp" => Ok(Self::Supplement),
             "backup" | "batt" => Ok(Self::Backup),
+            "blocked" | "block" | "lock" => Ok(Self::Blocked),
             _ => Err(format!(
-                "unsupported --mode value: {raw} (expected off|standby|supplement|backup)"
+                "unsupported --mode value: {raw} (expected off|standby|supplement|backup|blocked)"
             )),
         }
     }
@@ -1902,6 +1933,7 @@ impl ModeArg {
             UpsMode::Standby => Self::Standby,
             UpsMode::Supplement => Self::Supplement,
             UpsMode::Backup => Self::Backup,
+            UpsMode::Blocked => Self::Blocked,
         }
     }
 
@@ -1911,6 +1943,7 @@ impl ModeArg {
             ModeArg::Standby => UpsMode::Standby,
             ModeArg::Supplement => UpsMode::Supplement,
             ModeArg::Backup => UpsMode::Backup,
+            ModeArg::Blocked => UpsMode::Blocked,
         }
     }
 
@@ -1920,6 +1953,7 @@ impl ModeArg {
             ModeArg::Standby => "standby",
             ModeArg::Supplement => "supplement",
             ModeArg::Backup => "backup",
+            ModeArg::Blocked => "blocked",
         }
     }
 }
@@ -2312,7 +2346,7 @@ impl Args {
 fn help_text() -> String {
     [
         "Usage:",
-        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario <scenario>] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup|blocked}] [--scenario <scenario>] --out-dir <ABS_PATH> [--frame-no <n>]",
         "",
         "Common charger scenarios:",
         "  dashboard-detail-charger-wait",

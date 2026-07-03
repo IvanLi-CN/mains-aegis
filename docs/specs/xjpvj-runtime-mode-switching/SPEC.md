@@ -98,6 +98,11 @@
   - 输出由电池侧供能。
   - TPS 目标保持额定输出档位。
   - 固定为 non-charging mode。
+- `BLOCKED`
+  - owner-facing 阻断态，不是新的内部供电阶段。
+  - 当自动状态机候选结果为 `STANDBY / ASSIST / BACKUP`，但本轮请求的 TPS 输出没有全部进入
+    `active_outputs` 时，对外必须发布 `mode=blocked`。
+  - 固定为 non-charging mode。
 
 ## 自动运行态切换规则
 
@@ -105,6 +110,8 @@
 
 - 自动运行态只允许在 `STANDBY / ASSIST / BACKUP` 之间切换。
 - `BYPASS` 只能由显式管理态进入/退出，自动判定逻辑不得自行产出 `BYPASS`。
+- `BLOCKED` 只能由 owner-facing 发布门槛产生；内部候选阶段仍保留原始
+  `standby / assist_low / assist_rated / backup` 判定，便于恢复后回到正确目标。
 
 ### 2. 输入在线 / 离线判定
 
@@ -161,6 +168,18 @@
   - 自动离开 `BACKUP`
   - 下一状态按 `TPS total output current` 锁存结果进入 `STANDBY` 或 `ASSIST`
 
+### 5. TPS 输出活跃发布门槛
+
+- `STANDBY / ASSIST / BACKUP` 都属于需要 TPS 输出契约成立后才可对外发布的运行态。
+- 若 `requested_outputs != none`，则 `requested_outputs` 中每一路都必须同时存在于
+  `active_outputs`。
+- 若候选 mode 为 `STANDBY / ASSIST / BACKUP`，但上述条件不成立：
+  - API / diag / front-panel 必须发布 `mode=blocked`
+  - 不得发布 `mode=backup`、`mode=supplement` 或 `mode=standby`
+  - charger policy 必须按 non-charging mode 处理
+- 若 `requested_outputs == none`，发布门槛不阻断候选 mode；该场景表示当前没有要求 TPS
+  输出供电。
+
 ## 与 charger policy 的硬联动
 
 - `STANDBY`
@@ -174,6 +193,10 @@
   - 必须视为 non-charging mode。
   - `charger.allow_charge=false`
   - owner-facing charger token/notice 收敛到 `NOAC` 语义边界。
+- `BLOCKED`
+  - 必须视为 non-charging mode。
+  - `charger.allow_charge=false`
+  - owner-facing charger token/notice 收敛到 `LOCK` 语义边界。
 - 本联动只定义模式与 charger 的边界，不覆盖 `eu2b8` 内部关于 `DC IN` 压力、cooldown、recovery ramp 或手动 charge 的全部细节。
 
 ## owner-facing 可观测性要求
@@ -213,6 +236,10 @@
 - Given 已处于 `assist_low`，When 绝对 `VIN` 退出门槛与 `TPS total output current` 退出门槛都满足 `assist_required_samples` fresh 样本窗口，Then 内部阶段回到 `standby`。
 - Given `dcin_present=true` 且 USB `5V` 遥测同时存在，When 自动模式判定更新，Then `assist_low / assist_rated` 的资格判断必须继续跟随 DCIN 在线事实与 `VIN/TPS` 双判据，而不是被 owner-facing `input.source` 标签单独阻断。
 - Given `input_source` 不是 `dcin`，When 输入仍确认在线，Then 内部阶段不得仅因在线输入存在而进入 `assist_low` 或 `assist_rated`。
+- Given `requested_outputs=both` 且 `active_outputs=none`，When 内部候选 mode 为 `backup`，Then
+  owner-facing `mode=blocked`，不得发布 `mode=backup`。
+- Given `requested_outputs` 包含某路输出且 `active_outputs` 不包含该路，When 内部候选 mode 为
+  `standby` 或 `supplement`，Then owner-facing `mode=blocked`。
 - Given 输入状态未知，When `TPS` 仍在输出，Then 模式保持上一确认态，不得仅因输出活跃直接进入 `BACKUP`。
 - Given `VIN < 3V`，When 自动模式判定更新，Then 结果为 `BACKUP`。
 - Given `VIN` 连续缺样超过窗口且 `aggregate input-present=false`，When 自动模式判定更新，Then 结果为 `BACKUP`。
@@ -234,6 +261,14 @@
 - `firmware/src/output/pure.rs`
 
 ## Visual Evidence
+
+- source_type: firmware_preview
+  evidence_scope: owner-facing `mode=blocked` front-panel rendering
+  command: `cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --mode blocked --out-dir /tmp/mains-aegis-blocked-preview`
+  image: `assets/front-panel-blocked-mode.png`
+  evidence_note: 同源固件渲染入口显示 `BLOCKED / OUTPUT BLOCKED / LOCK`，不把 TPS 未 active 的状态渲染为 `BACKUP` 或放电 active。
+
+![Front panel blocked mode](assets/front-panel-blocked-mode.png)
 
 - source_type: real_hil_capture
   evidence_scope: passing formal `12V` runtime-mode scene

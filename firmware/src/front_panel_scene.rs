@@ -164,6 +164,7 @@ pub enum UpsMode {
     Standby,
     Supplement,
     Backup,
+    Blocked,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2344,6 +2345,7 @@ impl DashboardData {
             UpsMode::Standby => (0, 0, 1_120 + wave * 8),
             UpsMode::Supplement => (560 + wave * 6, 480 + wave * 5, 1_860 + wave * 9),
             UpsMode::Backup => (980 + wave * 7, 920 + wave * 6, 1_900 + wave * 8),
+            UpsMode::Blocked => (0, 0, 0),
         };
 
         Self {
@@ -2379,7 +2381,8 @@ impl DashboardData {
             } else {
                 15_200 + wave * 12
             },
-            bms_balancing: model.focus == UiFocus::Left && !matches!(mode, UpsMode::Off),
+            bms_balancing: model.focus == UiFocus::Left
+                && !matches!(mode, UpsMode::Off | UpsMode::Blocked),
             bms_soc_pct: if matches!(mode, UpsMode::Backup) {
                 56 + (wave % 5)
             } else if matches!(mode, UpsMode::Supplement) {
@@ -2655,6 +2658,7 @@ fn mode_label(mode: UpsMode) -> &'static str {
         UpsMode::Standby => "STANDBY",
         UpsMode::Supplement => "ASSIST",
         UpsMode::Backup => "BACKUP",
+        UpsMode::Blocked => "BLOCKED",
     }
 }
 
@@ -2667,11 +2671,12 @@ fn mode_accent_color(palette: Palette, mode: UpsMode, touch_irq: bool) -> u16 {
         UpsMode::Standby => palette.right,
         UpsMode::Supplement => palette.accent,
         UpsMode::Backup => palette.down,
+        UpsMode::Blocked => palette.down,
     }
 }
 
 fn mode_is_mains(mode: UpsMode) -> bool {
-    !matches!(mode, UpsMode::Backup)
+    !matches!(mode, UpsMode::Backup | UpsMode::Blocked)
 }
 
 #[allow(dead_code)]
@@ -4802,7 +4807,7 @@ fn render_variant_b_demo<P: UiPainter>(
     };
     let input_current_ma = if data.mains_present {
         match data.mode {
-            UpsMode::Off => load_ma,
+            UpsMode::Off | UpsMode::Blocked => load_ma,
             UpsMode::Standby => load_ma + charge_batt_ma,
             UpsMode::Supplement => {
                 let supplement_ma = tps_out_ma.min(load_ma.saturating_sub(120));
@@ -4815,7 +4820,7 @@ fn render_variant_b_demo<P: UiPainter>(
     };
     let output_current_ma = load_ma.max(120);
     let batt_discharge_ma = match data.mode {
-        UpsMode::Off | UpsMode::Standby => 0,
+        UpsMode::Off | UpsMode::Standby | UpsMode::Blocked => 0,
         UpsMode::Supplement => tps_out_ma.min(load_ma),
         UpsMode::Backup => load_ma,
     };
@@ -4923,12 +4928,16 @@ fn render_variant_b_demo<P: UiPainter>(
 
     draw_panel(painter, 6, 76, 196, 94, palette, false, palette.accent)?;
     match data.mode {
-        UpsMode::Off => {
+        UpsMode::Off | UpsMode::Blocked => {
             text(
                 painter,
                 variant,
                 FontRole::TextBody,
-                "BYPASS ACTIVE",
+                if matches!(data.mode, UpsMode::Blocked) {
+                    "OUTPUT BLOCKED"
+                } else {
+                    "BYPASS ACTIVE"
+                },
                 Point::new(14, 81),
                 HorizontalAlignment::Left,
                 palette.text,
@@ -5182,6 +5191,7 @@ fn render_variant_b_demo<P: UiPainter>(
                 }
             }
             UpsMode::Supplement => "DSG",
+            UpsMode::Blocked => "LOCK",
             UpsMode::Backup => {
                 if data.bms_soc_pct <= 20 {
                     "LOW"
@@ -5200,13 +5210,14 @@ fn render_variant_b_demo<P: UiPainter>(
             }
         }
         UpsMode::Backup => "NOAC",
-        UpsMode::Off | UpsMode::Supplement => "LOCK",
+        UpsMode::Off | UpsMode::Supplement | UpsMode::Blocked => "LOCK",
     };
     let discharge_status = match data.mode {
         UpsMode::Off => "BYP",
         UpsMode::Standby => "IDLE",
         UpsMode::Supplement => "ASSIST",
         UpsMode::Backup => "LOAD",
+        UpsMode::Blocked => "LOCK",
     };
 
     let batt_max_c = data.therm_a_c.max(data.therm_b_c);
@@ -5486,12 +5497,16 @@ fn render_variant_b_live<P: UiPainter>(
 
     draw_panel(painter, 6, 76, 196, 94, palette, false, palette.accent)?;
     match data.mode {
-        UpsMode::Off => {
+        UpsMode::Off | UpsMode::Blocked => {
             text(
                 painter,
                 variant,
                 FontRole::TextBody,
-                "BYPASS ACTIVE",
+                if matches!(data.mode, UpsMode::Blocked) {
+                    "OUTPUT BLOCKED"
+                } else {
+                    "BYPASS ACTIVE"
+                },
                 Point::new(14, 81),
                 HorizontalAlignment::Left,
                 palette.text,
@@ -5825,6 +5840,7 @@ fn render_variant_b_live<P: UiPainter>(
                 UpsMode::Standby => "IDLE",
                 UpsMode::Supplement => "ASSIST",
                 UpsMode::Backup => "LOAD",
+                UpsMode::Blocked => "LOCK",
             }
         };
     let discharge_note_color = comm_state_color(palette, data.bms_state);

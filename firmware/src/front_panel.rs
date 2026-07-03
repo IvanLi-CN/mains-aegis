@@ -2982,6 +2982,7 @@ fn ups_mode_name(mode: UpsMode) -> &'static str {
         UpsMode::Standby => "standby",
         UpsMode::Supplement => "supplement",
         UpsMode::Backup => "backup",
+        UpsMode::Blocked => "blocked",
     }
 }
 

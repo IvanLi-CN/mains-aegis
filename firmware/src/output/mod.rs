@@ -2386,6 +2386,36 @@ fn stable_mains_present(
     stable_mains_state(vin_mains_present, vin_vbus_mv, charger_present).present
 }
 
+fn requested_outputs_active(requested: EnabledOutputs, active: EnabledOutputs) -> bool {
+    match requested {
+        EnabledOutputs::None => true,
+        EnabledOutputs::Only(ch) => active.is_enabled(ch),
+        EnabledOutputs::Both => active == EnabledOutputs::Both,
+    }
+}
+
+fn mode_requires_active_tps_outputs(mode: UpsMode, requested: EnabledOutputs) -> bool {
+    requested != EnabledOutputs::None
+        && matches!(
+            mode,
+            UpsMode::Standby | UpsMode::Supplement | UpsMode::Backup
+        )
+}
+
+fn gate_owner_mode_on_active_outputs(
+    mode: UpsMode,
+    requested: EnabledOutputs,
+    active: EnabledOutputs,
+) -> UpsMode {
+    if mode_requires_active_tps_outputs(mode, requested)
+        && !requested_outputs_active(requested, active)
+    {
+        UpsMode::Blocked
+    } else {
+        mode
+    }
+}
+
 fn discharge_authorization_input_ready(
     mains_present: Option<bool>,
     charger_present: Option<bool>,
@@ -2580,6 +2610,67 @@ impl RuntimeModeTracker {
             }
             None => self.mains_mode,
         }
+    }
+}
+
+#[cfg(test)]
+mod owner_mode_gate_tests {
+    use super::{gate_owner_mode_on_active_outputs, EnabledOutputs, OutputChannel, UpsMode};
+
+    #[test]
+    fn gates_output_dependent_modes_when_requested_outputs_are_inactive() {
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(
+                UpsMode::Backup,
+                EnabledOutputs::Both,
+                EnabledOutputs::None
+            ),
+            UpsMode::Blocked
+        );
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(
+                UpsMode::Supplement,
+                EnabledOutputs::Only(OutputChannel::OutA),
+                EnabledOutputs::Only(OutputChannel::OutB)
+            ),
+            UpsMode::Blocked
+        );
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(
+                UpsMode::Standby,
+                EnabledOutputs::Only(OutputChannel::OutB),
+                EnabledOutputs::None
+            ),
+            UpsMode::Blocked
+        );
+    }
+
+    #[test]
+    fn preserves_owner_mode_when_requested_outputs_are_active_or_not_requested() {
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(
+                UpsMode::Backup,
+                EnabledOutputs::Both,
+                EnabledOutputs::Both
+            ),
+            UpsMode::Backup
+        );
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(
+                UpsMode::Backup,
+                EnabledOutputs::None,
+                EnabledOutputs::None
+            ),
+            UpsMode::Backup
+        );
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(
+                UpsMode::Off,
+                EnabledOutputs::Both,
+                EnabledOutputs::None
+            ),
+            UpsMode::Off
+        );
     }
 }
 
@@ -3436,7 +3527,7 @@ where
 
     let enabled_outputs = enabled_outputs_from_flags(out_a_allowed, out_b_allowed);
 
-    ui.mode = match stable_mains_present(
+    let candidate_mode = match stable_mains_present(
         ui.vin_mains_present,
         ui.vin_vbus_mv,
         ui.aggregate_input_present,
@@ -3444,6 +3535,7 @@ where
         Some(false) => UpsMode::Backup,
         _ => UpsMode::Standby,
     };
+    ui.mode = gate_owner_mode_on_active_outputs(candidate_mode, desired_outputs, enabled_outputs);
 
     defmt::info!(
         "self_test: done requested_outputs={} active_outputs={} recoverable_outputs={} gate_reason={} charger_enabled={=bool} bms_present={=bool}",
@@ -9114,11 +9206,16 @@ where
             tps_total_iout_fresh,
             tps_total_iout_sample_seq,
         );
-        self.ui_snapshot.mode = match self.assist_power_stage.stage {
+        let candidate_mode = match self.assist_power_stage.stage {
             AssistPowerStage::Backup => UpsMode::Backup,
             AssistPowerStage::AssistLow | AssistPowerStage::AssistRated => UpsMode::Supplement,
             AssistPowerStage::Standby => online_mode,
         };
+        self.ui_snapshot.mode = gate_owner_mode_on_active_outputs(
+            candidate_mode,
+            self.output_state.requested_outputs,
+            self.output_state.active_outputs,
+        );
         if target_changed {
             self.sync_runtime_output_target_if_needed();
         }

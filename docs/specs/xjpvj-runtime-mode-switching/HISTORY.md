@@ -1,5 +1,13 @@
 # 历史记录（#xjpvj）
 
+## 2026-07-03
+
+- 修正 owner-facing mode 发布门槛：
+  - 任何需要 TPS 输出成立的候选模式，都必须先满足 `requested_outputs` 全部进入
+    `active_outputs`
+  - 不满足时发布 `mode=blocked`，不得发布 `standby / supplement / backup`
+- `BLOCKED` 固定为 non-charging owner-facing 阻断态，charger token 收敛到 `LOCK`。
+
 ## 2026-06-16
 
 - 新建运行态模式切换 topic spec。

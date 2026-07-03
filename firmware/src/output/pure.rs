@@ -354,6 +354,11 @@ pub(super) const fn runtime_charge_override(mode: UpsMode) -> Option<RuntimeChar
             policy_status_text: "NOAC",
             policy_notice_text: "runtime_backup_no_charge",
         }),
+        UpsMode::Blocked => Some(RuntimeChargeOverride {
+            allow_charge: false,
+            policy_status_text: "LOCK",
+            policy_notice_text: "runtime_blocked_no_charge",
+        }),
         UpsMode::Standby | UpsMode::Off => None,
     }
 }
@@ -940,7 +945,8 @@ impl DcinInputPressureTracker {
     }
 
     pub(super) fn should_preserve_for_ac2_restore(&self, runtime_mode: UpsMode) -> bool {
-        self.has_recent_dcin_loss_for_restore() || matches!(runtime_mode, UpsMode::Backup)
+        self.has_recent_dcin_loss_for_restore()
+            || matches!(runtime_mode, UpsMode::Backup | UpsMode::Blocked)
     }
 
     pub(super) fn reset_for_online_restore(&mut self) {
@@ -3037,7 +3043,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_charge_override_blocks_charging_in_assist_and_backup_only() {
+    fn runtime_charge_override_blocks_charging_in_output_and_blocked_modes() {
         assert_eq!(
             runtime_charge_override(UpsMode::Supplement),
             Some(RuntimeChargeOverride {
@@ -3052,6 +3058,14 @@ mod tests {
                 allow_charge: false,
                 policy_status_text: "NOAC",
                 policy_notice_text: "runtime_backup_no_charge",
+            })
+        );
+        assert_eq!(
+            runtime_charge_override(UpsMode::Blocked),
+            Some(RuntimeChargeOverride {
+                allow_charge: false,
+                policy_status_text: "LOCK",
+                policy_notice_text: "runtime_blocked_no_charge",
             })
         );
         assert_eq!(runtime_charge_override(UpsMode::Standby), None);
@@ -3636,6 +3650,7 @@ mod tests {
     fn dcin_pressure_ac2_restore_preserves_baseline_after_backup_even_without_absent_flag() {
         let tracker = DcinInputPressureTracker::default();
         assert!(tracker.should_preserve_for_ac2_restore(UpsMode::Backup));
+        assert!(tracker.should_preserve_for_ac2_restore(UpsMode::Blocked));
         assert!(!tracker.should_preserve_for_ac2_restore(UpsMode::Standby));
         assert!(!tracker.should_preserve_for_ac2_restore(UpsMode::Supplement));
     }
