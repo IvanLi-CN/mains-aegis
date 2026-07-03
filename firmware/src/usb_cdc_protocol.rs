@@ -685,6 +685,16 @@ fn parse_advanced_power_settings(
             .ok_or(UsbCdcProtocolError::MissingField)?,
         required_samples: json_u8_field(line, "required_samples")?
             .ok_or(UsbCdcProtocolError::MissingField)?,
+        source_limited_vin_drop_pct: json_u8_field(line, "source_limited_vin_drop_pct")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        source_limited_enter_delta_ma: json_i16_field(line, "source_limited_enter_delta_ma")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        source_limited_exit_delta_ma: json_i16_field(line, "source_limited_exit_delta_ma")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        source_limited_required_samples: json_u8_field(line, "source_limited_required_samples")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
+        source_limited_recover_margin_mv: json_u16_field(line, "source_limited_recover_margin_mv")?
+            .ok_or(UsbCdcProtocolError::MissingField)?,
     };
     validate_advanced_power_settings(settings).map_err(advanced_power_validation_protocol_error)?;
     Ok(settings)
@@ -1034,6 +1044,38 @@ mod tests {
     }
 
     #[test]
+    fn parses_advanced_power_request_with_source_limited_fields() {
+        let frame = parse_frame(
+            r#"{"type":"request","request_id":"req-adv","op":"set_advanced_power","standby_drop_mv":1200,"assist_low_drop_mv":600,"assist_enter_delta_ma":0,"assist_exit_delta_ma":0,"assist_required_samples":2,"assist_ramp_step_mv":100,"assist_ramp_interval_ms":200,"rated_enter_delta_ma":0,"rated_exit_delta_ma":0,"vin_drop_threshold_pct":4,"required_samples":2,"source_limited_vin_drop_pct":4,"source_limited_enter_delta_ma":1900,"source_limited_exit_delta_ma":0,"source_limited_required_samples":2,"source_limited_recover_margin_mv":400}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            frame,
+            UsbCdcFrame::Request {
+                request_id: String::try_from("req-adv").unwrap(),
+                op: UsbCdcRequest::SetAdvancedPower(AdvancedPowerSettingsSnapshot {
+                    standby_drop_mv: 1200,
+                    assist_low_drop_mv: 600,
+                    assist_enter_delta_ma: 0,
+                    assist_exit_delta_ma: 0,
+                    assist_required_samples: 2,
+                    assist_ramp_step_mv: 100,
+                    assist_ramp_interval_ms: 200,
+                    rated_enter_delta_ma: 0,
+                    rated_exit_delta_ma: 0,
+                    vin_drop_threshold_pct: 4,
+                    required_samples: 2,
+                    source_limited_vin_drop_pct: 4,
+                    source_limited_enter_delta_ma: 1900,
+                    source_limited_exit_delta_ma: 0,
+                    source_limited_required_samples: 2,
+                    source_limited_recover_margin_mv: 400,
+                }),
+            }
+        );
+    }
+
+    #[test]
     fn diag_snapshot_response_supports_expanded_payload() {
         let diag = DerivedPowerSnapshot {
             input: DerivedPowerInputSnapshot {
@@ -1052,6 +1094,7 @@ mod tests {
                 vin_drop_mv: Some(120),
                 assist_power_stage: Some("assist_rated"),
                 assist_target_vout_mv: Some(12_000),
+                backup_reason: None,
                 usb_pd_attached: false,
                 usb_pd_charge_ready: false,
                 usb_pd_vbus_present: Some(true),

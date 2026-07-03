@@ -133,3 +133,18 @@
   - 当前 host truth 需区分：
     - `display_power_mode=sleeping` 时 `front_panel.frame_no` 可保持不变，这是 panel sleep 语义
     - `ready=false`、`init_state!=ready` 或 awake 态下长期无 frame advance 才可视为真实冻结嫌疑
+
+## 2026-07-03
+
+- `BACKUP` 语义从“输入物理断电”扩展为“UPS 已接管负载”：
+  - `backup_reason=input_absent`
+  - `backup_reason=source_limited`
+- `source_limited` 明确表示 `VIN` 在线但上级电源已不可承担当前负载，MCU 可主动切入 `BACKUP`，不必等待 `VIN < 3V`。
+- `advanced_power` 从 11 字段扩展到 16 字段，并落地 EEPROM `AdvancedPowerRecordV3`：
+  - `source_limited_vin_drop_pct`
+  - `source_limited_enter_delta_ma`
+  - `source_limited_exit_delta_ma`
+  - `source_limited_required_samples`
+  - `source_limited_recover_margin_mv`
+- 旧 `12V assist_path / 3900mA` sign-off 结果保留为旧方案实测证据；该结果说明场景可完成，但也记录了 assist 阶段负载端约 `10.5V` 级长时间深跌落观察。
+- `.mhtml` 被明确为可离线打开并保留内嵌图表的 evidence；单独 `.html` overview 若没有 scene 子目录会缺少 iframe 图表资源。

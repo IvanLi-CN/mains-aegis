@@ -195,7 +195,7 @@ pub fn render_settings_json<const N: usize>(
     let _ = buf.push_str("},\"advanced_power\":{");
     let _ = write!(
         buf,
-        "\"standby_drop_mv\":{},\"assist_low_drop_mv\":{},\"assist_enter_delta_ma\":{},\"assist_exit_delta_ma\":{},\"assist_required_samples\":{},\"assist_ramp_step_mv\":{},\"assist_ramp_interval_ms\":{},\"rated_enter_delta_ma\":{},\"rated_exit_delta_ma\":{},\"vin_drop_threshold_pct\":{},\"required_samples\":{}",
+        "\"standby_drop_mv\":{},\"assist_low_drop_mv\":{},\"assist_enter_delta_ma\":{},\"assist_exit_delta_ma\":{},\"assist_required_samples\":{},\"assist_ramp_step_mv\":{},\"assist_ramp_interval_ms\":{},\"rated_enter_delta_ma\":{},\"rated_exit_delta_ma\":{},\"vin_drop_threshold_pct\":{},\"required_samples\":{},\"source_limited_vin_drop_pct\":{},\"source_limited_enter_delta_ma\":{},\"source_limited_exit_delta_ma\":{},\"source_limited_required_samples\":{},\"source_limited_recover_margin_mv\":{}",
         settings.advanced_power.standby_drop_mv,
         settings.advanced_power.assist_low_drop_mv,
         settings.advanced_power.assist_enter_delta_ma,
@@ -207,11 +207,16 @@ pub fn render_settings_json<const N: usize>(
         settings.advanced_power.rated_exit_delta_ma,
         settings.advanced_power.vin_drop_threshold_pct,
         settings.advanced_power.required_samples,
+        settings.advanced_power.source_limited_vin_drop_pct,
+        settings.advanced_power.source_limited_enter_delta_ma,
+        settings.advanced_power.source_limited_exit_delta_ma,
+        settings.advanced_power.source_limited_required_samples,
+        settings.advanced_power.source_limited_recover_margin_mv,
     );
     let _ = buf.push_str("},\"advanced_power_capabilities\":{");
     let _ = write!(
         buf,
-        "\"rated_vout_mv\":{},\"standby_drop_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_low_drop_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_enter_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_exit_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_required_samples\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_ramp_step_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_ramp_interval_ms\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"rated_enter_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"rated_exit_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"vin_drop_threshold_pct\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"required_samples\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}}",
+        "\"rated_vout_mv\":{},\"standby_drop_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_low_drop_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_enter_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_exit_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_required_samples\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_ramp_step_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_ramp_interval_ms\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"rated_enter_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"rated_exit_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"vin_drop_threshold_pct\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"required_samples\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"source_limited_vin_drop_pct\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"source_limited_enter_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"source_limited_exit_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"source_limited_required_samples\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"source_limited_recover_margin_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}}",
         settings.advanced_power_capabilities.rated_vout_mv,
         settings.advanced_power_capabilities.standby_drop_mv.default,
         settings.advanced_power_capabilities.standby_drop_mv.min,
@@ -257,6 +262,54 @@ pub fn render_settings_json<const N: usize>(
         settings.advanced_power_capabilities.required_samples.min,
         settings.advanced_power_capabilities.required_samples.max,
         settings.advanced_power_capabilities.required_samples.step,
+        settings.advanced_power_capabilities
+            .source_limited_vin_drop_pct
+            .default,
+        settings.advanced_power_capabilities.source_limited_vin_drop_pct.min,
+        settings.advanced_power_capabilities.source_limited_vin_drop_pct.max,
+        settings.advanced_power_capabilities.source_limited_vin_drop_pct.step,
+        settings.advanced_power_capabilities
+            .source_limited_enter_delta_ma
+            .default,
+        settings.advanced_power_capabilities
+            .source_limited_enter_delta_ma
+            .min,
+        settings.advanced_power_capabilities
+            .source_limited_enter_delta_ma
+            .max,
+        settings.advanced_power_capabilities
+            .source_limited_enter_delta_ma
+            .step,
+        settings.advanced_power_capabilities
+            .source_limited_exit_delta_ma
+            .default,
+        settings.advanced_power_capabilities.source_limited_exit_delta_ma.min,
+        settings.advanced_power_capabilities.source_limited_exit_delta_ma.max,
+        settings.advanced_power_capabilities.source_limited_exit_delta_ma.step,
+        settings.advanced_power_capabilities
+            .source_limited_required_samples
+            .default,
+        settings.advanced_power_capabilities
+            .source_limited_required_samples
+            .min,
+        settings.advanced_power_capabilities
+            .source_limited_required_samples
+            .max,
+        settings.advanced_power_capabilities
+            .source_limited_required_samples
+            .step,
+        settings.advanced_power_capabilities
+            .source_limited_recover_margin_mv
+            .default,
+        settings.advanced_power_capabilities
+            .source_limited_recover_margin_mv
+            .min,
+        settings.advanced_power_capabilities
+            .source_limited_recover_margin_mv
+            .max,
+        settings.advanced_power_capabilities
+            .source_limited_recover_margin_mv
+            .step,
     );
     let _ = buf.push_str("}}");
 }
@@ -290,6 +343,7 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     json_field_opt_u16(buf, "vin_baseline_mv", status.input_vin_baseline_mv, true);
     json_field_opt_u16(buf, "vin_drop_mv", status.input_vin_drop_mv, true);
     json_field_opt_str(buf, "assist_power_stage", status.assist_power_stage, true);
+    json_field_opt_str(buf, "backup_reason", status.backup_reason, true);
     json_field_opt_u16(
         buf,
         "assist_target_vout_mv",
@@ -448,6 +502,7 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
     json_field_opt_u16(buf, "vin_baseline_mv", status.input_vin_baseline_mv, true);
     json_field_opt_u16(buf, "vin_drop_mv", status.input_vin_drop_mv, true);
     json_field_opt_str(buf, "assist_power_stage", status.assist_power_stage, true);
+    json_field_opt_str(buf, "backup_reason", status.backup_reason, true);
     json_field_opt_u16(
         buf,
         "assist_target_vout_mv",
@@ -556,6 +611,7 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
         diag.input.assist_power_stage,
         true,
     );
+    json_field_opt_str(buf, "backup_reason", diag.input.backup_reason, true);
     json_field_opt_u16(
         buf,
         "assist_target_vout_mv",

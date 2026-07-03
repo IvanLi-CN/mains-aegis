@@ -214,6 +214,11 @@ pub const ADVANCED_POWER_DEFAULT_RATED_ENTER_DELTA_MA: i16 = 0;
 pub const ADVANCED_POWER_DEFAULT_RATED_EXIT_DELTA_MA: i16 = 0;
 pub const ADVANCED_POWER_DEFAULT_VIN_DROP_THRESHOLD_PCT: u8 = 4;
 pub const ADVANCED_POWER_DEFAULT_REQUIRED_SAMPLES: u8 = 2;
+pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_VIN_DROP_PCT: u8 = 4;
+pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_ENTER_DELTA_MA: i16 = 1_900;
+pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_EXIT_DELTA_MA: i16 = 0;
+pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_REQUIRED_SAMPLES: u8 = 2;
+pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_RECOVER_MARGIN_MV: u16 = 400;
 pub const ADVANCED_POWER_STANDBY_DROP_MIN_MV: u16 = 0;
 pub const ADVANCED_POWER_STANDBY_DROP_MAX_MV: u16 = 3_000;
 pub const ADVANCED_POWER_STANDBY_DROP_STEP_MV: u16 = 20;
@@ -247,6 +252,21 @@ pub const ADVANCED_POWER_VIN_DROP_THRESHOLD_STEP_PCT: u8 = 1;
 pub const ADVANCED_POWER_REQUIRED_SAMPLES_MIN: u8 = 1;
 pub const ADVANCED_POWER_REQUIRED_SAMPLES_MAX: u8 = 5;
 pub const ADVANCED_POWER_REQUIRED_SAMPLES_STEP: u8 = 1;
+pub const ADVANCED_POWER_SOURCE_LIMITED_VIN_DROP_MIN_PCT: u8 = 1;
+pub const ADVANCED_POWER_SOURCE_LIMITED_VIN_DROP_MAX_PCT: u8 = 12;
+pub const ADVANCED_POWER_SOURCE_LIMITED_VIN_DROP_STEP_PCT: u8 = 1;
+pub const ADVANCED_POWER_SOURCE_LIMITED_ENTER_DELTA_MIN_MA: i16 = -100;
+pub const ADVANCED_POWER_SOURCE_LIMITED_ENTER_DELTA_MAX_MA: i16 = 3_000;
+pub const ADVANCED_POWER_SOURCE_LIMITED_ENTER_DELTA_STEP_MA: i16 = 50;
+pub const ADVANCED_POWER_SOURCE_LIMITED_EXIT_DELTA_MIN_MA: i16 = -50;
+pub const ADVANCED_POWER_SOURCE_LIMITED_EXIT_DELTA_MAX_MA: i16 = 1_000;
+pub const ADVANCED_POWER_SOURCE_LIMITED_EXIT_DELTA_STEP_MA: i16 = 50;
+pub const ADVANCED_POWER_SOURCE_LIMITED_REQUIRED_SAMPLES_MIN: u8 = 1;
+pub const ADVANCED_POWER_SOURCE_LIMITED_REQUIRED_SAMPLES_MAX: u8 = 5;
+pub const ADVANCED_POWER_SOURCE_LIMITED_REQUIRED_SAMPLES_STEP: u8 = 1;
+pub const ADVANCED_POWER_SOURCE_LIMITED_RECOVER_MARGIN_MIN_MV: u16 = 0;
+pub const ADVANCED_POWER_SOURCE_LIMITED_RECOVER_MARGIN_MAX_MV: u16 = 1_500;
+pub const ADVANCED_POWER_SOURCE_LIMITED_RECOVER_MARGIN_STEP_MV: u16 = 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AdvancedPowerSettingsSnapshot {
@@ -261,6 +281,11 @@ pub struct AdvancedPowerSettingsSnapshot {
     pub rated_exit_delta_ma: i16,
     pub vin_drop_threshold_pct: u8,
     pub required_samples: u8,
+    pub source_limited_vin_drop_pct: u8,
+    pub source_limited_enter_delta_ma: i16,
+    pub source_limited_exit_delta_ma: i16,
+    pub source_limited_required_samples: u8,
+    pub source_limited_recover_margin_mv: u16,
 }
 
 impl AdvancedPowerSettingsSnapshot {
@@ -277,6 +302,12 @@ impl AdvancedPowerSettingsSnapshot {
             rated_exit_delta_ma: ADVANCED_POWER_DEFAULT_RATED_EXIT_DELTA_MA,
             vin_drop_threshold_pct: ADVANCED_POWER_DEFAULT_VIN_DROP_THRESHOLD_PCT,
             required_samples: ADVANCED_POWER_DEFAULT_REQUIRED_SAMPLES,
+            source_limited_vin_drop_pct: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_VIN_DROP_PCT,
+            source_limited_enter_delta_ma: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_ENTER_DELTA_MA,
+            source_limited_exit_delta_ma: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_EXIT_DELTA_MA,
+            source_limited_required_samples: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_REQUIRED_SAMPLES,
+            source_limited_recover_margin_mv:
+                ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_RECOVER_MARGIN_MV,
         }
     }
 
@@ -302,6 +333,13 @@ impl AdvancedPowerSettingsSnapshot {
                 + i32::from(self.rated_exit_delta_ma),
             vin_drop_threshold_pct: u16::from(self.vin_drop_threshold_pct),
             required_samples: self.required_samples,
+            source_limited_vin_drop_pct: u16::from(self.source_limited_vin_drop_pct),
+            source_limited_enter_iout_ma: i32::from(ADVANCED_POWER_RATED_ENTER_BASE_MA)
+                + i32::from(self.source_limited_enter_delta_ma),
+            source_limited_exit_iout_ma: i32::from(ADVANCED_POWER_RATED_EXIT_BASE_MA)
+                + i32::from(self.source_limited_exit_delta_ma),
+            source_limited_required_samples: self.source_limited_required_samples,
+            source_limited_recover_margin_mv: self.source_limited_recover_margin_mv,
         })
     }
 
@@ -326,6 +364,11 @@ pub struct AdvancedPowerExpandedSnapshot {
     pub rated_exit_iout_ma: i32,
     pub vin_drop_threshold_pct: u16,
     pub required_samples: u8,
+    pub source_limited_vin_drop_pct: u16,
+    pub source_limited_enter_iout_ma: i32,
+    pub source_limited_exit_iout_ma: i32,
+    pub source_limited_required_samples: u8,
+    pub source_limited_recover_margin_mv: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -366,6 +409,11 @@ pub struct AdvancedPowerCapabilitiesSnapshot {
     pub rated_exit_delta_ma: AdvancedPowerI16CapabilitySnapshot,
     pub vin_drop_threshold_pct: AdvancedPowerU8CapabilitySnapshot,
     pub required_samples: AdvancedPowerU8CapabilitySnapshot,
+    pub source_limited_vin_drop_pct: AdvancedPowerU8CapabilitySnapshot,
+    pub source_limited_enter_delta_ma: AdvancedPowerI16CapabilitySnapshot,
+    pub source_limited_exit_delta_ma: AdvancedPowerI16CapabilitySnapshot,
+    pub source_limited_required_samples: AdvancedPowerU8CapabilitySnapshot,
+    pub source_limited_recover_margin_mv: AdvancedPowerU16CapabilitySnapshot,
 }
 
 impl AdvancedPowerCapabilitiesSnapshot {
@@ -438,6 +486,36 @@ impl AdvancedPowerCapabilitiesSnapshot {
                 max: ADVANCED_POWER_REQUIRED_SAMPLES_MAX,
                 step: ADVANCED_POWER_REQUIRED_SAMPLES_STEP,
             },
+            source_limited_vin_drop_pct: AdvancedPowerU8CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_VIN_DROP_PCT,
+                min: ADVANCED_POWER_SOURCE_LIMITED_VIN_DROP_MIN_PCT,
+                max: ADVANCED_POWER_SOURCE_LIMITED_VIN_DROP_MAX_PCT,
+                step: ADVANCED_POWER_SOURCE_LIMITED_VIN_DROP_STEP_PCT,
+            },
+            source_limited_enter_delta_ma: AdvancedPowerI16CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_ENTER_DELTA_MA,
+                min: ADVANCED_POWER_SOURCE_LIMITED_ENTER_DELTA_MIN_MA,
+                max: ADVANCED_POWER_SOURCE_LIMITED_ENTER_DELTA_MAX_MA,
+                step: ADVANCED_POWER_SOURCE_LIMITED_ENTER_DELTA_STEP_MA,
+            },
+            source_limited_exit_delta_ma: AdvancedPowerI16CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_EXIT_DELTA_MA,
+                min: ADVANCED_POWER_SOURCE_LIMITED_EXIT_DELTA_MIN_MA,
+                max: ADVANCED_POWER_SOURCE_LIMITED_EXIT_DELTA_MAX_MA,
+                step: ADVANCED_POWER_SOURCE_LIMITED_EXIT_DELTA_STEP_MA,
+            },
+            source_limited_required_samples: AdvancedPowerU8CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_REQUIRED_SAMPLES,
+                min: ADVANCED_POWER_SOURCE_LIMITED_REQUIRED_SAMPLES_MIN,
+                max: ADVANCED_POWER_SOURCE_LIMITED_REQUIRED_SAMPLES_MAX,
+                step: ADVANCED_POWER_SOURCE_LIMITED_REQUIRED_SAMPLES_STEP,
+            },
+            source_limited_recover_margin_mv: AdvancedPowerU16CapabilitySnapshot {
+                default: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_RECOVER_MARGIN_MV,
+                min: ADVANCED_POWER_SOURCE_LIMITED_RECOVER_MARGIN_MIN_MV,
+                max: ADVANCED_POWER_SOURCE_LIMITED_RECOVER_MARGIN_MAX_MV,
+                step: ADVANCED_POWER_SOURCE_LIMITED_RECOVER_MARGIN_STEP_MV,
+            },
         }
     }
 }
@@ -455,9 +533,15 @@ pub enum AdvancedPowerValidationError {
     RatedExitDeltaOutOfRange,
     VinDropThresholdPctOutOfRange,
     RequiredSamplesOutOfRange,
+    SourceLimitedVinDropPctOutOfRange,
+    SourceLimitedEnterDeltaOutOfRange,
+    SourceLimitedExitDeltaOutOfRange,
+    SourceLimitedRequiredSamplesOutOfRange,
+    SourceLimitedRecoverMarginOutOfRange,
     VoltageOrderInvalid,
     AssistCurrentOrderInvalid,
     CurrentOrderInvalid,
+    SourceLimitedCurrentOrderInvalid,
 }
 
 impl AdvancedPowerValidationError {
@@ -480,9 +564,27 @@ impl AdvancedPowerValidationError {
                 "advanced_power_vin_drop_threshold_pct_out_of_range"
             }
             Self::RequiredSamplesOutOfRange => "advanced_power_required_samples_out_of_range",
+            Self::SourceLimitedVinDropPctOutOfRange => {
+                "advanced_power_source_limited_vin_drop_pct_out_of_range"
+            }
+            Self::SourceLimitedEnterDeltaOutOfRange => {
+                "advanced_power_source_limited_enter_delta_out_of_range"
+            }
+            Self::SourceLimitedExitDeltaOutOfRange => {
+                "advanced_power_source_limited_exit_delta_out_of_range"
+            }
+            Self::SourceLimitedRequiredSamplesOutOfRange => {
+                "advanced_power_source_limited_required_samples_out_of_range"
+            }
+            Self::SourceLimitedRecoverMarginOutOfRange => {
+                "advanced_power_source_limited_recover_margin_out_of_range"
+            }
             Self::VoltageOrderInvalid => "advanced_power_voltage_order_invalid",
             Self::AssistCurrentOrderInvalid => "advanced_power_assist_current_order_invalid",
             Self::CurrentOrderInvalid => "advanced_power_current_order_invalid",
+            Self::SourceLimitedCurrentOrderInvalid => {
+                "advanced_power_source_limited_current_order_invalid"
+            }
         }
     }
 
@@ -519,6 +621,21 @@ impl AdvancedPowerValidationError {
                 "vin_drop_threshold_pct must be within 1..12 in 1% steps"
             }
             Self::RequiredSamplesOutOfRange => "required_samples must be within 1..5 in step 1",
+            Self::SourceLimitedVinDropPctOutOfRange => {
+                "source_limited_vin_drop_pct must be within 1..12 in 1% steps"
+            }
+            Self::SourceLimitedEnterDeltaOutOfRange => {
+                "source_limited_enter_delta_ma must be within -100..3000 mA in 50 mA steps"
+            }
+            Self::SourceLimitedExitDeltaOutOfRange => {
+                "source_limited_exit_delta_ma must be within -50..1000 mA in 50 mA steps"
+            }
+            Self::SourceLimitedRequiredSamplesOutOfRange => {
+                "source_limited_required_samples must be within 1..5 in step 1"
+            }
+            Self::SourceLimitedRecoverMarginOutOfRange => {
+                "source_limited_recover_margin_mv must be within 0..1500 mV in 20 mV steps"
+            }
             Self::VoltageOrderInvalid => {
                 "standby_drop_mv must be greater than or equal to assist_low_drop_mv"
             }
@@ -527,6 +644,9 @@ impl AdvancedPowerValidationError {
             }
             Self::CurrentOrderInvalid => {
                 "expanded rated_exit_threshold_ma must not exceed rated_enter_threshold_ma"
+            }
+            Self::SourceLimitedCurrentOrderInvalid => {
+                "expanded source_limited_exit_threshold_ma must not exceed source_limited_enter_threshold_ma"
             }
         }
     }
@@ -623,6 +743,46 @@ pub fn validate_advanced_power_settings(
     ) {
         return Err(AdvancedPowerValidationError::RequiredSamplesOutOfRange);
     }
+    if !value_in_u8_range(
+        settings.source_limited_vin_drop_pct,
+        ADVANCED_POWER_SOURCE_LIMITED_VIN_DROP_MIN_PCT,
+        ADVANCED_POWER_SOURCE_LIMITED_VIN_DROP_MAX_PCT,
+        ADVANCED_POWER_SOURCE_LIMITED_VIN_DROP_STEP_PCT,
+    ) {
+        return Err(AdvancedPowerValidationError::SourceLimitedVinDropPctOutOfRange);
+    }
+    if !value_in_i16_range(
+        settings.source_limited_enter_delta_ma,
+        ADVANCED_POWER_SOURCE_LIMITED_ENTER_DELTA_MIN_MA,
+        ADVANCED_POWER_SOURCE_LIMITED_ENTER_DELTA_MAX_MA,
+        ADVANCED_POWER_SOURCE_LIMITED_ENTER_DELTA_STEP_MA,
+    ) {
+        return Err(AdvancedPowerValidationError::SourceLimitedEnterDeltaOutOfRange);
+    }
+    if !value_in_i16_range(
+        settings.source_limited_exit_delta_ma,
+        ADVANCED_POWER_SOURCE_LIMITED_EXIT_DELTA_MIN_MA,
+        ADVANCED_POWER_SOURCE_LIMITED_EXIT_DELTA_MAX_MA,
+        ADVANCED_POWER_SOURCE_LIMITED_EXIT_DELTA_STEP_MA,
+    ) {
+        return Err(AdvancedPowerValidationError::SourceLimitedExitDeltaOutOfRange);
+    }
+    if !value_in_u8_range(
+        settings.source_limited_required_samples,
+        ADVANCED_POWER_SOURCE_LIMITED_REQUIRED_SAMPLES_MIN,
+        ADVANCED_POWER_SOURCE_LIMITED_REQUIRED_SAMPLES_MAX,
+        ADVANCED_POWER_SOURCE_LIMITED_REQUIRED_SAMPLES_STEP,
+    ) {
+        return Err(AdvancedPowerValidationError::SourceLimitedRequiredSamplesOutOfRange);
+    }
+    if !value_in_u16_range(
+        settings.source_limited_recover_margin_mv,
+        ADVANCED_POWER_SOURCE_LIMITED_RECOVER_MARGIN_MIN_MV,
+        ADVANCED_POWER_SOURCE_LIMITED_RECOVER_MARGIN_MAX_MV,
+        ADVANCED_POWER_SOURCE_LIMITED_RECOVER_MARGIN_STEP_MV,
+    ) {
+        return Err(AdvancedPowerValidationError::SourceLimitedRecoverMarginOutOfRange);
+    }
     if settings.standby_drop_mv < settings.assist_low_drop_mv {
         return Err(AdvancedPowerValidationError::VoltageOrderInvalid);
     }
@@ -636,6 +796,13 @@ pub fn validate_advanced_power_settings(
         > (i32::from(ADVANCED_POWER_RATED_ENTER_BASE_MA) + i32::from(settings.rated_enter_delta_ma))
     {
         return Err(AdvancedPowerValidationError::CurrentOrderInvalid);
+    }
+    if (i32::from(ADVANCED_POWER_RATED_EXIT_BASE_MA)
+        + i32::from(settings.source_limited_exit_delta_ma))
+        > (i32::from(ADVANCED_POWER_RATED_ENTER_BASE_MA)
+            + i32::from(settings.source_limited_enter_delta_ma))
+    {
+        return Err(AdvancedPowerValidationError::SourceLimitedCurrentOrderInvalid);
     }
     Ok(())
 }
@@ -701,6 +868,7 @@ pub struct UpsStatusSnapshot {
     pub input_vin_drop_mv: Option<u16>,
     pub assist_power_stage: Option<&'static str>,
     pub assist_target_vout_mv: Option<u16>,
+    pub backup_reason: Option<&'static str>,
     pub charger_state: &'static str,
     pub charger_allow_charge: Option<bool>,
     pub charger_ichg_ma: Option<u16>,
@@ -784,6 +952,7 @@ pub struct DerivedPowerInputSnapshot {
     pub vin_drop_mv: Option<u16>,
     pub assist_power_stage: Option<&'static str>,
     pub assist_target_vout_mv: Option<u16>,
+    pub backup_reason: Option<&'static str>,
     pub usb_pd_attached: bool,
     pub usb_pd_charge_ready: bool,
     pub usb_pd_vbus_present: Option<bool>,
@@ -813,6 +982,7 @@ impl DerivedPowerInputSnapshot {
             vin_drop_mv: None,
             assist_power_stage: None,
             assist_target_vout_mv: None,
+            backup_reason: None,
             usb_pd_attached: false,
             usb_pd_charge_ready: false,
             usb_pd_vbus_present: None,
@@ -1182,6 +1352,7 @@ impl UpsStatusSnapshot {
             input_vin_drop_mv: None,
             assist_power_stage: None,
             assist_target_vout_mv: None,
+            backup_reason: None,
             charger_state: "pending",
             charger_allow_charge: None,
             charger_ichg_ma: None,
@@ -1280,6 +1451,11 @@ mod tests {
         assert_eq!(expanded.rated_exit_iout_ma, 50);
         assert_eq!(expanded.vin_drop_threshold_pct, 4);
         assert_eq!(expanded.required_samples, 2);
+        assert_eq!(expanded.source_limited_vin_drop_pct, 4);
+        assert_eq!(expanded.source_limited_enter_iout_ma, 2_000);
+        assert_eq!(expanded.source_limited_exit_iout_ma, 50);
+        assert_eq!(expanded.source_limited_required_samples, 2);
+        assert_eq!(expanded.source_limited_recover_margin_mv, 400);
     }
 
     #[test]

@@ -192,7 +192,7 @@ const EEPROM_ADVANCED_POWER_OFFSET: u16 = 0x0200;
 const EEPROM_BEEPER_PREFS_MAGIC: [u8; 4] = *b"BEEP";
 const EEPROM_BEEPER_PREFS_RECORD_VERSION: u8 = 1;
 const EEPROM_ADVANCED_POWER_MAGIC: [u8; 4] = *b"ADVP";
-const EEPROM_ADVANCED_POWER_RECORD_VERSION: u8 = 2;
+const EEPROM_ADVANCED_POWER_RECORD_VERSION: u8 = 3;
 const EEPROM_WRITE_POLL_ATTEMPTS: usize = 32;
 const EEPROM_WRITE_POLL_GAP: Duration = Duration::from_millis(1);
 
@@ -407,6 +407,14 @@ impl AdvancedPowerRecordV1 {
         bytes[20..22].copy_from_slice(&rated_exit_delta);
         bytes[22] = self.settings.vin_drop_threshold_pct;
         bytes[23] = self.settings.required_samples;
+        bytes[24] = self.settings.source_limited_vin_drop_pct;
+        let source_limited_enter_delta = self.settings.source_limited_enter_delta_ma.to_le_bytes();
+        let source_limited_exit_delta = self.settings.source_limited_exit_delta_ma.to_le_bytes();
+        bytes[25..27].copy_from_slice(&source_limited_enter_delta);
+        bytes[27..29].copy_from_slice(&source_limited_exit_delta);
+        bytes[29] = self.settings.source_limited_required_samples;
+        bytes[30] =
+            (self.settings.source_limited_recover_margin_mv / 20).min(u16::from(u8::MAX)) as u8;
         bytes[31] = storage_crc8(&bytes[..31]);
         bytes
     }
@@ -428,6 +436,20 @@ impl AdvancedPowerRecordV1 {
                 required_samples: bytes[14],
                 ..AdvancedPowerSettingsSnapshot::defaults()
             },
+            2 => AdvancedPowerSettingsSnapshot {
+                standby_drop_mv: u16::from_le_bytes([bytes[5], bytes[6]]),
+                assist_low_drop_mv: u16::from_le_bytes([bytes[7], bytes[8]]),
+                assist_enter_delta_ma: i16::from_le_bytes([bytes[9], bytes[10]]),
+                assist_exit_delta_ma: i16::from_le_bytes([bytes[11], bytes[12]]),
+                assist_required_samples: bytes[13],
+                assist_ramp_step_mv: u16::from_le_bytes([bytes[14], bytes[15]]),
+                assist_ramp_interval_ms: u16::from_le_bytes([bytes[16], bytes[17]]),
+                rated_enter_delta_ma: i16::from_le_bytes([bytes[18], bytes[19]]),
+                rated_exit_delta_ma: i16::from_le_bytes([bytes[20], bytes[21]]),
+                vin_drop_threshold_pct: bytes[22],
+                required_samples: bytes[23],
+                ..AdvancedPowerSettingsSnapshot::defaults()
+            },
             EEPROM_ADVANCED_POWER_RECORD_VERSION => AdvancedPowerSettingsSnapshot {
                 standby_drop_mv: u16::from_le_bytes([bytes[5], bytes[6]]),
                 assist_low_drop_mv: u16::from_le_bytes([bytes[7], bytes[8]]),
@@ -440,11 +462,73 @@ impl AdvancedPowerRecordV1 {
                 rated_exit_delta_ma: i16::from_le_bytes([bytes[20], bytes[21]]),
                 vin_drop_threshold_pct: bytes[22],
                 required_samples: bytes[23],
+                source_limited_vin_drop_pct: bytes[24],
+                source_limited_enter_delta_ma: i16::from_le_bytes([bytes[25], bytes[26]]),
+                source_limited_exit_delta_ma: i16::from_le_bytes([bytes[27], bytes[28]]),
+                source_limited_required_samples: bytes[29],
+                source_limited_recover_margin_mv: u16::from(bytes[30]) * 20,
             },
             _ => return None,
         };
         validate_advanced_power_settings(settings).ok()?;
         Some(Self { settings })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        storage_crc8, AdvancedPowerRecordV1, AdvancedPowerSettingsSnapshot,
+        EEPROM_ADVANCED_POWER_MAGIC,
+    };
+
+    #[test]
+    fn advanced_power_v2_record_loads_with_source_limited_defaults() {
+        let mut bytes = [0u8; 32];
+        bytes[0..4].copy_from_slice(&EEPROM_ADVANCED_POWER_MAGIC);
+        bytes[4] = 2;
+        bytes[5..7].copy_from_slice(&1_400u16.to_le_bytes());
+        bytes[7..9].copy_from_slice(&800u16.to_le_bytes());
+        bytes[9..11].copy_from_slice(&50i16.to_le_bytes());
+        bytes[11..13].copy_from_slice(&0i16.to_le_bytes());
+        bytes[13] = 3;
+        bytes[14..16].copy_from_slice(&120u16.to_le_bytes());
+        bytes[16..18].copy_from_slice(&300u16.to_le_bytes());
+        bytes[18..20].copy_from_slice(&100i16.to_le_bytes());
+        bytes[20..22].copy_from_slice(&50i16.to_le_bytes());
+        bytes[22] = 5;
+        bytes[23] = 3;
+        bytes[31] = storage_crc8(&bytes[..31]);
+
+        let decoded = AdvancedPowerRecordV1::decode(bytes).unwrap();
+        assert_eq!(decoded.standby_drop_mv, 1_400);
+        assert_eq!(decoded.assist_low_drop_mv, 800);
+        assert_eq!(decoded.source_limited_vin_drop_pct, 4);
+        assert_eq!(decoded.source_limited_enter_delta_ma, 1_900);
+        assert_eq!(decoded.source_limited_exit_delta_ma, 0);
+        assert_eq!(decoded.source_limited_required_samples, 2);
+        assert_eq!(decoded.source_limited_recover_margin_mv, 400);
+        assert_eq!(
+            decoded.expand(12_000).unwrap().source_limited_enter_iout_ma,
+            2_000
+        );
+        assert_eq!(
+            decoded,
+            AdvancedPowerSettingsSnapshot {
+                standby_drop_mv: 1_400,
+                assist_low_drop_mv: 800,
+                assist_enter_delta_ma: 50,
+                assist_exit_delta_ma: 0,
+                assist_required_samples: 3,
+                assist_ramp_step_mv: 120,
+                assist_ramp_interval_ms: 300,
+                rated_enter_delta_ma: 100,
+                rated_exit_delta_ma: 50,
+                vin_drop_threshold_pct: 5,
+                required_samples: 3,
+                ..AdvancedPowerSettingsSnapshot::defaults()
+            }
+        );
     }
 }
 
@@ -4295,6 +4379,8 @@ where
             Some(initial_assist_stage.as_str());
         initial_ui_snapshot.dashboard_detail.assist_target_vout_mv =
             Some(initial_assist_target_vout_mv);
+        initial_ui_snapshot.dashboard_detail.backup_reason =
+            (initial_assist_stage == AssistPowerStage::Backup).then_some("input_absent");
         let bms_runtime_seen = bms_addr.is_some()
             || output_state.gate_reason == OutputGateReason::BmsNotReady
             || (cfg.charger_probe_ok
@@ -5012,6 +5098,7 @@ where
             vin_drop_mv: self.ui_snapshot.dashboard_detail.input_vin_drop_mv,
             assist_power_stage: self.ui_snapshot.dashboard_detail.assist_power_stage,
             assist_target_vout_mv: self.ui_snapshot.dashboard_detail.assist_target_vout_mv,
+            backup_reason: self.ui_snapshot.dashboard_detail.backup_reason,
             usb_pd_attached: usb_pd.attached,
             usb_pd_charge_ready: usb_pd.charge_ready,
             usb_pd_vbus_present: usb_pd.vbus_present,
@@ -9944,6 +10031,21 @@ where
                 rated_exit_iout_ma: self.advanced_power_expanded.rated_exit_iout_ma,
                 vin_drop_threshold_pct: self.advanced_power_expanded.vin_drop_threshold_pct,
                 required_samples: self.advanced_power_expanded.required_samples,
+                source_limited_vin_drop_pct: self
+                    .advanced_power_expanded
+                    .source_limited_vin_drop_pct,
+                source_limited_enter_iout_ma: self
+                    .advanced_power_expanded
+                    .source_limited_enter_iout_ma,
+                source_limited_exit_iout_ma: self
+                    .advanced_power_expanded
+                    .source_limited_exit_iout_ma,
+                source_limited_required_samples: self
+                    .advanced_power_expanded
+                    .source_limited_required_samples,
+                source_limited_recover_margin_mv: self
+                    .advanced_power_expanded
+                    .source_limited_recover_margin_mv,
             },
         );
 
@@ -9999,6 +10101,10 @@ where
         self.applied_assist_target_vout_mv = next_target_vout_mv;
         self.ui_snapshot.dashboard_detail.assist_power_stage = Some(next_stage.as_str());
         self.ui_snapshot.dashboard_detail.assist_target_vout_mv = Some(next_target_vout_mv);
+        self.ui_snapshot.dashboard_detail.backup_reason = self
+            .assist_power_stage
+            .backup_reason
+            .map(|reason| reason.as_str());
         changed
     }
 
@@ -11848,6 +11954,7 @@ where
         };
         let runtime_charge_override = runtime_charge_override_for_backup_usb_charger(
             self.ui_snapshot.mode,
+            self.ui_snapshot.dashboard_detail.backup_reason,
             force_allow_charge,
             auto_force_charge,
             backup_usb_charge_decision.allows_charge(),

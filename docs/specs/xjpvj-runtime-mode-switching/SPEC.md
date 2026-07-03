@@ -4,7 +4,7 @@
 
 - Status: active
 - Created: 2026-06-16
-- Last: 2026-06-24
+- Last: 2026-07-03
 
 ## 背景 / 问题陈述
 
@@ -21,8 +21,10 @@
 - 固定 owner-facing `ASSIST / supplement` 由内部 `assist_low | assist_rated` 阶段映射得到，不再让 `100mA / 50mA` 直接驱动 owner-facing mode。
 - 固定 `assist_low` 入口为 `dcin` 在线场景下的双判据：运行时内部绝对 `VIN` 门槛 + `TPS total output current` 已实际参与，并要求连续 fresh 样本锁存。
 - 固定 `standby -> assist_low` 通过限速爬升推进到低补能目标，不再一帧跳到固定 `assist_low` 电压目标。
-- 固定 `BACKUP` 只允许在“确认无输入”时进入；当 `mains_present` 未知时保持上一确认模式，不得因输出活跃而直接跳 `BACKUP`。
-- 固定 `ASSIST` 是 non-charging mode；`BACKUP` 默认停充，但可把唯一受控 USB-C 低输出充电例外交给 `eu2b8`，不得改变 VIN 或 mode 的真相源。
+- 固定 `BACKUP` 表示 UPS 已接管负载；进入原因必须可区分为 `backup_reason=input_absent` 或 `backup_reason=source_limited`。
+- 固定 `input_absent` 只在确认无输入时进入；当 `mains_present` 未知时保持上一确认模式，不得因输出活跃而直接跳 `BACKUP`。
+- 固定 `source_limited` 表示 `VIN` 仍在线，但上级电源已进入限流/棕断或低于合理工作电压，MCU 主动切入 `BACKUP` 以减少输出长时间深跌落。
+- 固定 `ASSIST` 是 non-charging mode。`BACKUP` 默认停充；`source_limited` 必须停充，而唯一受控 USB-C 低输出充电例外仅适用于 `input_absent`，并且不得改变 VIN 或 mode 的真相源。
 
 ### Non-goals
 
@@ -94,7 +96,9 @@
     - 当 `VIN` 相对基线持续下陷且 `TPS total output current` 持续升高时，TPS 升到额定输出接管档位。
   - 固定为 non-charging mode。
 - `BACKUP`
-  - 输入确认离线。
+  - UPS 已接管负载，进入原因由 `backup_reason` 标明：
+    - `input_absent`: 输入确认离线。
+    - `source_limited`: 输入仍在线，但 MCU 判定上级电源不可继续承担当前负载。
   - 输出由电池侧供能。
   - TPS 目标保持额定输出档位。
   - 默认 non-charging；只有 `eu2b8` 定义的 USB-C PD 低输出例外可改变 charger allow，不能改变 `BACKUP` 本身的 VIN/运行态定义。
@@ -158,16 +162,29 @@
 
 ### 4. `BACKUP` 进入 / 退出
 
-- 仅在“输入确认离线”时允许进入 `BACKUP`。
-- 输入确认离线的充分条件：
+- `BACKUP` 的 owner-facing mode 不新增名字；对外仍是 `mode=backup`。
+- `backup_reason=input_absent` 的充分条件：
   - fresh `VIN < 3V`；或
   - `VIN` 连续缺样超过 latch 窗口后，fallback `aggregate input-present=false`
+- `backup_reason=source_limited` 的充分条件：
+  - 输入确认在线；并且
+  - `input_source=dcin` / `dcin_assist_allowed=true`；并且
+  - `TPS total output current >= source_limited_enter_threshold_ma`；并且
+  - 出现以下任一上级不可承担负载信号：
+    - `VIN <= rated_vout_mv - source_limited_recover_margin_mv`；或
+    - `vin_drop_mv` 超过 `source_limited_vin_drop_pct` 派生阈值，且 `vin_iin_ma` 已接近 DCIN 限流门槛；并且
+  - 连续 `source_limited_required_samples` 个 fresh 样本满足。
 - 当输入状态未知时：
   - 必须保持上一确认模式
   - 不得因 `TPS` 有输出、输出 enable、或其它保守推断而直接切到 `BACKUP`
-- 一旦输入再次确认在线：
+- `backup_reason=input_absent` 一旦输入再次确认在线：
   - 自动离开 `BACKUP`
   - 下一状态按 `TPS total output current` 锁存结果进入 `STANDBY` 或 `ASSIST`
+- `backup_reason=source_limited` 的恢复必须满足回差：
+  - `VIN > rated_vout_mv - source_limited_recover_margin_mv`
+  - `vin_drop_mv` 回落到 source-limited 进入阈值的一半以内
+  - `TPS total output current <= source_limited_exit_threshold_ma`
+  - 连续 `source_limited_required_samples` 个 fresh 样本满足
 
 ### 5. TPS 输出活跃发布门槛
 
@@ -192,8 +209,9 @@
   - `charger.allow_charge=false`
   - owner-facing charger token/notice 收敛到 `LOAD` 语义边界。
 - `BACKUP`
-  - 默认视为 non-charging mode，`charger.allow_charge=false`，token/notice 收敛到 `NOAC`。
-  - 唯一例外由 `eu2b8` 定义：VIN 已确认无市电、USB-C PD 可充电、既有安全门通过且输出功率满足专用回环门时，可发布 `CHG500`；其 `LOAD/LOCK` 锁存、TPS 采样、手动确认与会话重置均不属于 mode state machine。
+  - `backup_reason=source_limited` 必须视为 non-charging mode，`charger.allow_charge=false`，token/notice 收敛到 `LOAD` 与 source-limited backup notice。
+  - `backup_reason=input_absent` 默认视为 non-charging mode，`charger.allow_charge=false`，token/notice 收敛到 `NOAC`。
+  - 唯一例外由 `eu2b8` 定义：当 `backup_reason=input_absent`、VIN 已确认无市电、USB-C PD 可充电、既有安全门通过且输出功率满足专用回环门时，可发布 `CHG500`；其 `LOAD/LOCK` 锁存、TPS 采样、手动确认与会话重置均不属于 mode state machine。
 - `BLOCKED`
   - 必须视为 non-charging mode。
   - `charger.allow_charge=false`
@@ -208,6 +226,7 @@
   - `input.vin_vbus_mv`
   - `input.assist_power_stage`
   - `input.assist_target_vout_mv`
+  - `input.backup_reason`
   - `input.tps_total_iout_ma`
   - `charger.allow_charge`
   - `charger.detail_status`
@@ -215,6 +234,7 @@
   - 输入在线/离线结果
   - `assist_power_stage`
   - `assist_target_vout_mv`
+  - `backup_reason`
   - `tps_total_iout_ma`
   - `vin_baseline_mv`
   - `vin_drop_mv`
@@ -242,11 +262,14 @@
 - Given `requested_outputs` 包含某路输出且 `active_outputs` 不包含该路，When 内部候选 mode 为
   `standby` 或 `supplement`，Then owner-facing `mode=blocked`。
 - Given 输入状态未知，When `TPS` 仍在输出，Then 模式保持上一确认态，不得仅因输出活跃直接进入 `BACKUP`。
-- Given `VIN < 3V`，When 自动模式判定更新，Then 结果为 `BACKUP`。
-- Given `VIN` 连续缺样超过窗口且 `aggregate input-present=false`，When 自动模式判定更新，Then 结果为 `BACKUP`。
+- Given `VIN < 3V`，When 自动模式判定更新，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`。
+- Given `VIN` 连续缺样超过窗口且 `aggregate input-present=false`，When 自动模式判定更新，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`。
+- Given 输入仍在线、`TPS total output current` 超过 source-limited 进入门槛、`VIN` 低于合理工作电压或 `VIN drop + VIN input current` 显示上级限流，When 连续 fresh 样本满足，Then 结果为 `BACKUP` 且 `backup_reason=source_limited`，TPS 目标切到额定输出。
+- Given 已处于 `backup_reason=source_limited`，When `VIN` 与 `vin_drop_mv` 恢复到回差内且输出电流低于退出门槛，Then 必须连续满足样本数后才退出 `BACKUP`，不得在阈值附近抖动。
 - Given `ASSIST` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD`。
-- Given `BACKUP` 已锁存且不满足 `eu2b8` 的 USB-C 例外，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
-- Given `mode=backup`、VIN 已确认无市电且 `eu2b8` 已以新鲜 `<2W` USB-C 输出样本放行，When 查看 mode，Then mode 仍为 `backup`，但 charger 可显示 `CHG500`；该例外不得把 mode 改写为 `standby`。
+- Given `backup_reason=input_absent` 已锁存且不满足 `eu2b8` 的 USB-C 例外，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
+- Given `backup_reason=source_limited` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD` / source-limited backup notice。
+- Given `mode=backup`、`backup_reason=input_absent`、VIN 已确认无市电且 `eu2b8` 已以新鲜 `<2W` USB-C 输出样本放行，When 查看 mode，Then mode 仍为 `backup`，但 charger 可显示 `CHG500`；该例外不得把 mode 改写为 `standby`。
 - Given 当前 topic 进入 `12V` Power Path Validation sign-off，When 判定任何边界、在线接管、切断或恢复结论，Then 必须同时满足 `docs/hil-runtime-mode-switching.md` 中定义的三设备实时数据、输出电压波动与 scene-complete gate。
 - Given 当前 topic 进入 formal dual-voltage suite，When 执行 `12V assist_path / 12V backup_only / 19V assist_path / 19V backup_only` 四场景，Then source profile、load target 与保护栏必须固定为 `12V|19V @ 3000mA`、`3900mA|1000mA`、`UVP=3000mV/OCP=4000mA/OPP=80000mW`，不得按口头约定漂移。
 - Given 需要在 formal suite 中从 `12V` 切到 `19V` 或从 `19V` 切回 `12V`，When 做 artifact select / flash，Then 必须先 disable load、cut IsolaPurr `port_c`、确认 UPS 已脱离外部 `DCIN` 高压输入，再进行切换或烧录；并行 USB-C 供电/通信允许保留，不构成切换阻断。

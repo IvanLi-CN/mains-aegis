@@ -637,6 +637,11 @@ struct AdvancedPowerSettings {
     rated_exit_delta_ma: i16,
     vin_drop_threshold_pct: u8,
     required_samples: u8,
+    source_limited_vin_drop_pct: u8,
+    source_limited_enter_delta_ma: i16,
+    source_limited_exit_delta_ma: i16,
+    source_limited_required_samples: u8,
+    source_limited_recover_margin_mv: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -677,6 +682,61 @@ struct AdvancedPowerCapabilities {
     rated_exit_delta_ma: AdvancedPowerFieldI16Capability,
     vin_drop_threshold_pct: AdvancedPowerFieldU8Capability,
     required_samples: AdvancedPowerFieldU8Capability,
+    #[serde(default = "default_source_limited_vin_drop_capability")]
+    source_limited_vin_drop_pct: AdvancedPowerFieldU8Capability,
+    #[serde(default = "default_source_limited_enter_delta_capability")]
+    source_limited_enter_delta_ma: AdvancedPowerFieldI16Capability,
+    #[serde(default = "default_source_limited_exit_delta_capability")]
+    source_limited_exit_delta_ma: AdvancedPowerFieldI16Capability,
+    #[serde(default = "default_source_limited_required_samples_capability")]
+    source_limited_required_samples: AdvancedPowerFieldU8Capability,
+    #[serde(default = "default_source_limited_recover_margin_capability")]
+    source_limited_recover_margin_mv: AdvancedPowerFieldU16Capability,
+}
+
+fn default_source_limited_vin_drop_capability() -> AdvancedPowerFieldU8Capability {
+    AdvancedPowerFieldU8Capability {
+        default: 4,
+        min: 1,
+        max: 12,
+        step: 1,
+    }
+}
+
+fn default_source_limited_enter_delta_capability() -> AdvancedPowerFieldI16Capability {
+    AdvancedPowerFieldI16Capability {
+        default: 1900,
+        min: -100,
+        max: 3000,
+        step: 50,
+    }
+}
+
+fn default_source_limited_exit_delta_capability() -> AdvancedPowerFieldI16Capability {
+    AdvancedPowerFieldI16Capability {
+        default: 0,
+        min: -50,
+        max: 1000,
+        step: 50,
+    }
+}
+
+fn default_source_limited_required_samples_capability() -> AdvancedPowerFieldU8Capability {
+    AdvancedPowerFieldU8Capability {
+        default: 2,
+        min: 1,
+        max: 5,
+        step: 1,
+    }
+}
+
+fn default_source_limited_recover_margin_capability() -> AdvancedPowerFieldU16Capability {
+    AdvancedPowerFieldU16Capability {
+        default: 400,
+        min: 0,
+        max: 1500,
+        step: 20,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -776,6 +836,11 @@ struct AdvancedPowerRequest {
     rated_exit_delta_ma: i16,
     vin_drop_threshold_pct: u8,
     required_samples: u8,
+    source_limited_vin_drop_pct: u8,
+    source_limited_enter_delta_ma: i16,
+    source_limited_exit_delta_ma: i16,
+    source_limited_required_samples: u8,
+    source_limited_recover_margin_mv: u16,
     device_id: Option<String>,
     lease_id: Option<String>,
 }
@@ -2780,6 +2845,31 @@ fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpErr
                 .and_then(Value::as_u64)
                 .and_then(|value| u8::try_from(value).ok())
                 .unwrap_or(defaults.advanced_power.required_samples),
+            source_limited_vin_drop_pct: advanced_power
+                .and_then(|snapshot| snapshot.get("source_limited_vin_drop_pct"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.source_limited_vin_drop_pct),
+            source_limited_enter_delta_ma: advanced_power
+                .and_then(|snapshot| snapshot.get("source_limited_enter_delta_ma"))
+                .and_then(Value::as_i64)
+                .and_then(|value| i16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.source_limited_enter_delta_ma),
+            source_limited_exit_delta_ma: advanced_power
+                .and_then(|snapshot| snapshot.get("source_limited_exit_delta_ma"))
+                .and_then(Value::as_i64)
+                .and_then(|value| i16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.source_limited_exit_delta_ma),
+            source_limited_required_samples: advanced_power
+                .and_then(|snapshot| snapshot.get("source_limited_required_samples"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.source_limited_required_samples),
+            source_limited_recover_margin_mv: advanced_power
+                .and_then(|snapshot| snapshot.get("source_limited_recover_margin_mv"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.source_limited_recover_margin_mv),
         },
         advanced_power_capabilities: advanced_power_capabilities
             .and_then(|snapshot| serde_json::from_value(snapshot.clone()).ok())
@@ -4952,6 +5042,11 @@ async fn set_advanced_power(
         rated_exit_delta_ma: input.rated_exit_delta_ma,
         vin_drop_threshold_pct: input.vin_drop_threshold_pct,
         required_samples: input.required_samples,
+        source_limited_vin_drop_pct: input.source_limited_vin_drop_pct,
+        source_limited_enter_delta_ma: input.source_limited_enter_delta_ma,
+        source_limited_exit_delta_ma: input.source_limited_exit_delta_ma,
+        source_limited_required_samples: input.source_limited_required_samples,
+        source_limited_recover_margin_mv: input.source_limited_recover_margin_mv,
     };
     let response = send_settings_command(
         &state,
@@ -4970,7 +5065,12 @@ async fn set_advanced_power(
                 "rated_enter_delta_ma": input.rated_enter_delta_ma,
                 "rated_exit_delta_ma": input.rated_exit_delta_ma,
                 "vin_drop_threshold_pct": input.vin_drop_threshold_pct,
-                "required_samples": input.required_samples
+                "required_samples": input.required_samples,
+                "source_limited_vin_drop_pct": input.source_limited_vin_drop_pct,
+                "source_limited_enter_delta_ma": input.source_limited_enter_delta_ma,
+                "source_limited_exit_delta_ma": input.source_limited_exit_delta_ma,
+                "source_limited_required_samples": input.source_limited_required_samples,
+                "source_limited_recover_margin_mv": input.source_limited_recover_margin_mv
             })),
         },
         json!({
@@ -4986,7 +5086,12 @@ async fn set_advanced_power(
             "rated_enter_delta_ma": input.rated_enter_delta_ma,
             "rated_exit_delta_ma": input.rated_exit_delta_ma,
             "vin_drop_threshold_pct": input.vin_drop_threshold_pct,
-            "required_samples": input.required_samples
+            "required_samples": input.required_samples,
+            "source_limited_vin_drop_pct": input.source_limited_vin_drop_pct,
+            "source_limited_enter_delta_ma": input.source_limited_enter_delta_ma,
+            "source_limited_exit_delta_ma": input.source_limited_exit_delta_ma,
+            "source_limited_required_samples": input.source_limited_required_samples,
+            "source_limited_recover_margin_mv": input.source_limited_recover_margin_mv
         }),
         |settings| settings.advanced_power = advanced_power,
         "advanced_power",
@@ -6279,6 +6384,7 @@ fn derive_diag_snapshot_from_status(status: &Value, source: &str) -> Value {
             "vin_drop_mv": input.get("vin_drop_mv").cloned().unwrap_or(Value::Null),
             "assist_power_stage": input.get("assist_power_stage").cloned().unwrap_or(Value::Null),
             "assist_target_vout_mv": input.get("assist_target_vout_mv").cloned().unwrap_or(Value::Null),
+            "backup_reason": input.get("backup_reason").cloned().unwrap_or(Value::Null),
             "usb_pd_attached": Value::Bool(input.get("source").and_then(Value::as_str) == Some("usbc")),
             "usb_pd_charge_ready": Value::Bool(charger.get("allow_charge").and_then(Value::as_bool).unwrap_or(false)),
             "usb_pd_vbus_present": Value::Null,
@@ -9265,6 +9371,11 @@ fn default_settings() -> DeviceSettingsState {
             rated_exit_delta_ma: 0,
             vin_drop_threshold_pct: 4,
             required_samples: 2,
+            source_limited_vin_drop_pct: 4,
+            source_limited_enter_delta_ma: 1900,
+            source_limited_exit_delta_ma: 0,
+            source_limited_required_samples: 2,
+            source_limited_recover_margin_mv: 400,
         },
         advanced_power_capabilities: AdvancedPowerCapabilities {
             rated_vout_mv: 12000,
@@ -9334,6 +9445,11 @@ fn default_settings() -> DeviceSettingsState {
                 max: 5,
                 step: 1,
             },
+            source_limited_vin_drop_pct: default_source_limited_vin_drop_capability(),
+            source_limited_enter_delta_ma: default_source_limited_enter_delta_capability(),
+            source_limited_exit_delta_ma: default_source_limited_exit_delta_capability(),
+            source_limited_required_samples: default_source_limited_required_samples_capability(),
+            source_limited_recover_margin_mv: default_source_limited_recover_margin_capability(),
         },
     }
 }
@@ -11607,7 +11723,29 @@ mod tests {
         assert_eq!(settings.advanced_power.rated_exit_delta_ma, 50);
         assert_eq!(settings.advanced_power.vin_drop_threshold_pct, 5);
         assert_eq!(settings.advanced_power.required_samples, 3);
+        assert_eq!(settings.advanced_power.source_limited_vin_drop_pct, 4);
+        assert_eq!(settings.advanced_power.source_limited_enter_delta_ma, 1900);
+        assert_eq!(settings.advanced_power.source_limited_exit_delta_ma, 0);
+        assert_eq!(settings.advanced_power.source_limited_required_samples, 2);
+        assert_eq!(
+            settings.advanced_power.source_limited_recover_margin_mv,
+            400
+        );
         assert_eq!(settings.advanced_power_capabilities.rated_vout_mv, 19_000);
+        assert_eq!(
+            settings
+                .advanced_power_capabilities
+                .source_limited_enter_delta_ma
+                .default,
+            1900
+        );
+        assert_eq!(
+            settings
+                .advanced_power_capabilities
+                .source_limited_enter_delta_ma
+                .max,
+            3000
+        );
     }
 
     #[test]
@@ -11631,6 +11769,14 @@ mod tests {
         assert_eq!(settings.advanced_power.rated_exit_delta_ma, 0);
         assert_eq!(settings.advanced_power.vin_drop_threshold_pct, 4);
         assert_eq!(settings.advanced_power.required_samples, 2);
+        assert_eq!(settings.advanced_power.source_limited_vin_drop_pct, 4);
+        assert_eq!(settings.advanced_power.source_limited_enter_delta_ma, 1900);
+        assert_eq!(settings.advanced_power.source_limited_exit_delta_ma, 0);
+        assert_eq!(settings.advanced_power.source_limited_required_samples, 2);
+        assert_eq!(
+            settings.advanced_power.source_limited_recover_margin_mv,
+            400
+        );
         assert_eq!(settings.advanced_power_capabilities.rated_vout_mv, 12_000);
     }
 

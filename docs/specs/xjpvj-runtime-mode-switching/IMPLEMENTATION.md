@@ -6,7 +6,11 @@
 
 - `VIN` 是运行态输入在线/离线的主真相源
 - `mains_present=None` 时保持上一确认模式
-- `BACKUP` 只允许在确认无输入时进入
+- `BACKUP` 表示 UPS 已接管负载，进入原因由 `backup_reason` 区分：
+  - `input_absent`
+  - `source_limited`
+- `input_absent` 仍只允许在确认无输入时进入
+- `source_limited` 允许在 `VIN` 在线但上级电源限流/棕断时由 MCU 主动进入
 - owner-facing `mode` 跟随内部阶段映射：
   - `standby -> standby`
   - `assist_low | assist_rated -> supplement`
@@ -22,6 +26,8 @@
   - `assist_rated` 与 `backup` 使用额定输出目标
 - `ASSIST` 收敛到 non-charging mode；`BACKUP` 默认同样停充，但把 VIN 已确认无市电时的受控 USB-C 低输出充电例外委托给 `eu2b8`
 - `BLOCKED` 也按 non-charging mode 处理，且不是 Dashboard 可渲染模式
+- `backup_reason=input_absent` 的 charger token 对齐 `NOAC`
+- `backup_reason=source_limited` 的 charger token 对齐 `LOAD`，并使用 `runtime_source_limited_backup_no_charge`
 
 ## 运行时调压实现
 
@@ -47,7 +53,7 @@
 
 ## 设置与持久化实现
 
-当前 `advanced_power` 契约已经是 11 字段：
+当前 `advanced_power` 契约已经是 16 字段：
 
 - `standby_drop_mv`
 - `assist_low_drop_mv`
@@ -60,15 +66,31 @@
 - `rated_exit_delta_ma`
 - `vin_drop_threshold_pct`
 - `required_samples`
+- `source_limited_vin_drop_pct`
+- `source_limited_enter_delta_ma`
+- `source_limited_exit_delta_ma`
+- `source_limited_required_samples`
+- `source_limited_recover_margin_mv`
 
 实现状态：
 
 - owner-facing 保存语义仍然是相对值或无量纲值
-- EEPROM 使用 `AdvancedPowerRecordV2`
-- 继续兼容旧 `V1` 记录的默认值补齐读取
+- EEPROM 使用 `AdvancedPowerRecordV3`
+- 继续兼容旧 `V1 / V2` 记录的默认值补齐读取
 - `status / diag-snapshot` 已暴露：
   - `assist_power_stage`
   - `assist_target_vout_mv`
+  - `backup_reason`
+
+新增 source-limited 默认值保持保守：
+
+- `source_limited_vin_drop_pct=4`
+- `source_limited_enter_delta_ma=1900`
+- `source_limited_exit_delta_ma=0`
+- `source_limited_required_samples=2`
+- `source_limited_recover_margin_mv=400`
+
+因此默认 source-limited 进入电流门槛为 `rated_enter_base 100mA + 1900mA = 2000mA`，目标是覆盖 `12V / 3A source + 3900mA load` 这类超电源能力负载，而不是把 1A 级一般 assist 负载提前切到 backup。
 
 ## 当前验证状态
 
@@ -172,6 +194,22 @@
 - `rated_exit_delta_ma=0`
 - `vin_drop_threshold_pct=4`
 - `required_samples=2`
+
+这些旧方案报告没有 `source_limited_*` 字段，因为当时 `advanced_power`
+仍是 11 字段契约；读取旧 EEPROM/旧 settings 时当前实现会用默认
+source-limited 字段补齐。
+
+### 旧方案 12V assist_path 3900mA 观察
+
+`12V assist_path / 3900mA` 是有效 sign-off scene，但它证明的是旧方案
+“assist 兜底可维持场景完成”，不是“assist 对超电源能力负载电压稳定性最优”。
+
+从当前 evidence 页面与截图观察可见：
+
+- 在 `12V / 3A source + 3900mA load` 的 hold/assist 阶段，LoadLynx 负载端电压曾长时间低于额定 12V，约落在 `10.5V` 级别。
+- 该跌落发生在 `VIN` 仍在线、上级电源接近能力边界时。
+- 这与硬件 assist 只作为 MCU 介入前兜底的定位一致：若硬件路径不能真正混合供电，只靠 MOS 体二极管或未主动导通路径补能，可能需要约 `0.7V` 级压差才开始勉强共同输出。
+- 本轮优化因此不再把该场景停留在 `assist_rated` 作为最终策略，而是允许 MCU 在识别 `source_limited` 后直接进入 `backup`，把 TPS 目标切回额定输出。
 
 ## 当前 Power Path Validation 工具链真相
 
