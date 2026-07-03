@@ -437,11 +437,13 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run_daemon_command(endpoint: &str, command: DaemonCommand) -> anyhow::Result<()> {
+    init_daemon_tracing();
     match command {
         DaemonCommand::Serve {
             idle_timeout_secs,
             allow_host_power_actions,
         } => {
+            eprintln!("mains-aegis daemon IPC endpoint: {endpoint}");
             let idle_timeout =
                 (idle_timeout_secs > 0).then(|| Duration::from_secs(idle_timeout_secs));
             serve_ipc(
@@ -468,6 +470,8 @@ async fn run_daemon_command(endpoint: &str, command: DaemonCommand) -> anyhow::R
                         })
                 })
                 .transpose()?;
+            eprintln!("mains-aegis daemon HTTP listening on http://{bind}");
+            eprintln!("mains-aegis daemon HTTP IPC endpoint: {endpoint}");
             serve_http_service(HttpServiceConfig {
                 ipc_endpoint: endpoint.to_string(),
                 bind,
@@ -480,6 +484,15 @@ async fn run_daemon_command(endpoint: &str, command: DaemonCommand) -> anyhow::R
             .await
         }
     }
+}
+
+fn init_daemon_tracing() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "mains_aegis_host=info".into()),
+        )
+        .try_init();
 }
 
 #[derive(Debug, Clone)]
