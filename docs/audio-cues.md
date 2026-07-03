@@ -14,6 +14,14 @@
 | `interaction_touch` | 有效触摸 / 有效按键 | `ACTION` | [`set_b_touch.wav`](./audio-cues-preview/interaction-feedback/audio/set_b_touch.wav) |
 | `usb_c_insert` | USB-C 插入 | `ACTION` | [`set_b_usb_c_insert.wav`](./audio-cues-preview/interaction-feedback/audio/set_b_usb_c_insert.wav) |
 
+## 音量调节试听音
+
+`Dashboard/Menu/AUDIO` 中调整 `ACTION` 或 `SYSTEM` 音量时会立即播放 `volume_preview`。它用于确认当前音量档位，不属于业务提示音或告警音，也不计入下方 17 个可播放 WAV 资产。
+
+- 触发：`ACTION` / `SYSTEM` 音量档位发生变化。
+- 路由：调整 `ACTION` 音量时走 `ACTION` route；调整 `SYSTEM` 音量时走 `SYSTEM` route。
+- 资产：固件内部按当前 route 与音量档位合成短 preview tone；文档站不提供独立 WAV 播放按钮。
+
 ## 状态 / 告警 / 错误音
 
 既有 `speaker_chime_v1` 运行时提示音保持原语义：状态音单次播放，告警音按 `2000ms` 间隔循环，错误音连续循环。
