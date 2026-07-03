@@ -64,10 +64,11 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - CLI 的 flash 与 host power state-changing 命令默认发送 dry-run；真实动作必须显式传入 `--real`。
 - `mains-aegis device <id> bind` 在交互式 TTY 场景下，若 devd 返回可确认的 `companion_lan_candidate`，必须就地提示是否同时绑定 LAN companion；非交互场景不得弹提示、不得自动持久化，只返回候选详情与后续显式命令。
 - host-tools 必须提供显式的 companion-LAN 契约面：`POST /api/v1/devices/{id}/companion-lan`、`DELETE /api/v1/devices/{id}/companion-lan`、IPC `device.companion_lan.bind|clear`，以及 CLI `device <id> companion-lan bind|clear`。该契约面只负责“确认/清除 companion 绑定”，不得隐式代替 `bind`。
+- host-tools 必须提供受限 BMS 放电授权恢复契约面：`POST /api/v1/devices/{id}/recovery/bms-discharge-authorization`、IPC `device.recovery.bms_discharge_authorization`，以及 CLI `device <id> recovery bms-discharge-authorization`。该契约面只负责把请求交给固件安全裁决，不能在 host/devd 侧绕过门禁或直接打开 TPS 输出。
 - CLI v1 覆盖：
   - `health`
   - `devices list|scan`
-  - `device <id> bind|unbind|connect|disconnect|identity|status|diag-snapshot|settings|trace|artifact get|artifact select|flash|reset|monitor start|monitor stop`
+  - `device <id> bind|unbind|connect|disconnect|identity|status|diag-snapshot|settings|trace|artifact get|artifact select|recovery bms-discharge-authorization|flash|reset|monitor start|monitor stop`
   - `serial lease create|heartbeat|release`
   - `settings wifi set|clear`、`settings log-level`、`settings manual-charge`
   - `host power status|profile|suspend|shutdown`

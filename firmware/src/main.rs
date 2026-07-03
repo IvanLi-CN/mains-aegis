@@ -1902,6 +1902,33 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 }
                             }
                         }
+                        esp_firmware::net::LanManagementCommand::RecoverBmsDischargeAuthorization => {
+                            let result = power.recover_bms_discharge_authorization("lan_http");
+                            esp_firmware::net::set_lan_command_result(
+                                esp_firmware::net::LanCommandResult::BmsDischargeAuthorizationRecovery {
+                                    ok: result.ok,
+                                    accepted: result.accepted,
+                                    recovered: result.recovered,
+                                    result: result.result,
+                                    reason: result.reason,
+                                    before_requested_outputs: result.status_before.requested_outputs,
+                                    before_active_outputs: result.status_before.active_outputs,
+                                    before_recoverable_outputs: result.status_before.recoverable_outputs,
+                                    before_output_gate_reason: result.status_before.output_gate_reason,
+                                    before_discharge_ready: result.status_before.discharge_ready,
+                                    after_requested_outputs: result.status_after.requested_outputs,
+                                    after_active_outputs: result.status_after.active_outputs,
+                                    after_recoverable_outputs: result.status_after.recoverable_outputs,
+                                    after_output_gate_reason: result.status_after.output_gate_reason,
+                                    after_discharge_ready: result.status_after.discharge_ready,
+                                },
+                            );
+                            defmt::info!(
+                                "net: LAN bms discharge authorization recovery result={} reason={}",
+                                result.result,
+                                result.reason
+                            );
+                        }
                         esp_firmware::net::LanManagementCommand::Reset => {
                             defmt::warn!("net: LAN reset requested");
                             Timer::after(embassy_time::Duration::from_millis(100)).await;
@@ -2347,6 +2374,14 @@ fn handle_web_serial_frame<'d, I2C>(
                         write_web_serial_line(serial, frame.as_str());
                     }
                 }
+            }
+            UsbCdcRequest::RecoverBmsDischargeAuthorization => {
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                let result = power.recover_bms_discharge_authorization("usb_cdc");
+                output::render_bms_discharge_authorization_recovery_json(&mut body, result);
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
             }
         },
         Ok(UsbCdcFrame::WifiConfig {

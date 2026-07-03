@@ -223,6 +223,8 @@ TPS 输出准入仍未成立，系统必须保持 owner-facing `mode=blocked`，
 
 如果任一条件不满足，模块保持 `bms_not_ready -> HOLD`，不把输出模块直接判成故障。
 
+为便于现场排查，固件还提供受限的 BMS 放电授权恢复触发入口。该入口只重新请求同一条放电路径恢复状态机；前置条件仍由固件内部判定，调用方不能绕过 `BMS`、`BQ25792`、输入电源、`THERM_KILL_N` 或输出门禁。返回结果必须同时给出 `accepted/result/reason` 与触发前后的 `requested/active/recoverable/gate_reason/discharge_ready`，但不得把“命令已发送”当成 TPS 输出已恢复。只有恢复链路最终确认 `discharge_ready == true` 且现有输出恢复条件满足时，固件才允许内部恢复入口重新进入输出准入。
+
 ## 主动降额与主动停机
 
 模块现在还维护一条独立于 `TPS fault` 的“软保护”链路，用于在硬故障出现前主动减载：
