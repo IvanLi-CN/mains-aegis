@@ -9,6 +9,7 @@ type AudioCueRow = {
   semantics: string;
   src: string;
   repeatCount?: number;
+  repeatIntervalMs?: number;
 };
 
 function resolveAssetPath(src: string): string {
@@ -25,10 +26,12 @@ function AudioCueButton({
   src,
   label,
   repeatCount = 1,
+  repeatIntervalMs = 0,
 }: {
   src: string;
   label: string;
   repeatCount?: number;
+  repeatIntervalMs?: number;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const runIdRef = useRef(0);
@@ -110,9 +113,9 @@ function AudioCueButton({
               clear(audio);
             }
           };
-          const visibleDelayMs =
-            totalRepeats > 1 ? Math.max(0, 650 - (performance.now() - startedAt)) : 0;
-          repeatDelayRef.current = window.setTimeout(finishIteration, visibleDelayMs);
+          const nextIterationDelayMs =
+            totalRepeats > 1 ? Math.max(0, repeatIntervalMs - (performance.now() - startedAt)) : 0;
+          repeatDelayRef.current = window.setTimeout(finishIteration, nextIterationDelayMs);
         },
         { once: true },
       );
@@ -142,7 +145,9 @@ function AudioCueButton({
       ? `停止 ${label}，正在播放第 ${playIndex}/${repeatCount} 次`
       : `停止 ${label}`
     : repeatCount > 1
-      ? `播放 ${label}，连播 ${repeatCount} 次`
+      ? repeatIntervalMs > 0
+        ? `播放 ${label}，连播 ${repeatCount} 次，每轮间隔 ${repeatIntervalMs}ms`
+        : `播放 ${label}，连播 ${repeatCount} 次`
       : `播放 ${label}`;
 
   return (
@@ -184,7 +189,12 @@ export function InteractionAudioCueTable({ rows }: { rows: AudioCueRow[] }) {
               </td>
               <td data-label="触发语义">{row.semantics}</td>
               <td data-label="预览">
-                <AudioCueButton src={row.src} label={row.id} repeatCount={row.repeatCount} />
+                <AudioCueButton
+                  src={row.src}
+                  label={row.id}
+                  repeatCount={row.repeatCount}
+                  repeatIntervalMs={row.repeatIntervalMs}
+                />
               </td>
             </tr>
           ))}
@@ -221,6 +231,9 @@ export function SystemAudioCueTable({ rows }: { rows: AudioCueRow[] }) {
                   src={row.src}
                   label={row.id}
                   repeatCount={row.repeatCount ?? (row.category === "warning" || row.category === "error" ? 5 : 1)}
+                  repeatIntervalMs={
+                    row.repeatIntervalMs ?? (row.category === "warning" ? 2_000 : 0)
+                  }
                 />
               </td>
             </tr>
