@@ -305,6 +305,13 @@ h3[id="61-tps55288-输出准入矩阵"] + p + table code {
   fill: currentColor;
 }
 
+.audio-cue-play-count {
+  font-size: 14px;
+  font-weight: 780;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 760px) {
   .audio-cue-table-wrap {
     overflow: hidden;

@@ -57,7 +57,7 @@ import { InteractionAudioCueTable, SystemAudioCueTable } from "../../src/compone
 
 ## 状态 / 告警 / 错误音
 
-既有 `speaker_chime_v1` 运行时提示音保持原语义：状态音单次播放，告警音按 `2000ms` 间隔循环，错误音连续循环。
+既有 `speaker_chime_v1` 运行时提示音保持原语义：状态音单次播放，告警音按 `2000ms` 间隔循环，错误音连续循环。文档站预览中，告警音与错误音按 5 次连播呈现，播放按钮会显示当前播放次数。
 
 <SystemAudioCueTable
   rows={[
