@@ -20,7 +20,7 @@
         window.location.replace(appRoot + "index.html?" + params.toString());
 
         function deriveAppRoot(pathname) {
-          var appRoute = pathname.match(/^(.*?)(\/(?:connect|devices)(?:\/|$))/);
+          var appRoute = pathname.match(/^(.*?)(\/(?:connect|devices|docs)(?:\/|$))/);
           if (appRoute) return normalizeRoot(appRoute[1]);
           var fileRoute = pathname.match(/^(.*\/)(?:404|index)\.html$/);
           if (fileRoute) return fileRoute[1];

@@ -110,6 +110,14 @@ describe("public static fallback", () => {
     );
   });
 
+  test("preserves the deployment root for bundled docs direct routes", () => {
+    expect(
+      runPublicFallbackRedirect("https://example.test/mains-aegis/docs/design/system-overview"),
+    ).toBe(
+      "https://example.test/mains-aegis/index.html?spa_path=%2Fdocs%2Fdesign%2Fsystem-overview",
+    );
+  });
+
   test("keeps root deployments at the domain root", () => {
     expect(runPublicFallbackRedirect("https://example.test/connect?demo=true")).toBe(
       "https://example.test/index.html?demo=true&spa_path=%2Fconnect&spa_search=demo%3Dtrue",
