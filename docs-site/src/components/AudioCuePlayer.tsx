@@ -68,9 +68,19 @@ function AudioCueButton({ src, label }: { src: string; label: string }) {
       type="button"
       className="audio-cue-play-button"
       onClick={playCue}
+      aria-pressed={isPlaying}
       aria-label={`${isPlaying ? "停止" : "播放"} ${label}`}
+      title={`${isPlaying ? "停止" : "播放"} ${label}`}
     >
-      {isPlaying ? "停止" : "播放"}
+      {isPlaying ? (
+        <svg aria-hidden="true" viewBox="0 0 24 24" className="audio-cue-play-icon">
+          <rect x="7" y="7" width="10" height="10" rx="1.5" />
+        </svg>
+      ) : (
+        <svg aria-hidden="true" viewBox="0 0 24 24" className="audio-cue-play-icon">
+          <path d="M9 7.8v8.4c0 .64.7 1.02 1.23.66l6.2-4.2a.78.78 0 0 0 0-1.32l-6.2-4.2A.78.78 0 0 0 9 7.8Z" />
+        </svg>
+      )}
     </button>
   );
 }
@@ -78,7 +88,7 @@ function AudioCueButton({ src, label }: { src: string; label: string }) {
 export function InteractionAudioCueTable({ rows }: { rows: AudioCueRow[] }) {
   return (
     <div className="audio-cue-table-wrap">
-      <table className="audio-cue-table">
+      <table className="audio-cue-table audio-cue-table--interaction">
         <thead>
           <tr>
             <th>ID</th>
@@ -91,15 +101,15 @@ export function InteractionAudioCueTable({ rows }: { rows: AudioCueRow[] }) {
         <tbody>
           {rows.map((row) => (
             <tr key={row.id}>
-              <td>
+              <td data-label="ID">
                 <code>{row.id}</code>
               </td>
-              <td>{row.purpose}</td>
-              <td>
+              <td data-label="用途">{row.purpose}</td>
+              <td data-label="路由">
                 <code>{row.route}</code>
               </td>
-              <td>{row.semantics}</td>
-              <td>
+              <td data-label="触发语义">{row.semantics}</td>
+              <td data-label="预览">
                 <AudioCueButton src={row.src} label={row.id} />
               </td>
             </tr>
@@ -113,7 +123,7 @@ export function InteractionAudioCueTable({ rows }: { rows: AudioCueRow[] }) {
 export function SystemAudioCueTable({ rows }: { rows: AudioCueRow[] }) {
   return (
     <div className="audio-cue-table-wrap">
-      <table className="audio-cue-table">
+      <table className="audio-cue-table audio-cue-table--system">
         <thead>
           <tr>
             <th>ID</th>
@@ -126,13 +136,13 @@ export function SystemAudioCueTable({ rows }: { rows: AudioCueRow[] }) {
         <tbody>
           {rows.map((row) => (
             <tr key={row.id}>
-              <td>
+              <td data-label="ID">
                 <code>{row.id}</code>
               </td>
-              <td>{row.title}</td>
-              <td>{row.category}</td>
-              <td>{row.semantics}</td>
-              <td>
+              <td data-label="标题">{row.title}</td>
+              <td data-label="分类">{row.category}</td>
+              <td data-label="触发语义">{row.semantics}</td>
+              <td data-label="预览">
                 <AudioCueButton src={row.src} label={row.id} />
               </td>
             </tr>

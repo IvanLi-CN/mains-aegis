@@ -140,23 +140,24 @@ h3[id="61-tps55288-输出准入矩阵"] + p + table code {
 .audio-cue-table-wrap {
   width: 100%;
   margin: 18px 0 30px;
-  overflow-x: auto;
-  border: 1px solid oklch(86% 0.018 220deg);
+  overflow: hidden;
+  border: 1px solid oklch(88% 0.006 255deg);
   border-radius: 8px;
-  background: oklch(99% 0.004 220deg);
+  background: oklch(100% 0 0deg);
 }
 
 .dark .audio-cue-table-wrap {
-  border-color: oklch(34% 0.024 220deg);
-  background: oklch(20% 0.014 220deg);
+  border-color: oklch(34% 0.01 255deg);
+  background: oklch(22% 0.008 255deg);
 }
 
 .audio-cue-table {
   width: 100%;
-  min-width: 920px;
+  min-width: 0;
   margin: 0;
   border-collapse: collapse;
-  font-size: 14px;
+  table-layout: fixed;
+  font-size: 13px;
   line-height: 1.55;
 }
 
@@ -164,42 +165,87 @@ h3[id="61-tps55288-输出准入矩阵"] + p + table code {
 .audio-cue-table td {
   padding: 12px 14px;
   border: 0;
-  border-bottom: 1px solid oklch(90% 0.012 220deg);
+  border-bottom: 1px solid oklch(91% 0.006 255deg);
   text-align: left;
   vertical-align: middle;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .dark .audio-cue-table th,
 .dark .audio-cue-table td {
-  border-bottom-color: oklch(30% 0.018 220deg);
+  border-bottom-color: oklch(31% 0.008 255deg);
 }
 
 .audio-cue-table th {
-  background: oklch(94% 0.018 210deg);
-  color: oklch(34% 0.08 210deg);
+  background: oklch(97% 0.003 255deg);
+  color: oklch(42% 0.015 255deg);
   font-weight: 750;
   white-space: nowrap;
 }
 
 .dark .audio-cue-table th {
-  background: oklch(27% 0.025 210deg);
-  color: oklch(84% 0.05 210deg);
+  background: oklch(26% 0.01 255deg);
+  color: oklch(80% 0.012 255deg);
 }
 
 .audio-cue-table tbody tr:nth-child(even) td {
-  background: oklch(97.5% 0.006 220deg);
+  background: oklch(98% 0.002 255deg);
 }
 
 .dark .audio-cue-table tbody tr:nth-child(even) td {
-  background: oklch(22% 0.016 220deg);
+  background: oklch(24% 0.008 255deg);
 }
 
-.audio-cue-table td:first-child {
-  min-width: 190px;
+.audio-cue-table code {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.audio-cue-table--interaction th:nth-child(1),
+.audio-cue-table--interaction td:nth-child(1) {
+  width: 19%;
+}
+
+.audio-cue-table--interaction th:nth-child(2),
+.audio-cue-table--interaction td:nth-child(2) {
+  width: 14%;
+}
+
+.audio-cue-table--interaction th:nth-child(3),
+.audio-cue-table--interaction td:nth-child(3) {
+  width: 10%;
+}
+
+.audio-cue-table--interaction th:nth-child(4),
+.audio-cue-table--interaction td:nth-child(4) {
+  width: auto;
+}
+
+.audio-cue-table--system th:nth-child(1),
+.audio-cue-table--system td:nth-child(1) {
+  width: 24%;
+}
+
+.audio-cue-table--system th:nth-child(2),
+.audio-cue-table--system td:nth-child(2) {
+  width: 18%;
+}
+
+.audio-cue-table--system th:nth-child(3),
+.audio-cue-table--system td:nth-child(3) {
+  width: 10%;
+}
+
+.audio-cue-table--system th:nth-child(4),
+.audio-cue-table--system td:nth-child(4) {
+  width: auto;
 }
 
 .audio-cue-table td:last-child {
-  width: 104px;
+  width: 58px;
+  padding-right: 12px;
   text-align: center;
 }
 
@@ -207,33 +253,105 @@ h3[id="61-tps55288-输出准入矩阵"] + p + table code {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 72px;
-  min-height: 36px;
-  border: 1px solid oklch(58% 0.12 210deg);
+  width: 36px;
+  height: 36px;
+  border: 1px solid oklch(73% 0.01 255deg);
   border-radius: 8px;
-  background: oklch(98% 0.02 205deg);
-  color: oklch(34% 0.11 210deg);
+  background: oklch(100% 0 0deg);
+  color: oklch(32% 0.018 255deg);
   cursor: pointer;
-  font: inherit;
-  font-weight: 720;
-  letter-spacing: 0;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
 }
 
 .audio-cue-play-button:hover {
-  background: oklch(94% 0.035 205deg);
+  border-color: oklch(56% 0.12 250deg);
+  background: oklch(97% 0.018 250deg);
+  color: oklch(38% 0.14 250deg);
+}
+
+.audio-cue-play-button[aria-pressed="true"] {
+  border-color: oklch(54% 0.12 250deg);
+  background: oklch(94% 0.03 250deg);
+  color: oklch(35% 0.15 250deg);
 }
 
 .audio-cue-play-button:focus-visible {
-  outline: 3px solid oklch(72% 0.12 210deg / 0.5);
+  outline: 3px solid oklch(66% 0.12 250deg / 0.45);
   outline-offset: 2px;
 }
 
 .dark .audio-cue-play-button {
-  border-color: oklch(62% 0.11 210deg);
-  background: oklch(28% 0.035 210deg);
-  color: oklch(90% 0.035 210deg);
+  border-color: oklch(42% 0.012 255deg);
+  background: oklch(27% 0.008 255deg);
+  color: oklch(82% 0.012 255deg);
 }
 
 .dark .audio-cue-play-button:hover {
-  background: oklch(33% 0.04 210deg);
+  border-color: oklch(66% 0.1 250deg);
+  background: oklch(31% 0.02 250deg);
+  color: oklch(86% 0.055 250deg);
+}
+
+.dark .audio-cue-play-button[aria-pressed="true"] {
+  border-color: oklch(68% 0.11 250deg);
+  background: oklch(34% 0.03 250deg);
+  color: oklch(88% 0.06 250deg);
+}
+
+.audio-cue-play-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+@media (max-width: 760px) {
+  .audio-cue-table-wrap {
+    overflow: hidden;
+  }
+
+  .audio-cue-table,
+  .audio-cue-table tbody,
+  .audio-cue-table tr,
+  .audio-cue-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .audio-cue-table thead {
+    display: none;
+  }
+
+  .audio-cue-table tr {
+    border-bottom: 1px solid oklch(91% 0.006 255deg);
+  }
+
+  .dark .audio-cue-table tr {
+    border-bottom-color: oklch(31% 0.008 255deg);
+  }
+
+  .audio-cue-table td,
+  .audio-cue-table td:last-child {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr);
+    gap: 12px;
+    width: 100%;
+    padding: 10px 12px;
+    border-bottom: 0;
+    text-align: left;
+  }
+
+  .audio-cue-table td::before {
+    content: attr(data-label);
+    color: oklch(52% 0.012 255deg);
+    font-weight: 700;
+  }
+
+  .dark .audio-cue-table td::before {
+    color: oklch(69% 0.012 255deg);
+  }
+
+  .audio-cue-table td[data-label="预览"] {
+    align-items: center;
+  }
 }
