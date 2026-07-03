@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { createPwaManifest, createPwaOptions } from "../../vite.config";
 import { shouldShowPwaUpdatePrompt } from "./PwaUpdatePrompt";
+import { resolveServiceWorkerTarget } from "./serviceWorkerTarget";
 
 function runPublicFallbackRedirect(input: string): string | null {
   const html = readFileSync(new URL("../../public/404.html", import.meta.url), "utf8");
@@ -73,6 +74,30 @@ describe("PWA workbox contract", () => {
   test("keeps absolute deployment bases on the app shell fallback", () => {
     const options = createPwaOptions("/mains-aegis/");
     expect(options.workbox?.navigateFallback).toBe("index.html");
+  });
+});
+
+describe("PWA service worker registration target", () => {
+  test("roots relative Pages builds at the deployed app root on deep routes", () => {
+    expect(
+      resolveServiceWorkerTarget("./", "/mains-aegis/devices/demo"),
+    ).toEqual({
+      scriptUrl: "/mains-aegis/sw.js",
+      scope: "/mains-aegis/",
+    });
+    expect(resolveServiceWorkerTarget("./", "/devices/demo")).toEqual({
+      scriptUrl: "/sw.js",
+      scope: "/",
+    });
+  });
+
+  test("keeps explicit deployment subpaths stable", () => {
+    expect(
+      resolveServiceWorkerTarget("/mains-aegis/", "/mains-aegis/devices/demo"),
+    ).toEqual({
+      scriptUrl: "/mains-aegis/sw.js",
+      scope: "/mains-aegis/",
+    });
   });
 });
 

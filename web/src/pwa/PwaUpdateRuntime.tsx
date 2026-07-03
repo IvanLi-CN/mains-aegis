@@ -1,19 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { registerSW } from "virtual:pwa-register";
 import {
   PwaUpdatePrompt,
   type PwaUpdateSnapshot,
 } from "./PwaUpdatePrompt";
+import {
+  registerMainsAegisServiceWorker,
+  type PwaUpdateServiceWorker,
+} from "./serviceWorkerRegistration";
 
 const idleSnapshot: PwaUpdateSnapshot = { status: "idle", error: null };
 
 export function PwaUpdateRuntime() {
   const [snapshot, setSnapshot] = useState<PwaUpdateSnapshot>(idleSnapshot);
-  const updateServiceWorker = useRef<ReturnType<typeof registerSW> | null>(null);
+  const updateServiceWorker = useRef<PwaUpdateServiceWorker | null>(null);
 
   useEffect(() => {
     if (!import.meta.env.PROD || typeof window === "undefined") return;
-    updateServiceWorker.current = registerSW({
+    updateServiceWorker.current = registerMainsAegisServiceWorker({
       immediate: true,
       onNeedRefresh() {
         setSnapshot({ status: "ready", error: null });
