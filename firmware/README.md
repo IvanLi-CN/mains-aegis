@@ -51,20 +51,20 @@ rustup toolchain list
 cargo install cargo-espflash
 ```
 
-### 3) `mains-aegis-devd`（默认工作流）与 `mcu-agentd`（fallback）
+### 3) `mains-aegis` CLI-managed devd（默认工作流）与 `mcu-agentd`（fallback）
 
-本仓库默认使用 `mains-aegis-devd` 作为 Mains Aegis 专用设备入口。它默认通过本地 IPC 管理设备扫描、绑定、连接、固件 artifact 匹配、烧录、reset 与 monitor；Web/API 验证需要显式启动 HTTP bridge，避免 Web App 和日志/烧录工具同时抢同一 USB CDC 口。
+本仓库默认使用 `mains-aegis` CLI 管理 Mains Aegis 专用 devd。普通 CLI 命令会通过本地 IPC 自动启动或复用 singleton daemon，管理设备扫描、绑定、连接、固件 artifact 匹配、烧录、reset 与 monitor；Web/API 验证需要通过 CLI 显式启动 HTTP service，避免 Web App 和日志/烧录工具同时抢同一 USB CDC 口。
 
-开发期 IPC daemon：
+开发期 IPC daemon（前台日志 / 持久调试）：
 
 ```bash
-cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve
+just devd-serve
 ```
 
-开发期 HTTP bridge：
+开发期 HTTP service：
 
 ```bash
-cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- bridge-http --allow-dev-cors
+just devd-http
 ```
 
 `mcu-agentd` 保留为 legacy/fallback。若需要 fallback，请确保环境中已能运行：
@@ -651,14 +651,13 @@ cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- \\
   --frame-no 12
 ```
 
-## 烧录与监视（推荐：`mains-aegis-devd`，从仓库根目录运行）
+## 烧录与监视（推荐：`mains-aegis` CLI-managed devd，从仓库根目录运行）
 
 ```bash
-cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- serve
-cargo run --manifest-path tools/mains-aegis-host/Cargo.toml --bin mains-aegis-devd -- bridge-http --allow-dev-cors
+just devd-http
 ```
 
-Web 开发期由 `web/vite.config.ts` 把 `/api` 反代到 `http://127.0.0.1:30080`。本地构建固件后，用统一 Firmware Catalog 生成脚本登记 artifact：
+普通 CLI recipe（例如 `just devices-list`）会使用 repo-local `.tmp/devd.sock` 并在需要时自动启动 singleton IPC daemon。需要 Web/API 验证时，从干净 IPC endpoint 直接运行 `just devd-http`，它通过 `mains-aegis daemon http --allow-dev-cors` 在前台启动显式 HTTP/API service；不要先用同一 `.tmp/devd.sock` auto-start IPC daemon 后再立即启动 HTTP service。Web 开发期由 `web/vite.config.ts` 把 `/api` 反代到 `http://127.0.0.1:30080`。本地构建固件后，用统一 Firmware Catalog 生成脚本登记 artifact：
 
 ```bash
 python3 tools/firmware-artifact/build-catalog-entry.py \

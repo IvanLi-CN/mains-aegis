@@ -25,6 +25,7 @@ const SOURCE_DISCONNECT_CONFIRM_INTERVAL_MS: u64 = 100;
 #[derive(Debug)]
 pub struct PowerValidationArgs {
     pub ups_ipc: String,
+    pub no_auto_start: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1217,9 +1218,11 @@ fn ups_command<const N: usize>(
         this_exe_or(args).to_string_lossy().to_string(),
         "--ipc".to_string(),
         context.ups_ipc.clone(),
-        "device".to_string(),
-        args.ups_device.clone(),
     ];
+    if context.no_auto_start {
+        cmd.push("--no-auto-start".to_string());
+    }
+    cmd.extend(["device".to_string(), args.ups_device.clone()]);
     cmd.extend(parts.into_iter().map(ToOwned::to_owned));
     cmd
 }
@@ -3580,6 +3583,23 @@ mod tests {
     }
 
     #[test]
+    fn ups_commands_propagate_no_auto_start() {
+        let cmd = ups_status_fresh_command(
+            &bench(Some("loadlynx")),
+            &PowerValidationArgs {
+                ups_ipc: "/tmp/ups.sock".to_string(),
+                no_auto_start: true,
+            },
+        );
+
+        assert_eq!(cmd[0], "mains-aegis");
+        assert!(cmd.contains(&"--ipc".to_string()));
+        assert!(cmd.contains(&"/tmp/ups.sock".to_string()));
+        assert!(cmd.contains(&"--no-auto-start".to_string()));
+        assert!(cmd.contains(&"status".to_string()));
+    }
+
+    #[test]
     fn loadlynx_stream_requires_explicit_cli() {
         let err = load_stream_command(&bench(None), 4).unwrap_err();
         assert!(err.to_string().contains("--load-cli"));
@@ -3789,6 +3809,7 @@ mod tests {
             &run,
             &PowerValidationArgs {
                 ups_ipc: "/tmp/ups.sock".to_string(),
+                no_auto_start: false,
             },
             "suite",
             Path::new("reports/suite"),

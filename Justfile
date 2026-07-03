@@ -2,6 +2,7 @@ set dotenv-load
 set shell := ["bash", "-uc"]
 
 host_manifest := "tools/mains-aegis-host/Cargo.toml"
+devd_ipc := ".tmp/devd.sock"
 artifact_out := "firmware/target/mains-aegis-artifacts"
 firmware_elf := "firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware"
 firmware_image := "firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware.bin"
@@ -26,26 +27,30 @@ web-dev: firmware-sync-web
 web-build:
     bun run web:build
 
-# Start the local devd HTTP service in API-only development mode. Override with MAINS_AEGIS_DEVD_BIND=127.0.0.1:30080.
-devd-http:
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis-devd -- serve-http --bind ${MAINS_AEGIS_DEVD_BIND:-127.0.0.1:30080} --allow-dev-cors
+# Build both host-tool binaries so CLI auto-start can find its sibling devd.
+host-tools-build:
+    cargo build --manifest-path {{ host_manifest }} --bins
 
-# Start the local devd IPC daemon.
-devd-serve:
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis-devd -- serve
+# Start the local devd HTTP service in API-only development mode. Override with MAINS_AEGIS_DEVD_BIND=127.0.0.1:30080.
+devd-http: host-tools-build
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} daemon http --bind ${MAINS_AEGIS_DEVD_BIND:-127.0.0.1:30080} --allow-dev-cors
+
+# Start the local devd IPC daemon in the foreground for development/debugging.
+devd-serve: host-tools-build
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} daemon serve --idle-timeout-secs 0
 
 # Run the host CLI, for example: just cli devices list
-cli *args:
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- {{ args }}
+cli *args: host-tools-build
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} {{ args }}
 
 # Run the Power Path Validation CLI, for example:
 # just power-validation run --dry-run --load-cli /path/to/loadlynx
-power-validation *args:
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- power-validation {{ args }}
+power-validation *args: host-tools-build
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} power-validation {{ args }}
 
 # Generate a dry-run Power Path Validation suite plan without touching hardware.
-power-validation-plan *args:
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- power-validation run --dry-run {{ args }}
+power-validation-plan *args: host-tools-build
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} power-validation run --dry-run {{ args }}
 
 # Run the read-only diag-snapshot HIL gate. Example:
 # just hil-diag-snapshot --devd-url http://127.0.0.1:30080 --device-id <device>
@@ -53,20 +58,20 @@ hil-diag-snapshot *args:
     python3 tools/hil/diag_snapshot_readonly.py {{ args }}
 
 # List currently known devd devices.
-devices-list:
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- devices list
+devices-list: host-tools-build
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} devices list
 
 # Run owner-visible USB candidate scan through devd.
-devices-scan-usb:
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- devices scan --no-lan
+devices-scan-usb: host-tools-build
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} devices scan --no-lan
 
 # Connect an already-known devd device.
-device-connect device:
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} connect
+device-connect device: host-tools-build
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} connect
 
 # Read identity for an already-known devd device.
-device-identity device:
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} identity
+device-identity device: host-tools-build
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} identity
 
 # Run host tool tests.
 host-test:
@@ -109,30 +114,30 @@ firmware-embed-web:
 firmware-release: firmware-artifact firmware-embed-web
 
 # Select an artifact manifest for a bound devd device.
-artifact-select device manifest:
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} artifact select --manifest-path {{ manifest }}
+artifact-select device manifest: host-tools-build
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} artifact select --manifest-path {{ manifest }}
 
 # Flash dry-run for an already-bound devd device.
-flash-dry-run device:
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --dry-run
+flash-dry-run device: host-tools-build
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --dry-run
 
 # Build, select, and dry-run flash for an already-bound devd device.
-flash-current-dry-run device:
+flash-current-dry-run device: host-tools-build
     just firmware-web-image
     manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release) && \
     bun run firmware:embed-web && \
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} artifact select --manifest-path "$manifest" && \
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --dry-run
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} artifact select --manifest-path "$manifest" && \
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --dry-run
 
 # Build, select, dry-run, and real-flash an already-bound devd device. Requires confirm=flash.
-flash-current-real device confirm:
+flash-current-real device confirm: host-tools-build
     [[ "{{ confirm }}" == "flash" ]] || { echo "Refusing real flash: pass confirm=flash"; exit 2; }
     just firmware-web-image
     manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release) && \
     bun run firmware:embed-web && \
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} artifact select --manifest-path "$manifest" && \
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --dry-run && \
-    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- device {{ device }} flash --real
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} artifact select --manifest-path "$manifest" && \
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --dry-run && \
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --real
 
 # Run the standard local validation set.
 check: web-check host-test firmware-host-test firmware-check

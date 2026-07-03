@@ -1,7 +1,15 @@
 use clap::{Args, Parser, Subcommand};
-use mains_aegis_host::{default_ipc_endpoint, ipc_call, release_version};
+use mains_aegis_host::{
+    default_ipc_endpoint, ipc_call, release_version, serve_http_service, serve_ipc,
+    HttpServiceConfig, IpcConfig, DEFAULT_BIND,
+};
 use serde_json::{json, Value};
-use std::io::{self, IsTerminal, Write};
+use std::{
+    io::{self, IsTerminal, Write},
+    net::SocketAddr,
+    path::PathBuf,
+    process::Stdio,
+};
 use tokio::time::{sleep, Duration};
 
 mod mains_aegis;
@@ -17,12 +25,19 @@ struct Cli {
     /// IPC socket or named-pipe endpoint.
     #[arg(long, global = true, env = "MAINS_AEGIS_DEVD_IPC")]
     ipc: Option<String>,
+    /// Do not auto-start the local IPC daemon when it is not reachable.
+    #[arg(long, global = true)]
+    no_auto_start: bool,
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommand,
+    },
     Health,
     Devices {
         #[command(subcommand)]
@@ -48,6 +63,40 @@ enum Command {
     PowerValidation {
         #[command(subcommand)]
         command: PowerValidationCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DaemonCommand {
+    /// Run the IPC daemon in the foreground. Intended for development/debugging.
+    Serve {
+        /// Exit after this many idle seconds. Use 0 to disable idle shutdown.
+        #[arg(long, default_value_t = mains_aegis_host::DEFAULT_IPC_IDLE_TIMEOUT_SECS)]
+        idle_timeout_secs: u64,
+        /// Allow real host power profile/suspend/shutdown actions.
+        #[arg(long, env = "MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS")]
+        allow_host_power_actions: bool,
+    },
+    /// Run the explicit HTTP API / hosted Web service in the foreground.
+    Http {
+        /// HTTP bind address.
+        #[arg(long, default_value = DEFAULT_BIND, env = "MAINS_AEGIS_DEVD_BIND")]
+        bind: SocketAddr,
+        /// Allow local development CORS origins.
+        #[arg(long, env = "MAINS_AEGIS_DEVD_ALLOW_DEV_CORS")]
+        allow_dev_cors: bool,
+        /// Allow real host power profile/suspend/shutdown actions.
+        #[arg(long, env = "MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS")]
+        allow_host_power_actions: bool,
+        /// Permit a non-loopback bridge bind when paired with an auth token file.
+        #[arg(long, env = "MAINS_AEGIS_DEVD_ALLOW_LAN_BRIDGE")]
+        allow_lan_bridge: bool,
+        /// File containing the bearer token required for LAN bridge mode.
+        #[arg(long, env = "MAINS_AEGIS_DEVD_AUTH_TOKEN_FILE")]
+        auth_token_file: Option<PathBuf>,
+        /// Open the hosted app in the default browser after the service starts.
+        #[arg(long, env = "MAINS_AEGIS_DEVD_OPEN_BROWSER")]
+        open_browser: bool,
     },
 }
 
@@ -316,29 +365,40 @@ enum WifiCommand {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let endpoint = cli.ipc.unwrap_or_else(default_ipc_endpoint);
+    let devd = DevdClient {
+        endpoint,
+        auto_start: !cli.no_auto_start,
+    };
     match cli.command {
+        Command::Daemon { command } => run_daemon_command(&devd.endpoint, command).await?,
         Command::PowerValidation { command } => {
-            mains_aegis::power_validation::run(command, PowerValidationArgs { ups_ipc: endpoint })
-                .await?;
+            mains_aegis::power_validation::run(
+                command,
+                PowerValidationArgs {
+                    ups_ipc: devd.endpoint,
+                    no_auto_start: cli.no_auto_start,
+                },
+            )
+            .await?;
         }
         Command::Device {
             device_id,
             command: DeviceCommand::Trace(args),
         } if args.follow => {
-            follow_device_trace(&endpoint, &device_id, args).await?;
+            follow_device_trace(&devd, &device_id, args).await?;
         }
         Command::Device {
             device_id,
             command: DeviceCommand::Status(args),
         } if args.watch => {
-            watch_device_read(&endpoint, &device_id, "status", "device.status", args, None).await?;
+            watch_device_read(&devd, &device_id, "status", "device.status", args, None).await?;
         }
         Command::Device {
             device_id,
             command: DeviceCommand::DiagSnapshot(args),
         } if args.read.watch => {
             watch_device_read(
-                &endpoint,
+                &devd,
                 &device_id,
                 "diag_snapshot",
                 "device.diag_snapshot",
@@ -356,14 +416,14 @@ async fn main() -> anyhow::Result<()> {
                 _ => None,
             };
             let (method, params) = command_to_ipc(command);
-            let mut result = ipc_call(&endpoint, method, params).await?;
+            let mut result = devd_ipc_call(&devd, method, params).await?;
             if let Some((device_id, _alias)) = interactive_bind {
                 if io::stdin().is_terminal()
                     && io::stdout().is_terminal()
-                    && maybe_confirm_companion_lan(&endpoint, &device_id, &result).await?
+                    && maybe_confirm_companion_lan(&devd, &device_id, &result).await?
                 {
-                    result = ipc_call(
-                        &endpoint,
+                    result = devd_ipc_call(
+                        &devd,
                         "device.connection",
                         json!({ "device_id": device_id }),
                     )
@@ -376,8 +436,118 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn run_daemon_command(endpoint: &str, command: DaemonCommand) -> anyhow::Result<()> {
+    match command {
+        DaemonCommand::Serve {
+            idle_timeout_secs,
+            allow_host_power_actions,
+        } => {
+            let idle_timeout =
+                (idle_timeout_secs > 0).then(|| Duration::from_secs(idle_timeout_secs));
+            serve_ipc(
+                IpcConfig::new(endpoint.to_string())
+                    .with_idle_timeout(idle_timeout)
+                    .with_host_power_actions(allow_host_power_actions),
+            )
+            .await
+        }
+        DaemonCommand::Http {
+            bind,
+            allow_dev_cors,
+            allow_host_power_actions,
+            allow_lan_bridge,
+            auth_token_file,
+            open_browser,
+        } => {
+            let auth_token = auth_token_file
+                .map(|path| {
+                    std::fs::read_to_string(&path)
+                        .map(|token| token.trim().to_string())
+                        .map_err(|error| {
+                            anyhow::anyhow!("read auth token file {}: {error}", path.display())
+                        })
+                })
+                .transpose()?;
+            serve_http_service(HttpServiceConfig {
+                ipc_endpoint: endpoint.to_string(),
+                bind,
+                allow_dev_cors,
+                allow_host_power_actions,
+                allow_lan_bridge,
+                auth_token,
+                open_browser,
+            })
+            .await
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DevdClient {
+    endpoint: String,
+    auto_start: bool,
+}
+
+async fn devd_ipc_call(devd: &DevdClient, method: &str, params: Value) -> anyhow::Result<Value> {
+    match ipc_call(&devd.endpoint, method, params.clone()).await {
+        Ok(value) => Ok(value),
+        Err(error) if devd.auto_start && looks_like_ipc_connect_error(&error) => {
+            start_devd(&devd.endpoint)?;
+            wait_for_devd_health(&devd.endpoint).await?;
+            ipc_call(&devd.endpoint, method, params).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn looks_like_ipc_connect_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("connect IPC socket") || message.contains("connect IPC pipe")
+}
+
+fn start_devd(endpoint: &str) -> anyhow::Result<()> {
+    let devd_bin = std::env::var_os("MAINS_AEGIS_DEVD_BIN")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let mut path = std::env::current_exe().ok()?;
+            path.set_file_name(format!("mains-aegis-devd{}", std::env::consts::EXE_SUFFIX));
+            Some(path)
+        })
+        .ok_or_else(|| anyhow::anyhow!("cannot resolve mains-aegis-devd path"))?;
+    if !devd_bin.is_file() {
+        anyhow::bail!(
+            "mains-aegis-devd was not found next to mains-aegis; install host tools or build both binaries"
+        );
+    }
+    std::process::Command::new(devd_bin)
+        .arg("serve")
+        .arg("--ipc")
+        .arg(endpoint)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!("start mains-aegis-devd IPC daemon: {error}"))
+}
+
+async fn wait_for_devd_health(endpoint: &str) -> anyhow::Result<()> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+    let mut last_error = None;
+    while tokio::time::Instant::now() < deadline {
+        match ipc_call(endpoint, "devd.health", json!({})).await {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("mains-aegis-devd IPC daemon did not start")))
+}
+
 async fn watch_device_read(
-    endpoint: &str,
+    devd: &DevdClient,
     device_id: &str,
     kind: &str,
     method: &'static str,
@@ -395,8 +565,8 @@ async fn watch_device_read(
         tokio::time::sleep_until(next_sample_at).await;
         next_sample_at += interval;
         let sampled_at_ms = started.elapsed().as_millis() as u64;
-        let result = match ipc_call(
-            endpoint,
+        let result = match devd_ipc_call(
+            devd,
             method,
             device_read_ipc_params(device_id, &args, true, true, packages.clone()),
         )
@@ -462,12 +632,12 @@ fn is_watch_retryable_cache_error(error: &anyhow::Error) -> bool {
 }
 
 async fn follow_device_trace(
-    endpoint: &str,
+    devd: &DevdClient,
     device_id: &str,
     args: TraceArgs,
 ) -> anyhow::Result<()> {
-    let initial = ipc_call(
-        endpoint,
+    let initial = devd_ipc_call(
+        devd,
         "device.trace",
         json!({
             "device_id": device_id,
@@ -483,8 +653,8 @@ async fn follow_device_trace(
         .map(|trace| seed_seen_ids(trace))
         .unwrap_or_default();
     loop {
-        let result = ipc_call(
-            endpoint,
+        let result = devd_ipc_call(
+            devd,
             "device.trace",
             json!({
                 "device_id": device_id,
@@ -548,6 +718,7 @@ fn trace_entry_matches_kind(entry: &Value, kind: Option<&str>) -> bool {
 fn command_to_ipc(command: Command) -> (&'static str, Value) {
     match command {
         Command::Health => ("devd.health", json!({})),
+        Command::Daemon { .. } => unreachable!("handled before IPC dispatch"),
         Command::Devices { command } => match command {
             DevicesCommand::List => ("devices.list", json!({})),
             DevicesCommand::Scan(args) => (
@@ -700,7 +871,7 @@ fn device_read_ipc_params(
 }
 
 async fn maybe_confirm_companion_lan(
-    endpoint: &str,
+    devd: &DevdClient,
     device_id: &str,
     bind_result: &Value,
 ) -> anyhow::Result<bool> {
@@ -729,8 +900,8 @@ async fn maybe_confirm_companion_lan(
         );
         return Ok(false);
     }
-    let result = ipc_call(
-        endpoint,
+    let result = devd_ipc_call(
+        devd,
         "device.companion_lan.bind",
         json!({
             "device_id": device_id,
@@ -748,10 +919,102 @@ async fn maybe_confirm_companion_lan(
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_new_matching_entries, device_read_ipc_params, seed_seen_ids,
-        trace_entry_matches_kind, DeviceReadArgs,
+        collect_new_matching_entries, device_read_ipc_params, looks_like_ipc_connect_error,
+        seed_seen_ids, trace_entry_matches_kind, Cli, Command, DaemonCommand, DeviceReadArgs,
     };
+    use clap::Parser as _;
     use serde_json::json;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn cli_parses_no_auto_start_global_flag() {
+        let cli = Cli::try_parse_from([
+            "mains-aegis",
+            "--ipc",
+            ".tmp/devd.sock",
+            "--no-auto-start",
+            "health",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.ipc.as_deref(), Some(".tmp/devd.sock"));
+        assert!(cli.no_auto_start);
+        assert!(matches!(cli.command, Command::Health));
+    }
+
+    #[test]
+    fn cli_parses_daemon_serve_as_developer_foreground_command() {
+        let cli = Cli::try_parse_from([
+            "mains-aegis",
+            "--ipc",
+            ".tmp/devd.sock",
+            "daemon",
+            "serve",
+            "--idle-timeout-secs",
+            "0",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Command::Daemon {
+                command: DaemonCommand::Serve {
+                    idle_timeout_secs: 0,
+                    allow_host_power_actions: false,
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_daemon_http_as_explicit_web_service_command() {
+        let cli = Cli::try_parse_from([
+            "mains-aegis",
+            "--ipc",
+            ".tmp/devd.sock",
+            "daemon",
+            "http",
+            "--bind",
+            "127.0.0.1:30081",
+            "--allow-dev-cors",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Daemon {
+                command:
+                    DaemonCommand::Http {
+                        bind,
+                        allow_dev_cors,
+                        allow_host_power_actions,
+                        allow_lan_bridge,
+                        auth_token_file,
+                        open_browser,
+                    },
+            } => {
+                assert_eq!(bind.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+                assert_eq!(bind.port(), 30081);
+                assert!(allow_dev_cors);
+                assert!(!allow_host_power_actions);
+                assert!(!allow_lan_bridge);
+                assert!(auth_token_file.is_none());
+                assert!(!open_browser);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auto_start_only_retries_native_ipc_connect_errors() {
+        let socket_error = anyhow::anyhow!("connect IPC socket .tmp/devd.sock: not found");
+        let pipe_error =
+            anyhow::anyhow!("connect IPC pipe \\\\.\\pipe\\mains-aegis-devd: not found");
+        let protocol_error = anyhow::anyhow!("IPC endpoint must be a native IPC endpoint");
+
+        assert!(looks_like_ipc_connect_error(&socket_error));
+        assert!(looks_like_ipc_connect_error(&pipe_error));
+        assert!(!looks_like_ipc_connect_error(&protocol_error));
+    }
 
     #[test]
     fn event_kind_only_matches_power_target() {

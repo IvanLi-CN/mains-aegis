@@ -1,6 +1,6 @@
 # Hardware Collaboration Workflow
 
-本项目的真机协作默认通过 released `mains-aegis` / `mains-aegis-devd` 执行，目标是在多设备、多 worktree 环境下避免连错设备，同时保留 USB CDC / Web Serial 的开发体验。
+本项目的真机协作默认通过 released `mains-aegis` CLI 管理本机 devd 执行，目标是在多设备、多 worktree 环境下避免连错设备，同时保留 USB CDC / Web Serial 的开发体验。`mains-aegis-devd` 是 release 包内的 sibling/internal daemon binary，不是普通用户手动操作入口。
 
 ## Boundaries
 
@@ -8,31 +8,35 @@
 - Agent 不使用 `mcu-agentd` 作为 Mains Aegis 设备操作路径。
 - Agent 不枚举 `/dev/*` 或其它串口路径。
 - Agent 不切换端口，也不“换一个端口试试”。
-- `mains-aegis-devd` 可以执行 owner-visible scan/list/bind/connect 流程；scan 只发现候选设备，不自动连接或切换。
+- `mains-aegis` CLI 可以自动启动或复用 singleton devd，并执行 owner-visible scan/list/bind/connect 流程；scan 只发现候选设备，不自动连接或切换。
 - USB CDC 同一时刻只有一个消费者：`mains-aegis-devd` 持有设备时，Web App Web Serial 不能并发占用同一 CDC 口。
 
 ## One-Time Human Setup
 
-每个 worktree 首次真机协作前，通过 released host tools 绑定目标设备：
+每个 worktree 首次真机协作前，通过 released `mains-aegis` 绑定目标设备。CLI 会自动启动或复用默认 IPC daemon：
 
 ```bash
-mains-aegis-devd serve
 mains-aegis devices scan
 mains-aegis device <device-id> bind --alias <name>
 mains-aegis device <device-id> connect
 mains-aegis device <device-id> identity
 ```
 
-如果本轮需要 HTTP/Web 或 `diag-snapshot`，从一开始使用 `serve-http` 代替 `serve`；不要在 `serve` 仍占用默认 IPC endpoint 时再启动默认 `serve-http`：
+如果本轮需要 HTTP/Web，从一开始通过 CLI 在一个终端启动显式 HTTP service：
 
 ```bash
-mains-aegis-devd serve-http --allow-dev-cors
-mains-aegis devices scan
-mains-aegis device <device-id> bind --alias <name>
-mains-aegis device <device-id> connect
+mains-aegis --ipc .tmp/devd.sock daemon http --allow-dev-cors
 ```
 
-绑定结果由 `mains-aegis-devd` 持久化到用户配置态。若没有已知绑定或无法确认 identity，Agent 必须停止真机操作并提示先完成 owner-visible 绑定。
+在另一个终端让后续 CLI 命令使用同一个 IPC endpoint：
+
+```bash
+mains-aegis --ipc .tmp/devd.sock devices scan
+mains-aegis --ipc .tmp/devd.sock device <device-id> bind --alias <name>
+mains-aegis --ipc .tmp/devd.sock device <device-id> connect
+```
+
+绑定结果由 devd 持久化到用户配置态。若没有已知绑定或无法确认 identity，Agent 必须停止真机操作并提示先完成 owner-visible 绑定。
 
 ## Agent Validation Sequence
 
@@ -68,15 +72,13 @@ Agent 接管真机验证时按以下顺序执行：
    mains-aegis device <device-id> monitor stop
    ```
 
-5. 读取充电/电源状态使用 devd HTTP service 的只读 `diag-snapshot` API：
+5. 读取充电/电源状态优先使用 CLI 的只读 `diag-snapshot`。只有浏览器/API 验证需要 HTTP 时，才通过 `mains-aegis daemon http` 启动 HTTP service：
 
    ```bash
-   curl http://127.0.0.1:30080/api/v1/devices/<device-id>/diag-snapshot
+   mains-aegis device <device-id> diag-snapshot
    ```
 
-   如果当前只启动了 IPC-only `serve`，先停止该 daemon，再以 `serve-http --allow-dev-cors` 重新启动同一 IPC endpoint；不要让两个进程同时绑定默认 IPC endpoint。
-
-6. 进入 Web Serial 验证前，断开 devd 设备连接或停止当前 devd bridge，释放 CDC 口：
+6. 进入 Web Serial 验证前，断开 devd 设备连接或停止当前 devd HTTP service，释放 CDC 口：
 
    ```bash
    mains-aegis device <device-id> disconnect
