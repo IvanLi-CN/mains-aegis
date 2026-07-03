@@ -16,11 +16,15 @@
 
 ## 音量调节试听音
 
-`Dashboard/Menu/AUDIO` 中调整 `ACTION` 或 `SYSTEM` 音量时会立即播放 `volume_preview`。它用于确认当前音量档位，不属于业务提示音或告警音，也不计入下方 17 个可播放 WAV 资产。
+`Dashboard/Menu/AUDIO` 中调整 `ACTION` 或 `SYSTEM` 音量时会立即播放 `volume_preview`。它用于确认当前音量档位，不属于业务提示音或告警音；文档站提供代表性 WAV 预览用于听感对照。
 
 - 触发：`ACTION` / `SYSTEM` 音量档位发生变化。
 - 路由：调整 `ACTION` 音量时走 `ACTION` route；调整 `SYSTEM` 音量时走 `SYSTEM` route。
-- 资产：固件内部按当前 route 与音量档位合成短 preview tone；文档站不提供独立 WAV 播放按钮。
+- 资产：实际固件按当前 route 与音量档位内部合成短 preview tone；下方 WAV 由同一组固件参数生成。
+
+| ID | 用途 | 路由 | 预览 |
+| --- | --- | --- | --- |
+| `volume_preview` | 音量调节试听 | `ACTION` / `SYSTEM` | [`volume_preview.wav`](./audio-cues-preview/interaction-feedback/audio/volume_preview.wav) |
 
 ## 状态 / 告警 / 错误音
 
