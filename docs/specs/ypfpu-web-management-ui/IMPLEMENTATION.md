@@ -4,6 +4,9 @@
 
 - `web/` 新增独立 Vite + React + TypeScript + Bun 应用。
 - 根 `package.json` 增加 workspace 与 `web:dev` / `web:preview` / `web:check` / `web:build` 脚本。
+- Web App 已接入 `vite-plugin-pwa`，生产构建生成 `manifest.webmanifest`、`sw.js`、PWA metadata 和 192/512 PNG maskable icons；`PAGES_BASE=./` 使用相对 `start_url` / `scope`，显式子路径部署保留对应 base。
+- PWA service worker 预缓存 app shell、Vite 构建产物、Pages fallback、PWA 图标、相对 base 深链 navigation helper 和 bundled static firmware artifacts；真实设备 `/api`、`/events`、LAN HTTP/SSE、USB/Web Serial 与 GitHub Release live catalog 不进入离线模拟缓存。
+- PWA 更新策略使用 prompt 模式：新 app shell 在后台安装并缓存完成后，Web 只显示非阻塞 `New version available` 提示；用户点击 `Update` 并通过确认对话后才调用 `updateSW(true)` 切换并刷新页面。
 - `DeviceRegistry` 维护浏览器侧设备清单、localStorage 持久化、LAN 探活、settings 读取、SSE 订阅与轮询兜底，并持有当前浏览器连接内的 USB CDC `SerialPort`。
 - USB CDC / Web Serial 设备使用 `serial:` target，不持久化真实 `SerialPort`；刷新后需要重新授权。
 - `web/src/serial/transport.ts` 实现 JSONL framing、`request_id` response matching、握手、状态读取、WiFi 配网、日志级别与手动充电偏好命令。
@@ -37,12 +40,13 @@
 - `bun install`: 已通过。
 - `bun run web:check`: 已通过。
 - `bun run web:build`: 已通过。
-- `bun test web/src/firmware/catalog.test.ts web/src/app/traceScrollAnchor.test.ts`: 已通过。
+- `bun run web:test`: 已通过。
 - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`: 已通过。
 - `cd firmware && cargo +esp check`: 已通过。
 - `cd firmware && cargo +esp check --no-default-features`: 已通过。
 - Storybook：已使用最新 `storybook` / `@storybook/react-vite` 10.3.6 建立 `UPS Management/Settings/WiFi Provisioning Feedback` 状态矩阵，覆盖连接失败、保存失败、清除失败、保存中、清除中与成功反馈；`UPS Management/Connect/Firmware mismatch warning` 覆盖连接前 firmware artifact 不匹配与显式忽略入口。
 - Storybook：`UPS Management/Add device` 已补齐 Pages direct LAN 支持态、非支持浏览器降级态、手动目标成功态与 CIDR 扫描命中态。
+- Storybook：`UPS Management/PWA Update` 覆盖 update ready、activating、offline ready、registration error、mobile 和 state gallery，并验证 ready 状态下点击 `Update` 会先进入确认对话。
 - 本地预览：已通过端口租约启动 Vite mock-data 前端。
 - 浏览器验证：已确认 Fleet、Connect 和单设备 Dashboard 可渲染，控制台无 warn/error。
 - 浏览器验证：真实 devd 驱动的 `/connect` 已确认显示 `Bind USB` 发现动作，不再暴露旧的 `Connect devd` 样式与语义。
