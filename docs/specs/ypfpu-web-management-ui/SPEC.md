@@ -29,7 +29,7 @@
 - 对接设备侧现有只读接口：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status` 和 status SSE。
 - 提供 mock fixtures 和正式路由 seed 场景，使无实机环境也能稳定预览、交互测试与截图验证。
 - 在现有 `web/` 管理台上新增 USB CDC / Web Serial 数据源，复用 `Identity`、`NetworkSummary`、`UpsStatus` 状态模型。
-- 使用 `mains-aegis-devd` 作为本地 USB 控制 owner；CLI 通过 IPC 访问，Web/App 通过显式 `serve-http` 使用同一 USB CDC 安全控制面。
+- 使用 CLI-managed devd 作为本地 USB 控制 owner；普通 CLI 命令通过 `mains-aegis` 自动复用或按需启动 singleton IPC daemon，Web/App 通过显式 `mains-aegis daemon http` 使用同一 USB CDC 安全控制面。
 - 通过 USB CDC structured JSONL 协议支持握手、状态读取、结构化日志、安全设置与 WiFi 配网。
 - 当前写入范围限制为 WiFi SSID/PSK 覆盖或清除、手动充电偏好、USB session 日志级别与 Advanced Power 高级设置；PSK 不在 API、日志或 UI 中回显。
 

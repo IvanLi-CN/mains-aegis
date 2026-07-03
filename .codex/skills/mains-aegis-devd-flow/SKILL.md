@@ -11,7 +11,7 @@ Use `$mains-aegis-user-operations` instead only when the owner explicitly asks f
 
 ## Required boundaries
 
-- This is the default in-repo Codex route. Source-built `tools/mains-aegis-host` devd/CLI may be used for development, validation, diagnostics, field investigation, and hardware read/session-read checks.
+- This is the default in-repo Codex route. Source-built `tools/mains-aegis-host` CLI/devd may be used for development, validation, diagnostics, field investigation, and hardware read/session-read checks. Prefer the `mains-aegis` CLI lifecycle surface over directly invoking `mains-aegis-devd`; the daemon binary is a packaged sibling/internal process and a low-level debug fallback.
 - Prefer released `mains-aegis` / `mains-aegis-devd` only for explicit end-user/released host-tools workflows.
 - Use repository `Justfile` recipes for source-built development, validation, firmware artifact generation, and devd-backed flash flows. Run `just --list` first when unsure; do not bypass `just firmware-*` with raw Cargo/esptool commands unless updating the recipes themselves.
 - Do not directly run `espflash`, `cargo espflash`, or `cargo-espflash` from the agent shell. The devd flash backend may invoke `espflash` internally after an explicit HTTP/API request or test dry-run.
@@ -28,14 +28,14 @@ Use `$mains-aegis-user-operations` instead only when the owner explicitly asks f
    - Flash dry-runs use `just flash-current-dry-run <device>`.
    - Real flash uses `just flash-current-real <device> flash` only after explicit owner authorization.
    - GitHub Releases and Web bundled fallback must use the same schema.
-2. Start devd IPC for development:
+2. Start devd IPC for development/debugging:
    - `just devd-serve`
+   - Normal CLI read/session-read commands auto-start the repo-local IPC daemon when needed; `just devd-serve` is only for foreground logs or persistent debug sessions.
 3. Start the explicit local HTTP bridge only when Web/API validation needs HTTP:
    - `just devd-http`
-   - Add `--web-root web/dist` only for production/static handoff.
    - Point CLI commands at the same `--ipc` endpoint when Web and CLI must observe the same bridge state.
 4. Develop Web UI through Vite.
-   - The Web dev server proxies `/api` to the explicit `bridge-http` endpoint, default `http://127.0.0.1:30080`.
+   - The Web dev server proxies `/api` to the explicit `mains-aegis daemon http` endpoint, default `http://127.0.0.1:30080`.
 5. Read/session-read device lifecycle:
    - `scan/list -> connect selected or bound device -> identity/status/diag-snapshot -> monitor logs -> disconnect`.
 6. State-changing device lifecycle:

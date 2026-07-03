@@ -22,7 +22,7 @@
 
 ### Goals
 
-- 新增 Mains Aegis 专用设备 daemon；当前 canonical host-tools crate 为 `tools/mains-aegis-host`（见 #7jqrq）。
+- 新增 Mains Aegis 专用设备 daemon；当前 canonical host-tools crate 为 `tools/mains-aegis-host`（见 #7jqrq），普通用户通过 `mains-aegis` CLI 自动启动/复用 singleton devd。
 - `serve` 启动不接收设备端口；设备通过 API 扫描、列出、绑定、连接、断开和解绑。
 - 设备绑定、别名和已选择 artifact 属于用户配置态，必须持久化到 devd 状态文件；默认位置复用参考项目的 host-tools 模式：`directories::ProjectDirs::config_dir()` 下的 `devices.json`。daemon 重启后 `GET /api/v1/devices` 仍能返回已知绑定，后续 `scan` 会把当前可见端口重新附加到对应绑定。
 - HTTP API 覆盖 identity、connection、settings、trace、events、artifact selection、reset、monitor start/stop、flash 与设备 settings 写入；`session` 仅作为历史兼容语义由 #k4vzn 接管。
@@ -31,7 +31,7 @@
 - 跨 `Web App` / `mains-aegis-devd` / `mains-aegis` CLI 的通信方案优先级矩阵由 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md) 统一定义；本规格不再重复定义跨客户端默认 transport 规则。
 - Firmware Catalog 成为 Web Direct、devd、本地构建和 GitHub Release 的统一 artifact 合同。
 - 固件 identity 暴露 build/profile/features/protocol/defmt 信息，devd 用它与 artifact manifest 匹配；不匹配时日志解码必须标记 `unverified`。
-- Web 开发期由 Vite dev server 反代 `/api` 到显式启动的 `serve-http --allow-dev-cors`，proxy target 可由 env 指向当前开发实例；hosted 模式下由 devd 直接托管嵌入式 Web。需要浏览器直接跨源访问 devd API 时，`--allow-dev-cors` 只允许 loopback HTTP development origins。Connect 页在 LAN 发现结果里只保留 `identity.firmware.protocol === "mains-aegis.cdc.v1"` 的候选；hosted Connect 中这些 LAN 候选只作为 direct hardware HTTP target 使用，不应伪装成 `devd transport`。
+- Web 开发期由 Vite dev server 反代 `/api` 到通过 `mains-aegis daemon http --allow-dev-cors` 显式启动的 HTTP service，proxy target 可由 env 指向当前开发实例；hosted 模式下由 devd 直接托管嵌入式 Web。需要浏览器直接跨源访问 devd API 时，`--allow-dev-cors` 只允许 loopback HTTP development origins。Connect 页在 LAN 发现结果里只保留 `identity.firmware.protocol === "mains-aegis.cdc.v1"` 的候选；hosted Connect 中这些 LAN 候选只作为 direct hardware HTTP target 使用，不应伪装成 `devd transport`。
 - 新增项目 skill，固化 devd 设备操作、安全边界和验证流程；Codex 在本仓内默认使用 `$mains-aegis-devd-flow` 做开发、验证、诊断与硬件 read/session-read 检查，`$mains-aegis-user-operations` 仅用于显式 end-user/released-tool 场景。
 
 ### Non-goals
@@ -182,7 +182,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - Given BQ40 DF 可读，When 读取 `diag-snapshot`，Then `bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg` 可见，用于确认 `2550mV + CUV_RECOV_CHG=0` baseline。
 - Given BQ40 处于 `EMSHUT` 或刚退出 `EMSHUT`，When 读取 `diag-snapshot`，Then `bms.op_status_raw_len`、`bms.op_status_raw_bytes`、`bms.emshut`、`bms.pres`、`bms.xdsg` 与 `bms.dsg_fet` 可见，用于直接核对 H4 raw payload 与解码结果。
 - Given BQ40 DF 可读，When 读取 `diag-snapshot`，Then `bms.da_configuration`、`bms.power_config`、`bms.emshut_en`、`bms.emshut_pexit_dis`、`bms.emshut_exit_comm` 与 `bms.emshut_exit_vpack` 可见，用于确认 `SHUTDN#` / communication-exit / PACK-voltage-exit 是否被配置允许。
-- Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 env 指定或默认的 `serve-http --allow-dev-cors`。
+- Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 env 指定或默认的 `mains-aegis daemon http --allow-dev-cors`。
 - 文档与 AGENTS guardrails 清晰说明 `$mains-aegis-devd-flow` 是本仓 Codex 默认入口；显式 end-user/released-tool 操作才使用 `$mains-aegis-user-operations`。
 - 多 USB CDC 设备同时存在时，devd/Web 不自动选择；Web 显示候选列表，用户选择后才创建 Web lease 并占用设备。
 - Web 正常断开后 devd 立即释放 USB 占用；Web 异常断开后 devd 按租约 TTL 自动释放，默认目标不超过 9 秒。
