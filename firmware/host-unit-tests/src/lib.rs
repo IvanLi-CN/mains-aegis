@@ -568,6 +568,39 @@ pub mod output {
         charger_present == Some(true) || mains_present == Some(true)
     }
 
+    fn requested_outputs_active(
+        requested: pure::EnabledOutputs,
+        active: pure::EnabledOutputs,
+    ) -> bool {
+        match requested {
+            pure::EnabledOutputs::None => true,
+            pure::EnabledOutputs::Only(ch) => active.is_enabled(ch),
+            pure::EnabledOutputs::Both => active == pure::EnabledOutputs::Both,
+        }
+    }
+
+    fn mode_requires_active_tps_outputs(mode: UpsMode, requested: pure::EnabledOutputs) -> bool {
+        requested != pure::EnabledOutputs::None
+            && matches!(
+                mode,
+                UpsMode::Standby | UpsMode::Supplement | UpsMode::Backup
+            )
+    }
+
+    fn gate_owner_mode_on_active_outputs(
+        mode: UpsMode,
+        requested: pure::EnabledOutputs,
+        active: pure::EnabledOutputs,
+    ) -> UpsMode {
+        if mode_requires_active_tps_outputs(mode, requested)
+            && !requested_outputs_active(requested, active)
+        {
+            UpsMode::Blocked
+        } else {
+            mode
+        }
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct RuntimeChargeOverride {
         allow_charge: bool,
@@ -587,12 +620,73 @@ pub mod output {
                 policy_status_text: "NOAC",
                 policy_notice_text: "runtime_backup_no_charge",
             }),
+            UpsMode::Blocked => Some(RuntimeChargeOverride {
+                allow_charge: false,
+                policy_status_text: "LOCK",
+                policy_notice_text: "runtime_blocked_no_charge",
+            }),
             UpsMode::Standby | UpsMode::Off => None,
         }
     }
 
     #[test]
-    fn runtime_charge_override_blocks_charging_in_assist_and_backup_only() {
+    fn owner_mode_gate_blocks_modes_that_require_inactive_tps_outputs() {
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(
+                UpsMode::Backup,
+                pure::EnabledOutputs::Both,
+                pure::EnabledOutputs::None
+            ),
+            UpsMode::Blocked
+        );
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(
+                UpsMode::Supplement,
+                pure::EnabledOutputs::Only(channel::OutputChannel::OutA),
+                pure::EnabledOutputs::Only(channel::OutputChannel::OutB)
+            ),
+            UpsMode::Blocked
+        );
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(
+                UpsMode::Standby,
+                pure::EnabledOutputs::Only(channel::OutputChannel::OutB),
+                pure::EnabledOutputs::None
+            ),
+            UpsMode::Blocked
+        );
+    }
+
+    #[test]
+    fn owner_mode_gate_preserves_modes_when_tps_outputs_are_active_or_not_requested() {
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(
+                UpsMode::Backup,
+                pure::EnabledOutputs::Both,
+                pure::EnabledOutputs::Both
+            ),
+            UpsMode::Backup
+        );
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(
+                UpsMode::Backup,
+                pure::EnabledOutputs::None,
+                pure::EnabledOutputs::None
+            ),
+            UpsMode::Backup
+        );
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(
+                UpsMode::Off,
+                pure::EnabledOutputs::Both,
+                pure::EnabledOutputs::None
+            ),
+            UpsMode::Off
+        );
+    }
+
+    #[test]
+    fn runtime_charge_override_blocks_charging_in_output_and_blocked_modes() {
         assert_eq!(
             runtime_charge_override(UpsMode::Supplement),
             Some(RuntimeChargeOverride {
@@ -607,6 +701,14 @@ pub mod output {
                 allow_charge: false,
                 policy_status_text: "NOAC",
                 policy_notice_text: "runtime_backup_no_charge",
+            })
+        );
+        assert_eq!(
+            runtime_charge_override(UpsMode::Blocked),
+            Some(RuntimeChargeOverride {
+                allow_charge: false,
+                policy_status_text: "LOCK",
+                policy_notice_text: "runtime_blocked_no_charge",
             })
         );
         assert_eq!(runtime_charge_override(UpsMode::Standby), None);

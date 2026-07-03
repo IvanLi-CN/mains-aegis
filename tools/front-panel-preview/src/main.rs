@@ -119,6 +119,7 @@ fn dashboard_detail_fixture(
         UpsMode::Standby => "CHG500",
         UpsMode::Supplement => "LOAD",
         UpsMode::Backup => "NOAC",
+        UpsMode::Blocked => unreachable!("blocked is not dashboard-renderable"),
         UpsMode::Off => "WAIT",
     });
     detail.charger_status = detail.charger_home_status;
@@ -149,6 +150,7 @@ fn dashboard_detail_fixture(
         UpsMode::Standby => "charging_500ma",
         UpsMode::Supplement => "blocked_output_over_limit",
         UpsMode::Backup => "blocked_no_input",
+        UpsMode::Blocked => unreachable!("blocked is not dashboard-renderable"),
         UpsMode::Off => "idle_wait_threshold",
     });
     detail.thermal_notice = Some("FAN RPM MOCKED - SENSOR WIRING NEXT");
@@ -363,6 +365,7 @@ fn dashboard_snapshot_for_mode(mode: UpsMode) -> SelfCheckUiSnapshot {
             snapshot.bq40z50_current_ma = Some(-1880);
             snapshot.bq40z50_soc_pct = Some(53);
         }
+        UpsMode::Blocked => unreachable!("blocked is not dashboard-renderable"),
     }
 
     snapshot
@@ -885,6 +888,7 @@ fn bq40_snapshot_for_scenario(
         ScenarioArg::Bq40Offline => SelfCheckOverlay::None,
         ScenarioArg::Bq40OfflineDialog => SelfCheckOverlay::BmsActivateConfirm,
         ScenarioArg::Bq40DischargeBlocked => {
+            snapshot.mode = UpsMode::Blocked;
             snapshot.bq40z50 = SelfCheckCommState::Warn;
             snapshot.bq40z50_pack_mv = Some(15_420);
             snapshot.bq40z50_current_ma = Some(115);
@@ -911,6 +915,7 @@ fn bq40_snapshot_for_scenario(
             SelfCheckOverlay::None
         }
         ScenarioArg::Bq40EmshutBlocked => {
+            snapshot.mode = UpsMode::Blocked;
             snapshot.bq40z50 = SelfCheckCommState::Warn;
             snapshot.bq40z50_pack_mv = Some(16_270);
             snapshot.bq40z50_current_ma = Some(0);
@@ -944,6 +949,7 @@ fn bq40_snapshot_for_scenario(
         ScenarioArg::Bq40DischargeDialog => {
             let (_, overlay) = bq40_snapshot_for_scenario(mode, ScenarioArg::Bq40DischargeBlocked);
             let mut blocked = base_bq40_snapshot(mode);
+            blocked.mode = UpsMode::Blocked;
             blocked.bq40z50 = SelfCheckCommState::Warn;
             blocked.bq40z50_pack_mv = Some(15_420);
             blocked.bq40z50_current_ma = Some(115);
@@ -972,6 +978,7 @@ fn bq40_snapshot_for_scenario(
             SelfCheckOverlay::BmsDischargeAuthorizeConfirm
         }
         ScenarioArg::Bq40DischargeRecovering => {
+            snapshot.mode = UpsMode::Blocked;
             snapshot.bq40z50 = SelfCheckCommState::Warn;
             snapshot.bq40z50_pack_mv = Some(15_420);
             snapshot.bq40z50_current_ma = Some(115);
@@ -1890,6 +1897,10 @@ impl ModeArg {
             "standby" | "stby" => Ok(Self::Standby),
             "supplement" | "supp" => Ok(Self::Supplement),
             "backup" | "batt" => Ok(Self::Backup),
+            "blocked" | "block" | "lock" => Err(
+                "unsupported --mode value: blocked (blocked is not dashboard-renderable)"
+                    .to_string(),
+            ),
             _ => Err(format!(
                 "unsupported --mode value: {raw} (expected off|standby|supplement|backup)"
             )),
@@ -1902,6 +1913,7 @@ impl ModeArg {
             UpsMode::Standby => Self::Standby,
             UpsMode::Supplement => Self::Supplement,
             UpsMode::Backup => Self::Backup,
+            UpsMode::Blocked => unreachable!("demo focus never maps to blocked"),
         }
     }
 

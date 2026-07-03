@@ -82,6 +82,12 @@
 - `recoverable_outputs`：被门控前最后一个可恢复集合
 - `gate_reason`：当前门控原因
 
+对外运行模式必须以后两类输出状态为准。若 `requested_outputs != none`，但本轮请求的任一路
+TPS 输出没有进入 `active_outputs`，固件不得把 owner-facing `mode` 发布为
+`standby`、`supplement` 或 `backup`，只能发布 `blocked`。`blocked` 表示内部候选模式被输出准入阻断，
+不是新的底层电源阶段；它固定为 non-charging 状态。前面板不得把 `blocked` 渲染成 Dashboard，
+必须保持或退回自检/阻断界面。
+
 ### 门控原因
 
 - `none`：当前无活动门控
@@ -210,6 +216,10 @@
 - `BQ25792` 正常且输入电源在线
 
 执行层会把 `Type-C / charger` 的输入存在作为冷启动放电授权的前置条件之一；它不要求 `INA3221 CH3` 的 `VIN` 遥测先稳定下来。恢复链路也只有在 `BQ40Z50` 最终回到 `discharge_ready == true` 时才算成功；若只是普通访问恢复、但放电路径仍未就绪，模块继续保持 `bms_not_ready -> HOLD`。一旦恢复成功并且输出恢复条件满足，固件会自动把本轮请求的 `recoverable_outputs` 重新置为 `active_outputs`，让自检页继续进入 Dashboard。
+
+USB-C 管理电源存在只说明恢复尝试具备输入电源前提；它不等价于 TPS 输出已经 active。若放电路径或
+TPS 输出准入仍未成立，系统必须保持 owner-facing `mode=blocked`，不能因为输入存在而进入
+`backup`、`supplement` 或 `standby`。
 
 如果任一条件不满足，模块保持 `bms_not_ready -> HOLD`，不把输出模块直接判成故障。
 

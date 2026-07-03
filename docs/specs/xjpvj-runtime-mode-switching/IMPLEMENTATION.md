@@ -11,11 +11,17 @@
   - `standby -> standby`
   - `assist_low | assist_rated -> supplement`
   - `backup -> backup`
+- owner-facing `mode` 发布前必须经过 TPS 输出活跃门槛：
+  - 若候选 mode 为 `standby / supplement / backup`
+  - 且 `requested_outputs` 中存在未进入 `active_outputs` 的通道
+  - 则 API / diag 发布 `mode=blocked`
+  - front-panel 保持或退回自检/阻断界面，不渲染 Dashboard
 - staged assist 已经落地：
   - `standby` 使用低于额定输出的热备目标
   - `assist_low` 通过运行时双判据进入，并按 `assist_ramp_step_mv / assist_ramp_interval_ms` 限速爬升
   - `assist_rated` 与 `backup` 使用额定输出目标
 - `ASSIST / BACKUP` 都收敛到 non-charging mode
+- `BLOCKED` 也按 non-charging mode 处理，且不是 Dashboard 可渲染模式
 
 ## 运行时调压实现
 
