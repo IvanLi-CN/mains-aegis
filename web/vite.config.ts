@@ -5,6 +5,7 @@ import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
+import { VitePWA, type ManifestOptions, type VitePWAOptions } from "vite-plugin-pwa";
 
 const devdUrl = process.env.MAINS_AEGIS_DEVD_URL ?? process.env.VITE_DEFAULT_DEVD_URL ?? process.env.VITE_DEVD_API_BASE ?? "http://127.0.0.1:30080";
 const appBase = normalizeBase(process.env.PAGES_BASE ?? process.env.VITE_BASE);
@@ -15,6 +16,8 @@ const publicFirmwareRoot = resolve(webRoot, "public/firmware");
 const localFirmwareArtifactsRoot = resolve(repoRoot, process.env.MAINS_AEGIS_FIRMWARE_ARTIFACTS_DIR ?? "firmware/target/mains-aegis-artifacts");
 const firmwareTargetRoot = resolve(repoRoot, "firmware/target");
 const devFirmwareCacheRoot = resolve(repoRoot, "tmp/web-dev-firmware");
+const pwaThemeColor = "#183f39";
+const pwaBackgroundColor = "#f9faf6";
 
 function normalizeBase(base: string | undefined): string {
   const raw = (base ?? "/").trim();
@@ -22,6 +25,71 @@ function normalizeBase(base: string | undefined): string {
   if (!raw || raw === "/") return "/";
   const withLeading = raw.startsWith("/") ? raw : `/${raw}`;
   return withLeading.endsWith("/") ? withLeading : `${withLeading}/`;
+}
+
+function resolvePwaUrl(base: string, path: string): string {
+  const normalizedPath = path.replace(/^\/+/, "");
+  if (base === "./") return `./${normalizedPath}`;
+  return `${base}${normalizedPath}`;
+}
+
+function createNavigationFallbackDenylist(): RegExp[] {
+  return [
+    /(?:^|\/)api(?:\/|$)/,
+    /(?:^|\/)events(?:\/|$)/,
+    /(?:^|\/)docs(?:\/|$)/,
+  ];
+}
+
+export function createPwaManifest(base: string = appBase): Partial<ManifestOptions> {
+  return {
+    name: "Mains Aegis Web",
+    short_name: "Mains Aegis",
+    description: "UPS fleet management console for Mains Aegis devices.",
+    start_url: base,
+    scope: base,
+    display: "standalone",
+    background_color: pwaBackgroundColor,
+    theme_color: pwaThemeColor,
+    icons: [
+      {
+        src: resolvePwaUrl(base, "pwa/mains-aegis-icon-192.png"),
+        sizes: "192x192",
+        type: "image/png",
+        purpose: "any maskable",
+      },
+      {
+        src: resolvePwaUrl(base, "pwa/mains-aegis-icon-512.png"),
+        sizes: "512x512",
+        type: "image/png",
+        purpose: "any maskable",
+      },
+    ],
+  };
+}
+
+export function createPwaOptions(base: string = appBase): Partial<VitePWAOptions> {
+  return {
+    registerType: "prompt",
+    injectRegister: false,
+    manifestFilename: "manifest.webmanifest",
+    includeAssets: ["favicon.svg", "pwa/mains-aegis-icon-192.png", "pwa/mains-aegis-icon-512.png"],
+    manifest: createPwaManifest(base),
+    workbox: {
+      cleanupOutdatedCaches: true,
+      globPatterns: ["**/*"],
+      globIgnores: ["**/*.map"],
+      importScripts: ["pwa-navigation-fallback.js"],
+      maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+      navigateFallback: "index.html",
+      navigateFallbackDenylist: createNavigationFallbackDenylist(),
+    },
+  };
+}
+
+function pwaPluginEnabled(): boolean {
+  const lifecycle = process.env.npm_lifecycle_event ?? "";
+  return lifecycle !== "storybook" && lifecycle !== "build-storybook" && process.env.STORYBOOK !== "true";
 }
 
 type FirmwareArtifactFile = {
@@ -406,7 +474,11 @@ function sendJson(res: { statusCode: number; setHeader: (name: string, value: st
 
 export default defineConfig({
   base: appBase,
-  plugins: [devFirmwarePlugin(), react()],
+  plugins: [
+    devFirmwarePlugin(),
+    react(),
+    ...(pwaPluginEnabled() ? VitePWA(createPwaOptions()) : []),
+  ],
   define: {
     "import.meta.env.VITE_APP_RUNTIME_MODE": JSON.stringify(appRuntimeMode),
   },

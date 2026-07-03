@@ -28,6 +28,7 @@
 - 实现设备接入页、单设备总览、电源路径、电池与 BMS、温度与保护、设备信息、API 调试页面。
 - 对接设备侧现有只读接口：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status` 和 status SSE。
 - 提供 mock fixtures 和正式路由 seed 场景，使无实机环境也能稳定预览、交互测试与截图验证。
+- 提供真实可安装 PWA：manifest、maskable icons、service worker app-shell precache、首开后离线恢复，以及新版本后台下载后的手动升级提示。
 - 在现有 `web/` 管理台上新增 USB CDC / Web Serial 数据源，复用 `Identity`、`NetworkSummary`、`UpsStatus` 状态模型。
 - 使用 CLI-managed devd 作为本地 USB 控制 owner；普通 CLI 命令通过 `mains-aegis` 自动复用或按需启动 singleton IPC daemon，Web/App 通过显式 `mains-aegis daemon http` 使用同一 USB CDC 安全控制面。
 - 通过 USB CDC structured JSONL 协议支持握手、状态读取、结构化日志、安全设置与 WiFi 配网。
@@ -41,6 +42,8 @@
 - 不做用户账号、鉴权、设备绑定、TLS、跨网段发现或云端服务。
 - 不改造 `docs-site/`；文档站与管理端保持独立。
 - Demo 复用 Web 管理端正式路由和正式交互，仅通过 mock 数据源替换真实设备接口；截图资产默认作为 owner-facing evidence，不自动进入 PR 正文。
+- PWA 离线能力只覆盖 Web app shell、构建产物、Pages fallback、PWA 图标和 bundled static firmware artifacts；真实设备 `/api`、`/events`、LAN HTTP/SSE、USB/Web Serial 与 GitHub Release live catalog 不做离线模拟。
+- PWA 新版本使用 prompt 模式：service worker 安装阶段在后台下载新 app shell，`onNeedRefresh` 后显示非阻塞更新提示；用户点击 `Update` 并确认后才允许刷新页面并切换版本。
 
 ## 功能规格
 
@@ -142,6 +145,9 @@
 - `bun install` 成功，并保留根项目 commitlint workflow。
 - `bun run web:check` 通过。
 - `bun run web:build` 通过。
+- `web/dist` 包含 `manifest.webmanifest`、`sw.js`、192px/512px maskable PNG icons；manifest 的 `start_url` / `scope` 必须同时支持 `PAGES_BASE=./` 与显式子路径部署。
+- PWA service worker precache 必须覆盖 app shell、Vite 构建产物、Pages `404.html`、相对 base 深链 navigation helper、PWA icons 和 bundled firmware static artifacts；不得把 `/api`、`/events` 或真实设备 runtime endpoints 当作离线数据缓存。
+- PWA 更新提示必须静默处理安装缓存阶段；新版本 ready 后显示非阻塞提示，点击 `Update` 先弹出确认，确认后才调用 service worker update 并刷新。
 - Fleet mock 页至少显示 6 台设备，覆盖 standby、assist、backup、warning、critical、offline。
 - `/connect` 能显示已保存设备，支持添加设备与探活错误显示。
 - GitHub Pages/public-static 构建默认不轮询 same-origin `/api/v1/devices`；无 hosted metadata、无显式 devd URL 时必须直接显示 browser-direct LAN 入口。
@@ -154,7 +160,7 @@
 - 正式路由能通过 `demo=true` 打开可复现 mock-only Demo，并通过页面内 Demo 控制面板切换 mock 场景，同时保持与正式产品一致的导航和页面结构。
 - 单设备详情页可从 Fleet 卡片进入，并展示 power、battery、thermal、device、api 子页。
 - 浏览器视觉验证覆盖 desktop Fleet、mobile Fleet、empty Fleet、large Fleet、单设备 Dashboard、USB Connect、USB structured logs 和 WiFi settings。
-- Storybook 或等价稳定预览必须覆盖：Pages direct LAN 支持态、非支持浏览器降级态、手动目标成功态、CIDR 扫描命中态。
+- Storybook 或等价稳定预览必须覆盖：Pages direct LAN 支持态、非支持浏览器降级态、手动目标成功态、CIDR 扫描命中态，以及 PWA update prompt 的 ready、activating、offline ready、error、mobile 状态。
 
 ## 文档更新
 
@@ -164,6 +170,12 @@
 - `docs/specs/README.md`: 增加当前 spec 索引。
 - `docs/firmware-catalog.md`: 记录 image `flash_address`、bundled 优先去重和 Web Serial flashing 约束。
 - `docs/web-management-ui.md`: 增加 Firmware/Flash 信息架构。
+
+## References
+
+- `vite-plugin-pwa`: https://github.com/vite-pwa/vite-plugin-pwa
+- Web app manifest: https://web.dev/learn/pwa/web-app-manifest
+- Chrome installable manifest audit: https://developer.chrome.com/docs/lighthouse/pwa/installable-manifest
 
 ## Visual Evidence
 
@@ -474,3 +486,4 @@
 - [x] M4: 完成只读 API/SSE 客户端、mock fixtures、类型检查、生产构建和 mock UI 视觉验证。
 - [x] M5: 创建 PR #71 并完成快车道 review / CI 收敛到 merge-ready。
 - [x] M6: 增加 USB CDC / Web Serial safe-control follow-up，完成协议、Web UI、固件处理、文档与视觉证据。
+- [x] M7: 增加 PWA install/offline/update prompt 合同，完成 manifest、service worker、icons、Storybook 状态画廊与构建验证。

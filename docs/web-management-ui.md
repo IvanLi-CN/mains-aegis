@@ -203,9 +203,10 @@ web/
 - 技术栈：Vite + React + TypeScript + Bun。
 - 默认数据：内置 6 台 mock UPS，覆盖 standby、assist、backup、warning、critical、offline。
 - GitHub Pages：根站点发布 Web App，文档站发布在同一 Pages artifact 的 `/docs/` 子路径；App 使用 History API path router，并通过 `PAGES_BASE` / `VITE_BASE` 支持仓库子路径和未来自定义域名根路径。Pages 构建会显式写入 `public_static` 运行模式标记，Connect 页默认展示 browser-direct LAN 入口，并只在用户点击后执行 IPv4 CIDR 扫描；扫描结果只保留在当前页面状态，只有显式 `Add WiFi` / `Open` 后才会落入浏览器持久化设备列表。
+- PWA：Web App 通过 `vite-plugin-pwa` 生成 `manifest.webmanifest`、`sw.js` 与 192/512 PNG maskable icons。首次成功打开后，service worker 会预缓存 app shell、Vite 构建产物、Pages fallback、相对 base 深链 navigation helper、PWA 图标和 bundled static firmware artifacts；真实设备 `/api`、`/events`、LAN HTTP/SSE、USB/Web Serial 与 GitHub Release live catalog 不做离线伪造。新版本使用 `registerType="prompt"`：浏览器后台下载新 app shell 后只显示非阻塞更新提示，用户点击 `Update` 并确认后才切换到新版本并刷新页面。
 - 全局导航：App Layout 侧栏固定提供 `Docs` 入口，打开 `${BASE_URL}docs/`，保持当前运维台页面与连接状态不被替换。
 - 数据接入：`DeviceRegistry` 负责 localStorage 设备清单、LAN 探活、settings 读取、SSE 订阅与轮询兜底、当前 Web Serial USB CDC transport，以及 devd 本地 control transport；同一 `identity.device_id` 的 LAN 与 USB 来源合并为一条设备记录。devd 发现出的 LAN 设备会直接落为 HTTP target，USB 设备才保留 devd lease / serial 上下文。
 - Connect 发现动作使用项目既有小号主次按钮体系；未纳管设备使用 `Bind USB` / `Add WiFi`，已纳管设备使用 `Open` 与 `Use ...`，不引入独立的 split-button 控件族。
-- 验证命令：`bun run web:check`、`PAGES_BASE=/mains-aegis/ bun run web:build`、`DOCS_BASE=/mains-aegis/docs/ bun run --cwd docs-site build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cargo test --manifest-path tools/mains-aegis-host/Cargo.toml`、`cd firmware && cargo +esp check`。
+- 验证命令：`bun run web:check`、`bun run web:test`、`PAGES_BASE=/mains-aegis/ bun run web:build`、`DOCS_BASE=/mains-aegis/docs/ bun run --cwd docs-site build`、`cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol`、`cargo test --manifest-path tools/mains-aegis-host/Cargo.toml`、`cd firmware && cargo +esp check`。
 - 本地设备 daemon：普通 CLI 验证会自动启动 repo-local IPC daemon；开发前台日志使用 `just devd-serve`；Vite 开发期 API 验证使用 `just devd-http`；hosted 模式由 `mains-aegis daemon http` 直接托管嵌入式 Web 产物。
 - 纯前端 Demo：`bun run web:dev` 后访问正式路由并加 `?demo=true`，例如 `/?demo=true`、`/connect?demo=true`、`/devices/mains-aegis-e4f5a6/battery?demo=true`。Demo 场景切换在左上角 Demo Logo 打开的悬浮控制面板内完成，不再通过 `seed=` URL 参数暴露。

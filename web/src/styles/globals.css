@@ -733,6 +733,163 @@ a {
   }
 }
 
+.pwa-update-prompt {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 60;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  width: min(560px, calc(100vw - 32px));
+  border: 1px solid
+    color-mix(in oklch, var(--color-primary) 30%, var(--color-hairline));
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+  color: var(--color-ink);
+  box-shadow: 0 6px 8px oklch(20% 0.012 250 / 0.12);
+  padding: 10px;
+}
+
+.pwa-update-prompt.is-inline {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  width: 100%;
+}
+
+.pwa-update-prompt.is-error {
+  border-color: color-mix(
+    in oklch,
+    var(--color-critical) 42%,
+    var(--color-hairline)
+  );
+  background: color-mix(in oklch, var(--color-critical) 7%, var(--color-panel));
+}
+
+.pwa-update-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--color-primary) 10%, var(--color-panel));
+  color: var(--color-primary-strong);
+}
+
+.pwa-update-prompt.is-error .pwa-update-icon {
+  background: color-mix(in oklch, var(--color-critical) 11%, var(--color-panel));
+  color: var(--color-critical);
+}
+
+.pwa-update-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.pwa-update-copy strong,
+.pwa-update-copy span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pwa-update-copy strong {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.pwa-update-copy span {
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.pwa-update-action {
+  white-space: nowrap;
+}
+
+.pwa-update-dismiss {
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+}
+
+.pwa-update-dialog-overlay {
+  position: fixed;
+  z-index: 69;
+  inset: 0;
+  background: var(--color-overlay);
+}
+
+.pwa-update-dialog {
+  position: fixed;
+  z-index: 70;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: min(440px, calc(100vw - 32px));
+  gap: 12px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+  color: var(--color-ink);
+  padding: 18px;
+}
+
+.pwa-update-dialog:focus-visible {
+  outline: 0;
+  box-shadow: var(--shadow-focus);
+}
+
+.pwa-update-dialog-title {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.pwa-update-dialog-description {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.pwa-update-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin-icon {
+    animation: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .pwa-update-prompt {
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+  }
+
+  .pwa-update-action {
+    grid-column: 2 / 4;
+    width: 100%;
+  }
+
+  .pwa-update-dismiss {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+
 .text-button {
   background: transparent;
   color: var(--color-primary);
@@ -1769,6 +1926,69 @@ a {
 
 .storybook-feedback-panel {
   width: 100%;
+}
+
+.storybook-pwa-surface {
+  box-sizing: border-box;
+  display: grid;
+  width: min(680px, calc(100vw - 32px));
+  max-width: 100%;
+  min-height: 220px;
+  place-items: end;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-card);
+  background: var(--color-canvas);
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.storybook-pwa-surface.is-mobile-story {
+  width: min(374px, calc(100vw - 16px));
+  min-height: 220px;
+  justify-items: start;
+  margin: 0;
+  padding: 24px 16px;
+}
+
+.storybook-pwa-surface.is-mobile-story .pwa-update-prompt {
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+}
+
+.storybook-pwa-surface.is-mobile-story .pwa-update-action {
+  grid-column: 2 / 4;
+  width: 100%;
+}
+
+.storybook-pwa-surface.is-mobile-story .pwa-update-dismiss {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.storybook-pwa-gallery {
+  box-sizing: border-box;
+  display: grid;
+  width: min(760px, calc(100vw - 32px));
+  max-width: 100%;
+  gap: 14px;
+}
+
+.storybook-pwa-gallery-item {
+  display: grid;
+  min-height: 96px;
+  align-items: center;
+}
+
+.storybook-pwa-mobile-frame {
+  box-sizing: border-box;
+  width: min(358px, calc(100vw - 64px));
+  max-width: 100%;
+}
+
+@media (max-width: 640px) {
+  .storybook-pwa-surface {
+    width: calc(100vw - 32px);
+    padding: 24px 16px;
+  }
 }
 
 .transport-badge {

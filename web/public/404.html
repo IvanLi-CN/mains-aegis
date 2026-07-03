@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mains Aegis Web</title>
+    <script>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        var originalSearch = params.toString();
+        var appRoot = deriveAppRoot(window.location.pathname || "/");
+        var pathInApp = toAppPath(window.location.pathname || "/", appRoot);
+        if (pathInApp === "/" && params.has("spa_path")) {
+          window.location.replace(appRoot + "index.html?" + params.toString());
+          return;
+        }
+        params.set("spa_path", pathInApp);
+        if (originalSearch) params.set("spa_search", originalSearch);
+        if (window.location.hash) params.set("spa_hash", window.location.hash.slice(1));
+        window.location.replace(appRoot + "index.html?" + params.toString());
+
+        function deriveAppRoot(pathname) {
+          var appRoute = pathname.match(/^(.*?)(\/(?:connect|devices)(?:\/|$))/);
+          if (appRoute) return normalizeRoot(appRoute[1]);
+          var fileRoute = pathname.match(/^(.*\/)(?:404|index)\.html$/);
+          if (fileRoute) return fileRoute[1];
+          return "./";
+        }
+
+        function normalizeRoot(prefix) {
+          if (!prefix) return "/";
+          return prefix.charAt(prefix.length - 1) === "/" ? prefix : prefix + "/";
+        }
+
+        function toAppPath(pathname, appRoot) {
+          if (appRoot === "./" || appRoot === "/") return pathname || "/";
+          return pathname.indexOf(appRoot) === 0
+            ? "/" + pathname.slice(appRoot.length)
+            : pathname || "/";
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <a href="./">Open Mains Aegis Web</a>
+  </body>
+</html>

@@ -111,8 +111,18 @@ jobs:
           set -euo pipefail
           test -f web/dist/index.html
           test -f web/dist/404.html
+          test -f web/dist/manifest.webmanifest
+          test -f web/dist/sw.js
+          test -f web/dist/pwa-navigation-fallback.js
+          test -f web/dist/pwa/mains-aegis-icon-192.png
+          test -f web/dist/pwa/mains-aegis-icon-512.png
           test -d web/dist/assets
           grep -q 'spa_path' web/dist/404.html
+          grep -q 'manifest.webmanifest' web/dist/index.html
+          grep -q 'pwa-navigation-fallback.js' web/dist/sw.js
+          grep -q 'mains-aegis-icon-192.png' web/dist/manifest.webmanifest
+          grep -q 'firmware-catalog.json' web/dist/sw.js
+          grep -q 'esp-firmware.bin' web/dist/sw.js
           test -f docs-site/doc_build/index.html
           test -f docs-site/doc_build/404.html
           test -d docs-site/doc_build/static
