@@ -18,6 +18,7 @@ description: 项目手册中的系统设计入口。
 | [系统概览](/design/system-overview) | 连接器、总线、GPIO、启动流程 |
 | [电源与 BMS](/design/power-and-bms) | 电池、保护、充电、主输出、遥测 |
 | [前面板与固件](/design/front-panel-and-firmware) | 前面板网络、扩展器、`SELF CHECK`、Dashboard |
+| [音效对照与预览](/design/audio-cues) | 操作音、USB-C 插入音与状态/告警/错误音预览 |
 | [前面板 UI 交互与设计](/design/front-panel-ui-design) | 信息架构、交互路径、状态语义与设计约束 |
 | [前面板 UI 图集](/design/front-panel-ui-gallery) | 冻结渲染图、页面家族与全量画面索引 |
 
@@ -26,8 +27,9 @@ description: 项目手册中的系统设计入口。
 1. [系统概览](/design/system-overview)
 2. [电源与 BMS](/design/power-and-bms)
 3. [前面板与固件](/design/front-panel-and-firmware)
-4. [前面板 UI 交互与设计](/design/front-panel-ui-design)
-5. [前面板 UI 图集](/design/front-panel-ui-gallery)
+4. [音效对照与预览](/design/audio-cues)
+5. [前面板 UI 交互与设计](/design/front-panel-ui-design)
+6. [前面板 UI 图集](/design/front-panel-ui-gallery)
 
 ## 3. 对应事实源
 

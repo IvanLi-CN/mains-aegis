@@ -57,6 +57,51 @@ pub struct UsbPdPowerDemand {
     pub charging_enabled: bool,
 }
 
+pub const fn attach_insert_feedback_edge(
+    previous: UsbPdPortState,
+    current: UsbPdPortState,
+) -> bool {
+    current.attached && !previous.attached
+}
+
+pub const USB_C_INSERT_FEEDBACK_REARM_DETACHED_MS: u32 = 500;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UsbCInsertFeedbackTracker {
+    armed: bool,
+    detached_since_ms: Option<u32>,
+}
+
+impl UsbCInsertFeedbackTracker {
+    pub const fn new(initial: UsbPdPortState) -> Self {
+        Self {
+            armed: !initial.attached,
+            detached_since_ms: None,
+        }
+    }
+
+    pub fn update(&mut self, current: UsbPdPortState, now_ms: u32) -> bool {
+        if current.attached {
+            if self.detached_since_ms.is_some_and(|since| {
+                now_ms.wrapping_sub(since) >= USB_C_INSERT_FEEDBACK_REARM_DETACHED_MS
+            }) {
+                self.armed = true;
+            }
+            self.detached_since_ms = None;
+            if self.armed {
+                self.armed = false;
+                return true;
+            }
+            return false;
+        }
+
+        if self.detached_since_ms.is_none() {
+            self.detached_since_ms = Some(now_ms);
+        }
+        false
+    }
+}
+
 impl UsbPdPowerDemand {
     pub fn required_power_mw(self) -> u32 {
         let charge_power_mw = if self.charging_enabled {
@@ -71,3 +116,74 @@ impl UsbPdPowerDemand {
 
 #[path = "../../src/usb_pd/sink_policy.rs"]
 pub mod sink_policy;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attach_insert_feedback_only_fires_on_attach_rising_edge() {
+        let detached = UsbPdPortState {
+            attached: false,
+            ..UsbPdPortState::default()
+        };
+        let attached_no_contract = UsbPdPortState {
+            attached: true,
+            vbus_present: Some(true),
+            ..UsbPdPortState::default()
+        };
+        let attached_with_contract = UsbPdPortState {
+            attached: true,
+            contract: Some(ActiveContract {
+                kind: ContractKind::Pps,
+                object_position: 3,
+                voltage_mv: 9_000,
+                current_ma: 2_000,
+                source_max_current_ma: 3_000,
+                input_current_limit_ma: Some(2_000),
+                vindpm_mv: Some(8_800),
+            }),
+            ..attached_no_contract
+        };
+
+        assert!(attach_insert_feedback_edge(detached, attached_no_contract));
+        assert!(!attach_insert_feedback_edge(
+            attached_no_contract,
+            attached_with_contract
+        ));
+        assert!(!attach_insert_feedback_edge(
+            attached_with_contract,
+            attached_with_contract
+        ));
+        assert!(!attach_insert_feedback_edge(
+            attached_with_contract,
+            detached
+        ));
+        assert!(attach_insert_feedback_edge(
+            detached,
+            attached_with_contract
+        ));
+    }
+
+    #[test]
+    fn usb_c_insert_feedback_tracker_requires_stable_detach_before_rearming() {
+        let detached = UsbPdPortState {
+            attached: false,
+            ..UsbPdPortState::default()
+        };
+        let attached = UsbPdPortState {
+            attached: true,
+            vbus_present: Some(true),
+            ..UsbPdPortState::default()
+        };
+
+        let mut tracker = UsbCInsertFeedbackTracker::new(detached);
+        assert!(tracker.update(attached, 10));
+        assert!(!tracker.update(attached, 20));
+        assert!(!tracker.update(detached, 30));
+        assert!(!tracker.update(attached, 40));
+        assert!(!tracker.update(detached, 1_000));
+        assert!(tracker.update(attached, 1_000 + USB_C_INSERT_FEEDBACK_REARM_DETACHED_MS));
+        assert!(!tracker.update(attached, 1_600));
+    }
+}

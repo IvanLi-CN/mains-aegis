@@ -18,6 +18,8 @@ pub enum AudioCue {
     ModuleFault,
     BatteryProtection,
     VolumePreview,
+    InteractionTouch,
+    UsbCInsert,
 }
 
 pub const AUDIO_CUE_COUNT: usize = 15;
@@ -80,6 +82,9 @@ const WAV_IO_OVER_POWER: &[u8] = include_bytes!("../assets/audio/test-fw-cues/io
 const WAV_MODULE_FAULT: &[u8] = include_bytes!("../assets/audio/test-fw-cues/module_fault.wav");
 const WAV_BATTERY_PROTECTION: &[u8] =
     include_bytes!("../assets/audio/test-fw-cues/battery_protection.wav");
+const WAV_INTERACTION_TOUCH: &[u8] =
+    include_bytes!("../assets/audio/interaction-cues/interaction_touch.wav");
+const WAV_USB_C_INSERT: &[u8] = include_bytes!("../assets/audio/interaction-cues/usb_c_insert.wav");
 
 impl AudioCue {
     pub fn from_index(idx: usize) -> Option<Self> {
@@ -120,7 +125,9 @@ impl AudioCue {
             Self::IoOverPower => 12,
             Self::ModuleFault => 13,
             Self::BatteryProtection => 14,
-            Self::VolumePreview => panic!("preview cue does not have a runtime loop index"),
+            Self::VolumePreview | Self::InteractionTouch | Self::UsbCInsert => {
+                panic!("action cue does not have a runtime loop index")
+            }
         }
     }
 }
@@ -230,6 +237,11 @@ impl AudioManager {
     }
 
     pub fn request(&mut self, request: AudioRequest) {
+        if should_suppress_duplicate_request(request.cue) && self.has_queued_or_current(request.cue)
+        {
+            return;
+        }
+
         if let Some(current) = self.current {
             if request.priority > current.request.priority {
                 let preempted = current.request;
@@ -270,6 +282,14 @@ impl AudioManager {
         if let Some(interrupted) = interrupted {
             self.requeue_preempted_loop(interrupted);
         }
+    }
+
+    pub fn trigger_interaction_feedback(&mut self) {
+        self.request_cue(AudioCue::InteractionTouch);
+    }
+
+    pub fn trigger_usb_c_insert(&mut self) {
+        self.request_cue(AudioCue::UsbCInsert);
     }
 
     pub fn set_cue_active(&mut self, cue: AudioCue, active: bool, now: Instant) {
@@ -784,6 +804,56 @@ mod tests {
         assert_eq!(PREVIEW_TOTAL_SAMPLES, PREVIEW_PULSE_SAMPLES);
         assert!(samples.iter().all(|sample| *sample != 0));
     }
+
+    #[test]
+    fn interaction_cues_use_action_route() {
+        for cue in [AudioCue::InteractionTouch, AudioCue::UsbCInsert] {
+            let request = default_request(cue);
+            assert_eq!(request.route, AudioRoute::Action);
+            assert_eq!(request.priority, AudioPriority::Preview);
+            assert_eq!(playback_mode_for_cue(cue), CuePlaybackMode::OneShot);
+        }
+    }
+
+    #[test]
+    fn interaction_assets_decode_to_pcm() {
+        for cue in [AudioCue::InteractionTouch, AudioCue::UsbCInsert] {
+            assert!(!pcm_for_cue(cue).is_empty());
+        }
+    }
+
+    #[test]
+    fn interaction_feedback_uses_action_gain() {
+        let mut manager = AudioManager::new();
+        manager.set_action_volume_step(0);
+        manager.set_system_volume_step(6);
+        manager.trigger_interaction_feedback();
+
+        let status = manager.status();
+        assert_eq!(status.current, Some(AudioCue::InteractionTouch));
+        assert_eq!(status.current_route, Some(AudioRoute::Action));
+
+        let mut buf = [0u8; 32];
+        let filled = manager.fill(&mut buf);
+        assert_eq!(filled, buf.len());
+        let samples = decode_left_samples(&buf);
+        assert!(samples.iter().all(|sample| *sample == 0));
+    }
+
+    #[test]
+    fn usb_c_insert_feedback_ignores_duplicate_while_active() {
+        let mut manager = AudioManager::new();
+        manager.trigger_usb_c_insert();
+        assert_eq!(manager.status().current, Some(AudioCue::UsbCInsert));
+
+        manager.trigger_usb_c_insert();
+        manager.trigger_usb_c_insert();
+
+        let status = manager.status();
+        assert_eq!(status.current, Some(AudioCue::UsbCInsert));
+        assert_eq!(status.queued, 0);
+        assert_eq!(status.dropped, 0);
+    }
 }
 
 pub const fn default_request(cue: AudioCue) -> AudioRequest {
@@ -821,13 +891,17 @@ pub const fn priority_for_cue(cue: AudioCue) -> AudioPriority {
         | AudioCue::IoOverPower
         | AudioCue::ModuleFault
         | AudioCue::BatteryProtection => AudioPriority::Error,
-        AudioCue::VolumePreview => AudioPriority::Preview,
+        AudioCue::VolumePreview | AudioCue::InteractionTouch | AudioCue::UsbCInsert => {
+            AudioPriority::Preview
+        }
     }
 }
 
 pub const fn route_for_cue(cue: AudioCue) -> AudioRoute {
     match cue {
-        AudioCue::VolumePreview => AudioRoute::Action,
+        AudioCue::VolumePreview | AudioCue::InteractionTouch | AudioCue::UsbCInsert => {
+            AudioRoute::Action
+        }
         _ => AudioRoute::System,
     }
 }
@@ -863,8 +937,14 @@ pub const fn playback_mode_for_cue(cue: AudioCue) -> CuePlaybackMode {
         | AudioCue::IoOverPower
         | AudioCue::ModuleFault
         | AudioCue::BatteryProtection => CuePlaybackMode::ContinuousLoop,
-        AudioCue::VolumePreview => CuePlaybackMode::OneShot,
+        AudioCue::VolumePreview | AudioCue::InteractionTouch | AudioCue::UsbCInsert => {
+            CuePlaybackMode::OneShot
+        }
     }
+}
+
+const fn should_suppress_duplicate_request(cue: AudioCue) -> bool {
+    matches!(cue, AudioCue::UsbCInsert)
 }
 
 fn pcm_for_cue(cue: AudioCue) -> &'static [u8] {
@@ -884,6 +964,8 @@ fn pcm_for_cue(cue: AudioCue) -> &'static [u8] {
         AudioCue::IoOverPower => WAV_IO_OVER_POWER,
         AudioCue::ModuleFault => WAV_MODULE_FAULT,
         AudioCue::BatteryProtection => WAV_BATTERY_PROTECTION,
+        AudioCue::InteractionTouch => WAV_INTERACTION_TOUCH,
+        AudioCue::UsbCInsert => WAV_USB_C_INSERT,
         AudioCue::VolumePreview => return &[],
     };
     parse_wav_pcm16le_mono(wav)

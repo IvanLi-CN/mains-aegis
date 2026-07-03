@@ -1289,6 +1289,28 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         }};
     }
 
+    macro_rules! trigger_action_feedback {
+        ($trigger:expr, $disable_reason:expr, $push_failed_msg:literal, $available_failed_msg:literal, $restart_failed_msg:literal) => {{
+            $trigger;
+            if audio_enabled {
+                audio_manager.arm_transition_bridge();
+                match reprime_runtime_audio_dma!(
+                    $push_failed_msg,
+                    $available_failed_msg,
+                    $restart_failed_msg
+                ) {
+                    RuntimeAudioReprimeResult::Ready { .. } => {
+                        audio_recovery.clear();
+                    }
+                    RuntimeAudioReprimeResult::Late => {}
+                    RuntimeAudioReprimeResult::Fatal => {
+                        disable_runtime_audio!($disable_reason);
+                    }
+                }
+            }
+        }};
+    }
+
     if audio_enabled {
         defmt::info!("audio: trigger boot cue");
         esp_println::println!("audio: trigger boot cue");
@@ -1611,6 +1633,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let mut last_irq_log_at: Option<Instant> = None;
     let mut last_fan_tach_log_at: Option<Instant> = None;
     let mut last_audio_diag_at: Option<Instant> = None;
+    let mut usb_c_insert_feedback_tracker =
+        esp_firmware::usb_pd::UsbCInsertFeedbackTracker::new(initial_pd_state);
     #[cfg(feature = "web_serial")]
     let mut web_serial_log_state = UsbCdcLogState::new();
     #[cfg(feature = "web_serial")]
@@ -1664,12 +1688,15 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 );
             }
             let mut irq_events = irq_tracker.take_delta();
+            let usb_pd_now_ms = pd_started_at.elapsed().as_millis() as u32;
             let mut pd_state = usb_pd.tick(
                 power.usb_pd_demand(),
                 irq_events.i2c2_int != 0,
-                pd_started_at.elapsed().as_millis() as u32,
+                usb_pd_now_ms,
             );
             power.update_usb_pd_state(pd_state);
+            let mut usb_c_insert_feedback =
+                usb_c_insert_feedback_tracker.update(pd_state, usb_pd_now_ms);
 
             if pd_state.attached && pd_state.contract.is_none() {
                 let focus_start = Instant::now();
@@ -1693,12 +1720,16 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     irq_events.therm_kill_n =
                         irq_events.therm_kill_n.wrapping_add(extra_irq.therm_kill_n);
 
+                    let usb_pd_now_ms = pd_started_at.elapsed().as_millis() as u32;
                     pd_state = usb_pd.tick(
                         power.usb_pd_demand(),
                         extra_irq.i2c2_int != 0,
-                        pd_started_at.elapsed().as_millis() as u32,
+                        usb_pd_now_ms,
                     );
                     power.update_usb_pd_state(pd_state);
+                    if usb_c_insert_feedback_tracker.update(pd_state, usb_pd_now_ms) {
+                        usb_c_insert_feedback = true;
+                    }
                     #[cfg(feature = "web_serial")]
                     {
                         let web_serial_snapshot = power.ui_snapshot();
@@ -1715,6 +1746,15 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     }
                     service_runtime_audio!(power);
                 }
+            }
+            if usb_c_insert_feedback {
+                trigger_action_feedback!(
+                    audio_manager.trigger_usb_c_insert(),
+                    "usb_c_insert_feedback_reprime_failed",
+                    "audio: usb-c insert feedback push failed; disabling runtime audio",
+                    "audio: usb-c insert feedback available failed err={=?}; disabling runtime audio",
+                    "audio: usb-c insert feedback restart failed err={=?}; disabling runtime audio"
+                );
             }
 
             let fan_telemetry_due = power.tick(&irq_events);
@@ -1897,6 +1937,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 self_check_blocked,
             ));
             if let Some(action) = front_panel.tick() {
+                let trigger_interaction_feedback =
+                    front_panel::ui_action_triggers_interaction_feedback(&action);
                 match action {
                     front_panel::UiAction::RequestBmsRecovery(action) => {
                         power.request_bms_recovery_action(action);
@@ -1940,6 +1982,18 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                         front_panel.update_bms_activation_state(power.bms_activation_state());
                     }
                 }
+                if trigger_interaction_feedback {
+                    front_panel.note_interaction_feedback();
+                }
+            }
+            if front_panel.take_interaction_feedback() {
+                trigger_action_feedback!(
+                    audio_manager.trigger_interaction_feedback(),
+                    "interaction_feedback_reprime_failed",
+                    "audio: interaction feedback push failed; disabling runtime audio",
+                    "audio: interaction feedback available failed err={=?}; disabling runtime audio",
+                    "audio: interaction feedback restart failed err={=?}; disabling runtime audio"
+                );
             }
             if front_panel_scene::self_check_can_enter_dashboard(&ui_snapshot) {
                 last_dashboard_block_reason = None;

@@ -1,0 +1,170 @@
+---
+title: 音效对照与预览
+description: 交互操作音与系统状态、告警、错误音对照。
+---
+
+import { InteractionAudioCueTable, SystemAudioCueTable } from "../../src/components/AudioCuePlayer";
+
+# 音效对照与预览
+
+本页集中预览当前固件使用的交互操作音，以及既有 `speaker_chime_v1` 状态、告警、错误音。所有预览操作都是独立按钮，不使用浏览器原生音频控件。
+
+## 交互操作音
+
+采用 `B. Warm Tap`。有效触摸 / 有效按键使用同一枚 touch 音；USB-C 插入使用明显不同的插入音。
+
+<InteractionAudioCueTable
+  rows={[
+    {
+      id: "interaction_touch",
+      purpose: "有效触摸 / 有效按键",
+      route: "ACTION",
+      semantics:
+        "输入被成功识别，且触发页面、路由、选择、偏好、弹层状态变化，或产生业务 UiAction；空白触摸、未定义 target、重复按键且状态未变化不发声。",
+      src: "audio-cues/interaction-feedback/set_b_touch.wav",
+    },
+    {
+      id: "usb_c_insert",
+      purpose: "USB-C 插入",
+      route: "ACTION",
+      semantics:
+        "USB-PD attach 从未连接切换为已连接时发声；PD 协商刷新、contract 更新或保持态不重复发声。",
+      src: "audio-cues/interaction-feedback/set_b_usb_c_insert.wav",
+    },
+  ]}
+/>
+
+## 音量调节试听音
+
+`Dashboard/Menu/AUDIO` 中调整 `ACTION` 或 `SYSTEM` 音量时会立即播放 `volume_preview`。它用于确认当前音量档位，不属于业务提示音或告警音；文档站提供代表性 WAV 预览用于听感对照。
+
+- 触发：`ACTION` / `SYSTEM` 音量档位发生变化。
+- 路由：调整 `ACTION` 音量时走 `ACTION` route；调整 `SYSTEM` 音量时走 `SYSTEM` route。
+- 资产：实际固件按当前 route 与音量档位内部合成短 preview tone；下方 WAV 由同一组固件参数生成。
+
+<InteractionAudioCueTable
+  rows={[
+    {
+      id: "volume_preview",
+      purpose: "音量调节试听",
+      route: "ACTION / SYSTEM",
+      semantics:
+        "AUDIO 菜单中 ACTION 或 SYSTEM 音量档位变化后立即播放；试听使用对应 route 的当前音量增益。",
+      src: "audio-cues/interaction-feedback/volume_preview.wav",
+    },
+  ]}
+/>
+
+## 状态 / 告警 / 错误音
+
+既有 `speaker_chime_v1` 运行时提示音保持原语义：状态音单次播放，告警音按 `2000ms` 间隔循环，错误音连续循环。文档站预览中，告警音按固件的 `2000ms` 起播间隔播放 5 次，错误音按固件连续循环语义播放 5 次；播放按钮会显示当前播放次数。
+
+<SystemAudioCueTable
+  rows={[
+    {
+      id: "boot_startup",
+      title: "开机音",
+      category: "status",
+      semantics: "系统上电启动成功后触发",
+      src: "audio-cues/system/boot_startup.wav",
+    },
+    {
+      id: "mains_present_dc",
+      title: "市电出现音（仅 DC 桶）",
+      category: "status",
+      semantics: "检测到 DC 桶输入恢复时触发",
+      src: "audio-cues/system/mains_present_dc.wav",
+    },
+    {
+      id: "charge_started",
+      title: "充电开始音",
+      category: "status",
+      semantics: "充电状态从未充电切换为充电中时触发",
+      src: "audio-cues/system/charge_started.wav",
+    },
+    {
+      id: "charge_completed",
+      title: "充电完成音",
+      category: "status",
+      semantics: "充电状态进入完成态时触发",
+      src: "audio-cues/system/charge_completed.wav",
+    },
+    {
+      id: "shutdown_mode_entered",
+      title: "进入关闭模式音",
+      category: "status",
+      semantics: "系统进入关闭模式流程时触发；当前主固件保持 dormant",
+      src: "audio-cues/system/shutdown_mode_entered.wav",
+    },
+    {
+      id: "mains_absent_dc",
+      title: "市电不存在告警（仅 DC 桶）",
+      category: "warning",
+      semantics: "DC 桶输入丢失时触发间隔循环",
+      src: "audio-cues/system/mains_absent_dc.wav",
+    },
+    {
+      id: "high_stress",
+      title: "压力大告警",
+      category: "warning",
+      semantics: "任一模块温度 / 负载不佳但未触发保护时触发间隔循环",
+      src: "audio-cues/system/high_stress.wav",
+    },
+    {
+      id: "battery_low_no_mains",
+      title: "电池电量低告警（无市电）",
+      category: "warning",
+      semantics: "电池低电且市电不存在时触发间隔循环",
+      src: "audio-cues/system/battery_low_no_mains.wav",
+    },
+    {
+      id: "battery_low_with_mains",
+      title: "电池电量低告警（有市电）",
+      category: "warning",
+      semantics: "电池低电且检测到市电时触发间隔循环",
+      src: "audio-cues/system/battery_low_with_mains.wav",
+    },
+    {
+      id: "shutdown_protection",
+      title: "停机保护错误",
+      category: "error",
+      semantics: "任一模块触发保护动作导致停机时连续循环",
+      src: "audio-cues/system/shutdown_protection.wav",
+    },
+    {
+      id: "io_over_voltage",
+      title: "输入输出过压错误",
+      category: "error",
+      semantics: "输入或输出检测到过压时连续循环",
+      src: "audio-cues/system/io_over_voltage.wav",
+    },
+    {
+      id: "io_over_current",
+      title: "输入输出过流错误",
+      category: "error",
+      semantics: "输入或输出检测到过流时连续循环",
+      src: "audio-cues/system/io_over_current.wav",
+    },
+    {
+      id: "io_over_power",
+      title: "输入输出过功率错误",
+      category: "error",
+      semantics: "输入或输出检测到过功率时连续循环；当前主固件保持 dormant",
+      src: "audio-cues/system/io_over_power.wav",
+    },
+    {
+      id: "module_fault",
+      title: "模块故障错误",
+      category: "error",
+      semantics: "部分硬件通信失败期间连续循环",
+      src: "audio-cues/system/module_fault.wav",
+    },
+    {
+      id: "battery_protection",
+      title: "电池保护错误",
+      category: "error",
+      semantics: "BMS 触发保护时连续循环",
+      src: "audio-cues/system/battery_protection.wav",
+    },
+  ]}
+/>

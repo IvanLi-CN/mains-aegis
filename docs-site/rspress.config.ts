@@ -27,6 +27,7 @@ const handbookSidebar = [
       { text: "系统概览", link: "/design/system-overview" },
       { text: "电源与 BMS", link: "/design/power-and-bms" },
       { text: "前面板与固件", link: "/design/front-panel-and-firmware" },
+      { text: "音效对照与预览", link: "/design/audio-cues" },
       { text: "前面板 UI 交互与设计", link: "/design/front-panel-ui-design" },
       { text: "前面板 UI 图集", link: "/design/front-panel-ui-gallery" },
     ],

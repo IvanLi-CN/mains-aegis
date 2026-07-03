@@ -4,7 +4,7 @@
 
 - Status: 已完成
 - Created: 2026-03-12
-- Last: 2026-06-08
+- Last: 2026-07-01
 
 ## 背景 / 问题陈述
 
@@ -77,6 +77,9 @@
 - Dormant cue：
   - `shutdown_mode_entered`：本轮不接入，等待真实 shutdown flow。
   - `io_over_power`：本轮不接入，等待独立 over-power 状态源或阈值策略。
+- 交互操作音：
+  - `interaction_touch`：有效触摸 / 有效按键触发，使用 `ACTION` route 的 one-shot cue。有效操作定义为输入边沿被成功识别，且导致页面、路由、选择、偏好、弹层状态变化，或产生对应业务 `UiAction`；空白命中、未定义 target、状态未变化的重复操作保持静默。
+  - `usb_c_insert`：USB-PD `attached` 从 false/unknown 进入 true 的物理插入边沿触发，使用 `ACTION` route 的 one-shot cue；PD 协商刷新、contract 更新、source caps 重发或 attach 保持态不得重复播放。
 
 ## 验收标准（Acceptance Criteria）
 
@@ -98,6 +101,9 @@
   - `error` -> `continuous_loop`
   - 优先级：`Error > Warning > Status > Boot`
   - 同优先级 `one_shot` 保持 FIFO。
+- `interaction_touch` 与 `usb_c_insert` 固定为 `ACTION` route one-shot cue，不计入 15 组 `SYSTEM` runtime loop index；二者可使用独立于系统告警音的 ACTION 音量偏好。
+- 有效触摸 / 有效按键只在实际 UI/业务动作发生时播放；同坐标空白触摸、未定义菜单项、动画期间被忽略的触摸、按键重复但目标状态不变时不得播放。
+- USB-C 插入音只在 attach 上升沿播放一次；同一次连接中的 PD negotiation focus、contract/PPS 刷新、source caps 重发和状态保持刷新不得再次触发。
 - 运行时场景正确触发/停播：市电恢复/丢失、充电开始/完成、电池低电（区分有无市电）、高压力进入/退出、模块通信故障进入/恢复、保护/过压/过流进入/清除。
 - `BQ25792 TS_WARM` 期间不得触发 `high_stress` 提示音；若同时存在 `TS_COOL`、`TREG` 或 TMP112 `TLOW`，仍按原 warning/error 口径播报更高等级热事件。
 - 当 `battery_protection` 与低电条件同时成立时，只允许播放 `battery_protection`；`BatteryLowNoMains` / `BatteryLowWithMains` 必须被全局压制，直到保护解除后再按当前 `RCA + mains_present` 状态恢复。
@@ -127,6 +133,10 @@
 - 运行期若 DMA refill 持续报错，主固件会关闭音频调度并清空队列，避免 cue 在无消费者时永久卡住。
 - 共享播放核心已落到 `firmware/src/audio.rs`，统一 15 组 cue、优先级、WAV 解析/重采样、DMA `fill()` 与播放状态接口。
 - `Dashboard/Menu/AUDIO` 运行态已接上前面板导航状态机；`UP/DOWN` 切换 `ACTION/SYSTEM` 分组，`LEFT/RIGHT` 调整当前分组音量，并向主循环抛出独立的 beeper preview action。AUDIO 页通过左上 `BACK` 按钮返回 Menu，触摸 `ACTION/SYSTEM` 行切换分组，触摸音量滑条手指热区会按最近档位吸附；按下可就近设置，拖拽可连续切换档位，且只在档位变化或首次按下时触发 beeper preview。
+- `B. Warm Tap` 已冻结为交互操作音资产：有效触摸 / 有效按键使用 `interaction_touch.wav`，USB-C 插入使用 `usb_c_insert.wav`；文档站点通过 `docs/audio-cues.md` 集中预览本次 2 个交互音与既有 15 个系统音。
+- `AudioManager` 已新增 `InteractionTouch` 与 `UsbCInsert`，二者走 `ACTION` route、one-shot playback，并使用独立固件资产 `firmware/assets/audio/interaction-cues/*.wav`。
+- 前面板输入处理通过 `pending_interaction_feedback` 记录实际状态变化或业务 `UiAction`，主循环消费后请求 `interaction_touch`；音量试听 `BeeperPreview` 保持专用 preview cue，不叠加 touch 音。
+- USB-PD 主循环以 `UsbPdPortState.attached` 的 false -> true 边沿触发 `usb_c_insert`，并在 negotiation focus 内同步更新边沿状态，避免 attach 保持态和协议刷新误响。
 - `Menu` 页触摸命中与按键导航语义一致：左右箭头切换当前菜单项，`DASHBOARD` 图标返回 Dashboard，`AUDIO` 图标进入音量设置，占位图标不触发业务动作。
 - `AudioManager` 现在按 `ACTION / SYSTEM` route 持有独立 gain LUT（共享刻度 `0..6`）；用户调节音量时立即播放内部 `volume_preview` 双脉冲试听音，不再借用 `charge_started` 等业务/告警 cue。
 - Warning cue 的 loop state 只在状态边沿变化时重置，steady-state 轮询期间继续保持 `interval_loop(2000ms)` 节流。
@@ -166,11 +176,19 @@
   - `cargo build --manifest-path tools/front-panel-preview/Cargo.toml`
   - `cd firmware && cargo +esp build --release --bin esp-firmware`
   - `cd firmware && cargo +esp build --release --bin test-fw --no-default-features --features test-fw-audio-playback`
+- 本轮交互操作音接入需通过：
+  - `python3 tools/audio/gen_interaction_feedback_previews.py`
+  - `python3 -m py_compile tools/audio/gen_interaction_feedback_previews.py`
+  - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml audio`
+  - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml front_panel`
+  - `cd firmware && cargo +esp build --release --bin esp-firmware`
+  - devd-backed flash 到 `/dev/cu.usbmodem212201` 并 monitor 至少 120 秒
 
 ## 风险 / 假设
 
 - 当前 worktree 初始化前 `ina3221-async` 与 `tps55288` submodule 为空目录；本轮实现前需要补齐子模块内容后再执行构建验证。
 - 运行时资产继续复用 `firmware/assets/audio/test-fw-cues/*.wav`，不直接从 `docs/audio-cues-preview/**` 读取。
+- 交互操作音固件资产由 `tools/audio/gen_interaction_feedback_previews.py` 生成到 `firmware/assets/audio/interaction-cues/`；docs preview 资产仍保留在 `docs/audio-cues-preview/interaction-feedback/` 便于浏览器试听。
 - 当前 `esp-hal` I2S circular DMA 生命周期仍未提供无缝热恢复路径；本轮修复继续采用“保留现有 cue 状态 + transport 级 re-prime + 有界止损”策略，而不是重做整套音频框架。
 - 当前主固件没有真实 shutdown flow，且没有独立 over-power 状态源，因此对应 cue 必须保持 dormant。
 - `ACTION / SYSTEM` 音量默认 `L4/L4`，调整后立即作用于试听与对应 route，并通过 #6xb4z 定义的 EEPROM beeper prefs record 持久化。
@@ -211,3 +229,4 @@
 - 2026-04-04: hotfix，针对 idle 主板周期性“滴”声回归，把运行期 `DmaError::Late` 从每轮噪声日志改为 burst 级 `detected / recovered / disabled` 状态机；首次 `Late` 立即 re-prime transport，恢复成功后清 burst，5 秒窗口内连续 3 次 recovery attempt 仍失败则静默降级，避免在无业务 cue 边沿时由 DMA underrun 继续制造杂音。
 - 2026-04-05: hotfix，`BQ25792 TS_WARM` 从 `high_stress` 播报条件中移除，避免温区预警在正常充电 warm 档位下每 2 秒重复提示；`TS_WARM` 改由界面状态与风扇全速 override 承载。
 - 2026-06-08: 将 `Dashboard/Menu/AUDIO` 运行态正式接入 `AudioManager`，新增 `ACTION / SYSTEM` 分组 gain LUT 与独立 `volume_preview` 试听音；主固件 release 构建、host-side audio tests 与 `front-panel-preview` 已通过，`test-fw` 默认特性构建仍保留既有 `esp_rtos_*` 链接缺口。
+- 2026-07-01: 冻结 `B. Warm Tap` 为有效触摸/按键与 USB-C 插入操作音；新增 ACTION route one-shot cue、文档站点对照页，并把前面板有效操作与 USB-PD attach 上升沿接入主固件播放路径。

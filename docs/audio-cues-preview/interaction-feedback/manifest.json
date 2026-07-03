@@ -1,0 +1,35 @@
+{
+  "title": "Selected interaction feedback tones",
+  "selected_set_id": "set_b_warm_tap",
+  "sample_rate_hz": 8000,
+  "firmware_sample_rate_hz": 44100,
+  "format": "WAV PCM16LE mono",
+  "sets": [
+    {
+      "id": "set_b_warm_tap",
+      "title": "B. Warm Tap",
+      "character": "Softer rounded touch with a warmer mid tone. USB-C is a confident low-to-high connect chime.",
+      "recommendation": "Best if the enclosure/speaker makes high tones too sharp.",
+      "touch": {
+        "id": "set_b_touch",
+        "title": "Touch / Button",
+        "intent": "valid touch, valid key",
+        "waveform": "sine",
+        "volume": 0.3,
+        "duration_ms": 62,
+        "wav": "./audio/set_b_touch.wav",
+        "mid": "./audio/set_b_touch.mid"
+      },
+      "usb_c": {
+        "id": "set_b_usb_c_insert",
+        "title": "USB-C Insert",
+        "intent": "USB-C inserted",
+        "waveform": "sine",
+        "volume": 0.46,
+        "duration_ms": 254,
+        "wav": "./audio/set_b_usb_c_insert.wav",
+        "mid": "./audio/set_b_usb_c_insert.mid"
+      }
+    }
+  ]
+}

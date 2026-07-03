@@ -1,0 +1,23 @@
+{
+  "tempo_bpm": 240,
+  "ppqn": 480,
+  "audio": {
+    "sample_rate_hz": 44100,
+    "waveform": "sine",
+    "volume": 0.3,
+    "fade_ms": 6
+  },
+  "events": [
+    {
+      "freq_hz": 1120,
+      "ms": 30
+    },
+    {
+      "rest_ms": 10
+    },
+    {
+      "freq_hz": 1480,
+      "ms": 22
+    }
+  ]
+}

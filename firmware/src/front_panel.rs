@@ -117,6 +117,10 @@ pub enum UiAction {
     ClearBmsActivationResult,
 }
 
+pub const fn ui_action_triggers_interaction_feedback(action: &UiAction) -> bool {
+    !matches!(action, UiAction::BeeperPreview { .. })
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TestInputEvent {
@@ -409,6 +413,7 @@ where
     bms_activation_state: BmsActivationState,
     self_check_overlay: SelfCheckOverlay,
     dashboard_touch_gesture_consumed: bool,
+    pending_interaction_feedback: bool,
     touch_irq_stuck_hint_logged: bool,
     frame_no: u32,
     display_power_epoch: Instant,
@@ -513,6 +518,7 @@ where
             bms_activation_state: BmsActivationState::Idle,
             self_check_overlay: SelfCheckOverlay::None,
             dashboard_touch_gesture_consumed: false,
+            pending_interaction_feedback: false,
             touch_irq_stuck_hint_logged: false,
             frame_no: 0,
             display_power_epoch: Instant::now(),
@@ -1123,6 +1129,7 @@ where
         if self.dashboard_page == page {
             return;
         }
+        self.note_interaction_feedback();
         let previous = self.dashboard_page;
         let target_offset_y = dashboard_menu_target_offset_y(page);
         self.dashboard_page = page;
@@ -1153,6 +1160,7 @@ where
         if self.dashboard_route == route {
             return;
         }
+        self.note_interaction_feedback();
         let previous = self.dashboard_route;
         self.dashboard_route = route;
         self.needs_redraw = true;
@@ -1174,6 +1182,7 @@ where
         if self.dashboard_home_focus == focus {
             return;
         }
+        self.note_interaction_feedback();
         let previous = self.dashboard_home_focus;
         self.dashboard_home_focus = focus;
         self.needs_redraw = true;
@@ -1193,6 +1202,7 @@ where
         if self.dashboard_menu_selected == item {
             return;
         }
+        self.note_interaction_feedback();
         let previous = self.dashboard_menu_selected;
         self.dashboard_menu_selected = item;
         self.needs_redraw = true;
@@ -1259,6 +1269,16 @@ where
         }
         self.beeper_prefs = prefs;
         self.needs_redraw = true;
+    }
+
+    pub fn note_interaction_feedback(&mut self) {
+        self.pending_interaction_feedback = true;
+    }
+
+    pub fn take_interaction_feedback(&mut self) -> bool {
+        let pending = self.pending_interaction_feedback;
+        self.pending_interaction_feedback = false;
+        pending
     }
 
     fn update_dashboard_menu_animation(&mut self) -> bool {
@@ -1449,6 +1469,7 @@ where
                     SelfCheckOverlay::BmsActivateResult(..)
                 );
                 self.self_check_overlay = SelfCheckOverlay::None;
+                self.note_interaction_feedback();
                 self.needs_redraw = true;
                 defmt::info!("ui: self-check dialog close via key");
                 if was_result {
@@ -1467,12 +1488,14 @@ where
                         front_panel_scene::bq40_recovery_overlay(&self.self_check_snapshot)
                     {
                         self.self_check_overlay = recovery_overlay;
+                        self.note_interaction_feedback();
                         self.needs_redraw = true;
                         defmt::info!("ui: bms recovery dialog open via key");
                     } else if let Some(result_overlay) =
                         front_panel_scene::bq40_result_overlay(&self.self_check_snapshot)
                     {
                         self.self_check_overlay = result_overlay;
+                        self.note_interaction_feedback();
                         self.needs_redraw = true;
                         defmt::info!("ui: bms result dialog reopen via key");
                     }
@@ -1482,6 +1505,7 @@ where
             | SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
                 if right_edge {
                     self.self_check_overlay = SelfCheckOverlay::None;
+                    self.note_interaction_feedback();
                     self.needs_redraw = true;
                     defmt::info!("ui: bms recovery dialog cancel via key");
                 } else if left_edge || center_edge {
@@ -1498,6 +1522,7 @@ where
                             SelfCheckOverlay::BmsDischargeAuthorizeProgress
                         }
                     };
+                    self.note_interaction_feedback();
                     self.needs_redraw = true;
                     defmt::info!(
                         "ui: bms recovery request via key action={}",
@@ -1954,6 +1979,7 @@ where
                 SelfCheckOverlay::BmsActivateResult(..)
             );
             self.self_check_overlay = SelfCheckOverlay::None;
+            self.note_interaction_feedback();
             self.needs_redraw = true;
             defmt::info!("ui: self-check dialog close via touch");
             esp_println::println!("ui: self-check dialog close via touch");
@@ -1978,6 +2004,7 @@ where
         match front_panel_scene::self_check_hit_test(x, y, self.self_check_overlay) {
             Some(SelfCheckTouchTarget::ActivateCancel) => {
                 self.self_check_overlay = SelfCheckOverlay::None;
+                self.note_interaction_feedback();
                 self.needs_redraw = true;
                 esp_println::println!("ui: touch target=activate_cancel action=close_dialog");
                 None
@@ -1996,6 +2023,7 @@ where
                         SelfCheckOverlay::BmsDischargeAuthorizeProgress
                     }
                 };
+                self.note_interaction_feedback();
                 self.needs_redraw = true;
                 esp_println::println!(
                     "ui: touch target=activate_confirm action={}",
@@ -2047,6 +2075,7 @@ where
         };
         if let Some(recovery_overlay) = recovery_overlay {
             self.self_check_overlay = recovery_overlay;
+            self.note_interaction_feedback();
             self.needs_redraw = true;
             defmt::info!("ui: bms recovery dialog open via touch");
             esp_println::println!(
@@ -2061,6 +2090,7 @@ where
                 front_panel_scene::bq40_result_overlay(&self.self_check_snapshot)
             {
                 self.self_check_overlay = result_overlay;
+                self.note_interaction_feedback();
                 self.needs_redraw = true;
                 defmt::info!("ui: bms result dialog reopen via touch");
                 esp_println::println!(
@@ -2075,6 +2105,7 @@ where
             front_panel_scene::self_check_hardware_issue_overlay(&self.self_check_snapshot, target)
         {
             self.self_check_overlay = issue_overlay;
+            self.note_interaction_feedback();
             self.needs_redraw = true;
             defmt::info!(
                 "ui: self-check hardware issue open target={}",
@@ -2213,6 +2244,7 @@ where
                     });
                 }
                 if prefs_changed {
+                    self.note_interaction_feedback();
                     return Some(UiAction::BeeperPrefsChanged {
                         prefs: self.beeper_prefs,
                     });
@@ -2532,6 +2564,9 @@ where
             });
         }
         if prefs_changed {
+            if preview_target.is_none() {
+                self.note_interaction_feedback();
+            }
             return Some(UiAction::BeeperPrefsChanged {
                 prefs: self.beeper_prefs,
             });
