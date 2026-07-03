@@ -18,6 +18,11 @@ pub fn dashboard_enter_requires_variant_switch(variant: UiVariant) -> bool {
     variant != DASHBOARD_VARIANT
 }
 
+pub fn dashboard_allowed(snapshot: &SelfCheckUiSnapshot) -> bool {
+    !matches!(snapshot.mode, front_panel_scene::UpsMode::Blocked)
+        && front_panel_scene::self_check_can_enter_dashboard(snapshot)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VerticalGestureDirection {
     Up,
@@ -51,6 +56,24 @@ pub const fn dashboard_page_for_vertical_menu_gesture(
 mod tests {
     use super::*;
     use crate::net_types::WifiSnapshot;
+    use crate::output_state::{EnabledOutputs, OutputSelector};
+
+    fn clear_self_check_snapshot(mode: front_panel_scene::UpsMode) -> SelfCheckUiSnapshot {
+        let mut snapshot = SelfCheckUiSnapshot::pending(mode);
+        snapshot.gc9307 = front_panel_scene::SelfCheckCommState::Ok;
+        snapshot.tca6408a = front_panel_scene::SelfCheckCommState::Ok;
+        snapshot.fusb302 = front_panel_scene::SelfCheckCommState::Ok;
+        snapshot.ina3221 = front_panel_scene::SelfCheckCommState::Ok;
+        snapshot.bq40z50 = front_panel_scene::SelfCheckCommState::Ok;
+        snapshot.bq25792 = front_panel_scene::SelfCheckCommState::Ok;
+        snapshot.tps_a = front_panel_scene::SelfCheckCommState::Ok;
+        snapshot.tps_b = front_panel_scene::SelfCheckCommState::Ok;
+        snapshot.tmp_a = front_panel_scene::SelfCheckCommState::Ok;
+        snapshot.tmp_b = front_panel_scene::SelfCheckCommState::Ok;
+        snapshot.requested_outputs = EnabledOutputs::None;
+        snapshot.active_outputs = EnabledOutputs::None;
+        snapshot
+    }
 
     #[test]
     fn only_animated_thermal_detail_uses_frame_animation() {
@@ -111,6 +134,32 @@ mod tests {
     fn enter_dashboard_only_transitions_from_self_check_variant() {
         assert!(dashboard_enter_requires_variant_switch(SELF_CHECK_VARIANT));
         assert!(!dashboard_enter_requires_variant_switch(DASHBOARD_VARIANT));
+    }
+
+    #[test]
+    fn dashboard_allowed_accepts_clear_non_blocked_snapshot() {
+        let snapshot = clear_self_check_snapshot(front_panel_scene::UpsMode::Standby);
+
+        assert!(dashboard_allowed(&snapshot));
+    }
+
+    #[test]
+    fn dashboard_allowed_rejects_blocked_mode() {
+        let snapshot = clear_self_check_snapshot(front_panel_scene::UpsMode::Blocked);
+
+        assert!(!dashboard_allowed(&snapshot));
+    }
+
+    #[test]
+    fn dashboard_allowed_rejects_requested_output_without_active_tps() {
+        let mut snapshot = clear_self_check_snapshot(front_panel_scene::UpsMode::Standby);
+        snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        snapshot.active_outputs = EnabledOutputs::None;
+
+        assert!(!dashboard_allowed(&snapshot));
+
+        snapshot.active_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        assert!(dashboard_allowed(&snapshot));
     }
 
     #[test]

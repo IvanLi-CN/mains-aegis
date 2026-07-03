@@ -85,7 +85,8 @@
 对外运行模式必须以后两类输出状态为准。若 `requested_outputs != none`，但本轮请求的任一路
 TPS 输出没有进入 `active_outputs`，固件不得把 owner-facing `mode` 发布为
 `standby`、`supplement` 或 `backup`，只能发布 `blocked`。`blocked` 表示内部候选模式被输出准入阻断，
-不是新的底层电源阶段；它固定为 non-charging 状态。
+不是新的底层电源阶段；它固定为 non-charging 状态。前面板不得把 `blocked` 渲染成 Dashboard，
+必须保持或退回自检/阻断界面。
 
 ### 门控原因
 

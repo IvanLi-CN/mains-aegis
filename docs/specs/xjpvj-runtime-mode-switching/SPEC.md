@@ -102,6 +102,7 @@
   - owner-facing 阻断态，不是新的内部供电阶段。
   - 当自动状态机候选结果为 `STANDBY / ASSIST / BACKUP`，但本轮请求的 TPS 输出没有全部进入
     `active_outputs` 时，对外必须发布 `mode=blocked`。
+  - 前面板不得把 `mode=blocked` 渲染为 Dashboard；若当前已在 Dashboard，必须退回自检/阻断界面。
   - 固定为 non-charging mode。
 
 ## 自动运行态切换规则
@@ -174,7 +175,8 @@
 - 若 `requested_outputs != none`，则 `requested_outputs` 中每一路都必须同时存在于
   `active_outputs`。
 - 若候选 mode 为 `STANDBY / ASSIST / BACKUP`，但上述条件不成立：
-  - API / diag / front-panel 必须发布 `mode=blocked`
+  - API / diag 必须发布 `mode=blocked`
+  - front-panel 必须保持或退回自检/阻断界面，不得渲染 Dashboard
   - 不得发布 `mode=backup`、`mode=supplement` 或 `mode=standby`
   - charger policy 必须按 non-charging mode 处理
 - 若 `requested_outputs == none`，发布门槛不阻断候选 mode；该场景表示当前没有要求 TPS
@@ -263,12 +265,12 @@
 ## Visual Evidence
 
 - source_type: firmware_preview
-  evidence_scope: owner-facing `mode=blocked` front-panel rendering
-  command: `cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --mode blocked --out-dir /tmp/mains-aegis-blocked-preview`
-  image: `assets/front-panel-blocked-mode.png`
-  evidence_note: 同源固件渲染入口显示 `BLOCKED / OUTPUT BLOCKED / LOCK`，不把 TPS 未 active 的状态渲染为 `BACKUP` 或放电 active。
+  evidence_scope: requested output blocked before Dashboard entry
+  command: `cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --scenario bq40-discharge-blocked --out-dir /tmp/mains-aegis-self-check-blocked-preview`
+  image: `assets/front-panel-self-check-output-blocked.png`
+  evidence_note: 同源固件渲染入口显示自检阻断态；TPS 未 active 的状态不得渲染为 `BACKUP`、`STANDBY`、`SUPPLEMENT` 或 `BLOCKED` Dashboard。
 
-![Front panel blocked mode](assets/front-panel-blocked-mode.png)
+![Front panel self-check output blocked](assets/front-panel-self-check-output-blocked.png)
 
 - source_type: real_hil_capture
   evidence_scope: passing formal `12V` runtime-mode scene

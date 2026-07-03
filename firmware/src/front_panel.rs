@@ -1,7 +1,7 @@
 use core::convert::Infallible;
 
 use crate::front_panel_logic::{
-    cst816d_vertical_gesture_direction, dashboard_enter_requires_variant_switch,
+    cst816d_vertical_gesture_direction, dashboard_allowed, dashboard_enter_requires_variant_switch,
     dashboard_page_for_vertical_menu_gesture, dashboard_uses_frame_animation,
     VerticalGestureDirection, DASHBOARD_VARIANT, SELF_CHECK_VARIANT,
 };
@@ -1049,6 +1049,23 @@ where
             );
             self.self_check_overlay = SelfCheckOverlay::None;
         }
+        if self.ui_variant == DASHBOARD_VARIANT && !dashboard_allowed(&self.self_check_snapshot) {
+            let previous_variant = self.ui_variant;
+            self.ui_variant = SELF_CHECK_VARIANT;
+            self.dashboard_status_dirty = false;
+            self.self_check_overlay = SelfCheckOverlay::None;
+            self.needs_redraw = true;
+            defmt::warn!(
+                "ui: page switch old={} new={} reason=dashboard_not_allowed",
+                variant_name(previous_variant),
+                variant_name(self.ui_variant)
+            );
+            esp_println::println!(
+                "ui: page switch old={} new={} reason=dashboard_not_allowed",
+                variant_name(previous_variant),
+                variant_name(self.ui_variant)
+            );
+        }
         if self.ui_variant != SELF_CHECK_VARIANT {
             self.dashboard_status_dirty = true;
             return;
@@ -1219,6 +1236,18 @@ where
     }
 
     pub fn enter_dashboard(&mut self) {
+        if !dashboard_allowed(&self.self_check_snapshot) {
+            defmt::warn!(
+                "ui: enter_dashboard denied reason=dashboard_not_allowed mode={}",
+                ups_mode_name(self.self_check_snapshot.mode)
+            );
+            esp_println::println!(
+                "ui: enter_dashboard denied reason=dashboard_not_allowed mode={}",
+                ups_mode_name(self.self_check_snapshot.mode)
+            );
+            return;
+        }
+
         if !dashboard_enter_requires_variant_switch(self.ui_variant) {
             return;
         }
