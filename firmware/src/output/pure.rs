@@ -375,6 +375,50 @@ pub(super) const fn runtime_charge_override_for_charger(
     }
 }
 
+pub(super) const BMS_NO_BATTERY_VPACK_MAX_MV: u16 = 2_500;
+
+pub(super) fn bq40_pack_indicates_no_battery(vpack_mv: u16) -> bool {
+    vpack_mv < BMS_NO_BATTERY_VPACK_MAX_MV
+}
+
+pub(super) fn bq40_physical_discharge_path_absent(
+    pack_mv: Option<u16>,
+    discharge_ready: Option<bool>,
+    charger_vbat_present: Option<bool>,
+) -> bool {
+    discharge_ready == Some(true)
+        && charger_vbat_present == Some(false)
+        && pack_mv
+            .map(|mv| !bq40_pack_indicates_no_battery(mv))
+            .unwrap_or(false)
+}
+
+pub(super) fn bq40_physical_discharge_path_issue(
+    charge_ready: Option<bool>,
+    charge_reason: Option<&'static str>,
+    discharge_ready: Option<bool>,
+) -> &'static str {
+    if charge_ready == Some(false) {
+        charge_reason.unwrap_or("charge_path_blocked")
+    } else if discharge_ready == Some(true) {
+        "pack_output_path_open"
+    } else {
+        "physical_vbat_absent"
+    }
+}
+
+pub(super) fn bq25792_effective_vbat_present(
+    status_vbat_present: Option<bool>,
+    vbat_adc_mv: Option<u16>,
+) -> Option<bool> {
+    match (status_vbat_present, vbat_adc_mv) {
+        (Some(true), _) => Some(true),
+        (_, Some(mv)) if !bq40_pack_indicates_no_battery(mv) => Some(true),
+        (Some(false), _) => Some(false),
+        (None, _) => None,
+    }
+}
+
 pub(super) const fn usb_pd_demand_charging_enabled(
     runtime_allow_charge: Option<bool>,
     charger_enabled: bool,
@@ -3255,6 +3299,32 @@ mod tests {
             runtime_charge_override_for_charger(UpsMode::Blocked, false, false),
             runtime_charge_override(UpsMode::Blocked)
         );
+    }
+
+    #[test]
+    fn charger_vbat_adc_overrides_false_status_presence_bit() {
+        assert_eq!(
+            bq25792_effective_vbat_present(Some(false), Some(16_243)),
+            Some(true)
+        );
+        assert!(!bq40_physical_discharge_path_absent(
+            Some(16_243),
+            Some(true),
+            bq25792_effective_vbat_present(Some(false), Some(16_243))
+        ));
+    }
+
+    #[test]
+    fn charger_vbat_absent_remains_absent_without_valid_adc_voltage() {
+        assert_eq!(
+            bq25792_effective_vbat_present(Some(false), Some(1_280)),
+            Some(false)
+        );
+        assert!(bq40_physical_discharge_path_absent(
+            Some(16_243),
+            Some(true),
+            bq25792_effective_vbat_present(Some(false), Some(1_280))
+        ));
     }
 
     #[test]
