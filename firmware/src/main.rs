@@ -1758,6 +1758,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             }
 
             let fan_telemetry_due = power.tick(&irq_events);
+            power.poll_front_panel_bms_discharge_authorization_recovery();
             #[cfg(feature = "web_serial")]
             {
                 let web_serial_snapshot = power.ui_snapshot();
@@ -1902,6 +1903,22 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 }
                             }
                         }
+                        esp_firmware::net::LanManagementCommand::RecoverBmsDischargeAuthorization => {
+                            if let Some(body) = power.begin_bms_discharge_authorization_recovery_json::<
+                                { esp_firmware::net::HTTP_RESPONSE_BODY_CAP },
+                            >("lan_http") {
+                                esp_firmware::net::set_lan_command_result(
+                                    esp_firmware::net::LanCommandResult::Json(body),
+                                );
+                                defmt::info!(
+                                    "net: LAN BMS discharge authorization recovery completed"
+                                );
+                            } else {
+                                defmt::info!(
+                                    "net: LAN BMS discharge authorization recovery pending"
+                                );
+                            }
+                        }
                         esp_firmware::net::LanManagementCommand::Reset => {
                             defmt::warn!("net: LAN reset requested");
                             Timer::after(embassy_time::Duration::from_millis(100)).await;
@@ -1910,6 +1927,16 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     }
                 }
                 let prefs = power.manual_charge_prefs_snapshot();
+                if let Some(body) = power
+                    .take_completed_bms_discharge_authorization_recovery_json_for_source::<
+                        { esp_firmware::net::HTTP_RESPONSE_BODY_CAP },
+                    >("lan_http")
+                {
+                    esp_firmware::net::set_lan_command_result(
+                        esp_firmware::net::LanCommandResult::Json(body),
+                    );
+                    defmt::info!("net: LAN BMS discharge authorization recovery completed");
+                }
                 esp_firmware::net::set_manual_charge_settings(
                     manual_charge_target_api_value(prefs.target),
                     manual_charge_speed_api_value(prefs.speed),
@@ -2228,6 +2255,15 @@ fn handle_web_serial_frame<'d, I2C>(
                     write_web_serial_line(serial, frame.as_str());
                     return;
                 }
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
+            }
+            UsbCdcRequest::RecoverBmsDischargeAuthorization => {
+                let body = power
+                    .recover_bms_discharge_authorization_json::<WEB_SERIAL_RESPONSE_BODY_CAP>(
+                        "usb_cdc",
+                    );
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
             }

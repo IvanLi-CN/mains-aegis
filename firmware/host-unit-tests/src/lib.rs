@@ -629,6 +629,18 @@ pub mod output {
         }
     }
 
+    const fn runtime_charge_override_for_charger(
+        mode: UpsMode,
+        force_allow_charge: bool,
+        auto_force_charge: bool,
+    ) -> Option<RuntimeChargeOverride> {
+        if force_allow_charge || auto_force_charge {
+            None
+        } else {
+            runtime_charge_override(mode)
+        }
+    }
+
     #[test]
     fn owner_mode_gate_blocks_modes_that_require_inactive_tps_outputs() {
         assert_eq!(
@@ -713,6 +725,22 @@ pub mod output {
         );
         assert_eq!(runtime_charge_override(UpsMode::Standby), None);
         assert_eq!(runtime_charge_override(UpsMode::Off), None);
+    }
+
+    #[test]
+    fn runtime_charge_override_does_not_swallow_recovery_force_charge() {
+        assert_eq!(
+            runtime_charge_override_for_charger(UpsMode::Blocked, true, false),
+            None
+        );
+        assert_eq!(
+            runtime_charge_override_for_charger(UpsMode::Backup, false, true),
+            None
+        );
+        assert_eq!(
+            runtime_charge_override_for_charger(UpsMode::Blocked, false, false),
+            runtime_charge_override(UpsMode::Blocked)
+        );
     }
 
     #[test]

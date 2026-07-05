@@ -363,6 +363,62 @@ pub(super) const fn runtime_charge_override(mode: UpsMode) -> Option<RuntimeChar
     }
 }
 
+pub(super) const fn runtime_charge_override_for_charger(
+    mode: UpsMode,
+    force_allow_charge: bool,
+    auto_force_charge: bool,
+) -> Option<RuntimeChargeOverride> {
+    if force_allow_charge || auto_force_charge {
+        None
+    } else {
+        runtime_charge_override(mode)
+    }
+}
+
+pub(super) const BMS_NO_BATTERY_VPACK_MAX_MV: u16 = 2_500;
+
+pub(super) fn bq40_pack_indicates_no_battery(vpack_mv: u16) -> bool {
+    vpack_mv < BMS_NO_BATTERY_VPACK_MAX_MV
+}
+
+pub(super) fn bq40_physical_discharge_path_absent(
+    pack_mv: Option<u16>,
+    discharge_ready: Option<bool>,
+    charger_vbat_present: Option<bool>,
+) -> bool {
+    discharge_ready == Some(true)
+        && charger_vbat_present == Some(false)
+        && pack_mv
+            .map(|mv| !bq40_pack_indicates_no_battery(mv))
+            .unwrap_or(false)
+}
+
+pub(super) fn bq40_physical_discharge_path_issue(
+    charge_ready: Option<bool>,
+    charge_reason: Option<&'static str>,
+    discharge_ready: Option<bool>,
+) -> &'static str {
+    if charge_ready == Some(false) {
+        charge_reason.unwrap_or("charge_path_blocked")
+    } else if discharge_ready == Some(true) {
+        "pack_output_path_open"
+    } else {
+        "physical_vbat_absent"
+    }
+}
+
+pub(super) fn bq25792_effective_vbat_present(
+    status_vbat_present: Option<bool>,
+    vbat_adc_mv: Option<u16>,
+) -> Option<bool> {
+    match (status_vbat_present, vbat_adc_mv) {
+        (Some(true), _) => Some(true),
+        (_, Some(mv)) if !bq40_pack_indicates_no_battery(mv) => Some(true),
+        (Some(false), _) => Some(false),
+        (None, _) => None,
+    }
+}
+
 pub(super) const fn usb_pd_demand_charging_enabled(
     runtime_allow_charge: Option<bool>,
     charger_enabled: bool,
@@ -391,6 +447,10 @@ pub(super) const fn usb_pd_charge_gate_path_present(
             input_source,
             Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
         )
+}
+
+pub(super) const fn charger_vbus_stat_allows_activation_charge(vbus_stat: u8) -> bool {
+    matches!(vbus_stat & 0x0F, 0x1 | 0x2 | 0x3 | 0x4 | 0x5 | 0x6)
 }
 
 pub(super) fn usb_pd_runtime_unsafe_source_latched(
@@ -672,6 +732,114 @@ pub(super) fn bms_recovery_charge_allowed_from_diag(
         && pf_status.unwrap_or(0) == 0
         && bq40_optional_bit(charging_status, bq40z50::charging_status::IN) != Some(true)
         && bq40_optional_bit(charging_status, bq40z50::charging_status::SU) != Some(true)
+}
+
+pub(super) fn bms_discharge_authorization_needs_pack_path_recovery(
+    charger_vbat_present: Option<bool>,
+    afe_dsg_fet: Option<bool>,
+    op_dsg_fet: Option<bool>,
+) -> bool {
+    charger_vbat_present == Some(false)
+        && match afe_dsg_fet {
+            Some(actual) => actual,
+            None => op_dsg_fet == Some(true),
+        }
+}
+
+pub(super) fn bms_discharge_authorization_needs_bq40_fet_state_reset(
+    charger_vbat_present: Option<bool>,
+    afe_chg_fet: Option<bool>,
+    afe_chg_control: Option<bool>,
+    afe_dsg_fet: Option<bool>,
+    op_chg_fet: Option<bool>,
+    op_dsg_fet: Option<bool>,
+    xchg: Option<bool>,
+    xdsg: Option<bool>,
+    safety_status: Option<u32>,
+    pf_status: Option<u32>,
+    mfg_fet_en: Option<bool>,
+) -> bool {
+    charger_vbat_present == Some(false)
+        && mfg_fet_en == Some(true)
+        && safety_status == Some(0)
+        && pf_status == Some(0)
+        && xchg == Some(false)
+        && xdsg == Some(false)
+        && op_chg_fet == Some(true)
+        && op_dsg_fet == Some(true)
+        && (afe_dsg_fet != Some(false))
+        && (afe_chg_fet != Some(true) || afe_chg_control != Some(true))
+}
+
+pub(super) fn bms_discharge_authorization_next_after_emshut_exit(
+    emshut: Option<bool>,
+    charger_vbat_present: Option<bool>,
+    afe_chg_fet: Option<bool>,
+    afe_chg_control: Option<bool>,
+    afe_dsg_fet: Option<bool>,
+    op_chg_fet: Option<bool>,
+    op_dsg_fet: Option<bool>,
+    xchg: Option<bool>,
+    xdsg: Option<bool>,
+    safety_status: Option<u32>,
+    pf_status: Option<u32>,
+    mfg_fet_en: Option<bool>,
+) -> Option<&'static str> {
+    if emshut != Some(false) {
+        return None;
+    }
+
+    if bms_discharge_authorization_needs_bq40_fet_state_reset(
+        charger_vbat_present,
+        afe_chg_fet,
+        afe_chg_control,
+        afe_dsg_fet,
+        op_chg_fet,
+        op_dsg_fet,
+        xchg,
+        xdsg,
+        safety_status,
+        pf_status,
+        mfg_fet_en,
+    ) {
+        Some("pack_output_path_reset_requested")
+    } else if bms_discharge_authorization_needs_pack_path_recovery(
+        charger_vbat_present,
+        afe_dsg_fet,
+        op_dsg_fet,
+    ) {
+        Some("pack_output_path_recovery_requested")
+    } else {
+        Some("ordinary_recovery_requested")
+    }
+}
+
+pub(super) fn bms_discharge_authorization_reason_uses_activation(reason: &'static str) -> bool {
+    matches!(
+        reason,
+        "ordinary_recovery_requested"
+            | "pack_output_path_recovery_requested"
+            | "pack_output_path_reset_requested"
+    )
+}
+
+pub(super) fn bms_discharge_authorization_recovery_action(reason: &'static str) -> &'static str {
+    match reason {
+        "emshut_exit_sent" => "exit_emshut",
+        "pack_output_path_reset_requested" => "bq40_device_reset_then_activation",
+        "pack_output_path_recovery_requested" => "activation_min_charge",
+        "ordinary_recovery_requested" => "activation",
+        _ => "none",
+    }
+}
+
+pub(super) fn bms_discharge_authorization_success_reason(reason: &'static str) -> &'static str {
+    match reason {
+        "emshut_exit_sent" => "emshut_exit_recovered",
+        "pack_output_path_recovery_requested" => "pack_output_path_recovered",
+        "pack_output_path_reset_requested" => "pack_output_path_reset_recovered",
+        _ => "discharge_authorization_recovered",
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2421,6 +2589,51 @@ pub(super) const fn enabled_outputs_from_flags(out_a: bool, out_b: bool) -> Enab
     }
 }
 
+pub(super) fn confirmed_active_outputs_from_tps_readback(
+    active_outputs: EnabledOutputs,
+    out_a_enabled: Option<bool>,
+    out_b_enabled: Option<bool>,
+) -> EnabledOutputs {
+    enabled_outputs_from_flags(
+        active_outputs.is_enabled(OutputChannel::OutA) && out_a_enabled == Some(true),
+        active_outputs.is_enabled(OutputChannel::OutB) && out_b_enabled == Some(true),
+    )
+}
+
+pub(super) const fn bms_recovery_pending_for_ui(
+    activation_pending: bool,
+    bms_snapshot_available: bool,
+    manual_recovery_pending: bool,
+) -> bool {
+    (activation_pending && bms_snapshot_available) || manual_recovery_pending
+}
+
+pub(super) fn active_tps_output_readback_missing(
+    active_outputs: EnabledOutputs,
+    out_a_enabled: Option<bool>,
+    out_a_ready: bool,
+    out_b_enabled: Option<bool>,
+    out_b_ready: bool,
+) -> bool {
+    (active_outputs.is_enabled(OutputChannel::OutA) && out_a_ready && out_a_enabled == Some(false))
+        || (active_outputs.is_enabled(OutputChannel::OutB)
+            && out_b_ready
+            && out_b_enabled == Some(false))
+}
+
+pub(super) fn output_restore_input_present(
+    mains_present: Option<bool>,
+    charger_input_present: Option<bool>,
+) -> Option<bool> {
+    if mains_present == Some(true) || charger_input_present == Some(true) {
+        Some(true)
+    } else if mains_present == Some(false) && charger_input_present == Some(false) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 pub(super) const fn logic_outputs_from_enabled(
     outputs: EnabledOutputs,
 ) -> output_state_logic::EnabledOutputs {
@@ -3073,6 +3286,48 @@ mod tests {
     }
 
     #[test]
+    fn runtime_charge_override_does_not_swallow_recovery_force_charge() {
+        assert_eq!(
+            runtime_charge_override_for_charger(UpsMode::Blocked, true, false),
+            None
+        );
+        assert_eq!(
+            runtime_charge_override_for_charger(UpsMode::Backup, false, true),
+            None
+        );
+        assert_eq!(
+            runtime_charge_override_for_charger(UpsMode::Blocked, false, false),
+            runtime_charge_override(UpsMode::Blocked)
+        );
+    }
+
+    #[test]
+    fn charger_vbat_adc_overrides_false_status_presence_bit() {
+        assert_eq!(
+            bq25792_effective_vbat_present(Some(false), Some(16_243)),
+            Some(true)
+        );
+        assert!(!bq40_physical_discharge_path_absent(
+            Some(16_243),
+            Some(true),
+            bq25792_effective_vbat_present(Some(false), Some(16_243))
+        ));
+    }
+
+    #[test]
+    fn charger_vbat_absent_remains_absent_without_valid_adc_voltage() {
+        assert_eq!(
+            bq25792_effective_vbat_present(Some(false), Some(1_280)),
+            Some(false)
+        );
+        assert!(bq40_physical_discharge_path_absent(
+            Some(16_243),
+            Some(true),
+            bq25792_effective_vbat_present(Some(false), Some(1_280))
+        ));
+    }
+
+    #[test]
     fn usb_pd_demand_charging_enabled_respects_bms_charge_path() {
         assert!(!usb_pd_demand_charging_enabled(
             Some(true),
@@ -3117,6 +3372,16 @@ mod tests {
             Some(DashboardInputSource::UsbC),
             false
         ));
+    }
+
+    #[test]
+    fn charger_vbus_stat_allows_only_source_modes_for_activation_charge() {
+        for code in 0x1..=0x6 {
+            assert!(charger_vbus_stat_allows_activation_charge(code));
+        }
+        for code in [0x0, 0x7, 0x8, 0x9, 0xA, 0xB, 0xF] {
+            assert!(!charger_vbus_stat_allows_activation_charge(code));
+        }
     }
 
     #[test]
@@ -3234,6 +3499,86 @@ mod tests {
             &snapshot,
             EnabledOutputs::None
         ));
+    }
+
+    #[test]
+    fn confirmed_active_outputs_require_tps_enabled_readback() {
+        assert_eq!(
+            confirmed_active_outputs_from_tps_readback(
+                EnabledOutputs::Both,
+                Some(false),
+                Some(false)
+            ),
+            EnabledOutputs::None
+        );
+        assert_eq!(
+            confirmed_active_outputs_from_tps_readback(
+                EnabledOutputs::Both,
+                Some(true),
+                Some(false)
+            ),
+            EnabledOutputs::Only(OutputChannel::OutA)
+        );
+        assert_eq!(
+            confirmed_active_outputs_from_tps_readback(
+                EnabledOutputs::Only(OutputChannel::OutB),
+                Some(true),
+                Some(true)
+            ),
+            EnabledOutputs::Only(OutputChannel::OutB)
+        );
+    }
+
+    #[test]
+    fn bms_recovery_pending_for_ui_includes_manual_recovery_transaction() {
+        assert!(bms_recovery_pending_for_ui(true, true, false));
+        assert!(!bms_recovery_pending_for_ui(true, false, false));
+        assert!(bms_recovery_pending_for_ui(false, false, true));
+        assert!(bms_recovery_pending_for_ui(true, false, true));
+        assert!(!bms_recovery_pending_for_ui(false, true, false));
+    }
+
+    #[test]
+    fn ready_active_outputs_with_disabled_readback_are_missing() {
+        assert!(active_tps_output_readback_missing(
+            EnabledOutputs::Both,
+            Some(false),
+            true,
+            Some(true),
+            true,
+        ));
+        assert!(!active_tps_output_readback_missing(
+            EnabledOutputs::Both,
+            Some(false),
+            false,
+            Some(false),
+            false,
+        ));
+        assert!(!active_tps_output_readback_missing(
+            EnabledOutputs::Only(OutputChannel::OutA),
+            Some(true),
+            true,
+            Some(false),
+            true,
+        ));
+    }
+
+    #[test]
+    fn output_restore_input_present_accepts_charger_input_without_vin_mains() {
+        assert_eq!(
+            output_restore_input_present(Some(false), Some(true)),
+            Some(true)
+        );
+        assert_eq!(output_restore_input_present(None, Some(true)), Some(true));
+        assert_eq!(
+            output_restore_input_present(Some(true), Some(false)),
+            Some(true)
+        );
+        assert_eq!(
+            output_restore_input_present(Some(false), Some(false)),
+            Some(false)
+        );
+        assert_eq!(output_restore_input_present(None, Some(false)), None);
     }
 
     #[test]
@@ -4106,6 +4451,222 @@ mod tests {
     }
 
     #[test]
+    fn discharge_authorization_pack_path_recovery_detects_dsg_on_bat_absent() {
+        assert!(bms_discharge_authorization_needs_pack_path_recovery(
+            Some(false),
+            Some(true),
+            Some(false),
+        ));
+        assert!(bms_discharge_authorization_reason_uses_activation(
+            "pack_output_path_recovery_requested"
+        ));
+        assert_eq!(
+            bms_discharge_authorization_success_reason("pack_output_path_recovery_requested"),
+            "pack_output_path_recovered"
+        );
+        assert_eq!(
+            bms_discharge_authorization_recovery_action("pack_output_path_recovery_requested"),
+            "activation_min_charge"
+        );
+    }
+
+    #[test]
+    fn discharge_authorization_pack_path_recovery_uses_op_dsg_when_afe_unknown() {
+        assert!(bms_discharge_authorization_needs_pack_path_recovery(
+            Some(false),
+            None,
+            Some(true),
+        ));
+    }
+
+    #[test]
+    fn discharge_authorization_pack_path_recovery_does_not_mask_dsg_off() {
+        assert!(!bms_discharge_authorization_needs_pack_path_recovery(
+            Some(false),
+            Some(false),
+            Some(true),
+        ));
+        assert!(!bms_discharge_authorization_needs_pack_path_recovery(
+            Some(true),
+            Some(true),
+            Some(true),
+        ));
+    }
+
+    #[test]
+    fn discharge_authorization_fet_state_reset_matches_current_safe_fault() {
+        assert!(bms_discharge_authorization_needs_bq40_fet_state_reset(
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(0),
+            Some(0),
+            Some(true),
+        ));
+        assert!(bms_discharge_authorization_reason_uses_activation(
+            "pack_output_path_reset_requested"
+        ));
+        assert_eq!(
+            bms_discharge_authorization_success_reason("pack_output_path_reset_requested"),
+            "pack_output_path_reset_recovered"
+        );
+        assert_eq!(
+            bms_discharge_authorization_recovery_action("pack_output_path_reset_requested"),
+            "bq40_device_reset_then_activation"
+        );
+    }
+
+    #[test]
+    fn discharge_authorization_fet_state_reset_allows_missing_afe_timing_evidence() {
+        assert!(bms_discharge_authorization_needs_bq40_fet_state_reset(
+            Some(false),
+            None,
+            None,
+            None,
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(0),
+            Some(0),
+            Some(true),
+        ));
+    }
+
+    #[test]
+    fn discharge_authorization_fet_state_reset_rejects_confirmed_dsg_off() {
+        assert!(!bms_discharge_authorization_needs_bq40_fet_state_reset(
+            Some(false),
+            None,
+            None,
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(0),
+            Some(0),
+            Some(true),
+        ));
+    }
+
+    #[test]
+    fn discharge_authorization_fet_state_reset_rejects_unsafe_conditions() {
+        let safe = (
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(0),
+            Some(0),
+            Some(true),
+        );
+        for override_case in [
+            (
+                safe.0,
+                safe.1,
+                safe.2,
+                safe.3,
+                safe.4,
+                safe.5,
+                safe.6,
+                Some(true),
+                safe.8,
+                safe.9,
+                safe.10,
+            ),
+            (
+                safe.0,
+                safe.1,
+                safe.2,
+                safe.3,
+                safe.4,
+                safe.5,
+                Some(true),
+                safe.7,
+                safe.8,
+                safe.9,
+                safe.10,
+            ),
+            (
+                safe.0,
+                safe.1,
+                safe.2,
+                safe.3,
+                safe.4,
+                safe.5,
+                safe.6,
+                safe.7,
+                Some(1),
+                safe.9,
+                safe.10,
+            ),
+            (
+                safe.0,
+                safe.1,
+                safe.2,
+                safe.3,
+                safe.4,
+                safe.5,
+                safe.6,
+                safe.7,
+                safe.8,
+                Some(1),
+                safe.10,
+            ),
+            (
+                safe.0,
+                safe.1,
+                safe.2,
+                safe.3,
+                safe.4,
+                safe.5,
+                safe.6,
+                safe.7,
+                safe.8,
+                safe.9,
+                Some(false),
+            ),
+            (
+                Some(true),
+                safe.1,
+                safe.2,
+                safe.3,
+                safe.4,
+                safe.5,
+                safe.6,
+                safe.7,
+                safe.8,
+                safe.9,
+                safe.10,
+            ),
+        ] {
+            assert!(!bms_discharge_authorization_needs_bq40_fet_state_reset(
+                override_case.0,
+                override_case.1,
+                override_case.2,
+                override_case.3,
+                override_case.4,
+                override_case.5,
+                override_case.6,
+                override_case.7,
+                override_case.8,
+                override_case.9,
+                override_case.10,
+            ));
+        }
+    }
+
+    #[test]
     fn charge_policy_starts_when_rsoc_is_below_threshold() {
         let mut memory = ChargePolicyMemory::default();
         let mut derate = ChargePolicyDerateTracker::default();
@@ -4934,6 +5495,48 @@ mod tests {
     }
 
     #[test]
+    fn discharge_authorization_emshut_exit_chains_to_pack_path_reset() {
+        assert_eq!(
+            bms_discharge_authorization_next_after_emshut_exit(
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(0),
+                Some(0),
+                Some(true),
+            ),
+            Some("pack_output_path_reset_requested")
+        );
+    }
+
+    #[test]
+    fn discharge_authorization_emshut_still_active_does_not_chain() {
+        assert_eq!(
+            bms_discharge_authorization_next_after_emshut_exit(
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(0),
+                Some(0),
+                Some(true),
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn bq40_protection_active_requires_pf_or_error_code() {
         assert!(bq40_protection_active(0x0001, Some(0)));
         assert!(bq40_protection_active(
@@ -5132,6 +5735,16 @@ mod tests {
             filter_capacity: None,
             balance_config: None,
             afe_register: Some(bq40z50::AfeRegister {
+                interrupt_status: 0,
+                fet_status: 0,
+                rxin: 0,
+                latch_status: 0,
+                interrupt_enable: 0,
+                fet_control: 0,
+                rxien: 0,
+                rlout: 0,
+                rhout: 0,
+                rhint: 0,
                 cell_balance_status: 0b0101,
             }),
             cell_mv: [4100, 4098, 4102, 4099],

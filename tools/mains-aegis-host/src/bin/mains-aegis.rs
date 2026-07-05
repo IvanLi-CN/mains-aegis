@@ -140,6 +140,10 @@ enum DeviceCommand {
     Identity,
     Status(DeviceReadArgs),
     DiagSnapshot(DiagSnapshotArgs),
+    Recovery {
+        #[command(subcommand)]
+        command: RecoveryCommand,
+    },
     Settings,
     Trace(TraceArgs),
     Artifact {
@@ -159,6 +163,11 @@ enum DeviceCommand {
         #[command(subcommand)]
         command: MonitorCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum RecoveryCommand {
+    BmsDischargeAuthorization,
 }
 
 #[derive(Debug, Args)]
@@ -812,6 +821,12 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
                 Some(args.packages),
             ),
         ),
+        DeviceCommand::Recovery { command } => match command {
+            RecoveryCommand::BmsDischargeAuthorization => (
+                "device.recovery.bms_discharge_authorization",
+                json!({ "device_id": device_id }),
+            ),
+        },
         DeviceCommand::Settings => ("device.settings", json!({ "device_id": device_id })),
         DeviceCommand::Trace(args) => (
             "device.trace",
@@ -932,8 +947,9 @@ async fn maybe_confirm_companion_lan(
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_new_matching_entries, device_read_ipc_params, looks_like_ipc_connect_error,
-        seed_seen_ids, trace_entry_matches_kind, Cli, Command, DaemonCommand, DeviceReadArgs,
+        collect_new_matching_entries, device_read_ipc_params, device_to_ipc,
+        looks_like_ipc_connect_error, seed_seen_ids, trace_entry_matches_kind, Cli, Command,
+        DaemonCommand, DeviceCommand, DeviceReadArgs, RecoveryCommand,
     };
     use clap::Parser as _;
     use serde_json::json;
@@ -977,6 +993,32 @@ mod tests {
                 }
             }
         ));
+    }
+
+    #[test]
+    fn cli_maps_bms_discharge_authorization_recovery_to_ipc() {
+        let cli = Cli::try_parse_from([
+            "mains-aegis",
+            "device",
+            "serial-04f3bb3f5367",
+            "recovery",
+            "bms-discharge-authorization",
+        ])
+        .unwrap();
+
+        let Command::Device { device_id, command } = cli.command else {
+            panic!("expected device command");
+        };
+        assert!(matches!(
+            command,
+            DeviceCommand::Recovery {
+                command: RecoveryCommand::BmsDischargeAuthorization
+            }
+        ));
+
+        let (method, params) = device_to_ipc(device_id, command);
+        assert_eq!(method, "device.recovery.bms_discharge_authorization");
+        assert_eq!(params, json!({"device_id": "serial-04f3bb3f5367"}));
     }
 
     #[test]

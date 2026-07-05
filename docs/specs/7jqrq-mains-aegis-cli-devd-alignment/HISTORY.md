@@ -21,3 +21,9 @@
 - 决定 devd discovery 里的 transport 语义按“发现源”和“实际连接源”分离：USB 候选通过 devd Web lease / usb-http bridge 接入，LAN 候选则落为设备本体 HTTP target，而不是 `devd transport`。
 - 决定 Connect discovery 的 owner-facing 动作命名回到绑定模型：未纳管 USB 候选显示 `Bind USB`，未纳管 LAN 候选显示 `Add WiFi`，已纳管设备才显示 `Open` / `Use ...`。
 - 决定 USB `bind` 成功后若已可验证 companion LAN，CLI 交互式 TTY 直接询问是否同时保存 `mDNS + IP:Port`；非交互场景只输出建议命令，不自动持久化。
+
+## 2026-07-05
+
+- 决定 BMS 放电授权恢复必须作为受限设备级 recovery 命令暴露给 CLI/IPC/devd HTTP，同时由固件统一裁决安全前置条件。
+- 决定 CLI 与 devd 只传递并等待固件恢复终态 JSON，不直接打开 TPS 输出，也不把 `pending` 或“命令已发送”当作恢复成功。
+- 决定 native serial 恢复写路径只能使用绑定 USB CDC 或显式绑定 companion LAN；缓存的 `identity/status.network.ipv4` 只是 telemetry，不能作为状态变更目标。

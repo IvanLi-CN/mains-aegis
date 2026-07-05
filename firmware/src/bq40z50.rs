@@ -33,6 +33,7 @@ pub mod cmd {
     pub const FULL_CHARGE_CAPACITY: u8 = 0x10;
     pub const BATTERY_STATUS: u8 = 0x16;
     pub const MANUFACTURER_DATA: u8 = 0x23;
+    pub const SAFETY_ALERT: u8 = 0x50;
     pub const SAFETY_STATUS: u8 = 0x51;
     pub const PF_STATUS: u8 = 0x53;
     pub const OPERATION_STATUS: u8 = 0x54;
@@ -80,6 +81,9 @@ pub mod gauging_status {
 }
 
 pub mod mac {
+    pub const EMSHUT_EXIT: u16 = 0x23A7;
+    pub const DEVICE_RESET: u16 = 0x0041;
+    pub const SAFETY_ALERT: u16 = 0x0050;
     pub const SAFETY_STATUS: u16 = 0x0051;
     pub const PF_STATUS: u16 = 0x0053;
     pub const MANUFACTURING_STATUS: u16 = 0x0057;
@@ -96,6 +100,7 @@ pub mod data_flash {
     pub const NO_OF_RA_UPDATES: u16 = 0x43D8;
     pub const PROTECTION_CONFIGURATION: u16 = 0x4937;
     pub const CUV_RECOVERY: u16 = 0x493F;
+    pub const FET_OPTIONS: u16 = 0x4887;
     pub const SBS_CONFIGURATION: u16 = 0x4889;
     pub const POWER_CONFIG: u16 = 0x488B;
     pub const BALANCING_CONFIGURATION: u16 = 0x4908;
@@ -133,6 +138,11 @@ pub mod operation_status {
     pub const CHG: u32 = 1 << 2;
     pub const DSG: u32 = 1 << 1;
     pub const PRES: u32 = 1 << 0;
+}
+
+pub mod afe_fet_status {
+    pub const DSG: u8 = 1 << 1;
+    pub const CHG: u8 = 1 << 2;
 }
 
 pub mod da_configuration {
@@ -558,6 +568,34 @@ where
     read_block_raw(i2c, addr, cmd::MANUFACTURER_DATA)
 }
 
+pub fn write_manufacturer_access<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    mac_cmd: u16,
+) -> Result<(), I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let mac_cmd = mac_cmd.to_le_bytes();
+    i2c.write(addr, &[cmd::MANUFACTURER_ACCESS, mac_cmd[0], mac_cmd[1]])?;
+    spin_delay(MAC_WRITE_SETTLE);
+    Ok(())
+}
+
+pub fn exit_emshut<I2C>(i2c: &mut I2C, addr: u8) -> Result<(), I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    write_manufacturer_access(i2c, addr, mac::EMSHUT_EXIT)
+}
+
+pub fn device_reset<I2C>(i2c: &mut I2C, addr: u8) -> Result<(), I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    write_manufacturer_access(i2c, addr, mac::DEVICE_RESET)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DaStatus2 {
     pub int_temp_k_x10: u16,
@@ -603,7 +641,35 @@ impl BalanceConfig {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AfeRegister {
+    pub interrupt_status: u8,
+    pub fet_status: u8,
+    pub rxin: u8,
+    pub latch_status: u8,
+    pub interrupt_enable: u8,
+    pub fet_control: u8,
+    pub rxien: u8,
+    pub rlout: u8,
+    pub rhout: u8,
+    pub rhint: u8,
     pub cell_balance_status: u8,
+}
+
+impl AfeRegister {
+    pub const fn chg_fet_on(self) -> bool {
+        (self.fet_status & afe_fet_status::CHG) != 0
+    }
+
+    pub const fn dsg_fet_on(self) -> bool {
+        (self.fet_status & afe_fet_status::DSG) != 0
+    }
+
+    pub const fn chg_fet_control_on(self) -> bool {
+        (self.fet_control & afe_fet_status::CHG) != 0
+    }
+
+    pub const fn dsg_fet_control_on(self) -> bool {
+        (self.fet_control & afe_fet_status::DSG) != 0
+    }
 }
 
 pub fn read_da_status2<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<DaStatus2>, I2C::Error>
@@ -699,6 +765,16 @@ where
     }
 
     Ok(Some(AfeRegister {
+        interrupt_status: raw.payload[0],
+        fet_status: raw.payload[1],
+        rxin: raw.payload[2],
+        latch_status: raw.payload[3],
+        interrupt_enable: raw.payload[4],
+        fet_control: raw.payload[5],
+        rxien: raw.payload[6],
+        rlout: raw.payload[7],
+        rhout: raw.payload[8],
+        rhint: raw.payload[9],
         cell_balance_status: raw.payload[10],
     }))
 }
@@ -797,6 +873,13 @@ where
     I2C: embedded_hal::i2c::I2c,
 {
     read_status_block_u32(i2c, addr, cmd::SAFETY_STATUS)
+}
+
+pub fn read_safety_alert<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<u32>, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    read_status_block_u32(i2c, addr, cmd::SAFETY_ALERT)
 }
 
 pub fn read_pf_status<I2C>(i2c: &mut I2C, addr: u8) -> Result<Option<u32>, I2C::Error>
@@ -1308,6 +1391,28 @@ mod tests {
         assert_ne!(value & manufacturing_status::FET_EN, 0);
         assert_ne!(value & manufacturing_status::CHG_EN, 0);
         assert_ne!(value & manufacturing_status::DSG_EN, 0);
+    }
+
+    #[test]
+    fn afe_register_decodes_fet_status_and_control_bits() {
+        let afe = AfeRegister {
+            interrupt_status: 0,
+            fet_status: afe_fet_status::DSG,
+            rxin: 0,
+            latch_status: 0,
+            interrupt_enable: 0,
+            fet_control: afe_fet_status::CHG | afe_fet_status::DSG,
+            rxien: 0,
+            rlout: 0,
+            rhout: 0,
+            rhint: 0,
+            cell_balance_status: 0,
+        };
+
+        assert!(!afe.chg_fet_on());
+        assert!(afe.dsg_fet_on());
+        assert!(afe.chg_fet_control_on());
+        assert!(afe.dsg_fet_control_on());
     }
 
     #[test]

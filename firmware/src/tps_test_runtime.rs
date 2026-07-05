@@ -573,7 +573,7 @@ impl TpsTestRuntime {
     fn poll_charger(&mut self, now: Instant) {
         let _ = self.chg_ilim_hiz_brk.set_low();
 
-        let _ = match bq25792::ensure_ship_fet_path_enabled(&mut self.i2c) {
+        let _ = match bq25792::ensure_ship_fet_path_disabled(&mut self.i2c) {
             Ok(state) => {
                 defmt::debug!(
                     "tps-test: charger ship path ctrl5_before=0x{=u8:x} ctrl5_after=0x{=u8:x} mode_before={=u8} mode_after={=u8}",
