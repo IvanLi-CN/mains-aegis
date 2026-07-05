@@ -26,3 +26,4 @@
 
 - 决定 BMS 放电授权恢复必须作为受限设备级 recovery 命令暴露给 CLI/IPC/devd HTTP，同时由固件统一裁决安全前置条件。
 - 决定 CLI 与 devd 只传递并等待固件恢复终态 JSON，不直接打开 TPS 输出，也不把 `pending` 或“命令已发送”当作恢复成功。
+- 决定 native serial 恢复写路径只能使用绑定 USB CDC 或显式绑定 companion LAN；缓存的 `identity/status.network.ipv4` 只是 telemetry，不能作为状态变更目标。

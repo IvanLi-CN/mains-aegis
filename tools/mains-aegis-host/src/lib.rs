@@ -3979,10 +3979,11 @@ async fn device_recover_bms_discharge_authorization(
             device.status.clone(),
         )
     };
-    let recovery_lan_address = lan_address
-        .clone()
-        .or_else(|| identity.as_ref().and_then(network_ipv4_from_value))
-        .or_else(|| cached_status.as_ref().and_then(network_ipv4_from_value));
+    let recovery_lan_address = recovery_lan_address_for_state_changing_write(
+        lan_address.clone(),
+        identity.as_ref(),
+        cached_status.as_ref(),
+    );
 
     let result = if matches!(transport, DeviceTransport::Mock) {
         json!({
@@ -4026,18 +4027,8 @@ async fn device_recover_bms_discharge_authorization(
                 }
             }
         } else {
-            match send_device_recovery_cdc_request(&state, &id, frame, RECOVERY_CDC_REQUEST_PREFIX)
-                .await
-            {
-                Ok(result) => result,
-                Err(error)
-                    if error.0.code == "native_cdc_timeout" && recovery_lan_address.is_some() =>
-                {
-                    let address = recovery_lan_address.expect("guarded by is_some");
-                    lan_recovery_http_json(&address).await.map_err(|_| error)?
-                }
-                Err(error) => return Err(error),
-            }
+            send_device_recovery_cdc_request(&state, &id, frame, RECOVERY_CDC_REQUEST_PREFIX)
+                .await?
         }
     };
 
@@ -4066,13 +4057,14 @@ async fn device_recover_bms_discharge_authorization(
     Ok(Json(result))
 }
 
-fn network_ipv4_from_value(value: &Value) -> Option<String> {
-    value
-        .get("network")
-        .and_then(|network| network.get("ipv4"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+fn recovery_lan_address_for_state_changing_write(
+    explicit_lan_address: Option<String>,
+    _cached_identity: Option<&Value>,
+    _cached_status: Option<&Value>,
+) -> Option<String> {
+    // Cached network.ipv4 is telemetry, not write authority. Recovery may change hardware state,
+    // so only an explicitly bound companion LAN address can be used as a LAN target.
+    explicit_lan_address
 }
 
 async fn send_device_recovery_cdc_request(
@@ -12425,6 +12417,38 @@ mod tests {
             "result": "failed",
             "reason": "afe_dsg_control_off"
         })));
+    }
+
+    #[test]
+    fn recovery_write_lan_target_ignores_cached_network_ipv4() {
+        let cached_identity = json!({
+            "network": {
+                "ipv4": "192.168.4.25"
+            }
+        });
+        let cached_status = json!({
+            "network": {
+                "ipv4": "192.168.4.26"
+            }
+        });
+
+        assert_eq!(
+            recovery_lan_address_for_state_changing_write(
+                None,
+                Some(&cached_identity),
+                Some(&cached_status)
+            ),
+            None
+        );
+        assert_eq!(
+            recovery_lan_address_for_state_changing_write(
+                Some("192.168.4.27".into()),
+                Some(&cached_identity),
+                Some(&cached_status)
+            )
+            .as_deref(),
+            Some("192.168.4.27")
+        );
     }
 
     #[test]

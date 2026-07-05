@@ -77,7 +77,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
   - `host power status|profile|suspend|shutdown`
 - `mains-aegis device <id> status` 与 `mains-aegis device <id> diag-snapshot` 是 UPS 只读观测的正式 CLI 面，必须通过 IPC 调用 devd，不得要求操作者直接拼 JSON-RPC 或依赖 HTTP service。
 - 两个只读命令都支持 `--fresh`、`--cache-only`、`--include-meta`、`--watch`、`--interval-ms` 与 `--samples`。`--fresh` 与 `--cache-only` 互斥；单次读取默认允许 devd 按自身策略使用 fresh 或 cache。`--watch` 的默认语义固定为 monitor-cache telemetry stream：优先按节拍返回 monitor cache，并通过 `meta.cache_fresh/sample_fresh` 标示新鲜度；若 monitor cache 尚不可用，则返回带 `miss=true` 的 JSONL miss 行，而不是隐式退回 direct CDC 读。需要逐样本强制 CDC fresh 读时，操作者必须显式传入 `--fresh`。
-- `mains-aegis device <id> recovery bms-discharge-authorization` 通过 IPC `device.recovery.bms_discharge_authorization` 调用 devd，不直接打开串口、不直接 force TPS 输出。CLI 必须原样输出固件裁决 JSON，包含 `ok`、`accepted`、`result`、`reason`、`status_before` 与 `status_after` 等恢复诊断字段；native serial 与 LAN 设备的 owner-facing 结果应一致。
+- `mains-aegis device <id> recovery bms-discharge-authorization` 通过 IPC `device.recovery.bms_discharge_authorization` 调用 devd，不直接打开串口、不直接 force TPS 输出。CLI 必须原样输出固件裁决 JSON，包含 `ok`、`accepted`、`result`、`reason`、`status_before` 与 `status_after` 等恢复诊断字段；native serial 与 LAN 设备的 owner-facing 结果应一致。native serial 的恢复写路径只能使用绑定 USB CDC 或显式绑定 companion LAN，不得把缓存的 `identity/status.network.ipv4` 当作设备授权目标。
 
 ### Release and install
 
