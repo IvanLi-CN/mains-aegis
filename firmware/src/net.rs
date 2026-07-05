@@ -57,7 +57,7 @@ const WIFI_DNS: Option<&str> = option_env!("MAINS_AEGIS_WIFI_DNS");
 
 const HTTP_PORT: u16 = 80;
 const HTTP_WORKER_COUNT: usize = 3;
-const HTTP_RESPONSE_BODY_CAP: usize = 3072;
+pub const HTTP_RESPONSE_BODY_CAP: usize = 3072;
 const HTTP_DIAG_SNAPSHOT_BODY_CAP: usize = 8192;
 const SSE_FRAME_CAP: usize = 3328;
 const REQUEST_BUF_CAP: usize = 1024;
@@ -67,6 +67,7 @@ const RSSI_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const WIFI_CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const LAN_ADVANCED_POWER_APPLY_TIMEOUT: Duration =
     Duration::from_millis(lan_advanced_power_apply_timeout_ms());
+const LAN_RECOVERY_TIMEOUT: Duration = Duration::from_secs(70);
 const LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL: Duration =
     Duration::from_millis(LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS);
 
@@ -109,12 +110,14 @@ pub enum LanManagementCommand {
     SetManualCharge(ManualChargePrefsCommand),
     SetAdvancedPower(AdvancedPowerSettingsSnapshot),
     ResetAdvancedPower,
+    RecoverBmsDischargeAuthorization,
     Reset,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LanCommandResult {
     Ok,
+    Json(String<HTTP_RESPONSE_BODY_CAP>),
     AdvancedPowerValidation {
         code: &'static str,
         message: &'static str,
@@ -908,6 +911,7 @@ async fn handle_http_write(
 ) -> Result<(), embassy_net::tcp::Error> {
     let mut body = String::<HTTP_RESPONSE_BODY_CAP>::new();
     let mut await_command_result = false;
+    let mut await_command_timeout = LAN_ADVANCED_POWER_APPLY_TIMEOUT;
     let queued = match (method, path) {
         ("POST", "/api/v1/wifi-config") => match parse_http_wifi_config_request(request_body) {
             Ok(secret) => queue_lan_command(LanManagementCommand::SetWifi(secret)),
@@ -955,6 +959,11 @@ async fn handle_http_write(
             await_command_result = true;
             queue_lan_command(LanManagementCommand::ResetAdvancedPower)
         }
+        ("POST", "/api/v1/recovery/bms-discharge-authorization") => {
+            await_command_result = true;
+            await_command_timeout = LAN_RECOVERY_TIMEOUT;
+            queue_lan_command(LanManagementCommand::RecoverBmsDischargeAuthorization)
+        }
         ("POST", "/api/v1/reset") => match parse_http_reset_request(request_body) {
             Ok(()) => queue_lan_command(LanManagementCommand::Reset),
             Err(err) => {
@@ -983,11 +992,15 @@ async fn handle_http_write(
     }
 
     if await_command_result {
-        let deadline = embassy_time::Instant::now() + LAN_ADVANCED_POWER_APPLY_TIMEOUT;
+        let deadline = embassy_time::Instant::now() + await_command_timeout;
         loop {
             if let Some(result) = take_lan_command_result() {
                 match result {
                     LanCommandResult::Ok => break,
+                    LanCommandResult::Json(json) => {
+                        write_http_response(socket, "200 OK", json.as_str(), origin).await?;
+                        return Ok(());
+                    }
                     LanCommandResult::AdvancedPowerValidation { code, message } => {
                         write_error_body(&mut body, code, message, false, None);
                         write_http_response(socket, "400 Bad Request", body.as_str(), origin)
@@ -1016,8 +1029,8 @@ async fn handle_http_write(
             if embassy_time::Instant::now() >= deadline {
                 write_error_body(
                     &mut body,
-                    "advanced_power_apply_timeout",
-                    "advanced power settings did not apply before timeout",
+                    "lan_command_timeout",
+                    "LAN management command did not complete before timeout",
                     true,
                     None,
                 );

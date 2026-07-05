@@ -48,6 +48,7 @@ pub enum UsbCdcRequest {
     GetStatus,
     GetSettings,
     GetDiagSnapshot(DiagSnapshotRequest),
+    RecoverBmsDischargeAuthorization,
     SetLogLevel(LogLevel),
     SetManualChargePrefs(ManualChargePrefsCommand),
     SetAdvancedPower(AdvancedPowerSettingsSnapshot),
@@ -279,7 +280,7 @@ pub fn parse_frame(line: &str) -> Result<UsbCdcFrame, UsbCdcProtocolError> {
         "request" => {
             let request_id = parse_request_id(line)?;
             let op =
-                json_string_field::<32>(line, "op")?.ok_or(UsbCdcProtocolError::MissingField)?;
+                json_string_field::<64>(line, "op")?.ok_or(UsbCdcProtocolError::MissingField)?;
             Ok(UsbCdcFrame::Request {
                 request_id,
                 op: parse_request_op(line, op.as_str())?,
@@ -531,6 +532,9 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
         "get_diag_snapshot" => Ok(UsbCdcRequest::GetDiagSnapshot(parse_diag_snapshot_request(
             line,
         )?)),
+        "recover_bms_discharge_authorization" => {
+            Ok(UsbCdcRequest::RecoverBmsDischargeAuthorization)
+        }
         "set_log_level" => {
             let level =
                 json_string_field::<16>(line, "level")?.ok_or(UsbCdcProtocolError::MissingField)?;
@@ -997,6 +1001,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_bms_discharge_authorization_recovery_request() {
+        let frame = parse_frame(
+            r#"{"type":"request","request_id":"req-recover","op":"recover_bms_discharge_authorization"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            frame,
+            UsbCdcFrame::Request {
+                request_id: String::try_from("req-recover").unwrap(),
+                op: UsbCdcRequest::RecoverBmsDischargeAuthorization,
+            }
+        );
+    }
+
+    #[test]
     fn rejects_malformed_advanced_power_numbers_with_trailing_fraction() {
         let err = parse_http_advanced_power_request(
             r#"{"standby_drop_mv":1200,"assist_low_drop_mv":600,"assist_enter_delta_ma":0,"assist_exit_delta_ma":0,"assist_required_samples":2.9,"assist_ramp_step_mv":100,"assist_ramp_interval_ms":200,"rated_enter_delta_ma":0,"rated_exit_delta_ma":0,"vin_drop_threshold_pct":4,"required_samples":2}"#,
@@ -1095,8 +1114,12 @@ mod tests {
                 fault0: Some(0),
                 fault1: Some(0),
                 ctrl0: Some(0),
+                ctrl2: Some(0x02),
                 ctrl3: Some(0x18),
                 ctrl4: Some(0x19),
+                ctrl5: Some(0x80),
+                sfet_present: Some(true),
+                sdrv_ctrl: Some(0),
                 acdrv_path: "ac1",
                 term_ctrl: Some(0x1234),
             },
@@ -1145,6 +1168,7 @@ mod tests {
                 full: Some(false),
                 issue_detail: Some("none"),
                 rca_alarm: Some(false),
+                safety_alert: Some(0),
                 safety_status: Some(0),
                 pf_status: Some(0),
                 manufacturing_status: Some(0),
@@ -1153,15 +1177,31 @@ mod tests {
                 op_status: Some(0),
                 op_status_raw_len: Some(4),
                 op_status_raw_bytes: Some([0x83, 0x49, 0x00, 0x00]),
+                afe_fet_status: Some(0x06),
+                afe_fet_control: Some(0x03),
+                afe_latch_status: Some(0x00),
+                afe_cell_balance_status: Some(0x00),
+                afe_chg_fet: Some(true),
+                afe_dsg_fet: Some(true),
                 emshut: Some(false),
                 pres: Some(true),
                 xchg: Some(true),
                 xdsg: Some(false),
+                op_chg_fet: Some(true),
+                op_dsg_fet: Some(true),
+                op_pchg_fet: Some(false),
                 chg_fet: Some(true),
                 dsg_fet: Some(true),
                 pchg_fet: Some(false),
+                discharge_path_contradiction: Some(false),
+                discharge_path_contradiction_reason: None,
                 cuv: Some(false),
                 cuvc: Some(false),
+                cov: Some(false),
+                occ1: Some(false),
+                occ2: Some(false),
+                oc: Some(false),
+                safety_alert_oc: Some(false),
                 cuv_recovery_mv: Some(3_000),
                 cuv_recov_chg: Some(true),
                 fet_en: Some(true),

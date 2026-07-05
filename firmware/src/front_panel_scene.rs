@@ -11020,6 +11020,7 @@ fn tps_issue_dialog_copy(
 fn bq40_issue_card_key(snapshot: &SelfCheckUiSnapshot) -> &'static str {
     match snapshot.bq40z50_issue_detail {
         Some("emshut_active") => "EMSHUT ACTIVE",
+        Some("pack_output_path_open") => "PACK PATH OPEN",
         Some("physical_vbat_absent") => "VBAT ABSENT",
         Some("xdsg_blocked") => "XDSG BLOCKED",
         Some("dsg_fet_off") => "DSG FET OFF",
@@ -11046,6 +11047,7 @@ fn bq40_issue_headline(
         BmsRecoveryUiAction::Activation => "NOT DETECTED",
         BmsRecoveryUiAction::DischargeAuthorization => match snapshot.bq40z50_issue_detail {
             Some("emshut_active") => "EMSHUT ACTIVE",
+            Some("pack_output_path_open") => "PACK PATH OPEN",
             Some("physical_vbat_absent") => "VBAT ABSENT",
             Some("xdsg_blocked") => "XDSG BLOCKED",
             Some("dsg_fet_off") => "DSG FET OFF",
@@ -11059,6 +11061,7 @@ fn bq40_issue_headline(
 fn bq40_issue_detail_body(snapshot: &SelfCheckUiSnapshot) -> &'static str {
     match snapshot.bq40z50_issue_detail {
         Some("emshut_active") => "Gauge is in emergency shutdown.",
+        Some("pack_output_path_open") => "Pack output path is open.",
         Some("physical_vbat_absent") => "Pack is not powering VBAT.",
         Some("xdsg_blocked") => "BQ40 keeps discharge path off.",
         Some("dsg_fet_off") => "Discharge FET is still off.",

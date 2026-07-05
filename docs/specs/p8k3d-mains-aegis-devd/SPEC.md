@@ -4,7 +4,7 @@
 
 - Status: 已完成（v1 devd foundation）
 - Created: 2026-05-02
-- Last: 2026-06-07
+- Last: 2026-07-05
 
 ## 接管说明
 
@@ -56,6 +56,7 @@
 - `GET /api/v1/devices/{id}/status`: 返回设备 owner-facing status。该接口同时通过 IPC `device.status` 暴露给 `mains-aegis device <id> status`；CLI 必须支持单次读和 `--watch` 连续 JSONL 采样，正式 Power Validation 的 UPS 状态采集不得因为 HTTP 或 IPC 原始方法更方便而绕过 CLI 能力缺口。
 - `GET /api/v1/devices/{id}/diag-snapshot?package=<id>`: 通过 USB CDC `get_diag_snapshot` 获取只读 package 化诊断快照，并缓存到设备 session；重复 `package=` 选择多个 package，空 package 默认读取轻量 `core`。
 - `GET /api/v1/devices/{id}/diag-snapshot` 同时通过 IPC `device.diag_snapshot` 暴露给 `mains-aegis device <id> diag-snapshot --package <id>`；CLI 必须提供与 `status` 同构的 `--fresh`、`--cache-only`、`--include-meta`、`--watch`、`--interval-ms` 与 `--samples` 参数。
+- `POST /api/v1/devices/{id}/recovery/bms-discharge-authorization`: 触发受限 BMS 放电授权恢复。native serial 设备优先走可用的设备 LAN HTTP `POST /api/v1/recovery/bms-discharge-authorization`，不可用时走 USB CDC `recover_bms_discharge_authorization`；LAN-only 设备直接调用设备本体 HTTP。devd 必须等待固件返回终态结果，不能把 `pending` 当作失败或成功；成功或失败后应刷新 status 与 diag-snapshot cache。
 - `GET|POST /api/v1/devices/{id}/artifact`: 查询或选择 artifact manifest。
 - `POST /api/v1/devices/{id}/flash`: 校验 artifact hash 后执行烧录；无硬件验证使用 `dry_run=true`。真实烧录响应与 `flash completed` 事件必须同时回传 backend `status/stdout/stderr`，用于区分“artifact 选择正确但底层 flash backend 没有真正完成”和“backend 已成功写入硬件”。真实 flash backend 必须有明确超时并在超时路径清理子进程，避免 HTTP 客户端断开后遗留卡住的底层烧录进程。
 - `POST /api/v1/devices/{id}/reset`: 设备 reset 请求；native serial 后端必须在已绑定端口上执行 in-process DTR/RTS app-boot 复位，保持 boot 释放线为实测 app-boot 电平，不再另起外部 reset 进程抢占同一串口。
@@ -80,7 +81,9 @@
 - `charger`: BQ25792 enable/control pin state、charge/input policy gates、status/fault raw bytes、decoded `CHG_STAT/VBUS_STAT/ICO_STAT` 与 ADC values；必须同时暴露 `vac1_adc_mv` 与 `vac2_adc_mv`，用于区分 USB-C VAC1 与 DC IN/VAC2 实际输入路径；还必须暴露 `vbat_lowv_pct_x10` 与 `iprechg_ma`，确认低压恢复的 `REG08` 已写为 `71.4% / 120mA`。
 - `policy`: `allow_charge=false` 或 `vbat_present=false` 相关的 policy state/status/notice、input source、target charge current、output-load and manual-charge blockers；低压恢复时必须暴露 `recovery_stage=bq40_pchg|bq25792_precharge`。
 - `bms`: BQ40Z50 pack/current/RSOC/cell range、RCA、charge/discharge readiness、raw safety/PF/manufacturing/gauging/operation status、XCHG/CHG/DSG/PCHG/FET enable/CUV/CUVC/charging inhibit flags；必须暴露 `cuv_recovery_mv` 与 `cuv_recov_chg`，确认维护 DF baseline 是否已应用。
-- `bq40.manufacturing`: 必须 fresh 同步读取 `ManufacturingStatus()`、`FET_EN/CHG_EN/DSG_EN/PF_EN`、`SafetyStatus()`、`PFStatus()`、`ChargingStatus()`、`GaugingStatus()`、`OperationStatus()` raw payload 与解码字段，不能依赖周期缓存。`OperationStatus()` 作为 H4/block command 读取时，该 package 必须暴露 `op_status_raw_len` 与前 4 个 `op_status_raw_bytes`，并显式解码 `emshut`、`pres`、`xdsg`，避免把 `EMSHUT` 误判成普通 `XDSG`。当 BQ40 DF 可读时，还必须暴露 `da_configuration`、`power_config`、`emshut_en`、`emshut_pexit_dis`、`emshut_exit_comm` 与 `emshut_exit_vpack`，用于判断 SHUTDN#/EMSHUT 退出路径是否允许按键、PACK 电压或 SMBus 通信恢复。
+- `bq40.manufacturing`: 必须 fresh 同步读取 `ManufacturingStatus()`、`FET_EN/CHG_EN/DSG_EN/PF_EN`、`SafetyAlert()`、`SafetyStatus()`、`PFStatus()`、`ChargingStatus()`、`GaugingStatus()`、`OperationStatus()` raw payload 与解码字段，不能依赖周期缓存。`OperationStatus()` 作为 H4/block command 读取时，该 package 必须暴露 `op_status_raw_len` 与前 4 个 `op_status_raw_bytes`，并显式解码 `emshut`、`pres`、`xchg`、`xdsg`、`op_chg_fet`、`op_dsg_fet` 与 `op_pchg_fet`，避免把 `EMSHUT` 误判成普通 `XDSG`。该 package 还必须暴露 BQ40 AFE register 派生字段 `afe_fet_status`、`afe_fet_control`、`afe_latch_status`、`afe_cell_balance_status`、`afe_chg_fet` 与 `afe_dsg_fet`，并以 `discharge_path_contradiction` / `discharge_path_contradiction_reason` 标记 BQ40 逻辑 FET、AFE FET 与 charger BAT 节点之间的矛盾。当 BQ40 DF 可读时，还必须暴露 `da_configuration`、`power_config`、`emshut_en`、`emshut_pexit_dis`、`emshut_exit_comm` 与 `emshut_exit_vpack`，用于判断 SHUTDN# / EMSHUT 退出路径是否允许按键、PACK 电压或 SMBus 通信恢复。
+
+`POST /api/v1/recovery/bms-discharge-authorization` 是设备本体 LAN HTTP 对应入口；USB CDC 对应 op 为 `recover_bms_discharge_authorization`。固件是唯一安全裁决点：host/devd/CLI 不得直接打开 TPS 输出或绕过 BMS、charger、THERM、TPS fault、active protection 等门禁。固件返回体至少包含 `ok`、`accepted`、`result`、`reason`、`attempt_reason`、`recovery_action`、`status_before`、`status_after`、`output_gate_reason`、`requested_outputs` 与 `active_outputs`。`result` 取值包含 `success`、`rejected`、`failed`、`already_ready` 与中间态 `pending`；devd/CLI 必须轮询到非 `pending` 终态。固件拒绝原因必须能区分 `output_not_requested`、`output_gate_not_bms_not_ready`、`bms_missing`、`no_battery`、`remaining_capacity_alarm`、`cell_undervoltage`、`therm_kill_asserted`、`input_missing`、`charger_missing`、`bms_pf_status_active` 与 active discharge-safety blocker。成功必须以 `status_after` 证明 `discharge_ready=true`、charger `vbat_present=true` 或等价恢复事实；若恢复后仍 `output_gate_reason=bms_not_ready`，结果不得报告为 success。
 
 ### Host power control
 
@@ -182,6 +185,8 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - Given BQ40 DF 可读，When 读取 `diag-snapshot`，Then `bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg` 可见，用于确认 `2550mV + CUV_RECOV_CHG=0` baseline。
 - Given BQ40 处于 `EMSHUT` 或刚退出 `EMSHUT`，When 读取 `diag-snapshot`，Then `bms.op_status_raw_len`、`bms.op_status_raw_bytes`、`bms.emshut`、`bms.pres`、`bms.xdsg` 与 `bms.dsg_fet` 可见，用于直接核对 H4 raw payload 与解码结果。
 - Given BQ40 DF 可读，When 读取 `diag-snapshot`，Then `bms.da_configuration`、`bms.power_config`、`bms.emshut_en`、`bms.emshut_pexit_dis`、`bms.emshut_exit_comm` 与 `bms.emshut_exit_vpack` 可见，用于确认 `SHUTDN#` / communication-exit / PACK-voltage-exit 是否被配置允许。
+- Given BQ40 放电授权未 ready 且输出已请求，When 调用 `POST /api/v1/devices/{id}/recovery/bms-discharge-authorization` 或设备本体 `POST /api/v1/recovery/bms-discharge-authorization`，Then 固件必须自行判断前置条件并返回结构化终态；host/devd/CLI 不得直接 force TPS 输出。
+- Given BQ40 刚退出 `EMSHUT` 后 `OperationStatus()` 逻辑 CHG/DSG ready、`XCHG/XDSG=false`、Safety/PF 清零、但 BQ25792 仍报告 `vbat_present=false`，When 调用 BMS 放电授权恢复，Then 固件应走 `bq40_device_reset_then_activation` 恢复链路，并且只有 `status_after` 显示 discharge path 和输出门禁闭合时才报告 success。
 - Web typecheck 通过，且 dev server proxy 将 `/api` 反代到 env 指定或默认的 `mains-aegis daemon http --allow-dev-cors`。
 - 文档与 AGENTS guardrails 清晰说明 `$mains-aegis-devd-flow` 是本仓 Codex 默认入口；显式 end-user/released-tool 操作才使用 `$mains-aegis-user-operations`。
 - 多 USB CDC 设备同时存在时，devd/Web 不自动选择；Web 显示候选列表，用户选择后才创建 Web lease 并占用设备。
@@ -210,6 +215,9 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - `web/src/api/*`: devd mode client contracts。
 - `firmware/src/net_contract.rs`: firmware identity/status/power diagnostic JSON contract。
 - `firmware/src/net_contract.rs`: `diag-snapshot.bms` 已暴露 `op_status_raw_len`、`op_status_raw_bytes`、`emshut`、`pres`、`xdsg` 与 EMSHUT 退出配置字段，供 host 直接核对 BQ40 `OperationStatus()` raw payload 与恢复门禁。
+- `firmware/src/net_contract.rs`: `diag-snapshot.bms` 已暴露 BQ40 AFE FET status/control/latch、logical `op_*` FET flags、SafetyAlert 派生位、discharge path contradiction 字段；`diag-snapshot.charger` 已暴露 BQ25792 `ctrl2`、`ctrl5`、`sfet_present` 与 `sdrv_ctrl`。
+- `firmware/src/output/mod.rs`、`firmware/src/net.rs` 与 `firmware/src/usb_cdc_protocol.rs`: 提供受限 BMS 放电授权恢复链路，覆盖 USB CDC `recover_bms_discharge_authorization` 与设备本体 LAN HTTP `POST /api/v1/recovery/bms-discharge-authorization`，并让前面板自检恢复操作复用同一个固件恢复事务。
+- `tools/mains-aegis-host`: 提供 devd HTTP `POST /api/v1/devices/{id}/recovery/bms-discharge-authorization`，native serial / LAN transport 返回固件原始裁决结果并刷新 status/diag cache。
 
 ## 变更记录（Change log）
 
@@ -220,3 +228,4 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - 2026-06-05: `/api/v1/status` 的 `battery` snapshot 增加四节 `cell_mv`、`cell_delta_mv`、均衡状态字段与 `charge_fet_on` / `discharge_fet_on` / `precharge_fet_on`，Web 电池页可直接展示 per-cell voltage、delta、BAL 状态与三路 BMS MOS 状态，不再依赖 `diag-snapshot` 详情端点。
 - 2026-06-07: `devices/scan` 与 `devices` 响应中的 `binding.logical_device_id` 成为 Web 归并 USB identity-pending candidate 与 Fleet 混合视图的 canonical 键；旧绑定若缺失该字段，Connect 仍可继续显式补绑到已有 logical device。
 - 2026-07-01: `diag-snapshot.bms` 增加 `OperationStatus()` raw payload、`emshut` / `pres` 解码与 EMSHUT 退出配置字段，现场可区分 `EMSHUT` 与普通 `XDSG` 阻断并确认恢复路径配置。
+- 2026-07-05: 增加受限 BMS 放电授权恢复 API，覆盖固件 CDC、设备 LAN HTTP、devd HTTP 与 host cache refresh；同时补充 BQ40 AFE FET 与 charger ship-FET 诊断字段，用于解释 `pack_output_path_open` 与前面板恢复结果。

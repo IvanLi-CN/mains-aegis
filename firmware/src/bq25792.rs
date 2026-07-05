@@ -1141,13 +1141,13 @@ pub struct ShipFetPathState {
     pub ship: ShipFetState,
 }
 
-/// Ensure ship-FET feature is enabled and SDRV stays in IDLE (00).
-pub fn ensure_ship_fet_path_enabled<I2C>(i2c: &mut I2C) -> Result<ShipFetPathState, I2C::Error>
+/// Ensure the unused external ship-FET feature is disabled and SDRV stays in IDLE (00).
+pub fn ensure_ship_fet_path_disabled<I2C>(i2c: &mut I2C) -> Result<ShipFetPathState, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
 {
     let ctrl5_before = read_u8(i2c, reg::CHARGER_CONTROL_5)?;
-    let ctrl5_after = ctrl5_before | ctrl5::SFET_PRESENT;
+    let ctrl5_after = ctrl5_before & !ctrl5::SFET_PRESENT;
     if ctrl5_after != ctrl5_before {
         write_u8(i2c, reg::CHARGER_CONTROL_5, ctrl5_after)?;
     }

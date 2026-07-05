@@ -2,6 +2,8 @@ pub mod channel;
 mod pure;
 pub mod tps55288;
 
+use core::fmt::Write as _;
+
 use crate::front_panel_scene::{
     is_bq40_activation_needed, BeeperPrefs, BeeperSettingTarget, BeeperVolumeLevel,
     BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardInputSource,
@@ -28,6 +30,7 @@ use esp_firmware::usb_pd;
 use esp_hal::gpio::{Flex, Input};
 use esp_hal::ram;
 use esp_hal::time::{Duration, Instant};
+use heapless::String;
 
 pub use self::channel::OutputChannel;
 pub use self::pure::{AppliedFanState, EnabledOutputs};
@@ -78,6 +81,9 @@ const BMS_ACTIVATION_EXIT_EXERCISE_PERIOD: Duration = Duration::from_secs(2);
 const BMS_ACTIVATION_CHARGER_POLL_PERIOD: Duration = Duration::from_secs(2);
 const BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY: Duration = Duration::from_secs(34);
 const BMS_ACTIVATION_AUTO_DELAY: Duration = Duration::from_secs(30);
+const BMS_DISCHARGE_AUTH_MANUAL_WINDOW: Duration = Duration::from_secs(62);
+const BMS_DISCHARGE_AUTH_FRONT_PANEL_SOURCE: &str = "front_panel";
+const BMS_DISCHARGE_AUTH_FRONT_PANEL_BODY_CAP: usize = 4096;
 const BMS_BOOT_DIAG_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
 const BMS_BOOT_DIAG_SHIP_RESET_SETTLE: Duration = Duration::from_millis(800);
 const CHARGER_LIMIT_DIAG_PERIOD: Duration = Duration::from_secs(1);
@@ -1292,6 +1298,14 @@ fn bms_result_option_name(result: Option<BmsResultKind>) -> &'static str {
     result.map_or("none", bms_result_name)
 }
 
+fn bms_activation_state_name(state: BmsActivationState) -> &'static str {
+    match state {
+        BmsActivationState::Idle => "idle",
+        BmsActivationState::Pending => "pending",
+        BmsActivationState::Result(result) => bms_result_name(result),
+    }
+}
+
 fn audio_battery_low_state_name(state: AudioBatteryLowState) -> &'static str {
     match state {
         AudioBatteryLowState::Inactive => "inactive",
@@ -1315,6 +1329,63 @@ fn bq40_physical_discharge_path_absent(
         && pack_mv
             .map(|mv| !bq40_pack_indicates_no_battery(mv))
             .unwrap_or(false)
+}
+
+fn bq40_physical_discharge_path_issue(
+    charge_ready: Option<bool>,
+    charge_reason: Option<&'static str>,
+    discharge_ready: Option<bool>,
+) -> &'static str {
+    if charge_ready == Some(false) {
+        charge_reason.unwrap_or("charge_path_blocked")
+    } else if discharge_ready == Some(true) {
+        "pack_output_path_open"
+    } else {
+        "physical_vbat_absent"
+    }
+}
+
+fn bq25792_effective_vbat_present(
+    status_vbat_present: Option<bool>,
+    vbat_adc_mv: Option<u16>,
+) -> Option<bool> {
+    match (status_vbat_present, vbat_adc_mv) {
+        (Some(true), _) => Some(true),
+        (_, Some(mv)) if !bq40_pack_indicates_no_battery(mv) => Some(true),
+        (Some(false), _) => Some(false),
+        (None, _) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn charger_vbat_adc_overrides_false_status_presence_bit() {
+        assert_eq!(
+            bq25792_effective_vbat_present(Some(false), Some(16_243)),
+            Some(true)
+        );
+        assert!(!bq40_physical_discharge_path_absent(
+            Some(16_243),
+            Some(true),
+            bq25792_effective_vbat_present(Some(false), Some(16_243))
+        ));
+    }
+
+    #[test]
+    fn charger_vbat_absent_remains_absent_without_valid_adc_voltage() {
+        assert_eq!(
+            bq25792_effective_vbat_present(Some(false), Some(1_280)),
+            Some(false)
+        );
+        assert!(bq40_physical_discharge_path_absent(
+            Some(16_243),
+            Some(true),
+            bq25792_effective_vbat_present(Some(false), Some(1_280))
+        ));
+    }
 }
 
 fn bq40_low_pack_runtime_signature_matches(
@@ -1856,6 +1927,7 @@ where
 {
     Bq40LockDiagSnapshot {
         charging: bq40z50::read_charging_status_trace(i2c, addr).ok(),
+        safety_alert: bq40z50::read_safety_alert(i2c, addr).ok().flatten(),
         safety_status: bq40z50::read_safety_status(i2c, addr).ok().flatten(),
         pf_status: bq40z50::read_pf_status(i2c, addr).ok().flatten(),
         manufacturing_status: bq40z50::read_manufacturing_status(i2c, addr).ok().flatten(),
@@ -1928,6 +2000,7 @@ where
 {
     Bq40LockDiagSnapshot {
         charging: bq40z50::read_charging_status_trace(i2c, addr).ok(),
+        safety_alert: bq40z50::read_safety_alert(i2c, addr).ok().flatten(),
         safety_status: bq40z50::read_safety_status(i2c, addr).ok().flatten(),
         pf_status: bq40z50::read_pf_status(i2c, addr).ok().flatten(),
         manufacturing_status: bq40z50::read_manufacturing_status(i2c, addr).ok().flatten(),
@@ -1949,11 +2022,16 @@ where
 fn log_bq40_lock_diag_snapshot(addr: u8, stage: &'static str, diag: &Bq40LockDiagSnapshot) {
     log_bq40_charging_status_trace(addr, stage, diag.charging.as_ref());
     defmt::info!(
-        "bms_diag_state: addr=0x{=u8:x} stage={} safety_status={=?} oc={=?} gauging_status={=?} qen={=?} vok={=?} rest={=?} fc={=?} fd={=?} op_status={=?} xchg={=?} chg_fet={=?} dsg_fet={=?} pchg_fet={=?} update_status={=?} current_at_eoc_ma={=?} no_valid_charge_term={=?} last_valid_charge_term={=?} no_of_qmax_updates={=?} no_of_ra_updates={=?}",
+        "bms_diag_state: addr=0x{=u8:x} stage={} safety_alert={=?} safety_alert_oc={=?} safety_status={=?} oc={=?} occ1={=?} occ2={=?} cov={=?} gauging_status={=?} qen={=?} vok={=?} rest={=?} fc={=?} fd={=?} op_status={=?} xchg={=?} chg_fet={=?} dsg_fet={=?} pchg_fet={=?} update_status={=?} current_at_eoc_ma={=?} no_valid_charge_term={=?} last_valid_charge_term={=?} no_of_qmax_updates={=?} no_of_ra_updates={=?}",
         addr,
         stage,
+        diag.safety_alert,
+        bq40_mac_bit(diag.safety_alert, bq40z50::safety_status::OC),
         diag.safety_status,
         bq40_mac_bit(diag.safety_status, bq40z50::safety_status::OC),
+        bq40_mac_bit(diag.safety_status, bq40z50::safety_status::OCC1),
+        bq40_mac_bit(diag.safety_status, bq40z50::safety_status::OCC2),
+        bq40_mac_bit(diag.safety_status, bq40z50::safety_status::COV),
         diag.gauging_status,
         bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::QEN),
         bq40_mac_bit(diag.gauging_status, bq40z50::gauging_status::VOK),
@@ -3095,7 +3173,9 @@ where
             initial_audio_charge_phase =
                 audio_charge_phase_from_chg_stat(bq25792::status1::chg_stat(status1));
         }
-        let vbat_present = charger_status2.map(|v| (v & bq25792::status2::VBAT_PRESENT_STAT) != 0);
+        let status_vbat_present =
+            charger_status2.map(|v| (v & bq25792::status2::VBAT_PRESENT_STAT) != 0);
+        let vbat_present = bq25792_effective_vbat_present(status_vbat_present, charger_vbat_adc_mv);
         charger_vbat_present = vbat_present;
         let vsys_min_reg = charger_status3.map(|v| (v & bq25792::status3::VSYS_STAT) != 0);
         let input_present = charger_status0
@@ -3121,12 +3201,13 @@ where
         charger_ibus_adc_ma = input_sample.ui_ibus_ma;
         charger_ibat_adc_ma = adc_ready.then_some(charger_ibat_adc_ma_local).flatten();
         defmt::info!(
-            "self_test: bq25792 ctrl0={=?} status0={=?} status1={=?} status2={=?} status3={=?} vbat_present={=?} phase={} vsys_min_reg={=?} vbus_adc_mv={=?} ibus_adc_ma={=?} ibat_adc_ma={=?} ui_vbus_mv={=?} ui_ibus_ma={=?} adc_ready={=bool} vbat_adc_mv={=?} vsys_adc_mv={=?}",
+            "self_test: bq25792 ctrl0={=?} status0={=?} status1={=?} status2={=?} status3={=?} status_vbat_present={=?} vbat_present={=?} phase={} vsys_min_reg={=?} vbus_adc_mv={=?} ibus_adc_ma={=?} ibat_adc_ma={=?} ui_vbus_mv={=?} ui_ibus_ma={=?} adc_ready={=bool} vbat_adc_mv={=?} vsys_adc_mv={=?}",
             charger_ctrl0,
             charger_status0,
             charger_status1,
             charger_status2,
             charger_status3,
+            status_vbat_present,
             vbat_present,
             bq25792::decode_chg_stat(
                 charger_status1
@@ -3170,6 +3251,11 @@ where
         bms_discharge_ready,
         charger_vbat_present,
     ) {
+        let physical_issue_detail = bq40_physical_discharge_path_issue(
+            bms_charge_ready,
+            bms_charge_reason,
+            bms_discharge_ready,
+        );
         defmt::warn!(
             "self_test: bq40z50 physical discharge path absent pack_mv={=?} charger_vbat_present={=?} charger_vbat_adc_mv={=?} op_reason={=?}",
             bms_voltage_mv,
@@ -3180,7 +3266,7 @@ where
         bms_discharge_ready = Some(false);
         ui.bq40z50 = SelfCheckCommState::Warn;
         ui.bq40z50_discharge_ready = bms_discharge_ready;
-        ui.bq40z50_issue_detail = Some("physical_vbat_absent");
+        ui.bq40z50_issue_detail = Some(physical_issue_detail);
     }
     let charger_probe_ok = charger_enabled;
     reporter(SelfCheckStage::Charger, ui);
@@ -3622,7 +3708,9 @@ pub struct PowerManager<'d, I2C> {
     bms_activation_auto_force_charge_programmed: bool,
     bms_activation_auto_defer_logged: bool,
     bms_activation_backup: Option<ChargerActivationBackup>,
+    bms_activation_last_reason: Option<&'static str>,
     chg_watchdog_restore: Option<u8>,
+    bms_discharge_authorization_manual_recovery: Option<BmsDischargeAuthorizationManualRecovery>,
     output_state: OutputRuntimeState,
     recoverable_output_source: OutputGateReason,
     output_restore_after_bms_recovery: bool,
@@ -3683,6 +3771,253 @@ impl BmsRecoveryRequestKind {
         match self {
             Self::Activation => "activation",
             Self::DischargeAuthorization => "discharge_authorization",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct BmsDischargeAuthorizationRecoveryFacts {
+    emshut: Option<bool>,
+    xchg: Option<bool>,
+    xdsg: Option<bool>,
+    op_chg_fet: Option<bool>,
+    op_dsg_fet: Option<bool>,
+    op_pchg_fet: Option<bool>,
+    afe_fet_status: Option<u8>,
+    afe_fet_control: Option<u8>,
+    afe_interrupt_status: Option<u8>,
+    afe_latch_status: Option<u8>,
+    afe_chg_fet: Option<bool>,
+    afe_dsg_fet: Option<bool>,
+    afe_chg_control: Option<bool>,
+    afe_dsg_control: Option<bool>,
+    safety_status: Option<u32>,
+    pf_status: Option<u32>,
+    manufacturing_status: Option<u32>,
+    fet_options: Option<u8>,
+    da_configuration: Option<u16>,
+    power_config: Option<u16>,
+    protection_configuration: Option<u8>,
+    batt_status: Option<u16>,
+    pack_mv: Option<u16>,
+    current_ma: Option<i16>,
+    cell1_mv: Option<u16>,
+    cell2_mv: Option<u16>,
+    cell3_mv: Option<u16>,
+    cell4_mv: Option<u16>,
+    rsoc_pct: Option<u16>,
+    remcap_mah: Option<u16>,
+    fcc_mah: Option<u16>,
+    discharge_ready: Option<bool>,
+    charger_vbat_present: Option<bool>,
+    charger_vbat_adc_mv: Option<u16>,
+}
+
+impl BmsDischargeAuthorizationRecoveryFacts {
+    const fn empty() -> Self {
+        Self {
+            emshut: None,
+            xchg: None,
+            xdsg: None,
+            op_chg_fet: None,
+            op_dsg_fet: None,
+            op_pchg_fet: None,
+            afe_fet_status: None,
+            afe_fet_control: None,
+            afe_interrupt_status: None,
+            afe_latch_status: None,
+            afe_chg_fet: None,
+            afe_dsg_fet: None,
+            afe_chg_control: None,
+            afe_dsg_control: None,
+            safety_status: None,
+            pf_status: None,
+            manufacturing_status: None,
+            fet_options: None,
+            da_configuration: None,
+            power_config: None,
+            protection_configuration: None,
+            batt_status: None,
+            pack_mv: None,
+            current_ma: None,
+            cell1_mv: None,
+            cell2_mv: None,
+            cell3_mv: None,
+            cell4_mv: None,
+            rsoc_pct: None,
+            remcap_mah: None,
+            fcc_mah: None,
+            discharge_ready: None,
+            charger_vbat_present: None,
+            charger_vbat_adc_mv: None,
+        }
+    }
+
+    const fn recovered(self) -> bool {
+        let bq40_ready = match self.afe_dsg_fet {
+            Some(actual) => actual,
+            None => match self.afe_dsg_control {
+                Some(control) => control,
+                None => {
+                    matches!(self.discharge_ready, Some(true))
+                        || matches!(self.op_dsg_fet, Some(true))
+                }
+            },
+        };
+        bq40_ready && matches!(self.charger_vbat_present, Some(true))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct BmsDischargeAuthorizationManualRecovery {
+    source: &'static str,
+    before: BmsDischargeAuthorizationRecoveryFacts,
+    deadline: Instant,
+    reason: &'static str,
+}
+
+fn render_bms_discharge_authorization_facts<const N: usize>(
+    body: &mut String<N>,
+    facts: BmsDischargeAuthorizationRecoveryFacts,
+) {
+    let _ = write!(
+        body,
+        r#"{{"emshut":{},"xchg":{},"xdsg":{},"op_chg_fet":{},"op_dsg_fet":{},"op_pchg_fet":{},"afe_fet_status":{},"afe_fet_control":{},"afe_interrupt_status":{},"afe_latch_status":{},"afe_chg_fet":{},"afe_dsg_fet":{},"afe_chg_control":{},"afe_dsg_control":{},"safety_status":{},"safety_oc":{},"pf_status":{},"manufacturing_status":{},"mfg_fet_en":{},"mfg_chg_test":{},"mfg_dsg_test":{},"fet_options":{},"fetopt_sleepchg":{},"fetopt_chgfet":{},"fetopt_chgin":{},"fetopt_chgsu":{},"fetopt_otfet":{},"fetopt_pchg_comm":{},"da_configuration":{},"power_config":{},"power_check_wake":{},"power_check_wake_fet":{},"emshut_exit_comm":{},"emshut_exit_vpack":{},"protection_configuration":{},"prot_cuv_recov_chg":{},"batt_status":{},"batt_oca":{},"pack_mv":{},"current_ma":{},"cell1_mv":{},"cell2_mv":{},"cell3_mv":{},"cell4_mv":{},"rsoc_pct":{},"remcap_mah":{},"fcc_mah":{},"discharge_ready":{},"charger_vbat_present":{},"charger_vbat_adc_mv":{}}}"#,
+        json_opt_bool(facts.emshut),
+        json_opt_bool(facts.xchg),
+        json_opt_bool(facts.xdsg),
+        json_opt_bool(facts.op_chg_fet),
+        json_opt_bool(facts.op_dsg_fet),
+        json_opt_bool(facts.op_pchg_fet),
+        json_opt_u8(facts.afe_fet_status),
+        json_opt_u8(facts.afe_fet_control),
+        json_opt_u8(facts.afe_interrupt_status),
+        json_opt_u8(facts.afe_latch_status),
+        json_opt_bool(facts.afe_chg_fet),
+        json_opt_bool(facts.afe_dsg_fet),
+        json_opt_bool(facts.afe_chg_control),
+        json_opt_bool(facts.afe_dsg_control),
+        json_opt_u32(facts.safety_status),
+        json_opt_bool(
+            facts
+                .safety_status
+                .map(|raw| raw & bq40z50::safety_status::OC != 0)
+        ),
+        json_opt_u32(facts.pf_status),
+        json_opt_u32(facts.manufacturing_status),
+        json_opt_bool(
+            facts
+                .manufacturing_status
+                .map(|raw| raw & bq40z50::manufacturing_status::FET_EN != 0)
+        ),
+        json_opt_bool(
+            facts
+                .manufacturing_status
+                .map(|raw| raw & bq40z50::manufacturing_status::CHG_EN != 0)
+        ),
+        json_opt_bool(
+            facts
+                .manufacturing_status
+                .map(|raw| raw & bq40z50::manufacturing_status::DSG_EN != 0)
+        ),
+        json_opt_u8(facts.fet_options),
+        json_opt_bool(facts.fet_options.map(|raw| raw & (1 << 6) != 0)),
+        json_opt_bool(facts.fet_options.map(|raw| raw & (1 << 5) != 0)),
+        json_opt_bool(facts.fet_options.map(|raw| raw & (1 << 4) != 0)),
+        json_opt_bool(facts.fet_options.map(|raw| raw & (1 << 3) != 0)),
+        json_opt_bool(facts.fet_options.map(|raw| raw & (1 << 2) != 0)),
+        json_opt_bool(facts.fet_options.map(|raw| raw & (1 << 0) != 0)),
+        json_opt_u16(facts.da_configuration),
+        json_opt_u16(facts.power_config),
+        json_opt_bool(
+            facts
+                .power_config
+                .map(|raw| raw & bq40z50::power_config::CHECK_WAKE != 0)
+        ),
+        json_opt_bool(
+            facts
+                .power_config
+                .map(|raw| raw & bq40z50::power_config::CHECK_WAKE_FET != 0)
+        ),
+        json_opt_bool(
+            facts
+                .power_config
+                .map(|raw| raw & bq40z50::power_config::EMSHUT_EXIT_COMM != 0)
+        ),
+        json_opt_bool(
+            facts
+                .power_config
+                .map(|raw| raw & bq40z50::power_config::EMSHUT_EXIT_VPACK != 0)
+        ),
+        json_opt_u8(facts.protection_configuration),
+        json_opt_bool(
+            facts
+                .protection_configuration
+                .map(|raw| raw & bq40z50::protection_configuration::CUV_RECOV_CHG != 0)
+        ),
+        json_opt_u16(facts.batt_status),
+        json_opt_bool(
+            facts
+                .batt_status
+                .map(|raw| raw & bq40z50::battery_status::OCA != 0)
+        ),
+        json_opt_u16(facts.pack_mv),
+        json_opt_i16(facts.current_ma),
+        json_opt_u16(facts.cell1_mv),
+        json_opt_u16(facts.cell2_mv),
+        json_opt_u16(facts.cell3_mv),
+        json_opt_u16(facts.cell4_mv),
+        json_opt_u16(facts.rsoc_pct),
+        json_opt_u16(facts.remcap_mah),
+        json_opt_u16(facts.fcc_mah),
+        json_opt_bool(facts.discharge_ready),
+        json_opt_bool(facts.charger_vbat_present),
+        json_opt_u16(facts.charger_vbat_adc_mv),
+    );
+}
+
+fn json_opt_bool(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "null",
+    }
+}
+
+fn json_opt_u8(value: Option<u8>) -> JsonOptU32 {
+    JsonOptU32(value.map(u32::from))
+}
+
+fn json_opt_u16(value: Option<u16>) -> JsonOptU32 {
+    JsonOptU32(value.map(u32::from))
+}
+
+fn json_opt_u32(value: Option<u32>) -> JsonOptU32 {
+    JsonOptU32(value)
+}
+
+fn json_opt_i16(value: Option<i16>) -> JsonOptI32 {
+    JsonOptI32(value.map(i32::from))
+}
+
+struct JsonOptU32(Option<u32>);
+
+impl core::fmt::Display for JsonOptU32 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(value) => write!(f, "{}", value),
+            None => f.write_str("null"),
+        }
+    }
+}
+
+struct JsonOptI32(Option<i32>);
+
+impl core::fmt::Display for JsonOptI32 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.0 {
+            Some(value) => write!(f, "{}", value),
+            None => f.write_str("null"),
         }
     }
 }
@@ -4171,7 +4506,9 @@ where
             bms_activation_auto_force_charge_programmed: false,
             bms_activation_auto_defer_logged: false,
             bms_activation_backup: None,
+            bms_activation_last_reason: None,
             chg_watchdog_restore: None,
+            bms_discharge_authorization_manual_recovery: None,
             output_state,
             recoverable_output_source,
             output_restore_after_bms_recovery: false,
@@ -4495,12 +4832,20 @@ where
         };
         let fan_status = self.fan.status();
         let applied_fan = self.applied_fan_state;
-        let bms_recovery_pending = self.bms_activation_state == BmsActivationState::Pending
-            && snapshot.bq40z50 != SelfCheckCommState::Err;
+        let bms_recovery_pending = bms_recovery_pending_for_ui(
+            self.bms_activation_state == BmsActivationState::Pending,
+            snapshot.bq40z50 != SelfCheckCommState::Err,
+            self.bms_discharge_authorization_manual_recovery.is_some(),
+        );
 
         snapshot.requested_outputs =
             logic_outputs_from_enabled(self.output_state.requested_outputs);
-        snapshot.active_outputs = logic_outputs_from_enabled(self.output_state.active_outputs);
+        snapshot.active_outputs =
+            logic_outputs_from_enabled(confirmed_active_outputs_from_tps_readback(
+                self.output_state.active_outputs,
+                snapshot.tps_a_enabled,
+                snapshot.tps_b_enabled,
+            ));
         snapshot.recoverable_outputs =
             logic_outputs_from_enabled(self.output_state.recoverable_outputs);
         snapshot.output_gate_reason = self.output_state.gate_reason;
@@ -4593,9 +4938,13 @@ where
             read_bq40_op_status_with_raw_trace(&mut self.i2c, addr);
         let op_status = op_status.or(lock_diag.op_status);
         let charging_status = lock_diag.charging.and_then(|charging| charging.value);
+        let afe_register = bq40z50::read_afe_register(&mut self.i2c, addr)
+            .ok()
+            .flatten();
 
         self.diag_snapshot.bms.addr = Some(addr);
         self.diag_snapshot.bms.state = self_check_comm_state_name(self.ui_snapshot.bq40z50);
+        self.diag_snapshot.bms.safety_alert = lock_diag.safety_alert;
         self.diag_snapshot.bms.safety_status = lock_diag.safety_status;
         self.diag_snapshot.bms.pf_status = lock_diag.pf_status;
         self.diag_snapshot.bms.manufacturing_status = lock_diag.manufacturing_status;
@@ -4604,17 +4953,57 @@ where
         self.diag_snapshot.bms.op_status = op_status;
         self.diag_snapshot.bms.op_status_raw_len = op_status_raw_len;
         self.diag_snapshot.bms.op_status_raw_bytes = op_status_raw_bytes;
+        self.diag_snapshot.bms.afe_fet_status = afe_register.map(|afe| afe.fet_status);
+        self.diag_snapshot.bms.afe_fet_control = afe_register.map(|afe| afe.fet_control);
+        self.diag_snapshot.bms.afe_latch_status = afe_register.map(|afe| afe.latch_status);
+        self.diag_snapshot.bms.afe_cell_balance_status =
+            afe_register.map(|afe| afe.cell_balance_status);
+        self.diag_snapshot.bms.afe_chg_fet = afe_register.map(|afe| afe.chg_fet_on());
+        self.diag_snapshot.bms.afe_dsg_fet = afe_register.map(|afe| afe.dsg_fet_on());
         self.diag_snapshot.bms.emshut = bq40_op_bit(op_status, bq40z50::operation_status::EMSHUT);
         self.diag_snapshot.bms.pres = bq40_op_bit(op_status, bq40z50::operation_status::PRES);
         self.diag_snapshot.bms.xchg = bq40_op_bit(op_status, bq40z50::operation_status::XCHG);
         self.diag_snapshot.bms.xdsg = bq40_op_bit(op_status, bq40z50::operation_status::XDSG);
-        self.diag_snapshot.bms.chg_fet = bq40_op_bit(op_status, bq40z50::operation_status::CHG);
-        self.diag_snapshot.bms.dsg_fet = bq40_op_bit(op_status, bq40z50::operation_status::DSG);
-        self.diag_snapshot.bms.pchg_fet = bq40_op_bit(op_status, bq40z50::operation_status::PCHG);
+        self.diag_snapshot.bms.op_chg_fet = bq40_op_bit(op_status, bq40z50::operation_status::CHG);
+        self.diag_snapshot.bms.op_dsg_fet = bq40_op_bit(op_status, bq40z50::operation_status::DSG);
+        self.diag_snapshot.bms.op_pchg_fet =
+            bq40_op_bit(op_status, bq40z50::operation_status::PCHG);
+        self.diag_snapshot.bms.chg_fet = self
+            .diag_snapshot
+            .bms
+            .afe_chg_fet
+            .or(self.diag_snapshot.bms.op_chg_fet);
+        self.diag_snapshot.bms.dsg_fet = self
+            .diag_snapshot
+            .bms
+            .afe_dsg_fet
+            .or(self.diag_snapshot.bms.op_dsg_fet);
+        self.diag_snapshot.bms.pchg_fet = self.diag_snapshot.bms.op_pchg_fet;
+        let discharge_path_contradiction = self.diag_snapshot.bms.op_dsg_fet == Some(true)
+            && self.diag_snapshot.bms.xdsg == Some(false)
+            && self.ui_snapshot.bq25792_vbat_present == Some(false)
+            && self.ui_snapshot.bq40z50_no_battery != Some(true);
+        self.diag_snapshot.bms.discharge_path_contradiction = Some(discharge_path_contradiction);
+        self.diag_snapshot.bms.discharge_path_contradiction_reason = if discharge_path_contradiction
+        {
+            Some("op_dsg_ready_but_charger_vbat_absent")
+        } else {
+            None
+        };
         self.diag_snapshot.bms.cuv =
             bq40_mac_bit(lock_diag.safety_status, bq40z50::safety_status::CUV);
         self.diag_snapshot.bms.cuvc =
             bq40_mac_bit(lock_diag.safety_status, bq40z50::safety_status::CUVC);
+        self.diag_snapshot.bms.cov =
+            bq40_mac_bit(lock_diag.safety_status, bq40z50::safety_status::COV);
+        self.diag_snapshot.bms.occ1 =
+            bq40_mac_bit(lock_diag.safety_status, bq40z50::safety_status::OCC1);
+        self.diag_snapshot.bms.occ2 =
+            bq40_mac_bit(lock_diag.safety_status, bq40z50::safety_status::OCC2);
+        self.diag_snapshot.bms.oc =
+            bq40_mac_bit(lock_diag.safety_status, bq40z50::safety_status::OC);
+        self.diag_snapshot.bms.safety_alert_oc =
+            bq40_mac_bit(lock_diag.safety_alert, bq40z50::safety_status::OC);
         self.diag_snapshot.bms.cuv_recovery_mv = lock_diag.cuv_recovery_mv;
         self.diag_snapshot.bms.cuv_recov_chg = lock_diag
             .protection_configuration
@@ -4932,11 +5321,13 @@ where
     pub fn request_output_restore(&mut self) {
         if !self.can_request_output_restore() {
             defmt::warn!(
-                "power: output restore ignored gate_reason={} active_outputs={} recoverable_outputs={} mains_present={=?}",
+                "power: output restore ignored gate_reason={} active_outputs={} recoverable_outputs={} restore_input_present={=?} mains_present={=?} input_present={=?}",
                 self.output_state.gate_reason.as_str(),
                 self.output_state.active_outputs.describe(),
                 self.output_state.recoverable_outputs.describe(),
-                self.current_mains_present()
+                self.current_output_restore_input_present(),
+                self.current_mains_present(),
+                self.ui_snapshot.aggregate_input_present,
             );
             return;
         }
@@ -4947,17 +5338,15 @@ where
         let now = Instant::now();
         if restore.is_enabled(OutputChannel::OutA) {
             self.clear_tps_fault_latch(OutputChannel::OutA);
-            self.tps_a_next_retry_at = Some(now);
+            self.mark_tps_failed(OutputChannel::OutA, Some(now));
         }
         if restore.is_enabled(OutputChannel::OutB) {
             self.clear_tps_fault_latch(OutputChannel::OutB);
-            self.tps_b_next_retry_at = Some(now);
+            self.mark_tps_failed(OutputChannel::OutB, Some(now));
         }
         if !self.ina_ready {
             self.ina_next_retry_at = Some(now);
         }
-        self.ui_snapshot.tps_a_enabled = Some(restore.is_enabled(OutputChannel::OutA));
-        self.ui_snapshot.tps_b_enabled = Some(restore.is_enabled(OutputChannel::OutB));
         self.recompute_ui_mode();
         defmt::info!(
             "power: output restore requested outputs={}",
@@ -5160,9 +5549,17 @@ where
         detail.discharge_ready = discharge_ready;
         detail.xchg = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::XCHG);
         detail.xdsg = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::XDSG);
-        detail.charge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CHG);
-        detail.discharge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::DSG);
-        detail.precharge_fet_on = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::PCHG);
+        detail.charge_fet_on = snapshot
+            .afe_register
+            .map(|afe| afe.chg_fet_on())
+            .or_else(|| bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CHG));
+        detail.discharge_fet_on = snapshot
+            .afe_register
+            .map(|afe| afe.dsg_fet_on())
+            .or_else(|| bq40_op_bit(snapshot.op_status, bq40z50::operation_status::DSG));
+        detail.precharge_fet_on = snapshot
+            .op_status
+            .map(|raw| (raw & bq40z50::operation_status::PCHG) != 0);
         detail.learn_qen = bq40_mac_bit(snapshot.gauging_status, bq40z50::gauging_status::QEN);
         detail.learn_vok = bq40_mac_bit(snapshot.gauging_status, bq40z50::gauging_status::VOK);
         detail.learn_rest = bq40_mac_bit(snapshot.gauging_status, bq40z50::gauging_status::REST);
@@ -5382,6 +5779,55 @@ where
         }
     }
 
+    fn front_panel_bms_discharge_authorization_recovery_pending(&self) -> bool {
+        self.bms_discharge_authorization_manual_recovery
+            .map(|pending| pending.source == BMS_DISCHARGE_AUTH_FRONT_PANEL_SOURCE)
+            .unwrap_or(false)
+    }
+
+    fn front_panel_bms_discharge_authorization_result(&mut self) -> BmsResultKind {
+        let facts = self.read_bms_discharge_authorization_recovery_facts();
+        if facts.recovered() && self.output_restore_complete_after_bms_recovery() {
+            BmsResultKind::Success
+        } else if self.ui_snapshot.bq40z50_no_battery == Some(true) {
+            BmsResultKind::NoBattery
+        } else if self.is_bq40_rom_mode_detected() {
+            BmsResultKind::RomMode
+        } else if self.bms_addr.is_none() || self.ui_snapshot.bq40z50 == SelfCheckCommState::Err {
+            BmsResultKind::NotDetected
+        } else {
+            BmsResultKind::Abnormal
+        }
+    }
+
+    fn finish_front_panel_bms_discharge_authorization_recovery(&mut self, reason: &'static str) {
+        let result = self.front_panel_bms_discharge_authorization_result();
+        self.bms_activation_last_reason = Some(reason);
+        self.bms_activation_state = BmsActivationState::Result(result);
+        self.ui_snapshot.bq40z50_last_result = Some(result);
+        defmt::info!(
+            "bms: discharge_authorization front_panel_result result={} reason={}",
+            bms_result_name(result),
+            reason
+        );
+    }
+
+    pub fn poll_front_panel_bms_discharge_authorization_recovery(&mut self) {
+        if !self.front_panel_bms_discharge_authorization_recovery_pending() {
+            return;
+        }
+        if self
+            .take_completed_bms_discharge_authorization_recovery_json_for_source::<
+                BMS_DISCHARGE_AUTH_FRONT_PANEL_BODY_CAP,
+            >(BMS_DISCHARGE_AUTH_FRONT_PANEL_SOURCE)
+            .is_some()
+        {
+            self.finish_front_panel_bms_discharge_authorization_recovery(
+                "front_panel_recovery_completed",
+            );
+        }
+    }
+
     fn can_request_bms_discharge_authorization(&self) -> bool {
         self.output_state.requested_outputs != EnabledOutputs::None
             && self.output_state.gate_reason == OutputGateReason::BmsNotReady
@@ -5435,6 +5881,701 @@ where
         );
     }
 
+    pub fn recover_bms_discharge_authorization_json<const N: usize>(
+        &mut self,
+        source: &'static str,
+    ) -> String<N> {
+        if let Some(body) =
+            self.take_completed_bms_discharge_authorization_recovery_json_for_source(source)
+        {
+            return body;
+        }
+        match self.begin_bms_discharge_authorization_recovery_json(source) {
+            Some(body) => body,
+            None => self.render_pending_bms_discharge_authorization_recovery_json(source),
+        }
+    }
+
+    pub fn begin_bms_discharge_authorization_recovery_json<const N: usize>(
+        &mut self,
+        source: &'static str,
+    ) -> Option<String<N>> {
+        if let Some(pending) = self.bms_discharge_authorization_manual_recovery {
+            if pending.source == source {
+                return self
+                    .take_completed_bms_discharge_authorization_recovery_json_for_source(source);
+            }
+            let before = self.read_bms_discharge_authorization_recovery_facts();
+            let after = before;
+            return Some(
+                self.render_bms_discharge_authorization_recovery_result_json(
+                    source,
+                    false,
+                    "rejected",
+                    "recovery_already_pending",
+                    pending.reason,
+                    before,
+                    after,
+                ),
+            );
+        }
+
+        let before = self.read_bms_discharge_authorization_recovery_facts();
+        let before_mfg_fet_en = before
+            .manufacturing_status
+            .map(|raw| raw & bq40z50::manufacturing_status::FET_EN != 0);
+        let mut accepted = false;
+        let mut result = "rejected";
+        let mut reason = self.bms_discharge_authorization_reject_reason(before);
+        let mut attempt_reason = reason;
+
+        if reason == "already_ready" {
+            result = "already_ready";
+            self.output_restore_after_bms_recovery = true;
+        } else if reason == "allowed" {
+            accepted = true;
+            if before.emshut == Some(true) {
+                attempt_reason = "emshut_exit_sent";
+                match self.bms_addr {
+                    Some(addr) => {
+                        if bq40z50::exit_emshut(&mut self.i2c, addr).is_err() {
+                            result = "failed";
+                            reason = "emshut_exit_write_failed";
+                        } else {
+                            reason = "emshut_exit_sent";
+                            self.start_bms_discharge_authorization_manual_recovery(
+                                source, before, reason,
+                            );
+                            return None;
+                        }
+                    }
+                    None => {
+                        result = "rejected";
+                        accepted = false;
+                        reason = "bms_missing";
+                    }
+                }
+            } else if bms_discharge_authorization_needs_bq40_fet_state_reset(
+                before.charger_vbat_present,
+                before.afe_chg_fet,
+                before.afe_chg_control,
+                before.afe_dsg_fet,
+                before.op_chg_fet,
+                before.op_dsg_fet,
+                before.xchg,
+                before.xdsg,
+                before.safety_status,
+                before.pf_status,
+                before_mfg_fet_en,
+            ) {
+                attempt_reason = "pack_output_path_reset_requested";
+                match self.bms_addr {
+                    Some(addr) => {
+                        if bq40z50::device_reset(&mut self.i2c, addr).is_err() {
+                            result = "failed";
+                            reason = "bq40_device_reset_write_failed";
+                        } else {
+                            self.request_bms_discharge_authorization(false);
+                            reason = "pack_output_path_reset_requested";
+                            if self.bms_activation_state == BmsActivationState::Pending {
+                                self.start_bms_discharge_authorization_manual_recovery(
+                                    source, before, reason,
+                                );
+                                return None;
+                            }
+                        }
+                    }
+                    None => {
+                        result = "rejected";
+                        accepted = false;
+                        reason = "bms_missing";
+                    }
+                }
+            } else if bms_discharge_authorization_needs_pack_path_recovery(
+                before.charger_vbat_present,
+                before.afe_dsg_fet,
+                before.op_dsg_fet,
+            ) {
+                self.request_bms_discharge_authorization(false);
+                reason = "pack_output_path_recovery_requested";
+                attempt_reason = reason;
+                if self.bms_activation_state == BmsActivationState::Pending {
+                    self.start_bms_discharge_authorization_manual_recovery(source, before, reason);
+                    return None;
+                }
+            } else {
+                self.request_bms_discharge_authorization(false);
+                reason = "ordinary_recovery_requested";
+                attempt_reason = reason;
+                if self.bms_activation_state == BmsActivationState::Pending {
+                    self.start_bms_discharge_authorization_manual_recovery(source, before, reason);
+                    return None;
+                }
+            }
+        }
+
+        let after = self.read_bms_discharge_authorization_recovery_facts();
+        if accepted {
+            if after.recovered() {
+                result = "success";
+                reason = bms_discharge_authorization_success_reason(attempt_reason);
+                self.output_restore_after_bms_recovery = true;
+            } else if result != "failed" {
+                result = "failed";
+                reason = self.bms_discharge_authorization_failure_reason(after, reason);
+            }
+        }
+
+        Some(
+            self.render_bms_discharge_authorization_recovery_result_json(
+                source,
+                accepted,
+                result,
+                reason,
+                attempt_reason,
+                before,
+                after,
+            ),
+        )
+    }
+
+    pub fn take_completed_bms_discharge_authorization_recovery_json_for_source<const N: usize>(
+        &mut self,
+        source: &'static str,
+    ) -> Option<String<N>> {
+        let pending = self.bms_discharge_authorization_manual_recovery?;
+        if pending.source != source {
+            return None;
+        }
+
+        let now = Instant::now();
+        let mut after = self.read_bms_discharge_authorization_recovery_facts();
+        if after.recovered() {
+            self.output_restore_after_bms_recovery = true;
+            if bms_discharge_authorization_reason_uses_activation(pending.reason)
+                && self.bms_activation_state == BmsActivationState::Pending
+            {
+                return None;
+            }
+            self.reconcile_output_state();
+            self.maybe_restore_outputs_after_bms_recovery();
+            if !self.output_restore_complete_after_bms_recovery() {
+                if now >= pending.deadline {
+                    self.bms_discharge_authorization_manual_recovery = None;
+                    return Some(
+                        self.render_bms_discharge_authorization_recovery_result_json(
+                            source,
+                            true,
+                            "failed",
+                            self.output_restore_failure_reason_after_bms_recovery(),
+                            pending.reason,
+                            pending.before,
+                            after,
+                        ),
+                    );
+                }
+                return None;
+            }
+            self.bms_discharge_authorization_manual_recovery = None;
+            let reason = bms_discharge_authorization_success_reason(pending.reason);
+            return Some(
+                self.render_bms_discharge_authorization_recovery_result_json(
+                    source,
+                    true,
+                    "success",
+                    reason,
+                    pending.reason,
+                    pending.before,
+                    after,
+                ),
+            );
+        }
+
+        if pending.reason == "emshut_exit_sent" {
+            let after_mfg_fet_en = after
+                .manufacturing_status
+                .map(|raw| raw & bq40z50::manufacturing_status::FET_EN != 0);
+            if let Some(next_reason) = bms_discharge_authorization_next_after_emshut_exit(
+                after.emshut,
+                after.charger_vbat_present,
+                after.afe_chg_fet,
+                after.afe_chg_control,
+                after.afe_dsg_fet,
+                after.op_chg_fet,
+                after.op_dsg_fet,
+                after.xchg,
+                after.xdsg,
+                after.safety_status,
+                after.pf_status,
+                after_mfg_fet_en,
+            ) {
+                if next_reason == "pack_output_path_reset_requested" {
+                    match self.bms_addr {
+                        Some(addr) => {
+                            if bq40z50::device_reset(&mut self.i2c, addr).is_err() {
+                                self.bms_discharge_authorization_manual_recovery = None;
+                                return Some(
+                                    self.render_bms_discharge_authorization_recovery_result_json(
+                                        source,
+                                        true,
+                                        "failed",
+                                        "bq40_device_reset_write_failed",
+                                        next_reason,
+                                        pending.before,
+                                        after,
+                                    ),
+                                );
+                            }
+                        }
+                        None => {
+                            self.bms_discharge_authorization_manual_recovery = None;
+                            return Some(
+                                self.render_bms_discharge_authorization_recovery_result_json(
+                                    source,
+                                    false,
+                                    "rejected",
+                                    "bms_missing",
+                                    next_reason,
+                                    pending.before,
+                                    after,
+                                ),
+                            );
+                        }
+                    }
+                }
+
+                self.request_bms_discharge_authorization(false);
+                if self.bms_activation_state == BmsActivationState::Pending {
+                    self.start_bms_discharge_authorization_manual_recovery(
+                        source,
+                        pending.before,
+                        next_reason,
+                    );
+                    return None;
+                }
+            }
+        }
+
+        let activation_finished =
+            bms_discharge_authorization_reason_uses_activation(pending.reason)
+                && self.bms_activation_state != BmsActivationState::Pending;
+        if activation_finished || now >= pending.deadline {
+            if bms_discharge_authorization_reason_uses_activation(pending.reason)
+                && self.bms_activation_state == BmsActivationState::Pending
+            {
+                self.finish_bms_activation(
+                    BmsResultKind::Abnormal,
+                    "manual_discharge_authorization_deadline_elapsed",
+                );
+                after = self.read_bms_discharge_authorization_recovery_facts();
+            }
+            self.bms_discharge_authorization_manual_recovery = None;
+            let reason = if now >= pending.deadline {
+                self.bms_discharge_authorization_failure_reason(after, "manual_recovery_timeout")
+            } else {
+                self.bms_discharge_authorization_failure_reason(after, pending.reason)
+            };
+            return Some(
+                self.render_bms_discharge_authorization_recovery_result_json(
+                    source,
+                    true,
+                    "failed",
+                    reason,
+                    pending.reason,
+                    pending.before,
+                    after,
+                ),
+            );
+        }
+
+        None
+    }
+
+    fn start_bms_discharge_authorization_manual_recovery(
+        &mut self,
+        source: &'static str,
+        before: BmsDischargeAuthorizationRecoveryFacts,
+        reason: &'static str,
+    ) {
+        let now = Instant::now();
+        let deadline = self
+            .bms_activation_deadline
+            .unwrap_or(now + BMS_DISCHARGE_AUTH_MANUAL_WINDOW);
+        self.bms_discharge_authorization_manual_recovery =
+            Some(BmsDischargeAuthorizationManualRecovery {
+                source,
+                before,
+                deadline,
+                reason,
+            });
+        defmt::info!(
+            "bms: discharge_authorization manual_recovery pending source={} reason={} deadline_ms={=u32}",
+            source,
+            reason,
+            BMS_DISCHARGE_AUTH_MANUAL_WINDOW.as_millis() as u32
+        );
+    }
+
+    fn render_pending_bms_discharge_authorization_recovery_json<const N: usize>(
+        &mut self,
+        source: &'static str,
+    ) -> String<N> {
+        let Some(pending) = self.bms_discharge_authorization_manual_recovery else {
+            let facts = self.read_bms_discharge_authorization_recovery_facts();
+            return self.render_bms_discharge_authorization_recovery_result_json(
+                source,
+                false,
+                "rejected",
+                "no_recovery_pending",
+                "no_recovery_pending",
+                facts,
+                facts,
+            );
+        };
+        let after = self.read_bms_discharge_authorization_recovery_facts();
+        self.render_bms_discharge_authorization_recovery_result_json(
+            source,
+            true,
+            "pending",
+            pending.reason,
+            pending.reason,
+            pending.before,
+            after,
+        )
+    }
+
+    fn render_bms_discharge_authorization_recovery_result_json<const N: usize>(
+        &self,
+        source: &'static str,
+        accepted: bool,
+        result: &'static str,
+        reason: &'static str,
+        attempt_reason: &'static str,
+        before: BmsDischargeAuthorizationRecoveryFacts,
+        after: BmsDischargeAuthorizationRecoveryFacts,
+    ) -> String<N> {
+        let recovery_action = bms_discharge_authorization_recovery_action(attempt_reason);
+        let activation_force_charge_requested = self.bms_activation_force_charge_requested
+            || (accepted && bms_discharge_authorization_reason_uses_activation(attempt_reason));
+        let charger_diag = self.diag_snapshot.charger;
+        let policy_diag = self.diag_snapshot.policy;
+        defmt::info!(
+            "bms: discharge_authorization manual_recovery source={} accepted={=bool} result={} reason={} attempt_reason={} action={} before_emshut={=?} before_xdsg={=?} before_op_chg={=?} before_op_dsg={=?} before_afe_chg={=?} before_afe_dsg={=?} before_afe_chg_ctl={=?} before_afe_dsg_ctl={=?} before_afe_latch={=?} before_vbat_present={=?} after_emshut={=?} after_xdsg={=?} after_op_chg={=?} after_op_dsg={=?} after_afe_chg={=?} after_afe_dsg={=?} after_afe_chg_ctl={=?} after_afe_dsg_ctl={=?} after_afe_latch={=?} after_vbat_present={=?} activation_state={} activation_phase={} force_charge={=bool} requested_outputs={} active_outputs={} gate_reason={}",
+            source,
+            accepted,
+            result,
+            reason,
+            attempt_reason,
+            recovery_action,
+            before.emshut,
+            before.xdsg,
+            before.op_chg_fet,
+            before.op_dsg_fet,
+            before.afe_chg_fet,
+            before.afe_dsg_fet,
+            before.afe_chg_control,
+            before.afe_dsg_control,
+            before.afe_latch_status,
+            before.charger_vbat_present,
+            after.emshut,
+            after.xdsg,
+            after.op_chg_fet,
+            after.op_dsg_fet,
+            after.afe_chg_fet,
+            after.afe_dsg_fet,
+            after.afe_chg_control,
+            after.afe_dsg_control,
+            after.afe_latch_status,
+            after.charger_vbat_present,
+            bms_activation_state_name(self.bms_activation_state),
+            bms_activation_phase_name(self.bms_activation_phase),
+            activation_force_charge_requested,
+            self.output_state.requested_outputs.describe(),
+            self.output_state.active_outputs.describe(),
+            self.output_state.gate_reason.as_str(),
+        );
+
+        let mut body = String::<N>::new();
+        let _ = write!(
+            body,
+            r#"{{"ok":{},"accepted":{},"result":"{}","reason":"{}","attempt_reason":"{}","recovery_action":"{}","source":"{}","activation_state":"{}","activation_last_reason":"{}","activation_phase":"{}","activation_force_charge_requested":{},"charger_enabled":{},"charger_ce_low":{},"charger_allow_charge":{},"charger_force_allow_charge":{},"charger_can_enable":{},"charger_usb_pd_charge_gate_ready":{},"charger_vbus_stat":"{}","charger_policy_status":"{}","charger_policy_notice":"{}","status_before":"#,
+            if result == "success" || result == "already_ready" {
+                "true"
+            } else {
+                "false"
+            },
+            if accepted { "true" } else { "false" },
+            result,
+            reason,
+            attempt_reason,
+            recovery_action,
+            source,
+            bms_activation_state_name(self.bms_activation_state),
+            self.bms_activation_last_reason.unwrap_or("none"),
+            bms_activation_phase_name(self.bms_activation_phase),
+            if activation_force_charge_requested {
+                "true"
+            } else {
+                "false"
+            },
+            if charger_diag.enabled {
+                "true"
+            } else {
+                "false"
+            },
+            if charger_diag.ce_low { "true" } else { "false" },
+            if charger_diag.allow_charge {
+                "true"
+            } else {
+                "false"
+            },
+            if charger_diag.force_allow_charge {
+                "true"
+            } else {
+                "false"
+            },
+            if charger_diag.can_enable {
+                "true"
+            } else {
+                "false"
+            },
+            if charger_diag.usb_pd_charge_gate_ready {
+                "true"
+            } else {
+                "false"
+            },
+            charger_diag.vbus_stat,
+            policy_diag.status,
+            policy_diag.notice,
+        );
+        render_bms_discharge_authorization_facts(&mut body, before);
+        let _ = body.push_str(r#","status_after":"#);
+        render_bms_discharge_authorization_facts(&mut body, after);
+        let _ = write!(
+            body,
+            r#","output_gate_reason":"{}","requested_outputs":"{}","active_outputs":"{}"}}"#,
+            self.output_state.gate_reason.as_str(),
+            self.output_state.requested_outputs.describe(),
+            self.output_state.active_outputs.describe(),
+        );
+        body
+    }
+
+    fn bms_discharge_authorization_reject_reason(
+        &self,
+        facts: BmsDischargeAuthorizationRecoveryFacts,
+    ) -> &'static str {
+        if facts.recovered() {
+            return "already_ready";
+        }
+        if self.output_state.requested_outputs == EnabledOutputs::None {
+            return "output_not_requested";
+        }
+        if self.output_state.gate_reason != OutputGateReason::BmsNotReady {
+            return "output_gate_not_bms_not_ready";
+        }
+        if self.bms_addr.is_none() || self.ui_snapshot.bq40z50 == SelfCheckCommState::Err {
+            return "bms_missing";
+        }
+        if self.ui_snapshot.bq40z50_no_battery == Some(true) {
+            return "no_battery";
+        }
+        if self.ui_snapshot.bq40z50_rca_alarm == Some(true) {
+            return "remaining_capacity_alarm";
+        }
+        if self.ui_snapshot.bq40z50_issue_detail == Some("cell_undervoltage")
+            || bq40_lock_diag_low_voltage_blocked(self.bms_cached_lock_diag)
+        {
+            return "cell_undervoltage";
+        }
+        if self.therm_kill.is_low() {
+            return "therm_kill_asserted";
+        }
+        if !discharge_authorization_input_ready(
+            self.current_mains_present(),
+            self.ui_snapshot.aggregate_input_present,
+        ) {
+            return "input_missing";
+        }
+        if self.ui_snapshot.bq25792 == SelfCheckCommState::Err {
+            return "charger_missing";
+        }
+        if facts.pf_status.map(|raw| raw != 0).unwrap_or(false) {
+            return "bms_pf_status_active";
+        }
+        let discharge_safety_block = bq40z50::safety_status::CUV
+            | bq40z50::safety_status::OCD1
+            | bq40z50::safety_status::OCD2
+            | bq40z50::safety_status::AOLD
+            | bq40z50::safety_status::AOLDL
+            | bq40z50::safety_status::ASCD
+            | bq40z50::safety_status::ASCDL
+            | bq40z50::safety_status::CUVC;
+        if facts
+            .safety_status
+            .map(|raw| raw & discharge_safety_block != 0)
+            .unwrap_or(false)
+        {
+            return "bms_discharge_safety_active";
+        }
+        "allowed"
+    }
+
+    fn bms_discharge_authorization_failure_reason(
+        &self,
+        facts: BmsDischargeAuthorizationRecoveryFacts,
+        fallback: &'static str,
+    ) -> &'static str {
+        if facts.emshut == Some(true) {
+            "emshut_still_active"
+        } else if facts.afe_dsg_control == Some(false) {
+            "afe_dsg_control_off"
+        } else if facts.afe_dsg_fet == Some(false) {
+            "afe_dsg_fet_off"
+        } else if facts.afe_chg_control == Some(false) && facts.charger_vbat_present == Some(false)
+        {
+            "afe_chg_control_off_bat_absent"
+        } else if facts.afe_chg_fet == Some(false) && facts.charger_vbat_present == Some(false) {
+            "afe_chg_fet_off_bat_absent"
+        } else if facts.afe_chg_control == Some(false) && facts.xchg == Some(true) {
+            "afe_chg_control_off_xchg"
+        } else if facts.afe_chg_fet == Some(false) && facts.xchg == Some(true) {
+            "afe_chg_fet_off_xchg"
+        } else if facts.xchg == Some(true)
+            && facts.op_chg_fet == Some(false)
+            && facts.op_dsg_fet == Some(true)
+            && facts.charger_vbat_present == Some(false)
+        {
+            "xchg_chg_fet_off_pack_output_open"
+        } else if facts.op_dsg_fet == Some(true) && facts.charger_vbat_present == Some(false) {
+            "dsg_reported_on_bat_absent"
+        } else if facts.xdsg == Some(true) {
+            "xdsg_still_asserted"
+        } else if facts.xchg == Some(true) && facts.op_chg_fet == Some(false) {
+            "xchg_chg_fet_off"
+        } else if facts.op_dsg_fet == Some(false) {
+            "dsg_fet_still_off"
+        } else if facts.charger_vbat_present == Some(false) {
+            "physical_vbat_absent"
+        } else if facts.discharge_ready == Some(false) {
+            "discharge_ready_false"
+        } else {
+            fallback
+        }
+    }
+
+    fn read_bms_discharge_authorization_recovery_facts(
+        &mut self,
+    ) -> BmsDischargeAuthorizationRecoveryFacts {
+        let mut facts = BmsDischargeAuthorizationRecoveryFacts::empty();
+        facts.discharge_ready = self.ui_snapshot.bq40z50_discharge_ready;
+        facts.charger_vbat_present = self.ui_snapshot.bq25792_vbat_present;
+        facts.charger_vbat_adc_mv = self.diag_snapshot.charger.vbat_adc_mv;
+        let mut bq40_discharge_ready = None;
+
+        if let Some(addr) = self.bms_addr {
+            if let Ok(Some(op)) = bq40z50::read_operation_status(&mut self.i2c, addr) {
+                facts.emshut = Some((op & bq40z50::operation_status::EMSHUT) != 0);
+                facts.xchg = Some((op & bq40z50::operation_status::XCHG) != 0);
+                facts.xdsg = Some((op & bq40z50::operation_status::XDSG) != 0);
+                facts.op_chg_fet = Some((op & bq40z50::operation_status::CHG) != 0);
+                facts.op_dsg_fet = Some((op & bq40z50::operation_status::DSG) != 0);
+                facts.op_pchg_fet = Some((op & bq40z50::operation_status::PCHG) != 0);
+                bq40_discharge_ready = Some(
+                    (op & bq40z50::operation_status::XDSG) == 0
+                        && (op & bq40z50::operation_status::DSG) != 0,
+                );
+            }
+            facts.batt_status = self
+                .read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::BATTERY_STATUS)
+                .ok();
+            facts.pack_mv = self
+                .read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::VOLTAGE)
+                .ok();
+            facts.current_ma = self
+                .read_bq40_i16_with_optional_pec(addr, bq40z50::cmd::CURRENT)
+                .ok();
+            facts.cell1_mv = self
+                .read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::CELL_VOLTAGE_1)
+                .ok();
+            facts.cell2_mv = self
+                .read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::CELL_VOLTAGE_2)
+                .ok();
+            facts.cell3_mv = self
+                .read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::CELL_VOLTAGE_3)
+                .ok();
+            facts.cell4_mv = self
+                .read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::CELL_VOLTAGE_4)
+                .ok();
+            facts.rsoc_pct = self
+                .read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE)
+                .ok();
+            facts.remcap_mah = self
+                .read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::REMAINING_CAPACITY)
+                .ok();
+            facts.fcc_mah = self
+                .read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::FULL_CHARGE_CAPACITY)
+                .ok();
+            if let Ok(Some(afe)) = bq40z50::read_afe_register(&mut self.i2c, addr) {
+                facts.afe_interrupt_status = Some(afe.interrupt_status);
+                facts.afe_fet_status = Some(afe.fet_status);
+                facts.afe_fet_control = Some(afe.fet_control);
+                facts.afe_latch_status = Some(afe.latch_status);
+                facts.afe_chg_fet = Some(afe.chg_fet_on());
+                facts.afe_dsg_fet = Some(afe.dsg_fet_on());
+                facts.afe_chg_control = Some(afe.chg_fet_control_on());
+                facts.afe_dsg_control = Some(afe.dsg_fet_control_on());
+            }
+            facts.safety_status = bq40z50::read_safety_status(&mut self.i2c, addr)
+                .ok()
+                .flatten();
+            facts.pf_status = bq40z50::read_pf_status(&mut self.i2c, addr).ok().flatten();
+            facts.manufacturing_status = bq40z50::read_manufacturing_status(&mut self.i2c, addr)
+                .ok()
+                .flatten();
+            facts.fet_options =
+                bq40z50::read_data_flash_u8(&mut self.i2c, addr, bq40z50::data_flash::FET_OPTIONS)
+                    .ok()
+                    .flatten();
+            facts.da_configuration = bq40z50::read_data_flash_u16(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::DA_CONFIGURATION,
+            )
+            .ok()
+            .flatten();
+            facts.power_config = bq40z50::read_data_flash_u16(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::POWER_CONFIG,
+            )
+            .ok()
+            .flatten();
+            facts.protection_configuration = bq40z50::read_data_flash_u8(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::PROTECTION_CONFIGURATION,
+            )
+            .ok()
+            .flatten();
+        }
+
+        if bq25792::ensure_adc_power_path(&mut self.i2c).is_ok() {
+            let status2 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_2).ok();
+            let status_vbat_present =
+                status2.map(|raw| (raw & bq25792::status2::VBAT_PRESENT_STAT) != 0);
+            facts.charger_vbat_adc_mv =
+                bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok();
+            facts.charger_vbat_present =
+                bq25792_effective_vbat_present(status_vbat_present, facts.charger_vbat_adc_mv);
+        }
+        if let Some(bq40_ready) = bq40_discharge_ready {
+            facts.discharge_ready = Some(bq40_ready && facts.charger_vbat_present == Some(true));
+        }
+
+        facts
+    }
+
     pub fn request_bms_activation(&mut self) {
         self.request_bms_recovery(BmsRecoveryRequestKind::Activation, false, false);
     }
@@ -5443,7 +6584,16 @@ where
         match action {
             BmsRecoveryUiAction::Activation => self.request_bms_activation(),
             BmsRecoveryUiAction::DischargeAuthorization => {
-                self.request_bms_discharge_authorization(false)
+                let _ = self.begin_bms_discharge_authorization_recovery_json::<
+                    BMS_DISCHARGE_AUTH_FRONT_PANEL_BODY_CAP,
+                >(BMS_DISCHARGE_AUTH_FRONT_PANEL_SOURCE);
+                if !self.front_panel_bms_discharge_authorization_recovery_pending()
+                    && self.bms_activation_state == BmsActivationState::Idle
+                {
+                    self.finish_front_panel_bms_discharge_authorization_recovery(
+                        "front_panel_recovery_completed_synchronously",
+                    );
+                }
             }
         }
     }
@@ -5946,6 +7096,7 @@ where
             allow_diag_warn
         );
         bms_diag_breadcrumb_note(2, allow_diag_warn as u8);
+        self.bms_activation_last_reason = None;
         self.bms_activation_current_is_auto = auto_request;
         self.bms_activation_request_kind = request_kind;
         if !(allow_diag_warn && self.cfg.bms_boot_diag_auto_validate) {
@@ -7874,7 +9025,11 @@ where
         self.ui_snapshot.bq40z50_no_battery = Some(low_pack_runtime);
         self.ui_snapshot.bq40z50_discharge_ready = effective_discharge_ready;
         self.ui_snapshot.bq40z50_issue_detail = if physical_path_absent {
-            Some("physical_vbat_absent")
+            Some(bq40_physical_discharge_path_issue(
+                charge_ready,
+                Some(charge_reason),
+                discharge_ready,
+            ))
         } else if bq40_lock_diag_low_voltage_blocked(self.bms_cached_lock_diag) {
             Some("cell_undervoltage")
         } else {
@@ -8275,6 +9430,16 @@ where
         }
 
         match self.ui_snapshot.bq40z50 {
+            SelfCheckCommState::Ok
+                if self.bms_recovery_requires_discharge_ready()
+                    && self.ui_snapshot.bq40z50_discharge_ready == Some(true) =>
+            {
+                self.finish_bms_activation(
+                    BmsResultKind::Success,
+                    "bq40_discharge_authorization_ready",
+                );
+                return bms_i2c_active;
+            }
             SelfCheckCommState::Ok if !self.bms_recovery_requires_discharge_ready() => {
                 self.finish_bms_activation(BmsResultKind::Success, "bq40_ready");
                 return bms_i2c_active;
@@ -8529,6 +9694,7 @@ where
     }
 
     fn finish_bms_activation(&mut self, result: BmsResultKind, reason: &'static str) {
+        self.bms_activation_last_reason = Some(reason);
         let request_kind = self.bms_activation_request_kind;
         if result == BmsResultKind::Success
             && request_kind == BmsRecoveryRequestKind::DischargeAuthorization
@@ -8573,6 +9739,12 @@ where
         self.ui_snapshot.bq40z50_last_result = Some(result);
         self.chg_next_poll_at = Instant::now();
         self.maybe_restore_charger_watchdog_after_activation();
+        if result == BmsResultKind::Success
+            && request_kind == BmsRecoveryRequestKind::DischargeAuthorization
+        {
+            self.reconcile_output_state();
+            self.maybe_restore_outputs_after_bms_recovery();
+        }
         match result {
             BmsResultKind::Success => defmt::info!(
                 "bms: activation finish request={} result={} reason={} bq40_state={} soc_pct={=?} rca_alarm={=?} dsg_ready={=?} charger_state={} allow_charge={=?} vbat_present={=?} input_present={=?} restore_chg_enabled={=bool}",
@@ -8737,6 +9909,23 @@ where
             self.ui_snapshot.vin_mains_present,
             self.ui_snapshot.vin_vbus_mv,
             self.ui_snapshot.aggregate_input_present,
+        )
+    }
+
+    fn current_output_restore_input_present(&self) -> Option<bool> {
+        let charger_runtime_input_present = self.diag_snapshot.charger.poll_valid
+            && (self.diag_snapshot.charger.input_present
+                || self.diag_snapshot.charger.vbus_present
+                || self.diag_snapshot.charger.ac1_present
+                || self.diag_snapshot.charger.pg);
+        let usb_pd_input_present = self.usb_pd_state.vbus_present == Some(true);
+        output_restore_input_present(
+            self.current_mains_present(),
+            Some(
+                self.ui_snapshot.aggregate_input_present == Some(true)
+                    || charger_runtime_input_present
+                    || usb_pd_input_present,
+            ),
         )
     }
 
@@ -8906,6 +10095,24 @@ where
             return OutputGateReason::BmsNotReady;
         }
 
+        if active_tps_output_readback_missing(
+            self.output_state.active_outputs,
+            self.ui_snapshot.tps_a_enabled,
+            self.tps_a_ready,
+            self.ui_snapshot.tps_b_enabled,
+            self.tps_b_ready,
+        ) {
+            defmt::warn!(
+                "power: tps active_readback_missing active_outputs={} tps_a_enabled={=?} tps_a_ready={=bool} tps_b_enabled={=?} tps_b_ready={=bool}",
+                self.output_state.active_outputs.describe(),
+                self.ui_snapshot.tps_a_enabled,
+                self.tps_a_ready,
+                self.ui_snapshot.tps_b_enabled,
+                self.tps_b_ready,
+            );
+            return OutputGateReason::TpsConfigFailed;
+        }
+
         for ch in [OutputChannel::OutA, OutputChannel::OutB] {
             if !self.output_state.requested_outputs.is_enabled(ch) {
                 continue;
@@ -8975,7 +10182,45 @@ where
 
     #[allow(dead_code)]
     fn can_request_output_restore(&self) -> bool {
-        output_restore_pending_from_state(self.output_state, self.current_mains_present())
+        output_restore_pending_from_state(
+            self.output_state,
+            self.current_output_restore_input_present(),
+        )
+    }
+
+    fn output_restore_complete_after_bms_recovery(&self) -> bool {
+        if self.output_state.requested_outputs == EnabledOutputs::None {
+            return true;
+        }
+        if self.output_state.gate_reason != OutputGateReason::None {
+            return false;
+        }
+        let confirmed_active_outputs = confirmed_active_outputs_from_tps_readback(
+            self.output_state.active_outputs,
+            self.ui_snapshot.tps_a_enabled,
+            self.ui_snapshot.tps_b_enabled,
+        );
+        requested_outputs_active(
+            self.output_state.requested_outputs,
+            confirmed_active_outputs,
+        )
+    }
+
+    fn output_restore_failure_reason_after_bms_recovery(&self) -> &'static str {
+        match self.output_state.gate_reason {
+            OutputGateReason::BmsNotReady => "output_restore_bms_not_ready",
+            OutputGateReason::ThermKill => "output_restore_therm_kill",
+            OutputGateReason::TpsFault => "output_restore_tps_fault",
+            OutputGateReason::TpsConfigFailed => "output_restore_tps_config_failed",
+            OutputGateReason::ActiveProtection => "output_restore_active_protection",
+            OutputGateReason::None => {
+                if self.current_output_restore_input_present() != Some(true) {
+                    "output_restore_input_missing"
+                } else {
+                    "output_restore_not_active"
+                }
+            }
+        }
     }
 
     fn apply_output_current_limit(&mut self, limit_ma: u16) {
@@ -9150,10 +10395,15 @@ where
             AssistPowerStage::AssistLow | AssistPowerStage::AssistRated => UpsMode::Supplement,
             AssistPowerStage::Standby => online_mode,
         };
+        let confirmed_active_outputs = confirmed_active_outputs_from_tps_readback(
+            self.output_state.active_outputs,
+            self.ui_snapshot.tps_a_enabled,
+            self.ui_snapshot.tps_b_enabled,
+        );
         self.ui_snapshot.mode = gate_owner_mode_on_active_outputs(
             candidate_mode,
             self.output_state.requested_outputs,
-            self.output_state.active_outputs,
+            confirmed_active_outputs,
         );
         if target_changed {
             self.sync_runtime_output_target_if_needed();
@@ -10091,6 +11341,16 @@ where
                 || activation_auto_probe_hold_charge);
         let activation_force_charge_off =
             activation_pending && bms_activation_phase_forces_charge_off(self.bms_activation_phase);
+        let discharge_authorization_recovery =
+            activation_pending && self.bms_recovery_requires_discharge_ready();
+        let discharge_physical_path_recovery = self.output_state.requested_outputs
+            != EnabledOutputs::None
+            && self.output_state.gate_reason == OutputGateReason::BmsNotReady
+            && matches!(
+                self.ui_snapshot.bq40z50_issue_detail,
+                Some("physical_vbat_absent" | "pack_output_path_open")
+            )
+            && self.ui_snapshot.bq40z50_discharge_ready == Some(false);
         let poll_period = if activation_pending {
             BMS_ACTIVATION_CHARGER_POLL_PERIOD
         } else {
@@ -10148,39 +11408,67 @@ where
             bq25792::read_u16(&mut self.i2c, bq25792::reg::TERMINATION_CONTROL).ok();
         let iterm_ma = termination_ctrl.map(bq25792::decode_termination_current_ma);
 
-        // Only enforce ship-FET path when charging is policy-enabled.
-        let (sfet_present_before, sfet_present_after, ship_mode_before, ship_mode_after) =
-            if self.cfg.charger_enabled || activation_force_charge || auto_force_charge {
-                match bq25792::ensure_ship_fet_path_enabled(&mut self.i2c) {
-                    Ok(state) => (
+        // Mains Aegis does not populate an external BQ25792 ship FET. Keep the
+        // feature disabled and SDRV in IDLE so the charger does not model a
+        // nonexistent BAT/SYS disconnect path.
+        let (
+            sfet_present_before,
+            sfet_present_after,
+            ship_mode_before,
+            ship_mode_after,
+            ctrl2_snapshot,
+            ctrl5_snapshot,
+        ) = if self.cfg.charger_enabled
+            || activation_force_charge
+            || auto_force_charge
+            || discharge_authorization_recovery
+            || discharge_physical_path_recovery
+        {
+            match bq25792::ensure_ship_fet_path_disabled(&mut self.i2c) {
+                Ok(state) => {
+                    if discharge_physical_path_recovery {
+                        defmt::info!(
+                                "charger: discharge_physical_path_recovery sfet_before={=bool} sfet_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8}",
+                                (state.ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
+                                (state.ctrl5_after & bq25792::ctrl5::SFET_PRESENT) != 0,
+                                state.ship.sdrv_ctrl_before,
+                                state.ship.sdrv_ctrl_after
+                            );
+                    }
+                    (
                         (state.ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
                         (state.ctrl5_after & bq25792::ctrl5::SFET_PRESENT) != 0,
                         state.ship.sdrv_ctrl_before,
                         state.ship.sdrv_ctrl_after,
-                    ),
-                    Err(e) => {
-                        self.mark_charger_poll_failed(now);
-                        defmt::error!(
-                            "charger: bq25792 err stage=ship_fet_path err={}",
-                            i2c_error_kind(e)
-                        );
-                        return;
-                    }
+                        Some(state.ship.ctrl2_after),
+                        Some(state.ctrl5_after),
+                    )
                 }
-            } else {
-                let ctrl5_before = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_5)
-                    .unwrap_or_default();
-                let ctrl2_before = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_2)
-                    .unwrap_or_default();
-                let sdrv_ctrl_before = (ctrl2_before & bq25792::ctrl2::SDRV_CTRL_MASK)
-                    >> bq25792::ctrl2::SDRV_CTRL_SHIFT;
-                (
-                    (ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
-                    (ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
-                    sdrv_ctrl_before,
-                    sdrv_ctrl_before,
-                )
-            };
+                Err(e) => {
+                    self.mark_charger_poll_failed(now);
+                    defmt::error!(
+                        "charger: bq25792 err stage=ship_fet_path err={}",
+                        i2c_error_kind(e)
+                    );
+                    return;
+                }
+            }
+        } else {
+            let ctrl5_before = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_5)
+                .unwrap_or_default();
+            let ctrl2_before = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_2)
+                .unwrap_or_default();
+            let sdrv_ctrl_before =
+                (ctrl2_before & bq25792::ctrl2::SDRV_CTRL_MASK) >> bq25792::ctrl2::SDRV_CTRL_SHIFT;
+            (
+                (ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
+                (ctrl5_before & bq25792::ctrl5::SFET_PRESENT) != 0,
+                sdrv_ctrl_before,
+                sdrv_ctrl_before,
+                Some(ctrl2_before),
+                Some(ctrl5_before),
+            )
+        };
 
         if boot_diag_ship_reset_due {
             self.bms_boot_diag_ship_reset_attempted = true;
@@ -10245,7 +11533,7 @@ where
         let vindpm = (status0 & bq25792::status0::VINDPM_STAT) != 0;
         let iindpm = (status0 & bq25792::status0::IINDPM_STAT) != 0;
 
-        let vbat_present = (status2 & bq25792::status2::VBAT_PRESENT_STAT) != 0;
+        let status_vbat_present = (status2 & bq25792::status2::VBAT_PRESENT_STAT) != 0;
         let treg = (status2 & bq25792::status2::TREG_STAT) != 0;
         let dpdm = (status2 & bq25792::status2::DPDM_STAT) != 0;
         let ico_stat = bq25792::status2::ico_stat(status2);
@@ -10289,6 +11577,12 @@ where
             Some(adc_state) => bq25792::power_path_adc_ready(adc_state, status3),
             None => false,
         };
+        let vbat_present = bq25792_effective_vbat_present(
+            Some(status_vbat_present),
+            adc_ready.then_some(vbat_adc_mv).flatten(),
+        )
+        .unwrap_or(status_vbat_present);
+        let charger_vbus_stat = bq25792::status1::vbus_stat(status1);
         let input_sample = normalize_charger_input_power_sample(
             input_present,
             adc_ready,
@@ -10318,12 +11612,18 @@ where
             usb_c_path_present,
             self.usb_pd_vac1_mv,
         );
-        let usb_pd_charge_gate_ready = usb_pd_charge_gate_ready(
+        let usb_pd_charge_gate_ready_raw = usb_pd_charge_gate_ready(
             self.usb_pd_state.enabled,
             self.usb_pd_state.controller_ready,
             usb_pd_charge_gate_path_present,
             self.usb_pd_state.charge_ready,
         );
+        let activation_bc12_charge_ready = activation_pending
+            && input_present
+            && vbus_present
+            && ac1_present
+            && charger_vbus_stat_allows_activation_charge(charger_vbus_stat);
+        let usb_pd_charge_gate_ready = usb_pd_charge_gate_ready_raw || activation_bc12_charge_ready;
         let requested_acdrv_path = match input_source {
             Some(DashboardInputSource::DcIn) if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
             Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
@@ -10517,7 +11817,11 @@ where
                 .or_else(|| policy_state.map(ChargePolicyState::as_str))
                 .unwrap_or("charger_policy_pending")
         };
-        let runtime_charge_override = runtime_charge_override(self.ui_snapshot.mode);
+        let runtime_charge_override = runtime_charge_override_for_charger(
+            self.ui_snapshot.mode,
+            force_allow_charge,
+            auto_force_charge,
+        );
         let manual_stop_hold_blocks_charge = manual_charge_stop_hold_blocks_charge(
             self.manual_charge_runtime.stop_inhibit,
             activation_pending,
@@ -11163,8 +12467,12 @@ where
             fault0: Some(fault0),
             fault1: Some(fault1),
             ctrl0: Some(applied_ctrl0),
+            ctrl2: ctrl2_snapshot,
             ctrl3: Some(acdrv_state.ctrl3_after),
             ctrl4: Some(acdrv_state.ctrl4_after),
+            ctrl5: ctrl5_snapshot,
+            sfet_present: Some(sfet_present_after),
+            sdrv_ctrl: Some(ship_mode_after),
             acdrv_path: bq25792::acdrv_path_name(acdrv_state.path_after),
             term_ctrl: termination_ctrl,
         };
@@ -11227,7 +12535,7 @@ where
 
         if !(auto_force_charge || activation_pending) {
             defmt::info!(
-                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_output_block_reason={=?} policy_target_ichg_ma={=?} policy_term_target_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} policy_output_blocked={=bool} policy_output_enter_streak={=u8} policy_output_exit_streak={=u8} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} vindpm_mv={=?} iindpm_ma={=?} iterm_ma={=?} applied_iterm_ma={=?} en_term={=bool} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x} term_ctrl={=?}",
+                "charger: enabled={=bool} force_min_charge={=bool} auto_boot_force_charge={=bool} boot_diag_hold_charge={=bool} activation_normal_hold_charge={=bool} activation_auto_probe_hold_charge={=bool} activation_force_charge_off={=bool} normal_allow_charge={=bool} force_allow_charge={=bool} allow_charge={=bool} policy_state={} policy_status={} policy_input_source={} policy_start_reason={=?} policy_full_reason={=?} policy_output_block_reason={=?} policy_target_ichg_ma={=?} policy_term_target_ma={=?} policy_output_power_w10={=?} policy_charge_latched={=bool} policy_full_latched={=bool} policy_dc_derated={=bool} policy_dc_over_limit_since_ms={=?} policy_dc_recover_since_ms={=?} policy_output_blocked={=bool} policy_output_enter_streak={=u8} policy_output_exit_streak={=u8} input_present={=bool} vbus_present={=bool} ac1_present={=bool} ac2_present={=bool} pg={=bool} status_vbat_present={=bool} vbat_present={=bool} ibus_adc_ma={=?} ibat_adc_ma={=?} vbus_adc_mv={=?} vbat_adc_mv={=?} vsys_adc_mv={=?} adc_enabled={=bool} adc_done={=bool} ac_rb1_present={=bool} ac_rb2_present={=bool} vsys_min_reg={=bool} ts_cold={=bool} ts_cool={=bool} ts_warm={=bool} ts_hot={=bool} vreg_mv={=?} ichg_ma={=?} vindpm_mv={=?} iindpm_ma={=?} iterm_ma={=?} applied_iterm_ma={=?} en_term={=bool} sfet_present_before={=bool} sfet_present_after={=bool} ship_mode_before={=u8} ship_mode_after={=u8} chg_stat={} vbus_stat={} ico={} treg={=bool} dpdm={=bool} wd={=bool} poorsrc={=bool} vindpm={=bool} iindpm={=bool} st0=0x{=u8:x} st1=0x{=u8:x} st2=0x{=u8:x} st3=0x{=u8:x} st4=0x{=u8:x} fault0=0x{=u8:x} fault1=0x{=u8:x} ctrl0=0x{=u8:x} term_ctrl={=?}",
                 self.chg_enabled,
                 self.cfg.force_min_charge,
                 auto_force_charge,
@@ -11260,6 +12568,7 @@ where
                 ac1_present,
                 ac2_present,
                 pg,
+                status_vbat_present,
                 vbat_present,
                 raw_ibus_adc_ma,
                 ibat_adc_ma,
@@ -11649,7 +12958,7 @@ where
                     };
                     self.log_bq40z50_snapshot(addr, poll_seq, self.bms_ok_streak, btp_int_h, &s);
                     self.maybe_log_bq40_config_runtime(addr, s.op_status);
-                    let (_, charge_reason) = bq40_decode_charge_path(s.op_status);
+                    let (charge_ready, charge_reason) = bq40_decode_charge_path(s.op_status);
                     let (_, discharge_reason) = bq40_decode_discharge_path(s.op_status);
                     let primary_reason = bq40_primary_reason(
                         s.batt_status,
@@ -11658,7 +12967,11 @@ where
                         discharge_reason,
                     );
                     self.ui_snapshot.bq40z50_issue_detail = if physical_path_absent {
-                        Some("physical_vbat_absent")
+                        Some(bq40_physical_discharge_path_issue(
+                            charge_ready,
+                            Some(charge_reason),
+                            discharge_ready,
+                        ))
                     } else if bq40_lock_diag_low_voltage_blocked(self.bms_cached_lock_diag) {
                         Some("cell_undervoltage")
                     } else {
@@ -11821,6 +13134,7 @@ where
         let op_status = s
             .op_status
             .or_else(|| lock_diag.and_then(|diag| diag.op_status));
+        let safety_alert = lock_diag.and_then(|diag| diag.safety_alert);
         let safety_status = lock_diag.and_then(|diag| diag.safety_status);
         let pf_status = lock_diag.and_then(|diag| diag.pf_status);
         let manufacturing_status = lock_diag.and_then(|diag| diag.manufacturing_status);
@@ -11845,6 +13159,11 @@ where
         } else {
             decoded_discharge_ready
         };
+        let afe_chg_fet = s.afe_register.map(|afe| afe.chg_fet_on());
+        let afe_dsg_fet = s.afe_register.map(|afe| afe.dsg_fet_on());
+        let op_chg_fet = bq40_op_bit(op_status, bq40z50::operation_status::CHG);
+        let op_dsg_fet = bq40_op_bit(op_status, bq40z50::operation_status::DSG);
+        let op_pchg_fet = bq40_op_bit(op_status, bq40z50::operation_status::PCHG);
 
         self.diag_snapshot.bms = DerivedPowerBmsSnapshot {
             addr: Some(addr),
@@ -11860,6 +13179,7 @@ where
             full: Some((s.batt_status & bq40z50::battery_status::FC) != 0),
             issue_detail: self.ui_snapshot.bq40z50_issue_detail,
             rca_alarm: Some((s.batt_status & bq40z50::battery_status::RCA) != 0),
+            safety_alert,
             safety_status,
             pf_status,
             manufacturing_status,
@@ -11868,15 +13188,50 @@ where
             op_status,
             op_status_raw_len: s.op_status_raw_len,
             op_status_raw_bytes: s.op_status_raw_bytes,
+            afe_fet_status: s.afe_register.map(|afe| afe.fet_status),
+            afe_fet_control: s.afe_register.map(|afe| afe.fet_control),
+            afe_latch_status: s.afe_register.map(|afe| afe.latch_status),
+            afe_cell_balance_status: s.afe_register.map(|afe| afe.cell_balance_status),
+            afe_chg_fet,
+            afe_dsg_fet,
             emshut: bq40_op_bit(op_status, bq40z50::operation_status::EMSHUT),
             pres: bq40_op_bit(op_status, bq40z50::operation_status::PRES),
             xchg: bq40_op_bit(op_status, bq40z50::operation_status::XCHG),
             xdsg: bq40_op_bit(op_status, bq40z50::operation_status::XDSG),
-            chg_fet: bq40_op_bit(op_status, bq40z50::operation_status::CHG),
-            dsg_fet: bq40_op_bit(op_status, bq40z50::operation_status::DSG),
-            pchg_fet: bq40_op_bit(op_status, bq40z50::operation_status::PCHG),
+            op_chg_fet,
+            op_dsg_fet,
+            op_pchg_fet,
+            chg_fet: afe_chg_fet.or(op_chg_fet),
+            dsg_fet: afe_dsg_fet.or(op_dsg_fet),
+            pchg_fet: op_pchg_fet,
+            discharge_path_contradiction: Some(
+                op_dsg_fet == Some(true)
+                    && afe_dsg_fet != Some(true)
+                    && self.ui_snapshot.bq25792_vbat_present == Some(false)
+                    && self.ui_snapshot.bq40z50_no_battery != Some(true),
+            ),
+            discharge_path_contradiction_reason: if op_dsg_fet == Some(true)
+                && afe_dsg_fet == Some(false)
+                && self.ui_snapshot.bq25792_vbat_present == Some(false)
+                && self.ui_snapshot.bq40z50_no_battery != Some(true)
+            {
+                Some("op_dsg_ready_but_afe_dsg_off")
+            } else if op_dsg_fet == Some(true)
+                && bq40_op_bit(op_status, bq40z50::operation_status::XDSG) == Some(false)
+                && self.ui_snapshot.bq25792_vbat_present == Some(false)
+                && self.ui_snapshot.bq40z50_no_battery != Some(true)
+            {
+                Some("op_dsg_ready_but_charger_vbat_absent")
+            } else {
+                None
+            },
             cuv: bq40_mac_bit(safety_status, bq40z50::safety_status::CUV),
             cuvc: bq40_mac_bit(safety_status, bq40z50::safety_status::CUVC),
+            cov: bq40_mac_bit(safety_status, bq40z50::safety_status::COV),
+            occ1: bq40_mac_bit(safety_status, bq40z50::safety_status::OCC1),
+            occ2: bq40_mac_bit(safety_status, bq40z50::safety_status::OCC2),
+            oc: bq40_mac_bit(safety_status, bq40z50::safety_status::OC),
+            safety_alert_oc: bq40_mac_bit(safety_alert, bq40z50::safety_status::OC),
             cuv_recovery_mv,
             cuv_recov_chg: protection_configuration
                 .map(|raw| (raw & bq40z50::protection_configuration::CUV_RECOV_CHG) != 0),
@@ -12060,10 +13415,15 @@ where
             self.bms_next_lock_diag_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
             log_bq40_lock_diag_snapshot(addr, "runtime_periodic", &snapshot);
         }
+        let decoded_discharge_ready = bq40_decode_discharge_path(op_status).0;
+        let needs_afe_fet_diag = decoded_discharge_ready == Some(true)
+            && self.ui_snapshot.bq25792_vbat_present == Some(false)
+            && !bq40_pack_indicates_no_battery(vpack_mv);
         let afe_register = if matches!(
             bq40_op_bit(op_status, bq40z50::operation_status::CB),
             Some(true)
-        ) {
+        ) || needs_afe_fet_diag
+        {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             bq40z50::read_afe_register(&mut self.i2c, addr)
                 .ok()
@@ -12293,6 +13653,7 @@ struct Bq40z50Snapshot {
 #[derive(Clone, Copy)]
 struct Bq40LockDiagSnapshot {
     charging: Option<bq40z50::ChargingStatusTrace>,
+    safety_alert: Option<u32>,
     safety_status: Option<u32>,
     pf_status: Option<u32>,
     manufacturing_status: Option<u32>,

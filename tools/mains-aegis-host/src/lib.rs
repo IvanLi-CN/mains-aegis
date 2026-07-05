@@ -60,6 +60,9 @@ const LAN_SCAN_MAX_HOSTS: usize = 4_096;
 const DEFAULT_ESPFLASH_TIMEOUT_SECS: u64 = 180;
 const NATIVE_SERIAL_BLOCKING_TIMEOUT_SECS: u64 = 12;
 const NATIVE_CDC_RESPONSE_TIMEOUT_SECS: u64 = 8;
+const RECOVERY_RESPONSE_TIMEOUT_SECS: u64 = 75;
+const RECOVERY_POLL_INTERVAL_MS: u64 = 500;
+const RECOVERY_CDC_REQUEST_PREFIX: &str = "devd-rec-bms";
 const NATIVE_MONITOR_STATUS_INTERVAL_MS: u64 = 500;
 const NATIVE_MONITOR_STATUS_RESPONSE_TIMEOUT_MS: u64 = 750;
 const NATIVE_MONITOR_COMMAND_TIMEOUT_MS: u64 = 750;
@@ -346,6 +349,7 @@ enum NativeMonitorCommand {
     SendFrame {
         frame: Value,
         request_id: String,
+        response_timeout: Duration,
         response_tx: mpsc::Sender<Result<Value, HttpError>>,
     },
     Reset {
@@ -903,6 +907,10 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         .route(
             "/api/v1/devices/{id}/diag-snapshot",
             get(device_diag_snapshot),
+        )
+        .route(
+            "/api/v1/devices/{id}/recovery/bms-discharge-authorization",
+            post(device_recover_bms_discharge_authorization),
         )
         .route("/api/v1/devices/{id}/connection", get(device_connection))
         .route(
@@ -1743,6 +1751,12 @@ async fn dispatch_ipc_request(
                 device_diag_snapshot_inner(params.read, state.clone(), id, params.packages).await,
             )
         }
+        "device.recovery.bms_discharge_authorization" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(
+                device_recover_bms_discharge_authorization(State(state.clone()), Path(id)).await,
+            )
+        }
         "device.settings" => {
             let id = require_param(&params, "device_id")?;
             json_result(device_settings(State(state.clone()), Path(id)).await)
@@ -1990,10 +2004,7 @@ fn ensure_bound_device_record(state: &AppState, id: &str) -> Result<(), HttpErro
     if guard.devices.contains_key(id) {
         return Ok(());
     }
-    let binding = guard
-        .bindings
-        .get(id)
-        .cloned()
+    let (record_id, binding) = resolve_bound_device_binding(&guard, id)
         .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
     let port_path = binding.port_path.clone().ok_or_else(|| {
         HttpError::retryable(
@@ -2001,10 +2012,15 @@ fn ensure_bound_device_record(state: &AppState, id: &str) -> Result<(), HttpErro
             "bound native serial device has no port path",
         )
     })?;
-    let selected_artifact_id = guard.selected_artifacts.get(id).cloned();
+    let selected_artifact_id = guard
+        .selected_artifacts
+        .get(id)
+        .or_else(|| guard.selected_artifacts.get(&record_id))
+        .cloned();
     let persisted_trace = guard
         .persisted_device_trace
         .get(id)
+        .or_else(|| guard.persisted_device_trace.get(&record_id))
         .cloned()
         .unwrap_or_default();
     guard.devices.insert(
@@ -2033,6 +2049,23 @@ fn ensure_bound_device_record(state: &AppState, id: &str) -> Result<(), HttpErro
         },
     );
     Ok(())
+}
+
+fn resolve_bound_device_binding(state: &DevdState, id: &str) -> Option<(String, DeviceBinding)> {
+    state
+        .bindings
+        .get(id)
+        .cloned()
+        .map(|binding| (id.to_string(), binding))
+        .or_else(|| {
+            state.bindings.iter().find_map(|(binding_id, binding)| {
+                let matches_alias = binding.alias.as_deref() == Some(id);
+                let matches_stable_id = binding.stable_id == id;
+                let matches_logical_id = binding.logical_device_id.as_deref() == Some(id);
+                (matches_alias || matches_stable_id || matches_logical_id)
+                    .then(|| (binding_id.clone(), binding.clone()))
+            })
+        })
 }
 
 async fn scan_devices(
@@ -3928,6 +3961,220 @@ async fn device_diag_snapshot(
     device_diag_snapshot_inner(query, state, id, packages).await
 }
 
+async fn device_recover_bms_discharge_authorization(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    ensure_bound_device_record(&state, &id)?;
+    let (transport, lan_address, identity, cached_status) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (
+            device.transport.clone(),
+            device.lan_address.clone(),
+            device.identity.clone(),
+            device.status.clone(),
+        )
+    };
+    let recovery_lan_address = lan_address
+        .clone()
+        .or_else(|| identity.as_ref().and_then(network_ipv4_from_value))
+        .or_else(|| cached_status.as_ref().and_then(network_ipv4_from_value));
+
+    let result = if matches!(transport, DeviceTransport::Mock) {
+        json!({
+            "ok": false,
+            "accepted": false,
+            "result": "rejected",
+            "reason": "mock_device",
+            "status_before": null,
+            "status_after": null
+        })
+    } else if matches!(transport, DeviceTransport::Lan) {
+        let address = lan_address.ok_or_else(|| {
+            HttpError::retryable(
+                "lan_address_missing",
+                format!("recovery is unavailable for {id}: LAN device has no address"),
+            )
+        })?;
+        lan_recovery_http_json(&address).await?
+    } else {
+        let frame = json!({
+            "type": "request",
+            "op": "recover_bms_discharge_authorization",
+        });
+        if let Some(address) = recovery_lan_address.clone() {
+            match lan_recovery_http_json(&address).await {
+                Ok(result) => result,
+                Err(lan_error) => {
+                    tracing::warn!(
+                        device_id = %id,
+                        address = %address,
+                        code = %lan_error.0.code,
+                        "native serial recovery LAN companion failed; falling back to CDC"
+                    );
+                    send_device_recovery_cdc_request(
+                        &state,
+                        &id,
+                        frame,
+                        RECOVERY_CDC_REQUEST_PREFIX,
+                    )
+                    .await?
+                }
+            }
+        } else {
+            match send_device_recovery_cdc_request(&state, &id, frame, RECOVERY_CDC_REQUEST_PREFIX)
+                .await
+            {
+                Ok(result) => result,
+                Err(error)
+                    if error.0.code == "native_cdc_timeout" && recovery_lan_address.is_some() =>
+                {
+                    let address = recovery_lan_address.expect("guarded by is_some");
+                    lan_recovery_http_json(&address).await.map_err(|_| error)?
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    };
+
+    let refresh_query = DeviceReadQuery {
+        fresh: Some(true),
+        cache_only: Some(false),
+        allow_stale_cache: Some(true),
+        include_meta: Some(false),
+        watch_freshness_ms: None,
+    };
+    let _ = device_status(Query(refresh_query), State(state.clone()), Path(id.clone())).await;
+    let _ = device_diag_snapshot_inner(
+        DeviceReadQuery {
+            fresh: Some(true),
+            cache_only: Some(false),
+            allow_stale_cache: Some(true),
+            include_meta: Some(false),
+            watch_freshness_ms: None,
+        },
+        state,
+        id,
+        Vec::new(),
+    )
+    .await;
+
+    Ok(Json(result))
+}
+
+fn network_ipv4_from_value(value: &Value) -> Option<String> {
+    value
+        .get("network")
+        .and_then(|network| network.get("ipv4"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+async fn send_device_recovery_cdc_request(
+    state: &AppState,
+    id: &str,
+    frame: Value,
+    request_prefix: &str,
+) -> Result<Value, HttpError> {
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(RECOVERY_RESPONSE_TIMEOUT_SECS);
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return Err(HttpError::retryable(
+                "recovery_timeout",
+                format!(
+                    "BMS discharge authorization recovery did not finish within {RECOVERY_RESPONSE_TIMEOUT_SECS}s"
+                ),
+            ));
+        }
+        let value = send_device_cdc_request_frame_with_timeout(
+            state,
+            id,
+            frame.clone(),
+            request_prefix,
+            deadline.duration_since(now),
+        )
+        .await?;
+        if !recovery_result_pending(&value) {
+            return Ok(value);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(HttpError::retryable(
+                "recovery_timeout",
+                format!("BMS discharge authorization recovery did not finish within {RECOVERY_RESPONSE_TIMEOUT_SECS}s"),
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(RECOVERY_POLL_INTERVAL_MS)).await;
+    }
+}
+
+fn recovery_result_pending(value: &Value) -> bool {
+    value.get("result").and_then(Value::as_str) == Some("pending")
+}
+
+async fn lan_recovery_http_json(address: &str) -> Result<Value, HttpError> {
+    lan_recovery_http_json_blocking(address).await
+}
+
+async fn lan_recovery_http_json_blocking(address: &str) -> Result<Value, HttpError> {
+    let address = address.to_string();
+    tokio::task::spawn_blocking(move || lan_recovery_http_json_blocking_inner(&address))
+        .await
+        .map_err(|error| {
+            HttpError::retryable(
+                "lan_http_blocking_join_failed",
+                format!("blocking LAN recovery request failed to join: {error}"),
+            )
+        })?
+}
+
+fn lan_recovery_http_json_blocking_inner(address: &str) -> Result<Value, HttpError> {
+    let mut stream =
+        std::net::TcpStream::connect((address, LAN_DISCOVERY_PORT)).map_err(|error| {
+            HttpError::retryable(
+                "lan_http_connect_failed",
+                format!("failed to connect to {address}:80: {error}"),
+            )
+        })?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(RECOVERY_RESPONSE_TIMEOUT_SECS)))
+        .ok();
+    stream
+        .set_write_timeout(Some(Duration::from_millis(LAN_PROBE_TIMEOUT_MS)))
+        .ok();
+    let body = "{}";
+    let request = format!(
+        "POST /api/v1/recovery/bms-discharge-authorization HTTP/1.1\r\nHost: {address}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(request.as_bytes()).map_err(|error| {
+        HttpError::retryable(
+            "lan_http_write_failed",
+            format!("failed to write POST /api/v1/recovery/bms-discharge-authorization to {address}: {error}"),
+        )
+    })?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).map_err(|error| {
+        HttpError::retryable(
+            "lan_http_read_failed",
+            format!("failed to read POST /api/v1/recovery/bms-discharge-authorization from {address}: {error}"),
+        )
+    })?;
+    parse_lan_http_json_response(
+        &response,
+        "POST",
+        "/api/v1/recovery/bms-discharge-authorization",
+        address,
+    )
+}
+
 async fn device_diag_snapshot_inner(
     query: DeviceReadQuery,
     state: AppState,
@@ -4319,6 +4566,7 @@ async fn select_artifact(
     Path(id): Path<String>,
     Json(input): Json<ArtifactSelectRequest>,
 ) -> Result<Json<Value>, HttpError> {
+    ensure_bound_device_record(&state, &id)?;
     let mut loaded_artifact_id = None;
     let mut artifact = None;
     if let Some(inline_artifact) = input.artifact {
@@ -4392,6 +4640,7 @@ async fn flash_device(
     Path(id): Path<String>,
     Json(input): Json<FlashRequest>,
 ) -> Result<Json<Value>, HttpError> {
+    ensure_bound_device_record(&state, &id)?;
     let (artifact, dry_run, port_path) = {
         let guard = state.inner.lock().expect("state lock");
         let device = guard
@@ -5271,8 +5520,45 @@ async fn send_device_cdc_request(
 async fn send_device_cdc_request_frame(
     state: &AppState,
     device_id: &str,
+    frame: Value,
+    request_prefix: &str,
+) -> Result<Value, HttpError> {
+    send_device_cdc_request_frame_with_timeouts(
+        state,
+        device_id,
+        frame,
+        request_prefix,
+        Duration::from_secs(NATIVE_CDC_RESPONSE_TIMEOUT_SECS),
+        Duration::from_millis(NATIVE_MONITOR_COMMAND_TIMEOUT_MS),
+    )
+    .await
+}
+
+async fn send_device_cdc_request_frame_with_timeout(
+    state: &AppState,
+    device_id: &str,
+    frame: Value,
+    request_prefix: &str,
+    response_timeout: Duration,
+) -> Result<Value, HttpError> {
+    send_device_cdc_request_frame_with_timeouts(
+        state,
+        device_id,
+        frame,
+        request_prefix,
+        response_timeout,
+        response_timeout,
+    )
+    .await
+}
+
+async fn send_device_cdc_request_frame_with_timeouts(
+    state: &AppState,
+    device_id: &str,
     mut frame: Value,
     request_prefix: &str,
+    native_response_timeout: Duration,
+    monitor_response_timeout: Duration,
 ) -> Result<Value, HttpError> {
     let (port_path, monitor_command_tx) = {
         let guard = state.inner.lock().expect("state lock");
@@ -5297,7 +5583,14 @@ async fn send_device_cdc_request_frame(
     let request_id = format!("{request_prefix}-{}", Utc::now().timestamp_millis());
     frame["request_id"] = json!(request_id);
     let response = if let Some(command_tx) = monitor_command_tx {
-        match send_monitor_cdc_frame_async(command_tx, frame.clone(), request_id.clone()).await {
+        match send_monitor_cdc_frame_async_with_timeout(
+            command_tx,
+            frame.clone(),
+            request_id.clone(),
+            monitor_response_timeout,
+        )
+        .await
+        {
             Ok(response) => response,
             Err(error) if is_native_monitor_command_error(&error) => {
                 let monitor = stop_native_monitor_after_command_failure(state, device_id, &error);
@@ -5308,7 +5601,13 @@ async fn send_device_cdc_request_frame(
                         "native serial device has no port path",
                     )
                 })?;
-                send_native_cdc_frame_async(port_path, frame.clone(), request_id.clone()).await?
+                send_native_cdc_frame_async_with_timeout(
+                    port_path,
+                    frame.clone(),
+                    request_id.clone(),
+                    native_response_timeout,
+                )
+                .await?
             }
             Err(error) => return Err(error),
         }
@@ -5319,7 +5618,13 @@ async fn send_device_cdc_request_frame(
                 "native serial device has no port path",
             )
         })?;
-        send_native_cdc_frame_async(port_path, frame.clone(), request_id.clone()).await?
+        send_native_cdc_frame_async_with_timeout(
+            port_path,
+            frame.clone(),
+            request_id.clone(),
+            native_response_timeout,
+        )
+        .await?
     };
 
     if response.get("type").and_then(Value::as_str) != Some("response")
@@ -6309,11 +6614,31 @@ async fn send_native_cdc_frame_async(
     frame: Value,
     request_id: String,
 ) -> Result<Value, HttpError> {
+    send_native_cdc_frame_async_with_timeout(
+        port_path,
+        frame,
+        request_id,
+        Duration::from_secs(NATIVE_CDC_RESPONSE_TIMEOUT_SECS),
+    )
+    .await
+}
+
+async fn send_native_cdc_frame_async_with_timeout(
+    port_path: String,
+    frame: Value,
+    request_id: String,
+    response_timeout: Duration,
+) -> Result<Value, HttpError> {
     let port_path_for_task = port_path.clone();
     tokio::time::timeout(
-        Duration::from_secs(NATIVE_SERIAL_BLOCKING_TIMEOUT_SECS),
+        response_timeout + Duration::from_secs(NATIVE_SERIAL_BLOCKING_TIMEOUT_SECS),
         tokio::task::spawn_blocking(move || {
-            send_native_cdc_frame(&port_path_for_task, frame, &request_id)
+            send_native_cdc_frame_with_timeout(
+                &port_path_for_task,
+                frame,
+                &request_id,
+                response_timeout,
+            )
         }),
     )
     .await
@@ -6360,12 +6685,28 @@ async fn send_monitor_cdc_frame_async(
     frame: Value,
     request_id: String,
 ) -> Result<Value, HttpError> {
+    send_monitor_cdc_frame_async_with_timeout(
+        command_tx,
+        frame,
+        request_id,
+        Duration::from_millis(NATIVE_MONITOR_COMMAND_TIMEOUT_MS),
+    )
+    .await
+}
+
+async fn send_monitor_cdc_frame_async_with_timeout(
+    command_tx: mpsc::Sender<NativeMonitorCommand>,
+    frame: Value,
+    request_id: String,
+    response_timeout: Duration,
+) -> Result<Value, HttpError> {
     tokio::task::spawn_blocking(move || {
         let (response_tx, response_rx) = mpsc::channel();
         command_tx
             .send(NativeMonitorCommand::SendFrame {
                 frame,
                 request_id,
+                response_timeout,
                 response_tx,
             })
             .map_err(|_| {
@@ -6375,7 +6716,7 @@ async fn send_monitor_cdc_frame_async(
                 )
             })?;
         response_rx
-            .recv_timeout(Duration::from_millis(NATIVE_MONITOR_COMMAND_TIMEOUT_MS))
+            .recv_timeout(response_timeout + Duration::from_millis(250))
             .map_err(|error| match error {
                 mpsc::RecvTimeoutError::Timeout => HttpError::retryable(
                     "native_monitor_command_timeout",
@@ -6499,32 +6840,20 @@ fn reset_native_serial_to_app_on_port(
     Ok(())
 }
 
-fn send_native_cdc_frame(
+fn send_native_cdc_frame_with_timeout(
     port_path: &str,
     frame: Value,
     request_id: &str,
+    response_timeout: Duration,
 ) -> Result<Value, HttpError> {
     let mut port = open_native_serial_port(port_path, Duration::from_millis(250), true)?;
-    send_cdc_frame_on_port(&mut *port, port_path, frame, request_id, |_| {})
-}
-
-fn send_cdc_frame_on_port<F>(
-    port: &mut dyn serialport::SerialPort,
-    port_path: &str,
-    frame: Value,
-    request_id: &str,
-    handle_unmatched_line: F,
-) -> Result<Value, HttpError>
-where
-    F: FnMut(&[u8]),
-{
     send_cdc_frame_on_port_with_timeout(
-        port,
+        &mut *port,
         port_path,
         frame,
         request_id,
-        Duration::from_secs(NATIVE_CDC_RESPONSE_TIMEOUT_SECS),
-        handle_unmatched_line,
+        response_timeout,
+        |_| {},
     )
 }
 
@@ -8086,6 +8415,7 @@ fn handle_native_monitor_command(
         NativeMonitorCommand::SendFrame {
             frame,
             request_id,
+            response_timeout,
             response_tx,
         } => {
             let result = send_cdc_frame_on_port_with_timeout(
@@ -8093,7 +8423,7 @@ fn handle_native_monitor_command(
                 port_path,
                 frame,
                 &request_id,
-                Duration::from_millis(NATIVE_MONITOR_COMMAND_TIMEOUT_MS),
+                response_timeout,
                 |line| {
                     if let Some((trace, log)) = parse_cdc_line_for_monitor(line) {
                         append_monitor_trace(state, device_id, trace, log);
@@ -12081,6 +12411,26 @@ mod tests {
         assert_eq!(event.kind, "host_power");
         assert_eq!(event.payload["action"], "profile");
         assert_eq!(event.payload["dry_run"], true);
+    }
+
+    #[test]
+    fn recovery_pending_result_is_detected_for_cdc_polling() {
+        assert!(recovery_result_pending(&json!({
+            "accepted": true,
+            "result": "pending",
+            "reason": "ordinary_recovery_requested"
+        })));
+        assert!(!recovery_result_pending(&json!({
+            "accepted": true,
+            "result": "failed",
+            "reason": "afe_dsg_control_off"
+        })));
+    }
+
+    #[test]
+    fn recovery_cdc_request_prefix_fits_firmware_request_id_limit() {
+        let request_id = format!("{RECOVERY_CDC_REQUEST_PREFIX}-{}", 9_999_999_999_999_u64);
+        assert!(request_id.len() <= 32, "{request_id}");
     }
 
     fn usb_port(port_name: &str, serial_number: Option<&str>) -> serialport::SerialPortInfo {

@@ -673,8 +673,12 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
     json_field_opt_u8(buf, "fault0", diag.charger.fault0, true);
     json_field_opt_u8(buf, "fault1", diag.charger.fault1, true);
     json_field_opt_u8(buf, "ctrl0", diag.charger.ctrl0, true);
+    json_field_opt_u8(buf, "ctrl2", diag.charger.ctrl2, true);
     json_field_opt_u8(buf, "ctrl3", diag.charger.ctrl3, true);
     json_field_opt_u8(buf, "ctrl4", diag.charger.ctrl4, true);
+    json_field_opt_u8(buf, "ctrl5", diag.charger.ctrl5, true);
+    json_field_opt_bool(buf, "sfet_present", diag.charger.sfet_present, true);
+    json_field_opt_u8(buf, "sdrv_ctrl", diag.charger.sdrv_ctrl, true);
     json_field_str(buf, "acdrv_path", diag.charger.acdrv_path, true);
     json_field_opt_u16(buf, "term_ctrl", diag.charger.term_ctrl, false);
     let _ = buf.push_str("},\"policy\":{");
@@ -756,6 +760,7 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
     json_field_opt_bool(buf, "full", diag.bms.full, true);
     json_field_opt_str(buf, "issue_detail", diag.bms.issue_detail, true);
     json_field_opt_bool(buf, "rca_alarm", diag.bms.rca_alarm, true);
+    json_field_opt_u32(buf, "safety_alert", diag.bms.safety_alert, true);
     json_field_opt_u32(buf, "safety_status", diag.bms.safety_status, true);
     json_field_opt_u32(buf, "pf_status", diag.bms.pf_status, true);
     json_field_opt_u32(
@@ -776,15 +781,46 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
             .map(|bytes| &bytes[..]),
         true,
     );
+    json_field_opt_u8(buf, "afe_fet_status", diag.bms.afe_fet_status, true);
+    json_field_opt_u8(buf, "afe_fet_control", diag.bms.afe_fet_control, true);
+    json_field_opt_u8(buf, "afe_latch_status", diag.bms.afe_latch_status, true);
+    json_field_opt_u8(
+        buf,
+        "afe_cell_balance_status",
+        diag.bms.afe_cell_balance_status,
+        true,
+    );
+    json_field_opt_bool(buf, "afe_chg_fet", diag.bms.afe_chg_fet, true);
+    json_field_opt_bool(buf, "afe_dsg_fet", diag.bms.afe_dsg_fet, true);
     json_field_opt_bool(buf, "emshut", diag.bms.emshut, true);
     json_field_opt_bool(buf, "pres", diag.bms.pres, true);
     json_field_opt_bool(buf, "xchg", diag.bms.xchg, true);
     json_field_opt_bool(buf, "xdsg", diag.bms.xdsg, true);
+    json_field_opt_bool(buf, "op_chg_fet", diag.bms.op_chg_fet, true);
+    json_field_opt_bool(buf, "op_dsg_fet", diag.bms.op_dsg_fet, true);
+    json_field_opt_bool(buf, "op_pchg_fet", diag.bms.op_pchg_fet, true);
     json_field_opt_bool(buf, "chg_fet", diag.bms.chg_fet, true);
     json_field_opt_bool(buf, "dsg_fet", diag.bms.dsg_fet, true);
     json_field_opt_bool(buf, "pchg_fet", diag.bms.pchg_fet, true);
+    json_field_opt_bool(
+        buf,
+        "discharge_path_contradiction",
+        diag.bms.discharge_path_contradiction,
+        true,
+    );
+    json_field_opt_str(
+        buf,
+        "discharge_path_contradiction_reason",
+        diag.bms.discharge_path_contradiction_reason,
+        true,
+    );
     json_field_opt_bool(buf, "cuv", diag.bms.cuv, true);
     json_field_opt_bool(buf, "cuvc", diag.bms.cuvc, true);
+    json_field_opt_bool(buf, "cov", diag.bms.cov, true);
+    json_field_opt_bool(buf, "occ1", diag.bms.occ1, true);
+    json_field_opt_bool(buf, "occ2", diag.bms.occ2, true);
+    json_field_opt_bool(buf, "oc", diag.bms.oc, true);
+    json_field_opt_bool(buf, "safety_alert_oc", diag.bms.safety_alert_oc, true);
     json_field_opt_u16(buf, "cuv_recovery_mv", diag.bms.cuv_recovery_mv, true);
     json_field_opt_bool(buf, "cuv_recov_chg", diag.bms.cuv_recov_chg, true);
     json_field_opt_bool(buf, "fet_en", diag.bms.fet_en, true);
@@ -983,6 +1019,7 @@ fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowe
     json_field_opt_bool(buf, "discharge_ready", bms.discharge_ready, true);
     json_field_opt_bool(buf, "charge_ready", bms.charge_ready, true);
     json_field_opt_str(buf, "issue_detail", bms.issue_detail, true);
+    json_field_opt_u32(buf, "safety_alert", bms.safety_alert, true);
     json_field_opt_u32(buf, "safety_status", bms.safety_status, true);
     json_field_opt_u32(buf, "pf_status", bms.pf_status, true);
     json_field_opt_u32(buf, "manufacturing_status", bms.manufacturing_status, true);
@@ -996,15 +1033,46 @@ fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowe
         bms.op_status_raw_bytes.as_ref().map(|bytes| &bytes[..]),
         true,
     );
+    json_field_opt_u8(buf, "afe_fet_status", bms.afe_fet_status, true);
+    json_field_opt_u8(buf, "afe_fet_control", bms.afe_fet_control, true);
+    json_field_opt_u8(buf, "afe_latch_status", bms.afe_latch_status, true);
+    json_field_opt_u8(
+        buf,
+        "afe_cell_balance_status",
+        bms.afe_cell_balance_status,
+        true,
+    );
+    json_field_opt_bool(buf, "afe_chg_fet", bms.afe_chg_fet, true);
+    json_field_opt_bool(buf, "afe_dsg_fet", bms.afe_dsg_fet, true);
     json_field_opt_bool(buf, "emshut", bms.emshut, true);
     json_field_opt_bool(buf, "pres", bms.pres, true);
     json_field_opt_bool(buf, "xchg", bms.xchg, true);
     json_field_opt_bool(buf, "xdsg", bms.xdsg, true);
+    json_field_opt_bool(buf, "op_chg_fet", bms.op_chg_fet, true);
+    json_field_opt_bool(buf, "op_dsg_fet", bms.op_dsg_fet, true);
+    json_field_opt_bool(buf, "op_pchg_fet", bms.op_pchg_fet, true);
     json_field_opt_bool(buf, "chg_fet", bms.chg_fet, true);
     json_field_opt_bool(buf, "dsg_fet", bms.dsg_fet, true);
     json_field_opt_bool(buf, "pchg_fet", bms.pchg_fet, true);
+    json_field_opt_bool(
+        buf,
+        "discharge_path_contradiction",
+        bms.discharge_path_contradiction,
+        true,
+    );
+    json_field_opt_str(
+        buf,
+        "discharge_path_contradiction_reason",
+        bms.discharge_path_contradiction_reason,
+        true,
+    );
     json_field_opt_bool(buf, "cuv", bms.cuv, true);
     json_field_opt_bool(buf, "cuvc", bms.cuvc, true);
+    json_field_opt_bool(buf, "cov", bms.cov, true);
+    json_field_opt_bool(buf, "occ1", bms.occ1, true);
+    json_field_opt_bool(buf, "occ2", bms.occ2, true);
+    json_field_opt_bool(buf, "oc", bms.oc, true);
+    json_field_opt_bool(buf, "safety_alert_oc", bms.safety_alert_oc, true);
     json_field_opt_bool(buf, "fet_en", bms.fet_en, true);
     json_field_opt_bool(buf, "chg_en", bms.chg_en, true);
     json_field_opt_bool(buf, "dsg_en", bms.dsg_en, true);
@@ -1050,8 +1118,12 @@ fn render_diag_charger_payload<const N: usize>(
     json_field_opt_u8(buf, "fault0", charger.fault0, true);
     json_field_opt_u8(buf, "fault1", charger.fault1, true);
     json_field_opt_u8(buf, "ctrl0", charger.ctrl0, true);
+    json_field_opt_u8(buf, "ctrl2", charger.ctrl2, true);
     json_field_opt_u8(buf, "ctrl3", charger.ctrl3, true);
     json_field_opt_u8(buf, "ctrl4", charger.ctrl4, true);
+    json_field_opt_u8(buf, "ctrl5", charger.ctrl5, true);
+    json_field_opt_bool(buf, "sfet_present", charger.sfet_present, true);
+    json_field_opt_u8(buf, "sdrv_ctrl", charger.sdrv_ctrl, true);
     json_field_str(buf, "acdrv_path", charger.acdrv_path, true);
     json_field_opt_u16(buf, "term_ctrl", charger.term_ctrl, false);
     let _ = buf.push('}');
