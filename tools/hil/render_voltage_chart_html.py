@@ -502,12 +502,13 @@ def render_html(
       background: #fff;
     }}
     .tooltip {{
-      position: absolute;
+      position: fixed;
       left: 0;
       top: 0;
       pointer-events: none;
       min-width: 320px;
-      max-width: 420px;
+      max-width: min(420px, calc(100vw - 24px));
+      max-height: calc(100vh - 24px);
       padding: 10px 12px;
       border-radius: 12px;
       background: rgba(19, 24, 32, 0.94);
@@ -518,8 +519,9 @@ def render_html(
       opacity: 0;
       transform: translate(-9999px, -9999px);
       transition: opacity 0.12s ease;
-      z-index: 10;
+      z-index: 2147483647;
       overflow-wrap: anywhere;
+      overflow-y: auto;
     }}
     .tooltip strong {{ color: #ffe594; }}
     .sidebar {{
@@ -664,6 +666,7 @@ def render_html(
 
     const svg = document.getElementById("chart");
     const tooltip = document.getElementById("tooltip");
+    document.body.appendChild(tooltip);
     const startRange = document.getElementById("startRange");
     const endRange = document.getElementById("endRange");
     const startValue = document.getElementById("startValue");
@@ -1127,26 +1130,26 @@ def render_html(
         `;
         tooltip.style.opacity = "1";
         tooltip.style.transform = "translate(-9999px, -9999px)";
-        const wrapRect = svg.getBoundingClientRect();
         const tooltipRect = tooltip.getBoundingClientRect();
         const tooltipWidth = tooltipRect.width || 360;
         const tooltipHeight = tooltipRect.height || 260;
-        let tipX = event.clientX - wrapRect.left + 18;
-        if (tipX + tooltipWidth + 14 > wrapRect.width) {{
-          tipX = event.clientX - wrapRect.left - tooltipWidth - 18;
+        const margin = 12;
+        const offset = 18;
+        const viewportWidth = document.documentElement.clientWidth;
+        const viewportHeight = document.documentElement.clientHeight;
+        let tipX = event.clientX + offset;
+        if (tipX + tooltipWidth + margin > viewportWidth) {{
+          tipX = event.clientX - tooltipWidth - offset;
         }}
-        tipX = Math.max(14, Math.min(tipX, wrapRect.width - tooltipWidth - 14));
+        tipX = Math.max(margin, Math.min(tipX, viewportWidth - tooltipWidth - margin));
 
-        let tipY = event.clientY - wrapRect.top - tooltipHeight - 18;
-        if (tipY < 14) {{
-          tipY = event.clientY - wrapRect.top + 18;
+        let tipY = event.clientY + offset;
+        if (tipY + tooltipHeight + margin > viewportHeight) {{
+          tipY = event.clientY - tooltipHeight - offset;
         }}
-        if (tipY + tooltipHeight + 14 > wrapRect.height) {{
-          tipY = wrapRect.height - tooltipHeight - 14;
-        }}
-        tipY = Math.max(14, tipY);
+        tipY = Math.max(margin, Math.min(tipY, viewportHeight - tooltipHeight - margin));
 
-        tooltip.style.transform = `translate(${{tipX}}px, ${{tipY}}px)`;
+        tooltip.style.transform = `translate3d(${{tipX}}px, ${{tipY}}px, 0)`;
       }});
     }}
 
