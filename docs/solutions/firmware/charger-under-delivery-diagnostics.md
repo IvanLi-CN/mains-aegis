@@ -34,6 +34,8 @@ The charger policy can correctly program a target `ICHG` while the BQ25792 still
 
 The failure mode is easy to miss if diagnostics only report over-limit mismatches. Under-delivery needs a separate signal that records both target and actual current with the limiter state.
 
+Another field diagnosis can look like a charger failure while the underlying policy is intentionally blocking: `runtime_backup_no_charge` previously disabled every `BACKUP` charger poll even when VIN had confirmed no mains, USB-C PD was ready, output power was very low, and all ordinary BMS/temperature/input gates were healthy. That condition is a mode-policy decision, not evidence that the USB-C source or BQ25792 failed.
+
 In this project another concrete failure mode was a BQ25792 register byte-order mismatch. The 16-bit configuration words such as `REG01`, `REG03`, and `REG06` are transferred MSB first. Writing `REG03=1000mA` little-endian produces a readback like `0x6400`, which decodes to `0mA` even though software may log the attempted target as `1000mA`.
 
 ## Resolution
@@ -49,6 +51,9 @@ In this project another concrete failure mode was a BQ25792 register byte-order 
 - Split input-limit programming by source. `dcin` must program `IINDPM=1000mA` and `VINDPM=measured_input_voltage*96%` using current `vin_vbus_mv` first and stable `vin_baseline_mv` as fallback. `usb_c` must continue to use the negotiated PD current limit and the existing contract-based `VINDPM` policy.
 - For Wi-Fi/LAN-only observation paths, allow host-side `diag-snapshot` derivation from `/api/v1/status` when `/api/v1/diag-snapshot` is unavailable, but keep the derived payload source-tagged so the operator can tell it came from `lan_derived`.
 - Mirror the diagnostic and manual `START/STOP` events to the plain serial monitor when the field workflow does not decode defmt, and rate-limit sustained under-delivery output so live monitoring remains readable.
+- For the controlled USB Backup exception, keep the loop-protection diagnosis separate from delivery diagnosis: automatic start needs a session-fresh trusted aggregate TPS output power `<2W`; charging tolerates `2W.. <3W`; a fresh `>=3W` sample latches `backup_usb_output_high_latched`; two distinct missing TPS sampling attempts latch `backup_usb_telemetry_lost_latched`.
+- Track TPS sampling attempts, not charger poll frequency. A stale missing sample must not be counted repeatedly just because BQ25792 is polled faster than TPS telemetry.
+- Emit the resulting policy notice through status, diag-snapshot, normal charger trace, and the front-panel detail footer. This preserves a distinguishable path for low-output allowance, high-output latch, telemetry latch, and confirmed manual session.
 
 ## Guardrails / Reuse Notes
 
@@ -58,6 +63,7 @@ In this project another concrete failure mode was a BQ25792 register byte-order 
 - Do not “fix” under-delivery by raising limits blindly. Confirm whether `IINDPM/VINDPM`, external ILIM, PD source behavior, or the power path is the limiting factor.
 - Do not attribute a `dcin` stop to `vin_drop` when `TPS` output current already crossed the `100mA` threshold in the same window. The owner-facing root cause must stay `tps_output_current`.
 - Keep the diagnostic rate-limited and require a short hold period so startup renegotiation transients do not flood the monitor.
+- Treat a real USB-C detach as a new charging session, never as recovery of the prior latch. A confirmed manual session may bypass only the three new loop guards; it must still stop for BMS, temperature, PD, input, or general output-overload safety gates.
 
 ## References
 

@@ -20,7 +20,7 @@ Index 表格的 `Status` 仅允许使用：`active`、`superseded(#<id>)`、`arc
 
 | ID | Title | Status | Spec | Last | Notes |
 | ---: | --- | --- | --- | --- | --- |
-| xjpvj | UPS runtime mode switching | active | `xjpvj-runtime-mode-switching/SPEC.md` | 2026-06-24 | 统一 `STANDBY / ASSIST / BACKUP` 自动切换、`BYPASS` 边界、VIN/fallback 真相源与 charger `LOAD/NOAC` 硬联动；当前实现真相还包含 runtime VOUT 直写与 `12V` formal sign-off 验收链 |
+| xjpvj | UPS runtime mode switching | active | `xjpvj-runtime-mode-switching/SPEC.md` | 2026-06-24 | 统一 `STANDBY / ASSIST / BACKUP` 自动切换、`BYPASS` 边界与 VIN/fallback 真相源；`BACKUP` 默认 `NOAC`，受控 USB-C 低输出充电例外由 #eu2b8 承接 |
 | rzx5v | Client transport priority matrix | archived | `rzx5v-client-transport-priority/SPEC.md` | 2026-06-08 | 跨 Web / devd / CLI 的通信方案优先级已抽成独立 topic spec；冻结 Web confirmed companion 的 FQDN-first 与 devd/CLI 的 USB-first 规则 |
 | k4vzn | LAN management convergence | archived | `k4vzn-lan-management-convergence/SPEC.md` | 2026-06-03 | 设备本体 settings 读写 API、devd LAN discovery/scan trace/LAN settings 写路径、USB 优先合并、trace+connection 查询面、Web direct LAN/devd LAN settings 与最终视觉证据已收口 |
 | 7jqrq | Mains Aegis CLI / devd alignment | archived | `7jqrq-mains-aegis-cli-devd-alignment/SPEC.md` | 2026-06-03 | 主机工具对齐与 release/install 基线已完成；CLI `device session` 与新查询面迁移改由 #k4vzn 接管 |
@@ -46,10 +46,10 @@ Index 表格的 `Status` 仅允许使用：`active`、`superseded(#<id>)`、`arc
 | cqd8u | Regulated output module docs + runtime gate state machine | archived | `cqd8u-regulated-output-module/SPEC.md` | 2026-03-16 | 已建立 `docs/modules/`、收敛稳压输出 SoT，并落地显式恢复状态机与本地验证 |
 | frsr9 | Regulated output active derating + shutdown | archived | `frsr9-regulated-output-active-protection/SPEC.md` | 2026-03-16 | 已落地温度/电流双门限主动降额、低压主动停机与显式恢复前置条件 |
 | 2uqhm | TPS/BQ power test firmware | archived | `2uqhm-tps-bq-power-test-firmware/SPEC.md` | 2026-03-21 | 已实现独立 `tps-test-fw`、固定 profile 电源运行时、专用 `TPS TEST` 屏显与三组 `cargo +esp check` 验证 |
-| eu2b8 | BQ25792 500mA charge policy + DC derate | archived | `eu2b8-bq25792-charge-policy/SPEC.md` | 2026-06-14 | 主线 charger state machine 已作为 SoT；DC IN 停充真相源已切到 `TPS output current > 100mA`，并补齐 `IINDPM=1000mA`、`VINDPM=输入电压*96%`、Web/CLI 可观测性与 HIL 视觉证据 |
+| eu2b8 | BQ25792 500mA charge policy + DC derate | archived | `eu2b8-bq25792-charge-policy/SPEC.md` | 2026-06-14 | 主线 charger state machine 已作为 SoT；DC IN 停充真相源使用 `TPS output current > 100mA`，并新增 BACKUP USB-C `<2W` 自动放行、`>=3W`/两次缺样锁存与可观测状态 |
 | 2drzf | BQ40 mainboard DF protection baseline | archived | `2drzf-bq40-mainboard-df-protection-baseline/SPEC.md` | 2026-04-03 | 冻结 `asset-df-mainboard` 的 `OCC/OCD/SOCC/SOCD` 主板基线，并把 `TMP + BMS` 最高温收敛为共享热控真相源 |
 | mturr | Front panel display-chain long-press diagnostics | archived | `mturr-front-panel-display-chain-diagnostics/SPEC.md` | 2026-04-04 | 已完成主固件实现、本地构建、真机 flash/monitor 与 `CENTER` 长按 defmt 取证 |
-| zp4cg | Manual charge dashboard page + EEPROM prefs | archived | `zp4cg-manual-charge-dashboard/SPEC.md` | 2026-04-07 | 已完成 `MANUAL` 三级页面、小屏触控布局、运行时手动接管/停止抑制、仅保存 prefs 的 EEPROM schema v1，以及预览/真机验证闭环 |
+| zp4cg | Manual charge dashboard page + EEPROM prefs | archived | `zp4cg-manual-charge-dashboard/SPEC.md` | 2026-04-07 | `MANUAL` 三级页面仅保存 prefs；手动 START 现需 USB-C 回环确认，确认 flag 仅在当前 RAM 会话有效 |
 | jxz2t | GitHub Pages docs site handbooks | archived | `jxz2t-docs-site-handbooks/SPEC.md` | 2026-05-05 | Pages 根站点改由 Web App 发布，文档站保留为 `/docs/` 子路径；原 `docs-site/`、手册页面与 PR #63 记录仍为历史基线 |
 | h6sae | BQ40 `LOCK` root cause + closure | active | `h6sae-bq40-lock-root-cause/SPEC.md` | 2026-04-13 | 已命中 `termination` 分流并提交 `ITERM` 对齐修复；下一步需要 `<90%` 解锁后的 live 闭环复验 |
 | amc32 | WiFi / service discovery / read-only API foundation | active | `amc32-wifi-service-discovery-api-foundation/SPEC.md` | 2026-06-03 | `net_http` 与 `web_serial` 已成为默认主固件能力；“LAN 只读 API” 假设由 #k4vzn 继续演进 |

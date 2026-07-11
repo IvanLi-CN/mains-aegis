@@ -22,7 +22,7 @@
 - 固定 `assist_low` 入口为 `dcin` 在线场景下的双判据：运行时内部绝对 `VIN` 门槛 + `TPS total output current` 已实际参与，并要求连续 fresh 样本锁存。
 - 固定 `standby -> assist_low` 通过限速爬升推进到低补能目标，不再一帧跳到固定 `assist_low` 电压目标。
 - 固定 `BACKUP` 只允许在“确认无输入”时进入；当 `mains_present` 未知时保持上一确认模式，不得因输出活跃而直接跳 `BACKUP`。
-- 固定 `ASSIST / BACKUP` 都是 non-charging mode，`charger.allow_charge=false`，并与现有 runtime token `LOAD / NOAC` 建立明确边界。
+- 固定 `ASSIST` 是 non-charging mode；`BACKUP` 默认停充，但可把唯一受控 USB-C 低输出充电例外交给 `eu2b8`，不得改变 VIN 或 mode 的真相源。
 
 ### Non-goals
 
@@ -97,7 +97,7 @@
   - 输入确认离线。
   - 输出由电池侧供能。
   - TPS 目标保持额定输出档位。
-  - 固定为 non-charging mode。
+  - 默认 non-charging；只有 `eu2b8` 定义的 USB-C PD 低输出例外可改变 charger allow，不能改变 `BACKUP` 本身的 VIN/运行态定义。
 - `BLOCKED`
   - owner-facing 阻断态，不是新的内部供电阶段。
   - 当自动状态机候选结果为 `STANDBY / ASSIST / BACKUP`，但本轮请求的 TPS 输出没有全部进入
@@ -192,9 +192,8 @@
   - `charger.allow_charge=false`
   - owner-facing charger token/notice 收敛到 `LOAD` 语义边界。
 - `BACKUP`
-  - 必须视为 non-charging mode。
-  - `charger.allow_charge=false`
-  - owner-facing charger token/notice 收敛到 `NOAC` 语义边界。
+  - 默认视为 non-charging mode，`charger.allow_charge=false`，token/notice 收敛到 `NOAC`。
+  - 唯一例外由 `eu2b8` 定义：VIN 已确认无市电、USB-C PD 可充电、既有安全门通过且输出功率满足专用回环门时，可发布 `CHG500`；其 `LOAD/LOCK` 锁存、TPS 采样、手动确认与会话重置均不属于 mode state machine。
 - `BLOCKED`
   - 必须视为 non-charging mode。
   - `charger.allow_charge=false`
@@ -246,7 +245,8 @@
 - Given `VIN < 3V`，When 自动模式判定更新，Then 结果为 `BACKUP`。
 - Given `VIN` 连续缺样超过窗口且 `aggregate input-present=false`，When 自动模式判定更新，Then 结果为 `BACKUP`。
 - Given `ASSIST` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD`。
-- Given `BACKUP` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
+- Given `BACKUP` 已锁存且不满足 `eu2b8` 的 USB-C 例外，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
+- Given `mode=backup`、VIN 已确认无市电且 `eu2b8` 已以新鲜 `<2W` USB-C 输出样本放行，When 查看 mode，Then mode 仍为 `backup`，但 charger 可显示 `CHG500`；该例外不得把 mode 改写为 `standby`。
 - Given 当前 topic 进入 `12V` Power Path Validation sign-off，When 判定任何边界、在线接管、切断或恢复结论，Then 必须同时满足 `docs/hil-runtime-mode-switching.md` 中定义的三设备实时数据、输出电压波动与 scene-complete gate。
 - Given 当前 topic 进入 formal dual-voltage suite，When 执行 `12V assist_path / 12V backup_only / 19V assist_path / 19V backup_only` 四场景，Then source profile、load target 与保护栏必须固定为 `12V|19V @ 3000mA`、`3900mA|1000mA`、`UVP=3000mV/OCP=4000mA/OPP=80000mW`，不得按口头约定漂移。
 - Given 需要在 formal suite 中从 `12V` 切到 `19V` 或从 `19V` 切回 `12V`，When 做 artifact select / flash，Then 必须先 disable load、cut IsolaPurr `port_c`、确认 UPS 已脱离外部 `DCIN` 高压输入，再进行切换或烧录；并行 USB-C 供电/通信允许保留，不构成切换阻断。
@@ -271,6 +271,13 @@
   evidence_note: 同源固件渲染入口显示自检阻断态；TPS 未 active 的状态不得渲染为 `BACKUP`、`STANDBY`、`SUPPLEMENT` 或 `BLOCKED` Dashboard。
 
 ![Front panel self-check output blocked](assets/front-panel-self-check-output-blocked.png)
+
+- source_type: firmware_preview
+  evidence_scope: Backup mode retains its VIN-derived identity while the controlled USB-C low-output charger exception shows `CHG500`.
+  command: `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode backup --scenario dashboard-detail-charger-backup-usb-low-output --out-dir /tmp/mains-aegis-usb-backup-loopback-preview`
+  image: `assets/backup-usb-low-output-charge.png`
+
+![Backup USB controlled low-output charge](assets/backup-usb-low-output-charge.png)
 
 - source_type: real_hil_capture
   evidence_scope: passing formal `12V` runtime-mode scene
