@@ -3613,6 +3613,21 @@ mod tests {
     }
 
     #[test]
+    fn backup_usb_guard_requires_a_new_tps_attempt_after_session_reset() {
+        let mut guard = BackupUsbChargeGuard::default();
+
+        guard.reset_for_new_session(Some(40));
+        assert_eq!(
+            guard.observe(true, true, true, Some(19), Some(40), false),
+            BackupUsbChargeGuardDecision::WaitingForLowOutput
+        );
+        assert_eq!(
+            guard.observe(true, true, true, Some(19), Some(41), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+    }
+
+    #[test]
     fn backup_usb_runtime_override_only_opens_backup_for_the_guard_allowance() {
         assert_eq!(
             runtime_charge_override_for_backup_usb_charger(UpsMode::Backup, false, false, true),

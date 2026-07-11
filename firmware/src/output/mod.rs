@@ -5090,15 +5090,20 @@ where
             );
             self.persist_pd_breadcrumb(previous_state, state);
         }
-        if previous_state.attached && !state.attached {
+        if previous_state.attached != state.attached {
             self.backup_usb_charge_guard
                 .reset_for_new_session(self.tps_telemetry_attempt_seq);
-            if self.manual_charge_runtime.active {
-                self.stop_manual_charge_session(ManualChargeStopReason::SafetyBlocked, false);
+            if !state.attached {
+                if self.manual_charge_runtime.active {
+                    self.stop_manual_charge_session(ManualChargeStopReason::SafetyBlocked, false);
+                }
+                defmt::info!("backup_usb_charge: session_reset reason=usb_pd_detach");
+                esp_println::println!("backup_usb_charge: session_reset reason=usb_pd_detach");
+            } else {
+                defmt::info!("backup_usb_charge: session_reset reason=usb_pd_attach");
+                esp_println::println!("backup_usb_charge: session_reset reason=usb_pd_attach");
             }
             self.chg_next_poll_at = Instant::now();
-            defmt::info!("backup_usb_charge: session_reset reason=usb_pd_detach");
-            esp_println::println!("backup_usb_charge: session_reset reason=usb_pd_detach");
         }
         self.usb_pd_state = state;
         self.usb_pd_input_current_limit_ma = state.input_current_limit_ma;
