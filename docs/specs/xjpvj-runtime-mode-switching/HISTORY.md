@@ -1,5 +1,11 @@
 # 历史记录（#xjpvj）
 
+## USB Backup controlled charge exception
+
+- `BACKUP` 的 VIN/运行态定义保持不变。
+- charger 默认仍为 `NOAC`；仅 `eu2b8` 的 USB-C PD 低输出守卫可在同一 `BACKUP` mode 中放行 `CHG500`。
+- `>3W` 与两次 TPS 缺样锁存、真实 USB-C detach 新会话和手动会话豁免均属于 charger policy，不回写 mode state machine。
+
 ## 2026-07-03
 
 - 修正 owner-facing mode 发布门槛：

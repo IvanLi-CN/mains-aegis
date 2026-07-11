@@ -530,6 +530,9 @@ fn dashboard_detail_snapshot_for_thermal_notice(
 enum ChargerPolicyPreviewState {
     Wait,
     Charge500mA,
+    BackupUsbLowOutput,
+    BackupUsbOutputHighLatched,
+    BackupUsbTelemetryLostLatched,
     Warm,
     Charge100mADcDerated,
     RecoveringLowVoltage,
@@ -542,7 +545,12 @@ enum ChargerPolicyPreviewState {
 fn charger_policy_snapshot_for_state(
     state: ChargerPolicyPreviewState,
 ) -> (UpsMode, SelfCheckUiSnapshot) {
-    let mode = UpsMode::Standby;
+    let mode = match state {
+        ChargerPolicyPreviewState::BackupUsbLowOutput
+        | ChargerPolicyPreviewState::BackupUsbOutputHighLatched
+        | ChargerPolicyPreviewState::BackupUsbTelemetryLostLatched => UpsMode::Backup,
+        _ => UpsMode::Standby,
+    };
     let mut snapshot = dashboard_snapshot_for_mode(mode);
     snapshot.dashboard_detail = dashboard_detail_fixture(mode, Some(DashboardDetailPage::Charger));
     snapshot.dashboard_detail.input_source = Some(DashboardInputSource::UsbC);
@@ -589,6 +597,59 @@ fn charger_policy_snapshot_for_state(
             snapshot.bq40z50_pack_mv = Some(15_260);
             snapshot.input_ibus_ma = Some(1_260);
             snapshot.vin_iin_ma = Some(1_260);
+        }
+        ChargerPolicyPreviewState::BackupUsbLowOutput => {
+            snapshot.vin_mains_present = Some(false);
+            snapshot.vin_vbus_mv = None;
+            snapshot.vin_iin_ma = None;
+            snapshot.dashboard_detail.charger_active = Some(true);
+            snapshot.dashboard_detail.charger_status = Some("CHG500");
+            snapshot.dashboard_detail.charger_notice = Some("backup_usb_low_output_charge");
+            snapshot.bq25792_allow_charge = Some(true);
+            snapshot.bq25792_ichg_ma = Some(500);
+            snapshot.bq25792_ibat_ma = Some(470);
+            snapshot.bq40z50_current_ma = Some(460);
+            snapshot.bq40z50_soc_pct = Some(67);
+            snapshot.bq40z50_pack_mv = Some(15_260);
+            snapshot.input_ibus_ma = Some(1_240);
+            snapshot.tps_a_enabled = Some(true);
+            snapshot.out_a_vbus_mv = Some(20_000);
+            snapshot.tps_a_iout_ma = Some(95);
+            snapshot.ina_total_ma = Some(95);
+        }
+        ChargerPolicyPreviewState::BackupUsbOutputHighLatched => {
+            snapshot.vin_mains_present = Some(false);
+            snapshot.vin_vbus_mv = None;
+            snapshot.vin_iin_ma = None;
+            snapshot.dashboard_detail.charger_status = Some("LOAD");
+            snapshot.dashboard_detail.charger_notice = Some("backup_usb_output_high_latched");
+            snapshot.bq25792_allow_charge = Some(false);
+            snapshot.bq25792_ibat_ma = Some(0);
+            snapshot.bq40z50_current_ma = Some(-150);
+            snapshot.bq40z50_soc_pct = Some(67);
+            snapshot.bq40z50_pack_mv = Some(15_250);
+            snapshot.input_ibus_ma = Some(220);
+            snapshot.tps_a_enabled = Some(true);
+            snapshot.out_a_vbus_mv = Some(20_000);
+            snapshot.tps_a_iout_ma = Some(155);
+            snapshot.ina_total_ma = Some(155);
+        }
+        ChargerPolicyPreviewState::BackupUsbTelemetryLostLatched => {
+            snapshot.vin_mains_present = Some(false);
+            snapshot.vin_vbus_mv = None;
+            snapshot.vin_iin_ma = None;
+            snapshot.dashboard_detail.charger_status = Some("LOCK");
+            snapshot.dashboard_detail.charger_notice = Some("backup_usb_telemetry_lost_latched");
+            snapshot.bq25792_allow_charge = Some(false);
+            snapshot.bq25792_ibat_ma = Some(0);
+            snapshot.bq40z50_current_ma = Some(-110);
+            snapshot.bq40z50_soc_pct = Some(67);
+            snapshot.bq40z50_pack_mv = Some(15_250);
+            snapshot.input_ibus_ma = Some(210);
+            snapshot.tps_a_enabled = Some(true);
+            snapshot.out_a_vbus_mv = Some(20_000);
+            snapshot.tps_a_iout_ma = None;
+            snapshot.ina_total_ma = None;
         }
         ChargerPolicyPreviewState::Warm => {
             snapshot.dashboard_detail.charger_active = Some(true);
@@ -705,6 +766,8 @@ enum ManualChargePreviewState {
     Default,
     AutoCharging,
     Active,
+    LoopbackConfirm,
+    LoopbackConfirmed,
     StopHold,
     ResetAuto,
     Blocked,
@@ -713,7 +776,12 @@ enum ManualChargePreviewState {
 fn manual_charge_snapshot_for_state(
     state: ManualChargePreviewState,
 ) -> (UpsMode, DashboardRoute, SelfCheckUiSnapshot) {
-    let mode = UpsMode::Standby;
+    let mode = match state {
+        ManualChargePreviewState::LoopbackConfirm | ManualChargePreviewState::LoopbackConfirmed => {
+            UpsMode::Backup
+        }
+        _ => UpsMode::Standby,
+    };
     let mut snapshot = dashboard_snapshot_for_mode(mode);
     snapshot.dashboard_detail = dashboard_detail_fixture(mode, Some(DashboardDetailPage::Charger));
     snapshot.dashboard_detail.input_source = Some(DashboardInputSource::UsbC);
@@ -735,6 +803,18 @@ fn manual_charge_snapshot_for_state(
     snapshot.bq40z50_pack_mv = Some(15_260);
     snapshot.bq40z50_current_ma = Some(0);
     snapshot.bq40z50_soc_pct = Some(67);
+
+    if matches!(
+        state,
+        ManualChargePreviewState::LoopbackConfirm | ManualChargePreviewState::LoopbackConfirmed
+    ) {
+        snapshot.vin_mains_present = Some(false);
+        snapshot.vin_vbus_mv = None;
+        snapshot.vin_iin_ma = None;
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.input_vbus_mv = Some(20_060);
+        snapshot.input_ibus_ma = Some(1_240);
+    }
 
     match state {
         ManualChargePreviewState::Default => {}
@@ -762,6 +842,30 @@ fn manual_charge_snapshot_for_state(
             snapshot.dashboard_detail.charger_status = Some("CHG500");
             snapshot.dashboard_detail.charger_home_status = Some("CHG500");
             snapshot.dashboard_detail.charger_notice = Some("charging_500ma");
+            snapshot.bq25792_allow_charge = Some(true);
+            snapshot.bq25792_ichg_ma = Some(500);
+            snapshot.bq25792_ibat_ma = Some(480);
+            snapshot.bq40z50_current_ma = Some(470);
+        }
+        ManualChargePreviewState::LoopbackConfirm => {}
+        ManualChargePreviewState::LoopbackConfirmed => {
+            snapshot.dashboard_detail.manual_charge.runtime.active = true;
+            snapshot.dashboard_detail.manual_charge.runtime.takeover = true;
+            snapshot
+                .dashboard_detail
+                .manual_charge
+                .runtime
+                .loopback_override = true;
+            snapshot
+                .dashboard_detail
+                .manual_charge
+                .runtime
+                .remaining_minutes = Some(92);
+            snapshot.dashboard_detail.charger_active = Some(true);
+            snapshot.dashboard_detail.charger_status = Some("CHG500");
+            snapshot.dashboard_detail.charger_home_status = Some("CHG500");
+            snapshot.dashboard_detail.charger_notice =
+                Some("manual_loopback_confirmed_charging_500ma");
             snapshot.bq25792_allow_charge = Some(true);
             snapshot.bq25792_ichg_ma = Some(500);
             snapshot.bq25792_ibat_ma = Some(480);
@@ -1132,6 +1236,9 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardDetailThermKillAsserted
         | ScenarioArg::DashboardDetailChargerWait
         | ScenarioArg::DashboardDetailCharger500mA
+        | ScenarioArg::DashboardDetailChargerBackupUsbLowOutput
+        | ScenarioArg::DashboardDetailChargerBackupUsbOutputHighLatched
+        | ScenarioArg::DashboardDetailChargerBackupUsbTelemetryLostLatched
         | ScenarioArg::DashboardDetailChargerWarm
         | ScenarioArg::DashboardDetailCharger100mADcDerated
         | ScenarioArg::DashboardDetailChargerRecovery
@@ -1142,6 +1249,8 @@ fn bq40_snapshot_for_scenario(
         | ScenarioArg::DashboardManualChargeDefault
         | ScenarioArg::DashboardManualChargeAutoCharging
         | ScenarioArg::DashboardManualChargeActive
+        | ScenarioArg::DashboardManualChargeLoopbackConfirm
+        | ScenarioArg::DashboardManualChargeLoopbackConfirmed
         | ScenarioArg::DashboardManualChargeStopHold
         | ScenarioArg::DashboardManualChargeResetAuto
         | ScenarioArg::DashboardManualChargeBlocked
@@ -1210,6 +1319,9 @@ fn run() -> Result<(), String> {
         ScenarioArg::DashboardDetailWifiDisabled => ModeArg::Standby,
         ScenarioArg::DashboardDetailChargerWait => ModeArg::Standby,
         ScenarioArg::DashboardDetailCharger500mA => ModeArg::Standby,
+        ScenarioArg::DashboardDetailChargerBackupUsbLowOutput => ModeArg::Backup,
+        ScenarioArg::DashboardDetailChargerBackupUsbOutputHighLatched => ModeArg::Backup,
+        ScenarioArg::DashboardDetailChargerBackupUsbTelemetryLostLatched => ModeArg::Backup,
         ScenarioArg::DashboardDetailChargerWarm => ModeArg::Standby,
         ScenarioArg::DashboardDetailCharger100mADcDerated => ModeArg::Standby,
         ScenarioArg::DashboardDetailChargerFullLatched => ModeArg::Standby,
@@ -1217,6 +1329,8 @@ fn run() -> Result<(), String> {
         ScenarioArg::DashboardManualChargeDefault => ModeArg::Standby,
         ScenarioArg::DashboardManualChargeAutoCharging => ModeArg::Standby,
         ScenarioArg::DashboardManualChargeActive => ModeArg::Standby,
+        ScenarioArg::DashboardManualChargeLoopbackConfirm => ModeArg::Backup,
+        ScenarioArg::DashboardManualChargeLoopbackConfirmed => ModeArg::Backup,
         ScenarioArg::DashboardManualChargeStopHold => ModeArg::Standby,
         ScenarioArg::DashboardManualChargeResetAuto => ModeArg::Standby,
         ScenarioArg::DashboardManualChargeBlocked => ModeArg::Standby,
@@ -1530,6 +1644,9 @@ fn run() -> Result<(), String> {
         | ScenarioArg::DashboardDetailThermKillAsserted
         | ScenarioArg::DashboardDetailChargerWait
         | ScenarioArg::DashboardDetailCharger500mA
+        | ScenarioArg::DashboardDetailChargerBackupUsbLowOutput
+        | ScenarioArg::DashboardDetailChargerBackupUsbOutputHighLatched
+        | ScenarioArg::DashboardDetailChargerBackupUsbTelemetryLostLatched
         | ScenarioArg::DashboardDetailChargerWarm
         | ScenarioArg::DashboardDetailCharger100mADcDerated
         | ScenarioArg::DashboardDetailChargerRecovery
@@ -1559,6 +1676,9 @@ fn run() -> Result<(), String> {
                 | ScenarioArg::DashboardDetailWifiDisabled => DashboardDetailPage::Wifi,
                 ScenarioArg::DashboardDetailChargerWait
                 | ScenarioArg::DashboardDetailCharger500mA
+                | ScenarioArg::DashboardDetailChargerBackupUsbLowOutput
+                | ScenarioArg::DashboardDetailChargerBackupUsbOutputHighLatched
+                | ScenarioArg::DashboardDetailChargerBackupUsbTelemetryLostLatched
                 | ScenarioArg::DashboardDetailChargerWarm
                 | ScenarioArg::DashboardDetailCharger100mADcDerated
                 | ScenarioArg::DashboardDetailChargerRecovery
@@ -1574,6 +1694,19 @@ fn run() -> Result<(), String> {
                 }
                 ScenarioArg::DashboardDetailCharger500mA => {
                     charger_policy_snapshot_for_state(ChargerPolicyPreviewState::Charge500mA)
+                }
+                ScenarioArg::DashboardDetailChargerBackupUsbLowOutput => {
+                    charger_policy_snapshot_for_state(ChargerPolicyPreviewState::BackupUsbLowOutput)
+                }
+                ScenarioArg::DashboardDetailChargerBackupUsbOutputHighLatched => {
+                    charger_policy_snapshot_for_state(
+                        ChargerPolicyPreviewState::BackupUsbOutputHighLatched,
+                    )
+                }
+                ScenarioArg::DashboardDetailChargerBackupUsbTelemetryLostLatched => {
+                    charger_policy_snapshot_for_state(
+                        ChargerPolicyPreviewState::BackupUsbTelemetryLostLatched,
+                    )
                 }
                 ScenarioArg::DashboardDetailChargerWarm => {
                     charger_policy_snapshot_for_state(ChargerPolicyPreviewState::Warm)
@@ -1671,6 +1804,8 @@ fn run() -> Result<(), String> {
         ScenarioArg::DashboardManualChargeDefault
         | ScenarioArg::DashboardManualChargeAutoCharging
         | ScenarioArg::DashboardManualChargeActive
+        | ScenarioArg::DashboardManualChargeLoopbackConfirm
+        | ScenarioArg::DashboardManualChargeLoopbackConfirmed
         | ScenarioArg::DashboardManualChargeStopHold
         | ScenarioArg::DashboardManualChargeResetAuto
         | ScenarioArg::DashboardManualChargeBlocked => {
@@ -1683,6 +1818,12 @@ fn run() -> Result<(), String> {
                 }
                 ScenarioArg::DashboardManualChargeActive => {
                     manual_charge_snapshot_for_state(ManualChargePreviewState::Active)
+                }
+                ScenarioArg::DashboardManualChargeLoopbackConfirm => {
+                    manual_charge_snapshot_for_state(ManualChargePreviewState::LoopbackConfirm)
+                }
+                ScenarioArg::DashboardManualChargeLoopbackConfirmed => {
+                    manual_charge_snapshot_for_state(ManualChargePreviewState::LoopbackConfirmed)
                 }
                 ScenarioArg::DashboardManualChargeStopHold => {
                     manual_charge_snapshot_for_state(ManualChargePreviewState::StopHold)
@@ -1701,13 +1842,21 @@ fn run() -> Result<(), String> {
                 touch_irq: false,
                 frame_no: args.frame_no,
             };
+            let overlay = if matches!(
+                args.scenario,
+                ScenarioArg::DashboardManualChargeLoopbackConfirm
+            ) {
+                SelfCheckOverlay::ManualChargeLoopbackConfirm
+            } else {
+                SelfCheckOverlay::None
+            };
             front_panel_scene::render_frame_with_dashboard_route_overlay(
                 &mut framebuffer,
                 &dashboard_model,
                 UiVariant::InstrumentB,
                 route,
                 Some(&snapshot),
-                SelfCheckOverlay::None,
+                overlay,
             )
             .map_err(|_| "render failed unexpectedly".to_string())?;
         }
@@ -1984,6 +2133,9 @@ enum ScenarioArg {
     DashboardDetailThermKillAsserted,
     DashboardDetailChargerWait,
     DashboardDetailCharger500mA,
+    DashboardDetailChargerBackupUsbLowOutput,
+    DashboardDetailChargerBackupUsbOutputHighLatched,
+    DashboardDetailChargerBackupUsbTelemetryLostLatched,
     DashboardDetailChargerWarm,
     DashboardDetailCharger100mADcDerated,
     DashboardDetailChargerRecovery,
@@ -1994,6 +2146,8 @@ enum ScenarioArg {
     DashboardManualChargeDefault,
     DashboardManualChargeAutoCharging,
     DashboardManualChargeActive,
+    DashboardManualChargeLoopbackConfirm,
+    DashboardManualChargeLoopbackConfirmed,
     DashboardManualChargeStopHold,
     DashboardManualChargeResetAuto,
     DashboardManualChargeBlocked,
@@ -2084,6 +2238,15 @@ impl ScenarioArg {
             "dashboard-detail-therm-kill-asserted" => Ok(Self::DashboardDetailThermKillAsserted),
             "dashboard-detail-charger-wait" => Ok(Self::DashboardDetailChargerWait),
             "dashboard-detail-charger-500ma" => Ok(Self::DashboardDetailCharger500mA),
+            "dashboard-detail-charger-backup-usb-low-output" => {
+                Ok(Self::DashboardDetailChargerBackupUsbLowOutput)
+            }
+            "dashboard-detail-charger-backup-usb-output-high-latched" => {
+                Ok(Self::DashboardDetailChargerBackupUsbOutputHighLatched)
+            }
+            "dashboard-detail-charger-backup-usb-telemetry-lost-latched" => {
+                Ok(Self::DashboardDetailChargerBackupUsbTelemetryLostLatched)
+            }
             "dashboard-detail-charger-warm" => Ok(Self::DashboardDetailChargerWarm),
             "dashboard-detail-charger-100ma-dc-derated" => {
                 Ok(Self::DashboardDetailCharger100mADcDerated)
@@ -2102,6 +2265,12 @@ impl ScenarioArg {
             "dashboard-manual-charge-default" => Ok(Self::DashboardManualChargeDefault),
             "dashboard-manual-charge-auto-charging" => Ok(Self::DashboardManualChargeAutoCharging),
             "dashboard-manual-charge-active" => Ok(Self::DashboardManualChargeActive),
+            "dashboard-manual-charge-loopback-confirm" => {
+                Ok(Self::DashboardManualChargeLoopbackConfirm)
+            }
+            "dashboard-manual-charge-loopback-confirmed" => {
+                Ok(Self::DashboardManualChargeLoopbackConfirmed)
+            }
             "dashboard-manual-charge-stop-hold" => Ok(Self::DashboardManualChargeStopHold),
             "dashboard-manual-charge-reset-auto" => Ok(Self::DashboardManualChargeResetAuto),
             "dashboard-manual-charge-blocked" => Ok(Self::DashboardManualChargeBlocked),
@@ -2197,6 +2366,15 @@ impl ScenarioArg {
             ScenarioArg::DashboardDetailThermKillAsserted => "dashboard-detail-therm-kill-asserted",
             ScenarioArg::DashboardDetailChargerWait => "dashboard-detail-charger-wait",
             ScenarioArg::DashboardDetailCharger500mA => "dashboard-detail-charger-500ma",
+            ScenarioArg::DashboardDetailChargerBackupUsbLowOutput => {
+                "dashboard-detail-charger-backup-usb-low-output"
+            }
+            ScenarioArg::DashboardDetailChargerBackupUsbOutputHighLatched => {
+                "dashboard-detail-charger-backup-usb-output-high-latched"
+            }
+            ScenarioArg::DashboardDetailChargerBackupUsbTelemetryLostLatched => {
+                "dashboard-detail-charger-backup-usb-telemetry-lost-latched"
+            }
             ScenarioArg::DashboardDetailChargerWarm => "dashboard-detail-charger-warm",
             ScenarioArg::DashboardDetailCharger100mADcDerated => {
                 "dashboard-detail-charger-100ma-dc-derated"
@@ -2219,6 +2397,12 @@ impl ScenarioArg {
                 "dashboard-manual-charge-auto-charging"
             }
             ScenarioArg::DashboardManualChargeActive => "dashboard-manual-charge-active",
+            ScenarioArg::DashboardManualChargeLoopbackConfirm => {
+                "dashboard-manual-charge-loopback-confirm"
+            }
+            ScenarioArg::DashboardManualChargeLoopbackConfirmed => {
+                "dashboard-manual-charge-loopback-confirmed"
+            }
             ScenarioArg::DashboardManualChargeStopHold => "dashboard-manual-charge-stop-hold",
             ScenarioArg::DashboardManualChargeResetAuto => "dashboard-manual-charge-reset-auto",
             ScenarioArg::DashboardManualChargeBlocked => "dashboard-manual-charge-blocked",

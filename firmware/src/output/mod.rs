@@ -200,6 +200,8 @@ const EEPROM_WRITE_POLL_GAP: Duration = Duration::from_millis(1);
 struct ManualChargeRuntime {
     active: bool,
     takeover: bool,
+    loopback_override: bool,
+    loopback_override_mode: Option<UpsMode>,
     stop_inhibit: bool,
     last_stop_reason: ManualChargeStopReason,
     deadline: Option<Instant>,
@@ -210,6 +212,8 @@ impl ManualChargeRuntime {
         Self {
             active: false,
             takeover: false,
+            loopback_override: false,
+            loopback_override_mode: None,
             stop_inhibit: false,
             last_stop_reason: ManualChargeStopReason::None,
             deadline: None,
@@ -3556,6 +3560,7 @@ pub struct PowerManager<'d, I2C> {
     tps_b_ready: bool,
     tps_b_next_retry_at: Option<Instant>,
     tps_telemetry_sample_seq: u32,
+    tps_telemetry_attempt_seq: Option<u32>,
     runtime_mode: RuntimeModeTracker,
     assist_power_stage: AssistPowerStageTracker,
     assist_target_ramp: AssistTargetRamp,
@@ -3595,6 +3600,7 @@ pub struct PowerManager<'d, I2C> {
     charge_policy: ChargePolicyMemory,
     charge_policy_derate: ChargePolicyDerateTracker,
     charge_policy_output_load: ChargePolicyOutputLoadTracker,
+    backup_usb_charge_guard: BackupUsbChargeGuard,
     dcin_input_pressure: DcinInputPressureTracker,
     advanced_power_settings: AdvancedPowerSettingsSnapshot,
     advanced_power_expanded: AdvancedPowerExpandedSnapshot,
@@ -4333,6 +4339,7 @@ where
             tps_b_ready: false,
             tps_b_next_retry_at: if out_b_allowed { Some(now) } else { None },
             tps_telemetry_sample_seq: 0,
+            tps_telemetry_attempt_seq: None,
             runtime_mode: RuntimeModeTracker::new(initial_ui_snapshot.mode),
             assist_power_stage: AssistPowerStageTracker::with_stage(initial_assist_stage),
             assist_target_ramp: AssistTargetRamp::new(initial_assist_target_vout_mv),
@@ -4372,6 +4379,7 @@ where
             charge_policy: ChargePolicyMemory::default(),
             charge_policy_derate: ChargePolicyDerateTracker::default(),
             charge_policy_output_load: ChargePolicyOutputLoadTracker::default(),
+            backup_usb_charge_guard: BackupUsbChargeGuard::default(),
             dcin_input_pressure: DcinInputPressureTracker::default(),
             advanced_power_settings,
             advanced_power_expanded,
@@ -4749,6 +4757,7 @@ where
         detail.manual_charge.runtime = ManualChargeRuntimeState {
             active: self.manual_charge_runtime.active,
             takeover: self.manual_charge_runtime.takeover,
+            loopback_override: self.manual_charge_runtime.loopback_override,
             stop_inhibit: self.manual_charge_runtime.stop_inhibit,
             last_stop_reason: self.manual_charge_runtime.last_stop_reason,
             remaining_minutes: manual_charge_remaining_minutes(
@@ -5080,6 +5089,21 @@ where
                 state.unsafe_source_latched
             );
             self.persist_pd_breadcrumb(previous_state, state);
+        }
+        if previous_state.attached != state.attached {
+            self.backup_usb_charge_guard
+                .reset_for_new_session(self.tps_telemetry_attempt_seq);
+            if !state.attached {
+                if self.manual_charge_runtime.active {
+                    self.stop_manual_charge_session(ManualChargeStopReason::SafetyBlocked, false);
+                }
+                defmt::info!("backup_usb_charge: session_reset reason=usb_pd_detach");
+                esp_println::println!("backup_usb_charge: session_reset reason=usb_pd_detach");
+            } else {
+                defmt::info!("backup_usb_charge: session_reset reason=usb_pd_attach");
+                esp_println::println!("backup_usb_charge: session_reset reason=usb_pd_attach");
+            }
+            self.chg_next_poll_at = Instant::now();
         }
         self.usb_pd_state = state;
         self.usb_pd_input_current_limit_ma = state.input_current_limit_ma;
@@ -6609,22 +6633,32 @@ where
                 }
             }
             ManualChargeUiAction::Start => {
+                defmt::warn!("manual_charge: start rejected reason=loopback_confirmation_required");
+                esp_println::println!(
+                    "manual_charge: start rejected reason=loopback_confirmation_required"
+                );
+            }
+            ManualChargeUiAction::StartConfirmedLoopback => {
                 self.manual_charge_runtime.active = true;
                 self.manual_charge_runtime.takeover = charging_active;
+                self.manual_charge_runtime.loopback_override = true;
+                self.manual_charge_runtime.loopback_override_mode = Some(self.ui_snapshot.mode);
                 self.manual_charge_runtime.stop_inhibit = false;
                 self.manual_charge_runtime.last_stop_reason = ManualChargeStopReason::None;
                 self.manual_charge_runtime.deadline =
                     Some(now + manual_charge_timer_duration(self.manual_charge_prefs.timer_limit));
+                self.backup_usb_charge_guard
+                    .reset_for_new_session(self.tps_telemetry_attempt_seq);
                 self.chg_next_poll_at = now;
                 esp_println::println!(
-                    "manual_charge: start target={} speed_ma={} timer_h={} takeover={}",
+                    "manual_charge: start confirmed_loopback=true target={} speed_ma={} timer_h={} takeover={}",
                     self.manual_charge_target_label(),
                     self.manual_charge_prefs.speed.ichg_ma(),
                     self.manual_charge_prefs.timer_limit.hours(),
                     self.manual_charge_runtime.takeover
                 );
                 defmt::info!(
-                    "manual_charge: start target={} speed_ma={=u16} timer_h={=u8} takeover={=bool}",
+                    "manual_charge: start confirmed_loopback=true target={} speed_ma={=u16} timer_h={=u8} takeover={=bool}",
                     self.manual_charge_target_label(),
                     self.manual_charge_prefs.speed.ichg_ma(),
                     self.manual_charge_prefs.timer_limit.hours(),
@@ -6936,9 +6970,12 @@ where
     fn stop_manual_charge_session(&mut self, reason: ManualChargeStopReason, inhibit: bool) {
         self.manual_charge_runtime.active = false;
         self.manual_charge_runtime.takeover = false;
+        self.manual_charge_runtime.loopback_override = false;
+        self.manual_charge_runtime.loopback_override_mode = None;
         self.manual_charge_runtime.stop_inhibit = inhibit;
         self.manual_charge_runtime.last_stop_reason = reason;
         self.manual_charge_runtime.deadline = None;
+        self.update_manual_charge_ui_snapshot(Instant::now());
     }
 
     fn update_manual_charge_ui_snapshot(&mut self, now: Instant) {
@@ -6946,6 +6983,7 @@ where
         self.ui_snapshot.dashboard_detail.manual_charge.runtime = ManualChargeRuntimeState {
             active: self.manual_charge_runtime.active,
             takeover: self.manual_charge_runtime.takeover,
+            loopback_override: self.manual_charge_runtime.loopback_override,
             stop_inhibit: self.manual_charge_runtime.stop_inhibit,
             last_stop_reason: self.manual_charge_runtime.last_stop_reason,
             remaining_minutes: manual_charge_remaining_minutes(
@@ -10331,6 +10369,16 @@ where
             self.output_state.requested_outputs,
             confirmed_active_outputs,
         );
+        if self.manual_charge_runtime.loopback_override
+            && self.manual_charge_runtime.loopback_override_mode != Some(self.ui_snapshot.mode)
+        {
+            self.stop_manual_charge_session(ManualChargeStopReason::SafetyBlocked, false);
+            self.chg_next_poll_at = Instant::now();
+            defmt::info!("manual_charge: loopback confirmation expired reason=mode_changed");
+            esp_println::println!(
+                "manual_charge: loopback confirmation expired reason=mode_changed"
+            );
+        }
         if target_changed {
             self.sync_runtime_output_target_if_needed();
         }
@@ -11201,6 +11249,8 @@ where
             self.ui_snapshot.tps_a_iout_ma,
             self.ui_snapshot.tps_b_iout_ma,
         );
+        self.tps_telemetry_attempt_seq =
+            Some(self.tps_telemetry_attempt_seq.unwrap_or(0).wrapping_add(1));
         if self.ui_snapshot.ina_total_ma.is_some() {
             self.tps_telemetry_sample_seq = self.tps_telemetry_sample_seq.wrapping_add(1);
         }
@@ -11550,6 +11600,15 @@ where
             && ac1_present
             && charger_vbus_stat_allows_activation_charge(charger_vbus_stat);
         let usb_pd_charge_gate_ready = usb_pd_charge_gate_ready_raw || activation_bc12_charge_ready;
+        let backup_vin_mains_present = mains_present_from_vin(self.ui_snapshot.vin_vbus_mv)
+            .or(self.ui_snapshot.vin_mains_present);
+        let backup_usb_charge_context = self.ui_snapshot.mode == UpsMode::Backup
+            && backup_vin_mains_present == Some(false)
+            && matches!(input_source, Some(DashboardInputSource::UsbC))
+            && usb_pd_charge_gate_ready;
+        let manual_loopback_override_for_policy = self.manual_charge_runtime.active
+            && self.manual_charge_runtime.loopback_override
+            && self.manual_charge_runtime.loopback_override_mode == Some(self.ui_snapshot.mode);
         let requested_acdrv_path = match input_source {
             Some(DashboardInputSource::DcIn) if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
             Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
@@ -11611,6 +11670,8 @@ where
             && self.bms_activation_phase == BmsActivationPhase::ProbeWithoutCharge;
         let activation_normal_hold_charge = false;
         let boot_diag_hold_charge = false;
+        let output_enabled =
+            charge_policy_output_enabled(&self.ui_snapshot, self.output_state.active_outputs);
         let output_power_w10 =
             charge_policy_output_power_w10(&self.ui_snapshot, self.output_state.active_outputs);
         let charge_policy_hv = self
@@ -11676,11 +11737,13 @@ where
                     ts_hot,
                     input_source,
                     ibus_ma: input_sample.ui_ibus_ma,
-                    output_enabled: charge_policy_output_enabled(
-                        &self.ui_snapshot,
-                        self.output_state.active_outputs,
-                    ),
+                    output_enabled,
                     output_power_w10,
+                    defer_output_power_unknown_block:
+                        defer_output_power_unknown_block_for_backup_usb(
+                            backup_usb_charge_context,
+                            manual_loopback_override_for_policy,
+                        ),
                     telemetry: charge_policy_telemetry,
                     charger_done: matches!(
                         audio_charge_phase_from_chg_stat(charger_chg_stat),
@@ -11693,6 +11756,46 @@ where
         let normal_allow_charge =
             charge_policy_decision.map_or(false, |decision| decision.allow_charge);
         let force_allow_charge = (activation_force_charge || auto_force_charge) && can_enable;
+        if self.manual_charge_runtime.loopback_override
+            && self.manual_charge_runtime.loopback_override_mode != Some(self.ui_snapshot.mode)
+        {
+            self.stop_manual_charge_session(ManualChargeStopReason::SafetyBlocked, false);
+            self.chg_next_poll_at = now;
+            defmt::info!("manual_charge: loopback confirmation expired reason=mode_changed");
+            esp_println::println!(
+                "manual_charge: loopback confirmation expired reason=mode_changed"
+            );
+        }
+        let manual_loopback_override =
+            self.manual_charge_runtime.active && self.manual_charge_runtime.loopback_override;
+        let backup_usb_charge_guard_before = self.backup_usb_charge_guard;
+        let backup_usb_charge_decision = self.backup_usb_charge_guard.observe(
+            backup_usb_charge_context,
+            normal_allow_charge,
+            output_enabled,
+            output_power_w10,
+            self.tps_telemetry_attempt_seq,
+            manual_loopback_override,
+        );
+        if backup_usb_charge_context
+            && !manual_loopback_override
+            && normal_allow_charge
+            && !backup_usb_charge_guard_before.admitted
+            && self.backup_usb_charge_guard.admitted
+            && matches!(
+                backup_usb_charge_decision,
+                BackupUsbChargeGuardDecision::Allow
+            )
+        {
+            defmt::info!("backup_usb_charge: admitted reason=low_output");
+            esp_println::println!("backup_usb_charge: admitted reason=low_output");
+        }
+        if backup_usb_charge_guard_before.latched_reason.is_none() {
+            if let Some(reason) = self.backup_usb_charge_guard.latched_reason {
+                defmt::warn!("backup_usb_charge: latched reason={}", reason.notice());
+                esp_println::println!("backup_usb_charge: latched reason={}", reason.notice());
+            }
+        }
         let mut allow_charge =
             if usb_pd_unsafe_latched || activation_force_charge_off || !usb_pd_charge_gate_ready {
                 false
@@ -11743,10 +11846,11 @@ where
                 .or_else(|| policy_state.map(ChargePolicyState::as_str))
                 .unwrap_or("charger_policy_pending")
         };
-        let runtime_charge_override = runtime_charge_override_for_charger(
+        let runtime_charge_override = runtime_charge_override_for_backup_usb_charger(
             self.ui_snapshot.mode,
             force_allow_charge,
             auto_force_charge,
+            backup_usb_charge_decision.allows_charge(),
         );
         let manual_stop_hold_blocks_charge = manual_charge_stop_hold_blocks_charge(
             self.manual_charge_runtime.stop_inhibit,
@@ -11769,6 +11873,7 @@ where
         } else if !activation_pending && !force_allow_charge && !auto_force_charge {
             let manual_blocked = !self.cfg.charger_enabled
                 || !can_enable
+                || !usb_pd_charge_gate_ready
                 || matches!(
                     policy_state,
                     Some(
@@ -11845,6 +11950,12 @@ where
                         manual_charge_status_text(self.manual_charge_prefs.speed, derated);
                     policy_notice_text = if derated {
                         "charging_100ma_dc_derated"
+                    } else if self.manual_charge_runtime.loopback_override {
+                        match self.manual_charge_prefs.speed {
+                            ManualChargeSpeed::Ma100 => "manual_loopback_confirmed_charging_100ma",
+                            ManualChargeSpeed::Ma500 => "manual_loopback_confirmed_charging_500ma",
+                            ManualChargeSpeed::Ma1000 => "manual_loopback_confirmed_charging_1a",
+                        }
                     } else {
                         match self.manual_charge_prefs.speed {
                             ManualChargeSpeed::Ma100 => "charging_100ma_manual",
@@ -11886,7 +11997,6 @@ where
             },
             self.advanced_power_expanded.vin_drop_threshold_pct,
         );
-        let requested_policy_target_ichg_ma = policy_target_ichg_ma;
         let mut effective_policy_target_ichg_ma = policy_target_ichg_ma;
         let mut policy_detail_status_text = dcin_charge_detail_status_text(
             policy_status_text,
@@ -11902,14 +12012,38 @@ where
                 policy_notice_text = dcin_pressure.limit_reason.as_str();
             }
         }
-        if let Some(runtime_charge_override) = runtime_charge_override {
+        if let Some(guard_status_text) = backup_usb_charge_decision.policy_status_text() {
+            allow_charge = false;
+            effective_policy_target_ichg_ma = None;
+            policy_status_text = guard_status_text;
+            policy_notice_text = backup_usb_charge_decision
+                .notice()
+                .unwrap_or("backup_usb_charge_guard");
+            policy_detail_status_text = guard_status_text;
+        } else if backup_usb_charge_context
+            && !manual_loopback_override
+            && normal_allow_charge
+            && matches!(
+                backup_usb_charge_decision,
+                BackupUsbChargeGuardDecision::Allow
+            )
+            && !force_allow_charge
+            && !auto_force_charge
+            && !activation_pending
+        {
+            policy_target_ichg_ma = Some(BACKUP_USB_AUTO_CHARGE_ICHG_MA);
+            effective_policy_target_ichg_ma = Some(BACKUP_USB_AUTO_CHARGE_ICHG_MA);
+            policy_status_text = BACKUP_USB_AUTO_CHARGE_STATUS_TEXT;
+            policy_notice_text = "backup_usb_low_output_charge";
+            policy_detail_status_text = BACKUP_USB_AUTO_CHARGE_STATUS_TEXT;
+        } else if let Some(runtime_charge_override) = runtime_charge_override {
             allow_charge = runtime_charge_override.allow_charge;
-            policy_target_ichg_ma = None;
             effective_policy_target_ichg_ma = None;
             policy_status_text = runtime_charge_override.policy_status_text;
             policy_notice_text = runtime_charge_override.policy_notice_text;
             policy_detail_status_text = runtime_charge_override.policy_status_text;
         }
+        let requested_policy_target_ichg_ma = policy_target_ichg_ma;
         let mut applied_ctrl0 = ctrl0;
         let mut applied_vreg_mv: Option<u16> = None;
         let mut applied_ichg_ma: Option<u16> = None;

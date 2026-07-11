@@ -295,6 +295,7 @@ pub enum ManualChargeStopReason {
 pub struct ManualChargeRuntimeState {
     pub active: bool,
     pub takeover: bool,
+    pub loopback_override: bool,
     pub stop_inhibit: bool,
     pub last_stop_reason: ManualChargeStopReason,
     pub remaining_minutes: Option<u16>,
@@ -305,6 +306,7 @@ impl ManualChargeRuntimeState {
         Self {
             active: false,
             takeover: false,
+            loopback_override: false,
             stop_inhibit: false,
             last_stop_reason: ManualChargeStopReason::None,
             remaining_minutes: None,
@@ -333,6 +335,7 @@ pub enum ManualChargeUiAction {
     SetSpeed(ManualChargeSpeed),
     SetTimerLimit(ManualChargeTimerLimit),
     Start,
+    StartConfirmedLoopback,
     Stop,
 }
 
@@ -1176,12 +1179,20 @@ pub enum SelfCheckTouchTarget {
 #[allow(dead_code)]
 pub enum SelfCheckOverlay {
     None,
+    ManualChargeLoopbackConfirm,
     BmsActivateConfirm,
     BmsActivateProgress,
     BmsDischargeAuthorizeConfirm,
     BmsDischargeAuthorizeProgress,
     BmsActivateResult(BmsResultKind),
     HardwareIssue(SelfCheckHardwareTarget),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum ManualChargeLoopbackConfirmTarget {
+    Cancel,
+    Confirm,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1750,6 +1761,7 @@ pub fn self_check_hit_test(
         SelfCheckOverlay::None => {
             self_check_hardware_target_at(x, y).map(SelfCheckTouchTarget::HardwareCard)
         }
+        SelfCheckOverlay::ManualChargeLoopbackConfirm => None,
         SelfCheckOverlay::BmsActivateConfirm | SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
             if contains(
                 x,
@@ -1777,6 +1789,48 @@ pub fn self_check_hit_test(
         | SelfCheckOverlay::BmsDischargeAuthorizeProgress
         | SelfCheckOverlay::BmsActivateResult(..)
         | SelfCheckOverlay::HardwareIssue(..) => None,
+    }
+}
+
+#[allow(dead_code)]
+pub fn manual_charge_loopback_confirm_hit_test(
+    x: u16,
+    y: u16,
+) -> Option<ManualChargeLoopbackConfirmTarget> {
+    if contains(
+        x,
+        y,
+        SELF_CHECK_CANCEL_BTN_X,
+        SELF_CHECK_CANCEL_BTN_Y,
+        SELF_CHECK_CANCEL_BTN_W,
+        SELF_CHECK_CANCEL_BTN_H,
+    ) {
+        Some(ManualChargeLoopbackConfirmTarget::Cancel)
+    } else if contains(
+        x,
+        y,
+        SELF_CHECK_CONFIRM_BTN_X,
+        SELF_CHECK_CONFIRM_BTN_Y,
+        SELF_CHECK_CONFIRM_BTN_W,
+        SELF_CHECK_CONFIRM_BTN_H,
+    ) {
+        Some(ManualChargeLoopbackConfirmTarget::Confirm)
+    } else {
+        None
+    }
+}
+
+pub const fn manual_charge_loopback_confirm_key_target(
+    left: bool,
+    right: bool,
+    center: bool,
+) -> Option<ManualChargeLoopbackConfirmTarget> {
+    if left {
+        Some(ManualChargeLoopbackConfirmTarget::Cancel)
+    } else if right || center {
+        Some(ManualChargeLoopbackConfirmTarget::Confirm)
+    } else {
+        None
     }
 }
 
@@ -2615,10 +2669,16 @@ impl DashboardLiveData {
                 .detail
                 .output_notice
                 .unwrap_or("OUTPUT DETAIL SOURCE PENDING"),
-            DashboardDetailPage::Charger => self
-                .detail
-                .charger_notice
-                .unwrap_or("DETAIL UI ONLY - SOURCE PENDING"),
+            DashboardDetailPage::Charger => match self.detail.charger_notice {
+                Some("backup_usb_low_output_charge") => "USB BACKUP: CHARGING ACTIVE",
+                Some("backup_usb_output_high_latched") => "USB BACKUP: LOAD PRESENT",
+                Some("backup_usb_telemetry_lost_latched") => "USB BACKUP: LOAD DATA LOST",
+                Some("manual_loopback_confirmed_charging_100ma")
+                | Some("manual_loopback_confirmed_charging_500ma")
+                | Some("manual_loopback_confirmed_charging_1a") => "MANUAL: LOOP CHECK OK",
+                Some(notice) => notice,
+                None => "DETAIL UI ONLY - SOURCE PENDING",
+            },
             DashboardDetailPage::Thermal => self
                 .detail
                 .thermal_notice
@@ -3433,6 +3493,11 @@ pub fn render_frame_with_dashboard_route_overlay<P: UiPainter>(
             render_variant_c(painter, variant, palette, data, self_check, overlay)?
         }
         UiVariant::InstrumentD => render_variant_d(painter, variant, palette, data, self_check)?,
+    }
+
+    if variant == UiVariant::InstrumentB && overlay == SelfCheckOverlay::ManualChargeLoopbackConfirm
+    {
+        draw_dashboard_manual_loopback_confirm_overlay(painter, variant, palette)?;
     }
 
     Ok(())
@@ -8982,7 +9047,11 @@ fn manual_charge_action_style(action_label: &'static str, palette: Palette) -> (
 fn manual_charge_footer_text(data: DashboardLiveData) -> &'static str {
     let runtime = data.detail.manual_charge.runtime;
     if runtime.active {
-        "MANUAL ACTIVE"
+        if runtime.loopback_override {
+            "LOOP OK"
+        } else {
+            "MANUAL ACTIVE"
+        }
     } else if runtime.stop_inhibit && charger_active_value(data) != Some(true) {
         manual_charge_stop_footer_text(runtime.last_stop_reason)
     } else if let Some(minutes) = runtime.remaining_minutes {
@@ -9980,6 +10049,22 @@ fn detail_footer_notice(page: DashboardDetailPage, data: DashboardLiveData) -> &
         return data.page_notice(page);
     }
 
+    if page == DashboardDetailPage::Charger
+        && matches!(
+            data.detail.charger_notice,
+            Some(
+                "backup_usb_low_output_charge"
+                    | "backup_usb_output_high_latched"
+                    | "backup_usb_telemetry_lost_latched"
+                    | "manual_loopback_confirmed_charging_100ma"
+                    | "manual_loopback_confirmed_charging_500ma"
+                    | "manual_loopback_confirmed_charging_1a"
+            )
+        )
+    {
+        return data.page_notice(page);
+    }
+
     match detail_status_tag(page, data) {
         "FAULT" => detail_fault_notice(page, data),
         "WARN" => "WARNING ACTIVE - CHECK STATUS",
@@ -10094,6 +10179,32 @@ fn detail_footer_badge(
 
     if page == DashboardDetailPage::Cells && notice == "CFG MISMATCH" {
         return (DetailFooterIcon::Warn, "CHECK STATUS");
+    }
+
+    if page == DashboardDetailPage::Charger {
+        return match data.detail.charger_notice {
+            Some("backup_usb_low_output_charge") => (DetailFooterIcon::Live, "CHARGING ACTIVE"),
+            Some("backup_usb_output_high_latched") => (DetailFooterIcon::Warn, "LOAD: CHG PAUSED"),
+            Some("backup_usb_telemetry_lost_latched") => (DetailFooterIcon::Warn, "LOAD DATA LOST"),
+            Some("manual_loopback_confirmed_charging_100ma")
+            | Some("manual_loopback_confirmed_charging_500ma")
+            | Some("manual_loopback_confirmed_charging_1a") => {
+                (DetailFooterIcon::Live, "LOOP CHECK OK")
+            }
+            _ => match status {
+                "FAULT" => (DetailFooterIcon::Fault, "LINK FAULT"),
+                "WARN" | "HOT" | "WARM" | "LOCK" | "NOAC" | "TEMP" | "LIMIT" | "HOLD" | "RECOV" => {
+                    (DetailFooterIcon::Warn, "CHECK STATUS")
+                }
+                _ if notice.contains("PENDING")
+                    || notice.contains("SOURCE")
+                    || notice.contains("UI ONLY") =>
+                {
+                    (DetailFooterIcon::Unknown, "SOURCE NXT")
+                }
+                _ => (DetailFooterIcon::Live, "LIVE DATA"),
+            },
+        };
     }
 
     if page == DashboardDetailPage::Wifi {
@@ -10652,7 +10763,10 @@ fn draw_self_check_overlay<P: UiPainter>(
     snapshot: &SelfCheckUiSnapshot,
     overlay: SelfCheckOverlay,
 ) -> Result<(), P::Error> {
-    if overlay == SelfCheckOverlay::None {
+    if matches!(
+        overlay,
+        SelfCheckOverlay::None | SelfCheckOverlay::ManualChargeLoopbackConfirm
+    ) {
         return Ok(());
     }
 
@@ -10687,7 +10801,7 @@ fn draw_self_check_overlay<P: UiPainter>(
         | SelfCheckOverlay::BmsDischargeAuthorizeProgress => "BQ40 RECOVERY",
         SelfCheckOverlay::BmsActivateResult(..) => "BQ40 RESULT",
         SelfCheckOverlay::HardwareIssue(..) => "SELF CHECK ISSUE",
-        SelfCheckOverlay::None => "",
+        SelfCheckOverlay::None | SelfCheckOverlay::ManualChargeLoopbackConfirm => "",
     };
 
     fill(
@@ -10891,8 +11005,147 @@ fn draw_self_check_overlay<P: UiPainter>(
                 palette.text_dim,
             )?;
         }
-        SelfCheckOverlay::None => {}
+        SelfCheckOverlay::None | SelfCheckOverlay::ManualChargeLoopbackConfirm => {}
     }
+
+    Ok(())
+}
+
+fn draw_dashboard_manual_loopback_confirm_overlay<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+) -> Result<(), P::Error> {
+    fill(
+        painter,
+        0,
+        HEADER_H,
+        UI_W,
+        UI_H - HEADER_H,
+        fade_color(palette.bg, 0x0000),
+    )?;
+
+    let dialog_border = fade_color(palette.right, palette.border);
+    let dialog_fill = fade_color(palette.panel_alt, palette.bg);
+    let title_fill = fade_color(dialog_border, palette.bg);
+    let divider = fade_color(title_fill, palette.text_dim);
+    let cancel_border = fade_color(palette.border, palette.text_dim);
+    let cancel_fill = fade_color(palette.panel, palette.panel_alt);
+    let confirm_border = fade_color(palette.right, 0x0000);
+    let confirm_fill = palette.right;
+
+    fill(
+        painter,
+        SELF_CHECK_DIALOG_X,
+        SELF_CHECK_DIALOG_Y,
+        SELF_CHECK_DIALOG_W,
+        SELF_CHECK_DIALOG_H,
+        dialog_border,
+    )?;
+    fill(
+        painter,
+        SELF_CHECK_DIALOG_X + 1,
+        SELF_CHECK_DIALOG_Y + 1,
+        SELF_CHECK_DIALOG_W - 2,
+        SELF_CHECK_DIALOG_H - 2,
+        dialog_fill,
+    )?;
+    fill(
+        painter,
+        SELF_CHECK_DIALOG_X + 1,
+        SELF_CHECK_DIALOG_Y + 1,
+        SELF_CHECK_DIALOG_W - 2,
+        20,
+        title_fill,
+    )?;
+    fill(
+        painter,
+        SELF_CHECK_DIALOG_X + 1,
+        SELF_CHECK_DIALOG_Y + 21,
+        SELF_CHECK_DIALOG_W - 2,
+        1,
+        divider,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "USB-C LOOP CHECK",
+        Point::new(
+            (SELF_CHECK_DIALOG_X + 10) as i32,
+            (SELF_CHECK_DIALOG_Y + 4) as i32,
+        ),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "Confirm USB-C IN is not",
+        Point::new(
+            (SELF_CHECK_DIALOG_X + 10) as i32,
+            (SELF_CHECK_DIALOG_Y + 28) as i32,
+        ),
+        HorizontalAlignment::Left,
+        ATTENTION_COLOR,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "wired to UPS OUT.",
+        Point::new(
+            (SELF_CHECK_DIALOG_X + 10) as i32,
+            (SELF_CHECK_DIALOG_Y + 46) as i32,
+        ),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    draw_manual_action_button(
+        painter,
+        SELF_CHECK_CANCEL_BTN_X,
+        SELF_CHECK_CANCEL_BTN_Y,
+        SELF_CHECK_CANCEL_BTN_W,
+        SELF_CHECK_CANCEL_BTN_H,
+        cancel_fill,
+        cancel_border,
+    )?;
+    draw_manual_action_button(
+        painter,
+        SELF_CHECK_CONFIRM_BTN_X,
+        SELF_CHECK_CONFIRM_BTN_Y,
+        SELF_CHECK_CONFIRM_BTN_W,
+        SELF_CHECK_CONFIRM_BTN_H,
+        confirm_fill,
+        confirm_border,
+    )?;
+    text_with_position(
+        painter,
+        variant,
+        FontRole::Num,
+        "CANCEL",
+        Point::new(
+            (SELF_CHECK_CANCEL_BTN_X + SELF_CHECK_CANCEL_BTN_W / 2) as i32,
+            (SELF_CHECK_CANCEL_BTN_Y + SELF_CHECK_CANCEL_BTN_H / 2) as i32,
+        ),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        palette.text,
+    )?;
+    text_with_position(
+        painter,
+        variant,
+        FontRole::Num,
+        "CONFIRM",
+        Point::new(
+            (SELF_CHECK_CONFIRM_BTN_X + SELF_CHECK_CONFIRM_BTN_W / 2) as i32,
+            (SELF_CHECK_CONFIRM_BTN_Y + SELF_CHECK_CONFIRM_BTN_H / 2) as i32,
+        ),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        palette.bg,
+    )?;
 
     Ok(())
 }
@@ -15008,6 +15261,98 @@ mod tests {
         let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
 
         assert_eq!(manual_charge_footer_text(live), "SAFETY STOP");
+    }
+
+    #[test]
+    fn manual_page_footer_marks_a_confirmed_loopback_override_session() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Backup);
+        snapshot.dashboard_detail.manual_charge.runtime.active = true;
+        snapshot
+            .dashboard_detail
+            .manual_charge
+            .runtime
+            .loopback_override = true;
+
+        let live = DashboardLiveData::from_snapshot(base_model(UpsMode::Backup), &snapshot);
+
+        assert_eq!(manual_charge_footer_text(live), "LOOP OK");
+    }
+
+    #[test]
+    fn manual_loopback_confirmation_hit_test_requires_explicit_button_choice() {
+        assert_eq!(
+            manual_charge_loopback_confirm_hit_test(
+                SELF_CHECK_CANCEL_BTN_X + 2,
+                SELF_CHECK_CANCEL_BTN_Y + 2,
+            ),
+            Some(ManualChargeLoopbackConfirmTarget::Cancel)
+        );
+        assert_eq!(
+            manual_charge_loopback_confirm_hit_test(
+                SELF_CHECK_CONFIRM_BTN_X + 2,
+                SELF_CHECK_CONFIRM_BTN_Y + 2,
+            ),
+            Some(ManualChargeLoopbackConfirmTarget::Confirm)
+        );
+        assert_eq!(manual_charge_loopback_confirm_hit_test(8, 8), None);
+    }
+
+    #[test]
+    fn manual_loopback_confirmation_keys_match_the_button_order() {
+        assert_eq!(
+            manual_charge_loopback_confirm_key_target(true, false, false),
+            Some(ManualChargeLoopbackConfirmTarget::Cancel)
+        );
+        assert_eq!(
+            manual_charge_loopback_confirm_key_target(false, true, false),
+            Some(ManualChargeLoopbackConfirmTarget::Confirm)
+        );
+        assert_eq!(
+            manual_charge_loopback_confirm_key_target(false, false, true),
+            Some(ManualChargeLoopbackConfirmTarget::Confirm)
+        );
+    }
+
+    #[test]
+    fn charger_detail_notice_names_backup_usb_guard_states() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Backup);
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.fusb302_vbus_present = Some(true);
+        snapshot.dashboard_detail.charger_status = Some("CHG500");
+        snapshot.dashboard_detail.charger_notice = Some("backup_usb_low_output_charge");
+        let low = DashboardLiveData::from_snapshot(base_model(UpsMode::Backup), &snapshot);
+        assert_eq!(
+            low.page_notice(DashboardDetailPage::Charger),
+            "USB BACKUP: CHARGING ACTIVE"
+        );
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::Charger, low),
+            (DetailFooterIcon::Live, "CHARGING ACTIVE")
+        );
+
+        snapshot.dashboard_detail.charger_status = Some("LOAD");
+        snapshot.dashboard_detail.charger_notice = Some("backup_usb_output_high_latched");
+        let high = DashboardLiveData::from_snapshot(base_model(UpsMode::Backup), &snapshot);
+        assert_eq!(
+            high.page_notice(DashboardDetailPage::Charger),
+            "USB BACKUP: LOAD PRESENT"
+        );
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::Charger, high),
+            (DetailFooterIcon::Warn, "LOAD: CHG PAUSED")
+        );
+
+        snapshot.dashboard_detail.charger_status = Some("LOCK");
+        snapshot.dashboard_detail.charger_notice = Some("backup_usb_telemetry_lost_latched");
+        let lost = DashboardLiveData::from_snapshot(base_model(UpsMode::Backup), &snapshot);
+        assert_eq!(
+            lost.page_notice(DashboardDetailPage::Charger),
+            "USB BACKUP: LOAD DATA LOST"
+        );
+        assert_eq!(
+            detail_footer_badge(DashboardDetailPage::Charger, lost),
+            (DetailFooterIcon::Warn, "LOAD DATA LOST")
+        );
     }
 
     #[test]

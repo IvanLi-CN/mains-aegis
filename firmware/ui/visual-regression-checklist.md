@@ -141,6 +141,18 @@
   - 对话框区域与按钮区域落在契约锚点范围。
   - 文案使用 `Type.Body`，结果与动作按钮具备足够对比。
 
+### VR-O-03 Manual USB-C loopback confirmation
+
+- Assets:
+  - `../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-loopback-confirm.png`
+  - `../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-loopback-confirmed.png`
+  - `../../docs/specs/eu2b8-bq25792-charge-policy/assets/charger-backup-usb-output-high-latched.png`
+  - `../../docs/specs/eu2b8-bq25792-charge-policy/assets/charger-backup-usb-telemetry-lost-latched.png`
+- Pass criteria:
+  - `START` 前必须可见 `USB-C LOOP CHECK`、两行确认内容、`CANCEL` 与 `CONFIRM`；取消不能切换到 active 手动状态。
+  - 已确认会话 action bar 显示 `LOOP OK`，但 `LOAD` 的 `LOAD: CHG PAUSED` 与 `LOCK` 的 `LOAD DATA LOST` 仍以独立 detail 状态可见。
+  - 五张图均为同源 `320x172` 固件渲染，文字不越过对话框或 footer 边界。
+
 ## 5. Offline-readability checks
 
 ### VR-G-01 No external image dependency

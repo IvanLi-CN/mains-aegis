@@ -95,7 +95,7 @@
 ### ManualChargePage
 
 - Responsibility: 手动充电页容器，承载偏好设置、运行时模式与 `START/STOP` 控制。
-- Required fields: `prefs`, `runtime`, `status_chip`, `footer_notice`, `action_label`.
+- Required fields: `prefs`, `runtime`, `status_chip`, `footer_notice`, `action_label`, `loopback_confirmation`.
 - Forbidden fields: 持久化手动会话状态；运行时状态不得越过 `PowerManager` RAM 边界。
 - Allowed states: `DashboardRoute::ManualCharge`。
 - Token refs: `Type.Title`, `Type.Body`, `Type.Num`, `Type.NumBig`, `Color.State.Accent|Warning|Error|Success`。
@@ -106,6 +106,7 @@
   - `TIMER` row: `x=6 y=92 w=308 h=30`
   - action bar: `BACK x=6 y=132 w=88 h=30` / `STATUS x=100 y=132 w=120 h=30` / `START|STOP x=226 y=132 w=88 h=30`
   - top bar is info-only on this page; no dedicated back chip，也不再保留第二层 info strip。
+- `START` 先打开确认层；只有确认 action 才创建会话。有效确认会话用 `LOOP OK` 表示，但该标志不可持久化。
 
 ### ManualChargeOptionGroup
 
@@ -183,12 +184,21 @@
 - Token refs: `Type.Body`, `Type.Num`, `Color.Surface.PanelAlt`, `Color.Border.Default`, `Color.State.Success|Error|Warning`。
 - Geometry anchor: 对话框 `x=20 y=34 w=280 h=112`；按钮按实现锚点固定。
 
+### ManualChargeLoopbackConfirmDialog
+
+- Responsibility: 在手动 START 前要求确认 USB-C 输入未与 UPS OUT 回环。
+- Required fields: `dialog_title=USB-C LOOP CHECK`, two-line loopback confirmation, `cancel`, `confirm`。
+- Forbidden fields: 直接写 charger、持久化豁免、覆盖 BMS/温度/PD/输入/通用输出过载安全门。
+- Allowed states: `DashboardRoute::ManualCharge` 且尚未建立手动会话。
+- Geometry anchor: 对话框 `x=20 y=34 w=280 h=112`；`CANCEL x=32 y=116 w=108 h=24`；`CONFIRM x=152 y=116 w=136 h=24`。
+
 ## 5. Field ownership guardrails
 
 - `ChargeCard` 与 `DischgCard` 不得互相承载对方电流字段。
 - `BatteryCard` 必须保留 `SOC + Tmax` 核心字段，不得替换为电压等其它主字段。
 - `DiagCard` 的 `key_param` 必须可映射到对应模块采样或状态源。
 - `UiFocus` 影响高亮，不得作为业务模式来源。
+- `loopback_override` 只属于当前 `ManualChargeRuntime`；模式变化、USB-C detach、停止与重启必须清除它。
 - 不允许组件绕过 Token 直接指定新字体；字体必须落在字高白名单 `13/14/22`（且不得小于 `10px`）。
 
 ## 6. Mapping references

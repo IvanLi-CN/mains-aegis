@@ -36,6 +36,11 @@ const CHARGE_POLICY_OUTPUT_POWER_LIMIT_W10: u32 = 50;
 const CHARGE_POLICY_OUTPUT_POWER_RESUME_W10: u32 = 45;
 const CHARGE_POLICY_OUTPUT_BLOCK_ENTER_POLLS: u8 = 2;
 const CHARGE_POLICY_OUTPUT_BLOCK_EXIT_POLLS: u8 = 3;
+pub(super) const BACKUP_USB_CHARGE_START_POWER_LIMIT_W10: u32 = 20;
+pub(super) const BACKUP_USB_CHARGE_STOP_POWER_LIMIT_W10: u32 = 30;
+pub(super) const BACKUP_USB_CHARGE_TELEMETRY_MISS_LIMIT: u8 = 2;
+pub(super) const BACKUP_USB_AUTO_CHARGE_ICHG_MA: u16 = CHARGE_POLICY_NORMAL_ICHG_MA;
+pub(super) const BACKUP_USB_AUTO_CHARGE_STATUS_TEXT: &str = "CHG500";
 pub(super) const DCIN_ADAPTIVE_START_ICHG_MA: u16 = 100;
 const DCIN_ADAPTIVE_STEP_UP_ICHG_MA: u16 = 100;
 const DCIN_ADAPTIVE_STEP_DOWN_ICHG_MA: u16 = 200;
@@ -372,6 +377,19 @@ pub(super) const fn runtime_charge_override_for_charger(
         None
     } else {
         runtime_charge_override(mode)
+    }
+}
+
+pub(super) fn runtime_charge_override_for_backup_usb_charger(
+    mode: UpsMode,
+    force_allow_charge: bool,
+    auto_force_charge: bool,
+    backup_usb_charge_allowed: bool,
+) -> Option<RuntimeChargeOverride> {
+    if mode == UpsMode::Backup && backup_usb_charge_allowed {
+        None
+    } else {
+        runtime_charge_override_for_charger(mode, force_allow_charge, auto_force_charge)
     }
 }
 
@@ -931,6 +949,169 @@ impl ChargePolicyOutputLoadTracker {
                 self.enter_streak = 0;
             }
             false
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BackupUsbChargeBlockReason {
+    OutputHigh,
+    TelemetryLost,
+}
+
+impl BackupUsbChargeBlockReason {
+    pub(super) const fn policy_status_text(self) -> &'static str {
+        match self {
+            Self::OutputHigh => "LOAD",
+            Self::TelemetryLost => "LOCK",
+        }
+    }
+
+    pub(super) const fn notice(self) -> &'static str {
+        match self {
+            Self::OutputHigh => "backup_usb_output_high_latched",
+            Self::TelemetryLost => "backup_usb_telemetry_lost_latched",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BackupUsbChargeGuardDecision {
+    NotApplicable,
+    Allow,
+    WaitingForLowOutput,
+    Blocked(BackupUsbChargeBlockReason),
+}
+
+impl BackupUsbChargeGuardDecision {
+    pub(super) const fn allows_charge(self) -> bool {
+        matches!(self, Self::Allow)
+    }
+
+    pub(super) const fn notice(self) -> Option<&'static str> {
+        match self {
+            Self::WaitingForLowOutput => Some("backup_usb_wait_low_output"),
+            Self::Blocked(reason) => Some(reason.notice()),
+            Self::NotApplicable | Self::Allow => None,
+        }
+    }
+
+    pub(super) const fn policy_status_text(self) -> Option<&'static str> {
+        match self {
+            Self::WaitingForLowOutput => Some("NOAC"),
+            Self::Blocked(reason) => Some(reason.policy_status_text()),
+            Self::NotApplicable | Self::Allow => None,
+        }
+    }
+}
+
+pub(super) const fn defer_output_power_unknown_block_for_backup_usb(
+    backup_usb_charge_context: bool,
+    manual_loopback_override: bool,
+) -> bool {
+    backup_usb_charge_context && !manual_loopback_override
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct BackupUsbChargeGuard {
+    pub(super) admitted: bool,
+    pub(super) latched_reason: Option<BackupUsbChargeBlockReason>,
+    pub(super) telemetry_miss_streak: u8,
+    pub(super) last_attempt_seq: Option<u32>,
+}
+
+impl BackupUsbChargeGuard {
+    pub(super) fn reset_for_new_session(&mut self, last_attempt_seq: Option<u32>) {
+        *self = Self {
+            last_attempt_seq,
+            ..Self::default()
+        };
+    }
+
+    pub(super) fn observe(
+        &mut self,
+        applicable: bool,
+        normal_charge_allowed: bool,
+        output_enabled: bool,
+        output_power_w10: Option<u32>,
+        telemetry_attempt_seq: Option<u32>,
+        manual_override: bool,
+    ) -> BackupUsbChargeGuardDecision {
+        if !applicable {
+            self.admitted = false;
+            self.telemetry_miss_streak = 0;
+            self.last_attempt_seq = telemetry_attempt_seq;
+            return BackupUsbChargeGuardDecision::NotApplicable;
+        }
+
+        if manual_override {
+            self.admitted = false;
+            self.telemetry_miss_streak = 0;
+            self.last_attempt_seq = telemetry_attempt_seq;
+            return BackupUsbChargeGuardDecision::Allow;
+        }
+
+        if let Some(reason) = self.latched_reason {
+            return BackupUsbChargeGuardDecision::Blocked(reason);
+        }
+
+        if !output_enabled {
+            self.admitted = true;
+            self.telemetry_miss_streak = 0;
+            self.last_attempt_seq = telemetry_attempt_seq;
+            return BackupUsbChargeGuardDecision::Allow;
+        }
+
+        if !self.admitted {
+            if !normal_charge_allowed {
+                self.telemetry_miss_streak = 0;
+                self.last_attempt_seq = telemetry_attempt_seq;
+                return BackupUsbChargeGuardDecision::NotApplicable;
+            }
+            let is_new_attempt =
+                telemetry_attempt_seq.is_some() && telemetry_attempt_seq != self.last_attempt_seq;
+            if !is_new_attempt {
+                return BackupUsbChargeGuardDecision::WaitingForLowOutput;
+            }
+            let Some(output_power_w10) = output_power_w10 else {
+                self.last_attempt_seq = telemetry_attempt_seq;
+                return BackupUsbChargeGuardDecision::WaitingForLowOutput;
+            };
+            self.last_attempt_seq = telemetry_attempt_seq;
+            if output_power_w10 < BACKUP_USB_CHARGE_START_POWER_LIMIT_W10 {
+                self.admitted = true;
+                self.telemetry_miss_streak = 0;
+                BackupUsbChargeGuardDecision::Allow
+            } else {
+                BackupUsbChargeGuardDecision::WaitingForLowOutput
+            }
+        } else {
+            let is_new_attempt =
+                telemetry_attempt_seq.is_some() && telemetry_attempt_seq != self.last_attempt_seq;
+            if is_new_attempt {
+                self.last_attempt_seq = telemetry_attempt_seq;
+                match output_power_w10 {
+                    Some(power_w10) if power_w10 > BACKUP_USB_CHARGE_STOP_POWER_LIMIT_W10 => {
+                        self.admitted = false;
+                        self.latched_reason = Some(BackupUsbChargeBlockReason::OutputHigh);
+                        return BackupUsbChargeGuardDecision::Blocked(
+                            BackupUsbChargeBlockReason::OutputHigh,
+                        );
+                    }
+                    Some(_) => self.telemetry_miss_streak = 0,
+                    None => {
+                        self.telemetry_miss_streak = self.telemetry_miss_streak.saturating_add(1);
+                        if self.telemetry_miss_streak >= BACKUP_USB_CHARGE_TELEMETRY_MISS_LIMIT {
+                            self.admitted = false;
+                            self.latched_reason = Some(BackupUsbChargeBlockReason::TelemetryLost);
+                            return BackupUsbChargeGuardDecision::Blocked(
+                                BackupUsbChargeBlockReason::TelemetryLost,
+                            );
+                        }
+                    }
+                }
+            }
+            BackupUsbChargeGuardDecision::Allow
         }
     }
 }
@@ -1921,6 +2102,7 @@ pub(super) struct ChargePolicyInput {
     pub(super) ibus_ma: Option<i32>,
     pub(super) output_enabled: bool,
     pub(super) output_power_w10: Option<u32>,
+    pub(super) defer_output_power_unknown_block: bool,
     pub(super) telemetry: Option<ChargePolicyTelemetry>,
     pub(super) charger_done: bool,
     pub(super) charger_taper_cv: bool,
@@ -1978,7 +2160,11 @@ pub(super) fn charge_policy_step(
         };
     }
 
-    if input.output_enabled && input.output_power_w10.is_none() && start_reason.is_none() {
+    if input.output_enabled
+        && input.output_power_w10.is_none()
+        && start_reason.is_none()
+        && !input.defer_output_power_unknown_block
+    {
         memory.charge_latched = false;
         derate.reset();
         output_load.note_unknown_sample();
@@ -3302,6 +3488,177 @@ mod tests {
     }
 
     #[test]
+    fn backup_usb_guard_requires_a_fresh_strictly_sub_2w_sample_to_start() {
+        let mut guard = BackupUsbChargeGuard::default();
+
+        assert_eq!(
+            guard.observe(false, false, true, Some(19), Some(1), false),
+            BackupUsbChargeGuardDecision::NotApplicable
+        );
+        assert_eq!(
+            guard.observe(true, true, true, Some(19), Some(1), false),
+            BackupUsbChargeGuardDecision::WaitingForLowOutput
+        );
+        assert_eq!(
+            guard.observe(true, true, true, Some(19), Some(2), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+
+        // A new USB session cannot reuse the pre-detach low-output observation.
+        guard.reset_for_new_session(Some(2));
+        assert_eq!(
+            guard.observe(true, true, true, Some(19), Some(2), false),
+            BackupUsbChargeGuardDecision::WaitingForLowOutput
+        );
+        assert_eq!(
+            guard.observe(true, true, true, Some(19), Some(3), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+
+        guard.reset_for_new_session(Some(3));
+        assert_eq!(
+            guard.observe(true, true, true, Some(20), Some(4), false),
+            BackupUsbChargeGuardDecision::WaitingForLowOutput
+        );
+
+        guard.reset_for_new_session(Some(4));
+        assert_eq!(
+            guard.observe(true, false, false, None, None, false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+    }
+
+    #[test]
+    fn backup_usb_guard_keeps_charging_through_3w_then_latches_above_3w() {
+        let mut guard = BackupUsbChargeGuard::default();
+        let _ = guard.observe(false, false, true, Some(0), Some(10), false);
+        assert_eq!(
+            guard.observe(true, true, true, Some(19), Some(11), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+        assert_eq!(
+            guard.observe(true, true, true, Some(20), Some(12), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+        assert_eq!(
+            guard.observe(true, true, true, Some(29), Some(13), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+        assert_eq!(
+            guard.observe(true, false, true, Some(30), Some(14), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+        assert_eq!(
+            guard.observe(true, false, true, Some(31), Some(15), false),
+            BackupUsbChargeGuardDecision::Blocked(BackupUsbChargeBlockReason::OutputHigh)
+        );
+        assert_eq!(
+            guard.latched_reason,
+            Some(BackupUsbChargeBlockReason::OutputHigh)
+        );
+    }
+
+    #[test]
+    fn backup_usb_guard_counts_only_distinct_missing_telemetry_attempts() {
+        let mut guard = BackupUsbChargeGuard::default();
+        let _ = guard.observe(false, false, true, Some(0), Some(20), false);
+        assert_eq!(
+            guard.observe(true, true, true, Some(19), Some(21), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+        assert_eq!(
+            guard.observe(true, true, true, None, Some(22), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+        assert_eq!(guard.telemetry_miss_streak, 1);
+        assert_eq!(
+            guard.observe(true, true, true, None, Some(22), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+        assert_eq!(guard.telemetry_miss_streak, 1);
+        assert_eq!(
+            guard.observe(true, true, true, Some(25), Some(23), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+        assert_eq!(guard.telemetry_miss_streak, 0);
+        assert_eq!(
+            guard.observe(true, true, true, None, Some(24), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+        assert_eq!(
+            guard.observe(true, true, true, None, Some(25), false),
+            BackupUsbChargeGuardDecision::Blocked(BackupUsbChargeBlockReason::TelemetryLost)
+        );
+    }
+
+    #[test]
+    fn backup_usb_guard_preserves_latches_until_manual_session_or_usb_replug_reset() {
+        let mut guard = BackupUsbChargeGuard::default();
+        let _ = guard.observe(false, false, true, Some(0), Some(30), false);
+        let _ = guard.observe(true, true, true, Some(19), Some(31), false);
+        assert_eq!(
+            guard.observe(true, true, true, Some(31), Some(32), false),
+            BackupUsbChargeGuardDecision::Blocked(BackupUsbChargeBlockReason::OutputHigh)
+        );
+        assert_eq!(
+            guard.observe(false, false, true, Some(0), Some(33), false),
+            BackupUsbChargeGuardDecision::NotApplicable
+        );
+        assert_eq!(
+            guard.observe(true, true, true, Some(19), Some(34), false),
+            BackupUsbChargeGuardDecision::Blocked(BackupUsbChargeBlockReason::OutputHigh)
+        );
+        assert_eq!(
+            guard.observe(true, true, true, Some(31), Some(35), true),
+            BackupUsbChargeGuardDecision::Allow
+        );
+
+        guard.reset_for_new_session(Some(35));
+        let _ = guard.observe(false, false, true, Some(0), Some(36), false);
+        assert_eq!(
+            guard.observe(true, true, true, Some(19), Some(37), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+    }
+
+    #[test]
+    fn backup_usb_guard_requires_a_new_tps_attempt_after_session_reset() {
+        let mut guard = BackupUsbChargeGuard::default();
+
+        guard.reset_for_new_session(Some(40));
+        assert_eq!(
+            guard.observe(true, true, true, Some(19), Some(40), false),
+            BackupUsbChargeGuardDecision::WaitingForLowOutput
+        );
+        assert_eq!(
+            guard.observe(true, true, true, Some(19), Some(41), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+    }
+
+    #[test]
+    fn backup_usb_auto_charge_keeps_the_fixed_500ma_policy() {
+        assert_eq!(BACKUP_USB_AUTO_CHARGE_ICHG_MA, 500);
+        assert_eq!(BACKUP_USB_AUTO_CHARGE_STATUS_TEXT, "CHG500");
+    }
+
+    #[test]
+    fn backup_usb_runtime_override_only_opens_backup_for_the_guard_allowance() {
+        assert_eq!(
+            runtime_charge_override_for_backup_usb_charger(UpsMode::Backup, false, false, true),
+            None
+        );
+        assert_eq!(
+            runtime_charge_override_for_backup_usb_charger(UpsMode::Backup, false, false, false),
+            runtime_charge_override(UpsMode::Backup)
+        );
+        assert_eq!(
+            runtime_charge_override_for_backup_usb_charger(UpsMode::Supplement, false, false, true),
+            runtime_charge_override(UpsMode::Supplement)
+        );
+    }
+
+    #[test]
     fn charger_vbat_adc_overrides_false_status_presence_bit() {
         assert_eq!(
             bq25792_effective_vbat_present(Some(false), Some(16_243)),
@@ -3688,6 +4045,7 @@ mod tests {
             ibus_ma,
             output_enabled: false,
             output_power_w10: Some(0),
+            defer_output_power_unknown_block: false,
             telemetry,
             charger_done: false,
             charger_taper_cv: false,
@@ -5371,6 +5729,43 @@ mod tests {
         assert!(!memory.charge_latched);
         assert!(output_load.blocked);
         assert_eq!(output_load.exit_streak, 0);
+    }
+
+    #[test]
+    fn charge_policy_defers_unknown_output_power_to_the_backup_usb_guard() {
+        let mut memory = ChargePolicyMemory::default();
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+
+        let decision = charge_policy_step(
+            &mut memory,
+            &mut derate,
+            &mut output_load,
+            0,
+            ChargePolicyInput {
+                output_enabled: true,
+                output_power_w10: None,
+                defer_output_power_unknown_block: true,
+                ..policy_input(
+                    Some(policy_telemetry(79, 3_850, 3_850)),
+                    Some(DashboardInputSource::UsbC),
+                    Some(1_000),
+                )
+            },
+        );
+
+        assert_eq!(decision.state, ChargePolicyState::Charging500mA);
+        assert!(decision.allow_charge);
+        assert_eq!(decision.output_block_reason, None);
+    }
+
+    #[test]
+    fn backup_usb_unknown_output_power_deferral_excludes_confirmed_manual_override() {
+        assert!(defer_output_power_unknown_block_for_backup_usb(true, false));
+        assert!(!defer_output_power_unknown_block_for_backup_usb(true, true));
+        assert!(!defer_output_power_unknown_block_for_backup_usb(
+            false, false
+        ));
     }
 
     #[test]

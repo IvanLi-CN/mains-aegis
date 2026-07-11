@@ -9,9 +9,10 @@ use crate::front_panel_scene::{
     self, AudioTestUiState, BeeperPrefs, BeeperSettingTarget, BeeperSettingsTouchTarget,
     BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardHomeFocus, DashboardMenuStyle,
     DashboardMenuTouchTarget, DashboardPrimaryPage, DashboardRoute, DashboardShellState,
-    DashboardTouchTarget, ManualChargeUiAction, MenuItem, SelfCheckCommState,
-    SelfCheckHardwareTarget, SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot,
-    TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant, UpsMode,
+    DashboardTouchTarget, ManualChargeLoopbackConfirmTarget, ManualChargeUiAction, MenuItem,
+    SelfCheckCommState, SelfCheckHardwareTarget, SelfCheckOverlay, SelfCheckTouchTarget,
+    SelfCheckUiSnapshot, TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant,
+    UpsMode,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -1089,6 +1090,10 @@ where
             return;
         }
         self.bms_activation_state = state;
+        if self.self_check_overlay == SelfCheckOverlay::ManualChargeLoopbackConfirm {
+            self.needs_redraw = self.ui_variant == DASHBOARD_VARIANT;
+            return;
+        }
         let recovery_overlay = front_panel_scene::bq40_recovery_overlay(&self.self_check_snapshot);
         let overlay_allowed = self.ui_variant == SELF_CHECK_VARIANT
             && (recovery_overlay.is_some()
@@ -1530,6 +1535,7 @@ where
                     }
                 }
             }
+            SelfCheckOverlay::ManualChargeLoopbackConfirm => {}
             SelfCheckOverlay::BmsActivateConfirm
             | SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
                 if right_edge {
@@ -2187,6 +2193,34 @@ where
             );
         }
 
+        if self.self_check_overlay == SelfCheckOverlay::ManualChargeLoopbackConfirm {
+            match front_panel_scene::manual_charge_loopback_confirm_key_target(
+                left_edge,
+                right_edge,
+                center_edge,
+            ) {
+                Some(ManualChargeLoopbackConfirmTarget::Cancel) => {
+                    self.self_check_overlay = SelfCheckOverlay::None;
+                    self.note_interaction_feedback();
+                    self.needs_redraw = true;
+                    defmt::info!("ui: manual_charge loopback confirm cancel via key");
+                    esp_println::println!("ui: manual_charge loopback confirm cancel via key");
+                }
+                Some(ManualChargeLoopbackConfirmTarget::Confirm) => {
+                    self.self_check_overlay = SelfCheckOverlay::None;
+                    self.note_interaction_feedback();
+                    self.needs_redraw = true;
+                    defmt::info!("ui: manual_charge loopback confirm accept via key");
+                    esp_println::println!("ui: manual_charge loopback confirm accept via key");
+                    return Some(UiAction::ManualCharge(
+                        ManualChargeUiAction::StartConfirmedLoopback,
+                    ));
+                }
+                None => {}
+            }
+            return None;
+        }
+
         match self.dashboard_page {
             DashboardPrimaryPage::Menu => {
                 if up_edge {
@@ -2326,6 +2360,9 @@ where
     }
 
     fn process_dashboard_gesture_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
+        if self.self_check_overlay == SelfCheckOverlay::ManualChargeLoopbackConfirm {
+            return None;
+        }
         let prev = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
         if !snapshot.touch {
             self.dashboard_touch_gesture_consumed = false;
@@ -2418,6 +2455,30 @@ where
             None => return None,
         };
 
+        if self.self_check_overlay == SelfCheckOverlay::ManualChargeLoopbackConfirm {
+            return match front_panel_scene::manual_charge_loopback_confirm_hit_test(x, y) {
+                Some(ManualChargeLoopbackConfirmTarget::Cancel) => {
+                    self.self_check_overlay = SelfCheckOverlay::None;
+                    self.note_interaction_feedback();
+                    self.needs_redraw = true;
+                    defmt::info!("ui: manual_charge loopback confirm cancel via touch");
+                    esp_println::println!("ui: manual_charge loopback confirm cancel via touch");
+                    None
+                }
+                Some(ManualChargeLoopbackConfirmTarget::Confirm) => {
+                    self.self_check_overlay = SelfCheckOverlay::None;
+                    self.note_interaction_feedback();
+                    self.needs_redraw = true;
+                    defmt::info!("ui: manual_charge loopback confirm accept via touch");
+                    esp_println::println!("ui: manual_charge loopback confirm accept via touch");
+                    Some(UiAction::ManualCharge(
+                        ManualChargeUiAction::StartConfirmedLoopback,
+                    ))
+                }
+                None => None,
+            };
+        }
+
         if self.dashboard_page == DashboardPrimaryPage::Menu {
             return self.process_dashboard_menu_touch_action(x, y);
         }
@@ -2465,6 +2526,15 @@ where
                     dashboard_route_name(self.dashboard_route),
                     dashboard_touch_target_name(resolved_target)
                 );
+            }
+
+            if matches!(resolved_target, DashboardTouchTarget::ManualStart) {
+                self.self_check_overlay = SelfCheckOverlay::ManualChargeLoopbackConfirm;
+                self.note_interaction_feedback();
+                self.needs_redraw = true;
+                defmt::info!("ui: manual_charge loopback confirm open via touch");
+                esp_println::println!("ui: manual_charge loopback confirm open via touch");
+                return None;
             }
 
             if let Some(action) =
@@ -2692,7 +2762,18 @@ where
         let self_check_snapshot = self.self_check_snapshot;
         let self_check_overlay = self.self_check_overlay;
         self.render_scene(|painter| {
-            if variant == DASHBOARD_VARIANT {
+            if variant == DASHBOARD_VARIANT
+                && self_check_overlay == SelfCheckOverlay::ManualChargeLoopbackConfirm
+            {
+                front_panel_scene::render_frame_with_dashboard_route_overlay(
+                    painter,
+                    &model,
+                    variant,
+                    dashboard_route,
+                    Some(&self_check_snapshot),
+                    self_check_overlay,
+                )
+            } else if variant == DASHBOARD_VARIANT {
                 front_panel_scene::render_dashboard_shell(
                     painter,
                     &model,
@@ -2902,6 +2983,7 @@ fn manual_charge_ui_action_name(action: ManualChargeUiAction) -> &'static str {
             "set_timer_6h"
         }
         ManualChargeUiAction::Start => "start",
+        ManualChargeUiAction::StartConfirmedLoopback => "start_confirmed_loopback",
         ManualChargeUiAction::Stop => "stop",
     }
 }
@@ -2967,6 +3049,7 @@ fn log_self_check_snapshot_transition(previous: &SelfCheckUiSnapshot, next: &Sel
 fn overlay_name(overlay: SelfCheckOverlay) -> &'static str {
     match overlay {
         SelfCheckOverlay::None => "none",
+        SelfCheckOverlay::ManualChargeLoopbackConfirm => "manual_loopback_confirm",
         SelfCheckOverlay::BmsActivateConfirm => "confirm_activation",
         SelfCheckOverlay::BmsActivateProgress => "progress_activation",
         SelfCheckOverlay::BmsDischargeAuthorizeConfirm => "confirm_discharge",
@@ -3064,6 +3147,7 @@ fn current_recovery_overlay_action(
         }
         SelfCheckOverlay::BmsActivateResult(..)
         | SelfCheckOverlay::HardwareIssue(..)
+        | SelfCheckOverlay::ManualChargeLoopbackConfirm
         | SelfCheckOverlay::None => match recovery_overlay {
             Some(SelfCheckOverlay::BmsActivateConfirm) => Some(BmsRecoveryUiAction::Activation),
             Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm) => {
