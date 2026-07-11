@@ -221,13 +221,34 @@ None。
 
 - `BACKUP USB low output`: 已确认无市电的 USB-C PD 输入在新鲜输出功率 `<2W` 时自动以 `CHG500` 放行；detail footer 显示 `CHARGING ACTIVE`。
 
+  PR: include
+  source_type=mock_ui
+  target_program=mock-only
+  capture_scope=app-window
+  sensitive_exclusion=N/A
+  submission_gate=approved
+
 ![Backup USB low-output charge](./assets/charger-backup-usb-low-output.png)
 
 - `BACKUP USB high output`: 一个新鲜 `>3W` 样本立即锁存停充，状态为 `LOAD`；detail footer 显示 `LOAD: CHG PAUSED`，不显示功率条件。
 
+  PR: include
+  source_type=mock_ui
+  target_program=mock-only
+  capture_scope=app-window
+  sensitive_exclusion=N/A
+  submission_gate=approved
+
 ![Backup USB output-high latch](./assets/charger-backup-usb-output-high-latched.png)
 
 - `BACKUP USB telemetry lost`: 两次独立 TPS 遥测缺失后锁存停充，状态为 `LOCK`；detail footer 显示 `LOAD DATA LOST`。
+
+  PR: include
+  source_type=mock_ui
+  target_program=mock-only
+  capture_scope=app-window
+  sensitive_exclusion=N/A
+  submission_gate=approved
 
 ![Backup USB telemetry-lost latch](./assets/charger-backup-usb-telemetry-lost-latched.png)
 

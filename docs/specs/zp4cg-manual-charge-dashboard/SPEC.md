@@ -263,9 +263,23 @@
 
 ### USB-C loopback confirmation
 
+PR: include
+source_type=mock_ui
+target_program=mock-only
+capture_scope=app-window
+sensitive_exclusion=N/A
+submission_gate=approved
+
 ![Manual charge loopback confirmation](./assets/manual-charge-loopback-confirm.png)
 
 ### Confirmed USB Backup session
+
+PR: include
+source_type=mock_ui
+target_program=mock-only
+capture_scope=app-window
+sensitive_exclusion=N/A
+submission_gate=approved
 
 ![Manual charge loopback confirmed](./assets/manual-charge-loopback-confirmed.png)
 
